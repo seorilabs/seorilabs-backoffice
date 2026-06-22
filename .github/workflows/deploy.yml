@@ -1,9 +1,11 @@
 name: Deploy
 
+# 시크릿(REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64)과 GitHub App 셋업 완료 후
+# push 트리거를 다시 활성화한다. 그 전까지는 수동 실행만.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+  # push:
+  #   branches: [main]
 
 concurrency:
   group: deploy-backoffice
