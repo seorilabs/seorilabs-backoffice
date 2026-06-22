@@ -1,0 +1,232 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  replicas: 1
+  # 단일 replica + RWO 미러 DB. 스케줄러 중복/롤아웃 데드락 방지 위해 Recreate.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      securityContext:
+        fsGroup: 10001
+      imagePullSecrets:
+        - name: registry-pull-cred
+      initContainers:
+        - name: migrate
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          command: ["prisma", "migrate", "deploy"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DATABASE_URL
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: backoffice
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=640"
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: AUTH_TRUST_HOST
+              value: "true"
+            - name: AUTH_URL
+              value: "https://backoffice.vzyx.xyz"
+            - name: GITHUB_ORG
+              value: seorilabs
+            - name: ALLOWLIST_LOGINS
+              value: "magicsih"
+            - name: FEATURE_MINIMAX_ENABLED
+              value: "false"
+            - name: MINIMAX_API_BASE_URL
+              value: "https://api.minimax.io/v1"
+            - name: MINIMAX_MODEL
+              value: "MiniMax-M3"
+            - name: MINIMAX_TIMEOUT_MS
+              value: "180000"
+            - name: RECONCILE_INTERVAL_MS
+              value: "21600000"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DATABASE_URL
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AUTH_SECRET
+            - name: AUTH_GITHUB_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AUTH_GITHUB_ID
+            - name: AUTH_GITHUB_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AUTH_GITHUB_SECRET
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_PRIVATE_KEY
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_WEBHOOK_SECRET
+            - name: INTERNAL_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: INTERNAL_ADMIN_TOKEN
+            - name: MINIMAX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: MINIMAX_API_KEY
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backoffice
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  selector:
+    app.kubernetes.io/name: backoffice
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backoffice
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    release: rpi-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backoffice
+  namespace: platform
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # GitHub webhook 대형 payload 대비 (raw-body HMAC 검증 안전).
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+spec:
+  ingressClassName: public
+  tls:
+    - secretName: backoffice-vzyx-xyz-tls
+      hosts:
+        - backoffice.vzyx.xyz
+  rules:
+    - host: backoffice.vzyx.xyz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backoffice
+                port:
+                  name: http

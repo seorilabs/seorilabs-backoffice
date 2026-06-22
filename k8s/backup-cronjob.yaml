@@ -1,0 +1,60 @@
+# 백오피스 DB(라이프사이클 상태는 GitHub 미러로 복구 불가) 일 1회 논리 백업.
+# 노드로컬 PVC 보관. 오프사이트는 syncthing 으로 이 PVC 경로 동기화 권장(후속).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backoffice-backup
+  namespace: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: microk8s-hostpath
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-db-backup
+  namespace: platform
+spec:
+  schedule: "0 18 * * *" # 03:00 KST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: dump
+              image: mysql:9.2.0
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  TS=$(date +%F-%H%M)
+                  OUT="/backup/backoffice-${TS}.sql.gz"
+                  echo "dumping to ${OUT}"
+                  mysqldump --single-transaction --no-tablespaces \
+                    -h mysql.data.svc.cluster.local -u backoffice backoffice \
+                    | gzip > "${OUT}"
+                  echo "retain last 14"
+                  ls -t /backup/backoffice-*.sql.gz | tail -n +15 | xargs -r rm -f
+                  echo "done"
+              env:
+                - name: MYSQL_PWD
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DB_PASSWORD
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: backoffice-backup

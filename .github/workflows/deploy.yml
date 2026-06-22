@@ -1,0 +1,52 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backoffice
+  cancel-in-progress: false
+
+env:
+  IMAGE: registry.vzyx.xyz/seorilabs/seorilabs-backoffice
+
+jobs:
+  build:
+    # ARM64 Docker 빌드 → -dind 러너(rpi4001)에서 격리.
+    runs-on: seorilabs-rpi-arm64-dind
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: registry.vzyx.xyz
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+
+  deploy:
+    needs: build
+    runs-on: seorilabs-rpi-arm64
+    steps:
+      - name: Deploy to platform ns
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl"
+          chmod +x /tmp/kubectl
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          IMG="${IMAGE}:${SHA}"
+          /tmp/kubectl -n platform set image deployment/backoffice migrate="$IMG" backoffice="$IMG"
+          /tmp/kubectl -n platform rollout status deployment/backoffice --timeout=300s

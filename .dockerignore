@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.env
+.env*.local
+*.pem
+Dockerfile
+.dockerignore
+k8s
+docs
+README.md

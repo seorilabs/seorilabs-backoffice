@@ -1,0 +1,35 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# prisma
+/prisma/*.db
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+pnpm-debug.log*
+
+# env files (secrets never committed)
+.env
+.env.local
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# editor
+.idea
+.vscode

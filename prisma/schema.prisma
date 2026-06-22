@@ -1,0 +1,340 @@
+// Seorilabs Backoffice — v1 데이터 모델
+// 원칙: GitHub = source of truth. 이 DB는 미러 + 라이프사이클 오케스트레이션 + 기획 인테이크 저장 계층.
+// 검증 반영: WorkflowRunMirror 추가, Release 는 tag push + workflow_run 파생, v2 모델은 미생성.
+
+generator client {
+  provider = "prisma-client-js"
+  // ARM64 런타임(bookworm-slim, openssl 3.x) 필수. 빌드 호스트와 별개로 명시.
+  binaryTargets = ["native", "linux-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// App — 앱/게임 중앙 레지스트리
+// ──────────────────────────────────────────────────────────────────────────
+model App {
+  id           String    @id @default(cuid())
+  slug         String    @unique // repo name, e.g. "happy-farm"
+  displayName  String
+  repoFullName String    @unique // "seorilabs/happy-farm"
+  repoId       BigInt?   @unique // GitHub repo numeric id (rename 안전 키)
+  type         AppType
+  engine       AppEngine
+  status       AppStatus @default(ACTIVE)
+  currentStage Lifecycle @default(PLANNING)
+  isPublicRepo Boolean   @default(false)
+
+  // 마켓 식별자 (미설정/example-only 이면 null + UI "확정 필요" 뱃지)
+  firebaseProject String?
+  playPackage     String? @unique
+  iosBundle       String?
+  appleTeamId     String?
+  iosSku          String?
+  aitAppName      String?
+
+  marketTargets Json // ["play","appstore","ait","web"]
+
+  // 부트스트랩 멱등
+  configHash     String?
+  configSyncedAt DateTime?
+
+  // GitHub Projects v2 연결(읽기용)
+  projectV2Id String?
+
+  owners       AppOwner[]
+  transitions  StageTransition[]
+  issues       IssueMirror[]
+  pullRequests PullRequestMirror[]
+  workflowRuns WorkflowRunMirror[]
+  releases     ReleaseRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, currentStage])
+  @@index([type, engine])
+  @@map("app")
+}
+
+enum AppType {
+  APP
+  GAME
+}
+
+enum AppEngine {
+  RN
+  GODOT
+}
+
+enum AppStatus {
+  ACTIVE
+  PAUSED
+  DEPRECATED
+}
+
+enum Lifecycle {
+  PLANNING
+  DEVELOPMENT
+  QA
+  MARKET_SUBMISSION
+  RELEASE
+  LIVEOPS
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// StageTransition — 라이프사이클 이력/감사
+// ──────────────────────────────────────────────────────────────────────────
+model StageTransition {
+  id         String           @id @default(cuid())
+  appId      String
+  app        App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  fromStage  Lifecycle? // 최초 진입은 null
+  toStage    Lifecycle
+  source     TransitionSource
+  actorLogin String? // 수동 전이 시 github login
+  reason     String?          @db.Text
+  signalRef  String? // "workflow_run:123456", "manual"
+  createdAt  DateTime         @default(now())
+
+  @@index([appId, createdAt])
+  @@map("stage_transition")
+}
+
+enum TransitionSource {
+  BACKOFFICE
+  GITHUB
+  SYSTEM
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// IssueMirror — GitHub 이슈 미러 (SoT=GitHub)
+// ──────────────────────────────────────────────────────────────────────────
+model IssueMirror {
+  id           String       @id @default(cuid())
+  appId        String?
+  app          App?         @relation(fields: [appId], references: [id])
+  repoFullName String
+  number       Int
+  nodeId       String       @unique // 멱등 upsert 키
+  title        String       @db.Text
+  state        IssueState
+  stateReason  String? // completed | not_planned | reopened
+  authorLogin  String?
+  assignees    Json // ["magicsih"]
+  labels       Json // ["P1","approval:planning","autopilot"]
+  milestone    String?
+  priority     Priority? // 라벨 파생(미러 시 앱이 채움)
+  isAutopilot  Boolean      @default(false)
+  hasEvidence  Boolean      @default(false)
+  isBlocked    Boolean      @default(false)
+  source       MirrorSource @default(UNKNOWN)
+  clientReqId  String?      @unique // 백오피스 생성 멱등 마커
+  linkedPrUrl  String?
+  ghCreatedAt  DateTime     @db.DateTime(3)
+  ghUpdatedAt  DateTime     @db.DateTime(3)
+  mirroredAt   DateTime     @updatedAt
+
+  @@unique([repoFullName, number])
+  @@index([appId, state])
+  @@index([state, priority])
+  @@map("issue_mirror")
+}
+
+enum IssueState {
+  OPEN
+  CLOSED
+}
+
+enum Priority {
+  P1
+  P2
+  P3
+  P4
+}
+
+enum MirrorSource {
+  BACKOFFICE
+  CLAUDE_CODE
+  ROUTINE
+  UNKNOWN
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// PullRequestMirror
+// ──────────────────────────────────────────────────────────────────────────
+model PullRequestMirror {
+  id            String   @id @default(cuid())
+  appId         String?
+  app           App?     @relation(fields: [appId], references: [id])
+  repoFullName  String
+  number        Int
+  nodeId        String   @unique
+  title         String   @db.Text
+  state         PrState
+  isDraft       Boolean  @default(false)
+  authorLogin   String?
+  headRef       String?
+  baseRef       String?
+  labels        Json
+  linkedIssue   Int?
+  isAutopilotPr Boolean  @default(false)
+  mergedAt      DateTime? @db.DateTime(3)
+  ghCreatedAt   DateTime @db.DateTime(3)
+  ghUpdatedAt   DateTime @db.DateTime(3)
+  mirroredAt    DateTime @updatedAt
+
+  @@unique([repoFullName, number])
+  @@index([appId, state])
+  @@map("pull_request_mirror")
+}
+
+enum PrState {
+  OPEN
+  CLOSED
+  MERGED
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// WorkflowRunMirror — deploy-* 등 워크플로 실행 (출시 신호의 원천)
+// ──────────────────────────────────────────────────────────────────────────
+model WorkflowRunMirror {
+  id           String   @id @default(cuid())
+  appId        String?
+  app          App?     @relation(fields: [appId], references: [id])
+  repoFullName String
+  runId        BigInt   @unique
+  name         String? // "Deploy AppsInToss"
+  status       String // queued | in_progress | completed
+  conclusion   String? // success | failure | cancelled | ...
+  event        String? // push | workflow_dispatch
+  headSha      String?
+  headBranch   String? // refs/tags/v1.2.3 도 가능
+  runAttempt   Int      @default(1)
+  runStartedAt DateTime? @db.DateTime(3)
+  ghUpdatedAt  DateTime @db.DateTime(3)
+  mirroredAt   DateTime @updatedAt
+
+  @@index([appId, name])
+  @@map("workflow_run_mirror")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ReleaseRecord — tag push + workflow_run 에서 파생 (GitHub Release 객체 없음)
+// ──────────────────────────────────────────────────────────────────────────
+model ReleaseRecord {
+  id            String        @id @default(cuid())
+  appId         String
+  app           App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  version       String // "v1.3.2"
+  market        ReleaseMarket
+  track         String?
+  status        ReleaseStatus @default(PENDING)
+  workflowRunId BigInt?
+  workflowName  String?
+  commitSha     String?
+  triggeredBy   String?
+  startedAt     DateTime? @db.DateTime(3)
+  deployedAt    DateTime? @db.DateTime(3)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([market, workflowRunId])
+  @@index([appId, market, deployedAt])
+  @@map("release_record")
+}
+
+enum ReleaseMarket {
+  PLAY
+  APPSTORE
+  AIT
+  WEB
+}
+
+enum ReleaseStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// User / AppOwner — 인증 + allowlist
+// ──────────────────────────────────────────────────────────────────────────
+model User {
+  id          String     @id @default(cuid())
+  githubId    BigInt     @unique
+  login       String     @unique
+  name        String?
+  avatarUrl   String?
+  role        UserRole   @default(VIEWER)
+  allowlisted Boolean    @default(false)
+  lastLoginAt DateTime?
+  ownedApps   AppOwner[]
+  createdAt   DateTime   @default(now())
+
+  @@map("app_user") // "user" 예약어 회피
+}
+
+enum UserRole {
+  ADMIN
+  MAINTAINER
+  VIEWER
+}
+
+model AppOwner {
+  appId  String
+  userId String
+  role   OwnerRole @default(OWNER)
+  app    App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  user   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([appId, userId])
+  @@map("app_owner")
+}
+
+enum OwnerRole {
+  OWNER
+  CONTRIBUTOR
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 인프라 테이블
+// ──────────────────────────────────────────────────────────────────────────
+model WebhookDelivery {
+  deliveryId String   @id // X-GitHub-Delivery
+  event      String
+  action     String?
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
+  @@map("webhook_delivery")
+}
+
+model SyncCursor {
+  repoFullName String   @id
+  lastIssueSync    DateTime?
+  lastPrSync       DateTime?
+  lastRunSync      DateTime?
+  updatedAt        DateTime @updatedAt
+
+  @@map("sync_cursor")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorLogin String? // null = system/webhook
+  action     String // "app.create", "stage.transition", "webhook.received"
+  entityType String
+  entityId   String?
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_log")
+}
