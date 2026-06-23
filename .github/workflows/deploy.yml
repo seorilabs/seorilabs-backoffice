@@ -1,11 +1,11 @@
 name: Deploy
 
-# 시크릿(REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64)과 GitHub App 셋업 완료 후
-# push 트리거를 다시 활성화한다. 그 전까지는 수동 실행만.
+# main push 시 자동 빌드→배포. 사전: REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64 secret
+# + 레포를 ARC "RPI ARM64 Builders" 러너 그룹에 추가 (DEPLOY.md §7).
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   group: deploy-backoffice

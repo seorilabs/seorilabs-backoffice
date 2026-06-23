@@ -1,0 +1,37 @@
+# CI(deploy.yml) 가 platform ns 의 backoffice Deployment 만 갱신할 수 있는 최소권한 SA.
+# 이 SA 토큰으로 kubeconfig 를 만들어 GitHub secret KUBECONFIG_B64 에 넣는다(DEPLOY.md §7).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer
+  namespace: platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer
+  namespace: platform
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"] # rollout status 가 RS 조회
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"] # rollout status 가 pod 조회
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer
+  namespace: platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ci-deployer
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer
+    namespace: platform

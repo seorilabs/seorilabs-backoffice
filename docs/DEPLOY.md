@@ -77,3 +77,48 @@ kubectl -n platform exec deploy/backoffice -- \
 - 라이프사이클 상태는 GitHub 에 없음 → `backoffice-db-backup` CronJob(일 1회) 유지. 복구 시 dump restore 후 reconcile.
 - reconcile 은 부팅 시 1회 + `RECONCILE_INTERVAL_MS`(기본 6h). `DISABLE_SCHEDULER=true` 로 비활성.
 - MiniMax 활성화는 `FEATURE_MINIMAX_ENABLED=true` + `MINIMAX_API_KEY`(v2).
+
+## 7. CI 자동배포 설정 (main push → 빌드/배포)
+
+`deploy.yml` 은 push main 시 `-dind` 러너에서 이미지 빌드/push 후 `-arm64` 러너에서 `kubectl set image`. 아래 3개를 1회 셋업한다.
+
+**(a) 배포용 SA + kubeconfig**
+```bash
+kubectl apply -f k8s/ci-deployer-rbac.yaml
+
+SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+TOKEN=$(kubectl -n platform create token ci-deployer --duration=8760h)
+cat > /tmp/ci.kubeconfig <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: vzyx
+  cluster:
+    server: ${SERVER}
+    certificate-authority-data: ${CA}
+users:
+- name: ci-deployer
+  user:
+    token: ${TOKEN}
+contexts:
+- name: ci
+  context: {cluster: vzyx, user: ci-deployer, namespace: platform}
+current-context: ci
+EOF
+# CA 가 비면(예: insecure 설정) 위 certificate-authority-data 줄 대신 'insecure-skip-tls-verify: true' 사용.
+```
+
+**(b) GitHub repo secrets**
+```bash
+R=seorilabs/seorilabs-backoffice
+gh secret set REGISTRY_USERNAME -R $R          # registry.vzyx.xyz push 계정
+gh secret set REGISTRY_PASSWORD -R $R
+base64 -i /tmp/ci.kubeconfig | gh secret set KUBECONFIG_B64 -R $R
+rm -f /tmp/ci.kubeconfig
+```
+
+**(c) ARC 러너 그룹**
+org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 repository access 에 `seorilabs-backoffice` 추가(아니면 job 이 queued 로 멈춤).
+
+이후: main push → 자동 배포. 수동 재배포는 Actions → **Deploy** → Run workflow.
