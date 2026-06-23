@@ -87,6 +87,12 @@ spec:
               value: "180000"
             - name: RECONCILE_INTERVAL_MS
               value: "21600000"
+            - name: FEATURE_TELEGRAM_ENABLED
+              value: "true"
+            - name: TELEGRAM_ALLOWED_IDS
+              value: "1366743545"
+            - name: TELEGRAM_CHAT_ID
+              value: "1366743545"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -132,6 +138,18 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: MINIMAX_API_KEY
+                  optional: true
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: TELEGRAM_BOT_TOKEN
+                  optional: true
+            - name: TELEGRAM_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: TELEGRAM_WEBHOOK_SECRET
                   optional: true
           readinessProbe:
             httpGet:

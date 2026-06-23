@@ -9,6 +9,7 @@ import {
   type GhPrInput,
   type GhRunInput,
 } from "@/lib/sync/mirror";
+import { notify, esc } from "@/lib/telegram/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,44 @@ interface WebhookPayload {
   issue?: GhIssueInput;
   pull_request?: GhPrInput;
   workflow_run?: GhRunInput;
+  label?: { name?: string };
+}
+
+// 실시간 webhook 에서만(미러 backfill 아님) 텔레그램 알림. 실패해도 webhook 200 유지.
+async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
+  try {
+    const repo = (p.repository?.full_name ?? "").replace("seorilabs/", "");
+    if (
+      event === "issues" &&
+      p.action === "labeled" &&
+      p.label?.name?.startsWith("approval:") &&
+      p.issue
+    ) {
+      const gate = p.label.name === "approval:release" ? "release" : "planning";
+      const mir = await prisma.issueMirror.findUnique({
+        where: { nodeId: p.issue.node_id },
+        select: { id: true },
+      });
+      if (mir) {
+        await notify(
+          `${gate === "release" ? "🚀" : "📝"} <b>승인 필요</b> ${esc(repo)} #${p.issue.number}\n${esc(p.issue.title)}`,
+          [[{ text: `승인 (${gate})`, callback_data: `approve:${gate}:${mir.id}` }]],
+        );
+      }
+    }
+    if (
+      event === "workflow_run" &&
+      p.workflow_run?.status === "completed" &&
+      p.workflow_run.conclusion === "failure" &&
+      /deploy|google|app\s*store|appstore|ait|toss/i.test(p.workflow_run.name ?? "")
+    ) {
+      await notify(
+        `❌ <b>배포 실패</b> ${esc(repo)}\n${esc(p.workflow_run.name ?? "")} (${esc(p.workflow_run.head_branch ?? "")})`,
+      );
+    }
+  } catch (e) {
+    console.error("[telegram] notifyHooks error:", e);
+  }
 }
 
 function repoName(p: WebhookPayload): string | null {
@@ -82,6 +121,8 @@ export async function POST(req: NextRequest) {
     // 핸들러 실패해도 200 (GitHub 재전송 + reconcile 로 복구). 로깅만.
     console.error(`[webhook] ${event} handler error:`, err);
   }
+
+  await notifyHooks(event, payload);
 
   return NextResponse.json({ status: "ok" });
 }

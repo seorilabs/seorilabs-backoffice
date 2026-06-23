@@ -32,4 +32,13 @@ export const env = {
       .filter(Boolean),
   reconcileIntervalMs: () =>
     Number(optional("RECONCILE_INTERVAL_MS", "21600000")),
+  telegramEnabled: () => bool("FEATURE_TELEGRAM_ENABLED", false),
+  telegramToken: () => optional("TELEGRAM_BOT_TOKEN"),
+  telegramWebhookSecret: () => optional("TELEGRAM_WEBHOOK_SECRET"),
+  telegramChatId: () => optional("TELEGRAM_CHAT_ID"),
+  telegramAllowedIds: () =>
+    optional("TELEGRAM_ALLOWED_IDS", "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
 };

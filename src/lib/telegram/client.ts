@@ -1,0 +1,88 @@
+import { env } from "@/lib/env";
+
+const API = "https://api.telegram.org";
+const TG_TEXT_LIMIT = 4000; // Telegram 4096 보다 보수적
+
+export interface InlineButton {
+  text: string;
+  callback_data: string;
+}
+
+export function telegramConfigured(): boolean {
+  return env.telegramEnabled() && !!env.telegramToken();
+}
+
+export function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function truncate(s: string, max = TG_TEXT_LIMIT): string {
+  return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+async function call(method: string, body: unknown): Promise<unknown> {
+  const token = env.telegramToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${API}/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    });
+    return await res.json().catch(() => null);
+  } catch (e) {
+    // 토큰이 URL 에 있으므로 전체 에러 객체 대신 message 만 로깅.
+    console.error(`[telegram] ${method} 실패:`, e instanceof Error ? e.message : "error");
+    return null;
+  }
+}
+
+export async function sendMessage(
+  chatId: string | number,
+  text: string,
+  buttons?: InlineButton[][],
+): Promise<unknown> {
+  return call("sendMessage", {
+    chat_id: chatId,
+    text: truncate(text),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
+  });
+}
+
+export async function answerCallback(id: string, text?: string): Promise<unknown> {
+  return call("answerCallbackQuery", {
+    callback_query_id: id,
+    ...(text ? { text } : {}),
+  });
+}
+
+export async function editMessageText(
+  chatId: string | number,
+  messageId: number,
+  text: string,
+): Promise<unknown> {
+  return call("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text: truncate(text),
+    parse_mode: "HTML",
+  });
+}
+
+// 기본 알림 대상(TELEGRAM_CHAT_ID)으로 전송. 실패해도 throw 안 함.
+export async function notify(text: string, buttons?: InlineButton[][]): Promise<void> {
+  const chat = env.telegramChatId();
+  if (!telegramConfigured() || !chat) return;
+  await sendMessage(chat, text, buttons);
+}
+
+export async function setWebhook(url: string, secret: string): Promise<unknown> {
+  return call("setWebhook", {
+    url,
+    secret_token: secret,
+    allowed_updates: ["message", "callback_query"],
+  });
+}

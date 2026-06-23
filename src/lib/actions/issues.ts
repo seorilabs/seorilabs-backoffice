@@ -4,8 +4,9 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireSession } from "@/lib/auth-helpers";
-import { createIssue, toggleIssueLabel, addIssueComment } from "@/lib/github/write";
+import { createIssue } from "@/lib/github/write";
 import { upsertIssue } from "@/lib/sync/mirror";
+import { toggleApprovalCore } from "@/lib/core/approvals";
 
 export interface PlanningIntake {
   repoFullName: string;
@@ -101,45 +102,7 @@ export async function toggleApproval(input: {
 }): Promise<{ ok: boolean }> {
   const session = await requireSession();
   const login = session.user.login ?? "unknown";
-  const issue = await prisma.issueMirror.findUnique({
-    where: { id: input.issueId },
-  });
-  if (!issue) throw new Error("issue not found");
-
-  const label = `approval:${input.gate}`;
-  await toggleIssueLabel({
-    repoFullName: issue.repoFullName,
-    issueNumber: issue.number,
-    label,
-    on: input.on,
-  });
-  if (input.reason) {
-    await addIssueComment({
-      repoFullName: issue.repoFullName,
-      issueNumber: issue.number,
-      body: `**승인 ${input.on ? "부여" : "회수"}** by @${login}\n\n${input.reason}`,
-    });
-  }
-
-  // optimistic 라벨 갱신 (webhook 으로 재수렴).
-  const labels = new Set((issue.labels as string[]) ?? []);
-  if (input.on) labels.add(label);
-  else labels.delete(label);
-  await prisma.issueMirror.update({
-    where: { id: issue.id },
-    data: { labels: [...labels] },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      actorLogin: login,
-      action: "issue.approval",
-      entityType: "IssueMirror",
-      entityId: issue.id,
-      payload: { gate: input.gate, on: input.on },
-    },
-  });
-
+  await toggleApprovalCore({ ...input, actorLabel: `@${login}` });
   revalidatePath("/approvals");
   revalidatePath("/issues");
   return { ok: true };
