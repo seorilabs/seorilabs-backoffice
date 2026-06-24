@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { env } from "@/lib/env";
 import { asStringArray, fmtDate, fmtDateTime } from "@/lib/format";
 import { hasEvidence } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { StageBadge, TypeBadge, PriorityTag, Pill } from "@/components/badges";
+import { AiAgentPanel } from "@/components/AiAgentPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +29,23 @@ export default async function AppDetail({
 
   const openIssues = app.issues.filter((i) => i.state === "OPEN");
   const targets = asStringArray(app.marketTargets);
+
+  const aiEnabled = env.minimaxConfigured();
+  const pendingDrafts = aiEnabled
+    ? await prisma.aiDraft.findMany({
+        where: { appId: app.id, status: "DRAFT" },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          kind: true,
+          title: true,
+          issueNumber: true,
+          outputText: true,
+          model: true,
+        },
+      })
+    : [];
 
   return (
     <div className="p-8">
@@ -94,6 +113,16 @@ export default async function AppDetail({
           </div>
         </Section>
       )}
+
+      {/* AI 에이전트 (MiniMax) */}
+      <Section title="AI 에이전트">
+        <AiAgentPanel
+          appId={app.id}
+          aiEnabled={aiEnabled}
+          openIssues={openIssues.map((i) => ({ number: i.number, title: i.title }))}
+          initialDrafts={pendingDrafts}
+        />
+      </Section>
 
       {/* 이슈/PR */}
       <Section title={`이슈 (${openIssues.length} open)`}>

@@ -76,7 +76,7 @@ kubectl -n platform exec deploy/backoffice -- \
 ## 6. 운영 메모
 - 라이프사이클 상태는 GitHub 에 없음 → `backoffice-db-backup` CronJob(일 1회) 유지. 복구 시 dump restore 후 reconcile.
 - reconcile 은 부팅 시 1회 + `RECONCILE_INTERVAL_MS`(기본 6h). `DISABLE_SCHEDULER=true` 로 비활성.
-- MiniMax 활성화는 `FEATURE_MINIMAX_ENABLED=true` + `MINIMAX_API_KEY`(v2).
+- MiniMax Stage Agent 는 `FEATURE_MINIMAX_ENABLED=true` + `MINIMAX_API_KEY`(§9).
 
 ## 7. CI 자동배포 설정 (main push → 빌드/배포)
 
@@ -138,3 +138,20 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
   ```
   (기존 Secret 이 SealedSecret 소유가 아니면 한 번 `kubectl -n platform delete secret backoffice-secrets` 후 재적용해 소유권 이관.)
 - **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) → `kubectl apply -f k8s/backoffice-sealedsecret.yaml`.
+
+## 9. MiniMax Stage Agent (단계별 AI)
+
+각 라이프사이클 단계에 AI 에이전트를 배치. **AI 는 GitHub 에 직접 쓰지 않고** `AiDraft` 초안만 만든다 → 사람이 검토/수정 → 1클릭 커밋(이슈 생성/코멘트) → webhook 으로 미러 수렴.
+
+- **모델**: MiniMax-M3 (OpenAI 호환 `/chat/completions`, gemini-pr-bot 과 동일 플랫폼 키).
+- **활성 조건**: `FEATURE_MINIMAX_ENABLED=true` AND `MINIMAX_API_KEY` 비어있지 않음(`env.minimaxConfigured()`).
+- **키 출처/회전**: gemini-pr-bot 의 `seori-pr-bot-provider-secrets`(apps ns) 와 동일 값. backoffice 는 `backoffice-secrets`(platform ns)에 복제 보관(SealedSecret).
+  ```bash
+  # apps ns 키를 platform/backoffice-secrets 스코프로 raw 봉인 → SealedSecret 의 MINIMAX_API_KEY 항목 교체 → apply
+  VAL=$(kubectl -n apps get secret seori-pr-bot-provider-secrets -o jsonpath='{.data.MINIMAX_API_KEY}' | base64 -d)
+  printf '%s' "$VAL" | kubeseal --raw --namespace platform --name backoffice-secrets \
+    --controller-namespace kube-system --controller-name sealed-secrets-controller
+  # 출력 암호문을 k8s/backoffice-sealedsecret.yaml 의 MINIMAX_API_KEY 에 넣고 kubectl apply
+  ```
+- **에이전트(현재)**: 기획(`PLANNING_SPEC`, `/plan` AI 버튼→폼 채움), 분해(`TASK_BREAKDOWN`, 앱 상세→대상 이슈 코멘트), 릴리스노트(`RELEASE_NOTES`, 앱 상세→새 이슈+`release-notes` 라벨). 코드 작성은 하지 않음(자율 Claude routine 담당).
+- **스키마**: `ai_draft` 테이블(마이그레이션 `1_ai_draft`). DRAFT→COMMITTED/DISCARDED.
