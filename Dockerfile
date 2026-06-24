@@ -14,7 +14,9 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma ./prisma
-RUN pnpm install --frozen-lockfile
+# pnpm store 를 캐시 마운트에 두어 영구 빌더에서 재다운로드 회피.
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+  pnpm install --frozen-lockfile --store-dir=/pnpm/store
 
 # ── build: next build (standalone) + prisma generate ──
 FROM base AS build
@@ -23,7 +25,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="mysql://build:build@127.0.0.1:3306/build"
-RUN pnpm prisma generate && pnpm build
+# .next/cache(webpack 증분)를 캐시 마운트에 → 영구 빌더에서 incremental build.
+RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
+  pnpm prisma generate && pnpm build
 
 # ── runtime: 슬림 standalone + prisma migrate(deploy) 가능 ──
 FROM base AS runtime
@@ -41,7 +45,8 @@ COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 # migrate deploy 용: schema/migrations + prisma CLI(글로벌, schema-engine 포함).
 COPY --from=build /app/prisma ./prisma
-RUN npm install -g prisma@6.19.3
+RUN --mount=type=cache,id=npm-global,target=/root/.npm \
+  npm install -g prisma@6.19.3
 
 USER 10001
 EXPOSE 3000
