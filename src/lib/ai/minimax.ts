@@ -15,6 +15,17 @@ export interface CompleteOptions {
   jsonOutput?: boolean;
 }
 
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface ChatOptions {
+  temperature?: number;
+  maxTokens?: number;
+  jsonOutput?: boolean;
+}
+
 export class MiniMaxNotConfiguredError extends Error {
   constructor() {
     super(
@@ -28,17 +39,22 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max);
 }
 
-// 프롬프트 컨텍스트 상한(과대 요청·요금 폭주 방지).
-const MAX_PROMPT_CHARS = 24_000;
+// 단일 메시지 컨텍스트 상한(과대 요청·요금 폭주 방지).
+const MAX_MSG_CHARS = 12_000;
 
-export async function miniMaxComplete(opts: CompleteOptions): Promise<string> {
+// 멀티턴 채팅(텔레그램 대화 등). messages 는 system/user/assistant 순서.
+export async function miniMaxChat(
+  messages: ChatMessage[],
+  opts: ChatOptions = {},
+): Promise<string> {
   if (!env.minimaxConfigured()) throw new MiniMaxNotConfiguredError();
 
   const baseUrl = env.minimaxBaseUrl().replace(/\/+$/, "");
   const url = `${baseUrl}/chat/completions`;
-  const messages: Array<{ role: string; content: string }> = [];
-  if (opts.system) messages.push({ role: "system", content: opts.system });
-  messages.push({ role: "user", content: truncate(opts.prompt, MAX_PROMPT_CHARS) });
+  const safeMessages = messages.map((m) => ({
+    role: m.role,
+    content: truncate(m.content, MAX_MSG_CHARS),
+  }));
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.minimaxTimeoutMs());
@@ -51,7 +67,7 @@ export async function miniMaxComplete(opts: CompleteOptions): Promise<string> {
       },
       body: JSON.stringify({
         model: env.minimaxModel(),
-        messages,
+        messages: safeMessages,
         temperature: opts.temperature ?? 0.3,
         max_completion_tokens: opts.maxTokens ?? 4096,
         thinking: { type: "disabled" },
@@ -92,4 +108,16 @@ export async function miniMaxComplete(opts: CompleteOptions): Promise<string> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// 단일 system+user 호출(에이전트 초안 생성). 내부적으로 miniMaxChat 위임.
+export async function miniMaxComplete(opts: CompleteOptions): Promise<string> {
+  const messages: ChatMessage[] = [];
+  if (opts.system) messages.push({ role: "system", content: opts.system });
+  messages.push({ role: "user", content: opts.prompt });
+  return miniMaxChat(messages, {
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+    jsonOutput: opts.jsonOutput,
+  });
 }

@@ -347,6 +347,18 @@ enum AiDraftStatus {
 // ──────────────────────────────────────────────────────────────────────────
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
+// 텔레그램 턴 기반 채팅 이력(MiniMax 대화 컨텍스트). chatId 별 롤링.
+model TelegramTurn {
+  id        String   @id @default(cuid())
+  chatId    String // telegram chat id
+  role      String // user | assistant
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([chatId, createdAt])
+  @@map("telegram_turn")
+}
+
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
   event      String

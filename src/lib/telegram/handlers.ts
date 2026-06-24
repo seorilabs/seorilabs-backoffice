@@ -1,10 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { sendMessage, answerCallback, editMessageText, esc } from "@/lib/telegram/client";
+import {
+  sendMessage,
+  answerCallback,
+  editMessageText,
+  sendChatAction,
+  esc,
+} from "@/lib/telegram/client";
 import { toggleApprovalCore } from "@/lib/core/approvals";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
+import { handleChat, resetChat } from "@/lib/telegram/chat";
 
 interface TgFrom {
   id: number;
@@ -35,6 +42,9 @@ function helpText(): string {
   return [
     "<b>Seorilabs Backoffice 봇</b>",
     "",
+    "💬 그냥 메시지를 보내면 AI 비서와 대화합니다(턴 기반).",
+    "/reset — 대화 맥락 초기화",
+    "",
     "/approvals — 승인 대기 목록(버튼으로 승인)",
     "/p1 — 전 레포 P1 이슈",
     "/status [slug] — 앱 현황",
@@ -55,6 +65,14 @@ async function handleMessage(m: TgMessage): Promise<void> {
     return;
   }
   const text = (m.text ?? "").trim();
+  if (!text) return;
+
+  // 슬래시 명령이 아니면 → AI 비서와 턴 기반 채팅.
+  if (!text.startsWith("/")) {
+    await cmdChat(m.chat.id, text);
+    return;
+  }
+
   const [cmd, ...args] = text.split(/\s+/);
   switch (cmd) {
     case "/start":
@@ -70,10 +88,30 @@ async function handleMessage(m: TgMessage): Promise<void> {
     case "/status":
       await cmdStatus(m.chat.id, args[0]);
       break;
+    case "/chat": {
+      const msg = args.join(" ").trim();
+      if (!msg) {
+        await sendMessage(m.chat.id, "사용법: /chat <메시지> — 또는 그냥 메시지를 보내세요.");
+      } else {
+        await cmdChat(m.chat.id, msg);
+      }
+      break;
+    }
+    case "/reset":
+      await resetChat(m.chat.id);
+      await sendMessage(m.chat.id, "🧹 대화 맥락을 초기화했습니다.");
+      break;
     default:
       await sendMessage(m.chat.id, "알 수 없는 명령입니다. /help");
       break;
   }
+}
+
+// AI 비서 턴 기반 채팅. 입력중 표시 후 응답.
+async function cmdChat(chatId: number, text: string): Promise<void> {
+  await sendChatAction(chatId, "typing");
+  const reply = await handleChat(chatId, text);
+  await sendMessage(chatId, esc(reply));
 }
 
 async function handleCallback(cq: TgCallback): Promise<void> {

@@ -52,6 +52,14 @@ export async function sendMessage(
   });
 }
 
+// 입력중 표시(채팅 응답 지연 동안 UX). 실패 무시.
+export async function sendChatAction(
+  chatId: string | number,
+  action = "typing",
+): Promise<unknown> {
+  return call("sendChatAction", { chat_id: chatId, action });
+}
+
 export async function answerCallback(id: string, text?: string): Promise<unknown> {
   return call("answerCallbackQuery", {
     callback_query_id: id,
