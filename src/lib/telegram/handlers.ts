@@ -8,8 +8,13 @@ import {
   sendChatAction,
   esc,
 } from "@/lib/telegram/client";
+import type { AiDraftKind } from "@prisma/client";
 import { toggleApprovalCore } from "@/lib/core/approvals";
-import { createPlanningDraftCore, commitDraftCore } from "@/lib/core/ai-drafts";
+import {
+  createPlanningDraftCore,
+  commitDraftCore,
+  generateStageDraftCore,
+} from "@/lib/core/ai-drafts";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
@@ -227,21 +232,78 @@ async function handlePlanIdea(
       idea,
       actorLabel: `telegram:${fromId ?? "?"}`,
     });
-    const preview = [
-      `<b>📝 기획 초안</b> — ${esc(d.displayName)}`,
-      `<b>${esc(d.title)}</b>`,
-      "",
-      esc(d.outputText.slice(0, 1400)),
-      d.outputText.length > 1400 ? "…(이하 생략, 이슈에는 전체 반영)" : "",
-    ].join("\n");
-    await sendMessage(chatId, preview, [
-      [
-        { text: "✅ 이슈 생성", callback_data: `plan:make:${d.id}` },
-        { text: "✖️ 취소", callback_data: `plan:cancel:${d.id}` },
-      ],
-    ]);
+    await sendDraftPreview(chatId, "📝 기획 초안", d);
   } catch (e) {
     await sendMessage(chatId, "초안 생성 실패: " + (e instanceof Error ? e.message : "error"));
+  }
+}
+
+// 초안 미리보기 + 커밋/취소 버튼(기획·단계 에이전트 공용).
+async function sendDraftPreview(
+  chatId: number,
+  heading: string,
+  d: { id: string; title: string | null; outputText: string },
+): Promise<void> {
+  const head = `<b>${esc(heading)}</b>${d.title ? `\n<b>${esc(d.title)}</b>` : ""}`;
+  const body = esc(d.outputText.slice(0, 1400)) + (d.outputText.length > 1400 ? "\n…(이하 생략, 커밋 시 전체 반영)" : "");
+  await sendMessage(chatId, `${head}\n\n${body}`, [
+    [
+      { text: "✅ 커밋", callback_data: `plan:make:${d.id}` },
+      { text: "✖️ 취소", callback_data: `plan:cancel:${d.id}` },
+    ],
+  ]);
+}
+
+const GEN_KINDS = new Set<AiDraftKind>([
+  "TASK_BREAKDOWN",
+  "QA_CHECKLIST",
+  "RELEASE_NOTES",
+  "STORE_COPY",
+  "IMPROVEMENT_HYPOTHESIS",
+]);
+const GEN_HEADING: Record<string, string> = {
+  TASK_BREAKDOWN: "🧩 작업 분해",
+  QA_CHECKLIST: "🧪 QA 체크리스트",
+  RELEASE_NOTES: "🚀 릴리스 노트",
+  STORE_COPY: "🏬 스토어 문안",
+  IMPROVEMENT_HYPOTHESIS: "💡 개선 가설",
+};
+
+// 넛지/주간리뷰 버튼 → 단계 에이전트 초안 생성 → 미리보기.
+async function cbGen(cq: TgCallback, fromId: number, kindRaw: string, appId: string): Promise<void> {
+  const kind = kindRaw as AiDraftKind;
+  if (!GEN_KINDS.has(kind) || !ID_RE.test(appId)) {
+    await answerCallback(cq.id, "잘못된 요청");
+    return;
+  }
+  await answerCallback(cq.id, "⏳ 생성 중…");
+  const chatId = cq.message?.chat.id;
+  if (chatId == null) return;
+  await sendChatAction(chatId, "typing");
+  try {
+    let issueNumber: number | undefined;
+    if (kind === "TASK_BREAKDOWN" || kind === "QA_CHECKLIST") {
+      const latest = await prisma.issueMirror.findFirst({
+        where: { appId, state: "OPEN" },
+        orderBy: { ghUpdatedAt: "desc" },
+        select: { number: true },
+      });
+      if (!latest) {
+        await sendMessage(chatId, "열린 이슈가 없어 생성할 수 없습니다.");
+        return;
+      }
+      issueNumber = latest.number;
+    }
+    await sendMessage(chatId, `⏳ ${GEN_HEADING[kind] ?? "초안"} 생성 중… (수십 초)`);
+    const d = await generateStageDraftCore({
+      appId,
+      kind,
+      issueNumber,
+      actorLabel: `telegram:${fromId}`,
+    });
+    await sendDraftPreview(chatId, GEN_HEADING[kind] ?? "AI 초안", d);
+  } catch (e) {
+    await sendMessage(chatId, "생성 실패: " + (e instanceof Error ? e.message : "error"));
   }
 }
 
@@ -262,6 +324,8 @@ async function handleCallback(cq: TgCallback): Promise<void> {
     if (sub === "make") return cbPlanMake(cq, fromId, arg);
     if (sub === "cancel") return cbPlanCancel(cq, arg);
   }
+
+  if (action === "gen") return cbGen(cq, fromId, rest[0], arg);
 
   if (action === "status" && rest[0] === "app") {
     await answerCallback(cq.id);

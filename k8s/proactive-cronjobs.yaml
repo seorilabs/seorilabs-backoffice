@@ -1,0 +1,87 @@
+# 선제(proactive) 알림 CronJob — backoffice 내부 서비스의 admin 엔드포인트를 호출.
+# 스케줄은 UTC 기준(클러스터 기본). 09:00 KST = 00:00 UTC.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-daily-digest
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "0 0 * * *" # 매일 00:00 UTC = 09:00 KST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 150 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/digest
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-weekly-liveops
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "0 0 * * 1" # 매주 월 00:00 UTC = 월 09:00 KST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 90 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/liveops-review
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

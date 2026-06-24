@@ -10,6 +10,8 @@ import {
   type GhRunInput,
 } from "@/lib/sync/mirror";
 import { notify, esc } from "@/lib/telegram/client";
+import { env } from "@/lib/env";
+import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,15 +48,45 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         );
       }
     }
+    const isDeploy = /deploy|google|app\s*store|appstore|ait|toss/i.test(
+      p.workflow_run?.name ?? "",
+    );
     if (
       event === "workflow_run" &&
       p.workflow_run?.status === "completed" &&
       p.workflow_run.conclusion === "failure" &&
-      /deploy|google|app\s*store|appstore|ait|toss/i.test(p.workflow_run.name ?? "")
+      isDeploy
     ) {
       await notify(
         `❌ <b>배포 실패</b> ${esc(repo)}\n${esc(p.workflow_run.name ?? "")} (${esc(p.workflow_run.head_branch ?? "")})`,
       );
+    }
+    // 배포 성공 → 릴리스 노트 넛지(출시/운영 단계에서만, 노이즈 억제).
+    if (
+      event === "workflow_run" &&
+      p.workflow_run?.status === "completed" &&
+      p.workflow_run.conclusion === "success" &&
+      isDeploy &&
+      env.minimaxConfigured() &&
+      p.repository?.full_name
+    ) {
+      const app = await prisma.app.findFirst({
+        where: { repoFullName: p.repository.full_name },
+        select: { id: true, displayName: true, currentStage: true },
+      });
+      if (app && (app.currentStage === "RELEASE" || app.currentStage === "LIVEOPS")) {
+        await notify(
+          `🚀 <b>${esc(app.displayName)}</b> 배포 성공 — 릴리스 노트 만들까요?`,
+          [[{ text: "🚀 릴리스 노트 생성", callback_data: `gen:RELEASE_NOTES:${app.id}` }]],
+        );
+      }
+    }
+    // 새 P1 이슈 → 즉시 알림.
+    if (event === "issues" && p.action === "opened" && p.issue) {
+      const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
+      if (priorityFromLabels(labels) === "P1") {
+        await notify(`🔥 <b>새 P1</b> ${esc(repo)} #${p.issue.number}\n${esc(p.issue.title)}`);
+      }
     }
   } catch (e) {
     console.error("[telegram] notifyHooks error:", e);

@@ -5,6 +5,7 @@ import type { Lifecycle } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recordTransition } from "@/lib/sync/transition";
 import { requireSession } from "@/lib/auth-helpers";
+import { notifyStageNudge } from "@/lib/telegram/nudges";
 
 // 보드에서 수동 라이프사이클 전이.
 export async function transitionApp(
@@ -33,6 +34,8 @@ export async function transitionApp(
         payload: { to },
       },
     });
+    // 다음 단계 에이전트 제안(넛지). 응답 블로킹 안 하도록 fire-and-forget.
+    void notifyStageNudge(appId, to);
   }
 
   revalidatePath("/board");

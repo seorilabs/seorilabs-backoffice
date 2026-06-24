@@ -1,10 +1,19 @@
+import type { AiDraftKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
 import { miniMaxComplete } from "@/lib/ai/minimax";
-import { AGENTS, buildPlanningPrompt } from "@/lib/ai/agents";
+import {
+  AGENTS,
+  buildPlanningPrompt,
+  buildDecomposePrompt,
+  buildQaPrompt,
+  buildReleaseNotesPrompt,
+  buildStoreCopyPrompt,
+  buildImprovementPrompt,
+} from "@/lib/ai/agents";
 import { createIssue, addIssueComment } from "@/lib/github/write";
-import { getRepoContext } from "@/lib/github/read";
+import { getRepoContext, getIssue } from "@/lib/github/read";
 import { upsertIssue } from "@/lib/sync/mirror";
 
 // 세션 비의존 코어(텔레그램·웹 공용). actorLabel 로 행위자 추적.
@@ -67,6 +76,150 @@ export async function createPlanningDraftCore(input: {
     outputText,
     repoFullName: app.repoFullName,
     displayName: app.displayName,
+  };
+}
+
+export interface StageDraftResult {
+  id: string;
+  kind: AiDraftKind;
+  title: string | null;
+  issueNumber: number | null;
+  outputText: string;
+  model: string;
+  appId: string;
+}
+
+// 단계 에이전트(분해/QA/릴리스노트/스토어/개선) 초안 생성 → AiDraft 저장. 세션 비의존.
+export async function generateStageDraftCore(input: {
+  appId: string;
+  kind: AiDraftKind;
+  issueNumber?: number;
+  actorLabel?: string;
+}): Promise<StageDraftResult> {
+  if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
+  const app = await prisma.app.findUnique({ where: { id: input.appId } });
+  if (!app) throw new Error("앱을 찾을 수 없습니다.");
+  const meta = AGENTS[input.kind];
+
+  let system: string;
+  let prompt: string;
+  let title: string | null = null;
+  let issueNumber: number | null = null;
+  let inputJson: Prisma.InputJsonObject;
+
+  if (input.kind === "TASK_BREAKDOWN" || input.kind === "QA_CHECKLIST") {
+    if (!input.issueNumber) throw new Error("대상 이슈 번호가 필요합니다.");
+    const issue = await getIssue(app.repoFullName, input.issueNumber);
+    issueNumber = input.issueNumber;
+    const issueCtx = {
+      displayName: app.displayName,
+      type: app.type,
+      engine: app.engine,
+      issueNumber: input.issueNumber,
+      issueTitle: issue.title,
+      issueBody: issue.body,
+    };
+    ({ system, prompt } =
+      input.kind === "QA_CHECKLIST" ? buildQaPrompt(issueCtx) : buildDecomposePrompt(issueCtx));
+    inputJson = { issueNumber: input.issueNumber, issueTitle: issue.title };
+  } else if (input.kind === "RELEASE_NOTES") {
+    const mergedPrs = await prisma.pullRequestMirror.findMany({
+      where: { appId: app.id, state: "MERGED" },
+      orderBy: { mergedAt: "desc" },
+      take: 30,
+      select: { number: true, title: true },
+    });
+    const latestRelease = await prisma.releaseRecord.findFirst({
+      where: { appId: app.id },
+      orderBy: { updatedAt: "desc" },
+      select: { version: true },
+    });
+    const version = latestRelease?.version ?? "vNext";
+    title = `릴리스 노트: ${app.displayName} ${version}`;
+    ({ system, prompt } = buildReleaseNotesPrompt({
+      displayName: app.displayName,
+      type: app.type,
+      marketTargets: asStringArray(app.marketTargets),
+      version,
+      mergedPrs,
+    }));
+    inputJson = { version, prCount: mergedPrs.length };
+  } else if (input.kind === "STORE_COPY") {
+    const recentPrs = await prisma.pullRequestMirror.findMany({
+      where: { appId: app.id, state: "MERGED" },
+      orderBy: { mergedAt: "desc" },
+      take: 20,
+      select: { number: true, title: true },
+    });
+    title = `스토어 등록 문안: ${app.displayName}`;
+    ({ system, prompt } = buildStoreCopyPrompt({
+      displayName: app.displayName,
+      type: app.type,
+      engine: app.engine,
+      marketTargets: asStringArray(app.marketTargets),
+      recentPrs,
+    }));
+    inputJson = { prCount: recentPrs.length };
+  } else if (input.kind === "IMPROVEMENT_HYPOTHESIS") {
+    const [openIssues, recentPrs, recentReleases] = await Promise.all([
+      prisma.issueMirror.findMany({
+        where: { appId: app.id, state: "OPEN" },
+        orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+        take: 20,
+        select: { number: true, title: true },
+      }),
+      prisma.pullRequestMirror.findMany({
+        where: { appId: app.id, state: "MERGED" },
+        orderBy: { mergedAt: "desc" },
+        take: 15,
+        select: { number: true, title: true },
+      }),
+      prisma.releaseRecord.findMany({
+        where: { appId: app.id },
+        orderBy: { updatedAt: "desc" },
+        take: 5,
+        select: { version: true, market: true },
+      }),
+    ]);
+    title = `개선 가설: ${app.displayName}`;
+    ({ system, prompt } = buildImprovementPrompt({
+      displayName: app.displayName,
+      type: app.type,
+      marketTargets: asStringArray(app.marketTargets),
+      openIssues,
+      recentPrs,
+      recentReleases: recentReleases.map((r) => ({ version: r.version, market: r.market })),
+    }));
+    inputJson = { openIssues: openIssues.length, prCount: recentPrs.length };
+  } else {
+    throw new Error("지원하지 않는 에이전트입니다.");
+  }
+
+  const outputText = await miniMaxComplete({ system, prompt, temperature: 0.3, maxTokens: 2048 });
+
+  const draft = await prisma.aiDraft.create({
+    data: {
+      appId: app.id,
+      repoFullName: app.repoFullName,
+      stage: meta.stage,
+      kind: input.kind,
+      title,
+      issueNumber,
+      inputJson,
+      outputText,
+      model: env.minimaxModel(),
+      createdBy: input.actorLabel ?? null,
+    },
+  });
+
+  return {
+    id: draft.id,
+    kind: draft.kind,
+    title: draft.title,
+    issueNumber: draft.issueNumber,
+    outputText: draft.outputText,
+    model: draft.model,
+    appId: app.id,
   };
 }
 
