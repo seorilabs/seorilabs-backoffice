@@ -122,3 +122,19 @@ rm -f /tmp/ci.kubeconfig
 org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 repository access 에 `seorilabs-backoffice` 추가(아니면 job 이 queued 로 멈춤).
 
 이후: main push → 자동 배포. 수동 재배포는 Actions → **Deploy** → Run workflow.
+
+## 8. Sealed Secrets (시크릿 git 버전관리)
+
+`backoffice-secrets`는 **암호화된 채 git에 보관**된다(`k8s/backoffice-sealedsecret.yaml`). kube-system 의 `sealed-secrets-controller`(v0.38.1)가 복호화해 실제 Secret 을 생성.
+
+- **봉인 키 백업(필수·DR)**: `~/.config/seorilabs/sealed-secrets-master.key.yaml` — 이 키가 없으면 클러스터/컨트롤러 유실 시 SealedSecret 복호화 불가. **반드시 오프머신 안전 보관**. git 커밋 금지.
+- **시크릿 추가/회전**: 임시 평문 Secret 을 만들고 봉인 → 재커밋.
+  ```bash
+  kubectl -n platform create secret generic backoffice-secrets \
+    --from-literal=KEY=VALUE ... --dry-run=client -o yaml \
+    | kubeseal --controller-namespace kube-system --controller-name sealed-secrets-controller --format yaml \
+    > k8s/backoffice-sealedsecret.yaml
+  kubectl apply -f k8s/backoffice-sealedsecret.yaml   # 컨트롤러가 Secret 갱신
+  ```
+  (기존 Secret 이 SealedSecret 소유가 아니면 한 번 `kubectl -n platform delete secret backoffice-secrets` 후 재적용해 소유권 이관.)
+- **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) → `kubectl apply -f k8s/backoffice-sealedsecret.yaml`.
