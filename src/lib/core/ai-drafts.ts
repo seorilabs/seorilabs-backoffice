@@ -36,7 +36,13 @@ export async function createPlanningDraftCore(input: {
     title,
     idea: input.idea,
   });
-  const outputText = await miniMaxComplete({ system, prompt, temperature: 0.4 });
+  // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
+  const outputText = await miniMaxComplete({
+    system,
+    prompt,
+    temperature: 0.4,
+    maxTokens: 2048,
+  });
 
   const draft = await prisma.aiDraft.create({
     data: {

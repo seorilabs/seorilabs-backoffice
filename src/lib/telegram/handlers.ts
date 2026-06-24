@@ -207,6 +207,7 @@ async function handlePlanIdea(
     return;
   }
   await sendChatAction(chatId, "typing");
+  await sendMessage(chatId, "⏳ 기획 초안 생성 중… (수십 초)");
   try {
     const d = await createPlanningDraftCore({
       appId: app.id,
