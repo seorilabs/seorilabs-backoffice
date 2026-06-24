@@ -50,3 +50,5 @@ webhook 로컬 수신은 smee.io 등으로 `/api/webhooks` 로 포워딩. 시드
 ```
 
 배포/운영 절차는 [`docs/DEPLOY.md`](docs/DEPLOY.md) 참고.
+
+<!-- ci cache warm test 151eba1 -->
