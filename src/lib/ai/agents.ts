@@ -26,6 +26,26 @@ export const AGENTS: Record<AiDraftKind, AgentMeta> = {
     ko: "분해 에이전트",
     commitTarget: "ISSUE_COMMENT",
   },
+  QA_CHECKLIST: {
+    kind: "QA_CHECKLIST",
+    stage: "QA",
+    ko: "QA 에이전트",
+    commitTarget: "ISSUE_COMMENT",
+  },
+  STORE_COPY: {
+    kind: "STORE_COPY",
+    stage: "MARKET_SUBMISSION",
+    ko: "스토어 에이전트",
+    commitTarget: "NEW_ISSUE",
+    commitLabels: ["store-copy"],
+  },
+  IMPROVEMENT_HYPOTHESIS: {
+    kind: "IMPROVEMENT_HYPOTHESIS",
+    stage: "LIVEOPS",
+    ko: "개선 에이전트",
+    commitTarget: "NEW_ISSUE",
+    commitLabels: ["improvement"],
+  },
   RELEASE_NOTES: {
     kind: "RELEASE_NOTES",
     stage: "RELEASE",
@@ -152,6 +172,115 @@ export function buildReleaseNotesPrompt(ctx: ReleaseNotesContext): {
       "1. `## 사용자용 릴리스 노트` — 사용자 입장의 변경점(불릿, 3~7개).",
       "2. `## 스토어 What's New` — 마켓 제출용 짧은 카피(2~4줄, 200자 이내).",
       "3. `## 내부 Changelog` — PR 기준 기술 변경 요약.",
+    ].join("\n"),
+  };
+}
+
+// ── QA 에이전트(QA): 이슈/기능 → 테스트 체크리스트 ──
+export function buildQaPrompt(ctx: DecomposeContext): {
+  system: string;
+  prompt: string;
+} {
+  return {
+    system: [
+      "당신은 Seorilabs 의 QA 엔지니어다.",
+      "기능/이슈를 검증할 테스트 케이스를 한국어 체크리스트로 작성한다.",
+      "정상 경로뿐 아니라 경계값·오류·기기/마켓별 차이·회귀 위험을 포함한다.",
+    ].join(" "),
+    prompt: [
+      `# 대상 이슈 #${ctx.issueNumber} — ${ctx.issueTitle}`,
+      `- 프로젝트: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"}, ${ctx.engine})`,
+      "",
+      "## 이슈 본문",
+      ctx.issueBody.trim() || "(본문 없음)",
+      "",
+      "다음 형식으로 작성하라:",
+      "1. `## 기능 테스트` — 정상 경로 검증 체크리스트(`- [ ]`).",
+      "2. `## 경계/오류 케이스` — 빈값·한계·네트워크 오류·중복 등(`- [ ]`).",
+      "3. `## 플랫폼/마켓 확인` — Play/App Store/AppsInToss 또는 기기별 차이(`- [ ]`).",
+      "4. `## 회귀 위험` — 이 변경이 깨뜨릴 수 있는 기존 기능(`- [ ]`).",
+    ].join("\n"),
+  };
+}
+
+export interface StoreCopyContext {
+  displayName: string;
+  type: AppType;
+  engine: AppEngine;
+  marketTargets: string[];
+  recentPrs: Array<{ number: number; title: string }>;
+}
+
+// ── 스토어 에이전트(MARKET_SUBMISSION): 마켓별 등록 문안 ──
+export function buildStoreCopyPrompt(ctx: StoreCopyContext): {
+  system: string;
+  prompt: string;
+} {
+  const prLines = ctx.recentPrs.length
+    ? ctx.recentPrs.map((p) => `- #${p.number} ${p.title}`).join("\n")
+    : "(최근 변경 정보 없음)";
+  const markets = ctx.marketTargets.length ? ctx.marketTargets.join(", ") : "Play, App Store, AppsInToss";
+  return {
+    system: [
+      "당신은 Seorilabs 의 앱 마케터다.",
+      "마켓 심사를 통과할 정확하고 매력적인 스토어 등록 문안을 한국어로 작성한다.",
+      "과장·허위 금지, 정책 위반 표현(최고/1위 등 근거 없는 단정) 회피. 마켓별 글자수 제약을 의식한다.",
+    ].join(" "),
+    prompt: [
+      `# 대상: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"}, ${ctx.engine})`,
+      `- 타겟 마켓: ${markets}`,
+      "",
+      "## 최근 변경(머지 PR)",
+      prLines,
+      "",
+      "다음을 작성하라(마켓 공통 + 차이 표기):",
+      "1. `## 앱 이름/부제` — 30자 내 제목 + 짧은 부제.",
+      "2. `## 짧은 설명` — 80자 이내(Play short description 대응).",
+      "3. `## 전체 설명` — 핵심 가치·주요 기능·대상 사용자(불릿 포함).",
+      "4. `## What's New` — 이번 업데이트 요약(200자 이내).",
+      "5. `## 키워드/태그` — 검색 최적화 키워드 10개 내외.",
+    ].join("\n"),
+  };
+}
+
+export interface ImprovementContext {
+  displayName: string;
+  type: AppType;
+  marketTargets: string[];
+  openIssues: Array<{ number: number; title: string }>;
+  recentPrs: Array<{ number: number; title: string }>;
+  recentReleases: Array<{ version: string; market: string }>;
+}
+
+// ── 개선 에이전트(LIVEOPS): 현황 → 개선 가설 ──
+export function buildImprovementPrompt(ctx: ImprovementContext): {
+  system: string;
+  prompt: string;
+} {
+  const fmt = (arr: string[]) => (arr.length ? arr.join("\n") : "(없음)");
+  return {
+    system: [
+      "당신은 Seorilabs 의 라이브옵스/그로스 담당이다.",
+      "운영 중인 앱/게임의 현황을 보고 개선 가설을 한국어로 제안한다.",
+      "각 가설은 '문제 추정 → 가설 → 실험/지표 → 예상 효과' 구조로, 검증 가능하게 쓴다.",
+      "데이터가 없으면 단정하지 말고 '확인 필요 지표'로 표시한다. (정량 지표 연동은 추후)",
+    ].join(" "),
+    prompt: [
+      `# 대상: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"}) · 마켓 ${ctx.marketTargets.join(", ") || "미정"}`,
+      "",
+      "## 열린 이슈",
+      fmt(ctx.openIssues.map((i) => `- #${i.number} ${i.title}`)),
+      "",
+      "## 최근 머지 PR",
+      fmt(ctx.recentPrs.map((p) => `- #${p.number} ${p.title}`)),
+      "",
+      "## 최근 릴리스",
+      fmt(ctx.recentReleases.map((r) => `- ${r.version} (${r.market})`)),
+      "",
+      "다음을 작성하라:",
+      "1. `## 개선 가설` — 3~5개. 각 가설은 `### 가설N: 제목` 아래 문제추정·가설·실험/지표·예상효과.",
+      "2. `## 우선순위 추천` — 효과/노력 기준 1~2개 우선 추천.",
+      "3. `## 확인 필요 지표` — 판단에 필요한데 현재 없는 데이터(GA4 등).",
     ].join("\n"),
   };
 }

@@ -15,6 +15,9 @@ import {
   buildPlanningPrompt,
   buildDecomposePrompt,
   buildReleaseNotesPrompt,
+  buildQaPrompt,
+  buildStoreCopyPrompt,
+  buildImprovementPrompt,
 } from "@/lib/ai/agents";
 import { getIssue } from "@/lib/github/read";
 import { commitDraftCore } from "@/lib/core/ai-drafts";
@@ -96,18 +99,20 @@ export async function generateStageDraft(input: {
   let issueNumber: number | null = null;
   let inputJson: Prisma.InputJsonObject;
 
-  if (input.kind === "TASK_BREAKDOWN") {
-    if (!input.issueNumber) throw new Error("분해할 이슈 번호가 필요합니다.");
+  if (input.kind === "TASK_BREAKDOWN" || input.kind === "QA_CHECKLIST") {
+    if (!input.issueNumber) throw new Error("대상 이슈 번호가 필요합니다.");
     const issue = await getIssue(app.repoFullName, input.issueNumber);
     issueNumber = input.issueNumber;
-    ({ system, prompt } = buildDecomposePrompt({
+    const issueCtx = {
       displayName: app.displayName,
       type: app.type,
       engine: app.engine,
       issueNumber: input.issueNumber,
       issueTitle: issue.title,
       issueBody: issue.body,
-    }));
+    };
+    ({ system, prompt } =
+      input.kind === "QA_CHECKLIST" ? buildQaPrompt(issueCtx) : buildDecomposePrompt(issueCtx));
     inputJson = { issueNumber: input.issueNumber, issueTitle: issue.title };
   } else if (input.kind === "RELEASE_NOTES") {
     const mergedPrs = await prisma.pullRequestMirror.findMany({
@@ -131,6 +136,53 @@ export async function generateStageDraft(input: {
       mergedPrs,
     }));
     inputJson = { version, prCount: mergedPrs.length };
+  } else if (input.kind === "STORE_COPY") {
+    const recentPrs = await prisma.pullRequestMirror.findMany({
+      where: { appId: app.id, state: "MERGED" },
+      orderBy: { mergedAt: "desc" },
+      take: 20,
+      select: { number: true, title: true },
+    });
+    title = `스토어 등록 문안: ${app.displayName}`;
+    ({ system, prompt } = buildStoreCopyPrompt({
+      displayName: app.displayName,
+      type: app.type,
+      engine: app.engine,
+      marketTargets: asStringArray(app.marketTargets),
+      recentPrs,
+    }));
+    inputJson = { prCount: recentPrs.length };
+  } else if (input.kind === "IMPROVEMENT_HYPOTHESIS") {
+    const [openIssues, recentPrs, recentReleases] = await Promise.all([
+      prisma.issueMirror.findMany({
+        where: { appId: app.id, state: "OPEN" },
+        orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+        take: 20,
+        select: { number: true, title: true },
+      }),
+      prisma.pullRequestMirror.findMany({
+        where: { appId: app.id, state: "MERGED" },
+        orderBy: { mergedAt: "desc" },
+        take: 15,
+        select: { number: true, title: true },
+      }),
+      prisma.releaseRecord.findMany({
+        where: { appId: app.id },
+        orderBy: { updatedAt: "desc" },
+        take: 5,
+        select: { version: true, market: true },
+      }),
+    ]);
+    title = `개선 가설: ${app.displayName}`;
+    ({ system, prompt } = buildImprovementPrompt({
+      displayName: app.displayName,
+      type: app.type,
+      marketTargets: asStringArray(app.marketTargets),
+      openIssues,
+      recentPrs,
+      recentReleases: recentReleases.map((r) => ({ version: r.version, market: r.market })),
+    }));
+    inputJson = { openIssues: openIssues.length, prCount: recentPrs.length };
   } else {
     throw new Error("이 화면에서 지원하지 않는 에이전트입니다.");
   }

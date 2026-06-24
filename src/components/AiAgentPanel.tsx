@@ -14,8 +14,21 @@ const KIND_META: Record<
   { ko: string; needsTitle: boolean; commitLabel: string }
 > = {
   TASK_BREAKDOWN: { ko: "분해 에이전트", needsTitle: false, commitLabel: "코멘트로 커밋" },
+  QA_CHECKLIST: { ko: "QA 에이전트", needsTitle: false, commitLabel: "코멘트로 커밋" },
+  STORE_COPY: { ko: "스토어 에이전트", needsTitle: true, commitLabel: "이슈로 커밋" },
+  IMPROVEMENT_HYPOTHESIS: { ko: "개선 에이전트", needsTitle: true, commitLabel: "이슈로 커밋" },
   RELEASE_NOTES: { ko: "릴리스노트 에이전트", needsTitle: true, commitLabel: "이슈로 커밋" },
 };
+
+// 대상 이슈가 필요한 에이전트(코멘트형).
+const NEEDS_ISSUE = new Set(["TASK_BREAKDOWN", "QA_CHECKLIST"]);
+
+type GenKind =
+  | "TASK_BREAKDOWN"
+  | "QA_CHECKLIST"
+  | "STORE_COPY"
+  | "IMPROVEMENT_HYPOTHESIS"
+  | "RELEASE_NOTES";
 
 interface IssueOpt {
   number: number;
@@ -49,10 +62,10 @@ export function AiAgentPanel({
     );
   }
 
-  function gen(kind: "TASK_BREAKDOWN" | "RELEASE_NOTES") {
+  function gen(kind: GenKind) {
     setError(null);
-    if (kind === "TASK_BREAKDOWN" && !issueNumber) {
-      setError("분해할 열린 이슈를 선택하세요.");
+    if (NEEDS_ISSUE.has(kind) && !issueNumber) {
+      setError("대상 열린 이슈를 선택하세요.");
       return;
     }
     setGenKind(kind);
@@ -61,7 +74,7 @@ export function AiAgentPanel({
         const d = await generateStageDraft({
           appId,
           kind,
-          issueNumber: kind === "TASK_BREAKDOWN" ? Number(issueNumber) : undefined,
+          issueNumber: NEEDS_ISSUE.has(kind) ? Number(issueNumber) : undefined,
         });
         setDrafts((prev) => [d, ...prev]);
       } catch (e) {
@@ -78,41 +91,34 @@ export function AiAgentPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <div className="mb-1 text-xs font-medium text-neutral-500">분해 대상 이슈</div>
-          <select
-            className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-            value={issueNumber}
-            onChange={(e) =>
-              setIssueNumber(e.target.value ? Number(e.target.value) : "")
-            }
-            disabled={openIssues.length === 0}
-          >
-            {openIssues.length === 0 && <option value="">열린 이슈 없음</option>}
-            {openIssues.map((i) => (
-              <option key={i.number} value={i.number}>
-                #{i.number} {i.title.slice(0, 40)}
-              </option>
-            ))}
-          </select>
+      <div className="space-y-3">
+        <div className="flex items-end gap-3">
+          <div>
+            <div className="mb-1 text-xs font-medium text-neutral-500">대상 이슈 (분해·QA)</div>
+            <select
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              value={issueNumber}
+              onChange={(e) =>
+                setIssueNumber(e.target.value ? Number(e.target.value) : "")
+              }
+              disabled={openIssues.length === 0}
+            >
+              {openIssues.length === 0 && <option value="">열린 이슈 없음</option>}
+              {openIssues.map((i) => (
+                <option key={i.number} value={i.number}>
+                  #{i.number} {i.title.slice(0, 40)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <button
-          type="button"
-          disabled={genKind !== null || openIssues.length === 0}
-          onClick={() => gen("TASK_BREAKDOWN")}
-          className="rounded border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-        >
-          {genKind === "TASK_BREAKDOWN" ? "분해중…" : "🧩 작업 분해"}
-        </button>
-        <button
-          type="button"
-          disabled={genKind !== null}
-          onClick={() => gen("RELEASE_NOTES")}
-          className="rounded border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-        >
-          {genKind === "RELEASE_NOTES" ? "작성중…" : "📝 릴리스 노트"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <AgentButton genKind={genKind} kind="TASK_BREAKDOWN" label="🧩 작업 분해" busy="분해중…" onClick={gen} disabled={openIssues.length === 0} />
+          <AgentButton genKind={genKind} kind="QA_CHECKLIST" label="🧪 QA 체크리스트" busy="작성중…" onClick={gen} disabled={openIssues.length === 0} />
+          <AgentButton genKind={genKind} kind="RELEASE_NOTES" label="📝 릴리스 노트" busy="작성중…" onClick={gen} />
+          <AgentButton genKind={genKind} kind="STORE_COPY" label="🏬 스토어 문안" busy="작성중…" onClick={gen} />
+          <AgentButton genKind={genKind} kind="IMPROVEMENT_HYPOTHESIS" label="💡 개선 가설" busy="분석중…" onClick={gen} />
+        </div>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -127,6 +133,33 @@ export function AiAgentPanel({
         <DraftCard key={d.id} draft={d} onDone={() => removeDraft(d.id)} />
       ))}
     </div>
+  );
+}
+
+function AgentButton({
+  genKind,
+  kind,
+  label,
+  busy,
+  onClick,
+  disabled,
+}: {
+  genKind: string | null;
+  kind: GenKind;
+  label: string;
+  busy: string;
+  onClick: (k: GenKind) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={genKind !== null || disabled}
+      onClick={() => onClick(kind)}
+      className="rounded border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+    >
+      {genKind === kind ? busy : label}
+    </button>
   );
 }
 
