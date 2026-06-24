@@ -52,6 +52,25 @@ export async function sendMessage(
   });
 }
 
+// 하단 고정 빠른 버튼(reply keyboard). labels 의 텍스트가 그대로 메시지로 전송됨.
+export async function sendWithReplyKeyboard(
+  chatId: string | number,
+  text: string,
+  keyboard: string[][],
+): Promise<unknown> {
+  return call("sendMessage", {
+    chat_id: chatId,
+    text: truncate(text),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      keyboard: keyboard.map((row) => row.map((t) => ({ text: t }))),
+      resize_keyboard: true,
+      is_persistent: true,
+    },
+  });
+}
+
 // 입력중 표시(채팅 응답 지연 동안 UX). 실패 무시.
 export async function sendChatAction(
   chatId: string | number,
@@ -71,13 +90,28 @@ export async function editMessageText(
   chatId: string | number,
   messageId: number,
   text: string,
+  buttons?: InlineButton[][],
 ): Promise<unknown> {
   return call("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
     text: truncate(text),
     parse_mode: "HTML",
+    // buttons=[] 명시 시 기존 인라인 버튼 제거.
+    ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
   });
+}
+
+// 봇 명령어 메뉴(텔레그램 "/" 메뉴) 등록.
+export async function setMyCommands(
+  commands: Array<{ command: string; description: string }>,
+): Promise<unknown> {
+  return call("setMyCommands", { commands });
+}
+
+// 채팅 입력창 메뉴 버튼을 명령어 목록으로.
+export async function setChatMenuButton(): Promise<unknown> {
+  return call("setChatMenuButton", { menu_button: { type: "commands" } });
 }
 
 // 기본 알림 대상(TELEGRAM_CHAT_ID)으로 전송. 실패해도 throw 안 함.

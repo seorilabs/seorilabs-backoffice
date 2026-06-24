@@ -2,11 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
-import {
-  miniMaxChat,
-  MiniMaxNotConfiguredError,
-  type ChatMessage,
-} from "@/lib/ai/minimax";
+import { MiniMaxNotConfiguredError, type ChatMessage } from "@/lib/ai/minimax";
+import { runChatAgent } from "@/lib/ai/chat-agent";
 
 // 컨텍스트로 불러올 최근 턴 수(=대화 메모리). 너무 길면 비용·지연 증가.
 const HISTORY_TURNS = 10;
@@ -95,7 +92,7 @@ export async function handleChat(
 
   let reply: string;
   try {
-    reply = await miniMaxChat(messages, { temperature: 0.5, maxTokens: 1200 });
+    reply = await runChatAgent(messages);
   } catch (e) {
     if (e instanceof MiniMaxNotConfiguredError) {
       return "AI 채팅이 비활성 상태입니다 (MiniMax 미설정).";

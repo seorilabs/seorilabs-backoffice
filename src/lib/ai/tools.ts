@@ -1,0 +1,147 @@
+import { prisma } from "@/lib/prisma";
+import { asStringArray } from "@/lib/format";
+import { hasApproval } from "@/lib/domain/labels";
+import { STAGE_KO } from "@/lib/domain/lifecycle";
+import type { Lifecycle, Priority } from "@prisma/client";
+
+// 채팅 비서가 사실 기반으로 답하도록 호출하는 read-only 도구.
+// 모델이 {"tool":name,"args":{...}} 로 요청 → runTool 이 미러 DB 조회 → 결과 텍스트 반환.
+// 쓰기/배포 도구는 없음(쓰기는 항상 버튼 확인 흐름).
+
+export interface ToolDef {
+  name: string;
+  description: string;
+}
+
+export const TOOLS: ToolDef[] = [
+  {
+    name: "list_apps",
+    description:
+      "앱/게임 목록과 현재 단계. 선택 인자 stage(PLANNING|DEVELOPMENT|QA|MARKET_SUBMISSION|RELEASE|LIVEOPS).",
+  },
+  {
+    name: "app_detail",
+    description: "특정 앱 상세(단계·열린 이슈/PR·최근 릴리스). 인자 slug(필수).",
+  },
+  {
+    name: "search_issues",
+    description:
+      "열린 이슈 검색. 선택 인자 query(제목 부분일치), priority(P1|P2|P3|P4), repo(slug).",
+  },
+  { name: "list_approvals", description: "승인 대기 이슈 목록." },
+  { name: "list_p1", description: "열린 P1 이슈 목록(우선순위 최상)." },
+];
+
+const STAGES_SET = new Set<string>([
+  "PLANNING",
+  "DEVELOPMENT",
+  "QA",
+  "MARKET_SUBMISSION",
+  "RELEASE",
+  "LIVEOPS",
+]);
+const PRIO_SET = new Set<string>(["P1", "P2", "P3", "P4"]);
+
+function repoShort(full: string): string {
+  return full.replace("seorilabs/", "");
+}
+
+type Args = Record<string, unknown>;
+const str = (a: Args, k: string): string | undefined => {
+  const v = a[k];
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+};
+
+export async function runTool(name: string, args: Args = {}): Promise<string> {
+  switch (name) {
+    case "list_apps": {
+      const stage = str(args, "stage")?.toUpperCase();
+      const where = stage && STAGES_SET.has(stage) ? { currentStage: stage as Lifecycle } : {};
+      const apps = await prisma.app.findMany({
+        where,
+        orderBy: [{ currentStage: "asc" }, { displayName: "asc" }],
+        select: { slug: true, displayName: true, currentStage: true, type: true },
+      });
+      if (apps.length === 0) return "결과 없음";
+      return apps
+        .map((a) => `- ${a.displayName} (${a.slug}) · ${STAGE_KO[a.currentStage]} · ${a.type}`)
+        .join("\n");
+    }
+    case "app_detail": {
+      const slug = str(args, "slug");
+      if (!slug) return "slug 인자가 필요합니다.";
+      const app = await prisma.app.findFirst({
+        where: { slug },
+        include: {
+          issues: { where: { state: "OPEN" }, select: { priority: true } },
+          pullRequests: { where: { state: "OPEN" }, select: { id: true } },
+          releases: { orderBy: { updatedAt: "desc" }, take: 1 },
+        },
+      });
+      if (!app) return `'${slug}' 앱 없음`;
+      const p1 = app.issues.filter((i) => i.priority === "P1").length;
+      const rel = app.releases[0];
+      return [
+        `${app.displayName} (${app.slug})`,
+        `단계: ${STAGE_KO[app.currentStage]} · 타입: ${app.type}/${app.engine}`,
+        `열린 이슈 ${app.issues.length}(P1 ${p1}) · 열린 PR ${app.pullRequests.length}`,
+        rel ? `최근 릴리스: ${rel.version} ${rel.market} ${rel.status}` : "릴리스 없음",
+        `마켓: ${asStringArray(app.marketTargets).join(", ") || "미정"}`,
+      ].join("\n");
+    }
+    case "search_issues": {
+      const query = str(args, "query");
+      const priority = str(args, "priority")?.toUpperCase();
+      const repo = str(args, "repo");
+      const issues = await prisma.issueMirror.findMany({
+        where: {
+          state: "OPEN",
+          ...(query ? { title: { contains: query } } : {}),
+          ...(priority && PRIO_SET.has(priority) ? { priority: priority as Priority } : {}),
+          ...(repo ? { repoFullName: { contains: repo } } : {}),
+        },
+        orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+        take: 20,
+      });
+      if (issues.length === 0) return "결과 없음";
+      return issues
+        .map(
+          (i) =>
+            `- ${repoShort(i.repoFullName)} #${i.number} [${i.priority ?? "-"}] ${i.title}`,
+        )
+        .join("\n");
+    }
+    case "list_approvals": {
+      const open = await prisma.issueMirror.findMany({
+        where: { state: "OPEN" },
+        orderBy: [{ priority: "asc" }],
+        take: 200,
+      });
+      const pend = open.filter((i) => {
+        const l = asStringArray(i.labels);
+        return hasApproval(l, "planning") || hasApproval(l, "release");
+      });
+      if (pend.length === 0) return "승인 대기 없음";
+      return pend
+        .slice(0, 20)
+        .map((i) => {
+          const gate = hasApproval(asStringArray(i.labels), "release") ? "release" : "planning";
+          return `- ${repoShort(i.repoFullName)} #${i.number} (${gate}) ${i.title}`;
+        })
+        .join("\n");
+    }
+    case "list_p1": {
+      const issues = await prisma.issueMirror.findMany({
+        where: { state: "OPEN", priority: "P1" },
+        orderBy: [{ ghUpdatedAt: "desc" }],
+        take: 20,
+      });
+      if (issues.length === 0) return "P1 없음";
+      return issues
+        .map((i) => `- ${repoShort(i.repoFullName)} #${i.number} ${i.title}`)
+        .join("\n");
+    }
+    default:
+      return `알 수 없는 도구: ${name}`;
+  }
+}

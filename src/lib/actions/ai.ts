@@ -16,9 +16,8 @@ import {
   buildDecomposePrompt,
   buildReleaseNotesPrompt,
 } from "@/lib/ai/agents";
-import { createIssue, addIssueComment } from "@/lib/github/write";
 import { getIssue } from "@/lib/github/read";
-import { upsertIssue } from "@/lib/sync/mirror";
+import { commitDraftCore } from "@/lib/core/ai-drafts";
 
 export interface DraftView {
   id: string;
@@ -188,63 +187,11 @@ export async function commitDraft(input: {
   const session = await requireSession();
   const login = session.user.login ?? "unknown";
 
-  const draft = await prisma.aiDraft.findUnique({ where: { id: input.draftId } });
-  if (!draft) throw new Error("초안을 찾을 수 없습니다.");
-  if (draft.status !== "DRAFT") throw new Error("이미 처리된 초안입니다.");
-
-  const meta = AGENTS[draft.kind];
-  const body = input.editedText.trim();
-  if (!body) throw new Error("본문이 비어 있습니다.");
-
-  let committedIssueNumber: number;
-  let url: string;
-
-  if (meta.commitTarget === "ISSUE_COMMENT") {
-    if (!draft.issueNumber) throw new Error("코멘트 대상 이슈가 없습니다.");
-    await addIssueComment({
-      repoFullName: draft.repoFullName,
-      issueNumber: draft.issueNumber,
-      body: `${body}\n\n_🤖 ${meta.ko}(${draft.model}) 초안 · @${login} 검토/커밋_`,
-    });
-    committedIssueNumber = draft.issueNumber;
-    url = `https://github.com/${draft.repoFullName}/issues/${draft.issueNumber}`;
-  } else {
-    const title = (input.editedTitle ?? draft.title ?? "").trim();
-    if (!title) throw new Error("이슈 제목이 필요합니다.");
-    const created = await createIssue({
-      repoFullName: draft.repoFullName,
-      title,
-      body: `${body}\n\n_🤖 ${meta.ko}(${draft.model}) 초안 · @${login} 검토/커밋_`,
-      labels: meta.commitLabels,
-    });
-    await upsertIssue(draft.repoFullName, {
-      number: created.number,
-      node_id: created.node_id,
-      title: created.title,
-      state: created.state,
-      state_reason: created.state_reason ?? null,
-      body: created.body ?? null,
-      user: created.user ? { login: created.user.login } : null,
-      assignees: (created.assignees ?? []).map((a) => ({ login: a.login })),
-      labels: created.labels,
-      milestone: created.milestone ? { title: created.milestone.title } : null,
-      created_at: created.created_at,
-      updated_at: created.updated_at,
-    });
-    committedIssueNumber = created.number;
-    url = created.html_url;
-  }
-
-  await prisma.aiDraft.update({
-    where: { id: draft.id },
-    data: {
-      status: "COMMITTED",
-      outputText: body,
-      title: input.editedTitle ?? draft.title,
-      committedIssueNumber,
-      committedUrl: url,
-      committedAt: new Date(),
-    },
+  const r = await commitDraftCore({
+    draftId: input.draftId,
+    actorLabel: `@${login}`,
+    editedText: input.editedText,
+    editedTitle: input.editedTitle,
   });
 
   await prisma.auditLog.create({
@@ -252,14 +199,14 @@ export async function commitDraft(input: {
       actorLogin: login,
       action: "ai.draft_commit",
       entityType: "AiDraft",
-      entityId: draft.id,
-      payload: { kind: draft.kind, issue: committedIssueNumber },
+      entityId: input.draftId,
+      payload: { issue: r.issueNumber },
     },
   });
 
-  revalidatePath(`/apps/${draft.appId}`);
+  revalidatePath(`/apps/${r.appId}`);
   revalidatePath("/issues");
-  return { ok: true, url };
+  return { ok: true, url: r.url };
 }
 
 // ── 초안 폐기. ──

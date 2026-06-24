@@ -359,6 +359,16 @@ model TelegramTurn {
   @@map("telegram_turn")
 }
 
+// 텔레그램 다단계 흐름(예: /plan 아이디어 입력 대기) 상태. chatId당 1건.
+model TelegramPending {
+  chatId    String   @id
+  action    String // "plan_idea"
+  dataJson  Json
+  updatedAt DateTime @updatedAt
+
+  @@map("telegram_pending")
+}
+
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
   event      String
