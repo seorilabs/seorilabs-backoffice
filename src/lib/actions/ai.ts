@@ -19,7 +19,7 @@ import {
   buildStoreCopyPrompt,
   buildImprovementPrompt,
 } from "@/lib/ai/agents";
-import { getIssue } from "@/lib/github/read";
+import { getIssue, getRepoContext } from "@/lib/github/read";
 import { commitDraftCore } from "@/lib/core/ai-drafts";
 
 export interface DraftView {
@@ -51,6 +51,7 @@ export async function generatePlanningDraft(input: {
   });
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
 
+  const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
   const { system, prompt } = buildPlanningPrompt({
     displayName: app.displayName,
     type: app.type,
@@ -58,6 +59,7 @@ export async function generatePlanningDraft(input: {
     marketTargets: asStringArray(app.marketTargets),
     title: input.title,
     idea: input.idea,
+    codebaseContext: codebaseContext || undefined,
   });
 
   let text: string;

@@ -4,6 +4,7 @@ import { asStringArray } from "@/lib/format";
 import { miniMaxComplete } from "@/lib/ai/minimax";
 import { AGENTS, buildPlanningPrompt } from "@/lib/ai/agents";
 import { createIssue, addIssueComment } from "@/lib/github/write";
+import { getRepoContext } from "@/lib/github/read";
 import { upsertIssue } from "@/lib/sync/mirror";
 
 // 세션 비의존 코어(텔레그램·웹 공용). actorLabel 로 행위자 추적.
@@ -28,6 +29,7 @@ export async function createPlanningDraftCore(input: {
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
 
   const title = (input.title ?? input.idea).trim().slice(0, 120) || "무제 기획";
+  const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
   const { system, prompt } = buildPlanningPrompt({
     displayName: app.displayName,
     type: app.type,
@@ -35,6 +37,7 @@ export async function createPlanningDraftCore(input: {
     marketTargets: asStringArray(app.marketTargets),
     title,
     idea: input.idea,
+    codebaseContext: codebaseContext || undefined,
   });
   // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
   const outputText = await miniMaxComplete({

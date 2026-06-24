@@ -69,6 +69,7 @@ export interface PlanningContext {
   marketTargets: string[];
   title: string;
   idea: string;
+  codebaseContext?: string; // 실제 레포 README + 파일 트리 요약(있으면 정합)
 }
 
 export function buildPlanningPrompt(ctx: PlanningContext): {
@@ -80,13 +81,22 @@ export function buildPlanningPrompt(ctx: PlanningContext): {
   const sections = isGame
     ? "개요/핵심 재미, 게임 루프, 핵심 시스템·메커닉, 진행/난이도, 콘텐츠·레벨, UX·온보딩, 수익화, 수용 기준, 마켓별 고려사항, 리스크"
     : "개요/문제정의, 목표·성공지표, 핵심 기능, 화면·플로우, 데이터·연동, UX, 수용 기준, 마켓별 고려사항, 리스크";
+  const systemParts = [
+    "당신은 Seorilabs 의 시니어 프로덕트/게임 기획자다.",
+    "한국어 마크다운으로 실행 가능한 기획 초안을 작성한다.",
+    "추측으로 사실을 단정하지 말고, 미정 항목은 '확정 필요'로 표시한다.",
+    "코드를 작성하지 않는다(구현은 별도 자율 에이전트 담당). 기획·요구사항·수용기준에 집중한다.",
+  ];
+  if (ctx.codebaseContext) {
+    systemParts.push(
+      "\n\n## 실제 코드베이스 컨텍스트(이 레포)\n" +
+        ctx.codebaseContext +
+        "\n\n위 실제 코드베이스(기존 구조·스택·기능)를 반영해, 현 구조에 자연스럽게 얹히는 현실적인 기획을 작성한다. " +
+        "기존 파일/모듈을 참조해 '어디에 무엇을 추가/수정'할지 구체적으로 제안한다.",
+    );
+  }
   return {
-    system: [
-      "당신은 Seorilabs 의 시니어 프로덕트/게임 기획자다.",
-      "한국어 마크다운으로 실행 가능한 기획 초안을 작성한다.",
-      "추측으로 사실을 단정하지 말고, 미정 항목은 '확정 필요'로 표시한다.",
-      "코드를 작성하지 않는다(구현은 별도 자율 에이전트 담당). 기획·요구사항·수용기준에 집중한다.",
-    ].join(" "),
+    system: systemParts.join(" "),
     prompt: [
       `# 대상: ${ctx.displayName}`,
       `- 종류: ${appDescriptor(ctx.type, ctx.engine, ctx.marketTargets)}`,

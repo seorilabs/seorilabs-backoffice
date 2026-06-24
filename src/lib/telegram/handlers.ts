@@ -63,15 +63,28 @@ function authorized(fromId?: number): boolean {
 
 function helpText(): string {
   return [
-    "<b>Seorilabs Backoffice 봇</b>",
+    "<b>📖 Seorilabs Backoffice 봇 사용 가이드</b>",
     "",
-    "💬 그냥 메시지를 보내면 AI 비서와 대화합니다(실시간 데이터 조회).",
-    "아래 버튼이나 / 메뉴로 빠르게 실행하세요.",
+    "앱 제작 공장(기획→개발→QA→마켓→출시→운영)을 폰에서 운영합니다.",
     "",
-    "📝 기획 — 초안 생성 후 버튼으로 이슈 생성",
-    "📋 승인 · 🔥 P1 · 📊 현황 · 🧹 초기화",
+    "<b>💬 AI 비서와 대화</b>",
+    "그냥 메시지를 보내면 됩니다. 비서가 실제 데이터(앱·이슈·PR·승인)를 조회해 답합니다.",
+    "예) <i>운영 단계 앱 뭐 있어?</i> · <i>happy-farm 열린 P1 알려줘</i> · <i>승인 대기 정리해줘</i>",
+    "맥락을 기억하니 이어서 질문해도 됩니다. <code>/reset</code> 으로 초기화.",
     "",
-    "웹: https://backoffice.vzyx.xyz",
+    "<b>📝 기획 → 이슈 생성</b> (<code>/plan</code> 또는 📝 기획)",
+    "앱 선택 → 아이디어 한 줄 입력 → AI가 코드베이스를 반영한 초안 작성 → <b>[✅ 이슈 생성]</b> 버튼.",
+    "버튼을 눌러야 실제 GitHub 이슈가 생깁니다(자동 생성 아님).",
+    "",
+    "<b>⚡ 빠른 버튼 / 명령어</b>",
+    "📋 승인 (<code>/approvals</code>) — 승인 대기 + 버튼 승인",
+    "🔥 P1 (<code>/p1</code>) — 전 레포 P1 이슈",
+    "📊 현황 (<code>/status</code>) — 앱 선택 → 상세",
+    "🧹 초기화 (<code>/reset</code>) — 대화 맥락 비우기",
+    "ℹ️ 도움말 (<code>/help</code>) — 이 안내",
+    "",
+    "<b>🔒 원칙</b>: 조회·대화는 자유, 쓰기(이슈/승인)는 항상 버튼 확인 후.",
+    "🌐 웹 백오피스: https://backoffice.vzyx.xyz",
   ].join("\n");
 }
 
