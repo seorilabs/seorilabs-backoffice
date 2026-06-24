@@ -25,6 +25,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="mysql://build:build@127.0.0.1:3306/build"
+# 증분 빌드 시 .next/cache 로드 + webpack 으로 메모리 피크가 커져 빌더 OOM 가능 →
+# node 힙 상한으로 피크 억제(빌더 메모리 한도 내 유지).
+ENV NODE_OPTIONS=--max-old-space-size=2048
 # .next/cache(webpack 증분)를 캐시 마운트에 → 영구 빌더에서 incremental build.
 RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
   pnpm prisma generate && pnpm build

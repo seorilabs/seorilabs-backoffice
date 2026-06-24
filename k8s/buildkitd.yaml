@@ -64,7 +64,9 @@ spec:
               memory: 1Gi
             limits:
               cpu: "3500m"
-              memory: 4Gi
+              # 증분 빌드 캐시 로드 피크 대비 소폭 상향(제어플레인 노드라 보수적).
+              # next build 힙은 Dockerfile NODE_OPTIONS 로 별도 상한.
+              memory: 5Gi
           volumeMounts:
             - name: cache
               mountPath: /var/lib/buildkit
