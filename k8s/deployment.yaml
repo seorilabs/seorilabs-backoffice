@@ -78,7 +78,7 @@ spec:
             - name: ALLOWLIST_LOGINS
               value: "magicsih"
             - name: FEATURE_MINIMAX_ENABLED
-              value: "false"
+              value: "true"
             - name: MINIMAX_API_BASE_URL
               value: "https://api.minimax.io/v1"
             - name: MINIMAX_MODEL

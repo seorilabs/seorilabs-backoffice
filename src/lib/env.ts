@@ -25,6 +25,16 @@ export const env = {
   bool,
   githubOrg: () => optional("GITHUB_ORG", "seorilabs"),
   featureMinimax: () => bool("FEATURE_MINIMAX_ENABLED", false),
+  // MiniMax (OpenAI 호환 Chat Completions, gemini-pr-bot 와 동일 형태)
+  minimaxApiKey: () => optional("MINIMAX_API_KEY"),
+  minimaxModel: () => optional("MINIMAX_MODEL", "MiniMax-M3"),
+  minimaxBaseUrl: () =>
+    optional("MINIMAX_API_BASE_URL", "https://api.minimax.io/v1"),
+  minimaxTimeoutMs: () => Number(optional("MINIMAX_TIMEOUT_MS", "180000")),
+  // 실제 LLM 호출 가능 여부: 플래그 ON + 키 존재.
+  minimaxConfigured: () =>
+    bool("FEATURE_MINIMAX_ENABLED", false) &&
+    Boolean(optional("MINIMAX_API_KEY").trim()),
   allowlistLogins: () =>
     optional("ALLOWLIST_LOGINS", "")
       .split(",")

@@ -3,14 +3,20 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createPlanningIssue } from "@/lib/actions/issues";
-import { env } from "@/lib/env";
+import { generatePlanningDraft } from "@/lib/actions/ai";
 
 interface AppOption {
   repoFullName: string;
   displayName: string;
 }
 
-export function PlanForm({ apps }: { apps: AppOption[] }) {
+export function PlanForm({
+  apps,
+  aiEnabled,
+}: {
+  apps: AppOption[];
+  aiEnabled: boolean;
+}) {
   const [form, setForm] = useState({
     repoFullName: apps[0]?.repoFullName ?? "",
     title: "",
@@ -25,12 +31,33 @@ export function PlanForm({ apps }: { apps: AppOption[] }) {
     labels: "",
   });
   const [pending, startTransition] = useTransition();
+  const [aiPending, startAi] = useTransition();
   const [result, setResult] = useState<{ number: number; htmlUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   function set<K extends keyof typeof form>(k: K, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  function generateAi() {
+    setError(null);
+    if (!form.repoFullName || !form.title.trim()) {
+      setError("AI 초안은 레포와 제목이 필요합니다.");
+      return;
+    }
+    startAi(async () => {
+      try {
+        const r = await generatePlanningDraft({
+          repoFullName: form.repoFullName,
+          title: form.title,
+          idea: form.summary,
+        });
+        set("summary", r.text);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "AI 초안 생성 실패");
+      }
+    });
   }
 
   function submit() {
@@ -91,9 +118,17 @@ export function PlanForm({ apps }: { apps: AppOption[] }) {
       <Field label="기획 내용 (본문)">
         <textarea
           className="input min-h-28"
+          placeholder={
+            aiEnabled
+              ? "한 줄 아이디어만 적고 'AI 기획 초안 생성'을 눌러도 됩니다."
+              : ""
+          }
           value={form.summary}
           onChange={(e) => set("summary", e.target.value)}
         />
+        {aiPending && (
+          <p className="mt-1 text-xs text-violet-600">AI 기획 초안 생성중… (최대 수십초)</p>
+        )}
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Market">
@@ -143,14 +178,23 @@ export function PlanForm({ apps }: { apps: AppOption[] }) {
         >
           {pending ? "생성중…" : "GitHub 이슈 생성"}
         </button>
-        {env.featureMinimax() ? null : (
+        {aiEnabled ? (
+          <button
+            type="button"
+            disabled={aiPending || pending}
+            onClick={generateAi}
+            className="rounded border border-violet-300 bg-violet-50 px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+          >
+            {aiPending ? "생성중…" : "✨ AI 기획 초안 생성"}
+          </button>
+        ) : (
           <button
             type="button"
             disabled
-            title="v2 예정"
+            title="FEATURE_MINIMAX_ENABLED + MINIMAX_API_KEY 필요"
             className="cursor-not-allowed rounded border border-neutral-300 px-4 py-2 text-sm text-neutral-400"
           >
-            AI 초안 생성 (v2)
+            AI 초안 생성 (비활성)
           </button>
         )}
       </div>

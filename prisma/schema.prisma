@@ -51,6 +51,7 @@ model App {
   pullRequests PullRequestMirror[]
   workflowRuns WorkflowRunMirror[]
   releases     ReleaseRecord[]
+  aiDrafts     AiDraft[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -300,6 +301,47 @@ model AppOwner {
 enum OwnerRole {
   OWNER
   CONTRIBUTOR
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// AiDraft — Stage Agent(MiniMax) 산출 초안. 초안→검토→1클릭 커밋.
+// AI 는 GitHub 에 직접 쓰지 않음: 이 테이블이 검토 큐 + 감사 + 재생성 근거.
+// ──────────────────────────────────────────────────────────────────────────
+model AiDraft {
+  id           String        @id @default(cuid())
+  appId        String
+  app          App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  repoFullName String
+  stage        Lifecycle // 어느 단계 에이전트 산출인가
+  kind         AiDraftKind
+  title        String?       @db.Text // 커밋(새 이슈) 시 제목
+  issueNumber  Int? // 코멘트 커밋 대상(분해 등). 새 이슈형은 null
+  inputJson    Json // 생성 입력 컨텍스트(재생성/감사)
+  outputText   String        @db.Text // LLM 산출(사람이 수정 가능)
+  model        String // "MiniMax-M3"
+  status       AiDraftStatus @default(DRAFT)
+  committedIssueNumber Int? // 커밋 결과 이슈 번호
+  committedUrl String?
+  committedAt  DateTime?     @db.DateTime(3)
+  createdBy    String? // github login
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([appId, stage, status])
+  @@index([status, createdAt])
+  @@map("ai_draft")
+}
+
+enum AiDraftKind {
+  PLANNING_SPEC
+  TASK_BREAKDOWN
+  RELEASE_NOTES
+}
+
+enum AiDraftStatus {
+  DRAFT
+  COMMITTED
+  DISCARDED
 }
 
 // ──────────────────────────────────────────────────────────────────────────

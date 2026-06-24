@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { PlanForm } from "@/components/PlanForm";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export default async function PlanPage() {
     select: { repoFullName: true, displayName: true },
     orderBy: { displayName: "asc" },
   });
+  const aiEnabled = env.minimaxConfigured();
 
   return (
     <div className="p-8">
@@ -21,7 +23,7 @@ export default async function PlanPage() {
           등록된 앱이 없습니다. 설정에서 레지스트리 시드를 먼저 실행하세요.
         </p>
       ) : (
-        <PlanForm apps={apps} />
+        <PlanForm apps={apps} aiEnabled={aiEnabled} />
       )}
     </div>
   );
