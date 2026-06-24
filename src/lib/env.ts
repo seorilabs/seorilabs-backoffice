@@ -1,4 +1,5 @@
 // 환경변수 접근 헬퍼. 빌드 시점 크래시를 피하려 런타임 lazy 접근.
+// (값은 K8s secret/deployment env 로 주입; 로컬은 .env)
 
 function get(key: string, fallback?: string): string {
   const v = process.env[key];
