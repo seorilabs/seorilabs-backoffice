@@ -8,7 +8,10 @@ import { env } from "@/lib/env";
 
 const MAX_TEXT_CHARS = 4000; // 단일 텍스트 상한(토큰/요금 보호)
 const BATCH = 32; // batchEmbedContents 한 번에 보낼 수(rate/payload 보호)
-const MAX_RETRY = 3;
+// 무료등급 임베딩은 ~2 req/min 수준으로 박함 → 429 를 "스킵"이 아니라 "기다렸다 재시도"로.
+// Retry-After 헤더 있으면 우선, 없으면 고정 대기. 인내심 있게 여러 번(백필 완주용).
+const MAX_RETRY = 8;
+const RETRY_429_WAIT_MS = 20_000;
 
 export class EmbeddingsNotConfiguredError extends Error {
   constructor() {
@@ -64,9 +67,15 @@ async function embedBatch(
         signal: controller.signal,
       });
       const rawText = await response.text();
-      if (response.status === 429 || response.status >= 500) {
-        // rate limit/일시 오류 → 지수 백오프 재시도.
-        lastErr = `${response.status}: ${truncate(rawText, 300)}`;
+      if (response.status === 429) {
+        // rate limit → Retry-After(초) 우선, 없으면 고정 대기 후 재시도(스킵 금지).
+        const ra = Number(response.headers.get("retry-after"));
+        lastErr = `429: ${truncate(rawText, 200)}`;
+        await sleep(ra > 0 ? Math.min(ra * 1000, 30_000) : RETRY_429_WAIT_MS);
+        continue;
+      }
+      if (response.status >= 500) {
+        lastErr = `${response.status}: ${truncate(rawText, 200)}`;
         await sleep(1000 * Math.pow(2, attempt));
         continue;
       }
