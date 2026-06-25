@@ -30,6 +30,11 @@ export const TOOLS: ToolDef[] = [
   },
   { name: "list_approvals", description: "승인 대기 이슈 목록." },
   { name: "list_p1", description: "열린 P1 이슈 목록(우선순위 최상)." },
+  {
+    name: "search_knowledge",
+    description:
+      "Obsidian 지식 볼트(기획서·아이디어·과거 결정·도메인 지식) 의미검색. 인자 query(필수). 기획/맥락/과거 논의를 참고할 때 사용.",
+  },
 ];
 
 const STAGES_SET = new Set<string>([
@@ -140,6 +145,17 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
       return issues
         .map((i) => `- ${repoShort(i.repoFullName)} #${i.number} ${i.title}`)
         .join("\n");
+    }
+    case "search_knowledge": {
+      const query = str(args, "query");
+      if (!query) return "query 인자가 필요합니다.";
+      // 동적 import: 인덱스 비활성/미구성 환경에서도 다른 도구 영향 없음.
+      const { searchVaultText } = await import("@/lib/vault/retrieve");
+      try {
+        return await searchVaultText(query, 6);
+      } catch (e) {
+        return `지식 볼트 검색 실패: ${(e as Error).message}`;
+      }
     }
     default:
       return `알 수 없는 도구: ${name}`;

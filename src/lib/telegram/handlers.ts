@@ -20,6 +20,7 @@ import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
 import { handleChat, resetChat } from "@/lib/telegram/chat";
 import { getPending, setPending, clearPending } from "@/lib/telegram/state";
+import { enqueueVaultWrite } from "@/lib/vault/write-core";
 
 interface TgFrom {
   id: number;
@@ -47,6 +48,7 @@ export const BOT_COMMANDS = [
   { command: "approvals", description: "승인 대기" },
   { command: "p1", description: "열린 P1 이슈" },
   { command: "status", description: "앱 현황" },
+  { command: "save", description: "메모를 볼트 받은함에 저장" },
   { command: "reset", description: "대화 맥락 초기화" },
   { command: "help", description: "도움말 · 빠른 버튼" },
 ];
@@ -73,9 +75,12 @@ function helpText(): string {
     "앱 제작 공장(기획→개발→QA→마켓→출시→운영)을 폰에서 운영합니다.",
     "",
     "<b>💬 AI 비서와 대화</b>",
-    "그냥 메시지를 보내면 됩니다. 비서가 실제 데이터(앱·이슈·PR·승인)를 조회해 답합니다.",
-    "예) <i>운영 단계 앱 뭐 있어?</i> · <i>happy-farm 열린 P1 알려줘</i> · <i>승인 대기 정리해줘</i>",
+    "그냥 메시지를 보내면 됩니다. 비서가 실제 데이터(앱·이슈·PR·승인)와 <b>Obsidian 지식 볼트</b>(기획서·아이디어·과거 결정)를 조회해 답합니다.",
+    "예) <i>운영 단계 앱 뭐 있어?</i> · <i>happy-farm 열린 P1 알려줘</i> · <i>예전에 정리한 게임 아이디어 찾아줘</i>",
     "맥락을 기억하니 이어서 질문해도 됩니다. <code>/reset</code> 으로 초기화.",
+    "",
+    "<b>📥 볼트에 메모 저장</b> (<code>/save</code>)",
+    "<code>/save 내용</code> → 볼트 <b>받은함</b>에 .md 초안 저장(5분 내 동기화). 첫 줄이 제목.",
     "",
     "<b>📝 기획 → 이슈 생성</b> (<code>/plan</code> 또는 📝 기획)",
     "앱 선택 → 아이디어 한 줄 입력 → AI가 코드베이스를 반영한 초안 작성 → <b>[✅ 이슈 생성]</b> 버튼.",
@@ -172,6 +177,11 @@ async function handleMessage(m: TgMessage): Promise<void> {
       else await cmdChat(chatId, msg);
       break;
     }
+    case "/save": {
+      const msg = args.join(" ").trim();
+      await cmdSave(chatId, msg);
+      break;
+    }
     default:
       await sendMessage(chatId, "알 수 없는 명령입니다. /help");
       break;
@@ -187,6 +197,26 @@ async function cmdChat(chatId: number, text: string): Promise<void> {
   await sendChatAction(chatId, "typing");
   const reply = await handleChat(chatId, text);
   await sendMessage(chatId, esc(reply));
+}
+
+// /save: 메모를 볼트 받은함 draft 로 적재(라이터 CronJob 이 5분 내 파일 생성).
+async function cmdSave(chatId: number, text: string): Promise<void> {
+  if (!text) {
+    await sendMessage(chatId, "사용법: /save <메모 내용> — 첫 줄이 제목이 됩니다.");
+    return;
+  }
+  const title = text.split("\n")[0].slice(0, 60).trim() || "메모";
+  await enqueueVaultWrite({
+    folder: "받은함",
+    title,
+    content: text,
+    source: "telegram",
+    requestedBy: String(chatId),
+  });
+  await sendMessage(
+    chatId,
+    esc(`📥 받은함에 저장 예약됨: “${title}”\n5분 내 Obsidian 으로 동기화됩니다.`),
+  );
 }
 
 // ── /plan: 앱 선택 → 아이디어 → 미리보기 → 버튼 커밋 ──

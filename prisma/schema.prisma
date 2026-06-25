@@ -405,3 +405,49 @@ model AuditLog {
   @@index([createdAt])
   @@map("audit_log")
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Vault RAG — Obsidian 지식 볼트(Syncthing) 임베딩 인덱스 + 쓰기 큐
+// indexer(data ns)가 PVC 를 읽어 채우고, backoffice(platform ns)는 MySQL 로만 조회.
+// 벡터는 ANN 인덱스(HeatWave 전용) 없이 float32 BLOB 로 저장 → 앱에서 brute-force cosine.
+// ──────────────────────────────────────────────────────────────────────────
+model VaultChunk {
+  id        String   @id @default(cuid())
+  path      String // 볼트 기준 상대경로, e.g. "프로젝트/앱 제작 공장/11 백오피스.md"
+  ord       Int // 파일 내 청크 순서
+  heading   String?  @db.Text // 가장 가까운 헤딩 breadcrumb
+  text      String   @db.Text
+  fileHash  String // 파일 전체 sha256 (증분 인덱싱 판정)
+  embedding Bytes // float32 LE 패킹
+  dim       Int
+  chars     Int      @default(0)
+  indexedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([path, ord])
+  @@index([fileHash])
+  @@index([indexedAt])
+  @@map("vault_chunk")
+}
+
+model VaultWriteRequest {
+  id          String           @id @default(cuid())
+  folder      String           @default("받은함") // 대상 하위폴더(allowlist 강제)
+  filename    String // 확장자 제외 제목(슬러그화)
+  content     String           @db.Text
+  source      String           @default("agent") // agent|telegram|web
+  requestedBy String?
+  status      VaultWriteStatus @default(PENDING)
+  writtenPath String? // 실제 기록된 상대경로
+  error       String?          @db.Text
+  createdAt   DateTime         @default(now()) @db.DateTime(3)
+  processedAt DateTime?        @db.DateTime(3)
+
+  @@index([status])
+  @@map("vault_write_request")
+}
+
+enum VaultWriteStatus {
+  PENDING
+  DONE
+  FAILED
+}

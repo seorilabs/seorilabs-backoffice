@@ -10,6 +10,7 @@ next-env.d.ts
 
 # production
 /build
+/scripts-dist
 
 # prisma
 /prisma/*.db

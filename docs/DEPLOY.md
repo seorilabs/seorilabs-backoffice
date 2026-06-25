@@ -165,3 +165,38 @@ CI(`deploy.yml`)의 `build` 잡은 ARC ephemeral 러너에서 돌지만, **클�
 - **메모리**: buildkitd limit **5Gi**, `next build` 는 Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 힙 상한(증분 시 `.next/cache` 로드로 메모리 피크↑ → OOM(exit 137) 방지). 제어플레인 노드라 한도 상향은 보수적으로.
 - **장애 시**: buildkitd 가 죽으면 **모든 빌드 실패**. 복구 `kubectl apply -f k8s/buildkitd.yaml`. 캐시는 PVC 라 재시작에도 유지. 캐시 비우려면 `kubectl -n platform exec deploy/buildkitd -- buildctl prune`.
 - **주의**: `buildkitd.yaml`/CronJob 등 매니페스트 변경은 CI(`set image`)로 반영 안 됨 → `kubectl apply` 1회 필요.
+
+## 11. Vault RAG — Obsidian 볼트 지식 + 벡터검색 + 받은함 쓰기
+
+Syncthing(`data` ns, hostPath `/data/syncthing`, rpi5)이 동기화하는 **Obsidian 메인 볼트**(`Sync/obsidian-main`, .md ~1.2k)를 MiniMax 지식 원천으로 인덱싱한다. PVC(`syncthing-pvc`, RWO, `data` ns)는 네임스페이스 스코프라 `platform` 의 backoffice 가 직접 못 붙는다 → **인덱서/라이터는 `data` ns CronJob**(같은 rpi5, RWO 동시 마운트), backoffice 는 **MySQL `vault_chunk` 만 조회**.
+
+```
+data ns                                   platform ns
+ vault-indexer CronJob (2h)                search_knowledge 챗 도구(MiniMax 자동 호출)
+   PVC ro → chunk → embo-01 →              /api/admin/vault/probe  (임베딩 실측, 키 비노출)
+   vault_chunk(embedding LONGBLOB)         /api/admin/vault/search (검색 점검)
+ vault-writer CronJob (5m)                 enqueueVaultWrite → vault_write_request
+   PENDING 드레인 → 받은함/*.md (uid 1000)   (텔레그램 /save)
+```
+
+- **임베딩**: MiniMax `embo-01`(`/v1/embeddings`, 1536dim 추정). 벡터는 ANN 인덱스(HeatWave 전용) 없이 **float32 LONGBLOB 저장 + 앱 brute-force cosine**(수천 청크라 충분). 검색측은 임베딩만 메모리 캐시(시그니처 변하면 갱신).
+- **인덱싱 범위**: `비공개`·`.obsidian`·`.stfolder`·`.trash`·`첨부파일` 제외(`VAULT_EXCLUDE_DIRS`). 증분(파일 sha256 == DB fileHash 면 스킵), 사라진 파일 청크 삭제.
+- **쓰기 안전장치**: 에이전트는 **받은함**(`VAULT_WRITE_FOLDERS` allowlist)에 **draft .md 만** 생성, 기존 노트 수정/삭제 불가. 사람이 Obsidian 에서 검토. writer 는 파일 소유자 **uid 1000** 으로 실행해야 기록 가능.
+
+**배포 런북**
+1. 이미지에 `scripts-dist/{index-vault,vault-writer}.cjs` 포함(Dockerfile `pnpm build:scripts`, @prisma/client external → standalone node_modules 재사용). 최신 이미지 배포 후 진행.
+2. data ns 에 pull cred + 전용 시크릿:
+   ```sh
+   kubectl -n platform get secret registry-pull-cred -o yaml \
+     | sed 's/namespace: platform/namespace: data/' | kubectl -n data apply -f -
+   kubectl -n data create secret generic backoffice-vault-secrets \
+     --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
+     --from-literal=MINIMAX_API_KEY='***' \
+     --from-literal=MINIMAX_GROUP_ID=''
+   ```
+3. `kubectl apply -f k8s/vault-rag.yaml`.
+4. **임베딩 실측(키 비노출)**: `curl -fsS -XPOST -H "x-admin-token: $TOK" https://backoffice.vzyx.xyz/api/admin/vault/probe` → `{ok:true, dim, groupIdSet}`. `ok:false` 이고 GroupId 관련 에러면 MiniMax 콘솔의 GroupId 를 `MINIMAX_GROUP_ID` 로 주입 후 재시도.
+5. 최초 인덱싱: `kubectl -n data create job --from=cronjob/vault-indexer vault-index-init` → 로그로 `result {scanned,changed,chunks}` 확인.
+6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 5분 내 받은함에 파일.
+
+> **주의**: `vault-rag.yaml` 은 CI(`set image`) 비대상 → 변경 시 `kubectl apply` 1회. embo-01 요금/한도 고려해 인덱서는 2h 주기(증분이라 대부분 스킵).

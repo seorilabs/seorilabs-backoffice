@@ -1,0 +1,191 @@
+# Vault RAG — Obsidian 볼트(Syncthing) 인덱서/라이터 CronJob (data ns).
+# backoffice 이미지를 재사용해 번들된 scripts-dist 엔트리를 실행.
+# PVC(syncthing-pvc, hostPath /data/syncthing, RWO)는 data ns 소속이라 여기서만 마운트 가능.
+# 둘 다 rpi5 고정(Syncthing 과 동일 노드 → RWO 동시 마운트 가능).
+#
+# 사전 준비(런북, DEPLOY.md §11 참고):
+#   1) data ns 에 이미지 풀 시크릿 복제:
+#      kubectl -n platform get secret registry-pull-cred -o yaml \
+#        | sed 's/namespace: platform/namespace: data/' \
+#        | kubectl -n data apply -f -
+#   2) data ns 에 전용 시크릿 생성(평문 레포 금지 → kubectl 로 주입):
+#      kubectl -n data create secret generic backoffice-vault-secrets \
+#        --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
+#        --from-literal=MINIMAX_API_KEY='***' \
+#        --from-literal=MINIMAX_GROUP_ID=''   # 프로브가 GroupId 필요라고 하면 콘솔값 주입
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-indexer
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: vault-indexer
+spec:
+  schedule: "17 */2 * * *" # 2시간마다(분 17 — 정각 부하 회피). 증분이라 대부분 스킵.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3000 # 최초 전체 인덱싱(임베딩) 여유.
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: vault-indexer
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            # 볼트 파일은 uid 1000(syncthing) 소유. ro 라 1000 으로 읽기.
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+            - name: indexer
+              image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              command: ["node", "/app/scripts-dist/index-vault.cjs"]
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: CHECKPOINT_DISABLE
+                  value: "1"
+                - name: FEATURE_MINIMAX_ENABLED
+                  value: "true"
+                - name: MINIMAX_API_BASE_URL
+                  value: "https://api.minimax.io/v1"
+                - name: MINIMAX_EMBED_MODEL
+                  value: "embo-01"
+                - name: MINIMAX_TIMEOUT_MS
+                  value: "180000"
+                - name: VAULT_PATH
+                  value: /vault
+                - name: VAULT_EXCLUDE_DIRS
+                  value: "비공개,.obsidian,.stfolder,.trash,첨부파일"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-vault-secrets
+                      key: DATABASE_URL
+                - name: MINIMAX_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-vault-secrets
+                      key: MINIMAX_API_KEY
+                - name: MINIMAX_GROUP_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-vault-secrets
+                      key: MINIMAX_GROUP_ID
+                      optional: true
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              volumeMounts:
+                - name: vault
+                  mountPath: /vault
+                  subPath: Sync/obsidian-main
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: vault
+              persistentVolumeClaim:
+                claimName: syncthing-pvc
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-writer
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: vault-writer
+spec:
+  schedule: "*/5 * * * *" # 5분마다 PENDING 쓰기 요청 드레인.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: vault-writer
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            # 받은함/ 에 기록하려면 소유자(uid 1000)로 실행해야 함.
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+            - name: writer
+              image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              command: ["node", "/app/scripts-dist/vault-writer.cjs"]
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: CHECKPOINT_DISABLE
+                  value: "1"
+                - name: VAULT_PATH
+                  value: /vault
+                - name: VAULT_WRITE_FOLDERS
+                  value: "받은함"
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-vault-secrets
+                      key: DATABASE_URL
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 384Mi
+              volumeMounts:
+                - name: vault
+                  mountPath: /vault
+                  subPath: Sync/obsidian-main
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: vault
+              persistentVolumeClaim:
+                claimName: syncthing-pvc
+            - name: tmp
+              emptyDir: {}

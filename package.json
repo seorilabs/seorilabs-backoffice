@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "prisma migrate deploy",
+    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -35,6 +36,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.28.1",
     "eslint": "^9.0.0",
     "eslint-config-next": "^15.5.0",
     "prisma": "^6.3.0",

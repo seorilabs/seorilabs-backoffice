@@ -32,6 +32,24 @@ export const env = {
   minimaxBaseUrl: () =>
     optional("MINIMAX_API_BASE_URL", "https://api.minimax.io/v1"),
   minimaxTimeoutMs: () => Number(optional("MINIMAX_TIMEOUT_MS", "180000")),
+  // 임베딩(embo-01). GroupId 는 일부 엔드포인트에서 ?GroupId= 로 요구 → 있으면 부착.
+  minimaxEmbedModel: () => optional("MINIMAX_EMBED_MODEL", "embo-01"),
+  minimaxGroupId: () => optional("MINIMAX_GROUP_ID"),
+  // Vault RAG(Obsidian 볼트 지식). 인덱서/라이터는 data ns 에서 PVC 마운트.
+  featureVaultRag: () => bool("FEATURE_VAULT_RAG", false),
+  vaultPath: () => optional("VAULT_PATH", "/vault"),
+  // 인덱싱 제외 디렉터리(쉼표 구분). 비공개·옵시디언 설정·sync 메타 기본 제외.
+  vaultExcludeDirs: () =>
+    optional("VAULT_EXCLUDE_DIRS", "비공개,.obsidian,.stfolder,.trash,첨부파일")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  // 에이전트가 쓸 수 있는 하위폴더 allowlist(라이터가 강제).
+  vaultWriteFolders: () =>
+    optional("VAULT_WRITE_FOLDERS", "받은함")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
   // 실제 LLM 호출 가능 여부: 플래그 ON + 키 존재.
   minimaxConfigured: () =>
     bool("FEATURE_MINIMAX_ENABLED", false) &&

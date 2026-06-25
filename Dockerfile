@@ -31,6 +31,8 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 # .next/cache(webpack 증분)를 캐시 마운트에 → 영구 빌더에서 incremental build.
 RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
   pnpm prisma generate && pnpm build
+# data ns CronJob 용 인덱서/라이터 엔트리를 단일 CJS 로 번들(@prisma/client 는 external).
+RUN pnpm build:scripts
 
 # ── runtime: 슬림 standalone + prisma migrate(deploy) 가능 ──
 FROM base AS runtime
@@ -46,6 +48,8 @@ RUN groupadd --system --gid 10001 app \
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
+# data ns CronJob(인덱서/라이터) 엔트리. standalone node_modules 의 @prisma/client 를 재사용.
+COPY --from=build /app/scripts-dist ./scripts-dist
 # migrate deploy 용: schema/migrations + prisma CLI(글로벌, schema-engine 포함).
 COPY --from=build /app/prisma ./prisma
 RUN --mount=type=cache,id=npm-global,target=/root/.npm \
