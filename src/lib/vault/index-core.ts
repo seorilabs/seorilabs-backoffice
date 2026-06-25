@@ -11,6 +11,7 @@ import { chunkMarkdown } from "@/lib/vault/chunk";
 
 export interface IndexOptions {
   root: string;
+  includeDirs?: string[]; // 비면 root 전체. 지정 시 해당 최상위 폴더만 스캔(allowlist).
   excludeDirs?: string[];
   log?: (msg: string) => void;
 }
@@ -25,6 +26,7 @@ export interface IndexResult {
 
 async function walkMarkdown(
   root: string,
+  includeDirs: string[],
   excludeDirs: Set<string>,
 ): Promise<string[]> {
   const out: string[] = [];
@@ -45,7 +47,12 @@ async function walkMarkdown(
       }
     }
   }
-  await rec(root);
+  // allowlist 지정 시 해당 최상위 폴더만 시작점으로(루트 직속 파일/타 폴더 제외).
+  const starts =
+    includeDirs.length > 0
+      ? includeDirs.map((d) => path.join(root, d))
+      : [root];
+  for (const s of starts) await rec(s);
   return out;
 }
 
@@ -55,11 +62,14 @@ function sha256(s: string): string {
 
 export async function indexVaultCore(opts: IndexOptions): Promise<IndexResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
+  const includeDirs = opts.includeDirs ?? [];
   const excludeDirs = new Set(opts.excludeDirs ?? []);
   const root = path.resolve(opts.root);
 
-  const files = await walkMarkdown(root, excludeDirs);
-  log(`[vault-index] 대상 .md ${files.length}개 (root=${root})`);
+  const files = await walkMarkdown(root, includeDirs, excludeDirs);
+  log(
+    `[vault-index] 대상 .md ${files.length}개 (root=${root}, include=${includeDirs.join("|") || "ALL"})`,
+  );
 
   // DB 의 path 별 현재 fileHash 맵.
   const existing = await prisma.vaultChunk.findMany({

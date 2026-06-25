@@ -43,9 +43,16 @@ export const env = {
   // Vault RAG(Obsidian 볼트 지식). 인덱서/라이터는 data ns 에서 PVC 마운트.
   featureVaultRag: () => bool("FEATURE_VAULT_RAG", false),
   vaultPath: () => optional("VAULT_PATH", "/vault"),
-  // 인덱싱 제외 디렉터리(쉼표 구분). 비공개·옵시디언 설정·sync 메타 기본 제외.
+  // 인덱싱할 최상위 폴더 allowlist(쉼표 구분). 비면 전체(루트) 스캔.
+  // 시크릿이 폴더 곳곳에 흩어져 있어 블록리스트보다 화이트리스트가 안전.
+  vaultIncludeDirs: () =>
+    optional("VAULT_INCLUDE_DIRS", "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  // 추가 제외 디렉터리(쉼표 구분, 하위 어디서나 이름 매칭). 옵시디언/sync 메타.
   vaultExcludeDirs: () =>
-    optional("VAULT_EXCLUDE_DIRS", "비공개,.obsidian,.stfolder,.trash,첨부파일")
+    optional("VAULT_EXCLUDE_DIRS", ".obsidian,.stfolder,.trash")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),

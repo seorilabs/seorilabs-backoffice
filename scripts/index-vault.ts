@@ -11,6 +11,7 @@ async function main() {
   }
   const res = await indexVaultCore({
     root: env.vaultPath(),
+    includeDirs: env.vaultIncludeDirs(),
     excludeDirs: env.vaultExcludeDirs(),
   });
   console.log("[index-vault] result", JSON.stringify(res));

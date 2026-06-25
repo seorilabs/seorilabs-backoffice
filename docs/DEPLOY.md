@@ -180,7 +180,7 @@ data ns                                   platform ns
 ```
 
 - **임베딩**: **Google Gemini `gemini-embedding-001`**(`:batchEmbedContents`, 1536dim, taskType RETRIEVAL_DOCUMENT/QUERY 비대칭). MiniMax 국제(.io)는 임베딩 미제공이라 별도 제공자 사용 — **챗/추론은 그대로 MiniMax-M3**. 벡터는 ANN 인덱스(HeatWave 전용) 없이 **float32 LONGBLOB 저장 + 앱 brute-force cosine**(cosine 은 스케일 불변이라 정규화 불필요). 검색측은 임베딩만 메모리 캐시(시그니처 변하면 갱신).
-- **인덱싱 범위**: `비공개`·`.obsidian`·`.stfolder`·`.trash`·`첨부파일` 제외(`VAULT_EXCLUDE_DIRS`). 증분(파일 sha256 == DB fileHash 면 스킵), 사라진 파일 청크 삭제.
+- **인덱싱 범위 = 최상위 폴더 allowlist** `VAULT_INCLUDE_DIRS=프로젝트,지식,받은함,자료`(+`.obsidian` 등 메타 제외). ⚠️ **블록리스트 금지 교훈**: 볼트에 시크릿(니모닉·access key·kubeconfig)이 `보관함/EpicLeague/Keep/` 등 `비공개` 아닌 폴더에도 흩어져 있어 "비공개만 제외" 시 Gemini/MiniMax 로 유출됨 → **화이트리스트로 전환**. 증분(파일 sha256 == DB fileHash 면 스킵), allowlist 밖 기존 청크는 인덱서 삭제 로직이 자동 purge.
 - **쓰기 안전장치**: 에이전트는 **받은함**(`VAULT_WRITE_FOLDERS` allowlist)에 **draft .md 만** 생성, 기존 노트 수정/삭제 불가. 사람이 Obsidian 에서 검토. writer 는 파일 소유자 **uid 1000** 으로 실행해야 기록 가능.
 
 **배포 런북**
