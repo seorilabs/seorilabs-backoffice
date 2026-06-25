@@ -16,6 +16,30 @@ export function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// AI 답변의 마크다운 → Telegram HTML. 균형 잡힌 쌍만 태그화(파싱 오류 방지).
+// 단일 '_'/'*'(italic)은 식별자·파일경로와 충돌해 위험하므로 변환하지 않음.
+export function mdToTelegramHtml(src: string): string {
+  let s = esc(src);
+  s = s.replace(/`([^`\n]+)`/g, (_m, c) => `<code>${c}</code>`); // `code`
+  s = s.replace(/\*\*([^\n*]+?)\*\*/g, (_m, c) => `<b>${c}</b>`); // **bold**
+  s = s.replace(/^\s{0,3}#{1,6}\s+(.+)$/gm, (_m, c) => `<b>${c}</b>`); // 헤딩 → bold
+  s = s.replace(/^(\s*)[-*]\s+/gm, "$1• "); // 불릿 → •
+  s = s.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_m, t, u) => `<a href="${u}">${t}</a>`,
+  ); // [text](url)
+  return s;
+}
+
+// HTML 태그 제거 + 엔티티 복원(parse_mode 실패 시 plain 폴백용).
+function stripTags(s: string): string {
+  return s
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 export function truncate(s: string, max = TG_TEXT_LIMIT): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
@@ -43,13 +67,24 @@ export async function sendMessage(
   text: string,
   buttons?: InlineButton[][],
 ): Promise<unknown> {
-  return call("sendMessage", {
+  const markup = buttons ? { reply_markup: { inline_keyboard: buttons } } : {};
+  const res = (await call("sendMessage", {
     chat_id: chatId,
     text: truncate(text),
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
-  });
+    ...markup,
+  })) as { ok?: boolean } | null;
+  // HTML 파싱 실패(잘못된 태그 등) → parse_mode 없이 plain 재전송(원문 노출 방지).
+  if (res && res.ok === false) {
+    return call("sendMessage", {
+      chat_id: chatId,
+      text: truncate(stripTags(text)),
+      disable_web_page_preview: true,
+      ...markup,
+    });
+  }
+  return res;
 }
 
 // 하단 고정 빠른 버튼(reply keyboard). labels 의 텍스트가 그대로 메시지로 전송됨.

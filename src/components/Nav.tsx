@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/issues", label: "이슈" },
   { href: "/approvals", label: "승인 대기" },
   { href: "/releases", label: "출시 매트릭스" },
+  { href: "/release-notes", label: "출시노트" },
   { href: "/plan", label: "기획 입력" },
   { href: "/settings", label: "설정" },
 ];

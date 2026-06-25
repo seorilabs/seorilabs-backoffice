@@ -12,6 +12,7 @@ import {
 import { notify, esc } from "@/lib/telegram/client";
 import { env } from "@/lib/env";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
+import { generateReleaseNoteCore } from "@/lib/core/release-notes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,9 @@ export const dynamic = "force-dynamic";
 interface WebhookPayload {
   action?: string;
   ref?: string;
+  created?: boolean;
+  deleted?: boolean;
+  after?: string;
   repository?: { full_name?: string };
   issue?: GhIssueInput;
   pull_request?: GhPrInput;
@@ -110,8 +114,25 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
     case "workflow_run":
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
+    case "push": {
+      // 릴리즈 태그 생성 → 출시노트 자동 생성(fire-and-forget, 200 안 막음).
+      const ref = p.ref ?? "";
+      if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
+        const version = ref.slice("refs/tags/".length);
+        if (/^v?\d+\./.test(version)) {
+          void generateReleaseNoteCore({
+            repoFullName: repo,
+            version,
+            headSha: p.after,
+          }).catch((e) =>
+            console.error("[webhook] 출시노트 생성 실패:", e instanceof Error ? e.message : e),
+          );
+        }
+      }
+      break;
+    }
     default:
-      // issue_comment, push 등은 v1 에서 미러 대상 아님.
+      // issue_comment 등은 미러 대상 아님.
       break;
   }
 }

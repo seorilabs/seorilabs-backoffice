@@ -1,43 +1,16 @@
 import { miniMaxChat, type ChatMessage } from "@/lib/ai/minimax";
 import { TOOLS, runTool } from "@/lib/ai/tools";
+import { stripFences, extractObject } from "@/lib/ai/json";
 
 // 도구 보강 채팅 루프. 모델이 JSON 으로 도구를 호출하면 실행해 되먹이고,
 // {"final":...} 또는 비-JSON 이면 최종 답변으로 본다. 지연 억제 위해 라운드 제한.
-const MAX_ROUNDS = 3;
+// browse→read→요약 같은 다단계 흐름 여유로 4.
+const MAX_ROUNDS = 4;
 
 interface ParsedAction {
   tool?: string;
   args?: Record<string, unknown>;
   final?: string;
-}
-
-// 코드펜스(```json ... ```) 제거.
-function stripFences(s: string): string {
-  const m = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return (m ? m[1] : s).trim();
-}
-
-// 머리말/꼬리말이 섞여 있어도 첫 균형 잡힌 {...} 객체 문자열만 추출(문자열 내 중괄호 무시).
-function extractObject(s: string): string | null {
-  const start = s.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-    } else if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return s.slice(start, i + 1);
-    }
-  }
-  return null;
 }
 
 // MiniMax 가 머리말 + JSON 을 함께 뱉어도 도구/최종 액션을 인식(견고화).

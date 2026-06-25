@@ -14,6 +14,7 @@ import {
 } from "@/lib/domain/labels";
 import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
 import { recordTransition } from "@/lib/sync/transition";
+import { findTagForSha } from "@/lib/github/release";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -218,8 +219,14 @@ export async function upsertWorkflowRun(
   if (!market || !appId) return;
 
   const status = releaseStatusOf(gh.status, gh.conclusion);
-  const version =
-    gh.head_branch && /^v\d/.test(gh.head_branch) ? gh.head_branch : "untagged";
+  // 버전: head_branch 가 태그면 그대로, 아니면(main 등) head_sha 를 가리키는
+  // v* 태그를 GitHub 에서 조회해 보정. 태그가 없으면 "untagged".
+  let version = "untagged";
+  if (gh.head_branch && /^v\d/.test(gh.head_branch)) {
+    version = gh.head_branch;
+  } else if (gh.head_sha) {
+    version = (await findTagForSha(repoFullName, gh.head_sha)) ?? "untagged";
+  }
   const relData = {
     appId,
     version,

@@ -294,3 +294,42 @@ export function buildImprovementPrompt(ctx: ImprovementContext): {
     ].join("\n"),
   };
 }
+
+// ── 출시노트(i18n) — 릴리즈 태그 diff 기반 유저 공지(ko/en). JSON 출력. ──
+export interface ReleaseNotesI18nContext {
+  displayName: string;
+  type: AppType;
+  version: string;
+  previousVersion: string | null;
+  prs: Array<{ number: number; title: string }>;
+  commitCount: number;
+}
+
+export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
+  system: string;
+  prompt: string;
+} {
+  const prLines = ctx.prs.length
+    ? ctx.prs.map((p) => `- #${p.number} ${p.title}`).join("\n")
+    : "(머지 PR 식별 못함 — 커밋 기준으로만 작성)";
+  return {
+    system: [
+      "당신은 Seorilabs 의 릴리스 매니저다.",
+      "변경 내역(머지 PR/커밋)을 바탕으로 '사용자에게 공지할' 출시노트를 작성한다.",
+      "내부 리팩터링·빌드·CI·테스트 등 사용자가 체감 못하는 변경은 제외하고, 새 기능·개선·버그수정만 쉬운 말로 쓴다.",
+      "마케팅 과장 없이 간결한 불릿(- ). 한국어(ko_KR)와 자연스러운 영어(en_US) 두 버전을 만든다.",
+      '반드시 JSON 객체 하나만 출력: {"ko_KR":"- 항목1\\n- 항목2","en_US":"- item1\\n- item2"}. 머리말/코드블록 금지.',
+      "사용자 체감 변경이 전혀 없으면 안정성·내부 개선 위주로 1~2줄 간단히.",
+    ].join(" "),
+    prompt: [
+      `앱: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"})`,
+      `버전: ${ctx.version}${ctx.previousVersion ? ` (이전: ${ctx.previousVersion})` : " (첫 릴리스)"}`,
+      `커밋 ${ctx.commitCount}개`,
+      "",
+      "## 변경 내역",
+      prLines,
+      "",
+      "위에서 사용자 체감 항목만 골라 ko_KR/en_US 출시노트를 JSON 으로 작성하라(각 3~6개 불릿).",
+    ].join("\n"),
+  };
+}

@@ -202,3 +202,20 @@ data ns                                   platform ns
 - **즉시 재인덱싱 트리거**: 텔레그램 `/index` 또는 `POST /api/admin/vault/reindex` → backoffice 가 K8s API 로 `data` ns 에 인덱서 Job 생성(`src/lib/k8s/vault-trigger.ts`, 파드 SA 토큰+CA, 의존성 0). 실행 중이면 중복 방지, 완료 후 ttl 자동 정리. 평소 2h 자동 증분과 별개로 "방금 쓴 문서 바로 검색" 용도. RBAC: `k8s/vault-trigger-rbac.yaml`(SA `backoffice` + data ns Role: cronjobs get, jobs create/list/get), deployment `serviceAccountName: backoffice`.
 
 > **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
+
+## 12. 출시노트 (Release Notes) — 태그 diff 기반 ko/en 유저 공지
+
+릴리즈 태그(`v*`) push 시 **이전 릴리즈 태그~새 태그**의 변경(머지 PR/커밋)을 GitHub compare 로 모아 MiniMax 로 **사용자용 출시노트(ko_KR/en_US)** 를 생성, `release_note` 테이블에 저장. 백오피스 `/release-notes`(전역 타임라인) + 앱 상세 "출시노트" 섹션에서 열람.
+
+```mermaid
+flowchart LR
+  TAG["태그 push refs/tags/v*"] -->|webhook push| GEN["generateReleaseNoteCore (fire-and-forget)"]
+  GEN --> CMP["compareCommitsWithBasehead(prev...new)"] --> MM["MiniMax → JSON ko/en"] --> DB[("release_note")]
+  DB --> UI["/release-notes + 앱상세"]
+```
+
+- **트리거(자동)**: webhook `push` + `created` + `ref=refs/tags/v*`. **⚠️ GitHub App 이 `push` 이벤트를 구독해야 자동 발화** — App 설정 > Permissions & events > Subscribe to events > **Push** 체크(미구독 시 자동 생성 안 됨, 수동 백필은 가능).
+- **수동 백필/재생성**: `POST /api/admin/release-notes/generate`(x-admin-token) body `{repo, version, headSha?}`. 멱등 upsert(`@@unique([repoFullName, version])`).
+- **생성 로직**(`src/lib/core/release-notes.ts`, `src/lib/github/release.ts`): `listVersionTags`(semver 내림차순) → `previousTag` → `compareTags`(머지 PR 추출: `(#N)`/`Merge pull request #N`) → `buildReleaseNotesI18nPrompt` → MiniMax JSON(`parseLooseJson` 견고 파싱).
+- **untagged 보정**: deploy `workflow_run` 의 head_branch 가 버전이 아니면(main 등) `findTagForSha(head_sha)` 로 태그를 조회해 ReleaseRecord.version 복원(출시 매트릭스). 태그 없으면 "untagged" 유지(연속배포).
+- 마이그레이션 `6_release_note`. webhook 은 생성이 느려도 200 을 막지 않도록 fire-and-forget.

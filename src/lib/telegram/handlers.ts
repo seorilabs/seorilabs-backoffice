@@ -7,6 +7,7 @@ import {
   editMessageText,
   sendChatAction,
   esc,
+  mdToTelegramHtml,
 } from "@/lib/telegram/client";
 import type { AiDraftKind } from "@prisma/client";
 import { toggleApprovalCore } from "@/lib/core/approvals";
@@ -203,7 +204,7 @@ async function sendHelp(chatId: number): Promise<void> {
 async function cmdChat(chatId: number, text: string): Promise<void> {
   await sendChatAction(chatId, "typing");
   const reply = await handleChat(chatId, text);
-  await sendMessage(chatId, esc(reply));
+  await sendMessage(chatId, mdToTelegramHtml(reply));
 }
 
 // /save: 메모를 볼트 받은함 draft 로 적재(라이터 CronJob 이 5분 내 파일 생성).

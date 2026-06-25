@@ -51,6 +51,7 @@ model App {
   pullRequests PullRequestMirror[]
   workflowRuns WorkflowRunMirror[]
   releases     ReleaseRecord[]
+  releaseNotes ReleaseNote[]
   aiDrafts     AiDraft[]
 
   createdAt DateTime @default(now())
@@ -246,6 +247,34 @@ model ReleaseRecord {
   @@unique([market, workflowRunId])
   @@index([appId, market, deployedAt])
   @@map("release_record")
+}
+
+// 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 유저용 공지(ko/en).
+// 마켓 무관, 버전(태그)당 1건. webhook(tag push) 또는 수동 백필로 생성.
+model ReleaseNote {
+  id              String            @id @default(cuid())
+  appId           String
+  app             App               @relation(fields: [appId], references: [id], onDelete: Cascade)
+  repoFullName    String
+  version         String // 태그, e.g. "v1.3.0"
+  previousVersion String? // 직전 릴리즈 태그
+  headSha         String?
+  compareUrl      String? // GitHub compare 링크
+  koKR            String            @db.Text // 한국어 유저용 출시노트
+  enUS            String            @db.Text // 영어 유저용 출시노트
+  sourceJson      Json? // 생성 근거(커밋/PR 요약)
+  status          ReleaseNoteStatus @default(GENERATED)
+  model           String? // 생성 모델
+  createdAt       DateTime          @default(now())
+
+  @@unique([repoFullName, version])
+  @@index([appId, createdAt])
+  @@map("release_note")
+}
+
+enum ReleaseNoteStatus {
+  GENERATED
+  FAILED
 }
 
 enum ReleaseMarket {

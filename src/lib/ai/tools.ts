@@ -33,7 +33,17 @@ export const TOOLS: ToolDef[] = [
   {
     name: "search_knowledge",
     description:
-      "Obsidian 지식 볼트(기획서·아이디어·과거 결정·도메인 지식) 의미검색. 인자 query(필수). 기획/맥락/과거 논의를 참고할 때 사용.",
+      "Obsidian 지식 볼트 의미검색 — 질문과 관련된 문서 본문 발췌를 찾음. 인자 query(필수). 내용 질문·요약·맥락 참고에 사용.",
+  },
+  {
+    name: "browse_knowledge",
+    description:
+      "지식 볼트에서 경로/제목에 키워드가 든 문서 목록을 열거(정확, 의미검색 아님). 인자 query(필수). '특정 주제/폴더에 어떤 문서가 있는지'(예: TAS 제안서 목록) 알 때.",
+  },
+  {
+    name: "read_knowledge",
+    description:
+      "특정 문서의 전체 본문을 읽어옴(요약·상세 답변용). 인자 path(필수 — browse/search 결과의 경로, 부분일치 가능).",
   },
 ];
 
@@ -155,6 +165,31 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
         return await searchVaultText(query, 6);
       } catch (e) {
         return `지식 볼트 검색 실패: ${(e as Error).message}`;
+      }
+    }
+    case "browse_knowledge": {
+      const query = str(args, "query");
+      if (!query) return "query 인자가 필요합니다.";
+      const { browseVault } = await import("@/lib/vault/retrieve");
+      try {
+        const paths = await browseVault(query, 40);
+        if (paths.length === 0) return "일치하는 문서 없음";
+        return `문서 ${paths.length}개:\n` + paths.map((p) => `- ${p}`).join("\n");
+      } catch (e) {
+        return `문서 목록 조회 실패: ${(e as Error).message}`;
+      }
+    }
+    case "read_knowledge": {
+      const p = str(args, "path");
+      if (!p) return "path 인자가 필요합니다.";
+      const { readVaultDoc } = await import("@/lib/vault/retrieve");
+      try {
+        const doc = await readVaultDoc(p);
+        if (!doc) return `문서를 찾지 못함: ${p}`;
+        // 컨텍스트 보호용 상한(MiniMax MAX_MSG_CHARS 고려).
+        return `[${doc.path}]\n${doc.text.slice(0, 6000)}`;
+      } catch (e) {
+        return `문서 읽기 실패: ${(e as Error).message}`;
       }
     }
     default:

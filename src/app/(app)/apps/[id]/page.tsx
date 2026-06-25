@@ -7,6 +7,7 @@ import { hasEvidence } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { StageBadge, TypeBadge, PriorityTag, Pill } from "@/components/badges";
 import { AiAgentPanel } from "@/components/AiAgentPanel";
+import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export default async function AppDetail({
       issues: { orderBy: [{ state: "asc" }, { priority: "asc" }], take: 100 },
       pullRequests: { orderBy: { ghUpdatedAt: "desc" }, take: 50 },
       releases: { orderBy: { updatedAt: "desc" }, take: 30 },
+      releaseNotes: { orderBy: { createdAt: "desc" }, take: 10 },
       transitions: { orderBy: { createdAt: "desc" }, take: 30 },
     },
   });
@@ -161,6 +163,25 @@ export default async function AppDetail({
             </div>
           ))}
           {app.releases.length === 0 && <Empty />}
+        </div>
+      </Section>
+
+      <Section title="출시노트">
+        <div className="flex flex-col gap-3">
+          {app.releaseNotes.map((n) => (
+            <ReleaseNoteCard
+              key={n.id}
+              appName={app.displayName}
+              appId={app.id}
+              version={n.version}
+              previousVersion={n.previousVersion}
+              createdAt={fmtDate(n.createdAt)}
+              compareUrl={n.compareUrl}
+              koKR={n.koKR}
+              enUS={n.enUS}
+            />
+          ))}
+          {app.releaseNotes.length === 0 && <Empty />}
         </div>
       </Section>
 

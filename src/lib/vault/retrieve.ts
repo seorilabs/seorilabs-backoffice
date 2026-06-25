@@ -89,6 +89,47 @@ export async function searchVaultText(query: string, k = 6): Promise<string> {
     .join("\n\n");
 }
 
+/** 경로/제목에 키워드가 포함된 문서 목록 열거(의미검색 아님, 정확). */
+export async function browseVault(query: string, limit = 40): Promise<string[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const rows = await prisma.vaultChunk.findMany({
+    where: { path: { contains: q } },
+    distinct: ["path"],
+    select: { path: true },
+    orderBy: { path: "asc" },
+    take: limit,
+  });
+  return rows.map((r) => r.path);
+}
+
+/** 특정 문서의 전체 본문(청크를 ord 순으로 결합). path 부분일치면 첫 매칭 사용. */
+export async function readVaultDoc(
+  pathQuery: string,
+): Promise<{ path: string; text: string } | null> {
+  const q = pathQuery.trim();
+  if (!q) return null;
+  // 정확 일치 우선, 없으면 부분일치 첫 문서.
+  let target = q;
+  const exact = await prisma.vaultChunk.count({ where: { path: q } });
+  if (exact === 0) {
+    const hit = await prisma.vaultChunk.findFirst({
+      where: { path: { contains: q } },
+      select: { path: true },
+      orderBy: { path: "asc" },
+    });
+    if (!hit) return null;
+    target = hit.path;
+  }
+  const rows = await prisma.vaultChunk.findMany({
+    where: { path: target },
+    orderBy: { ord: "asc" },
+    select: { text: true },
+  });
+  if (rows.length === 0) return null;
+  return { path: target, text: rows.map((r) => r.text).join("\n\n") };
+}
+
 /** 테스트/관리용 캐시 무효화. */
 export function invalidateVaultCache(): void {
   cache = null;
