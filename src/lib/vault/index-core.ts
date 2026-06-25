@@ -77,7 +77,18 @@ export async function indexVaultCore(opts: IndexOptions): Promise<IndexResult> {
     select: { path: true, fileHash: true },
   });
   const dbHash = new Map(existing.map((r) => [r.path, r.fileHash]));
-  const seen = new Set<string>();
+
+  // 보안/정합: 스캔 대상(allowlist) 밖이거나 사라진 path 의 청크를 *임베딩 전에 먼저* 삭제.
+  // (throttle 로 잡이 deadline 에 걸려도 purge 는 보장 — 시크릿 잔존 방지.)
+  const scanned = new Set(files.map((f) => path.relative(root, f)));
+  let removed = 0;
+  for (const p of dbHash.keys()) {
+    if (!scanned.has(p)) {
+      const r = await prisma.vaultChunk.deleteMany({ where: { path: p } });
+      if (r.count > 0) removed++;
+    }
+  }
+  if (removed > 0) log(`[vault-index] 범위 밖/삭제된 ${removed}개 파일 청크 purge`);
 
   let changed = 0;
   let unchanged = 0;
@@ -85,7 +96,6 @@ export async function indexVaultCore(opts: IndexOptions): Promise<IndexResult> {
 
   for (const abs of files) {
     const rel = path.relative(root, abs);
-    seen.add(rel);
     let content: string;
     try {
       content = await fs.readFile(abs, "utf8");
@@ -136,15 +146,6 @@ export async function indexVaultCore(opts: IndexOptions): Promise<IndexResult> {
     changed++;
     chunkTotal += chunks.length;
     log(`[vault-index] 갱신 ${rel} (${chunks.length} chunks)`);
-  }
-
-  // 디스크에서 사라진 path 의 청크 삭제.
-  let removed = 0;
-  for (const p of dbHash.keys()) {
-    if (!seen.has(p)) {
-      const r = await prisma.vaultChunk.deleteMany({ where: { path: p } });
-      removed += r.count > 0 ? 1 : 0;
-    }
   }
 
   const result: IndexResult = {
