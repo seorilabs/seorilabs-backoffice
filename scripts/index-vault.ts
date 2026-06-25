@@ -5,8 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { indexVaultCore } from "@/lib/vault/index-core";
 
 async function main() {
-  if (!env.minimaxConfigured()) {
-    console.error("[index-vault] MiniMax 미구성(FEATURE_MINIMAX_ENABLED+키 필요). 중단.");
+  if (!env.geminiConfigured()) {
+    console.error("[index-vault] 임베딩 미구성(GEMINI_API_KEY 필요). 중단.");
     process.exit(2);
   }
   const res = await indexVaultCore({

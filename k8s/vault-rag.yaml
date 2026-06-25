@@ -11,8 +11,7 @@
 #   2) data ns 에 전용 시크릿 생성(평문 레포 금지 → kubectl 로 주입):
 #      kubectl -n data create secret generic backoffice-vault-secrets \
 #        --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
-#        --from-literal=MINIMAX_API_KEY='***' \
-#        --from-literal=MINIMAX_GROUP_ID=''   # 프로브가 GroupId 필요라고 하면 콘솔값 주입
+#        --from-literal=GEMINI_API_KEY='***'  # Google AI Studio 키(임베딩용)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -58,14 +57,13 @@ spec:
                   value: /tmp
                 - name: CHECKPOINT_DISABLE
                   value: "1"
-                - name: FEATURE_MINIMAX_ENABLED
-                  value: "true"
-                - name: MINIMAX_API_BASE_URL
-                  value: "https://api.minimax.io/v1"
-                - name: MINIMAX_EMBED_MODEL
-                  value: "embo-01"
-                - name: MINIMAX_TIMEOUT_MS
-                  value: "180000"
+                # 임베딩 = Gemini(gemini-embedding-001). MiniMax .io 는 임베딩 미제공.
+                - name: GEMINI_API_BASE_URL
+                  value: "https://generativelanguage.googleapis.com/v1beta"
+                - name: GEMINI_EMBED_MODEL
+                  value: "gemini-embedding-001"
+                - name: GEMINI_EMBED_DIM
+                  value: "1536"
                 - name: VAULT_PATH
                   value: /vault
                 - name: VAULT_EXCLUDE_DIRS
@@ -75,17 +73,11 @@ spec:
                     secretKeyRef:
                       name: backoffice-vault-secrets
                       key: DATABASE_URL
-                - name: MINIMAX_API_KEY
+                - name: GEMINI_API_KEY
                   valueFrom:
                     secretKeyRef:
                       name: backoffice-vault-secrets
-                      key: MINIMAX_API_KEY
-                - name: MINIMAX_GROUP_ID
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-vault-secrets
-                      key: MINIMAX_GROUP_ID
-                      optional: true
+                      key: GEMINI_API_KEY
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

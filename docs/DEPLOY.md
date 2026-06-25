@@ -173,13 +173,13 @@ Syncthing(`data` ns, hostPath `/data/syncthing`, rpi5)이 동기화하는 **Obsi
 ```
 data ns                                   platform ns
  vault-indexer CronJob (2h)                search_knowledge 챗 도구(MiniMax 자동 호출)
-   PVC ro → chunk → embo-01 →              /api/admin/vault/probe  (임베딩 실측, 키 비노출)
+   PVC ro → chunk → gemini-embed →         /api/admin/vault/probe  (임베딩 실측, 키 비노출)
    vault_chunk(embedding LONGBLOB)         /api/admin/vault/search (검색 점검)
  vault-writer CronJob (5m)                 enqueueVaultWrite → vault_write_request
    PENDING 드레인 → 받은함/*.md (uid 1000)   (텔레그램 /save)
 ```
 
-- **임베딩**: MiniMax `embo-01`(`/v1/embeddings`, 1536dim 추정). 벡터는 ANN 인덱스(HeatWave 전용) 없이 **float32 LONGBLOB 저장 + 앱 brute-force cosine**(수천 청크라 충분). 검색측은 임베딩만 메모리 캐시(시그니처 변하면 갱신).
+- **임베딩**: **Google Gemini `gemini-embedding-001`**(`:batchEmbedContents`, 1536dim, taskType RETRIEVAL_DOCUMENT/QUERY 비대칭). MiniMax 국제(.io)는 임베딩 미제공이라 별도 제공자 사용 — **챗/추론은 그대로 MiniMax-M3**. 벡터는 ANN 인덱스(HeatWave 전용) 없이 **float32 LONGBLOB 저장 + 앱 brute-force cosine**(cosine 은 스케일 불변이라 정규화 불필요). 검색측은 임베딩만 메모리 캐시(시그니처 변하면 갱신).
 - **인덱싱 범위**: `비공개`·`.obsidian`·`.stfolder`·`.trash`·`첨부파일` 제외(`VAULT_EXCLUDE_DIRS`). 증분(파일 sha256 == DB fileHash 면 스킵), 사라진 파일 청크 삭제.
 - **쓰기 안전장치**: 에이전트는 **받은함**(`VAULT_WRITE_FOLDERS` allowlist)에 **draft .md 만** 생성, 기존 노트 수정/삭제 불가. 사람이 Obsidian 에서 검토. writer 는 파일 소유자 **uid 1000** 으로 실행해야 기록 가능.
 
@@ -191,12 +191,12 @@ data ns                                   platform ns
      | sed 's/namespace: platform/namespace: data/' | kubectl -n data apply -f -
    kubectl -n data create secret generic backoffice-vault-secrets \
      --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
-     --from-literal=MINIMAX_API_KEY='***' \
-     --from-literal=MINIMAX_GROUP_ID=''
+     --from-literal=GEMINI_API_KEY='***'
    ```
+   backoffice(platform, 질의측)에도 `GEMINI_API_KEY` 필요 → `backoffice-secrets` 에 추가하고 `kubectl apply -f k8s/deployment.yaml`(env 변경은 CI set image 비대상).
 3. `kubectl apply -f k8s/vault-rag.yaml`.
-4. **임베딩 실측(키 비노출)**: `curl -fsS -XPOST -H "x-admin-token: $TOK" https://backoffice.vzyx.xyz/api/admin/vault/probe` → `{ok:true, dim, groupIdSet}`. `ok:false` 이고 GroupId 관련 에러면 MiniMax 콘솔의 GroupId 를 `MINIMAX_GROUP_ID` 로 주입 후 재시도.
+4. **임베딩 실측(키 비노출)**: `curl -fsS -XPOST -H "x-admin-token: $TOK" https://backoffice.vzyx.xyz/api/admin/vault/probe` → `{ok:true, provider:"gemini", dim:1536}`.
 5. 최초 인덱싱: `kubectl -n data create job --from=cronjob/vault-indexer vault-index-init` → 로그로 `result {scanned,changed,chunks}` 확인.
 6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 5분 내 받은함에 파일.
 
-> **주의**: `vault-rag.yaml` 은 CI(`set image`) 비대상 → 변경 시 `kubectl apply` 1회. embo-01 요금/한도 고려해 인덱서는 2h 주기(증분이라 대부분 스킵).
+> **주의**: `vault-rag.yaml`·`deployment.yaml` env 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. Gemini 무료등급(임베딩 RPD/TPM) 고려해 인덱서는 2h 주기(증분이라 대부분 스킵).

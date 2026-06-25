@@ -32,9 +32,14 @@ export const env = {
   minimaxBaseUrl: () =>
     optional("MINIMAX_API_BASE_URL", "https://api.minimax.io/v1"),
   minimaxTimeoutMs: () => Number(optional("MINIMAX_TIMEOUT_MS", "180000")),
-  // 임베딩(embo-01). GroupId 는 일부 엔드포인트에서 ?GroupId= 로 요구 → 있으면 부착.
-  minimaxEmbedModel: () => optional("MINIMAX_EMBED_MODEL", "embo-01"),
-  minimaxGroupId: () => optional("MINIMAX_GROUP_ID"),
+  // 임베딩 = Gemini(gemini-embedding-001). MiniMax .io 는 임베딩 미제공이라 분리.
+  geminiApiKey: () => optional("GEMINI_API_KEY"),
+  geminiEmbedModel: () => optional("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
+  geminiBaseUrl: () =>
+    optional("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
+  geminiEmbedDim: () => Number(optional("GEMINI_EMBED_DIM", "1536")),
+  geminiTimeoutMs: () => Number(optional("GEMINI_TIMEOUT_MS", "60000")),
+  geminiConfigured: () => Boolean(optional("GEMINI_API_KEY").trim()),
   // Vault RAG(Obsidian 볼트 지식). 인덱서/라이터는 data ns 에서 PVC 마운트.
   featureVaultRag: () => bool("FEATURE_VAULT_RAG", false),
   vaultPath: () => optional("VAULT_PATH", "/vault"),

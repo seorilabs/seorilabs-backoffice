@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
-import { miniMaxEmbed } from "@/lib/ai/embeddings";
+import { embedTexts } from "@/lib/ai/embeddings";
 import { packFloat32 } from "@/lib/vault/pack";
 import { chunkMarkdown } from "@/lib/vault/chunk";
 
@@ -99,7 +99,7 @@ export async function indexVaultCore(opts: IndexOptions): Promise<IndexResult> {
 
     let vectors: number[][];
     try {
-      vectors = await miniMaxEmbed(
+      vectors = await embedTexts(
         chunks.map((c) => c.text),
         "db",
       );

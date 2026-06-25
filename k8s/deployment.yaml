@@ -139,6 +139,13 @@ spec:
                   name: backoffice-secrets
                   key: MINIMAX_API_KEY
                   optional: true
+            # 임베딩(볼트 검색 질의측). 인덱서는 data ns 에서 별도 주입.
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GEMINI_API_KEY
+                  optional: true
             - name: TELEGRAM_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
