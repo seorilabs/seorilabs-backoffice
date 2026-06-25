@@ -49,6 +49,7 @@ export const BOT_COMMANDS = [
   { command: "p1", description: "열린 P1 이슈" },
   { command: "status", description: "앱 현황" },
   { command: "save", description: "메모를 볼트 받은함에 저장" },
+  { command: "index", description: "볼트 즉시 재인덱싱" },
   { command: "reset", description: "대화 맥락 초기화" },
   { command: "help", description: "도움말 · 빠른 버튼" },
 ];
@@ -81,6 +82,9 @@ function helpText(): string {
     "",
     "<b>📥 볼트에 메모 저장</b> (<code>/save</code>)",
     "<code>/save 내용</code> → 볼트 <b>받은함</b>에 .md 초안 저장(5분 내 동기화). 첫 줄이 제목.",
+    "",
+    "<b>🔄 볼트 즉시 재인덱싱</b> (<code>/index</code>)",
+    "문서를 추가·수정한 직후 검색에 바로 반영하고 싶을 때. 변경분만 임베딩(평소엔 2시간마다 자동 증분).",
     "",
     "<b>📝 기획 → 이슈 생성</b> (<code>/plan</code> 또는 📝 기획)",
     "앱 선택 → 아이디어 한 줄 입력 → AI가 코드베이스를 반영한 초안 작성 → <b>[✅ 이슈 생성]</b> 버튼.",
@@ -182,6 +186,9 @@ async function handleMessage(m: TgMessage): Promise<void> {
       await cmdSave(chatId, msg);
       break;
     }
+    case "/index":
+      await cmdIndex(chatId);
+      break;
     default:
       await sendMessage(chatId, "알 수 없는 명령입니다. /help");
       break;
@@ -217,6 +224,24 @@ async function cmdSave(chatId: number, text: string): Promise<void> {
     chatId,
     esc(`📥 받은함에 저장 예약됨: “${title}”\n5분 내 Obsidian 으로 동기화됩니다.`),
   );
+}
+
+// /index: 볼트 즉시 재인덱싱(data ns 인덱서 Job 생성). 변경분만 임베딩.
+async function cmdIndex(chatId: number): Promise<void> {
+  try {
+    const { triggerVaultIndex } = await import("@/lib/k8s/vault-trigger");
+    const r = await triggerVaultIndex();
+    await sendMessage(
+      chatId,
+      esc(
+        r.triggered
+          ? `🔄 ${r.message} (${r.name})\n변경/신규 파일만 임베딩되며 잠시 후 검색에 반영됩니다.`
+          : `⏳ ${r.message}`,
+      ),
+    );
+  } catch (e) {
+    await sendMessage(chatId, esc(`인덱싱 트리거 실패: ${(e as Error).message}`));
+  }
 }
 
 // ── /plan: 앱 선택 → 아이디어 → 미리보기 → 버튼 커밋 ──

@@ -18,6 +18,8 @@ spec:
       labels:
         app.kubernetes.io/name: backoffice
     spec:
+      # data ns 인덱싱 Job 생성용(텔레그램 /index). RBAC: k8s/vault-trigger-rbac.yaml
+      serviceAccountName: backoffice
       nodeSelector:
         kubernetes.io/hostname: rpi5
       securityContext:
