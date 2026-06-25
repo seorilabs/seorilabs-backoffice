@@ -199,4 +199,6 @@ data ns                                   platform ns
 5. 최초 인덱싱: `kubectl -n data create job --from=cronjob/vault-indexer vault-index-init` → 로그로 `result {scanned,changed,chunks}` 확인.
 6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 5분 내 받은함에 파일.
 
-> **주의**: `vault-rag.yaml`·`deployment.yaml` env 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. Gemini 무료등급(임베딩 RPD/TPM) 고려해 인덱서는 2h 주기(증분이라 대부분 스킵).
+- **즉시 재인덱싱 트리거**: 텔레그램 `/index` 또는 `POST /api/admin/vault/reindex` → backoffice 가 K8s API 로 `data` ns 에 인덱서 Job 생성(`src/lib/k8s/vault-trigger.ts`, 파드 SA 토큰+CA, 의존성 0). 실행 중이면 중복 방지, 완료 후 ttl 자동 정리. 평소 2h 자동 증분과 별개로 "방금 쓴 문서 바로 검색" 용도. RBAC: `k8s/vault-trigger-rbac.yaml`(SA `backoffice` + data ns Role: cronjobs get, jobs create/list/get), deployment `serviceAccountName: backoffice`.
+
+> **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
