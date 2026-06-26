@@ -68,7 +68,7 @@ spec:
                   value: /vault
                 # 인덱싱할 최상위 폴더 allowlist(시크릿 흩어짐 → 화이트리스트).
                 - name: VAULT_INCLUDE_DIRS
-                  value: "프로젝트,지식,받은함,자료"
+                  value: "받은함,지식,커리어,프로젝트"
                 - name: VAULT_EXCLUDE_DIRS
                   value: ".obsidian,.stfolder,.trash"
                 - name: DATABASE_URL
