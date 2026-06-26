@@ -24,9 +24,10 @@ export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise
     if (!m || !env.minimaxConfigured()) return;
     const app = await prisma.app.findUnique({
       where: { id: appId },
-      select: { displayName: true },
+      select: { displayName: true, status: true },
     });
     if (!app) return;
+    if (app.status === "DEPRECATED") return; // 존치 앱은 단계 넛지 안 함.
     await notify(
       `${m.emoji} <b>${esc(app.displayName)}</b> — ${STAGE_KO[stage]} 단계 진입\n${m.suggest}`,
       [[{ text: m.label, callback_data: `gen:${m.kind}:${appId}` }]],
@@ -111,7 +112,8 @@ export async function sendDailyDigest(now: Date): Promise<void> {
 // 주간 LiveOps 리뷰: 운영 앱별 개선 가설 생성 버튼.
 export async function sendWeeklyLiveopsReview(): Promise<void> {
   const apps = await prisma.app.findMany({
-    where: { currentStage: "LIVEOPS" },
+    // 존치(DEPRECATED) 앱은 개선 가설 대상에서 제외.
+    where: { currentStage: "LIVEOPS", status: { not: "DEPRECATED" } },
     orderBy: { displayName: "asc" },
     select: { id: true, displayName: true },
   });

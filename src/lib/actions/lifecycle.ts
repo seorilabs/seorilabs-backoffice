@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { Lifecycle } from "@prisma/client";
+import type { Lifecycle, AppStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recordTransition } from "@/lib/sync/transition";
 import { requireSession } from "@/lib/auth-helpers";
 import { notifyStageNudge } from "@/lib/telegram/nudges";
+import { setAppStatusCore } from "@/lib/core/app-status";
 
 // 보드에서 수동 라이프사이클 전이.
 export async function transitionApp(
@@ -42,4 +43,22 @@ export async function transitionApp(
   revalidatePath("/");
   revalidatePath(`/apps/${appId}`);
   return { ok: changed };
+}
+
+// 앱 운영 상태 변경(존치/일시중지/운영 재개).
+export async function setAppStatus(
+  appId: string,
+  status: AppStatus,
+): Promise<{ ok: boolean }> {
+  const session = await requireSession();
+  const r = await setAppStatusCore({
+    idOrSlug: appId,
+    status,
+    actorLogin: session.user.login ?? null,
+  });
+  revalidatePath("/");
+  revalidatePath("/board");
+  revalidatePath("/releases");
+  revalidatePath(`/apps/${appId}`);
+  return { ok: Boolean(r) };
 }

@@ -1,6 +1,13 @@
-import type { Lifecycle, ReleaseMarket } from "@prisma/client";
+import type { Lifecycle, ReleaseMarket, AppStatus } from "@prisma/client";
 
 // 6단계 라이프사이클. 전이는 수동(보드)이 기본, deploy 성공만 자동 신호.
+
+// 앱 운영 상태. DEPRECATED = "존치"(더 이상 업데이트 안 하지만 배포는 유지).
+export const STATUS_KO: Record<AppStatus, string> = {
+  ACTIVE: "운영",
+  PAUSED: "일시중지",
+  DEPRECATED: "존치",
+};
 
 export const STAGES: Lifecycle[] = [
   "PLANNING",

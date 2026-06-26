@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getBoardApps } from "@/lib/queries";
 import { STAGES, STAGE_KO } from "@/lib/domain/lifecycle";
-import { StageBadge, TypeBadge, MarketDots, Pill } from "@/components/badges";
+import { StageBadge, TypeBadge, MarketDots, Pill, StatusBadge } from "@/components/badges";
 import { fmtDate } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +61,7 @@ export default async function Dashboard() {
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <TypeBadge type={a.type} engine={a.engine} />
+              <StatusBadge status={a.status} />
               {a.blocked && <Pill tone="red">blocked</Pill>}
               {a.approvalWaiting && <Pill tone="amber">승인대기</Pill>}
               {a.needsConfig && <Pill tone="neutral">확정 필요</Pill>}

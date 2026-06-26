@@ -1,6 +1,30 @@
-import type { Lifecycle } from "@prisma/client";
-import { STAGE_KO } from "@/lib/domain/lifecycle";
+import type { Lifecycle, AppStatus } from "@prisma/client";
+import { STAGE_KO, STATUS_KO } from "@/lib/domain/lifecycle";
 import type { MarketStatus } from "@/lib/queries";
+
+const STATUS_COLOR: Record<AppStatus, string> = {
+  ACTIVE: "bg-emerald-100 text-emerald-700",
+  PAUSED: "bg-amber-100 text-amber-800",
+  DEPRECATED: "bg-neutral-200 text-neutral-600",
+};
+
+// 운영(ACTIVE)은 기본값이라 표시 생략 — 존치/일시중지만 뱃지로 부각.
+export function StatusBadge({
+  status,
+  always = false,
+}: {
+  status: AppStatus;
+  always?: boolean;
+}) {
+  if (status === "ACTIVE" && !always) return null;
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${STATUS_COLOR[status]}`}
+    >
+      {STATUS_KO[status]}
+    </span>
+  );
+}
 
 const STAGE_COLOR: Record<Lifecycle, string> = {
   PLANNING: "bg-slate-100 text-slate-700",

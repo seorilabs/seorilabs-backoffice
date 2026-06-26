@@ -4,10 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { asStringArray, fmtDate, fmtDateTime } from "@/lib/format";
 import { hasEvidence } from "@/lib/domain/labels";
-import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { StageBadge, TypeBadge, PriorityTag, Pill } from "@/components/badges";
+import { STAGE_KO, STATUS_KO } from "@/lib/domain/lifecycle";
+import { StageBadge, TypeBadge, PriorityTag, Pill, StatusBadge } from "@/components/badges";
 import { AiAgentPanel } from "@/components/AiAgentPanel";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
+import { StatusControl } from "@/components/StatusControl";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,18 @@ export default async function AppDetail({
         <Meta k="iOS 번들" v={app.iosBundle} needs={targets.includes("appstore") && !app.iosBundle} />
         <Meta k="Firebase" v={app.firebaseProject} />
         <Meta k="AIT" v={app.aitAppName} needs={targets.includes("ait") && !app.aitAppName} />
-        <Meta k="상태" v={app.status} />
+        <Meta k="상태" v={STATUS_KO[app.status]} />
+      </div>
+
+      {/* 운영 상태 전환(존치 등) */}
+      <div className="mt-3 flex items-center gap-3">
+        <StatusBadge status={app.status} always />
+        <StatusControl appId={app.id} status={app.status} />
+        {app.status === "DEPRECATED" && (
+          <span className="text-xs text-neutral-400">
+            존치: 더 이상 업데이트하지 않지만 배포는 유지됩니다(운영 넛지·리뷰 제외).
+          </span>
+        )}
       </div>
 
       {/* 운영(LIVEOPS) 개선 루프 미니보드 */}

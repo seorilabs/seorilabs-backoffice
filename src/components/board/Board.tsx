@@ -14,7 +14,7 @@ import {
 } from "@dnd-kit/core";
 import type { Lifecycle } from "@prisma/client";
 import { STAGES, STAGE_KO } from "@/lib/domain/lifecycle";
-import { TypeBadge, MarketDots, Pill } from "@/components/badges";
+import { TypeBadge, MarketDots, Pill, StatusBadge } from "@/components/badges";
 import type { BoardApp } from "@/lib/queries";
 import { transitionApp } from "@/lib/actions/lifecycle";
 
@@ -43,6 +43,7 @@ function Card({ app }: { app: BoardApp }) {
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1">
         <TypeBadge type={app.type} engine={app.engine} />
+        <StatusBadge status={app.status} />
         {app.blocked && <Pill tone="red">blocked</Pill>}
         {app.approvalWaiting && <Pill tone="amber">승인</Pill>}
         {app.needsConfig && <Pill tone="neutral">확정필요</Pill>}
