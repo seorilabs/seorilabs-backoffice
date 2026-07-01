@@ -22,6 +22,16 @@ import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
 import { handleChat, resetChat } from "@/lib/telegram/chat";
 import { getPending, setPending, clearPending } from "@/lib/telegram/state";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
+import {
+  createReleaseTagWithNotes,
+  dispatchMarketDeploy,
+  previewNextTag,
+  deployTargetsFor,
+  DEPLOY_TARGET_KO,
+  type DeployTarget,
+  type Bump,
+} from "@/lib/core/release-ops";
+import { listVersionTags } from "@/lib/github/release";
 
 interface TgFrom {
   id: number;
@@ -49,6 +59,8 @@ export const BOT_COMMANDS = [
   { command: "approvals", description: "승인 대기" },
   { command: "p1", description: "열린 P1 이슈" },
   { command: "status", description: "앱 현황" },
+  { command: "release", description: "릴리즈 태그 생성 + 출시노트" },
+  { command: "deploy", description: "마켓 배포(태그 선택)" },
   { command: "save", description: "메모를 볼트 받은함에 저장" },
   { command: "index", description: "볼트 즉시 재인덱싱" },
   { command: "reset", description: "대화 맥락 초기화" },
@@ -170,6 +182,12 @@ async function handleMessage(m: TgMessage): Promise<void> {
       break;
     case "/plan":
       await cmdPlanStart(chatId);
+      break;
+    case "/release":
+      await cmdReleaseStart(chatId);
+      break;
+    case "/deploy":
+      await cmdDeployStart(chatId);
       break;
     case "/reset":
       await resetChat(chatId);
@@ -383,6 +401,9 @@ async function handleCallback(cq: TgCallback): Promise<void> {
 
   if (action === "gen") return cbGen(cq, fromId, rest[0], arg);
 
+  if (action === "rel") return cbRelease(cq, fromId, rest);
+  if (action === "deploy") return cbDeploy(cq, fromId, rest);
+
   if (action === "status" && rest[0] === "app") {
     await answerCallback(cq.id);
     if (cq.message) await cmdStatusDetail(cq.message.chat.id, arg);
@@ -564,6 +585,244 @@ async function cmdStatusDetail(chatId: number, slug: string): Promise<void> {
       `https://backoffice.vzyx.xyz/apps/${app.id}`,
     ].join("\n"),
   );
+}
+
+const TAG_RE = /^v\d+\.\d+\.\d+$/;
+const BUMPS = new Set(["patch", "minor", "major"]);
+const DEPLOY_TARGETS = new Set(["AIT", "PLAY", "APPSTORE", "ALL"]);
+
+async function appBySlug(slug: string) {
+  if (!SLUG_RE.test(slug)) return null;
+  return prisma.app.findFirst({
+    where: { slug },
+    select: { slug: true, displayName: true, repoFullName: true, marketTargets: true },
+  });
+}
+
+// ── /release: 앱 선택 → bump → 확인 → 태그 + 출시노트(ko/en) + GitHub Release ──
+async function cmdReleaseStart(chatId: number): Promise<void> {
+  const apps = await prisma.app.findMany({
+    orderBy: { displayName: "asc" },
+    select: { slug: true, displayName: true },
+  });
+  if (apps.length === 0) {
+    await sendMessage(chatId, "등록된 앱이 없습니다.");
+    return;
+  }
+  const buttons = chunk2(
+    apps.map((a) => ({ text: a.displayName, callback_data: `rel:app:${a.slug}` })),
+  );
+  await sendMessage(chatId, "<b>🚀 릴리즈할 앱을 선택하세요</b>", buttons);
+}
+
+async function cbRelease(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
+  const sub = rest[0];
+  const slug = rest[1] ?? "";
+  const chatId = cq.message?.chat.id;
+  const mid = cq.message?.message_id;
+
+  if (sub === "app") {
+    if (!SLUG_RE.test(slug)) {
+      await answerCallback(cq.id, "잘못된 앱");
+      return;
+    }
+    await answerCallback(cq.id);
+    if (chatId != null && mid != null) {
+      await editMessageText(chatId, mid, `🚀 <b>${esc(slug)}</b> — 버전 증가 단위를 선택하세요.`, [
+        [
+          { text: "patch", callback_data: `rel:bump:${slug}:patch` },
+          { text: "minor", callback_data: `rel:bump:${slug}:minor` },
+          { text: "major", callback_data: `rel:bump:${slug}:major` },
+        ],
+      ]);
+    }
+    return;
+  }
+
+  if (sub === "cancel") {
+    await answerCallback(cq.id, "취소됨");
+    if (chatId != null && mid != null) await editMessageText(chatId, mid, "✖️ 릴리즈 취소됨", []);
+    return;
+  }
+
+  const bump = rest[2] ?? "";
+  if (!SLUG_RE.test(slug) || !BUMPS.has(bump)) {
+    await answerCallback(cq.id, "잘못된 요청");
+    return;
+  }
+  const app = await appBySlug(slug);
+  if (!app) {
+    await answerCallback(cq.id, "앱 없음");
+    return;
+  }
+
+  if (sub === "bump") {
+    await answerCallback(cq.id, "⏳ 확인 중…");
+    if (chatId == null || mid == null) return;
+    try {
+      const preview = await previewNextTag(app.repoFullName, bump as Bump);
+      await editMessageText(
+        chatId,
+        mid,
+        `🚀 <b>${esc(app.displayName)}</b>\n최신: ${esc(preview.latest ?? "(없음)")} → 생성: <b>${esc(preview.next)}</b>\n태그 + 출시노트(ko/en) + GitHub Release 를 진행할까요?`,
+        [
+          [
+            { text: `✅ ${preview.next} 생성`, callback_data: `rel:go:${slug}:${bump}` },
+            { text: "✖️ 취소", callback_data: `rel:cancel:${slug}` },
+          ],
+        ],
+      );
+    } catch (e) {
+      await editMessageText(chatId, mid, "태그 조회 실패: " + esc((e as Error).message), []);
+    }
+    return;
+  }
+
+  if (sub === "go") {
+    await answerCallback(cq.id, "⏳ 릴리즈 생성 중…");
+    if (chatId == null || mid == null) return;
+    try {
+      const r = await createReleaseTagWithNotes({
+        repoFullName: app.repoFullName,
+        bump: bump as Bump,
+        actorLabel: `telegram:${fromId}`,
+      });
+      const ko = r.koKR ? "\n\n" + esc(r.koKR.slice(0, 600)) : "";
+      await editMessageText(
+        chatId,
+        mid,
+        `✅ <b>${esc(app.displayName)} ${esc(r.tag)}</b> 릴리즈 생성됨${r.created ? "" : " (기존 태그 재사용)"}\n${esc(r.releaseUrl)}${ko}`,
+        [],
+      );
+    } catch (e) {
+      await editMessageText(chatId, mid, "릴리즈 실패: " + esc((e as Error).message), []);
+    }
+    return;
+  }
+
+  await answerCallback(cq.id);
+}
+
+// ── /deploy: 앱 → 태그 → 마켓 → 확인 → workflow_dispatch ──
+async function cmdDeployStart(chatId: number): Promise<void> {
+  const apps = await prisma.app.findMany({
+    where: { status: { not: "PAUSED" } },
+    orderBy: { displayName: "asc" },
+    select: { slug: true, displayName: true },
+  });
+  if (apps.length === 0) {
+    await sendMessage(chatId, "등록된 앱이 없습니다.");
+    return;
+  }
+  const buttons = chunk2(
+    apps.map((a) => ({ text: a.displayName, callback_data: `deploy:app:${a.slug}` })),
+  );
+  await sendMessage(chatId, "<b>📦 배포할 앱을 선택하세요</b>", buttons);
+}
+
+async function cbDeploy(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
+  const sub = rest[0];
+  const slug = rest[1] ?? "";
+  const chatId = cq.message?.chat.id;
+  const mid = cq.message?.message_id;
+
+  if (sub === "cancel") {
+    await answerCallback(cq.id, "취소됨");
+    if (chatId != null && mid != null) await editMessageText(chatId, mid, "✖️ 배포 취소됨", []);
+    return;
+  }
+
+  const app = await appBySlug(slug);
+  if (!app) {
+    await answerCallback(cq.id, "앱 없음");
+    return;
+  }
+
+  if (sub === "app") {
+    await answerCallback(cq.id, "⏳ 태그 조회…");
+    if (chatId == null || mid == null) return;
+    try {
+      const tags = await listVersionTags(app.repoFullName);
+      if (tags.length === 0) {
+        await editMessageText(chatId, mid, `${esc(app.displayName)} — 릴리즈 태그가 없습니다. 먼저 /release 로 생성하세요.`, []);
+        return;
+      }
+      const buttons = chunk2(
+        tags.slice(0, 6).map((t) => ({ text: t.name, callback_data: `deploy:tag:${slug}:${t.name}` })),
+      );
+      await editMessageText(chatId, mid, `📦 <b>${esc(app.displayName)}</b> — 배포할 릴리즈 태그를 선택하세요.`, buttons);
+    } catch (e) {
+      await editMessageText(chatId, mid, "태그 조회 실패: " + esc((e as Error).message), []);
+    }
+    return;
+  }
+
+  const tag = rest[2] ?? "";
+  if (!TAG_RE.test(tag)) {
+    await answerCallback(cq.id, "잘못된 태그");
+    return;
+  }
+
+  if (sub === "tag") {
+    await answerCallback(cq.id);
+    if (chatId == null || mid == null) return;
+    const targets = deployTargetsFor(app.marketTargets);
+    if (targets.length === 0) {
+      await editMessageText(chatId, mid, `${esc(app.displayName)} — 배포 마켓이 설정되어 있지 않습니다.`, []);
+      return;
+    }
+    const btns = targets.map((t) => ({ text: DEPLOY_TARGET_KO[t], callback_data: `deploy:mk:${slug}:${tag}:${t}` }));
+    await editMessageText(chatId, mid, `📦 <b>${esc(app.displayName)} ${esc(tag)}</b> — 배포 대상을 선택하세요.`, chunk2(btns));
+    return;
+  }
+
+  const target = (rest[3] ?? "") as DeployTarget;
+  if (!DEPLOY_TARGETS.has(target)) {
+    await answerCallback(cq.id, "잘못된 대상");
+    return;
+  }
+
+  if (sub === "mk") {
+    await answerCallback(cq.id);
+    if (chatId != null && mid != null) {
+      await editMessageText(
+        chatId,
+        mid,
+        `⚠️ <b>${esc(app.displayName)} ${esc(tag)}</b> → <b>${esc(DEPLOY_TARGET_KO[target])}</b> 배포를 실행합니다. 계속할까요?`,
+        [
+          [
+            { text: "🚀 배포 실행", callback_data: `deploy:go:${slug}:${tag}:${target}` },
+            { text: "✖️ 취소", callback_data: `deploy:cancel:${slug}` },
+          ],
+        ],
+      );
+    }
+    return;
+  }
+
+  if (sub === "go") {
+    await answerCallback(cq.id, "🚀 배포 트리거 중…");
+    if (chatId == null || mid == null) return;
+    try {
+      await dispatchMarketDeploy({
+        repoFullName: app.repoFullName,
+        target,
+        tag,
+        actorLabel: `telegram:${fromId}`,
+      });
+      await editMessageText(
+        chatId,
+        mid,
+        `🚀 <b>${esc(app.displayName)} ${esc(tag)}</b> → ${esc(DEPLOY_TARGET_KO[target])} 배포를 트리거했습니다.\n빌드/업로드 완료 시 결과 알림이 옵니다.`,
+        [],
+      );
+    } catch (e) {
+      await editMessageText(chatId, mid, "배포 트리거 실패: " + esc((e as Error).message), []);
+    }
+    return;
+  }
+
+  await answerCallback(cq.id);
 }
 
 // 인라인 버튼 2열 배치.

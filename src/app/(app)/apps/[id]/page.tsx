@@ -9,6 +9,7 @@ import { StageBadge, TypeBadge, PriorityTag, Pill, StatusBadge } from "@/compone
 import { AiAgentPanel } from "@/components/AiAgentPanel";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 import { StatusControl } from "@/components/StatusControl";
+import { ReleaseControls } from "@/components/ReleaseControls";
 
 export const dynamic = "force-dynamic";
 
@@ -158,6 +159,10 @@ export default async function AppDetail({
           ))}
           {app.issues.length === 0 && <Empty />}
         </div>
+      </Section>
+
+      <Section title="릴리즈 & 배포">
+        <ReleaseControls appId={app.id} targets={targets} />
       </Section>
 
       <Section title="릴리스">
