@@ -52,9 +52,12 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         );
       }
     }
-    const isDeploy = /deploy|google|app\s*store|appstore|ait|toss/i.test(
-      p.workflow_run?.name ?? "",
-    );
+    // 마켓 배포(AIT/Play/App Store)만 대상 — GitHub Pages 프리뷰(Deploy Godot Web Pages)는
+    // 빌드 미리보기일 뿐 마켓 배포가 아니므로 제외한다(main 병합마다 오탐 넛지 방지).
+    const wfName = p.workflow_run?.name ?? "";
+    const isDeploy =
+      /deploy|google|app\s*store|appstore|ait|toss/i.test(wfName) &&
+      !/pages/i.test(wfName);
     if (
       event === "workflow_run" &&
       p.workflow_run?.status === "completed" &&
