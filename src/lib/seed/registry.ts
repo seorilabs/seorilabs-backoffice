@@ -133,26 +133,28 @@ async function seedRepo(
 
   const firebaserc = await getJson<FirebaseRc>(octokit, org, name, ".firebaserc");
 
-  let hasAit = false;
-  let aitAppName: string | null = null;
-  if (engine === "RN") {
-    hasAit = await pathExists(octokit, org, name, "apps/ait/granite.config.ts");
-    const granite = await getText(octokit, org, name, "apps/ait/granite.config.ts");
-    const m = granite?.match(/appName\s*:\s*["'`]([^"'`]+)["'`]/);
-    aitAppName = m ? m[1] : null;
-  } else {
-    const aitReal = await getJson<{ appName?: unknown }>(
-      octokit,
-      org,
-      name,
-      "apps-in-toss/apps-in-toss.config.json",
-    );
-    const aitExample = aitReal
-      ? false
-      : await pathExists(octokit, org, name, "apps-in-toss/apps-in-toss.config.example.json");
-    hasAit = !!aitReal || aitExample;
-    aitAppName = aitReal ? pickAppName(aitReal.appName) : null;
-  }
+  // AIT(Granite/Bedrock) 감지는 engine과 무관하게 세 위치를 모두 확인한다.
+  // Granite 앱은 RN(apps/ait/granite.config.ts) 또는 web/Vite(레포 루트 granite.config.ts) 레이아웃일 수 있고,
+  // 별도로 apps-in-toss/apps-in-toss.config.json(또는 .example.json)을 둘 수도 있다(예: Godot).
+  // crossword-puzzle 처럼 루트 granite.config.ts 만 있는 web-Granite 앱이 누락되던 것을 방지한다.
+  const rootGranite = await getText(octokit, org, name, "granite.config.ts");
+  const rnGranite = await getText(octokit, org, name, "apps/ait/granite.config.ts");
+  const aitReal = await getJson<{ appName?: unknown }>(
+    octokit,
+    org,
+    name,
+    "apps-in-toss/apps-in-toss.config.json",
+  );
+  const aitExample = aitReal
+    ? false
+    : await pathExists(octokit, org, name, "apps-in-toss/apps-in-toss.config.example.json");
+
+  const graniteText = rootGranite ?? rnGranite;
+  const hasAit = !!graniteText || !!aitReal || aitExample;
+
+  // aitAppName 은 실제 config 우선. granite.config.ts 는 appName: 정규식으로, apps-in-toss.config.json 은 pickAppName 으로 추출.
+  const graniteAppName = graniteText?.match(/appName\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? null;
+  const aitAppName = aitReal ? pickAppName(aitReal.appName) : graniteAppName;
 
   const hasWeb = await pathExists(octokit, org, name, "web");
 
