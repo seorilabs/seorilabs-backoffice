@@ -1,12 +1,12 @@
-import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { getInstallationOctokit } from "@/lib/github/app";
 import { backfillRepo } from "@/lib/sync/backfill";
 import { env } from "@/lib/env";
-import type { AppType, AppEngine } from "@prisma/client";
+import { computeRepoSeed, type Octo, type RepoLite } from "./compute";
 
 // 레지스트리 부트스트랩. Next 런타임에서 실행(octokit 번들).
-// R4: Godot 레포는 config 경로가 다르고 .example.json 만 있을 수 있음 → 미설정(null + UI "확정 필요").
+// 순수 계산부(octokit read → marketTargets → configHash → 시드 데이터)는 compute.ts 로 분리했고,
+// 여기서는 그 결과를 받아 prisma upsert(멱등)만 수행한다.
 
 const IGNORE = new Set([
   "gemini-pr-bot",
@@ -17,215 +17,40 @@ const IGNORE = new Set([
   "archive",
 ]);
 
-type Octo = Awaited<ReturnType<typeof getInstallationOctokit>>;
-
-async function getText(
-  octokit: Octo,
-  owner: string,
-  repo: string,
-  path: string,
-): Promise<string | null> {
-  try {
-    const res = await octokit.rest.repos.getContent({ owner, repo, path });
-    const data = res.data;
-    if (Array.isArray(data)) return null;
-    if (data.type === "file" && "content" in data && data.content) {
-      return Buffer.from(data.content, "base64").toString("utf8");
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function getJson<T = Record<string, unknown>>(
-  octokit: Octo,
-  owner: string,
-  repo: string,
-  path: string,
-): Promise<T | null> {
-  const text = await getText(octokit, owner, repo, path);
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function pathExists(
-  octokit: Octo,
-  owner: string,
-  repo: string,
-  path: string,
-): Promise<boolean> {
-  try {
-    await octokit.rest.repos.getContent({ owner, repo, path });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function pickAppName(appName: unknown): string | null {
-  if (typeof appName === "string") return appName;
-  if (appName && typeof appName === "object") {
-    const o = appName as Record<string, string>;
-    return o["ko-KR"] ?? o["en-US"] ?? Object.values(o)[0] ?? null;
-  }
-  return null;
-}
-
-interface PlayConfig {
-  packageName?: string;
-  appType?: string;
-  storeListing?: { appName?: unknown };
-}
-interface AppStoreConfig {
-  bundleId?: string;
-  appleTeamId?: string;
-  sku?: string;
-  appType?: string;
-}
-interface FirebaseRc {
-  projects?: { default?: string };
-}
-
-interface RepoLite {
-  name: string;
-  full_name: string;
-  id: number;
-  private: boolean;
-}
-
 async function seedRepo(
   octokit: Octo,
   org: string,
   repo: RepoLite,
 ): Promise<"seeded" | "skipped"> {
-  const name = repo.name;
+  const seed = await computeRepoSeed(octokit, org, repo);
+  if (!seed) return "skipped"; // RN/Godot 아님(예: Unity)
 
-  const isGodot = await pathExists(octokit, org, name, "project.godot");
-  const hasPackageJson = await pathExists(octokit, org, name, "package.json");
-  if (!isGodot && !hasPackageJson) return "skipped"; // RN/Godot 아님(예: Unity)
-
-  const engine: AppEngine = isGodot ? "GODOT" : "RN";
-
-  const play = await getJson<PlayConfig>(
-    octokit,
-    org,
-    name,
-    "play-store/google-play.config.json",
-  );
-  const playExample = play
-    ? false
-    : await pathExists(octokit, org, name, "play-store/google-play.config.example.json");
-
-  const appStore = await getJson<AppStoreConfig>(
-    octokit,
-    org,
-    name,
-    "app-store/app-store.config.json",
-  );
-  const appStoreExample = appStore
-    ? false
-    : await pathExists(octokit, org, name, "app-store/app-store.config.example.json");
-
-  const firebaserc = await getJson<FirebaseRc>(octokit, org, name, ".firebaserc");
-
-  // AIT(Granite/Bedrock) 감지는 engine과 무관하게 세 위치를 모두 확인한다.
-  // Granite 앱은 RN(apps/ait/granite.config.ts) 또는 web/Vite(레포 루트 granite.config.ts) 레이아웃일 수 있고,
-  // 별도로 apps-in-toss/apps-in-toss.config.json(또는 .example.json)을 둘 수도 있다(예: Godot).
-  // crossword-puzzle 처럼 루트 granite.config.ts 만 있는 web-Granite 앱이 누락되던 것을 방지한다.
-  const rootGranite = await getText(octokit, org, name, "granite.config.ts");
-  const rnGranite = await getText(octokit, org, name, "apps/ait/granite.config.ts");
-  const aitReal = await getJson<{ appName?: unknown }>(
-    octokit,
-    org,
-    name,
-    "apps-in-toss/apps-in-toss.config.json",
-  );
-  const aitExample = aitReal
-    ? false
-    : await pathExists(octokit, org, name, "apps-in-toss/apps-in-toss.config.example.json");
-
-  const graniteText = rootGranite ?? rnGranite;
-  const hasAit = !!graniteText || !!aitReal || aitExample;
-
-  // aitAppName 은 실제 config 우선. granite.config.ts 는 appName: 정규식으로, apps-in-toss.config.json 은 pickAppName 으로 추출.
-  const graniteAppName = graniteText?.match(/appName\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? null;
-  const aitAppName = aitReal ? pickAppName(aitReal.appName) : graniteAppName;
-
-  const hasWeb = await pathExists(octokit, org, name, "web");
-
-  const marketTargets: string[] = [];
-  if (play || playExample) marketTargets.push("play");
-  if (appStore || appStoreExample) marketTargets.push("appstore");
-  if (hasAit) marketTargets.push("ait");
-  if (hasWeb) marketTargets.push("web");
-
-  const appType = play?.appType ?? appStore?.appType;
-  const type: AppType =
-    engine === "GODOT" || appType?.toLowerCase() === "game" ? "GAME" : "APP";
-
-  const displayName =
-    pickAppName(play?.storeListing?.appName) ??
-    name
-      .split("-")
-      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(" ");
-
-  const configHash = crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({ play, appStore, firebaserc, aitAppName, marketTargets, type, engine }),
-    )
-    .digest("hex");
-
+  // configHash 가 동일하면(= config/워크플로우 존재 신호 모두 불변) 재기록을 생략한다(멱등).
   const existing = await prisma.app.findUnique({
     where: { repoFullName: repo.full_name },
     select: { configHash: true },
   });
-  if (existing?.configHash === configHash) return "seeded";
-
-  const data = {
-    slug: name,
-    displayName,
-    repoFullName: repo.full_name,
-    repoId: BigInt(repo.id),
-    type,
-    engine,
-    isPublicRepo: !repo.private,
-    firebaseProject: firebaserc?.projects?.default ?? null,
-    playPackage: play?.packageName ?? null,
-    iosBundle: appStore?.bundleId ?? null,
-    appleTeamId: appStore?.appleTeamId ?? null,
-    iosSku: appStore?.sku ?? null,
-    aitAppName,
-    marketTargets,
-    configHash,
-    configSyncedAt: new Date(),
-  };
+  if (existing?.configHash === seed.configHash) return "seeded";
 
   await prisma.app.upsert({
     where: { repoFullName: repo.full_name },
-    create: data,
+    create: seed,
     update: {
       // currentStage/status 는 운영 상태이므로 시드가 덮지 않음.
-      displayName: data.displayName,
-      repoId: data.repoId,
-      type: data.type,
-      engine: data.engine,
-      isPublicRepo: data.isPublicRepo,
-      firebaseProject: data.firebaseProject,
-      playPackage: data.playPackage,
-      iosBundle: data.iosBundle,
-      appleTeamId: data.appleTeamId,
-      iosSku: data.iosSku,
-      aitAppName: data.aitAppName,
-      marketTargets: data.marketTargets,
-      configHash: data.configHash,
-      configSyncedAt: data.configSyncedAt,
+      displayName: seed.displayName,
+      repoId: seed.repoId,
+      type: seed.type,
+      engine: seed.engine,
+      isPublicRepo: seed.isPublicRepo,
+      firebaseProject: seed.firebaseProject,
+      playPackage: seed.playPackage,
+      iosBundle: seed.iosBundle,
+      appleTeamId: seed.appleTeamId,
+      iosSku: seed.iosSku,
+      aitAppName: seed.aitAppName,
+      marketTargets: seed.marketTargets,
+      configHash: seed.configHash,
+      configSyncedAt: seed.configSyncedAt,
     },
   });
   return "seeded";
@@ -261,6 +86,7 @@ export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
         full_name: r.full_name,
         id: r.id,
         private: r.private,
+        defaultBranch: r.default_branch ?? "main",
       });
       if (result === "seeded") seeded++;
       else skipped++;

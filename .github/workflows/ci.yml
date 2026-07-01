@@ -19,6 +19,7 @@ jobs:
       - run: pnpm prisma generate
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm test
       - run: pnpm build
         env:
           DATABASE_URL: mysql://build:build@127.0.0.1:3306/build
