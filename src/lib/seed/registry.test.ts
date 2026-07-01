@@ -1,0 +1,141 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { computeRepoSeed, type Octo, type RepoLite } from "./compute";
+
+// seedRepo 통합 경로 회귀 테스트: octokit(getContent) 워크플로우 존재 read → deriveMarketTargets → configHash.
+// deriveMarketTargets 단위 테스트(market-targets.test.ts)는 순수 함수만 검증하므로,
+// 여기서는 그 앞단(레포 파일 존재 판정)과 뒷단(configHash)이 실제로 배선돼 있는지를 가짜 octokit 으로 고정한다.
+// 목적: "config 만 있고 배포 워크플로우가 없으면 marketTargets 에 play/appstore/ait 가 들어가지 않는다"는
+//       계약이 seedRepo 경로에서 회귀하지 않도록(= config 존재 기반으로 되돌아가지 않도록) CI 로 가드한다.
+
+// getContent 를 흉내내는 최소 octokit. present 에 있는 경로만 파일로 resolve 하고, 없으면 404(throw).
+// pathExists 는 throw 여부로 존재를 판정하고, getText/getJson 은 base64 content 를 디코드한다.
+function fakeOctokit(present: Record<string, string>): Octo {
+  return {
+    rest: {
+      repos: {
+        async getContent({ path }: { path: string }) {
+          if (!(path in present)) {
+            const err = new Error(`Not Found: ${path}`) as Error & { status: number };
+            err.status = 404;
+            throw err;
+          }
+          return {
+            data: {
+              type: "file" as const,
+              content: Buffer.from(present[path], "utf8").toString("base64"),
+            },
+          };
+        },
+      },
+    },
+  } as unknown as Octo;
+}
+
+const ORG = "seorilabs";
+const REPO: RepoLite = {
+  name: "sample-game",
+  full_name: "seorilabs/sample-game",
+  id: 42,
+  private: true,
+  defaultBranch: "main",
+};
+
+const PLAY_CFG = JSON.stringify({
+  packageName: "com.seorilabs.sample",
+  appType: "game",
+  storeListing: { appName: "Sample Game" },
+});
+const APPSTORE_CFG = JSON.stringify({
+  bundleId: "com.seorilabs.sample",
+  appleTeamId: "TEAM123",
+  sku: "sample-sku",
+  appType: "game",
+});
+const FIREBASERC = JSON.stringify({ projects: { default: "seorilabs-sample" } });
+
+const WF_PLAY = ".github/workflows/deploy-google-play.yml";
+const WF_APPSTORE = ".github/workflows/deploy-app-store.yml";
+const WF_AIT = ".github/workflows/deploy-apps-in-toss.yml";
+
+// Godot 게임 실제 사례: project.godot + play/app-store config 는 있지만
+// 표준 배포 워크플로우는 없고 deploy-godot-pages.yml 만 있다(=/deploy 404 근본 원인 시나리오).
+const godotConfigOnly: Record<string, string> = {
+  "project.godot": "[application]",
+  "play-store/google-play.config.json": PLAY_CFG,
+  "app-store/app-store.config.json": APPSTORE_CFG,
+  ".firebaserc": FIREBASERC,
+  ".github/workflows/deploy-godot-pages.yml": "name: pages", // 표준 배포 caller 아님 → 무시돼야 함
+};
+
+test("배포 워크플로우 3종 존재 → marketTargets=[play,appstore,ait], configHash 가 이를 반영", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "package.json": "{}",
+      "play-store/google-play.config.json": PLAY_CFG,
+      "app-store/app-store.config.json": APPSTORE_CFG,
+      ".firebaserc": FIREBASERC,
+      [WF_PLAY]: "name: play",
+      [WF_APPSTORE]: "name: appstore",
+      [WF_AIT]: "name: ait",
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.deepEqual(seed.marketTargets, ["play", "appstore", "ait"]);
+  assert.equal(seed.configHash.length, 64); // sha256 hex
+});
+
+test("config 만 있고 표준 배포 워크플로우 없음(Godot pages-only) → marketTargets 에 play/appstore/ait 없음", async () => {
+  const seed = await computeRepoSeed(fakeOctokit(godotConfigOnly), ORG, REPO);
+  assert.ok(seed);
+  // 핵심 계약: config(play/app-store) 존재만으로는 dispatch 대상이 아니다.
+  assert.deepEqual(seed.marketTargets, []);
+  // config 는 marketTargets 와 분리돼 다른 필드 산출에는 그대로 쓰인다(회귀 방지).
+  assert.equal(seed.playPackage, "com.seorilabs.sample");
+  assert.equal(seed.iosBundle, "com.seorilabs.sample");
+  assert.equal(seed.firebaseProject, "seorilabs-sample");
+  assert.equal(seed.type, "GAME");
+  assert.equal(seed.engine, "GODOT");
+});
+
+test("동일 config 라도 배포 워크플로우가 나중에 추가되면 configHash 변동(stale skip 방지)", async () => {
+  const before = await computeRepoSeed(fakeOctokit(godotConfigOnly), ORG, REPO);
+  // config 는 그대로 두고 deploy-google-play.yml 만 추가.
+  const after = await computeRepoSeed(
+    fakeOctokit({ ...godotConfigOnly, [WF_PLAY]: "name: play" }),
+    ORG,
+    REPO,
+  );
+  assert.ok(before && after);
+  assert.notEqual(before.configHash, after.configHash); // 워크플로우 존재 신호가 hash 에 반영됨
+  assert.deepEqual(before.marketTargets, []);
+  assert.deepEqual(after.marketTargets, ["play"]);
+});
+
+test("동일 read 결과 → 동일 configHash (결정적, configSyncedAt 은 hash 입력에서 제외)", async () => {
+  const a = await computeRepoSeed(fakeOctokit(godotConfigOnly), ORG, REPO);
+  const b = await computeRepoSeed(fakeOctokit(godotConfigOnly), ORG, REPO);
+  assert.ok(a && b);
+  assert.equal(a.configHash, b.configHash);
+});
+
+test("web/ 은 배포 워크플로우와 독립적으로 marketTargets 에 포함", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "package.json": "{}",
+      web: "", // 디렉터리 존재(pathExists 만 사용)
+      ".firebaserc": FIREBASERC,
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.deepEqual(seed.marketTargets, ["web"]);
+});
+
+test("project.godot/package.json 모두 없음 → null(시드 대상 아님)", async () => {
+  const seed = await computeRepoSeed(fakeOctokit({ [WF_PLAY]: "name: play" }), ORG, REPO);
+  assert.equal(seed, null);
+});
