@@ -117,9 +117,6 @@ async function seedRepo(
     name,
     "play-store/google-play.config.json",
   );
-  const playExample = play
-    ? false
-    : await pathExists(octokit, org, name, "play-store/google-play.config.example.json");
 
   const appStore = await getJson<AppStoreConfig>(
     octokit,
@@ -127,16 +124,13 @@ async function seedRepo(
     name,
     "app-store/app-store.config.json",
   );
-  const appStoreExample = appStore
-    ? false
-    : await pathExists(octokit, org, name, "app-store/app-store.config.example.json");
 
   const firebaserc = await getJson<FirebaseRc>(octokit, org, name, ".firebaserc");
 
-  // AIT(Granite/Bedrock) 감지는 engine과 무관하게 세 위치를 모두 확인한다.
+  // AIT(Granite/Bedrock) 앱의 aitAppName 메타데이터 추출. engine과 무관하게 두 config 위치를 확인한다.
   // Granite 앱은 RN(apps/ait/granite.config.ts) 또는 web/Vite(레포 루트 granite.config.ts) 레이아웃일 수 있고,
-  // 별도로 apps-in-toss/apps-in-toss.config.json(또는 .example.json)을 둘 수도 있다(예: Godot).
-  // crossword-puzzle 처럼 루트 granite.config.ts 만 있는 web-Granite 앱이 누락되던 것을 방지한다.
+  // 별도로 apps-in-toss/apps-in-toss.config.json 을 둘 수도 있다(예: Godot).
+  // (marketTargets 의 ait 포함 여부는 config 가 아니라 아래 표준 배포 워크플로우 존재로 판정한다.)
   const rootGranite = await getText(octokit, org, name, "granite.config.ts");
   const rnGranite = await getText(octokit, org, name, "apps/ait/granite.config.ts");
   const aitReal = await getJson<{ appName?: unknown }>(
@@ -145,12 +139,8 @@ async function seedRepo(
     name,
     "apps-in-toss/apps-in-toss.config.json",
   );
-  const aitExample = aitReal
-    ? false
-    : await pathExists(octokit, org, name, "apps-in-toss/apps-in-toss.config.example.json");
 
   const graniteText = rootGranite ?? rnGranite;
-  const hasAit = !!graniteText || !!aitReal || aitExample;
 
   // aitAppName 은 실제 config 우선. granite.config.ts 는 appName: 정규식으로, apps-in-toss.config.json 은 pickAppName 으로 추출.
   const graniteAppName = graniteText?.match(/appName\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? null;
@@ -158,10 +148,34 @@ async function seedRepo(
 
   const hasWeb = await pathExists(octokit, org, name, "web");
 
+  // marketTargets = 실제로 dispatch 가능한 마켓만 포함한다(= Backoffice/Telegram /deploy 버튼이 진실이 되도록).
+  // deployTargetsFor 가 marketTargets → 표준 배포 caller 워크플로우로 매핑하므로(ait→deploy-apps-in-toss.yml,
+  // play→deploy-google-play.yml, appstore→deploy-app-store.yml), config 만 있고 해당 워크플로우가 없으면
+  // (예: deploy-godot-pages.yml 만 둔 Godot 게임) dispatch 가 404 였다.
+  // 따라서 config 존재가 아니라 기본 브랜치의 표준 배포 워크플로우 파일 존재를 근거로 삼는다.
+  const hasPlayWorkflow = await pathExists(
+    octokit,
+    org,
+    name,
+    ".github/workflows/deploy-google-play.yml",
+  );
+  const hasAppStoreWorkflow = await pathExists(
+    octokit,
+    org,
+    name,
+    ".github/workflows/deploy-app-store.yml",
+  );
+  const hasAitWorkflow = await pathExists(
+    octokit,
+    org,
+    name,
+    ".github/workflows/deploy-apps-in-toss.yml",
+  );
+
   const marketTargets: string[] = [];
-  if (play || playExample) marketTargets.push("play");
-  if (appStore || appStoreExample) marketTargets.push("appstore");
-  if (hasAit) marketTargets.push("ait");
+  if (hasPlayWorkflow) marketTargets.push("play");
+  if (hasAppStoreWorkflow) marketTargets.push("appstore");
+  if (hasAitWorkflow) marketTargets.push("ait");
   if (hasWeb) marketTargets.push("web");
 
   const appType = play?.appType ?? appStore?.appType;
