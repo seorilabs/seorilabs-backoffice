@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { miniMaxComplete } from "@/lib/ai/minimax";
 import { parseLooseJson } from "@/lib/ai/json";
 import { buildReleaseNotesI18nPrompt } from "@/lib/ai/agents";
+import { normalizeStoreNotes } from "@/lib/core/store-notes";
 import {
   listVersionTags,
   previousTag,
@@ -70,8 +71,12 @@ export async function generateReleaseNoteCore(
     jsonOutput: true,
   });
   const parsed = parseLooseJson<{ ko_KR?: string; en_US?: string }>(raw);
-  const koKR = (parsed?.ko_KR ?? "").trim() || raw.trim();
-  const enUS = (parsed?.en_US ?? "").trim() || "(영문 생성 실패 — 원문 참고)";
+  // 스토어 정형 포맷으로 강제(≤4불릿·각≤100자·언어당≤480자·순수텍스트). LLM 출력은 신뢰하지 않는다.
+  const koKR =
+    normalizeStoreNotes((parsed?.ko_KR ?? "").trim() || raw.trim()) ||
+    "- 버그 수정 및 안정성 개선";
+  const enUS =
+    normalizeStoreNotes((parsed?.en_US ?? "").trim()) || "- Bug fixes and stability improvements";
 
   const data = {
     appId: app.id,
