@@ -72,8 +72,9 @@ export async function generateReleaseNoteCore(
   });
   const parsed = parseLooseJson<{ ko_KR?: string; en_US?: string }>(raw);
   // 스토어 정형 포맷으로 강제(≤4불릿·각≤100자·언어당≤480자·순수텍스트). LLM 출력은 신뢰하지 않는다.
+  // ko_KR 파싱 실패 시 raw(JSON 원문) 전체를 한국어 노트로 흘리지 않는다.
   const koKR =
-    normalizeStoreNotes((parsed?.ko_KR ?? "").trim() || raw.trim()) ||
+    normalizeStoreNotes((parsed?.ko_KR ?? "").trim()) ||
     "- 버그 수정 및 안정성 개선";
   const enUS =
     normalizeStoreNotes((parsed?.en_US ?? "").trim()) || "- Bug fixes and stability improvements";

@@ -21,10 +21,16 @@ function stripInlineMarkdown(s: string): string {
     .trim();
 }
 
-/** max 자 이내로 자르되 가능하면 단어 경계에서, 초과 시 말줄임(…). */
+/** 코드포인트(문자) 수를 반환. JS .length는 UTF-16 유닛 기준이라 서로게이트 페어(이모지 등)를 2로 센다. */
+function cpLen(s: string): number {
+  return [...s].length;
+}
+
+/** max 코드포인트 이내로 자르되 가능하면 단어 경계에서, 초과 시 말줄임(…). */
 function clip(s: string, max: number): string {
-  if (s.length <= max) return s;
-  const slice = s.slice(0, max - 1);
+  if (cpLen(s) <= max) return s;
+  const chars = [...s];
+  const slice = chars.slice(0, max - 1).join("");
   const lastSpace = slice.lastIndexOf(" ");
   // 공백이 충분히 뒤쪽이면 단어 경계에서 자름(영문). 한글 등 공백 없으면 하드 슬라이스.
   const base = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
@@ -55,13 +61,13 @@ export function normalizeStoreNotes(raw: string): string {
 
   const render = (bs: string[]) => bs.map((b) => `- ${b}`).join("\n");
   let out = render(bullets);
-  // 총 길이 초과 시 뒤 불릿부터 제거.
-  while (bullets.length > 1 && out.length > STORE_NOTES_MAX_TOTAL) {
+  // 총 코드포인트 초과 시 뒤 불릿부터 제거.
+  while (bullets.length > 1 && cpLen(out) > STORE_NOTES_MAX_TOTAL) {
     bullets.pop();
     out = render(bullets);
   }
   // 불릿 1개인데도 초과하면 마지막으로 하드 말줄임.
-  if (out.length > STORE_NOTES_MAX_TOTAL) out = clip(out, STORE_NOTES_MAX_TOTAL);
+  if (cpLen(out) > STORE_NOTES_MAX_TOTAL) out = clip(out, STORE_NOTES_MAX_TOTAL);
   return out;
 }
 

@@ -27,10 +27,19 @@ test("불릿 개수를 최대치로 제한", () => {
   assert.equal(out.split("\n").length, STORE_NOTES_MAX_BULLETS);
 });
 
-test("총 길이가 항상 480자 이내(Play 500 안전마진)", () => {
+test("총 코드포인트 길이가 항상 480 이내(Play 500 안전마진)", () => {
   const long = Array.from({ length: 6 }, () => "- " + "가".repeat(300)).join("\n");
   const out = normalizeStoreNotes(long);
-  assert.ok(out.length <= STORE_NOTES_MAX_TOTAL, `len=${out.length}`);
+  const cpLen = [...out].length;
+  assert.ok(cpLen <= STORE_NOTES_MAX_TOTAL, `cpLen=${cpLen}`);
+});
+
+test("이모지(서로게이트 페어) 포함 시 코드포인트 기준으로 480자 이내", () => {
+  // 😀 는 UTF-16 유닛 2개이지만 코드포인트 1개. .length 기준이면 한도를 초과하는지 검증.
+  const emojiLine = "😀".repeat(200);
+  const out = normalizeStoreNotes(emojiLine);
+  const cpLen = [...out].length;
+  assert.ok(cpLen <= STORE_NOTES_MAX_TOTAL, `cpLen=${cpLen}`);
 });
 
 test("공백 없는 한글 장문도 하드 말줄임으로 길이 강제", () => {
