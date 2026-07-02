@@ -2,11 +2,16 @@ import { prisma } from "@/lib/prisma";
 import {
   createTag,
   createOrUpdateRelease,
+  upsertReleaseAsset,
   dispatchWorkflow,
   resolveRefSha,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
+import {
+  buildReleaseNotesAsset,
+  RELEASE_NOTES_ASSET_NAME,
+} from "@/lib/core/store-notes";
 
 // 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Telegram 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
@@ -105,6 +110,23 @@ export async function createReleaseTagWithNotes(opts: {
     body,
     prerelease: opts.prerelease,
   });
+
+  // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json).
+  // 실패해도 Release 는 유지(워크플로우는 에셋 없으면 config 기본값으로 폴백).
+  try {
+    const asset = buildReleaseNotesAsset({ tag, koKR, enUS });
+    if (asset) {
+      await upsertReleaseAsset({
+        repoFullName: opts.repoFullName,
+        releaseId: rel.id,
+        name: RELEASE_NOTES_ASSET_NAME,
+        contentType: "application/json",
+        data: asset,
+      });
+    }
+  } catch (e) {
+    console.warn(`[release-ops] ${RELEASE_NOTES_ASSET_NAME} 업로드 실패: ${(e as Error).message}`);
+  }
 
   await prisma.auditLog
     .create({

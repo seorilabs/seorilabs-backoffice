@@ -144,6 +144,50 @@ export async function createOrUpdateRelease(opts: {
   return { url: res.data.html_url, id: res.data.id };
 }
 
+/** Release 에 에셋 업로드. 동일 이름 에셋이 있으면 교체(GitHub 는 중복 이름을 거부).
+ *  upload-first: 먼저 올리고 422(이름 충돌)일 때만 기존 삭제 후 재업로드.
+ *  delete-first 패턴은 삭제~업로드 사이에 에셋이 없는 구간이 생겨 동시 실행 배포가 폴백된다. */
+export async function upsertReleaseAsset(opts: {
+  repoFullName: string;
+  releaseId: number;
+  name: string;
+  contentType: string;
+  data: string;
+}): Promise<{ url: string }> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(opts.repoFullName);
+
+  const doUpload = () =>
+    octokit.rest.repos.uploadReleaseAsset({
+      owner,
+      repo,
+      release_id: opts.releaseId,
+      name: opts.name,
+      // octokit 타입은 data:string 을 요구. JSON 문자열을 원문 바디로 전송.
+      data: opts.data,
+      headers: { "content-type": opts.contentType },
+    });
+
+  try {
+    const res = await doUpload();
+    return { url: res.data.browser_download_url };
+  } catch (err: unknown) {
+    // 422 = 이름 충돌 → 기존 에셋 삭제 후 재업로드
+    if ((err as { status?: number }).status !== 422) throw err;
+    const existing = await octokit.rest.repos.listReleaseAssets({
+      owner,
+      repo,
+      release_id: opts.releaseId,
+      per_page: 100,
+    });
+    for (const a of existing.data.filter((a) => a.name === opts.name)) {
+      await octokit.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+    }
+    const res = await doUpload();
+    return { url: res.data.browser_download_url };
+  }
+}
+
 /** workflow_dispatch 트리거(배포 워크플로우). inputs 값은 문자열. */
 export async function dispatchWorkflow(opts: {
   repoFullName: string;
