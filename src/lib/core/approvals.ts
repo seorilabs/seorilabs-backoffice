@@ -15,7 +15,15 @@ export async function toggleApprovalCore(input: {
     include: { app: { select: { status: true } } },
   });
   if (!issue) throw new Error("issue not found");
-  if (issue.app && isDisabledAppStatus(issue.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  const appStatus =
+    issue.app?.status ??
+    (
+      await prisma.app.findUnique({
+        where: { repoFullName: issue.repoFullName },
+        select: { status: true },
+      })
+    )?.status;
+  if (appStatus && isDisabledAppStatus(appStatus)) throw new Error(HIDDEN_APP_ERROR);
 
   const label = `approval:${input.gate}`;
   const labels = new Set((issue.labels as string[]) ?? []);
