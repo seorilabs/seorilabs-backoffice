@@ -837,18 +837,20 @@ async function cbDeploy(cq: TgCallback, fromId: number, rest: string[]): Promise
     await answerCallback(cq.id, "🚀 배포 트리거 중…");
     if (chatId == null || mid == null) return;
     try {
-      await dispatchMarketDeploy({
+      const res = await dispatchMarketDeploy({
         repoFullName: app.repoFullName,
         target,
         tag,
         actorLabel: `telegram:${fromId}`,
       });
-      await editMessageText(
-        chatId,
-        mid,
-        `🚀 <b>${esc(app.displayName)} ${esc(tag)}</b> → ${esc(DEPLOY_TARGET_KO[target])} 배포를 트리거했습니다.\n빌드/업로드 완료 시 결과 알림이 옵니다.`,
-        [],
-      );
+      let body = `🚀 <b>${esc(app.displayName)} ${esc(tag)}</b> → ${esc(DEPLOY_TARGET_KO[target])} 배포를 트리거했습니다.`;
+      if (res.xcodeCloudBuild != null) {
+        body += `\n📱 iOS: Xcode Cloud 빌드 #${res.xcodeCloudBuild} (결과는 App Store Connect/TestFlight 에서 확인)`;
+      }
+      if (res.workflowFile) {
+        body += `\n빌드/업로드 완료 시 결과 알림이 옵니다.`;
+      }
+      await editMessageText(chatId, mid, body, []);
     } catch (e) {
       await editMessageText(chatId, mid, "배포 트리거 실패: " + esc((e as Error).message), []);
     }
