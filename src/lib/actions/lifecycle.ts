@@ -7,6 +7,7 @@ import { recordTransition } from "@/lib/sync/transition";
 import { requireSession } from "@/lib/auth-helpers";
 import { notifyStageNudge } from "@/lib/telegram/nudges";
 import { setAppStatusCore } from "@/lib/core/app-status";
+import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 // 보드에서 수동 라이프사이클 전이.
 export async function transitionApp(
@@ -15,6 +16,11 @@ export async function transitionApp(
 ): Promise<{ ok: boolean }> {
   const session = await requireSession();
   const login = session.user.login ?? null;
+  const app = await prisma.app.findFirst({
+    where: { id: appId, ...visibleAppWhere },
+    select: { id: true },
+  });
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
 
   const changed = await recordTransition({
     appId,
