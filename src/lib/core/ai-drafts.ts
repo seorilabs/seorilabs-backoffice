@@ -15,6 +15,7 @@ import {
 import { createIssue, addIssueComment } from "@/lib/github/write";
 import { getRepoContext, getIssue } from "@/lib/github/read";
 import { upsertIssue } from "@/lib/sync/mirror";
+import { HIDDEN_APP_ERROR, isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 // 세션 비의존 코어(텔레그램·웹 공용). actorLabel 로 행위자 추적.
 
@@ -34,8 +35,8 @@ export async function createPlanningDraftCore(input: {
   actorLabel?: string;
 }): Promise<PlanningDraftResult> {
   if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
-  const app = await prisma.app.findUnique({ where: { id: input.appId } });
-  if (!app) throw new Error("앱을 찾을 수 없습니다.");
+  const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
 
   const title = (input.title ?? input.idea).trim().slice(0, 120) || "무제 기획";
   const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
@@ -97,8 +98,8 @@ export async function generateStageDraftCore(input: {
   actorLabel?: string;
 }): Promise<StageDraftResult> {
   if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
-  const app = await prisma.app.findUnique({ where: { id: input.appId } });
-  if (!app) throw new Error("앱을 찾을 수 없습니다.");
+  const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
   const meta = AGENTS[input.kind];
 
   let system: string;
@@ -237,8 +238,12 @@ export async function commitDraftCore(input: {
   editedText?: string;
   editedTitle?: string;
 }): Promise<CommitDraftResult> {
-  const draft = await prisma.aiDraft.findUnique({ where: { id: input.draftId } });
+  const draft = await prisma.aiDraft.findUnique({
+    where: { id: input.draftId },
+    include: { app: { select: { status: true } } },
+  });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
+  if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
   if (draft.status !== "DRAFT") throw new Error("이미 처리된 초안입니다.");
 
   const meta = AGENTS[draft.kind];

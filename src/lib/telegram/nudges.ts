@@ -5,6 +5,7 @@ import { notify, esc, type InlineButton } from "@/lib/telegram/client";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
+import { visibleAppWhere, visibleIssueWhere, visibleReleaseWhere } from "@/lib/domain/app-visibility";
 import { miniMaxComplete } from "@/lib/ai/minimax";
 
 // 단계 진입 시 다음 단계 에이전트를 제안하는 넛지 매핑.
@@ -22,12 +23,11 @@ export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise
   try {
     const m = STAGE_NUDGE[stage];
     if (!m || !env.minimaxConfigured()) return;
-    const app = await prisma.app.findUnique({
-      where: { id: appId },
-      select: { displayName: true, status: true },
+    const app = await prisma.app.findFirst({
+      where: { id: appId, ...visibleAppWhere },
+      select: { displayName: true },
     });
     if (!app) return;
-    if (app.status === "DEPRECATED") return; // 존치 앱은 단계 넛지 안 함.
     await notify(
       `${m.emoji} <b>${esc(app.displayName)}</b> — ${STAGE_KO[stage]} 단계 진입\n${m.suggest}`,
       [[{ text: m.label, callback_data: `gen:${m.kind}:${appId}` }]],
@@ -44,15 +44,17 @@ export async function sendDailyDigest(now: Date): Promise<void> {
   const yesterday = new Date(now.getTime() - DAY_MS);
 
   const [apps, openIssues, mergedPrs, releases] = await Promise.all([
-    prisma.app.findMany({ select: { currentStage: true } }),
+    prisma.app.findMany({ where: visibleAppWhere, select: { currentStage: true } }),
     prisma.issueMirror.findMany({
-      where: { state: "OPEN" },
+      where: { ...visibleIssueWhere, state: "OPEN" },
       orderBy: [{ priority: "asc" }],
       take: 300,
       select: { id: true, number: true, title: true, repoFullName: true, priority: true, labels: true },
     }),
-    prisma.pullRequestMirror.count({ where: { state: "MERGED", mergedAt: { gte: yesterday } } }),
-    prisma.releaseRecord.count({ where: { deployedAt: { gte: yesterday } } }),
+    prisma.pullRequestMirror.count({
+      where: { app: { is: visibleAppWhere }, state: "MERGED", mergedAt: { gte: yesterday } },
+    }),
+    prisma.releaseRecord.count({ where: { ...visibleReleaseWhere, deployedAt: { gte: yesterday } } }),
   ]);
 
   const pend = openIssues.filter((i) => {
@@ -112,8 +114,7 @@ export async function sendDailyDigest(now: Date): Promise<void> {
 // 주간 LiveOps 리뷰: 운영 앱별 개선 가설 생성 버튼.
 export async function sendWeeklyLiveopsReview(): Promise<void> {
   const apps = await prisma.app.findMany({
-    // 존치(DEPRECATED) 앱은 개선 가설 대상에서 제외.
-    where: { currentStage: "LIVEOPS", status: { not: "DEPRECATED" } },
+    where: { ...visibleAppWhere, currentStage: "LIVEOPS" },
     orderBy: { displayName: "asc" },
     select: { id: true, displayName: true },
   });

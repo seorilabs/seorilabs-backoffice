@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { asStringArray, fmtDate, fmtDateTime } from "@/lib/format";
 import { hasEvidence } from "@/lib/domain/labels";
 import { STAGE_KO, STATUS_KO } from "@/lib/domain/lifecycle";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { StageBadge, TypeBadge, PriorityTag, Pill, StatusBadge } from "@/components/badges";
 import { AiAgentPanel } from "@/components/AiAgentPanel";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
@@ -19,8 +20,8 @@ export default async function AppDetail({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const app = await prisma.app.findUnique({
-    where: { id },
+  const app = await prisma.app.findFirst({
+    where: { id, ...visibleAppWhere },
     include: {
       issues: { orderBy: [{ state: "asc" }, { priority: "asc" }], take: 100 },
       pullRequests: { orderBy: { ghUpdatedAt: "desc" }, take: 50 },
@@ -84,15 +85,10 @@ export default async function AppDetail({
         <Meta k="상태" v={STATUS_KO[app.status]} />
       </div>
 
-      {/* 운영 상태 전환(존치 등) */}
+      {/* 운영 상태 전환 */}
       <div className="mt-3 flex items-center gap-3">
         <StatusBadge status={app.status} always />
         <StatusControl appId={app.id} status={app.status} />
-        {app.status === "DEPRECATED" && (
-          <span className="text-xs text-neutral-400">
-            존치: 더 이상 업데이트하지 않지만 배포는 유지됩니다(운영 넛지·리뷰 제외).
-          </span>
-        )}
       </div>
 
       {/* 운영(LIVEOPS) 개선 루프 미니보드 */}

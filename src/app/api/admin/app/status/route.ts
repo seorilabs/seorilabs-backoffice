@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { setAppStatusCore, isAppStatus } from "@/lib/core/app-status";
 
-// 앱 운영 상태 변경(존치 등). body { app(slug|id), status }. x-admin-token 보호.
+// 앱 운영 상태 변경. body { app(slug|id), status }. x-admin-token 보호.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -20,11 +20,15 @@ export async function POST(req: NextRequest) {
   const status = (body.status ?? "").trim().toUpperCase();
   if (!app || !isAppStatus(status)) {
     return NextResponse.json(
-      { error: "app, status(ACTIVE|PAUSED|DEPRECATED) 필요" },
+      { error: "app, status(ACTIVE|PAUSED) 필요" },
       { status: 400 },
     );
   }
-  const r = await setAppStatusCore({ idOrSlug: app, status, actorLogin: "admin" });
-  if (!r) return NextResponse.json({ ok: false, error: "앱 없음" }, { status: 404 });
-  return NextResponse.json({ ok: true, ...r });
+  try {
+    const r = await setAppStatusCore({ idOrSlug: app, status, actorLogin: "admin" });
+    if (!r) return NextResponse.json({ ok: false, error: "앱 없음" }, { status: 404 });
+    return NextResponse.json({ ok: true, ...r });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 409 });
+  }
 }

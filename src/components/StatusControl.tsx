@@ -4,18 +4,16 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { AppStatus } from "@prisma/client";
 import { setAppStatus } from "@/lib/actions/lifecycle";
+import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
-// 앱 운영 상태 토글. 현재 상태에 따라 가능한 전환 버튼만 노출.
-const NEXT: Record<AppStatus, Array<{ to: AppStatus; label: string; tone: string }>> = {
+type WritableStatus = Exclude<AppStatus, "DEPRECATED">;
+
+// 앱 운영 상태 토글. 비활성(DEPRECATED)은 DB 전용 플래그라 UI에서 전환/복구하지 않는다.
+const NEXT: Record<WritableStatus, Array<{ to: WritableStatus; label: string; tone: string }>> = {
   ACTIVE: [
-    { to: "DEPRECATED", label: "존치 전환", tone: "bg-neutral-700 hover:bg-neutral-600" },
     { to: "PAUSED", label: "일시중지", tone: "bg-amber-600 hover:bg-amber-500" },
   ],
   PAUSED: [
-    { to: "ACTIVE", label: "운영 재개", tone: "bg-emerald-600 hover:bg-emerald-500" },
-    { to: "DEPRECATED", label: "존치 전환", tone: "bg-neutral-700 hover:bg-neutral-600" },
-  ],
-  DEPRECATED: [
     { to: "ACTIVE", label: "운영 재개", tone: "bg-emerald-600 hover:bg-emerald-500" },
   ],
 };
@@ -24,7 +22,9 @@ export function StatusControl({ appId, status }: { appId: string; status: AppSta
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
-  function change(to: AppStatus) {
+  if (isDisabledAppStatus(status)) return null;
+
+  function change(to: WritableStatus) {
     startTransition(async () => {
       await setAppStatus(appId, to);
       router.refresh();

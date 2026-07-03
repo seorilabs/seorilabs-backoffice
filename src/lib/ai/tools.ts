@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
+import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import type { Lifecycle, Priority } from "@prisma/client";
 
 // 채팅 비서가 사실 기반으로 답하도록 호출하는 read-only 도구.
@@ -71,7 +72,10 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
   switch (name) {
     case "list_apps": {
       const stage = str(args, "stage")?.toUpperCase();
-      const where = stage && STAGES_SET.has(stage) ? { currentStage: stage as Lifecycle } : {};
+      const where =
+        stage && STAGES_SET.has(stage)
+          ? { ...visibleAppWhere, currentStage: stage as Lifecycle }
+          : visibleAppWhere;
       const apps = await prisma.app.findMany({
         where,
         orderBy: [{ currentStage: "asc" }, { displayName: "asc" }],
@@ -86,7 +90,7 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
       const slug = str(args, "slug");
       if (!slug) return "slug 인자가 필요합니다.";
       const app = await prisma.app.findFirst({
-        where: { slug },
+        where: { slug, ...visibleAppWhere },
         include: {
           issues: { where: { state: "OPEN" }, select: { priority: true } },
           pullRequests: { where: { state: "OPEN" }, select: { id: true } },
@@ -110,6 +114,7 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
       const repo = str(args, "repo");
       const issues = await prisma.issueMirror.findMany({
         where: {
+          ...visibleIssueWhere,
           state: "OPEN",
           ...(query ? { title: { contains: query } } : {}),
           ...(priority && PRIO_SET.has(priority) ? { priority: priority as Priority } : {}),
@@ -128,7 +133,7 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
     }
     case "list_approvals": {
       const open = await prisma.issueMirror.findMany({
-        where: { state: "OPEN" },
+        where: { ...visibleIssueWhere, state: "OPEN" },
         orderBy: [{ priority: "asc" }],
         take: 200,
       });
@@ -147,7 +152,7 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
     }
     case "list_p1": {
       const issues = await prisma.issueMirror.findMany({
-        where: { state: "OPEN", priority: "P1" },
+        where: { ...visibleIssueWhere, state: "OPEN", priority: "P1" },
         orderBy: [{ ghUpdatedAt: "desc" }],
         take: 20,
       });

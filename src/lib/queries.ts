@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { asStringArray, daysSince } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import type { Lifecycle } from "@prisma/client";
 
 export type MarketStatus = "succeeded" | "failed" | "pending" | "none";
@@ -40,6 +41,7 @@ function marketStatusOf(
 
 export async function getBoardApps(): Promise<BoardApp[]> {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     orderBy: [{ type: "asc" }, { displayName: "asc" }],
     include: {
       issues: {

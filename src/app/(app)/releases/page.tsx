@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { asStringArray, fmtDate } from "@/lib/format";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { TypeBadge } from "@/components/badges";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ const STATUS_DOT: Record<string, string> = {
 
 export default async function ReleasesPage() {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     orderBy: [{ type: "asc" }, { displayName: "asc" }],
     include: { releases: { orderBy: { updatedAt: "desc" } } },
   });

@@ -1,14 +1,14 @@
 import type { Lifecycle, AppStatus } from "@prisma/client";
 import { STAGE_KO, STATUS_KO } from "@/lib/domain/lifecycle";
+import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import type { MarketStatus } from "@/lib/queries";
 
-const STATUS_COLOR: Record<AppStatus, string> = {
+const STATUS_COLOR: Partial<Record<AppStatus, string>> = {
   ACTIVE: "bg-emerald-100 text-emerald-700",
   PAUSED: "bg-amber-100 text-amber-800",
-  DEPRECATED: "bg-neutral-200 text-neutral-600",
 };
 
-// 운영(ACTIVE)은 기본값이라 표시 생략 — 존치/일시중지만 뱃지로 부각.
+// 운영(ACTIVE)은 기본값이라 표시 생략. 비활성 앱은 상위 조회에서 제외되고, 여기서도 fail-closed 한다.
 export function StatusBadge({
   status,
   always = false,
@@ -16,10 +16,13 @@ export function StatusBadge({
   status: AppStatus;
   always?: boolean;
 }) {
+  if (isDisabledAppStatus(status)) return null;
   if (status === "ACTIVE" && !always) return null;
+  const color = STATUS_COLOR[status];
+  if (!color) return null;
   return (
     <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${STATUS_COLOR[status]}`}
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${color}`}
     >
       {STATUS_KO[status]}
     </span>

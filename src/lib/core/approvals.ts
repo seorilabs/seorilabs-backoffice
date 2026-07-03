@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { toggleIssueLabel, addIssueComment } from "@/lib/github/write";
+import { HIDDEN_APP_ERROR, isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
 // 세션 비의존 코어. 웹 서버액션(세션)과 텔레그램 핸들러(allowlist) 양쪽이 호출.
 export async function toggleApprovalCore(input: {
@@ -11,8 +12,18 @@ export async function toggleApprovalCore(input: {
 }): Promise<{ repoFullName: string; number: number; changed: boolean }> {
   const issue = await prisma.issueMirror.findUnique({
     where: { id: input.issueId },
+    include: { app: { select: { status: true } } },
   });
   if (!issue) throw new Error("issue not found");
+  const appStatus =
+    issue.app?.status ??
+    (
+      await prisma.app.findUnique({
+        where: { repoFullName: issue.repoFullName },
+        select: { status: true },
+      })
+    )?.status;
+  if (appStatus && isDisabledAppStatus(appStatus)) throw new Error(HIDDEN_APP_ERROR);
 
   const label = `approval:${input.gate}`;
   const labels = new Set((issue.labels as string[]) ?? []);

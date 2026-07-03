@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
+import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { MiniMaxNotConfiguredError, type ChatMessage } from "@/lib/ai/minimax";
@@ -13,6 +14,7 @@ const RETAIN_TURNS = 40;
 // 공장 현황 스냅샷 — 비서가 사실 기반으로 답하도록 system 에 주입.
 async function factorySnapshot(): Promise<string> {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     select: { currentStage: true },
   });
   const byStage: Record<string, number> = {};
@@ -24,10 +26,10 @@ async function factorySnapshot(): Promise<string> {
     .join(", ");
 
   const p1 = await prisma.issueMirror.count({
-    where: { state: "OPEN", priority: "P1" },
+    where: { ...visibleIssueWhere, state: "OPEN", priority: "P1" },
   });
   const openIssues = await prisma.issueMirror.findMany({
-    where: { state: "OPEN" },
+    where: { ...visibleIssueWhere, state: "OPEN" },
     select: { labels: true },
     take: 300,
   });

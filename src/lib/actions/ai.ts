@@ -13,6 +13,7 @@ import {
   commitDraftCore,
   generateStageDraftCore,
 } from "@/lib/core/ai-drafts";
+import { HIDDEN_APP_ERROR, isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 export interface DraftView {
   id: string;
@@ -38,10 +39,10 @@ export async function generatePlanningDraft(input: {
   const login = session.user.login ?? "unknown";
   if (!env.minimaxConfigured()) throw new MiniMaxNotConfiguredError();
 
-  const app = await prisma.app.findUnique({
-    where: { repoFullName: input.repoFullName },
+  const app = await prisma.app.findFirst({
+    where: { repoFullName: input.repoFullName, ...visibleAppWhere },
   });
-  if (!app) throw new Error("앱을 찾을 수 없습니다.");
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
 
   const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
   const { system, prompt } = buildPlanningPrompt({
@@ -149,8 +150,12 @@ export async function commitDraft(input: {
 // ── 초안 폐기. ──
 export async function discardDraft(draftId: string): Promise<{ ok: boolean }> {
   await requireSession();
-  const draft = await prisma.aiDraft.findUnique({ where: { id: draftId } });
+  const draft = await prisma.aiDraft.findUnique({
+    where: { id: draftId },
+    include: { app: { select: { status: true } } },
+  });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
+  if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
   if (draft.status === "COMMITTED") throw new Error("이미 커밋된 초안입니다.");
   await prisma.aiDraft.update({
     where: { id: draftId },

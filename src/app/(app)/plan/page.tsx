@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { PlanForm } from "@/components/PlanForm";
 import { env } from "@/lib/env";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 
 export const dynamic = "force-dynamic";
 
 export default async function PlanPage() {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     select: { repoFullName: true, displayName: true },
     orderBy: { displayName: "asc" },
   });

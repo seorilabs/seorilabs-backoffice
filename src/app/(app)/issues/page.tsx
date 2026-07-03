@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { PriorityTag, Pill } from "@/components/badges";
 import { asStringArray, fmtDate } from "@/lib/format";
+import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export default async function IssuesPage({
   const fLabel = one(sp.label);
 
   const where: Prisma.IssueMirrorWhereInput = {
+    ...visibleIssueWhere,
     state: fState === "closed" ? "CLOSED" : fState === "all" ? undefined : "OPEN",
   };
   if (fPriority) where.priority = fPriority as Prisma.EnumPriorityNullableFilter["equals"];
@@ -36,6 +38,7 @@ export default async function IssuesPage({
   }
 
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     select: { repoFullName: true, displayName: true },
     orderBy: { displayName: "asc" },
   });
