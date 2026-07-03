@@ -19,7 +19,13 @@ import {
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
-import { activeAppWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
+import {
+  activeAppWhere,
+  HIDDEN_APP_ERROR,
+  isDisabledAppStatus,
+  visibleAppWhere,
+  visibleIssueWhere,
+} from "@/lib/domain/app-visibility";
 import { handleChat, resetChat } from "@/lib/telegram/chat";
 import { getPending, setPending, clearPending } from "@/lib/telegram/state";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
@@ -479,6 +485,26 @@ async function cbApprove(cq: TgCallback, fromId: number, rest: string[]): Promis
     return;
   }
   try {
+    const issue = await prisma.issueMirror.findUnique({
+      where: { id: issueId },
+      select: { repoFullName: true, app: { select: { status: true } } },
+    });
+    if (!issue) {
+      await answerCallback(cq.id, "이슈 없음");
+      return;
+    }
+    const appStatus =
+      issue.app?.status ??
+      (
+        await prisma.app.findUnique({
+          where: { repoFullName: issue.repoFullName },
+          select: { status: true },
+        })
+      )?.status;
+    if (appStatus && isDisabledAppStatus(appStatus)) {
+      await answerCallback(cq.id, HIDDEN_APP_ERROR);
+      return;
+    }
     const r = await toggleApprovalCore({
       issueId,
       gate,
