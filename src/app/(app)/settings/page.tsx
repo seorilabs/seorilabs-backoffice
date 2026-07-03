@@ -2,16 +2,22 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { fmtDateTime } from "@/lib/format";
 import { SettingsActions } from "@/components/SettingsActions";
+import {
+  visibleAppWhere,
+  visibleIssueWhere,
+  visiblePrWhere,
+  visibleReleaseWhere,
+} from "@/lib/domain/app-visibility";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers] =
     await Promise.all([
-      prisma.app.count(),
-      prisma.issueMirror.count(),
-      prisma.pullRequestMirror.count(),
-      prisma.releaseRecord.count(),
+      prisma.app.count({ where: visibleAppWhere }),
+      prisma.issueMirror.count({ where: visibleIssueWhere }),
+      prisma.pullRequestMirror.count({ where: visiblePrWhere }),
+      prisma.releaseRecord.count({ where: visibleReleaseWhere }),
       prisma.webhookDelivery.findFirst({ orderBy: { receivedAt: "desc" } }),
       prisma.user.findMany({ where: { allowlisted: true }, select: { login: true } }),
     ]);

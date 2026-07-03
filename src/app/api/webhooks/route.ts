@@ -13,6 +13,7 @@ import { notify, esc } from "@/lib/telegram/client";
 import { env } from "@/lib/env";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
+import { isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,9 +32,19 @@ interface WebhookPayload {
 }
 
 // 실시간 webhook 에서만(미러 backfill 아님) 텔레그램 알림. 실패해도 webhook 200 유지.
+async function shouldNotifyRepo(repoFullName: string): Promise<boolean> {
+  const app = await prisma.app.findUnique({
+    where: { repoFullName },
+    select: { status: true },
+  });
+  return !app || !isDisabledAppStatus(app.status);
+}
+
 async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
   try {
-    const repo = (p.repository?.full_name ?? "").replace("seorilabs/", "");
+    const repoFullName = p.repository?.full_name ?? "";
+    if (repoFullName && !(await shouldNotifyRepo(repoFullName))) return;
+    const repo = repoFullName.replace("seorilabs/", "");
     if (
       event === "issues" &&
       p.action === "labeled" &&
@@ -78,7 +89,7 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
       p.repository?.full_name
     ) {
       const app = await prisma.app.findFirst({
-        where: { repoFullName: p.repository.full_name },
+        where: { repoFullName: p.repository.full_name, ...visibleAppWhere },
         select: { id: true, displayName: true, currentStage: true },
       });
       if (app && (app.currentStage === "RELEASE" || app.currentStage === "LIVEOPS")) {

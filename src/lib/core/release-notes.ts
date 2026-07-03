@@ -4,6 +4,7 @@ import { miniMaxComplete } from "@/lib/ai/minimax";
 import { parseLooseJson } from "@/lib/ai/json";
 import { buildReleaseNotesI18nPrompt } from "@/lib/ai/agents";
 import { normalizeStoreNotes } from "@/lib/core/store-notes";
+import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   listVersionTags,
   previousTag,
@@ -35,6 +36,14 @@ export async function generateReleaseNoteCore(
   });
   if (!app) {
     console.warn(`[release-notes] 미등록 repo: ${input.repoFullName}`);
+    return null;
+  }
+  const visibleApp = await prisma.app.findFirst({
+    where: { id: app.id, ...visibleAppWhere },
+    select: { id: true },
+  });
+  if (!visibleApp) {
+    console.warn(`[release-notes] ${HIDDEN_APP_ERROR}`);
     return null;
   }
   if (!env.minimaxConfigured()) {

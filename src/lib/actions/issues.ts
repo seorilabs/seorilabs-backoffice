@@ -7,6 +7,7 @@ import { requireSession } from "@/lib/auth-helpers";
 import { createIssue } from "@/lib/github/write";
 import { upsertIssue } from "@/lib/sync/mirror";
 import { toggleApprovalCore } from "@/lib/core/approvals";
+import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 export interface PlanningIntake {
   repoFullName: string;
@@ -55,6 +56,11 @@ export async function createPlanningIssue(
   const login = session.user.login ?? "unknown";
   const clientReqId = randomUUID();
   const body = renderBody(input, clientReqId);
+  const app = await prisma.app.findFirst({
+    where: { repoFullName: input.repoFullName, ...visibleAppWhere },
+    select: { id: true },
+  });
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
 
   const created = await createIssue({
     repoFullName: input.repoFullName,

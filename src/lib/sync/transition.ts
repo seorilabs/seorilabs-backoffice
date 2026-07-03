@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import type { Lifecycle, TransitionSource } from "@prisma/client";
 
 // DB 라이프사이클 전이 기록 (App.currentStage 갱신 + StageTransition append).
@@ -13,9 +14,9 @@ export async function recordTransition(opts: {
 }): Promise<boolean> {
   const app = await prisma.app.findUnique({
     where: { id: opts.appId },
-    select: { currentStage: true },
+    select: { currentStage: true, status: true },
   });
-  if (!app || app.currentStage === opts.to) return false;
+  if (!app || app.currentStage === opts.to || isDisabledAppStatus(app.status)) return false;
 
   await prisma.$transaction([
     prisma.app.update({

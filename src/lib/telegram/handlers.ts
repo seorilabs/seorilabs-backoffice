@@ -19,6 +19,7 @@ import {
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
+import { activeAppWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import { handleChat, resetChat } from "@/lib/telegram/chat";
 import { getPending, setPending, clearPending } from "@/lib/telegram/state";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
@@ -270,6 +271,7 @@ async function cmdPlanStart(chatId: number): Promise<void> {
     return;
   }
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: { slug: true, displayName: true },
   });
@@ -293,7 +295,10 @@ async function handlePlanIdea(
     await sendMessage(chatId, "잘못된 앱입니다. /plan 다시 시도하세요.");
     return;
   }
-  const app = await prisma.app.findFirst({ where: { slug }, select: { id: true } });
+  const app = await prisma.app.findFirst({
+    where: { slug, ...visibleAppWhere },
+    select: { id: true },
+  });
   if (!app) {
     await sendMessage(chatId, `'${esc(slug)}' 앱을 찾을 수 없습니다.`);
     return;
@@ -499,7 +504,7 @@ async function cbApprove(cq: TgCallback, fromId: number, rest: string[]): Promis
 
 async function cmdApprovals(chatId: number): Promise<void> {
   const open = await prisma.issueMirror.findMany({
-    where: { state: "OPEN" },
+    where: { ...visibleIssueWhere, state: "OPEN" },
     orderBy: [{ priority: "asc" }],
     take: 200,
   });
@@ -525,7 +530,7 @@ async function cmdApprovals(chatId: number): Promise<void> {
 
 async function cmdP1(chatId: number): Promise<void> {
   const issues = await prisma.issueMirror.findMany({
-    where: { state: "OPEN", priority: "P1" },
+    where: { ...visibleIssueWhere, state: "OPEN", priority: "P1" },
     orderBy: [{ ghUpdatedAt: "desc" }],
     take: 20,
   });
@@ -542,6 +547,7 @@ async function cmdP1(chatId: number): Promise<void> {
 // 앱 현황 — 단계 요약 1줄 + 앱 선택 버튼(텍스트 최소화).
 async function cmdStatusList(chatId: number): Promise<void> {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     orderBy: [{ currentStage: "asc" }, { displayName: "asc" }],
     select: { slug: true, displayName: true, currentStage: true },
   });
@@ -562,7 +568,7 @@ async function cmdStatusList(chatId: number): Promise<void> {
 
 async function cmdStatusDetail(chatId: number, slug: string): Promise<void> {
   const app = await prisma.app.findFirst({
-    where: { slug },
+    where: { slug, ...visibleAppWhere },
     include: {
       issues: { where: { state: "OPEN" }, select: { priority: true } },
       pullRequests: { where: { state: "OPEN" }, select: { id: true } },
@@ -594,7 +600,7 @@ const DEPLOY_TARGETS = new Set(["AIT", "PLAY", "APPSTORE", "ALL"]);
 async function appBySlug(slug: string) {
   if (!SLUG_RE.test(slug)) return null;
   return prisma.app.findFirst({
-    where: { slug },
+    where: { slug, ...visibleAppWhere },
     select: { slug: true, displayName: true, repoFullName: true, marketTargets: true },
   });
 }
@@ -602,6 +608,7 @@ async function appBySlug(slug: string) {
 // ── /release: 앱 선택 → bump → 확인 → 태그 + 출시노트(ko/en) + GitHub Release ──
 async function cmdReleaseStart(chatId: number): Promise<void> {
   const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: { slug: true, displayName: true },
   });
@@ -706,7 +713,7 @@ async function cbRelease(cq: TgCallback, fromId: number, rest: string[]): Promis
 // ── /deploy: 앱 → 태그 → 마켓 → 확인 → workflow_dispatch ──
 async function cmdDeployStart(chatId: number): Promise<void> {
   const apps = await prisma.app.findMany({
-    where: { status: { not: "PAUSED" } },
+    where: activeAppWhere,
     orderBy: { displayName: "asc" },
     select: { slug: true, displayName: true },
   });

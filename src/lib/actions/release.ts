@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireSession } from "@/lib/auth-helpers";
 import { listVersionTags } from "@/lib/github/release";
+import { HIDDEN_APP_ERROR, isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import {
   createReleaseTagWithNotes,
   dispatchMarketDeploy,
@@ -21,9 +22,10 @@ const TAG_RE = /^v\d+\.\d+\.\d+$/;
 async function repoOf(appId: string): Promise<string> {
   const app = await prisma.app.findUnique({
     where: { id: appId },
-    select: { repoFullName: true },
+    select: { repoFullName: true, status: true },
   });
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
+  if (isDisabledAppStatus(app.status)) throw new Error(HIDDEN_APP_ERROR);
   return app.repoFullName;
 }
 

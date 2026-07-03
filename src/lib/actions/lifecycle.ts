@@ -45,7 +45,7 @@ export async function transitionApp(
   return { ok: changed };
 }
 
-// 앱 운영 상태 변경(존치/일시중지/운영 재개).
+// 앱 운영 상태 변경(일시중지/운영 재개). 비활성 복구는 DB 직접 변경만 허용.
 export async function setAppStatus(
   appId: string,
   status: AppStatus,

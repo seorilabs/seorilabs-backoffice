@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { fmtDate } from "@/lib/format";
+import { visibleReleaseNoteWhere } from "@/lib/domain/app-visibility";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReleaseNotesPage() {
   const notes = await prisma.releaseNote.findMany({
+    where: visibleReleaseNoteWhere,
     orderBy: { createdAt: "desc" },
     take: 100,
     include: { app: { select: { displayName: true, id: true } } },
