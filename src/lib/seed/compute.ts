@@ -128,7 +128,9 @@ export async function computeRepoSeed(
   // 모든 config/워크플로우 존재 판정을 레포의 실제 기본 브랜치에서 일관되게 수행한다.
   const ref = repo.defaultBranch;
 
-  const isGodot = await pathExists(octokit, org, name, "project.godot", ref);
+  const isGodot =
+    (await pathExists(octokit, org, name, "project.godot", ref)) ||
+    (await pathExists(octokit, org, name, "godot/project.godot", ref));
   const hasPackageJson = await pathExists(octokit, org, name, "package.json", ref);
   if (!isGodot && !hasPackageJson) return null; // RN/Godot 아님(예: Unity)
 
