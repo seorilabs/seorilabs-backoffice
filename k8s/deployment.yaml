@@ -95,6 +95,9 @@ spec:
               value: "1366743545"
             - name: TELEGRAM_CHAT_ID
               value: "1366743545"
+            # iOS(App Store)를 Xcode Cloud 로 빌드/업로드하는 repo allowlist(CSV).
+            - name: XCODE_CLOUD_APP_STORE_REPOS
+              value: "seorilabs/happy-farm"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -159,6 +162,25 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: TELEGRAM_WEBHOOK_SECRET
+                  optional: true
+            # App Store Connect API 팀 키(Xcode Cloud iOS 빌드 트리거용).
+            - name: APP_STORE_CONNECT_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_API_KEY_ID
+                  optional: true
+            - name: APP_STORE_CONNECT_ISSUER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_ISSUER_ID
+                  optional: true
+            - name: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
                   optional: true
           readinessProbe:
             httpGet:
