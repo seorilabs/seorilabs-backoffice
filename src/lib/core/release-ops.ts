@@ -7,6 +7,7 @@ import {
   resolveRefSha,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
+import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
 import {
   buildReleaseNotesAsset,
@@ -196,22 +197,52 @@ export async function dispatchMarketDeploy(opts: {
   tag: string;
   memo?: string;
   actorLabel?: string;
-}): Promise<{ workflowFile: string }> {
+}): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const workflowFile = MARKET_WORKFLOW[opts.target];
   if (!workflowFile) throw new Error(`알 수 없는 배포 대상: ${opts.target}`);
 
-  // 표준 caller 는 release_tag 입력을 받는다. AIT/ALL 은 memo 도 지원.
-  const inputs: Record<string, string> = { release_tag: opts.tag };
-  if ((opts.target === "AIT" || opts.target === "ALL") && opts.memo) {
-    inputs.memo = opts.memo;
+  // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 GH 가 아니라
+  // ASC API 로 트리거한다(APPSTORE 단독, 또는 ALL 의 iOS 부분).
+  const iosViaXcodeCloud =
+    isXcodeCloudRepo(opts.repoFullName) &&
+    (opts.target === "APPSTORE" || opts.target === "ALL");
+
+  let xcodeCloudBuild: number | null | undefined;
+  if (iosViaXcodeCloud) {
+    const app = await prisma.app.findUnique({
+      where: { repoFullName: opts.repoFullName },
+      select: { iosBundle: true },
+    });
+    if (!app?.iosBundle) {
+      throw new Error(
+        `iosBundle 미설정: ${opts.repoFullName} — Xcode Cloud 트리거 불가`,
+      );
+    }
+    const run = await triggerXcodeCloudDeploy({ bundleId: app.iosBundle, tag: opts.tag });
+    xcodeCloudBuild = run.buildNumber;
   }
 
-  await dispatchWorkflow({
-    repoFullName: opts.repoFullName,
-    workflowFile,
-    ref: opts.tag,
-    inputs,
-  });
+  // GH 워크플로 dispatch. APPSTORE 단독은 Xcode Cloud 로 갔으니 GH 는 생략.
+  let dispatchedWorkflow: string | undefined;
+  if (!(iosViaXcodeCloud && opts.target === "APPSTORE")) {
+    // 표준 caller 는 release_tag 입력을 받는다. AIT/ALL 은 memo 도 지원.
+    const inputs: Record<string, string> = { release_tag: opts.tag };
+    if ((opts.target === "AIT" || opts.target === "ALL") && opts.memo) {
+      inputs.memo = opts.memo;
+    }
+    // ALL 인데 iOS 가 Xcode Cloud 면, deploy-all 의 App Store 잡은 제외한다.
+    if (iosViaXcodeCloud && opts.target === "ALL") {
+      inputs.deploy_app_store = "false";
+    }
+
+    await dispatchWorkflow({
+      repoFullName: opts.repoFullName,
+      workflowFile,
+      ref: opts.tag,
+      inputs,
+    });
+    dispatchedWorkflow = workflowFile;
+  }
 
   await prisma.auditLog
     .create({
@@ -220,10 +251,15 @@ export async function dispatchMarketDeploy(opts: {
         action: "release.deploy.dispatch",
         entityType: "release",
         entityId: `${opts.repoFullName}@${opts.tag}`,
-        payload: { target: opts.target, workflowFile, tag: opts.tag } as object,
+        payload: {
+          target: opts.target,
+          workflowFile: dispatchedWorkflow ?? null,
+          xcodeCloudBuild: xcodeCloudBuild ?? null,
+          tag: opts.tag,
+        } as object,
       },
     })
     .catch(() => {});
 
-  return { workflowFile };
+  return { workflowFile: dispatchedWorkflow, xcodeCloudBuild };
 }
