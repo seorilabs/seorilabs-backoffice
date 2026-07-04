@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { verifyStaticToken } from "@/lib/security";
 import { setWebhook, setMyCommands, setChatMenuButton } from "@/lib/telegram/client";
-import { BOT_COMMANDS } from "@/lib/telegram/handlers";
+import { BOT_COMMANDS } from "@/lib/telegram/commands";
 
 // Telegram webhook 을 코드로 등록(secret_token 바인딩). x-admin-token 보호.
 export const runtime = "nodejs";

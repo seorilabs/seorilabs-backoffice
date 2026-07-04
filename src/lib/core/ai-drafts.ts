@@ -6,6 +6,7 @@ import { miniMaxComplete } from "@/lib/ai/minimax";
 import {
   AGENTS,
   buildPlanningPrompt,
+  buildBugReportPrompt,
   buildDecomposePrompt,
   buildQaPrompt,
   buildReleaseNotesPrompt,
@@ -65,6 +66,60 @@ export async function createPlanningDraftCore(input: {
       kind: "PLANNING_SPEC",
       title,
       inputJson: { idea: input.idea },
+      outputText,
+      model: env.minimaxModel(),
+      createdBy: input.actorLabel ?? null,
+    },
+  });
+
+  return {
+    id: draft.id,
+    title,
+    outputText,
+    repoFullName: app.repoFullName,
+    displayName: app.displayName,
+  };
+}
+
+// 버그 리포트 초안 생성 → AiDraft(BUG_REPORT, DRAFT) 저장. 커밋 시 label: bug 새 이슈.
+export async function createBugDraftCore(input: {
+  appId: string;
+  symptom: string;
+  title?: string;
+  actorLabel?: string;
+}): Promise<PlanningDraftResult> {
+  if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
+  const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
+  if (!app) throw new Error(HIDDEN_APP_ERROR);
+
+  const title =
+    (input.title ?? input.symptom).trim().replace(/\s+/g, " ").slice(0, 120) || "버그 리포트";
+  const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
+  const { system, prompt } = buildBugReportPrompt({
+    displayName: app.displayName,
+    type: app.type,
+    engine: app.engine,
+    marketTargets: asStringArray(app.marketTargets),
+    title,
+    symptom: input.symptom,
+    codebaseContext: codebaseContext || undefined,
+  });
+  // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
+  const outputText = await miniMaxComplete({
+    system,
+    prompt,
+    temperature: 0.3,
+    maxTokens: 2048,
+  });
+
+  const draft = await prisma.aiDraft.create({
+    data: {
+      appId: app.id,
+      repoFullName: app.repoFullName,
+      stage: "DEVELOPMENT",
+      kind: "BUG_REPORT",
+      title,
+      inputJson: { symptom: input.symptom },
       outputText,
       model: env.minimaxModel(),
       createdBy: input.actorLabel ?? null,
