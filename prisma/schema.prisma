@@ -368,6 +368,7 @@ enum AiDraftKind {
   STORE_COPY
   IMPROVEMENT_HYPOTHESIS
   RELEASE_NOTES
+  BUG_REPORT
 }
 
 enum AiDraftStatus {

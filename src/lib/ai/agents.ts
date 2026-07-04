@@ -53,6 +53,13 @@ export const AGENTS: Record<AiDraftKind, AgentMeta> = {
     commitTarget: "NEW_ISSUE",
     commitLabels: ["release-notes"],
   },
+  BUG_REPORT: {
+    kind: "BUG_REPORT",
+    stage: "DEVELOPMENT",
+    ko: "버그 에이전트",
+    commitTarget: "NEW_ISSUE",
+    commitLabels: ["bug"],
+  },
 };
 
 function appDescriptor(type: AppType, engine: AppEngine, markets: string[]): string {
@@ -109,6 +116,56 @@ export function buildPlanningPrompt(ctx: PlanningContext): {
       sections,
       "",
       "마지막에 '## 수용 기준'은 반드시 체크리스트(`- [ ]`)로 작성한다.",
+    ].join("\n"),
+  };
+}
+
+// ── 버그 에이전트(DEVELOPMENT): 증상 한 줄 → 재현 가능한 버그 리포트 이슈 ──
+export interface BugReportContext {
+  displayName: string;
+  type: AppType;
+  engine: AppEngine;
+  marketTargets: string[];
+  title: string;
+  symptom: string;
+  codebaseContext?: string; // 실제 레포 README + 파일 트리 요약(있으면 원인 지점 추정에 반영)
+}
+
+export function buildBugReportPrompt(ctx: BugReportContext): {
+  system: string;
+  prompt: string;
+} {
+  const systemParts = [
+    "당신은 Seorilabs 의 QA/버그 트리아지 담당이다.",
+    "제보된 증상을 개발자가 바로 대응할 수 있는 한국어 마크다운 버그 리포트로 정리한다.",
+    "제보에 없는 사실을 지어내지 말고, 불명확한 정보는 '확인 필요'로 표시한다.",
+    "재현 절차는 관찰된 증상에서 합리적으로 추론하되, 추정한 부분은 추정임을 명시한다.",
+    "코드를 작성하지 않는다. 원인 추정과 재현·영향 정리에 집중한다.",
+  ];
+  if (ctx.codebaseContext) {
+    systemParts.push(
+      "\n\n## 실제 코드베이스 컨텍스트(이 레포)\n" +
+        ctx.codebaseContext +
+        "\n\n위 실제 구조를 참고해, 증상과 관련 있어 보이는 모듈/파일을 '원인 추정 지점'으로 제시한다(단정 금지, 후보로).",
+    );
+  }
+  return {
+    system: systemParts.join(" "),
+    prompt: [
+      `# 대상: ${ctx.displayName}`,
+      `- 종류: ${appDescriptor(ctx.type, ctx.engine, ctx.marketTargets)}`,
+      `- 제목: ${ctx.title}`,
+      "",
+      "## 제보된 증상(입력)",
+      ctx.symptom.trim() || "(상세 미입력 — 제목 기준으로 합리적 정리)",
+      "",
+      "위 제보를 버그 리포트로 정리하라. 다음 섹션을 포함한다:",
+      "1. `## 요약` — 한두 줄로 무슨 문제인지.",
+      "2. `## 재현 절차` — 번호 목록. 추정한 단계는 (추정) 표기.",
+      "3. `## 기대 결과` / `## 실제 결과` — 각각 명확히.",
+      "4. `## 환경/영향 범위` — 기기·OS·마켓(Play/App Store/AppsInToss)·버전 등. 미상은 '확인 필요'.",
+      "5. `## 심각도 추정` — 크래시/데이터 손실/기능 불가/경미 중 하나 + 근거.",
+      "6. `## 원인 추정 · 확인 필요 사항` — 후보 원인과 추가로 받아야 할 정보 체크리스트(`- [ ]`).",
     ].join("\n"),
   };
 }

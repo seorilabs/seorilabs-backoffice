@@ -13,6 +13,7 @@ import type { AiDraftKind } from "@prisma/client";
 import { toggleApprovalCore } from "@/lib/core/approvals";
 import {
   createPlanningDraftCore,
+  createBugDraftCore,
   commitDraftCore,
   generateStageDraftCore,
 } from "@/lib/core/ai-drafts";
@@ -63,6 +64,7 @@ export interface TgUpdate {
 // "/" 명령어 메뉴(setMyCommands)용. admin 라우트에서 등록.
 export const BOT_COMMANDS = [
   { command: "plan", description: "기획 초안 → 이슈 생성" },
+  { command: "bug", description: "버그 리포트 → 이슈 생성" },
   { command: "approvals", description: "승인 대기" },
   { command: "p1", description: "열린 P1 이슈" },
   { command: "status", description: "앱 현황" },
@@ -78,7 +80,8 @@ export const BOT_COMMANDS = [
 const QUICK_KEYBOARD = [
   ["📋 승인", "🔥 P1"],
   ["📊 현황", "📝 기획"],
-  ["ℹ️ 도움말", "🧹 초기화"],
+  ["🐞 버그", "ℹ️ 도움말"],
+  ["🧹 초기화"],
 ];
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/i;
@@ -109,6 +112,9 @@ function helpText(): string {
     "<b>📝 기획 → 이슈 생성</b> (<code>/plan</code> 또는 📝 기획)",
     "앱 선택 → 아이디어 한 줄 입력 → AI가 코드베이스를 반영한 초안 작성 → <b>[✅ 이슈 생성]</b> 버튼.",
     "버튼을 눌러야 실제 GitHub 이슈가 생깁니다(자동 생성 아님).",
+    "",
+    "<b>🐞 버그 → 이슈 생성</b> (<code>/bug</code> 또는 🐞 버그)",
+    "앱 선택 → 증상 답장 → AI가 재현 절차·기대/실제·심각도로 정리 → <b>[✅ 커밋]</b> 버튼 → GitHub 이슈(라벨 <code>bug</code>).",
     "",
     "<b>⚡ 빠른 버튼 / 명령어</b>",
     "📋 승인 (<code>/approvals</code>) — 승인 대기 + 버튼 승인",
@@ -147,6 +153,8 @@ async function handleMessage(m: TgMessage): Promise<void> {
       return cmdStatusList(chatId);
     case "📝 기획":
       return cmdPlanStart(chatId);
+    case "🐞 버그":
+      return cmdBugStart(chatId);
     case "ℹ️ 도움말":
       return sendHelp(chatId);
     case "🧹 초기화":
@@ -162,6 +170,9 @@ async function handleMessage(m: TgMessage): Promise<void> {
     await clearPending(chatId);
     if (pending.action === "plan_idea") {
       return handlePlanIdea(chatId, m.from?.id, String(pending.data.slug ?? ""), text);
+    }
+    if (pending.action === "bug_report") {
+      return handleBugReport(chatId, m.from?.id, String(pending.data.slug ?? ""), text);
     }
   }
 
@@ -189,6 +200,9 @@ async function handleMessage(m: TgMessage): Promise<void> {
       break;
     case "/plan":
       await cmdPlanStart(chatId);
+      break;
+    case "/bug":
+      await cmdBugStart(chatId);
       break;
     case "/release":
       await cmdReleaseStart(chatId);
@@ -323,6 +337,76 @@ async function handlePlanIdea(
   }
 }
 
+// ── /bug: 앱 선택 → 증상 → AI 정리 → 버튼 커밋(label: bug) ──
+async function cmdBugStart(chatId: number): Promise<void> {
+  if (!env.minimaxConfigured()) {
+    await sendMessage(chatId, "AI 정리가 비활성 상태입니다 (MiniMax 미설정).");
+    return;
+  }
+  const apps = await prisma.app.findMany({
+    where: visibleAppWhere,
+    orderBy: { displayName: "asc" },
+    select: { slug: true, displayName: true },
+  });
+  if (apps.length === 0) {
+    await sendMessage(chatId, "등록된 앱이 없습니다.");
+    return;
+  }
+  const buttons = chunk2(
+    apps.map((a) => ({ text: a.displayName, callback_data: `bug:app:${a.slug}` })),
+  );
+  await sendMessage(chatId, "<b>🐞 버그를 등록할 앱을 선택하세요</b>", buttons);
+}
+
+async function cbBugApp(cq: TgCallback, slug: string): Promise<void> {
+  if (!SLUG_RE.test(slug)) {
+    await answerCallback(cq.id, "잘못된 앱");
+    return;
+  }
+  if (cq.message) await setPending(cq.message.chat.id, "bug_report", { slug });
+  await answerCallback(cq.id);
+  if (cq.message) {
+    await editMessageText(
+      cq.message.chat.id,
+      cq.message.message_id,
+      `🐞 <b>${esc(slug)}</b> 버그 — 증상을 답장으로 적어주세요.\n무엇을/어디서/어떻게 하면 발생하는지 있는 그대로 쓰면 됩니다.`,
+      [],
+    );
+  }
+}
+
+async function handleBugReport(
+  chatId: number,
+  fromId: number | undefined,
+  slug: string,
+  symptom: string,
+): Promise<void> {
+  if (!SLUG_RE.test(slug)) {
+    await sendMessage(chatId, "잘못된 앱입니다. /bug 다시 시도하세요.");
+    return;
+  }
+  const app = await prisma.app.findFirst({
+    where: { slug, ...visibleAppWhere },
+    select: { id: true },
+  });
+  if (!app) {
+    await sendMessage(chatId, `'${esc(slug)}' 앱을 찾을 수 없습니다.`);
+    return;
+  }
+  await sendChatAction(chatId, "typing");
+  await sendMessage(chatId, "⏳ 버그 리포트 정리 중… (수십 초)");
+  try {
+    const d = await createBugDraftCore({
+      appId: app.id,
+      symptom,
+      actorLabel: `telegram:${fromId ?? "?"}`,
+    });
+    await sendDraftPreview(chatId, "🐞 버그 리포트", d);
+  } catch (e) {
+    await sendMessage(chatId, "정리 실패: " + (e instanceof Error ? e.message : "error"));
+  }
+}
+
 // 초안 미리보기 + 커밋/취소 버튼(기획·단계 에이전트 공용).
 async function sendDraftPreview(
   chatId: number,
@@ -409,6 +493,9 @@ async function handleCallback(cq: TgCallback): Promise<void> {
     if (sub === "make") return cbPlanMake(cq, fromId, arg);
     if (sub === "cancel") return cbPlanCancel(cq, arg);
   }
+
+  // 버그: 앱 선택만 전용. 커밋/취소는 plan:make · plan:cancel 재사용(kind 무관).
+  if (action === "bug" && rest[0] === "app") return cbBugApp(cq, arg);
 
   if (action === "gen") return cbGen(cq, fromId, rest[0], arg);
 
