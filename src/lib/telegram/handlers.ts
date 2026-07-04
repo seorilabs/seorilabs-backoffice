@@ -61,20 +61,8 @@ export interface TgUpdate {
   callback_query?: TgCallback;
 }
 
-// "/" 명령어 메뉴(setMyCommands)용. admin 라우트에서 등록.
-export const BOT_COMMANDS = [
-  { command: "plan", description: "기획 초안 → 이슈 생성" },
-  { command: "bug", description: "버그 리포트 → 이슈 생성" },
-  { command: "approvals", description: "승인 대기" },
-  { command: "p1", description: "열린 P1 이슈" },
-  { command: "status", description: "앱 현황" },
-  { command: "release", description: "릴리즈 태그 생성 + 출시노트" },
-  { command: "deploy", description: "마켓 배포(태그 선택)" },
-  { command: "save", description: "메모를 볼트 받은함에 저장" },
-  { command: "index", description: "볼트 즉시 재인덱싱" },
-  { command: "reset", description: "대화 맥락 초기화" },
-  { command: "help", description: "도움말 · 빠른 버튼" },
-];
+// "/" 명령어 메뉴 정의는 commands.ts(경량)로 분리. 하위 호환 위해 re-export.
+export { BOT_COMMANDS } from "@/lib/telegram/commands";
 
 // 하단 고정 빠른 버튼.
 const QUICK_KEYBOARD = [
