@@ -29,6 +29,23 @@ function clientFor(project: string): BigQuery {
 // GA4_BQ_LOCATION 이 지정되면 그 값을 강제(비상용).
 const locationCache = new Map<string, string>();
 
+/**
+ * job location 결정(순수). 우선순위: override > 캐시 > dataset 메타 조회값.
+ * 셋 다 없으면 US 로 임의 폴백하지 않고 에러 — 비US 리전 데이터셋을 US 로 잘못
+ * 조회하는 회귀를 막는다.
+ */
+export function decideLocation(opts: {
+  override?: string;
+  cached?: string;
+  fetched?: string | null;
+}): string {
+  const o = opts.override?.trim();
+  if (o) return o;
+  if (opts.cached) return opts.cached;
+  if (opts.fetched) return opts.fetched;
+  throw new Error("dataset location 을 확인할 수 없음(메타에 location 없음/권한 부족)");
+}
+
 async function resolveLocation(project: string, dataset: string): Promise<string> {
   const override = env.optional("GA4_BQ_LOCATION").trim();
   if (override) return override;
@@ -36,7 +53,7 @@ async function resolveLocation(project: string, dataset: string): Promise<string
   const cached = locationCache.get(key);
   if (cached) return cached;
   const [meta] = await clientFor(project).dataset(dataset).getMetadata();
-  const loc = (meta?.location as string) || "US";
+  const loc = decideLocation({ fetched: (meta?.location as string) ?? null });
   locationCache.set(key, loc);
   return loc;
 }
