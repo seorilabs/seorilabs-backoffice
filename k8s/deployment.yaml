@@ -89,6 +89,9 @@ spec:
               value: "180000"
             - name: RECONCILE_INTERVAL_MS
               value: "21600000"
+            # GA4→BigQuery 지표 수집(수집/보고 CronJob + /analytics 대시보드).
+            - name: FEATURE_GA4_ANALYTICS
+              value: "true"
             - name: FEATURE_TELEGRAM_ENABLED
               value: "true"
             - name: TELEGRAM_ALLOWED_IDS
@@ -152,6 +155,13 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: GEMINI_API_KEY
+                  optional: true
+            # GA4 BigQuery 읽기 SA 키(JSON 전체). 없으면 지표 수집이 비활성.
+            - name: GA4_SA_KEY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GA4_SA_KEY_JSON
                   optional: true
             - name: TELEGRAM_BOT_TOKEN
               valueFrom:

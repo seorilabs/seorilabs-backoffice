@@ -11,6 +11,8 @@ import { AiAgentPanel } from "@/components/AiAgentPanel";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 import { StatusControl } from "@/components/StatusControl";
 import { ReleaseControls } from "@/components/ReleaseControls";
+import { MetricCards, type MetricDaily } from "@/components/analytics/MetricPanels";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +52,16 @@ export default async function AppDetail({
           model: true,
         },
       })
+    : [];
+
+  // GA4 대상 앱이면 최근 지표 스냅샷(최신 7일)을 함께 보여준다.
+  const ga4Target = resolveGa4Target(app);
+  const metricRows = ga4Target
+    ? ((await prisma.appMetricDaily.findMany({
+        where: { appId: app.id },
+        orderBy: { date: "desc" },
+        take: 7,
+      })) as MetricDaily[])
     : [];
 
   return (
@@ -197,6 +209,26 @@ export default async function AppDetail({
           {app.releaseNotes.length === 0 && <Empty />}
         </div>
       </Section>
+
+      {ga4Target && (
+        <Section title="앱 지표">
+          {metricRows.length === 0 ? (
+            <div className="py-2 text-sm text-neutral-400">
+              아직 수집된 지표가 없습니다. (매일 21:00 KST 수집)
+            </div>
+          ) : (
+            <>
+              <MetricCards latest={metricRows[0]} />
+              <div className="mt-3 text-right text-xs text-neutral-400">
+                기준일 {metricRows[0].date.toISOString().slice(0, 10)} ·{" "}
+                <Link href={`/analytics?app=${app.slug}`} className="text-blue-600 hover:underline">
+                  상세 대시보드 →
+                </Link>
+              </div>
+            </>
+          )}
+        </Section>
+      )}
 
       <Section title="전이 이력">
         <div className="divide-y divide-neutral-100">
