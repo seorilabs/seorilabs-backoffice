@@ -154,7 +154,7 @@ spec:
                 - name: VAULT_PATH
                   value: /vault
                 - name: VAULT_WRITE_FOLDERS
-                  value: "받은함"
+                  value: "받은함,프로젝트/지표"
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:

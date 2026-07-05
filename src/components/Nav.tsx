@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/", label: "대시보드" },
   { href: "/board", label: "워크플로우 보드" },
+  { href: "/analytics", label: "지표" },
   { href: "/issues", label: "이슈" },
   { href: "/approvals", label: "승인 대기" },
   { href: "/releases", label: "출시 매트릭스" },
