@@ -6,11 +6,6 @@ import type { Ga4Target } from "@/lib/ga4/datasets";
 // job 을 실행한다(SA 는 각 프로젝트에 bigquery.dataViewer + jobUser 보유).
 // events_YYYYMMDD 만 매칭하도록 _TABLE_SUFFIX 를 숫자 범위로 제한 → intraday 자동 제외.
 
-// GA4 export 데이터셋 location. 대부분 US. 다른 리전이면 env 로 오버라이드.
-function location(): string {
-  return env.optional("GA4_BQ_LOCATION", "US");
-}
-
 const clients = new Map<string, BigQuery>();
 
 function clientFor(project: string): BigQuery {
@@ -29,8 +24,26 @@ function clientFor(project: string): BigQuery {
   return bq;
 }
 
-async function runQuery<T>(project: string, sql: string): Promise<T[]> {
-  const [rows] = await clientFor(project).query({ query: sql, location: location() });
+// GA4 export 데이터셋 리전은 프로젝트마다 다르다(asia-northeast3/asia-southeast3 등).
+// bq CLI 와 달리 Node SDK 는 job location 을 자동 감지하지 않으므로 dataset 메타에서 조회한다.
+// GA4_BQ_LOCATION 이 지정되면 그 값을 강제(비상용).
+const locationCache = new Map<string, string>();
+
+async function resolveLocation(project: string, dataset: string): Promise<string> {
+  const override = env.optional("GA4_BQ_LOCATION").trim();
+  if (override) return override;
+  const key = `${project}.${dataset}`;
+  const cached = locationCache.get(key);
+  if (cached) return cached;
+  const [meta] = await clientFor(project).dataset(dataset).getMetadata();
+  const loc = (meta?.location as string) || "US";
+  locationCache.set(key, loc);
+  return loc;
+}
+
+async function runQuery<T>(project: string, dataset: string, sql: string): Promise<T[]> {
+  const location = await resolveLocation(project, dataset);
+  const [rows] = await clientFor(project).query({ query: sql, location });
   return rows as T[];
 }
 
@@ -87,7 +100,7 @@ export async function queryDailyActivity(
     WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     GROUP BY date
     ORDER BY date`;
-  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, sql);
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
   return rows.map((r) => ({
     date: String(r.date),
     dau: num(r.dau),
@@ -127,7 +140,7 @@ export async function queryCohortRetention(
     FROM j
     GROUP BY date
     ORDER BY date`;
-  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, sql);
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
   return rows.map((r) => ({
     date: String(r.date),
     newUsers: num(r.new_users),
