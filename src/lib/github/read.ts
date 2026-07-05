@@ -1,8 +1,45 @@
+import { parse as parseYaml } from "yaml";
+
 import { getInstallationOctokit } from "@/lib/github/app";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
   return { owner, repo };
+}
+
+/**
+ * repo 기본 브랜치의 워크플로 파일에 선언된 workflow_dispatch 입력 이름 집합.
+ *
+ * GitHub 은 workflow_dispatch 로 넘긴 입력을 "기본 브랜치의 워크플로 정의" 기준으로 검증하고,
+ * 선언되지 않은 입력을 넘기면 422 로 거부한다. 따라서 배포 dispatch 전에 어떤 입력이 선언돼
+ * 있는지 알아야 안전하게 값을 주입할 수 있다(ref 없이 = 기본 브랜치 조회).
+ *
+ * yaml 파서는 YAML 1.2 라 `on:` 을 문자열 키 "on" 으로 파싱한다(js-yaml 의 on→true 함정 회피).
+ */
+export async function getWorkflowDispatchInputNames(
+  repoFullName: string,
+  workflowFile: string,
+): Promise<Set<string>> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const res = await octokit.rest.repos.getContent({
+    owner,
+    repo,
+    path: `.github/workflows/${workflowFile}`,
+  });
+  const data = res.data as { content?: string; encoding?: string };
+  if (!data.content) {
+    throw new Error(`워크플로 파일 내용을 읽을 수 없음: ${repoFullName} ${workflowFile}`);
+  }
+  const text = Buffer.from(
+    data.content,
+    data.encoding === "base64" ? "base64" : "utf8",
+  ).toString("utf8");
+  const doc = parseYaml(text) as
+    | { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } }
+    | null;
+  const inputs = doc?.on?.workflow_dispatch?.inputs ?? {};
+  return new Set(Object.keys(inputs));
 }
 
 // 분해 에이전트용: 이슈 본문을 GitHub 에서 직접 읽는다(미러에 body 컬럼 없음).

@@ -7,6 +7,7 @@ import {
   resolveRefSha,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
+import { getWorkflowDispatchInputNames } from "@/lib/github/read";
 import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
 import {
@@ -187,6 +188,41 @@ export function deployTargetsFor(marketTargets: unknown): DeployTarget[] {
   return out;
 }
 
+// Google Play 업로드 토글 input 은 repo 마다 이름이 다르다(레거시 self-contained caller vs org
+// 재사용 caller). 선언된 것 중 하나에 true 를 준다. 하나도 없으면 업로드를 보장할 수 없어 중단.
+const GOOGLE_PLAY_UPLOAD_TOGGLES = ["upload", "send_to_google_play", "upload_to_internal"];
+
+/**
+ * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포
+ * (release completed)까지 진행되도록 입력을 주입한다. 선언 안 된 입력을 넘기면 GitHub 이 422 로
+ * 거부하므로, 이름이 repo 마다 다른 업로드 토글/배포옵션/Godot 필수값을 동적으로 감지해 맞춘다.
+ */
+async function applyGooglePlayUploadInputs(
+  repoFullName: string,
+  workflowFile: string,
+  tag: string,
+  inputs: Record<string, string>,
+): Promise<void> {
+  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile);
+
+  const toggle = GOOGLE_PLAY_UPLOAD_TOGGLES.find((n) => declared.has(n));
+  if (!toggle) {
+    throw new Error(
+      `${repoFullName} 의 ${workflowFile} 에서 Google Play 업로드 토글 입력을 찾지 못했습니다` +
+        ` (${GOOGLE_PLAY_UPLOAD_TOGGLES.join("/")}). 항상 업로드를 보장할 수 없어 중단합니다.`,
+    );
+  }
+  inputs[toggle] = "true";
+
+  // 내부 테스터에게 배포(완료 상태). 이름이 repo 마다 달라 선언된 것만 채운다.
+  if (declared.has("after_upload")) inputs.after_upload = "내부 테스터에게 배포하기";
+  if (declared.has("track")) inputs.track = "internal";
+  if (declared.has("release_status")) inputs.release_status = "completed";
+
+  // Godot caller 는 version_name 이 required. 태그에서 파생(vX.Y.Z → X.Y.Z).
+  if (declared.has("version_name")) inputs.version_name = tag.replace(/^v/i, "");
+}
+
 /**
  * 마켓 배포 dispatch. 지정 태그를 ref 로 표준 caller 워크플로우를 트리거.
  * 결과(빌드/업로드/성공)는 workflow_run webhook → ReleaseRecord + 라이프사이클 + 텔레그램 알림.
@@ -233,6 +269,11 @@ export async function dispatchMarketDeploy(opts: {
     // ALL 인데 iOS 가 Xcode Cloud 면, deploy-all 의 App Store 잡은 제외한다.
     if (iosViaXcodeCloud && opts.target === "ALL") {
       inputs.deploy_app_store = "false";
+    }
+    // PLAY 단독: 텔레그램/백오피스에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
+    // 배포까지 진행한다(ALL 의 google-play 잡은 이미 upload=true 로 하드코딩되어 별도 처리 불필요).
+    if (opts.target === "PLAY") {
+      await applyGooglePlayUploadInputs(opts.repoFullName, workflowFile, opts.tag, inputs);
     }
 
     await dispatchWorkflow({
