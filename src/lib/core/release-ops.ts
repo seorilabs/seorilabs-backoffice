@@ -203,13 +203,15 @@ async function applyGooglePlayUploadInputs(
   tag: string,
   inputs: Record<string, string>,
 ): Promise<void> {
-  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile);
+  // 검사 ref = 실제 dispatch ref(tag). GitHub 은 dispatch 한 ref 의 워크플로 정의로 입력을 검증하므로,
+  // 태그와 다른 ref(기본 브랜치)로 검사하면 통과해도 dispatch 에서 422 가 날 수 있다(구버전 태그 함정).
+  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile, tag);
 
   const toggle = GOOGLE_PLAY_UPLOAD_TOGGLES.find((n) => declared.has(n));
   if (!toggle) {
     throw new Error(
-      `${repoFullName} 의 ${workflowFile} 에서 Google Play 업로드 토글 입력을 찾지 못했습니다` +
-        ` (${GOOGLE_PLAY_UPLOAD_TOGGLES.join("/")}). 항상 업로드를 보장할 수 없어 중단합니다.`,
+      `${repoFullName} 의 ${workflowFile}(태그 ${tag})에 Google Play 업로드 토글 입력이 없습니다` +
+        ` (${GOOGLE_PLAY_UPLOAD_TOGGLES.join("/")}). 업로드 토글이 포함된 최신 태그로 다시 배포하세요.`,
     );
   }
   inputs[toggle] = "true";
