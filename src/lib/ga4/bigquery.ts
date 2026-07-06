@@ -58,9 +58,18 @@ async function resolveLocation(project: string, dataset: string): Promise<string
   return loc;
 }
 
+// 쿼리 폭주 과금 차단. 이 상한(bytes)을 넘게 스캔하는 job 은 BigQuery 가 실패시켜
+// 비용을 원천 차단한다. 현재 게임당 일 스캔 ~2.5MB 이므로 기본 2GiB 는 폭주(파티션
+// 프루닝 실패/데이터 폭증/코드 버그)만 걸러내고 정상 쿼리는 영향받지 않는다.
+const MAX_BYTES_BILLED = env.optional("GA4_MAX_BYTES_BILLED", String(2 * 1024 ** 3));
+
 async function runQuery<T>(project: string, dataset: string, sql: string): Promise<T[]> {
   const location = await resolveLocation(project, dataset);
-  const [rows] = await clientFor(project).query({ query: sql, location });
+  const [rows] = await clientFor(project).query({
+    query: sql,
+    location,
+    maximumBytesBilled: MAX_BYTES_BILLED,
+  });
   return rows as T[];
 }
 
