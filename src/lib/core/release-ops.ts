@@ -8,6 +8,7 @@ import {
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
 import { getWorkflowDispatchInputNames } from "@/lib/github/read";
+import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
 import {
@@ -188,14 +189,11 @@ export function deployTargetsFor(marketTargets: unknown): DeployTarget[] {
   return out;
 }
 
-// Google Play 업로드 토글 input 은 repo 마다 이름이 다르다(레거시 self-contained caller vs org
-// 재사용 caller). 선언된 것 중 하나에 true 를 준다. 하나도 없으면 업로드를 보장할 수 없어 중단.
-const GOOGLE_PLAY_UPLOAD_TOGGLES = ["upload", "send_to_google_play", "upload_to_internal"];
-
 /**
- * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포
- * (release completed)까지 진행되도록 입력을 주입한다. 선언 안 된 입력을 넘기면 GitHub 이 422 로
- * 거부하므로, 이름이 repo 마다 다른 업로드 토글/배포옵션/Godot 필수값을 동적으로 감지해 맞춘다.
+ * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포까지
+ * 진행되도록 입력을 주입한다. 검사 ref = 실제 dispatch ref(tag) — GitHub 은 dispatch 한 ref 의
+ * 워크플로 정의로 입력을 검증하므로, 태그와 다른 ref(기본 브랜치)로 검사하면 통과해도 dispatch 에서
+ * 422 가 날 수 있다(구버전 태그 함정).
  */
 async function applyGooglePlayUploadInputs(
   repoFullName: string,
@@ -203,24 +201,8 @@ async function applyGooglePlayUploadInputs(
   tag: string,
   inputs: Record<string, string>,
 ): Promise<void> {
-  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile);
-
-  const toggle = GOOGLE_PLAY_UPLOAD_TOGGLES.find((n) => declared.has(n));
-  if (!toggle) {
-    throw new Error(
-      `${repoFullName} 의 ${workflowFile} 에서 Google Play 업로드 토글 입력을 찾지 못했습니다` +
-        ` (${GOOGLE_PLAY_UPLOAD_TOGGLES.join("/")}). 항상 업로드를 보장할 수 없어 중단합니다.`,
-    );
-  }
-  inputs[toggle] = "true";
-
-  // 내부 테스터에게 배포(완료 상태). 이름이 repo 마다 달라 선언된 것만 채운다.
-  if (declared.has("after_upload")) inputs.after_upload = "내부 테스터에게 배포하기";
-  if (declared.has("track")) inputs.track = "internal";
-  if (declared.has("release_status")) inputs.release_status = "completed";
-
-  // Godot caller 는 version_name 이 required. 태그에서 파생(vX.Y.Z → X.Y.Z).
-  if (declared.has("version_name")) inputs.version_name = tag.replace(/^v/i, "");
+  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile, tag);
+  Object.assign(inputs, buildGooglePlayUploadInputs(declared, tag, { repoFullName, workflowFile }));
 }
 
 /**

@@ -8,17 +8,19 @@ function splitRepo(repoFullName: string): { owner: string; repo: string } {
 }
 
 /**
- * repo 기본 브랜치의 워크플로 파일에 선언된 workflow_dispatch 입력 이름 집합.
+ * 워크플로 파일에 선언된 workflow_dispatch 입력 이름 집합.
  *
- * GitHub 은 workflow_dispatch 로 넘긴 입력을 "기본 브랜치의 워크플로 정의" 기준으로 검증하고,
- * 선언되지 않은 입력을 넘기면 422 로 거부한다. 따라서 배포 dispatch 전에 어떤 입력이 선언돼
- * 있는지 알아야 안전하게 값을 주입할 수 있다(ref 없이 = 기본 브랜치 조회).
+ * GitHub 은 workflow_dispatch 로 넘긴 입력을 "dispatch 한 ref(브랜치/태그)의 워크플로 정의"
+ * 기준으로 검증하고, 선언되지 않은 입력을 넘기면 422 로 거부한다. 따라서 검사도 실제 dispatch 할
+ * ref 로 조회해야 검증 대상이 일치한다(예: 구버전 태그로 배포하면 그 태그의 정의로 검증되므로,
+ * 기본 브랜치에만 있는 입력은 통과해도 dispatch 에서 422 가 난다). ref 미지정 시 기본 브랜치 조회.
  *
  * yaml 파서는 YAML 1.2 라 `on:` 을 문자열 키 "on" 으로 파싱한다(js-yaml 의 on→true 함정 회피).
  */
 export async function getWorkflowDispatchInputNames(
   repoFullName: string,
   workflowFile: string,
+  ref?: string,
 ): Promise<Set<string>> {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
@@ -26,6 +28,7 @@ export async function getWorkflowDispatchInputNames(
     owner,
     repo,
     path: `.github/workflows/${workflowFile}`,
+    ...(ref ? { ref } : {}),
   });
   const data = res.data as { content?: string; encoding?: string };
   if (!data.content) {
