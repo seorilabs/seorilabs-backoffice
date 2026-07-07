@@ -10,10 +10,9 @@ import {
   type GhRunInput,
 } from "@/lib/sync/mirror";
 import { notify, esc } from "@/lib/telegram/client";
-import { env } from "@/lib/env";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateReleaseNoteCore } from "@/lib/core/release-notes";
-import { isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
+import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,26 +78,8 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         `❌ <b>배포 실패</b> ${esc(repo)}\n${esc(p.workflow_run.name ?? "")} (${esc(p.workflow_run.head_branch ?? "")})`,
       );
     }
-    // 배포 성공 → 릴리스 노트 넛지(출시/운영 단계에서만, 노이즈 억제).
-    if (
-      event === "workflow_run" &&
-      p.workflow_run?.status === "completed" &&
-      p.workflow_run.conclusion === "success" &&
-      isDeploy &&
-      env.minimaxConfigured() &&
-      p.repository?.full_name
-    ) {
-      const app = await prisma.app.findFirst({
-        where: { repoFullName: p.repository.full_name, ...visibleAppWhere },
-        select: { id: true, displayName: true, currentStage: true },
-      });
-      if (app && (app.currentStage === "RELEASE" || app.currentStage === "LIVEOPS")) {
-        await notify(
-          `🚀 <b>${esc(app.displayName)}</b> 배포 성공 — 릴리스 노트 만들까요?`,
-          [[{ text: "🚀 릴리스 노트 생성", callback_data: `gen:RELEASE_NOTES:${app.id}` }]],
-        );
-      }
-    }
+    // 출시노트는 태그 생성 시점에만 만든다(태그 push webhook + 백오피스/텔레그램 태그 생성).
+    // 배포 성공 후 별도 릴리스 노트 넛지는 하지 않는다.
     // 새 P1 이슈 → 즉시 알림.
     if (event === "issues" && p.action === "opened" && p.issue) {
       const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
