@@ -25,6 +25,9 @@ export const env = {
   optional,
   bool,
   githubOrg: () => optional("GITHUB_ORG", "seorilabs"),
+  // Godot 버전 감지 알림: global-versions.yaml 의 tools.godot.version 을 미러링.
+  // kubectl 워크스페이스가 git 이 아니라 fetch 불가 → env 로 pin 값 주입.
+  godotPinnedVersion: () => optional("GODOT_PINNED_VERSION", "4.6.3"),
   featureMinimax: () => bool("FEATURE_MINIMAX_ENABLED", false),
   // MiniMax (OpenAI 호환 Chat Completions, gemini-pr-bot 와 동일 형태)
   minimaxApiKey: () => optional("MINIMAX_API_KEY"),
