@@ -95,7 +95,7 @@ metadata:
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "0 12 * * *" # 매일 12:00 UTC = 21:00 KST (보고서보다 1시간 앞서 수집)
+  schedule: "0 1 * * *" # 매일 01:00 UTC = 10:00 KST (GA4 일별 export 착지 직후 = 가장 빠른 D-1)
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
@@ -139,7 +139,7 @@ metadata:
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "0 13 * * *" # 매일 13:00 UTC = 22:00 KST
+  schedule: "30 1 * * *" # 매일 01:30 UTC = 10:30 KST (수집 30분 뒤 = 늦게 착지하는 export 안전 버퍼)
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
