@@ -223,14 +223,15 @@ export async function queryDailyBreakdowns(
         IFNULL(NULLIF(platform, ''), '(unknown)') AS platform,
         IFNULL(NULLIF(geo.country, ''), '(unknown)') AS country,
         IFNULL(NULLIF(device.category, ''), '(unknown)') AS device_cat,
-        NULLIF(TRIM(CONCAT(IFNULL(device.operating_system, ''), ' ', IFNULL(device.operating_system_version, ''))), '') AS os_ver
+        IFNULL(NULLIF(TRIM(CONCAT(IFNULL(device.operating_system, ''), ' ', IFNULL(device.operating_system_version, ''))), ''), '(unknown)') AS os_dim
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     )
+    -- 각 분기의 val(3번째 컬럼)은 base 의 정규화된 단일 컬럼 → SELECT/GROUP BY 식이 항상 일치.
     SELECT date, 'platform' AS dim, platform AS val, COUNT(DISTINCT uid) AS dau FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'country', country, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
-    UNION ALL SELECT date, 'os', IFNULL(os_ver, '(unknown)'), COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+    UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
   const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
   return rows.map((r) => ({
     date: String(r.date),

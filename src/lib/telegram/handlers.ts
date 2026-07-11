@@ -41,7 +41,7 @@ import {
 } from "@/lib/core/release-ops";
 import { listVersionTags } from "@/lib/github/release";
 import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
-import { engagementRate, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
+import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 
 interface TgFrom {
   id: number;
@@ -784,13 +784,8 @@ async function cmdMetricsDetail(chatId: number, slug: string): Promise<void> {
     .map((r) => `${isoDate(r.date).slice(5)}  DAU ${r.dau}`);
 
   // 플랫폼 비중(0 인 것 제외).
-  const platform = [
-    ["Android", latest.dauAndroid],
-    ["iOS", latest.dauIos],
-    ["Web", latest.dauWeb],
-  ]
-    .filter(([, v]) => (v as number) > 0)
-    .map(([k, v]) => `${k} ${v}`)
+  const platform = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
+    .segs.map((s) => `${s.label} ${s.value}`)
     .join(" · ");
 
   // 국가 Top 3(raw JSON).

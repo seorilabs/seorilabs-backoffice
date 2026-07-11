@@ -1,6 +1,7 @@
 import { isoDate } from "@/lib/ga4/datasets";
 import {
   engagementRate,
+  platformSegments,
   type DimCount,
   type MetricBreakdowns,
 } from "@/lib/ga4/metric-shapes";
@@ -51,13 +52,14 @@ export function MetricCards({ latest }: { latest: MetricDaily }) {
 }
 
 // 플랫폼 비중 막대(Android/iOS/Web) — 전용 컬럼 사용.
+const PLATFORM_CLS: Record<string, string> = {
+  Android: "bg-emerald-500",
+  iOS: "bg-sky-500",
+  Web: "bg-violet-500",
+};
+
 export function PlatformSplit({ latest }: { latest: MetricDaily }) {
-  const segs = [
-    { label: "Android", value: latest.dauAndroid, cls: "bg-emerald-500" },
-    { label: "iOS", value: latest.dauIos, cls: "bg-sky-500" },
-    { label: "Web", value: latest.dauWeb, cls: "bg-violet-500" },
-  ].filter((s) => s.value > 0);
-  const total = segs.reduce((n, s) => n + s.value, 0);
+  const { segs, total } = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb);
   if (total === 0) {
     return <div className="text-sm text-neutral-400">플랫폼 데이터 없음</div>;
   }
@@ -67,8 +69,8 @@ export function PlatformSplit({ latest }: { latest: MetricDaily }) {
         {segs.map((s) => (
           <div
             key={s.label}
-            className={s.cls}
-            style={{ width: `${(s.value / total) * 100}%` }}
+            className={PLATFORM_CLS[s.label]}
+            style={{ width: `${s.pct}%` }}
             title={`${s.label} ${s.value}`}
           />
         ))}
@@ -76,9 +78,9 @@ export function PlatformSplit({ latest }: { latest: MetricDaily }) {
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
         {segs.map((s) => (
           <span key={s.label} className="inline-flex items-center gap-1.5">
-            <span className={`inline-block h-2 w-2 rounded-full ${s.cls}`} />
+            <span className={`inline-block h-2 w-2 rounded-full ${PLATFORM_CLS[s.label]}`} />
             {s.label} <b className="text-neutral-800">{s.value}</b>
-            <span className="text-neutral-400">({Math.round((s.value / total) * 100)}%)</span>
+            <span className="text-neutral-400">({s.pct}%)</span>
           </span>
         ))}
       </div>

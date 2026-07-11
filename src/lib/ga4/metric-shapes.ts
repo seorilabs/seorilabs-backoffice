@@ -80,3 +80,28 @@ export function engagementRate(engagedUsers: number, dau: number): number | null
   if (dau <= 0) return null;
   return Math.round((engagedUsers / dau) * 1000) / 10;
 }
+
+export interface PlatformSeg {
+  label: string;
+  value: number;
+  pct: number; // 전체 대비 %(정수)
+}
+
+/**
+ * 플랫폼 DAU → 0 초과 세그먼트 + 총합(순수). total===0 이면 세그먼트 빈 배열 →
+ * 표시부는 안내 문구로 분기(NaN width 진입 불가).
+ */
+export function platformSegments(
+  android: number,
+  ios: number,
+  web: number,
+): { segs: PlatformSeg[]; total: number } {
+  const raw = [
+    { label: "Android", value: android },
+    { label: "iOS", value: ios },
+    { label: "Web", value: web },
+  ].filter((s) => s.value > 0);
+  const total = raw.reduce((n, s) => n + s.value, 0);
+  const segs = raw.map((s) => ({ ...s, pct: total > 0 ? Math.round((s.value / total) * 100) : 0 }));
+  return { segs, total };
+}

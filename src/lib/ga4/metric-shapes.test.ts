@@ -4,6 +4,7 @@ import {
   pivotBreakdownRows,
   topN,
   platformDau,
+  platformSegments,
   buildDayBreakdown,
   engagementRate,
   type Ga4BreakdownRow,
@@ -62,6 +63,24 @@ test("buildDayBreakdown: 데이터 없는 날은 0/빈 배열", () => {
     dauWeb: 0,
     raw: { countries: [], osVersions: [], devices: [] },
   });
+});
+
+test("platformSegments: 0 초과만 세그먼트, pct 정수, 총합", () => {
+  const { segs, total } = platformSegments(70, 30, 0);
+  assert.equal(total, 100);
+  assert.deepEqual(
+    segs.map((s) => [s.label, s.value, s.pct]),
+    [
+      ["Android", 70, 70],
+      ["iOS", 30, 30],
+    ],
+  );
+});
+
+test("platformSegments: 전부 0 이면 total 0·빈 세그먼트(NaN width 진입 불가)", () => {
+  const { segs, total } = platformSegments(0, 0, 0);
+  assert.equal(total, 0);
+  assert.deepEqual(segs, []);
 });
 
 test("engagementRate: engaged/dau %, dau 0 이면 null", () => {
