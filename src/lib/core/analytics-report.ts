@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import { notify, esc, telegramConfigured } from "@/lib/telegram/client";
 import { resolveGa4Target, latestClosedDay, isoDate } from "@/lib/ga4/datasets";
+import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 
 // 야간(22:00 KST) 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고,
@@ -23,6 +24,9 @@ export interface MetricRow {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  dauAndroid: number;
+  dauIos: number;
+  dauWeb: number;
 }
 
 export interface ReportResult {
@@ -53,7 +57,8 @@ export function buildAppReportMd(
     `- DAU ${latest.dau}`,
     `- 신규(first_visit) ${latest.newUsers}`,
     `- D1 잔존율 ${pct(latest.d1Pct)} · D3 ${pct(latest.d3Pct)} · D7 ${pct(latest.d7Pct)}`,
-    `- engagement ${latest.engagedUsers}명 · 평균 ${numOrDash(latest.avgEngageSec)}초`,
+    `- 활성사용자 ${latest.engagedUsers}명 · 참여율 ${pct(engagementRate(latest.engagedUsers, latest.dau))} · 평균 ${numOrDash(latest.avgEngageSec)}초`,
+    `- 플랫폼 Android ${latest.dauAndroid} · iOS ${latest.dauIos} · Web ${latest.dauWeb}`,
     `- 광고 노출 ${latest.adImpressions} · 고유 ${latest.adEventUsers}명`,
     "",
     `## 최근 ${rowsDesc.length}일 추이`,
@@ -68,9 +73,16 @@ export function buildAppReportMd(
   return lines.join("\n");
 }
 
-/** Telegram 요약 한 줄(HTML). */
+/** Telegram 요약 한 줄(HTML). 활성사용자·참여율·플랫폼 반영. */
 export function summaryLine(displayName: string, latest: MetricRow): string {
-  return `<b>${esc(displayName)}</b> DAU ${latest.dau} · 신규 ${latest.newUsers} · D7 ${pct(latest.d7Pct)} · 광고 ${latest.adImpressions}`;
+  const rate = engagementRate(latest.engagedUsers, latest.dau);
+  const plat = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
+    .segs.map((s) => `${s.label} ${s.value}`)
+    .join("/");
+  return (
+    `<b>${esc(displayName)}</b> DAU ${latest.dau} · 활성 ${latest.engagedUsers}(${pct(rate)}) · D7 ${pct(latest.d7Pct)} · 광고 ${latest.adImpressions}` +
+    (plat ? ` · ${plat}` : "")
+  );
 }
 
 export async function sendMetricsReport(now: Date): Promise<ReportResult> {

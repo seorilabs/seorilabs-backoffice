@@ -403,7 +403,10 @@ model AppMetricDaily {
   avgEngageSec  Float? // user_engagement 평균 초
   adEventUsers  Int    @default(0) // 광고 이벤트(ad_*/ait_*) 고유 사용자
   adImpressions Int    @default(0) // 광고 이벤트 수
-  raw           Json? // event reach 등 부가 지표 원본
+  dauAndroid    Int    @default(0) // platform=ANDROID DAU
+  dauIos        Int    @default(0) // platform=IOS DAU
+  dauWeb        Int    @default(0) // platform=WEB DAU
+  raw           Json? // 차원 분해(국가/기기/OS top-N) 등 부가 지표 원본 — MetricBreakdowns
 
   collectedAt DateTime @default(now()) @db.DateTime(3)
 

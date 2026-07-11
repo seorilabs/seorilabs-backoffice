@@ -6,6 +6,8 @@ import {
   MetricCards,
   DauTrend,
   MetricTrendTable,
+  PlatformSplit,
+  TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
 
@@ -66,13 +68,14 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
     where: { appId },
     orderBy: { date: "desc" },
     take: WINDOW,
-  })) as MetricDaily[];
+  })) as unknown as MetricDaily[];
 
   if (rowsDesc.length === 0) {
     return <Notice>{name}의 수집된 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>;
   }
   const latest = rowsDesc[0];
   const rowsAsc = [...rowsDesc].reverse();
+  const bd = latest.raw ?? {};
 
   return (
     <div className="space-y-6">
@@ -83,6 +86,23 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
         <MetricCards latest={latest} />
       </div>
       <div>
+        <div className="mb-2 text-sm font-semibold text-neutral-700">플랫폼 비중 (DAU)</div>
+        <div className="rounded-lg border border-neutral-200 bg-white p-4">
+          <PlatformSplit latest={latest} />
+        </div>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel title="국가 Top (DAU)">
+          <TopDimList items={bd.countries} empty="국가 데이터 없음" />
+        </Panel>
+        <Panel title="기기 유형 (DAU)">
+          <TopDimList items={bd.devices} empty="기기 데이터 없음" />
+        </Panel>
+        <Panel title="OS 버전 (DAU)">
+          <TopDimList items={bd.osVersions} empty="OS 데이터 없음" />
+        </Panel>
+      </div>
+      <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">DAU 추이 (최근 {rowsAsc.length}일)</div>
         <DauTrend rowsAsc={rowsAsc} />
       </div>
@@ -90,6 +110,15 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+    </div>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="mb-3 text-sm font-semibold text-neutral-700">{title}</div>
+      {children}
     </div>
   );
 }
@@ -105,7 +134,7 @@ async function Overview({
       latest: (await prisma.appMetricDaily.findFirst({
         where: { appId: a.id },
         orderBy: { date: "desc" },
-      })) as MetricDaily | null,
+      })) as unknown as MetricDaily | null,
     })),
   );
 

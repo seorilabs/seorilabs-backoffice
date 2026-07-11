@@ -1,4 +1,10 @@
 import { isoDate } from "@/lib/ga4/datasets";
+import {
+  buildMetricCards,
+  platformSegments,
+  type DimCount,
+  type MetricBreakdowns,
+} from "@/lib/ga4/metric-shapes";
 
 // GA4 일별 스냅샷의 프레젠테이션 컴포넌트(순수). 대시보드/앱상세에서 공유.
 // 서버 컴포넌트에서 렌더 — 클라이언트 상태 없음(차트 라이브러리 미사용, tailwind 로 구현).
@@ -14,25 +20,82 @@ export interface MetricDaily {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  dauAndroid: number;
+  dauIos: number;
+  dauWeb: number;
+  raw: MetricBreakdowns | null;
 }
 
 const pct = (v: number | null): string => (v == null ? "—" : `${v}%`);
 
 export function MetricCards({ latest }: { latest: MetricDaily }) {
-  const cards: { label: string; value: string | number }[] = [
-    { label: "DAU", value: latest.dau },
-    { label: "신규", value: latest.newUsers },
-    { label: "D1 잔존", value: pct(latest.d1Pct) },
-    { label: "D7 잔존", value: pct(latest.d7Pct) },
-    { label: "engagement", value: `${latest.engagedUsers}명` },
-    { label: "광고 노출", value: latest.adImpressions },
-  ];
+  const cards = buildMetricCards(latest);
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {cards.map((c) => (
         <div key={c.label} className="rounded-lg border border-neutral-200 bg-white p-3">
           <div className="text-xs text-neutral-500">{c.label}</div>
           <div className="mt-1 text-2xl font-semibold text-neutral-900">{c.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 플랫폼 비중 막대(Android/iOS/Web) — 전용 컬럼 사용.
+const PLATFORM_CLS: Record<string, string> = {
+  Android: "bg-emerald-500",
+  iOS: "bg-sky-500",
+  Web: "bg-violet-500",
+};
+
+export function PlatformSplit({ latest }: { latest: MetricDaily }) {
+  const { segs, total } = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb);
+  if (total === 0) {
+    return <div className="text-sm text-neutral-400">플랫폼 데이터 없음</div>;
+  }
+  return (
+    <div>
+      <div className="flex h-3 overflow-hidden rounded-full bg-neutral-100">
+        {segs.map((s) => (
+          <div
+            key={s.label}
+            className={PLATFORM_CLS[s.label]}
+            style={{ width: `${s.pct}%` }}
+            title={`${s.label} ${s.value}`}
+          />
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
+        {segs.map((s) => (
+          <span key={s.label} className="inline-flex items-center gap-1.5">
+            <span className={`inline-block h-2 w-2 rounded-full ${PLATFORM_CLS[s.label]}`} />
+            {s.label} <b className="text-neutral-800">{s.value}</b>
+            <span className="text-neutral-400">({s.pct}%)</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 차원 top-N 목록(국가/기기/OS) — 비중 막대 포함.
+export function TopDimList({ items, empty }: { items: DimCount[] | undefined; empty?: string }) {
+  if (!items || items.length === 0) {
+    return <div className="text-sm text-neutral-400">{empty ?? "데이터 없음"}</div>;
+  }
+  const max = Math.max(1, ...items.map((i) => i.dau));
+  return (
+    <div className="space-y-1.5">
+      {items.map((i) => (
+        <div key={i.k} className="flex items-center gap-2 text-sm">
+          <span className="w-28 shrink-0 truncate text-neutral-700" title={i.k}>
+            {i.k}
+          </span>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-100">
+            <div className="h-full rounded-full bg-neutral-400" style={{ width: `${(i.dau / max) * 100}%` }} />
+          </div>
+          <span className="w-12 shrink-0 text-right tabular-nums text-neutral-600">{i.dau}</span>
         </div>
       ))}
     </div>
@@ -75,7 +138,7 @@ export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
             <th className="px-3 py-2 text-right">신규</th>
             <th className="px-3 py-2 text-right">D1</th>
             <th className="px-3 py-2 text-right">D7</th>
-            <th className="px-3 py-2 text-right">engagement</th>
+            <th className="px-3 py-2 text-right">활성</th>
             <th className="px-3 py-2 text-right">광고노출</th>
           </tr>
         </thead>

@@ -41,6 +41,7 @@ import {
 } from "@/lib/core/release-ops";
 import { listVersionTags } from "@/lib/github/release";
 import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
+import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 
 interface TgFrom {
   id: number;
@@ -781,6 +782,21 @@ async function cmdMetricsDetail(chatId: number, slug: string): Promise<void> {
     .slice(0, 7)
     .reverse()
     .map((r) => `${isoDate(r.date).slice(5)}  DAU ${r.dau}`);
+
+  // 플랫폼 비중(0 인 것 제외).
+  const platform = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
+    .segs.map((s) => `${s.label} ${s.value}`)
+    .join(" · ");
+
+  // 국가 Top 3(raw JSON).
+  const bd = (latest.raw ?? {}) as MetricBreakdowns;
+  const countries = (bd.countries ?? [])
+    .slice(0, 3)
+    .map((c) => `${c.k} ${c.dau}`)
+    .join(" · ");
+
+  const rate = engagementRate(latest.engagedUsers, latest.dau);
+
   await sendMessage(
     chatId,
     [
@@ -788,14 +804,18 @@ async function cmdMetricsDetail(chatId: number, slug: string): Promise<void> {
       "",
       `DAU <b>${latest.dau}</b> · 신규 ${latest.newUsers}`,
       `잔존 D1 ${pctStr(latest.d1Pct)} · D3 ${pctStr(latest.d3Pct)} · D7 ${pctStr(latest.d7Pct)}`,
-      `engagement ${latest.engagedUsers}명${latest.avgEngageSec != null ? ` · 평균 ${latest.avgEngageSec}s` : ""}`,
+      `활성사용자 ${latest.engagedUsers}명 · 참여율 ${pctStr(rate)}${latest.avgEngageSec != null ? ` · 평균 ${latest.avgEngageSec}s` : ""}`,
+      platform ? `플랫폼 ${platform}` : null,
+      countries ? `국가 ${countries}` : null,
       `광고 노출 ${latest.adImpressions}`,
       "",
       `<b>DAU 추이(최근 ${trend.length}일)</b>`,
       esc(trend.join("\n")),
       "",
       `https://backoffice.vzyx.xyz/analytics?app=${app.slug}`,
-    ].join("\n"),
+    ]
+      .filter((l) => l !== null)
+      .join("\n"),
   );
 }
 
