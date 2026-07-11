@@ -10,7 +10,9 @@ import {
 } from "@/lib/ga4/datasets";
 import { contentSpecFor } from "@/lib/analytics/content-registry";
 import { ga4ContentSource } from "@/lib/ga4/content-metrics";
-import type { ContentMetricsSource } from "@/lib/analytics/content-source";
+import type { AppContentSpec } from "@/lib/analytics/content-spec";
+import type { ContentMetricsSource, ContentMetricSnapshot } from "@/lib/analytics/content-source";
+import type { Ga4Target } from "@/lib/ga4/datasets";
 import type { Prisma } from "@prisma/client";
 
 // 앱 컨텐츠 세부 지표 수집. 컨텐츠 스펙이 등록된 앱마다 최근 N일을 소스에서 집계해
@@ -29,6 +31,54 @@ export interface ContentCollectResult {
   errors: { slug: string; error: string }[];
 }
 
+export interface ContentCollectAppRow {
+  id: string;
+  slug: string;
+  firebaseProject: string | null;
+  ga4Dataset: string | null;
+}
+
+export interface ContentCollectTarget {
+  app: { id: string; slug: string };
+  target: Ga4Target;
+  spec: AppContentSpec;
+}
+
+/**
+ * 수집 대상 분류(순수). 컨텐츠 스펙이 등록되고 GA4 대상이 해석되는 앱만 target 으로,
+ * 나머지는 skipped 로 나눈다. 스펙 없는 앱은 컨텐츠 지표 수집에서 빠지고 공통 지표
+ * 수집에는 영향을 주지 않는다.
+ */
+export function classifyContentTargets(apps: ContentCollectAppRow[]): {
+  targets: ContentCollectTarget[];
+  skipped: string[];
+} {
+  const targets: ContentCollectTarget[] = [];
+  const skipped: string[] = [];
+  for (const app of apps) {
+    const spec = contentSpecFor(app.slug);
+    const target = resolveGa4Target(app);
+    if (!spec || !target) {
+      skipped.push(app.slug);
+      continue;
+    }
+    targets.push({ app: { id: app.id, slug: app.slug }, target, spec });
+  }
+  return { targets, skipped };
+}
+
+/** 스냅샷 → AppContentMetricDaily upsert 페이로드(순수, collectedAt 제외 필드 잠금). */
+export function buildContentUpsert(
+  snapshot: ContentMetricSnapshot,
+  now: Date,
+): { totalEvents: number; raw: Prisma.InputJsonValue; collectedAt: Date } {
+  return {
+    totalEvents: snapshot.totalEvents,
+    raw: snapshot as unknown as Prisma.InputJsonValue,
+    collectedAt: now,
+  };
+}
+
 export async function collectContentMetrics(
   now: Date,
   opts: { windowDays?: number; source?: ContentMetricsSource } = {},
@@ -45,25 +95,18 @@ export async function collectContentMetrics(
   const apps = await prisma.app.findMany({
     select: { id: true, slug: true, firebaseProject: true, ga4Dataset: true },
   });
+  const { targets, skipped } = classifyContentTargets(apps);
 
   const result: ContentCollectResult = {
     endDate: isoDate(end),
     windowDays,
-    targetApps: 0,
+    targetApps: targets.length,
     upserts: 0,
-    skipped: [],
+    skipped,
     errors: [],
   };
 
-  for (const app of apps) {
-    const spec = contentSpecFor(app.slug);
-    const target = resolveGa4Target(app);
-    // 컨텐츠 스펙이 없거나 GA4 대상이 없으면 컨텐츠 지표 수집에서 제외(공통 지표는 별도).
-    if (!spec || !target) {
-      result.skipped.push(app.slug);
-      continue;
-    }
-    result.targetApps++;
+  for (const { app, target, spec } of targets) {
     try {
       const byDate = await source.queryContentMetrics(
         { slug: app.slug, firebaseProject: target.firebaseProject, dataset: target.dataset },
@@ -73,11 +116,7 @@ export async function collectContentMetrics(
       );
       for (const [dateStr, snapshot] of Object.entries(byDate)) {
         const date = parseIsoDate(dateStr);
-        const data = {
-          totalEvents: snapshot.totalEvents,
-          raw: snapshot as unknown as Prisma.InputJsonValue,
-          collectedAt: now,
-        };
+        const data = buildContentUpsert(snapshot, now);
         await prisma.appContentMetricDaily.upsert({
           where: { appId_date: { appId: app.id, date } },
           create: { appId: app.id, date, ...data },

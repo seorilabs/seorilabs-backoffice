@@ -147,7 +147,8 @@ export function mapContentRows(rows: ContentSqlRow[], spec: AppContentSpec): Con
   for (const snap of Object.values(out)) {
     for (const key of Object.keys(snap.distributions)) {
       snap.distributions[key] = snap.distributions[key]
-        .sort((x, y) => y.count - x.count || x.k.localeCompare(y.k))
+        // 동률은 key 코드포인트 순(localeCompare 는 ICU/로케일에 따라 흔들려 테스트 비결정적).
+        .sort((x, y) => y.count - x.count || (x.k < y.k ? -1 : x.k > y.k ? 1 : 0))
         .slice(0, topNFor(spec, key));
     }
   }
