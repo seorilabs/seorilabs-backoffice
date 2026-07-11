@@ -175,19 +175,30 @@ export async function queryAdProbe(
       COUNTIF(event_name = 'ad_impression') AS ad_impressions,
       COUNTIF(event_name = 'ad_impression' AND ${AD_FORMAT} = 'rewarded') AS rewarded_impressions,
       COUNTIF(event_name = 'ad_impression' AND ${AD_VALUE} > 0) AS impressions_with_value,
-      ROUND(SUM(IF(event_name = 'ad_impression', ${AD_VALUE}, 0)), 4) AS est_revenue,
-      STRING_AGG(DISTINCT IF(event_name = 'ad_impression', ${AD_CURRENCY}, NULL)) AS currencies,
+      -- est_revenue 는 impressions_with_value 와 반드시 같은 부분집합(value>0)만 합산해야
+      -- 두 지표가 모순되지 않는다. value 없는 노출(COALESCE→0)까지 포함하지 않도록 조건 일치.
+      ROUND(SUM(IF(event_name = 'ad_impression' AND ${AD_VALUE} > 0, ${AD_VALUE}, 0)), 4) AS est_revenue,
+      -- currency 는 value>0 인 노출에서만 수집(수익 없는 빈 currency 문자열 혼입 방지).
+      STRING_AGG(DISTINCT IF(event_name = 'ad_impression' AND ${AD_VALUE} > 0 AND ${AD_CURRENCY} != '', ${AD_CURRENCY}, NULL)) AS currencies,
       COUNTIF(REGEXP_CONTAINS(event_name, ${AD_EVENT_RE})) AS broad_ad_events
     FROM ${from}
     WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'`;
   const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
-  const r = rows[0] ?? {};
+  return mapAdProbeRow(rows[0] ?? {});
+}
+
+/**
+ * BigQuery 응답 1행 → Ga4AdProbe 매핑(순수). SQL 조립과 분리해 회귀 테스트 가능하게 한다.
+ * currencies 는 빈 문자열/공백을 null 로 정규화(UI '추정수익' 셀 공백 표시 방지).
+ */
+export function mapAdProbeRow(r: Record<string, unknown>): Ga4AdProbe {
+  const currencies = r.currencies != null ? String(r.currencies).trim() : "";
   return {
     adImpressions: num(r.ad_impressions),
     rewardedImpressions: num(r.rewarded_impressions),
     impressionsWithValue: num(r.impressions_with_value),
     estRevenue: num(r.est_revenue),
-    currencies: r.currencies ? String(r.currencies) : null,
+    currencies: currencies || null,
     broadAdEvents: num(r.broad_ad_events),
   };
 }

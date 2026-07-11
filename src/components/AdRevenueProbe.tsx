@@ -46,6 +46,12 @@ export function AdRevenueProbe() {
             기준일 {data.endDate} · 최근 {data.windowDays}일
             {data.skipped.length > 0 && ` · 매핑없음 ${data.skipped.length}개 제외`}
           </div>
+          {!data.ga4Configured && (
+            <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              GA4 미설정(FEATURE_GA4_ANALYTICS + GA4_SA_KEY_JSON) — BigQuery 조회를 생략했습니다.
+              아래는 앱 매핑 현황만 표시합니다.
+            </p>
+          )}
           <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
             <table className="w-full min-w-[560px] text-sm">
               <thead>
