@@ -56,6 +56,11 @@ model App {
   releaseNotes ReleaseNote[]
   aiDrafts     AiDraft[]
   metrics      AppMetricDaily[]
+  // 콘텐츠 세부 지표(foam-party 전용 타입드).
+  levelMetrics        AppLevelMetricDaily[]
+  monetizationMetrics AppMonetizationDaily[]
+  missionMetrics      AppMissionMetricDaily[]
+  economyMetrics      AppEconomyMetricDaily[]
   // 게임 세부 지표(현재 crossword-puzzle 전용). 게임별 지표 모듈이 각자 관계를 추가한다.
   crosswordMetrics CrosswordMetricDaily[]
 
@@ -415,6 +420,102 @@ model AppMetricDaily {
   @@unique([appId, date])
   @@index([date])
   @@map("app_metric_daily")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 콘텐츠 세부 지표 (foam-party 타입드) — 콘텐츠 이벤트 일별 집계.
+// 소스: GA4→BigQuery(ContentMetricsSource 포트로 추상화, 자체 지표 서버로 교체 가능).
+// market = platform: android=Google Play, ios=App Store, web=AIT.
+// 시장별 1행 저장 → "통합" 뷰는 시장 합산으로 파생(이벤트 카운트 가산적). 기준일 D-1,
+// WINDOW 일 재집계로 지연 도착분 반영(멱등 upsert). 이벤트 없는 앱은 행이 없다.
+// ──────────────────────────────────────────────────────────────────────────
+
+// 레벨 퍼널: 레벨별 시작/완료/플레이어/평균 클리어시간·별/획득코인. 이탈 = starts-completes.
+model AppLevelMetricDaily {
+  id       String   @id @default(cuid())
+  appId    String
+  app      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date     DateTime @db.Date
+  platform String // 'android' | 'ios' | 'web'
+  level    Int
+
+  starts      Int    @default(0) // level_start 이벤트 수
+  completes   Int    @default(0) // level_complete 이벤트 수
+  players     Int    @default(0) // level_start 고유 사용자
+  avgClearSec Float? // level_complete time_sec 평균
+  avgStars    Float? // level_complete stars 평균
+  coinsEarned Int    @default(0) // level_complete coins_earned 합
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, platform, level])
+  @@index([appId, date])
+  @@map("app_level_metric_daily")
+}
+
+// 수익화 분포: 종류(skin|upgrade|foam_bomb)×아이템별 구매/소비 집계.
+model AppMonetizationDaily {
+  id       String   @id @default(cuid())
+  appId    String
+  app      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date     DateTime @db.Date
+  platform String
+  kind     String // 'skin' | 'upgrade' | 'foam_bomb'
+  itemKey  String // skin_id / tool / source(ad|coins)
+
+  count      Int @default(0) // 이벤트 수
+  users      Int @default(0) // 고유 사용자
+  coinsSpent Int @default(0) // cost 합(코인 소비)
+  adCount    Int @default(0) // 광고 소스 수(foam_bomb source=ad)
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, platform, kind, itemKey])
+  @@index([appId, date])
+  @@map("app_monetization_daily")
+}
+
+// 미션·리텐션 훅: 데일리 미션 타입별 클레임.
+model AppMissionMetricDaily {
+  id          String   @id @default(cuid())
+  appId       String
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date        DateTime @db.Date
+  platform    String
+  missionType String
+
+  claims      Int @default(0)
+  users       Int @default(0)
+  rewardCoins Int @default(0)
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, platform, missionType])
+  @@index([appId, date])
+  @@map("app_mission_metric_daily")
+}
+
+// 경제/재화 흐름: 하루 소스(획득)/싱크(소비) 합계(플랫폼별 1행).
+model AppEconomyMetricDaily {
+  id       String   @id @default(cuid())
+  appId    String
+  app      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date     DateTime @db.Date
+  platform String
+
+  coinsFromLevels   Int @default(0) // level_complete coins_earned 합
+  coinsFromMissions Int @default(0) // daily_mission_claim reward 합
+  coinsToUpgrades   Int @default(0) // upgrade_purchase cost 합
+  coinsToSkins      Int @default(0) // skin_purchase cost 합
+  coinsToFoamBombs  Int @default(0) // foam_bomb_use(source=coins) cost 합
+  foamBombAd        Int @default(0) // foam_bomb_use(source=ad) 수
+  foamBombCoin      Int @default(0) // foam_bomb_use(source=coins) 수
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, platform])
+  @@index([appId, date])
+  @@map("app_economy_metric_daily")
 }
 
 // ──────────────────────────────────────────────────────────────────────────

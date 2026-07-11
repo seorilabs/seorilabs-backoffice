@@ -13,6 +13,7 @@ import {
 import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels";
 import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
 import { isContentMetricsApp } from "@/lib/ga4/content-apps";
+import { parseMarket } from "@/lib/analytics/foam-content-shapes";
 
 // 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
 // (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
@@ -144,10 +145,11 @@ async function SelectedApp({
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
       {gameSection}
+      {/* 콘텐츠 세부 지표 — 콘텐츠 지표 대상 앱만(앱별 전용 섹션 디스패처) */}
       {isContentMetricsApp(slug) && (
         <div className="border-t border-neutral-200 pt-6">
           <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
-          <ContentMetricsSection appId={appId} />
+          <ContentMetricsSection appId={appId} slug={slug} market={parseMarket(market)} />
         </div>
       )}
     </div>

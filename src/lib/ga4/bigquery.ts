@@ -74,6 +74,12 @@ export async function runQuery<T>(project: string, dataset: string, sql: string)
   return rows as T[];
 }
 
+// 콘텐츠 지표 소스 어댑터(ga4/content-source.ts)가 재사용하는 공개 러너. 인증 클라이언트
+// + job location + maximumBytesBilled 방어를 이 파일에 가두고, SQL 은 호출부가 조립한다.
+export async function runGa4Query<T>(target: Ga4Target, sql: string): Promise<T[]> {
+  return runQuery<T>(target.firebaseProject, target.dataset, sql);
+}
+
 export function num(v: unknown): number {
   const n = typeof v === "object" && v !== null ? Number((v as { value: unknown }).value) : Number(v);
   return Number.isFinite(n) ? n : 0;

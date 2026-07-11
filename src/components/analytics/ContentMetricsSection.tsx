@@ -6,10 +6,35 @@ import {
   AdPlacementTable,
   FeatureFunnelPanels,
 } from "@/components/analytics/ContentMetricPanels";
+import { FoamContentSection } from "@/components/analytics/FoamContentSection";
+import type { Market } from "@/lib/analytics/foam-content-shapes";
 
-// happy-farm 콘텐츠 세부 지표 섹션(서버 컴포넌트). happy_farm_* 스냅샷의 최신 기준일
-// rows 를 테이블별로 읽어 콘텐츠 패널로 렌더한다. 각 테이블의 최신 기준일을 독립적으로
-// 잡아, 일부 차원이 비어도 나머지가 표시되도록 한다.
+// 콘텐츠 세부 지표 섹션 디스패처(서버 컴포넌트). 콘텐츠 지표는 앱마다 이벤트/차원이
+// 달라 앱별 전용 섹션으로 렌더한다. content-apps 레지스트리에 편입된 앱이 여기로 온다.
+//   - foam-party → FoamContentSection(레벨/수익화/미션/경제 + 마켓 통합·개별)
+//   - happy-farm → HappyFarmContentSection(작물/구역/기능퍼널/광고)
+export async function ContentMetricsSection({
+  appId,
+  slug,
+  market,
+}: {
+  appId: string;
+  slug: string;
+  market: Market | "all";
+}) {
+  // 디스패치는 오직 slug 기준. market 은 시장 분해를 지원하는 섹션(현재 foam-party)만
+  // 소비한다 — happy-farm 은 플랫폼 마켓을 다르게 다뤄(별도 포트) 시장 탭이 없으므로
+  // market 을 의도적으로 무시한다. 따라서 happy-farm 선택 상태의 ?market=... 은
+  // FoamContentSection 으로 잘못 라우팅되지 않는다(오직 slug 로만 분기).
+  if (slug === "foam-party") {
+    return <FoamContentSection appId={appId} slug={slug} market={market} />;
+  }
+  return <HappyFarmContentSection appId={appId} />;
+}
+
+// happy-farm 콘텐츠 세부 지표 섹션. happy_farm_* 스냅샷의 최신 기준일 rows 를 테이블별로
+// 읽어 콘텐츠 패널로 렌더한다. 각 테이블의 최신 기준일을 독립적으로 잡아, 일부 차원이
+// 비어도 나머지가 표시되도록 한다.
 
 async function latestDate(
   find: (args: { where: { appId: string }; orderBy: { date: "desc" }; select: { date: true } }) => Promise<{ date: Date } | null>,
@@ -19,7 +44,7 @@ async function latestDate(
   return r?.date ?? null;
 }
 
-export async function ContentMetricsSection({ appId }: { appId: string }) {
+async function HappyFarmContentSection({ appId }: { appId: string }) {
   const [cropDate, areaDate, funnelDate, adDate] = await Promise.all([
     latestDate((a) => prisma.happyFarmCropDaily.findFirst(a), appId),
     latestDate((a) => prisma.happyFarmAreaDaily.findFirst(a), appId),
