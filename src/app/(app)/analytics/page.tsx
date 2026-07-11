@@ -14,6 +14,11 @@ import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels
 import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
 import { isContentMetricsApp } from "@/lib/ga4/content-apps";
 import { parseMarket } from "@/lib/analytics/foam-content-shapes";
+// 범용(스펙 구동) 앱 컨텐츠 지표 섹션 — lucid-chess 등. happy-farm/foam/crossword 의
+// bespoke 섹션과 병렬로 공존한다.
+import { ContentSection } from "@/components/analytics/AppContentPanels";
+import { contentSpecFor } from "@/lib/analytics/content-registry";
+import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 
 // 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
 // (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
@@ -113,6 +118,7 @@ async function SelectedApp({
 
   return (
     <div className="space-y-6">
+      <ContentMetrics appId={appId} slug={slug} />
       <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">
           핵심 지표 <span className="text-neutral-400">(기준일 {isoDate(latest.date)})</span>
@@ -152,6 +158,34 @@ async function SelectedApp({
           <ContentMetricsSection appId={appId} slug={slug} market={parseMarket(market)} />
         </div>
       )}
+    </div>
+  );
+}
+
+// 앱 컨텐츠 세부 지표 섹션. 컨텐츠 스펙이 등록되고 수집된 스냅샷이 있을 때만 렌더한다.
+// 스펙 없는 앱은 공통 지표만 보이고 이 섹션은 조용히 생략된다.
+async function ContentMetrics({ appId, slug }: { appId: string; slug: string }) {
+  const spec = contentSpecFor(slug);
+  if (!spec) return null;
+  const row = await prisma.appContentMetricDaily.findFirst({
+    where: { appId },
+    orderBy: { date: "desc" },
+  });
+  if (!row) {
+    return (
+      <div>
+        <div className="mb-2 text-sm font-semibold text-neutral-700">컨텐츠 지표</div>
+        <Notice>수집된 컨텐츠 지표가 아직 없습니다. 다음 수집(10:15 KST) 이후 표시됩니다.</Notice>
+      </div>
+    );
+  }
+  const snapshot = row.raw as unknown as ContentMetricSnapshot;
+  return (
+    <div>
+      <div className="mb-2 text-sm font-semibold text-neutral-700">
+        컨텐츠 지표 <span className="text-neutral-400">(기준일 {isoDate(row.date)})</span>
+      </div>
+      <ContentSection spec={spec} snapshot={snapshot} />
     </div>
   );
 }

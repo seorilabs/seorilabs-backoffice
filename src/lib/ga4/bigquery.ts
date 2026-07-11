@@ -284,3 +284,4 @@ export async function queryCohortRetention(
     d7Pct: numOrNull(r.d7_pct),
   }));
 }
+
