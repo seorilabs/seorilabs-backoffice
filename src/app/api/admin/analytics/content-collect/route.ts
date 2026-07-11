@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
     { name: "happyFarm", result: happyFarm },
     { name: "foamParty", result: foamParty },
   ]);
-  return NextResponse.json({ ok, failed, happyFarm, foamParty });
+  // 부분/전체 실패는 HTTP 500 으로 내려 크론/모니터링이 상태코드로 감지하게 한다
+  // (본문엔 ok/failed + 개별 결과를 그대로 담아 진단 가능). 전부 성공이면 200.
+  return NextResponse.json({ ok, failed, happyFarm, foamParty }, { status: ok ? 200 : 500 });
 }
 
 // 각 수집기를 독립적으로 실행. 실패는 { error } 로 캡처(전체 500 대신 부분 결과 반환).

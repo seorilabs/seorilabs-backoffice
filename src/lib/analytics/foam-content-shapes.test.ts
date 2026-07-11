@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   marketOf,
   parseMarket,
+  buildMarketTabs,
   completionRate,
   weightedAvg,
   filterByMarket,
@@ -41,6 +42,27 @@ test("parseMarket: 유효 값은 그대로, 그 외/미지정은 all 폴백", ()
   assert.equal(parseMarket(undefined), "all");
   assert.equal(parseMarket("ANDROID"), "all"); // 대문자는 URL 계약상 무효 → 폴백
   assert.equal(parseMarket("bogus"), "all");
+});
+
+test("buildMarketTabs: 넘어온 slug 를 보존하고 통합/시장 URL 을 올바르게 만든다", () => {
+  const tabs = buildMarketTabs("foam-party", "ios");
+  assert.deepEqual(
+    tabs.map((t) => t.key),
+    ["all", "android", "ios", "web"],
+  );
+  const all = tabs.find((t) => t.key === "all")!;
+  const ios = tabs.find((t) => t.key === "ios")!;
+  assert.equal(all.href, "/analytics?app=foam-party"); // 통합 = ?app 만
+  assert.equal(ios.href, "/analytics?app=foam-party&market=ios"); // ?app..&market.. 계약
+  assert.equal(ios.active, true);
+  assert.equal(all.active, false);
+});
+
+test("buildMarketTabs: 다른 slug 컨텍스트를 덮어쓰지 않는다(하드코딩 없음)", () => {
+  const tabs = buildMarketTabs("happy-farm", "all");
+  // 모든 href 가 호출 slug(app=happy-farm)를 유지 — foam-party 로 점프하지 않음.
+  assert.ok(tabs.every((t) => t.href.includes("app=happy-farm")));
+  assert.ok(tabs.every((t) => !t.href.includes("app=foam-party")));
 });
 
 test("completionRate: 완료/시작 %, starts 0 이면 null", () => {

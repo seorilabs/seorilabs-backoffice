@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
-  MARKETS,
-  MARKET_LABEL,
+  buildMarketTabs,
   type Market,
   type LevelTotal,
   type MonetizationTotal,
@@ -24,19 +23,16 @@ export function MarketTabs({
   appSlug: string;
   selected: Market | "all";
 }) {
-  const base = `/analytics?app=${appSlug}`;
-  const tabs: { key: Market | "all"; label: string }[] = [
-    { key: "all", label: "통합" },
-    ...MARKETS.map((m) => ({ key: m, label: MARKET_LABEL[m] })),
-  ];
+  // href 조립은 순수 buildMarketTabs 로 위임(슬러그 보존 + `?app=..&market=..` 계약, 테스트로 고정).
+  const tabs = buildMarketTabs(appSlug, selected);
   return (
     <div className="flex flex-wrap gap-1.5">
       {tabs.map((t) => (
         <Link
           key={t.key}
-          href={t.key === "all" ? base : `${base}&market=${t.key}`}
+          href={t.href}
           className={`rounded px-2.5 py-1 text-xs font-medium transition ${
-            selected === t.key
+            t.active
               ? "bg-neutral-900 text-white"
               : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
           }`}

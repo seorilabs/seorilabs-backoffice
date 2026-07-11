@@ -21,6 +21,33 @@ export function parseMarket(v: string | undefined): Market | "all" {
   return v && (MARKETS as readonly string[]).includes(v) ? (v as Market) : "all";
 }
 
+export interface MarketTab {
+  key: Market | "all";
+  label: string;
+  href: string;
+  active: boolean;
+}
+
+/**
+ * 시장 탭 목록(순수). href 는 **넘어온 appSlug 를 그대로 보존**한다(하드코딩/덮어쓰기
+ * 없음 → 어떤 앱 컨텍스트에서도 자기 슬러그를 유지). base 가 이미 `?app=` 을 포함하므로
+ * 시장 탭은 `&market=` 로 이어붙여 유효한 쿼리스트링(`?app=..&market=..`)을 만든다.
+ * slug 는 URL 안전하게 인코딩한다.
+ */
+export function buildMarketTabs(appSlug: string, selected: Market | "all"): MarketTab[] {
+  const base = `/analytics?app=${encodeURIComponent(appSlug)}`;
+  const tabs: { key: Market | "all"; label: string }[] = [
+    { key: "all", label: "통합" },
+    ...MARKETS.map((m) => ({ key: m, label: MARKET_LABEL[m] })),
+  ];
+  return tabs.map((t) => ({
+    key: t.key,
+    label: t.label,
+    href: t.key === "all" ? base : `${base}&market=${t.key}`,
+    active: selected === t.key,
+  }));
+}
+
 /** GA4 platform(대문자) → market. 미지원 platform 은 null(집계 제외). */
 export function marketOf(platform: string): Market | null {
   switch (platform.trim().toUpperCase()) {

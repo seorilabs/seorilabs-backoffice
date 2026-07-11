@@ -22,6 +22,10 @@ export async function ContentMetricsSection({
   slug: string;
   market: Market | "all";
 }) {
+  // 디스패치는 오직 slug 기준. market 은 시장 분해를 지원하는 섹션(현재 foam-party)만
+  // 소비한다 — happy-farm 은 플랫폼 마켓을 다르게 다뤄(별도 포트) 시장 탭이 없으므로
+  // market 을 의도적으로 무시한다. 따라서 happy-farm 선택 상태의 ?market=... 은
+  // FoamContentSection 으로 잘못 라우팅되지 않는다(오직 slug 로만 분기).
   if (slug === "foam-party") {
     return <FoamContentSection appId={appId} slug={slug} market={market} />;
   }
