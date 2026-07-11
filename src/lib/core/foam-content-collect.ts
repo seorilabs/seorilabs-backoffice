@@ -10,14 +10,14 @@ import {
 } from "@/lib/ga4/datasets";
 import { foamGa4ContentSource } from "@/lib/ga4/foam-content-source";
 import type {
-  ContentMetricsSource,
+  FoamContentSource,
   ContentSourceApp,
   ContentDateWindow,
 } from "@/lib/analytics/foam-content-shapes";
 
 // 콘텐츠 세부 지표 수집. 대상 앱마다 최근 N일 콘텐츠 이벤트를 소스에서 조회해 typed
 // 모델(레벨/수익화/미션/경제)로 멱등 upsert. 공통 지표 수집(analytics-collect)과 같은
-// 야간 크론에서 이어 돈다. 소스는 ContentMetricsSource 포트로 주입 — 지금은 GA4/BigQuery,
+// 야간 크론에서 이어 돈다. 소스는 FoamContentSource 포트로 주입 — 지금은 GA4/BigQuery,
 // 나중에 자체 지표 서버로 교체해도 이 파일과 스키마·대시보드는 그대로다.
 //
 // GA4 export 지연 대비로 매일 최근 N일을 재집계한다(지연 도착분 반영). 콘텐츠 이벤트가
