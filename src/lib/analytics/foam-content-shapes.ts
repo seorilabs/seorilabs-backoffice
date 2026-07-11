@@ -16,6 +16,11 @@ export const MARKET_LABEL: Record<Market, string> = {
   web: "AIT",
 };
 
+/** URL ?market= 값 → Market | "all". 유효하지 않으면 "all"(통합)로 안전 폴백. */
+export function parseMarket(v: string | undefined): Market | "all" {
+  return v && (MARKETS as readonly string[]).includes(v) ? (v as Market) : "all";
+}
+
 /** GA4 platform(대문자) → market. 미지원 platform 은 null(집계 제외). */
 export function marketOf(platform: string): Market | null {
   switch (platform.trim().toUpperCase()) {

@@ -12,18 +12,13 @@ import {
 } from "@/components/analytics/MetricPanels";
 import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
 import { isContentMetricsApp } from "@/lib/ga4/content-apps";
-import { MARKETS, type Market } from "@/lib/analytics/foam-content-shapes";
+import { parseMarket, type Market } from "@/lib/analytics/foam-content-shapes";
 
 export const dynamic = "force-dynamic";
 
 const WINDOW = 28;
 
 const pct = (v: number | null): string => (v == null ? "—" : `${v}%`);
-
-// 마켓 필터 파싱(콘텐츠 섹션 통합/개별). foam-party 등 마켓 분해 지원 앱에서 사용.
-function parseMarket(v: string | undefined): Market | "all" {
-  return v && (MARKETS as readonly string[]).includes(v) ? (v as Market) : "all";
-}
 
 export default async function AnalyticsPage({
   searchParams,

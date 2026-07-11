@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   marketOf,
+  parseMarket,
   completionRate,
   weightedAvg,
   filterByMarket,
@@ -30,6 +31,16 @@ test("marketOf: SQL 이 내보내는 소문자 platform 경로도 정상 매핑"
   assert.equal(marketOf("android"), "android");
   assert.equal(marketOf("ios"), "ios");
   assert.equal(marketOf("web"), "web");
+});
+
+test("parseMarket: 유효 값은 그대로, 그 외/미지정은 all 폴백", () => {
+  assert.equal(parseMarket("android"), "android");
+  assert.equal(parseMarket("ios"), "ios");
+  assert.equal(parseMarket("web"), "web");
+  assert.equal(parseMarket("all"), "all");
+  assert.equal(parseMarket(undefined), "all");
+  assert.equal(parseMarket("ANDROID"), "all"); // 대문자는 URL 계약상 무효 → 폴백
+  assert.equal(parseMarket("bogus"), "all");
 });
 
 test("completionRate: 완료/시작 %, starts 0 이면 null", () => {
