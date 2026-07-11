@@ -10,6 +10,8 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
+import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
+import { isContentMetricsApp } from "@/lib/ga4/content-apps";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +57,7 @@ export default async function AnalyticsPage({
       {apps.length === 0 ? (
         <Notice>GA4 지표 대상 앱이 없습니다. (App.ga4Dataset 매핑 또는 fallback 표 확인)</Notice>
       ) : selected ? (
-        <SelectedApp appId={selected.id} name={selected.displayName} />
+        <SelectedApp appId={selected.id} name={selected.displayName} slug={selected.slug} />
       ) : (
         <Overview apps={apps} />
       )}
@@ -63,7 +65,7 @@ export default async function AnalyticsPage({
   );
 }
 
-async function SelectedApp({ appId, name }: { appId: string; name: string }) {
+async function SelectedApp({ appId, name, slug }: { appId: string; name: string; slug: string }) {
   const rowsDesc = (await prisma.appMetricDaily.findMany({
     where: { appId },
     orderBy: { date: "desc" },
@@ -110,6 +112,12 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+      {isContentMetricsApp(slug) && (
+        <div className="border-t border-neutral-200 pt-6">
+          <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
+          <ContentMetricsSection appId={appId} />
+        </div>
+      )}
     </div>
   );
 }
