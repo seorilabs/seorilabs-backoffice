@@ -7,10 +7,13 @@
 ALTER TABLE `app_content_metric_daily`
     ADD COLUMN `market` VARCHAR(191) NOT NULL DEFAULT 'all';
 
--- 유니크 키를 (appId, date) → (appId, date, market) 로 교체
-DROP INDEX `app_content_metric_daily_appId_date_key` ON `app_content_metric_daily`;
+-- 유니크 키를 (appId, date) → (appId, date, market) 로 교체.
+-- 순서 주의: 기존 (appId, date) 유니크 인덱스가 appId 외래키(app_content_metric_daily_appId_fkey)를
+-- 백업하는 유일한 인덱스라, 먼저 DROP 하면 MySQL(InnoDB)이 거부한다(errno 1553). 새 (appId, date,
+-- market) 유니크 인덱스를 먼저 만들어(appId 가 선두라 FK 를 백업 가능) 그 다음 기존 인덱스를 드롭한다.
 CREATE UNIQUE INDEX `app_content_metric_daily_appId_date_market_key`
     ON `app_content_metric_daily`(`appId`, `date`, `market`);
+DROP INDEX `app_content_metric_daily_appId_date_key` ON `app_content_metric_daily`;
 
 -- DropTable: crossword 전용 표(범용 스냅샷으로 이관)
 DROP TABLE IF EXISTS `crossword_metric_daily`;
