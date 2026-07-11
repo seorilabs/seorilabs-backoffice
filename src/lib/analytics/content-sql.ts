@@ -63,7 +63,7 @@ function numberParam(param: string): string {
   );
 }
 
-const OP_SQL: Record<ContentPredicate["op"], string> = {
+const OP_SQL: Record<Exclude<ContentPredicate["op"], "truthy">, string> = {
   eq: "=",
   ne: "!=",
   gt: ">",
@@ -72,8 +72,24 @@ const OP_SQL: Record<ContentPredicate["op"], string> = {
   lte: "<=",
 };
 
-/** predicate → SQL 조건절(문자열/숫자 param 비교). */
+// 불리언 truthy 검사. web/RN Firebase SDK 가 string 'true'/'1' 또는 int 1 로 export 하는
+// 두 형식을 모두 참으로 인정한다(둘 다 없으면 FALSE).
+function truthyExpr(param: string): string {
+  const p = assertIdent(param, "predicate.param");
+  return (
+    `COALESCE(` +
+    `(SELECT LOWER(ep.value.string_value) IN ('true', '1') FROM UNNEST(event_params) ep WHERE ep.key = '${p}'), ` +
+    `(SELECT ep.value.int_value = 1 FROM UNNEST(event_params) ep WHERE ep.key = '${p}'), ` +
+    `FALSE)`
+  );
+}
+
+/** predicate → SQL 조건절(문자열/숫자 param 비교, 또는 불리언 truthy). */
 function predicateSql(p: ContentPredicate): string {
+  if (p.op === "truthy") return truthyExpr(p.param);
+  if (p.value == null) {
+    throw new Error(`predicate op '${p.op}' 는 value 필수: ${JSON.stringify(p)}`);
+  }
   const op = OP_SQL[p.op];
   if (typeof p.value === "number") {
     return `${numberParam(p.param)} ${op} ${p.value}`;

@@ -6,7 +6,7 @@ import type { AppContentSpec } from "@/lib/analytics/content-spec";
 //   - game_puzzle_start / game_first_input / game_progress / game_puzzle_complete / game_puzzle_abandon
 //   - game_hint_use(hint_type=hint|reveal_word|stuck_hint) / game_assist_ad(result=request|reward)
 //   - game_puzzle_complete: solve_time_sec, no_hint, first_try, difficulty
-// no_hint/first_try 는 불리언 파라미터(정수 1/0으로 전송) 가정. 문자열 전송 시 스펙 조정 필요.
+// no_hint/first_try 는 불리언 파라미터 — op:"truthy" 로 string 'true'/'1' 과 int 1 을 모두 인정.
 export const crosswordPuzzleContentSpec: AppContentSpec = {
   slug: "crossword-puzzle",
   market: {
@@ -30,8 +30,8 @@ export const crosswordPuzzleContentSpec: AppContentSpec = {
     { key: "completePlayers", label: "완료 사용자", event: "game_puzzle_complete", agg: "users" },
     // 풀이 성과.
     { key: "avgSolveTime", label: "평균 풀이시간", event: "game_puzzle_complete", agg: "avg", param: "solve_time_sec", unit: "초" },
-    { key: "noHintCompletes", label: "노힌트 완료", event: "game_puzzle_complete", agg: "count", where: [{ param: "no_hint", op: "eq", value: 1 }] },
-    { key: "firstTryCompletes", label: "첫도전 완료", event: "game_puzzle_complete", agg: "count", where: [{ param: "first_try", op: "eq", value: 1 }] },
+    { key: "noHintCompletes", label: "노힌트 완료", event: "game_puzzle_complete", agg: "count", where: [{ param: "no_hint", op: "truthy" }] },
+    { key: "firstTryCompletes", label: "첫도전 완료", event: "game_puzzle_complete", agg: "count", where: [{ param: "first_try", op: "truthy" }] },
     // 힌트/보조.
     { key: "hintUses", label: "힌트", event: "game_hint_use", agg: "count", where: [{ param: "hint_type", op: "eq", value: "hint" }] },
     { key: "revealUses", label: "정답 보기", event: "game_hint_use", agg: "count", where: [{ param: "hint_type", op: "eq", value: "reveal_word" }] },

@@ -43,6 +43,16 @@ test("buildContentSql: base 단일 스캔 + 종류별 UNION ALL + total", () => 
   assert.doesNotMatch(sql, /GROUPING SETS/);
 });
 
+test("buildContentSql: truthy predicate 는 string 'true'/'1' 과 int 1 을 모두 인정", () => {
+  const spec: AppContentSpec = {
+    slug: "b",
+    metrics: [{ key: "noHint", label: "노힌트", event: "done", agg: "count", where: [{ param: "no_hint", op: "truthy" }] }],
+  };
+  const sql = buildContentSql(spec, "`p.d.events_*`", "1", "2");
+  assert.match(sql, /LOWER\(ep\.value\.string_value\) IN \('true', '1'\)/);
+  assert.match(sql, /ep\.value\.int_value = 1/);
+});
+
 test("buildContentSql: 마켓 스펙은 market 컬럼 + GROUPING SETS", () => {
   const spec: AppContentSpec = {
     slug: "m",

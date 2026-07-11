@@ -15,12 +15,16 @@
 /** 지표 집계 방식. count=이벤트수, users=고유사용자수, sum/avg=param 수치 집계. */
 export type ContentAgg = "count" | "users" | "sum" | "avg";
 
-/** event_param 조건 필터(조건부 집계). 예: reason='not_ready', is_first=1. */
+/**
+ * event_param 조건 필터(조건부 집계). 예: reason='not_ready', is_first=1.
+ * op="truthy" 는 불리언 파라미터가 참인지 검사한다(웹/RN Firebase SDK 가 string 'true'/'1'
+ * 또는 int 1 로 export 하는 두 형식을 모두 허용). truthy 는 value 를 쓰지 않는다.
+ */
 export interface ContentPredicate {
   param: string;
-  op: "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
-  /** 문자열이면 string_value, 숫자면 수치값과 비교. */
-  value: string | number;
+  op: "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "truthy";
+  /** 비교값. 문자열이면 string_value, 숫자면 수치값과 비교. truthy 에서는 무시(생략 가능). */
+  value?: string | number;
 }
 
 /**
