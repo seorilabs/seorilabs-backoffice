@@ -10,8 +10,13 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
+import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels";
 import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
 import { isContentMetricsApp } from "@/lib/ga4/content-apps";
+
+// 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
+// (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
+const CROSSWORD_SLUG = "crossword-puzzle";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +27,7 @@ const pct = (v: number | null): string => (v == null ? "—" : `${v}%`);
 export default async function AnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ app?: string }>;
+  searchParams: Promise<{ app?: string; market?: string }>;
 }) {
   const sp = await searchParams;
 
@@ -57,7 +62,12 @@ export default async function AnalyticsPage({
       {apps.length === 0 ? (
         <Notice>GA4 지표 대상 앱이 없습니다. (App.ga4Dataset 매핑 또는 fallback 표 확인)</Notice>
       ) : selected ? (
-        <SelectedApp appId={selected.id} name={selected.displayName} slug={selected.slug} />
+        <SelectedApp
+          appId={selected.id}
+          name={selected.displayName}
+          slug={selected.slug}
+          market={sp.market}
+        />
       ) : (
         <Overview apps={apps} />
       )}
@@ -65,15 +75,36 @@ export default async function AnalyticsPage({
   );
 }
 
-async function SelectedApp({ appId, name, slug }: { appId: string; name: string; slug: string }) {
+async function SelectedApp({
+  appId,
+  name,
+  slug,
+  market,
+}: {
+  appId: string;
+  name: string;
+  slug: string;
+  market?: string;
+}) {
   const rowsDesc = (await prisma.appMetricDaily.findMany({
     where: { appId },
     orderBy: { date: "desc" },
     take: WINDOW,
   })) as unknown as MetricDaily[];
 
+  // 게임 세부 지표 섹션(현재 crossword-puzzle 전용). 공통 지표가 비어 있어도 노출한다.
+  const gameSection =
+    slug === CROSSWORD_SLUG ? (
+      <CrosswordGameSection appId={appId} appSlug={slug} market={market} />
+    ) : null;
+
   if (rowsDesc.length === 0) {
-    return <Notice>{name}의 수집된 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>;
+    return (
+      <div className="space-y-6">
+        <Notice>{name}의 수집된 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
+        {gameSection}
+      </div>
+    );
   }
   const latest = rowsDesc[0];
   const rowsAsc = [...rowsDesc].reverse();
@@ -112,6 +143,7 @@ async function SelectedApp({ appId, name, slug }: { appId: string; name: string;
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+      {gameSection}
       {isContentMetricsApp(slug) && (
         <div className="border-t border-neutral-200 pt-6">
           <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
