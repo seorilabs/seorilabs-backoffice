@@ -101,7 +101,7 @@ export interface ContentDateWindow {
   end: string; // "YYYYMMDD"
 }
 
-export interface ContentMetricsSource {
+export interface FoamContentSource {
   /** 진단/로그용 소스 이름(e.g. "ga4-bigquery"). */
   readonly name: string;
   queryLevels(app: ContentSourceApp, window: ContentDateWindow): Promise<LevelMetricRow[]>;

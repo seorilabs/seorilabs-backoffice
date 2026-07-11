@@ -13,7 +13,7 @@ import {
   type MonetizationRow,
   type MissionRow,
   type EconomyRow,
-} from "@/lib/analytics/content-shapes";
+} from "@/lib/analytics/foam-content-shapes";
 
 test("marketOf: GA4 platform → market, 미지원은 null", () => {
   assert.equal(marketOf("ANDROID"), "android");

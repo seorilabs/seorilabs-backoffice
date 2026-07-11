@@ -8,12 +8,12 @@ import {
   isoDate,
   parseIsoDate,
 } from "@/lib/ga4/datasets";
-import { ga4ContentSource } from "@/lib/ga4/content-source";
+import { foamGa4ContentSource } from "@/lib/ga4/foam-content-source";
 import type {
   ContentMetricsSource,
   ContentSourceApp,
   ContentDateWindow,
-} from "@/lib/analytics/content-shapes";
+} from "@/lib/analytics/foam-content-shapes";
 
 // 콘텐츠 세부 지표 수집. 대상 앱마다 최근 N일 콘텐츠 이벤트를 소스에서 조회해 typed
 // 모델(레벨/수익화/미션/경제)로 멱등 upsert. 공통 지표 수집(analytics-collect)과 같은
@@ -24,6 +24,9 @@ import type {
 // 없는 앱(예: foam-party 외 게임)은 소스가 빈 배열을 반환해 자연히 건너뛴다.
 
 const WINDOW_DAYS = 14;
+
+// 이 수집기가 담당하는 앱 slug(foam-party 콘텐츠 이벤트 카탈로그 채택 앱).
+const FOAM_CONTENT_SLUGS = ["foam-party"];
 
 // DB 쓰기 동시성 상한. 레벨 많은 앱은 (레벨×시장×일)로 수천 행이 될 수 있어 건별 순차
 // await 는 크론 maxDuration(300s)을 위협한다. 커넥션 풀을 넘지 않는 선에서 병렬화한다.
@@ -66,14 +69,14 @@ export interface ContentCollectResult {
   errors: { slug: string; error: string }[];
 }
 
-export async function collectContentMetrics(
+export async function collectFoamContentMetrics(
   now: Date,
-  opts: { windowDays?: number; source?: ContentMetricsSource } = {},
+  opts: { windowDays?: number; source?: FoamContentSource } = {},
 ): Promise<ContentCollectResult> {
   if (!env.ga4Configured()) {
     throw new Error("GA4 미설정 — FEATURE_GA4_ANALYTICS + GA4_SA_KEY_JSON 필요");
   }
-  const source = opts.source ?? ga4ContentSource;
+  const source = opts.source ?? foamGa4ContentSource;
   const windowDays = opts.windowDays ?? WINDOW_DAYS;
   const end = latestClosedDay(now); // D-1 UTC 자정
   const window: ContentDateWindow = {
@@ -81,7 +84,11 @@ export async function collectContentMetrics(
     end: toTableSuffix(end),
   };
 
+  // 이 콘텐츠 이벤트(level_*/skin_*/daily_mission_claim/foam_bomb_use)는 foam-party
+  // 전용이라 그 앱만 조회한다(다른 게임은 이벤트가 없어 빈 결과 — 스캔 낭비 방지).
+  // 레벨형 게임이 같은 카탈로그를 채택하면 여기에 slug 를 추가하면 자동 편입된다.
   const apps = await prisma.app.findMany({
+    where: { slug: { in: FOAM_CONTENT_SLUGS } },
     select: { id: true, slug: true, firebaseProject: true, ga4Dataset: true },
   });
 

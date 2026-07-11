@@ -8,7 +8,7 @@ import {
   type MissionTotal,
   type EconomyTotal,
   type MonetizationKind,
-} from "@/lib/analytics/content-shapes";
+} from "@/lib/analytics/foam-content-shapes";
 
 // 콘텐츠 세부 지표 프레젠테이션(순수, 서버 컴포넌트). 이미 시장 필터 + 롤업된 데이터를
 // 받는다. 차트 라이브러리 없이 tailwind 로 비중 막대만 그린다(공통 MetricPanels 와 동일 톤).
