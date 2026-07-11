@@ -1,6 +1,6 @@
 import { isoDate } from "@/lib/ga4/datasets";
 import {
-  engagementRate,
+  buildMetricCards,
   platformSegments,
   type DimCount,
   type MetricBreakdowns,
@@ -29,16 +29,7 @@ export interface MetricDaily {
 const pct = (v: number | null): string => (v == null ? "—" : `${v}%`);
 
 export function MetricCards({ latest }: { latest: MetricDaily }) {
-  const cards: { label: string; value: string | number }[] = [
-    { label: "DAU", value: latest.dau },
-    { label: "신규", value: latest.newUsers },
-    { label: "활성사용자", value: `${latest.engagedUsers}명` },
-    { label: "참여율", value: pct(engagementRate(latest.engagedUsers, latest.dau)) },
-    { label: "D1 잔존", value: pct(latest.d1Pct) },
-    { label: "D7 잔존", value: pct(latest.d7Pct) },
-    { label: "평균 참여", value: latest.avgEngageSec == null ? "—" : `${latest.avgEngageSec}s` },
-    { label: "광고 노출", value: latest.adImpressions },
-  ];
+  const cards = buildMetricCards(latest);
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {cards.map((c) => (
@@ -147,7 +138,7 @@ export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
             <th className="px-3 py-2 text-right">신규</th>
             <th className="px-3 py-2 text-right">D1</th>
             <th className="px-3 py-2 text-right">D7</th>
-            <th className="px-3 py-2 text-right">engagement</th>
+            <th className="px-3 py-2 text-right">활성</th>
             <th className="px-3 py-2 text-right">광고노출</th>
           </tr>
         </thead>

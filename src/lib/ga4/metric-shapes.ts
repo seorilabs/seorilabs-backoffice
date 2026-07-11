@@ -81,6 +81,76 @@ export function engagementRate(engagedUsers: number, dau: number): number | null
   return Math.round((engagedUsers / dau) * 1000) / 10;
 }
 
+// 수집 조립용 최소 활동/잔존 필드(BigQuery Ga4DailyRow·clampRetention 결과의 부분집합).
+export interface DailyActivityCore {
+  dau: number;
+  newUsers: number;
+  engagedUsers: number;
+  avgEngageSec: number | null;
+  adEventUsers: number;
+  adImpressions: number;
+}
+export interface RetentionCore {
+  d1Pct: number | null;
+  d3Pct: number | null;
+  d7Pct: number | null;
+}
+
+/**
+ * 활동+잔존+차원분해 → AppMetricDaily upsert 데이터(순수, collectedAt 제외).
+ * 플랫폼 DAU 전용 컬럼과 국가/기기/OS top-N raw JSON 배치를 잠근다.
+ */
+export function assembleDailyMetric(
+  activity: DailyActivityCore,
+  retention: RetentionCore,
+  dims: DayDims | undefined,
+): DailyActivityCore &
+  RetentionCore & { dauAndroid: number; dauIos: number; dauWeb: number; raw: MetricBreakdowns } {
+  const bd = buildDayBreakdown(dims);
+  return {
+    dau: activity.dau,
+    newUsers: activity.newUsers,
+    engagedUsers: activity.engagedUsers,
+    avgEngageSec: activity.avgEngageSec,
+    adEventUsers: activity.adEventUsers,
+    adImpressions: activity.adImpressions,
+    dauAndroid: bd.dauAndroid,
+    dauIos: bd.dauIos,
+    dauWeb: bd.dauWeb,
+    raw: bd.raw,
+    d1Pct: retention.d1Pct,
+    d3Pct: retention.d3Pct,
+    d7Pct: retention.d7Pct,
+  };
+}
+
+// 핵심 지표 카드용 최소 필드(표시부 MetricDaily 가 satisfy).
+export interface CoreMetricCard {
+  dau: number;
+  newUsers: number;
+  engagedUsers: number;
+  avgEngageSec: number | null;
+  d1Pct: number | null;
+  d7Pct: number | null;
+  adImpressions: number;
+}
+
+const pctLabel = (v: number | null): string => (v == null ? "—" : `${v}%`);
+
+/** 핵심 지표 카드 배열(순수, 라벨/포맷 잠금). engagement→활성사용자, 참여율 신규. */
+export function buildMetricCards(m: CoreMetricCard): { label: string; value: string | number }[] {
+  return [
+    { label: "DAU", value: m.dau },
+    { label: "신규", value: m.newUsers },
+    { label: "활성사용자", value: `${m.engagedUsers}명` },
+    { label: "참여율", value: pctLabel(engagementRate(m.engagedUsers, m.dau)) },
+    { label: "D1 잔존", value: pctLabel(m.d1Pct) },
+    { label: "D7 잔존", value: pctLabel(m.d7Pct) },
+    { label: "평균 참여", value: m.avgEngageSec == null ? "—" : `${m.avgEngageSec}s` },
+    { label: "광고 노출", value: m.adImpressions },
+  ];
+}
+
 export interface PlatformSeg {
   label: string;
   value: number;
