@@ -5,6 +5,11 @@
 //
 // lizard-tycoon 은 dataset 은 확인됐으나 BigQuery 읽기 SA 키가 아직 미발급이다.
 // 키가 준비되면(SA 에 dataViewer+jobUser 부여) 별도 변경 없이 자동으로 수집된다.
+//
+// foam-party 는 propertyId(542197312)를 레포 firebase.config.json 에서 확인했다.
+// 다만 config 상 eventDeliveryStatus=not-confirmed(BigQuery export 데이터셋 미확인)라
+// GA4→BigQuery export 가 아직 활성화 전일 수 있다. export 가 켜지면 별도 변경 없이 수집된다.
+// (설정 > "광고/수익 export 진단" 으로 실동작 확인)
 
 export interface Ga4Target {
   /** BigQuery 프로젝트(= Firebase project id). job 실행/billing 대상. */
@@ -18,6 +23,7 @@ const FALLBACK: Record<string, Ga4Target> = {
   "crossword-puzzle": { firebaseProject: "crossword-puzzle-79ae0", dataset: "analytics_539639687" },
   "happy-farm": { firebaseProject: "happy-farm-tycoon", dataset: "analytics_539626577" },
   "lizard-tycoon": { firebaseProject: "lizard-tycoon", dataset: "analytics_544016233" },
+  "foam-party": { firebaseProject: "foam-party", dataset: "analytics_542197312" },
 };
 
 export interface AppGa4Fields {
