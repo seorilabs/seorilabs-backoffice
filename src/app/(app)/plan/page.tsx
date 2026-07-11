@@ -14,7 +14,7 @@ export default async function PlanPage() {
   const aiEnabled = env.minimaxConfigured();
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">기획 입력</h1>
       <p className="mt-1 mb-6 text-sm text-neutral-500">
         입력 내용은 GitHub Issue 로 생성되어(seorilabs_execution_task 필드 매핑) 미러에 수렴합니다.

@@ -130,7 +130,7 @@ export function PlanForm({
           <p className="mt-1 text-xs text-violet-600">AI 기획 초안 생성중… (최대 수십초)</p>
         )}
       </Field>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Market">
           <input className="input" value={form.market} onChange={(e) => set("market", e.target.value)} />
         </Field>

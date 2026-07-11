@@ -122,10 +122,12 @@ export function Board({ apps: initial }: { apps: BoardApp[] }) {
 
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-      <div className="grid grid-cols-6 gap-3">
-        {STAGES.map((s) => (
-          <Column key={s} stage={s} apps={apps.filter((a) => a.stage === s)} />
-        ))}
+      <div className="-mx-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
+        <div className="grid min-w-[720px] grid-cols-6 gap-3">
+          {STAGES.map((s) => (
+            <Column key={s} stage={s} apps={apps.filter((a) => a.stage === s)} />
+          ))}
+        </div>
       </div>
     </DndContext>
   );

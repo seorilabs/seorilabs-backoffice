@@ -16,14 +16,14 @@ export default async function Dashboard() {
   };
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">대시보드</h1>
       <p className="mt-1 text-sm text-neutral-500">
         앱/게임 {apps.length}개 · 전체 라이프사이클 현황
       </p>
 
       {/* 단계별 카운트 */}
-      <div className="mt-6 grid grid-cols-6 gap-3">
+      <div className="mt-6 grid grid-cols-3 gap-3 sm:grid-cols-6">
         {STAGES.map((s) => {
           const count = apps.filter((a) => a.stage === s).length;
           return (

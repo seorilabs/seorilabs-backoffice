@@ -23,7 +23,7 @@ export default async function SettingsPage() {
     ]);
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">설정</h1>
 
       <section className="mt-6 max-w-xl space-y-4">
