@@ -27,6 +27,14 @@ test("resolveGa4Target 는 DB 값이 없으면 fallback 표를 쓴다", () => {
   });
 });
 
+test("resolveGa4Target 는 foam-party fallback 매핑을 반환한다(키 오타/dataset 회귀 방지)", () => {
+  const t = resolveGa4Target({ slug: "foam-party", firebaseProject: null, ga4Dataset: null });
+  assert.deepEqual(t, {
+    firebaseProject: "foam-party",
+    dataset: "analytics_542197312",
+  });
+});
+
 test("resolveGa4Target 는 매핑 없는 앱에 null 을 준다", () => {
   assert.equal(
     resolveGa4Target({ slug: "unknown-app", firebaseProject: null, ga4Dataset: null }),
