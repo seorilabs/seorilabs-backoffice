@@ -129,9 +129,23 @@ export async function collectAppContentMetrics(
         result.upserts++;
       }
     } catch (e) {
-      result.errors.push({ slug: app.slug, error: (e as Error).message.slice(0, 300) });
+      // 원문 에러(BigQuery/SQL 내부 사정 등)는 서버 로그로만 보내고, admin 응답에는
+      // slug + 안정적인 분류 코드만 담는다(내부 세부정보 유출 방지).
+      console.error(`[app-content-metrics-collect] ${app.slug} 수집 실패:`, e);
+      result.errors.push({ slug: app.slug, error: classifyCollectError(e) });
     }
   }
 
   return result;
+}
+
+// 수집 예외를 응답용 안정 코드로 분류(원문 메시지 미노출). 운영자는 코드로 원인 유형을
+// 파악하고, 상세는 서버 로그에서 확인한다.
+export function classifyCollectError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/GA4 대상 미해석|firebaseProject|dataset/.test(msg)) return "ga4_target_unresolved";
+  if (/GA4_SA_KEY_JSON|credentials|권한|permission|denied/i.test(msg)) return "ga4_auth";
+  if (/location/i.test(msg)) return "ga4_location";
+  if (/maximumBytesBilled|bytes|quota|limit/i.test(msg)) return "bigquery_limit";
+  return "collect_failed";
 }

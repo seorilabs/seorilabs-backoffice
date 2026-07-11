@@ -120,8 +120,14 @@ function topNFor(spec: AppContentSpec, key: string): number {
 }
 
 /**
- * 통합 행들을 date → 스냅샷으로 피벗(순수). 분포는 count 내림차순(동률 key 사전순)
- * 상위 N 만 남긴다. 스펙에 있는 key 는 데이터가 없어도 초기값으로 존재한다.
+ * 통합 행들을 date → 스냅샷으로 피벗(순수). 분포는 count 내림차순(동률 key 코드포인트순)
+ * 상위 N 만 남긴다. 스펙에 있는 key 는 그 날 데이터가 없어도 초기값(빈 배열/0/null)으로 존재.
+ *
+ * 스펙 이벤트가 하루에 하나라도 있으면 'total' 행이 나와 그 날 스냅샷이 생성되고, 각
+ * metric 의 부분 zero 는 emptySnapshot 초기값으로 표현된다. 반면 스펙 이벤트가 아예 0건인
+ * 날은 base 가 비어 그 날짜 자체가 결과에서 빠진다(빈 스냅샷 upsert 안 함) — 의도된 동작이다.
+ * 대시보드는 최신 "데이터 있는" 날을 보여주는 편이 전(全)0 스냅샷보다 유용하고, 활동 없는
+ * 날까지 매일 빈 row 를 쌓지 않아 저장도 깔끔하다. (구간 내 활동일만 upsert)
  */
 export function mapContentRows(rows: ContentSqlRow[], spec: AppContentSpec): ContentMetricByDate {
   const out: ContentMetricByDate = {};

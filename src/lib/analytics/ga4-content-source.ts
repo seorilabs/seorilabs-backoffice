@@ -17,6 +17,18 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** BigQuery 원시 응답 행 → ContentSqlRow(순수). 컬럼 형변환/래핑값 처리를 잠근다. */
+export function mapRawContentRows(raw: Record<string, unknown>[]): ContentSqlRow[] {
+  return raw.map((r) => ({
+    date: String(r.date),
+    kind: String(r.kind),
+    metric: String(r.metric),
+    val: String(r.val ?? ""),
+    a: num(r.a),
+    b: num(r.b),
+  }));
+}
+
 export const ga4ContentSource: ContentMetricsSource = {
   async queryContentMetrics(
     target: ContentSourceTarget,
@@ -30,14 +42,6 @@ export const ga4ContentSource: ContentMetricsSource = {
     const fromExpr = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
     const sql = buildContentSql(spec, fromExpr, start, end);
     const raw = await runGa4Query<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
-    const rows: ContentSqlRow[] = raw.map((r) => ({
-      date: String(r.date),
-      kind: String(r.kind),
-      metric: String(r.metric),
-      val: String(r.val ?? ""),
-      a: num(r.a),
-      b: num(r.b),
-    }));
-    return mapContentRows(rows, spec);
+    return mapContentRows(mapRawContentRows(raw), spec);
   },
 };
