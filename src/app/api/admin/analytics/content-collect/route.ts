@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { collectContentMetrics } from "@/lib/core/content-metrics-collect";
 import { collectFoamContentMetrics } from "@/lib/core/foam-content-collect";
+import { summarizeContentCollect } from "@/lib/core/content-collect-summary";
 
 // 콘텐츠 세부 지표 수집 트리거(CronJob 이 호출). x-admin-token 보호.
 // 공통 지표 수집(analytics/collect) 이후에 돌려 GA4 export 착지분을 함께 집계한다.
@@ -18,8 +19,12 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const happyFarm = await settle(() => collectContentMetrics(now));
   const foamParty = await settle(() => collectFoamContentMetrics(now));
-  const ok = !("error" in happyFarm) || !("error" in foamParty);
-  return NextResponse.json({ ok, happyFarm, foamParty });
+  // 한 수집기라도 실패하면 ok=false(부분 실패를 정상으로 오인 방지). 개별 결과는 본문에 그대로.
+  const { ok, failed } = summarizeContentCollect([
+    { name: "happyFarm", result: happyFarm },
+    { name: "foamParty", result: foamParty },
+  ]);
+  return NextResponse.json({ ok, failed, happyFarm, foamParty });
 }
 
 // 각 수집기를 독립적으로 실행. 실패는 { error } 로 캡처(전체 500 대신 부분 결과 반환).

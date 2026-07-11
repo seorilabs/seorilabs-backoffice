@@ -23,6 +23,15 @@ test("marketOf: GA4 platform → market, 미지원은 null", () => {
   assert.equal(marketOf(""), null);
 });
 
+// 소스 어댑터 계약: foam-content-source 의 SQL 은 `LOWER(platform) AS market` 로
+// 소문자('android'|'ios'|'web')를 내보내고, 그 값이 marketOf 를 그대로 통과해야 한다.
+// (marketOf 가 입력을 대문자 정규화하므로 소문자 코드 경로도 null 로 떨어지지 않음.)
+test("marketOf: SQL 이 내보내는 소문자 platform 경로도 정상 매핑", () => {
+  assert.equal(marketOf("android"), "android");
+  assert.equal(marketOf("ios"), "ios");
+  assert.equal(marketOf("web"), "web");
+});
+
 test("completionRate: 완료/시작 %, starts 0 이면 null", () => {
   assert.equal(completionRate(200, 150), 75);
   assert.equal(completionRate(0, 0), null);

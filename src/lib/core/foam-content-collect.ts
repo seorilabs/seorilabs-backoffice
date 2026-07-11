@@ -33,8 +33,8 @@ const FOAM_CONTENT_SLUGS = ["foam-party"];
 const WRITE_CONCURRENCY = 8;
 
 // items 를 최대 limit 개씩 동시에 처리하고 완료 수를 반환. 하나라도 reject 하면 그대로
-// 전파(앱 단위 try/catch 가 errors 로 수집). 순서 무관(멱등 upsert).
-async function runPooled<T>(
+// 전파(앱 단위 try/catch 가 errors 로 수집). 순서 무관(멱등 upsert). export: 회귀 테스트용.
+export async function runPooled<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
