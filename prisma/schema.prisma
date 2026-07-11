@@ -519,3 +519,100 @@ enum VaultWriteStatus {
   DONE
   FAILED
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// happy-farm 콘텐츠 세부 지표 — 전용 일별 스냅샷(작물/구역/기능 퍼널/광고 placement)
+// 공통 지표(AppMetricDaily)와 별개로, "앱 안에서 무엇이 얼마나 소비되는가"를 콘텐츠
+// 차원(작물·구역·퍼널단계·placement)별로 집계한다. 지표 정의 단일 출처는
+// happy-farm docs/04-work/content-analytics.md. 수집기(content-metrics-collect)가
+// GA4→BigQuery 일별 export(D-1)를 쿼리해 앱×일자×차원키로 멱등 upsert 한다.
+//
+// 설계 메모: 여러 게임의 지표 작업이 동시에 진행되므로 App 모델을 건드리지 않도록
+// appId 는 FK relation 없이 String + index 로만 둔다(테이블 append 만으로 충돌 회피).
+// 참조 무결성은 수집기가 유효한 App.id 로만 upsert 하는 것으로 보장한다.
+// 테이블명은 happy_farm_* 로 게임 스코프를 명시해 타 게임 테이블과 충돌하지 않는다.
+// ──────────────────────────────────────────────────────────────────────────
+
+// 작물(crop) × 일자 — 심기/수확/매출/씨앗선택/첫수확/오늘의작물.
+model HappyFarmCropDaily {
+  id    String   @id @default(cuid())
+  appId String
+  date  DateTime @db.Date // 지표 기준일(D-1)
+  crop  String // balance.json crops[].key (미번역 stable key)
+
+  planted       Int   @default(0) // crop_planted
+  ready         Int   @default(0) // crop_ready
+  harvested     Int   @default(0) // crop_harvested
+  seedSelected  Int   @default(0) // seed_selected + first_seed_selected
+  firstHarvests Int   @default(0) // crop_harvested(is_first_crop_harvest)
+  cotdHarvests  Int   @default(0) // crop_of_the_day_harvested
+  harvesters    Int   @default(0) // 수확 고유 사용자
+  revenue       Float @default(0) // sum(crop_harvested.revenue)
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, crop])
+  @@index([appId, date])
+  @@map("happy_farm_crop_daily")
+}
+
+// 구역(area) × 일자 — 언락 시도/완료/비용, 구역 내 심기/수확.
+model HappyFarmAreaDaily {
+  id    String   @id @default(cuid())
+  appId String
+  date  DateTime @db.Date
+  area  String // balance.json areas[].key
+
+  unlockClicked Int   @default(0) // area_unlock_clicked
+  unlocked      Int   @default(0) // area_unlocked
+  planted       Int   @default(0) // crop_planted(area)
+  harvested     Int   @default(0) // crop_harvested(area)
+  unlockCostSum Float @default(0) // sum(area_unlocked.cost)
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, area])
+  @@index([appId, date])
+  @@map("happy_farm_area_daily")
+}
+
+// 기능 퍼널(onboarding/prestige/research/collection) × 단계 × 일자.
+model HappyFarmFunnelDaily {
+  id     String   @id @default(cuid())
+  appId  String
+  date   DateTime @db.Date
+  funnel String // 'onboarding' | 'prestige' | 'research' | 'collection'
+  step   String // 단계 키(onboarding step / node_key / reward_key / 'complete' 등)
+
+  count  Int @default(0) // 이벤트/발생 수(view)
+  users  Int @default(0) // 고유 사용자
+  skips  Int @default(0) // onboarding_skip (onboarding 전용, 그 외 0)
+  stalls Int @default(0) // onboarding_stall (onboarding 전용, 그 외 0)
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, funnel, step])
+  @@index([appId, date])
+  @@map("happy_farm_funnel_daily")
+}
+
+// 광고 placement × 일자 — 보상형 퍼널 카운트(정의는 ad-analytics.md 준수).
+model HappyFarmAdPlacementDaily {
+  id        String   @id @default(cuid())
+  appId     String
+  date      DateTime @db.Date
+  placement String // shop_gold_reward / shop_plot_discount / growth_ad_sheet / harvest_bonus_sheet
+
+  impressions   Int @default(0) // ad_reward_impression
+  clicks        Int @default(0) // ad_reward_click
+  completes     Int @default(0) // ad_reward_completed
+  fails         Int @default(0) // ad_reward_failed(all reasons)
+  failsNotReady Int @default(0) // ad_reward_failed(reason=not_ready) — fill 근사 분모
+  blocked       Int @default(0) // ad_limit_blocked
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, placement])
+  @@index([appId, date])
+  @@map("happy_farm_ad_placement_daily")
+}
