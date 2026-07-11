@@ -10,19 +10,12 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
-import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels";
-import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
-import { isContentMetricsApp } from "@/lib/ga4/content-apps";
-import { parseMarket } from "@/lib/analytics/foam-content-shapes";
-// 범용(스펙 구동) 앱 컨텐츠 지표 섹션 — lucid-chess 등. happy-farm/foam/crossword 의
-// bespoke 섹션과 병렬로 공존한다.
-import { ContentSection } from "@/components/analytics/AppContentPanels";
+// 범용(스펙 구동) 앱 컨텐츠 세부 지표 — 모든 게임의 단일 렌더러. lucid-chess/happy-farm/
+// foam-party/crossword-puzzle 등 스펙(content-registry)이 등록된 앱은 모두 이 경로로 렌더된다.
+import { ContentSection, ContentMarketTabs } from "@/components/analytics/AppContentPanels";
 import { contentSpecFor } from "@/lib/analytics/content-registry";
+import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
-
-// 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
-// (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
-const CROSSWORD_SLUG = "crossword-puzzle";
 
 export const dynamic = "force-dynamic";
 
@@ -98,17 +91,14 @@ async function SelectedApp({
     take: WINDOW,
   })) as unknown as MetricDaily[];
 
-  // 게임 세부 지표 섹션(현재 crossword-puzzle 전용). 공통 지표가 비어 있어도 노출한다.
-  const gameSection =
-    slug === CROSSWORD_SLUG ? (
-      <CrosswordGameSection appId={appId} appSlug={slug} market={market} />
-    ) : null;
+  // 컨텐츠 세부 지표 섹션(스펙 등록 앱만). 공통 지표가 비어 있어도 노출한다.
+  const contentSection = <ContentMetrics appId={appId} slug={slug} market={market} />;
 
   if (rowsDesc.length === 0) {
     return (
       <div className="space-y-6">
         <Notice>{name}의 수집된 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
-        {gameSection}
+        {contentSection}
       </div>
     );
   }
@@ -118,7 +108,6 @@ async function SelectedApp({
 
   return (
     <div className="space-y-6">
-      <ContentMetrics appId={appId} slug={slug} />
       <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">
           핵심 지표 <span className="text-neutral-400">(기준일 {isoDate(latest.date)})</span>
@@ -150,42 +139,42 @@ async function SelectedApp({
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
-      {gameSection}
-      {/* 콘텐츠 세부 지표 — 콘텐츠 지표 대상 앱만(앱별 전용 섹션 디스패처) */}
-      {isContentMetricsApp(slug) && (
-        <div className="border-t border-neutral-200 pt-6">
-          <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
-          <ContentMetricsSection appId={appId} slug={slug} market={parseMarket(market)} />
-        </div>
-      )}
+      {contentSection}
     </div>
   );
 }
 
-// 앱 컨텐츠 세부 지표 섹션. 컨텐츠 스펙이 등록되고 수집된 스냅샷이 있을 때만 렌더한다.
+// 앱 컨텐츠 세부 지표 섹션(스펙 구동 단일 경로). 컨텐츠 스펙이 등록된 앱만 렌더한다.
+// 스펙이 마켓을 선언하면 마켓 탭 + 선택 마켓 스냅샷을, 아니면 통합('all') 스냅샷을 보인다.
 // 스펙 없는 앱은 공통 지표만 보이고 이 섹션은 조용히 생략된다.
-async function ContentMetrics({ appId, slug }: { appId: string; slug: string }) {
+async function ContentMetrics({
+  appId,
+  slug,
+  market,
+}: {
+  appId: string;
+  slug: string;
+  market?: string;
+}) {
   const spec = contentSpecFor(slug);
   if (!spec) return null;
+  const selectedMarket = parseMarket(spec, market);
   const row = await prisma.appContentMetricDaily.findFirst({
-    where: { appId },
+    where: { appId, market: selectedMarket },
     orderBy: { date: "desc" },
   });
-  if (!row) {
-    return (
-      <div>
-        <div className="mb-2 text-sm font-semibold text-neutral-700">컨텐츠 지표</div>
-        <Notice>수집된 컨텐츠 지표가 아직 없습니다. 다음 수집(10:15 KST) 이후 표시됩니다.</Notice>
-      </div>
-    );
-  }
-  const snapshot = row.raw as unknown as ContentMetricSnapshot;
   return (
-    <div>
-      <div className="mb-2 text-sm font-semibold text-neutral-700">
-        컨텐츠 지표 <span className="text-neutral-400">(기준일 {isoDate(row.date)})</span>
+    <div className="border-t border-neutral-200 pt-6">
+      <div className="mb-3 text-sm font-semibold text-neutral-800">
+        컨텐츠 세부 지표{" "}
+        {row && <span className="font-normal text-neutral-400">(기준일 {isoDate(row.date)})</span>}
       </div>
-      <ContentSection spec={spec} snapshot={snapshot} />
+      <ContentMarketTabs spec={spec} appSlug={slug} selected={selectedMarket} />
+      {row ? (
+        <ContentSection spec={spec} snapshot={row.raw as unknown as ContentMetricSnapshot} />
+      ) : (
+        <Notice>수집된 컨텐츠 세부 지표가 아직 없습니다. 다음 수집(10:15 KST) 이후 표시됩니다.</Notice>
+      )}
     </div>
   );
 }

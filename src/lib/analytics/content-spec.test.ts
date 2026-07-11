@@ -2,18 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { specEvents, assertIdent, type AppContentSpec } from "@/lib/analytics/content-spec";
 import { contentSpecFor, contentSpecSlugs } from "@/lib/analytics/content-registry";
+import { buildContentSql } from "@/lib/analytics/content-sql";
 
-test("specEvents: 스펙 전반의 event 를 중복 없이 모은다", () => {
+test("specEvents: metrics/distributions/groups 의 event 를 중복 없이 모은다(배열 포함)", () => {
   const spec: AppContentSpec = {
     slug: "x",
-    distributions: [
-      { key: "a", label: "", event: "game_end", param: "outcome" },
-      { key: "b", label: "", event: "game_end", param: "difficulty" },
-    ],
-    counters: [{ key: "c", label: "", event: "hint_used" }],
-    measures: [{ key: "d", label: "", event: "game_end", param: "move_count", agg: "avg" }],
+    metrics: [{ key: "s", label: "", event: ["a", "b"], agg: "count" }],
+    distributions: [{ key: "d", label: "", event: "game_end", param: "outcome" }],
+    groups: [{ key: "g", label: "", param: "level", metrics: [{ key: "c", label: "", event: "game_end", agg: "count" }] }],
   };
-  assert.deepEqual(specEvents(spec).sort(), ["game_end", "hint_used"]);
+  assert.deepEqual(specEvents(spec).sort(), ["a", "b", "game_end"]);
 });
 
 test("assertIdent: 규격 밖 식별자는 던진다", () => {
@@ -22,25 +20,27 @@ test("assertIdent: 규격 밖 식별자는 던진다", () => {
   assert.throws(() => assertIdent("x'; DROP", "event"), /식별자 규격 위반/);
 });
 
-test("registry: lucid-chess 스펙이 등록되어 있고 이벤트 이름이 규격을 지킨다", () => {
-  const spec = contentSpecFor("lucid-chess");
-  assert.ok(spec, "lucid-chess 스펙 등록됨");
-  assert.ok(contentSpecSlugs().includes("lucid-chess"));
-  // 게임 레포 컨텐츠 이벤트 카탈로그와 계약을 공유하는 핵심 이벤트가 포함되는지.
-  const events = specEvents(spec!);
-  for (const e of ["game_end", "game_abandon", "hint_used", "streak_claim"]) {
-    assert.ok(events.includes(e), `${e} 포함`);
+test("registry: 4개 게임 스펙이 등록되어 있다", () => {
+  for (const slug of ["lucid-chess", "happy-farm", "foam-party", "crossword-puzzle"]) {
+    assert.ok(contentSpecFor(slug), `${slug} 스펙 등록됨`);
+    assert.ok(contentSpecSlugs().includes(slug));
   }
-  // 모든 이벤트/파라미터 키가 SQL 식별자 규격을 지켜 조립이 안전한지.
-  for (const d of spec!.distributions) {
-    assert.doesNotThrow(() => assertIdent(d.event, "event"));
-    assert.doesNotThrow(() => assertIdent(d.param, "param"));
-  }
-  for (const m of spec!.measures) {
-    assert.doesNotThrow(() => assertIdent(m.param, "param"));
+  assert.equal(contentSpecFor("no-such-app"), null);
+});
+
+test("registry: 모든 등록 스펙이 SQL 조립을 통과한다(식별자/값 규격 위반 없음)", () => {
+  for (const slug of contentSpecSlugs()) {
+    const spec = contentSpecFor(slug)!;
+    assert.doesNotThrow(
+      () => buildContentSql(spec, "`p.d.events_*`", "20260101", "20260107"),
+      `${slug} SQL 조립 실패`,
+    );
   }
 });
 
-test("registry: 미등록 앱은 null(컨텐츠 지표 대상 아님)", () => {
-  assert.equal(contentSpecFor("no-such-app"), null);
+test("registry: crossword/foam 은 마켓, happy-farm/lucid-chess 는 비마켓", () => {
+  assert.ok(contentSpecFor("crossword-puzzle")!.market);
+  assert.ok(contentSpecFor("foam-party")!.market);
+  assert.equal(contentSpecFor("happy-farm")!.market, undefined);
+  assert.equal(contentSpecFor("lucid-chess")!.market, undefined);
 });

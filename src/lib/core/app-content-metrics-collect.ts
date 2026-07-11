@@ -15,16 +15,13 @@ import type { ContentMetricsSource, ContentMetricSnapshot } from "@/lib/analytic
 import type { Ga4Target } from "@/lib/ga4/datasets";
 import type { Prisma } from "@prisma/client";
 
-// 앱 컨텐츠 세부 지표 수집(스펙 구동, 범용). 컨텐츠 스펙(src/lib/analytics/specs/*)이
-// 등록된 앱마다 최근 N일을 소스에서 집계해 AppContentMetricDaily 로 멱등 upsert 한다.
-// 소스는 ContentMetricsSource 포트 주입이라 지금은 GA4/BigQuery, 향후 자체 지표 서버로
-// 이 파일 밖에서 교체된다. GA4 export 지연 대비로 매일 최근 N일을 재집계한다.
-//
-// 주의: happy-farm 전용 bespoke 수집기(src/lib/core/content-metrics-collect.ts, 전용
-// HappyFarm*Daily 테이블)와는 별개의 병렬 서브시스템이다. 이쪽은 slug→스펙 레지스트리로
-// 어떤 앱이든 JSON 스냅샷 한 테이블에 담는 범용 경로다. 통합 여부는 후속 결정.
+// 앱 컨텐츠 세부 지표 수집(스펙 구동, 범용 — 모든 게임의 단일 경로). 컨텐츠 스펙
+// (src/lib/analytics/specs/*)이 등록된 앱마다 최근 N일을 소스에서 집계해 AppContentMetricDaily
+// 로 (앱×날짜×마켓) 멱등 upsert 한다. 마켓 미선언 스펙은 'all' 단일 행. 소스는
+// ContentMetricsSource 포트 주입이라 지금은 GA4/BigQuery, 향후 자체 지표 서버로 이 파일 밖에서
+// 교체된다. GA4 export 지연 대비로 매일 최근 N일을 재집계한다(멱등 upsert).
 
-const WINDOW_DAYS = 3;
+const WINDOW_DAYS = 14;
 
 export interface ContentCollectResult {
   endDate: string; // 최신 확정일(D-1)
@@ -112,21 +109,23 @@ export async function collectAppContentMetrics(
 
   for (const { app, target, spec } of targets) {
     try {
-      const byDate = await source.queryContentMetrics(
+      const byMarket = await source.queryContentMetrics(
         { slug: app.slug, firebaseProject: target.firebaseProject, dataset: target.dataset },
         spec,
         startSuffix,
         endSuffix,
       );
-      for (const [dateStr, snapshot] of Object.entries(byDate)) {
-        const date = parseIsoDate(dateStr);
-        const data = buildContentUpsert(snapshot, now);
-        await prisma.appContentMetricDaily.upsert({
-          where: { appId_date: { appId: app.id, date } },
-          create: { appId: app.id, date, ...data },
-          update: data,
-        });
-        result.upserts++;
+      for (const [market, byDate] of Object.entries(byMarket)) {
+        for (const [dateStr, snapshot] of Object.entries(byDate)) {
+          const date = parseIsoDate(dateStr);
+          const data = buildContentUpsert(snapshot, now);
+          await prisma.appContentMetricDaily.upsert({
+            where: { appId_date_market: { appId: app.id, date, market } },
+            create: { appId: app.id, date, market, ...data },
+            update: data,
+          });
+          result.upserts++;
+        }
       }
     } catch (e) {
       // 원문 에러(BigQuery/SQL 내부 사정 등)는 서버 로그로만 보내고, admin 응답에는

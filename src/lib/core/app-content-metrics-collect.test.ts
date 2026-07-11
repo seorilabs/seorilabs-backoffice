@@ -53,9 +53,9 @@ test("classifyContentTargets: 빈 입력은 빈 결과(공통 지표에 영향 �
 
 test("buildContentUpsert: totalEvents + raw 스냅샷 + collectedAt 잠금", () => {
   const snap: ContentMetricSnapshot = {
+    metrics: { hint: { value: 5, users: 3 }, avg_moves: { value: 40 } },
     distributions: { outcome: [{ k: "win", count: 3, users: 2 }] },
-    counters: { hint: { count: 5, users: 3 } },
-    measures: { avg_moves: 40 },
+    groups: { level: { "1": { starts: { value: 20, users: 15 } } } },
     totalEvents: 12,
   };
   const now = new Date("2026-07-11T00:00:00.000Z");
