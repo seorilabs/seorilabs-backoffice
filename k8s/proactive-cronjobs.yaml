@@ -218,3 +218,47 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+---
+# happy-farm 콘텐츠 세부 지표 수집 — BigQuery 를 쿼리해 happy_farm_* 스냅샷 upsert.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-content-metrics-collect
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "15 1 * * *" # 매일 01:15 UTC = 10:15 KST (공통 지표 수집 직후, 보고서 이전)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 330
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 300 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/analytics/content-collect
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

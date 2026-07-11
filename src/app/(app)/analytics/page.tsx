@@ -11,8 +11,11 @@ import {
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
 import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels";
+import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
+import { isContentMetricsApp } from "@/lib/ga4/content-apps";
 
 // 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
+// (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
 const CROSSWORD_SLUG = "crossword-puzzle";
 
 export const dynamic = "force-dynamic";
@@ -141,6 +144,12 @@ async function SelectedApp({
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
       {gameSection}
+      {isContentMetricsApp(slug) && (
+        <div className="border-t border-neutral-200 pt-6">
+          <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
+          <ContentMetricsSection appId={appId} />
+        </div>
+      )}
     </div>
   );
 }
