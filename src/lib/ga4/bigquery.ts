@@ -138,6 +138,71 @@ export async function queryDailyActivity(
   }));
 }
 
+// 광고/수익 진단 결과(앱×윈도우 합계 1행). AdMob↔GA4 연동 + 노출수준 수익 export
+// 활성 여부를 실데이터로 확인하기 위한 프로브 전용 타입. 지표 상시수집에는 쓰지 않는다.
+export interface Ga4AdProbe {
+  /** 표준 이벤트 ad_impression 수(실제 노출). */
+  adImpressions: number;
+  /** ad_format='rewarded' 노출 수(실제 시청한 리워드 광고). */
+  rewardedImpressions: number;
+  /** value 파라미터가 채워진 ad_impression 수(수익 export 동작 여부). */
+  impressionsWithValue: number;
+  /** ad_impression.value 합계(추정 광고수익). value 부재 시 0. */
+  estRevenue: number;
+  /** ad_impression.currency 고유값(쉼표 결합). 없으면 null. */
+  currencies: string | null;
+  /** 현재 "광고 노출" 지표와 동일한 광의 카운트(비교용). */
+  broadAdEvents: number;
+}
+
+// GA4 ad_impression 의 value 는 통상 double, 드물게 int 로 온다 → COALESCE.
+const AD_VALUE = "COALESCE((SELECT COALESCE(value.double_value, value.int_value) FROM UNNEST(event_params) WHERE key = 'value'), 0)";
+const AD_FORMAT = "(SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'ad_format')";
+const AD_CURRENCY = "(SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'currency')";
+
+/**
+ * 광고/수익 진단. ad_impression 이벤트와 노출수준 수익(value)이 실제로 export 되는지
+ * 실데이터로 확인한다. start/end 는 "YYYYMMDD".
+ */
+export async function queryAdProbe(
+  target: Ga4Target,
+  start: string,
+  end: string,
+): Promise<Ga4AdProbe> {
+  const from = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
+  const sql = `
+    SELECT
+      COUNTIF(event_name = 'ad_impression') AS ad_impressions,
+      COUNTIF(event_name = 'ad_impression' AND ${AD_FORMAT} = 'rewarded') AS rewarded_impressions,
+      COUNTIF(event_name = 'ad_impression' AND ${AD_VALUE} > 0) AS impressions_with_value,
+      -- est_revenue 는 impressions_with_value 와 반드시 같은 부분집합(value>0)만 합산해야
+      -- 두 지표가 모순되지 않는다. value 없는 노출(COALESCE→0)까지 포함하지 않도록 조건 일치.
+      ROUND(SUM(IF(event_name = 'ad_impression' AND ${AD_VALUE} > 0, ${AD_VALUE}, 0)), 4) AS est_revenue,
+      -- currency 는 value>0 인 노출에서만 수집(수익 없는 빈 currency 문자열 혼입 방지).
+      STRING_AGG(DISTINCT IF(event_name = 'ad_impression' AND ${AD_VALUE} > 0 AND ${AD_CURRENCY} != '', ${AD_CURRENCY}, NULL)) AS currencies,
+      COUNTIF(REGEXP_CONTAINS(event_name, ${AD_EVENT_RE})) AS broad_ad_events
+    FROM ${from}
+    WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'`;
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+  return mapAdProbeRow(rows[0] ?? {});
+}
+
+/**
+ * BigQuery 응답 1행 → Ga4AdProbe 매핑(순수). SQL 조립과 분리해 회귀 테스트 가능하게 한다.
+ * currencies 는 빈 문자열/공백을 null 로 정규화(UI '추정수익' 셀 공백 표시 방지).
+ */
+export function mapAdProbeRow(r: Record<string, unknown>): Ga4AdProbe {
+  const currencies = r.currencies != null ? String(r.currencies).trim() : "";
+  return {
+    adImpressions: num(r.ad_impressions),
+    rewardedImpressions: num(r.rewarded_impressions),
+    impressionsWithValue: num(r.impressions_with_value),
+    estRevenue: num(r.est_revenue),
+    currencies: currencies || null,
+    broadAdEvents: num(r.broad_ad_events),
+  };
+}
+
 /** 신규 코호트 잔존율(D1/D3/D7). 윈도우 내 첫 활동일을 코호트일로 근사. */
 export async function queryCohortRetention(
   target: Ga4Target,

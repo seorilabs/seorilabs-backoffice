@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { fmtDateTime } from "@/lib/format";
 import { SettingsActions } from "@/components/SettingsActions";
+import { AdRevenueProbe } from "@/components/AdRevenueProbe";
 import {
   visibleAppWhere,
   visibleIssueWhere,
@@ -41,6 +42,12 @@ export default async function SettingsPage() {
         <Card title="Allowlist">
           <Row k="ENV ALLOWLIST_LOGINS" v={env.allowlistLogins().join(", ") || "(없음)"} />
           <Row k="허용된 사용자(DB)" v={allowUsers.map((u) => `@${u.login}`).join(", ") || "(없음)"} />
+        </Card>
+      </section>
+
+      <section className="mt-4 max-w-3xl">
+        <Card title="광고/수익 지표 진단">
+          <AdRevenueProbe />
         </Card>
       </section>
     </div>
