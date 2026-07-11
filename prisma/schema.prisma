@@ -56,10 +56,13 @@ model App {
   releaseNotes ReleaseNote[]
   aiDrafts     AiDraft[]
   metrics      AppMetricDaily[]
+  // 콘텐츠 세부 지표(foam-party 전용 타입드).
   levelMetrics        AppLevelMetricDaily[]
   monetizationMetrics AppMonetizationDaily[]
   missionMetrics      AppMissionMetricDaily[]
   economyMetrics      AppEconomyMetricDaily[]
+  // 게임 세부 지표(현재 crossword-puzzle 전용). 게임별 지표 모듈이 각자 관계를 추가한다.
+  crosswordMetrics CrosswordMetricDaily[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -513,6 +516,58 @@ model AppEconomyMetricDaily {
   @@unique([appId, date, platform])
   @@index([appId, date])
   @@map("app_economy_metric_daily")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 게임 세부 지표 스냅샷(현재 crossword-puzzle 전용). AppMetricDaily 가 모든 앱 공통
+// 지표(DAU/잔존/광고)라면, 이 표는 게임 콘텐츠 지표(완료 퍼널·풀이 성과·힌트/보조·난이도)
+// 를 담는다. 앱이 core gameAnalytics 계약으로 보내는 game_* 이벤트를 GA4→BigQuery 에서
+// 집계해 매일(D-1) 멱등 upsert 한다. 대시보드는 이 스냅샷만 읽는다.
+//
+// market: 마켓통합('all') + 마켓개별('apps-in-toss'/'google-play'/'app-store') 을 각 행으로
+// 저장해, 한 조회로 통합/개별을 모두 낸다. breakdowns(JSON)에 난이도별 세부 지표를 둔다.
+// 다른 게임의 세부 지표는 각 게임 전용 표를 추가한다(이 표를 공유하지 않음 → 동시 작업 충돌 방지).
+// ──────────────────────────────────────────────────────────────────────────
+model CrosswordMetricDaily {
+  id     String   @id @default(cuid())
+  appId  String
+  app    App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date   DateTime @db.Date // 지표 기준일(YYYY-MM-DD)
+  market String // 'all' | 'apps-in-toss' | 'google-play' | 'app-store'
+
+  // 완료 퍼널(이벤트 카운트)
+  starts          Int @default(0) // game_puzzle_start
+  firstInputs     Int @default(0) // game_first_input
+  progressReaches Int @default(0) // game_progress(마일스톤 도달)
+  completes       Int @default(0) // game_puzzle_complete
+  abandons        Int @default(0) // game_puzzle_abandon
+
+  // 완료/풀이 성과
+  completionRatePct Float? // completes / starts * 100
+  avgSolveTimeSec   Float? // 완료 평균 풀이 시간(초)
+  noHintCompletes   Int    @default(0) // 힌트/정답보기 없이 완료
+  firstTryCompletes Int    @default(0) // 첫 도전에 완료
+
+  // 힌트/보조 사용
+  hintUses         Int @default(0) // game_hint_use(hint_type='hint')
+  revealUses       Int @default(0) // game_hint_use(hint_type='reveal_word')
+  stuckHintUses    Int @default(0) // game_hint_use(hint_type='stuck_hint')
+  assistAdRequests Int @default(0) // game_assist_ad(result='request')
+  assistAdRewards  Int @default(0) // game_assist_ad(result='reward')
+
+  // 고유 사용자(그룹 단위 distinct — rollup 도 정확)
+  players         Int @default(0) // 게임 이벤트 발생 고유 사용자
+  completePlayers Int @default(0) // 완료 고유 사용자
+
+  // 난이도(easy/normal/hard)별 세부 지표 — CrosswordBreakdowns
+  breakdowns Json?
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date, market])
+  @@index([appId, date])
+  @@index([date])
+  @@map("crossword_metric_daily")
 }
 
 // ──────────────────────────────────────────────────────────────────────────

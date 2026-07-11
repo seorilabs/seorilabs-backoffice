@@ -10,9 +10,14 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
+import { CrosswordGameSection } from "@/components/analytics/CrosswordGamePanels";
 import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
 import { isContentMetricsApp } from "@/lib/ga4/content-apps";
-import { parseMarket, type Market } from "@/lib/analytics/foam-content-shapes";
+import { parseMarket } from "@/lib/analytics/foam-content-shapes";
+
+// 게임 세부 지표 섹션을 가진 앱 slug → 섹션 컴포넌트. 게임이 늘면 여기에 추가한다.
+// (happy-farm 등 다른 게임은 content-apps 레지스트리 + ContentMetricsSection 사용)
+const CROSSWORD_SLUG = "crossword-puzzle";
 
 export const dynamic = "force-dynamic";
 
@@ -60,9 +65,9 @@ export default async function AnalyticsPage({
       ) : selected ? (
         <SelectedApp
           appId={selected.id}
-          slug={selected.slug}
           name={selected.displayName}
-          market={parseMarket(sp.market)}
+          slug={selected.slug}
+          market={sp.market}
         />
       ) : (
         <Overview apps={apps} />
@@ -73,14 +78,14 @@ export default async function AnalyticsPage({
 
 async function SelectedApp({
   appId,
-  slug,
   name,
+  slug,
   market,
 }: {
   appId: string;
-  slug: string;
   name: string;
-  market: Market | "all";
+  slug: string;
+  market?: string;
 }) {
   const rowsDesc = (await prisma.appMetricDaily.findMany({
     where: { appId },
@@ -88,8 +93,19 @@ async function SelectedApp({
     take: WINDOW,
   })) as unknown as MetricDaily[];
 
+  // 게임 세부 지표 섹션(현재 crossword-puzzle 전용). 공통 지표가 비어 있어도 노출한다.
+  const gameSection =
+    slug === CROSSWORD_SLUG ? (
+      <CrosswordGameSection appId={appId} appSlug={slug} market={market} />
+    ) : null;
+
   if (rowsDesc.length === 0) {
-    return <Notice>{name}의 수집된 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>;
+    return (
+      <div className="space-y-6">
+        <Notice>{name}의 수집된 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
+        {gameSection}
+      </div>
+    );
   }
   const latest = rowsDesc[0];
   const rowsAsc = [...rowsDesc].reverse();
@@ -128,12 +144,12 @@ async function SelectedApp({
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
-
+      {gameSection}
       {/* 콘텐츠 세부 지표 — 콘텐츠 지표 대상 앱만(앱별 전용 섹션 디스패처) */}
       {isContentMetricsApp(slug) && (
         <div className="border-t border-neutral-200 pt-6">
           <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
-          <ContentMetricsSection appId={appId} slug={slug} market={market} />
+          <ContentMetricsSection appId={appId} slug={slug} market={parseMarket(market)} />
         </div>
       )}
     </div>
