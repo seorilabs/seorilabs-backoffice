@@ -40,6 +40,7 @@ import {
   type Bump,
 } from "@/lib/core/release-ops";
 import { listVersionTags } from "@/lib/github/release";
+import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
 
 interface TgFrom {
   id: number;
@@ -67,9 +68,9 @@ export { BOT_COMMANDS } from "@/lib/telegram/commands";
 // 하단 고정 빠른 버튼.
 const QUICK_KEYBOARD = [
   ["📋 승인", "🔥 P1"],
-  ["📊 현황", "📝 기획"],
-  ["🐞 버그", "ℹ️ 도움말"],
-  ["🧹 초기화"],
+  ["📊 현황", "📈 지표"],
+  ["📝 기획", "🐞 버그"],
+  ["ℹ️ 도움말", "🧹 초기화"],
 ];
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/i;
@@ -108,6 +109,7 @@ function helpText(): string {
     "📋 승인 (<code>/approvals</code>) — 승인 대기 + 버튼 승인",
     "🔥 P1 (<code>/p1</code>) — 전 레포 P1 이슈",
     "📊 현황 (<code>/status</code>) — 앱 선택 → 상세",
+    "📈 지표 (<code>/metrics</code>) — GA4 DAU·잔존·광고 (앱 선택 → 상세)",
     "🧹 초기화 (<code>/reset</code>) — 대화 맥락 비우기",
     "ℹ️ 도움말 (<code>/help</code>) — 이 안내",
     "",
@@ -139,6 +141,8 @@ async function handleMessage(m: TgMessage): Promise<void> {
       return cmdP1(chatId);
     case "📊 현황":
       return cmdStatusList(chatId);
+    case "📈 지표":
+      return cmdMetricsList(chatId);
     case "📝 기획":
       return cmdPlanStart(chatId);
     case "🐞 버그":
@@ -185,6 +189,10 @@ async function handleMessage(m: TgMessage): Promise<void> {
     case "/status":
       if (args[0]) await cmdStatusDetail(chatId, args[0]);
       else await cmdStatusList(chatId);
+      break;
+    case "/metrics":
+      if (args[0]) await cmdMetricsDetail(chatId, args[0]);
+      else await cmdMetricsList(chatId);
       break;
     case "/plan":
       await cmdPlanStart(chatId);
@@ -496,6 +504,12 @@ async function handleCallback(cq: TgCallback): Promise<void> {
     return;
   }
 
+  if (action === "metrics" && rest[0] === "app") {
+    await answerCallback(cq.id);
+    if (cq.message) await cmdMetricsDetail(cq.message.chat.id, arg);
+    return;
+  }
+
   await answerCallback(cq.id);
 }
 
@@ -690,6 +704,97 @@ async function cmdStatusDetail(chatId: number, slug: string): Promise<void> {
       `열린 이슈 ${app.issues.length} (P1 ${p1}) · PR ${app.pullRequests.length}`,
       rel ? `최근 릴리스: ${esc(rel.version)} ${esc(rel.market)} ${esc(rel.status)}` : "릴리스 없음",
       `https://backoffice.vzyx.xyz/apps/${app.id}`,
+    ].join("\n"),
+  );
+}
+
+// ── /metrics: GA4 지표 조회(웹 analytics 와 동일한 AppMetricDaily 재사용) ──
+function pctStr(v: number | null): string {
+  return v == null ? "—" : `${v}%`;
+}
+
+// 지표 목록 — GA4 대상 앱별 최신 스냅샷 1줄 + 앱 선택 버튼(상세용).
+async function cmdMetricsList(chatId: number): Promise<void> {
+  const all = await prisma.app.findMany({
+    where: visibleAppWhere,
+    orderBy: { displayName: "asc" },
+    select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+  });
+  const apps = all.filter((a) => resolveGa4Target(a));
+  if (apps.length === 0) {
+    await sendMessage(chatId, "GA4 지표 대상 앱이 없습니다. (firebaseProject/dataset 매핑 필요)");
+    return;
+  }
+  const items = await Promise.all(
+    apps.map(async (a) => ({
+      app: a,
+      latest: await prisma.appMetricDaily.findFirst({
+        where: { appId: a.id },
+        orderBy: { date: "desc" },
+      }),
+    })),
+  );
+  const lines = items.map(({ app, latest }) =>
+    latest
+      ? `• <b>${esc(app.displayName)}</b> — DAU ${latest.dau} · 신규 ${latest.newUsers} · D1 ${pctStr(latest.d1Pct)} · D7 ${pctStr(latest.d7Pct)} <i>(${isoDate(latest.date)})</i>`
+      : `• <b>${esc(app.displayName)}</b> — <i>수집 데이터 없음</i>`,
+  );
+  const buttons = chunk2(
+    apps.map((a) => ({ text: a.displayName, callback_data: `metrics:app:${a.slug}` })),
+  );
+  await sendMessage(
+    chatId,
+    `<b>📈 앱 지표</b> (GA4 · 기준 D-1)\n${lines.join("\n")}\n\n앱을 선택하면 상세를 봅니다.`,
+    buttons,
+  );
+}
+
+// 지표 상세 — 최신 핵심 지표 + 최근 7일 DAU 추이.
+async function cmdMetricsDetail(chatId: number, slug: string): Promise<void> {
+  if (!SLUG_RE.test(slug)) {
+    await sendMessage(chatId, "잘못된 앱입니다. /metrics 다시 시도하세요.");
+    return;
+  }
+  const app = await prisma.app.findFirst({
+    where: { slug, ...visibleAppWhere },
+    select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+  });
+  if (!app) {
+    await sendMessage(chatId, `'${esc(slug)}' 앱을 찾을 수 없습니다.`);
+    return;
+  }
+  const rowsDesc = await prisma.appMetricDaily.findMany({
+    where: { appId: app.id },
+    orderBy: { date: "desc" },
+    take: 14,
+  });
+  if (rowsDesc.length === 0) {
+    const mapped = resolveGa4Target(app) != null;
+    await sendMessage(
+      chatId,
+      `<b>📈 ${esc(app.displayName)}</b>\n수집된 지표가 아직 없습니다.${mapped ? " (GA4 export 활성화 후 수집)" : "\nGA4 매핑이 없습니다(firebaseProject/dataset)."}`,
+    );
+    return;
+  }
+  const latest = rowsDesc[0];
+  const trend = rowsDesc
+    .slice(0, 7)
+    .reverse()
+    .map((r) => `${isoDate(r.date).slice(5)}  DAU ${r.dau}`);
+  await sendMessage(
+    chatId,
+    [
+      `<b>📈 ${esc(app.displayName)}</b> <i>(기준 ${isoDate(latest.date)})</i>`,
+      "",
+      `DAU <b>${latest.dau}</b> · 신규 ${latest.newUsers}`,
+      `잔존 D1 ${pctStr(latest.d1Pct)} · D3 ${pctStr(latest.d3Pct)} · D7 ${pctStr(latest.d7Pct)}`,
+      `engagement ${latest.engagedUsers}명${latest.avgEngageSec != null ? ` · 평균 ${latest.avgEngageSec}s` : ""}`,
+      `광고 노출 ${latest.adImpressions}`,
+      "",
+      `<b>DAU 추이(최근 ${trend.length}일)</b>`,
+      esc(trend.join("\n")),
+      "",
+      `https://backoffice.vzyx.xyz/analytics?app=${app.slug}`,
     ].join("\n"),
   );
 }

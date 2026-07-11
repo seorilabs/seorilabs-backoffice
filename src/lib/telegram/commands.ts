@@ -7,6 +7,7 @@ export const BOT_COMMANDS = [
   { command: "approvals", description: "승인 대기" },
   { command: "p1", description: "열린 P1 이슈" },
   { command: "status", description: "앱 현황" },
+  { command: "metrics", description: "앱 지표(DAU·잔존·광고)" },
   { command: "release", description: "릴리즈 태그 생성 + 출시노트" },
   { command: "deploy", description: "마켓 배포(태그 선택)" },
   { command: "save", description: "메모를 볼트 받은함에 저장" },
