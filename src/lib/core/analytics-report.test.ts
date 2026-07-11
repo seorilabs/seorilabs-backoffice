@@ -14,6 +14,9 @@ function row(date: string, over: Partial<MetricRow> = {}): MetricRow {
     avgEngageSec: 120,
     adEventUsers: 20,
     adImpressions: 45,
+    dauAndroid: 70,
+    dauIos: 30,
+    dauWeb: 0,
     ...over,
   };
 }

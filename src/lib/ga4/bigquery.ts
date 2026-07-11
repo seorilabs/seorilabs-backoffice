@@ -1,6 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { env } from "@/lib/env";
 import type { Ga4Target } from "@/lib/ga4/datasets";
+import type { Ga4BreakdownRow } from "@/lib/ga4/metric-shapes";
 
 // GA4 export → BigQuery 조회. SA 키 JSON(env)으로 인증하고, 대상 게임 프로젝트에서
 // job 을 실행한다(SA 는 각 프로젝트에 bigquery.dataViewer + jobUser 보유).
@@ -201,6 +202,42 @@ export function mapAdProbeRow(r: Record<string, unknown>): Ga4AdProbe {
     currencies: currencies || null,
     broadAdEvents: num(r.broad_ad_events),
   };
+}
+
+/**
+ * 날짜×차원별 DAU 분해(플랫폼/국가/기기카테고리/OS버전). start/end 는 "YYYYMMDD".
+ * events 를 한 번 스캔(CTE)해 4개 차원을 UNION ALL 로 집계한다. DAU 는 차원별 고유
+ * user_pseudo_id 라 차원마다 GROUP BY 가 필요하다(단순 합산 불가).
+ */
+export async function queryDailyBreakdowns(
+  target: Ga4Target,
+  start: string,
+  end: string,
+): Promise<Ga4BreakdownRow[]> {
+  const from = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
+  const sql = `
+    WITH base AS (
+      SELECT
+        FORMAT_DATE('%Y-%m-%d', PARSE_DATE('%Y%m%d', event_date)) AS date,
+        user_pseudo_id AS uid,
+        IFNULL(NULLIF(platform, ''), '(unknown)') AS platform,
+        IFNULL(NULLIF(geo.country, ''), '(unknown)') AS country,
+        IFNULL(NULLIF(device.category, ''), '(unknown)') AS device_cat,
+        NULLIF(TRIM(CONCAT(IFNULL(device.operating_system, ''), ' ', IFNULL(device.operating_system_version, ''))), '') AS os_ver
+      FROM ${from}
+      WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
+    )
+    SELECT date, 'platform' AS dim, platform AS val, COUNT(DISTINCT uid) AS dau FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'country', country, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'os', IFNULL(os_ver, '(unknown)'), COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+  return rows.map((r) => ({
+    date: String(r.date),
+    dim: String(r.dim),
+    val: String(r.val),
+    dau: num(r.dau),
+  }));
 }
 
 /** 신규 코호트 잔존율(D1/D3/D7). 윈도우 내 첫 활동일을 코호트일로 근사. */

@@ -12,8 +12,11 @@ import {
 import {
   queryDailyActivity,
   queryCohortRetention,
+  queryDailyBreakdowns,
   type Ga4CohortRow,
 } from "@/lib/ga4/bigquery";
+import { pivotBreakdownRows, buildDayBreakdown } from "@/lib/ga4/metric-shapes";
+import type { Prisma } from "@prisma/client";
 
 // GA4→BigQuery 일별 지표 수집. 대상 앱마다 최근 N일을 쿼리해 AppMetricDaily 로 멱등 upsert.
 // GA4 export 지연 대비로 매일 최근 N일을 재집계한다(지연 도착분 + 코호트 D7 확정 반영).
@@ -79,16 +82,19 @@ export async function collectMetrics(
     }
     result.targetApps++;
     try {
-      const [activity, cohort] = await Promise.all([
+      const [activity, cohort, breakdowns] = await Promise.all([
         queryDailyActivity(target, startSuffix, endSuffix),
         queryCohortRetention(target, startSuffix, endSuffix),
+        queryDailyBreakdowns(target, startSuffix, endSuffix),
       ]);
       const cohortByDate = new Map(cohort.map((c) => [c.date, c]));
+      const dimsByDate = pivotBreakdownRows(breakdowns);
 
       for (const a of activity) {
         const date = parseIsoDate(a.date);
         const age = daysBetween(end, date);
         const ret = clampRetention(cohortByDate.get(a.date), age);
+        const bd = buildDayBreakdown(dimsByDate[a.date]);
         const data = {
           dau: a.dau,
           newUsers: a.newUsers,
@@ -96,6 +102,10 @@ export async function collectMetrics(
           avgEngageSec: a.avgEngageSec,
           adEventUsers: a.adEventUsers,
           adImpressions: a.adImpressions,
+          dauAndroid: bd.dauAndroid,
+          dauIos: bd.dauIos,
+          dauWeb: bd.dauWeb,
+          raw: bd.raw as unknown as Prisma.InputJsonValue,
           d1Pct: ret.d1Pct,
           d3Pct: ret.d3Pct,
           d7Pct: ret.d7Pct,
