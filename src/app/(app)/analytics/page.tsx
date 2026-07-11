@@ -10,6 +10,10 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
+// happy-farm 전용(bespoke) 컨텐츠 지표 섹션
+import { ContentMetricsSection } from "@/components/analytics/ContentMetricsSection";
+import { isContentMetricsApp } from "@/lib/ga4/content-apps";
+// 범용(스펙 구동) 앱 컨텐츠 지표 섹션
 import { ContentSection } from "@/components/analytics/ContentPanels";
 import { contentSpecFor } from "@/lib/analytics/content-registry";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
@@ -114,6 +118,12 @@ async function SelectedApp({ appId, slug, name }: { appId: string; slug: string;
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+      {isContentMetricsApp(slug) && (
+        <div className="border-t border-neutral-200 pt-6">
+          <div className="mb-3 text-sm font-semibold text-neutral-800">콘텐츠 세부 지표</div>
+          <ContentMetricsSection appId={appId} />
+        </div>
+      )}
     </div>
   );
 }

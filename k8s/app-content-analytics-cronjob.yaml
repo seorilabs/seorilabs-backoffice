@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backoffice-content-analytics-collect
+  name: backoffice-app-content-analytics-collect
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
@@ -30,7 +30,7 @@ spec:
                 - >-
                   curl -fsS --max-time 300 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
-                  http://backoffice.platform.svc.cluster.local/api/admin/analytics/content-collect
+                  http://backoffice.platform.svc.cluster.local/api/admin/analytics/app-content-collect
               env:
                 - name: ADMIN_TOKEN
                   valueFrom:

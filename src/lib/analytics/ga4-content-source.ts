@@ -1,5 +1,5 @@
 import { runGa4Query } from "@/lib/ga4/bigquery";
-import { buildContentSql, mapContentRows, type ContentSqlRow } from "@/lib/ga4/content-shapes";
+import { buildContentSql, mapContentRows, type ContentSqlRow } from "@/lib/analytics/content-sql";
 import type { AppContentSpec } from "@/lib/analytics/content-spec";
 import type {
   ContentMetricByDate,

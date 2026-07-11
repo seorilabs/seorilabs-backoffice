@@ -4,11 +4,11 @@ import {
   classifyContentTargets,
   buildContentUpsert,
   type ContentCollectAppRow,
-} from "@/lib/core/content-metrics-collect";
+} from "@/lib/core/app-content-metrics-collect";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 
-// 수집 핵심 경로의 결정 로직(대상 분류 / upsert 페이로드)을 DB 없이 순수 검증한다.
-// (repo 관례: collect 는 pure 헬퍼만 유닛테스트, DB 오케스트레이션은 제외.)
+// 범용(스펙 구동) 컨텐츠 지표 수집의 결정 로직(대상 분류 / upsert 페이로드)을 DB 없이
+// 순수 검증한다. (repo 관례: collect 는 pure 헬퍼만 유닛테스트, DB 오케스트레이션 제외.)
 
 const lucid: ContentCollectAppRow = {
   id: "app_lucid",
@@ -28,7 +28,6 @@ test("classifyContentTargets: 스펙+GA4대상 앱만 target, 나머지는 skipp
   assert.equal(targets.length, 1);
   assert.equal(targets[0].app.slug, "lucid-chess");
   assert.equal(targets[0].spec.slug, "lucid-chess");
-  // fallback 표에서 GA4 대상이 해석되어야 한다.
   assert.ok(targets[0].target.firebaseProject);
   assert.ok(targets[0].target.dataset);
   assert.deepEqual(skipped, ["no-such-game"]);
@@ -63,6 +62,5 @@ test("buildContentUpsert: totalEvents + raw 스냅샷 + collectedAt 잠금", () 
   const data = buildContentUpsert(snap, now);
   assert.equal(data.totalEvents, 12);
   assert.equal(data.collectedAt, now);
-  // raw 는 스냅샷 원본을 그대로 보존한다.
   assert.deepEqual(data.raw, snap);
 });

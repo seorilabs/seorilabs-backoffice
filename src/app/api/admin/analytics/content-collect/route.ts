@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { collectContentMetrics } from "@/lib/core/content-metrics-collect";
 
-// 앱 컨텐츠 세부 지표 수집 트리거(CronJob 이 공통 지표 collect 직후 호출). x-admin-token
-// 보호. 공통 지표(AppMetricDaily) 수집과 독립적으로 실패해도 서로 영향 없도록 별도 route.
+// happy-farm 콘텐츠 세부 지표 수집 트리거(CronJob 이 호출). x-admin-token 보호.
+// 공통 지표 수집(analytics/collect) 이후에 돌려 GA4 export 착지분을 함께 집계한다.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
