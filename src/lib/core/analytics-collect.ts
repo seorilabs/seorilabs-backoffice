@@ -16,7 +16,23 @@ import {
   type Ga4CohortRow,
 } from "@/lib/ga4/bigquery";
 import { pivotBreakdownRows, assembleDailyMetric } from "@/lib/ga4/metric-shapes";
+import { collectCrosswordGameMetrics } from "@/lib/core/crossword-game-metrics";
 import type { Prisma } from "@prisma/client";
+
+// 게임 세부 지표 모듈이 붙는 앱들. 공통 지표(AppMetricDaily) 수집 뒤, 해당 앱만 게임 전용
+// 수집을 추가로 돌린다. 게임이 늘면 이 표에 (slug → 수집 함수)만 추가하면 된다.
+const GAME_METRIC_COLLECTORS: Record<
+  string,
+  (params: {
+    appId: string;
+    target: import("@/lib/ga4/datasets").Ga4Target;
+    startSuffix: string;
+    endSuffix: string;
+    now: Date;
+  }) => Promise<number>
+> = {
+  "crossword-puzzle": collectCrosswordGameMetrics,
+};
 
 // GA4→BigQuery 일별 지표 수집. 대상 앱마다 최근 N일을 쿼리해 AppMetricDaily 로 멱등 upsert.
 // GA4 export 지연 대비로 매일 최근 N일을 재집계한다(지연 도착분 + 코호트 D7 확정 반영).
@@ -28,6 +44,7 @@ export interface CollectResult {
   windowDays: number;
   targetApps: number; // GA4 대상 앱 수
   upserts: number; // 저장된 (앱×날짜) row 수
+  gameUpserts: number; // 게임 세부 지표로 저장된 (앱×날짜×마켓) row 수
   skipped: string[]; // 매핑 없어 제외된 앱 slug
   errors: { slug: string; error: string }[];
 }
@@ -70,6 +87,7 @@ export async function collectMetrics(
     windowDays,
     targetApps: 0,
     upserts: 0,
+    gameUpserts: 0,
     skipped: [],
     errors: [],
   };
@@ -112,6 +130,26 @@ export async function collectMetrics(
         slug: app.slug,
         error: (e as Error).message.slice(0, 300),
       });
+    }
+
+    // 게임 세부 지표(해당 앱만). 공통 지표와 독립적으로 실패 격리한다 — 게임 쿼리 실패가
+    // 공통 지표 수집을 되돌리지 않게 별도 try/catch.
+    const gameCollector = GAME_METRIC_COLLECTORS[app.slug];
+    if (gameCollector) {
+      try {
+        result.gameUpserts += await gameCollector({
+          appId: app.id,
+          target,
+          startSuffix,
+          endSuffix,
+          now,
+        });
+      } catch (e) {
+        result.errors.push({
+          slug: `${app.slug}:game`,
+          error: (e as Error).message.slice(0, 300),
+        });
+      }
     }
   }
 

@@ -12,6 +12,7 @@ export interface ContentMetricsApp {
 
 export const CONTENT_METRICS_APPS: ContentMetricsApp[] = [
   { slug: "happy-farm", label: "행복한 농장" },
+  { slug: "foam-party", label: "버블버블 폼파티" },
 ];
 
 const BY_SLUG = new Map(CONTENT_METRICS_APPS.map((a) => [a.slug, a]));

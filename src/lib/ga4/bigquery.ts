@@ -64,7 +64,7 @@ async function resolveLocation(project: string, dataset: string): Promise<string
 // 프루닝 실패/데이터 폭증/코드 버그)만 걸러내고 정상 쿼리는 영향받지 않는다.
 const MAX_BYTES_BILLED = env.optional("GA4_MAX_BYTES_BILLED", String(2 * 1024 ** 3));
 
-async function runQuery<T>(project: string, dataset: string, sql: string): Promise<T[]> {
+export async function runQuery<T>(project: string, dataset: string, sql: string): Promise<T[]> {
   const location = await resolveLocation(project, dataset);
   const [rows] = await clientFor(project).query({
     query: sql,
@@ -74,7 +74,13 @@ async function runQuery<T>(project: string, dataset: string, sql: string): Promi
   return rows as T[];
 }
 
-function num(v: unknown): number {
+// 콘텐츠 지표 소스 어댑터(ga4/content-source.ts)가 재사용하는 공개 러너. 인증 클라이언트
+// + job location + maximumBytesBilled 방어를 이 파일에 가두고, SQL 은 호출부가 조립한다.
+export async function runGa4Query<T>(target: Ga4Target, sql: string): Promise<T[]> {
+  return runQuery<T>(target.firebaseProject, target.dataset, sql);
+}
+
+export function num(v: unknown): number {
   const n = typeof v === "object" && v !== null ? Number((v as { value: unknown }).value) : Number(v);
   return Number.isFinite(n) ? n : 0;
 }
@@ -279,9 +285,3 @@ export async function queryCohortRetention(
   }));
 }
 
-// 컨텐츠 지표(content-metrics.ts)용 저수준 조회 진입점. 클라이언트/리전 해석/과금
-// 상한 등 기존 인프라를 재사용하도록 private runQuery 를 얇게 노출한다(중복 클라이언트
-// 방지). SQL 조립은 호출측(순수 content-shapes)이 담당한다.
-export async function runGa4Query<T>(project: string, dataset: string, sql: string): Promise<T[]> {
-  return runQuery<T>(project, dataset, sql);
-}

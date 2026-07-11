@@ -41,7 +41,10 @@ export const ga4ContentSource: ContentMetricsSource = {
     }
     const fromExpr = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
     const sql = buildContentSql(spec, fromExpr, start, end);
-    const raw = await runGa4Query<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+    const raw = await runGa4Query<Record<string, unknown>>(
+      { firebaseProject: target.firebaseProject, dataset: target.dataset },
+      sql,
+    );
     return mapContentRows(mapRawContentRows(raw), spec);
   },
 };
