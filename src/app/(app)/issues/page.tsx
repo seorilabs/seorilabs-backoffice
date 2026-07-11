@@ -44,7 +44,7 @@ export default async function IssuesPage({
   });
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">크로스레포 이슈</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
         전 레포 이슈 집계 ({issues.length}건 표시)
@@ -65,8 +65,8 @@ export default async function IssuesPage({
         </button>
       </form>
 
-      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+        <table className="w-full min-w-[560px] text-sm">
           <tbody>
             {issues.map((i) => (
               <tr key={i.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">

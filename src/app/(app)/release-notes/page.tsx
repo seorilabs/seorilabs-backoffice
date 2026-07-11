@@ -14,7 +14,7 @@ export default async function ReleaseNotesPage() {
   });
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">출시노트</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
         릴리즈 태그 기준 유저용 공지 (이전 태그~새 태그 변경분, ko/en). 최신순.

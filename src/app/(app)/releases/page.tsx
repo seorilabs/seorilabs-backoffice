@@ -28,14 +28,14 @@ export default async function ReleasesPage() {
   });
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">마켓별 출시 매트릭스</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
         앱 × 마켓 배포 상태 (tag push + deploy workflow_run 기반)
       </p>
 
-      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+        <table className="w-full min-w-[640px] text-sm">
           <thead>
             <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
               <th className="px-3 py-2">앱</th>

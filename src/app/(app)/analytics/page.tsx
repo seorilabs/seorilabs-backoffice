@@ -31,7 +31,7 @@ export default async function AnalyticsPage({
   const selected = apps.find((a) => a.slug === sp.app) ?? null;
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">앱 지표</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
         GA4 → BigQuery 일별 스냅샷 · 기준일 D-1(전일 확정) · 매일 21:00 KST 수집

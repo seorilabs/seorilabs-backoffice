@@ -18,7 +18,7 @@ export default async function ApprovalsPage() {
   const release = open.filter((i) => hasApproval(asStringArray(i.labels), "release"));
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">승인 대기</h1>
       <p className="mt-1 mb-6 text-sm text-neutral-500">
         지금 내 승인이 필요한 이슈. 승인 처리 시 GitHub 라벨이 제거되고 사유가 코멘트로 남습니다.

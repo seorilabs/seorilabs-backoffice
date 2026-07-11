@@ -66,8 +66,8 @@ export function DauTrend({ rowsAsc }: { rowsAsc: MetricDaily[] }) {
 /** 최근 지표 추이 표(최신→과거). */
 export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+      <table className="w-full min-w-[560px] text-sm">
         <thead>
           <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
             <th className="px-3 py-2">날짜</th>

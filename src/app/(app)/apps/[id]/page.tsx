@@ -65,7 +65,7 @@ export default async function AppDetail({
     : [];
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold">{app.displayName}</h1>
@@ -106,7 +106,7 @@ export default async function AppDetail({
       {/* 운영(LIVEOPS) 개선 루프 미니보드 */}
       {app.currentStage === "LIVEOPS" && (
         <Section title="지속개선 루프">
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MiniCol
               title="가설중"
               items={openIssues
