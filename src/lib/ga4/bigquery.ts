@@ -278,3 +278,10 @@ export async function queryCohortRetention(
     d7Pct: numOrNull(r.d7_pct),
   }));
 }
+
+// 컨텐츠 지표(content-metrics.ts)용 저수준 조회 진입점. 클라이언트/리전 해석/과금
+// 상한 등 기존 인프라를 재사용하도록 private runQuery 를 얇게 노출한다(중복 클라이언트
+// 방지). SQL 조립은 호출측(순수 content-shapes)이 담당한다.
+export async function runGa4Query<T>(project: string, dataset: string, sql: string): Promise<T[]> {
+  return runQuery<T>(project, dataset, sql);
+}

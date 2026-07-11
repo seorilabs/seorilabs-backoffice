@@ -10,6 +10,9 @@ import {
   TopDimList,
   type MetricDaily,
 } from "@/components/analytics/MetricPanels";
+import { ContentSection } from "@/components/analytics/ContentPanels";
+import { contentSpecFor } from "@/lib/analytics/content-registry";
+import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +58,7 @@ export default async function AnalyticsPage({
       {apps.length === 0 ? (
         <Notice>GA4 지표 대상 앱이 없습니다. (App.ga4Dataset 매핑 또는 fallback 표 확인)</Notice>
       ) : selected ? (
-        <SelectedApp appId={selected.id} name={selected.displayName} />
+        <SelectedApp appId={selected.id} slug={selected.slug} name={selected.displayName} />
       ) : (
         <Overview apps={apps} />
       )}
@@ -63,7 +66,7 @@ export default async function AnalyticsPage({
   );
 }
 
-async function SelectedApp({ appId, name }: { appId: string; name: string }) {
+async function SelectedApp({ appId, slug, name }: { appId: string; slug: string; name: string }) {
   const rowsDesc = (await prisma.appMetricDaily.findMany({
     where: { appId },
     orderBy: { date: "desc" },
@@ -79,6 +82,7 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
 
   return (
     <div className="space-y-6">
+      <ContentMetrics appId={appId} slug={slug} />
       <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">
           핵심 지표 <span className="text-neutral-400">(기준일 {isoDate(latest.date)})</span>
@@ -110,6 +114,34 @@ async function SelectedApp({ appId, name }: { appId: string; name: string }) {
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+    </div>
+  );
+}
+
+// 앱 컨텐츠 세부 지표 섹션. 컨텐츠 스펙이 등록되고 수집된 스냅샷이 있을 때만 렌더한다.
+// 스펙 없는 앱은 공통 지표만 보이고 이 섹션은 조용히 생략된다.
+async function ContentMetrics({ appId, slug }: { appId: string; slug: string }) {
+  const spec = contentSpecFor(slug);
+  if (!spec) return null;
+  const row = await prisma.appContentMetricDaily.findFirst({
+    where: { appId },
+    orderBy: { date: "desc" },
+  });
+  if (!row) {
+    return (
+      <div>
+        <div className="mb-2 text-sm font-semibold text-neutral-700">컨텐츠 지표</div>
+        <Notice>수집된 컨텐츠 지표가 아직 없습니다. 다음 수집(10:15 KST) 이후 표시됩니다.</Notice>
+      </div>
+    );
+  }
+  const snapshot = row.raw as unknown as ContentMetricSnapshot;
+  return (
+    <div>
+      <div className="mb-2 text-sm font-semibold text-neutral-700">
+        컨텐츠 지표 <span className="text-neutral-400">(기준일 {isoDate(row.date)})</span>
+      </div>
+      <ContentSection spec={spec} snapshot={snapshot} />
     </div>
   );
 }
