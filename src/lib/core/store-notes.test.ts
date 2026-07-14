@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizeStoreNotes,
   buildReleaseNotesAsset,
+  buildGooglePlayReleaseNotesText,
   RELEASE_NOTES_ASSET_SCHEMA,
 } from "./store-notes";
 
@@ -69,4 +70,24 @@ test("buildReleaseNotesAsset: 비어있지 않은 언어만 포함", () => {
 
 test("buildReleaseNotesAsset: 노트 없으면 null", () => {
   assert.equal(buildReleaseNotesAsset({ tag: "v1.0.0", koKR: "", enUS: "  " }), null);
+});
+
+test("Android용 출시노트를 Google Play 로케일 태그 형식으로 만든다", () => {
+  assert.equal(
+    buildGooglePlayReleaseNotesText({
+      koKR: "- 개선",
+      enUS: "- Improvements",
+      jaJP: "- 改善",
+      zhCN: "",
+    }),
+    [
+      "<ko-KR>\n- 개선\n</ko-KR>",
+      "<en-US>\n- Improvements\n</en-US>",
+      "<ja-JP>\n- 改善\n</ja-JP>",
+    ].join("\n"),
+  );
+});
+
+test("Android용 출시노트는 번역이 없으면 빈 문자열이다", () => {
+  assert.equal(buildGooglePlayReleaseNotesText({}), "");
 });
