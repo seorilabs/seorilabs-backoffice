@@ -65,8 +65,11 @@ spec:
               value: "3000"
             - name: HOSTNAME
               value: "0.0.0.0"
+            # --no-network-family-autoselection: pod 에 IPv6 egress 가 없는데 api.telegram.org 등이
+            # AAAA 를 광고 → Node fetch 의 Happy Eyeballs 가 IPv6 를 시도하다 전체 연결을 ETIMEDOUT
+            # 으로 실패시킨다. autoSelectFamily 를 끄고 IPv4 를 우선해 모든 outbound 를 IPv4 로 고정.
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=640"
+              value: "--max-old-space-size=640 --dns-result-order=ipv4first --no-network-family-autoselection"
             - name: HOME
               value: /tmp
             - name: CHECKPOINT_DISABLE

@@ -1,14 +1,7 @@
-import { Agent, fetch as undiciFetch } from "undici";
 import { env } from "@/lib/env";
 
 const API = "https://api.telegram.org";
 const TG_TEXT_LIMIT = 4000; // Telegram 4096 보다 보수적
-
-// api.telegram.org 는 A/AAAA 를 모두 광고하지만 배포 pod 네트워크에는 IPv6 egress 가 없다.
-// Node 24 fetch(undici)의 Happy Eyeballs(autoSelectFamily)가 IPv6 를 병렬 시도하다
-// IPv4 가 정상인데도 전체 연결을 ETIMEDOUT 으로 끌고가 봇 응답이 실패했다.
-// → IPv4 로 고정(family:4)하고 Happy Eyeballs 를 꺼 IPv6 시도 자체를 배제한다.
-const tgDispatcher = new Agent({ connect: { family: 4, autoSelectFamily: false } });
 
 export interface InlineButton {
   text: string;
@@ -55,11 +48,10 @@ async function call(method: string, body: unknown): Promise<unknown> {
   const token = env.telegramToken();
   if (!token) return null;
   try {
-    const res = await undiciFetch(`${API}/bot${token}/${method}`, {
+    const res = await fetch(`${API}/bot${token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      dispatcher: tgDispatcher,
       signal: AbortSignal.timeout(5000),
     });
     return await res.json().catch(() => null);
