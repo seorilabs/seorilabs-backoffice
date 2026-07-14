@@ -254,7 +254,7 @@ model ReleaseRecord {
   @@map("release_record")
 }
 
-// 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 유저용 공지(ko/en).
+// 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 다국어 유저용 공지.
 // 마켓 무관, 버전(태그)당 1건. webhook(tag push) 또는 수동 백필로 생성.
 model ReleaseNote {
   id              String            @id @default(cuid())
@@ -267,6 +267,12 @@ model ReleaseNote {
   compareUrl      String? // GitHub compare 링크
   koKR            String            @db.Text // 한국어 유저용 출시노트
   enUS            String            @db.Text // 영어 유저용 출시노트
+  jaJP            String?           @db.Text // 일본어 유저용 출시노트
+  zhCN            String?           @db.Text // 중국어 간체 유저용 출시노트
+  zhTW            String?           @db.Text // 중국어 번체 유저용 출시노트
+  deDE            String?           @db.Text // 독일어 유저용 출시노트
+  frFR            String?           @db.Text // 프랑스어 유저용 출시노트
+  esES            String?           @db.Text // 스페인어 유저용 출시노트
   sourceJson      Json? // 생성 근거(커밋/PR 요약)
   status          ReleaseNoteStatus @default(GENERATED)
   model           String? // 생성 모델

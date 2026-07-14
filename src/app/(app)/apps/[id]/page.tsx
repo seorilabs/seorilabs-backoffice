@@ -13,6 +13,7 @@ import { StatusControl } from "@/components/StatusControl";
 import { ReleaseControls } from "@/components/ReleaseControls";
 import { MetricCards, type MetricDaily } from "@/components/analytics/MetricPanels";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { releaseNoteTranslations } from "@/lib/core/release-note-locales";
 
 export const dynamic = "force-dynamic";
 
@@ -202,8 +203,7 @@ export default async function AppDetail({
               previousVersion={n.previousVersion}
               createdAt={fmtDate(n.createdAt)}
               compareUrl={n.compareUrl}
-              koKR={n.koKR}
-              enUS={n.enUS}
+              {...releaseNoteTranslations(n)}
             />
           ))}
           {app.releaseNotes.length === 0 && <Empty />}

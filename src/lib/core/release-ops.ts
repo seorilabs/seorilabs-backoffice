@@ -10,11 +10,20 @@ import { listVersionTags } from "@/lib/github/release";
 import { getWorkflowDispatchInputNames } from "@/lib/github/read";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
-import { generateReleaseNoteCore } from "@/lib/core/release-notes";
+import {
+  generateReleaseNoteCore,
+  type GenerateReleaseNoteInput,
+  type ReleaseNoteResult,
+} from "@/lib/core/release-notes";
 import {
   buildReleaseNotesAsset,
   RELEASE_NOTES_ASSET_NAME,
 } from "@/lib/core/store-notes";
+import {
+  RELEASE_NOTE_LOCALES,
+  releaseNoteTranslations,
+  type ReleaseNoteTranslationsInput,
+} from "@/lib/core/release-note-locales";
 
 // 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Telegram 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
@@ -52,13 +61,11 @@ export interface CreateReleaseResult {
   sha: string;
   created: boolean;
   releaseUrl: string;
-  koKR: string;
-  enUS: string;
-  compareUrl: string | null;
 }
 
 /**
- * 명시적 릴리즈 태그 생성 → 출시노트(ko/en) 생성 → GitHub Release 발행.
+ * 명시적 릴리즈 태그 + GitHub Release 를 즉시 생성한다.
+ * 다국어 출시노트는 tag push webhook 의 after 작업에서 별도로 생성·발행한다.
  * tag 지정 시 그대로, 없으면 최신 태그 + bump.
  */
 export async function createReleaseTagWithNotes(opts: {
@@ -81,55 +88,13 @@ export async function createReleaseTagWithNotes(opts: {
   }
 
   const { created } = await createTag({ repoFullName: opts.repoFullName, tag, sha });
-
-  // 출시노트 동기 생성(마켓 무관 ko/en). 실패해도 Release 는 발행.
-  let koKR = "";
-  let enUS = "";
-  let compareUrl: string | null = null;
-  try {
-    const note = await generateReleaseNoteCore({
-      repoFullName: opts.repoFullName,
-      version: tag,
-      headSha: sha,
-    });
-    if (note) {
-      const row = await prisma.releaseNote.findUnique({
-        where: { repoFullName_version: { repoFullName: opts.repoFullName, version: tag } },
-        select: { koKR: true, enUS: true, compareUrl: true },
-      });
-      koKR = row?.koKR ?? "";
-      enUS = row?.enUS ?? "";
-      compareUrl = row?.compareUrl ?? null;
-    }
-  } catch (e) {
-    console.warn(`[release-ops] 출시노트 생성 실패: ${(e as Error).message}`);
-  }
-
-  const body = formatReleaseBody({ tag, koKR, enUS, compareUrl });
   const rel = await createOrUpdateRelease({
     repoFullName: opts.repoFullName,
     tag,
     name: tag,
-    body,
+    body: formatReleaseBody({ tag }),
     prerelease: opts.prerelease,
   });
-
-  // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json).
-  // 실패해도 Release 는 유지(워크플로우는 에셋 없으면 config 기본값으로 폴백).
-  try {
-    const asset = buildReleaseNotesAsset({ tag, koKR, enUS });
-    if (asset) {
-      await upsertReleaseAsset({
-        repoFullName: opts.repoFullName,
-        releaseId: rel.id,
-        name: RELEASE_NOTES_ASSET_NAME,
-        contentType: "application/json",
-        data: asset,
-      });
-    }
-  } catch (e) {
-    console.warn(`[release-ops] ${RELEASE_NOTES_ASSET_NAME} 업로드 실패: ${(e as Error).message}`);
-  }
 
   await prisma.auditLog
     .create({
@@ -143,19 +108,81 @@ export async function createReleaseTagWithNotes(opts: {
     })
     .catch(() => {});
 
-  return { tag, sha, created, releaseUrl: rel.url, koKR, enUS, compareUrl };
+  return { tag, sha, created, releaseUrl: rel.url };
 }
 
-/** GitHub Release 본문(마켓 무관 ko/en + compare 링크). */
-export function formatReleaseBody(n: {
-  tag: string;
-  koKR: string;
-  enUS: string;
-  compareUrl?: string | null;
-}): string {
+/**
+ * tag push 이후 실행되는 비동기 후처리.
+ * 번역 생성 → DB upsert → GitHub Release 본문/배포 에셋 갱신을 멱등 수행한다.
+ */
+export async function generateAndPublishReleaseNotes(
+  input: GenerateReleaseNoteInput,
+): Promise<ReleaseNoteResult | null> {
+  const note = await generateReleaseNoteCore(input);
+  if (!note) return null;
+
+  const row = await prisma.releaseNote.findUnique({
+    where: {
+      repoFullName_version: {
+        repoFullName: input.repoFullName,
+        version: input.version,
+      },
+    },
+    select: {
+      koKR: true,
+      enUS: true,
+      jaJP: true,
+      zhCN: true,
+      zhTW: true,
+      deDE: true,
+      frFR: true,
+      esES: true,
+      compareUrl: true,
+    },
+  });
+  if (!row) return note;
+
+  const translations = releaseNoteTranslations(row);
+  const rel = await createOrUpdateRelease({
+    repoFullName: input.repoFullName,
+    tag: input.version,
+    name: input.version,
+    body: formatReleaseBody({
+      tag: input.version,
+      ...translations,
+      compareUrl: row.compareUrl,
+    }),
+  });
+
+  // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json).
+  // 실패해도 번역과 GitHub Release 본문은 유지한다.
+  try {
+    const asset = buildReleaseNotesAsset({ tag: input.version, ...translations });
+    if (asset) {
+      await upsertReleaseAsset({
+        repoFullName: input.repoFullName,
+        releaseId: rel.id,
+        name: RELEASE_NOTES_ASSET_NAME,
+        contentType: "application/json",
+        data: asset,
+      });
+    }
+  } catch (e) {
+    console.warn(`[release-ops] ${RELEASE_NOTES_ASSET_NAME} 업로드 실패: ${(e as Error).message}`);
+  }
+
+  return note;
+}
+
+/** GitHub Release 본문(마켓 무관 다국어 출시노트 + compare 링크). */
+export function formatReleaseBody(
+  n: { tag: string; compareUrl?: string | null } & ReleaseNoteTranslationsInput,
+): string {
   const parts: string[] = [];
-  if (n.koKR.trim()) parts.push(`## 🇰🇷 이번 업데이트\n\n${n.koKR.trim()}`);
-  if (n.enUS.trim()) parts.push(`## 🇺🇸 What's New\n\n${n.enUS.trim()}`);
+  for (const { field, heading } of RELEASE_NOTE_LOCALES) {
+    const body = n[field]?.trim();
+    if (body) parts.push(`## ${heading}\n\n${body}`);
+  }
   if (parts.length === 0) parts.push(`Release ${n.tag}`);
   if (n.compareUrl) parts.push(`---\n\n**Changes:** ${n.compareUrl}`);
   return parts.join("\n\n");

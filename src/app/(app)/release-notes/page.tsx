@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { fmtDate } from "@/lib/format";
 import { visibleReleaseNoteWhere } from "@/lib/domain/app-visibility";
+import { releaseNoteTranslations } from "@/lib/core/release-note-locales";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export default async function ReleaseNotesPage() {
     <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">출시노트</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
-        릴리즈 태그 기준 유저용 공지 (이전 태그~새 태그 변경분, ko/en). 최신순.
+        릴리즈 태그 기준 유저용 공지 (이전 태그~새 태그 변경분, 8개 언어). 최신순.
       </p>
 
       {notes.length === 0 ? (
@@ -35,8 +36,7 @@ export default async function ReleaseNotesPage() {
               previousVersion={n.previousVersion}
               createdAt={fmtDate(n.createdAt)}
               compareUrl={n.compareUrl}
-              koKR={n.koKR}
-              enUS={n.enUS}
+              {...releaseNoteTranslations(n)}
             />
           ))}
         </div>

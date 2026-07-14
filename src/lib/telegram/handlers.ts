@@ -831,7 +831,7 @@ async function appBySlug(slug: string) {
   });
 }
 
-// ── /release: 앱 선택 → bump → 확인 → 태그 + 출시노트(ko/en) + GitHub Release ──
+// ── /release: 앱 선택 → bump → 확인 → 태그 + GitHub Release (출시노트는 webhook 후 비동기) ──
 async function cmdReleaseStart(chatId: number): Promise<void> {
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
@@ -897,7 +897,7 @@ async function cbRelease(cq: TgCallback, fromId: number, rest: string[]): Promis
       await editMessageText(
         chatId,
         mid,
-        `🚀 <b>${esc(app.displayName)}</b>\n최신: ${esc(preview.latest ?? "(없음)")} → 생성: <b>${esc(preview.next)}</b>\n태그 + 출시노트(ko/en) + GitHub Release 를 진행할까요?`,
+        `🚀 <b>${esc(app.displayName)}</b>\n최신: ${esc(preview.latest ?? "(없음)")} → 생성: <b>${esc(preview.next)}</b>\n태그 + GitHub Release 를 진행할까요? 출시노트 번역은 이후 비동기로 생성됩니다.`,
         [
           [
             { text: `✅ ${preview.next} 생성`, callback_data: `rel:go:${slug}:${bump}` },
@@ -920,11 +920,10 @@ async function cbRelease(cq: TgCallback, fromId: number, rest: string[]): Promis
         bump: bump as Bump,
         actorLabel: `telegram:${fromId}`,
       });
-      const ko = r.koKR ? "\n\n" + esc(r.koKR.slice(0, 600)) : "";
       await editMessageText(
         chatId,
         mid,
-        `✅ <b>${esc(app.displayName)} ${esc(r.tag)}</b> 릴리즈 생성됨${r.created ? "" : " (기존 태그 재사용)"}\n${esc(r.releaseUrl)}${ko}`,
+        `✅ <b>${esc(app.displayName)} ${esc(r.tag)}</b> 릴리즈 생성됨${r.created ? "" : " (기존 태그 재사용)"}\n${esc(r.releaseUrl)}\n출시노트 번역은 백그라운드에서 생성 중입니다.`,
         [],
       );
     } catch (e) {

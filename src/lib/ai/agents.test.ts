@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENTS, buildBugReportPrompt } from "./agents";
+import { AGENTS, buildBugReportPrompt, buildReleaseNotesI18nPrompt } from "./agents";
 
 test("BUG_REPORT 는 새 이슈 + bug 라벨로 커밋된다", () => {
   const meta = AGENTS.BUG_REPORT;
@@ -35,4 +35,20 @@ test("코드베이스 컨텍스트가 있으면 원인 추정 지점 지시가 s
     codebaseContext: "README: ...",
   });
   assert.match(system, /원인 추정 지점/);
+});
+
+test("출시노트 프롬프트는 8개 언어 키를 모두 요구한다", () => {
+  const { system, prompt } = buildReleaseNotesI18nPrompt({
+    displayName: "해피팜",
+    type: "GAME",
+    version: "v1.2.3",
+    previousVersion: "v1.2.2",
+    prs: [{ number: 12, title: "언어 지원 확대" }],
+    commitCount: 3,
+  });
+
+  for (const key of ["ko_KR", "en_US", "ja_JP", "zh_CN", "zh_TW", "de_DE", "fr_FR", "es_ES"]) {
+    assert.match(system + prompt, new RegExp(key));
+  }
+  assert.match(system, /8개 언어/);
 });

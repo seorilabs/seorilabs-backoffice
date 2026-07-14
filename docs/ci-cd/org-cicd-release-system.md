@@ -196,7 +196,7 @@ flowchart LR
 
 ### 7.1 책임 분담 (backoffice 현황 기반)
 
-- 이미 존재: 출시노트(ko/en) 자동 생성(`generateReleaseNoteCore`, MiniMax + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Telegram 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
+- 이미 존재: 출시노트 8개 언어 자동 생성(`generateReleaseNoteCore`, MiniMax + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Telegram 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
 - **추가 필요(gap)**:
   1. GitHub **태그 생성 + Release 발행**(현재 write는 issue/label/comment뿐) → `lib/github/write.ts`에 `createTag`/`createRelease`/`updateRelease` 추가. GitHub App 권한에 `contents:write` 필요.
   2. **workflow_dispatch 트리거**(`octokit.rest.actions.createWorkflowDispatch`) → `lib/github/write.ts`. App 권한 `actions:write` 필요.
@@ -217,12 +217,14 @@ sequenceDiagram
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
     BO->>GH: createTag(vX.Y.Z) [contents:write]
+    BO-->>U: 태그 + GitHub Release 즉시 생성
     GH-->>BO: tag push webhook
-    BO->>GH: compareTags(이전→현재) 변경 수집
-    BO->>AI: 변경 요약 → 출시노트(ko/en, 마켓 비종속 표현)
-    AI-->>BO: {ko_KR, en_US}
-    BO->>GH: ② createRelease(body=출시노트)
-    BO->>TG: ③ 릴리즈 태그 링크 + 노트 발송
+    BO-->>GH: webhook 200
+    BO->>GH: after: compareTags(이전→현재) 변경 수집
+    BO->>AI: webhook 응답 후 변경 요약 → 출시노트 8개 언어
+    AI-->>BO: {ko_KR, en_US, ja_JP, zh_CN, zh_TW, de_DE, fr_FR, es_ES}
+    BO->>GH: ② updateRelease(body=출시노트) + release-notes.json
+    BO->>TG: ③ 릴리즈 태그 링크 발송(번역 비대기)
     U->>BO: ④ 배포 대상 선택(태그/마켓: AIT/GPS/APS/Deploy All)
     BO->>TG: confirm 버튼
     U->>TG: 확인
@@ -235,7 +237,8 @@ sequenceDiagram
 
 ### 7.3 출시노트 규칙
 - **마켓 비종속**: "앱스토어/플레이스토어/토스" 등 특정 마켓 명칭·정책 표현 금지. 모든 마켓 공통으로 재사용.
-- ko/en 동시 생성. GitHub Release body + 각 마켓 "이번 버전의 새로운 기능"에 동일 텍스트 주입.
+- 한국어·영어·일본어·중국어 간체/번체·독일어·프랑스어·스페인어를 동시에 생성한다. GitHub Release body + 각 마켓 "이번 버전의 새로운 기능"에 언어별 텍스트를 주입한다.
+- 번역은 tag push webhook 응답 이후 비동기로 실행하며 태그 생성과 Telegram 응답을 막지 않는다.
 - 내부/CI/refactor 변경은 사용자 노트에서 제외(이미 프롬프트에 반영).
 
 ### 7.4 스크린샷 (선택 단계)
@@ -254,7 +257,8 @@ flowchart TD
   SC -.->|merge마다 빌드·배포 금지| X[(no deploy)]
 
   R[운영자: Backoffice/Telegram] -->|명시적| T[release-tag 생성 vX.Y.Z]
-  T --> N[출시노트 ko/en + GitHub Release + Telegram 링크]
+  T --> N[GitHub Release + Telegram 링크]
+  T -. webhook after .-> I18N[출시노트 8개 언어 생성 및 Release 갱신]
   R -->|배포 트리거| D{선택}
   D -->|AIT| DA[deploy-apps-in-toss]
   D -->|GPS| DG[deploy-google-play]

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSignature } from "@/lib/github/webhook";
 import { prisma } from "@/lib/prisma";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@/lib/sync/mirror";
 import { notify, esc } from "@/lib/telegram/client";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
-import { generateReleaseNoteCore } from "@/lib/core/release-notes";
+import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
 export const runtime = "nodejs";
@@ -110,18 +110,25 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
     case "push": {
-      // 릴리즈 태그 생성 → 출시노트 자동 생성(fire-and-forget, 200 안 막음).
+      // 릴리즈 태그 생성 → 응답 이후 출시노트 생성·발행(태그/webhook/텔레그램 응답을 막지 않음).
       const ref = p.ref ?? "";
       if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
         const version = ref.slice("refs/tags/".length);
         if (/^v?\d+\./.test(version)) {
-          void generateReleaseNoteCore({
-            repoFullName: repo,
-            version,
-            headSha: p.after,
-          }).catch((e) =>
-            console.error("[webhook] 출시노트 생성 실패:", e instanceof Error ? e.message : e),
-          );
+          after(async () => {
+            try {
+              await generateAndPublishReleaseNotes({
+                repoFullName: repo,
+                version,
+                headSha: p.after,
+              });
+            } catch (e) {
+              console.error(
+                "[webhook] 출시노트 생성 실패:",
+                e instanceof Error ? e.message : e,
+              );
+            }
+          });
         }
       }
       break;
