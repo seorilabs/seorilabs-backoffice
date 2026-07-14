@@ -57,3 +57,16 @@ export function buildReleaseNotesAsset(
     2,
   );
 }
+
+/**
+ * Google Play Console의 언어별 출시노트 일괄 입력 형식.
+ * 번역이 있는 로케일만 <ko-KR>...</ko-KR> 블록으로 반환한다.
+ */
+export function buildGooglePlayReleaseNotesText(
+  input: ReleaseNoteTranslationsInput,
+): string {
+  return RELEASE_NOTE_LOCALES.flatMap(({ field, storeLocale }) => {
+    const body = input[field]?.trim();
+    return body ? [`<${storeLocale}>\n${body}\n</${storeLocale}>`] : [];
+  }).join("\n");
+}

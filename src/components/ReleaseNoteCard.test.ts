@@ -39,4 +39,5 @@ test("8개 언어 선택지를 렌더링하고 긴 출시노트를 줄이지 않
   }
   assert.ok(html.includes(longKoNote));
   assert.ok(!html.includes("…"));
+  assert.ok(html.includes("Android용 전체 복사"));
 });
