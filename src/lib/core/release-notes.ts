@@ -4,6 +4,11 @@ import { miniMaxComplete } from "@/lib/ai/minimax";
 import { parseLooseJson } from "@/lib/ai/json";
 import { buildReleaseNotesI18nPrompt } from "@/lib/ai/agents";
 import { normalizeStoreNotes } from "@/lib/core/store-notes";
+import {
+  RELEASE_NOTE_LOCALES,
+  type ReleaseNotePromptKey,
+  type ReleaseNoteTranslations,
+} from "@/lib/core/release-note-locales";
 import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   listVersionTags,
@@ -13,7 +18,7 @@ import {
 } from "@/lib/github/release";
 
 // 출시노트 생성 코어 — 릴리즈 태그 push(webhook) 또는 수동 백필 공용.
-// 이전 릴리즈 태그~새 태그 diff → MiniMax 로 ko/en 유저 공지 생성 → ReleaseNote 저장.
+// 이전 릴리즈 태그~새 태그 diff → MiniMax 로 다국어 유저 공지 생성 → ReleaseNote 저장.
 
 export interface GenerateReleaseNoteInput {
   repoFullName: string;
@@ -76,17 +81,18 @@ export async function generateReleaseNoteCore(
     system,
     prompt,
     temperature: 0.3,
-    maxTokens: 1500,
+    maxTokens: 4000,
     jsonOutput: true,
   });
-  const parsed = parseLooseJson<{ ko_KR?: string; en_US?: string }>(raw);
-  // 스토어 정형 포맷으로 강제(≤4불릿·각≤100자·언어당≤480자·순수텍스트). LLM 출력은 신뢰하지 않는다.
-  // ko_KR 파싱 실패 시 raw(JSON 원문) 전체를 한국어 노트로 흘리지 않는다.
-  const koKR =
-    normalizeStoreNotes((parsed?.ko_KR ?? "").trim()) ||
-    "- 버그 수정 및 안정성 개선";
-  const enUS =
-    normalizeStoreNotes((parsed?.en_US ?? "").trim()) || "- Bug fixes and stability improvements";
+  const parsed = parseLooseJson<Partial<Record<ReleaseNotePromptKey, string>>>(raw);
+  // 순수 텍스트 불릿으로 정리하되 번역 원문은 자르지 않는다. 누락 언어만 현지어 폴백을 쓴다.
+  // 파싱 실패 시 raw(JSON 원문) 전체를 특정 언어 노트로 흘리지 않는다.
+  const translations = Object.fromEntries(
+    RELEASE_NOTE_LOCALES.map(({ field, promptKey, fallback }) => [
+      field,
+      normalizeStoreNotes((parsed?.[promptKey] ?? "").trim()) || fallback,
+    ]),
+  ) as ReleaseNoteTranslations;
 
   const data = {
     appId: app.id,
@@ -94,8 +100,7 @@ export async function generateReleaseNoteCore(
     previousVersion: prev,
     headSha: input.headSha ?? null,
     compareUrl: cmp?.url ?? null,
-    koKR,
-    enUS,
+    ...translations,
     sourceJson: {
       prs: cmp?.prs ?? [],
       commitCount: cmp?.commitCount ?? 0,

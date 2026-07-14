@@ -53,7 +53,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
     start(async () => {
       const r = await createReleaseAction(appId, bump);
       if (r.ok) {
-        setRelMsg(`✅ ${r.tag} 생성됨 — GitHub Release + 출시노트 발행`);
+        setRelMsg(`✅ ${r.tag} + GitHub Release 생성됨 — 출시노트 번역 중`);
         const t = await listAppTagsAction(appId);
         setTags(t.tags);
         if (t.tags[0]) setTag(t.tags[0]);
@@ -85,7 +85,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 릴리즈 태그 생성 + 출시노트 + GitHub Release */}
+      {/* 릴리즈 태그 + GitHub Release 즉시 생성, 출시노트는 webhook 후 비동기 생성 */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-20 text-xs font-medium text-neutral-500">릴리즈</span>
         <select

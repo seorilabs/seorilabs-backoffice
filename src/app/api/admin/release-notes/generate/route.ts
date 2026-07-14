@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
-import { generateReleaseNoteCore } from "@/lib/core/release-notes";
+import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
 
 // 출시노트 수동 백필/재생성. body { repo, version, headSha? }. x-admin-token 보호.
 export const runtime = "nodejs";
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "repo, version 필요" }, { status: 400 });
   }
   try {
-    const r = await generateReleaseNoteCore({
+    const r = await generateAndPublishReleaseNotes({
       repoFullName: repo.includes("/") ? repo : `seorilabs/${repo}`,
       version,
       headSha: body.headSha,

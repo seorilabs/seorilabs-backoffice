@@ -1,4 +1,5 @@
 import type { AppType, AppEngine, Lifecycle, AiDraftKind } from "@prisma/client";
+import { RELEASE_NOTE_LOCALES } from "@/lib/core/release-note-locales";
 
 // 단계별 Stage Agent — 각 에이전트는 컨텍스트로부터 MiniMax 프롬프트(system+user)를 만든다.
 // 산출물은 한국어 마크다운. LLM 은 GitHub 에 직접 쓰지 않는다(초안만 생성).
@@ -352,7 +353,7 @@ export function buildImprovementPrompt(ctx: ImprovementContext): {
   };
 }
 
-// ── 출시노트(i18n) — 릴리즈 태그 diff 기반 유저 공지(ko/en). JSON 출력. ──
+// ── 출시노트(i18n) — 릴리즈 태그 diff 기반 다국어 유저 공지. JSON 출력. ──
 export interface ReleaseNotesI18nContext {
   displayName: string;
   type: AppType;
@@ -369,17 +370,26 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
   const prLines = ctx.prs.length
     ? ctx.prs.map((p) => `- #${p.number} ${p.title}`).join("\n")
     : "(머지 PR 식별 못함 — 커밋 기준으로만 작성)";
+  const languageKeys = RELEASE_NOTE_LOCALES.map(
+    ({ label, promptKey }) => `${label}(${promptKey})`,
+  ).join(", ");
+  const jsonExample = JSON.stringify(
+    Object.fromEntries(
+      RELEASE_NOTE_LOCALES.map(({ promptKey }) => [promptKey, "- item1\\n- item2"]),
+    ),
+  );
   return {
     system: [
       "당신은 Seorilabs 의 릴리스 매니저다.",
       "변경 내역(머지 PR/커밋)을 바탕으로 '사용자에게 공지할' 출시노트를 작성한다.",
       "이 출시노트는 Google Play·App Store 등 앱 마켓에 그대로 게시된다.",
       "내부 리팩터링·빌드·CI·테스트 등 사용자가 체감 못하는 변경은 제외하고, 새 기능·개선·버그수정만 쉬운 말로 쓴다.",
-      "마케팅 과장 없이 간결한 불릿(- ). 한국어(ko_KR)와 자연스러운 영어(en_US) 두 버전을 만든다.",
-      // 스토어 정형 규칙(코드에서도 강제하지만 프롬프트에서 먼저 지킨다).
+      `마케팅 과장 없이 간결한 불릿(- )으로 다음 8개 언어 버전을 만든다: ${languageKeys}.`,
+      "각 번역은 해당 지역의 앱 마켓에서 자연스럽게 읽히도록 현지화하고, 다른 언어의 문장을 섞지 않는다.",
+      // 스토어 정형 규칙. 번역 원문을 코드에서 자르지 않으므로 여기서 반드시 지킨다.
       "형식 규칙(반드시 준수): 각 언어는 최대 4개 불릿, 각 불릿은 한 줄이며 100자 이내, 언어당 전체 480자 이내.",
       "각 줄은 '- ' 로 시작하는 순수 텍스트만. 마크다운 헤더(#)·링크·볼드(**)·이모지·코드블록 금지.",
-      '반드시 JSON 객체 하나만 출력: {"ko_KR":"- 항목1\\n- 항목2","en_US":"- item1\\n- item2"}. 머리말/코드블록 금지.',
+      `반드시 8개 키를 모두 가진 JSON 객체 하나만 출력: ${jsonExample}. 머리말/코드블록 금지.`,
       "사용자 체감 변경이 전혀 없으면 안정성·내부 개선 위주로 1~2줄 간단히.",
     ].join(" "),
     prompt: [
@@ -390,7 +400,7 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
       "## 변경 내역",
       prLines,
       "",
-      "위에서 사용자 체감 항목만 골라 ko_KR/en_US 출시노트를 JSON 으로 작성하라.",
+      `위에서 사용자 체감 항목만 골라 ${RELEASE_NOTE_LOCALES.map(({ promptKey }) => promptKey).join("/")} 출시노트를 JSON 으로 작성하라.`,
       "각 언어 최대 4개 불릿, 언어당 480자 이내, 순수 텍스트 '- ' 불릿만.",
     ].join("\n"),
   };
