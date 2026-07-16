@@ -3,13 +3,15 @@
 // 코드 내 fallback 표를 둔다(DB 값이 있으면 항상 DB 우선). 신규 게임은 DB 또는 이 표에
 // 추가하면 수집 대상에 자동 편입된다.
 //
-// lizard-tycoon 은 dataset 은 확인됐으나 BigQuery 읽기 SA 키가 아직 미발급이다.
-// 키가 준비되면(SA 에 dataViewer+jobUser 부여) 별도 변경 없이 자동으로 수집된다.
+// 표에는 (1) GA4→BigQuery export 가 실제 활성(dataset + events_* 적재)이고 (2) 수집 SA
+// ga4-routine-ro@crossword-puzzle-79ae0 에 각 프로젝트 bigquery.dataViewer+jobUser 가
+// 부여된 게임만 넣는다. 둘 중 하나라도 빠지면 매 수집마다 "Dataset not found"/권한 에러가
+// 쌓인다(백오피스는 errors 로 잡고 다른 앱 수집은 계속한다).
 //
-// foam-party 는 propertyId(542197312)를 레포 firebase.config.json 에서 확인했다.
-// 다만 config 상 eventDeliveryStatus=not-confirmed(BigQuery export 데이터셋 미확인)라
-// GA4→BigQuery export 가 아직 활성화 전일 수 있다. export 가 켜지면 별도 변경 없이 수집된다.
-// (설정 > "광고/수익 export 진단" 으로 실동작 확인)
+// 대기 중(트래픽/설정이 갖춰지면 SA 권한 부여 후 표에 추가):
+// - lizard-tycoon: 미론칭. export 미활성(analytics_544016233 dataset 없음).
+// - lucid-reversi(property 545247767): export 링크는 활성(2026-07-13)이나 실사용 트래픽이
+//   없어 BigQuery dataset 미생성. events 가 적재되면 편입한다.
 
 export interface Ga4Target {
   /** BigQuery 프로젝트(= Firebase project id). job 실행/billing 대상. */
@@ -22,8 +24,8 @@ const FALLBACK: Record<string, Ga4Target> = {
   "lucid-chess": { firebaseProject: "lucid-chess-dbb9d", dataset: "analytics_539665867" },
   "crossword-puzzle": { firebaseProject: "crossword-puzzle-79ae0", dataset: "analytics_539639687" },
   "happy-farm": { firebaseProject: "happy-farm-tycoon", dataset: "analytics_539626577" },
-  "lizard-tycoon": { firebaseProject: "lizard-tycoon", dataset: "analytics_544016233" },
   "foam-party": { firebaseProject: "foam-party", dataset: "analytics_542197312" },
+  "match-picture-app": { firebaseProject: "match-picture-app", dataset: "analytics_542397319" },
 };
 
 export interface AppGa4Fields {
