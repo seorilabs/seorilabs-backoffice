@@ -45,6 +45,7 @@ jobs:
     needs: build
     runs-on: seorilabs-rpi-arm64
     steps:
+      - uses: actions/checkout@v6 # k8s 매니페스트 apply 를 위해 레포 파일 필요
       - name: Deploy to platform ns
         env:
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
@@ -56,13 +57,12 @@ jobs:
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           IMG="${IMAGE}:${SHA}"
-          # 선언적 리소스(SealedSecret/CronJob) 적용 — 매니페스트 변경이 배포에 자동 반영되게.
-          # 새 CronJob/SealedSecret 등 앱 매니페스트를 추가하면 이 목록에도 넣는다.
-          # 제외: deployment(아래 set image 로 이미지만 갱신), PVC 포함 매니페스트
-          # (backup-cronjob/buildkitd — immutable 필드로 apply 실패 위험), 인프라
-          # (vault-*/rbac), secret.example.yaml(placeholder — 실제 secret 덮을 위험).
+          # CronJob 매니페스트를 선언적 적용 — 변경이 배포에 자동 반영되게.
+          # 새 CronJob 을 추가하면 이 목록에도 넣는다(ci-deployer Role 에 batch/cronjobs
+          # write 권한 필요 — k8s/ci-deployer-rbac.yaml). 제외: deployment(아래 set image
+          # 로 이미지만 갱신), SealedSecret(배포 SA 에 secret write 권한 안 줌 → 수동 apply),
+          # PVC 포함(backup-cronjob/buildkitd), 인프라(vault-*/rbac), secret.example.yaml.
           for m in \
-            backoffice-sealedsecret.yaml \
             proactive-cronjobs.yaml \
             app-content-analytics-cronjob.yaml; do
             /tmp/kubectl apply -f "k8s/$m"
