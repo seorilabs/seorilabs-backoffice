@@ -56,5 +56,16 @@ jobs:
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           IMG="${IMAGE}:${SHA}"
+          # 선언적 리소스(SealedSecret/CronJob) 적용 — 매니페스트 변경이 배포에 자동 반영되게.
+          # 새 CronJob/SealedSecret 등 앱 매니페스트를 추가하면 이 목록에도 넣는다.
+          # 제외: deployment(아래 set image 로 이미지만 갱신), PVC 포함 매니페스트
+          # (backup-cronjob/buildkitd — immutable 필드로 apply 실패 위험), 인프라
+          # (vault-*/rbac), secret.example.yaml(placeholder — 실제 secret 덮을 위험).
+          for m in \
+            backoffice-sealedsecret.yaml \
+            proactive-cronjobs.yaml \
+            app-content-analytics-cronjob.yaml; do
+            /tmp/kubectl apply -f "k8s/$m"
+          done
           /tmp/kubectl -n platform set image deployment/backoffice migrate="$IMG" backoffice="$IMG"
           /tmp/kubectl -n platform rollout status deployment/backoffice --timeout=300s
