@@ -35,6 +35,21 @@ test("resolveGa4Target 는 foam-party fallback 매핑을 반환한다(키 오타
   });
 });
 
+test("resolveGa4Target 는 match-picture-app fallback 매핑을 반환한다", () => {
+  const t = resolveGa4Target({ slug: "match-picture-app", firebaseProject: null, ga4Dataset: null });
+  assert.deepEqual(t, {
+    firebaseProject: "match-picture-app",
+    dataset: "analytics_542397319",
+  });
+});
+
+test("resolveGa4Target 는 표에서 뺀 lizard-tycoon 에 null 을 준다(미론칭/export 미활성)", () => {
+  assert.equal(
+    resolveGa4Target({ slug: "lizard-tycoon", firebaseProject: null, ga4Dataset: null }),
+    null,
+  );
+});
+
 test("resolveGa4Target 는 매핑 없는 앱에 null 을 준다", () => {
   assert.equal(
     resolveGa4Target({ slug: "unknown-app", firebaseProject: null, ga4Dataset: null }),
