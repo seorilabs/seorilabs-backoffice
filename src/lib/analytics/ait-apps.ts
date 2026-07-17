@@ -15,7 +15,9 @@ export const AIT_MINIAPP_BY_SLUG: Record<string, number> = {
   "match-picture-app": 32325,
   "lucid-chess": 34107,
   "dpti-app": 34639,
-  "periodic-table": 36076,
+  // 콘솔 appName 은 "periodic-table" 이나 backoffice App.slug(=repo)는 "periodic-table-app".
+  // 키는 항상 backoffice slug(ingest 가 slug 로 App 해석)여야 하므로 -app 을 붙인다.
+  "periodic-table-app": 36076,
   "crossword-puzzle": 36555,
   "vocab-swipe": 36976,
   "lucid-reversi": 44056,
