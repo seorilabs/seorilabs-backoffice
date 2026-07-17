@@ -37,6 +37,9 @@ model App {
   appleTeamId     String?
   iosSku          String?
   aitAppName      String?
+  // AppsInToss 콘솔 지표 수집 매핑. 워크스페이스는 단일(38345)이나 명시 저장, miniAppId 는 앱당 유일.
+  aitWorkspaceId  Int?
+  aitMiniAppId    Int?    @unique
 
   marketTargets Json // ["play","appstore","ait","web"]
 
@@ -58,6 +61,8 @@ model App {
   metrics      AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
   contentMetrics AppContentMetricDaily[]
+  // AppsInToss 콘솔 일별 지표(토스 표면 DAU/세션/잔존/IAA·IAP). GA4 와 별개 소스.
+  consoleMetrics AppConsoleMetricDaily[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -450,6 +455,38 @@ model AppContentMetricDaily {
   @@unique([appId, date, market])
   @@index([date])
   @@map("app_content_metric_daily")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// AppConsoleMetricDaily — AppsInToss 콘솔 일별 지표 스냅샷(GA4 와 별개 소스)
+// 토스 표면 전용 데이터: 콘솔 기준 DAU/신규, 평균 세션, IAA(광고)·IAP(인앱결제) 매출,
+// 유입경로(전체탭/미니앱홈)·연령/성별/OS·잔존 코호트 등. 콘솔 MCP 는 사용자 OAuth 세션이라
+// pod 가 직접 pull 불가 → 인증된 로컬 Claude 세션이 MCP 로 조회해 ingest route 로 push 한다.
+// GA4 수집과 동일하게 앱×날짜 upsert, 최근 N일 재집계(멱등). 향후 서비스 자격증명이 생기면
+// pod-side pull(ConsoleMetricsSource) 로 무중단 교체 — 스키마 불변.
+// 승격 컬럼은 '일별 스칼라'만, 나머지(잔존 코호트/데모그래픽/OS별 분해)는 raw JSON.
+// ──────────────────────────────────────────────────────────────────────────
+model AppConsoleMetricDaily {
+  id    String   @id @default(cuid())
+  appId String
+  app   App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date  DateTime @db.Date // 지표 기준일(YYYY-MM-DD, 토스/KST)
+
+  dau              Int    @default(0) // 콘솔 활성 사용자(au)
+  newUsers         Int    @default(0) // 신규 활성(newAu)
+  avgSessionSec    Float? // 평균 세션 길이(초)
+  iaaImpressions   Int    @default(0) // 광고 노출(OS 합)
+  iaaEarningKrw    Float  @default(0) // 광고 추정 수익(원, OS 합)
+  iapTrxAmountKrw  Float  @default(0) // 인앱결제 거래액(원)
+  iapSettlementKrw Float  @default(0) // 인앱결제 정산액(원)
+  payingUsers      Int    @default(0) // 결제 사용자(pu)
+  raw              Json? // 부가 원본: 유입경로/데모그래픽/OS별 IAA/잔존 코호트/앱버전 등
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([appId, date])
+  @@index([date])
+  @@map("app_console_metric_daily")
 }
 
 // ──────────────────────────────────────────────────────────────────────────

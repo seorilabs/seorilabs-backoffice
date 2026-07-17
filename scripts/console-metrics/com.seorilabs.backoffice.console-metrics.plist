@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AppsInToss 콘솔 지표 일일 수집 launchd 에이전트(사용자 로그인 세션).
+  설치:
+    cp scripts/console-metrics/com.seorilabs.backoffice.console-metrics.plist \
+       ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.seorilabs.backoffice.console-metrics.plist
+  즉시 1회 실행(검증):
+    launchctl start com.seorilabs.backoffice.console-metrics
+  해제:
+    launchctl unload ~/Library/LaunchAgents/com.seorilabs.backoffice.console-metrics.plist
+  StartCalendarInterval 은 Mac 로컬 시간(Asia/Seoul) 기준. 여기선 매일 10:30 KST.
+  잠자던 중 시각을 지나쳤으면 깨어난 직후 1회 실행된다.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.seorilabs.backoffice.console-metrics</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/syous/Repositories/seorilabs/seorilabs-backoffice/scripts/console-metrics/run.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/syous/Library/Logs/seorilabs/console-metrics.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/syous/Library/Logs/seorilabs/console-metrics.launchd.log</string>
+</dict>
+</plist>
