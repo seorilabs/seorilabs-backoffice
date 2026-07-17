@@ -16,6 +16,8 @@ import { ContentSection, ContentMarketTabs } from "@/components/analytics/AppCon
 import { contentSpecFor } from "@/lib/analytics/content-registry";
 import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
+import { resolveAitTarget } from "@/lib/analytics/ait-apps";
+import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
 
 export const dynamic = "force-dynamic";
 
@@ -33,16 +35,27 @@ export default async function AnalyticsPage({
   const allApps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
-    select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      firebaseProject: true,
+      ga4Dataset: true,
+      aitWorkspaceId: true,
+      aitMiniAppId: true,
+    },
   });
-  const apps = allApps.filter((a) => resolveGa4Target(a));
+  // 탭 = GA4 대상 ∪ 콘솔 대상. 개요는 소스별로 각각 렌더한다.
+  const ga4Apps = allApps.filter((a) => resolveGa4Target(a));
+  const consoleApps = allApps.filter((a) => resolveAitTarget(a));
+  const apps = allApps.filter((a) => resolveGa4Target(a) || resolveAitTarget(a));
   const selected = apps.find((a) => a.slug === sp.app) ?? null;
 
   return (
     <div className="px-4 py-6 sm:p-8">
       <h1 className="text-xl font-semibold">앱 지표</h1>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
-        GA4 → BigQuery 일별 스냅샷 · 기준일 D-1(전일 확정) · 매일 21:00 KST 수집
+        GA4(BigQuery, 매일 수집) + AppsInToss 콘솔(온디맨드 수집) 일별 스냅샷 · 기준일 D-1(전일 확정)
       </p>
 
       {/* 앱 선택 탭 */}
@@ -59,7 +72,7 @@ export default async function AnalyticsPage({
       </div>
 
       {apps.length === 0 ? (
-        <Notice>GA4 지표 대상 앱이 없습니다. (App.ga4Dataset 매핑 또는 fallback 표 확인)</Notice>
+        <Notice>지표 대상 앱이 없습니다. (GA4 ga4Dataset 매핑 또는 콘솔 aitMiniAppId/ait-apps 표 확인)</Notice>
       ) : selected ? (
         <SelectedApp
           appId={selected.id}
@@ -68,7 +81,7 @@ export default async function AnalyticsPage({
           market={sp.market}
         />
       ) : (
-        <Overview apps={apps} />
+        <Overview ga4Apps={ga4Apps} consoleApps={consoleApps} />
       )}
     </div>
   );
@@ -97,7 +110,8 @@ async function SelectedApp({
   if (rowsDesc.length === 0) {
     return (
       <div className="space-y-6">
-        <Notice>{name}의 수집된 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
+        <Notice>{name}의 수집된 GA4 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
+        <ConsoleMetricsSection appId={appId} />
         {contentSection}
       </div>
     );
@@ -139,7 +153,29 @@ async function SelectedApp({
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
+      <ConsoleMetricsSection appId={appId} />
       {contentSection}
+    </div>
+  );
+}
+
+// AppsInToss 콘솔 지표 섹션(온디맨드 수집). GA4 유무와 무관하게 렌더 — 콘솔 데이터가 있으면
+// 카드/추이/유입경로/데모를, 없으면 안내를 보인다.
+async function ConsoleMetricsSection({ appId }: { appId: string }) {
+  const rowsDesc = (await prisma.appConsoleMetricDaily.findMany({
+    where: { appId },
+    orderBy: { date: "desc" },
+    take: WINDOW,
+  })) as unknown as ConsoleMetricDaily[];
+  return (
+    <div className="border-t border-neutral-200 pt-6">
+      <div className="mb-3 text-sm font-semibold text-neutral-800">
+        AppsInToss 콘솔 지표
+        {rowsDesc.length > 0 && (
+          <span className="font-normal text-neutral-400"> (기준일 {isoDate(rowsDesc[0].date)})</span>
+        )}
+      </div>
+      <ConsoleSection rowsDesc={rowsDesc} />
     </div>
   );
 }
@@ -188,55 +224,111 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-async function Overview({
-  apps,
-}: {
-  apps: { id: string; slug: string; displayName: string }[];
-}) {
-  const items = await Promise.all(
-    apps.map(async (a) => ({
-      app: a,
-      latest: (await prisma.appMetricDaily.findFirst({
-        where: { appId: a.id },
-        orderBy: { date: "desc" },
-      })) as unknown as MetricDaily | null,
-    })),
-  );
+type AppRef = { id: string; slug: string; displayName: string };
+
+async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleApps: AppRef[] }) {
+  const [ga4Items, consoleItems] = await Promise.all([
+    Promise.all(
+      ga4Apps.map(async (a) => ({
+        app: a,
+        latest: (await prisma.appMetricDaily.findFirst({
+          where: { appId: a.id },
+          orderBy: { date: "desc" },
+        })) as unknown as MetricDaily | null,
+      })),
+    ),
+    Promise.all(
+      consoleApps.map(async (a) => ({
+        app: a,
+        latest: (await prisma.appConsoleMetricDaily.findFirst({
+          where: { appId: a.id },
+          orderBy: { date: "desc" },
+        })) as unknown as ConsoleMetricDaily | null,
+      })),
+    ),
+  ]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
-            <th className="px-3 py-2">앱</th>
-            <th className="px-3 py-2">기준일</th>
-            <th className="px-3 py-2 text-right">DAU</th>
-            <th className="px-3 py-2 text-right">신규</th>
-            <th className="px-3 py-2 text-right">D1</th>
-            <th className="px-3 py-2 text-right">D7</th>
-            <th className="px-3 py-2 text-right">광고노출</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(({ app, latest }) => (
-            <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-              <td className="px-3 py-2">
-                <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
-                  {app.displayName}
-                </Link>
-              </td>
-              <td className="px-3 py-2 text-xs text-neutral-500">
-                {latest ? isoDate(latest.date) : "—"}
-              </td>
-              <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
-              <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
-              <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d1Pct) : "—"}</td>
-              <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d7Pct) : "—"}</td>
-              <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.adImpressions : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-6">
+      {ga4Apps.length > 0 && (
+        <div>
+          <div className="mb-2 text-sm font-semibold text-neutral-700">GA4 지표</div>
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
+                  <th className="px-3 py-2">앱</th>
+                  <th className="px-3 py-2">기준일</th>
+                  <th className="px-3 py-2 text-right">DAU</th>
+                  <th className="px-3 py-2 text-right">신규</th>
+                  <th className="px-3 py-2 text-right">D1</th>
+                  <th className="px-3 py-2 text-right">D7</th>
+                  <th className="px-3 py-2 text-right">광고노출</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ga4Items.map(({ app, latest }) => (
+                  <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                    <td className="px-3 py-2">
+                      <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
+                        {app.displayName}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
+                    <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
+                    <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d1Pct) : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d7Pct) : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.adImpressions : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {consoleApps.length > 0 && (
+        <div>
+          <div className="mb-2 text-sm font-semibold text-neutral-700">AppsInToss 콘솔 지표</div>
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
+                  <th className="px-3 py-2">앱</th>
+                  <th className="px-3 py-2">기준일</th>
+                  <th className="px-3 py-2 text-right">DAU</th>
+                  <th className="px-3 py-2 text-right">신규</th>
+                  <th className="px-3 py-2 text-right">세션</th>
+                  <th className="px-3 py-2 text-right">광고노출</th>
+                  <th className="px-3 py-2 text-right">광고수익</th>
+                </tr>
+              </thead>
+              <tbody>
+                {consoleItems.map(({ app, latest }) => (
+                  <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                    <td className="px-3 py-2">
+                      <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
+                        {app.displayName}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
+                    <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
+                    <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">
+                      {latest?.avgSessionSec != null ? `${Math.round(latest.avgSessionSec)}초` : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.iaaImpressions : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">
+                      {latest ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
