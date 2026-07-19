@@ -38,7 +38,7 @@ export default async function AppDetail({
   const openIssues = app.issues.filter((i) => i.state === "OPEN");
   const targets = asStringArray(app.marketTargets);
 
-  const aiEnabled = env.minimaxConfigured();
+  const aiEnabled = env.geminiChatConfigured();
   const pendingDrafts = aiEnabled
     ? await prisma.aiDraft.findMany({
         where: { appId: app.id, status: "DRAFT" },
@@ -138,7 +138,7 @@ export default async function AppDetail({
         </Section>
       )}
 
-      {/* AI 에이전트 (MiniMax) */}
+      {/* AI 에이전트 (Gemini) */}
       <Section title="AI 에이전트">
         <AiAgentPanel
           appId={app.id}

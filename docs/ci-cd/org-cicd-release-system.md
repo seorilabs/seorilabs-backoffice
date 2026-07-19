@@ -196,7 +196,7 @@ flowchart LR
 
 ### 7.1 책임 분담 (backoffice 현황 기반)
 
-- 이미 존재: 출시노트 8개 언어 자동 생성(`generateReleaseNoteCore`, MiniMax + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Telegram 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
+- 이미 존재: 출시노트 8개 언어 자동 생성(`generateReleaseNoteCore`, Gemini + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Telegram 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
 - **추가 필요(gap)**:
   1. GitHub **태그 생성 + Release 발행**(현재 write는 issue/label/comment뿐) → `lib/github/write.ts`에 `createTag`/`createRelease`/`updateRelease` 추가. GitHub App 권한에 `contents:write` 필요.
   2. **workflow_dispatch 트리거**(`octokit.rest.actions.createWorkflowDispatch`) → `lib/github/write.ts`. App 권한 `actions:write` 필요.
@@ -211,7 +211,7 @@ sequenceDiagram
     participant U as 운영자(Backoffice/Telegram)
     participant BO as Backoffice
     participant GH as GitHub (API/Actions)
-    participant AI as MiniMax
+    participant AI as Gemini
     participant TG as Telegram
     participant MK as 마켓(AIT/GPS/APS)
 

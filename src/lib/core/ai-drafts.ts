@@ -2,7 +2,7 @@ import type { AiDraftKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
-import { miniMaxComplete } from "@/lib/ai/minimax";
+import { geminiComplete } from "@/lib/ai/gemini";
 import {
   AGENTS,
   buildPlanningPrompt,
@@ -35,7 +35,7 @@ export async function createPlanningDraftCore(input: {
   title?: string;
   actorLabel?: string;
 }): Promise<PlanningDraftResult> {
-  if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
+  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
 
@@ -51,10 +51,9 @@ export async function createPlanningDraftCore(input: {
     codebaseContext: codebaseContext || undefined,
   });
   // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
-  const outputText = await miniMaxComplete({
+  const outputText = await geminiComplete({
     system,
     prompt,
-    temperature: 0.4,
     maxTokens: 2048,
   });
 
@@ -67,7 +66,7 @@ export async function createPlanningDraftCore(input: {
       title,
       inputJson: { idea: input.idea },
       outputText,
-      model: env.minimaxModel(),
+      model: env.geminiChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });
@@ -88,7 +87,7 @@ export async function createBugDraftCore(input: {
   title?: string;
   actorLabel?: string;
 }): Promise<PlanningDraftResult> {
-  if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
+  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
 
@@ -105,10 +104,9 @@ export async function createBugDraftCore(input: {
     codebaseContext: codebaseContext || undefined,
   });
   // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
-  const outputText = await miniMaxComplete({
+  const outputText = await geminiComplete({
     system,
     prompt,
-    temperature: 0.3,
     maxTokens: 2048,
   });
 
@@ -121,7 +119,7 @@ export async function createBugDraftCore(input: {
       title,
       inputJson: { symptom: input.symptom },
       outputText,
-      model: env.minimaxModel(),
+      model: env.geminiChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });
@@ -152,7 +150,7 @@ export async function generateStageDraftCore(input: {
   issueNumber?: number;
   actorLabel?: string;
 }): Promise<StageDraftResult> {
-  if (!env.minimaxConfigured()) throw new Error("MiniMax 비활성");
+  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
   const meta = AGENTS[input.kind];
@@ -251,7 +249,7 @@ export async function generateStageDraftCore(input: {
     throw new Error("지원하지 않는 에이전트입니다.");
   }
 
-  const outputText = await miniMaxComplete({ system, prompt, temperature: 0.3, maxTokens: 2048 });
+  const outputText = await geminiComplete({ system, prompt, maxTokens: 2048 });
 
   const draft = await prisma.aiDraft.create({
     data: {
@@ -263,7 +261,7 @@ export async function generateStageDraftCore(input: {
       issueNumber,
       inputJson,
       outputText,
-      model: env.minimaxModel(),
+      model: env.geminiChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });

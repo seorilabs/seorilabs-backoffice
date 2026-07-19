@@ -191,7 +191,7 @@ export function PlanForm({
           <button
             type="button"
             disabled
-            title="FEATURE_MINIMAX_ENABLED + MINIMAX_API_KEY 필요"
+            title="FEATURE_GEMINI_ENABLED + GEMINI_API_KEY 필요"
             className="cursor-not-allowed rounded border border-neutral-300 px-4 py-2 text-sm text-neutral-400"
           >
             AI 초안 생성 (비활성)

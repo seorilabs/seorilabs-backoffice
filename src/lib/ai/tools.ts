@@ -191,7 +191,7 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
       try {
         const doc = await readVaultDoc(p);
         if (!doc) return `문서를 찾지 못함: ${p}`;
-        // 컨텍스트 보호용 상한(MiniMax MAX_MSG_CHARS 고려).
+        // 모델 컨텍스트와 요청 비용을 보호하는 문서 본문 상한.
         return `[${doc.path}]\n${doc.text.slice(0, 6000)}`;
       } catch (e) {
         return `문서 읽기 실패: ${(e as Error).message}`;

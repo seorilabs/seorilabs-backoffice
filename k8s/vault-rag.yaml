@@ -11,7 +11,7 @@
 #   2) data ns 에 전용 시크릿 생성(평문 레포 금지 → kubectl 로 주입):
 #      kubectl -n data create secret generic backoffice-vault-secrets \
 #        --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
-#        --from-literal=GEMINI_API_KEY='***'  # Google AI Studio 키(임베딩용)
+#        --from-literal=GEMINI_API_KEY='***'  # 회사 Vault 인덱서 전용 키
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -57,7 +57,7 @@ spec:
                   value: /tmp
                 - name: CHECKPOINT_DISABLE
                   value: "1"
-                # 임베딩 = Gemini(gemini-embedding-001). MiniMax .io 는 임베딩 미제공.
+                # 임베딩 = Gemini(gemini-embedding-001).
                 - name: GEMINI_API_BASE_URL
                   value: "https://generativelanguage.googleapis.com/v1beta"
                 - name: GEMINI_EMBED_MODEL

@@ -1,7 +1,7 @@
 import { env } from "@/lib/env";
 
-// 임베딩 = Google Gemini(gemini-embedding-001). MiniMax 국제(.io)는 임베딩 미제공이라
-// 챗(MiniMax-M3)과 별개 제공자를 사용. 챗/추론은 그대로 MiniMax 가 담당.
+// 임베딩 = Google Gemini(gemini-embedding-001). 챗/초안은 별도
+// Gemini 3.1 Flash-Lite 모델을 사용한다.
 // - taskType: "db"(문서 색인=RETRIEVAL_DOCUMENT) | "query"(질의=RETRIEVAL_QUERY) — 비대칭.
 // - outputDimensionality 로 차원 축소(저장 절약). cosine 은 스케일 불변이라 정규화 불필요.
 // 서버 전용(API 키). 절대 클라이언트 번들에 포함하지 말 것.
