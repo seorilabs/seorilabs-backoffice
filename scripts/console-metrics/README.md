@@ -28,17 +28,19 @@ AppsInToss 콘솔의 미니앱 지표(토스 표면 DAU/신규/세션/IAA·IAP �
 |---|---|
 | `src/lib/analytics/ait-apps.ts` | slug ↔ (workspaceId, miniAppId) 정본 표 + 해석기 |
 | `src/lib/analytics/console-source.ts` | push 계약 타입 + 향후 pull 포트(ConsoleMetricsSource) |
-| `src/lib/core/console-metrics-collect.ts` | `ingestConsoleMetrics()` — 검증 + 멱등 upsert |
-| `src/app/api/admin/analytics/console-collect/route.ts` | ingest 엔드포인트(x-admin-token) |
+| `src/lib/core/console-metrics-collect.ts` | `ingestConsoleMetrics()` upsert + `getConsoleSyncStatus()` 상태 조회 |
+| `src/app/api/admin/analytics/console-collect/route.ts` | ingest(POST) + 동기화 상태(GET), 둘 다 x-admin-token |
 | `scripts/console-metrics/runbook.md` | 온디맨드 수집 절차(대화형 Claude 가 따른다) |
+| `scripts/console-metrics/status.sh` | GET 상태 조회 헬퍼 — 앱별 lastDate/rows(증분 윈도우 판정) |
 | `scripts/console-metrics/push.sh` | payload JSON → ingest POST 헬퍼(토큰 취급 분리) |
 | `scripts/seed-ait-mapping.ts` | App.aitMiniAppId/aitWorkspaceId 채우기(선택 — ingest 는 slug 로도 동작) |
 
 ## 수집 방법
 
-대화형 Claude 세션에서 `runbook.md` 절차를 따른다(요청: "콘솔 지표 수집해줘"). 토큰이 만료됐으면
-`/mcp` 로 `apps-in-toss-console` 재인증 후 진행. push 는 `push.sh` 가 `~/.config/seorilabs/backoffice.env`
-의 `INTERNAL_ADMIN_TOKEN` 으로 처리한다.
+대화형 Claude 세션에서 `runbook.md` 절차를 따른다(요청: "콘솔 지표 수집해줘" 또는 `/console-sync`).
+토큰이 만료됐으면 `/mcp` 로 `apps-in-toss-console` 재인증 후 진행. 먼저 `status.sh` 로 앱별 마지막
+동기화 날짜를 읽어 증분 윈도우를 잡고, MCP 조회 → 정규화 → `push.sh` 로 push 한다. 두 스크립트 모두
+`~/.config/seorilabs/backoffice.env` 의 `INTERNAL_ADMIN_TOKEN` 으로 인증한다.
 
 ## 진짜 무인화 (향후)
 
