@@ -349,7 +349,7 @@ enum OwnerRole {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// AiDraft — Stage Agent(MiniMax) 산출 초안. 초안→검토→1클릭 커밋.
+// AiDraft — Stage Agent(Gemini) 산출 초안. 초안→검토→1클릭 커밋.
 // AI 는 GitHub 에 직접 쓰지 않음: 이 테이블이 검토 큐 + 감사 + 재생성 근거.
 // ──────────────────────────────────────────────────────────────────────────
 model AiDraft {
@@ -363,7 +363,7 @@ model AiDraft {
   issueNumber  Int? // 코멘트 커밋 대상(분해 등). 새 이슈형은 null
   inputJson    Json // 생성 입력 컨텍스트(재생성/감사)
   outputText   String        @db.Text // LLM 산출(사람이 수정 가능)
-  model        String // "MiniMax-M3"
+  model        String // "gemini-3.1-flash-lite"
   status       AiDraftStatus @default(DRAFT)
   committedIssueNumber Int? // 커밋 결과 이슈 번호
   committedUrl String?
@@ -492,7 +492,7 @@ model AppConsoleMetricDaily {
 // ──────────────────────────────────────────────────────────────────────────
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
-// 텔레그램 턴 기반 채팅 이력(MiniMax 대화 컨텍스트). chatId 별 롤링.
+// 텔레그램 턴 기반 채팅 이력(Gemini 대화 컨텍스트). chatId 별 롤링.
 model TelegramTurn {
   id        String   @id @default(cuid())
   chatId    String // telegram chat id

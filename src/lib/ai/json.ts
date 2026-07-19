@@ -1,4 +1,4 @@
-// MiniMax 가 머리말/코드펜스를 섞어 뱉어도 JSON 객체를 견고하게 추출.
+// 모델이 머리말/코드펜스를 섞어 뱉어도 JSON 객체를 견고하게 추출.
 
 export function stripFences(s: string): string {
   const m = s.match(/```(?:json)?\s*([\s\S]*?)```/i);

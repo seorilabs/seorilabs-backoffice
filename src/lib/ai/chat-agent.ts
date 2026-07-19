@@ -1,4 +1,4 @@
-import { miniMaxChat, type ChatMessage } from "@/lib/ai/minimax";
+import { geminiChat, type ChatMessage } from "@/lib/ai/gemini";
 import { TOOLS, runTool } from "@/lib/ai/tools";
 import { stripFences, extractObject } from "@/lib/ai/json";
 
@@ -13,7 +13,7 @@ interface ParsedAction {
   final?: string;
 }
 
-// MiniMax 가 머리말 + JSON 을 함께 뱉어도 도구/최종 액션을 인식(견고화).
+// 모델이 머리말 + JSON을 함께 뱉어도 도구/최종 액션을 인식한다.
 function tryParseAction(raw: string): ParsedAction | null {
   const base = stripFences(raw);
   for (const cand of [base, extractObject(base)]) {
@@ -62,8 +62,7 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
 
   let lastRaw = "";
   for (let i = 0; i < MAX_ROUNDS; i++) {
-    const raw = await miniMaxChat(convo, {
-      temperature: 0.3,
+    const raw = await geminiChat(convo, {
       maxTokens: 1100,
       jsonOutput: true,
     });
@@ -81,9 +80,9 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
   }
 
   // 라운드 소진 → 도구 없이 최종 정리 1회.
-  const final = await miniMaxChat(
+  const final = await geminiChat(
     [...convo, { role: "user", content: "지금까지 정보로 한국어 최종 답변만 작성." }],
-    { temperature: 0.4, maxTokens: 1100 },
+    { maxTokens: 1100 },
   );
   return final || lastRaw;
 }

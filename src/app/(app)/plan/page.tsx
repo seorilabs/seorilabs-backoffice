@@ -11,7 +11,7 @@ export default async function PlanPage() {
     select: { repoFullName: true, displayName: true },
     orderBy: { displayName: "asc" },
   });
-  const aiEnabled = env.minimaxConfigured();
+  const aiEnabled = env.geminiChatConfigured();
 
   return (
     <div className="px-4 py-6 sm:p-8">

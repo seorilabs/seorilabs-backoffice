@@ -3,7 +3,7 @@ import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
-import { MiniMaxNotConfiguredError, type ChatMessage } from "@/lib/ai/minimax";
+import { GeminiNotConfiguredError, type ChatMessage } from "@/lib/ai/gemini";
 import { runChatAgent } from "@/lib/ai/chat-agent";
 
 // 컨텍스트로 불러올 최근 턴 수(=대화 메모리). 너무 길면 비용·지연 증가.
@@ -83,8 +83,8 @@ export async function resetChat(chatId: string | number): Promise<void> {
 }
 
 /**
- * 턴 기반 채팅 처리: 이력 로드 → MiniMax 호출 → 턴 저장 → 답변 반환.
- * MiniMax 미설정/오류 시 사용자용 메시지를 반환(throw 안 함).
+ * 턴 기반 채팅 처리: 이력 로드 → Gemini 호출 → 턴 저장 → 답변 반환.
+ * Gemini 미설정/오류 시 사용자용 메시지를 반환(throw 안 함).
  */
 export async function handleChat(
   chatId: string | number,
@@ -115,8 +115,8 @@ export async function handleChat(
   try {
     reply = await runChatAgent(messages);
   } catch (e) {
-    if (e instanceof MiniMaxNotConfiguredError) {
-      return "AI 채팅이 비활성 상태입니다 (MiniMax 미설정).";
+    if (e instanceof GeminiNotConfiguredError) {
+      return "AI 채팅이 비활성 상태입니다 (Gemini 미설정).";
     }
     console.error("[telegram] chat error:", e instanceof Error ? e.message : "error");
     return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도하세요.";

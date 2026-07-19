@@ -283,8 +283,8 @@ async function cmdIndex(chatId: number): Promise<void> {
 
 // ── /plan: 앱 선택 → 아이디어 → 미리보기 → 버튼 커밋 ──
 async function cmdPlanStart(chatId: number): Promise<void> {
-  if (!env.minimaxConfigured()) {
-    await sendMessage(chatId, "AI 기획이 비활성 상태입니다 (MiniMax 미설정).");
+  if (!env.geminiChatConfigured()) {
+    await sendMessage(chatId, "AI 기획이 비활성 상태입니다 (Gemini 미설정).");
     return;
   }
   const apps = await prisma.app.findMany({
@@ -336,8 +336,8 @@ async function handlePlanIdea(
 
 // ── /bug: 앱 선택 → 증상 → AI 정리 → 버튼 커밋(label: bug) ──
 async function cmdBugStart(chatId: number): Promise<void> {
-  if (!env.minimaxConfigured()) {
-    await sendMessage(chatId, "AI 정리가 비활성 상태입니다 (MiniMax 미설정).");
+  if (!env.geminiChatConfigured()) {
+    await sendMessage(chatId, "AI 정리가 비활성 상태입니다 (Gemini 미설정).");
     return;
   }
   const apps = await prisma.app.findMany({

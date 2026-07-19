@@ -82,14 +82,20 @@ spec:
               value: seorilabs
             - name: ALLOWLIST_LOGINS
               value: "magicsih"
-            - name: FEATURE_MINIMAX_ENABLED
+            - name: FEATURE_GEMINI_ENABLED
               value: "true"
-            - name: MINIMAX_API_BASE_URL
-              value: "https://api.minimax.io/v1"
-            - name: MINIMAX_MODEL
-              value: "MiniMax-M3"
-            - name: MINIMAX_TIMEOUT_MS
+            - name: GEMINI_API_BASE_URL
+              value: "https://generativelanguage.googleapis.com/v1beta"
+            - name: GEMINI_CHAT_MODEL
+              value: "gemini-3.1-flash-lite"
+            - name: GEMINI_CHAT_TIMEOUT_MS
               value: "180000"
+            - name: GEMINI_EMBED_MODEL
+              value: "gemini-embedding-001"
+            - name: GEMINI_EMBED_DIM
+              value: "1536"
+            - name: GEMINI_TIMEOUT_MS
+              value: "60000"
             - name: RECONCILE_INTERVAL_MS
               value: "21600000"
             # GA4→BigQuery 지표 수집(수집/보고 CronJob + /analytics 대시보드).
@@ -146,19 +152,12 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: INTERNAL_ADMIN_TOKEN
-            - name: MINIMAX_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: MINIMAX_API_KEY
-                  optional: true
-            # 임베딩(볼트 검색 질의측). 인덱서는 data ns 에서 별도 주입.
+            # 챗/초안 + 볼트 검색 질의 임베딩. 인덱서는 data ns 별도 키를 사용.
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: GEMINI_API_KEY
-                  optional: true
             # GA4 BigQuery 읽기 SA 키(JSON 전체). 없으면 지표 수집이 비활성.
             - name: GA4_SA_KEY_JSON
               valueFrom:

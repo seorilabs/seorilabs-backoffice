@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       version,
       headSha: body.headSha,
     });
-    if (!r) return NextResponse.json({ ok: false, error: "미등록 repo 또는 MiniMax 미구성" }, { status: 400 });
+    if (!r) return NextResponse.json({ ok: false, error: "미등록 repo 또는 Gemini 미구성" }, { status: 400 });
     return NextResponse.json({ ok: true, ...r });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });

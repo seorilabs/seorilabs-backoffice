@@ -6,7 +6,7 @@ import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { visibleAppWhere, visibleIssueWhere, visibleReleaseWhere } from "@/lib/domain/app-visibility";
-import { miniMaxComplete } from "@/lib/ai/minimax";
+import { geminiComplete } from "@/lib/ai/gemini";
 
 // 단계 진입 시 다음 단계 에이전트를 제안하는 넛지 매핑.
 const STAGE_NUDGE: Partial<
@@ -22,7 +22,7 @@ const STAGE_NUDGE: Partial<
 export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise<void> {
   try {
     const m = STAGE_NUDGE[stage];
-    if (!m || !env.minimaxConfigured()) return;
+    if (!m || !env.geminiChatConfigured()) return;
     const app = await prisma.app.findFirst({
       where: { id: appId, ...visibleAppWhere },
       select: { displayName: true },
@@ -78,17 +78,16 @@ export async function sendDailyDigest(now: Date): Promise<void> {
   ];
 
   // AI '오늘 볼 것' 한 줄(설정 시).
-  if (env.minimaxConfigured()) {
+  if (env.geminiChatConfigured()) {
     try {
       const summary = [
         `승인대기 ${pend.length}건: ${pend.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number}`).join(", ") || "없음"}`,
         `P1 ${p1.length}건: ${p1.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number} ${i.title}`).join("; ") || "없음"}`,
       ].join("\n");
-      const oneLiner = await miniMaxComplete({
+      const oneLiner = await geminiComplete({
         system:
           "당신은 Seorilabs 공장 운영 비서다. 아래 현황에서 오늘 가장 먼저 처리하면 좋을 것 1가지를 한 문장(한국어)으로만 제안하라. 불필요한 인사·부연 없이 핵심만.",
         prompt: summary,
-        temperature: 0.4,
         maxTokens: 200,
       });
       lines.push("", `💬 ${esc(oneLiner.trim())}`);

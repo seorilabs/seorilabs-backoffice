@@ -28,15 +28,11 @@ export const env = {
   // Godot 버전 감지 알림: global-versions.yaml 의 tools.godot.version 을 미러링.
   // kubectl 워크스페이스가 git 이 아니라 fetch 불가 → env 로 pin 값 주입.
   godotPinnedVersion: () => optional("GODOT_PINNED_VERSION", "4.6.3"),
-  featureMinimax: () => bool("FEATURE_MINIMAX_ENABLED", false),
-  // MiniMax (OpenAI 호환 Chat Completions, gemini-pr-bot 와 동일 형태)
-  minimaxApiKey: () => optional("MINIMAX_API_KEY"),
-  minimaxModel: () => optional("MINIMAX_MODEL", "MiniMax-M3"),
-  minimaxBaseUrl: () =>
-    optional("MINIMAX_API_BASE_URL", "https://api.minimax.io/v1"),
-  minimaxTimeoutMs: () => Number(optional("MINIMAX_TIMEOUT_MS", "180000")),
-  // 임베딩 = Gemini(gemini-embedding-001). MiniMax .io 는 임베딩 미제공이라 분리.
+  featureGemini: () => bool("FEATURE_GEMINI_ENABLED", false),
+  // Gemini API: Flash-Lite 챗/초안 + gemini-embedding-001 볼트 질의 임베딩.
   geminiApiKey: () => optional("GEMINI_API_KEY"),
+  geminiChatModel: () => optional("GEMINI_CHAT_MODEL", "gemini-3.1-flash-lite"),
+  geminiChatTimeoutMs: () => Number(optional("GEMINI_CHAT_TIMEOUT_MS", "180000")),
   geminiEmbedModel: () => optional("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
   geminiBaseUrl: () =>
     optional("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
@@ -65,10 +61,10 @@ export const env = {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-  // 실제 LLM 호출 가능 여부: 플래그 ON + 키 존재.
-  minimaxConfigured: () =>
-    bool("FEATURE_MINIMAX_ENABLED", false) &&
-    Boolean(optional("MINIMAX_API_KEY").trim()),
+  // 실제 챗/초안 호출 가능 여부: 플래그 ON + 회사 키 존재.
+  geminiChatConfigured: () =>
+    bool("FEATURE_GEMINI_ENABLED", false) &&
+    Boolean(optional("GEMINI_API_KEY").trim()),
   allowlistLogins: () =>
     optional("ALLOWLIST_LOGINS", "")
       .split(",")

@@ -57,7 +57,7 @@ export function AiAgentPanel({
   if (!aiEnabled) {
     return (
       <p className="text-sm text-neutral-400">
-        AI 에이전트 비활성 (FEATURE_MINIMAX_ENABLED + MINIMAX_API_KEY 필요).
+        AI 에이전트 비활성 (FEATURE_GEMINI_ENABLED + GEMINI_API_KEY 필요).
       </p>
     );
   }

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { miniMaxComplete } from "@/lib/ai/minimax";
+import { geminiComplete } from "@/lib/ai/gemini";
 import { parseLooseJson } from "@/lib/ai/json";
 import { buildReleaseNotesI18nPrompt } from "@/lib/ai/agents";
 import { normalizeStoreNotes } from "@/lib/core/store-notes";
@@ -18,7 +18,7 @@ import {
 } from "@/lib/github/release";
 
 // 출시노트 생성 코어 — 릴리즈 태그 push(webhook) 또는 수동 백필 공용.
-// 이전 릴리즈 태그~새 태그 diff → MiniMax 로 다국어 유저 공지 생성 → ReleaseNote 저장.
+// 이전 릴리즈 태그~새 태그 diff → Gemini로 다국어 유저 공지 생성 → ReleaseNote 저장.
 
 export interface GenerateReleaseNoteInput {
   repoFullName: string;
@@ -51,8 +51,8 @@ export async function generateReleaseNoteCore(
     console.warn(`[release-notes] ${HIDDEN_APP_ERROR}`);
     return null;
   }
-  if (!env.minimaxConfigured()) {
-    console.warn("[release-notes] MiniMax 미구성 — 생성 스킵");
+  if (!env.geminiChatConfigured()) {
+    console.warn("[release-notes] Gemini 미구성 — 생성 스킵");
     return null;
   }
 
@@ -77,10 +77,9 @@ export async function generateReleaseNoteCore(
     commitCount: cmp?.commitCount ?? 0,
   });
 
-  const raw = await miniMaxComplete({
+  const raw = await geminiComplete({
     system,
     prompt,
-    temperature: 0.3,
     maxTokens: 4000,
     jsonOutput: true,
   });
@@ -106,7 +105,7 @@ export async function generateReleaseNoteCore(
       commitCount: cmp?.commitCount ?? 0,
     } as object,
     status: "GENERATED" as const,
-    model: env.minimaxModel(),
+    model: env.geminiChatModel(),
   };
 
   const note = await prisma.releaseNote.upsert({
