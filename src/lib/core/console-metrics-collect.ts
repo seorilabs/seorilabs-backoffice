@@ -5,6 +5,7 @@ import type {
   ConsoleAppPush,
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
+import { AIT_MINIAPP_BY_SLUG } from "@/lib/analytics/ait-apps";
 
 // AppsInToss 콘솔 지표 ingest(push 수집). 인증된 로컬 Claude 세션이 MCP dashboard_* 를 조회해
 // 정규화한 push 페이로드를 받아 AppConsoleMetricDaily(앱×날짜)로 멱등 upsert 한다.
@@ -117,4 +118,84 @@ export async function ingestConsoleMetrics(
   }
 
   return result;
+}
+
+// ── 동기화 상태 조회(온디맨드 수집 윈도우 판정용) ──────────────────────────
+// 콘솔 수집은 cron 이 아닌 온디맨드(대화형 Claude 세션)라 마지막 동기화가 오래됐을 수 있다.
+// 수집 커맨드가 "어디부터 당길지"를 정하려면 앱별 마지막 저장 날짜가 필요하다. ingest 는 POST
+// 전용이라 읽기 경로가 없어, 같은 라우트에 token 보호 GET 을 두고 이 헬퍼로 상태를 반환한다.
+
+/** 대상 앱 1개의 콘솔 지표 동기화 상태. */
+export interface ConsoleSyncStatusApp {
+  /** backoffice App.slug(= 콘솔 appName 매핑 키). */
+  slug: string;
+  /** 콘솔 miniAppId(DB aitMiniAppId 우선, 없으면 코드 매핑 fallback). */
+  miniAppId: number | null;
+  /** 저장된 마지막 지표 기준일 "YYYY-MM-DD"(없으면 null → 백필 필요). */
+  lastDate: string | null;
+  /** 마지막 수집 시각 ISO(없으면 null). */
+  lastCollectedAt: string | null;
+  /** 저장된 (앱×날짜) row 수. */
+  rows: number;
+}
+
+/** 콘솔 지표 수집 대상 앱 전체의 동기화 상태 스냅샷. */
+export interface ConsoleSyncStatus {
+  apps: ConsoleSyncStatusApp[];
+  /** 데이터가 있는 앱들의 lastDate 중 가장 이른 값 — 증분 윈도우 시작 판단용(없으면 null). */
+  minLastDate: string | null;
+  /** 데이터가 있는 앱들의 lastDate 중 가장 늦은 값(없으면 null). */
+  maxLastDate: string | null;
+  /** 저장 row 가 전혀 없는 대상 앱 slug — 신규 등록 등, 별도 백필 필요. */
+  appsWithNoData: string[];
+}
+
+function toIsoDate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
+/**
+ * 콘솔 지표 수집 대상 앱(코드 매핑 ∪ DB aitMiniAppId 설정 앱)별 마지막 동기화 상태를 반환한다.
+ * 수집 커맨드가 이 값을 읽어 증분 윈도우([minLastDate−overlap, D-1])와 백필 대상을 정한다.
+ */
+export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
+  const grouped = await prisma.appConsoleMetricDaily.groupBy({
+    by: ["appId"],
+    _max: { date: true, collectedAt: true },
+    _count: { _all: true },
+  });
+  const registry = await prisma.app.findMany({
+    select: { id: true, slug: true, aitMiniAppId: true },
+  });
+
+  const bySlug = new Map(registry.map((a) => [a.slug, a]));
+  const groupByAppId = new Map(grouped.map((g) => [g.appId, g]));
+
+  // 대상 앱 = 코드 매핑 슬러그 ∪ DB 에 aitMiniAppId 채워진 앱.
+  const targetSlugs = new Set<string>(Object.keys(AIT_MINIAPP_BY_SLUG));
+  for (const a of registry) if (a.aitMiniAppId != null) targetSlugs.add(a.slug);
+
+  const apps: ConsoleSyncStatusApp[] = [...targetSlugs]
+    .sort()
+    .map((slug) => {
+      const app = bySlug.get(slug);
+      const g = app ? groupByAppId.get(app.id) : undefined;
+      return {
+        slug,
+        miniAppId: app?.aitMiniAppId ?? AIT_MINIAPP_BY_SLUG[slug] ?? null,
+        lastDate: toIsoDate(g?._max.date ?? null),
+        lastCollectedAt: g?._max.collectedAt
+          ? g._max.collectedAt.toISOString()
+          : null,
+        rows: g?._count._all ?? 0,
+      };
+    });
+
+  const withData = apps.filter((a) => a.lastDate != null).map((a) => a.lastDate!);
+  return {
+    apps,
+    minLastDate: withData.length ? withData.reduce((m, d) => (d < m ? d : m)) : null,
+    maxLastDate: withData.length ? withData.reduce((m, d) => (d > m ? d : m)) : null,
+    appsWithNoData: apps.filter((a) => a.rows === 0).map((a) => a.slug),
+  };
 }
