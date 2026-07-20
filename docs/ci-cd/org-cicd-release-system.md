@@ -201,7 +201,7 @@ flowchart LR
   1. GitHub **태그 생성 + Release 발행**(현재 write는 issue/label/comment뿐) → `lib/github/write.ts`에 `createTag`/`createRelease`/`updateRelease` 추가. GitHub App 권한에 `contents:write` 필요.
   2. **workflow_dispatch 트리거**(`octokit.rest.actions.createWorkflowDispatch`) → `lib/github/write.ts`. App 권한 `actions:write` 필요.
   3. `/releases` UI: **태그 선택 + 마켓별/Deploy All 버튼**.
-  4. Telegram: `/deploy` 슬래시 + `deploy:` 콜백(confirm-button), 릴리즈 태그 링크 발송.
+  4. Telegram: `/deploy` 슬래시 + `deploy:` 콜백(confirm-button), 릴리즈 태그 링크 발송. `/release` 태그 생성 완료 메시지에는 해당 태그의 플랫폼별 빠른 배포 버튼을 즉시 표시하며, 각 버튼은 독립 상태를 유지해 순서대로 모두 트리거할 수 있다(`READY → TRIGGERING → TRIGGERED/IN_PROGRESS/SUCCEEDED`, 실패 시 재시도).
   5. 성공 알림: dispatch된 deploy의 `workflow_run` webhook → 기존 `ReleaseRecord` + nudge 경로로 자동 성공/실패 메시지(이미 동작).
 
 ### 7.2 릴리즈 → 배포 시퀀스
