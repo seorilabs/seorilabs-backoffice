@@ -18,6 +18,7 @@ import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
+import { aggConsoleWindow } from "@/lib/analytics/console-window";
 
 export const dynamic = "force-dynamic";
 
@@ -227,7 +228,7 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 type AppRef = { id: string; slug: string; displayName: string };
 
 async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleApps: AppRef[] }) {
-  const [ga4Items, consoleItems] = await Promise.all([
+  const [ga4Items, consoleItems, consoleWindows] = await Promise.all([
     Promise.all(
       ga4Apps.map(async (a) => ({
         app: a,
@@ -246,7 +247,25 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
         })) as unknown as ConsoleMetricDaily | null,
       })),
     ),
+    // 최근 7일 집계(앱별 최근 7개 수집 row).
+    Promise.all(
+      consoleApps.map(async (a) => ({
+        app: a,
+        agg: aggConsoleWindow(
+          (await prisma.appConsoleMetricDaily.findMany({
+            where: { appId: a.id },
+            orderBy: { date: "desc" },
+            take: 7,
+          })) as unknown as ConsoleMetricDaily[],
+        ),
+      })),
+    ),
   ]);
+
+  // 최근 7일 집계 비교는 DAU 합 내림차순(데이터 없는 앱은 뒤).
+  const windowRanked = [...consoleWindows].sort(
+    (a, b) => (b.agg?.dauSum ?? -1) - (a.agg?.dauSum ?? -1),
+  );
 
   return (
     <div className="space-y-6">
@@ -289,43 +308,97 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
       )}
 
       {consoleApps.length > 0 && (
-        <div>
-          <div className="mb-2 text-sm font-semibold text-neutral-700">AppsInToss 콘솔 지표</div>
-          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
-                  <th className="px-3 py-2">앱</th>
-                  <th className="px-3 py-2">기준일</th>
-                  <th className="px-3 py-2 text-right">DAU</th>
-                  <th className="px-3 py-2 text-right">신규</th>
-                  <th className="px-3 py-2 text-right">세션</th>
-                  <th className="px-3 py-2 text-right">광고노출</th>
-                  <th className="px-3 py-2 text-right">광고수익</th>
-                </tr>
-              </thead>
-              <tbody>
-                {consoleItems.map(({ app, latest }) => (
-                  <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-                    <td className="px-3 py-2">
-                      <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
-                        {app.displayName}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
-                    <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
-                    <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
-                    <td className="px-3 py-2 text-right text-neutral-600">
-                      {latest?.avgSessionSec != null ? `${Math.round(latest.avgSessionSec)}초` : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.iaaImpressions : "—"}</td>
-                    <td className="px-3 py-2 text-right text-neutral-600">
-                      {latest ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
-                    </td>
+        <div className="space-y-6">
+          {/* 최근 7일 집계 비교(내가 보여준 앱 전체 비교표) */}
+          <div>
+            <div className="mb-2 text-sm font-semibold text-neutral-700">
+              AppsInToss 콘솔 지표 · 최근 7일 집계
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
+                    <th className="px-3 py-2">앱</th>
+                    <th className="px-3 py-2">기간</th>
+                    <th className="px-3 py-2 text-right">DAU 합</th>
+                    <th className="px-3 py-2 text-right">일평균</th>
+                    <th className="px-3 py-2 text-right">신규</th>
+                    <th className="px-3 py-2 text-right">세션(평균)</th>
+                    <th className="px-3 py-2 text-right">광고노출</th>
+                    <th className="px-3 py-2 text-right">광고수익</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {windowRanked.map(({ app, agg }) => (
+                    <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                      <td className="px-3 py-2">
+                        <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
+                          {app.displayName}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-neutral-500">
+                        {agg ? `${isoDate(agg.dateMin)}~${isoDate(agg.dateMax)}` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right">{agg ? agg.dauSum : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">
+                        {agg ? agg.dauAvg.toFixed(1) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right">{agg ? agg.newSum : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">
+                        {agg?.sessAvg != null ? `${Math.round(agg.sessAvg)}초` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right text-neutral-600">{agg ? agg.iaaImpSum : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">
+                        {agg ? `₩${Math.round(agg.iaaEarnSum).toLocaleString("ko-KR")}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 최신 기준일 스냅샷 */}
+          <div>
+            <div className="mb-2 text-sm font-semibold text-neutral-700">
+              AppsInToss 콘솔 지표 · 최신 기준일
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
+                    <th className="px-3 py-2">앱</th>
+                    <th className="px-3 py-2">기준일</th>
+                    <th className="px-3 py-2 text-right">DAU</th>
+                    <th className="px-3 py-2 text-right">신규</th>
+                    <th className="px-3 py-2 text-right">세션</th>
+                    <th className="px-3 py-2 text-right">광고노출</th>
+                    <th className="px-3 py-2 text-right">광고수익</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consoleItems.map(({ app, latest }) => (
+                    <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                      <td className="px-3 py-2">
+                        <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
+                          {app.displayName}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
+                      <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
+                      <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">
+                        {latest?.avgSessionSec != null ? `${Math.round(latest.avgSessionSec)}초` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.iaaImpressions : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">
+                        {latest ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
