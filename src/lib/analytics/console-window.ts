@@ -53,3 +53,13 @@ export function aggConsoleWindow(rows: ConsoleWindowRow[]): ConsoleWindowAgg | n
     iaaEarnSum: sum((r) => r.iaaEarningKrw),
   };
 }
+
+/**
+ * 기간 집계 항목을 DAU 합 내림차순으로 정렬한다. 집계가 없는 항목(agg=null, 수집 데이터 없음)은
+ * dauSum 을 -1 로 취급해 항상 뒤로 보낸다. 원본 배열은 변경하지 않는다(복사 후 정렬).
+ */
+export function rankConsoleWindows<T extends { agg: ConsoleWindowAgg | null }>(
+  items: readonly T[],
+): T[] {
+  return [...items].sort((a, b) => (b.agg?.dauSum ?? -1) - (a.agg?.dauSum ?? -1));
+}

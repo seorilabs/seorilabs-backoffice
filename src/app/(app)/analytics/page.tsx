@@ -18,7 +18,7 @@ import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
-import { aggConsoleWindow } from "@/lib/analytics/console-window";
+import { aggConsoleWindow, rankConsoleWindows } from "@/lib/analytics/console-window";
 
 export const dynamic = "force-dynamic";
 
@@ -263,9 +263,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
   ]);
 
   // 최근 7일 집계 비교는 DAU 합 내림차순(데이터 없는 앱은 뒤).
-  const windowRanked = [...consoleWindows].sort(
-    (a, b) => (b.agg?.dauSum ?? -1) - (a.agg?.dauSum ?? -1),
-  );
+  const windowRanked = rankConsoleWindows(consoleWindows);
 
   return (
     <div className="space-y-6">

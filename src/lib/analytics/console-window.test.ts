@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aggConsoleWindow, type ConsoleWindowRow } from "@/lib/analytics/console-window";
+import {
+  aggConsoleWindow,
+  rankConsoleWindows,
+  type ConsoleWindowAgg,
+  type ConsoleWindowRow,
+} from "@/lib/analytics/console-window";
 
 const row = (d: string, o: Partial<ConsoleWindowRow> = {}): ConsoleWindowRow => ({
   date: new Date(d),
@@ -49,4 +54,42 @@ test("aggConsoleWindow: 세션 평균은 값 있는 날만, 일평균 DAU 는 �
 test("aggConsoleWindow: 세션이 전부 null 이면 sessAvg 는 null", () => {
   const a = aggConsoleWindow([row("2026-07-16", { dau: 1 })])!;
   assert.equal(a.sessAvg, null);
+});
+
+const aggWith = (dauSum: number): ConsoleWindowAgg => ({
+  days: 1,
+  dateMin: new Date("2026-07-21"),
+  dateMax: new Date("2026-07-21"),
+  dauSum,
+  dauAvg: dauSum,
+  newSum: 0,
+  sessAvg: null,
+  iaaImpSum: 0,
+  iaaEarnSum: 0,
+});
+
+test("rankConsoleWindows: DAU 합 내림차순, 집계 없는 앱(agg=null)은 뒤로", () => {
+  const items = [
+    { id: "a", agg: aggWith(10) },
+    { id: "z", agg: null },
+    { id: "b", agg: aggWith(98) },
+    { id: "c", agg: aggWith(40) },
+  ];
+  const ranked = rankConsoleWindows(items);
+  assert.deepEqual(
+    ranked.map((r) => r.id),
+    ["b", "c", "a", "z"],
+  );
+});
+
+test("rankConsoleWindows: 원본 배열을 변경하지 않는다", () => {
+  const items = [
+    { id: "a", agg: aggWith(1) },
+    { id: "b", agg: aggWith(2) },
+  ];
+  rankConsoleWindows(items);
+  assert.deepEqual(
+    items.map((r) => r.id),
+    ["a", "b"],
+  );
 });
