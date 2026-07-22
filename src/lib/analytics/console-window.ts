@@ -63,3 +63,46 @@ export function rankConsoleWindows<T extends { agg: ConsoleWindowAgg | null }>(
 ): T[] {
   return [...items].sort((a, b) => (b.agg?.dauSum ?? -1) - (a.agg?.dauSum ?? -1));
 }
+
+/** 집계 표 한 행의 표시 문자열. 값이 없으면 모두 "—"(0 이 아님). */
+export interface ConsoleWindowRowDisplay {
+  period: string;
+  dauSum: string;
+  dauAvg: string;
+  newSum: string;
+  sessAvg: string;
+  iaaImpSum: string;
+  iaaEarnKrw: string;
+}
+
+const DASH = "—";
+
+/**
+ * 기간 집계 한 행을 표 셀 문자열로 포맷한다. 집계가 없으면(agg=null, 수집 데이터 없음) 모든 셀이
+ * "—" 이며 0 으로 표기하지 않는다. 세션 평균이 null 인 날짜집합도 "—". fmtDate 는 날짜 포맷터 주입.
+ */
+export function formatConsoleWindowRow(
+  agg: ConsoleWindowAgg | null,
+  fmtDate: (d: Date) => string,
+): ConsoleWindowRowDisplay {
+  if (!agg) {
+    return {
+      period: DASH,
+      dauSum: DASH,
+      dauAvg: DASH,
+      newSum: DASH,
+      sessAvg: DASH,
+      iaaImpSum: DASH,
+      iaaEarnKrw: DASH,
+    };
+  }
+  return {
+    period: `${fmtDate(agg.dateMin)}~${fmtDate(agg.dateMax)}`,
+    dauSum: String(agg.dauSum),
+    dauAvg: agg.dauAvg.toFixed(1),
+    newSum: String(agg.newSum),
+    sessAvg: agg.sessAvg != null ? `${Math.round(agg.sessAvg)}초` : DASH,
+    iaaImpSum: String(agg.iaaImpSum),
+    iaaEarnKrw: `₩${Math.round(agg.iaaEarnSum).toLocaleString("ko-KR")}`,
+  };
+}

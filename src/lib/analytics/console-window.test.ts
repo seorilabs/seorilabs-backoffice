@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   aggConsoleWindow,
+  formatConsoleWindowRow,
   rankConsoleWindows,
   type ConsoleWindowAgg,
   type ConsoleWindowRow,
@@ -92,4 +93,50 @@ test("rankConsoleWindows: 원본 배열을 변경하지 않는다", () => {
     items.map((r) => r.id),
     ["a", "b"],
   );
+});
+
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+test("formatConsoleWindowRow: 집계 없으면(agg=null) 모든 셀이 '—'(0 아님)", () => {
+  const d = formatConsoleWindowRow(null, iso);
+  assert.deepEqual(d, {
+    period: "—",
+    dauSum: "—",
+    dauAvg: "—",
+    newSum: "—",
+    sessAvg: "—",
+    iaaImpSum: "—",
+    iaaEarnKrw: "—",
+  });
+  // 0 으로 오도하지 않는다.
+  assert.equal(Object.values(d).includes("0"), false);
+});
+
+test("formatConsoleWindowRow: 집계 있으면 기간/합/일평균/수익을 포맷한다", () => {
+  const d = formatConsoleWindowRow(
+    {
+      days: 7,
+      dateMin: new Date("2026-07-15"),
+      dateMax: new Date("2026-07-21"),
+      dauSum: 98,
+      dauAvg: 14,
+      newSum: 54,
+      sessAvg: 156.4,
+      iaaImpSum: 102,
+      iaaEarnSum: 399.6,
+    },
+    iso,
+  );
+  assert.equal(d.period, "2026-07-15~2026-07-21");
+  assert.equal(d.dauSum, "98");
+  assert.equal(d.dauAvg, "14.0");
+  assert.equal(d.newSum, "54");
+  assert.equal(d.sessAvg, "156초");
+  assert.equal(d.iaaImpSum, "102");
+  assert.equal(d.iaaEarnKrw, "₩400");
+});
+
+test("formatConsoleWindowRow: 세션 평균이 null 이면 '—'", () => {
+  const d = formatConsoleWindowRow(aggWith(3), iso);
+  assert.equal(d.sessAvg, "—");
 });

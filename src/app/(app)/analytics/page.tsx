@@ -18,7 +18,11 @@ import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
-import { aggConsoleWindow, rankConsoleWindows } from "@/lib/analytics/console-window";
+import {
+  aggConsoleWindow,
+  formatConsoleWindowRow,
+  rankConsoleWindows,
+} from "@/lib/analytics/console-window";
 
 export const dynamic = "force-dynamic";
 
@@ -327,30 +331,25 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                   </tr>
                 </thead>
                 <tbody>
-                  {windowRanked.map(({ app, agg }) => (
-                    <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-                      <td className="px-3 py-2">
-                        <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
-                          {app.displayName}
-                        </Link>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-neutral-500">
-                        {agg ? `${isoDate(agg.dateMin)}~${isoDate(agg.dateMax)}` : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right">{agg ? agg.dauSum : "—"}</td>
-                      <td className="px-3 py-2 text-right text-neutral-600">
-                        {agg ? agg.dauAvg.toFixed(1) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right">{agg ? agg.newSum : "—"}</td>
-                      <td className="px-3 py-2 text-right text-neutral-600">
-                        {agg?.sessAvg != null ? `${Math.round(agg.sessAvg)}초` : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right text-neutral-600">{agg ? agg.iaaImpSum : "—"}</td>
-                      <td className="px-3 py-2 text-right text-neutral-600">
-                        {agg ? `₩${Math.round(agg.iaaEarnSum).toLocaleString("ko-KR")}` : "—"}
-                      </td>
-                    </tr>
-                  ))}
+                  {windowRanked.map(({ app, agg }) => {
+                    const d = formatConsoleWindowRow(agg, isoDate);
+                    return (
+                      <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                        <td className="px-3 py-2">
+                          <Link href={`/analytics?app=${app.slug}`} className="font-medium hover:underline">
+                            {app.displayName}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-neutral-500">{d.period}</td>
+                        <td className="px-3 py-2 text-right">{d.dauSum}</td>
+                        <td className="px-3 py-2 text-right text-neutral-600">{d.dauAvg}</td>
+                        <td className="px-3 py-2 text-right">{d.newSum}</td>
+                        <td className="px-3 py-2 text-right text-neutral-600">{d.sessAvg}</td>
+                        <td className="px-3 py-2 text-right text-neutral-600">{d.iaaImpSum}</td>
+                        <td className="px-3 py-2 text-right text-neutral-600">{d.iaaEarnKrw}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
