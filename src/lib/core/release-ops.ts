@@ -22,8 +22,17 @@ import {
 import {
   RELEASE_NOTE_LOCALES,
   releaseNoteTranslations,
+  type ReleaseNoteTranslations,
   type ReleaseNoteTranslationsInput,
 } from "@/lib/core/release-note-locales";
+import {
+  prepareAppStoreSubmission,
+  submitAppStoreForReview,
+  getAppStoreSubmissionState,
+  marketingVersionFromTag,
+  type PrepareResult,
+  type SubmitResult,
+} from "@/lib/app-store/submit";
 
 // 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Telegram 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
@@ -312,4 +321,173 @@ export async function dispatchMarketDeploy(opts: {
     .catch(() => {});
 
   return { workflowFile: dispatchedWorkflow, xcodeCloudBuild };
+}
+
+// ── Google Play: 내부 빌드 → 프로덕션 승격(재빌드 없이 심사 제출) ──
+
+// 재빌드 없이 이미 올라간 versionCode 를 프로덕션 트랙으로 복사 + 심사 제출하는 org 워크플로.
+const PROMOTE_WORKFLOW = "promote-google-play.yml";
+
+/** repo+version 의 저장된 다국어 출시노트. 없으면 null. */
+async function loadReleaseNoteTranslations(
+  repoFullName: string,
+  version: string,
+): Promise<ReleaseNoteTranslations | null> {
+  const row = await prisma.releaseNote.findUnique({
+    where: { repoFullName_version: { repoFullName, version } },
+    select: {
+      koKR: true,
+      enUS: true,
+      jaJP: true,
+      zhCN: true,
+      zhTW: true,
+      deDE: true,
+      frFR: true,
+      esES: true,
+    },
+  });
+  return row ? releaseNoteTranslations(row) : null;
+}
+
+/**
+ * 이미 internal 트랙에 올라간 빌드를 production 트랙으로 승격(= 심사 제출).
+ * 재빌드하지 않고 promote-google-play.yml 을 dispatch 한다. 결과는 workflow_run webhook 미러.
+ * 출시노트는 사전 생성돼 있어야 하며(태그 시점), 없으면 승격을 막는다.
+ */
+export async function promoteGooglePlay(opts: {
+  repoFullName: string;
+  tag: string;
+  rollout?: number; // 0<f<=1 staged rollout. 미지정 시 완전 출시.
+  actorLabel?: string;
+}): Promise<{ workflowFile: string }> {
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, opts.tag);
+  if (!notes) {
+    throw new Error(
+      `출시노트가 아직 생성되지 않았습니다(${opts.tag}). 잠시 후 다시 시도하세요.`,
+    );
+  }
+
+  const declared = await getWorkflowDispatchInputNames(
+    opts.repoFullName,
+    PROMOTE_WORKFLOW,
+    opts.tag,
+  );
+  const inputs: Record<string, string> = { release_tag: opts.tag };
+  if (declared.has("from_track")) inputs.from_track = "internal";
+  if (declared.has("to_track")) inputs.to_track = "production";
+  if (declared.has("release_status")) inputs.release_status = "completed";
+  if (opts.rollout != null && declared.has("rollout")) {
+    inputs.rollout = String(opts.rollout);
+  }
+
+  await dispatchWorkflow({
+    repoFullName: opts.repoFullName,
+    workflowFile: PROMOTE_WORKFLOW,
+    ref: opts.tag,
+    inputs,
+  });
+
+  await prisma.auditLog
+    .create({
+      data: {
+        actorLogin: opts.actorLabel ?? null,
+        action: "release.promote.dispatch",
+        entityType: "release",
+        entityId: `${opts.repoFullName}@${opts.tag}`,
+        payload: { target: "PLAY", to: "production", tag: opts.tag } as object,
+      },
+    })
+    .catch(() => {});
+
+  return { workflowFile: PROMOTE_WORKFLOW };
+}
+
+// ── App Store: 심사 준비(스테이징) / 심사 제출(별도 확인) ──
+
+/** repoFullName → iosBundle. 미설정이면 throw. */
+async function iosBundleOf(repoFullName: string): Promise<string> {
+  const app = await prisma.app.findUnique({
+    where: { repoFullName },
+    select: { iosBundle: true },
+  });
+  if (!app?.iosBundle) {
+    throw new Error(`iosBundle 미설정: ${repoFullName} — App Store 심사 처리 불가`);
+  }
+  return app.iosBundle;
+}
+
+/**
+ * App Store 심사 준비(멱등): 버전 확보 + 언어별 what's new 주입 + 최신 VALID 빌드 연결.
+ * 빌드 처리 중이면 ready=false 로 사유를 담아 반환한다(에러 아님).
+ */
+export async function prepareAppStore(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<PrepareResult> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, opts.tag);
+  const result = await prepareAppStoreSubmission({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+    notes: notes ?? {},
+  });
+
+  await prisma.auditLog
+    .create({
+      data: {
+        actorLogin: opts.actorLabel ?? null,
+        action: "release.appstore.prepare",
+        entityType: "release",
+        entityId: `${opts.repoFullName}@${opts.tag}`,
+        payload: {
+          ready: result.ready,
+          appStoreState: result.appStoreState,
+          localizationsUpdated: result.localizationsUpdated,
+          buildAttached: result.buildAttached,
+        } as object,
+      },
+    })
+    .catch(() => {});
+
+  return result;
+}
+
+/** App Store 심사 제출(되돌리기 어려움 — 호출부에서 명시 확인 후). */
+export async function submitAppStore(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<SubmitResult> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const result = await submitAppStoreForReview({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
+
+  await prisma.auditLog
+    .create({
+      data: {
+        actorLogin: opts.actorLabel ?? null,
+        action: "release.appstore.submit",
+        entityType: "release",
+        entityId: `${opts.repoFullName}@${opts.tag}`,
+        payload: { reviewSubmissionId: result.reviewSubmissionId, tag: opts.tag } as object,
+      },
+    })
+    .catch(() => {});
+
+  return result;
+}
+
+/** 마케팅 버전의 현재 App Store 상태(라이브). null=버전 없음. */
+export async function appStoreState(opts: {
+  repoFullName: string;
+  tag: string;
+}): Promise<string | null> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  return getAppStoreSubmissionState({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
 }

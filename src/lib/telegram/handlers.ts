@@ -33,6 +33,9 @@ import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import {
   createReleaseTagWithNotes,
   dispatchMarketDeploy,
+  promoteGooglePlay,
+  prepareAppStore,
+  submitAppStore,
   previewNextTag,
   deployTargetsFor,
   DEPLOY_TARGET_KO,
@@ -44,6 +47,7 @@ import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 import {
   buildReleaseDeployButtons,
+  buildMarketReviewButtons,
   deployStateCallbackText,
   deployTargetFromCode,
   platformDeployTargets,
@@ -515,6 +519,9 @@ async function handleCallback(cq: TgCallback): Promise<void> {
     await answerCallback(cq.id, deployStateCallbackText(rest[3] ?? ""));
     return;
   }
+  if (action === "pp") return cbPlayPromote(cq, fromId, rest);
+  if (action === "ap") return cbAppStorePrepare(cq, fromId, rest);
+  if (action === "as") return cbAppStoreSubmit(cq, fromId, rest);
 
   if (action === "status" && rest[0] === "app") {
     await answerCallback(cq.id);
@@ -938,8 +945,186 @@ async function editReleaseDeployMessage(opts: {
     opts.chatId,
     opts.messageId,
     releaseDeployMessage(opts),
-    buildReleaseDeployButtons(opts.app.id, opts.tag, targets, opts.states, DEPLOY_TARGET_KO),
+    [
+      ...buildReleaseDeployButtons(opts.app.id, opts.tag, targets, opts.states, DEPLOY_TARGET_KO),
+      ...buildMarketReviewButtons(opts.app.id, opts.tag, targets),
+    ],
   );
+}
+
+/** appId+tag 로 릴리즈 배포 메시지(버튼 포함)를 재구성. 확인 취소/후속 액션 결과 표시에 사용. */
+async function rebuildReleaseDeployMessage(
+  chatId: number,
+  messageId: number,
+  app: ReleaseDeployApp,
+  tag: string,
+  note?: string,
+): Promise<void> {
+  const targets = platformDeployTargets(deployTargetsFor(app.marketTargets));
+  const states = await loadReleaseDeployStates(app, tag, targets);
+  await editReleaseDeployMessage({ chatId, messageId, app, tag, states, note });
+}
+
+// ── 릴리즈 메시지의 마켓 마무리 버튼: Google 프로덕션 승격 / App Store 심사 준비·제출 ──
+
+async function cbPlayPromote(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
+  const sub = rest[0]; // "c" | "go" | "cancel"
+  const appId = rest[1] ?? "";
+  const tag = rest[2] ?? "";
+  const chatId = cq.message?.chat.id;
+  const mid = cq.message?.message_id;
+  if (!ID_RE.test(appId) || !TAG_RE.test(tag)) {
+    await answerCallback(cq.id, "잘못된 요청");
+    return;
+  }
+  const app = await appById(appId);
+  if (!app || chatId == null || mid == null) {
+    await answerCallback(cq.id, "앱/메시지 없음");
+    return;
+  }
+
+  if (sub === "cancel") {
+    await answerCallback(cq.id, "취소됨");
+    await rebuildReleaseDeployMessage(chatId, mid, app, tag);
+    return;
+  }
+  if (sub === "c") {
+    await answerCallback(cq.id);
+    await editMessageText(
+      chatId,
+      mid,
+      `⚠️ <b>${esc(app.displayName)} ${esc(tag)}</b> — 내부 빌드를 Google Play <b>프로덕션</b>으로 승격(심사 제출)합니다. 재빌드 없이 진행됩니다. 계속할까요?`,
+      [
+        [
+          { text: "⬆️ 승격 실행", callback_data: `pp:go:${appId}:${tag}` },
+          { text: "✖️ 취소", callback_data: `pp:cancel:${appId}:${tag}` },
+        ],
+      ],
+    );
+    return;
+  }
+  if (sub === "go") {
+    await answerCallback(cq.id, "⏳ 프로덕션 승격 트리거 중…");
+    try {
+      await promoteGooglePlay({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: `telegram:${fromId}`,
+      });
+      await rebuildReleaseDeployMessage(
+        chatId,
+        mid,
+        app,
+        tag,
+        "⬆️ Google Play 프로덕션 승격을 트리거했습니다. 완료 시 결과 알림이 옵니다.",
+      );
+    } catch (e) {
+      await rebuildReleaseDeployMessage(
+        chatId,
+        mid,
+        app,
+        tag,
+        `❌ 프로덕션 승격 실패: ${esc((e as Error).message)}`,
+      );
+    }
+    return;
+  }
+  await answerCallback(cq.id);
+}
+
+async function cbAppStorePrepare(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
+  const appId = rest[0] ?? "";
+  const tag = rest[1] ?? "";
+  const chatId = cq.message?.chat.id;
+  const mid = cq.message?.message_id;
+  if (!ID_RE.test(appId) || !TAG_RE.test(tag)) {
+    await answerCallback(cq.id, "잘못된 요청");
+    return;
+  }
+  const app = await appById(appId);
+  if (!app || chatId == null || mid == null) {
+    await answerCallback(cq.id, "앱/메시지 없음");
+    return;
+  }
+  await answerCallback(cq.id, "⏳ 심사 준비 중…");
+  try {
+    const r = await prepareAppStore({
+      repoFullName: app.repoFullName,
+      tag,
+      actorLabel: `telegram:${fromId}`,
+    });
+    const note = r.ready
+      ? `📝 App Store 심사 준비 완료 — what's new ${r.localizationsUpdated.length}개 언어 반영 + 빌드 연결. 이제 '🚀 심사 제출' 가능.`
+      : `⏳ 노트 반영됨. ${esc(r.reason ?? "빌드 처리 대기 중")}`;
+    await rebuildReleaseDeployMessage(chatId, mid, app, tag, note);
+  } catch (e) {
+    await rebuildReleaseDeployMessage(
+      chatId,
+      mid,
+      app,
+      tag,
+      `❌ 심사 준비 실패: ${esc((e as Error).message)}`,
+    );
+  }
+}
+
+async function cbAppStoreSubmit(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
+  const sub = rest[0]; // "c" | "go" | "cancel"
+  const appId = rest[1] ?? "";
+  const tag = rest[2] ?? "";
+  const chatId = cq.message?.chat.id;
+  const mid = cq.message?.message_id;
+  if (!ID_RE.test(appId) || !TAG_RE.test(tag)) {
+    await answerCallback(cq.id, "잘못된 요청");
+    return;
+  }
+  const app = await appById(appId);
+  if (!app || chatId == null || mid == null) {
+    await answerCallback(cq.id, "앱/메시지 없음");
+    return;
+  }
+
+  if (sub === "cancel") {
+    await answerCallback(cq.id, "취소됨");
+    await rebuildReleaseDeployMessage(chatId, mid, app, tag);
+    return;
+  }
+  if (sub === "c") {
+    await answerCallback(cq.id);
+    await editMessageText(
+      chatId,
+      mid,
+      `⚠️ <b>${esc(app.displayName)} ${esc(tag)}</b> — App Store <b>심사에 제출</b>합니다. 되돌리기 어렵습니다. 계속할까요?\n(먼저 '심사 준비'로 빌드가 연결돼 있어야 합니다.)`,
+      [
+        [
+          { text: "🚀 심사 제출", callback_data: `as:go:${appId}:${tag}` },
+          { text: "✖️ 취소", callback_data: `as:cancel:${appId}:${tag}` },
+        ],
+      ],
+    );
+    return;
+  }
+  if (sub === "go") {
+    await answerCallback(cq.id, "⏳ 심사 제출 중…");
+    try {
+      await submitAppStore({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: `telegram:${fromId}`,
+      });
+      await rebuildReleaseDeployMessage(chatId, mid, app, tag, "🚀 App Store 심사에 제출했습니다.");
+    } catch (e) {
+      await rebuildReleaseDeployMessage(
+        chatId,
+        mid,
+        app,
+        tag,
+        `❌ 심사 제출 실패: ${esc((e as Error).message)}`,
+      );
+    }
+    return;
+  }
+  await answerCallback(cq.id);
 }
 
 // ── /release: 앱 선택 → bump → 확인 → 태그 + GitHub Release (출시노트는 webhook 후 비동기) ──

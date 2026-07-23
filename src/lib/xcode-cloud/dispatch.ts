@@ -5,16 +5,11 @@
 // 트리거한다(태그 ref 대상). org 릴리즈 모델(태그 자동배포가 아니라 Backoffice
 // 명시 dispatch)과 동일하게 동작한다.
 //
-// 필요 env(App Store Connect API 팀 키):
-//   APP_STORE_CONNECT_API_KEY_ID / APP_STORE_CONNECT_ISSUER_ID
-//   APP_STORE_CONNECT_PRIVATE_KEY_BASE64 (.p8 PEM 의 base64)
+// ASC JWT/fetch/JSON:API 헬퍼는 app-store/asc-client.ts 공용.
 //   XCODE_CLOUD_APP_STORE_REPOS (Xcode Cloud 로 iOS 를 빌드하는 repoFullName CSV)
 
-import crypto from "node:crypto";
-
 import { env } from "@/lib/env";
-
-const ASC_BASE = "https://api.appstoreconnect.apple.com";
+import { asc, asArray } from "@/lib/app-store/asc-client";
 
 /** repoFullName 이 Xcode Cloud(iOS) 대상 allowlist 에 있는지. */
 export function isXcodeCloudRepo(repoFullName: string): boolean {
@@ -24,68 +19,6 @@ export function isXcodeCloudRepo(repoFullName: string): boolean {
     .map((s) => s.trim())
     .filter(Boolean)
     .includes(repoFullName);
-}
-
-function base64url(input: Buffer | string): string {
-  return Buffer.from(input).toString("base64url");
-}
-
-/** App Store Connect API 용 ES256 JWT(20분) 발급. 외부 라이브러리 없이 node:crypto. */
-function mintToken(): string {
-  const kid = env.get("APP_STORE_CONNECT_API_KEY_ID");
-  const iss = env.get("APP_STORE_CONNECT_ISSUER_ID");
-  const pem = Buffer.from(
-    env.get("APP_STORE_CONNECT_PRIVATE_KEY_BASE64"),
-    "base64",
-  ).toString("utf8");
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({ alg: "ES256", kid, typ: "JWT" }));
-  const payload = base64url(
-    JSON.stringify({ iss, iat: now, exp: now + 20 * 60, aud: "appstoreconnect-v1" }),
-  );
-  const signingInput = `${header}.${payload}`;
-  // ES256 = ECDSA(P-256, SHA-256), JWS 는 raw r||s(IEEE P1363) 서명을 요구.
-  const signature = crypto
-    .sign("sha256", Buffer.from(signingInput), { key: pem, dsaEncoding: "ieee-p1363" })
-    .toString("base64url");
-  return `${signingInput}.${signature}`;
-}
-
-interface JsonApiResource {
-  id: string;
-  type: string;
-  attributes?: Record<string, unknown>;
-  relationships?: Record<string, { data?: { id: string; type: string } | null }>;
-}
-interface JsonApiDoc {
-  data?: JsonApiResource | JsonApiResource[];
-  included?: JsonApiResource[];
-  errors?: Array<{ title?: string; detail?: string }>;
-}
-
-async function asc(path: string, init?: RequestInit): Promise<JsonApiDoc> {
-  const res = await fetch(`${ASC_BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${mintToken()}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const text = await res.text();
-  const doc = (text ? JSON.parse(text) : {}) as JsonApiDoc;
-  if (!res.ok) {
-    const detail =
-      doc.errors?.map((e) => e.detail ?? e.title).filter(Boolean).join("; ") || text;
-    throw new Error(`App Store Connect API ${res.status}: ${detail}`);
-  }
-  return doc;
-}
-
-function asArray(data: JsonApiDoc["data"]): JsonApiResource[] {
-  if (!data) return [];
-  return Array.isArray(data) ? data : [data];
 }
 
 /** bundleId 로 Xcode Cloud 제품(ciProduct) 찾기. */

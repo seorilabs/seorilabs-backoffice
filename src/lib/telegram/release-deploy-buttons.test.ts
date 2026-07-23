@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildReleaseDeployButtons,
+  buildMarketReviewButtons,
   deployTargetFromCode,
   resolveDeployButtonStates,
   type DeployButtonState,
@@ -57,6 +58,32 @@ test("플랫폼별 최신 dispatch/run 신호가 서로의 상태를 덮지 않�
     PLAY: "TRIGGERED",
     APPSTORE: "READY",
   });
+});
+
+test("마켓 마무리 버튼: PLAY=승격, APPSTORE=준비+제출, 64바이트 이내", () => {
+  const appId = "cm12345678901234567890123";
+
+  const play = buildMarketReviewButtons(appId, "v1.2.3", ["PLAY"]);
+  assert.deepEqual(play, [
+    [{ text: "⬆️ Play 프로덕션 승격", callback_data: `pp:c:${appId}:v1.2.3` }],
+  ]);
+
+  const apple = buildMarketReviewButtons(appId, "v1.2.3", ["APPSTORE"]);
+  assert.deepEqual(apple, [
+    [
+      { text: "📝 심사 준비", callback_data: `ap:${appId}:v1.2.3` },
+      { text: "🚀 심사 제출", callback_data: `as:c:${appId}:v1.2.3` },
+    ],
+  ]);
+
+  // AIT 만이면 마무리 버튼 없음.
+  assert.deepEqual(buildMarketReviewButtons(appId, "v1.2.3", ["AIT"]), []);
+
+  // 둘 다면 승격 + (준비/제출) 두 행.
+  const both = buildMarketReviewButtons(appId, "v1.2.3", ["PLAY", "APPSTORE"]);
+  assert.equal(both.length, 2);
+  for (const row of both)
+    for (const b of row) assert.ok(Buffer.byteLength(b.callback_data) <= 64);
 });
 
 test("Deploy All dispatch 는 모든 플랫폼을 요청됨 상태로 만든다", () => {

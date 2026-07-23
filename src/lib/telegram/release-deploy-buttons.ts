@@ -128,6 +128,32 @@ export function buildReleaseDeployButtons(
   return rows;
 }
 
+/**
+ * 업로드 이후 마켓 마무리 버튼(딥링크 확인 스텝 경유).
+ * Google=프로덕션 승격(심사 제출), Apple=심사 준비 → 심사 제출.
+ * callback_data 는 64바이트 제한을 위해 slug 대신 cuid(appId)를 쓴다.
+ *   pp = play-promote, ap = appstore-prepare, as = appstore-submit
+ */
+export function buildMarketReviewButtons(
+  appId: string,
+  tag: string,
+  targets: PlatformDeployTarget[],
+): InlineButton[][] {
+  const rows: InlineButton[][] = [];
+  if (targets.includes("PLAY")) {
+    rows.push([
+      { text: "⬆️ Play 프로덕션 승격", callback_data: `pp:c:${appId}:${tag}` },
+    ]);
+  }
+  if (targets.includes("APPSTORE")) {
+    rows.push([
+      { text: "📝 심사 준비", callback_data: `ap:${appId}:${tag}` },
+      { text: "🚀 심사 제출", callback_data: `as:c:${appId}:${tag}` },
+    ]);
+  }
+  return rows;
+}
+
 export function deployStateCallbackText(stateCode: string): string {
   switch (stateCode) {
     case "g":
