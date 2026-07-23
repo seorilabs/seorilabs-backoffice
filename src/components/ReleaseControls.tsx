@@ -5,6 +5,9 @@ import {
   createReleaseAction,
   listAppTagsAction,
   deployAction,
+  promoteToProductionAction,
+  prepareAppStoreAction,
+  submitAppStoreAction,
 } from "@/lib/actions/release";
 
 const TARGET_LABEL: Record<string, string> = {
@@ -77,6 +80,46 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
     });
   }
 
+  const [subMsg, setSubMsg] = useState<string | null>(null);
+
+  function doPromote() {
+    if (!tag) return;
+    if (!window.confirm(`${tag} 의 내부 빌드를 Google Play 프로덕션으로 승격(심사 제출)할까요?`))
+      return;
+    setSubMsg(null);
+    start(async () => {
+      const r = await promoteToProductionAction(appId, tag);
+      setSubMsg(
+        r.ok ? `⬆️ 프로덕션 승격 트리거됨 — 완료 시 알림` : `실패: ${r.error}`,
+      );
+    });
+  }
+
+  function doPrepareAppStore() {
+    if (!tag) return;
+    setSubMsg(null);
+    start(async () => {
+      const r = await prepareAppStoreAction(appId, tag);
+      setSubMsg(
+        !r.ok
+          ? `실패: ${r.error}`
+          : r.ready
+            ? `📝 심사 준비 완료 — 이제 '심사 제출' 가능`
+            : `⏳ 준비됨(노트 반영). ${r.reason ?? "빌드 처리 대기 중"}`,
+      );
+    });
+  }
+
+  function doSubmitAppStore() {
+    if (!tag) return;
+    if (!window.confirm(`${tag} 를 App Store 심사에 제출할까요? (되돌리기 어려움)`)) return;
+    setSubMsg(null);
+    start(async () => {
+      const r = await submitAppStoreAction(appId, tag);
+      setSubMsg(r.ok ? `🚀 App Store 심사 제출됨` : `실패: ${r.error}`);
+    });
+  }
+
   const btn =
     "rounded border border-neutral-300 px-2.5 py-1 text-sm hover:bg-neutral-50 disabled:opacity-50";
   const primary =
@@ -144,6 +187,29 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
         )}
         {depMsg && <span className="text-xs text-neutral-600">{depMsg}</span>}
       </div>
+
+      {/* 업로드 이후 마켓 마무리: Google 프로덕션 승격 / App Store 심사 준비·제출 */}
+      {tags.length > 0 && (markets.includes("PLAY") || markets.includes("APPSTORE")) && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-20 text-xs font-medium text-neutral-500">심사</span>
+          {markets.includes("PLAY") && (
+            <button onClick={doPromote} disabled={pending} className={btn} title="내부 빌드를 재빌드 없이 프로덕션 트랙으로 승격 + 심사 제출">
+              ⬆️ Play 프로덕션 승격
+            </button>
+          )}
+          {markets.includes("APPSTORE") && (
+            <>
+              <button onClick={doPrepareAppStore} disabled={pending} className={btn} title="App Store 버전 생성 + 언어별 what's new + 빌드 연결">
+                📝 심사 준비
+              </button>
+              <button onClick={doSubmitAppStore} disabled={pending} className={btn} title="App Store 심사에 제출(되돌리기 어려움)">
+                🚀 심사 제출
+              </button>
+            </>
+          )}
+          {subMsg && <span className="text-xs text-neutral-600">{subMsg}</span>}
+        </div>
+      )}
 
       <p className="text-[11px] text-neutral-400">
         릴리즈 태그는 명시적으로 생성되며, 마켓 배포는 태그를 기준으로 트리거됩니다. 결과는 워크플로 완료 시

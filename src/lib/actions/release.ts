@@ -8,6 +8,9 @@ import { HIDDEN_APP_ERROR, isDisabledAppStatus } from "@/lib/domain/app-visibili
 import {
   createReleaseTagWithNotes,
   dispatchMarketDeploy,
+  promoteGooglePlay,
+  prepareAppStore,
+  submitAppStore,
   type Bump,
   type DeployTarget,
 } from "@/lib/core/release-ops";
@@ -75,6 +78,71 @@ export async function deployAction(
     await dispatchMarketDeploy({
       repoFullName,
       target: target as DeployTarget,
+      tag,
+      actorLabel: `web:${session.user.login ?? "?"}`,
+    });
+    revalidatePath(`/apps/${appId}`);
+    revalidatePath("/releases");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** Google Play: 내부 빌드를 프로덕션으로 승격(재빌드 없이 심사 제출). */
+export async function promoteToProductionAction(
+  appId: string,
+  tag: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await requireSession();
+  if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
+  try {
+    const repoFullName = await repoOf(appId);
+    await promoteGooglePlay({
+      repoFullName,
+      tag,
+      actorLabel: `web:${session.user.login ?? "?"}`,
+    });
+    revalidatePath(`/apps/${appId}`);
+    revalidatePath("/releases");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** App Store 심사 준비(버전+언어별 what's new+빌드 연결). ready=false 면 빌드 처리 대기. */
+export async function prepareAppStoreAction(
+  appId: string,
+  tag: string,
+): Promise<{ ok: boolean; ready?: boolean; reason?: string; error?: string }> {
+  const session = await requireSession();
+  if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
+  try {
+    const repoFullName = await repoOf(appId);
+    const r = await prepareAppStore({
+      repoFullName,
+      tag,
+      actorLabel: `web:${session.user.login ?? "?"}`,
+    });
+    revalidatePath(`/apps/${appId}`);
+    return { ok: true, ready: r.ready, reason: r.reason };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** App Store 심사 제출(되돌리기 어려움 — UI 에서 명시 확인 후 호출). */
+export async function submitAppStoreAction(
+  appId: string,
+  tag: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await requireSession();
+  if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
+  try {
+    const repoFullName = await repoOf(appId);
+    await submitAppStore({
+      repoFullName,
       tag,
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
