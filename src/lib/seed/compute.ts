@@ -20,6 +20,7 @@ interface AppStoreConfig {
   appleTeamId?: string;
   sku?: string;
   appType?: string;
+  storeListing?: { appName?: unknown; name?: unknown };
 }
 interface FirebaseRc {
   projects?: { default?: string };
@@ -31,6 +32,7 @@ export interface RepoLite {
   id: number;
   private: boolean;
   defaultBranch: string;
+  description?: string | null;
 }
 
 // 모든 read 는 레포의 실제 기본 브랜치(ref)를 명시적으로 대상으로 한다.
@@ -97,6 +99,25 @@ function pickAppName(appName: unknown): string | null {
   return null;
 }
 
+function containsHangul(value: string | null): value is string {
+  return Boolean(value && /[가-힣]/.test(value));
+}
+
+function projectName(project: string | null): string | null {
+  return project?.match(/^\s*config\/name\s*=\s*"([^"]+)"/m)?.[1]?.trim() ?? null;
+}
+
+function descriptionDisplayName(description: string | null | undefined): string | null {
+  const text = description?.trim();
+  if (!text) return null;
+  const parenthesized = text.match(/^[A-Za-z0-9 ]+\(([가-힣][^)]+)\)/)?.[1];
+  if (parenthesized) return parenthesized.trim();
+  const prefix = text.split(/\s+(?:—|–|-)\s+/)[0]?.trim();
+  if (containsHangul(prefix) && prefix.length <= 30) return prefix;
+  if (containsHangul(text) && text.length <= 24) return text;
+  return null;
+}
+
 // 시드가 prisma 에 upsert 하는 앱 레코드(create 페이로드). configHash/marketTargets 포함.
 export interface AppSeedData {
   slug: string;
@@ -128,9 +149,11 @@ export async function computeRepoSeed(
   // 모든 config/워크플로우 존재 판정을 레포의 실제 기본 브랜치에서 일관되게 수행한다.
   const ref = repo.defaultBranch;
 
-  const isGodot =
-    (await pathExists(octokit, org, name, "project.godot", ref)) ||
-    (await pathExists(octokit, org, name, "godot/project.godot", ref));
+  const godotProject =
+    (await getText(octokit, org, name, "project.godot", ref)) ??
+    (await getText(octokit, org, name, "godot/project.godot", ref)) ??
+    (await getText(octokit, org, name, "game/project.godot", ref));
+  const isGodot = godotProject != null;
   const hasPackageJson = await pathExists(octokit, org, name, "package.json", ref);
   if (!isGodot && !hasPackageJson) return null; // RN/Godot 아님(예: Unity)
 
@@ -216,8 +239,25 @@ export async function computeRepoSeed(
   const type: AppType =
     engine === "GODOT" || appType?.toLowerCase() === "game" ? "GAME" : "APP";
 
+  const playName = pickAppName(play?.storeListing?.appName);
+  const appStoreName = pickAppName(
+    appStore?.storeListing?.appName ?? appStore?.storeListing?.name,
+  );
+  const godotName = projectName(godotProject);
+  const descriptionName = descriptionDisplayName(repo.description);
+  const koreanName = [
+    playName,
+    appStoreName,
+    godotName,
+    descriptionName,
+    aitAppName,
+  ].find(containsHangul);
   const displayName =
-    pickAppName(play?.storeListing?.appName) ??
+    koreanName ??
+    playName ??
+    appStoreName ??
+    godotName ??
+    aitAppName ??
     name
       .split("-")
       .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
@@ -242,6 +282,8 @@ export async function computeRepoSeed(
         hasWeb,
         type,
         engine,
+        displayName,
+        seedVersion: 2,
       }),
     )
     .digest("hex");

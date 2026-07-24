@@ -225,3 +225,13 @@ flowchart LR
 - **생성 로직**(`src/lib/core/release-notes.ts`, `src/lib/github/release.ts`): `listVersionTags`(semver 내림차순) → `previousTag` → `compareTags`(머지 PR 추출: `(#N)`/`Merge pull request #N`) → `buildReleaseNotesI18nPrompt` → Gemini JSON(`parseLooseJson` 견고 파싱).
 - **untagged 보정**: deploy `workflow_run` 의 head_branch 가 버전이 아니면(main 등) `findTagForSha(head_sha)` 로 태그를 조회해 ReleaseRecord.version 복원(출시 매트릭스). 태그 없으면 "untagged" 유지(연속배포).
 - 마이그레이션 `6_release_note`, `14_release_note_i18n`. webhook 은 생성이 느려도 200 을 막지 않도록 Next.js `after`에서 후처리한다.
+
+## 13. Telegram 배포 완료 알림
+
+- `/release` 앱 목록은 GitHub 레지스트리를 서버 부팅 30초 후와 6시간마다 자동 재스캔한다. 명령 첫 줄의 `앱 목록 새로고침`으로 즉시 재스캔할 수도 있다. `game/project.godot` 레이아웃을 포함하며 한국어 마켓명·Godot명·짧은 한국어 저장소 설명을 우선 표시한다.
+- GitHub 마켓 배포는 `workflow_run.completed`를 `ReleaseRecord`에 반영한 뒤 `telegram_notification` outbox에 성공·실패 알림을 멱등 큐잉한다.
+- 알림에는 한글 앱명, 릴리즈 태그, 마켓, 실행 이름, GitHub Actions 실행 링크가 포함된다.
+- Telegram에서 트리거한 배포는 감사 로그에 저장한 `chatId/messageId`로 기존 `/release` 메시지를 현재 버튼 상태로 다시 그린다. 원문 수정 실패는 새 완료 알림을 막지 않는다.
+- Telegram API의 일시 오류는 요청 내 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다. 전송 성공·실패는 `AuditLog`의 `telegram.deploy.notification.*` action으로 확인한다.
+- Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
+- 관련 마이그레이션: `16_deploy_completion_notifications`.

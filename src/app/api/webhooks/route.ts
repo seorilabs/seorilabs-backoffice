@@ -62,24 +62,6 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         );
       }
     }
-    // 마켓 배포(AIT/Play/App Store)만 대상 — GitHub Pages 프리뷰(Deploy Godot Web Pages)는
-    // 빌드 미리보기일 뿐 마켓 배포가 아니므로 제외한다(main 병합마다 오탐 넛지 방지).
-    const wfName = p.workflow_run?.name ?? "";
-    const isDeploy =
-      /deploy|google|app\s*store|appstore|ait|toss/i.test(wfName) &&
-      !/pages/i.test(wfName);
-    if (
-      event === "workflow_run" &&
-      p.workflow_run?.status === "completed" &&
-      p.workflow_run.conclusion === "failure" &&
-      isDeploy
-    ) {
-      await notify(
-        `❌ <b>배포 실패</b> ${esc(repo)}\n${esc(p.workflow_run.name ?? "")} (${esc(p.workflow_run.head_branch ?? "")})`,
-      );
-    }
-    // 출시노트는 태그 생성 시점에만 만든다(태그 push webhook + 백오피스/텔레그램 태그 생성).
-    // 배포 성공 후 별도 릴리스 노트 넛지는 하지 않는다.
     // 새 P1 이슈 → 즉시 알림.
     if (event === "issues" && p.action === "opened" && p.issue) {
       const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);

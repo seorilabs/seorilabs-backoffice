@@ -46,18 +46,18 @@ import { listVersionTags } from "@/lib/github/release";
 import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 import {
-  buildReleaseDeployButtons,
-  buildMarketReviewButtons,
   deployStateCallbackText,
   deployTargetFromCode,
   platformDeployTargets,
-  resolveDeployButtonStates,
   type DeployButtonState,
   type DeployButtonStates,
-  type DeployDispatchStateInput,
-  type DeployRunStateInput,
-  type PlatformDeployTarget,
 } from "@/lib/telegram/release-deploy-buttons";
+import {
+  editReleaseDeployMessage,
+  loadReleaseDeployStates,
+  rebuildReleaseDeployMessage,
+} from "@/lib/telegram/release-message";
+import { seedRegistry } from "@/lib/seed/registry";
 
 interface TgFrom {
   id: number;
@@ -863,108 +863,6 @@ async function appById(id: string) {
   });
 }
 
-type ReleaseDeployApp = NonNullable<Awaited<ReturnType<typeof appBySlug>>>;
-
-function deployTargetFromAuditPayload(payload: unknown): DeployTarget | null {
-  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const target = String((payload as { target?: unknown }).target ?? "") as DeployTarget;
-  return DEPLOY_TARGETS.has(target) ? target : null;
-}
-
-async function loadReleaseDeployStates(
-  app: ReleaseDeployApp,
-  tag: string,
-  targets: PlatformDeployTarget[],
-): Promise<DeployButtonStates> {
-  const [auditRows, releaseRows] = await Promise.all([
-    prisma.auditLog.findMany({
-      where: {
-        action: "release.deploy.dispatch",
-        entityType: "release",
-        entityId: `${app.repoFullName}@${tag}`,
-      },
-      select: { payload: true, createdAt: true },
-    }),
-    prisma.releaseRecord.findMany({
-      where: { appId: app.id, version: tag, market: { in: targets } },
-      select: { market: true, status: true, updatedAt: true },
-    }),
-  ]);
-
-  const dispatches = auditRows.flatMap((row): DeployDispatchStateInput[] => {
-    const target = deployTargetFromAuditPayload(row.payload);
-    return target ? [{ target, createdAt: row.createdAt }] : [];
-  });
-  const runs = releaseRows.map(
-    (row): DeployRunStateInput => ({
-      target: row.market as PlatformDeployTarget,
-      status: row.status,
-      updatedAt: row.updatedAt,
-    }),
-  );
-  return resolveDeployButtonStates(targets, dispatches, runs);
-}
-
-function releaseDeployMessage(opts: {
-  app: ReleaseDeployApp;
-  tag: string;
-  releaseUrl?: string;
-  created?: boolean;
-  note?: string;
-}): string {
-  const targets = platformDeployTargets(deployTargetsFor(opts.app.marketTargets));
-  const releaseUrl =
-    opts.releaseUrl ??
-    `https://github.com/${opts.app.repoFullName}/releases/tag/${encodeURIComponent(opts.tag)}`;
-  const lines = [
-    `✅ <b>${esc(opts.app.displayName)} ${esc(opts.tag)}</b> 릴리즈 생성됨${opts.created === false ? " (기존 태그 재사용)" : ""}`,
-    esc(releaseUrl),
-    "출시노트 번역은 백그라운드에서 생성 중입니다.",
-  ];
-  if (targets.length > 0) {
-    lines.push("", "<b>📦 플랫폼별 배포</b>", "각 버튼은 독립적으로 트리거됩니다.");
-  } else {
-    lines.push("", "배포 가능한 플랫폼 워크플로우가 설정되어 있지 않습니다.");
-  }
-  if (opts.note) lines.push("", opts.note);
-  return lines.join("\n");
-}
-
-async function editReleaseDeployMessage(opts: {
-  chatId: number;
-  messageId: number;
-  app: ReleaseDeployApp;
-  tag: string;
-  states: DeployButtonStates;
-  releaseUrl?: string;
-  created?: boolean;
-  note?: string;
-}): Promise<void> {
-  const targets = platformDeployTargets(deployTargetsFor(opts.app.marketTargets));
-  await editMessageText(
-    opts.chatId,
-    opts.messageId,
-    releaseDeployMessage(opts),
-    [
-      ...buildReleaseDeployButtons(opts.app.id, opts.tag, targets, opts.states, DEPLOY_TARGET_KO),
-      ...buildMarketReviewButtons(opts.app.id, opts.tag, targets),
-    ],
-  );
-}
-
-/** appId+tag 로 릴리즈 배포 메시지(버튼 포함)를 재구성. 확인 취소/후속 액션 결과 표시에 사용. */
-async function rebuildReleaseDeployMessage(
-  chatId: number,
-  messageId: number,
-  app: ReleaseDeployApp,
-  tag: string,
-  note?: string,
-): Promise<void> {
-  const targets = platformDeployTargets(deployTargetsFor(app.marketTargets));
-  const states = await loadReleaseDeployStates(app, tag, targets);
-  await editReleaseDeployMessage({ chatId, messageId, app, tag, states, note });
-}
-
 // ── 릴리즈 메시지의 마켓 마무리 버튼: Google 프로덕션 승격 / App Store 심사 준비·제출 ──
 
 async function cbPlayPromote(cq: TgCallback, fromId: number, rest: string[]): Promise<void> {
@@ -1128,19 +1026,29 @@ async function cbAppStoreSubmit(cq: TgCallback, fromId: number, rest: string[]):
 }
 
 // ── /release: 앱 선택 → bump → 확인 → 태그 + GitHub Release (출시노트는 webhook 후 비동기) ──
-async function cmdReleaseStart(chatId: number): Promise<void> {
+async function releaseAppList() {
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: { slug: true, displayName: true },
   });
+  return {
+    apps,
+    buttons: [
+      [{ text: "🔄 앱 목록 새로고침", callback_data: "rel:refresh" }],
+      ...chunk2(
+        apps.map((a) => ({ text: a.displayName, callback_data: `rel:app:${a.slug}` })),
+      ),
+    ],
+  };
+}
+
+async function cmdReleaseStart(chatId: number): Promise<void> {
+  const { apps, buttons } = await releaseAppList();
   if (apps.length === 0) {
     await sendMessage(chatId, "등록된 앱이 없습니다.");
     return;
   }
-  const buttons = chunk2(
-    apps.map((a) => ({ text: a.displayName, callback_data: `rel:app:${a.slug}` })),
-  );
   await sendMessage(chatId, "<b>🚀 릴리즈할 앱을 선택하세요</b>", buttons);
 }
 
@@ -1150,14 +1058,45 @@ async function cbRelease(cq: TgCallback, fromId: number, rest: string[]): Promis
   const chatId = cq.message?.chat.id;
   const mid = cq.message?.message_id;
 
+  if (sub === "refresh") {
+    await answerCallback(cq.id, "⏳ GitHub 앱 목록 갱신 중…");
+    if (chatId == null || mid == null) return;
+    try {
+      const result = await seedRegistry({ backfill: false });
+      const { buttons } = await releaseAppList();
+      await editMessageText(
+        chatId,
+        mid,
+        `<b>🚀 릴리즈할 앱을 선택하세요</b>\nGitHub 재스캔 완료: ${result.seeded}개 반영 · ${result.skipped}개 제외`,
+        buttons,
+      );
+    } catch (error) {
+      await editMessageText(
+        chatId,
+        mid,
+        `앱 목록 갱신 실패: ${esc(error instanceof Error ? error.message : "unknown error")}`,
+        [[{ text: "↻ 다시 시도", callback_data: "rel:refresh" }]],
+      );
+    }
+    return;
+  }
+
   if (sub === "app") {
     if (!SLUG_RE.test(slug)) {
       await answerCallback(cq.id, "잘못된 앱");
       return;
     }
+    const selected = await prisma.app.findUnique({
+      where: { slug },
+      select: { displayName: true, status: true },
+    });
+    if (!selected || isDisabledAppStatus(selected.status)) {
+      await answerCallback(cq.id, "앱 없음");
+      return;
+    }
     await answerCallback(cq.id);
     if (chatId != null && mid != null) {
-      await editMessageText(chatId, mid, `🚀 <b>${esc(slug)}</b> — 버전 증가 단위를 선택하세요.`, [
+      await editMessageText(chatId, mid, `🚀 <b>${esc(selected.displayName)}</b> — 버전 증가 단위를 선택하세요.`, [
         [
           { text: "patch", callback_data: `rel:bump:${slug}:patch` },
           { text: "minor", callback_data: `rel:bump:${slug}:minor` },
@@ -1294,6 +1233,7 @@ async function cbReleaseDeploy(cq: TgCallback, fromId: number, rest: string[]): 
       target,
       tag,
       actorLabel: `telegram:${fromId}`,
+      telegramContext: { chatId, messageId: mid },
     });
     const refreshed = await loadReleaseDeployStates(app, tag, targets);
     // GitHub dispatch 성공 직후 audit 저장이 일시 실패해도 버튼은 중복 실행을 막는다.
@@ -1432,6 +1372,7 @@ async function cbDeploy(cq: TgCallback, fromId: number, rest: string[]): Promise
         target,
         tag,
         actorLabel: `telegram:${fromId}`,
+        telegramContext: { chatId, messageId: mid },
       });
       let body = `🚀 <b>${esc(app.displayName)} ${esc(tag)}</b> → ${esc(DEPLOY_TARGET_KO[target])} 배포를 트리거했습니다.`;
       if (res.xcodeCloudBuild != null) {

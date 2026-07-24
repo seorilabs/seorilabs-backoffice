@@ -2,6 +2,15 @@ import { env } from "@/lib/env";
 
 const API = "https://api.telegram.org";
 const TG_TEXT_LIMIT = 4000; // Telegram 4096 보다 보수적
+const MAX_ATTEMPTS = 3;
+
+export interface TelegramApiResponse {
+  ok: boolean;
+  error_code?: number;
+  description?: string;
+  parameters?: { retry_after?: number };
+  result?: unknown;
+}
 
 export interface InlineButton {
   text: string;
@@ -44,33 +53,76 @@ export function truncate(s: string, max = TG_TEXT_LIMIT): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
 
-async function call(method: string, body: unknown): Promise<unknown> {
+export function telegramResponseOk(
+  response: TelegramApiResponse | null,
+): response is TelegramApiResponse & { ok: true } {
+  return response?.ok === true;
+}
+
+export function telegramRetryDelayMs(
+  response: TelegramApiResponse | null,
+  attempt: number,
+): number | null {
+  if (!response) return Math.min(250 * 2 ** attempt, 2_000);
+  const retryable =
+    response.error_code === 429 || (response.error_code != null && response.error_code >= 500);
+  if (!retryable) return null;
+  const retryAfter = response.parameters?.retry_after;
+  return retryAfter != null
+    ? Math.min(Math.max(retryAfter, 1) * 1_000, 10_000)
+    : Math.min(250 * 2 ** attempt, 2_000);
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function call(method: string, body: unknown): Promise<TelegramApiResponse | null> {
   const token = env.telegramToken();
   if (!token) return null;
-  try {
-    const res = await fetch(`${API}/bot${token}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
-    });
-    return await res.json().catch(() => null);
-  } catch (e) {
-    // 토큰이 URL 에 있으므로 전체 에러 객체 대신 message + 연결 실패 코드만 로깅.
-    const code =
-      e && typeof e === "object" && "cause" in e && e.cause && typeof e.cause === "object" && "code" in e.cause
-        ? ` (${(e.cause as { code?: string }).code})`
-        : "";
-    console.error(`[telegram] ${method} 실패:`, (e instanceof Error ? e.message : "error") + code);
-    return null;
+  let lastResponse: TelegramApiResponse | null = null;
+  let lastError = "";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${API}/bot${token}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
+      });
+      lastResponse = (await res.json().catch(() => null)) as TelegramApiResponse | null;
+      if (telegramResponseOk(lastResponse)) return lastResponse;
+      const delay = telegramRetryDelayMs(lastResponse, attempt);
+      if (delay == null || attempt === MAX_ATTEMPTS - 1) break;
+      await wait(delay);
+    } catch (e) {
+      // 완료 알림은 유실보다 중복 가능성을 택해 네트워크 오류도 제한 재시도한다.
+      const code =
+        e &&
+        typeof e === "object" &&
+        "cause" in e &&
+        e.cause &&
+        typeof e.cause === "object" &&
+        "code" in e.cause
+          ? ` (${(e.cause as { code?: string }).code})`
+          : "";
+      lastError = (e instanceof Error ? e.message : "error") + code;
+      if (attempt === MAX_ATTEMPTS - 1) break;
+      await wait(telegramRetryDelayMs(null, attempt) ?? 250);
+    }
   }
+  console.error(
+    `[telegram] ${method} 실패:`,
+    lastResponse?.description ?? (lastError || "unknown error"),
+  );
+  return lastResponse;
 }
 
 export async function sendMessage(
   chatId: string | number,
   text: string,
   buttons?: InlineButton[][],
-): Promise<unknown> {
+): Promise<TelegramApiResponse | null> {
   const markup = buttons ? { reply_markup: { inline_keyboard: buttons } } : {};
   const res = (await call("sendMessage", {
     chat_id: chatId,
@@ -78,9 +130,15 @@ export async function sendMessage(
     parse_mode: "HTML",
     disable_web_page_preview: true,
     ...markup,
-  })) as { ok?: boolean } | null;
-  // HTML 파싱 실패(잘못된 태그 등) → parse_mode 없이 plain 재전송(원문 노출 방지).
-  if (res && res.ok === false) {
+  }));
+  // HTML 파싱 오류만 parse_mode 없이 plain 재전송한다.
+  // 429/5xx 등 다른 실패를 plain fallback 으로 중복 전송하지 않는다.
+  if (
+    res &&
+    res.ok === false &&
+    res.error_code === 400 &&
+    /parse|entities/i.test(res.description ?? "")
+  ) {
     return call("sendMessage", {
       chat_id: chatId,
       text: truncate(stripTags(text)),
@@ -96,7 +154,7 @@ export async function sendWithReplyKeyboard(
   chatId: string | number,
   text: string,
   keyboard: string[][],
-): Promise<unknown> {
+): Promise<TelegramApiResponse | null> {
   return call("sendMessage", {
     chat_id: chatId,
     text: truncate(text),
@@ -114,11 +172,14 @@ export async function sendWithReplyKeyboard(
 export async function sendChatAction(
   chatId: string | number,
   action = "typing",
-): Promise<unknown> {
+): Promise<TelegramApiResponse | null> {
   return call("sendChatAction", { chat_id: chatId, action });
 }
 
-export async function answerCallback(id: string, text?: string): Promise<unknown> {
+export async function answerCallback(
+  id: string,
+  text?: string,
+): Promise<TelegramApiResponse | null> {
   return call("answerCallbackQuery", {
     callback_query_id: id,
     ...(text ? { text } : {}),
@@ -130,7 +191,7 @@ export async function editMessageText(
   messageId: number,
   text: string,
   buttons?: InlineButton[][],
-): Promise<unknown> {
+): Promise<TelegramApiResponse | null> {
   return call("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
@@ -144,23 +205,29 @@ export async function editMessageText(
 // 봇 명령어 메뉴(텔레그램 "/" 메뉴) 등록.
 export async function setMyCommands(
   commands: Array<{ command: string; description: string }>,
-): Promise<unknown> {
+): Promise<TelegramApiResponse | null> {
   return call("setMyCommands", { commands });
 }
 
 // 채팅 입력창 메뉴 버튼을 명령어 목록으로.
-export async function setChatMenuButton(): Promise<unknown> {
+export async function setChatMenuButton(): Promise<TelegramApiResponse | null> {
   return call("setChatMenuButton", { menu_button: { type: "commands" } });
 }
 
 // 기본 알림 대상(TELEGRAM_CHAT_ID)으로 전송. 실패해도 throw 안 함.
-export async function notify(text: string, buttons?: InlineButton[][]): Promise<void> {
+export async function notify(
+  text: string,
+  buttons?: InlineButton[][],
+): Promise<TelegramApiResponse | null> {
   const chat = env.telegramChatId();
-  if (!telegramConfigured() || !chat) return;
-  await sendMessage(chat, text, buttons);
+  if (!telegramConfigured() || !chat) return null;
+  return sendMessage(chat, text, buttons);
 }
 
-export async function setWebhook(url: string, secret: string): Promise<unknown> {
+export async function setWebhook(
+  url: string,
+  secret: string,
+): Promise<TelegramApiResponse | null> {
   return call("setWebhook", {
     url,
     secret_token: secret,

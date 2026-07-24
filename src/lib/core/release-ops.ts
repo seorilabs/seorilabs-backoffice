@@ -33,6 +33,13 @@ import {
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
+
+export {
+  DEPLOY_TARGET_KO,
+  deployTargetsFor,
+  type DeployTarget,
+} from "@/lib/core/deploy-targets";
 
 // 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Telegram 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
@@ -197,33 +204,12 @@ export function formatReleaseBody(
   return parts.join("\n\n");
 }
 
-// 배포 대상 → 표준 caller 워크플로우 파일.
-export type DeployTarget = "AIT" | "PLAY" | "APPSTORE" | "ALL";
-
 const MARKET_WORKFLOW: Record<DeployTarget, string> = {
   AIT: "deploy-apps-in-toss.yml",
   PLAY: "deploy-google-play.yml",
   APPSTORE: "deploy-app-store.yml",
   ALL: "deploy-all.yml",
 };
-
-export const DEPLOY_TARGET_KO: Record<DeployTarget, string> = {
-  AIT: "AppsInToss",
-  PLAY: "Google Play",
-  APPSTORE: "App Store",
-  ALL: "전체(Deploy All)",
-};
-
-// App.marketTargets(Json) → 배포 대상 후보.
-export function deployTargetsFor(marketTargets: unknown): DeployTarget[] {
-  const arr = Array.isArray(marketTargets) ? (marketTargets as string[]) : [];
-  const out: DeployTarget[] = [];
-  if (arr.includes("ait")) out.push("AIT");
-  if (arr.includes("play")) out.push("PLAY");
-  if (arr.includes("appstore")) out.push("APPSTORE");
-  if (out.length > 1) out.push("ALL");
-  return out;
-}
 
 /**
  * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포까지
@@ -251,6 +237,7 @@ export async function dispatchMarketDeploy(opts: {
   tag: string;
   memo?: string;
   actorLabel?: string;
+  telegramContext?: { chatId: string | number; messageId: number };
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const workflowFile = MARKET_WORKFLOW[opts.target];
   if (!workflowFile) throw new Error(`알 수 없는 배포 대상: ${opts.target}`);
@@ -265,7 +252,7 @@ export async function dispatchMarketDeploy(opts: {
   if (iosViaXcodeCloud) {
     const app = await prisma.app.findUnique({
       where: { repoFullName: opts.repoFullName },
-      select: { iosBundle: true },
+      select: { id: true, iosBundle: true },
     });
     if (!app?.iosBundle) {
       throw new Error(
@@ -273,7 +260,30 @@ export async function dispatchMarketDeploy(opts: {
       );
     }
     const run = await triggerXcodeCloudDeploy({ bundleId: app.iosBundle, tag: opts.tag });
+    if (!run.buildRunId) throw new Error("Xcode Cloud 빌드 실행 ID가 없습니다.");
     xcodeCloudBuild = run.buildNumber;
+    // GitHub workflow_run 대신 ASC ciBuildRun 을 mirror 하는 외부 배포 레코드.
+    // scheduler 가 이 실행을 조회해 완료 상태와 Telegram 알림을 수렴시킨다.
+    await prisma.releaseRecord.upsert({
+      where: { externalRunId: run.buildRunId },
+      create: {
+        appId: app.id,
+        version: opts.tag,
+        market: "APPSTORE",
+        status: "PENDING",
+        workflowName: "Xcode Cloud",
+        externalRunId: run.buildRunId,
+        externalBuildNumber: run.buildNumber,
+        triggeredBy: opts.actorLabel ?? null,
+        startedAt: new Date(),
+      },
+      update: {
+        version: opts.tag,
+        status: "PENDING",
+        externalBuildNumber: run.buildNumber,
+        triggeredBy: opts.actorLabel ?? null,
+      },
+    });
   }
 
   // GH 워크플로 dispatch. APPSTORE 단독은 Xcode Cloud 로 갔으니 GH 는 생략.
@@ -315,6 +325,12 @@ export async function dispatchMarketDeploy(opts: {
           workflowFile: dispatchedWorkflow ?? null,
           xcodeCloudBuild: xcodeCloudBuild ?? null,
           tag: opts.tag,
+          telegram: opts.telegramContext
+            ? {
+                chatId: String(opts.telegramContext.chatId),
+                messageId: opts.telegramContext.messageId,
+              }
+            : null,
         } as object,
       },
     })

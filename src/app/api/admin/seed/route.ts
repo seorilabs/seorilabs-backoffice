@@ -12,7 +12,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
-    const result = await seedRegistry({ backfill: true });
+    const body = (await req.json().catch(() => ({}))) as { backfill?: unknown };
+    const result = await seedRegistry({ backfill: body.backfill !== false });
     return NextResponse.json(result);
   } catch (err) {
     console.error("[admin/seed] 실패:", err);
