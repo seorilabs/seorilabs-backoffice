@@ -247,6 +247,9 @@ model ReleaseRecord {
   status        ReleaseStatus @default(PENDING)
   workflowRunId BigInt?
   workflowName  String?
+  // GitHub workflow_run 이 아닌 외부 배포 실행(Xcode Cloud) 식별자.
+  externalRunId String? @unique
+  externalBuildNumber Int?
   commitSha     String?
   triggeredBy   String?
   startedAt     DateTime? @db.DateTime(3)
@@ -257,6 +260,35 @@ model ReleaseRecord {
   @@unique([market, workflowRunId])
   @@index([appId, market, deployedAt])
   @@map("release_record")
+}
+
+// Telegram 비동기 알림 outbox. webhook 응답을 Telegram 네트워크 상태와 분리하고
+// dedupeKey 로 완료 알림을 정확히 한 번 큐잉한다. 전송 실패는 scheduler 가 재시도한다.
+model TelegramNotification {
+  id            String                     @id @default(cuid())
+  dedupeKey     String                     @unique
+  kind          TelegramNotificationKind
+  status        TelegramNotificationStatus @default(PENDING)
+  payload       Json
+  attempts      Int                        @default(0)
+  nextAttemptAt DateTime                   @default(now()) @db.DateTime(3)
+  lastError     String?                    @db.Text
+  sentAt        DateTime?                  @db.DateTime(3)
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@map("telegram_notification")
+}
+
+enum TelegramNotificationKind {
+  DEPLOY_COMPLETION
+}
+
+enum TelegramNotificationStatus {
+  PENDING
+  PROCESSING
+  SENT
 }
 
 // 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 다국어 유저용 공지.

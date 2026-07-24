@@ -3,7 +3,6 @@ import type {
   IssueState,
   PrState,
   ReleaseMarket,
-  ReleaseStatus,
 } from "@prisma/client";
 import {
   normalizeLabels,
@@ -13,8 +12,10 @@ import {
   isBlocked,
 } from "@/lib/domain/labels";
 import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
+import { releaseStatusOf } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
 import { findTagForSha } from "@/lib/github/release";
+import { enqueueDeployCompletionNotification } from "@/lib/telegram/deploy-notifications";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -172,16 +173,6 @@ export async function upsertPr(
 }
 
 // ── Workflow run → ReleaseRecord + 라이프사이클 자동 신호 ──────────────────────
-function releaseStatusOf(
-  status?: string | null,
-  conclusion?: string | null,
-): ReleaseStatus {
-  if (status !== "completed") return "IN_PROGRESS";
-  if (conclusion === "success") return "SUCCEEDED";
-  if (conclusion === "failure" || conclusion === "timed_out") return "FAILED";
-  return "IN_PROGRESS";
-}
-
 export async function upsertWorkflowRun(
   repoFullName: string,
   gh: GhRunInput,
@@ -236,21 +227,32 @@ export async function upsertWorkflowRun(
     commitSha: gh.head_sha ?? null,
     deployedAt: status === "SUCCEEDED" ? ghUpdatedAt : null,
   };
-  await prisma.releaseRecord.upsert({
+  const release = await prisma.releaseRecord.upsert({
     where: { market_workflowRunId: { market, workflowRunId: runId } },
     create: { market, workflowRunId: runId, ...relData },
     update: relData,
   });
 
+  // webhook 유실·처리 실패도 정기 reconcile 이 복구하도록 미러 upsert 경로에서 outbox를 만든다.
+  // run_attempt를 키에 포함해 GitHub 재실행 완료도 별도 알림으로 전달한다.
+  if (status === "SUCCEEDED" || status === "FAILED") {
+    await enqueueDeployCompletionNotification({
+      releaseRecordId: release.id,
+      eventKey: `github:${runId}:${gh.run_attempt ?? 1}`,
+      status,
+      runUrl: `https://github.com/${repoFullName}/actions/runs/${runId}`,
+    });
+  }
+
   if (status === "SUCCEEDED") {
-    await evalLifecycleOnRelease(appId, runId);
+    await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);
   }
 }
 
 // 배포 성공 시 라이프사이클 자동 전이 (라벨/마일스톤 비의존).
-async function evalLifecycleOnRelease(
+export async function evaluateLifecycleOnSuccessfulRelease(
   appId: string,
-  runId: bigint,
+  signalRef: string,
 ): Promise<void> {
   const app = await prisma.app.findUnique({
     where: { id: appId },
@@ -263,8 +265,8 @@ async function evalLifecycleOnRelease(
       appId,
       to: "RELEASE",
       source: "SYSTEM",
-      reason: "deploy workflow 성공",
-      signalRef: `workflow_run:${runId}`,
+      reason: "마켓 배포 성공",
+      signalRef,
     });
   }
 
@@ -289,7 +291,7 @@ async function evalLifecycleOnRelease(
       to: "LIVEOPS",
       source: "SYSTEM",
       reason: "전 마켓 배포 성공",
-      signalRef: `workflow_run:${runId}`,
+      signalRef,
     });
   }
 }

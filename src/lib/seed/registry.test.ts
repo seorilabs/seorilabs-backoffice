@@ -139,3 +139,53 @@ test("project.godot/package.json 모두 없음 → null(시드 대상 아님)", 
   const seed = await computeRepoSeed(fakeOctokit({ [WF_PLAY]: "name: play" }), ORG, REPO);
   assert.equal(seed, null);
 });
+
+test("game/project.godot 레이아웃도 등록하고 저장소 설명의 짧은 한글명을 우선한다", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "game/project.godot": '[application]\nconfig/name="Merge Lizard"',
+    }),
+    ORG,
+    {
+      ...REPO,
+      name: "merge-lizard",
+      full_name: "seorilabs/merge-lizard",
+      description: "햇살비늘 정원 - 결정형 환경 진화 머지 게임",
+    },
+  );
+  assert.ok(seed);
+  assert.equal(seed.engine, "GODOT");
+  assert.equal(seed.displayName, "햇살비늘 정원");
+});
+
+test("한국어 마켓명이 있으면 영문 프로젝트명보다 우선한다", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "project.godot": '[application]\nconfig/name="Lucid Chess"',
+      "play-store/google-play.config.json": JSON.stringify({
+        storeListing: {
+          appName: { "ko-KR": "루시드 체스", "en-US": "Lucid Chess" },
+        },
+      }),
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.equal(seed.displayName, "루시드 체스");
+});
+
+test("App Store 한국어 이름도 릴리즈 목록 표시명으로 사용한다", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "project.godot": '[application]\nconfig/name="Spiritgate Defenders"',
+      "app-store/app-store.config.json": JSON.stringify({
+        storeListing: { name: "영혼의 문 디펜스" },
+      }),
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.equal(seed.displayName, "영혼의 문 디펜스");
+});

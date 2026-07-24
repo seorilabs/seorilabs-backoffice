@@ -87,6 +87,7 @@ export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
         id: r.id,
         private: r.private,
         defaultBranch: r.default_branch ?? "main",
+        description: r.description,
       });
       if (result === "seeded") seeded++;
       else skipped++;

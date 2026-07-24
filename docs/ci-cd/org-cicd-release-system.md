@@ -202,7 +202,7 @@ flowchart LR
   2. **workflow_dispatch 트리거**(`octokit.rest.actions.createWorkflowDispatch`) → `lib/github/write.ts`. App 권한 `actions:write` 필요.
   3. `/releases` UI: **태그 선택 + 마켓별/Deploy All 버튼**.
   4. Telegram: `/deploy` 슬래시 + `deploy:` 콜백(confirm-button), 릴리즈 태그 링크 발송. `/release` 태그 생성 완료 메시지에는 해당 태그의 플랫폼별 빠른 배포 버튼을 즉시 표시하며, 각 버튼은 독립 상태를 유지해 순서대로 모두 트리거할 수 있다(`READY → TRIGGERING → TRIGGERED/IN_PROGRESS/SUCCEEDED`, 실패 시 재시도).
-  5. 성공 알림: dispatch된 deploy의 `workflow_run` webhook → 기존 `ReleaseRecord` + nudge 경로로 자동 성공/실패 메시지(이미 동작).
+  5. 완료 알림: dispatch된 deploy의 `workflow_run` webhook → `ReleaseRecord` → `telegram_notification` outbox로 성공/실패 메시지를 전송한다. Telegram에서 시작한 배포는 감사 로그의 `chatId/messageId`로 원래 `/release` 메시지 버튼도 갱신한다. Xcode Cloud는 `ciBuildRun`을 주기 조회해 같은 경로로 수렴한다.
 
 ### 7.2 릴리즈 → 배포 시퀀스
 
@@ -231,9 +231,13 @@ sequenceDiagram
     BO->>GH: ⑤ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
     GH->>MK: ⑥ 빌드 → 서명 → 업로드(출시노트 동봉)
     GH-->>BO: workflow_run webhook(성공/실패)
-    BO->>BO: ReleaseRecord 갱신 + 라이프사이클 전이
+    BO->>BO: ReleaseRecord 갱신 + 알림 outbox + 라이프사이클 전이
     BO->>TG: ⑦ 업로드 성공/실패 메시지
 ```
+
+- Telegram API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
+- Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
+- 완료 알림은 한글 앱명·태그·마켓·실행 이름·GitHub Actions 링크 또는 Xcode Cloud 빌드 번호를 포함한다.
 
 ### 7.3 출시노트 규칙
 - **마켓 비종속**: "앱스토어/플레이스토어/토스" 등 특정 마켓 명칭·정책 표현 금지. 모든 마켓 공통으로 재사용.

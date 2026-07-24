@@ -1,5 +1,5 @@
 import type { InlineButton } from "@/lib/telegram/client";
-import type { DeployTarget } from "@/lib/core/release-ops";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
 
 export type PlatformDeployTarget = Exclude<DeployTarget, "ALL">;
 export type DeployButtonState =
