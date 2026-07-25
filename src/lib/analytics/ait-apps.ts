@@ -22,6 +22,7 @@ export const AIT_MINIAPP_BY_SLUG: Record<string, number> = {
   "vocab-swipe": 36976,
   "lucid-reversi": 44056,
   "foam-party": 50736,
+  "trait-test-hub": 54985,
 };
 
 export interface AitTarget {

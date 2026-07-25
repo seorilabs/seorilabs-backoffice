@@ -23,7 +23,7 @@ bash scripts/console-metrics/status.sh
 - 한 앱 당 최대 120일(`MAX_DAYS_PER_APP`). 더 큰 gap 은 120일씩 나눠 반복 push.
 
 ## 2. 앱별 콘솔 MCP 조회 (workspaceId=38345)
-대상 9개 앱 (slug → miniAppId). 콘솔 appName 과 backoffice slug 가 다른 경우 주의:
+대상 10개 앱 (slug → miniAppId). 콘솔 appName 과 backoffice slug 가 다른 경우 주의:
 
 | slug (payload 키) | miniAppId | 콘솔 appName |
 |---|---|---|
@@ -36,6 +36,7 @@ bash scripts/console-metrics/status.sh
 | vocab-swipe | 36976 | vocab-swipe |
 | lucid-reversi | 44056 | lucid-reversi |
 | foam-party | 50736 | foam-party |
+| trait-test-hub | 54985 | trait-test-hub |
 
 각 앱마다(구간 = 위 startDate~endDate) 호출 → 날짜별로 정규화:
 - `dashboard_dau` `{startDate,endDate,timeUnit:"DAY"}` → `au[].value`=**dau**, `newAu[].value`=**newUsers**. referrer/age/gender/os/appVersion 은 `raw` 로.
