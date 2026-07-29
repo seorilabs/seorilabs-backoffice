@@ -90,6 +90,9 @@ spec:
               value: "gemini-3.1-flash-lite"
             - name: GEMINI_CHAT_TIMEOUT_MS
               value: "180000"
+            # 일일 병합 목록은 항상 발송. Gemini 한 줄 요약만 날짜별 10% 슬로우 롤아웃.
+            - name: DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT
+              value: "10"
             - name: GEMINI_EMBED_MODEL
               value: "gemini-embedding-001"
             - name: GEMINI_EMBED_DIM
