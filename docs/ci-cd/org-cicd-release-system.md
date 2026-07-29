@@ -237,6 +237,7 @@ sequenceDiagram
 
 - Telegram API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
+- Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행한다.
 - 완료 알림은 한글 앱명·태그·마켓·실행 이름·GitHub Actions 링크 또는 Xcode Cloud 빌드 번호를 포함한다.
 
 ### 7.3 출시노트 규칙

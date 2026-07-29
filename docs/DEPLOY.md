@@ -236,4 +236,5 @@ flowchart LR
 - Telegram API의 일시 오류는 요청 내 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다. 전송 성공·실패는 `AuditLog`의 `telegram.deploy.notification.*` action으로 확인한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
+- `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
 - 관련 마이그레이션: `16_deploy_completion_notifications`.
