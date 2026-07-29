@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   dailyRolloutBucket,
+  deliverDailyDigest,
   filterDefaultBranchMerges,
   formatMergedPrLines,
   normalizeRolloutPercent,
@@ -9,6 +10,7 @@ import {
   shouldUseDailyDigestGemini,
   type MergedPrDigestItem,
 } from "@/lib/telegram/daily-digest";
+import { env } from "@/lib/env";
 
 function pr(
   repoFullName: string,
@@ -38,6 +40,24 @@ test("Gemini rollout percent를 fail-closed 범위로 정규화한다", () => {
   assert.equal(normalizeRolloutPercent(-1), 0);
   assert.equal(normalizeRolloutPercent(101), 100);
   assert.equal(normalizeRolloutPercent("invalid"), 0);
+});
+
+test("Gemini rollout 환경변수 초기값은 10이고 0과 100을 그대로 읽는다", () => {
+  const original = process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT;
+  try {
+    delete process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT;
+    assert.equal(env.dailyDigestGeminiRolloutPercent(), 10);
+    process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT = "0";
+    assert.equal(env.dailyDigestGeminiRolloutPercent(), 0);
+    process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT = "100";
+    assert.equal(env.dailyDigestGeminiRolloutPercent(), 100);
+  } finally {
+    if (original === undefined) {
+      delete process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT;
+    } else {
+      process.env.DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT = original;
+    }
+  }
 });
 
 test("Gemini rollout은 날짜별 고정 버킷 경계를 따른다", () => {
@@ -85,4 +105,46 @@ test("병합 PR 목록은 링크와 escape를 적용하고 최대 개수를 제�
     "• 그 외 1건",
   ]);
   assert.deepEqual(formatMergedPrLines([]), ["• 병합 없음"]);
+});
+
+test("Gemini 미호출일에도 확정적 병합 목록을 발송한다", async () => {
+  let sent = "";
+  const result = await deliverDailyDigest({
+    lines: ["병합 변경사항", "• app #1 기능 추가"],
+    send: async (text) => {
+      sent = text;
+      return { ok: true };
+    },
+  });
+
+  assert.equal(result.geminiUsed, false);
+  assert.match(sent, /app #1 기능 추가/);
+});
+
+test("Gemini 실패 시에도 확정적 병합 목록을 발송한다", async () => {
+  let sent = "";
+  const result = await deliverDailyDigest({
+    lines: ["병합 변경사항", "• app #2 버그 수정"],
+    generateGeminiSummary: async () => {
+      throw new Error("quota exceeded");
+    },
+    send: async (text) => {
+      sent = text;
+      return { ok: true };
+    },
+  });
+
+  assert.equal(result.geminiUsed, false);
+  assert.match(sent, /app #2 버그 수정/);
+  assert.doesNotMatch(sent, /AI 요약/);
+});
+
+test("Telegram 발송 실패를 throw해 Cron 성공 오인을 막는다", async () => {
+  await assert.rejects(
+    deliverDailyDigest({
+      lines: ["병합 변경사항"],
+      send: async () => ({ ok: false, error_code: 500 }),
+    }),
+    /Telegram 발송 실패/,
+  );
 });

@@ -1,4 +1,9 @@
-import { esc } from "@/lib/telegram/client";
+import {
+  esc,
+  telegramResponseOk,
+  type InlineButton,
+  type TelegramApiResponse,
+} from "@/lib/telegram/client";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -16,6 +21,21 @@ export interface MergedPrDigestItem {
   title: string;
   baseRef: string | null;
   mergedAt: Date | null;
+}
+
+export interface DailyDigestDeliveryResult {
+  geminiUsed: boolean;
+  telegramSent: true;
+}
+
+interface DailyDigestDeliveryOptions {
+  lines: string[];
+  buttons?: InlineButton[][];
+  generateGeminiSummary?: () => Promise<string>;
+  send: (
+    text: string,
+    buttons?: InlineButton[][],
+  ) => Promise<TelegramApiResponse | null>;
 }
 
 function dateLabel(date: Date): string {
@@ -117,4 +137,33 @@ export function mergedPrPromptLines(
   return prs
     .slice(0, maxItems)
     .map((pr) => `- ${shortRepo(pr.repoFullName)} #${pr.number}: ${truncateTitle(pr.title, 180)}`);
+}
+
+/**
+ * 확정적 목록을 먼저 만든 뒤 AI 요약을 선택적으로 덧붙인다.
+ * AI 실패는 목록 발송을 막지 않고, Telegram 실패는 Cron 재시도를 위해 throw한다.
+ */
+export async function deliverDailyDigest({
+  lines,
+  buttons,
+  generateGeminiSummary,
+  send,
+}: DailyDigestDeliveryOptions): Promise<DailyDigestDeliveryResult> {
+  const messageLines = [...lines];
+  let geminiUsed = false;
+  if (generateGeminiSummary) {
+    try {
+      const summary = await generateGeminiSummary();
+      messageLines.push("", `💬 <b>AI 요약</b> ${esc(summary.trim())}`);
+      geminiUsed = true;
+    } catch {
+      // AI 실패는 확정적 목록 발송에 영향을 주지 않는다.
+    }
+  }
+
+  const telegramResponse = await send(messageLines.join("\n"), buttons);
+  if (!telegramResponseOk(telegramResponse)) {
+    throw new Error("일일 다이제스트 Telegram 발송 실패");
+  }
+  return { geminiUsed, telegramSent: true };
 }

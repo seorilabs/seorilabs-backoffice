@@ -1,12 +1,7 @@
 import type { Lifecycle, AiDraftKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import {
-  notify,
-  esc,
-  telegramResponseOk,
-  type InlineButton,
-} from "@/lib/telegram/client";
+import { notify, esc, type InlineButton } from "@/lib/telegram/client";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
@@ -15,6 +10,7 @@ import { geminiComplete } from "@/lib/ai/gemini";
 import { getOrgDefaultBranches } from "@/lib/github/read";
 import {
   filterDefaultBranchMerges,
+  deliverDailyDigest,
   formatMergedPrLines,
   mergedPrPromptLines,
   previousKstDayWindow,
@@ -127,34 +123,29 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   }
 
   // 확정적 목록은 항상 발송한다. Gemini는 날짜별 고정 저비율 샘플에서만 한 번 호출한다.
-  let geminiUsed = false;
-  if (
+  const useGemini =
     mergedPrs.length > 0 &&
     env.geminiChatConfigured() &&
     shouldUseDailyDigestGemini(
       window.label,
       env.dailyDigestGeminiRolloutPercent(),
-    )
-  ) {
-    try {
-      const summary = [
-        `승인대기 ${pend.length}건: ${pend.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number}`).join(", ") || "없음"}`,
-        `P1 ${p1.length}건: ${p1.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number} ${i.title}`).join("; ") || "없음"}`,
-        `${window.label} default branch 병합 ${mergedPrs.length}건:`,
-        ...mergedPrPromptLines(mergedPrs),
-      ].join("\n");
-      const oneLiner = await geminiComplete({
-        system:
-          "당신은 Seorilabs 공장 운영 비서다. 제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 제목에 없는 효과나 사실은 추정하지 말고 인사·부연은 쓰지 않는다.",
-        prompt: summary,
-        maxTokens: 240,
-      });
-      lines.push("", `💬 <b>AI 요약</b> ${esc(oneLiner.trim())}`);
-      geminiUsed = true;
-    } catch {
-      // AI 실패는 무시
-    }
-  }
+    );
+  const generateGeminiSummary = useGemini
+    ? async () => {
+        const prompt = [
+          `승인대기 ${pend.length}건: ${pend.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number}`).join(", ") || "없음"}`,
+          `P1 ${p1.length}건: ${p1.slice(0, 5).map((i) => `${i.repoFullName.replace("seorilabs/", "")}#${i.number} ${i.title}`).join("; ") || "없음"}`,
+          `${window.label} default branch 병합 ${mergedPrs.length}건:`,
+          ...mergedPrPromptLines(mergedPrs),
+        ].join("\n");
+        return geminiComplete({
+          system:
+            "당신은 Seorilabs 공장 운영 비서다. 제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 제목에 없는 효과나 사실은 추정하지 말고 인사·부연은 쓰지 않는다.",
+          prompt,
+          maxTokens: 240,
+        });
+      }
+    : undefined;
 
   // 승인 대기 상위 5건은 바로 승인 버튼으로.
   const buttons: InlineButton[][] = pend.slice(0, 5).map((i) => {
@@ -167,20 +158,18 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     ];
   });
 
-  const telegramResponse = await notify(
-    lines.join("\n"),
-    buttons.length ? buttons : undefined,
-  );
-  if (!telegramResponseOk(telegramResponse)) {
-    throw new Error("일일 다이제스트 Telegram 발송 실패");
-  }
+  const delivery = await deliverDailyDigest({
+    lines,
+    buttons: buttons.length ? buttons : undefined,
+    generateGeminiSummary,
+    send: notify,
+  });
   return {
     date: window.label,
     mergedPrCount: mergedPrs.length,
     releaseCount: releases,
     unresolvedDefaultBranchCount: unresolvedCount,
-    geminiUsed,
-    telegramSent: true,
+    ...delivery,
   };
 }
 
