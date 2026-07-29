@@ -10,6 +10,10 @@ import type { Octokit } from "octokit";
 
 export type Octo = Octokit;
 
+// 파서가 같은 원본 config에서 다른 시드 값을 산출하게 되면 반드시 올린다.
+// configHash가 바뀌어 운영 레지스트리의 기존 레코드도 재시드된다.
+const SEED_VERSION = 3;
+
 interface PlayConfig {
   packageName?: string;
   appType?: string;
@@ -292,7 +296,7 @@ export async function computeRepoSeed(
         type,
         engine,
         displayName,
-        seedVersion: 2,
+        seedVersion: SEED_VERSION,
       }),
     )
     .digest("hex");
