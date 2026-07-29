@@ -259,7 +259,11 @@ export async function dispatchMarketDeploy(opts: {
         `iosBundle 미설정: ${opts.repoFullName} — Xcode Cloud 트리거 불가`,
       );
     }
-    const run = await triggerXcodeCloudDeploy({ bundleId: app.iosBundle, tag: opts.tag });
+    const run = await triggerXcodeCloudDeploy({
+      bundleId: app.iosBundle,
+      repoFullName: opts.repoFullName,
+      tag: opts.tag,
+    });
     if (!run.buildRunId) throw new Error("Xcode Cloud 빌드 실행 ID가 없습니다.");
     xcodeCloudBuild = run.buildNumber;
     // GitHub workflow_run 대신 ASC ciBuildRun 을 mirror 하는 외부 배포 레코드.
