@@ -10,16 +10,23 @@ import type { Octokit } from "octokit";
 
 export type Octo = Octokit;
 
+// 파서가 같은 원본 config에서 다른 시드 값을 산출하게 되면 반드시 올린다.
+// configHash가 바뀌어 운영 레지스트리의 기존 레코드도 재시드된다.
+const SEED_VERSION = 3;
+
 interface PlayConfig {
   packageName?: string;
   appType?: string;
   storeListing?: { appName?: unknown };
 }
-interface AppStoreConfig {
+interface AppStoreIdentity {
   bundleId?: string;
   appleTeamId?: string;
   sku?: string;
   appType?: string;
+}
+interface AppStoreConfig extends AppStoreIdentity {
+  app?: AppStoreIdentity;
   storeListing?: { appName?: unknown; name?: unknown };
 }
 interface FirebaseRc {
@@ -174,6 +181,12 @@ export async function computeRepoSeed(
     "app-store/app-store.config.json",
     ref,
   );
+  // 초기 레포의 최상위 형식과 최신 Godot 레포의 app.* 형식을 모두 지원한다.
+  // 필드별로 최상위 값을 우선해 기존 설정의 의미를 바꾸지 않는다.
+  const appStoreBundleId = appStore?.bundleId ?? appStore?.app?.bundleId;
+  const appStoreAppleTeamId = appStore?.appleTeamId ?? appStore?.app?.appleTeamId;
+  const appStoreSku = appStore?.sku ?? appStore?.app?.sku;
+  const appStoreType = appStore?.appType ?? appStore?.app?.appType;
 
   const firebaserc = await getJson<FirebaseRc>(octokit, org, name, ".firebaserc", ref);
 
@@ -235,7 +248,7 @@ export async function computeRepoSeed(
     hasWeb,
   });
 
-  const appType = play?.appType ?? appStore?.appType;
+  const appType = play?.appType ?? appStoreType;
   const type: AppType =
     engine === "GODOT" || appType?.toLowerCase() === "game" ? "GAME" : "APP";
 
@@ -283,7 +296,7 @@ export async function computeRepoSeed(
         type,
         engine,
         displayName,
-        seedVersion: 2,
+        seedVersion: SEED_VERSION,
       }),
     )
     .digest("hex");
@@ -298,9 +311,9 @@ export async function computeRepoSeed(
     isPublicRepo: !repo.private,
     firebaseProject: firebaserc?.projects?.default ?? null,
     playPackage: play?.packageName ?? null,
-    iosBundle: appStore?.bundleId ?? null,
-    appleTeamId: appStore?.appleTeamId ?? null,
-    iosSku: appStore?.sku ?? null,
+    iosBundle: appStoreBundleId ?? null,
+    appleTeamId: appStoreAppleTeamId ?? null,
+    iosSku: appStoreSku ?? null,
     aitAppName,
     marketTargets,
     configHash,

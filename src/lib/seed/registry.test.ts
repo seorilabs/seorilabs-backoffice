@@ -52,6 +52,14 @@ const APPSTORE_CFG = JSON.stringify({
   sku: "sample-sku",
   appType: "game",
 });
+const NESTED_APPSTORE_CFG = JSON.stringify({
+  app: {
+    bundleId: "com.seorilabs.nested",
+    appleTeamId: "TEAM456",
+    sku: "nested-sku",
+    appType: "game",
+  },
+});
 const FIREBASERC = JSON.stringify({ projects: { default: "seorilabs-sample" } });
 
 const WF_PLAY = ".github/workflows/deploy-google-play.yml";
@@ -95,9 +103,29 @@ test("config 만 있고 표준 배포 워크플로우 없음(Godot pages-only) �
   // config 는 marketTargets 와 분리돼 다른 필드 산출에는 그대로 쓰인다(회귀 방지).
   assert.equal(seed.playPackage, "com.seorilabs.sample");
   assert.equal(seed.iosBundle, "com.seorilabs.sample");
+  assert.equal(seed.appleTeamId, "TEAM123");
+  assert.equal(seed.iosSku, "sample-sku");
   assert.equal(seed.firebaseProject, "seorilabs-sample");
   assert.equal(seed.type, "GAME");
   assert.equal(seed.engine, "GODOT");
+});
+
+test("중첩형 app.* App Store 설정 → iOS 식별자와 appstore 마켓 대상 시드", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "project.godot": "[application]",
+      "app-store/app-store.config.json": NESTED_APPSTORE_CFG,
+      [WF_APPSTORE]: "name: appstore",
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.equal(seed.iosBundle, "com.seorilabs.nested");
+  assert.equal(seed.appleTeamId, "TEAM456");
+  assert.equal(seed.iosSku, "nested-sku");
+  assert.equal(seed.type, "GAME");
+  assert.deepEqual(seed.marketTargets, ["appstore"]);
 });
 
 test("동일 config 라도 배포 워크플로우가 나중에 추가되면 configHash 변동(stale skip 방지)", async () => {
