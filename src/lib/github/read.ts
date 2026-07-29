@@ -1,10 +1,26 @@
 import { parse as parseYaml } from "yaml";
 
 import { getInstallationOctokit } from "@/lib/github/app";
+import { env } from "@/lib/env";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
   return { owner, repo };
+}
+
+/** 조직 저장소의 실제 default branch를 한 번의 paginated 조회로 가져온다. */
+export async function getOrgDefaultBranches(): Promise<Map<string, string>> {
+  const octokit = await getInstallationOctokit();
+  const repos = await octokit.paginate(octokit.rest.repos.listForOrg, {
+    org: env.githubOrg(),
+    per_page: 100,
+    type: "all",
+  });
+  return new Map(
+    repos
+      .filter((repo) => Boolean(repo.default_branch))
+      .map((repo) => [repo.full_name, repo.default_branch as string]),
+  );
 }
 
 /**

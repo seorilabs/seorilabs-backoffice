@@ -145,6 +145,7 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
 
 - **모델**: `gemini-3.1-flash-lite` GenerateContent API. 비용·지연을 줄이기 위해 `minimal` thinking을 명시하고 Gemini 3 권장에 따라 temperature를 별도 지정하지 않는다.
 - **활성 조건**: `FEATURE_GEMINI_ENABLED=true` AND `GEMINI_API_KEY` 비어있지 않음(`env.geminiChatConfigured()`).
+- **일일 다이제스트 슬로우 롤아웃**: 전일 KST 기준 default branch 병합 PR 목록은 Gemini 없이 매일 발송한다. AI 한 줄만 `DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT`의 날짜별 고정 샘플에 적용하며 초기값은 `10`이다. Free API 쿼타와 결과 품질을 확인한 뒤 `25 → 50 → 100`으로 올린다.
 - **키 출처/회전**: `~/.config/seorilabs/gemini-cluster-api-keys.env`의 Backoffice 전용 회사 키를 `backoffice-secrets`(platform ns)에 보관한다. PR bot과 Vault 배치 인덱서 키를 재사용하지 않는다.
   ```bash
   set -a

@@ -12,8 +12,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
-    await sendDailyDigest(new Date());
-    return NextResponse.json({ ok: true });
+    const result = await sendDailyDigest(new Date());
+    return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     console.error("[admin/digest] 실패:", e);
     return NextResponse.json({ error: "digest failed" }, { status: 500 });

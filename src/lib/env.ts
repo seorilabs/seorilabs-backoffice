@@ -65,6 +65,9 @@ export const env = {
   geminiChatConfigured: () =>
     bool("FEATURE_GEMINI_ENABLED", false) &&
     Boolean(optional("GEMINI_API_KEY").trim()),
+  // 일일 병합 요약 Gemini 적용률. 확정적 PR 목록은 항상 발송하고 AI 한 줄만 날짜별 샘플링.
+  dailyDigestGeminiRolloutPercent: () =>
+    Number(optional("DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT", "10")),
   allowlistLogins: () =>
     optional("ALLOWLIST_LOGINS", "")
       .split(",")
