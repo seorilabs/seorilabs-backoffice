@@ -20,6 +20,12 @@ export interface MetricDaily {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  adCtaUsers: number;
+  adCtaImpressions: number;
+  adCompletedUsers: number;
+  adCompletions: number;
+  networkAdUsers: number;
+  networkAdImpressions: number;
   dauAndroid: number;
   dauIos: number;
   dauWeb: number;
@@ -130,7 +136,7 @@ export function DauTrend({ rowsAsc }: { rowsAsc: MetricDaily[] }) {
 export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full min-w-[560px] text-sm">
+      <table className="w-full min-w-[760px] text-sm">
         <thead>
           <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
             <th className="px-3 py-2">날짜</th>
@@ -139,7 +145,9 @@ export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
             <th className="px-3 py-2 text-right">D1</th>
             <th className="px-3 py-2 text-right">D7</th>
             <th className="px-3 py-2 text-right">활성</th>
-            <th className="px-3 py-2 text-right">광고노출</th>
+            <th className="px-3 py-2 text-right">CTA 노출</th>
+            <th className="px-3 py-2 text-right">완료</th>
+            <th className="px-3 py-2 text-right">실제 노출</th>
           </tr>
         </thead>
         <tbody>
@@ -151,7 +159,9 @@ export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
               <td className="px-3 py-1.5 text-right text-neutral-600">{pct(r.d1Pct)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{pct(r.d7Pct)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{r.engagedUsers}</td>
-              <td className="px-3 py-1.5 text-right text-neutral-600">{r.adImpressions}</td>
+              <td className="px-3 py-1.5 text-right text-neutral-600">{r.adCtaImpressions}</td>
+              <td className="px-3 py-1.5 text-right text-neutral-600">{r.adCompletions}</td>
+              <td className="px-3 py-1.5 text-right text-neutral-600">{r.networkAdImpressions}</td>
             </tr>
           ))}
         </tbody>

@@ -24,6 +24,12 @@ export interface MetricRow {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  adCtaUsers: number;
+  adCtaImpressions: number;
+  adCompletedUsers: number;
+  adCompletions: number;
+  networkAdUsers: number;
+  networkAdImpressions: number;
   dauAndroid: number;
   dauIos: number;
   dauWeb: number;
@@ -59,14 +65,16 @@ export function buildAppReportMd(
     `- D1 잔존율 ${pct(latest.d1Pct)} · D3 ${pct(latest.d3Pct)} · D7 ${pct(latest.d7Pct)}`,
     `- 활성사용자 ${latest.engagedUsers}명 · 참여율 ${pct(engagementRate(latest.engagedUsers, latest.dau))} · 평균 ${numOrDash(latest.avgEngageSec)}초`,
     `- 플랫폼 Android ${latest.dauAndroid} · iOS ${latest.dauIos} · Web ${latest.dauWeb}`,
-    `- 광고 노출 ${latest.adImpressions} · 고유 ${latest.adEventUsers}명`,
+    `- 광고 CTA 노출 ${latest.adCtaImpressions} · 고유 ${latest.adCtaUsers}명`,
+    `- 광고 완료 ${latest.adCompletions} · 고유 ${latest.adCompletedUsers}명`,
+    `- 실제 광고 노출 ${latest.networkAdImpressions} · 고유 ${latest.networkAdUsers}명`,
     "",
     `## 최근 ${rowsDesc.length}일 추이`,
-    `| 날짜 | DAU | 신규 | D1 | D7 | 광고노출 |`,
-    `| --- | ---: | ---: | ---: | ---: | ---: |`,
+    `| 날짜 | DAU | 신규 | D1 | D7 | CTA 노출 | 광고 완료 | 실제 노출 |`,
+    `| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
     ...rowsDesc.map(
       (r) =>
-        `| ${day(r.date)} | ${r.dau} | ${r.newUsers} | ${pct(r.d1Pct)} | ${pct(r.d7Pct)} | ${r.adImpressions} |`,
+        `| ${day(r.date)} | ${r.dau} | ${r.newUsers} | ${pct(r.d1Pct)} | ${pct(r.d7Pct)} | ${r.adCtaImpressions} | ${r.adCompletions} | ${r.networkAdImpressions} |`,
     ),
     "",
   ];
@@ -80,7 +88,7 @@ export function summaryLine(displayName: string, latest: MetricRow): string {
     .segs.map((s) => `${s.label} ${s.value}`)
     .join("/");
   return (
-    `<b>${esc(displayName)}</b> DAU ${latest.dau} · 활성 ${latest.engagedUsers}(${pct(rate)}) · D7 ${pct(latest.d7Pct)} · 광고 ${latest.adImpressions}` +
+    `<b>${esc(displayName)}</b> DAU ${latest.dau} · 활성 ${latest.engagedUsers}(${pct(rate)}) · D7 ${pct(latest.d7Pct)} · CTA ${latest.adCtaImpressions} · 완료 ${latest.adCompletions} · 실제노출 ${latest.networkAdImpressions}` +
     (plat ? ` · ${plat}` : "")
   );
 }

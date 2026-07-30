@@ -101,6 +101,12 @@ export interface Ga4DailyRow {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  adCtaUsers: number;
+  adCtaImpressions: number;
+  adCompletedUsers: number;
+  adCompletions: number;
+  networkAdUsers: number;
+  networkAdImpressions: number;
 }
 
 export interface Ga4CohortRow {
@@ -109,6 +115,24 @@ export interface Ga4CohortRow {
   d1Pct: number | null;
   d3Pct: number | null;
   d7Pct: number | null;
+}
+
+export function mapDailyActivityRow(r: Record<string, unknown>): Ga4DailyRow {
+  return {
+    date: String(r.date),
+    dau: num(r.dau),
+    newUsers: num(r.new_users),
+    engagedUsers: num(r.engaged_users),
+    avgEngageSec: numOrNull(r.avg_engage_sec),
+    adEventUsers: num(r.ad_users),
+    adImpressions: num(r.broad_ad_events),
+    adCtaUsers: num(r.ad_cta_users),
+    adCtaImpressions: num(r.ad_cta_impressions),
+    adCompletedUsers: num(r.ad_completed_users),
+    adCompletions: num(r.ad_completions),
+    networkAdUsers: num(r.network_ad_users),
+    networkAdImpressions: num(r.network_ad_impressions),
+  };
 }
 
 /** 날짜별 활동 지표(DAU/신규/engagement/광고). start/end 는 "YYYYMMDD". */
@@ -128,21 +152,19 @@ export async function queryDailyActivity(
         (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec'),
         NULL)) / 1000, 1) AS avg_engage_sec,
       COUNT(DISTINCT IF(REGEXP_CONTAINS(event_name, ${AD_EVENT_RE}), user_pseudo_id, NULL)) AS ad_users,
-      COUNTIF(REGEXP_CONTAINS(event_name, ${AD_EVENT_RE})) AS ad_impressions
+      COUNTIF(REGEXP_CONTAINS(event_name, ${AD_EVENT_RE})) AS broad_ad_events,
+      COUNT(DISTINCT IF(event_name = 'ad_reward_impression', user_pseudo_id, NULL)) AS ad_cta_users,
+      COUNTIF(event_name = 'ad_reward_impression') AS ad_cta_impressions,
+      COUNT(DISTINCT IF(event_name = 'ad_reward_completed', user_pseudo_id, NULL)) AS ad_completed_users,
+      COUNTIF(event_name = 'ad_reward_completed') AS ad_completions,
+      COUNT(DISTINCT IF(event_name = 'ad_impression', user_pseudo_id, NULL)) AS network_ad_users,
+      COUNTIF(event_name = 'ad_impression') AS network_ad_impressions
     FROM ${from}
     WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     GROUP BY date
     ORDER BY date`;
   const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
-  return rows.map((r) => ({
-    date: String(r.date),
-    dau: num(r.dau),
-    newUsers: num(r.new_users),
-    engagedUsers: num(r.engaged_users),
-    avgEngageSec: numOrNull(r.avg_engage_sec),
-    adEventUsers: num(r.ad_users),
-    adImpressions: num(r.ad_impressions),
-  }));
+  return rows.map(mapDailyActivityRow);
 }
 
 // 광고/수익 진단 결과(앱×윈도우 합계 1행). AdMob↔GA4 연동 + 노출수준 수익 export
@@ -158,7 +180,7 @@ export interface Ga4AdProbe {
   estRevenue: number;
   /** ad_impression.currency 고유값(쉼표 결합). 없으면 null. */
   currencies: string | null;
-  /** 현재 "광고 노출" 지표와 동일한 광의 카운트(비교용). */
+  /** legacy 광의 광고 이벤트 카운트(마이그레이션 비교용, 노출 지표로 표시하지 않음). */
   broadAdEvents: number;
 }
 
@@ -284,4 +306,3 @@ export async function queryCohortRetention(
     d7Pct: numOrNull(r.d7_pct),
   }));
 }
-

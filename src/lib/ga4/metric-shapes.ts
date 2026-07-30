@@ -89,6 +89,12 @@ export interface DailyActivityCore {
   avgEngageSec: number | null;
   adEventUsers: number;
   adImpressions: number;
+  adCtaUsers: number;
+  adCtaImpressions: number;
+  adCompletedUsers: number;
+  adCompletions: number;
+  networkAdUsers: number;
+  networkAdImpressions: number;
 }
 export interface RetentionCore {
   d1Pct: number | null;
@@ -114,6 +120,12 @@ export function assembleDailyMetric(
     avgEngageSec: activity.avgEngageSec,
     adEventUsers: activity.adEventUsers,
     adImpressions: activity.adImpressions,
+    adCtaUsers: activity.adCtaUsers,
+    adCtaImpressions: activity.adCtaImpressions,
+    adCompletedUsers: activity.adCompletedUsers,
+    adCompletions: activity.adCompletions,
+    networkAdUsers: activity.networkAdUsers,
+    networkAdImpressions: activity.networkAdImpressions,
     dauAndroid: bd.dauAndroid,
     dauIos: bd.dauIos,
     dauWeb: bd.dauWeb,
@@ -132,7 +144,9 @@ export interface CoreMetricCard {
   avgEngageSec: number | null;
   d1Pct: number | null;
   d7Pct: number | null;
-  adImpressions: number;
+  adCtaImpressions: number;
+  adCompletions: number;
+  networkAdImpressions: number;
 }
 
 const pctLabel = (v: number | null): string => (v == null ? "—" : `${v}%`);
@@ -147,7 +161,9 @@ export function buildMetricCards(m: CoreMetricCard): { label: string; value: str
     { label: "D1 잔존", value: pctLabel(m.d1Pct) },
     { label: "D7 잔존", value: pctLabel(m.d7Pct) },
     { label: "평균 참여", value: m.avgEngageSec == null ? "—" : `${m.avgEngageSec}s` },
-    { label: "광고 노출", value: m.adImpressions },
+    { label: "광고 CTA 노출", value: m.adCtaImpressions },
+    { label: "광고 완료", value: m.adCompletions },
+    { label: "실제 광고 노출", value: m.networkAdImpressions },
   ];
 }
 

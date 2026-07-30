@@ -88,7 +88,20 @@ test("platformSegments: 전부 0 이면 total 0·빈 세그먼트(NaN width 진�
 test("assembleDailyMetric: 활동+잔존+차원 → 저장 데이터(플랫폼 컬럼·raw 배치)", () => {
   const dims = pivotBreakdownRows(rows)["2026-07-04"];
   const data = assembleDailyMetric(
-    { dau: 100, newUsers: 10, engagedUsers: 60, avgEngageSec: 120, adEventUsers: 5, adImpressions: 40 },
+    {
+      dau: 100,
+      newUsers: 10,
+      engagedUsers: 60,
+      avgEngageSec: 120,
+      adEventUsers: 5,
+      adImpressions: 40,
+      adCtaUsers: 4,
+      adCtaImpressions: 30,
+      adCompletedUsers: 2,
+      adCompletions: 3,
+      networkAdUsers: 1,
+      networkAdImpressions: 2,
+    },
     { d1Pct: 40, d3Pct: 20, d7Pct: 10 },
     dims,
   );
@@ -98,6 +111,9 @@ test("assembleDailyMetric: 활동+잔존+차원 → 저장 데이터(플랫폼 �
   assert.equal(data.dauIos, 30);
   assert.equal(data.dauWeb, 0);
   assert.equal(data.d7Pct, 10);
+  assert.equal(data.adCtaImpressions, 30);
+  assert.equal(data.adCompletions, 3);
+  assert.equal(data.networkAdImpressions, 2);
   assert.deepEqual(data.raw.countries, [
     { k: "KR", dau: 80 },
     { k: "US", dau: 20 },
@@ -106,7 +122,20 @@ test("assembleDailyMetric: 활동+잔존+차원 → 저장 데이터(플랫폼 �
 
 test("assembleDailyMetric: 차원 없는 날은 플랫폼 0 + 빈 raw", () => {
   const data = assembleDailyMetric(
-    { dau: 5, newUsers: 5, engagedUsers: 0, avgEngageSec: null, adEventUsers: 0, adImpressions: 0 },
+    {
+      dau: 5,
+      newUsers: 5,
+      engagedUsers: 0,
+      avgEngageSec: null,
+      adEventUsers: 0,
+      adImpressions: 0,
+      adCtaUsers: 0,
+      adCtaImpressions: 0,
+      adCompletedUsers: 0,
+      adCompletions: 0,
+      networkAdUsers: 0,
+      networkAdImpressions: 0,
+    },
     { d1Pct: null, d3Pct: null, d7Pct: null },
     undefined,
   );
@@ -122,13 +151,19 @@ test("buildMetricCards: 활성사용자/참여율 라벨 + 포맷(engagement 옛
     avgEngageSec: 90,
     d1Pct: 40,
     d7Pct: null,
-    adImpressions: 42,
+    adCtaImpressions: 42,
+    adCompletions: 7,
+    networkAdImpressions: 3,
   });
   const byLabel = Object.fromEntries(cards.map((c) => [c.label, c.value]));
   assert.equal(byLabel["활성사용자"], "60명");
   assert.equal(byLabel["참여율"], "60%");
   assert.equal(byLabel["평균 참여"], "90s");
   assert.equal(byLabel["D7 잔존"], "—");
+  assert.equal(byLabel["광고 CTA 노출"], 42);
+  assert.equal(byLabel["광고 완료"], 7);
+  assert.equal(byLabel["실제 광고 노출"], 3);
+  assert.ok(!cards.some((c) => c.label === "광고 노출"));
   assert.ok(!cards.some((c) => c.label === "engagement"));
 });
 
