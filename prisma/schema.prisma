@@ -46,6 +46,10 @@ model App {
   // 부트스트랩 멱등
   configHash     String?
   configSyncedAt DateTime?
+  // 게임 저장소의 .seorilabs/backoffice.json 선언형 관리툴 계약.
+  // 실행 코드는 저장하지 않으며, invalid manifest는 error만 보존해 앱 워크스페이스에서 노출한다.
+  opsManifest      Json?
+  opsManifestError String? @db.Text
 
   // GitHub Projects v2 연결(읽기용)
   projectV2Id String?

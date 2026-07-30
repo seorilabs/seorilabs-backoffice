@@ -22,10 +22,12 @@ export function ContentMarketTabs({
   spec,
   appSlug,
   selected,
+  hrefBase,
 }: {
   spec: AppContentSpec;
   appSlug: string;
   selected: string;
+  hrefBase?: string;
 }) {
   const tabs = marketTabs(spec);
   if (tabs.length === 0) return null;
@@ -34,7 +36,11 @@ export function ContentMarketTabs({
       {tabs.map((t) => (
         <Link
           key={t.key}
-          href={`/analytics?app=${appSlug}&market=${t.key}`}
+          href={
+            hrefBase
+              ? `${hrefBase}?market=${t.key}`
+              : `/analytics?app=${appSlug}&market=${t.key}`
+          }
           className={`rounded px-2.5 py-1 text-xs font-medium transition ${
             t.key === selected
               ? "bg-neutral-800 text-white"

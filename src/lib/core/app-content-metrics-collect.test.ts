@@ -51,6 +51,30 @@ test("classifyContentTargets: 빈 입력은 빈 결과(공통 지표에 영향 �
   assert.deepEqual(skipped, []);
 });
 
+test("classifyContentTargets: 게임 저장소 manifest의 신규 컨텐츠 스펙을 사용한다", () => {
+  const contributed: ContentCollectAppRow = {
+    id: "app_contributed",
+    slug: "new-game",
+    firebaseProject: "new-game",
+    ga4Dataset: "analytics_999",
+    opsManifest: {
+      version: 1,
+      tools: [],
+      analytics: {
+        content: {
+          metrics: [
+            { key: "runs", label: "플레이", event: "game_start", agg: "count" },
+          ],
+        },
+      },
+    },
+  };
+  const { targets, skipped } = classifyContentTargets([contributed]);
+  assert.equal(targets[0].spec.slug, "new-game");
+  assert.equal(targets[0].spec.metrics?.[0].key, "runs");
+  assert.deepEqual(skipped, []);
+});
+
 test("buildContentUpsert: totalEvents + raw 스냅샷 + collectedAt 잠금", () => {
   const snap: ContentMetricSnapshot = {
     metrics: { hint: { value: 5, users: 3 }, avg_moves: { value: 40 } },

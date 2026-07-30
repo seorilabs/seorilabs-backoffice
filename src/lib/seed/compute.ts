@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import { deriveMarketTargets } from "./market-targets";
 import type { AppType, AppEngine } from "@prisma/client";
 import type { Octokit } from "octokit";
+import {
+  APP_OPS_MANIFEST_PATH,
+  parseAppOpsManifestText,
+  type AppOpsManifest,
+} from "@/lib/app-ops/manifest";
 
 // seedRepo 의 순수 계산부: octokit read → deriveMarketTargets → configHash → 시드 데이터.
 // prisma/env 등 부작용 의존을 두지 않고 octokit 만 주입받으므로,
@@ -12,7 +17,7 @@ export type Octo = Octokit;
 
 // 파서가 같은 원본 config에서 다른 시드 값을 산출하게 되면 반드시 올린다.
 // configHash가 바뀌어 운영 레지스트리의 기존 레코드도 재시드된다.
-const SEED_VERSION = 3;
+const SEED_VERSION = 4;
 
 interface PlayConfig {
   packageName?: string;
@@ -141,6 +146,8 @@ export interface AppSeedData {
   iosSku: string | null;
   aitAppName: string | null;
   marketTargets: string[];
+  opsManifest: AppOpsManifest | null;
+  opsManifestError: string | null;
   configHash: string;
   configSyncedAt: Date;
 }
@@ -211,6 +218,15 @@ export async function computeRepoSeed(
   const aitAppName = aitReal ? pickAppName(aitReal.appName) : graniteAppName;
 
   const hasWeb = await pathExists(octokit, org, name, "web", ref);
+  const opsManifestText = await getText(
+    octokit,
+    org,
+    name,
+    APP_OPS_MANIFEST_PATH,
+    ref,
+  );
+  const { manifest: opsManifest, error: opsManifestError } =
+    parseAppOpsManifestText(opsManifestText);
 
   // marketTargets = 실제로 dispatch 가능한 마켓만 포함한다(= Backoffice/Telegram /deploy 버튼이 진실이 되도록).
   // deployTargetsFor 가 marketTargets → 표준 배포 caller 워크플로우로 매핑하므로(ait→deploy-apps-in-toss.yml,
@@ -293,6 +309,7 @@ export async function computeRepoSeed(
         hasAppStoreWorkflow,
         hasAitWorkflow,
         hasWeb,
+        opsManifestText,
         type,
         engine,
         displayName,
@@ -316,6 +333,8 @@ export async function computeRepoSeed(
     iosSku: appStoreSku ?? null,
     aitAppName,
     marketTargets,
+    opsManifest,
+    opsManifestError,
     configHash,
     configSyncedAt: new Date(),
   };

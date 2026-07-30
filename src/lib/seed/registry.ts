@@ -3,6 +3,7 @@ import { getInstallationOctokit } from "@/lib/github/app";
 import { backfillRepo } from "@/lib/sync/backfill";
 import { env } from "@/lib/env";
 import { computeRepoSeed, type Octo, type RepoLite } from "./compute";
+import { Prisma } from "@prisma/client";
 
 // 레지스트리 부트스트랩. Next 런타임에서 실행(octokit 번들).
 // 순수 계산부(octokit read → marketTargets → configHash → 시드 데이터)는 compute.ts 로 분리했고,
@@ -34,7 +35,12 @@ async function seedRepo(
 
   await prisma.app.upsert({
     where: { repoFullName: repo.full_name },
-    create: seed,
+    create: {
+      ...seed,
+      opsManifest: seed.opsManifest
+        ? (seed.opsManifest as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull,
+    },
     update: {
       // currentStage/status 는 운영 상태이므로 시드가 덮지 않음.
       displayName: seed.displayName,
@@ -49,6 +55,10 @@ async function seedRepo(
       iosSku: seed.iosSku,
       aitAppName: seed.aitAppName,
       marketTargets: seed.marketTargets,
+      opsManifest: seed.opsManifest
+        ? (seed.opsManifest as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull,
+      opsManifestError: seed.opsManifestError,
       configHash: seed.configHash,
       configSyncedAt: seed.configSyncedAt,
     },

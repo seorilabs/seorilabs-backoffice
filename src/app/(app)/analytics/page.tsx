@@ -13,7 +13,7 @@ import {
 // 범용(스펙 구동) 앱 컨텐츠 세부 지표 — 모든 게임의 단일 렌더러. lucid-chess/happy-farm/
 // foam-party/crossword-puzzle 등 스펙(content-registry)이 등록된 앱은 모두 이 경로로 렌더된다.
 import { ContentSection, ContentMarketTabs } from "@/components/analytics/AppContentPanels";
-import { contentSpecFor } from "@/lib/analytics/content-registry";
+import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
@@ -48,6 +48,7 @@ export default async function AnalyticsPage({
       ga4Dataset: true,
       aitWorkspaceId: true,
       aitMiniAppId: true,
+      opsManifest: true,
     },
   });
   // 탭 = GA4 대상 ∪ 콘솔 대상. 개요는 소스별로 각각 렌더한다.
@@ -83,6 +84,7 @@ export default async function AnalyticsPage({
           appId={selected.id}
           name={selected.displayName}
           slug={selected.slug}
+          opsManifest={selected.opsManifest}
           market={sp.market}
         />
       ) : (
@@ -96,11 +98,13 @@ async function SelectedApp({
   appId,
   name,
   slug,
+  opsManifest,
   market,
 }: {
   appId: string;
   name: string;
   slug: string;
+  opsManifest: unknown;
   market?: string;
 }) {
   const rowsDesc = (await prisma.appMetricDaily.findMany({
@@ -110,7 +114,14 @@ async function SelectedApp({
   })) as unknown as MetricDaily[];
 
   // 컨텐츠 세부 지표 섹션(스펙 등록 앱만). 공통 지표가 비어 있어도 노출한다.
-  const contentSection = <ContentMetrics appId={appId} slug={slug} market={market} />;
+  const contentSection = (
+    <ContentMetrics
+      appId={appId}
+      slug={slug}
+      opsManifest={opsManifest}
+      market={market}
+    />
+  );
 
   if (rowsDesc.length === 0) {
     return (
@@ -191,13 +202,15 @@ async function ConsoleMetricsSection({ appId }: { appId: string }) {
 async function ContentMetrics({
   appId,
   slug,
+  opsManifest,
   market,
 }: {
   appId: string;
   slug: string;
+  opsManifest: unknown;
   market?: string;
 }) {
-  const spec = contentSpecFor(slug);
+  const spec = resolveAppContentSpec(slug, opsManifest);
   if (!spec) return null;
   const selectedMarket = parseMarket(spec, market);
   const row = await prisma.appContentMetricDaily.findFirst({
