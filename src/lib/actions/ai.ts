@@ -106,6 +106,7 @@ export async function generateStageDraft(input: {
   });
 
   revalidatePath(`/apps/${draft.appId}`);
+  revalidatePath(`/apps/${draft.appId}/development`);
   return {
     id: draft.id,
     kind: draft.kind,
@@ -143,6 +144,7 @@ export async function commitDraft(input: {
   });
 
   revalidatePath(`/apps/${r.appId}`);
+  revalidatePath(`/apps/${r.appId}/development`);
   revalidatePath("/issues");
   return { ok: true, url: r.url };
 }
@@ -162,5 +164,6 @@ export async function discardDraft(draftId: string): Promise<{ ok: boolean }> {
     data: { status: "DISCARDED" },
   });
   revalidatePath(`/apps/${draft.appId}`);
+  revalidatePath(`/apps/${draft.appId}/development`);
   return { ok: true };
 }

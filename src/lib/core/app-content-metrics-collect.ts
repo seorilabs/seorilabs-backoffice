@@ -8,7 +8,7 @@ import {
   isoDate,
   parseIsoDate,
 } from "@/lib/ga4/datasets";
-import { contentSpecFor } from "@/lib/analytics/content-registry";
+import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { ga4ContentSource } from "@/lib/analytics/ga4-content-source";
 import type { AppContentSpec } from "@/lib/analytics/content-spec";
 import type { ContentMetricsSource, ContentMetricSnapshot } from "@/lib/analytics/content-source";
@@ -37,6 +37,7 @@ export interface ContentCollectAppRow {
   slug: string;
   firebaseProject: string | null;
   ga4Dataset: string | null;
+  opsManifest?: unknown;
 }
 
 export interface ContentCollectTarget {
@@ -57,7 +58,7 @@ export function classifyContentTargets(apps: ContentCollectAppRow[]): {
   const targets: ContentCollectTarget[] = [];
   const skipped: string[] = [];
   for (const app of apps) {
-    const spec = contentSpecFor(app.slug);
+    const spec = resolveAppContentSpec(app.slug, app.opsManifest);
     const target = resolveGa4Target(app);
     if (!spec || !target) {
       skipped.push(app.slug);
@@ -94,7 +95,13 @@ export async function collectAppContentMetrics(
   const startSuffix = toTableSuffix(dateWindow(end, windowDays)[0]);
 
   const apps = await prisma.app.findMany({
-    select: { id: true, slug: true, firebaseProject: true, ga4Dataset: true },
+    select: {
+      id: true,
+      slug: true,
+      firebaseProject: true,
+      ga4Dataset: true,
+      opsManifest: true,
+    },
   });
   const { targets, skipped } = classifyContentTargets(apps);
 

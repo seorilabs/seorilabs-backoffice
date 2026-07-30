@@ -65,6 +65,7 @@ const FIREBASERC = JSON.stringify({ projects: { default: "seorilabs-sample" } })
 const WF_PLAY = ".github/workflows/deploy-google-play.yml";
 const WF_APPSTORE = ".github/workflows/deploy-app-store.yml";
 const WF_AIT = ".github/workflows/deploy-apps-in-toss.yml";
+const OPS_MANIFEST = ".seorilabs/backoffice.json";
 
 // Godot 게임 실제 사례: project.godot + play/app-store config 는 있지만
 // 표준 배포 워크플로우는 없고 deploy-godot-pages.yml 만 있다(=/deploy 404 근본 원인 시나리오).
@@ -147,6 +148,77 @@ test("동일 read 결과 → 동일 configHash (결정적, configSyncedAt 은 ha
   const b = await computeRepoSeed(fakeOctokit(godotConfigOnly), ORG, REPO);
   assert.ok(a && b);
   assert.equal(a.configHash, b.configHash);
+});
+
+test("게임 저장소의 관리툴 manifest를 검증해 시드하고 변경을 configHash에 반영한다", async () => {
+  const base = {
+    "package.json": "{}",
+    [OPS_MANIFEST]: JSON.stringify({
+      version: 1,
+      tools: [
+        {
+          id: "flags",
+          section: "flags",
+          title: "Feature Flags",
+          description: "게임 기능 플래그를 조회합니다.",
+          operations: [
+            {
+              id: "list",
+              label: "목록 조회",
+              intent: "read",
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  const before = await computeRepoSeed(fakeOctokit(base), ORG, REPO);
+  const after = await computeRepoSeed(
+    fakeOctokit({
+      ...base,
+      [OPS_MANIFEST]: JSON.stringify({
+        version: 1,
+        tools: [
+          {
+            id: "flags",
+            section: "flags",
+            title: "Feature Flags",
+            description: "게임 기능 플래그를 조회하고 변경합니다.",
+            operations: [
+              { id: "list", label: "목록 조회", intent: "read" },
+              {
+                id: "set",
+                label: "값 변경",
+                intent: "mutate",
+                risk: "medium",
+                confirmation: "reason",
+              },
+            ],
+          },
+        ],
+      }),
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(before && after);
+  assert.equal(before.opsManifestError, null);
+  assert.equal(before.opsManifest?.tools[0].id, "flags");
+  assert.notEqual(before.configHash, after.configHash);
+});
+
+test("깨진 관리툴 manifest는 앱 등록을 막지 않고 오류를 시드한다", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "package.json": "{}",
+      [OPS_MANIFEST]: JSON.stringify({ version: 1, tools: [{ id: "broken" }] }),
+    }),
+    ORG,
+    REPO,
+  );
+  assert.ok(seed);
+  assert.equal(seed.opsManifest, null);
+  assert.match(seed.opsManifestError ?? "", /tools/);
 });
 
 test("web/ 은 배포 워크플로우와 독립적으로 marketTargets 에 포함", async () => {

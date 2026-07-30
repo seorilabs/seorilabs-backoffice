@@ -1,0 +1,236 @@
+{
+  "$schema": "../manifest.schema.json",
+  "version": 1,
+  "summary": "게임 경제, IAP, 광고와 라이브 콘텐츠를 관리합니다.",
+  "tools": [
+    {
+      "id": "daily-content",
+      "section": "operations",
+      "title": "일일 콘텐츠",
+      "description": "다음 일일 콘텐츠를 미리 조회하고 생성 작업을 시작합니다.",
+      "runbook": "docs/08-ops/daily-content.md",
+      "operations": [
+        {
+          "id": "preview",
+          "label": "다음 콘텐츠 조회",
+          "intent": "read",
+          "inputs": [
+            {
+              "key": "date",
+              "label": "기준일",
+              "type": "text",
+              "placeholder": "YYYY-MM-DD"
+            }
+          ]
+        },
+        {
+          "id": "generate",
+          "label": "콘텐츠 생성",
+          "intent": "mutate",
+          "risk": "medium",
+          "confirmation": "reason",
+          "inputs": [
+            {
+              "key": "date",
+              "label": "기준일",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "iap-support",
+      "section": "commerce",
+      "title": "IAP 테스트 지원",
+      "description": "테스트 계정의 entitlement를 조회하고 무료 지급 또는 회수합니다.",
+      "runbook": "docs/08-ops/iap.md",
+      "operations": [
+        {
+          "id": "lookup",
+          "label": "entitlement 조회",
+          "intent": "read",
+          "inputs": [
+            {
+              "key": "test_account_ref",
+              "label": "테스트 계정 참조",
+              "type": "text"
+            },
+            {
+              "key": "market",
+              "label": "마켓",
+              "type": "select",
+              "options": [
+                { "value": "google-play", "label": "Google Play" },
+                { "value": "app-store", "label": "App Store" },
+                { "value": "apps-in-toss", "label": "AppsInToss" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "grant",
+          "label": "무료 지급",
+          "description": "테스트 계정에 지정 상품 entitlement를 무료 지급합니다.",
+          "intent": "mutate",
+          "risk": "high",
+          "confirmation": "typed",
+          "inputs": [
+            {
+              "key": "test_account_ref",
+              "label": "테스트 계정 참조",
+              "type": "text"
+            },
+            {
+              "key": "product_id",
+              "label": "상품 ID",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "id": "revoke",
+          "label": "지급 회수",
+          "description": "무료 지급한 entitlement를 보상 전이로 회수합니다.",
+          "intent": "mutate",
+          "risk": "high",
+          "confirmation": "typed",
+          "inputs": [
+            {
+              "key": "test_account_ref",
+              "label": "테스트 계정 참조",
+              "type": "text"
+            },
+            {
+              "key": "entitlement_id",
+              "label": "Entitlement ID",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rewarded-ads",
+      "section": "ads",
+      "title": "보상형 광고",
+      "description": "placement 상태와 빈도 제한을 조회하고 테스트합니다.",
+      "operations": [
+        {
+          "id": "placements",
+          "label": "placement 조회",
+          "intent": "read"
+        },
+        {
+          "id": "verify-reward",
+          "label": "보상 지급 검증",
+          "intent": "read",
+          "inputs": [
+            {
+              "key": "player_ref",
+              "label": "플레이어 참조",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-flags",
+      "section": "flags",
+      "title": "라이브 플래그",
+      "description": "환경과 마켓별 Feature Flag를 조회하고 변경합니다.",
+      "operations": [
+        {
+          "id": "list",
+          "label": "플래그 조회",
+          "intent": "read"
+        },
+        {
+          "id": "set",
+          "label": "플래그 변경",
+          "intent": "mutate",
+          "risk": "medium",
+          "confirmation": "reason",
+          "inputs": [
+            {
+              "key": "environment",
+              "label": "환경",
+              "type": "select",
+              "options": [
+                { "value": "staging", "label": "Staging" },
+                { "value": "production", "label": "Production" }
+              ]
+            },
+            {
+              "key": "flag_key",
+              "label": "플래그 키",
+              "type": "text"
+            },
+            {
+              "key": "target_value",
+              "label": "목표 값",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "analytics": {
+    "content": {
+      "metrics": [
+        {
+          "key": "starts",
+          "label": "게임 시작",
+          "event": "game_start",
+          "agg": "count"
+        },
+        {
+          "key": "completes",
+          "label": "게임 완료",
+          "event": "game_complete",
+          "agg": "count"
+        }
+      ],
+      "derived": [
+        {
+          "key": "completion_rate",
+          "label": "완료율",
+          "num": "completes",
+          "den": "starts"
+        }
+      ],
+      "groups": [
+        {
+          "key": "level",
+          "label": "레벨별 성과",
+          "param": "level",
+          "orderBy": "starts",
+          "metrics": [
+            {
+              "key": "starts",
+              "label": "시작",
+              "event": "level_start",
+              "agg": "count"
+            },
+            {
+              "key": "completes",
+              "label": "완료",
+              "event": "level_complete",
+              "agg": "count"
+            }
+          ],
+          "derived": [
+            {
+              "key": "completion_rate",
+              "label": "완료율",
+              "num": "completes",
+              "den": "starts"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

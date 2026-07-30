@@ -46,6 +46,7 @@ export async function createReleaseAction(
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
     revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
     revalidatePath("/releases");
     revalidatePath("/release-notes");
     return { ok: true, tag: r.tag, url: r.releaseUrl };
@@ -82,6 +83,7 @@ export async function deployAction(
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
     revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
     revalidatePath("/releases");
     return { ok: true };
   } catch (e) {
@@ -104,6 +106,7 @@ export async function promoteToProductionAction(
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
     revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
     revalidatePath("/releases");
     return { ok: true };
   } catch (e) {
@@ -126,6 +129,7 @@ export async function prepareAppStoreAction(
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
     revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
     return { ok: true, ready: r.ready, reason: r.reason };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
@@ -147,6 +151,7 @@ export async function submitAppStoreAction(
       actorLabel: `web:${session.user.login ?? "?"}`,
     });
     revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
     revalidatePath("/releases");
     return { ok: true };
   } catch (e) {
