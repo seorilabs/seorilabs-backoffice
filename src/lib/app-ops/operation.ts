@@ -6,17 +6,6 @@ import {
   type AppOpsOperation,
 } from "@/lib/app-ops/manifest";
 
-export const APP_OPS_WORKFLOW_FILE = "backoffice-ops.yml";
-export const APP_OPS_WORKFLOW_NAME = "Backoffice Operations";
-export const APP_OPS_WORKFLOW_INPUTS = [
-  "operation",
-  "request_id",
-  "params_json",
-  "reason",
-] as const;
-export const APP_OPS_RESULT_FILE = "result.json";
-export const APP_OPS_ARTIFACT_PREFIX = "backoffice-ops-";
-
 const REQUEST_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -36,11 +25,6 @@ export type AppOpsResult = z.infer<typeof appOpsResultSchema>;
 
 export type AppOperationValue = string | number | boolean;
 export type AppOperationValues = Record<string, AppOperationValue>;
-export type AppOpsWorkflowInputs = Record<
-  (typeof APP_OPS_WORKFLOW_INPUTS)[number],
-  string
->;
-
 export interface PreparedAppOperation {
   operation: AppOpsOperation;
   operationKey: string;
@@ -51,25 +35,6 @@ export interface PreparedAppOperation {
 
 export function isAppOpsRequestId(value: string): boolean {
   return REQUEST_ID.test(value);
-}
-
-export function artifactName(requestId: string): string {
-  return `${APP_OPS_ARTIFACT_PREFIX}${requestId}`;
-}
-
-export function buildAppOpsWorkflowInputs(
-  prepared: PreparedAppOperation,
-  requestId: string,
-): AppOpsWorkflowInputs {
-  if (!isAppOpsRequestId(requestId)) {
-    throw new Error("백오피스 request_id가 올바르지 않습니다.");
-  }
-  return {
-    operation: prepared.operationKey,
-    request_id: requestId,
-    params_json: prepared.paramsJson,
-    reason: prepared.reason ?? `백오피스 조회 실행 · ${prepared.operationKey}`,
-  };
 }
 
 function isMissing(value: unknown): boolean {

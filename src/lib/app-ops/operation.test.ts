@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  APP_OPS_WORKFLOW_INPUTS,
   appOpsResultSchema,
-  buildAppOpsWorkflowInputs,
   prepareAppOperation,
 } from "./operation";
 
@@ -63,18 +61,6 @@ test("manifest에 선언된 조회 오퍼레이션 입력을 정규화한다", (
   assert.deepEqual(prepared.params, { volatility: "all", spins: 20_000 });
   assert.equal(prepared.paramsJson, '{"volatility":"all","spins":20000}');
   assert.equal(prepared.reason, null);
-  assert.deepEqual(
-    buildAppOpsWorkflowInputs(
-      prepared,
-      "86aa4c7c-bf75-4f38-a1c8-50ac398de7dc",
-    ),
-    {
-      operation: "slot-math.rtp-report",
-      request_id: "86aa4c7c-bf75-4f38-a1c8-50ac398de7dc",
-      params_json: '{"volatility":"all","spins":20000}',
-      reason: "백오피스 조회 실행 · slot-math.rtp-report",
-    },
-  );
 });
 
 test("선언되지 않은 입력과 select 값을 거부한다", () => {
@@ -130,22 +116,9 @@ test("변경 오퍼레이션은 사유와 정확한 typed 확인 문구를 요�
     confirmationText: "수학 설정 반영",
   });
   assert.equal(prepared.reason, "운영 설정 반영");
-  assert.equal(
-    buildAppOpsWorkflowInputs(
-      prepared,
-      "b214838f-378e-46d5-84a1-0e708274f24f",
-    ).reason,
-    "운영 설정 반영",
-  );
 });
 
-test("표준 workflow 입력과 결과 artifact 계약을 검증한다", () => {
-  assert.deepEqual(APP_OPS_WORKFLOW_INPUTS, [
-    "operation",
-    "request_id",
-    "params_json",
-    "reason",
-  ]);
+test("Kubernetes worker 결과 계약을 검증한다", () => {
   assert.equal(
     appOpsResultSchema.safeParse({
       version: 1,
