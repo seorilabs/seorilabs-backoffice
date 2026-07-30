@@ -240,3 +240,31 @@ flowchart LR
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
 - 관련 마이그레이션: `16_deploy_completion_notifications`.
+
+## 14. AppOps Kubernetes worker
+
+앱별 관리 도구는 GitHub Actions를 실행기로 사용하지 않는다. 백오피스 API가
+`app_operation_run`에 검증된 요청을 적재하고, 별도
+`backoffice-app-ops-worker` Deployment가 게임별 최소권한 identity로 처리한다.
+
+- 웹 Pod에는 게임 자격증명을 주입하지 않는다.
+- worker 전용 Secret 이름은 `backoffice-app-ops-secrets`다.
+- 도마뱀 IAP 조회 키는 `LIZARD_TYCOON_APP_OPS_SA_KEY_JSON`이며
+  `lizard-tycoon` 프로젝트의 `roles/datastore.viewer`만 부여한다.
+- 입력 파라미터와 결과는 24시간 뒤 제거한다. 영수증, 구매 토큰, 비밀번호, 개인키는
+  요청이나 결과에 포함하지 않는다.
+- worker는 처리 중 중단된 요청을 최대 세 번 재시도한다.
+
+최초 부트스트랩은 평문 JSON을 출력하지 않고 파일 입력으로 Secret을 만든 뒤 SealedSecret으로
+관리한다.
+
+```sh
+kubectl -n platform create secret generic backoffice-app-ops-secrets \
+  --from-file=LIZARD_TYCOON_APP_OPS_SA_KEY_JSON=/secure/path/lizard-app-ops.json
+kubectl apply -f k8s/ci-deployer-rbac.yaml
+kubectl apply -f k8s/app-ops-worker.yaml
+```
+
+배포 workflow는 먼저 웹 Deployment의 Prisma migration과 rollout을 끝낸 뒤 worker
+Deployment를 같은 이미지 SHA로 갱신한다. 검증은 두 Deployment의 rollout, worker 로그,
+DB 요청 상태, 실제 게임 데이터 readback 순서로 수행한다.

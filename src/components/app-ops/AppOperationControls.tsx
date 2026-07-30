@@ -9,10 +9,10 @@ import {
 } from "@/lib/actions/app-ops";
 import type { AppOpsOperation } from "@/lib/app-ops/manifest";
 import type { AppOpsResult } from "@/lib/app-ops/operation";
-import type { AppOpsRunSummary } from "@/lib/github/app-ops";
+import type { AppOpsRunSummary } from "@/lib/app-ops/runs";
 
-const POLL_INTERVAL_MS = 2_000;
-const POLL_LIMIT = 45;
+const POLL_INTERVAL_MS = 1_000;
+const POLL_LIMIT = 60;
 
 export function AppOperationControls({
   appId,
@@ -37,12 +37,10 @@ export function AppOperationControls({
   const [feedback, setFeedback] = useState<{
     ok: boolean;
     message: string;
-    workflowUrl?: string;
   } | null>(null);
   const [operationResult, setOperationResult] = useState<AppOpsResult | null>(
     null,
   );
-  const [runUrl, setRunUrl] = useState<string | null>(null);
 
   function updateValue(key: string, value: string | boolean) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -52,7 +50,6 @@ export function AppOperationControls({
     event.preventDefault();
     setFeedback(null);
     setOperationResult(null);
-    setRunUrl(null);
     startTransition(async () => {
       const response = await dispatchAppOperationAction({
         appId,
@@ -72,7 +69,6 @@ export function AppOperationControls({
       setFeedback({
         ok: true,
         message: `실행 요청됨 · ${response.requestId.slice(0, 8)}`,
-        workflowUrl: response.workflowUrl,
       });
       setReason("");
       setConfirmationText("");
@@ -90,9 +86,8 @@ export function AppOperationControls({
         });
         return;
       }
-      if (response.url) setRunUrl(response.url);
       if (!response.found) {
-        setFeedback({ ok: true, message: "GitHub Actions 실행 생성 대기 중입니다." });
+        setFeedback({ ok: true, message: "Kubernetes worker 요청 생성 대기 중입니다." });
       } else if (response.status !== "completed") {
         setFeedback({
           ok: true,
@@ -229,19 +224,6 @@ export function AppOperationControls({
             className={`text-xs ${feedback.ok ? "text-emerald-700" : "text-red-600"}`}
           >
             {feedback.message}
-            {(runUrl ?? feedback.workflowUrl) && (
-              <>
-                {" · "}
-                <a
-                  href={runUrl ?? feedback.workflowUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline"
-                >
-                  Actions 확인
-                </a>
-              </>
-            )}
           </span>
         )}
       </div>
@@ -319,14 +301,6 @@ export function AppOperationHistory({ appId }: { appId: string }) {
             >
               결과 보기
             </button>
-            <a
-              href={run.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-blue-600 hover:underline"
-            >
-              Actions ↗
-            </a>
           </div>
         ))}
       </div>

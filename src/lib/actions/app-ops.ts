@@ -4,24 +4,17 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 
 import {
-  APP_OPS_WORKFLOW_FILE,
-  APP_OPS_WORKFLOW_INPUTS,
-  buildAppOpsWorkflowInputs,
   prepareAppOperation,
   type AppOpsResult,
 } from "@/lib/app-ops/operation";
+import {
+  enqueueAppOperation,
+  getAppOperationRunStatus,
+  listRecentAppOperationRuns,
+  type AppOpsRunSummary,
+} from "@/lib/app-ops/runs";
 import { requireSession } from "@/lib/auth-helpers";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import {
-  getAppOpsRunStatus,
-  listRecentAppOpsRuns,
-  type AppOpsRunSummary,
-} from "@/lib/github/app-ops";
-import {
-  getRepoDefaultBranch,
-  getWorkflowDispatchInputNames,
-} from "@/lib/github/read";
-import { dispatchWorkflow } from "@/lib/github/write";
 import { prisma } from "@/lib/prisma";
 
 interface OperationApp {
@@ -42,7 +35,6 @@ export interface DispatchAppOperationInput {
 export interface DispatchAppOperationResult {
   ok: boolean;
   requestId?: string;
-  workflowUrl?: string;
   error?: string;
 }
 
@@ -51,7 +43,6 @@ export interface AppOperationStatusResponse {
   found?: boolean;
   status?: string;
   conclusion?: string | null;
-  url?: string;
   result?: AppOpsResult;
   resultError?: string;
   error?: string;
@@ -84,54 +75,18 @@ export async function dispatchAppOperationAction(
       reason: input.reason,
       confirmationText: input.confirmationText,
     });
-    const defaultBranch = await getRepoDefaultBranch(app.repoFullName);
-    const declaredInputs = await getWorkflowDispatchInputNames(
-      app.repoFullName,
-      APP_OPS_WORKFLOW_FILE,
-      defaultBranch,
-    );
-    const missingInput = APP_OPS_WORKFLOW_INPUTS.find(
-      (name) => !declaredInputs.has(name),
-    );
-    if (missingInput) {
-      throw new Error(
-        `${APP_OPS_WORKFLOW_FILE}에 표준 입력이 없습니다: ${missingInput}`,
-      );
-    }
 
     const requestId = randomUUID();
-    await dispatchWorkflow({
+    await enqueueAppOperation({
+      appId: app.id,
       repoFullName: app.repoFullName,
-      workflowFile: APP_OPS_WORKFLOW_FILE,
-      ref: defaultBranch,
-      inputs: buildAppOpsWorkflowInputs(prepared, requestId),
+      actorLogin: session.user.login ?? null,
+      prepared,
+      requestId,
     });
 
-    await prisma.auditLog
-      .create({
-        data: {
-          actorLogin: session.user.login ?? null,
-          action: "app.operation.dispatch",
-          entityType: "app",
-          entityId: app.id,
-          payload: {
-            requestId,
-            repoFullName: app.repoFullName,
-            operation: prepared.operationKey,
-            intent: prepared.operation.intent,
-            paramKeys: Object.keys(prepared.params),
-            reason: prepared.reason,
-          },
-        },
-      })
-      .catch(() => {});
-
     revalidatePath(`/apps/${app.id}`);
-    return {
-      ok: true,
-      requestId,
-      workflowUrl: `https://github.com/${app.repoFullName}/actions/workflows/${APP_OPS_WORKFLOW_FILE}`,
-    };
+    return { ok: true, requestId };
   } catch (error) {
     return { ok: false, error: (error as Error).message };
   }
@@ -144,14 +99,13 @@ export async function getAppOperationStatusAction(
   await requireSession();
   try {
     const app = await operationApp(appId);
-    const run = await getAppOpsRunStatus(app.repoFullName, requestId);
+    const run = await getAppOperationRunStatus(app.id, requestId);
     if (!run) return { ok: true, found: false, status: "waiting" };
     return {
       ok: true,
       found: true,
       status: run.status,
       conclusion: run.conclusion,
-      url: run.url,
       result: run.result,
       resultError: run.resultError,
     };
@@ -166,7 +120,7 @@ export async function listAppOperationRunsAction(
   await requireSession();
   try {
     const app = await operationApp(appId);
-    return { ok: true, runs: await listRecentAppOpsRuns(app.repoFullName) };
+    return { ok: true, runs: await listRecentAppOperationRuns(app.id) };
   } catch (error) {
     return { ok: false, error: (error as Error).message };
   }

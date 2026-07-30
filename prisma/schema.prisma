@@ -61,6 +61,7 @@ model App {
   workflowRuns WorkflowRunMirror[]
   releases     ReleaseRecord[]
   releaseNotes ReleaseNote[]
+  operationRuns AppOperationRun[]
   aiDrafts     AiDraft[]
   metrics      AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
@@ -293,6 +294,44 @@ enum TelegramNotificationStatus {
   PENDING
   PROCESSING
   SENT
+}
+
+// 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가
+// 게임별 최소권한 identity로 처리한다. params/result는 단기 보관 후 worker가 제거한다.
+model AppOperationRun {
+  id           String                @id @default(cuid())
+  requestId    String                @unique
+  appId        String
+  app          App                   @relation(fields: [appId], references: [id], onDelete: Cascade)
+  repoFullName String
+  operation    String
+  intent       String
+  params       Json?
+  reason       String?               @db.Text
+  actorLogin   String?
+  status       AppOperationRunStatus @default(PENDING)
+  attempts     Int                   @default(0)
+  summary      String?               @db.Text
+  result       Json?
+  error        String?               @db.Text
+  startedAt    DateTime?             @db.DateTime(3)
+  completedAt  DateTime?             @db.DateTime(3)
+  expiresAt    DateTime              @db.DateTime(3)
+  redactedAt   DateTime?             @db.DateTime(3)
+  createdAt    DateTime              @default(now()) @db.DateTime(3)
+  updatedAt    DateTime              @updatedAt
+
+  @@index([status, createdAt])
+  @@index([appId, createdAt])
+  @@index([redactedAt, expiresAt])
+  @@map("app_operation_run")
+}
+
+enum AppOperationRunStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
 }
 
 // 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 다국어 유저용 공지.
