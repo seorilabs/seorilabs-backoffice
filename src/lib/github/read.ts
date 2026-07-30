@@ -23,6 +23,17 @@ export async function getOrgDefaultBranches(): Promise<Map<string, string>> {
   );
 }
 
+/** 단일 저장소의 실제 default branch. workflow_dispatch ref 선택에 사용한다. */
+export async function getRepoDefaultBranch(repoFullName: string): Promise<string> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const result = await octokit.rest.repos.get({ owner, repo });
+  if (!result.data.default_branch) {
+    throw new Error(`기본 브랜치를 확인할 수 없습니다: ${repoFullName}`);
+  }
+  return result.data.default_branch;
+}
+
 /**
  * 워크플로 파일에 선언된 workflow_dispatch 입력 이름 집합.
  *

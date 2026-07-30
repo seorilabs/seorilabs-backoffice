@@ -231,6 +231,8 @@ export const appOpsManifestSchema = z
 
 export type AppOpsManifest = z.infer<typeof appOpsManifestSchema>;
 export type AppOpsTool = AppOpsManifest["tools"][number];
+export type AppOpsOperation = AppOpsTool["operations"][number];
+export type AppOpsInput = AppOpsOperation["inputs"][number];
 
 export interface ManifestParseResult {
   manifest: AppOpsManifest | null;

@@ -75,6 +75,7 @@ export default async function AppAdsPage({
       >
         <ToolCatalog
           tools={tools}
+          appId={app.id}
           repoFullName={app.repoFullName}
           emptyTitle="광고 오퍼레이션이 아직 없습니다"
           emptyDescription="광고가 있는 게임은 placement 조회, 빈도 제한, 테스트 광고 검증 도구를 manifest에 선언합니다."

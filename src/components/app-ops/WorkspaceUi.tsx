@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AppOperationControls } from "@/components/app-ops/AppOperationControls";
 import type { AppOpsTool } from "@/lib/app-ops/manifest";
 import type {
   AppWorkspaceReadiness,
@@ -105,11 +106,13 @@ const RISK_CLASS = {
 
 export function ToolCatalog({
   tools,
+  appId,
   repoFullName,
   emptyTitle,
   emptyDescription,
 }: {
   tools: AppOpsTool[];
+  appId: string;
   repoFullName: string;
   emptyTitle: string;
   emptyDescription: string;
@@ -163,6 +166,11 @@ export function ToolCatalog({
                       입력: {operation.inputs.map((input) => input.label).join(", ")}
                     </div>
                   )}
+                  <AppOperationControls
+                    appId={appId}
+                    toolId={tool.id}
+                    operation={operation}
+                  />
                 </div>
               ))}
             </div>
@@ -184,7 +192,7 @@ export function ToolCatalog({
             ) : (
               <span className="text-neutral-400">런북 미등록</span>
             )}
-            <span className="text-neutral-400">실행 연결은 후속 단계</span>
+            <span className="text-neutral-400">GitHub Actions 감사 실행</span>
           </div>
         </div>
       ))}
