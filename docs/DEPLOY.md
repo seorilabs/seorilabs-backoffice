@@ -249,11 +249,29 @@ flowchart LR
 
 - 웹 Pod에는 게임 자격증명을 주입하지 않는다.
 - worker 전용 Secret 이름은 `backoffice-app-ops-secrets`다.
-- 도마뱀 IAP 조회 키는 `LIZARD_TYCOON_APP_OPS_SA_KEY_JSON`이며
-  `lizard-tycoon` 프로젝트의 `roles/datastore.viewer`만 부여한다.
+- 도마뱀 IAP 키는 `LIZARD_TYCOON_APP_OPS_SA_KEY_JSON`이며
+  `lizard-tycoon` 프로젝트의 `roles/datastore.viewer`와 프로젝트 custom role
+  `iapSandboxLedgerResetter`만 부여한다. custom role은 sandbox 테스트 원장의 보상 전이에 필요한
+  `datastore.entities.create`·`datastore.entities.update`만 포함한다.
 - 입력 파라미터와 결과는 24시간 뒤 제거한다. 영수증, 구매 토큰, 비밀번호, 개인키는
   요청이나 결과에 포함하지 않는다.
 - worker는 처리 중 중단된 요청을 최대 세 번 재시도한다.
+- `iap-ledger.reset-app-store-sandbox`는 Apple Sandbox 구매 내역을 먼저 지운 계정에만 사용한다.
+  production·Google Play source와 처리 주문 문서는 삭제하지 않고 App Store source를
+  `revoked`로 전이하며 request ID로 멱등 처리한다.
+
+custom role과 실행 identity binding은 다음처럼 구성한다.
+
+```sh
+gcloud iam roles create iapSandboxLedgerResetter \
+  --project=lizard-tycoon \
+  --title="IAP Sandbox Ledger Resetter" \
+  --permissions=datastore.entities.create,datastore.entities.update \
+  --stage=GA
+gcloud projects add-iam-policy-binding lizard-tycoon \
+  --member=serviceAccount:iap-backoffice-ops@lizard-tycoon.iam.gserviceaccount.com \
+  --role=projects/lizard-tycoon/roles/iapSandboxLedgerResetter
+```
 
 최초 부트스트랩은 평문 JSON을 출력하지 않고 파일 입력으로 Secret을 만든 뒤 SealedSecret으로
 관리한다.
