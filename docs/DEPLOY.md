@@ -19,7 +19,9 @@ SQL
 
 ## 2. GitHub App 생성 (신규 전용, seori-pr-bot 무관)
 Org `seorilabs` → Settings → Developer settings → GitHub Apps → New.
-- **Permissions(Repository)**: Metadata=Read, Contents=Read, Pull requests=Read, Actions(Workflows)=Read, Checks=Read, **Issues=Read & Write**.
+- **Permissions(Repository)**: Metadata=Read, **Contents=Read & Write**, Pull requests=Read, **Actions=Read & Write**, Checks=Read, **Issues=Read & Write**.
+  - `Actions=Read & Write`: 앱별 관리 도구가 저장소의 `.github/workflows/backoffice-ops.yml`을 dispatch할 때 필요하다.
+  - `Contents=Read & Write`: 기존 출시 태그 생성 기능에 필요하다.
 - **Subscribe to events**: Issues, Issue comment, Pull request, Push, Workflow run.
 - **Webhook**: URL `https://backoffice.vzyx.xyz/api/webhooks`, Secret 신규 생성(= `GITHUB_WEBHOOK_SECRET`).
 - **OAuth (로그인용)**: Callback URL `https://backoffice.vzyx.xyz/api/auth/callback/github` (+ 로컬 `http://localhost:3000/api/auth/callback/github`). "Request user authorization (OAuth) during installation" 체크.
