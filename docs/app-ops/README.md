@@ -120,6 +120,10 @@ worker는 UUID 기준으로 요청을 원자적으로 claim하고 최대 세 번
 - 지급·회수 요청은 동일 `request_id` 재실행 시 결과가 바뀌지 않아야 한다.
 - 실제 결제와 무료 지급은 서로 다른 ledger source로 기록한다.
 - 회수는 원장 삭제가 아니라 보상 전이 기록으로 처리한다.
+- Sandbox 구매 이력 초기화도 주문·entitlement 문서를 삭제하지 않고 해당 마켓 source만
+  `revoked`로 전이한다. 다른 마켓 source와 production 원장은 보존한다.
+- Sandbox 초기화는 마켓 콘솔의 테스트 구매 이력을 먼저 지운 뒤 실행하며, request ID 멱등성과
+  내부 source·사용자 projection 동시 갱신을 검증한다.
 - production 대상 지급·회수는 `typed` 확인과 별도 최소권한 worker adapter를 사용한다.
 
 ## Feature Flag 안전 기준

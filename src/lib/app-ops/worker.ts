@@ -35,6 +35,7 @@ export async function executeAppOperation(
     return executeLizardTycoonOperation({
       requestId: run.requestId,
       operation: run.operation,
+      intent: run.intent,
       params,
     });
   }
