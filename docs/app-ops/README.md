@@ -23,8 +23,9 @@ flowchart LR
 ```
 
 현재 구현 범위는 manifest 검증·미러링, 앱 워크스페이스 UI, manifest 기반 콘텐츠 지표
-수집이다. 실제 변경 오퍼레이션의 workflow dispatch는 다음 단계다. UI에서 manifest를
-선언했다고 실행 권한이 생기지는 않는다.
+수집과 표준 GitHub Actions 오퍼레이션 실행이다. UI에서 manifest를 선언한 것만으로 임의
+실행 권한이 생기지는 않으며, 저장소 기본 브랜치의 표준
+`.github/workflows/backoffice-ops.yml`이 존재해야 한다.
 
 ## 정보 구조
 
@@ -78,22 +79,23 @@ flowchart LR
 
 ### 오퍼레이션 계약
 
-manifest는 화면과 입력 계약만 선언한다. 다음 단계의 실행기는 저장소의 표준
-`.github/workflows/backoffice-ops.yml`만 dispatch한다. manifest에서 임의 workflow 경로나
-외부 URL을 지정하지 않는다.
+manifest는 화면과 입력 계약만 선언한다. 실행기는 저장소의 표준
+`.github/workflows/backoffice-ops.yml`만 기본 브랜치에서 dispatch한다. manifest에서 임의
+workflow 경로나 외부 URL을 지정하지 않는다.
 
 표준 workflow 입력 계약은 다음처럼 제한한다.
 
 | 입력 | 용도 |
 |---|---|
-| `operation` | manifest의 오퍼레이션 ID |
+| `operation` | manifest의 `<tool-id>.<operation-id>` |
 | `request_id` | 멱등·감사 식별자 |
-| `target_ref` | 비밀값이 아닌 사용자 또는 리소스 참조 |
+| `params_json` | manifest 스키마로 검증된 비밀값이 아닌 입력 JSON |
 | `reason` | 변경 사유 |
 
-비밀번호, 영수증 원문, 스토어 토큰, Firebase 키는 manifest나 workflow 입력으로 전달하지
-않는다. 게임 런타임 어댑터가 필요하면 GitHub Environment에 보관된 자격증명으로 서버 측에서
-조회한다.
+모든 변경 오퍼레이션은 사유가 필요하고, `confirmation: "typed"`는 오퍼레이션 라벨을
+정확히 재입력해야 한다. 비밀번호, 영수증 원문, 스토어 토큰, Firebase 키는 manifest나
+workflow 입력으로 전달하지 않는다. 게임 런타임 어댑터가 필요하면 GitHub Environment에
+보관된 자격증명으로 서버 측에서 조회한다.
 
 ## IAP 안전 기준
 

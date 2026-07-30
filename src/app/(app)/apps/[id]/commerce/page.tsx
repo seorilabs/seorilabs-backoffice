@@ -82,6 +82,7 @@ export default async function CommercePage({
         </div>
         <ToolCatalog
           tools={tools}
+          appId={app.id}
           repoFullName={app.repoFullName}
           emptyTitle="IAP 관리 계약이 아직 없습니다"
           emptyDescription="IAP이 있는 게임은 테스트 계정 조회, 무료 지급, 회수, 구매 검증 오퍼레이션을 manifest에 선언합니다."
