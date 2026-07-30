@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { LizardTycoonIapConsole } from "@/components/app-ops/LizardTycoonIapConsole";
 import { ToolCatalog, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { toolsForSection } from "@/lib/app-ops/manifest";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
@@ -32,6 +33,26 @@ export default async function CommercePage({
     },
   });
   const tools = toolsForSection(app.opsManifest, "commerce");
+  const lizardIapTool =
+    app.repoFullName === "seorilabs/lizard-tycoon"
+      ? tools.find((tool) => {
+          if (tool.id !== "iap-ledger") return false;
+          const operationIds = new Set(
+            tool.operations.map((operation) => operation.id),
+          );
+          return [
+            "recent-purchases",
+            "sandbox-testers",
+            "reset-app-store-sandbox",
+            "production-grants",
+            "grant-production-entitlement",
+            "revoke-production-entitlement",
+          ].every((operationId) => operationIds.has(operationId));
+        })
+      : undefined;
+  const genericTools = lizardIapTool
+    ? tools.filter((tool) => tool.id !== lizardIapTool.id)
+    : tools;
 
   return (
     <div className="space-y-8">
@@ -80,13 +101,30 @@ export default async function CommercePage({
             </div>
           ))}
         </div>
-        <ToolCatalog
-          appId={app.id}
-          tools={tools}
-          repoFullName={app.repoFullName}
-          emptyTitle="IAP 관리 계약이 아직 없습니다"
-          emptyDescription="IAP이 있는 게임은 테스트 계정 조회, 무료 지급, 회수, 구매 검증 오퍼레이션을 manifest에 선언합니다."
-        />
+        {lizardIapTool ? (
+          <>
+            <LizardTycoonIapConsole appId={app.id} tool={lizardIapTool} />
+            {genericTools.length > 0 && (
+              <div className="mt-6">
+                <ToolCatalog
+                  appId={app.id}
+                  tools={genericTools}
+                  repoFullName={app.repoFullName}
+                  emptyTitle="추가 IAP 관리 계약이 없습니다"
+                  emptyDescription="추가 관리 오퍼레이션이 manifest에 선언되면 표시됩니다."
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <ToolCatalog
+            appId={app.id}
+            tools={genericTools}
+            repoFullName={app.repoFullName}
+            emptyTitle="IAP 관리 계약이 아직 없습니다"
+            emptyDescription="IAP이 있는 게임은 테스트 계정 조회, 무료 지급, 회수, 구매 검증 오퍼레이션을 manifest에 선언합니다."
+          />
+        )}
       </WorkspaceSection>
     </div>
   );

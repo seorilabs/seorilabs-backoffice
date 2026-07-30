@@ -26,20 +26,32 @@ function safeErrorMessage(error: unknown): string {
 export async function executeAppOperation(
   run: AppOperationRun,
 ): Promise<AppOpsResult> {
+  const input = lizardOperationInputForTest(run);
+
+  if (run.repoFullName === "seorilabs/lizard-tycoon") {
+    return executeLizardTycoonOperation(input);
+  }
+  throw new Error(`등록되지 않은 Kubernetes AppOps adapter: ${run.repoFullName}`);
+}
+
+export function lizardOperationInputForTest(
+  run: Pick<
+    AppOperationRun,
+    "requestId" | "operation" | "intent" | "params" | "actorLogin" | "reason"
+  >,
+) {
   const params =
     run.params && typeof run.params === "object" && !Array.isArray(run.params)
       ? (run.params as AppOperationValues)
       : {};
-
-  if (run.repoFullName === "seorilabs/lizard-tycoon") {
-    return executeLizardTycoonOperation({
-      requestId: run.requestId,
-      operation: run.operation,
-      intent: run.intent,
-      params,
-    });
-  }
-  throw new Error(`등록되지 않은 Kubernetes AppOps adapter: ${run.repoFullName}`);
+  return {
+    requestId: run.requestId,
+    operation: run.operation,
+    intent: run.intent,
+    params,
+    actorLogin: run.actorLogin,
+    reason: run.reason ?? "",
+  };
 }
 
 export async function recoverStaleAppOperations(now = new Date()): Promise<void> {

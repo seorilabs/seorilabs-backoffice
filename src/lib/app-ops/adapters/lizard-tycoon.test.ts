@@ -3,23 +3,33 @@ import test from "node:test";
 
 import {
   LIZARD_TYCOON_IAP_OPERATIONS,
+  addOperatorSourceForTest,
+  appleSandboxResetBody,
   parseLimit,
   requireAccountRef,
+  requireEntitlementId,
   requireLizardOperationIntent,
+  requireResourceRef,
   requireSandboxEnvironment,
   resetAppStoreSourcesForTest,
+  revokeOperatorSourceForTest,
   sanitizeEntitlement,
   sanitizePurchase,
   sanitizeRefundReview,
+  sanitizeSandboxTester,
   validateLizardCredentialForTest,
 } from "./lizard-tycoon";
 
 test("도마뱀 worker가 지원하는 IAP 오퍼레이션을 고정한다", () => {
   assert.deepEqual(LIZARD_TYCOON_IAP_OPERATIONS, [
     "iap-ledger.recent-purchases",
+    "iap-ledger.sandbox-testers",
     "iap-ledger.account-entitlements",
     "iap-ledger.refund-review-queue",
     "iap-ledger.reset-app-store-sandbox",
+    "iap-ledger.production-grants",
+    "iap-ledger.grant-production-entitlement",
+    "iap-ledger.revoke-production-entitlement",
   ]);
 });
 
@@ -38,6 +48,10 @@ test("도마뱀 worker는 sandbox와 제한된 입력만 허용한다", () => {
     "firebase_uid-123.test",
   );
   assert.throws(() => requireAccountRef("uid with space"), /형식/);
+  assert.equal(requireResourceRef("tester-123", "계정"), "tester-123");
+  assert.throws(() => requireResourceRef("tester/123", "계정"), /형식/);
+  assert.equal(requireEntitlementId("sp_galaxy_gecko"), "sp_galaxy_gecko");
+  assert.throws(() => requireEntitlementId("unknown"), /허용되지 않은/);
   assert.doesNotThrow(() =>
     requireLizardOperationIntent(
       "iap-ledger.reset-app-store-sandbox",
@@ -51,6 +65,15 @@ test("도마뱀 worker는 sandbox와 제한된 입력만 허용한다", () => {
         "read",
       ),
     /mutate intent/,
+  );
+  assert.doesNotThrow(() =>
+    requireLizardOperationIntent(
+      "iap-ledger.grant-production-entitlement",
+      "mutate",
+    ),
+  );
+  assert.doesNotThrow(() =>
+    requireLizardOperationIntent("iap-ledger.production-grants", "read"),
   );
   assert.doesNotThrow(() =>
     requireLizardOperationIntent("iap-ledger.recent-purchases", "read"),
@@ -90,6 +113,7 @@ test("도마뱀 worker는 전용 Sandbox 운영 서비스 계정만 허용한다
 
 test("worker 결과에서 provider token과 영수증을 제거한다", () => {
   const purchase = sanitizePurchase({
+    id: "purchase-1",
     data: () => ({
       uid: "test-account-ref",
       platform: "app_store",
@@ -126,6 +150,7 @@ test("worker 결과에서 provider token과 영수증을 제거한다", () => {
   } as never);
 
   assert.deepEqual(purchase, {
+    purchaseRef: "purchase-1",
     testAccountRef: "test-account-ref",
     platform: "app_store",
     productId: "product-1",
@@ -153,6 +178,39 @@ test("worker 결과에서 provider token과 영수증을 제거한다", () => {
     JSON.stringify({ purchase, entitlement, review }),
     /must-not-leak/,
   );
+});
+
+test("Apple Sandbox 계정 표시와 전체 구매내역 초기화 요청 body를 고정한다", () => {
+  assert.deepEqual(
+    sanitizeSandboxTester({
+      id: "tester-1",
+      type: "sandboxTesters",
+      attributes: {
+        acAccountName: "sandbox@example.com",
+        firstName: "Sandbox",
+        lastName: "Tester",
+        territory: "KOR",
+        interruptPurchases: false,
+      },
+    }),
+    {
+      sandboxTesterId: "tester-1",
+      accountName: "sandbox@example.com",
+      firstName: "Sandbox",
+      lastName: "Tester",
+      territory: "KOR",
+    },
+  );
+  assert.deepEqual(appleSandboxResetBody("tester-1"), {
+    data: {
+      type: "sandboxTestersClearPurchaseHistoryRequest",
+      relationships: {
+        sandboxTesters: {
+          data: [{ id: "tester-1", type: "sandboxTesters" }],
+        },
+      },
+    },
+  });
 });
 
 test("Apple Sandbox 초기화는 App Store source만 revoked로 전이한다", () => {
@@ -240,4 +298,39 @@ test("손상된 entitlement source는 부분 초기화하지 않고 중단한다
       ),
     /source 필드/,
   );
+});
+
+test("Production 운영자 지급·회수는 유료 구매 source를 보존한다", () => {
+  const timestamp = "2026-07-30T02:00:00.000Z";
+  const paidSource = {
+    paid: {
+      platform: "app_store",
+      productId: "apple.product",
+      state: "active" as const,
+      observedAt: "2026-07-30T01:00:00.000Z",
+      updatedAt: "2026-07-30T01:00:00.000Z",
+    },
+  };
+  const granted = addOperatorSourceForTest(paidSource, {
+    sourceKey: "operator:grant-1",
+    entitlementId: "sp_galaxy_gecko",
+    actorLogin: "operator",
+    reason: "CS 지급",
+    grantRef: "grant-1",
+    timestamp,
+  });
+  assert.equal(granted.paid.state, "active");
+  assert.equal(granted["operator:grant-1"].state, "active");
+
+  const revoked = revokeOperatorSourceForTest(granted, {
+    sourceKey: "operator:grant-1",
+    actorLogin: "operator",
+    reason: "지급 회수",
+    requestId: "revoke-1",
+    timestamp: "2026-07-30T03:00:00.000Z",
+  });
+  assert.equal(revoked.sources.paid.state, "active");
+  assert.equal(revoked.sources["operator:grant-1"].state, "revoked");
+  assert.equal(revoked.active, true);
+  assert.equal(revoked.alreadyRevoked, false);
 });

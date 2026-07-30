@@ -54,6 +54,21 @@ spec:
                 secretKeyRef:
                   name: backoffice-app-ops-secrets
                   key: LIZARD_TYCOON_APP_OPS_SA_KEY_JSON
+            - name: APP_STORE_CONNECT_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_API_KEY_ID
+            - name: APP_STORE_CONNECT_ISSUER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_ISSUER_ID
+            - name: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
           resources:
             requests:
               cpu: 50m
