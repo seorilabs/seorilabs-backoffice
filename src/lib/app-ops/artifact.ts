@@ -4,7 +4,7 @@ import {
   APP_OPS_RESULT_FILE,
   appOpsResultSchema,
   type AppOpsResult,
-} from "@/lib/app-ops/execution";
+} from "@/lib/app-ops/operation";
 
 const MAX_RESULT_BYTES = 64 * 1024;
 

@@ -12,7 +12,7 @@ test("GitHub Actions artifact의 result.json을 검증해 복원한다", () => {
       JSON.stringify({
         version: 1,
         requestId,
-        operation: "iap-ledger:recent-purchases",
+        operation: "iap-ledger.recent-purchases",
         status: "success",
         summary: "4건 조회",
         data: { count: 4 },
@@ -31,7 +31,7 @@ test("요청 ID 불일치와 result.json 누락 artifact는 거부한다", () =>
       JSON.stringify({
         version: 1,
         requestId,
-        operation: "iap-ledger:recent-purchases",
+        operation: "iap-ledger.recent-purchases",
         status: "success",
         summary: "4건 조회",
         completedAt: "2026-07-30T02:30:00.000Z",

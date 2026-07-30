@@ -79,22 +79,23 @@ flowchart LR
 
 ### 오퍼레이션 계약
 
-manifest는 화면과 입력 계약만 선언한다. 다음 단계의 실행기는 저장소의 표준
-`.github/workflows/backoffice-ops.yml`만 dispatch한다. manifest에서 임의 workflow 경로나
-외부 URL을 지정하지 않는다.
+manifest는 화면과 입력 계약만 선언한다. 실행기는 저장소의 표준
+`.github/workflows/backoffice-ops.yml`만 기본 브랜치에서 dispatch한다. manifest에서 임의
+workflow 경로나 외부 URL을 지정하지 않는다.
 
 표준 workflow 입력 계약은 다음처럼 제한한다.
 
 | 입력 | 용도 |
 |---|---|
-| `operation` | manifest의 오퍼레이션 ID |
+| `operation` | manifest의 `<tool-id>.<operation-id>` |
 | `request_id` | 멱등·감사 식별자 |
-| `target_ref` | manifest 검증을 통과한 비밀값 아닌 입력의 JSON 객체 |
+| `params_json` | manifest 스키마로 검증된 비밀값이 아닌 입력 JSON |
 | `reason` | 변경 사유 |
 
-비밀번호, 영수증 원문, 스토어 토큰, Firebase 키는 manifest나 workflow 입력으로 전달하지
-않는다. 게임 런타임 어댑터가 필요하면 GitHub Environment에 보관된 자격증명으로 서버 측에서
-조회한다.
+모든 변경 오퍼레이션은 사유가 필요하고, `confirmation: "typed"`는 오퍼레이션 라벨을
+정확히 재입력해야 한다. 비밀번호, 영수증 원문, 스토어 토큰, Firebase 키는 manifest나
+workflow 입력으로 전달하지 않는다. 게임 런타임 어댑터가 필요하면 GitHub Environment에
+보관된 자격증명으로 서버 측에서 조회한다.
 
 workflow는 `run-name`을 `Backoffice · <operation> [<request_id>]` 형태로 설정하고, 완료 시
 `backoffice-ops-<request_id>` artifact 안에 `result.json`을 저장한다. artifact는 짧은 보존기간을
@@ -104,7 +105,7 @@ workflow는 `run-name`을 `Backoffice · <operation> [<request_id>]` 형태로 �
 {
   "version": 1,
   "requestId": "UUID",
-  "operation": "tool-id:operation-id",
+  "operation": "tool-id.operation-id",
   "status": "success",
   "summary": "운영자용 한 줄 결과",
   "data": {},

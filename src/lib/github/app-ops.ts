@@ -3,10 +3,9 @@ import {
   artifactName,
   isAppOpsRequestId,
   type AppOpsResult,
-} from "@/lib/app-ops/execution";
+} from "@/lib/app-ops/operation";
 import { parseAppOpsResultArtifact } from "@/lib/app-ops/artifact";
 import { getInstallationOctokit } from "@/lib/github/app";
-import { dispatchWorkflow } from "@/lib/github/write";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 const REQUEST_ID_IN_TITLE =
@@ -60,34 +59,6 @@ function runSummary(run: {
     url: run.html_url,
     runId: run.id,
   };
-}
-
-export async function getRepoDefaultBranch(repoFullName: string): Promise<string> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(repoFullName);
-  const response = await octokit.rest.repos.get({ owner, repo });
-  return response.data.default_branch;
-}
-
-export async function dispatchAppOpsWorkflow(options: {
-  repoFullName: string;
-  ref: string;
-  operation: string;
-  requestId: string;
-  targetRef: string;
-  reason: string;
-}): Promise<void> {
-  await dispatchWorkflow({
-    repoFullName: options.repoFullName,
-    workflowFile: APP_OPS_WORKFLOW_FILE,
-    ref: options.ref,
-    inputs: {
-      operation: options.operation,
-      request_id: options.requestId,
-      target_ref: options.targetRef,
-      reason: options.reason,
-    },
-  });
 }
 
 export async function listRecentAppOpsRuns(

@@ -1,9 +1,9 @@
 import Link from "next/link";
 
 import {
-  OperationHistory,
-  OperationRunner,
-} from "@/components/app-ops/OperationRunner";
+  AppOperationControls,
+  AppOperationHistory,
+} from "@/components/app-ops/AppOperationControls";
 import type { AppOpsTool } from "@/lib/app-ops/manifest";
 import type {
   AppWorkspaceReadiness,
@@ -170,7 +170,11 @@ export function ToolCatalog({
                       입력: {operation.inputs.map((input) => input.label).join(", ")}
                     </div>
                   )}
-                  <OperationRunner appId={appId} toolId={tool.id} operation={operation} />
+                  <AppOperationControls
+                    appId={appId}
+                    toolId={tool.id}
+                    operation={operation}
+                  />
                 </div>
               ))}
             </div>
@@ -197,7 +201,7 @@ export function ToolCatalog({
         </div>
         ))}
       </div>
-      <OperationHistory appId={appId} />
+      <AppOperationHistory appId={appId} />
     </>
   );
 }
