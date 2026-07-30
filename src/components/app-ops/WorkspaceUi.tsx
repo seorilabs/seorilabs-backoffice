@@ -1,5 +1,9 @@
 import Link from "next/link";
 
+import {
+  OperationHistory,
+  OperationRunner,
+} from "@/components/app-ops/OperationRunner";
 import type { AppOpsTool } from "@/lib/app-ops/manifest";
 import type {
   AppWorkspaceReadiness,
@@ -104,11 +108,13 @@ const RISK_CLASS = {
 } as const;
 
 export function ToolCatalog({
+  appId,
   tools,
   repoFullName,
   emptyTitle,
   emptyDescription,
 }: {
+  appId: string;
   tools: AppOpsTool[];
   repoFullName: string;
   emptyTitle: string;
@@ -125,8 +131,9 @@ export function ToolCatalog({
     );
   }
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      {tools.map((tool) => (
+    <>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {tools.map((tool) => (
         <div key={tool.id} className="rounded-lg border border-neutral-200 bg-white p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -163,6 +170,7 @@ export function ToolCatalog({
                       입력: {operation.inputs.map((input) => input.label).join(", ")}
                     </div>
                   )}
+                  <OperationRunner appId={appId} toolId={tool.id} operation={operation} />
                 </div>
               ))}
             </div>
@@ -184,10 +192,12 @@ export function ToolCatalog({
             ) : (
               <span className="text-neutral-400">런북 미등록</span>
             )}
-            <span className="text-neutral-400">실행 연결은 후속 단계</span>
+            <span className="text-emerald-600">표준 workflow 연결</span>
           </div>
         </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      <OperationHistory appId={appId} />
+    </>
   );
 }

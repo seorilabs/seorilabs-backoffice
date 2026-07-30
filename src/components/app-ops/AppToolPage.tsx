@@ -87,6 +87,7 @@ export async function AppToolPage({
           ))}
         </div>
         <ToolCatalog
+          appId={appId}
           tools={tools}
           repoFullName={app.repoFullName}
           emptyTitle={copy.emptyTitle}

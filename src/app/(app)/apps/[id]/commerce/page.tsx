@@ -81,6 +81,7 @@ export default async function CommercePage({
           ))}
         </div>
         <ToolCatalog
+          appId={app.id}
           tools={tools}
           repoFullName={app.repoFullName}
           emptyTitle="IAP 관리 계약이 아직 없습니다"

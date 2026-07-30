@@ -22,9 +22,10 @@ flowchart LR
   H --> D
 ```
 
-현재 구현 범위는 manifest 검증·미러링, 앱 워크스페이스 UI, manifest 기반 콘텐츠 지표
-수집이다. 실제 변경 오퍼레이션의 workflow dispatch는 다음 단계다. UI에서 manifest를
-선언했다고 실행 권한이 생기지는 않는다.
+현재 구현은 manifest 검증·미러링, 앱 워크스페이스 UI, manifest 기반 콘텐츠 지표 수집과
+표준 workflow dispatch를 포함한다. UI에서 manifest를 선언했다고 실행 권한이 생기지는 않으며,
+기본 브랜치의 `.github/workflows/backoffice-ops.yml`이 아래 고정 입력 계약과 결과 artifact
+계약을 함께 구현해야 한다.
 
 ## 정보 구조
 
@@ -88,12 +89,28 @@ manifest는 화면과 입력 계약만 선언한다. 다음 단계의 실행기�
 |---|---|
 | `operation` | manifest의 오퍼레이션 ID |
 | `request_id` | 멱등·감사 식별자 |
-| `target_ref` | 비밀값이 아닌 사용자 또는 리소스 참조 |
+| `target_ref` | manifest 검증을 통과한 비밀값 아닌 입력의 JSON 객체 |
 | `reason` | 변경 사유 |
 
 비밀번호, 영수증 원문, 스토어 토큰, Firebase 키는 manifest나 workflow 입력으로 전달하지
 않는다. 게임 런타임 어댑터가 필요하면 GitHub Environment에 보관된 자격증명으로 서버 측에서
 조회한다.
+
+workflow는 `run-name`을 `Backoffice · <operation> [<request_id>]` 형태로 설정하고, 완료 시
+`backoffice-ops-<request_id>` artifact 안에 `result.json`을 저장한다. artifact는 짧은 보존기간을
+사용하고 원문 토큰·영수증·비밀번호·비밀키를 포함하지 않는다.
+
+```json
+{
+  "version": 1,
+  "requestId": "UUID",
+  "operation": "tool-id:operation-id",
+  "status": "success",
+  "summary": "운영자용 한 줄 결과",
+  "data": {},
+  "completedAt": "2026-07-30T00:00:00.000Z"
+}
+```
 
 ## IAP 안전 기준
 

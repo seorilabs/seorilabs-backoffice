@@ -113,6 +113,24 @@ test("임의 runbook 경로와 깨진 JSON은 거부한다", () => {
   assert.match(parseAppOpsManifestText("{").error ?? "", /JSON/);
 });
 
+test("비밀번호·영수증·구매 토큰 입력은 manifest 단계에서 거부한다", () => {
+  for (const key of ["password", "receipt_data", "purchase_token", "private_key"]) {
+    const unsafe = structuredClone(validManifest);
+    unsafe.tools[0].operations[0].inputs = [
+      { key, label: "민감 입력", type: "text" },
+    ];
+    assert.equal(parseAppOpsManifest(unsafe).manifest, null);
+    assert.match(parseAppOpsManifest(unsafe).error ?? "", /비밀 입력/);
+  }
+});
+
+test("같은 도구 안의 operation id 중복은 거부한다", () => {
+  const unsafe = structuredClone(validManifest);
+  unsafe.tools[0].operations.push(structuredClone(unsafe.tools[0].operations[0]));
+  assert.equal(parseAppOpsManifest(unsafe).manifest, null);
+  assert.match(parseAppOpsManifest(unsafe).error ?? "", /중복 operation id/);
+});
+
 test("manifest 컨텐츠 스펙과 섹션별 도구를 해석한다", () => {
   const spec = contentSpecFromManifest("happy-farm", validManifest);
   assert.equal(spec?.slug, "happy-farm");
