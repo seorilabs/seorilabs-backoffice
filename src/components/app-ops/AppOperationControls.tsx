@@ -1,9 +1,18 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
-import { dispatchAppOperationAction } from "@/lib/actions/app-ops";
+import {
+  dispatchAppOperationAction,
+  getAppOperationStatusAction,
+  listAppOperationRunsAction,
+} from "@/lib/actions/app-ops";
 import type { AppOpsOperation } from "@/lib/app-ops/manifest";
+import type { AppOpsResult } from "@/lib/app-ops/operation";
+import type { AppOpsRunSummary } from "@/lib/github/app-ops";
+
+const POLL_INTERVAL_MS = 2_000;
+const POLL_LIMIT = 45;
 
 export function AppOperationControls({
   appId,
@@ -17,16 +26,23 @@ export function AppOperationControls({
   const [pending, startTransition] = useTransition();
   const [values, setValues] = useState<Record<string, string | boolean>>(() =>
     Object.fromEntries(
-      operation.inputs.map((input) => [input.key, input.type === "boolean" ? false : ""]),
+      operation.inputs.map((input) => [
+        input.key,
+        input.type === "boolean" ? false : "",
+      ]),
     ),
   );
   const [reason, setReason] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
-  const [result, setResult] = useState<{
+  const [feedback, setFeedback] = useState<{
     ok: boolean;
     message: string;
     workflowUrl?: string;
   } | null>(null);
+  const [operationResult, setOperationResult] = useState<AppOpsResult | null>(
+    null,
+  );
+  const [runUrl, setRunUrl] = useState<string | null>(null);
 
   function updateValue(key: string, value: string | boolean) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -34,7 +50,9 @@ export function AppOperationControls({
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setResult(null);
+    setFeedback(null);
+    setOperationResult(null);
+    setRunUrl(null);
     startTransition(async () => {
       const response = await dispatchAppOperationAction({
         appId,
@@ -44,19 +62,65 @@ export function AppOperationControls({
         reason,
         confirmationText,
       });
-      setResult(
-        response.ok
-          ? {
-              ok: true,
-              message: `실행 요청됨 · ${response.requestId?.slice(0, 8)}`,
-              workflowUrl: response.workflowUrl,
-            }
-          : { ok: false, message: response.error ?? "실행 요청에 실패했습니다." },
-      );
-      if (response.ok) {
-        setReason("");
-        setConfirmationText("");
+      if (!response.ok || !response.requestId) {
+        setFeedback({
+          ok: false,
+          message: response.error ?? "실행 요청에 실패했습니다.",
+        });
+        return;
       }
+      setFeedback({
+        ok: true,
+        message: `실행 요청됨 · ${response.requestId.slice(0, 8)}`,
+        workflowUrl: response.workflowUrl,
+      });
+      setReason("");
+      setConfirmationText("");
+      void poll(response.requestId);
+    });
+  }
+
+  async function poll(requestId: string) {
+    for (let attempt = 0; attempt < POLL_LIMIT; attempt += 1) {
+      const response = await getAppOperationStatusAction(appId, requestId);
+      if (!response.ok) {
+        setFeedback({
+          ok: false,
+          message: response.error ?? "실행 상태를 읽지 못했습니다.",
+        });
+        return;
+      }
+      if (response.url) setRunUrl(response.url);
+      if (!response.found) {
+        setFeedback({ ok: true, message: "GitHub Actions 실행 생성 대기 중입니다." });
+      } else if (response.status !== "completed") {
+        setFeedback({
+          ok: true,
+          message: `실행 상태 · ${response.status ?? "unknown"}`,
+        });
+      } else if (response.result) {
+        setOperationResult(response.result);
+        setFeedback({
+          ok: response.result.status === "success",
+          message: response.result.summary,
+        });
+        return;
+      } else {
+        setFeedback({
+          ok: false,
+          message:
+            response.resultError ??
+            `실행 완료 · ${response.conclusion ?? "결과 artifact 없음"}`,
+        });
+        return;
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, POLL_INTERVAL_MS),
+      );
+    }
+    setFeedback({
+      ok: false,
+      message: "자동 확인 시간이 끝났습니다. 최근 실행에서 결과를 다시 확인하세요.",
     });
   }
 
@@ -111,7 +175,11 @@ export function AppOperationControls({
               className="w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm"
             />
           )}
-          {input.help && <span className="mt-1 block text-[11px] text-neutral-400">{input.help}</span>}
+          {input.help && (
+            <span className="mt-1 block text-[11px] text-neutral-400">
+              {input.help}
+            </span>
+          )}
         </label>
       ))}
 
@@ -156,14 +224,16 @@ export function AppOperationControls({
               ? "조회 실행"
               : "변경 실행"}
         </button>
-        {result && (
-          <span className={`text-xs ${result.ok ? "text-emerald-700" : "text-red-600"}`}>
-            {result.message}
-            {result.workflowUrl && (
+        {feedback && (
+          <span
+            className={`text-xs ${feedback.ok ? "text-emerald-700" : "text-red-600"}`}
+          >
+            {feedback.message}
+            {(runUrl ?? feedback.workflowUrl) && (
               <>
                 {" · "}
                 <a
-                  href={result.workflowUrl}
+                  href={runUrl ?? feedback.workflowUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="underline"
@@ -175,6 +245,96 @@ export function AppOperationControls({
           </span>
         )}
       </div>
+      {operationResult && (
+        <pre className="max-h-80 overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">
+          {JSON.stringify(operationResult, null, 2)}
+        </pre>
+      )}
     </form>
+  );
+}
+
+export function AppOperationHistory({ appId }: { appId: string }) {
+  const [runs, setRuns] = useState<AppOpsRunSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedResult, setSelectedResult] = useState<unknown>(null);
+  const [pending, startTransition] = useTransition();
+
+  useEffect(() => {
+    startTransition(async () => {
+      const response = await listAppOperationRunsAction(appId);
+      if (!response.ok) {
+        setError(response.error ?? "실행 이력을 읽지 못했습니다.");
+      } else {
+        setRuns(response.runs ?? []);
+      }
+    });
+  }, [appId]);
+
+  function loadResult(requestId: string) {
+    setError(null);
+    startTransition(async () => {
+      const response = await getAppOperationStatusAction(appId, requestId);
+      if (!response.ok) {
+        setError(response.error ?? "실행 결과를 읽지 못했습니다.");
+        return;
+      }
+      setSelectedResult(
+        response.result ?? {
+          status: response.status,
+          conclusion: response.conclusion,
+          error: response.resultError,
+        },
+      );
+    });
+  }
+
+  if (!pending && runs.length === 0 && !error) return null;
+  return (
+    <div className="mt-5 rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="text-sm font-semibold text-neutral-700">최근 실행</div>
+      {pending && runs.length === 0 && (
+        <div className="mt-2 text-xs text-neutral-400">불러오는 중…</div>
+      )}
+      {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+      <div className="mt-2 divide-y divide-neutral-100">
+        {runs.map((run) => (
+          <div
+            key={run.requestId}
+            className="flex flex-wrap items-center gap-2 py-2 text-xs"
+          >
+            <span className="font-medium text-neutral-700">{run.operation}</span>
+            <span className="text-neutral-400">
+              {run.status}
+              {run.conclusion ? ` / ${run.conclusion}` : ""}
+            </span>
+            <span className="text-neutral-400">
+              {new Date(run.createdAt).toLocaleString("ko-KR")}
+            </span>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => loadResult(run.requestId)}
+              className="text-blue-600 hover:underline disabled:opacity-50"
+            >
+              결과 보기
+            </button>
+            <a
+              href={run.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+              Actions ↗
+            </a>
+          </div>
+        ))}
+      </div>
+      {selectedResult !== null && (
+        <pre className="mt-3 max-h-80 overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">
+          {JSON.stringify(selectedResult, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }

@@ -87,8 +87,8 @@ export default async function AppContentPage({
         description="콘텐츠 발행, 재집계, 보상 테이블 검증 등 게임별 운영 작업입니다."
       >
         <ToolCatalog
-          tools={tools}
           appId={app.id}
+          tools={tools}
           repoFullName={app.repoFullName}
           emptyTitle="콘텐츠 오퍼레이션이 아직 없습니다"
           emptyDescription="게임 저장소 manifest에서 content 섹션 도구를 선언하세요."

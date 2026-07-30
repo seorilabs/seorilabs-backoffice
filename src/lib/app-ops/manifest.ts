@@ -27,6 +27,8 @@ const analyticsIdent = z
   .regex(/^[a-zA-Z0-9_]+$/, "분석 식별자는 영문, 숫자, 밑줄만 사용할 수 있습니다.");
 const label = z.string().trim().min(1).max(80);
 const description = z.string().trim().min(1).max(300);
+const sensitiveInputKey =
+  /(?:password|passwd|secret|credential|private[_-]?key|receipt|purchase[_-]?token|signed[_-]?(?:data|payload)|id[_-]?token|access[_-]?token|refresh[_-]?token)/i;
 
 const predicateSchema = z
   .object({
@@ -156,6 +158,13 @@ const inputSchema = z
         message: "select 입력에는 options가 필요합니다.",
       });
     }
+    if (sensitiveInputKey.test(input.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["key"],
+        message: "비밀번호, 영수증, 토큰, 키 등 비밀 입력은 manifest로 받을 수 없습니다.",
+      });
+    }
   });
 
 const operationSchema = z
@@ -199,7 +208,20 @@ const toolSchema = z
       .optional(),
     operations: z.array(operationSchema).max(20).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((tool, ctx) => {
+    const ids = new Set<string>();
+    tool.operations.forEach((operation, index) => {
+      if (ids.has(operation.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["operations", index, "id"],
+          message: `중복 operation id: ${operation.id}`,
+        });
+      }
+      ids.add(operation.id);
+    });
+  });
 
 export const appOpsManifestSchema = z
   .object({

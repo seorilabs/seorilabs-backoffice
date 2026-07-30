@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   parseAppOpsManifest,
   type AppOpsInput,
@@ -6,6 +8,31 @@ import {
 
 export const APP_OPS_WORKFLOW_FILE = "backoffice-ops.yml";
 export const APP_OPS_WORKFLOW_NAME = "Backoffice Operations";
+export const APP_OPS_WORKFLOW_INPUTS = [
+  "operation",
+  "request_id",
+  "params_json",
+  "reason",
+] as const;
+export const APP_OPS_RESULT_FILE = "result.json";
+export const APP_OPS_ARTIFACT_PREFIX = "backoffice-ops-";
+
+const REQUEST_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const appOpsResultSchema = z
+  .object({
+    version: z.literal(1),
+    requestId: z.string().regex(REQUEST_ID),
+    operation: z.string().min(3).max(129),
+    status: z.enum(["success", "error"]),
+    summary: z.string().trim().min(1).max(500),
+    data: z.unknown().optional(),
+    completedAt: z.string().datetime(),
+  })
+  .strict();
+
+export type AppOpsResult = z.infer<typeof appOpsResultSchema>;
 
 export type AppOperationValue = string | number | boolean;
 export type AppOperationValues = Record<string, AppOperationValue>;
@@ -16,6 +43,14 @@ export interface PreparedAppOperation {
   params: AppOperationValues;
   paramsJson: string;
   reason: string | null;
+}
+
+export function isAppOpsRequestId(value: string): boolean {
+  return REQUEST_ID.test(value);
+}
+
+export function artifactName(requestId: string): string {
+  return `${APP_OPS_ARTIFACT_PREFIX}${requestId}`;
 }
 
 function isMissing(value: unknown): boolean {

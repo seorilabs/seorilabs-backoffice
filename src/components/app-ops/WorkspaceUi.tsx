@@ -1,6 +1,9 @@
 import Link from "next/link";
 
-import { AppOperationControls } from "@/components/app-ops/AppOperationControls";
+import {
+  AppOperationControls,
+  AppOperationHistory,
+} from "@/components/app-ops/AppOperationControls";
 import type { AppOpsTool } from "@/lib/app-ops/manifest";
 import type {
   AppWorkspaceReadiness,
@@ -105,14 +108,14 @@ const RISK_CLASS = {
 } as const;
 
 export function ToolCatalog({
-  tools,
   appId,
+  tools,
   repoFullName,
   emptyTitle,
   emptyDescription,
 }: {
-  tools: AppOpsTool[];
   appId: string;
+  tools: AppOpsTool[];
   repoFullName: string;
   emptyTitle: string;
   emptyDescription: string;
@@ -128,8 +131,9 @@ export function ToolCatalog({
     );
   }
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      {tools.map((tool) => (
+    <>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {tools.map((tool) => (
         <div key={tool.id} className="rounded-lg border border-neutral-200 bg-white p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -192,10 +196,12 @@ export function ToolCatalog({
             ) : (
               <span className="text-neutral-400">런북 미등록</span>
             )}
-            <span className="text-neutral-400">GitHub Actions 감사 실행</span>
+            <span className="text-emerald-600">표준 workflow 연결</span>
           </div>
         </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      <AppOperationHistory appId={appId} />
+    </>
   );
 }

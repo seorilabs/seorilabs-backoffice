@@ -130,7 +130,16 @@
       "additionalProperties": false,
       "required": ["key", "label", "type"],
       "properties": {
-        "key": { "$ref": "#/$defs/ident" },
+        "key": {
+          "allOf": [
+            { "$ref": "#/$defs/ident" },
+            {
+              "not": {
+                "pattern": "([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Ww][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Rr][Ee][Cc][Ee][Ii][Pp][Tt]|[Pp][Uu][Rr][Cc][Hh][Aa][Ss][Ee][_-]?[Tt][Oo][Kk][Ee][Nn]|[Ss][Ii][Gg][Nn][Ee][Dd][_-]?([Dd][Aa][Tt][Aa]|[Pp][Aa][Yy][Ll][Oo][Aa][Dd])|[Ii][Dd][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn]|[Rr][Ee][Ff][Rr][Ee][Ss][Hh][_-]?[Tt][Oo][Kk][Ee][Nn])"
+              }
+            }
+          ]
+        },
         "label": { "$ref": "#/$defs/label" },
         "type": { "enum": ["text", "number", "boolean", "select", "textarea"] },
         "required": { "type": "boolean", "default": true },

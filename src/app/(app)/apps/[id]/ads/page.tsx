@@ -74,8 +74,8 @@ export default async function AppAdsPage({
         description="placement 상태, 빈도 제한, 테스트 모드와 광고 보상 검증을 게임별로 선언합니다."
       >
         <ToolCatalog
-          tools={tools}
           appId={app.id}
+          tools={tools}
           repoFullName={app.repoFullName}
           emptyTitle="광고 오퍼레이션이 아직 없습니다"
           emptyDescription="광고가 있는 게임은 placement 조회, 빈도 제한, 테스트 광고 검증 도구를 manifest에 선언합니다."
