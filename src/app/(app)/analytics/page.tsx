@@ -288,7 +288,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
         <div>
           <div className="mb-2 text-sm font-semibold text-neutral-700">GA4 지표</div>
           <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
-            <table className="w-full min-w-[560px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
                   <th className="px-3 py-2">앱</th>
@@ -297,7 +297,9 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                   <th className="px-3 py-2 text-right">신규</th>
                   <th className="px-3 py-2 text-right">D1</th>
                   <th className="px-3 py-2 text-right">D7</th>
-                  <th className="px-3 py-2 text-right">광고노출</th>
+                  <th className="px-3 py-2 text-right">CTA 노출</th>
+                  <th className="px-3 py-2 text-right">완료</th>
+                  <th className="px-3 py-2 text-right">실제 노출</th>
                 </tr>
               </thead>
               <tbody>
@@ -313,7 +315,15 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                     <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
                     <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d1Pct) : "—"}</td>
                     <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d7Pct) : "—"}</td>
-                    <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.adImpressions : "—"}</td>
+                    <td className="px-3 py-2 text-right text-neutral-600">
+                      {latest ? latest.adCtaImpressions : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-600">
+                      {latest ? latest.adCompletions : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-600">
+                      {latest ? latest.networkAdImpressions : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

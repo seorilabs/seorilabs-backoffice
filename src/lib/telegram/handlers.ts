@@ -831,7 +831,7 @@ async function cmdMetricsDetail(chatId: number, slug: string): Promise<void> {
       `활성사용자 ${latest.engagedUsers}명 · 참여율 ${pctStr(rate)}${latest.avgEngageSec != null ? ` · 평균 ${latest.avgEngageSec}s` : ""}`,
       platform ? `플랫폼 ${platform}` : null,
       countries ? `국가 ${countries}` : null,
-      `광고 노출 ${latest.adImpressions}`,
+      `광고 CTA 노출 ${latest.adCtaImpressions} · 완료 ${latest.adCompletions} · 실제 노출 ${latest.networkAdImpressions}`,
       "",
       `<b>DAU 추이(최근 ${trend.length}일)</b>`,
       esc(trend.join("\n")),

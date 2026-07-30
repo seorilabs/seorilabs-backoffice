@@ -25,7 +25,15 @@ export default async function AppAdsPage({
     prisma.appMetricDaily.findFirst({
       where: { appId: app.id },
       orderBy: { date: "desc" },
-      select: { date: true, adEventUsers: true, adImpressions: true },
+      select: {
+        date: true,
+        adCtaUsers: true,
+        adCtaImpressions: true,
+        adCompletedUsers: true,
+        adCompletions: true,
+        networkAdUsers: true,
+        networkAdImpressions: true,
+      },
     }),
     prisma.appConsoleMetricDaily.findFirst({
       where: { appId: app.id },
@@ -43,15 +51,15 @@ export default async function AppAdsPage({
     <div className="space-y-8">
       <WorkspaceSection
         title="광고 현황"
-        description="광고 노출 사용자, placement 운영과 채널별 수익 상태를 확인합니다."
+        description="CTA 노출, 보상 완료, 실제 네트워크 노출과 채널별 수익 상태를 분리해 확인합니다."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <AdCard
-            label="GA4 광고 이벤트 사용자"
-            value={ga4?.adEventUsers}
-            date={ga4?.date}
-          />
-          <AdCard label="GA4 광고 노출" value={ga4?.adImpressions} date={ga4?.date} />
+          <AdCard label="GA4 CTA 노출 사용자" value={ga4?.adCtaUsers} date={ga4?.date} />
+          <AdCard label="GA4 CTA 노출" value={ga4?.adCtaImpressions} date={ga4?.date} />
+          <AdCard label="GA4 광고 완료 사용자" value={ga4?.adCompletedUsers} date={ga4?.date} />
+          <AdCard label="GA4 광고 완료" value={ga4?.adCompletions} date={ga4?.date} />
+          <AdCard label="GA4 실제 노출 사용자" value={ga4?.networkAdUsers} date={ga4?.date} />
+          <AdCard label="GA4 실제 광고 노출" value={ga4?.networkAdImpressions} date={ga4?.date} />
           <AdCard
             label="AIT 광고 노출"
             value={consoleMetric?.iaaImpressions}

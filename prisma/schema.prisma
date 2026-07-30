@@ -489,8 +489,14 @@ model AppMetricDaily {
   d7Pct         Float?
   engagedUsers  Int    @default(0)
   avgEngageSec  Float? // user_engagement 평균 초
-  adEventUsers  Int    @default(0) // 광고 이벤트(ad_*/ait_*) 고유 사용자
-  adImpressions Int    @default(0) // 광고 이벤트 수
+  adEventUsers  Int    @default(0) // legacy 광의 광고 이벤트 고유 사용자
+  adImpressions Int    @default(0) // legacy 광의 광고 이벤트 수 — 노출로 표시하지 않음
+  adCtaUsers Int @default(0) // ad_reward_impression 고유 사용자
+  adCtaImpressions Int @default(0) // 광고 CTA 지면 노출
+  adCompletedUsers Int @default(0) // ad_reward_completed 고유 사용자
+  adCompletions Int @default(0) // 보상형 광고 완료
+  networkAdUsers Int @default(0) // 표준 ad_impression 고유 사용자
+  networkAdImpressions Int    @default(0) // SDK/네트워크 실제 광고 노출
   dauAndroid    Int    @default(0) // platform=ANDROID DAU
   dauIos        Int    @default(0) // platform=IOS DAU
   dauWeb        Int    @default(0) // platform=WEB DAU
