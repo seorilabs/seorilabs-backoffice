@@ -34,6 +34,13 @@ import {
   type SubmitResult,
 } from "@/lib/app-store/submit";
 import type { DeployTarget } from "@/lib/core/deploy-targets";
+import {
+  bumpStableSemVerTag,
+  normalizeStableSemVerTag,
+  type Bump,
+} from "@/lib/core/stable-semver";
+
+export type { Bump } from "@/lib/core/stable-semver";
 
 export {
   DEPLOY_TARGET_KO,
@@ -45,21 +52,12 @@ export {
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
 // 배포 dispatch 는 ReleaseRecord 를 직접 INSERT 하지 않는다(workflow_run 미러가 담당).
 
-const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-export type Bump = "major" | "minor" | "patch";
-
 function normalizeTag(raw: string): string {
-  const v = raw.replace(/^v/i, "").trim();
-  if (!SEMVER_RE.test(v)) throw new Error(`SemVer(vX.Y.Z) 형식이 아닙니다: ${raw}`);
-  return `v${v}`;
+  return normalizeStableSemVerTag(raw);
 }
 
 export function bumpFrom(latest: string | null, bump: Bump): string {
-  const base = (latest ?? "v0.0.0").replace(/^v/i, "");
-  const [ma, mi, pa] = base.split(".").map((n) => parseInt(n, 10) || 0);
-  if (bump === "major") return `v${ma + 1}.0.0`;
-  if (bump === "minor") return `v${ma}.${mi + 1}.0`;
-  return `v${ma}.${mi}.${pa + 1}`;
+  return bumpStableSemVerTag(latest, bump);
 }
 
 /** 다음 릴리즈 태그 계산(dispatch 전 미리보기용). */

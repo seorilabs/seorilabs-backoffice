@@ -21,6 +21,7 @@ import {
 const BUMPS = new Set(["patch", "minor", "major"]);
 const TARGETS = new Set(["AIT", "PLAY", "APPSTORE", "ALL"]);
 const TAG_RE = /^v\d+\.\d+\.\d+$/;
+const EXPLICIT_TAG_RE = /^v?\d+\.\d+\.\d+$/;
 
 async function repoOf(appId: string): Promise<string> {
   const app = await prisma.app.findUnique({
@@ -35,13 +36,19 @@ async function repoOf(appId: string): Promise<string> {
 export async function createReleaseAction(
   appId: string,
   bump: string,
+  explicitTag = "",
 ): Promise<{ ok: boolean; tag?: string; url?: string; error?: string }> {
   const session = await requireSession();
   if (!BUMPS.has(bump)) return { ok: false, error: "잘못된 증가 단위" };
+  const requestedTag = explicitTag.trim();
+  if (requestedTag && !EXPLICIT_TAG_RE.test(requestedTag)) {
+    return { ok: false, error: "직접 지정 버전은 vX.Y.Z 형식이어야 합니다." };
+  }
   try {
     const repoFullName = await repoOf(appId);
     const r = await createReleaseTagWithNotes({
       repoFullName,
+      tag: requestedTag || undefined,
       bump: bump as Bump,
       actorLabel: `web:${session.user.login ?? "?"}`,
     });

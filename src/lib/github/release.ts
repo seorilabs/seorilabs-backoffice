@@ -1,4 +1,8 @@
 import { getInstallationOctokit } from "@/lib/github/app";
+import {
+  compareStableSemVerTagsDesc,
+  stableVersionTags,
+} from "@/lib/core/stable-semver";
 
 // 릴리즈/태그 관련 GitHub 조회. 출시노트 생성 + untagged 보정에 사용.
 
@@ -12,26 +16,7 @@ export interface VersionTag {
   sha: string;
 }
 
-function parseVer(v: string): number[] {
-  return v
-    .replace(/^v/i, "")
-    .split(/[.\-+]/)
-    .map((n) => parseInt(n, 10))
-    .filter((n) => !Number.isNaN(n));
-}
-
-// 내림차순(최신 먼저) 비교.
-function cmpSemverDesc(a: string, b: string): number {
-  const pa = parseVer(a);
-  const pb = parseVer(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
-}
-
-/** v* / 숫자 버전 태그 목록(semver 내림차순). */
+/** stable SemVer(vX.Y.Z) 태그 목록(내림차순). */
 export async function listVersionTags(
   repoFullName: string,
   limit = 100,
@@ -39,11 +24,9 @@ export async function listVersionTags(
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
   const res = await octokit.rest.repos.listTags({ owner, repo, per_page: limit });
-  const tags = res.data
-    .filter((t) => /^v?\d+\./.test(t.name))
-    .map((t) => ({ name: t.name, sha: t.commit.sha }));
-  tags.sort((a, b) => cmpSemverDesc(a.name, b.name));
-  return tags;
+  return stableVersionTags(
+    res.data.map((tag) => ({ name: tag.name, sha: tag.commit.sha })),
+  );
 }
 
 /** version 직전(더 낮은) 릴리즈 태그. 없으면 null(첫 릴리스). */
@@ -52,7 +35,7 @@ export function previousTag(tags: VersionTag[], version: string): string | null 
   if (idx >= 0) return tags[idx + 1]?.name ?? null;
   // 목록에 아직 없으면(반영 지연) semver 비교로 더 낮은 첫 태그.
   for (const t of tags) {
-    if (cmpSemverDesc(version, t.name) < 0) return t.name;
+    if (compareStableSemVerTagsDesc(version, t.name) < 0) return t.name;
   }
   return tags[0]?.name ?? null;
 }

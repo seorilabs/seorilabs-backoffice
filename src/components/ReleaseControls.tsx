@@ -31,6 +31,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
   const markets = targetsFrom(targets);
   const [pending, start] = useTransition();
   const [bump, setBump] = useState("patch");
+  const [explicitTag, setExplicitTag] = useState("");
   const [relMsg, setRelMsg] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState("");
@@ -54,9 +55,10 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
   function doRelease() {
     setRelMsg(null);
     start(async () => {
-      const r = await createReleaseAction(appId, bump);
+      const r = await createReleaseAction(appId, bump, explicitTag);
       if (r.ok) {
         setRelMsg(`✅ ${r.tag} + GitHub Release 생성됨 — 출시노트 번역 중`);
+        setExplicitTag("");
         const t = await listAppTagsAction(appId);
         setTags(t.tags);
         if (t.tags[0]) setTag(t.tags[0]);
@@ -141,6 +143,15 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
           <option value="minor">minor</option>
           <option value="major">major</option>
         </select>
+        <input
+          type="text"
+          value={explicitTag}
+          onChange={(event) => setExplicitTag(event.target.value)}
+          disabled={pending}
+          placeholder="직접 지정 v1.2.3 - 선택"
+          aria-label="직접 지정 릴리즈 태그"
+          className="w-44 rounded border border-neutral-300 px-2 py-1 text-sm"
+        />
         <button onClick={doRelease} disabled={pending} className={primary}>
           🚀 릴리즈 태그 생성
         </button>
