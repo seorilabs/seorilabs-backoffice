@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import {
   APP_OPS_WORKFLOW_FILE,
   APP_OPS_WORKFLOW_INPUTS,
+  buildAppOpsWorkflowInputs,
   prepareAppOperation,
   type AppOpsResult,
 } from "@/lib/app-ops/operation";
@@ -103,12 +104,7 @@ export async function dispatchAppOperationAction(
       repoFullName: app.repoFullName,
       workflowFile: APP_OPS_WORKFLOW_FILE,
       ref: defaultBranch,
-      inputs: {
-        operation: prepared.operationKey,
-        request_id: requestId,
-        params_json: prepared.paramsJson,
-        reason: prepared.reason ?? "",
-      },
+      inputs: buildAppOpsWorkflowInputs(prepared, requestId),
     });
 
     await prisma.auditLog
