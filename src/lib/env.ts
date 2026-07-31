@@ -81,6 +81,15 @@ export const env = {
   ga4Configured: () =>
     bool("FEATURE_GA4_ANALYTICS", false) &&
     Boolean(optional("GA4_SA_KEY_JSON").trim()),
+  // 공통 플랫폼 Admin API. 런타임 유저 데이터의 SoT는 플랫폼이다.
+  // 백오피스는 앱 Firestore를 직접 만지지 않고 이 API만 부른다.
+  featurePlatform: () => bool("FEATURE_PLATFORM_ADMIN", false),
+  platformAdminUrl: () => optional("PLATFORM_ADMIN_URL"),
+  platformAdminSaKeyJson: () => optional("PLATFORM_ADMIN_SA_KEY_JSON"),
+  platformConfigured: () =>
+    bool("FEATURE_PLATFORM_ADMIN", false) &&
+    Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
+    Boolean(optional("PLATFORM_ADMIN_SA_KEY_JSON").trim()),
   telegramEnabled: () => bool("FEATURE_TELEGRAM_ENABLED", false),
   telegramToken: () => optional("TELEGRAM_BOT_TOKEN"),
   telegramWebhookSecret: () => optional("TELEGRAM_WEBHOOK_SECRET"),

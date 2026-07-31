@@ -12,6 +12,11 @@ import {
 import type { AppOpsResult, AppOperationValues } from "@/lib/app-ops/operation";
 import { asc, asArray, type JsonApiResource } from "@/lib/app-store/asc-client";
 
+import {
+  executeLizardTycoonPlatformOperation,
+  shouldUsePlatform,
+} from "./lizard-tycoon-platform";
+
 const PROJECT_ID = "lizard-tycoon";
 const FIREBASE_APP_NAME = "backoffice-app-ops-lizard-tycoon";
 const SERVICE_ACCOUNT_EMAIL =
@@ -1074,6 +1079,18 @@ export async function executeLizardTycoonOperation(
   ) {
     throw new Error("도마뱀 AppOps에서 허용되지 않은 오퍼레이션입니다.");
   }
+
+  // 플랫폼이 런타임 유저 데이터의 SoT다. 설정이 갖춰져 있고 플랫폼이
+  // 대신할 수 있는 operation이면 그쪽으로 보낸다.
+  //
+  // 아래 경로는 앱 Firestore를 직접 조작한다. 플랫폼 전환이 끝나면
+  // 지운다. 그때까지는 FEATURE_PLATFORM_ADMIN 하나로 되돌아올 수 있는
+  // 자리로 남겨둔다.
+  if (shouldUsePlatform(input.operation)) {
+    requireLizardOperationIntent(input.operation, input.intent);
+    return executeLizardTycoonPlatformOperation(input);
+  }
+
   if (!credentialJson) {
     throw new Error("도마뱀 AppOps 서비스 계정이 설정되지 않았습니다.");
   }
