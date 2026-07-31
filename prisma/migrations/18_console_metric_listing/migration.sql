@@ -39,6 +39,9 @@ ALTER TABLE `app_console_metric_daily` MODIFY COLUMN `dau` INTEGER NULL;
 ALTER TABLE `app_console_metric_daily` MODIFY COLUMN `newUsers` INTEGER NULL;
 
 -- 6) 유니크 키 재구성 (appId, date) → (appId, miniAppId, date)
-ALTER TABLE `app_console_metric_daily` DROP INDEX `app_console_metric_daily_appId_date_key`;
+--    새 인덱스를 먼저 만든다: 기존 (appId,date) 인덱스는 appId FK(app_console_metric_daily_appId_fkey)를
+--    지탱하므로 그대로 drop 하면 MySQL 1553("needed in a foreign key constraint"). 새 (appId,...)
+--    인덱스가 appId leftmost 로 FK 를 이어받은 뒤 옛 인덱스를 drop 한다.
 ALTER TABLE `app_console_metric_daily`
   ADD UNIQUE INDEX `app_console_metric_daily_appId_miniAppId_date_key` (`appId`, `miniAppId`, `date`);
+ALTER TABLE `app_console_metric_daily` DROP INDEX `app_console_metric_daily_appId_date_key`;
