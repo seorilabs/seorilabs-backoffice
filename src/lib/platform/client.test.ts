@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 
-import { PlatformApiError } from "./client.ts";
+import { PlatformApiError } from "./client";
 
 /**
  * readEnvelope만 떼어내 검증한다.
@@ -22,9 +22,9 @@ import { PlatformApiError } from "./client.ts";
  */
 async function withClient<T>(
   reply: { status: number; body: unknown; raw?: string },
-  run: (client: import("./client.ts").PlatformClient) => Promise<T>,
+  run: (client: import("./client").PlatformClient) => Promise<T>,
 ): Promise<T> {
-  const { PlatformClient } = await import("./client.ts");
+  const { PlatformClient } = await import("./client");
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = mock.fn(async () => {
@@ -68,7 +68,7 @@ function fakeServiceAccount() {
 
 describe("PlatformClient 생성", () => {
   it("주소가 없으면 거부한다", async () => {
-    const { PlatformClient } = await import("./client.ts");
+    const { PlatformClient } = await import("./client");
     assert.throws(
       () => new PlatformClient({ baseUrl: "", serviceAccountJson: "{}" }),
       /주소가 필요/,
@@ -76,7 +76,7 @@ describe("PlatformClient 생성", () => {
   });
 
   it("서비스 계정이 없으면 거부한다", async () => {
-    const { PlatformClient } = await import("./client.ts");
+    const { PlatformClient } = await import("./client");
     assert.throws(
       () => new PlatformClient({ baseUrl: "https://x.test", serviceAccountJson: "  " }),
       /서비스 계정이 필요/,
@@ -84,7 +84,7 @@ describe("PlatformClient 생성", () => {
   });
 
   it("서비스 계정 JSON이 깨졌으면 거부한다", async () => {
-    const { PlatformClient } = await import("./client.ts");
+    const { PlatformClient } = await import("./client");
     assert.throws(
       () => new PlatformClient({ baseUrl: "https://x.test", serviceAccountJson: "{{{" }),
       /해석하지 못했습니다/,
