@@ -57,6 +57,19 @@ test("aggConsoleWindow: 세션이 전부 null 이면 sessAvg 는 null", () => {
   assert.equal(a.sessAvg, null);
 });
 
+test("aggConsoleWindow: 콘솔 미집계일(dau=null)은 합 0 취급·평균 분모 제외", () => {
+  const rows = [
+    row("2026-07-30", { dau: 8, newUsers: 4, avgSessionSec: 79 }),
+    row("2026-07-29", { dau: null, newUsers: null, avgSessionSec: 30 }), // 세션만, DAU 미집계
+    row("2026-07-28", { dau: 4, newUsers: 2, avgSessionSec: 137 }),
+  ];
+  const a = aggConsoleWindow(rows)!;
+  assert.equal(a.dauSum, 12); // 8+0+4, null→0
+  assert.equal(a.dauAvg, 6); // (8+4)/2, null 일은 분모 제외
+  assert.equal(a.newSum, 6); // 4+0+2
+  assert.equal(a.days, 3); // 수집 일수는 그대로 3
+});
+
 const aggWith = (dauSum: number): ConsoleWindowAgg => ({
   days: 1,
   dateMin: new Date("2026-07-21"),

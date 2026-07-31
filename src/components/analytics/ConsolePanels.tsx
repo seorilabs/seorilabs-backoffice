@@ -20,8 +20,9 @@ interface ConsoleRaw {
 
 export interface ConsoleMetricDaily {
   date: Date;
-  dau: number;
-  newUsers: number;
+  // dau/newUsers: null=콘솔 미집계(세션/광고는 있으나 DAU 배열에 부재). 0(=방문 0명)과 구분.
+  dau: number | null;
+  newUsers: number | null;
   avgSessionSec: number | null;
   iaaImpressions: number;
   iaaEarningKrw: number;
@@ -33,11 +34,13 @@ export interface ConsoleMetricDaily {
 
 const won = (v: number): string => `₩${Math.round(v).toLocaleString("ko-KR")}`;
 const sec = (v: number | null): string => (v == null ? "—" : `${Math.round(v)}초`);
+/** nullable 정수 표시: null=콘솔 미집계 "—". */
+const intFmt = (v: number | null): string => (v == null ? "—" : String(v));
 
 export function ConsoleMetricCards({ latest }: { latest: ConsoleMetricDaily }) {
   const cards = [
-    { label: "DAU", value: String(latest.dau) },
-    { label: "신규", value: String(latest.newUsers) },
+    { label: "DAU", value: intFmt(latest.dau) },
+    { label: "신규", value: intFmt(latest.newUsers) },
     { label: "평균 세션", value: sec(latest.avgSessionSec) },
     { label: "광고 노출", value: String(latest.iaaImpressions) },
     { label: "광고 수익", value: won(latest.iaaEarningKrw) },
@@ -57,7 +60,8 @@ export function ConsoleMetricCards({ latest }: { latest: ConsoleMetricDaily }) {
 
 /** DAU 추이 막대(오래된→최신) — 콘솔은 sky. */
 export function ConsoleDauTrend({ rowsAsc }: { rowsAsc: ConsoleMetricDaily[] }) {
-  const max = Math.max(1, ...rowsAsc.map((r) => r.dau));
+  // null(미집계)은 0 높이로 그리되 값은 "—"로 표기(0명과 구분).
+  const max = Math.max(1, ...rowsAsc.map((r) => r.dau ?? 0));
   return (
     <div>
       <div className="flex h-24 items-end gap-0.5">
@@ -65,8 +69,8 @@ export function ConsoleDauTrend({ rowsAsc }: { rowsAsc: ConsoleMetricDaily[] }) 
           <div
             key={i}
             className="flex-1 rounded-t bg-sky-400/80 hover:bg-sky-500"
-            style={{ height: `${Math.max(2, (r.dau / max) * 100)}%` }}
-            title={`${isoDate(r.date)} · DAU ${r.dau} · 신규 ${r.newUsers} · 광고 ${won(r.iaaEarningKrw)}`}
+            style={{ height: `${Math.max(2, ((r.dau ?? 0) / max) * 100)}%` }}
+            title={`${isoDate(r.date)} · DAU ${intFmt(r.dau)} · 신규 ${intFmt(r.newUsers)} · 광고 ${won(r.iaaEarningKrw)}`}
           />
         ))}
       </div>
@@ -129,8 +133,8 @@ export function ConsoleTrendTable({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[]
           {rowsDesc.map((r) => (
             <tr key={isoDate(r.date)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
               <td className="px-3 py-1.5 text-neutral-700">{isoDate(r.date)}</td>
-              <td className="px-3 py-1.5 text-right">{r.dau}</td>
-              <td className="px-3 py-1.5 text-right">{r.newUsers}</td>
+              <td className="px-3 py-1.5 text-right">{intFmt(r.dau)}</td>
+              <td className="px-3 py-1.5 text-right">{intFmt(r.newUsers)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{sec(r.avgSessionSec)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{r.iaaImpressions}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{won(r.iaaEarningKrw)}</td>
@@ -143,12 +147,24 @@ export function ConsoleTrendTable({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[]
   );
 }
 
-/** 선택 앱의 콘솔 지표 섹션(카드+추이+유입경로+데모). rows 는 최신→과거. */
-export function ConsoleSection({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[] }) {
+/**
+ * 선택 앱의 콘솔 지표 섹션(카드+추이+유입경로+데모). rows 는 최신→과거.
+ * title 은 한 App 에 리스팅이 여럿일 때 리스팅 라벨(예: "네이티브 게임"/"웹")을 붙인다.
+ */
+export function ConsoleSection({
+  rowsDesc,
+  title,
+}: {
+  rowsDesc: ConsoleMetricDaily[];
+  title?: string;
+}) {
   if (rowsDesc.length === 0) {
     return (
-      <div className="rounded-lg border border-neutral-200 bg-white p-6 text-center text-sm text-neutral-500">
-        수집된 콘솔 지표가 아직 없습니다. 콘솔 지표는 온디맨드 수집(대화형)으로 채워집니다.
+      <div className="space-y-2">
+        {title && <div className="text-sm font-semibold text-neutral-700">{title}</div>}
+        <div className="rounded-lg border border-neutral-200 bg-white p-6 text-center text-sm text-neutral-500">
+          수집된 콘솔 지표가 아직 없습니다. 콘솔 지표는 온디맨드 수집(대화형)으로 채워집니다.
+        </div>
       </div>
     );
   }
@@ -158,6 +174,12 @@ export function ConsoleSection({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[] })
   const demo = raw.demographics ?? {};
   return (
     <div className="space-y-5">
+      {title && (
+        <div className="text-sm font-semibold text-neutral-800">
+          {title}
+          <span className="ml-2 font-normal text-neutral-400">기준일 {isoDate(latest.date)}</span>
+        </div>
+      )}
       <ConsoleMetricCards latest={latest} />
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="유입경로 (전체탭/미니앱홈/검색)">

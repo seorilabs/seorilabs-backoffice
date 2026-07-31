@@ -26,7 +26,7 @@ AppsInToss 콘솔의 미니앱 지표(토스 표면 DAU/신규/세션/IAA·IAP �
 
 | 경로 | 역할 |
 |---|---|
-| `src/lib/analytics/ait-apps.ts` | slug ↔ (workspaceId, miniAppId) 정본 표 + 해석기 |
+| `src/lib/analytics/ait-apps.ts` | 콘솔 리스팅(App × miniAppId) 정본 표(`AIT_LISTINGS`) + 해석기. 한 slug 에 리스팅이 여럿일 수 있다(crossword-puzzle: 웹 36555 + 게임 56407) |
 | `src/lib/analytics/console-source.ts` | push 계약 타입 + 향후 pull 포트(ConsoleMetricsSource) |
 | `src/lib/core/console-metrics-collect.ts` | `ingestConsoleMetrics()` upsert + `getConsoleSyncStatus()` 상태 조회 |
 | `src/app/api/admin/analytics/console-collect/route.ts` | ingest(POST) + 동기화 상태(GET), 둘 다 x-admin-token |

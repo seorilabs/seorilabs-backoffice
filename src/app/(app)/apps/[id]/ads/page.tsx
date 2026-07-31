@@ -4,6 +4,7 @@ import { ToolCatalog, WorkspaceSection } from "@/components/app-ops/WorkspaceUi"
 import { toolsForSection } from "@/lib/app-ops/manifest";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { isoDate } from "@/lib/ga4/datasets";
+import { primaryListingForSlug } from "@/lib/analytics/ait-apps";
 import { prisma } from "@/lib/prisma";
 
 export default async function AppAdsPage({
@@ -16,6 +17,7 @@ export default async function AppAdsPage({
     where: { id, ...visibleAppWhere },
     select: {
       id: true,
+      slug: true,
       repoFullName: true,
       opsManifest: true,
     },
@@ -36,7 +38,8 @@ export default async function AppAdsPage({
       },
     }),
     prisma.appConsoleMetricDaily.findFirst({
-      where: { appId: app.id },
+      // 콘솔 리스팅이 여럿인 App(예: crossword-puzzle)은 primary 리스팅만.
+      where: { appId: app.id, miniAppId: primaryListingForSlug(app.slug)?.miniAppId },
       orderBy: { date: "desc" },
       select: {
         date: true,

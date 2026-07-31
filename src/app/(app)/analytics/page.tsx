@@ -16,7 +16,7 @@ import { ContentSection, ContentMarketTabs } from "@/components/analytics/AppCon
 import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { parseMarket } from "@/lib/analytics/market";
 import type { ContentMetricSnapshot } from "@/lib/analytics/content-source";
-import { resolveAitTarget } from "@/lib/analytics/ait-apps";
+import { resolveAitTarget, listingsForSlug, primaryListingForSlug } from "@/lib/analytics/ait-apps";
 import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
 import {
   aggConsoleWindow,
@@ -127,7 +127,7 @@ async function SelectedApp({
     return (
       <div className="space-y-6">
         <Notice>{name}의 수집된 GA4 공통 지표가 아직 없습니다. 수집 후 표시됩니다.</Notice>
-        <ConsoleMetricsSection appId={appId} />
+        <ConsoleMetricsSection appId={appId} slug={slug} />
         {contentSection}
       </div>
     );
@@ -169,29 +169,46 @@ async function SelectedApp({
         <div className="mb-2 text-sm font-semibold text-neutral-700">일별 상세</div>
         <MetricTrendTable rowsDesc={rowsDesc} />
       </div>
-      <ConsoleMetricsSection appId={appId} />
+      <ConsoleMetricsSection appId={appId} slug={slug} />
       {contentSection}
     </div>
   );
 }
 
 // AppsInToss 콘솔 지표 섹션(온디맨드 수집). GA4 유무와 무관하게 렌더 — 콘솔 데이터가 있으면
-// 카드/추이/유입경로/데모를, 없으면 안내를 보인다.
-async function ConsoleMetricsSection({ appId }: { appId: string }) {
+// 카드/추이/유입경로/데모를, 없으면 안내를 보인다. 한 App 에 콘솔 리스팅이 여럿이면(예:
+// crossword-puzzle 웹+네이티브 게임) 리스팅별로 섹션을 나눠 보인다.
+async function ConsoleMetricsSection({ appId, slug }: { appId: string; slug: string }) {
+  const listings = listingsForSlug(slug);
   const rowsDesc = (await prisma.appConsoleMetricDaily.findMany({
     where: { appId },
     orderBy: { date: "desc" },
-    take: WINDOW,
-  })) as unknown as ConsoleMetricDaily[];
+    take: WINDOW * Math.max(1, listings.length),
+  })) as unknown as (ConsoleMetricDaily & { miniAppId: number })[];
+
+  // 리스팅이 0~1개면 단일 섹션(기존 동작). 여럿이면 리스팅별로 필터해 각각 렌더.
+  const multi = listings.length > 1;
+  const sections: { key: string; title?: string; rows: ConsoleMetricDaily[] }[] = multi
+    ? listings.map((l) => ({
+        key: String(l.miniAppId),
+        title: l.label,
+        rows: rowsDesc.filter((r) => r.miniAppId === l.miniAppId).slice(0, WINDOW),
+      }))
+    : [{ key: "single", rows: rowsDesc.slice(0, WINDOW) }];
+
   return (
     <div className="border-t border-neutral-200 pt-6">
       <div className="mb-3 text-sm font-semibold text-neutral-800">
         AppsInToss 콘솔 지표
-        {rowsDesc.length > 0 && (
+        {!multi && rowsDesc.length > 0 && (
           <span className="font-normal text-neutral-400"> (기준일 {isoDate(rowsDesc[0].date)})</span>
         )}
       </div>
-      <ConsoleSection rowsDesc={rowsDesc} />
+      <div className="space-y-8">
+        {sections.map((s) => (
+          <ConsoleSection key={s.key} rowsDesc={s.rows} title={s.title} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -255,22 +272,23 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
         })) as unknown as MetricDaily | null,
       })),
     ),
+    // 개요 단일값은 primary 리스팅만(한 App 에 리스팅이 여럿이면 섞이지 않게 miniAppId 로 스코프).
     Promise.all(
       consoleApps.map(async (a) => ({
         app: a,
         latest: (await prisma.appConsoleMetricDaily.findFirst({
-          where: { appId: a.id },
+          where: { appId: a.id, miniAppId: primaryListingForSlug(a.slug)?.miniAppId },
           orderBy: { date: "desc" },
         })) as unknown as ConsoleMetricDaily | null,
       })),
     ),
-    // 최근 7일 집계(앱별 최근 7개 수집 row).
+    // 최근 7일 집계(앱별 primary 리스팅 최근 7개 수집 row).
     Promise.all(
       consoleApps.map(async (a) => ({
         app: a,
         agg: aggConsoleWindow(
           (await prisma.appConsoleMetricDaily.findMany({
-            where: { appId: a.id },
+            where: { appId: a.id, miniAppId: primaryListingForSlug(a.slug)?.miniAppId },
             orderBy: { date: "desc" },
             take: 7,
           })) as unknown as ConsoleMetricDaily[],

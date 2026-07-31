@@ -12,7 +12,7 @@ import {
 import { EmptyState, Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { isoDate, resolveGa4Target } from "@/lib/ga4/datasets";
-import { resolveAitTarget } from "@/lib/analytics/ait-apps";
+import { resolveAitTarget, listingsForSlug } from "@/lib/analytics/ait-apps";
 import { prisma } from "@/lib/prisma";
 
 const WINDOW = 28;
@@ -49,10 +49,22 @@ export default async function AppMetricsPage({
       ? (prisma.appConsoleMetricDaily.findMany({
           where: { appId: app.id },
           orderBy: { date: "desc" },
-          take: WINDOW,
-        }) as unknown as Promise<ConsoleMetricDaily[]>)
-      : Promise.resolve([]),
+          // 리스팅별로 나눠 보이므로 리스팅 수만큼 넉넉히 가져온다.
+          take: WINDOW * Math.max(1, listingsForSlug(app.slug).length),
+        }) as unknown as Promise<(ConsoleMetricDaily & { miniAppId: number })[]>)
+      : Promise.resolve([] as (ConsoleMetricDaily & { miniAppId: number })[]),
   ]);
+
+  // 콘솔 리스팅이 여럿인 App(예: crossword-puzzle 웹+게임)은 리스팅별 섹션으로 분리.
+  const listings = listingsForSlug(app.slug);
+  const consoleSections =
+    listings.length > 1
+      ? listings.map((l) => ({
+          key: String(l.miniAppId),
+          title: l.label,
+          rows: consoleRows.filter((r) => r.miniAppId === l.miniAppId).slice(0, WINDOW),
+        }))
+      : [{ key: "single", title: undefined as string | undefined, rows: consoleRows.slice(0, WINDOW) }];
 
   return (
     <div className="space-y-8">
@@ -100,7 +112,11 @@ export default async function AppMetricsPage({
 
       <WorkspaceSection title="AppsInToss 콘솔 지표">
         {consoleRows.length > 0 ? (
-          <ConsoleSection rowsDesc={consoleRows} />
+          <div className="space-y-8">
+            {consoleSections.map((s) => (
+              <ConsoleSection key={s.key} rowsDesc={s.rows} title={s.title} />
+            ))}
+          </div>
         ) : (
           <EmptyState title="수집된 AppsInToss 콘솔 지표가 없습니다">
             콘솔 앱 매핑과 온디맨드 수집 상태를 확인하세요.

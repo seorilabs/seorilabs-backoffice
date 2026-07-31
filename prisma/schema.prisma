@@ -551,10 +551,16 @@ model AppConsoleMetricDaily {
   id    String   @id @default(cuid())
   appId String
   app   App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  date  DateTime @db.Date // 지표 기준일(YYYY-MM-DD, 토스/KST)
+  // 콘솔 미니앱 리스팅 id. 한 App(=repo)이 콘솔에 여러 미니앱으로 등록될 수 있어(예:
+  // crossword-puzzle 웹 36555 + 네이티브 게임 56407) 지표는 (appId, miniAppId, date)로 분리한다.
+  miniAppId Int
+  date      DateTime @db.Date // 지표 기준일(YYYY-MM-DD, 토스/KST)
 
-  dau              Int    @default(0) // 콘솔 활성 사용자(au)
-  newUsers         Int    @default(0) // 신규 활성(newAu)
+  // dau/newUsers 는 nullable: 콘솔 DAU endpoint 는 세션/광고 활동이 있어도 식별 불가 세션을
+  // 집계에서 누락(키 자체 부재)한다. 이 경우 0(=방문 0명)이 아니라 null(=콘솔 미집계)로 저장해
+  // 세션/광고 수익은 보존하되 허수 0 을 만들지 않는다.
+  dau              Int? // 콘솔 활성 사용자(au). null=콘솔 미집계
+  newUsers         Int? // 신규 활성(newAu). null=콘솔 미집계
   avgSessionSec    Float? // 평균 세션 길이(초)
   iaaImpressions   Int    @default(0) // 광고 노출(OS 합)
   iaaEarningKrw    Float  @default(0) // 광고 추정 수익(원, OS 합)
@@ -565,7 +571,7 @@ model AppConsoleMetricDaily {
 
   collectedAt DateTime @default(now()) @db.DateTime(3)
 
-  @@unique([appId, date])
+  @@unique([appId, miniAppId, date])
   @@index([date])
   @@map("app_console_metric_daily")
 }
