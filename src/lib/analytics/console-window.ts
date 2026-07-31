@@ -3,8 +3,9 @@
 
 export interface ConsoleWindowRow {
   date: Date;
-  dau: number;
-  newUsers: number;
+  // null=콘솔 미집계(세션/광고는 있으나 DAU 배열에 부재). 합계에선 0 취급, 평균 분모에선 제외.
+  dau: number | null;
+  newUsers: number | null;
   avgSessionSec: number | null;
   iaaImpressions: number;
   iaaEarningKrw: number;
@@ -30,7 +31,8 @@ export interface ConsoleWindowAgg {
 
 /**
  * 최근 N개 콘솔 수집 row 를 집계한다. 빈 배열이면 null.
- * 일평균 DAU 는 존재 일수(rows.length)로 나눈다(데이터 없는 날은 애초에 row 가 없음).
+ * 일평균 DAU 는 DAU 가 집계된 일수(dau != null)로 나눈다 — 콘솔 미집계일(null)은 분모에서 제외
+ * (세션만 있는 날을 0 명으로 눌러 평균을 왜곡하지 않는다). DAU 가 전부 null 이면 dauAvg=0.
  * 세션 평균은 avgSessionSec 이 null 이 아닌 날만 대상으로 하며, 전부 null 이면 null 이다.
  */
 export function aggConsoleWindow(rows: ConsoleWindowRow[]): ConsoleWindowAgg | null {
@@ -38,14 +40,15 @@ export function aggConsoleWindow(rows: ConsoleWindowRow[]): ConsoleWindowAgg | n
   const n = rows.length;
   const sum = (f: (r: ConsoleWindowRow) => number) => rows.reduce((s, r) => s + f(r), 0);
   const sessRows = rows.filter((r) => r.avgSessionSec != null);
-  const dauSum = sum((r) => r.dau);
+  const dauSum = sum((r) => r.dau ?? 0);
+  const dauDays = rows.filter((r) => r.dau != null).length;
   return {
     days: n,
     dateMin: rows[n - 1].date,
     dateMax: rows[0].date,
     dauSum,
-    dauAvg: dauSum / n,
-    newSum: sum((r) => r.newUsers),
+    dauAvg: dauDays ? dauSum / dauDays : 0,
+    newSum: sum((r) => r.newUsers ?? 0),
     sessAvg: sessRows.length
       ? sessRows.reduce((s, r) => s + (r.avgSessionSec ?? 0), 0) / sessRows.length
       : null,
