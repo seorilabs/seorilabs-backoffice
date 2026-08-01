@@ -109,6 +109,28 @@ export interface OperatorResult {
   entitlements: string[];
 }
 
+/** App Store sandbox 구매내역 초기화 요청. */
+export interface SandboxResetRequest {
+  requestId: string;
+  platformUserId: string;
+  reason: string;
+  appId: string;
+  /**
+   * App Store Connect에서 구매내역을 실제로 지웠다는 확인.
+   *
+   * 플랫폼은 App Store Connect API 자격증명이 없어 스스로 확인할 수 없다.
+   * 확인 없이 원장만 지우면 Apple에는 거래가 남아 다음 검증이 그걸
+   * 새 구매로 보고 다시 지급한다. 초기화한 줄 알았던 테스터가
+   * 상품을 그대로 갖게 된다.
+   */
+  appleClearedConfirmed: boolean;
+}
+
+export interface SandboxResetResult {
+  platformUserId: string;
+  resetOrderKeys: string[];
+}
+
 export class PlatformClient {
   private readonly baseUrl: string;
   private readonly auth: GoogleAuth;
@@ -183,6 +205,20 @@ export class PlatformClient {
   /** 운영자 회수. 등급 D — 취소할 수 없다. */
   async revokeEntitlement(req: OperatorRequest, actor: string): Promise<OperatorResult> {
     return this.request<OperatorResult>("POST", "/v1/admin/entitlements/revoke", req, actor);
+  }
+
+  /**
+   * App Store sandbox 초기화. 등급 D — 취소할 수 없다.
+   *
+   * Apple 쪽 구매내역은 App Store Connect에서 사람이 먼저 지운다.
+   * 플랫폼은 그 뒤에 원장을 맞추는 일만 한다. sandbox 원장에서만
+   * 동작하고 production에서는 플랫폼이 거부한다.
+   */
+  async resetAppStoreSandbox(
+    req: SandboxResetRequest,
+    actor: string,
+  ): Promise<SandboxResetResult> {
+    return this.request<SandboxResetResult>("POST", "/v1/admin/iap/sandbox-reset", req, actor);
   }
 
   private async request<T>(
