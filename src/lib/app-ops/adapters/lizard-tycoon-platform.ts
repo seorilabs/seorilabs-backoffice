@@ -9,10 +9,16 @@
  * 기존 경로에 돌아간다.
  */
 
+import { asc } from "../../app-store/asc-client";
 import { env } from "../../env";
 import { PlatformApiError, PlatformClient } from "../../platform/client";
 import type { AppOpsResult } from "../operation";
 import type { LizardTycoonOperationInput } from "./lizard-tycoon";
+import {
+  appleSandboxResetBody,
+  requireResourceRef,
+  requireSandboxEnvironment,
+} from "./lizard-tycoon";
 
 const APP_ID = "lizard-tycoon";
 
@@ -30,8 +36,6 @@ const UNSUPPORTED: Record<string, string> = {
     "샌드박스 테스터 조회는 App Store Connect API가 필요해 플랫폼에 아직 없습니다.",
   "iap-ledger.refund-review-queue":
     "환불 검토 대기열은 플랫폼 Admin API에 아직 없습니다.",
-  "iap-ledger.reset-app-store-sandbox":
-    "App Store 샌드박스 초기화는 플랫폼 Admin API에 아직 없습니다.",
 };
 
 /** 플랫폼 경로로 처리할 수 있는 operation인지 본다. */
@@ -98,6 +102,9 @@ async function runOperation(
     case "iap-ledger.revoke-production-entitlement":
       return revokeEntitlement(client, input, actor);
 
+    case "iap-ledger.reset-app-store-sandbox":
+      return resetAppStoreSandbox(client, input, actor);
+
     default:
       throw new Error("도마뱀 AppOps에서 허용되지 않은 오퍼레이션입니다.");
   }
@@ -135,7 +142,7 @@ async function accountEntitlements(
   client: PlatformClient,
   input: LizardTycoonOperationInput,
 ): Promise<OperationOutput> {
-  const puid = requireString(input.params.platformUserId ?? input.params.accountRef, "사용자 식별자");
+  const puid = requirePlatformUserId(input, input.params.test_account_ref);
   const entitlements = await client.userEntitlements(puid);
 
   const active = entitlements.filter((e) => e.active).length;
@@ -235,12 +242,76 @@ async function revokeEntitlement(
 }
 
 /**
+ * App Store sandbox 구매내역을 초기화한다.
+ *
+ * 두 곳을 순서대로 지운다. 순서가 곧 안전성이다.
+ *
+ *   1. Apple — App Store Connect API. 백오피스가 자격증명을 갖고 있다
+ *   2. 플랫폼 원장 — Admin API. 초기화 표식을 남긴다
+ *
+ * 반대 순서로 하면 원장은 비었는데 Apple에는 거래가 남는다. 그러면
+ * 다음 검증이 그 거래를 새 구매로 보고 다시 지급한다. 초기화한 줄
+ * 알았던 테스터가 상품을 그대로 갖는다.
+ *
+ * 1이 끝나고 2가 실패하면 같은 requestId로 다시 부르면 된다. Apple
+ * 초기화는 여러 번 해도 결과가 같고, 플랫폼 쪽도 이미 revoked인
+ * 주문을 다시 revoked로 만들 뿐이다.
+ */
+async function resetAppStoreSandbox(
+  client: PlatformClient,
+  input: LizardTycoonOperationInput,
+  actor: string,
+): Promise<OperationOutput> {
+  requireSandboxEnvironment(input.params);
+
+  const reason = input.reason.trim();
+  if (!reason) {
+    throw new Error("샌드박스 초기화에는 사유가 필요합니다.");
+  }
+  const platformUserId = requirePlatformUserId(input, input.params.test_account_ref);
+  const sandboxTesterId = requireResourceRef(
+    input.params.sandbox_tester_id,
+    "Apple Sandbox 계정",
+  );
+
+  // 1. Apple 쪽을 먼저 지운다.
+  await asc("/v2/sandboxTestersClearPurchaseHistoryRequest", {
+    method: "POST",
+    body: JSON.stringify(appleSandboxResetBody(sandboxTesterId)),
+  });
+
+  // 2. 원장을 맞춘다.
+  const result = await client.resetAppStoreSandbox(
+    {
+      requestId: input.requestId,
+      platformUserId,
+      reason,
+      appId: APP_ID,
+      appleClearedConfirmed: true,
+    },
+    actor,
+  );
+
+  return {
+    summary:
+      `${platformUserId}의 App Store 샌드박스 구매내역을 초기화하고 ` +
+      `주문 ${result.resetOrderKeys.length}건을 회수했습니다.`,
+    data: {
+      platformUserId,
+      sandboxTesterId,
+      resetOrderKeys: result.resetOrderKeys,
+      requestId: input.requestId,
+    },
+  };
+}
+
+/**
  * 지급·회수 요청을 만든다.
  *
  * requestId는 백오피스가 이미 멱등 키로 쓰고 있는 값을 그대로 넘긴다.
  * 재시도해도 보상이 두 번 나가지 않는 근거가 여기 있다.
  */
-function operatorRequest(input: LizardTycoonOperationInput) {
+export function operatorRequest(input: LizardTycoonOperationInput) {
   const reason = input.reason.trim();
   if (!reason) {
     // 플랫폼도 거부하지만 왕복을 아낀다.
@@ -249,14 +320,32 @@ function operatorRequest(input: LizardTycoonOperationInput) {
 
   return {
     requestId: input.requestId,
-    platformUserId: requireString(
-      input.params.platformUserId ?? input.params.accountRef,
-      "사용자 식별자",
+    platformUserId: requirePlatformUserId(input, input.params.player_ref),
+    entitlementId: requireString(
+      // 매니페스트 입력 키는 snake_case다. 화면이 넘기는 건 이쪽이다.
+      input.params.entitlementId ?? input.params.entitlement_id,
+      "entitlement",
     ),
-    entitlementId: requireString(input.params.entitlementId, "entitlement"),
     reason,
     appId: APP_ID,
   };
+}
+
+/**
+ * 사용자 식별자를 읽는다.
+ *
+ * 매니페스트 입력 키(snake_case)와 API 직접 호출용 키(camelCase)를 모두 본다.
+ * 전에는 camelCase만 읽어서, 화면에서 넘어온 player_ref·test_account_ref가
+ * 한 번도 잡히지 않았다.
+ */
+function requirePlatformUserId(
+  input: LizardTycoonOperationInput,
+  manifestValue: unknown,
+): string {
+  return requireString(
+    input.params.platformUserId ?? manifestValue ?? input.params.accountRef,
+    "사용자 식별자",
+  );
 }
 
 function requireString(value: unknown, label: string): string {

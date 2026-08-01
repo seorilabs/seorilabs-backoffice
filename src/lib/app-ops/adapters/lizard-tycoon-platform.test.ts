@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   isPlatformSupportedOperation,
+  operatorRequest,
   shouldUsePlatform,
 } from "./lizard-tycoon-platform";
 
@@ -22,6 +23,7 @@ describe("플랫폼 지원 여부", () => {
       "iap-ledger.production-grants",
       "iap-ledger.grant-production-entitlement",
       "iap-ledger.revoke-production-entitlement",
+      "iap-ledger.reset-app-store-sandbox",
     ];
 
     for (const op of supported) {
@@ -35,7 +37,6 @@ describe("플랫폼 지원 여부", () => {
     const unsupported = [
       "iap-ledger.sandbox-testers",
       "iap-ledger.refund-review-queue",
-      "iap-ledger.reset-app-store-sandbox",
     ];
 
     for (const op of unsupported) {
@@ -296,5 +297,60 @@ describe("인수조건", () => {
     }
 
     assert.equal(gotActor, "syous");
+  });
+});
+
+// 매니페스트가 넘기는 입력 키는 snake_case다.
+//
+// 전에는 camelCase만 읽어서 화면에서 넘어온 player_ref와 entitlement_id가
+// 한 번도 잡히지 않았다. 운영자는 매번 "사용자 식별자가 필요합니다"만
+// 받았고, 플랫폼 지급·회수는 사실상 동작하지 않는 상태였다.
+describe("운영 요청 조립", () => {
+  const base = {
+    requestId: "11111111-1111-4111-8111-111111111111",
+    operation: "iap-ledger.grant-production-entitlement",
+    reason: "보상 지급",
+    actorLogin: "syous",
+  };
+
+  it("매니페스트 snake_case 키를 읽는다", () => {
+    const request = operatorRequest({
+      ...base,
+      params: { player_ref: "pu_abc", entitlement_id: "sp_galaxy_gecko" },
+    } as never);
+
+    assert.equal(request.platformUserId, "pu_abc");
+    assert.equal(request.entitlementId, "sp_galaxy_gecko");
+    assert.equal(request.appId, "lizard-tycoon");
+    assert.equal(request.requestId, base.requestId);
+  });
+
+  it("API 직접 호출용 camelCase 키도 읽는다", () => {
+    const request = operatorRequest({
+      ...base,
+      params: { platformUserId: "pu_xyz", entitlementId: "sp_shootingstar_tokay" },
+    } as never);
+
+    assert.equal(request.platformUserId, "pu_xyz");
+    assert.equal(request.entitlementId, "sp_shootingstar_tokay");
+  });
+
+  it("사유가 없으면 왕복 전에 막는다", () => {
+    assert.throws(() =>
+      operatorRequest({
+        ...base,
+        reason: "   ",
+        params: { player_ref: "pu_abc", entitlement_id: "sp_galaxy_gecko" },
+      } as never),
+    );
+  });
+
+  it("사용자 식별자가 없으면 막는다", () => {
+    assert.throws(() =>
+      operatorRequest({
+        ...base,
+        params: { entitlement_id: "sp_galaxy_gecko" },
+      } as never),
+    );
   });
 });
