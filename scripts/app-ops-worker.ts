@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import {
+  assertPlatformWorkerConfiguration,
   processNextAppOperation,
   recoverStaleAppOperations,
   redactExpiredAppOperations,
 } from "@/lib/app-ops/worker";
+import { env } from "@/lib/env";
 
 const pollIntervalMs = Math.max(
   250,
@@ -23,8 +25,14 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  assertPlatformWorkerConfiguration({
+    enabled: env.featurePlatformWrites(),
+    writeConfigured: env.platformWriteConfigured(),
+  });
   await recoverStaleAppOperations();
-  let lastMaintenanceAt = 0;
+  // 24시간 이상 중단 뒤 재기동해도 만료 row를 첫 작업으로 실행하지 않는다.
+  await redactExpiredAppOperations();
+  let lastMaintenanceAt = Date.now();
   console.log("[app-ops-worker] 시작");
 
   while (!stopping) {

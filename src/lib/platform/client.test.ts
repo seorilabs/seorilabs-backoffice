@@ -103,11 +103,37 @@ describe("응답 해석", () => {
     assert.equal(got.deadLetterCount, 2);
   });
 
-  it("목록이 없으면 빈 배열을 준다", async () => {
-    const got = await withClient({ status: 200, body: { ok: true, result: {} } }, (c) =>
-      c.recentOrders(),
+  it("목록 필드가 없으면 빈 결과로 오인하지 않는다", async () => {
+    await assert.rejects(
+      () =>
+        withClient({ status: 200, body: { ok: true, result: {} } }, (c) =>
+          c.recentOrders(),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformApiError &&
+        error.code === "platform_response_invalid",
+    );
+  });
+
+  it("명시적인 빈 목록만 빈 결과로 전달한다", async () => {
+    const got = await withClient(
+      { status: 200, body: { ok: true, result: { orders: [] } } },
+      (c) => c.recentOrders(),
     );
     assert.deepEqual(got, []);
+  });
+
+  it("상태 필드가 빠지면 연결 성공으로 오인하지 않는다", async () => {
+    await assert.rejects(
+      () =>
+        withClient(
+          { status: 200, body: { ok: true, result: { environment: "production" } } },
+          (c) => c.health(),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformApiError &&
+        error.code === "platform_response_invalid",
+    );
   });
 
   it("오류 응답을 PlatformApiError로 던진다", async () => {
@@ -211,8 +237,10 @@ describe("운영자 조작", () => {
             requestId: "req-1",
             platformUserId: "pu_1",
             entitlementId: "sp_a",
-            reason: "CS 보상",
+            reason: "customer_support_compensation",
             appId: "lizard-tycoon",
+            expectedEnvironment: "production",
+            confirmation: "GRANT lizard-tycoon pu_1 sp_a",
           },
           "syous",
         ),
@@ -232,8 +260,11 @@ describe("운영자 조작", () => {
             requestId: "req-1",
             platformUserId: "pu_1",
             entitlementId: "sp_a",
-            reason: "오지급",
+            reason: "incorrect_grant_correction",
             appId: "lizard-tycoon",
+            expectedEnvironment: "production",
+            confirmation: "REVOKE lizard-tycoon pu_1 sp_a grant-1",
+            grantRequestId: "grant-1",
           },
           "syous",
         ),
@@ -256,8 +287,10 @@ describe("운영자 조작", () => {
                 requestId: "r",
                 platformUserId: "pu_1",
                 entitlementId: "sp_a",
-                reason: "",
+                reason: "" as never,
                 appId: "a",
+                expectedEnvironment: "production",
+                confirmation: "GRANT a pu_1 sp_a",
               },
               "syous",
             ),
@@ -268,5 +301,75 @@ describe("운영자 조작", () => {
         return true;
       },
     );
+  });
+});
+
+describe("플랫폼 관리 조회", () => {
+  it("SKU 없이 정렬된 entitlement ID 목록만 전달한다", async () => {
+    const result = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: { entitlements: ["premium", "starter"] },
+        },
+      },
+      (c) => c.catalogEntitlements(),
+    );
+
+    assert.deepEqual(result, ["premium", "starter"]);
+  });
+
+  it("PII 없는 인증 사용자 결과를 전달한다", async () => {
+    const user = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            user: {
+              platformUserId: "pu_01JTEST",
+              appId: "lizard-tycoon",
+              supportCode: "LT-ABC12345",
+              isAnonymous: false,
+              createdAt: "2026-08-01T00:00:00Z",
+              lastSeenAt: "2026-08-02T00:00:00Z",
+            },
+          },
+        },
+      },
+      (c) => c.user("LT-ABC12345"),
+    );
+
+    assert.equal(user.platformUserId, "pu_01JTEST");
+    assert.equal(user.supportCode, "LT-ABC12345");
+    assert.equal("appUserId" in user, false);
+  });
+
+  it("사용자 객체가 없으면 성공으로 오인하지 않는다", async () => {
+    await assert.rejects(
+      () => withClient({ status: 200, body: { ok: true, result: {} } }, (c) => c.user("x")),
+      (err: unknown) => {
+        assert.ok(err instanceof PlatformApiError);
+        assert.equal(err.code, "platform_response_invalid");
+        return true;
+      },
+    );
+  });
+
+  it("점검 모드 결과를 전달한다", async () => {
+    const result = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: { appId: "lizard-tycoon", active: true, minutes: 30 },
+        },
+      },
+      (c) => c.setMaintenance("lizard-tycoon", 30, "syous"),
+    );
+
+    assert.equal(result.active, true);
+    assert.equal(result.minutes, 30);
   });
 });

@@ -11,7 +11,9 @@ import { readFile } from "node:fs/promises";
 
 import {
   isPlatformSupportedOperation,
+  lizardPlatformScopeForTest,
   operatorRequest,
+  requiresCentralPlatformMutation,
   shouldUsePlatform,
 } from "./lizard-tycoon-platform";
 
@@ -21,9 +23,6 @@ describe("플랫폼 지원 여부", () => {
       "iap-ledger.recent-purchases",
       "iap-ledger.account-entitlements",
       "iap-ledger.production-grants",
-      "iap-ledger.grant-production-entitlement",
-      "iap-ledger.revoke-production-entitlement",
-      "iap-ledger.reset-app-store-sandbox",
     ];
 
     for (const op of supported) {
@@ -37,11 +36,41 @@ describe("플랫폼 지원 여부", () => {
     const unsupported = [
       "iap-ledger.sandbox-testers",
       "iap-ledger.refund-review-queue",
+      "iap-ledger.grant-production-entitlement",
+      "iap-ledger.revoke-production-entitlement",
+      "iap-ledger.reset-app-store-sandbox",
     ];
 
     for (const op of unsupported) {
       assert.equal(isPlatformSupportedOperation(op), false, op);
     }
+  });
+});
+
+describe("앱 범위", () => {
+  it("전역 Admin 목록에서 lizard-tycoon 행만 남긴다", () => {
+    assert.deepEqual(
+      lizardPlatformScopeForTest.rows(
+        [
+          { appId: "other-app", id: "leak" },
+          { appId: "lizard-tycoon", id: "safe-1" },
+          { appId: "lizard-tycoon", id: "safe-2" },
+        ],
+        1,
+      ),
+      [{ appId: "lizard-tycoon", id: "safe-1" }],
+    );
+  });
+
+  it("앱이 다른 PUID의 entitlement 조회를 거부한다", () => {
+    assert.throws(
+      () =>
+        lizardPlatformScopeForTest.user(
+          { platformUserId: "pu_01J00000000000000000000000", appId: "other-app" },
+          "pu_01J00000000000000000000000",
+        ),
+      /이 앱에 속한/,
+    );
   });
 });
 
@@ -56,12 +85,12 @@ describe("게이트", () => {
     const original = {
       flag: process.env.FEATURE_PLATFORM_ADMIN,
       url: process.env.PLATFORM_ADMIN_URL,
-      key: process.env.PLATFORM_ADMIN_SA_KEY_JSON,
+      key: process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON,
     };
 
     process.env.FEATURE_PLATFORM_ADMIN = "true";
     process.env.PLATFORM_ADMIN_URL = "https://platform-admin.test";
-    process.env.PLATFORM_ADMIN_SA_KEY_JSON = "{}";
+    process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON = "{}";
 
     try {
       assert.equal(shouldUsePlatform("iap-ledger.recent-purchases"), true);
@@ -69,7 +98,7 @@ describe("게이트", () => {
     } finally {
       restore("FEATURE_PLATFORM_ADMIN", original.flag);
       restore("PLATFORM_ADMIN_URL", original.url);
-      restore("PLATFORM_ADMIN_SA_KEY_JSON", original.key);
+      restore("PLATFORM_ADMIN_WRITE_SA_KEY_JSON", original.key);
     }
   });
 
@@ -90,6 +119,48 @@ describe("게이트", () => {
       restore("PLATFORM_ADMIN_URL", original.url);
     }
   });
+
+  it("플랫폼 write 전환 플래그가 켜지면 설정 누락에도 legacy mutation을 차단한다", () => {
+    const original = {
+      flag: process.env.FEATURE_PLATFORM_ADMIN_WRITES,
+      url: process.env.PLATFORM_ADMIN_URL,
+      key: process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON,
+    };
+    process.env.FEATURE_PLATFORM_ADMIN_WRITES = "true";
+    delete process.env.PLATFORM_ADMIN_URL;
+    delete process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON;
+    try {
+      assert.equal(
+        requiresCentralPlatformMutation(
+          "iap-ledger.grant-production-entitlement",
+        ),
+        true,
+      );
+      assert.equal(
+        requiresCentralPlatformMutation("iap-ledger.recent-purchases"),
+        false,
+      );
+    } finally {
+      restore("FEATURE_PLATFORM_ADMIN_WRITES", original.flag);
+      restore("PLATFORM_ADMIN_URL", original.url);
+      restore("PLATFORM_ADMIN_WRITE_SA_KEY_JSON", original.key);
+    }
+  });
+
+  it("플랫폼 write 전환 플래그가 꺼져 있으면 legacy rollback 경로를 유지한다", () => {
+    const original = process.env.FEATURE_PLATFORM_ADMIN_WRITES;
+    delete process.env.FEATURE_PLATFORM_ADMIN_WRITES;
+    try {
+      assert.equal(
+        requiresCentralPlatformMutation(
+          "iap-ledger.grant-production-entitlement",
+        ),
+        false,
+      );
+    } finally {
+      restore("FEATURE_PLATFORM_ADMIN_WRITES", original);
+    }
+  });
 });
 
 function restore(key: string, value: string | undefined): void {
@@ -107,7 +178,7 @@ describe("인수조건", () => {
     intent: "grant",
     params: { platformUserId: "pu_1", entitlementId: "sp_galaxy_gecko" },
     actorLogin: "syous",
-    reason: "CS 보상",
+    reason: "customer_support_compensation",
   };
 
   /**
@@ -120,11 +191,11 @@ describe("인수조건", () => {
     const saved = {
       flag: process.env.FEATURE_PLATFORM_ADMIN,
       url: process.env.PLATFORM_ADMIN_URL,
-      key: process.env.PLATFORM_ADMIN_SA_KEY_JSON,
+      key: process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON,
     };
     process.env.FEATURE_PLATFORM_ADMIN = "true";
     process.env.PLATFORM_ADMIN_URL = "https://platform-admin.test";
-    process.env.PLATFORM_ADMIN_SA_KEY_JSON = JSON.stringify({
+    process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON = JSON.stringify({
       type: "service_account",
       client_email: "backoffice-admin@seorilabs-platform.iam.gserviceaccount.com",
       private_key: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
@@ -135,7 +206,7 @@ describe("인수조건", () => {
     } finally {
       restore("FEATURE_PLATFORM_ADMIN", saved.flag);
       restore("PLATFORM_ADMIN_URL", saved.url);
-      restore("PLATFORM_ADMIN_SA_KEY_JSON", saved.key);
+      restore("PLATFORM_ADMIN_WRITE_SA_KEY_JSON", saved.key);
     }
   }
 
@@ -239,7 +310,7 @@ describe("인수조건", () => {
               ...baseInput,
               reason: "   ",
             } as never),
-          /사유가 필요/,
+          /허용된 사유 코드/,
         );
       });
     } finally {
@@ -287,8 +358,10 @@ describe("인수조건", () => {
           requestId: "r",
           platformUserId: "pu_1",
           entitlementId: "sp_a",
-          reason: "보상",
+          reason: "customer_support_compensation",
           appId: "lizard-tycoon",
+          expectedEnvironment: "production",
+          confirmation: "GRANT lizard-tycoon pu_1 sp_a",
         },
         "syous",
       );
@@ -309,7 +382,7 @@ describe("운영 요청 조립", () => {
   const base = {
     requestId: "11111111-1111-4111-8111-111111111111",
     operation: "iap-ledger.grant-production-entitlement",
-    reason: "보상 지급",
+    reason: "customer_support_compensation",
     actorLogin: "syous",
   };
 
@@ -342,6 +415,21 @@ describe("운영 요청 조립", () => {
         reason: "   ",
         params: { player_ref: "pu_abc", entitlement_id: "sp_galaxy_gecko" },
       } as never),
+    );
+  });
+
+  it("자유 입력 사유를 플랫폼 감사 원장에 보내지 않는다", () => {
+    assert.throws(
+      () =>
+        operatorRequest({
+          ...base,
+          reason: "고객 이메일 user@example.com 보상",
+          params: {
+            player_ref: "pu_abc",
+            entitlement_id: "sp_galaxy_gecko",
+          },
+        } as never),
+      /허용된 사유 코드/,
     );
   });
 

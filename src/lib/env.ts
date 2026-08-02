@@ -82,14 +82,34 @@ export const env = {
     bool("FEATURE_GA4_ANALYTICS", false) &&
     Boolean(optional("GA4_SA_KEY_JSON").trim()),
   // 공통 플랫폼 Admin API. 런타임 유저 데이터의 SoT는 플랫폼이다.
-  // 백오피스는 앱 Firestore를 직접 만지지 않고 이 API만 부른다.
+  //
+  // 읽기와 쓰기 서비스 계정을 분리한다. 웹 Pod에는 read 계정만,
+  // Kubernetes AppOps worker에는 write 계정만 주입한다. read 키 유출만으로
+  // Admin API mutation을 직접 호출하거나 write 키를 탈취할 수 없게 한다.
+  // queue/MySQL 무결성은 별도 신뢰 경계이며 worker가 현재 권한을 재검증한다.
   featurePlatform: () => bool("FEATURE_PLATFORM_ADMIN", false),
+  featurePlatformWrites: () =>
+    bool("FEATURE_PLATFORM_ADMIN_WRITES", false),
   platformAdminUrl: () => optional("PLATFORM_ADMIN_URL"),
-  platformAdminSaKeyJson: () => optional("PLATFORM_ADMIN_SA_KEY_JSON"),
+  platformAdminReadSaKeyJson: () => optional("PLATFORM_ADMIN_READ_SA_KEY_JSON"),
+  platformAdminWriteSaKeyJson: () => optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON"),
+  platformReadConfigured: () =>
+    bool("FEATURE_PLATFORM_ADMIN", false) &&
+    Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
+    Boolean(optional("PLATFORM_ADMIN_READ_SA_KEY_JSON").trim()),
+  platformWriteConfigured: () =>
+    bool("FEATURE_PLATFORM_ADMIN", false) &&
+    bool("FEATURE_PLATFORM_ADMIN_WRITES", false) &&
+    Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
+    Boolean(optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON").trim()),
+  // 기존 앱별 worker 어댑터의 호출부는 write 전용 설정을 사용한다.
+  // 이름을 남겨 점진적으로 전환하되, 과거 단일 SA 환경변수로 fallback하지
+  // 않는다. 잘못된 Pod에 쓰기 키가 들어가는 것보다 명시적 미설정이 안전하다.
+  platformAdminSaKeyJson: () => optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON"),
   platformConfigured: () =>
     bool("FEATURE_PLATFORM_ADMIN", false) &&
     Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
-    Boolean(optional("PLATFORM_ADMIN_SA_KEY_JSON").trim()),
+    Boolean(optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON").trim()),
   telegramEnabled: () => bool("FEATURE_TELEGRAM_ENABLED", false),
   telegramToken: () => optional("TELEGRAM_BOT_TOKEN"),
   telegramWebhookSecret: () => optional("TELEGRAM_WEBHOOK_SECRET"),

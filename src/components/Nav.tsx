@@ -2,37 +2,45 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-const LINKS = [
-  { href: "/", label: "대시보드" },
-  { href: "/board", label: "워크플로우 보드" },
-  { href: "/analytics", label: "지표" },
-  { href: "/issues", label: "이슈" },
-  { href: "/approvals", label: "승인 대기" },
-  { href: "/releases", label: "출시 매트릭스" },
-  { href: "/release-notes", label: "출시노트" },
-  { href: "/plan", label: "기획 입력" },
-  { href: "/settings", label: "설정" },
-];
+import {
+  NAVIGATION_SECTIONS,
+  isNavigationLinkActive,
+} from "@/lib/navigation";
 
 export function Nav() {
   const pathname = usePathname();
   return (
-    <nav className="flex flex-col gap-0.5">
-      {LINKS.map((l) => {
-        const active = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
+    <nav aria-label="주 메뉴" className="flex flex-col gap-5">
+      {NAVIGATION_SECTIONS.map((section) => {
+        const headingId = `nav-section-${section.key}`;
         return (
-          <Link
-            key={l.href}
-            href={l.href}
-            className={`rounded px-3 py-2 text-sm font-medium transition ${
-              active
-                ? "bg-neutral-900 text-white"
-                : "text-neutral-600 hover:bg-neutral-100"
-            }`}
-          >
-            {l.label}
-          </Link>
+          <div key={section.key} role="group" aria-labelledby={headingId}>
+            <h2
+              id={headingId}
+              className="mb-1 px-3 text-[11px] font-semibold tracking-wide text-neutral-400"
+            >
+              {section.label}
+            </h2>
+            <div className="flex flex-col gap-0.5">
+              {section.links.map((link) => {
+                const active = isNavigationLinkActive(pathname, link);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    aria-current={active ? "page" : undefined}
+                    className={`rounded px-3 py-2 text-sm font-medium transition ${
+                      active
+                        ? "bg-neutral-900 text-white"
+                        : "text-neutral-600 hover:bg-neutral-100"
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
         );
       })}
     </nav>

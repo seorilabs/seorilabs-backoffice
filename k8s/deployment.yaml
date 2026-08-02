@@ -104,6 +104,13 @@ spec:
             # GA4→BigQuery 지표 수집(수집/보고 CronJob + /analytics 대시보드).
             - name: FEATURE_GA4_ANALYTICS
               value: "true"
+            # 공통 플랫폼 조회. 웹 Pod에는 read 전용 Cloud Run invoker만 둔다.
+            # 쓰기 키는 backoffice-app-ops-worker에만 주입한다.
+            - name: FEATURE_PLATFORM_ADMIN
+              value: "true"
+            # worker·registry·catalog 준비 전에는 UI mutation을 열지 않는다.
+            - name: FEATURE_PLATFORM_ADMIN_WRITES
+              value: "false"
             - name: FEATURE_TELEGRAM_ENABLED
               value: "true"
             - name: TELEGRAM_ALLOWED_IDS
@@ -167,6 +174,18 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: GA4_SA_KEY_JSON
+                  optional: true
+            - name: PLATFORM_ADMIN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: PLATFORM_ADMIN_URL
+                  optional: true
+            - name: PLATFORM_ADMIN_READ_SA_KEY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: PLATFORM_ADMIN_READ_SA_KEY_JSON
                   optional: true
             - name: TELEGRAM_BOT_TOKEN
               valueFrom:

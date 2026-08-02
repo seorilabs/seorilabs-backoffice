@@ -5,13 +5,16 @@
  * 조작해 처리했다. 이쪽은 플랫폼 API만 부른다. 백오피스가 SA 키를
  * 보관하지 않고, IAP 원장 불변식은 플랫폼 한 곳에서만 지켜진다.
  *
- * `FEATURE_PLATFORM_ADMIN`으로 갈아탄다. 문제가 생기면 환경변수 하나로
- * 기존 경로에 돌아간다.
+ * 조회와 mutation 전환 플래그를 분리해 단계적으로 갈아탄다.
  */
 
 import { asc } from "../../app-store/asc-client";
 import { env } from "../../env";
 import { PlatformApiError, PlatformClient } from "../../platform/client";
+import {
+  PLATFORM_OPERATION_REASON_CODES,
+  type PlatformOperationReason,
+} from "../../platform/reasons";
 import type { AppOpsResult } from "../operation";
 import type { LizardTycoonOperationInput } from "./lizard-tycoon";
 import {
@@ -24,6 +27,49 @@ const APP_ID = "lizard-tycoon";
 
 /** 조회 결과 행 수 상한. 기존 어댑터와 같다. */
 const MAX_RESULT_ROWS = 20;
+
+const PLATFORM_READ_OPERATIONS = new Set([
+  "iap-ledger.recent-purchases",
+  "iap-ledger.account-entitlements",
+  "iap-ledger.production-grants",
+]);
+
+const CENTRAL_PLATFORM_MUTATIONS = new Set([
+  "iap-ledger.grant-production-entitlement",
+  "iap-ledger.revoke-production-entitlement",
+  "iap-ledger.reset-app-store-sandbox",
+]);
+
+function appScopedRows<T extends { appId: string }>(
+  rows: readonly T[],
+  limit: number,
+): T[] {
+  return rows.filter((row) => row.appId === APP_ID).slice(0, limit);
+}
+
+function assertLizardPlatformUser(
+  user: { platformUserId: string; appId: string },
+  requestedPlatformUserId: string,
+): void {
+  if (
+    user.platformUserId !== requestedPlatformUserId ||
+    user.appId !== APP_ID
+  ) {
+    throw new Error("이 앱에 속한 플랫폼 사용자가 아닙니다.");
+  }
+}
+
+function requirePlatformReason(reason: string): PlatformOperationReason {
+  const normalized = reason.trim();
+  if (
+    !(PLATFORM_OPERATION_REASON_CODES as readonly string[]).includes(normalized)
+  ) {
+    throw new Error(
+      "플랫폼 변경 사유는 공통 관리 화면의 허용된 사유 코드여야 합니다.",
+    );
+  }
+  return normalized as PlatformOperationReason;
+}
 
 /**
  * 플랫폼이 아직 대신할 수 없는 operation.
@@ -40,7 +86,19 @@ const UNSUPPORTED: Record<string, string> = {
 
 /** 플랫폼 경로로 처리할 수 있는 operation인지 본다. */
 export function isPlatformSupportedOperation(operation: string): boolean {
-  return !(operation in UNSUPPORTED);
+  return PLATFORM_READ_OPERATIONS.has(operation);
+}
+
+/**
+ * 플랫폼 기능 플래그를 켠 뒤에는 기존 앱 도구가 Firebase 원장을 직접 쓰지 않는다.
+ * write 설정이 빠진 배포에서도 legacy mutation으로 우회하지 않고 실패해야 한다.
+ * 기존 action은 requestId를 브라우저가 미리 보존하지 않으므로 mutation은
+ * 동일-ID 복구 계약이 있는 공통 `/platform/iap` 화면으로만 받는다.
+ */
+export function requiresCentralPlatformMutation(operation: string): boolean {
+  return (
+    env.featurePlatformWrites() && CENTRAL_PLATFORM_MUTATIONS.has(operation)
+  );
 }
 
 /**
@@ -115,23 +173,26 @@ async function recentPurchases(
   input: LizardTycoonOperationInput,
 ): Promise<OperationOutput> {
   const limit = clampLimit(input.params.limit);
-  const orders = await client.recentOrders(limit);
+  const orders = appScopedRows(
+    await client.recentOrders(Math.min(limit * 5, 100)),
+    limit,
+  );
 
   return {
     summary: `최근 주문 ${orders.length}건을 조회했습니다.`,
     data: {
       // 구매 토큰과 마켓 계정 해시는 플랫폼이 응답에 넣지 않는다.
       // 화면에 뜨면 스크린샷과 로그로 퍼진다.
-      rows: orders.map((order) => ({
-        orderKey: order.orderKey,
-        platformUserId: order.platformUserId,
+      purchases: orders.map((order) => ({
+        purchaseRef: order.orderKey,
+        testAccountRef: order.platformUserId,
         entitlementId: order.entitlementId,
         platform: order.platform,
         productId: order.productId,
-        providerOrderId: order.providerOrderId,
         state: order.state,
         purchasedAt: order.purchasedAt,
         observedAt: order.observedAt,
+        updatedAt: order.observedAt,
         tombstone: order.tombstone,
       })),
     },
@@ -143,6 +204,8 @@ async function accountEntitlements(
   input: LizardTycoonOperationInput,
 ): Promise<OperationOutput> {
   const puid = requirePlatformUserId(input, input.params.test_account_ref);
+  const user = await client.user(puid);
+  assertLizardPlatformUser(user, puid);
   const entitlements = await client.userEntitlements(puid);
 
   const active = entitlements.filter((e) => e.active).length;
@@ -172,32 +235,35 @@ async function productionGrants(
   input: LizardTycoonOperationInput,
 ): Promise<OperationOutput> {
   const limit = clampLimit(input.params.limit);
-  const { grants, revocations } = await client.operatorRecords(limit);
+  const records = await client.operatorRecords(Math.min(limit * 5, 100));
+  const grants = appScopedRows(records.grants, limit);
+  const revocations = appScopedRows(records.revocations, limit);
+  const revocationByGrant = new Map(
+    revocations
+      .filter((record) => record.grantRequestId)
+      .map((record) => [record.grantRequestId as string, record]),
+  );
 
   return {
     summary: `운영자 지급 ${grants.length}건, 회수 ${revocations.length}건을 조회했습니다.`,
     data: {
-      grants: grants.map(toOperatorRow),
-      revocations: revocations.map(toOperatorRow),
+      grants: grants.map((grant) => {
+        const revoked = revocationByGrant.get(grant.requestId);
+        return {
+          grantRef: grant.requestId,
+          playerRef: grant.platformUserId,
+          entitlementId: grant.entitlementId,
+          state: revoked ? "revoked" : "active",
+          actorLogin: grant.actorLogin,
+          reason: grant.reason,
+          createdAt: grant.createdAt,
+          updatedAt: revoked?.createdAt ?? grant.createdAt,
+          revokedAt: revoked?.createdAt ?? null,
+          revokedBy: revoked?.actorLogin ?? null,
+          revocationReason: revoked?.reason ?? null,
+        };
+      }),
     },
-  };
-}
-
-function toOperatorRow(record: {
-  requestId: string;
-  platformUserId: string;
-  entitlementId: string;
-  actorLogin: string;
-  reason: string;
-  createdAt: string;
-}) {
-  return {
-    requestId: record.requestId,
-    platformUserId: record.platformUserId,
-    entitlementId: record.entitlementId,
-    actorLogin: record.actorLogin,
-    reason: record.reason,
-    createdAt: record.createdAt,
   };
 }
 
@@ -226,7 +292,35 @@ async function revokeEntitlement(
   input: LizardTycoonOperationInput,
   actor: string,
 ): Promise<OperationOutput> {
-  const request = operatorRequest(input);
+  const grantRequestId = requireString(
+    input.params.grantRequestId ?? input.params.grant_ref,
+    "회수할 운영자 지급 기록",
+  );
+  const reason = requirePlatformReason(input.reason);
+
+  // 화면은 감사 원장의 grant_ref만 보낸다. PUID와 entitlement를 다시
+  // 입력받아 조합하면 다른 지급을 잘못 회수할 수 있으므로, 플랫폼의
+  // 감사 원장에서 원본 지급을 찾아 서버 요청을 구성한다.
+  const { grants } = await client.operatorRecords(200);
+  const original = grants.find(
+    (record) => record.requestId === grantRequestId && record.appId === APP_ID,
+  );
+  if (!original) {
+    throw new Error("회수할 플랫폼 운영자 지급 기록을 찾지 못했습니다.");
+  }
+
+  const request = {
+    requestId: input.requestId,
+    platformUserId: original.platformUserId,
+    entitlementId: original.entitlementId,
+    reason,
+    appId: APP_ID,
+    expectedEnvironment: "production" as const,
+    grantRequestId,
+    confirmation:
+      `REVOKE ${APP_ID} ${original.platformUserId} ` +
+      `${original.entitlementId} ${grantRequestId}`,
+  };
   const result = await client.revokeEntitlement(request, actor);
 
   return {
@@ -264,10 +358,7 @@ async function resetAppStoreSandbox(
 ): Promise<OperationOutput> {
   requireSandboxEnvironment(input.params);
 
-  const reason = input.reason.trim();
-  if (!reason) {
-    throw new Error("샌드박스 초기화에는 사유가 필요합니다.");
-  }
+  const reason = requirePlatformReason(input.reason);
   const platformUserId = requirePlatformUserId(input, input.params.test_account_ref);
   const sandboxTesterId = requireResourceRef(
     input.params.sandbox_tester_id,
@@ -287,6 +378,8 @@ async function resetAppStoreSandbox(
       platformUserId,
       reason,
       appId: APP_ID,
+      expectedEnvironment: "sandbox",
+      confirmation: `RESET ${APP_ID} ${platformUserId}`,
       appleClearedConfirmed: true,
     },
     actor,
@@ -312,13 +405,9 @@ async function resetAppStoreSandbox(
  * 재시도해도 보상이 두 번 나가지 않는 근거가 여기 있다.
  */
 export function operatorRequest(input: LizardTycoonOperationInput) {
-  const reason = input.reason.trim();
-  if (!reason) {
-    // 플랫폼도 거부하지만 왕복을 아낀다.
-    throw new Error("지급·회수에는 사유가 필요합니다.");
-  }
+  const reason = requirePlatformReason(input.reason);
 
-  return {
+  const request = {
     requestId: input.requestId,
     platformUserId: requirePlatformUserId(input, input.params.player_ref),
     entitlementId: requireString(
@@ -328,7 +417,12 @@ export function operatorRequest(input: LizardTycoonOperationInput) {
     ),
     reason,
     appId: APP_ID,
+    expectedEnvironment: "production" as const,
+    confirmation: "",
   };
+  request.confirmation =
+    `GRANT ${request.appId} ${request.platformUserId} ${request.entitlementId}`;
+  return request;
 }
 
 /**
@@ -369,3 +463,8 @@ export function describePlatformError(error: unknown): string {
   }
   return error instanceof Error ? error.message : "플랫폼 호출에 실패했습니다.";
 }
+
+export const lizardPlatformScopeForTest = {
+  rows: appScopedRows,
+  user: assertLizardPlatformUser,
+};
