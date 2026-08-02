@@ -58,22 +58,10 @@ jobs:
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           IMG="${IMAGE}:${SHA}"
 
-          # 매니페스트의 :latest 를 이번 빌드 SHA 로 바꿔 내보낸다.
-          #
-          # apply 뒤에 set image 로 고치는 방법도 되지만, 그 사이 :latest 로
-          # 한 번 rollout 이 돌아 노드 캐시에 남은 예전 :latest 가 잠깐
-          # 뜰 수 있다. imagePullPolicy 가 Always 라도 창은 남는다.
-          # 치환해서 한 번만 굴린다.
-          #
-          # 치환이 조용히 빗나가면 :latest 로 배포된다. 그래서 확인하고 죽는다.
-          render() {
-            local f="k8s/$1"
-            if ! grep -q "${IMAGE}:latest" "$f"; then
-              echo "::error::$f 에 ${IMAGE}:latest 가 없다. 이미지 치환이 깨졌다."
-              exit 1
-            fi
-            sed "s|${IMAGE}:latest|${IMG}|g" "$f"
-          }
+          # 매니페스트의 :latest 를 이번 빌드 SHA 로 바꿔 적용한다.
+          # 치환이 빗나가면 스크립트가 아무것도 내보내지 않고 죽는다.
+          # 계약은 scripts/render-manifest.test.sh 가 CI 에서 고정한다.
+          render() { scripts/render-manifest.sh "k8s/$1" "$IMG"; }
 
           # 매니페스트를 선언적으로 적용한다 — 파일 변경이 배포에 자동 반영되게.
           #
