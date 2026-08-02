@@ -44,12 +44,23 @@ spec:
               value: "1"
             - name: APP_OPS_POLL_INTERVAL_MS
               value: "1000"
+            # 세 전제가 모두 갖춰져 전환했다. 하나라도 빠지면 화면은
+            # 뜨지만 실행이 막힌다.
+            #
+            #   레지스트리   features.iap + iap.entitlement_ids
+            #   카탈로그     IAP_CATALOG_JSON 에 같은 entitlement
+            #   자격증명     PLATFORM_ADMIN_WRITE_SA_KEY_JSON (worker 전용)
+            #
+            # 레지스트리는 repo 파일을 고치는 것만으로 반영되지 않는다.
+            # platform 저장소에서 cmd/regsync 를 사람이 돌려야 한다.
+            # 실제로 features.iap 가 false 인 채 남아 결제는 되는데 IAP
+            # 관리만 403이었다.
             - name: FEATURE_PLATFORM_ADMIN
-              # registry IAP·catalog·write Secret 준비 후 마지막에 true로 전환한다.
-              value: "false"
+              value: "true"
+            # 웹과 worker에서 같은 시점에 바꾼다. 웹만 켜면 worker가
+            # mutation을 집지 않고, worker만 켜면 접수 경로가 없다.
             - name: FEATURE_PLATFORM_ADMIN_WRITES
-              # 웹과 worker에서 같은 최종 전환 시점에 true로 바꾼다.
-              value: "false"
+              value: "true"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
