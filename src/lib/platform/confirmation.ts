@@ -8,6 +8,36 @@ export interface PlatformConfirmationInput {
   grantRequestId?: string;
 }
 
+export type PlatformUnknownReconciliationResolution =
+  | "applied"
+  | "not_applied";
+
+/** 만료된 결과 불명을 사람이 원장과 대조한 뒤 닫을 때 쓰는 별도 확인 문구. */
+export function platformUnknownReconciliationConfirmationText(input: {
+  appSlug: string;
+  requestId: string;
+  resolution: PlatformUnknownReconciliationResolution;
+}): string {
+  const outcome = input.resolution === "applied" ? "APPLIED" : "NOT_APPLIED";
+  return `RECONCILE ${outcome} ${input.appSlug} ${input.requestId}`;
+}
+
+/** prepared reset intent를 immutable requestId 그대로 재개하는 확인 문구. */
+export function platformSandboxResetResumeConfirmationText(input: {
+  appSlug: string;
+  requestId: string;
+}): string {
+  return `RESUME RESET ${input.appSlug} ${input.requestId}`;
+}
+
+/** reset intent가 없음을 영구 확정하는 close 요청의 확인 문구. */
+export function platformSandboxResetCloseConfirmationText(input: {
+  appSlug: string;
+  requestId: string;
+}): string {
+  return `CLOSE RESET ${input.appSlug} ${input.requestId}`;
+}
+
 /** Platform Admin API가 비교하는 typed confirmation 문구의 단일 조립 규칙. */
 export function platformOperationConfirmationText(
   input: PlatformConfirmationInput,

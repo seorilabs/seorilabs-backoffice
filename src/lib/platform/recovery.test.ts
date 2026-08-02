@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { EnqueuePlatformOperationResult } from "@/lib/actions/platform-ops";
+
 import {
   PLATFORM_RECOVERY_LEGACY_STORAGE_KEY,
+  canSubmitPlatformRecovery,
   listPlatformRecoveryReferences,
   migrateLegacyPlatformRecoveryReference,
   parsePlatformRecoveryReference,
+  platformBlockingEnqueueRecoveryPlan,
   platformRecoveryStorageValue,
   removePlatformRecoveryReference,
   savePlatformRecoveryReference,
   type PlatformRecoveryStorage,
 } from "./recovery";
+import { platformRequestIdForSubmission } from "./confirmation";
 
 class MemoryStorage implements PlatformRecoveryStorage {
   private readonly values = new Map<string, string>();
@@ -137,4 +142,50 @@ test("v2 저장이 실패하면 유일한 v1 복구 값을 보존한다", () => 
     /storage write failed/,
   );
   assert.notEqual(storage.getItem(PLATFORM_RECOVERY_LEGACY_STORAGE_KEY), null);
+});
+
+test("새로고침 고아 참조는 DB 미존재 확인 뒤에만 동일 ID 재등록을 허용한다", () => {
+  const recovered = { fingerprint: null, requestId: "preserved-id" };
+  assert.equal(canSubmitPlatformRecovery(recovered, false), false);
+  assert.equal(canSubmitPlatformRecovery(recovered, true), true);
+  assert.equal(
+    platformRequestIdForSubmission("re-entered", recovered, () => "new-id"),
+    "preserved-id",
+  );
+});
+
+test("enqueue blocker DTO는 실제 blocker를 활성화하고 미등록 ID와 신규 ID 차단을 보존한다", () => {
+  const attempted = {
+    requestId: "123e4567-e89b-42d3-a456-426614174000",
+    appSlug: "lizard-tycoon",
+    operation: "platform.iap.grant-entitlement" as const,
+  };
+  const actionResult = {
+    ok: false,
+    blockingReference: {
+      requestId: "223e4567-e89b-42d3-a456-426614174000",
+      appSlug: "lizard-tycoon",
+      operation: "platform.iap.reset-app-store-sandbox",
+      state: "expired_unknown",
+    },
+  } satisfies EnqueuePlatformOperationResult;
+
+  const plan = platformBlockingEnqueueRecoveryPlan(attempted, actionResult);
+  assert.ok(plan);
+  assert.equal(
+    plan.active.retryRequest.requestId,
+    actionResult.blockingReference.requestId,
+  );
+  assert.equal(plan.active.writeState, "expired_unknown");
+  assert.match(plan.active.summary, /원장과 감사 로그 대조/);
+
+  const storage = new MemoryStorage();
+  for (const reference of plan.referencesToPreserve) {
+    savePlatformRecoveryReference(storage, reference);
+  }
+  assert.deepEqual(
+    listPlatformRecoveryReferences(storage).map(({ requestId }) => requestId),
+    [attempted.requestId, actionResult.blockingReference.requestId],
+  );
+  assert.equal(canSubmitPlatformRecovery(plan.active.retryRequest, false), false);
 });

@@ -1,6 +1,7 @@
 "use server";
 
 import type {
+  PlatformAppIapCatalog,
   PlatformHealth,
   PlatformOperatorRecord,
   PlatformOrder,
@@ -10,6 +11,7 @@ import { PlatformApiError } from "@/lib/platform/client";
 import {
   PlatformAccessError,
   requirePlatformReadAccess,
+  requirePlatformWriteAccess,
 } from "@/lib/platform/access";
 import { createPlatformReadClient } from "@/lib/platform/read-client";
 import {
@@ -40,11 +42,12 @@ export type PlatformActionResult<T> =
 
 export interface PlatformIapSnapshot {
   health: PlatformHealth;
-  catalogEntitlements: string[];
   orders: PlatformOrder[];
   operatorRecords: PlatformOperatorRecord[];
   checkedAt: string;
 }
+
+export type PlatformIapCatalog = PlatformAppIapCatalog;
 
 export interface PlatformEntitlementLookup {
   platformUserId: string;
@@ -75,9 +78,8 @@ export async function loadPlatformIapSnapshotAction(): Promise<
   try {
     await requirePlatformReadAccess();
     const client = createPlatformReadClient();
-    const [health, catalogEntitlements, orders, records] = await Promise.all([
+    const [health, orders, records] = await Promise.all([
       client.health(),
-      client.catalogEntitlements(),
       client.recentOrders(50),
       client.operatorRecords(50),
     ]);
@@ -85,7 +87,6 @@ export async function loadPlatformIapSnapshotAction(): Promise<
       ok: true,
       data: {
         health,
-        catalogEntitlements,
         orders: orders.map(publicPlatformOrder),
         operatorRecords: [...records.grants, ...records.revocations]
           .map(publicPlatformOperatorRecord)
@@ -93,6 +94,27 @@ export async function loadPlatformIapSnapshotAction(): Promise<
         checkedAt: new Date().toISOString(),
       },
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** 선택 앱의 entitlement allowlist만 읽는다. UI 전환 race도 appId로 재확인한다. */
+export async function loadPlatformIapCatalogAction(
+  appSlug: string,
+): Promise<PlatformActionResult<PlatformIapCatalog>> {
+  try {
+    const actor = await requirePlatformWriteAccess(appSlug);
+    const client = createPlatformReadClient();
+    const catalog = await client.catalogEntitlements(actor.appSlug);
+    if (catalog.appId !== actor.appSlug) {
+      throw new PlatformApiError(
+        "platform_response_invalid",
+        "플랫폼 entitlement 카탈로그 응답 대상이 요청과 일치하지 않습니다.",
+        200,
+      );
+    }
+    return { ok: true, data: catalog };
   } catch (error) {
     return failure(error);
   }

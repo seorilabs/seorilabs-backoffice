@@ -6,6 +6,26 @@ export interface PlatformRecoveryReference {
   operation: PlatformOperationKey;
 }
 
+export interface PlatformBlockingReference extends PlatformRecoveryReference {
+  state: "in_progress" | "unknown" | "expired_unknown";
+}
+
+export interface PlatformRecoveryRetryRequest extends PlatformRecoveryReference {
+  fingerprint: null;
+  platformUserId: "";
+}
+
+export interface PlatformBlockingRecoveryView {
+  retryRequest: PlatformRecoveryRetryRequest;
+  writeState: "submitting" | "unknown" | "expired_unknown";
+  summary: string;
+}
+
+export interface PlatformBlockingEnqueueRecoveryPlan {
+  active: PlatformBlockingRecoveryView;
+  referencesToPreserve: PlatformRecoveryReference[];
+}
+
 export const PLATFORM_RECOVERY_LEGACY_STORAGE_KEY =
   "seorilabs.platform.iap.pending.v1";
 export const PLATFORM_RECOVERY_STORAGE_PREFIX =
@@ -17,6 +37,83 @@ export interface PlatformRecoveryStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+}
+
+/**
+ * 새로고침으로 payload fingerprint를 잃은 참조는 DB 미존재 확인 전까지
+ * 재전송하지 않는다. 확인 뒤에도 request ID는 그대로 써서 지연 commit과
+ * 경합하더라도 DB unique key와 플랫폼 멱등 키가 중복 적용을 막는다.
+ */
+export function canSubmitPlatformRecovery(
+  previous: { fingerprint: string | null } | null,
+  serverRowConfirmedMissing: boolean,
+): boolean {
+  return (
+    previous === null ||
+    previous.fingerprint !== null ||
+    serverRowConfirmedMissing
+  );
+}
+
+/** 저장 payload가 없는 서버 참조를 화면의 fail-close 재시도 상태로 바꾼다. */
+export function platformRecoveryRetryRequest(
+  reference: PlatformRecoveryReference,
+): PlatformRecoveryRetryRequest {
+  return {
+    ...platformRecoveryStorageValue(reference),
+    fingerprint: null,
+    platformUserId: "",
+  };
+}
+
+/** 서버 blocker 상태를 실제 화면에서 활성화할 최소 view-model로 투영한다. */
+export function platformBlockingRecoveryView(
+  reference: PlatformBlockingReference,
+): PlatformBlockingRecoveryView {
+  if (reference.state === "expired_unknown") {
+    return {
+      retryRequest: platformRecoveryRetryRequest(reference),
+      writeState: "expired_unknown",
+      summary:
+        "서버에서 만료된 결과 미확인 요청을 찾았습니다. 원장과 감사 로그 대조 후 판정을 기록해야 합니다.",
+    };
+  }
+  if (reference.state === "in_progress") {
+    return {
+      retryRequest: platformRecoveryRetryRequest(reference),
+      writeState: "submitting",
+      summary:
+        "다른 브라우저 또는 탭에서 시작한 플랫폼 요청이 처리 중입니다. 동일 request ID 상태를 확인하세요.",
+    };
+  }
+  return {
+    retryRequest: platformRecoveryRetryRequest(reference),
+    writeState: "unknown",
+    summary:
+      "서버에서 결과 미확인 요청을 찾았습니다. 새 request ID를 만들지 말고 동일 ID로 복구하세요.",
+  };
+}
+
+/**
+ * enqueue가 다른 서버 blocker를 반환하면 방금 만든 미등록 ID도 버리지 않는다.
+ * blocker를 먼저 활성화하고 두 참조를 모두 보존해야 blocker 종료 뒤 원 요청을
+ * 같은 ID로 재개할 수 있다.
+ */
+export function platformBlockingEnqueueRecoveryPlan(
+  attempted: PlatformRecoveryReference,
+  result: { blockingReference?: PlatformBlockingReference },
+): PlatformBlockingEnqueueRecoveryPlan | null {
+  if (!result.blockingReference) return null;
+
+  const references = new Map<string, PlatformRecoveryReference>();
+  for (const reference of [attempted, result.blockingReference]) {
+    const safe = platformRecoveryStorageValue(reference);
+    references.set(safe.requestId, safe);
+  }
+  return {
+    active: platformBlockingRecoveryView(result.blockingReference),
+    referencesToPreserve: [...references.values()],
+  };
 }
 
 /** localStorage에서 읽은 값은 신뢰하지 않고 비민감 복구 참조만 허용한다. */

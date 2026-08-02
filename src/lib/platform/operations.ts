@@ -5,7 +5,11 @@ import {
   isAppOpsRequestId,
   type AppOperationValues,
 } from "@/lib/app-ops/operation";
-import { platformOperationConfirmationText } from "@/lib/platform/confirmation";
+import {
+  platformOperationConfirmationText,
+  platformSandboxResetCloseConfirmationText,
+  platformSandboxResetResumeConfirmationText,
+} from "@/lib/platform/confirmation";
 import {
   PLATFORM_OPERATION_REASON_CODES,
   type PlatformOperationReason,
@@ -18,6 +22,11 @@ export {
 
 export const PLATFORM_REPO_FULL_NAME = "seorilabs/platform";
 export const PLATFORM_OUTCOME_UNKNOWN_CODE = "platform_outcome_unknown";
+export const PLATFORM_SANDBOX_RESET_RESUME_MARKER = "resumePreparedReset";
+export const PLATFORM_SANDBOX_RESET_CLOSE_MARKER = "closeNotStartedReset";
+// PlatformClient의 20초 HTTP timeout과 DB 완료 저장을 포함할 실행 여유다.
+// claim과 동일-ID 수동 retry가 같은 기준을 써야 만료 직전 row를 되열지 않는다.
+export const PLATFORM_MIN_EXECUTION_WINDOW_MS = 60_000;
 
 export const PLATFORM_OPERATION_KEYS = [
   "platform.iap.grant-entitlement",
@@ -199,6 +208,28 @@ const resetInputSchema = z
   })
   .strict();
 
+const sandboxResetResumeInputSchema = z
+  .object({
+    requestId: requestIdSchema,
+    operation: z.literal("platform.iap.reset-app-store-sandbox"),
+    appSlug: appSlugSchema,
+    serverConfirmation: serverConfirmationSchema,
+    resumePreparedReset: z.literal(true),
+    reason: z.null(),
+  })
+  .strict();
+
+const sandboxResetCloseInputSchema = z
+  .object({
+    requestId: requestIdSchema,
+    operation: z.literal("platform.iap.reset-app-store-sandbox"),
+    appSlug: appSlugSchema,
+    serverConfirmation: serverConfirmationSchema,
+    closeNotStartedReset: z.literal(true),
+    reason: z.null(),
+  })
+  .strict();
+
 export const platformOperationInputSchema = z
   .discriminatedUnion("operation", [
     grantInputSchema,
@@ -237,6 +268,18 @@ export interface PreparedPlatformOperation {
   params: AppOperationValues;
   paramsJson: string;
   reason: PlatformOperationReason;
+}
+
+export interface PreparedSandboxResetResume {
+  requestId: string;
+  appSlug: string;
+  serverConfirmation: string;
+}
+
+export interface PreparedSandboxResetClose {
+  requestId: string;
+  appSlug: string;
+  serverConfirmation: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -295,12 +338,139 @@ export function prepareQueuedPlatformOperation(input: {
       "플랫폼 오퍼레이션 params가 올바르지 않습니다.",
     );
   }
+
+  // requestId·operation·reason은 AppOperationRun envelope가 원장이다.
+  // params에 같은 키가 있으면 손상/직접 삽입 row가 다른 멱등 키나 조작으로
+  // 실행될 수 있으므로 덮어쓰기 순서에 기대지 않고 명시적으로 거부한다.
+  for (const reservedKey of ["requestId", "operation", "reason"] as const) {
+    if (Object.prototype.hasOwnProperty.call(input.params, reservedKey)) {
+      throw new PlatformOperationInputError(
+        `플랫폼 오퍼레이션 params에 예약 필드 ${reservedKey}를 넣을 수 없습니다.`,
+      );
+    }
+  }
   return preparePlatformOperation({
+    ...input.params,
     operation: input.operation,
     requestId: input.requestId,
     reason: input.reason,
-    ...input.params,
   });
+}
+
+/**
+ * TTL 뒤 민감 payload가 제거된 durable reset만 별도 최소 envelope로 재개한다.
+ * marker가 없는 일반 요청은 null을 반환하고 기존 strict parser가 처리한다.
+ */
+export function prepareQueuedSandboxResetResume(input: {
+  requestId: string;
+  operation: string;
+  params: unknown;
+  reason: string | null;
+}): PreparedSandboxResetResume | null {
+  if (
+    !isRecord(input.params) ||
+    input.params[PLATFORM_SANDBOX_RESET_RESUME_MARKER] !== true
+  ) {
+    return null;
+  }
+  for (const reservedKey of ["requestId", "operation", "reason"] as const) {
+    if (Object.prototype.hasOwnProperty.call(input.params, reservedKey)) {
+      throw new PlatformOperationInputError(
+        `sandbox reset 재개 params에 예약 필드 ${reservedKey}를 넣을 수 없습니다.`,
+      );
+    }
+  }
+  const parsed = sandboxResetResumeInputSchema.safeParse({
+    requestId: input.requestId,
+    operation: input.operation,
+    ...input.params,
+    reason: input.reason,
+  });
+  if (!parsed.success) {
+    throw new PlatformOperationInputError(
+      parsed.error.issues[0]?.message ??
+        "sandbox reset 재개 입력이 올바르지 않습니다.",
+    );
+  }
+  const expected = platformSandboxResetResumeConfirmationText({
+    appSlug: parsed.data.appSlug,
+    requestId: parsed.data.requestId,
+  });
+  if (parsed.data.serverConfirmation !== expected) {
+    throw new PlatformOperationInputError(
+      "sandbox reset 재개 확인 문구가 정확히 일치하지 않습니다.",
+    );
+  }
+  return {
+    requestId: parsed.data.requestId,
+    appSlug: parsed.data.appSlug,
+    serverConfirmation: parsed.data.serverConfirmation,
+  };
+}
+
+/**
+ * TTL 뒤 원 payload 없이 permanent not-started closure만 실행하는 envelope다.
+ * resume와 marker를 분리해 worker가 잘못된 원격 endpoint를 선택하지 않게 한다.
+ */
+export function prepareQueuedSandboxResetClose(input: {
+  requestId: string;
+  operation: string;
+  params: unknown;
+  reason: string | null;
+}): PreparedSandboxResetClose | null {
+  if (
+    !isRecord(input.params) ||
+    input.params[PLATFORM_SANDBOX_RESET_CLOSE_MARKER] !== true
+  ) {
+    return null;
+  }
+  for (const reservedKey of ["requestId", "operation", "reason"] as const) {
+    if (Object.prototype.hasOwnProperty.call(input.params, reservedKey)) {
+      throw new PlatformOperationInputError(
+        `sandbox reset 미시작 종료 params에 예약 필드 ${reservedKey}를 넣을 수 없습니다.`,
+      );
+    }
+  }
+  const parsed = sandboxResetCloseInputSchema.safeParse({
+    requestId: input.requestId,
+    operation: input.operation,
+    ...input.params,
+    reason: input.reason,
+  });
+  if (!parsed.success) {
+    throw new PlatformOperationInputError(
+      parsed.error.issues[0]?.message ??
+        "sandbox reset 미시작 종료 입력이 올바르지 않습니다.",
+    );
+  }
+  const expected = platformSandboxResetCloseConfirmationText({
+    appSlug: parsed.data.appSlug,
+    requestId: parsed.data.requestId,
+  });
+  if (parsed.data.serverConfirmation !== expected) {
+    throw new PlatformOperationInputError(
+      "sandbox reset 미시작 종료 확인 문구가 정확히 일치하지 않습니다.",
+    );
+  }
+  return {
+    requestId: parsed.data.requestId,
+    appSlug: parsed.data.appSlug,
+    serverConfirmation: parsed.data.serverConfirmation,
+  };
+}
+
+/** worker 권한 재검증 단계도 일반 command와 resume envelope를 모두 엄격히 읽는다. */
+export function queuedPlatformOperationAppSlug(input: {
+  requestId: string;
+  operation: string;
+  params: unknown;
+  reason: string | null;
+}): string {
+  return (
+    prepareQueuedSandboxResetResume(input)?.appSlug ??
+    prepareQueuedSandboxResetClose(input)?.appSlug ??
+    prepareQueuedPlatformOperation(input).appSlug
+  );
 }
 
 export function isPlatformWriteOperation(value: string): value is PlatformOperationKey {

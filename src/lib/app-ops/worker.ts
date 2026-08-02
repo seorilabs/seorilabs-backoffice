@@ -19,9 +19,10 @@ import {
   PlatformOperationUnknownOutcomeError,
 } from "@/lib/platform/executor";
 import {
+  PLATFORM_MIN_EXECUTION_WINDOW_MS,
   PLATFORM_OUTCOME_UNKNOWN_CODE,
   PLATFORM_REPO_FULL_NAME,
-  prepareQueuedPlatformOperation,
+  queuedPlatformOperationAppSlug,
 } from "@/lib/platform/operations";
 import {
   revalidateQueuedPlatformReadAccess,
@@ -160,6 +161,92 @@ function staleRecoveryUpdate(
   };
 }
 
+type AppOperationClaim = Pick<
+  AppOperationRun,
+  "id" | "repoFullName" | "attempts" | "startedAt"
+>;
+
+function activeProcessingWhere(run: AppOperationClaim) {
+  return {
+    id: run.id,
+    status: AppOperationRunStatus.PROCESSING,
+    redactedAt: null,
+    // stale recovery 뒤 새 worker가 같은 row를 claim하면 attempts와
+    // startedAt이 모두 바뀐다. 이전 worker는 새 세대 row를 닫지 못한다.
+    attempts: run.attempts,
+    startedAt: run.startedAt,
+  };
+}
+
+function completionWriteWhere(run: AppOperationClaim) {
+  // 중앙 플랫폼만 TTL redaction과 경쟁한다. 기존 앱 adapter는 기존처럼 id
+  // 기준 완료 저장을 유지해 stale recovery 동작을 바꾸지 않는다.
+  return run.repoFullName === PLATFORM_REPO_FULL_NAME
+    ? activeProcessingWhere(run)
+    : { id: run.id };
+}
+
+function assertPlatformResultBinding(
+  run: Pick<AppOperationRun, "repoFullName" | "requestId" | "operation">,
+  result: AppOpsResult,
+): void {
+  if (
+    run.repoFullName === PLATFORM_REPO_FULL_NAME &&
+    (result.requestId !== run.requestId || result.operation !== run.operation)
+  ) {
+    // remote 호출은 성공했을 수 있으므로 일반 실패로 닫지 않는다. 같은 row를
+    // unknown으로 유지해야 새 requestId 중복 지급과 조기 redaction을 막는다.
+    throw new PlatformOperationUnknownOutcomeError();
+  }
+}
+
+function claimExpiryThreshold(repoFullName: string, startedAt: Date): Date {
+  return repoFullName === PLATFORM_REPO_FULL_NAME
+    ? new Date(startedAt.getTime() + PLATFORM_MIN_EXECUTION_WINDOW_MS)
+    : startedAt;
+}
+
+function canStartPlatformRemote(
+  repoFullName: string,
+  startedAt: Date,
+  expiresAt: Date,
+): boolean {
+  if (repoFullName !== PLATFORM_REPO_FULL_NAME) return true;
+  return expiresAt > claimExpiryThreshold(repoFullName, startedAt);
+}
+
+async function executeWithinClaimWindow<T>(
+  repoFullName: string,
+  startedAt: Date,
+  expiresAt: Date,
+  execute: () => Promise<T>,
+): Promise<{ started: false } | { started: true; result: T }> {
+  if (!canStartPlatformRemote(repoFullName, startedAt, expiresAt)) {
+    return { started: false };
+  }
+  return { started: true, result: await execute() };
+}
+
+function staleRecoveryLiveGuard(repoFullName: string, now: Date) {
+  return repoFullName === PLATFORM_REPO_FULL_NAME
+    ? { expiresAt: { gt: now }, redactedAt: null }
+    : {};
+}
+
+function staleRecoveryWhere(run: AppOperationClaim, now: Date) {
+  return {
+    id: run.id,
+    status: AppOperationRunStatus.PROCESSING,
+    ...(run.repoFullName === PLATFORM_REPO_FULL_NAME
+      ? {
+          ...staleRecoveryLiveGuard(run.repoFullName, now),
+          attempts: run.attempts,
+          startedAt: run.startedAt,
+        }
+      : {}),
+  };
+}
+
 export async function executeAppOperation(
   run: AppOperationRun,
 ): Promise<AppOpsResult> {
@@ -214,15 +301,24 @@ export async function recoverStaleAppOperations(now = new Date()): Promise<void>
     where: {
       status: AppOperationRunStatus.PROCESSING,
       startedAt: { lt: staleBefore },
+      OR: [
+        {
+          repoFullName: PLATFORM_REPO_FULL_NAME,
+          ...staleRecoveryLiveGuard(PLATFORM_REPO_FULL_NAME, now),
+        },
+        { repoFullName: { not: PLATFORM_REPO_FULL_NAME } },
+      ],
     },
-    select: { id: true, attempts: true, repoFullName: true },
+    select: {
+      id: true,
+      attempts: true,
+      repoFullName: true,
+      startedAt: true,
+    },
   });
   for (const run of stale) {
     await prisma.appOperationRun.updateMany({
-      where: {
-        id: run.id,
-        status: AppOperationRunStatus.PROCESSING,
-      },
+      where: staleRecoveryWhere(run, now),
       data: staleRecoveryUpdate(run, now),
     });
   }
@@ -247,11 +343,36 @@ function expiredPendingUpdate(outcomeUnknown: boolean, now: Date) {
   };
 }
 
+function expiredPlatformProcessingWhere(now: Date) {
+  return {
+    repoFullName: PLATFORM_REPO_FULL_NAME,
+    expiresAt: { lte: now },
+    redactedAt: null,
+    status: AppOperationRunStatus.PROCESSING,
+  };
+}
+
+function expiredTerminalRowsWhere(ids: readonly string[], now: Date) {
+  return {
+    id: { in: [...ids] },
+    expiresAt: { lte: now },
+    redactedAt: null,
+    status: {
+      in: [AppOperationRunStatus.SUCCEEDED, AppOperationRunStatus.FAILED],
+    },
+  };
+}
+
 export async function redactExpiredAppOperations(
   now = new Date(),
 ): Promise<number> {
   // worker가 장시간 멈춰도 중앙 플랫폼의 PUID/reason이 TTL을 넘어 큐에
-  // 남지 않게 한다. PROCESSING은 실행 중 경쟁을 피하고 stale recovery 뒤 처리한다.
+  // 남지 않게 한다. 실행 중이라도 보관 상한이 우선이며 늦은 worker 완료는
+  // claim generation CAS가 막는다.
+  const processing = await prisma.appOperationRun.updateMany({
+    where: expiredPlatformProcessingWhere(now),
+    data: expiredPendingUpdate(true, now),
+  });
   const abandonedUnknown = await prisma.appOperationRun.updateMany({
     where: {
       repoFullName: PLATFORM_REPO_FULL_NAME,
@@ -286,10 +407,15 @@ export async function redactExpiredAppOperations(
     take: 100,
   });
   if (expired.length === 0) {
-    return abandonedUnknown.count + abandoned.count;
+    return processing.count + abandonedUnknown.count + abandoned.count;
   }
   const updated = await prisma.appOperationRun.updateMany({
-    where: { id: { in: expired.map(({ id }) => id) } },
+    // findMany 뒤 unknown 수동 retry가 row를 PENDING으로 되열 수 있다.
+    // terminal·expiry·redaction을 다시 CAS해 재시도 payload를 지우지 않는다.
+    where: expiredTerminalRowsWhere(
+      expired.map(({ id }) => id),
+      now,
+    ),
     data: {
       params: Prisma.DbNull,
       result: Prisma.DbNull,
@@ -297,28 +423,52 @@ export async function redactExpiredAppOperations(
       redactedAt: now,
     },
   });
-  return abandonedUnknown.count + abandoned.count + updated.count;
+  return (
+    processing.count +
+    abandonedUnknown.count +
+    abandoned.count +
+    updated.count
+  );
 }
 
 async function claimNextAppOperation(): Promise<AppOperationRun | null> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const startedAt = new Date();
+    const platformExpiresAfter = claimExpiryThreshold(
+      PLATFORM_REPO_FULL_NAME,
+      startedAt,
+    );
     const candidate = await prisma.appOperationRun.findFirst({
       where: {
         status: AppOperationRunStatus.PENDING,
         attempts: { lt: MAX_ATTEMPTS },
-        expiresAt: { gt: startedAt },
+        redactedAt: null,
+        OR: [
+          {
+            repoFullName: PLATFORM_REPO_FULL_NAME,
+            expiresAt: { gt: platformExpiresAfter },
+          },
+          {
+            repoFullName: { not: PLATFORM_REPO_FULL_NAME },
+            expiresAt: { gt: startedAt },
+          },
+        ],
       },
       orderBy: { createdAt: "asc" },
     });
     if (!candidate) return null;
+    const expiresAfter = claimExpiryThreshold(
+      candidate.repoFullName,
+      startedAt,
+    );
     const claimed = await prisma.appOperationRun.updateMany({
       where: {
         id: candidate.id,
         status: AppOperationRunStatus.PENDING,
         attempts: candidate.attempts,
+        redactedAt: null,
         // 조회와 claim 사이에 만료돼도 write identity로 넘기지 않는다.
-        expiresAt: { gt: startedAt },
+        expiresAt: { gt: expiresAfter },
       },
       data: {
         status: AppOperationRunStatus.PROCESSING,
@@ -350,7 +500,7 @@ export async function processNextAppOperation(): Promise<boolean> {
   try {
     let executableRun = run;
     if (run.repoFullName === PLATFORM_REPO_FULL_NAME) {
-      const prepared = prepareQueuedPlatformOperation({
+      const appSlug = queuedPlatformOperationAppSlug({
         requestId: run.requestId,
         operation: run.operation,
         params: run.params,
@@ -358,7 +508,7 @@ export async function processNextAppOperation(): Promise<boolean> {
       });
       const actor = await revalidateQueuedPlatformWriteAccess({
         appId: run.appId,
-        appSlug: prepared.appSlug,
+        appSlug,
         actorLogin: run.actorLogin,
       });
       // 큐 문자열 대신 현재 DB의 canonical login을 외부 감사 헤더로 쓴다.
@@ -377,14 +527,48 @@ export async function processNextAppOperation(): Promise<boolean> {
       });
       executableRun = { ...run, actorLogin: actor.login };
     }
-    const rawResult = await executeAppOperation(executableRun);
+    const remoteStartedAt = new Date();
+    const execution = await executeWithinClaimWindow(
+      run.repoFullName,
+      remoteStartedAt,
+      run.expiresAt,
+      () => executeAppOperation(executableRun),
+    );
+    if (!execution.started) {
+      if (run.expiresAt <= remoteStartedAt) {
+        await prisma.appOperationRun.updateMany({
+          where: activeProcessingWhere(run),
+          // 이 worker 세대는 remote를 시작하지 않았으므로 최초 시도는
+          // definite expiry다. 이전 unknown retry라면 그 표식은 보존한다.
+          data: expiredPendingUpdate(hadUnknownOutcome, remoteStartedAt),
+        });
+      } else {
+        await prisma.appOperationRun.updateMany({
+          where: activeProcessingWhere(run),
+          data: {
+            status: AppOperationRunStatus.PENDING,
+            attempts: { decrement: 1 },
+            startedAt: null,
+            summary: "플랫폼 실행 안전 시간 부족 · TTL 만료 대기",
+            error: hadUnknownOutcome
+              ? PLATFORM_OUTCOME_UNKNOWN_CODE
+              : null,
+          },
+        });
+      }
+      return true;
+    }
+    const rawResult = execution.result;
     // API가 성공 응답을 준 뒤 DB 완료 저장만 실패해도 새 requestId를 허용하면
     // 중복 지급이 생긴다. 이 시점 이후 오류는 결과 불명으로 수렴한다.
     platformRemoteCompleted =
       run.repoFullName === PLATFORM_REPO_FULL_NAME;
     const result = appOpsResultSchema.parse(rawResult);
-    await prisma.appOperationRun.update({
-      where: { id: run.id },
+    assertPlatformResultBinding(run, result);
+    const completed = await prisma.appOperationRun.updateMany({
+      // TTL redaction이 PROCESSING을 먼저 닫았으면 늦은 성공 결과로 unknown
+      // 표식을 되돌리지 않는다. 원장 대조만 그 잠금을 닫을 수 있다.
+      where: completionWriteWhere(run),
       data: {
         status: AppOperationRunStatus.SUCCEEDED,
         summary: result.summary,
@@ -394,6 +578,11 @@ export async function processNextAppOperation(): Promise<boolean> {
         ...completionRedaction(run.repoFullName),
       },
     });
+    if (completed.count !== 1) {
+      // 만료 정리가 먼저 FAILED/unknown + redactedAt을 기록한 정상 race다.
+      // 늦은 응답은 보존하지 않고 수동 원장 대조 상태를 그대로 둔다.
+      return true;
+    }
   } catch (error) {
     const effectiveError =
       platformRemoteCompleted &&
@@ -410,8 +599,13 @@ export async function processNextAppOperation(): Promise<boolean> {
     if (shouldRetryPlatformUnknownOutcome({ ...run, error: effectiveError })) {
       // 같은 row를 PENDING으로 돌린다. 새 requestId를 만들지 않아 플랫폼의
       // 멱등 원장과 한 요청으로 이어진다. 실행 입력은 최종 완료 전까지 유지한다.
-      await prisma.appOperationRun.update({
-        where: { id: run.id },
+      const retryAt = new Date();
+      const retried = await prisma.appOperationRun.updateMany({
+        where: {
+          ...activeProcessingWhere(run),
+          // 최초 enqueue의 보관 상한을 지난 row를 다시 PENDING으로 열지 않는다.
+          expiresAt: { gt: retryAt },
+        },
         data: {
           status: AppOperationRunStatus.PENDING,
           summary: "플랫폼 처리 결과 불명 · 동일 requestId 재시도 대기",
@@ -420,6 +614,15 @@ export async function processNextAppOperation(): Promise<boolean> {
           completedAt: null,
         },
       });
+      if (retried.count !== 1 && run.repoFullName === PLATFORM_REPO_FULL_NAME) {
+        await prisma.appOperationRun.updateMany({
+          where: {
+            ...activeProcessingWhere(run),
+            expiresAt: { lte: retryAt },
+          },
+          data: expiredPendingUpdate(true, retryAt),
+        });
+      }
       return true;
     }
     const terminalSummary =
@@ -428,16 +631,31 @@ export async function processNextAppOperation(): Promise<boolean> {
         : summary;
     const outcomeUnknown =
       effectiveError instanceof PlatformOperationUnknownOutcomeError;
+    const completedAt = new Date();
+    if (
+      run.repoFullName === PLATFORM_REPO_FULL_NAME &&
+      outcomeUnknown &&
+      run.expiresAt <= completedAt
+    ) {
+      await prisma.appOperationRun.updateMany({
+        where: {
+          ...activeProcessingWhere(run),
+          expiresAt: { lte: completedAt },
+        },
+        data: expiredPendingUpdate(true, completedAt),
+      });
+      return true;
+    }
     const result: AppOpsResult = {
       version: 1,
       requestId: run.requestId,
       operation: run.operation,
       status: "error",
       summary: terminalSummary,
-      completedAt: new Date().toISOString(),
+      completedAt: completedAt.toISOString(),
     };
-    await prisma.appOperationRun.update({
-      where: { id: run.id },
+    await prisma.appOperationRun.updateMany({
+      where: completionWriteWhere(run),
       data: {
         status: AppOperationRunStatus.FAILED,
         summary: terminalSummary,
@@ -447,7 +665,7 @@ export async function processNextAppOperation(): Promise<boolean> {
         error: outcomeUnknown
           ? PLATFORM_OUTCOME_UNKNOWN_CODE
           : terminalSummary,
-        completedAt: new Date(),
+        completedAt,
         ...(outcomeUnknown ? {} : completionRedaction(run.repoFullName)),
       },
     });
@@ -463,3 +681,16 @@ export const shouldRetryPlatformUnknownOutcomeForTest =
 export const hadPlatformUnknownOutcomeForTest = hadPlatformUnknownOutcome;
 export const staleRecoveryUpdateForTest = staleRecoveryUpdate;
 export const expiredPendingUpdateForTest = expiredPendingUpdate;
+export const expiredPlatformProcessingWhereForTest =
+  expiredPlatformProcessingWhere;
+export const expiredTerminalRowsWhereForTest = expiredTerminalRowsWhere;
+export const activeProcessingWhereForTest = activeProcessingWhere;
+export const completionWriteWhereForTest = completionWriteWhere;
+export const assertPlatformResultBindingForTest = assertPlatformResultBinding;
+export const claimExpiryThresholdForTest = claimExpiryThreshold;
+export const canStartPlatformRemoteForTest = canStartPlatformRemote;
+export const executeWithinClaimWindowForTest = executeWithinClaimWindow;
+export const staleRecoveryLiveGuardForTest = staleRecoveryLiveGuard;
+export const staleRecoveryWhereForTest = staleRecoveryWhere;
+export const PLATFORM_MIN_EXECUTION_WINDOW_MS_FOR_TEST =
+  PLATFORM_MIN_EXECUTION_WINDOW_MS;

@@ -253,7 +253,19 @@ describe("인수조건", () => {
     globalThis.fetch = (async (_url: string, init?: RequestInit) => {
       sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(
-        JSON.stringify({ ok: true, result: { applied: true, entitlements: [] } }),
+        JSON.stringify({
+          ok: true,
+          result: {
+            applied: true,
+            entitlements: [],
+            requestId: "aop_01JXYZ",
+            appId: "lizard-tycoon",
+            platformUserId: "pu_1",
+            entitlementId: "sp_galaxy_gecko",
+            expectedEnvironment: "production",
+            operation: "grant",
+          },
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -271,7 +283,16 @@ describe("인수조건", () => {
           body?: unknown,
         ) {
           sentBody = body as Record<string, unknown>;
-          return { applied: true, entitlements: [] };
+          return {
+            applied: true,
+            entitlements: [],
+            requestId: "aop_01JXYZ",
+            appId: "lizard-tycoon",
+            platformUserId: "pu_1",
+            entitlementId: "sp_galaxy_gecko",
+            expectedEnvironment: "production",
+            operation: "grant",
+          };
         };
         try {
           await executeLizardTycoonPlatformOperation(baseInput as never);
@@ -333,7 +354,19 @@ describe("인수조건", () => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       gotActor = headers["X-Seori-Actor"];
       return new Response(
-        JSON.stringify({ ok: true, result: { applied: true, entitlements: [] } }),
+        JSON.stringify({
+          ok: true,
+          result: {
+            applied: true,
+            entitlements: [],
+            requestId: "r",
+            appId: "lizard-tycoon",
+            platformUserId: "pu_1",
+            entitlementId: "sp_a",
+            expectedEnvironment: "production",
+            operation: "grant",
+          },
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;

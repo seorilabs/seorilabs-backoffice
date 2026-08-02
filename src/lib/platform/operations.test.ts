@@ -6,6 +6,9 @@ import {
   platformOperationConfirmationText,
   preparePlatformOperation,
   prepareQueuedPlatformOperation,
+  prepareQueuedSandboxResetClose,
+  prepareQueuedSandboxResetResume,
+  queuedPlatformOperationAppSlug,
 } from "./operations";
 
 const requestId = "123e4567-e89b-42d3-a456-426614174000";
@@ -171,6 +174,107 @@ test("worker는 DB params도 동일 계약으로 재검증한다", () => {
         operation: prepared.operationKey,
         params: { ...prepared.params, token: "injected" },
         reason: prepared.reason,
+      }),
+    /Unrecognized key|인식되지 않은 키/i,
+  );
+
+  for (const reservedKey of ["requestId", "operation", "reason"] as const) {
+    assert.throws(
+      () =>
+        prepareQueuedPlatformOperation({
+          requestId,
+          operation: prepared.operationKey,
+          params: {
+            ...prepared.params,
+            [reservedKey]:
+              reservedKey === "requestId"
+                ? "223e4567-e89b-42d3-a456-426614174000"
+                : "injected",
+          },
+          reason: prepared.reason,
+        }),
+      /예약 필드/,
+      reservedKey,
+    );
+  }
+});
+
+test("만료 reset은 PII 없는 resume envelope와 exact 문구만 허용한다", () => {
+  const input = {
+    requestId,
+    operation: "platform.iap.reset-app-store-sandbox",
+    params: {
+      appSlug: "lizard-tycoon",
+      resumePreparedReset: true,
+      serverConfirmation:
+        `RESUME RESET lizard-tycoon ${requestId}`,
+    },
+    reason: null,
+  };
+  assert.deepEqual(prepareQueuedSandboxResetResume(input), {
+    requestId,
+    appSlug: "lizard-tycoon",
+    serverConfirmation: `RESUME RESET lizard-tycoon ${requestId}`,
+  });
+  assert.equal(queuedPlatformOperationAppSlug(input), "lizard-tycoon");
+
+  assert.throws(
+    () =>
+      prepareQueuedSandboxResetResume({
+        ...input,
+        params: { ...input.params, serverConfirmation: "RESUME RESET other" },
+      }),
+    /정확히 일치/,
+  );
+  assert.throws(
+    () =>
+      prepareQueuedSandboxResetResume({
+        ...input,
+        params: { ...input.params, platformUserId },
+      }),
+    /Unrecognized key|인식되지 않은 키/i,
+  );
+  assert.throws(
+    () =>
+      prepareQueuedSandboxResetResume({
+        ...input,
+        params: { ...input.params, requestId: grantRequestId },
+      }),
+    /예약 필드/,
+  );
+});
+
+test("미시작 reset 종료도 PII 없는 close envelope와 exact 문구만 허용한다", () => {
+  const input = {
+    requestId,
+    operation: "platform.iap.reset-app-store-sandbox",
+    params: {
+      appSlug: "lizard-tycoon",
+      closeNotStartedReset: true,
+      serverConfirmation: `CLOSE RESET lizard-tycoon ${requestId}`,
+    },
+    reason: null,
+  };
+  assert.deepEqual(prepareQueuedSandboxResetClose(input), {
+    requestId,
+    appSlug: "lizard-tycoon",
+    serverConfirmation: `CLOSE RESET lizard-tycoon ${requestId}`,
+  });
+  assert.equal(queuedPlatformOperationAppSlug(input), "lizard-tycoon");
+
+  assert.throws(
+    () =>
+      prepareQueuedSandboxResetClose({
+        ...input,
+        params: { ...input.params, serverConfirmation: "CLOSE RESET other" },
+      }),
+    /정확히 일치/,
+  );
+  assert.throws(
+    () =>
+      prepareQueuedSandboxResetClose({
+        ...input,
+        params: { ...input.params, platformUserId },
       }),
     /Unrecognized key|인식되지 않은 키/i,
   );

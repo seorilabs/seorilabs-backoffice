@@ -1,5 +1,9 @@
 import type { AppOpsResult } from "@/lib/app-ops/operation";
-import { prepareQueuedPlatformOperation } from "@/lib/platform/operations";
+import {
+  prepareQueuedPlatformOperation,
+  prepareQueuedSandboxResetClose,
+  prepareQueuedSandboxResetResume,
+} from "@/lib/platform/operations";
 import type { PlatformOperationReason } from "@/lib/platform/reasons";
 
 import { createPlatformWriteOperationsClient } from "./executor-client";
@@ -19,10 +23,31 @@ export interface PlatformRevokeOperatorRequest
   grantRequestId: string;
 }
 
-export interface PlatformOperatorResult {
+interface PlatformOperatorResultBase {
   applied: boolean;
   entitlements: string[];
+  requestId: string;
+  appId: string;
+  platformUserId: string;
+  entitlementId: string;
+  expectedEnvironment: "sandbox" | "production";
 }
+
+export interface PlatformGrantOperatorResult
+  extends PlatformOperatorResultBase {
+  operation: "grant";
+  grantRequestId?: never;
+}
+
+export interface PlatformRevokeOperatorResult
+  extends PlatformOperatorResultBase {
+  operation: "revoke";
+  grantRequestId: string;
+}
+
+export type PlatformOperatorResult =
+  | PlatformGrantOperatorResult
+  | PlatformRevokeOperatorResult;
 
 export interface PlatformSandboxResetRequest {
   requestId: string;
@@ -35,8 +60,33 @@ export interface PlatformSandboxResetRequest {
 }
 
 export interface PlatformSandboxResetResult {
+  requestId: string;
+  appId: string;
   platformUserId: string;
+  expectedEnvironment: "sandbox";
+  operation: "sandbox_reset";
   resetOrderKeys: string[];
+}
+
+export interface PlatformSandboxResetResumeRequest {
+  requestId: string;
+  appId: string;
+  confirmation: string;
+}
+
+export interface PlatformSandboxResetCloseRequest {
+  requestId: string;
+  appId: string;
+  confirmation: string;
+}
+
+export interface PlatformSandboxResetCloseResult {
+  requestId: string;
+  appId: string;
+  state: "closed_not_started";
+  expectedEnvironment: "sandbox";
+  operation: "sandbox_reset";
+  applied: boolean;
 }
 
 /** executor가 소비하는 최소 client 포트. 실제 client 클래스에 의존하지 않는다. */
@@ -44,15 +94,23 @@ export interface PlatformOperationsClient {
   grantEntitlement(
     request: PlatformOperatorRequest,
     actor: string,
-  ): Promise<PlatformOperatorResult>;
+  ): Promise<PlatformGrantOperatorResult>;
   revokeEntitlement(
     request: PlatformRevokeOperatorRequest,
     actor: string,
-  ): Promise<PlatformOperatorResult>;
+  ): Promise<PlatformRevokeOperatorResult>;
   resetAppStoreSandbox(
     request: PlatformSandboxResetRequest,
     actor: string,
   ): Promise<PlatformSandboxResetResult>;
+  resumeSandboxReset(
+    request: PlatformSandboxResetResumeRequest,
+    actor: string,
+  ): Promise<PlatformSandboxResetResult>;
+  closeSandboxResetNotStarted(
+    request: PlatformSandboxResetCloseRequest,
+    actor: string,
+  ): Promise<PlatformSandboxResetCloseResult>;
 }
 
 export type PlatformOperationsClientFactory =
@@ -110,16 +168,30 @@ function isUnknownOutcome(error: unknown): boolean {
     candidate.status === 0 ||
     candidate.status === 408 ||
     candidate.status === 425 ||
-    candidate.status === 429 ||
     (typeof candidate.status === "number" && candidate.status >= 500)
   );
 }
 
-function validateResult(result: PlatformOperatorResult): void {
+function validateResult(
+  result: PlatformOperatorResult,
+  expected: PlatformOperatorRequest | PlatformRevokeOperatorRequest,
+  operation: "grant" | "revoke",
+): void {
+  const expectedGrantRequestId =
+    operation === "revoke"
+      ? (expected as PlatformRevokeOperatorRequest).grantRequestId
+      : undefined;
   if (
     typeof result?.applied !== "boolean" ||
     !Array.isArray(result.entitlements) ||
-    result.entitlements.some((value) => typeof value !== "string")
+    result.entitlements.some((value) => typeof value !== "string") ||
+    result.requestId !== expected.requestId ||
+    result.appId !== expected.appId ||
+    result.platformUserId !== expected.platformUserId ||
+    result.entitlementId !== expected.entitlementId ||
+    result.expectedEnvironment !== expected.expectedEnvironment ||
+    result.operation !== operation ||
+    result.grantRequestId !== expectedGrantRequestId
   ) {
     throw new PlatformOperationUnknownOutcomeError();
   }
@@ -127,11 +199,50 @@ function validateResult(result: PlatformOperatorResult): void {
 
 function validateSandboxResetResult(
   result: PlatformSandboxResetResult,
+  expected: PlatformSandboxResetRequest,
 ): void {
   if (
-    typeof result?.platformUserId !== "string" ||
+    result?.requestId !== expected.requestId ||
+    result.appId !== expected.appId ||
+    result.platformUserId !== expected.platformUserId ||
+    result.expectedEnvironment !== expected.expectedEnvironment ||
+    result.operation !== "sandbox_reset" ||
     !Array.isArray(result.resetOrderKeys) ||
     result.resetOrderKeys.some((value) => typeof value !== "string")
+  ) {
+    throw new PlatformOperationUnknownOutcomeError();
+  }
+}
+
+function validateSandboxResetResumeResult(
+  result: PlatformSandboxResetResult,
+  expected: PlatformSandboxResetResumeRequest,
+): void {
+  if (
+    result?.requestId !== expected.requestId ||
+    result.appId !== expected.appId ||
+    typeof result.platformUserId !== "string" ||
+    result.platformUserId === "" ||
+    result.expectedEnvironment !== "sandbox" ||
+    result.operation !== "sandbox_reset" ||
+    !Array.isArray(result.resetOrderKeys) ||
+    result.resetOrderKeys.some((value) => typeof value !== "string")
+  ) {
+    throw new PlatformOperationUnknownOutcomeError();
+  }
+}
+
+function validateSandboxResetCloseResult(
+  result: PlatformSandboxResetCloseResult,
+  expected: PlatformSandboxResetCloseRequest,
+): void {
+  if (
+    result?.requestId !== expected.requestId ||
+    result.appId !== expected.appId ||
+    result.state !== "closed_not_started" ||
+    result.expectedEnvironment !== "sandbox" ||
+    result.operation !== "sandbox_reset" ||
+    typeof result.applied !== "boolean"
   ) {
     throw new PlatformOperationUnknownOutcomeError();
   }
@@ -143,20 +254,63 @@ export async function executePlatformOperation(
   clientFactory: PlatformOperationsClientFactory =
     createPlatformWriteOperationsClient,
 ): Promise<AppOpsResult> {
-  const prepared = prepareQueuedPlatformOperation(input);
+  const preparedClose = prepareQueuedSandboxResetClose(input);
+  const preparedResume = prepareQueuedSandboxResetResume(input);
+  const prepared = preparedClose || preparedResume
+    ? null
+    : prepareQueuedPlatformOperation(input);
   const actor = input.actorLogin?.trim();
   if (!actor) {
     throw new Error("플랫폼 오퍼레이션 실행자 정보가 없습니다.");
   }
 
-  const params = prepared.params;
   const client = await clientFactory();
   try {
+    if (preparedClose) {
+      const request: PlatformSandboxResetCloseRequest = {
+        requestId: preparedClose.requestId,
+        appId: preparedClose.appSlug,
+        confirmation: preparedClose.serverConfirmation,
+      };
+      const result = await client.closeSandboxResetNotStarted(request, actor);
+      validateSandboxResetCloseResult(result, request);
+      return {
+        version: 1,
+        requestId: preparedClose.requestId,
+        operation: "platform.iap.reset-app-store-sandbox",
+        status: "success",
+        summary: "App Store Sandbox reset 미시작 종료를 영구 확정했습니다.",
+        data: { closureApplied: result.applied },
+        completedAt: new Date().toISOString(),
+      };
+    }
+    if (preparedResume) {
+      const request: PlatformSandboxResetResumeRequest = {
+        requestId: preparedResume.requestId,
+        appId: preparedResume.appSlug,
+        confirmation: preparedResume.serverConfirmation,
+      };
+      const result = await client.resumeSandboxReset(request, actor);
+      validateSandboxResetResumeResult(result, request);
+      return {
+        version: 1,
+        requestId: preparedResume.requestId,
+        operation: "platform.iap.reset-app-store-sandbox",
+        status: "success",
+        summary: "대기 중인 App Store Sandbox 원장 초기화를 재개했습니다.",
+        data: { resetOrderCount: result.resetOrderKeys.length },
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    // preparedResume와 상호 배타적인 parser 결과다.
+    if (!prepared) throw new Error("플랫폼 오퍼레이션을 준비하지 못했습니다.");
+    const params = prepared.params;
     if (prepared.operationKey === "platform.iap.reset-app-store-sandbox") {
-      const result = await client.resetAppStoreSandbox(
-        {
+      const platformUserId = stringParam(params, "platformUserId");
+      const request: PlatformSandboxResetRequest = {
           requestId: prepared.requestId,
-          platformUserId: stringParam(params, "platformUserId"),
+          platformUserId,
           reason: prepared.reason,
           appId: prepared.appSlug,
           expectedEnvironment: "sandbox",
@@ -165,10 +319,9 @@ export async function executePlatformOperation(
             params,
             "appleClearedConfirmed",
           ),
-        },
-        actor,
-      );
-      validateSandboxResetResult(result);
+      };
+      const result = await client.resetAppStoreSandbox(request, actor);
+      validateSandboxResetResult(result, request);
       return {
         version: 1,
         requestId: prepared.requestId,
@@ -192,17 +345,18 @@ export async function executePlatformOperation(
       ) as PlatformOperatorRequest["expectedEnvironment"],
       confirmation: stringParam(params, "serverConfirmation"),
     };
-    const result =
-      prepared.operationKey === "platform.iap.grant-entitlement"
-        ? await client.grantEntitlement(request, actor)
-        : await client.revokeEntitlement(
-            {
-              ...request,
-              grantRequestId: stringParam(params, "grantRequestId"),
-            },
-            actor,
-          );
-    validateResult(result);
+    let result: PlatformOperatorResult;
+    if (prepared.operationKey === "platform.iap.grant-entitlement") {
+      result = await client.grantEntitlement(request, actor);
+      validateResult(result, request, "grant");
+    } else {
+      const revokeRequest: PlatformRevokeOperatorRequest = {
+        ...request,
+        grantRequestId: stringParam(params, "grantRequestId"),
+      };
+      result = await client.revokeEntitlement(revokeRequest, actor);
+      validateResult(result, revokeRequest, "revoke");
+    }
     return {
       version: 1,
       requestId: prepared.requestId,

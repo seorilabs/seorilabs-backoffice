@@ -6,17 +6,21 @@ import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
+import { listBlockingPlatformOperations } from "@/lib/platform/runs";
+import type { PlatformBlockingReference } from "@/lib/platform/recovery";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 async function writableApps(): Promise<{
   apps: PlatformWritableApp[];
+  blockingReferences: PlatformBlockingReference[];
   error: string | null;
 }> {
   if (!env.featurePlatformWrites()) {
     return {
       apps: [],
+      blockingReferences: [],
       error:
         "플랫폼 조회는 가능하지만 변경 전환은 아직 활성화되지 않았습니다.",
     };
@@ -30,13 +34,18 @@ async function writableApps(): Promise<{
           ? {}
           : { owners: { some: { userId: actor.userId, role: "OWNER" } } }),
       },
-      select: { slug: true, displayName: true },
+      select: { id: true, slug: true, displayName: true },
       orderBy: { displayName: "asc" },
     });
-    return { apps, error: null };
+    return {
+      apps: apps.map(({ slug, displayName }) => ({ slug, displayName })),
+      blockingReferences: await listBlockingPlatformOperations(apps),
+      error: null,
+    };
   } catch {
     return {
       apps: [],
+      blockingReferences: [],
       error: "플랫폼 변경 권한과 앱 소유권을 확인하지 못했습니다.",
     };
   }
@@ -67,6 +76,7 @@ export default async function PlatformIapPage() {
               : null
         }
         writableApps={writeAccess.apps}
+        initialBlockingReferences={writeAccess.blockingReferences}
         writeAccessError={writeAccess.error}
       />
     </section>

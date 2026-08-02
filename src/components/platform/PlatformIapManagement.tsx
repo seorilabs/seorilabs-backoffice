@@ -1,29 +1,48 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 
 import {
+  closeNotStartedSandboxResetAction,
   enqueuePlatformOperationAction,
   getPlatformOperationStatusAction,
+  reconcileExpiredUnknownPlatformOperationAction,
+  resumePreparedSandboxResetAction,
   retryUnknownPlatformOperationAction,
   type PlatformOperationKey,
 } from "@/lib/actions/platform-ops";
 import {
+  loadPlatformIapCatalogAction,
   loadPlatformIapSnapshotAction,
   lookupPlatformEntitlementsAction,
+  type PlatformIapCatalog,
   type PlatformIapSnapshot,
 } from "@/lib/actions/platform-read";
 import {
   platformOperationConfirmationText,
   platformRequestIdForSubmission,
+  platformSandboxResetCloseConfirmationText,
+  platformSandboxResetResumeConfirmationText,
+  platformUnknownReconciliationConfirmationText,
+  type PlatformUnknownReconciliationResolution,
 } from "@/lib/platform/confirmation";
+import {
+  platformCatalogForApp,
+  platformEntitlementAllowedForApp,
+} from "@/lib/platform/catalog";
 import { PLATFORM_OPERATION_REASONS } from "@/lib/platform/reasons";
 import type { PlatformEntitlementSummary } from "@/lib/platform/read-contract";
 import {
+  canSubmitPlatformRecovery,
   listPlatformRecoveryReferences,
   migrateLegacyPlatformRecoveryReference,
+  platformBlockingEnqueueRecoveryPlan,
+  platformBlockingRecoveryView,
+  platformRecoveryRetryRequest,
   removePlatformRecoveryReference,
   savePlatformRecoveryReference,
+  type PlatformBlockingReference,
+  type PlatformBlockingRecoveryView,
   type PlatformRecoveryReference,
 } from "@/lib/platform/recovery";
 
@@ -40,12 +59,14 @@ export interface PlatformWritableApp {
 interface PlatformIapManagementProps {
   initialSnapshot?: PlatformIapSnapshot | null;
   initialError?: string | null;
+  initialBlockingReferences?: readonly PlatformBlockingReference[];
   writableApps: readonly PlatformWritableApp[];
   writeAccessError?: string | null;
 }
 
 const STATUS_POLL_COUNT = 40;
 const STATUS_POLL_MS = 1_500;
+const EMPTY_BLOCKING_REFERENCES: readonly PlatformBlockingReference[] = [];
 
 interface PlatformRetryRequest {
   requestId: string;
@@ -64,6 +85,7 @@ function delay(ms: number): Promise<void> {
 export function PlatformIapManagement({
   initialSnapshot = null,
   initialError = null,
+  initialBlockingReferences = EMPTY_BLOCKING_REFERENCES,
   writableApps,
   writeAccessError = null,
 }: PlatformIapManagementProps) {
@@ -77,6 +99,10 @@ export function PlatformIapManagement({
     "platform.iap.grant-entitlement",
   );
   const [appSlug, setAppSlug] = useState(writableApps[0]?.slug ?? "");
+  const [catalog, setCatalog] = useState<PlatformIapCatalog | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogPending, setCatalogPending] = useState(false);
+  const [catalogRefreshVersion, setCatalogRefreshVersion] = useState(0);
   const [platformUserId, setPlatformUserId] = useState("");
   const [entitlementId, setEntitlementId] = useState("");
   const [grantRequestId, setGrantRequestId] = useState("");
@@ -86,6 +112,18 @@ export function PlatformIapManagement({
   const [appleClearedConfirmed, setAppleClearedConfirmed] = useState(false);
   const [retryRequest, setRetryRequest] =
     useState<PlatformRetryRequest | null>(null);
+  const [serverRowConfirmedMissing, setServerRowConfirmedMissing] =
+    useState(false);
+  const [reconciliationResolution, setReconciliationResolution] = useState<
+    PlatformUnknownReconciliationResolution | ""
+  >("");
+  const [reconciliationConfirmation, setReconciliationConfirmation] =
+    useState("");
+  const [sandboxResetRemoteState, setSandboxResetRemoteState] = useState<
+    "absent" | "prepared" | "completed" | "closed_not_started" | null
+  >(null);
+  const [resumeConfirmation, setResumeConfirmation] = useState("");
+  const [closeConfirmation, setCloseConfirmation] = useState("");
   const [recoveryLoaded, setRecoveryLoaded] = useState(false);
   const [writeOperation, setWriteOperation] =
     useState<PlatformIapWriteOperationView>({ state: "idle" });
@@ -94,30 +132,56 @@ export function PlatformIapManagement({
   const [writePending, startWrite] = useTransition();
 
   const environment = snapshot?.health.environment;
+  const activeCatalog = platformCatalogForApp(catalog, appSlug);
 
-  function activateRecoveryReference(
-    reference: PlatformRecoveryReference,
-    summary =
-      "이 브라우저에 결과 미확인 request ID가 남아 있습니다. 상태 확인 또는 동일 ID 안전 재실행이 필요합니다.",
-  ): void {
-    const recovered: PlatformRetryRequest = {
-      ...reference,
-      fingerprint: null,
-      platformUserId: "",
-    };
-    setRetryRequest(recovered);
-    setOperation(recovered.operation);
-    setAppSlug(recovered.appSlug);
-    setConfirmation("");
-    setEnvironmentConfirmed(false);
-    setAppleClearedConfirmed(false);
-    setWriteOperation({
-      state: "unknown",
-      actionLabel: operationLabel(recovered.operation),
-      summary,
-      requestId: recovered.requestId,
-    });
-  }
+  const activateRecoveryReference = useCallback(
+    (
+      reference: PlatformRecoveryReference,
+      summary =
+        "이 브라우저에 결과 미확인 request ID가 남아 있습니다. 상태 확인 또는 동일 ID 안전 재실행이 필요합니다.",
+      state: PlatformIapWriteOperationView["state"] = "unknown",
+    ): void => {
+      const recovered: PlatformRetryRequest =
+        platformRecoveryRetryRequest(reference);
+      setRetryRequest(recovered);
+      setServerRowConfirmedMissing(false);
+      setReconciliationResolution("");
+      setReconciliationConfirmation("");
+      setSandboxResetRemoteState(null);
+      setResumeConfirmation("");
+      setCloseConfirmation("");
+      setOperation(recovered.operation);
+      setAppSlug(recovered.appSlug);
+      setConfirmation("");
+      setEnvironmentConfirmed(false);
+      setAppleClearedConfirmed(false);
+      setWriteOperation({
+        state,
+        actionLabel: operationLabel(recovered.operation),
+        summary,
+        requestId: recovered.requestId,
+      });
+    },
+    [],
+  );
+
+  const activateBlockingRecoveryView = useCallback(
+    (view: PlatformBlockingRecoveryView): void => {
+      activateRecoveryReference(
+        view.retryRequest,
+        view.summary,
+        view.writeState,
+      );
+    },
+    [activateRecoveryReference],
+  );
+
+  const activateBlockingReference = useCallback(
+    (reference: PlatformBlockingReference): void => {
+      activateBlockingRecoveryView(platformBlockingRecoveryView(reference));
+    },
+    [activateBlockingRecoveryView],
+  );
 
   /**
    * 확정된 요청 하나만 지우고 다른 탭의 복구 참조는 다음 작업으로 넘긴다.
@@ -129,7 +193,15 @@ export function PlatformIapManagement({
     try {
       removePlatformRecoveryReference(window.localStorage, requestId);
       const next = listPlatformRecoveryReferences(window.localStorage)[0] ?? null;
-      if (!next) setRetryRequest(null);
+      setServerRowConfirmedMissing(false);
+      if (!next) {
+        setRetryRequest(null);
+        setReconciliationResolution("");
+        setReconciliationConfirmation("");
+        setSandboxResetRemoteState(null);
+        setResumeConfirmation("");
+        setCloseConfirmation("");
+      }
       return next;
     } catch {
       return undefined;
@@ -137,32 +209,30 @@ export function PlatformIapManagement({
   }
 
   useEffect(() => {
+    let localReferences: PlatformRecoveryReference[] = [];
     try {
       migrateLegacyPlatformRecoveryReference(window.localStorage);
-      const reference = listPlatformRecoveryReferences(window.localStorage)[0];
-      if (reference) {
-        const recovered: PlatformRetryRequest = {
-          ...reference,
-          fingerprint: null,
-          platformUserId: "",
-        };
-        setRetryRequest(recovered);
-        setOperation(reference.operation);
-        setAppSlug(reference.appSlug);
-        setWriteOperation({
-          state: "unknown",
-          actionLabel: operationLabel(reference.operation),
-          summary:
-            "이 브라우저에 결과 미확인 request ID가 남아 있습니다. 상태 확인 또는 동일 ID 안전 재실행이 필요합니다.",
-          requestId: reference.requestId,
-        });
+      localReferences = listPlatformRecoveryReferences(window.localStorage);
+      // 다른 브라우저에서 시작한 server blocker도 비민감 참조만 로컬 복구
+      // 목록에 합쳐, 현재 blocker가 끝난 뒤 남은 참조를 순서대로 처리한다.
+      for (const reference of initialBlockingReferences) {
+        savePlatformRecoveryReference(window.localStorage, reference);
       }
     } catch {
       // 저장소 접근 자체가 차단된 브라우저는 enqueue 직전 검사에서 fail-close한다.
-    } finally {
-      setRecoveryLoaded(true);
     }
-  }, []);
+    const serverReference = initialBlockingReferences[0];
+    if (serverReference) {
+      activateBlockingReference(serverReference);
+    } else if (localReferences[0]) {
+      activateRecoveryReference(localReferences[0]);
+    }
+    setRecoveryLoaded(true);
+  }, [
+    activateBlockingReference,
+    activateRecoveryReference,
+    initialBlockingReferences,
+  ]);
 
   useEffect(() => {
     if (!recoveryLoaded || !retryRequest) return;
@@ -187,15 +257,48 @@ export function PlatformIapManagement({
   }, [appSlug, platformUserId]);
 
   useEffect(() => {
+    let cancelled = false;
+    setCatalog(null);
+    setCatalogError(null);
+    setEntitlementId("");
+    setConfirmation("");
+    if (appSlug === "") {
+      setCatalogPending(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCatalogPending(true);
+    void loadPlatformIapCatalogAction(appSlug).then((result) => {
+      if (cancelled) return;
+      setCatalogPending(false);
+      if (!result.ok) {
+        setCatalogError(result.error);
+        return;
+      }
+      // action/client도 appId를 검증하지만 화면 상태에서도 다시 결합한다.
+      if (result.data.appId !== appSlug) {
+        setCatalogError("선택한 앱의 entitlement 카탈로그를 확인하지 못했습니다.");
+        return;
+      }
+      setCatalog(result.data);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appSlug, catalogRefreshVersion]);
+
+  useEffect(() => {
     if (
       entitlementId !== "" &&
-      snapshot &&
-      !snapshot.catalogEntitlements.includes(entitlementId)
+      activeCatalog?.entitlements.includes(entitlementId) !== true
     ) {
       setEntitlementId("");
       setConfirmation("");
     }
-  }, [entitlementId, snapshot]);
+  }, [activeCatalog, entitlementId]);
 
   const expectedConfirmation = useMemo(() => {
     const normalizedPlatformUserId = platformUserId.trim();
@@ -252,8 +355,46 @@ export function PlatformIapManagement({
     ],
   );
 
+  const expectedReconciliationConfirmation = useMemo(() => {
+    if (!retryRequest || reconciliationResolution === "") return "";
+    return platformUnknownReconciliationConfirmationText({
+      appSlug: retryRequest.appSlug,
+      requestId: retryRequest.requestId,
+      resolution: reconciliationResolution,
+    });
+  }, [reconciliationResolution, retryRequest]);
+
+  const expectedResumeConfirmation = useMemo(() => {
+    if (
+      !retryRequest ||
+      retryRequest.operation !== "platform.iap.reset-app-store-sandbox" ||
+      sandboxResetRemoteState !== "prepared"
+    ) {
+      return "";
+    }
+    return platformSandboxResetResumeConfirmationText({
+      appSlug: retryRequest.appSlug,
+      requestId: retryRequest.requestId,
+    });
+  }, [retryRequest, sandboxResetRemoteState]);
+
+  const expectedCloseConfirmation = useMemo(() => {
+    if (
+      !retryRequest ||
+      retryRequest.operation !== "platform.iap.reset-app-store-sandbox" ||
+      sandboxResetRemoteState !== "absent"
+    ) {
+      return "";
+    }
+    return platformSandboxResetCloseConfirmationText({
+      appSlug: retryRequest.appSlug,
+      requestId: retryRequest.requestId,
+    });
+  }, [retryRequest, sandboxResetRemoteState]);
+
   function refreshSnapshot() {
     startRefresh(async () => {
+      setCatalogRefreshVersion((current) => current + 1);
       const result = await loadPlatformIapSnapshotAction();
       if (!result.ok) {
         setError(result.error);
@@ -304,9 +445,22 @@ export function PlatformIapManagement({
       }
       if (!result.found) continue;
       found = true;
+      setServerRowConfirmedMissing(false);
       if (result.status !== "completed") continue;
 
       if (result.outcomeExpired) {
+        const resetState = result.sandboxResetState ?? null;
+        setSandboxResetRemoteState(resetState);
+        setResumeConfirmation("");
+        setCloseConfirmation("");
+        setReconciliationResolution(
+          resetState === "completed"
+            ? "applied"
+            : resetState === "closed_not_started"
+              ? "not_applied"
+              : "",
+        );
+        setReconciliationConfirmation("");
         setWriteOperation({
           state: "expired_unknown",
           actionLabel: operationLabel(submittedOperation),
@@ -319,6 +473,9 @@ export function PlatformIapManagement({
       }
 
       if (result.outcomeUnknown) {
+        setSandboxResetRemoteState(null);
+        setResumeConfirmation("");
+        setCloseConfirmation("");
         setWriteOperation({
           state: "unknown",
           actionLabel: operationLabel(submittedOperation),
@@ -331,6 +488,9 @@ export function PlatformIapManagement({
       }
 
       const succeeded = result.conclusion === "success";
+      setSandboxResetRemoteState(null);
+      setResumeConfirmation("");
+      setCloseConfirmation("");
       const terminalSummary = succeeded
         ? result.result?.summary ?? "플랫폼 원장 변경이 완료됐습니다."
         : result.resultError ?? "플랫폼 원장 변경에 실패했습니다.";
@@ -386,6 +546,7 @@ export function PlatformIapManagement({
         : "큐 row를 아직 찾지 못했습니다. 원 요청 값을 다시 입력해도 반드시 보존된 동일 request ID로만 등록됩니다.",
       requestId,
     });
+    setServerRowConfirmedMissing(!found);
   }
 
   function recoverWriteStatus() {
@@ -407,7 +568,13 @@ export function PlatformIapManagement({
   }
 
   function retryUnknownWrite() {
-    if (!retryRequest || writeOperation.state !== "unknown") return;
+    if (
+      !retryRequest ||
+      writeOperation.state !== "unknown" ||
+      serverRowConfirmedMissing
+    ) {
+      return;
+    }
     startWrite(async () => {
       setWriteOperation({
         state: "submitting",
@@ -436,6 +603,172 @@ export function PlatformIapManagement({
         retryRequest.operation,
         retryRequest.platformUserId,
       );
+    });
+  }
+
+  function resumePreparedSandboxResetWrite() {
+    if (
+      !retryRequest ||
+      retryRequest.operation !== "platform.iap.reset-app-store-sandbox" ||
+      writeOperation.state !== "expired_unknown" ||
+      sandboxResetRemoteState !== "prepared" ||
+      resumeConfirmation !== expectedResumeConfirmation
+    ) {
+      return;
+    }
+    startWrite(async () => {
+      setWriteOperation({
+        state: "submitting",
+        actionLabel: operationLabel(retryRequest.operation),
+        summary: "prepared reset을 보존된 동일 request ID로 worker에 재등록합니다.",
+        requestId: retryRequest.requestId,
+      });
+      const result = await resumePreparedSandboxResetAction({
+        appSlug: retryRequest.appSlug,
+        requestId: retryRequest.requestId,
+        confirmation: resumeConfirmation,
+      });
+      if (!result.ok) {
+        setWriteOperation({
+          state: "expired_unknown",
+          actionLabel: operationLabel(retryRequest.operation),
+          summary:
+            result.error ?? "대기 중인 sandbox reset을 재개하지 못했습니다.",
+          requestId: retryRequest.requestId,
+        });
+        return;
+      }
+      setResumeConfirmation("");
+      setCloseConfirmation("");
+      setSandboxResetRemoteState(null);
+      await pollWrite(
+        retryRequest.appSlug,
+        retryRequest.requestId,
+        retryRequest.operation,
+        retryRequest.platformUserId,
+      );
+    });
+  }
+
+  function closeNotStartedSandboxResetWrite() {
+    if (
+      !retryRequest ||
+      retryRequest.operation !== "platform.iap.reset-app-store-sandbox" ||
+      writeOperation.state !== "expired_unknown" ||
+      sandboxResetRemoteState !== "absent" ||
+      closeConfirmation !== expectedCloseConfirmation
+    ) {
+      return;
+    }
+    startWrite(async () => {
+      setWriteOperation({
+        state: "submitting",
+        actionLabel: operationLabel(retryRequest.operation),
+        summary:
+          "보존된 동일 request ID로 플랫폼의 영구 미시작 종료를 요청합니다.",
+        requestId: retryRequest.requestId,
+      });
+      const result = await closeNotStartedSandboxResetAction({
+        appSlug: retryRequest.appSlug,
+        requestId: retryRequest.requestId,
+        confirmation: closeConfirmation,
+      });
+      if (!result.ok) {
+        setWriteOperation({
+          state: "expired_unknown",
+          actionLabel: operationLabel(retryRequest.operation),
+          summary:
+            result.error ?? "sandbox reset 미시작 종료를 등록하지 못했습니다.",
+          requestId: retryRequest.requestId,
+        });
+        return;
+      }
+      setCloseConfirmation("");
+      setSandboxResetRemoteState(null);
+      await pollWrite(
+        retryRequest.appSlug,
+        retryRequest.requestId,
+        retryRequest.operation,
+        retryRequest.platformUserId,
+      );
+    });
+  }
+
+  function reconcileExpiredUnknownWrite() {
+    if (
+      !retryRequest ||
+      writeOperation.state !== "expired_unknown" ||
+      reconciliationResolution === ""
+    ) {
+      return;
+    }
+    if (
+      retryRequest.operation === "platform.iap.reset-app-store-sandbox" &&
+      (sandboxResetRemoteState === "prepared" ||
+        sandboxResetRemoteState === "absent" ||
+        (sandboxResetRemoteState === "completed" &&
+          reconciliationResolution !== "applied") ||
+        (sandboxResetRemoteState === "closed_not_started" &&
+          reconciliationResolution !== "not_applied") ||
+        sandboxResetRemoteState === null)
+    ) {
+      return;
+    }
+    const resolution = reconciliationResolution;
+    if (
+      reconciliationConfirmation !== expectedReconciliationConfirmation
+    ) {
+      return;
+    }
+
+    startWrite(async () => {
+      const result = await reconcileExpiredUnknownPlatformOperationAction({
+        appSlug: retryRequest.appSlug,
+        requestId: retryRequest.requestId,
+        resolution,
+        confirmation: reconciliationConfirmation,
+      });
+      if (!result.ok) {
+        setWriteOperation({
+          state: "expired_unknown",
+          actionLabel: operationLabel(retryRequest.operation),
+          summary:
+            result.error ??
+            "결과 미확인 요청을 대조 종료하지 못했습니다.",
+          requestId: retryRequest.requestId,
+        });
+        return;
+      }
+
+      const reconciledRequestId = retryRequest.requestId;
+      const nextRecovery = clearRecoveryReference(reconciledRequestId);
+      if (nextRecovery === undefined) {
+        setWriteOperation({
+          state: "error",
+          actionLabel: operationLabel(retryRequest.operation),
+          summary:
+            "대조 종료는 기록됐지만 브라우저 복구 참조를 제거하지 못했습니다. 저장소 접근을 허용한 뒤 상태를 다시 확인하세요.",
+          requestId: reconciledRequestId,
+        });
+        return;
+      }
+      setReconciliationResolution("");
+      setReconciliationConfirmation("");
+      setWriteOperation({
+        state: "success",
+        actionLabel: "결과 불명 대조 종료",
+        summary:
+          resolution === "applied"
+            ? "플랫폼 적용 확인 판정을 감사 로그에 기록하고 앱 잠금을 해제했습니다."
+            : "플랫폼 미적용 확인 판정을 감사 로그에 기록하고 앱 잠금을 해제했습니다.",
+        requestId: reconciledRequestId,
+      });
+      if (nextRecovery) {
+        activateRecoveryReference(
+          nextRecovery,
+          "현재 대조 종료를 기록했습니다. 다른 탭의 결과 미확인 request ID를 이어서 확인해야 합니다.",
+        );
+      }
     });
   }
 
@@ -499,12 +832,15 @@ export function PlatformIapManagement({
         });
         return;
       }
-      if (retryRequest?.fingerprint === null) {
+      if (
+        retryRequest &&
+        !canSubmitPlatformRecovery(retryRequest, serverRowConfirmedMissing)
+      ) {
         setWriteOperation({
           state: writeOperation.state,
           actionLabel: operationLabel(retryRequest.operation),
           summary:
-            "새로고침으로 원 payload가 제거됐습니다. 폼을 재전송하지 말고 보존된 request ID의 상태 확인 또는 안전 재실행을 사용하세요.",
+            "새로고침으로 원 payload가 제거됐습니다. 먼저 보존된 request ID의 DB 상태를 확인하세요.",
           requestId: retryRequest.requestId,
         });
         return;
@@ -540,6 +876,7 @@ export function PlatformIapManagement({
         });
         return;
       }
+      setServerRowConfirmedMissing(false);
       setRetryRequest(recoveryRequest);
       setWriteOperation({
         state: "submitting",
@@ -609,6 +946,23 @@ export function PlatformIapManagement({
           );
           return;
         }
+        const blockingRecovery = platformBlockingEnqueueRecoveryPlan(
+          recoveryRequest,
+          result,
+        );
+        if (blockingRecovery) {
+          try {
+            // 방금 만든 미등록 request ID와 서버 blocker를 모두 보존한다.
+            // blocker를 먼저 처리한 뒤 원 요청도 같은 ID로 재개한다.
+            for (const reference of blockingRecovery.referencesToPreserve) {
+              savePlatformRecoveryReference(window.localStorage, reference);
+            }
+          } catch {
+            // 서버 DB 참조가 SoT이므로 저장 실패여도 현재 화면 복구는 계속한다.
+          }
+          activateBlockingRecoveryView(blockingRecovery.active);
+          return;
+        }
         if (existing.ok && !existing.found && !wasRecovery) {
           // DB에서 존재하지 않음을 확인했으므로 이 requestId는 실행되지 않았다.
           const nextRecovery = clearRecoveryReference(requestId);
@@ -636,6 +990,22 @@ export function PlatformIapManagement({
               requestId,
             });
           }
+        } else if (existing.ok && !existing.found && wasRecovery) {
+          setServerRowConfirmedMissing(true);
+          // 서버에 row가 없다는 확정 결과 뒤에는 잘못 입력한 값을 고칠 수
+          // 있게 탭 메모리 fingerprint만 버린다. request ID는 그대로 보존한다.
+          setRetryRequest((current) =>
+            current?.requestId === requestId
+              ? { ...current, fingerprint: null, platformUserId: "" }
+              : current,
+          );
+          setWriteOperation({
+            state: "unknown",
+            actionLabel: operationLabel(submittedOperation),
+            summary:
+              "DB에 이 request ID가 없음을 확인했습니다. 원 요청 값을 다시 입력해 보존된 동일 request ID로 재등록할 수 있습니다.",
+            requestId,
+          });
         } else {
           setWriteOperation({
             state: "unknown",
@@ -673,7 +1043,13 @@ export function PlatformIapManagement({
     !environmentConfirmed ||
     (operation === "platform.iap.reset-app-store-sandbox" &&
       (environment !== "sandbox" || !appleClearedConfirmed)) ||
-    (retryRequest !== null && retryRequest.fingerprint === null) ||
+    (operation !== "platform.iap.reset-app-store-sandbox" &&
+      !platformEntitlementAllowedForApp(
+        catalog,
+        appSlug,
+        entitlementId.trim(),
+      )) ||
+    !canSubmitPlatformRecovery(retryRequest, serverRowConfirmedMissing) ||
     writeOperation.state === "expired_unknown" ||
     (retryRequest !== null &&
       (retryRequest.appSlug !== appSlug ||
@@ -820,19 +1196,33 @@ export function PlatformIapManagement({
                     setConfirmation("");
                   }}
                   required
-                  disabled={!snapshot || snapshot.catalogEntitlements.length === 0}
+          disabled={
+            catalogPending ||
+            !activeCatalog ||
+            activeCatalog.entitlements.length === 0
+          }
                   className="w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm disabled:bg-neutral-100"
                 >
                   <option value="">카탈로그에서 선택</option>
-                  {snapshot?.catalogEntitlements.map((id) => (
+          {activeCatalog?.entitlements.map((id) => (
                     <option key={id} value={id}>
                       {id}
                     </option>
                   ))}
                 </select>
-                {snapshot && snapshot.catalogEntitlements.length === 0 && (
+        {catalogPending && (
+          <span className="mt-1 block text-xs text-neutral-500">
+            선택한 앱의 카탈로그를 확인하고 있습니다.
+          </span>
+        )}
+        {catalogError && (
+          <span className="mt-1 block text-xs text-red-600">
+            {catalogError}
+          </span>
+        )}
+        {activeCatalog && activeCatalog.entitlements.length === 0 && (
                   <span className="mt-1 block text-xs text-red-600">
-                    플랫폼 카탈로그가 비어 있어 변경할 수 없습니다.
+            이 앱의 카탈로그가 비어 있어 변경할 수 없습니다.
                   </span>
                 )}
               </Field>
@@ -930,9 +1320,11 @@ export function PlatformIapManagement({
         >
           {writePending
             ? "처리 중…"
-            : retryRequest
+            : retryRequest && serverRowConfirmedMissing
               ? "보존된 동일 Request ID로 재등록"
-              : `${operationLabel(operation)} 요청`}
+              : retryRequest
+                ? "보존된 동일 Request ID로 재요청"
+                : `${operationLabel(operation)} 요청`}
         </button>
         {retryRequest && (
           <button
@@ -944,21 +1336,185 @@ export function PlatformIapManagement({
             동일 Request ID 상태 다시 확인
           </button>
         )}
-        {retryRequest && writeOperation.state === "unknown" && (
-          <button
-            type="button"
-            onClick={retryUnknownWrite}
-            disabled={writePending}
-            className="ml-2 mt-4 rounded border border-red-400 bg-red-50 px-4 py-2 text-sm font-semibold text-red-900 disabled:opacity-40"
-          >
-            동일 Request ID 안전 재실행
-          </button>
+        {retryRequest &&
+          writeOperation.state === "unknown" &&
+          !serverRowConfirmedMissing && (
+            <button
+              type="button"
+              onClick={retryUnknownWrite}
+              disabled={writePending}
+              className="ml-2 mt-4 rounded border border-red-400 bg-red-50 px-4 py-2 text-sm font-semibold text-red-900 disabled:opacity-40"
+            >
+              동일 Request ID 안전 재실행
+            </button>
+          )}
+        {retryRequest && writeOperation.state === "expired_unknown" && (
+          <div className="mt-4 rounded border border-red-300 bg-red-50 p-3">
+            <p className="text-sm font-semibold text-red-900">
+              {retryRequest.operation ===
+                "platform.iap.reset-app-store-sandbox" &&
+              sandboxResetRemoteState === "prepared"
+                ? "대기 중인 Sandbox Reset 재개"
+                : retryRequest.operation ===
+                      "platform.iap.reset-app-store-sandbox" &&
+                    sandboxResetRemoteState === "absent"
+                  ? "Sandbox Reset 미시작 영구 종료"
+                : "수동 원장 대조 결과 기록"}
+            </p>
+            <p className="mt-1 text-xs text-red-800">
+              {retryRequest.operation ===
+                "platform.iap.reset-app-store-sandbox" &&
+              sandboxResetRemoteState === "prepared"
+                ? "플랫폼에 durable reset intent가 남아 있습니다. 잠금을 닫거나 새 request ID를 만들 수 없으며, 보존된 동일 request ID로만 재개합니다."
+                : retryRequest.operation ===
+                      "platform.iap.reset-app-store-sandbox" &&
+                    sandboxResetRemoteState === "completed"
+                  ? "플랫폼의 immutable completion을 확인했습니다. 플랫폼 적용 확인 판정으로만 잠금을 닫을 수 있습니다."
+                  : retryRequest.operation ===
+                        "platform.iap.reset-app-store-sandbox" &&
+                      sandboxResetRemoteState === "absent"
+                    ? "현재 intent가 없지만 곧바로 미적용 판정으로 닫지 않습니다. write worker가 영구 미시작 closure를 먼저 확정해야 새 request ID가 열립니다."
+                    : retryRequest.operation ===
+                          "platform.iap.reset-app-store-sandbox" &&
+                        sandboxResetRemoteState === "closed_not_started"
+                      ? "플랫폼의 immutable 미시작 closure를 확인했습니다. 플랫폼 미적용 확인 판정으로만 잠금을 닫을 수 있습니다."
+                    : "플랫폼 원장과 감사 로그를 실제로 대조한 뒤 판정을 선택하세요. 이 작업은 IAP 원장을 수정하지 않고 앱 잠금 표식만 감사 기록과 함께 닫습니다."}
+            </p>
+            {retryRequest.operation ===
+              "platform.iap.reset-app-store-sandbox" &&
+            sandboxResetRemoteState === "prepared" ? (
+              <>
+                <div className="mt-3 rounded bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100">
+                  {expectedResumeConfirmation}
+                </div>
+                <input
+                  value={resumeConfirmation}
+                  onChange={(event) =>
+                    setResumeConfirmation(event.target.value)
+                  }
+                  placeholder="위 재개 문구를 정확히 입력"
+                  maxLength={180}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-2 w-full rounded border border-red-300 bg-white px-3 py-2 font-mono text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={resumePreparedSandboxResetWrite}
+                  disabled={
+                    writePending ||
+                    resumeConfirmation !== expectedResumeConfirmation
+                  }
+                  className="mt-3 rounded bg-red-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  동일 Request ID로 Reset 재개
+                </button>
+              </>
+            ) : retryRequest.operation ===
+                "platform.iap.reset-app-store-sandbox" &&
+              sandboxResetRemoteState === "absent" ? (
+              <>
+                <div className="mt-3 rounded bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100">
+                  {expectedCloseConfirmation}
+                </div>
+                <input
+                  value={closeConfirmation}
+                  onChange={(event) =>
+                    setCloseConfirmation(event.target.value)
+                  }
+                  placeholder="위 미시작 종료 문구를 정확히 입력"
+                  maxLength={180}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-2 w-full rounded border border-red-300 bg-white px-3 py-2 font-mono text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={closeNotStartedSandboxResetWrite}
+                  disabled={
+                    writePending ||
+                    closeConfirmation !== expectedCloseConfirmation
+                  }
+                  className="mt-3 rounded bg-red-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  동일 Request ID를 영구 미시작 종료
+                </button>
+              </>
+            ) : retryRequest.operation !==
+                "platform.iap.reset-app-store-sandbox" ||
+              sandboxResetRemoteState !== null ? (
+              <>
+                <select
+                  value={reconciliationResolution}
+                  onChange={(event) => {
+                    setReconciliationResolution(
+                      event.target.value as
+                        | PlatformUnknownReconciliationResolution
+                        | "",
+                    );
+                    setReconciliationConfirmation("");
+                  }}
+                  className="mt-3 w-full rounded border border-red-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">대조 결과 선택</option>
+                  {(retryRequest.operation !==
+                    "platform.iap.reset-app-store-sandbox" ||
+                    sandboxResetRemoteState === "completed") && (
+                    <option value="applied">플랫폼 적용 확인</option>
+                  )}
+                  {(retryRequest.operation !==
+                    "platform.iap.reset-app-store-sandbox" ||
+                    sandboxResetRemoteState === "closed_not_started") && (
+                    <option value="not_applied">플랫폼 미적용 확인</option>
+                  )}
+                </select>
+                <div className="mt-3 rounded bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100">
+                  {expectedReconciliationConfirmation ||
+                    "대조 결과를 먼저 선택하세요."}
+                </div>
+                <input
+                  value={reconciliationConfirmation}
+                  onChange={(event) =>
+                    setReconciliationConfirmation(event.target.value)
+                  }
+                  placeholder="위 대조 종료 문구를 정확히 입력"
+                  maxLength={180}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-2 w-full rounded border border-red-300 bg-white px-3 py-2 font-mono text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={reconcileExpiredUnknownWrite}
+                  disabled={
+                    writePending ||
+                    reconciliationResolution === "" ||
+                    reconciliationConfirmation !==
+                      expectedReconciliationConfirmation
+                  }
+                  className="mt-3 rounded bg-red-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                >
+                  감사 로그에 판정 기록 후 잠금 해제
+                </button>
+              </>
+            ) : (
+              <p className="mt-3 text-xs font-semibold text-red-900">
+                플랫폼 durable intent 상태를 확인해야 합니다. 동일 Request ID 상태 다시 확인을 실행하세요.
+              </p>
+            )}
+          </div>
         )}
         {retryRequest && (
           <p className="mt-2 text-xs text-amber-800">
             {writeOperation.state === "expired_unknown"
-              ? "재실행 기한이 지났습니다. 플랫폼 원장과 감사 로그를 수동 대조하고 운영 DB의 결과 불명 표식을 정리하기 전에는 새 request ID를 만들 수 없습니다."
-              : "이 요청이 확정되기 전에는 대상 값을 바꾸거나 새 request ID를 만들 수 없습니다."}
+              ? sandboxResetRemoteState === "prepared"
+                ? "prepared reset을 같은 request ID로 완료하기 전에는 잠금을 닫거나 새 request ID를 만들 수 없습니다."
+                : sandboxResetRemoteState === "absent"
+                  ? "영구 미시작 closure가 성공하기 전에는 잠금을 닫거나 새 request ID를 만들 수 없습니다."
+                  : "재실행 기한이 지났습니다. 위 대조 종료 절차 전에는 새 request ID를 만들 수 없습니다."
+              : serverRowConfirmedMissing
+                ? "DB 미존재를 확인했습니다. 값을 다시 입력해도 보존된 동일 request ID만 사용합니다."
+                : "이 요청이 확정되기 전에는 대상 값을 바꾸거나 새 request ID를 만들 수 없습니다."}
           </p>
         )}
       </form>
