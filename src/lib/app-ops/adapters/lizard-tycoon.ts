@@ -14,6 +14,7 @@ import { asc, asArray, type JsonApiResource } from "@/lib/app-store/asc-client";
 
 import {
   executeLizardTycoonPlatformOperation,
+  requiresCentralPlatformMutation,
   shouldUsePlatform,
 } from "./lizard-tycoon-platform";
 
@@ -1089,6 +1090,12 @@ export async function executeLizardTycoonOperation(
   if (shouldUsePlatform(input.operation)) {
     requireLizardOperationIntent(input.operation, input.intent);
     return executeLizardTycoonPlatformOperation(input);
+  }
+
+  if (requiresCentralPlatformMutation(input.operation)) {
+    throw new Error(
+      "플랫폼 write 경계가 활성화된 IAP 변경은 /platform/iap 공통 관리 화면에서 실행해야 합니다.",
+    );
   }
 
   if (!credentialJson) {

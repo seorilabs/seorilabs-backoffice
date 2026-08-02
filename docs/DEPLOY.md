@@ -249,12 +249,39 @@ flowchart LR
 
 - 웹 Pod에는 게임 자격증명을 주입하지 않는다.
 - worker 전용 Secret 이름은 `backoffice-app-ops-secrets`다.
+- 공통 플랫폼 Admin API는 읽기/쓰기를 분리한다. 웹 Pod의
+  `PLATFORM_ADMIN_READ_SA_KEY_JSON`은 조회만 가능하고, worker의
+  `PLATFORM_ADMIN_WRITE_SA_KEY_JSON`만 지급·회수를 호출할 수 있다.
+- 이 분리는 read 키 유출에 의한 직접 mutation과 write 키 탈취를 막는 경계다.
+  웹과 worker가 공유하는 queue/MySQL 무결성까지 보장한다는 뜻은 아니다.
+  worker는 실행 직전에 현재 allowlist·role·앱 OWNER·ACTIVE 상태와
+  `AppOperationRun.appId`/`params.appSlug`를 다시 결합한다.
+- 두 Pod가 공유하는 `PLATFORM_ADMIN_URL`은 각 Secret에 같은 Cloud Run
+  URL로 넣는다. 과거 단일 `PLATFORM_ADMIN_SA_KEY_JSON`은 사용하지 않는다.
+- 웹의 `FEATURE_PLATFORM_ADMIN=true`는 조회 화면만 연다. mutation은 별도
+  `FEATURE_PLATFORM_ADMIN_WRITES`가 `true`여야 action과 앱별 legacy cutover가
+  함께 열린다. 기본값은 웹·worker 모두 `false`다.
+- worker manifest의 두 플랫폼 플래그 기본값도 `false`다. 플랫폼 registry의
+  대상 앱 `features.iap`, 앱별 catalog, URL·write Secret을 먼저 준비한 뒤
+  마지막 배포에서 worker의 `FEATURE_PLATFORM_ADMIN`과 양쪽 Pod의
+  `FEATURE_PLATFORM_ADMIN_WRITES`를 함께 `true`로 전환한다. URL 또는 write
+  키 없이 write 플래그를 켜면 worker는 큐를 잡기 전 기동 단계에서 실패한다.
+  전환 뒤 도마뱀 grant·revoke·reset은 legacy Firebase 직접 쓰기로 fallback하지
+  않고 공통 `/platform/iap` 화면만 허용한다.
 - 도마뱀 IAP 키는 `LIZARD_TYCOON_APP_OPS_SA_KEY_JSON`이며
   `lizard-tycoon` 프로젝트의 `roles/datastore.viewer`와 프로젝트 custom role
   `iapSandboxLedgerResetter`만 부여한다. custom role은 sandbox 테스트 원장의 보상 전이에 필요한
   `datastore.entities.create`·`datastore.entities.update`만 포함한다.
-- 입력 파라미터와 결과는 24시간 뒤 제거한다. 영수증, 구매 토큰, 비밀번호, 개인키는
-  요청이나 결과에 포함하지 않는다.
+- 조회 결과는 MySQL에 미러하지 않는다. 승인된 mutation command의 PUID,
+  entitlement, typed confirmation과 고정 reason code만 `AppOperationRun`에
+  최대 24시간 보관한다. 확정 결과는 즉시 입력을 제거하고, 결과 불명만 동일
+  request ID 재실행을 위해 TTL까지 보존한다. 영수증, 구매 토큰, 비밀번호,
+  개인키는 요청이나 결과에 포함하지 않는다.
+- 브라우저에는 결과 불명 복구용 `requestId`·앱·operation만 저장한다. PUID,
+  entitlement, reason, confirmation은 저장하지 않으며 새 ID 재발급을 막는다.
+- 서버 enqueue는 MySQL의 대상 `app` row를 `FOR UPDATE`로 잠근 뒤 앱별 중앙
+  플랫폼 요청을 한 건씩만 만든다. localStorage는 crash 복구 보조 수단이며
+  여러 탭의 동시 지급을 막는 최종 경계가 아니다.
 - worker는 처리 중 중단된 요청을 최대 세 번 재시도한다.
 - `iap-ledger.reset-app-store-sandbox`는 Apple Sandbox 구매 내역을 먼저 지운 계정에만 사용한다.
   production·Google Play source와 처리 주문 문서는 삭제하지 않고 App Store source를
@@ -278,10 +305,19 @@ gcloud projects add-iam-policy-binding lizard-tycoon \
 
 ```sh
 kubectl -n platform create secret generic backoffice-app-ops-secrets \
-  --from-file=LIZARD_TYCOON_APP_OPS_SA_KEY_JSON=/secure/path/lizard-app-ops.json
+  --from-file=LIZARD_TYCOON_APP_OPS_SA_KEY_JSON=/secure/path/lizard-app-ops.json \
+  --from-literal=PLATFORM_ADMIN_URL='https://platform-admin-xxxxx.run.app' \
+  --from-file=PLATFORM_ADMIN_WRITE_SA_KEY_JSON=/secure/path/platform-admin-write.json
 kubectl apply -f k8s/ci-deployer-rbac.yaml
 kubectl apply -f k8s/app-ops-worker.yaml
 ```
+
+Secret 생성 후에도 worker의 두 플래그와 웹의
+`FEATURE_PLATFORM_ADMIN_WRITES`는 그대로 `false`로 먼저 배포한다. 플랫폼
+registry sync와 catalog 검증이 끝난 것을 확인한 뒤 worker의 조회 플래그와
+양쪽 write 플래그를 함께 `true`로 바꿔 재배포한다. 세 전제 중 하나라도
+준비되지 않았으면 웹은 읽기 전용으로 두고 기존 앱별 mutation 경로를
+유지한다.
 
 배포 workflow는 먼저 웹 Deployment의 Prisma migration과 rollout을 끝낸 뒤 worker
 Deployment를 같은 이미지 SHA로 갱신한다. 검증은 두 Deployment의 rollout, worker 로그,

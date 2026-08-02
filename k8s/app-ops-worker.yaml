@@ -44,6 +44,12 @@ spec:
               value: "1"
             - name: APP_OPS_POLL_INTERVAL_MS
               value: "1000"
+            - name: FEATURE_PLATFORM_ADMIN
+              # registry IAP·catalog·write Secret 준비 후 마지막에 true로 전환한다.
+              value: "false"
+            - name: FEATURE_PLATFORM_ADMIN_WRITES
+              # 웹과 worker에서 같은 최종 전환 시점에 true로 바꾼다.
+              value: "false"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -54,6 +60,19 @@ spec:
                 secretKeyRef:
                   name: backoffice-app-ops-secrets
                   key: LIZARD_TYCOON_APP_OPS_SA_KEY_JSON
+            # 플랫폼 mutation은 write 전용 invoker로만 실행한다.
+            - name: PLATFORM_ADMIN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-app-ops-secrets
+                  key: PLATFORM_ADMIN_URL
+                  optional: true
+            - name: PLATFORM_ADMIN_WRITE_SA_KEY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-app-ops-secrets
+                  key: PLATFORM_ADMIN_WRITE_SA_KEY_JSON
+                  optional: true
             - name: APP_STORE_CONNECT_API_KEY_ID
               valueFrom:
                 secretKeyRef:

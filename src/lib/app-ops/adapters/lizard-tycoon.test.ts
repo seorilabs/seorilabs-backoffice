@@ -5,6 +5,7 @@ import {
   LIZARD_TYCOON_IAP_OPERATIONS,
   addOperatorSourceForTest,
   appleSandboxResetBody,
+  executeLizardTycoonOperation,
   parseLimit,
   requireAccountRef,
   requireEntitlementId,
@@ -19,6 +20,14 @@ import {
   sanitizeSandboxTester,
   validateLizardCredentialForTest,
 } from "./lizard-tycoon";
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
 
 test("도마뱀 worker가 지원하는 IAP 오퍼레이션을 고정한다", () => {
   assert.deepEqual(LIZARD_TYCOON_IAP_OPERATIONS, [
@@ -109,6 +118,42 @@ test("도마뱀 worker는 전용 Sandbox 운영 서비스 계정만 허용한다
       ),
     /identity/,
   );
+});
+
+test("플랫폼 write 전환 플래그가 켜지면 설정 누락에도 legacy 지급으로 우회하지 않는다", async () => {
+  const saved = {
+    flag: process.env.FEATURE_PLATFORM_ADMIN_WRITES,
+    url: process.env.PLATFORM_ADMIN_URL,
+    key: process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON,
+  };
+  process.env.FEATURE_PLATFORM_ADMIN_WRITES = "true";
+  delete process.env.PLATFORM_ADMIN_URL;
+  delete process.env.PLATFORM_ADMIN_WRITE_SA_KEY_JSON;
+
+  try {
+    await assert.rejects(
+      () =>
+        executeLizardTycoonOperation(
+          {
+            requestId: "11111111-1111-4111-8111-111111111111",
+            operation: "iap-ledger.grant-production-entitlement",
+            intent: "mutate",
+            params: {
+              player_ref: "pu_01J00000000000000000000000",
+              entitlement_id: "sp_galaxy_gecko",
+            },
+            actorLogin: "syous",
+            reason: "customer_support_compensation",
+          },
+          "legacy-credential-must-not-be-used",
+        ),
+      /공통 관리 화면/,
+    );
+  } finally {
+    restoreEnv("FEATURE_PLATFORM_ADMIN_WRITES", saved.flag);
+    restoreEnv("PLATFORM_ADMIN_URL", saved.url);
+    restoreEnv("PLATFORM_ADMIN_WRITE_SA_KEY_JSON", saved.key);
+  }
 });
 
 test("worker 결과에서 provider token과 영수증을 제거한다", () => {

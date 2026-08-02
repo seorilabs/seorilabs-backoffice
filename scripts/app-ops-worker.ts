@@ -1,9 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import {
+  assertPlatformWorkerConfiguration,
   processNextAppOperation,
   recoverStaleAppOperations,
   redactExpiredAppOperations,
 } from "@/lib/app-ops/worker";
+import { env } from "@/lib/env";
+import { createMaintenanceWatchdog } from "@/lib/app-ops/maintenance-watchdog";
 
 const pollIntervalMs = Math.max(
   250,
@@ -23,22 +26,40 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await recoverStaleAppOperations();
-  let lastMaintenanceAt = 0;
-  console.log("[app-ops-worker] 시작");
-
-  while (!stopping) {
-    const processed = await processNextAppOperation();
-    const now = Date.now();
-    if (now - lastMaintenanceAt >= 60_000) {
-      await recoverStaleAppOperations(new Date(now));
-      const redacted = await redactExpiredAppOperations(new Date(now));
+  assertPlatformWorkerConfiguration({
+    enabled: env.featurePlatformWrites(),
+    writeConfigured: env.platformWriteConfigured(),
+  });
+  let maintenanceFailure: unknown = null;
+  const maintenance = createMaintenanceWatchdog({
+    intervalMs: 60_000,
+    async run() {
+      const now = new Date();
+      await recoverStaleAppOperations(now);
+      const redacted = await redactExpiredAppOperations(now);
       if (redacted > 0) {
         console.log(`[app-ops-worker] 만료 결과 ${redacted}건 제거`);
       }
-      lastMaintenanceAt = now;
+    },
+    onError(error) {
+      maintenanceFailure = error;
+      stopping = true;
+    },
+  });
+  // 24시간 이상 중단 뒤 재기동해도 만료 row를 첫 작업으로 실행하지 않는다.
+  await maintenance.runNow();
+  maintenance.start();
+  console.log("[app-ops-worker] 시작");
+
+  try {
+    while (!stopping) {
+      const processed = await processNextAppOperation();
+      if (maintenanceFailure) throw maintenanceFailure;
+      if (!processed) await sleep(pollIntervalMs);
     }
-    if (!processed) await sleep(pollIntervalMs);
+    if (maintenanceFailure) throw maintenanceFailure;
+  } finally {
+    await maintenance.stop();
   }
 }
 

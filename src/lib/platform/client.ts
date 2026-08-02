@@ -14,6 +14,11 @@
 
 import { GoogleAuth } from "google-auth-library";
 
+import {
+  PLATFORM_OPERATION_REASON_CODES,
+  type PlatformOperationReason,
+} from "@/lib/platform/reasons";
+
 /** 플랫폼이 돌려주는 오류. */
 export class PlatformApiError extends Error {
   readonly code: string;
@@ -31,10 +36,10 @@ export interface PlatformClientOptions {
   /** Admin API 주소. Cloud Run URL이다. */
   baseUrl: string;
   /**
-   * backoffice-admin@ 서비스 계정 키(JSON 문자열).
+   * Admin API 호출용 서비스 계정 키(JSON 문자열).
    *
-   * 이 SA에는 run.invoker 외에 아무 권한도 없다. RPI 클러스터가
-   * 침해되어도 폭발 반경이 Admin API 호출까지로 제한된다.
+   * read 계정은 웹 Pod, write 계정은 AppOps worker에만 둔다. 두 계정
+   * 모두 Cloud Run run.invoker 외 프로젝트 권한을 갖지 않는다.
    */
   serviceAccountJson: string;
   /** 요청 제한 시간. */
@@ -43,14 +48,56 @@ export interface PlatformClientOptions {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
+function abortError(): Error {
+  const error = new Error("플랫폼 요청 제한 시간을 초과했습니다.");
+  error.name = "AbortError";
+  return error;
+}
+
+function assertBeforeDeadline(
+  controller: AbortController,
+  deadlineAt: number,
+): void {
+  // event loop이 잠시 멈추면 timer callback보다 완료 promise의 microtask가
+  // 먼저 실행될 수 있다. signal뿐 아니라 절대 시각도 검사해 늦은 fetch를 막는다.
+  if (controller.signal.aborted || Date.now() >= deadlineAt) {
+    controller.abort();
+    throw abortError();
+  }
+}
+
+/** signal을 받지 않는 GoogleAuth promise도 전체 요청 deadline에 묶는다. */
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) {
+          reject(abortError());
+          return;
+        }
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** 운영 화면에 보여줄 주문 요약. */
 export interface PlatformOrder {
   orderKey: string;
+  /** identity binding에서 확인한 앱. 삭제된 사용자의 tombstone은 빈 문자열이다. */
+  appId: string;
   platformUserId: string;
   entitlementId: string;
   platform: string;
   productId: string;
-  providerOrderId: string;
   state: string;
   purchasedAt: string;
   observedAt: string;
@@ -77,15 +124,33 @@ export interface PlatformOperatorRecord {
   platformUserId: string;
   entitlementId: string;
   actorLogin: string;
-  reason: string;
+  reason: PlatformOperationReason;
   appId: string;
   createdAt: string;
   kind: "grant" | "revoke";
+  /** revoke 기록이 대상으로 삼은 운영자 grant requestId. */
+  grantRequestId?: string;
 }
 
 export interface PlatformHealth {
   environment: string;
   deadLetterCount: number;
+}
+
+export interface PlatformAppIapCatalog {
+  appId: string;
+  entitlements: string[];
+}
+
+/** PII를 제외한 플랫폼 인증 사용자 조회 결과. */
+export interface PlatformUser {
+  platformUserId: string;
+  appId: string;
+  supportCode: string;
+  /** true는 서명 없는 anonymous credential이며 Firebase 익명 Auth와 다르다. */
+  isAnonymous: boolean;
+  createdAt: string;
+  lastSeenAt: string;
 }
 
 /** 운영자 지급·회수 요청. */
@@ -99,22 +164,50 @@ export interface OperatorRequest {
   platformUserId: string;
   entitlementId: string;
   /** 왜 했는지. 비어 있으면 플랫폼이 거부한다. */
-  reason: string;
+  reason: PlatformOperationReason;
   appId: string;
+  /** 화면 표시 환경과 원장 환경이 어긋나면 서버가 거부한다. */
+  expectedEnvironment: "sandbox" | "production";
+  /** 서버가 계산한 정확한 문구와 일치해야 한다. */
+  confirmation: string;
 }
 
-export interface OperatorResult {
+export interface RevokeOperatorRequest extends OperatorRequest {
+  /** 회수할 운영자 지급 requestId. 마켓 구매 source는 대상으로 삼지 않는다. */
+  grantRequestId: string;
+}
+
+interface OperatorResultBase {
   /** false면 이미 처리된 요청이었다. 실패가 아니다. */
   applied: boolean;
   entitlements: string[];
+  requestId: string;
+  appId: string;
+  platformUserId: string;
+  entitlementId: string;
+  expectedEnvironment: "sandbox" | "production";
 }
+
+export interface GrantOperatorResult extends OperatorResultBase {
+  operation: "grant";
+  grantRequestId?: never;
+}
+
+export interface RevokeOperatorResult extends OperatorResultBase {
+  operation: "revoke";
+  grantRequestId: string;
+}
+
+export type OperatorResult = GrantOperatorResult | RevokeOperatorResult;
 
 /** App Store sandbox 구매내역 초기화 요청. */
 export interface SandboxResetRequest {
   requestId: string;
   platformUserId: string;
-  reason: string;
+  reason: PlatformOperationReason;
   appId: string;
+  expectedEnvironment: "sandbox";
+  confirmation: string;
   /**
    * App Store Connect에서 구매내역을 실제로 지웠다는 확인.
    *
@@ -123,12 +216,342 @@ export interface SandboxResetRequest {
    * 새 구매로 보고 다시 지급한다. 초기화한 줄 알았던 테스터가
    * 상품을 그대로 갖게 된다.
    */
-  appleClearedConfirmed: boolean;
+  appleClearedConfirmed: true;
 }
 
 export interface SandboxResetResult {
+  requestId: string;
+  appId: string;
   platformUserId: string;
+  expectedEnvironment: "sandbox";
+  operation: "sandbox_reset";
   resetOrderKeys: string[];
+}
+
+/** 민감한 대상 정보 없이 durable reset intent의 진행 상태만 조회한다. */
+export interface SandboxResetStatus {
+  requestId: string;
+  appId: string;
+  state: "prepared" | "completed" | "closed_not_started";
+  expectedEnvironment: "sandbox";
+  operation: "sandbox_reset";
+}
+
+/** 만료된 백오피스 command가 prepared intent를 같은 ID로 재개할 때 쓴다. */
+export interface SandboxResetResumeRequest {
+  requestId: string;
+  appId: string;
+  confirmation: string;
+}
+
+/** durable intent 부재를 영구 확정하는 write 요청과 응답. */
+export interface SandboxResetCloseRequest {
+  requestId: string;
+  appId: string;
+  confirmation: string;
+}
+
+export interface SandboxResetCloseResult extends SandboxResetStatus {
+  state: "closed_not_started";
+  applied: boolean;
+}
+
+export interface MaintenanceResult {
+  appId: string;
+  active: boolean;
+  minutes: number;
+}
+
+function invalidPlatformResponse(message: string): never {
+  throw new PlatformApiError("platform_response_invalid", message, 200);
+}
+
+function requiredArray(
+  value: unknown,
+  key: string,
+): unknown[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) {
+    return invalidPlatformResponse(`플랫폼 ${key} 응답 형식이 올바르지 않습니다.`);
+  }
+  return value[key];
+}
+
+function requiredString(
+  value: Record<string, unknown>,
+  key: string,
+): string {
+  if (typeof value[key] !== "string") {
+    return invalidPlatformResponse(`플랫폼 ${key} 응답 형식이 올바르지 않습니다.`);
+  }
+  return value[key];
+}
+
+function requiredReason(
+  value: Record<string, unknown>,
+  key: string,
+): PlatformOperationReason {
+  const reason = requiredString(value, key);
+  if (!(PLATFORM_OPERATION_REASON_CODES as readonly string[]).includes(reason)) {
+    return invalidPlatformResponse(
+      "플랫폼 운영 사유 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  return reason as PlatformOperationReason;
+}
+
+function validateOrder(value: unknown): PlatformOrder {
+  if (!isRecord(value) || typeof value.tombstone !== "boolean") {
+    return invalidPlatformResponse("플랫폼 주문 응답 형식이 올바르지 않습니다.");
+  }
+  return {
+    orderKey: requiredString(value, "orderKey"),
+    appId: requiredString(value, "appId"),
+    platformUserId: requiredString(value, "platformUserId"),
+    entitlementId: requiredString(value, "entitlementId"),
+    platform: requiredString(value, "platform"),
+    productId: requiredString(value, "productId"),
+    state: requiredString(value, "state"),
+    purchasedAt: requiredString(value, "purchasedAt"),
+    observedAt: requiredString(value, "observedAt"),
+    tombstone: value.tombstone,
+  };
+}
+
+function validateEntitlement(value: unknown): PlatformEntitlement {
+  if (!isRecord(value) || typeof value.active !== "boolean") {
+    return invalidPlatformResponse(
+      "플랫폼 entitlement 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  return {
+    entitlementId: requiredString(value, "entitlementId"),
+    active: value.active,
+    updatedAt: requiredString(value, "updatedAt"),
+    sources: requiredArray(value, "sources").map((source) => {
+      if (!isRecord(source)) {
+        return invalidPlatformResponse(
+          "플랫폼 entitlement source 응답 형식이 올바르지 않습니다.",
+        );
+      }
+      return {
+        platform: requiredString(source, "platform"),
+        productId: requiredString(source, "productId"),
+        state: requiredString(source, "state"),
+        orderKey: requiredString(source, "orderKey"),
+        observedAt: requiredString(source, "observedAt"),
+      };
+    }),
+  };
+}
+
+function validateOperatorRecord(value: unknown): PlatformOperatorRecord {
+  if (!isRecord(value) || (value.kind !== "grant" && value.kind !== "revoke")) {
+    return invalidPlatformResponse(
+      "플랫폼 운영자 이력 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  const grantRequestId = value.grantRequestId;
+  if (grantRequestId !== undefined && typeof grantRequestId !== "string") {
+    return invalidPlatformResponse(
+      "플랫폼 운영자 이력 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  return {
+    requestId: requiredString(value, "requestId"),
+    grantRequestId,
+    platformUserId: requiredString(value, "platformUserId"),
+    entitlementId: requiredString(value, "entitlementId"),
+    actorLogin: requiredString(value, "actorLogin"),
+    reason: requiredReason(value, "reason"),
+    appId: requiredString(value, "appId"),
+    createdAt: requiredString(value, "createdAt"),
+    kind: value.kind,
+  };
+}
+
+function validateOperatorResult(
+  value: unknown,
+  expected: OperatorRequest,
+  operation: "grant",
+): GrantOperatorResult;
+function validateOperatorResult(
+  value: unknown,
+  expected: RevokeOperatorRequest,
+  operation: "revoke",
+): RevokeOperatorResult;
+function validateOperatorResult(
+  value: unknown,
+  expected: OperatorRequest | RevokeOperatorRequest,
+  operation: "grant" | "revoke",
+): OperatorResult {
+  if (!isRecord(value) || typeof value.applied !== "boolean") {
+    return invalidPlatformResponse("플랫폼 조작 응답 형식이 올바르지 않습니다.");
+  }
+  const entitlements = requiredArray(value, "entitlements");
+  const requestId = requiredString(value, "requestId");
+  const appId = requiredString(value, "appId");
+  const platformUserId = requiredString(value, "platformUserId");
+  const entitlementId = requiredString(value, "entitlementId");
+  const expectedEnvironment = requiredString(value, "expectedEnvironment");
+  const responseOperation = requiredString(value, "operation");
+  const expectedGrantRequestId =
+    operation === "revoke"
+      ? (expected as RevokeOperatorRequest).grantRequestId
+      : undefined;
+  const grantRequestId = value.grantRequestId;
+  if (
+    entitlements.some((item) => typeof item !== "string") ||
+    requestId !== expected.requestId ||
+    appId !== expected.appId ||
+    platformUserId !== expected.platformUserId ||
+    entitlementId !== expected.entitlementId ||
+    expectedEnvironment !== expected.expectedEnvironment ||
+    responseOperation !== operation ||
+    grantRequestId !== expectedGrantRequestId
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 조작 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  const base = {
+    applied: value.applied,
+    entitlements: entitlements as string[],
+    requestId,
+    appId,
+    platformUserId,
+    entitlementId,
+    expectedEnvironment: expected.expectedEnvironment,
+  };
+  return operation === "grant"
+    ? { ...base, operation }
+    : { ...base, operation, grantRequestId: expectedGrantRequestId! };
+}
+
+function validateSandboxResetResult(
+  value: unknown,
+  expected: SandboxResetRequest,
+): SandboxResetResult {
+  if (!isRecord(value)) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  const requestId = requiredString(value, "requestId");
+  const appId = requiredString(value, "appId");
+  const platformUserId = requiredString(value, "platformUserId");
+  const expectedEnvironment = requiredString(value, "expectedEnvironment");
+  const operation = requiredString(value, "operation");
+  const resetOrderKeys = requiredArray(value, "resetOrderKeys");
+  if (
+    requestId !== expected.requestId ||
+    appId !== expected.appId ||
+    platformUserId !== expected.platformUserId ||
+    expectedEnvironment !== expected.expectedEnvironment ||
+    operation !== "sandbox_reset" ||
+    resetOrderKeys.some((item) => typeof item !== "string")
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  return {
+    requestId,
+    appId,
+    platformUserId,
+    expectedEnvironment: "sandbox",
+    operation: "sandbox_reset",
+    resetOrderKeys: resetOrderKeys as string[],
+  };
+}
+
+function validateSandboxResetStatus(
+  value: unknown,
+  expected: { requestId: string; appId: string },
+): SandboxResetStatus {
+  if (!isRecord(value)) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 상태 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  const requestId = requiredString(value, "requestId");
+  const appId = requiredString(value, "appId");
+  const state = requiredString(value, "state");
+  const expectedEnvironment = requiredString(value, "expectedEnvironment");
+  const operation = requiredString(value, "operation");
+  if (
+    requestId !== expected.requestId ||
+    appId !== expected.appId ||
+    (state !== "prepared" &&
+      state !== "completed" &&
+      state !== "closed_not_started") ||
+    expectedEnvironment !== "sandbox" ||
+    operation !== "sandbox_reset"
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 상태 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  return {
+    requestId,
+    appId,
+    state,
+    expectedEnvironment: "sandbox",
+    operation: "sandbox_reset",
+  };
+}
+
+function validateSandboxResetCloseResult(
+  value: unknown,
+  expected: SandboxResetCloseRequest,
+): SandboxResetCloseResult {
+  const status = validateSandboxResetStatus(value, expected);
+  if (
+    status.state !== "closed_not_started" ||
+    !isRecord(value) ||
+    typeof value.applied !== "boolean"
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 미시작 종료 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  return { ...status, state: "closed_not_started", applied: value.applied };
+}
+
+function validateSandboxResetResumeResult(
+  value: unknown,
+  expected: SandboxResetResumeRequest,
+): SandboxResetResult {
+  if (!isRecord(value)) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 재개 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  const requestId = requiredString(value, "requestId");
+  const appId = requiredString(value, "appId");
+  const platformUserId = requiredString(value, "platformUserId");
+  const expectedEnvironment = requiredString(value, "expectedEnvironment");
+  const operation = requiredString(value, "operation");
+  const resetOrderKeys = requiredArray(value, "resetOrderKeys");
+  if (
+    requestId !== expected.requestId ||
+    appId !== expected.appId ||
+    platformUserId === "" ||
+    expectedEnvironment !== "sandbox" ||
+    operation !== "sandbox_reset" ||
+    resetOrderKeys.some((item) => typeof item !== "string")
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 sandbox reset 재개 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  return {
+    requestId,
+    appId,
+    platformUserId,
+    expectedEnvironment: "sandbox",
+    operation: "sandbox_reset",
+    resetOrderKeys: resetOrderKeys as string[],
+  };
 }
 
 export class PlatformClient {
@@ -159,16 +582,58 @@ export class PlatformClient {
 
   /** 운영 상태 요약. dead-letter가 0이 아니면 사람이 봐야 한다. */
   async health(): Promise<PlatformHealth> {
-    return this.request<PlatformHealth>("GET", "/v1/admin/health");
+    const res = await this.request<unknown>("GET", "/v1/admin/health");
+    if (
+      !isRecord(res) ||
+      (res.environment !== "sandbox" && res.environment !== "production") ||
+      !Number.isInteger(res.deadLetterCount) ||
+      (res.deadLetterCount as number) < 0
+    ) {
+      return invalidPlatformResponse("플랫폼 상태 응답 형식이 올바르지 않습니다.");
+    }
+    return {
+      environment: res.environment,
+      deadLetterCount: res.deadLetterCount as number,
+    };
+  }
+
+  /** platform_user_id 또는 지원 코드로 PII 없는 인증 사용자 정보를 찾는다. */
+  async user(reference: string): Promise<PlatformUser> {
+    const res = await this.request<unknown>(
+      "GET",
+      `/v1/admin/users/${encodeURIComponent(reference)}`,
+    );
+    if (!isRecord(res) || !isRecord(res.user) || typeof res.user.isAnonymous !== "boolean") {
+      return invalidPlatformResponse("플랫폼 사용자 응답 형식이 올바르지 않습니다.");
+    }
+    const platformUserId = requiredString(res.user, "platformUserId");
+    const supportCode = requiredString(res.user, "supportCode");
+    const normalizedReference = reference.trim().toUpperCase();
+    const responseReference = normalizedReference.startsWith("PU_")
+      ? platformUserId.toUpperCase()
+      : supportCode.toUpperCase();
+    if (responseReference !== normalizedReference) {
+      return invalidPlatformResponse(
+        "플랫폼 사용자 응답 대상이 요청과 일치하지 않습니다.",
+      );
+    }
+    return {
+      platformUserId,
+      appId: requiredString(res.user, "appId"),
+      supportCode,
+      isAnonymous: res.user.isAnonymous,
+      createdAt: requiredString(res.user, "createdAt"),
+      lastSeenAt: requiredString(res.user, "lastSeenAt"),
+    };
   }
 
   /** 최근 주문. 기존 recent-purchases에 대응한다. */
   async recentOrders(limit = 20): Promise<PlatformOrder[]> {
-    const res = await this.request<{ orders: PlatformOrder[] }>(
+    const res = await this.request<unknown>(
       "GET",
       `/v1/admin/orders/recent?limit=${encodeURIComponent(String(limit))}`,
     );
-    return res.orders ?? [];
+    return requiredArray(res, "orders").map(validateOrder);
   }
 
   /**
@@ -177,11 +642,19 @@ export class PlatformClient {
    * 비활성도 함께 온다. 왜 없는지를 봐야 CS가 가능하다.
    */
   async userEntitlements(platformUserId: string): Promise<PlatformEntitlement[]> {
-    const res = await this.request<{ entitlements: PlatformEntitlement[] }>(
+    const res = await this.request<unknown>(
       "GET",
       `/v1/admin/users/${encodeURIComponent(platformUserId)}/entitlements`,
     );
-    return res.entitlements ?? [];
+    if (
+      !isRecord(res) ||
+      requiredString(res, "platformUserId") !== platformUserId
+    ) {
+      return invalidPlatformResponse(
+        "플랫폼 entitlement 응답 대상이 요청과 일치하지 않습니다.",
+      );
+    }
+    return requiredArray(res, "entitlements").map(validateEntitlement);
   }
 
   /** 운영자 지급·회수 이력. 기존 production-grants에 대응한다. */
@@ -189,22 +662,71 @@ export class PlatformClient {
     grants: PlatformOperatorRecord[];
     revocations: PlatformOperatorRecord[];
   }> {
-    const res = await this.request<{
-      grants: PlatformOperatorRecord[];
-      revocations: PlatformOperatorRecord[];
-    }>("GET", `/v1/admin/operator-grants?limit=${encodeURIComponent(String(limit))}`);
+    const res = await this.request<unknown>(
+      "GET",
+      `/v1/admin/operator-grants?limit=${encodeURIComponent(String(limit))}`,
+    );
 
-    return { grants: res.grants ?? [], revocations: res.revocations ?? [] };
+    return {
+      grants: requiredArray(res, "grants").map(validateOperatorRecord),
+      revocations: requiredArray(res, "revocations").map(
+        validateOperatorRecord,
+      ),
+    };
+  }
+
+  /** 앱별 운영자 변경 allowlist. SKU와 마켓 비밀은 반환하지 않는다. */
+  async catalogEntitlements(appId: string): Promise<PlatformAppIapCatalog> {
+    const res = await this.request<unknown>(
+      "GET",
+      `/v1/admin/apps/${encodeURIComponent(appId)}/iap/catalog`,
+    );
+    if (!isRecord(res) || requiredString(res, "appId") !== appId) {
+      return invalidPlatformResponse(
+        "플랫폼 entitlement 카탈로그 응답 대상이 요청과 일치하지 않습니다.",
+      );
+    }
+    const entitlements = requiredArray(res, "entitlements");
+    if (entitlements.some((item) => typeof item !== "string")) {
+      return invalidPlatformResponse(
+        "플랫폼 entitlement 카탈로그 응답 형식이 올바르지 않습니다.",
+      );
+    }
+    return { appId, entitlements: entitlements as string[] };
   }
 
   /** 운영자 지급. 등급 C — dry-run과 typed confirmation을 거친 뒤 부른다. */
-  async grantEntitlement(req: OperatorRequest, actor: string): Promise<OperatorResult> {
-    return this.request<OperatorResult>("POST", "/v1/admin/entitlements/grant", req, actor);
+  async grantEntitlement(
+    req: OperatorRequest,
+    actor: string,
+  ): Promise<GrantOperatorResult> {
+    return validateOperatorResult(
+      await this.request<unknown>(
+        "POST",
+        "/v1/admin/entitlements/grant",
+        req,
+        actor,
+      ),
+    req,
+    "grant",
+    );
   }
 
   /** 운영자 회수. 등급 D — 취소할 수 없다. */
-  async revokeEntitlement(req: OperatorRequest, actor: string): Promise<OperatorResult> {
-    return this.request<OperatorResult>("POST", "/v1/admin/entitlements/revoke", req, actor);
+  async revokeEntitlement(
+    req: RevokeOperatorRequest,
+    actor: string,
+  ): Promise<RevokeOperatorResult> {
+    return validateOperatorResult(
+      await this.request<unknown>(
+        "POST",
+        "/v1/admin/entitlements/revoke",
+        req,
+        actor,
+      ),
+    req,
+    "revoke",
+    );
   }
 
   /**
@@ -218,7 +740,82 @@ export class PlatformClient {
     req: SandboxResetRequest,
     actor: string,
   ): Promise<SandboxResetResult> {
-    return this.request<SandboxResetResult>("POST", "/v1/admin/iap/sandbox-reset", req, actor);
+    return validateSandboxResetResult(
+      await this.request<unknown>(
+        "POST",
+        "/v1/admin/iap/sandbox-reset",
+        req,
+        actor,
+      ),
+    req,
+    );
+  }
+
+  /** prepared/completed/closed 상태를 반환한다. 404만 아직 기록이 없다는 뜻이다. */
+  async sandboxResetStatus(
+    requestId: string,
+    appId: string,
+  ): Promise<SandboxResetStatus | null> {
+    try {
+      return validateSandboxResetStatus(
+        await this.request<unknown>(
+          "GET",
+          `/v1/admin/iap/sandbox-resets/${encodeURIComponent(requestId)}`,
+        ),
+        { requestId, appId },
+      );
+    } catch (error) {
+      if (
+        error instanceof PlatformApiError &&
+        error.status === 404 &&
+        error.code === "sandbox_reset_not_found"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** prepared durable intent를 immutable requestId 그대로 완료한다. */
+  async resumeSandboxReset(
+    req: SandboxResetResumeRequest,
+    actor: string,
+  ): Promise<SandboxResetResult> {
+    return validateSandboxResetResumeResult(
+      await this.request<unknown>(
+        "POST",
+        `/v1/admin/iap/sandbox-resets/${encodeURIComponent(req.requestId)}/resume`,
+        { appId: req.appId, confirmation: req.confirmation },
+        actor,
+      ),
+      req,
+    );
+  }
+
+  /** intent 부재를 영구 closure로 확정한다. write identity에서만 호출한다. */
+  async closeSandboxResetNotStarted(
+    req: SandboxResetCloseRequest,
+    actor: string,
+  ): Promise<SandboxResetCloseResult> {
+    return validateSandboxResetCloseResult(
+      await this.request<unknown>(
+        "POST",
+        `/v1/admin/iap/sandbox-resets/${encodeURIComponent(req.requestId)}/close-not-started`,
+        { appId: req.appId, confirmation: req.confirmation },
+        actor,
+      ),
+      req,
+    );
+  }
+
+  /** 앱 점검 모드를 켜거나 끈다. write 계정으로만 호출할 수 있다. */
+  async setMaintenance(appId: string, minutes: number, actor: string): Promise<MaintenanceResult> {
+    return this.request<MaintenanceResult>(
+      "POST",
+      "/v1/admin/config/maintenance",
+      { appId, minutes },
+      actor,
+    );
   }
 
   private async request<T>(
@@ -227,39 +824,61 @@ export class PlatformClient {
     body?: unknown,
     actor?: string,
   ): Promise<T> {
-    // audience는 Cloud Run 서비스 URL이다. 다른 서비스로 발급된
-    // 토큰을 재사용하지 못하게 막는다.
-    const client = await this.auth.getIdTokenClient(this.baseUrl);
-    const token = await client.idTokenProvider.fetchIdToken(this.baseUrl);
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    };
-    // 누가 눌렀는지. 서비스 계정만으로는 알 수 없다.
-    if (actor) {
-      headers["X-Seori-Actor"] = actor;
-    }
-
+    // 인증 client·토큰 획득·remote fetch·body 해석을 하나의 절대 deadline에
+    // 묶는다. token promise 자체는 취소할 수 없지만 timeout 뒤 fetch는 금지한다.
     const controller = new AbortController();
+    const deadlineAt = Date.now() + this.timeoutMs;
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    let response: Response;
     try {
-      response = await fetch(this.baseUrl + path, {
+      // audience는 Cloud Run 서비스 URL이다. 다른 서비스로 발급된
+      // 토큰을 재사용하지 못하게 막는다.
+      const client = await abortable(
+        this.auth.getIdTokenClient(this.baseUrl),
+        controller.signal,
+      );
+      assertBeforeDeadline(controller, deadlineAt);
+      const token = await abortable(
+        client.idTokenProvider.fetchIdToken(this.baseUrl),
+        controller.signal,
+      );
+      // token이 deadline 경계에서 늦게 완료된 경우 remote mutation을 새로
+      // 시작하지 않는다. abortable의 검사와 별도 명시해 회귀를 막는다.
+      assertBeforeDeadline(controller, deadlineAt);
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      };
+      // 누가 눌렀는지. 서비스 계정만으로는 알 수 없다.
+      if (actor) {
+        headers["X-Seori-Actor"] = actor;
+      }
+
+      const response = await fetch(this.baseUrl + path, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
+      assertBeforeDeadline(controller, deadlineAt);
+      const result = await this.readEnvelope<T>(response);
+      assertBeforeDeadline(controller, deadlineAt);
+      return result;
     } catch (error) {
+      if (error instanceof PlatformApiError && !controller.signal.aborted) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : "연결에 실패했습니다.";
-      throw new PlatformApiError("network_error", message, 0);
+      throw new PlatformApiError(
+        "network_error",
+        controller.signal.aborted
+          ? "플랫폼 요청 제한 시간을 초과했습니다."
+          : message,
+        0,
+      );
     } finally {
       clearTimeout(timer);
     }
-
-    return this.readEnvelope<T>(response);
   }
 
   private async readEnvelope<T>(response: Response): Promise<T> {

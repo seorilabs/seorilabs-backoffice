@@ -66,7 +66,7 @@ export function AppShell({
 
       {/* 사이드바 — 모바일: 슬라이드 드로어 / 데스크톱: 고정 */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-64 max-w-[80vw] shrink-0 flex-col border-r border-neutral-200 bg-white p-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-60 md:max-w-none md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 max-w-[80vw] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-neutral-200 bg-white p-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-60 md:max-w-none md:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
