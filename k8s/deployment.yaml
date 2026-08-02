@@ -1,3 +1,11 @@
+# backoffice 웹 Deployment. CI(deploy.yml)가 선언적으로 apply 한다.
+#
+# Service·ServiceMonitor·Ingress 는 k8s/backoffice-networking.yaml 로 분리했다.
+# 배포 SA 에 그 리소스 write 권한이 없어 한 파일이면 apply 가 실패한다.
+# 그래서 예전에는 이 파일을 apply 하지 않고 set image 로 이미지만 갱신했고,
+# 여기 적은 env 가 클러스터에 영영 가지 않았다.
+#
+# 이제 이 파일에 값을 적으면 다음 배포에 반영된다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -260,64 +268,3 @@ spec:
           emptyDir: {}
         - name: next-cache
           emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backoffice
-  namespace: platform
-  labels:
-    app.kubernetes.io/name: backoffice
-spec:
-  selector:
-    app.kubernetes.io/name: backoffice
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
----
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: backoffice
-  namespace: platform
-  labels:
-    app.kubernetes.io/name: backoffice
-    release: rpi-monitoring
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: backoffice
-  endpoints:
-    - port: http
-      path: /api/metrics
-      interval: 30s
-      scrapeTimeout: 10s
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: backoffice
-  namespace: platform
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    # GitHub webhook 대형 payload 대비 (raw-body HMAC 검증 안전).
-    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
-spec:
-  ingressClassName: public
-  tls:
-    - secretName: backoffice-vzyx-xyz-tls
-      hosts:
-        - backoffice.vzyx.xyz
-  rules:
-    - host: backoffice.vzyx.xyz
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: backoffice
-                port:
-                  name: http

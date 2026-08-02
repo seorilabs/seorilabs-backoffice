@@ -57,19 +57,35 @@ jobs:
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           IMG="${IMAGE}:${SHA}"
-          # CronJob 매니페스트를 선언적 적용 — 변경이 배포에 자동 반영되게.
-          # 새 CronJob 을 추가하면 이 목록에도 넣는다(ci-deployer Role 에 batch/cronjobs
-          # write 권한 필요 — k8s/ci-deployer-rbac.yaml). 제외: deployment(아래 set image
-          # 로 이미지만 갱신), SealedSecret(배포 SA 에 secret write 권한 안 줌 → 수동 apply),
-          # PVC 포함(backup-cronjob/buildkitd), 인프라(vault-*/rbac), secret.example.yaml.
+
+          # 매니페스트의 :latest 를 이번 빌드 SHA 로 바꿔 적용한다.
+          # 치환이 빗나가면 스크립트가 아무것도 내보내지 않고 죽는다.
+          # 계약은 scripts/render-manifest.test.sh 가 CI 에서 고정한다.
+          render() { scripts/render-manifest.sh "k8s/$1" "$IMG"; }
+
+          # 매니페스트를 선언적으로 적용한다 — 파일 변경이 배포에 자동 반영되게.
+          #
+          # 예전에는 deployment.yaml 을 제외하고 set image 로 이미지만 갱신했다.
+          # 그래서 매니페스트에 적은 env 가 클러스터에 영영 가지 않았다.
+          # FEATURE_PLATFORM_ADMIN_WRITES 와 DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT 가
+          # 실제로 그 상태로 남아 있었고, 매니페스트만 보면 켜져 있는 줄 안다.
+          #
+          # 새 매니페스트를 추가하면 이 목록에도 넣는다. ci-deployer Role 에
+          # 해당 리소스 write 권한이 필요하다(k8s/ci-deployer-rbac.yaml).
+          #
+          # 제외 — 전부 수동 apply 대상이다:
+          #   backoffice-networking.yaml  Service/ServiceMonitor/Ingress. 배포 SA 에
+          #                               권한을 주지 않으려고 deployment.yaml 에서 분리했다
+          #   SealedSecret                secret write 권한 안 줌
+          #   PVC 포함                    backup-cronjob, buildkitd
+          #   인프라                      vault-*, rbac, secret.example.yaml
           for m in \
             proactive-cronjobs.yaml \
             app-content-analytics-cronjob.yaml; do
             /tmp/kubectl apply -f "k8s/$m"
           done
-          /tmp/kubectl -n platform set image deployment/backoffice migrate="$IMG" backoffice="$IMG"
+          render deployment.yaml | /tmp/kubectl apply -f -
           /tmp/kubectl -n platform rollout status deployment/backoffice --timeout=300s
           # DB migration이 완료된 뒤 queue worker를 생성/갱신한다.
-          /tmp/kubectl apply -f k8s/app-ops-worker.yaml
-          /tmp/kubectl -n platform set image deployment/backoffice-app-ops-worker app-ops-worker="$IMG"
+          render app-ops-worker.yaml | /tmp/kubectl apply -f -
           /tmp/kubectl -n platform rollout status deployment/backoffice-app-ops-worker --timeout=300s
