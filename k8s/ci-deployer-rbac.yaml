@@ -1,5 +1,16 @@
-# CI(deploy.yml) 가 platform ns 의 backoffice Deployment + CronJob 만 갱신할 수 있는 최소권한 SA.
-# 이 SA 토큰으로 kubeconfig 를 만들어 GitHub secret KUBECONFIG_B64 에 넣는다(DEPLOY.md §7).
+# CI(deploy.yml) 가 platform ns 의 backoffice 워크로드와 그 노출 리소스만 갱신할 수 있는
+# 최소권한 SA. 이 SA 토큰으로 kubeconfig 를 만들어 GitHub secret KUBECONFIG_B64 에 넣는다
+# (DEPLOY.md §7).
+#
+# 여기 권한을 넓히는 대신 매니페스트를 쪼갰다.
+#
+# deployment.yaml 이 Deployment 외에 Service, ServiceMonitor, Ingress 를 함께 담고
+# 있어서, 권한이 없는 apply 가 중간에 실패했다. 그래서 예전 deploy.yml 은 그 파일을
+# 아예 apply 하지 않고 set image 로 이미지만 갱신했고, 매니페스트에 적은 env 가
+# 클러스터에 영영 가지 않았다.
+#
+# 노출 리소스는 k8s/backoffice-networking.yaml 로 옮겨 수동 apply 로 남겼다.
+# 거의 바뀌지 않는 값이라 이 SA 에 services/ingresses write 를 주는 것보다 낫다.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
