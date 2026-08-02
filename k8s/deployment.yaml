@@ -108,9 +108,15 @@ spec:
             # 쓰기 키는 backoffice-app-ops-worker에만 주입한다.
             - name: FEATURE_PLATFORM_ADMIN
               value: "true"
-            # worker·registry·catalog 준비 전에는 UI mutation을 열지 않는다.
+            # worker·registry·catalog가 모두 준비돼 전환했다.
+            #
+            # 이 플래그는 화면만 연다. 웹 Pod에는 read 키만 있어서 켜도
+            # 원장을 직접 쓰지 못한다. 실제 mutation은 write 자격증명을
+            # 가진 backoffice-app-ops-worker가 실행한다.
+            #
+            # worker의 같은 이름 두 플래그와 항상 같은 값을 유지한다.
             - name: FEATURE_PLATFORM_ADMIN_WRITES
-              value: "false"
+              value: "true"
             - name: FEATURE_TELEGRAM_ENABLED
               value: "true"
             - name: TELEGRAM_ALLOWED_IDS
