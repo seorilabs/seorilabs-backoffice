@@ -127,7 +127,7 @@ spec:
             # 정책: 모든 App Store 배포는 App Store Connect(Xcode Cloud)로 → TestFlight 검증 → 심사 제출.
             # iOS 를 출시하는 repo 는 Xcode Cloud 제품/워크플로 준비되는 대로 이 목록에 추가한다.
             - name: XCODE_CLOUD_APP_STORE_REPOS
-              value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair"
+              value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
