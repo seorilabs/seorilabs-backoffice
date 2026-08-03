@@ -22,10 +22,17 @@ export interface PlatformCapabilityView {
   description?: string;
 }
 
+export interface PlatformEnvironmentMismatchView {
+  appId: string;
+  registry: string;
+  ledger: string;
+}
+
 export interface PlatformOverviewStatusProps {
   connection: PlatformConnectionState;
   environment?: string | null;
   deadLetterCount?: number | null;
+  environmentMismatches?: readonly PlatformEnvironmentMismatchView[];
   capabilities?: readonly PlatformCapabilityView[];
   lastCheckedAt?: string | null;
   message?: string | null;
@@ -36,6 +43,7 @@ export function PlatformOverviewStatus({
   connection,
   environment,
   deadLetterCount,
+  environmentMismatches = [],
   capabilities = [],
   lastCheckedAt,
   message,
@@ -70,6 +78,31 @@ export function PlatformOverviewStatus({
           detail="0이 아니면 마켓 완료 처리 상태를 점검해야 합니다."
         />
       </div>
+
+      {environmentMismatches.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          <div className="font-medium">
+            레지스트리와 원장 환경이 어긋나 운영 조작이 막혀 있습니다.
+          </div>
+          <ul className="mt-2 space-y-1">
+            {environmentMismatches.map((m) => (
+              <li key={m.appId} className="font-mono text-xs">
+                {m.appId} — 레지스트리 {m.registry || "(미선언)"} / 원장 {m.ledger}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 text-xs">
+            해당 앱의 지급·회수가 전부 실패합니다. 유저 결제는 정상이라 다른
+            지표로는 드러나지 않습니다. platform 저장소에서{" "}
+            <span className="font-mono">registry/apps/*.json</span>을 고친 뒤{" "}
+            <span className="font-mono">cmd/regsync</span>를 실행해야 합니다 —
+            파일만 고치면 반영되지 않습니다.
+          </div>
+        </div>
+      )}
 
       {message && (
         <div

@@ -132,9 +132,25 @@ export interface PlatformOperatorRecord {
   grantRequestId?: string;
 }
 
+/** 레지스트리가 선언한 원장 환경이 서비스 환경과 다른 앱. */
+export interface PlatformEnvironmentMismatch {
+  appId: string;
+  /** 레지스트리가 선언한 환경. 선언하지 않았으면 빈 문자열이다. */
+  registry: string;
+  /** 플랫폼 서비스가 실제로 읽고 쓰는 환경. */
+  ledger: string;
+}
+
 export interface PlatformHealth {
   environment: string;
   deadLetterCount: number;
+  /**
+   * 비어 있지 않으면 그 앱의 운영 조작이 전부 422로 막힌다.
+   *
+   * 반대로 유저 결제는 계속 된다. 환경 대조가 Admin 경로에만 있고 검증
+   * 경로에는 없기 때문이다. 그래서 5xx나 트래픽 변화로는 잡히지 않는다.
+   */
+  environmentMismatches: PlatformEnvironmentMismatch[];
 }
 
 export interface PlatformAppIapCatalog {
@@ -594,6 +610,9 @@ export class PlatformClient {
     return {
       environment: res.environment,
       deadLetterCount: res.deadLetterCount as number,
+      // 구버전 Admin API는 이 필드를 주지 않는다. 없으면 빈 배열로 본다.
+      // 조회 기능 전체를 막을 만한 값이 아니다.
+      environmentMismatches: parseEnvironmentMismatches(res.environmentMismatches),
     };
   }
 
@@ -919,6 +938,33 @@ export class PlatformClient {
       response.status,
     );
   }
+}
+
+/**
+ * 환경 불일치 목록을 읽는다.
+ *
+ * 형식이 이상하면 던지지 않고 버린다. 이 값은 진단 정보이고, 여기서 실패하면
+ * 정작 문제를 봐야 할 상태 화면 전체가 닫힌다. 대신 항목 단위로 걸러서
+ * 온전한 것만 보여준다.
+ */
+function parseEnvironmentMismatches(
+  value: unknown,
+): PlatformEnvironmentMismatch[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (
+      !isRecord(item) ||
+      typeof item.appId !== "string" ||
+      typeof item.registry !== "string" ||
+      typeof item.ledger !== "string" ||
+      item.appId.trim() === ""
+    ) {
+      return [];
+    }
+    return [
+      { appId: item.appId, registry: item.registry, ledger: item.ledger },
+    ];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
