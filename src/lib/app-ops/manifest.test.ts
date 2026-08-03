@@ -45,6 +45,7 @@ const validManifest = {
     content: {
       metrics: [
         { key: "starts", label: "시작", event: "game_start", agg: "count" },
+        { key: "manual", label: "직접 수확", event: "crop_harvested", agg: "count", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
         {
           key: "avg_duration",
           label: "평균 플레이",
@@ -134,7 +135,8 @@ test("같은 도구 안의 operation id 중복은 거부한다", () => {
 test("manifest 컨텐츠 스펙과 섹션별 도구를 해석한다", () => {
   const spec = contentSpecFromManifest("happy-farm", validManifest);
   assert.equal(spec?.slug, "happy-farm");
-  assert.equal(spec?.metrics?.[1].param, "duration_sec");
+  assert.equal(spec?.metrics?.[1].where?.[0].op, "ne_or_unset");
+  assert.equal(spec?.metrics?.[2].param, "duration_sec");
   assert.equal(toolsForSection(validManifest, "commerce").length, 1);
   assert.equal(toolsForSection(validManifest, "ads").length, 0);
 });

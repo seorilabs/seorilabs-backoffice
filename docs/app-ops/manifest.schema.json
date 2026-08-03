@@ -47,7 +47,7 @@
       "properties": {
         "param": { "$ref": "#/$defs/analyticsIdent" },
         "op": {
-          "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "truthy"]
+          "enum": ["eq", "ne", "ne_or_unset", "gt", "gte", "lt", "lte", "truthy"]
         },
         "value": { "type": ["string", "number"] }
       }
