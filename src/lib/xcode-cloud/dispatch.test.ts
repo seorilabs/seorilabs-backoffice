@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import {
+  findTagRefId,
   isXcodeCloudRepo,
   selectWorkflowForRepository,
+  waitForTagRefId,
   type WorkflowCandidate,
 } from "./dispatch";
 
@@ -95,5 +97,43 @@ test("동일 repo의 배포 workflow가 둘이면 모호성을 실패 처리", (
         "seorilabs/cycle-pair",
       ),
     /일치=2/,
+  );
+});
+
+test("정확한 TAG 이름의 ref id를 찾음", () => {
+  assert.equal(
+    findTagRefId(
+      [
+        { id: "branch", attributes: { kind: "BRANCH", name: "v0.0.2" } },
+        { id: "other-tag", attributes: { kind: "TAG", name: "v0.0.1" } },
+        { id: "target-tag", attributes: { kind: "TAG", name: "v0.0.2" } },
+      ],
+      "v0.0.2",
+    ),
+    "target-tag",
+  );
+});
+
+test("Xcode Cloud 태그 ref 동기화 지연을 재시도", async () => {
+  let loads = 0;
+  const refId = await waitForTagRefId(
+    "v0.0.2",
+    async () => {
+      loads += 1;
+      return loads < 3
+        ? []
+        : [{ id: "synced-tag", attributes: { kind: "TAG", name: "v0.0.2" } }];
+    },
+    { delaysMs: [0, 0, 0] },
+  );
+
+  assert.equal(refId, "synced-tag");
+  assert.equal(loads, 3);
+});
+
+test("재시도 후에도 태그 ref가 없으면 운영 확인 항목을 안내", async () => {
+  await assert.rejects(
+    () => waitForTagRefId("v0.0.2", async () => [], { delaysMs: [0, 0] }),
+    /Manual Start - Tag\(v\*\).*SCM 연결 상태/,
   );
 });

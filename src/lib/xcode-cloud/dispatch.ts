@@ -11,6 +11,8 @@
 import { env } from "@/lib/env";
 import { asc, asArray } from "@/lib/app-store/asc-client";
 
+const TAG_REF_RETRY_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000] as const;
+
 /** repoFullName 이 Xcode Cloud(iOS) 대상 allowlist 에 있는지. */
 export function isXcodeCloudRepo(repoFullName: string): boolean {
   return env
@@ -40,6 +42,53 @@ export interface WorkflowCandidate {
   repoFullName: string | null;
   isEnabled: boolean;
   actions: unknown;
+}
+
+export interface GitReferenceCandidate {
+  id: string;
+  attributes?: Record<string, unknown>;
+}
+
+/** ASC git reference 목록에서 정확한 태그 ref id를 찾는다. */
+export function findTagRefId(
+  refs: GitReferenceCandidate[],
+  tag: string,
+): string | null {
+  const ref = refs.find(
+    (candidate) =>
+      candidate.attributes?.kind === "TAG" && candidate.attributes?.name === tag,
+  );
+  return ref?.id ?? null;
+}
+
+/**
+ * GitHub 태그 생성과 Xcode Cloud SCM 인덱싱 사이의 짧은 지연을 흡수한다.
+ * POST 빌드 호출 전 조회만 반복하므로 중복 Xcode Cloud 빌드를 만들지 않는다.
+ */
+export async function waitForTagRefId(
+  tag: string,
+  loadRefs: () => Promise<GitReferenceCandidate[]>,
+  options: {
+    delaysMs?: readonly number[];
+    sleep?: (delayMs: number) => Promise<void>;
+  } = {},
+): Promise<string> {
+  const delaysMs = options.delaysMs ?? TAG_REF_RETRY_DELAYS_MS;
+  const sleep =
+    options.sleep ??
+    ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+
+  for (const delayMs of delaysMs) {
+    if (delayMs > 0) await sleep(delayMs);
+    const refId = findTagRefId(await loadRefs(), tag);
+    if (refId) return refId;
+  }
+
+  const waitedMs = delaysMs.reduce((sum, delayMs) => sum + delayMs, 0);
+  throw new Error(
+    `태그 ref 가 Xcode Cloud 에 ${Math.ceil(waitedMs / 1_000)}초 동안 동기화되지 않음: ${tag}. ` +
+      "workflow의 Manual Start - Tag(v*)와 SCM 연결 상태를 확인하세요.",
+  );
 }
 
 function isAppStoreArchive(actions: unknown): boolean {
@@ -119,14 +168,13 @@ async function resolveTagRefId(productId: string, tag: string): Promise<string> 
   const repoId = asArray(repos.data)[0]?.id;
   if (!repoId) throw new Error("Xcode Cloud primary repository 없음");
 
-  const refs = await asc(`/v1/scmRepositories/${repoId}/gitReferences?limit=200`);
-  const ref = asArray(refs.data).find(
-    (r) => r.attributes?.kind === "TAG" && r.attributes?.name === tag,
+  return waitForTagRefId(
+    tag,
+    async () => {
+      const refs = await asc(`/v1/scmRepositories/${repoId}/gitReferences?limit=200`);
+      return asArray(refs.data);
+    },
   );
-  if (!ref) {
-    throw new Error(`태그 ref 가 Xcode Cloud 에 아직 동기화되지 않음: ${tag}`);
-  }
-  return ref.id;
 }
 
 /**
