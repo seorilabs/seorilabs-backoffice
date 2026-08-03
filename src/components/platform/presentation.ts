@@ -83,3 +83,49 @@ export function writeStatePresentation(
   };
   return states[state];
 }
+
+/**
+ * 개요 화면의 연결 상태를 정한다.
+ *
+ * 이 판정을 page에서 삼항 연산자로 두면 test로 고정할 수 없다. 실제로
+ * 환경 불일치가 조용히 넘어가 운영자가 못 보는 사고가 있었으므로,
+ * 무엇이 degraded인지는 계약으로 박아 둔다.
+ */
+export function overviewConnectionState(input: {
+  configured: boolean;
+  reachable: boolean;
+  deadLetterCount: number;
+  environmentMismatchCount: number;
+}): PlatformConnectionState {
+  if (!input.configured) return "unconfigured";
+  if (!input.reachable) return "unavailable";
+  // 환경 불일치는 dead-letter와 같은 등급이다. 서비스는 살아 있지만
+  // 운영자가 할 수 있는 일이 막혀 있다.
+  if (input.deadLetterCount > 0 || input.environmentMismatchCount > 0) {
+    return "degraded";
+  }
+  return "connected";
+}
+
+/**
+ * 개요 화면의 요약 문구를 정한다.
+ *
+ * 환경 불일치를 dead-letter보다 먼저 알린다. dead-letter는 재시도가 돌지만
+ * 환경 불일치는 사람이 regsync를 돌리기 전에는 저절로 낫지 않는다.
+ */
+export function overviewMessage(input: {
+  configuredMessage: string | null;
+  errorMessage: string | null;
+  deadLetterCount: number;
+  environmentMismatchCount: number;
+}): string {
+  if (input.configuredMessage) return input.configuredMessage;
+  if (input.errorMessage) return input.errorMessage;
+  if (input.environmentMismatchCount > 0) {
+    return "레지스트리와 원장 환경이 어긋나 일부 앱의 운영 조작이 막혀 있습니다.";
+  }
+  if (input.deadLetterCount > 0) {
+    return "IAP dead-letter가 있어 완료 처리 상태 확인이 필요합니다.";
+  }
+  return "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
+}

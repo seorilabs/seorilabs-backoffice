@@ -2,6 +2,10 @@ import {
   PlatformOverviewStatus,
   type PlatformCapabilityView,
 } from "@/components/platform";
+import {
+  overviewConnectionState,
+  overviewMessage,
+} from "@/components/platform/presentation";
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
@@ -38,33 +42,27 @@ export default async function PlatformOverviewPage() {
     },
   ];
 
-  const message = !configuration.configured
-    ? configuration.message
-    : snapshot && !snapshot.ok
-      ? snapshot.error
-      : snapshot?.data.health.environmentMismatches.length
-        ? "레지스트리와 원장 환경이 어긋나 일부 앱의 운영 조작이 막혀 있습니다."
-        : snapshot?.data.health.deadLetterCount
-          ? "IAP dead-letter가 있어 완료 처리 상태 확인이 필요합니다."
-          : "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
+  const health = snapshot?.ok ? snapshot.data.health : null;
+  const mismatches = health?.environmentMismatches ?? [];
+
+  const message = overviewMessage({
+    configuredMessage: configuration.configured ? null : configuration.message,
+    errorMessage: snapshot && !snapshot.ok ? snapshot.error : null,
+    deadLetterCount: health?.deadLetterCount ?? 0,
+    environmentMismatchCount: mismatches.length,
+  });
 
   return (
     <PlatformOverviewStatus
-      connection={
-        !configuration.configured
-          ? "unconfigured"
-          : !snapshot?.ok
-            ? "unavailable"
-            : snapshot.data.health.deadLetterCount > 0 ||
-                snapshot.data.health.environmentMismatches.length > 0
-              ? "degraded"
-              : "connected"
-      }
+      connection={overviewConnectionState({
+        configured: configuration.configured,
+        reachable: snapshot?.ok === true,
+        deadLetterCount: health?.deadLetterCount ?? 0,
+        environmentMismatchCount: mismatches.length,
+      })}
       environment={snapshot?.ok ? snapshot.data.health.environment : null}
       deadLetterCount={snapshot?.ok ? snapshot.data.health.deadLetterCount : null}
-      environmentMismatches={
-        snapshot?.ok ? snapshot.data.health.environmentMismatches : []
-      }
+      environmentMismatches={mismatches}
       capabilities={capabilities}
       lastCheckedAt={snapshot?.ok ? snapshot.data.checkedAt : null}
       message={message}
