@@ -44,3 +44,13 @@ test("registry: crossword/foam 은 마켓, happy-farm/lucid-chess 는 비마켓"
   assert.equal(contentSpecFor("happy-farm")!.market, undefined);
   assert.equal(contentSpecFor("lucid-chess")!.market, undefined);
 });
+
+test("happy-farm: 자동수확 집계 이벤트를 사용하고 레거시 auto 원시 이벤트를 제외", () => {
+  const spec = contentSpecFor("happy-farm")!;
+  const sql = buildContentSql(spec, "`p.d.events_*`", "20260101", "20260107");
+  assert.match(sql, /event_name = 'auto_harvest_summary'/);
+  assert.match(sql, /ep\.key = 'harvested_count'/);
+  assert.match(sql, /ep\.key = 'total_gold'/);
+  assert.match(sql, /ep\.key = 'total_research_points'/);
+  assert.match(sql, /ep\.key = 'harvest_source'[\s\S]*!= 'auto'/);
+});

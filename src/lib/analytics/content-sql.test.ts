@@ -53,6 +53,15 @@ test("buildContentSql: truthy predicate 는 string 'true'/'1' 과 int 1 을 모�
   assert.match(sql, /ep\.value\.int_value = 1/);
 });
 
+test("buildContentSql: ne_or_unset predicate 는 파라미터 미존재 이벤트를 보존", () => {
+  const spec: AppContentSpec = {
+    slug: "legacy-compatible",
+    metrics: [{ key: "manual", label: "직접 수확", event: "crop_harvested", agg: "count", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] }],
+  };
+  const sql = buildContentSql(spec, "`p.d.events_*`", "1", "2");
+  assert.match(sql, /COALESCE\(\(SELECT COALESCE\(ep\.value\.string_value,[\s\S]*ep\.key = 'harvest_source'\), ''\) != 'auto'/);
+});
+
 test("buildContentSql: 마켓 스펙은 market 컬럼 + GROUPING SETS", () => {
   const spec: AppContentSpec = {
     slug: "m",

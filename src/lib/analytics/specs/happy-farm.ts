@@ -4,6 +4,7 @@ import type { AppContentSpec } from "@/lib/analytics/content-spec";
 // 이전 bespoke happy_farm_* 테이블/전용 SQL 을 범용 스펙으로 이관한 것. 지표 정의 단일
 // 출처는 happy-farm docs/04-work/content-analytics.md, ad-analytics.md.
 //   - crop_planted/crop_ready/crop_harvested(revenue,is_first_crop_harvest,area,crop),
+//     auto_harvest_summary(harvested_count,total_gold,area,crop),
 //     crop_of_the_day_harvested, seed_selected/first_seed_selected
 //   - area_unlock_clicked/area_unlocked(cost)
 //   - onboarding_step_view(step)/onboarding_skip/onboarding_stall/onboarding_complete
@@ -31,11 +32,14 @@ export const happyFarmContentSpec: AppContentSpec = {
       topN: 15,
       metrics: [
         { key: "planted", label: "심기", event: "crop_planted", agg: "count" },
-        { key: "harvested", label: "수확", event: "crop_harvested", agg: "count" },
-        { key: "harvesters", label: "수확자", event: "crop_harvested", agg: "users" },
-        { key: "revenue", label: "매출", event: "crop_harvested", agg: "sum", param: "revenue" },
+        { key: "harvested", label: "직접 수확", event: "crop_harvested", agg: "count", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
+        { key: "autoHarvested", label: "자동 수확", event: "auto_harvest_summary", agg: "sum", param: "harvested_count" },
+        { key: "harvesters", label: "수확자", event: ["crop_harvested", "auto_harvest_summary"], agg: "users", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
+        { key: "revenue", label: "직접 수확 매출", event: "crop_harvested", agg: "sum", param: "revenue", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
+        { key: "autoRevenue", label: "자동 수확 매출", event: "auto_harvest_summary", agg: "sum", param: "total_gold" },
+        { key: "autoResearchPoints", label: "자동 수확 연구 포인트", event: "auto_harvest_summary", agg: "sum", param: "total_research_points" },
         { key: "seedSelected", label: "씨앗 선택", event: ["seed_selected", "first_seed_selected"], agg: "count" },
-        { key: "firstHarvests", label: "첫 수확", event: "crop_harvested", agg: "count", where: [{ param: "is_first_crop_harvest", op: "eq", value: 1 }] },
+        { key: "firstHarvests", label: "첫 수확", event: "crop_harvested", agg: "count", where: [{ param: "is_first_crop_harvest", op: "eq", value: 1 }, { param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
         { key: "cotdHarvests", label: "오늘의 작물", event: "crop_of_the_day_harvested", agg: "count" },
       ],
       derived: [
@@ -52,7 +56,8 @@ export const happyFarmContentSpec: AppContentSpec = {
         { key: "unlockClicked", label: "언락 클릭", event: "area_unlock_clicked", agg: "count" },
         { key: "unlocked", label: "언락 완료", event: "area_unlocked", agg: "count" },
         { key: "planted", label: "심기", event: "crop_planted", agg: "count" },
-        { key: "harvested", label: "수확", event: "crop_harvested", agg: "count" },
+        { key: "harvested", label: "직접 수확", event: "crop_harvested", agg: "count", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
+        { key: "autoHarvested", label: "자동 수확", event: "auto_harvest_summary", agg: "sum", param: "harvested_count" },
         { key: "unlockCostSum", label: "언락 비용", event: "area_unlocked", agg: "sum", param: "cost" },
       ],
       derived: [{ key: "unlockConv", label: "언락 전환", num: "unlocked", den: "unlockClicked" }],

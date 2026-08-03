@@ -19,10 +19,12 @@ export type ContentAgg = "count" | "users" | "sum" | "avg";
  * event_param 조건 필터(조건부 집계). 예: reason='not_ready', is_first=1.
  * op="truthy" 는 불리언 파라미터가 참인지 검사한다(웹/RN Firebase SDK 가 string 'true'/'1'
  * 또는 int 1 로 export 하는 두 형식을 모두 허용). truthy 는 value 를 쓰지 않는다.
+ * op="ne_or_unset" 은 파라미터가 없거나 비교값과 다른 이벤트를 포함한다. 새 파라미터 도입
+ * 이전의 레거시 이벤트를 유지하면서 특정 값만 제외할 때 사용한다.
  */
 export interface ContentPredicate {
   param: string;
-  op: "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "truthy";
+  op: "eq" | "ne" | "ne_or_unset" | "gt" | "gte" | "lt" | "lte" | "truthy";
   /** 비교값. 문자열이면 string_value, 숫자면 수치값과 비교. truthy 에서는 무시(생략 가능). */
   value?: string | number;
 }

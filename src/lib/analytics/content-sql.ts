@@ -63,7 +63,7 @@ function numberParam(param: string): string {
   );
 }
 
-const OP_SQL: Record<Exclude<ContentPredicate["op"], "truthy">, string> = {
+const OP_SQL: Record<Exclude<ContentPredicate["op"], "truthy" | "ne_or_unset">, string> = {
   eq: "=",
   ne: "!=",
   gt: ">",
@@ -89,6 +89,11 @@ function predicateSql(p: ContentPredicate): string {
   if (p.op === "truthy") return truthyExpr(p.param);
   if (p.value == null) {
     throw new Error(`predicate op '${p.op}' 는 value 필수: ${JSON.stringify(p)}`);
+  }
+  if (p.op === "ne_or_unset") {
+    const value = String(p.value);
+    const v = assertValue(value, "predicate.value");
+    return `COALESCE(${rawStringParam(p.param)}, '') != '${v}'`;
   }
   const op = OP_SQL[p.op];
   if (typeof p.value === "number") {

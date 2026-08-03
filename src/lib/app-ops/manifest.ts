@@ -33,7 +33,7 @@ const sensitiveInputKey =
 const predicateSchema = z
   .object({
     param: analyticsIdent,
-    op: z.enum(["eq", "ne", "gt", "gte", "lt", "lte", "truthy"]),
+    op: z.enum(["eq", "ne", "ne_or_unset", "gt", "gte", "lt", "lte", "truthy"]),
     value: z.union([z.string(), z.number()]).optional(),
   })
   .strict();
