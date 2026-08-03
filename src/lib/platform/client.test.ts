@@ -112,6 +112,66 @@ describe("응답 해석", () => {
     assert.equal(got.deadLetterCount, 2);
   });
 
+  it("환경 불일치 목록을 그대로 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            environment: "production",
+            deadLetterCount: 0,
+            environmentMismatches: [
+              { appId: "lizard-tycoon", registry: "sandbox", ledger: "production" },
+            ],
+          },
+        },
+      },
+      (c) => c.health(),
+    );
+
+    assert.equal(got.environmentMismatches.length, 1);
+    assert.equal(got.environmentMismatches[0].appId, "lizard-tycoon");
+    assert.equal(got.environmentMismatches[0].registry, "sandbox");
+    assert.equal(got.environmentMismatches[0].ledger, "production");
+  });
+
+  it("환경 불일치 필드가 없어도 health 조회는 성공한다", async () => {
+    // 구버전 Admin API 호환. 이 필드 하나 때문에 상태 화면 전체가
+    // 닫히면 정작 문제를 볼 창구가 사라진다.
+    const got = await withClient(
+      { status: 200, body: { ok: true, result: { environment: "sandbox", deadLetterCount: 0 } } },
+      (c) => c.health(),
+    );
+
+    assert.deepEqual(got.environmentMismatches, []);
+  });
+
+  it("형식이 깨진 환경 불일치 항목만 버리고 나머지는 보여준다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            environment: "production",
+            deadLetterCount: 0,
+            environmentMismatches: [
+              { appId: "", registry: "sandbox", ledger: "production" },
+              { appId: "ok-app", registry: "sandbox", ledger: "production" },
+              { appId: "no-ledger", registry: "sandbox" },
+              "문자열",
+            ],
+          },
+        },
+      },
+      (c) => c.health(),
+    );
+
+    assert.equal(got.environmentMismatches.length, 1);
+    assert.equal(got.environmentMismatches[0].appId, "ok-app");
+  });
+
   it("목록 필드가 없으면 빈 결과로 오인하지 않는다", async () => {
     await assert.rejects(
       () =>

@@ -42,9 +42,11 @@ export default async function PlatformOverviewPage() {
     ? configuration.message
     : snapshot && !snapshot.ok
       ? snapshot.error
-      : snapshot?.data.health.deadLetterCount
-        ? "IAP dead-letter가 있어 완료 처리 상태 확인이 필요합니다."
-        : "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
+      : snapshot?.data.health.environmentMismatches.length
+        ? "레지스트리와 원장 환경이 어긋나 일부 앱의 운영 조작이 막혀 있습니다."
+        : snapshot?.data.health.deadLetterCount
+          ? "IAP dead-letter가 있어 완료 처리 상태 확인이 필요합니다."
+          : "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
 
   return (
     <PlatformOverviewStatus
@@ -53,12 +55,16 @@ export default async function PlatformOverviewPage() {
           ? "unconfigured"
           : !snapshot?.ok
             ? "unavailable"
-            : snapshot.data.health.deadLetterCount > 0
+            : snapshot.data.health.deadLetterCount > 0 ||
+                snapshot.data.health.environmentMismatches.length > 0
               ? "degraded"
               : "connected"
       }
       environment={snapshot?.ok ? snapshot.data.health.environment : null}
       deadLetterCount={snapshot?.ok ? snapshot.data.health.deadLetterCount : null}
+      environmentMismatches={
+        snapshot?.ok ? snapshot.data.health.environmentMismatches : []
+      }
       capabilities={capabilities}
       lastCheckedAt={snapshot?.ok ? snapshot.data.checkedAt : null}
       message={message}
