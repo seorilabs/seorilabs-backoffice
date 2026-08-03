@@ -7,7 +7,10 @@ import {
   resolveRefSha,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
-import { getWorkflowDispatchInputNames } from "@/lib/github/read";
+import {
+  getRepoJsonFile,
+  getWorkflowDispatchInputNames,
+} from "@/lib/github/read";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
 import {
@@ -39,6 +42,11 @@ import {
   normalizeStableSemVerTag,
   type Bump,
 } from "@/lib/core/stable-semver";
+import {
+  assertTagAtOrAboveMarketFloor,
+  marketVersionFloorFromConfigs,
+  resolveReleaseTagWithMarketFloor,
+} from "@/lib/core/market-version-floor";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -60,14 +68,32 @@ export function bumpFrom(latest: string | null, bump: Bump): string {
   return bumpStableSemVerTag(latest, bump);
 }
 
+async function marketVersionFloor(repoFullName: string): Promise<string | null> {
+  const [googlePlay, appStore] = await Promise.all([
+    getRepoJsonFile(repoFullName, "play-store/google-play.config.json"),
+    getRepoJsonFile(repoFullName, "app-store/app-store.config.json"),
+  ]);
+  return marketVersionFloorFromConfigs({ googlePlay, appStore });
+}
+
 /** 다음 릴리즈 태그 계산(dispatch 전 미리보기용). */
 export async function previewNextTag(
   repoFullName: string,
   bump: Bump,
 ): Promise<{ latest: string | null; next: string }> {
-  const tags = await listVersionTags(repoFullName);
+  const [tags, floor] = await Promise.all([
+    listVersionTags(repoFullName),
+    marketVersionFloor(repoFullName),
+  ]);
   const latest = tags[0]?.name ?? null;
-  return { latest, next: bumpFrom(latest, bump) };
+  return {
+    latest,
+    next: resolveReleaseTagWithMarketFloor({
+      latestTag: latest,
+      marketFloor: floor,
+      bump,
+    }),
+  };
 }
 
 export interface CreateReleaseResult {
@@ -93,13 +119,16 @@ export async function createReleaseTagWithNotes(opts: {
   const targetRef = opts.targetRef || "main";
   const sha = await resolveRefSha(opts.repoFullName, targetRef);
 
-  let tag: string;
-  if (opts.tag) {
-    tag = normalizeTag(opts.tag);
-  } else {
-    const tags = await listVersionTags(opts.repoFullName);
-    tag = bumpFrom(tags[0]?.name ?? null, opts.bump ?? "patch");
-  }
+  const [tags, floor] = await Promise.all([
+    listVersionTags(opts.repoFullName),
+    marketVersionFloor(opts.repoFullName),
+  ]);
+  const tag = resolveReleaseTagWithMarketFloor({
+    latestTag: tags[0]?.name ?? null,
+    marketFloor: floor,
+    explicitTag: opts.tag ? normalizeTag(opts.tag) : undefined,
+    bump: opts.bump ?? "patch",
+  });
 
   const { created } = await createTag({ repoFullName: opts.repoFullName, tag, sha });
   const rel = await createOrUpdateRelease({
@@ -239,6 +268,9 @@ export async function dispatchMarketDeploy(opts: {
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const workflowFile = MARKET_WORKFLOW[opts.target];
   if (!workflowFile) throw new Error(`알 수 없는 배포 대상: ${opts.target}`);
+
+  const floor = await marketVersionFloor(opts.repoFullName);
+  assertTagAtOrAboveMarketFloor(opts.tag, floor);
 
   // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 GH 가 아니라
   // ASC API 로 트리거한다(APPSTORE 단독, 또는 ALL 의 iOS 부분).

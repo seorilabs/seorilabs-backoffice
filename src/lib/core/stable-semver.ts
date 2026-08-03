@@ -15,15 +15,20 @@ export function normalizeStableSemVerTag(raw: string): string {
   return `v${parts.join(".")}`;
 }
 
-export function compareStableSemVerTagsDesc(a: string, b: string): number {
+/** 오름차순 비교: a < b 이면 음수, 같으면 0, a > b 이면 양수. */
+export function compareStableSemVerTags(a: string, b: string): number {
   const left = parseStableSemVerTag(a);
   const right = parseStableSemVerTag(b);
   if (!left || !right) throw new Error("stable SemVer 태그만 비교할 수 있습니다.");
   for (let index = 0; index < left.length; index += 1) {
-    const difference = right[index] - left[index];
+    const difference = left[index] - right[index];
     if (difference !== 0) return difference;
   }
   return 0;
+}
+
+export function compareStableSemVerTagsDesc(a: string, b: string): number {
+  return -compareStableSemVerTags(a, b);
 }
 
 export function stableVersionTags<T extends { name: string }>(tags: T[]): T[] {

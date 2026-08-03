@@ -13,6 +13,28 @@ function splitRepo(repoFullName: string): { owner: string; repo: string } {
   return { owner, repo };
 }
 
+/** 기본 브랜치의 repo-local JSON 원장. 파일 없음은 null, 권한/네트워크 오류는 throw. */
+export async function getRepoJsonFile(
+  repoFullName: string,
+  path: string,
+): Promise<unknown | null> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  try {
+    const res = await octokit.rest.repos.getContent({ owner, repo, path });
+    const data = res.data as { content?: string; encoding?: string };
+    if (!data.content) return null;
+    const text = Buffer.from(
+      data.content,
+      data.encoding === "base64" ? "base64" : "utf8",
+    ).toString("utf8");
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return null;
+    throw error;
+  }
+}
+
 /** 조직 저장소의 실제 default branch를 한 번의 paginated 조회로 가져온다. */
 export async function getOrgDefaultBranches(): Promise<Map<string, string>> {
   const octokit = await getInstallationOctokit();
