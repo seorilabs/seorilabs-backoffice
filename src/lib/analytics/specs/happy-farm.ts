@@ -37,6 +37,7 @@ export const happyFarmContentSpec: AppContentSpec = {
         { key: "harvesters", label: "수확자", event: ["crop_harvested", "auto_harvest_summary"], agg: "users", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
         { key: "revenue", label: "직접 수확 매출", event: "crop_harvested", agg: "sum", param: "revenue", where: [{ param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
         { key: "autoRevenue", label: "자동 수확 매출", event: "auto_harvest_summary", agg: "sum", param: "total_gold" },
+        { key: "autoResearchPoints", label: "자동 수확 연구 포인트", event: "auto_harvest_summary", agg: "sum", param: "total_research_points" },
         { key: "seedSelected", label: "씨앗 선택", event: ["seed_selected", "first_seed_selected"], agg: "count" },
         { key: "firstHarvests", label: "첫 수확", event: "crop_harvested", agg: "count", where: [{ param: "is_first_crop_harvest", op: "eq", value: 1 }, { param: "harvest_source", op: "ne_or_unset", value: "auto" }] },
         { key: "cotdHarvests", label: "오늘의 작물", event: "crop_of_the_day_harvested", agg: "count" },

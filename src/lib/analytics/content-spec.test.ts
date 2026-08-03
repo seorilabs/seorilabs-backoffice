@@ -51,5 +51,6 @@ test("happy-farm: 자동수확 집계 이벤트를 사용하고 레거시 auto �
   assert.match(sql, /event_name = 'auto_harvest_summary'/);
   assert.match(sql, /ep\.key = 'harvested_count'/);
   assert.match(sql, /ep\.key = 'total_gold'/);
+  assert.match(sql, /ep\.key = 'total_research_points'/);
   assert.match(sql, /ep\.key = 'harvest_source'[\s\S]*!= 'auto'/);
 });
