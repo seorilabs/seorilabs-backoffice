@@ -188,10 +188,10 @@ export async function upsertReleaseAsset(opts: {
   }
 }
 
-/** workflow_dispatch 트리거(배포 워크플로우). inputs 값은 문자열. */
+/** workflow_dispatch 트리거. inputs 값은 문자열. */
 export async function dispatchWorkflow(opts: {
   repoFullName: string;
-  workflowFile: string; // "deploy-apps-in-toss.yml"
+  workflowFile: string;
   ref: string; // 태그 또는 브랜치
   inputs?: Record<string, string>;
 }): Promise<void> {

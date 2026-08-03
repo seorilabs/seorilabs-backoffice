@@ -2,6 +2,11 @@ import { parse as parseYaml } from "yaml";
 
 import { getInstallationOctokit } from "@/lib/github/app";
 import { env } from "@/lib/env";
+import {
+  BUILD_TARGET_DEFINITIONS,
+  BUILD_TARGETS,
+  type BuildTarget,
+} from "@/lib/core/build-targets";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
@@ -32,6 +37,36 @@ export async function getRepoDefaultBranch(repoFullName: string): Promise<string
     throw new Error(`기본 브랜치를 확인할 수 없습니다: ${repoFullName}`);
   }
   return result.data.default_branch;
+}
+
+/** 기본 브랜치에 build-only caller가 실제 존재하는 대상만 반환한다. */
+export async function getAvailableBuildTargets(
+  repoFullName: string,
+): Promise<BuildTarget[]> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const info = await octokit.rest.repos.get({ owner, repo });
+  const ref = info.data.default_branch;
+  if (!ref) throw new Error(`기본 브랜치를 확인할 수 없습니다: ${repoFullName}`);
+
+  const availability = await Promise.all(
+    BUILD_TARGETS.map(async (target) => {
+      const workflowFile = BUILD_TARGET_DEFINITIONS[target].workflowFile;
+      try {
+        await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path: `.github/workflows/${workflowFile}`,
+          ref,
+        });
+        return target;
+      } catch (error) {
+        if ((error as { status?: number }).status === 404) return null;
+        throw error;
+      }
+    }),
+  );
+  return availability.filter((target): target is BuildTarget => target !== null);
 }
 
 /**

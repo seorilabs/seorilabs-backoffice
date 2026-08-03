@@ -2,11 +2,13 @@ import { notFound } from "next/navigation";
 
 import { EmptyState, Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { Pill } from "@/components/badges";
+import { BuildControls } from "@/components/BuildControls";
 import { ReleaseControls } from "@/components/ReleaseControls";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 import { releaseNoteTranslations } from "@/lib/core/release-note-locales";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { asStringArray, fmtDate } from "@/lib/format";
+import { getAvailableBuildTargets } from "@/lib/github/read";
 import { prisma } from "@/lib/prisma";
 
 export default async function AppReleasesPage({
@@ -24,9 +26,31 @@ export default async function AppReleasesPage({
   });
   if (!app) notFound();
   const targets = asStringArray(app.marketTargets);
+  const buildDiscovery = await getAvailableBuildTargets(app.repoFullName)
+    .then((buildTargets) => ({ buildTargets, error: null }))
+    .catch((error) => {
+      console.error(`[build-targets] ${app.repoFullName}:`, error);
+      return {
+        buildTargets: [],
+        error: "GitHub build workflow 상태를 확인하지 못했습니다. 잠시 후 다시 시도하세요.",
+      };
+    });
 
   return (
     <div className="space-y-8">
+      <WorkspaceSection
+        title="빌드 산출물"
+        description="마켓에 업로드하지 않고 선택한 태그의 후보 artifact만 생성합니다."
+      >
+        <Panel>
+          <BuildControls
+            appId={app.id}
+            targets={buildDiscovery.buildTargets}
+            discoveryError={buildDiscovery.error}
+          />
+        </Panel>
+      </WorkspaceSection>
+
       <WorkspaceSection
         title="릴리스 실행"
         description="명시적 태그를 만들고 마켓별 배포 workflow를 시작합니다."
