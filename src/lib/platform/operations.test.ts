@@ -10,6 +10,7 @@ import {
   prepareQueuedSandboxResetResume,
   queuedPlatformOperationAppSlug,
 } from "./operations";
+import { platformRefundReviewConfirmationText } from "./refund-review";
 
 const requestId = "123e4567-e89b-42d3-a456-426614174000";
 const grantRequestId = "323e4567-e89b-42d3-a456-426614174000";
@@ -154,6 +155,48 @@ test("sandbox reset은 sandbox 환경과 Apple 삭제 확인을 강제한다", (
         appleClearedConfirmed: false,
       }),
     /Invalid literal|리터럴/i,
+  );
+});
+
+test("환불 검토 command는 safe 필드와 명시 boolean만 허용한다", () => {
+  const reviewId = "a".repeat(64);
+  const base = {
+    operation: "platform.iap.decide-refund-review",
+    requestId,
+    appSlug: "lizard-tycoon",
+    reviewId,
+    expectedEnvironment: "production",
+    refundPreference: "DECLINE",
+    sampleContentProvided: false,
+    reason: "verified_fulfillment",
+    serverConfirmation: platformRefundReviewConfirmationText({
+      appSlug: "lizard-tycoon",
+      reviewId,
+      refundPreference: "DECLINE",
+    }),
+  };
+  const prepared = preparePlatformOperation(base);
+  assert.equal(prepared.operationKey, "platform.iap.decide-refund-review");
+  assert.equal(prepared.params.sampleContentProvided, false);
+  assert.equal(prepared.params.reviewId, reviewId);
+  assert.equal("orderId" in prepared.params, false);
+  assert.equal("pendingRefundToken" in prepared.params, false);
+
+  assert.throws(
+    () => preparePlatformOperation({ ...base, sampleContentProvided: undefined }),
+    /Required|필수/i,
+  );
+  assert.throws(
+    () => preparePlatformOperation({ ...base, pendingRefundToken: "secret" }),
+    /Unrecognized key|인식되지 않은 키/i,
+  );
+  assert.throws(
+    () =>
+      preparePlatformOperation({
+        ...base,
+        serverConfirmation: `RESPOND REFUND lizard-tycoon ${reviewId} APPROVE`,
+      }),
+    /정확히 일치/,
   );
 });
 

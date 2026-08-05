@@ -2,6 +2,7 @@ import type {
   PlatformEntitlement,
   PlatformOperatorRecord,
   PlatformOrder,
+  PlatformRefundReview,
   PlatformUser,
 } from "@/lib/platform/client";
 
@@ -83,6 +84,30 @@ export function publicPlatformOperatorRecord(
     appId: record.appId,
     createdAt: record.createdAt,
     kind: record.kind,
+  };
+}
+
+/** 브라우저에는 Admin API의 명시 safe projection만 다시 투영한다. */
+export function publicPlatformRefundReview(
+  review: PlatformRefundReview,
+): PlatformRefundReview {
+  return {
+    reviewId: review.reviewId,
+    appId: review.appId,
+    expectedEnvironment: review.expectedEnvironment,
+    state: review.state,
+    refundReason: review.refundReason,
+    receivedAt: review.receivedAt,
+    dueAt: review.dueAt,
+    requestId: review.requestId,
+    refundPreference: review.refundPreference,
+    sampleContentProvided: review.sampleContentProvided,
+    decisionReason: review.decisionReason,
+    decidedAt: review.decidedAt,
+    respondedAt: review.respondedAt,
+    failedAt: review.failedAt,
+    expiredAt: review.expiredAt,
+    lastErrorCode: review.lastErrorCode,
   };
 }
 

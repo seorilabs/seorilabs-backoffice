@@ -5,6 +5,7 @@ import type {
   PlatformHealth,
   PlatformOperatorRecord,
   PlatformOrder,
+  PlatformRefundReview,
   PlatformUser,
 } from "@/lib/platform/client";
 import { PlatformApiError } from "@/lib/platform/client";
@@ -21,6 +22,7 @@ import {
   publicPlatformEntitlement,
   publicPlatformOperatorRecord,
   publicPlatformOrder,
+  publicPlatformRefundReview,
   publicPlatformUser,
   type PlatformEntitlementSummary,
 } from "@/lib/platform/read-contract";
@@ -48,6 +50,12 @@ export interface PlatformIapSnapshot {
 }
 
 export type PlatformIapCatalog = PlatformAppIapCatalog;
+
+export interface PlatformRefundReviewQueue {
+  appId: string;
+  refundReviews: PlatformRefundReview[];
+  checkedAt: string;
+}
 
 export interface PlatformEntitlementLookup {
   platformUserId: string;
@@ -115,6 +123,37 @@ export async function loadPlatformIapCatalogAction(
       );
     }
     return { ok: true, data: catalog };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** 선택 앱의 환불 검토 queue를 read identity로 실시간 조회한다. */
+export async function loadPlatformRefundReviewsAction(
+  appSlug: string,
+): Promise<PlatformActionResult<PlatformRefundReviewQueue>> {
+  try {
+    // 앱 소유권과 write role까지 확인해 다른 앱의 운영 queue를 열지 않는다.
+    const actor = await requirePlatformWriteAccess(appSlug);
+    const client = createPlatformReadClient();
+    // 영구 보존되는 responded/expired 이력이 오래 쌓여도 새 pending 항목이
+    // 기본 50개 목록 뒤로 밀리지 않게 actionable 상태를 각각 조회한다.
+    const [pending, decided, failed] = await Promise.all([
+      client.refundReviews(actor.appSlug, "pending", 100),
+      client.refundReviews(actor.appSlug, "decided", 100),
+      client.refundReviews(actor.appSlug, "failed", 20),
+    ]);
+    const reviews = [...pending, ...decided, ...failed].sort(
+      (a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt),
+    );
+    return {
+      ok: true,
+      data: {
+        appId: actor.appSlug,
+        refundReviews: reviews.map(publicPlatformRefundReview),
+        checkedAt: new Date().toISOString(),
+      },
+    };
   } catch (error) {
     return failure(error);
   }

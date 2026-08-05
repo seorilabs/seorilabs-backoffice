@@ -5,6 +5,11 @@ import {
   prepareQueuedSandboxResetResume,
 } from "@/lib/platform/operations";
 import type { PlatformOperationReason } from "@/lib/platform/reasons";
+import type {
+  PlatformRefundReviewDecisionReason,
+  PlatformRefundReviewDecisionState,
+  PlatformRefundReviewPreference,
+} from "@/lib/platform/refund-review";
 
 import { createPlatformWriteOperationsClient } from "./executor-client";
 
@@ -89,6 +94,29 @@ export interface PlatformSandboxResetCloseResult {
   applied: boolean;
 }
 
+export interface PlatformRefundReviewDecisionRequest {
+  requestId: string;
+  appId: string;
+  reviewId: string;
+  expectedEnvironment: "sandbox" | "production";
+  refundPreference: PlatformRefundReviewPreference;
+  sampleContentProvided: boolean;
+  reason: PlatformRefundReviewDecisionReason;
+  confirmation: string;
+}
+
+export interface PlatformRefundReviewDecisionResult {
+  applied: boolean;
+  requestId: string;
+  appId: string;
+  reviewId: string;
+  expectedEnvironment: "sandbox" | "production";
+  state: PlatformRefundReviewDecisionState;
+  refundPreference: PlatformRefundReviewPreference;
+  sampleContentProvided: boolean;
+  operation: "refund_review_decision";
+}
+
 /** executor가 소비하는 최소 client 포트. 실제 client 클래스에 의존하지 않는다. */
 export interface PlatformOperationsClient {
   grantEntitlement(
@@ -111,6 +139,10 @@ export interface PlatformOperationsClient {
     request: PlatformSandboxResetCloseRequest,
     actor: string,
   ): Promise<PlatformSandboxResetCloseResult>;
+  decideRefundReview?(
+    request: PlatformRefundReviewDecisionRequest,
+    actor: string,
+  ): Promise<PlatformRefundReviewDecisionResult>;
 }
 
 export type PlatformOperationsClientFactory =
@@ -157,6 +189,17 @@ function confirmedBooleanParam(
     throw new Error(`플랫폼 오퍼레이션 ${key} 확인이 필요합니다.`);
   }
   return true;
+}
+
+function booleanParam(
+  params: Record<string, string | number | boolean>,
+  key: string,
+): boolean {
+  const value = params[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`플랫폼 오퍼레이션 ${key} 값이 올바르지 않습니다.`);
+  }
+  return value;
 }
 
 function isUnknownOutcome(error: unknown): boolean {
@@ -248,6 +291,28 @@ function validateSandboxResetCloseResult(
   }
 }
 
+function validateRefundReviewDecisionResult(
+  result: PlatformRefundReviewDecisionResult,
+  expected: PlatformRefundReviewDecisionRequest,
+): void {
+  if (
+    typeof result?.applied !== "boolean" ||
+    result.requestId !== expected.requestId ||
+    result.appId !== expected.appId ||
+    result.reviewId !== expected.reviewId ||
+    result.expectedEnvironment !== expected.expectedEnvironment ||
+    (result.state !== "decided" &&
+      result.state !== "responded" &&
+      result.state !== "expired" &&
+      result.state !== "failed") ||
+    result.refundPreference !== expected.refundPreference ||
+    result.sampleContentProvided !== expected.sampleContentProvided ||
+    result.operation !== "refund_review_decision"
+  ) {
+    throw new PlatformOperationUnknownOutcomeError();
+  }
+}
+
 /** 중앙 플랫폼 write allowlist를 실행하고 식별자가 없는 최소 결과만 반환한다. */
 export async function executePlatformOperation(
   input: PlatformOperationExecutionInput,
@@ -306,12 +371,46 @@ export async function executePlatformOperation(
     // preparedResume와 상호 배타적인 parser 결과다.
     if (!prepared) throw new Error("플랫폼 오퍼레이션을 준비하지 못했습니다.");
     const params = prepared.params;
+    if (prepared.operationKey === "platform.iap.decide-refund-review") {
+      if (!client.decideRefundReview) {
+        throw new Error("환불 검토 write client가 준비되지 않았습니다.");
+      }
+      const request: PlatformRefundReviewDecisionRequest = {
+        requestId: prepared.requestId,
+        appId: prepared.appSlug,
+        reviewId: stringParam(params, "reviewId"),
+        expectedEnvironment: stringParam(
+          params,
+          "expectedEnvironment",
+        ) as PlatformRefundReviewDecisionRequest["expectedEnvironment"],
+        refundPreference: stringParam(
+          params,
+          "refundPreference",
+        ) as PlatformRefundReviewPreference,
+        sampleContentProvided: booleanParam(params, "sampleContentProvided"),
+        reason: prepared.reason as PlatformRefundReviewDecisionReason,
+        confirmation: stringParam(params, "serverConfirmation"),
+      };
+      const result = await client.decideRefundReview(request, actor);
+      validateRefundReviewDecisionResult(result, request);
+      return {
+        version: 1,
+        requestId: prepared.requestId,
+        operation: prepared.operationKey,
+        status: "success",
+        summary: result.applied
+          ? "Google Play 환불 검토 결정을 영구 확정했습니다."
+          : "이미 처리된 동일 requestId입니다.",
+        data: { applied: result.applied, state: result.state },
+        completedAt: new Date().toISOString(),
+      };
+    }
     if (prepared.operationKey === "platform.iap.reset-app-store-sandbox") {
       const platformUserId = stringParam(params, "platformUserId");
       const request: PlatformSandboxResetRequest = {
           requestId: prepared.requestId,
           platformUserId,
-          reason: prepared.reason,
+          reason: prepared.reason as PlatformOperationReason,
           appId: prepared.appSlug,
           expectedEnvironment: "sandbox",
           confirmation: stringParam(params, "serverConfirmation"),
@@ -337,7 +436,7 @@ export async function executePlatformOperation(
       requestId: prepared.requestId,
       platformUserId: stringParam(params, "platformUserId"),
       entitlementId: stringParam(params, "entitlementId"),
-      reason: prepared.reason,
+      reason: prepared.reason as PlatformOperationReason,
       appId: prepared.appSlug,
       expectedEnvironment: stringParam(
         params,

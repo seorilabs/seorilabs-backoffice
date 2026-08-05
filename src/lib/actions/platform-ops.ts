@@ -67,10 +67,27 @@ export interface ResetPlatformAppStoreSandboxInput
   appleClearedConfirmed: true;
 }
 
+export interface DecidePlatformRefundReviewInput {
+  operation: "platform.iap.decide-refund-review";
+  requestId: string;
+  appSlug: string;
+  reviewId: string;
+  expectedEnvironment: "sandbox" | "production";
+  refundPreference: "DECLINE" | "APPROVE" | "NEUTRAL";
+  sampleContentProvided: boolean;
+  reason:
+    | "verified_fulfillment"
+    | "customer_refund_supported"
+    | "insufficient_evidence"
+    | "internal_validation";
+  serverConfirmation: string;
+}
+
 export type EnqueuePlatformOperationInput =
   | GrantPlatformEntitlementInput
   | RevokePlatformEntitlementInput
-  | ResetPlatformAppStoreSandboxInput;
+  | ResetPlatformAppStoreSandboxInput
+  | DecidePlatformRefundReviewInput;
 
 export interface EnqueuePlatformOperationResult {
   ok: boolean;

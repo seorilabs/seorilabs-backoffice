@@ -7,6 +7,7 @@ import {
   PlatformAuthUserResult,
   PlatformIapConsole,
   PlatformOverviewStatus,
+  PlatformRefundReviewPanel,
 } from "./index";
 
 describe("플랫폼 표현 컴포넌트", () => {
@@ -82,5 +83,23 @@ describe("플랫폼 표현 컴포넌트", () => {
     assert.match(html, /order-safe/);
     assert.match(html, /원 지급 grant-request-safe/);
     assert.doesNotMatch(html, /must-not-render/);
+  });
+
+  it("환불 검토 패널은 safe queue 경계와 health count를 설명한다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformRefundReviewPanel, {
+        apps: [{ slug: "lizard-tycoon", displayName: "도마뱀 키우기" }],
+        environment: "production",
+        pendingCount: 3,
+        dueSoonCount: 1,
+        failedCount: 2,
+      }),
+    );
+    assert.match(html, /Google Play 환불 검토/);
+    assert.match(html, /token·order ID 없이/);
+    assert.match(html, /미응답 3/);
+    assert.match(html, /1시간 이내 1/);
+    assert.match(html, /실패 2/);
+    assert.doesNotMatch(html, /pendingRefundToken|ciphertext/);
   });
 });

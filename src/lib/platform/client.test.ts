@@ -145,6 +145,33 @@ describe("응답 해석", () => {
     );
 
     assert.deepEqual(got.environmentMismatches, []);
+    assert.equal(got.pendingRefundReviewCount, 0);
+    assert.equal(got.dueSoonRefundReviewCount, 0);
+    assert.equal(got.failedRefundReviewCount, 0);
+    assert.equal(got.refundReviewAvailable, false);
+  });
+
+  it("환불 검토 health count를 검증해 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            environment: "production",
+            deadLetterCount: 0,
+            pendingRefundReviewCount: 3,
+            dueSoonRefundReviewCount: 1,
+            failedRefundReviewCount: 2,
+          },
+        },
+      },
+      (c) => c.health(),
+    );
+    assert.equal(got.pendingRefundReviewCount, 3);
+    assert.equal(got.dueSoonRefundReviewCount, 1);
+    assert.equal(got.failedRefundReviewCount, 2);
+    assert.equal(got.refundReviewAvailable, true);
   });
 
   it("형식이 깨진 환경 불일치 항목만 버리고 나머지는 보여준다", async () => {
@@ -343,6 +370,165 @@ describe("전체 요청 timeout", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("환불 검토", () => {
+  const reviewId = "a".repeat(64);
+
+  it("민감 필드 없는 앱별 queue만 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            appId: "lizard-tycoon",
+            environment: "production",
+            refundReviews: [
+              {
+                reviewId,
+                appId: "lizard-tycoon",
+                expectedEnvironment: "production",
+                state: "pending",
+                refundReason: 1,
+                receivedAt: "2026-08-05T00:00:00Z",
+                dueAt: "2026-08-06T00:00:00Z",
+              },
+            ],
+          },
+        },
+        inspectRequest(input) {
+          assert.equal(
+            String(input),
+            "https://platform-admin.test/v1/admin/apps/lizard-tycoon/iap/refund-reviews?limit=50",
+          );
+        },
+      },
+      (c) => c.refundReviews("lizard-tycoon"),
+    );
+    assert.equal(got[0]?.reviewId, reviewId);
+    assert.equal(got[0]?.state, "pending");
+  });
+
+  it("queue에 token 또는 ciphertext가 섞이면 전체를 거부한다", async () => {
+    await assert.rejects(
+      () =>
+        withClient(
+          {
+            status: 200,
+            body: {
+              ok: true,
+              result: {
+                appId: "lizard-tycoon",
+                environment: "production",
+                refundReviews: [
+                  {
+                    reviewId,
+                    appId: "lizard-tycoon",
+                    expectedEnvironment: "production",
+                    state: "pending",
+                    refundReason: 1,
+                    receivedAt: "2026-08-05T00:00:00Z",
+                    dueAt: "2026-08-06T00:00:00Z",
+                    pendingRefundToken: "must-not-cross",
+                  },
+                ],
+              },
+            },
+          },
+          (c) => c.refundReviews("lizard-tycoon"),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformApiError &&
+        error.code === "platform_response_invalid",
+    );
+  });
+
+  it("결정 body에서 경로 필드를 분리하고 target echo를 대조한다", async () => {
+    const got = await withClient(
+      {
+        status: 202,
+        body: {
+          ok: true,
+          result: {
+            applied: true,
+            requestId: "req-1",
+            appId: "lizard-tycoon",
+            reviewId,
+            expectedEnvironment: "production",
+            state: "decided",
+            refundPreference: "DECLINE",
+            sampleContentProvided: false,
+            operation: "refund_review_decision",
+          },
+        },
+        inspectRequest(input, init) {
+          assert.equal(
+            String(input),
+            `https://platform-admin.test/v1/admin/apps/lizard-tycoon/iap/refund-reviews/${reviewId}/decision`,
+          );
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.equal(body.appId, undefined);
+          assert.equal(body.reviewId, undefined);
+          assert.equal(body.sampleContentProvided, false);
+          assert.equal(init?.headers && (init.headers as Record<string, string>)["X-Seori-Actor"], "syous");
+        },
+      },
+      (c) =>
+        c.decideRefundReview(
+          {
+            requestId: "req-1",
+            appId: "lizard-tycoon",
+            reviewId,
+            expectedEnvironment: "production",
+            refundPreference: "DECLINE",
+            sampleContentProvided: false,
+            reason: "verified_fulfillment",
+            confirmation: `RESPOND REFUND lizard-tycoon ${reviewId} DECLINE`,
+          },
+          "syous",
+        ),
+    );
+    assert.equal(got.applied, true);
+  });
+
+  it("exact replay의 전달 실패 상태도 영구 결정 결과로 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 202,
+        body: {
+          ok: true,
+          result: {
+            applied: false,
+            requestId: "req-terminal",
+            appId: "lizard-tycoon",
+            reviewId,
+            expectedEnvironment: "production",
+            state: "failed",
+            refundPreference: "NEUTRAL",
+            sampleContentProvided: false,
+            operation: "refund_review_decision",
+          },
+        },
+      },
+      (c) =>
+        c.decideRefundReview(
+          {
+            requestId: "req-terminal",
+            appId: "lizard-tycoon",
+            reviewId,
+            expectedEnvironment: "production",
+            refundPreference: "NEUTRAL",
+            sampleContentProvided: false,
+            reason: "insufficient_evidence",
+            confirmation: `RESPOND REFUND lizard-tycoon ${reviewId} NEUTRAL`,
+          },
+          "syous",
+        ),
+    );
+    assert.equal(got.applied, false);
+    assert.equal(got.state, "failed");
   });
 });
 

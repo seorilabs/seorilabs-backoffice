@@ -14,6 +14,12 @@ import {
   PLATFORM_OPERATION_REASON_CODES,
   type PlatformOperationReason,
 } from "@/lib/platform/reasons";
+import {
+  PLATFORM_REFUND_REVIEW_PREFERENCES,
+  PLATFORM_REFUND_REVIEW_REASONS,
+  platformRefundReviewConfirmationText,
+  type PlatformRefundReviewDecisionReason,
+} from "@/lib/platform/refund-review";
 
 export {
   platformOperationConfirmationText,
@@ -32,6 +38,7 @@ export const PLATFORM_OPERATION_KEYS = [
   "platform.iap.grant-entitlement",
   "platform.iap.revoke-entitlement",
   "platform.iap.reset-app-store-sandbox",
+  "platform.iap.decide-refund-review",
 ] as const;
 
 export type PlatformOperationKey = (typeof PLATFORM_OPERATION_KEYS)[number];
@@ -132,6 +139,42 @@ export const PLATFORM_OPERATION_DEFINITIONS = {
       },
     ],
   },
+  "platform.iap.decide-refund-review": {
+    id: "decide-refund-review",
+    label: "Google Play 환불 검토 결정",
+    description:
+      "변경할 수 없는 환불 검토 의견을 플랫폼 worker 제출 queue에 확정합니다.",
+    intent: "mutate",
+    risk: "high",
+    confirmation: "typed",
+    inputs: [
+      commonInputs[0],
+      {
+        key: "reviewId",
+        label: "환불 검토 ID",
+        type: "text",
+        required: true,
+      },
+      commonInputs[3],
+      {
+        key: "refundPreference",
+        label: "Google 제안",
+        type: "select",
+        required: true,
+        options: PLATFORM_REFUND_REVIEW_PREFERENCES.map((value) => ({
+          value,
+          label: value,
+        })),
+      },
+      {
+        key: "sampleContentProvided",
+        label: "샘플 콘텐츠 제공 여부",
+        type: "boolean",
+        required: true,
+      },
+      commonInputs[4],
+    ],
+  },
 } satisfies Record<PlatformOperationKey, AppOpsOperation>;
 
 const requestIdSchema = z.string().refine(isAppOpsRequestId, {
@@ -159,6 +202,9 @@ const entitlementIdSchema = z
   );
 const reasonSchema = z.enum(PLATFORM_OPERATION_REASON_CODES, {
   errorMap: () => ({ message: "허용된 변경 사유 코드를 선택해야 합니다." }),
+});
+const refundReviewReasonSchema = z.enum(PLATFORM_REFUND_REVIEW_REASONS, {
+  errorMap: () => ({ message: "허용된 환불 검토 사유 코드를 선택해야 합니다." }),
 });
 const serverConfirmationSchema = z
   .string()
@@ -208,6 +254,20 @@ const resetInputSchema = z
   })
   .strict();
 
+const refundReviewInputSchema = z
+  .object({
+    operation: z.literal("platform.iap.decide-refund-review"),
+    requestId: requestIdSchema,
+    appSlug: appSlugSchema,
+    reviewId: z.string().regex(/^[0-9a-f]{64}$/, "reviewId 형식이 올바르지 않습니다."),
+    expectedEnvironment: z.enum(["sandbox", "production"]),
+    refundPreference: z.enum(PLATFORM_REFUND_REVIEW_PREFERENCES),
+    sampleContentProvided: z.boolean(),
+    reason: refundReviewReasonSchema,
+    serverConfirmation: serverConfirmationSchema,
+  })
+  .strict();
+
 const sandboxResetResumeInputSchema = z
   .object({
     requestId: requestIdSchema,
@@ -235,6 +295,7 @@ export const platformOperationInputSchema = z
     grantInputSchema,
     revokeInputSchema,
     resetInputSchema,
+    refundReviewInputSchema,
   ])
   .superRefine((input, ctx) => {
     if (
@@ -247,7 +308,11 @@ export const platformOperationInputSchema = z
         message: "회수 requestId와 원 지급 requestId는 달라야 합니다.",
       });
     }
-    if (input.serverConfirmation !== platformOperationConfirmationText(input)) {
+    const expectedConfirmation =
+      input.operation === "platform.iap.decide-refund-review"
+        ? platformRefundReviewConfirmationText(input)
+        : platformOperationConfirmationText(input);
+    if (input.serverConfirmation !== expectedConfirmation) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["serverConfirmation"],
@@ -267,7 +332,7 @@ export interface PreparedPlatformOperation {
   operationKey: PlatformOperationKey;
   params: AppOperationValues;
   paramsJson: string;
-  reason: PlatformOperationReason;
+  reason: PlatformOperationReason | PlatformRefundReviewDecisionReason;
 }
 
 export interface PreparedSandboxResetResume {
