@@ -50,6 +50,7 @@ import {
   PlatformIapConsole,
   type PlatformIapWriteOperationView,
 } from "./PlatformIapConsole";
+import { PlatformRefundReviewPanel } from "./PlatformRefundReviewPanel";
 
 export interface PlatformWritableApp {
   slug: string;
@@ -78,6 +79,11 @@ interface PlatformRetryRequest {
   platformUserId: string;
 }
 
+type PlatformManualOperationKey = Exclude<
+  PlatformOperationKey,
+  "platform.iap.decide-refund-review"
+>;
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -95,7 +101,7 @@ export function PlatformIapManagement({
   const [entitlements, setEntitlements] = useState<PlatformEntitlementSummary[]>(
     [],
   );
-  const [operation, setOperation] = useState<PlatformOperationKey>(
+  const [operation, setOperation] = useState<PlatformManualOperationKey>(
     "platform.iap.grant-entitlement",
   );
   const [appSlug, setAppSlug] = useState(writableApps[0]?.slug ?? "");
@@ -127,6 +133,7 @@ export function PlatformIapManagement({
   const [recoveryLoaded, setRecoveryLoaded] = useState(false);
   const [writeOperation, setWriteOperation] =
     useState<PlatformIapWriteOperationView>({ state: "idle" });
+  const [refundReviewBusy, setRefundReviewBusy] = useState(false);
   const [refreshPending, startRefresh] = useTransition();
   const [lookupPending, startLookup] = useTransition();
   const [writePending, startWrite] = useTransition();
@@ -150,7 +157,9 @@ export function PlatformIapManagement({
       setSandboxResetRemoteState(null);
       setResumeConfirmation("");
       setCloseConfirmation("");
-      setOperation(recovered.operation);
+      if (recovered.operation !== "platform.iap.decide-refund-review") {
+        setOperation(recovered.operation);
+      }
       setAppSlug(recovered.appSlug);
       setConfirmation("");
       setEnvironmentConfirmed(false);
@@ -538,6 +547,37 @@ export function PlatformIapManagement({
       return;
     }
 
+    if (
+      !found &&
+      submittedOperation === "platform.iap.decide-refund-review"
+    ) {
+      const nextRecovery = clearRecoveryReference(requestId);
+      if (nextRecovery === undefined) {
+        setWriteOperation({
+          state: "error",
+          actionLabel: operationLabel(submittedOperation),
+          summary:
+            "큐 row가 없음을 확인했지만 브라우저 복구 참조를 제거하지 못했습니다. 저장소 접근을 허용한 뒤 상태를 다시 확인하세요.",
+          requestId,
+        });
+        return;
+      }
+      setWriteOperation({
+        state: "error",
+        actionLabel: operationLabel(submittedOperation),
+        summary:
+          "반복 조회에서도 큐 row가 확인되지 않아 미등록 복구 참조를 제거했습니다. 목록을 새로고침한 뒤 결정을 다시 제출하세요.",
+        requestId,
+      });
+      if (nextRecovery) {
+        activateRecoveryReference(
+          nextRecovery,
+          "미등록 복구 참조를 제거했습니다. 다른 탭에 남은 결과 미확인 request ID를 이어서 확인해야 합니다.",
+        );
+      }
+      return;
+    }
+
     setWriteOperation({
       state: "unknown",
       actionLabel: operationLabel(submittedOperation),
@@ -774,6 +814,16 @@ export function PlatformIapManagement({
 
   function submitWrite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (retryRequest?.operation === "platform.iap.decide-refund-review") {
+      setWriteOperation({
+        state: "error",
+        actionLabel: operationLabel(retryRequest.operation),
+        summary:
+          "환불 검토 원 payload는 브라우저에 보존하지 않습니다. 보존된 request ID 상태를 먼저 확인하세요.",
+        requestId: retryRequest.requestId,
+      });
+      return;
+    }
     if (environment !== "sandbox" && environment !== "production") {
       setWriteOperation({
         state: "error",
@@ -1036,6 +1086,7 @@ export function PlatformIapManagement({
   const writeDisabled =
     !recoveryLoaded ||
     writePending ||
+    refundReviewBusy ||
     writableApps.length === 0 ||
     expectedConfirmation === "" ||
     confirmation.trim() !== expectedConfirmation ||
@@ -1051,6 +1102,7 @@ export function PlatformIapManagement({
       )) ||
     !canSubmitPlatformRecovery(retryRequest, serverRowConfirmedMissing) ||
     writeOperation.state === "expired_unknown" ||
+    retryRequest?.operation === "platform.iap.decide-refund-review" ||
     (retryRequest !== null &&
       (retryRequest.appSlug !== appSlug ||
         retryRequest.operation !== operation ||
@@ -1107,6 +1159,18 @@ export function PlatformIapManagement({
         </div>
       </div>
 
+      {snapshot?.health.refundReviewAvailable && (
+        <PlatformRefundReviewPanel
+          apps={writableApps}
+          environment={environment}
+          pendingCount={snapshot.health.pendingRefundReviewCount}
+          dueSoonCount={snapshot.health.dueSoonRefundReviewCount}
+          failedCount={snapshot.health.failedRefundReviewCount}
+          writeAccessError={writeAccessError}
+          onBusyChange={setRefundReviewBusy}
+        />
+      )}
+
       <form
         onSubmit={submitWrite}
         className="rounded-lg border-2 border-neutral-300 bg-white p-4"
@@ -1144,7 +1208,7 @@ export function PlatformIapManagement({
               <select
                 value={operation}
                 onChange={(event) => {
-                  setOperation(event.target.value as PlatformOperationKey);
+                  setOperation(event.target.value as PlatformManualOperationKey);
                   setConfirmation("");
                   setAppleClearedConfirmed(false);
                 }}
@@ -1549,6 +1613,9 @@ function operationLabel(operation: PlatformOperationKey): string {
   }
   if (operation === "platform.iap.revoke-entitlement") {
     return "Entitlement 회수";
+  }
+  if (operation === "platform.iap.decide-refund-review") {
+    return "Google Play 환불 검토 결정";
   }
   return "App Store Sandbox 원장 초기화";
 }

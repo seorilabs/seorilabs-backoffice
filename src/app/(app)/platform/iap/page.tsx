@@ -63,7 +63,7 @@ export default async function PlatformIapPage() {
       <div>
         <h2 className="text-lg font-semibold text-neutral-900">IAP 원장</h2>
         <p className="mt-1 text-sm text-neutral-500">
-          주문·권한·운영자 이력을 조회하고, 별도 worker를 통해 지급·회수·Sandbox 원장 초기화를 실행합니다.
+          주문·권한·환불 검토·운영자 이력을 조회하고, 별도 worker를 통해 지급·회수·Sandbox 초기화·Google 환불 의견 제출을 실행합니다.
         </p>
       </div>
       <PlatformIapManagement

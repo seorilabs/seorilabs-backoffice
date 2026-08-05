@@ -18,6 +18,7 @@ export {
   PlatformIapManagement,
   type PlatformWritableApp,
 } from "./PlatformIapManagement";
+export { PlatformRefundReviewPanel } from "./PlatformRefundReviewPanel";
 export {
   PlatformOverviewStatus,
   type PlatformCapabilityView,
