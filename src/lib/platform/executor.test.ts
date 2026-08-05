@@ -498,3 +498,74 @@ test("sandbox reset 미시작 종료 응답 target이 다르면 local lock을 �
     PlatformOperationUnknownOutcomeError,
   );
 });
+
+test("환불 검토 결정을 write client에 전달하고 safe 결과만 남긴다", async () => {
+  const reviewId = "a".repeat(64);
+  let called: unknown;
+  const client: PlatformOperationsClient = {
+    async grantEntitlement() {
+      throw new Error("unexpected");
+    },
+    async revokeEntitlement() {
+      throw new Error("unexpected");
+    },
+    async resetAppStoreSandbox() {
+      throw new Error("unexpected");
+    },
+    async resumeSandboxReset() {
+      throw new Error("unexpected");
+    },
+    async closeSandboxResetNotStarted() {
+      throw new Error("unexpected");
+    },
+    async decideRefundReview(request, actor) {
+      called = { request, actor };
+      return {
+        applied: false,
+        requestId: request.requestId,
+        appId: request.appId,
+        reviewId: request.reviewId,
+        expectedEnvironment: request.expectedEnvironment,
+        state: "failed",
+        refundPreference: request.refundPreference,
+        sampleContentProvided: request.sampleContentProvided,
+        operation: "refund_review_decision",
+      };
+    },
+  };
+
+  const result = await executePlatformOperation(
+    {
+      requestId: baseInput.requestId,
+      operation: "platform.iap.decide-refund-review",
+      params: {
+        appSlug: "lizard-tycoon",
+        reviewId,
+        expectedEnvironment: "production",
+        refundPreference: "DECLINE",
+        sampleContentProvided: false,
+        serverConfirmation:
+          `RESPOND REFUND lizard-tycoon ${reviewId} DECLINE`,
+      },
+      actorLogin: "reviewer",
+      reason: "verified_fulfillment",
+    },
+    () => client,
+  );
+
+  assert.deepEqual(called, {
+    request: {
+      requestId: baseInput.requestId,
+      appId: "lizard-tycoon",
+      reviewId,
+      expectedEnvironment: "production",
+      refundPreference: "DECLINE",
+      sampleContentProvided: false,
+      reason: "verified_fulfillment",
+      confirmation: `RESPOND REFUND lizard-tycoon ${reviewId} DECLINE`,
+    },
+    actor: "reviewer",
+  });
+  assert.deepEqual(result.data, { applied: false, state: "failed" });
+  assert.doesNotMatch(JSON.stringify(result), /pendingRefundToken|orderId|ciphertext/);
+});

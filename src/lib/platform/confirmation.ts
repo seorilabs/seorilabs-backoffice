@@ -1,7 +1,7 @@
 import type { PlatformOperationKey } from "./operations";
 
 export interface PlatformConfirmationInput {
-  operation: PlatformOperationKey;
+  operation: Exclude<PlatformOperationKey, "platform.iap.decide-refund-review">;
   appSlug: string;
   platformUserId: string;
   entitlementId?: string;

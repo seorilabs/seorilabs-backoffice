@@ -18,6 +18,15 @@ import {
   PLATFORM_OPERATION_REASON_CODES,
   type PlatformOperationReason,
 } from "@/lib/platform/reasons";
+import {
+  PLATFORM_REFUND_REVIEW_PREFERENCES,
+  PLATFORM_REFUND_REVIEW_REASONS,
+  PLATFORM_REFUND_REVIEW_STATES,
+  type PlatformRefundReviewDecisionReason,
+  type PlatformRefundReviewDecisionState,
+  type PlatformRefundReviewPreference,
+  type PlatformRefundReviewState,
+} from "@/lib/platform/refund-review";
 
 /** 플랫폼이 돌려주는 오류. */
 export class PlatformApiError extends Error {
@@ -144,6 +153,11 @@ export interface PlatformEnvironmentMismatch {
 export interface PlatformHealth {
   environment: string;
   deadLetterCount: number;
+  /** 세 환불 검토 health 필드와 Admin endpoint가 함께 배포된 세대다. */
+  refundReviewAvailable: boolean;
+  pendingRefundReviewCount: number;
+  dueSoonRefundReviewCount: number;
+  failedRefundReviewCount: number;
   /**
    * 비어 있지 않으면 그 앱의 운영 조작이 전부 422로 막힌다.
    *
@@ -156,6 +170,49 @@ export interface PlatformHealth {
 export interface PlatformAppIapCatalog {
   appId: string;
   entitlements: string[];
+}
+
+/** token·order ID·ciphertext·PUID가 없는 환불 검토 projection. */
+export interface PlatformRefundReview {
+  reviewId: string;
+  appId: string;
+  expectedEnvironment: "sandbox" | "production";
+  state: PlatformRefundReviewState;
+  refundReason: number;
+  receivedAt: string;
+  dueAt: string;
+  requestId?: string;
+  refundPreference?: PlatformRefundReviewPreference;
+  sampleContentProvided?: boolean;
+  decisionReason?: PlatformRefundReviewDecisionReason;
+  decidedAt?: string;
+  respondedAt?: string;
+  failedAt?: string;
+  expiredAt?: string;
+  lastErrorCode?: string;
+}
+
+export interface RefundReviewDecisionRequest {
+  requestId: string;
+  appId: string;
+  reviewId: string;
+  expectedEnvironment: "sandbox" | "production";
+  refundPreference: PlatformRefundReviewPreference;
+  sampleContentProvided: boolean;
+  reason: PlatformRefundReviewDecisionReason;
+  confirmation: string;
+}
+
+export interface RefundReviewDecisionResult {
+  applied: boolean;
+  requestId: string;
+  appId: string;
+  reviewId: string;
+  expectedEnvironment: "sandbox" | "production";
+  state: PlatformRefundReviewDecisionState;
+  refundPreference: PlatformRefundReviewPreference;
+  sampleContentProvided: boolean;
+  operation: "refund_review_decision";
 }
 
 /** PII를 제외한 플랫폼 인증 사용자 조회 결과. */
@@ -302,6 +359,31 @@ function requiredString(
   return value[key];
 }
 
+function optionalString(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const item = value[key];
+  if (item === undefined) return undefined;
+  if (typeof item !== "string" || item === "") {
+    return invalidPlatformResponse(`플랫폼 ${key} 응답 형식이 올바르지 않습니다.`);
+  }
+  return item;
+}
+
+function nonnegativeInteger(
+  value: Record<string, unknown>,
+  key: string,
+  fallback?: number,
+): number {
+  const item = value[key];
+  if (item === undefined && fallback !== undefined) return fallback;
+  if (!Number.isInteger(item) || (item as number) < 0) {
+    return invalidPlatformResponse(`플랫폼 ${key} 응답 형식이 올바르지 않습니다.`);
+  }
+  return item as number;
+}
+
 function requiredReason(
   value: Record<string, unknown>,
   key: string,
@@ -382,6 +464,127 @@ function validateOperatorRecord(value: unknown): PlatformOperatorRecord {
     appId: requiredString(value, "appId"),
     createdAt: requiredString(value, "createdAt"),
     kind: value.kind,
+  };
+}
+
+const FORBIDDEN_REFUND_REVIEW_KEYS = [
+  "orderId",
+  "pendingRefundToken",
+  "ciphertext",
+  "secret",
+  "packageName",
+  "platformUserId",
+] as const;
+
+function validateRefundReview(
+  value: unknown,
+  expectedAppId: string,
+  expectedEnvironment: "sandbox" | "production",
+): PlatformRefundReview {
+  if (
+    !isRecord(value) ||
+    FORBIDDEN_REFUND_REVIEW_KEYS.some((key) => key in value) ||
+    !Number.isSafeInteger(value.refundReason) ||
+    (value.expectedEnvironment !== "sandbox" &&
+      value.expectedEnvironment !== "production") ||
+    !(PLATFORM_REFUND_REVIEW_STATES as readonly unknown[]).includes(value.state)
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 환불 검토 응답 형식이 올바르지 않습니다.",
+    );
+  }
+  const appId = requiredString(value, "appId");
+  const reviewId = requiredString(value, "reviewId");
+  const receivedAt = requiredString(value, "receivedAt");
+  const dueAt = requiredString(value, "dueAt");
+  if (
+    appId !== expectedAppId ||
+    value.expectedEnvironment !== expectedEnvironment ||
+    !/^[0-9a-f]{64}$/.test(reviewId) ||
+    Number.isNaN(Date.parse(receivedAt)) ||
+    Number.isNaN(Date.parse(dueAt))
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 환불 검토 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+
+  const refundPreference = optionalString(value, "refundPreference");
+  const decisionReason = optionalString(value, "decisionReason");
+  if (
+    (refundPreference !== undefined &&
+      !(PLATFORM_REFUND_REVIEW_PREFERENCES as readonly string[]).includes(
+        refundPreference,
+      )) ||
+    (decisionReason !== undefined &&
+      !(PLATFORM_REFUND_REVIEW_REASONS as readonly string[]).includes(
+        decisionReason,
+      )) ||
+    (value.sampleContentProvided !== undefined &&
+      typeof value.sampleContentProvided !== "boolean")
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 환불 검토 결정 응답 형식이 올바르지 않습니다.",
+    );
+  }
+
+  return {
+    reviewId,
+    appId,
+    expectedEnvironment: value.expectedEnvironment,
+    state: value.state as PlatformRefundReviewState,
+    refundReason: value.refundReason as number,
+    receivedAt,
+    dueAt,
+    requestId: optionalString(value, "requestId"),
+    refundPreference: refundPreference as
+      | PlatformRefundReviewPreference
+      | undefined,
+    sampleContentProvided: value.sampleContentProvided as boolean | undefined,
+    decisionReason: decisionReason as
+      | PlatformRefundReviewDecisionReason
+      | undefined,
+    decidedAt: optionalString(value, "decidedAt"),
+    respondedAt: optionalString(value, "respondedAt"),
+    failedAt: optionalString(value, "failedAt"),
+    expiredAt: optionalString(value, "expiredAt"),
+    lastErrorCode: optionalString(value, "lastErrorCode"),
+  };
+}
+
+function validateRefundReviewDecisionResult(
+  value: unknown,
+  expected: RefundReviewDecisionRequest,
+): RefundReviewDecisionResult {
+  if (
+    !isRecord(value) ||
+    typeof value.applied !== "boolean" ||
+    value.requestId !== expected.requestId ||
+    value.appId !== expected.appId ||
+    value.reviewId !== expected.reviewId ||
+    value.expectedEnvironment !== expected.expectedEnvironment ||
+    (value.state !== "decided" &&
+      value.state !== "responded" &&
+      value.state !== "expired" &&
+      value.state !== "failed") ||
+    value.refundPreference !== expected.refundPreference ||
+    value.sampleContentProvided !== expected.sampleContentProvided ||
+    value.operation !== "refund_review_decision"
+  ) {
+    return invalidPlatformResponse(
+      "플랫폼 환불 검토 결정 응답 대상이 요청과 일치하지 않습니다.",
+    );
+  }
+  return {
+    applied: value.applied,
+    requestId: expected.requestId,
+    appId: expected.appId,
+    reviewId: expected.reviewId,
+    expectedEnvironment: expected.expectedEnvironment,
+    state: value.state,
+    refundPreference: expected.refundPreference,
+    sampleContentProvided: expected.sampleContentProvided,
+    operation: "refund_review_decision",
   };
 }
 
@@ -601,15 +804,36 @@ export class PlatformClient {
     const res = await this.request<unknown>("GET", "/v1/admin/health");
     if (
       !isRecord(res) ||
-      (res.environment !== "sandbox" && res.environment !== "production") ||
-      !Number.isInteger(res.deadLetterCount) ||
-      (res.deadLetterCount as number) < 0
+      (res.environment !== "sandbox" && res.environment !== "production")
     ) {
       return invalidPlatformResponse("플랫폼 상태 응답 형식이 올바르지 않습니다.");
     }
+    const refundReviewAvailable = [
+      "pendingRefundReviewCount",
+      "dueSoonRefundReviewCount",
+      "failedRefundReviewCount",
+    ].every((key) => Object.prototype.hasOwnProperty.call(res, key));
     return {
       environment: res.environment,
-      deadLetterCount: res.deadLetterCount as number,
+      deadLetterCount: nonnegativeInteger(res, "deadLetterCount"),
+      refundReviewAvailable,
+      // rolling deploy 중 구버전 Admin 응답은 세 필드가 없다. 잠깐 0으로
+      // 보이게 하되 신규 API가 배포되면 실제 값으로 즉시 전환한다.
+      pendingRefundReviewCount: nonnegativeInteger(
+        res,
+        "pendingRefundReviewCount",
+        0,
+      ),
+      dueSoonRefundReviewCount: nonnegativeInteger(
+        res,
+        "dueSoonRefundReviewCount",
+        0,
+      ),
+      failedRefundReviewCount: nonnegativeInteger(
+        res,
+        "failedRefundReviewCount",
+        0,
+      ),
       // 구버전 Admin API는 이 필드를 주지 않는다. 없으면 빈 배열로 본다.
       // 조회 기능 전체를 막을 만한 값이 아니다.
       environmentMismatches: parseEnvironmentMismatches(res.environmentMismatches),
@@ -714,6 +938,33 @@ export class PlatformClient {
     return { appId, entitlements: entitlements as string[] };
   }
 
+  /** 앱별 Google Play 환불 검토 queue. 민감 필드가 섞이면 응답 전체를 거부한다. */
+  async refundReviews(
+    appId: string,
+    state?: PlatformRefundReviewState,
+    limit = 50,
+  ): Promise<PlatformRefundReview[]> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (state) query.set("state", state);
+    const res = await this.request<unknown>(
+      "GET",
+      `/v1/admin/apps/${encodeURIComponent(appId)}/iap/refund-reviews?${query.toString()}`,
+    );
+    const environment = isRecord(res) ? res.environment : undefined;
+    if (
+      !isRecord(res) ||
+      requiredString(res, "appId") !== appId ||
+      (environment !== "sandbox" && environment !== "production")
+    ) {
+      return invalidPlatformResponse(
+        "플랫폼 환불 검토 목록 응답 대상이 요청과 일치하지 않습니다.",
+      );
+    }
+    return requiredArray(res, "refundReviews").map((item) =>
+      validateRefundReview(item, appId, environment),
+    );
+  }
+
   /** 운영자 지급. 등급 C — dry-run과 typed confirmation을 거친 뒤 부른다. */
   async grantEntitlement(
     req: OperatorRequest,
@@ -745,6 +996,29 @@ export class PlatformClient {
       ),
     req,
     "revoke",
+    );
+  }
+
+  /** 첫 호출만 반영되는 Google 결정. worker write identity에서만 호출한다. */
+  async decideRefundReview(
+    req: RefundReviewDecisionRequest,
+    actor: string,
+  ): Promise<RefundReviewDecisionResult> {
+    return validateRefundReviewDecisionResult(
+      await this.request<unknown>(
+        "POST",
+        `/v1/admin/apps/${encodeURIComponent(req.appId)}/iap/refund-reviews/${encodeURIComponent(req.reviewId)}/decision`,
+        {
+          requestId: req.requestId,
+          expectedEnvironment: req.expectedEnvironment,
+          refundPreference: req.refundPreference,
+          sampleContentProvided: req.sampleContentProvided,
+          reason: req.reason,
+          confirmation: req.confirmation,
+        },
+        actor,
+      ),
+      req,
     );
   }
 

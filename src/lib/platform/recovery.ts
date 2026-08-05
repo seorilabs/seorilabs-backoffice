@@ -131,7 +131,8 @@ export function parsePlatformRecoveryReference(
     !/^[a-z0-9][a-z0-9-]{0,63}$/.test(candidate.appSlug) ||
     (candidate.operation !== "platform.iap.grant-entitlement" &&
       candidate.operation !== "platform.iap.revoke-entitlement" &&
-      candidate.operation !== "platform.iap.reset-app-store-sandbox")
+      candidate.operation !== "platform.iap.reset-app-store-sandbox" &&
+      candidate.operation !== "platform.iap.decide-refund-review")
   ) {
     return null;
   }

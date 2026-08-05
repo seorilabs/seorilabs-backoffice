@@ -60,6 +60,23 @@ test("결과 불명 복구 참조는 비민감 필드만 브라우저 저장소�
   ]);
 });
 
+test("환불 검토 복구 참조도 review와 결정 payload를 저장하지 않는다", () => {
+  const value = platformRecoveryStorageValue({
+    requestId: "123e4567-e89b-42d3-a456-426614174000",
+    appSlug: "lizard-tycoon",
+    operation: "platform.iap.decide-refund-review",
+    reviewId: "a".repeat(64),
+    refundPreference: "DECLINE",
+    pendingRefundToken: "must-not-persist",
+  } as never);
+  const serialized = JSON.stringify(value);
+  assert.doesNotMatch(serialized, /aaaaaaaaaa|DECLINE|must-not-persist/);
+  assert.equal(
+    parsePlatformRecoveryReference(value)?.operation,
+    "platform.iap.decide-refund-review",
+  );
+});
+
 test("브라우저 저장소의 변조된 request ID와 operation을 거부한다", () => {
   assert.equal(
     parsePlatformRecoveryReference({
