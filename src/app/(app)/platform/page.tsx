@@ -17,7 +17,12 @@ export default async function PlatformOverviewPage() {
   const snapshot = configuration.configured
     ? await loadPlatformIapSnapshotAction()
     : null;
-  const available = snapshot?.ok === true;
+  const data = snapshot?.ok ? snapshot.data : null;
+  const health = data?.health ?? null;
+
+  // capability는 Admin API가 살아 있는지로만 판단한다. 감사 목록 조회가
+  // 실패했다고 해서 인증 조회 기능이 사라진 것은 아니다.
+  const available = health !== null;
   const capabilities: PlatformCapabilityView[] = [
     {
       key: "auth",
@@ -42,29 +47,45 @@ export default async function PlatformOverviewPage() {
     },
   ];
 
-  const health = snapshot?.ok ? snapshot.data.health : null;
   const mismatches = health?.environmentMismatches ?? [];
+  const failures = data?.failures ?? [];
+  // health 실패는 연결 배지가 이미 말하고 있다. 구획 목록에 또 넣으면
+  // 같은 사실이 두 번 보인다.
+  const sectionFailures = failures.filter((f) => f.section !== "health");
+  const healthFailure = failures.find((f) => f.section === "health");
 
   const message = overviewMessage({
     configuredMessage: configuration.configured ? null : configuration.message,
-    errorMessage: snapshot && !snapshot.ok ? snapshot.error : null,
+    errorMessage:
+      snapshot && !snapshot.ok ? snapshot.error : (healthFailure?.error ?? null),
     deadLetterCount: health?.deadLetterCount ?? 0,
     environmentMismatchCount: mismatches.length,
+    failedSectionLabels: sectionFailures.map((f) => f.label),
   });
 
   return (
     <PlatformOverviewStatus
       connection={overviewConnectionState({
         configured: configuration.configured,
-        reachable: snapshot?.ok === true,
+        healthReachable: health !== null,
         deadLetterCount: health?.deadLetterCount ?? 0,
         environmentMismatchCount: mismatches.length,
+        failedSectionCount: sectionFailures.length,
       })}
-      environment={snapshot?.ok ? snapshot.data.health.environment : null}
-      deadLetterCount={snapshot?.ok ? snapshot.data.health.deadLetterCount : null}
+      environment={health?.environment ?? null}
+      deadLetterCount={health?.deadLetterCount ?? null}
       environmentMismatches={mismatches}
       capabilities={capabilities}
-      lastCheckedAt={snapshot?.ok ? snapshot.data.checkedAt : null}
+      sectionFailures={sectionFailures}
+      metrics={data?.metrics ?? null}
+      // 조회는 성공했는데 값이 null이면 구버전 Admin API다. 실패 목록에
+      // 없다는 것이 그 증거다.
+      metricsUnsupported={
+        data != null &&
+        data.metrics === null &&
+        !failures.some((f) => f.section === "metrics")
+      }
+      lastCheckedAt={data?.checkedAt ?? null}
       message={message}
     />
   );

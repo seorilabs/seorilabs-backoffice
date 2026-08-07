@@ -16,8 +16,11 @@ import {
   loadPlatformIapSnapshotAction,
   lookupPlatformEntitlementsAction,
   type PlatformIapCatalog,
-  type PlatformIapSnapshot,
 } from "@/lib/actions/platform-read";
+import {
+  platformSnapshotErrorMessage,
+  type PlatformIapSnapshot,
+} from "@/lib/platform/snapshot";
 import {
   platformOperationConfirmationText,
   platformRequestIdForSubmission,
@@ -138,7 +141,7 @@ export function PlatformIapManagement({
   const [lookupPending, startLookup] = useTransition();
   const [writePending, startWrite] = useTransition();
 
-  const environment = snapshot?.health.environment;
+  const environment = snapshot?.health?.environment;
   const activeCatalog = platformCatalogForApp(catalog, appSlug);
 
   const activateRecoveryReference = useCallback(
@@ -410,7 +413,9 @@ export function PlatformIapManagement({
         return;
       }
       setSnapshot(result.data);
-      setError(null);
+      // 부분 실패는 ok인 채로 온다. null로 덮으면 방금 실패한 조회가
+      // 새로고침으로 조용히 사라진다.
+      setError(platformSnapshotErrorMessage(result.data));
     });
   }
 
@@ -1159,7 +1164,7 @@ export function PlatformIapManagement({
         </div>
       </div>
 
-      {snapshot?.health.refundReviewAvailable && (
+      {snapshot?.health?.refundReviewAvailable && (
         <PlatformRefundReviewPanel
           apps={writableApps}
           environment={environment}
@@ -1585,7 +1590,7 @@ export function PlatformIapManagement({
 
       <PlatformIapConsole
         environment={environment}
-        deadLetterCount={snapshot?.health.deadLetterCount}
+        deadLetterCount={snapshot?.health?.deadLetterCount}
         selectedPlatformUserId={selectedPlatformUserId || null}
         orders={snapshot?.orders.map((order) => ({
           ...order,

@@ -23,6 +23,8 @@ export {
   PlatformOverviewStatus,
   type PlatformCapabilityView,
   type PlatformOverviewStatusProps,
+  type PlatformSectionFailureView,
+  type PlatformUserMetricsView,
 } from "./PlatformOverviewStatus";
 export {
   type PlatformCapabilityState,
