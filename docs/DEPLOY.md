@@ -239,6 +239,7 @@ flowchart LR
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
+- `lizard-tycoon`은 `com.seorilabs.lizardtycoon` Xcode Cloud 제품(`LizardTerrarium`)과 `Lizard Tycoon Release` workflow를 사용한다. Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그 커밋에서 Godot iOS 프로젝트를 재생성한다. workflow에는 환경변수 `GODOT_ANALYTICS_ID`와 secret `GODOT_ANALYTICS_SECRET`이 있어야 빌드가 통과한다.
 - 관련 마이그레이션: `16_deploy_completion_notifications`.
 
 ## 14. AppOps Kubernetes worker
