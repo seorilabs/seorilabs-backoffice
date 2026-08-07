@@ -17,3 +17,25 @@ export function releaseMarkerMessage(tag: string): string {
 export function isReleaseMarkerMessage(message: string): boolean {
   return message.split("\n")[0].startsWith(RELEASE_MARKER_PREFIX);
 }
+
+/** 출시노트 집계에서 마커 커밋 제목을 제외한다(코드 변경이 없는 커밋). */
+export function excludeReleaseMarkers(messages: string[]): string[] {
+  return messages.filter((m) => !isReleaseMarkerMessage(m));
+}
+
+/**
+ * 마커 커밋을 남길지 판단(순수). 아래 중 하나라도 해당하면 남기지 않는다.
+ * - 태그가 이미 존재(재실행) → 기존 태그 커밋을 유지해야 멱등
+ * - 대상 ref 가 브랜치가 아님, 또는 그 사이 브랜치가 움직임 → 임의 브랜치 이동 금지
+ * - 부모가 이미 마커 커밋 → 직전 릴리즈 이후 새 커밋이 없으므로 마커 연쇄 방지
+ */
+export function shouldPushReleaseMarker(input: {
+  tagAlreadyExists: boolean;
+  branchHeadSha: string | null;
+  targetSha: string;
+  parentMessage: string;
+}): boolean {
+  if (input.tagAlreadyExists) return false;
+  if (!input.branchHeadSha || input.branchHeadSha !== input.targetSha) return false;
+  return !isReleaseMarkerMessage(input.parentMessage);
+}

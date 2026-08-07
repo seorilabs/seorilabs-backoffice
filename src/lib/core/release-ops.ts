@@ -6,7 +6,6 @@ import {
   dispatchWorkflow,
   resolveRefSha,
   pushReleaseMarkerCommit,
-  tagExists,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
 import {
@@ -133,15 +132,12 @@ export async function createReleaseTagWithNotes(opts: {
   });
 
   // 릴리즈 경계 마커 커밋을 남기고 그 커밋에 태그를 단다(커밋 히스토리 가시성).
-  // 재실행이면 이미 태그가 있으므로 마커를 새로 쌓지 않는다.
-  const { sha, marked } = (await tagExists(opts.repoFullName, tag))
-    ? { sha: baseSha, marked: false }
-    : await pushReleaseMarkerCommit({
-        repoFullName: opts.repoFullName,
-        ref: targetRef,
-        sha: baseSha,
-        tag,
-      });
+  const { sha, marked } = await pushReleaseMarkerCommit({
+    repoFullName: opts.repoFullName,
+    ref: targetRef,
+    sha: baseSha,
+    tag,
+  });
 
   const { created } = await createTag({ repoFullName: opts.repoFullName, tag, sha });
   const rel = await createOrUpdateRelease({

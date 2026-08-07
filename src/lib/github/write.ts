@@ -1,7 +1,7 @@
 import { getInstallationOctokit } from "@/lib/github/app";
 import {
-  isReleaseMarkerMessage,
   releaseMarkerMessage,
+  shouldPushReleaseMarker,
 } from "@/lib/core/release-marker";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
@@ -84,16 +84,6 @@ export async function resolveRefSha(repoFullName: string, ref: string): Promise<
   return res.data.sha;
 }
 
-/** 태그 존재 여부. 재실행 시 마커 커밋을 중복으로 쌓지 않기 위한 선행 확인. */
-export async function tagExists(repoFullName: string, tag: string): Promise<boolean> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(repoFullName);
-  const res = await octokit.rest.git
-    .getRef({ owner, repo, ref: `tags/${tag}` })
-    .catch(() => null);
-  return res != null;
-}
-
 /**
  * 릴리즈 태그를 달 커밋을 확정한다.
  *
@@ -101,10 +91,8 @@ export async function tagExists(repoFullName: string, tag: string): Promise<bool
  * GitHub /commits 화면이 태그를 표시하지 않아 커밋 목록만으로 릴리즈 경계를 알 수 없는 문제를
  * 해결하는 유일한 방법이다(파일 변경 0 이라 코드에는 영향 없음).
  *
- * 아래 경우에는 마커 없이 원래 SHA 를 그대로 돌려준다.
- * - ref 가 브랜치가 아님(태그/SHA 직접 지정) 또는 그 사이 브랜치가 움직임
- * - HEAD 가 이미 마커 커밋(직전 릴리즈 이후 새 커밋 없음) → 마커 연쇄 방지
- * - 보호 브랜치·권한 부족으로 push 거절 → 태그 생성 자체는 계속 진행
+ * 마커를 남길지 판단은 `shouldPushReleaseMarker`(순수 함수)가 담당한다.
+ * 남기지 않기로 했거나 push 가 거절되면 원래 SHA 를 그대로 돌려주고 태그 생성은 계속 진행한다.
  */
 export async function pushReleaseMarkerCommit(opts: {
   repoFullName: string;
@@ -115,13 +103,19 @@ export async function pushReleaseMarkerCommit(opts: {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(opts.repoFullName);
 
-  const branch = await octokit.rest.git
-    .getRef({ owner, repo, ref: `heads/${opts.ref}` })
-    .catch(() => null);
-  if (!branch || branch.data.object.sha !== opts.sha) return { sha: opts.sha, marked: false };
+  const [tagRef, branch, parent] = await Promise.all([
+    octokit.rest.git.getRef({ owner, repo, ref: `tags/${opts.tag}` }).catch(() => null),
+    octokit.rest.git.getRef({ owner, repo, ref: `heads/${opts.ref}` }).catch(() => null),
+    octokit.rest.git.getCommit({ owner, repo, commit_sha: opts.sha }),
+  ]);
 
-  const parent = await octokit.rest.git.getCommit({ owner, repo, commit_sha: opts.sha });
-  if (isReleaseMarkerMessage(parent.data.message)) return { sha: opts.sha, marked: false };
+  const should = shouldPushReleaseMarker({
+    tagAlreadyExists: tagRef != null,
+    branchHeadSha: branch?.data.object.sha ?? null,
+    targetSha: opts.sha,
+    parentMessage: parent.data.message,
+  });
+  if (!should) return { sha: opts.sha, marked: false };
 
   try {
     const commit = await octokit.rest.git.createCommit({
