@@ -51,26 +51,55 @@ describe("플랫폼 표현 컴포넌트", () => {
   });
 
   it("사용자 지표를 활성 정의와 함께 표시한다", () => {
+    // 값이 서로의 부분 문자열이 되지 않게 고른다. 12,345와 2,345처럼
+    // 겹치면 라벨이 뒤바뀌어도 단순 포함 검사가 통과해 버린다.
     const html = renderToStaticMarkup(
       createElement(PlatformOverviewStatus, {
         connection: "connected",
         environment: "production",
         metrics: {
-          totalUsers: 12345,
-          dailyActiveUsers: 678,
-          weeklyActiveUsers: 2345,
+          totalUsers: 91250,
+          dailyActiveUsers: 431,
+          weeklyActiveUsers: 7806,
           activitySource: "session_last_seen",
           measuredAt: "2026-08-07T13:21:28Z",
         },
       }),
     );
 
-    assert.match(html, /12,345/);
-    assert.match(html, /678/);
-    assert.match(html, /2,345/);
+    // 라벨과 값을 붙여서 확인한다. 각각 따로 검사하면 세 숫자가
+    // 엉뚱한 카드에 들어가도 통과한다.
+    const card = (label: string, value: string) =>
+      new RegExp(`${label}</div><div[^>]*>${value}</div>`);
+
+    assert.match(html, card("전체 사용자", "91,250"));
+    assert.match(html, card("DAU", "431"));
+    assert.match(html, card("WAU", "7,806"));
+
     // 정의를 안 적으면 GA4 DAU와 숫자가 다른 것이 버그로 읽힌다.
     assert.match(html, /세션 발급/);
     assert.match(html, /동시 접속은 현재 플랫폼이 측정하지 않습니다/);
+  });
+
+  it("지표 0은 미확인이 아니라 0으로 그린다", () => {
+    // 0을 대시로 그리면 "사용자가 없다"와 "집계를 못 읽었다"가
+    // 화면에서 같아 보인다.
+    const html = renderToStaticMarkup(
+      createElement(PlatformOverviewStatus, {
+        connection: "connected",
+        environment: "production",
+        metrics: {
+          totalUsers: 0,
+          dailyActiveUsers: 0,
+          weeklyActiveUsers: 0,
+          activitySource: "session_last_seen",
+          measuredAt: "2026-08-07T13:21:28Z",
+        },
+      }),
+    );
+
+    assert.match(html, /전체 사용자<\/div><div[^>]*>0<\/div>/);
+    assert.doesNotMatch(html, /전체 사용자<\/div><div[^>]*>—<\/div>/);
   });
 
   it("지표 미지원은 장애가 아니라 배포 대기로 안내한다", () => {
