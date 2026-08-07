@@ -3,6 +3,7 @@ import {
   compareStableSemVerTagsDesc,
   stableVersionTags,
 } from "@/lib/core/stable-semver";
+import { excludeReleaseMarkers } from "@/lib/core/release-marker";
 
 // 릴리즈/태그 관련 GitHub 조회. 출시노트 생성 + untagged 보정에 사용.
 
@@ -77,8 +78,9 @@ export async function compareTags(
     repo,
     basehead: `${base}...${head}`,
   });
-  const messages = (res.data.commits ?? []).map(
-    (c) => c.commit.message.split("\n")[0],
+  // 릴리즈 마커 커밋은 코드 변경이 없으므로 출시노트 집계에서 제외한다.
+  const messages = excludeReleaseMarkers(
+    (res.data.commits ?? []).map((c) => c.commit.message.split("\n")[0]),
   );
   return {
     url: res.data.html_url,

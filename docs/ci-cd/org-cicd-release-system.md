@@ -216,7 +216,8 @@ sequenceDiagram
     participant MK as 마켓(AIT/GPS/APS)
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
-    BO->>GH: createTag(vX.Y.Z) [contents:write]
+    BO->>GH: 릴리즈 마커 빈 커밋 push - chore release vX.Y.Z [contents:write]
+    BO->>GH: createTag(vX.Y.Z) → 마커 커밋에 태그 [contents:write]
     BO-->>U: 태그 + GitHub Release 즉시 생성
     GH-->>BO: tag push webhook
     BO-->>GH: webhook 200
@@ -235,6 +236,7 @@ sequenceDiagram
     BO->>TG: ⑦ 업로드 성공/실패 메시지
 ```
 
+- **릴리즈 마커 커밋**: GitHub `/commits` 화면은 태그도 배포 상태도 표시하지 않아 커밋 목록만으로 배포 경계를 알 수 없다. 태그 생성 시 트리가 부모와 동일한 빈 커밋 `chore(release): vX.Y.Z` 를 대상 브랜치에 push 하고 그 커밋에 태그를 단다. 파일 변경이 0 이라 코드에는 영향이 없고, 본문 `[skip ci]` 로 push→main 정적 게이트 중복 실행을 막는다(배포는 `workflow_dispatch` 라 영향 없음). 태그가 이미 있거나(재실행), HEAD 가 이미 마커이거나, 브랜치가 보호되어 push 가 거절되면 마커 없이 기존 커밋에 태그만 단다. 마커 커밋은 출시노트 커밋 집계에서 제외한다.
 - Telegram API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
 - Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행한다.

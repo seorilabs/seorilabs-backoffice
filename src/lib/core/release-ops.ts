@@ -5,6 +5,7 @@ import {
   upsertReleaseAsset,
   dispatchWorkflow,
   resolveRefSha,
+  pushReleaseMarkerCommit,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
 import {
@@ -117,7 +118,7 @@ export async function createReleaseTagWithNotes(opts: {
   prerelease?: boolean;
 }): Promise<CreateReleaseResult> {
   const targetRef = opts.targetRef || "main";
-  const sha = await resolveRefSha(opts.repoFullName, targetRef);
+  const baseSha = await resolveRefSha(opts.repoFullName, targetRef);
 
   const [tags, floor] = await Promise.all([
     listVersionTags(opts.repoFullName),
@@ -128,6 +129,14 @@ export async function createReleaseTagWithNotes(opts: {
     marketFloor: floor,
     explicitTag: opts.tag ? normalizeTag(opts.tag) : undefined,
     bump: opts.bump ?? "patch",
+  });
+
+  // 릴리즈 경계 마커 커밋을 남기고 그 커밋에 태그를 단다(커밋 히스토리 가시성).
+  const { sha, marked } = await pushReleaseMarkerCommit({
+    repoFullName: opts.repoFullName,
+    ref: targetRef,
+    sha: baseSha,
+    tag,
   });
 
   const { created } = await createTag({ repoFullName: opts.repoFullName, tag, sha });
@@ -146,7 +155,7 @@ export async function createReleaseTagWithNotes(opts: {
         action: "release.tag.create",
         entityType: "release",
         entityId: `${opts.repoFullName}@${tag}`,
-        payload: { tag, sha, created, releaseUrl: rel.url } as object,
+        payload: { tag, sha, baseSha, marked, created, releaseUrl: rel.url } as object,
       },
     })
     .catch(() => {});
