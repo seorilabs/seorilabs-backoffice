@@ -20,12 +20,17 @@ function marker(input: Partial<Parameters<typeof shouldPushReleaseMarker>[0]> = 
   });
 }
 
-test("마커 커밋 메시지는 제목에 태그를, 본문에 skip ci 를 담는다", () => {
-  const [subject, blank, body] = releaseMarkerMessage("v1.3.2").split("\n");
+test("마커 커밋 메시지는 제목 한 줄이다", () => {
+  assert.equal(releaseMarkerMessage("v1.3.2"), "chore(release): v1.3.2");
+});
 
-  assert.equal(subject, "chore(release): v1.3.2");
-  assert.equal(blank, "");
-  assert.equal(body, "[skip ci]");
+// 인수조건: push:tags 로 도는 배포를 마커 커밋이 삼키지 않는다.
+test("마커 커밋 메시지에 CI skip 지시어를 넣지 않는다", () => {
+  const message = releaseMarkerMessage("v1.3.2");
+
+  for (const directive of ["[skip ci]", "[ci skip]", "[skip actions]", "***NO_CI***"]) {
+    assert.equal(message.includes(directive), false, `${directive} 가 포함되면 안 된다`);
+  }
 });
 
 test("자기 자신이 만든 마커 메시지를 다시 마커로 인식한다(연쇄 방지)", () => {
