@@ -7,10 +7,16 @@
 /** 마커 커밋 제목 접두사. */
 export const RELEASE_MARKER_PREFIX = "chore(release): ";
 
-/** 마커 커밋 메시지. 본문 `[skip ci]` 는 push→main 정적 게이트 중복 실행을 막는다.
- *  배포 워크플로우는 workflow_dispatch 라 skip 지시어의 영향을 받지 않는다. */
+/**
+ * 마커 커밋 메시지.
+ *
+ * `[skip ci]` 를 넣지 않는다. 마커 커밋은 태그가 가리키는 커밋이 되므로, 배포 워크플로우가
+ * `push: tags` 로 트리거되는 repo(예: lizard-tycoon `deploy-apps-in-toss.yml`)에서 skip
+ * 지시어가 그 배포까지 조용히 삼킨다. 정적 게이트가 릴리즈마다 한 번 더 도는 비용을
+ * 감수하는 편이 배포 누락보다 안전하다.
+ */
 export function releaseMarkerMessage(tag: string): string {
-  return `${RELEASE_MARKER_PREFIX}${tag}\n\n[skip ci]`;
+  return `${RELEASE_MARKER_PREFIX}${tag}`;
 }
 
 /** 마커 커밋인가(제목 기준). 마커 연쇄 방지 + 출시노트 커밋 집계 제외에 사용. */
