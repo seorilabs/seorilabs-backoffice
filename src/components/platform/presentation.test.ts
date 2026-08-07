@@ -58,9 +58,10 @@ describe("플랫폼 운영 상태 표현", () => {
 describe("개요 연결 상태", () => {
   const base = {
     configured: true,
-    reachable: true,
+    healthReachable: true,
     deadLetterCount: 0,
     environmentMismatchCount: 0,
+    failedSectionCount: 0,
   };
 
   it("환경 불일치는 dead-letter와 같은 등급으로 degraded다", () => {
@@ -85,14 +86,35 @@ describe("개요 연결 상태", () => {
     assert.equal(
       overviewConnectionState({
         ...base,
-        reachable: false,
+        healthReachable: false,
         environmentMismatchCount: 3,
       }),
       "unavailable",
     );
     assert.equal(
-      overviewConnectionState({ ...base, configured: false, reachable: false }),
+      overviewConnectionState({
+        ...base,
+        configured: false,
+        healthReachable: false,
+      }),
       "unconfigured",
+    );
+  });
+
+  it("개별 조회 실패는 degraded지 unavailable이 아니다", () => {
+    // 감사 기록 하나가 계약 검증에 걸렸다고 멀쩡한 Admin API를
+    // "연결 실패"로 표시하면, 운영자는 네트워크와 자격증명을
+    // 의심하게 되고 진짜 원인은 화면 어디에도 없다.
+    assert.equal(
+      overviewConnectionState({ ...base, failedSectionCount: 1 }),
+      "degraded",
+    );
+  });
+
+  it("health가 살아 있으면 다른 조회가 다 실패해도 연결은 유효하다", () => {
+    assert.notEqual(
+      overviewConnectionState({ ...base, failedSectionCount: 3 }),
+      "unavailable",
     );
   });
 });
@@ -134,5 +156,26 @@ describe("개요 요약 문구", () => {
       overviewMessage({ ...base, errorMessage: "조회 실패", environmentMismatchCount: 1 }),
       "조회 실패",
     );
+  });
+
+  it("실패한 구획 이름을 알리되 연결이 끊긴 것처럼 말하지 않는다", () => {
+    const message = overviewMessage({
+      ...base,
+      failedSectionLabels: ["운영자 변경 이력"],
+    });
+
+    assert.match(message, /운영자 변경 이력/);
+    assert.match(message, /Admin API는 정상/);
+  });
+
+  it("환경 불일치가 구획 실패보다 급하다", () => {
+    // 조회가 하나 안 되는 것보다 지급이 전부 막힌 쪽이 먼저다.
+    const message = overviewMessage({
+      ...base,
+      environmentMismatchCount: 1,
+      failedSectionLabels: ["운영자 변경 이력"],
+    });
+
+    assert.match(message, /환경이 어긋나/);
   });
 });

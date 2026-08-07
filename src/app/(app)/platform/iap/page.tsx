@@ -6,6 +6,7 @@ import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
+import { platformSnapshotErrorMessage } from "@/lib/platform/snapshot";
 import { listBlockingPlatformOperations } from "@/lib/platform/runs";
 import type { PlatformBlockingReference } from "@/lib/platform/recovery";
 import { prisma } from "@/lib/prisma";
@@ -73,7 +74,11 @@ export default async function PlatformIapPage() {
             ? configuration.message
             : snapshot && !snapshot.ok
               ? snapshot.error
-              : null
+              : // 부분 실패는 snapshot이 ok인 채로 온다. 여기서 안 꺼내면
+                // 이 화면에는 실패가 어디에도 안 보인다.
+                snapshot?.ok
+                ? platformSnapshotErrorMessage(snapshot.data)
+                : null
         }
         writableApps={writeAccess.apps}
         initialBlockingReferences={writeAccess.blockingReferences}

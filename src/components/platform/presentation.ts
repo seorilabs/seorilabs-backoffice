@@ -90,18 +90,29 @@ export function writeStatePresentation(
  * 이 판정을 page에서 삼항 연산자로 두면 test로 고정할 수 없다. 실제로
  * 환경 불일치가 조용히 넘어가 운영자가 못 보는 사고가 있었으므로,
  * 무엇이 degraded인지는 계약으로 박아 둔다.
+ *
+ * `healthReachable`은 health 조회만 본다. 예전에는 주문·감사 조회까지
+ * 한 덩어리로 묶어 판정해서, 감사 기록 하나가 계약 검증에 걸리면
+ * 멀쩡한 Admin API가 "연결 실패"로 표시됐다. 운영자는 네트워크나
+ * 자격증명을 의심하게 되고 진짜 원인은 화면 어디에도 없었다.
+ * 개별 조회 실패는 degraded지 unavailable이 아니다.
  */
 export function overviewConnectionState(input: {
   configured: boolean;
-  reachable: boolean;
+  healthReachable: boolean;
   deadLetterCount: number;
   environmentMismatchCount: number;
+  failedSectionCount: number;
 }): PlatformConnectionState {
   if (!input.configured) return "unconfigured";
-  if (!input.reachable) return "unavailable";
+  if (!input.healthReachable) return "unavailable";
   // 환경 불일치는 dead-letter와 같은 등급이다. 서비스는 살아 있지만
   // 운영자가 할 수 있는 일이 막혀 있다.
-  if (input.deadLetterCount > 0 || input.environmentMismatchCount > 0) {
+  if (
+    input.deadLetterCount > 0 ||
+    input.environmentMismatchCount > 0 ||
+    input.failedSectionCount > 0
+  ) {
     return "degraded";
   }
   return "connected";
@@ -112,12 +123,17 @@ export function overviewConnectionState(input: {
  *
  * 환경 불일치를 dead-letter보다 먼저 알린다. dead-letter는 재시도가 돌지만
  * 환경 불일치는 사람이 regsync를 돌리기 전에는 저절로 낫지 않는다.
+ *
+ * 개별 조회 실패는 맨 뒤다. 조회가 하나 안 되는 것보다 원장 환경이
+ * 어긋나 지급이 전부 막힌 쪽이 급하다. 실패한 조회의 실제 원인은
+ * 화면이 구획별로 따로 보여준다.
  */
 export function overviewMessage(input: {
   configuredMessage: string | null;
   errorMessage: string | null;
   deadLetterCount: number;
   environmentMismatchCount: number;
+  failedSectionLabels?: readonly string[];
 }): string {
   if (input.configuredMessage) return input.configuredMessage;
   if (input.errorMessage) return input.errorMessage;
@@ -126,6 +142,10 @@ export function overviewMessage(input: {
   }
   if (input.deadLetterCount > 0) {
     return "IAP dead-letter가 있어 완료 처리 상태 확인이 필요합니다.";
+  }
+  const failed = input.failedSectionLabels ?? [];
+  if (failed.length > 0) {
+    return `Admin API는 정상이지만 ${failed.join(", ")} 조회가 실패했습니다.`;
   }
   return "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
 }

@@ -87,6 +87,17 @@ export function PlatformMeta({
   );
 }
 
+/**
+ * 지표 숫자를 표시한다.
+ *
+ * 0과 "아직 못 읽음"을 구분한다. 0을 대시로 그리면 사용자가 없는 것과
+ * 집계가 실패한 것이 같아 보인다.
+ */
+export function formatPlatformCount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("ko-KR").format(value);
+}
+
 export function formatPlatformTimestamp(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);

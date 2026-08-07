@@ -167,6 +167,29 @@ export interface PlatformHealth {
   environmentMismatches: PlatformEnvironmentMismatch[];
 }
 
+/**
+ * 앱을 가로지르는 플랫폼 전체 사용자 규모.
+ *
+ * 앱별 제품 지표가 아니다. IAP 원장 환경과도 무관하다 — `users` 컬렉션은
+ * identity가 소유하고 sandbox/production prefix를 타지 않으므로, sandbox
+ * 원장을 보고 있어도 같은 배포 환경 전체를 센다.
+ */
+export interface PlatformUserMetrics {
+  totalUsers: number;
+  dailyActiveUsers: number;
+  weeklyActiveUsers: number;
+  /**
+   * 활성 판정 근거.
+   *
+   * `session_last_seen`은 세션 발급·갱신 시각 기준이라는 뜻이다. 앱을
+   * 열었지만 토큰이 아직 유효해 재발급이 없었던 사용자는 세지 않으므로
+   * GA4 DAU보다 작게 나온다. 나중에 이벤트 기반 집계가 붙어도 화면이
+   * 정의 변화를 알아챌 수 있게 값으로 받는다.
+   */
+  activitySource: string;
+  measuredAt: string;
+}
+
 export interface PlatformAppIapCatalog {
   appId: string;
   entitlements: string[];
@@ -837,6 +860,33 @@ export class PlatformClient {
       // 구버전 Admin API는 이 필드를 주지 않는다. 없으면 빈 배열로 본다.
       // 조회 기능 전체를 막을 만한 값이 아니다.
       environmentMismatches: parseEnvironmentMismatches(res.environmentMismatches),
+    };
+  }
+
+  /**
+   * 플랫폼 전체 사용자 규모.
+   *
+   * 이 endpoint가 없는 구버전 Admin API를 만나면 던지지 않고 null을
+   * 준다. rolling deploy 중 잠깐 없는 것과 진짜 장애를 화면에서 같은
+   * 빨간 경고로 보여주면 운영자가 경고를 무시하게 된다.
+   */
+  async metrics(): Promise<PlatformUserMetrics | null> {
+    let res: unknown;
+    try {
+      res = await this.request<unknown>("GET", "/v1/admin/metrics");
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 404) return null;
+      throw error;
+    }
+    if (!isRecord(res)) {
+      return invalidPlatformResponse("플랫폼 지표 응답 형식이 올바르지 않습니다.");
+    }
+    return {
+      totalUsers: nonnegativeInteger(res, "totalUsers"),
+      dailyActiveUsers: nonnegativeInteger(res, "dailyActiveUsers"),
+      weeklyActiveUsers: nonnegativeInteger(res, "weeklyActiveUsers"),
+      activitySource: requiredString(res, "activitySource"),
+      measuredAt: requiredString(res, "measuredAt"),
     };
   }
 

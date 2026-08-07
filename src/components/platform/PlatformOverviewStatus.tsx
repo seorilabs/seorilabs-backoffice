@@ -12,6 +12,7 @@ import {
   PlatformBadge,
   PlatformEmptyState,
   PlatformPanel,
+  formatPlatformCount,
   formatPlatformTimestamp,
 } from "./PlatformUi";
 
@@ -28,12 +29,31 @@ export interface PlatformEnvironmentMismatchView {
   ledger: string;
 }
 
+/** 실패한 개별 조회. 다른 구획의 값은 그대로 살아 있다. */
+export interface PlatformSectionFailureView {
+  section: string;
+  label: string;
+  error: string;
+}
+
+export interface PlatformUserMetricsView {
+  totalUsers: number;
+  dailyActiveUsers: number;
+  weeklyActiveUsers: number;
+  activitySource: string;
+  measuredAt: string;
+}
+
 export interface PlatformOverviewStatusProps {
   connection: PlatformConnectionState;
   environment?: string | null;
   deadLetterCount?: number | null;
   environmentMismatches?: readonly PlatformEnvironmentMismatchView[];
   capabilities?: readonly PlatformCapabilityView[];
+  sectionFailures?: readonly PlatformSectionFailureView[];
+  metrics?: PlatformUserMetricsView | null;
+  /** 지표 endpoint가 없는 구버전 Admin API를 만났는지. 실패와 다르다. */
+  metricsUnsupported?: boolean;
   lastCheckedAt?: string | null;
   message?: string | null;
 }
@@ -45,6 +65,9 @@ export function PlatformOverviewStatus({
   deadLetterCount,
   environmentMismatches = [],
   capabilities = [],
+  sectionFailures = [],
+  metrics,
+  metricsUnsupported = false,
   lastCheckedAt,
   message,
 }: PlatformOverviewStatusProps) {
@@ -104,6 +127,75 @@ export function PlatformOverviewStatus({
         </div>
       )}
 
+      {sectionFailures.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <div className="font-medium">
+            일부 조회가 실패했습니다. 나머지 상태 표시는 유효합니다.
+          </div>
+          <ul className="mt-2 space-y-1">
+            {sectionFailures.map((f) => (
+              <li key={f.section} className="text-xs">
+                <span className="font-medium">{f.label}</span> — {f.error}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <PlatformPanel
+        title="플랫폼 사용자"
+        description="앱을 가로지르는 플랫폼 전체 규모입니다. IAP 원장 환경과 무관하게 배포 환경 전체를 셉니다."
+      >
+        {metrics ? (
+          <>
+            <div className="grid gap-3 p-4 sm:grid-cols-3">
+              <MetricCard
+                label="전체 사용자"
+                value={formatPlatformCount(metrics.totalUsers)}
+                detail="플랫폼이 발급한 사용자 ID 총계"
+              />
+              <MetricCard
+                label="DAU"
+                value={formatPlatformCount(metrics.dailyActiveUsers)}
+                detail="최근 24시간 세션 발급 사용자"
+              />
+              <MetricCard
+                label="WAU"
+                value={formatPlatformCount(metrics.weeklyActiveUsers)}
+                detail="최근 7일 세션 발급 사용자"
+              />
+            </div>
+            <div className="border-t border-neutral-100 px-4 py-3 text-[11px] leading-4 text-neutral-500">
+              {/*
+                이 한 줄을 빼면 안 된다. 정의를 모르면 GA4 DAU와 숫자가
+                다른 것이 버그로 보이고, 실제로는 정상 동작이다.
+              */}
+              활성 판정은 세션 발급·갱신 시각 기준입니다. 앱을 열었지만 토큰이
+              아직 유효해 재발급이 없었던 사용자는 세지 않으므로 GA4 DAU보다
+              작게 나옵니다. 동시 접속은 현재 플랫폼이 측정하지 않습니다.
+              {metrics.activitySource !== "session_last_seen" && (
+                <span className="ml-1 font-medium text-amber-700">
+                  Admin API가 다른 활성 기준({metrics.activitySource})을
+                  보냈습니다. 위 설명이 맞는지 확인하세요.
+                </span>
+              )}
+              <span className="ml-1">
+                집계 기준 {formatPlatformTimestamp(metrics.measuredAt)}
+              </span>
+            </div>
+          </>
+        ) : (
+          <PlatformEmptyState title="사용자 지표를 표시할 수 없습니다">
+            {metricsUnsupported
+              ? "이 Admin API 버전에는 지표 조회가 없습니다. 플랫폼 배포 후 표시됩니다."
+              : "지표 조회 상태를 확인하세요."}
+          </PlatformEmptyState>
+        )}
+      </PlatformPanel>
+
       {message && (
         <div
           role={connection === "unavailable" ? "alert" : "status"}
@@ -153,6 +245,26 @@ export function PlatformOverviewStatus({
           </div>
         )}
       </PlatformPanel>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="text-xs font-medium text-neutral-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums text-neutral-900">
+        {value}
+      </div>
+      <p className="mt-1 text-[11px] leading-4 text-neutral-400">{detail}</p>
     </div>
   );
 }

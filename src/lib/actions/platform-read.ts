@@ -2,9 +2,6 @@
 
 import type {
   PlatformAppIapCatalog,
-  PlatformHealth,
-  PlatformOperatorRecord,
-  PlatformOrder,
   PlatformRefundReview,
   PlatformUser,
 } from "@/lib/platform/client";
@@ -15,13 +12,15 @@ import {
   requirePlatformWriteAccess,
 } from "@/lib/platform/access";
 import { createPlatformReadClient } from "@/lib/platform/read-client";
+import { buildPlatformIapSnapshot } from "@/lib/platform/snapshot-build";
+import type { PlatformIapSnapshot } from "@/lib/platform/snapshot";
+// "use server" 파일은 async 함수만 export할 수 있어 타입을 다시 내보낼 수
+// 없다. 소비자는 @/lib/platform/snapshot에서 직접 가져온다.
 import {
   isPlatformUserId,
   normalizePlatformReference,
   PlatformReadInputError,
   publicPlatformEntitlement,
-  publicPlatformOperatorRecord,
-  publicPlatformOrder,
   publicPlatformRefundReview,
   publicPlatformUser,
   type PlatformEntitlementSummary,
@@ -41,13 +40,6 @@ export interface PlatformActionSuccess<T> {
 export type PlatformActionResult<T> =
   | PlatformActionSuccess<T>
   | PlatformActionFailure;
-
-export interface PlatformIapSnapshot {
-  health: PlatformHealth;
-  orders: PlatformOrder[];
-  operatorRecords: PlatformOperatorRecord[];
-  checkedAt: string;
-}
 
 export type PlatformIapCatalog = PlatformAppIapCatalog;
 
@@ -79,32 +71,38 @@ function failure(error: unknown): PlatformActionFailure {
   };
 }
 
-/** 플랫폼 연결·IAP 상태를 한 번의 화면 새로고침에 맞춰 읽는다. */
+/**
+ * 플랫폼 연결·IAP 상태를 한 번의 화면 새로고침에 맞춰 읽는다.
+ *
+ * 구획별로 독립 실패한다. 인증이나 설정처럼 모든 조회의 전제가 되는
+ * 실패만 전체 실패로 돌려준다. 개별 조회 실패는 snapshot 안에 남겨
+ * 나머지 진단 정보를 살린다.
+ */
 export async function loadPlatformIapSnapshotAction(): Promise<
   PlatformActionResult<PlatformIapSnapshot>
 > {
+  let client: ReturnType<typeof createPlatformReadClient>;
   try {
     await requirePlatformReadAccess();
-    const client = createPlatformReadClient();
-    const [health, orders, records] = await Promise.all([
-      client.health(),
-      client.recentOrders(50),
-      client.operatorRecords(50),
-    ]);
-    return {
-      ok: true,
-      data: {
-        health,
-        orders: orders.map(publicPlatformOrder),
-        operatorRecords: [...records.grants, ...records.revocations]
-          .map(publicPlatformOperatorRecord)
-          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
-        checkedAt: new Date().toISOString(),
-      },
-    };
+    client = createPlatformReadClient();
   } catch (error) {
     return failure(error);
   }
+
+  const [health, orders, operatorRecords, metrics] = await Promise.allSettled([
+    client.health(),
+    client.recentOrders(50),
+    client.operatorRecords(50),
+    client.metrics(),
+  ]);
+
+  return {
+    ok: true,
+    data: buildPlatformIapSnapshot(
+      { health, orders, operatorRecords, metrics },
+      new Date().toISOString(),
+    ),
+  };
 }
 
 /** 선택 앱의 entitlement allowlist만 읽는다. UI 전환 race도 appId로 재확인한다. */
