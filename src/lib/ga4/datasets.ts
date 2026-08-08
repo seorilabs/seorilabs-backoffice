@@ -26,6 +26,10 @@ const FALLBACK: Record<string, Ga4Target> = {
   "happy-farm": { firebaseProject: "happy-farm-tycoon", dataset: "analytics_539626577" },
   "foam-party": { firebaseProject: "foam-party", dataset: "analytics_542197312" },
   "match-picture-app": { firebaseProject: "match-picture-app", dataset: "analytics_542397319" },
+  "slotmachine-game": {
+    firebaseProject: "slotmachine-game-495cc",
+    dataset: "analytics_547294653",
+  },
 };
 
 export interface AppGa4Fields {
