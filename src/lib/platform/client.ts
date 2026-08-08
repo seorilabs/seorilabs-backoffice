@@ -920,13 +920,26 @@ export class PlatformClient {
     };
   }
 
-  /** 최근 주문. 기존 recent-purchases에 대응한다. */
-  async recentOrders(limit = 20): Promise<PlatformOrder[]> {
+  /**
+   * 최근 주문. 기존 recent-purchases에 대응한다.
+   *
+   * hidden은 계약 형식을 만족하지 않아 Admin API가 제외한 건수다.
+   * 0이 아니면 이 목록은 불완전하므로 화면이 반드시 알려야 한다.
+   */
+  async recentOrders(
+    limit = 20,
+  ): Promise<{ orders: PlatformOrder[]; hidden: number }> {
     const res = await this.request<unknown>(
       "GET",
       `/v1/admin/orders/recent?limit=${encodeURIComponent(String(limit))}`,
     );
-    return requiredArray(res, "orders").map(validateOrder);
+    return {
+      orders: requiredArray(res, "orders").map(validateOrder),
+      // 구버전 Admin API는 이 필드를 주지 않는다. 0으로 보되, 실제로
+      // 제외가 있었는지는 알 수 없다는 뜻이라 조용히 넘어가도 되는 값은
+      // 아니다. 다만 목록 자체를 막을 근거는 못 된다.
+      hidden: isRecord(res) ? nonnegativeInteger(res, "hiddenOrderCount", 0) : 0,
+    };
   }
 
   /**
@@ -950,10 +963,17 @@ export class PlatformClient {
     return requiredArray(res, "entitlements").map(validateEntitlement);
   }
 
-  /** 운영자 지급·회수 이력. 기존 production-grants에 대응한다. */
+  /**
+   * 운영자 지급·회수 이력. 기존 production-grants에 대응한다.
+   *
+   * hidden은 계약 형식을 만족하지 않아 Admin API가 제외한 건수다.
+   * 감사 이력이라 조용한 누락이 특히 위험하다 — 짧아진 목록을 보고
+   * "지급한 적 없다"는 잘못된 결론이 나올 수 있다.
+   */
   async operatorRecords(limit = 20): Promise<{
     grants: PlatformOperatorRecord[];
     revocations: PlatformOperatorRecord[];
+    hidden: number;
   }> {
     const res = await this.request<unknown>(
       "GET",
@@ -965,6 +985,10 @@ export class PlatformClient {
       revocations: requiredArray(res, "revocations").map(
         validateOperatorRecord,
       ),
+      hidden: isRecord(res)
+        ? nonnegativeInteger(res, "hiddenGrantCount", 0) +
+          nonnegativeInteger(res, "hiddenRevocationCount", 0)
+        : 0,
     };
   }
 

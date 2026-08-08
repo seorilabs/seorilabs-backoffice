@@ -51,6 +51,9 @@ export interface PlatformOverviewStatusProps {
   environmentMismatches?: readonly PlatformEnvironmentMismatchView[];
   capabilities?: readonly PlatformCapabilityView[];
   sectionFailures?: readonly PlatformSectionFailureView[];
+  /** 계약 위반으로 목록에서 제외된 건수. 실패가 아니라 불완전이다. */
+  hiddenOrderCount?: number;
+  hiddenOperatorRecordCount?: number;
   metrics?: PlatformUserMetricsView | null;
   /** 지표 endpoint가 없는 구버전 Admin API를 만났는지. 실패와 다르다. */
   metricsUnsupported?: boolean;
@@ -66,6 +69,8 @@ export function PlatformOverviewStatus({
   environmentMismatches = [],
   capabilities = [],
   sectionFailures = [],
+  hiddenOrderCount = 0,
+  hiddenOperatorRecordCount = 0,
   metrics,
   metricsUnsupported = false,
   lastCheckedAt,
@@ -142,6 +147,37 @@ export function PlatformOverviewStatus({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {(hiddenOrderCount > 0 || hiddenOperatorRecordCount > 0) && (
+        <div
+          role="alert"
+          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <div className="font-medium">
+            계약을 만족하지 않아 목록에서 제외된 기록이 있습니다.
+          </div>
+          <ul className="mt-2 space-y-1 text-xs">
+            {hiddenOperatorRecordCount > 0 && (
+              <li>운영자 변경 이력 {hiddenOperatorRecordCount}건 제외됨</li>
+            )}
+            {hiddenOrderCount > 0 && <li>최근 주문 {hiddenOrderCount}건 제외됨</li>}
+          </ul>
+          <div className="mt-2 text-xs">
+            {/*
+              감사 이력에서 조용한 누락은 잘못된 결론으로 이어진다.
+              짧아진 목록을 보고 "지급한 적 없다"고 판단하면 안 된다.
+            */}
+            <span className="font-medium">
+              이 목록은 불완전합니다. 없는 것으로 판단하지 마세요.
+            </span>{" "}
+            제외된 기록은 자유 서술 사유나 이메일 원문 같은 계약 밖 값을 담고
+            있어 브라우저로 내보내지 않습니다. 어느 문서의 어느 필드인지는
+            platform Cloud Logging의{" "}
+            <span className="font-mono">invalid_fields</span> 경고 로그에
+            남습니다.
+          </div>
         </div>
       )}
 

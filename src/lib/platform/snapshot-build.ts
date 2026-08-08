@@ -17,6 +17,7 @@ import {
   type PlatformSectionFailure,
   type PlatformSnapshotSection,
 } from "@/lib/platform/snapshot";
+export type { PlatformIapSnapshot } from "@/lib/platform/snapshot";
 
 /**
  * 서버 전용이다. 오류 분류에 client·access의 값 import가 필요해서
@@ -50,10 +51,11 @@ export function platformErrorView(error: unknown): {
 
 export interface PlatformSnapshotSettled {
   health: PromiseSettledResult<PlatformHealth>;
-  orders: PromiseSettledResult<PlatformOrder[]>;
+  orders: PromiseSettledResult<{ orders: PlatformOrder[]; hidden: number }>;
   operatorRecords: PromiseSettledResult<{
     grants: PlatformOperatorRecord[];
     revocations: PlatformOperatorRecord[];
+    hidden: number;
   }>;
   metrics: PromiseSettledResult<PlatformUserMetrics | null>;
 }
@@ -108,9 +110,17 @@ export function buildPlatformIapSnapshot(
     health: settled.health.status === "fulfilled" ? settled.health.value : null,
     orders:
       settled.orders.status === "fulfilled"
-        ? settled.orders.value.map(publicPlatformOrder)
+        ? settled.orders.value.orders.map(publicPlatformOrder)
         : [],
     operatorRecords,
+    // 조회가 실패한 구획은 0이다. 목록을 아예 못 받았으므로 "몇 건이
+    // 제외됐다"고 말할 근거가 없다. 그 경우는 failures가 이미 알린다.
+    hiddenOrderCount:
+      settled.orders.status === "fulfilled" ? settled.orders.value.hidden : 0,
+    hiddenOperatorRecordCount:
+      settled.operatorRecords.status === "fulfilled"
+        ? settled.operatorRecords.value.hidden
+        : 0,
     metrics:
       settled.metrics.status === "fulfilled" ? settled.metrics.value : null,
     failures,

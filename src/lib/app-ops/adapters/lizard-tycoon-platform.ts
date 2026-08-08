@@ -173,13 +173,18 @@ async function recentPurchases(
   input: LizardTycoonOperationInput,
 ): Promise<OperationOutput> {
   const limit = clampLimit(input.params.limit);
-  const orders = appScopedRows(
-    await client.recentOrders(Math.min(limit * 5, 100)),
-    limit,
-  );
+  const page = await client.recentOrders(Math.min(limit * 5, 100));
+  const orders = appScopedRows(page.orders, limit);
+
+  // 제외된 주문이 있으면 요약에 붙인다. AppOps 결과는 운영 기록으로
+  // 남으므로 목록이 불완전했다는 사실이 함께 남아야 한다.
+  const hiddenNote =
+    page.hidden > 0
+      ? ` 계약 위반으로 ${page.hidden}건이 제외돼 목록이 불완전합니다.`
+      : "";
 
   return {
-    summary: `최근 주문 ${orders.length}건을 조회했습니다.`,
+    summary: `최근 주문 ${orders.length}건을 조회했습니다.${hiddenNote}`,
     data: {
       // 구매 토큰과 마켓 계정 해시는 플랫폼이 응답에 넣지 않는다.
       // 화면에 뜨면 스크린샷과 로그로 퍼진다.

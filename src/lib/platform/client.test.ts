@@ -213,10 +213,53 @@ describe("응답 해석", () => {
 
   it("명시적인 빈 목록만 빈 결과로 전달한다", async () => {
     const got = await withClient(
+      {
+        status: 200,
+        body: { ok: true, result: { orders: [], hiddenOrderCount: 0 } },
+      },
+      (c) => c.recentOrders(),
+    );
+    assert.deepEqual(got, { orders: [], hidden: 0 });
+  });
+
+  it("제외 건수를 읽어 목록이 불완전함을 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: { ok: true, result: { orders: [], hiddenOrderCount: 4 } },
+      },
+      (c) => c.recentOrders(),
+    );
+    assert.equal(got.hidden, 4);
+  });
+
+  it("제외 건수를 주지 않는 구버전 Admin API도 목록은 읽는다", async () => {
+    // rolling deploy 중 잠깐 구버전을 만난다. 건수를 모르는 것이
+    // 목록을 통째로 못 읽는 것보다 낫다.
+    const got = await withClient(
       { status: 200, body: { ok: true, result: { orders: [] } } },
       (c) => c.recentOrders(),
     );
-    assert.deepEqual(got, []);
+    assert.deepEqual(got, { orders: [], hidden: 0 });
+  });
+
+  it("운영자 이력의 지급·회수 제외 건수를 합산한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            grants: [],
+            revocations: [],
+            hiddenGrantCount: 2,
+            hiddenRevocationCount: 3,
+          },
+        },
+      },
+      (c) => c.operatorRecords(),
+    );
+    assert.equal(got.hidden, 5);
   });
 
   it("상태 필드가 빠지면 연결 성공으로 오인하지 않는다", async () => {

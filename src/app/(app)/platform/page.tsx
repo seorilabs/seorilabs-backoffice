@@ -71,12 +71,16 @@ export default async function PlatformOverviewPage() {
         deadLetterCount: health?.deadLetterCount ?? 0,
         environmentMismatchCount: mismatches.length,
         failedSectionCount: sectionFailures.length,
+        hiddenRecordCount:
+          (data?.hiddenOrderCount ?? 0) + (data?.hiddenOperatorRecordCount ?? 0),
       })}
       environment={health?.environment ?? null}
       deadLetterCount={health?.deadLetterCount ?? null}
       environmentMismatches={mismatches}
       capabilities={capabilities}
       sectionFailures={sectionFailures}
+      hiddenOrderCount={data?.hiddenOrderCount ?? 0}
+      hiddenOperatorRecordCount={data?.hiddenOperatorRecordCount ?? 0}
       metrics={data?.metrics ?? null}
       // 조회는 성공했는데 값이 null이면 구버전 Admin API다. 실패 목록에
       // 없다는 것이 그 증거다.
