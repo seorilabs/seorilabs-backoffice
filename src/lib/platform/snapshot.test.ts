@@ -3,7 +3,10 @@ import { describe, it } from "node:test";
 
 import { PlatformApiError, type PlatformHealth } from "@/lib/platform/client";
 import { buildPlatformIapSnapshot } from "@/lib/platform/snapshot-build";
-import { platformSnapshotErrorMessage } from "@/lib/platform/snapshot";
+import {
+  platformSnapshotErrorMessage,
+  platformSnapshotHasHiddenRecords,
+} from "@/lib/platform/snapshot";
 
 const HEALTH: PlatformHealth = {
   environment: "sandbox",
@@ -33,7 +36,7 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok({ ...HEALTH, deadLetterCount: 3 }),
-        orders: ok([]),
+        orders: ok({ orders: [], hidden: 0 }),
         operatorRecords: failed(
           new PlatformApiError(
             "ledger_state_invalid",
@@ -63,7 +66,7 @@ describe("플랫폼 snapshot 조립", () => {
         orders: failed(
           new PlatformApiError("ledger_state_invalid", "주문 원장이 이상해요", 422),
         ),
-        operatorRecords: ok({ grants: [], revocations: [] }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: ok(null),
       },
       CHECKED_AT,
@@ -77,8 +80,8 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok(HEALTH),
-        orders: ok([]),
-        operatorRecords: ok({ grants: [], revocations: [] }),
+        orders: ok({ orders: [], hidden: 0 }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: failed(new Error("connect ECONNREFUSED 10.0.0.5:443")),
       },
       CHECKED_AT,
@@ -92,8 +95,8 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: failed(new PlatformApiError("network_error", "연결 실패", 0)),
-        orders: ok([]),
-        operatorRecords: ok({ grants: [], revocations: [] }),
+        orders: ok({ orders: [], hidden: 0 }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: ok({
           totalUsers: 10,
           dailyActiveUsers: 2,
@@ -117,8 +120,8 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok(HEALTH),
-        orders: ok([]),
-        operatorRecords: ok({ grants: [], revocations: [] }),
+        orders: ok({ orders: [], hidden: 0 }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: ok(null),
       },
       CHECKED_AT,
@@ -132,7 +135,7 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok(HEALTH),
-        orders: ok([]),
+        orders: ok({ orders: [], hidden: 0 }),
         operatorRecords: failed(
           new PlatformApiError("ledger_state_invalid", "감사 값이 이상해요", 422),
         ),
@@ -151,8 +154,8 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok(HEALTH),
-        orders: ok([]),
-        operatorRecords: ok({ grants: [], revocations: [] }),
+        orders: ok({ orders: [], hidden: 0 }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: ok(null),
       },
       CHECKED_AT,
@@ -176,12 +179,13 @@ describe("플랫폼 snapshot 조립", () => {
     const snapshot = buildPlatformIapSnapshot(
       {
         health: ok(HEALTH),
-        orders: ok([]),
+        orders: ok({ orders: [], hidden: 0 }),
         operatorRecords: ok({
           grants: [record("old", "2026-08-01T00:00:00Z")],
           revocations: [
             { ...record("new", "2026-08-05T00:00:00Z"), kind: "revoke" as const },
           ],
+          hidden: 0,
         }),
         metrics: ok(null),
       },
@@ -192,5 +196,42 @@ describe("플랫폼 snapshot 조립", () => {
       snapshot.operatorRecords.map((r) => r.requestId),
       ["new", "old"],
     );
+  });
+
+  it("제외 건수를 실패와 구분해 그대로 실어 나른다", () => {
+    // 조회는 성공했고 나머지 항목은 유효하다. 실패가 아니므로
+    // failures에 들어가면 안 되고, 그렇다고 조용히 사라져도 안 된다.
+    const snapshot = buildPlatformIapSnapshot(
+      {
+        health: ok(HEALTH),
+        orders: ok({ orders: [], hidden: 3 }),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 2 }),
+        metrics: ok(null),
+      },
+      CHECKED_AT,
+    );
+
+    assert.equal(snapshot.hiddenOrderCount, 3);
+    assert.equal(snapshot.hiddenOperatorRecordCount, 2);
+    assert.deepEqual(snapshot.failures, []);
+    assert.equal(platformSnapshotHasHiddenRecords(snapshot), true);
+  });
+
+  it("조회가 실패한 구획의 제외 건수는 0이다", () => {
+    // 목록을 아예 못 받았으면 "몇 건이 제외됐다"고 말할 근거가 없다.
+    // 그 상황은 failures가 이미 알린다.
+    const snapshot = buildPlatformIapSnapshot(
+      {
+        health: ok(HEALTH),
+        orders: failed(new PlatformApiError("network_error", "연결 실패", 0)),
+        operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
+        metrics: ok(null),
+      },
+      CHECKED_AT,
+    );
+
+    assert.equal(snapshot.hiddenOrderCount, 0);
+    assert.equal(platformSnapshotHasHiddenRecords(snapshot), false);
+    assert.equal(snapshot.failures.length, 1);
   });
 });

@@ -111,6 +111,15 @@ describe("개요 연결 상태", () => {
     );
   });
 
+  it("제외된 기록이 있으면 초록으로 두지 않는다", () => {
+    // 조회는 성공했지만 목록이 불완전하다. 배지가 초록이면 운영자가
+    // 목록을 완전한 것으로 믿는다.
+    assert.equal(
+      overviewConnectionState({ ...base, hiddenRecordCount: 1 }),
+      "degraded",
+    );
+  });
+
   it("health가 살아 있으면 다른 조회가 다 실패해도 연결은 유효하다", () => {
     assert.notEqual(
       overviewConnectionState({ ...base, failedSectionCount: 3 }),

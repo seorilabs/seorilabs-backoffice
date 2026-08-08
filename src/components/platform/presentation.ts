@@ -103,15 +103,20 @@ export function overviewConnectionState(input: {
   deadLetterCount: number;
   environmentMismatchCount: number;
   failedSectionCount: number;
+  hiddenRecordCount?: number;
 }): PlatformConnectionState {
   if (!input.configured) return "unconfigured";
   if (!input.healthReachable) return "unavailable";
   // 환경 불일치는 dead-letter와 같은 등급이다. 서비스는 살아 있지만
   // 운영자가 할 수 있는 일이 막혀 있다.
+  //
+  // 제외된 기록도 같은 등급이다. 조회는 성공했지만 목록이 불완전한데,
+  // 배지가 초록이면 운영자가 목록을 완전한 것으로 믿는다.
   if (
     input.deadLetterCount > 0 ||
     input.environmentMismatchCount > 0 ||
-    input.failedSectionCount > 0
+    input.failedSectionCount > 0 ||
+    (input.hiddenRecordCount ?? 0) > 0
   ) {
     return "degraded";
   }

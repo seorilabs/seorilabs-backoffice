@@ -42,8 +42,24 @@ export interface PlatformIapSnapshot {
   operatorRecords: PlatformOperatorRecord[];
   /** 구버전 Admin API에는 없는 조회다. null이면 미지원이지 실패가 아니다. */
   metrics: PlatformUserMetrics | null;
+  /**
+   * 계약 형식을 만족하지 않아 Admin API가 목록에서 제외한 건수.
+   *
+   * 실패와는 다르다. 조회는 성공했고 나머지 항목은 유효하다. 다만
+   * 목록이 불완전하므로 화면이 반드시 알려야 한다. 감사 이력에서
+   * 조용한 누락은 잘못된 결론으로 이어진다.
+   */
+  hiddenOrderCount: number;
+  hiddenOperatorRecordCount: number;
   failures: PlatformSectionFailure[];
   checkedAt: string;
+}
+
+/** 제외된 항목이 하나라도 있으면 목록이 불완전하다는 뜻이다. */
+export function platformSnapshotHasHiddenRecords(
+  snapshot: PlatformIapSnapshot,
+): boolean {
+  return snapshot.hiddenOrderCount > 0 || snapshot.hiddenOperatorRecordCount > 0;
 }
 
 export const PLATFORM_SECTION_LABELS: Record<PlatformSnapshotSection, string> = {
@@ -62,6 +78,23 @@ export const PLATFORM_SECTION_LABELS: Record<PlatformSnapshotSection, string> = 
 export function platformSnapshotErrorMessage(
   snapshot: PlatformIapSnapshot,
 ): string | null {
-  if (snapshot.failures.length === 0) return null;
-  return snapshot.failures.map((f) => `${f.label}: ${f.error}`).join(" / ");
+  const parts = snapshot.failures.map((f) => `${f.label}: ${f.error}`);
+
+  // 제외된 기록도 같은 배너에 싣는다. 실패와 성격이 다르지만 이 화면에는
+  // 배너가 하나뿐이고, 조용히 짧아진 목록을 완전한 것으로 읽는 쪽이
+  // 성격 구분보다 훨씬 위험하다.
+  const hidden: string[] = [];
+  if (snapshot.hiddenOperatorRecordCount > 0) {
+    hidden.push(`운영자 변경 이력 ${snapshot.hiddenOperatorRecordCount}건`);
+  }
+  if (snapshot.hiddenOrderCount > 0) {
+    hidden.push(`최근 주문 ${snapshot.hiddenOrderCount}건`);
+  }
+  if (hidden.length > 0) {
+    parts.push(
+      `${hidden.join(", ")}이 계약 위반으로 목록에서 제외됐습니다. 이 목록은 불완전하므로 없는 것으로 판단하지 마세요.`,
+    );
+  }
+
+  return parts.length === 0 ? null : parts.join(" / ");
 }

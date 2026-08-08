@@ -102,6 +102,40 @@ describe("플랫폼 표현 컴포넌트", () => {
     assert.doesNotMatch(html, /전체 사용자<\/div><div[^>]*>—<\/div>/);
   });
 
+  it("제외된 기록이 있으면 목록이 불완전하다고 경고한다", () => {
+    // 감사 이력에서 조용한 누락은 잘못된 결론으로 이어진다.
+    // 짧아진 목록을 보고 "지급한 적 없다"고 판단하면 안 된다.
+    const html = renderToStaticMarkup(
+      createElement(PlatformOverviewStatus, {
+        connection: "degraded",
+        environment: "sandbox",
+        hiddenOperatorRecordCount: 2,
+        hiddenOrderCount: 5,
+      }),
+    );
+
+    assert.match(html, /운영자 변경 이력 2건 제외됨/);
+    assert.match(html, /최근 주문 5건 제외됨/);
+    assert.match(html, /없는 것으로 판단하지 마세요/);
+    // 어디서 원인을 찾는지도 알려야 한다. 원장 접근 권한이 없으므로
+    // 로그가 유일한 단서다.
+    assert.match(html, /invalid_fields/);
+  });
+
+  it("제외된 기록이 없으면 경고를 띄우지 않는다", () => {
+    // 늘 떠 있는 경고는 아무도 안 본다.
+    const html = renderToStaticMarkup(
+      createElement(PlatformOverviewStatus, {
+        connection: "connected",
+        environment: "sandbox",
+        hiddenOperatorRecordCount: 0,
+        hiddenOrderCount: 0,
+      }),
+    );
+
+    assert.doesNotMatch(html, /제외됨/);
+  });
+
   it("지표 미지원은 장애가 아니라 배포 대기로 안내한다", () => {
     const html = renderToStaticMarkup(
       createElement(PlatformOverviewStatus, {
