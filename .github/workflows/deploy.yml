@@ -81,7 +81,8 @@ jobs:
           #   인프라                      vault-*, rbac, secret.example.yaml
           for m in \
             proactive-cronjobs.yaml \
-            app-content-analytics-cronjob.yaml; do
+            app-content-analytics-cronjob.yaml \
+            platform-metric-cronjob.yaml; do
             /tmp/kubectl apply -f "k8s/$m"
           done
           render deployment.yaml | /tmp/kubectl apply -f -

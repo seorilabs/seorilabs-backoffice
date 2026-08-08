@@ -1,0 +1,55 @@
+# 플랫폼 사용자 규모 시점 스냅샷.
+#
+# 매시 정각에 platform Admin API를 찍어 backoffice DB에 저장한다.
+# 백필이 불가능하다 — platform의 lastSeenAt은 덮어쓰기라 놓친 시각의
+# 활성 사용자 수는 영구히 복원할 수 없다. 그래서 실패를 삼키지 않고
+# backoffLimit으로 재시도한다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-platform-metric-collect
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "0 * * * *" # 매시 정각 UTC. 서버가 정시로 내림 처리한다.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 60 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/platform/metrics-collect
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi

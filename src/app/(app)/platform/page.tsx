@@ -1,7 +1,9 @@
 import {
+  PlatformMetricChart,
   PlatformOverviewStatus,
   type PlatformCapabilityView,
 } from "@/components/platform";
+import { loadPlatformMetricSamplesAction } from "@/lib/actions/platform-metrics";
 import {
   overviewConnectionState,
   overviewMessage,
@@ -14,9 +16,12 @@ export const dynamic = "force-dynamic";
 
 export default async function PlatformOverviewPage() {
   const configuration = platformReadConfiguration();
-  const snapshot = configuration.configured
-    ? await loadPlatformIapSnapshotAction()
-    : null;
+  const [snapshot, samples] = await Promise.all([
+    configuration.configured ? loadPlatformIapSnapshotAction() : null,
+    // 시계열은 우리 DB만 읽는다. platform이 죽어도 과거 추이는 보여야
+    // 한다 — 장애 중에 "언제부터 이랬나"를 볼 창구가 이것뿐이다.
+    loadPlatformMetricSamplesAction().catch(() => []),
+  ]);
   const data = snapshot?.ok ? snapshot.data : null;
   const health = data?.health ?? null;
 
@@ -57,40 +62,49 @@ export default async function PlatformOverviewPage() {
   const message = overviewMessage({
     configuredMessage: configuration.configured ? null : configuration.message,
     errorMessage:
-      snapshot && !snapshot.ok ? snapshot.error : (healthFailure?.error ?? null),
+      snapshot && !snapshot.ok
+        ? snapshot.error
+        : (healthFailure?.error ?? null),
     deadLetterCount: health?.deadLetterCount ?? 0,
     environmentMismatchCount: mismatches.length,
     failedSectionLabels: sectionFailures.map((f) => f.label),
   });
 
   return (
-    <PlatformOverviewStatus
-      connection={overviewConnectionState({
-        configured: configuration.configured,
-        healthReachable: health !== null,
-        deadLetterCount: health?.deadLetterCount ?? 0,
-        environmentMismatchCount: mismatches.length,
-        failedSectionCount: sectionFailures.length,
-        hiddenRecordCount:
-          (data?.hiddenOrderCount ?? 0) + (data?.hiddenOperatorRecordCount ?? 0),
-      })}
-      environment={health?.environment ?? null}
-      deadLetterCount={health?.deadLetterCount ?? null}
-      environmentMismatches={mismatches}
-      capabilities={capabilities}
-      sectionFailures={sectionFailures}
-      hiddenOrderCount={data?.hiddenOrderCount ?? 0}
-      hiddenOperatorRecordCount={data?.hiddenOperatorRecordCount ?? 0}
-      metrics={data?.metrics ?? null}
-      // 조회는 성공했는데 값이 null이면 구버전 Admin API다. 실패 목록에
-      // 없다는 것이 그 증거다.
-      metricsUnsupported={
-        data != null &&
-        data.metrics === null &&
-        !failures.some((f) => f.section === "metrics")
-      }
-      lastCheckedAt={data?.checkedAt ?? null}
-      message={message}
-    />
+    <div className="space-y-4">
+      <PlatformOverviewStatus
+        connection={overviewConnectionState({
+          configured: configuration.configured,
+          healthReachable: health !== null,
+          deadLetterCount: health?.deadLetterCount ?? 0,
+          environmentMismatchCount: mismatches.length,
+          failedSectionCount: sectionFailures.length,
+          hiddenRecordCount:
+            (data?.hiddenOrderCount ?? 0) +
+            (data?.hiddenOperatorRecordCount ?? 0),
+        })}
+        environment={health?.environment ?? null}
+        deadLetterCount={health?.deadLetterCount ?? null}
+        environmentMismatches={mismatches}
+        capabilities={capabilities}
+        sectionFailures={sectionFailures}
+        hiddenOrderCount={data?.hiddenOrderCount ?? 0}
+        hiddenOperatorRecordCount={data?.hiddenOperatorRecordCount ?? 0}
+        metrics={data?.metrics ?? null}
+        // 조회는 성공했는데 값이 null이면 구버전 Admin API다. 실패 목록에
+        // 없다는 것이 그 증거다.
+        metricsUnsupported={
+          data != null &&
+          data.metrics === null &&
+          !failures.some((f) => f.section === "metrics")
+        }
+        lastCheckedAt={data?.checkedAt ?? null}
+        message={message}
+      />
+      <PlatformMetricChart
+        samples={samples}
+        collecting={configuration.configured}
+      />
+    </div>
   );
 }

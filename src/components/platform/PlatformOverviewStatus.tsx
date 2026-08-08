@@ -38,6 +38,7 @@ export interface PlatformSectionFailureView {
 
 export interface PlatformUserMetricsView {
   totalUsers: number;
+  hourlyActiveUsers: number;
   dailyActiveUsers: number;
   weeklyActiveUsers: number;
   activitySource: string;
@@ -187,11 +188,16 @@ export function PlatformOverviewStatus({
       >
         {metrics ? (
           <>
-            <div className="grid gap-3 p-4 sm:grid-cols-3">
+            <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
               <MetricCard
                 label="전체 사용자"
                 value={formatPlatformCount(metrics.totalUsers)}
                 detail="플랫폼이 발급한 사용자 ID 총계"
+              />
+              <MetricCard
+                label="1시간 활성"
+                value={formatPlatformCount(metrics.hourlyActiveUsers)}
+                detail="최근 1시간 세션 발급 사용자"
               />
               <MetricCard
                 label="DAU"
