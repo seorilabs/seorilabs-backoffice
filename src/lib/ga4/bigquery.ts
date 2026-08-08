@@ -237,18 +237,23 @@ export function mapAdProbeRow(r: Record<string, unknown>): Ga4AdProbe {
  * events 를 한 번 스캔(CTE)해 4개 차원을 UNION ALL 로 집계한다. DAU 는 차원별 고유
  * user_pseudo_id 라 차원마다 GROUP BY 가 필요하다(단순 합산 불가).
  */
-export async function queryDailyBreakdowns(
+export function buildDailyBreakdownsSql(
   target: Ga4Target,
   start: string,
   end: string,
-): Promise<Ga4BreakdownRow[]> {
+): string {
   const from = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
-  const sql = `
+  return `
     WITH base AS (
       SELECT
         FORMAT_DATE('%Y-%m-%d', PARSE_DATE('%Y%m%d', event_date)) AS date,
         user_pseudo_id AS uid,
-        IFNULL(NULLIF(platform, ''), '(unknown)') AS platform,
+        COALESCE(
+          NULLIF(UPPER((SELECT ep.value.string_value
+            FROM UNNEST(event_params) ep WHERE ep.key = 'platform')), ''),
+          NULLIF(UPPER(platform), ''),
+          '(unknown)'
+        ) AS platform,
         IFNULL(NULLIF(geo.country, ''), '(unknown)') AS country,
         IFNULL(NULLIF(device.category, ''), '(unknown)') AS device_cat,
         IFNULL(NULLIF(TRIM(CONCAT(IFNULL(device.operating_system, ''), ' ', IFNULL(device.operating_system_version, ''))), ''), '(unknown)') AS os_dim
@@ -260,6 +265,14 @@ export async function queryDailyBreakdowns(
     UNION ALL SELECT date, 'country', country, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+}
+
+export async function queryDailyBreakdowns(
+  target: Ga4Target,
+  start: string,
+  end: string,
+): Promise<Ga4BreakdownRow[]> {
+  const sql = buildDailyBreakdownsSql(target, start, end);
   const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
   return rows.map((r) => ({
     date: String(r.date),

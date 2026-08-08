@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideLocation, mapDailyActivityRow } from "@/lib/ga4/bigquery";
+import {
+  buildDailyBreakdownsSql,
+  decideLocation,
+  mapDailyActivityRow,
+} from "@/lib/ga4/bigquery";
 
 test("decideLocation: override 가 최우선", () => {
   assert.equal(
@@ -49,4 +53,19 @@ test("mapDailyActivityRow: 광의 이벤트·CTA·완료·실제 노출을 서�
   assert.equal(row.networkAdImpressions, 0);
   assert.equal(row.adCtaUsers, 9);
   assert.equal(row.adCompletedUsers, 1);
+});
+
+test("buildDailyBreakdownsSql: event platform을 GA4 stream platform보다 우선한다", () => {
+  const sql = buildDailyBreakdownsSql(
+    { firebaseProject: "slotmachine-game-495cc", dataset: "analytics_547294653" },
+    "20260801",
+    "20260808",
+  );
+
+  const eventPlatform = "WHERE ep.key = 'platform'";
+  const streamPlatform = "NULLIF(UPPER(platform), '')";
+  assert.ok(sql.indexOf(eventPlatform) >= 0, "event_params.platform 추출이 빠졌습니다");
+  assert.ok(sql.indexOf(streamPlatform) > sql.indexOf(eventPlatform), "stream platform이 먼저 적용됩니다");
+  assert.match(sql, /slotmachine-game-495cc\.analytics_547294653\.events_\*/);
+  assert.match(sql, /_TABLE_SUFFIX BETWEEN '20260801' AND '20260808'/);
 });
