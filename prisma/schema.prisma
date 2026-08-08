@@ -680,3 +680,34 @@ enum VaultWriteStatus {
   DONE
   FAILED
 }
+
+/// 플랫폼 전체 사용자 규모의 시점 스냅샷.
+///
+/// 앱별 지표(AppMetricDaily)와 달리 앱을 가로지르는 플랫폼 전체 값이라
+/// appId가 없다. 매시 정각에 platform Admin API를 찍어 저장한다.
+///
+/// 백필이 불가능하다. platform의 lastSeenAt은 덮어쓰기라 과거 시점의
+/// 활성 사용자 수를 복원할 수 없다. 이 표는 수집을 시작한 시점부터만
+/// 존재하고, cron이 실패한 구간은 영구히 빈다.
+model PlatformUserMetricSample {
+  id String @id @default(cuid())
+
+  /// 서버가 집계 기준으로 삼은 시각을 정시로 내림한 값.
+  /// 재실행해도 같은 시각이면 덮어쓰도록 유니크로 둔다.
+  capturedAt DateTime @unique @db.DateTime(3)
+
+  totalUsers        Int @default(0)
+  /// 직전 1시간 활성. 창이 겹치지 않아 시간대별 굴곡이 남는다.
+  hourlyActiveUsers Int @default(0)
+  /// 직전 24시간 롤링. 이웃한 시간 샘플과 창을 23/24 공유한다.
+  dailyActiveUsers  Int @default(0)
+  weeklyActiveUsers Int @default(0)
+
+  /// 활성 판정 근거. platform이 정의를 바꾸면 여기서 드러나야 한다.
+  activitySource String @default("session_last_seen")
+
+  collectedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@index([capturedAt])
+  @@map("platform_user_metric_sample")
+}

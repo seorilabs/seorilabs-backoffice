@@ -31,3 +31,5 @@ export {
   type PlatformConnectionState,
   type PlatformWriteState,
 } from "./presentation";
+
+export { PlatformMetricChart, type PlatformMetricChartProps } from "./PlatformMetricChart";

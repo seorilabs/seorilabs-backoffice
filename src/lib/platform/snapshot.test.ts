@@ -99,6 +99,7 @@ describe("플랫폼 snapshot 조립", () => {
         operatorRecords: ok({ grants: [], revocations: [], hidden: 0 }),
         metrics: ok({
           totalUsers: 10,
+          hourlyActiveUsers: 1,
           dailyActiveUsers: 2,
           weeklyActiveUsers: 5,
           activitySource: "session_last_seen",

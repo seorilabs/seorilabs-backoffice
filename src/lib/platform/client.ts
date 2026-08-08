@@ -176,6 +176,13 @@ export interface PlatformHealth {
  */
 export interface PlatformUserMetrics {
   totalUsers: number;
+  /**
+   * 직전 1시간 활성. 시계열 해상도를 주는 값이다.
+   *
+   * dailyActiveUsers를 매시 찍으면 이웃한 두 점이 창을 23/24 공유해
+   * 곡선이 뭉개진다. 이 값은 창이 겹치지 않아 굴곡이 남는다.
+   */
+  hourlyActiveUsers: number;
   dailyActiveUsers: number;
   weeklyActiveUsers: number;
   /**
@@ -883,6 +890,8 @@ export class PlatformClient {
     }
     return {
       totalUsers: nonnegativeInteger(res, "totalUsers"),
+      // 구버전 Admin API에는 없다. 0으로 보되 지표 전체를 막지 않는다.
+      hourlyActiveUsers: nonnegativeInteger(res, "hourlyActiveUsers", 0),
       dailyActiveUsers: nonnegativeInteger(res, "dailyActiveUsers"),
       weeklyActiveUsers: nonnegativeInteger(res, "weeklyActiveUsers"),
       activitySource: requiredString(res, "activitySource"),

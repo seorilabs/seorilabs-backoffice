@@ -59,6 +59,7 @@ describe("플랫폼 표현 컴포넌트", () => {
         environment: "production",
         metrics: {
           totalUsers: 91250,
+          hourlyActiveUsers: 58,
           dailyActiveUsers: 431,
           weeklyActiveUsers: 7806,
           activitySource: "session_last_seen",
@@ -73,6 +74,7 @@ describe("플랫폼 표현 컴포넌트", () => {
       new RegExp(`${label}</div><div[^>]*>${value}</div>`);
 
     assert.match(html, card("전체 사용자", "91,250"));
+    assert.match(html, card("1시간 활성", "58"));
     assert.match(html, card("DAU", "431"));
     assert.match(html, card("WAU", "7,806"));
 
@@ -90,6 +92,7 @@ describe("플랫폼 표현 컴포넌트", () => {
         environment: "production",
         metrics: {
           totalUsers: 0,
+          hourlyActiveUsers: 0,
           dailyActiveUsers: 0,
           weeklyActiveUsers: 0,
           activitySource: "session_last_seen",
