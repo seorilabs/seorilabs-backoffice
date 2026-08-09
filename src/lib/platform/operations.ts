@@ -39,6 +39,8 @@ export const PLATFORM_OPERATION_KEYS = [
   "platform.iap.revoke-entitlement",
   "platform.iap.reset-app-store-sandbox",
   "platform.iap.decide-refund-review",
+  "platform.ads.grant-suppression",
+  "platform.ads.revoke-suppression",
 ] as const;
 
 export type PlatformOperationKey = (typeof PLATFORM_OPERATION_KEYS)[number];
@@ -175,6 +177,26 @@ export const PLATFORM_OPERATION_DEFINITIONS = {
       commonInputs[4],
     ],
   },
+  "platform.ads.grant-suppression": {
+    id: "grant-ads-suppression",
+    label: "운영자 광고 차단 추가",
+    description: "선택 사용자와 앱에 영구 운영자 광고 차단을 추가합니다.",
+    intent: "mutate",
+    risk: "high",
+    confirmation: "typed",
+    inputs: [commonInputs[0], commonInputs[1], commonInputs[4]],
+  },
+  "platform.ads.revoke-suppression": {
+    id: "revoke-ads-suppression",
+    label: "운영자 광고 차단 회수",
+    description: "선택한 운영자 차단만 회수합니다. ad_free는 유지됩니다.",
+    intent: "mutate",
+    risk: "high",
+    confirmation: "typed",
+    inputs: [commonInputs[0], commonInputs[1], commonInputs[4], {
+      key: "grantRequestId", label: "원 차단 Request ID", type: "text", required: true,
+    }],
+  },
 } satisfies Record<PlatformOperationKey, AppOpsOperation>;
 
 const requestIdSchema = z.string().refine(isAppOpsRequestId, {
@@ -268,6 +290,25 @@ const refundReviewInputSchema = z
   })
   .strict();
 
+const adsGrantInputSchema = z.object({
+  operation: z.literal("platform.ads.grant-suppression"),
+  requestId: requestIdSchema,
+  appSlug: appSlugSchema,
+  platformUserId: platformUserIdSchema,
+  reason: reasonSchema,
+  serverConfirmation: serverConfirmationSchema,
+}).strict();
+
+const adsRevokeInputSchema = z.object({
+  operation: z.literal("platform.ads.revoke-suppression"),
+  requestId: requestIdSchema,
+  appSlug: appSlugSchema,
+  platformUserId: platformUserIdSchema,
+  grantRequestId: requestIdSchema,
+  reason: reasonSchema,
+  serverConfirmation: serverConfirmationSchema,
+}).strict();
+
 const sandboxResetResumeInputSchema = z
   .object({
     requestId: requestIdSchema,
@@ -296,6 +337,8 @@ export const platformOperationInputSchema = z
     revokeInputSchema,
     resetInputSchema,
     refundReviewInputSchema,
+    adsGrantInputSchema,
+    adsRevokeInputSchema,
   ])
   .superRefine((input, ctx) => {
     if (

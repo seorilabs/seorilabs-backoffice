@@ -256,6 +256,91 @@ export interface PlatformUser {
   lastSeenAt: string;
 }
 
+export type AdsPolicyReason = "operator" | "ad_free";
+export interface PlatformAdsPolicy {
+  appUsesAds: boolean;
+  adsEnabled: boolean;
+  disabledBy: AdsPolicyReason[];
+  checkedAt: string;
+}
+export interface PlatformAdsSuppressionRecord {
+  requestId: string;
+  grantRequestId?: string;
+  appId: string;
+  platformUserId: string;
+  actorLogin: string;
+  reason: PlatformOperationReason;
+  operation: "grant" | "revoke";
+  applied: boolean;
+  createdAt: string;
+}
+export interface PlatformUserAds {
+  appId: string;
+  platformUserId: string;
+  supportCode: string;
+  isAnonymous: boolean;
+  authType: "firebase" | "firebase_bridge" | "apps_in_toss" | "anonymous";
+  lastSeenAt: string;
+  policy: PlatformAdsPolicy;
+  auditHistory: PlatformAdsSuppressionRecord[];
+}
+export interface PlatformAdsHealth {
+  status: "ok";
+  lastSsvSuccessAt?: string;
+  invalidSignatureCount: number;
+  stalePendingClaimCount: number;
+  policyFailureCount: number;
+  checkedAt: string;
+}
+export interface PlatformAdReward { key: string; amount: number }
+export interface PlatformAdClaim {
+  claimId: string;
+  appId: string;
+  placement: string;
+  provider: "admob" | "apps_in_toss";
+  clientPlatform: "android" | "ios" | "apps_in_toss";
+  reward: PlatformAdReward;
+  state: "accepted" | "confirmed" | "delivered" | "expired";
+  assurance: "pending" | "server_verified" | "client_confirmed";
+  createdAt: string;
+  confirmedAt?: string;
+  acknowledgedAt?: string;
+  expiresAt: string;
+}
+export interface PlatformAdsProviderConfig {
+  androidAdUnitSuffix?: string;
+  iosAdUnitSuffix?: string;
+  adGroupSuffix?: string;
+  rewardItem?: string;
+  rewardAmount?: number;
+}
+export interface PlatformAdsConfig {
+  appId: string;
+  providers: Array<"admob" | "apps_in_toss">;
+  registrySyncedAt: string;
+  placements: Array<{
+    id: string;
+    format: "rewarded" | "interstitial";
+    providers: Record<string, PlatformAdsProviderConfig>;
+    reward?: { key: string; min_amount: number; max_amount: number };
+    dailyLimit: number;
+    cooldownSeconds: number;
+  }>;
+}
+export interface AdsSuppressionRequest {
+  requestId: string;
+  appId: string;
+  platformUserId: string;
+  grantRequestId?: string;
+  reason: PlatformOperationReason;
+  confirmation: string;
+}
+export interface AdsSuppressionResult {
+  applied: boolean;
+  requestId: string;
+  activeGrantRequestId?: string;
+}
+
 /** 운영자 지급·회수 요청. */
 export interface OperatorRequest {
   /**
@@ -425,6 +510,130 @@ function requiredReason(
     );
   }
   return reason as PlatformOperationReason;
+}
+
+function requiredBoolean(value: Record<string, unknown>, key: string): boolean {
+  if (typeof value[key] !== "boolean") {
+    return invalidPlatformResponse(`플랫폼 ${key} 응답 형식이 올바르지 않습니다.`);
+  }
+  return value[key];
+}
+
+const ADS_CLAIM_FORBIDDEN_FIELDS = new Set([
+  "transactionId",
+  "transactionHash",
+  "signature",
+  "query",
+  "rawQuery",
+  "userKey",
+  "platformUserId",
+  "supportCode",
+]);
+
+function containsForbiddenAdsField(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsForbiddenAdsField);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(
+    ([key, item]) => ADS_CLAIM_FORBIDDEN_FIELDS.has(key) || containsForbiddenAdsField(item),
+  );
+}
+
+function validateAdClaim(value: unknown): PlatformAdClaim {
+  if (!isRecord(value) || containsForbiddenAdsField(value) || !isRecord(value.reward)) {
+    return invalidPlatformResponse("광고 Claim 응답에 허용되지 않은 필드가 있습니다.");
+  }
+  const provider = requiredString(value, "provider");
+  const clientPlatform = requiredString(value, "clientPlatform");
+  const state = requiredString(value, "state");
+  const assurance = requiredString(value, "assurance");
+  if (
+    (provider !== "admob" && provider !== "apps_in_toss") ||
+    !["android", "ios", "apps_in_toss"].includes(clientPlatform) ||
+    !["accepted", "confirmed", "delivered", "expired"].includes(state) ||
+    !["pending", "server_verified", "client_confirmed"].includes(assurance)
+  ) {
+    return invalidPlatformResponse("광고 Claim 상태 응답 형식이 올바르지 않습니다.");
+  }
+  const amount = nonnegativeInteger(value.reward, "amount");
+  if (amount < 1) {
+    return invalidPlatformResponse("광고 Claim 보상 응답 형식이 올바르지 않습니다.");
+  }
+  return {
+    claimId: requiredString(value, "claimId"),
+    appId: requiredString(value, "appId"),
+    placement: requiredString(value, "placement"),
+    provider,
+    clientPlatform: clientPlatform as PlatformAdClaim["clientPlatform"],
+    reward: { key: requiredString(value.reward, "key"), amount },
+    state: state as PlatformAdClaim["state"],
+    assurance: assurance as PlatformAdClaim["assurance"],
+    createdAt: requiredString(value, "createdAt"),
+    confirmedAt: optionalString(value, "confirmedAt"),
+    acknowledgedAt: optionalString(value, "acknowledgedAt"),
+    expiresAt: requiredString(value, "expiresAt"),
+  };
+}
+
+function validateAdsProviderConfig(value: unknown): PlatformAdsProviderConfig {
+  if (!isRecord(value)) {
+    return invalidPlatformResponse("광고 provider 설정 응답 형식이 올바르지 않습니다.");
+  }
+  return {
+    androidAdUnitSuffix: optionalString(value, "androidAdUnitSuffix"),
+    iosAdUnitSuffix: optionalString(value, "iosAdUnitSuffix"),
+    adGroupSuffix: optionalString(value, "adGroupSuffix"),
+    rewardItem: optionalString(value, "rewardItem"),
+    ...(value.rewardAmount === undefined
+      ? {}
+      : { rewardAmount: nonnegativeInteger(value, "rewardAmount") }),
+  };
+}
+
+function validateAdsConfig(value: unknown, appId: string): PlatformAdsConfig {
+  if (!isRecord(value) || value.appId !== appId) {
+    return invalidPlatformResponse("광고 앱 설정 응답 대상이 일치하지 않습니다.");
+  }
+  const providers = requiredArray(value, "providers");
+  if (providers.some((item) => item !== "admob" && item !== "apps_in_toss")) {
+    return invalidPlatformResponse("광고 provider 목록 응답 형식이 올바르지 않습니다.");
+  }
+  const placements = requiredArray(value, "placements").map((item) => {
+    if (!isRecord(item) || !isRecord(item.providers)) {
+      return invalidPlatformResponse("광고 placement 응답 형식이 올바르지 않습니다.");
+    }
+    const format = requiredString(item, "format");
+    if (format !== "rewarded" && format !== "interstitial") {
+      return invalidPlatformResponse("광고 format 응답 형식이 올바르지 않습니다.");
+    }
+    const placementProviders = Object.fromEntries(
+      Object.entries(item.providers).map(([name, config]) => [name, validateAdsProviderConfig(config)]),
+    );
+    let reward: PlatformAdsConfig["placements"][number]["reward"];
+    if (item.reward !== undefined) {
+      if (!isRecord(item.reward)) {
+        return invalidPlatformResponse("광고 reward 범위 응답 형식이 올바르지 않습니다.");
+      }
+      reward = {
+        key: requiredString(item.reward, "key"),
+        min_amount: nonnegativeInteger(item.reward, "min_amount"),
+        max_amount: nonnegativeInteger(item.reward, "max_amount"),
+      };
+    }
+    return {
+      id: requiredString(item, "id"),
+      format: format as "rewarded" | "interstitial",
+      providers: placementProviders,
+      ...(reward ? { reward } : {}),
+      dailyLimit: nonnegativeInteger(item, "dailyLimit"),
+      cooldownSeconds: nonnegativeInteger(item, "cooldownSeconds"),
+    };
+  });
+  return {
+    appId,
+    providers: providers as PlatformAdsConfig["providers"],
+    registrySyncedAt: requiredString(value, "registrySyncedAt"),
+    placements,
+  };
 }
 
 function validateOrder(value: unknown): PlatformOrder {
@@ -926,6 +1135,129 @@ export class PlatformClient {
       isAnonymous: res.user.isAnonymous,
       createdAt: requiredString(res.user, "createdAt"),
       lastSeenAt: requiredString(res.user, "lastSeenAt"),
+    };
+  }
+
+  async adsHealth(): Promise<PlatformAdsHealth> {
+    const value = await this.request<unknown>("GET", "/v1/admin/ads/health");
+    if (!isRecord(value) || value.status !== "ok") {
+      return invalidPlatformResponse("광고 서비스 상태 응답 형식이 올바르지 않습니다.");
+    }
+    return {
+      status: "ok",
+      lastSsvSuccessAt: optionalString(value, "lastSsvSuccessAt"),
+      invalidSignatureCount: nonnegativeInteger(value, "invalidSignatureCount"),
+      stalePendingClaimCount: nonnegativeInteger(value, "stalePendingClaimCount"),
+      policyFailureCount: nonnegativeInteger(value, "policyFailureCount"),
+      checkedAt: requiredString(value, "checkedAt"),
+    };
+  }
+
+  async userAds(platformUserId: string): Promise<PlatformUserAds> {
+    const value = await this.request<unknown>(
+      "GET",
+      `/v1/admin/users/${encodeURIComponent(platformUserId)}/ads`,
+    );
+    if (!isRecord(value) || value.platformUserId !== platformUserId || !isRecord(value.policy)) {
+      return invalidPlatformResponse("사용자 광고 정책 응답 형식이 올바르지 않습니다.");
+    }
+    const disabledBy = requiredArray(value.policy, "disabledBy");
+    const authType = requiredString(value, "authType");
+    if (!["firebase", "firebase_bridge", "apps_in_toss", "anonymous"].includes(authType)) {
+      return invalidPlatformResponse("광고 정책 인증 유형 응답이 올바르지 않습니다.");
+    }
+    if (disabledBy.some((item) => item !== "operator" && item !== "ad_free")) {
+      return invalidPlatformResponse("사용자 광고 차단 원인 응답이 올바르지 않습니다.");
+    }
+    const appId = requiredString(value, "appId");
+    const auditHistory = requiredArray(value, "auditHistory").map((item) => {
+      if (!isRecord(item) || (item.operation !== "grant" && item.operation !== "revoke")) {
+        return invalidPlatformResponse("광고 차단 감사 이력 응답이 올바르지 않습니다.");
+      }
+      if (item.appId !== appId || item.platformUserId !== platformUserId) {
+        return invalidPlatformResponse("광고 차단 감사 이력 대상이 사용자와 다릅니다.");
+      }
+      return {
+        requestId: requiredString(item, "requestId"),
+        grantRequestId: optionalString(item, "grantRequestId"),
+        appId,
+        platformUserId,
+        actorLogin: requiredString(item, "actorLogin"),
+        reason: requiredReason(item, "reason"),
+        operation: item.operation as "grant" | "revoke",
+        applied: requiredBoolean(item, "applied"),
+        createdAt: requiredString(item, "createdAt"),
+      };
+    });
+    return {
+      appId,
+      platformUserId,
+      supportCode: requiredString(value, "supportCode"),
+      isAnonymous: requiredBoolean(value, "isAnonymous"),
+      authType: authType as PlatformUserAds["authType"],
+      lastSeenAt: requiredString(value, "lastSeenAt"),
+      policy: {
+        appUsesAds: requiredBoolean(value.policy, "appUsesAds"),
+        adsEnabled: requiredBoolean(value.policy, "adsEnabled"),
+        disabledBy: disabledBy as AdsPolicyReason[],
+        checkedAt: requiredString(value.policy, "checkedAt"),
+      },
+      auditHistory,
+    };
+  }
+
+  async adsConfig(appId: string): Promise<PlatformAdsConfig> {
+    const value = await this.request<unknown>(
+      "GET",
+      `/v1/admin/apps/${encodeURIComponent(appId)}/ads/config`,
+    );
+    return validateAdsConfig(value, appId);
+  }
+
+  async adClaims(query: Record<string, string | undefined>): Promise<PlatformAdClaim[]> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value) params.set(key, value);
+    }
+    const value = await this.request<unknown>(
+      "GET",
+      `/v1/admin/ads/reward-claims?${params.toString()}`,
+    );
+    return requiredArray(value, "claims").map(validateAdClaim);
+  }
+
+  async grantAdsSuppression(
+    req: AdsSuppressionRequest,
+    actor: string,
+  ): Promise<AdsSuppressionResult> {
+    return this.mutateAdsSuppression("grant", req, actor);
+  }
+
+  async revokeAdsSuppression(
+    req: AdsSuppressionRequest,
+    actor: string,
+  ): Promise<AdsSuppressionResult> {
+    return this.mutateAdsSuppression("revoke", req, actor);
+  }
+
+  private async mutateAdsSuppression(
+    operation: "grant" | "revoke",
+    req: AdsSuppressionRequest,
+    actor: string,
+  ): Promise<AdsSuppressionResult> {
+    const value = await this.request<unknown>(
+      "POST",
+      `/v1/admin/ads/suppressions/${operation}`,
+      req,
+      actor,
+    );
+    if (!isRecord(value) || value.requestId !== req.requestId) {
+      return invalidPlatformResponse("광고 차단 조작 응답 대상이 일치하지 않습니다.");
+    }
+    return {
+      applied: requiredBoolean(value, "applied"),
+      requestId: req.requestId,
+      activeGrantRequestId: optionalString(value, "activeGrantRequestId"),
     };
   }
 
