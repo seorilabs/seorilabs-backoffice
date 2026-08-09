@@ -965,13 +965,15 @@ export function PlatformIapManagement({
             grantRequestId: normalizedGrantRequestId,
             expectedEnvironment: targetEnvironment,
           });
-        } else {
+        } else if (submittedOperation === "platform.iap.reset-app-store-sandbox") {
           result = await enqueuePlatformOperationAction({
             operation: submittedOperation,
             ...common,
             expectedEnvironment: "sandbox",
             appleClearedConfirmed: true,
           });
+        } else {
+          throw new Error("IAP 화면에서 지원하지 않는 플랫폼 작업입니다.");
         }
       } catch {
         // enqueue 성공 뒤 응답만 유실됐을 수 있다. 새 요청을 만들지 않고

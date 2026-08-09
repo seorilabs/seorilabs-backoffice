@@ -4,6 +4,7 @@ const links = [
   { href: "/platform", label: "개요" },
   { href: "/platform/auth", label: "인증" },
   { href: "/platform/iap", label: "IAP" },
+  { href: "/platform/ads", label: "Ads" },
 ] as const;
 
 export default function PlatformLayout({
@@ -22,7 +23,7 @@ export default function PlatformLayout({
             공통 플랫폼 관리
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            앱별 화면과 분리된 인증·IAP 공통 기능을 관리합니다.
+            앱별 화면과 분리된 인증·IAP·광고 공통 기능을 관리합니다.
           </p>
         </div>
         <nav aria-label="플랫폼 관리" className="flex gap-1 rounded-lg bg-neutral-100 p-1">

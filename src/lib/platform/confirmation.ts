@@ -48,6 +48,12 @@ export function platformOperationConfirmationText(
   if (input.operation === "platform.iap.revoke-entitlement") {
     return `REVOKE ${input.appSlug} ${input.platformUserId} ${input.entitlementId} ${input.grantRequestId ?? ""}`;
   }
+  if (input.operation === "platform.ads.grant-suppression") {
+    return `DISABLE ADS ${input.appSlug} ${input.platformUserId}`;
+  }
+  if (input.operation === "platform.ads.revoke-suppression") {
+    return `ENABLE ADS ${input.appSlug} ${input.platformUserId} ${input.grantRequestId ?? ""}`;
+  }
   return `RESET ${input.appSlug} ${input.platformUserId}`;
 }
 

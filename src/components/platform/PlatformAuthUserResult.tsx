@@ -1,4 +1,5 @@
 import React from "react";
+import Link from "next/link";
 
 import {
   PlatformBadge,
@@ -132,6 +133,11 @@ export function PlatformAuthUserResult({
           {message}
         </div>
       )}
+      <div className="border-t border-neutral-100 px-4 py-3 text-right">
+        <Link className="text-sm font-medium text-blue-700 hover:underline" href={`/platform/ads?reference=${encodeURIComponent(user.platformUserId)}`}>
+          광고 정책 보기
+        </Link>
+      </div>
     </PlatformPanel>
   );
 }

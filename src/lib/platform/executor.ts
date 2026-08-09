@@ -117,6 +117,12 @@ export interface PlatformRefundReviewDecisionResult {
   operation: "refund_review_decision";
 }
 
+export interface PlatformAdsSuppressionRequest {
+  requestId:string;appId:string;platformUserId:string;grantRequestId?:string;
+  reason:PlatformOperationReason;confirmation:string;
+}
+export interface PlatformAdsSuppressionResult {applied:boolean;requestId:string;activeGrantRequestId?:string}
+
 /** executor가 소비하는 최소 client 포트. 실제 client 클래스에 의존하지 않는다. */
 export interface PlatformOperationsClient {
   grantEntitlement(
@@ -143,6 +149,8 @@ export interface PlatformOperationsClient {
     request: PlatformRefundReviewDecisionRequest,
     actor: string,
   ): Promise<PlatformRefundReviewDecisionResult>;
+  grantAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
+  revokeAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
 }
 
 export type PlatformOperationsClientFactory =
@@ -371,6 +379,14 @@ export async function executePlatformOperation(
     // preparedResume와 상호 배타적인 parser 결과다.
     if (!prepared) throw new Error("플랫폼 오퍼레이션을 준비하지 못했습니다.");
     const params = prepared.params;
+    if (prepared.operationKey === "platform.ads.grant-suppression" || prepared.operationKey === "platform.ads.revoke-suppression") {
+      const revoke = prepared.operationKey === "platform.ads.revoke-suppression";
+      if(!client.grantAdsSuppression||!client.revokeAdsSuppression){throw new Error("광고 정책 write client가 준비되지 않았습니다.")}
+      const request:PlatformAdsSuppressionRequest={requestId:prepared.requestId,appId:prepared.appSlug,platformUserId:stringParam(params,"platformUserId"),reason:prepared.reason as PlatformOperationReason,confirmation:stringParam(params,"serverConfirmation"),...(revoke?{grantRequestId:stringParam(params,"grantRequestId")}:{})};
+      const result=revoke?await client.revokeAdsSuppression(request,actor):await client.grantAdsSuppression(request,actor);
+      if(typeof result?.applied!=="boolean"||result.requestId!==request.requestId){throw new PlatformOperationUnknownOutcomeError()}
+      return{version:1,requestId:prepared.requestId,operation:prepared.operationKey,status:"success",summary:result.applied?(revoke?"운영자 광고 차단을 회수했습니다.":"운영자 광고 차단을 추가했습니다."):"이미 처리된 동일 상태입니다.",data:{applied:result.applied,activeGrantRequestId:result.activeGrantRequestId},completedAt:new Date().toISOString()};
+    }
     if (prepared.operationKey === "platform.iap.decide-refund-review") {
       if (!client.decideRefundReview) {
         throw new Error("환불 검토 write client가 준비되지 않았습니다.");

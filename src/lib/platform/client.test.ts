@@ -416,6 +416,107 @@ describe("전체 요청 timeout", () => {
   });
 });
 
+describe("광고 Admin 응답", () => {
+  const safeClaim = {
+    claimId: "cl_1",
+    appId: "happy-farm",
+    placement: "harvest_boost",
+    provider: "admob",
+    clientPlatform: "android",
+    reward: { key: "harvest_boost", amount: 1 },
+    state: "confirmed",
+    assurance: "server_verified",
+    createdAt: "2026-08-09T00:00:00Z",
+    confirmedAt: "2026-08-09T00:00:05Z",
+    expiresAt: "2026-08-10T00:00:00Z",
+  };
+
+  it("사용자 광고 정책은 원본 신원 없이 안전한 인증 유형만 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            appId: "happy-farm",
+            platformUserId: "pu_01J00000000000000000000000",
+            supportCode: "HF-ABC12345",
+            isAnonymous: false,
+            authType: "apps_in_toss",
+            lastSeenAt: "2026-08-09T00:00:00Z",
+            policy: {
+              appUsesAds: true,
+              adsEnabled: true,
+              disabledBy: [],
+              checkedAt: "2026-08-09T00:00:00Z",
+            },
+            auditHistory: [],
+          },
+        },
+      },
+      (client) => client.userAds("pu_01J00000000000000000000000"),
+    );
+    assert.equal(got.authType, "apps_in_toss");
+    assert.equal("userKey" in got, false);
+  });
+
+  it("Claim의 safe 필드와 assurance만 전달한다", async () => {
+    const got = await withClient(
+      { status: 200, body: { ok: true, result: { claims: [safeClaim] } } },
+      (client) => client.adClaims({ appId: "happy-farm" }),
+    );
+    assert.equal(got[0]?.assurance, "server_verified");
+    assert.equal(got[0]?.claimId, "cl_1");
+  });
+
+  it("Claim에 transaction 또는 사용자 원본 필드가 섞이면 전체를 거부한다", async () => {
+    for (const leaked of [
+      { transactionId: "raw-transaction" },
+      { platformUserId: "pu_secret" },
+      { nested: { signature: "raw-signature" } },
+    ]) {
+      await assert.rejects(
+        () => withClient(
+          {
+            status: 200,
+            body: { ok: true, result: { claims: [{ ...safeClaim, ...leaked }] } },
+          },
+          (client) => client.adClaims({}),
+        ),
+        (error: unknown) =>
+          error instanceof PlatformApiError && error.code === "platform_response_invalid",
+      );
+    }
+  });
+
+  it("앱 설정의 registry sync 시각과 suffix만 전달한다", async () => {
+    const got = await withClient(
+      {
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            appId: "happy-farm",
+            providers: ["admob", "apps_in_toss"],
+            registrySyncedAt: "2026-08-09T00:00:00Z",
+            placements: [{
+              id: "harvest_boost",
+              format: "rewarded",
+              providers: { admob: { androidAdUnitSuffix: "1234567890" } },
+              reward: { key: "harvest_boost", min_amount: 1, max_amount: 1 },
+              dailyLimit: 20,
+              cooldownSeconds: 30,
+            }],
+          },
+        },
+      },
+      (client) => client.adsConfig("happy-farm"),
+    );
+    assert.equal(got.registrySyncedAt, "2026-08-09T00:00:00Z");
+    assert.equal(got.placements[0]?.providers.admob?.androidAdUnitSuffix, "1234567890");
+  });
+});
+
 describe("환불 검토", () => {
   const reviewId = "a".repeat(64);
 

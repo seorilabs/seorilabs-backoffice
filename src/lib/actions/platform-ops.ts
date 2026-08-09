@@ -83,11 +83,27 @@ export interface DecidePlatformRefundReviewInput {
   serverConfirmation: string;
 }
 
+export interface GrantPlatformAdsSuppressionInput {
+  operation: "platform.ads.grant-suppression";
+  requestId: string;
+  appSlug: string;
+  platformUserId: string;
+  reason: "customer_support_compensation"|"incorrect_grant_correction"|"incident_recovery"|"internal_validation";
+  serverConfirmation: string;
+}
+
+export interface RevokePlatformAdsSuppressionInput extends Omit<GrantPlatformAdsSuppressionInput,"operation"> {
+  operation: "platform.ads.revoke-suppression";
+  grantRequestId: string;
+}
+
 export type EnqueuePlatformOperationInput =
   | GrantPlatformEntitlementInput
   | RevokePlatformEntitlementInput
   | ResetPlatformAppStoreSandboxInput
-  | DecidePlatformRefundReviewInput;
+  | DecidePlatformRefundReviewInput
+  | GrantPlatformAdsSuppressionInput
+  | RevokePlatformAdsSuppressionInput;
 
 export interface EnqueuePlatformOperationResult {
   ok: boolean;
@@ -173,6 +189,7 @@ export async function enqueuePlatformOperationAction(
     });
 
     revalidatePath("/platform/iap");
+    revalidatePath("/platform/ads");
     return { ok: true, requestId: prepared.requestId };
   } catch (error) {
     return {
@@ -266,6 +283,7 @@ export async function retryUnknownPlatformOperationAction(
       requestId,
     });
     revalidatePath("/platform/iap");
+    revalidatePath("/platform/ads");
     return { ok: true };
   } catch (error) {
     return {

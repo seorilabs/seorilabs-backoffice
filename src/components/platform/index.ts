@@ -33,3 +33,4 @@ export {
 } from "./presentation";
 
 export { PlatformMetricChart, type PlatformMetricChartProps } from "./PlatformMetricChart";
+export { PlatformAdsConsole, type PlatformAdsApp } from "./PlatformAdsConsole";

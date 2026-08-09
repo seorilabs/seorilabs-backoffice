@@ -132,7 +132,9 @@ export function parsePlatformRecoveryReference(
     (candidate.operation !== "platform.iap.grant-entitlement" &&
       candidate.operation !== "platform.iap.revoke-entitlement" &&
       candidate.operation !== "platform.iap.reset-app-store-sandbox" &&
-      candidate.operation !== "platform.iap.decide-refund-review")
+      candidate.operation !== "platform.iap.decide-refund-review" &&
+      candidate.operation !== "platform.ads.grant-suppression" &&
+      candidate.operation !== "platform.ads.revoke-suppression")
   ) {
     return null;
   }
