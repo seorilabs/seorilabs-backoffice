@@ -20,6 +20,8 @@ import { resolveAitTarget, listingsForSlug, primaryListingForSlug } from "@/lib/
 import { ConsoleSection, type ConsoleMetricDaily } from "@/components/analytics/ConsolePanels";
 import {
   aggConsoleWindow,
+  completePeriodChangePct,
+  consoleMonthWindow,
   formatConsoleWindowRow,
   rankConsoleWindows,
 } from "@/lib/analytics/console-window";
@@ -259,10 +261,186 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-type AppRef = { id: string; slug: string; displayName: string };
+type AppRef = { id: string; slug: string; displayName: string; aitMiniAppId?: number | null };
+
+interface ConsoleRevenueAgg {
+  observedDays: number;
+  impressions: number;
+  earningKrw: number;
+}
+
+interface ConsoleMonthlyRevenueItem {
+  key: string;
+  appName: string;
+  listingLabel: string;
+  miniAppId: number;
+  current: ConsoleRevenueAgg;
+  previousComparable: ConsoleRevenueAgg;
+  previousFull: ConsoleRevenueAgg;
+  changePct: number | null;
+}
+
+interface ConsoleMonthlyRevenueReport {
+  reportDate: Date;
+  currentLabel: string;
+  previousLabel: string;
+  currentElapsedDays: number;
+  previousComparableDays: number;
+  previousCalendarDays: number;
+  targetListings: number;
+  items: ConsoleMonthlyRevenueItem[];
+  currentTotal: ConsoleRevenueAgg;
+  previousComparableTotal: ConsoleRevenueAgg;
+  previousFullTotal: ConsoleRevenueAgg;
+  changePct: number | null;
+}
+
+interface ConsoleRevenueGroup {
+  appId: string;
+  miniAppId: number;
+  _count: { _all: number };
+  _sum: { iaaImpressions: number | null; iaaEarningKrw: number | null };
+}
+
+const emptyRevenue = (): ConsoleRevenueAgg => ({ observedDays: 0, impressions: 0, earningKrw: 0 });
+const revenueKey = (appId: string, miniAppId: number): string => `${appId}:${miniAppId}`;
+const monthLabel = (d: Date): string => `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월`;
+
+function revenueMap(groups: ConsoleRevenueGroup[]): Map<string, ConsoleRevenueAgg> {
+  return new Map(
+    groups.map((g) => [
+      revenueKey(g.appId, g.miniAppId),
+      {
+        observedDays: g._count._all,
+        impressions: g._sum.iaaImpressions ?? 0,
+        earningKrw: g._sum.iaaEarningKrw ?? 0,
+      },
+    ]),
+  );
+}
+
+function sumRevenue(values: ConsoleRevenueAgg[]): ConsoleRevenueAgg {
+  return values.reduce(
+    (sum, value) => ({
+      observedDays: sum.observedDays + value.observedDays,
+      impressions: sum.impressions + value.impressions,
+      earningKrw: sum.earningKrw + value.earningKrw,
+    }),
+    emptyRevenue(),
+  );
+}
+
+/** 최신 수집 기준일까지 리스팅별 이번 달 MTD·전월 동기간·전월 전체 예상 광고수익을 집계한다. */
+async function loadConsoleMonthlyRevenue(apps: AppRef[]): Promise<ConsoleMonthlyRevenueReport | null> {
+  if (apps.length === 0) return null;
+  const targets = apps.flatMap((app) => {
+    const listings = listingsForSlug(app.slug);
+    if (listings.length > 0) {
+      return listings.map((listing) => ({
+        app,
+        miniAppId: listing.miniAppId,
+        listingLabel: listing.label,
+      }));
+    }
+    return app.aitMiniAppId == null
+      ? []
+      : [{ app, miniAppId: app.aitMiniAppId, listingLabel: app.slug }];
+  });
+  if (targets.length === 0) return null;
+  const listingScope = targets.map(({ app, miniAppId }) => ({ appId: app.id, miniAppId }));
+  const latest = await prisma.appConsoleMetricDaily.findFirst({
+    where: { OR: listingScope },
+    orderBy: { date: "desc" },
+    select: { date: true },
+  });
+  if (!latest) return null;
+
+  const window = consoleMonthWindow(latest.date);
+  const [currentGroups, previousComparableGroups, previousFullGroups] = await Promise.all([
+    prisma.appConsoleMetricDaily.groupBy({
+      by: ["appId", "miniAppId"],
+      where: {
+        OR: listingScope,
+        date: { gte: window.currentStart, lt: window.currentEndExclusive },
+      },
+      _count: { _all: true },
+      _sum: { iaaImpressions: true, iaaEarningKrw: true },
+    }),
+    prisma.appConsoleMetricDaily.groupBy({
+      by: ["appId", "miniAppId"],
+      where: {
+        OR: listingScope,
+        date: { gte: window.previousStart, lt: window.previousComparableEndExclusive },
+      },
+      _count: { _all: true },
+      _sum: { iaaImpressions: true, iaaEarningKrw: true },
+    }),
+    prisma.appConsoleMetricDaily.groupBy({
+      by: ["appId", "miniAppId"],
+      where: {
+        OR: listingScope,
+        date: { gte: window.previousStart, lt: window.previousEndExclusive },
+      },
+      _count: { _all: true },
+      _sum: { iaaImpressions: true, iaaEarningKrw: true },
+    }),
+  ]);
+
+  const currentByListing = revenueMap(currentGroups);
+  const previousComparableByListing = revenueMap(previousComparableGroups);
+  const previousFullByListing = revenueMap(previousFullGroups);
+  const items = targets.map(({ app, miniAppId, listingLabel }) => {
+    const key = revenueKey(app.id, miniAppId);
+    const current = currentByListing.get(key) ?? emptyRevenue();
+    const previousComparable = previousComparableByListing.get(key) ?? emptyRevenue();
+    const previousFull = previousFullByListing.get(key) ?? emptyRevenue();
+    return {
+      key,
+      appName: app.displayName,
+      listingLabel,
+      miniAppId,
+      current,
+      previousComparable,
+      previousFull,
+      changePct: completePeriodChangePct({
+        currentValue: current.earningKrw,
+        previousValue: previousComparable.earningKrw,
+        currentObserved: current.observedDays,
+        currentExpected: window.currentElapsedDays,
+        previousObserved: previousComparable.observedDays,
+        previousExpected: window.previousComparableDays,
+      }),
+    } satisfies ConsoleMonthlyRevenueItem;
+  });
+
+  const currentTotal = sumRevenue(items.map((item) => item.current));
+  const previousComparableTotal = sumRevenue(items.map((item) => item.previousComparable));
+  const previousFullTotal = sumRevenue(items.map((item) => item.previousFull));
+  return {
+    reportDate: window.reportDate,
+    currentLabel: monthLabel(window.currentStart),
+    previousLabel: monthLabel(window.previousStart),
+    currentElapsedDays: window.currentElapsedDays,
+    previousComparableDays: window.previousComparableDays,
+    previousCalendarDays: window.previousCalendarDays,
+    targetListings: targets.length,
+    items,
+    currentTotal,
+    previousComparableTotal,
+    previousFullTotal,
+    changePct: completePeriodChangePct({
+      currentValue: currentTotal.earningKrw,
+      previousValue: previousComparableTotal.earningKrw,
+      currentObserved: currentTotal.observedDays,
+      currentExpected: targets.length * window.currentElapsedDays,
+      previousObserved: previousComparableTotal.observedDays,
+      previousExpected: targets.length * window.previousComparableDays,
+    }),
+  };
+}
 
 async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleApps: AppRef[] }) {
-  const [ga4Items, consoleItems, consoleWindows] = await Promise.all([
+  const [ga4Items, consoleItems, consoleWindows, monthlyRevenue] = await Promise.all([
     Promise.all(
       ga4Apps.map(async (a) => ({
         app: a,
@@ -295,6 +473,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
         ),
       })),
     ),
+    loadConsoleMonthlyRevenue(consoleApps),
   ]);
 
   // 최근 7일 집계 비교는 DAU 합 내림차순(데이터 없는 앱은 뒤).
@@ -352,6 +531,8 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
 
       {consoleApps.length > 0 && (
         <div className="space-y-6">
+          {monthlyRevenue && <ConsoleMonthlyRevenue report={monthlyRevenue} />}
+
           {/* 최근 7일 집계 비교(내가 보여준 앱 전체 비교표) */}
           <div>
             <div className="mb-2 text-sm font-semibold text-neutral-700">
@@ -440,6 +621,125 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const revenueWon = (value: number): string => `₩${Math.round(value).toLocaleString("ko-KR")}`;
+const revenueChange = (value: number | null): string =>
+  value == null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+
+function RevenueSummaryCard({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <div className="mt-1 text-xl font-semibold text-neutral-900">{value}</div>
+      <div className="mt-1 text-xs text-neutral-400">{note}</div>
+    </div>
+  );
+}
+
+function ConsoleMonthlyRevenue({ report }: { report: ConsoleMonthlyRevenueReport }) {
+  const currentExpected = report.targetListings * report.currentElapsedDays;
+  const previousFullExpected = report.targetListings * report.previousCalendarDays;
+  const changeAvailable = report.changePct != null;
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-neutral-700">
+            AppsInToss 콘솔 · 월 누적 예상 광고수익
+          </div>
+          <div className="mt-0.5 text-xs text-neutral-400">
+            기준일 {isoDate(report.reportDate)} · AppsInToss estimatedEarning · 정산 확정액 아님
+          </div>
+        </div>
+        <div className="text-xs text-neutral-400">
+          서로 다른 리스팅의 합계는 리스팅 보고 수익 합계로 표시
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <RevenueSummaryCard
+          label={`${report.currentLabel} 누적`}
+          value={revenueWon(report.currentTotal.earningKrw)}
+          note={`1~${report.currentElapsedDays}일 · 리스팅 보고 수익 합계`}
+        />
+        <RevenueSummaryCard
+          label={`${report.previousLabel} 동기간`}
+          value={revenueWon(report.previousComparableTotal.earningKrw)}
+          note={`1~${report.previousComparableDays}일 관측 합계`}
+        />
+        <RevenueSummaryCard
+          label="전월 동기간 대비"
+          value={revenueChange(report.changePct)}
+          note={changeAvailable ? "양쪽 동기간 완전 관측" : "누락 또는 기준 0원으로 비교 보류"}
+        />
+        <RevenueSummaryCard
+          label="이번 달 수집 범위"
+          value={`${report.currentTotal.observedDays}/${currentExpected} 리스팅-일`}
+          note={`지난달 전체 ${report.previousFullTotal.observedDays}/${previousFullExpected} 리스팅-일`}
+        />
+      </div>
+
+      <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+        <table className="w-full min-w-[860px] text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-xs text-neutral-500">
+              <th className="px-3 py-2">앱 / 리스팅</th>
+              <th className="px-3 py-2 text-right">이번 달 수집</th>
+              <th className="px-3 py-2 text-right">광고노출</th>
+              <th className="px-3 py-2 text-right">이번 달 예상수익</th>
+              <th className="px-3 py-2 text-right">전월 동기간</th>
+              <th className="px-3 py-2 text-right">동기간 대비</th>
+              <th className="px-3 py-2 text-right">전월 전체 관측 합계</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.items.map((item) => (
+              <tr key={item.key} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+                <td className="px-3 py-2">
+                  <div className="font-medium text-neutral-800">{item.appName}</div>
+                  <div className="text-xs text-neutral-400">
+                    {item.listingLabel} · #{item.miniAppId}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right text-neutral-600">
+                  {item.current.observedDays}/{report.currentElapsedDays}일
+                </td>
+                <td className="px-3 py-2 text-right text-neutral-600">
+                  {item.current.impressions.toLocaleString("ko-KR")}
+                </td>
+                <td className="px-3 py-2 text-right font-medium">
+                  {revenueWon(item.current.earningKrw)}
+                </td>
+                <td className="px-3 py-2 text-right text-neutral-600">
+                  {revenueWon(item.previousComparable.earningKrw)}
+                </td>
+                <td className="px-3 py-2 text-right text-neutral-600">
+                  {revenueChange(item.changePct)}
+                </td>
+                <td className="px-3 py-2 text-right text-neutral-600">
+                  {revenueWon(item.previousFull.earningKrw)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 text-xs text-neutral-400">
+        전월 동기간 대비는 해당 리스팅의 양쪽 기간이 모두 수집되고 전월 수익이 0원보다 클 때만
+        표시합니다. 누락된 날짜는 0원으로 간주하지 않습니다.
+      </div>
     </div>
   );
 }

@@ -30,6 +30,85 @@ export interface ConsoleWindowAgg {
 }
 
 /**
+ * 콘솔 광고수익 월 집계 범위. AppConsoleMetricDaily.date 는 토스/KST 기준일을 UTC 자정 Date 로
+ * 저장하므로 UTC calendar 연산으로 월 경계를 계산한다. 현재 월은 최신 수집 기준일까지, 전월은
+ * 전체 월과 현재 월의 같은 일수만큼인 동기간을 함께 제공한다.
+ */
+export interface ConsoleMonthWindow {
+  reportDate: Date;
+  currentStart: Date;
+  currentEndExclusive: Date;
+  previousStart: Date;
+  previousComparableEndExclusive: Date;
+  previousEndExclusive: Date;
+  currentElapsedDays: number;
+  previousComparableDays: number;
+  previousCalendarDays: number;
+}
+
+/** 최신 수집 기준일을 기준으로 이번 달 MTD·전월 동기간·전월 전체 경계를 계산한다. */
+export function consoleMonthWindow(reportDate: Date): ConsoleMonthWindow {
+  const year = reportDate.getUTCFullYear();
+  const month = reportDate.getUTCMonth();
+  const day = reportDate.getUTCDate();
+  const currentStart = new Date(Date.UTC(year, month, 1));
+  const previousStart = new Date(Date.UTC(year, month - 1, 1));
+  const previousEndExclusive = currentStart;
+  const previousYear = previousStart.getUTCFullYear();
+  const previousMonth = previousStart.getUTCMonth();
+  const previousCalendarDays = new Date(
+    Date.UTC(previousYear, previousMonth + 1, 0),
+  ).getUTCDate();
+  const previousComparableDays = Math.min(day, previousCalendarDays);
+
+  return {
+    reportDate,
+    currentStart,
+    currentEndExclusive: new Date(Date.UTC(year, month, day + 1)),
+    previousStart,
+    previousComparableEndExclusive: new Date(
+      Date.UTC(previousYear, previousMonth, previousComparableDays + 1),
+    ),
+    previousEndExclusive,
+    currentElapsedDays: day,
+    previousComparableDays,
+    previousCalendarDays,
+  };
+}
+
+/**
+ * 같은 길이의 두 기간이 모두 빠짐없이 관측됐을 때만 증감률을 반환한다. 누락된 리스팅-일을
+ * 수익 0원으로 해석하거나, 기준값 0원에서 무한대 비율을 만드는 것을 방지한다.
+ */
+export function completePeriodChangePct({
+  currentValue,
+  previousValue,
+  currentObserved,
+  currentExpected,
+  previousObserved,
+  previousExpected,
+}: {
+  currentValue: number;
+  previousValue: number;
+  currentObserved: number;
+  currentExpected: number;
+  previousObserved: number;
+  previousExpected: number;
+}): number | null {
+  if (
+    currentExpected <= 0 ||
+    previousExpected <= 0 ||
+    currentExpected !== previousExpected ||
+    currentObserved !== currentExpected ||
+    previousObserved !== previousExpected ||
+    previousValue <= 0
+  ) {
+    return null;
+  }
+  return ((currentValue - previousValue) / previousValue) * 100;
+}
+
+/**
  * 최근 N개 콘솔 수집 row 를 집계한다. 빈 배열이면 null.
  * 일평균 DAU 는 DAU 가 집계된 일수(dau != null)로 나눈다 — 콘솔 미집계일(null)은 분모에서 제외
  * (세션만 있는 날을 0 명으로 눌러 평균을 왜곡하지 않는다). DAU 가 전부 null 이면 dauAvg=0.
