@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   aggConsoleWindow,
+  completePeriodChangePct,
+  consoleMonthWindow,
   formatConsoleWindowRow,
   rankConsoleWindows,
   type ConsoleWindowAgg,
@@ -152,4 +154,70 @@ test("formatConsoleWindowRow: 집계 있으면 기간/합/일평균/수익을 �
 test("formatConsoleWindowRow: 세션 평균이 null 이면 '—'", () => {
   const d = formatConsoleWindowRow(aggWith(3), iso);
   assert.equal(d.sessAvg, "—");
+});
+
+test("consoleMonthWindow: 최신 기준일로 이번 달·전월 동기간·전월 전체 경계를 계산한다", () => {
+  const w = consoleMonthWindow(new Date("2026-08-09T00:00:00.000Z"));
+  assert.equal(iso(w.currentStart), "2026-08-01");
+  assert.equal(iso(w.currentEndExclusive), "2026-08-10");
+  assert.equal(iso(w.previousStart), "2026-07-01");
+  assert.equal(iso(w.previousComparableEndExclusive), "2026-07-10");
+  assert.equal(iso(w.previousEndExclusive), "2026-08-01");
+  assert.equal(w.currentElapsedDays, 9);
+  assert.equal(w.previousComparableDays, 9);
+  assert.equal(w.previousCalendarDays, 31);
+});
+
+test("consoleMonthWindow: 전월이 더 짧으면 동기간을 전월 말일로 제한한다", () => {
+  const w = consoleMonthWindow(new Date("2026-03-31T00:00:00.000Z"));
+  assert.equal(iso(w.previousComparableEndExclusive), "2026-03-01");
+  assert.equal(w.previousComparableDays, 28);
+  assert.equal(w.previousCalendarDays, 28);
+});
+
+test("completePeriodChangePct: 양쪽 기간이 완전할 때만 증감률을 반환한다", () => {
+  assert.equal(
+    completePeriodChangePct({
+      currentValue: 150,
+      previousValue: 100,
+      currentObserved: 9,
+      currentExpected: 9,
+      previousObserved: 9,
+      previousExpected: 9,
+    }),
+    50,
+  );
+  assert.equal(
+    completePeriodChangePct({
+      currentValue: 150,
+      previousValue: 100,
+      currentObserved: 8,
+      currentExpected: 9,
+      previousObserved: 9,
+      previousExpected: 9,
+    }),
+    null,
+  );
+  assert.equal(
+    completePeriodChangePct({
+      currentValue: 10,
+      previousValue: 0,
+      currentObserved: 9,
+      currentExpected: 9,
+      previousObserved: 9,
+      previousExpected: 9,
+    }),
+    null,
+  );
+  assert.equal(
+    completePeriodChangePct({
+      currentValue: 150,
+      previousValue: 100,
+      currentObserved: 31,
+      currentExpected: 31,
+      previousObserved: 28,
+      previousExpected: 28,
+    }),
+    null,
+  );
 });
