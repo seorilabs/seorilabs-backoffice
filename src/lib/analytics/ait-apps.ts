@@ -42,6 +42,7 @@ export const AIT_LISTINGS: AitListing[] = [
   { appSlug: "lucid-reversi", miniAppId: 44056, label: "lucid-reversi", primary: true },
   { appSlug: "foam-party", miniAppId: 50736, label: "foam-party", primary: true },
   { appSlug: "trait-test-hub", miniAppId: 54985, label: "trait-test-hub", primary: true },
+  { appSlug: "lizard-tycoon", miniAppId: 61736, label: "lizard-tycoon", primary: true },
 ];
 
 /** App 당 primary 리스팅의 miniAppId 표(slug → miniAppId). seed/단일값 조회의 하위호환 경로. */

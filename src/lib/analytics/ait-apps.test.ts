@@ -56,6 +56,20 @@ test("AC-4: crossword-puzzle primary 는 네이티브 게임 56407", () => {
   assert.equal(AIT_MINIAPP_BY_SLUG["crossword-puzzle"], 56407);
 });
 
+test("신규 lizard-tycoon 리스팅은 61736을 primary로 사용한다", () => {
+  const list = listingsForSlug("lizard-tycoon");
+  assert.deepEqual(list, [
+    {
+      appSlug: "lizard-tycoon",
+      miniAppId: 61736,
+      label: "lizard-tycoon",
+      primary: true,
+    },
+  ]);
+  assert.equal(primaryListingForSlug("lizard-tycoon")?.miniAppId, 61736);
+  assert.equal(AIT_MINIAPP_BY_SLUG["lizard-tycoon"], 61736);
+});
+
 // 무결성: miniAppId 는 리스팅 전역 유일(저장 유니크 키 전제).
 test("miniAppId 는 전역 유일", () => {
   const ids = AIT_LISTINGS.map((l) => l.miniAppId);
