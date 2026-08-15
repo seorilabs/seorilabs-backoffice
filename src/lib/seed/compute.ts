@@ -130,6 +130,12 @@ function descriptionDisplayName(description: string | null | undefined): string 
   return null;
 }
 
+// 스토어 상품명과 분리된 Backoffice 운영 표시명. slug/repo identity는 바꾸지 않는다.
+const BACKOFFICE_DISPLAY_NAME_OVERRIDES: Readonly<Record<string, string>> = {
+  "slotmachine-game": "루시드 슬롯머신",
+  "trait-test-hub": "성향 테스트",
+};
+
 // 시드가 prisma 에 upsert 하는 앱 레코드(create 페이로드). configHash/marketTargets 포함.
 export interface AppSeedData {
   slug: string;
@@ -282,6 +288,7 @@ export async function computeRepoSeed(
     aitAppName,
   ].find(containsHangul);
   const displayName =
+    BACKOFFICE_DISPLAY_NAME_OVERRIDES[name] ??
     koreanName ??
     playName ??
     appStoreName ??

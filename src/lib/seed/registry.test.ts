@@ -289,3 +289,23 @@ test("App Store 한국어 이름도 릴리즈 목록 표시명으로 사용한�
   assert.ok(seed);
   assert.equal(seed.displayName, "영혼의 문 디펜스");
 });
+
+test("Backoffice 운영 표시명은 스토어 이름과 별도로 고정한다", async () => {
+  for (const [name, expected] of [
+    ["slotmachine-game", "루시드 슬롯머신"],
+    ["trait-test-hub", "성향 테스트"],
+  ] as const) {
+    const seed = await computeRepoSeed(
+      fakeOctokit({
+        "package.json": "{}",
+        "play-store/google-play.config.json": JSON.stringify({
+          storeListing: { appName: "Store Product Name" },
+        }),
+      }),
+      ORG,
+      { ...REPO, name, full_name: `${ORG}/${name}` },
+    );
+    assert.ok(seed);
+    assert.equal(seed.displayName, expected);
+  }
+});

@@ -8,10 +8,7 @@
 // 부여된 게임만 넣는다. 둘 중 하나라도 빠지면 매 수집마다 "Dataset not found"/권한 에러가
 // 쌓인다(백오피스는 errors 로 잡고 다른 앱 수집은 계속한다).
 //
-// 대기 중(트래픽/설정이 갖춰지면 SA 권한 부여 후 표에 추가):
-// - lizard-tycoon: 미론칭. export 미활성(analytics_544016233 dataset 없음).
-// - lucid-reversi(property 545247767): export 링크는 활성(2026-07-13)이나 실사용 트래픽이
-//   없어 BigQuery dataset 미생성. events 가 적재되면 편입한다.
+// dataset 이 아직 없는 앱은 raw events 적재와 수집 SA 권한을 확인한 뒤 편입한다.
 
 export interface Ga4Target {
   /** BigQuery 프로젝트(= Firebase project id). job 실행/billing 대상. */
@@ -29,6 +26,10 @@ const FALLBACK: Record<string, Ga4Target> = {
   "slotmachine-game": {
     firebaseProject: "slotmachine-game-495cc",
     dataset: "analytics_547294653",
+  },
+  "lizard-tycoon": {
+    firebaseProject: "lizard-tycoon",
+    dataset: "analytics_544016233",
   },
 };
 
@@ -84,4 +85,15 @@ export function dateWindow(end: Date, days: number): Date[] {
 /** a 가 b 보다 며칠 뒤인지(정수 일). */
 export function daysBetween(a: Date, b: Date): number {
   return Math.round((a.getTime() - b.getTime()) / DAY_MS);
+}
+
+/** 내부 백필 API의 조회 일수. 평상시에는 undefined로 기본 14일을 유지한다. */
+export function parseWindowDays(value: string | null, maxDays = 366): number | undefined {
+  if (value === null) return undefined;
+  if (!/^\d+$/.test(value)) throw new Error("windowDays 는 양의 정수여야 합니다.");
+  const days = Number(value);
+  if (!Number.isSafeInteger(days) || days < 1 || days > maxDays) {
+    throw new Error(`windowDays 는 1~${maxDays} 범위여야 합니다.`);
+  }
+  return days;
 }
