@@ -10,6 +10,7 @@
 
 import { env } from "@/lib/env";
 import { asc, asArray } from "@/lib/app-store/asc-client";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
 
 const TAG_REF_RETRY_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000] as const;
 
@@ -26,7 +27,7 @@ export function isXcodeCloudRepo(repoFullName: string): boolean {
 /** App Store가 포함된 배포 대상에서 ASC Xcode Cloud 경로를 선택할지 판정한다. */
 export function shouldUseXcodeCloudForTarget(
   repoFullName: string,
-  target: string,
+  target: DeployTarget,
 ): boolean {
   return (
     isXcodeCloudRepo(repoFullName) &&

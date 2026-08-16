@@ -42,14 +42,11 @@ test("운영 Xcode Cloud allowlist 에 Jomul이 등록됨", () => {
     new URL("../../../k8s/deployment.yaml", import.meta.url),
     "utf8",
   );
-  const allowlistLine = deployment
-    .split("\n")
-    .find((line) => line.includes("seorilabs/happy-farm"));
-
-  assert.ok(allowlistLine);
-  assert.match(allowlistLine, /(?:^|,)seorilabs\/jomul(?:,|\")/);
-  const allowlist = allowlistLine.match(/value: "([^"]+)"/)?.[1];
+  const allowlist = deployment.match(
+    /- name: XCODE_CLOUD_APP_STORE_REPOS\s*\n\s*value: "([^"]+)"/,
+  )?.[1];
   assert.ok(allowlist);
+  assert.equal(allowlist.split(",").includes("seorilabs/jomul"), true);
   process.env[KEY] = allowlist;
 
   assert.equal(shouldUseXcodeCloudForTarget("seorilabs/jomul", "APPSTORE"), true);
