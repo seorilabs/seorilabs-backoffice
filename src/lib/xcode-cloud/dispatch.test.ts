@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 
 import {
@@ -33,6 +34,19 @@ test("미설정/빈 allowlist 는 전부 대상 아님", () => {
   assert.equal(isXcodeCloudRepo("seorilabs/happy-farm"), false);
   process.env[KEY] = "";
   assert.equal(isXcodeCloudRepo("seorilabs/happy-farm"), false);
+});
+
+test("운영 Xcode Cloud allowlist 에 Jomul이 등록됨", () => {
+  const deployment = readFileSync(
+    new URL("../../../k8s/deployment.yaml", import.meta.url),
+    "utf8",
+  );
+  const allowlistLine = deployment
+    .split("\n")
+    .find((line) => line.includes("seorilabs/happy-farm"));
+
+  assert.ok(allowlistLine);
+  assert.match(allowlistLine, /(?:^|,)seorilabs\/jomul(?:,|\")/);
 });
 
 const cycleRelease: WorkflowCandidate = {
