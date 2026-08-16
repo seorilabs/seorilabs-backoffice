@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { sendMetricsReport } from "@/lib/core/analytics-report";
 
-// 야간 지표 보고서 트리거(CronJob 22:00 KST 이 호출). x-admin-token 보호.
+// 일별 지표 보고서 트리거(CronJob 10:30 KST 이 호출). GA4 + AppsInToss 콘솔 요약을 함께 발송.
+// x-admin-token 보호.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;

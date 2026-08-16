@@ -130,7 +130,8 @@ spec:
                 capabilities:
                   drop: ["ALL"]
 ---
-# GA4 지표 보고서 — 앱별 노트를 Obsidian(프로젝트/지표)에 큐잉 + Telegram 요약.
+# 일별 지표 보고서 — 앱별 GA4 노트를 Obsidian(프로젝트/지표)에 큐잉 + Telegram 요약
+# (GA4 섹션 + AppsInToss 콘솔 섹션. 콘솔은 온디맨드 push 라 기준일이 GA4 보다 늦을 수 있음).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
