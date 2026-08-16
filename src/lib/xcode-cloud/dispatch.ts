@@ -23,6 +23,17 @@ export function isXcodeCloudRepo(repoFullName: string): boolean {
     .includes(repoFullName);
 }
 
+/** App Store가 포함된 배포 대상에서 ASC Xcode Cloud 경로를 선택할지 판정한다. */
+export function shouldUseXcodeCloudForTarget(
+  repoFullName: string,
+  target: string,
+): boolean {
+  return (
+    isXcodeCloudRepo(repoFullName) &&
+    (target === "APPSTORE" || target === "ALL")
+  );
+}
+
 /** bundleId 로 Xcode Cloud 제품(ciProduct) 찾기. */
 async function findProductId(bundleId: string): Promise<string> {
   const doc = await asc("/v1/ciProducts?include=app&limit=200");

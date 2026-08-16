@@ -6,6 +6,7 @@ import {
   findTagRefId,
   isXcodeCloudRepo,
   selectWorkflowForRepository,
+  shouldUseXcodeCloudForTarget,
   waitForTagRefId,
   type WorkflowCandidate,
 } from "./dispatch";
@@ -47,6 +48,13 @@ test("운영 Xcode Cloud allowlist 에 Jomul이 등록됨", () => {
 
   assert.ok(allowlistLine);
   assert.match(allowlistLine, /(?:^|,)seorilabs\/jomul(?:,|\")/);
+  const allowlist = allowlistLine.match(/value: "([^"]+)"/)?.[1];
+  assert.ok(allowlist);
+  process.env[KEY] = allowlist;
+
+  assert.equal(shouldUseXcodeCloudForTarget("seorilabs/jomul", "APPSTORE"), true);
+  assert.equal(shouldUseXcodeCloudForTarget("seorilabs/jomul", "ALL"), true);
+  assert.equal(shouldUseXcodeCloudForTarget("seorilabs/jomul", "PLAY"), false);
 });
 
 const cycleRelease: WorkflowCandidate = {

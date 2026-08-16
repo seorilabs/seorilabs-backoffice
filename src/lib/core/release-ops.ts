@@ -13,7 +13,10 @@ import {
   getWorkflowDispatchInputNames,
 } from "@/lib/github/read";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
-import { isXcodeCloudRepo, triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
+import {
+  shouldUseXcodeCloudForTarget,
+  triggerXcodeCloudDeploy,
+} from "@/lib/xcode-cloud/dispatch";
 import {
   generateReleaseNoteCore,
   type GenerateReleaseNoteInput,
@@ -283,9 +286,10 @@ export async function dispatchMarketDeploy(opts: {
 
   // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 GH 가 아니라
   // ASC API 로 트리거한다(APPSTORE 단독, 또는 ALL 의 iOS 부분).
-  const iosViaXcodeCloud =
-    isXcodeCloudRepo(opts.repoFullName) &&
-    (opts.target === "APPSTORE" || opts.target === "ALL");
+  const iosViaXcodeCloud = shouldUseXcodeCloudForTarget(
+    opts.repoFullName,
+    opts.target,
+  );
 
   let xcodeCloudBuild: number | null | undefined;
   if (iosViaXcodeCloud) {
