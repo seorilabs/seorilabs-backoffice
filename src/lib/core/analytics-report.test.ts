@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildAppReportMd,
   buildConsoleSection,
+  buildReportMessage,
   consoleSummaryLine,
   summaryLine,
   type ConsoleMetricRow,
@@ -151,6 +152,52 @@ test("buildConsoleSection: 최신 기준일·수익 내림차순 정렬, 합계�
   assert.match(total, /<b>합계<\/b> DAU 30 · 신규 10 · 광고 300회 ₩2,500/); // Foam Party 제외
   assert.match(total, /\(기준일 2\/3 리스팅\)/);
   assert.doesNotMatch(total, /결제/);
+});
+
+// ── Telegram 메시지 조립(GA4 + 콘솔 동시 보고) ─────────────────────────
+test("buildReportMessage: 한 메시지에 GA4 섹션과 콘솔 섹션이 함께, GA4 가 먼저 실린다", () => {
+  const ga4Line = summaryLine("Lucid Chess", row("2026-08-15", { dau: 512 }));
+  const consoleLines = buildConsoleSection(
+    [item("Lucid Chess", consoleRow("2026-08-14", { dau: 210 }))],
+    new Date("2026-08-15T00:00:00.000Z"),
+  ).lines;
+
+  const msg = buildReportMessage({
+    refDate: "2026-08-15",
+    ga4Lines: [ga4Line],
+    consoleLines,
+    link: "https://backoffice.example",
+  });
+
+  // 두 소스가 하나의 메시지에 함께 담긴다(발송은 notify 1회).
+  assert.equal(msg.match(/📊 <b>앱 지표 리포트<\/b>/g)?.length, 1);
+  assert.ok(msg.includes("📈 <b>GA4</b>"));
+  assert.ok(msg.includes(ga4Line));
+  assert.ok(msg.includes("🧩 <b>AppsInToss 콘솔</b>"));
+  assert.ok(msg.includes(consoleLines[1])); // 콘솔 리스팅 줄
+  assert.ok(msg.indexOf("📈 <b>GA4</b>") < msg.indexOf("🧩 <b>AppsInToss 콘솔</b>"));
+  assert.match(msg, /🔗 https:\/\/backoffice\.example\/analytics$/);
+});
+
+test("buildReportMessage: 한쪽 소스만 있으면 그 섹션만, 링크 없으면 푸터 생략", () => {
+  const consoleOnly = buildReportMessage({
+    refDate: "2026-08-15",
+    ga4Lines: [],
+    consoleLines: ["🧩 <b>AppsInToss 콘솔</b> (기준 2026-08-15)"],
+    link: "",
+  });
+  assert.doesNotMatch(consoleOnly, /GA4/);
+  assert.ok(consoleOnly.includes("🧩 <b>AppsInToss 콘솔</b>"));
+  assert.doesNotMatch(consoleOnly, /🔗/);
+
+  const ga4Only = buildReportMessage({
+    refDate: "2026-08-15",
+    ga4Lines: ["<b>Lucid Chess</b> DAU 512"],
+    consoleLines: [],
+    link: "",
+  });
+  assert.ok(ga4Only.includes("📈 <b>GA4</b>"));
+  assert.doesNotMatch(ga4Only, /AppsInToss 콘솔/);
 });
 
 test("buildConsoleSection: GA4 기준일 대비 지연·미수집 리스팅·DAU 전부 미집계 표기", () => {

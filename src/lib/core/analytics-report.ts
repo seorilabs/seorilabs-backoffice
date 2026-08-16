@@ -220,6 +220,28 @@ export function buildConsoleSection(
   return { lines, refDate, lagDays, listings: items.length, onRefDate: onRef.length };
 }
 
+/**
+ * Telegram 리포트 메시지 본문(HTML). GA4(전 표면)와 콘솔(토스 표면)은 모수가 달라 한 메시지 안에서
+ * 섹션으로 나란히 싣는다. 각 섹션은 보고할 줄이 있을 때만 붙어, 한쪽 소스만 있어도 발송된다.
+ */
+export function buildReportMessage({
+  refDate,
+  ga4Lines,
+  consoleLines,
+  link,
+}: {
+  refDate: string;
+  ga4Lines: string[];
+  consoleLines: string[];
+  /** 백오피스 링크(AUTH_URL). 비어 있으면 푸터를 생략한다. */
+  link: string;
+}): string {
+  const lines = [`📊 <b>앱 지표 리포트</b> (기준 ${esc(refDate)}, D-1)`];
+  if (ga4Lines.length > 0) lines.push("", "📈 <b>GA4</b>", ...ga4Lines);
+  if (consoleLines.length > 0) lines.push("", ...consoleLines);
+  return lines.join("\n") + (link ? `\n\n🔗 ${esc(link)}/analytics` : "");
+}
+
 type ConsoleAppRef = {
   id: string;
   slug: string;
@@ -326,12 +348,14 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   result.consoleLagDays = consoleSection.lagDays;
 
   if ((summary.length > 0 || consoleSection.lines.length > 0) && telegramConfigured()) {
-    const link = env.optional("AUTH_URL").trim();
-    const footer = link ? `\n\n🔗 ${esc(link)}/analytics` : "";
-    const lines = [`📊 <b>앱 지표 리포트</b> (기준 ${esc(result.refDate)}, D-1)`];
-    if (summary.length > 0) lines.push("", "📈 <b>GA4</b>", ...summary);
-    if (consoleSection.lines.length > 0) lines.push("", ...consoleSection.lines);
-    await notify(lines.join("\n") + footer);
+    await notify(
+      buildReportMessage({
+        refDate: result.refDate,
+        ga4Lines: summary,
+        consoleLines: consoleSection.lines,
+        link: env.optional("AUTH_URL").trim(),
+      }),
+    );
     result.telegramSent = true;
   }
 
