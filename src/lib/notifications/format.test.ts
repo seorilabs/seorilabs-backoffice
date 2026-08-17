@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sendDiscord, splitDiscordText } from "@/lib/notifications/discord";
+import { editDiscord, sendDiscord, splitDiscordText } from "@/lib/notifications/discord";
 import { htmlToDiscord } from "@/lib/notifications/format";
 
 test("Telegram HTML을 Discord Markdown으로 안전하게 바꾼다", () => {
@@ -43,5 +43,80 @@ test("Ops 실패 알림은 지정 역할만 mention allowlist에 넣는다", asy
     globalThis.fetch = previousFetch;
     if (previousWebhook == null) delete process.env.DISCORD_OPS_ALERTS_WEBHOOK_URL;
     else process.env.DISCORD_OPS_ALERTS_WEBHOOK_URL = previousWebhook;
+  }
+});
+
+test("기존 Discord webhook 메시지를 같은 ID로 수정한다", async () => {
+  const previousWebhook = process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+  const previousFetch = globalThis.fetch;
+  process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL =
+    "https://discord.com/api/webhooks/1234567890/test_token";
+  let requestUrl = "";
+  let requestMethod = "";
+  globalThis.fetch = async (input, init) => {
+    requestUrl = String(input);
+    requestMethod = String(init?.method);
+    return new Response(JSON.stringify({ id: "9876543210" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const result = await editDiscord("release-ops", "9876543210", "진행 중");
+    assert.equal(result.ok, true);
+    assert.equal(result.messageId, "9876543210");
+    assert.equal(requestMethod, "PATCH");
+    assert.equal(
+      requestUrl,
+      "https://discord.com/api/webhooks/1234567890/test_token/messages/9876543210?wait=true",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWebhook == null) delete process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+    else process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL = previousWebhook;
+  }
+});
+
+test("삭제된 Discord 카드의 404를 호출자가 새 메시지 생성으로 복구할 수 있게 전달한다", async () => {
+  const previousWebhook = process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+  const previousFetch = globalThis.fetch;
+  process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL =
+    "https://discord.com/api/webhooks/1234567890/test_token";
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  try {
+    const result = await editDiscord("release-ops", "9876543210", "완료");
+    assert.equal(result.ok, false);
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.errorCode, 10_008);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWebhook == null) delete process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+    else process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL = previousWebhook;
+  }
+});
+
+test("잘못된 Discord webhook의 404 오류 코드를 메시지 삭제와 구분한다", async () => {
+  const previousWebhook = process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+  const previousFetch = globalThis.fetch;
+  process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL =
+    "https://discord.com/api/webhooks/1234567890/test_token";
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ code: 10_015, message: "Unknown Webhook" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  try {
+    const result = await editDiscord("release-ops", "9876543210", "완료");
+    assert.equal(result.ok, false);
+    assert.equal(result.statusCode, 404);
+    assert.equal(result.errorCode, 10_015);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWebhook == null) delete process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL;
+    else process.env.DISCORD_RELEASE_OPS_WEBHOOK_URL = previousWebhook;
   }
 });
