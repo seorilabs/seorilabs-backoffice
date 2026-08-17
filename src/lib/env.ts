@@ -119,4 +119,9 @@ export const env = {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+  discordMetricsWebhook: () => optional("DISCORD_METRICS_WEBHOOK_URL").trim(),
+  discordActionEventsWebhook: () => optional("DISCORD_ACTION_EVENTS_WEBHOOK_URL").trim(),
+  discordReleaseOpsWebhook: () => optional("DISCORD_RELEASE_OPS_WEBHOOK_URL").trim(),
+  discordOpsAlertsWebhook: () => optional("DISCORD_OPS_ALERTS_WEBHOOK_URL").trim(),
+  platformEventSharedSecret: () => optional("PLATFORM_EVENT_SHARED_SECRET"),
 };

@@ -1,14 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
-import { notify, esc, telegramConfigured } from "@/lib/telegram/client";
+import { esc } from "@/lib/telegram/client";
 import { resolveGa4Target, latestClosedDay, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
+import { configuredDestinations } from "@/lib/notifications/destinations";
+import { htmlToDiscord } from "@/lib/notifications/format";
+import { enqueueNotification } from "@/lib/notifications/outbox";
+import { drainAllNotifications } from "@/lib/telegram/deploy-notifications";
 
-// 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을 Telegram 으로
-// 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
+// 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을
+// Telegram과 Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
 // AppConsoleMetricDaily=AppsInToss 콘솔). 두 소스는 모수가 달라(GA4=전 표면, 콘솔=토스 표면)
 // 한 줄로 합치지 않고 섹션을 나눠 함께 보고한다.
 // vault-writer 가 파일명 앞에 처리일(KST)을 붙이므로 title 에는 날짜를 넣지 않는다.
@@ -77,6 +81,8 @@ export interface ReportResult {
   apps: number; // 보고서 생성된 앱 수
   enqueued: number; // Obsidian 쓰기 큐 건수
   telegramSent: boolean;
+  discordSent: boolean;
+  notificationsQueued: number;
   skipped: string[]; // 스냅샷 없어 제외된 앱 slug
   consoleListings: number; // 콘솔 보고 대상 리스팅 수
   consoleRefDate: string | null; // 콘솔 기준일(온디맨드 수집이라 GA4 보다 늦을 수 있음)
@@ -313,6 +319,8 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     apps: 0,
     enqueued: 0,
     telegramSent: false,
+    discordSent: false,
+    notificationsQueued: 0,
     skipped: [],
     consoleListings: 0,
     consoleRefDate: null,
@@ -347,16 +355,32 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   result.consoleRefDate = consoleSection.refDate;
   result.consoleLagDays = consoleSection.lagDays;
 
-  if ((summary.length > 0 || consoleSection.lines.length > 0) && telegramConfigured()) {
-    await notify(
-      buildReportMessage({
-        refDate: result.refDate,
-        ga4Lines: summary,
-        consoleLines: consoleSection.lines,
-        link: env.optional("AUTH_URL").trim(),
-      }),
+  if (summary.length > 0 || consoleSection.lines.length > 0) {
+    const telegramHtml = buildReportMessage({
+      refDate: result.refDate,
+      ga4Lines: summary,
+      consoleLines: consoleSection.lines,
+      link: env.optional("AUTH_URL").trim(),
+    });
+    const destinations = configuredDestinations(["telegram", "metrics"]);
+    const eventId = await enqueueNotification({
+      dedupeKey: `metrics:daily:${result.refDate}`,
+      kind: "DAILY_METRICS",
+      payload: { telegramHtml, discordMarkdown: htmlToDiscord(telegramHtml) },
+      destinations,
+    });
+    result.notificationsQueued = destinations.length;
+    await drainAllNotifications();
+    const deliveries = await prisma.notificationDelivery.findMany({
+      where: { eventId },
+      select: { provider: true, status: true },
+    });
+    result.telegramSent = deliveries.some(
+      (delivery) => delivery.provider === "TELEGRAM" && delivery.status === "SENT",
     );
-    result.telegramSent = true;
+    result.discordSent = deliveries.some(
+      (delivery) => delivery.provider === "DISCORD" && delivery.status === "SENT",
+    );
   }
 
   return result;

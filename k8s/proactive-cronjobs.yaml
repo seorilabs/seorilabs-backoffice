@@ -223,3 +223,47 @@ spec:
 # k8s/app-content-analytics-cronjob.yaml(backoffice-app-content-analytics-collect,
 # /api/admin/analytics/app-content-collect)에서 담당한다. 게임별 bespoke 수집 CronJob
 # (구 backoffice-content-metrics-collect → /content-collect)은 통합으로 제거됨.
+---
+# 당일 확정 운영 이벤트 + Platform 활성 현황 잠정 요약.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-operations-report
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "30 13 * * *" # 매일 13:30 UTC = 22:30 KST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 150 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/analytics/operations-report
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

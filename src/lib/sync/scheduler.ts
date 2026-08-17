@@ -1,6 +1,6 @@
 import { reconcileAll } from "@/lib/sync/backfill";
 import { env } from "@/lib/env";
-import { drainTelegramNotifications } from "@/lib/telegram/deploy-notifications";
+import { drainAllNotifications } from "@/lib/telegram/deploy-notifications";
 
 let started = false;
 
@@ -40,8 +40,8 @@ export function startScheduler(): void {
   }, interval);
 
   setTimeout(() => {
-    drainTelegramNotifications().catch((e) =>
-      console.error("[scheduler] telegram notifications", e),
+    drainAllNotifications().catch((e) =>
+      console.error("[scheduler] notifications", e),
     );
     triggerInternalPost("/api/admin/xcode-cloud/sync", undefined, 5 * 60_000).catch((e) =>
       console.error("[scheduler] xcode cloud", e),
@@ -55,8 +55,8 @@ export function startScheduler(): void {
 
   // webhook 은 outbox 까지만 기록하고 Telegram 네트워크/Apple 상태 조회는 서버 루프가 맡는다.
   setInterval(() => {
-    drainTelegramNotifications().catch((e) =>
-      console.error("[scheduler] telegram notifications", e),
+    drainAllNotifications().catch((e) =>
+      console.error("[scheduler] notifications", e),
     );
   }, 30_000);
   setInterval(() => {

@@ -141,6 +141,22 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
   (기존 Secret 이 SealedSecret 소유가 아니면 한 번 `kubectl -n platform delete secret backoffice-secrets` 후 재적용해 소유권 이관.)
 - **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) → `kubectl apply -f k8s/backoffice-sealedsecret.yaml`.
 
+Discord 운영 알림은 목적지별 webhook을 분리한다. 원본은 macOS Keychain과
+`~/.config/seorilabs/catalog/shared.yaml`이고, 클러스터에는 아래 이름으로만
+봉인한다. URL이나 서명키 원문을 문서·로그·PR에 남기지 않는다.
+
+| Secret key | 로컬 논리 ID | 목적지 |
+| --- | --- | --- |
+| `DISCORD_METRICS_WEBHOOK_URL` | `shared/discord/backoffice-metrics-webhook` | `#metrics-daily` |
+| `DISCORD_ACTION_EVENTS_WEBHOOK_URL` | `shared/discord/backoffice-action-events-webhook` | `#action-events` |
+| `DISCORD_RELEASE_OPS_WEBHOOK_URL` | `shared/discord/backoffice-release-ops-webhook` | `#release-ops` |
+| `DISCORD_OPS_ALERTS_WEBHOOK_URL` | `shared/discord/backoffice-ops-alerts-webhook` | `#ops-alerts` |
+| `PLATFORM_EVENT_SHARED_SECRET` | `shared/platform/backoffice-operational-events-secret` | Platform HMAC 검증 |
+
+`DISCORD_RELEASE_OPS_ROLE_ID`는 비밀값이 아니며 실패 알림의 허용된 역할 mention에만
+사용한다. Telegram 목적지는 제거하지 않고 같은 공급자 중립 outbox의 독립 delivery로
+유지한다.
+
 ## 9. Gemini Stage Agent (단계별 AI)
 
 각 라이프사이클 단계에 AI 에이전트를 배치. **AI 는 GitHub 에 직접 쓰지 않고** `AiDraft` 초안만 만든다 → 사람이 검토/수정 → 1클릭 커밋(이슈 생성/코멘트) → webhook 으로 미러 수렴.
