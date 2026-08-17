@@ -37,28 +37,22 @@ export async function enqueueNotification(input: {
       kind: input.kind,
       payload: input.payload,
       occurredAt: input.occurredAt,
+      ...(input.destinations.length > 0
+        ? {
+            deliveries: {
+              create: input.destinations.map((destination) => ({
+                provider: destination.provider,
+                destinationKey: destination.key,
+              })),
+            },
+          }
+        : {}),
     },
-    // 같은 event redelivery는 상태를 되돌리지 않고 표시 payload만 최신화한다.
+    // 같은 event redelivery는 상태나 최초 목적지를 바꾸지 않고 표시 payload만
+    // 최신화한다. 나중에 추가한 provider가 과거 알림을 역으로 전송하면 안 된다.
     update: { payload: input.payload },
     select: { id: true },
   });
-  for (const destination of input.destinations) {
-    await prisma.notificationDelivery.upsert({
-      where: {
-        eventId_provider_destinationKey: {
-          eventId: event.id,
-          provider: destination.provider,
-          destinationKey: destination.key,
-        },
-      },
-      create: {
-        eventId: event.id,
-        provider: destination.provider,
-        destinationKey: destination.key,
-      },
-      update: {},
-    });
-  }
   return event.id;
 }
 
