@@ -267,33 +267,75 @@ model ReleaseRecord {
   @@map("release_record")
 }
 
-// Telegram 비동기 알림 outbox. webhook 응답을 Telegram 네트워크 상태와 분리하고
-// dedupeKey 로 완료 알림을 정확히 한 번 큐잉한다. 전송 실패는 scheduler 가 재시도한다.
-model TelegramNotification {
-  id            String                     @id @default(cuid())
-  dedupeKey     String                     @unique
-  kind          TelegramNotificationKind
-  status        TelegramNotificationStatus @default(PENDING)
-  payload       Json
-  attempts      Int                        @default(0)
-  nextAttemptAt DateTime                   @default(now()) @db.DateTime(3)
-  lastError     String?                    @db.Text
-  sentAt        DateTime?                  @db.DateTime(3)
-  createdAt     DateTime                   @default(now())
-  updatedAt     DateTime                   @updatedAt
+// 공급자 중립 알림 원본과 목적지별 배달 상태. 같은 이벤트를 Telegram과 Discord에
+// 병행 전송하되 한쪽 장애가 다른 쪽의 성공 상태를 되돌리지 않게 분리한다.
+model NotificationEvent {
+  id         String               @id @default(cuid())
+  dedupeKey  String               @unique
+  kind       NotificationKind
+  payload    Json
+  occurredAt DateTime             @default(now()) @db.DateTime(3)
+  createdAt  DateTime             @default(now())
+  deliveries NotificationDelivery[]
 
+  @@index([kind, occurredAt])
+  @@map("notification_event")
+}
+
+model NotificationDelivery {
+  id             String                     @id @default(cuid())
+  eventId        String
+  event          NotificationEvent          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  provider       NotificationProvider
+  destinationKey String
+  status         NotificationDeliveryStatus @default(PENDING)
+  attempts       Int                        @default(0)
+  nextAttemptAt  DateTime                   @default(now()) @db.DateTime(3)
+  lastError      String?                    @db.Text
+  providerMessageId String?
+  sentAt         DateTime?                  @db.DateTime(3)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  @@unique([eventId, provider, destinationKey])
   @@index([status, nextAttemptAt])
-  @@map("telegram_notification")
+  @@map("notification_delivery")
 }
 
-enum TelegramNotificationKind {
+enum NotificationKind {
   DEPLOY_COMPLETION
+  DAILY_METRICS
+  OPERATIONS_SUMMARY
+  OPERATIONAL_EVENT
+  OPS_ALERT
 }
 
-enum TelegramNotificationStatus {
+enum NotificationProvider {
+  TELEGRAM
+  DISCORD
+}
+
+enum NotificationDeliveryStatus {
   PENDING
   PROCESSING
   SENT
+  DEAD_LETTER
+}
+
+// Platform의 확정 도메인 이벤트 수신 원장. 사용자 식별자·토큰·영수증은 저장하지 않고
+// eventId로 멱등 처리한 뒤 Discord 표시와 야간 집계에 사용한다.
+model OperationalEvent {
+  eventId    String   @id
+  eventType  String
+  appId      String
+  occurredAt DateTime @db.DateTime(3)
+  outcome    String
+  attributes Json?
+  receivedAt DateTime @default(now()) @db.DateTime(3)
+
+  @@index([occurredAt])
+  @@index([appId, eventType, occurredAt])
+  @@map("operational_event")
 }
 
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가

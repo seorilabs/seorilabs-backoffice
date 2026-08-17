@@ -131,6 +131,9 @@ spec:
               value: "1366743545"
             - name: TELEGRAM_CHAT_ID
               value: "1366743545"
+            # 실패 알림에서만 허용하는 릴리즈·운영 역할 ID. Discord 구성 후 고정한다.
+            - name: DISCORD_RELEASE_OPS_ROLE_ID
+              value: "1538854786021990480"
             # iOS(App Store)를 Xcode Cloud 로 빌드/업로드하는 repo allowlist(CSV).
             # 정책: 모든 App Store 배포는 App Store Connect(Xcode Cloud)로 → TestFlight 검증 → 심사 제출.
             # iOS 를 출시하는 repo 는 Xcode Cloud 제품/워크플로 준비되는 대로 이 목록에 추가한다.
@@ -212,6 +215,36 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: TELEGRAM_WEBHOOK_SECRET
+                  optional: true
+            - name: DISCORD_METRICS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DISCORD_METRICS_WEBHOOK_URL
+                  optional: true
+            - name: DISCORD_ACTION_EVENTS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DISCORD_ACTION_EVENTS_WEBHOOK_URL
+                  optional: true
+            - name: DISCORD_RELEASE_OPS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DISCORD_RELEASE_OPS_WEBHOOK_URL
+                  optional: true
+            - name: DISCORD_OPS_ALERTS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DISCORD_OPS_ALERTS_WEBHOOK_URL
+                  optional: true
+            - name: PLATFORM_EVENT_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: PLATFORM_EVENT_SHARED_SECRET
                   optional: true
             # App Store Connect API 팀 키(Xcode Cloud iOS 빌드 트리거용).
             - name: APP_STORE_CONNECT_API_KEY_ID
