@@ -15,8 +15,8 @@ import {
 import type { PlatformDeployTarget } from "@/lib/telegram/release-deploy-buttons";
 import { configuredDestinations } from "@/lib/notifications/destinations";
 import { DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
-import { sendDiscord } from "@/lib/notifications/discord";
-import { htmlToDiscord, plainTextPayload } from "@/lib/notifications/format";
+import { editDiscord, sendDiscord } from "@/lib/notifications/discord";
+import { plainTextPayload } from "@/lib/notifications/format";
 import { env } from "@/lib/env";
 import {
   drainNotifications,
@@ -25,6 +25,7 @@ import {
 } from "@/lib/notifications/outbox";
 import {
   buildDeployCompletionText,
+  buildDeployStatusCardText,
   deployCompletionPayload,
   deployMarketLabel,
   deployNotificationDedupeKey,
@@ -48,8 +49,30 @@ export async function enqueueDeployCompletionNotification(
     dedupeKey,
     kind: "DEPLOY_COMPLETION",
     payload: jsonPayload,
-    destinations: configuredDestinations(["telegram", "release-ops"]),
+    destinations: configuredDestinations(
+      payload.status === "SUCCEEDED" || payload.status === "FAILED"
+        ? ["telegram", "release-ops"]
+        : ["release-ops"],
+    ),
   });
+}
+
+async function previousDiscordReleaseMessage(
+  releaseRecordId: string,
+  destinationKey: string,
+): Promise<string | null> {
+  const delivery = await prisma.notificationDelivery.findFirst({
+    where: {
+      provider: "DISCORD",
+      destinationKey,
+      status: "SENT",
+      providerMessageId: { not: null },
+      event: { dedupeKey: { startsWith: `deploy:${releaseRecordId}:` } },
+    },
+    orderBy: { sentAt: "desc" },
+    select: { providerMessageId: true },
+  });
+  return delivery?.providerMessageId ?? null;
 }
 
 async function releaseMessageContexts(
@@ -98,6 +121,7 @@ async function deliverDeployCompletion(
       status: true,
       workflowName: true,
       externalBuildNumber: true,
+      updatedAt: true,
       app: {
         select: {
           id: true,
@@ -110,10 +134,30 @@ async function deliverDeployCompletion(
     },
   });
   if (!release) return { ok: false, error: "release record not found" };
-  const note =
-    release.status === "SUCCEEDED" || release.status === "FAILED"
-      ? `${release.status === "SUCCEEDED" ? "✅" : "❌"} ${deployMarketLabel(release.market)} 배포 ${release.status === "SUCCEEDED" ? "완료" : "실패"}`
-      : `⏳ ${deployMarketLabel(release.market)} 배포 재실행 중`;
+  if (provider === "DISCORD") {
+    const text = buildDeployStatusCardText({
+      displayName: release.app.displayName,
+      version: release.version,
+      market: release.market,
+      // 오래된 outbox 재시도가 최신 카드를 과거 상태로 되돌리지 않게
+      // 이벤트 payload가 아니라 mirror의 현재 상태를 표시한다.
+      status: release.status,
+      workflowName: release.workflowName,
+      externalBuildNumber: release.externalBuildNumber,
+      runUrl: payload.runUrl,
+      updatedAt: release.updatedAt,
+    });
+    const messageId = await previousDiscordReleaseMessage(release.id, destinationKey);
+    if (messageId) {
+      const edited = await editDiscord(destinationKey, messageId, text);
+      if (edited.ok || edited.statusCode !== 404) return edited;
+    }
+    return sendDiscord(destinationKey, text);
+  }
+  if (payload.status !== "SUCCEEDED" && payload.status !== "FAILED") {
+    return { ok: false, error: "Telegram에는 완료 상태만 전송할 수 있습니다." };
+  }
+  const note = `${payload.status === "SUCCEEDED" ? "✅" : "❌"} ${deployMarketLabel(release.market)} 배포 ${payload.status === "SUCCEEDED" ? "완료" : "실패"}`;
   const text = buildDeployCompletionText({
     displayName: release.app.displayName,
     version: release.version,
@@ -123,9 +167,6 @@ async function deliverDeployCompletion(
     externalBuildNumber: release.externalBuildNumber,
     runUrl: payload.runUrl,
   });
-  if (provider === "DISCORD") {
-    return sendDiscord(destinationKey, htmlToDiscord(text));
-  }
   const contexts = await releaseMessageContexts(release.app, release.version, release.market);
   // 원문 갱신은 Telegram delivery의 best-effort 보조 동작이다.
   for (const context of contexts) {

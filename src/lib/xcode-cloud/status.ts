@@ -34,7 +34,7 @@ export async function syncPendingXcodeCloudDeployments(limit = 30): Promise<{
       },
       orderBy: { createdAt: "asc" },
       take: limit,
-      select: { id: true, appId: true, externalRunId: true },
+      select: { id: true, appId: true, externalRunId: true, status: true },
     });
     let completed = 0;
     for (const row of pending) {
@@ -54,9 +54,16 @@ export async function syncPendingXcodeCloudDeployments(limit = 30): Promise<{
                 : null,
           },
         });
+        if (row.status !== result.status) {
+          await enqueueDeployCompletionNotification({
+            releaseRecordId: row.id,
+            eventKey: terminal
+              ? `xcode:${row.externalRunId}`
+              : `xcode:${row.externalRunId}:${result.status.toLowerCase()}`,
+            status: result.status,
+          });
+        }
         if (!terminal) continue;
-        const completionStatus =
-          result.status === "SUCCEEDED" ? "SUCCEEDED" : "FAILED";
         completed++;
         if (result.status === "SUCCEEDED") {
           await evaluateLifecycleOnSuccessfulRelease(
@@ -64,11 +71,6 @@ export async function syncPendingXcodeCloudDeployments(limit = 30): Promise<{
             `xcode_cloud:${row.externalRunId}`,
           );
         }
-        await enqueueDeployCompletionNotification({
-          releaseRecordId: row.id,
-          eventKey: `xcode:${row.externalRunId}`,
-          status: completionStatus,
-        });
       } catch (error) {
         console.error(
           `[xcode-cloud] 상태 조회 실패 ${row.externalRunId}:`,

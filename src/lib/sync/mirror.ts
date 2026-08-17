@@ -234,15 +234,18 @@ export async function upsertWorkflowRun(
   });
 
   // webhook 유실·처리 실패도 정기 reconcile 이 복구하도록 미러 upsert 경로에서 outbox를 만든다.
-  // run_attempt를 키에 포함해 GitHub 재실행 완료도 별도 알림으로 전달한다.
-  if (status === "SUCCEEDED" || status === "FAILED") {
-    await enqueueDeployCompletionNotification({
-      releaseRecordId: release.id,
-      eventKey: `github:${runId}:${gh.run_attempt ?? 1}`,
-      status,
-      runUrl: `https://github.com/${repoFullName}/actions/runs/${runId}`,
-    });
-  }
+  // terminal key는 기존 완료 알림과 같게 유지해 배포 직후 과거 실행을 다시 보내지 않는다.
+  // 비terminal 상태는 상태명을 붙여 같은 실행의 요청됨→진행 중 카드를 멱등 갱신한다.
+  const runAttempt = gh.run_attempt ?? 1;
+  const terminal = status === "SUCCEEDED" || status === "FAILED";
+  await enqueueDeployCompletionNotification({
+    releaseRecordId: release.id,
+    eventKey: terminal
+      ? `github:${runId}:${runAttempt}`
+      : `github:${runId}:${runAttempt}:${status.toLowerCase()}`,
+    status,
+    runUrl: `https://github.com/${repoFullName}/actions/runs/${runId}`,
+  });
 
   if (status === "SUCCEEDED") {
     await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);

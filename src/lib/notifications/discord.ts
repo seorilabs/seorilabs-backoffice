@@ -8,6 +8,11 @@ export interface DiscordDeliveryResult {
   messageId?: string;
   error?: string;
   retryAfterMs?: number;
+  statusCode?: number;
+}
+
+interface DiscordMessageOptions {
+  alertRoleId?: string;
 }
 
 export function splitDiscordText(text: string): string[] {
@@ -38,35 +43,41 @@ function validWebhookUrl(raw: string): boolean {
   }
 }
 
-export async function sendDiscord(
-  destinationKey: string,
-  text: string,
-  options: { alertRoleId?: string } = {},
-): Promise<DiscordDeliveryResult> {
-  const webhook = discordWebhookFor(destinationKey);
-  if (!validWebhookUrl(webhook)) return { ok: false, error: "Discord webhook 미설정" };
+function discordPayload(text: string, options: DiscordMessageOptions): Record<string, unknown> | null {
   const descriptions = splitDiscordText(text);
-  if (descriptions.length === 0) return { ok: false, error: "Discord 메시지 비어 있음" };
+  if (descriptions.length === 0) return null;
 
   const roleId = options.alertRoleId?.trim();
   const content = roleId && /^\d+$/.test(roleId) ? `<@&${roleId}>` : undefined;
+  return {
+    ...(content ? { content } : {}),
+    embeds: descriptions.map((description) => ({ description })),
+    allowed_mentions: { parse: [], roles: content ? [roleId] : [] },
+  };
+}
+
+async function requestDiscord(
+  url: string,
+  method: "POST" | "PATCH",
+  payload: Record<string, unknown>,
+  fallbackMessageId?: string,
+): Promise<DiscordDeliveryResult> {
   try {
-    const response = await fetch(`${webhook}?wait=true`, {
-      method: "POST",
+    const response = await fetch(url, {
+      method,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        username: discordUsername(destinationKey),
-        ...(content ? { content } : {}),
-        embeds: descriptions.map((description) => ({ description })),
-        allowed_mentions: { parse: [], roles: content ? [roleId] : [] },
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(8_000),
     });
     if (response.ok) {
       const body = (await response.json().catch(() => null)) as { id?: unknown } | null;
       return {
         ok: true,
-        ...(typeof body?.id === "string" ? { messageId: body.id } : {}),
+        ...(typeof body?.id === "string"
+          ? { messageId: body.id }
+          : fallbackMessageId
+            ? { messageId: fallbackMessageId }
+            : {}),
       };
     }
     const body = (await response.json().catch(() => null)) as {
@@ -77,6 +88,7 @@ export async function sendDiscord(
     return {
       ok: false,
       error: `Discord HTTP ${response.status}${typeof body?.message === "string" ? `: ${body.message}` : ""}`,
+      statusCode: response.status,
       ...(response.status === 429 && Number.isFinite(retryAfter)
         ? { retryAfterMs: Math.max(1_000, Math.ceil(retryAfter * 1_000)) }
         : {}),
@@ -84,4 +96,38 @@ export async function sendDiscord(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Discord network error" };
   }
+}
+
+export async function sendDiscord(
+  destinationKey: string,
+  text: string,
+  options: DiscordMessageOptions = {},
+): Promise<DiscordDeliveryResult> {
+  const webhook = discordWebhookFor(destinationKey);
+  if (!validWebhookUrl(webhook)) return { ok: false, error: "Discord webhook 미설정" };
+  const payload = discordPayload(text, options);
+  if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
+  return requestDiscord(`${webhook}?wait=true`, "POST", {
+    username: discordUsername(destinationKey),
+    ...payload,
+  });
+}
+
+export async function editDiscord(
+  destinationKey: string,
+  messageId: string,
+  text: string,
+  options: DiscordMessageOptions = {},
+): Promise<DiscordDeliveryResult> {
+  const webhook = discordWebhookFor(destinationKey);
+  if (!validWebhookUrl(webhook)) return { ok: false, error: "Discord webhook 미설정" };
+  if (!/^\d+$/.test(messageId)) return { ok: false, error: "Discord message ID 오류" };
+  const payload = discordPayload(text, options);
+  if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
+  return requestDiscord(
+    `${webhook}/messages/${messageId}?wait=true`,
+    "PATCH",
+    payload,
+    messageId,
+  );
 }

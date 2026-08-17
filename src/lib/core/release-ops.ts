@@ -51,6 +51,7 @@ import {
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
+import { enqueueDeployCompletionNotification } from "@/lib/telegram/deploy-notifications";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -311,7 +312,7 @@ export async function dispatchMarketDeploy(opts: {
     xcodeCloudBuild = run.buildNumber;
     // GitHub workflow_run 대신 ASC ciBuildRun 을 mirror 하는 외부 배포 레코드.
     // scheduler 가 이 실행을 조회해 완료 상태와 Telegram 알림을 수렴시킨다.
-    await prisma.releaseRecord.upsert({
+    const release = await prisma.releaseRecord.upsert({
       where: { externalRunId: run.buildRunId },
       create: {
         appId: app.id,
@@ -330,6 +331,11 @@ export async function dispatchMarketDeploy(opts: {
         externalBuildNumber: run.buildNumber,
         triggeredBy: opts.actorLabel ?? null,
       },
+    });
+    await enqueueDeployCompletionNotification({
+      releaseRecordId: release.id,
+      eventKey: `xcode:${run.buildRunId}:pending`,
+      status: "PENDING",
     });
   }
 
