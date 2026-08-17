@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import {
   buildDeployCompletionText,
@@ -8,6 +10,11 @@ import {
   nextNotificationAttemptAt,
 } from "@/lib/telegram/deploy-notification-format";
 import { telegramContextFromAuditPayload } from "@/lib/telegram/release-message-payload";
+
+const deployNotificationSource = readFileSync(
+  join(process.cwd(), "src/lib/telegram/deploy-notifications.ts"),
+  "utf8",
+);
 
 test("배포 완료 알림에 한글 앱명·버전·마켓·실행 링크를 모두 표시한다", () => {
   const text = buildDeployCompletionText({
@@ -55,6 +62,13 @@ test("Discord 릴리즈 카드는 워크플로와 후속 마켓 gate를 분리�
   assert.match(text, /공개 배포: ⚪ 미실행/);
   assert.match(text, /actions\/runs\/123/);
   assert.doesNotMatch(text, /공개 완료/);
+});
+
+test("Discord에서 삭제된 메시지 오류일 때만 새 릴리즈 카드를 만든다", () => {
+  assert.match(
+    deployNotificationSource,
+    /edited\.statusCode !== 404 \|\| edited\.errorCode !== 10_008/,
+  );
 });
 
 test("outbox payload와 원문 Telegram 좌표는 유효한 값만 복원한다", () => {

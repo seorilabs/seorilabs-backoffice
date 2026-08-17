@@ -150,7 +150,7 @@ async function deliverDeployCompletion(
     const messageId = await previousDiscordReleaseMessage(release.id, destinationKey);
     if (messageId) {
       const edited = await editDiscord(destinationKey, messageId, text);
-      if (edited.ok || edited.statusCode !== 404) return edited;
+      if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
     }
     return sendDiscord(destinationKey, text);
   }

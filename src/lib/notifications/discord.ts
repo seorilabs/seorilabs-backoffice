@@ -9,6 +9,7 @@ export interface DiscordDeliveryResult {
   error?: string;
   retryAfterMs?: number;
   statusCode?: number;
+  errorCode?: number;
 }
 
 interface DiscordMessageOptions {
@@ -83,12 +84,15 @@ async function requestDiscord(
     const body = (await response.json().catch(() => null)) as {
       message?: unknown;
       retry_after?: unknown;
+      code?: unknown;
     } | null;
     const retryAfter = Number(body?.retry_after);
+    const errorCode = typeof body?.code === "number" ? body.code : undefined;
     return {
       ok: false,
       error: `Discord HTTP ${response.status}${typeof body?.message === "string" ? `: ${body.message}` : ""}`,
       statusCode: response.status,
+      ...(errorCode != null ? { errorCode } : {}),
       ...(response.status === 429 && Number.isFinite(retryAfter)
         ? { retryAfterMs: Math.max(1_000, Math.ceil(retryAfter * 1_000)) }
         : {}),
