@@ -162,7 +162,8 @@ export async function editDiscord(
   return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+    // Discord PATCH는 누락 필드를 보존하므로 이전 mention과 버튼을 명시적으로 비운다.
+    body: JSON.stringify({ content: "", components: [], ...payload }),
   });
 }
 
