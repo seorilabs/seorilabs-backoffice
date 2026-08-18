@@ -65,16 +65,26 @@ test("Discord Bot 메시지를 같은 channel/message ID로 수정한다", async
     const previousFetch = globalThis.fetch;
     let requestUrl = "";
     let requestMethod = "";
+    let bodyText = "";
     globalThis.fetch = async (input, init) => {
       requestUrl = String(input);
       requestMethod = String(init?.method);
+      bodyText = String(init?.body);
       return new Response(JSON.stringify({ id: "9876543210" }), { status: 200, headers: { "content-type": "application/json" } });
     };
     try {
       const result = await editDiscord("release-ops", "9876543210", "진행 중");
+      const body = JSON.parse(bodyText) as {
+        content?: string;
+        components?: unknown[];
+        embeds?: Array<{ description?: string }>;
+      };
       assert.equal(result.ok, true);
       assert.equal(requestMethod, "PATCH");
       assert.equal(requestUrl, "https://discord.com/api/v10/channels/1538853052818264225/messages/9876543210");
+      assert.equal(body.content, "");
+      assert.deepEqual(body.components, []);
+      assert.equal(body.embeds?.[0]?.description, "진행 중");
     } finally {
       globalThis.fetch = previousFetch;
     }
