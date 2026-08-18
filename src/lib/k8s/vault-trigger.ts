@@ -114,7 +114,7 @@ export async function triggerVaultIndex(): Promise<TriggerResult> {
     apiVersion: "batch/v1",
     kind: "Job",
     metadata: {
-      generateName: "vault-index-tg-",
+      generateName: "vault-index-discord-",
       namespace: NS,
       labels: {
         "app.kubernetes.io/name": "backoffice",
@@ -137,7 +137,7 @@ export async function triggerVaultIndex(): Promise<TriggerResult> {
   if (created.status >= 200 && created.status < 300) {
     const name =
       (created.json as { metadata?: { name?: string } }).metadata?.name ??
-      "vault-index-tg";
+      "vault-index-discord";
     return { triggered: true, name, message: "인덱싱을 시작했습니다." };
   }
   throw new Error(

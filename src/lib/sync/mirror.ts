@@ -15,7 +15,7 @@ import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
 import { releaseStatusOf } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
 import { findTagForSha } from "@/lib/github/release";
-import { enqueueDeployCompletionNotification } from "@/lib/telegram/deploy-notifications";
+import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {

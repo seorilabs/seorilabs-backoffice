@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { configuredDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { drainAllNotifications } from "@/lib/telegram/deploy-notifications";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
 
@@ -18,7 +17,7 @@ export function kstDayStart(now: Date): Date {
 export async function sendOperationsSummary(now: Date): Promise<{
   refDate: string;
   events: number;
-  discordSent: boolean;
+  notificationsQueued: number;
 }> {
   const start = kstDayStart(now);
   const rows = await prisma.operationalEvent.groupBy({
@@ -72,20 +71,16 @@ export async function sendOperationsSummary(now: Date): Promise<{
     lines.push("", "⚠️ Platform 활성 사용자 스냅샷 없음");
   }
 
-  const eventId = await enqueueNotification({
+  const destinations = configuredDestinations(["metrics-daily"]);
+  await enqueueNotification({
     dedupeKey: `metrics:operations:${refDate}`,
     kind: "OPERATIONS_SUMMARY",
     payload: { discordMarkdown: lines.join("\n") },
-    destinations: configuredDestinations(["metrics"]),
-  });
-  await drainAllNotifications();
-  const discord = await prisma.notificationDelivery.findFirst({
-    where: { eventId, provider: "DISCORD" },
-    select: { status: true },
+    destinations,
   });
   return {
     refDate,
     events: rows.reduce((sum, row) => sum + row._count._all, 0),
-    discordSent: discord?.status === "SENT",
+    notificationsQueued: destinations.length,
   };
 }

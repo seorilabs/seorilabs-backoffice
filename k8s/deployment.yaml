@@ -26,7 +26,7 @@ spec:
       labels:
         app.kubernetes.io/name: backoffice
     spec:
-      # data ns 인덱싱 Job 생성용(텔레그램 /index). RBAC: k8s/vault-trigger-rbac.yaml
+      # data ns 인덱싱 Job 생성용(Discord /index). RBAC: k8s/vault-trigger-rbac.yaml
       serviceAccountName: backoffice
       nodeSelector:
         kubernetes.io/hostname: rpi5
@@ -73,9 +73,7 @@ spec:
               value: "3000"
             - name: HOSTNAME
               value: "0.0.0.0"
-            # --no-network-family-autoselection: pod 에 IPv6 egress 가 없는데 api.telegram.org 등이
-            # AAAA 를 광고 → Node fetch 의 Happy Eyeballs 가 IPv6 를 시도하다 전체 연결을 ETIMEDOUT
-            # 으로 실패시킨다. autoSelectFamily 를 끄고 IPv4 를 우선해 모든 outbound 를 IPv4 로 고정.
+            # 일부 외부 API가 AAAA를 광고하지만 pod에 IPv6 egress가 없어 IPv4를 우선한다.
             - name: NODE_OPTIONS
               value: "--max-old-space-size=640 --dns-result-order=ipv4first --no-network-family-autoselection"
             - name: HOME
@@ -125,15 +123,6 @@ spec:
             # worker의 같은 이름 두 플래그와 항상 같은 값을 유지한다.
             - name: FEATURE_PLATFORM_ADMIN_WRITES
               value: "true"
-            - name: FEATURE_TELEGRAM_ENABLED
-              value: "true"
-            - name: TELEGRAM_ALLOWED_IDS
-              value: "1366743545"
-            - name: TELEGRAM_CHAT_ID
-              value: "1366743545"
-            # 실패 알림에서만 허용하는 릴리즈·운영 역할 ID. Discord 구성 후 고정한다.
-            - name: DISCORD_RELEASE_OPS_ROLE_ID
-              value: "1538854786021990480"
             # iOS(App Store)를 Xcode Cloud 로 빌드/업로드하는 repo allowlist(CSV).
             # 정책: 모든 App Store 배포는 App Store Connect(Xcode Cloud)로 → TestFlight 검증 → 심사 제출.
             # iOS 를 출시하는 repo 는 Xcode Cloud 제품/워크플로 준비되는 대로 이 목록에 추가한다.
@@ -204,42 +193,35 @@ spec:
                   name: backoffice-secrets
                   key: PLATFORM_ADMIN_READ_SA_KEY_JSON
                   optional: true
-            - name: TELEGRAM_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: TELEGRAM_BOT_TOKEN
-                  optional: true
-            - name: TELEGRAM_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: TELEGRAM_WEBHOOK_SECRET
-                  optional: true
-            - name: DISCORD_METRICS_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DISCORD_METRICS_WEBHOOK_URL
-                  optional: true
-            - name: DISCORD_ACTION_EVENTS_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DISCORD_ACTION_EVENTS_WEBHOOK_URL
-                  optional: true
-            - name: DISCORD_RELEASE_OPS_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DISCORD_RELEASE_OPS_WEBHOOK_URL
-                  optional: true
-            - name: DISCORD_OPS_ALERTS_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DISCORD_OPS_ALERTS_WEBHOOK_URL
-                  optional: true
+            # Interaction webhook은 공개키로 검증하고, 쓰기는 별도 worker가 Bot token으로 수행한다.
+            - name: DISCORD_PUBLIC_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_PUBLIC_KEY } }
+            - name: DISCORD_GUILD_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_GUILD_ID } }
+            - name: DISCORD_CHANNEL_BACKOFFICE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID } }
+            - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
+            - name: DISCORD_ROLE_OPERATOR_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATOR_ID } }
+            - name: DISCORD_ROLE_PRODUCT_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_PRODUCT_ID } }
+            - name: DISCORD_ROLE_DESIGN_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DESIGN_ID } }
+            - name: DISCORD_ROLE_DEVELOPMENT_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DEVELOPMENT_ID } }
+            - name: DISCORD_ROLE_QA_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_QA_ID } }
+            - name: DISCORD_ROLE_DATA_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DATA_ID } }
+            - name: DISCORD_ROLE_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
+            - name: DISCORD_ROLE_CS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_CS_ID } }
+            - name: DISCORD_ROLE_VIEWER_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_VIEWER_ID } }
+            - name: GRAFANA_ALERT_HMAC_SECRET
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GRAFANA_ALERT_HMAC_SECRET } }
             - name: PLATFORM_EVENT_SHARED_SECRET
               valueFrom:
                 secretKeyRef:

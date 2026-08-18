@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
-import { sendDailyDigest } from "@/lib/telegram/nudges";
+import { sendDailyDigest } from "@/lib/notifications/proactive";
 
 // 데일리 다이제스트 트리거(CronJob 이 호출). x-admin-token 보호.
 export const runtime = "nodejs";

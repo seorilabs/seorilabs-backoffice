@@ -16,13 +16,10 @@ function stringField(payload: JsonObject | null, key: string): string {
 export function plainTextPayload(
   kind: NotificationKind,
   payload: Prisma.JsonValue,
-  provider: "TELEGRAM" | "DISCORD",
 ): string | null {
   if (kind === "DEPLOY_COMPLETION") return null;
   const object = objectPayload(payload);
-  return provider === "TELEGRAM"
-    ? stringField(object, "telegramHtml") || stringField(object, "text") || null
-    : stringField(object, "discordMarkdown") || stringField(object, "text") || null;
+  return stringField(object, "discordMarkdown") || stringField(object, "text") || null;
 }
 
 export function htmlToDiscord(input: string): string {

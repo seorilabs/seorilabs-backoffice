@@ -1,5 +1,5 @@
 # backoffice(platform ns)가 data ns 의 vault-indexer 인덱싱 Job 을 즉시 생성할 수 있게 하는
-# 최소 권한 RBAC. 텔레그램 /index, /api/admin/vault/reindex 에서 사용.
+# 최소 권한 RBAC. Discord /index, /api/admin/vault/reindex 에서 사용.
 # 권한 범위: data ns 의 cronjobs(get) + jobs(create/list/get) 만.
 apiVersion: v1
 kind: ServiceAccount

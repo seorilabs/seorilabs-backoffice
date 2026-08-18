@@ -5,7 +5,7 @@ import type { Lifecycle, AppStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recordTransition } from "@/lib/sync/transition";
 import { requireSession } from "@/lib/auth-helpers";
-import { notifyStageNudge } from "@/lib/telegram/nudges";
+import { notifyStageNudge } from "@/lib/notifications/proactive";
 import { setAppStatusCore } from "@/lib/core/app-status";
 import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 

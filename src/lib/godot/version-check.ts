@@ -1,7 +1,8 @@
 import { env } from "@/lib/env";
-import { notify, esc } from "@/lib/telegram/client";
+import { configuredDestinations } from "@/lib/notifications/destinations";
+import { enqueueNotification } from "@/lib/notifications/outbox";
 
-// Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Telegram 으로 알린다.
+// Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Discord로 알린다.
 // 실제 bump(코드 수정)는 하지 않는다 — 감지+알림 전용. CronJob 이 주기 호출.
 
 const RELEASES_API =
@@ -82,18 +83,23 @@ export async function checkGodotVersion(): Promise<GodotCheckResult> {
   }
 
   const text = [
-    "🎮 <b>Godot 새 stable 릴리스 감지</b>",
-    `현재 pin: <code>${esc(pinned)}</code> → 최신: <code>${esc(latest)}</code>`,
+    "🎮 **Godot 새 stable 릴리스 감지**",
+    `현재 pin: \`${pinned}\` → 최신: \`${latest}\``,
     "",
     "bump 시 함께 갱신:",
     "· global-versions.yaml (tools.godot.version)",
     "· godot-game 스킬 github-actions.md (GODOT_VERSION)",
     "· backoffice GODOT_PINNED_VERSION",
     "",
-    `릴리스: ${esc(url)}`,
+    `릴리스: ${url}`,
     "마이그레이션 노트 확인 후 승격하세요.",
   ].join("\n");
-  await notify(text);
+  await enqueueNotification({
+    dedupeKey: `godot-stable:${latest}`,
+    kind: "OPS_ALERT",
+    payload: { text },
+    destinations: configuredDestinations(["backoffice"]),
+  });
 
   return { status: "outdated", pinned, latest, url };
 }

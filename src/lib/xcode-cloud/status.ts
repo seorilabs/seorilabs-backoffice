@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { asc, asArray } from "@/lib/app-store/asc-client";
 import { evaluateLifecycleOnSuccessfulRelease } from "@/lib/sync/mirror";
-import { enqueueDeployCompletionNotification } from "@/lib/telegram/deploy-notifications";
+import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
 import {
   mapXcodeCloudBuildStatus,
   type XcodeCloudBuildStatus,

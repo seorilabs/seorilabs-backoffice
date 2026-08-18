@@ -5,7 +5,7 @@ import test from "node:test";
 
 const source = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
 
-test("Platform operational event 경로만 세션 대신 route HMAC 인증을 사용한다", () => {
-  assert.match(source, /api\/internal\/platform\/operational-events\(\?:\/\|\$\)/);
+test("서명된 internal webhook 두 경로만 세션 인증에서 제외한다", () => {
+  assert.match(source, /api\/internal\/\(\?:platform\/operational-events\|grafana\/alerts\)\(\?:\/\|\$\)/);
   assert.doesNotMatch(source, /api\/internal\)\(\?:\/\|\$\)/);
 });

@@ -48,6 +48,7 @@ export interface JsonApiResource {
 export interface JsonApiDoc {
   data?: JsonApiResource | JsonApiResource[];
   included?: JsonApiResource[];
+  links?: { next?: string };
   errors?: Array<{ status?: string; code?: string; title?: string; detail?: string }>;
 }
 

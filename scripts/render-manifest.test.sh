@@ -22,7 +22,7 @@ ok() { printf '  ok   %s\n' "$1"; }
 ng() { printf '  FAIL %s\n' "$1" >&2; fail=1; }
 
 # CD 가 render 를 거쳐 apply 하는 매니페스트.
-MANIFESTS=(k8s/deployment.yaml k8s/app-ops-worker.yaml)
+MANIFESTS=(k8s/deployment.yaml k8s/app-ops-worker.yaml k8s/discord-workers.yaml k8s/store-review-cronjob.yaml)
 
 echo "== 치환 =="
 for m in "${MANIFESTS[@]}"; do
@@ -43,6 +43,19 @@ for m in "${MANIFESTS[@]}"; do
   fi
   ok "$m ($got 곳)"
 done
+
+echo "== Discord worker 권한 분리 =="
+discord_workers="$root/k8s/discord-workers.yaml"
+notification_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-notification-worker/ { print }' "$discord_workers")"
+operator_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-operator-command-worker/ { print }' "$discord_workers")"
+if printf '%s' "$notification_doc" | grep -q 'automountServiceAccountToken: false' &&
+   ! printf '%s' "$notification_doc" | grep -q 'GITHUB_PRIVATE_KEY' &&
+   printf '%s' "$operator_doc" | grep -q 'serviceAccountName: backoffice' &&
+   printf '%s' "$operator_doc" | grep -q 'operator-command-worker.cjs'; then
+  ok "알림 worker와 쓰기 권한 command worker 분리"
+else
+  ng "Discord worker 최소권한 경계가 깨졌다"
+fi
 
 echo "== 대상이 없으면 죽는다 =="
 # :latest 가 없는 매니페스트를 만들어 넣는다. 조용히 통과하면 안 된다.

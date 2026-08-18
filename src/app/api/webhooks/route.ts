@@ -9,7 +9,8 @@ import {
   type GhPrInput,
   type GhRunInput,
 } from "@/lib/sync/mirror";
-import { notify, esc } from "@/lib/telegram/client";
+import { configuredDestinations } from "@/lib/notifications/destinations";
+import { enqueueNotification } from "@/lib/notifications/outbox";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
@@ -30,7 +31,7 @@ interface WebhookPayload {
   label?: { name?: string };
 }
 
-// 실시간 webhook 에서만(미러 backfill 아님) 텔레그램 알림. 실패해도 webhook 200 유지.
+// 실시간 webhook 에서만(미러 backfill 아님) Discord 알림. 실패해도 webhook 200 유지.
 async function shouldNotifyRepo(repoFullName: string): Promise<boolean> {
   const app = await prisma.app.findUnique({
     where: { repoFullName },
@@ -39,7 +40,7 @@ async function shouldNotifyRepo(repoFullName: string): Promise<boolean> {
   return !app || !isDisabledAppStatus(app.status);
 }
 
-async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
+async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string): Promise<void> {
   try {
     const repoFullName = p.repository?.full_name ?? "";
     if (repoFullName && !(await shouldNotifyRepo(repoFullName))) return;
@@ -56,21 +57,31 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         select: { id: true },
       });
       if (mir) {
-        await notify(
-          `${gate === "release" ? "🚀" : "📝"} <b>승인 필요</b> ${esc(repo)} #${p.issue.number}\n${esc(p.issue.title)}`,
-          [[{ text: `승인 (${gate})`, callback_data: `approve:${gate}:${mir.id}` }]],
-        );
+        await enqueueNotification({
+          dedupeKey: `github:${deliveryId}:approval`,
+          kind: "OPS_ALERT",
+          payload: {
+            text: `${gate === "release" ? "🚀" : "📝"} **승인 필요** ${repo} #${p.issue.number}\n${p.issue.title}`,
+            components: [{ type: 1, components: [{ type: 2, style: 3, label: `승인 (${gate})`, custom_id: `approval:${gate}:${mir.id}` }] }],
+          },
+          destinations: configuredDestinations(["backoffice"]),
+        });
       }
     }
     // 새 P1 이슈 → 즉시 알림.
     if (event === "issues" && p.action === "opened" && p.issue) {
       const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
       if (priorityFromLabels(labels) === "P1") {
-        await notify(`🔥 <b>새 P1</b> ${esc(repo)} #${p.issue.number}\n${esc(p.issue.title)}`);
+        await enqueueNotification({
+          dedupeKey: `github:${deliveryId}:p1`,
+          kind: "OPS_ALERT",
+          payload: { text: `🔥 **새 P1** ${repo} #${p.issue.number}\n${p.issue.title}` },
+          destinations: configuredDestinations(["backoffice"]),
+        });
       }
     }
   } catch (e) {
-    console.error("[telegram] notifyHooks error:", e);
+    console.error("[discord] notifyHooks error:", e);
   }
 }
 
@@ -92,7 +103,7 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
     case "push": {
-      // 릴리즈 태그 생성 → 응답 이후 출시노트 생성·발행(태그/webhook/텔레그램 응답을 막지 않음).
+      // 릴리즈 태그 생성 → 응답 이후 출시노트 생성·발행(태그/webhook 응답을 막지 않음).
       const ref = p.ref ?? "";
       if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
         const version = ref.slice("refs/tags/".length);
@@ -159,7 +170,7 @@ export async function POST(req: NextRequest) {
     console.error(`[webhook] ${event} handler error:`, err);
   }
 
-  await notifyHooks(event, payload);
+  await notifyHooks(event, payload, deliveryId);
 
   return NextResponse.json({ status: "ok" });
 }

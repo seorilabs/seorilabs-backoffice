@@ -62,6 +62,11 @@ model App {
   releases     ReleaseRecord[]
   releaseNotes ReleaseNote[]
   operationRuns AppOperationRun[]
+  operatorCommandRuns OperatorCommandRun[]
+  incidents     OperationalIncident[]
+  milestones    OperationalMilestone[]
+  storeReviewSyncs StoreReviewSync[]
+  storeReviewObservations StoreReviewObservation[]
   aiDrafts     AiDraft[]
   metrics      AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
@@ -267,8 +272,7 @@ model ReleaseRecord {
   @@map("release_record")
 }
 
-// 공급자 중립 알림 원본과 목적지별 배달 상태. 같은 이벤트를 Telegram과 Discord에
-// 병행 전송하되 한쪽 장애가 다른 쪽의 성공 상태를 되돌리지 않게 분리한다.
+// 알림 원본과 Discord 목적지별 배달 상태. 과거 provider 값은 이력 보존을 위해 유지한다.
 model NotificationEvent {
   id         String               @id @default(cuid())
   dedupeKey  String               @unique
@@ -294,6 +298,7 @@ model NotificationDelivery {
   lastError      String?                    @db.Text
   providerMessageId String?
   sentAt         DateTime?                  @db.DateTime(3)
+  deletedAt      DateTime?                  @db.DateTime(3)
   createdAt      DateTime                   @default(now())
   updatedAt      DateTime                   @updatedAt
 
@@ -308,6 +313,10 @@ enum NotificationKind {
   OPERATIONS_SUMMARY
   OPERATIONAL_EVENT
   OPS_ALERT
+  EXTERNAL_FEED
+  MILESTONE
+  INCIDENT
+  STORE_REVIEW
 }
 
 enum NotificationProvider {
@@ -336,6 +345,138 @@ model OperationalEvent {
   @@index([occurredAt])
   @@index([appId, eventType, occurredAt])
   @@map("operational_event")
+}
+
+// Discord 운영 명령 실행 원장. interaction id를 멱등 키로 삼고, 외부 쓰기는
+// 별도 worker가 처리한다. interaction token은 저장하지 않는다.
+model OperatorCommandRun {
+  id                 String               @id @default(cuid())
+  sourceInteractionId String              @unique
+  appId              String?
+  app                App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
+  operation          String
+  params             Json?
+  actorDiscordUserId String
+  actorLabel         String
+  channelId          String
+  messageId          String?
+  status             OperatorCommandStatus @default(AWAITING_CONFIRMATION)
+  attempts           Int                  @default(0)
+  summary            String?              @db.Text
+  error              String?              @db.Text
+  confirmedAt        DateTime?             @db.DateTime(3)
+  startedAt          DateTime?             @db.DateTime(3)
+  completedAt        DateTime?             @db.DateTime(3)
+  expiresAt          DateTime               @db.DateTime(3)
+  redactedAt         DateTime?              @db.DateTime(3)
+  createdAt          DateTime               @default(now()) @db.DateTime(3)
+  updatedAt          DateTime               @updatedAt
+
+  @@index([status, createdAt])
+  @@index([redactedAt, expiresAt])
+  @@map("operator_command_run")
+}
+
+enum OperatorCommandStatus {
+  AWAITING_CONFIRMATION
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+model OperationalIncident {
+  id                    String             @id @default(cuid())
+  dedupeKey             String             @unique
+  appId                 String?
+  app                   App?               @relation(fields: [appId], references: [id], onDelete: SetNull)
+  source                String
+  kind                  String
+  severity              String
+  status                IncidentStatus     @default(OPEN)
+  summary               String             @db.Text
+  evidence              Json?
+  destinationKey        String             @default("ops-alerts")
+  providerMessageId     String?
+  acknowledgedBy        String?
+  acknowledgedAt        DateTime?          @db.DateTime(3)
+  assignedDiscordUserId String?
+  firstDetectedAt       DateTime            @db.DateTime(3)
+  lastDetectedAt        DateTime            @db.DateTime(3)
+  recoveredAt           DateTime?           @db.DateTime(3)
+  createdAt             DateTime            @default(now()) @db.DateTime(3)
+  updatedAt             DateTime            @updatedAt
+
+  @@index([status, severity, lastDetectedAt])
+  @@index([appId, status])
+  @@map("operational_incident")
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RECOVERED
+}
+
+model OperationalMilestone {
+  id             String   @id @default(cuid())
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  eventType      String
+  firstEventId   String
+  firstObservedAt DateTime @db.DateTime(3)
+  notifiedAt     DateTime? @db.DateTime(3)
+  createdAt      DateTime  @default(now()) @db.DateTime(3)
+
+  @@unique([appId, eventType])
+  @@map("operational_milestone")
+}
+
+// 마켓 리뷰 수집 기준선. 앱·마켓별 첫 성공 수집은 과거 리뷰를 알리지 않고
+// 기준선으로만 저장한다. 이후 수집부터 신규·변경 리뷰만 outbox에 넣는다.
+model StoreReviewSync {
+  id               String           @id @default(cuid())
+  appId            String
+  app              App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store            StoreReviewStore
+  initializedAt    DateTime         @default(now()) @db.DateTime(3)
+  lastSuccessfulAt DateTime         @db.DateTime(3)
+  createdAt        DateTime         @default(now()) @db.DateTime(3)
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([appId, store])
+  @@index([store, lastSuccessfulAt])
+  @@map("store_review_sync")
+}
+
+// 관찰 테이블에는 리뷰 원문이나 작성자명을 저장하지 않는다. 표시 내용의 hash와
+// 별점만 보존한다. 전송용 outbox 원문은 Discord 보존기한 뒤 별도로 제거한다.
+model StoreReviewObservation {
+  id               String           @id @default(cuid())
+  appId            String
+  app              App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store            StoreReviewStore
+  externalReviewId String
+  rating           Int
+  contentHash      String
+  notifiedHash     String?
+  sourceCreatedAt  DateTime?        @db.DateTime(3)
+  sourceModifiedAt DateTime?        @db.DateTime(3)
+  firstObservedAt  DateTime         @default(now()) @db.DateTime(3)
+  lastObservedAt   DateTime         @default(now()) @db.DateTime(3)
+  createdAt        DateTime         @default(now()) @db.DateTime(3)
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([appId, store, externalReviewId])
+  @@index([appId, store, sourceModifiedAt])
+  @@map("store_review_observation")
+}
+
+enum StoreReviewStore {
+  GOOGLE_PLAY
+  APP_STORE
 }
 
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가
@@ -621,7 +762,22 @@ model AppConsoleMetricDaily {
 // ──────────────────────────────────────────────────────────────────────────
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
+// Discord /ask 대화 문맥. 서버·채널·사용자 조합별로 분리한다.
+model DiscordTurn {
+  id        String   @id @default(cuid())
+  guildId   String
+  channelId String
+  userId    String
+  role      String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([guildId, channelId, userId, createdAt])
+  @@map("discord_turn")
+}
+
 // 텔레그램 턴 기반 채팅 이력(Gemini 대화 컨텍스트). chatId 별 롤링.
+// Discord 전환 전 이력 테이블. 저장소의 additive migration 정책상 최종 정리 승인 전까지 보존한다.
 model TelegramTurn {
   id        String   @id @default(cuid())
   chatId    String // telegram chat id
@@ -705,7 +861,7 @@ model VaultWriteRequest {
   folder      String           @default("받은함") // 대상 하위폴더(allowlist 강제)
   filename    String // 확장자 제외 제목(슬러그화)
   content     String           @db.Text
-  source      String           @default("agent") // agent|telegram|web
+  source      String           @default("agent") // agent|discord|web; legacy telegram rows retained
   requestedBy String?
   status      VaultWriteStatus @default(PENDING)
   writtenPath String? // 실제 기록된 상대경로
