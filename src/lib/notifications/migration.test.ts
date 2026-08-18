@@ -47,8 +47,13 @@ test("과거 outbox 이관 migration은 event와 목적지 delivery를 분리하
 });
 
 test("Discord 이관 migration은 기존 이벤트 slug를 실제 App FK로 변환해 milestone을 선반영한다", () => {
-  assert.match(discordSql, /INNER JOIN `app` ON `app`\.`slug` = `operational_event`\.`appId`/);
-  assert.match(discordSql, /GROUP BY `app`\.`id`, `operational_event`\.`eventType`/);
+  assert.match(discordSql, /INNER JOIN `app` ON `app`\.`slug` = `candidate_event`\.`appId`/);
+  assert.match(discordSql, /AND NOT EXISTS \(/);
+  assert.match(
+    discordSql,
+    /`earlier_event`\.`occurredAt` < `candidate_event`\.`occurredAt`[\s\S]*`earlier_event`\.`eventId` < `candidate_event`\.`eventId`/,
+  );
+  assert.doesNotMatch(discordSql, /GROUP_CONCAT/i);
 });
 
 test("마켓 리뷰 migration은 앱·스토어 기준선과 리뷰 fingerprint를 분리한다", () => {
