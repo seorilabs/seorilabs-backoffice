@@ -39,7 +39,9 @@ test("Ops 실패 알림은 지정 역할만 mention allowlist에 넣는다", asy
     const previousFetch = globalThis.fetch;
     let bodyText = "";
     let auth = "";
-    globalThis.fetch = async (_input, init) => {
+    let requestUrl = "";
+    globalThis.fetch = async (input, init) => {
+      requestUrl = String(input);
       bodyText = String(init?.body);
       auth = new Headers(init?.headers).get("authorization") ?? "";
       return new Response(JSON.stringify({ id: "1234567890" }), { status: 200, headers: { "content-type": "application/json" } });
@@ -49,6 +51,7 @@ test("Ops 실패 알림은 지정 역할만 mention allowlist에 넣는다", asy
       const body = JSON.parse(bodyText) as Record<string, unknown>;
       assert.equal(result.messageId, "1234567890");
       assert.equal(auth, "Bot test-bot-token");
+      assert.equal(requestUrl, "https://discord.com/api/v10/channels/1538853137862098954/messages");
       assert.equal(body.content, "<@&1538854786021990480>");
       assert.deepEqual(body.allowed_mentions, { parse: [], roles: ["1538854786021990480"] });
     } finally {
