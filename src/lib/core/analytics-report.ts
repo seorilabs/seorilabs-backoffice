@@ -6,7 +6,7 @@ import { resolveGa4Target, latestClosedDay, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { htmlToDiscord } from "@/lib/notifications/format";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
@@ -364,7 +364,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       consoleLines: consoleSection.lines,
       link: env.optional("AUTH_URL").trim(),
     });
-    const destinations = configuredDestinations(["metrics-daily"]);
+    const destinations = discordDestinations(["metrics-daily"]);
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",

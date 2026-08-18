@@ -7,7 +7,7 @@ import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { visibleAppWhere, visibleIssueWhere, visibleReleaseWhere } from "@/lib/domain/app-visibility";
 import { geminiComplete } from "@/lib/ai/gemini";
 import { getOrgDefaultBranches } from "@/lib/github/read";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import {
   filterDefaultBranchMerges,
@@ -41,7 +41,7 @@ export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise
         text: `${mapping.emoji} **${app.displayName}** · ${STAGE_KO[stage]} 단계 진입\n${mapping.suggest}`,
         components: button("초안 생성", `generate:${mapping.kind}:${appId}`),
       },
-      destinations: configuredDestinations(["backoffice"]),
+      destinations: discordDestinations(["backoffice"]),
     });
   } catch (error) {
     console.error("[nudge] stage error", error instanceof Error ? error.message : "error");
@@ -113,7 +113,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     dedupeKey: `daily-digest:${window.label}`,
     kind: "OPERATIONS_SUMMARY",
     payload: { text: lines.join("\n"), ...(components.length ? { components } : {}) },
-    destinations: configuredDestinations(["backoffice"]),
+    destinations: discordDestinations(["backoffice"]),
   });
   return { date: window.label, mergedPrCount: mergedPrs.length, releaseCount: releases, unresolvedDefaultBranchCount: unresolvedCount, geminiUsed, queued: true };
 }
@@ -136,6 +136,6 @@ export async function sendWeeklyLiveopsReview(now = new Date()): Promise<void> {
       text: apps.length ? `**📈 주간 LiveOps 리뷰**\n운영 앱 ${apps.length}개. 버튼을 누르면 개선 가설 초안을 만듭니다.` : "**📈 주간 LiveOps 리뷰**\n운영 단계 앱이 없습니다.",
       ...(components.length ? { components } : {}),
     },
-    destinations: configuredDestinations(["backoffice"]),
+    destinations: discordDestinations(["backoffice"]),
   });
 }

@@ -1,5 +1,5 @@
 import { env } from "@/lib/env";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 
 // Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Discord로 알린다.
@@ -98,7 +98,7 @@ export async function checkGodotVersion(): Promise<GodotCheckResult> {
     dedupeKey: `godot-stable:${latest}`,
     kind: "OPS_ALERT",
     payload: { text },
-    destinations: configuredDestinations(["backoffice"]),
+    destinations: discordDestinations(["backoffice"]),
   });
 
   return { status: "outdated", pinned, latest, url };

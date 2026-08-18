@@ -9,7 +9,7 @@ import {
   type GhPrInput,
   type GhRunInput,
 } from "@/lib/sync/mirror";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
@@ -64,7 +64,7 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
             text: `${gate === "release" ? "🚀" : "📝"} **승인 필요** ${repo} #${p.issue.number}\n${p.issue.title}`,
             components: [{ type: 1, components: [{ type: 2, style: 3, label: `승인 (${gate})`, custom_id: `approval:${gate}:${mir.id}` }] }],
           },
-          destinations: configuredDestinations(["backoffice"]),
+          destinations: discordDestinations(["backoffice"]),
         });
       }
     }
@@ -76,7 +76,7 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
           dedupeKey: `github:${deliveryId}:p1`,
           kind: "OPS_ALERT",
           payload: { text: `🔥 **새 P1** ${repo} #${p.issue.number}\n${p.issue.title}` },
-          destinations: configuredDestinations(["backoffice"]),
+          destinations: discordDestinations(["backoffice"]),
         });
       }
     }

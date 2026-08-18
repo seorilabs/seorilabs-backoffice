@@ -34,12 +34,11 @@ export function isDiscordDestinationKey(value: string): value is DiscordDestinat
   return DISCORD_DESTINATIONS.includes(value as DiscordDestinationKey);
 }
 
-export function configuredDestinations(
+export function discordDestinations(
   keys: DiscordDestinationKey[],
 ): NotificationDestination[] {
-  return keys
-    .filter((key) => Boolean(discordChannelId(key)))
-    .map((key) => ({ provider: "DISCORD", key }));
+  // 생산자는 논리 목적지만 기록하고, 실제 채널 설정은 전송 worker가 확인한다.
+  return keys.map((key) => ({ provider: "DISCORD", key }));
 }
 
 export function discordChannelId(destinationKey: string): string {

@@ -1,6 +1,6 @@
 import { Prisma, type OperationalIncident } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 
@@ -42,7 +42,7 @@ async function enqueueIncident(incident: OperationalIncident, signalId: string):
     kind: "INCIDENT",
     payload: { incidentId: incident.id },
     occurredAt: incident.lastDetectedAt,
-    destinations: configuredDestinations([incident.destinationKey === "ops-alerts" ? "ops-alerts" : "metrics-daily"]),
+    destinations: discordDestinations([incident.destinationKey === "ops-alerts" ? "ops-alerts" : "metrics-daily"]),
   });
 }
 

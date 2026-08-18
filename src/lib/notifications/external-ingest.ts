@@ -1,4 +1,9 @@
-import { configuredDestinations, type NotificationDestination } from "@/lib/notifications/destinations";
+import {
+  discordChannelId,
+  discordDestinations,
+  type DiscordDestinationKey,
+  type NotificationDestination,
+} from "@/lib/notifications/destinations";
 import {
   parseExternalNotification,
   routeFromNotificationSubject,
@@ -7,7 +12,8 @@ import {
 import { enqueueNotification } from "@/lib/notifications/outbox";
 
 interface ExternalIngestDependencies {
-  destinations?: (route: Parameters<typeof configuredDestinations>[0][number]) => NotificationDestination[];
+  destinationConfigured?: (route: DiscordDestinationKey) => boolean;
+  destinations?: (route: DiscordDestinationKey) => NotificationDestination[];
   enqueue?: typeof enqueueNotification;
 }
 
@@ -18,7 +24,10 @@ export async function ingestExternalNotification(
 ): Promise<NotificationAck> {
   const route = routeFromNotificationSubject(subject);
   if (!route) throw new Error("허용되지 않은 NATS subject");
-  const destinations = (dependencies.destinations ?? ((key) => configuredDestinations([key])))(route);
+  const destinationConfigured = dependencies.destinationConfigured ??
+    ((key: DiscordDestinationKey) => /^\d+$/.test(discordChannelId(key)));
+  if (!destinationConfigured(route)) throw new Error(`Discord 목적지 미설정: ${route}`);
+  const destinations = (dependencies.destinations ?? ((key) => discordDestinations([key])))(route);
   if (destinations.length !== 1) throw new Error(`Discord 목적지 미설정: ${route}`);
   const payload = parseExternalNotification(value);
   const eventId = await (dependencies.enqueue ?? enqueueNotification)({

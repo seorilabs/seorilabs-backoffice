@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
@@ -71,7 +71,7 @@ export async function sendOperationsSummary(now: Date): Promise<{
     lines.push("", "⚠️ Platform 활성 사용자 스냅샷 없음");
   }
 
-  const destinations = configuredDestinations(["metrics-daily"]);
+  const destinations = discordDestinations(["metrics-daily"]);
   await enqueueNotification({
     dedupeKey: `metrics:operations:${refDate}`,
     kind: "OPERATIONS_SUMMARY",
