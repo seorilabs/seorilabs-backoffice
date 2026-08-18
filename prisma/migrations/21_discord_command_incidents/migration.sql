@@ -110,7 +110,7 @@ ALTER TABLE `operational_milestone`
     ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- 이미 수집된 이벤트 조합은 재알림 없이 선반영한다.
--- GROUP_CONCAT 기본 길이에 의존하지 않고 시각·eventId 순 최초 이벤트를 고른다.
+-- 문자열 집계 기본 길이에 의존하지 않고 시각·eventId 순 최초 이벤트를 고른다.
 INSERT INTO `operational_milestone` (
     `id`, `appId`, `eventType`, `firstEventId`, `firstObservedAt`, `notifiedAt`, `createdAt`
 )
