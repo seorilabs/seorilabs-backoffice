@@ -2,13 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { toggleIssueLabel, addIssueComment } from "@/lib/github/write";
 import { HIDDEN_APP_ERROR, isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
-// 세션 비의존 코어. 웹 서버액션(세션)과 텔레그램 핸들러(allowlist) 양쪽이 호출.
+// 세션 비의존 코어. 웹 서버액션과 Discord worker 양쪽이 호출.
 export async function toggleApprovalCore(input: {
   issueId: string;
   gate: "planning" | "release";
   on: boolean;
   reason?: string;
-  actorLabel: string; // "@magicsih" | "telegram:123"
+  actorLabel: string; // "@magicsih" | "discord:123"
 }): Promise<{ repoFullName: string; number: number; changed: boolean }> {
   const issue = await prisma.issueMirror.findUnique({
     where: { id: input.issueId },

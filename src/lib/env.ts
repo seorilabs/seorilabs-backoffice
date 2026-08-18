@@ -110,18 +110,22 @@ export const env = {
     bool("FEATURE_PLATFORM_ADMIN", false) &&
     Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
     Boolean(optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON").trim()),
-  telegramEnabled: () => bool("FEATURE_TELEGRAM_ENABLED", false),
-  telegramToken: () => optional("TELEGRAM_BOT_TOKEN"),
-  telegramWebhookSecret: () => optional("TELEGRAM_WEBHOOK_SECRET"),
-  telegramChatId: () => optional("TELEGRAM_CHAT_ID"),
-  telegramAllowedIds: () =>
-    optional("TELEGRAM_ALLOWED_IDS", "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  discordMetricsWebhook: () => optional("DISCORD_METRICS_WEBHOOK_URL").trim(),
-  discordActionEventsWebhook: () => optional("DISCORD_ACTION_EVENTS_WEBHOOK_URL").trim(),
-  discordReleaseOpsWebhook: () => optional("DISCORD_RELEASE_OPS_WEBHOOK_URL").trim(),
-  discordOpsAlertsWebhook: () => optional("DISCORD_OPS_ALERTS_WEBHOOK_URL").trim(),
+  discordApplicationId: () => optional("DISCORD_APPLICATION_ID").trim(),
+  discordPublicKey: () => optional("DISCORD_PUBLIC_KEY").trim(),
+  discordBotToken: () => optional("DISCORD_BOT_TOKEN").trim(),
+  discordGuildId: () => optional("DISCORD_GUILD_ID").trim(),
+  discordConfigured: () =>
+    Boolean(optional("DISCORD_APPLICATION_ID").trim()) &&
+    Boolean(optional("DISCORD_PUBLIC_KEY").trim()) &&
+    Boolean(optional("DISCORD_BOT_TOKEN").trim()) &&
+    Boolean(optional("DISCORD_GUILD_ID").trim()),
+  discordChannelId: (key: string) =>
+    optional(`DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
+  discordRoleId: (key: string) =>
+    optional(`DISCORD_ROLE_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
+  discordRetentionDays: () =>
+    Math.max(1, Number(optional("DISCORD_RETENTION_DAYS", "30"))),
+  natsServerUrl: () => optional("NATS_SERVER_URL", "nats://nats.data.svc.cluster.local:4222"),
+  grafanaAlertHmacSecret: () => optional("GRAFANA_ALERT_HMAC_SECRET"),
   platformEventSharedSecret: () => optional("PLATFORM_EVENT_SHARED_SECRET"),
 };

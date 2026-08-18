@@ -1,60 +1,47 @@
 import type { NotificationProvider } from "@prisma/client";
 import { env } from "@/lib/env";
 
-export const TELEGRAM_DEFAULT = "default";
-export const DISCORD_METRICS = "metrics";
+export const DISCORD_BACKOFFICE = "backoffice";
+export const DISCORD_METRICS = "metrics-daily";
 export const DISCORD_ACTION_EVENTS = "action-events";
 export const DISCORD_RELEASE_OPS = "release-ops";
 export const DISCORD_OPS_ALERTS = "ops-alerts";
+export const DISCORD_SEORI_REVIEW = "seori-review";
+export const DISCORD_PRIVATE_FEED = "private-feed";
+export const DISCORD_FINANCE_ALERTS = "finance-alerts";
+
+export const DISCORD_DESTINATIONS = [
+  DISCORD_BACKOFFICE,
+  DISCORD_METRICS,
+  DISCORD_ACTION_EVENTS,
+  DISCORD_RELEASE_OPS,
+  DISCORD_OPS_ALERTS,
+  DISCORD_SEORI_REVIEW,
+  DISCORD_PRIVATE_FEED,
+  DISCORD_FINANCE_ALERTS,
+] as const;
+
+export type DiscordDestinationKey = (typeof DISCORD_DESTINATIONS)[number];
 
 export interface NotificationDestination {
   provider: NotificationProvider;
-  key: string;
+  key: DiscordDestinationKey;
+}
+
+export function isDiscordDestinationKey(value: string): value is DiscordDestinationKey {
+  return DISCORD_DESTINATIONS.includes(value as DiscordDestinationKey);
 }
 
 export function configuredDestinations(
-  keys: Array<"telegram" | "metrics" | "action-events" | "release-ops" | "ops-alerts">,
+  keys: DiscordDestinationKey[],
 ): NotificationDestination[] {
-  const destinations: NotificationDestination[] = [];
-  for (const key of keys) {
-    if (key === "telegram") {
-      if (env.telegramEnabled() && env.telegramToken() && env.telegramChatId()) {
-        destinations.push({ provider: "TELEGRAM", key: TELEGRAM_DEFAULT });
-      }
-      continue;
-    }
-    const url = discordWebhookFor(key);
-    if (url) destinations.push({ provider: "DISCORD", key });
-  }
-  return destinations;
+  return keys
+    .filter((key) => Boolean(discordChannelId(key)))
+    .map((key) => ({ provider: "DISCORD", key }));
 }
 
-export function discordWebhookFor(destinationKey: string): string {
-  switch (destinationKey) {
-    case DISCORD_METRICS:
-      return env.discordMetricsWebhook();
-    case DISCORD_ACTION_EVENTS:
-      return env.discordActionEventsWebhook();
-    case DISCORD_RELEASE_OPS:
-      return env.discordReleaseOpsWebhook();
-    case DISCORD_OPS_ALERTS:
-      return env.discordOpsAlertsWebhook();
-    default:
-      return "";
-  }
-}
-
-export function discordUsername(destinationKey: string): string {
-  switch (destinationKey) {
-    case DISCORD_METRICS:
-      return "Seorilabs Metrics";
-    case DISCORD_ACTION_EVENTS:
-      return "Seorilabs Action Log";
-    case DISCORD_RELEASE_OPS:
-      return "Seorilabs Release Ops";
-    case DISCORD_OPS_ALERTS:
-      return "Seorilabs Ops Alerts";
-    default:
-      return "Seorilabs Backoffice";
-  }
+export function discordChannelId(destinationKey: string): string {
+  return isDiscordDestinationKey(destinationKey)
+    ? env.discordChannelId(destinationKey)
+    : "";
 }

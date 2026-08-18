@@ -154,7 +154,7 @@ test("buildConsoleSection: 최신 기준일·수익 내림차순 정렬, 합계�
   assert.doesNotMatch(total, /결제/);
 });
 
-// ── Telegram 메시지 조립(GA4 + 콘솔 동시 보고) ─────────────────────────
+// ── 운영 알림 메시지 조립(GA4 + 콘솔 동시 보고) ─────────────────────────
 test("buildReportMessage: 한 메시지에 GA4 섹션과 콘솔 섹션이 함께, GA4 가 먼저 실린다", () => {
   const ga4Line = summaryLine("Lucid Chess", row("2026-08-15", { dau: 512 }));
   const consoleLines = buildConsoleSection(

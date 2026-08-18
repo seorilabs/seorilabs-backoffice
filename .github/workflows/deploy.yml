@@ -90,3 +90,6 @@ jobs:
           # DB migration이 완료된 뒤 queue worker를 생성/갱신한다.
           render app-ops-worker.yaml | /tmp/kubectl apply -f -
           /tmp/kubectl -n platform rollout status deployment/backoffice-app-ops-worker --timeout=300s
+          render discord-workers.yaml | /tmp/kubectl apply -f -
+          /tmp/kubectl -n platform rollout status deployment/backoffice-notification-worker --timeout=300s
+          /tmp/kubectl -n platform rollout status deployment/backoffice-operator-command-worker --timeout=300s

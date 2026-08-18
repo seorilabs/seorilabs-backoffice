@@ -5,11 +5,10 @@ import type {
 } from "@prisma/client";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
-import { sendDiscord } from "@/lib/notifications/discord";
+import { sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
 import type { NotificationDestination } from "@/lib/notifications/destinations";
 import { DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
 import { plainTextPayload } from "@/lib/notifications/format";
-import { notify, telegramResponseOk } from "@/lib/telegram/client";
 
 const MAX_ATTEMPTS = 10;
 let draining = false;
@@ -169,18 +168,37 @@ async function deliverPlain(
   destinationKey: string,
   payload: Prisma.JsonValue,
 ): Promise<DeliveryOverrideResult> {
-  const text = plainTextPayload(kind, payload, provider);
-  if (!text) return { ok: false, error: "알림 payload 형식 오류" };
-  if (provider === "TELEGRAM") {
-    const response = await notify(text);
-    return telegramResponseOk(response)
-      ? { ok: true }
-      : { ok: false, error: response?.description ?? "Telegram 응답 없음" };
+  if (provider !== "DISCORD") {
+    return { ok: false, error: "unsupported notification provider" };
   }
+  const text = plainTextPayload(kind, payload);
+  if (!text) return { ok: false, error: "알림 payload 형식 오류" };
+  const object = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Prisma.JsonObject
+    : null;
+  const attachmentValue = object?.attachment;
+  const attachment = attachmentValue && typeof attachmentValue === "object" && !Array.isArray(attachmentValue)
+    ? attachmentValue as Prisma.JsonObject
+    : null;
+  const attachmentOption =
+    typeof attachment?.filename === "string" &&
+    typeof attachment?.contentType === "string" &&
+    typeof attachment?.base64 === "string"
+      ? {
+          filename: attachment.filename,
+          contentType: attachment.contentType,
+          base64: attachment.base64,
+        }
+      : undefined;
+  const components = Array.isArray(object?.components)
+    ? (object.components as unknown as DiscordActionRow[]).slice(0, 5)
+    : undefined;
   return sendDiscord(destinationKey, text, {
     alertRoleId:
       destinationKey === DISCORD_OPS_ALERTS
-        ? env.optional("DISCORD_RELEASE_OPS_ROLE_ID").trim()
+        ? env.discordRoleId("release_ops")
         : undefined,
+    attachment: attachmentOption,
+    components,
   });
 }

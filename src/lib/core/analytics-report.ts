@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
-import { esc } from "@/lib/telegram/client";
+import { escapeHtml as esc } from "@/lib/format/html";
 import { resolveGa4Target, latestClosedDay, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
@@ -9,10 +9,10 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { configuredDestinations } from "@/lib/notifications/destinations";
 import { htmlToDiscord } from "@/lib/notifications/format";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { drainAllNotifications } from "@/lib/telegram/deploy-notifications";
+import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
 
 // 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을
-// Telegram과 Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
+// Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
 // AppConsoleMetricDaily=AppsInToss 콘솔). 두 소스는 모수가 달라(GA4=전 표면, 콘솔=토스 표면)
 // 한 줄로 합치지 않고 섹션을 나눠 함께 보고한다.
 // vault-writer 가 파일명 앞에 처리일(KST)을 붙이므로 title 에는 날짜를 넣지 않는다.
@@ -64,7 +64,7 @@ export interface ConsoleReportItem {
 }
 
 export interface ConsoleReportSection {
-  /** Telegram 메시지에 그대로 붙일 줄들(헤더 포함). 수집 데이터가 없으면 빈 배열. */
+  /** 운영 알림 메시지에 그대로 붙일 줄들(헤더 포함). 수집 데이터가 없으면 빈 배열. */
   lines: string[];
   /** 콘솔 최신 기준일 "YYYY-MM-DD"(수집 데이터가 없으면 null). */
   refDate: string | null;
@@ -80,8 +80,6 @@ export interface ReportResult {
   refDate: string; // GA4 기준일(D-1)
   apps: number; // 보고서 생성된 앱 수
   enqueued: number; // Obsidian 쓰기 큐 건수
-  telegramSent: boolean;
-  discordSent: boolean;
   notificationsQueued: number;
   skipped: string[]; // 스냅샷 없어 제외된 앱 slug
   consoleListings: number; // 콘솔 보고 대상 리스팅 수
@@ -131,7 +129,7 @@ export function buildAppReportMd(
   return lines.join("\n");
 }
 
-/** Telegram 요약 한 줄(HTML). 활성사용자·참여율·플랫폼 반영. */
+/** Discord 변환 전 요약 한 줄(제한된 HTML). 활성사용자·참여율·플랫폼 반영. */
 export function summaryLine(displayName: string, latest: MetricRow): string {
   const rate = engagementRate(latest.engagedUsers, latest.dau);
   const plat = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
@@ -227,7 +225,7 @@ export function buildConsoleSection(
 }
 
 /**
- * Telegram 리포트 메시지 본문(HTML). GA4(전 표면)와 콘솔(토스 표면)은 모수가 달라 한 메시지 안에서
+ * Discord 변환 전 리포트 메시지 본문(제한된 HTML). GA4(전 표면)와 콘솔(토스 표면)은 모수가 달라 한 메시지 안에서
  * 섹션으로 나란히 싣는다. 각 섹션은 보고할 줄이 있을 때만 붙어, 한쪽 소스만 있어도 발송된다.
  */
 export function buildReportMessage({
@@ -318,8 +316,6 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     refDate: isoDate(end),
     apps: 0,
     enqueued: 0,
-    telegramSent: false,
-    discordSent: false,
     notificationsQueued: 0,
     skipped: [],
     consoleListings: 0,
@@ -348,6 +344,12 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     result.enqueued++;
     result.apps++;
     summary.push(summaryLine(app.displayName, rows[0]));
+    await reconcileMetricAnomalies({
+      appId: app.id,
+      appSlug: app.slug,
+      displayName: app.displayName,
+      rowsDesc: rows,
+    });
   }
 
   const consoleSection = buildConsoleSection(await loadConsoleReportItems(consoleApps), end);
@@ -356,31 +358,20 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   result.consoleLagDays = consoleSection.lagDays;
 
   if (summary.length > 0 || consoleSection.lines.length > 0) {
-    const telegramHtml = buildReportMessage({
+    const reportHtml = buildReportMessage({
       refDate: result.refDate,
       ga4Lines: summary,
       consoleLines: consoleSection.lines,
       link: env.optional("AUTH_URL").trim(),
     });
-    const destinations = configuredDestinations(["telegram", "metrics"]);
-    const eventId = await enqueueNotification({
+    const destinations = configuredDestinations(["metrics-daily"]);
+    await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",
-      payload: { telegramHtml, discordMarkdown: htmlToDiscord(telegramHtml) },
+      payload: { discordMarkdown: htmlToDiscord(reportHtml) },
       destinations,
     });
     result.notificationsQueued = destinations.length;
-    await drainAllNotifications();
-    const deliveries = await prisma.notificationDelivery.findMany({
-      where: { eventId },
-      select: { provider: true, status: true },
-    });
-    result.telegramSent = deliveries.some(
-      (delivery) => delivery.provider === "TELEGRAM" && delivery.status === "SENT",
-    );
-    result.discordSent = deliveries.some(
-      (delivery) => delivery.provider === "DISCORD" && delivery.status === "SENT",
-    );
   }
 
   return result;

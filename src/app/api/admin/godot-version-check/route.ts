@@ -3,7 +3,7 @@ import { verifyStaticToken } from "@/lib/security";
 import { checkGodotVersion } from "@/lib/godot/version-check";
 
 // Godot 최신 stable 감지 트리거(CronJob 이 호출). x-admin-token 보호.
-// pin 버전보다 새 stable 이 나오면 Telegram 알림. 코드 수정은 하지 않음.
+// pin 버전보다 새 stable 이 나오면 Discord 알림. 코드 수정은 하지 않음.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;

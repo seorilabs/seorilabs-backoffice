@@ -51,7 +51,7 @@ import {
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
-import { enqueueDeployCompletionNotification } from "@/lib/telegram/deploy-notifications";
+import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -61,7 +61,7 @@ export {
   type DeployTarget,
 } from "@/lib/core/deploy-targets";
 
-// 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Telegram 공용.
+// 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Discord 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
 // 배포 dispatch 는 ReleaseRecord 를 직접 INSERT 하지 않는다(workflow_run 미러가 담당).
 
@@ -277,7 +277,6 @@ export async function dispatchMarketDeploy(opts: {
   tag: string;
   memo?: string;
   actorLabel?: string;
-  telegramContext?: { chatId: string | number; messageId: number };
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const workflowFile = MARKET_WORKFLOW[opts.target];
   if (!workflowFile) throw new Error(`알 수 없는 배포 대상: ${opts.target}`);
@@ -311,7 +310,7 @@ export async function dispatchMarketDeploy(opts: {
     if (!run.buildRunId) throw new Error("Xcode Cloud 빌드 실행 ID가 없습니다.");
     xcodeCloudBuild = run.buildNumber;
     // GitHub workflow_run 대신 ASC ciBuildRun 을 mirror 하는 외부 배포 레코드.
-    // scheduler 가 이 실행을 조회해 완료 상태와 Telegram 알림을 수렴시킨다.
+    // scheduler 가 이 실행을 조회해 완료 상태와 Discord 알림을 수렴시킨다.
     const release = await prisma.releaseRecord.upsert({
       where: { externalRunId: run.buildRunId },
       create: {
@@ -378,12 +377,6 @@ export async function dispatchMarketDeploy(opts: {
           workflowFile: dispatchedWorkflow ?? null,
           xcodeCloudBuild: xcodeCloudBuild ?? null,
           tag: opts.tag,
-          telegram: opts.telegramContext
-            ? {
-                chatId: String(opts.telegramContext.chatId),
-                messageId: opts.telegramContext.messageId,
-              }
-            : null,
         } as object,
       },
     })

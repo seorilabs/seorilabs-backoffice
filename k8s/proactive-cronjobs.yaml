@@ -130,7 +130,7 @@ spec:
                 capabilities:
                   drop: ["ALL"]
 ---
-# 일별 지표 보고서 — 앱별 GA4 노트를 Obsidian(프로젝트/지표)에 큐잉 + Telegram 요약
+# 일별 지표 보고서 — 앱별 GA4 노트를 Obsidian(프로젝트/지표)에 큐잉 + Discord 요약
 # (GA4 섹션 + AppsInToss 콘솔 섹션. 콘솔은 온디맨드 push 라 기준일이 GA4 보다 늦을 수 있음).
 apiVersion: batch/v1
 kind: CronJob
@@ -175,7 +175,7 @@ spec:
                 capabilities:
                   drop: ["ALL"]
 ---
-# Godot 버전 감지 — 최신 stable 이 pin(GODOT_PINNED_VERSION)보다 높으면 Telegram 알림.
+# Godot 버전 감지 — 최신 stable 이 pin(GODOT_PINNED_VERSION)보다 높으면 Discord 알림.
 # 코드/설정 bump 는 하지 않음(감지+알림 전용). global-versions.yaml 미러링.
 apiVersion: batch/v1
 kind: CronJob

@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-notification-worker
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: notification-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: notification-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: notification-worker
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: notification-worker
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/notification-worker.cjs"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: NOTIFICATION_POLL_INTERVAL_MS
+              value: "1000"
+            - name: DISCORD_RETENTION_DAYS
+              value: "30"
+            - name: NATS_SERVER_URL
+              value: nats://nats.data.svc.cluster.local:4222
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
+            - name: DISCORD_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_BOT_TOKEN } }
+            - name: DISCORD_CHANNEL_BACKOFFICE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID } }
+            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID } }
+            - name: DISCORD_CHANNEL_ACTION_EVENTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_ACTION_EVENTS_ID } }
+            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
+            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
+            - name: DISCORD_CHANNEL_SEORI_REVIEW_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_SEORI_REVIEW_ID } }
+            - name: DISCORD_CHANNEL_PRIVATE_FEED_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_PRIVATE_FEED_ID } }
+            - name: DISCORD_CHANNEL_FINANCE_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_FINANCE_ALERTS_ID } }
+            - name: DISCORD_ROLE_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
+          resources:
+            requests: { cpu: 25m, memory: 128Mi }
+            limits: { cpu: 300m, memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-operator-command-worker
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: operator-command-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: operator-command-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: operator-command-worker
+    spec:
+      serviceAccountName: backoffice
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: operator-command-worker
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/operator-command-worker.cjs"]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HOME, value: /tmp }
+            - { name: CHECKPOINT_DISABLE, value: "1" }
+            - { name: OPERATOR_COMMAND_POLL_INTERVAL_MS, value: "1000" }
+            - { name: FEATURE_GEMINI_ENABLED, value: "true" }
+            - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
+            - { name: GEMINI_EMBED_MODEL, value: gemini-embedding-001 }
+            - { name: GEMINI_EMBED_DIM, value: "1536" }
+            - { name: XCODE_CLOUD_APP_STORE_REPOS, value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul" }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
+            - name: DISCORD_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_APPLICATION_ID } }
+            - name: DISCORD_GUILD_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_GUILD_ID } }
+            - name: DISCORD_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_BOT_TOKEN } }
+            - name: GITHUB_APP_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_APP_ID } }
+            - name: GITHUB_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_PRIVATE_KEY } }
+            - name: GEMINI_API_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GEMINI_API_KEY } }
+            - name: APP_STORE_CONNECT_API_KEY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_API_KEY_ID, optional: true } }
+            - name: APP_STORE_CONNECT_ISSUER_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_ISSUER_ID, optional: true } }
+            - name: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_PRIVATE_KEY_BASE64, optional: true } }
+          resources:
+            requests: { cpu: 50m, memory: 192Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

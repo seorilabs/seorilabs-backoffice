@@ -234,7 +234,7 @@ export async function computeRepoSeed(
   const { manifest: opsManifest, error: opsManifestError } =
     parseAppOpsManifestText(opsManifestText);
 
-  // marketTargets = 실제로 dispatch 가능한 마켓만 포함한다(= Backoffice/Telegram /deploy 버튼이 진실이 되도록).
+  // marketTargets = 실제로 dispatch 가능한 마켓만 포함한다(= Backoffice/Discord /deploy가 진실이 되도록).
   // deployTargetsFor 가 marketTargets → 표준 배포 caller 워크플로우로 매핑하므로(ait→deploy-apps-in-toss.yml,
   // play→deploy-google-play.yml, appstore→deploy-app-store.yml), config 만 있고 해당 워크플로우가 없으면
   // (예: deploy-godot-pages.yml 만 둔 Godot 게임) dispatch 가 404 였다.

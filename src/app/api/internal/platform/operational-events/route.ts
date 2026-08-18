@@ -10,7 +10,8 @@ import {
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
-import { drainAllNotifications } from "@/lib/telegram/deploy-notifications";
+import { recordOperationalMilestone } from "@/lib/notifications/milestones";
+import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,20 +57,53 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (duplicate) return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+
   const app = await prisma.app.findUnique({
     where: { slug: input.appId },
-    select: { displayName: true },
+    select: { id: true, displayName: true },
   });
   const alert = isOpsAlert(input.type);
-  await enqueueNotification({
-    dedupeKey: `operational:${input.eventId}`,
-    kind: alert ? "OPS_ALERT" : "OPERATIONAL_EVENT",
-    occurredAt: new Date(input.occurredAt),
-    payload: {
-      text: operationalEventMessage(input, app?.displayName ?? input.appId),
-    },
-    destinations: configuredDestinations([alert ? "ops-alerts" : "action-events"]),
-  });
-  await drainAllNotifications();
-  return NextResponse.json({ ok: true, duplicate }, { status: duplicate ? 200 : 202 });
+  const occurredAt = new Date(input.occurredAt);
+  const incidentKind = app ? input.type : `${input.type}:${input.appId}`;
+  if (alert) {
+    await recordIncident({
+      source: "platform",
+      kind: incidentKind,
+      severity: "critical",
+      summary: operationalEventMessage(input, app?.displayName ?? input.appId).split("\n")[0].replace(/[*]/g, ""),
+      signalId: input.eventId,
+      detectedAt: occurredAt,
+      appId: app?.id,
+      evidence: { outcome: input.outcome, eventType: input.type },
+    });
+  } else {
+    const recoveryKind = input.type === "iap.granted"
+      ? "iap.completion_failed"
+      : input.type === "ad.reward.delivered"
+        ? "ad.reward.delivery_failed"
+        : null;
+    if (recoveryKind) {
+      await recoverIncident({
+        source: "platform",
+        kind: app ? recoveryKind : `${recoveryKind}:${input.appId}`,
+        appId: app?.id,
+        signalId: input.eventId,
+        recoveredAt: occurredAt,
+      });
+    }
+    const milestone = app
+      ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
+      : false;
+    if (!milestone) {
+      await enqueueNotification({
+        dedupeKey: `operational:${input.eventId}`,
+        kind: "OPERATIONAL_EVENT",
+        occurredAt,
+        payload: { text: operationalEventMessage(input, app?.displayName ?? input.appId) },
+        destinations: configuredDestinations(["action-events"]),
+      });
+    }
+  }
+  return NextResponse.json({ ok: true, duplicate: false }, { status: 202 });
 }
