@@ -16,7 +16,7 @@ import {
   p1Query,
   statusQuery,
 } from "@/lib/discord/queries";
-import { capabilityForCommand, hasDiscordCapability, type DiscordCapability } from "@/lib/discord/roles";
+import { capabilityForCommand, hasDiscordCapability, isDiscordInteractionScope, type DiscordCapability } from "@/lib/discord/roles";
 import { ephemeral, modal } from "@/lib/discord/responses";
 import {
   EPHEMERAL_FLAG,
@@ -292,8 +292,12 @@ async function handleComponent(interaction: DiscordInteraction) {
 
 export async function handleDiscordInteraction(interaction: DiscordInteraction) {
   if (interaction.type === InteractionType.PING) return { type: InteractionResponseType.PONG };
-  if (interaction.guild_id !== env.discordGuildId()) return ephemeral("허용되지 않은 Discord 서버입니다.");
-  if (interaction.channel_id !== env.discordChannelId("backoffice")) return ephemeral("백오피스 명령은 #backoffice 채널에서만 사용할 수 있습니다.");
+  if (!isDiscordInteractionScope({
+    guildId: interaction.guild_id,
+    channelId: interaction.channel_id,
+    expectedGuildId: env.discordGuildId(),
+    expectedChannelId: env.discordChannelId("backoffice"),
+  })) return ephemeral("백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.");
 
   if (interaction.type === InteractionType.AUTOCOMPLETE) {
     if (!authorized(interaction, "read")) return { type: InteractionResponseType.AUTOCOMPLETE_RESULT, data: { choices: [] } };

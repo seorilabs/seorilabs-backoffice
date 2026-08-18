@@ -19,6 +19,10 @@ import {
   type DiscordActionRow,
 } from "@/lib/notifications/discord";
 import { acknowledgeIncident, incidentComponents, incidentMessage } from "@/lib/notifications/incidents";
+import {
+  confirmationClaimWhere,
+  requiresOperatorConfirmation,
+} from "@/lib/discord/command-policy";
 
 const CONFIRM_TTL_MS = 10 * 60_000;
 const RESULT_TTL_MS = 24 * 60 * 60_000;
@@ -84,12 +88,7 @@ export async function confirmOperatorCommand(input: {
 }): Promise<boolean> {
   const now = new Date();
   const changed = await prisma.operatorCommandRun.updateMany({
-    where: {
-      id: input.id,
-      actorDiscordUserId: input.actorDiscordUserId,
-      status: "AWAITING_CONFIRMATION",
-      expiresAt: { gt: now },
-    },
+    where: confirmationClaimWhere({ id: input.id, actorDiscordUserId: input.actorDiscordUserId, now }),
     data: {
       status: "PENDING",
       confirmedAt: now,
@@ -168,6 +167,9 @@ async function appForRun(run: OperatorCommandRun) {
 }
 
 async function execute(run: OperatorCommandRun): Promise<{ summary: string; awaiting?: boolean; messageId?: string | null }> {
+  if (requiresOperatorConfirmation(run.operation) && !run.confirmedAt) {
+    throw new Error("확인되지 않은 고위험 작업입니다.");
+  }
   const params = jsonRecord(run.params);
   switch (run.operation) {
     case "plan_generate": {
@@ -271,6 +273,7 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           status: "AWAITING_CONFIRMATION",
           attempts: 0,
           startedAt: null,
+          confirmedAt: null,
           messageId,
           expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
         },

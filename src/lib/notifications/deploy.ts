@@ -12,7 +12,7 @@ import {
   type DeployCompletionPayload,
   type EnqueueDeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
-import { incidentComponents, incidentMessage } from "@/lib/notifications/incidents";
+import { incidentComponents, incidentDeliveryMode, incidentMessage } from "@/lib/notifications/incidents";
 
 export async function enqueueDeployCompletionNotification(
   payload: EnqueueDeployCompletionPayload,
@@ -122,8 +122,9 @@ export async function drainAllNotifications(limit = 30) {
         alertRoleId: incident.status === "OPEN" ? env.discordRoleId("release_ops") : undefined,
         components: incidentComponents(incident),
       };
-      let result = incident.providerMessageId
-        ? await editDiscord(destinationKey, incident.providerMessageId, incidentMessage(incident), options)
+      const deliveryMode = incidentDeliveryMode(incident.providerMessageId);
+      let result = deliveryMode.kind === "edit"
+        ? await editDiscord(destinationKey, deliveryMode.messageId, incidentMessage(incident), options)
         : null;
       if (!result || (!result.ok && result.statusCode === 404 && result.errorCode === 10_008)) {
         result = await sendDiscord(destinationKey, incidentMessage(incident), options);

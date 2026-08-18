@@ -28,6 +28,14 @@ export function incidentMessage(incident: OperationalIncident): string {
   return lines.join("\n");
 }
 
+export function incidentDeliveryMode(providerMessageId: string | null):
+  | { kind: "edit"; messageId: string }
+  | { kind: "create" } {
+  return providerMessageId
+    ? { kind: "edit", messageId: providerMessageId }
+    : { kind: "create" };
+}
+
 async function enqueueIncident(incident: OperationalIncident, signalId: string): Promise<void> {
   await enqueueNotification({
     dedupeKey: `incident:${incident.id}:${signalId}`,

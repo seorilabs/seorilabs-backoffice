@@ -10,12 +10,20 @@ const MILESTONE_LABELS: Partial<Record<OperationalEventInput["type"], string>> =
   "ad.reward.delivered": "첫 광고 보상 지급",
 };
 
+export function milestoneLabelForEvent(type: OperationalEventInput["type"]): string | undefined {
+  return MILESTONE_LABELS[type];
+}
+
+export function isDuplicateMilestoneError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
 export async function recordOperationalMilestone(input: {
   appId: string;
   displayName: string;
   event: OperationalEventInput;
 }): Promise<boolean> {
-  const label = MILESTONE_LABELS[input.event.type];
+  const label = milestoneLabelForEvent(input.event.type);
   if (!label) return false;
   let milestoneId: string;
   try {
@@ -29,7 +37,7 @@ export async function recordOperationalMilestone(input: {
     });
     milestoneId = milestone.id;
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return false;
+    if (isDuplicateMilestoneError(error)) return false;
     throw error;
   }
   const destinations = configuredDestinations(["action-events"]);

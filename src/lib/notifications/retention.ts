@@ -1,9 +1,34 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { deleteDiscordChannelMessage, deleteDiscordMessage } from "@/lib/notifications/discord";
 
 function deletedOrMissing(result: { ok: boolean; statusCode?: number; errorCode?: number }): boolean {
   return result.ok || (result.statusCode === 404 && result.errorCode === 10_008);
+}
+
+export function notificationRetentionWhere(
+  cutoff: Date,
+  protectedIds: string[],
+): Prisma.NotificationDeliveryWhereInput {
+  return {
+    provider: "DISCORD",
+    status: "SENT",
+    deletedAt: null,
+    sentAt: { lt: cutoff },
+    providerMessageId: { not: null, ...(protectedIds.length ? { notIn: protectedIds } : {}) },
+  };
+}
+
+export function commandRetentionWhere(
+  cutoff: Date,
+  protectedIds: string[],
+): Prisma.OperatorCommandRunWhereInput {
+  return {
+    status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
+    completedAt: { lt: cutoff },
+    messageId: { not: null, ...(protectedIds.length ? { notIn: protectedIds } : {}) },
+  };
 }
 
 export async function maintainDiscordRetention(now = new Date()) {
@@ -14,13 +39,7 @@ export async function maintainDiscordRetention(now = new Date()) {
   });
   const protectedIds = activeIncidents.flatMap((item) => item.providerMessageId ? [item.providerMessageId] : []);
   const deliveries = await prisma.notificationDelivery.findMany({
-    where: {
-      provider: "DISCORD",
-      status: "SENT",
-      deletedAt: null,
-      sentAt: { lt: cutoff },
-      providerMessageId: { not: null, ...(protectedIds.length ? { notIn: protectedIds } : {}) },
-    },
+    where: notificationRetentionWhere(cutoff, protectedIds),
     orderBy: { sentAt: "asc" },
     take: 100,
   });
@@ -33,11 +52,7 @@ export async function maintainDiscordRetention(now = new Date()) {
   }
 
   const commands = await prisma.operatorCommandRun.findMany({
-    where: {
-      status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
-      completedAt: { lt: cutoff },
-      messageId: { not: null, ...(protectedIds.length ? { notIn: protectedIds } : {}) },
-    },
+    where: commandRetentionWhere(cutoff, protectedIds),
     orderBy: { completedAt: "asc" },
     take: 100,
   });

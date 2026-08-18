@@ -33,6 +33,18 @@ export function hasDiscordCapability(roleIds: readonly string[], capability: Dis
   return false;
 }
 
+export function isDiscordInteractionScope(input: {
+  guildId?: string;
+  channelId?: string;
+  expectedGuildId: string;
+  expectedChannelId: string;
+}): boolean {
+  return Boolean(input.guildId) &&
+    Boolean(input.channelId) &&
+    input.guildId === input.expectedGuildId &&
+    input.channelId === input.expectedChannelId;
+}
+
 export function capabilityForCommand(command: string): DiscordCapability {
   switch (command) {
     case "plan":
