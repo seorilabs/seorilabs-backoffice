@@ -20,6 +20,12 @@ function bool(key: string, fallback = false): boolean {
   return v === "true" || v === "1";
 }
 
+export function parseDiscordRetentionDays(value: string | undefined): number {
+  const parsed = Number(value ?? "30");
+  if (!Number.isFinite(parsed)) return 30;
+  return Math.min(365, Math.max(1, Math.floor(parsed)));
+}
+
 export const env = {
   get,
   optional,
@@ -132,7 +138,7 @@ export const env = {
   discordRoleId: (key: string) =>
     optional(`DISCORD_ROLE_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
   discordRetentionDays: () =>
-    Math.max(1, Number(optional("DISCORD_RETENTION_DAYS", "30"))),
+    parseDiscordRetentionDays(optional("DISCORD_RETENTION_DAYS", "30")),
   natsServerUrl: () => optional("NATS_SERVER_URL", "nats://nats.data.svc.cluster.local:4222"),
   grafanaAlertHmacSecret: () => optional("GRAFANA_ALERT_HMAC_SECRET"),
   platformEventSharedSecret: () => optional("PLATFORM_EVENT_SHARED_SECRET"),

@@ -50,12 +50,16 @@ export async function previewDiscordChat(userText: string): Promise<string> {
   ]);
 }
 
-function key(input: { guildId: string; channelId: string; userId: string }) {
-  return input;
+export function discordTurnKey(input: { guildId: string; channelId: string; userId: string }) {
+  return {
+    guildId: input.guildId,
+    channelId: input.channelId,
+    userId: input.userId,
+  };
 }
 
 export async function resetDiscordChat(input: { guildId: string; channelId: string; userId: string }) {
-  await prisma.discordTurn.deleteMany({ where: key(input) });
+  await prisma.discordTurn.deleteMany({ where: discordTurnKey(input) });
 }
 
 export async function handleDiscordChat(input: {
@@ -65,7 +69,7 @@ export async function handleDiscordChat(input: {
   text: string;
 }): Promise<string> {
   const recent = await prisma.discordTurn.findMany({
-    where: key(input),
+    where: discordTurnKey(input),
     orderBy: { createdAt: "desc" },
     take: HISTORY_TURNS,
   });
@@ -87,12 +91,12 @@ export async function handleDiscordChat(input: {
   }
   await prisma.discordTurn.createMany({
     data: [
-      { ...key(input), role: "user", content: input.text },
-      { ...key(input), role: "assistant", content: reply },
+      { ...discordTurnKey(input), role: "user", content: input.text },
+      { ...discordTurnKey(input), role: "assistant", content: reply },
     ],
   });
   const stale = await prisma.discordTurn.findMany({
-    where: key(input),
+    where: discordTurnKey(input),
     orderBy: { createdAt: "desc" },
     select: { id: true },
     skip: RETAIN_TURNS,

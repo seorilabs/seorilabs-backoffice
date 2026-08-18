@@ -22,13 +22,27 @@ export function parseGrafanaWebhook(value: unknown) {
   return webhookSchema.parse(value);
 }
 
+export function grafanaAppSlugs(
+  alerts: Array<{ labels: Record<string, string> }>,
+): string[] {
+  return [...new Set(alerts
+    .map((alert) => alert.labels.app ?? alert.labels.app_slug ?? "")
+    .filter(Boolean))];
+}
+
 export async function ingestGrafanaWebhook(value: unknown): Promise<{ processed: number }> {
   const payload = parseGrafanaWebhook(value);
+  const slugs = grafanaAppSlugs(payload.alerts);
+  const apps = slugs.length
+    ? await prisma.app.findMany({
+      where: { slug: { in: slugs } },
+      select: { id: true, slug: true },
+    })
+    : [];
+  const appIds = new Map(apps.map((app) => [app.slug, app.id]));
   for (const alert of payload.alerts) {
     const slug = alert.labels.app ?? alert.labels.app_slug ?? "";
-    const app = slug
-      ? await prisma.app.findUnique({ where: { slug }, select: { id: true, displayName: true } })
-      : null;
+    const appId = appIds.get(slug);
     const alertName = alert.labels.alertname ?? "Grafana alert";
     const kind = `${alertName}:${alert.fingerprint}`.slice(0, 240);
     if (alert.status === "firing") {
@@ -40,7 +54,7 @@ export async function ingestGrafanaWebhook(value: unknown): Promise<{ processed:
         summary: (alert.annotations.summary || alert.annotations.description || alertName).slice(0, 500),
         signalId: `${alert.fingerprint}:${detectedAt.getTime()}`,
         detectedAt,
-        appId: app?.id,
+        appId,
         evidence: {
           alertName,
           team: alert.labels.team ?? "",
@@ -52,7 +66,7 @@ export async function ingestGrafanaWebhook(value: unknown): Promise<{ processed:
       await recoverIncident({
         source: "grafana",
         kind,
-        appId: app?.id,
+        appId,
         signalId: `${alert.fingerprint}:resolved:${alert.endsAt ?? Date.now()}`,
         recoveredAt: alert.endsAt ? new Date(alert.endsAt) : new Date(),
       });
