@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_DISCORD_ATTACHMENT_BASE64_CHARS,
   notificationSubject,
   parseExternalNotification,
   routeFromNotificationSubject,
@@ -25,4 +26,12 @@ test("외부 알림 payload를 엄격 검증한다", () => {
   assert.throws(() => parseExternalNotification({ ...payload, unknown: true }));
   assert.throws(() => parseExternalNotification({ ...payload, id: "contains space" }));
   assert.throws(() => parseExternalNotification({ ...payload, text: "" }));
+  assert.throws(() => parseExternalNotification({
+    ...payload,
+    attachment: {
+      filename: "oversized.bin",
+      contentType: "application/octet-stream",
+      base64: "A".repeat(MAX_DISCORD_ATTACHMENT_BASE64_CHARS + 1),
+    },
+  }));
 });

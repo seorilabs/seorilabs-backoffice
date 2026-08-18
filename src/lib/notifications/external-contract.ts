@@ -8,6 +8,8 @@ import {
 } from "@/lib/notifications/destinations";
 
 export const OPS_NOTIFICATION_SUBJECT_PREFIX = "ops.notification.v1";
+export const MAX_DISCORD_ATTACHMENT_BASE64_CHARS =
+  4 * Math.ceil(MAX_DISCORD_ATTACHMENT_BYTES / 3);
 
 const ROUTES = new Set<DiscordDestinationKey>([
   DISCORD_PRIVATE_FEED,
@@ -24,7 +26,7 @@ const payloadSchema = z.object({
   attachment: z.object({
     filename: z.string().min(1).max(120).regex(/^[^/\\]+$/),
     contentType: z.string().min(1).max(100),
-    base64: z.string().min(1),
+    base64: z.string().min(1).max(MAX_DISCORD_ATTACHMENT_BASE64_CHARS),
   }).optional(),
 }).strict();
 
