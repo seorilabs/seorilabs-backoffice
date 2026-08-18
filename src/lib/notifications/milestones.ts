@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
 
@@ -40,7 +40,7 @@ export async function recordOperationalMilestone(input: {
     if (isDuplicateMilestoneError(error)) return false;
     throw error;
   }
-  const destinations = configuredDestinations(["action-events"]);
+  const destinations = discordDestinations(["action-events"]);
   await enqueueNotification({
     dedupeKey: `milestone:${input.appId}:${input.event.type}`,
     kind: "MILESTONE",

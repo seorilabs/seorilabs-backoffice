@@ -6,8 +6,8 @@ import type {
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
-  configuredDestinations,
   discordChannelId,
+  discordDestinations,
   type NotificationDestination,
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
@@ -229,7 +229,7 @@ export async function collectStoreReviews(
 ): Promise<StoreReviewCollectResult> {
   const destinations = (dependencies.destinations ?? (() => {
     if (!/^\d+$/.test(discordChannelId("user-reviews"))) return [];
-    return configuredDestinations(["user-reviews"]);
+    return discordDestinations(["user-reviews"]);
   }))();
   if (destinations.length !== 1) {
     throw new Error("Discord 목적지 미설정: user-reviews");

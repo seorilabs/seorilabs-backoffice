@@ -1,6 +1,6 @@
 import type { NotificationProvider, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { configuredDestinations, DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
+import { discordDestinations, DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
 import { editDiscord, sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
 import { env } from "@/lib/env";
@@ -25,7 +25,7 @@ export async function enqueueDeployCompletionNotification(
       status: payload.status,
       ...(payload.runUrl ? { runUrl: payload.runUrl } : {}),
     },
-    destinations: configuredDestinations(["release-ops"]),
+    destinations: discordDestinations(["release-ops"]),
   });
 }
 

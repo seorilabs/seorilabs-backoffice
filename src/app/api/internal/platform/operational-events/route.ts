@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { configuredDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { prisma } from "@/lib/prisma";
 import {
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
         kind: "OPERATIONAL_EVENT",
         occurredAt,
         payload: { text: operationalEventMessage(input, app?.displayName ?? input.appId) },
-        destinations: configuredDestinations(["action-events"]),
+        destinations: discordDestinations(["action-events"]),
       });
     }
   }
