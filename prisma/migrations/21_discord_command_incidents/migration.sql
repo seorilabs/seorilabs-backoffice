@@ -110,18 +110,31 @@ ALTER TABLE `operational_milestone`
     ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- 이미 수집된 이벤트 조합은 재알림 없이 선반영한다.
+-- 문자열 집계 기본 길이에 의존하지 않고 시각·eventId 순 최초 이벤트를 고른다.
 INSERT INTO `operational_milestone` (
     `id`, `appId`, `eventType`, `firstEventId`, `firstObservedAt`, `notifiedAt`, `createdAt`
 )
 SELECT
-    CONCAT('milestone_', SHA2(CONCAT(`app`.`id`, ':', `operational_event`.`eventType`), 256)),
+    CONCAT('milestone_', SHA2(CONCAT(`app`.`id`, ':', `candidate_event`.`eventType`), 256)),
     `app`.`id`,
-    `operational_event`.`eventType`,
-    SUBSTRING_INDEX(GROUP_CONCAT(`operational_event`.`eventId` ORDER BY `operational_event`.`occurredAt` ASC), ',', 1),
-    MIN(`operational_event`.`occurredAt`),
+    `candidate_event`.`eventType`,
+    `candidate_event`.`eventId`,
+    `candidate_event`.`occurredAt`,
     CURRENT_TIMESTAMP(3),
     CURRENT_TIMESTAMP(3)
-FROM `operational_event`
-INNER JOIN `app` ON `app`.`slug` = `operational_event`.`appId`
-WHERE `operational_event`.`eventType` IN ('identity.created', 'iap.granted', 'ad.reward.delivered')
-GROUP BY `app`.`id`, `operational_event`.`eventType`;
+FROM `operational_event` AS `candidate_event`
+INNER JOIN `app` ON `app`.`slug` = `candidate_event`.`appId`
+WHERE `candidate_event`.`eventType` IN ('identity.created', 'iap.granted', 'ad.reward.delivered')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM `operational_event` AS `earlier_event`
+      WHERE `earlier_event`.`appId` = `candidate_event`.`appId`
+        AND `earlier_event`.`eventType` = `candidate_event`.`eventType`
+        AND (
+            `earlier_event`.`occurredAt` < `candidate_event`.`occurredAt`
+            OR (
+                `earlier_event`.`occurredAt` = `candidate_event`.`occurredAt`
+                AND `earlier_event`.`eventId` < `candidate_event`.`eventId`
+            )
+        )
+  );
