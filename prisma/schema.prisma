@@ -65,6 +65,8 @@ model App {
   operatorCommandRuns OperatorCommandRun[]
   incidents     OperationalIncident[]
   milestones    OperationalMilestone[]
+  storeReviewSyncs StoreReviewSync[]
+  storeReviewObservations StoreReviewObservation[]
   aiDrafts     AiDraft[]
   metrics      AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
@@ -314,6 +316,7 @@ enum NotificationKind {
   EXTERNAL_FEED
   MILESTONE
   INCIDENT
+  STORE_REVIEW
 }
 
 enum NotificationProvider {
@@ -429,6 +432,51 @@ model OperationalMilestone {
 
   @@unique([appId, eventType])
   @@map("operational_milestone")
+}
+
+// 마켓 리뷰 수집 기준선. 앱·마켓별 첫 성공 수집은 과거 리뷰를 알리지 않고
+// 기준선으로만 저장한다. 이후 수집부터 신규·변경 리뷰만 outbox에 넣는다.
+model StoreReviewSync {
+  id               String           @id @default(cuid())
+  appId            String
+  app              App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store            StoreReviewStore
+  initializedAt    DateTime         @default(now()) @db.DateTime(3)
+  lastSuccessfulAt DateTime         @db.DateTime(3)
+  createdAt        DateTime         @default(now()) @db.DateTime(3)
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([appId, store])
+  @@index([store, lastSuccessfulAt])
+  @@map("store_review_sync")
+}
+
+// 관찰 테이블에는 리뷰 원문이나 작성자명을 저장하지 않는다. 표시 내용의 hash와
+// 별점만 보존한다. 전송용 outbox 원문은 Discord 보존기한 뒤 별도로 제거한다.
+model StoreReviewObservation {
+  id               String           @id @default(cuid())
+  appId            String
+  app              App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store            StoreReviewStore
+  externalReviewId String
+  rating           Int
+  contentHash      String
+  notifiedHash     String?
+  sourceCreatedAt  DateTime?        @db.DateTime(3)
+  sourceModifiedAt DateTime?        @db.DateTime(3)
+  firstObservedAt  DateTime         @default(now()) @db.DateTime(3)
+  lastObservedAt   DateTime         @default(now()) @db.DateTime(3)
+  createdAt        DateTime         @default(now()) @db.DateTime(3)
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([appId, store, externalReviewId])
+  @@index([appId, store, sourceModifiedAt])
+  @@map("store_review_observation")
+}
+
+enum StoreReviewStore {
+  GOOGLE_PLAY
+  APP_STORE
 }
 
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가

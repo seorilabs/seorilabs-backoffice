@@ -110,6 +110,14 @@ export const env = {
     bool("FEATURE_PLATFORM_ADMIN", false) &&
     Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
     Boolean(optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON").trim()),
+  // Google Play Developer API 리뷰 조회용 공용 publisher service account.
+  // 리뷰 collector CronJob에만 주입하고 웹/Discord worker에는 전달하지 않는다.
+  googlePlayServiceAccountJson: () =>
+    optional("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON").trim(),
+  appStoreConnectConfigured: () =>
+    Boolean(optional("APP_STORE_CONNECT_API_KEY_ID").trim()) &&
+    Boolean(optional("APP_STORE_CONNECT_ISSUER_ID").trim()) &&
+    Boolean(optional("APP_STORE_CONNECT_PRIVATE_KEY_BASE64").trim()),
   discordApplicationId: () => optional("DISCORD_APPLICATION_ID").trim(),
   discordPublicKey: () => optional("DISCORD_PUBLIC_KEY").trim(),
   discordBotToken: () => optional("DISCORD_BOT_TOKEN").trim(),

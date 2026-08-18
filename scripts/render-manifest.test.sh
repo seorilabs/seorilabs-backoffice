@@ -22,7 +22,7 @@ ok() { printf '  ok   %s\n' "$1"; }
 ng() { printf '  FAIL %s\n' "$1" >&2; fail=1; }
 
 # CD 가 render 를 거쳐 apply 하는 매니페스트.
-MANIFESTS=(k8s/deployment.yaml k8s/app-ops-worker.yaml k8s/discord-workers.yaml)
+MANIFESTS=(k8s/deployment.yaml k8s/app-ops-worker.yaml k8s/discord-workers.yaml k8s/store-review-cronjob.yaml)
 
 echo "== 치환 =="
 for m in "${MANIFESTS[@]}"; do

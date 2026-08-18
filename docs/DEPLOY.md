@@ -141,21 +141,23 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
   (기존 Secret 이 SealedSecret 소유가 아니면 한 번 `kubectl -n platform delete secret backoffice-secrets` 후 재적용해 소유권 이관.)
 - **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) → `kubectl apply -f k8s/backoffice-sealedsecret.yaml`.
 
-Discord 운영 알림은 목적지별 webhook을 분리한다. 원본은 macOS Keychain과
-`~/.config/seorilabs/catalog/shared.yaml`이고, 클러스터에는 아래 이름으로만
-봉인한다. URL이나 서명키 원문을 문서·로그·PR에 남기지 않는다.
+Discord 운영 알림은 단일 Bot과 목적지별 channel ID를 사용한다. Bot token과
+Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, 클러스터에는
+아래 이름의 실행 복제본만 봉인한다. 값 원문을 문서·로그·PR에 남기지 않는다.
 
-| Secret key | 로컬 논리 ID | 목적지 |
-| --- | --- | --- |
-| `DISCORD_METRICS_WEBHOOK_URL` | `shared/discord/backoffice-metrics-webhook` | `#metrics-daily` |
-| `DISCORD_ACTION_EVENTS_WEBHOOK_URL` | `shared/discord/backoffice-action-events-webhook` | `#action-events` |
-| `DISCORD_RELEASE_OPS_WEBHOOK_URL` | `shared/discord/backoffice-release-ops-webhook` | `#release-ops` |
-| `DISCORD_OPS_ALERTS_WEBHOOK_URL` | `shared/discord/backoffice-ops-alerts-webhook` | `#ops-alerts` |
-| `PLATFORM_EVENT_SHARED_SECRET` | `shared/platform/backoffice-operational-events-secret` | Platform HMAC 검증 |
+| Secret key | 용도 |
+| --- | --- |
+| `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | Interaction 검증과 Bot 전송 |
+| `DISCORD_CHANNEL_METRICS_DAILY_ID` | `#metrics-daily` |
+| `DISCORD_CHANNEL_ACTION_EVENTS_ID` | `#action-events` |
+| `DISCORD_CHANNEL_RELEASE_OPS_ID` | `#release-ops` |
+| `DISCORD_CHANNEL_OPS_ALERTS_ID` | `#ops-alerts` |
+| `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
+| `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
 
-`DISCORD_RELEASE_OPS_ROLE_ID`는 비밀값이 아니며 실패 알림의 허용된 역할 mention에만
-사용한다. Telegram 목적지는 제거하지 않고 같은 공급자 중립 outbox의 독립 delivery로
-유지한다.
+역할 ID는 비밀값이 아니며 허용된 역할 mention과 명령 권한 검사에만 사용한다.
+Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
+지나면 notification worker가 Discord에서 삭제한다.
 
 ## 9. Gemini Stage Agent (단계별 AI)
 
@@ -340,3 +342,28 @@ registry sync와 catalog 검증이 끝난 것을 확인한 뒤 worker의 조회 
 배포 workflow는 먼저 웹 Deployment의 Prisma migration과 rollout을 끝낸 뒤 worker
 Deployment를 같은 이미지 SHA로 갱신한다. 검증은 두 Deployment의 rollout, worker 로그,
 DB 요청 상태, 실제 게임 데이터 readback 순서로 수행한다.
+
+## 15. Discord 마켓 리뷰 알림
+
+`backoffice-store-reviews` CronJob은 30분마다 `ACTIVE` 앱 중 실제
+`marketTargets`와 `playPackage`/`iosBundle`이 모두 있는 대상을 수집한다.
+
+- Google Play: Android Publisher API `reviews.list`, 공용 카탈로그 자격증명
+  `shared/google-play/publisher`의 실행 복제본 `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` 사용.
+- App Store: App Store Connect API `customerReviews`, 기존 공용 자격증명
+  `shared/apple/app-store-connect-uploader`의 세 환경변수 사용.
+- 범위는 두 공식 API가 반환하는 개별 리뷰 resource와 그 1~5점 평점이다.
+  스토어 전체 평균 평점의 집계값 변동은 이 collector 대상이 아니다.
+- 첫 성공 수집은 기존 리뷰를 `store_review_sync` 기준선으로만 기록하며 Discord에
+  보내지 않는다. 이후 새 리뷰와 동일 리뷰 ID의 별점·제목·본문 수정만
+  `#user-reviews` outbox에 멱등 enqueue한다.
+- 작성자명과 리뷰 원문은 `store_review_observation`에 저장하지 않는다. 리뷰 ID,
+  표시 내용 hash, 별점, 원본 시각만 보존한다. Discord 메시지와 전송용 리뷰
+  outbox payload는 일반 알림과 같은 보존기한 뒤 제거한다.
+- `DISCORD_CHANNEL_USER_REVIEWS_ID`가 없으면 API 호출이나 최초 기준선 생성을 하지
+  않고 실패한다. 채널 누락 상태에서 과거 리뷰를 조용히 소비하지 않기 위한 gate다.
+
+배포 전에 평문을 출력하지 않는 파일 입력 방식으로 Google JSON을 Secret에 추가하고,
+App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확인한다. 배포 후에는
+임시 Job으로 최초 실행해 `baselined > 0`, `enqueued = 0`, `errors = []`를 확인한 뒤
+새 테스트 리뷰 1건으로 enqueue·Discord 수신을 각각 검증한다.

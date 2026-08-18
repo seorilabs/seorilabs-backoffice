@@ -9,6 +9,7 @@ export const DISCORD_OPS_ALERTS = "ops-alerts";
 export const DISCORD_SEORI_REVIEW = "seori-review";
 export const DISCORD_PRIVATE_FEED = "private-feed";
 export const DISCORD_FINANCE_ALERTS = "finance-alerts";
+export const DISCORD_USER_REVIEWS = "user-reviews";
 
 export const DISCORD_DESTINATIONS = [
   DISCORD_BACKOFFICE,
@@ -19,6 +20,7 @@ export const DISCORD_DESTINATIONS = [
   DISCORD_SEORI_REVIEW,
   DISCORD_PRIVATE_FEED,
   DISCORD_FINANCE_ALERTS,
+  DISCORD_USER_REVIEWS,
 ] as const;
 
 export type DiscordDestinationKey = (typeof DISCORD_DESTINATIONS)[number];

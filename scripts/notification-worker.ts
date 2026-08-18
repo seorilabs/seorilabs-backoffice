@@ -56,8 +56,8 @@ async function deliver(): Promise<void> {
   while (!stopping) {
     if (Date.now() - lastRetention >= 24 * 60 * 60_000) {
       const retained = await maintainDiscordRetention();
-      if (retained.deletedNotifications || retained.deletedCommands || retained.deletedTurns) {
-        console.log(`[notification-worker] 보존기한 정리 알림 ${retained.deletedNotifications} · 명령 ${retained.deletedCommands} · 대화 ${retained.deletedTurns}`);
+      if (retained.deletedNotifications || retained.deletedCommands || retained.deletedTurns || retained.deletedReviewEvents) {
+        console.log(`[notification-worker] 보존기한 정리 알림 ${retained.deletedNotifications} · 명령 ${retained.deletedCommands} · 대화 ${retained.deletedTurns} · 리뷰 payload ${retained.deletedReviewEvents}`);
       }
       lastRetention = Date.now();
     }

@@ -31,6 +31,24 @@ export function commandRetentionWhere(
   };
 }
 
+export function reviewEventRetentionWhere(
+  cutoff: Date,
+): Prisma.NotificationEventWhereInput {
+  return {
+    kind: "STORE_REVIEW",
+    createdAt: { lt: cutoff },
+    deliveries: {
+      some: {},
+      every: {
+        OR: [
+          { status: "DEAD_LETTER" },
+          { deletedAt: { not: null } },
+        ],
+      },
+    },
+  };
+}
+
 export async function maintainDiscordRetention(now = new Date()) {
   const cutoff = new Date(now.getTime() - env.discordRetentionDays() * 24 * 60 * 60_000);
   const activeIncidents = await prisma.operationalIncident.findMany({
@@ -64,5 +82,24 @@ export async function maintainDiscordRetention(now = new Date()) {
     deletedCommands++;
   }
   const turns = await prisma.discordTurn.deleteMany({ where: { createdAt: { lt: cutoff } } });
-  return { deletedNotifications, deletedCommands, deletedTurns: turns.count, cutoff };
+  // 리뷰 원문은 전송 payload에만 최대 보존기한 동안 둔다. Discord 삭제가
+  // 확인됐거나 전송이 영구 실패한 이벤트만 제거해 pending 재시도는 보존한다.
+  const expiredReviewEvents = await prisma.notificationEvent.findMany({
+    where: reviewEventRetentionWhere(cutoff),
+    orderBy: { createdAt: "asc" },
+    take: 100,
+    select: { id: true },
+  });
+  const deletedReviewEvents = expiredReviewEvents.length
+    ? (await prisma.notificationEvent.deleteMany({
+        where: { id: { in: expiredReviewEvents.map((event) => event.id) } },
+      })).count
+    : 0;
+  return {
+    deletedNotifications,
+    deletedCommands,
+    deletedTurns: turns.count,
+    deletedReviewEvents,
+    cutoff,
+  };
 }
