@@ -56,6 +56,7 @@ class MemoryReviewRepository implements ReviewRepository {
 const app = {
   id: "app-1",
   displayName: "테스트 게임",
+  currentStage: "LIVEOPS" as const,
   playPackage: "com.seorilabs.test",
   iosBundle: "com.seorilabs.test",
   marketTargets: ["play", "appstore"],
@@ -195,4 +196,46 @@ test("수집 대상과 다른 store의 리뷰는 기준선으로 저장하지 �
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0]?.error ?? "", /리뷰 store 불일치/);
   assert.equal(await repository.initialized(app.id, "GOOGLE_PLAY"), false);
+});
+
+test("공개 전 단계는 제외하고 RELEASE와 LIVEOPS만 리뷰를 수집한다", async () => {
+  const fetched: string[] = [];
+  const result = await collectStoreReviews({
+    repository: new MemoryReviewRepository(),
+    listApps: async () => [
+      { ...app, id: "planning", currentStage: "PLANNING" },
+      { ...app, id: "qa", currentStage: "QA" },
+      { ...app, id: "release", currentStage: "RELEASE", iosBundle: null, marketTargets: ["play"] },
+      { ...app, id: "liveops", currentStage: "LIVEOPS", iosBundle: null, marketTargets: ["play"] },
+    ],
+    destinations: () => destination,
+    fetchGooglePlay: async (packageName) => {
+      fetched.push(packageName);
+      return [];
+    },
+    enqueue: async (input) => input.dedupeKey,
+  });
+  assert.equal(result.targets, 2);
+  assert.equal(result.storeCoverage.GOOGLE_PLAY.targets, 2);
+  assert.equal(result.storeCoverage.GOOGLE_PLAY.succeeded, 2);
+  assert.deepEqual(fetched, [app.playPackage, app.playPackage]);
+});
+
+test("같은 store의 일부 앱 실패는 성공 범위와 오류를 함께 남긴다", async () => {
+  const result = await collectStoreReviews({
+    repository: new MemoryReviewRepository(),
+    listApps: async () => [
+      { ...app, id: "allowed", playPackage: "com.seorilabs.allowed", iosBundle: null, marketTargets: ["play"] },
+      { ...app, id: "denied", playPackage: "com.seorilabs.denied", iosBundle: null, marketTargets: ["play"] },
+    ],
+    destinations: () => destination,
+    fetchGooglePlay: async (packageName) => {
+      if (packageName.endsWith("denied")) throw new Error("권한 없음");
+      return [];
+    },
+    enqueue: async (input) => input.dedupeKey,
+  });
+  assert.deepEqual(result.storeCoverage.GOOGLE_PLAY, { targets: 2, succeeded: 1 });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0]?.app, "테스트 게임");
 });

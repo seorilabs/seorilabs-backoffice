@@ -1,4 +1,5 @@
 import type {
+  Lifecycle,
   Prisma,
   StoreReviewStore,
 } from "@prisma/client";
@@ -26,6 +27,7 @@ import type {
 export interface ReviewAppTarget {
   id: string;
   displayName: string;
+  currentStage: Lifecycle;
   playPackage: string | null;
   iosBundle: string | null;
   marketTargets: Prisma.JsonValue;
@@ -131,12 +133,15 @@ export interface StoreReviewCollectorDependencies {
 
 export interface StoreReviewCollectResult {
   targets: number;
+  storeCoverage: Record<StoreReviewStore, { targets: number; succeeded: number }>;
   fetched: number;
   baselined: number;
   enqueued: number;
   unchanged: number;
   errors: Array<{ app: string; store: StoreReviewStore; error: string }>;
 }
+
+const REVIEWABLE_STAGES = new Set<Lifecycle>(["RELEASE", "LIVEOPS"]);
 
 function marketTargets(value: Prisma.JsonValue): Set<string> {
   return new Set(
@@ -234,6 +239,7 @@ export async function collectStoreReviews(
     select: {
       id: true,
       displayName: true,
+      currentStage: true,
       playPackage: true,
       iosBundle: true,
       marketTargets: true,
@@ -241,6 +247,7 @@ export async function collectStoreReviews(
   }));
   const apps = await listApps();
   const targets = apps.flatMap((app) => {
+    if (!REVIEWABLE_STAGES.has(app.currentStage)) return [];
     const markets = marketTargets(app.marketTargets);
     return [
       ...(markets.has("play") && app.playPackage
@@ -253,12 +260,17 @@ export async function collectStoreReviews(
   });
   const result: StoreReviewCollectResult = {
     targets: targets.length,
+    storeCoverage: {
+      GOOGLE_PLAY: { targets: 0, succeeded: 0 },
+      APP_STORE: { targets: 0, succeeded: 0 },
+    },
     fetched: 0,
     baselined: 0,
     enqueued: 0,
     unchanged: 0,
     errors: [],
   };
+  for (const target of targets) result.storeCoverage[target.store].targets++;
   if (targets.length === 0) return result;
 
   let googleFetcher = dependencies.fetchGooglePlay;
@@ -288,6 +300,7 @@ export async function collectStoreReviews(
         now: dependencies.now ?? (() => new Date()),
         result,
       });
+      result.storeCoverage[target.store].succeeded++;
     } catch (error) {
       result.errors.push({
         app: target.app.displayName,
