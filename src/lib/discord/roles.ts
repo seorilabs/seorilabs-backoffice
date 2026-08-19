@@ -33,16 +33,28 @@ export function hasDiscordCapability(roleIds: readonly string[], capability: Dis
   return false;
 }
 
+/**
+ * 버튼이 실려 나가는 알림 채널. 카드는 이 채널들에 놓이므로 버튼을 누르는 인터랙션도
+ * 여기서 온다. 슬래시 명령은 #backoffice 로만 제한하고, 버튼은 카드가 있는 곳에서
+ * 눌러야 의미가 있다. 실제 실행 권한은 채널이 아니라 Discord 역할로 건다.
+ */
+export const DISCORD_CARD_CHANNEL_KEYS = [
+  "backoffice", // 승인·초안·명령 확인 카드
+  "release-ops", // 배포 상태 카드의 마켓 후속 작업
+  "ops-alerts", // 장애 확인·담당 지정
+  "metrics-daily", // 지표 계열 장애 카드
+] as const;
+
 export function isDiscordInteractionScope(input: {
   guildId?: string;
   channelId?: string;
   expectedGuildId: string;
-  expectedChannelId: string;
+  allowedChannelIds: readonly string[];
 }): boolean {
-  return Boolean(input.guildId) &&
-    Boolean(input.channelId) &&
-    input.guildId === input.expectedGuildId &&
-    input.channelId === input.expectedChannelId;
+  if (!input.guildId || !input.channelId) return false;
+  if (input.guildId !== input.expectedGuildId) return false;
+  // 미설정 채널은 빈 문자열로 들어온다. 걸러내지 않으면 허용 목록이 느슨해진다.
+  return input.allowedChannelIds.some((id) => id !== "" && id === input.channelId);
 }
 
 export function capabilityForCommand(command: string): DiscordCapability {
