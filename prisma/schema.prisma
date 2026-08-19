@@ -324,7 +324,6 @@ enum NotificationKind {
 }
 
 enum NotificationProvider {
-  TELEGRAM
   DISCORD
 }
 
@@ -780,29 +779,6 @@ model DiscordTurn {
   @@map("discord_turn")
 }
 
-// 텔레그램 턴 기반 채팅 이력(Gemini 대화 컨텍스트). chatId 별 롤링.
-// Discord 전환 전 이력 테이블. 저장소의 additive migration 정책상 최종 정리 승인 전까지 보존한다.
-model TelegramTurn {
-  id        String   @id @default(cuid())
-  chatId    String // telegram chat id
-  role      String // user | assistant
-  content   String   @db.Text
-  createdAt DateTime @default(now())
-
-  @@index([chatId, createdAt])
-  @@map("telegram_turn")
-}
-
-// 텔레그램 다단계 흐름(예: /plan 아이디어 입력 대기) 상태. chatId당 1건.
-model TelegramPending {
-  chatId    String   @id
-  action    String // "plan_idea"
-  dataJson  Json
-  updatedAt DateTime @updatedAt
-
-  @@map("telegram_pending")
-}
-
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
   event      String
@@ -865,7 +841,7 @@ model VaultWriteRequest {
   folder      String           @default("받은함") // 대상 하위폴더(allowlist 강제)
   filename    String // 확장자 제외 제목(슬러그화)
   content     String           @db.Text
-  source      String           @default("agent") // agent|discord|web; legacy telegram rows retained
+  source      String           @default("agent") // agent|discord|web
   requestedBy String?
   status      VaultWriteStatus @default(PENDING)
   writtenPath String? // 실제 기록된 상대경로
