@@ -29,6 +29,24 @@ export async function enqueueDeployCompletionNotification(
   });
 }
 
+/**
+ * deploy-all 은 ReleaseRecord 가 없어 배포 상태 카드 경로를 타지 못한다. 실행 단위 결과를
+ * 같은 릴리즈 채널에 단발 알림으로 남겨 ALL 배포가 무음으로 끝나지 않게 한다.
+ */
+export async function enqueueDeployAllResultNotification(input: {
+  text: string;
+  eventKey: string;
+  occurredAt: Date;
+}): Promise<void> {
+  await enqueueNotification({
+    dedupeKey: `deploy-all:${input.eventKey}`,
+    kind: "OPS_ALERT",
+    payload: { text: input.text },
+    occurredAt: input.occurredAt,
+    destinations: discordDestinations(["release-ops"]),
+  });
+}
+
 async function previousReleaseMessage(releaseRecordId: string, destinationKey: string) {
   const delivery = await prisma.notificationDelivery.findFirst({
     where: {

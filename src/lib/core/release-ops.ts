@@ -40,7 +40,7 @@ import {
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
-import type { DeployTarget } from "@/lib/core/deploy-targets";
+import { MARKET_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
 import {
   bumpStableSemVerTag,
   normalizeStableSemVerTag,
@@ -243,13 +243,6 @@ export function formatReleaseBody(
   if (n.compareUrl) parts.push(`---\n\n**Changes:** ${n.compareUrl}`);
   return parts.join("\n\n");
 }
-
-const MARKET_WORKFLOW: Record<DeployTarget, string> = {
-  AIT: "deploy-apps-in-toss.yml",
-  PLAY: "deploy-google-play.yml",
-  APPSTORE: "deploy-app-store.yml",
-  ALL: "deploy-all.yml",
-};
 
 /**
  * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포까지
