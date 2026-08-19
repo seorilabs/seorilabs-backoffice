@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, ReleaseMarket } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
 import { editDiscord, sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
@@ -16,15 +16,35 @@ import {
 import { marketingVersionFromTag, readAppStoreReviewStatus } from "@/lib/app-store/submit";
 import { incidentComponents, incidentDeliveryMode, incidentMessage } from "@/lib/notifications/incidents";
 
-async function previousReleaseMessage(releaseRecordId: string, destinationKey: string) {
+/**
+ * 이 배포가 이어 써야 할 카드 메시지.
+ *
+ * 한 마켓·버전의 배포는 실행이 여러 개로 갈린다(업로드 → 프로덕션 승격, 재시도, 태그 push 와
+ * 명시 dispatch 중복). 실행마다 ReleaseRecord 가 따로 생기므로 releaseRecordId 로만 찾으면
+ * 그때마다 새 카드가 채널에 쌓인다. 같은 앱·마켓·버전의 카드는 하나로 유지한다.
+ */
+async function previousReleaseMessage(
+  release: { appId: string; market: ReleaseMarket; version: string },
+  destinationKey: string,
+) {
+  const siblings = await prisma.releaseRecord.findMany({
+    where: { appId: release.appId, market: release.market, version: release.version },
+    select: { id: true },
+  });
+  if (siblings.length === 0) return null;
   const delivery = await prisma.notificationDelivery.findFirst({
     where: {
       provider: "DISCORD",
       destinationKey,
       status: "SENT",
       providerMessageId: { not: null },
-      event: { dedupeKey: { startsWith: `deploy:${releaseRecordId}:` } },
+      event: {
+        OR: siblings.map((s) => ({ dedupeKey: { startsWith: `deploy:${s.id}:` } })),
+      },
     },
+    // 가장 최근 카드를 이어 쓴다. 사람이 카드를 지워 edit 이 10008 로 실패하면 새로 보내고,
+    // 다음 갱신은 그 새 카드를 집어 자기 복구된다. 가장 오래된 것을 고르면 지워진 메시지를
+    // 계속 편집 시도하다 매번 새 카드를 만든다.
     orderBy: { sentAt: "desc" },
     select: { providerMessageId: true },
   });
@@ -64,10 +84,17 @@ async function appStoreReviewCardState(
  * 배포 상태 카드의 본문과 액션 버튼. 알림 전달과 카드 버튼 실행 후 재렌더가 공유한다.
  * null = ReleaseRecord 없음.
  */
+export interface DeployCardRender {
+  text: string;
+  components: DiscordActionRow[];
+  /** 카드 메시지를 공유하는 단위. 같은 앱·마켓·버전이면 같은 카드다. */
+  release: { appId: string; market: ReleaseMarket; version: string };
+}
+
 export async function renderDeployCard(
   releaseRecordId: string,
   runUrl?: string,
-): Promise<{ text: string; components: DiscordActionRow[] } | null> {
+): Promise<DeployCardRender | null> {
   const release = await prisma.releaseRecord.findUnique({
     where: { id: releaseRecordId },
     select: {
@@ -76,6 +103,7 @@ export async function renderDeployCard(
       version: true,
       market: true,
       status: true,
+      track: true,
       workflowName: true,
       workflowRunId: true,
       externalBuildNumber: true,
@@ -115,11 +143,13 @@ export async function renderDeployCard(
     })) > 0;
 
   return {
+    release: { appId: release.appId, market: release.market, version: release.version },
     text: buildDeployStatusCardText({
       displayName: release.app.displayName,
       version: release.version,
       market: release.market,
       status: release.status,
+      track: release.track,
       workflowName: release.workflowName,
       externalBuildNumber: release.externalBuildNumber,
       runUrl: resolvedRunUrl,
@@ -143,7 +173,7 @@ async function deliverDeployCompletion(
   const card = await renderDeployCard(payload.releaseRecordId, payload.runUrl);
   if (!card) return { ok: false, error: "release record not found" };
   const options = { components: card.components };
-  const messageId = await previousReleaseMessage(payload.releaseRecordId, destinationKey);
+  const messageId = await previousReleaseMessage(card.release, destinationKey);
   if (messageId) {
     const edited = await editDiscord(destinationKey, messageId, card.text, options);
     if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;

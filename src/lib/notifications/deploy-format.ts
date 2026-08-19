@@ -86,11 +86,30 @@ export function buildDeployAllStatusCardText(input: {
   return lines.join("\n");
 }
 
+/**
+ * 마켓 게이트 표시. 승격 실행(track=production)이 성공했으면 그 게이트는 실행된 것으로
+ * 표시한다. 승격 카드에 "프로덕션 승격: 미실행" 이 남아 있으면 카드가 스스로를 부정한다.
+ */
+function marketGates(
+  market: ReleaseMarket,
+  status: ReleaseStatus,
+  track: string | null | undefined,
+): string[] {
+  const gates = REMAINING_GATES[market];
+  if (market !== "PLAY" || track !== "production") return gates;
+  const label = status === "SUCCEEDED" ? "🟢 실행됨" : `${WORKFLOW_STATUS_LABEL[status]}`;
+  return gates.map((line) =>
+    line.startsWith("프로덕션 승격·심사:") ? `프로덕션 승격·심사: ${label}` : line,
+  );
+}
+
 export function buildDeployStatusCardText(input: {
   displayName: string;
   version: string;
   market: ReleaseMarket;
   status: ReleaseStatus;
+  /** 배포 트랙. PLAY 의 "production" 은 승격 실행을 뜻한다. */
+  track?: string | null;
   workflowName?: string | null;
   externalBuildNumber?: number | null;
   runUrl?: string;
@@ -100,7 +119,7 @@ export function buildDeployStatusCardText(input: {
     `🚀 **${input.displayName} ${input.version} · ${MARKET_LABEL[input.market]}**`,
     "",
     `빌드·업로드 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
-    ...REMAINING_GATES[input.market],
+    ...marketGates(input.market, input.status, input.track),
   ];
   if (input.workflowName) lines.push(`실행: ${input.workflowName}`);
   if (input.externalBuildNumber != null) lines.push(`Xcode Cloud 빌드: #${input.externalBuildNumber}`);
