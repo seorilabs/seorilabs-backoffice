@@ -18,7 +18,7 @@ import { findTagForSha } from "@/lib/github/release";
 import {
   enqueueDeployAllResultNotification,
   enqueueDeployCompletionNotification,
-} from "@/lib/notifications/deploy";
+} from "@/lib/notifications/deploy-enqueue";
 import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
 import { isDeployAllWorkflow } from "@/lib/core/deploy-targets";
 

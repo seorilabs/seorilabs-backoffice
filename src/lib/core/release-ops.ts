@@ -35,8 +35,12 @@ import {
 import {
   prepareAppStoreSubmission,
   submitAppStoreForReview,
-  getAppStoreSubmissionState,
+  createAppStoreReviewSubmission,
+  removeAppStoreReviewSubmissionItem,
+  cancelAppStoreReviewSubmission,
+  readAppStoreReviewStatus,
   marketingVersionFromTag,
+  type AppStoreReviewStatus,
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
@@ -51,7 +55,7 @@ import {
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
-import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
+import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy-enqueue";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -540,9 +544,92 @@ export async function appStoreState(opts: {
   repoFullName: string;
   tag: string;
 }): Promise<string | null> {
+  return (await appStoreReviewStatus(opts)).appStoreState;
+}
+
+/** 마케팅 버전의 심사 단계 라이브 조회(카드 버튼 구성·실행 가드 공용). */
+export async function appStoreReviewStatus(opts: {
+  repoFullName: string;
+  tag: string;
+}): Promise<AppStoreReviewStatus> {
   const bundleId = await iosBundleOf(opts.repoFullName);
-  return getAppStoreSubmissionState({
+  return readAppStoreReviewStatus({
     bundleId,
     marketingVersion: marketingVersionFromTag(opts.tag),
   });
+}
+
+/** App Store 심사 생성(제출 아님): 준비 + 열린 제출에 이 버전을 항목으로 추가. */
+export async function createAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ prepare: PrepareResult; reviewSubmissionId?: string }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, opts.tag);
+  const result = await createAppStoreReviewSubmission({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+    notes: notes ?? {},
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.create", {
+    ready: result.prepare.ready,
+    appStoreState: result.prepare.appStoreState,
+    reviewSubmissionId: result.reviewSubmissionId ?? null,
+  });
+
+  return result;
+}
+
+/** App Store 심사 생성 삭제(미제출 항목만). */
+export async function removeAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ removed: boolean }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const result = await removeAppStoreReviewSubmissionItem({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.remove", { tag: opts.tag });
+  return result;
+}
+
+/** App Store 제출 취소(심사 대기·진행 중 회수). */
+export async function cancelAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ reviewSubmissionId: string }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const result = await cancelAppStoreReviewSubmission({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.cancel", {
+    reviewSubmissionId: result.reviewSubmissionId,
+  });
+  return result;
+}
+
+async function recordReleaseAudit(
+  opts: { repoFullName: string; tag: string; actorLabel?: string },
+  action: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await prisma.auditLog
+    .create({
+      data: {
+        actorLogin: opts.actorLabel ?? null,
+        action,
+        entityType: "release",
+        entityId: `${opts.repoFullName}@${opts.tag}`,
+        payload: payload as object,
+      },
+    })
+    .catch(() => {});
 }

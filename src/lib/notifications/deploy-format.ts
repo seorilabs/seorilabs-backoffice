@@ -1,4 +1,5 @@
 import type { ReleaseMarket, ReleaseStatus } from "@prisma/client";
+import type { DiscordActionRow } from "@/lib/notifications/discord";
 
 const MARKET_LABEL: Record<ReleaseMarket, string> = {
   AIT: "AppsInToss",
@@ -106,4 +107,116 @@ export function buildDeployStatusCardText(input: {
   if (input.runUrl) lines.push(`[실행 결과 보기](${input.runUrl})`);
   lines.push(`마지막 갱신: ${formatKst(input.updatedAt)}`);
   return lines.join("\n");
+}
+
+// ── 배포 카드 액션 버튼 ────────────────────────────────────────────────────────
+
+/** 카드 버튼이 트리거하는 마켓 후속 작업. custom_id 의 action 부분과 1:1. */
+export const DEPLOY_CARD_ACTIONS = [
+  "play_promote",
+  "appstore_review_create",
+  "appstore_review_submit",
+  "appstore_review_remove",
+  "appstore_review_cancel",
+  "appstore_refresh",
+] as const;
+
+export type DeployCardAction = (typeof DEPLOY_CARD_ACTIONS)[number];
+
+export const DEPLOY_CARD_ACTION_KO: Record<DeployCardAction, string> = {
+  play_promote: "Google Play 프로덕션 승격",
+  appstore_review_create: "App Store 심사 생성",
+  appstore_review_submit: "App Store 심사 제출",
+  appstore_review_remove: "App Store 심사 삭제",
+  appstore_review_cancel: "App Store 제출 취소",
+  appstore_refresh: "App Store 상태 새로고침",
+};
+
+/** 카드 렌더에 필요한 App Store 심사 단계. ASC 라이브 조회 결과에서 뽑는다. */
+export interface AppStoreReviewCardState {
+  appStoreState: string | null;
+  versionEditable: boolean;
+  submissionState: string | null;
+  /** 이 버전이 열린 심사 제출의 항목으로 들어가 있는지. */
+  hasSubmissionItem: boolean;
+}
+
+// 제출 뒤 회수(취소)가 가능한 심사 제출 상태.
+const CANCELABLE_SUBMISSION_STATES = new Set([
+  "WAITING_FOR_REVIEW",
+  "IN_REVIEW",
+  "UNRESOLVED_ISSUES",
+]);
+
+export function deployCardCustomId(action: DeployCardAction, releaseRecordId: string): string {
+  return `deploycard:${action}:${releaseRecordId}`;
+}
+
+function button(
+  action: DeployCardAction,
+  releaseRecordId: string,
+  style: 1 | 2 | 4,
+): DiscordActionRow["components"][number] {
+  return {
+    type: 2,
+    style,
+    label: DEPLOY_CARD_ACTION_KO[action].replace(/^(Google Play|App Store) /, ""),
+    custom_id: deployCardCustomId(action, releaseRecordId),
+  };
+}
+
+function row(components: DiscordActionRow["components"]): DiscordActionRow[] {
+  return components.length ? [{ type: 1, components }] : [];
+}
+
+/** App Store 심사 단계 → 지금 실행 가능한 액션만. */
+function appStoreButtons(
+  releaseRecordId: string,
+  review: AppStoreReviewCardState | null,
+): DiscordActionRow["components"] {
+  // 상태를 못 읽었으면 임의 액션을 노출하지 않고 새로고침만 남긴다.
+  if (!review) return [button("appstore_refresh", releaseRecordId, 2)];
+  const refresh = button("appstore_refresh", releaseRecordId, 2);
+
+  if (review.hasSubmissionItem) {
+    if (review.submissionState === "READY_FOR_REVIEW") {
+      return [
+        button("appstore_review_submit", releaseRecordId, 4),
+        button("appstore_review_remove", releaseRecordId, 2),
+        refresh,
+      ];
+    }
+    if (CANCELABLE_SUBMISSION_STATES.has(review.submissionState ?? "")) {
+      return [button("appstore_review_cancel", releaseRecordId, 2), refresh];
+    }
+    // COMPLETING·CANCELING 은 ASC 가 처리 중이라 개입할 수 없다.
+    return [refresh];
+  }
+
+  // 다른 버전이 이미 제출된 열린 심사를 점유하면 이 버전을 항목으로 넣을 수 없다.
+  if (review.submissionState && review.submissionState !== "READY_FOR_REVIEW") return [refresh];
+  if (review.appStoreState && !review.versionEditable) return [refresh];
+  return [button("appstore_review_create", releaseRecordId, 1), refresh];
+}
+
+/**
+ * 배포 카드에 붙일 액션 버튼. 업로드가 성공한 뒤에만 후속 마켓 작업을 노출한다.
+ * Play 승격 실행 자체가 만든 카드에는 승격 버튼을 다시 달지 않는다.
+ */
+export function deployCardComponents(input: {
+  releaseRecordId: string;
+  market: ReleaseMarket;
+  status: ReleaseStatus;
+  workflowName?: string | null;
+  review?: AppStoreReviewCardState | null;
+}): DiscordActionRow[] {
+  if (input.status !== "SUCCEEDED") return [];
+  if (input.market === "PLAY") {
+    if (/promote/i.test(input.workflowName ?? "")) return [];
+    return row([button("play_promote", input.releaseRecordId, 4)]);
+  }
+  if (input.market === "APPSTORE") {
+    return row(appStoreButtons(input.releaseRecordId, input.review ?? null));
+  }
+  return [];
 }
