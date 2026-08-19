@@ -1,9 +1,15 @@
 import { EPHEMERAL_FLAG, InteractionResponseType } from "@/lib/discord/types";
+import type { DiscordActionRow } from "@/lib/notifications/discord";
 
-export function ephemeral(content: string) {
+export function ephemeral(content: string, components: DiscordActionRow[] = []) {
   return {
     type: InteractionResponseType.CHANNEL_MESSAGE,
-    data: { content: content.slice(0, 2_000), flags: EPHEMERAL_FLAG, allowed_mentions: { parse: [] } },
+    data: {
+      content: content.slice(0, 2_000),
+      ...(components.length ? { components } : {}),
+      flags: EPHEMERAL_FLAG,
+      allowed_mentions: { parse: [] },
+    },
   };
 }
 

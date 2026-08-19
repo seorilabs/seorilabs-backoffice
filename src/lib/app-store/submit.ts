@@ -179,14 +179,94 @@ export async function prepareAppStoreSubmission(opts: {
   };
 }
 
-/** 앱의 열린 reviewSubmission(미제출) 조회, 없으면 생성. */
-async function findOrCreateReviewSubmission(appId: string): Promise<string> {
+// 아직 종료되지 않은 심사 제출 상태. COMPLETE 는 이미 끝난 제출이라 제외한다.
+const OPEN_SUBMISSION_STATES = [
+  "READY_FOR_REVIEW",
+  "WAITING_FOR_REVIEW",
+  "IN_REVIEW",
+  "UNRESOLVED_ISSUES",
+  "COMPLETING",
+  "CANCELING",
+] as const;
+
+// 제출 뒤 취소(canceled=true)가 가능한 상태. 심사 대기·진행 중에만 회수할 수 있다.
+const CANCELABLE_SUBMISSION_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW", "UNRESOLVED_ISSUES"]);
+
+interface OpenSubmission {
+  id: string;
+  state: string;
+}
+
+// 앱·플랫폼당 열린 제출은 사실상 1건이고, 상태 전이 중에 잠깐 겹치는 정도다.
+// 카드 렌더가 제출 수만큼 항목 조회를 더 하므로 탐색 범위를 좁게 묶는다.
+const OPEN_SUBMISSION_SCAN_LIMIT = 5;
+
+/** 앱의 아직 끝나지 않은 심사 제출 목록. 같은 앱에 여러 건이 겹칠 수 있다. */
+async function listOpenReviewSubmissions(appId: string): Promise<OpenSubmission[]> {
   const open = await asc(
-    `/v1/reviewSubmissions?filter[app]=${appId}` +
-      `&filter[state]=READY_FOR_REVIEW,UNRESOLVED_ISSUES,COMPLETING&limit=1`,
+    `/v1/reviewSubmissions?filter[app]=${appId}&filter[platform]=${PLATFORM}` +
+      `&filter[state]=${OPEN_SUBMISSION_STATES.join(",")}&limit=${OPEN_SUBMISSION_SCAN_LIMIT}`,
   ).catch(() => null);
-  const existing = open ? asArray(open.data)[0] : null;
-  if (existing) return existing.id;
+  if (!open) return [];
+  return asArray(open.data).map((item) => ({
+    id: item.id,
+    state: String(item.attributes?.state ?? ""),
+  }));
+}
+
+/**
+ * 제출에서 해당 appStoreVersion 을 가리키는 항목 id. 없으면 null.
+ * ASC 는 include 로 요청하지 않은 to-one 관계에 data 를 넣지 않으므로 반드시 include 한다.
+ */
+async function findSubmissionItem(
+  submissionId: string,
+  versionId: string,
+): Promise<string | null> {
+  const items = await asc(
+    `/v1/reviewSubmissions/${submissionId}/items?include=appStoreVersion&limit=50`,
+  ).catch(() => null);
+  if (!items) return null;
+  const match = asArray(items.data).find(
+    (item) => item.relationships?.appStoreVersion?.data?.id === versionId,
+  );
+  return match?.id ?? null;
+}
+
+/** 제출에 appStoreVersion 항목을 추가. 이미 있으면 POST 하지 않는다. */
+async function addSubmissionItem(submissionId: string, versionId: string): Promise<void> {
+  if (await findSubmissionItem(submissionId, versionId)) return;
+  await asc("/v1/reviewSubmissionItems", {
+    method: "POST",
+    body: JSON.stringify({
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: submissionId } },
+          appStoreVersion: { data: { type: "appStoreVersions", id: versionId } },
+        },
+      },
+    }),
+  }).catch((e) => {
+    // 선조회와 POST 사이의 경합만 흡수한다(판정의 1차 근거는 위 조회다).
+    if (!/already|exist|duplicate/i.test((e as Error).message)) throw e;
+  });
+}
+
+/**
+ * 항목을 더 넣을 수 있는 제출(미제출 = READY_FOR_REVIEW) 확보. 없으면 생성.
+ * 이미 심사 대기·진행 중인 제출에 항목을 추가하거나 다시 제출하면 ASC 가 거부하므로,
+ * 그 상태는 재사용하지 않고 무엇이 막고 있는지 드러낸다.
+ */
+async function findOrCreateReviewSubmission(appId: string): Promise<string> {
+  const open = await listOpenReviewSubmissions(appId);
+  const reusable = open.find((item) => item.state === "READY_FOR_REVIEW");
+  if (reusable) return reusable.id;
+  const blocking = open[0];
+  if (blocking) {
+    throw new Error(
+      `진행 중인 심사 제출(${blocking.state})이 있어 새 제출을 만들 수 없습니다.`,
+    );
+  }
 
   const created = await asc("/v1/reviewSubmissions", {
     method: "POST",
@@ -226,24 +306,7 @@ export async function submitAppStoreForReview(opts: {
   }
 
   const reviewSubmissionId = await findOrCreateReviewSubmission(appId);
-
-  // 동일 버전이 이미 항목으로 있으면 중복 추가는 ASC 가 거부하므로 무시.
-  await asc("/v1/reviewSubmissionItems", {
-    method: "POST",
-    body: JSON.stringify({
-      data: {
-        type: "reviewSubmissionItems",
-        relationships: {
-          reviewSubmission: {
-            data: { type: "reviewSubmissions", id: reviewSubmissionId },
-          },
-          appStoreVersion: { data: { type: "appStoreVersions", id: version.id } },
-        },
-      },
-    }),
-  }).catch((e) => {
-    if (!/already|exist|duplicate/i.test((e as Error).message)) throw e;
-  });
+  await addSubmissionItem(reviewSubmissionId, version.id);
 
   await asc(`/v1/reviewSubmissions/${reviewSubmissionId}`, {
     method: "PATCH",
@@ -259,16 +322,119 @@ export async function submitAppStoreForReview(opts: {
   return { reviewSubmissionId, versionId: version.id, submitted: true };
 }
 
-/** 마케팅 버전의 현재 appStoreState 라이브 조회(버튼 상태 표시용). null=버전 없음. */
-export async function getAppStoreSubmissionState(opts: {
+/** 심사 생성(제출 아님): 버전 준비 → 열린 제출 확보 → 이 버전을 항목으로 추가. */
+export async function createAppStoreReviewSubmission(opts: {
   bundleId: string;
   marketingVersion: string;
-}): Promise<string | null> {
+  notes: ReleaseNoteTranslationsInput;
+}): Promise<{ prepare: PrepareResult; reviewSubmissionId?: string }> {
+  const prepare = await prepareAppStoreSubmission(opts);
+  // 빌드가 연결되지 않은 상태로 항목을 만들면 제출 단계에서 ASC 가 거부한다.
+  if (!prepare.ready) return { prepare };
+
+  const reviewSubmissionId = await findOrCreateReviewSubmission(prepare.appId);
+  await addSubmissionItem(reviewSubmissionId, prepare.versionId);
+  return { prepare, reviewSubmissionId };
+}
+
+/** 심사 생성 삭제: 아직 제출하지 않은 항목만 제거한다. */
+export async function removeAppStoreReviewSubmissionItem(opts: {
+  bundleId: string;
+  marketingVersion: string;
+}): Promise<{ removed: boolean }> {
+  const status = await readAppStoreReviewStatus(opts);
+  if (!status.submissionId || !status.submissionItemId) {
+    throw new Error("삭제할 심사 항목이 없습니다.");
+  }
+  // 제출된 뒤에는 항목 제거가 아니라 제출 취소로만 회수할 수 있다.
+  if (status.submissionState !== "READY_FOR_REVIEW") {
+    throw new Error(
+      `이미 제출된 심사(${status.submissionState})는 삭제할 수 없습니다. 제출 취소를 사용하세요.`,
+    );
+  }
+  await asc(`/v1/reviewSubmissionItems/${status.submissionItemId}`, { method: "DELETE" });
+  return { removed: true };
+}
+
+/** 제출 취소: 심사 대기·진행 중인 제출을 회수한다(canceled=true). */
+export async function cancelAppStoreReviewSubmission(opts: {
+  bundleId: string;
+  marketingVersion: string;
+}): Promise<{ reviewSubmissionId: string }> {
+  const status = await readAppStoreReviewStatus(opts);
+  if (!status.submissionId) throw new Error("취소할 심사 제출이 없습니다.");
+  if (!CANCELABLE_SUBMISSION_STATES.has(status.submissionState ?? "")) {
+    throw new Error(
+      `현재 상태(${status.submissionState ?? "알 수 없음"})에서는 제출을 취소할 수 없습니다.`,
+    );
+  }
+  await asc(`/v1/reviewSubmissions/${status.submissionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      data: {
+        type: "reviewSubmissions",
+        id: status.submissionId,
+        attributes: { canceled: true },
+      },
+    }),
+  });
+  return { reviewSubmissionId: status.submissionId };
+}
+
+export interface AppStoreReviewStatus {
+  /** 마케팅 버전의 appStoreVersion. null=버전 아직 없음. */
+  versionId: string | null;
+  appStoreState: string | null;
+  /** 메타데이터·빌드 편집이 가능한 상태인지. */
+  versionEditable: boolean;
+  /** 앱의 열린 심사 제출. null=열린 제출 없음. */
+  submissionId: string | null;
+  submissionState: string | null;
+  /** 이 버전이 열린 제출에 포함돼 있으면 그 항목 id. */
+  submissionItemId: string | null;
+}
+
+/**
+ * 마케팅 버전의 현재 심사 단계 라이브 조회(버튼 구성·실행 가드 공용).
+ * appStoreVersion 상태와 열린 reviewSubmission 을 함께 본다. 둘은 별개 리소스라
+ * "버전은 편집 가능한데 제출은 진행 중" 같은 조합이 실제로 존재한다.
+ */
+export async function readAppStoreReviewStatus(opts: {
+  bundleId: string;
+  marketingVersion: string;
+}): Promise<AppStoreReviewStatus> {
   const appId = await findAppId(opts.bundleId);
   const doc = await asc(
     `/v1/apps/${appId}/appStoreVersions?filter[platform]=${PLATFORM}` +
       `&filter[versionString]=${encodeURIComponent(opts.marketingVersion)}&limit=1`,
   );
   const ver = asArray(doc.data)[0];
-  return ver ? String(ver.attributes?.appStoreState ?? "") || null : null;
+  const versionId = ver?.id ?? null;
+  const appStoreState = ver ? String(ver.attributes?.appStoreState ?? "") || null : null;
+
+  // 이 버전을 담고 있는 제출을 우선한다. 없으면 항목을 넣을 수 있는 미제출 건,
+  // 그것도 없으면 첫 건(막고 있는 제출)을 상태로 보여준다.
+  const open = await listOpenReviewSubmissions(appId);
+  let submission: OpenSubmission | null = null;
+  let submissionItemId: string | null = null;
+  if (versionId) {
+    for (const candidate of open) {
+      const itemId = await findSubmissionItem(candidate.id, versionId);
+      if (itemId) {
+        submission = candidate;
+        submissionItemId = itemId;
+        break;
+      }
+    }
+  }
+  submission ??= open.find((item) => item.state === "READY_FOR_REVIEW") ?? open[0] ?? null;
+
+  return {
+    versionId,
+    appStoreState,
+    versionEditable: EDITABLE_STATES.has(appStoreState ?? ""),
+    submissionId: submission?.id ?? null,
+    submissionState: submission?.state ?? null,
+    submissionItemId,
+  };
 }

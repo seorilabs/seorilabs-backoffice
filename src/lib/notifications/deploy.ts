@@ -1,51 +1,20 @@
 import type { NotificationProvider, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { discordDestinations, DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
+import { DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
 import { editDiscord, sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
 import { env } from "@/lib/env";
-import { drainNotifications, enqueueNotification, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
+import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
 import {
   buildDeployStatusCardText,
+  deployCardComponents,
   deployCompletionPayload,
-  deployNotificationDedupeKey,
+  isReleaseTag,
+  type AppStoreReviewCardState,
   type DeployCompletionPayload,
-  type EnqueueDeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
+import { marketingVersionFromTag, readAppStoreReviewStatus } from "@/lib/app-store/submit";
 import { incidentComponents, incidentDeliveryMode, incidentMessage } from "@/lib/notifications/incidents";
-
-export async function enqueueDeployCompletionNotification(
-  payload: EnqueueDeployCompletionPayload,
-): Promise<void> {
-  await enqueueNotification({
-    dedupeKey: deployNotificationDedupeKey(payload.releaseRecordId, payload.eventKey),
-    kind: "DEPLOY_COMPLETION",
-    payload: {
-      releaseRecordId: payload.releaseRecordId,
-      status: payload.status,
-      ...(payload.runUrl ? { runUrl: payload.runUrl } : {}),
-    },
-    destinations: discordDestinations(["release-ops"]),
-  });
-}
-
-/**
- * deploy-all 은 ReleaseRecord 가 없어 배포 상태 카드 경로를 타지 못한다. 실행 단위 결과를
- * 같은 릴리즈 채널에 단발 알림으로 남겨 ALL 배포가 무음으로 끝나지 않게 한다.
- */
-export async function enqueueDeployAllResultNotification(input: {
-  text: string;
-  eventKey: string;
-  occurredAt: Date;
-}): Promise<void> {
-  await enqueueNotification({
-    dedupeKey: `deploy-all:${input.eventKey}`,
-    kind: "OPS_ALERT",
-    payload: { text: input.text },
-    occurredAt: input.occurredAt,
-    destinations: discordDestinations(["release-ops"]),
-  });
-}
 
 async function previousReleaseMessage(releaseRecordId: string, destinationKey: string) {
   const delivery = await prisma.notificationDelivery.findFirst({
@@ -62,42 +31,126 @@ async function previousReleaseMessage(releaseRecordId: string, destinationKey: s
   return delivery?.providerMessageId ?? null;
 }
 
+/**
+ * App Store 심사 단계 라이브 조회. 카드 렌더를 외부 API 가용성에 묶지 않기 위해
+ * 실패는 null 로 흘려보내고(버튼은 새로고침만 남는다) 알림 자체는 계속 보낸다.
+ */
+async function appStoreReviewCardState(
+  iosBundle: string | null,
+  version: string,
+): Promise<AppStoreReviewCardState | null> {
+  if (!iosBundle) return null;
+  try {
+    const status = await readAppStoreReviewStatus({
+      bundleId: iosBundle,
+      marketingVersion: marketingVersionFromTag(version),
+    });
+    return {
+      appStoreState: status.appStoreState,
+      versionEditable: status.versionEditable,
+      submissionState: status.submissionState,
+      hasSubmissionItem: status.submissionItemId != null,
+    };
+  } catch (error) {
+    console.error(
+      "[deploy-card] App Store 심사 상태 조회 실패:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+/**
+ * 배포 상태 카드의 본문과 액션 버튼. 알림 전달과 카드 버튼 실행 후 재렌더가 공유한다.
+ * null = ReleaseRecord 없음.
+ */
+export async function renderDeployCard(
+  releaseRecordId: string,
+  runUrl?: string,
+): Promise<{ text: string; components: DiscordActionRow[] } | null> {
+  const release = await prisma.releaseRecord.findUnique({
+    where: { id: releaseRecordId },
+    select: {
+      id: true,
+      appId: true,
+      version: true,
+      market: true,
+      status: true,
+      workflowName: true,
+      workflowRunId: true,
+      externalBuildNumber: true,
+      updatedAt: true,
+      app: { select: { displayName: true, repoFullName: true, iosBundle: true } },
+    },
+  });
+  if (!release) return null;
+
+  // 재렌더 시점에는 알림 payload 가 없으므로 미러된 실행 id 로 링크를 복원한다.
+  const resolvedRunUrl =
+    runUrl ??
+    (release.workflowRunId != null
+      ? `https://github.com/${release.app.repoFullName}/actions/runs/${release.workflowRunId}`
+      : undefined);
+
+  // 태그가 없으면 어차피 버튼을 달지 않는다. ASC 를 헛되이 호출하지 않는다.
+  const actionable = release.status === "SUCCEEDED" && isReleaseTag(release.version);
+  const review =
+    actionable && release.market === "APPSTORE"
+      ? await appStoreReviewCardState(release.app.iosBundle, release.version)
+      : null;
+
+  // 같은 태그의 승격 배포가 이미 있으면(진행 중·성공) 승격 버튼을 다시 달지 않는다.
+  // 실패한 승격은 재시도할 수 있어야 하므로 세지 않는다.
+  const promotionRequested =
+    actionable &&
+    release.market === "PLAY" &&
+    (await prisma.releaseRecord.count({
+      where: {
+        appId: release.appId,
+        market: "PLAY",
+        version: release.version,
+        track: "production",
+        status: { in: ["PENDING", "IN_PROGRESS", "SUCCEEDED"] },
+      },
+    })) > 0;
+
+  return {
+    text: buildDeployStatusCardText({
+      displayName: release.app.displayName,
+      version: release.version,
+      market: release.market,
+      status: release.status,
+      workflowName: release.workflowName,
+      externalBuildNumber: release.externalBuildNumber,
+      runUrl: resolvedRunUrl,
+      updatedAt: release.updatedAt,
+    }),
+    components: deployCardComponents({
+      releaseRecordId: release.id,
+      market: release.market,
+      status: release.status,
+      version: release.version,
+      promotionRequested,
+      review,
+    }),
+  };
+}
+
 async function deliverDeployCompletion(
   payload: DeployCompletionPayload,
   provider: NotificationProvider,
   destinationKey: string,
 ): Promise<DeliveryOverrideResult> {
   if (provider !== "DISCORD") return { ok: false, error: "unsupported notification provider" };
-  const release = await prisma.releaseRecord.findUnique({
-    where: { id: payload.releaseRecordId },
-    select: {
-      id: true,
-      version: true,
-      market: true,
-      status: true,
-      workflowName: true,
-      externalBuildNumber: true,
-      updatedAt: true,
-      app: { select: { displayName: true } },
-    },
-  });
-  if (!release) return { ok: false, error: "release record not found" };
-  const text = buildDeployStatusCardText({
-    displayName: release.app.displayName,
-    version: release.version,
-    market: release.market,
-    status: release.status,
-    workflowName: release.workflowName,
-    externalBuildNumber: release.externalBuildNumber,
-    runUrl: payload.runUrl,
-    updatedAt: release.updatedAt,
-  });
-  const messageId = await previousReleaseMessage(release.id, destinationKey);
+  const card = await renderDeployCard(payload.releaseRecordId, payload.runUrl);
+  if (!card) return { ok: false, error: "release record not found" };
+  const options = { components: card.components };
+  const messageId = await previousReleaseMessage(payload.releaseRecordId, destinationKey);
   if (messageId) {
-    const edited = await editDiscord(destinationKey, messageId, text);
+    const edited = await editDiscord(destinationKey, messageId, card.text, options);
     if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
   }
-  return sendDiscord(destinationKey, text);
+  return sendDiscord(destinationKey, card.text, options);
 }
 
 function attachmentFromPayload(payload: Prisma.JsonValue) {

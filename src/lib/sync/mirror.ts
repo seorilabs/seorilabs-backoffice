@@ -18,9 +18,13 @@ import { findTagForSha } from "@/lib/github/release";
 import {
   enqueueDeployAllResultNotification,
   enqueueDeployCompletionNotification,
-} from "@/lib/notifications/deploy";
+} from "@/lib/notifications/deploy-enqueue";
 import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
-import { isDeployAllWorkflow } from "@/lib/core/deploy-targets";
+import {
+  isDeployAllWorkflow,
+  isPromoteGooglePlayWorkflow,
+  marketFromWorkflowPath,
+} from "@/lib/core/deploy-targets";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -225,7 +229,9 @@ export async function upsertWorkflowRun(
   const runUrl = `https://github.com/${repoFullName}/actions/runs/${runId}`;
 
   // deploy-* 워크플로면 ReleaseRecord 파생 (R1: GitHub Release 객체 없음).
-  const market = marketFromWorkflowName(gh.name);
+  // 파일명이 우선이다. 표시 이름은 repo 마다 달라 승격 워크플로처럼 마켓 키워드가
+  // 빠지면 배포 기록 자체가 파생되지 않는다. 이름 판별은 비표준 워크플로용 fallback.
+  const market = marketFromWorkflowPath(gh.path) ?? marketFromWorkflowName(gh.name);
   if (!market) {
     // deploy-all 의 마켓 잡은 재사용 워크플로라 자체 workflow_run 이 없다. ReleaseRecord 도
     // 파생되지 않아 그대로 두면 ALL 배포는 성공이든 실패든 Discord 에 아무것도 남지 않는다.
@@ -253,7 +259,8 @@ export async function upsertWorkflowRun(
   const relData = {
     appId,
     version,
-    track: null,
+    // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
+    track: isPromoteGooglePlayWorkflow(gh.path) ? "production" : null,
     status,
     workflowName: gh.name ?? null,
     commitSha: gh.head_sha ?? null,
