@@ -1,6 +1,5 @@
 import type {
   NotificationKind,
-  NotificationProvider,
   Prisma,
 } from "@prisma/client";
 import { env } from "@/lib/env";
@@ -66,7 +65,6 @@ export async function drainNotifications(
   limit = 30,
   deliverOverride?: (input: {
     kind: NotificationKind;
-    provider: NotificationProvider;
     destinationKey: string;
     payload: Prisma.JsonValue;
   }) => Promise<DeliveryOverrideResult>,
@@ -100,13 +98,11 @@ export async function drainNotifications(
       const result = deliverOverride
         ? await deliverOverride({
             kind: row.event.kind,
-            provider: row.provider,
             destinationKey: row.destinationKey,
             payload: row.event.payload,
           })
         : await deliverPlain(
             row.event.kind,
-            row.provider,
             row.destinationKey,
             row.event.payload,
           );
@@ -164,13 +160,9 @@ export async function drainNotifications(
 
 async function deliverPlain(
   kind: NotificationKind,
-  provider: NotificationProvider,
   destinationKey: string,
   payload: Prisma.JsonValue,
 ): Promise<DeliveryOverrideResult> {
-  if (provider !== "DISCORD") {
-    return { ok: false, error: "unsupported notification provider" };
-  }
   const text = plainTextPayload(kind, payload);
   if (!text) return { ok: false, error: "알림 payload 형식 오류" };
   const object = payload && typeof payload === "object" && !Array.isArray(payload)

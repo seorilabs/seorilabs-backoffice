@@ -247,19 +247,19 @@ flowchart LR
 - **untagged 보정**: deploy `workflow_run` 의 head_branch 가 버전이 아니면(main 등) `findTagForSha(head_sha)` 로 태그를 조회해 ReleaseRecord.version 복원(출시 매트릭스). 태그 없으면 "untagged" 유지(연속배포).
 - 마이그레이션 `6_release_note`, `14_release_note_i18n`. webhook 은 생성이 느려도 200 을 막지 않도록 Next.js `after`에서 후처리한다.
 
-## 13. Telegram 배포 완료 알림
+## 13. Discord 배포 완료 알림
 
 - `/release` 앱 목록은 GitHub 레지스트리를 서버 부팅 30초 후와 6시간마다 자동 재스캔한다. 명령 첫 줄의 `앱 목록 새로고침`으로 즉시 재스캔할 수도 있다. `game/project.godot` 레이아웃을 포함하며 한국어 마켓명·Godot명·짧은 한국어 저장소 설명을 우선 표시한다.
-- GitHub 마켓 배포는 `workflow_run.completed`를 `ReleaseRecord`에 반영한 뒤 `telegram_notification` outbox에 성공·실패 알림을 멱등 큐잉한다.
+- GitHub 마켓 배포는 `workflow_run.completed`를 `ReleaseRecord`에 반영한 뒤 `notification_event`/`notification_delivery` outbox에 `release-ops` 목적지로 성공·실패 알림을 멱등 큐잉한다.
 - 알림에는 한글 앱명, 릴리즈 태그, 마켓, 실행 이름, GitHub Actions 실행 링크가 포함된다.
-- Telegram에서 트리거한 배포는 감사 로그에 저장한 `chatId/messageId`로 기존 `/release` 메시지를 현재 버튼 상태로 다시 그린다. 원문 수정 실패는 새 완료 알림을 막지 않는다.
-- Telegram API의 일시 오류는 요청 내 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다. 전송 성공·실패는 `AuditLog`의 `telegram.deploy.notification.*` action으로 확인한다.
+- 릴리즈 요청·진행·성공·실패·롤백은 `notification_delivery.providerMessageId`로 같은 Discord 카드를 `PATCH /messages/{id}`로 갱신한다. `Unknown Message`(코드 `10008`)일 때만 새 카드를 만들고, 그 밖의 실패는 중복 전송 없이 outbox 재시도로 남긴다.
+- Discord API의 일시 오류는 요청 내 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다. 전송 성공·실패는 `AuditLog`의 `notification.sent`/`notification.failed` action으로 확인한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
 - `lizard-tycoon`은 `com.seorilabs.lizardtycoon` Xcode Cloud 제품(`LizardTerrarium`)과 `Lizard Tycoon Release` workflow를 사용한다. Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그 커밋에서 Godot iOS 프로젝트를 재생성한다. workflow에는 환경변수 `GODOT_ANALYTICS_ID`와 secret `GODOT_ANALYTICS_SECRET`이 있어야 빌드가 통과한다.
 - `jomul`은 `com.seorilabs.jomul` Xcode Cloud 제품과 `Jomul App Store Archive` workflow를 사용한다. 2026-08-16 live readback에서 primary repository `seorilabs/jomul`과 활성 `APP_STORE_ELIGIBLE` iOS Archive workflow가 정확히 하나임을 확인했다. repo의 `deploy-app-store.yml`은 마켓 지원 탐지용 fail-closed 표준 진입점이며, 실제 App Store 실행은 Backoffice가 ASC API로 Xcode Cloud에 요청한다.
-- 관련 마이그레이션: `16_deploy_completion_notifications`.
+- 관련 마이그레이션: `16_deploy_completion_notifications`, `20_discord_operational_notifications`, `23_drop_telegram_legacy`.
 
 ## 14. AppOps Kubernetes worker
 

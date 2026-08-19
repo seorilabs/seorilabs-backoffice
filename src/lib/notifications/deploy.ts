@@ -1,4 +1,4 @@
-import type { NotificationProvider, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { discordDestinations, DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
 import { editDiscord, sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
@@ -46,10 +46,8 @@ async function previousReleaseMessage(releaseRecordId: string, destinationKey: s
 
 async function deliverDeployCompletion(
   payload: DeployCompletionPayload,
-  provider: NotificationProvider,
   destinationKey: string,
 ): Promise<DeliveryOverrideResult> {
-  if (provider !== "DISCORD") return { ok: false, error: "unsupported notification provider" };
   const release = await prisma.releaseRecord.findUnique({
     where: { id: payload.releaseRecordId },
     select: {
@@ -101,17 +99,16 @@ function componentsFromPayload(payload: Prisma.JsonValue): DiscordActionRow[] | 
 }
 
 export async function drainAllNotifications(limit = 30) {
-  return drainNotifications(limit, async ({ kind, provider, destinationKey, payload }) => {
+  return drainNotifications(limit, async ({ kind, destinationKey, payload }) => {
     if (kind === "DEPLOY_COMPLETION") {
       const deploy = deployCompletionPayload(payload);
       if (!deploy) return { ok: false, error: "invalid deploy notification payload" };
-      return deliverDeployCompletion(deploy, provider, destinationKey).catch((error) => ({
+      return deliverDeployCompletion(deploy, destinationKey).catch((error) => ({
         ok: false,
         error: error instanceof Error ? error.message : "unknown error",
       }));
     }
     if (kind === "INCIDENT") {
-      if (provider !== "DISCORD") return { ok: false, error: "unsupported notification provider" };
       const incidentId = payload && typeof payload === "object" && !Array.isArray(payload)
         ? (payload as Prisma.JsonObject).incidentId
         : null;
@@ -134,7 +131,6 @@ export async function drainAllNotifications(limit = 30) {
       }
       return result;
     }
-    if (provider !== "DISCORD") return { ok: false, error: "unsupported notification provider" };
     const text = plainTextPayload(kind, payload);
     if (!text) return { ok: false, error: "알림 payload 형식 오류" };
     return sendDiscord(destinationKey, text, {

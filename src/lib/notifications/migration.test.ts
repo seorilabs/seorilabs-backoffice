@@ -27,6 +27,14 @@ const storeReviewSql = readFileSync(
   "utf8",
 );
 
+const dropTelegramSql = readFileSync(
+  join(
+    process.cwd(),
+    "prisma/migrations/23_drop_telegram_legacy/migration.sql",
+  ),
+  "utf8",
+);
+
 const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
 
 test("과거 outbox 이관 migration은 event와 목적지 delivery를 분리하고 상태를 보존한다", () => {
@@ -66,4 +74,21 @@ test("마켓 리뷰 migration은 앱·스토어 기준선과 리뷰 fingerprint�
   );
   const observation = schema.match(/model StoreReviewObservation \{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.doesNotMatch(observation, /\b(?:author|nickname|title|body)\b/i);
+});
+
+test("Telegram 정리 migration은 배달행을 먼저 비운 뒤 provider enum을 좁히고 이력 테이블을 지운다", () => {
+  assert.ok(
+    dropTelegramSql.indexOf("DELETE FROM `notification_delivery` WHERE `provider` = 'TELEGRAM'") <
+      dropTelegramSql.indexOf("MODIFY `provider` ENUM('DISCORD') NOT NULL"),
+  );
+  assert.match(dropTelegramSql, /DROP TABLE IF EXISTS `telegram_turn`/);
+  assert.match(dropTelegramSql, /DROP TABLE IF EXISTS `telegram_pending`/);
+  assert.doesNotMatch(dropTelegramSql, /DROP TABLE `notification_event`/);
+});
+
+test("schema는 Telegram provider와 이력 모델을 더 이상 선언하지 않는다", () => {
+  const provider = schema.match(/enum NotificationProvider \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(provider, /DISCORD/);
+  assert.doesNotMatch(provider, /TELEGRAM/);
+  assert.doesNotMatch(schema, /model Telegram\w+/);
 });
