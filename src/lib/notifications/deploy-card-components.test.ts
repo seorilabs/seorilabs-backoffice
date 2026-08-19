@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   deployCardComponents,
   deployCardCustomId,
+  isReleaseTag,
   type AppStoreReviewCardState,
 } from "@/lib/notifications/deploy-format";
 
@@ -152,5 +153,13 @@ test("태그를 못 찾은 배포에는 후속 작업 버튼을 달지 않는다
       [],
       version,
     );
+  }
+});
+
+test("릴리즈 태그 판별은 카드 버튼과 외부 조회 가드가 같은 기준을 쓴다", () => {
+  assert.equal(isReleaseTag("v1.1.6"), true);
+  assert.equal(isReleaseTag("v10.0.12"), true);
+  for (const version of ["untagged", "", "1.1.6", "v1.1", "v1.1.6-rc1"]) {
+    assert.equal(isReleaseTag(version), false, version);
   }
 });

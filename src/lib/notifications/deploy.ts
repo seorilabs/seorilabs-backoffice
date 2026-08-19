@@ -9,6 +9,7 @@ import {
   buildDeployStatusCardText,
   deployCardComponents,
   deployCompletionPayload,
+  isReleaseTag,
   type AppStoreReviewCardState,
   type DeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
@@ -91,14 +92,17 @@ export async function renderDeployCard(
       ? `https://github.com/${release.app.repoFullName}/actions/runs/${release.workflowRunId}`
       : undefined);
 
+  // 태그가 없으면 어차피 버튼을 달지 않는다. ASC 를 헛되이 호출하지 않는다.
+  const actionable = release.status === "SUCCEEDED" && isReleaseTag(release.version);
   const review =
-    release.market === "APPSTORE" && release.status === "SUCCEEDED"
+    actionable && release.market === "APPSTORE"
       ? await appStoreReviewCardState(release.app.iosBundle, release.version)
       : null;
 
   // 같은 태그의 승격 배포가 이미 있으면(진행 중·성공) 승격 버튼을 다시 달지 않는다.
   // 실패한 승격은 재시도할 수 있어야 하므로 세지 않는다.
   const promotionRequested =
+    actionable &&
     release.market === "PLAY" &&
     (await prisma.releaseRecord.count({
       where: {

@@ -200,8 +200,12 @@ function appStoreButtons(
 }
 
 // 후속 마켓 작업은 모두 릴리즈 태그를 기준으로 동작한다. 태그를 못 찾은 배포
-// (mirror 의 "untagged")에 버튼을 달면 눌러도 항상 거부되므로 아예 노출하지 않는다.
+// (mirror 의 "untagged")는 버튼도, 그 버튼을 그리기 위한 외부 조회도 의미가 없다.
 const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+$/;
+
+export function isReleaseTag(version: string): boolean {
+  return RELEASE_TAG_RE.test(version);
+}
 
 /**
  * 배포 카드에 붙일 액션 버튼. 업로드가 성공한 뒤에만 후속 마켓 작업을 노출한다.
@@ -217,7 +221,7 @@ export function deployCardComponents(input: {
   review?: AppStoreReviewCardState | null;
 }): DiscordActionRow[] {
   if (input.status !== "SUCCEEDED") return [];
-  if (!RELEASE_TAG_RE.test(input.version)) return [];
+  if (!isReleaseTag(input.version)) return [];
   if (input.market === "PLAY") {
     if (input.promotionRequested) return [];
     return row([button("play_promote", input.releaseRecordId, 4)]);

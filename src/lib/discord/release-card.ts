@@ -1,4 +1,4 @@
-import { deployTargetsFor, DEPLOY_TARGET_KO } from "@/lib/core/deploy-targets";
+import { deployTargetsFor, DEPLOY_TARGET_KO, type DeployTarget } from "@/lib/core/deploy-targets";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 
 /**
@@ -23,6 +23,10 @@ export function releaseDeployRows(
   }];
 }
 
-export function releaseDeployCustomId(appId: string, tag: string, target: string): string {
+/**
+ * handler 는 이 id 를 ":" 로 분해해 target·appId·tag 를 읽는다. target 을 DeployTarget 으로
+ * 제한해 구분자가 섞이거나 없는 대상이 들어가는 경로를 타입에서 막는다.
+ */
+export function releaseDeployCustomId(appId: string, tag: string, target: DeployTarget): string {
   return `rdeploy:${target}:${appId}:${tag}`;
 }

@@ -197,11 +197,15 @@ interface OpenSubmission {
   state: string;
 }
 
+// 앱·플랫폼당 열린 제출은 사실상 1건이고, 상태 전이 중에 잠깐 겹치는 정도다.
+// 카드 렌더가 제출 수만큼 항목 조회를 더 하므로 탐색 범위를 좁게 묶는다.
+const OPEN_SUBMISSION_SCAN_LIMIT = 5;
+
 /** 앱의 아직 끝나지 않은 심사 제출 목록. 같은 앱에 여러 건이 겹칠 수 있다. */
 async function listOpenReviewSubmissions(appId: string): Promise<OpenSubmission[]> {
   const open = await asc(
     `/v1/reviewSubmissions?filter[app]=${appId}&filter[platform]=${PLATFORM}` +
-      `&filter[state]=${OPEN_SUBMISSION_STATES.join(",")}&limit=20`,
+      `&filter[state]=${OPEN_SUBMISSION_STATES.join(",")}&limit=${OPEN_SUBMISSION_SCAN_LIMIT}`,
   ).catch(() => null);
   if (!open) return [];
   return asArray(open.data).map((item) => ({

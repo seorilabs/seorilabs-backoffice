@@ -19,6 +19,7 @@ import {
 import { capabilityForCommand, hasDiscordCapability, isDiscordInteractionScope, type DiscordCapability } from "@/lib/discord/roles";
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
+import type { DiscordActionRow } from "@/lib/notifications/discord";
 import { ephemeral, modal } from "@/lib/discord/responses";
 import {
   EPHEMERAL_FLAG,
@@ -69,7 +70,7 @@ function update(content: string) {
  * 배포 카드 액션의 확인은 ephemeral 로 띄운다. 카드 메시지는 worker 가 단독으로 소유해야
  * 실행 결과 렌더와 interaction 응답이 같은 메시지를 두고 경합하지 않는다.
  */
-function ephemeralConfirmRows(runId: string): unknown[] {
+function ephemeralConfirmRows(runId: string): DiscordActionRow[] {
   return [{
     type: 1,
     components: [
