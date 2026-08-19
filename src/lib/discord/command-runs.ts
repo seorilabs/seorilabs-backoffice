@@ -16,7 +16,7 @@ import {
   type DeployTarget,
 } from "@/lib/core/release-ops";
 import { renderDeployCard } from "@/lib/notifications/deploy";
-import { deployTargetsFor, DEPLOY_TARGET_KO } from "@/lib/core/deploy-targets";
+import { releaseDeployRows } from "@/lib/discord/release-card";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 import { handleDiscordChat } from "@/lib/discord/chat";
@@ -129,25 +129,6 @@ function confirmationRows(runId: string): DiscordActionRow[] {
       { type: 2, style: 4, label: "실행", custom_id: `command:confirm:${runId}` },
       { type: 2, style: 2, label: "취소", custom_id: `command:cancel:${runId}` },
     ],
-  }];
-}
-
-/** 릴리즈 태그 카드에서 바로 고를 수 있는 마켓 배포 버튼. 앱의 marketTargets 만 노출한다. */
-function releaseDeployRows(
-  appId: string,
-  tag: string,
-  marketTargets: unknown,
-): DiscordActionRow[] {
-  const targets = deployTargetsFor(marketTargets);
-  if (targets.length === 0) return [];
-  return [{
-    type: 1,
-    components: targets.map((target) => ({
-      type: 2 as const,
-      style: (target === "ALL" ? 4 : 1) as 1 | 4,
-      label: DEPLOY_TARGET_KO[target],
-      custom_id: `rdeploy:${target}:${appId}:${tag}`,
-    })),
   }];
 }
 
@@ -482,8 +463,16 @@ export async function processNextOperatorCommand(): Promise<boolean> {
     const message = safeError(error);
     // 카드 소유 run 은 실패로 카드를 지우지 않는다. 실패 사유를 얹고 현재 상태를 다시 그린다.
     const releaseRecordId = releaseRecordIdOf(run);
-    if (releaseRecordId) await showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`);
-    else await showRun(run, `❌ 작업 실패: ${message}`);
+    // 표시가 실패해도 run 이 PROCESSING 에 갇히면 안 된다. 렌더 예외는 여기서 삼킨다.
+    await (releaseRecordId
+      ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
+      : showRun(run, `❌ 작업 실패: ${message}`)
+    ).catch((renderError) => {
+      console.error(
+        `[operator-command-worker] 실패 표시 실패 ${run.id}:`,
+        renderError instanceof Error ? renderError.message : renderError,
+      );
+    });
     await prisma.operatorCommandRun.update({
       where: { id: run.id },
       data: {

@@ -199,20 +199,27 @@ function appStoreButtons(
   return [button("appstore_review_create", releaseRecordId, 1), refresh];
 }
 
+// 후속 마켓 작업은 모두 릴리즈 태그를 기준으로 동작한다. 태그를 못 찾은 배포
+// (mirror 의 "untagged")에 버튼을 달면 눌러도 항상 거부되므로 아예 노출하지 않는다.
+const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+$/;
+
 /**
  * 배포 카드에 붙일 액션 버튼. 업로드가 성공한 뒤에만 후속 마켓 작업을 노출한다.
- * Play 승격 실행 자체가 만든 카드에는 승격 버튼을 다시 달지 않는다.
+ * 승격을 이미 트리거한 태그에는 승격 버튼을 다시 달지 않는다(승격 실행 자체의 카드 포함).
  */
 export function deployCardComponents(input: {
   releaseRecordId: string;
   market: ReleaseMarket;
   status: ReleaseStatus;
-  workflowName?: string | null;
+  version: string;
+  /** 같은 앱·버전에 실패하지 않은 production 승격 배포가 이미 있는지. */
+  promotionRequested?: boolean;
   review?: AppStoreReviewCardState | null;
 }): DiscordActionRow[] {
   if (input.status !== "SUCCEEDED") return [];
+  if (!RELEASE_TAG_RE.test(input.version)) return [];
   if (input.market === "PLAY") {
-    if (/promote/i.test(input.workflowName ?? "")) return [];
+    if (input.promotionRequested) return [];
     return row([button("play_promote", input.releaseRecordId, 4)]);
   }
   if (input.market === "APPSTORE") {

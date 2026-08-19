@@ -20,7 +20,7 @@ import {
   enqueueDeployCompletionNotification,
 } from "@/lib/notifications/deploy-enqueue";
 import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
-import { isDeployAllWorkflow } from "@/lib/core/deploy-targets";
+import { isDeployAllWorkflow, isPromoteGooglePlayWorkflow } from "@/lib/core/deploy-targets";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -253,7 +253,8 @@ export async function upsertWorkflowRun(
   const relData = {
     appId,
     version,
-    track: null,
+    // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
+    track: isPromoteGooglePlayWorkflow(gh.path) ? "production" : null,
     status,
     workflowName: gh.name ?? null,
     commitSha: gh.head_sha ?? null,

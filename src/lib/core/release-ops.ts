@@ -44,7 +44,7 @@ import {
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
-import { MARKET_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
+import { MARKET_WORKFLOW, PROMOTE_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
 import {
   bumpStableSemVerTag,
   normalizeStableSemVerTag,
@@ -384,9 +384,6 @@ export async function dispatchMarketDeploy(opts: {
 
 // ── Google Play: 내부 빌드 → 프로덕션 승격(재빌드 없이 심사 제출) ──
 
-// 재빌드 없이 이미 올라간 versionCode 를 프로덕션 트랙으로 복사 + 심사 제출하는 org 워크플로.
-const PROMOTE_WORKFLOW = "promote-google-play.yml";
-
 /** repo+version 의 저장된 다국어 출시노트. 없으면 null. */
 async function loadReleaseNoteTranslations(
   repoFullName: string,
@@ -537,14 +534,6 @@ export async function submitAppStore(opts: {
     .catch(() => {});
 
   return result;
-}
-
-/** 마케팅 버전의 현재 App Store 상태(라이브). null=버전 없음. */
-export async function appStoreState(opts: {
-  repoFullName: string;
-  tag: string;
-}): Promise<string | null> {
-  return (await appStoreReviewStatus(opts)).appStoreState;
 }
 
 /** 마케팅 버전의 심사 단계 라이브 조회(카드 버튼 구성·실행 가드 공용). */

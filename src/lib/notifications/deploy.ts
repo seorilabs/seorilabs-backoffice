@@ -71,6 +71,7 @@ export async function renderDeployCard(
     where: { id: releaseRecordId },
     select: {
       id: true,
+      appId: true,
       version: true,
       market: true,
       status: true,
@@ -95,6 +96,20 @@ export async function renderDeployCard(
       ? await appStoreReviewCardState(release.app.iosBundle, release.version)
       : null;
 
+  // 같은 태그의 승격 배포가 이미 있으면(진행 중·성공) 승격 버튼을 다시 달지 않는다.
+  // 실패한 승격은 재시도할 수 있어야 하므로 세지 않는다.
+  const promotionRequested =
+    release.market === "PLAY" &&
+    (await prisma.releaseRecord.count({
+      where: {
+        appId: release.appId,
+        market: "PLAY",
+        version: release.version,
+        track: "production",
+        status: { in: ["PENDING", "IN_PROGRESS", "SUCCEEDED"] },
+      },
+    })) > 0;
+
   return {
     text: buildDeployStatusCardText({
       displayName: release.app.displayName,
@@ -110,7 +125,8 @@ export async function renderDeployCard(
       releaseRecordId: release.id,
       market: release.market,
       status: release.status,
-      workflowName: release.workflowName,
+      version: release.version,
+      promotionRequested,
       review,
     }),
   };

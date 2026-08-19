@@ -192,28 +192,35 @@ const OPEN_SUBMISSION_STATES = [
 // 제출 뒤 취소(canceled=true)가 가능한 상태. 심사 대기·진행 중에만 회수할 수 있다.
 const CANCELABLE_SUBMISSION_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW", "UNRESOLVED_ISSUES"]);
 
-/** 앱의 열린 reviewSubmission id. 없으면 null. */
-async function findOpenReviewSubmission(
-  appId: string,
-): Promise<{ id: string; state: string } | null> {
-  const open = await asc(
-    `/v1/reviewSubmissions?filter[app]=${appId}` +
-      `&filter[state]=${OPEN_SUBMISSION_STATES.join(",")}&limit=1`,
-  ).catch(() => null);
-  const existing = open ? asArray(open.data)[0] : null;
-  return existing
-    ? { id: existing.id, state: String(existing.attributes?.state ?? "") }
-    : null;
+interface OpenSubmission {
+  id: string;
+  state: string;
 }
 
-/** 열린 제출에서 해당 appStoreVersion 을 가리키는 항목 id. 없으면 null. */
+/** 앱의 아직 끝나지 않은 심사 제출 목록. 같은 앱에 여러 건이 겹칠 수 있다. */
+async function listOpenReviewSubmissions(appId: string): Promise<OpenSubmission[]> {
+  const open = await asc(
+    `/v1/reviewSubmissions?filter[app]=${appId}&filter[platform]=${PLATFORM}` +
+      `&filter[state]=${OPEN_SUBMISSION_STATES.join(",")}&limit=20`,
+  ).catch(() => null);
+  if (!open) return [];
+  return asArray(open.data).map((item) => ({
+    id: item.id,
+    state: String(item.attributes?.state ?? ""),
+  }));
+}
+
+/**
+ * 제출에서 해당 appStoreVersion 을 가리키는 항목 id. 없으면 null.
+ * ASC 는 include 로 요청하지 않은 to-one 관계에 data 를 넣지 않으므로 반드시 include 한다.
+ */
 async function findSubmissionItem(
   submissionId: string,
   versionId: string,
 ): Promise<string | null> {
-  const items = await asc(`/v1/reviewSubmissions/${submissionId}/items?limit=50`).catch(
-    () => null,
-  );
+  const items = await asc(
+    `/v1/reviewSubmissions/${submissionId}/items?include=appStoreVersion&limit=50`,
+  ).catch(() => null);
   if (!items) return null;
   const match = asArray(items.data).find(
     (item) => item.relationships?.appStoreVersion?.data?.id === versionId,
@@ -221,8 +228,9 @@ async function findSubmissionItem(
   return match?.id ?? null;
 }
 
-/** 열린 제출에 appStoreVersion 항목을 추가. 이미 있으면 무시(멱등). */
+/** 제출에 appStoreVersion 항목을 추가. 이미 있으면 POST 하지 않는다. */
 async function addSubmissionItem(submissionId: string, versionId: string): Promise<void> {
+  if (await findSubmissionItem(submissionId, versionId)) return;
   await asc("/v1/reviewSubmissionItems", {
     method: "POST",
     body: JSON.stringify({
@@ -235,14 +243,26 @@ async function addSubmissionItem(submissionId: string, versionId: string): Promi
       },
     }),
   }).catch((e) => {
+    // 선조회와 POST 사이의 경합만 흡수한다(판정의 1차 근거는 위 조회다).
     if (!/already|exist|duplicate/i.test((e as Error).message)) throw e;
   });
 }
 
-/** 앱의 열린 reviewSubmission(미제출) 조회, 없으면 생성. */
+/**
+ * 항목을 더 넣을 수 있는 제출(미제출 = READY_FOR_REVIEW) 확보. 없으면 생성.
+ * 이미 심사 대기·진행 중인 제출에 항목을 추가하거나 다시 제출하면 ASC 가 거부하므로,
+ * 그 상태는 재사용하지 않고 무엇이 막고 있는지 드러낸다.
+ */
 async function findOrCreateReviewSubmission(appId: string): Promise<string> {
-  const existing = await findOpenReviewSubmission(appId);
-  if (existing) return existing.id;
+  const open = await listOpenReviewSubmissions(appId);
+  const reusable = open.find((item) => item.state === "READY_FOR_REVIEW");
+  if (reusable) return reusable.id;
+  const blocking = open[0];
+  if (blocking) {
+    throw new Error(
+      `진행 중인 심사 제출(${blocking.state})이 있어 새 제출을 만들 수 없습니다.`,
+    );
+  }
 
   const created = await asc("/v1/reviewSubmissions", {
     method: "POST",
@@ -388,9 +408,22 @@ export async function readAppStoreReviewStatus(opts: {
   const versionId = ver?.id ?? null;
   const appStoreState = ver ? String(ver.attributes?.appStoreState ?? "") || null : null;
 
-  const submission = await findOpenReviewSubmission(appId);
-  const submissionItemId =
-    submission && versionId ? await findSubmissionItem(submission.id, versionId) : null;
+  // 이 버전을 담고 있는 제출을 우선한다. 없으면 항목을 넣을 수 있는 미제출 건,
+  // 그것도 없으면 첫 건(막고 있는 제출)을 상태로 보여준다.
+  const open = await listOpenReviewSubmissions(appId);
+  let submission: OpenSubmission | null = null;
+  let submissionItemId: string | null = null;
+  if (versionId) {
+    for (const candidate of open) {
+      const itemId = await findSubmissionItem(candidate.id, versionId);
+      if (itemId) {
+        submission = candidate;
+        submissionItemId = itemId;
+        break;
+      }
+    }
+  }
+  submission ??= open.find((item) => item.state === "READY_FOR_REVIEW") ?? open[0] ?? null;
 
   return {
     versionId,
