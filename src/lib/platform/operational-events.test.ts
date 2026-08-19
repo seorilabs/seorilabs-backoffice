@@ -61,3 +61,13 @@ test("이벤트 메시지에 사용자 ID 없이 운영 정보만 표시한다",
   assert.match(message, /해피팜/);
   assert.doesNotMatch(message, /eventId|platformUserId/);
 });
+
+test("AppsInToss 로그인 referrer는 받고 사용자 식별자는 계속 거부한다", () => {
+  const withReferrer = { ...sample, attributes: { authType: "ait_login", referrer: "SANDBOX" } };
+  assert.deepEqual(parseOperationalEvent(withReferrer), withReferrer);
+  assert.equal(
+    parseOperationalEvent({ ...sample, attributes: { authType: "ait_login", supportCode: "LT-1234" } }),
+    null,
+  );
+  assert.match(operationalEventMessage(withReferrer, "도마뱀 테라리움"), /유입: SANDBOX/);
+});
