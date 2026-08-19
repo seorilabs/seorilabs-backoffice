@@ -26,11 +26,17 @@ test("버튼은 카드가 놓이는 여러 운영 채널에서 눌릴 수 있다
   assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "999", ...cards }), false);
 });
 
-test("미설정 채널의 빈 ID는 허용 목록을 느슨하게 만들지 않는다", () => {
-  // env 미설정 채널은 빈 문자열로 들어온다. 걸러내지 않으면 channelId 가 비어도 통과한다.
+test("허용 목록에 미설정 채널의 빈 ID가 섞여도 매칭이 느슨해지지 않는다", () => {
+  // env 미설정 채널은 빈 문자열로 허용 목록에 들어온다. 설정된 채널만 통과해야 한다.
   const withEmpty = { expectedGuildId: "100", allowedChannelIds: ["200", "", ""] };
-  assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "", ...withEmpty }), false);
   assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "200", ...withEmpty }), true);
+  assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "300", ...withEmpty }), false);
+  // channelId 가 비어 있는 인터랙션은 허용 목록과 무관하게 거부한다.
+  assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "", ...withEmpty }), false);
+  assert.equal(
+    isDiscordInteractionScope({ guildId: "100", channelId: "", expectedGuildId: "100", allowedChannelIds: [""] }),
+    false,
+  );
 });
 
 test("슬래시 명령과 모달은 #backoffice 로만 제한한다", () => {

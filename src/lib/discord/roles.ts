@@ -64,7 +64,8 @@ export function isDiscordInteractionScope(input: {
 }): boolean {
   if (!input.guildId || !input.channelId) return false;
   if (input.guildId !== input.expectedGuildId) return false;
-  // 미설정 채널은 빈 문자열로 들어온다. 걸러내지 않으면 허용 목록이 느슨해진다.
+  // 미설정 채널은 빈 문자열로 허용 목록에 섞여 들어오는 것이 정상 경로다(env 미설정).
+  // channelId 가 비면 위에서 이미 거부되지만, 매칭 대상에서도 빈 값을 명시적으로 뺀다.
   return input.allowedChannelIds.some((id) => id !== "" && id === input.channelId);
 }
 
