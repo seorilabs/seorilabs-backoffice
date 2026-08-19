@@ -18,7 +18,7 @@
 2. **마켓 업로드 = 명시적 Release/Tag 기준.** 자동 태깅(merge마다) 금지. 태그는 사람이 의도적으로 찍는다.
 3. **Release/Tag 후 AIT / GPS / APS는 각각 분리된 액션**으로 존재하고, **Deploy All**로 한 번에도 가능.
 4. **RPI ARC에서 돌릴 수 있는 건 최대한 ARC로.** 예외(정책): Android AAB release(x64 `aapt2`), Apple/Xcode(macOS), public PR job → ARC 금지.
-5. **운영 진입점은 Backoffice + Telegram.** 태그 생성·출시노트·배포 트리거·결과 알림을 backoffice/telegram에서 수행.
+5. **운영 진입점은 Backoffice + Discord.** 태그 생성·출시노트·배포 트리거·결과 알림을 backoffice/discord에서 수행.
 6. **중복 제거 = org 레벨 재사용 워크플로우.** 로직은 `seorilabs/.github`에 한 번만 둔다. 각 repo는 얇은 caller.
 7. **아티팩트 retention = 3.** (`retention-days: 3`, 마지막 3개 수준)
 
@@ -108,11 +108,11 @@ flowchart LR
 | 파일 | 트리거 | 호출 대상(reusable) | 러너 | 역할 |
 |---|---|---|---|---|
 | `static-checks.yml` | push/PR→main, dispatch | `rn-static-checks.yml` | ARC | lint/typecheck/test/style + 정적 게이트 |
-| `release-tag.yml` | dispatch(+ backoffice/telegram) | `release-tag.yml` | ARC | 명시적 SemVer 태그 생성 + push |
+| `release-tag.yml` | dispatch(+ backoffice/discord) | `release-tag.yml` | ARC | 명시적 SemVer 태그 생성 + push |
 | `deploy-apps-in-toss.yml` | dispatch, `workflow_call` | `rn-deploy-ait.yml` | ARC | .ait build + AIT deploy |
 | `deploy-google-play.yml` | dispatch, `workflow_call` | `rn-deploy-google-play.yml` | ubuntu | 서명 AAB + Play 업로드 |
 | `deploy-app-store.yml` | dispatch, `workflow_call` | `rn-deploy-app-store.yml` | macos-26 | Xcode archive + App Store 업로드 |
-| `deploy-all.yml` | dispatch(+ backoffice/telegram) | (위 3개 `workflow_call`) | — | 한 번에 빌드·배포 |
+| `deploy-all.yml` | dispatch(+ backoffice/discord) | (위 3개 `workflow_call`) | — | 한 번에 빌드·배포 |
 | `cleanup-actions-storage.yml` | dispatch, cron(선택) | `cleanup-actions-storage.yml` | ARC | 아티팩트/캐시 정리 |
 
 ### 3.2 Godot 게임
@@ -190,29 +190,29 @@ flowchart LR
 
 ---
 
-## 7. Backoffice + Telegram 운영 흐름 (핵심)
+## 7. Backoffice + Discord 운영 흐름 (핵심)
 
-운영 진입점은 **Backoffice UI**와 **Telegram**. 둘 다 `GitHub API → workflow → webhook 미러` 단방향 원칙을 따른다. (`AGENTS.md`)
+운영 진입점은 **Backoffice UI**와 **Discord**. 둘 다 `GitHub API → workflow → webhook 미러` 단방향 원칙을 따른다. (`AGENTS.md`)
 
 ### 7.1 책임 분담 (backoffice 현황 기반)
 
-- 이미 존재: 출시노트 8개 언어 자동 생성(`generateReleaseNoteCore`, Gemini + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Telegram 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
+- 이미 존재: 출시노트 8개 언어 자동 생성(`generateReleaseNoteCore`, Gemini + GitHub compareTags), `ReleaseNote`/`ReleaseRecord`/`App(marketTargets)` 모델, `/releases` 앱×마켓 매트릭스 UI, Discord 커맨드 라우터(confirm-button 패턴), webhook 수신 → 미러 → 라이프사이클 자동 전이.
 - **추가 필요(gap)**:
   1. GitHub **태그 생성 + Release 발행**(현재 write는 issue/label/comment뿐) → `lib/github/write.ts`에 `createTag`/`createRelease`/`updateRelease` 추가. GitHub App 권한에 `contents:write` 필요.
   2. **workflow_dispatch 트리거**(`octokit.rest.actions.createWorkflowDispatch`) → `lib/github/write.ts`. App 권한 `actions:write` 필요.
   3. `/releases` UI: **태그 선택 + 마켓별/Deploy All 버튼**.
-  4. Telegram: `/deploy` 슬래시 + `deploy:` 콜백(confirm-button), 릴리즈 태그 링크 발송. `/release` 태그 생성 완료 메시지에는 해당 태그의 플랫폼별 빠른 배포 버튼을 즉시 표시하며, 각 버튼은 독립 상태를 유지해 순서대로 모두 트리거할 수 있다(`READY → TRIGGERING → TRIGGERED/IN_PROGRESS/SUCCEEDED`, 실패 시 재시도).
-  5. 완료 알림: dispatch된 deploy의 `workflow_run` webhook → `ReleaseRecord` → `telegram_notification` outbox로 성공/실패 메시지를 전송한다. Telegram에서 시작한 배포는 감사 로그의 `chatId/messageId`로 원래 `/release` 메시지 버튼도 갱신한다. Xcode Cloud는 `ciBuildRun`을 주기 조회해 같은 경로로 수렴한다.
+  4. Discord: `/deploy` 슬래시 + `deploy:` 콜백(confirm-button), 릴리즈 태그 링크 발송. `/release` 태그 생성 완료 메시지에는 해당 태그의 플랫폼별 빠른 배포 버튼을 즉시 표시하며, 각 버튼은 독립 상태를 유지해 순서대로 모두 트리거할 수 있다(`READY → TRIGGERING → TRIGGERED/IN_PROGRESS/SUCCEEDED`, 실패 시 재시도).
+  5. 완료 알림: dispatch된 deploy의 `workflow_run` webhook → `ReleaseRecord` → `notification_event`/`notification_delivery` outbox로 `release-ops` 채널에 성공/실패를 전송한다. 같은 릴리즈의 상태 변화는 `providerMessageId`로 같은 카드를 갱신한다. Xcode Cloud는 `ciBuildRun`을 주기 조회해 같은 경로로 수렴한다.
 
 ### 7.2 릴리즈 → 배포 시퀀스
 
 ```mermaid
 sequenceDiagram
-    participant U as 운영자(Backoffice/Telegram)
+    participant U as 운영자(Backoffice/Discord)
     participant BO as Backoffice
     participant GH as GitHub (API/Actions)
     participant AI as Gemini
-    participant TG as Telegram
+    participant DC as Discord
     participant MK as 마켓(AIT/GPS/APS)
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
@@ -225,21 +225,21 @@ sequenceDiagram
     BO->>AI: webhook 응답 후 변경 요약 → 출시노트 8개 언어
     AI-->>BO: {ko_KR, en_US, ja_JP, zh_CN, zh_TW, de_DE, fr_FR, es_ES}
     BO->>GH: ② updateRelease(body=출시노트) + release-notes.json
-    BO->>TG: ③ 릴리즈 태그 링크 발송(번역 비대기)
+    BO->>DC: ③ 릴리즈 태그 링크 발송(번역 비대기)
     U->>BO: ④ 배포 대상 선택(태그/마켓: AIT/GPS/APS/Deploy All)
-    BO->>TG: confirm 버튼
-    U->>TG: 확인
+    BO->>DC: confirm 버튼
+    U->>DC: 확인
     BO->>GH: ⑤ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
     GH->>MK: ⑥ 빌드 → 서명 → 업로드(출시노트 동봉)
     GH-->>BO: workflow_run webhook(성공/실패)
     BO->>BO: ReleaseRecord 갱신 + 알림 outbox + 라이프사이클 전이
-    BO->>TG: ⑦ 업로드 성공/실패 메시지
+    BO->>DC: ⑦ 업로드 성공/실패 메시지
 ```
 
 - **릴리즈 마커 커밋**: GitHub `/commits` 화면은 태그도 배포 상태도 표시하지 않아 커밋 목록만으로 배포 경계를 알 수 없다. 태그 생성 시 트리가 부모와 동일한 빈 커밋 `chore(release): vX.Y.Z` 를 대상 브랜치에 push 하고 그 커밋에 태그를 단다. 파일 변경이 0 이라 코드에는 영향이 없다. 태그가 이미 있거나(재실행), HEAD 가 이미 마커이거나, 브랜치가 보호되어 push 가 거절되면 마커 없이 기존 커밋에 태그만 단다. 마커 커밋은 출시노트 커밋 집계에서 제외한다.
 - **마커 커밋에 `[skip ci]` 를 넣지 않는다.** 마커 커밋이 태그가 가리키는 커밋이 되므로, 배포가 `push: tags` 로 트리거되는 repo(예: lizard-tycoon `deploy-apps-in-toss.yml`)에서 skip 지시어가 그 배포까지 조용히 삼킨다. 정적 게이트가 릴리즈마다 한 번 더 도는 비용을 감수한다.
 - 백오피스 경로(`pushReleaseMarkerCommit`)와 워크플로우 경로(org 재사용 `release-tag.yml` + 인라인 caller)가 같은 규칙을 쓴다. 어느 쪽으로 태그를 찍어도 마커가 남는다.
-- Telegram API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
+- Discord API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
 - Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행한다.
 - 완료 알림은 한글 앱명·태그·마켓·실행 이름·GitHub Actions 링크 또는 Xcode Cloud 빌드 번호를 포함한다.
@@ -247,7 +247,7 @@ sequenceDiagram
 ### 7.3 출시노트 규칙
 - **마켓 비종속**: "앱스토어/플레이스토어/토스" 등 특정 마켓 명칭·정책 표현 금지. 모든 마켓 공통으로 재사용.
 - 한국어·영어·일본어·중국어 간체/번체·독일어·프랑스어·스페인어를 동시에 생성한다. GitHub Release body + 각 마켓 "이번 버전의 새로운 기능"에 언어별 텍스트를 주입한다.
-- 번역은 tag push webhook 응답 이후 비동기로 실행하며 태그 생성과 Telegram 응답을 막지 않는다.
+- 번역은 tag push webhook 응답 이후 비동기로 실행하며 태그 생성과 Discord 응답을 막지 않는다.
 - 내부/CI/refactor 변경은 사용자 노트에서 제외(이미 프롬프트에 반영).
 
 ### 7.4 스크린샷 (선택 단계)
@@ -265,8 +265,8 @@ flowchart TD
   M[main 병합/PR] --> SC[static-checks 정적 게이트<br/>ARC, concurrency-cancel]
   SC -.->|merge마다 빌드·배포 금지| X[(no deploy)]
 
-  R[운영자: Backoffice/Telegram] -->|명시적| T[release-tag 생성 vX.Y.Z]
-  T --> N[GitHub Release + Telegram 링크]
+  R[운영자: Backoffice/Discord] -->|명시적| T[release-tag 생성 vX.Y.Z]
+  T --> N[GitHub Release + Discord 링크]
   T -. webhook after .-> I18N[출시노트 8개 언어 생성 및 Release 갱신]
   R -->|배포 트리거| D{선택}
   D -->|AIT| DA[deploy-apps-in-toss]
@@ -274,7 +274,7 @@ flowchart TD
   D -->|APS| DP[deploy-app-store]
   D -->|All| ALL[deploy-all → 3개 workflow_call]
   DA & DG & DP & ALL --> W[workflow_run webhook]
-  W --> BO2[Backoffice 미러+전이] --> TGN[Telegram 성공/실패]
+  W --> BO2[Backoffice 미러+전이] --> DCN[Discord 성공/실패]
 ```
 
 - 배포 워크플로우는 **`workflow_dispatch` + `workflow_call`**만(자동 tag-push 트리거는 기본 비활성; 필요 repo만 옵션). backoffice가 dispatch로 구동 → "원하는 태그를 골라" 배포 가능(원칙 #2·#3).
@@ -293,7 +293,7 @@ flowchart TD
 
 1. **Phase 0 — 기반(이 설계)**: `seorilabs/.github`에 재사용 워크플로우 + composite actions + 공통 스크립트 + 이 문서 미러. (inert: 참조 전까지 무영향)
 2. **Phase 1 — 템플릿(기준 반영)**: `starter-template-app`, `starter-template-game`를 caller 표준으로 전환. 이후 신규 repo는 자동 표준 준수.
-3. **Phase 2 — Backoffice/Telegram**: 태그 생성/Release 발행/`workflow_dispatch`/`/deploy`/태그 링크/성공 알림 구현. GitHub App 권한(`contents:write`, `actions:write`) 확장.
+3. **Phase 2 — Backoffice/Discord**: 태그 생성/Release 발행/`workflow_dispatch`/`/deploy`/태그 링크/성공 알림 구현. GitHub App 권한(`contents:write`, `actions:write`) 확장.
 4. **Phase 3 — 쿼터 긴급 수정(anomaly)**: A2/A4 우선(push→main 배포 강등, 자동 태깅 제거), A1(dpti-app develop→main), A5/A6/A8.
 5. **Phase 4 — 전 repo 마이그레이션**: 성숙 repo(happy-farm/crossword/lucid-chess)는 caller로 점진 치환(이름·retention·트리거 정합), 나머지는 표준 caller 적용. repo별 PR(Ready, 한글).
 6. **Phase 5 — 보호 규칙**: main 필수 status check(`static-checks`/`godot-checks`), CODEOWNERS, Environments 보호.
@@ -303,7 +303,7 @@ flowchart TD
 ---
 
 ## 11. Claude 스킬 보존
-- 본 절차를 `seorilabs-org-release-pipeline` 스킬로 보존: 아키타입 판별 → caller 워크플로우 생성/갱신 → secrets/vars/environments 점검 → backoffice/telegram 연동 → 보호 규칙. 기존 `arc-runners`, `generate-release-notes`, `google-play-publishing`, `apple-app-store-registration`, `apps-in-toss-react-native-setup` 스킬과 상호 링크.
+- 본 절차를 `seorilabs-org-release-pipeline` 스킬로 보존: 아키타입 판별 → caller 워크플로우 생성/갱신 → secrets/vars/environments 점검 → backoffice/discord 연동 → 보호 규칙. 기존 `arc-runners`, `generate-release-notes`, `google-play-publishing`, `apple-app-store-registration`, `apps-in-toss-react-native-setup` 스킬과 상호 링크.
 
 ---
 
