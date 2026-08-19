@@ -10,6 +10,7 @@ import {
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
+import { recordIdentitySignup } from "@/lib/notifications/identity-summary";
 import { recordOperationalMilestone } from "@/lib/notifications/milestones";
 import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
 
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
   // incident dedupe와 notification dedupeKey, 마일스톤 unique로 모두 멱등하다.
   const app = await prisma.app.findUnique({
     where: { slug: input.appId },
-    select: { id: true, displayName: true },
+    select: { id: true, slug: true, displayName: true, platformUserBaseline: true },
   });
   const alert = isOpsAlert(input.type);
   const occurredAt = new Date(input.occurredAt);
@@ -96,7 +97,11 @@ export async function POST(request: NextRequest) {
     const milestone = app
       ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
       : false;
-    if (!milestone) {
+    // 등록된 앱의 신규 계정은 건별 카드 대신 앱·일 요약 카드 하나를 갱신한다.
+    const summarized = app && input.type === "identity.created"
+      ? await recordIdentitySignup({ app, event: input })
+      : false;
+    if (!milestone && !summarized) {
       await enqueueNotification({
         dedupeKey: `operational:${input.eventId}`,
         kind: "OPERATIONAL_EVENT",

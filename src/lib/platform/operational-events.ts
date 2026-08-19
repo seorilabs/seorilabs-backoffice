@@ -12,7 +12,9 @@ export const OPERATIONAL_EVENT_TYPES = [
 export type OperationalEventType = (typeof OPERATIONAL_EVENT_TYPES)[number];
 
 const allowedAttributes: Record<OperationalEventType, Set<string>> = {
-  "identity.created": new Set(["authType", "anonymous"]),
+  // referrer는 AppsInToss 로그인의 DEFAULT/SANDBOX 구분이다. 실서비스 유입과
+  // 샌드박스 테스트를 같은 카드로 읽지 않으려고 받는다.
+  "identity.created": new Set(["authType", "anonymous", "referrer"]),
   "iap.granted": new Set(["platform", "entitlementId"]),
   "ad.reward.delivered": new Set([
     "provider",
@@ -101,6 +103,7 @@ export function operationalEventMessage(
       lines.unshift("👤 **신규 Platform 사용자 생성**");
       lines.push(`인증: ${String(attr(event, "authType") ?? "unknown")}`);
       if (attr(event, "anonymous") === true) lines.push("유형: 익명");
+      if (attr(event, "referrer")) lines.push(`유입: ${String(attr(event, "referrer"))}`);
       break;
     case "iap.granted":
       lines.unshift("💳 **IAP 지급 확정**");

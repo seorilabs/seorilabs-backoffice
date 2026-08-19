@@ -172,7 +172,7 @@ function componentsFromPayload(payload: Prisma.JsonValue): DiscordActionRow[] | 
 }
 
 export async function drainAllNotifications(limit = 30) {
-  return drainNotifications(limit, async ({ kind, provider, destinationKey, payload }) => {
+  return drainNotifications(limit, async ({ kind, provider, destinationKey, payload, providerMessageId }) => {
     if (kind === "DEPLOY_COMPLETION") {
       const deploy = deployCompletionPayload(payload);
       if (!deploy) return { ok: false, error: "invalid deploy notification payload" };
@@ -208,6 +208,11 @@ export async function drainAllNotifications(limit = 30) {
     if (provider !== "DISCORD") return { ok: false, error: "unsupported notification provider" };
     const text = plainTextPayload(kind, payload);
     if (!text) return { ok: false, error: "알림 payload 형식 오류" };
+    // 신규 계정 요약은 같은 카드를 계속 갱신한다. 사람이 지웠으면 새로 만든다.
+    if (kind === "IDENTITY_SUMMARY" && providerMessageId) {
+      const edited = await editDiscord(destinationKey, providerMessageId, text);
+      if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
+    }
     return sendDiscord(destinationKey, text, {
       alertRoleId:
         destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
