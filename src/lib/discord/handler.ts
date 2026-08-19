@@ -16,7 +16,13 @@ import {
   p1Query,
   statusQuery,
 } from "@/lib/discord/queries";
-import { capabilityForCommand, hasDiscordCapability, isDiscordInteractionScope, type DiscordCapability } from "@/lib/discord/roles";
+import {
+  capabilityForCommand,
+  hasDiscordCapability,
+  isDiscordInteractionScope,
+  interactionChannelKeys,
+  type DiscordCapability,
+} from "@/lib/discord/roles";
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
@@ -385,12 +391,24 @@ async function handleComponent(interaction: DiscordInteraction) {
 
 export async function handleDiscordInteraction(interaction: DiscordInteraction) {
   if (interaction.type === InteractionType.PING) return { type: InteractionResponseType.PONG };
+  // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #backoffice 로 묶은 채로 버튼까지 묶으면
+  // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
+  const isComponent = interaction.type === InteractionType.MESSAGE_COMPONENT;
+  const allowedChannelIds = interactionChannelKeys(isComponent).map((key) =>
+    env.discordChannelId(key),
+  );
   if (!isDiscordInteractionScope({
     guildId: interaction.guild_id,
     channelId: interaction.channel_id,
     expectedGuildId: env.discordGuildId(),
-    expectedChannelId: env.discordChannelId("backoffice"),
-  })) return ephemeral("백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.");
+    allowedChannelIds,
+  })) {
+    return ephemeral(
+      isComponent
+        ? "이 버튼은 허용된 Discord 서버의 운영 채널에서만 사용할 수 있습니다."
+        : "백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.",
+    );
+  }
 
   if (interaction.type === InteractionType.AUTOCOMPLETE) {
     if (!authorized(interaction, "read")) return { type: InteractionResponseType.AUTOCOMPLETE_RESULT, data: { choices: [] } };
