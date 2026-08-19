@@ -1,3 +1,5 @@
+import type { ReleaseMarket } from "@prisma/client";
+
 export type DeployTarget = "AIT" | "PLAY" | "APPSTORE" | "ALL";
 
 // 백오피스가 dispatch 하는 표준 caller 워크플로 파일.
@@ -26,6 +28,24 @@ export function isDeployAllWorkflow(path: string | null | undefined): boolean {
 /** 승격 실행 여부. 승격이 만든 배포 카드에 다시 승격 버튼을 달지 않기 위해 쓴다. */
 export function isPromoteGooglePlayWorkflow(path: string | null | undefined): boolean {
   return typeof path === "string" && path.split("/").pop() === PROMOTE_WORKFLOW;
+}
+
+const MARKET_BY_WORKFLOW_FILE: Record<string, ReleaseMarket> = {
+  [MARKET_WORKFLOW.AIT]: "AIT",
+  [MARKET_WORKFLOW.PLAY]: "PLAY",
+  [MARKET_WORKFLOW.APPSTORE]: "APPSTORE",
+  [PROMOTE_WORKFLOW]: "PLAY",
+};
+
+/**
+ * 표준 caller 워크플로 파일 → 마켓. 표시 이름 기반 판별보다 정확하다.
+ * 승격 워크플로의 name 이 repo 마다 달라도 PLAY 배포 기록이 파생되도록 보장한다.
+ */
+export function marketFromWorkflowPath(
+  path: string | null | undefined,
+): ReleaseMarket | null {
+  if (typeof path !== "string") return null;
+  return MARKET_BY_WORKFLOW_FILE[path.split("/").pop() ?? ""] ?? null;
 }
 
 export const DEPLOY_TARGET_KO: Record<DeployTarget, string> = {
