@@ -13,6 +13,7 @@ import {
   getWorkflowDispatchInputNames,
 } from "@/lib/github/read";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
+import { buildDeployAllAppStoreInputs } from "@/lib/core/deploy-all-inputs";
 import {
   shouldUseXcodeCloudForTarget,
   triggerXcodeCloudDeploy,
@@ -344,8 +345,15 @@ export async function dispatchMarketDeploy(opts: {
       inputs.memo = opts.memo;
     }
     // ALL 인데 iOS 가 Xcode Cloud 면, deploy-all 의 App Store 잡은 제외한다.
+    // 단 App Store 를 애초에 deploy-all 에서 뺀 repo 는 이 입력을 선언하지 않는다.
+    // 선언되지 않은 입력을 보내면 GitHub 이 422 로 거부해 ALL 배포가 통째로 막힌다.
     if (iosViaXcodeCloud && opts.target === "ALL") {
-      inputs.deploy_app_store = "false";
+      const declared = await getWorkflowDispatchInputNames(
+        opts.repoFullName,
+        workflowFile,
+        opts.tag,
+      );
+      Object.assign(inputs, buildDeployAllAppStoreInputs(declared));
     }
     // PLAY 단독: 텔레그램/백오피스에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
     // 배포까지 진행한다(ALL 의 google-play 잡은 이미 upload=true 로 하드코딩되어 별도 처리 불필요).
