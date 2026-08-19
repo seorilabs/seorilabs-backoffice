@@ -13,6 +13,7 @@ import {
   getWorkflowDispatchInputNames,
 } from "@/lib/github/read";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
+import { buildDeployAllAppStoreInputs } from "@/lib/core/deploy-all-inputs";
 import {
   shouldUseXcodeCloudForTarget,
   triggerXcodeCloudDeploy,
@@ -35,12 +36,16 @@ import {
 import {
   prepareAppStoreSubmission,
   submitAppStoreForReview,
-  getAppStoreSubmissionState,
+  createAppStoreReviewSubmission,
+  removeAppStoreReviewSubmissionItem,
+  cancelAppStoreReviewSubmission,
+  readAppStoreReviewStatus,
   marketingVersionFromTag,
+  type AppStoreReviewStatus,
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
-import type { DeployTarget } from "@/lib/core/deploy-targets";
+import { MARKET_WORKFLOW, PROMOTE_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
 import {
   bumpStableSemVerTag,
   normalizeStableSemVerTag,
@@ -51,7 +56,7 @@ import {
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
-import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
+import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy-enqueue";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -244,13 +249,6 @@ export function formatReleaseBody(
   return parts.join("\n\n");
 }
 
-const MARKET_WORKFLOW: Record<DeployTarget, string> = {
-  AIT: "deploy-apps-in-toss.yml",
-  PLAY: "deploy-google-play.yml",
-  APPSTORE: "deploy-app-store.yml",
-  ALL: "deploy-all.yml",
-};
-
 /**
  * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포까지
  * 진행되도록 입력을 주입한다. 검사 ref = 실제 dispatch ref(tag) — GitHub 은 dispatch 한 ref 의
@@ -347,8 +345,15 @@ export async function dispatchMarketDeploy(opts: {
       inputs.memo = opts.memo;
     }
     // ALL 인데 iOS 가 Xcode Cloud 면, deploy-all 의 App Store 잡은 제외한다.
+    // 단 App Store 를 애초에 deploy-all 에서 뺀 repo 는 이 입력을 선언하지 않는다.
+    // 선언되지 않은 입력을 보내면 GitHub 이 422 로 거부해 ALL 배포가 통째로 막힌다.
     if (iosViaXcodeCloud && opts.target === "ALL") {
-      inputs.deploy_app_store = "false";
+      const declared = await getWorkflowDispatchInputNames(
+        opts.repoFullName,
+        workflowFile,
+        opts.tag,
+      );
+      Object.assign(inputs, buildDeployAllAppStoreInputs(declared));
     }
     // PLAY 단독: 텔레그램/백오피스에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
     // 배포까지 진행한다(ALL 의 google-play 잡은 이미 upload=true 로 하드코딩되어 별도 처리 불필요).
@@ -386,9 +391,6 @@ export async function dispatchMarketDeploy(opts: {
 }
 
 // ── Google Play: 내부 빌드 → 프로덕션 승격(재빌드 없이 심사 제출) ──
-
-// 재빌드 없이 이미 올라간 versionCode 를 프로덕션 트랙으로 복사 + 심사 제출하는 org 워크플로.
-const PROMOTE_WORKFLOW = "promote-google-play.yml";
 
 /** repo+version 의 저장된 다국어 출시노트. 없으면 null. */
 async function loadReleaseNoteTranslations(
@@ -542,14 +544,89 @@ export async function submitAppStore(opts: {
   return result;
 }
 
-/** 마케팅 버전의 현재 App Store 상태(라이브). null=버전 없음. */
-export async function appStoreState(opts: {
+/** 마케팅 버전의 심사 단계 라이브 조회(카드 버튼 구성·실행 가드 공용). */
+export async function appStoreReviewStatus(opts: {
   repoFullName: string;
   tag: string;
-}): Promise<string | null> {
+}): Promise<AppStoreReviewStatus> {
   const bundleId = await iosBundleOf(opts.repoFullName);
-  return getAppStoreSubmissionState({
+  return readAppStoreReviewStatus({
     bundleId,
     marketingVersion: marketingVersionFromTag(opts.tag),
   });
+}
+
+/** App Store 심사 생성(제출 아님): 준비 + 열린 제출에 이 버전을 항목으로 추가. */
+export async function createAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ prepare: PrepareResult; reviewSubmissionId?: string }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, opts.tag);
+  const result = await createAppStoreReviewSubmission({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+    notes: notes ?? {},
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.create", {
+    ready: result.prepare.ready,
+    appStoreState: result.prepare.appStoreState,
+    reviewSubmissionId: result.reviewSubmissionId ?? null,
+  });
+
+  return result;
+}
+
+/** App Store 심사 생성 삭제(미제출 항목만). */
+export async function removeAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ removed: boolean }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const result = await removeAppStoreReviewSubmissionItem({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.remove", { tag: opts.tag });
+  return result;
+}
+
+/** App Store 제출 취소(심사 대기·진행 중 회수). */
+export async function cancelAppStoreReview(opts: {
+  repoFullName: string;
+  tag: string;
+  actorLabel?: string;
+}): Promise<{ reviewSubmissionId: string }> {
+  const bundleId = await iosBundleOf(opts.repoFullName);
+  const result = await cancelAppStoreReviewSubmission({
+    bundleId,
+    marketingVersion: marketingVersionFromTag(opts.tag),
+  });
+
+  await recordReleaseAudit(opts, "release.appstore.review.cancel", {
+    reviewSubmissionId: result.reviewSubmissionId,
+  });
+  return result;
+}
+
+async function recordReleaseAudit(
+  opts: { repoFullName: string; tag: string; actorLabel?: string },
+  action: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await prisma.auditLog
+    .create({
+      data: {
+        actorLogin: opts.actorLabel ?? null,
+        action,
+        entityType: "release",
+        entityId: `${opts.repoFullName}@${opts.tag}`,
+        payload: payload as object,
+      },
+    })
+    .catch(() => {});
 }

@@ -54,6 +54,26 @@ export async function enqueueNotification(input: {
   return event.id;
 }
 
+// 이미 보낸 카드를 갱신 발송 대상으로 되돌린다. providerMessageId를 남겨야 워커가
+// 새 메시지를 만들지 않고 같은 메시지를 편집한다. PROCESSING 중인 전송은 건드리지
+// 않는다. 그 전송은 곧 최신 payload로 나가고, 아니면 다음 갱신이 따라잡는다.
+//
+// deletedAt은 함께 비운다. 보존기한 정리로 지워진 메시지를 다시 보내면 새 메시지가
+// 생기는데, 표시가 남아 있으면 그 메시지가 다음 정리 대상에서 영구히 빠진다.
+export async function requeueNotification(eventId: string): Promise<number> {
+  const result = await prisma.notificationDelivery.updateMany({
+    where: { eventId, status: { in: ["SENT", "DEAD_LETTER"] } },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      deletedAt: null,
+    },
+  });
+  return result.count;
+}
+
 export interface DeliveryOverrideResult {
   ok: boolean;
   error?: string;
@@ -67,6 +87,7 @@ export async function drainNotifications(
     kind: NotificationKind;
     destinationKey: string;
     payload: Prisma.JsonValue;
+    providerMessageId: string | null;
   }) => Promise<DeliveryOverrideResult>,
 ): Promise<{ processed: number; sent: number; deadLetter: number }> {
   if (draining) return { processed: 0, sent: 0, deadLetter: 0 };
@@ -100,6 +121,7 @@ export async function drainNotifications(
             kind: row.event.kind,
             destinationKey: row.destinationKey,
             payload: row.event.payload,
+            providerMessageId: row.providerMessageId,
           })
         : await deliverPlain(
             row.event.kind,
@@ -114,7 +136,7 @@ export async function drainNotifications(
             status: "SENT",
             attempts: { increment: 1 },
             sentAt: new Date(),
-            providerMessageId: result.messageId,
+            providerMessageId: result.messageId ?? row.providerMessageId,
             lastError: null,
           },
         });

@@ -15,7 +15,16 @@ import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
 import { releaseStatusOf } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
 import { findTagForSha } from "@/lib/github/release";
-import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy";
+import {
+  enqueueDeployAllResultNotification,
+  enqueueDeployCompletionNotification,
+} from "@/lib/notifications/deploy-enqueue";
+import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
+import {
+  isDeployAllWorkflow,
+  isPromoteGooglePlayWorkflow,
+  marketFromWorkflowPath,
+} from "@/lib/core/deploy-targets";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -57,6 +66,7 @@ export interface GhRunInput {
   status?: string | null;
   conclusion?: string | null;
   event?: string | null;
+  path?: string | null;
   head_sha?: string | null;
   head_branch?: string | null;
   run_attempt?: number | null;
@@ -172,6 +182,14 @@ export async function upsertPr(
   });
 }
 
+// 버전: head_branch 가 태그면 그대로, 아니면(main 등) head_sha 를 가리키는
+// v* 태그를 GitHub 에서 조회해 보정. 태그가 없으면 "untagged".
+async function resolveRunVersion(repoFullName: string, gh: GhRunInput): Promise<string> {
+  if (gh.head_branch && /^v\d/.test(gh.head_branch)) return gh.head_branch;
+  if (gh.head_sha) return (await findTagForSha(repoFullName, gh.head_sha)) ?? "untagged";
+  return "untagged";
+}
+
 // ── Workflow run → ReleaseRecord + 라이프사이클 자동 신호 ──────────────────────
 export async function upsertWorkflowRun(
   repoFullName: string,
@@ -205,23 +223,44 @@ export async function upsertWorkflowRun(
     update: runData,
   });
 
-  // deploy-* 워크플로면 ReleaseRecord 파생 (R1: GitHub Release 객체 없음).
-  const market = marketFromWorkflowName(gh.name);
-  if (!market || !appId) return;
-
+  if (!appId) return;
   const status = releaseStatusOf(gh.status, gh.conclusion);
-  // 버전: head_branch 가 태그면 그대로, 아니면(main 등) head_sha 를 가리키는
-  // v* 태그를 GitHub 에서 조회해 보정. 태그가 없으면 "untagged".
-  let version = "untagged";
-  if (gh.head_branch && /^v\d/.test(gh.head_branch)) {
-    version = gh.head_branch;
-  } else if (gh.head_sha) {
-    version = (await findTagForSha(repoFullName, gh.head_sha)) ?? "untagged";
+  const runAttempt = gh.run_attempt ?? 1;
+  const runUrl = `https://github.com/${repoFullName}/actions/runs/${runId}`;
+
+  // deploy-* 워크플로면 ReleaseRecord 파생 (R1: GitHub Release 객체 없음).
+  // 파일명이 우선이다. 표시 이름은 repo 마다 달라 승격 워크플로처럼 마켓 키워드가
+  // 빠지면 배포 기록 자체가 파생되지 않는다. 이름 판별은 비표준 워크플로용 fallback.
+  const market = marketFromWorkflowPath(gh.path) ?? marketFromWorkflowName(gh.name);
+  if (!market) {
+    // deploy-all 의 마켓 잡은 재사용 워크플로라 자체 workflow_run 이 없다. ReleaseRecord 도
+    // 파생되지 않아 그대로 두면 ALL 배포는 성공이든 실패든 Discord 에 아무것도 남지 않는다.
+    if (isDeployAllWorkflow(gh.path) && (status === "SUCCEEDED" || status === "FAILED")) {
+      const app = await prisma.app.findUnique({
+        where: { id: appId },
+        select: { displayName: true },
+      });
+      await enqueueDeployAllResultNotification({
+        text: buildDeployAllStatusCardText({
+          displayName: app?.displayName ?? repoFullName,
+          version: await resolveRunVersion(repoFullName, gh),
+          status,
+          runUrl,
+          updatedAt: ghUpdatedAt,
+        }),
+        eventKey: `${runId}:${runAttempt}`,
+        occurredAt: ghUpdatedAt,
+      });
+    }
+    return;
   }
+
+  const version = await resolveRunVersion(repoFullName, gh);
   const relData = {
     appId,
     version,
-    track: null,
+    // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
+    track: isPromoteGooglePlayWorkflow(gh.path) ? "production" : null,
     status,
     workflowName: gh.name ?? null,
     commitSha: gh.head_sha ?? null,
@@ -236,7 +275,6 @@ export async function upsertWorkflowRun(
   // webhook 유실·처리 실패도 정기 reconcile 이 복구하도록 미러 upsert 경로에서 outbox를 만든다.
   // terminal key는 기존 완료 알림과 같게 유지해 배포 직후 과거 실행을 다시 보내지 않는다.
   // 비terminal 상태는 상태명을 붙여 같은 실행의 요청됨→진행 중 카드를 멱등 갱신한다.
-  const runAttempt = gh.run_attempt ?? 1;
   const terminal = status === "SUCCEEDED" || status === "FAILED";
   await enqueueDeployCompletionNotification({
     releaseRecordId: release.id,
@@ -244,7 +282,7 @@ export async function upsertWorkflowRun(
       ? `github:${runId}:${runAttempt}`
       : `github:${runId}:${runAttempt}:${status.toLowerCase()}`,
     status,
-    runUrl: `https://github.com/${repoFullName}/actions/runs/${runId}`,
+    runUrl,
   });
 
   if (status === "SUCCEEDED") {

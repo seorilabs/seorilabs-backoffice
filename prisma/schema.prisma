@@ -32,6 +32,9 @@ model App {
   firebaseProject String?
   // GA4 BigQuery export 데이터셋("analytics_<propertyId>"). 지표 수집 대상 판별용.
   ga4Dataset      String?
+  // Platform 운영 이벤트 수집 이전에 이미 만들어져 있던 Platform 계정 수.
+  // 알림의 누적 순번은 이 값에 관측 이벤트 수를 더해 계산한다.
+  platformUserBaseline Int?
   playPackage     String? @unique
   iosBundle       String?
   appleTeamId     String?
@@ -317,6 +320,7 @@ enum NotificationKind {
   MILESTONE
   INCIDENT
   STORE_REVIEW
+  IDENTITY_SUMMARY
 }
 
 enum NotificationProvider {

@@ -37,6 +37,32 @@ test("미설정/빈 allowlist 는 전부 대상 아님", () => {
   assert.equal(isXcodeCloudRepo("seorilabs/happy-farm"), false);
 });
 
+test("두 워커의 Xcode Cloud allowlist 가 서로 어긋나지 않는다", () => {
+  // 웹/스케줄러는 deployment.yaml, Discord 명령 워커는 discord-workers.yaml 을 쓴다.
+  // 한쪽만 갱신하면 같은 repo 가 경로에 따라 GH 와 Xcode Cloud 로 갈린다.
+  const pick = (file: string) =>
+    readFileSync(new URL(file, import.meta.url), "utf8")
+      .match(/XCODE_CLOUD_APP_STORE_REPOS,?\s*value: "([^"]+)"/)?.[1];
+  const web = pick("../../../k8s/deployment.yaml");
+  const worker = pick("../../../k8s/discord-workers.yaml");
+  assert.ok(web && worker);
+  assert.deepEqual(web.split(","), worker.split(","));
+});
+
+test("Xcode Cloud 제품이 준비된 repo 만 allowlist 에 있다", () => {
+  const allowlist = readFileSync(
+    new URL("../../../k8s/deployment.yaml", import.meta.url),
+    "utf8",
+  ).match(/- name: XCODE_CLOUD_APP_STORE_REPOS\s*\n\s*value: "([^"]+)"/)?.[1];
+  assert.ok(allowlist);
+  const repos = allowlist.split(",");
+  // 제품이 없는 repo 를 넣으면 App Store 배포가 "Xcode Cloud 제품 없음" 으로 죽는다.
+  for (const repo of ["seorilabs/match-picture-app", "seorilabs/lucid-reversi"]) {
+    assert.equal(repos.includes(repo), false, `${repo} 는 Xcode Cloud 제품 미생성`);
+  }
+  assert.equal(repos.includes("seorilabs/spiritgate-defenders"), true);
+});
+
 test("운영 Xcode Cloud allowlist 에 Jomul이 등록됨", () => {
   const deployment = readFileSync(
     new URL("../../../k8s/deployment.yaml", import.meta.url),

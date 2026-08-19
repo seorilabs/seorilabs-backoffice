@@ -5,12 +5,27 @@ import {
   requiresOperatorConfirmation,
 } from "@/lib/discord/command-policy";
 
-test("릴리즈 생성·배포·재인덱싱만 명시 확인을 요구한다", () => {
-  assert.equal(requiresOperatorConfirmation("release_create"), true);
-  assert.equal(requiresOperatorConfirmation("deploy"), true);
-  assert.equal(requiresOperatorConfirmation("index"), true);
-  assert.equal(requiresOperatorConfirmation("release_preview"), false);
-  assert.equal(requiresOperatorConfirmation("plan_generate"), false);
+test("되돌리기 어렵거나 외부에 공개되는 작업만 명시 확인을 요구한다", () => {
+  for (const operation of [
+    "release_create",
+    "deploy",
+    "index",
+    "play_promote",
+    "appstore_review_submit",
+    "appstore_review_cancel",
+  ]) {
+    assert.equal(requiresOperatorConfirmation(operation), true, operation);
+  }
+  // 심사 생성·삭제·상태 조회는 같은 카드에서 되돌릴 수 있어 즉시 실행한다.
+  for (const operation of [
+    "release_preview",
+    "plan_generate",
+    "appstore_review_create",
+    "appstore_review_remove",
+    "appstore_refresh",
+  ]) {
+    assert.equal(requiresOperatorConfirmation(operation), false, operation);
+  }
 });
 
 test("확인 claim은 같은 요청자와 만료 전 대기 상태를 모두 요구한다", () => {

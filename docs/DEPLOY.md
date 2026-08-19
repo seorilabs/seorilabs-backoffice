@@ -259,7 +259,7 @@ flowchart LR
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
 - `lizard-tycoon`은 `com.seorilabs.lizardtycoon` Xcode Cloud 제품(`LizardTerrarium`)과 `Lizard Tycoon Release` workflow를 사용한다. Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그 커밋에서 Godot iOS 프로젝트를 재생성한다. workflow에는 환경변수 `GODOT_ANALYTICS_ID`와 secret `GODOT_ANALYTICS_SECRET`이 있어야 빌드가 통과한다.
 - `jomul`은 `com.seorilabs.jomul` Xcode Cloud 제품과 `Jomul App Store Archive` workflow를 사용한다. 2026-08-16 live readback에서 primary repository `seorilabs/jomul`과 활성 `APP_STORE_ELIGIBLE` iOS Archive workflow가 정확히 하나임을 확인했다. repo의 `deploy-app-store.yml`은 마켓 지원 탐지용 fail-closed 표준 진입점이며, 실제 App Store 실행은 Backoffice가 ASC API로 Xcode Cloud에 요청한다.
-- 관련 마이그레이션: `16_deploy_completion_notifications`, `20_discord_operational_notifications`, `23_drop_telegram_legacy`.
+- 관련 마이그레이션: `16_deploy_completion_notifications`, `20_discord_operational_notifications`, `24_drop_telegram_legacy`.
 
 ## 14. AppOps Kubernetes worker
 

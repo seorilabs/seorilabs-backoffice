@@ -30,7 +30,7 @@ const storeReviewSql = readFileSync(
 const dropTelegramSql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/23_drop_telegram_legacy/migration.sql",
+    "prisma/migrations/24_drop_telegram_legacy/migration.sql",
   ),
   "utf8",
 );
@@ -100,7 +100,7 @@ test("빈 DB bootstrap에서 Telegram 생성 migration이 정리 migration보다
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  const cleanup = order.indexOf("23_drop_telegram_legacy");
+  const cleanup = order.indexOf("24_drop_telegram_legacy");
   assert.ok(cleanup >= 0);
   assert.ok(cleanup < order.indexOf("2_telegram_turn"));
   assert.ok(cleanup < order.indexOf("3_telegram_pending"));

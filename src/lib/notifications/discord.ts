@@ -217,7 +217,10 @@ export async function editDiscordChannelMessage(
   return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+    // Discord PATCH는 누락 필드를 보존한다. 확인 버튼 응답(UPDATE_MESSAGE)이 남긴
+    // "실행 중" content 와 버튼을 비우지 않으면 결과 embed 를 붙여도 메시지가 계속
+    // 진행 중으로 읽힌다.
+    body: JSON.stringify({ content: "", components: [], ...payload }),
   });
 }
 

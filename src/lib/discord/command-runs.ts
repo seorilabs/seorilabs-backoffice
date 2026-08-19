@@ -4,12 +4,19 @@ import { createBugDraftCore, createPlanningDraftCore, commitDraftCore } from "@/
 import { generateStageDraftCore } from "@/lib/core/ai-drafts";
 import { toggleApprovalCore } from "@/lib/core/approvals";
 import {
+  cancelAppStoreReview,
+  createAppStoreReview,
   createReleaseTagWithNotes,
   dispatchMarketDeploy,
   previewNextTag,
+  promoteGooglePlay,
+  removeAppStoreReview,
+  submitAppStore,
   type Bump,
   type DeployTarget,
 } from "@/lib/core/release-ops";
+import { renderDeployCard } from "@/lib/notifications/deploy";
+import { releaseDeployRows } from "@/lib/discord/release-card";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 import { handleDiscordChat } from "@/lib/discord/chat";
@@ -156,6 +163,25 @@ async function showRun(
   return created.ok ? created.messageId ?? null : null;
 }
 
+/** 배포 카드 소유 run 의 releaseRecordId. 카드 액션이 아니면 빈 문자열. */
+function releaseRecordIdOf(run: OperatorCommandRun): string {
+  return stringValue(jsonRecord(run.params), "releaseRecordId");
+}
+
+/**
+ * 배포 카드를 현재 상태로 다시 그린다. 액션 결과 한 줄을 앞에 붙여 무엇이 실행됐는지
+ * 남기되, 카드 본문과 버튼은 라이브 상태에서 다시 계산한다.
+ */
+async function showDeployCard(
+  run: OperatorCommandRun,
+  releaseRecordId: string,
+  resultLine: string,
+): Promise<string | null> {
+  const card = await renderDeployCard(releaseRecordId);
+  if (!card) return showRun(run, resultLine);
+  return showRun(run, `${resultLine}\n\n${card.text}`, card.components);
+}
+
 async function appForRun(run: OperatorCommandRun) {
   if (!run.appId) throw new Error("앱이 지정되지 않았습니다.");
   const app = await prisma.app.findUnique({
@@ -287,8 +313,13 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         tag: stringValue(params, "next"),
         actorLabel: run.actorLabel,
       });
-      await showRun(run, `✅ **${app.displayName} ${result.tag}** 생성 완료\n[GitHub Release](${result.releaseUrl})`);
-      return { summary: `릴리즈 ${result.tag} 생성` };
+      const messageId = await showRun(
+        run,
+        `✅ **${app.displayName} ${result.tag}** 생성 완료\n[GitHub Release](${result.releaseUrl})\n` +
+          "아래에서 배포할 마켓을 고르세요.",
+        releaseDeployRows(app.id, result.tag, app.marketTargets),
+      );
+      return { summary: `릴리즈 ${result.tag} 생성`, messageId };
     }
     case "deploy": {
       const app = await appForRun(run);
@@ -306,6 +337,67 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           (result.xcodeCloudBuild != null ? `\nXcode Cloud #${result.xcodeCloudBuild}` : ""),
       );
       return { summary: `${target} 배포 트리거` };
+    }
+    case "play_promote": {
+      const app = await appForRun(run);
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const tag = stringValue(params, "tag");
+      await promoteGooglePlay({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: run.actorLabel,
+      });
+      const messageId = await showDeployCard(
+        run,
+        releaseRecordId,
+        `🚀 **${tag}** 프로덕션 승격을 트리거했습니다. 결과는 승격 워크플로 카드로 옵니다.`,
+      );
+      return { summary: `Play 프로덕션 승격 ${tag}`, messageId };
+    }
+    case "appstore_review_create": {
+      const app = await appForRun(run);
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const tag = stringValue(params, "tag");
+      const result = await createAppStoreReview({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: run.actorLabel,
+      });
+      // 빌드가 아직 처리 중이면 항목을 만들지 않고 사유만 알린다(에러 아님).
+      const line = result.reviewSubmissionId
+        ? `📝 **${tag}** 심사를 생성했습니다. 제출 전 마지막 확인을 하세요.`
+        : `⏳ 심사를 아직 생성할 수 없습니다: ${result.prepare.reason ?? "빌드 준비 대기"}`;
+      const messageId = await showDeployCard(run, releaseRecordId, line);
+      return { summary: result.reviewSubmissionId ? `심사 생성 ${tag}` : `심사 생성 대기 ${tag}`, messageId };
+    }
+    case "appstore_review_submit": {
+      const app = await appForRun(run);
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const tag = stringValue(params, "tag");
+      await submitAppStore({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
+      const messageId = await showDeployCard(run, releaseRecordId, `📮 **${tag}** 심사 제출 완료.`);
+      return { summary: `심사 제출 ${tag}`, messageId };
+    }
+    case "appstore_review_remove": {
+      const app = await appForRun(run);
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const tag = stringValue(params, "tag");
+      await removeAppStoreReview({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
+      const messageId = await showDeployCard(run, releaseRecordId, `🗑️ **${tag}** 심사 생성을 삭제했습니다.`);
+      return { summary: `심사 생성 삭제 ${tag}`, messageId };
+    }
+    case "appstore_review_cancel": {
+      const app = await appForRun(run);
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const tag = stringValue(params, "tag");
+      await cancelAppStoreReview({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
+      const messageId = await showDeployCard(run, releaseRecordId, `↩️ **${tag}** 심사 제출을 취소했습니다.`);
+      return { summary: `심사 제출 취소 ${tag}`, messageId };
+    }
+    case "appstore_refresh": {
+      const releaseRecordId = stringValue(params, "releaseRecordId");
+      const messageId = await showDeployCard(run, releaseRecordId, "🔄 App Store 심사 상태를 새로 읽었습니다.");
+      return { summary: "심사 상태 새로고침", messageId };
     }
     case "save": {
       const text = stringValue(params, "text");
@@ -369,7 +461,18 @@ export async function processNextOperatorCommand(): Promise<boolean> {
     }
   } catch (error) {
     const message = safeError(error);
-    await showRun(run, `❌ 작업 실패: ${message}`);
+    // 카드 소유 run 은 실패로 카드를 지우지 않는다. 실패 사유를 얹고 현재 상태를 다시 그린다.
+    const releaseRecordId = releaseRecordIdOf(run);
+    // 표시가 실패해도 run 이 PROCESSING 에 갇히면 안 된다. 렌더 예외는 여기서 삼킨다.
+    await (releaseRecordId
+      ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
+      : showRun(run, `❌ 작업 실패: ${message}`)
+    ).catch((renderError) => {
+      console.error(
+        `[operator-command-worker] 실패 표시 실패 ${run.id}:`,
+        renderError instanceof Error ? renderError.message : renderError,
+      );
+    });
     await prisma.operatorCommandRun.update({
       where: { id: run.id },
       data: {
@@ -407,15 +510,20 @@ export async function maintainOperatorCommands(now = new Date()) {
   return { expired: expired.count, stale: stale.count, redacted: redacted.count };
 }
 
+const OPERATION_KO: Record<string, string> = {
+  deploy: "배포 트리거",
+  index: "볼트 재인덱싱",
+  release_create: "릴리즈 태그 생성",
+  play_promote: "Google Play 프로덕션 승격",
+  appstore_review_create: "App Store 심사 생성",
+  appstore_review_submit: "App Store 심사 제출",
+  appstore_review_remove: "App Store 심사 삭제",
+  appstore_review_cancel: "App Store 제출 취소",
+  appstore_refresh: "App Store 상태 새로고침",
+};
+
 export function awaitingConfirmationText(operation: string): string {
-  switch (operation) {
-    case "deploy":
-      return "배포 트리거";
-    case "index":
-      return "볼트 재인덱싱";
-    default:
-      return "작업";
-  }
+  return OPERATION_KO[operation] ?? "작업";
 }
 
 export function confirmationComponents(runId: string) {

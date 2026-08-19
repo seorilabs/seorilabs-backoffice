@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import {
   isDuplicateMilestoneError,
   milestoneLabelForEvent,
+  milestoneRetryAction,
 } from "@/lib/notifications/milestones";
 
 test("최초 알림 대상은 계정 생성·IAP 지급·광고 보상 지급만 포함한다", () => {
@@ -24,4 +25,13 @@ test("appId와 eventType 중복은 이미 발송된 최초 마일스톤으로 �
   });
   assert.equal(isDuplicateMilestoneError(duplicate), true);
   assert.equal(isDuplicateMilestoneError(other), false);
+});
+
+test("재전송된 최초 이벤트는 발송 전일 때만 다시 알린다", () => {
+  const notified = { firstEventId: "identity_a", notifiedAt: new Date("2026-08-18T00:00:00Z") };
+  const pending = { firstEventId: "identity_a", notifiedAt: null };
+  assert.equal(milestoneRetryAction(pending, "identity_a"), "notify");
+  assert.equal(milestoneRetryAction(notified, "identity_a"), "skip");
+  assert.equal(milestoneRetryAction(pending, "identity_b"), "not-milestone");
+  assert.equal(milestoneRetryAction(null, "identity_a"), "not-milestone");
 });

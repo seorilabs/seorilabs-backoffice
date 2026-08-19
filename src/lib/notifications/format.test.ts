@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { editDiscord, sendDiscord, splitDiscordText } from "@/lib/notifications/discord";
+import {
+  editDiscord,
+  editDiscordChannelMessage,
+  sendDiscord,
+  splitDiscordText,
+} from "@/lib/notifications/discord";
 import { htmlToDiscord } from "@/lib/notifications/format";
 
 test("과거 HTML 본문을 Discord Markdown으로 변환한다", () => {
@@ -103,6 +108,59 @@ test("삭제된 Discord 카드의 Unknown Message를 복구 가능하게 전달�
       assert.equal(result.ok, false);
       assert.equal(result.statusCode, 404);
       assert.equal(result.errorCode, 10_008);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
+test("명령 결과 수정은 확인 버튼이 남긴 진행 중 content와 버튼을 비운다", async () => {
+  await withDiscordEnv(async () => {
+    const previousFetch = globalThis.fetch;
+    let bodyText = "";
+    globalThis.fetch = async (input, init) => {
+      bodyText = String(init?.body);
+      return new Response(JSON.stringify({ id: "1539418059209445457" }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const result = await editDiscordChannelMessage(
+        "1539210290917277706",
+        "1539418059209445457",
+        "🚀 배포 트리거 완료",
+      );
+      const body = JSON.parse(bodyText) as {
+        content?: string;
+        components?: unknown[];
+        embeds?: Array<{ description?: string }>;
+      };
+      assert.equal(result.ok, true);
+      // PATCH 는 누락 필드를 보존한다. content 를 비우지 않으면 "⏳ 실행 중…" 이 남아
+      // 결과 embed 를 붙여도 메시지가 계속 진행 중으로 읽힌다.
+      assert.equal(body.content, "");
+      assert.deepEqual(body.components, []);
+      assert.equal(body.embeds?.[0]?.description, "🚀 배포 트리거 완료");
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
+test("명령 결과에 버튼이 있으면 비우지 않고 그대로 실어 보낸다", async () => {
+  await withDiscordEnv(async () => {
+    const previousFetch = globalThis.fetch;
+    let bodyText = "";
+    globalThis.fetch = async (input, init) => {
+      bodyText = String(init?.body);
+      return new Response(JSON.stringify({ id: "1539418059209445457" }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      await editDiscordChannelMessage("1539210290917277706", "1539418059209445457", "확인 필요", {
+        components: [{ type: 1, components: [{ type: 2, style: 4, label: "실행", custom_id: "command:confirm:x" }] }],
+      });
+      const body = JSON.parse(bodyText) as { content?: string; components?: Array<{ type?: number }> };
+      assert.equal(body.content, "");
+      assert.equal(body.components?.length, 1);
+      assert.equal(body.components?.[0]?.type, 1);
     } finally {
       globalThis.fetch = previousFetch;
     }

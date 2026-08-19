@@ -10,6 +10,7 @@ import {
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
+import { recordIdentitySignup } from "@/lib/notifications/identity-summary";
 import { recordOperationalMilestone } from "@/lib/notifications/milestones";
 import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
 
@@ -57,11 +58,12 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (duplicate) return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
-
+  // 중복이어도 알림 경로를 다시 태운다. 이벤트 저장 뒤 enqueue가 실패하면 Platform
+  // 재전송이 유일한 복구 경로인데, 여기서 조기 반환하면 그 경로가 막힌다. 아래 처리는
+  // incident dedupe와 notification dedupeKey, 마일스톤 unique로 모두 멱등하다.
   const app = await prisma.app.findUnique({
     where: { slug: input.appId },
-    select: { id: true, displayName: true },
+    select: { id: true, slug: true, displayName: true, platformUserBaseline: true },
   });
   const alert = isOpsAlert(input.type);
   const occurredAt = new Date(input.occurredAt);
@@ -95,7 +97,11 @@ export async function POST(request: NextRequest) {
     const milestone = app
       ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
       : false;
-    if (!milestone) {
+    // 등록된 앱의 신규 계정은 건별 카드 대신 앱·일 요약 카드 하나를 갱신한다.
+    const summarized = app && input.type === "identity.created"
+      ? await recordIdentitySignup({ app, event: input })
+      : false;
+    if (!milestone && !summarized) {
       await enqueueNotification({
         dedupeKey: `operational:${input.eventId}`,
         kind: "OPERATIONAL_EVENT",
@@ -105,5 +111,5 @@ export async function POST(request: NextRequest) {
       });
     }
   }
-  return NextResponse.json({ ok: true, duplicate: false }, { status: 202 });
+  return NextResponse.json({ ok: true, duplicate }, { status: duplicate ? 200 : 202 });
 }

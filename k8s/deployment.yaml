@@ -127,7 +127,7 @@ spec:
             # 정책: 모든 App Store 배포는 App Store Connect(Xcode Cloud)로 → TestFlight 검증 → 심사 제출.
             # iOS 를 출시하는 repo 는 Xcode Cloud 제품/워크플로 준비되는 대로 이 목록에 추가한다.
             - name: XCODE_CLOUD_APP_STORE_REPOS
-              value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul"
+              value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul,seorilabs/spiritgate-defenders"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -198,8 +198,17 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_PUBLIC_KEY } }
             - name: DISCORD_GUILD_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_GUILD_ID } }
+            # Discord interaction 스코프 검사에 쓰인다. 버튼은 카드가 놓인 채널에서 눌리므로
+            # 카드를 보내는 채널 ID 가 여기 없으면 그 채널의 버튼이 전부 거부된다.
+            # 목록은 roles.ts 의 DISCORD_CARD_CHANNEL_KEYS 와 일치해야 한다.
             - name: DISCORD_CHANNEL_BACKOFFICE_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID } }
+            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
+            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
+            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID } }
             - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
             - name: DISCORD_ROLE_OPERATOR_ID

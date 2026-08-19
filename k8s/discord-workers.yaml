@@ -70,6 +70,14 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true } }
             - name: DISCORD_ROLE_RELEASE_OPS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
+            # 배포 카드의 App Store 액션 버튼은 심사 단계에 따라 달라진다. 카드를 그리는
+            # 쪽에서 ASC 라이브 상태를 읽어야 실행 불가능한 버튼을 노출하지 않는다.
+            - name: APP_STORE_CONNECT_API_KEY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_API_KEY_ID, optional: true } }
+            - name: APP_STORE_CONNECT_ISSUER_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_ISSUER_ID, optional: true } }
+            - name: APP_STORE_CONNECT_PRIVATE_KEY_BASE64
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_PRIVATE_KEY_BASE64, optional: true } }
           resources:
             requests: { cpu: 25m, memory: 128Mi }
             limits: { cpu: 300m, memory: 384Mi }
@@ -129,7 +137,7 @@ spec:
             - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
             - { name: GEMINI_EMBED_MODEL, value: gemini-embedding-001 }
             - { name: GEMINI_EMBED_DIM, value: "1536" }
-            - { name: XCODE_CLOUD_APP_STORE_REPOS, value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul" }
+            - { name: XCODE_CLOUD_APP_STORE_REPOS, value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/babycare,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul,seorilabs/spiritgate-defenders" }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
             - name: DISCORD_APPLICATION_ID

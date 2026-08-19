@@ -16,7 +16,16 @@ import {
   p1Query,
   statusQuery,
 } from "@/lib/discord/queries";
-import { capabilityForCommand, hasDiscordCapability, isDiscordInteractionScope, type DiscordCapability } from "@/lib/discord/roles";
+import {
+  capabilityForCommand,
+  hasDiscordCapability,
+  isDiscordInteractionScope,
+  interactionChannelKeys,
+  type DiscordCapability,
+} from "@/lib/discord/roles";
+import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
+import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
+import type { DiscordActionRow } from "@/lib/notifications/discord";
 import { ephemeral, modal } from "@/lib/discord/responses";
 import {
   EPHEMERAL_FLAG,
@@ -63,6 +72,20 @@ function update(content: string) {
   };
 }
 
+/**
+ * 배포 카드 액션의 확인은 ephemeral 로 띄운다. 카드 메시지는 worker 가 단독으로 소유해야
+ * 실행 결과 렌더와 interaction 응답이 같은 메시지를 두고 경합하지 않는다.
+ */
+function ephemeralConfirmRows(runId: string): DiscordActionRow[] {
+  return [{
+    type: 1,
+    components: [
+      { type: 2, style: 4, label: "실행", custom_id: `command:econfirm:${runId}` },
+      { type: 2, style: 2, label: "취소", custom_id: `command:ecancel:${runId}` },
+    ],
+  }];
+}
+
 function roles(interaction: DiscordInteraction): string[] {
   return interaction.member?.roles ?? [];
 }
@@ -78,7 +101,8 @@ function authorized(interaction: DiscordInteraction, capability: DiscordCapabili
 function commandCapability(operation: string): DiscordCapability {
   if (operation === "approval") return "planning_approval";
   if (operation === "incident_ack" || operation === "incident_assign") return "ops_incident";
-  if (operation === "release_create" || operation === "release_preview" || operation === "deploy") return "release";
+  if (operation.startsWith("release_") || operation === "deploy") return "release";
+  if (operation === "play_promote" || operation.startsWith("appstore_")) return "release";
   if (operation === "index") return "vault_index";
   if (operation === "save") return "vault_write";
   if (operation === "plan_generate" || operation === "draft_commit") return "planning";
@@ -92,6 +116,8 @@ function helpText(): string {
     "조회: `/approvals` `/p1` `/status [app]` `/metrics [app]`",
     "초안: `/plan app` `/bug app` — AI 초안 확인 후 버튼으로 GitHub 이슈 생성",
     "릴리즈: `/release app bump` `/deploy app tag target` — 실행 전 확인 버튼 필요",
+    "태그 카드에서 배포할 마켓을 버튼으로 고를 수 있습니다.",
+    "배포 카드에서 Play 프로덕션 승격, App Store 심사 생성·제출·삭제·제출 취소를 버튼으로 실행합니다.",
     "볼트/대화: `/save` `/index` `/ask` `/reset`",
     "쓰기 권한은 Discord 업무 역할로 제한되며 실행자는 감사 로그에 남습니다.",
     "https://backoffice.vzyx.xyz",
@@ -198,7 +224,8 @@ async function handleModal(interaction: DiscordInteraction) {
 }
 
 async function handleComponent(interaction: DiscordInteraction) {
-  const [kind, action, id] = (interaction.data?.custom_id ?? "").split(":");
+  const parts = (interaction.data?.custom_id ?? "").split(":");
+  const [kind, action, id] = parts;
   const userId = actor(interaction);
   const channelId = interaction.channel_id ?? "";
   const messageId = interaction.message?.id;
@@ -215,6 +242,78 @@ async function handleComponent(interaction: DiscordInteraction) {
       const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
       return changed ? update("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
     }
+    // ephemeral 확인: 실행 대상 메시지를 바꾸지 않는다(ephemeral id 로 덮으면 worker 가 카드를 잃는다).
+    if (action === "econfirm") {
+      const changed = await confirmOperatorCommand({ id, actorDiscordUserId: userId, channelId });
+      return ephemeral(
+        changed
+          ? `⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`
+          : "이미 처리됐거나 확인 시간이 만료됐습니다.",
+      );
+    }
+    if (action === "ecancel") {
+      const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
+      return ephemeral(changed ? "✖️ 작업을 취소했습니다." : "이미 처리됐거나 취소할 수 없습니다.");
+    }
+  }
+
+  // 릴리즈 태그 카드의 마켓 배포 버튼 — rdeploy:<target>:<appId>:<tag>
+  if (kind === "rdeploy") {
+    if (!authorized(interaction, "release")) return ephemeral("배포 권한이 없습니다.");
+    const [, target, appId, tag] = parts;
+    if (!appId || !TARGETS.has(target) || !TAG_RE.test(tag ?? "")) {
+      return ephemeral("앱, 배포 대상 또는 태그가 올바르지 않습니다.");
+    }
+    const app = await prisma.app.findUnique({ where: { id: appId }, select: { id: true, displayName: true } });
+    if (!app) return ephemeral("앱을 찾을 수 없습니다.");
+    const run = await createOperatorCommand({
+      sourceInteractionId: interaction.id,
+      appId: app.id,
+      operation: "deploy",
+      params: { tag, target },
+      actorDiscordUserId: userId,
+      channelId,
+      needsConfirmation: true,
+    });
+    return ephemeral(
+      `⚠️ **${app.displayName} ${tag} → ${target}** 배포 워크플로를 트리거할까요? · 10분 후 만료`,
+      ephemeralConfirmRows(run.id),
+    );
+  }
+
+  // 배포 카드의 마켓 후속 작업 버튼 — deploycard:<action>:<releaseRecordId>
+  if (kind === "deploycard") {
+    if (!authorized(interaction, "release")) return ephemeral("배포 권한이 없습니다.");
+    if (!DEPLOY_CARD_ACTIONS.includes(action as DeployCardAction)) {
+      return ephemeral("지원하지 않는 배포 작업입니다.");
+    }
+    const cardAction = action as DeployCardAction;
+    if (!id) return ephemeral("배포 기록이 지정되지 않았습니다.");
+    const release = await prisma.releaseRecord.findUnique({
+      where: { id },
+      select: { id: true, appId: true, version: true, app: { select: { displayName: true } } },
+    });
+    if (!release) return ephemeral("배포 기록을 찾을 수 없습니다.");
+    if (!TAG_RE.test(release.version)) return ephemeral("태그 없는 배포에는 후속 작업을 할 수 없습니다.");
+
+    const needsConfirmation = requiresOperatorConfirmation(cardAction);
+    const run = await createOperatorCommand({
+      sourceInteractionId: interaction.id,
+      appId: release.appId,
+      operation: cardAction,
+      params: { releaseRecordId: release.id, tag: release.version },
+      actorDiscordUserId: userId,
+      channelId,
+      messageId,
+      needsConfirmation,
+    });
+    const label = DEPLOY_CARD_ACTION_KO[cardAction];
+    return needsConfirmation
+      ? ephemeral(
+          `⚠️ **${release.app.displayName} ${release.version}** ${label}을(를) 실행할까요? · 10분 후 만료`,
+          ephemeralConfirmRows(run.id),
+        )
+      : ephemeral(`⏳ ${label} 실행 중…`);
   }
 
   if (kind === "draft") {
@@ -292,12 +391,24 @@ async function handleComponent(interaction: DiscordInteraction) {
 
 export async function handleDiscordInteraction(interaction: DiscordInteraction) {
   if (interaction.type === InteractionType.PING) return { type: InteractionResponseType.PONG };
+  // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #backoffice 로 묶은 채로 버튼까지 묶으면
+  // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
+  const isComponent = interaction.type === InteractionType.MESSAGE_COMPONENT;
+  const allowedChannelIds = interactionChannelKeys(isComponent).map((key) =>
+    env.discordChannelId(key),
+  );
   if (!isDiscordInteractionScope({
     guildId: interaction.guild_id,
     channelId: interaction.channel_id,
     expectedGuildId: env.discordGuildId(),
-    expectedChannelId: env.discordChannelId("backoffice"),
-  })) return ephemeral("백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.");
+    allowedChannelIds,
+  })) {
+    return ephemeral(
+      isComponent
+        ? "이 버튼은 허용된 Discord 서버의 운영 채널에서만 사용할 수 있습니다."
+        : "백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.",
+    );
+  }
 
   if (interaction.type === InteractionType.AUTOCOMPLETE) {
     if (!authorized(interaction, "read")) return { type: InteractionResponseType.AUTOCOMPLETE_RESULT, data: { choices: [] } };
