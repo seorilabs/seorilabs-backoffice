@@ -57,8 +57,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (duplicate) return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
-
+  // 중복이어도 알림 경로를 다시 태운다. 이벤트 저장 뒤 enqueue가 실패하면 Platform
+  // 재전송이 유일한 복구 경로인데, 여기서 조기 반환하면 그 경로가 막힌다. 아래 처리는
+  // incident dedupe와 notification dedupeKey, 마일스톤 unique로 모두 멱등하다.
   const app = await prisma.app.findUnique({
     where: { slug: input.appId },
     select: { id: true, displayName: true },
@@ -105,5 +106,5 @@ export async function POST(request: NextRequest) {
       });
     }
   }
-  return NextResponse.json({ ok: true, duplicate: false }, { status: 202 });
+  return NextResponse.json({ ok: true, duplicate }, { status: duplicate ? 200 : 202 });
 }
