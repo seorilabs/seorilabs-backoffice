@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   capabilityForCommand,
   hasDiscordCapability,
@@ -81,5 +82,19 @@ test("Discord 역할별 capability와 명령 매핑을 최소권한으로 제한
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("interaction 을 받는 배포에 카드 채널 ID env 가 모두 선언돼 있다", () => {
+  // /api/discord/interactions 는 웹 배포에서 돈다. 여기 env 가 없으면 채널 ID 가 빈
+  // 문자열이 되고, 허용 목록에서 걸러져 그 채널의 버튼이 조용히 전부 거부된다.
+  // 실제로 release-ops 카드 버튼이 이 이유로 막혀 있었다.
+  const deployment = readFileSync(
+    new URL("../../../k8s/deployment.yaml", import.meta.url),
+    "utf8",
+  );
+  for (const key of DISCORD_CARD_CHANNEL_KEYS) {
+    const envName = `DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`;
+    assert.match(deployment, new RegExp(`name: ${envName}\\b`), `${envName} 미선언`);
   }
 });
