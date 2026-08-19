@@ -106,6 +106,11 @@ test("갱신 재발송은 전송 중인 delivery를 되돌리지 않는다", () 
   assert.match(outboxSource, /providerMessageId: result\.messageId \?\? row\.providerMessageId/);
 });
 
+test("갱신 재발송은 보존기한 정리 표시를 함께 지운다", () => {
+  // deletedAt이 남으면 재발송으로 생긴 새 메시지가 정리 대상에서 영구히 빠진다.
+  assert.match(outboxSource, /deletedAt: null,\n\s*\},\n\s*\}\);\n\s*return result\.count;/);
+});
+
 test("요약 카드는 기존 메시지를 편집하고 삭제됐을 때만 새로 만든다", () => {
   assert.match(deploySource, /kind === "IDENTITY_SUMMARY" && providerMessageId/);
   assert.match(deploySource, /errorCode !== 10_008\) return edited/);
