@@ -53,6 +53,38 @@ const REMAINING_GATES: Record<ReleaseMarket, string[]> = {
   WEB: ["배포 반영: ⚪ 미확인", "live smoke: ⚪ 미실행"],
 };
 
+function formatKst(at: Date): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(at);
+}
+
+/**
+ * deploy-all 실행 결과 카드. 마켓별 잡은 재사용 워크플로라 자체 workflow_run 이 없어
+ * ReleaseRecord 가 파생되지 않으므로, 마켓 게이트 대신 실행 단위 결과만 남긴다.
+ */
+export function buildDeployAllStatusCardText(input: {
+  displayName: string;
+  version: string;
+  status: Extract<ReleaseStatus, "SUCCEEDED" | "FAILED">;
+  runUrl?: string;
+  updatedAt: Date;
+}): string {
+  const lines = [
+    `🚀 **${input.displayName} ${input.version} · 전체 마켓 배포**`,
+    "",
+    `배포 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
+    input.status === "SUCCEEDED"
+      ? "마켓별 업로드 결과는 실행의 잡 결과에서 확인한다."
+      : "마켓 업로드가 진행되지 않았을 수 있다. 실행 로그를 확인한다.",
+  ];
+  if (input.runUrl) lines.push(`[실행 결과 보기](${input.runUrl})`);
+  lines.push(`마지막 갱신: ${formatKst(input.updatedAt)}`);
+  return lines.join("\n");
+}
+
 export function buildDeployStatusCardText(input: {
   displayName: string;
   version: string;
@@ -72,10 +104,6 @@ export function buildDeployStatusCardText(input: {
   if (input.workflowName) lines.push(`실행: ${input.workflowName}`);
   if (input.externalBuildNumber != null) lines.push(`Xcode Cloud 빌드: #${input.externalBuildNumber}`);
   if (input.runUrl) lines.push(`[실행 결과 보기](${input.runUrl})`);
-  lines.push(`마지막 갱신: ${new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(input.updatedAt)}`);
+  lines.push(`마지막 갱신: ${formatKst(input.updatedAt)}`);
   return lines.join("\n");
 }
