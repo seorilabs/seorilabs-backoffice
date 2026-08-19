@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -91,4 +91,19 @@ test("schema는 Telegram provider와 이력 모델을 더 이상 선언하지 �
   assert.match(provider, /DISCORD/);
   assert.doesNotMatch(provider, /TELEGRAM/);
   assert.doesNotMatch(schema, /model Telegram\w+/);
+});
+
+test("빈 DB bootstrap에서 Telegram 생성 migration이 정리 migration보다 뒤에 정렬된다", () => {
+  // Prisma는 migration 디렉터리를 사전식으로 적용한다. 숫자에 zero padding이 없어
+  // `2_`/`3_`이 `23_`보다 뒤로 가므로 정리 migration은 순서에 의존하면 안 된다.
+  const order = readdirSync(join(process.cwd(), "prisma/migrations"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const cleanup = order.indexOf("23_drop_telegram_legacy");
+  assert.ok(cleanup >= 0);
+  assert.ok(cleanup < order.indexOf("2_telegram_turn"));
+  assert.ok(cleanup < order.indexOf("3_telegram_pending"));
+  // 그래서 DROP은 반드시 IF EXISTS여야 한다.
+  assert.doesNotMatch(dropTelegramSql, /DROP TABLE `telegram_(?:turn|pending)`/);
 });
