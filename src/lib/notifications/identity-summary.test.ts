@@ -34,7 +34,7 @@ test("당일 이벤트에서 인증·익명·유입 분해와 직전 간격을 �
     ...base,
     todayTotal: 3,
     rows: [
-      { occurredAt: new Date("2026-08-19T07:44:00Z"), attributes: { authType: "ait_login", referrer: "DEFAULT" } },
+      { occurredAt: new Date("2026-08-19T07:44:00Z"), attributes: { authType: "apps_in_toss", referrer: "DEFAULT" } },
       { occurredAt: new Date("2026-08-19T07:36:00Z"), attributes: { authType: "firebase", anonymous: true } },
       { occurredAt: new Date("2026-08-19T02:10:00Z"), attributes: { authType: "firebase", anonymous: true } },
     ],
@@ -42,7 +42,7 @@ test("당일 이벤트에서 인증·익명·유입 분해와 직전 간격을 �
   assert.ok(facts);
   assert.equal(facts.todayTotal, 3);
   assert.equal(facts.anonymous, 2);
-  assert.deepEqual(facts.authTypes, [["firebase", 2], ["ait_login", 1]]);
+  assert.deepEqual(facts.authTypes, [["firebase", 2], ["apps_in_toss", 1]]);
   assert.deepEqual(facts.referrers, [["DEFAULT", 1]]);
   assert.deepEqual(facts.latestAt, new Date("2026-08-19T07:44:00Z"));
   assert.deepEqual(facts.previousAt, new Date("2026-08-19T07:36:00Z"));
@@ -61,13 +61,13 @@ test("카드에는 신규 수·최근 생성·직전 간격·누적·분해가 �
     latestAt: new Date("2026-08-19T07:44:00Z"),
     previousAt: new Date("2026-08-19T07:36:00Z"),
     anonymous: 2,
-    authTypes: [["firebase", 10], ["ait_login", 2]],
+    authTypes: [["firebase", 10], ["apps_in_toss", 2]],
     referrers: [["DEFAULT", 11], ["SANDBOX", 1]],
   });
   assert.match(text, /오늘 신규 계정 12명/);
   assert.match(text, /직전 간격 8분/);
   assert.match(text, /누적: 639번째 계정/);
-  assert.match(text, /인증: firebase 10 · ait_login 2/);
+  assert.match(text, /인증: firebase 10 · apps_in_toss 2/);
   assert.match(text, /익명 계정: 2/);
   assert.match(text, /유입: DEFAULT 11 · SANDBOX 1/);
 });
@@ -97,6 +97,7 @@ test("요약 카드는 앱·KST 날짜당 하나만 유지한다", () => {
   );
 });
 
+const summarySource = readFileSync(join(process.cwd(), "src/lib/notifications/identity-summary.ts"), "utf8");
 const outboxSource = readFileSync(join(process.cwd(), "src/lib/notifications/outbox.ts"), "utf8");
 const deploySource = readFileSync(join(process.cwd(), "src/lib/notifications/deploy.ts"), "utf8");
 
@@ -108,4 +109,22 @@ test("갱신 재발송은 전송 중인 delivery를 되돌리지 않는다", () 
 test("요약 카드는 기존 메시지를 편집하고 삭제됐을 때만 새로 만든다", () => {
   assert.match(deploySource, /kind === "IDENTITY_SUMMARY" && providerMessageId/);
   assert.match(deploySource, /errorCode !== 10_008\) return edited/);
+});
+
+test("신규 계정 알림은 앱·KST 날짜 dedupe 키 하나로 enqueue하고 갱신 발송한다", () => {
+  assert.match(
+    summarySource,
+    /dedupeKey: identitySummaryDedupeKey\(input\.app\.slug, facts\.dateKey\)/,
+  );
+  assert.match(summarySource, /kind: "IDENTITY_SUMMARY"/);
+  assert.match(summarySource, /await requeueNotification\(eventId\)/);
+});
+
+test("등록된 앱의 신규 계정은 건별 카드를 만들지 않는다", () => {
+  const routeSource = readFileSync(
+    join(process.cwd(), "src/app/api/internal/platform/operational-events/route.ts"),
+    "utf8",
+  );
+  assert.match(routeSource, /input\.type === "identity\.created"\s*\?\s*await recordIdentitySignup/);
+  assert.match(routeSource, /if \(!milestone && !summarized\)/);
 });
