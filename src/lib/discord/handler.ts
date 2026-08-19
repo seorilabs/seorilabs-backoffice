@@ -20,7 +20,7 @@ import {
   capabilityForCommand,
   hasDiscordCapability,
   isDiscordInteractionScope,
-  DISCORD_CARD_CHANNEL_KEYS,
+  interactionChannelKeys,
   type DiscordCapability,
 } from "@/lib/discord/roles";
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
@@ -394,9 +394,9 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
   // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #backoffice 로 묶은 채로 버튼까지 묶으면
   // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
   const isComponent = interaction.type === InteractionType.MESSAGE_COMPONENT;
-  const allowedChannelIds = isComponent
-    ? DISCORD_CARD_CHANNEL_KEYS.map((key) => env.discordChannelId(key))
-    : [env.discordChannelId("backoffice")];
+  const allowedChannelIds = interactionChannelKeys(isComponent).map((key) =>
+    env.discordChannelId(key),
+  );
   if (!isDiscordInteractionScope({
     guildId: interaction.guild_id,
     channelId: interaction.channel_id,

@@ -5,6 +5,7 @@ import {
   hasDiscordCapability,
   isDiscordInteractionScope,
   DISCORD_CARD_CHANNEL_KEYS,
+  interactionChannelKeys,
 } from "@/lib/discord/roles";
 
 test("guild와 허용 채널이 모두 일치해야 interaction scope를 통과한다", () => {
@@ -30,6 +31,13 @@ test("미설정 채널의 빈 ID는 허용 목록을 느슨하게 만들지 않�
   const withEmpty = { expectedGuildId: "100", allowedChannelIds: ["200", "", ""] };
   assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "", ...withEmpty }), false);
   assert.equal(isDiscordInteractionScope({ guildId: "100", channelId: "200", ...withEmpty }), true);
+});
+
+test("슬래시 명령과 모달은 #backoffice 로만 제한한다", () => {
+  // 명령까지 카드 채널로 넓히면 운영 알림 채널 어디서나 배포를 시작할 수 있게 된다.
+  assert.deepEqual([...interactionChannelKeys(false)], ["backoffice"]);
+  assert.deepEqual([...interactionChannelKeys(true)], [...DISCORD_CARD_CHANNEL_KEYS]);
+  assert.ok(interactionChannelKeys(true).length > interactionChannelKeys(false).length);
 });
 
 test("카드 채널 목록에는 버튼이 실려 나가는 목적지가 모두 들어 있다", () => {

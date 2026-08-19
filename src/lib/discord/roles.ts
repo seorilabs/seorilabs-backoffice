@@ -45,6 +45,17 @@ export const DISCORD_CARD_CHANNEL_KEYS = [
   "metrics-daily", // 지표 계열 장애 카드
 ] as const;
 
+/**
+ * 인터랙션 종류별 허용 채널 키.
+ * 슬래시 명령·모달은 #backoffice 로 묶고, 버튼만 카드가 놓인 채널까지 넓힌다.
+ * 명령까지 넓히면 운영 알림 채널 어디서나 배포를 시작할 수 있게 된다.
+ */
+export function interactionChannelKeys(
+  isMessageComponent: boolean,
+): readonly string[] {
+  return isMessageComponent ? DISCORD_CARD_CHANNEL_KEYS : ["backoffice"];
+}
+
 export function isDiscordInteractionScope(input: {
   guildId?: string;
   channelId?: string;
