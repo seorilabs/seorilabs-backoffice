@@ -14,6 +14,7 @@ import {
   type TeammateMeta,
 } from "@/lib/discord/teammates";
 import { handleTeammateMention } from "@/lib/discord/teammate-chat";
+import { maintainTeammateRuns, processNextTeammatePatrol } from "@/lib/discord/teammate-patrol";
 
 // 팀원별 동시 처리 상한. 초과분은 Gemini 없이 혼잡 답변으로 즉시 응답한다.
 const MAX_PENDING_PER_TEAMMATE = 2;
@@ -138,7 +139,26 @@ async function main(): Promise<void> {
   }
   if (connections.length === 0) throw new Error("팀원 Gateway 연결이 모두 실패했습니다.");
 
-  while (!stopping) await sleep(1_000);
+  // 순찰 큐(teammate_run PENDING)는 60초 주기로 직렬 소화한다. Gemini 종합은
+  // 멘션과 같은 전역 슬롯을 지나므로 무료 쿼타 동시 소진이 없다.
+  let lastPatrolTick = 0;
+  while (!stopping) {
+    if (Date.now() - lastPatrolTick >= 60_000) {
+      lastPatrolTick = Date.now();
+      try {
+        await maintainTeammateRuns();
+        while (!stopping && (await processNextTeammatePatrol(withGeminiSlot))) {
+          // 다음 PENDING 순찰이 없어질 때까지 1건씩 처리
+        }
+      } catch (error) {
+        console.error(
+          "[teammate-worker] 순찰 처리 실패:",
+          error instanceof Error ? error.message : "error",
+        );
+      }
+    }
+    await sleep(1_000);
+  }
   for (const state of connections) state.connection.stop();
 }
 
