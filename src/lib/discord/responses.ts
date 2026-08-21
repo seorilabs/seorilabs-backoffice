@@ -13,6 +13,18 @@ export function ephemeral(content: string, components: DiscordActionRow[] = []) 
   };
 }
 
+/** 버튼이 붙어 있던 메시지를 갱신해 별도 interaction 답글이 쌓이지 않게 한다. */
+export function updateMessage(content: string) {
+  return {
+    type: InteractionResponseType.UPDATE_MESSAGE,
+    data: {
+      content: content.slice(0, 2_000),
+      components: [],
+      allowed_mentions: { parse: [] },
+    },
+  };
+}
+
 export function modal(customId: string, title: string, label: string, placeholder = "") {
   return {
     type: InteractionResponseType.MODAL,
