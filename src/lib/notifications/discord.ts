@@ -43,6 +43,9 @@ export interface DiscordMessageOptions {
   // 한 줄짜리 기록은 embed 박스 없이 본문으로 보낸다. 여러 건이 쌓이는 곳에서
   // embed는 한 건마다 상자를 그려 로그로 읽히지 않는다.
   plain?: boolean;
+  // 원본 메시지에 대한 네이티브 답글로 보낸다. 답글이어도 allowed_mentions 는
+  // 그대로 비워 두므로 핑은 발생하지 않는다.
+  replyToMessageId?: string;
 }
 
 export function splitDiscordText(text: string): string[] {
@@ -65,6 +68,9 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
   const mention = roleId && /^\d+$/.test(roleId) ? `<@&${roleId}>` : undefined;
   const allowedMentions = { parse: [] as string[], roles: mention ? [roleId] : [] };
   const components = options.components?.length ? { components: options.components } : {};
+  const reference = options.replyToMessageId && /^\d+$/.test(options.replyToMessageId)
+    ? { message_reference: { message_id: options.replyToMessageId, fail_if_not_exists: false } }
+    : {};
   if (options.plain) {
     const body = text.trim();
     // 본문이 비면 embed 경로와 같이 보내지 않는다. 멘션만 남은 알림은 내용 없이 울린다.
@@ -72,6 +78,7 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
     return {
       content: [mention, body].filter(Boolean).join(" ").slice(0, CONTENT_LIMIT),
       ...components,
+      ...reference,
       allowed_mentions: allowedMentions,
     };
   }
@@ -81,6 +88,7 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
     ...(mention ? { content: mention } : {}),
     embeds: descriptions.map((description) => ({ description })),
     ...components,
+    ...reference,
     allowed_mentions: allowedMentions,
   };
 }
@@ -103,8 +111,10 @@ function safeDiscordError(status: number, body: unknown): DiscordDeliveryResult 
 async function discordRequest(
   path: string,
   init: RequestInit,
+  // AI 팀원 봇은 자기 토큰으로 발화한다. 미지정이면 메인 봇 토큰.
+  tokenOverride?: string,
 ): Promise<DiscordDeliveryResult & { json?: unknown }> {
-  const token = env.discordBotToken();
+  const token = tokenOverride ?? env.discordBotToken();
   if (!token) return { ok: false, error: "Discord Bot token 미설정" };
   try {
     const headers = new Headers(init.headers);
@@ -217,6 +227,24 @@ export async function createDiscordChannelMessage(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+// AI 팀원 봇이 자기 토큰·자기 정체로 채널에 발화한다.
+export async function createDiscordChannelMessageAs(
+  botToken: string,
+  channelId: string,
+  text: string,
+  options: DiscordMessageOptions = {},
+): Promise<DiscordDeliveryResult> {
+  if (!botToken) return { ok: false, error: "Discord Bot token 미설정" };
+  if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 오류" };
+  const payload = messagePayload(text, options);
+  if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
+  return discordRequest(`/channels/${channelId}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  }, botToken);
 }
 
 // 메시지에서 시작한 public thread는 ID가 원본 메시지 ID와 같다. 그래서 thread ID를 따로
