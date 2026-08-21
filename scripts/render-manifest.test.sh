@@ -57,6 +57,29 @@ else
   ng "Discord worker 최소권한 경계가 깨졌다"
 fi
 
+echo "== Vault 일일 스케줄 =="
+vault_manifest="$root/k8s/vault-rag.yaml"
+indexer_doc="$(awk 'BEGIN { RS="---" } /name: vault-indexer/ { print }' "$vault_manifest")"
+writer_doc="$(awk 'BEGIN { RS="---" } /name: vault-writer/ { print }' "$vault_manifest")"
+if printf '%s' "$indexer_doc" | grep -q 'schedule: "0 5 \* \* \*"' &&
+   printf '%s' "$indexer_doc" | grep -q 'timeZone: Asia/Seoul' &&
+   printf '%s' "$writer_doc" | grep -q 'schedule: "30 4 \* \* \*"' &&
+   printf '%s' "$writer_doc" | grep -q 'timeZone: Asia/Seoul'; then
+  ok "indexer 05:00, writer 04:30 KST"
+else
+  ng "Vault CronJob 일일 스케줄 계약이 깨졌다"
+fi
+
+echo "== Grafana alert 연동 제거 =="
+if [ ! -e "$root/src/app/api/internal/grafana/alerts/route.ts" ] &&
+   [ ! -e "$root/src/lib/notifications/grafana.ts" ] &&
+   ! grep -q 'GRAFANA_ALERT_HMAC_SECRET' "$root/k8s/deployment.yaml" "$root/k8s/secret.example.yaml" &&
+   ! grep -q 'grafana/alerts' "$root/src/middleware.ts"; then
+  ok "수신 route, 처리기, 배포 환경변수 제거"
+else
+  ng "Grafana alert 연동이 runtime 또는 배포 계약에 남아 있다"
+fi
+
 echo "== 대상이 없으면 죽는다 =="
 # :latest 가 없는 매니페스트를 만들어 넣는다. 조용히 통과하면 안 된다.
 tmp="$(mktemp)"

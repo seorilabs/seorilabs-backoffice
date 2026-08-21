@@ -229,8 +229,6 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_CS_ID } }
             - name: DISCORD_ROLE_VIEWER_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_VIEWER_ID } }
-            - name: GRAFANA_ALERT_HMAC_SECRET
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GRAFANA_ALERT_HMAC_SECRET } }
             - name: PLATFORM_EVENT_SHARED_SECRET
               valueFrom:
                 secretKeyRef:

@@ -219,10 +219,10 @@ Syncthing(`data` ns, hostPath `/data/syncthing`, rpi5)이 동기화하는 **Obsi
 
 ```
 data ns                                   platform ns
- vault-indexer CronJob (2h)                search_knowledge 챗 도구(Gemini 자동 호출)
+ vault-indexer CronJob (매일 KST 05:00)    search_knowledge 챗 도구(Gemini 자동 호출)
    PVC ro → chunk → gemini-embed →         /api/admin/vault/probe  (임베딩 실측, 키 비노출)
    vault_chunk(embedding LONGBLOB)         /api/admin/vault/search (검색 점검)
- vault-writer CronJob (5m)                 enqueueVaultWrite → vault_write_request
+ vault-writer CronJob (매일 KST 04:30)     enqueueVaultWrite → vault_write_request
    PENDING 드레인 → 받은함/*.md (uid 1000)   (텔레그램 /save)
 ```
 
@@ -245,11 +245,11 @@ data ns                                   platform ns
 3. `kubectl apply -f k8s/vault-rag.yaml`.
 4. **임베딩 실측(키 비노출)**: `curl -fsS -XPOST -H "x-admin-token: $TOK" https://backoffice.vzyx.xyz/api/admin/vault/probe` → `{ok:true, provider:"gemini", dim:1536}`.
 5. 최초 인덱싱: `kubectl -n data create job --from=cronjob/vault-indexer vault-index-init` → 로그로 `result {scanned,changed,chunks}` 확인.
-6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 5분 내 받은함에 파일.
+6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 다음 KST 04:30 writer 실행 뒤 받은함에 파일. 즉시 처리해야 하면 `kubectl -n data create job --from=cronjob/vault-writer vault-writer-manual-$(date +%s)`를 사용한다.
 
 - **즉시 재인덱싱 트리거**: 텔레그램 `/index` 또는 `POST /api/admin/vault/reindex` → backoffice 가 K8s API 로 `data` ns 에 인덱서 Job 생성(`src/lib/k8s/vault-trigger.ts`, 파드 SA 토큰+CA, 의존성 0). 실행 중이면 중복 방지, 완료 후 ttl 자동 정리. 평소 2h 자동 증분과 별개로 "방금 쓴 문서 바로 검색" 용도. RBAC: `k8s/vault-trigger-rbac.yaml`(SA `backoffice` + data ns Role: cronjobs get, jobs create/list/get), deployment `serviceAccountName: backoffice`.
 
-> **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
+> **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. `/index`와 `POST /api/admin/vault/reindex`의 즉시 인덱싱은 일일 스케줄과 무관하게 유지된다. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
 
 ## 12. 출시노트 (Release Notes) — 태그 diff 기반 8개 언어 유저 공지
 

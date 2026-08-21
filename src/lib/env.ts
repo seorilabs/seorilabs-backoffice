@@ -150,6 +150,5 @@ export const env = {
   discordRetentionDays: () =>
     parseDiscordRetentionDays(optional("DISCORD_RETENTION_DAYS", "30")),
   natsServerUrl: () => optional("NATS_SERVER_URL", "nats://nats.data.svc.cluster.local:4222"),
-  grafanaAlertHmacSecret: () => optional("GRAFANA_ALERT_HMAC_SECRET"),
   platformEventSharedSecret: () => optional("PLATFORM_EVENT_SHARED_SECRET"),
 };
