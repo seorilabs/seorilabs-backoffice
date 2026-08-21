@@ -80,6 +80,20 @@ test("운영 Xcode Cloud allowlist 에 Jomul이 등록됨", () => {
   assert.equal(shouldUseXcodeCloudForTarget("seorilabs/jomul", "PLAY"), false);
 });
 
+test("운영 Xcode Cloud allowlist 에 운글 저장소가 등록됨", () => {
+  const deployment = readFileSync(
+    new URL("../../../k8s/deployment.yaml", import.meta.url),
+    "utf8",
+  );
+  const allowlist = deployment.match(
+    /- name: XCODE_CLOUD_APP_STORE_REPOS\s*\n\s*value: "([^"]+)"/,
+  )?.[1];
+  assert.ok(allowlist);
+  assert.equal(allowlist.split(",").includes("seorilabs/saju-reader"), true);
+  process.env[KEY] = allowlist;
+  assert.equal(isXcodeCloudRepo("seorilabs/saju-reader"), true);
+});
+
 const cycleRelease: WorkflowCandidate = {
   id: "cycle-release",
   name: "Cycle Pair Release",
