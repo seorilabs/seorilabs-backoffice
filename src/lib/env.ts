@@ -133,6 +133,16 @@ export const env = {
     Boolean(optional("DISCORD_PUBLIC_KEY").trim()) &&
     Boolean(optional("DISCORD_BOT_TOKEN").trim()) &&
     Boolean(optional("DISCORD_GUILD_ID").trim()),
+  // AI 팀원 봇 4종(product/data/development/qa). 역할별 별도 Discord 앱이며
+  // 슬래시 명령은 메인 봇 전유라 팀원에겐 APPLICATION_ID 와 BOT_TOKEN 만 필요하다.
+  featureDiscordTeammates: () => bool("FEATURE_DISCORD_TEAMMATES", false),
+  discordTeammateApplicationId: (role: string) =>
+    optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_APPLICATION_ID`).trim(),
+  discordTeammateBotToken: (role: string) =>
+    optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_BOT_TOKEN`).trim(),
+  discordTeammateConfigured: (role: string) =>
+    Boolean(optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_APPLICATION_ID`).trim()) &&
+    Boolean(optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_BOT_TOKEN`).trim()),
   discordChannelId: (key: string) =>
     optional(`DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
   discordRoleId: (key: string) =>

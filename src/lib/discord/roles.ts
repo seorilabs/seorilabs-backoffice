@@ -25,6 +25,14 @@ const ROLE_CAPABILITIES: Record<string, DiscordCapability[]> = {
   viewer: ["read"],
 };
 
+/**
+ * 역할 키의 capability 목록. AI 팀원이 같은 이름의 사람 역할 경계를 그대로
+ * 상속하는 데 쓴다 — 사람 product 가 못 하는 일은 팀원 봇도 못 한다.
+ */
+export function capabilitiesForRole(roleKey: string): readonly DiscordCapability[] {
+  return ROLE_CAPABILITIES[roleKey] ?? [];
+}
+
 export function hasDiscordCapability(roleIds: readonly string[], capability: DiscordCapability): boolean {
   for (const [roleKey, capabilities] of Object.entries(ROLE_CAPABILITIES)) {
     const configuredId = env.discordRoleId(roleKey);

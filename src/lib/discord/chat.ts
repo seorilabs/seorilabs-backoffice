@@ -9,7 +9,7 @@ import { runChatAgent } from "@/lib/ai/chat-agent";
 const HISTORY_TURNS = 10;
 const RETAIN_TURNS = 40;
 
-async function factorySnapshot(): Promise<string> {
+export async function factorySnapshot(): Promise<string> {
   const apps = await prisma.app.findMany({ where: visibleAppWhere, select: { currentStage: true } });
   const byStage: Record<string, number> = {};
   for (const app of apps) byStage[app.currentStage] = (byStage[app.currentStage] ?? 0) + 1;
@@ -50,12 +50,50 @@ export async function previewDiscordChat(userText: string): Promise<string> {
   ]);
 }
 
-export function discordTurnKey(input: { guildId: string; channelId: string; userId: string }) {
+// teammate 는 AI 팀원 봇의 대화를 메인 봇 /ask 와 격리한다. 기본 null 이 메인 봇이라
+// 기존 행·기존 호출부가 그대로 동작한다.
+export function discordTurnKey(input: {
+  guildId: string;
+  channelId: string;
+  userId: string;
+  teammate?: string | null;
+}) {
   return {
     guildId: input.guildId,
     channelId: input.channelId,
     userId: input.userId,
+    teammate: input.teammate ?? null,
   };
+}
+
+export type DiscordTurnKey = ReturnType<typeof discordTurnKey>;
+
+export async function loadDiscordHistory(key: DiscordTurnKey): Promise<ChatMessage[]> {
+  const recent = await prisma.discordTurn.findMany({
+    where: key,
+    orderBy: { createdAt: "desc" },
+    take: HISTORY_TURNS,
+  });
+  return recent.reverse().map((turn) => ({
+    role: turn.role === "assistant" ? "assistant" : "user",
+    content: turn.content,
+  }));
+}
+
+export async function appendDiscordTurns(key: DiscordTurnKey, userText: string, reply: string): Promise<void> {
+  await prisma.discordTurn.createMany({
+    data: [
+      { ...key, role: "user", content: userText },
+      { ...key, role: "assistant", content: reply },
+    ],
+  });
+  const stale = await prisma.discordTurn.findMany({
+    where: key,
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+    skip: RETAIN_TURNS,
+  });
+  if (stale.length) await prisma.discordTurn.deleteMany({ where: { id: { in: stale.map(({ id }) => id) } } });
 }
 
 export async function resetDiscordChat(input: { guildId: string; channelId: string; userId: string }) {
@@ -68,15 +106,8 @@ export async function handleDiscordChat(input: {
   userId: string;
   text: string;
 }): Promise<string> {
-  const recent = await prisma.discordTurn.findMany({
-    where: discordTurnKey(input),
-    orderBy: { createdAt: "desc" },
-    take: HISTORY_TURNS,
-  });
-  const history: ChatMessage[] = recent.reverse().map((turn) => ({
-    role: turn.role === "assistant" ? "assistant" : "user",
-    content: turn.content,
-  }));
+  const key = discordTurnKey(input);
+  const history = await loadDiscordHistory(key);
   let reply: string;
   try {
     reply = await runChatAgent([
@@ -89,18 +120,6 @@ export async function handleDiscordChat(input: {
     console.error("[discord] chat error", error instanceof Error ? error.message : "error");
     return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도하세요.";
   }
-  await prisma.discordTurn.createMany({
-    data: [
-      { ...discordTurnKey(input), role: "user", content: input.text },
-      { ...discordTurnKey(input), role: "assistant", content: reply },
-    ],
-  });
-  const stale = await prisma.discordTurn.findMany({
-    where: discordTurnKey(input),
-    orderBy: { createdAt: "desc" },
-    select: { id: true },
-    skip: RETAIN_TURNS,
-  });
-  if (stale.length) await prisma.discordTurn.deleteMany({ where: { id: { in: stale.map(({ id }) => id) } } });
+  await appendDiscordTurns(key, input.text, reply);
   return reply;
 }

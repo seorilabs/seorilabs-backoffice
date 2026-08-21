@@ -2,12 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  capabilitiesForRole,
   capabilityForCommand,
   hasDiscordCapability,
   isDiscordInteractionScope,
   DISCORD_CARD_CHANNEL_KEYS,
   interactionChannelKeys,
 } from "@/lib/discord/roles";
+
+test("역할 capability accessor 는 사람 역할 경계를 그대로 노출한다", () => {
+  // AI 팀원이 이 목록을 상속한다. data 팀원이 배포하거나 qa 팀원이 기획 승인을
+  // 하게 되면 사람 역할 경계가 깨진 것이다.
+  assert.deepEqual(capabilitiesForRole("data"), ["read", "metric_incident"]);
+  assert.ok(!capabilitiesForRole("qa").includes("release"));
+  assert.ok(capabilitiesForRole("qa").includes("release_approval"));
+  assert.ok(!capabilitiesForRole("product").includes("release"));
+  assert.deepEqual(capabilitiesForRole("unknown-role"), []);
+});
 
 test("guild와 허용 채널이 모두 일치해야 interaction scope를 통과한다", () => {
   const expected = { expectedGuildId: "100", allowedChannelIds: ["200"] };

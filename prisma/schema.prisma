@@ -767,17 +767,51 @@ model AppConsoleMetricDaily {
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
 // Discord /ask 대화 문맥. 서버·채널·사용자 조합별로 분리한다.
+// teammate 는 AI 팀원 봇의 대화를 메인 봇 /ask 와 격리한다(null = 메인 봇).
 model DiscordTurn {
   id        String   @id @default(cuid())
   guildId   String
   channelId String
   userId    String
+  teammate  String?
   role      String
   content   String   @db.Text
   createdAt DateTime @default(now())
 
-  @@index([guildId, channelId, userId, createdAt])
+  @@index([guildId, channelId, userId, teammate, createdAt])
   @@map("discord_turn")
+}
+
+// AI 팀원 실행 원장. 멘션 응답과 순찰 실행을 모두 기록하고, dedupeKey unique 가
+// Gateway resume 중복 응답과 순찰 중복 트리거를 DB 수준에서 막는다.
+// 순찰(trigger=schedule)은 PENDING 으로 삽입되고 teammate worker 가 큐처럼 소화한다.
+model TeammateRun {
+  id           String            @id @default(cuid())
+  teammate     String
+  trigger      String
+  dedupeKey    String            @unique
+  scope        String?           @db.Text
+  status       TeammateRunStatus @default(PENDING)
+  findingCount Int               @default(0)
+  findings     Json?
+  issueUrls    Json?
+  outcome      String?           @db.Text
+  attempts     Int               @default(0)
+  startedAt    DateTime?         @db.DateTime(3)
+  completedAt  DateTime?         @db.DateTime(3)
+  createdAt    DateTime          @default(now()) @db.DateTime(3)
+  updatedAt    DateTime          @updatedAt
+
+  @@index([teammate, createdAt])
+  @@index([status, createdAt])
+  @@map("teammate_run")
+}
+
+enum TeammateRunStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
 }
 
 model WebhookDelivery {
