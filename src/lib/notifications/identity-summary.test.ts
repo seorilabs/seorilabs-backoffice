@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   formatElapsed,
   identityRowDedupeKey,
+  identityRowRanges,
   identityRowText,
   identitySummaryDedupeKey,
   identitySummaryText,
@@ -194,10 +195,43 @@ test("하루 첫 계정만 멘션 대상으로 표시한다", () => {
   assert.match(summarySource, /first: ordinal === 1/);
 });
 
-test("행 순번과 직전 간격은 당일 범위를 이 이벤트 시각으로 잘라 센다", () => {
-  // 재전송으로 옛 이벤트가 다시 들어와도 그 이벤트의 순번과 간격이 나와야 한다.
-  assert.match(summarySource, /occurredAt: \{ gte: dayStart, lte: occurredAt \}/);
-  assert.match(summarySource, /occurredAt: \{ gte: dayStart, lt: occurredAt \}/);
+test("행 순번은 자기 자신을 포함하고 직전 간격은 자기 자신을 뺀다", () => {
+  const dayStart = new Date("2026-08-20T15:00:00Z");
+  const occurredAt = new Date("2026-08-21T01:46:27Z");
+  const { upTo, before } = identityRowRanges(dayStart, occurredAt);
+  assert.deepEqual(upTo, { gte: dayStart, lte: occurredAt });
+  assert.deepEqual(before, { gte: dayStart, lt: occurredAt });
+});
+
+test("재전송된 옛 이벤트는 그 뒤에 생긴 계정을 순번에 넣지 않는다", () => {
+  // Platform 재전송의 유일한 복구 경로라 옛 이벤트가 다시 들어온다. 당일 전체를
+  // 세면 그 이벤트의 순번과 직전 간격이 아니라 지금 시점의 값이 나온다.
+  const dayStart = new Date("2026-08-20T15:00:00Z");
+  const day = [
+    new Date("2026-08-20T21:27:34Z"),
+    new Date("2026-08-21T01:46:27Z"),
+    new Date("2026-08-21T06:37:49Z"),
+  ];
+  const redelivered = day[1];
+  const { upTo, before } = identityRowRanges(dayStart, redelivered);
+  const ordinal = day.filter((at) => at >= upTo.gte && at <= upTo.lte).length;
+  const previous = day.filter((at) => at >= before.gte && at < before.lt).at(-1) ?? null;
+  assert.equal(ordinal, 2);
+  assert.deepEqual(previous, day[0]);
+  assert.match(identityRowText({
+    ordinal,
+    occurredAt: redelivered,
+    previousAt: previous,
+    authType: null,
+    anonymous: false,
+    referrer: null,
+  }), /`#2` · 10:46:27 · 직전 \+4시간 19분/);
+});
+
+test("행 범위는 당일 끝이 아니라 이 이벤트 시각을 상한으로 쓴다", () => {
+  assert.match(summarySource, /occurredAt: ranges\.upTo/);
+  assert.match(summarySource, /occurredAt: ranges\.before/);
+  assert.doesNotMatch(summarySource, /ranges\.\w+[\s\S]{0,80}dayEnd/);
 });
 
 test("행 배달은 카드 메시지에 쓰레드를 걸고 첫 댓글만 멘션한다", () => {

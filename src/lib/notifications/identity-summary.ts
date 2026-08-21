@@ -131,6 +131,20 @@ export function identityThreadName(displayName: string, dateKey: string): string
   return `${displayName} 신규 계정 ${dateKey}`;
 }
 
+/**
+ * 건별 행이 볼 당일 범위. 순번은 이 이벤트까지 포함해 세고(`lte`), 직전 계정은 이
+ * 이벤트를 빼고 찾는다(`lt`).
+ *
+ * 당일 전체(`lt: dayEnd`)로 세면 안 된다. Platform 재전송으로 옛 이벤트가 다시
+ * 들어왔을 때 그 뒤에 생긴 계정까지 세어 순번과 간격이 그 이벤트의 사실이 아니게 된다.
+ */
+export function identityRowRanges(dayStart: Date, occurredAt: Date) {
+  return {
+    upTo: { gte: dayStart, lte: occurredAt },
+    before: { gte: dayStart, lt: occurredAt },
+  };
+}
+
 export interface IdentityRowFacts {
   ordinal: number;
   occurredAt: Date;
@@ -209,12 +223,11 @@ export async function recordIdentitySignup(input: {
   // 카드가 가린 건별 사실은 카드 쓰레드에 댓글로 남긴다. 카드 delivery가 먼저
   // 만들어졌으므로 createdAt 순으로 도는 outbox가 카드를 먼저 보내고, 댓글은 그때
   // 확정된 카드 메시지에 쓰레드를 건다.
+  const ranges = identityRowRanges(dayStart, occurredAt);
   const [ordinal, previous] = await Promise.all([
-    prisma.operationalEvent.count({
-      where: { ...where, occurredAt: { gte: dayStart, lte: occurredAt } },
-    }),
+    prisma.operationalEvent.count({ where: { ...where, occurredAt: ranges.upTo } }),
     prisma.operationalEvent.findFirst({
-      where: { ...where, occurredAt: { gte: dayStart, lt: occurredAt } },
+      where: { ...where, occurredAt: ranges.before },
       select: { occurredAt: true },
       orderBy: { occurredAt: "desc" },
     }),
