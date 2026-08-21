@@ -102,6 +102,20 @@ test("한 줄 기록은 embed 없이 본문으로 나가고 멘션은 본문 앞
   );
 });
 
+test("본문이 비면 멘션만 남은 메시지를 보내지 않는다", async () => {
+  await withDiscord(
+    () => new Response(JSON.stringify({ id: "333" }), { status: 201 }),
+    async (calls) => {
+      const result = await createDiscordChannelMessage("222", "   ", {
+        plain: true,
+        alertRoleId: "987",
+      });
+      assert.equal(result.ok, false);
+      assert.equal(calls.length, 0);
+    },
+  );
+});
+
 test("기본 메시지는 그대로 embed로 나간다", async () => {
   await withDiscord(
     () => new Response(JSON.stringify({ id: "333" }), { status: 201 }),

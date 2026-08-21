@@ -66,9 +66,14 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
   const allowedMentions = { parse: [] as string[], roles: mention ? [roleId] : [] };
   const components = options.components?.length ? { components: options.components } : {};
   if (options.plain) {
-    const content = [mention, text.trim()].filter(Boolean).join(" ").slice(0, CONTENT_LIMIT);
-    if (!content) return null;
-    return { content, ...components, allowed_mentions: allowedMentions };
+    const body = text.trim();
+    // 본문이 비면 embed 경로와 같이 보내지 않는다. 멘션만 남은 알림은 내용 없이 울린다.
+    if (!body) return null;
+    return {
+      content: [mention, body].filter(Boolean).join(" ").slice(0, CONTENT_LIMIT),
+      ...components,
+      allowed_mentions: allowedMentions,
+    };
   }
   const descriptions = splitDiscordText(text);
   if (descriptions.length === 0) return null;
