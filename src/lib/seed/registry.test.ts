@@ -235,6 +235,47 @@ test("web/ 은 배포 워크플로우와 독립적으로 marketTargets 에 포�
   assert.deepEqual(seed.marketTargets, ["web"]);
 });
 
+test("app/package.json nested RN 저장소도 앱으로 시드하고 현재 메타데이터를 읽는다", async () => {
+  const seed = await computeRepoSeed(
+    fakeOctokit({
+      "app/package.json": JSON.stringify({ name: "ungeul-app" }),
+      "play-store/google-play.config.json": JSON.stringify({
+        packageName: "com.seorilabs.ungeul",
+        appType: "APP",
+      }),
+      "app-store/app-store.config.json": JSON.stringify({
+        bundleId: "com.seorilabs.ungeul",
+        appleTeamId: "HCDUXX4Z3X",
+        sku: "ungeul-app",
+        appType: "APP",
+        name: "운글",
+      }),
+      "apps-in-toss/apps-in-toss.config.json": JSON.stringify({
+        appName: "ungeul",
+        title: "운글",
+      }),
+      ".firebaserc": JSON.stringify({
+        projects: { default: "seorilabs-ungeul" },
+      }),
+      [WF_PLAY]: "name: play",
+      [WF_APPSTORE]: "name: appstore",
+      [WF_AIT]: "name: ait",
+    }),
+    ORG,
+    { ...REPO, name: "saju-reader", full_name: "seorilabs/saju-reader" },
+  );
+
+  assert.ok(seed);
+  assert.equal(seed.displayName, "운글");
+  assert.equal(seed.type, "APP");
+  assert.equal(seed.engine, "RN");
+  assert.equal(seed.playPackage, "com.seorilabs.ungeul");
+  assert.equal(seed.iosBundle, "com.seorilabs.ungeul");
+  assert.equal(seed.firebaseProject, "seorilabs-ungeul");
+  assert.equal(seed.aitAppName, "ungeul");
+  assert.deepEqual(seed.marketTargets, ["play", "appstore", "ait"]);
+});
+
 test("project.godot/package.json 모두 없음 → null(시드 대상 아님)", async () => {
   const seed = await computeRepoSeed(fakeOctokit({ [WF_PLAY]: "name: play" }), ORG, REPO);
   assert.equal(seed, null);

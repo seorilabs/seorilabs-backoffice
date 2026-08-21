@@ -17,7 +17,7 @@ export type Octo = Octokit;
 
 // 파서가 같은 원본 config에서 다른 시드 값을 산출하게 되면 반드시 올린다.
 // configHash가 바뀌어 운영 레지스트리의 기존 레코드도 재시드된다.
-const SEED_VERSION = 4;
+const SEED_VERSION = 5;
 
 interface PlayConfig {
   packageName?: string;
@@ -32,6 +32,7 @@ interface AppStoreIdentity {
 }
 interface AppStoreConfig extends AppStoreIdentity {
   app?: AppStoreIdentity;
+  name?: unknown;
   storeListing?: { appName?: unknown; name?: unknown };
 }
 interface FirebaseRc {
@@ -174,7 +175,9 @@ export async function computeRepoSeed(
     (await getText(octokit, org, name, "godot/project.godot", ref)) ??
     (await getText(octokit, org, name, "game/project.godot", ref));
   const isGodot = godotProject != null;
-  const hasPackageJson = await pathExists(octokit, org, name, "package.json", ref);
+  const hasPackageJson =
+    (await pathExists(octokit, org, name, "package.json", ref)) ||
+    (await pathExists(octokit, org, name, "app/package.json", ref));
   if (!isGodot && !hasPackageJson) return null; // RN/Godot 아님(예: Unity)
 
   const engine: AppEngine = isGodot ? "GODOT" : "RN";
@@ -209,7 +212,7 @@ export async function computeRepoSeed(
   // (marketTargets 의 ait 포함 여부는 config 가 아니라 아래 표준 배포 워크플로우 존재로 판정한다.)
   const rootGranite = await getText(octokit, org, name, "granite.config.ts", ref);
   const rnGranite = await getText(octokit, org, name, "apps/ait/granite.config.ts", ref);
-  const aitReal = await getJson<{ appName?: unknown }>(
+  const aitReal = await getJson<{ appName?: unknown; title?: unknown }>(
     octokit,
     org,
     name,
@@ -222,6 +225,7 @@ export async function computeRepoSeed(
   // aitAppName 은 실제 config 우선. granite.config.ts 는 appName: 정규식으로, apps-in-toss.config.json 은 pickAppName 으로 추출.
   const graniteAppName = graniteText?.match(/appName\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? null;
   const aitAppName = aitReal ? pickAppName(aitReal.appName) : graniteAppName;
+  const aitTitle = aitReal ? pickAppName(aitReal.title) : null;
 
   const hasWeb = await pathExists(octokit, org, name, "web", ref);
   const opsManifestText = await getText(
@@ -276,7 +280,7 @@ export async function computeRepoSeed(
 
   const playName = pickAppName(play?.storeListing?.appName);
   const appStoreName = pickAppName(
-    appStore?.storeListing?.appName ?? appStore?.storeListing?.name,
+    appStore?.storeListing?.appName ?? appStore?.storeListing?.name ?? appStore?.name,
   );
   const godotName = projectName(godotProject);
   const descriptionName = descriptionDisplayName(repo.description);
@@ -285,6 +289,7 @@ export async function computeRepoSeed(
     appStoreName,
     godotName,
     descriptionName,
+    aitTitle,
     aitAppName,
   ].find(containsHangul);
   const displayName =
@@ -293,6 +298,7 @@ export async function computeRepoSeed(
     playName ??
     appStoreName ??
     godotName ??
+    aitTitle ??
     aitAppName ??
     name
       .split("-")
