@@ -1,7 +1,7 @@
 # AI 팀원 Gateway 워커. 팀원 봇 4개의 Discord Gateway WebSocket 연결을 프로세스
 # 하나로 유지하고(멘션 대화), teammate_run 순찰 큐를 소화한다.
-# FEATURE_DISCORD_TEAMMATES=false + optional secret 이라 자격증명 없이 배포해도
-# idle 상태로만 남는다. 활성화는 SealedSecret 키 투입 후 플래그 전환으로 한다.
+# 자격증명은 SealedSecret 의 DISCORD_TEAMMATE_* 8키(2026-08-21 투입). 키를 빼면
+# 해당 팀원만 비활성, 플래그를 끄면 워커 전체가 idle 로 돌아간다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,7 +45,7 @@ spec:
             # 클러스터에 IPv6 egress 가 없어 Happy Eyeballs 가 discord.com AAAA 로
             # 타임아웃된다. 웹 배포와 동일한 플래그가 상시 WSS 연결에도 필요하다.
             - { name: NODE_OPTIONS, value: "--dns-result-order=ipv4first --no-network-family-autoselection" }
-            - { name: FEATURE_DISCORD_TEAMMATES, value: "false" }
+            - { name: FEATURE_DISCORD_TEAMMATES, value: "true" }
             - { name: FEATURE_GEMINI_ENABLED, value: "true" }
             - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
             - name: DATABASE_URL

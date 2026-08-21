@@ -163,6 +163,25 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
 지나면 notification worker가 Discord에서 삭제한다.
 
+### AI 팀원 봇 (teammate worker)
+
+역할별 별도 Discord 앱 4개(서리 프로덕트/데이터/개발/QA)가 `backoffice-teammate-worker`
+(`k8s/teammate-worker.yaml`) 한 프로세스에서 Gateway 연결 4개로 동작한다. 멘션 대화와
+`teammate_run` 순찰 큐(트리거는 `k8s/teammate-patrol-cronjobs.yaml`)를 담당한다.
+
+- Secret key: `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA}_{APPLICATION_ID,BOT_TOKEN}`
+  (8키, 전부 `optional: true`). 원본은 `~/.config/seorilabs` 카탈로그
+  `shared/discord/teammate-<role>-bot`(macOS 키체인 `com.seorilabs.discord.teammate-<role>`).
+- 전체 비활성: `FEATURE_DISCORD_TEAMMATES=false` 로 전환(워커가 idle 로만 남음).
+  팀원 1명만 비활성: 해당 role 의 키 2개를 SealedSecret 에서 제거.
+- 토큰 로테이션: Developer Portal 에서 Reset Token → 키체인 갱신(`security add-generic-password
+  -U -a syous -s com.seorilabs.discord.teammate-<role> -w`) → 위 kubeseal 절차로 재봉인 →
+  apply → `kubectl -n platform rollout restart deploy/backoffice-teammate-worker`.
+- 순찰 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-teammate-patrol-<role> smoke-patrol-<role>`.
+  순찰은 pod 내 DB 근거만 쓰고, 이슈 초안은 사람이 confirm 카드 버튼으로 승인해야 등록된다.
+- 팀원 봇에는 Interactions Endpoint 를 설정하지 않는다 — 초안 confirm 카드는 메인 봇이
+  게시하므로 interaction 서명·검증 경로는 기존 단일 앱 그대로다.
+
 ## 9. Gemini Stage Agent (단계별 AI)
 
 각 라이프사이클 단계에 AI 에이전트를 배치. **AI 는 GitHub 에 직접 쓰지 않고** `AiDraft` 초안만 만든다 → 사람이 검토/수정 → 1클릭 커밋(이슈 생성/코멘트) → webhook 으로 미러 수렴.
