@@ -10,6 +10,6 @@ export const config = {
   // 세그먼트 경계((?:/|$))로 앵커 — api/discordX 같은 prefix 우회 방지.
   // 주의: api/admin/* 는 자체 토큰, operational-events는 timestamp HMAC 인증 필수.
   matcher: [
-    "/((?!api/(?:webhooks|discord/interactions|auth|admin|health|metrics)(?:/|$)|api/internal/(?:platform/operational-events|grafana/alerts)(?:/|$)|_next/static|_next/image|favicon.ico|login(?:/|$)).*)",
+    "/((?!api/(?:webhooks|discord/interactions|auth|admin|health|metrics)(?:/|$)|api/internal/platform/operational-events(?:/|$)|_next/static|_next/image|favicon.ico|login(?:/|$)).*)",
   ],
 };
