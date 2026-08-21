@@ -26,7 +26,7 @@ import {
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
-import { ephemeral, modal } from "@/lib/discord/responses";
+import { ephemeral, modal, updateMessage } from "@/lib/discord/responses";
 import {
   EPHEMERAL_FLAG,
   InteractionResponseType,
@@ -62,13 +62,6 @@ function response(content: string, components: unknown[] = [], ephemeralMessage 
       ...(ephemeralMessage ? { flags: EPHEMERAL_FLAG } : {}),
       allowed_mentions: { parse: [] },
     },
-  };
-}
-
-function update(content: string) {
-  return {
-    type: InteractionResponseType.UPDATE_MESSAGE,
-    data: { content: content.slice(0, 2_000), components: [], allowed_mentions: { parse: [] } },
   };
 }
 
@@ -236,24 +229,23 @@ async function handleComponent(interaction: DiscordInteraction) {
     if (!authorized(interaction, commandCapability(run.operation))) return ephemeral("이 작업을 실행할 역할 권한이 없습니다.");
     if (action === "confirm") {
       const changed = await confirmOperatorCommand({ id, actorDiscordUserId: userId, channelId, messageId });
-      return changed ? update(`⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`) : ephemeral("이미 처리됐거나 확인 시간이 만료됐습니다.");
+      return changed ? updateMessage(`⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`) : ephemeral("이미 처리됐거나 확인 시간이 만료됐습니다.");
     }
     if (action === "cancel") {
       const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
-      return changed ? update("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
+      return changed ? updateMessage("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
     }
-    // ephemeral 확인: 실행 대상 메시지를 바꾸지 않는다(ephemeral id 로 덮으면 worker 가 카드를 잃는다).
+    // ephemeral 확인창 자체를 갱신해 별도 "실행 중" 답글이 쌓이지 않게 한다.
+    // worker 에는 ephemeral messageId 를 넘기지 않아 완료 결과는 채널 메시지로 따로 남긴다.
     if (action === "econfirm") {
       const changed = await confirmOperatorCommand({ id, actorDiscordUserId: userId, channelId });
-      return ephemeral(
-        changed
-          ? `⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`
-          : "이미 처리됐거나 확인 시간이 만료됐습니다.",
-      );
+      return changed
+        ? updateMessage(`⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`)
+        : ephemeral("이미 처리됐거나 확인 시간이 만료됐습니다.");
     }
     if (action === "ecancel") {
       const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
-      return ephemeral(changed ? "✖️ 작업을 취소했습니다." : "이미 처리됐거나 취소할 수 없습니다.");
+      return changed ? updateMessage("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
     }
   }
 
@@ -327,13 +319,13 @@ async function handleComponent(interaction: DiscordInteraction) {
         channelId,
         messageId,
       });
-      return update("⏳ GitHub 이슈를 생성 중…");
+      return updateMessage("⏳ GitHub 이슈를 생성 중…");
     }
     if (action === "cancel") {
       const draft = await prisma.aiDraft.findUnique({ where: { id }, select: { status: true, createdBy: true } });
       if (!draft || draft.createdBy !== `discord:${userId}`) return ephemeral("본인이 만든 초안만 취소할 수 있습니다.");
       if (draft.status === "DRAFT") await prisma.aiDraft.update({ where: { id }, data: { status: "DISCARDED" } });
-      return update("✖️ 초안을 취소했습니다.");
+      return updateMessage("✖️ 초안을 취소했습니다.");
     }
   }
 
@@ -350,7 +342,7 @@ async function handleComponent(interaction: DiscordInteraction) {
       channelId,
       messageId,
     });
-    return update("⏳ 승인을 반영 중…");
+    return updateMessage("⏳ 승인을 반영 중…");
   }
   if (kind === "generate") {
     if (!authorized(interaction, "planning")) return ephemeral("초안 생성 권한이 없습니다.");
@@ -369,7 +361,7 @@ async function handleComponent(interaction: DiscordInteraction) {
       channelId,
       messageId,
     });
-    return update("⏳ 단계 초안을 생성 중…");
+    return updateMessage("⏳ 단계 초안을 생성 중…");
   }
   if (kind === "incident") {
     if (!authorized(interaction, "ops_incident")) return ephemeral("장애 대응 권한이 없습니다.");
@@ -384,7 +376,7 @@ async function handleComponent(interaction: DiscordInteraction) {
       channelId,
       messageId,
     });
-    return update(action === "assign" ? "⏳ 담당자를 지정 중…" : "⏳ 장애 확인을 반영 중…");
+    return updateMessage(action === "assign" ? "⏳ 담당자를 지정 중…" : "⏳ 장애 확인을 반영 중…");
   }
   return ephemeral("지원하지 않는 버튼입니다.");
 }
