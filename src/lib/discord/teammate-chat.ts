@@ -71,13 +71,28 @@ export async function withGemini429Retry<T>(fn: () => Promise<T>, waitMs = 30_00
   }
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return Boolean(
     error && typeof error === "object" && (error as { code?: unknown }).code === "P2002",
   );
 }
 
 export type TeammateMentionResult = "replied" | "skipped" | "failed";
+
+/**
+ * INSERT-first claim. dedupeKey unique 위반(P2002)은 이미 처리한 실행이라는 뜻이라
+ * null 을 돌려주고, 그 외 오류는 그대로 던진다.
+ */
+export async function claimTeammateRun(
+  create: () => Promise<{ id: string }>,
+): Promise<string | null> {
+  try {
+    return (await create()).id;
+  } catch (error) {
+    if (isUniqueViolation(error)) return null;
+    throw error;
+  }
+}
 
 /**
  * 팀원 멘션 1건을 처리한다. teammate_run 의 dedupeKey unique 가 INSERT-first claim
@@ -94,9 +109,8 @@ export async function handleTeammateMention(input: {
   busy?: boolean;
 }): Promise<TeammateMentionResult> {
   const { meta } = input;
-  let runId: string;
-  try {
-    const run = await prisma.teammateRun.create({
+  const runId = await claimTeammateRun(() =>
+    prisma.teammateRun.create({
       data: {
         teammate: meta.role,
         trigger: "mention",
@@ -106,12 +120,10 @@ export async function handleTeammateMention(input: {
         attempts: 1,
         startedAt: new Date(),
       },
-    });
-    runId = run.id;
-  } catch (error) {
-    if (isUniqueViolation(error)) return "skipped";
-    throw error;
-  }
+      select: { id: true },
+    }),
+  );
+  if (!runId) return "skipped";
 
   const reply = async (text: string) =>
     createDiscordChannelMessageAs(input.botToken, input.channelId, text, {
