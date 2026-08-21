@@ -26,7 +26,7 @@ import {
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
-import { ephemeral, modal, updateMessage } from "@/lib/discord/responses";
+import { deferredUpdate, ephemeral, modal, updateMessage } from "@/lib/discord/responses";
 import {
   EPHEMERAL_FLAG,
   InteractionResponseType,
@@ -235,17 +235,17 @@ async function handleComponent(interaction: DiscordInteraction) {
       const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
       return changed ? updateMessage("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
     }
-    // ephemeral 확인창 자체를 갱신해 별도 "실행 중" 답글이 쌓이지 않게 한다.
-    // worker 에는 ephemeral messageId 를 넘기지 않아 완료 결과는 채널 메시지로 따로 남긴다.
+    // ephemeral 확인창은 route 가 interaction 응답 직후 삭제한다. worker 에는 ephemeral
+    // messageId 를 넘기지 않아 완료 결과만 채널 메시지나 원래 배포 카드에 남긴다.
     if (action === "econfirm") {
       const changed = await confirmOperatorCommand({ id, actorDiscordUserId: userId, channelId });
       return changed
-        ? updateMessage(`⏳ ${awaitingConfirmationText(run.operation)} 실행 중…`)
+        ? deferredUpdate()
         : ephemeral("이미 처리됐거나 확인 시간이 만료됐습니다.");
     }
     if (action === "ecancel") {
       const changed = await cancelOperatorCommand({ id, actorDiscordUserId: userId });
-      return changed ? updateMessage("✖️ 작업을 취소했습니다.") : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
+      return changed ? deferredUpdate() : ephemeral("이미 처리됐거나 취소할 수 없습니다.");
     }
   }
 
@@ -305,7 +305,7 @@ async function handleComponent(interaction: DiscordInteraction) {
           `⚠️ **${release.app.displayName} ${release.version}** ${label}을(를) 실행할까요? · 10분 후 만료`,
           ephemeralConfirmRows(run.id),
         )
-      : ephemeral(`⏳ ${label} 실행 중…`);
+      : deferredUpdate();
   }
 
   if (kind === "draft") {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ephemeral, updateMessage } from "@/lib/discord/responses";
+import { deferredUpdate, ephemeral, updateMessage } from "@/lib/discord/responses";
 import { EPHEMERAL_FLAG, InteractionResponseType } from "@/lib/discord/types";
 
 test("ephemeral 버튼 결과는 새 답글 대신 원래 확인창을 갱신할 수 있다", () => {
@@ -12,4 +12,10 @@ test("ephemeral 버튼 결과는 새 답글 대신 원래 확인창을 갱신할
   assert.equal(updated.type, InteractionResponseType.UPDATE_MESSAGE);
   assert.deepEqual(updated.data.components, []);
   assert.ok(!("flags" in updated.data));
+});
+
+test("비동기 컴포넌트 작업은 새 중간 메시지 없이 확인한다", () => {
+  assert.deepEqual(deferredUpdate(), {
+    type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE,
+  });
 });

@@ -8,6 +8,7 @@ export interface DiscordInteractionOption {
 export interface DiscordInteraction {
   id: string;
   application_id: string;
+  token?: string;
   type: number;
   guild_id?: string;
   channel_id?: string;
@@ -40,6 +41,7 @@ export const InteractionResponseType = {
   PONG: 1,
   CHANNEL_MESSAGE: 4,
   DEFERRED_CHANNEL_MESSAGE: 5,
+  DEFERRED_UPDATE_MESSAGE: 6,
   UPDATE_MESSAGE: 7,
   AUTOCOMPLETE_RESULT: 8,
   MODAL: 9,

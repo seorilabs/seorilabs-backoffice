@@ -25,6 +25,11 @@ export function updateMessage(content: string) {
   };
 }
 
+/** 컴포넌트 요청만 확인하고 원본 메시지는 worker 결과가 준비될 때까지 건드리지 않는다. */
+export function deferredUpdate() {
+  return { type: InteractionResponseType.DEFERRED_UPDATE_MESSAGE };
+}
+
 export function modal(customId: string, title: string, label: string, placeholder = "") {
   return {
     type: InteractionResponseType.MODAL,
