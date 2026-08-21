@@ -112,6 +112,25 @@ export function parsePatrolFindings(value: Prisma.JsonValue | null): PatrolFindi
   return result;
 }
 
+export type RegistrationDecision =
+  | { action: "already"; issueUrl: string }
+  | { action: "register"; repoFullName: string };
+
+/**
+ * 등록 버튼 처리의 판정. 재클릭(이미 registered)은 멱등으로 기존 URL 을 알리고,
+ * drafted 가 아니거나 근거·대상 레포가 없는 초안은 등록을 거부한다.
+ */
+export function registrationDecision(item: PatrolFinding): RegistrationDecision {
+  if (item.status === "registered" && item.issueUrl) {
+    return { action: "already", issueUrl: item.issueUrl };
+  }
+  if (item.status !== "drafted") throw new Error("등록 대상 초안이 아닙니다.");
+  if (!item.repoFullName || item.evidence.length === 0) {
+    throw new Error("근거 없는 초안은 등록할 수 없습니다.");
+  }
+  return { action: "register", repoFullName: item.repoFullName };
+}
+
 /** 초안 폐기 — drafted 상태만 skipped 로 되돌린다(웹 interaction 경로에서 호출). */
 export async function skipTeammateFinding(runId: string, findingIndex: number): Promise<boolean> {
   const run = await prisma.teammateRun.findUnique({ where: { id: runId }, select: { findings: true } });

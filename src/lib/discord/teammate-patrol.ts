@@ -20,6 +20,7 @@ import {
   buildIssueBody,
   extractTeammateMarkers,
   parsePatrolFindings,
+  registrationDecision,
   renderPatrolReport,
   selectDraftIndexes,
   type PatrolFinding,
@@ -530,17 +531,14 @@ export async function registerTeammateFinding(input: {
   const findings = parsePatrolFindings(run.findings);
   const item = findings[input.findingIndex];
   if (!item) throw new Error("초안을 찾을 수 없습니다.");
-  if (item.status === "registered" && item.issueUrl) {
-    return { message: `✅ 이미 등록된 이슈입니다: ${item.issueUrl}`, summary: "이미 등록된 이슈" };
-  }
-  if (item.status !== "drafted") throw new Error("등록 대상 초안이 아닙니다.");
-  if (!item.repoFullName || item.evidence.length === 0) {
-    throw new Error("근거 없는 초안은 등록할 수 없습니다.");
+  const decision = registrationDecision(item);
+  if (decision.action === "already") {
+    return { message: `✅ 이미 등록된 이슈입니다: ${decision.issueUrl}`, summary: "이미 등록된 이슈" };
   }
 
   // 등록 직전 재확인 — 초안 생성과 버튼 클릭 사이에 같은 이슈가 생겼을 수 있다.
   const existing = await fetchExistingMarkers(
-    [item.repoFullName],
+    [decision.repoFullName],
     new Date(Date.now() - DEDUPE_WINDOW_DAYS * DAY_MS),
   );
   const duplicateUrl = existing.get(`${run.teammate}:${item.key}`);
@@ -554,14 +552,14 @@ export async function registerTeammateFinding(input: {
     summary = "중복 이슈로 등록 생략";
   } else {
     const issue = await createIssue({
-      repoFullName: item.repoFullName,
+      repoFullName: decision.repoFullName,
       title: item.title,
       body: buildIssueBody(run.teammate, item),
       labels: [`teammate:${run.teammate}`, ...item.labels],
     });
     item.status = "registered";
     item.issueUrl = issue.html_url;
-    message = `✅ 이슈 생성 완료: [${item.repoFullName} #${issue.number}](${issue.html_url})`;
+    message = `✅ 이슈 생성 완료: [${decision.repoFullName} #${issue.number}](${issue.html_url})`;
     summary = `이슈 #${issue.number} 생성`;
   }
 

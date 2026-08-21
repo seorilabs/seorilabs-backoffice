@@ -5,6 +5,7 @@ import {
   extractTeammateMarkers,
   parsePatrolFindings,
   patrolDedupeKey,
+  registrationDecision,
   renderPatrolReport,
   selectDraftIndexes,
   teammateIssueMarker,
@@ -82,6 +83,33 @@ test("이슈 본문에는 근거 목록과 dedupe marker 가 반드시 들어간
   assert.match(body, /2026-08-20 DAU 12/);
   assert.match(body, /## 제안/);
   assert.ok(body.includes(teammateIssueMarker("data", "dau-drop:foam-party")));
+});
+
+test("등록 재클릭은 기존 이슈 URL 로 멱등 처리된다", () => {
+  const decision = registrationDecision(
+    fixture({ status: "registered", issueUrl: "https://github.com/seorilabs/foam-party/issues/9" }),
+  );
+  assert.deepEqual(decision, {
+    action: "already",
+    issueUrl: "https://github.com/seorilabs/foam-party/issues/9",
+  });
+});
+
+test("drafted 초안만 등록 대상이 되고 근거 게이트를 다시 통과해야 한다", () => {
+  assert.deepEqual(registrationDecision(fixture({ status: "drafted" })), {
+    action: "register",
+    repoFullName: "seorilabs/foam-party",
+  });
+  assert.throws(() => registrationDecision(fixture({ status: "skipped" })), /등록 대상 초안이 아닙니다/);
+  assert.throws(() => registrationDecision(fixture({ status: "deduped" })), /등록 대상 초안이 아닙니다/);
+  assert.throws(
+    () => registrationDecision(fixture({ status: "drafted", evidence: [] })),
+    /근거 없는 초안은 등록할 수 없습니다/,
+  );
+  assert.throws(
+    () => registrationDecision(fixture({ status: "drafted", repoFullName: null })),
+    /근거 없는 초안은 등록할 수 없습니다/,
+  );
 });
 
 test("findings JSON 파싱은 손상된 항목을 거르고 상태를 보수적으로 되돌린다", () => {
