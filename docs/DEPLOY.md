@@ -80,9 +80,13 @@ kubectl -n platform exec deploy/backoffice -- \
 - reconcile 은 부팅 시 1회 + `RECONCILE_INTERVAL_MS`(기본 6h). `DISABLE_SCHEDULER=true` 로 비활성.
 - Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
 
-## 7. CI 자동배포 설정 (main push → 빌드/배포)
+## 7. CI 자동배포 설정 (main push → 검증/빌드/배포)
 
-`deploy.yml` 은 push main 시 `-dind` 러너에서 이미지 빌드/push 후 `-arm64` 러너에서 `kubectl set image`. 아래 3개를 1회 셋업한다.
+`ci.yml` 은 PR에서 정적 검증과 Next build를 완료한다. `deploy.yml` 은 push main 시
+`-arm64` 러너에서 Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너에서
+production 이미지를 한 번만 빌드/push하고 `-arm64` 러너에서 같은 SHA 이미지를 배포한다.
+`verify → build → deploy` 의존성으로 검증 실패 commit은 이미지 빌드나 배포를 시작하지 않는다.
+아래 3개를 1회 셋업한다.
 
 **(a) 배포용 SA + kubeconfig**
 ```bash
@@ -180,10 +184,12 @@ Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_
 
 ## 10. 빌드 캐시 — 영구 BuildKit 빌더 (CI 의존성)
 
-CI(`deploy.yml`)의 `build` 잡은 ARC ephemeral 러너에서 돌지만, **클러스터 내 영구 BuildKit 데몬**(`k8s/buildkitd.yaml`, platform ns, rpi4001)을 remote 빌더로 사용한다. 캐시(pnpm store·`.next/cache`·레이어)가 PVC `buildkit-cache`(25Gi)에 지속되어 **증분 빌드**가 가능하다.
+CI(`deploy.yml`)의 `build` 잡은 `verify` 성공 뒤 ARC ephemeral 러너에서 돌지만,
+**클러스터 내 영구 BuildKit 데몬**(`k8s/buildkitd.yaml`, platform ns, rpi4001)을 remote 빌더로 사용한다.
+캐시(pnpm store·`.next/cache`·레이어)가 PVC `buildkit-cache`(25Gi)에 지속되어 **증분 빌드**가 가능하다.
 
 - **효과(실측)**: 콜드 ~33분 → 의존성 무변경/캐시히트 ~3분, 일반 코드 변경 ~15–18분.
-- **연결**: `deploy.yml` 의 `setup-buildx-action(driver: remote, endpoint: tcp://buildkitd.platform.svc.cluster.local:1234)`. 러너(arc-runners ns)는 platform ns ClusterIP 로 접속. `next build` 는 `eslint.ignoreDuringBuilds`/`typescript.ignoreBuildErrors`(verify 잡이 게이트)로 중복 제거.
+- **연결**: `deploy.yml` 의 `setup-buildx-action(driver: remote, endpoint: tcp://buildkitd.platform.svc.cluster.local:1234)`. 러너(arc-runners ns)는 platform ns ClusterIP 로 접속. PR CI만 `pnpm build`를 실행하고, main Deploy의 `verify`는 이를 생략한다. production `next build`는 Dockerfile에서 한 번 실행하며 `eslint.ignoreDuringBuilds`/`typescript.ignoreBuildErrors`는 선행 verify 잡이 게이트한다.
 - **메모리**: buildkitd limit **5Gi**, `next build` 는 Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 힙 상한(증분 시 `.next/cache` 로드로 메모리 피크↑ → OOM(exit 137) 방지). 제어플레인 노드라 한도 상향은 보수적으로.
 - **장애 시**: buildkitd 가 죽으면 **모든 빌드 실패**. 복구 `kubectl apply -f k8s/buildkitd.yaml`. 캐시는 PVC 라 재시작에도 유지. 캐시 비우려면 `kubectl -n platform exec deploy/buildkitd -- buildctl prune`.
 - **주의**: `buildkitd.yaml`/CronJob 등 매니페스트 변경은 CI(`set image`)로 반영 안 됨 → `kubectl apply` 1회 필요.
