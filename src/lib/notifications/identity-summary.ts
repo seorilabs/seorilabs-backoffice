@@ -48,6 +48,11 @@ function attributeText(attributes: Prisma.JsonValue, key: string): string | null
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function attributeFlag(attributes: Prisma.JsonValue, key: string): boolean {
+  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  return (attributes as Prisma.JsonObject)[key] === true;
+}
+
 function tally(counts: Map<string, number>): Array<[string, number]> {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
@@ -118,6 +123,43 @@ export function identitySummaryDedupeKey(appSlug: string, dateKey: string): stri
   return `identity-daily:${appSlug}:${dateKey}`;
 }
 
+export function identityRowDedupeKey(eventId: string): string {
+  return `identity-row:${eventId}`;
+}
+
+export function identityThreadName(displayName: string, dateKey: string): string {
+  return `${displayName} 신규 계정 ${dateKey}`;
+}
+
+export interface IdentityRowFacts {
+  ordinal: number;
+  occurredAt: Date;
+  previousAt: Date | null;
+  authType: string | null;
+  anonymous: boolean;
+  referrer: string | null;
+}
+
+// 요약 카드가 가리는 건별 사실만 담는다. 가입이 몰리는 시간대와 간격이 읽히도록
+// 시각과 직전 간격을 앞에 두고, 인증·유입은 있을 때만 붙인다.
+export function identityRowText(facts: IdentityRowFacts): string {
+  const time = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(facts.occurredAt);
+  const parts = [`\`#${facts.ordinal}\``, time];
+  if (facts.previousAt) {
+    parts.push(`직전 +${formatElapsed(facts.occurredAt.getTime() - facts.previousAt.getTime())}`);
+  }
+  if (facts.authType) parts.push(facts.authType);
+  if (facts.anonymous) parts.push("익명");
+  if (facts.referrer) parts.push(`유입 ${facts.referrer}`);
+  return parts.join(" · ");
+}
+
 // 신규 계정은 건별 카드 대신 앱·일 단위 카드 하나를 갱신한다. 같은 채널에서
 // 유입 속도와 누적을 한 장으로 읽을 수 있고, 계정마다 알림이 쌓이지 않는다.
 export async function recordIdentitySignup(input: {
@@ -163,5 +205,39 @@ export async function recordIdentitySignup(input: {
     destinations: discordDestinations(["action-events"]),
   });
   await requeueNotification(eventId);
+
+  // 카드가 가린 건별 사실은 카드 쓰레드에 댓글로 남긴다. 카드 delivery가 먼저
+  // 만들어졌으므로 createdAt 순으로 도는 outbox가 카드를 먼저 보내고, 댓글은 그때
+  // 확정된 카드 메시지에 쓰레드를 건다.
+  const [ordinal, previous] = await Promise.all([
+    prisma.operationalEvent.count({
+      where: { ...where, occurredAt: { gte: dayStart, lte: occurredAt } },
+    }),
+    prisma.operationalEvent.findFirst({
+      where: { ...where, occurredAt: { gte: dayStart, lt: occurredAt } },
+      select: { occurredAt: true },
+      orderBy: { occurredAt: "desc" },
+    }),
+  ]);
+  await enqueueNotification({
+    dedupeKey: identityRowDedupeKey(input.event.eventId),
+    kind: "IDENTITY_ROW",
+    occurredAt,
+    payload: {
+      text: identityRowText({
+        ordinal,
+        occurredAt,
+        previousAt: previous?.occurredAt ?? null,
+        authType: attributeText(input.event.attributes, "authType"),
+        anonymous: attributeFlag(input.event.attributes, "anonymous"),
+        referrer: attributeText(input.event.attributes, "referrer"),
+      }),
+      cardDedupeKey: identitySummaryDedupeKey(input.app.slug, facts.dateKey),
+      threadName: identityThreadName(input.app.displayName, facts.dateKey),
+      // 하루 첫 댓글만 멘션한다. 멘션되면 쓰레드 멤버로 추가돼 이후 댓글도 알림이 간다.
+      first: ordinal === 1,
+    },
+    destinations: discordDestinations(["action-events"]),
+  });
   return true;
 }

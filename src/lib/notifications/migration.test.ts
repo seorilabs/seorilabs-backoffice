@@ -35,6 +35,14 @@ const dropTelegramSql = readFileSync(
   "utf8",
 );
 
+const identityRowSql = readFileSync(
+  join(
+    process.cwd(),
+    "prisma/migrations/25_identity_thread_rows/migration.sql",
+  ),
+  "utf8",
+);
+
 const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
 
 test("과거 outbox 이관 migration은 event와 목적지 delivery를 분리하고 상태를 보존한다", () => {
@@ -91,6 +99,21 @@ test("schema는 Telegram provider와 이력 모델을 더 이상 선언하지 �
   assert.match(provider, /DISCORD/);
   assert.doesNotMatch(provider, /TELEGRAM/);
   assert.doesNotMatch(schema, /model Telegram\w+/);
+});
+
+test("행 댓글 migration은 기존 kind를 하나도 잃지 않고 IDENTITY_ROW만 더한다", () => {
+  // ENUM은 MODIFY로 전체를 다시 쓴다. 값을 하나라도 빠뜨리면 기존 행이 잘린다.
+  const declared = schema.match(/enum NotificationKind \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const kinds = declared.split("\n").map((line) => line.trim()).filter(Boolean);
+  assert.ok(kinds.includes("IDENTITY_ROW"));
+  for (const kind of kinds) assert.match(identityRowSql, new RegExp(`'${kind}'`));
+  assert.equal(identityRowSql.match(/'[A-Z_]+'/g)?.length, kinds.length);
+});
+
+test("행 댓글 migration은 notification_event가 만들어진 뒤에 적용된다", () => {
+  // Prisma는 사전식으로 적용한다. 테이블을 만드는 20_이 25_보다 앞이어야 ALTER가 산다.
+  assert.ok("20_discord_operational_notifications" < "25_identity_thread_rows");
+  assert.match(sql, /CREATE TABLE `notification_event`/);
 });
 
 test("빈 DB bootstrap에서 Telegram 생성 migration이 정리 migration보다 뒤에 정렬된다", () => {

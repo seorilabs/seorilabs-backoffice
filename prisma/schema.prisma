@@ -321,6 +321,7 @@ enum NotificationKind {
   INCIDENT
   STORE_REVIEW
   IDENTITY_SUMMARY
+  IDENTITY_ROW
 }
 
 enum NotificationProvider {

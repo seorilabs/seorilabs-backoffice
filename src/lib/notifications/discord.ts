@@ -3,6 +3,7 @@ import { discordChannelId } from "@/lib/notifications/destinations";
 
 const API_BASE = "https://discord.com/api/v10";
 const EMBED_DESCRIPTION_LIMIT = 4_000;
+const CONTENT_LIMIT = 2_000;
 const MAX_EMBEDS = 10;
 export const MAX_DISCORD_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
@@ -39,6 +40,9 @@ export interface DiscordMessageOptions {
   alertRoleId?: string;
   components?: DiscordActionRow[];
   attachment?: DiscordAttachment;
+  // 한 줄짜리 기록은 embed 박스 없이 본문으로 보낸다. 여러 건이 쌓이는 곳에서
+  // embed는 한 건마다 상자를 그려 로그로 읽히지 않는다.
+  plain?: boolean;
 }
 
 export function splitDiscordText(text: string): string[] {
@@ -57,15 +61,22 @@ export function splitDiscordText(text: string): string[] {
 }
 
 function messagePayload(text: string, options: DiscordMessageOptions) {
-  const descriptions = splitDiscordText(text);
-  if (descriptions.length === 0) return null;
   const roleId = options.alertRoleId?.trim();
   const mention = roleId && /^\d+$/.test(roleId) ? `<@&${roleId}>` : undefined;
+  const allowedMentions = { parse: [] as string[], roles: mention ? [roleId] : [] };
+  const components = options.components?.length ? { components: options.components } : {};
+  if (options.plain) {
+    const content = [mention, text.trim()].filter(Boolean).join(" ").slice(0, CONTENT_LIMIT);
+    if (!content) return null;
+    return { content, ...components, allowed_mentions: allowedMentions };
+  }
+  const descriptions = splitDiscordText(text);
+  if (descriptions.length === 0) return null;
   return {
     ...(mention ? { content: mention } : {}),
     embeds: descriptions.map((description) => ({ description })),
-    ...(options.components?.length ? { components: options.components } : {}),
-    allowed_mentions: { parse: [], roles: mention ? [roleId] : [] },
+    ...components,
+    allowed_mentions: allowedMentions,
   };
 }
 
@@ -201,6 +212,35 @@ export async function createDiscordChannelMessage(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+// 메시지에서 시작한 public thread는 ID가 원본 메시지 ID와 같다. 그래서 thread ID를 따로
+// 저장하지 않고 카드의 providerMessageId를 그대로 쓴다. 메시지당 thread는 하나뿐이라
+// 재시도로 다시 요청하면 Discord가 160004로 거절하는데, 이미 있다는 뜻이지 실패가 아니다.
+const MESSAGE_ALREADY_HAS_THREAD = 160_004;
+const THREAD_AUTO_ARCHIVE_MINUTES = 1_440;
+const THREAD_NAME_LIMIT = 100;
+
+export async function startDiscordThread(
+  channelId: string,
+  messageId: string,
+  name: string,
+): Promise<DiscordDeliveryResult> {
+  if (!/^\d+$/.test(channelId) || !/^\d+$/.test(messageId)) {
+    return { ok: false, error: "Discord channel/message ID 오류" };
+  }
+  const threadName = name.trim().slice(0, THREAD_NAME_LIMIT);
+  if (!threadName) return { ok: false, error: "Discord thread 이름 비어 있음" };
+  const result = await discordRequest(`/channels/${channelId}/messages/${messageId}/threads`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: threadName,
+      auto_archive_duration: THREAD_AUTO_ARCHIVE_MINUTES,
+    }),
+  });
+  if (result.errorCode === MESSAGE_ALREADY_HAS_THREAD) return { ok: true, messageId };
+  return result;
 }
 
 export async function editDiscordChannelMessage(
