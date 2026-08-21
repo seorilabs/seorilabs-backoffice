@@ -107,6 +107,10 @@ spec:
               value: "60000"
             - name: RECONCILE_INTERVAL_MS
               value: "21600000"
+            # AI 팀원 순찰 트리거 route(/api/admin/teammates/patrol)는 웹 Pod에서
+            # 돈다. 워커 플래그와 별개로 여기 없으면 CronJob 이 503으로 실패한다.
+            - name: FEATURE_DISCORD_TEAMMATES
+              value: "true"
             # GA4→BigQuery 지표 수집(수집/보고 CronJob + /analytics 대시보드).
             - name: FEATURE_GA4_ANALYTICS
               value: "true"
