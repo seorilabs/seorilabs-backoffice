@@ -1,6 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { handleDiscordInteraction } from "@/lib/discord/handler";
+import {
+  deleteOriginalInteractionResponse,
+  shouldDeleteEphemeralConfirmation,
+} from "@/lib/discord/interaction-cleanup";
 import { verifyDiscordSignature } from "@/lib/discord/security";
 import type { DiscordInteraction } from "@/lib/discord/types";
 
@@ -24,7 +28,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
   try {
-    return NextResponse.json(await handleDiscordInteraction(interaction));
+    const response = await handleDiscordInteraction(interaction);
+    const interactionToken = interaction.token;
+    if (interactionToken && shouldDeleteEphemeralConfirmation(interaction, response)) {
+      after(async () => {
+        const deleted = await deleteOriginalInteractionResponse({
+          applicationId: interaction.application_id,
+          interactionToken,
+        });
+        if (!deleted.ok) {
+          console.error("[discord/interactions] ephemeral 확인창 삭제 실패", deleted.error);
+        }
+      });
+    }
+    return NextResponse.json(response);
   } catch (error) {
     console.error("[discord/interactions] 실패", error instanceof Error ? error.message : "error");
     return NextResponse.json(ephemeralError());
