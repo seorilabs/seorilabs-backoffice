@@ -54,12 +54,20 @@ export function renderPatrolReport(
   meta: TeammateMeta,
   findings: readonly PatrolFinding[],
   narrative: string,
+  // 발견과 무관하게 항상 싣는 현황 스냅샷(예: 파이낸스의 월누적 비용).
+  summaryLines: readonly string[] = [],
 ): string {
-  if (findings.length === 0) return `🔎 **${meta.ko} 순찰 보고**\n이상 없음 — 발견 0건`;
+  if (findings.length === 0) {
+    const lines = [`🔎 **${meta.ko} 순찰 보고**`];
+    if (summaryLines.length > 0) lines.push(...summaryLines, "", "경고 없음");
+    else lines.push("이상 없음 — 발견 0건");
+    return lines.join("\n");
+  }
   const drafted = findings.filter((item) => item.status === "drafted").length;
   const deduped = findings.filter((item) => item.status === "deduped").length;
   const lines = [
     `🔎 **${meta.ko} 순찰 보고**`,
+    ...summaryLines,
     `발견 ${findings.length}건 · 이슈 초안 ${drafted}건 · 기존 이슈 중복 ${deduped}건`,
   ];
   if (narrative) lines.push("", narrative);

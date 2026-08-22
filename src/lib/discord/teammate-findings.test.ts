@@ -65,6 +65,30 @@ test("발견 0건 순찰은 0건으로 보고한다", () => {
   assert.match(report, /이상 없음 — 발견 0건/);
 });
 
+test("현황 스냅샷이 있는 팀원은 0건이어도 스냅샷과 함께 보고한다", () => {
+  // 파이낸스 리포트는 경고가 없어도 월누적 수치가 본문이다.
+  const report = renderPatrolReport(TEAMMATES.finance, [], "", [
+    "이번 달(2026-08) 종량제 현황",
+    "- GitHub Actions: 환산 1500분/3000분 (50%)",
+  ]);
+  assert.match(report, /서리 파이낸스 순찰 보고/);
+  assert.match(report, /환산 1500분\/3000분/);
+  assert.match(report, /경고 없음/);
+  assert.ok(!report.includes("이상 없음 — 발견 0건"));
+});
+
+test("발견이 있으면 스냅샷 뒤에 경고 목록이 붙는다", () => {
+  const report = renderPatrolReport(
+    TEAMMATES.finance,
+    [fixture({ key: "gh-overage:2026-08", title: "GitHub Actions 초과 과금", repoFullName: null })],
+    "",
+    ["- GitHub Actions: 환산 4000분/3000분 (133%)"],
+  );
+  assert.match(report, /환산 4000분\/3000분/);
+  assert.match(report, /발견 1건/);
+  assert.match(report, /GitHub Actions 초과 과금/);
+});
+
 test("순찰 보고는 발견·초안·중복 수와 근거를 담는다", () => {
   const findings = [
     fixture({ status: "drafted" }),

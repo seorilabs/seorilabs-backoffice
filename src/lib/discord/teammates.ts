@@ -2,9 +2,9 @@ import { capabilitiesForRole, type DiscordCapability } from "@/lib/discord/roles
 import type { DiscordDestinationKey } from "@/lib/notifications/destinations";
 import { env } from "@/lib/env";
 
-// AI 팀원 4명. 역할 키·capability 는 사람 역할(roles.ts)을 그대로 상속하고,
-// 보고 채널은 역할별 기존 채널을 쓴다(전부 카드 버튼 allowlist 채널).
-export const TEAMMATE_ROLES = ["product", "data", "development", "qa"] as const;
+// AI 팀원. 역할 키·capability 는 사람 역할(roles.ts)을 그대로 상속하고,
+// 보고 채널은 역할별 기존 채널을 쓴다.
+export const TEAMMATE_ROLES = ["product", "data", "development", "qa", "finance"] as const;
 
 export type TeammateRole = (typeof TEAMMATE_ROLES)[number];
 
@@ -14,6 +14,11 @@ export interface TeammateMeta {
   channelKey: DiscordDestinationKey;
   focus: string;
   capabilities: readonly DiscordCapability[];
+  // 순찰에서 GitHub 이슈 초안(confirm 카드)을 만드는 팀원인가. 초안 카드에는
+  // 버튼이 실리므로 이 값이 true 인 팀원의 보고 채널은 반드시 카드 버튼
+  // allowlist(DISCORD_CARD_CHANNEL_KEYS) 채널이어야 한다. finance 는 보고·경고
+  // 전용이라 카드 채널이 아닌 finance-alerts 를 쓴다.
+  draftsEnabled: boolean;
 }
 
 export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
@@ -23,6 +28,7 @@ export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
     channelKey: "backoffice",
     focus: "기획과 우선순위, 승인 대기, 단계 정체 앱",
     capabilities: capabilitiesForRole("product"),
+    draftsEnabled: true,
   },
   data: {
     role: "data",
@@ -30,6 +36,7 @@ export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
     channelKey: "metrics-daily",
     focus: "지표 해석, 이상치, 계측 공백",
     capabilities: capabilitiesForRole("data"),
+    draftsEnabled: true,
   },
   development: {
     role: "development",
@@ -37,6 +44,7 @@ export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
     channelKey: "ops-alerts",
     focus: "코드 결함, 운영 장애, 배포 실패, 기술 부채",
     capabilities: capabilitiesForRole("development"),
+    draftsEnabled: true,
   },
   qa: {
     role: "qa",
@@ -44,6 +52,15 @@ export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
     channelKey: "release-ops",
     focus: "릴리즈 품질 게이트, 회귀 위험, 스토어 리뷰 불만",
     capabilities: capabilitiesForRole("qa"),
+    draftsEnabled: true,
+  },
+  finance: {
+    role: "finance",
+    ko: "서리 파이낸스",
+    channelKey: "finance-alerts",
+    focus: "종량제 비용, 예산 대비 지출, 분량·크레딧 잔량",
+    capabilities: capabilitiesForRole("finance"),
+    draftsEnabled: false,
   },
 };
 
