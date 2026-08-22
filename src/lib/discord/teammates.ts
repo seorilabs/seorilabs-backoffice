@@ -56,7 +56,7 @@ export const TEAMMATES: Record<TeammateRole, TeammateMeta> = {
   },
   finance: {
     role: "finance",
-    ko: "서리 파이낸스",
+    ko: "서리 재무",
     channelKey: "finance-alerts",
     focus: "종량제 비용, 예산 대비 지출, 분량·크레딧 잔량",
     capabilities: capabilitiesForRole("finance"),

@@ -71,7 +71,7 @@ test("현황 스냅샷이 있는 팀원은 0건이어도 스냅샷과 함께 보
     "이번 달(2026-08) 종량제 현황",
     "- GitHub Actions: 환산 1500분/3000분 (50%)",
   ]);
-  assert.match(report, /서리 파이낸스 순찰 보고/);
+  assert.match(report, /서리 재무 순찰 보고/);
   assert.match(report, /환산 1500분\/3000분/);
   assert.match(report, /경고 없음/);
   assert.ok(!report.includes("이상 없음 — 발견 0건"));
