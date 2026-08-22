@@ -2,7 +2,7 @@ import { env } from "@/lib/env";
 import { runQuery } from "@/lib/ga4/bigquery";
 import type { PatrolFinding } from "@/lib/discord/teammate-findings";
 
-// 서리 파이낸스 순찰의 비용 수집. 소스 3종은 전부 선택적(optional env)이며,
+// 서리 재무 순찰의 비용 수집. 소스 3종은 전부 선택적(optional env)이며,
 // 미설정 소스는 조용히 건너뛰지 않고 리포트에 "미설정" 으로 드러낸다.
 // 경고 판정은 순수 함수로 분리해 테스트로 고정한다.
 

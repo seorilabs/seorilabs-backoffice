@@ -169,9 +169,12 @@ Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_
 (`k8s/teammate-worker.yaml`) 한 프로세스에서 Gateway 연결 4개로 동작한다. 멘션 대화와
 `teammate_run` 순찰 큐(트리거는 `k8s/teammate-patrol-cronjobs.yaml`)를 담당한다.
 
-- Secret key: `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA}_{APPLICATION_ID,BOT_TOKEN}`
-  (8키, 전부 `optional: true`). 원본은 `~/.config/seorilabs` 카탈로그
+- Secret key: `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA,FINANCE}_{APPLICATION_ID,BOT_TOKEN}`
+  (10키, 전부 `optional: true`). 원본은 `~/.config/seorilabs` 카탈로그
   `shared/discord/teammate-<role>-bot`(macOS 키체인 `com.seorilabs.discord.teammate-<role>`).
+- 서리 재무(finance) 비용 순찰 소스 key: `GITHUB_BILLING_TOKEN`(fine-grained PAT,
+  키체인 `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`,
+  `STABILITY_API_KEY`. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 표기된다.
 - 전체 비활성: `FEATURE_DISCORD_TEAMMATES=false` 로 전환(워커가 idle 로만 남음).
   팀원 1명만 비활성: 해당 role 의 키 2개를 SealedSecret 에서 제거.
 - 토큰 로테이션: Developer Portal 에서 Reset Token → 키체인 갱신(`security add-generic-password

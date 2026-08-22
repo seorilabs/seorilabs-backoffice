@@ -94,7 +94,7 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_APPLICATION_ID, optional: true } }
             - name: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN, optional: true } }
-            # 서리 파이낸스 비용 순찰 소스. 전부 optional — 미설정 소스는 리포트에
+            # 서리 재무 비용 순찰 소스. 전부 optional — 미설정 소스는 리포트에
             # "미설정" 으로 표기된다. GITHUB_BILLING_TOKEN 은 조직 billing 읽기 전용
             # fine-grained PAT(신형 청구 API 는 GitHub App 토큰 불가).
             - name: GITHUB_BILLING_TOKEN
