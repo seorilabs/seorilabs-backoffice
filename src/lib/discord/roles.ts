@@ -20,6 +20,7 @@ const ROLE_CAPABILITIES: Record<string, DiscordCapability[]> = {
   development: ["read", "bug", "ops_incident"],
   qa: ["read", "bug", "release_approval", "ops_incident"],
   data: ["read", "metric_incident"],
+  finance: ["read", "metric_incident"],
   release_ops: ["read", "release_approval", "ops_incident", "release"],
   cs: ["read", "bug"],
   viewer: ["read"],

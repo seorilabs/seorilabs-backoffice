@@ -16,6 +16,7 @@ import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { asStringArray } from "@/lib/format";
 import { TEAMMATES, type TeammateMeta, type TeammateRole } from "@/lib/discord/teammates";
 import { withGemini429Retry } from "@/lib/discord/teammate-chat";
+import { collectFinanceCosts } from "@/lib/discord/teammate-costs";
 import {
   buildIssueBody,
   extractTeammateMarkers,
@@ -306,14 +307,30 @@ async function collectQa(now: Date): Promise<PatrolFinding[]> {
   return findings;
 }
 
-async function collect(role: TeammateRole, now: Date): Promise<PatrolFinding[]> {
+interface CollectResult {
+  findings: PatrolFinding[];
+  // 발견과 무관하게 리포트에 항상 싣는 현황 스냅샷(파이낸스 전용, 다른 팀원은 빈 배열).
+  summaryLines: string[];
+}
+
+async function collect(role: TeammateRole, now: Date): Promise<CollectResult> {
+  if (role === "finance") {
+    const result = await collectFinanceCosts(now);
+    return {
+      findings: result.findings.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN),
+      summaryLines: result.summaryLines,
+    };
+  }
   const collected =
     role === "product" ? await collectProduct(now)
     : role === "data" ? await collectDataTeam(now)
     : role === "development" ? await collectDevelopment(now)
     : await collectQa(now);
   // 근거 게이트: evidence 없는 항목은 어떤 경로로도 초안이 될 수 없다.
-  return collected.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN);
+  return {
+    findings: collected.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN),
+    summaryLines: [],
+  };
 }
 
 // ── GitHub open+closed dedupe ───────────────────────────────────────────────
@@ -404,9 +421,10 @@ async function executePatrol(
   if (!channelId) throw new Error(`${meta.channelKey} 채널 ID 가 설정되지 않았습니다.`);
 
   const now = new Date();
-  const findings = await collect(meta.role, now);
+  const { findings, summaryLines } = await collect(meta.role, now);
 
   // open+closed 이슈 교차 dedupe — 닫힌 이슈의 재발견도 marker 로 걸러진다.
+  // 초안을 만들지 않는 팀원(finance)은 대상 repo 자체가 없어 자연히 건너뛴다.
   const repos = [...new Set(findings.map((item) => item.repoFullName).filter((repo): repo is string => Boolean(repo)))];
   if (repos.length > 0) {
     const existing = await fetchExistingMarkers(repos, new Date(now.getTime() - DEDUPE_WINDOW_DAYS * DAY_MS));
@@ -419,11 +437,12 @@ async function executePatrol(
     }
   }
 
-  const draftIndexes = selectDraftIndexes(findings);
+  const draftIndexes = meta.draftsEnabled ? selectDraftIndexes(findings) : [];
   for (const index of draftIndexes) findings[index].status = "drafted";
 
   let narrative = "";
-  if (findings.length > 0 && env.geminiChatConfigured()) {
+  // 파이낸스 리포트는 결정적 수치라 Gemini 서술을 쓰지 않는다(쿼타 보호).
+  if (meta.draftsEnabled && findings.length > 0 && env.geminiChatConfigured()) {
     try {
       const synthesis = await withGeminiSlot(() => synthesize(meta, findings));
       narrative = synthesis.report;
@@ -440,7 +459,7 @@ async function executePatrol(
     }
   }
 
-  const report = renderPatrolReport(meta, findings, narrative);
+  const report = renderPatrolReport(meta, findings, narrative, summaryLines);
   const posted = await createDiscordChannelMessageAs(botToken, channelId, report);
   if (!posted.ok) throw new Error(`순찰 보고 게시 실패: ${posted.error ?? "unknown"}`);
 

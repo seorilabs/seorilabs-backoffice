@@ -10,8 +10,8 @@ import {
   TEAMMATES,
 } from "@/lib/discord/teammates";
 
-test("팀원 4명이 모두 정의되고 capability 는 사람 역할을 그대로 상속한다", () => {
-  assert.deepEqual(TEAMMATE_ROLES, ["product", "data", "development", "qa"]);
+test("팀원 5명이 모두 정의되고 capability 는 사람 역할을 그대로 상속한다", () => {
+  assert.deepEqual(TEAMMATE_ROLES, ["product", "data", "development", "qa", "finance"]);
   for (const role of TEAMMATE_ROLES) {
     const meta = TEAMMATES[role];
     assert.equal(meta.role, role);
@@ -21,13 +21,25 @@ test("팀원 4명이 모두 정의되고 capability 는 사람 역할을 그대�
   }
 });
 
-test("팀원 보고 채널은 전부 카드 버튼 allowlist 채널이다", () => {
+test("초안을 만드는 팀원의 보고 채널은 전부 카드 버튼 allowlist 채널이다", () => {
+  // 초안 confirm 카드에는 버튼이 실리므로, 버튼 allowlist 밖 채널로 보고하는
+  // 팀원은 초안을 만들 수 없어야 한다.
   for (const role of TEAMMATE_ROLES) {
+    const meta = TEAMMATES[role];
+    if (!meta.draftsEnabled) continue;
     assert.ok(
-      (DISCORD_CARD_CHANNEL_KEYS as readonly string[]).includes(TEAMMATES[role].channelKey),
-      `${role} 채널 ${TEAMMATES[role].channelKey} 이 카드 채널이 아니다`,
+      (DISCORD_CARD_CHANNEL_KEYS as readonly string[]).includes(meta.channelKey),
+      `${role} 채널 ${meta.channelKey} 이 카드 채널이 아니다`,
     );
   }
+});
+
+test("파이낸스는 finance-alerts 로 보고하고 이슈 초안을 만들지 않는다", () => {
+  assert.equal(TEAMMATES.finance.channelKey, "finance-alerts");
+  assert.equal(TEAMMATES.finance.draftsEnabled, false);
+  assert.ok(
+    !(DISCORD_CARD_CHANNEL_KEYS as readonly string[]).includes(TEAMMATES.finance.channelKey),
+  );
 });
 
 test("isTeammateRole 은 사람 전용 역할을 거른다", () => {

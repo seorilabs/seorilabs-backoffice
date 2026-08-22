@@ -133,7 +133,17 @@ export const env = {
     Boolean(optional("DISCORD_PUBLIC_KEY").trim()) &&
     Boolean(optional("DISCORD_BOT_TOKEN").trim()) &&
     Boolean(optional("DISCORD_GUILD_ID").trim()),
-  // AI 팀원 봇 4종(product/data/development/qa). 역할별 별도 Discord 앱이며
+  // 서리 파이낸스 비용 순찰 소스. 전부 선택적 — 미설정 소스는 리포트에 "미설정" 으로 표기.
+  githubBillingToken: () => optional("GITHUB_BILLING_TOKEN").trim(),
+  // GitHub 플랜 포함 hosted 분량(macOS 10x·Windows 2x 환산 기준). Team 플랜 3,000분.
+  githubIncludedQuotaMinutes: () => Number(optional("GITHUB_INCLUDED_QUOTA_MINUTES", "3000")),
+  // billing export 테이블 전체 경로 "project.dataset.gcp_billing_export_v1_XXXX".
+  gcpBillingExportTable: () => optional("GCP_BILLING_EXPORT_TABLE").trim(),
+  // 0 = 예산 미확정(보고만). 첫 달 실측 후 확정한다.
+  gcpMonthlyBudgetKrw: () => Number(optional("GCP_MONTHLY_BUDGET_KRW", "0")),
+  stabilityApiKey: () => optional("STABILITY_API_KEY").trim(),
+  stabilityMinCredits: () => Number(optional("STABILITY_MIN_CREDITS", "200")),
+  // AI 팀원 봇(product/data/development/qa/finance). 역할별 별도 Discord 앱이며
   // 슬래시 명령은 메인 봇 전유라 팀원에겐 APPLICATION_ID 와 BOT_TOKEN 만 필요하다.
   featureDiscordTeammates: () => bool("FEATURE_DISCORD_TEAMMATES", false),
   discordTeammateApplicationId: (role: string) =>

@@ -63,6 +63,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
             - name: DISCORD_CHANNEL_RELEASE_OPS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
+            - name: DISCORD_CHANNEL_FINANCE_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_FINANCE_ALERTS_ID } }
             # 순찰 dedupe 는 open/closed GitHub 이슈를 교차 조회한다.
             - name: GITHUB_APP_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_APP_ID } }
@@ -88,6 +90,22 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_QA_APPLICATION_ID, optional: true } }
             - name: DISCORD_TEAMMATE_QA_BOT_TOKEN
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_QA_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_FINANCE_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN, optional: true } }
+            # 서리 파이낸스 비용 순찰 소스. 전부 optional — 미설정 소스는 리포트에
+            # "미설정" 으로 표기된다. GITHUB_BILLING_TOKEN 은 조직 billing 읽기 전용
+            # fine-grained PAT(신형 청구 API 는 GitHub App 토큰 불가).
+            - name: GITHUB_BILLING_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_BILLING_TOKEN, optional: true } }
+            - name: GCP_BILLING_EXPORT_TABLE
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GCP_BILLING_EXPORT_TABLE, optional: true } }
+            - name: STABILITY_API_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: STABILITY_API_KEY, optional: true } }
+            # billing export BigQuery 조회는 GA4 수집과 같은 read 전용 SA 를 쓴다.
+            - name: GA4_SA_KEY_JSON
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GA4_SA_KEY_JSON, optional: true } }
           resources:
             requests: { cpu: 50m, memory: 192Mi }
             limits: { cpu: 500m, memory: 512Mi }
