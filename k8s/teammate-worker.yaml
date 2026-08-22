@@ -47,6 +47,8 @@ spec:
             - { name: NODE_OPTIONS, value: "--dns-result-order=ipv4first --no-network-family-autoselection" }
             - { name: FEATURE_DISCORD_TEAMMATES, value: "true" }
             - { name: FEATURE_GEMINI_ENABLED, value: "true" }
+            # GCP 월 예산(원). 70/90/100% 에서 서리 재무가 경고한다.
+            - { name: GCP_MONTHLY_BUDGET_KRW, value: "20000" }
             - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
