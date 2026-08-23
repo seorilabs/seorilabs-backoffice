@@ -14,18 +14,23 @@ import { marketVersionFloorFromConfigs } from "@/lib/core/market-version-floor";
 import {
   assertSnapshotDefaultBranch,
   assertSnapshotShaUnchanged,
+  assertSnapshotRegistryUnchanged,
   assertSnapshotTargetsUnchanged,
   buildSnapshotMarketInputs,
   SNAPSHOT_BRANCH,
   SNAPSHOT_DEPLOY_TARGET_KO,
-  snapshotDeployTargetsFor,
+  selectSnapshotDeployTargets,
   nextSnapshotCandidateTag,
   parseSnapshotCandidateTag,
   resolveSnapshotDeployDispatchRef,
   resolveSnapshotCandidateBase,
   type SnapshotDeployTarget,
 } from "@/lib/core/snapshot-candidate";
-import { isXcodeCloudRepo } from "@/lib/xcode-cloud/dispatch";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
+import {
+  isXcodeCloudRepo,
+  validateXcodeCloudDeploy,
+} from "@/lib/xcode-cloud/dispatch";
 import { dispatchXcodeCloudRelease } from "@/lib/xcode-cloud/release";
 
 export const SNAPSHOT_AIT_WORKFLOW = "deploy-apps-in-toss.yml";
@@ -61,18 +66,10 @@ function object(value: unknown): JsonObject | null {
 function assertSnapshotTargets(
   repoFullName: string,
   marketTargets: unknown,
+  target: DeployTarget,
   iosBundle?: string | null,
 ): SnapshotDeployTarget[] {
-  const targets = snapshotDeployTargetsFor(marketTargets);
-  const requiredTargets: SnapshotDeployTarget[] = ["AIT", "PLAY", "TESTFLIGHT"];
-  const missing = requiredTargets.filter((target) => !targets.includes(target));
-  if (missing.length > 0) {
-    throw new Error(
-      `${repoFullName}의 snapshot 후보 배포 대상이 부족합니다: ${missing
-        .map((target) => SNAPSHOT_DEPLOY_TARGET_KO[target])
-        .join(", ")}`,
-    );
-  }
+  const targets = selectSnapshotDeployTargets(marketTargets, target);
   if (targets.includes("TESTFLIGHT")) {
     if (!isXcodeCloudRepo(repoFullName)) {
       throw new Error(
@@ -148,6 +145,8 @@ async function prepareGithubDeployPlans(opts: {
 
 export interface SnapshotDeployPreview {
   branch: typeof SNAPSHOT_BRANCH;
+  repoFullName: string;
+  iosBundle: string | null;
   sha: string;
   tag: string;
   targets: SnapshotDeployTarget[];
@@ -157,11 +156,16 @@ export interface SnapshotDeployPreview {
 /** 외부 write 전 main HEAD와 모든 테스트 배포 caller를 검증한다. */
 export async function previewSnapshotDeploy(
   repoFullName: string,
-  options: { marketTargets: unknown; iosBundle?: string | null },
+  options: {
+    target: DeployTarget;
+    marketTargets: unknown;
+    iosBundle?: string | null;
+  },
 ): Promise<SnapshotDeployPreview> {
   const targets = assertSnapshotTargets(
     repoFullName,
     options.marketTargets,
+    options.target,
     options.iosBundle,
   );
   const defaultBranch = await getRepoDefaultBranch(repoFullName);
@@ -180,8 +184,17 @@ export async function previewSnapshotDeploy(
     tag,
     sha,
   });
+  if (targets.includes("TESTFLIGHT")) {
+    await validateXcodeCloudDeploy({
+      bundleId: options.iosBundle!,
+      repoFullName,
+      tag,
+    });
+  }
   return {
     branch: SNAPSHOT_BRANCH,
+    repoFullName,
+    iosBundle: targets.includes("TESTFLIGHT") ? options.iosBundle! : null,
     sha,
     tag,
     targets,
@@ -198,11 +211,15 @@ export async function previewSnapshotDeploy(
   };
 }
 
-/** 확인된 main SHA에 후보 태그를 붙인 뒤 등록된 모든 내부 테스트 채널을 실행한다. */
+/** 확인된 main SHA에 후보 태그를 붙인 뒤 선택한 내부 테스트 채널을 실행한다. */
 export async function createAndDispatchSnapshotDeploy(opts: {
+  appId: string;
   repoFullName: string;
+  expectedRepoFullName: string;
+  expectedIosBundle?: string | null;
   expectedSha: string;
   expectedTargets: readonly SnapshotDeployTarget[];
+  target: DeployTarget;
   marketTargets: unknown;
   iosBundle?: string | null;
   tag: string;
@@ -217,9 +234,18 @@ export async function createAndDispatchSnapshotDeploy(opts: {
     throw new Error(`snapshot 후보 태그 형식이 아닙니다: ${opts.tag}`);
   }
 
+  assertSnapshotRegistryUnchanged({
+    expectedRepoFullName: opts.expectedRepoFullName,
+    currentRepoFullName: opts.repoFullName,
+    expectedTargets: opts.expectedTargets,
+    expectedIosBundle: opts.expectedIosBundle,
+    currentIosBundle: opts.iosBundle,
+  });
+
   const currentTargets = assertSnapshotTargets(
     opts.repoFullName,
     opts.marketTargets,
+    opts.target,
     opts.iosBundle,
   );
   assertSnapshotTargetsUnchanged(opts.expectedTargets, currentTargets);
@@ -236,6 +262,13 @@ export async function createAndDispatchSnapshotDeploy(opts: {
     tag: opts.tag,
     sha: opts.expectedSha,
   });
+  if (currentTargets.includes("TESTFLIGHT")) {
+    await validateXcodeCloudDeploy({
+      bundleId: opts.iosBundle!,
+      repoFullName: opts.repoFullName,
+      tag: opts.tag,
+    });
+  }
 
   const { created } = await createTag({
     repoFullName: opts.repoFullName,
@@ -291,6 +324,8 @@ export async function createAndDispatchSnapshotDeploy(opts: {
         repoFullName: opts.repoFullName,
         tag: opts.tag,
         actorLabel: opts.actorLabel,
+        expectedAppId: opts.appId,
+        expectedIosBundle: opts.iosBundle!,
       });
       destinations.push({
         target: "TESTFLIGHT",

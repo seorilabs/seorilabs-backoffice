@@ -164,8 +164,8 @@ flowchart LR
 ## 5. 버전 source of truth
 
 - **태그가 기준.** `vMAJOR.MINOR.PATCH`(stable SemVer)만 허용.
-- Discord `/snapshot app`은 `main` HEAD에 `vMAJOR.MINOR.PATCH-snapshot.N` 후보 태그를 붙여 세 테스트 채널을 한 번에 트리거한다. AppsInToss는 후보 배포, Google Play는 `internal/completed`, iOS는 GitHub macOS가 아니라 Xcode Cloud의 TestFlight 내부 테스트 경로를 사용한다. 세 마켓이 모두 등록되지 않은 앱은 일부 성공을 완료처럼 보이지 않도록 실행 전에 중단한다. 저장소의 기본 브랜치와 후보 소스는 모두 `main`이어야 하며, 실행 ref는 후보 태그로 고정해 `workflow_run`이 후보 버전을 정확히 기록하게 한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
-- 후보 태그를 받는 앱 저장소의 배포 계약은 prerelease ref를 checkout할 수 있어야 한다. Android는 후보마다 Play의 기존 값보다 큰 고유 `versionCode`를 만들어야 하고, iOS는 `vX.Y.Z-snapshot.N`에서 `CFBundleShortVersionString=X.Y.Z`와 단조 증가 `CFBundleVersion`을 분리해야 한다. stable 태그만 허용하는 repo-local resolver/Xcode Cloud preflight는 후보 배포 전에 해당 저장소에서 먼저 확장한다.
+- Discord `/snapshot app target`은 `main` HEAD에 `vMAJOR.MINOR.PATCH-snapshot.N` 후보 태그를 붙여 선택한 내부 테스트 채널을 트리거한다. `target`은 정식 배포와 같은 `AIT`, `PLAY`, `APPSTORE`, `ALL` 중 하나이며 `APPSTORE`는 TestFlight 내부 테스트를 뜻하고 `ALL`은 앱에 등록된 마켓만 실행한다. AppsInToss는 후보 배포, Google Play는 `internal/completed`, iOS는 GitHub macOS가 아니라 Xcode Cloud를 사용한다. 선택한 마켓이 등록되지 않았으면 외부 쓰기 전에 중단한다. 저장소의 기본 브랜치와 후보 소스는 모두 `main`이어야 하며, 실행 ref는 후보 태그로 고정해 `workflow_run`이 후보 버전을 정확히 기록하게 한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
+- 후보 태그를 받는 앱 저장소의 배포 계약은 prerelease ref를 checkout할 수 있어야 한다. Android는 후보마다 Play의 기존 값보다 큰 고유 `versionCode`를 만들어야 하고, iOS는 `vX.Y.Z-snapshot.N`에서 `CFBundleShortVersionString=X.Y.Z`와 단조 증가 `CFBundleVersion`을 분리해야 한다. Xcode Cloud는 자동 Tag 변경 조건을 두지 않고 Manual Tag 시작 조건이 `v` 접두사 태그를 허용하도록 등록하며, Backoffice는 수동 조건이 요청 태그를 허용하는지 외부 write 전에 검증한다. stable 태그만 허용하는 repo-local resolver는 후보 배포 전에 해당 저장소에서 먼저 확장한다.
 - RN: `scripts/resolve-release-version.mjs`가 태그에서 `version_name`, `android_version_code`(세그먼트 base 1000), `apple_marketing_version`, `apple_build_number`를 파생. (happy-farm/crossword 검증됨)
 - Godot: `play-store/google-play.config.json`의 `release.versionName/versionCode`를 읽고 태그(`v$versionName`)와 일치 검증.(lucid-chess)
 - → 표준 리졸버를 org 공통 스크립트로 승격(템플릿에 포함). 마켓별 versionCode/buildNumber 충돌은 업로드 직전 검증.
@@ -243,7 +243,7 @@ sequenceDiagram
 - 백오피스 경로(`pushReleaseMarkerCommit`)와 워크플로우 경로(org 재사용 `release-tag.yml` + 인라인 caller)가 같은 규칙을 쓴다. 어느 쪽으로 태그를 찍어도 마커가 남는다.
 - Discord API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
-- Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행한다.
+- Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행하며, 태그 ref도 제품의 첫 primary repository가 아니라 선택한 workflow에 연결된 repository에서 찾는다.
 - 완료 알림은 한글 앱명·태그·마켓·실행 이름·GitHub Actions 링크 또는 Xcode Cloud 빌드 번호를 포함한다.
 
 ### 7.3 출시노트 규칙

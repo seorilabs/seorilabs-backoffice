@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   assertSnapshotDefaultBranch,
   assertSnapshotShaUnchanged,
+  assertSnapshotRegistryUnchanged,
   assertSnapshotTargetsUnchanged,
   buildSnapshotDeployInputs,
   buildSnapshotMarketInputs,
@@ -13,6 +14,7 @@ import {
   parseSnapshotCandidateTag,
   resolveSnapshotDeployDispatchRef,
   resolveSnapshotCandidateBase,
+  selectSnapshotDeployTargets,
 } from "@/lib/core/snapshot-candidate";
 
 test("snapshot 소스 브랜치는 main으로 고정한다", () => {
@@ -37,6 +39,41 @@ test("확인 뒤 main HEAD나 내부 테스트 대상이 바뀌면 실행을 중
     () => assertSnapshotTargetsUnchanged(["AIT", "PLAY", "TESTFLIGHT"], ["AIT", "PLAY"]),
     /배포 대상이 변경됐습니다/,
   );
+});
+
+test("확인 뒤 저장소나 TestFlight bundle ID가 바뀌면 실행을 중단한다", () => {
+  assert.doesNotThrow(() => assertSnapshotRegistryUnchanged({
+    expectedRepoFullName: "seorilabs/saju-reader",
+    currentRepoFullName: "seorilabs/saju-reader",
+    expectedTargets: ["TESTFLIGHT"],
+    expectedIosBundle: "com.seorilabs.ungeul",
+    currentIosBundle: "com.seorilabs.ungeul",
+  }));
+  assert.throws(
+    () => assertSnapshotRegistryUnchanged({
+      expectedRepoFullName: "seorilabs/saju-reader",
+      currentRepoFullName: "seorilabs/other",
+      expectedTargets: ["PLAY"],
+    }),
+    /저장소가 변경/,
+  );
+  assert.throws(
+    () => assertSnapshotRegistryUnchanged({
+      expectedRepoFullName: "seorilabs/saju-reader",
+      currentRepoFullName: "seorilabs/saju-reader",
+      expectedTargets: ["TESTFLIGHT"],
+      expectedIosBundle: "com.seorilabs.ungeul",
+      currentIosBundle: "com.seorilabs.other",
+    }),
+    /bundle ID가 변경/,
+  );
+  assert.doesNotThrow(() => assertSnapshotRegistryUnchanged({
+    expectedRepoFullName: "seorilabs/saju-reader",
+    currentRepoFullName: "seorilabs/saju-reader",
+    expectedTargets: ["PLAY"],
+    expectedIosBundle: "com.seorilabs.ungeul",
+    currentIosBundle: "com.seorilabs.other",
+  }));
 });
 
 test("후보 태그는 마지막 stable SemVer에 snapshot 순번을 이어 붙인다", () => {
@@ -144,4 +181,28 @@ test("등록된 마켓만 AIT·Play 내부·TestFlight 후보 대상으로 고�
   );
   assert.deepEqual(snapshotDeployTargetsFor(["web"]), []);
   assert.deepEqual(snapshotDeployTargetsFor(null), []);
+});
+
+test("deploy와 같은 선택값을 snapshot 내부 테스트 대상으로 변환한다", () => {
+  const markets = ["web", "appstore", "play", "ait"];
+  assert.deepEqual(selectSnapshotDeployTargets(markets, "AIT"), ["AIT"]);
+  assert.deepEqual(selectSnapshotDeployTargets(markets, "PLAY"), ["PLAY"]);
+  assert.deepEqual(selectSnapshotDeployTargets(markets, "APPSTORE"), ["TESTFLIGHT"]);
+  assert.deepEqual(
+    selectSnapshotDeployTargets(markets, "ALL"),
+    ["AIT", "PLAY", "TESTFLIGHT"],
+  );
+});
+
+test("선택한 snapshot 마켓만 등록 여부를 검사한다", () => {
+  assert.deepEqual(selectSnapshotDeployTargets(["play"], "PLAY"), ["PLAY"]);
+  assert.deepEqual(selectSnapshotDeployTargets(["play"], "ALL"), ["PLAY"]);
+  assert.throws(
+    () => selectSnapshotDeployTargets(["play"], "APPSTORE"),
+    /TestFlight 내부 테스트가 등록되지 않아/,
+  );
+  assert.throws(
+    () => selectSnapshotDeployTargets([], "ALL"),
+    /등록 마켓이 없습니다/,
+  );
 });

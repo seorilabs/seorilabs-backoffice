@@ -52,8 +52,15 @@ export interface WorkflowCandidate {
   id: string;
   name: string;
   repoFullName: string | null;
+  repositoryId: string | null;
   isEnabled: boolean;
   actions: unknown;
+  manualTagStartCondition: unknown;
+}
+
+export interface WorkflowSelection {
+  workflowId: string;
+  repositoryId: string;
 }
 
 export interface GitReferenceCandidate {
@@ -99,7 +106,7 @@ export async function waitForTagRefId(
   const waitedMs = delaysMs.reduce((sum, delayMs) => sum + delayMs, 0);
   throw new Error(
     `태그 ref 가 Xcode Cloud 에 ${Math.ceil(waitedMs / 1_000)}초 동안 동기화되지 않음: ${tag}. ` +
-      "workflow의 Manual Start - Tag(v*)와 SCM 연결 상태를 확인하세요.",
+      "workflow의 Manual Tag 시작 조건과 SCM 연결 상태를 확인하세요.",
   );
 }
 
@@ -116,6 +123,29 @@ function isAppStoreArchive(actions: unknown): boolean {
   });
 }
 
+/** Xcode Cloud의 수동 태그 조건은 glob이 아니라 대소문자 구분 exact/prefix 계약이다. */
+export function matchesManualTagStartCondition(
+  condition: unknown,
+  tag: string,
+): boolean {
+  if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
+    return false;
+  }
+  const source = (condition as Record<string, unknown>).source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return false;
+  const value = source as Record<string, unknown>;
+  if (value.isAllMatch === true) return true;
+  if (value.isAllMatch !== false || !Array.isArray(value.patterns)) return false;
+  return value.patterns.some((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const pattern = item as Record<string, unknown>;
+    if (typeof pattern.pattern !== "string" || typeof pattern.isPrefix !== "boolean") {
+      return false;
+    }
+    return pattern.isPrefix ? tag.startsWith(pattern.pattern) : tag === pattern.pattern;
+  });
+}
+
 /**
  * 교차 앱 workflow가 같은 제품에 남아 있어도 요청 repo와 일치하는 App Store
  * Archive만 고른다. 0개나 2개 이상이면 임의 실행하지 않고 fail closed한다.
@@ -123,34 +153,53 @@ function isAppStoreArchive(actions: unknown): boolean {
 export function selectWorkflowForRepository(
   candidates: WorkflowCandidate[],
   repoFullName: string,
-): string {
+  tag: string,
+): WorkflowSelection {
   const matched = candidates.filter(
     (candidate) =>
       candidate.repoFullName === repoFullName &&
       candidate.isEnabled &&
-      isAppStoreArchive(candidate.actions),
+      isAppStoreArchive(candidate.actions) &&
+      matchesManualTagStartCondition(candidate.manualTagStartCondition, tag),
   );
   if (matched.length !== 1) {
     const names = matched.map((candidate) => candidate.name).join(", ") || "없음";
     throw new Error(
-      `Xcode Cloud workflow 선택 실패(repo=${repoFullName}, 일치=${matched.length}, 후보=${names})`,
+      `Xcode Cloud workflow 선택 실패(repo=${repoFullName}, tag=${tag}, 수동 태그 조건 일치=${matched.length}, 후보=${names})`,
     );
   }
-  return matched[0].id;
+  if (!matched[0].repositoryId) {
+    throw new Error(
+      `Xcode Cloud workflow repository ID 없음(repo=${repoFullName}, workflow=${matched[0].name})`,
+    );
+  }
+  return {
+    workflowId: matched[0].id,
+    repositoryId: matched[0].repositoryId,
+  };
 }
 
 /** 제품의 workflow 중 요청 repository와 일치하는 활성 App Store Archive 선택. */
-async function pickWorkflowId(productId: string, repoFullName: string): Promise<string> {
-  const doc = await asc(`/v1/ciProducts/${productId}/workflows?limit=200`);
+async function pickWorkflow(
+  productId: string,
+  repoFullName: string,
+  tag: string,
+): Promise<WorkflowSelection> {
+  const doc = await asc(
+    `/v1/ciProducts/${productId}/workflows?limit=200&` +
+      "fields[ciWorkflows]=name,isEnabled,actions,manualTagStartCondition",
+  );
   const workflows = asArray(doc.data);
   const candidates = await Promise.all(
     workflows.map(async (workflow): Promise<WorkflowCandidate> => {
       let workflowRepo: string | null = null;
+      let repositoryId: string | null = null;
       try {
         const repoDoc = await asc(
           `/v1/ciWorkflows/${encodeURIComponent(workflow.id)}/repository`,
         );
         const repo = asArray(repoDoc.data)[0];
+        repositoryId = repo?.id ?? null;
         const owner = repo?.attributes?.ownerName;
         const name = repo?.attributes?.repositoryName;
         if (typeof owner === "string" && typeof name === "string") {
@@ -166,24 +215,34 @@ async function pickWorkflowId(productId: string, repoFullName: string): Promise<
             ? workflow.attributes.name
             : workflow.id,
         repoFullName: workflowRepo,
+        repositoryId,
         isEnabled: workflow.attributes?.isEnabled === true,
         actions: workflow.attributes?.actions,
+        manualTagStartCondition: workflow.attributes?.manualTagStartCondition,
       };
     }),
   );
-  return selectWorkflowForRepository(candidates, repoFullName);
+  return selectWorkflowForRepository(candidates, repoFullName, tag);
 }
 
-/** 태그 이름 → 제품의 primary repository 상 git reference id. */
-async function resolveTagRefId(productId: string, tag: string): Promise<string> {
-  const repos = await asc(`/v1/ciProducts/${productId}/primaryRepositories?limit=10`);
-  const repoId = asArray(repos.data)[0]?.id;
-  if (!repoId) throw new Error("Xcode Cloud primary repository 없음");
+/** 외부 write 전에 제품·repo·수동 태그 시작 조건을 검증한다. */
+export async function validateXcodeCloudDeploy(opts: {
+  bundleId: string;
+  repoFullName: string;
+  tag: string;
+}): Promise<void> {
+  const productId = await findProductId(opts.bundleId);
+  await pickWorkflow(productId, opts.repoFullName, opts.tag);
+}
 
+/** 태그 이름 → 선택한 workflow repository의 git reference id. */
+async function resolveTagRefId(repositoryId: string, tag: string): Promise<string> {
   return waitForTagRefId(
     tag,
     async () => {
-      const refs = await asc(`/v1/scmRepositories/${repoId}/gitReferences?limit=200`);
+      const refs = await asc(
+        `/v1/scmRepositories/${encodeURIComponent(repositoryId)}/gitReferences?limit=200`,
+      );
       return asArray(refs.data);
     },
   );
@@ -199,10 +258,8 @@ export async function triggerXcodeCloudDeploy(opts: {
   tag: string;
 }): Promise<{ buildRunId: string; buildNumber: number | null }> {
   const productId = await findProductId(opts.bundleId);
-  const [workflowId, refId] = await Promise.all([
-    pickWorkflowId(productId, opts.repoFullName),
-    resolveTagRefId(productId, opts.tag),
-  ]);
+  const selection = await pickWorkflow(productId, opts.repoFullName, opts.tag);
+  const refId = await resolveTagRefId(selection.repositoryId, opts.tag);
 
   const doc = await asc("/v1/ciBuildRuns", {
     method: "POST",
@@ -210,7 +267,9 @@ export async function triggerXcodeCloudDeploy(opts: {
       data: {
         type: "ciBuildRuns",
         relationships: {
-          workflow: { data: { type: "ciWorkflows", id: workflowId } },
+          workflow: {
+            data: { type: "ciWorkflows", id: selection.workflowId },
+          },
           sourceBranchOrTag: { data: { type: "scmGitReferences", id: refId } },
         },
       },
