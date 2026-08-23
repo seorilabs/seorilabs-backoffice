@@ -4,7 +4,7 @@ import { triggerXcodeCloudDeploy } from "@/lib/xcode-cloud/dispatch";
 
 /**
  * Xcode Cloud build를 실행하고 GitHub workflow_run 대신 추적할 ReleaseRecord를 만든다.
- * stable 릴리스와 develop 후보가 같은 외부 실행 원장을 공유한다.
+ * stable 릴리스와 snapshot 후보가 같은 외부 실행 원장을 공유한다.
  */
 export async function dispatchXcodeCloudRelease(opts: {
   repoFullName: string;

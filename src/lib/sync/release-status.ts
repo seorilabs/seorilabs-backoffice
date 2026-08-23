@@ -1,6 +1,6 @@
 import type { ReleaseStatus } from "@prisma/client";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
-import { parseDevelopCandidateTag } from "@/lib/core/develop-candidate";
+import { parseSnapshotCandidateTag } from "@/lib/core/snapshot-candidate";
 
 export function releaseStatusOf(
   status?: string | null,
@@ -12,7 +12,7 @@ export function releaseStatusOf(
   return "FAILED";
 }
 
-/** develop 후보·untagged 빌드는 배포 기록만 남기고 정식 출시 단계는 전이하지 않는다. */
+/** snapshot 후보·untagged 빌드는 배포 기록만 남기고 정식 출시 단계는 전이하지 않는다. */
 export function shouldAdvanceLifecycleForRelease(
   status: ReleaseStatus,
   version: string,
@@ -27,5 +27,5 @@ export function releaseTrackForWorkflow(input: {
 }): string | null {
   if (input.market !== "PLAY") return null;
   if (input.promoted) return "production";
-  return parseDevelopCandidateTag(input.version) ? "internal" : null;
+  return parseSnapshotCandidateTag(input.version) ? "internal" : null;
 }

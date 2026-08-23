@@ -49,8 +49,8 @@ export const DISCORD_COMMANDS = [
     ],
   },
   {
-    name: "develop",
-    description: "develop 후보를 등록된 내부 테스트 채널에 빌드·배포",
+    name: "snapshot",
+    description: "main snapshot을 등록된 내부 테스트 채널에 빌드·배포",
     type: 1,
     options: [appOption],
   },

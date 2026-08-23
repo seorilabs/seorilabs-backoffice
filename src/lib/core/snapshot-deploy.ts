@@ -12,25 +12,26 @@ import {
 } from "@/lib/github/write";
 import { marketVersionFloorFromConfigs } from "@/lib/core/market-version-floor";
 import {
-  buildDevelopMarketInputs,
-  DEVELOP_DEPLOY_TARGET_KO,
-  developDeployTargetsFor,
-  nextDevelopCandidateTag,
-  parseDevelopCandidateTag,
-  resolveDevelopDeployDispatchRef,
-  resolveDevelopCandidateBase,
-  type DevelopDeployTarget,
-} from "@/lib/core/develop-candidate";
+  assertSnapshotDefaultBranch,
+  buildSnapshotMarketInputs,
+  SNAPSHOT_BRANCH,
+  SNAPSHOT_DEPLOY_TARGET_KO,
+  snapshotDeployTargetsFor,
+  nextSnapshotCandidateTag,
+  parseSnapshotCandidateTag,
+  resolveSnapshotDeployDispatchRef,
+  resolveSnapshotCandidateBase,
+  type SnapshotDeployTarget,
+} from "@/lib/core/snapshot-candidate";
 import { isXcodeCloudRepo } from "@/lib/xcode-cloud/dispatch";
 import { dispatchXcodeCloudRelease } from "@/lib/xcode-cloud/release";
 
-export const DEVELOP_BRANCH = "develop";
-export const DEVELOP_AIT_WORKFLOW = "deploy-apps-in-toss.yml";
-export const DEVELOP_PLAY_WORKFLOW = "deploy-google-play.yml";
+export const SNAPSHOT_AIT_WORKFLOW = "deploy-apps-in-toss.yml";
+export const SNAPSHOT_PLAY_WORKFLOW = "deploy-google-play.yml";
 
-const GITHUB_WORKFLOW: Partial<Record<DevelopDeployTarget, string>> = {
-  AIT: DEVELOP_AIT_WORKFLOW,
-  PLAY: DEVELOP_PLAY_WORKFLOW,
+const GITHUB_WORKFLOW: Partial<Record<SnapshotDeployTarget, string>> = {
+  AIT: SNAPSHOT_AIT_WORKFLOW,
+  PLAY: SNAPSHOT_PLAY_WORKFLOW,
 };
 
 type JsonObject = Record<string, unknown>;
@@ -42,8 +43,8 @@ interface GithubDeployPlan {
   inputs: Record<string, string>;
 }
 
-export interface DevelopDeployDestination {
-  target: DevelopDeployTarget;
+export interface SnapshotDeployDestination {
+  target: SnapshotDeployTarget;
   label: string;
   url?: string;
   xcodeCloudBuild?: number | null;
@@ -56,25 +57,25 @@ function object(value: unknown): JsonObject | null {
 }
 
 function sameTargets(
-  left: readonly DevelopDeployTarget[],
-  right: readonly DevelopDeployTarget[],
+  left: readonly SnapshotDeployTarget[],
+  right: readonly SnapshotDeployTarget[],
 ): boolean {
   return left.length === right.length &&
     left.every((value, index) => value === right[index]);
 }
 
-function assertDevelopTargets(
+function assertSnapshotTargets(
   repoFullName: string,
   marketTargets: unknown,
   iosBundle?: string | null,
-): DevelopDeployTarget[] {
-  const targets = developDeployTargetsFor(marketTargets);
-  const requiredTargets: DevelopDeployTarget[] = ["AIT", "PLAY", "TESTFLIGHT"];
+): SnapshotDeployTarget[] {
+  const targets = snapshotDeployTargetsFor(marketTargets);
+  const requiredTargets: SnapshotDeployTarget[] = ["AIT", "PLAY", "TESTFLIGHT"];
   const missing = requiredTargets.filter((target) => !targets.includes(target));
   if (missing.length > 0) {
     throw new Error(
-      `${repoFullName}의 develop 후보 배포 대상이 부족합니다: ${missing
-        .map((target) => DEVELOP_DEPLOY_TARGET_KO[target])
+      `${repoFullName}의 snapshot 후보 배포 대상이 부족합니다: ${missing
+        .map((target) => SNAPSHOT_DEPLOY_TARGET_KO[target])
         .join(", ")}`,
     );
   }
@@ -94,13 +95,13 @@ function assertDevelopTargets(
 async function candidateBaseContext(repoFullName: string) {
   const [tags, googlePlay, appStore, packageJson] = await Promise.all([
     listRepositoryTags(repoFullName),
-    getRepoJsonFile(repoFullName, "play-store/google-play.config.json", DEVELOP_BRANCH),
-    getRepoJsonFile(repoFullName, "app-store/app-store.config.json", DEVELOP_BRANCH),
-    getRepoJsonFile(repoFullName, "package.json", DEVELOP_BRANCH),
+    getRepoJsonFile(repoFullName, "play-store/google-play.config.json", SNAPSHOT_BRANCH),
+    getRepoJsonFile(repoFullName, "app-store/app-store.config.json", SNAPSHOT_BRANCH),
+    getRepoJsonFile(repoFullName, "package.json", SNAPSHOT_BRANCH),
   ]);
   const packageVersion = object(packageJson)?.version;
   const marketFloor = marketVersionFloorFromConfigs({ googlePlay, appStore });
-  const baseTag = resolveDevelopCandidateBase({
+  const baseTag = resolveSnapshotCandidateBase({
     tags: tags.map((tag) => tag.name),
     marketFloor,
     packageVersion,
@@ -110,13 +111,12 @@ async function candidateBaseContext(repoFullName: string) {
 
 async function prepareGithubDeployPlans(opts: {
   repoFullName: string;
-  defaultBranch: string;
-  targets: readonly DevelopDeployTarget[];
+  targets: readonly SnapshotDeployTarget[];
   tag: string;
   sha: string;
 }): Promise<GithubDeployPlan[]> {
-  if (!parseDevelopCandidateTag(opts.tag)) {
-    throw new Error(`develop 후보 태그 형식이 아닙니다: ${opts.tag}`);
+  if (!parseSnapshotCandidateTag(opts.tag)) {
+    throw new Error(`snapshot 후보 태그 형식이 아닙니다: ${opts.tag}`);
   }
 
   return Promise.all(
@@ -124,37 +124,23 @@ async function prepareGithubDeployPlans(opts: {
       .filter((target): target is "AIT" | "PLAY" => target !== "TESTFLIGHT")
       .map(async (target) => {
         const workflowFile = GITHUB_WORKFLOW[target];
-        if (!workflowFile) throw new Error(`develop 배포 workflow가 없습니다: ${target}`);
-        // workflow_dispatch API 진입점은 기본 브랜치에, 실제 실행 정의는 후보가 가리킬
-        // develop에 모두 있어야 한다. 입력 검증도 실제 실행 ref와 같은 develop 정의를 쓴다.
-        const defaultWorkflow = await getWorkflowDispatchContract(
+        if (!workflowFile) throw new Error(`snapshot 배포 workflow가 없습니다: ${target}`);
+        // workflow_dispatch API 진입점과 후보 소스 정의를 main에서 검증한 뒤,
+        // main SHA에 붙인 snapshot 태그로 실행 ref를 고정한다.
+        const workflow = await getWorkflowDispatchContract(
           opts.repoFullName,
           workflowFile,
-          opts.defaultBranch,
+          SNAPSHOT_BRANCH,
         );
-        if (!defaultWorkflow.dispatchable) {
-          throw new Error(
-            `${opts.defaultBranch}의 ${workflowFile}에 workflow_dispatch가 없습니다.`,
-          );
-        }
-        const workflow = opts.defaultBranch === DEVELOP_BRANCH
-          ? defaultWorkflow
-          : await getWorkflowDispatchContract(
-            opts.repoFullName,
-            workflowFile,
-            DEVELOP_BRANCH,
-          );
         if (!workflow.dispatchable) {
           throw new Error(
-            `${DEVELOP_BRANCH}의 ${workflowFile}에 workflow_dispatch가 없습니다.`,
+            `${SNAPSHOT_BRANCH}의 ${workflowFile}에 workflow_dispatch가 없습니다.`,
           );
         }
-        const dispatchRef = resolveDevelopDeployDispatchRef(
-          opts.defaultBranch,
-          workflow.inputNames,
+        const dispatchRef = resolveSnapshotDeployDispatchRef(
           opts.tag,
         );
-        const inputs = buildDevelopMarketInputs(
+        const inputs = buildSnapshotMarketInputs(
           target,
           workflow.inputNames,
           opts.tag,
@@ -166,63 +152,63 @@ async function prepareGithubDeployPlans(opts: {
   );
 }
 
-export interface DevelopDeployPreview {
-  branch: typeof DEVELOP_BRANCH;
+export interface SnapshotDeployPreview {
+  branch: typeof SNAPSHOT_BRANCH;
   sha: string;
   tag: string;
-  targets: DevelopDeployTarget[];
-  destinations: DevelopDeployDestination[];
+  targets: SnapshotDeployTarget[];
+  destinations: SnapshotDeployDestination[];
 }
 
-/** 외부 write 전 develop HEAD와 모든 테스트 배포 caller를 검증한다. */
-export async function previewDevelopDeploy(
+/** 외부 write 전 main HEAD와 모든 테스트 배포 caller를 검증한다. */
+export async function previewSnapshotDeploy(
   repoFullName: string,
   options: { marketTargets: unknown; iosBundle?: string | null },
-): Promise<DevelopDeployPreview> {
-  const targets = assertDevelopTargets(
+): Promise<SnapshotDeployPreview> {
+  const targets = assertSnapshotTargets(
     repoFullName,
     options.marketTargets,
     options.iosBundle,
   );
   const defaultBranch = await getRepoDefaultBranch(repoFullName);
+  assertSnapshotDefaultBranch(defaultBranch);
   const [sha, context] = await Promise.all([
-    resolveRefSha(repoFullName, DEVELOP_BRANCH),
+    resolveRefSha(repoFullName, SNAPSHOT_BRANCH),
     candidateBaseContext(repoFullName),
   ]);
-  const tag = nextDevelopCandidateTag(
+  const tag = nextSnapshotCandidateTag(
     context.baseTag,
     context.tags.map((item) => item.name),
   );
   const plans = await prepareGithubDeployPlans({
     repoFullName,
-    defaultBranch,
     targets,
     tag,
     sha,
   });
   return {
-    branch: DEVELOP_BRANCH,
+    branch: SNAPSHOT_BRANCH,
     sha,
     tag,
     targets,
     destinations: [
       ...plans.map((plan) => ({
         target: plan.target,
-        label: DEVELOP_DEPLOY_TARGET_KO[plan.target],
+        label: SNAPSHOT_DEPLOY_TARGET_KO[plan.target],
         url: `https://github.com/${repoFullName}/actions/workflows/${plan.workflowFile}`,
       })),
       ...(targets.includes("TESTFLIGHT")
-        ? [{ target: "TESTFLIGHT" as const, label: DEVELOP_DEPLOY_TARGET_KO.TESTFLIGHT }]
+        ? [{ target: "TESTFLIGHT" as const, label: SNAPSHOT_DEPLOY_TARGET_KO.TESTFLIGHT }]
         : []),
     ],
   };
 }
 
-/** 확인된 develop SHA에 후보 태그를 붙인 뒤 등록된 모든 내부 테스트 채널을 실행한다. */
-export async function createAndDispatchDevelopDeploy(opts: {
+/** 확인된 main SHA에 후보 태그를 붙인 뒤 등록된 모든 내부 테스트 채널을 실행한다. */
+export async function createAndDispatchSnapshotDeploy(opts: {
   repoFullName: string;
   expectedSha: string;
-  expectedTargets: readonly DevelopDeployTarget[];
+  expectedTargets: readonly SnapshotDeployTarget[];
   marketTargets: unknown;
   iosBundle?: string | null;
   tag: string;
@@ -231,13 +217,13 @@ export async function createAndDispatchDevelopDeploy(opts: {
   tag: string;
   sha: string;
   created: boolean;
-  destinations: DevelopDeployDestination[];
+  destinations: SnapshotDeployDestination[];
 }> {
-  if (!parseDevelopCandidateTag(opts.tag)) {
-    throw new Error(`develop 후보 태그 형식이 아닙니다: ${opts.tag}`);
+  if (!parseSnapshotCandidateTag(opts.tag)) {
+    throw new Error(`snapshot 후보 태그 형식이 아닙니다: ${opts.tag}`);
   }
 
-  const currentTargets = assertDevelopTargets(
+  const currentTargets = assertSnapshotTargets(
     opts.repoFullName,
     opts.marketTargets,
     opts.iosBundle,
@@ -246,18 +232,18 @@ export async function createAndDispatchDevelopDeploy(opts: {
     throw new Error("확인 후 테스트 배포 대상이 변경됐습니다. 다시 요청해 확인하세요.");
   }
 
-  const currentSha = await resolveRefSha(opts.repoFullName, DEVELOP_BRANCH);
+  const currentSha = await resolveRefSha(opts.repoFullName, SNAPSHOT_BRANCH);
   if (currentSha !== opts.expectedSha) {
     throw new Error(
-      `develop HEAD가 ${opts.expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
+      `main HEAD가 ${opts.expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
     );
   }
 
   const defaultBranch = await getRepoDefaultBranch(opts.repoFullName);
+  assertSnapshotDefaultBranch(defaultBranch);
   // 태그를 만들기 전에 GitHub caller의 dispatch/input 계약을 모두 검증한다.
   const plans = await prepareGithubDeployPlans({
     repoFullName: opts.repoFullName,
-    defaultBranch,
     targets: currentTargets,
     tag: opts.tag,
     sha: opts.expectedSha,
@@ -271,11 +257,11 @@ export async function createAndDispatchDevelopDeploy(opts: {
   await prisma.auditLog.create({
     data: {
       actorLogin: opts.actorLabel ?? null,
-      action: "develop.candidate.tag.create",
+      action: "snapshot.candidate.tag.create",
       entityType: "release-candidate",
       entityId: `${opts.repoFullName}@${opts.tag}`,
       payload: {
-        branch: DEVELOP_BRANCH,
+        branch: SNAPSHOT_BRANCH,
         tag: opts.tag,
         sha: opts.expectedSha,
         targets: currentTargets,
@@ -284,7 +270,7 @@ export async function createAndDispatchDevelopDeploy(opts: {
     },
   }).catch(() => {});
 
-  const destinations: DevelopDeployDestination[] = [];
+  const destinations: SnapshotDeployDestination[] = [];
   const failures: string[] = [];
   for (const plan of plans) {
     try {
@@ -296,17 +282,17 @@ export async function createAndDispatchDevelopDeploy(opts: {
       });
       destinations.push({
         target: plan.target,
-        label: DEVELOP_DEPLOY_TARGET_KO[plan.target],
+        label: SNAPSHOT_DEPLOY_TARGET_KO[plan.target],
         url: `https://github.com/${opts.repoFullName}/actions/workflows/${plan.workflowFile}`,
       });
-      await recordDevelopDispatch(opts, {
+      await recordSnapshotDispatch(opts, {
         target: plan.target,
         workflowFile: plan.workflowFile,
         dispatchRef: plan.dispatchRef,
       });
     } catch (error) {
       failures.push(
-        `${DEVELOP_DEPLOY_TARGET_KO[plan.target]}: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
+        `${SNAPSHOT_DEPLOY_TARGET_KO[plan.target]}: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
       );
     }
   }
@@ -320,17 +306,17 @@ export async function createAndDispatchDevelopDeploy(opts: {
       });
       destinations.push({
         target: "TESTFLIGHT",
-        label: DEVELOP_DEPLOY_TARGET_KO.TESTFLIGHT,
+        label: SNAPSHOT_DEPLOY_TARGET_KO.TESTFLIGHT,
         xcodeCloudBuild: run.buildNumber,
       });
-      await recordDevelopDispatch(opts, {
+      await recordSnapshotDispatch(opts, {
         target: "TESTFLIGHT",
         xcodeCloudBuild: run.buildNumber,
         externalRunId: run.buildRunId,
       });
     } catch (error) {
       failures.push(
-        `${DEVELOP_DEPLOY_TARGET_KO.TESTFLIGHT}: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
+        `${SNAPSHOT_DEPLOY_TARGET_KO.TESTFLIGHT}: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
       );
     }
   }
@@ -338,14 +324,14 @@ export async function createAndDispatchDevelopDeploy(opts: {
   if (failures.length > 0) {
     const succeeded = destinations.map((item) => item.label).join(", ") || "없음";
     throw new Error(
-      `develop 후보 ${opts.tag} 일부 트리거 실패 (성공: ${succeeded}; 실패: ${failures.join(" / ")})`,
+      `snapshot 후보 ${opts.tag} 일부 트리거 실패 (성공: ${succeeded}; 실패: ${failures.join(" / ")})`,
     );
   }
 
   return { tag: opts.tag, sha: opts.expectedSha, created, destinations };
 }
 
-async function recordDevelopDispatch(
+async function recordSnapshotDispatch(
   opts: {
     repoFullName: string;
     tag: string;
@@ -357,11 +343,11 @@ async function recordDevelopDispatch(
   await prisma.auditLog.create({
     data: {
       actorLogin: opts.actorLabel ?? null,
-      action: "develop.deploy.dispatch",
+      action: "snapshot.deploy.dispatch",
       entityType: "release-candidate",
       entityId: `${opts.repoFullName}@${opts.tag}`,
       payload: {
-        branch: DEVELOP_BRANCH,
+        branch: SNAPSHOT_BRANCH,
         tag: opts.tag,
         sha: opts.expectedSha,
         ...payload,

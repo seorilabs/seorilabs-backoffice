@@ -22,9 +22,9 @@ import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 import { handleDiscordChat } from "@/lib/discord/chat";
 import { registerTeammateFinding } from "@/lib/discord/teammate-patrol";
 import {
-  createAndDispatchDevelopDeploy,
-  previewDevelopDeploy,
-} from "@/lib/core/develop-deploy";
+  createAndDispatchSnapshotDeploy,
+  previewSnapshotDeploy,
+} from "@/lib/core/snapshot-deploy";
 import {
   createDiscordChannelMessage,
   editDiscordChannelMessage,
@@ -340,17 +340,17 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       );
       return { summary: `릴리즈 ${result.tag} 생성`, messageId };
     }
-    case "develop_preview": {
+    case "snapshot_preview": {
       const app = await appForRun(run);
-      const preview = await previewDevelopDeploy(app.repoFullName, {
+      const preview = await previewSnapshotDeploy(app.repoFullName, {
         marketTargets: app.marketTargets,
         iosBundle: app.iosBundle,
       });
       const targetLabels = preview.destinations.map((item) => item.label).join(", ");
       const messageId = await showRun(
         run,
-        `⚠️ **${app.displayName}** develop 후보를 내부 테스트 채널에 빌드·배포합니다.\n` +
-          `develop@${preview.sha.slice(0, 7)} → **${preview.tag}**\n` +
+        `⚠️ **${app.displayName}** main snapshot을 내부 테스트 채널에 빌드·배포합니다.\n` +
+          `main@${preview.sha.slice(0, 7)} → **${preview.tag}**\n` +
           `대상: **${targetLabels}**\n` +
           "GitHub Release와 출시노트는 만들지 않습니다. 계속할까요?",
         confirmationRows(run.id),
@@ -358,7 +358,7 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       await prisma.operatorCommandRun.update({
         where: { id: run.id },
         data: {
-          operation: "develop_deploy",
+          operation: "snapshot_deploy",
           params: { tag: preview.tag, sha: preview.sha, targets: preview.targets },
           status: "AWAITING_CONFIRMATION",
           attempts: 0,
@@ -368,11 +368,11 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
         },
       });
-      return { summary: `develop 후보 ${preview.tag} 확인 대기`, awaiting: true, messageId };
+      return { summary: `snapshot 후보 ${preview.tag} 확인 대기`, awaiting: true, messageId };
     }
-    case "develop_deploy": {
+    case "snapshot_deploy": {
       const app = await appForRun(run);
-      const result = await createAndDispatchDevelopDeploy({
+      const result = await createAndDispatchSnapshotDeploy({
         repoFullName: app.repoFullName,
         expectedSha: stringValue(params, "sha"),
         expectedTargets: stringArrayValue(params, "targets") as Array<
@@ -389,10 +389,10 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       });
       const messageId = await showRun(
         run,
-        `🚧 **${app.displayName} ${result.tag}** develop 내부 테스트 빌드·배포 트리거 완료\n` +
+        `🚧 **${app.displayName} ${result.tag}** snapshot 내부 테스트 빌드·배포 트리거 완료\n` +
           destinationLines.join("\n"),
       );
-      return { summary: `develop 후보 ${result.tag} 배포 트리거`, messageId };
+      return { summary: `snapshot 후보 ${result.tag} 배포 트리거`, messageId };
     }
     case "deploy": {
       const app = await appForRun(run);
@@ -594,7 +594,7 @@ export async function maintainOperatorCommands(now = new Date()) {
 
 const OPERATION_KO: Record<string, string> = {
   deploy: "배포 트리거",
-  develop_deploy: "develop 후보 빌드·배포",
+  snapshot_deploy: "snapshot 후보 빌드·배포",
   index: "볼트 재인덱싱",
   release_create: "릴리즈 태그 생성",
   play_promote: "Google Play 프로덕션 승격",
