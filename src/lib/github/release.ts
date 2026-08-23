@@ -17,6 +17,20 @@ export interface VersionTag {
   sha: string;
 }
 
+/** stable·후보·레거시를 포함한 전체 태그. 후보 순번 충돌 방지에 사용한다. */
+export async function listRepositoryTags(
+  repoFullName: string,
+): Promise<VersionTag[]> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const tags = await octokit.paginate(octokit.rest.repos.listTags, {
+    owner,
+    repo,
+    per_page: 100,
+  });
+  return tags.map((tag) => ({ name: tag.name, sha: tag.commit.sha }));
+}
+
 /** stable SemVer(vX.Y.Z) 태그 목록(내림차순). */
 export async function listVersionTags(
   repoFullName: string,

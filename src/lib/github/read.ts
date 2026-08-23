@@ -1,5 +1,3 @@
-import { parse as parseYaml } from "yaml";
-
 import { getInstallationOctokit } from "@/lib/github/app";
 import { env } from "@/lib/env";
 import {
@@ -7,21 +5,34 @@ import {
   BUILD_TARGETS,
   type BuildTarget,
 } from "@/lib/core/build-targets";
+import {
+  parseWorkflowDispatchContract,
+  type WorkflowDispatchContract,
+} from "@/lib/github/workflow-dispatch";
+
+export { parseWorkflowDispatchContract } from "@/lib/github/workflow-dispatch";
+export type { WorkflowDispatchContract } from "@/lib/github/workflow-dispatch";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
   return { owner, repo };
 }
 
-/** 기본 브랜치의 repo-local JSON 원장. 파일 없음은 null, 권한/네트워크 오류는 throw. */
+/** 지정 ref(미지정 시 기본 브랜치)의 repo-local JSON. 파일 없음은 null, 다른 오류는 throw. */
 export async function getRepoJsonFile(
   repoFullName: string,
   path: string,
+  ref?: string,
 ): Promise<unknown | null> {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
   try {
-    const res = await octokit.rest.repos.getContent({ owner, repo, path });
+    const res = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path,
+      ...(ref ? { ref } : {}),
+    });
     const data = res.data as { content?: string; encoding?: string };
     if (!data.content) return null;
     const text = Buffer.from(
@@ -106,6 +117,15 @@ export async function getWorkflowDispatchInputNames(
   workflowFile: string,
   ref?: string,
 ): Promise<Set<string>> {
+  return (await getWorkflowDispatchContract(repoFullName, workflowFile, ref)).inputNames;
+}
+
+/** 실제 dispatch ref의 workflow_dispatch 존재 여부와 선언 입력을 함께 읽는다. */
+export async function getWorkflowDispatchContract(
+  repoFullName: string,
+  workflowFile: string,
+  ref?: string,
+): Promise<WorkflowDispatchContract> {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
   const res = await octokit.rest.repos.getContent({
@@ -122,11 +142,7 @@ export async function getWorkflowDispatchInputNames(
     data.content,
     data.encoding === "base64" ? "base64" : "utf8",
   ).toString("utf8");
-  const doc = parseYaml(text) as
-    | { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } }
-    | null;
-  const inputs = doc?.on?.workflow_dispatch?.inputs ?? {};
-  return new Set(Object.keys(inputs));
+  return parseWorkflowDispatchContract(text);
 }
 
 // 분해 에이전트용: 이슈 본문을 GitHub 에서 직접 읽는다(미러에 body 컬럼 없음).

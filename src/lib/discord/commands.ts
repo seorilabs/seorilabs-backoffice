@@ -48,6 +48,12 @@ export const DISCORD_COMMANDS = [
       },
     ],
   },
+  {
+    name: "develop",
+    description: "develop 후보 태그로 AppsInToss 빌드·배포",
+    type: 1,
+    options: [appOption],
+  },
   { name: "save", description: "Obsidian 받은함에 메모 저장", type: 1 },
   { name: "index", description: "Obsidian 볼트 즉시 재인덱싱", type: 1 },
   { name: "ask", description: "백오피스 AI에게 질문", type: 1 },
