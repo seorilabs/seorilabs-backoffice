@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 const CONFIRMATION_REQUIRED_OPERATIONS = new Set([
   "release_create",
   "deploy",
-  "develop_deploy",
+  "snapshot_deploy",
   "index",
   "play_promote",
   "appstore_review_submit",

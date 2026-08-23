@@ -164,8 +164,8 @@ flowchart LR
 ## 5. 버전 source of truth
 
 - **태그가 기준.** `vMAJOR.MINOR.PATCH`(stable SemVer)만 허용.
-- Discord `/develop app`은 예외적으로 `develop` HEAD에 `vMAJOR.MINOR.PATCH-develop.N` 후보 태그를 붙여 세 테스트 채널을 한 번에 트리거한다. AppsInToss는 후보 배포, Google Play는 `internal/completed`, iOS는 GitHub macOS가 아니라 Xcode Cloud의 TestFlight 내부 테스트 경로를 사용한다. 세 마켓이 모두 등록되지 않은 앱은 일부 성공을 완료처럼 보이지 않도록 실행 전에 중단한다. GitHub caller는 API 진입점인 기본 브랜치와 실제 후보 소스인 `develop`에 모두 존재해야 하며, 실행 ref는 후보 태그로 고정해 `workflow_run`이 후보 버전을 정확히 기록하게 한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
-- 후보 태그를 받는 앱 저장소의 배포 계약은 prerelease ref를 checkout할 수 있어야 한다. Android는 후보마다 Play의 기존 값보다 큰 고유 `versionCode`를 만들어야 하고, iOS는 `vX.Y.Z-develop.N`에서 `CFBundleShortVersionString=X.Y.Z`와 단조 증가 `CFBundleVersion`을 분리해야 한다. stable 태그만 허용하는 repo-local resolver/Xcode Cloud preflight는 후보 배포 전에 해당 저장소에서 먼저 확장한다.
+- Discord `/snapshot app`은 `main` HEAD에 `vMAJOR.MINOR.PATCH-snapshot.N` 후보 태그를 붙여 세 테스트 채널을 한 번에 트리거한다. AppsInToss는 후보 배포, Google Play는 `internal/completed`, iOS는 GitHub macOS가 아니라 Xcode Cloud의 TestFlight 내부 테스트 경로를 사용한다. 세 마켓이 모두 등록되지 않은 앱은 일부 성공을 완료처럼 보이지 않도록 실행 전에 중단한다. 저장소의 기본 브랜치와 후보 소스는 모두 `main`이어야 하며, 실행 ref는 후보 태그로 고정해 `workflow_run`이 후보 버전을 정확히 기록하게 한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
+- 후보 태그를 받는 앱 저장소의 배포 계약은 prerelease ref를 checkout할 수 있어야 한다. Android는 후보마다 Play의 기존 값보다 큰 고유 `versionCode`를 만들어야 하고, iOS는 `vX.Y.Z-snapshot.N`에서 `CFBundleShortVersionString=X.Y.Z`와 단조 증가 `CFBundleVersion`을 분리해야 한다. stable 태그만 허용하는 repo-local resolver/Xcode Cloud preflight는 후보 배포 전에 해당 저장소에서 먼저 확장한다.
 - RN: `scripts/resolve-release-version.mjs`가 태그에서 `version_name`, `android_version_code`(세그먼트 base 1000), `apple_marketing_version`, `apple_build_number`를 파생. (happy-farm/crossword 검증됨)
 - Godot: `play-store/google-play.config.json`의 `release.versionName/versionCode`를 읽고 태그(`v$versionName`)와 일치 검증.(lucid-chess)
 - → 표준 리졸버를 org 공통 스크립트로 승격(템플릿에 포함). 마켓별 versionCode/buildNumber 충돌은 업로드 직전 검증.

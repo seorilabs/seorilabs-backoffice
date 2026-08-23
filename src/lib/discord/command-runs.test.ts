@@ -9,7 +9,7 @@ test("되돌리기 어렵거나 외부에 공개되는 작업만 명시 확인�
   for (const operation of [
     "release_create",
     "deploy",
-    "develop_deploy",
+    "snapshot_deploy",
     "index",
     "play_promote",
     "appstore_review_submit",
@@ -20,7 +20,7 @@ test("되돌리기 어렵거나 외부에 공개되는 작업만 명시 확인�
   // 심사 생성·삭제·상태 조회는 같은 카드에서 되돌릴 수 있어 즉시 실행한다.
   for (const operation of [
     "release_preview",
-    "develop_preview",
+    "snapshot_preview",
     "plan_generate",
     "appstore_review_create",
     "appstore_review_remove",

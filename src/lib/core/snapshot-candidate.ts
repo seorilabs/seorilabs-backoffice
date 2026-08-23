@@ -5,32 +5,66 @@ import {
 } from "@/lib/core/stable-semver";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 
-const DEVELOP_CANDIDATE_RE =
-  /^(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-develop\.([1-9]\d*)$/;
+const SNAPSHOT_CANDIDATE_RE =
+  /^(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-snapshot\.([1-9]\d*)$/;
 
-export type DevelopDeployTarget = "AIT" | "PLAY" | "TESTFLIGHT";
+export const SNAPSHOT_BRANCH = "main";
 
-export const DEVELOP_DEPLOY_TARGET_KO: Record<DevelopDeployTarget, string> = {
+export function assertSnapshotDefaultBranch(
+  defaultBranch: string,
+): asserts defaultBranch is typeof SNAPSHOT_BRANCH {
+  if (defaultBranch !== SNAPSHOT_BRANCH) {
+    throw new Error(
+      `기본 브랜치가 ${SNAPSHOT_BRANCH}이 아닙니다: ${defaultBranch}`,
+    );
+  }
+}
+
+export type SnapshotDeployTarget = "AIT" | "PLAY" | "TESTFLIGHT";
+
+export const SNAPSHOT_DEPLOY_TARGET_KO: Record<SnapshotDeployTarget, string> = {
   AIT: "AppsInToss",
   PLAY: "Google Play 내부 테스트",
   TESTFLIGHT: "TestFlight 내부 테스트",
 };
+
+export function assertSnapshotTargetsUnchanged(
+  expectedTargets: readonly SnapshotDeployTarget[],
+  currentTargets: readonly SnapshotDeployTarget[],
+): void {
+  const unchanged = expectedTargets.length === currentTargets.length &&
+    expectedTargets.every((value, index) => value === currentTargets[index]);
+  if (!unchanged) {
+    throw new Error("확인 후 테스트 배포 대상이 변경됐습니다. 다시 요청해 확인하세요.");
+  }
+}
+
+export function assertSnapshotShaUnchanged(
+  expectedSha: string,
+  currentSha: string,
+): void {
+  if (currentSha !== expectedSha) {
+    throw new Error(
+      `main HEAD가 ${expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
+    );
+  }
+}
 
 function optionalStableTag(value: unknown): string | null {
   if (typeof value !== "string" || !parseStableSemVerTag(value)) return null;
   return normalizeStableSemVerTag(value);
 }
 
-export function parseDevelopCandidateTag(
+export function parseSnapshotCandidateTag(
   raw: string,
 ): { baseTag: string; sequence: number } | null {
-  const match = raw.match(DEVELOP_CANDIDATE_RE);
+  const match = raw.match(SNAPSHOT_CANDIDATE_RE);
   if (!match) return null;
   return { baseTag: match[1], sequence: Number(match[2]) };
 }
 
-/** 태그·마켓 원장·develop package.json 중 가장 높은 stable SemVer를 후보 기준으로 쓴다. */
-export function resolveDevelopCandidateBase(input: {
+/** 태그·마켓 원장·main package.json 중 가장 높은 stable SemVer를 후보 기준으로 쓴다. */
+export function resolveSnapshotCandidateBase(input: {
   tags: readonly string[];
   marketFloor?: string | null;
   packageVersion?: unknown;
@@ -45,28 +79,28 @@ export function resolveDevelopCandidateBase(input: {
   const base = candidates.sort((a, b) => compareStableSemVerTags(b, a))[0];
   if (!base) {
     throw new Error(
-      "stable SemVer 태그나 develop package.json version이 없어 후보 버전을 계산할 수 없습니다.",
+      "stable SemVer 태그나 main package.json version이 없어 후보 버전을 계산할 수 없습니다.",
     );
   }
   return base;
 }
 
-export function nextDevelopCandidateTag(
+export function nextSnapshotCandidateTag(
   baseTag: string,
   existingTags: readonly string[],
 ): string {
   const normalizedBase = normalizeStableSemVerTag(baseTag);
   let latestSequence = 0;
   for (const tag of existingTags) {
-    const parsed = parseDevelopCandidateTag(tag);
+    const parsed = parseSnapshotCandidateTag(tag);
     if (parsed?.baseTag === normalizedBase) {
       latestSequence = Math.max(latestSequence, parsed.sequence);
     }
   }
-  return `${normalizedBase}-develop.${latestSequence + 1}`;
+  return `${normalizedBase}-snapshot.${latestSequence + 1}`;
 }
 
-export function buildDevelopDeployInputs(
+export function buildSnapshotDeployInputs(
   declaredInputs: ReadonlySet<string>,
   tag: string,
   sha: string,
@@ -74,25 +108,25 @@ export function buildDevelopDeployInputs(
   const inputs: Record<string, string> = {};
   if (declaredInputs.has("release_tag")) inputs.release_tag = tag;
   if (declaredInputs.has("memo")) {
-    inputs.memo = `develop candidate ${tag} (${sha.slice(0, 7)})`;
+    inputs.memo = `snapshot candidate ${tag} (${sha.slice(0, 7)})`;
   }
   // 레거시 caller가 배포 뒤 별도 순번 태그를 만드는 경우 후보 태그와 이중 기록되지 않게 막는다.
   if (declaredInputs.has("create_release_tag")) inputs.create_release_tag = "false";
   return inputs;
 }
 
-export function buildDevelopMarketInputs(
+export function buildSnapshotMarketInputs(
   target: "AIT" | "PLAY",
   declaredInputs: ReadonlySet<string>,
   tag: string,
   sha: string,
   context: { repoFullName: string; workflowFile: string },
 ): Record<string, string> {
-  const inputs = buildDevelopDeployInputs(declaredInputs, tag, sha);
+  const inputs = buildSnapshotDeployInputs(declaredInputs, tag, sha);
   if (target !== "PLAY") return inputs;
 
-  const parsed = parseDevelopCandidateTag(tag);
-  if (!parsed) throw new Error(`develop 후보 태그 형식이 아닙니다: ${tag}`);
+  const parsed = parseSnapshotCandidateTag(tag);
+  if (!parsed) throw new Error(`snapshot 후보 태그 형식이 아닙니다: ${tag}`);
   Object.assign(
     inputs,
     buildGooglePlayUploadInputs(declaredInputs, tag, context),
@@ -105,14 +139,14 @@ export function buildDevelopMarketInputs(
   return inputs;
 }
 
-/** 앱 레지스트리의 실제 배포 가능 마켓만 develop 테스트 배포 대상으로 사용한다. */
-export function developDeployTargetsFor(
+/** 앱 레지스트리의 실제 배포 가능 마켓만 snapshot 테스트 배포 대상으로 사용한다. */
+export function snapshotDeployTargetsFor(
   marketTargets: unknown,
-): DevelopDeployTarget[] {
+): SnapshotDeployTarget[] {
   const values = Array.isArray(marketTargets)
     ? new Set(marketTargets.filter((value): value is string => typeof value === "string"))
     : new Set<string>();
-  const targets: DevelopDeployTarget[] = [];
+  const targets: SnapshotDeployTarget[] = [];
   if (values.has("ait")) targets.push("AIT");
   if (values.has("play")) targets.push("PLAY");
   if (values.has("appstore")) targets.push("TESTFLIGHT");
@@ -120,9 +154,7 @@ export function developDeployTargetsFor(
 }
 
 /** workflow_run이 후보 버전을 식별하도록 실제 실행 ref를 후보 태그로 고정한다. */
-export function resolveDevelopDeployDispatchRef(
-  _defaultBranch: string,
-  _declaredInputs: ReadonlySet<string>,
+export function resolveSnapshotDeployDispatchRef(
   tag: string,
 ): string {
   return tag;

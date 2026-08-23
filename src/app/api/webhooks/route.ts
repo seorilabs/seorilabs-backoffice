@@ -108,7 +108,7 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       const ref = p.ref ?? "";
       if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
         const version = ref.slice("refs/tags/".length);
-        // develop 후보 태그(vX.Y.Z-develop.N)는 빌드 출처일 뿐 정식 Release가 아니다.
+        // snapshot 후보 태그(vX.Y.Z-snapshot.N)는 빌드 출처일 뿐 정식 Release가 아니다.
         if (parseStableSemVerTag(version)) {
           after(async () => {
             try {

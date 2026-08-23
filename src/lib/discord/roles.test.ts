@@ -86,7 +86,7 @@ test("Discord 역할별 capability와 명령 매핑을 최소권한으로 제한
     assert.equal(hasDiscordCapability(["release-role"], "vault_index"), false);
     assert.equal(hasDiscordCapability(["admin-role"], "vault_index"), true);
     assert.equal(capabilityForCommand("deploy"), "release");
-    assert.equal(capabilityForCommand("develop"), "release");
+    assert.equal(capabilityForCommand("snapshot"), "release");
     assert.equal(capabilityForCommand("save"), "vault_write");
     assert.equal(capabilityForCommand("metrics"), "read");
   } finally {
