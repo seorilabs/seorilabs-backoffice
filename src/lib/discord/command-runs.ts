@@ -22,6 +22,10 @@ import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 import { handleDiscordChat } from "@/lib/discord/chat";
 import { registerTeammateFinding } from "@/lib/discord/teammate-patrol";
 import {
+  createAndDispatchDevelopDeploy,
+  previewDevelopDeploy,
+} from "@/lib/core/develop-deploy";
+import {
   createDiscordChannelMessage,
   editDiscordChannelMessage,
   type DiscordActionRow,
@@ -322,6 +326,46 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       );
       return { summary: `릴리즈 ${result.tag} 생성`, messageId };
     }
+    case "develop_preview": {
+      const app = await appForRun(run);
+      const preview = await previewDevelopDeploy(app.repoFullName);
+      const messageId = await showRun(
+        run,
+        `⚠️ **${app.displayName}** develop 후보를 AppsInToss에 빌드·배포합니다.\n` +
+          `develop@${preview.sha.slice(0, 7)} → **${preview.tag}**\n` +
+          "GitHub Release와 출시노트는 만들지 않습니다. 계속할까요?",
+        confirmationRows(run.id),
+      );
+      await prisma.operatorCommandRun.update({
+        where: { id: run.id },
+        data: {
+          operation: "develop_deploy",
+          params: { tag: preview.tag, sha: preview.sha },
+          status: "AWAITING_CONFIRMATION",
+          attempts: 0,
+          startedAt: null,
+          confirmedAt: null,
+          messageId,
+          expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
+        },
+      });
+      return { summary: `develop 후보 ${preview.tag} 확인 대기`, awaiting: true, messageId };
+    }
+    case "develop_deploy": {
+      const app = await appForRun(run);
+      const result = await createAndDispatchDevelopDeploy({
+        repoFullName: app.repoFullName,
+        expectedSha: stringValue(params, "sha"),
+        tag: stringValue(params, "tag"),
+        actorLabel: run.actorLabel,
+      });
+      const messageId = await showRun(
+        run,
+        `🚧 **${app.displayName} ${result.tag}** develop AppsInToss 빌드·배포 트리거 완료\n` +
+          `[Actions에서 확인](${result.workflowUrl})`,
+      );
+      return { summary: `develop 후보 ${result.tag} 배포 트리거`, messageId };
+    }
     case "deploy": {
       const app = await appForRun(run);
       const target = stringValue(params, "target") as DeployTarget;
@@ -522,6 +566,7 @@ export async function maintainOperatorCommands(now = new Date()) {
 
 const OPERATION_KO: Record<string, string> = {
   deploy: "배포 트리거",
+  develop_deploy: "develop 후보 빌드·배포",
   index: "볼트 재인덱싱",
   release_create: "릴리즈 태그 생성",
   play_promote: "Google Play 프로덕션 승격",

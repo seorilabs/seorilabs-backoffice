@@ -164,6 +164,7 @@ flowchart LR
 ## 5. 버전 source of truth
 
 - **태그가 기준.** `vMAJOR.MINOR.PATCH`(stable SemVer)만 허용.
+- Discord `/develop app`은 예외적으로 `develop` HEAD에 `vMAJOR.MINOR.PATCH-develop.N` 후보 태그를 붙여 AppsInToss 빌드·배포만 트리거한다. 표준 caller는 기본 브랜치에서 실행하되 `release_tag`로 후보 소스를 고정한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
 - RN: `scripts/resolve-release-version.mjs`가 태그에서 `version_name`, `android_version_code`(세그먼트 base 1000), `apple_marketing_version`, `apple_build_number`를 파생. (happy-farm/crossword 검증됨)
 - Godot: `play-store/google-play.config.json`의 `release.versionName/versionCode`를 읽고 태그(`v$versionName`)와 일치 검증.(lucid-chess)
 - → 표준 리졸버를 org 공통 스크립트로 승격(템플릿에 포함). 마켓별 versionCode/buildNumber 충돌은 업로드 직전 검증.

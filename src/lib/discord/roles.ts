@@ -86,6 +86,7 @@ export function capabilityForCommand(command: string): DiscordCapability {
       return "bug";
     case "release":
     case "deploy":
+    case "develop":
       return "release";
     case "index":
       return "vault_index";

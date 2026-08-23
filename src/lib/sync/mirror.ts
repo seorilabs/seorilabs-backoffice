@@ -12,7 +12,10 @@ import {
   isBlocked,
 } from "@/lib/domain/labels";
 import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
-import { releaseStatusOf } from "@/lib/sync/release-status";
+import {
+  releaseStatusOf,
+  shouldAdvanceLifecycleForRelease,
+} from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
 import { findTagForSha } from "@/lib/github/release";
 import {
@@ -285,7 +288,7 @@ export async function upsertWorkflowRun(
     runUrl,
   });
 
-  if (status === "SUCCEEDED") {
+  if (shouldAdvanceLifecycleForRelease(status, version)) {
     await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);
   }
 }

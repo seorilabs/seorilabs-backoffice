@@ -13,6 +13,7 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
+import { parseStableSemVerTag } from "@/lib/core/stable-semver";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 
 export const runtime = "nodejs";
@@ -107,7 +108,8 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       const ref = p.ref ?? "";
       if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
         const version = ref.slice("refs/tags/".length);
-        if (/^v?\d+\./.test(version)) {
+        // develop 후보 태그(vX.Y.Z-develop.N)는 빌드 출처일 뿐 정식 Release가 아니다.
+        if (parseStableSemVerTag(version)) {
           after(async () => {
             try {
               await generateAndPublishReleaseNotes({
