@@ -5,6 +5,7 @@ import { afterEach, test } from "node:test";
 import {
   findTagRefId,
   isXcodeCloudRepo,
+  matchesManualTagStartCondition,
   selectWorkflowForRepository,
   shouldUseXcodeCloudForTarget,
   waitForTagRefId,
@@ -98,6 +99,7 @@ const cycleRelease: WorkflowCandidate = {
   id: "cycle-release",
   name: "Cycle Pair Release",
   repoFullName: "seorilabs/cycle-pair",
+  repositoryId: "cycle-pair-repository",
   isEnabled: true,
   actions: [
     {
@@ -106,7 +108,48 @@ const cycleRelease: WorkflowCandidate = {
       buildDistributionAudience: "APP_STORE_ELIGIBLE",
     },
   ],
+  manualTagStartCondition: {
+    source: {
+      isAllMatch: false,
+      patterns: [{ pattern: "v", isPrefix: true }],
+    },
+  },
 };
+
+test("수동 태그 시작 조건은 all/exact/prefix를 대소문자 구분해 판정", () => {
+  assert.deepEqual(
+    matchesManualTagStartCondition({ source: { isAllMatch: true } }, "anything"),
+    true,
+  );
+  assert.deepEqual(
+    matchesManualTagStartCondition({
+      source: {
+        isAllMatch: false,
+        patterns: [{ pattern: "v0.1.0", isPrefix: false }],
+      },
+    }, "v0.1.0"),
+    true,
+  );
+  assert.equal(
+    matchesManualTagStartCondition({
+      source: {
+        isAllMatch: false,
+        patterns: [{ pattern: "v", isPrefix: true }],
+      },
+    }, "v0.1.0-snapshot.1"),
+    true,
+  );
+  assert.equal(
+    matchesManualTagStartCondition({
+      source: {
+        isAllMatch: false,
+        patterns: [{ pattern: "v", isPrefix: true }],
+      },
+    }, "V0.1.0"),
+    false,
+  );
+  assert.equal(matchesManualTagStartCondition(null, "v0.1.0"), false);
+});
 
 test("같은 제품의 교차 앱 workflow를 제외하고 요청 repo workflow만 선택", () => {
   const lizardWorkflow: WorkflowCandidate = {
@@ -114,13 +157,18 @@ test("같은 제품의 교차 앱 workflow를 제외하고 요청 repo workflow�
     id: "lizard-release",
     name: "Lizard Tycoon TestFlight",
     repoFullName: "seorilabs/lizard-tycoon",
+    repositoryId: "lizard-tycoon-repository",
   };
-  assert.equal(
+  assert.deepEqual(
     selectWorkflowForRepository(
       [lizardWorkflow, cycleRelease],
       "seorilabs/cycle-pair",
+      "v0.1.0-snapshot.1",
     ),
-    "cycle-release",
+    {
+      workflowId: "cycle-release",
+      repositoryId: "cycle-pair-repository",
+    },
   );
 });
 
@@ -143,6 +191,7 @@ test("repo가 다르거나 App Store Archive가 아니면 임의 실행하지 �
           },
         ],
         "seorilabs/cycle-pair",
+        "v0.1.0",
       ),
     /workflow 선택 실패/,
   );
@@ -154,8 +203,71 @@ test("동일 repo의 배포 workflow가 둘이면 모호성을 실패 처리", (
       selectWorkflowForRepository(
         [cycleRelease, { ...cycleRelease, id: "cycle-release-2" }],
         "seorilabs/cycle-pair",
+        "v0.1.0",
       ),
     /일치=2/,
+  );
+});
+
+test("자동 태그 조건만 있거나 수동 조건이 요청 태그와 다르면 선택하지 않음", () => {
+  assert.throws(
+    () => selectWorkflowForRepository(
+      [{ ...cycleRelease, manualTagStartCondition: null }],
+      "seorilabs/cycle-pair",
+      "v0.1.0-snapshot.1",
+    ),
+    /수동 태그 조건 일치=0/,
+  );
+  assert.throws(
+    () => selectWorkflowForRepository(
+      [{
+        ...cycleRelease,
+        manualTagStartCondition: {
+          source: {
+            isAllMatch: false,
+            patterns: [{ pattern: "release/", isPrefix: true }],
+          },
+        },
+      }],
+      "seorilabs/cycle-pair",
+      "v0.1.0",
+    ),
+    /수동 태그 조건 일치=0/,
+  );
+});
+
+test("workflow repository id가 없으면 태그 ref를 임의 repository에서 찾지 않음", () => {
+  assert.throws(
+    () => selectWorkflowForRepository(
+      [{ ...cycleRelease, repositoryId: null }],
+      "seorilabs/cycle-pair",
+      "v0.1.0-snapshot.1",
+    ),
+    /workflow repository ID 없음/,
+  );
+});
+
+test("같은 repo workflow 중 요청 태그를 허용하는 하나만 선택", () => {
+  const stableOnly = {
+    ...cycleRelease,
+    id: "stable-only",
+    manualTagStartCondition: {
+      source: {
+        isAllMatch: false,
+        patterns: [{ pattern: "v0.1.0", isPrefix: false }],
+      },
+    },
+  };
+  assert.deepEqual(
+    selectWorkflowForRepository(
+      [stableOnly, cycleRelease],
+      "seorilabs/cycle-pair",
+      "v0.1.0-snapshot.1",
+    ),
+    {
+      workflowId: "cycle-release",
+      repositoryId: "cycle-pair-repository",
+    },
   );
 });
 
@@ -193,6 +305,6 @@ test("Xcode Cloud 태그 ref 동기화 지연을 재시도", async () => {
 test("재시도 후에도 태그 ref가 없으면 운영 확인 항목을 안내", async () => {
   await assert.rejects(
     () => waitForTagRefId("v0.0.2", async () => [], { delaysMs: [0, 0] }),
-    /Manual Start - Tag\(v\*\).*SCM 연결 상태/,
+    /Manual Tag 시작 조건.*SCM 연결 상태/,
   );
 });

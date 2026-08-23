@@ -9,6 +9,14 @@ const appOption = {
   autocomplete: true,
 };
 
+const deployTargetOption = {
+  type: 3,
+  name: "target",
+  description: "배포 대상",
+  required: true,
+  choices: ["AIT", "PLAY", "APPSTORE", "ALL"].map((name) => ({ name, value: name })),
+};
+
 export const DISCORD_COMMANDS = [
   { name: "help", description: "백오피스 명령 도움말", type: 1 },
   { name: "approvals", description: "승인 대기 항목", type: 1 },
@@ -39,20 +47,14 @@ export const DISCORD_COMMANDS = [
     options: [
       appOption,
       { type: 3, name: "tag", description: "v1.2.3 형식", required: true },
-      {
-        type: 3,
-        name: "target",
-        description: "배포 대상",
-        required: true,
-        choices: ["AIT", "PLAY", "APPSTORE", "ALL"].map((name) => ({ name, value: name })),
-      },
+      deployTargetOption,
     ],
   },
   {
     name: "snapshot",
-    description: "main snapshot을 등록된 내부 테스트 채널에 빌드·배포",
+    description: "main snapshot을 선택한 내부 테스트 채널에 빌드·배포",
     type: 1,
-    options: [appOption],
+    options: [appOption, deployTargetOption],
   },
   { name: "save", description: "Obsidian 받은함에 메모 저장", type: 1 },
   { name: "index", description: "Obsidian 볼트 즉시 재인덱싱", type: 1 },

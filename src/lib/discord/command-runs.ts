@@ -342,7 +342,9 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     }
     case "snapshot_preview": {
       const app = await appForRun(run);
+      const target = stringValue(params, "target") as DeployTarget;
       const preview = await previewSnapshotDeploy(app.repoFullName, {
+        target,
         marketTargets: app.marketTargets,
         iosBundle: app.iosBundle,
       });
@@ -359,7 +361,14 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         where: { id: run.id },
         data: {
           operation: "snapshot_deploy",
-          params: { tag: preview.tag, sha: preview.sha, targets: preview.targets },
+          params: {
+            tag: preview.tag,
+            sha: preview.sha,
+            target,
+            targets: preview.targets,
+            repoFullName: preview.repoFullName,
+            iosBundle: preview.iosBundle ?? "",
+          },
           status: "AWAITING_CONFIRMATION",
           attempts: 0,
           startedAt: null,
@@ -373,11 +382,15 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     case "snapshot_deploy": {
       const app = await appForRun(run);
       const result = await createAndDispatchSnapshotDeploy({
+        appId: app.id,
         repoFullName: app.repoFullName,
+        expectedRepoFullName: stringValue(params, "repoFullName"),
+        expectedIosBundle: stringValue(params, "iosBundle"),
         expectedSha: stringValue(params, "sha"),
         expectedTargets: stringArrayValue(params, "targets") as Array<
           "AIT" | "PLAY" | "TESTFLIGHT"
         >,
+        target: stringValue(params, "target") as DeployTarget,
         marketTargets: app.marketTargets,
         iosBundle: app.iosBundle,
         tag: stringValue(params, "tag"),

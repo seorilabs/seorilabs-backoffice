@@ -4,6 +4,7 @@ import {
   parseStableSemVerTag,
 } from "@/lib/core/stable-semver";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
 
 const SNAPSHOT_CANDIDATE_RE =
   /^(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-snapshot\.([1-9]\d*)$/;
@@ -47,6 +48,24 @@ export function assertSnapshotShaUnchanged(
     throw new Error(
       `main HEAD가 ${expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
     );
+  }
+}
+
+export function assertSnapshotRegistryUnchanged(input: {
+  expectedRepoFullName: string;
+  currentRepoFullName: string;
+  expectedTargets: readonly SnapshotDeployTarget[];
+  expectedIosBundle?: string | null;
+  currentIosBundle?: string | null;
+}): void {
+  if (input.expectedRepoFullName !== input.currentRepoFullName) {
+    throw new Error("확인 후 앱 저장소가 변경됐습니다. 다시 요청해 확인하세요.");
+  }
+  if (
+    input.expectedTargets.includes("TESTFLIGHT") &&
+    (input.expectedIosBundle ?? "") !== (input.currentIosBundle ?? "")
+  ) {
+    throw new Error("확인 후 iOS bundle ID가 변경됐습니다. 다시 요청해 확인하세요.");
   }
 }
 
@@ -151,6 +170,29 @@ export function snapshotDeployTargetsFor(
   if (values.has("play")) targets.push("PLAY");
   if (values.has("appstore")) targets.push("TESTFLIGHT");
   return targets;
+}
+
+/** deploy와 같은 선택값을 snapshot 내부 테스트 채널로 변환한다. */
+export function selectSnapshotDeployTargets(
+  marketTargets: unknown,
+  target: DeployTarget,
+): SnapshotDeployTarget[] {
+  const available = snapshotDeployTargetsFor(marketTargets);
+  if (target === "ALL") {
+    if (available.length === 0) {
+      throw new Error("snapshot 후보를 배포할 등록 마켓이 없습니다.");
+    }
+    return available;
+  }
+
+  const selected: SnapshotDeployTarget =
+    target === "APPSTORE" ? "TESTFLIGHT" : target;
+  if (!available.includes(selected)) {
+    throw new Error(
+      `${SNAPSHOT_DEPLOY_TARGET_KO[selected]}가 등록되지 않아 snapshot 후보를 배포할 수 없습니다.`,
+    );
+  }
+  return [selected];
 }
 
 /** workflow_run이 후보 버전을 식별하도록 실제 실행 ref를 후보 태그로 고정한다. */

@@ -26,7 +26,8 @@ import {
 import { skipTeammateFinding } from "@/lib/discord/teammate-findings";
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
-import { asStringArray } from "@/lib/format";
+import { selectSnapshotDeployTargets } from "@/lib/core/snapshot-candidate";
+import type { DeployTarget } from "@/lib/core/deploy-targets";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 import { deferredUpdate, ephemeral, modal, updateMessage } from "@/lib/discord/responses";
 import {
@@ -112,7 +113,7 @@ function helpText(): string {
     "조회: `/approvals` `/p1` `/status [app]` `/metrics [app]`",
     "초안: `/plan app` `/bug app` — AI 초안 확인 후 버튼으로 GitHub 이슈 생성",
     "릴리즈: `/release app bump` `/deploy app tag target` — 실행 전 확인 버튼 필요",
-    "후보 배포: `/snapshot app` — main HEAD를 후보 태그로 등록된 내부 테스트 채널에 빌드·배포",
+    "후보 배포: `/snapshot app target` — main HEAD를 후보 태그로 선택한 내부 테스트 채널에 빌드·배포",
     "태그 카드에서 배포할 마켓을 버튼으로 고를 수 있습니다.",
     "배포 카드에서 Play 프로덕션 승격, App Store 심사 생성·제출·삭제·제출 취소를 버튼으로 실행합니다.",
     "볼트/대화: `/save` `/index` `/ask` `/reset`",
@@ -190,21 +191,24 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 
   if (name === "snapshot") {
     const app = await findVisibleApp(appSlug);
-    if (!app) return ephemeral("앱을 찾을 수 없습니다.");
-    const testTargets = new Set(asStringArray(app.marketTargets));
-    if (!["ait", "play", "appstore"].every((target) => testTargets.has(target))) {
-      return ephemeral(
-        "AppsInToss·Google Play 내부 테스트·TestFlight가 모두 등록된 앱만 snapshot 후보 배포를 실행할 수 있습니다.",
-      );
+    const target = option(interaction.data?.options, "target");
+    if (!app || !TARGETS.has(target)) {
+      return ephemeral("앱 또는 배포 대상이 올바르지 않습니다.");
+    }
+    try {
+      selectSnapshotDeployTargets(app.marketTargets, target as DeployTarget);
+    } catch (error) {
+      return ephemeral(error instanceof Error ? error.message : "배포 대상을 확인할 수 없습니다.");
     }
     await createOperatorCommand({
       sourceInteractionId: interaction.id,
       appId: app.id,
       operation: "snapshot_preview",
+      params: { target },
       actorDiscordUserId: userId,
       channelId,
     });
-    return ephemeral("⏳ main HEAD와 다음 snapshot 후보 태그를 확인합니다.");
+    return ephemeral("⏳ main HEAD와 선택한 마켓의 다음 snapshot 후보 태그를 확인합니다.");
   }
 
   if (name === "index") {
