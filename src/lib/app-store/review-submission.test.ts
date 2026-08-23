@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import {
   cancelAppStoreReviewSubmission,
   removeAppStoreReviewSubmissionItem,
+  submitAppStoreForReview,
 } from "@/lib/app-store/submit";
 
 const BUNDLE_ID = "com.seorilabs.lizardtycoon";
@@ -40,6 +41,7 @@ function ascEnv(): Record<string, string> {
  */
 async function withAsc(
   fixture: {
+    versionState?: string;
     submissions: Array<{ id: string; state: string }>;
     itemsBySubmission?: Record<string, Array<{ id: string; versionId: string }>>;
   },
@@ -65,7 +67,11 @@ async function withAsc(
     if (url.pathname === "/v1/apps") return json([{ id: "app-1", type: "apps" }]);
     if (url.pathname === "/v1/apps/app-1/appStoreVersions") {
       return json([
-        { id: "version-1", type: "appStoreVersions", attributes: { appStoreState: "PREPARE_FOR_SUBMISSION" } },
+        {
+          id: "version-1",
+          type: "appStoreVersions",
+          attributes: { appStoreState: fixture.versionState ?? "PREPARE_FOR_SUBMISSION" },
+        },
       ]);
     }
     if (url.pathname === "/v1/reviewSubmissions") {
@@ -102,6 +108,47 @@ async function withAsc(
 }
 
 const opts = { bundleId: BUNDLE_ID, marketingVersion: VERSION };
+
+test("심사 생성 후 READY_FOR_REVIEW 버전을 실제 심사에 제출한다", async () => {
+  await withAsc(
+    {
+      versionState: "READY_FOR_REVIEW",
+      submissions: [{ id: "sub-1", state: "READY_FOR_REVIEW" }],
+      itemsBySubmission: { "sub-1": [{ id: "item-1", versionId: "version-1" }] },
+    },
+    async (calls) => {
+      const result = await submitAppStoreForReview(opts);
+      assert.deepEqual(result, {
+        reviewSubmissionId: "sub-1",
+        versionId: "version-1",
+        submitted: true,
+      });
+      const patch = calls.find(
+        (call) => call.method === "PATCH" && call.path === "/v1/reviewSubmissions/sub-1",
+      );
+      assert.ok(patch, "미제출 reviewSubmission 을 제출한다");
+      assert.deepEqual(JSON.parse(patch.body).data.attributes, { submitted: true });
+      assert.ok(
+        !calls.some((call) => call.method === "POST" && call.path === "/v1/reviewSubmissionItems"),
+        "이미 연결된 심사 항목을 중복 생성하지 않는다",
+      );
+    },
+  );
+});
+
+test("이미 심사 대기 중인 앱 버전은 다시 제출하지 않는다", async () => {
+  await withAsc(
+    {
+      versionState: "WAITING_FOR_REVIEW",
+      submissions: [{ id: "sub-1", state: "WAITING_FOR_REVIEW" }],
+      itemsBySubmission: { "sub-1": [{ id: "item-1", versionId: "version-1" }] },
+    },
+    async (calls) => {
+      await assert.rejects(submitAppStoreForReview(opts), /WAITING_FOR_REVIEW/);
+      assert.ok(!calls.some((call) => call.method === "PATCH"));
+    },
+  );
+});
 
 test("심사 삭제는 미제출 항목만 지운다", async () => {
   await withAsc(

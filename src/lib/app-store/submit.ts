@@ -22,6 +22,11 @@ const EDITABLE_STATES = new Set([
   "INVALID_BINARY",
 ]);
 
+// 심사 생성으로 reviewSubmissionItem 을 추가하면 ASC 가 appStoreVersion 을
+// READY_FOR_REVIEW 로 전이한다. 이 상태는 더 이상 편집 가능하지 않지만,
+// reviewSubmission 의 submitted=true 전환에는 정상적인 입력이다.
+const SUBMITTABLE_STATES = new Set([...EDITABLE_STATES, "READY_FOR_REVIEW"]);
+
 /** vX.Y.Z / X.Y.Z → 마케팅 버전(X.Y.Z). */
 export function marketingVersionFromTag(tag: string): string {
   return tag.trim().replace(/^v/i, "").trim();
@@ -299,7 +304,7 @@ export async function submitAppStoreForReview(opts: {
 }): Promise<SubmitResult> {
   const appId = await findAppId(opts.bundleId);
   const version = await findOrCreateVersion(appId, opts.marketingVersion);
-  if (!EDITABLE_STATES.has(version.appStoreState)) {
+  if (!SUBMITTABLE_STATES.has(version.appStoreState)) {
     throw new Error(
       `현재 상태(${version.appStoreState})에서는 심사 제출할 수 없습니다.`,
     );
