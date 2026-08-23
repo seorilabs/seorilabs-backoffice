@@ -28,6 +28,28 @@ export const SNAPSHOT_DEPLOY_TARGET_KO: Record<SnapshotDeployTarget, string> = {
   TESTFLIGHT: "TestFlight 내부 테스트",
 };
 
+export function assertSnapshotTargetsUnchanged(
+  expectedTargets: readonly SnapshotDeployTarget[],
+  currentTargets: readonly SnapshotDeployTarget[],
+): void {
+  const unchanged = expectedTargets.length === currentTargets.length &&
+    expectedTargets.every((value, index) => value === currentTargets[index]);
+  if (!unchanged) {
+    throw new Error("확인 후 테스트 배포 대상이 변경됐습니다. 다시 요청해 확인하세요.");
+  }
+}
+
+export function assertSnapshotShaUnchanged(
+  expectedSha: string,
+  currentSha: string,
+): void {
+  if (currentSha !== expectedSha) {
+    throw new Error(
+      `main HEAD가 ${expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
+    );
+  }
+}
+
 function optionalStableTag(value: unknown): string | null {
   if (typeof value !== "string" || !parseStableSemVerTag(value)) return null;
   return normalizeStableSemVerTag(value);

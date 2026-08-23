@@ -13,6 +13,8 @@ import {
 import { marketVersionFloorFromConfigs } from "@/lib/core/market-version-floor";
 import {
   assertSnapshotDefaultBranch,
+  assertSnapshotShaUnchanged,
+  assertSnapshotTargetsUnchanged,
   buildSnapshotMarketInputs,
   SNAPSHOT_BRANCH,
   SNAPSHOT_DEPLOY_TARGET_KO,
@@ -54,14 +56,6 @@ function object(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonObject
     : null;
-}
-
-function sameTargets(
-  left: readonly SnapshotDeployTarget[],
-  right: readonly SnapshotDeployTarget[],
-): boolean {
-  return left.length === right.length &&
-    left.every((value, index) => value === right[index]);
 }
 
 function assertSnapshotTargets(
@@ -228,16 +222,10 @@ export async function createAndDispatchSnapshotDeploy(opts: {
     opts.marketTargets,
     opts.iosBundle,
   );
-  if (!sameTargets(currentTargets, opts.expectedTargets)) {
-    throw new Error("확인 후 테스트 배포 대상이 변경됐습니다. 다시 요청해 확인하세요.");
-  }
+  assertSnapshotTargetsUnchanged(opts.expectedTargets, currentTargets);
 
   const currentSha = await resolveRefSha(opts.repoFullName, SNAPSHOT_BRANCH);
-  if (currentSha !== opts.expectedSha) {
-    throw new Error(
-      `main HEAD가 ${opts.expectedSha.slice(0, 7)}에서 ${currentSha.slice(0, 7)}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
-    );
-  }
+  assertSnapshotShaUnchanged(opts.expectedSha, currentSha);
 
   const defaultBranch = await getRepoDefaultBranch(opts.repoFullName);
   assertSnapshotDefaultBranch(defaultBranch);

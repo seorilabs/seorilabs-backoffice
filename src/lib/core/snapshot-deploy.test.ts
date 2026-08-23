@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   assertSnapshotDefaultBranch,
+  assertSnapshotShaUnchanged,
+  assertSnapshotTargetsUnchanged,
   buildSnapshotDeployInputs,
   buildSnapshotMarketInputs,
   SNAPSHOT_BRANCH,
@@ -17,6 +19,24 @@ test("snapshot 소스 브랜치는 main으로 고정한다", () => {
   assert.equal(SNAPSHOT_BRANCH, "main");
   assert.doesNotThrow(() => assertSnapshotDefaultBranch("main"));
   assert.throws(() => assertSnapshotDefaultBranch("develop"), /기본 브랜치가 main이 아닙니다/);
+});
+
+test("확인 뒤 main HEAD나 내부 테스트 대상이 바뀌면 실행을 중단한다", () => {
+  assert.doesNotThrow(() => assertSnapshotShaUnchanged("abc1234", "abc1234"));
+  assert.throws(
+    () => assertSnapshotShaUnchanged("abc1234", "def5678"),
+    /main HEAD가 abc1234에서 def5678.*변경됐습니다/,
+  );
+  assert.doesNotThrow(() => {
+    assertSnapshotTargetsUnchanged(
+      ["AIT", "PLAY", "TESTFLIGHT"],
+      ["AIT", "PLAY", "TESTFLIGHT"],
+    );
+  });
+  assert.throws(
+    () => assertSnapshotTargetsUnchanged(["AIT", "PLAY", "TESTFLIGHT"], ["AIT", "PLAY"]),
+    /배포 대상이 변경됐습니다/,
+  );
 });
 
 test("후보 태그는 마지막 stable SemVer에 snapshot 순번을 이어 붙인다", () => {
