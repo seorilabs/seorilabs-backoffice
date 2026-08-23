@@ -16,8 +16,8 @@ import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 import { buildDeployAllAppStoreInputs } from "@/lib/core/deploy-all-inputs";
 import {
   shouldUseXcodeCloudForTarget,
-  triggerXcodeCloudDeploy,
 } from "@/lib/xcode-cloud/dispatch";
+import { dispatchXcodeCloudRelease } from "@/lib/xcode-cloud/release";
 import {
   generateReleaseNoteCore,
   type GenerateReleaseNoteInput,
@@ -56,7 +56,6 @@ import {
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
-import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy-enqueue";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -291,49 +290,12 @@ export async function dispatchMarketDeploy(opts: {
 
   let xcodeCloudBuild: number | null | undefined;
   if (iosViaXcodeCloud) {
-    const app = await prisma.app.findUnique({
-      where: { repoFullName: opts.repoFullName },
-      select: { id: true, iosBundle: true },
-    });
-    if (!app?.iosBundle) {
-      throw new Error(
-        `iosBundle 미설정: ${opts.repoFullName} — Xcode Cloud 트리거 불가`,
-      );
-    }
-    const run = await triggerXcodeCloudDeploy({
-      bundleId: app.iosBundle,
+    const run = await dispatchXcodeCloudRelease({
       repoFullName: opts.repoFullName,
       tag: opts.tag,
+      actorLabel: opts.actorLabel,
     });
-    if (!run.buildRunId) throw new Error("Xcode Cloud 빌드 실행 ID가 없습니다.");
     xcodeCloudBuild = run.buildNumber;
-    // GitHub workflow_run 대신 ASC ciBuildRun 을 mirror 하는 외부 배포 레코드.
-    // scheduler 가 이 실행을 조회해 완료 상태와 Discord 알림을 수렴시킨다.
-    const release = await prisma.releaseRecord.upsert({
-      where: { externalRunId: run.buildRunId },
-      create: {
-        appId: app.id,
-        version: opts.tag,
-        market: "APPSTORE",
-        status: "PENDING",
-        workflowName: "Xcode Cloud",
-        externalRunId: run.buildRunId,
-        externalBuildNumber: run.buildNumber,
-        triggeredBy: opts.actorLabel ?? null,
-        startedAt: new Date(),
-      },
-      update: {
-        version: opts.tag,
-        status: "PENDING",
-        externalBuildNumber: run.buildNumber,
-        triggeredBy: opts.actorLabel ?? null,
-      },
-    });
-    await enqueueDeployCompletionNotification({
-      releaseRecordId: release.id,
-      eventKey: `xcode:${run.buildRunId}:pending`,
-      status: "PENDING",
-    });
   }
 
   // GH 워크플로 dispatch. APPSTORE 단독은 Xcode Cloud 로 갔으니 GH 는 생략.

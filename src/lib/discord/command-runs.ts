@@ -53,6 +53,13 @@ function stringValue(input: JsonRecord, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function stringArrayValue(input: JsonRecord, key: string): string[] {
+  const value = input[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message : "알 수 없는 오류";
   return message
@@ -191,7 +198,14 @@ async function appForRun(run: OperatorCommandRun) {
   if (!run.appId) throw new Error("앱이 지정되지 않았습니다.");
   const app = await prisma.app.findUnique({
     where: { id: run.appId },
-    select: { id: true, slug: true, displayName: true, repoFullName: true, marketTargets: true },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      repoFullName: true,
+      marketTargets: true,
+      iosBundle: true,
+    },
   });
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
   return app;
@@ -328,11 +342,16 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     }
     case "develop_preview": {
       const app = await appForRun(run);
-      const preview = await previewDevelopDeploy(app.repoFullName);
+      const preview = await previewDevelopDeploy(app.repoFullName, {
+        marketTargets: app.marketTargets,
+        iosBundle: app.iosBundle,
+      });
+      const targetLabels = preview.destinations.map((item) => item.label).join(", ");
       const messageId = await showRun(
         run,
-        `⚠️ **${app.displayName}** develop 후보를 AppsInToss에 빌드·배포합니다.\n` +
+        `⚠️ **${app.displayName}** develop 후보를 내부 테스트 채널에 빌드·배포합니다.\n` +
           `develop@${preview.sha.slice(0, 7)} → **${preview.tag}**\n` +
+          `대상: **${targetLabels}**\n` +
           "GitHub Release와 출시노트는 만들지 않습니다. 계속할까요?",
         confirmationRows(run.id),
       );
@@ -340,7 +359,7 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         where: { id: run.id },
         data: {
           operation: "develop_deploy",
-          params: { tag: preview.tag, sha: preview.sha },
+          params: { tag: preview.tag, sha: preview.sha, targets: preview.targets },
           status: "AWAITING_CONFIRMATION",
           attempts: 0,
           startedAt: null,
@@ -356,13 +375,22 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       const result = await createAndDispatchDevelopDeploy({
         repoFullName: app.repoFullName,
         expectedSha: stringValue(params, "sha"),
+        expectedTargets: stringArrayValue(params, "targets") as Array<
+          "AIT" | "PLAY" | "TESTFLIGHT"
+        >,
+        marketTargets: app.marketTargets,
+        iosBundle: app.iosBundle,
         tag: stringValue(params, "tag"),
         actorLabel: run.actorLabel,
       });
+      const destinationLines = result.destinations.map((item) => {
+        if (item.url) return `- [${item.label}](${item.url})`;
+        return `- ${item.label}${item.xcodeCloudBuild != null ? ` · Xcode Cloud #${item.xcodeCloudBuild}` : ""}`;
+      });
       const messageId = await showRun(
         run,
-        `🚧 **${app.displayName} ${result.tag}** develop AppsInToss 빌드·배포 트리거 완료\n` +
-          `[Actions에서 확인](${result.workflowUrl})`,
+        `🚧 **${app.displayName} ${result.tag}** develop 내부 테스트 빌드·배포 트리거 완료\n` +
+          destinationLines.join("\n"),
       );
       return { summary: `develop 후보 ${result.tag} 배포 트리거`, messageId };
     }

@@ -38,7 +38,14 @@ export async function findVisibleApp(slug: string) {
   if (!/^[a-z0-9][a-z0-9-]{0,40}$/i.test(slug)) return null;
   return prisma.app.findFirst({
     where: { slug, ...visibleAppWhere },
-    select: { id: true, slug: true, displayName: true, repoFullName: true, marketTargets: true },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      repoFullName: true,
+      marketTargets: true,
+      iosBundle: true,
+    },
   });
 }
 

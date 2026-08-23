@@ -1,5 +1,6 @@
 import type { ReleaseStatus } from "@prisma/client";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
+import { parseDevelopCandidateTag } from "@/lib/core/develop-candidate";
 
 export function releaseStatusOf(
   status?: string | null,
@@ -17,4 +18,14 @@ export function shouldAdvanceLifecycleForRelease(
   version: string,
 ): boolean {
   return status === "SUCCEEDED" && parseStableSemVerTag(version) !== null;
+}
+
+export function releaseTrackForWorkflow(input: {
+  market: string;
+  promoted: boolean;
+  version: string;
+}): string | null {
+  if (input.market !== "PLAY") return null;
+  if (input.promoted) return "production";
+  return parseDevelopCandidateTag(input.version) ? "internal" : null;
 }
