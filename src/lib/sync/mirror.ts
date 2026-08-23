@@ -14,6 +14,7 @@ import {
 import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
 import {
   releaseStatusOf,
+  releaseTrackForWorkflow,
   shouldAdvanceLifecycleForRelease,
 } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
@@ -263,7 +264,11 @@ export async function upsertWorkflowRun(
     appId,
     version,
     // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
-    track: isPromoteGooglePlayWorkflow(gh.path) ? "production" : null,
+    track: releaseTrackForWorkflow({
+      market,
+      promoted: isPromoteGooglePlayWorkflow(gh.path),
+      version,
+    }),
     status,
     workflowName: gh.name ?? null,
     commitSha: gh.head_sha ?? null,

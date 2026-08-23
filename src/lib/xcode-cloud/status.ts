@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { asc, asArray } from "@/lib/app-store/asc-client";
 import { evaluateLifecycleOnSuccessfulRelease } from "@/lib/sync/mirror";
 import { enqueueDeployCompletionNotification } from "@/lib/notifications/deploy-enqueue";
+import { shouldAdvanceLifecycleForRelease } from "@/lib/sync/release-status";
 import {
   mapXcodeCloudBuildStatus,
   type XcodeCloudBuildStatus,
@@ -34,7 +35,13 @@ export async function syncPendingXcodeCloudDeployments(limit = 30): Promise<{
       },
       orderBy: { createdAt: "asc" },
       take: limit,
-      select: { id: true, appId: true, externalRunId: true, status: true },
+      select: {
+        id: true,
+        appId: true,
+        version: true,
+        externalRunId: true,
+        status: true,
+      },
     });
     let completed = 0;
     for (const row of pending) {
@@ -65,7 +72,7 @@ export async function syncPendingXcodeCloudDeployments(limit = 30): Promise<{
         }
         if (!terminal) continue;
         completed++;
-        if (result.status === "SUCCEEDED") {
+        if (shouldAdvanceLifecycleForRelease(result.status, row.version)) {
           await evaluateLifecycleOnSuccessfulRelease(
             row.appId,
             `xcode_cloud:${row.externalRunId}`,

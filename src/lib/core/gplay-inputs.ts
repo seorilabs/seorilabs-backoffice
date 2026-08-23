@@ -9,7 +9,7 @@ export const GOOGLE_PLAY_UPLOAD_TOGGLES = ["upload", "send_to_google_play", "upl
  * Godot 필수값을 declared 에 있는 것만 채운다. 토글이 하나도 없으면 업로드 보장 불가 → 에러(태그 명시).
  */
 export function buildGooglePlayUploadInputs(
-  declared: Set<string>,
+  declared: ReadonlySet<string>,
   tag: string,
   ctx: { repoFullName: string; workflowFile: string },
 ): Record<string, string> {

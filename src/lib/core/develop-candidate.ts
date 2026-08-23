@@ -3,9 +3,18 @@ import {
   normalizeStableSemVerTag,
   parseStableSemVerTag,
 } from "@/lib/core/stable-semver";
+import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 
 const DEVELOP_CANDIDATE_RE =
   /^(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-develop\.([1-9]\d*)$/;
+
+export type DevelopDeployTarget = "AIT" | "PLAY" | "TESTFLIGHT";
+
+export const DEVELOP_DEPLOY_TARGET_KO: Record<DevelopDeployTarget, string> = {
+  AIT: "AppsInToss",
+  PLAY: "Google Play 내부 테스트",
+  TESTFLIGHT: "TestFlight 내부 테스트",
+};
 
 function optionalStableTag(value: unknown): string | null {
   if (typeof value !== "string" || !parseStableSemVerTag(value)) return null;
@@ -72,19 +81,49 @@ export function buildDevelopDeployInputs(
   return inputs;
 }
 
-/**
- * 표준 caller는 기본 브랜치에 두고 release_tag로 develop 소스를 checkout한다.
- * release_tag 입력이 없는 레거시 caller는 기본 브랜치 자체가 develop일 때만 후보 태그 ref로
- * 실행할 수 있다. 그렇지 않으면 main 소스를 잘못 배포할 수 있으므로 중단한다.
- */
-export function resolveDevelopDeployDispatchRef(
-  defaultBranch: string,
+export function buildDevelopMarketInputs(
+  target: "AIT" | "PLAY",
   declaredInputs: ReadonlySet<string>,
   tag: string,
-): string {
-  if (declaredInputs.has("release_tag")) return defaultBranch;
-  if (defaultBranch === "develop") return tag;
-  throw new Error(
-    "deploy-apps-in-toss.yml에 release_tag 입력이 없어 develop 소스를 고정할 수 없습니다.",
+  sha: string,
+  context: { repoFullName: string; workflowFile: string },
+): Record<string, string> {
+  const inputs = buildDevelopDeployInputs(declaredInputs, tag, sha);
+  if (target !== "PLAY") return inputs;
+
+  const parsed = parseDevelopCandidateTag(tag);
+  if (!parsed) throw new Error(`develop 후보 태그 형식이 아닙니다: ${tag}`);
+  Object.assign(
+    inputs,
+    buildGooglePlayUploadInputs(declaredInputs, tag, context),
   );
+  // Godot caller의 명시 version_name은 숫자 SemVer를 요구한다. 후보 식별은
+  // release_tag가 소유하고 Play 표시 버전은 기반 SemVer로 유지한다.
+  if (declaredInputs.has("version_name")) {
+    inputs.version_name = parsed.baseTag.slice(1);
+  }
+  return inputs;
+}
+
+/** 앱 레지스트리의 실제 배포 가능 마켓만 develop 테스트 배포 대상으로 사용한다. */
+export function developDeployTargetsFor(
+  marketTargets: unknown,
+): DevelopDeployTarget[] {
+  const values = Array.isArray(marketTargets)
+    ? new Set(marketTargets.filter((value): value is string => typeof value === "string"))
+    : new Set<string>();
+  const targets: DevelopDeployTarget[] = [];
+  if (values.has("ait")) targets.push("AIT");
+  if (values.has("play")) targets.push("PLAY");
+  if (values.has("appstore")) targets.push("TESTFLIGHT");
+  return targets;
+}
+
+/** workflow_run이 후보 버전을 식별하도록 실제 실행 ref를 후보 태그로 고정한다. */
+export function resolveDevelopDeployDispatchRef(
+  _defaultBranch: string,
+  _declaredInputs: ReadonlySet<string>,
+  tag: string,
+): string {
+  return tag;
 }

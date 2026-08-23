@@ -112,7 +112,7 @@ function helpText(): string {
     "조회: `/approvals` `/p1` `/status [app]` `/metrics [app]`",
     "초안: `/plan app` `/bug app` — AI 초안 확인 후 버튼으로 GitHub 이슈 생성",
     "릴리즈: `/release app bump` `/deploy app tag target` — 실행 전 확인 버튼 필요",
-    "후보 배포: `/develop app` — develop HEAD를 후보 태그로 AppsInToss에 빌드·배포",
+    "후보 배포: `/develop app` — develop HEAD를 후보 태그로 등록된 내부 테스트 채널에 빌드·배포",
     "태그 카드에서 배포할 마켓을 버튼으로 고를 수 있습니다.",
     "배포 카드에서 Play 프로덕션 승격, App Store 심사 생성·제출·삭제·제출 취소를 버튼으로 실행합니다.",
     "볼트/대화: `/save` `/index` `/ask` `/reset`",
@@ -191,8 +191,11 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
   if (name === "develop") {
     const app = await findVisibleApp(appSlug);
     if (!app) return ephemeral("앱을 찾을 수 없습니다.");
-    if (!asStringArray(app.marketTargets).includes("ait")) {
-      return ephemeral("AppsInToss 배포 workflow가 등록된 앱만 develop 후보 배포를 실행할 수 있습니다.");
+    const testTargets = new Set(asStringArray(app.marketTargets));
+    if (!["ait", "play", "appstore"].every((target) => testTargets.has(target))) {
+      return ephemeral(
+        "AppsInToss·Google Play 내부 테스트·TestFlight가 모두 등록된 앱만 develop 후보 배포를 실행할 수 있습니다.",
+      );
     }
     await createOperatorCommand({
       sourceInteractionId: interaction.id,
