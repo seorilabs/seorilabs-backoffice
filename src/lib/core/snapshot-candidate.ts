@@ -1,4 +1,5 @@
 import {
+  bumpStableSemVerTag,
   compareStableSemVerTags,
   normalizeStableSemVerTag,
   parseStableSemVerTag,
@@ -8,6 +9,8 @@ import type { DeployTarget } from "@/lib/core/deploy-targets";
 
 const SNAPSHOT_CANDIDATE_RE =
   /^(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-snapshot\.([1-9]\d*)$/;
+
+export const SNAPSHOT_MAX_SEQUENCE = 99;
 
 export const SNAPSHOT_BRANCH = "main";
 
@@ -51,6 +54,17 @@ export function assertSnapshotShaUnchanged(
   }
 }
 
+export function assertSnapshotCandidateTagUnchanged(
+  expectedTag: string,
+  currentTag: string,
+): void {
+  if (currentTag !== expectedTag) {
+    throw new Error(
+      `확인 후 다음 snapshot 후보가 ${expectedTag}에서 ${currentTag}(으)로 변경됐습니다. 다시 요청해 확인하세요.`,
+    );
+  }
+}
+
 export function assertSnapshotRegistryUnchanged(input: {
   expectedRepoFullName: string;
   currentRepoFullName: string;
@@ -79,29 +93,47 @@ export function parseSnapshotCandidateTag(
 ): { baseTag: string; sequence: number } | null {
   const match = raw.match(SNAPSHOT_CANDIDATE_RE);
   if (!match) return null;
-  return { baseTag: match[1], sequence: Number(match[2]) };
+  const sequence = Number(match[2]);
+  if (sequence > SNAPSHOT_MAX_SEQUENCE) return null;
+  return { baseTag: match[1], sequence };
 }
 
-/** 태그·마켓 원장·main package.json 중 가장 높은 stable SemVer를 후보 기준으로 쓴다. */
+/**
+ * 다음 snapshot 후보의 stable base를 계산한다.
+ *
+ * 이미 공개에 사용한 stable 태그·마켓 원장이 있으면 그 최댓값의 다음 patch를 쓴다.
+ * main package.json이 그보다 높은 버전을 미리 선언했다면 해당 선언을 존중하고 다시
+ * 증가시키지 않는다. 아직 공개 이력이 없는 앱은 package version을 첫 후보 base로 쓴다.
+ */
 export function resolveSnapshotCandidateBase(input: {
   tags: readonly string[];
   marketFloor?: string | null;
   packageVersion?: unknown;
 }): string {
-  const candidates = [
+  const published = [
     ...input.tags.filter((tag) => parseStableSemVerTag(tag) !== null),
     input.marketFloor,
-    optionalStableTag(input.packageVersion),
   ].filter((value): value is string => Boolean(value))
     .map(normalizeStableSemVerTag);
+  const publishedFloor = published
+    .sort((a, b) => compareStableSemVerTags(b, a))[0] ?? null;
+  const packageVersion = optionalStableTag(input.packageVersion);
 
-  const base = candidates.sort((a, b) => compareStableSemVerTags(b, a))[0];
-  if (!base) {
+  if (!publishedFloor) {
+    if (packageVersion) return packageVersion;
     throw new Error(
       "stable SemVer 태그나 main package.json version이 없어 후보 버전을 계산할 수 없습니다.",
     );
   }
-  return base;
+
+  const nextPublishedPatch = bumpStableSemVerTag(publishedFloor, "patch");
+  if (
+    packageVersion &&
+    compareStableSemVerTags(packageVersion, nextPublishedPatch) > 0
+  ) {
+    return packageVersion;
+  }
+  return nextPublishedPatch;
 }
 
 export function nextSnapshotCandidateTag(
@@ -116,6 +148,12 @@ export function nextSnapshotCandidateTag(
       latestSequence = Math.max(latestSequence, parsed.sequence);
     }
   }
+  if (latestSequence >= SNAPSHOT_MAX_SEQUENCE) {
+    throw new Error(
+      `${normalizedBase} snapshot 순번 1..${SNAPSHOT_MAX_SEQUENCE}를 모두 사용했습니다. ` +
+        "package version을 다음 stable base로 올린 뒤 다시 요청하세요.",
+    );
+  }
   return `${normalizedBase}-snapshot.${latestSequence + 1}`;
 }
 
@@ -123,8 +161,18 @@ export function buildSnapshotDeployInputs(
   declaredInputs: ReadonlySet<string>,
   tag: string,
   sha: string,
+  context?: { repoFullName: string; workflowFile: string },
 ): Record<string, string> {
-  const inputs: Record<string, string> = {};
+  if (!declaredInputs.has("snapshot_candidate")) {
+    const workflow = context
+      ? `${context.repoFullName} ${context.workflowFile}`
+      : "workflow";
+    throw new Error(
+      `${workflow}에 snapshot_candidate 입력이 없어 snapshot 후보를 안전하게 실행할 수 없습니다.`,
+    );
+  }
+
+  const inputs: Record<string, string> = { snapshot_candidate: "true" };
   if (declaredInputs.has("release_tag")) inputs.release_tag = tag;
   if (declaredInputs.has("memo")) {
     inputs.memo = `snapshot candidate ${tag} (${sha.slice(0, 7)})`;
@@ -141,8 +189,11 @@ export function buildSnapshotMarketInputs(
   sha: string,
   context: { repoFullName: string; workflowFile: string },
 ): Record<string, string> {
-  const inputs = buildSnapshotDeployInputs(declaredInputs, tag, sha);
-  if (target !== "PLAY") return inputs;
+  const inputs = buildSnapshotDeployInputs(declaredInputs, tag, sha, context);
+  if (target === "AIT") {
+    if (declaredInputs.has("upload")) inputs.upload = "true";
+    return inputs;
+  }
 
   const parsed = parseSnapshotCandidateTag(tag);
   if (!parsed) throw new Error(`snapshot 후보 태그 형식이 아닙니다: ${tag}`);
