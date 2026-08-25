@@ -55,6 +55,7 @@ export async function createPlanningDraftCore(input: {
     system,
     prompt,
     maxTokens: 2048,
+    usage: { path: "draft" },
   });
 
   const draft = await prisma.aiDraft.create({
@@ -108,6 +109,7 @@ export async function createBugDraftCore(input: {
     system,
     prompt,
     maxTokens: 2048,
+    usage: { path: "draft" },
   });
 
   const draft = await prisma.aiDraft.create({
@@ -249,7 +251,7 @@ export async function generateStageDraftCore(input: {
     throw new Error("지원하지 않는 에이전트입니다.");
   }
 
-  const outputText = await geminiComplete({ system, prompt, maxTokens: 2048 });
+  const outputText = await geminiComplete({ system, prompt, maxTokens: 2048, usage: { path: "draft" } });
 
   const draft = await prisma.aiDraft.create({
     data: {

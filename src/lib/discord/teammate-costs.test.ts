@@ -6,6 +6,7 @@ import {
   gcpBudgetFindings,
   githubQuotaMultiplier,
   githubUsageFindings,
+  llmBudgetFindings,
   parseBillingTable,
   renderGcpCostLines,
   stabilityFindings,
@@ -88,6 +89,15 @@ test("GCP 예산 경고는 예산이 확정된 뒤에만 발동한다", () => {
   assert.deepEqual(gcpBudgetFindings(5_000, 10_000, "202608"), []); // 50%
   assert.match(gcpBudgetFindings(8_000, 10_000, "202608")[0].title, /80% 도달/);
   assert.match(gcpBudgetFindings(12_000, 10_000, "202608")[0].title, /예산 초과/);
+});
+
+test("LLM 예산 경고는 GCP 예산과 같은 70%/100% 규칙을 따른다", () => {
+  assert.deepEqual(llmBudgetFindings(3, 0, "2026-08"), []); // 예산 미확정 → 보고만
+  assert.deepEqual(llmBudgetFindings(3, 10, "2026-08"), []); // 30%
+  assert.match(llmBudgetFindings(8, 10, "2026-08")[0].title, /80% 도달/);
+  assert.match(llmBudgetFindings(12, 10, "2026-08")[0].title, /예산 초과/);
+  // 경고 finding 은 이슈 초안이 아니라 채널 경고 전용이다.
+  assert.equal(llmBudgetFindings(12, 10, "2026-08")[0].repoFullName, null);
 });
 
 test("Stability 크레딧은 경고선 아래에서만 경고한다", () => {

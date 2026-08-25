@@ -57,7 +57,7 @@ export async function generatePlanningDraft(input: {
 
   let text: string;
   try {
-    text = await geminiComplete({ system, prompt });
+    text = await geminiComplete({ system, prompt, usage: { path: "action" } });
   } catch (e) {
     throw new Error(notConfiguredMessage(e));
   }

@@ -9,6 +9,7 @@ export interface CompleteOptions {
   system?: string;
   maxTokens?: number;
   jsonOutput?: boolean;
+  usage?: ChatOptions["usage"];
 }
 
 export interface ChatMessage {
@@ -19,6 +20,8 @@ export interface ChatMessage {
 export interface ChatOptions {
   maxTokens?: number;
   jsonOutput?: boolean;
+  /** 사용량 원장(ai_usage) 귀속 컨텍스트. 미전달 시 path "unknown" 으로 기록된다. */
+  usage?: { path: string; teammate?: string | null };
 }
 
 export class GeminiNotConfiguredError extends Error {
@@ -125,13 +128,28 @@ export async function geminiChat(
 
     const usage = parsed.usageMetadata;
     if (usage) {
-      console.info("[gemini] usage", {
-        model,
+      const tokens = {
         inputTokens: usage.promptTokenCount ?? 0,
         outputTokens: usage.candidatesTokenCount ?? 0,
         thinkingTokens: usage.thoughtsTokenCount ?? 0,
         totalTokens: usage.totalTokenCount ?? 0,
-      });
+      };
+      console.info("[gemini] usage", { model, ...tokens });
+      // fire-and-forget 원장 적재. 동적 import 로 prisma 의존을 이 모듈의
+      // 정적 그래프에서 격리한다(웹 번들·테스트 그래프 보호).
+      void import("@/lib/ai/usage")
+        .then((m) =>
+          m.recordAiUsage({
+            provider: "gemini",
+            model,
+            path: opts.usage?.path ?? "unknown",
+            teammate: opts.usage?.teammate ?? null,
+            ...tokens,
+          }),
+        )
+        .catch((error) =>
+          console.error("[gemini] usage 기록 실패", error instanceof Error ? error.message : error),
+        );
     }
     return text;
   } finally {
@@ -146,5 +164,6 @@ export async function geminiComplete(opts: CompleteOptions): Promise<string> {
   return geminiChat(messages, {
     maxTokens: opts.maxTokens,
     jsonOutput: opts.jsonOutput,
+    usage: opts.usage,
   });
 }

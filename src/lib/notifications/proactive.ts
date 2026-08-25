@@ -98,6 +98,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
         system: "제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 추정하지 않는다.",
         prompt: [`승인대기 ${pending.length}건`, `P1 ${p1.length}건`, ...mergedPrPromptLines(mergedPrs)].join("\n"),
         maxTokens: 240,
+        usage: { path: "proactive" },
       });
       lines.push("", `💬 **AI 요약** ${summary.trim()}`);
       geminiUsed = true;

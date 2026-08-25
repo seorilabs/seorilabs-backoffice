@@ -807,6 +807,26 @@ model TeammateRun {
   @@map("teammate_run")
 }
 
+/// LLM 호출 사용량 원장. 모든 provider 호출 직후 fire-and-forget 으로 적재하고,
+/// 서리 재무 순찰이 월누적 비용으로 집계한다. 단가는 저장하지 않는다 —
+/// 비용은 조회 시점에 pricing.ts 단가표로 환산한다(단가 개정 시 소급 반영).
+model AiUsage {
+  id             String   @id @default(cuid())
+  provider       String // "gemini" | "anthropic" | "openai"
+  model          String
+  path           String // "chat-agent" | "patrol" | "standup" | "draft" | "release-notes" | "unknown"
+  teammate       String?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  thinkingTokens Int      @default(0) // Gemini 전용 — 다른 provider 는 output 에 합산 청구
+  totalTokens    Int      @default(0)
+  createdAt      DateTime @default(now()) @db.DateTime(3)
+
+  @@index([createdAt])
+  @@index([provider, model, createdAt])
+  @@map("ai_usage")
+}
+
 enum TeammateRunStatus {
   PENDING
   PROCESSING

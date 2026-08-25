@@ -379,7 +379,7 @@ async function synthesize(meta: TeammateMeta, findings: PatrolFinding[]): Promis
         },
         { role: "user", content: JSON.stringify(payload) },
       ],
-      { jsonOutput: true, maxTokens: 1_500 },
+      { jsonOutput: true, maxTokens: 1_500, usage: { path: "patrol", teammate: meta.role } },
     ),
   );
   const parsed = parseLooseJson<{ report?: unknown; suggestions?: Record<string, unknown> }>(raw);
