@@ -13,6 +13,7 @@ import {
 import { marketVersionFloorFromConfigs } from "@/lib/core/market-version-floor";
 import {
   assertSnapshotDefaultBranch,
+  assertSnapshotCandidateTagUnchanged,
   assertSnapshotShaUnchanged,
   assertSnapshotRegistryUnchanged,
   assertSnapshotTargetsUnchanged,
@@ -83,12 +84,12 @@ function assertSnapshotTargets(
   return targets;
 }
 
-async function candidateBaseContext(repoFullName: string) {
+async function candidateBaseContext(repoFullName: string, sourceRef: string) {
   const [tags, googlePlay, appStore, packageJson] = await Promise.all([
     listRepositoryTags(repoFullName),
-    getRepoJsonFile(repoFullName, "play-store/google-play.config.json", SNAPSHOT_BRANCH),
-    getRepoJsonFile(repoFullName, "app-store/app-store.config.json", SNAPSHOT_BRANCH),
-    getRepoJsonFile(repoFullName, "package.json", SNAPSHOT_BRANCH),
+    getRepoJsonFile(repoFullName, "play-store/google-play.config.json", sourceRef),
+    getRepoJsonFile(repoFullName, "app-store/app-store.config.json", sourceRef),
+    getRepoJsonFile(repoFullName, "package.json", sourceRef),
   ]);
   const packageVersion = object(packageJson)?.version;
   const marketFloor = marketVersionFloorFromConfigs({ googlePlay, appStore });
@@ -116,16 +117,15 @@ async function prepareGithubDeployPlans(opts: {
       .map(async (target) => {
         const workflowFile = GITHUB_WORKFLOW[target];
         if (!workflowFile) throw new Error(`snapshot 배포 workflow가 없습니다: ${target}`);
-        // workflow_dispatch API 진입점과 후보 소스 정의를 main에서 검증한 뒤,
-        // main SHA에 붙인 snapshot 태그로 실행 ref를 고정한다.
+        // 태그 대상 SHA의 workflow_dispatch 계약을 검증한 뒤 동일 SHA에 후보 태그를 붙인다.
         const workflow = await getWorkflowDispatchContract(
           opts.repoFullName,
           workflowFile,
-          SNAPSHOT_BRANCH,
+          opts.sha,
         );
         if (!workflow.dispatchable) {
           throw new Error(
-            `${SNAPSHOT_BRANCH}의 ${workflowFile}에 workflow_dispatch가 없습니다.`,
+            `${opts.sha.slice(0, 7)}의 ${workflowFile}에 workflow_dispatch가 없습니다.`,
           );
         }
         const dispatchRef = resolveSnapshotDeployDispatchRef(
@@ -170,10 +170,9 @@ export async function previewSnapshotDeploy(
   );
   const defaultBranch = await getRepoDefaultBranch(repoFullName);
   assertSnapshotDefaultBranch(defaultBranch);
-  const [sha, context] = await Promise.all([
-    resolveRefSha(repoFullName, SNAPSHOT_BRANCH),
-    candidateBaseContext(repoFullName),
-  ]);
+  const sha = await resolveRefSha(repoFullName, SNAPSHOT_BRANCH);
+  // 이후 main이 움직여도 package/config/caller capability는 확인한 태그 대상 SHA에서 읽는다.
+  const context = await candidateBaseContext(repoFullName, sha);
   const tag = nextSnapshotCandidateTag(
     context.baseTag,
     context.tags.map((item) => item.name),
@@ -255,7 +254,8 @@ export async function createAndDispatchSnapshotDeploy(opts: {
 
   const defaultBranch = await getRepoDefaultBranch(opts.repoFullName);
   assertSnapshotDefaultBranch(defaultBranch);
-  // 태그를 만들기 전에 GitHub caller의 dispatch/input 계약을 모두 검증한다.
+  // preview와 confirm 모두 이 함수에서 선택 caller의 capability를 검사한다.
+  // snapshot_candidate가 없으면 아래 createTag write까지 도달하지 않는다.
   const plans = await prepareGithubDeployPlans({
     repoFullName: opts.repoFullName,
     targets: currentTargets,
@@ -269,6 +269,18 @@ export async function createAndDispatchSnapshotDeploy(opts: {
       tag: opts.tag,
     });
   }
+
+  // read-only preflight 뒤 현재 태그 계보를 다시 읽어 외부 write까지의 위험창을 줄인다.
+  const [latestSha, candidateContext] = await Promise.all([
+    resolveRefSha(opts.repoFullName, SNAPSHOT_BRANCH),
+    candidateBaseContext(opts.repoFullName, opts.expectedSha),
+  ]);
+  assertSnapshotShaUnchanged(opts.expectedSha, latestSha);
+  const currentCandidateTag = nextSnapshotCandidateTag(
+    candidateContext.baseTag,
+    candidateContext.tags.map((item) => item.name),
+  );
+  assertSnapshotCandidateTagUnchanged(opts.tag, currentCandidateTag);
 
   const { created } = await createTag({
     repoFullName: opts.repoFullName,
