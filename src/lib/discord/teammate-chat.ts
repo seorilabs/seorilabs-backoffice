@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { env } from "@/lib/env";
 import { GeminiNotConfiguredError } from "@/lib/ai/gemini";
 import { runChatAgent } from "@/lib/ai/chat-agent";
 import {
@@ -9,7 +11,7 @@ import {
 } from "@/lib/discord/chat";
 import { createDiscordChannelMessageAs } from "@/lib/notifications/discord";
 import type { DiscordCapability } from "@/lib/discord/roles";
-import type { TeammateMeta, TeammateRole } from "@/lib/discord/teammates";
+import { TEAMMATES, type TeammateMeta, type TeammateRole } from "@/lib/discord/teammates";
 
 const CAPABILITY_KO: Record<DiscordCapability, string> = {
   read: "공장 현황·지표·이슈 조회",
@@ -80,6 +82,30 @@ export function isUniqueViolation(error: unknown): boolean {
 
 export type TeammateMentionResult = "replied" | "skipped" | "failed";
 
+/** teammate_run.payload 에 저장하는 멘션 원문. worker 재기동 후 재시도에 쓴다. */
+export interface MentionPayload {
+  guildId: string;
+  channelId: string;
+  userId: string;
+  messageId: string;
+  text: string;
+}
+
+export function parseMentionPayload(value: unknown): MentionPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ["guildId", "channelId", "userId", "messageId"] as const) {
+    if (typeof record[key] !== "string" || !(record[key] as string)) return null;
+  }
+  return {
+    guildId: record.guildId as string,
+    channelId: record.channelId as string,
+    userId: record.userId as string,
+    messageId: record.messageId as string,
+    text: typeof record.text === "string" ? record.text : "",
+  };
+}
+
 /**
  * INSERT-first claim. dedupeKey unique 위반(P2002)은 이미 처리한 실행이라는 뜻이라
  * null 을 돌려주고, 그 외 오류는 그대로 던진다.
@@ -110,6 +136,13 @@ export async function handleTeammateMention(input: {
   busy?: boolean;
 }): Promise<TeammateMentionResult> {
   const { meta } = input;
+  const payload: MentionPayload = {
+    guildId: input.guildId,
+    channelId: input.channelId,
+    userId: input.userId,
+    messageId: input.messageId,
+    text: input.text,
+  };
   const runId = await claimTeammateRun(() =>
     prisma.teammateRun.create({
       data: {
@@ -120,34 +153,54 @@ export async function handleTeammateMention(input: {
         status: "PROCESSING",
         attempts: 1,
         startedAt: new Date(),
+        // worker 가 응답 도중 죽으면 maintain 이 payload 로 재시도한다.
+        payload: payload as unknown as Prisma.InputJsonValue,
       },
       select: { id: true },
     }),
   );
   if (!runId) return "skipped";
 
-  const reply = async (text: string) =>
-    createDiscordChannelMessageAs(input.botToken, input.channelId, text, {
-      plain: true,
-      replyToMessageId: input.messageId,
-    });
-
   if (input.busy) {
-    await reply("지금 다른 요청을 처리하고 있습니다. 잠시 후 다시 불러주세요.");
+    await createDiscordChannelMessageAs(
+      input.botToken,
+      input.channelId,
+      "지금 다른 요청을 처리하고 있습니다. 잠시 후 다시 불러주세요.",
+      { plain: true, replyToMessageId: input.messageId },
+    );
     await prisma.teammateRun.update({
       where: { id: runId },
-      data: { status: "COMPLETED", outcome: "busy", completedAt: new Date() },
+      data: { status: "COMPLETED", outcome: "busy", completedAt: new Date(), payload: Prisma.DbNull },
     });
     return "replied";
   }
 
+  return replyToMention(runId, meta, input.botToken, payload);
+}
+
+/**
+ * claim 이 끝난 멘션 run 의 응답 본체. 최초 처리와 worker 재기동 후 재시도가
+ * 같은 경로를 쓴다. 정상 완료 시 payload 를 비운다.
+ */
+async function replyToMention(
+  runId: string,
+  meta: TeammateMeta,
+  botToken: string,
+  payload: MentionPayload,
+): Promise<TeammateMentionResult> {
+  const reply = async (text: string) =>
+    createDiscordChannelMessageAs(botToken, payload.channelId, text, {
+      plain: true,
+      replyToMessageId: payload.messageId,
+    });
+
   const key = discordTurnKey({
-    guildId: input.guildId,
-    channelId: input.channelId,
-    userId: input.userId,
+    guildId: payload.guildId,
+    channelId: payload.channelId,
+    userId: payload.userId,
     teammate: meta.role,
   });
-  const question = input.text || "당신의 역할과 지금 볼 만한 담당 영역 현황을 짧게 소개해줘.";
+  const question = payload.text || "당신의 역할과 지금 볼 만한 담당 영역 현황을 짧게 소개해줘.";
   let answer: string;
   try {
     const history = await loadDiscordHistory(key);
@@ -168,6 +221,7 @@ export async function handleTeammateMention(input: {
       console.error(`[teammate:${meta.role}] mention error`, message);
       await reply("응답 생성에 실패했습니다. 잠시 후 다시 시도하세요.");
     }
+    // 폴백 답변까지 보냈으므로 재시도하지 않는 최종 실패다. payload 는 진단용으로 남긴다.
     await prisma.teammateRun.update({
       where: { id: runId },
       data: { status: "FAILED", outcome: message.slice(0, 500), completedAt: new Date() },
@@ -183,7 +237,45 @@ export async function handleTeammateMention(input: {
       status: posted.ok ? "COMPLETED" : "FAILED",
       outcome: posted.ok ? "replied" : `discord: ${posted.error ?? "전송 실패"}`.slice(0, 500),
       completedAt: new Date(),
+      ...(posted.ok ? { payload: Prisma.DbNull } : {}),
     },
   });
   return posted.ok ? "replied" : "failed";
+}
+
+/**
+ * maintain 이 PENDING 으로 되돌린 멘션 run 을 하나 claim 해 재시도한다.
+ * 처리했으면 true. 순찰 큐와 같은 optimistic claim idiom 을 쓴다.
+ */
+export async function processNextTeammateMentionRetry(
+  withSlot: <T>(fn: () => Promise<T>) => Promise<T>,
+): Promise<boolean> {
+  const candidate = await prisma.teammateRun.findFirst({
+    where: { status: "PENDING", trigger: "mention" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, teammate: true, payload: true },
+  });
+  if (!candidate) return false;
+  const claimed = await prisma.teammateRun.updateMany({
+    where: { id: candidate.id, status: "PENDING" },
+    data: { status: "PROCESSING", attempts: { increment: 1 }, startedAt: new Date() },
+  });
+  if (claimed.count !== 1) return true;
+
+  const payload = parseMentionPayload(candidate.payload);
+  const meta = (TEAMMATES as Partial<Record<string, TeammateMeta>>)[candidate.teammate];
+  const botToken = meta ? env.discordTeammateBotToken(meta.role) : "";
+  if (!payload || !meta || !botToken) {
+    await prisma.teammateRun.update({
+      where: { id: candidate.id },
+      data: {
+        status: "FAILED",
+        outcome: "재시도에 필요한 payload 또는 팀원 자격증명이 없습니다.",
+        completedAt: new Date(),
+      },
+    });
+    return true;
+  }
+  await withSlot(() => replyToMention(candidate.id, meta, botToken, payload));
+  return true;
 }

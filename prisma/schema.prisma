@@ -795,6 +795,10 @@ model TeammateRun {
   findingCount Int               @default(0)
   findings     Json?
   issueUrls    Json?
+  /// 멘션 원문(guildId/channelId/userId/messageId/text). worker 재기동으로 끊긴
+  /// 멘션을 재시도할 때 필요하다. 정상 완료 시 비운다(원문 보존 최소화 —
+  /// 대화 자체는 discord_turn 에 남는다).
+  payload      Json?
   outcome      String?           @db.Text
   attempts     Int               @default(0)
   startedAt    DateTime?         @db.DateTime(3)
