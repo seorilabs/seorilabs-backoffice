@@ -1,7 +1,7 @@
-# AI 팀원 Gateway 워커. 팀원 봇 5개의 Discord Gateway WebSocket 연결을 프로세스
-# 하나로 유지하고(멘션 대화), teammate_run 순찰 큐를 소화한다.
-# 자격증명은 SealedSecret 의 DISCORD_TEAMMATE_* 10키(2026-08-21~22 투입). 키를 빼면
-# 해당 팀원만 비활성, 플래그를 끄면 워커 전체가 idle 로 돌아간다.
+# 담당제 AI 팀원 Gateway 워커. 팀원 봇 6개(오너 5 + 운영 총괄 서리)의 Discord
+# Gateway WebSocket 연결을 프로세스 하나로 유지하고(멘션 대화), teammate_run
+# 순찰 큐를 소화한다. 자격증명은 SealedSecret 의 DISCORD_TEAMMATE_* 12키.
+# 키를 빼면 해당 팀원만 비활성, 플래그를 끄면 워커 전체가 idle 로 돌아간다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,6 +67,9 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
             - name: DISCORD_CHANNEL_FINANCE_ALERTS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_FINANCE_ALERTS_ID } }
+            # 담당제 통합 운영 채널 — 순찰 보고·confirm 카드가 여기 모인다.
+            - name: DISCORD_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
             # 순찰 dedupe 는 open/closed GitHub 이슈를 교차 조회한다.
             - name: GITHUB_APP_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_APP_ID } }
@@ -74,29 +77,34 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_PRIVATE_KEY } }
             - name: GEMINI_API_KEY
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GEMINI_API_KEY } }
-            # 팀원 봇 자격증명(role 당 APPLICATION_ID, BOT_TOKEN). Phase 0 완료 전에는
+            # 팀원 봇 자격증명(팀원당 APPLICATION_ID, BOT_TOKEN). 기존 직군 앱을
+            # 리네임 재활용하므로 토큰 값은 같고 env 키만 담당제 키다. 재봉인 전에는
             # 키가 없으므로 전부 optional — 미설정 팀원은 워커가 건너뛴다.
-            - name: DISCORD_TEAMMATE_PRODUCT_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_PRODUCT_APPLICATION_ID, optional: true } }
-            - name: DISCORD_TEAMMATE_PRODUCT_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_PRODUCT_BOT_TOKEN, optional: true } }
-            - name: DISCORD_TEAMMATE_DATA_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_DATA_APPLICATION_ID, optional: true } }
-            - name: DISCORD_TEAMMATE_DATA_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_DATA_BOT_TOKEN, optional: true } }
-            - name: DISCORD_TEAMMATE_DEVELOPMENT_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_DEVELOPMENT_APPLICATION_ID, optional: true } }
-            - name: DISCORD_TEAMMATE_DEVELOPMENT_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_DEVELOPMENT_BOT_TOKEN, optional: true } }
-            - name: DISCORD_TEAMMATE_QA_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_QA_APPLICATION_ID, optional: true } }
-            - name: DISCORD_TEAMMATE_QA_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_QA_BOT_TOKEN, optional: true } }
-            - name: DISCORD_TEAMMATE_FINANCE_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_APPLICATION_ID, optional: true } }
-            - name: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_FINANCE_BOT_TOKEN, optional: true } }
-            # 서리 재무 비용 순찰 소스. 전부 optional — 미설정 소스는 리포트에
+            - name: DISCORD_TEAMMATE_NOEUL_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_NOEUL_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_NOEUL_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_NOEUL_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_ISEUL_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_ISEUL_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_ISEUL_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_ISEUL_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_BARAM_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_BARAM_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_BARAM_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_BARAM_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_SAEBYEOK_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SAEBYEOK_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_SAEBYEOK_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SAEBYEOK_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_MARU_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_MARU_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_MARU_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_MARU_BOT_TOKEN, optional: true } }
+            - name: DISCORD_TEAMMATE_SEORI_APPLICATION_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SEORI_APPLICATION_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_SEORI_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SEORI_BOT_TOKEN, optional: true } }
+            # 운영 총괄(서리) 비용 순찰 소스. 전부 optional — 미설정 소스는 리포트에
             # "미설정" 으로 표기된다. GITHUB_BILLING_TOKEN 은 조직 billing 읽기 전용
             # fine-grained PAT(신형 청구 API 는 GitHub App 토큰 불가).
             - name: GITHUB_BILLING_TOKEN

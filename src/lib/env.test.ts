@@ -28,7 +28,7 @@ test(".env.example은 Telegram 키를 남기지 않고 env가 읽는 Discord 키
   for (const key of literal) {
     assert.match(envExample, new RegExp(`^${key}=`, "m"), `${key} 누락`);
   }
-  // 목적지 9종과 역할 10종이 모두 있어야 배달과 권한 판정이 로컬에서 재현된다.
-  assert.equal(channels.length, 9);
+  // 목적지 10종(담당제 app-ops 포함)과 역할 10종이 모두 있어야 배달과 권한 판정이 로컬에서 재현된다.
+  assert.equal(channels.length, 10);
   assert.equal(roles.length, 10);
 });

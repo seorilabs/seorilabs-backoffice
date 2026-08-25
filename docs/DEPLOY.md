@@ -163,25 +163,34 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
 지나면 notification worker가 Discord에서 삭제한다.
 
-### AI 팀원 봇 (teammate worker)
+### AI 팀원 봇 (teammate worker) — 담당제
 
-역할별 별도 Discord 앱 5개(서리 프로덕트/데이터/개발/QA/재무)가 `backoffice-teammate-worker`
-(`k8s/teammate-worker.yaml`) 한 프로세스에서 Gateway 연결 5개로 동작한다. 멘션 대화와
-`teammate_run` 순찰 큐(트리거는 `k8s/teammate-patrol-cronjobs.yaml`)를 담당한다.
+담당제 팀원 6명(오너 노을/이슬/바람/새벽/마루 + 운영 총괄 서리)이 각자 별도 Discord
+앱으로 `backoffice-teammate-worker`(`k8s/teammate-worker.yaml`) 한 프로세스에서
+Gateway 연결 6개로 동작한다. 오너는 `App.ownerTeammate` 로 배분된 앱 포트폴리오를
+E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(종량제 비용·org 장애·담당
+미배정)을 본다. 순찰 보고와 confirm 카드는 통합 운영 채널
+`DISCORD_CHANNEL_APP_OPS_ID`(#app-ops) 한 곳에 모인다.
 
-- Secret key: `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA,FINANCE}_{APPLICATION_ID,BOT_TOKEN}`
-  (10키, 전부 `optional: true`). 원본은 `~/.config/seorilabs` 카탈로그
-  `shared/discord/teammate-<role>-bot`(macOS 키체인 `com.seorilabs.discord.teammate-<role>`).
-- 서리 재무(finance) 비용 순찰 소스 key: `GITHUB_BILLING_TOKEN`(fine-grained PAT,
+- Secret key: `DISCORD_TEAMMATE_{NOEUL,ISEUL,BARAM,SAEBYEOK,MARU,SEORI}_{APPLICATION_ID,BOT_TOKEN}`
+  (12키, 전부 `optional: true`). 기존 직군 앱 5개(프로덕트→노을 등)를 리네임 재활용해
+  토큰 값은 유지되고 env 키만 담당제 키로 재봉인한다. 원본은 `~/.config/seorilabs`
+  카탈로그 `shared/discord/teammate-<key>-bot`.
+- 포트폴리오 재배분: `UPDATE app SET ownerTeammate='<key>' WHERE slug='...'` 데이터
+  갱신만으로 반영(배포 불필요). 미배정 앱은 서리 순찰이 경고한다. `platform` 레포는
+  인프라라 의도적 미배정.
+- 운영 총괄(서리) 비용 순찰 소스 key: `GITHUB_BILLING_TOKEN`(fine-grained PAT,
   키체인 `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`,
   `STABILITY_API_KEY`. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 표기된다.
 - 전체 비활성: `FEATURE_DISCORD_TEAMMATES=false` 로 전환(워커가 idle 로만 남음).
-  팀원 1명만 비활성: 해당 role 의 키 2개를 SealedSecret 에서 제거.
-- 토큰 로테이션: Developer Portal 에서 Reset Token → 키체인 갱신(`security add-generic-password
-  -U -a syous -s com.seorilabs.discord.teammate-<role> -w`) → 위 kubeseal 절차로 재봉인 →
+  팀원 1명만 비활성: 해당 팀원의 키 2개를 SealedSecret 에서 제거.
+- 토큰 로테이션: Developer Portal 에서 Reset Token → 키체인 갱신 → kubeseal 재봉인 →
   apply → `kubectl -n platform rollout restart deploy/backoffice-teammate-worker`.
-- 순찰 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-teammate-patrol-<role> smoke-patrol-<role>`.
+- 순찰 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-teammate-patrol-<key> smoke-patrol-<key>`.
   순찰은 pod 내 DB 근거만 쓰고, 이슈 초안은 사람이 confirm 카드 버튼으로 승인해야 등록된다.
+- 담당제 전환 정리: 구 직군 CronJob 은 apply 로 삭제되지 않으므로 전환 배포 후 1회
+  `kubectl -n platform delete cronjob backoffice-teammate-patrol-{development,product,data,qa,finance}`.
+  구 `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA,FINANCE}_*` 10키는 재봉인 시 제거한다.
 - 팀원 봇에는 Interactions Endpoint 를 설정하지 않는다 — 초안 confirm 카드는 메인 봇이
   게시하므로 interaction 서명·검증 경로는 기존 단일 앱 그대로다.
 

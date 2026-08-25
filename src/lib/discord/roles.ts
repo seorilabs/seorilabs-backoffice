@@ -52,6 +52,7 @@ export const DISCORD_CARD_CHANNEL_KEYS = [
   "release-ops", // 배포 상태 카드의 마켓 후속 작업
   "ops-alerts", // 장애 확인·담당 지정
   "metrics-daily", // 지표 계열 장애 카드
+  "app-ops", // AI 팀원 이슈 초안 confirm 카드
 ] as const;
 
 /**

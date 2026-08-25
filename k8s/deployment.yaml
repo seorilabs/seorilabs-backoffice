@@ -213,6 +213,9 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
             - name: DISCORD_CHANNEL_METRICS_DAILY_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID } }
+            # 담당제 통합 운영 채널 — confirm 카드 버튼 allowlist 검증에 필요.
+            - name: DISCORD_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
             - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
             - name: DISCORD_ROLE_OPERATOR_ID

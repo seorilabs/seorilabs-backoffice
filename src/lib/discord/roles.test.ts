@@ -66,6 +66,7 @@ test("카드 채널 목록에는 버튼이 실려 나가는 목적지가 모두 
     "release-ops",
     "ops-alerts",
     "metrics-daily",
+    "app-ops",
   ]);
 });
 
