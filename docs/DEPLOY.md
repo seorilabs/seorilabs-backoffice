@@ -165,8 +165,8 @@ Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_
 
 ### AI 팀원 봇 (teammate worker)
 
-역할별 별도 Discord 앱 4개(서리 프로덕트/데이터/개발/QA)가 `backoffice-teammate-worker`
-(`k8s/teammate-worker.yaml`) 한 프로세스에서 Gateway 연결 4개로 동작한다. 멘션 대화와
+역할별 별도 Discord 앱 5개(서리 프로덕트/데이터/개발/QA/재무)가 `backoffice-teammate-worker`
+(`k8s/teammate-worker.yaml`) 한 프로세스에서 Gateway 연결 5개로 동작한다. 멘션 대화와
 `teammate_run` 순찰 큐(트리거는 `k8s/teammate-patrol-cronjobs.yaml`)를 담당한다.
 
 - Secret key: `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA,FINANCE}_{APPLICATION_ID,BOT_TOKEN}`

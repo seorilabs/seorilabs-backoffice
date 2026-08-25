@@ -24,12 +24,13 @@ const CAPABILITY_KO: Record<DiscordCapability, string> = {
   vault_index: "지식 볼트 인덱싱",
 };
 
-// 권한 밖 요청을 받았을 때 지목할 담당 팀원 안내. 4명 모두 같은 표를 쓴다.
+// 권한 밖 요청을 받았을 때 지목할 담당 팀원 안내. 팀원 전원이 같은 표를 쓴다.
 const REFERRAL_MATRIX = [
   "- 지표 해석·계측 공백: 서리 데이터",
   "- 코드 결함·운영 장애·배포 문제: 서리 개발",
   "- 기획·우선순위·승인 대기: 서리 프로덕트",
   "- 릴리즈 품질·스토어 리뷰 불만: 서리 QA",
+  "- 종량제 비용·예산·크레딧 잔량: 서리 재무",
 ].join("\n");
 
 export function teammateSystemPrompt(meta: TeammateMeta, snapshot: string): string {

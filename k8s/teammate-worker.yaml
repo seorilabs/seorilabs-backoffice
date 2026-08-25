@@ -1,6 +1,6 @@
-# AI 팀원 Gateway 워커. 팀원 봇 4개의 Discord Gateway WebSocket 연결을 프로세스
+# AI 팀원 Gateway 워커. 팀원 봇 5개의 Discord Gateway WebSocket 연결을 프로세스
 # 하나로 유지하고(멘션 대화), teammate_run 순찰 큐를 소화한다.
-# 자격증명은 SealedSecret 의 DISCORD_TEAMMATE_* 8키(2026-08-21 투입). 키를 빼면
+# 자격증명은 SealedSecret 의 DISCORD_TEAMMATE_* 10키(2026-08-21~22 투입). 키를 빼면
 # 해당 팀원만 비활성, 플래그를 끄면 워커 전체가 idle 로 돌아간다.
 apiVersion: apps/v1
 kind: Deployment

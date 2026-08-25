@@ -32,7 +32,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Gemini 전역 직렬화(semaphore 1). 팀원 4명이 무료 쿼타를 동시에 태우지 않게 한다.
+// Gemini 전역 직렬화(semaphore 1). LLM 쓰는 팀원들이 무료 쿼타를 동시에 태우지 않게 한다.
 let geminiChain: Promise<void> = Promise.resolve();
 
 function withGeminiSlot<T>(fn: () => Promise<T>): Promise<T> {
