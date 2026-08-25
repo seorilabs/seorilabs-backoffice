@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { verifyStaticToken } from "@/lib/security";
-import { isTeammateRole } from "@/lib/discord/teammates";
+import { isTeammateKey } from "@/lib/discord/teammates";
 import { patrolDedupeKey } from "@/lib/discord/teammate-findings";
 
 // AI 팀원 순찰 트리거(CronJob 이 role 별로 호출). 순찰 자체는 수 분이 걸릴 수
@@ -20,17 +20,17 @@ export async function POST(req: NextRequest) {
   if (!env.featureDiscordTeammates()) {
     return NextResponse.json({ error: "teammates disabled" }, { status: 503 });
   }
-  const role = req.nextUrl.searchParams.get("role") ?? "";
-  if (!isTeammateRole(role)) {
-    return NextResponse.json({ error: "unknown role" }, { status: 400 });
+  const key = req.nextUrl.searchParams.get("role") ?? "";
+  if (!isTeammateKey(key)) {
+    return NextResponse.json({ error: "unknown teammate" }, { status: 400 });
   }
   try {
     const run = await prisma.teammateRun.create({
       data: {
-        teammate: role,
+        teammate: key,
         trigger: "schedule",
-        dedupeKey: patrolDedupeKey(role),
-        scope: `patrol:${role}`,
+        dedupeKey: patrolDedupeKey(key),
+        scope: `patrol:${key}`,
       },
       select: { id: true },
     });

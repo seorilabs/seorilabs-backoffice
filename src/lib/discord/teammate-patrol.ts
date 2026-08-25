@@ -14,12 +14,19 @@ import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility"
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { asStringArray } from "@/lib/format";
-import { TEAMMATES, type TeammateMeta, type TeammateRole } from "@/lib/discord/teammates";
+import {
+  appsOwnedBy,
+  TEAMMATES,
+  type OwnedApp,
+  type TeammateKey,
+  type TeammateMeta,
+} from "@/lib/discord/teammates";
 import { withGemini429Retry } from "@/lib/discord/teammate-chat";
 import { collectFinanceCosts } from "@/lib/discord/teammate-costs";
 import {
   buildIssueBody,
   extractTeammateMarkers,
+  markerFindingKey,
   parsePatrolFindings,
   registrationDecision,
   renderPatrolReport,
@@ -69,12 +76,18 @@ function finding(input: Omit<PatrolFinding, "status">): PatrolFinding {
   return { ...input, status: "skipped" };
 }
 
-// ── 팀원별 collector — 전부 pod 내 DB 근거 ──────────────────────────────────
+// ── 담당제 collector — 전부 pod 내 DB 근거 ─────────────────────────────────
+// 오너는 담당 앱(App.ownerTeammate) 포트폴리오로 필터한 점검 전체를 실행하고,
+// 총괄(서리)은 재무 3소스 + appId 없는 조직 횡단 항목을 본다.
 
-async function collectProduct(now: Date): Promise<PatrolFinding[]> {
+async function collectOwnerFindings(apps: readonly OwnedApp[], now: Date): Promise<PatrolFinding[]> {
   const findings: PatrolFinding[] = [];
-  const apps = await prisma.app.findMany({
-    where: { ...visibleAppWhere, currentStage: { not: "LIVEOPS" } },
+  if (apps.length === 0) return findings;
+  const appIds = apps.map((app) => app.id);
+
+  // 단계 정체 — 미론칭 앱이 같은 단계에 오래 머무는가
+  const stalled = await prisma.app.findMany({
+    where: { id: { in: appIds }, currentStage: { not: "LIVEOPS" } },
     select: {
       slug: true,
       displayName: true,
@@ -83,7 +96,7 @@ async function collectProduct(now: Date): Promise<PatrolFinding[]> {
       transitions: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true } },
     },
   });
-  for (const app of apps) {
+  for (const app of stalled) {
     const since = app.transitions[0]?.createdAt;
     if (!since) continue;
     const days = ageDays(since, now);
@@ -99,8 +112,9 @@ async function collectProduct(now: Date): Promise<PatrolFinding[]> {
     }));
   }
 
+  // 승인 대기·P1 정체 — 담당 앱 이슈만
   const openIssues = await prisma.issueMirror.findMany({
-    where: { ...visibleIssueWhere, state: "OPEN" },
+    where: { ...visibleIssueWhere, state: "OPEN", appId: { in: appIds } },
     select: { repoFullName: true, number: true, title: true, labels: true, priority: true, ghUpdatedAt: true },
     orderBy: { ghUpdatedAt: "asc" },
     take: 300,
@@ -129,13 +143,10 @@ async function collectProduct(now: Date): Promise<PatrolFinding[]> {
       }));
     }
   }
-  return findings;
-}
 
-async function collectDataTeam(now: Date): Promise<PatrolFinding[]> {
-  const findings: PatrolFinding[] = [];
+  // GA4 export 공백·DAU 급락
   const ga4Apps = await prisma.app.findMany({
-    where: { ...visibleAppWhere, ga4Dataset: { not: null } },
+    where: { id: { in: appIds }, ga4Dataset: { not: null } },
     select: {
       slug: true,
       displayName: true,
@@ -177,8 +188,9 @@ async function collectDataTeam(now: Date): Promise<PatrolFinding[]> {
     }
   }
 
+  // AppsInToss 콘솔 지표 공백
   const consoleApps = await prisma.app.findMany({
-    where: { ...visibleAppWhere, aitMiniAppId: { not: null } },
+    where: { id: { in: appIds }, aitMiniAppId: { not: null } },
     select: {
       slug: true,
       displayName: true,
@@ -200,56 +212,13 @@ async function collectDataTeam(now: Date): Promise<PatrolFinding[]> {
       }));
     }
   }
-  return findings;
-}
 
-async function collectDevelopment(now: Date): Promise<PatrolFinding[]> {
-  const findings: PatrolFinding[] = [];
-  const incidents = await prisma.operationalIncident.findMany({
-    where: { status: "OPEN", firstDetectedAt: { lt: new Date(now.getTime() - INCIDENT_AGE_HOURS * 3_600_000) } },
-    select: {
-      dedupeKey: true,
-      kind: true,
-      severity: true,
-      summary: true,
-      firstDetectedAt: true,
-      app: { select: { displayName: true, repoFullName: true } },
-    },
-    orderBy: { firstDetectedAt: "asc" },
-    take: 10,
-  });
-  for (const incident of incidents) {
-    const hours = Math.floor((now.getTime() - incident.firstDetectedAt.getTime()) / 3_600_000);
-    findings.push(finding({
-      key: `incident:${incident.dedupeKey}`,
-      title: `${incident.app?.displayName ?? incident.kind} 장애 ${hours}시간 미해소`,
-      detail: `${incident.summary.slice(0, 200)} — ${hours}시간째 OPEN 상태다.`,
-      repoFullName: incident.app?.repoFullName ?? null,
-      labels: ["P2"],
-      evidence: [`장애 ${incident.kind} · 심각도 ${incident.severity} · 최초 감지 ${incident.firstDetectedAt.toISOString()}`],
-    }));
-  }
-
-  const failedRuns = await prisma.workflowRunMirror.findMany({
-    where: { conclusion: "failure", ghUpdatedAt: { gt: new Date(now.getTime() - DAY_MS) } },
-    select: { repoFullName: true, runId: true, name: true, headBranch: true, ghUpdatedAt: true },
-    orderBy: { ghUpdatedAt: "desc" },
-    take: 50,
-  });
-  for (const run of failedRuns) {
-    if (!/deploy/i.test(run.name ?? "")) continue;
-    findings.push(finding({
-      key: `deploy-fail:${run.repoFullName}:${run.runId}`,
-      title: `${run.repoFullName} 배포 워크플로 실패`,
-      detail: `${run.repoFullName} 의 "${run.name}" 실행이 실패로 끝났다 (${run.headBranch ?? "ref 불명"}).`,
-      repoFullName: run.repoFullName,
-      labels: ["P2"],
-      evidence: [`workflow run ${run.runId} · ${run.ghUpdatedAt.toISOString()} · https://github.com/${run.repoFullName}/actions/runs/${run.runId}`],
-    }));
-  }
+  // 장애·배포 실패·릴리즈 정체·심사 대기·저평점 군집
+  findings.push(...(await collectIncidentFindings(now, { appIds })));
+  findings.push(...(await collectDeployFailFindings(now, { appIds })));
 
   const stuckReleases = await prisma.releaseRecord.findMany({
-    where: { status: "IN_PROGRESS", updatedAt: { lt: new Date(now.getTime() - RELEASE_STUCK_HOURS * 3_600_000) } },
+    where: { appId: { in: appIds }, status: "IN_PROGRESS", updatedAt: { lt: new Date(now.getTime() - RELEASE_STUCK_HOURS * 3_600_000) } },
     select: { id: true, version: true, market: true, updatedAt: true, app: { select: { displayName: true, repoFullName: true } } },
     take: 10,
   });
@@ -264,13 +233,26 @@ async function collectDevelopment(now: Date): Promise<PatrolFinding[]> {
       evidence: [`release record ${release.id} · 마지막 갱신 ${release.updatedAt.toISOString()}`],
     }));
   }
-  return findings;
-}
 
-async function collectQa(now: Date): Promise<PatrolFinding[]> {
-  const findings: PatrolFinding[] = [];
+  const pendingReleases = await prisma.releaseRecord.findMany({
+    where: { appId: { in: appIds }, status: "PENDING", createdAt: { lt: new Date(now.getTime() - SUBMISSION_STUCK_DAYS * DAY_MS) } },
+    select: { id: true, version: true, market: true, createdAt: true, app: { select: { displayName: true, repoFullName: true } } },
+    take: 10,
+  });
+  for (const release of pendingReleases) {
+    const days = ageDays(release.createdAt, now);
+    findings.push(finding({
+      key: `submission-stuck:${release.id}`,
+      title: `${release.app.displayName} ${release.version} ${release.market} ${days}일째 대기`,
+      detail: `${release.app.displayName} ${release.version} 의 ${release.market} 배포 레코드가 생성 후 ${days}일째 PENDING 이다. 심사 제출이나 배포 트리거가 누락됐을 수 있다.`,
+      repoFullName: release.app.repoFullName,
+      labels: ["P3"],
+      evidence: [`release record ${release.id} · 생성 ${release.createdAt.toISOString().slice(0, 10)} · 상태 PENDING`],
+    }));
+  }
+
   const reviews = await prisma.storeReviewObservation.findMany({
-    where: { rating: { lte: 2 }, lastObservedAt: { gt: new Date(now.getTime() - REVIEW_CLUSTER_DAYS * DAY_MS) } },
+    where: { appId: { in: appIds }, rating: { lte: 2 }, lastObservedAt: { gt: new Date(now.getTime() - REVIEW_CLUSTER_DAYS * DAY_MS) } },
     select: { store: true, rating: true, app: { select: { slug: true, displayName: true, repoFullName: true } } },
   });
   const clusters = new Map<string, { count: number; ratings: number[]; app: (typeof reviews)[number]["app"]; store: string }>();
@@ -293,44 +275,119 @@ async function collectQa(now: Date): Promise<PatrolFinding[]> {
     }));
   }
 
-  const pendingReleases = await prisma.releaseRecord.findMany({
-    where: { status: "PENDING", createdAt: { lt: new Date(now.getTime() - SUBMISSION_STUCK_DAYS * DAY_MS) } },
-    select: { id: true, version: true, market: true, createdAt: true, app: { select: { displayName: true, repoFullName: true } } },
+  return findings;
+}
+
+// 장애 점검 — 오너는 담당 앱, 총괄은 appId 없는 조직 항목.
+async function collectIncidentFindings(
+  now: Date,
+  scope: { appIds: string[] } | { org: true },
+): Promise<PatrolFinding[]> {
+  const findings: PatrolFinding[] = [];
+  const incidents = await prisma.operationalIncident.findMany({
+    where: {
+      status: "OPEN",
+      firstDetectedAt: { lt: new Date(now.getTime() - INCIDENT_AGE_HOURS * 3_600_000) },
+      appId: "appIds" in scope ? { in: scope.appIds } : null,
+    },
+    select: {
+      dedupeKey: true,
+      kind: true,
+      severity: true,
+      summary: true,
+      firstDetectedAt: true,
+      app: { select: { displayName: true, repoFullName: true } },
+    },
+    orderBy: { firstDetectedAt: "asc" },
     take: 10,
   });
-  for (const release of pendingReleases) {
-    const days = ageDays(release.createdAt, now);
+  for (const incident of incidents) {
+    const hours = Math.floor((now.getTime() - incident.firstDetectedAt.getTime()) / 3_600_000);
     findings.push(finding({
-      key: `submission-stuck:${release.id}`,
-      title: `${release.app.displayName} ${release.version} ${release.market} ${days}일째 대기`,
-      detail: `${release.app.displayName} ${release.version} 의 ${release.market} 배포 레코드가 생성 후 ${days}일째 PENDING 이다. 심사 제출이나 배포 트리거가 누락됐을 수 있다.`,
-      repoFullName: release.app.repoFullName,
-      labels: ["P3"],
-      evidence: [`release record ${release.id} · 생성 ${release.createdAt.toISOString().slice(0, 10)} · 상태 PENDING`],
+      key: `incident:${incident.dedupeKey}`,
+      title: `${incident.app?.displayName ?? incident.kind} 장애 ${hours}시간 미해소`,
+      detail: `${incident.summary.slice(0, 200)} — ${hours}시간째 OPEN 상태다.`,
+      repoFullName: incident.app?.repoFullName ?? null,
+      labels: ["P2"],
+      evidence: [`장애 ${incident.kind} · 심각도 ${incident.severity} · 최초 감지 ${incident.firstDetectedAt.toISOString()}`],
     }));
   }
   return findings;
 }
 
+// 배포 워크플로 실패 — 오너는 담당 앱, 총괄은 appId 없는 조직 레포.
+async function collectDeployFailFindings(
+  now: Date,
+  scope: { appIds: string[] } | { org: true },
+): Promise<PatrolFinding[]> {
+  const findings: PatrolFinding[] = [];
+  const failedRuns = await prisma.workflowRunMirror.findMany({
+    where: {
+      conclusion: "failure",
+      ghUpdatedAt: { gt: new Date(now.getTime() - DAY_MS) },
+      appId: "appIds" in scope ? { in: scope.appIds } : null,
+    },
+    select: { repoFullName: true, runId: true, name: true, headBranch: true, ghUpdatedAt: true },
+    orderBy: { ghUpdatedAt: "desc" },
+    take: 50,
+  });
+  for (const run of failedRuns) {
+    if (!/deploy/i.test(run.name ?? "")) continue;
+    findings.push(finding({
+      key: `deploy-fail:${run.repoFullName}:${run.runId}`,
+      title: `${run.repoFullName} 배포 워크플로 실패`,
+      detail: `${run.repoFullName} 의 "${run.name}" 실행이 실패로 끝났다 (${run.headBranch ?? "ref 불명"}).`,
+      repoFullName: run.repoFullName,
+      labels: ["P2"],
+      evidence: [`workflow run ${run.runId} · ${run.ghUpdatedAt.toISOString()} · https://github.com/${run.repoFullName}/actions/runs/${run.runId}`],
+    }));
+  }
+  return findings;
+}
+
+// 운영 총괄(서리) — 재무 3소스 + LLM 비용 + 조직 횡단 항목 + 담당 미배정 앱.
+async function collectChiefFindings(now: Date): Promise<CollectResult> {
+  const finance = await collectFinanceCosts(now);
+  const findings = [...finance.findings];
+  findings.push(...(await collectIncidentFindings(now, { org: true })));
+  findings.push(...(await collectDeployFailFindings(now, { org: true })));
+
+  // 담당 미배정 ACTIVE 앱 — 신규 앱은 null 로 시작하므로 여기서 드러난다.
+  // platform 레포는 인프라라 의도적으로 미배정(총괄 소관)이다.
+  const unassigned = await prisma.app.findMany({
+    where: { ...visibleAppWhere, ownerTeammate: null, slug: { not: "platform" } },
+    select: { slug: true, displayName: true },
+    take: 20,
+  });
+  if (unassigned.length > 0) {
+    findings.push(finding({
+      key: `owner-unassigned:${unassigned.map((app) => app.slug).sort().join(",")}`,
+      title: `담당자 미배정 앱 ${unassigned.length}건`,
+      detail: "App.ownerTeammate 가 비어 있어 어떤 담당자의 순찰에도 포함되지 않는 앱이 있다. 배분이 필요하다.",
+      repoFullName: null,
+      labels: [],
+      evidence: unassigned.map((app) => `${app.displayName} (${app.slug})`),
+    }));
+  }
+  return { findings, summaryLines: finance.summaryLines };
+}
+
 interface CollectResult {
   findings: PatrolFinding[];
-  // 발견과 무관하게 리포트에 항상 싣는 현황 스냅샷(파이낸스 전용, 다른 팀원은 빈 배열).
+  // 발견과 무관하게 리포트에 항상 싣는 현황 스냅샷(총괄 전용, 오너는 빈 배열).
   summaryLines: string[];
 }
 
-async function collect(role: TeammateRole, now: Date): Promise<CollectResult> {
-  if (role === "finance") {
-    const result = await collectFinanceCosts(now);
+async function collect(meta: TeammateMeta, now: Date): Promise<CollectResult> {
+  if (meta.kind === "chief") {
+    const result = await collectChiefFindings(now);
     return {
       findings: result.findings.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN),
       summaryLines: result.summaryLines,
     };
   }
-  const collected =
-    role === "product" ? await collectProduct(now)
-    : role === "data" ? await collectDataTeam(now)
-    : role === "development" ? await collectDevelopment(now)
-    : await collectQa(now);
+  const apps = await appsOwnedBy(meta.key);
+  const collected = await collectOwnerFindings(apps, now);
   // 근거 게이트: evidence 없는 항목은 어떤 경로로도 초안이 될 수 없다.
   return {
     findings: collected.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN),
@@ -355,7 +412,9 @@ async function fetchExistingMarkers(repos: string[], since: Date): Promise<Map<s
     for (const issue of issues) {
       if (issue.pull_request) continue;
       for (const marker of extractTeammateMarkers(issue.body ?? "")) {
-        if (!found.has(marker)) found.set(marker, issue.html_url);
+        // 팀원 접두를 벗긴 finding key 로 색인 — 담당제 전환 전 마커와도 이어진다.
+        const findingKey = markerFindingKey(marker);
+        if (!found.has(findingKey)) found.set(findingKey, issue.html_url);
       }
     }
   }
@@ -384,7 +443,7 @@ async function synthesize(meta: TeammateMeta, findings: PatrolFinding[]): Promis
         },
         { role: "user", content: JSON.stringify(payload) },
       ],
-      { jsonOutput: true, maxTokens: 1_500, usage: { path: "patrol", teammate: meta.role } },
+      { jsonOutput: true, maxTokens: 1_500, usage: { path: "patrol", teammate: meta.key } },
     ),
   );
   const parsed = parseLooseJson<{ report?: unknown; suggestions?: Record<string, unknown> }>(raw);
@@ -418,23 +477,23 @@ async function executePatrol(
   run: { id: string; teammate: string },
   withGeminiSlot: <T>(fn: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
-  const meta = TEAMMATES[run.teammate as TeammateRole];
+  const meta = TEAMMATES[run.teammate as TeammateKey];
   if (!meta) throw new Error(`알 수 없는 팀원: ${run.teammate}`);
-  const botToken = env.discordTeammateBotToken(meta.role);
-  if (!botToken) throw new Error(`${meta.role} 팀원 자격증명이 설정되지 않았습니다.`);
+  const botToken = env.discordTeammateBotToken(meta.key);
+  if (!botToken) throw new Error(`${meta.key} 팀원 자격증명이 설정되지 않았습니다.`);
   const channelId = env.discordChannelId(meta.channelKey);
   if (!channelId) throw new Error(`${meta.channelKey} 채널 ID 가 설정되지 않았습니다.`);
 
   const now = new Date();
-  const { findings, summaryLines } = await collect(meta.role, now);
+  const { findings, summaryLines } = await collect(meta, now);
 
   // open+closed 이슈 교차 dedupe — 닫힌 이슈의 재발견도 marker 로 걸러진다.
-  // 초안을 만들지 않는 팀원(finance)은 대상 repo 자체가 없어 자연히 건너뛴다.
+  // 초안을 만들지 않는 총괄은 대상 repo 자체가 없어 자연히 건너뛴다.
   const repos = [...new Set(findings.map((item) => item.repoFullName).filter((repo): repo is string => Boolean(repo)))];
   if (repos.length > 0) {
     const existing = await fetchExistingMarkers(repos, new Date(now.getTime() - DEDUPE_WINDOW_DAYS * DAY_MS));
     for (const item of findings) {
-      const url = existing.get(`${meta.role}:${item.key}`);
+      const url = existing.get(item.key);
       if (url) {
         item.status = "deduped";
         item.issueUrl = url;
@@ -446,7 +505,7 @@ async function executePatrol(
   for (const index of draftIndexes) findings[index].status = "drafted";
 
   let narrative = "";
-  // 파이낸스 리포트는 결정적 수치라 Gemini 서술을 쓰지 않는다(쿼타 보호).
+  // 총괄(서리) 리포트는 결정적 수치라 Gemini 서술을 쓰지 않는다(쿼타 보호).
   if (meta.draftsEnabled && findings.length > 0 && env.geminiChatConfigured()) {
     try {
       const synthesis = await withGeminiSlot(() => synthesize(meta, findings));
@@ -460,7 +519,7 @@ async function executePatrol(
       // 429 재실패는 run FAILED 로 남겨 다음날 재시도한다. 그 외(파싱 등)는
       // 서술 없이 결정적 리포트로 계속 간다.
       if (message.includes("(429)")) throw error;
-      console.error(`[teammate-patrol:${meta.role}] Gemini 종합 실패:`, message || "error");
+      console.error(`[teammate-patrol:${meta.key}] Gemini 종합 실패:`, message || "error");
     }
   }
 
@@ -483,7 +542,7 @@ async function executePatrol(
     const created = await createDiscordChannelMessage(channelId, card, {
       components: draftCardRows(run.id, index),
     });
-    if (!created.ok) console.error(`[teammate-patrol:${meta.role}] 초안 카드 게시 실패:`, created.error);
+    if (!created.ok) console.error(`[teammate-patrol:${meta.key}] 초안 카드 게시 실패:`, created.error);
   }
 
   await prisma.teammateRun.update({
@@ -592,7 +651,7 @@ export async function registerTeammateFinding(input: {
     [decision.repoFullName],
     new Date(Date.now() - DEDUPE_WINDOW_DAYS * DAY_MS),
   );
-  const duplicateUrl = existing.get(`${run.teammate}:${item.key}`);
+  const duplicateUrl = existing.get(item.key);
 
   let message: string;
   let summary: string;

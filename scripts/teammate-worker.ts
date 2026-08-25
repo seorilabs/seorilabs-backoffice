@@ -79,7 +79,7 @@ function onMessageCreate(state: TeammateConnection, guildId: string, data: unkno
   task
     .catch((error) => {
       console.error(
-        `[teammate-worker:${state.meta.role}] 멘션 처리 실패:`,
+        `[teammate-worker:${state.meta.key}] 멘션 처리 실패:`,
         error instanceof Error ? error.message : "error",
       );
     })
@@ -89,7 +89,7 @@ function onMessageCreate(state: TeammateConnection, guildId: string, data: unkno
 }
 
 async function connectTeammate(meta: TeammateMeta, guildId: string): Promise<TeammateConnection> {
-  const botToken = env.discordTeammateBotToken(meta.role);
+  const botToken = env.discordTeammateBotToken(meta.key);
   const gatewayUrl = await fetchGatewayUrl(botToken);
   const state: TeammateConnection = {
     meta,
@@ -102,7 +102,7 @@ async function connectTeammate(meta: TeammateMeta, guildId: string): Promise<Tea
     token: botToken,
     intents: GATEWAY_INTENT_GUILDS | GATEWAY_INTENT_GUILD_MESSAGES,
     gatewayUrl,
-    label: meta.role,
+    label: meta.key,
     handlers: {
       onReady: ({ botUserId }) => {
         state.botUserId = botUserId;
@@ -130,12 +130,12 @@ async function main(): Promise<void> {
   for (const meta of teammates) {
     try {
       connections.push(await connectTeammate(meta, guildId));
-      console.log(`[teammate-worker] ${meta.ko}(${meta.role}) Gateway 연결 시작`);
+      console.log(`[teammate-worker] ${meta.ko}(${meta.key}) Gateway 연결 시작`);
     } catch (error) {
       // 토큰 하나가 잘못돼도 나머지 팀원은 계속 일해야 한다. 실패 팀원은
       // 로그로 드러내고 다음 Pod 재시작 때 재시도된다.
       console.error(
-        `[teammate-worker] ${meta.role} 연결 실패:`,
+        `[teammate-worker] ${meta.key} 연결 실패:`,
         error instanceof Error ? error.message : "error",
       );
     }

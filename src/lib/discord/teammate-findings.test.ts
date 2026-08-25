@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildIssueBody,
   extractTeammateMarkers,
+  markerFindingKey,
   parsePatrolFindings,
   patrolDedupeKey,
   registrationDecision,
@@ -28,8 +29,8 @@ function fixture(overrides: Partial<PatrolFinding>): PatrolFinding {
 
 test("순찰 dedupe 키는 KST 날짜 기준이라 하루 1회를 보장한다", () => {
   // 16:00Z 는 KST 로 다음날 01:00 — UTC 날짜로 만들면 CronJob 재발화가 이중 실행된다.
-  assert.equal(patrolDedupeKey("data", new Date("2026-08-21T16:00:00Z")), "patrol:data:20260822");
-  assert.equal(patrolDedupeKey("qa", new Date("2026-08-21T10:00:00Z")), "patrol:qa:20260821");
+  assert.equal(patrolDedupeKey("noeul", new Date("2026-08-21T16:00:00Z")), "patrol:noeul:20260822");
+  assert.equal(patrolDedupeKey("seori", new Date("2026-08-21T10:00:00Z")), "patrol:seori:20260821");
 });
 
 test("근거 없는 항목과 대상 레포 없는 항목은 초안이 되지 않는다", () => {
@@ -53,25 +54,32 @@ test("초안은 실행당 3건으로 상한하고 dedupe 된 항목은 제외한
 });
 
 test("이슈 marker 는 본문에서 그대로 복원돼 open+closed dedupe 에 쓰인다", () => {
-  const marker = teammateIssueMarker("data", "dau-drop:foam-party");
+  const marker = teammateIssueMarker("baram", "dau-drop:foam-party");
   const closedIssueBody = `해결됨\n\n${marker}\n<!-- 다른 주석 -->`;
-  assert.deepEqual(extractTeammateMarkers(closedIssueBody), ["data:dau-drop:foam-party"]);
+  assert.deepEqual(extractTeammateMarkers(closedIssueBody), ["baram:dau-drop:foam-party"]);
   assert.deepEqual(extractTeammateMarkers("marker 없는 본문"), []);
 });
 
+test("marker 의 팀원 접두를 벗기면 담당제 전환 전 이슈와도 dedupe 가 이어진다", () => {
+  // 직군 체계(data)로 등록된 이슈의 marker 도 finding key 는 같다.
+  assert.equal(markerFindingKey("data:dau-drop:foam-party"), "dau-drop:foam-party");
+  assert.equal(markerFindingKey("baram:dau-drop:foam-party"), "dau-drop:foam-party");
+  assert.equal(markerFindingKey("no-colon"), "no-colon");
+});
+
 test("발견 0건 순찰은 0건으로 보고한다", () => {
-  const report = renderPatrolReport(TEAMMATES.data, [], "");
-  assert.match(report, /서리 데이터 순찰 보고/);
+  const report = renderPatrolReport(TEAMMATES.noeul, [], "");
+  assert.match(report, /노을 순찰 보고/);
   assert.match(report, /이상 없음 — 발견 0건/);
 });
 
 test("현황 스냅샷이 있는 팀원은 0건이어도 스냅샷과 함께 보고한다", () => {
-  // 파이낸스 리포트는 경고가 없어도 월누적 수치가 본문이다.
-  const report = renderPatrolReport(TEAMMATES.finance, [], "", [
+  // 총괄 리포트는 경고가 없어도 월누적 수치가 본문이다.
+  const report = renderPatrolReport(TEAMMATES.seori, [], "", [
     "이번 달(2026-08) 종량제 현황",
     "- GitHub Actions: 환산 1500분/3000분 (50%)",
   ]);
-  assert.match(report, /서리 재무 순찰 보고/);
+  assert.match(report, /서리 순찰 보고/);
   assert.match(report, /환산 1500분\/3000분/);
   assert.match(report, /경고 없음/);
   assert.ok(!report.includes("이상 없음 — 발견 0건"));
@@ -79,7 +87,7 @@ test("현황 스냅샷이 있는 팀원은 0건이어도 스냅샷과 함께 보
 
 test("발견이 있으면 스냅샷 뒤에 경고 목록이 붙는다", () => {
   const report = renderPatrolReport(
-    TEAMMATES.finance,
+    TEAMMATES.seori,
     [fixture({ key: "gh-overage:2026-08", title: "GitHub Actions 초과 과금", repoFullName: null })],
     "",
     ["- GitHub Actions: 환산 4000분/3000분 (133%)"],
@@ -94,7 +102,7 @@ test("순찰 보고는 발견·초안·중복 수와 근거를 담는다", () =>
     fixture({ status: "drafted" }),
     fixture({ key: "x", title: "기존 건", status: "deduped", issueUrl: "https://github.com/seorilabs/foam-party/issues/1" }),
   ];
-  const report = renderPatrolReport(TEAMMATES.data, findings, "요약 서술");
+  const report = renderPatrolReport(TEAMMATES.noeul, findings, "요약 서술");
   assert.match(report, /발견 2건 · 이슈 초안 1건 · 기존 이슈 중복 1건/);
   assert.match(report, /요약 서술/);
   assert.match(report, /직전 7일 중앙값 30/);

@@ -1,20 +1,20 @@
-# AI 팀원 순찰 트리거 CronJob — role 별 teammate_run PENDING 행 삽입만 하고
-# 실제 순찰은 teammate worker 가 소화한다. dedupeKey(role×KST 날짜) unique 라
+# 담당제 AI 팀원 순찰 트리거 CronJob — 팀원별 teammate_run PENDING 행 삽입만 하고
+# 실제 순찰은 teammate worker 가 소화한다. dedupeKey(팀원×KST 날짜) unique 라
 # 중복 발화는 무해하다. 스케줄은 UTC.
-# - development 22:30 UTC(07:30 KST): 밤사이 장애·배포 실패를 아침 전에
-# - finance 00:00 UTC(09:00 KST): 아침 종량제 비용 리포트
-# - product 23:30 UTC(08:30 KST): 업무 시작 전 승인 대기·정체 현황
-# - data 01:30 UTC(10:30 KST): analytics-collect(01:00 UTC) 착지 후
-# - qa 02:00 UTC(11:00 KST): 스토어 리뷰 수집(30분 주기) 누적분 반영
+# - seori(운영 총괄) 00:00 UTC(09:00 KST): 아침 종량제 비용·조직 횡단 리포트
+# - 오너 5명 01:30~02:30 UTC(10:30~11:30 KST): analytics-collect(01:00 UTC) 착지 후
+#   15분 간격 시차 — 모든 오너 순찰이 지표 점검을 포함하므로 지표 수집 이후로 정렬.
+# 구 직군 체계 CronJob(-development/-product/-data/-qa/-finance)은 apply 로 지워지지
+# 않으므로 배포 후 kubectl delete cronjob 으로 정리한다(런북 참고).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backoffice-teammate-patrol-development
+  name: backoffice-teammate-patrol-seori
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "30 22 * * *"
+  schedule: "0 0 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
@@ -34,7 +34,7 @@ spec:
                 - >-
                   curl -fsS --max-time 30 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
-                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=development"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=seori"
               env:
                 - name: ADMIN_TOKEN
                   valueFrom:
@@ -52,50 +52,7 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backoffice-teammate-patrol-product
-  namespace: platform
-  labels:
-    app.kubernetes.io/name: backoffice
-spec:
-  schedule: "30 23 * * *"
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 2
-  failedJobsHistoryLimit: 3
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      activeDeadlineSeconds: 60
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: trigger
-              image: curlimages/curl:8.11.1
-              command:
-                - sh
-                - -c
-                - >-
-                  curl -fsS --max-time 30 -XPOST
-                  -H "x-admin-token: $ADMIN_TOKEN"
-                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=product"
-              env:
-                - name: ADMIN_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-secrets
-                      key: INTERNAL_ADMIN_TOKEN
-              securityContext:
-                runAsUser: 10001
-                runAsGroup: 10001
-                allowPrivilegeEscalation: false
-                readOnlyRootFilesystem: true
-                capabilities:
-                  drop: ["ALL"]
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: backoffice-teammate-patrol-data
+  name: backoffice-teammate-patrol-noeul
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
@@ -120,7 +77,7 @@ spec:
                 - >-
                   curl -fsS --max-time 30 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
-                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=data"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=noeul"
               env:
                 - name: ADMIN_TOKEN
                   valueFrom:
@@ -138,7 +95,50 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backoffice-teammate-patrol-qa
+  name: backoffice-teammate-patrol-iseul
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "45 1 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 60
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 30 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=iseul"
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-teammate-patrol-baram
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
@@ -163,7 +163,7 @@ spec:
                 - >-
                   curl -fsS --max-time 30 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
-                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=qa"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=baram"
               env:
                 - name: ADMIN_TOKEN
                   valueFrom:
@@ -181,12 +181,12 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backoffice-teammate-patrol-finance
+  name: backoffice-teammate-patrol-saebyeok
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "0 0 * * *" # 09:00 KST — 아침 비용 리포트
+  schedule: "15 2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
@@ -206,7 +206,50 @@ spec:
                 - >-
                   curl -fsS --max-time 30 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
-                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=finance"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=saebyeok"
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-teammate-patrol-maru
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 60
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 30 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  "http://backoffice.platform.svc.cluster.local/api/admin/teammates/patrol?role=maru"
               env:
                 - name: ADMIN_TOKEN
                   valueFrom:

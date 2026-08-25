@@ -10,23 +10,36 @@ import {
 } from "@/lib/discord/teammate-chat";
 import { TEAMMATES } from "@/lib/discord/teammates";
 
-test("팀원 프롬프트에 정체성·권한·거절 안내가 들어간다", () => {
-  const prompt = teammateSystemPrompt(TEAMMATES.qa, "앱 10개");
-  assert.ok(prompt.includes("서리 QA"));
+const PROMPT_CONTEXT = {
+  portfolio: [
+    { id: "1", slug: "happy-farm", displayName: "해피팜", repoFullName: "seorilabs/happy-farm", currentStage: "LIVEOPS" },
+  ],
+  directory: ["- 노을: happy-farm", "- 이슬: lizard-tycoon"],
+};
+
+test("오너 프롬프트에 정체성·포트폴리오·권한·담당자 지목이 들어간다", () => {
+  const prompt = teammateSystemPrompt(TEAMMATES.noeul, "앱 10개", PROMPT_CONTEXT);
+  assert.ok(prompt.includes('AI 담당자 "노을"'));
+  assert.ok(prompt.includes("담당 포트폴리오"));
+  assert.ok(prompt.includes("해피팜 (happy-farm)"));
   assert.ok(prompt.includes("릴리즈 승인 판단"));
-  assert.ok(prompt.includes("권한 밖 요청은 수행하지 말고"));
-  assert.ok(prompt.includes("지표 해석·계측 공백: 서리 데이터"));
+  assert.ok(prompt.includes("담당자를 지목한다"));
+  assert.ok(prompt.includes("- 이슬: lizard-tycoon"));
   assert.ok(prompt.includes("앱 10개"));
+  // 배포 트리거는 어떤 오너에게도 없다.
+  assert.ok(!prompt.includes("- 배포 실행"));
 });
 
-test("데이터 팀원 프롬프트에는 배포 권한이 없다", () => {
-  const prompt = teammateSystemPrompt(TEAMMATES.data, "현황");
-  assert.ok(!prompt.includes("- 배포 실행"));
-  assert.ok(prompt.includes("지표 이상 확인·해석"));
+test("운영 총괄 프롬프트는 포트폴리오 대신 횡단 영역을 담는다", () => {
+  const prompt = teammateSystemPrompt(TEAMMATES.seori, "현황", { portfolio: [], directory: PROMPT_CONTEXT.directory });
+  assert.ok(prompt.includes('운영 총괄 AI "서리"'));
+  assert.ok(!prompt.includes("담당 포트폴리오"));
+  assert.ok(prompt.includes("운영 장애 확인·분류"));
+  assert.ok(prompt.includes("- 노을: happy-farm"));
 });
 
 test("멘션 dedupe 키는 메시지와 팀원 조합이다", () => {
-  assert.equal(mentionDedupeKey("123", "development"), "mention:123:development");
+  assert.equal(mentionDedupeKey("123", "noeul"), "mention:123:noeul");
 });
 
 test("resume replay 로 같은 dedupeKey 가 다시 오면 claim 이 null 로 skip 된다", async () => {

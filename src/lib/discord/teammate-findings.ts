@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import type { TeammateMeta, TeammateRole } from "@/lib/discord/teammates";
+import type { TeammateKey, TeammateMeta } from "@/lib/discord/teammates";
 
 // 순찰 발견(finding)의 데이터 모델과 순수 로직. octokit 등 외부 클라이언트에
 // 닿는 실행 경로는 teammate-patrol.ts 에 있다(테스트와 web 번들 분리 목적).
@@ -19,15 +19,25 @@ export interface PatrolFinding {
   issueUrl?: string;
 }
 
-export function patrolDedupeKey(role: TeammateRole, now = new Date()): string {
+export function patrolDedupeKey(key: TeammateKey, now = new Date()): string {
   const kstDate = new Date(now.getTime() + 9 * 3_600_000).toISOString().slice(0, 10).replace(/-/g, "");
-  return `patrol:${role}:${kstDate}`;
+  return `patrol:${key}:${kstDate}`;
 }
 
 const MARKER_PREFIX = "seori-teammate";
 
 export function teammateIssueMarker(role: string, findingKey: string): string {
   return `<!-- ${MARKER_PREFIX}:${role}:${findingKey} -->`;
+}
+
+/**
+ * marker "<teammate>:<findingKey>" 에서 팀원 접두를 벗긴 finding key.
+ * finding key 는 앱/이슈 식별자를 품어 팀원과 무관하게 유일하므로, 담당제 전환
+ * 이전 직군 팀원이 등록한 이슈와도 dedupe 가 이어진다.
+ */
+export function markerFindingKey(marker: string): string {
+  const idx = marker.indexOf(":");
+  return idx === -1 ? marker : marker.slice(idx + 1);
 }
 
 export function extractTeammateMarkers(body: string): string[] {
