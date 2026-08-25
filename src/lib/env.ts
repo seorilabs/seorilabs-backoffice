@@ -143,6 +143,8 @@ export const env = {
   gcpMonthlyBudgetKrw: () => Number(optional("GCP_MONTHLY_BUDGET_KRW", "0")),
   stabilityApiKey: () => optional("STABILITY_API_KEY").trim(),
   stabilityMinCredits: () => Number(optional("STABILITY_MIN_CREDITS", "200")),
+  // 0 = LLM 월 예산 미확정(보고만). 유료 provider 도입 후 실측으로 확정한다.
+  llmMonthlyBudgetUsd: () => Number(optional("LLM_MONTHLY_BUDGET_USD", "0")),
   // AI 팀원 봇(product/data/development/qa/finance). 역할별 별도 Discord 앱이며
   // 슬래시 명령은 메인 봇 전유라 팀원에겐 APPLICATION_ID 와 BOT_TOKEN 만 필요하다.
   featureDiscordTeammates: () => bool("FEATURE_DISCORD_TEAMMATES", false),

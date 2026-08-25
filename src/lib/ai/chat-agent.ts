@@ -65,6 +65,7 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
     const raw = await geminiChat(convo, {
       maxTokens: 1100,
       jsonOutput: true,
+      usage: { path: "chat-agent" },
     });
     lastRaw = raw;
     const parsed = tryParseAction(raw);
@@ -82,7 +83,7 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
   // 라운드 소진 → 도구 없이 최종 정리 1회.
   const final = await geminiChat(
     [...convo, { role: "user", content: "지금까지 정보로 한국어 최종 답변만 작성." }],
-    { maxTokens: 1100 },
+    { maxTokens: 1100, usage: { path: "chat-agent" } },
   );
   return final || lastRaw;
 }

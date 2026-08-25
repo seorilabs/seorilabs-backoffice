@@ -202,6 +202,23 @@ export function gcpBudgetFindings(totalKrw: number, budgetKrw: number, invoiceMo
   })];
 }
 
+// ── LLM 사용량 (ai_usage 원장) ──────────────────────────────────────────────
+
+export function llmBudgetFindings(totalUsd: number, budgetUsd: number, month: string): PatrolFinding[] {
+  if (budgetUsd <= 0) return []; // 예산 미확정 — 보고만 하고 경고하지 않는다.
+  const pct = Math.round((totalUsd / budgetUsd) * 100);
+  if (pct < GITHUB_QUOTA_WARN_PCT) return [];
+  const over = pct >= 100;
+  return [warning({
+    key: `llm-budget:${month}`,
+    title: over ? `LLM 월 예산 초과 (${pct}%)` : `LLM 월 예산 ${pct}% 도달`,
+    detail: over
+      ? `이번 달 LLM 사용 비용이 예산 ${usd(budgetUsd)} 을 넘었다. 모델 배정 티어나 호출 빈도를 점검해야 한다.`
+      : `이번 달 LLM 사용 비용이 예산 ${usd(budgetUsd)} 의 ${pct}% 에 도달했다.`,
+    evidence: [`이번 달 LLM 비용 ${usd(totalUsd)} / 예산 ${usd(budgetUsd)}`],
+  })];
+}
+
 // ── Stability AI 크레딧 ─────────────────────────────────────────────────────
 
 async function fetchStabilityCredits(key: string): Promise<number> {
@@ -283,6 +300,18 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
     } catch (error) {
       summaryLines.push(`- GCP: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
     }
+  }
+
+  // LLM 사용량 — ai_usage 원장(로컬 DB) 집계라 별도 자격증명이 없다.
+  // 동적 import 로 prisma 의존을 이 모듈의 정적 그래프에서 격리한다(테스트 그래프 보호).
+  try {
+    const { monthlyAiUsageSummary } = await import("@/lib/ai/usage");
+    const llm = await monthlyAiUsageSummary(now);
+    const detail = llm.lines.length ? ` (${llm.lines.join(" · ")})` : " (호출 없음)";
+    summaryLines.push(`- LLM: ${usd(llm.totalUsd)}${detail}`);
+    findings.push(...llmBudgetFindings(llm.totalUsd, env.llmMonthlyBudgetUsd(), month));
+  } catch (error) {
+    summaryLines.push(`- LLM: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
   }
 
   // Stability 크레딧

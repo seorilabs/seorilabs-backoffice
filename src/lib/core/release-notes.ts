@@ -82,6 +82,7 @@ export async function generateReleaseNoteCore(
     prompt,
     maxTokens: 4000,
     jsonOutput: true,
+    usage: { path: "release-notes" },
   });
   const parsed = parseLooseJson<Partial<Record<ReleaseNotePromptKey, string>>>(raw);
   // 순수 텍스트 불릿으로 정리하되 번역 원문은 자르지 않는다. 누락 언어만 현지어 폴백을 쓴다.
