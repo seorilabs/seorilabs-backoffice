@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { GeminiNotConfiguredError } from "@/lib/ai/gemini";
+import { chatFnFor } from "@/lib/ai/provider";
 import { runChatAgent } from "@/lib/ai/chat-agent";
 import {
   appendDiscordTurns,
@@ -84,10 +85,10 @@ export function mentionDedupeKey(messageId: string, key: TeammateKey): string {
 }
 
 /**
- * Gemini 무료 쿼타의 429 에 대한 최소 대응. 30초 대기 후 1회만 재시도하고,
- * 재실패는 호출부가 폴백 처리한다. gemini.ts 는 건드리지 않는다.
+ * LLM 429 에 대한 최소 대응. 30초 대기 후 1회만 재시도하고, 재실패는 호출부가
+ * 폴백 처리한다. 세 provider 클라이언트 모두 "(429)" 형식으로 에러를 던진다.
  */
-export async function withGemini429Retry<T>(fn: () => Promise<T>, waitMs = 30_000): Promise<T> {
+export async function withLlm429Retry<T>(fn: () => Promise<T>, waitMs = 30_000): Promise<T> {
   try {
     return await fn();
   } catch (error) {
@@ -237,12 +238,15 @@ async function replyToMention(
       meta.kind === "owner" ? appsOwnedBy(meta.key) : Promise.resolve([]),
       ownerDirectoryLines(),
     ]);
-    answer = await withGemini429Retry(async () =>
-      runChatAgent([
-        { role: "system", content: teammateSystemPrompt(meta, snapshot, { portfolio, directory }) },
-        ...history,
-        { role: "user", content: question },
-      ]),
+    answer = await withLlm429Retry(async () =>
+      runChatAgent(
+        [
+          { role: "system", content: teammateSystemPrompt(meta, snapshot, { portfolio, directory }) },
+          ...history,
+          { role: "user", content: question },
+        ],
+        { chat: chatFnFor(meta), usage: { path: "chat-agent", teammate: meta.key } },
+      ),
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "error";

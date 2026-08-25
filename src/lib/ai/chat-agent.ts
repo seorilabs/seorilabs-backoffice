@@ -1,4 +1,5 @@
 import { geminiChat, type ChatMessage } from "@/lib/ai/gemini";
+import type { ChatFn } from "@/lib/ai/provider";
 import { TOOLS, runTool } from "@/lib/ai/tools";
 import { stripFences, extractObject } from "@/lib/ai/json";
 
@@ -53,7 +54,19 @@ function toolInstructions(): string {
  * messages: [system, ...history, user]. system 에 도구 안내를 덧붙여 루프 실행.
  * 항상 사용자에게 보여줄 최종 텍스트를 반환.
  */
-export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
+export interface RunChatAgentOptions {
+  /** 페르소나 배정 모델의 ChatFn(provider.chatFnFor). 미전달 시 Gemini 기본. */
+  chat?: ChatFn;
+  /** ai_usage 귀속 컨텍스트. 미전달 시 path "chat-agent" 로 기록된다. */
+  usage?: { path: string; teammate?: string | null };
+}
+
+export async function runChatAgent(
+  messages: ChatMessage[],
+  options: RunChatAgentOptions = {},
+): Promise<string> {
+  const chat = options.chat ?? geminiChat;
+  const usage = options.usage ?? { path: "chat-agent" };
   const [system, ...rest] = messages;
   const convo: ChatMessage[] = [
     { role: "system", content: (system?.content ?? "") + "\n" + toolInstructions() },
@@ -62,10 +75,10 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
 
   let lastRaw = "";
   for (let i = 0; i < MAX_ROUNDS; i++) {
-    const raw = await geminiChat(convo, {
+    const raw = await chat(convo, {
       maxTokens: 1100,
       jsonOutput: true,
-      usage: { path: "chat-agent" },
+      usage,
     });
     lastRaw = raw;
     const parsed = tryParseAction(raw);
@@ -81,9 +94,9 @@ export async function runChatAgent(messages: ChatMessage[]): Promise<string> {
   }
 
   // 라운드 소진 → 도구 없이 최종 정리 1회.
-  const final = await geminiChat(
+  const final = await chat(
     [...convo, { role: "user", content: "지금까지 정보로 한국어 최종 답변만 작성." }],
-    { maxTokens: 1100, usage: { path: "chat-agent" } },
+    { maxTokens: 1100, usage },
   );
   return final || lastRaw;
 }

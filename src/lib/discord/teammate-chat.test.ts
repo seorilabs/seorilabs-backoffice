@@ -6,7 +6,7 @@ import {
   isUniqueViolation,
   mentionDedupeKey,
   teammateSystemPrompt,
-  withGemini429Retry,
+  withLlm429Retry,
 } from "@/lib/discord/teammate-chat";
 import { TEAMMATES } from "@/lib/discord/teammates";
 
@@ -80,7 +80,7 @@ test("teammate_run dedupeKey 는 스키마에서 unique 로 강제된다", () =>
 
 test("Gemini 429 는 한 번만 재시도한다", async () => {
   let calls = 0;
-  const result = await withGemini429Retry(async () => {
+  const result = await withLlm429Retry(async () => {
     calls += 1;
     if (calls === 1) throw new Error("Gemini API 요청 실패 (429): quota");
     return "ok";
@@ -92,7 +92,7 @@ test("Gemini 429 는 한 번만 재시도한다", async () => {
 test("429 가 아닌 오류는 즉시 던진다", async () => {
   let calls = 0;
   await assert.rejects(
-    withGemini429Retry(async () => {
+    withLlm429Retry(async () => {
       calls += 1;
       throw new Error("Gemini API 요청 실패 (500): boom");
     }, 1),
@@ -104,7 +104,7 @@ test("429 가 아닌 오류는 즉시 던진다", async () => {
 test("재시도까지 429 면 오류를 그대로 던진다", async () => {
   let calls = 0;
   await assert.rejects(
-    withGemini429Retry(async () => {
+    withLlm429Retry(async () => {
       calls += 1;
       throw new Error("Gemini API 요청 실패 (429): quota");
     }, 1),

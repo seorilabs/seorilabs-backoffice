@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { geminiChat } from "@/lib/ai/gemini";
+import { chatFnFor } from "@/lib/ai/provider";
 import { parseLooseJson } from "@/lib/ai/json";
 import { getInstallationOctokit } from "@/lib/github/app";
 import { createIssue } from "@/lib/github/write";
@@ -21,7 +21,7 @@ import {
   type TeammateKey,
   type TeammateMeta,
 } from "@/lib/discord/teammates";
-import { withGemini429Retry } from "@/lib/discord/teammate-chat";
+import { withLlm429Retry } from "@/lib/discord/teammate-chat";
 import { collectFinanceCosts } from "@/lib/discord/teammate-costs";
 import {
   buildIssueBody,
@@ -430,8 +430,8 @@ interface PatrolNarrative {
 
 async function synthesize(meta: TeammateMeta, findings: PatrolFinding[]): Promise<PatrolNarrative> {
   const payload = findings.map((item) => ({ key: item.key, title: item.title, evidence: item.evidence }));
-  const raw = await withGemini429Retry(() =>
-    geminiChat(
+  const raw = await withLlm429Retry(() =>
+    chatFnFor(meta)(
       [
         {
           role: "system",
