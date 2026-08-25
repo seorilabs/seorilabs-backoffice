@@ -99,3 +99,22 @@ test("재시도까지 429 면 오류를 그대로 던진다", async () => {
   );
   assert.equal(calls, 2);
 });
+
+test("멘션 payload 는 필수 식별자가 전부 있어야 파싱된다", async () => {
+  const { parseMentionPayload } = await import("@/lib/discord/teammate-chat");
+  const full = {
+    guildId: "g1",
+    channelId: "c1",
+    userId: "u1",
+    messageId: "m1",
+    text: "어제 DAU 알려줘",
+  };
+  assert.deepEqual(parseMentionPayload(full), full);
+  // text 는 빈 멘션(소개 요청)일 수 있어 없어도 된다.
+  assert.deepEqual(parseMentionPayload({ ...full, text: undefined }), { ...full, text: "" });
+  // 식별자 하나라도 빠지면 재시도 불가 — null 로 실패를 드러낸다.
+  assert.equal(parseMentionPayload({ ...full, channelId: "" }), null);
+  assert.equal(parseMentionPayload({ ...full, messageId: 123 }), null);
+  assert.equal(parseMentionPayload(null), null);
+  assert.equal(parseMentionPayload(["not", "object"]), null);
+});

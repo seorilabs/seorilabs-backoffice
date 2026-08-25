@@ -49,6 +49,11 @@ const REVIEW_CLUSTER_DAYS = 7;
 const REVIEW_CLUSTER_MIN = 3;
 const PATROL_STALE_MS = 30 * 60_000;
 const PATROL_PENDING_EXPIRE_MS = 24 * 60 * 60_000;
+// worker 재기동으로 끊긴 멘션의 재시도 창. 5분 넘게 PROCESSING 이면 끊긴 것으로
+// 보고(정상 응답은 수십 초), 생성 60분이 지난 질문에는 뒤늦게 답하지 않는다.
+const MENTION_RETRY_AFTER_MS = 5 * 60_000;
+const MENTION_RETRY_WINDOW_MS = 60 * 60_000;
+const MENTION_MAX_ATTEMPTS = 2;
 
 function ageDays(from: Date, now: Date): number {
   return Math.floor((now.getTime() - from.getTime()) / DAY_MS);
@@ -523,7 +528,29 @@ export async function processNextTeammatePatrol(
 
 /** 워커 중단으로 남은 PROCESSING, 소화되지 못한 PENDING 을 정리한다. */
 export async function maintainTeammateRuns(now = new Date()) {
-  const [stale, expired] = await prisma.$transaction([
+  const [mentionRetry, mentionExpired, stale, expired] = await prisma.$transaction([
+    // 1) 끊긴 최근 멘션은 FAILED 대신 PENDING 으로 되돌려 worker 가 재시도한다.
+    //    payload 없는 구형 행과 시도 소진 행은 아래 stale 규칙(30분 FAILED)에 맡긴다.
+    prisma.teammateRun.updateMany({
+      where: {
+        status: "PROCESSING",
+        trigger: "mention",
+        startedAt: { lt: new Date(now.getTime() - MENTION_RETRY_AFTER_MS) },
+        createdAt: { gt: new Date(now.getTime() - MENTION_RETRY_WINDOW_MS) },
+        attempts: { lt: MENTION_MAX_ATTEMPTS },
+        payload: { not: Prisma.AnyNull },
+      },
+      data: { status: "PENDING" },
+    }),
+    // 2) 재시도조차 소화되지 못한 멘션 PENDING 은 60분에 만료한다.
+    prisma.teammateRun.updateMany({
+      where: {
+        status: "PENDING",
+        trigger: "mention",
+        createdAt: { lt: new Date(now.getTime() - MENTION_RETRY_WINDOW_MS) },
+      },
+      data: { status: "FAILED", outcome: "재시도 시한(60분)을 넘겨 만료됐습니다.", completedAt: now },
+    }),
     prisma.teammateRun.updateMany({
       where: { status: "PROCESSING", startedAt: { lt: new Date(now.getTime() - PATROL_STALE_MS) } },
       data: { status: "FAILED", outcome: "worker 중단으로 실행 결과를 확인할 수 없습니다.", completedAt: now },
@@ -533,7 +560,12 @@ export async function maintainTeammateRuns(now = new Date()) {
       data: { status: "FAILED", outcome: "24시간 안에 소화되지 못해 만료됐습니다.", completedAt: now },
     }),
   ]);
-  return { stale: stale.count, expired: expired.count };
+  return {
+    mentionRetry: mentionRetry.count,
+    mentionExpired: mentionExpired.count,
+    stale: stale.count,
+    expired: expired.count,
+  };
 }
 
 // ── 이슈 등록(operator-command-worker 가 호출) ──────────────────────────────
