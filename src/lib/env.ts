@@ -145,6 +145,11 @@ export const env = {
   stabilityMinCredits: () => Number(optional("STABILITY_MIN_CREDITS", "200")),
   // 0 = LLM 월 예산 미확정(보고만). 유료 provider 도입 후 실측으로 확정한다.
   llmMonthlyBudgetUsd: () => Number(optional("LLM_MONTHLY_BUDGET_USD", "0")),
+  // P1·P2 자동 등록 — 실행당(=일일, 순찰은 하루 1회) 상한과 NOT_PLANNED 비율
+  // 기준(%). 비율 초과 시 자동 등록을 멈추고 전량 confirm 카드로 되돌린다.
+  teammateAutoDailyLimit: () => Number(optional("TEAMMATE_AUTO_DAILY_LIMIT", "2")),
+  teammateAutoNotPlannedDisablePct: () =>
+    Number(optional("TEAMMATE_AUTO_NOT_PLANNED_DISABLE_PCT", "30")),
   // 페르소나별 모델 교차 배정(Anthropic·OpenAI 추가). 키 미설정 provider 는
   // Gemini 폴백이라 플래그만 켜도 무해하다.
   featureMultiLlm: () => bool("FEATURE_MULTI_LLM", false),

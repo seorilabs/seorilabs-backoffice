@@ -17,7 +17,11 @@ import {
   handleTeammateMention,
   processNextTeammateMentionRetry,
 } from "@/lib/discord/teammate-chat";
-import { maintainTeammateRuns, processNextTeammatePatrol } from "@/lib/discord/teammate-patrol";
+import {
+  expireTeammateDrafts,
+  maintainTeammateRuns,
+  processNextTeammatePatrol,
+} from "@/lib/discord/teammate-patrol";
 
 // 팀원별 동시 처리 상한. 초과분은 Gemini 없이 혼잡 답변으로 즉시 응답한다.
 const MAX_PENDING_PER_TEAMMATE = 2;
@@ -145,11 +149,17 @@ async function main(): Promise<void> {
   // 순찰 큐(teammate_run PENDING)는 60초 주기로 직렬 소화한다. Gemini 종합은
   // 멘션과 같은 전역 슬롯을 지나므로 무료 쿼타 동시 소진이 없다.
   let lastPatrolTick = 0;
+  let lastExpireTick = 0;
   while (!stopping) {
     if (Date.now() - lastPatrolTick >= 60_000) {
       lastPatrolTick = Date.now();
       try {
         await maintainTeammateRuns();
+        if (Date.now() - lastExpireTick >= 3_600_000) {
+          lastExpireTick = Date.now();
+          const expired = await expireTeammateDrafts();
+          if (expired > 0) console.log(`[teammate-worker] confirm 초안 ${expired}건 만료 처리`);
+        }
         while (!stopping && (await processNextTeammateMentionRetry(withGeminiSlot))) {
           // maintain 이 PENDING 으로 되돌린 멘션을 순찰보다 먼저 소화한다(사람이 기다리는 중).
         }
