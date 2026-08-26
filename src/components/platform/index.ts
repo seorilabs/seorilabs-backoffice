@@ -33,4 +33,11 @@ export {
 } from "./presentation";
 
 export { PlatformMetricChart, type PlatformMetricChartProps } from "./PlatformMetricChart";
+export {
+  PlatformPresencePanel,
+  PlatformPresenceView,
+  type PlatformPresencePanelProps,
+  type PlatformPresenceState,
+  type PlatformPresenceViewProps,
+} from "./PlatformPresencePanel";
 export { PlatformAdsConsole, type PlatformAdsApp } from "./PlatformAdsConsole";

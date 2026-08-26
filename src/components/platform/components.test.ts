@@ -7,10 +7,49 @@ import {
   PlatformAuthUserResult,
   PlatformIapConsole,
   PlatformOverviewStatus,
+  PlatformPresenceView,
   PlatformRefundReviewPanel,
 } from "./index";
 
 describe("플랫폼 표현 컴포넌트", () => {
+  const presenceSnapshot = {
+    totalActiveSessions: 0,
+    measuredAt: "2026-08-26T12:00:00Z",
+    activeTtlSeconds: 150,
+    apps: [],
+  };
+
+  it("Edge 정상일 때 실제 0명을 유효한 현재값으로 그린다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformPresenceView, {
+        state: "available",
+        current: presenceSnapshot,
+        lastHealthy: presenceSnapshot,
+      }),
+    );
+
+    assert.match(html, /Edge 정상/);
+    assert.match(html, /전체 최근 활성/);
+    assert.match(html, />0<span[^>]*>명/);
+    assert.doesNotMatch(html, /동접 알 수 없음/);
+  });
+
+  it("Edge 장애 중에는 만료 결과를 0명으로 오인하지 않는다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformPresenceView, {
+        state: "unavailable",
+        current: null,
+        lastHealthy: { ...presenceSnapshot, totalActiveSessions: 7 },
+        error: "RPI Edge가 응답하지 않습니다.",
+      }),
+    );
+
+    assert.match(html, /동접 알 수 없음/);
+    assert.match(html, /마지막 정상값 7명/);
+    assert.doesNotMatch(html, /전체 최근 활성/);
+    assert.doesNotMatch(html, /마지막 정상값 0명/);
+  });
+
   it("개요에서 연결 상태와 비어 있는 capability를 구분한다", () => {
     const html = renderToStaticMarkup(
       createElement(PlatformOverviewStatus, {
@@ -80,7 +119,7 @@ describe("플랫폼 표현 컴포넌트", () => {
 
     // 정의를 안 적으면 GA4 DAU와 숫자가 다른 것이 버그로 읽힌다.
     assert.match(html, /세션 발급/);
-    assert.match(html, /동시 접속은 현재 플랫폼이 측정하지 않습니다/);
+    assert.match(html, /RPI Edge의 최근 150초 heartbeat/);
   });
 
   it("지표 0은 미확인이 아니라 0으로 그린다", () => {

@@ -217,7 +217,8 @@ export function PlatformOverviewStatus({
               */}
               활성 판정은 세션 발급·갱신 시각 기준입니다. 앱을 열었지만 토큰이
               아직 유효해 재발급이 없었던 사용자는 세지 않으므로 GA4 DAU보다
-              작게 나옵니다. 동시 접속은 현재 플랫폼이 측정하지 않습니다.
+              작게 나옵니다. 동시 접속은 아래 RPI Edge의 최근 150초 heartbeat로
+              별도 집계합니다.
               {metrics.activitySource !== "session_last_seen" && (
                 <span className="ml-1 font-medium text-amber-700">
                   Admin API가 다른 활성 기준({metrics.activitySource})을
