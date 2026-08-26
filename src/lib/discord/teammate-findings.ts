@@ -17,6 +17,10 @@ export interface PatrolFinding {
   status: "drafted" | "deduped" | "skipped" | "registered";
   suggestion?: string;
   issueUrl?: string;
+  /** 사람 confirm 없이 자동 등록된 발견(P1·P2 게이트). 채택률 집계의 분모다. */
+  auto?: boolean;
+  /** confirm 카드 Discord 메시지 ID — 3일 만료 시 카드를 갱신하는 데 쓴다. */
+  cardMessageId?: string;
 }
 
 export function patrolDedupeKey(key: TeammateKey, now = new Date()): string {
@@ -60,6 +64,111 @@ export function selectDraftIndexes(findings: readonly PatrolFinding[]): number[]
   return indexes;
 }
 
+export const AUTO_ADOPTION_WINDOW_DAYS = 14;
+export const AUTO_ADOPTION_MIN_SAMPLE = 5;
+export const DRAFT_EXPIRE_DAYS = 3;
+
+/** P1·P2 발견만 사람 confirm 없이 자동 등록할 수 있다. */
+export function isAutoRegisterPriority(labels: readonly string[]): boolean {
+  return labels.includes("P1") || labels.includes("P2");
+}
+
+/**
+ * 자동 등록 대상 선정 — 초안 요건(대상 레포·근거)에 우선순위 게이트(P1·P2)와
+ * 실행당 상한을 더한다. 순찰은 dedupeKey 로 팀원당 하루 1회라 실행당 상한이
+ * 곧 일일 상한이다.
+ */
+export function selectAutoRegisterIndexes(
+  findings: readonly PatrolFinding[],
+  limit: number,
+): number[] {
+  const indexes: number[] = [];
+  for (let i = 0; i < findings.length && indexes.length < limit; i++) {
+    const item = findings[i];
+    if (item.status !== "skipped") continue;
+    if (!item.repoFullName || item.evidence.length === 0) continue;
+    if (!isAutoRegisterPriority(item.labels)) continue;
+    indexes.push(i);
+  }
+  return indexes;
+}
+
+export interface AutoAdoptionStats {
+  registered: number;
+  notPlanned: number;
+}
+
+/**
+ * 채택률 게이트 — 최근 자동 등록 이슈 중 NOT_PLANNED 종료 비율이 기준을 넘으면
+ * 자동 등록을 멈추고 전량 confirm 카드로 되돌린다. 상태를 저장하지 않고 매 순찰
+ * 재평가하므로 채택률이 회복되면 자동으로 재개된다.
+ */
+export function evaluateAutoRegistration(
+  stats: AutoAdoptionStats,
+  opts: { minSample: number; disablePct: number },
+): { enabled: boolean; reason?: string } {
+  if (stats.registered < opts.minSample) return { enabled: true };
+  const pct = Math.round((stats.notPlanned / stats.registered) * 100);
+  if (pct >= opts.disablePct) {
+    return {
+      enabled: false,
+      reason: `최근 자동 등록 ${stats.registered}건 중 NOT_PLANNED ${stats.notPlanned}건(${pct}%) — 수동 confirm 으로 복귀`,
+    };
+  }
+  return { enabled: true };
+}
+
+export function parseIssueUrl(url: string): { repoFullName: string; number: number } | null {
+  const match = /github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/.exec(url);
+  if (!match) return null;
+  return { repoFullName: match[1], number: Number(match[2]) };
+}
+
+/** 최근 자동 등록 이슈의 채택 통계 — issueMirror 의 CLOSED+not_planned 로 판별. */
+export async function collectAutoAdoptionStats(windowDays: number): Promise<AutoAdoptionStats> {
+  const runs = await prisma.teammateRun.findMany({
+    where: {
+      trigger: "schedule",
+      status: "COMPLETED",
+      createdAt: { gte: new Date(Date.now() - windowDays * 86_400_000) },
+    },
+    select: { findings: true },
+    take: 300,
+  });
+  const registeredUrls: Array<{ repoFullName: string; number: number }> = [];
+  for (const run of runs) {
+    for (const item of parsePatrolFindings(run.findings)) {
+      if (!item.auto || item.status !== "registered" || !item.issueUrl) continue;
+      const parsed = parseIssueUrl(item.issueUrl);
+      if (parsed) registeredUrls.push(parsed);
+    }
+  }
+  if (registeredUrls.length === 0) return { registered: 0, notPlanned: 0 };
+  const mirrors = await prisma.issueMirror.findMany({
+    where: { OR: registeredUrls.map((issue) => ({ repoFullName: issue.repoFullName, number: issue.number })) },
+    select: { state: true, stateReason: true },
+  });
+  const notPlanned = mirrors.filter(
+    (issue) => issue.state === "CLOSED" && issue.stateReason === "not_planned",
+  ).length;
+  return { registered: registeredUrls.length, notPlanned };
+}
+
+/** 3일 넘게 confirm 되지 않은 drafted 초안의 인덱스 — 만료(skipped) 대상. */
+export function selectExpiredDraftIndexes(
+  findings: readonly PatrolFinding[],
+  runCreatedAt: Date,
+  now: Date,
+  ttlDays = DRAFT_EXPIRE_DAYS,
+): number[] {
+  if (now.getTime() - runCreatedAt.getTime() < ttlDays * 86_400_000) return [];
+  const indexes: number[] = [];
+  findings.forEach((item, index) => {
+    if (item.status === "drafted") indexes.push(index);
+  });
+  return indexes;
+}
+
 export function renderPatrolReport(
   meta: TeammateMeta,
   findings: readonly PatrolFinding[],
@@ -75,16 +184,20 @@ export function renderPatrolReport(
   }
   const drafted = findings.filter((item) => item.status === "drafted").length;
   const deduped = findings.filter((item) => item.status === "deduped").length;
+  const registered = findings.filter((item) => item.status === "registered").length;
   const lines = [
     `🔎 **${meta.ko} 순찰 보고**`,
     ...summaryLines,
-    `발견 ${findings.length}건 · 이슈 초안 ${drafted}건 · 기존 이슈 중복 ${deduped}건`,
+    `발견 ${findings.length}건 · 자동 등록 ${registered}건 · 이슈 초안 ${drafted}건 · 기존 이슈 중복 ${deduped}건`,
   ];
   if (narrative) lines.push("", narrative);
   findings.forEach((item, index) => {
-    lines.push("", `**${index + 1}. ${item.title}**${item.status === "deduped" ? " (기존 이슈 있음)" : ""}`);
+    const tag =
+      item.status === "deduped" ? " (기존 이슈 있음)" : item.status === "registered" ? " (자동 등록됨)" : "";
+    lines.push("", `**${index + 1}. ${item.title}**${tag}`);
     for (const evidence of item.evidence) lines.push(`- ${evidence}`);
     if (item.status === "deduped" && item.issueUrl) lines.push(`- 기존 이슈: ${item.issueUrl}`);
+    if (item.status === "registered" && item.issueUrl) lines.push(`- 등록된 이슈: ${item.issueUrl}`);
   });
   return lines.join("\n");
 }
@@ -125,6 +238,8 @@ export function parsePatrolFindings(value: Prisma.JsonValue | null): PatrolFindi
           : "skipped",
       ...(typeof record.suggestion === "string" ? { suggestion: record.suggestion } : {}),
       ...(typeof record.issueUrl === "string" ? { issueUrl: record.issueUrl } : {}),
+      ...(record.auto === true ? { auto: true } : {}),
+      ...(typeof record.cardMessageId === "string" ? { cardMessageId: record.cardMessageId } : {}),
     });
   }
   return result;

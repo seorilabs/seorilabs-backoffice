@@ -103,7 +103,7 @@ test("순찰 보고는 발견·초안·중복 수와 근거를 담는다", () =>
     fixture({ key: "x", title: "기존 건", status: "deduped", issueUrl: "https://github.com/seorilabs/foam-party/issues/1" }),
   ];
   const report = renderPatrolReport(TEAMMATES.noeul, findings, "요약 서술");
-  assert.match(report, /발견 2건 · 이슈 초안 1건 · 기존 이슈 중복 1건/);
+  assert.match(report, /발견 2건 · 자동 등록 0건 · 이슈 초안 1건 · 기존 이슈 중복 1건/);
   assert.match(report, /요약 서술/);
   assert.match(report, /직전 7일 중앙값 30/);
   assert.match(report, /기존 이슈: https:\/\/github\.com\/seorilabs\/foam-party\/issues\/1/);
@@ -157,4 +157,63 @@ test("findings JSON 파싱은 손상된 항목을 거르고 상태를 보수적�
   assert.equal(parsed[0].issueUrl, "u");
   assert.equal(parsed[1].status, "skipped");
   assert.deepEqual(parsed[1].evidence, []);
+});
+
+test("자동 등록은 P1·P2 이면서 초안 요건을 갖춘 항목만 상한 안에서 고른다", async () => {
+  const { isAutoRegisterPriority, selectAutoRegisterIndexes } = await import(
+    "@/lib/discord/teammate-findings"
+  );
+  assert.ok(isAutoRegisterPriority(["P1"]));
+  assert.ok(isAutoRegisterPriority(["P2", "bug"]));
+  assert.ok(!isAutoRegisterPriority(["P3"]));
+  assert.ok(!isAutoRegisterPriority([]));
+
+  const findings = [
+    fixture({ key: "a", labels: ["P2"] }),
+    fixture({ key: "b", labels: ["P3"] }), // 우선순위 미달 → confirm 카드
+    fixture({ key: "c", labels: ["P1"], repoFullName: null }), // 대상 레포 없음
+    fixture({ key: "d", labels: ["P2"], status: "deduped" }), // 기존 이슈
+    fixture({ key: "e", labels: ["P1"] }),
+    fixture({ key: "f", labels: ["P2"] }),
+  ];
+  // 상한 2 — a, e 까지만.
+  assert.deepEqual(selectAutoRegisterIndexes(findings, 2), [0, 4]);
+  assert.deepEqual(selectAutoRegisterIndexes(findings, 10), [0, 4, 5]);
+});
+
+test("채택률 게이트는 표본이 차기 전엔 열려 있고 NOT_PLANNED 비율 초과 시 닫힌다", async () => {
+  const { evaluateAutoRegistration } = await import("@/lib/discord/teammate-findings");
+  const opts = { minSample: 5, disablePct: 30 };
+  // 표본 미달 — 초기엔 자동 등록 허용.
+  assert.equal(evaluateAutoRegistration({ registered: 4, notPlanned: 4 }, opts).enabled, true);
+  // 표본 충족 + 비율 미달 — 유지.
+  assert.equal(evaluateAutoRegistration({ registered: 10, notPlanned: 2 }, opts).enabled, true);
+  // 비율 초과 — 수동 복귀(사유 포함).
+  const closed = evaluateAutoRegistration({ registered: 10, notPlanned: 3 }, opts);
+  assert.equal(closed.enabled, false);
+  assert.match(closed.reason ?? "", /30%/);
+});
+
+test("이슈 URL 파싱은 repo 와 번호를 복원한다", async () => {
+  const { parseIssueUrl } = await import("@/lib/discord/teammate-findings");
+  assert.deepEqual(parseIssueUrl("https://github.com/seorilabs/happy-farm/issues/482"), {
+    repoFullName: "seorilabs/happy-farm",
+    number: 482,
+  });
+  assert.equal(parseIssueUrl("https://github.com/seorilabs/happy-farm/pull/1"), null);
+  assert.equal(parseIssueUrl("not-a-url"), null);
+});
+
+test("초안 만료는 3일이 지난 run 의 drafted 만 고른다", async () => {
+  const { selectExpiredDraftIndexes } = await import("@/lib/discord/teammate-findings");
+  const findings = [
+    fixture({ key: "a", status: "drafted" }),
+    fixture({ key: "b", status: "registered" }),
+    fixture({ key: "c", status: "drafted" }),
+  ];
+  const created = new Date("2026-08-20T00:00:00Z");
+  // 3일 미만 — 만료 없음.
+  assert.deepEqual(selectExpiredDraftIndexes(findings, created, new Date("2026-08-22T00:00:00Z")), []);
+  // 3일 경과 — drafted 만.
+  assert.deepEqual(selectExpiredDraftIndexes(findings, created, new Date("2026-08-23T00:00:01Z")), [0, 2]);
 });

@@ -8,6 +8,7 @@ import { createIssue } from "@/lib/github/write";
 import {
   createDiscordChannelMessage,
   createDiscordChannelMessageAs,
+  editDiscordChannelMessage,
   type DiscordActionRow,
 } from "@/lib/notifications/discord";
 import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
@@ -24,13 +25,20 @@ import {
 import { withLlm429Retry } from "@/lib/discord/teammate-chat";
 import { collectFinanceCosts } from "@/lib/discord/teammate-costs";
 import {
+  AUTO_ADOPTION_MIN_SAMPLE,
+  AUTO_ADOPTION_WINDOW_DAYS,
   buildIssueBody,
+  collectAutoAdoptionStats,
+  DRAFT_EXPIRE_DAYS,
+  evaluateAutoRegistration,
   extractTeammateMarkers,
   markerFindingKey,
   parsePatrolFindings,
   registrationDecision,
   renderPatrolReport,
+  selectAutoRegisterIndexes,
   selectDraftIndexes,
+  selectExpiredDraftIndexes,
   type PatrolFinding,
 } from "@/lib/discord/teammate-findings";
 
@@ -501,6 +509,43 @@ async function executePatrol(
     }
   }
 
+  // P1·P2 자동 등록 — 채택률 게이트(매 순찰 재평가)와 실행당 상한 안에서
+  // confirm 버튼 없이 이슈를 만든다. 실패한 항목은 confirm 카드 후보로 남는다.
+  const issueUrls: string[] = [];
+  let autoDisabledReason: string | undefined;
+  if (meta.draftsEnabled) {
+    const stats = await collectAutoAdoptionStats(AUTO_ADOPTION_WINDOW_DAYS);
+    const evaluation = evaluateAutoRegistration(stats, {
+      minSample: AUTO_ADOPTION_MIN_SAMPLE,
+      disablePct: env.teammateAutoNotPlannedDisablePct(),
+    });
+    if (evaluation.enabled) {
+      for (const index of selectAutoRegisterIndexes(findings, env.teammateAutoDailyLimit())) {
+        const item = findings[index];
+        try {
+          const issue = await createIssue({
+            repoFullName: item.repoFullName as string,
+            title: item.title,
+            body: buildIssueBody(meta.key, item),
+            labels: [`teammate:${meta.key}`, ...item.labels],
+          });
+          item.status = "registered";
+          item.auto = true;
+          item.issueUrl = issue.html_url;
+          issueUrls.push(issue.html_url);
+        } catch (error) {
+          // 등록 실패는 confirm 카드 경로로 폴백한다(status skipped 유지).
+          console.error(
+            `[teammate-patrol:${meta.key}] 자동 등록 실패(${item.key}):`,
+            error instanceof Error ? error.message : "error",
+          );
+        }
+      }
+    } else {
+      autoDisabledReason = evaluation.reason;
+    }
+  }
+
   const draftIndexes = meta.draftsEnabled ? selectDraftIndexes(findings) : [];
   for (const index of draftIndexes) findings[index].status = "drafted";
 
@@ -523,7 +568,10 @@ async function executePatrol(
     }
   }
 
-  const report = renderPatrolReport(meta, findings, narrative, summaryLines);
+  const reportSummaryLines = autoDisabledReason
+    ? [...summaryLines, `⚠️ 자동 등록 일시 중단: ${autoDisabledReason}`]
+    : summaryLines;
+  const report = renderPatrolReport(meta, findings, narrative, reportSummaryLines);
   const posted = await createDiscordChannelMessageAs(botToken, channelId, report);
   if (!posted.ok) throw new Error(`순찰 보고 게시 실패: ${posted.error ?? "unknown"}`);
 
@@ -543,6 +591,8 @@ async function executePatrol(
       components: draftCardRows(run.id, index),
     });
     if (!created.ok) console.error(`[teammate-patrol:${meta.key}] 초안 카드 게시 실패:`, created.error);
+    // 3일 만료 시 카드를 갱신할 수 있게 메시지 ID 를 finding 에 남긴다.
+    else if (created.messageId) item.cardMessageId = created.messageId;
   }
 
   await prisma.teammateRun.update({
@@ -551,10 +601,63 @@ async function executePatrol(
       status: "COMPLETED",
       findingCount: findings.length,
       findings: findings as unknown as Prisma.InputJsonValue,
-      outcome: `발견 ${findings.length}건, 초안 ${draftIndexes.length}건, 중복 ${findings.filter((item) => item.status === "deduped").length}건`,
+      ...(issueUrls.length > 0 ? { issueUrls: issueUrls as unknown as Prisma.InputJsonValue } : {}),
+      outcome: `발견 ${findings.length}건, 자동 등록 ${issueUrls.length}건, 초안 ${draftIndexes.length}건, 중복 ${findings.filter((item) => item.status === "deduped").length}건`,
       completedAt: new Date(),
     },
   });
+}
+
+// ── confirm 카드 3일 만료 ───────────────────────────────────────────────────
+
+const DRAFT_EXPIRE_SCAN_DAYS = 14;
+
+/**
+ * 3일 넘게 confirm 되지 않은 drafted 초안을 skipped 로 만료하고, 카드가 남아
+ * 있으면 버튼을 제거해 만료를 드러낸다. worker 가 1시간 간격으로 호출한다.
+ */
+export async function expireTeammateDrafts(now = new Date()): Promise<number> {
+  const runs = await prisma.teammateRun.findMany({
+    where: {
+      trigger: "schedule",
+      status: "COMPLETED",
+      createdAt: {
+        gte: new Date(now.getTime() - DRAFT_EXPIRE_SCAN_DAYS * DAY_MS),
+        lt: new Date(now.getTime() - DRAFT_EXPIRE_DAYS * DAY_MS),
+      },
+    },
+    select: { id: true, teammate: true, createdAt: true, findings: true },
+    take: 100,
+  });
+  let expired = 0;
+  for (const run of runs) {
+    const findings = parsePatrolFindings(run.findings);
+    const indexes = selectExpiredDraftIndexes(findings, run.createdAt, now);
+    if (indexes.length === 0) continue;
+    const meta = TEAMMATES[run.teammate as TeammateKey];
+    const channelId = meta ? env.discordChannelId(meta.channelKey) : "";
+    for (const index of indexes) {
+      const item = findings[index];
+      item.status = "skipped";
+      expired += 1;
+      if (channelId && item.cardMessageId) {
+        // PATCH 는 components 를 기본으로 비워 버튼을 제거한다.
+        const edited = await editDiscordChannelMessage(
+          channelId,
+          item.cardMessageId,
+          `⏳ **이슈 초안 만료 · ${meta.ko}**\n**${item.title}**\n${DRAFT_EXPIRE_DAYS}일간 확인되지 않아 만료됐습니다. 필요하면 다음 순찰의 새 초안을 사용하세요.`,
+        );
+        if (!edited.ok) {
+          console.error(`[teammate-patrol:${run.teammate}] 만료 카드 갱신 실패:`, edited.error);
+        }
+      }
+    }
+    await prisma.teammateRun.update({
+      where: { id: run.id },
+      data: { findings: findings as unknown as Prisma.InputJsonValue },
+    });
+  }
+  return expired;
 }
 
 /** PENDING 순찰 run 을 하나 claim 해 실행한다. 처리했으면 true. */
