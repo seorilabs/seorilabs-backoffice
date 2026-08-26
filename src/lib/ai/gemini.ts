@@ -20,6 +20,8 @@ export interface ChatMessage {
 export interface ChatOptions {
   maxTokens?: number;
   jsonOutput?: boolean;
+  /** 모델 오버라이드(페르소나 교차 배정). 미전달 시 provider 기본 모델을 쓴다. */
+  model?: string;
   /** 사용량 원장(ai_usage) 귀속 컨텍스트. 미전달 시 path "unknown" 으로 기록된다. */
   usage?: { path: string; teammate?: string | null };
 }
@@ -75,7 +77,7 @@ export async function geminiChat(
   if (contents.length === 0) throw new Error("Gemini API에 보낼 사용자 메시지가 없습니다.");
 
   const baseUrl = env.geminiBaseUrl().replace(/\/+$/, "");
-  const model = env.geminiChatModel();
+  const model = opts.model ?? env.geminiChatModel();
   const url = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.geminiChatTimeoutMs());

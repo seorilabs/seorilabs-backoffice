@@ -24,6 +24,11 @@ const OWNER_CAPABILITIES: readonly DiscordCapability[] = [
 ];
 const CHIEF_CAPABILITIES: readonly DiscordCapability[] = ["read", "metric_incident", "ops_incident"];
 
+export interface TeammateModel {
+  provider: "gemini" | "anthropic" | "openai";
+  model: string;
+}
+
 export interface TeammateMeta {
   key: TeammateKey;
   kind: "owner" | "chief";
@@ -31,6 +36,12 @@ export interface TeammateMeta {
   channelKey: DiscordDestinationKey;
   focus: string;
   capabilities: readonly DiscordCapability[];
+  /**
+   * 페르소나 고정 배정 모델(2026-08-26 승인, 3사 교차). 전 경로(멘션·순찰 서술·
+   * 스탠드업)에 적용해 모델별 품질·비용 비교가 원장에 쌓인다. 총괄(서리)은
+   * 결정적 수치만 다뤄 LLM 미사용(undefined). provider 키 미설정 시 Gemini 폴백.
+   */
+  model?: TeammateModel;
   // 순찰에서 GitHub 이슈 초안(confirm 카드)을 만드는 팀원인가. 초안 카드에는
   // 버튼이 실리므로 이 값이 true 인 팀원의 보고 채널은 반드시 카드 버튼
   // allowlist(DISCORD_CARD_CHANNEL_KEYS) 채널이어야 한다. 총괄(서리)은
@@ -40,7 +51,7 @@ export interface TeammateMeta {
 
 const OWNER_FOCUS = "담당 앱 포트폴리오의 론칭 진행, 운영 지표, 릴리즈 품질, 개선 백로그";
 
-function owner(key: TeammateKey, ko: string): TeammateMeta {
+function owner(key: TeammateKey, ko: string, model: TeammateModel): TeammateMeta {
   return {
     key,
     kind: "owner",
@@ -48,16 +59,17 @@ function owner(key: TeammateKey, ko: string): TeammateMeta {
     channelKey: "app-ops",
     focus: OWNER_FOCUS,
     capabilities: OWNER_CAPABILITIES,
+    model,
     draftsEnabled: true,
   };
 }
 
 export const TEAMMATES: Record<TeammateKey, TeammateMeta> = {
-  noeul: owner("noeul", "노을"),
-  iseul: owner("iseul", "이슬"),
-  baram: owner("baram", "바람"),
-  saebyeok: owner("saebyeok", "새벽"),
-  maru: owner("maru", "마루"),
+  noeul: owner("noeul", "노을", { provider: "anthropic", model: "claude-opus-5" }),
+  iseul: owner("iseul", "이슬", { provider: "anthropic", model: "claude-sonnet-5" }),
+  baram: owner("baram", "바람", { provider: "openai", model: "gpt-5.6-terra" }),
+  saebyeok: owner("saebyeok", "새벽", { provider: "gemini", model: "gemini-3.7-flash" }),
+  maru: owner("maru", "마루", { provider: "openai", model: "gpt-5.6-luna" }),
   seori: {
     key: "seori",
     kind: "chief",

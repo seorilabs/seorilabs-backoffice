@@ -10,9 +10,13 @@ export interface ModelPrice {
 
 export const LLM_PRICES: Record<string, ModelPrice> = {
   "gemini-3.1-flash-lite": { inputUsdPerMTok: 0.25, outputUsdPerMTok: 1.5 },
+  // 2026-12-31 까지의 프로모션 단가($0.75/$3.75) — 2027-01-01 부터 $1.50/$7.50.
+  "gemini-3.7-flash": { inputUsdPerMTok: 0.75, outputUsdPerMTok: 3.75 },
   "claude-haiku-4-5": { inputUsdPerMTok: 1, outputUsdPerMTok: 5 },
   "claude-sonnet-5": { inputUsdPerMTok: 2, outputUsdPerMTok: 10 },
   "claude-opus-5": { inputUsdPerMTok: 5, outputUsdPerMTok: 25 },
+  "gpt-5.6-terra": { inputUsdPerMTok: 2, outputUsdPerMTok: 12 },
+  "gpt-5.6-luna": { inputUsdPerMTok: 0.2, outputUsdPerMTok: 1.2 },
 };
 
 /**

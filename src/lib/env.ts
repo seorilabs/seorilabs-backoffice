@@ -145,6 +145,25 @@ export const env = {
   stabilityMinCredits: () => Number(optional("STABILITY_MIN_CREDITS", "200")),
   // 0 = LLM 월 예산 미확정(보고만). 유료 provider 도입 후 실측으로 확정한다.
   llmMonthlyBudgetUsd: () => Number(optional("LLM_MONTHLY_BUDGET_USD", "0")),
+  // 페르소나별 모델 교차 배정(Anthropic·OpenAI 추가). 키 미설정 provider 는
+  // Gemini 폴백이라 플래그만 켜도 무해하다.
+  featureMultiLlm: () => bool("FEATURE_MULTI_LLM", false),
+  anthropicApiKey: () => optional("ANTHROPIC_API_KEY").trim(),
+  anthropicChatModel: () => optional("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5"),
+  anthropicBaseUrl: () => optional("ANTHROPIC_API_BASE_URL", "https://api.anthropic.com"),
+  anthropicChatTimeoutMs: () => Number(optional("ANTHROPIC_CHAT_TIMEOUT_MS", "180000")),
+  // 짧은 운영 응답 위주라 비용 통제를 위해 low 로 시작한다.
+  anthropicEffort: () => optional("ANTHROPIC_EFFORT", "low"),
+  anthropicConfigured: () =>
+    bool("FEATURE_MULTI_LLM", false) && Boolean(optional("ANTHROPIC_API_KEY").trim()),
+  openaiApiKey: () => optional("OPENAI_API_KEY").trim(),
+  openaiChatModel: () => optional("OPENAI_CHAT_MODEL", "gpt-5.6-luna"),
+  openaiBaseUrl: () => optional("OPENAI_API_BASE_URL", "https://api.openai.com"),
+  openaiChatTimeoutMs: () => Number(optional("OPENAI_CHAT_TIMEOUT_MS", "180000")),
+  // GPT-5 계열 reasoning 소모 억제. 모델이 값을 거부하면 env 로 조정한다.
+  openaiReasoningEffort: () => optional("OPENAI_REASONING_EFFORT", "minimal"),
+  openaiConfigured: () =>
+    bool("FEATURE_MULTI_LLM", false) && Boolean(optional("OPENAI_API_KEY").trim()),
   // AI 팀원 봇(product/data/development/qa/finance). 역할별 별도 Discord 앱이며
   // 슬래시 명령은 메인 봇 전유라 팀원에겐 APPLICATION_ID 와 BOT_TOKEN 만 필요하다.
   featureDiscordTeammates: () => bool("FEATURE_DISCORD_TEAMMATES", false),

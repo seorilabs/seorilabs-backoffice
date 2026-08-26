@@ -47,6 +47,8 @@ spec:
             - { name: NODE_OPTIONS, value: "--dns-result-order=ipv4first --no-network-family-autoselection" }
             - { name: FEATURE_DISCORD_TEAMMATES, value: "true" }
             - { name: FEATURE_GEMINI_ENABLED, value: "true" }
+            # 페르소나별 모델 교차 배정. 키 미설정 provider 는 Gemini 폴백이라 무해.
+            - { name: FEATURE_MULTI_LLM, value: "true" }
             # GCP 월 예산(원). 70/90/100% 에서 서리 재무가 경고한다.
             - { name: GCP_MONTHLY_BUDGET_KRW, value: "20000" }
             - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
@@ -77,6 +79,10 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_PRIVATE_KEY } }
             - name: GEMINI_API_KEY
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GEMINI_API_KEY } }
+            - name: ANTHROPIC_API_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: ANTHROPIC_API_KEY, optional: true } }
+            - name: OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: OPENAI_API_KEY, optional: true } }
             # 팀원 봇 자격증명(팀원당 APPLICATION_ID, BOT_TOKEN). 기존 직군 앱을
             # 리네임 재활용하므로 토큰 값은 같고 env 키만 담당제 키다. 재봉인 전에는
             # 키가 없으므로 전부 optional — 미설정 팀원은 워커가 건너뛴다.
