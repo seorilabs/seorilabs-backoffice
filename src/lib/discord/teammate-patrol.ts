@@ -17,6 +17,7 @@ import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { asStringArray } from "@/lib/format";
 import {
   appsOwnedBy,
+  splitByCareMode,
   TEAMMATES,
   type OwnedApp,
   type TeammateKey,
@@ -28,6 +29,7 @@ import {
   AUTO_ADOPTION_MIN_SAMPLE,
   AUTO_ADOPTION_WINDOW_DAYS,
   buildIssueBody,
+  isAutoRegisterPriority,
   collectAutoAdoptionStats,
   DRAFT_EXPIRE_DAYS,
   evaluateAutoRegistration,
@@ -395,11 +397,24 @@ async function collect(meta: TeammateMeta, now: Date): Promise<CollectResult> {
     };
   }
   const apps = await appsOwnedBy(meta.key);
-  const collected = await collectOwnerFindings(apps, now);
+  const { tended, neglected } = splitByCareMode(apps);
+
+  const collected = await collectOwnerFindings(tended, now);
+  if (neglected.length > 0) {
+    // 론칭 후 방치 앱: 지표 수집은 계속되지만 순찰은 P1·P2 급 발견만 올린다.
+    // 단계 정체·승인 대기 같은 저강도 항목은 대응 대상이 아니라 버린다.
+    const raw = await collectOwnerFindings(neglected, now);
+    collected.push(...raw.filter((item) => isAutoRegisterPriority(item.labels)));
+  }
+
   // 근거 게이트: evidence 없는 항목은 어떤 경로로도 초안이 될 수 없다.
+  const summaryLines =
+    neglected.length > 0
+      ? [`방치 운영 ${neglected.length}개(${neglected.map((app) => app.slug).join(", ")}) — 주요 발견만 점검`]
+      : [];
   return {
     findings: collected.filter((item) => item.evidence.length > 0).slice(0, MAX_FINDINGS_PER_RUN),
-    summaryLines: [],
+    summaryLines,
   };
 }
 

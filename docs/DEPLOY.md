@@ -179,6 +179,11 @@ E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(
 - 포트폴리오 재배분: `UPDATE app SET ownerTeammate='<key>' WHERE slug='...'` 데이터
   갱신만으로 반영(배포 불필요). 미배정 앱은 서리 순찰이 경고한다. `platform` 레포는
   인프라라 의도적 미배정.
+- 운영 강도(`App.status`, 2026-08-26 도입): `ACTIVE`=정규 운영,
+  **`PAUSED`=론칭 후 방치**(지표 수집·보드 노출은 유지, 순찰은 P1·P2 급 발견만 채택 —
+  최저가 모델 담당자에게 몰아준다), **`DEPRECATED`=개발 폐기**(`visibleAppWhere` 가
+  걸러내 순찰·보드·멘션 도구에서 전부 제외). 전환은 `UPDATE app SET status=...` 만으로
+  되고, 지표 수집은 status 필터가 없어(analytics-collect) 어느 상태에서도 계속된다.
 - 운영 총괄(서리) 비용 순찰 소스 key: `GITHUB_BILLING_TOKEN`(fine-grained PAT,
   키체인 `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`,
   `STABILITY_API_KEY`. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 표기된다.
