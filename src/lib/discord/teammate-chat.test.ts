@@ -12,7 +12,7 @@ import { TEAMMATES } from "@/lib/discord/teammates";
 
 const PROMPT_CONTEXT = {
   portfolio: [
-    { id: "1", slug: "happy-farm", displayName: "해피팜", repoFullName: "seorilabs/happy-farm", currentStage: "LIVEOPS" },
+    { id: "1", slug: "happy-farm", displayName: "해피팜", repoFullName: "seorilabs/happy-farm", currentStage: "LIVEOPS", status: "ACTIVE" },
   ],
   directory: ["- 노을: happy-farm", "- 이슬: lizard-tycoon"],
 };

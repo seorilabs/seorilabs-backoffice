@@ -3,6 +3,7 @@ import test from "node:test";
 import { DISCORD_CARD_CHANNEL_KEYS } from "@/lib/discord/roles";
 import {
   configuredTeammates,
+  isNeglectedApp,
   isTeammateKey,
   portfolioLines,
   shouldHandleTeammateMention,
@@ -54,10 +55,11 @@ test("isTeammateKey 는 구 직군 키와 사람 역할을 거른다", () => {
 
 test("포트폴리오 줄 목록은 앱과 단계를 담고 빈 배분을 드러낸다", () => {
   const lines = portfolioLines([
-    { id: "1", slug: "happy-farm", displayName: "해피팜", repoFullName: "seorilabs/happy-farm", currentStage: "LIVEOPS" },
+    { id: "1", slug: "happy-farm", displayName: "해피팜", repoFullName: "seorilabs/happy-farm", currentStage: "LIVEOPS", status: "ACTIVE" },
   ]);
   assert.equal(lines.length, 1);
   assert.match(lines[0], /해피팜 \(happy-farm\)/);
+  assert.ok(!lines[0].includes("방치"));
   assert.deepEqual(portfolioLines([]), ["- (배분된 앱 없음)"]);
 });
 
@@ -116,4 +118,19 @@ test("플래그가 켜지면 자격증명이 주입된 팀원만 활성화된다
     if (saved.token === undefined) delete process.env.DISCORD_TEAMMATE_NOEUL_BOT_TOKEN;
     else process.env.DISCORD_TEAMMATE_NOEUL_BOT_TOKEN = saved.token;
   }
+});
+
+test("방치(PAUSED) 앱은 포트폴리오에 운영 강도가 드러난다", () => {
+  // 론칭 후 방치: 지표 수집은 계속하되 순찰은 주요 발견만 올린다.
+  const paused = {
+    id: "2",
+    slug: "vocab-swipe",
+    displayName: "보캡스와이프",
+    repoFullName: "seorilabs/vocab-swipe",
+    currentStage: "LIVEOPS",
+    status: "PAUSED",
+  };
+  assert.ok(isNeglectedApp(paused));
+  assert.ok(!isNeglectedApp({ status: "ACTIVE" }));
+  assert.match(portfolioLines([paused])[0], /방치\(주요 이슈만 대응\)/);
 });

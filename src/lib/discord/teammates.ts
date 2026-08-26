@@ -100,6 +100,16 @@ export interface OwnedApp {
   displayName: string;
   repoFullName: string;
   currentStage: string;
+  /**
+   * ACTIVE = 정규 운영, PAUSED = 론칭 후 방치(지표는 계속 수집하되 순찰은 P1·P2
+   * 급 발견만 채택). DEPRECATED(개발 폐기)는 visibleAppWhere 가 이미 걸러낸다.
+   */
+  status: string;
+}
+
+/** 론칭 후 방치 — 순찰이 주요 발견만 보고하는 앱인가. */
+export function isNeglectedApp(app: Pick<OwnedApp, "status">): boolean {
+  return app.status === "PAUSED";
 }
 
 /** 오너의 담당 앱 포트폴리오. 배분은 App.ownerTeammate 데이터라 재배분에 배포가 필요 없다. */
@@ -107,9 +117,20 @@ export async function appsOwnedBy(key: TeammateKey): Promise<OwnedApp[]> {
   const apps = await prisma.app.findMany({
     where: { ...visibleAppWhere, ownerTeammate: key },
     orderBy: [{ currentStage: "desc" }, { slug: "asc" }],
-    select: { id: true, slug: true, displayName: true, repoFullName: true, currentStage: true },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      repoFullName: true,
+      currentStage: true,
+      status: true,
+    },
   });
-  return apps.map((app) => ({ ...app, currentStage: app.currentStage as string }));
+  return apps.map((app) => ({
+    ...app,
+    currentStage: app.currentStage as string,
+    status: app.status as string,
+  }));
 }
 
 /**
@@ -138,13 +159,14 @@ export async function ownerDirectoryLines(): Promise<string[]> {
   return lines;
 }
 
-/** 포트폴리오를 프롬프트용 줄 목록으로. */
+/** 포트폴리오를 프롬프트용 줄 목록으로. 방치 앱은 운영 강도를 명시한다. */
 export function portfolioLines(apps: readonly OwnedApp[]): string[] {
   if (apps.length === 0) return ["- (배분된 앱 없음)"];
-  return apps.map(
-    (app) =>
-      `- ${app.displayName} (${app.slug}) · ${STAGE_KO[app.currentStage as keyof typeof STAGE_KO] ?? app.currentStage}`,
-  );
+  return apps.map((app) => {
+    const stage = STAGE_KO[app.currentStage as keyof typeof STAGE_KO] ?? app.currentStage;
+    const mode = isNeglectedApp(app) ? " · 방치(주요 이슈만 대응)" : "";
+    return `- ${app.displayName} (${app.slug}) · ${stage}${mode}`;
+  });
 }
 
 export interface GatewayMessage {
