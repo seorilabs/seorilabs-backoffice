@@ -1,6 +1,7 @@
 import {
   PlatformMetricChart,
   PlatformOverviewStatus,
+  PlatformPresencePanel,
   type PlatformCapabilityView,
 } from "@/components/platform";
 import { loadPlatformMetricSamplesAction } from "@/lib/actions/platform-metrics";
@@ -11,16 +12,20 @@ import {
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
+import { loadPlatformPresenceSnapshot } from "@/lib/platform/presence";
 
 export const dynamic = "force-dynamic";
 
 export default async function PlatformOverviewPage() {
   const configuration = platformReadConfiguration();
-  const [snapshot, samples] = await Promise.all([
+  const [snapshot, samples, presenceSnapshot] = await Promise.all([
     configuration.configured ? loadPlatformIapSnapshotAction() : null,
     // 시계열은 우리 DB만 읽는다. platform이 죽어도 과거 추이는 보여야
     // 한다 — 장애 중에 "언제부터 이랬나"를 볼 창구가 이것뿐이다.
     loadPlatformMetricSamplesAction().catch(() => []),
+    // Edge health는 브라우저에서 공개 경로로 별도 확인한다. DB 값만 읽혔다고
+    // 현재 동접으로 표시하면 RPI 장애 중 만료된 행을 0명으로 오인한다.
+    loadPlatformPresenceSnapshot().catch(() => null),
   ]);
   const data = snapshot?.ok ? snapshot.data : null;
   const health = data?.health ?? null;
@@ -101,6 +106,7 @@ export default async function PlatformOverviewPage() {
         lastCheckedAt={data?.checkedAt ?? null}
         message={message}
       />
+      <PlatformPresencePanel initialSnapshot={presenceSnapshot} />
       <PlatformMetricChart
         samples={samples}
         collecting={configuration.configured}

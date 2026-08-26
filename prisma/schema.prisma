@@ -953,3 +953,26 @@ model PlatformUserMetricSample {
   @@index([capturedAt])
   @@map("platform_user_metric_sample")
 }
+
+/// RPI Presence Edge가 갱신하는 최근 활성 세션 projection.
+///
+/// 결제·사용자 원장이 아니며 유실을 허용하는 운영 관측값이다. Edge가 서버
+/// 시각으로 expiresAt을 갱신하고, Backoffice는 아직 만료되지 않은 행만 센다.
+model PlatformPresenceSession {
+  appId       String @map("app_id") @db.VarChar(64)
+  sessionHash String @map("session_hash") @db.Char(64)
+
+  platform     String @db.VarChar(16)
+  appVersion   String @default("") @map("app_version") @db.VarChar(32)
+  lastSequence BigInt @default(0) @map("last_sequence")
+
+  lastSeenAt DateTime @map("last_seen_at") @db.DateTime(3)
+  expiresAt  DateTime @map("expires_at") @db.DateTime(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@id([appId, sessionHash])
+  @@index([expiresAt])
+  @@index([appId, expiresAt])
+  @@map("platform_presence_session")
+}
