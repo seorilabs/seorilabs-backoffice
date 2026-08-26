@@ -24,7 +24,12 @@ interface PresenceGroup {
 
 interface AppLabel {
   slug: string;
+  platformAppId: string | null;
   displayName: string;
+}
+
+export function activePresenceWhere(now: Date) {
+  return { expiresAt: { gt: now } } as const;
 }
 
 /** DB 의존부와 표현 조립을 분리해 0건·미등록 앱 계약을 단위 검증한다. */
@@ -33,7 +38,9 @@ export function buildPlatformPresenceSnapshot(
   groups: readonly PresenceGroup[],
   appLabels: readonly AppLabel[],
 ): PlatformPresenceSnapshot {
-  const labels = new Map(appLabels.map((app) => [app.slug, app.displayName]));
+  const labels = new Map(
+    appLabels.map((app) => [app.platformAppId ?? app.slug, app.displayName]),
+  );
   const apps = groups
     .map((group) => ({
       appId: group.appId,
@@ -63,15 +70,20 @@ export async function loadPlatformPresenceSnapshot(
 ): Promise<PlatformPresenceSnapshot> {
   const groups = await prisma.platformPresenceSession.groupBy({
     by: ["appId"],
-    where: { expiresAt: { gt: now } },
+    where: activePresenceWhere(now),
     _count: { _all: true },
     _max: { lastSeenAt: true },
   });
   const appIds = groups.map((group) => group.appId);
   const appLabels = appIds.length
     ? await prisma.app.findMany({
-        where: { slug: { in: appIds } },
-        select: { slug: true, displayName: true },
+        where: {
+          OR: [
+            { platformAppId: { in: appIds } },
+            { platformAppId: null, slug: { in: appIds } },
+          ],
+        },
+        select: { slug: true, platformAppId: true, displayName: true },
       })
     : [];
 

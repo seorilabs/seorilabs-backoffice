@@ -22,6 +22,20 @@ export interface PlatformPresencePanelProps {
   initialSnapshot?: PlatformPresenceSnapshot | null;
 }
 
+export interface PlatformPresenceRefreshDependencies {
+  assertEdgeReady: () => Promise<void>;
+  fetchSnapshot: () => Promise<PlatformPresenceSnapshot>;
+}
+
+/** Edge와 DB가 모두 정상일 때만 현재값을 반환한다. */
+export async function loadAvailablePresenceSnapshot(
+  dependencies: PlatformPresenceRefreshDependencies,
+  candidate?: PlatformPresenceSnapshot | null,
+): Promise<PlatformPresenceSnapshot> {
+  await dependencies.assertEdgeReady();
+  return candidate ?? dependencies.fetchSnapshot();
+}
+
 /**
  * Edge와 DB 집계가 모두 정상일 때만 현재 숫자를 보여준다.
  * 장애 중 만료된 행을 0명으로 오인하지 않도록 마지막 정상값은 별도 보관한다.
@@ -42,8 +56,10 @@ export function PlatformPresencePanel({
 
     async function refresh(candidate?: PlatformPresenceSnapshot | null) {
       try {
-        await assertEdgeReady();
-        const snapshot = candidate ?? (await fetchPresenceSnapshot());
+        const snapshot = await loadAvailablePresenceSnapshot(
+          { assertEdgeReady, fetchSnapshot: fetchPresenceSnapshot },
+          candidate,
+        );
         if (!active) return;
         setCurrent(snapshot);
         setLastHealthy(snapshot);

@@ -19,6 +19,7 @@ export async function seedRegistryAction(): Promise<{
   seeded: number;
   skipped: number;
   backfilled: number;
+  platformBound: number;
 }> {
   await requireSession();
   const result = await seedRegistry({ backfill: true });

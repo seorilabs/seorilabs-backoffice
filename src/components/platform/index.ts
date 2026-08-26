@@ -36,7 +36,9 @@ export { PlatformMetricChart, type PlatformMetricChartProps } from "./PlatformMe
 export {
   PlatformPresencePanel,
   PlatformPresenceView,
+  loadAvailablePresenceSnapshot,
   type PlatformPresencePanelProps,
+  type PlatformPresenceRefreshDependencies,
   type PlatformPresenceState,
   type PlatformPresenceViewProps,
 } from "./PlatformPresencePanel";

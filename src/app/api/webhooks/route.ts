@@ -15,6 +15,12 @@ import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
+import { env } from "@/lib/env";
+import { getInstallationOctokit } from "@/lib/github/app";
+import {
+  isPlatformRegistryPush,
+  syncPlatformRegistryBindings,
+} from "@/lib/platform/registry-bindings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,6 +110,19 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
     case "push": {
+      if (isPlatformRegistryPush(repo, p.ref ?? "", env.githubOrg())) {
+        after(async () => {
+          try {
+            await syncPlatformRegistryBindings(
+              await getInstallationOctokit(),
+              env.githubOrg(),
+            );
+          } catch (e) {
+            console.error("[webhook] Platform registry binding 실패:", e);
+          }
+        });
+      }
+
       // 릴리즈 태그 생성 → 응답 이후 출시노트 생성·발행(태그/webhook 응답을 막지 않음).
       const ref = p.ref ?? "";
       if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {

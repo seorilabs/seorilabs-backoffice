@@ -9,6 +9,7 @@ import {
   PlatformOverviewStatus,
   PlatformPresenceView,
   PlatformRefundReviewPanel,
+  loadAvailablePresenceSnapshot,
 } from "./index";
 
 describe("플랫폼 표현 컴포넌트", () => {
@@ -48,6 +49,43 @@ describe("플랫폼 표현 컴포넌트", () => {
     assert.match(html, /마지막 정상값 7명/);
     assert.doesNotMatch(html, /전체 최근 활성/);
     assert.doesNotMatch(html, /마지막 정상값 0명/);
+  });
+
+  it("Edge만 실패하면 DB 숫자를 현재값으로 채택하지 않는다", async () => {
+    let dbCalled = false;
+    await assert.rejects(
+      loadAvailablePresenceSnapshot({
+        assertEdgeReady: async () => {
+          throw new Error("edge unavailable");
+        },
+        fetchSnapshot: async () => {
+          dbCalled = true;
+          return presenceSnapshot;
+        },
+      }),
+      /edge unavailable/,
+    );
+    assert.equal(dbCalled, false);
+  });
+
+  it("Edge 정상·DB 실패의 부분 장애도 unknown으로 전파한다", async () => {
+    await assert.rejects(
+      loadAvailablePresenceSnapshot({
+        assertEdgeReady: async () => undefined,
+        fetchSnapshot: async () => {
+          throw new Error("DB unavailable");
+        },
+      }),
+      /DB unavailable/,
+    );
+  });
+
+  it("Edge와 DB가 정상일 때 0명 snapshot을 현재값으로 유지한다", async () => {
+    const snapshot = await loadAvailablePresenceSnapshot({
+      assertEdgeReady: async () => undefined,
+      fetchSnapshot: async () => presenceSnapshot,
+    });
+    assert.equal(snapshot.totalActiveSessions, 0);
   });
 
   it("개요에서 연결 상태와 비어 있는 capability를 구분한다", () => {

@@ -4,6 +4,7 @@ import { backfillRepo } from "@/lib/sync/backfill";
 import { env } from "@/lib/env";
 import { computeRepoSeed, type Octo, type RepoLite } from "./compute";
 import { Prisma } from "@prisma/client";
+import { syncPlatformRegistryBindings } from "@/lib/platform/registry-bindings";
 
 // 레지스트리 부트스트랩. Next 런타임에서 실행(octokit 번들).
 // 순수 계산부(octokit read → marketTargets → configHash → 시드 데이터)는 compute.ts 로 분리했고,
@@ -70,6 +71,7 @@ export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
   seeded: number;
   skipped: number;
   backfilled: number;
+  platformBound: number;
 }> {
   const org = env.githubOrg();
   const octokit = await getInstallationOctokit();
@@ -106,6 +108,8 @@ export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
     }
   }
 
+  const platformBindings = await syncPlatformRegistryBindings(octokit, org);
+
   let backfilled = 0;
   if (opts.backfill !== false) {
     const apps = await prisma.app.findMany({ select: { repoFullName: true } });
@@ -119,5 +123,10 @@ export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
     }
   }
 
-  return { seeded, skipped, backfilled };
+  return {
+    seeded,
+    skipped,
+    backfilled,
+    platformBound: platformBindings.bound,
+  };
 }
