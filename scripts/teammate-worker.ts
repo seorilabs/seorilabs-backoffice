@@ -22,6 +22,7 @@ import {
   maintainTeammateRuns,
   processNextTeammatePatrol,
 } from "@/lib/discord/teammate-patrol";
+import { processNextTeammateStandup } from "@/lib/discord/teammate-standup";
 
 // 팀원별 동시 처리 상한. 초과분은 Gemini 없이 혼잡 답변으로 즉시 응답한다.
 const MAX_PENDING_PER_TEAMMATE = 2;
@@ -162,6 +163,9 @@ async function main(): Promise<void> {
         }
         while (!stopping && (await processNextTeammateMentionRetry(withGeminiSlot))) {
           // maintain 이 PENDING 으로 되돌린 멘션을 순찰보다 먼저 소화한다(사람이 기다리는 중).
+        }
+        while (!stopping && (await processNextTeammateStandup(withGeminiSlot))) {
+          // 아침 스탠드업(하루 1건)을 순찰보다 먼저 소화한다.
         }
         while (!stopping && (await processNextTeammatePatrol(withGeminiSlot))) {
           // 다음 PENDING 순찰이 없어질 때까지 1건씩 처리
