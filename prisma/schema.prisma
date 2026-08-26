@@ -30,6 +30,9 @@ model App {
 
   // 마켓 식별자 (미설정/example-only 이면 null + UI "확정 필요" 뱃지)
   firebaseProject String?
+  // Platform registry의 app_id. registry/apps/*.json을 GitHub에서 읽어
+  // slug 또는 유일한 Firebase project 일치로 동기화한다.
+  platformAppId   String? @unique
   // GA4 BigQuery export 데이터셋("analytics_<propertyId>"). 지표 수집 대상 판별용.
   ga4Dataset      String?
   // Platform 운영 이벤트 수집 이전에 이미 만들어져 있던 Platform 계정 수.

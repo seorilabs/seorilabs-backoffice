@@ -8,6 +8,8 @@ import {
   type GhPrInput,
   type GhRunInput,
 } from "@/lib/sync/mirror";
+import { env } from "@/lib/env";
+import { syncPlatformRegistryBindings } from "@/lib/platform/registry-bindings";
 
 // 한 레포의 issue/PR/workflow_run 을 installation token 으로 증분 동기화.
 export async function backfillRepo(repoFullName: string): Promise<void> {
@@ -77,6 +79,14 @@ export async function reconcileAll(): Promise<{ repos: number; ok: boolean }> {
       } catch (e) {
         console.error(`[reconcile] ${a.repoFullName} 실패:`, e);
       }
+    }
+    try {
+      await syncPlatformRegistryBindings(
+        await getInstallationOctokit(),
+        env.githubOrg(),
+      );
+    } catch (e) {
+      console.error("[reconcile] Platform registry binding 실패:", e);
     }
     return { repos: apps.length, ok: true };
   } finally {

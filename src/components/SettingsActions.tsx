@@ -18,7 +18,9 @@ export function SettingsActions() {
           setMsg(`리싱크 완료: ${r.repos}개 레포`);
         } else {
           const r = await seedRegistryAction();
-          setMsg(`시드 완료: ${r.seeded} upsert / ${r.skipped} skip / ${r.backfilled} backfill`);
+          setMsg(
+            `시드 완료: ${r.seeded} upsert / ${r.skipped} skip / ${r.backfilled} backfill / ${r.platformBound} platform binding`,
+          );
         }
         router.refresh();
       } catch (e) {
