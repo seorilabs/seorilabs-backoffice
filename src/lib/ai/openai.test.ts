@@ -47,7 +47,7 @@ test("OpenAI chat 은 Chat Completions 계약(max_completion_tokens·json_object
     // GPT-5 계열은 max_tokens 가 아니라 max_completion_tokens 를 받는다.
     assert.equal(body.max_completion_tokens, 512);
     assert.equal("max_tokens" in body, false);
-    assert.equal(body.reasoning_effort, "minimal");
+    assert.equal(body.reasoning_effort, "low");
     assert.deepEqual(body.response_format, { type: "json_object" });
     assert.deepEqual(body.messages.map((m: { role: string }) => m.role), ["system", "user"]);
   } finally {

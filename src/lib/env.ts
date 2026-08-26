@@ -165,8 +165,9 @@ export const env = {
   openaiChatModel: () => optional("OPENAI_CHAT_MODEL", "gpt-5.6-luna"),
   openaiBaseUrl: () => optional("OPENAI_API_BASE_URL", "https://api.openai.com"),
   openaiChatTimeoutMs: () => Number(optional("OPENAI_CHAT_TIMEOUT_MS", "180000")),
-  // GPT-5 계열 reasoning 소모 억제. 모델이 값을 거부하면 env 로 조정한다.
-  openaiReasoningEffort: () => optional("OPENAI_REASONING_EFFORT", "minimal"),
+  // GPT-5 계열 reasoning 소모 억제. gpt-5.6 은 minimal 을 거부한다
+  // (지원: none/low/medium/high/xhigh — 2026-08-26 실호출 검증), low 로 시작.
+  openaiReasoningEffort: () => optional("OPENAI_REASONING_EFFORT", "low"),
   openaiConfigured: () =>
     bool("FEATURE_MULTI_LLM", false) && Boolean(optional("OPENAI_API_KEY").trim()),
   // AI 팀원 봇(product/data/development/qa/finance). 역할별 별도 Discord 앱이며

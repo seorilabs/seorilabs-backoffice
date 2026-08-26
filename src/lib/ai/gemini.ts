@@ -96,7 +96,9 @@ export async function geminiChat(
         contents,
         generationConfig: {
           maxOutputTokens: opts.maxTokens ?? 4096,
-          thinkingConfig: { thinkingLevel: "minimal" },
+          // flash-lite 만 minimal 을 지원하고 상위 flash(3.7 등)는 거부한다
+          // (2026-08-26 실호출 검증) — 페르소나 오버라이드 모델은 low 로.
+          thinkingConfig: { thinkingLevel: model.includes("flash-lite") ? "minimal" : "low" },
           ...(opts.jsonOutput ? { responseMimeType: "application/json" } : {}),
         },
       }),
