@@ -84,3 +84,32 @@ test("Gemini chat fails closed when the feature flag is disabled", async () => {
     else process.env.GEMINI_API_KEY = originalKey;
   }
 });
+
+test("페르소나 오버라이드 모델(비 flash-lite)은 thinkingLevel low 를 쓴다", async () => {
+  // gemini-3.7-flash 는 MINIMAL 을 400 으로 거부한다(2026-08-26 실호출 검증).
+  const originalFetch = globalThis.fetch;
+  const saved = { flag: process.env.FEATURE_GEMINI_ENABLED, key: process.env.GEMINI_API_KEY };
+  process.env.FEATURE_GEMINI_ENABLED = "true";
+  process.env.GEMINI_API_KEY = "company-test-key";
+  let capturedBody = "";
+  let capturedUrl = "";
+  globalThis.fetch = async (input, init) => {
+    capturedUrl = String(input);
+    capturedBody = String(init?.body);
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "답" }] } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await geminiChat([{ role: "user", content: "질문" }], { model: "gemini-3.7-flash" });
+    assert.ok(capturedUrl.includes("gemini-3.7-flash"));
+    assert.equal(JSON.parse(capturedBody).generationConfig.thinkingConfig.thinkingLevel, "low");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (saved.flag === undefined) delete process.env.FEATURE_GEMINI_ENABLED;
+    else process.env.FEATURE_GEMINI_ENABLED = saved.flag;
+    if (saved.key === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = saved.key;
+  }
+});
