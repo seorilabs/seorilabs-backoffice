@@ -5,6 +5,7 @@ import {
   configuredTeammates,
   isNeglectedApp,
   isTeammateKey,
+  splitByCareMode,
   portfolioLines,
   shouldHandleTeammateMention,
   stripMentionTags,
@@ -133,4 +134,18 @@ test("방치(PAUSED) 앱은 포트폴리오에 운영 강도가 드러난다", (
   assert.ok(isNeglectedApp(paused));
   assert.ok(!isNeglectedApp({ status: "ACTIVE" }));
   assert.match(portfolioLines([paused])[0], /방치\(주요 이슈만 대응\)/);
+});
+
+test("포트폴리오는 운영 강도로 나뉘어 방치 앱만 저강도 경로로 간다", () => {
+  const apps = [
+    { slug: "happy-farm", status: "ACTIVE" },
+    { slug: "vocab-swipe", status: "PAUSED" },
+    { slug: "crossword-puzzle", status: "ACTIVE" },
+    { slug: "foam-party", status: "PAUSED" },
+  ];
+  const { tended, neglected } = splitByCareMode(apps);
+  assert.deepEqual(tended.map((app) => app.slug), ["happy-farm", "crossword-puzzle"]);
+  assert.deepEqual(neglected.map((app) => app.slug), ["vocab-swipe", "foam-party"]);
+  // 어느 앱도 양쪽에 동시에 들어가거나 누락되지 않는다.
+  assert.equal(tended.length + neglected.length, apps.length);
 });

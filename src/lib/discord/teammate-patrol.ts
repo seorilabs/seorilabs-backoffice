@@ -17,7 +17,7 @@ import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { asStringArray } from "@/lib/format";
 import {
   appsOwnedBy,
-  isNeglectedApp,
+  splitByCareMode,
   TEAMMATES,
   type OwnedApp,
   type TeammateKey,
@@ -397,8 +397,7 @@ async function collect(meta: TeammateMeta, now: Date): Promise<CollectResult> {
     };
   }
   const apps = await appsOwnedBy(meta.key);
-  const tended = apps.filter((app) => !isNeglectedApp(app));
-  const neglected = apps.filter((app) => isNeglectedApp(app));
+  const { tended, neglected } = splitByCareMode(apps);
 
   const collected = await collectOwnerFindings(tended, now);
   if (neglected.length > 0) {

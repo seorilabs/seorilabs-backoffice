@@ -112,6 +112,19 @@ export function isNeglectedApp(app: Pick<OwnedApp, "status">): boolean {
   return app.status === "PAUSED";
 }
 
+/**
+ * 포트폴리오를 운영 강도로 나눈다(순수). 정규 앱은 전체 점검, 방치 앱은 순찰이
+ * P1·P2 급 발견만 채택한다.
+ */
+export function splitByCareMode<T extends Pick<OwnedApp, "status">>(
+  apps: readonly T[],
+): { tended: T[]; neglected: T[] } {
+  return {
+    tended: apps.filter((app) => !isNeglectedApp(app)),
+    neglected: apps.filter((app) => isNeglectedApp(app)),
+  };
+}
+
 /** 오너의 담당 앱 포트폴리오. 배분은 App.ownerTeammate 데이터라 재배분에 배포가 필요 없다. */
 export async function appsOwnedBy(key: TeammateKey): Promise<OwnedApp[]> {
   const apps = await prisma.app.findMany({
