@@ -1,5 +1,4 @@
 import { geminiChat, type ChatMessage } from "@/lib/ai/gemini";
-import type { ChatFn } from "@/lib/ai/provider";
 import { TOOLS, runTool } from "@/lib/ai/tools";
 import { stripFences, extractObject } from "@/lib/ai/json";
 
@@ -55,17 +54,15 @@ function toolInstructions(): string {
  * 항상 사용자에게 보여줄 최종 텍스트를 반환.
  */
 export interface RunChatAgentOptions {
-  /** 페르소나 배정 모델의 ChatFn(provider.chatFnFor). 미전달 시 Gemini 기본. */
-  chat?: ChatFn;
   /** ai_usage 귀속 컨텍스트. 미전달 시 path "chat-agent" 로 기록된다. */
-  usage?: { path: string; teammate?: string | null };
+  usage?: { path: string };
 }
 
 export async function runChatAgent(
   messages: ChatMessage[],
   options: RunChatAgentOptions = {},
 ): Promise<string> {
-  const chat = options.chat ?? geminiChat;
+  const chat = geminiChat;
   const usage = options.usage ?? { path: "chat-agent" };
   const [system, ...rest] = messages;
   const convo: ChatMessage[] = [

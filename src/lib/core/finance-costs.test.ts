@@ -3,16 +3,16 @@ import test from "node:test";
 import {
   buildGcpMonthCostSql,
   financeMonth,
-  gcpBudgetFindings,
+  gcpBudgetWarnings,
   githubQuotaMultiplier,
-  githubUsageFindings,
-  llmBudgetFindings,
+  githubUsageWarnings,
+  llmBudgetWarnings,
   parseBillingTable,
   renderGcpCostLines,
-  stabilityFindings,
+  stabilityWarnings,
   summarizeGithubUsage,
   type GithubUsageItem,
-} from "@/lib/discord/teammate-costs";
+} from "@/lib/core/finance-costs";
 
 test("hosted 분량 환산 배수는 macOS 10x·Windows 2x·Linux 1x, 저장소는 0", () => {
   assert.equal(githubQuotaMultiplier("Actions Linux"), 1);
@@ -38,20 +38,19 @@ test("월 사용량 요약은 해당 월만 집계하고 저장소를 분량에�
 
 test("실청구가 시작되면 임계와 무관하게 초과 경고를 만든다", () => {
   const summary = summarizeGithubUsage(AUGUST_ITEMS, "2026-08");
-  const findings = githubUsageFindings(summary, 3_000);
-  assert.equal(findings.length, 1);
-  assert.match(findings[0].title, /초과 과금 \$5\.31/);
-  assert.ok(findings[0].evidence.some((line) => line.includes("3980분")));
-  assert.equal(findings[0].repoFullName, null); // 비용 경고는 이슈 초안 대상이 아님
+  const warnings = githubUsageWarnings(summary, 3_000);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].title, /초과 과금 \$5\.31/);
+  assert.ok(warnings[0].evidence.some((line: string) => line.includes("3980분")));
 });
 
 test("실청구 전에는 70%·90% 임계로만 경고한다", () => {
   const at50 = summarizeGithubUsage([{ date: "2026-08-01", sku: "Actions Linux", quantity: 1_500, grossAmount: 9, netAmount: 0 }], "2026-08");
-  assert.deepEqual(githubUsageFindings(at50, 3_000), []);
+  assert.deepEqual(githubUsageWarnings(at50, 3_000), []);
   const at75 = summarizeGithubUsage([{ date: "2026-08-01", sku: "Actions Linux", quantity: 2_250, grossAmount: 13.5, netAmount: 0 }], "2026-08");
-  assert.match(githubUsageFindings(at75, 3_000)[0].title, /75% 소진/);
+  assert.match(githubUsageWarnings(at75, 3_000)[0].title, /75% 소진/);
   const at95 = summarizeGithubUsage([{ date: "2026-08-01", sku: "Actions Linux", quantity: 2_850, grossAmount: 17.1, netAmount: 0 }], "2026-08");
-  assert.match(githubUsageFindings(at95, 3_000)[0].title, /초과 임박/);
+  assert.match(githubUsageWarnings(at95, 3_000)[0].title, /초과 임박/);
 });
 
 test("billing export 테이블 경로는 project.dataset.table 3분절만 허용한다", () => {
@@ -85,24 +84,22 @@ test("GCP 비용 렌더는 총액과 상위 프로젝트를 요약한다", () =>
 });
 
 test("GCP 예산 경고는 예산이 확정된 뒤에만 발동한다", () => {
-  assert.deepEqual(gcpBudgetFindings(50_000, 0, "202608"), []); // 예산 미확정 → 보고만
-  assert.deepEqual(gcpBudgetFindings(5_000, 10_000, "202608"), []); // 50%
-  assert.match(gcpBudgetFindings(8_000, 10_000, "202608")[0].title, /80% 도달/);
-  assert.match(gcpBudgetFindings(12_000, 10_000, "202608")[0].title, /예산 초과/);
+  assert.deepEqual(gcpBudgetWarnings(50_000, 0, "202608"), []); // 예산 미확정 → 보고만
+  assert.deepEqual(gcpBudgetWarnings(5_000, 10_000, "202608"), []); // 50%
+  assert.match(gcpBudgetWarnings(8_000, 10_000, "202608")[0].title, /80% 도달/);
+  assert.match(gcpBudgetWarnings(12_000, 10_000, "202608")[0].title, /예산 초과/);
 });
 
 test("LLM 예산 경고는 GCP 예산과 같은 70%/100% 규칙을 따른다", () => {
-  assert.deepEqual(llmBudgetFindings(3, 0, "2026-08"), []); // 예산 미확정 → 보고만
-  assert.deepEqual(llmBudgetFindings(3, 10, "2026-08"), []); // 30%
-  assert.match(llmBudgetFindings(8, 10, "2026-08")[0].title, /80% 도달/);
-  assert.match(llmBudgetFindings(12, 10, "2026-08")[0].title, /예산 초과/);
-  // 경고 finding 은 이슈 초안이 아니라 채널 경고 전용이다.
-  assert.equal(llmBudgetFindings(12, 10, "2026-08")[0].repoFullName, null);
+  assert.deepEqual(llmBudgetWarnings(3, 0, "2026-08"), []); // 예산 미확정 → 보고만
+  assert.deepEqual(llmBudgetWarnings(3, 10, "2026-08"), []); // 30%
+  assert.match(llmBudgetWarnings(8, 10, "2026-08")[0].title, /80% 도달/);
+  assert.match(llmBudgetWarnings(12, 10, "2026-08")[0].title, /예산 초과/);
 });
 
 test("Stability 크레딧은 경고선 아래에서만 경고한다", () => {
-  assert.deepEqual(stabilityFindings(725, 200), []);
-  assert.match(stabilityFindings(150, 200)[0].title, /잔액 150/);
+  assert.deepEqual(stabilityWarnings(725, 200), []);
+  assert.match(stabilityWarnings(150, 200)[0].title, /잔액 150/);
 });
 
 test("비용 기준 월은 KST 로 계산한다", () => {

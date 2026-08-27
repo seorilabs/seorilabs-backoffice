@@ -28,7 +28,6 @@ MANIFESTS=(
   k8s/deployment.yaml
   k8s/app-ops-worker.yaml
   k8s/discord-workers.yaml
-  k8s/teammate-worker.yaml
   k8s/repository-discovery-worker.yaml
   k8s/provider-execution-worker.yaml
   k8s/store-review-cronjob.yaml

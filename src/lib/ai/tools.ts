@@ -75,11 +75,6 @@ export const TOOLS: ToolDef[] = [
       "스토어 리뷰 별점 요약(앱·스토어별 건수/평균/저평점). 선택 인자 slug, days(기본 7, 최대 28). 리뷰 본문은 저장하지 않아 별점 통계만 제공.",
   },
   {
-    name: "teammate_activity",
-    description:
-      "AI 팀원 활동 원장 요약(순찰·발견·이슈 등록·멘션·실패). 선택 인자 teammate, days(기본 7, 최대 28).",
-  },
-  {
     name: "cost_summary",
     description: "이번 달 종량제 비용 현황(GitHub Actions 분량·GCP·Stability 크레딧).",
   },
@@ -390,48 +385,9 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
         )
         .join("\n");
     }
-    case "teammate_activity": {
-      const teammate = str(args, "teammate");
-      const days = clampInt(args, "days", 7, 1, 28);
-      const runs = await prisma.teammateRun.findMany({
-        where: {
-          createdAt: { gte: new Date(Date.now() - days * DAY_MS) },
-          ...(teammate ? { teammate } : {}),
-        },
-        select: {
-          teammate: true,
-          trigger: true,
-          status: true,
-          findingCount: true,
-          issueUrls: true,
-        },
-        take: 300,
-      });
-      if (runs.length === 0) return `최근 ${days}일 팀원 활동 없음`;
-      const groups = new Map<
-        string,
-        { patrols: number; mentions: number; findings: number; issues: number; failed: number }
-      >();
-      for (const r of runs) {
-        const g =
-          groups.get(r.teammate) ?? { patrols: 0, mentions: 0, findings: 0, issues: 0, failed: 0 };
-        if (r.trigger === "mention") g.mentions += 1;
-        else g.patrols += 1;
-        g.findings += r.findingCount;
-        g.issues += asStringArray(r.issueUrls).length;
-        if (r.status === "FAILED") g.failed += 1;
-        groups.set(r.teammate, g);
-      }
-      return [...groups.entries()]
-        .map(
-          ([key, g]) =>
-            `- ${key}: 순찰 ${g.patrols}회 · 발견 ${g.findings} · 이슈 등록 ${g.issues} · 멘션 ${g.mentions}회 · 실패 ${g.failed}`,
-        )
-        .join("\n");
-    }
     case "cost_summary": {
       // 동적 import: BigQuery/외부 API 의존 경로가 웹 번들·테스트 그래프에 실리지 않게 격리.
-      const { collectFinanceCosts } = await import("@/lib/discord/teammate-costs");
+      const { collectFinanceCosts } = await import("@/lib/core/finance-costs");
       try {
         const result = await collectFinanceCosts(new Date());
         return result.summaryLines.join("\n");

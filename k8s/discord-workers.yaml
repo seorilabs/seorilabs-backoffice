@@ -70,6 +70,12 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true } }
             - name: DISCORD_ROLE_RELEASE_OPS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
+            # 서리 일일 재무 리포트가 놓이는 채널과, 그 리포트를 게시·삭제할 봇 정체.
+            # 토큰이 없으면 메인 봇으로 나가므로 리포트 자체가 사라지지는 않는다.
+            - name: DISCORD_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
+            - name: DISCORD_TEAMMATE_SEORI_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SEORI_BOT_TOKEN, optional: true } }
             # 배포 카드의 App Store 액션 버튼은 심사 단계에 따라 달라진다. 카드를 그리는
             # 쪽에서 ASC 라이브 상태를 읽어야 실행 불가능한 버튼을 노출하지 않는다.
             - name: APP_STORE_CONNECT_API_KEY_ID

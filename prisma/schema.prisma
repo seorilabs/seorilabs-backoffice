@@ -50,8 +50,8 @@ model App {
   aitWorkspaceId       Int?
   aitMiniAppId         Int?    @unique
 
-  // 담당제 AI 팀원(오너) 배분. teammates.ts 의 TeammateKey 문자열이며 null 은
-  // 미배정(운영 총괄 순찰이 경고). 재배분은 데이터 갱신만으로 반영된다.
+  // [폐기] 담당제 AI 팀원 배분. 2026-08-27 팀원 체계를 접어 읽는 코드가 사라졌다.
+  // expand-only migration 계약상 컬럼 제거는 별도 contract 단계에서 한다.
   ownerTeammate String?
 
   marketTargets Json // ["play","appstore","ait","web"]
@@ -802,7 +802,8 @@ model AppConsoleMetricDaily {
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
 // Discord /ask 대화 문맥. 서버·채널·사용자 조합별로 분리한다.
-// teammate 는 AI 팀원 봇의 대화를 메인 봇 /ask 와 격리한다(null = 메인 봇).
+// [폐기] teammate 는 팀원 봇 대화를 메인 봇 /ask 와 격리하던 축이다. 팀원 체계를
+// 접어 신규 행은 항상 null 이며, 제거는 별도 contract 단계에서 한다.
 model DiscordTurn {
   id        String   @id @default(cuid())
   guildId   String
@@ -817,9 +818,8 @@ model DiscordTurn {
   @@map("discord_turn")
 }
 
-// AI 팀원 실행 원장. 멘션 응답과 순찰 실행을 모두 기록하고, dedupeKey unique 가
-// Gateway resume 중복 응답과 순찰 중복 트리거를 DB 수준에서 막는다.
-// 순찰(trigger=schedule)은 PENDING 으로 삽입되고 teammate worker 가 큐처럼 소화한다.
+// [폐기] AI 팀원 순찰·멘션 큐. 2026-08-27 팀원 체계를 접어 쓰는 코드가 사라졌다.
+// expand-only migration 계약상 테이블 제거는 별도 contract 단계에서 한다.
 model TeammateRun {
   id           String            @id @default(cuid())
   teammate     String
@@ -853,7 +853,8 @@ model AiUsage {
   id             String   @id @default(cuid())
   provider       String // "gemini" | "anthropic" | "openai"
   model          String
-  path           String // "chat-agent" | "patrol" | "standup" | "draft" | "release-notes" | "unknown"
+  path           String // "chat-agent" | "release-notes" | "unknown"
+  // [폐기] 팀원 귀속 축. 신규 행은 항상 null 이며 제거는 별도 contract 단계에서 한다.
   teammate       String?
   inputTokens    Int      @default(0)
   outputTokens   Int      @default(0)

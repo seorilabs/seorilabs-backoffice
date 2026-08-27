@@ -286,8 +286,6 @@ wait_for_deployment backoffice-app-ops-worker
 apply_image_manifest discord-workers.yaml
 wait_for_deployment backoffice-notification-worker
 wait_for_deployment backoffice-operator-command-worker
-apply_image_manifest teammate-worker.yaml
-wait_for_deployment backoffice-teammate-worker
 apply_image_manifest repository-discovery-worker.yaml
 wait_for_deployment backoffice-repository-discovery-worker
 
@@ -338,8 +336,7 @@ for manifest in \
   backup-cronjob.yaml \
   proactive-cronjobs.yaml \
   app-content-analytics-cronjob.yaml \
-  platform-metric-cronjob.yaml \
-  teammate-patrol-cronjobs.yaml; do
+  platform-metric-cronjob.yaml; do
   k apply -f "$root/k8s/$manifest"
 done
 

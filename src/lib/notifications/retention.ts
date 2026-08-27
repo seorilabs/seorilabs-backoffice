@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { deleteDiscordChannelMessage, deleteDiscordMessage } from "@/lib/notifications/discord";
+import { senderBotToken } from "@/lib/notifications/sender";
 
 function deletedOrMissing(result: { ok: boolean; statusCode?: number; errorCode?: number }): boolean {
   return result.ok || (result.statusCode === 404 && result.errorCode === 10_008);
@@ -60,10 +61,16 @@ export async function maintainDiscordRetention(now = new Date()) {
     where: notificationRetentionWhere(cutoff, protectedIds),
     orderBy: { sentAt: "asc" },
     take: 100,
+    // 메인 봇이 아닌 정체로 게시한 알림은 그 봇만 확실히 지울 수 있다.
+    include: { event: { select: { payload: true } } },
   });
   let deletedNotifications = 0;
   for (const delivery of deliveries) {
-    const result = await deleteDiscordMessage(delivery.destinationKey, delivery.providerMessageId!);
+    const result = await deleteDiscordMessage(
+      delivery.destinationKey,
+      delivery.providerMessageId!,
+      senderBotToken(delivery.event.payload),
+    );
     if (!deletedOrMissing(result)) continue;
     await prisma.notificationDelivery.update({ where: { id: delivery.id }, data: { deletedAt: now } });
     deletedNotifications++;

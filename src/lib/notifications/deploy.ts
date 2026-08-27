@@ -9,6 +9,7 @@ import {
   type DiscordActionRow,
 } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
+import { senderBotToken } from "@/lib/notifications/sender";
 import { env } from "@/lib/env";
 import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
 import {
@@ -320,6 +321,8 @@ export async function drainAllNotifications(limit = 30) {
         destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
       attachment: attachmentFromPayload(payload),
       components: componentsFromPayload(payload),
+      // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
+      botToken: senderBotToken(payload),
     });
   });
 }

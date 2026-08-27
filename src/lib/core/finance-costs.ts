@@ -1,10 +1,18 @@
 import { env } from "@/lib/env";
 import { runQuery } from "@/lib/ga4/bigquery";
-import type { PatrolFinding } from "@/lib/discord/teammate-findings";
 
-// 서리 재무 순찰의 비용 수집. 소스 3종은 전부 선택적(optional env)이며,
-// 미설정 소스는 조용히 건너뛰지 않고 리포트에 "미설정" 으로 드러낸다.
-// 경고 판정은 순수 함수로 분리해 테스트로 고정한다.
+// 종량제 비용 수집. 소스 4종은 전부 선택적(optional env)이며, 미설정 소스는 조용히
+// 건너뛰지 않고 리포트에 "미설정" 으로 드러낸다. 경고 판정은 순수 함수로 분리해
+// 테스트로 고정한다.
+
+/** 재무 리포트에 싣는 경고 한 건. 채널 경고 전용이라 GitHub 이슈로 나가지 않는다. */
+export interface CostWarning {
+  /** 경고 종류×기간 식별자. 같은 달의 같은 경고가 두 줄로 갈리지 않게 한다. */
+  key: string;
+  title: string;
+  detail: string;
+  evidence: string[];
+}
 
 export const GITHUB_QUOTA_WARN_PCT = 70;
 export const GITHUB_QUOTA_ALERT_PCT = 90;
@@ -19,9 +27,8 @@ function krw(value: number): string {
   return `₩${KRW_FORMAT.format(value)}`;
 }
 
-function warning(input: Omit<PatrolFinding, "status" | "repoFullName" | "labels">): PatrolFinding {
-  // 비용 경고는 이슈 초안이 아니라 채널 경고 전용이다(repoFullName null).
-  return { ...input, repoFullName: null, labels: [], status: "skipped" };
+function warning(input: CostWarning): CostWarning {
+  return input;
 }
 
 // ── GitHub Actions 분량 ─────────────────────────────────────────────────────
@@ -84,14 +91,14 @@ export function summarizeGithubUsage(items: readonly GithubUsageItem[], month: s
   };
 }
 
-export function githubUsageFindings(summary: GithubUsageSummary, includedMinutes: number): PatrolFinding[] {
-  const findings: PatrolFinding[] = [];
+export function githubUsageWarnings(summary: GithubUsageSummary, includedMinutes: number): CostWarning[] {
+  const warnings: CostWarning[] = [];
   const pct = includedMinutes > 0 ? Math.round((summary.quotaMinutes / includedMinutes) * 100) : 0;
   const topLine = summary.topRepos
     .map((entry) => `${entry.repo} ${entry.quotaMinutes}분`)
     .join(", ");
   if (summary.netUsd > 0) {
-    findings.push(warning({
+    warnings.push(warning({
       key: `gh-overage:${summary.month}`,
       title: `GitHub Actions 초과 과금 ${usd(summary.netUsd)} 발생`,
       detail: `${summary.month} hosted 분량이 포함분량을 넘어 실제 청구가 시작됐다. hosted 러너를 타는 워크플로를 ARC 로 돌리거나 빈도를 줄여야 한다.`,
@@ -102,7 +109,7 @@ export function githubUsageFindings(summary: GithubUsageSummary, includedMinutes
       ],
     }));
   } else if (pct >= GITHUB_QUOTA_ALERT_PCT) {
-    findings.push(warning({
+    warnings.push(warning({
       key: `gh-quota-90:${summary.month}`,
       title: `GitHub Actions 포함분량 ${pct}% 소진 — 초과 임박`,
       detail: `${summary.month} 환산 사용량이 포함분량의 ${GITHUB_QUOTA_ALERT_PCT}% 를 넘었다. 이대로면 월내 초과 과금이 시작된다.`,
@@ -112,7 +119,7 @@ export function githubUsageFindings(summary: GithubUsageSummary, includedMinutes
       ],
     }));
   } else if (pct >= GITHUB_QUOTA_WARN_PCT) {
-    findings.push(warning({
+    warnings.push(warning({
       key: `gh-quota-70:${summary.month}`,
       title: `GitHub Actions 포함분량 ${pct}% 소진`,
       detail: `${summary.month} 환산 사용량이 포함분량의 ${GITHUB_QUOTA_WARN_PCT}% 를 넘었다.`,
@@ -122,7 +129,7 @@ export function githubUsageFindings(summary: GithubUsageSummary, includedMinutes
       ],
     }));
   }
-  return findings;
+  return warnings;
 }
 
 async function fetchGithubUsage(token: string, now: Date): Promise<GithubUsageItem[]> {
@@ -185,7 +192,7 @@ export function renderGcpCostLines(rows: readonly GcpCostRow[]): { total: number
   return { total, currency, lines: [`GCP 이번 달 순비용 ${format(total)}`, ...lines] };
 }
 
-export function gcpBudgetFindings(totalKrw: number, budgetKrw: number, invoiceMonth: string): PatrolFinding[] {
+export function gcpBudgetWarnings(totalKrw: number, budgetKrw: number, invoiceMonth: string): CostWarning[] {
   if (budgetKrw <= 0) return []; // 예산 미확정 — 보고만 하고 경고하지 않는다.
   const pct = Math.round((totalKrw / budgetKrw) * 100);
   if (pct < GITHUB_QUOTA_WARN_PCT) return [];
@@ -204,7 +211,7 @@ export function gcpBudgetFindings(totalKrw: number, budgetKrw: number, invoiceMo
 
 // ── LLM 사용량 (ai_usage 원장) ──────────────────────────────────────────────
 
-export function llmBudgetFindings(totalUsd: number, budgetUsd: number, month: string): PatrolFinding[] {
+export function llmBudgetWarnings(totalUsd: number, budgetUsd: number, month: string): CostWarning[] {
   if (budgetUsd <= 0) return []; // 예산 미확정 — 보고만 하고 경고하지 않는다.
   const pct = Math.round((totalUsd / budgetUsd) * 100);
   if (pct < GITHUB_QUOTA_WARN_PCT) return [];
@@ -232,7 +239,7 @@ async function fetchStabilityCredits(key: string): Promise<number> {
   return json.credits;
 }
 
-export function stabilityFindings(credits: number, minCredits: number): PatrolFinding[] {
+export function stabilityWarnings(credits: number, minCredits: number): CostWarning[] {
   if (credits >= minCredits) return [];
   return [warning({
     key: "stability-credits-low",
@@ -245,7 +252,9 @@ export function stabilityFindings(credits: number, minCredits: number): PatrolFi
 // ── 수집 본체 ───────────────────────────────────────────────────────────────
 
 export interface FinanceCollectResult {
-  findings: PatrolFinding[];
+  /** 임계값을 넘은 경고. 비어 있으면 리포트는 "경고 없음" 이다. */
+  warnings: CostWarning[];
+  /** 경고와 무관하게 항상 싣는 이번 달 현황 스냅샷. */
   summaryLines: string[];
 }
 
@@ -258,7 +267,7 @@ export function financeMonth(now: Date): { month: string; invoiceMonth: string }
 
 export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResult> {
   const { month, invoiceMonth } = financeMonth(now);
-  const findings: PatrolFinding[] = [];
+  const warnings: CostWarning[] = [];
   const summaryLines: string[] = [`이번 달(${month}) 종량제 현황`];
 
   // GitHub Actions 분량
@@ -274,7 +283,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
       summaryLines.push(
         `- GitHub Actions: 환산 ${summary.quotaMinutes}분/${included}분 (${pct}%) · gross ${usd(summary.grossUsd)} · 실청구 ${usd(summary.netUsd)}`,
       );
-      findings.push(...githubUsageFindings(summary, included));
+      warnings.push(...githubUsageWarnings(summary, included));
     } catch (error) {
       summaryLines.push(`- GitHub: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
     }
@@ -295,7 +304,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
       const rendered = renderGcpCostLines(rows.map((row) => ({ ...row, net_cost: Number(row.net_cost) })));
       summaryLines.push(`- ${rendered.lines[0]}`, ...rendered.lines.slice(1));
       if (rendered.currency === "KRW") {
-        findings.push(...gcpBudgetFindings(rendered.total, env.gcpMonthlyBudgetKrw(), invoiceMonth));
+        warnings.push(...gcpBudgetWarnings(rendered.total, env.gcpMonthlyBudgetKrw(), invoiceMonth));
       }
     } catch (error) {
       summaryLines.push(`- GCP: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
@@ -309,7 +318,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
     const llm = await monthlyAiUsageSummary(now);
     const detail = llm.lines.length ? ` (${llm.lines.join(" · ")})` : " (호출 없음)";
     summaryLines.push(`- LLM: ${usd(llm.totalUsd)}${detail}`);
-    findings.push(...llmBudgetFindings(llm.totalUsd, env.llmMonthlyBudgetUsd(), month));
+    warnings.push(...llmBudgetWarnings(llm.totalUsd, env.llmMonthlyBudgetUsd(), month));
   } catch (error) {
     summaryLines.push(`- LLM: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
   }
@@ -322,11 +331,11 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
     try {
       const credits = await fetchStabilityCredits(stabilityKey);
       summaryLines.push(`- Stability 크레딧: ${Math.round(credits)}`);
-      findings.push(...stabilityFindings(credits, env.stabilityMinCredits()));
+      warnings.push(...stabilityWarnings(credits, env.stabilityMinCredits()));
     } catch (error) {
       summaryLines.push(`- Stability: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
     }
   }
 
-  return { findings, summaryLines };
+  return { warnings, summaryLines };
 }

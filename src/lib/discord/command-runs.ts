@@ -20,7 +20,6 @@ import { releaseDeployRows } from "@/lib/discord/release-card";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 import { handleDiscordChat } from "@/lib/discord/chat";
-import { registerTeammateFinding } from "@/lib/discord/teammate-patrol";
 import {
   createAndDispatchSnapshotDeploy,
   previewSnapshotDeploy,
@@ -518,15 +517,6 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       const result = await triggerVaultIndex();
       await showRun(run, `${result.triggered ? "🔄" : "⏳"} ${result.message} (${result.name})`);
       return { summary: result.message };
-    }
-    case "teammate_issue_create": {
-      const findingIndexRaw = jsonRecord(run.params).findingIndex;
-      const result = await registerTeammateFinding({
-        runId: stringValue(params, "runId"),
-        findingIndex: typeof findingIndexRaw === "number" ? findingIndexRaw : -1,
-      });
-      await showRun(run, result.message);
-      return { summary: result.summary };
     }
     case "ask": {
       const reply = await handleDiscordChat({
