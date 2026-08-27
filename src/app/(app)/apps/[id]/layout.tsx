@@ -19,6 +19,7 @@ export default async function AppWorkspaceLayout({
     where: { id, ...visibleAppWhere },
     select: {
       id: true,
+      repoId: true,
       slug: true,
       displayName: true,
       repoFullName: true,

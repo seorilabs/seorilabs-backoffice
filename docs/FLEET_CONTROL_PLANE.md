@@ -19,11 +19,13 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 
 | Method | Path | 계약 |
 | --- | --- | --- |
-| `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과와 build target projection 기록 |
+| `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation과 서명 검증된 config snapshot 조립 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
+| `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
+| `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
 | `POST` | `/api/internal/agents/claim` | 최대 5분 lease와 generation capability 발급 |
 | `POST` | `/api/internal/agents/heartbeat` | 현재 generation lease만 연장 |
 | `POST` | `/api/internal/agents/complete` | 현재 generation을 성공 종료 |
@@ -32,6 +34,30 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
+
+Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 첫 slice는
+`schemaVersion`, 비공개 market channel, localization, object-storage asset revision, build pin, support URL만
+허용한다. 법적 선언, 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 변경 및 모든
+미정의 필드는 DRAFT 생성과 activation에서 fail-closed한다. 이전 validator로 만들어진 DRAFT도
+activation 시 다시 검사한다.
+
+DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
+profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
+허용한다. resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
+`NO_WORKFLOW_CALLER_FOR_SHA`로 중단하고 추측하지 않는다.
+
+## 운영 UI와 재인증 경계
+
+앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
+ProviderObservation, PlatformFleetBinding, CredentialBinding, AgentRun/dead-letter와 ReauthRequest를
+한 화면에서 조회한다. CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만
+있으며 secret 값을 저장하거나 변경하는 endpoint는 없다.
+
+ReauthRequest는 strict gate enum만 저장하고 공개 설명은 서버의 고정 mapping으로 파생한다. provider
+error나 DOM free-form text를 받거나 저장하지 않는다. `HUMAN_REAUTH_REQUIRED → TRUSTED_LOCAL_PENDING`은
+사람이 로그인한 Backoffice UI에서 app-scoped write RBAC를 통과한 server action으로만 기록한다.
+control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상태는 로그인 수행이나 성공 판정이
+아니다. Backoffice에는 비밀번호, TOTP, passkey, SMS/push 승인, cookie, recovery code 입력 UI가 없다.
 
 ## Queue 불변식
 
@@ -54,3 +80,5 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 Platform registry와 `.seorilabs/*` consumer는 계속 동작한다. 두 번의 shadow parity와 build-only gate,
 서명 snapshot 복구 검증 전에는 기존 consumer를 삭제하지 않는다.
 
+이 변경의 merge는 production migration 적용이나 배포를 의미하지 않는다. migration 적용, signing key
+검증, 배포와 readback은 별도 rollout gate에서 수행한다.
