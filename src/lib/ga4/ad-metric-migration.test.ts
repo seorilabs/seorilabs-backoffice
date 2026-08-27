@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SQL = readFileSync(
-  join(process.cwd(), "prisma/migrations/19_split_ad_metrics/migration.sql"),
+  join(
+    process.cwd(),
+    "prisma/migration-archive/legacy-v1/19_split_ad_metrics/migration.sql",
+  ),
   "utf8",
 );
 

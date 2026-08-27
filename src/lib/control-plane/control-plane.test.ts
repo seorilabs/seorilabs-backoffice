@@ -103,7 +103,10 @@ test("repository registration은 다중 후보와 archive를 명시 상태로 �
 test("migration이 webhook/occurrence 멱등과 repo PR unique scope를 DB에서 강제한다", () => {
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
   const migration = readFileSync(
-    join(process.cwd(), "prisma/migrations/35_fleet_control_plane/migration.sql"),
+    join(
+      process.cwd(),
+      "prisma/migrations/00000000000000_squashed_migrations/migration.sql",
+    ),
     "utf8",
   );
   assert.match(schema, /model WebhookDelivery[\s\S]*deliveryId String\s+@id/);
@@ -116,7 +119,10 @@ test("migration이 webhook/occurrence 멱등과 repo PR unique scope를 DB에서
 test("provider observation migration은 MySQL utf8mb4 인덱스 한도를 넘지 않는다", () => {
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
   const migration = readFileSync(
-    join(process.cwd(), "prisma/migrations/35_fleet_control_plane/migration.sql"),
+    join(
+      process.cwd(),
+      "prisma/migrations/00000000000000_squashed_migrations/migration.sql",
+    ),
     "utf8",
   );
   const oversizedColumns = "`appId`, `provider`, `resourceType`, `resourceId`, `payloadHash`";

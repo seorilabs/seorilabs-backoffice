@@ -21,6 +21,8 @@ jobs:
     runs-on: seorilabs-rpi-arm64
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: "24.16.0"
@@ -33,11 +35,18 @@ jobs:
       - run: pnpm test
       - run: bash scripts/check-migration-safety.test.sh
       - run: bash scripts/check-migration-safety.sh
+        env:
+          MIGRATION_FROZEN_BASE: ${{ github.event.before }}
       - run: bash scripts/render-manifest.test.sh
       - run: bash scripts/deploy-backoffice.test.sh
 
+  migration-contract:
+    uses: ./.github/workflows/migration-contract.yml
+    permissions:
+      contents: read
+
   build:
-    needs: verify
+    needs: [verify, migration-contract]
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
     # ARM64 Docker 빌드 → -dind 러너(rpi4001)에서 격리.

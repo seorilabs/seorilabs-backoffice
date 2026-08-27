@@ -320,6 +320,7 @@ scheduler_restore_needed=false
 
 echo "== endpoint CronJob manifests =="
 for manifest in \
+  backup-cronjob.yaml \
   proactive-cronjobs.yaml \
   app-content-analytics-cronjob.yaml \
   platform-metric-cronjob.yaml \

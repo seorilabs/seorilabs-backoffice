@@ -17,7 +17,7 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/teammate-worker.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
+    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/teammate-worker.ts scripts/verify-migration-state.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

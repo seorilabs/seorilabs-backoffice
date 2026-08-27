@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "provider": "mysql",
+  "baseline": {
+    "name": "00000000000000_squashed_migrations",
+    "sha256": "3f6490cca6bf5043519c534a8fde27361ae3f8a87c62de3162b649eaaca27f53",
+    "schemaContract": "prisma/schema-contract-v1.json",
+    "schemaContractSha256": "453df49cbddfbcaf7ee5cc2c5dc741f86cf8e83880238e5749ec6ff23688498a"
+  },
+  "currentSchemaContract": "prisma/schema-contract-current.json",
+  "legacy": {
+    "directory": "prisma/migration-archive/legacy-v1",
+    "ledger": "prisma/migration-archive/production-ledger-v1.tsv",
+    "ledgerSha256": "9904c8010ddee8e10801a7b6426c7a522f68362d693ed8e953a7459bc2bd4cbc",
+    "successfulMigrations": 39,
+    "allowedRolledBackAttempts": 3,
+    "rolledBackSourceCommits": {
+      "13_unified_content_metrics": "1ea730a7b4dbe0c2d79bf4fe1d14a685c2d0e802",
+      "21_discord_command_incidents": "612b4b190080db989bdee966cc52d3a7ef966d2c",
+      "35_fleet_control_plane": "35e469e7e537700119287e0170ae1a26f46f73cf"
+    }
+  },
+  "naming": {
+    "notBefore": "20260827000000",
+    "width": 14
+  }
+}
