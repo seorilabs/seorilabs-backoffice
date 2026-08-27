@@ -1,0 +1,76 @@
+# 웹과 worker가 exact digest로 전환된 뒤, 정기 CronJob을 재개하기 전에 세 작업을
+# 한 번씩 직렬 실행한다. 응답 body는 로그에 남기지 않고 실패 여부만 기록한다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-scheduler-catchup-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: scheduler-catchup
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1500
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: scheduler-catchup
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      containers:
+        - name: trigger
+          image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ceu
+            - |
+              failed=0
+              call() {
+                label="$1"
+                shift
+                if curl -sS -f -o /dev/null "$@"; then
+                  echo "$label=ok"
+                else
+                  echo "$label=failed" >&2
+                  failed=1
+                fi
+              }
+              call reconcile --max-time 840 -XPOST \
+                -H "x-admin-token: $ADMIN_TOKEN" \
+                http://backoffice.platform.svc.cluster.local/api/admin/reconcile
+              call xcode_cloud_sync --max-time 300 -XPOST \
+                -H "x-admin-token: $ADMIN_TOKEN" \
+                http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
+              call registry_seed --max-time 300 -XPOST \
+                -H "x-admin-token: $ADMIN_TOKEN" \
+                -H "content-type: application/json" \
+                --data '{"backfill":false}' \
+                http://backoffice.platform.svc.cluster.local/api/admin/seed
+              exit "$failed"
+          env:
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: INTERNAL_ADMIN_TOKEN
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

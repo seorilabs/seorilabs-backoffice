@@ -55,18 +55,32 @@ CI(`.github/workflows/deploy.yml`)가 push main 시 빌드/푸시/롤아웃. 필
 
 수동 최초 배포:
 ```bash
-kubectl apply -f k8s/deployment.yaml
+IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<64자리-digest>'
+SOURCE_SHA='<40자리-git-sha>'
+BACKOFFICE_IMAGE="$IMAGE" BACKOFFICE_SOURCE_SHA="$SOURCE_SHA" \
+  scripts/deploy-backoffice.sh
 kubectl apply -f k8s/backup-cronjob.yaml
-kubectl -n platform rollout status deployment/backoffice --timeout=300s
+# 첫 component=web Pod 전환이 끝난 뒤 Service selector를 좁힌다.
+kubectl apply -f k8s/backoffice-networking.yaml
 ```
-initContainer `migrate` 가 `prisma migrate deploy` 로 스키마 적용.
+CI는 build가 반환한 immutable registry digest의 migration Job으로 `prisma migrate deploy`를
+먼저 완료하고 source SHA를 별도 label로 기록한다.
+실패하면 기존 Ready 웹과 worker/CronJob은 바꾸지 않는다. 완료 Job은 7일간 남아
+실행 SHA와 결과를 감사할 수 있고, 웹은 `maxUnavailable: 0`, `maxSurge: 1`로 교체된다.
+같은 SHA workflow를 재실행해 tag digest가 달라져도 digest가 Deployment template에 직접
+반영되므로 migration과 기존 Pod가 서로 다른 artifact를 실행하지 않는다.
+
+신규 migration은 `scripts/check-migration-safety.sh`의 expand-only gate를 통과해야 한다.
+DROP/RENAME/MODIFY/데이터 삭제와 기존 writer를 깨는 NOT NULL column 추가는 한 번의
+pre-deploy migration으로 허용하지 않고 expand → backfill → contract 단계와 별도 승인을 쓴다.
+Job 실패 로그는 credential 노출 방지를 위해 CI에 출력하지 않는다.
 
 ## 5. 시드 + 검증
 ```bash
-# 레지스트리 시드 + backfill (헤드리스)
-TOKEN=$(kubectl -n platform get secret backoffice-secrets -o jsonpath='{.data.INTERNAL_ADMIN_TOKEN}' | base64 -d)
-kubectl -n platform exec deploy/backoffice -- \
-  sh -c "curl -fsS -XPOST -H 'x-admin-token: $TOKEN' http://localhost:3000/api/admin/seed"
+# 레지스트리 시드 헤드리스 실행. token을 셸로 꺼내지 않는다.
+kubectl -n platform create job \
+  --from=cronjob/backoffice-registry-seed \
+  backoffice-registry-seed-manual-<고유번호>
 # 또는 로그인 후 /settings 의 "레지스트리 시드/재스캔"
 ```
 검증:
@@ -77,20 +91,31 @@ kubectl -n platform exec deploy/backoffice -- \
 
 ## 6. 운영 메모
 - 라이프사이클 상태는 GitHub 에 없음 → `backoffice-db-backup` CronJob(일 1회) 유지. 복구 시 dump restore 후 reconcile.
-- reconcile 은 부팅 시 1회 + `RECONCILE_INTERVAL_MS`(기본 6h). `DISABLE_SCHEDULER=true` 로 비활성.
+- reconcile, Xcode Cloud sync, registry seed는 `scheduler-cronjobs.yaml`이 각각
+  `concurrencyPolicy: Forbid`로 실행한다. 배포는 기존 scheduler를 suspend/drain한 뒤 CronJob만
+  orphan 삭제한다. 세 작업의 one-shot 직렬 catch-up을 마친 다음 CronJob을 새로 생성하므로
+  suspend 중 놓친 시각이 재개 직후 중복 실행되지 않는다. 보존된 Job은 TTL로 정리되며 웹
+  프로세스 안에는 scheduler가 없다.
 - Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
 
 ## 7. CI 자동배포 설정 (main push → 검증/빌드/배포)
 
 `ci.yml` 은 PR에서 정적 검증과 Next build를 완료한다. `deploy.yml` 은 push main 시
 `-arm64` 러너에서 Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너에서
-production 이미지를 한 번만 빌드/push하고 `-arm64` 러너에서 같은 SHA 이미지를 배포한다.
+production 이미지를 한 번만 빌드/push하고 build output digest를 `-arm64` 배포에 넘긴다.
 `verify → build → deploy` 의존성으로 검증 실패 commit은 이미지 빌드나 배포를 시작하지 않는다.
-아래 3개를 1회 셋업한다.
+deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler catch-up →
+CronJob 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
+
+> 2026-08-27 실측에서 cluster control plane은 `--authorization-mode=AlwaysAllow`였다.
+> 따라서 아래 Role은 [조직 P0 #45](https://github.com/seorilabs/.github/issues/45)가
+> 완료돼 `Node,RBAC`로 전환되기 전에는 실제 보안 경계가 아니다. 전환에는 단일
+> control-plane restart와 별도 `approval:release`가 필요하다.
 
 **(a) 배포용 SA + kubeconfig**
 ```bash
 kubectl apply -f k8s/ci-deployer-rbac.yaml
+kubectl apply -f k8s/ci-deployer-data-rbac.yaml
 
 SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
 CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
@@ -428,9 +453,11 @@ registry sync와 catalog 검증이 끝난 것을 확인한 뒤 worker의 조회 
 준비되지 않았으면 웹은 읽기 전용으로 두고 기존 앱별 mutation 경로를
 유지한다.
 
-배포 workflow는 먼저 웹 Deployment의 Prisma migration과 rollout을 끝낸 뒤 worker
-Deployment를 같은 이미지 SHA로 갱신한다. 검증은 두 Deployment의 rollout, worker 로그,
-DB 요청 상태, 실제 게임 데이터 readback 순서로 수행한다.
+배포 workflow는 exact-digest Prisma migration Job을 먼저 끝낸 뒤 웹 Deployment를
+가용성 보존 방식으로 교체하고 worker/CronJob을 같은 image digest로 갱신한다. data ns의
+Vault CronJob이 설치돼 있으면 최소권한 Role로 두 image도 같은 digest에 맞춘다. 검증은
+migration Job, 웹 endpoint 연속성, 각 workload image, worker 로그, DB 요청 상태,
+실제 게임 데이터 readback 순서로 수행한다.
 
 ## 15. Discord 마켓 리뷰 알림
 

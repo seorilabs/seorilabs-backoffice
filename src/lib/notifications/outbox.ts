@@ -12,6 +12,11 @@ import { plainTextPayload } from "@/lib/notifications/format";
 const MAX_ATTEMPTS = 10;
 let draining = false;
 
+export type NotificationOutboxClient = Pick<
+  Prisma.TransactionClient,
+  "notificationEvent"
+>;
+
 export function nextNotificationAttemptAt(
   attempts: number,
   now = new Date(),
@@ -27,8 +32,8 @@ export async function enqueueNotification(input: {
   payload: Prisma.InputJsonObject;
   occurredAt?: Date;
   destinations: NotificationDestination[];
-}): Promise<string> {
-  const event = await prisma.notificationEvent.upsert({
+}, db: NotificationOutboxClient = prisma): Promise<string> {
+  const event = await db.notificationEvent.upsert({
     where: { dedupeKey: input.dedupeKey },
     create: {
       dedupeKey: input.dedupeKey,

@@ -1,16 +1,20 @@
 import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
+import {
+  enqueueNotification,
+  type NotificationOutboxClient,
+} from "@/lib/notifications/outbox";
 import {
   deployNotificationDedupeKey,
   type EnqueueDeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
 
 // 배포 알림 enqueue 전용. 전달(deploy.ts)은 App Store Connect 를 호출하는데, 이 경로는
-// workflow_run 미러 → 부팅 스케줄러까지 이어져 edge instrumentation 번들에 들어간다.
+// workflow_run 미러와 reconcile CronJob 양쪽에서 호출되는 공용 enqueue 경계다.
 // enqueue 를 분리해 미러가 node:crypto 의존을 끌고 들어가지 않게 한다.
 
 export async function enqueueDeployCompletionNotification(
   payload: EnqueueDeployCompletionPayload,
+  db?: NotificationOutboxClient,
 ): Promise<void> {
   await enqueueNotification({
     dedupeKey: deployNotificationDedupeKey(payload.releaseRecordId, payload.eventKey),
@@ -21,7 +25,7 @@ export async function enqueueDeployCompletionNotification(
       ...(payload.runUrl ? { runUrl: payload.runUrl } : {}),
     },
     destinations: discordDestinations(["release-ops"]),
-  });
+  }, db);
 }
 
 /**

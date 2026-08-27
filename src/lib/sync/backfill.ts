@@ -65,18 +65,33 @@ export async function backfillRepo(repoFullName: string): Promise<void> {
   });
 }
 
-// 전체 reconcile. 단일 replica(Recreate)라 in-process guard 로 중복 실행만 방지.
+// 전체 reconcile. Kubernetes CronJob의 concurrencyPolicy=Forbid가 예약 실행을
+// 직렬화하고, 이 guard는 같은 HTTP 프로세스에 들어온 중복 요청을 한 번 더 막는다.
 let running = false;
 
-export async function reconcileAll(): Promise<{ repos: number; ok: boolean }> {
-  if (running) return { repos: 0, ok: false };
+export interface ReconcileRunResult {
+  repos: number;
+  succeeded: number;
+  failed: number;
+  state: "completed" | "busy" | "partial";
+  ok: boolean;
+}
+
+export async function reconcileAll(): Promise<ReconcileRunResult> {
+  if (running) {
+    return { repos: 0, succeeded: 0, failed: 0, state: "busy", ok: false };
+  }
   running = true;
   try {
     const apps = await prisma.app.findMany({ select: { repoFullName: true } });
+    let succeeded = 0;
+    let failed = 0;
     for (const a of apps) {
       try {
         await backfillRepo(a.repoFullName);
+        succeeded++;
       } catch (e) {
+        failed++;
         console.error(`[reconcile] ${a.repoFullName} 실패:`, e);
       }
     }
@@ -86,9 +101,16 @@ export async function reconcileAll(): Promise<{ repos: number; ok: boolean }> {
         env.githubOrg(),
       );
     } catch (e) {
+      failed++;
       console.error("[reconcile] Platform registry binding 실패:", e);
     }
-    return { repos: apps.length, ok: true };
+    return {
+      repos: apps.length,
+      succeeded,
+      failed,
+      state: failed === 0 ? "completed" : "partial",
+      ok: failed === 0,
+    };
   } finally {
     running = false;
   }

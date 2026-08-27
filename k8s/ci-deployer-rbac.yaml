@@ -32,9 +32,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods"] # rollout status 가 pod 조회
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"] # exact-digest pre-deploy migration/catch-up Job
+    resources: ["jobs"]
+    verbs: ["get", "create"]
   - apiGroups: ["batch"] # deploy.yml 이 CronJob 매니페스트를 선언적 apply
     resources: ["cronjobs"]
-    verbs: ["get", "list", "watch", "create", "patch", "update"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

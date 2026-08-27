@@ -31,10 +31,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      - run: bash scripts/check-migration-safety.test.sh
+      - run: bash scripts/check-migration-safety.sh
       - run: bash scripts/render-manifest.test.sh
+      - run: bash scripts/deploy-backoffice.test.sh
 
   build:
     needs: verify
+    outputs:
+      image_digest: ${{ steps.image.outputs.digest }}
     # ARM64 Docker 빌드 → -dind 러너(rpi4001)에서 격리.
     runs-on: seorilabs-rpi-arm64-dind
     steps:
@@ -50,7 +55,8 @@ jobs:
           registry: registry.vzyx.xyz
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - uses: docker/build-push-action@v7
+      - id: image
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
@@ -69,52 +75,19 @@ jobs:
         env:
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
           SHA: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl"
           chmod +x /tmp/kubectl
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          IMG="${IMAGE}:${SHA}"
-
-          # 매니페스트의 :latest 를 이번 빌드 SHA 로 바꿔 적용한다.
-          # 치환이 빗나가면 스크립트가 아무것도 내보내지 않고 죽는다.
-          # 계약은 scripts/render-manifest.test.sh 가 CI 에서 고정한다.
-          render() { scripts/render-manifest.sh "k8s/$1" "$IMG"; }
-
-          # 매니페스트를 선언적으로 적용한다 — 파일 변경이 배포에 자동 반영되게.
-          #
-          # 예전에는 deployment.yaml 을 제외하고 set image 로 이미지만 갱신했다.
-          # 그래서 매니페스트에 적은 env 가 클러스터에 영영 가지 않았다.
-          # FEATURE_PLATFORM_ADMIN_WRITES 와 DAILY_DIGEST_GEMINI_ROLLOUT_PERCENT 가
-          # 실제로 그 상태로 남아 있었고, 매니페스트만 보면 켜져 있는 줄 안다.
-          #
-          # 새 매니페스트를 추가하면 이 목록에도 넣는다. ci-deployer Role 에
-          # 해당 리소스 write 권한이 필요하다(k8s/ci-deployer-rbac.yaml).
-          #
-          # 제외 — 전부 수동 apply 대상이다:
-          #   backoffice-networking.yaml  Service/ServiceMonitor/Ingress. 배포 SA 에
-          #                               권한을 주지 않으려고 deployment.yaml 에서 분리했다
-          #   SealedSecret                secret write 권한 안 줌
-          #   PVC 포함                    backup-cronjob, buildkitd
-          #   인프라                      vault-*, rbac, secret.example.yaml
-          for m in \
-            proactive-cronjobs.yaml \
-            app-content-analytics-cronjob.yaml \
-            platform-metric-cronjob.yaml \
-            teammate-patrol-cronjobs.yaml; do
-            /tmp/kubectl apply -f "k8s/$m"
-          done
-          render deployment.yaml | /tmp/kubectl apply -f -
-          /tmp/kubectl -n platform rollout status deployment/backoffice --timeout=300s
-          # DB migration이 완료된 뒤 queue worker를 생성/갱신한다.
-          render app-ops-worker.yaml | /tmp/kubectl apply -f -
-          /tmp/kubectl -n platform rollout status deployment/backoffice-app-ops-worker --timeout=300s
-          render discord-workers.yaml | /tmp/kubectl apply -f -
-          /tmp/kubectl -n platform rollout status deployment/backoffice-notification-worker --timeout=300s
-          /tmp/kubectl -n platform rollout status deployment/backoffice-operator-command-worker --timeout=300s
-          # AI 팀원 Gateway worker — 자격증명 미투입 상태에서는 idle 로만 뜬다.
-          render teammate-worker.yaml | /tmp/kubectl apply -f -
-          /tmp/kubectl -n platform rollout status deployment/backoffice-teammate-worker --timeout=300s
-          # 리뷰 collector는 DB migration과 알림 worker rollout 뒤 같은 SHA로 갱신한다.
-          render store-review-cronjob.yaml | /tmp/kubectl apply -f -
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid image digest" >&2
+            exit 1
+          fi
+          IMG="${IMAGE}@${IMAGE_DIGEST}"
+          KUBECTL_BIN=/tmp/kubectl \
+            BACKOFFICE_IMAGE="$IMG" \
+            BACKOFFICE_SOURCE_SHA="$SHA" \
+            scripts/deploy-backoffice.sh
