@@ -77,9 +77,10 @@ jobs:
           platforms: linux/arm64
           push: true
           provenance: false
-          tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
       - name: Record immutable candidate
         run: echo "image=${IMAGE}@${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
 

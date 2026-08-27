@@ -66,7 +66,8 @@ Resolve Job은 source SHA, image digest, baseline SHA-256, legacy ledger SHA-256
 
 최종 PR HEAD의 candidate image는 Deploy workflow를 해당 branch에서 수동 실행하며
 `deploy=false`를 선택해 만든다. 이 실행은 동일한 verify와 MySQL 9.2 계약을 통과해
-image를 push하지만 production deploy job은 실행하지 않는다.
+source SHA tag만 push하고 production deploy job은 실행하지 않는다. image config의
+OCI revision label, workflow run HEAD SHA, action output digest가 모두 같아야 한다.
 
 운영 resolve 전에 baseline commit을 병합하면 `migrate deploy`가 기존 table에
 baseline DDL을 실행한다. MySQL DDL은 일부만 적용된 채 실패할 수 있으므로 이 순서를

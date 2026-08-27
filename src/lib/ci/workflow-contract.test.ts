@@ -59,10 +59,13 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.ok(deployVerifyRuns.includes("bash scripts/render-manifest.test.sh"));
   assert.ok(!deployVerifyRuns.includes("pnpm build"));
   assert.ok(deploy.jobs?.build?.steps?.some((step) => step.uses === "docker/build-push-action@v7"));
-  assert.match(
-    readFileSync(join(process.cwd(), ".github/workflows/deploy.yml"), "utf8"),
-    /Record immutable candidate/,
+  const deploySource = readFileSync(
+    join(process.cwd(), ".github/workflows/deploy.yml"),
+    "utf8",
   );
+  assert.match(deploySource, /Record immutable candidate/);
+  assert.match(deploySource, /org\.opencontainers\.image\.revision=/);
+  assert.doesNotMatch(deploySource, /\$\{\{ env\.IMAGE \}\}:latest/);
   const migrationSource = readFileSync(
     join(process.cwd(), ".github/workflows/migration-contract.yml"),
     "utf8",
