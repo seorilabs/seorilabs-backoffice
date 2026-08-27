@@ -172,6 +172,30 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: INTERNAL_ADMIN_TOKEN
+            - name: CONTROL_PLANE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: CONTROL_PLANE_ADMIN_TOKEN
+                  optional: true
+            - name: AGENT_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AGENT_WORKER_TOKEN
+                  optional: true
+            - name: AGENT_LEASE_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AGENT_LEASE_SIGNING_KEY
+                  optional: true
+            - name: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
+                  optional: true
             # 챗/초안 + 볼트 검색 질의 임베딩. 인덱서는 data ns 별도 키를 사용.
             - name: GEMINI_API_KEY
               valueFrom:

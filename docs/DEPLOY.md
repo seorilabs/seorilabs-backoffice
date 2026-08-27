@@ -158,6 +158,10 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `DISCORD_CHANNEL_OPS_ALERTS_ID` | `#ops-alerts` |
 | `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
 | `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
+| `CONTROL_PLANE_ADMIN_TOKEN` | 제어면 observation/config/manifest API 전용 Bearer token |
+| `AGENT_WORKER_TOKEN` | agent queue claim/heartbeat/settle API 전용 Bearer token |
+| `AGENT_LEASE_SIGNING_KEY` | idempotent claim capability를 파생하는 server-only HMAC 키 |
+| `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 
 역할 ID는 비밀값이 아니며 허용된 역할 mention과 명령 권한 검사에만 사용한다.
 Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
