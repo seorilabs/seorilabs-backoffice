@@ -4,6 +4,12 @@ name: Deploy
 # + 레포를 ARC "RPI ARM64 Builders" 러너 그룹에 추가 (DEPLOY.md §7).
 on:
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: 검증과 immutable image build 뒤 production에 배포한다
+        required: true
+        type: boolean
+        default: true
   push:
     branches: [main]
 
@@ -74,8 +80,11 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
+      - name: Record immutable candidate
+        run: echo "image=${IMAGE}@${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
+    if: github.event_name != 'workflow_dispatch' || inputs.deploy
     needs: build
     runs-on: seorilabs-rpi-arm64
     steps:
