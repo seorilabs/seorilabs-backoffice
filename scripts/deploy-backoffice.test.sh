@@ -195,6 +195,11 @@ run_deploy Complete >/dev/null
 [ "$(grep -c '^CREATE_JOB ' "$log")" -eq 4 ]
 [ "$(grep -c '^APPLY_STDIN backoffice,' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN vault-indexer,vault-writer,' "$log")" -eq 2 ]
+[ "$(grep -c '^APPLY_FILE backup-cronjob.yaml$' "$log")" -eq 2 ]
+if grep -q '^APPLY_FILE backup-pvc.yaml$' "$log"; then
+  echo "FAIL CI deployer가 stateful PVC를 변경했다" >&2
+  exit 1
+fi
 
 migration_line="$(line_of '^CREATE_JOB ')"
 web_line="$(line_of '^APPLY_STDIN backoffice,')"

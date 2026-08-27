@@ -76,6 +76,18 @@ else
   ng "scheduler catch-up source SHA identity가 깨졌다"
 fi
 
+resolve_out="$("$render" "$root/k8s/migration-baseline-resolve-job.yaml" "$IMG" "$SHA")"
+if printf '%s' "$resolve_out" | grep -q "generateName: backoffice-baseline-resolve-${SHA:0:12}-" &&
+   printf '%s' "$resolve_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\"" &&
+   printf '%s' "$resolve_out" | grep -q "image: ${IMG}" &&
+   printf '%s' "$resolve_out" | grep -q 'baseline-sha256:' &&
+   printf '%s' "$resolve_out" | grep -q -- '--history=legacy' &&
+   printf '%s' "$resolve_out" | grep -q -- '--history=cutover'; then
+  ok "baseline resolve Job exact artifact identity"
+else
+  ng "baseline resolve Job artifact identity가 깨졌다"
+fi
+
 echo "== availability-preserving deploy 계약 =="
 deployment="$root/k8s/deployment.yaml"
 migration_job="$root/k8s/migration-job.yaml"
@@ -106,10 +118,32 @@ fi
 if grep -q 'backoffLimit: 0' "$migration_job" &&
    grep -q 'ttlSecondsAfterFinished: 604800' "$migration_job" &&
    grep -q 'automountServiceAccountToken: false' "$migration_job" &&
+   grep -q 'verify-migration-state.cjs' "$migration_job" &&
+   grep -q -- '--history=predeploy' "$migration_job" &&
+   grep -q -- '--expected-lineage=cutover' "$migration_job" &&
+   grep -q 'fresh|cutover' "$migration_job" &&
+   grep -q -- '--from-schema-datasource prisma/schema.prisma' "$migration_job" &&
    [ "$(grep -c 'key: DATABASE_URL' "$migration_job")" -eq 1 ]; then
-  ok "migration Job 최소권한과 7일 감사 보존"
+  ok "migration Job 최소권한, checksum/schema gate와 7일 감사 보존"
 else
   ng "migration Job 실행 경계가 깨졌다"
+fi
+
+backup_cronjob="$root/k8s/backup-cronjob.yaml"
+backup_pvc="$root/k8s/backup-pvc.yaml"
+if [ "$(grep -c '^kind: CronJob' "$backup_cronjob")" -eq 1 ] &&
+   ! grep -q '^kind: PersistentVolumeClaim' "$backup_cronjob" &&
+   grep -q '^kind: PersistentVolumeClaim' "$backup_pvc" &&
+   grep -q 'automountServiceAccountToken: false' "$backup_cronjob" &&
+   grep -q 'runAsNonRoot: true' "$backup_cronjob" &&
+   grep -q 'readOnlyRootFilesystem: true' "$backup_cronjob" &&
+   grep -q 'umask 077' "$backup_cronjob" &&
+   grep -q 'activeDeadlineSeconds: 1800' "$backup_cronjob" &&
+   grep -q 'path: db-password' "$backup_cronjob" &&
+   ! grep -q 'name: MYSQL_PWD' "$backup_cronjob"; then
+  ok "backup CronJob credential 경계와 PVC mutation 분리"
+else
+  ng "backup CronJob credential 경계 또는 PVC 분리가 깨졌다"
 fi
 
 if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 3 ] &&

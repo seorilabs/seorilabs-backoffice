@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 
 const SQL = readFileSync(
   new URL(
-    "../../../prisma/migrations/33_platform_app_id_binding/migration.sql",
+    "../../../prisma/migration-archive/legacy-v1/33_platform_app_id_binding/migration.sql",
     import.meta.url,
   ),
   "utf8",

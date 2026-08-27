@@ -1,60 +1,97 @@
-# 백오피스 DB(라이프사이클 상태는 GitHub 미러로 복구 불가) 일 1회 논리 백업.
-# 노드로컬 PVC 보관. 오프사이트는 syncthing 으로 이 PVC 경로 동기화 권장(후속).
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: backoffice-backup
-  namespace: platform
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: microk8s-hostpath
-  resources:
-    requests:
-      storage: 2Gi
----
+# 백오피스 DB의 일 1회 논리 백업. PVC는 k8s/backup-pvc.yaml에서 별도로 관리한다.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: backoffice-db-backup
   namespace: platform
 spec:
-  schedule: "0 18 * * *" # 03:00 KST
+  schedule: "0 3 * * *"
+  timeZone: Asia/Seoul
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 2
+      activeDeadlineSeconds: 1800
       template:
         spec:
           restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            fsGroupChangePolicy: OnRootMismatch
           containers:
             - name: dump
-              image: mysql:9.2.0
+              image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
               command:
-                - /bin/sh
+                - /bin/bash
                 - -c
                 - |
-                  set -eu
-                  TS=$(date +%F-%H%M)
+                  set -euo pipefail
+                  ulimit -c 0
+                  umask 077
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
                   OUT="/backup/backoffice-${TS}.sql.gz"
-                  echo "dumping to ${OUT}"
-                  mysqldump --single-transaction --no-tablespaces \
-                    -h mysql.data.svc.cluster.local -u backoffice backoffice \
-                    | gzip > "${OUT}"
-                  echo "retain last 14"
-                  ls -t /backup/backoffice-*.sql.gz | tail -n +15 | xargs -r rm -f
+                  PART="${OUT}.partial"
+                  CHECKSUM="${OUT}.sha256"
+                  CHECKSUM_PART="${CHECKSUM}.partial"
+                  trap 'rm -f "${PART}" "${CHECKSUM_PART}"' EXIT
+                  echo "dumping to an atomic temporary file"
+                  MYSQL_PWD="$(< /run/secrets/db-password)" \
+                    mysqldump --single-transaction --no-tablespaces \
+                      -h mysql.data.svc.cluster.local -u backoffice backoffice \
+                    | gzip > "${PART}"
+                  gzip -t "${PART}"
+                  sha256sum "${PART}" | awk '{print $1}' > "${CHECKSUM_PART}"
+                  # 완성본 이름의 dump는 checksum이 먼저 준비된 뒤 마지막에 노출한다.
+                  mv "${CHECKSUM_PART}" "${CHECKSUM}"
+                  mv "${PART}" "${OUT}"
+                  trap - EXIT
+                  echo "retain last 14 verified dumps"
+                  while IFS= read -r stale; do
+                    rm -f "${stale}" "${stale}.sha256"
+                  done < <(find /backup -maxdepth 1 -type f -name 'backoffice-*.sql.gz' \
+                    -print0 | xargs -0 -r ls -t | tail -n +15)
                   echo "done"
               env:
-                - name: MYSQL_PWD
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-secrets
-                      key: DB_PASSWORD
+                - name: HOME
+                  value: /tmp
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               volumeMounts:
                 - name: backup
                   mountPath: /backup
+                - name: db-password
+                  mountPath: /run/secrets
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
           volumes:
             - name: backup
               persistentVolumeClaim:
                 claimName: backoffice-backup
+            - name: db-password
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: DB_PASSWORD
+                    path: db-password
+            - name: tmp
+              emptyDir: {}

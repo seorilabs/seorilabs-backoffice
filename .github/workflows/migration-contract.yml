@@ -1,0 +1,45 @@
+name: Migration contract
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  mysql92:
+    name: MySQL 9.2 ${{ matrix.scenario }}
+    runs-on: seorilabs-rpi-arm64-dind
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [empty, cutover]
+    services:
+      mysql:
+        image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+        env:
+          MYSQL_ROOT_PASSWORD: bootstrap-test-only
+          MYSQL_DATABASE: backoffice_${{ matrix.scenario }}_contract_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -pbootstrap-test-only --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
+    env:
+      DATABASE_URL: mysql://root:bootstrap-test-only@127.0.0.1:3306/backoffice_${{ matrix.scenario }}_contract_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.16.0"
+          check-latest: false
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - if: matrix.scenario == 'empty'
+        run: bash scripts/test-migration-bootstrap.sh
+      - if: matrix.scenario == 'cutover'
+        run: bash scripts/test-migration-cutover.sh

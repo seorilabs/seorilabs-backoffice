@@ -6,7 +6,7 @@ import test from "node:test";
 const sql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/20_discord_operational_notifications/migration.sql",
+    "prisma/migration-archive/legacy-v1/20_discord_operational_notifications/migration.sql",
   ),
   "utf8",
 );
@@ -14,7 +14,7 @@ const sql = readFileSync(
 const discordSql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/21_discord_command_incidents/migration.sql",
+    "prisma/migration-archive/legacy-v1/21_discord_command_incidents/migration.sql",
   ),
   "utf8",
 );
@@ -22,7 +22,7 @@ const discordSql = readFileSync(
 const storeReviewSql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/22_store_review_notifications/migration.sql",
+    "prisma/migration-archive/legacy-v1/22_store_review_notifications/migration.sql",
   ),
   "utf8",
 );
@@ -30,7 +30,7 @@ const storeReviewSql = readFileSync(
 const dropTelegramSql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/24_drop_telegram_legacy/migration.sql",
+    "prisma/migration-archive/legacy-v1/24_drop_telegram_legacy/migration.sql",
   ),
   "utf8",
 );
@@ -38,12 +38,19 @@ const dropTelegramSql = readFileSync(
 const identityRowSql = readFileSync(
   join(
     process.cwd(),
-    "prisma/migrations/25_identity_thread_rows/migration.sql",
+    "prisma/migration-archive/legacy-v1/25_identity_thread_rows/migration.sql",
   ),
   "utf8",
 );
 
 const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+const baselineSql = readFileSync(
+  join(
+    process.cwd(),
+    "prisma/migrations/00000000000000_squashed_migrations/migration.sql",
+  ),
+  "utf8",
+);
 
 test("과거 outbox 이관 migration은 event와 목적지 delivery를 분리하고 상태를 보존한다", () => {
   assert.match(sql, /CREATE TABLE `notification_event`/);
@@ -116,17 +123,20 @@ test("행 댓글 migration은 notification_event가 만들어진 뒤에 적용�
   assert.match(sql, /CREATE TABLE `notification_event`/);
 });
 
-test("빈 DB bootstrap에서 Telegram 생성 migration이 정리 migration보다 뒤에 정렬된다", () => {
-  // Prisma는 migration 디렉터리를 사전식으로 적용한다. 숫자에 zero padding이 없어
-  // `2_`/`3_`이 `23_`보다 뒤로 가므로 정리 migration은 순서에 의존하면 안 된다.
+test("빈 DB bootstrap은 baseline에서 시작하며 Telegram 이력 table을 만들지 않는다", () => {
   const order = readdirSync(join(process.cwd(), "prisma/migrations"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  const cleanup = order.indexOf("24_drop_telegram_legacy");
-  assert.ok(cleanup >= 0);
-  assert.ok(cleanup < order.indexOf("2_telegram_turn"));
-  assert.ok(cleanup < order.indexOf("3_telegram_pending"));
-  // 그래서 DROP은 반드시 IF EXISTS여야 한다.
-  assert.doesNotMatch(dropTelegramSql, /DROP TABLE `telegram_(?:turn|pending)`/);
+  assert.equal(order[0], "00000000000000_squashed_migrations");
+  assert.equal(
+    order.filter((name) => name === "00000000000000_squashed_migrations").length,
+    1,
+  );
+  assert.ok(!order.includes("2_telegram_turn"));
+  assert.ok(!order.includes("3_telegram_pending"));
+  assert.doesNotMatch(
+    baselineSql,
+    /CREATE TABLE `telegram_(?:turn|pending|notification)`/,
+  );
 });

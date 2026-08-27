@@ -223,7 +223,10 @@ test("Fleet run 오류를 화면에 내보내기 전에 credential 후보를 제
 test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () => {
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
   const migration = readFileSync(
-    join(process.cwd(), "prisma/migrations/36_fleet_operations_ui/migration.sql"),
+    join(
+      process.cwd(),
+      "prisma/migration-archive/legacy-v1/36_fleet_operations_ui/migration.sql",
+    ),
     "utf8",
   );
   const editor = readFileSync(

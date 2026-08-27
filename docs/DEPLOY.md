@@ -55,14 +55,21 @@ CI(`.github/workflows/deploy.yml`)가 push main 시 빌드/푸시/롤아웃. 필
 
 수동 최초 배포:
 ```bash
+# stateful infrastructure는 CI deployer 권한 밖에서 한 번 만들고 Bound를 확인한다.
+kubectl apply -f k8s/backup-pvc.yaml
+kubectl -n platform wait --for=jsonpath='{.status.phase}'=Bound \
+  pvc/backoffice-backup --timeout=120s
+
 IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<64자리-digest>'
 SOURCE_SHA='<40자리-git-sha>'
 BACKOFFICE_IMAGE="$IMAGE" BACKOFFICE_SOURCE_SHA="$SOURCE_SHA" \
   scripts/deploy-backoffice.sh
-kubectl apply -f k8s/backup-cronjob.yaml
 # 첫 component=web Pod 전환이 끝난 뒤 Service selector를 좁힌다.
 kubectl apply -f k8s/backoffice-networking.yaml
 ```
+`backup-cronjob.yaml`은 CI가 갱신하지만 PVC는 갱신하지 않는다. 백업 Job은 비밀번호를
+전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
+마지막에 완성본 이름으로 이동한다.
 CI는 build가 반환한 immutable registry digest의 migration Job으로 `prisma migrate deploy`를
 먼저 완료하고 source SHA를 별도 label로 기록한다.
 실패하면 기존 Ready 웹과 worker/CronJob은 바꾸지 않는다. 완료 Job은 7일간 남아

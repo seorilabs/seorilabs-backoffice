@@ -9,7 +9,10 @@ import { join } from "node:path";
 // → migrate 실패 → 배포 실패. 반드시 "새 인덱스 생성 후 기존 인덱스 드롭" 순서여야 한다.
 
 const SQL = readFileSync(
-  join(process.cwd(), "prisma/migrations/13_unified_content_metrics/migration.sql"),
+  join(
+    process.cwd(),
+    "prisma/migration-archive/legacy-v1/13_unified_content_metrics/migration.sql",
+  ),
   "utf8",
 );
 

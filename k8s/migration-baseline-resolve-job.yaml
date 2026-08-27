@@ -1,23 +1,26 @@
-# immutable image digest의 Prisma migration을 웹 rollout 전에 한 번 실행한다.
-# deploy renderer가 이미지 digest와 generateName/label의 source SHA를 함께 치환한다.
+# 운영 baseline cutover 전용 one-shot Job. 자동 deploy 대상이 아니다.
+# 최종 PR HEAD에서 빌드한 immutable image digest로 render한 뒤 trusted operator가 실행한다.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: backoffice-migrate-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  generateName: backoffice-baseline-resolve-__BACKOFFICE_IMAGE_TAG_SHORT__-
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
-    app.kubernetes.io/component: migration
+    app.kubernetes.io/component: migration-baseline-resolve
     seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/baseline-sha256: "3f6490cca6bf5043519c534a8fde27361ae3f8a87c62de3162b649eaaca27f53"
+    seorilabs.dev/legacy-ledger-sha256: "9904c8010ddee8e10801a7b6426c7a522f68362d693ed8e953a7459bc2bd4cbc"
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 300
-  ttlSecondsAfterFinished: 604800
+  ttlSecondsAfterFinished: 2592000
   template:
     metadata:
       labels:
         app.kubernetes.io/name: backoffice
-        app.kubernetes.io/component: migration
+        app.kubernetes.io/component: migration-baseline-resolve
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -28,7 +31,7 @@ spec:
       securityContext:
         fsGroup: 10001
       containers:
-        - name: migrate
+        - name: resolve
           image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
           imagePullPolicy: Always
           command: ["/bin/bash", "-c"]
@@ -36,17 +39,20 @@ spec:
             - |
               set -euo pipefail
               ulimit -c 0
-              history_mode="$(node scripts-dist/verify-migration-state.cjs \
-                --history=predeploy --expected-lineage=cutover)"
-              case "${history_mode}" in
-                fresh|cutover) ;;
-                *)
-                  echo "invalid predeploy history classification" >&2
-                  exit 1
-                  ;;
-              esac
+              test "$(sha256sum prisma/migrations/00000000000000_squashed_migrations/migration.sql | awk '{print $1}')" = \
+                "3f6490cca6bf5043519c534a8fde27361ae3f8a87c62de3162b649eaaca27f53"
+              test "$(sha256sum prisma/migration-archive/production-ledger-v1.tsv | awk '{print $1}')" = \
+                "9904c8010ddee8e10801a7b6426c7a522f68362d693ed8e953a7459bc2bd4cbc"
+              node scripts-dist/verify-migration-state.cjs \
+                --history=legacy --print-data-fingerprint
+              prisma migrate resolve \
+                --applied 00000000000000_squashed_migrations
+              node scripts-dist/verify-migration-state.cjs \
+                --history=cutover --print-data-fingerprint
+              test "$(node scripts-dist/verify-migration-state.cjs \
+                --history=predeploy --expected-lineage=cutover)" = cutover
               prisma migrate deploy
-              node scripts-dist/verify-migration-state.cjs --history="${history_mode}"
+              prisma migrate status
               prisma migrate diff \
                 --from-schema-datasource prisma/schema.prisma \
                 --to-schema-datamodel prisma/schema.prisma \
