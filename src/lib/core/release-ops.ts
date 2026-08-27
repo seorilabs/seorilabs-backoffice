@@ -9,10 +9,12 @@ import {
 import { listVersionTags } from "@/lib/github/release";
 import {
   getRepoJsonFile,
-  getWorkflowDispatchInputNames,
+  getRepoDefaultBranch,
+  getWorkflowDispatchContract,
 } from "@/lib/github/read";
 import {
   shouldUseXcodeCloudForTarget,
+  validateXcodeCloudDeploy,
 } from "@/lib/xcode-cloud/dispatch";
 import { dispatchXcodeCloudRelease } from "@/lib/xcode-cloud/release";
 import {
@@ -55,9 +57,12 @@ import {
 import { readReleaseSourceFiles } from "@/lib/github/release-source";
 import {
   createReleaseTagAtSource,
-  dispatchMarketDeployAtTag,
+  executeMarketDeployPlan,
+  planMarketDeploy,
+  previewStableRelease,
   type MarketDispatchPort,
   type ReleaseSourcePort,
+  type StableReleaseCandidate,
 } from "@/lib/core/release-orchestrator";
 
 export type { Bump } from "@/lib/core/stable-semver";
@@ -94,24 +99,34 @@ async function marketVersionFloor(repoFullName: string): Promise<string | null> 
   return marketVersionFloorFromConfigs({ googlePlay, appStore });
 }
 
-/** 다음 릴리즈 태그 계산(dispatch 전 미리보기용). */
+/**
+ * 릴리즈 후보 미리보기. default branch 의 exact SHA 를 고정하고 그 SHA 의 소스 원장에서
+ * 후보 태그를 확정한다. 외부 write 는 하지 않는다. confirm 단계가 이 SHA·태그를 다시 검증한다.
+ */
 export async function previewNextTag(
   repoFullName: string,
   bump: Bump,
-): Promise<{ latest: string | null; next: string }> {
-  const [tags, floor] = await Promise.all([
+  explicitTag?: string,
+): Promise<StableReleaseCandidate & { next: string }> {
+  const [tags, floor, targetRef] = await Promise.all([
     listVersionTags(repoFullName),
     marketVersionFloor(repoFullName),
+    getRepoDefaultBranch(repoFullName),
   ]);
   const latest = tags[0]?.name ?? null;
-  return {
-    latest,
-    next: resolveReleaseTagWithMarketFloor({
+  const candidate = await previewStableRelease({
+    repoFullName,
+    targetRef,
+    latestTag: latest,
+    explicitTag: explicitTag ? normalizeTag(explicitTag) : undefined,
+    bumpedTag: resolveReleaseTagWithMarketFloor({
       latestTag: latest,
       marketFloor: floor,
       bump,
     }),
-  };
+    source: releaseSourcePort(repoFullName),
+  });
+  return { ...candidate, next: candidate.tag };
 }
 
 export interface CreateReleaseResult {
@@ -134,26 +149,29 @@ export async function createReleaseTagWithNotes(opts: {
   tag?: string;
   bump?: Bump;
   targetRef?: string;
+  /** preview 에서 고정한 default branch SHA. 다르면 write 없이 중단한다. */
+  expectedSha?: string;
   actorLabel?: string;
   prerelease?: boolean;
 }): Promise<CreateReleaseResult> {
-  const targetRef = opts.targetRef || "main";
+  // targetRef 미지정이면 repo 의 실제 default branch 를 쓴다("main" 하드코딩 금지).
+  const targetRef = opts.targetRef || (await getRepoDefaultBranch(opts.repoFullName));
 
-  const [tags, floor] = await Promise.all([
-    listVersionTags(opts.repoFullName),
-    marketVersionFloor(opts.repoFullName),
-  ]);
-  const tag = resolveReleaseTagWithMarketFloor({
-    latestTag: tags[0]?.name ?? null,
-    marketFloor: floor,
+  // 후보 태그는 소스 원장이 있는 repo 에서는 소스 버전이고, 없는 repo 에서만 bump 로 정해진다.
+  const candidate = await previewStableRelease({
+    repoFullName: opts.repoFullName,
+    targetRef,
+    latestTag: null,
     explicitTag: opts.tag ? normalizeTag(opts.tag) : undefined,
-    bump: opts.bump ?? "patch",
+    bumpedTag: await bumpedCandidateTag(opts.repoFullName, opts.bump ?? "patch"),
+    source: releaseSourcePort(opts.repoFullName),
   });
 
   const result = await createReleaseTagAtSource({
     repoFullName: opts.repoFullName,
-    tag,
+    tag: candidate.tag,
     targetRef,
+    expectedSha: opts.expectedSha ?? candidate.sha,
     prerelease: opts.prerelease,
     releaseBody: (created) => formatReleaseBody({ tag: created }),
     source: releaseSourcePort(opts.repoFullName),
@@ -190,6 +208,19 @@ export async function createReleaseTagWithNotes(opts: {
     created: result.created,
     releaseUrl: result.releaseUrl,
   };
+}
+
+/** 소스 원장이 없는 repo 를 위한 bump 후보(태그 계보와 마켓 원장 중 높은 쪽 기준). */
+async function bumpedCandidateTag(repoFullName: string, bump: Bump): Promise<string> {
+  const [tags, floor] = await Promise.all([
+    listVersionTags(repoFullName),
+    marketVersionFloor(repoFullName),
+  ]);
+  return resolveReleaseTagWithMarketFloor({
+    latestTag: tags[0]?.name ?? null,
+    marketFloor: floor,
+    bump,
+  });
 }
 
 /**
@@ -292,10 +323,18 @@ export async function dispatchMarketDeploy(opts: {
   actorLabel?: string;
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const dispatcher: MarketDispatchPort = {
-    getWorkflowDispatchInputNames: (workflowFile, ref) =>
-      getWorkflowDispatchInputNames(opts.repoFullName, workflowFile, ref),
+    getWorkflowDispatchContract: (workflowFile, ref) =>
+      getWorkflowDispatchContract(opts.repoFullName, workflowFile, ref),
     dispatchWorkflow: (input) =>
       dispatchWorkflow({ repoFullName: opts.repoFullName, ...input }),
+    validateXcodeCloudRelease: async (input) => {
+      const bundleId = await iosBundleOf(opts.repoFullName);
+      await validateXcodeCloudDeploy({
+        bundleId,
+        repoFullName: opts.repoFullName,
+        tag: input.tag,
+      });
+    },
     dispatchXcodeCloudRelease: (input) =>
       dispatchXcodeCloudRelease({
         repoFullName: opts.repoFullName,
@@ -304,7 +343,8 @@ export async function dispatchMarketDeploy(opts: {
       }),
   };
 
-  const result = await dispatchMarketDeployAtTag({
+  // preflight 전부 → GitHub dispatch → Xcode Cloud. 계획 수립까지는 외부 write 가 없다.
+  const plan = await planMarketDeploy({
     repoFullName: opts.repoFullName,
     target: opts.target,
     tag: opts.tag,
@@ -315,21 +355,24 @@ export async function dispatchMarketDeploy(opts: {
     dispatcher,
   });
 
+  const result = await executeMarketDeployPlan({ plan, dispatcher });
+
   await prisma.auditLog
     .create({
       data: {
         actorLogin: opts.actorLabel ?? null,
         action: "release.deploy.dispatch",
         entityType: "release",
-        entityId: `${opts.repoFullName}@${opts.tag}`,
+        entityId: `${opts.repoFullName}@${result.contract.tag}`,
         payload: {
           target: opts.target,
-          workflowFile: result.workflowFile ?? null,
-          xcodeCloudBuild: result.xcodeCloudBuild ?? null,
-          tag: opts.tag,
+          tag: result.contract.tag,
+          // 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
           sha: result.sha,
           contract: result.contract.kind,
           sourceVersions: result.contract.observed,
+          workflowFile: result.workflowFile ?? null,
+          xcodeCloudBuild: result.xcodeCloudBuild ?? null,
         } as object,
       },
     })
@@ -382,7 +425,7 @@ export async function promoteGooglePlay(opts: {
     );
   }
 
-  const declared = await getWorkflowDispatchInputNames(
+  const { inputNames: declared } = await getWorkflowDispatchContract(
     opts.repoFullName,
     PROMOTE_WORKFLOW,
     opts.tag,

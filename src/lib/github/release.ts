@@ -1,4 +1,5 @@
 import { getInstallationOctokit } from "@/lib/github/app";
+import { excludeHistoricalReleaseMarkers } from "@/lib/core/release-marker-history";
 import {
   compareStableSemVerTagsDesc,
   stableVersionTags,
@@ -91,7 +92,10 @@ export async function compareTags(
     repo,
     basehead: `${base}...${head}`,
   });
-  const messages = (res.data.commits ?? []).map((c) => c.commit.message.split("\n")[0]);
+  // 마커 커밋 생성은 폐기됐지만 폐기 이전 커밋이 히스토리에 남아 있다. 읽기에서만 제외한다.
+  const messages = excludeHistoricalReleaseMarkers(
+    (res.data.commits ?? []).map((c) => c.commit.message.split("\n")[0]),
+  );
   return {
     url: res.data.html_url,
     commitCount: messages.length,

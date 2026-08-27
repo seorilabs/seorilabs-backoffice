@@ -305,16 +305,28 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       const app = await appForRun(run);
       const bump = stringValue(params, "bump") as Bump;
       const preview = await previewNextTag(app.repoFullName, bump);
+      const sourceLine = preview.sourceVersion
+        ? `\n소스 버전 ${preview.sourceVersion} (${preview.contract})` +
+          (preview.bumpIgnored ? " — 소스 원장이 버전을 소유하므로 bump 대신 이 값을 씁니다." : "")
+        : `\n버전 파생 ${preview.contract}`;
       const messageId = await showRun(
         run,
-        `⚠️ **${app.displayName}** 릴리즈 태그를 생성합니다.\n${preview.latest ?? "태그 없음"} → **${preview.next}**\nGitHub Release 생성까지 진행할까요?`,
+        `⚠️ **${app.displayName}** 릴리즈 태그를 생성합니다.\n` +
+          `${preview.latestTag ?? "태그 없음"} → **${preview.tag}**\n` +
+          `${preview.targetRef}@${preview.sha.slice(0, 7)}${sourceLine}\n` +
+          "GitHub Release 생성까지 진행할까요?",
         confirmationRows(run.id),
       );
       await prisma.operatorCommandRun.update({
         where: { id: run.id },
         data: {
           operation: "release_create",
-          params: { bump, next: preview.next },
+          params: {
+            bump,
+            next: preview.tag,
+            sha: preview.sha,
+            targetRef: preview.targetRef,
+          },
           status: "AWAITING_CONFIRMATION",
           attempts: 0,
           startedAt: null,
@@ -323,13 +335,17 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
         },
       });
-      return { summary: `릴리즈 ${preview.next} 확인 대기`, awaiting: true, messageId };
+      return { summary: `릴리즈 ${preview.tag} 확인 대기`, awaiting: true, messageId };
     }
     case "release_create": {
       const app = await appForRun(run);
+      // 확인 시점에 고정한 SHA·후보 태그를 그대로 다시 검증한다. 그 사이 default branch 가
+      // 움직였거나 소스 버전이 바뀌었으면 태그·Release 를 만들지 않고 중단한다.
       const result = await createReleaseTagWithNotes({
         repoFullName: app.repoFullName,
         tag: stringValue(params, "next"),
+        targetRef: stringValue(params, "targetRef") || undefined,
+        expectedSha: stringValue(params, "sha") || undefined,
         actorLabel: run.actorLabel,
       });
       const messageId = await showRun(

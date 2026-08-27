@@ -119,20 +119,32 @@ function describe(observed: Record<string, string>): string {
  * 태그가 가리키는 SHA 의 소스 버전 계약을 검증한다. 위반이면 throw 하고, 통과하면 계약 정보를 돌려준다.
  * 호출부는 이 함수가 통과한 뒤에만 GitHub tag/Release, workflow dispatch, Xcode Cloud 실행을 만든다.
  */
-export function assertReleaseSourceContract(input: {
+export interface ReleaseSourceVersion {
+  kind: ReleaseSourceContractKind;
+  sha: string;
+  /** pinned-source 에서 읽은 단일 소스 버전(접두사 v 제외). 다른 계약에서는 null. */
+  sourceVersion: string | null;
+  observed: Record<string, string>;
+}
+
+/**
+ * SHA 의 소스 버전 원장을 읽는다(태그와 비교하지 않는다).
+ *
+ * 후보 태그를 계산하려면 태그보다 먼저 소스 버전을 알아야 하므로, 원장 읽기와 태그 대조를
+ * 분리한다. pinned-source 는 이 단계에서 이미 원장 간 정합(존재·stable SemVer·상호 일치)을
+ * 강제하므로, 어긋난 소스는 후보 태그 계산 이전에 fail-closed 된다.
+ */
+export function readReleaseSourceVersion(input: {
   repoFullName: string;
-  tag: string;
   files: ReleaseSourceFiles;
-}): ReleaseSourceContract {
+}): ReleaseSourceVersion {
   const { repoFullName, files } = input;
-  const tag = normalizeStableSemVerTag(input.tag);
-  const tagVersion = tag.slice(1);
-  const base = { sha: files.sha, tag, tagVersion };
 
   if (!files.hasContractScript) {
     return {
-      ...base,
       kind: files.hasTagDerivedScript ? "tag-derived" : "tag-derived-caller",
+      sha: files.sha,
+      sourceVersion: null,
       observed: {},
     };
   }
@@ -181,23 +193,77 @@ export function assertReleaseSourceContract(input: {
     );
   }
 
-  const distinct = new Set(Object.values(observed));
-  if (distinct.size !== 1) {
+  if (new Set(Object.values(observed)).size !== 1) {
+    fail(repoFullName, files.sha, `소스 원장 버전이 서로 다릅니다: ${describe(observed)}.`);
+  }
+
+  return { kind: "pinned-source", sha: files.sha, sourceVersion: play.value, observed };
+}
+
+/**
+ * 태그가 가리키는 SHA 의 소스 버전 계약을 검증한다. 위반이면 throw 하고, 통과하면 계약 정보를 돌려준다.
+ * 호출부는 이 함수가 통과한 뒤에만 GitHub tag/Release, workflow dispatch, Xcode Cloud 실행을 만든다.
+ */
+export function assertReleaseSourceContract(input: {
+  repoFullName: string;
+  tag: string;
+  files: ReleaseSourceFiles;
+}): ReleaseSourceContract {
+  const tag = normalizeStableSemVerTag(input.tag);
+  const tagVersion = tag.slice(1);
+  const source = readReleaseSourceVersion(input);
+
+  if (source.sourceVersion !== null && source.sourceVersion !== tagVersion) {
     fail(
-      repoFullName,
-      files.sha,
-      `소스 원장 버전이 서로 다릅니다: ${describe(observed)}.`,
+      input.repoFullName,
+      source.sha,
+      `태그 버전과 소스 버전이 다릅니다: tag=${tagVersion}, source=${source.sourceVersion} ` +
+        `(${describe(source.observed)}).`,
     );
   }
 
-  const sourceVersion = play.value;
-  if (sourceVersion !== tagVersion) {
-    fail(
-      repoFullName,
-      files.sha,
-      `태그 버전과 소스 버전이 다릅니다: tag=${tagVersion}, source=${sourceVersion} (${describe(observed)}).`,
-    );
+  return {
+    kind: source.kind,
+    sha: source.sha,
+    tag,
+    tagVersion,
+    observed: source.observed,
+  };
+}
+
+/**
+ * 후보 stable 태그를 확정한다.
+ *
+ * pinned-source repo 는 소스가 버전 원장을 소유한다. bump 로 원장에 없는 버전을 만들어내면
+ * 태그만 앞서가는 상태(v1.2.0 태그 / 소스 1.1.12)가 다시 생기므로, 후보는 항상 소스 버전이다.
+ * 버전을 올리려면 repo 에서 원장을 먼저 올려야 한다. 명시 태그가 소스와 다르면 fail-closed 한다.
+ *
+ * 그 밖의 계약은 버전이 태그의 함수라 대조할 원장이 없다. 기존대로 명시 태그 또는
+ * 태그 계보·마켓 원장 중 높은 쪽에서 bump 한다.
+ */
+export function resolveStableReleaseCandidateTag(input: {
+  repoFullName: string;
+  source: ReleaseSourceVersion;
+  explicitTag?: string;
+  bumpedTag: string;
+}): { tag: string; bumpIgnored: boolean } {
+  const explicitTag = input.explicitTag
+    ? normalizeStableSemVerTag(input.explicitTag)
+    : null;
+
+  if (input.source.sourceVersion === null) {
+    return { tag: explicitTag ?? normalizeStableSemVerTag(input.bumpedTag), bumpIgnored: false };
   }
 
-  return { ...base, kind: "pinned-source", observed };
+  const sourceTag = `v${input.source.sourceVersion}`;
+  if (explicitTag && explicitTag !== sourceTag) {
+    fail(
+      input.repoFullName,
+      input.source.sha,
+      `지정한 태그가 소스 버전과 다릅니다: tag=${explicitTag.slice(1)}, ` +
+        `source=${input.source.sourceVersion} (${describe(input.source.observed)}). ` +
+        "repo 의 릴리스 버전 원장을 먼저 올린 뒤 그 버전으로 릴리스하세요.",
+    );
+  }
+  return { tag: sourceTag, bumpIgnored: !explicitTag };
 }
