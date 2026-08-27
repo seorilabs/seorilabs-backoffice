@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { syncPendingXcodeCloudDeployments } from "@/lib/xcode-cloud/status";
+import { scheduledRunHttpStatus } from "@/lib/sync/scheduler-http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,5 +13,5 @@ export async function POST(req: Request) {
   }
 
   const result = await syncPendingXcodeCloudDeployments();
-  return NextResponse.json({ ok: true, ...result });
+  return NextResponse.json(result, { status: scheduledRunHttpStatus(result) });
 }

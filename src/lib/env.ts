@@ -79,8 +79,6 @@ export const env = {
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
-  reconcileIntervalMs: () =>
-    Number(optional("RECONCILE_INTERVAL_MS", "21600000")),
   // GA4→BigQuery 지표 수집. SA 키(JSON 문자열)로 BigQuery 조회.
   featureGa4: () => bool("FEATURE_GA4_ANALYTICS", false),
   ga4SaKeyJson: () => optional("GA4_SA_KEY_JSON"),

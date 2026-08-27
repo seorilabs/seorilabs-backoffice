@@ -67,66 +67,104 @@ async function seedRepo(
   return "seeded";
 }
 
-export async function seedRegistry(opts: { backfill?: boolean } = {}): Promise<{
+export interface SeedRegistryResult {
   seeded: number;
   skipped: number;
   backfilled: number;
   platformBound: number;
-}> {
-  const org = env.githubOrg();
-  const octokit = await getInstallationOctokit();
-  const repos = await octokit.paginate(octokit.rest.repos.listForOrg, {
-    org,
-    per_page: 100,
-    type: "all",
-  });
+  failed: number;
+  state: "completed" | "busy" | "partial";
+  ok: boolean;
+}
 
-  const targets = repos.filter(
-    (r) =>
-      !r.archived &&
-      !r.fork &&
-      !IGNORE.has(r.name) &&
-      !r.name.startsWith("starter-template"),
-  );
+let seeding = false;
 
-  let seeded = 0;
-  let skipped = 0;
-  for (const r of targets) {
-    try {
-      const result = await seedRepo(octokit, org, {
-        name: r.name,
-        full_name: r.full_name,
-        id: r.id,
-        private: r.private,
-        defaultBranch: r.default_branch ?? "main",
-        description: r.description,
-      });
-      if (result === "seeded") seeded++;
-      else skipped++;
-    } catch (e) {
-      console.error(`[seed] ${r.full_name} 실패:`, e);
-    }
+export async function seedRegistry(
+  opts: { backfill?: boolean } = {},
+): Promise<SeedRegistryResult> {
+  if (seeding) {
+    return {
+      seeded: 0,
+      skipped: 0,
+      backfilled: 0,
+      platformBound: 0,
+      failed: 0,
+      state: "busy",
+      ok: false,
+    };
   }
+  seeding = true;
+  try {
+    const org = env.githubOrg();
+    const octokit = await getInstallationOctokit();
+    const repos = await octokit.paginate(octokit.rest.repos.listForOrg, {
+      org,
+      per_page: 100,
+      type: "all",
+    });
 
-  const platformBindings = await syncPlatformRegistryBindings(octokit, org);
+    const targets = repos.filter(
+      (r) =>
+        !r.archived &&
+        !r.fork &&
+        !IGNORE.has(r.name) &&
+        !r.name.startsWith("starter-template"),
+    );
 
-  let backfilled = 0;
-  if (opts.backfill !== false) {
-    const apps = await prisma.app.findMany({ select: { repoFullName: true } });
-    for (const a of apps) {
+    let seeded = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const r of targets) {
       try {
-        await backfillRepo(a.repoFullName);
-        backfilled++;
+        const result = await seedRepo(octokit, org, {
+          name: r.name,
+          full_name: r.full_name,
+          id: r.id,
+          private: r.private,
+          defaultBranch: r.default_branch ?? "main",
+          description: r.description,
+        });
+        if (result === "seeded") seeded++;
+        else skipped++;
       } catch (e) {
-        console.error(`[seed] backfill ${a.repoFullName} 실패:`, e);
+        failed++;
+        console.error(`[seed] ${r.full_name} 실패:`, e);
       }
     }
-  }
 
-  return {
-    seeded,
-    skipped,
-    backfilled,
-    platformBound: platformBindings.bound,
-  };
+    let platformBound = 0;
+    try {
+      const platformBindings = await syncPlatformRegistryBindings(octokit, org);
+      platformBound = platformBindings.bound;
+    } catch (e) {
+      failed++;
+      console.error("[seed] Platform registry binding 실패:", e);
+    }
+
+    let backfilled = 0;
+    if (opts.backfill !== false) {
+      const apps = await prisma.app.findMany({ select: { repoFullName: true } });
+      for (const a of apps) {
+        try {
+          await backfillRepo(a.repoFullName);
+          backfilled++;
+        } catch (e) {
+          failed++;
+          console.error(`[seed] backfill ${a.repoFullName} 실패:`, e);
+        }
+      }
+    }
+
+    return {
+      seeded,
+      skipped,
+      backfilled,
+      platformBound,
+      failed,
+      state: failed === 0 ? "completed" : "partial",
+      ok: failed === 0,
+    };
+  } finally {
+    seeding = false;
+  }
 }

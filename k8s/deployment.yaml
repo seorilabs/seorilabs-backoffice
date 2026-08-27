@@ -15,9 +15,15 @@ metadata:
     app.kubernetes.io/name: backoffice
 spec:
   replicas: 1
-  # 단일 replica + RWO 미러 DB. 스케줄러 중복/롤아웃 데드락 방지 위해 Recreate.
+  # DB migration은 별도 exact-digest Job이 먼저 끝낸다. 웹은 DB/PVC를 직접 점유하지
+  # 않고 scheduler도 CronJob으로 분리했으므로 기존 Ready Pod를 남긴 채 교체한다.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  minReadySeconds: 5
+  progressDeadlineSeconds: 300
   selector:
     matchLabels:
       app.kubernetes.io/name: backoffice
@@ -25,6 +31,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: web
     spec:
       # data ns 인덱싱 Job 생성용(Discord /index). RBAC: k8s/vault-trigger-rbac.yaml
       serviceAccountName: backoffice
@@ -34,31 +41,6 @@ spec:
         fsGroup: 10001
       imagePullSecrets:
         - name: registry-pull-cred
-      initContainers:
-        - name: migrate
-          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
-          imagePullPolicy: Always
-          command: ["prisma", "migrate", "deploy"]
-          env:
-            - name: HOME
-              value: /tmp
-            - name: CHECKPOINT_DISABLE
-              value: "1"
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DATABASE_URL
-          securityContext:
-            runAsUser: 10001
-            runAsGroup: 10001
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
       containers:
         - name: backoffice
           image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
@@ -105,8 +87,6 @@ spec:
               value: "1536"
             - name: GEMINI_TIMEOUT_MS
               value: "60000"
-            - name: RECONCILE_INTERVAL_MS
-              value: "21600000"
             # AI 팀원 순찰 트리거 route(/api/admin/teammates/patrol)는 웹 Pod에서
             # 돈다. 워커 플래그와 별개로 여기 없으면 CronJob 이 503으로 실패한다.
             - name: FEATURE_DISCORD_TEAMMATES
