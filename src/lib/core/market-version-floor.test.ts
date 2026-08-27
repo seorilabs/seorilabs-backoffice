@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  assertTagAtOrAboveMarketFloor,
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
@@ -77,24 +76,20 @@ test("태그 계보가 마켓 원장보다 낮으면 마켓 기준으로 bump한
   );
 });
 
-test("마켓 원장보다 낮은 명시 태그와 배포 태그를 거부한다", () => {
-  assert.throws(
-    () =>
-      resolveReleaseTagWithMarketFloor({
-        latestTag: "v0.0.2",
-        marketFloor: "v1.0.3",
-        explicitTag: "v0.0.3",
-        bump: "patch",
-      }),
-    /v0\.0\.3.*마켓 원장 v1\.0\.3/s,
-  );
-  assert.throws(
-    () => assertTagAtOrAboveMarketFloor("v0.0.2", "v1.0.3"),
-    /v0\.0\.2.*v1\.0\.3/s,
+// 인수조건: 마켓 floor 는 추천용이다. 배포 허가는 소스 계약이 판단한다.
+test("명시 태그는 마켓 원장과 비교하지 않고 그대로 쓴다", () => {
+  assert.equal(
+    resolveReleaseTagWithMarketFloor({
+      latestTag: "v0.0.2",
+      marketFloor: "v1.0.3",
+      explicitTag: "v0.0.3",
+      bump: "patch",
+    }),
+    "v0.0.3",
   );
 });
 
-test("마켓 원장과 같은 명시 태그는 새 build를 위해 허용한다", () => {
+test("명시 태그는 정규화만 거친다", () => {
   assert.equal(
     resolveReleaseTagWithMarketFloor({
       latestTag: "v0.0.2",
