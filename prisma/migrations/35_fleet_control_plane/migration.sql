@@ -97,7 +97,6 @@ CREATE TABLE `control_plane_provider_observation` (
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     UNIQUE INDEX `control_plane_provider_observation_idempotencyKey_key`(`idempotencyKey`),
-    INDEX `control_plane_provider_observation_appId_provider_resourceTy_idx`(`appId`, `provider`, `resourceType`, `resourceId`, `payloadHash`),
     INDEX `control_plane_provider_observation_appId_provider_observedAt_idx`(`appId`, `provider`, `observedAt`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

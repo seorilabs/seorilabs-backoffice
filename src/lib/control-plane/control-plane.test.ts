@@ -112,3 +112,23 @@ test("migration이 webhook/occurrence 멱등과 repo PR unique scope를 DB에서
   assert.match(migration, /UNIQUE INDEX `agent_lease_scopeKey_key`/);
   assert.match(migration, /UNIQUE INDEX `agent_run_event_requestId_key`/);
 });
+
+test("provider observation migration은 MySQL utf8mb4 인덱스 한도를 넘지 않는다", () => {
+  const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+  const migration = readFileSync(
+    join(process.cwd(), "prisma/migrations/35_fleet_control_plane/migration.sql"),
+    "utf8",
+  );
+  const oversizedColumns = "`appId`, `provider`, `resourceType`, `resourceId`, `payloadHash`";
+
+  assert.doesNotMatch(migration, new RegExp(oversizedColumns));
+  assert.doesNotMatch(
+    schema,
+    /@@index\(\[appId, provider, resourceType, resourceId, payloadHash\]\)/,
+  );
+  assert.match(
+    migration,
+    /INDEX `control_plane_provider_observation_appId_provider_observedAt_idx`\(`appId`, `provider`, `observedAt`\)/,
+  );
+  assert.match(schema, /@@index\(\[appId, provider, observedAt\]\)/);
+});
