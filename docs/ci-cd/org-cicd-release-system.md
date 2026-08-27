@@ -245,6 +245,8 @@ sequenceDiagram
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
 - Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행하며, 태그 ref도 제품의 첫 primary repository가 아니라 선택한 workflow에 연결된 repository에서 찾는다.
 - 완료 알림은 한글 앱명·태그·마켓·실행 이름·GitHub Actions 링크 또는 Xcode Cloud 빌드 번호를 포함한다.
+- `deploy-all`의 마켓 잡은 재사용 워크플로라 자체 `workflow_run`이 없다. 실행의 잡 목록과 `deploy-all.yml`의 `uses` 대상 파일을 맞춰 마켓별 결론을 복원하고, 단일 마켓 배포와 같은 카드(프로덕션 승격·심사 버튼 포함)를 남긴다. 실행되지 않은 마켓은 배포 기록을 만들지 않으며, 마켓 잡이 하나도 없거나 잡을 읽지 못하면 실행 단위 카드로 물러선다.
+- Google Play 카드의 "내부 테스트" 링크 버튼은 백오피스 앱 화면에 입력한 `App.playInternalTestUrl`이 있을 때만 붙는다. Play Console 내부 테스트 opt-in URL은 패키지명에서 파생되지 않아 콘솔에서 복사해 넣는다.
 
 ### 7.3 출시노트 규칙
 - **마켓 비종속**: "앱스토어/플레이스토어/토스" 등 특정 마켓 명칭·정책 표현 금지. 모든 마켓 공통으로 재사용.

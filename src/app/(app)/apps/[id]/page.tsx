@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { CapabilityGrid, Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { MetricCards, type MetricDaily } from "@/components/analytics/MetricPanels";
 import { StatusControl } from "@/components/StatusControl";
+import { PlayInternalTestControl } from "@/components/PlayInternalTestControl";
 import { hasEvidence } from "@/lib/domain/labels";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { STATUS_KO } from "@/lib/domain/lifecycle";
@@ -80,6 +81,11 @@ export default async function AppOverview({
             />
             <Meta k="구성 동기화" v={fmtDate(app.configSyncedAt)} />
           </div>
+          {targets.includes("play") && (
+            <div className="mt-4 border-t border-neutral-100 pt-3">
+              <PlayInternalTestControl appId={app.id} url={app.playInternalTestUrl} />
+            </div>
+          )}
           <div className="mt-4 border-t border-neutral-100 pt-3">
             <StatusControl appId={app.id} status={app.status} />
           </div>

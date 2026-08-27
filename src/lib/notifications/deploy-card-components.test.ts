@@ -6,9 +6,11 @@ import {
   isReleaseTag,
   type AppStoreReviewCardState,
 } from "@/lib/notifications/deploy-format";
+import { playInternalTestLink } from "@/lib/domain/play-internal-test";
 
 const RELEASE_ID = "cmszaz3wd0asqs101uvv5ar6x";
 const VERSION = "v1.1.6";
+const INTERNAL_TEST_URL = "https://play.google.com/apps/internaltest/4700123456789012345";
 
 function labels(input: Parameters<typeof deployCardComponents>[0]): string[] {
   return deployCardComponents(input).flatMap((row) => row.components.map((c) => c.label));
@@ -50,6 +52,63 @@ test("Play 업로드 성공 카드는 프로덕션 승격을 제공하고 승격
     }),
     [],
   );
+});
+
+test("내부 테스트 링크는 백오피스에 입력된 앱에만 링크 버튼으로 붙는다", () => {
+  const base = {
+    releaseRecordId: RELEASE_ID,
+    market: "PLAY" as const,
+    status: "SUCCEEDED" as const,
+    version: VERSION,
+  };
+  assert.deepEqual(labels({ ...base, internalTestUrl: INTERNAL_TEST_URL }), [
+    "프로덕션 승격",
+    "내부 테스트",
+  ]);
+  // 승격을 이미 트리거해도 설치 경로는 남아야 한다.
+  assert.deepEqual(
+    labels({ ...base, promotionRequested: true, internalTestUrl: INTERNAL_TEST_URL }),
+    ["내부 테스트"],
+  );
+  // 태그가 없는 snapshot 후보도 내부 트랙으로 올라가므로 링크는 유지한다.
+  assert.deepEqual(
+    labels({ ...base, version: "v1.1.7-snapshot.2", internalTestUrl: INTERNAL_TEST_URL }),
+    ["내부 테스트"],
+  );
+  // 업로드 전에는 설치할 것이 없다.
+  assert.deepEqual(
+    labels({ ...base, status: "FAILED", internalTestUrl: INTERNAL_TEST_URL }),
+    [],
+  );
+});
+
+test("내부 테스트 링크 버튼은 Play 링크만 실어 보낸다", () => {
+  const play = deployCardComponents({
+    releaseRecordId: RELEASE_ID,
+    market: "PLAY",
+    status: "SUCCEEDED",
+    version: VERSION,
+    promotionRequested: true,
+    internalTestUrl: INTERNAL_TEST_URL,
+  })[0].components[0];
+  assert.deepEqual(play, { type: 2, style: 5, label: "내부 테스트", url: INTERNAL_TEST_URL });
+
+  assert.equal(playInternalTestLink(`  ${INTERNAL_TEST_URL}  `), INTERNAL_TEST_URL);
+  for (const invalid of ["", null, undefined, "http://play.google.com/x", "https://evil.example/x"]) {
+    assert.equal(playInternalTestLink(invalid), null, String(invalid));
+    assert.deepEqual(
+      labels({
+        releaseRecordId: RELEASE_ID,
+        market: "PLAY",
+        status: "SUCCEEDED",
+        version: VERSION,
+        promotionRequested: true,
+        internalTestUrl: invalid,
+      }),
+      [],
+      String(invalid),
+    );
+  }
 });
 
 test("AIT·Web 배포에는 카드 액션이 없다", () => {

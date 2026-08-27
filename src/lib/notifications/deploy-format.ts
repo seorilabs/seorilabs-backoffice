@@ -1,5 +1,6 @@
 import type { ReleaseMarket, ReleaseStatus } from "@prisma/client";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
+import { playInternalTestLink } from "@/lib/domain/play-internal-test";
 
 const MARKET_LABEL: Record<ReleaseMarket, string> = {
   AIT: "AppsInToss",
@@ -226,6 +227,10 @@ export function isReleaseTag(version: string): boolean {
   return RELEASE_TAG_RE.test(version);
 }
 
+function linkButton(label: string, url: string): DiscordActionRow["components"][number] {
+  return { type: 2, style: 5, label, url };
+}
+
 /**
  * 배포 카드에 붙일 액션 버튼. 업로드가 성공한 뒤에만 후속 마켓 작업을 노출한다.
  * 승격을 이미 트리거한 태그에는 승격 버튼을 다시 달지 않는다(승격 실행 자체의 카드 포함).
@@ -238,13 +243,21 @@ export function deployCardComponents(input: {
   /** 같은 앱·버전에 실패하지 않은 production 승격 배포가 이미 있는지. */
   promotionRequested?: boolean;
   review?: AppStoreReviewCardState | null;
+  /** 백오피스에 입력된 Play 내부 테스트 바로가기 URL. */
+  internalTestUrl?: string | null;
 }): DiscordActionRow[] {
   if (input.status !== "SUCCEEDED") return [];
-  if (!isReleaseTag(input.version)) return [];
   if (input.market === "PLAY") {
-    if (input.promotionRequested) return [];
-    return row([button("play_promote", input.releaseRecordId, 4)]);
+    // 내부 테스트 링크는 태그와 무관하다. snapshot 후보도 내부 트랙으로 올라간다.
+    const internalTest = playInternalTestLink(input.internalTestUrl);
+    const buttons: DiscordActionRow["components"] = [];
+    if (isReleaseTag(input.version) && !input.promotionRequested) {
+      buttons.push(button("play_promote", input.releaseRecordId, 4));
+    }
+    if (internalTest) buttons.push(linkButton("내부 테스트", internalTest));
+    return row(buttons);
   }
+  if (!isReleaseTag(input.version)) return [];
   if (input.market === "APPSTORE") {
     return row(appStoreButtons(input.releaseRecordId, input.review ?? null));
   }

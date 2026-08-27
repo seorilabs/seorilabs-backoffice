@@ -23,12 +23,17 @@ import {
   enqueueDeployAllResultNotification,
   enqueueDeployCompletionNotification,
 } from "@/lib/notifications/deploy-enqueue";
-import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
 import {
   isDeployAllWorkflow,
   isPromoteGooglePlayWorkflow,
   marketFromWorkflowPath,
 } from "@/lib/core/deploy-targets";
+import {
+  recordDeployAllRun,
+  type DeployAllReleaseDeps,
+  type MarketReleaseInput,
+} from "@/lib/sync/deploy-all-release";
+import { getWorkflowFileText, listWorkflowRunJobs } from "@/lib/github/read";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -237,31 +242,34 @@ export async function upsertWorkflowRun(
   // 빠지면 배포 기록 자체가 파생되지 않는다. 이름 판별은 비표준 워크플로용 fallback.
   const market = marketFromWorkflowPath(gh.path) ?? marketFromWorkflowName(gh.name);
   if (!market) {
-    // deploy-all 의 마켓 잡은 재사용 워크플로라 자체 workflow_run 이 없다. ReleaseRecord 도
-    // 파생되지 않아 그대로 두면 ALL 배포는 성공이든 실패든 Discord 에 아무것도 남지 않는다.
     if (isDeployAllWorkflow(gh.path) && (status === "SUCCEEDED" || status === "FAILED")) {
-      const app = await prisma.app.findUnique({
-        where: { id: appId },
-        select: { displayName: true },
-      });
-      await enqueueDeployAllResultNotification({
-        text: buildDeployAllStatusCardText({
-          displayName: app?.displayName ?? repoFullName,
-          version: await resolveRunVersion(repoFullName, gh),
+      const version = await resolveRunVersion(repoFullName, gh);
+      const results = await recordDeployAllRun(
+        {
+          repoFullName,
+          appId,
+          workflowName: gh.name ?? null,
+          headSha: gh.head_sha ?? null,
+          version,
           status,
+          runId,
+          runAttempt,
           runUrl,
-          updatedAt: ghUpdatedAt,
-        }),
-        eventKey: `${runId}:${runAttempt}`,
-        occurredAt: ghUpdatedAt,
-      });
+          ghUpdatedAt,
+        },
+        deployAllReleaseDeps,
+      );
+      if (results.some((result) => shouldAdvanceLifecycleForRelease(result.status, version))) {
+        await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);
+      }
     }
     return;
   }
 
   const version = await resolveRunVersion(repoFullName, gh);
-  const relData = {
+  await recordMarketRelease({
     appId,
+    market,
     version,
     // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
     track: releaseTrackForWorkflow({
@@ -272,31 +280,58 @@ export async function upsertWorkflowRun(
     status,
     workflowName: gh.name ?? null,
     commitSha: gh.head_sha ?? null,
-    deployedAt: status === "SUCCEEDED" ? ghUpdatedAt : null,
-  };
-  const release = await prisma.releaseRecord.upsert({
-    where: { market_workflowRunId: { market, workflowRunId: runId } },
-    create: { market, workflowRunId: runId, ...relData },
-    update: relData,
-  });
-
-  // webhook 유실·처리 실패도 정기 reconcile 이 복구하도록 미러 upsert 경로에서 outbox를 만든다.
-  // terminal key는 기존 완료 알림과 같게 유지해 배포 직후 과거 실행을 다시 보내지 않는다.
-  // 비terminal 상태는 상태명을 붙여 같은 실행의 요청됨→진행 중 카드를 멱등 갱신한다.
-  const terminal = status === "SUCCEEDED" || status === "FAILED";
-  await enqueueDeployCompletionNotification({
-    releaseRecordId: release.id,
-    eventKey: terminal
-      ? `github:${runId}:${runAttempt}`
-      : `github:${runId}:${runAttempt}:${status.toLowerCase()}`,
-    status,
+    runId,
+    runAttempt,
     runUrl,
+    ghUpdatedAt,
   });
 
   if (shouldAdvanceLifecycleForRelease(status, version)) {
     await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);
   }
 }
+
+const deployAllReleaseDeps: DeployAllReleaseDeps = {
+  readWorkflowFile: getWorkflowFileText,
+  listRunJobs: listWorkflowRunJobs,
+  recordMarketRelease: (input) => recordMarketRelease(input),
+  appDisplayName: async (appId) =>
+    (await prisma.app.findUnique({ where: { id: appId }, select: { displayName: true } }))
+      ?.displayName ?? null,
+  enqueueRunResultCard: enqueueDeployAllResultNotification,
+};
+
+/** ReleaseRecord 파생 + 배포 상태 카드 알림. 단일 마켓 실행과 deploy-all 이 공유한다. */
+async function recordMarketRelease(input: MarketReleaseInput): Promise<void> {
+  const relData = {
+    appId: input.appId,
+    version: input.version,
+    track: input.track,
+    status: input.status,
+    workflowName: input.workflowName,
+    commitSha: input.commitSha,
+    deployedAt: input.status === "SUCCEEDED" ? input.ghUpdatedAt : null,
+  };
+  const release = await prisma.releaseRecord.upsert({
+    where: { market_workflowRunId: { market: input.market, workflowRunId: input.runId } },
+    create: { market: input.market, workflowRunId: input.runId, ...relData },
+    update: relData,
+  });
+
+  // webhook 유실·처리 실패도 정기 reconcile 이 복구하도록 미러 upsert 경로에서 outbox를 만든다.
+  // terminal key는 기존 완료 알림과 같게 유지해 배포 직후 과거 실행을 다시 보내지 않는다.
+  // 비terminal 상태는 상태명을 붙여 같은 실행의 요청됨→진행 중 카드를 멱등 갱신한다.
+  const terminal = input.status === "SUCCEEDED" || input.status === "FAILED";
+  await enqueueDeployCompletionNotification({
+    releaseRecordId: release.id,
+    eventKey: terminal
+      ? `github:${input.runId}:${input.runAttempt}`
+      : `github:${input.runId}:${input.runAttempt}:${input.status.toLowerCase()}`,
+    status: input.status,
+    runUrl: input.runUrl,
+  });
+}
+
 
 // 배포 성공 시 라이프사이클 자동 전이 (라벨/마일스톤 비의존).
 export async function evaluateLifecycleOnSuccessfulRelease(

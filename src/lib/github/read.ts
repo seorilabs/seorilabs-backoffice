@@ -120,12 +120,12 @@ export async function getWorkflowDispatchInputNames(
   return (await getWorkflowDispatchContract(repoFullName, workflowFile, ref)).inputNames;
 }
 
-/** 실제 dispatch ref의 workflow_dispatch 존재 여부와 선언 입력을 함께 읽는다. */
-export async function getWorkflowDispatchContract(
+/** 지정 ref(미지정 시 기본 브랜치)의 워크플로 파일 원문. */
+export async function getWorkflowFileText(
   repoFullName: string,
   workflowFile: string,
   ref?: string,
-): Promise<WorkflowDispatchContract> {
+): Promise<string> {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
   const res = await octokit.rest.repos.getContent({
@@ -138,11 +138,39 @@ export async function getWorkflowDispatchContract(
   if (!data.content) {
     throw new Error(`워크플로 파일 내용을 읽을 수 없음: ${repoFullName} ${workflowFile}`);
   }
-  const text = Buffer.from(
+  return Buffer.from(
     data.content,
     data.encoding === "base64" ? "base64" : "utf8",
   ).toString("utf8");
-  return parseWorkflowDispatchContract(text);
+}
+
+/** 실제 dispatch ref의 workflow_dispatch 존재 여부와 선언 입력을 함께 읽는다. */
+export async function getWorkflowDispatchContract(
+  repoFullName: string,
+  workflowFile: string,
+  ref?: string,
+): Promise<WorkflowDispatchContract> {
+  return parseWorkflowDispatchContract(
+    await getWorkflowFileText(repoFullName, workflowFile, ref),
+  );
+}
+
+/**
+ * 실행의 잡 목록. 재사용 워크플로 잡은 자체 workflow_run 이 없어서, deploy-all 이 어느
+ * 마켓을 올렸는지는 이 목록의 잡 이름과 결론으로만 알 수 있다.
+ */
+export async function listWorkflowRunJobs(
+  repoFullName: string,
+  runId: bigint,
+  runAttempt: number,
+): Promise<Array<{ name: string; conclusion: string | null }>> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const jobs = await octokit.paginate(
+    octokit.rest.actions.listJobsForWorkflowRunAttempt,
+    { owner, repo, run_id: Number(runId), attempt_number: runAttempt, per_page: 100 },
+  );
+  return jobs.map((job) => ({ name: job.name, conclusion: job.conclusion ?? null }));
 }
 
 // 분해 에이전트용: 이슈 본문을 GitHub 에서 직접 읽는다(미러에 body 컬럼 없음).
