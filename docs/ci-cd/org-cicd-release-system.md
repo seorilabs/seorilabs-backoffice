@@ -218,8 +218,8 @@ sequenceDiagram
     participant MK as 마켓(AIT/GPS/APS)
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
-    BO->>GH: 릴리즈 마커 빈 커밋 push - chore release vX.Y.Z [contents:write]
-    BO->>GH: createTag(vX.Y.Z) → 마커 커밋에 태그 [contents:write]
+    BO->>GH: 대상 ref SHA 확정 + 그 SHA 의 소스 버전 계약 검증 [contents:read]
+    BO->>GH: createTag(vX.Y.Z) → 승인된 소스 SHA 에 태그 [contents:write]
     BO-->>U: 태그 + GitHub Release 즉시 생성
     GH-->>BO: tag push webhook
     BO-->>GH: webhook 200
@@ -231,16 +231,21 @@ sequenceDiagram
     U->>BO: ④ 배포 대상 선택(태그/마켓: AIT/GPS/APS/Deploy All)
     BO->>DC: confirm 버튼
     U->>DC: 확인
-    BO->>GH: ⑤ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
-    GH->>MK: ⑥ 빌드 → 서명 → 업로드(출시노트 동봉)
+    BO->>GH: ⑤ 태그가 가리키는 SHA 의 소스 버전 계약 재검증 [contents:read]
+    BO->>GH: ⑥ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
+    GH->>MK: ⑦ 빌드 → 서명 → 업로드(출시노트 동봉)
     GH-->>BO: workflow_run webhook(성공/실패)
     BO->>BO: ReleaseRecord 갱신 + 알림 outbox + 라이프사이클 전이
-    BO->>DC: ⑦ 업로드 성공/실패 메시지
+    BO->>DC: ⑧ 업로드 성공/실패 메시지
 ```
 
-- **릴리즈 마커 커밋**: GitHub `/commits` 화면은 태그도 배포 상태도 표시하지 않아 커밋 목록만으로 배포 경계를 알 수 없다. 태그 생성 시 트리가 부모와 동일한 빈 커밋 `chore(release): vX.Y.Z` 를 대상 브랜치에 push 하고 그 커밋에 태그를 단다. 파일 변경이 0 이라 코드에는 영향이 없다. 태그가 이미 있거나(재실행), HEAD 가 이미 마커이거나, 브랜치가 보호되어 push 가 거절되면 마커 없이 기존 커밋에 태그만 단다. 마커 커밋은 출시노트 커밋 집계에서 제외한다.
-- **마커 커밋에 `[skip ci]` 를 넣지 않는다.** 마커 커밋이 태그가 가리키는 커밋이 되므로, 배포가 `push: tags` 로 트리거되는 repo(예: lizard-tycoon `deploy-apps-in-toss.yml`)에서 skip 지시어가 그 배포까지 조용히 삼킨다. 정적 게이트가 릴리즈마다 한 번 더 도는 비용을 감수한다.
-- 백오피스 경로(`pushReleaseMarkerCommit`)와 워크플로우 경로(org 재사용 `release-tag.yml` + 인라인 caller)가 같은 규칙을 쓴다. 어느 쪽으로 태그를 찍어도 마커가 남는다.
+- **릴리즈 태그는 승인된 소스 SHA 를 직접 가리킨다.** 백오피스는 대상 ref 의 SHA 를 한 번 확정하고 그 SHA 에 태그를 단다. 브랜치 ref 를 갱신하거나 커밋을 만들지 않는다(빈 마커 커밋 방식 폐기). 마커 커밋은 파일 변경이 없는 커밋을 릴리즈 소스로 만들고 브랜치 HEAD 도 함께 움직였다.
+- **fail-closed 소스 버전 계약**: 태그 생성 전과 마켓 배포 dispatch 전에, 해당 SHA 의 repo-local 버전 원장을 백오피스가 직접 읽어 태그와 정확히 일치하는지 검증한다. 위반이면 GitHub tag, GitHub Release, 브랜치 ref 갱신, Xcode Cloud `ciBuildRuns` POST, workflow dispatch 중 무엇도 실행하지 않는다. `ALL` 에서도 이 검증이 Xcode Cloud 트리거보다 먼저다.
+  - `scripts/check_release_version.py` 를 선언한 repo(pinned-source): `project.godot` 의 `application/config/version`, `play-store/google-play.config.json` 의 `release.versionName`, `app-store/app-store.config.json` 의 `release.appleMarketingVersion` 이 서로 같고 태그와도 같아야 한다.
+  - `scripts/resolve-release-version.mjs` 를 선언한 repo(tag-derived, org RN 표준): 버전이 태그의 순수 함수라 비교할 원장이 없다.
+  - 둘 다 없는 repo(tag-derived-caller): Godot caller 가 `version_name` 을 required 입력으로 받고 백오피스가 태그에서 파생해 넘긴다. repo 가 강제하는 pinned 원장이 없다.
+- **마켓 config 의 버전(floor)은 다음 태그 추천에만 쓴다.** 이미 배포된 마켓 버전보다 태그가 높다는 사실은 태그가 가리키는 소스가 그 버전이라는 증거가 아니다(태그 v1.2.0 / 소스 1.1.12 장애). 배포 허가는 위 소스 계약이 판단한다.
+- **개별 마켓 workflow 내부의 exact 검증은 마지막 방어막으로 유지한다.** 백오피스 검증은 그 앞단에서 외부 실행이 만들어지는 것 자체를 막는다.
 - Discord API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
 - Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행하며, 태그 ref도 제품의 첫 primary repository가 아니라 선택한 workflow에 연결된 repository에서 찾는다.

@@ -5,15 +5,12 @@ import {
   upsertReleaseAsset,
   dispatchWorkflow,
   resolveRefSha,
-  pushReleaseMarkerCommit,
 } from "@/lib/github/write";
 import { listVersionTags } from "@/lib/github/release";
 import {
   getRepoJsonFile,
   getWorkflowDispatchInputNames,
 } from "@/lib/github/read";
-import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
-import { buildDeployAllAppStoreInputs } from "@/lib/core/deploy-all-inputs";
 import {
   shouldUseXcodeCloudForTarget,
 } from "@/lib/xcode-cloud/dispatch";
@@ -45,17 +42,23 @@ import {
   type PrepareResult,
   type SubmitResult,
 } from "@/lib/app-store/submit";
-import { MARKET_WORKFLOW, PROMOTE_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
+import { PROMOTE_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
 import {
   bumpStableSemVerTag,
   normalizeStableSemVerTag,
   type Bump,
 } from "@/lib/core/stable-semver";
 import {
-  assertTagAtOrAboveMarketFloor,
   marketVersionFloorFromConfigs,
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
+import { readReleaseSourceFiles } from "@/lib/github/release-source";
+import {
+  createReleaseTagAtSource,
+  dispatchMarketDeployAtTag,
+  type MarketDispatchPort,
+  type ReleaseSourcePort,
+} from "@/lib/core/release-orchestrator";
 
 export type { Bump } from "@/lib/core/stable-semver";
 
@@ -77,6 +80,12 @@ export function bumpFrom(latest: string | null, bump: Bump): string {
   return bumpStableSemVerTag(latest, bump);
 }
 
+/**
+ * repo-local 마켓 config 의 최고 버전. **다음 태그 추천에만** 쓴다.
+ * 배포 허가 근거로 쓰지 않는다 — 마켓 원장은 이미 배포된 버전이라 "그 이상"이라는 사실만으로는
+ * 태그가 가리키는 소스가 그 버전이라는 증거가 되지 못한다(v1.2.0 태그 / 소스 1.1.12 장애).
+ * 실제 허가는 `assertReleaseSourceContract` 가 SHA 단위로 판단한다.
+ */
 async function marketVersionFloor(repoFullName: string): Promise<string | null> {
   const [googlePlay, appStore] = await Promise.all([
     getRepoJsonFile(repoFullName, "play-store/google-play.config.json"),
@@ -115,7 +124,10 @@ export interface CreateReleaseResult {
 /**
  * 명시적 릴리즈 태그 + GitHub Release 를 즉시 생성한다.
  * 다국어 출시노트는 tag push webhook 의 after 작업에서 별도로 생성·발행한다.
- * tag 지정 시 그대로, 없으면 최신 태그 + bump.
+ * tag 지정 시 그대로, 없으면 최신 태그 + 마켓 원장 중 높은 쪽에서 bump(추천 값).
+ *
+ * 태그는 승인된 소스 SHA 를 직접 가리키고, 대상 브랜치 HEAD 는 이 경로에서 절대 움직이지 않는다.
+ * 소스 버전 계약이 깨지면 태그도 Release 도 만들지 않는다.
  */
 export async function createReleaseTagWithNotes(opts: {
   repoFullName: string;
@@ -126,7 +138,6 @@ export async function createReleaseTagWithNotes(opts: {
   prerelease?: boolean;
 }): Promise<CreateReleaseResult> {
   const targetRef = opts.targetRef || "main";
-  const baseSha = await resolveRefSha(opts.repoFullName, targetRef);
 
   const [tags, floor] = await Promise.all([
     listVersionTags(opts.repoFullName),
@@ -139,21 +150,18 @@ export async function createReleaseTagWithNotes(opts: {
     bump: opts.bump ?? "patch",
   });
 
-  // 릴리즈 경계 마커 커밋을 남기고 그 커밋에 태그를 단다(커밋 히스토리 가시성).
-  const { sha, marked } = await pushReleaseMarkerCommit({
-    repoFullName: opts.repoFullName,
-    ref: targetRef,
-    sha: baseSha,
-    tag,
-  });
-
-  const { created } = await createTag({ repoFullName: opts.repoFullName, tag, sha });
-  const rel = await createOrUpdateRelease({
+  const result = await createReleaseTagAtSource({
     repoFullName: opts.repoFullName,
     tag,
-    name: tag,
-    body: formatReleaseBody({ tag }),
+    targetRef,
     prerelease: opts.prerelease,
+    releaseBody: (created) => formatReleaseBody({ tag: created }),
+    source: releaseSourcePort(opts.repoFullName),
+    writer: {
+      createTag: (input) => createTag({ repoFullName: opts.repoFullName, ...input }),
+      createOrUpdateRelease: (input) =>
+        createOrUpdateRelease({ repoFullName: opts.repoFullName, ...input }),
+    },
   });
 
   await prisma.auditLog
@@ -162,13 +170,26 @@ export async function createReleaseTagWithNotes(opts: {
         actorLogin: opts.actorLabel ?? null,
         action: "release.tag.create",
         entityType: "release",
-        entityId: `${opts.repoFullName}@${tag}`,
-        payload: { tag, sha, baseSha, marked, created, releaseUrl: rel.url } as object,
+        entityId: `${opts.repoFullName}@${result.tag}`,
+        payload: {
+          tag: result.tag,
+          sha: result.sha,
+          targetRef,
+          contract: result.contract.kind,
+          sourceVersions: result.contract.observed,
+          created: result.created,
+          releaseUrl: result.releaseUrl,
+        } as object,
       },
     })
     .catch(() => {});
 
-  return { tag, sha, created, releaseUrl: rel.url };
+  return {
+    tag: result.tag,
+    sha: result.sha,
+    created: result.created,
+    releaseUrl: result.releaseUrl,
+  };
 }
 
 /**
@@ -248,25 +269,20 @@ export function formatReleaseBody(
   return parts.join("\n\n");
 }
 
-/**
- * PLAY 단독 배포 시, caller 워크플로에 "선언된" 입력만 감지해 항상 업로드 + 내부 테스터 배포까지
- * 진행되도록 입력을 주입한다. 검사 ref = 실제 dispatch ref(tag) — GitHub 은 dispatch 한 ref 의
- * 워크플로 정의로 입력을 검증하므로, 태그와 다른 ref(기본 브랜치)로 검사하면 통과해도 dispatch 에서
- * 422 가 날 수 있다(구버전 태그 함정).
- */
-async function applyGooglePlayUploadInputs(
-  repoFullName: string,
-  workflowFile: string,
-  tag: string,
-  inputs: Record<string, string>,
-): Promise<void> {
-  const declared = await getWorkflowDispatchInputNames(repoFullName, workflowFile, tag);
-  Object.assign(inputs, buildGooglePlayUploadInputs(declared, tag, { repoFullName, workflowFile }));
+/** repo 단위 릴리스 소스 조회 포트(SHA 확정 + 계약 입력 읽기). */
+function releaseSourcePort(repoFullName: string): ReleaseSourcePort {
+  return {
+    resolveRefSha: (ref) => resolveRefSha(repoFullName, ref),
+    readReleaseSourceFiles: (sha) => readReleaseSourceFiles(repoFullName, sha),
+  };
 }
 
 /**
  * 마켓 배포 dispatch. 지정 태그를 ref 로 표준 caller 워크플로우를 트리거.
- * 결과(빌드/업로드/성공)는 workflow_run webhook → ReleaseRecord + 라이프사이클 + 텔레그램 알림.
+ * 결과(빌드/업로드/성공)는 workflow_run webhook → ReleaseRecord + 라이프사이클 + 알림.
+ *
+ * dispatch 전에 태그가 가리키는 정확한 SHA 의 소스 버전 계약을 다시 검증한다. 이미 만들어진
+ * 잘못된 태그로 PLAY/AIT/ALL 을 재시도해도 외부 실행이 하나도 생기지 않는다.
  */
 export async function dispatchMarketDeploy(opts: {
   repoFullName: string;
@@ -275,62 +291,29 @@ export async function dispatchMarketDeploy(opts: {
   memo?: string;
   actorLabel?: string;
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
-  const workflowFile = MARKET_WORKFLOW[opts.target];
-  if (!workflowFile) throw new Error(`알 수 없는 배포 대상: ${opts.target}`);
+  const dispatcher: MarketDispatchPort = {
+    getWorkflowDispatchInputNames: (workflowFile, ref) =>
+      getWorkflowDispatchInputNames(opts.repoFullName, workflowFile, ref),
+    dispatchWorkflow: (input) =>
+      dispatchWorkflow({ repoFullName: opts.repoFullName, ...input }),
+    dispatchXcodeCloudRelease: (input) =>
+      dispatchXcodeCloudRelease({
+        repoFullName: opts.repoFullName,
+        tag: input.tag,
+        actorLabel: opts.actorLabel,
+      }),
+  };
 
-  const floor = await marketVersionFloor(opts.repoFullName);
-  assertTagAtOrAboveMarketFloor(opts.tag, floor);
-
-  // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 GH 가 아니라
-  // ASC API 로 트리거한다(APPSTORE 단독, 또는 ALL 의 iOS 부분).
-  const iosViaXcodeCloud = shouldUseXcodeCloudForTarget(
-    opts.repoFullName,
-    opts.target,
-  );
-
-  let xcodeCloudBuild: number | null | undefined;
-  if (iosViaXcodeCloud) {
-    const run = await dispatchXcodeCloudRelease({
-      repoFullName: opts.repoFullName,
-      tag: opts.tag,
-      actorLabel: opts.actorLabel,
-    });
-    xcodeCloudBuild = run.buildNumber;
-  }
-
-  // GH 워크플로 dispatch. APPSTORE 단독은 Xcode Cloud 로 갔으니 GH 는 생략.
-  let dispatchedWorkflow: string | undefined;
-  if (!(iosViaXcodeCloud && opts.target === "APPSTORE")) {
-    // 표준 caller 는 release_tag 입력을 받는다. AIT/ALL 은 memo 도 지원.
-    const inputs: Record<string, string> = { release_tag: opts.tag };
-    if ((opts.target === "AIT" || opts.target === "ALL") && opts.memo) {
-      inputs.memo = opts.memo;
-    }
-    // ALL 인데 iOS 가 Xcode Cloud 면, deploy-all 의 App Store 잡은 제외한다.
-    // 단 App Store 를 애초에 deploy-all 에서 뺀 repo 는 이 입력을 선언하지 않는다.
-    // 선언되지 않은 입력을 보내면 GitHub 이 422 로 거부해 ALL 배포가 통째로 막힌다.
-    if (iosViaXcodeCloud && opts.target === "ALL") {
-      const declared = await getWorkflowDispatchInputNames(
-        opts.repoFullName,
-        workflowFile,
-        opts.tag,
-      );
-      Object.assign(inputs, buildDeployAllAppStoreInputs(declared));
-    }
-    // PLAY 단독: 텔레그램/백오피스에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
-    // 배포까지 진행한다(ALL 의 google-play 잡은 이미 upload=true 로 하드코딩되어 별도 처리 불필요).
-    if (opts.target === "PLAY") {
-      await applyGooglePlayUploadInputs(opts.repoFullName, workflowFile, opts.tag, inputs);
-    }
-
-    await dispatchWorkflow({
-      repoFullName: opts.repoFullName,
-      workflowFile,
-      ref: opts.tag,
-      inputs,
-    });
-    dispatchedWorkflow = workflowFile;
-  }
+  const result = await dispatchMarketDeployAtTag({
+    repoFullName: opts.repoFullName,
+    target: opts.target,
+    tag: opts.tag,
+    memo: opts.memo,
+    // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 ASC API 로 트리거한다.
+    iosViaXcodeCloud: shouldUseXcodeCloudForTarget(opts.repoFullName, opts.target),
+    source: releaseSourcePort(opts.repoFullName),
+    dispatcher,
+  });
 
   await prisma.auditLog
     .create({
@@ -341,15 +324,21 @@ export async function dispatchMarketDeploy(opts: {
         entityId: `${opts.repoFullName}@${opts.tag}`,
         payload: {
           target: opts.target,
-          workflowFile: dispatchedWorkflow ?? null,
-          xcodeCloudBuild: xcodeCloudBuild ?? null,
+          workflowFile: result.workflowFile ?? null,
+          xcodeCloudBuild: result.xcodeCloudBuild ?? null,
           tag: opts.tag,
+          sha: result.sha,
+          contract: result.contract.kind,
+          sourceVersions: result.contract.observed,
         } as object,
       },
     })
     .catch(() => {});
 
-  return { workflowFile: dispatchedWorkflow, xcodeCloudBuild };
+  return {
+    workflowFile: result.workflowFile,
+    xcodeCloudBuild: result.xcodeCloudBuild,
+  };
 }
 
 // ── Google Play: 내부 빌드 → 프로덕션 승격(재빌드 없이 심사 제출) ──

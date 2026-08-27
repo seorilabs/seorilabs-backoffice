@@ -46,6 +46,33 @@ export async function getRepoJsonFile(
   }
 }
 
+/** 지정 ref(미지정 시 기본 브랜치)의 repo-local 텍스트 파일. 파일 없음은 null, 다른 오류는 throw. */
+export async function getRepoTextFile(
+  repoFullName: string,
+  path: string,
+  ref?: string,
+): Promise<string | null> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  try {
+    const res = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path,
+      ...(ref ? { ref } : {}),
+    });
+    const data = res.data as { content?: string; encoding?: string };
+    if (!data.content) return null;
+    return Buffer.from(
+      data.content,
+      data.encoding === "base64" ? "base64" : "utf8",
+    ).toString("utf8");
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return null;
+    throw error;
+  }
+}
+
 /** 조직 저장소의 실제 default branch를 한 번의 paginated 조회로 가져온다. */
 export async function getOrgDefaultBranches(): Promise<Map<string, string>> {
   const octokit = await getInstallationOctokit();

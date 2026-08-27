@@ -1,8 +1,4 @@
 import { getInstallationOctokit } from "@/lib/github/app";
-import {
-  releaseMarkerMessage,
-  shouldPushReleaseMarker,
-} from "@/lib/core/release-marker";
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
@@ -82,60 +78,6 @@ export async function resolveRefSha(repoFullName: string, ref: string): Promise<
   const { owner, repo } = splitRepo(repoFullName);
   const res = await octokit.rest.repos.getCommit({ owner, repo, ref });
   return res.data.sha;
-}
-
-/**
- * 릴리즈 태그를 달 커밋을 확정한다.
- *
- * ref 가 브랜치 헤드이면 트리가 부모와 동일한 빈 마커 커밋을 push 하고 그 SHA 를 돌려준다.
- * GitHub /commits 화면이 태그를 표시하지 않아 커밋 목록만으로 릴리즈 경계를 알 수 없는 문제를
- * 해결하는 유일한 방법이다(파일 변경 0 이라 코드에는 영향 없음).
- *
- * 마커를 남길지 판단은 `shouldPushReleaseMarker`(순수 함수)가 담당한다.
- * 남기지 않기로 했거나 push 가 거절되면 원래 SHA 를 그대로 돌려주고 태그 생성은 계속 진행한다.
- */
-export async function pushReleaseMarkerCommit(opts: {
-  repoFullName: string;
-  ref: string;
-  sha: string;
-  tag: string;
-}): Promise<{ sha: string; marked: boolean }> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(opts.repoFullName);
-
-  const [tagRef, branch, parent] = await Promise.all([
-    octokit.rest.git.getRef({ owner, repo, ref: `tags/${opts.tag}` }).catch(() => null),
-    octokit.rest.git.getRef({ owner, repo, ref: `heads/${opts.ref}` }).catch(() => null),
-    octokit.rest.git.getCommit({ owner, repo, commit_sha: opts.sha }),
-  ]);
-
-  const should = shouldPushReleaseMarker({
-    tagAlreadyExists: tagRef != null,
-    branchHeadSha: branch?.data.object.sha ?? null,
-    targetSha: opts.sha,
-    parentMessage: parent.data.message,
-  });
-  if (!should) return { sha: opts.sha, marked: false };
-
-  try {
-    const commit = await octokit.rest.git.createCommit({
-      owner,
-      repo,
-      message: releaseMarkerMessage(opts.tag),
-      tree: parent.data.tree.sha,
-      parents: [opts.sha],
-    });
-    // force 없음 = fast-forward 만 허용. 그 사이 브랜치가 움직였으면 실패 → 폴백.
-    await octokit.rest.git.updateRef({
-      owner,
-      repo,
-      ref: `heads/${opts.ref}`,
-      sha: commit.data.sha,
-    });
-    return { sha: commit.data.sha, marked: true };
-  } catch {
-    return { sha: opts.sha, marked: false };
-  }
 }
 
 /** lightweight 태그 생성. 이미 존재하면 동일 SHA→idempotent, 다른 SHA→throw. */
