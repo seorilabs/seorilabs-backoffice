@@ -14,17 +14,20 @@ interface DraftSummary {
   payloadHash: string;
   createdBy: string;
   createdAt: string;
+  activatable: boolean;
 }
 
 export function FleetConfigEditor({
   appId,
   activeRevision,
   initialPayload,
+  legacyActiveBlocked,
   drafts,
 }: {
   appId: string;
   activeRevision: number;
   initialPayload: string;
+  legacyActiveBlocked: boolean;
   drafts: DraftSummary[];
 }) {
   const [payload, setPayload] = useState(initialPayload);
@@ -54,9 +57,14 @@ export function FleetConfigEditor({
           비민감 desired state JSON
         </label>
         <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-          법적 선언, 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포,
-          credential 변경 필드는 별도 사람 승인 workflow가 없어 저장과 활성화가 모두 차단됩니다.
+          이 화면은 schemaVersion, 비공개 market channel, localization, asset revision,
+          build pin, support URL만 허용합니다. 그 밖의 필드는 별도 사람 승인 workflow가 없어 저장과 활성화가 모두 차단됩니다.
         </p>
+        {legacyActiveBlocked && (
+          <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            기존 ACTIVE revision은 현재 strict 계약 밖의 payload라 편집 원본으로 복사하지 않았습니다. 서명 snapshot 조회는 유지되지만 재활성화할 수 없습니다.
+          </p>
+        )}
         <textarea
           id="fleet-config-payload"
           value={payload}
@@ -113,7 +121,7 @@ export function FleetConfigEditor({
               </div>
               <button
                 type="button"
-                disabled={pending}
+                disabled={pending || !draft.activatable}
                 onClick={() => run(
                   () => activateFleetConfigRevisionAction({
                     appId,
@@ -125,7 +133,7 @@ export function FleetConfigEditor({
                 )}
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
               >
-                ACTIVE 전환
+                {draft.activatable ? "ACTIVE 전환" : "strict 계약 밖 DRAFT"}
               </button>
             </div>
           ))}

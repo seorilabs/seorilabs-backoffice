@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
+import {
+  configRevisionPayloadSchema,
+  workflowCallerSchema,
+  type ReauthGate,
+  type WorkflowCaller,
+} from "@/lib/control-plane/contracts";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 
 export class ControlPlaneError extends Error {
@@ -42,12 +47,92 @@ function assertIdempotentPayload(
   }
 }
 
+export function assertIdempotentRequestHash(storedHash: string | null, requestHash: string): void {
+  if (storedHash !== requestHash) {
+    throw new ControlPlaneError(
+      "같은 idempotency key가 다른 전체 요청에 사용되었습니다.",
+      409,
+      "IDEMPOTENCY_CONFLICT",
+    );
+  }
+}
+
+export function discoveryObservationRequestHash(input: {
+  repoId: bigint;
+  sourceSha: string;
+  sourceRef?: string;
+  observedAt: Date;
+  observedBy: string;
+  workflowCaller: WorkflowCaller;
+  payload: Record<string, unknown>;
+  buildTargets: Array<{
+    targetKey: string;
+    stack: string;
+    market?: string;
+    packageId?: string;
+    bundleId?: string;
+    configuration?: Record<string, unknown>;
+  }>;
+}): string {
+  return jsonDigest({
+    repoId: input.repoId.toString(),
+    sourceSha: input.sourceSha.toLowerCase(),
+    sourceRef: input.sourceRef ?? null,
+    observedAt: input.observedAt.toISOString(),
+    observedBy: input.observedBy,
+    workflowCaller: input.workflowCaller,
+    payload: input.payload,
+    buildTargets: input.buildTargets.map((target) => ({
+      targetKey: target.targetKey,
+      stack: target.stack,
+      market: target.market?.toLowerCase() ?? null,
+      packageId: target.packageId ?? null,
+      bundleId: target.bundleId ?? null,
+      configuration: target.configuration ?? null,
+    })),
+  } as JsonValue);
+}
+
+export function providerObservationRequestHash(input: {
+  repoId: bigint;
+  provider: string;
+  resourceType: string;
+  resourceId: string;
+  observedAt: Date;
+  observedBy: string;
+  payload: Record<string, unknown>;
+  externalBinding?: {
+    bindingType: string;
+    externalId: string;
+    publicIdentity?: string;
+    metadata?: Record<string, unknown>;
+  };
+}): string {
+  return jsonDigest({
+    repoId: input.repoId.toString(),
+    provider: input.provider.toLowerCase(),
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    observedAt: input.observedAt.toISOString(),
+    observedBy: input.observedBy,
+    payload: input.payload,
+    externalBinding: input.externalBinding
+      ? {
+          bindingType: input.externalBinding.bindingType,
+          externalId: input.externalBinding.externalId,
+          publicIdentity: input.externalBinding.publicIdentity ?? null,
+          metadata: input.externalBinding.metadata ?? null,
+        }
+      : null,
+  } as JsonValue);
+}
+
 export function assertConfigRevisionPayload(payload: unknown): asserts payload is Record<string, unknown> {
   const validated = configRevisionPayloadSchema.safeParse(payload);
   if (validated.success) return;
   const paths = validated.error.issues.map((issue) => issue.path.join(".")).filter(Boolean);
   throw new ControlPlaneError(
-    `별도 사람 승인 workflow가 필요한 Config 필드가 포함되어 있습니다: ${paths.join(", ") || "unknown"}`,
+    `허용된 비민감 Config 계약 밖의 필드 또는 값은 별도 사람 승인 workflow가 필요합니다: ${paths.join(", ") || "unknown"}`,
     403,
     "HUMAN_APPROVAL_REQUIRED",
   );
@@ -70,6 +155,24 @@ export function assertActivationPreconditions(input: {
   }
 }
 
+export function resolvedWorkflowCaller(input: {
+  profile: string | null;
+  packageManager: string | null;
+  workingDirectory: string | null;
+}): WorkflowCaller {
+  const result = workflowCallerSchema.safeParse({
+    profile: input.profile,
+    packageManager: input.packageManager,
+    workingDirectory: input.workingDirectory,
+  });
+  if (result.success) return result.data;
+  throw new ControlPlaneError(
+    "요청한 source SHA의 workflow caller 탐지 결과가 없거나 모호합니다.",
+    409,
+    "NO_WORKFLOW_CALLER_FOR_SHA",
+  );
+}
+
 export async function recordDiscoveryObservation(input: {
   repoId: bigint;
   sourceSha: string;
@@ -77,6 +180,7 @@ export async function recordDiscoveryObservation(input: {
   observedAt: Date;
   observedBy: string;
   idempotencyKey: string;
+  workflowCaller: WorkflowCaller;
   payload: Record<string, unknown>;
   buildTargets: Array<{
     targetKey: string;
@@ -88,14 +192,23 @@ export async function recordDiscoveryObservation(input: {
   }>;
 }) {
   const payloadHash = jsonDigest(input.payload as JsonValue);
+  const requestHash = discoveryObservationRequestHash(input);
   const replay = await prisma.discoveryObservation.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
     include: { app: { select: { repoId: true } } },
   });
   if (replay) {
+    assertIdempotentRequestHash(replay.requestHash, requestHash);
     assertIdempotentPayload(replay.payloadHash, payloadHash);
     if (replay.app.repoId !== input.repoId || replay.sourceSha !== input.sourceSha.toLowerCase()) {
       throw new ControlPlaneError("idempotency key가 다른 discovery 요청에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    if (
+      replay.workflowProfile !== input.workflowCaller.profile
+      || replay.workflowPackageManager !== input.workflowCaller.packageManager
+      || replay.workflowWorkingDirectory !== input.workflowCaller.workingDirectory
+    ) {
+      throw new ControlPlaneError("idempotency key가 다른 workflow caller에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
     return { observation: replay, duplicate: true };
   }
@@ -107,11 +220,15 @@ export async function recordDiscoveryObservation(input: {
         appId: app.id,
         sourceSha: input.sourceSha.toLowerCase(),
         sourceRef: input.sourceRef,
+        workflowProfile: input.workflowCaller.profile,
+        workflowPackageManager: input.workflowCaller.packageManager,
+        workflowWorkingDirectory: input.workflowCaller.workingDirectory,
         observedAt: input.observedAt,
         observedBy: input.observedBy,
         idempotencyKey: input.idempotencyKey,
         payload: jsonInput(input.payload),
         payloadHash,
+        requestHash,
       },
     });
     for (const target of input.buildTargets) {
@@ -154,7 +271,12 @@ export async function recordDiscoveryObservation(input: {
         action: "control-plane.discovery.record",
         entityType: "DiscoveryObservation",
         entityId: observation.id,
-        payload: { appId: app.id, sourceSha: input.sourceSha, payloadHash },
+        payload: {
+          appId: app.id,
+          sourceSha: input.sourceSha,
+          payloadHash,
+          workflowCaller: input.workflowCaller,
+        },
       },
     });
     return { observation, duplicate: false };
@@ -179,11 +301,13 @@ export async function recordProviderObservation(input: {
 }) {
   const provider = input.provider.toLowerCase();
   const payloadHash = jsonDigest(input.payload as JsonValue);
+  const requestHash = providerObservationRequestHash(input);
   const replay = await prisma.providerObservation.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
     include: { app: { select: { repoId: true } } },
   });
   if (replay) {
+    assertIdempotentRequestHash(replay.requestHash, requestHash);
     assertIdempotentPayload(replay.payloadHash, payloadHash);
     if (
       replay.app.repoId !== input.repoId
@@ -205,6 +329,7 @@ export async function recordProviderObservation(input: {
         resourceId: input.resourceId,
         payload: jsonInput(input.payload),
         payloadHash,
+        requestHash,
         observedBy: input.observedBy,
         observedAt: input.observedAt,
         idempotencyKey: input.idempotencyKey,
@@ -432,8 +557,7 @@ export async function recordReauthRequest(input: {
   origin: string;
   publicAccountId: string;
   capability: string;
-  gate: string;
-  reason: string;
+  gate: ReauthGate;
   actor: string;
   idempotencyKey: string;
 }) {
@@ -452,7 +576,6 @@ export async function recordReauthRequest(input: {
       || replay.publicAccountId !== input.publicAccountId
       || replay.capability !== input.capability
       || replay.gate !== input.gate
-      || replay.reason !== input.reason
       || replay.requestedBy !== input.actor
     ) {
       throw new ControlPlaneError(
@@ -484,7 +607,6 @@ export async function recordReauthRequest(input: {
         publicAccountId: input.publicAccountId,
         capability: input.capability,
         gate: input.gate,
-        reason: input.reason,
         requestedBy: input.actor,
         idempotencyKey: input.idempotencyKey,
       },
@@ -524,7 +646,6 @@ export async function listReauthRequests(repoId: bigint) {
       publicAccountId: true,
       capability: true,
       gate: true,
-      reason: true,
       status: true,
       generation: true,
       requestedBy: true,
@@ -536,7 +657,8 @@ export async function listReauthRequests(repoId: bigint) {
   });
 }
 
-export async function markReauthTrustedLocalPending(input: {
+/** Backoffice의 DB session/RBAC를 통과한 사람 UI server action에서만 호출한다. */
+export async function markReauthTrustedLocalPendingFromHumanUi(input: {
   repoId: bigint;
   reauthRequestId: string;
   expectedGeneration: number;
@@ -594,7 +716,7 @@ export async function markReauthTrustedLocalPending(input: {
     await tx.auditLog.create({
       data: {
         actorLogin: input.actor,
-        action: "control-plane.reauth.trusted-local-pending",
+        action: "control-plane.reauth.trusted-local-pending.human-ui",
         entityType: "ReauthRequest",
         entityId: request.id,
         payload: {
@@ -602,6 +724,7 @@ export async function markReauthTrustedLocalPending(input: {
           generation: request.generation,
           provider: request.provider,
           publicAccountId: request.publicAccountId,
+          transitionSource: "BACKOFFICE_HUMAN_UI",
         },
       },
     });
@@ -640,6 +763,11 @@ export async function resolveManifest(input: {
   if (!discovery) {
     throw new ControlPlaneError("요청한 source SHA의 discovery observation이 없습니다.", 409, "NO_DISCOVERY_FOR_SHA");
   }
+  const workflowCaller = resolvedWorkflowCaller({
+    profile: discovery.workflowProfile,
+    packageManager: discovery.workflowPackageManager,
+    workingDirectory: discovery.workflowWorkingDirectory,
+  });
   const market = input.market?.toLowerCase();
   const [buildTargets, externalBindings, providerRows, platformFleet] = await Promise.all([
     prisma.buildTarget.findMany({
@@ -675,6 +803,7 @@ export async function resolveManifest(input: {
       observationId: discovery.id,
       payload: discovery.payload,
     },
+    workflowCaller,
     config: {
       id: revision.id,
       revision: revision.revision,

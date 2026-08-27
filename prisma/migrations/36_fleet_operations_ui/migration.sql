@@ -1,3 +1,12 @@
+-- AlterTable
+ALTER TABLE `control_plane_discovery_observation` ADD COLUMN `requestHash` CHAR(64) NULL,
+    ADD COLUMN `workflowPackageManager` VARCHAR(191) NULL,
+    ADD COLUMN `workflowProfile` VARCHAR(191) NULL,
+    ADD COLUMN `workflowWorkingDirectory` VARCHAR(191) NULL;
+
+-- AlterTable
+ALTER TABLE `control_plane_provider_observation` ADD COLUMN `requestHash` CHAR(64) NULL;
+
 -- CreateTable
 CREATE TABLE `control_plane_credential_binding` (
     `id` VARCHAR(191) NOT NULL,
@@ -29,8 +38,7 @@ CREATE TABLE `control_plane_reauth_request` (
     `origin` VARCHAR(512) NOT NULL,
     `publicAccountId` VARCHAR(191) NOT NULL,
     `capability` VARCHAR(191) NOT NULL,
-    `gate` VARCHAR(191) NOT NULL,
-    `reason` TEXT NOT NULL,
+    `gate` ENUM('CAPTCHA', 'PASSKEY', 'SMS', 'PUSH', 'TRUSTED_DEVICE', 'RECOVERY', 'TERMS', 'ANOMALOUS_LOGIN', 'NEW_LOCATION', 'HUMAN_MFA') NOT NULL,
     `status` ENUM('HUMAN_REAUTH_REQUIRED', 'TRUSTED_LOCAL_PENDING') NOT NULL DEFAULT 'HUMAN_REAUTH_REQUIRED',
     `generation` INTEGER NOT NULL DEFAULT 0,
     `idempotencyKey` VARCHAR(191) NOT NULL,

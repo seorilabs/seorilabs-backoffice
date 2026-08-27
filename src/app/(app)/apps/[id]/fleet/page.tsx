@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
+import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { getFleetOperationsView } from "@/lib/control-plane/fleet-view";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 
@@ -56,6 +57,10 @@ export default async function FleetOperationsPage({
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
   const latestDiscovery = fleet.discoveryObservations[0];
+  const activePayload = configRevisionPayloadSchema.safeParse(activeConfig?.payload);
+  const initialPayload = activePayload.success
+    ? activePayload.data
+    : { schemaVersion: 1 as const, markets: [] };
 
   return (
     <div className="space-y-8">
@@ -79,12 +84,14 @@ export default async function FleetOperationsPage({
         <FleetConfigEditor
           appId={fleet.id}
           activeRevision={activeConfig?.revision ?? 0}
-          initialPayload={jsonText(activeConfig?.payload ?? {})}
+          initialPayload={jsonText(initialPayload)}
+          legacyActiveBlocked={Boolean(activeConfig) && !activePayload.success}
           drafts={drafts.map((draft) => ({
             revision: draft.revision,
             payloadHash: draft.payloadHash,
             createdBy: draft.createdBy,
             createdAt: dateTime(draft.createdAt),
+            activatable: configRevisionPayloadSchema.safeParse(draft.payload).success,
           }))}
         />
       </WorkspaceSection>
@@ -97,7 +104,7 @@ export default async function FleetOperationsPage({
               rows={fleet.discoveryObservations.map((row) => ({
                 id: row.id,
                 title: `${mono(row.sourceSha, 12)}${row.sourceRef ? ` · ${row.sourceRef}` : ""}`,
-                subtitle: `${dateTime(row.observedAt)} · ${row.observedBy}`,
+                subtitle: `${dateTime(row.observedAt)} · ${row.observedBy} · ${row.workflowProfile ?? "caller 미탐지"}/${row.workflowPackageManager ?? "—"} @ ${row.workflowWorkingDirectory ?? "—"}`,
                 payload: row.payload,
               }))}
             />

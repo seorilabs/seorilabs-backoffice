@@ -10,7 +10,7 @@ import {
 import {
   activateConfigRevision,
   createConfigRevision,
-  markReauthTrustedLocalPending,
+  markReauthTrustedLocalPendingFromHumanUi,
 } from "@/lib/control-plane/service";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
@@ -27,6 +27,12 @@ export interface FleetActionResult {
 }
 
 const uiRequestIdSchema = z.string().uuid();
+const trustedLocalHumanUiSchema = z.object({
+  appId: z.string().min(1).max(191),
+  reauthRequestId: z.string().min(1).max(191),
+  expectedGeneration: z.number().int().nonnegative(),
+  requestId: uiRequestIdSchema,
+}).strict();
 
 function errorMessage(error: unknown): string {
   if (error instanceof SyntaxError) return "payload는 올바른 JSON object여야 합니다.";
@@ -132,13 +138,14 @@ export async function markTrustedLocalPendingAction(input: {
   requestId: string;
 }): Promise<FleetActionResult> {
   try {
-    const { app, actor } = await fleetWriteContext(input.appId);
-    const result = await markReauthTrustedLocalPending({
+    const body = trustedLocalHumanUiSchema.parse(input);
+    const { app, actor } = await fleetWriteContext(body.appId);
+    const result = await markReauthTrustedLocalPendingFromHumanUi({
       repoId: app.repoId,
-      reauthRequestId: input.reauthRequestId,
-      expectedGeneration: input.expectedGeneration,
+      reauthRequestId: body.reauthRequestId,
+      expectedGeneration: body.expectedGeneration,
       actor: actor.login,
-      idempotencyKey: `ui-reauth-pending:${uiRequestIdSchema.parse(input.requestId)}`,
+      idempotencyKey: `ui-reauth-pending:${body.requestId}`,
     });
     revalidatePath(`/apps/${app.id}/fleet`);
     return { ok: true, status: result.request.status };

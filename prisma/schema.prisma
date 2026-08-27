@@ -937,17 +937,21 @@ model ExternalBinding {
 }
 
 model DiscoveryObservation {
-  id             String   @id @default(cuid())
-  appId          String
-  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha      String   @db.Char(40)
-  sourceRef      String?
-  payload        Json
-  payloadHash    String   @db.Char(64)
-  idempotencyKey String   @unique
-  observedBy     String
-  observedAt     DateTime @db.DateTime(3)
-  createdAt      DateTime @default(now()) @db.DateTime(3)
+  id                       String   @id @default(cuid())
+  appId                    String
+  app                      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha                String   @db.Char(40)
+  sourceRef                String?
+  workflowProfile          String?
+  workflowPackageManager   String?
+  workflowWorkingDirectory String?
+  payload                  Json
+  payloadHash              String   @db.Char(64)
+  requestHash              String?  @db.Char(64)
+  idempotencyKey           String   @unique
+  observedBy               String
+  observedAt               DateTime @db.DateTime(3)
+  createdAt                DateTime @default(now()) @db.DateTime(3)
 
   @@index([appId, sourceSha, payloadHash])
   @@index([appId, observedAt])
@@ -994,6 +998,7 @@ model ProviderObservation {
   resourceId     String
   payload        Json
   payloadHash    String   @db.Char(64)
+  requestHash    String?  @db.Char(64)
   idempotencyKey String   @unique
   observedBy     String
   observedAt     DateTime @db.DateTime(3)
@@ -1112,8 +1117,7 @@ model ReauthRequest {
   origin                     String              @db.VarChar(512)
   publicAccountId            String
   capability                 String
-  gate                       String
-  reason                     String              @db.Text
+  gate                       ReauthGate
   status                     ReauthRequestStatus @default(HUMAN_REAUTH_REQUIRED)
   generation                 Int                 @default(0)
   idempotencyKey             String              @unique
@@ -1132,6 +1136,19 @@ model ReauthRequest {
 enum ReauthRequestStatus {
   HUMAN_REAUTH_REQUIRED
   TRUSTED_LOCAL_PENDING
+}
+
+enum ReauthGate {
+  CAPTCHA
+  PASSKEY
+  SMS
+  PUSH
+  TRUSTED_DEVICE
+  RECOVERY
+  TERMS
+  ANOMALOUS_LOGIN
+  NEW_LOCATION
+  HUMAN_MFA
 }
 
 // repository webhook의 등록 원장. stack 후보가 하나로 확정되기 전에는 App을 추측 생성하지 않는다.

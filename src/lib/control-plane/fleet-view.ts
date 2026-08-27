@@ -1,4 +1,5 @@
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
+import { reauthPublicReason } from "@/lib/control-plane/contracts";
 import { prisma } from "@/lib/prisma";
 
 export function redactFleetError(value: string | null): string | null {
@@ -38,6 +39,9 @@ export async function getFleetOperationsView(appId: string) {
           id: true,
           sourceSha: true,
           sourceRef: true,
+          workflowProfile: true,
+          workflowPackageManager: true,
+          workflowWorkingDirectory: true,
           payload: true,
           payloadHash: true,
           observedBy: true,
@@ -124,7 +128,6 @@ export async function getFleetOperationsView(appId: string) {
           publicAccountId: true,
           capability: true,
           gate: true,
-          reason: true,
           status: true,
           generation: true,
           requestedBy: true,
@@ -213,7 +216,7 @@ export async function getFleetOperationsView(appId: string) {
     })),
     reauthRequests: app.reauthRequests.map((request) => ({
       ...request,
-      reason: redactFleetError(request.reason) ?? "재인증 사유 없음",
+      reason: reauthPublicReason(request.gate),
     })),
     recentRuns: recentRuns.map((run) => ({ ...run, error: redactFleetError(run.error) })),
     deadLetters: deadLetters.map((run) => ({ ...run, error: redactFleetError(run.error) })),
