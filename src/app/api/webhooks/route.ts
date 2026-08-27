@@ -22,6 +22,10 @@ import {
   isPlatformRegistryPush,
   syncPlatformRegistryBindings,
 } from "@/lib/platform/registry-bindings";
+import {
+  registerRepositoryWebhook,
+  type RepositoryWebhookInput,
+} from "@/lib/control-plane/repository-registration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +36,7 @@ interface WebhookPayload {
   created?: boolean;
   deleted?: boolean;
   after?: string;
-  repository?: { full_name?: string };
+  repository?: Partial<RepositoryWebhookInput>;
   issue?: GhIssueInput;
   pull_request?: GhPrInput;
   workflow_run?: GhRunInput;
@@ -104,9 +108,24 @@ function repoName(p: WebhookPayload): string | null {
   return p.repository?.full_name ?? null;
 }
 
-async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
+async function handleEvent(event: string, p: WebhookPayload, deliveryId: string): Promise<void> {
   const repo = repoName(p);
   if (!repo) return;
+  if (
+    p.repository?.id &&
+    p.repository.full_name &&
+    (event === "push" || event === "repository")
+  ) {
+    await registerRepositoryWebhook({
+      event,
+      action: p.action,
+      repository: p.repository as RepositoryWebhookInput,
+      ref: p.ref,
+      after: p.after,
+      deliveryId,
+      organization: env.githubOrg(),
+    });
+  }
   switch (event) {
     case "issues":
       if (p.issue) await upsertIssue(repo, p.issue);
@@ -193,7 +212,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await handleEvent(event, payload);
+    await handleEvent(event, payload, deliveryId);
   } catch (err) {
     // 핸들러 실패해도 200 (GitHub 재전송 + reconcile 로 복구). 로깅만.
     console.error(`[webhook] ${event} handler error:`, err);

@@ -86,6 +86,15 @@ model App {
   contentMetrics AppContentMetricDaily[]
   // AppsInToss 콘솔 일별 지표(토스 표면 DAU/세션/잔존/IAA·IAP). GA4 와 별개 소스.
   consoleMetrics AppConsoleMetricDaily[]
+  buildTargets BuildTarget[]
+  externalBindings ExternalBinding[]
+  discoveryObservations DiscoveryObservation[]
+  configRevisions ConfigRevision[]
+  providerObservations ProviderObservation[]
+  releaseCandidates ReleaseCandidate[]
+  platformFleetBinding PlatformFleetBinding?
+  automationDefinitions AutomationDefinition[]
+  agentRuns AgentRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -881,6 +890,321 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("audit_log")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Fleet Control Plane — source observation, desired state, provider readback
+// 기존 JSON consumer와 병행하는 shadow-compatible v1. 비밀값은 저장하지 않는다.
+// ──────────────────────────────────────────────────────────────────────────
+model BuildTarget {
+  id            String   @id @default(cuid())
+  appId         String
+  app           App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  targetKey     String
+  stack         String
+  market        String?
+  packageId     String?
+  bundleId      String?
+  observedSha   String   @db.Char(40)
+  observedAt    DateTime @db.DateTime(3)
+  configuration Json?
+  createdAt     DateTime @default(now()) @db.DateTime(3)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([appId, targetKey])
+  @@index([appId, observedSha])
+  @@map("control_plane_build_target")
+}
+
+model ExternalBinding {
+  id             String   @id @default(cuid())
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  provider       String
+  bindingType    String
+  externalId     String
+  publicIdentity String?
+  metadata       Json?
+  observedAt     DateTime @db.DateTime(3)
+  createdAt      DateTime @default(now()) @db.DateTime(3)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([provider, bindingType, externalId])
+  @@index([appId, provider])
+  @@map("control_plane_external_binding")
+}
+
+model DiscoveryObservation {
+  id             String   @id @default(cuid())
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha      String   @db.Char(40)
+  sourceRef      String?
+  payload        Json
+  payloadHash    String   @db.Char(64)
+  idempotencyKey String   @unique
+  observedBy     String
+  observedAt     DateTime @db.DateTime(3)
+  createdAt      DateTime @default(now()) @db.DateTime(3)
+
+  @@index([appId, sourceSha, payloadHash])
+  @@index([appId, observedAt])
+  @@map("control_plane_discovery_observation")
+}
+
+model ConfigRevision {
+  id                       String               @id @default(cuid())
+  appId                    String
+  app                      App                  @relation(fields: [appId], references: [id], onDelete: Cascade)
+  revision                 Int
+  status                   ConfigRevisionStatus @default(DRAFT)
+  payload                  Json
+  payloadHash              String               @db.Char(64)
+  createdBy                String
+  idempotencyKey           String               @unique
+  activeSlot               String?              @unique
+  activationIdempotencyKey String?              @unique
+  activatedSnapshot        Json?
+  snapshotDigest           String?              @db.Char(64)
+  snapshotSignature        String?              @db.Char(64)
+  activatedAt              DateTime?            @db.DateTime(3)
+  supersededAt             DateTime?            @db.DateTime(3)
+  createdAt                DateTime             @default(now()) @db.DateTime(3)
+  releaseCandidates        ReleaseCandidate[]
+
+  @@unique([appId, revision])
+  @@index([appId, status])
+  @@map("control_plane_config_revision")
+}
+
+enum ConfigRevisionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+}
+
+model ProviderObservation {
+  id             String   @id @default(cuid())
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  provider       String
+  resourceType   String
+  resourceId     String
+  payload        Json
+  payloadHash    String   @db.Char(64)
+  idempotencyKey String   @unique
+  observedBy     String
+  observedAt     DateTime @db.DateTime(3)
+  createdAt      DateTime @default(now()) @db.DateTime(3)
+
+  @@index([appId, provider, resourceType, resourceId, payloadHash])
+  @@index([appId, provider, observedAt])
+  @@map("control_plane_provider_observation")
+}
+
+model ReleaseCandidate {
+  id               String                   @id @default(cuid())
+  appId            String
+  app              App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha        String                   @db.Char(40)
+  configRevisionId String
+  configRevision   ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
+  artifactChecksum String                   @db.Char(64)
+  status           ReleaseCandidateStatus   @default(PREPARED)
+  createdBy        String
+  createdAt        DateTime                 @default(now()) @db.DateTime(3)
+  gateObservations ReleaseGateObservation[]
+
+  @@unique([appId, sourceSha, configRevisionId, artifactChecksum])
+  @@index([appId, status, createdAt])
+  @@map("control_plane_release_candidate")
+}
+
+enum ReleaseCandidateStatus {
+  PREPARED
+  READY
+  BLOCKED
+  SUPERSEDED
+}
+
+model ReleaseGateObservation {
+  id          String            @id @default(cuid())
+  candidateId String
+  candidate   ReleaseCandidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  gate        String
+  status      ReleaseGateStatus
+  evidence    Json?
+  dedupeKey   String            @unique
+  observedBy  String
+  observedAt  DateTime          @db.DateTime(3)
+  createdAt   DateTime          @default(now()) @db.DateTime(3)
+
+  @@index([candidateId, gate, observedAt])
+  @@map("control_plane_release_gate_observation")
+}
+
+enum ReleaseGateStatus {
+  PENDING
+  PASSED
+  FAILED
+  HUMAN_REQUIRED
+}
+
+model PlatformFleetBinding {
+  id                 String    @id @default(cuid())
+  appId              String    @unique
+  app                App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  observedVersion    String?
+  approvedVersion    String?
+  contractRevision   String?
+  state              String
+  sourceSha          String?   @db.Char(40)
+  exceptionExpiresAt DateTime? @db.DateTime(3)
+  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([state, exceptionExpiresAt])
+  @@map("platform_fleet_binding")
+}
+
+// repository webhook의 등록 원장. stack 후보가 하나로 확정되기 전에는 App을 추측 생성하지 않는다.
+model RepositoryRegistration {
+  repoId              BigInt                       @id
+  repoFullName        String                       @unique
+  defaultBranch       String?
+  archived            Boolean                      @default(false)
+  status              RepositoryRegistrationStatus @default(REGISTERED)
+  discoveryCandidates Json?
+  lastDefaultPushSha  String?                      @db.Char(40)
+  lastDeliveryId      String?
+  createdAt           DateTime                     @default(now()) @db.DateTime(3)
+  updatedAt           DateTime                     @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("repository_registration")
+}
+
+enum RepositoryRegistrationStatus {
+  REGISTERED
+  NEEDS_INPUT
+  MANAGED
+  ARCHIVED
+}
+
+// durable automation queue. AgentLease.scopeKey의 nullable unique 제약으로
+// 같은 repo에서 자율 PR을 만드는 실행은 동시에 하나만 claim할 수 있다.
+model AutomationDefinition {
+  id          String                 @id @default(cuid())
+  key         String                 @unique
+  appId       String?
+  app         App?                   @relation(fields: [appId], references: [id], onDelete: Cascade)
+  template    String
+  schedule    String?
+  enabled     Boolean                @default(true)
+  maxAttempts Int                    @default(3)
+  createdAt   DateTime               @default(now()) @db.DateTime(3)
+  updatedAt   DateTime               @updatedAt
+  occurrences AutomationOccurrence[]
+
+  @@index([enabled])
+  @@map("automation_definition")
+}
+
+model AutomationOccurrence {
+  id             String                     @id @default(cuid())
+  definitionId   String
+  definition     AutomationDefinition       @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  scheduledFor   DateTime                   @db.DateTime(3)
+  idempotencyKey String                     @unique
+  status         AutomationOccurrenceStatus @default(PENDING)
+  createdAt      DateTime                   @default(now()) @db.DateTime(3)
+  completedAt    DateTime?                  @db.DateTime(3)
+  runs           AgentRun[]
+
+  @@unique([definitionId, scheduledFor])
+  @@index([status, scheduledFor])
+  @@map("automation_occurrence")
+}
+
+enum AutomationOccurrenceStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  DEAD_LETTER
+}
+
+model AgentRun {
+  id              String               @id @default(cuid())
+  occurrenceId    String
+  occurrence      AutomationOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  appId           String?
+  app             App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
+  repoFullName    String
+  issueNumber     Int?
+  issueState      String?
+  labels          Json
+  createsPr       Boolean              @default(true)
+  priority        Int                  @default(100)
+  status          AgentRunStatus       @default(PENDING)
+  leaseGeneration Int                  @default(0)
+  attempts        Int                  @default(0)
+  maxAttempts     Int                  @default(3)
+  eligibleAt      DateTime             @default(now()) @db.DateTime(3)
+  startedAt       DateTime?            @db.DateTime(3)
+  completedAt     DateTime?            @db.DateTime(3)
+  outcome         Json?
+  error           String?              @db.Text
+  createdAt       DateTime             @default(now()) @db.DateTime(3)
+  updatedAt       DateTime             @updatedAt
+  leases          AgentLease[]
+  events          AgentRunEvent[]
+
+  @@index([status, eligibleAt, priority])
+  @@index([repoFullName, status])
+  @@map("agent_run")
+}
+
+enum AgentRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD_LETTER
+  CANCELLED
+}
+
+model AgentLease {
+  id          String    @id @default(cuid())
+  runId       String
+  run         AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  generation  Int
+  tokenHash   String    @db.Char(64)
+  workerId    String
+  scopeKey    String?   @unique
+  expiresAt   DateTime  @db.DateTime(3)
+  heartbeatAt DateTime  @db.DateTime(3)
+  revokedAt   DateTime? @db.DateTime(3)
+  createdAt   DateTime  @default(now()) @db.DateTime(3)
+
+  @@unique([runId, generation])
+  @@index([workerId, expiresAt])
+  @@map("agent_lease")
+}
+
+model AgentRunEvent {
+  id         String   @id @default(cuid())
+  requestId  String?  @unique
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type       String
+  generation Int?
+  actor      String
+  payload    Json?
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+
+  @@index([runId, createdAt])
+  @@map("agent_run_event")
 }
 
 // ──────────────────────────────────────────────────────────────────────────
