@@ -11,6 +11,7 @@ import {
 } from "@/lib/sync/mirror";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
+import { issueEventMessage } from "@/lib/notifications/issue-events";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
@@ -75,17 +76,24 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
         });
       }
     }
-    // 새 P1 이슈 → 즉시 알림.
-    if (event === "issues" && p.action === "opened" && p.issue) {
+    // 이슈 생성·종료 → 즉시 알림. 등급과 무관하게 전체 이슈를 알린다.
+    if (event === "issues" && (p.action === "opened" || p.action === "closed") && p.issue) {
       const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
-      if (priorityFromLabels(labels) === "P1") {
-        await enqueueNotification({
-          dedupeKey: `github:${deliveryId}:p1`,
-          kind: "OPS_ALERT",
-          payload: { text: `🔥 **새 P1** ${repo} #${p.issue.number}\n${p.issue.title}` },
-          destinations: discordDestinations(["backoffice"]),
-        });
-      }
+      await enqueueNotification({
+        dedupeKey: `github:${deliveryId}:issue-${p.action}`,
+        kind: "OPS_ALERT",
+        payload: {
+          text: issueEventMessage({
+            action: p.action,
+            repoFullName,
+            number: p.issue.number,
+            title: p.issue.title,
+            priority: priorityFromLabels(labels),
+            stateReason: p.issue.state_reason,
+          }),
+        },
+        destinations: discordDestinations(["backoffice"]),
+      });
     }
   } catch (e) {
     console.error("[discord] notifyHooks error:", e);

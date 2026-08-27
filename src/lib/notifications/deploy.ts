@@ -114,7 +114,14 @@ export async function renderDeployCard(
       workflowRunId: true,
       externalBuildNumber: true,
       updatedAt: true,
-      app: { select: { displayName: true, repoFullName: true, iosBundle: true } },
+      app: {
+        select: {
+          displayName: true,
+          repoFullName: true,
+          iosBundle: true,
+          playInternalTestUrl: true,
+        },
+      },
     },
   });
   if (!release) return null;
@@ -168,6 +175,7 @@ export async function renderDeployCard(
       version: release.version,
       promotionRequested,
       review,
+      internalTestUrl: release.app.playInternalTestUrl,
     }),
   };
 }
