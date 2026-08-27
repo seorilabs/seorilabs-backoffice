@@ -59,6 +59,26 @@ printf "DROP TABLE \`legacy\`;\n" > \
   "$tmp/destructive/prisma/migrations/20260827120001_drop_legacy/migration.sql"
 expect_failure destructive
 
+prepare_case destructive_update
+mkdir -p "$tmp/destructive_update/prisma/migrations/20260827120004_update_data"
+printf "WITH candidates AS (SELECT 1) UPDATE \`app\` SET \`status\` = 'PAUSED';\n" > \
+  "$tmp/destructive_update/prisma/migrations/20260827120004_update_data/migration.sql"
+expect_failure destructive_update
+
+prepare_case destructive_update_cascade
+mkdir -p "$tmp/destructive_update_cascade/prisma/migrations/20260827120006_update_data"
+printf "UPDATE CASCADE SET \`status\` = 'PAUSED';\n" > \
+  "$tmp/destructive_update_cascade/prisma/migrations/20260827120006_update_data/migration.sql"
+expect_failure destructive_update_cascade
+
+prepare_case valid_foreign_key
+mkdir -p "$tmp/valid_foreign_key/prisma/migrations/20260827120005_add_fk"
+printf '%s\n' \
+  "CREATE TABLE \`child\` (\`id\` VARCHAR(32) NOT NULL, \`appId\` VARCHAR(191) NOT NULL);" \
+  "ALTER TABLE \`child\` ADD CONSTRAINT \`child_appId_fkey\` FOREIGN KEY (\`appId\`) REFERENCES \`app\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE;" > \
+  "$tmp/valid_foreign_key/prisma/migrations/20260827120005_add_fk/migration.sql"
+REPOSITORY_ROOT="$tmp/valid_foreign_key" "$here/check-migration-safety.sh" >/dev/null
+
 prepare_case valid
 mkdir -p "$tmp/valid/prisma/migrations/20260827120002_add_observation"
 printf "ALTER TABLE \`app\` ADD COLUMN \`observedAt\` DATETIME(3) NULL;\n" > \

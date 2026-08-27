@@ -49,6 +49,20 @@ test("ACTIVE 또는 SUPERSEDED revision은 다시 activation할 수 없다", () 
   }
 });
 
+test("legacy shadow import가 만든 DRAFT는 payload가 유효해도 activation할 수 없다", () => {
+  assert.throws(
+    () => assertActivationPreconditions({
+      actualActiveRevision: 1,
+      expectedActiveRevision: 1,
+      targetStatus: "DRAFT",
+      shadowImportId: "legacy-import-1",
+    }),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "SHADOW_IMPORT_NOT_ACTIVATABLE"
+      && error.status === 409,
+  );
+});
+
 test("동시에 claim한 두 worker 중 CAS 성공 worker 하나만 lease를 얻는다", async () => {
   let claimed = false;
   const tryClaim = async (runId: string) => {

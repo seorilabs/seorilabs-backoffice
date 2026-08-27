@@ -220,9 +220,13 @@ for (const name of activeNames) {
   }
   checked += 1;
   const normalized = sql.replace(/--.*$/gm, " ").replace(/\s+/g, " ");
+  const mutationScan = normalized.replace(
+    /\bON\s+UPDATE\s+(?:CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL)\b/gi,
+    " ",
+  );
   if (
     /\b(DROP|TRUNCATE|RENAME|MODIFY|CHANGE)\b|\bDELETE\s+FROM\b|\bUPDATE\s+/i.test(
-      normalized,
+      mutationScan,
     )
   ) {
     fail(`expand-only 금지 SQL이 있다: ${name}`);

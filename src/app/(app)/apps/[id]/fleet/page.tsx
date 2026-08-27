@@ -28,13 +28,13 @@ function jsonText(value: unknown): string {
 }
 
 function statusClass(status: string): string {
-  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED"].includes(status)) {
+  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH"].includes(status)) {
     return "bg-emerald-50 text-emerald-700";
   }
-  if (["FAILED", "DEAD_LETTER", "REVOKED"].includes(status)) {
+  if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH"].includes(status)) {
     return "bg-red-50 text-red-700";
   }
-  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "RUNNING"].includes(status)) {
+  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING"].includes(status)) {
     return "bg-amber-50 text-amber-800";
   }
   return "bg-neutral-100 text-neutral-600";
@@ -68,9 +68,10 @@ export default async function FleetOperationsPage({
         title="Fleet 제어면"
         description="자동 탐지·desired state·provider readback·credential 공개 identity·agent queue를 앱 단위로 대조합니다. 이 화면은 provider write를 수행하지 않습니다."
       >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <Summary label="Discovery" value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : "미관측"} detail={dateTime(latestDiscovery?.observedAt)} />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
+          <Summary label="Legacy shadow" value={`${fleet.legacyConfigImports.length}개`} detail={fleet.legacyConfigImports[0] ? `${fleet.legacyConfigImports[0].status} · ${mono(fleet.legacyConfigImports[0].sourceSha, 12)}` : "미관측"} />
           <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
           <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />
           <Summary label="Dead-letter" value={`${fleet.deadLetters.length}개`} detail={`${fleet.reauthRequests.filter((request) => request.status === "HUMAN_REAUTH_REQUIRED").length}건 재인증 필요`} danger={fleet.deadLetters.length > 0} />
@@ -86,14 +87,101 @@ export default async function FleetOperationsPage({
           activeRevision={activeConfig?.revision ?? 0}
           initialPayload={jsonText(initialPayload)}
           legacyActiveBlocked={Boolean(activeConfig) && !activePayload.success}
+          shadowSourceSha={latestDiscovery?.sourceSha ?? null}
           drafts={drafts.map((draft) => ({
             revision: draft.revision,
             payloadHash: draft.payloadHash,
             createdBy: draft.createdBy,
             createdAt: dateTime(draft.createdAt),
-            activatable: configRevisionPayloadSchema.safeParse(draft.payload).success,
+            activatable: !draft.legacyConfigImport && configRevisionPayloadSchema.safeParse(draft.payload).success,
+            activationLabel: draft.legacyConfigImport
+              ? `Legacy shadow import ${draft.legacyConfigImport.status} — 활성화 금지`
+              : configRevisionPayloadSchema.safeParse(draft.payload).success
+                ? "ACTIVE 전환"
+                : "strict 계약 밖 DRAFT",
           }))}
         />
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="Legacy JSON shadow import"
+        description="정확한 source SHA에서 읽은 공개 provenance와 중앙 ACTIVE 계약의 parity만 표시합니다. 원문은 저장·표시하지 않으며 imported DRAFT는 활성화할 수 없습니다. 정리는 연속 full MATCH 2회와 선언 마켓 build-only·장애 복구 증거가 모두 있어야 합니다."
+      >
+        <Panel title="최근 shadow import">
+          <div className="space-y-3">
+            {fleet.legacyConfigImports.map((legacyImport) => (
+              <article key={legacyImport.id} className="rounded border border-neutral-200 bg-white p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm font-medium text-neutral-800">{mono(legacyImport.sourceSha, 16)}</span>
+                      <Status value={legacyImport.status} />
+                      {legacyImport.configRevision && (
+                        <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
+                          DRAFT revision {legacyImport.configRevision.revision}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-neutral-500">
+                      {legacyImport.sourceRef ?? "sourceRef 없음"} · {legacyImport.transformVersion} · {legacyImport.observedBy} · {dateTime(legacyImport.observedAt)}
+                    </div>
+                    <div className="mt-1 text-[11px] text-neutral-400">input digest {mono(legacyImport.inputDigest, 20)}</div>
+                  </div>
+                  <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
+                    정리 금지 · occurrence + parity + build-only + 복구 증거 원장 미구현
+                  </span>
+                </div>
+
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[900px] text-left text-[11px]">
+                    <thead className="border-b border-neutral-200 text-neutral-500">
+                      <tr><th className="py-1.5 pr-3">Source</th><th className="pr-3">Repository</th><th className="pr-3">상태</th><th className="pr-3">Blob</th><th className="pr-3">Content SHA-256</th><th>관측</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100">
+                      {legacyImport.sources.map((source) => (
+                        <tr key={source.id}>
+                          <td className="max-w-72 py-1.5 pr-3 align-top">
+                            <div className="font-medium text-neutral-700">{source.sourceKind}</div>
+                            <div className="break-all font-mono text-neutral-500">{source.path}</div>
+                          </td>
+                          <td className="pr-3 align-top text-neutral-600">
+                            <div>{source.repoFullName} · ID {source.repoId ?? "—"}</div>
+                            <div className="font-mono text-neutral-400">{mono(source.sourceSha, 12)}{source.sourceRef ? ` · ${source.sourceRef}` : ""}</div>
+                          </td>
+                          <td className="pr-3 align-top"><Status value={source.status} />{source.errorCode ? <div className="mt-1 text-red-600">{source.errorCode}</div> : null}</td>
+                          <td className="pr-3 align-top font-mono text-neutral-500">{mono(source.blobSha, 14)}</td>
+                          <td className="pr-3 align-top font-mono text-neutral-500">{mono(source.contentSha256, 14)}</td>
+                          <td className="align-top text-neutral-500">{dateTime(source.observedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {legacyImport.sources.length === 0 && <Empty>Source metadata가 없습니다.</Empty>}
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {legacyImport.parityObservations.map((parity) => (
+                    <details key={parity.id} className="rounded border border-neutral-200 px-3 py-2">
+                      <summary className="cursor-pointer text-xs text-neutral-700">
+                        <span className="mr-2 inline-block"><Status value={parity.status} /></span>
+                        {parity.scope} · contract {parity.contractVersion} · {dateTime(parity.observedAt)}
+                      </summary>
+                      <dl className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
+                        <Meta label="비교 Config" value={parity.configRevisionId ? mono(parity.configRevisionId, 16) : "없음"} />
+                        <Meta label="관측자" value={parity.observedBy} />
+                        <Meta label="Legacy digest" value={mono(parity.legacyDigest, 16)} />
+                        <Meta label="Central digest" value={mono(parity.centralDigest, 16)} />
+                      </dl>
+                      <pre className="mt-2 max-h-48 overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">{jsonText(parity.diff ?? [])}</pre>
+                    </details>
+                  ))}
+                  {legacyImport.parityObservations.length === 0 && <Empty>Parity observation이 없습니다.</Empty>}
+                </div>
+              </article>
+            ))}
+            {fleet.legacyConfigImports.length === 0 && <Empty>Legacy shadow import가 없습니다.</Empty>}
+          </div>
+        </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection title="관측과 binding" description="observation은 append-only이며 credential은 logical ID와 공개 identity만 표시합니다.">

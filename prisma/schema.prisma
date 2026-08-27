@@ -90,6 +90,8 @@ model App {
   externalBindings ExternalBinding[]
   discoveryObservations DiscoveryObservation[]
   configRevisions ConfigRevision[]
+  legacyConfigImports LegacyConfigImport[]
+  shadowParityObservations ShadowParityObservation[]
   providerObservations ProviderObservation[]
   releaseCandidates ReleaseCandidate[]
   platformFleetBinding PlatformFleetBinding?
@@ -977,8 +979,11 @@ model ConfigRevision {
   supersededAt             DateTime?            @db.DateTime(3)
   createdAt                DateTime             @default(now()) @db.DateTime(3)
   releaseCandidates        ReleaseCandidate[]
+  legacyConfigImport       LegacyConfigImport?
+  shadowParityObservations ShadowParityObservation[]
 
   @@unique([appId, revision])
+  @@unique([id, appId])
   @@index([appId, status])
   @@map("control_plane_config_revision")
 }
@@ -987,6 +992,89 @@ enum ConfigRevisionStatus {
   DRAFT
   ACTIVE
   SUPERSEDED
+}
+
+// 기존 JSON을 중앙 draft로 옮긴 한 번의 결정적 import 실행이다.
+// 원문과 상세 오류는 저장하지 않고 hash, 공개 provenance, 상태 코드만 보존한다.
+model LegacyConfigImport {
+  id                 String                    @id @default(cuid())
+  appId              String
+  // import 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
+  app                App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceSha          String                    @db.Char(40)
+  sourceRef          String?                   @db.VarChar(512)
+  transformVersion   String                    @db.VarChar(64)
+  requestHash        String                    @db.Char(64)
+  inputDigest        String                    @db.Char(64)
+  status             String                    @db.VarChar(32)
+  idempotencyKey     String                    @unique @db.Char(64)
+  configRevisionId   String?
+  configRevision     ConfigRevision?           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict)
+  observedBy         String
+  observedAt         DateTime                  @db.DateTime(3)
+  createdAt          DateTime                  @default(now()) @db.DateTime(3)
+  sources            LegacyConfigSource[]
+  parityObservations ShadowParityObservation[]
+
+  @@index([appId, sourceSha, createdAt])
+  @@unique([id, appId])
+  @@unique([configRevisionId, appId])
+  @@map("control_plane_legacy_config_import")
+}
+
+// import 입력 하나의 파일 provenance. path 자체는 조회용이고 고유성은 고정 길이 hash로 판정한다.
+model LegacyConfigSource {
+  id                String             @id @default(cuid())
+  importId          String
+  import            LegacyConfigImport @relation(fields: [importId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  repoId            BigInt?
+  repoFullName      String
+  sourceSha         String?            @db.Char(40)
+  sourceRef         String?            @db.VarChar(512)
+  sourceKind        String             @db.VarChar(32)
+  path              String             @db.VarChar(1024)
+  pathHash          String             @db.Char(64)
+  blobSha           String?            @db.VarChar(64)
+  contentSha256     String?            @db.Char(64)
+  status            String             @db.VarChar(32)
+  transformVersion  String             @db.VarChar(64)
+  parsedPayloadHash String?            @db.Char(64)
+  errorCode         String?            @db.VarChar(64)
+  observedAt        DateTime           @db.DateTime(3)
+  createdAt         DateTime           @default(now()) @db.DateTime(3)
+
+  @@unique([importId, pathHash])
+  @@index([repoId, sourceSha])
+  @@map("control_plane_legacy_config_source")
+}
+
+// 동일 source SHA의 legacy parser와 중앙 resolved manifest를 비교한 append-only 관측이다.
+// diff에는 값이나 오류문이 아니라 { path, code } 항목만 저장한다.
+model ShadowParityObservation {
+  id               String             @id @default(cuid())
+  appId            String
+  // parity 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
+  app              App                @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  legacyImportId   String
+  legacyImport     LegacyConfigImport @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
+  configRevisionId String?
+  configRevision   ConfigRevision?    @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
+  sourceSha        String             @db.Char(40)
+  scope            String             @db.VarChar(64)
+  contractVersion  String             @db.VarChar(64)
+  status           String             @db.VarChar(32)
+  legacyDigest     String?            @db.Char(64)
+  centralDigest    String?            @db.Char(64)
+  diff             Json?
+  dedupeKey        String             @unique @db.Char(64)
+  observedBy       String
+  observedAt       DateTime           @db.DateTime(3)
+  createdAt        DateTime           @default(now()) @db.DateTime(3)
+
+  @@index([appId, sourceSha, observedAt])
+  @@index([legacyImportId, observedAt])
+  @@index([configRevisionId, observedAt])
+  @@map("control_plane_shadow_parity_observation")
 }
 
 model ProviderObservation {

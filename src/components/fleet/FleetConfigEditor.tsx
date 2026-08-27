@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   activateFleetConfigRevisionAction,
   createFleetConfigDraftAction,
+  importLegacyShadowAction,
   validateFleetConfigDraftAction,
 } from "@/lib/actions/fleet-control-plane";
 
@@ -15,6 +16,7 @@ interface DraftSummary {
   createdBy: string;
   createdAt: string;
   activatable: boolean;
+  activationLabel: string;
 }
 
 export function FleetConfigEditor({
@@ -22,12 +24,14 @@ export function FleetConfigEditor({
   activeRevision,
   initialPayload,
   legacyActiveBlocked,
+  shadowSourceSha,
   drafts,
 }: {
   appId: string;
   activeRevision: number;
   initialPayload: string;
   legacyActiveBlocked: boolean;
+  shadowSourceSha: string | null;
   drafts: DraftSummary[];
 }) {
   const [payload, setPayload] = useState(initialPayload);
@@ -36,7 +40,16 @@ export function FleetConfigEditor({
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
-  function run(action: () => Promise<{ ok: boolean; error?: string; revision?: number; status?: string }>, success: (result: { revision?: number; status?: string }) => string) {
+  function run(
+    action: () => Promise<{
+      ok: boolean;
+      error?: string;
+      revision?: number;
+      status?: string;
+      parityStatus?: string | null;
+    }>,
+    success: (result: { revision?: number; status?: string; parityStatus?: string | null }) => string,
+  ) {
     setError(null);
     setMessage(null);
     startTransition(async () => {
@@ -53,6 +66,33 @@ export function FleetConfigEditor({
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-neutral-200 bg-white p-4">
+        <div className="mb-4 rounded border border-neutral-200 bg-neutral-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-neutral-800">Legacy JSON shadow 관측</div>
+              <p className="mt-1 text-xs text-neutral-500">
+                최신 Discovery SHA를 GitHub default branch와 다시 대조해 원문 없이 DRAFT와 parity만 기록합니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={pending || !shadowSourceSha}
+              onClick={() => shadowSourceSha && run(
+                () => importLegacyShadowAction({
+                  appId,
+                  sourceSha: shadowSourceSha,
+                  requestId: crypto.randomUUID(),
+                }),
+                (result) => result.status === "DRAFT_CREATED"
+                  ? `Shadow import 완료 · DRAFT revision ${result.revision} · parity ${result.parityStatus ?? "없음"}`
+                  : `Shadow import ${result.status ?? "완료"} · 사람 입력이 필요합니다.`,
+              )}
+              className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+            >
+              {shadowSourceSha ? "최신 SHA shadow import" : "Discovery 관측 필요"}
+            </button>
+          </div>
+        </div>
         <label className="block text-sm font-semibold text-neutral-800" htmlFor="fleet-config-payload">
           비민감 desired state JSON
         </label>
@@ -118,6 +158,9 @@ export function FleetConfigEditor({
                 <div className="mt-0.5 text-xs text-neutral-500">
                   {draft.createdBy} · {draft.createdAt} · digest {draft.payloadHash.slice(0, 12)}…
                 </div>
+                {!draft.activatable && (
+                  <div className="mt-1 text-xs font-medium text-amber-700">{draft.activationLabel}</div>
+                )}
               </div>
               <button
                 type="button"
@@ -133,7 +176,7 @@ export function FleetConfigEditor({
                 )}
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
               >
-                {draft.activatable ? "ACTIVE 전환" : "strict 계약 밖 DRAFT"}
+                {draft.activationLabel}
               </button>
             </div>
           ))}

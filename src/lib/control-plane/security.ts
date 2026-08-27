@@ -36,4 +36,3 @@ export function requireIdempotencyKey(request: NextRequest): string | null {
   const value = request.headers.get("idempotency-key")?.trim() ?? "";
   return /^[A-Za-z0-9._:/-]{8,191}$/.test(value) ? value : null;
 }
-

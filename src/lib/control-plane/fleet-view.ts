@@ -1,5 +1,6 @@
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { reauthPublicReason } from "@/lib/control-plane/contracts";
+import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { prisma } from "@/lib/prisma";
 
 export function redactFleetError(value: string | null): string | null {
@@ -33,7 +34,7 @@ export async function getFleetOperationsView(appId: string) {
       repoId: true,
       repoFullName: true,
       discoveryObservations: {
-        orderBy: { observedAt: "desc" },
+        orderBy: latestDiscoveryObservationOrder(),
         take: 8,
         select: {
           id: true,
@@ -62,6 +63,72 @@ export async function getFleetOperationsView(appId: string) {
           createdAt: true,
           activatedAt: true,
           snapshotDigest: true,
+          legacyConfigImport: {
+            select: {
+              id: true,
+              status: true,
+            },
+          },
+        },
+      },
+      legacyConfigImports: {
+        orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        take: 8,
+        select: {
+          id: true,
+          sourceSha: true,
+          sourceRef: true,
+          transformVersion: true,
+          inputDigest: true,
+          status: true,
+          observedBy: true,
+          observedAt: true,
+          createdAt: true,
+          configRevision: {
+            select: {
+              id: true,
+              revision: true,
+              status: true,
+            },
+          },
+          sources: {
+            orderBy: [{ sourceKind: "asc" }, { path: "asc" }],
+            select: {
+              id: true,
+              repoId: true,
+              repoFullName: true,
+              sourceSha: true,
+              sourceRef: true,
+              sourceKind: true,
+              path: true,
+              blobSha: true,
+              contentSha256: true,
+              status: true,
+              transformVersion: true,
+              parsedPayloadHash: true,
+              errorCode: true,
+              observedAt: true,
+            },
+          },
+          parityObservations: {
+            orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+            take: 4,
+            select: {
+              id: true,
+              appId: true,
+              legacyImportId: true,
+              configRevisionId: true,
+              sourceSha: true,
+              scope: true,
+              contractVersion: true,
+              status: true,
+              legacyDigest: true,
+              centralDigest: true,
+              diff: true,
+              observedBy: true,
+              observedAt: true,
+            },
+          },
         },
       },
       providerObservations: {
@@ -210,6 +277,17 @@ export async function getFleetOperationsView(appId: string) {
       ...revision,
       payload: redactFleetJson(revision.payload),
     })),
+    legacyConfigImports: app.legacyConfigImports.map((legacyImport) => ({
+        ...legacyImport,
+        sources: legacyImport.sources.map((source) => ({
+          ...source,
+          repoId: source.repoId?.toString() ?? null,
+        })),
+        parityObservations: legacyImport.parityObservations.map((observation) => ({
+          ...observation,
+          diff: redactFleetJson(observation.diff),
+        })),
+      })),
     providerObservations: providerObservations.map((observation) => ({
       ...observation,
       payload: redactFleetJson(observation.payload),

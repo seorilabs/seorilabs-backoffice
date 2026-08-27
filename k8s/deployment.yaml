@@ -68,6 +68,8 @@ spec:
               value: "https://backoffice.vzyx.xyz"
             - name: GITHUB_ORG
               value: seorilabs
+            - name: PLATFORM_GITHUB_REPOSITORY_ID
+              value: "1317999271"
             - name: ALLOWLIST_LOGINS
               value: "magicsih"
             - name: FEATURE_GEMINI_ENABLED

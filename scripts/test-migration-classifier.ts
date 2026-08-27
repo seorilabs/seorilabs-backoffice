@@ -4,7 +4,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,19 +25,22 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
   throw new Error("classifier fixture DB 이름은 _contract_test로 끝나야 한다");
 }
 
-const first = "20260827000001_first_expand";
-const second = "20260827000002_second_expand";
+const first = "99999999999998_first_expand";
+const second = "99999999999999_second_expand";
 const fixtureId = "00000000-0000-4000-8000-000000000161";
 
 async function main(): Promise<void> {
   const root = process.cwd();
   const migrationRoot = mkdtempSync(join(tmpdir(), "migration-prefix-contract-"));
-  const baseline = "00000000000000_squashed_migrations";
-  mkdirSync(join(migrationRoot, baseline));
-  copyFileSync(
-    join(root, "prisma/migrations", baseline, "migration.sql"),
-    join(migrationRoot, baseline, "migration.sql"),
-  );
+  const activeRoot = join(root, "prisma/migrations");
+  for (const name of readdirSync(activeRoot).sort()) {
+    if (!statSync(join(activeRoot, name)).isDirectory()) continue;
+    mkdirSync(join(migrationRoot, name));
+    copyFileSync(
+      join(activeRoot, name, "migration.sql"),
+      join(migrationRoot, name, "migration.sql"),
+    );
+  }
   copyFileSync(
     join(root, "prisma/migrations/migration_lock.toml"),
     join(migrationRoot, "migration_lock.toml"),

@@ -6,6 +6,7 @@ import {
   type ReauthGate,
   type WorkflowCaller,
 } from "@/lib/control-plane/contracts";
+import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 
 export class ControlPlaneError extends Error {
@@ -15,6 +16,28 @@ export class ControlPlaneError extends Error {
     readonly code: string,
   ) {
     super(message);
+  }
+}
+
+export const MAX_OBSERVATION_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+
+/** caller clock 오류가 event-time latest pointer를 영구 오염시키지 못하게 한다. */
+export function assertObservationTime(
+  observedAt: Date,
+  receivedAt = new Date(),
+): void {
+  const observedTime = observedAt.getTime();
+  const receivedTime = receivedAt.getTime();
+  if (
+    !Number.isFinite(observedTime)
+    || !Number.isFinite(receivedTime)
+    || observedTime > receivedTime + MAX_OBSERVATION_FUTURE_SKEW_MS
+  ) {
+    throw new ControlPlaneError(
+      "observation 시각이 서버 수신 시각의 허용 범위를 벗어났습니다.",
+      400,
+      "OBSERVED_AT_FUTURE",
+    );
   }
 }
 
@@ -142,7 +165,15 @@ export function assertActivationPreconditions(input: {
   actualActiveRevision: number;
   expectedActiveRevision: number;
   targetStatus: "DRAFT" | "ACTIVE" | "SUPERSEDED";
+  shadowImportId?: string | null;
 }): void {
+  if (input.shadowImportId) {
+    throw new ControlPlaneError(
+      "Legacy shadow import가 만든 DRAFT는 직접 활성화할 수 없습니다.",
+      409,
+      "SHADOW_IMPORT_NOT_ACTIVATABLE",
+    );
+  }
   if (input.actualActiveRevision !== input.expectedActiveRevision) {
     throw new ControlPlaneError(
       `ACTIVE revision 충돌: expected=${input.expectedActiveRevision}, actual=${input.actualActiveRevision}`,
@@ -191,6 +222,7 @@ export async function recordDiscoveryObservation(input: {
     configuration?: Record<string, unknown>;
   }>;
 }) {
+  assertObservationTime(input.observedAt);
   const payloadHash = jsonDigest(input.payload as JsonValue);
   const requestHash = discoveryObservationRequestHash(input);
   const replay = await prisma.discoveryObservation.findUnique({
@@ -299,6 +331,7 @@ export async function recordProviderObservation(input: {
     metadata?: Record<string, unknown>;
   };
 }) {
+  assertObservationTime(input.observedAt);
   const provider = input.provider.toLowerCase();
   const payloadHash = jsonDigest(input.payload as JsonValue);
   const requestHash = providerObservationRequestHash(input);
@@ -423,20 +456,12 @@ export async function createConfigRevision(input: {
       }
       return { revision: afterLockReplay, duplicate: true };
     }
-    const latest = await tx.configRevision.aggregate({
-      where: { appId: app.id },
-      _max: { revision: true },
-    });
-    const revision = await tx.configRevision.create({
-      data: {
-        appId: app.id,
-        revision: (latest._max.revision ?? 0) + 1,
-        status: "DRAFT",
-        payload: jsonInput(input.payload),
-        payloadHash,
-        createdBy: input.actor,
-        idempotencyKey: input.idempotencyKey,
-      },
+    const revision = await createDraftRevisionInTransaction(tx, {
+      appId: app.id,
+      payload: input.payload,
+      payloadHash,
+      createdBy: input.actor,
+      idempotencyKey: input.idempotencyKey,
     });
     await tx.auditLog.create({
       data: {
@@ -483,6 +508,7 @@ export async function activateConfigRevision(input: {
     });
     const target = await tx.configRevision.findUnique({
       where: { appId_revision: { appId: app.id, revision: input.revision } },
+      include: { legacyConfigImport: { select: { id: true } } },
     });
     if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
     // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
@@ -491,6 +517,10 @@ export async function activateConfigRevision(input: {
       actualActiveRevision: active?.revision ?? 0,
       expectedActiveRevision: input.expectedActiveRevision,
       targetStatus: target.status,
+      // append-only import relation이 운영자 DB 조작으로 훼손돼도 파생 DRAFT key가
+      // 남아 있는 한 activation을 fail-closed한다.
+      shadowImportId: target.legacyConfigImport?.id
+        ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
     });
 
     const activatedAt = new Date();
