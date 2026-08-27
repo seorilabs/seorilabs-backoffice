@@ -135,7 +135,19 @@ export const discoveryObservationSchema = z.object({
     bundleId: z.string().min(1).max(255).optional(),
     configuration: jsonRecord.optional(),
   })).default([]),
-}).strict();
+}).strict().superRefine((observation, context) => {
+  const seenTargetKeys = new Set<string>();
+  observation.buildTargets.forEach((target, targetIndex) => {
+    if (seenTargetKeys.has(target.targetKey)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "동일 DiscoveryObservation의 targetKey는 중복될 수 없습니다.",
+        path: ["buildTargets", targetIndex, "targetKey"],
+      });
+    }
+    seenTargetKeys.add(target.targetKey);
+  });
+});
 
 export const providerObservationSchema = z.object({
   repoId: z.coerce.bigint().positive(),
@@ -149,8 +161,8 @@ export const providerObservationSchema = z.object({
     externalId: z.string().min(1).max(191),
     publicIdentity: z.string().max(191).optional(),
     metadata: jsonRecord.optional(),
-  }).optional(),
-});
+  }).strict().optional(),
+}).strict();
 
 export const configRevisionSchema = z.object({
   repoId: z.coerce.bigint().positive(),
