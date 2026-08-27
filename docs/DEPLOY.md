@@ -268,6 +268,49 @@ data ns                                   platform ns
 
 > **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. `/index`와 `POST /api/admin/vault/reindex`의 즉시 인덱싱은 일일 스케줄과 무관하게 유지된다. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
 
+## 11-1. Stable 릴리스 오케스트레이션 (태그 → 배포)
+
+백오피스가 stable 릴리스에서 지키는 원장. 설계 정본은 `docs/ci-cd/org-cicd-release-system.md` §7.2.
+
+**릴리즈 마커 커밋 정책은 폐기됐다.** 예전에는 태그 생성 시 파일 변경이 없는 `chore(release): vX.Y.Z` 커밋을 default branch 에 push 하고 그 커밋에 태그를 달았다. 이 방식은 릴리즈 소스를 빈 커밋으로 만들고 브랜치 HEAD 까지 움직여, 태그가 가리키는 소스와 실제 배포 대상이 갈라지는 원인이 됐다. 지금은 마커를 만들지 않고 검증한 소스 SHA 에 태그를 직접 단다. 폐기 이전에 쌓인 마커 커밋만 출시노트 집계에서 계속 제외한다(`src/lib/core/release-marker-history.ts`, 읽기 전용).
+
+### 태그 생성 — preview / confirm 2단계
+
+| 단계 | 하는 일 | 외부 write |
+|---|---|---|
+| preview | repo 의 default branch 를 조회해 **exact SHA 를 고정**하고, 그 SHA 의 소스 원장에서 후보 태그를 확정한다 | 없음 |
+| confirm | 같은 SHA·후보 태그·소스 버전을 **다시 검증**한 뒤에만 `createTag` → `createOrUpdateRelease` | 검증 통과 후에만 |
+
+- 확인 사이에 default branch 가 움직였으면 write 없이 중단한다.
+- `bump` 는 소스에 없는 버전을 만들지 않는다. pinned-source repo 는 후보 태그가 항상 소스 버전이며, 버전을 올리려면 repo 의 원장을 먼저 올린다.
+- 소스 버전 계약(`src/lib/core/release-source-contract.ts`)은 SHA 시점의 repo-local 선언으로 판별한다. `scripts/check_release_version.py`=pinned-source(3원장 정합+태그 일치 강제), `scripts/resolve-release-version.mjs`=tag-derived, 둘 다 없으면 tag-derived-caller.
+
+### 배포 — preflight 전부 → GitHub → Xcode Cloud
+
+```mermaid
+flowchart TD
+  A["배포 요청 - tag, target"] --> B["preflight - 외부 write 0"]
+  B --> B1["태그가 가리키는 exact SHA"]
+  B --> B2["그 SHA 의 소스 버전 계약"]
+  B --> B3["caller workflow_dispatch 선언"]
+  B --> B4["보낼 inputs 가 전부 선언돼 있는지"]
+  B --> B5["Xcode Cloud 제품 - repo - 수동 태그 조건"]
+  B1 --> C{"전부 통과"}
+  B2 --> C
+  B3 --> C
+  B4 --> C
+  B5 --> C
+  C -- "아니오" --> X["재시도 불가 오류 - 외부 write 0회"]
+  C -- "예" --> D["GitHub workflow_dispatch"]
+  D -- "422 등 거부" --> X2["중단 - Xcode Cloud write 0회"]
+  D -- "성공" --> E["Xcode Cloud ciBuildRuns - 마지막"]
+```
+
+- 되돌릴 수 없는 Xcode Cloud 실행이 항상 마지막이다. GitHub 이 거부하면 `ciBuildRuns` 는 0회로 남는다.
+- `APPSTORE` 단독도 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
+- 배포 audit(`release.deploy.dispatch`)에는 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
+- 개별 마켓 workflow 내부의 exact 버전 검증은 마지막 방어막으로 그대로 둔다.
+
 ## 12. 출시노트 (Release Notes) — 태그 diff 기반 8개 언어 유저 공지
 
 릴리즈 태그(`v*`) push 시 **이전 릴리즈 태그~새 태그**의 변경(머지 PR/커밋)을 GitHub compare 로 모아 Gemini로 **사용자용 출시노트(ko_KR/en_US/ja_JP/zh_CN/zh_TW/de_DE/fr_FR/es_ES)** 를 생성, `release_note` 테이블에 저장한다. 백오피스 `/release-notes`(전역 타임라인) + 앱 상세 "출시노트" 섹션에서 언어별로 전문을 열람할 수 있고, `Android용 전체 복사`로 Google Play Console의 `<ko-KR>...</ko-KR>` 일괄 입력 형식을 복사할 수 있다.

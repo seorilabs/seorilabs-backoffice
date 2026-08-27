@@ -218,7 +218,9 @@ sequenceDiagram
     participant MK as 마켓(AIT/GPS/APS)
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
-    BO->>GH: 대상 ref SHA 확정 + 그 SHA 의 소스 버전 계약 검증 [contents:read]
+    BO->>GH: preview - default branch exact SHA 고정 + 소스 버전에서 후보 태그 확정 [contents:read]
+    U->>BO: 확인
+    BO->>GH: confirm - 같은 SHA·후보 태그·소스 버전 재검증 [contents:read]
     BO->>GH: createTag(vX.Y.Z) → 승인된 소스 SHA 에 태그 [contents:write]
     BO-->>U: 태그 + GitHub Release 즉시 생성
     GH-->>BO: tag push webhook
@@ -231,20 +233,28 @@ sequenceDiagram
     U->>BO: ④ 배포 대상 선택(태그/마켓: AIT/GPS/APS/Deploy All)
     BO->>DC: confirm 버튼
     U->>DC: 확인
-    BO->>GH: ⑤ 태그가 가리키는 SHA 의 소스 버전 계약 재검증 [contents:read]
+    BO->>GH: ⑤ preflight - 태그 SHA, 소스 버전, dispatch 계약, inputs, Xcode 조건 [read only]
     BO->>GH: ⑥ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
+    BO->>MK: ⑥-1 Xcode Cloud ciBuildRuns - GitHub dispatch 성공 뒤 마지막
     GH->>MK: ⑦ 빌드 → 서명 → 업로드(출시노트 동봉)
     GH-->>BO: workflow_run webhook(성공/실패)
     BO->>BO: ReleaseRecord 갱신 + 알림 outbox + 라이프사이클 전이
     BO->>DC: ⑧ 업로드 성공/실패 메시지
 ```
 
-- **릴리즈 태그는 승인된 소스 SHA 를 직접 가리킨다.** 백오피스는 대상 ref 의 SHA 를 한 번 확정하고 그 SHA 에 태그를 단다. 브랜치 ref 를 갱신하거나 커밋을 만들지 않는다(빈 마커 커밋 방식 폐기). 마커 커밋은 파일 변경이 없는 커밋을 릴리즈 소스로 만들고 브랜치 HEAD 도 함께 움직였다.
-- **fail-closed 소스 버전 계약**: 태그 생성 전과 마켓 배포 dispatch 전에, 해당 SHA 의 repo-local 버전 원장을 백오피스가 직접 읽어 태그와 정확히 일치하는지 검증한다. 위반이면 GitHub tag, GitHub Release, 브랜치 ref 갱신, Xcode Cloud `ciBuildRuns` POST, workflow dispatch 중 무엇도 실행하지 않는다. `ALL` 에서도 이 검증이 Xcode Cloud 트리거보다 먼저다.
+- **릴리즈 태그는 승인된 소스 SHA 를 직접 가리킨다.** 백오피스는 대상 ref 의 SHA 를 한 번 확정하고 그 SHA 에 태그를 단다. 브랜치 ref 를 갱신하거나 커밋을 만들지 않는다. **릴리즈 마커 커밋 정책은 폐기됐다** — 파일 변경이 없는 `chore(release): vX.Y.Z` 커밋을 릴리즈 소스로 만들고 브랜치 HEAD 까지 움직였기 때문이다. 폐기 이전에 쌓인 마커 커밋은 히스토리에 남아 있으므로 출시노트 집계에서만 계속 제외한다(읽기 호환).
+- **preview 는 default branch 의 exact SHA 를 고정한다.** 후보 태그·소스 버전·SHA 를 확인 카드에 담고, confirm 단계에서 같은 값을 다시 검증한다. 그 사이 브랜치가 움직였으면 write 없이 중단한다. default branch 이름은 repo 에서 조회하며 `main` 으로 하드코딩하지 않는다.
+- **bump 는 소스에 없는 버전을 만들지 않는다.** pinned-source repo 는 소스가 버전 원장을 소유하므로 후보 태그가 항상 소스 버전이다. 버전을 올리려면 repo 의 원장을 먼저 올린다. 소스 원장이 없는 계약에서만 태그 계보·마켓 원장 기준 bump 를 쓴다.
+- **fail-closed 소스 버전 계약**: 태그 생성 전과 마켓 배포 dispatch 전에, 해당 SHA 의 repo-local 버전 원장을 백오피스가 직접 읽어 태그와 정확히 일치하는지 검증한다. 위반이면 GitHub tag, GitHub Release, 브랜치 ref 갱신, Xcode Cloud `ciBuildRuns` POST, workflow dispatch 중 무엇도 실행하지 않는다.
   - `scripts/check_release_version.py` 를 선언한 repo(pinned-source): `project.godot` 의 `application/config/version`, `play-store/google-play.config.json` 의 `release.versionName`, `app-store/app-store.config.json` 의 `release.appleMarketingVersion` 이 서로 같고 태그와도 같아야 한다.
   - `scripts/resolve-release-version.mjs` 를 선언한 repo(tag-derived, org RN 표준): 버전이 태그의 순수 함수라 비교할 원장이 없다.
   - 둘 다 없는 repo(tag-derived-caller): Godot caller 가 `version_name` 을 required 입력으로 받고 백오피스가 태그에서 파생해 넘긴다. repo 가 강제하는 pinned 원장이 없다.
 - **마켓 config 의 버전(floor)은 다음 태그 추천에만 쓴다.** 이미 배포된 마켓 버전보다 태그가 높다는 사실은 태그가 가리키는 소스가 그 버전이라는 증거가 아니다(태그 v1.2.0 / 소스 1.1.12 장애). 배포 허가는 위 소스 계약이 판단한다.
+- **배포는 preflight 전부 → GitHub dispatch → Xcode Cloud 순서다.** 되돌릴 수 없는 외부 실행을 마지막에 둔다.
+  - preflight(외부 write 0): 태그가 가리키는 exact SHA, 그 SHA 의 소스 버전, caller 의 `workflow_dispatch` 선언 존재, 실제로 보낼 입력이 모두 선언돼 있는지, Xcode Cloud 제품·repository·수동 태그 시작 조건까지 확인해 실행 계획을 확정한다.
+  - 실행: GitHub `workflow_dispatch` 를 먼저 보낸다. GitHub 이 422(선언되지 않은 입력·정의 불일치) 등으로 거부하면 거기서 중단되므로 `ciBuildRuns` POST 는 0회로 남는다. Xcode Cloud 는 GitHub 이 성공한 뒤에만 실행한다.
+  - `APPSTORE` 단독(Xcode Cloud 경로)은 GitHub dispatch 가 없지만 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
+  - 배포 audit 에는 **검증된 태그 SHA 와 실제 dispatch 결과만** 남긴다. 요청값을 그대로 신뢰해 기록하지 않는다.
 - **개별 마켓 workflow 내부의 exact 검증은 마지막 방어막으로 유지한다.** 백오피스 검증은 그 앞단에서 외부 실행이 만들어지는 것 자체를 막는다.
 - Discord API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
