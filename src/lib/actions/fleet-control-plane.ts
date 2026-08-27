@@ -6,7 +6,9 @@ import { z, ZodError } from "zod";
 import {
   configActivationSchema,
   configRevisionSchema,
+  legacyShadowImportRequestSchema,
 } from "@/lib/control-plane/contracts";
+import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
 import {
   activateConfigRevision,
   createConfigRevision,
@@ -24,6 +26,8 @@ export interface FleetActionResult {
   error?: string;
   revision?: number;
   status?: string;
+  importId?: string;
+  parityStatus?: string | null;
 }
 
 const uiRequestIdSchema = z.string().uuid();
@@ -100,6 +104,35 @@ export async function createFleetConfigDraftAction(input: {
     });
     revalidatePath(`/apps/${app.id}/fleet`);
     return { ok: true, revision: result.revision.revision, status: result.revision.status };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+export async function importLegacyShadowAction(input: {
+  appId: string;
+  sourceSha: string;
+  requestId: string;
+}): Promise<FleetActionResult> {
+  try {
+    const { app, actor } = await fleetWriteContext(input.appId);
+    const body = legacyShadowImportRequestSchema.parse({
+      repoId: app.repoId,
+      sourceSha: input.sourceSha,
+    });
+    const result = await recordLegacyShadowImport({
+      ...body,
+      observedBy: actor.login,
+      idempotencyKey: `ui-legacy-shadow:${uiRequestIdSchema.parse(input.requestId)}`,
+    });
+    revalidatePath(`/apps/${app.id}/fleet`);
+    return {
+      ok: true,
+      importId: result.import.id,
+      revision: result.configRevision?.revision,
+      status: result.import.status,
+      parityStatus: result.parity?.status ?? null,
+    };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

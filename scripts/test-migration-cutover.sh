@@ -19,6 +19,7 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 
 before="$(pnpm tsx scripts/verify-migration-state.ts \
   --history=legacy --print-data-fingerprint | tail -n 1)"
+new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation"
 preflight_log="$(mktemp)"
 trap 'rm -f "$preflight_log"' EXIT
 if pnpm tsx scripts/verify-migration-state.ts --history=predeploy \
@@ -42,9 +43,10 @@ pnpm prisma migrate deploy
 pnpm prisma migrate deploy
 pnpm prisma migrate status >/dev/null
 after="$(pnpm tsx scripts/verify-migration-state.ts \
-  --history=cutover --print-data-fingerprint | tail -n 1)"
+  --history=cutover --print-data-fingerprint \
+  --allow-empty-new-tables="$new_empty_tables" | tail -n 1)"
 if [ "$before" != "$after" ]; then
-  echo "오류: baseline resolve 과정에서 application row count가 바뀌었다" >&2
+  echo "오류: migration 과정에서 기존 application table row count가 바뀌었다" >&2
   exit 1
 fi
 pnpm prisma migrate diff \

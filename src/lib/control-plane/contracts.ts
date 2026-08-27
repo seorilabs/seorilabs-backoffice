@@ -6,8 +6,15 @@ const jsonRecord = z.record(z.unknown());
 
 const locale = z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/, "BCP-47 locale이 필요합니다.");
 const revisionRef = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$/);
-const httpsUrl = z.string().url().max(2_048).refine((value) => new URL(value).protocol === "https:", {
-  message: "HTTPS URL이 필요합니다.",
+const httpsUrl = z.string().url().max(2_048).refine((value) => {
+  const parsed = new URL(value);
+  return parsed.protocol === "https:"
+    && parsed.username === ""
+    && parsed.password === ""
+    && parsed.search === ""
+    && parsed.hash === "";
+}, {
+  message: "userinfo, query, fragment가 없는 공개 HTTPS URL이 필요합니다.",
 });
 
 /**
@@ -168,6 +175,17 @@ export const configRevisionSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   payload: configRevisionPayloadSchema,
 }).strict();
+
+/**
+ * Legacy shadow import는 원문이나 source path 목록을 호출자가 주입하지 못하게 한다.
+ * 서버가 고정 allowlist와 transform version을 선택하고, 정확한 commit SHA에서만 읽는다.
+ */
+export const legacyShadowImportRequestSchema = z.object({
+  repoId: z.coerce.bigint().positive().max(BigInt(Number.MAX_SAFE_INTEGER)),
+  sourceSha: sha40,
+}).strict();
+
+export type LegacyShadowImportRequest = z.infer<typeof legacyShadowImportRequestSchema>;
 
 export const configActivationSchema = z.object({
   repoId: z.coerce.bigint().positive(),

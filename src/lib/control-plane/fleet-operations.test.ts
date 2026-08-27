@@ -12,6 +12,7 @@ import {
 } from "@/lib/control-plane/contracts";
 import {
   assertConfigRevisionPayload,
+  assertObservationTime,
   assertIdempotentRequestHash,
   ControlPlaneError,
   discoveryObservationRequestHash,
@@ -54,6 +55,24 @@ test("strict allowlist 밖의 공개 배포·심사 alias는 DRAFT 생성과 act
         && error.status === 403,
     );
   }
+});
+
+test("Config의 공개 support URL은 credential userinfo와 query token을 저장하지 않는다", () => {
+  const base = { schemaVersion: 1 as const, markets: [] };
+  for (const privacyPolicyUrl of [
+    "https://user:password@example.com/privacy",
+    "https://example.com/privacy?token=should-not-persist",
+    "https://example.com/privacy#secret-fragment",
+  ]) {
+    assert.equal(configRevisionPayloadSchema.safeParse({
+      ...base,
+      support: { privacyPolicyUrl },
+    }).success, false);
+  }
+  assert.equal(configRevisionPayloadSchema.safeParse({
+    ...base,
+    support: { privacyPolicyUrl: "https://example.com/privacy" },
+  }).success, true);
 });
 
 test("Config 계약은 market·locale 중복, channel 조합, SDK 역전을 거부한다", () => {
@@ -160,6 +179,20 @@ test("observation validator는 중복 targetKey와 provider unknown field를 fai
   }).success, false);
 });
 
+test("미래 시각 observation은 latest event-time pointer를 오염시키기 전에 거부한다", () => {
+  const receivedAt = new Date("2026-08-28T00:00:00.000Z");
+  assert.doesNotThrow(() => assertObservationTime(
+    new Date("2026-08-28T00:05:00.000Z"),
+    receivedAt,
+  ));
+  assert.throws(
+    () => assertObservationTime(new Date("2099-01-01T00:00:00.000Z"), receivedAt),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "OBSERVED_AT_FUTURE"
+      && error.status === 400,
+  );
+});
+
 test("observation idempotency hash는 buildTarget과 externalBinding 전체를 결합한다", () => {
   const discovery = {
     repoId: 123n,
@@ -250,6 +283,9 @@ test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () 
   assert.match(actions, /requirePlatformReadAccess\(\)/);
   assert.match(actions, /requirePlatformWriteAccess\(app\.slug\)/);
   assert.match(actions, /uiRequestIdSchema\.parse\(input\.requestId\)/);
+  assert.match(actions, /legacyShadowImportRequestSchema\.parse/);
+  assert.match(actions, /recordLegacyShadowImport/);
+  assert.match(actions, /observedBy: actor\.login/);
   assert.match(actions, /markReauthTrustedLocalPendingFromHumanUi/);
   assert.match(service, /control-plane\.reauth\.trusted-local-pending\.human-ui/);
   assert.match(service, /transitionSource: "BACKOFFICE_HUMAN_UI"/);

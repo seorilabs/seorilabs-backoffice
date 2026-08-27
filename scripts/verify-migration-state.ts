@@ -52,6 +52,12 @@ const expectedLineage = option("expected-lineage") as
   | undefined;
 const printContract = process.argv.includes("--print-contract");
 const printDataFingerprint = process.argv.includes("--print-data-fingerprint");
+const allowedEmptyNewTables = new Set(
+  (option("allow-empty-new-tables") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 if (
   !historyMode ||
   !["fresh", "legacy", "cutover", "predeploy"].includes(historyMode)
@@ -60,6 +66,11 @@ if (
 }
 if (expectedLineage && !["fresh", "cutover"].includes(expectedLineage)) {
   throw new Error("--expected-lineage=fresh|cutover만 허용한다");
+}
+for (const tableName of allowedEmptyNewTables) {
+  if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
+    throw new Error("--allow-empty-new-tables에 안전하지 않은 table name이 있다");
+  }
 }
 const contractPath = resolve(
   process.env.SCHEMA_CONTRACT ??
@@ -399,7 +410,10 @@ function verifyContract(actual: SchemaContract): void {
   }
 }
 
-async function dataFingerprint(prisma: PrismaClient): Promise<Fingerprint> {
+async function dataFingerprint(
+  prisma: PrismaClient,
+  allowedEmptyTables: ReadonlySet<string>,
+): Promise<Fingerprint> {
   const tables = await prisma.$queryRawUnsafe<Array<{ tableName: string }>>(`
     SELECT TABLE_NAME AS tableName
     FROM information_schema.TABLES
@@ -409,6 +423,7 @@ async function dataFingerprint(prisma: PrismaClient): Promise<Fingerprint> {
     ORDER BY TABLE_NAME
   `);
   const counts: DatabaseRow[] = [];
+  const observedAllowedEmptyTables = new Set<string>();
   for (const { tableName } of tables) {
     if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
       throw new Error("안전하지 않은 table name을 발견했다");
@@ -416,7 +431,20 @@ async function dataFingerprint(prisma: PrismaClient): Promise<Fingerprint> {
     const [row] = await prisma.$queryRawUnsafe<Array<{ rowCount: bigint }>>(
       `SELECT COUNT(*) AS rowCount FROM \`${tableName}\``,
     );
+    if (allowedEmptyTables.has(tableName)) {
+      observedAllowedEmptyTables.add(tableName);
+      if (row.rowCount !== 0n) {
+        throw new Error(`허용된 신규 table이 비어 있지 않다: ${tableName}`);
+      }
+      continue;
+    }
     counts.push({ tableName, rowCount: row.rowCount });
+  }
+  const missingAllowedTable = [...allowedEmptyTables].find(
+    (tableName) => !observedAllowedEmptyTables.has(tableName),
+  );
+  if (missingAllowedTable) {
+    throw new Error(`허용된 신규 table이 존재하지 않는다: ${missingAllowedTable}`);
   }
   return fingerprint(counts);
 }
@@ -446,7 +474,7 @@ async function main(): Promise<void> {
       );
     }
     if (printDataFingerprint) {
-      const data = await dataFingerprint(prisma);
+      const data = await dataFingerprint(prisma, allowedEmptyNewTables);
       console.log(`application data fingerprint: tables=${data.count} sha256=${data.sha256}`);
     }
   } finally {
