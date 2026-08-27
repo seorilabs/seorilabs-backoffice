@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   configRevisionPayloadSchema,
   discoveryObservationSchema,
+  providerObservationSchema,
   reauthPublicReason,
   reauthRequestSchema,
 } from "@/lib/control-plane/contracts";
@@ -127,6 +128,36 @@ test("workflow caller는 exact source observation의 strict projection만 허용
     () => resolvedWorkflowCaller({ profile: "react-native", packageManager: "pnpm", workingDirectory: "../mobile" }),
     (error) => error instanceof ControlPlaneError && error.code === "NO_WORKFLOW_CALLER_FOR_SHA",
   );
+});
+
+test("observation validator는 중복 targetKey와 provider unknown field를 fail-closed한다", () => {
+  const discovery = {
+    repoId: "123",
+    sourceSha: "a".repeat(40),
+    observedAt: "2026-08-27T00:00:00.000Z",
+    workflowCaller: { profile: "godot", packageManager: "npm", workingDirectory: "." },
+    payload: {},
+    buildTargets: [
+      { targetKey: "android", stack: "godot" },
+      { targetKey: "android", stack: "godot", market: "google-play" },
+    ],
+  };
+  assert.equal(discoveryObservationSchema.safeParse(discovery).success, false);
+
+  const provider = {
+    repoId: "123",
+    provider: "google-play",
+    resourceType: "app",
+    resourceId: "com.example.app",
+    observedAt: "2026-08-27T00:00:00.000Z",
+    payload: {},
+  };
+  assert.equal(providerObservationSchema.safeParse(provider).success, true);
+  assert.equal(providerObservationSchema.safeParse({ ...provider, providerWrite: true }).success, false);
+  assert.equal(providerObservationSchema.safeParse({
+    ...provider,
+    externalBinding: { bindingType: "publisher", externalId: "team-1", secret: "never" },
+  }).success, false);
 });
 
 test("observation idempotency hash는 buildTarget과 externalBinding 전체를 결합한다", () => {
