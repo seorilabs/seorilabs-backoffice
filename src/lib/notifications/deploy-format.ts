@@ -1,5 +1,6 @@
 import type { ReleaseMarket, ReleaseStatus } from "@prisma/client";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
+import { playInternalTestLink } from "@/lib/domain/play-internal-test";
 
 const MARKET_LABEL: Record<ReleaseMarket, string> = {
   AIT: "AppsInToss",
@@ -224,15 +225,6 @@ const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+$/;
 
 export function isReleaseTag(version: string): boolean {
   return RELEASE_TAG_RE.test(version);
-}
-
-/**
- * Play 내부 테스트 바로가기 링크. 콘솔에서만 얻을 수 있는 값이라 백오피스에 입력된
- * 앱만 링크가 붙는다. 오입력으로 임의 도메인이 카드에 실리지 않게 Play 링크만 받는다.
- */
-export function playInternalTestLink(url: string | null | undefined): string | null {
-  const value = url?.trim() ?? "";
-  return /^https:\/\/play\.google\.com\//.test(value) ? value : null;
 }
 
 function linkButton(label: string, url: string): DiscordActionRow["components"][number] {

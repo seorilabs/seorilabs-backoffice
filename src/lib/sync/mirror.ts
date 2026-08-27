@@ -3,7 +3,6 @@ import type {
   IssueState,
   PrState,
   ReleaseMarket,
-  ReleaseStatus,
 } from "@prisma/client";
 import {
   normalizeLabels,
@@ -24,18 +23,16 @@ import {
   enqueueDeployAllResultNotification,
   enqueueDeployCompletionNotification,
 } from "@/lib/notifications/deploy-enqueue";
-import { buildDeployAllStatusCardText } from "@/lib/notifications/deploy-format";
 import {
   isDeployAllWorkflow,
   isPromoteGooglePlayWorkflow,
   marketFromWorkflowPath,
-  MARKET_WORKFLOW,
 } from "@/lib/core/deploy-targets";
 import {
-  deployAllMarketResults,
-  parseDeployAllMarketJobs,
-  type DeployAllMarketResult,
-} from "@/lib/core/deploy-all-jobs";
+  recordDeployAllRun,
+  type DeployAllReleaseDeps,
+  type MarketReleaseInput,
+} from "@/lib/sync/deploy-all-release";
 import { getWorkflowFileText, listWorkflowRunJobs } from "@/lib/github/read";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
@@ -246,7 +243,25 @@ export async function upsertWorkflowRun(
   const market = marketFromWorkflowPath(gh.path) ?? marketFromWorkflowName(gh.name);
   if (!market) {
     if (isDeployAllWorkflow(gh.path) && (status === "SUCCEEDED" || status === "FAILED")) {
-      await recordDeployAllRun({ repoFullName, appId, gh, status, runId, runAttempt, runUrl, ghUpdatedAt });
+      const version = await resolveRunVersion(repoFullName, gh);
+      const results = await recordDeployAllRun(
+        {
+          repoFullName,
+          appId,
+          workflowName: gh.name ?? null,
+          headSha: gh.head_sha ?? null,
+          version,
+          status,
+          runId,
+          runAttempt,
+          runUrl,
+          ghUpdatedAt,
+        },
+        deployAllReleaseDeps,
+      );
+      if (results.some((result) => shouldAdvanceLifecycleForRelease(result.status, version))) {
+        await evaluateLifecycleOnSuccessfulRelease(appId, `workflow_run:${runId}`);
+      }
     }
     return;
   }
@@ -276,20 +291,18 @@ export async function upsertWorkflowRun(
   }
 }
 
+const deployAllReleaseDeps: DeployAllReleaseDeps = {
+  readWorkflowFile: getWorkflowFileText,
+  listRunJobs: listWorkflowRunJobs,
+  recordMarketRelease: (input) => recordMarketRelease(input),
+  appDisplayName: async (appId) =>
+    (await prisma.app.findUnique({ where: { id: appId }, select: { displayName: true } }))
+      ?.displayName ?? null,
+  enqueueRunResultCard: enqueueDeployAllResultNotification,
+};
+
 /** ReleaseRecord 파생 + 배포 상태 카드 알림. 단일 마켓 실행과 deploy-all 이 공유한다. */
-async function recordMarketRelease(input: {
-  appId: string;
-  market: ReleaseMarket;
-  version: string;
-  track: string | null;
-  status: ReleaseStatus;
-  workflowName: string | null;
-  commitSha: string | null;
-  runId: bigint;
-  runAttempt: number;
-  runUrl: string;
-  ghUpdatedAt: Date;
-}): Promise<void> {
+async function recordMarketRelease(input: MarketReleaseInput): Promise<void> {
   const relData = {
     appId: input.appId,
     version: input.version,
@@ -319,82 +332,6 @@ async function recordMarketRelease(input: {
   });
 }
 
-/**
- * deploy-all 실행의 마켓별 배포 기록.
- *
- * 마켓 잡은 재사용 워크플로라 자체 workflow_run 이 없다. 실행의 잡 목록으로 마켓별 결론을
- * 복원해 단일 마켓 배포와 같은 카드(프로덕션 승격·심사 버튼 포함)를 남긴다. 잡을 읽지
- * 못했거나 마켓 잡이 하나도 돌지 않았으면 ALL 배포가 무음으로 끝나지 않게 실행 단위 카드로
- * 물러선다.
- */
-async function recordDeployAllRun(input: {
-  repoFullName: string;
-  appId: string;
-  gh: GhRunInput;
-  status: Extract<ReleaseStatus, "SUCCEEDED" | "FAILED">;
-  runId: bigint;
-  runAttempt: number;
-  runUrl: string;
-  ghUpdatedAt: Date;
-}): Promise<void> {
-  const version = await resolveRunVersion(input.repoFullName, input.gh);
-  let results: DeployAllMarketResult[] = [];
-  try {
-    const [definition, jobs] = await Promise.all([
-      getWorkflowFileText(
-        input.repoFullName,
-        MARKET_WORKFLOW.ALL,
-        input.gh.head_sha ?? undefined,
-      ),
-      listWorkflowRunJobs(input.repoFullName, input.runId, input.runAttempt),
-    ]);
-    results = deployAllMarketResults(parseDeployAllMarketJobs(definition), jobs);
-  } catch (error) {
-    console.error(
-      "[mirror] deploy-all 마켓 결과 분해 실패:",
-      error instanceof Error ? error.message : error,
-    );
-  }
-
-  if (results.length === 0) {
-    const app = await prisma.app.findUnique({
-      where: { id: input.appId },
-      select: { displayName: true },
-    });
-    await enqueueDeployAllResultNotification({
-      text: buildDeployAllStatusCardText({
-        displayName: app?.displayName ?? input.repoFullName,
-        version,
-        status: input.status,
-        runUrl: input.runUrl,
-        updatedAt: input.ghUpdatedAt,
-      }),
-      eventKey: `${input.runId}:${input.runAttempt}`,
-      occurredAt: input.ghUpdatedAt,
-    });
-    return;
-  }
-
-  for (const result of results) {
-    await recordMarketRelease({
-      appId: input.appId,
-      market: result.market,
-      version,
-      track: releaseTrackForWorkflow({ market: result.market, promoted: false, version }),
-      status: result.status,
-      workflowName: `${input.gh.name ?? "Deploy All"} / ${result.displayName}`,
-      commitSha: input.gh.head_sha ?? null,
-      runId: input.runId,
-      runAttempt: input.runAttempt,
-      runUrl: input.runUrl,
-      ghUpdatedAt: input.ghUpdatedAt,
-    });
-  }
-
-  if (results.some((result) => shouldAdvanceLifecycleForRelease(result.status, version))) {
-    await evaluateLifecycleOnSuccessfulRelease(input.appId, `workflow_run:${input.runId}`);
-  }
-}
 
 // 배포 성공 시 라이프사이클 자동 전이 (라벨/마일스톤 비의존).
 export async function evaluateLifecycleOnSuccessfulRelease(

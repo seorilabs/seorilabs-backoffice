@@ -4,9 +4,9 @@ import {
   deployCardComponents,
   deployCardCustomId,
   isReleaseTag,
-  playInternalTestLink,
   type AppStoreReviewCardState,
 } from "@/lib/notifications/deploy-format";
+import { playInternalTestLink } from "@/lib/domain/play-internal-test";
 
 const RELEASE_ID = "cmszaz3wd0asqs101uvv5ar6x";
 const VERSION = "v1.1.6";
