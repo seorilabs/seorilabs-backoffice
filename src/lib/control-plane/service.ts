@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 
 export class ControlPlaneError extends Error {
@@ -39,6 +40,17 @@ function assertIdempotentPayload(
       "IDEMPOTENCY_CONFLICT",
     );
   }
+}
+
+export function assertConfigRevisionPayload(payload: unknown): asserts payload is Record<string, unknown> {
+  const validated = configRevisionPayloadSchema.safeParse(payload);
+  if (validated.success) return;
+  const paths = validated.error.issues.map((issue) => issue.path.join(".")).filter(Boolean);
+  throw new ControlPlaneError(
+    `별도 사람 승인 workflow가 필요한 Config 필드가 포함되어 있습니다: ${paths.join(", ") || "unknown"}`,
+    403,
+    "HUMAN_APPROVAL_REQUIRED",
+  );
 }
 
 export function assertActivationPreconditions(input: {
@@ -259,6 +271,7 @@ export async function createConfigRevision(input: {
   actor: string;
   idempotencyKey: string;
 }) {
+  assertConfigRevisionPayload(input.payload);
   const payloadHash = jsonDigest(input.payload as JsonValue);
   const replay = await prisma.configRevision.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
@@ -347,6 +360,8 @@ export async function activateConfigRevision(input: {
       where: { appId_revision: { appId: app.id, revision: input.revision } },
     });
     if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
+    // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
+    assertConfigRevisionPayload(target.payload);
     assertActivationPreconditions({
       actualActiveRevision: active?.revision ?? 0,
       expectedActiveRevision: input.expectedActiveRevision,
@@ -407,6 +422,190 @@ export async function activateConfigRevision(input: {
       },
     });
     return { revision, duplicate: false };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function recordReauthRequest(input: {
+  repoId: bigint;
+  runId?: string;
+  provider: string;
+  origin: string;
+  publicAccountId: string;
+  capability: string;
+  gate: string;
+  reason: string;
+  actor: string;
+  idempotencyKey: string;
+}) {
+  const provider = input.provider.toLowerCase();
+  const origin = new URL(input.origin).origin;
+  const replay = await prisma.reauthRequest.findUnique({
+    where: { idempotencyKey: input.idempotencyKey },
+    include: { app: { select: { repoId: true } } },
+  });
+  if (replay) {
+    if (
+      replay.app.repoId !== input.repoId
+      || replay.runId !== (input.runId ?? null)
+      || replay.provider !== provider
+      || replay.origin !== origin
+      || replay.publicAccountId !== input.publicAccountId
+      || replay.capability !== input.capability
+      || replay.gate !== input.gate
+      || replay.reason !== input.reason
+      || replay.requestedBy !== input.actor
+    ) {
+      throw new ControlPlaneError(
+        "idempotency key가 다른 reauth 요청에 사용되었습니다.",
+        409,
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    return { request: replay, duplicate: true };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const app = await appForRepoId(tx, input.repoId);
+    if (input.runId) {
+      const run = await tx.agentRun.findUnique({
+        where: { id: input.runId },
+        select: { appId: true, repoFullName: true },
+      });
+      if (!run || (run.appId !== app.id && run.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase())) {
+        throw new ControlPlaneError("reauth run이 앱 범위와 일치하지 않습니다.", 409, "RUN_SCOPE_MISMATCH");
+      }
+    }
+    const request = await tx.reauthRequest.create({
+      data: {
+        appId: app.id,
+        runId: input.runId,
+        provider,
+        origin,
+        publicAccountId: input.publicAccountId,
+        capability: input.capability,
+        gate: input.gate,
+        reason: input.reason,
+        requestedBy: input.actor,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorLogin: input.actor,
+        action: "control-plane.reauth.request",
+        entityType: "ReauthRequest",
+        entityId: request.id,
+        payload: {
+          appId: app.id,
+          runId: input.runId ?? null,
+          provider,
+          origin,
+          publicAccountId: input.publicAccountId,
+          capability: input.capability,
+          gate: input.gate,
+        },
+      },
+    });
+    return { request, duplicate: false };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function listReauthRequests(repoId: bigint) {
+  const app = await appForRepoId(prisma, repoId);
+  return prisma.reauthRequest.findMany({
+    where: { appId: app.id },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: {
+      id: true,
+      runId: true,
+      provider: true,
+      origin: true,
+      publicAccountId: true,
+      capability: true,
+      gate: true,
+      reason: true,
+      status: true,
+      generation: true,
+      requestedBy: true,
+      trustedLocalRequestedBy: true,
+      trustedLocalRequestedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+}
+
+export async function markReauthTrustedLocalPending(input: {
+  repoId: bigint;
+  reauthRequestId: string;
+  expectedGeneration: number;
+  actor: string;
+  idempotencyKey: string;
+}) {
+  const replay = await prisma.reauthRequest.findUnique({
+    where: { trustedLocalIdempotencyKey: input.idempotencyKey },
+    include: { app: { select: { repoId: true } } },
+  });
+  if (replay) {
+    if (
+      replay.id !== input.reauthRequestId
+      || replay.app.repoId !== input.repoId
+      || replay.trustedLocalRequestedBy !== input.actor
+    ) {
+      throw new ControlPlaneError(
+        "idempotency key가 다른 trusted-local 요청에 사용되었습니다.",
+        409,
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    return { request: replay, duplicate: true };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const app = await appForRepoId(tx, input.repoId);
+    const requestedAt = new Date();
+    const updated = await tx.reauthRequest.updateMany({
+      where: {
+        id: input.reauthRequestId,
+        appId: app.id,
+        status: "HUMAN_REAUTH_REQUIRED",
+        generation: input.expectedGeneration,
+        trustedLocalIdempotencyKey: null,
+      },
+      data: {
+        status: "TRUSTED_LOCAL_PENDING",
+        generation: { increment: 1 },
+        trustedLocalIdempotencyKey: input.idempotencyKey,
+        trustedLocalRequestedBy: input.actor,
+        trustedLocalRequestedAt: requestedAt,
+      },
+    });
+    if (updated.count !== 1) {
+      throw new ControlPlaneError(
+        "reauth 상태가 변경되었거나 이미 trusted-local 대기 중입니다.",
+        409,
+        "REAUTH_STATE_CONFLICT",
+      );
+    }
+    const request = await tx.reauthRequest.findUniqueOrThrow({
+      where: { id: input.reauthRequestId },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorLogin: input.actor,
+        action: "control-plane.reauth.trusted-local-pending",
+        entityType: "ReauthRequest",
+        entityId: request.id,
+        payload: {
+          appId: request.appId,
+          generation: request.generation,
+          provider: request.provider,
+          publicAccountId: request.publicAccountId,
+        },
+      },
+    });
+    return { request, duplicate: false };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 

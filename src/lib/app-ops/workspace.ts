@@ -15,6 +15,7 @@ export const APP_WORKSPACE_TABS = [
   { key: "ads", segment: "ads", label: "광고" },
   { key: "content", segment: "content", label: "콘텐츠" },
   { key: "flags", segment: "flags", label: "Feature Flags" },
+  { key: "fleet", segment: "fleet", label: "Fleet" },
   { key: "development", segment: "development", label: "개발" },
   { key: "releases", segment: "releases", label: "릴리스" },
 ] as const;
@@ -25,6 +26,7 @@ export type AppWorkspaceReadiness = "ready" | "partial" | "missing";
 export interface AppWorkspaceSource {
   id: string;
   slug: string;
+  repoId: bigint | null;
   firebaseProject: string | null;
   ga4Dataset: string | null;
   aitWorkspaceId: number | null;
@@ -70,6 +72,7 @@ export function buildAppWorkspaceTabs(app: AppWorkspaceSource): AppWorkspaceTab[
           : "partial"
         : "missing",
     flags: toolReadiness(app, "flags"),
+    fleet: app.repoId ? "ready" : "missing",
     development: "ready",
     releases: "ready",
   };

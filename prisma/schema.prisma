@@ -93,6 +93,8 @@ model App {
   providerObservations ProviderObservation[]
   releaseCandidates ReleaseCandidate[]
   platformFleetBinding PlatformFleetBinding?
+  credentialBindings CredentialBinding[]
+  reauthRequests ReauthRequest[]
   automationDefinitions AutomationDefinition[]
   agentRuns AgentRun[]
 
@@ -1067,6 +1069,71 @@ model PlatformFleetBinding {
   @@map("platform_fleet_binding")
 }
 
+// secret 값이 아닌 logical credential과 공개 identity만 저장한다.
+// 실제 값의 조회·변경·export API는 이 데이터 모델과 Backoffice UI에 존재하지 않는다.
+model CredentialBinding {
+  id                  String                  @id @default(cuid())
+  appId               String
+  app                 App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
+  logicalCredentialId String
+  provider            String
+  capability          String
+  environment         String
+  publicIdentity      String?
+  fingerprint         String?
+  consumer            String
+  scope               Json?
+  status              CredentialBindingStatus @default(ACTIVE)
+  observedAt          DateTime                @db.DateTime(3)
+  createdAt           DateTime                @default(now()) @db.DateTime(3)
+  updatedAt           DateTime                @updatedAt
+
+  @@unique([appId, logicalCredentialId, capability])
+  @@index([appId, provider, status])
+  @@map("control_plane_credential_binding")
+}
+
+enum CredentialBindingStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+  NEEDS_REAUTH
+}
+
+// 사람이 trusted local UI에서 인증해야 한다는 대기 상태만 기록한다.
+// password, TOTP seed/code, cookie, recovery code를 담는 컬럼은 두지 않는다.
+model ReauthRequest {
+  id                         String              @id @default(cuid())
+  appId                      String
+  app                        App                 @relation(fields: [appId], references: [id], onDelete: Cascade)
+  runId                      String?
+  run                        AgentRun?           @relation(fields: [runId], references: [id], onDelete: SetNull)
+  provider                   String
+  origin                     String              @db.VarChar(512)
+  publicAccountId            String
+  capability                 String
+  gate                       String
+  reason                     String              @db.Text
+  status                     ReauthRequestStatus @default(HUMAN_REAUTH_REQUIRED)
+  generation                 Int                 @default(0)
+  idempotencyKey             String              @unique
+  trustedLocalIdempotencyKey String?             @unique
+  requestedBy                String
+  trustedLocalRequestedBy    String?
+  trustedLocalRequestedAt    DateTime?           @db.DateTime(3)
+  createdAt                  DateTime            @default(now()) @db.DateTime(3)
+  updatedAt                  DateTime            @updatedAt
+
+  @@index([appId, status, createdAt])
+  @@index([runId, status])
+  @@map("control_plane_reauth_request")
+}
+
+enum ReauthRequestStatus {
+  HUMAN_REAUTH_REQUIRED
+  TRUSTED_LOCAL_PENDING
+}
+
 // repository webhook의 등록 원장. stack 후보가 하나로 확정되기 전에는 App을 추측 생성하지 않는다.
 model RepositoryRegistration {
   repoId              BigInt                       @id
@@ -1159,6 +1226,7 @@ model AgentRun {
   updatedAt       DateTime             @updatedAt
   leases          AgentLease[]
   events          AgentRunEvent[]
+  reauthRequests  ReauthRequest[]
 
   @@index([status, eligibleAt, priority])
   @@index([repoFullName, status])
