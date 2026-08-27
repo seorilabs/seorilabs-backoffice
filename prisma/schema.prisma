@@ -1004,7 +1004,6 @@ model ProviderObservation {
   observedAt     DateTime @db.DateTime(3)
   createdAt      DateTime @default(now()) @db.DateTime(3)
 
-  @@index([appId, provider, resourceType, resourceId, payloadHash])
   @@index([appId, provider, observedAt])
   @@map("control_plane_provider_observation")
 }
