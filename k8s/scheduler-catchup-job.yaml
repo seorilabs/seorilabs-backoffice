@@ -21,6 +21,8 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
       nodeSelector:
         kubernetes.io/hostname: rpi5
       containers:
@@ -32,10 +34,12 @@ spec:
             - -ceu
             - |
               failed=0
+              token="$(cat /var/run/secrets/seorilabs/admin-token)"
               call() {
                 label="$1"
                 shift
-                if curl -sS -f -o /dev/null "$@"; then
+                if printf 'header = "x-admin-token: %s"\n' "$token" | \
+                  curl --config - -sS -f -o /dev/null "$@"; then
                   echo "$label=ok"
                 else
                   echo "$label=failed" >&2
@@ -43,23 +47,14 @@ spec:
                 fi
               }
               call reconcile --max-time 840 -XPOST \
-                -H "x-admin-token: $ADMIN_TOKEN" \
                 http://backoffice.platform.svc.cluster.local/api/admin/reconcile
               call xcode_cloud_sync --max-time 300 -XPOST \
-                -H "x-admin-token: $ADMIN_TOKEN" \
                 http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
               call registry_seed --max-time 300 -XPOST \
-                -H "x-admin-token: $ADMIN_TOKEN" \
                 -H "content-type: application/json" \
                 --data '{"backfill":false}' \
                 http://backoffice.platform.svc.cluster.local/api/admin/seed
               exit "$failed"
-          env:
-            - name: ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: INTERNAL_ADMIN_TOKEN
           resources:
             requests:
               cpu: 10m
@@ -74,3 +69,15 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: admin-token
+              mountPath: /var/run/secrets/seorilabs
+              readOnly: true
+      volumes:
+        - name: admin-token
+          secret:
+            secretName: backoffice-secrets
+            defaultMode: 0440
+            items:
+              - key: INTERNAL_ADMIN_TOKEN
+                path: admin-token

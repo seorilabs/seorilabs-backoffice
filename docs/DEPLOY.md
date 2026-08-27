@@ -95,7 +95,8 @@ kubectl -n platform create job \
   `concurrencyPolicy: Forbid`로 실행한다. 배포는 기존 scheduler를 suspend/drain한 뒤 CronJob만
   orphan 삭제한다. 세 작업의 one-shot 직렬 catch-up을 마친 다음 CronJob을 새로 생성하므로
   suspend 중 놓친 시각이 재개 직후 중복 실행되지 않는다. 보존된 Job은 TTL로 정리되며 웹
-  프로세스 안에는 scheduler가 없다.
+  프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
+  stdin으로 전달하며 환경변수나 argv에 넣지 않는다.
 - Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
 
 ## 7. CI 자동배포 설정 (main push → 검증/빌드/배포)

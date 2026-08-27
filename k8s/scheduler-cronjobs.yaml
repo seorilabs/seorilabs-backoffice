@@ -29,6 +29,8 @@ spec:
         spec:
           restartPolicy: Never
           automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 10001
           nodeSelector:
             kubernetes.io/hostname: rpi5
           containers:
@@ -39,15 +41,10 @@ spec:
                 - sh
                 - -c
                 - >-
-                  curl -fsS -o /dev/null --max-time 840 -XPOST
-                  -H "x-admin-token: $ADMIN_TOKEN"
+                  token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
+                  printf 'header = "x-admin-token: %s"\n' "$token" |
+                  curl --config - -fsS -o /dev/null --max-time 840 -XPOST
                   http://backoffice.platform.svc.cluster.local/api/admin/reconcile
-              env:
-                - name: ADMIN_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-secrets
-                      key: INTERNAL_ADMIN_TOKEN
               resources:
                 requests:
                   cpu: 10m
@@ -62,6 +59,18 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+              volumeMounts:
+                - name: admin-token
+                  mountPath: /var/run/secrets/seorilabs
+                  readOnly: true
+          volumes:
+            - name: admin-token
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: INTERNAL_ADMIN_TOKEN
+                    path: admin-token
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -91,6 +100,8 @@ spec:
         spec:
           restartPolicy: Never
           automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 10001
           nodeSelector:
             kubernetes.io/hostname: rpi5
           containers:
@@ -101,15 +112,10 @@ spec:
                 - sh
                 - -c
                 - >-
-                  curl -fsS -o /dev/null --max-time 300 -XPOST
-                  -H "x-admin-token: $ADMIN_TOKEN"
+                  token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
+                  printf 'header = "x-admin-token: %s"\n' "$token" |
+                  curl --config - -fsS -o /dev/null --max-time 300 -XPOST
                   http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
-              env:
-                - name: ADMIN_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-secrets
-                      key: INTERNAL_ADMIN_TOKEN
               resources:
                 requests:
                   cpu: 10m
@@ -124,6 +130,18 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+              volumeMounts:
+                - name: admin-token
+                  mountPath: /var/run/secrets/seorilabs
+                  readOnly: true
+          volumes:
+            - name: admin-token
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: INTERNAL_ADMIN_TOKEN
+                    path: admin-token
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -153,6 +171,8 @@ spec:
         spec:
           restartPolicy: Never
           automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 10001
           nodeSelector:
             kubernetes.io/hostname: rpi5
           containers:
@@ -163,17 +183,12 @@ spec:
                 - sh
                 - -c
                 - >-
-                  curl -fsS -o /dev/null --max-time 300 -XPOST
-                  -H "x-admin-token: $ADMIN_TOKEN"
+                  token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
+                  printf 'header = "x-admin-token: %s"\n' "$token" |
+                  curl --config - -fsS -o /dev/null --max-time 300 -XPOST
                   -H "content-type: application/json"
                   --data '{"backfill":false}'
                   http://backoffice.platform.svc.cluster.local/api/admin/seed
-              env:
-                - name: ADMIN_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-secrets
-                      key: INTERNAL_ADMIN_TOKEN
               resources:
                 requests:
                   cpu: 10m
@@ -188,3 +203,15 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+              volumeMounts:
+                - name: admin-token
+                  mountPath: /var/run/secrets/seorilabs
+                  readOnly: true
+          volumes:
+            - name: admin-token
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: INTERNAL_ADMIN_TOKEN
+                    path: admin-token
