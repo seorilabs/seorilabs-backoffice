@@ -566,9 +566,9 @@ export const discoveryObservationSchema = z.object({
     targetKey: z.string().min(1).max(191),
     stack: z.string().min(1).max(191),
     market: z.string().min(1).max(64).optional(),
-    packageId: z.string().min(1).max(255).optional(),
-    bundleId: z.string().min(1).max(255).optional(),
-    configuration: jsonRecord.optional(),
+    packageId: z.string().min(1).max(255).nullish(),
+    bundleId: z.string().min(1).max(255).nullish(),
+    configuration: jsonRecord.nullish(),
   })).default([]),
 }).strict().superRefine((observation, context) => {
   const seenTargetKeys = new Set<string>();

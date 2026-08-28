@@ -9,6 +9,11 @@ import {
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
+import {
+  BUILD_TARGET_MARKETS,
+  exactBuildTargetIdentity,
+  type BuildTargetMarket,
+} from "@/lib/control-plane/build-target-identity";
 
 export class ControlPlaneError extends Error {
   constructor(
@@ -93,9 +98,9 @@ export function discoveryObservationRequestHash(input: {
     targetKey: string;
     stack: string;
     market?: string;
-    packageId?: string;
-    bundleId?: string;
-    configuration?: Record<string, unknown>;
+    packageId?: string | null;
+    bundleId?: string | null;
+    configuration?: Record<string, unknown> | null;
   }>;
 }): string {
   return jsonDigest({
@@ -218,9 +223,9 @@ export type DiscoveryObservationInput = {
     targetKey: string;
     stack: string;
     market?: string;
-    packageId?: string;
-    bundleId?: string;
-    configuration?: Record<string, unknown>;
+    packageId?: string | null;
+    bundleId?: string | null;
+    configuration?: Record<string, unknown> | null;
   }>;
 };
 
@@ -281,11 +286,11 @@ export async function recordDiscoveryObservationInTransaction(
         targetKey: target.targetKey,
         stack: target.stack,
         market,
-        packageId: target.packageId,
-        bundleId: target.bundleId,
+        packageId: target.packageId ?? null,
+        bundleId: target.bundleId ?? null,
         observedSha: input.sourceSha.toLowerCase(),
         observedAt: input.observedAt,
-        configuration: target.configuration ? jsonInput(target.configuration) : undefined,
+        configuration: target.configuration ? jsonInput(target.configuration) : Prisma.DbNull,
       },
       update: {},
     });
@@ -298,11 +303,11 @@ export async function recordDiscoveryObservationInTransaction(
       data: {
         stack: target.stack,
         market,
-        packageId: target.packageId,
-        bundleId: target.bundleId,
+        packageId: target.packageId ?? null,
+        bundleId: target.bundleId ?? null,
         observedSha: input.sourceSha.toLowerCase(),
         observedAt: input.observedAt,
-        configuration: target.configuration ? jsonInput(target.configuration) : Prisma.JsonNull,
+        configuration: target.configuration ? jsonInput(target.configuration) : Prisma.DbNull,
       },
     });
   }
@@ -808,7 +813,21 @@ export async function resolveManifest(input: {
     packageManager: discovery.workflowPackageManager,
     workingDirectory: discovery.workflowWorkingDirectory,
   });
-  const market = input.market?.toLowerCase();
+  const configPayload = configRevisionPayloadSchema.parse(revision.payload);
+  const requestedMarket = input.market?.toLowerCase();
+  if (
+    requestedMarket
+    && !BUILD_TARGET_MARKETS.includes(requestedMarket as BuildTargetMarket)
+  ) {
+    throw new ControlPlaneError("지원하지 않는 market입니다.", 409, "MARKET_NOT_ENABLED");
+  }
+  const market = requestedMarket as BuildTargetMarket | undefined;
+  const enabledMarkets = configPayload.markets
+    .filter((profile) => profile.enabled)
+    .map((profile) => profile.market);
+  if (market && !enabledMarkets.includes(market)) {
+    throw new ControlPlaneError("ACTIVE revision에서 활성화된 market이 아닙니다.", 409, "MARKET_NOT_ENABLED");
+  }
   const [buildTargets, externalBindings, providerRows, platformFleet] = await Promise.all([
     prisma.buildTarget.findMany({
       where: {
@@ -832,6 +851,28 @@ export async function resolveManifest(input: {
   for (const row of providerRows) {
     const key = `${row.provider}:${row.resourceType}:${row.resourceId}`;
     if (!latestProvider.has(key)) latestProvider.set(key, row);
+  }
+  for (const requiredMarket of market ? [market] : enabledMarkets) {
+    const identity = exactBuildTargetIdentity(buildTargets, requiredMarket, externalBindings);
+    if (identity.status === "TARGET_MISSING" || identity.status === "TARGET_AMBIGUOUS") {
+      throw new ControlPlaneError(
+        "요청한 source SHA와 market에 고정된 BuildTarget이 하나 필요합니다.",
+        409,
+        "BUILD_TARGET_MISMATCH",
+      );
+    }
+    if (identity.status !== "READY") {
+      const code = identity.status === "EXTERNAL_BINDING_AMBIGUOUS"
+        ? "BUILD_IDENTITY_AMBIGUOUS"
+        : identity.status === "IDENTITY_CONFLICT"
+          ? "BUILD_IDENTITY_CONFLICT"
+          : "BUILD_IDENTITY_MISSING";
+      throw new ControlPlaneError(
+        "요청한 source SHA와 provider application binding의 공개 build identity를 확정할 수 없습니다.",
+        409,
+        code,
+      );
+    }
   }
   return {
     schemaVersion: 1,

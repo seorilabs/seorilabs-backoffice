@@ -16,12 +16,13 @@ import {
 } from "@/lib/control-plane/repository-classification";
 import type { WorkflowCaller } from "@/lib/control-plane/contracts";
 
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v4";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v5";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
 export const REPOSITORY_DISCOVERY_MAX_ATTEMPTS = 3;
 export const REPOSITORY_DISCOVERY_MAX_TREE_ENTRIES = 20_000;
+export const REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH = 64;
 export const REPOSITORY_DISCOVERY_MAX_PACKAGE_FILES = 25;
 export const REPOSITORY_DISCOVERY_MAX_CONFIG_FILES = 96;
 export const REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES = 1024 * 1024;
@@ -111,9 +112,9 @@ export interface RepositoryDiscoveryBuildTarget {
   targetKey: string;
   stack: "react-native" | "godot";
   market: "google-play" | "app-store" | "apps-in-toss";
-  packageId?: string;
-  bundleId?: string;
-  configuration?: Record<string, unknown>;
+  packageId: string | null;
+  bundleId: string | null;
+  configuration: Record<string, unknown> | null;
 }
 
 export interface RepositoryDiscoveryCandidate {
@@ -228,7 +229,8 @@ function safeTreePath(path: unknown): path is string {
   if (typeof path !== "string" || path.length === 0 || path.length > 512) return false;
   if (path.startsWith("/") || path.includes("\\") || path.includes("\0")) return false;
   const parts = path.split("/");
-  return parts.length <= 12 && parts.every((part) => part.length > 0 && part !== "." && part !== "..");
+  return parts.length <= REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH
+    && parts.every((part) => part.length > 0 && part !== "." && part !== "..");
 }
 
 function validRepoId(repoId: number): boolean {
@@ -656,21 +658,19 @@ function parsePackage(path: string, text: string): ParsedPackage | null {
 }
 
 function isPrimaryReactNativePackage(pkg: ParsedPackage): boolean {
-  if (
-    pkg.directory === "apps/ait"
-    || pkg.directory.startsWith("apps/ait/")
-    || pkg.directory === "ait"
-    || pkg.directory.startsWith("ait/")
-    || pkg.directory === "apps-in-toss"
-    || pkg.directory.startsWith("apps-in-toss/")
-  ) return false;
   return [pkg.dependencies, pkg.devDependencies].some((dependencies) =>
     typeof dependencies["react-native"] === "string" || typeof dependencies.expo === "string"
   );
 }
 
 function isAppsInTossPackage(pkg: ParsedPackage): boolean {
-  return [pkg.dependencies, pkg.devDependencies].some((dependencies) => (
+  const deliveryDirectory = pkg.directory === "apps/ait"
+    || pkg.directory.startsWith("apps/ait/")
+    || pkg.directory === "ait"
+    || pkg.directory.startsWith("ait/")
+    || pkg.directory === "apps-in-toss"
+    || pkg.directory.startsWith("apps-in-toss/");
+  return deliveryDirectory || [pkg.dependencies, pkg.devDependencies].some((dependencies) => (
     typeof dependencies["@apps-in-toss/framework"] === "string"
     || typeof dependencies["@granite-js/react-native"] === "string"
   ));
@@ -1231,25 +1231,23 @@ export async function discoverRepository(
       return needsInput(snapshot, "BUILD_IDENTITY_AMBIGUOUS", candidates, sourceMetadata);
     }
     if (androidPaths.length > 0) {
-      if (!androidIds[0]) {
-        return needsInput(snapshot, "BUILD_IDENTITY_MISSING", candidates, sourceMetadata);
-      }
       buildTargets.push({
         targetKey: "android",
         stack,
         market: "google-play",
-        ...(androidIds[0] ? { packageId: androidIds[0] } : {}),
+        packageId: androidIds[0] ?? null,
+        bundleId: null,
+        configuration: null,
       });
     }
     if (iosPaths.length > 0) {
-      if (!iosIds[0]) {
-        return needsInput(snapshot, "BUILD_IDENTITY_MISSING", candidates, sourceMetadata);
-      }
       buildTargets.push({
         targetKey: "ios",
         stack,
         market: "app-store",
-        ...(iosIds[0] ? { bundleId: iosIds[0] } : {}),
+        packageId: null,
+        bundleId: iosIds[0] ?? null,
+        configuration: null,
       });
     }
   } else {
@@ -1270,15 +1268,14 @@ export async function discoverRepository(
       || /^AAB_PATH=/m.test(buildEnv);
     const hasIosTarget = presets.some((preset) => preset.platform === "iOS")
       || pathSet.has(pathIn(candidate.workingDirectory, "ios/ci_scripts/ci_post_clone.sh"));
-    if ((hasAndroidTarget && !androidIds[0]) || (hasIosTarget && !iosIds[0])) {
-      return needsInput(snapshot, "BUILD_IDENTITY_MISSING", candidates, sourceMetadata);
-    }
     if (hasAndroidTarget) {
       buildTargets.push({
         targetKey: "android",
         stack,
         market: "google-play",
-        ...(androidIds[0] ? { packageId: androidIds[0] } : {}),
+        packageId: androidIds[0] ?? null,
+        bundleId: null,
+        configuration: null,
       });
     }
     if (hasIosTarget) {
@@ -1286,7 +1283,9 @@ export async function discoverRepository(
         targetKey: "ios",
         stack,
         market: "app-store",
-        ...(iosIds[0] ? { bundleId: iosIds[0] } : {}),
+        packageId: null,
+        bundleId: iosIds[0] ?? null,
+        configuration: null,
       });
     }
   }
@@ -1298,14 +1297,13 @@ export async function discoverRepository(
     if (appNames.length > 1) {
       return needsInput(snapshot, "BUILD_IDENTITY_AMBIGUOUS", candidates, sourceMetadata);
     }
-    if (!appNames[0]) {
-      return needsInput(snapshot, "BUILD_IDENTITY_MISSING", candidates, sourceMetadata);
-    }
     buildTargets.push({
       targetKey: "ait",
       stack,
       market: "apps-in-toss",
-      ...(appNames[0] ? { configuration: { appName: appNames[0] } } : {}),
+      packageId: null,
+      bundleId: null,
+      configuration: appNames[0] ? { appName: appNames[0] } : null,
     });
   }
 
