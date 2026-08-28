@@ -4,7 +4,10 @@ import { join, resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 
 import {
-  verifyAppendOnlyTriggers,
+  REQUIRED_APPEND_ONLY_TRIGGERS,
+  evaluateAppendOnlyTriggers,
+  triggerVisibilityFromGrants,
+  type AppendOnlyTriggerVerification,
   type ObservedTrigger,
 } from "@/lib/control-plane/append-only-triggers";
 
@@ -476,7 +479,21 @@ async function readSchemaContract(prisma: PrismaClient): Promise<SchemaContract>
   };
 }
 
-async function verifyLiveAppendOnlyTriggers(prisma: PrismaClient): Promise<number> {
+async function verifyLiveAppendOnlyTriggers(
+  prisma: PrismaClient,
+): Promise<AppendOnlyTriggerVerification> {
+  const [schemaRow] = await prisma.$queryRawUnsafe<Array<{ schemaName: string }>>(
+    "SELECT DATABASE() AS schemaName",
+  );
+  const grantRows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    "SHOW GRANTS FOR CURRENT_USER()",
+  );
+  const grants = grantRows.map((row) => String(Object.values(row)[0] ?? ""));
+  const visibility = triggerVisibilityFromGrants(
+    grants,
+    schemaRow.schemaName,
+    REQUIRED_APPEND_ONLY_TRIGGERS,
+  );
   const observed = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
     SELECT
       TRIGGER_NAME AS name,
@@ -488,15 +505,16 @@ async function verifyLiveAppendOnlyTriggers(prisma: PrismaClient): Promise<numbe
     WHERE TRIGGER_SCHEMA = DATABASE()
     ORDER BY TRIGGER_NAME
   `);
-  return verifyAppendOnlyTriggers(
-    observed.map((row): ObservedTrigger => ({
+  return evaluateAppendOnlyTriggers({
+    visibility,
+    observed: observed.map((row): ObservedTrigger => ({
       name: String(row.name ?? ""),
       table: String(row.tableName ?? ""),
       event: String(row.event ?? ""),
       timing: String(row.timing ?? ""),
       statement: String(row.statement ?? ""),
     })),
-  );
+  });
 }
 
 function verifyContract(actual: SchemaContract): void {
@@ -571,9 +589,14 @@ async function main(): Promise<void> {
       process.stdout.write(`${JSON.stringify(contract, null, 2)}\n`);
     } else {
       verifyContract(contract);
-      const appendOnlyTriggers = historyMode === "legacy"
-        ? 0
+      const appendOnly = historyMode === "legacy"
+        ? null
         : await verifyLiveAppendOnlyTriggers(prisma);
+      const appendOnlyTriggers = appendOnly === null
+        ? "skipped"
+        : appendOnly.visibility === "FORBIDDEN"
+          ? "FORBIDDEN(migration principal에 TRIGGER 권한 없음, trusted operator Job이 검증)"
+          : String(appendOnly.verified);
       console.log(
         `migration/schema 계약 통과: mode=${historyMode} rows=${history.length} tables=${contract.tables.count} columns=${contract.columns.count} indexes=${contract.indexes.count} foreignKeys=${contract.foreignKeys.count} appendOnlyTriggers=${appendOnlyTriggers}`,
       );

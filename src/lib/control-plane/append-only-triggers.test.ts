@@ -7,6 +7,8 @@ import {
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   parseAppendOnlyTriggers,
+  evaluateAppendOnlyTriggers,
+  triggerVisibilityFromGrants,
   verifyAppendOnlyTriggers,
   type ObservedTrigger,
 } from "@/lib/control-plane/append-only-triggers";
@@ -127,6 +129,69 @@ test("보호 대상이 아닌 table의 trigger는 무시한다", () => {
 test("배포 gate script가 live trigger readback을 수행한다", () => {
   const script = readFileSync(join(process.cwd(), "scripts/verify-migration-state.ts"), "utf8");
   assert.match(script, /information_schema\.TRIGGERS/);
-  assert.match(script, /verifyAppendOnlyTriggers/);
+  assert.match(script, /evaluateAppendOnlyTriggers/);
   assert.match(script, /appendOnlyTriggers=\$\{appendOnlyTriggers\}/);
+});
+
+test("TRIGGER 권한이 없는 principal은 FORBIDDEN이다", () => {
+  // production `backoffice`@`%`의 실제 SHOW GRANTS 출력이다.
+  const grants = [
+    "GRANT USAGE ON *.* TO `backoffice`@`%`",
+    "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER ON `backoffice`.* TO `backoffice`@`%`",
+  ];
+  assert.equal(triggerVisibilityFromGrants(grants, "backoffice"), "FORBIDDEN");
+});
+
+test("schema 또는 전역 TRIGGER 권한은 VISIBLE이다", () => {
+  assert.equal(
+    triggerVisibilityFromGrants(["GRANT SELECT, TRIGGER ON `backoffice`.* TO `u`@`%`"], "backoffice"),
+    "VISIBLE",
+  );
+  assert.equal(
+    triggerVisibilityFromGrants(["GRANT ALL PRIVILEGES ON *.* TO `root`@`localhost` WITH GRANT OPTION"], "backoffice"),
+    "VISIBLE",
+  );
+  assert.equal(
+    triggerVisibilityFromGrants(["GRANT TRIGGER ON `other`.* TO `u`@`%`"], "backoffice"),
+    "FORBIDDEN",
+  );
+});
+
+test("보호 table 전부에 table 단위 TRIGGER 권한이 있어야 VISIBLE이다", () => {
+  const table = REQUIRED_APPEND_ONLY_TRIGGERS[0].table;
+  const partial = [`GRANT TRIGGER ON \`backoffice\`.\`${table}\` TO \`u\`@\`%\``];
+  assert.equal(triggerVisibilityFromGrants(partial, "backoffice"), "VISIBLE");
+  assert.equal(
+    triggerVisibilityFromGrants(
+      [`GRANT TRIGGER ON \`backoffice\`.\`unrelated\` TO \`u\`@\`%\``],
+      "backoffice",
+    ),
+    "FORBIDDEN",
+  );
+});
+
+test("FORBIDDEN은 부재로 단정하지 않고 배포를 막지 않는다", () => {
+  assert.deepEqual(
+    evaluateAppendOnlyTriggers({ visibility: "FORBIDDEN", observed: [] }),
+    { visibility: "FORBIDDEN", verified: 0 },
+  );
+});
+
+test("VISIBLE에서는 기존 fail-closed 계약이 그대로 적용된다", () => {
+  assert.deepEqual(
+    evaluateAppendOnlyTriggers({ visibility: "VISIBLE", observed: compliantObservation() }),
+    { visibility: "VISIBLE", verified: REQUIRED_APPEND_ONLY_TRIGGERS.length },
+  );
+  assert.throws(
+    () => evaluateAppendOnlyTriggers({ visibility: "VISIBLE", observed: [] }),
+    /missing:/,
+  );
+});
+
+test("배포 gate script는 권한을 먼저 읽고 FORBIDDEN을 구분해 출력한다", () => {
+  const script = readFileSync(join(process.cwd(), "scripts/verify-migration-state.ts"), "utf8");
+  assert.match(script, /SHOW GRANTS FOR CURRENT_USER\(\)/);
+  assert.match(script, /triggerVisibilityFromGrants/);
+  assert.match(script, /evaluateAppendOnlyTriggers/);
+  assert.match(script, /FORBIDDEN\(migration principal에 TRIGGER 권한 없음/);
 });

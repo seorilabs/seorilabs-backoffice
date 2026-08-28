@@ -112,6 +112,14 @@ fail-closed한다. 계약은 `src/lib/control-plane/append-only-triggers.ts`이�
 같아야 한다. 보호 table에 계약 밖 trigger가 추가돼도 실패한다. 성공 로그의
 `appendOnlyTriggers=<n>`이 검증된 trigger 수다.
 
+MySQL은 대상 table의 `TRIGGER` 권한이 없는 principal에게 `information_schema.TRIGGERS`를 빈
+결과로 돌려준다. 그래서 gate는 관측 전에 `SHOW GRANTS FOR CURRENT_USER()`로 가시성을 먼저
+판정하고 권한 부족을 리소스 부재로 읽지 않는다. production migration principal
+`backoffice`@`%`에는 `TRIGGER` 권한이 없으므로 로그는
+`appendOnlyTriggers=FORBIDDEN(...)`이 되고 배포는 계속된다. 이 상태에서 trigger 설치와 검증은
+위 trusted operator 복구 Job이 담당한다. principal에 schema 또는 보호 table 전체의 `TRIGGER`
+권한이 부여되면 같은 gate가 자동으로 fail-closed 검증으로 승격된다.
+
 ### Provider execution signer 활성화
 
 `k8s/provider-execution-worker.yaml`은 signer와 worker를 모두 기본 `replicas: 0`으로 둔다.

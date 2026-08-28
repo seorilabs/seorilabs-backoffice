@@ -91,7 +91,9 @@ mutation용 identity와 readback identity는 logical credential ID와 공개 ide
 하나라도 같으면 enqueue 전에 fail-closed한다. 실행 감사 event는 FK `RESTRICT`와 MySQL UPDATE/DELETE
 거부 trigger로 append-only를 강제한다. migration principal에 `CREATE TRIGGER` 권한이 없으면 배포가 중단된다.
 배포 gate는 migration 적용 뒤 live DB의 trigger를 다시 읽어 계약과 정확히 같은지 확인하며, baseline이나
-recovery resolve로 migration row만 성공 처리된 경우에도 trigger가 없으면 fail-closed한다.
+recovery resolve로 migration row만 성공 처리된 경우에도 trigger가 없으면 fail-closed한다. 관측 principal에
+`TRIGGER` 권한이 없으면 MySQL이 빈 결과를 주므로, gate는 grant를 먼저 읽어 `FORBIDDEN` 가시성과 리소스
+부재를 분리하고 권한 부족을 부재로 기록하지 않는다.
 
 - `READBACK`은 사전 승인 가능한 fleet inventory identity만 사용한다.
 - production mutation, IAM, Workspace domain-wide delegation은 매 실행마다 Backoffice의 app-scoped 사람
