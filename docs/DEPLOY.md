@@ -131,9 +131,10 @@ kubectl -n platform create job \
 ## 6. 운영 메모
 - 라이프사이클 상태는 GitHub 에 없음 → `backoffice-db-backup` CronJob(일 1회) 유지. 복구 시 dump restore 후 reconcile.
 - full-org repository discovery backfill, reconcile, Xcode Cloud sync, registry seed, Platform Fleet 조정은 `scheduler-cronjobs.yaml`이 각각
-  `concurrencyPolicy: Forbid`로 실행한다. 배포는 기존 scheduler를 suspend/drain한 뒤 CronJob만
-  orphan 삭제한다. 다섯 작업의 one-shot 직렬 catch-up을 마친 다음 CronJob을 새로 생성하므로
-  suspend 중 놓친 시각이 재개 직후 중복 실행되지 않는다. 보존된 Job은 TTL로 정리되며 웹
+  `concurrencyPolicy: Forbid`로 실행한다. 배포는 웹과 worker 전환 뒤 CronJob desired state를
+  먼저 적용하고, 그 다음 다섯 작업의 one-shot 직렬 catch-up을 실행한다. 배포 runner나
+  catch-up이 실패해도 정기 scheduler를 delete 또는 suspend하지 않는다. 같은 시각 실행은
+  endpoint의 durable idempotency/CAS로 한 번만 반영되고, 보존된 Job은 TTL로 정리된다. 웹
   프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
   stdin으로 전달하며 환경변수나 argv에 넣지 않는다.
 - Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
@@ -144,8 +145,8 @@ kubectl -n platform create job \
 `-arm64` 러너에서 Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너에서
 production 이미지를 한 번만 빌드/push하고 build output digest를 `-arm64` 배포에 넘긴다.
 `verify → build → deploy` 의존성으로 검증 실패 commit은 이미지 빌드나 배포를 시작하지 않는다.
-deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler catch-up →
-CronJob 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
+deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler CronJob →
+catch-up 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
 
 > 2026-08-27 실측에서 cluster control plane은 `--authorization-mode=AlwaysAllow`였다.
 > 따라서 아래 Role은 [조직 P0 #45](https://github.com/seorilabs/.github/issues/45)가

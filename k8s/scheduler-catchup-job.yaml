@@ -1,5 +1,6 @@
-# 웹과 worker가 exact digest로 전환된 뒤, 정기 CronJob을 재개하기 전에 다섯 작업을
-# 한 번씩 직렬 실행한다. 응답 body는 로그에 남기지 않고 실패 여부만 기록한다.
+# 웹과 worker가 exact digest로 전환되고 정기 CronJob desired state를 확인한 뒤,
+# 다섯 작업을 한 번씩 직렬 실행한다. 정기 실행과 겹치더라도 endpoint의 durable
+# idempotency/CAS가 한 번만 반영하며, 응답 body는 로그에 남기지 않는다.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -38,11 +39,19 @@ spec:
               call() {
                 label="$1"
                 shift
-                if printf 'header = "x-admin-token: %s"\n' "$token" | \
-                  curl --config - -sS -f -o /dev/null "$@"; then
-                  echo "$label=ok"
+                status=""
+                if status="$(printf 'header = "x-admin-token: %s"\n' "$token" | \
+                  curl --config - -sS -o /dev/null -w '%{http_code}' "$@")"; then
+                  case "$status" in
+                    2??) echo "$label=ok" ;;
+                    409) echo "$label=busy" ;;
+                    *)
+                      echo "$label=failed_http_$status" >&2
+                      failed=1
+                      ;;
+                  esac
                 else
-                  echo "$label=failed" >&2
+                  echo "$label=failed_transport" >&2
                   failed=1
                 fi
               }

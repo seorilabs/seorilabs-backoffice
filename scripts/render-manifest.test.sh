@@ -213,6 +213,7 @@ fi
 if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q 'ttlSecondsAfterFinished: 604800' "$catchup_job" &&
    grep -q 'curlimages/curl@sha256:' "$catchup_job" &&
+   grep -q '409) echo "$label=busy"' "$catchup_job" &&
    grep -q 'repository-discovery/backfill' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then

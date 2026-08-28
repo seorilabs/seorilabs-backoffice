@@ -11,10 +11,7 @@ source_sha="${BACKOFFICE_SOURCE_SHA:-}"
 migration_timeout="${BACKOFFICE_MIGRATION_TIMEOUT_SECONDS:-300}"
 migration_poll="${BACKOFFICE_MIGRATION_POLL_SECONDS:-2}"
 rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
-scheduler_drain_timeout="${BACKOFFICE_SCHEDULER_DRAIN_TIMEOUT_SECONDS:-960}"
-scheduler_drain_settle="${BACKOFFICE_SCHEDULER_DRAIN_SETTLE_SECONDS:-15}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-2460}"
-catchup_quiesce_timeout="${BACKOFFICE_CATCHUP_QUIESCE_TIMEOUT_SECONDS:-180}"
 
 if [ -z "$image" ]; then
   echo "오류: BACKOFFICE_IMAGE가 필요하다" >&2
@@ -29,16 +26,12 @@ if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "오류: BACKOFFICE_SOURCE_SHA는 40자리 git SHA여야 한다" >&2
   exit 2
 fi
-for value in "$migration_timeout" "$scheduler_drain_timeout" "$catchup_timeout" "$catchup_quiesce_timeout"; do
+for value in "$migration_timeout" "$catchup_timeout"; do
   if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
     echo "오류: Job timeout은 양의 정수여야 한다" >&2
     exit 2
   fi
 done
-if [[ ! "$scheduler_drain_settle" =~ ^[0-9]+$ ]]; then
-  echo "오류: BACKOFFICE_SCHEDULER_DRAIN_SETTLE_SECONDS는 0 이상의 정수여야 한다" >&2
-  exit 2
-fi
 if [ "$catchup_timeout" -lt 2400 ]; then
   echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 2400이어야 한다" >&2
   exit 2
@@ -137,21 +130,6 @@ scheduler_cronjobs=(
   backoffice-automation-scheduler
   backoffice-platform-fleet
 )
-scheduler_restore_needed=false
-scheduler_restore_safe=true
-
-cronjob_exists() {
-  local cronjob="$1"
-  local result
-  if result="$(k -n "$namespace" get "cronjob/$cronjob" -o name 2>&1)"; then
-    return 0
-  fi
-  if [[ "$result" == *NotFound* ]]; then
-    return 1
-  fi
-  echo "오류: cronjob/$cronjob 조회 실패: $result" >&2
-  return 2
-}
 
 verify_schedulers_resumed() {
   local cronjob suspended result
@@ -174,86 +152,6 @@ restore_scheduler_manifests() {
     return 1
   fi
   verify_schedulers_resumed
-}
-
-restore_schedulers_on_exit() {
-  local code=$?
-  trap - EXIT
-  if [ "$scheduler_restore_needed" = true ]; then
-    if [ "$scheduler_restore_safe" != true ]; then
-      echo "치명적 오류: catch-up Job 종료를 확인하지 못해 scheduler CronJob을 재개하지 않는다" >&2
-      echo "중복 실행을 막기 위해 operator가 Job 종료 확인 후 scheduler-cronjobs.yaml을 적용해야 한다" >&2
-      code=1
-    elif ! restore_scheduler_manifests; then
-      echo "배포 중단 — scheduler CronJob 매니페스트 복구 실패" >&2
-      echo "치명적 오류: scheduler CronJob 자동 복구를 확인하지 못했다" >&2
-      code=1
-    fi
-  fi
-  exit "$code"
-}
-
-wait_for_job_quiescent() {
-  local job_name="$1"
-  local deadline=$((SECONDS + catchup_quiesce_timeout))
-  local conditions
-  while (( SECONDS < deadline )); do
-    if ! conditions="$(k -n "$namespace" get job "$job_name" -o 'jsonpath={range .status.conditions[*]}{.type}={.status}{"\n"}{end}' 2>&1)"; then
-      echo "오류: scheduler catch-up 종료 확인 실패: $conditions" >&2
-      return 1
-    fi
-    if [[ "$conditions" == *"Complete=True"* || "$conditions" == *"Failed=True"* ]]; then
-      return 0
-    fi
-    sleep "$migration_poll"
-  done
-  echo "오류: scheduler catch-up Job terminal 상태를 확인하지 못했다" >&2
-  return 1
-}
-trap restore_schedulers_on_exit EXIT
-
-suspend_and_drain_schedulers() {
-  local cronjob code active deadline
-  for cronjob in "${scheduler_cronjobs[@]}"; do
-    if cronjob_exists "$cronjob"; then
-      # patch 결과가 timeout으로 불명이어도 복구하도록 mutation 전에 세운다.
-      scheduler_restore_needed=true
-      k -n "$namespace" patch "cronjob/$cronjob" --type=merge \
-        -p '{"spec":{"suspend":true}}' >/dev/null
-    else
-      code=$?
-      [ "$code" -eq 1 ] || return "$code"
-    fi
-  done
-
-  # CronJob controller가 마지막 Job 생성과 .status.active 반영을 끝낼 시간을 준다.
-  sleep "$scheduler_drain_settle"
-  deadline=$((SECONDS + scheduler_drain_timeout))
-  while (( SECONDS < deadline )); do
-    active=""
-    for cronjob in "${scheduler_cronjobs[@]}"; do
-      if cronjob_exists "$cronjob"; then
-        active+="$(k -n "$namespace" get "cronjob/$cronjob" -o 'jsonpath={range .status.active[*]}{.name}{" "}{end}')"
-      else
-        code=$?
-        [ "$code" -eq 1 ] || return "$code"
-      fi
-    done
-    [ -z "${active// }" ] && return 0
-    sleep "$migration_poll"
-  done
-  echo "오류: scheduler CronJob drain timeout: ${scheduler_drain_timeout}s" >&2
-  return 1
-}
-
-reset_scheduler_cronjobs() {
-  # suspend 중 놓친 시각은 재개 시 즉시 실행될 수 있다. active Job을 drain한 뒤
-  # CronJob만 orphan 삭제하고 catch-up 완료 후 새로 생성해 missed schedule을 없앤다.
-  scheduler_restore_needed=true
-  k -n "$namespace" delete cronjob \
-    "${scheduler_cronjobs[@]}" \
-    --ignore-not-found=true \
-    --cascade=orphan >/dev/null
 }
 
 echo "== pre-deploy migration =="
@@ -293,36 +191,26 @@ wait_for_deployment backoffice-teammate-worker
 apply_image_manifest repository-discovery-worker.yaml
 wait_for_deployment backoffice-repository-discovery-worker
 
-echo "== scheduler drain and catch-up =="
-# 첫 전환에서는 old in-process scheduler Pod가 사라진 뒤 실행된다. 이후에는 기존
-# CronJob을 잠시 suspend하고 active Job을 비운 뒤 one-shot과 정기 실행의 중복을 막는다.
-suspend_and_drain_schedulers
-reset_scheduler_cronjobs
+echo "== continuously available scheduler manifests =="
+# 정기 scheduler를 먼저 exact manifest로 수렴시킨다. 이후 runner나 catch-up이
+# 중단돼도 CronJob은 삭제·suspend되지 않는다. catch-up과 같은 시각의 정기 실행은
+# 각 endpoint의 durable idempotency/CAS 계약으로 한 번만 반영된다.
+restore_scheduler_manifests
+
+echo "== scheduler catch-up =="
 catchup_manifest="$(render scheduler-catchup-job.yaml)"
-# create가 서버에는 반영된 뒤 응답만 유실될 수 있으므로 mutation 전에 unsafe로 둔다.
-# 이름을 확인하지 못하면 중복 방지를 위해 CronJob 자동 재개 대신 operator 확인으로 멈춘다.
-scheduler_restore_safe=false
 catchup_ref="$(printf '%s\n' "$catchup_manifest" | k create -f - -o name)"
 catchup_name="${catchup_ref##*/}"
 if [ -z "$catchup_name" ]; then
   echo "오류: 생성된 scheduler catch-up Job 이름을 읽지 못했다" >&2
   exit 1
 fi
-if ! wait_for_job scheduler-catchup "$catchup_name" "$catchup_timeout"; then
-  if wait_for_job_quiescent "$catchup_name"; then
-    scheduler_restore_safe=true
-  fi
-  exit 1
-fi
-scheduler_restore_safe=true
+wait_for_job scheduler-catchup "$catchup_name" "$catchup_timeout"
 catchup_sha="$(k -n "$namespace" get job "$catchup_name" -o 'jsonpath={.metadata.labels.seorilabs\.dev/source-sha}')"
 if [ "$catchup_sha" != "$source_sha" ]; then
   echo "오류: scheduler catch-up source SHA 불일치" >&2
   exit 1
 fi
-restore_scheduler_manifests
-scheduler_restore_needed=false
-
 echo "== endpoint CronJob manifests =="
 for manifest in \
   backup-cronjob.yaml \
