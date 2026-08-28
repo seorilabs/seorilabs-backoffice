@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   RELEASE_CANDIDATE_REQUIRED_GATES,
+  RELEASE_GATE_NAMES,
   type ReleaseGateName,
 } from "@/lib/control-plane/contracts";
 
@@ -86,6 +87,18 @@ export const GATE_IDENTITY_REQUIREMENT = {
   DEPLOYMENT: "providerReference",
   PUBLIC: "publicIdentity",
 } as const satisfies Record<ReleaseGateName, "none" | "providerReference" | "publicIdentity">;
+
+/**
+ * 외부 provider 단계에만 대응하는 gate다. 이 gate는 범용 release-gate 요청으로 만들 수 없고
+ * exact ProviderExecution settlement에서만 원장에 들어간다.
+ */
+export const EXTERNAL_RELEASE_GATES = RELEASE_GATE_NAMES.filter(
+  (gate) => !(RELEASE_CANDIDATE_REQUIRED_GATES as readonly string[]).includes(gate),
+);
+
+export function isExternalReleaseGate(gate: string): boolean {
+  return (EXTERNAL_RELEASE_GATES as readonly string[]).includes(gate);
+}
 
 export function lifecycleStageRank(stage: string): number {
   return (FLEET_LIFECYCLE_STAGES as readonly string[]).indexOf(stage);

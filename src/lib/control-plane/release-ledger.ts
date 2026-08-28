@@ -8,6 +8,7 @@ import {
 import {
   evidenceLifecycleStage,
   gateIdentitySatisfied,
+  isExternalReleaseGate,
   lifecycleStageRank,
   type GateObservationFact,
 } from "@/lib/control-plane/lifecycle-policy";
@@ -245,34 +246,260 @@ function gateObservationFact(row: {
   };
 }
 
+export interface ReleaseGateEvidence {
+  schemaVersion: 1;
+  sourceSha: string;
+  configRevision: number;
+  artifactChecksum: string;
+  providerReference?: string;
+  publicIdentity?: string;
+  note?: string;
+}
+
+/**
+ * 관측이 어느 경계에서 왔는지를 계약으로 고정한다.
+ * `PROVIDER_SETTLEMENT`는 provider execution transaction 안에서만 만들 수 있으며
+ * 호출자가 값을 직접 넘기는 HTTP 요청 경로에는 존재하지 않는다.
+ */
+export type ReleaseGateOrigin =
+  | { kind: "CANDIDATE_GATE" }
+  | {
+    kind: "PROVIDER_SETTLEMENT";
+    executionId: string;
+    observationId: string;
+    publicAccountId: string;
+    publicAppId: string;
+    bindingHash: string;
+  };
+
 function gateRequestHash(input: {
   candidateId: string;
   gate: ReleaseGateName;
   status: ReleaseGateStatus;
   observedAt: Date;
-  evidence: Record<string, unknown>;
+  evidence: ReleaseGateEvidence;
   actor: string;
 }): string {
   return jsonDigest({
     ...input,
     observedAt: input.observedAt.toISOString(),
-  } as JsonValue);
+  } as unknown as JsonValue);
 }
 
+/**
+ * append-only gate 원장에 한 관측을 쓰고 candidate status와 중앙 lifecycle을 같은 transaction에서 갱신한다.
+ * 범용 release-gate 요청과 실제 provider settlement가 이 helper 하나만 사용한다.
+ * 별도 validator나 두 번째 원장을 만들지 않는다.
+ */
+export async function appendReleaseGateObservation(input: {
+  tx: Prisma.TransactionClient;
+  candidateId: string;
+  gate: ReleaseGateName;
+  status: ReleaseGateStatus;
+  observedAt: Date;
+  evidence: ReleaseGateEvidence;
+  actor: string;
+  dedupeKey: string;
+  requestHash: string;
+  origin: ReleaseGateOrigin;
+}) {
+  const { tx } = input;
+  const candidate = await tx.releaseCandidate.findUnique({
+    where: { id: input.candidateId },
+    include: { configRevision: { select: { revision: true } } },
+  });
+  if (!candidate) throw new ControlPlaneError("Release candidate를 찾을 수 없습니다.", 404, "CANDIDATE_NOT_FOUND");
+  if (
+    candidate.sourceSha !== input.evidence.sourceSha.toLowerCase()
+    || candidate.configRevision.revision !== input.evidence.configRevision
+    || candidate.artifactChecksum !== input.evidence.artifactChecksum.toLowerCase()
+  ) {
+    throw new ControlPlaneError("Gate evidence가 candidate의 source/config/artifact와 일치하지 않습니다.", 409, "EVIDENCE_MISMATCH");
+  }
+  if (isExternalReleaseGate(input.gate) && input.origin.kind !== "PROVIDER_SETTLEMENT") {
+    throw new ControlPlaneError(
+      "외부 단계 gate는 exact ProviderExecution settlement에서만 기록할 수 있습니다.",
+      409,
+      "EXTERNAL_GATE_PROVIDER_ONLY",
+    );
+  }
+  if (!isExternalReleaseGate(input.gate) && input.origin.kind === "PROVIDER_SETTLEMENT") {
+    throw new ControlPlaneError(
+      "release-candidate gate는 provider settlement로 기록할 수 없습니다.",
+      409,
+      "CANDIDATE_GATE_PROVIDER_FORBIDDEN",
+    );
+  }
+  if (
+    input.status === "PASSED"
+    && !gateIdentitySatisfied({
+      gate: input.gate,
+      providerReference: input.evidence.providerReference ?? null,
+      publicIdentity: input.evidence.publicIdentity ?? null,
+    })
+  ) {
+    throw new ControlPlaneError(
+      "외부 단계 gate의 PASSED 관측에는 exact provider/public identity 증거가 필요합니다.",
+      409,
+      "GATE_IDENTITY_REQUIRED",
+    );
+  }
+
+  let evidence: Record<string, unknown> = { ...input.evidence };
+  if (input.origin.kind === "PROVIDER_SETTLEMENT") {
+    const origin = input.origin;
+    const execution = await tx.providerExecution.findUnique({
+      where: { id: origin.executionId },
+      select: {
+        id: true,
+        appId: true,
+        kind: true,
+        provider: true,
+        releaseCandidateId: true,
+        sourceSha: true,
+        configRevisionNumber: true,
+        artifactChecksum: true,
+        publicAccountId: true,
+        resourceId: true,
+        bindingHash: true,
+      },
+    });
+    if (
+      !execution
+      || execution.kind !== "MARKET_RELEASE"
+      || execution.releaseCandidateId !== candidate.id
+      || execution.appId !== candidate.appId
+      || execution.sourceSha !== candidate.sourceSha
+      || execution.configRevisionNumber !== candidate.configRevision.revision
+      || (execution.artifactChecksum ?? "") !== candidate.artifactChecksum
+      || execution.publicAccountId !== origin.publicAccountId
+      || execution.resourceId !== origin.publicAppId
+      || execution.bindingHash !== origin.bindingHash
+    ) {
+      throw new ControlPlaneError(
+        "gate 관측이 exact ProviderExecution binding과 일치하지 않습니다.",
+        409,
+        "PROVIDER_EXECUTION_BINDING_MISMATCH",
+      );
+    }
+    const providerObservation = await tx.providerObservation.findUnique({
+      where: { id: origin.observationId },
+      select: { id: true, appId: true, provider: true, resourceId: true },
+    });
+    if (
+      !providerObservation
+      || providerObservation.appId !== execution.appId
+      || providerObservation.provider !== execution.provider
+      || providerObservation.resourceId !== execution.resourceId
+    ) {
+      throw new ControlPlaneError(
+        "gate 관측이 signed provider readback observation과 결합되지 않았습니다.",
+        409,
+        "PROVIDER_OBSERVATION_BINDING_MISMATCH",
+      );
+    }
+    if (input.evidence.publicIdentity !== `${origin.publicAccountId}/${origin.publicAppId}`) {
+      throw new ControlPlaneError(
+        "provider account/team/workspace 또는 app identity가 일치하지 않습니다.",
+        409,
+        "PROVIDER_IDENTITY_MISMATCH",
+      );
+    }
+    // 호출자가 넣을 수 없는 서버 파생 provenance만 원장에 덧붙인다.
+    evidence = {
+      ...evidence,
+      providerExecutionId: execution.id,
+      providerObservationId: providerObservation.id,
+    };
+  }
+
+  const observation = await tx.releaseGateObservation.create({
+    data: {
+      candidateId: candidate.id,
+      gate: input.gate,
+      status: input.status,
+      evidence: jsonInput(evidence),
+      dedupeKey: input.dedupeKey,
+      requestHash: input.requestHash,
+      observedBy: input.actor,
+      observedAt: input.observedAt,
+    },
+  });
+  const observations = await tx.releaseGateObservation.findMany({
+    where: { candidateId: candidate.id },
+    select: { gate: true, status: true, observedAt: true, createdAt: true, id: true, evidence: true },
+  });
+  const candidateStatus = releaseCandidateStatus(observations);
+  await tx.releaseCandidate.update({ where: { id: candidate.id }, data: { status: candidateStatus } });
+  const evidenceStage = evidenceLifecycleStage(observations.map(gateObservationFact));
+  if (evidenceStage) {
+    const state = await tx.fleetLifecycleState.findUnique({ where: { appId: candidate.appId } });
+    if (!state || lifecycleStageRank(state.stage) < lifecycleStageRank(evidenceStage)) {
+      await tx.fleetLifecycleState.upsert({
+        where: { appId: candidate.appId },
+        create: {
+          appId: candidate.appId,
+          stage: evidenceStage,
+          sourceSha: candidate.sourceSha,
+          configRevisionId: candidate.configRevisionId,
+          generation: 1,
+        },
+        update: {
+          stage: evidenceStage,
+          sourceSha: candidate.sourceSha,
+          configRevisionId: candidate.configRevisionId,
+          generation: { increment: 1 },
+        },
+      });
+      await tx.fleetLifecycleEvent.upsert({
+        where: { idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}` },
+        create: {
+          appId: candidate.appId,
+          fromStage: state?.stage,
+          toStage: evidenceStage,
+          sourceSha: candidate.sourceSha,
+          configRevisionId: candidate.configRevisionId,
+          actor: input.actor,
+          idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}`,
+          evidence: { candidateId: candidate.id, gate: input.gate, observationId: observation.id },
+        },
+        update: {},
+      });
+    }
+  }
+  await tx.auditLog.create({
+    data: {
+      actorLogin: input.actor,
+      action: "control-plane.release-gate.record",
+      entityType: "ReleaseGateObservation",
+      entityId: observation.id,
+      payload: {
+        candidateId: candidate.id,
+        gate: input.gate,
+        status: input.status,
+        origin: input.origin.kind,
+        candidateStatus,
+        lifecycleStage: evidenceStage,
+        sourceSha: candidate.sourceSha,
+        configRevision: candidate.configRevision.revision,
+        artifactChecksum: candidate.artifactChecksum,
+        providerExecutionId: input.origin.kind === "PROVIDER_SETTLEMENT" ? input.origin.executionId : null,
+      },
+    },
+  });
+  return { observation, candidateStatus, lifecycleStage: evidenceStage };
+}
+
+/**
+ * 범용 control-plane release-gate 요청 경로다.
+ * release-candidate를 만드는 6개 gate만 받으며 외부 단계 gate는 helper가 거부한다.
+ */
 export async function recordReleaseGateObservation(input: {
   candidateId: string;
   gate: ReleaseGateName;
   status: ReleaseGateStatus;
   observedAt: Date;
-  evidence: {
-    schemaVersion: 1;
-    sourceSha: string;
-    configRevision: number;
-    artifactChecksum: string;
-    providerReference?: string;
-    publicIdentity?: string;
-    note?: string;
-  };
+  evidence: ReleaseGateEvidence;
   actor: string;
   idempotencyKey: string;
 }) {
@@ -296,104 +523,18 @@ export async function recordReleaseGateObservation(input: {
       }
       return { observation: afterLockReplay, duplicate: true };
     }
-    const candidate = await tx.releaseCandidate.findUnique({
-      where: { id: input.candidateId },
-      include: { configRevision: { select: { revision: true } } },
+    const result = await appendReleaseGateObservation({
+      tx,
+      candidateId: input.candidateId,
+      gate: input.gate,
+      status: input.status,
+      observedAt: input.observedAt,
+      evidence: input.evidence,
+      actor: input.actor,
+      dedupeKey: input.idempotencyKey,
+      requestHash,
+      origin: { kind: "CANDIDATE_GATE" },
     });
-    if (!candidate) throw new ControlPlaneError("Release candidate를 찾을 수 없습니다.", 404, "CANDIDATE_NOT_FOUND");
-    if (
-      candidate.sourceSha !== input.evidence.sourceSha.toLowerCase()
-      || candidate.configRevision.revision !== input.evidence.configRevision
-      || candidate.artifactChecksum !== input.evidence.artifactChecksum.toLowerCase()
-    ) {
-      throw new ControlPlaneError("Gate evidence가 candidate의 source/config/artifact와 일치하지 않습니다.", 409, "EVIDENCE_MISMATCH");
-    }
-    if (
-      input.status === "PASSED"
-      && !gateIdentitySatisfied({
-        gate: input.gate,
-        providerReference: input.evidence.providerReference ?? null,
-        publicIdentity: input.evidence.publicIdentity ?? null,
-      })
-    ) {
-      throw new ControlPlaneError(
-        "외부 단계 gate의 PASSED 관측에는 exact provider/public identity 증거가 필요합니다.",
-        409,
-        "GATE_IDENTITY_REQUIRED",
-      );
-    }
-    const observation = await tx.releaseGateObservation.create({
-      data: {
-        candidateId: candidate.id,
-        gate: input.gate,
-        status: input.status,
-        evidence: jsonInput(input.evidence),
-        dedupeKey: input.idempotencyKey,
-        requestHash,
-        observedBy: input.actor,
-        observedAt: input.observedAt,
-      },
-    });
-    const observations = await tx.releaseGateObservation.findMany({
-      where: { candidateId: candidate.id },
-      select: { gate: true, status: true, observedAt: true, createdAt: true, id: true, evidence: true },
-    });
-    const status = releaseCandidateStatus(observations);
-    await tx.releaseCandidate.update({ where: { id: candidate.id }, data: { status } });
-    const evidenceStage = evidenceLifecycleStage(observations.map(gateObservationFact));
-    if (evidenceStage) {
-      const state = await tx.fleetLifecycleState.findUnique({ where: { appId: candidate.appId } });
-      if (!state || lifecycleStageRank(state.stage) < lifecycleStageRank(evidenceStage)) {
-        await tx.fleetLifecycleState.upsert({
-          where: { appId: candidate.appId },
-          create: {
-            appId: candidate.appId,
-            stage: evidenceStage,
-            sourceSha: candidate.sourceSha,
-            configRevisionId: candidate.configRevisionId,
-            generation: 1,
-          },
-          update: {
-            stage: evidenceStage,
-            sourceSha: candidate.sourceSha,
-            configRevisionId: candidate.configRevisionId,
-            generation: { increment: 1 },
-          },
-        });
-        await tx.fleetLifecycleEvent.upsert({
-          where: { idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}` },
-          create: {
-            appId: candidate.appId,
-            fromStage: state?.stage,
-            toStage: evidenceStage,
-            sourceSha: candidate.sourceSha,
-            configRevisionId: candidate.configRevisionId,
-            actor: input.actor,
-            idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}`,
-            evidence: { candidateId: candidate.id, gate: input.gate, observationId: observation.id },
-          },
-          update: {},
-        });
-      }
-    }
-    await tx.auditLog.create({
-      data: {
-        actorLogin: input.actor,
-        action: "control-plane.release-gate.record",
-        entityType: "ReleaseGateObservation",
-        entityId: observation.id,
-        payload: {
-          candidateId: candidate.id,
-          gate: input.gate,
-          status: input.status,
-          candidateStatus: status,
-          lifecycleStage: evidenceStage,
-          sourceSha: candidate.sourceSha,
-          configRevision: candidate.configRevision.revision,
-          artifactChecksum: candidate.artifactChecksum,
-        },
-      },
-    });
-    return { observation, duplicate: false };
+    return { observation: result.observation, duplicate: false };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }

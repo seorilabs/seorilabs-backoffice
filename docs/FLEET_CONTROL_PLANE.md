@@ -185,6 +185,23 @@ revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMAT
 - 라벨, 마일스톤, Project field는 어떤 전이에도 입력으로 쓰지 않는다. 심사 제출·공개 배포·법적·결제 행위는
   이 계약에 action 자체가 없다.
 
+gate 원장에 쓰는 지점은 `appendReleaseGateObservation` helper 하나뿐이다. 범용 요청 경로와 실제 provider
+settlement가 같은 transaction 안에서 이 helper만 사용하며 candidate status와 중앙 lifecycle이 함께 갱신된다.
+별도 validator나 두 번째 원장을 두지 않는다.
+
+- 범용 `POST /api/control-plane/release-gate-observations`는 release-candidate를 만드는 6개 gate만 기록할 수
+  있다. 외부 단계 gate를 임의 `providerReference`/`publicIdentity` 문자열로 요청하면 원장을 하나도 바꾸지 않고
+  `EXTERNAL_GATE_PROVIDER_ONLY`로 거부한다. 반대로 release-candidate gate를 provider settlement로 쓰는 것도
+  `CANDIDATE_GATE_PROVIDER_FORBIDDEN`으로 막는다.
+- 외부 단계 gate는 exact `ProviderExecution` settlement transaction에서만 생성된다. helper는 그 execution이
+  `MARKET_RELEASE`이고 같은 release candidate·app·source SHA·config revision·artifact checksum·공개
+  account/app identity·`bindingHash`에 결합됐는지, 그리고 같은 settlement에서 만들어진 `ProviderObservation`이
+  같은 app·provider·resource에 결합됐는지 다시 읽어 확인한다. 하나라도 다르면
+  `PROVIDER_EXECUTION_BINDING_MISMATCH` 또는 `PROVIDER_OBSERVATION_BINDING_MISMATCH`로 settlement 전체가
+  롤백된다.
+- 저장되는 evidence의 `providerExecutionId`, `providerObservationId`는 서버가 파생해 덧붙인다. HTTP 요청
+  계약에는 이 필드가 없어 호출자가 주입할 수 없다.
+
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
 profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
 허용한다. resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면

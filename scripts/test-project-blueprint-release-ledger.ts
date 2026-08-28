@@ -7,13 +7,28 @@ import {
 } from "@/lib/control-plane/contracts";
 import { signSnapshot } from "@/lib/control-plane/json";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
+import {
+  claimProviderExecution,
+  enqueueProviderExecution,
+  approveProviderExecution,
+  settleProviderExecution,
+} from "@/lib/control-plane/provider-execution-service";
 import { createReleaseCandidate, recordReleaseGateObservation } from "@/lib/control-plane/release-ledger";
+import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   activateConfigRevision,
   createConfigRevision,
   recordDiscoveryObservation,
 } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+
+const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
+if (!["127.0.0.1", "localhost"].includes(databaseUrl.hostname)) {
+  throw new Error("release ledger integration fixture는 loopback MySQL에서만 허용한다");
+}
+if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
+  throw new Error("release ledger integration fixture DB 이름은 _contract_test로 끝나야 한다");
+}
 
 const APP_ID = "project-blueprint-integration-app";
 const REPO_ID = 9_000_000_001n;
@@ -23,6 +38,106 @@ const ARTIFACT_SHA = "d".repeat(64);
 const RULES_SHA = "e".repeat(64);
 const PLATFORM_ARTIFACT_SHA = "f".repeat(64);
 const PLATFORM_CONTRACT_REVISION = "1".repeat(64);
+const PUBLISHER_ACCOUNT = "1234567890123456789";
+const PACKAGE_ID = "com.seorilabs.blueprint";
+const SIGNING_KEY = "integration-provider-lease-signing-key-0123456789";
+const WORKER_ID = "integration-provider-worker";
+
+/**
+ * gate 원장에 실제로 남은 관측과 lifecycle 상태를 한 번에 읽는다.
+ * 거부 경로가 정말 0 mutation인지 판정하는 기준이다.
+ */
+async function ledgerSnapshot(candidateId: string) {
+  const [gates, candidate, lifecycle, events] = await Promise.all([
+    prisma.releaseGateObservation.count({ where: { candidateId } }),
+    prisma.releaseCandidate.findUniqueOrThrow({ where: { id: candidateId }, select: { status: true } }),
+    prisma.fleetLifecycleState.findUnique({ where: { appId: APP_ID }, select: { stage: true, generation: true } }),
+    prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }),
+  ]);
+  return {
+    gates,
+    candidateStatus: candidate.status,
+    stage: lifecycle?.stage ?? null,
+    generation: lifecycle?.generation ?? 0,
+    events,
+  };
+}
+
+async function expectRejected(
+  label: string,
+  candidateId: string,
+  run: () => Promise<unknown>,
+  expectedCode: string,
+) {
+  const before = await ledgerSnapshot(candidateId);
+  let code: string | null = null;
+  try {
+    await run();
+  } catch (error) {
+    code = error instanceof ControlPlaneError ? error.code : (error as Error).message;
+  }
+  assert.equal(code, expectedCode, `${label}: 예상 거부 코드가 아니다`);
+  assert.deepEqual(await ledgerSnapshot(candidateId), before, `${label}: 거부 경로가 원장을 변경했다`);
+}
+
+/**
+ * 한 건의 market provider execution을 enqueue → (필요 시) 승인 → claim → settle까지 끝낸다.
+ * gate 관측은 오직 이 settlement transaction 안에서만 만들어진다.
+ */
+async function runMarketSettlement(input: {
+  key: string;
+  operation: "READBACK" | "UPLOAD_INTERNAL";
+  gate: "UPLOAD" | "PROCESSING" | "DEVICE_QA" | "REVIEW" | "APPROVAL" | "DEPLOYMENT" | "PUBLIC";
+  state: "SUCCEEDED" | "APPROVED" | "LIVE";
+  candidateId: string;
+  observedAt: Date;
+  providerReference: string;
+}) {
+  const enqueued = await enqueueProviderExecution({
+    kind: "MARKET_RELEASE",
+    repoId: REPO_ID,
+    releaseCandidateId: input.candidateId,
+    operation: input.operation,
+    maxAttempts: 3,
+    actor: "integration-human",
+    idempotencyKey: `provider-execution-${input.key}`,
+  });
+  if (enqueued.execution.status === "WAITING_HUMAN_APPROVAL") {
+    await approveProviderExecution({
+      executionId: enqueued.execution.id,
+      expectedGeneration: enqueued.execution.leaseGeneration,
+      bindingHash: enqueued.execution.bindingHash,
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      actor: "integration-human",
+      idempotencyKey: `provider-approval-${input.key}`,
+    });
+  }
+  const claimed = await claimProviderExecution({
+    workerId: WORKER_ID,
+    leaseSeconds: 300,
+    idempotencyKey: `provider-claim-${input.key}`,
+    signingKey: SIGNING_KEY,
+  });
+  assert.equal(claimed.claim?.executionId, enqueued.execution.id);
+  const claim = claimed.claim!;
+  const observation = {
+    kind: "MARKET" as const,
+    payload: {
+      schemaVersion: 1 as const,
+      market: "google-play" as const,
+      publicAccountId: PUBLISHER_ACCOUNT,
+      publicAppId: PACKAGE_ID,
+      gate: input.gate,
+      state: input.state,
+      sourceSha: SOURCE_SHA,
+      configRevision: 1,
+      artifactChecksum: ARTIFACT_SHA,
+      providerReference: input.providerReference,
+      observedAt: input.observedAt,
+    },
+  };
+  return { execution: enqueued.execution, claim, observation };
+}
 
 function blueprint(): ProjectBlueprint {
   return {
@@ -239,10 +354,193 @@ async function main() {
   assert.equal(candidate.status, "READY");
   assert.equal(lifecycle.stage, "RELEASE_CANDIDATE");
   assert.equal(await prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }), 1);
+
+  const candidateId = created.candidate.id;
+
+  // 외부 단계 gate는 범용 요청으로 만들 수 없다. 임의 identity 문자열도 원장을 바꾸지 못한다.
+  for (const gate of ["UPLOAD", "PROCESSING", "DEVICE_QA", "REVIEW", "APPROVAL", "DEPLOYMENT", "PUBLIC"] as const) {
+    await expectRejected(`forged ${gate}`, candidateId, () => recordReleaseGateObservation({
+      candidateId,
+      gate,
+      status: "PASSED",
+      observedAt: new Date(),
+      evidence: {
+        schemaVersion: 1,
+        sourceSha: SOURCE_SHA,
+        configRevision: 1,
+        artifactChecksum: ARTIFACT_SHA,
+        providerReference: "forged-provider-reference",
+        publicIdentity: "forged-account/forged-app",
+      },
+      actor: "forged-principal",
+      idempotencyKey: `forged-external-gate-${gate.toLowerCase()}`,
+    }), "EXTERNAL_GATE_PROVIDER_ONLY");
+  }
+
+  // provider market binding과 실행 credential을 등록한다. 비밀값은 저장하지 않는다.
+  await prisma.externalBinding.createMany({
+    data: [
+      { appId: APP_ID, provider: "google-play", bindingType: "publisher-account", externalId: PUBLISHER_ACCOUNT, publicIdentity: PUBLISHER_ACCOUNT, observedAt },
+      { appId: APP_ID, provider: "google-play", bindingType: "application", externalId: PACKAGE_ID, publicIdentity: PACKAGE_ID, observedAt },
+    ],
+  });
+  await prisma.credentialBinding.createMany({
+    data: [
+      ["shared/google-play/upload", "google-play.upload.internal", "upload-bot@example.invalid"],
+      ["shared/google-play/readback", "google-play.readback", "readback-bot@example.invalid"],
+    ].map(([logicalCredentialId, capability, publicIdentity]) => ({
+      appId: APP_ID,
+      logicalCredentialId,
+      provider: "google-play",
+      capability,
+      environment: "production",
+      publicIdentity,
+      consumer: "project-blueprint-integration",
+      credentialGeneration: 1,
+      policyGeneration: 1,
+      adapterId: "google-play-api-v1",
+      origin: "https://androidpublisher.googleapis.com",
+      authFactors: ["oidc"],
+      observedAt,
+    })),
+  });
+
+  const upload = await runMarketSettlement({
+    key: "upload",
+    operation: "UPLOAD_INTERNAL",
+    gate: "UPLOAD",
+    state: "SUCCEEDED",
+    candidateId,
+    observedAt: new Date(observedAt.getTime() + 1_000),
+    providerReference: "edits/upload-1",
+  });
+
+  // stale lease는 gate를 만들 수 없다.
+  await expectRejected("stale lease", candidateId, () => settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: "0".repeat(64),
+    outcome: "OBSERVED",
+    observation: upload.observation,
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload-stale",
+  }), "STALE_LEASE");
+
+  // provider app identity가 다르면 settlement 자체가 거부된다.
+  await expectRejected("identity mismatch", candidateId, () => settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: upload.claim.leaseToken,
+    outcome: "OBSERVED",
+    observation: {
+      kind: "MARKET",
+      payload: { ...upload.observation.payload, publicAppId: "com.attacker.other" },
+    },
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload-identity",
+  }), "PROVIDER_IDENTITY_MISMATCH");
+
+  // candidate 결합이 다른 artifact checksum도 거부된다.
+  await expectRejected("candidate binding mismatch", candidateId, () => settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: upload.claim.leaseToken,
+    outcome: "OBSERVED",
+    observation: {
+      kind: "MARKET",
+      payload: { ...upload.observation.payload, artifactChecksum: "9".repeat(64) },
+    },
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload-artifact",
+  }), "CANDIDATE_BINDING_MISMATCH");
+
+  const settled = await settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: upload.claim.leaseToken,
+    outcome: "OBSERVED",
+    observation: upload.observation,
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload",
+  });
+  assert.equal(settled.status, "SUCCEEDED");
+  assert.equal(settled.duplicate, false);
+
+  const afterUpload = await ledgerSnapshot(candidateId);
+  assert.equal(afterUpload.stage, "SUBMITTED");
+  assert.equal(afterUpload.gates, RELEASE_CANDIDATE_REQUIRED_GATES.length + 1);
+
+  const uploadGate = await prisma.releaseGateObservation.findFirstOrThrow({
+    where: { candidateId, gate: "UPLOAD" },
+  });
+  const uploadEvidence = uploadGate.evidence as Record<string, unknown>;
+  assert.equal(uploadEvidence.providerExecutionId, upload.execution.id);
+  assert.equal(typeof uploadEvidence.providerObservationId, "string");
+  assert.equal(uploadEvidence.publicIdentity, `${PUBLISHER_ACCOUNT}/${PACKAGE_ID}`);
+  assert.equal(uploadEvidence.providerReference, "edits/upload-1");
+
+  // 같은 idempotency key 재호출은 원장을 한 번만 반영한다.
+  const replayedSettlement = await settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: upload.claim.leaseToken,
+    outcome: "OBSERVED",
+    observation: upload.observation,
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload",
+  });
+  assert.equal(replayedSettlement.duplicate, true);
+  assert.deepEqual(await ledgerSnapshot(candidateId), afterUpload);
+
+  const ladder = [
+    { key: "processing", gate: "PROCESSING" as const, state: "SUCCEEDED" as const, stage: "SUBMITTED" },
+    { key: "device-qa", gate: "DEVICE_QA" as const, state: "SUCCEEDED" as const, stage: "SUBMITTED" },
+    { key: "review", gate: "REVIEW" as const, state: "SUCCEEDED" as const, stage: "REVIEW" },
+    { key: "approval", gate: "APPROVAL" as const, state: "APPROVED" as const, stage: "APPROVED_FOR_RELEASE" },
+    { key: "deployment", gate: "DEPLOYMENT" as const, state: "SUCCEEDED" as const, stage: "DEPLOYED" },
+    { key: "public", gate: "PUBLIC" as const, state: "LIVE" as const, stage: "PUBLIC_VERIFIED" },
+    { key: "public-sustained", gate: "PUBLIC" as const, state: "LIVE" as const, stage: "MONITORED" },
+  ];
+  for (const [index, step] of ladder.entries()) {
+    const run = await runMarketSettlement({
+      key: step.key,
+      operation: "READBACK",
+      gate: step.gate,
+      state: step.state,
+      candidateId,
+      observedAt: new Date(observedAt.getTime() + 10_000 + index * 1_000),
+      providerReference: `edits/${step.key}`,
+    });
+    const result = await settleProviderExecution({
+      executionId: run.execution.id,
+      generation: run.claim.generation,
+      leaseToken: run.claim.leaseToken,
+      outcome: "OBSERVED",
+      observation: run.observation,
+      workerId: WORKER_ID,
+      idempotencyKey: `provider-settle-${step.key}`,
+    });
+    assert.equal(result.status, "SUCCEEDED");
+    const snapshot = await ledgerSnapshot(candidateId);
+    assert.equal(snapshot.stage, step.stage, `${step.key}: lifecycle 단계가 예상과 다르다`);
+  }
+
+  const final = await ledgerSnapshot(candidateId);
+  assert.equal(final.stage, "MONITORED");
+  assert.equal(final.candidateStatus, "READY");
+  // RELEASE_CANDIDATE + SUBMITTED + REVIEW + APPROVED_FOR_RELEASE + DEPLOYED + PUBLIC_VERIFIED + MONITORED
+  assert.equal(final.events, 7);
+  assert.equal(
+    await prisma.releaseGateObservation.count({ where: { candidateId, observedBy: "forged-principal" } }),
+    0,
+  );
+
   console.log(JSON.stringify({
     ok: true,
-    candidateStatus: candidate.status,
-    lifecycleStage: lifecycle.stage,
+    candidateStatus: final.candidateStatus,
+    lifecycleStage: final.stage,
+    gateObservations: final.gates,
+    lifecycleEvents: final.events,
     resourceCount: plan.resources.length,
     productionProviderWrite: false,
   }));

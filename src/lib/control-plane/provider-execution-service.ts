@@ -35,6 +35,7 @@ import {
   providerSignerRequestId,
 } from "@/lib/control-plane/provider-execution-signer";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
+import { appendReleaseGateObservation } from "@/lib/control-plane/release-ledger";
 import {
   assertObservationTime,
   ControlPlaneError,
@@ -1068,16 +1069,24 @@ export async function settleProviderExecution(input: {
           configRevision: execution.configRevisionNumber,
           artifactChecksum: execution.artifactChecksum ?? "",
         });
-        await tx.releaseGateObservation.create({
-          data: {
-            candidateId: candidate.id,
-            gate: normalized.gate,
-            status: normalized.status,
-            evidence: inputJson(normalized.evidence),
-            dedupeKey: `provider-execution:${jsonDigest({ executionId: execution.id, generation: execution.leaseGeneration, gate: normalized.gate } as JsonValue)}`,
-            requestHash: settlementHash,
-            observedBy: input.workerId,
-            observedAt: normalized.observedAt,
+        // 범용 요청 경로와 같은 helper를 쓴다. candidate status와 중앙 lifecycle이 이 transaction에서 함께 전진한다.
+        await appendReleaseGateObservation({
+          tx,
+          candidateId: candidate.id,
+          gate: normalized.gate,
+          status: normalized.status,
+          observedAt: normalized.observedAt,
+          evidence: normalized.evidence,
+          actor: input.workerId,
+          dedupeKey: `provider-execution:${jsonDigest({ executionId: execution.id, generation: execution.leaseGeneration, gate: normalized.gate } as JsonValue)}`,
+          requestHash: settlementHash,
+          origin: {
+            kind: "PROVIDER_SETTLEMENT",
+            executionId: execution.id,
+            observationId: observation.id,
+            publicAccountId: execution.publicAccountId,
+            publicAppId: execution.resourceId,
+            bindingHash: execution.bindingHash,
           },
         });
         if (!readbackFirst || execution.operation === "READBACK") {
