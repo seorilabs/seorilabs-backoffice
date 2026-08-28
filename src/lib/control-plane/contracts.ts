@@ -116,6 +116,7 @@ const platformArtifactSchema = z.discriminatedUnion("kind", [
     version: platformVersion,
     digest: sha256,
     releaseAssetUrl: githubReleaseAssetUrl,
+    treeChecksum: sha256,
   }).strict(),
 ]);
 
@@ -132,6 +133,14 @@ export const platformReleaseManifestSchema = z.object({
     repoId: numericId,
     artifactKind: platformArtifactKind,
   }).strict()).min(1).max(1_000),
+  provenance: z.object({
+    repository: z.literal("seorilabs/platform"),
+    releaseId: numericId,
+    releaseTag: z.string().regex(/^v\d+\.\d+\.\d+$/),
+    rawManifestSha256: sha256,
+    approvalSha256: sha256,
+    approvalKeyId: publicIdentifier,
+  }).strict().optional(),
 }).strict().superRefine((manifest, context) => {
   const artifactKinds = manifest.artifacts.map((artifact) => artifact.kind);
   if (new Set(artifactKinds).size !== artifactKinds.length) {
@@ -165,8 +174,12 @@ export const platformConsumerObservationPayloadSchema = z.discriminatedUnion("in
     integration: z.literal("SDK"),
     artifactKind: platformArtifactKind,
     observedVersion: platformVersion,
-    observedDigest: sha256,
-    contractRevision: sha256,
+    observedDigest: sha256.nullable(),
+    contractRevision: sha256.nullable(),
+    evidenceDigest: sha256.optional(),
+    lockIntegrity: z.string().regex(/^(?:sha256-[A-Za-z0-9+/]{43}=|sha512-[A-Za-z0-9+/]{86}==)$/).optional(),
+    releaseAssetUrl: githubReleaseAssetUrl.optional(),
+    treeChecksum: sha256.optional(),
   }).strict(),
   z.object({
     schemaVersion: z.literal(1),

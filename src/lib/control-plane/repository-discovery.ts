@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { parse as parseYaml } from "yaml";
+
 import type { Octokit } from "@/lib/github/app";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
@@ -13,7 +16,8 @@ export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
 export const REPOSITORY_DISCOVERY_MAX_ATTEMPTS = 3;
 export const REPOSITORY_DISCOVERY_MAX_TREE_ENTRIES = 20_000;
 export const REPOSITORY_DISCOVERY_MAX_PACKAGE_FILES = 25;
-export const REPOSITORY_DISCOVERY_MAX_CONFIG_FILES = 32;
+export const REPOSITORY_DISCOVERY_MAX_CONFIG_FILES = 96;
+export const REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES = 1024 * 1024;
 
 const SHA_40 = /^[0-9a-f]{40}$/i;
 const REPO_SEGMENT = /^[A-Za-z0-9_.-]+$/;
@@ -75,6 +79,7 @@ export type RepositoryHeadReadResult =
 
 export type RepositoryDiscoverySourceReader = (
   path: string,
+  maxBytes?: number,
 ) => Promise<SourceObservationResult>;
 
 export interface RepositoryDiscoveryBuildTarget {
@@ -91,6 +96,27 @@ export interface RepositoryDiscoveryCandidate {
   workingDirectory: string;
   markerPath: string;
 }
+
+export type RepositoryPlatformConsumerObservation =
+  | {
+      schemaVersion: 1;
+      sourceSha: string;
+      integration: "SDK";
+      artifactKind: "TYPESCRIPT" | "GDSCRIPT";
+      observedVersion: string;
+      observedDigest: null;
+      contractRevision: null;
+      evidenceDigest: string;
+      lockIntegrity?: string;
+      releaseAssetUrl?: string;
+      treeChecksum?: string;
+    }
+  | {
+      schemaVersion: 1;
+      sourceSha: string;
+      integration: "CUSTOM_HTTP" | "MISSING";
+      evidenceDigest: string;
+    };
 
 interface DiscoveryBase {
   candidates: RepositoryDiscoveryCandidate[];
@@ -112,6 +138,7 @@ export type RepositoryDiscoveryResult =
         workingDirectory: string;
       };
       buildTargets: RepositoryDiscoveryBuildTarget[];
+      platformConsumer: RepositoryPlatformConsumerObservation;
     })
   | (DiscoveryBase & {
       status: "NEEDS_INPUT";
@@ -138,6 +165,11 @@ type ParsedPackage = {
   devDependencies: Record<string, unknown>;
   scripts: Record<string, unknown>;
   name: unknown;
+};
+
+type PlatformPackageLock = {
+  version: string;
+  integrity: string;
 };
 
 type ExactTreeOctokit = {
@@ -399,6 +431,131 @@ function safeRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function relativeDirectory(from: string, to: string): string | null {
+  if (from === ".") return to;
+  if (from === to) return ".";
+  return to.startsWith(`${from}/`) ? to.slice(from.length + 1) : null;
+}
+
+function packageLockPath(
+  candidateDirectory: string,
+  packageManager: "npm" | "pnpm",
+  paths: ReadonlySet<string>,
+): string | null {
+  const name = packageManager === "pnpm" ? "pnpm-lock.yaml" : "package-lock.json";
+  for (const directory of parentDirectories(candidateDirectory)) {
+    const path = pathIn(directory, name);
+    if (paths.has(path)) return path;
+  }
+  return null;
+}
+
+function exactPlatformVersion(value: unknown): string | null {
+  return typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value) ? value : null;
+}
+
+function platformPackageSpec(pkg: ParsedPackage): unknown {
+  return pkg.dependencies["@seorilabs/platform-sdk"]
+    ?? pkg.devDependencies["@seorilabs/platform-sdk"];
+}
+
+function validPackageIntegrity(value: unknown): value is string {
+  return typeof value === "string"
+    && /^(?:sha256-[A-Za-z0-9+/]{43}=|sha512-[A-Za-z0-9+/]{86}==)$/.test(value);
+}
+
+function normalizedLockVersion(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^(?:npm:)?(\d+\.\d+\.\d+)(?:\([^)]*\))?$/.exec(value);
+  return match?.[1] ?? null;
+}
+
+function parsePnpmPlatformLock(
+  text: string,
+  lockPath: string,
+  candidateDirectory: string,
+): PlatformPackageLock | null {
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(text, { maxAliasCount: 20 });
+  } catch {
+    return null;
+  }
+  const root = safeRecord(parsed);
+  const lockDirectory = directoryOf(lockPath);
+  const importerKey = relativeDirectory(lockDirectory, candidateDirectory);
+  if (importerKey === null) return null;
+  const importer = safeRecord(safeRecord(root.importers)[importerKey]);
+  const dependency = safeRecord(importer.dependencies)["@seorilabs/platform-sdk"]
+    ?? safeRecord(importer.devDependencies)["@seorilabs/platform-sdk"];
+  const dependencyRecord = safeRecord(dependency);
+  const version = normalizedLockVersion(
+    typeof dependency === "string" ? dependency : dependencyRecord.version,
+  );
+  if (!version) return null;
+
+  const packages = safeRecord(root.packages);
+  const packageEntry = Object.entries(packages).find(([key]) => {
+    const normalized = key.replace(/^\//, "");
+    return normalized === `@seorilabs/platform-sdk@${version}`
+      || normalized.startsWith(`@seorilabs/platform-sdk@${version}(`);
+  })?.[1];
+  const packageRecord = safeRecord(packageEntry);
+  const resolution = safeRecord(packageRecord.resolution);
+  const integrity = resolution.integrity ?? dependencyRecord.integrity;
+  if (!validPackageIntegrity(integrity)) return null;
+  return { version, integrity };
+}
+
+function parseNpmPlatformLock(
+  text: string,
+  lockPath: string,
+  candidateDirectory: string,
+): PlatformPackageLock | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+  const root = safeRecord(parsed);
+  const lockDirectory = directoryOf(lockPath);
+  const relative = relativeDirectory(lockDirectory, candidateDirectory);
+  if (relative === null) return null;
+  const packagePath = relative === "."
+    ? "node_modules/@seorilabs/platform-sdk"
+    : `${relative}/node_modules/@seorilabs/platform-sdk`;
+  const packageRecord = safeRecord(safeRecord(root.packages)[packagePath]);
+  const version = exactPlatformVersion(packageRecord.version);
+  const integrity = packageRecord.integrity;
+  if (!version || !validPackageIntegrity(integrity)) return null;
+  return { version, integrity };
+}
+
+function updateHashWithLength(hash: ReturnType<typeof createHash>, value: string): void {
+  const content = Buffer.from(value, "utf8");
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(content.length));
+  hash.update(length);
+  hash.update(content);
+}
+
+function vendoredTreeChecksum(files: Array<{ path: string; text: string }>): string {
+  const hash = createHash("sha256");
+  hash.update(Buffer.from("seorilabs-vendored-tree-v1\0", "utf8"));
+  for (const file of [...files].sort((left, right) => (
+    Buffer.compare(Buffer.from(left.path, "utf8"), Buffer.from(right.path, "utf8"))
+  ))) {
+    updateHashWithLength(hash, file.path);
+    updateHashWithLength(hash, file.text);
+  }
+  return hash.digest("hex");
+}
+
+function platformEvidenceDigest(input: Record<string, unknown>): string {
+  return jsonDigest(input as JsonValue);
+}
+
 function parsePackage(path: string, text: string): ParsedPackage | null {
   try {
     const value = JSON.parse(text) as unknown;
@@ -430,6 +587,13 @@ function isPrimaryReactNativePackage(pkg: ParsedPackage): boolean {
   return [pkg.dependencies, pkg.devDependencies].some((dependencies) =>
     typeof dependencies["react-native"] === "string" || typeof dependencies.expo === "string"
   );
+}
+
+function isAppsInTossPackage(pkg: ParsedPackage): boolean {
+  return [pkg.dependencies, pkg.devDependencies].some((dependencies) => (
+    typeof dependencies["@apps-in-toss/framework"] === "string"
+    || typeof dependencies["@granite-js/react-native"] === "string"
+  ));
 }
 
 function packageManagerFor(
@@ -533,6 +697,7 @@ function resultPayload(input: {
   sourceMetadata: SourcePersistenceMetadata[];
   workflowCaller?: { profile: string; packageManager: string; workingDirectory: string };
   buildTargets?: RepositoryDiscoveryBuildTarget[];
+  platformConsumer?: RepositoryPlatformConsumerObservation;
 }): Record<string, unknown> {
   return {
     schemaVersion: 1,
@@ -556,6 +721,7 @@ function resultPayload(input: {
       bundleId: target.bundleId ?? null,
       configuration: target.configuration ?? null,
     })),
+    platformConsumer: input.platformConsumer ?? null,
     sources: input.sourceMetadata,
   };
 }
@@ -575,7 +741,11 @@ function finish<T extends RepositoryDiscoveryUnfinished>(
     candidates: input.candidates,
     sourceMetadata: input.sourceMetadata,
     ...(active
-      ? { workflowCaller: active.workflowCaller, buildTargets: active.buildTargets }
+      ? {
+          workflowCaller: active.workflowCaller,
+          buildTargets: active.buildTargets,
+          platformConsumer: active.platformConsumer,
+        }
       : {}),
   });
   return { ...input, candidateDigest, payload };
@@ -624,11 +794,14 @@ export async function discoverRepository(
 
   const sourceMetadata: SourcePersistenceMetadata[] = [];
   const texts = new Map<string, string>();
-  const readPaths = async (paths: readonly string[]): Promise<RepositoryDiscoveryReason | null> => {
+  const readPaths = async (
+    paths: readonly string[],
+    maxBytes?: number,
+  ): Promise<RepositoryDiscoveryReason | null> => {
     for (const path of [...new Set(paths)].sort()) {
       if (texts.has(path)) continue;
       if (texts.size >= REPOSITORY_DISCOVERY_MAX_CONFIG_FILES) return "TOO_MANY_DISCOVERY_FILES";
-      const source = await readSource(path);
+      const source = await readSource(path, maxBytes);
       sourceMetadata.push(toSourceMetadata(source));
       if (source.status !== "PRESENT") return "SOURCE_FILE_UNREADABLE";
       texts.set(path, source.text);
@@ -661,8 +834,12 @@ export async function discoverRepository(
     });
   }
 
+  const reactNativePackages = packages.filter(isPrimaryReactNativePackage);
+  const primaryReactNativePackages = reactNativePackages.some((pkg) => !isAppsInTossPackage(pkg))
+    ? reactNativePackages.filter((pkg) => !isAppsInTossPackage(pkg))
+    : reactNativePackages;
   const candidates: RepositoryDiscoveryCandidate[] = [
-    ...packages.filter(isPrimaryReactNativePackage).map((pkg) => ({
+    ...primaryReactNativePackages.map((pkg) => ({
       profile: "react-native" as const,
       workingDirectory: pkg.directory,
       markerPath: pkg.path,
@@ -689,6 +866,176 @@ export async function discoverRepository(
       candidates,
       sourceMetadata,
     );
+  }
+
+  let platformConsumer: RepositoryPlatformConsumerObservation;
+  if (candidate.profile === "react-native") {
+    const pkg = packages.find((entry) => entry.path === candidate.markerPath);
+    const declaredSpec = pkg ? platformPackageSpec(pkg) : undefined;
+    const artifactKind = "TYPESCRIPT" as const;
+    if (declaredSpec === undefined) {
+      platformConsumer = {
+        schemaVersion: 1,
+        sourceSha: snapshot.sourceSha,
+        integration: "MISSING",
+        evidenceDigest: platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "MISSING",
+          reason: "PACKAGE_NOT_DECLARED",
+        }),
+      };
+    } else {
+      const declaredVersion = exactPlatformVersion(declaredSpec);
+      const lockPath = packageLockPath(candidate.workingDirectory, packageManager.value, pathSet);
+      if (lockPath) {
+        const lockReadError = await readPaths([lockPath], REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES);
+        if (lockReadError) return needsInput(snapshot, lockReadError, candidates, sourceMetadata);
+      }
+      const lock = declaredVersion && lockPath
+        ? packageManager.value === "pnpm"
+          ? parsePnpmPlatformLock(texts.get(lockPath)!, lockPath, candidate.workingDirectory)
+          : parseNpmPlatformLock(texts.get(lockPath)!, lockPath, candidate.workingDirectory)
+        : null;
+      if (declaredVersion && lock?.version === declaredVersion) {
+        const evidenceDigest = platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "SDK",
+          packageName: "@seorilabs/platform-sdk",
+          declaredVersion,
+          lockPath,
+          lockVersion: lock.version,
+          lockIntegrity: lock.integrity,
+        });
+        platformConsumer = {
+          schemaVersion: 1,
+          sourceSha: snapshot.sourceSha,
+          integration: "SDK",
+          artifactKind,
+          observedVersion: declaredVersion,
+          observedDigest: null,
+          contractRevision: null,
+          evidenceDigest,
+          lockIntegrity: lock.integrity,
+        };
+      } else {
+        platformConsumer = {
+          schemaVersion: 1,
+          sourceSha: snapshot.sourceSha,
+          integration: "CUSTOM_HTTP",
+          evidenceDigest: platformEvidenceDigest({
+            contractVersion: "platform-consumer-discovery/v1",
+            sourceSha: snapshot.sourceSha,
+            artifactKind,
+            integration: "CUSTOM_HTTP",
+            reason: declaredVersion ? "LOCK_NOT_EXACT" : "DEPENDENCY_NOT_EXACT",
+            lockPath,
+          }),
+        };
+      }
+    }
+  } else {
+    const artifactKind = "GDSCRIPT" as const;
+    const addonDirectories = [
+      pathIn(candidate.workingDirectory, "addons/seorilabs_platform"),
+      pathIn(candidate.workingDirectory, "game/addons/seorilabs_platform"),
+    ].filter((directory, index, values) => (
+      values.indexOf(directory) === index
+      && snapshot.paths.some((path) => path.startsWith(`${directory}/`))
+    ));
+    const addonDirectory = addonDirectories[0]
+      ?? pathIn(candidate.workingDirectory, "addons/seorilabs_platform");
+    const addonPrefix = `${addonDirectory}/`;
+    const addonPaths = snapshot.paths
+      .filter((path) => path.startsWith(addonPrefix))
+      .sort((left, right) => left.localeCompare(right));
+    if (addonDirectories.length > 1) {
+      platformConsumer = {
+        schemaVersion: 1,
+        sourceSha: snapshot.sourceSha,
+        integration: "CUSTOM_HTTP",
+        evidenceDigest: platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "CUSTOM_HTTP",
+          reason: "MULTIPLE_ADDON_ROOTS",
+        }),
+      };
+    } else if (addonPaths.length === 0) {
+      platformConsumer = {
+        schemaVersion: 1,
+        sourceSha: snapshot.sourceSha,
+        integration: "MISSING",
+        evidenceDigest: platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "MISSING",
+          reason: "ADDON_NOT_PRESENT",
+        }),
+      };
+    } else {
+      const addonReadError = await readPaths(addonPaths);
+      if (addonReadError) return needsInput(snapshot, addonReadError, candidates, sourceMetadata);
+      const sourcePath = `${addonDirectory}/SOURCE`;
+      const versionPath = `${addonDirectory}/VERSION`;
+      const checksumPath = `${addonDirectory}/CHECKSUM`;
+      const source = texts.get(sourcePath)?.trim() ?? "";
+      const version = texts.get(versionPath)?.trim() ?? "";
+      const declaredChecksum = texts.get(checksumPath)?.trim().toLowerCase() ?? "";
+      const treeChecksum = vendoredTreeChecksum(addonPaths
+        .filter((path) => path !== checksumPath)
+        .map((path) => ({ path: path.slice(addonPrefix.length), text: texts.get(path)! })));
+      const expectedSource = /^\d+\.\d+\.\d+$/.test(version)
+        ? `https://github.com/seorilabs/platform/releases/download/v${version}/seorilabs-platform-gdscript-${version}.tar.gz`
+        : "";
+      if (
+        source === expectedSource
+        && /^[0-9a-f]{64}$/.test(declaredChecksum)
+        && declaredChecksum === treeChecksum
+      ) {
+        const evidenceDigest = platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "SDK",
+          observedVersion: version,
+          releaseAssetUrl: source,
+          treeChecksum,
+          sourceCount: addonPaths.length,
+        });
+        platformConsumer = {
+          schemaVersion: 1,
+          sourceSha: snapshot.sourceSha,
+          integration: "SDK",
+          artifactKind,
+          observedVersion: version,
+          observedDigest: null,
+          contractRevision: null,
+          evidenceDigest,
+          releaseAssetUrl: source,
+          treeChecksum,
+        };
+      } else {
+        platformConsumer = {
+          schemaVersion: 1,
+          sourceSha: snapshot.sourceSha,
+          integration: "CUSTOM_HTTP",
+          evidenceDigest: platformEvidenceDigest({
+            contractVersion: "platform-consumer-discovery/v1",
+            sourceSha: snapshot.sourceSha,
+            artifactKind,
+            integration: "CUSTOM_HTTP",
+            reason: source !== expectedSource ? "FLOATING_OR_INVALID_SOURCE" : "TREE_CHECKSUM_MISMATCH",
+            sourceCount: addonPaths.length,
+          }),
+        };
+      }
+    }
   }
 
   const stack = candidate.profile;
@@ -816,6 +1163,7 @@ export async function discoverRepository(
       workingDirectory: candidate.workingDirectory,
     },
     buildTargets: buildTargets.sort((left, right) => left.targetKey.localeCompare(right.targetKey)),
+    platformConsumer,
   });
 }
 

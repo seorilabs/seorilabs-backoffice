@@ -23,8 +23,15 @@ export function platformFleetDisposition(input: {
   }
   const current = input.observation.artifactKind === input.artifact.kind
     && input.observation.observedVersion === input.artifact.version
-    && input.observation.observedDigest.toLowerCase() === input.artifact.digest.toLowerCase()
-    && input.observation.contractRevision.toLowerCase() === input.contractRevision.toLowerCase();
+    && input.observation.observedDigest?.toLowerCase() === input.artifact.digest.toLowerCase()
+    && input.observation.contractRevision?.toLowerCase() === input.contractRevision.toLowerCase()
+    && (
+      input.artifact.kind !== "GDSCRIPT"
+      || (
+        input.observation.treeChecksum?.toLowerCase() === input.artifact.treeChecksum.toLowerCase()
+        && input.observation.releaseAssetUrl === input.artifact.releaseAssetUrl
+      )
+    );
   if (current) return { kind: "COMPLIANT", status: "COMPLIANT", bindingState: "COMPLIANT" };
   if (input.classification === "IMPLEMENTATION_ONLY") {
     return { kind: "SDK_UPDATE_PR", status: "QUEUED", bindingState: "UPDATE_PR_QUEUED" };

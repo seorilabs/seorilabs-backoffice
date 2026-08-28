@@ -191,6 +191,14 @@ spec:
                   name: backoffice-control-plane-snapshot-signing
                   key: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
                   optional: true
+            # 공개 Ed25519 trust root다. fleet-approved.json이 발행돼도 이
+            # ConfigMap이 없거나 ACTIVE key가 아니면 release 입력을 거부한다.
+            - name: PLATFORM_FLEET_APPROVAL_PUBLIC_KEYS_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: backoffice-platform-fleet-trust
+                  key: trusted-release-keys.json
+                  optional: true
             # 챗/초안 + 볼트 검색 질의 임베딩. 인덱서는 data ns 별도 키를 사용.
             - name: GEMINI_API_KEY
               valueFrom:

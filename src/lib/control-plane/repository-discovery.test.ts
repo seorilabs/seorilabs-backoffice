@@ -67,6 +67,23 @@ function sourceReader(files: Record<string, string>) {
   };
 }
 
+function vendoredChecksum(files: Record<string, string>): string {
+  const hash = createHash("sha256");
+  hash.update(Buffer.from("seorilabs-vendored-tree-v1\0", "utf8"));
+  for (const [path, text] of Object.entries(files).sort(([left], [right]) => (
+    Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"))
+  ))) {
+    for (const value of [path, text]) {
+      const content = Buffer.from(value, "utf8");
+      const length = Buffer.alloc(8);
+      length.writeBigUInt64BE(BigInt(content.length));
+      hash.update(length);
+      hash.update(content);
+    }
+  }
+  return hash.digest("hex");
+}
+
 test("기존 App adoption은 비어 있는 market identity만 채우고 충돌은 NEEDS_INPUT 대상으로 판정한다", () => {
   const discovered = {
     playPackage: "com.seorilabs.sample",
@@ -151,6 +168,95 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
   assert.equal(result.sourceMetadata.every((source) => !("text" in source)), true);
 });
 
+test("RN exact package와 lock integrity를 PLATFORM_SDK_UPDATE용 source observation으로 만든다", async () => {
+  const files = {
+    "package.json": JSON.stringify({ name: "sample", packageManager: "pnpm@11.3.0" }),
+    "apps/mobile/package.json": JSON.stringify({
+      name: "sample-mobile",
+      dependencies: {
+        "react-native": "0.81.0",
+        "@seorilabs/platform-sdk": "0.4.0",
+      },
+    }),
+    "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
+    "pnpm-lock.yaml": [
+      "lockfileVersion: '9.0'",
+      "importers:",
+      "  apps/mobile:",
+      "    dependencies:",
+      "      '@seorilabs/platform-sdk':",
+      "        specifier: 0.4.0",
+      "        version: 0.4.0",
+      "packages:",
+      "  '@seorilabs/platform-sdk@0.4.0':",
+      "    resolution:",
+      `      integrity: sha512-${createHash("sha512").update("platform-sdk").digest("base64")}`,
+    ].join("\n"),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.platformConsumer, {
+    schemaVersion: 1,
+    sourceSha: SHA,
+    integration: "SDK",
+    artifactKind: "TYPESCRIPT",
+    observedVersion: "0.4.0",
+    observedDigest: null,
+    contractRevision: null,
+    evidenceDigest: result.platformConsumer.evidenceDigest,
+    lockIntegrity: `sha512-${createHash("sha512").update("platform-sdk").digest("base64")}`,
+  });
+  assert.match(result.platformConsumer.evidenceDigest, /^[0-9a-f]{64}$/);
+  assert.equal((result.payload.platformConsumer as { integration: string }).integration, "SDK");
+});
+
+test("multi-market repo의 root Granite package를 native RN 후보로 중복 계산하지 않는다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "sample-ait-root",
+      packageManager: "pnpm@11.3.0",
+      dependencies: {
+        "react-native": "0.84.0",
+        "@apps-in-toss/framework": "2.10.7",
+        "@granite-js/react-native": "1.0.28",
+      },
+    }),
+    "apps/mobile/package.json": JSON.stringify({
+      name: "sample-mobile",
+      dependencies: { "react-native": "0.85.0" },
+    }),
+    "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
+    "apps/ait/granite.config.ts": "export default { appName: 'sample-ait' };",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\nimporters: {}\npackages: {}\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.equal(result.workflowCaller.workingDirectory, "apps/mobile");
+  assert.deepEqual(result.candidates, [{
+    profile: "react-native",
+    workingDirectory: "apps/mobile",
+    markerPath: "apps/mobile/package.json",
+  }]);
+});
+
+test("RN floating Platform dependency는 관리 SDK로 추측하지 않는다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "sample",
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0", "@seorilabs/platform-sdk": "^0.4.0" },
+    }),
+    "android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.equal(result.platformConsumer.integration, "CUSTOM_HTTP");
+});
+
 test("Godot production preset은 debug identity를 제외하고 npm caller와 target을 만든다", async () => {
   const files = {
     "package.json": JSON.stringify({
@@ -190,6 +296,71 @@ test("Godot production preset은 debug identity를 제외하고 npm caller와 ta
     result.buildTargets.map((target) => [target.targetKey, target.packageId ?? target.bundleId ?? null]),
     [["ait", null], ["android", "com.seorilabs.game"], ["ios", "com.seorilabs.game"]],
   );
+});
+
+test("Godot fixed release URL과 vendored tree checksum을 exact SDK observation으로 만든다", async () => {
+  const version = "1.2.3";
+  const addonFiles = {
+    SOURCE: `https://github.com/seorilabs/platform/releases/download/v${version}/seorilabs-platform-gdscript-${version}.tar.gz\n`,
+    VERSION: `${version}\n`,
+    "platform_client.gd": `const SDK_VERSION := "${version}"\n`,
+  };
+  const checksum = vendoredChecksum(addonFiles);
+  const files = {
+    "package.json": JSON.stringify({ name: "sample", packageManager: "npm@11.0.0" }),
+    "project.godot": "[application]\n",
+    "export_presets.cfg": [
+      "[preset.0]",
+      'name="Android"',
+      'platform="Android"',
+      "[preset.0.options]",
+      'package/unique_name="com.seorilabs.game"',
+    ].join("\n"),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    ...Object.fromEntries(Object.entries(addonFiles).map(([path, text]) => [
+      `addons/seorilabs_platform/${path}`,
+      text,
+    ])),
+    "addons/seorilabs_platform/CHECKSUM": `${checksum}\n`,
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.platformConsumer, {
+    schemaVersion: 1,
+    sourceSha: SHA,
+    integration: "SDK",
+    artifactKind: "GDSCRIPT",
+    observedVersion: version,
+    observedDigest: null,
+    contractRevision: null,
+    evidenceDigest: result.platformConsumer.evidenceDigest,
+    releaseAssetUrl: addonFiles.SOURCE.trim(),
+    treeChecksum: checksum,
+  });
+});
+
+test("Godot floating main SOURCE는 CUSTOM_HTTP unmanaged로 탐지한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({ name: "sample", packageManager: "npm@11.0.0" }),
+    "project.godot": "[application]\n",
+    "export_presets.cfg": [
+      "[preset.0]",
+      'name="Android"',
+      'platform="Android"',
+      "[preset.0.options]",
+      'package/unique_name="com.seorilabs.game"',
+    ].join("\n"),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    "game/addons/seorilabs_platform/SOURCE": "https://github.com/seorilabs/platform/tree/main/sdk-gdscript\n",
+    "game/addons/seorilabs_platform/VERSION": "1.2.3\n",
+    "game/addons/seorilabs_platform/CHECKSUM": `${"a".repeat(64)}\n`,
+    "game/addons/seorilabs_platform/platform_client.gd": "extends RefCounted\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.equal(result.platformConsumer.integration, "CUSTOM_HTTP");
 });
 
 test("RN과 Godot 후보가 함께 있으면 추측하지 않고 MULTIPLE_CANDIDATES다", async () => {

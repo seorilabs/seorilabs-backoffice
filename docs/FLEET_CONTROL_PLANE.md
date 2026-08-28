@@ -50,7 +50,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
 | `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
-| `POST` | `/api/admin/automation/platform-fleet` | contract Issue plan을 GitHub App으로 read-before/write/read-after 처리하고 SDK PR 결과를 readback |
+| `POST` | `/api/admin/automation/platform-fleet` | latest Platform Release/approval을 검증·record/reconcile한 뒤 기존 contract Issue/SDK PR plan을 readback-first로 drain |
 
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
@@ -232,11 +232,32 @@ profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirect
 
 ## Platform Fleet
 
-Platform producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version과 SHA-256,
-변경 분류, numeric consumer repo ID를 `platform-release` manifest에 고정한다. Backoffice는
-`FLEET_APPROVED` literal과 중앙 snapshot signature를 모두 검증한 manifest만 append-only
-`PlatformRelease`로 받는다. GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는
-계약에 들어올 수 없다.
+매분 RPI5 `backoffice-platform-fleet` CronJob과 배포 직후 catch-up Job은 같은 admin endpoint를 호출한다.
+producer는 GitHub App의 read-only API로 `seorilabs/platform` latest Release의 정확한 tag commit,
+`platform-release.json`, `fleet-approved.json`, GDScript artifact와 checksum asset을 읽는다. raw byte SHA-256,
+release asset size/digest, release tag/source SHA가 하나라도 다르면 아무 release나 plan을 만들지 않는다.
+TypeScript package는 Release asset이 아니라 GitHub Packages로 발행되므로, 승인 manifest가 고정한 package
+version·artifact digest와 consumer lock의 exact version·integrity를 결합해 관측한다.
+
+`fleet-approved.json`은 P3 RN/Godot static·build-only canary와 exact WorkflowBundle SHA를 포함하고,
+ConfigMap `backoffice-platform-fleet-trust`의 `trusted-release-keys.json`에 등록된 ACTIVE Ed25519 공개키로
+서명이 검증되어야 한다. 승인 asset이 아직 없으면 endpoint는 `WAITING_APPROVAL`을 반환하고 DB write와
+reconcile을 모두 생략한다. 승인 asset은 있는데 trust root가 없거나 서명이 틀리면 fail-closed한다.
+공개키 ConfigMap은 secret이 아니며 private signing key나 임시 대체키를 Backoffice에 두지 않는다.
+
+검증된 producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version·SHA-256,
+GDScript tree checksum, 변경 분류, numeric consumer repo ID와 raw/approval provenance를 중앙 snapshot
+signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
+GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
+
+Repository discovery는 exact source SHA에서 RN의 고정 `@seorilabs/platform-sdk` version과 lock integrity,
+Godot의 vendored `SOURCE`/`VERSION`/`CHECKSUM`과 실제 tree checksum을 자동 관측한다. 범위·branch·git URL,
+lock 불일치, floating `main`, tree checksum 불일치는 `CUSTOM_HTTP`, SDK 자체가 없으면 `MISSING`으로
+분류한다. 현재 release의 exact package version·lock integrity 또는 fixed asset URL·검증된 tree가 일치할 때만
+approved digest와 contract revision을 얻고, 이전 exact SDK는 digest를 추측하지 않은 채 update 대상으로 남는다.
+lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 기존 256KiB 한도를 유지한다.
+ACTIVE app 중 current default HEAD discovery가 `NEEDS_INPUT`이거나 Platform evidence가 없는 repo가 하나라도
+있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다.
 
 Reconcile input은 manifest의 전체 consumer cohort와 각 repo의 current default HEAD
 `DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히

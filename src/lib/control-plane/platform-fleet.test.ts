@@ -61,6 +61,7 @@ test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail
       kind: "GDSCRIPT",
       version: "1.2.3",
       digest: artifactDigest,
+      treeChecksum: contractRevision,
       releaseAssetUrl: "https://raw.githubusercontent.com/seorilabs/platform/main/platform.gd",
     }],
     consumers: [{ repoId: "1234", artifactKind: "GDSCRIPT" }],
@@ -71,6 +72,7 @@ test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail
       kind: "GDSCRIPT",
       version: "1.2.3",
       digest: artifactDigest,
+      treeChecksum: contractRevision,
       releaseAssetUrl: "https://github.com/seorilabs/platform/releases/download/v1.2.3/platform.gd",
     }],
     consumers: [{ repoId: "1234", artifactKind: "GDSCRIPT" }],
@@ -93,6 +95,16 @@ test("구현 drift와 계약 drift를 분리하고 custom/missing을 unmanaged�
     contractRevision,
     artifact,
     observation: observed,
+  }).kind, "SDK_UPDATE_PR");
+  assert.equal(platformFleetDisposition({
+    classification: "IMPLEMENTATION_ONLY",
+    contractRevision,
+    artifact,
+    observation: {
+      ...observed,
+      observedDigest: null,
+      contractRevision: null,
+    },
   }).kind, "SDK_UPDATE_PR");
   assert.equal(platformFleetDisposition({
     classification: "CONTRACT_CHANGE",

@@ -715,7 +715,7 @@ export async function processRepositoryDiscoveryClaim(
   let result: RepositoryDiscoveryResult;
   let claimLost = false;
   try {
-    result = await discoverRepository(snapshot, async (path) => {
+    result = await discoverRepository(snapshot, async (path, maxBytes) => {
       if (!await renewRepositoryDiscoveryClaim(claim, dependencies)) {
         claimLost = true;
         throw new Error("REPOSITORY_DISCOVERY_CLAIM_LOST");
@@ -727,6 +727,7 @@ export async function processRepositoryDiscoveryClaim(
         sourceRef: snapshot.sourceRef,
         path,
         allowedPaths: [path],
+        ...(maxBytes === undefined ? {} : { maxBytes }),
       });
     });
   } catch {

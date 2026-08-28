@@ -652,7 +652,9 @@ export async function reconcilePlatformFleet(input: {
       const currentBinding = await tx.platformFleetBinding.findUnique({ where: { appId: app.id } });
       const sameRelease = currentBinding?.platformReleaseId === release.id;
       const observedVersion = observation.integration === "SDK" ? observation.observedVersion : null;
-      const observedDigest = observation.integration === "SDK" ? observation.observedDigest.toLowerCase() : null;
+      const observedDigest = observation.integration === "SDK"
+        ? observation.observedDigest?.toLowerCase() ?? null
+        : null;
       const bindingState = disposition.kind === "SDK_UPDATE_PR" && planStatus === "PR_OPEN"
         ? "UPDATE_PR_OPEN"
         : disposition.kind === "SDK_UPDATE_PR" && planStatus === "PR_MERGED"

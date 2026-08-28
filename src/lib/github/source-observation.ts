@@ -7,6 +7,7 @@ import type { Octokit } from "@/lib/github/app";
  * size를 믿기 전에 encoded payload 길이도 검사해 비정상 응답의 메모리 사용을 제한한다.
  */
 export const SOURCE_OBSERVATION_MAX_BYTES = 256 * 1024;
+export const SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES = 1024 * 1024;
 
 export type SourceObservationStatus =
   | "PRESENT"
@@ -50,6 +51,8 @@ export interface SourceObservationInput {
   path: string;
   /** 호출자가 명시적으로 허용한 정확한 repo-relative path 집합. */
   allowedPaths: readonly string[];
+  /** lockfile처럼 검증된 대형 입력만 올릴 수 있으며 absolute cap을 넘으면 기본값을 쓴다. */
+  maxBytes?: number;
 }
 
 interface SourceObservationBase {
@@ -224,6 +227,11 @@ export async function readExactSourceFile(
 ): Promise<SourceObservationResult> {
   const normalizedRepoId = normalizeRepoId(input.repoId);
   const normalizedSha = input.sourceSha.toLowerCase();
+  const maxBytes = Number.isSafeInteger(input.maxBytes)
+    && (input.maxBytes ?? 0) >= SOURCE_OBSERVATION_MAX_BYTES
+    && (input.maxBytes ?? 0) <= SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES
+    ? input.maxBytes!
+    : SOURCE_OBSERVATION_MAX_BYTES;
   const placeholderRepoId = normalizedRepoId ?? 0;
   const common = base(input, placeholderRepoId, normalizedSha);
 
@@ -308,7 +316,7 @@ export async function readExactSourceFile(
   }
 
   const declaredSize = file.size as number;
-  if (declaredSize > SOURCE_OBSERVATION_MAX_BYTES) {
+  if (declaredSize > maxBytes) {
     return nonPresent(common, "TOO_LARGE", "SIZE_LIMIT_EXCEEDED", {
       size: declaredSize,
     });
@@ -327,7 +335,7 @@ export async function readExactSourceFile(
   }
 
   const compactBase64Length = file.content.replace(/[\t\n\r ]/g, "").length;
-  const maximumEncodedLength = 4 * Math.ceil(SOURCE_OBSERVATION_MAX_BYTES / 3);
+  const maximumEncodedLength = 4 * Math.ceil(maxBytes / 3);
   if (compactBase64Length > maximumEncodedLength) {
     return nonPresent(common, "TOO_LARGE", "SIZE_LIMIT_EXCEEDED", {
       blobSha,
@@ -342,7 +350,7 @@ export async function readExactSourceFile(
       size: declaredSize,
     });
   }
-  if (bytes.byteLength > SOURCE_OBSERVATION_MAX_BYTES) {
+  if (bytes.byteLength > maxBytes) {
     return nonPresent(common, "TOO_LARGE", "SIZE_LIMIT_EXCEEDED", {
       blobSha,
       size: bytes.byteLength,
