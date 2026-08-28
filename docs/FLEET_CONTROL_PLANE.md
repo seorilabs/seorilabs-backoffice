@@ -90,6 +90,8 @@ worker lease는 generation CAS와 1회용 HMAC token hash로 보호하며, stale
 mutation용 identity와 readback identity는 logical credential ID와 공개 identity가 모두 달라야 하며,
 하나라도 같으면 enqueue 전에 fail-closed한다. 실행 감사 event는 FK `RESTRICT`와 MySQL UPDATE/DELETE
 거부 trigger로 append-only를 강제한다. migration principal에 `CREATE TRIGGER` 권한이 없으면 배포가 중단된다.
+배포 gate는 migration 적용 뒤 live DB의 trigger를 다시 읽어 계약과 정확히 같은지 확인하며, baseline이나
+recovery resolve로 migration row만 성공 처리된 경우에도 trigger가 없으면 fail-closed한다.
 
 - `READBACK`은 사전 승인 가능한 fleet inventory identity만 사용한다.
 - production mutation, IAM, Workspace domain-wide delegation은 매 실행마다 Backoffice의 app-scoped 사람

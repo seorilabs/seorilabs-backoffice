@@ -3,6 +3,11 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 
+import {
+  verifyAppendOnlyTriggers,
+  type ObservedTrigger,
+} from "@/lib/control-plane/append-only-triggers";
+
 type HistoryMode = "fresh" | "legacy" | "cutover" | "predeploy";
 type DatabaseRow = Record<string, unknown>;
 type Fingerprint = { count: number; sha256: string };
@@ -471,6 +476,29 @@ async function readSchemaContract(prisma: PrismaClient): Promise<SchemaContract>
   };
 }
 
+async function verifyLiveAppendOnlyTriggers(prisma: PrismaClient): Promise<number> {
+  const observed = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+    SELECT
+      TRIGGER_NAME AS name,
+      EVENT_OBJECT_TABLE AS tableName,
+      EVENT_MANIPULATION AS event,
+      ACTION_TIMING AS timing,
+      ACTION_STATEMENT AS statement
+    FROM information_schema.TRIGGERS
+    WHERE TRIGGER_SCHEMA = DATABASE()
+    ORDER BY TRIGGER_NAME
+  `);
+  return verifyAppendOnlyTriggers(
+    observed.map((row): ObservedTrigger => ({
+      name: String(row.name ?? ""),
+      table: String(row.tableName ?? ""),
+      event: String(row.event ?? ""),
+      timing: String(row.timing ?? ""),
+      statement: String(row.statement ?? ""),
+    })),
+  );
+}
+
 function verifyContract(actual: SchemaContract): void {
   const expected = JSON.parse(readFileSync(contractPath, "utf8")) as SchemaContract;
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -543,8 +571,11 @@ async function main(): Promise<void> {
       process.stdout.write(`${JSON.stringify(contract, null, 2)}\n`);
     } else {
       verifyContract(contract);
+      const appendOnlyTriggers = historyMode === "legacy"
+        ? 0
+        : await verifyLiveAppendOnlyTriggers(prisma);
       console.log(
-        `migration/schema 계약 통과: mode=${historyMode} rows=${history.length} tables=${contract.tables.count} columns=${contract.columns.count} indexes=${contract.indexes.count} foreignKeys=${contract.foreignKeys.count}`,
+        `migration/schema 계약 통과: mode=${historyMode} rows=${history.length} tables=${contract.tables.count} columns=${contract.columns.count} indexes=${contract.indexes.count} foreignKeys=${contract.foreignKeys.count} appendOnlyTriggers=${appendOnlyTriggers}`,
       );
     }
     if (printDataFingerprint) {
