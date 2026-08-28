@@ -476,14 +476,19 @@ async function main(): Promise<void> {
     });
     assert.equal(unresolved.status, "NEEDS_INPUT");
     assert.equal(unresolved.reasonCode, "NO_CANDIDATE");
+    await prisma.repositoryRegistration.update({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+      data: { classificationDecisionVersion: null },
+    });
     const unresolvedRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
       where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
     });
+    assert.equal(unresolvedRegistration.classificationDecisionVersion, null);
     const decisionBase = {
       schemaVersion: 1 as const,
       repoId: BigInt(CLASSIFICATION_REPO_ID),
       expectedGeneration: unresolvedRegistration.reconcileGeneration ?? 0,
-      expectedDecisionRevision: unresolvedRegistration.classificationDecisionVersion,
+      expectedDecisionRevision: unresolvedRegistration.classificationDecisionVersion ?? 0,
       candidateMarkerPath: null,
       justification: "REPOSITORY_PURPOSE_CONFIRMED" as const,
     };

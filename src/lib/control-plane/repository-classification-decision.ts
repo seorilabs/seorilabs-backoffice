@@ -98,7 +98,7 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
     repoId: registration.repoId.toString(),
     repoFullName: registration.repoFullName,
     generation: registration.reconcileGeneration ?? 0,
-    decisionRevision: registration.classificationDecisionVersion,
+    decisionRevision: registration.classificationDecisionVersion ?? 0,
     reasonCode: registration.lastDiscoveryReason,
     fork: registration.fork,
     candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
@@ -186,9 +186,10 @@ export async function recordRepositoryClassificationDecision(input: {
       throw new ControlPlaneError("repository 등록을 찾을 수 없습니다.", 404, "REPOSITORY_NOT_FOUND");
     }
     const generation = registration.reconcileGeneration ?? 0;
+    const currentDecisionRevision = registration.classificationDecisionVersion ?? 0;
     if (
       generation !== request.expectedGeneration
-      || registration.classificationDecisionVersion !== request.expectedDecisionRevision
+      || currentDecisionRevision !== request.expectedDecisionRevision
     ) {
       throw new ControlPlaneError(
         "repository 상태가 갱신되었습니다. 최신 입력 큐를 다시 확인해 주세요.",
@@ -237,7 +238,7 @@ export async function recordRepositoryClassificationDecision(input: {
       );
     }
 
-    const revision = registration.classificationDecisionVersion + 1;
+    const revision = currentDecisionRevision + 1;
     const decision = await tx.repositoryClassificationDecision.create({
       data: {
         repoId: registration.repoId,
@@ -256,7 +257,12 @@ export async function recordRepositoryClassificationDecision(input: {
         status: "NEEDS_INPUT",
         archived: false,
         reconcileGeneration: request.expectedGeneration,
-        classificationDecisionVersion: request.expectedDecisionRevision,
+        OR: request.expectedDecisionRevision === 0
+          ? [
+              { classificationDecisionVersion: null },
+              { classificationDecisionVersion: 0 },
+            ]
+          : [{ classificationDecisionVersion: request.expectedDecisionRevision }],
       },
       data: { classificationDecisionVersion: revision },
     });

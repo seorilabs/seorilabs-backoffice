@@ -314,7 +314,7 @@ export async function registerRepositoryWebhookInTransaction(
 
     if (
       input.classificationDecisionRevision !== undefined
-      && input.classificationDecisionRevision !== registration.classificationDecisionVersion
+      && input.classificationDecisionRevision !== (registration.classificationDecisionVersion ?? 0)
     ) {
       throw new Error("REPOSITORY_CLASSIFICATION_REVISION_STALE");
     }

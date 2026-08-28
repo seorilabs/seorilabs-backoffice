@@ -4,7 +4,7 @@ ALTER TABLE `repository_registration`
     ADD COLUMN `classification` ENUM('PRODUCT_APP', 'INFRA_REPO', 'PLATFORM_PRODUCER', 'EXCLUDED') NULL,
     ADD COLUMN `discoveryContractVersion` VARCHAR(64) NULL,
     ADD COLUMN `fork` BOOLEAN NULL,
-    ADD COLUMN `classificationDecisionVersion` INTEGER NOT NULL DEFAULT 0;
+    ADD COLUMN `classificationDecisionVersion` INTEGER NULL DEFAULT 0;
 
 ALTER TABLE `repository_discovery_run`
     ADD COLUMN `classification` ENUM('PRODUCT_APP', 'INFRA_REPO', 'PLATFORM_PRODUCER', 'EXCLUDED') NULL,

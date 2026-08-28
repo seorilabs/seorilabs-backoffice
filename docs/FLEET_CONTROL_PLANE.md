@@ -422,7 +422,8 @@ ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보�
 source/provider evidence가 완전하지 않은 한 만들지 않는다. 특히 법적 선언, 계정 소유권, 결제·세금,
 심사 제출과 공개 배포 승인은 자동 생성하거나 활성화하지 않는다. `/settings`는 repository classification,
 DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다. 같은 설정 화면과 internal API는 동일한 strict
-validator와 transaction service를 사용한다. 분류 결정은 `classificationDecisionVersion` CAS와 idempotency
+validator와 transaction service를 사용한다. nullable expand column의 `classificationDecisionVersion=null`은
+revision `0`으로만 해석하며 분류 결정은 이 revision CAS와 idempotency
 key를 요구하고 이전 revision을 수정하지 않으며 audit에는 공개 repo/candidate identity만 남긴다.
 
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
