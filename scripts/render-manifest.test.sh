@@ -251,12 +251,12 @@ fi
 
 echo "== repository discovery backfill 스케줄 =="
 backfill_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-repository-discovery-backfill/ { print }' "$scheduler_cronjobs")"
-if printf '%s' "$backfill_doc" | grep -q 'schedule: "7 \* \* \* \*"' &&
-   printf '%s' "$backfill_doc" | grep -q 'concurrencyPolicy: Forbid' &&
-   printf '%s' "$backfill_doc" | grep -q 'repository-discovery/backfill' &&
-   printf '%s' "$backfill_doc" | grep -q 'automountServiceAccountToken: false' &&
-   printf '%s' "$backfill_doc" | grep -q 'readOnlyRootFilesystem: true' &&
-   ! printf '%s' "$backfill_doc" | grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET'; then
+if grep -q 'schedule: "7 \* \* \* \*"' <<<"$backfill_doc" &&
+   grep -q 'concurrencyPolicy: Forbid' <<<"$backfill_doc" &&
+   grep -q 'repository-discovery/backfill' <<<"$backfill_doc" &&
+   grep -q 'automountServiceAccountToken: false' <<<"$backfill_doc" &&
+   grep -q 'readOnlyRootFilesystem: true' <<<"$backfill_doc" &&
+   ! grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET' <<<"$backfill_doc"; then
   ok "full-org backfill은 hourly read-only trigger 하나로 직렬 실행"
 else
   ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
