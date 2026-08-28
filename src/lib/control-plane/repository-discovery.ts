@@ -14,8 +14,9 @@ import {
   type RepositoryClassification,
   type RepositoryClassificationDirective,
 } from "@/lib/control-plane/repository-classification";
+import type { WorkflowCaller } from "@/lib/control-plane/contracts";
 
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v3";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v4";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -157,11 +158,7 @@ export type RepositoryDiscoveryResult =
       reasonCode: null;
       appType: "APP" | "GAME";
       engine: "RN" | "GODOT";
-      workflowCaller: {
-        profile: "react-native" | "godot";
-        packageManager: "npm" | "pnpm";
-        workingDirectory: string;
-      };
+      workflowCaller: WorkflowCaller;
       buildTargets: RepositoryDiscoveryBuildTarget[];
       platformConsumer: RepositoryPlatformConsumerObservation;
     })
@@ -779,7 +776,7 @@ function resultPayload(input: {
   classification: RepositoryClassification | null;
   candidates: RepositoryDiscoveryCandidate[];
   sourceMetadata: SourcePersistenceMetadata[];
-  workflowCaller?: { profile: string; packageManager: string; workingDirectory: string };
+  workflowCaller?: WorkflowCaller;
   buildTargets?: RepositoryDiscoveryBuildTarget[];
   platformConsumer?: RepositoryPlatformConsumerObservation;
 }): Record<string, unknown> {
@@ -995,18 +992,23 @@ export async function discoverRepository(
     return needsInput(snapshot, "MULTIPLE_CANDIDATES", candidates, sourceMetadata);
   }
   const candidate = selectedCandidate ?? candidates[0];
-  const packageManager = packageManagerFor(candidate.workingDirectory, packages, pathSet);
-  if (packageManager.status !== "FOUND") {
-    return needsInput(
-      snapshot,
-      packageManager.status === "MISSING" ? "PACKAGE_MANAGER_MISSING" : "PACKAGE_MANAGER_AMBIGUOUS",
-      candidates,
-      sourceMetadata,
-    );
-  }
-
+  let workflowCaller: WorkflowCaller;
   let platformConsumer: RepositoryPlatformConsumerObservation;
   if (candidate.profile === "react-native") {
+    const packageManager = packageManagerFor(candidate.workingDirectory, packages, pathSet);
+    if (packageManager.status !== "FOUND") {
+      return needsInput(
+        snapshot,
+        packageManager.status === "MISSING" ? "PACKAGE_MANAGER_MISSING" : "PACKAGE_MANAGER_AMBIGUOUS",
+        candidates,
+        sourceMetadata,
+      );
+    }
+    workflowCaller = {
+      profile: "react-native",
+      packageManager: packageManager.value,
+      workingDirectory: candidate.workingDirectory,
+    };
     const pkg = packages.find((entry) => entry.path === candidate.markerPath);
     const declaredSpec = pkg ? platformPackageSpec(pkg) : undefined;
     const artifactKind = "TYPESCRIPT" as const;
@@ -1075,6 +1077,11 @@ export async function discoverRepository(
       }
     }
   } else {
+    workflowCaller = {
+      profile: "godot",
+      packageManager: null,
+      workingDirectory: candidate.workingDirectory,
+    };
     const artifactKind = "GDSCRIPT" as const;
     const addonDirectories = [
       pathIn(candidate.workingDirectory, "addons/seorilabs_platform"),
@@ -1315,11 +1322,7 @@ export async function discoverRepository(
     sourceMetadata,
     appType: candidate.profile === "godot" ? "GAME" as const : "APP" as const,
     engine: candidate.profile === "godot" ? "GODOT" as const : "RN" as const,
-    workflowCaller: {
-      profile: candidate.profile,
-      packageManager: packageManager.value,
-      workingDirectory: candidate.workingDirectory,
-    },
+    workflowCaller,
     buildTargets: buildTargets.sort((left, right) => left.targetKey.localeCompare(right.targetKey)),
     platformConsumer,
   });

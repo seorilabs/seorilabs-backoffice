@@ -139,6 +139,19 @@ test("workflow caller는 exact source observation의 strict projection만 허용
     packageManager: workflowCaller.packageManager,
     workingDirectory: workflowCaller.workingDirectory,
   }), workflowCaller);
+  assert.deepEqual(resolvedWorkflowCaller({
+    profile: "godot",
+    packageManager: null,
+    workingDirectory: ".",
+  }), {
+    profile: "godot",
+    packageManager: null,
+    workingDirectory: ".",
+  });
+  assert.throws(
+    () => resolvedWorkflowCaller({ profile: "godot", packageManager: "npm", workingDirectory: "." }),
+    (error) => error instanceof ControlPlaneError && error.code === "NO_WORKFLOW_CALLER_FOR_SHA",
+  );
   assert.throws(
     () => resolvedWorkflowCaller({ profile: null, packageManager: null, workingDirectory: null }),
     (error) => error instanceof ControlPlaneError && error.code === "NO_WORKFLOW_CALLER_FOR_SHA",
@@ -154,7 +167,7 @@ test("observation validator는 중복 targetKey와 provider unknown field를 fai
     repoId: "123",
     sourceSha: "a".repeat(40),
     observedAt: "2026-08-27T00:00:00.000Z",
-    workflowCaller: { profile: "godot", packageManager: "npm", workingDirectory: "." },
+    workflowCaller: { profile: "godot", packageManager: null, workingDirectory: "." },
     payload: {},
     buildTargets: [
       { targetKey: "android", stack: "godot" },

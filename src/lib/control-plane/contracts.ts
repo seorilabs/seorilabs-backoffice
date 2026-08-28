@@ -540,11 +540,18 @@ const workflowWorkingDirectory = z.string().min(1).max(255).refine((value) => {
     && value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, "repository 상대 workingDirectory가 필요합니다.");
 
-export const workflowCallerSchema = z.object({
-  profile: z.enum(["react-native", "godot"]),
-  packageManager: z.enum(["npm", "pnpm"]),
-  workingDirectory: workflowWorkingDirectory,
-}).strict();
+export const workflowCallerSchema = z.discriminatedUnion("profile", [
+  z.object({
+    profile: z.literal("react-native"),
+    packageManager: z.enum(["npm", "pnpm"]),
+    workingDirectory: workflowWorkingDirectory,
+  }).strict(),
+  z.object({
+    profile: z.literal("godot"),
+    packageManager: z.null(),
+    workingDirectory: workflowWorkingDirectory,
+  }).strict(),
+]);
 
 export type WorkflowCaller = z.infer<typeof workflowCallerSchema>;
 

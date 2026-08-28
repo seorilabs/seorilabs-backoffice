@@ -259,12 +259,8 @@ test("RN floating Platform dependency는 관리 SDK로 추측하지 않는다", 
   assert.equal(result.platformConsumer.integration, "CUSTOM_HTTP");
 });
 
-test("Godot production preset은 debug identity를 제외하고 npm caller와 target을 만든다", async () => {
+test("Godot production preset은 package manager 없이 debug identity를 제외한 caller와 target을 만든다", async () => {
   const files = {
-    "package.json": JSON.stringify({
-      name: "sample-game",
-      scripts: { test: "npm run test:core" },
-    }),
     "project.godot": "[application]\nconfig/name=\"Sample\"\n",
     "export_presets.cfg": [
       "[preset.0]",
@@ -292,7 +288,7 @@ test("Godot production preset은 debug identity를 제외하고 npm caller와 ta
   assert.equal(result.classification, "PRODUCT_APP");
   assert.deepEqual(result.workflowCaller, {
     profile: "godot",
-    packageManager: "npm",
+    packageManager: null,
     workingDirectory: ".",
   });
   assert.deepEqual(
