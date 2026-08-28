@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { RELEASE_CANDIDATE_REQUIRED_GATES, type ProjectBlueprint } from "@/lib/control-plane/contracts";
+import { Prisma } from "@prisma/client";
+import {
+  RELEASE_CANDIDATE_REQUIRED_GATES,
+  type PlatformReleaseManifest,
+  type ProjectBlueprint,
+} from "@/lib/control-plane/contracts";
+import { signSnapshot } from "@/lib/control-plane/json";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
 import { createReleaseCandidate, recordReleaseGateObservation } from "@/lib/control-plane/release-ledger";
 import {
@@ -15,6 +21,8 @@ const SOURCE_SHA = "b".repeat(40);
 const WORKFLOW_SHA = "c".repeat(40);
 const ARTIFACT_SHA = "d".repeat(64);
 const RULES_SHA = "e".repeat(64);
+const PLATFORM_ARTIFACT_SHA = "f".repeat(64);
+const PLATFORM_CONTRACT_REVISION = "1".repeat(64);
 
 function blueprint(): ProjectBlueprint {
   return {
@@ -120,6 +128,57 @@ async function main() {
   const plan = await getProjectBlueprintPlan({ repoId: REPO_ID, sourceSha: SOURCE_SHA, configRevision: 1 });
   assert.equal(plan.status, "READY_TO_APPLY");
   assert.equal(plan.credentialChecks.every((check) => check.state === "READY"), true);
+
+  const platformManifest: PlatformReleaseManifest = {
+    schemaVersion: 1,
+    approval: "FLEET_APPROVED",
+    version: "0.6.5",
+    sourceSha: "a".repeat(40),
+    contractRevision: PLATFORM_CONTRACT_REVISION,
+    classification: "IMPLEMENTATION_ONLY",
+    publishedAt: observedAt.toISOString(),
+    artifacts: [{
+      kind: "TYPESCRIPT",
+      version: "0.6.5",
+      digest: PLATFORM_ARTIFACT_SHA,
+      packageName: "@seorilabs/platform",
+    }],
+    consumers: [{ repoId: REPO_ID.toString(), artifactKind: "TYPESCRIPT" }],
+  };
+  const signedPlatformManifest = signSnapshot(
+    platformManifest as unknown as Parameters<typeof signSnapshot>[0],
+    "integration-signing-key",
+  );
+  const platformRelease = await prisma.platformRelease.create({
+    data: {
+      version: platformManifest.version,
+      sourceSha: platformManifest.sourceSha,
+      classification: platformManifest.classification,
+      approval: platformManifest.approval,
+      contractRevision: platformManifest.contractRevision,
+      manifest: platformManifest as unknown as Prisma.InputJsonValue,
+      manifestDigest: signedPlatformManifest.digest,
+      signature: signedPlatformManifest.signature,
+      publishedAt: observedAt,
+      observedBy: "integration-worker",
+      requestHash: signedPlatformManifest.digest,
+      idempotencyKey: "project-blueprint-integration-platform-release",
+    },
+  });
+  await prisma.platformFleetBinding.create({
+    data: {
+      appId: APP_ID,
+      platformReleaseId: platformRelease.id,
+      observedVersion: "0.6.5",
+      observedDigest: PLATFORM_ARTIFACT_SHA,
+      approvedVersion: "0.6.5",
+      approvedDigest: PLATFORM_ARTIFACT_SHA,
+      manifestDigest: signedPlatformManifest.digest,
+      contractRevision: PLATFORM_CONTRACT_REVISION,
+      state: "COMPLIANT",
+      sourceSha: SOURCE_SHA,
+    },
+  });
 
   const created = await createReleaseCandidate({
     repoId: REPO_ID,

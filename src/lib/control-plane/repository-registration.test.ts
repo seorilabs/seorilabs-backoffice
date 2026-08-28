@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { repositoryDiscoveryTrigger } from "@/lib/control-plane/repository-registration";
+import {
+  repositoryDiscoveryRequestHashMatches,
+  repositoryDiscoveryRequestHashes,
+  repositoryDiscoveryTrigger,
+  repositoryGenerationAfterArchive,
+} from "@/lib/control-plane/repository-registration";
 
 const SHA = "a".repeat(40);
 
@@ -53,4 +58,50 @@ test("source drift reconcile은 검증된 current HEAD만 다음 generation에 �
     sourceSha: SHA,
     sourceRef: "refs/heads/main",
   });
+});
+
+test("archive 전이는 generation을 한 번 무효화하고 반복 archive는 다시 올리지 않는다", () => {
+  assert.equal(repositoryGenerationAfterArchive({
+    archived: false,
+    reconcileGeneration: 4,
+  }), 5);
+  assert.equal(repositoryGenerationAfterArchive({
+    archived: true,
+    reconcileGeneration: 5,
+  }), 5);
+});
+
+test("empty repository의 private/public 전환은 서로 다른 semantic reconcile이다", () => {
+  const base = {
+    event: "reconcile",
+    action: "full-org-readback",
+    repository: {
+      id: 42,
+      full_name: "seorilabs/empty-app",
+      name: "empty-app",
+      default_branch: null,
+      archived: false,
+    },
+    deliveryId: "delivery",
+    organization: "seorilabs",
+  };
+  const trigger = repositoryDiscoveryTrigger({
+    event: base.event,
+    action: base.action,
+    defaultBranch: null,
+  });
+  const privateHashes = repositoryDiscoveryRequestHashes({
+    ...base,
+    repository: { ...base.repository, private: true },
+  }, false, trigger);
+  const publicHashes = repositoryDiscoveryRequestHashes({
+    ...base,
+    repository: { ...base.repository, private: false },
+  }, false, trigger);
+  assert.notEqual(privateHashes.current, publicHashes.current);
+  assert.equal(privateHashes.legacyV1, publicHashes.legacyV1);
+  assert.notEqual(privateHashes.current, privateHashes.legacyV1);
+  assert.equal(repositoryDiscoveryRequestHashMatches(privateHashes.current, privateHashes), true);
+  assert.equal(repositoryDiscoveryRequestHashMatches(privateHashes.legacyV1, privateHashes), true);
+  assert.equal(repositoryDiscoveryRequestHashMatches("0".repeat(64), privateHashes), false);
 });

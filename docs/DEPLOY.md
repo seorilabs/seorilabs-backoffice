@@ -130,9 +130,9 @@ kubectl -n platform create job \
 
 ## 6. 운영 메모
 - 라이프사이클 상태는 GitHub 에 없음 → `backoffice-db-backup` CronJob(일 1회) 유지. 복구 시 dump restore 후 reconcile.
-- reconcile, Xcode Cloud sync, registry seed는 `scheduler-cronjobs.yaml`이 각각
+- full-org repository discovery backfill, reconcile, Xcode Cloud sync, registry seed, Platform Fleet 조정은 `scheduler-cronjobs.yaml`이 각각
   `concurrencyPolicy: Forbid`로 실행한다. 배포는 기존 scheduler를 suspend/drain한 뒤 CronJob만
-  orphan 삭제한다. 세 작업의 one-shot 직렬 catch-up을 마친 다음 CronJob을 새로 생성하므로
+  orphan 삭제한다. 다섯 작업의 one-shot 직렬 catch-up을 마친 다음 CronJob을 새로 생성하므로
   suspend 중 놓친 시각이 재개 직후 중복 실행되지 않는다. 보존된 Job은 TTL로 정리되며 웹
   프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
   stdin으로 전달하며 환경변수나 argv에 넣지 않는다.

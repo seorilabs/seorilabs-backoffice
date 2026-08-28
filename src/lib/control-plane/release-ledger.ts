@@ -1,6 +1,7 @@
 import { Prisma, type ReleaseGateStatus } from "@prisma/client";
 import {
   configRevisionPayloadSchema,
+  platformReleaseManifestSchema,
   RELEASE_CANDIDATE_REQUIRED_GATES,
   type ReleaseGateName,
 } from "@/lib/control-plane/contracts";
@@ -96,7 +97,7 @@ export async function createReleaseCandidate(input: {
     if (payload.build?.platformVersion !== input.platformVersion) {
       throw new ControlPlaneError("ACTIVE revision의 Platform version과 일치하지 않습니다.", 409, "PLATFORM_VERSION_MISMATCH");
     }
-    const [discovery, target] = await Promise.all([
+    const [discovery, target, platformBinding, approvedPlatformReleases] = await Promise.all([
       tx.discoveryObservation.findFirst({
         where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
         select: { id: true },
@@ -104,6 +105,15 @@ export async function createReleaseCandidate(input: {
       tx.buildTarget.findUnique({
         where: { appId_targetKey: { appId: app.id, targetKey: input.targetKey } },
         select: { observedSha: true, market: true },
+      }),
+      tx.platformFleetBinding.findUnique({
+        where: { appId: app.id },
+        include: { platformRelease: { select: { id: true, approval: true, manifestDigest: true } } },
+      }),
+      tx.platformRelease.findMany({
+        where: { approval: "FLEET_APPROVED" },
+        orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+        select: { id: true, manifest: true },
       }),
     ]);
     if (!discovery) {
@@ -115,6 +125,41 @@ export async function createReleaseCandidate(input: {
       || target.market !== input.market
     ) {
       throw new ControlPlaneError("source SHA와 market에 고정된 BuildTarget이 없습니다.", 409, "BUILD_TARGET_MISMATCH");
+    }
+    const repoId = app.repoId?.toString() ?? null;
+    const latestApplicablePlatformRelease = repoId
+      ? approvedPlatformReleases
+          .map((release) => ({ ...release, parsedManifest: platformReleaseManifestSchema.parse(release.manifest) }))
+          .find((release) => release.parsedManifest.consumers.some((consumer) => consumer.repoId === repoId))
+      : null;
+    const latestConsumer = latestApplicablePlatformRelease?.parsedManifest.consumers.find(
+      (consumer) => consumer.repoId === repoId,
+    );
+    const latestArtifact = latestApplicablePlatformRelease?.parsedManifest.artifacts.find(
+      (artifact) => artifact.kind === latestConsumer?.artifactKind,
+    );
+    if (
+      !latestApplicablePlatformRelease
+      || !platformBinding
+      || platformBinding.platformReleaseId !== latestApplicablePlatformRelease.id
+      || platformBinding.platformRelease?.approval !== "FLEET_APPROVED"
+      || platformBinding.platformRelease.manifestDigest !== platformBinding.manifestDigest
+      || platformBinding.state !== "COMPLIANT"
+      || platformBinding.sourceSha?.toLowerCase() !== input.sourceSha.toLowerCase()
+      || platformBinding.observedVersion !== input.platformVersion
+      || platformBinding.approvedVersion !== input.platformVersion
+      || platformBinding.approvedVersion !== latestArtifact?.version
+      || !platformBinding.observedDigest
+      || platformBinding.observedDigest !== platformBinding.approvedDigest
+      || platformBinding.approvedDigest !== latestArtifact?.digest.toLowerCase()
+      || platformBinding.contractRevision?.toLowerCase()
+        !== latestApplicablePlatformRelease.parsedManifest.contractRevision.toLowerCase()
+    ) {
+      throw new ControlPlaneError(
+        "최신 FLEET_APPROVED Platform SDK의 exact version/digest 관측 전에는 release candidate를 만들 수 없습니다.",
+        409,
+        "PLATFORM_FLEET_STALE",
+      );
     }
     const candidate = await tx.releaseCandidate.create({
       data: {

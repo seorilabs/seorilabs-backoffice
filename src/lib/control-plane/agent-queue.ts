@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
-  AUTOMATION_TEMPLATE_KEY,
-  isManagedAutomationDefinition,
-  parseManagedAutomationPolicy,
+  MANAGED_WORKER_TEMPLATE_KEYS,
+  parseManagedWorkerPolicy,
   type AutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { prisma } from "@/lib/prisma";
@@ -65,9 +64,7 @@ function managedPolicy(definition: {
   agentKind: string | null;
   configuration: Prisma.JsonValue | null;
 }): AutomationPolicy | null {
-  return isManagedAutomationDefinition(definition)
-    ? parseManagedAutomationPolicy(definition.configuration)
-    : null;
+  return parseManagedWorkerPolicy(definition);
 }
 
 function tokenHash(token: string): string {
@@ -285,6 +282,7 @@ export interface ClaimedAgentRun {
   budgetCeilingMicros: number;
   spentMicros: number;
   remainingBudgetMicros: number;
+  taskInput: Prisma.JsonValue | null;
   actionCapabilities: readonly string[];
   resumeMode: "START" | "READBACK_FIRST";
   generation: number;
@@ -352,6 +350,7 @@ async function replayClaim(input: {
     budgetCeilingMicros: policy.budgetCeilingMicros,
     spentMicros,
     remainingBudgetMicros: Math.max(0, policy.budgetCeilingMicros - spentMicros),
+    taskInput: event.run.taskInput,
     actionCapabilities: resumeMode === "READBACK_FIRST"
       ? READBACK_ACTION_CAPABILITIES
       : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
@@ -509,6 +508,7 @@ async function tryClaimRun(input: {
         budgetCeilingMicros: policy.budgetCeilingMicros,
         spentMicros,
         remainingBudgetMicros: policy.budgetCeilingMicros - spentMicros,
+        taskInput: run.taskInput,
         actionCapabilities: readbackClaim
           ? READBACK_ACTION_CAPABILITIES
           : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
@@ -549,7 +549,7 @@ export async function claimAgentRun(input: {
         definition: {
           enabled: true,
           cancelledAt: null,
-          template: AUTOMATION_TEMPLATE_KEY,
+          template: { in: [...MANAGED_WORKER_TEMPLATE_KEYS] },
           agentKind: input.agentKind,
           configuration: { not: Prisma.DbNull },
         },
