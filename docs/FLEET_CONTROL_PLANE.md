@@ -145,7 +145,36 @@ Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT`
 
 `repository`의 created, renamed, archived, unarchived, edited와 default-branch `push`를
 `RepositoryRegistration`에 repo numeric ID 기준으로 upsert한다. 이미 관리 중인 repo rename만
-`App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규 repo는 App을 추측 생성하지 않는다.
+GitHub readback까지 통과한 뒤 `App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규
+repo는 App을 추측 생성하지 않는다.
+
+webhook은 source를 직접 읽지 않는다. 같은 transaction에서 `RepositoryDiscoveryRun` generation을
+enqueue하고 응답한다. delivery ID가 달라도 동일 generation의 normalized request hash가 같으면 기존
+run으로 접고, 새 generation은 이전 QUEUED/RUNNING lease를 즉시 `STALE`로 만든다. 전용 worker가 numeric
+repository ID, canonical full name, private/archive/default
+branch와 현재 `main` HEAD를 provider에서 다시 읽은 뒤 exact commit tree만 탐색한다. default push SHA와
+현재 HEAD가 다르거나 탐지 중 HEAD가 움직이면 이전 run은 `STALE`로 닫고 current HEAD를 새 generation으로
+enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration generation CAS에서 거부된다.
+
+탐지 파일은 verified tree에서 선택한 `package.json`, `project.godot`, native build identity,
+`export_presets.cfg`, `build.env`, `granite.config.ts`로 제한한다. 원문은 parser 호출 동안만 유지하며 DB에는
+path, blob SHA, content SHA-256, size, 상태와 파생된 공개 package/bundle/app ID만 저장한다. tree 전체 path와
+source 원문, secret-like custom package field는 저장하지 않는다.
+
+- 후보 하나: `App.status=ACTIVE` 신규 등록, `RepositoryRegistration.status=MANAGED`, exact-SHA
+  `DiscoveryObservation`을 하나의 transaction으로 완료한다.
+- 후보 0개/여러 개, package manager 모호성, build target/공개 identity 누락, unreadable source,
+  public/non-main repo: 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
+- `seorilabs/platform`은 `seorilabs-platform` package와 `spec/openapi.yaml`을 함께 확인한 뒤
+  `PLATFORM_PRODUCER`로 관리하며 RN/Godot App 후보에서 명시적으로 제외한다.
+- webhook handler가 durable enqueue 전에 실패하면 delivery claim을 되돌리고 503을 반환해 GitHub
+  redelivery가 동일 delivery ID로 재개할 수 있게 한다.
+
+worker poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
+enqueue와 registration은 webhook transaction에서
+즉시 완료하며, 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
+신규 private RN/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
+completedAt, reasonCode로 자동 검증할 수 있다.
 
 ## 이관 경계
 

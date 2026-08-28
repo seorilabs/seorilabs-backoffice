@@ -948,21 +948,22 @@ model ExternalBinding {
 }
 
 model DiscoveryObservation {
-  id                       String   @id @default(cuid())
+  id                       String                   @id @default(cuid())
   appId                    String
-  app                      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha                String   @db.Char(40)
+  app                      App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha                String                   @db.Char(40)
   sourceRef                String?
   workflowProfile          String?
   workflowPackageManager   String?
   workflowWorkingDirectory String?
   payload                  Json
-  payloadHash              String   @db.Char(64)
-  requestHash              String?  @db.Char(64)
-  idempotencyKey           String   @unique
+  payloadHash              String                   @db.Char(64)
+  requestHash              String?                  @db.Char(64)
+  idempotencyKey           String                   @unique
   observedBy               String
-  observedAt               DateTime @db.DateTime(3)
-  createdAt                DateTime @default(now()) @db.DateTime(3)
+  observedAt               DateTime                 @db.DateTime(3)
+  createdAt                DateTime                 @default(now()) @db.DateTime(3)
+  repositoryDiscoveryRuns  RepositoryDiscoveryRun[]
 
   @@index([appId, sourceSha, payloadHash])
   @@index([appId, observedAt])
@@ -1494,9 +1495,14 @@ model RepositoryRegistration {
   defaultBranch       String?
   archived            Boolean                      @default(false)
   status              RepositoryRegistrationStatus @default(REGISTERED)
+  managementKind      RepositoryManagementKind?
   discoveryCandidates Json?
   lastDefaultPushSha  String?                      @db.Char(40)
+  reconcileGeneration Int?
+  lastReconciledSha   String?                      @db.Char(40)
+  lastDiscoveryReason String?                      @db.VarChar(64)
   lastDeliveryId      String?
+  discoveryRuns       RepositoryDiscoveryRun[]
   createdAt           DateTime                     @default(now()) @db.DateTime(3)
   updatedAt           DateTime                     @updatedAt
 
@@ -1509,6 +1515,54 @@ enum RepositoryRegistrationStatus {
   NEEDS_INPUT
   MANAGED
   ARCHIVED
+}
+
+enum RepositoryManagementKind {
+  UNCLASSIFIED
+  APP
+  PLATFORM_PRODUCER
+}
+
+// webhook 응답과 GitHub source read를 분리하는 durable 재조정 원장이다.
+// leaseGeneration CAS로 사라진 worker의 늦은 완료가 최신 push를 덮지 못한다.
+model RepositoryDiscoveryRun {
+  id                String                       @id @default(cuid())
+  repoId            BigInt
+  registration      RepositoryRegistration       @relation(fields: [repoId], references: [repoId], onDelete: Cascade)
+  generation        Int
+  triggerDeliveryId String                       @unique
+  requestHash       String                       @db.Char(64)
+  sourceSha         String?                      @db.Char(40)
+  sourceRef         String?
+  status            RepositoryDiscoveryRunStatus @default(QUEUED)
+  reasonCode        String?                      @db.VarChar(64)
+  candidateDigest   String?                      @db.Char(64)
+  observationId     String?                      @unique
+  observation       DiscoveryObservation?        @relation(fields: [observationId], references: [id], onDelete: SetNull)
+  attempts          Int                          @default(0)
+  leaseGeneration   Int                          @default(0)
+  workerId          String?
+  leaseExpiresAt    DateTime?                    @db.DateTime(3)
+  availableAt       DateTime                     @default(now()) @db.DateTime(3)
+  startedAt         DateTime?                    @db.DateTime(3)
+  completedAt       DateTime?                    @db.DateTime(3)
+  createdAt         DateTime                     @default(now()) @db.DateTime(3)
+  updatedAt         DateTime                     @updatedAt
+
+  @@unique([repoId, generation])
+  @@index([status, availableAt, createdAt])
+  @@index([repoId, createdAt])
+  @@map("repository_discovery_run")
+}
+
+enum RepositoryDiscoveryRunStatus {
+  QUEUED
+  RUNNING
+  MANAGED
+  NEEDS_INPUT
+  EXCLUDED
+  STALE
+  FAILED
 }
 
 // durable automation queue. AgentRepoGuard가 lease TTL과 독립적으로 같은 repo의

@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-repository-discovery-worker
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: repository-discovery-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: repository-discovery-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: repository-discovery-worker
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: repository-discovery-worker
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/repository-discovery-worker.cjs"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=256 --dns-result-order=ipv4first --no-network-family-autoselection"
+            - name: GITHUB_ORG
+              value: seorilabs
+            - name: REPOSITORY_DISCOVERY_POLL_INTERVAL_MS
+              value: "2000"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DATABASE_URL
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_PRIVATE_KEY
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

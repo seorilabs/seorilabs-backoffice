@@ -226,9 +226,16 @@ export async function POST(req: NextRequest) {
 
   try {
     await handleEvent(event, payload, deliveryId);
-  } catch (err) {
-    // 핸들러 실패해도 200 (GitHub 재전송 + reconcile 로 복구). 로깅만.
-    console.error(`[webhook] ${event} handler error:`, err);
+  } catch {
+    if (event === "repository" || event === "push") {
+      // durable discovery enqueue 전에 delivery만 완료되는 창을 허용하지 않는다.
+      // row를 되돌리고 non-2xx로 응답해 같은 delivery가 다시 claim되게 한다.
+      await prisma.webhookDelivery.deleteMany({ where: { deliveryId } });
+      console.error(`[webhook] ${event} handler error code=DURABLE_ENQUEUE_FAILED`);
+      return NextResponse.json({ error: "temporary webhook processing failure" }, { status: 503 });
+    }
+    // 기존 mirror upsert는 provider 재동기화 경계가 있으므로 webhook 응답을 유지한다.
+    console.error(`[webhook] ${event} handler error code=MIRROR_HANDLER_FAILED`);
   }
 
   await notifyHooks(event, payload, deliveryId);

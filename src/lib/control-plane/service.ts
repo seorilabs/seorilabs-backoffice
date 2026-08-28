@@ -204,7 +204,7 @@ export function resolvedWorkflowCaller(input: {
   );
 }
 
-export async function recordDiscoveryObservation(input: {
+export type DiscoveryObservationInput = {
   repoId: bigint;
   sourceSha: string;
   sourceRef?: string;
@@ -221,11 +221,20 @@ export async function recordDiscoveryObservation(input: {
     bundleId?: string;
     configuration?: Record<string, unknown>;
   }>;
-}) {
+};
+
+/**
+ * Repository discovery reconciler가 App 등록, observation, registration 상태를
+ * 하나의 row-lock transaction으로 닫을 수 있게 하는 내부 service 경계다.
+ */
+export async function recordDiscoveryObservationInTransaction(
+  tx: Prisma.TransactionClient,
+  input: DiscoveryObservationInput,
+) {
   assertObservationTime(input.observedAt);
   const payloadHash = jsonDigest(input.payload as JsonValue);
   const requestHash = discoveryObservationRequestHash(input);
-  const replay = await prisma.discoveryObservation.findUnique({
+  const replay = await tx.discoveryObservation.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
     include: { app: { select: { repoId: true } } },
   });
@@ -245,74 +254,76 @@ export async function recordDiscoveryObservation(input: {
     return { observation: replay, duplicate: true };
   }
 
-  return prisma.$transaction(async (tx) => {
-    const app = await appForRepoId(tx, input.repoId);
-    const observation = await tx.discoveryObservation.create({
-      data: {
-        appId: app.id,
-        sourceSha: input.sourceSha.toLowerCase(),
-        sourceRef: input.sourceRef,
-        workflowProfile: input.workflowCaller.profile,
-        workflowPackageManager: input.workflowCaller.packageManager,
-        workflowWorkingDirectory: input.workflowCaller.workingDirectory,
-        observedAt: input.observedAt,
-        observedBy: input.observedBy,
-        idempotencyKey: input.idempotencyKey,
-        payload: jsonInput(input.payload),
-        payloadHash,
-        requestHash,
-      },
-    });
-    for (const target of input.buildTargets) {
-      const market = target.market?.toLowerCase();
-      await tx.buildTarget.upsert({
-        where: { appId_targetKey: { appId: app.id, targetKey: target.targetKey } },
-        create: {
-          appId: app.id,
-          targetKey: target.targetKey,
-          stack: target.stack,
-          market,
-          packageId: target.packageId,
-          bundleId: target.bundleId,
-          observedSha: input.sourceSha.toLowerCase(),
-          observedAt: input.observedAt,
-          configuration: target.configuration ? jsonInput(target.configuration) : undefined,
-        },
-        update: {},
-      });
-      await tx.buildTarget.updateMany({
-        where: {
-          appId: app.id,
-          targetKey: target.targetKey,
-          observedAt: { lte: input.observedAt },
-        },
-        data: {
-          stack: target.stack,
-          market,
-          packageId: target.packageId,
-          bundleId: target.bundleId,
-          observedSha: input.sourceSha.toLowerCase(),
-          observedAt: input.observedAt,
-          configuration: target.configuration ? jsonInput(target.configuration) : Prisma.JsonNull,
-        },
-      });
-    }
-    await tx.auditLog.create({
-      data: {
-        actorLogin: input.observedBy,
-        action: "control-plane.discovery.record",
-        entityType: "DiscoveryObservation",
-        entityId: observation.id,
-        payload: {
-          appId: app.id,
-          sourceSha: input.sourceSha,
-          payloadHash,
-          workflowCaller: input.workflowCaller,
-        },
-      },
-    });
-    return { observation, duplicate: false };
+  const app = await appForRepoId(tx, input.repoId);
+  const observation = await tx.discoveryObservation.create({
+    data: {
+      appId: app.id,
+      sourceSha: input.sourceSha.toLowerCase(),
+      sourceRef: input.sourceRef,
+      workflowProfile: input.workflowCaller.profile,
+      workflowPackageManager: input.workflowCaller.packageManager,
+      workflowWorkingDirectory: input.workflowCaller.workingDirectory,
+      observedAt: input.observedAt,
+      observedBy: input.observedBy,
+      idempotencyKey: input.idempotencyKey,
+      payload: jsonInput(input.payload),
+      payloadHash,
+      requestHash,
+    },
   });
+  for (const target of input.buildTargets) {
+    const market = target.market?.toLowerCase();
+    await tx.buildTarget.upsert({
+      where: { appId_targetKey: { appId: app.id, targetKey: target.targetKey } },
+      create: {
+        appId: app.id,
+        targetKey: target.targetKey,
+        stack: target.stack,
+        market,
+        packageId: target.packageId,
+        bundleId: target.bundleId,
+        observedSha: input.sourceSha.toLowerCase(),
+        observedAt: input.observedAt,
+        configuration: target.configuration ? jsonInput(target.configuration) : undefined,
+      },
+      update: {},
+    });
+    await tx.buildTarget.updateMany({
+      where: {
+        appId: app.id,
+        targetKey: target.targetKey,
+        observedAt: { lte: input.observedAt },
+      },
+      data: {
+        stack: target.stack,
+        market,
+        packageId: target.packageId,
+        bundleId: target.bundleId,
+        observedSha: input.sourceSha.toLowerCase(),
+        observedAt: input.observedAt,
+        configuration: target.configuration ? jsonInput(target.configuration) : Prisma.JsonNull,
+      },
+    });
+  }
+  await tx.auditLog.create({
+    data: {
+      actorLogin: input.observedBy,
+      action: "control-plane.discovery.record",
+      entityType: "DiscoveryObservation",
+      entityId: observation.id,
+      payload: {
+        appId: app.id,
+        sourceSha: input.sourceSha,
+        payloadHash,
+        workflowCaller: input.workflowCaller,
+      },
+    },
+  });
+  return { observation, duplicate: false };
+}
+
+export async function recordDiscoveryObservation(input: DiscoveryObservationInput) {
+  return prisma.$transaction((tx) => recordDiscoveryObservationInTransaction(tx, input));
 }
 
 export async function recordProviderObservation(input: {

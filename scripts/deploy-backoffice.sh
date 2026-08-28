@@ -287,6 +287,8 @@ wait_for_deployment backoffice-notification-worker
 wait_for_deployment backoffice-operator-command-worker
 apply_image_manifest teammate-worker.yaml
 wait_for_deployment backoffice-teammate-worker
+apply_image_manifest repository-discovery-worker.yaml
+wait_for_deployment backoffice-repository-discovery-worker
 
 echo "== scheduler drain and catch-up =="
 # 첫 전환에서는 old in-process scheduler Pod가 사라진 뒤 실행된다. 이후에는 기존

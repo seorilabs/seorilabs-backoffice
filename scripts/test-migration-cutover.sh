@@ -19,7 +19,7 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 
 before="$(pnpm tsx scripts/verify-migration-state.ts \
   --history=legacy --print-data-fingerprint | tail -n 1)"
-new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation,control_plane_fleet_parity_wave,control_plane_fleet_parity_wave_result,control_plane_project_blueprint,control_plane_market_profile,control_plane_market_localization,control_plane_compliance_profile,control_plane_store_asset,control_plane_fleet_lifecycle_state,control_plane_fleet_lifecycle_event,agent_repo_guard,automation_ingress_event,fleet_project_projection,automation_mutation_request"
+new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation,control_plane_fleet_parity_wave,control_plane_fleet_parity_wave_result,control_plane_project_blueprint,control_plane_market_profile,control_plane_market_localization,control_plane_compliance_profile,control_plane_store_asset,control_plane_fleet_lifecycle_state,control_plane_fleet_lifecycle_event,agent_repo_guard,automation_ingress_event,fleet_project_projection,automation_mutation_request,repository_discovery_run"
 preflight_log="$(mktemp)"
 trap 'rm -f "$preflight_log"' EXIT
 if pnpm tsx scripts/verify-migration-state.ts --history=predeploy \
@@ -55,5 +55,6 @@ pnpm prisma migrate diff \
   --exit-code >/dev/null
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-lineage-loss.ts
+pnpm tsx scripts/test-repository-discovery.ts
 
 echo "legacy → baseline cutover 계약 통과"
