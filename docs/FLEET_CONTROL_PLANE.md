@@ -17,7 +17,7 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
   agent queue의 `X-Admin-Token`은 인증에 사용하지 않으며, 새 capability가 없으면 fail-closed한다.
 - 제어면 principal은 token과 1:1로 결합하며 임의 header 값이나 미설정 principal은 거부한다.
 - 모든 mutation: 8자 이상의 `Idempotency-Key`
-- Config activation과 resolved manifest: `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY`
+- Config activation과 resolved manifest: 전용 Secret `backoffice-control-plane-snapshot-signing`의 `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY`
 - agent claim: worker에 노출하지 않는 `AGENT_LEASE_SIGNING_KEY`
 
 토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
@@ -312,6 +312,9 @@ read-only PVC에서 읽어 Pod 내부 MySQL 9.2 `emptyDir`에 복원하고 다�
 - 현재 migration/history/schema와 복구 전후 data fingerprint가 같다.
 - 복구 DB로 production Backoffice server가 Ready가 되고 resolved manifest를 HTTP로 재생한다.
 - 모든 ACTIVE snapshot 서명이 맞고 잘못된 키와 DRAFT는 기존 resolve 경계에서 거부된다.
+- signing key는 broad `backoffice-secrets`가 아니라 exact key 하나만 가진 전용 Secret volume에서 읽는다.
+  전용 SealedSecret이 live에 적용되지 않았으면 web activation과 rehearsal은 fail-closed하며 다른 Secret으로
+  대체하지 않는다.
 - verifier는 SHA, count, digest와 성공 여부만 출력한다. production DB URL/password는 Pod에 주입하지 않는다.
 - verifier 종료 시 MySQL을 내리고 Pod-scoped `emptyDir`을 폐기한다. Job은 감사용 metadata만 7일 보존한다.
 
