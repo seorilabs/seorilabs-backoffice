@@ -1,16 +1,13 @@
 import { hostname } from "node:os";
 import { readFile } from "node:fs/promises";
 
-import {
-  marketReadbackSchema,
-  providerReadbackPayloadSchema,
-} from "@/lib/control-plane/contracts";
+import type { ProviderCommandEnvelope } from "@/lib/control-plane/contracts";
 import {
   createProductionProviderAdapter,
+  type ProviderAdapterExecutor,
 } from "@/lib/control-plane/provider-adapter-client";
 import {
   claimProviderExecution,
-  readProviderExecutionObservation,
   settleProviderExecution,
 } from "@/lib/control-plane/provider-execution-service";
 import { recordReauthRequest } from "@/lib/control-plane/service";
@@ -39,19 +36,10 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function currentReadback(executionId: string, generation: number) {
+async function currentReadback(adapter: ProviderAdapterExecutor, envelope: ProviderCommandEnvelope) {
   for (let attempt = 0; attempt < 20 && running; attempt += 1) {
-    const observed = await readProviderExecutionObservation(executionId, generation);
-    if (observed?.kind === "BLUEPRINT") {
-      return {
-        kind: "BLUEPRINT" as const,
-        observedAt: observed.observedAt,
-        payload: providerReadbackPayloadSchema.parse(observed.payload),
-      };
-    }
-    if (observed?.kind === "MARKET") {
-      return { kind: "MARKET" as const, payload: marketReadbackSchema.parse(observed.payload) };
-    }
+    const observed = await adapter.readObservation(envelope);
+    if (observed) return observed;
     await wait(500);
   }
   return null;
@@ -78,7 +66,17 @@ async function main() {
       const { executionId, generation, leaseToken, envelope } = claimed.claim;
       const result = await adapter.execute(envelope);
       const settlementId = `provider-settlement:${executionId}:${generation}`;
-      if (result.outcome === "HUMAN_REQUIRED") {
+      if (result.outcome === "APPROVAL_REQUIRED") {
+        await settleProviderExecution({
+          executionId,
+          generation,
+          leaseToken,
+          workerId,
+          outcome: "APPROVAL_REQUIRED",
+          errorCode: result.errorCode ?? "PER_RUN_APPROVAL_REQUIRED",
+          idempotencyKey: settlementId,
+        });
+      } else if (result.outcome === "HUMAN_REQUIRED") {
         const reauth = await recordReauthRequest({
           repoId: BigInt(envelope.repoId),
           provider: envelope.provider,
@@ -99,7 +97,7 @@ async function main() {
           idempotencyKey: settlementId,
         });
       } else if (result.outcome === "COMMAND_ACCEPTED" && envelope.operation === "READBACK") {
-        const observation = await currentReadback(executionId, generation);
+        const observation = await currentReadback(adapter, envelope);
         await settleProviderExecution({
           executionId,
           generation,

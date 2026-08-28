@@ -6,24 +6,28 @@ import {
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
+import { z } from "zod";
 
 import {
   providerCommandEnvelopeSchema,
+  providerExecutionObservationSchema,
   type ProviderCommandEnvelope,
+  type ProviderExecutionObservation,
 } from "@/lib/control-plane/contracts";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
 const ATTESTATION_DOMAIN = "seori-run-attestation-v1\n";
 const RESPONSE_LIMIT = 64 * 1024;
-const PUBLIC_ERROR = /^[a-z][a-z0-9_]{0,127}$/;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/;
 
 export interface ProviderAdapterResult {
-  outcome: "COMMAND_ACCEPTED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED";
+  outcome: "COMMAND_ACCEPTED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED" | "APPROVAL_REQUIRED";
   errorCode?: string;
 }
 
 export interface ProviderAdapterExecutor {
   execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult>;
+  readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null>;
 }
 
 export function buildAuthBrokerLeaseRequest(envelope: ProviderCommandEnvelope, subject: string) {
@@ -52,6 +56,52 @@ export function buildAuthBrokerLeaseRequest(envelope: ProviderCommandEnvelope, s
     authFactors: command.credential.authFactors,
     approval: command.approval,
   };
+}
+
+function policyActionClass(command: ProviderCommandEnvelope) {
+  if (command.operation === "READBACK") return "read_only" as const;
+  if (command.operation === "UPLOAD_INTERNAL") return "internal_upload" as const;
+  return "other_mutation" as const;
+}
+
+export function buildAuthBrokerPolicyGrant(envelope: ProviderCommandEnvelope, subject: string) {
+  const command = providerCommandEnvelopeSchema.parse(envelope);
+  const request = buildAuthBrokerLeaseRequest(command, subject);
+  const id = `provider-grant-${command.bindingHash.slice(0, 40)}-${command.generation}`;
+  const commandDigest = jsonDigest(command as unknown as JsonValue);
+  const grant = {
+    schemaVersion: 1 as const,
+    id,
+    policyGeneration: command.credential.policyGeneration,
+    bindingHash: command.bindingHash,
+    commandDigest,
+    expiresAt: command.approval.expiresAt,
+    maxUses: 1 as const,
+    rule: {
+      id,
+      enabled: true,
+      credentialRefs: [request.credentialRef],
+      subjects: [request.subject],
+      repositories: [request.repository],
+      runIds: [request.runId],
+      commitShas: [request.commitSha],
+      providers: [request.provider],
+      origins: [request.origin],
+      redirectOrigins: request.redirectOrigins,
+      capabilities: [request.capability],
+      resources: [request.resource],
+      adapters: [request.adapterId],
+      accountIds: [request.accountId],
+      actionClass: policyActionClass(command),
+      authStrategies: [request.authFactors],
+      requiresArtifact: request.artifact !== undefined,
+      artifactSha256s: request.artifact ? [request.artifact.sha256] : [],
+      allowTotp: false,
+      approvals: [request.approval],
+    },
+    command,
+  };
+  return { grant, digest: jsonDigest(grant as unknown as JsonValue) };
 }
 
 function base64UrlJson(value: Record<string, unknown>): string {
@@ -93,19 +143,49 @@ type BrokerTransport = (input: {
   attestation: string;
 }) => Promise<{ status: number; body: unknown }>;
 
-function safeBrokerError(body: unknown): string {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return "auth_broker_failed";
-  const candidate = body as { error?: unknown; code?: unknown };
-  const code = typeof candidate.code === "string" ? candidate.code : typeof candidate.error === "string" ? candidate.error : "";
-  return PUBLIC_ERROR.test(code) ? code : "auth_broker_failed";
+const brokerErrorResponseSchema = z.object({
+  error: z.object({
+    code: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,127}$/),
+  }).strict(),
+}).strict();
+
+export function safeBrokerError(body: unknown): string {
+  const parsed = brokerErrorResponseSchema.safeParse(body);
+  return parsed.success ? parsed.data.error.code : "auth_broker_failed";
 }
 
-const HUMAN_ERRORS = new Set([
-  "human_reauth_required",
-  "reauth_required",
-  "browser_reauthentication_required",
-  "policy_requires_human_approval",
+const REAUTH_ERRORS = new Set([
+  "HUMAN_REAUTH_REQUIRED",
+  "lease_invalidated_by_reauth",
 ]);
+const APPROVAL_ERRORS = new Set([
+  "per_run_approval_required",
+  "approval_expired",
+  "approval_already_used",
+]);
+
+function brokerGateResult(code: string): ProviderAdapterResult | null {
+  if (REAUTH_ERRORS.has(code)) return { outcome: "HUMAN_REQUIRED", errorCode: code.toUpperCase() };
+  if (APPROVAL_ERRORS.has(code)) return { outcome: "APPROVAL_REQUIRED", errorCode: code.toUpperCase() };
+  return null;
+}
+
+const policyGrantReferenceSchema = z.object({
+  id: z.string().regex(/^provider-grant-[0-9a-f]{40}-[1-9][0-9]*$/),
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+  bindingHash: z.string().regex(/^[0-9a-f]{64}$/),
+  commandDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  policyGeneration: z.number().int().positive(),
+  state: z.literal("ACTIVE"),
+}).strict();
+
+const policyGrantResponseSchema = z.object({ policyGrant: policyGrantReferenceSchema }).strict();
+const policyGrantObservationResponseSchema = z.object({
+  policyGrant: policyGrantReferenceSchema,
+  observation: providerExecutionObservationSchema,
+}).strict();
+
+type PolicyGrantReference = z.infer<typeof policyGrantReferenceSchema>;
 
 export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   readonly #workerId: string;
@@ -145,8 +225,88 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     });
   }
 
+  #matchesGrantReference(
+    reference: PolicyGrantReference,
+    expected: ReturnType<typeof buildAuthBrokerPolicyGrant>,
+  ): boolean {
+    return reference.id === expected.grant.id
+      && reference.digest === expected.digest
+      && reference.bindingHash === expected.grant.bindingHash
+      && reference.commandDigest === expected.grant.commandDigest
+      && reference.policyGeneration === expected.grant.policyGeneration;
+  }
+
+  async #registerAndVerifyPolicyGrant(command: ProviderCommandEnvelope): Promise<
+    { grant: ReturnType<typeof buildAuthBrokerPolicyGrant> }
+    | { result: ProviderAdapterResult }
+  > {
+    const built = buildAuthBrokerPolicyGrant(command, this.#subject);
+    let registered;
+    try {
+      registered = await this.#transport({
+        path: "/auth/policy-grants",
+        body: {
+          idempotencyKey: `provider-policy-grant:${command.executionId}:${command.generation}`,
+          workerId: this.#workerId,
+          grant: built.grant,
+          digest: built.digest,
+        },
+        attestation: this.#attestation(command),
+      });
+    } catch {
+      return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNAVAILABLE" } };
+    }
+    if (registered.status !== 200 && registered.status !== 201) {
+      const code = safeBrokerError(registered.body);
+      const gate = brokerGateResult(code);
+      if (gate) return { result: gate };
+      return {
+        result: {
+          outcome: "FAILED",
+          errorCode: registered.status === 404
+            ? "AUTH_BROKER_POLICY_GRANT_UNAVAILABLE"
+            : code.toUpperCase(),
+        },
+      };
+    }
+    const registeredBody = policyGrantResponseSchema.safeParse(registered.body);
+    if (!registeredBody.success || !this.#matchesGrantReference(registeredBody.data.policyGrant, built)) {
+      return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_INVALID" } };
+    }
+
+    let verified;
+    try {
+      verified = await this.#transport({
+        path: `/auth/policy-grants/${encodeURIComponent(built.grant.id)}/verify`,
+        body: {
+          workerId: this.#workerId,
+          expectedDigest: built.digest,
+          expectedBindingHash: built.grant.bindingHash,
+          expectedCommandDigest: built.grant.commandDigest,
+          expectedPolicyGeneration: built.grant.policyGeneration,
+        },
+        attestation: this.#attestation(command),
+      });
+    } catch {
+      return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
+    }
+    if (verified.status !== 200) {
+      const code = safeBrokerError(verified.body);
+      const gate = brokerGateResult(code);
+      if (gate) return { result: gate };
+      return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
+    }
+    const verifiedBody = policyGrantResponseSchema.safeParse(verified.body);
+    if (!verifiedBody.success || !this.#matchesGrantReference(verifiedBody.data.policyGrant, built)) {
+      return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
+    }
+    return { grant: built };
+  }
+
   async execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult> {
     const command = providerCommandEnvelopeSchema.parse(envelope);
+    const policyGrant = await this.#registerAndVerifyPolicyGrant(command);
+    if ("result" in policyGrant) return policyGrant.result;
     const request = buildAuthBrokerLeaseRequest(command, this.#subject);
     let issued;
     try {
@@ -164,7 +324,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     }
     if (issued.status !== 201 && issued.status !== 200) {
       const errorCode = safeBrokerError(issued.body);
-      return { outcome: HUMAN_ERRORS.has(errorCode) ? "HUMAN_REQUIRED" : "FAILED", errorCode: errorCode.toUpperCase() };
+      return brokerGateResult(errorCode) ?? { outcome: "FAILED", errorCode: errorCode.toUpperCase() };
     }
     const checkout = (issued.body as { credentialCheckout?: { id?: unknown; generation?: unknown } })?.credentialCheckout;
     if (!checkout || typeof checkout.id !== "string" || !OPAQUE_ID.test(checkout.id) || !Number.isSafeInteger(checkout.generation) || Number(checkout.generation) < 1) {
@@ -187,12 +347,36 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     }
     if (executed.status !== 200) {
       const errorCode = safeBrokerError(executed.body);
-      return { outcome: HUMAN_ERRORS.has(errorCode) ? "HUMAN_REQUIRED" : "RESULT_UNKNOWN", errorCode: errorCode.toUpperCase() };
+      return brokerGateResult(errorCode) ?? { outcome: "RESULT_UNKNOWN", errorCode: errorCode.toUpperCase() };
     }
     const execution = (executed.body as { execution?: { outcome?: unknown } })?.execution;
     if (execution?.outcome === "SUCCESS") return { outcome: "COMMAND_ACCEPTED" };
     if (execution?.outcome === "ADAPTER_FAILED") return { outcome: "FAILED", errorCode: "TRUSTED_ADAPTER_FAILED" };
     return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_RESPONSE_INVALID" };
+  }
+
+  async readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null> {
+    const command = providerCommandEnvelopeSchema.parse(envelope);
+    const built = buildAuthBrokerPolicyGrant(command, this.#subject);
+    const response = await this.#transport({
+      path: `/auth/policy-grants/${encodeURIComponent(built.grant.id)}/observation`,
+      body: {
+        workerId: this.#workerId,
+        expectedDigest: built.digest,
+        expectedBindingHash: built.grant.bindingHash,
+        expectedCommandDigest: built.grant.commandDigest,
+        expectedPolicyGeneration: built.grant.policyGeneration,
+        expectedExecutionGeneration: command.generation,
+      },
+      attestation: this.#attestation(command),
+    });
+    if (response.status === 204) return null;
+    if (response.status !== 200) throw new Error("AUTH_BROKER_OBSERVATION_UNAVAILABLE");
+    const parsed = policyGrantObservationResponseSchema.safeParse(response.body);
+    if (!parsed.success || !this.#matchesGrantReference(parsed.data.policyGrant, built)) {
+      throw new Error("AUTH_BROKER_OBSERVATION_BINDING_MISMATCH");
+    }
+    return parsed.data.observation;
   }
 }
 

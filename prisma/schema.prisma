@@ -1451,7 +1451,7 @@ enum ProviderExecutionStatus {
 model ProviderExecutionEvent {
   id          String            @id @default(cuid())
   executionId String
-  execution   ProviderExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  execution   ProviderExecution @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   requestId   String?           @unique @db.VarChar(191)
   type        String            @db.VarChar(64)
   generation  Int?

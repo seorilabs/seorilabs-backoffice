@@ -12,9 +12,12 @@ import {
 import {
   SeoriAuthBrokerProviderAdapter,
   buildAuthBrokerLeaseRequest,
+  buildAuthBrokerPolicyGrant,
+  safeBrokerError,
   signRunAttestation,
 } from "@/lib/control-plane/provider-adapter-client";
 import {
+  assertDistinctProviderExecutionCredentials,
   blueprintExecutionContract,
   compileProviderCommandEnvelope,
   decideBlueprintReadback,
@@ -71,6 +74,20 @@ function envelope() {
       expiresAt: new Date("2099-01-01T00:00:00.000Z"),
     },
   });
+}
+
+function activeGrantResponse(command = envelope()) {
+  const built = buildAuthBrokerPolicyGrant(command, "k8s:platform:provider-execution-worker");
+  return {
+    policyGrant: {
+      id: built.grant.id,
+      digest: built.digest,
+      bindingHash: built.grant.bindingHash,
+      commandDigest: built.grant.commandDigest,
+      policyGeneration: built.grant.policyGeneration,
+      state: "ACTIVE",
+    },
+  };
 }
 
 test("provider execution create 계약은 blueprint/market allowlist 밖의 법적·심사·public action을 거부한다", () => {
@@ -137,6 +154,15 @@ test("result-unknown 재개는 mutation credential 대신 별도 fleet readback 
   };
   assert.equal(providerExecutionCredentialForClaim("START", primary, readback), primary);
   assert.equal(providerExecutionCredentialForClaim("READBACK_FIRST", primary, readback), readback);
+  assert.doesNotThrow(() => assertDistinctProviderExecutionCredentials(primary, readback));
+  assert.throws(
+    () => assertDistinctProviderExecutionCredentials(primary, { ...readback, logicalCredentialId: primary.logicalCredentialId }),
+    /PROVIDER_READBACK_IDENTITY_NOT_DISTINCT/,
+  );
+  assert.throws(
+    () => assertDistinctProviderExecutionCredentials(primary, { ...readback, credentialPublicIdentity: primary.credentialPublicIdentity.toUpperCase() }),
+    /PROVIDER_READBACK_IDENTITY_NOT_DISTINCT/,
+  );
 });
 
 test("binding hash는 repo/source/config/desired/public identity/credential generation 전체에 결합된다", () => {
@@ -230,6 +256,62 @@ test("Auth Broker lease에는 logical credential과 전체 binding digest만 전
   assert.equal("desired" in request, false);
 });
 
+test("동적 policy grant는 P2 exact singleton rule과 public command digest를 고정하고 shell/secret 표면을 만들지 않는다", () => {
+  const built = buildAuthBrokerPolicyGrant(envelope(), "k8s:platform:provider-execution-worker");
+  assert.equal(built.grant.rule.runIds[0], "provider-execution-1");
+  assert.equal(built.grant.rule.commitShas[0], sourceSha);
+  assert.equal(built.grant.rule.resources[0].id, `binding:${bindingHash}`);
+  assert.equal(built.grant.rule.approvals[0].maxUses, 1);
+  assert.equal(built.grant.command.bindingHash, bindingHash);
+  assert.match(built.digest, /^[0-9a-f]{64}$/);
+  assert.doesNotMatch(JSON.stringify(built), /"(?:executable|argv|env|secretExport|password|totpSeed)"/);
+});
+
+test("P2 실제 nested error contract만 수용하고 사람 gate code를 정확히 분류한다", async () => {
+  assert.equal(safeBrokerError({ error: { code: "HUMAN_REAUTH_REQUIRED" } }), "HUMAN_REAUTH_REQUIRED");
+  assert.equal(safeBrokerError({ error: { code: "per_run_approval_required" } }), "per_run_approval_required");
+  assert.equal(safeBrokerError({ code: "HUMAN_REAUTH_REQUIRED" }), "auth_broker_failed");
+  assert.equal(safeBrokerError({ error: { code: "approval_expired", message: "extra" } }), "auth_broker_failed");
+
+  for (const [code, outcome] of [
+    ["HUMAN_REAUTH_REQUIRED", "HUMAN_REQUIRED"],
+    ["lease_invalidated_by_reauth", "HUMAN_REQUIRED"],
+    ["per_run_approval_required", "APPROVAL_REQUIRED"],
+    ["approval_expired", "APPROVAL_REQUIRED"],
+    ["approval_already_used", "APPROVAL_REQUIRED"],
+  ] as const) {
+    const { privateKey } = generateKeyPairSync("ed25519");
+    const adapter = new SeoriAuthBrokerProviderAdapter({
+      workerId: "provider-worker-1",
+      subject: "k8s:platform:provider-execution-worker",
+      clientSpiffeId: "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker",
+      attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+      transport: async () => ({ status: 409, body: { error: { code } } }),
+    });
+    assert.deepEqual(await adapter.execute(envelope()), { outcome, errorCode: code.toUpperCase() });
+  }
+});
+
+test("현재 P2에 policy grant endpoint가 없으면 lease를 요청하지 않고 404 fail-closed한다", async () => {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const paths: string[] = [];
+  const adapter = new SeoriAuthBrokerProviderAdapter({
+    workerId: "provider-worker-1",
+    subject: "k8s:platform:provider-execution-worker",
+    clientSpiffeId: "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker",
+    attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+    transport: async ({ path }) => {
+      paths.push(path);
+      return { status: 404, body: { error: { code: "route_not_found" } } };
+    },
+  });
+  assert.deepEqual(await adapter.execute(envelope()), {
+    outcome: "FAILED",
+    errorCode: "AUTH_BROKER_POLICY_GRANT_UNAVAILABLE",
+  });
+  assert.deepEqual(paths, ["/auth/policy-grants"]);
+});
+
 test("mTLS scheduler attestation은 exact SPIFFE/run/repo/worker payload에 Ed25519 서명한다", () => {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const token = signRunAttestation({
@@ -259,7 +341,8 @@ test("Auth Broker execute transport가 불명확하면 adapter를 재실행하�
     attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
     transport: async () => {
       calls += 1;
-      if (calls === 1) return { status: 201, body: { credentialCheckout: { id: "checkout-1", generation: 1 } } };
+      if (calls <= 2) return { status: 200, body: activeGrantResponse() };
+      if (calls === 3) return { status: 201, body: { credentialCheckout: { id: "checkout-1", generation: 1 } } };
       throw new Error("response lost");
     },
   });
@@ -267,7 +350,49 @@ test("Auth Broker execute transport가 불명확하면 adapter를 재실행하�
     outcome: "RESULT_UNKNOWN",
     errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN",
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
+});
+
+test("grant 검증 뒤 binding이 일치하는 strict provider observation만 소비한다", async () => {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  let calls = 0;
+  const adapter = new SeoriAuthBrokerProviderAdapter({
+    workerId: "provider-worker-1",
+    subject: "k8s:platform:provider-execution-worker",
+    clientSpiffeId: "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker",
+    attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+    transport: async () => {
+      calls += 1;
+      if (calls <= 2) return { status: 200, body: activeGrantResponse() };
+      if (calls === 3) return { status: 201, body: { credentialCheckout: { id: "checkout-1", generation: 1 } } };
+      if (calls === 4) return { status: 200, body: { execution: { outcome: "SUCCESS" } } };
+      return {
+        status: 200,
+        body: {
+          ...activeGrantResponse(),
+          observation: {
+            kind: "MARKET",
+            payload: {
+              schemaVersion: 1,
+              market: "google-play",
+              publicAccountId: "publisher-team",
+              publicAppId: "com.seorilabs.sample",
+              gate: "UPLOAD",
+              state: "SUCCEEDED",
+              sourceSha,
+              configRevision: 2,
+              artifactChecksum,
+              observedAt: "2098-01-01T00:00:00.000Z",
+            },
+          },
+        },
+      };
+    },
+  });
+  assert.deepEqual(await adapter.execute(envelope()), { outcome: "COMMAND_ACCEPTED" });
+  const observation = await adapter.readObservation(envelope());
+  assert.equal(observation?.kind, "MARKET");
+  assert.equal(calls, 5);
 });
 
 test("settlement 계약은 observation과 공개 error code 조합을 fail-closed한다", () => {
@@ -275,6 +400,8 @@ test("settlement 계약은 observation과 공개 error code 조합을 fail-close
   assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "OBSERVED" }).success, false);
   assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "FAILED" }).success, false);
   assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "FAILED", errorCode: "ADAPTER_FAILED" }).success, true);
+  assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "APPROVAL_REQUIRED" }).success, false);
+  assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "APPROVAL_REQUIRED", errorCode: "APPROVAL_EXPIRED" }).success, true);
   assert.equal(providerExecutionSettlementSchema.safeParse({ ...base, outcome: "FAILED", errorCode: "raw provider error text" }).success, false);
 });
 
@@ -283,8 +410,16 @@ test("migration과 worker manifest는 secret/export 컬럼·worker secret RBAC·
   const manifest = readFileSync(join(process.cwd(), "k8s/provider-execution-worker.yaml"), "utf8");
   assert.match(migration, /CREATE TABLE `control_plane_provider_execution`/);
   assert.match(migration, /`leaseTokenHash` CHAR\(64\)/);
+  assert.match(migration, /ON DELETE RESTRICT ON UPDATE RESTRICT/);
+  assert.match(migration, /CREATE TRIGGER `control_plane_provider_execution_event_no_update`/);
+  assert.match(migration, /CREATE TRIGGER `control_plane_provider_execution_event_no_delete`/);
   assert.doesNotMatch(migration, /`(?:password|totp|cookie|privateKey|apiKey|secretValue)`/i);
   assert.match(manifest, /rules: \[\]/);
   assert.match(manifest, /replicas: 0/);
+  assert.match(manifest, /image: __BACKOFFICE_IMAGE_DIGEST__/);
+  assert.doesNotMatch(manifest, /:latest/);
+  assert.match(manifest, /kind: NetworkPolicy/);
+  assert.match(manifest, /kubernetes\.io\/metadata\.name: auth-broker/);
+  assert.match(manifest, /kubernetes\.io\/metadata\.name: data/);
   assert.doesNotMatch(manifest, /\b(?:get|list|watch)\b[^\n]*\bsecrets\b/i);
 });

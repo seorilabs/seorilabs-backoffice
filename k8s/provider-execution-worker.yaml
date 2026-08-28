@@ -50,8 +50,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: provider-execution-worker
-          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
-          imagePullPolicy: Always
+          image: __BACKOFFICE_IMAGE_DIGEST__
+          imagePullPolicy: IfNotPresent
           workingDir: /app
           command: ["node", "/app/scripts-dist/provider-execution-worker.cjs"]
           env:
@@ -121,3 +121,45 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provider-execution-worker
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: provider-execution-worker
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auth-broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seori-auth-broker
+      ports:
+        - { protocol: TCP, port: 8443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+          podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - { protocol: TCP, port: 3306 }

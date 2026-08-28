@@ -31,6 +31,36 @@ const migrationDirectories = (root) =>
     .filter((name) => statSync(join(root, name)).isDirectory())
     .sort();
 
+const appendOnlyTriggerPattern = /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
+const appendOnlyTriggerContract = new Map([
+  [
+    "control_plane_provider_execution_event_no_update",
+    { event: "UPDATE", table: "control_plane_provider_execution_event" },
+  ],
+  [
+    "control_plane_provider_execution_event_no_delete",
+    { event: "DELETE", table: "control_plane_provider_execution_event" },
+  ],
+]);
+
+function stripVerifiedAppendOnlyTriggers(sql) {
+  return sql.replace(
+    appendOnlyTriggerPattern,
+    (statement, triggerName, event, table, message) => {
+      const contract = appendOnlyTriggerContract.get(triggerName.toLowerCase());
+      if (
+        contract
+        && contract.event === event.toUpperCase()
+        && contract.table === table.toLowerCase()
+        && message === "provider execution audit is append-only"
+      ) {
+        return " ";
+      }
+      return statement;
+    },
+  );
+}
+
 const frozenBase = process.env.MIGRATION_FROZEN_BASE;
 if (frozenBase) {
   const commit = spawnSync("git", ["cat-file", "-e", `${frozenBase}^{commit}`], {
@@ -250,12 +280,12 @@ for (const name of activeNames) {
   }
   checked += 1;
   const normalized = sql.replace(/--.*$/gm, " ").replace(/\s+/g, " ");
-  const mutationScan = normalized.replace(
+  const mutationScan = stripVerifiedAppendOnlyTriggers(normalized).replace(
     /\bON\s+UPDATE\s+(?:CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL)\b/gi,
     " ",
   );
   if (
-    /\b(DROP|TRUNCATE|RENAME|MODIFY|CHANGE)\b|\bDELETE\s+FROM\b|\bUPDATE\s+/i.test(
+    /\b(DROP|TRUNCATE|RENAME|MODIFY|CHANGE)\b|\bDELETE\s+FROM\b|\bBEFORE\s+DELETE\b|\bUPDATE\s+/i.test(
       mutationScan,
     )
   ) {

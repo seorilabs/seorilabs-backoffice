@@ -460,7 +460,7 @@ export const providerExecutionClaimSchema = z.object({
   leaseSeconds: z.number().int().min(30).max(300).default(300),
 }).strict();
 
-const providerExecutionObservationSchema = z.discriminatedUnion("kind", [
+export const providerExecutionObservationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("BLUEPRINT"),
     observedAt: z.coerce.date(),
@@ -472,11 +472,13 @@ const providerExecutionObservationSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+export type ProviderExecutionObservation = z.infer<typeof providerExecutionObservationSchema>;
+
 export const providerExecutionSettlementSchema = z.object({
   executionId: z.string().min(1).max(191),
   generation: z.number().int().positive(),
   leaseToken: z.string().min(32).max(256),
-  outcome: z.enum(["COMMAND_ACCEPTED", "OBSERVED", "RESULT_UNKNOWN", "FAILED", "HUMAN_REQUIRED"]),
+  outcome: z.enum(["COMMAND_ACCEPTED", "OBSERVED", "RESULT_UNKNOWN", "FAILED", "HUMAN_REQUIRED", "APPROVAL_REQUIRED"]),
   observation: providerExecutionObservationSchema.optional(),
   errorCode: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/).optional(),
   reauthRequestId: publicIdentifier.optional(),
@@ -492,6 +494,9 @@ export const providerExecutionSettlementSchema = z.object({
   }
   if (value.outcome === "HUMAN_REQUIRED" && !value.reauthRequestId) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "HUMAN_REQUIRED 결과에는 ReauthRequest 공개 ID가 필요합니다.", path: ["reauthRequestId"] });
+  }
+  if (value.outcome === "APPROVAL_REQUIRED" && !value.errorCode) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "APPROVAL_REQUIRED 결과에는 공개 error code가 필요합니다.", path: ["errorCode"] });
   }
 });
 
@@ -524,7 +529,7 @@ export const providerCommandEnvelopeSchema = z.object({
     capability: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,190}$/),
     publicAccountId: z.string().min(1).max(191),
     publicIdentity: z.string().min(1).max(512),
-    authFactors: z.array(z.enum(["api_key", "certificate", "oidc", "password", "session", "totp"])).min(1).max(3),
+    authFactors: z.array(z.enum(["api_key", "certificate", "oidc"])).min(1).max(3),
   }).strict(),
   approval: z.object({
     id: publicIdentifier,

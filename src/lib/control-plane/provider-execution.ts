@@ -60,6 +60,19 @@ export function providerExecutionCredentialForClaim(
   return resumeMode === "READBACK_FIRST" ? readback : primary;
 }
 
+export function assertDistinctProviderExecutionCredentials(
+  primary: CredentialExecutionMetadata,
+  readback: CredentialExecutionMetadata,
+): void {
+  if (
+    primary.logicalCredentialId === readback.logicalCredentialId
+    || primary.credentialPublicIdentity.toLowerCase()
+      === readback.credentialPublicIdentity.toLowerCase()
+  ) {
+    throw new Error("PROVIDER_READBACK_IDENTITY_NOT_DISTINCT");
+  }
+}
+
 export interface ProviderExecutionBinding {
   executionId: string;
   generation: number;

@@ -84,6 +84,9 @@ readback이 들어와야 완료된다.
 hash, primary credential과 fleet read-only credential의 logical ID·credential generation·policy generation,
 adapter/origin을 immutable binding hash로 고정한다. secret 값과 Auth Broker lease 원문은 저장하지 않는다.
 worker lease는 generation CAS와 1회용 HMAC token hash로 보호하며, stale completion은 거부한다.
+mutation용 identity와 readback identity는 logical credential ID와 공개 identity가 모두 달라야 하며,
+하나라도 같으면 enqueue 전에 fail-closed한다. 실행 감사 event는 FK `RESTRICT`와 MySQL UPDATE/DELETE
+거부 trigger로 append-only를 강제한다. migration principal에 `CREATE TRIGGER` 권한이 없으면 배포가 중단된다.
 
 - `READBACK`은 사전 승인 가능한 fleet inventory identity만 사용한다.
 - production mutation, IAM, Workspace domain-wide delegation은 매 실행마다 Backoffice의 app-scoped 사람
@@ -103,19 +106,27 @@ envelope에는 arbitrary executable, argv, env가 없으며 repo ID/source/confi
 들어 있다. 실제 secret 사용은 P2 Auth Broker가 logical credential lease를 발급한 뒤 trusted adapter에
 직접 주입한다. worker에는 credential export API와 Kubernetes Secret `get/list/watch` 권한이 없다.
 
+worker는 lease보다 먼저 `/auth/policy-grants`에 exact singleton P2 rule과 public command digest를 등록하고,
+`/auth/policy-grants/{id}/verify`에서 policy generation, binding hash, command digest를 다시 확인한다. 둘 중
+하나라도 없거나 404, schema mismatch, digest mismatch이면 lease를 요청하지 않는다. readback은 같은 grant의
+`/auth/policy-grants/{id}/observation`에서 exact generation과 binding에 결합된 strict observation만 소비한다.
+현재 P2 릴리스에는 이 세 endpoint가 아직 없으므로 `route_not_found`는
+`AUTH_BROKER_POLICY_GRANT_UNAVAILABLE`로 fail-closed하며 운영 활성화 blocker다.
+
 운영 활성화 전에는 다음을 모두 readback으로 확인한다.
 
 1. primary/readback `CredentialBinding`의 logical ID, public credential identity, generation, exact origin,
    adapter, auth factor를 catalog와 일치하게 backfill한다.
 2. P2 adapter registry/policy에 위 adapter와 capability를 등록하고 mTLS, attestation key, WIF/GSA identity,
    Secret Manager resource binding을 실제 값으로 교차 검증한다.
-3. Auth Broker child가 `binding:<bindingHash>`로 exact public command envelope를 해석하고 provider 결과를
-   `observedBy=provider-adapter:<provider>`로 append하는 trusted bridge를 배치한다. secret이나 command를
-   stdout/argv/env로 전달하지 않는다.
+3. P2에 policy-grant register/verify와 `binding:<bindingHash>` public command resolver, strict observation
+   endpoint를 배치한다. secret이나 command를 stdout/argv/env로 전달하지 않는다.
 4. canary/fake provider에서 결과 유실, FORBIDDEN/ABSENT, stale generation, approval 만료, credential 회전,
    동일 resource 동시 claim을 통과한 뒤 immutable image digest로 manifest를 렌더한다.
 5. 위 조건 전에는 `k8s/provider-execution-worker.yaml`의 `replicas: 0`을 변경하지 않는다. 이 manifest는
-   일반 deploy script에서 의도적으로 제외되어 운영 활성화를 우연히 켜거나 끄지 않는다.
+   일반 deploy script에서 의도적으로 제외되어 운영 활성화를 우연히 켜거나 끄지 않는다. raw manifest에는
+   mutable image가 없으며 renderer가 immutable sha256 digest를 주입한다. egress는 DNS, P2 broker 8443,
+   MySQL 3306으로만 제한한다.
 
 ## Release candidate와 마켓 원장
 

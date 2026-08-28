@@ -11,6 +11,7 @@ import { normalizeMarketReadback } from "@/lib/control-plane/market-adapter";
 import {
   MARKET_EXECUTION_CONTRACT,
   PROVIDER_EXECUTION_APPROVAL_TTL_MS,
+  assertDistinctProviderExecutionCredentials,
   blueprintExecutionContract,
   compileProviderCommandEnvelope,
   decideBlueprintReadback,
@@ -196,6 +197,17 @@ async function enqueueBlueprintExecution(input: Extract<ProviderExecutionCreate,
         expectedAdapterId: contract.adapterId,
         expectedOrigin: contract.origin,
       });
+  if (input.operation !== "READBACK") {
+    try {
+      assertDistinctProviderExecutionCredentials(credential, readbackCredential);
+    } catch {
+      throw new ControlPlaneError(
+        "mutation identity와 fleet readback identity는 logical ID와 공개 identity가 모두 달라야 합니다.",
+        409,
+        "PROVIDER_READBACK_IDENTITY_NOT_DISTINCT",
+      );
+    }
+  }
   const actionClass: ProviderExecutionActionClass = input.operation === "READBACK"
     ? "READ_ONLY"
     : contract.actionClass;
@@ -369,6 +381,17 @@ async function enqueueMarketExecution(input: Extract<ProviderExecutionCreate, { 
         expectedOrigin: contract.origin,
       });
   const readbackCredential = { ...readbackBinding, publicAccountId };
+  if (input.operation !== "READBACK") {
+    try {
+      assertDistinctProviderExecutionCredentials(credential, readbackCredential);
+    } catch {
+      throw new ControlPlaneError(
+        "market mutation identity와 fleet readback identity는 logical ID와 공개 identity가 모두 달라야 합니다.",
+        409,
+        "PROVIDER_READBACK_IDENTITY_NOT_DISTINCT",
+      );
+    }
+  }
   const desiredPayload = {
     market,
     publicAccountId,
@@ -793,7 +816,7 @@ export async function settleProviderExecution(input: {
   executionId: string;
   generation: number;
   leaseToken: string;
-  outcome: "COMMAND_ACCEPTED" | "OBSERVED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED";
+  outcome: "COMMAND_ACCEPTED" | "OBSERVED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED" | "APPROVAL_REQUIRED";
   observation?: {
     kind: "BLUEPRINT";
     observedAt: Date;
@@ -858,7 +881,11 @@ export async function settleProviderExecution(input: {
     let eventType: string;
     let observationId: string | null = null;
 
-    if (parsed.outcome === "HUMAN_REQUIRED") {
+    if (parsed.outcome === "APPROVAL_REQUIRED") {
+      status = "WAITING_HUMAN_APPROVAL";
+      errorCode = parsed.errorCode ?? "PER_RUN_APPROVAL_REQUIRED";
+      eventType = "human_approval_required";
+    } else if (parsed.outcome === "HUMAN_REQUIRED") {
       status = "FAILED";
       errorCode = "HUMAN_REAUTH_REQUIRED";
       eventType = "human_reauth_required";
@@ -997,53 +1024,4 @@ export async function settleProviderExecution(input: {
     });
     return { status, duplicate: false };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-}
-
-/** trusted adapter가 기록한 현재 generation의 공개 readback만 worker가 settlement로 소비한다. */
-export async function readProviderExecutionObservation(executionId: string, generation: number) {
-  const execution = await prisma.providerExecution.findUnique({
-    where: { id: executionId },
-    select: {
-      id: true,
-      appId: true,
-      kind: true,
-      provider: true,
-      resourceType: true,
-      resourceId: true,
-      status: true,
-      leaseGeneration: true,
-      events: {
-        where: { type: "claimed", generation },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: { createdAt: true },
-      },
-    },
-  });
-  if (!execution || execution.status !== "RUNNING" || execution.leaseGeneration !== generation || execution.events.length !== 1) {
-    throw new ControlPlaneError("현재 generation의 provider claim이 아닙니다.", 409, "READBACK_STATE_CONFLICT");
-  }
-  const observation = await prisma.providerObservation.findFirst({
-    where: {
-      appId: execution.appId,
-      provider: execution.provider,
-      resourceType: execution.resourceType,
-      resourceId: execution.resourceId,
-      observedBy: `provider-adapter:${execution.provider}`,
-      observedAt: { gte: execution.events[0].createdAt },
-    },
-    orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-  });
-  if (!observation) return null;
-  if (execution.kind === "BLUEPRINT_RESOURCE") {
-    return {
-      kind: "BLUEPRINT" as const,
-      observedAt: observation.observedAt,
-      payload: observation.payload,
-    };
-  }
-  return {
-    kind: "MARKET" as const,
-    payload: observation.payload,
-  };
 }

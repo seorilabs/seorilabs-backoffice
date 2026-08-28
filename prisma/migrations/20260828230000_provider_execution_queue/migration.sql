@@ -107,4 +107,14 @@ ALTER TABLE `control_plane_provider_execution`
 
 ALTER TABLE `control_plane_provider_execution_event`
     ADD CONSTRAINT `control_plane_provider_execution_event_executionId_fkey`
-    FOREIGN KEY (`executionId`) REFERENCES `control_plane_provider_execution`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+    FOREIGN KEY (`executionId`) REFERENCES `control_plane_provider_execution`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- 감사 원장은 애플리케이션 계정의 실수나 ORM 경로와 무관하게 append-only다.
+-- migration principal에는 CREATE TRIGGER 권한이 필요하며 없으면 배포가 fail-closed한다.
+CREATE TRIGGER `control_plane_provider_execution_event_no_update`
+BEFORE UPDATE ON `control_plane_provider_execution_event`
+FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'provider execution audit is append-only';
+
+CREATE TRIGGER `control_plane_provider_execution_event_no_delete`
+BEFORE DELETE ON `control_plane_provider_execution_event`
+FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'provider execution audit is append-only';

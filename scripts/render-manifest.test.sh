@@ -46,7 +46,7 @@ for m in "${MANIFESTS[@]}"; do
   fi
 
   # 매니페스트에 있던 이미지 줄 수만큼 치환돼야 한다.
-  want=$(grep -c "${REPO}:latest" "$root/$m")
+  want=$(( $(grep -c "${REPO}:latest" "$root/$m") + $(grep -c '__BACKOFFICE_IMAGE_DIGEST__' "$root/$m") ))
   got=$(printf '%s' "$out" | grep -c "${REPO}@sha256:${DIGEST}")
   if [ "$want" -ne "$got" ]; then
     ng "$m 치환 개수가 다르다: 기대 $want, 실제 $got"
@@ -54,6 +54,17 @@ for m in "${MANIFESTS[@]}"; do
   fi
   ok "$m ($got 곳)"
 done
+
+provider_worker="$root/k8s/provider-execution-worker.yaml"
+provider_out="$("$render" "$provider_worker" "$IMG" "$SHA")"
+if ! grep -q ':latest' "$provider_worker" &&
+   grep -q 'image: __BACKOFFICE_IMAGE_DIGEST__' "$provider_worker" &&
+   printf '%s' "$provider_out" | grep -q "image: ${IMG}" &&
+   ! printf '%s' "$provider_out" | grep -q '__BACKOFFICE_IMAGE_DIGEST__'; then
+  ok "provider worker는 raw mutable image 없이 digest renderer만 허용"
+else
+  ng "provider worker immutable image 계약이 깨졌다"
+fi
 
 echo "== repository discovery worker 최소권한 =="
 discovery_worker="$root/k8s/repository-discovery-worker.yaml"
