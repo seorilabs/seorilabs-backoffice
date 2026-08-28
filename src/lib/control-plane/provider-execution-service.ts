@@ -8,6 +8,7 @@ import {
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { normalizeMarketReadback } from "@/lib/control-plane/market-adapter";
+import type { ProviderObservationReceipt } from "@/lib/control-plane/provider-adapter-client";
 import {
   MARKET_EXECUTION_CONTRACT,
   PROVIDER_EXECUTION_APPROVAL_TTL_MS,
@@ -941,6 +942,11 @@ export async function settleProviderExecution(input: {
     kind: "MARKET";
     payload: ReturnType<typeof marketReadbackSchema.parse>;
   };
+  /**
+   * 관측을 동반한 settlement에는 broker policy grant 영수증이 반드시 있어야 한다.
+   * signer가 Auth Broker에서 직접 읽은 관측만 이 값을 가질 수 있다.
+   */
+  observationReceipt?: ProviderObservationReceipt;
   errorCode?: string;
   reauthRequestId?: string;
   workerId: string;
@@ -966,7 +972,10 @@ export async function settleProviderExecution(input: {
       : null,
     errorCode: parsed.errorCode ?? null,
     reauthRequestId: parsed.reauthRequestId ?? null,
-  } as JsonValue);
+    observationReceipt: input.observationReceipt
+      ? { ...input.observationReceipt }
+      : null,
+  } as unknown as JsonValue);
   const replay = await prisma.providerExecutionEvent.findUnique({ where: { requestId: input.idempotencyKey } });
   if (replay) {
     const payload = replay.payload as { settlementHash?: string; status?: string } | null;
@@ -1017,6 +1026,31 @@ export async function settleProviderExecution(input: {
       }
       if (execution.kind === "MARKET_RELEASE" && parsed.observation.kind !== "MARKET") {
         throw new ControlPlaneError("market execution에는 market readback이 필요합니다.", 409, "OBSERVATION_KIND_MISMATCH");
+      }
+      // 관측은 signer가 broker에서 직접 읽은 것만 받는다. 영수증이 이 execution의 exact
+      // policy grant, lease generation, bindingHash에 결합되지 않으면 settlement 전체를 되돌린다.
+      const receipt = input.observationReceipt;
+      const expectedCommandDigest = jsonDigest(
+        commandClaim(
+          execution,
+          execution.readbackRequiredAt ? "READBACK_FIRST" : "START",
+          "not-returned-to-worker",
+        ).envelope as unknown as JsonValue,
+      );
+      if (
+        !receipt
+        || receipt.bindingHash !== execution.bindingHash
+        || receipt.generation !== execution.leaseGeneration
+        || receipt.policyGeneration !== execution.policyGeneration
+        || receipt.policyGrantId !== `provider-grant-${execution.bindingHash.slice(0, 40)}-${execution.leaseGeneration}`
+        || receipt.commandDigest !== expectedCommandDigest
+        || !/^[0-9a-f]{64}$/.test(receipt.policyGrantDigest)
+      ) {
+        throw new ControlPlaneError(
+          "관측이 exact Auth Broker policy grant 영수증에 결합되지 않았습니다.",
+          409,
+          "PROVIDER_OBSERVATION_RECEIPT_MISMATCH",
+        );
       }
       const observedAt = parsed.observation.kind === "BLUEPRINT" ? parsed.observation.observedAt : parsed.observation.payload.observedAt;
       assertObservationTime(observedAt, now);
@@ -1087,6 +1121,7 @@ export async function settleProviderExecution(input: {
             publicAccountId: execution.publicAccountId,
             publicAppId: execution.resourceId,
             bindingHash: execution.bindingHash,
+            policyGrantId: receipt.policyGrantId,
           },
         });
         if (!readbackFirst || execution.operation === "READBACK") {
@@ -1149,6 +1184,16 @@ export async function settleProviderExecution(input: {
           observationId,
           errorCode,
           reauthRequestId: parsed.reauthRequestId ?? null,
+          observationReceipt: input.observationReceipt
+            ? {
+              policyGrantId: input.observationReceipt.policyGrantId,
+              policyGrantDigest: input.observationReceipt.policyGrantDigest,
+              bindingHash: input.observationReceipt.bindingHash,
+              commandDigest: input.observationReceipt.commandDigest,
+              policyGeneration: input.observationReceipt.policyGeneration,
+              generation: input.observationReceipt.generation,
+            }
+            : null,
         },
       },
     });

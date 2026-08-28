@@ -10,12 +10,18 @@ import type { TLSSocket } from "node:tls";
 import { z } from "zod";
 
 import {
-  providerExecutionObservationSchema,
-} from "@/lib/control-plane/contracts";
-import {
+  buildProviderBrokerRequest,
+  providerBrokerRequestDigest,
   providerBrokerStageSchema,
+  readTrustedBrokerObservation,
   sanitizeProviderBrokerResponse,
+  type BrokerTransport,
+  type ProviderBrokerStage,
 } from "@/lib/control-plane/provider-adapter-client";
+import {
+  containsWorkerSuppliedObservation,
+  providerSignerSettlementRequestSchema,
+} from "@/lib/control-plane/provider-settlement-request";
 import { providerExecutionLeaseToken } from "@/lib/control-plane/provider-execution";
 import {
   authorizeProviderBrokerRequest,
@@ -63,26 +69,12 @@ const claimSchema = z.object({
 const brokerRequestSchema = z.object({
   executionId: z.string().min(1).max(191),
   generation: z.number().int().positive(),
-  stage: providerBrokerStageSchema,
-  ordinal: z.number().int().min(1).max(20),
+  // OBSERVATION은 signer만 수행한다. worker가 관측 stage를 proxy로 호출하면
+  // 신뢰 관측의 ordinal 예산을 소진시켜 settlement readback을 막을 수 있다.
+  stage: providerBrokerStageSchema.exclude(["OBSERVATION"]),
+  ordinal: z.literal(1),
   expectedRequestDigest: z.string().regex(/^[0-9a-f]{64}$/),
 }).strict();
-
-const settlementSchema = z.object({
-  executionId: z.string().min(1).max(191),
-  generation: z.number().int().positive(),
-  outcome: z.enum(["COMMAND_ACCEPTED", "OBSERVED", "RESULT_UNKNOWN", "FAILED", "HUMAN_REQUIRED", "APPROVAL_REQUIRED"]),
-  observation: providerExecutionObservationSchema.optional(),
-  errorCode: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/).optional(),
-  idempotencyKey: z.string().regex(/^provider-settlement:[A-Za-z0-9._:/-]{1,191}$/),
-}).strict().superRefine((value, context) => {
-  if ((value.outcome === "OBSERVED") !== Boolean(value.observation)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "observation binding invalid" });
-  }
-  if ((value.outcome === "FAILED" || value.outcome === "APPROVAL_REQUIRED") && !value.errorCode) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "error code required" });
-  }
-});
 
 function respond(response: ServerResponse, status: number, body: unknown) {
   const encoded = Buffer.from(JSON.stringify(body), "utf8");
@@ -206,6 +198,77 @@ async function main() {
     outgoing.end(encoded, clearEncoded);
   });
 
+  /** 모든 broker 호출이 지나는 단일 경계다. 매 요청마다 durable claim 결합과 attestation을 새로 검증한다. */
+  const authorizeAndCall = async (input: {
+    executionId: string;
+    generation: number;
+    stage: ProviderBrokerStage;
+    ordinal: number;
+    expectedRequestDigest: string;
+  }) => {
+    const now = new Date();
+    const nonce = createRunAttestationNonce();
+    const authorized = await authorizeProviderBrokerRequest({
+      ...input,
+      workerId,
+      subject,
+      nonceDigest: runAttestationNonceDigest(nonce),
+      now,
+    });
+    const attestation = signRunAttestation({
+      privateKey: attestationPrivateKey,
+      clientSpiffeId: brokerSpiffeId,
+      subject,
+      runId: authorized.envelope.executionId,
+      repository: authorized.envelope.repository,
+      workerId,
+      issuedAt: now.getTime(),
+      expiresAt: authorized.attestationExpiresAt.getTime(),
+      nonce,
+    });
+    return sanitizeProviderBrokerResponse(input.stage, await brokerCall({
+      path: authorized.request.path,
+      body: authorized.request.body,
+      attestation,
+    }));
+  };
+
+  // signer가 스스로 만든 요청은 digest도 스스로 계산한다. worker 입력이 섞이지 않는다.
+  const brokerTransport: BrokerTransport = (brokerRequest) => authorizeAndCall({
+    executionId: brokerRequest.executionId,
+    generation: brokerRequest.generation,
+    stage: brokerRequest.stage,
+    ordinal: brokerRequest.ordinal,
+    expectedRequestDigest: providerBrokerRequestDigest(brokerRequest),
+  });
+
+  /**
+   * 같은 (execution, generation, stage, ordinal)의 attestation은 한 번만 발급된다.
+   * 재시작이나 settlement 재시도에서도 다음 ordinal로 진행해 신뢰 관측을 다시 읽는다.
+   */
+  async function readObservation(executionId: string, generation: number) {
+    const claim = await currentProviderExecutionClaim({ executionId, generation, workerId });
+    if (claim.envelope.operation !== "READBACK") return null;
+    for (let ordinal = 1; ordinal <= 20; ordinal += 1) {
+      try {
+        return await readTrustedBrokerObservation({
+          envelope: claim.envelope,
+          subject,
+          workerId,
+          ordinal,
+          transport: brokerTransport,
+        });
+      } catch (error) {
+        if (
+          error instanceof ControlPlaneError
+          && error.code === "PROVIDER_ATTESTATION_ALREADY_ISSUED"
+        ) continue;
+        throw error;
+      }
+    }
+    return null;
+  }
+
   const server = createServer({
     ca: signerClientCa,
     cert: signerCertificate,
@@ -243,34 +306,11 @@ async function main() {
       }
       if (request.url === "/v1/broker-requests") {
         const body = brokerRequestSchema.parse(await readJson(request));
-        const now = new Date();
-        const nonce = createRunAttestationNonce();
-        const authorized = await authorizeProviderBrokerRequest({
-          ...body,
-          workerId,
-          subject,
-          nonceDigest: runAttestationNonceDigest(nonce),
-          now,
-        });
-        const attestation = signRunAttestation({
-          privateKey: attestationPrivateKey,
-          clientSpiffeId: brokerSpiffeId,
-          subject,
-          runId: authorized.envelope.executionId,
-          repository: authorized.envelope.repository,
-          workerId,
-          issuedAt: now.getTime(),
-          expiresAt: authorized.attestationExpiresAt.getTime(),
-          nonce,
-        });
         let broker;
         try {
-          broker = sanitizeProviderBrokerResponse(body.stage, await brokerCall({
-            path: authorized.request.path,
-            body: authorized.request.body,
-            attestation,
-          }));
-        } catch {
+          broker = await authorizeAndCall(body);
+        } catch (error) {
+          if (error instanceof ControlPlaneError) throw error;
           // 특히 CONSUME는 broker가 처리한 뒤 응답만 유실됐을 수 있다. worker가 같은
           // mutation을 재전송하지 않고 별도 RESULT attestation으로 확인하도록 5xx만 반환한다.
           respond(response, 502, { error: { code: "auth_broker_unavailable" } });
@@ -280,7 +320,14 @@ async function main() {
         return;
       }
       if (request.url === "/v1/settlements") {
-        const body = settlementSchema.parse(await readJson(request));
+        const raw = await readJson(request);
+        if (containsWorkerSuppliedObservation(raw)) {
+          // valid mTLS identity와 살아 있는 claim이 있어도 worker가 만든 관측은 받지 않는다.
+          // 이 경로는 DB에 어떤 write도 하지 않고 끝난다.
+          respond(response, 400, { error: { code: "worker_supplied_observation_rejected" } });
+          return;
+        }
+        const body = providerSignerSettlementRequestSchema.parse(raw);
         let reauthRequestId: string | undefined;
         if (body.outcome === "HUMAN_REQUIRED") {
           const claim = await currentProviderExecutionClaim({
@@ -300,6 +347,18 @@ async function main() {
           });
           reauthRequestId = reauth.request.id;
         }
+        // 관측은 signer가 durable claim에서 재구성한 envelope으로 broker를 직접 읽어 만든다.
+        let trusted: Awaited<ReturnType<typeof readObservation>> = null;
+        let outcome = body.outcome;
+        let errorCode = body.errorCode;
+        if (body.outcome === "OBSERVED") {
+          trusted = await readObservation(body.executionId, body.generation);
+          if (!trusted) {
+            // broker가 아직 관측을 내주지 않았다. durable requeue로 넘겨 restart에 안전하게 만든다.
+            outcome = "RESULT_UNKNOWN";
+            errorCode = "PROVIDER_OBSERVATION_PENDING";
+          }
+        }
         const leaseToken = providerExecutionLeaseToken({
           signingKey: queueSigningKey,
           executionId: body.executionId,
@@ -307,7 +366,12 @@ async function main() {
           workerId,
         });
         const result = await settleProviderExecution({
-          ...body,
+          executionId: body.executionId,
+          generation: body.generation,
+          outcome,
+          idempotencyKey: body.idempotencyKey,
+          ...(trusted ? { observation: trusted.observation, observationReceipt: trusted.receipt } : {}),
+          ...(errorCode ? { errorCode } : {}),
           leaseToken,
           workerId,
           ...(reauthRequestId ? { reauthRequestId } : {}),

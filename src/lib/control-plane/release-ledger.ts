@@ -270,6 +270,7 @@ export type ReleaseGateOrigin =
     publicAccountId: string;
     publicAppId: string;
     bindingHash: string;
+    policyGrantId: string;
   };
 
 function gateRequestHash(input: {
@@ -362,6 +363,7 @@ export async function appendReleaseGateObservation(input: {
         publicAccountId: true,
         resourceId: true,
         bindingHash: true,
+        leaseGeneration: true,
       },
     });
     if (
@@ -406,10 +408,18 @@ export async function appendReleaseGateObservation(input: {
       );
     }
     // 호출자가 넣을 수 없는 서버 파생 provenance만 원장에 덧붙인다.
+    if (origin.policyGrantId !== `provider-grant-${execution.bindingHash.slice(0, 40)}-${execution.leaseGeneration}`) {
+      throw new ControlPlaneError(
+        "gate 관측이 exact Auth Broker policy grant에 결합되지 않았습니다.",
+        409,
+        "PROVIDER_POLICY_GRANT_BINDING_MISMATCH",
+      );
+    }
     evidence = {
       ...evidence,
       providerExecutionId: execution.id,
       providerObservationId: providerObservation.id,
+      providerPolicyGrantId: origin.policyGrantId,
     };
   }
 

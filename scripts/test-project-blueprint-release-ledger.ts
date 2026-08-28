@@ -7,6 +7,7 @@ import {
 } from "@/lib/control-plane/contracts";
 import { signSnapshot } from "@/lib/control-plane/json";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
+import { buildAuthBrokerPolicyGrant } from "@/lib/control-plane/provider-adapter-client";
 import {
   claimProviderExecution,
   enqueueProviderExecution,
@@ -42,17 +43,21 @@ const PUBLISHER_ACCOUNT = "1234567890123456789";
 const PACKAGE_ID = "com.seorilabs.blueprint";
 const SIGNING_KEY = "integration-provider-lease-signing-key-0123456789";
 const WORKER_ID = "integration-provider-worker";
+const SUBJECT = "k8s:platform:provider-execution-worker";
 
 /**
  * gate 원장에 실제로 남은 관측과 lifecycle 상태를 한 번에 읽는다.
  * 거부 경로가 정말 0 mutation인지 판정하는 기준이다.
  */
 async function ledgerSnapshot(candidateId: string) {
-  const [gates, candidate, lifecycle, events] = await Promise.all([
+  const [gates, candidate, lifecycle, events, audits, observations, executionEvents] = await Promise.all([
     prisma.releaseGateObservation.count({ where: { candidateId } }),
     prisma.releaseCandidate.findUniqueOrThrow({ where: { id: candidateId }, select: { status: true } }),
     prisma.fleetLifecycleState.findUnique({ where: { appId: APP_ID }, select: { stage: true, generation: true } }),
     prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }),
+    prisma.auditLog.count(),
+    prisma.providerObservation.count({ where: { appId: APP_ID } }),
+    prisma.providerExecutionEvent.count(),
   ]);
   return {
     gates,
@@ -60,6 +65,9 @@ async function ledgerSnapshot(candidateId: string) {
     stage: lifecycle?.stage ?? null,
     generation: lifecycle?.generation ?? 0,
     events,
+    audits,
+    observations,
+    executionEvents,
   };
 }
 
@@ -136,7 +144,17 @@ async function runMarketSettlement(input: {
       observedAt: input.observedAt,
     },
   };
-  return { execution: enqueued.execution, claim, observation };
+  // signer가 broker에서 직접 읽었을 때 나오는 영수증과 정확히 같은 값이다.
+  const built = buildAuthBrokerPolicyGrant(claim.envelope, SUBJECT);
+  const receipt = {
+    policyGrantId: built.grant.id,
+    policyGrantDigest: built.digest,
+    bindingHash: built.grant.bindingHash,
+    commandDigest: built.grant.commandDigest,
+    policyGeneration: built.grant.policyGeneration,
+    generation: claim.generation,
+  };
+  return { execution: enqueued.execution, claim, observation, receipt };
 }
 
 function blueprint(): ProjectBlueprint {
@@ -422,6 +440,7 @@ async function main() {
     leaseToken: "0".repeat(64),
     outcome: "OBSERVED",
     observation: upload.observation,
+    observationReceipt: upload.receipt,
     workerId: WORKER_ID,
     idempotencyKey: "provider-settle-upload-stale",
   }), "STALE_LEASE");
@@ -436,6 +455,7 @@ async function main() {
       kind: "MARKET",
       payload: { ...upload.observation.payload, publicAppId: "com.attacker.other" },
     },
+    observationReceipt: upload.receipt,
     workerId: WORKER_ID,
     idempotencyKey: "provider-settle-upload-identity",
   }), "PROVIDER_IDENTITY_MISMATCH");
@@ -450,9 +470,43 @@ async function main() {
       kind: "MARKET",
       payload: { ...upload.observation.payload, artifactChecksum: "9".repeat(64) },
     },
+    observationReceipt: upload.receipt,
     workerId: WORKER_ID,
     idempotencyKey: "provider-settle-upload-artifact",
   }), "CANDIDATE_BINDING_MISMATCH");
+
+  // valid worker identity와 살아 있는 claim이 있어도, broker 영수증 없이는 관측이 원장에 들어가지 않는다.
+  await expectRejected("receipt absent", candidateId, () => settleProviderExecution({
+    executionId: upload.execution.id,
+    generation: upload.claim.generation,
+    leaseToken: upload.claim.leaseToken,
+    outcome: "OBSERVED",
+    observation: upload.observation,
+    workerId: WORKER_ID,
+    idempotencyKey: "provider-settle-upload-no-receipt",
+  }), "PROVIDER_OBSERVATION_RECEIPT_MISMATCH");
+
+  // 영수증의 어느 한 축이라도 execution binding과 어긋나면 gate/candidate/lifecycle/audit이 그대로다.
+  const forgedReceipts: Array<[string, Record<string, unknown>]> = [
+    ["binding", { bindingHash: "1".repeat(64) }],
+    ["generation", { generation: upload.claim.generation + 1 }],
+    ["policy generation", { policyGeneration: upload.receipt.policyGeneration + 1 }],
+    ["grant id", { policyGrantId: `provider-grant-${"2".repeat(40)}-1` }],
+    ["command digest", { commandDigest: "3".repeat(64) }],
+    ["grant digest", { policyGrantDigest: "not-a-digest" }],
+  ];
+  for (const [label, patch] of forgedReceipts) {
+    await expectRejected(`forged receipt ${label}`, candidateId, () => settleProviderExecution({
+      executionId: upload.execution.id,
+      generation: upload.claim.generation,
+      leaseToken: upload.claim.leaseToken,
+      outcome: "OBSERVED",
+      observation: upload.observation,
+      observationReceipt: { ...upload.receipt, ...patch } as typeof upload.receipt,
+      workerId: WORKER_ID,
+      idempotencyKey: `provider-settle-upload-forged-${label.replace(/\s+/g, "-")}`,
+    }), "PROVIDER_OBSERVATION_RECEIPT_MISMATCH");
+  }
 
   const settled = await settleProviderExecution({
     executionId: upload.execution.id,
@@ -460,6 +514,7 @@ async function main() {
     leaseToken: upload.claim.leaseToken,
     outcome: "OBSERVED",
     observation: upload.observation,
+    observationReceipt: upload.receipt,
     workerId: WORKER_ID,
     idempotencyKey: "provider-settle-upload",
   });
@@ -478,6 +533,14 @@ async function main() {
   assert.equal(typeof uploadEvidence.providerObservationId, "string");
   assert.equal(uploadEvidence.publicIdentity, `${PUBLISHER_ACCOUNT}/${PACKAGE_ID}`);
   assert.equal(uploadEvidence.providerReference, "edits/upload-1");
+  assert.equal(uploadEvidence.providerPolicyGrantId, upload.receipt.policyGrantId);
+
+  const settlementEvent = await prisma.providerExecutionEvent.findUniqueOrThrow({
+    where: { requestId: "provider-settle-upload" },
+  });
+  const eventPayload = settlementEvent.payload as { observationReceipt?: Record<string, unknown> };
+  assert.equal(eventPayload.observationReceipt?.policyGrantId, upload.receipt.policyGrantId);
+  assert.equal(eventPayload.observationReceipt?.bindingHash, upload.receipt.bindingHash);
 
   // 같은 idempotency key 재호출은 원장을 한 번만 반영한다.
   const replayedSettlement = await settleProviderExecution({
@@ -486,6 +549,7 @@ async function main() {
     leaseToken: upload.claim.leaseToken,
     outcome: "OBSERVED",
     observation: upload.observation,
+    observationReceipt: upload.receipt,
     workerId: WORKER_ID,
     idempotencyKey: "provider-settle-upload",
   });
@@ -517,6 +581,7 @@ async function main() {
       leaseToken: run.claim.leaseToken,
       outcome: "OBSERVED",
       observation: run.observation,
+      observationReceipt: run.receipt,
       workerId: WORKER_ID,
       idempotencyKey: `provider-settle-${step.key}`,
     });

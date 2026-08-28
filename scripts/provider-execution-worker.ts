@@ -1,10 +1,6 @@
 import { hostname } from "node:os";
 
-import type { ProviderCommandEnvelope } from "@/lib/control-plane/contracts";
-import {
-  executeProviderAdapterClaim,
-  type ProviderAdapterExecutor,
-} from "@/lib/control-plane/provider-adapter-client";
+import { executeProviderAdapterClaim } from "@/lib/control-plane/provider-adapter-client";
 import { createProductionProviderExecutionBoundary } from "@/lib/control-plane/provider-execution-boundary-client";
 
 const workerId = process.env.PROVIDER_EXECUTION_WORKER_ID?.trim() || `provider-execution:${hostname()}`;
@@ -24,15 +20,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function currentReadback(adapter: ProviderAdapterExecutor, envelope: ProviderCommandEnvelope) {
-  for (let attempt = 0; attempt < 20 && running; attempt += 1) {
-    const observed = await adapter.readObservation(envelope);
-    if (observed) return observed;
-    await wait(500);
-  }
-  return null;
 }
 
 async function main() {
@@ -74,12 +61,11 @@ async function main() {
           idempotencyKey: settlementId,
         });
       } else if (result.outcome === "COMMAND_ACCEPTED" && envelope.operation === "READBACK") {
-        const observation = await currentReadback(adapter, envelope);
+        // 관측 payload는 worker가 만들지 않는다. signer가 Auth Broker에서 직접 읽는다.
         await boundary.settle({
           executionId,
           generation,
-          outcome: observation ? "OBSERVED" : "RESULT_UNKNOWN",
-          ...(observation ? { observation } : {}),
+          outcome: "OBSERVED",
           idempotencyKey: settlementId,
         });
       } else {

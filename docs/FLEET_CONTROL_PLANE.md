@@ -199,8 +199,31 @@ settlement가 같은 transaction 안에서 이 helper만 사용하며 candidate 
   같은 app·provider·resource에 결합됐는지 다시 읽어 확인한다. 하나라도 다르면
   `PROVIDER_EXECUTION_BINDING_MISMATCH` 또는 `PROVIDER_OBSERVATION_BINDING_MISMATCH`로 settlement 전체가
   롤백된다.
-- 저장되는 evidence의 `providerExecutionId`, `providerObservationId`는 서버가 파생해 덧붙인다. HTTP 요청
-  계약에는 이 필드가 없어 호출자가 주입할 수 없다.
+- 저장되는 evidence의 `providerExecutionId`, `providerObservationId`, `providerPolicyGrantId`는 서버가
+  파생해 덧붙인다. HTTP 요청 계약에는 이 필드가 없어 호출자가 주입할 수 없다.
+
+### 관측 신뢰 경계
+
+관측 payload는 worker가 만들지 않는다. valid mTLS identity와 살아 있는 claim을 가진 worker라도
+provider account/app/source/config/artifact 문자열을 스스로 지어 외부 gate를 전진시킬 수 없어야 한다.
+
+- signer `/v1/settlements` 요청 계약(`providerSignerSettlementRequestSchema`)에는 `observation`,
+  `observationReceipt`, `leaseToken` 자리가 없다. 이 key가 하나라도 있으면 DB에 접근하기 전에
+  `worker_supplied_observation_rejected`로 끝난다. worker의 `OBSERVED`는 "readback 명령이 성공했으니
+  signer가 관측을 직접 읽어라"는 신호일 뿐이다.
+- signer는 durable `RUNNING` claim에서 envelope을 다시 구성해 Auth Broker `OBSERVATION` stage를 직접 읽고,
+  응답의 policy grant reference(`id`/`digest`/`bindingHash`/`commandDigest`/`policyGeneration`)가 이 execution의
+  exact grant와 전부 같을 때만 관측으로 승격한다(`parseTrustedBrokerObservation`).
+- worker는 `/v1/broker-requests`로 `OBSERVATION` stage를 호출할 수 없다. 호출할 수 있으면 ordinal 예산을
+  소진시켜 signer의 신뢰 관측을 막을 수 있다.
+- `settleProviderExecution`은 관측을 동반한 settlement에 broker 영수증을 요구하고, `bindingHash`,
+  lease generation, `policyGeneration`, grant id, 재계산한 command digest가 하나라도 다르면
+  `PROVIDER_OBSERVATION_RECEIPT_MISMATCH`로 settlement 전체를 롤백한다. 영수증은 settlement hash에
+  포함되므로 같은 idempotency key로 다른 영수증을 밀어 넣을 수 없다.
+- broker가 아직 관측을 내주지 않으면(204) signer는 `RESULT_UNKNOWN`/`PROVIDER_OBSERVATION_PENDING`으로
+  durable requeue한다. 같은 `(execution, generation, stage, ordinal)` attestation은 한 번만 발급되므로
+  재시작이나 settlement 재시도는 다음 ordinal로 진행한다.
+- signer 응답에는 lease token, attestation, 영수증 capability를 싣지 않는다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
 profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
