@@ -223,10 +223,10 @@ echo "  ok   동일 SHA 재실행은 새 migration/catch-up attempt로 감사 �
 echo "== 기존 scheduler drain과 재개 =="
 : > "$log"
 run_deploy Complete "$image" true >/dev/null
-if [ "$(grep -c '^PATCH_CRONJOB .*suspend.*true' "$log")" -eq 3 ] &&
+if [ "$(grep -c '^PATCH_CRONJOB .*suspend.*true' "$log")" -eq 4 ] &&
    grep -q '^DELETE_CRONJOBS ' "$log" &&
    grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log"; then
-  echo "  ok   기존 scheduler 3개 suspend → drain → orphan reset → manifest 재생성"
+  echo "  ok   기존 scheduler 4개 suspend → drain → orphan reset → manifest 재생성"
 else
   echo "FAIL 기존 scheduler drain/restart 계약이 깨졌다" >&2
   cat "$log" >&2

@@ -7,9 +7,9 @@
 - generic worker contract: Codex와 Claude 각각 조직당 설치 상한 1개다.
 - Project projector: `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`을 desired/observed ledger로 분리하고 write 뒤 readback한다.
 
-## 설치 gate
+## 운영 상태와 worker gate
 
-이 디렉터리의 CronJob은 `suspend: true`인 비활성 템플릿이며 실제 배포 manifest에 포함되지 않는다. 다음을 확인한 뒤 사용자 승인으로만 활성화한다.
+deterministic scheduler는 `k8s/scheduler-cronjobs.yaml`의 `backoffice-automation-scheduler`로 배포하며 매분 누락 schedule, webhook inbox, 만료 lease를 멱등 재조정한다. 코드·리뷰를 수행하는 generic worker는 다음을 확인한 뒤 각각 조직당 하나만 설치한다.
 
 1. migration이 운영 DB에 적용되고 Backoffice 새 revision이 배포됐다.
 2. `INTERNAL_ADMIN_TOKEN`, `CONTROL_PLANE_ADMIN_TOKEN`과 그 token에 결합된
@@ -24,4 +24,4 @@
    누적 예산을 강제하는 신뢰된 adapter만 사용한다. 이 경계를 검증한 뒤에만
    `AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED=true`로 전환한다. 기본 `false`에서는 `READY_PR` 생성과 claim이 모두 거부된다.
 
-`docs/automation/automation-scheduler-cronjob.yaml`을 활성화하거나 Codex/Claude 예약 작업을 실제 생성하는 행위는 이 구현에 포함하지 않는다.
+Codex와 Claude worker는 앱별로 설치하지 않는다. 기존 generic worker가 있으면 중복 생성하지 않고 같은 계약으로 업데이트한다.
