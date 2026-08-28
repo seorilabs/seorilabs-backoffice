@@ -292,6 +292,32 @@ default branch, archive state 또는 HEAD vector 변경만 current generation을
 `leaseGeneration` CAS, 최대 3회 retry, append-only audit를 그대로 사용한다. backfill은 항상 `shadow`이고
 GitHub settings, caller, secret, Environment, ruleset, Issue 또는 PR을 쓰는 adapter를 호출하지 않는다.
 
+같은 backfill occurrence는 App-JWT의 공개 installation ID, app ID, 조직 account, repository selection,
+permission grant, subscribed event와 suspended 상태를 앱별 `ProviderObservation` 및
+`github-app-installation-repository` `ExternalBinding`으로 남긴다. Fleet UI의 `GitHub App Gate 1 권한`은
+caller bootstrap PR, Issue fan-out, required check, workflow dispatch, Environment, 조직 variable/secret,
+custom property와 조직 ruleset에 필요한 exact grant/event의 누락을 표시한다. `GRANTED`는 installation이
+그 권한을 가지고 있다는 readback일 뿐이며 실행 승인, 설정 변경 또는 mutation 성공을 뜻하지 않는다.
+이 단계에서 GitHub에는 installation/repository GET만 수행한다.
+
+## 중앙 모델의 zero-state 의미
+
+- `MarketProfile`, `MarketLocalization`, `ComplianceProfile`, `StoreAsset`, `ProjectBlueprint`는
+  `ConfigRevision` projection이다. ConfigRevision이 없으면 0이 정상이며, exact legacy shadow import가 만든
+  DRAFT는 같은 transaction에서 표현 가능한 market/localization만 materialize한다. shadow DRAFT는 직접
+  ACTIVE로 전환할 수 없다.
+- `ProjectBlueprint`, compliance 및 asset은 legacy source에 필요한 공개 desired state가 완전하게 있을 때만
+  사람이 검토 가능한 새 DRAFT에 포함한다. 조직/folder/billing, 법적 선언, object storage checksum이나
+  provider 상태를 App/Discovery 필드에서 추측하지 않는다.
+- `ProviderObservation`과 `ExternalBinding`은 provider GET/readback producer가 실행된 경우에만 생긴다.
+  GitHub installation readback은 위 hourly backfill이 공급하지만 GCP/Firebase/Workspace/마켓 readback은
+  각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
+- `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin을
+  모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로 capability를 추측하지 않는다.
+- `ReleaseCandidate`와 `ReleaseGateObservation`은 ACTIVE revision, exact source, artifact checksum,
+  WorkflowBundle SHA, Platform version 및 독립 gate evidence가 생긴 뒤에만 기록한다. 코드/빌드가 있다는
+  이유로 release candidate나 upload/public 상태를 합성하지 않는다.
+
 ## 이관 경계
 
 이 migration은 additive다. Play/App Store/AppsInToss JSON, `market-launch-state.json`,
