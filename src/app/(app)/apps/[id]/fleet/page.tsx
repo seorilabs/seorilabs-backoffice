@@ -42,7 +42,7 @@ function statusClass(status: string): string {
   if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH", "BLOCKED", "MISSING_REQUIREMENT"].includes(status)) {
     return "bg-red-50 text-red-700";
   }
-  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING", "WAITING_HUMAN_APPROVAL", "READBACK_REQUIRED"].includes(status)) {
+  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "DRAFT_CREATED_WITH_INPUT", "RUNNING", "WAITING_HUMAN_APPROVAL", "READBACK_REQUIRED"].includes(status)) {
     return "bg-amber-50 text-amber-800";
   }
   return "bg-neutral-100 text-neutral-600";
@@ -65,7 +65,7 @@ export default async function FleetOperationsPage({
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
   const latestShadowDraft = drafts.find((revision) => (
-    revision.legacyConfigImport?.status === "DRAFT_CREATED"
+    revision.legacyConfigImport?.status?.startsWith("DRAFT_CREATED")
     && configRevisionPayloadSchema.safeParse(revision.payload).success
   ));
   const latestObservedDiscovery = fleet.discoveryObservations[0];

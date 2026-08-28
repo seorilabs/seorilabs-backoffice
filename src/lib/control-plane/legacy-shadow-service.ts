@@ -428,7 +428,7 @@ function persistedDiff(
     const key = `${diff.path}\u0000${diff.code}`;
     items.set(key, diff);
   }
-  if (transform.status === "NEEDS_INPUT") {
+  if (transform.status !== "DRAFTABLE") {
     // Legacy 문서의 임의 key는 path를 통해 비밀을 유출할 수 있어 저장하지 않는다.
     for (const reason of transform.reasons) {
       const item = { path: "$", code: reason.code };
@@ -726,7 +726,7 @@ export async function recordLegacyShadowImport(input: {
         select: { id: true, payload: true, payloadHash: true },
       });
       let draft = null;
-      if (transformed.status === "DRAFTABLE") {
+      if (transformed.status !== "NEEDS_INPUT") {
         assertConfigRevisionPayload(transformed.payload);
         draft = await createDraftRevisionInTransaction(tx, {
           appId: app.id,
@@ -745,7 +745,11 @@ export async function recordLegacyShadowImport(input: {
           transformVersion: LEGACY_TRANSFORM_VERSION,
           requestHash,
           inputDigest,
-          status: transformed.status === "DRAFTABLE" ? "DRAFT_CREATED" : "NEEDS_INPUT",
+          status: transformed.status === "DRAFTABLE"
+            ? "DRAFT_CREATED"
+            : transformed.status === "DRAFTABLE_WITH_INPUT"
+              ? "DRAFT_CREATED_WITH_INPUT"
+              : "NEEDS_INPUT",
           idempotencyKey: storedIdempotencyKey,
           configRevisionId: draft?.id,
           observedBy: input.observedBy,
@@ -768,6 +772,8 @@ export async function recordLegacyShadowImport(input: {
             sourceKind: source.sourceKind,
             path: source.path,
           } as JsonValue),
+          // 검토 대기 partition에 credential 후보가 있을 수 있으므로 source
+          // fingerprint도 완전 DRAFTABLE일 때만 보존한다.
           blobSha: transformed.status === "DRAFTABLE" ? source.blobSha : null,
           contentSha256: transformed.status === "DRAFTABLE" ? source.contentSha256 : null,
           status: source.status,
@@ -830,7 +836,7 @@ export async function recordLegacyShadowImport(input: {
               status: source.status,
               errorCode: source.errorCode,
             })),
-            reasonCodes: transformed.status === "NEEDS_INPUT"
+            reasonCodes: transformed.status !== "DRAFTABLE"
               ? [...new Set(transformed.reasons.map((reason) => reason.code))].sort()
               : [],
           },

@@ -409,14 +409,14 @@ async function main(): Promise<void> {
       observedBy: "integration-worker",
       idempotencyKey: "legacy-shadow-integration-secret",
     }, dependencies);
-    assert.equal(blocked.import.status, "NEEDS_INPUT");
-    assert.equal(blocked.configRevision, null);
+    assert.equal(blocked.import.status, "DRAFT_CREATED_WITH_INPUT");
+    assert.ok(blocked.configRevision);
     assert.equal(
       blocked.import.sources.every((source) => source.blobSha === null && source.contentSha256 === null),
       true,
     );
     const blockedTransform = transformLegacySources(sourceVector(googlePayload));
-    assert.equal(blockedTransform.status, "NEEDS_INPUT");
+    assert.equal(blockedTransform.status, "DRAFTABLE_WITH_INPUT");
     assert.notEqual(blocked.import.inputDigest, blockedTransform.inputDigest);
     const persisted = await prisma.legacyConfigImport.findMany({
       where: { appId: APP_ID },

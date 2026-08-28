@@ -285,7 +285,7 @@ test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () 
   assert.doesNotMatch(credentialModel, /^\s*(value|secret|privateKey|password)\s+/m);
   assert.doesNotMatch(editor, /type=["']password["']/);
   assert.match(editor, /initialPayloadSource === "LEGACY_SHADOW"/);
-  assert.match(fleetPage, /latestShadowDraft[\s\S]*legacyConfigImport\?\.status === "DRAFT_CREATED"/);
+  assert.match(fleetPage, /latestShadowDraft[\s\S]*legacyConfigImport\?\.status\?\.startsWith\("DRAFT_CREATED"\)/);
   assert.match(fleetPage, /configRevisionPayloadSchema\.safeParse\(latestShadowDraft\?\.payload\)/);
   assert.match(actions, /requirePlatformReadAccess\(\)/);
   assert.match(actions, /requirePlatformWriteAccess\(app\.slug\)/);
