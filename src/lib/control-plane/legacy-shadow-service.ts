@@ -433,7 +433,11 @@ function importSelect() {
       },
     },
     parityObservations: {
-      orderBy: [{ observedAt: "desc" as const }, { id: "desc" as const }],
+      orderBy: [
+        { observedAt: "desc" as const },
+        { createdAt: "desc" as const },
+        { id: "desc" as const },
+      ],
       take: 1,
       select: {
         id: true,

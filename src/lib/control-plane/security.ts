@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { GENERIC_WORKER_PRINCIPALS } from "@/lib/control-plane/automation-catalog";
 import { verifyStaticToken } from "@/lib/security";
 
 export type InternalAudience = "control-plane" | "agent-worker";
@@ -8,10 +9,10 @@ export interface InternalPrincipal {
   audience: InternalAudience;
 }
 
-function bearerToken(request: NextRequest): string | null {
+function authorizationBearerToken(request: NextRequest): string | null {
   const header = request.headers.get("authorization");
   if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
-  return request.headers.get("x-admin-token");
+  return null;
 }
 
 function principalId(request: NextRequest): string | null {
@@ -19,20 +20,41 @@ function principalId(request: NextRequest): string | null {
   return /^[A-Za-z0-9._:/-]{1,128}$/.test(value) ? value : null;
 }
 
+function configuredAgentWorkerTokens(): ReadonlyMap<string, string> | null {
+  const entries = [
+    [GENERIC_WORKER_PRINCIPALS.CODEX, process.env.AGENT_WORKER_CODEX_TOKEN?.trim()],
+    [GENERIC_WORKER_PRINCIPALS.CLAUDE, process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim()],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  const tokens = entries.map(([, token]) => token);
+  if (new Set(tokens).size !== tokens.length) return null;
+  return new Map(entries);
+}
+
 export function authenticateInternalRequest(
   request: NextRequest,
   audience: InternalAudience,
 ): InternalPrincipal | null {
-  const expected = audience === "agent-worker"
-    ? process.env.AGENT_WORKER_TOKEN
-    : process.env.CONTROL_PLANE_ADMIN_TOKEN ?? process.env.INTERNAL_ADMIN_TOKEN;
-  const token = bearerToken(request);
   const id = principalId(request);
-  if (!id || !verifyStaticToken(token, expected)) return null;
+  if (!id) return null;
+  if (audience === "agent-worker") {
+    const expected = configuredAgentWorkerTokens()?.get(id);
+    if (!verifyStaticToken(authorizationBearerToken(request), expected)) return null;
+  } else {
+    const token = authorizationBearerToken(request) ?? request.headers.get("x-admin-token");
+    const expected = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? process.env.INTERNAL_ADMIN_TOKEN;
+    const expectedPrincipal = process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim();
+    if (!expectedPrincipal || id !== expectedPrincipal || !verifyStaticToken(token, expected)) return null;
+  }
   return { id, audience };
 }
 
 export function requireIdempotencyKey(request: NextRequest): string | null {
   const value = request.headers.get("idempotency-key")?.trim() ?? "";
   return /^[A-Za-z0-9._:/-]{8,191}$/.test(value) ? value : null;
+}
+
+export function agentKindForPrincipal(principalId: string): "CODEX" | "CLAUDE" | null {
+  if (principalId === GENERIC_WORKER_PRINCIPALS.CODEX) return "CODEX";
+  if (principalId === GENERIC_WORKER_PRINCIPALS.CLAUDE) return "CLAUDE";
+  return null;
 }

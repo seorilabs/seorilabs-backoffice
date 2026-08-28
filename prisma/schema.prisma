@@ -107,6 +107,7 @@ model App {
   reauthRequests           ReauthRequest[]
   automationDefinitions    AutomationDefinition[]
   agentRuns                AgentRun[]
+  fleetProjectProjections  FleetProjectProjection[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -947,21 +948,22 @@ model ExternalBinding {
 }
 
 model DiscoveryObservation {
-  id                       String   @id @default(cuid())
+  id                       String                   @id @default(cuid())
   appId                    String
-  app                      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha                String   @db.Char(40)
+  app                      App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha                String                   @db.Char(40)
   sourceRef                String?
   workflowProfile          String?
   workflowPackageManager   String?
   workflowWorkingDirectory String?
   payload                  Json
-  payloadHash              String   @db.Char(64)
-  requestHash              String?  @db.Char(64)
-  idempotencyKey           String   @unique
+  payloadHash              String                   @db.Char(64)
+  requestHash              String?                  @db.Char(64)
+  idempotencyKey           String                   @unique
   observedBy               String
-  observedAt               DateTime @db.DateTime(3)
-  createdAt                DateTime @default(now()) @db.DateTime(3)
+  observedAt               DateTime                 @db.DateTime(3)
+  createdAt                DateTime                 @default(now()) @db.DateTime(3)
+  repositoryDiscoveryRuns  RepositoryDiscoveryRun[]
 
   @@index([appId, sourceSha, payloadHash])
   @@index([appId, observedAt])
@@ -1493,9 +1495,14 @@ model RepositoryRegistration {
   defaultBranch       String?
   archived            Boolean                      @default(false)
   status              RepositoryRegistrationStatus @default(REGISTERED)
+  managementKind      RepositoryManagementKind?
   discoveryCandidates Json?
   lastDefaultPushSha  String?                      @db.Char(40)
+  reconcileGeneration Int?
+  lastReconciledSha   String?                      @db.Char(40)
+  lastDiscoveryReason String?                      @db.VarChar(64)
   lastDeliveryId      String?
+  discoveryRuns       RepositoryDiscoveryRun[]
   createdAt           DateTime                     @default(now()) @db.DateTime(3)
   updatedAt           DateTime                     @updatedAt
 
@@ -1510,20 +1517,73 @@ enum RepositoryRegistrationStatus {
   ARCHIVED
 }
 
-// durable automation queue. AgentLease.scopeKey의 nullable unique 제약으로
-// 같은 repo에서 자율 PR을 만드는 실행은 동시에 하나만 claim할 수 있다.
+enum RepositoryManagementKind {
+  UNCLASSIFIED
+  APP
+  PLATFORM_PRODUCER
+}
+
+// webhook 응답과 GitHub source read를 분리하는 durable 재조정 원장이다.
+// leaseGeneration CAS로 사라진 worker의 늦은 완료가 최신 push를 덮지 못한다.
+model RepositoryDiscoveryRun {
+  id                String                       @id @default(cuid())
+  repoId            BigInt
+  registration      RepositoryRegistration       @relation(fields: [repoId], references: [repoId], onDelete: Cascade)
+  generation        Int
+  triggerDeliveryId String                       @unique
+  requestHash       String                       @db.Char(64)
+  sourceSha         String?                      @db.Char(40)
+  sourceRef         String?
+  status            RepositoryDiscoveryRunStatus @default(QUEUED)
+  reasonCode        String?                      @db.VarChar(64)
+  candidateDigest   String?                      @db.Char(64)
+  observationId     String?                      @unique
+  observation       DiscoveryObservation?        @relation(fields: [observationId], references: [id], onDelete: SetNull)
+  attempts          Int                          @default(0)
+  leaseGeneration   Int                          @default(0)
+  workerId          String?
+  leaseExpiresAt    DateTime?                    @db.DateTime(3)
+  availableAt       DateTime                     @default(now()) @db.DateTime(3)
+  startedAt         DateTime?                    @db.DateTime(3)
+  completedAt       DateTime?                    @db.DateTime(3)
+  createdAt         DateTime                     @default(now()) @db.DateTime(3)
+  updatedAt         DateTime                     @updatedAt
+
+  @@unique([repoId, generation])
+  @@index([status, availableAt, createdAt])
+  @@index([repoId, createdAt])
+  @@map("repository_discovery_run")
+}
+
+enum RepositoryDiscoveryRunStatus {
+  QUEUED
+  RUNNING
+  MANAGED
+  NEEDS_INPUT
+  EXCLUDED
+  STALE
+  FAILED
+}
+
+// durable automation queue. AgentRepoGuard가 lease TTL과 독립적으로 같은 repo의
+// 자율 PR 권한을 한 run에 고정하고, AgentLease는 generation별 실행 capability만 가진다.
 model AutomationDefinition {
-  id          String                 @id @default(cuid())
-  key         String                 @unique
-  appId       String?
-  app         App?                   @relation(fields: [appId], references: [id], onDelete: Cascade)
-  template    String
-  schedule    String?
-  enabled     Boolean                @default(true)
-  maxAttempts Int                    @default(3)
-  createdAt   DateTime               @default(now()) @db.DateTime(3)
-  updatedAt   DateTime               @updatedAt
-  occurrences AutomationOccurrence[]
+  id            String                 @id @default(cuid())
+  key           String                 @unique
+  appId         String?
+  app           App?                   @relation(fields: [appId], references: [id], onDelete: Cascade)
+  template      String
+  schedule      String?
+  agentKind     String?
+  model         String?
+  configuration Json?
+  enabled       Boolean                @default(true)
+  pausedAt      DateTime?              @db.DateTime(3)
+  cancelledAt   DateTime?              @db.DateTime(3)
+  maxAttempts   Int                    @default(3)
+  createdAt     DateTime               @default(now()) @db.DateTime(3)
+  updatedAt     DateTime               @updatedAt
+  occurrences   AutomationOccurrence[]
 
   @@index([enabled])
   @@map("automation_definition")
@@ -1535,7 +1595,10 @@ model AutomationOccurrence {
   definition     AutomationDefinition       @relation(fields: [definitionId], references: [id], onDelete: Cascade)
   scheduledFor   DateTime                   @db.DateTime(3)
   idempotencyKey String                     @unique
+  triggerKind    String?
+  triggerKey     String?                    @unique
   status         AutomationOccurrenceStatus @default(PENDING)
+  result         Json?
   createdAt      DateTime                   @default(now()) @db.DateTime(3)
   completedAt    DateTime?                  @db.DateTime(3)
   runs           AgentRun[]
@@ -1554,31 +1617,36 @@ enum AutomationOccurrenceStatus {
 }
 
 model AgentRun {
-  id              String               @id @default(cuid())
-  occurrenceId    String
-  occurrence      AutomationOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  appId           String?
-  app             App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
-  repoFullName    String
-  issueNumber     Int?
-  issueState      String?
-  labels          Json
-  createsPr       Boolean              @default(true)
-  priority        Int                  @default(100)
-  status          AgentRunStatus       @default(PENDING)
-  leaseGeneration Int                  @default(0)
-  attempts        Int                  @default(0)
-  maxAttempts     Int                  @default(3)
-  eligibleAt      DateTime             @default(now()) @db.DateTime(3)
-  startedAt       DateTime?            @db.DateTime(3)
-  completedAt     DateTime?            @db.DateTime(3)
-  outcome         Json?
-  error           String?              @db.Text
-  createdAt       DateTime             @default(now()) @db.DateTime(3)
-  updatedAt       DateTime             @updatedAt
-  leases          AgentLease[]
-  events          AgentRunEvent[]
-  reauthRequests  ReauthRequest[]
+  id                  String               @id @default(cuid())
+  occurrenceId        String
+  occurrence          AutomationOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  appId               String?
+  app                 App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
+  repoFullName        String
+  issueNumber         Int?
+  workKey             String?              @unique
+  issueState          String?
+  labels              Json
+  createsPr           Boolean              @default(true)
+  priority            Int                  @default(100)
+  status              AgentRunStatus       @default(PENDING)
+  leaseGeneration     Int                  @default(0)
+  attempts            Int                  @default(0)
+  maxAttempts         Int                  @default(3)
+  spentMicros         BigInt?
+  eligibleAt          DateTime             @default(now()) @db.DateTime(3)
+  startedAt           DateTime?            @db.DateTime(3)
+  completedAt         DateTime?            @db.DateTime(3)
+  outcome             Json?
+  error               String?              @db.Text
+  readbackRequestedAt DateTime?            @db.DateTime(3)
+  cancelledAt         DateTime?            @db.DateTime(3)
+  createdAt           DateTime             @default(now()) @db.DateTime(3)
+  updatedAt           DateTime             @updatedAt
+  leases              AgentLease[]
+  events              AgentRunEvent[]
+  reauthRequests      ReauthRequest[]
+  repoGuard           AgentRepoGuard?
 
   @@index([status, eligibleAt, priority])
   @@index([repoFullName, status])
@@ -1592,6 +1660,21 @@ enum AgentRunStatus {
   FAILED
   DEAD_LETTER
   CANCELLED
+}
+
+// AgentLease TTL과 독립적으로 repo별 자율 PR 권한을 한 run에 고정한다.
+// lease 만료·결과 불명 후에도 같은 run의 readback/retry가 끝날 때까지 유지한다.
+model AgentRepoGuard {
+  id             String    @id @default(cuid())
+  runId          String    @unique
+  run            AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  repoFullName   String
+  activeScopeKey String?   @unique
+  acquiredAt     DateTime  @default(now()) @db.DateTime(3)
+  releasedAt     DateTime? @db.DateTime(3)
+
+  @@index([repoFullName, releasedAt])
+  @@map("agent_repo_guard")
 }
 
 model AgentLease {
@@ -1625,6 +1708,78 @@ model AgentRunEvent {
 
   @@index([runId, createdAt])
   @@map("agent_run_event")
+}
+
+// GitHub webhook 수신과 automation enqueue를 분리하는 durable inbox.
+// webhook handler 실패나 재전송과 무관하게 scheduler가 동일 sourceKey를 한 번만 소진한다.
+model AutomationIngressEvent {
+  id           String    @id @default(cuid())
+  sourceKey    String    @unique
+  event        String
+  action       String?
+  repoFullName String
+  issueNumber  Int?
+  issueNodeId  String?
+  payload      Json?
+  payloadHash  String?   @db.Char(64)
+  occurredAt   DateTime  @db.DateTime(3)
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  eligibleAt   DateTime  @default(now()) @db.DateTime(3)
+  processedAt  DateTime? @db.DateTime(3)
+  error        String?   @db.Text
+  createdAt    DateTime  @default(now()) @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status, eligibleAt])
+  @@index([repoFullName, issueNumber])
+  @@map("automation_ingress_event")
+}
+
+// 운영 명령의 Idempotency-Key를 actor/operation/target/request hash에 고정한다.
+// PENDING row는 crash 후 동일 요청의 안전한 재실행을 허용하고, COMPLETED response는
+// side effect를 다시 만들지 않고 그대로 재생한다.
+model AutomationMutationRequest {
+  requestId   String    @id
+  actor       String
+  operation   String
+  targetKey   String
+  requestHash String    @db.Char(64)
+  status      String    @default("PENDING")
+  request     Json
+  response    Json?
+  completedAt DateTime? @db.DateTime(3)
+  createdAt   DateTime  @default(now()) @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("automation_mutation_request")
+}
+
+// GitHub Project는 포트폴리오 projection일 뿐 실행 claim의 입력이 아니다.
+// desired/observed를 따로 보존해 permission 부재나 drift를 UI에서 fail-closed로 보인다.
+model FleetProjectProjection {
+  id            String    @id @default(cuid())
+  appId         String?
+  app           App?      @relation(fields: [appId], references: [id], onDelete: SetNull)
+  projectNodeId String
+  issueNodeId   String
+  repoFullName  String
+  issueNumber   Int
+  desired       Json
+  desiredHash   String    @db.Char(64)
+  observed      Json?
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  lastError     String?   @db.Text
+  appliedAt     DateTime? @db.DateTime(3)
+  createdAt     DateTime  @default(now()) @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([projectNodeId, issueNodeId])
+  @@index([appId, status])
+  @@index([status, updatedAt])
+  @@map("fleet_project_projection")
 }
 
 // ──────────────────────────────────────────────────────────────────────────

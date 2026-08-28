@@ -1,5 +1,14 @@
-import type { RepositoryRegistrationStatus } from "@prisma/client";
+import { Prisma, type RepositoryRegistrationStatus } from "@prisma/client";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
+
+const SHA_40 = /^[0-9a-f]{40}$/i;
+const REPOSITORY_DISCOVERY_ACTIONS = new Set([
+  "created",
+  "renamed",
+  "unarchived",
+  "edited",
+]);
 
 export interface RepositoryWebhookInput {
   id: number;
@@ -7,6 +16,7 @@ export interface RepositoryWebhookInput {
   name?: string;
   default_branch?: string | null;
   archived?: boolean;
+  private?: boolean;
 }
 
 export function registrationStatus(input: {
@@ -20,7 +30,69 @@ export function registrationStatus(input: {
   return "REGISTERED";
 }
 
-export async function registerRepositoryWebhook(input: {
+export function repositorySourceIsCurrent(input: {
+  archived: boolean;
+  status: string;
+  managementKind: string | null;
+  lastDefaultPushSha: string | null;
+  lastReconciledSha: string | null;
+}, observationSha?: string | null): boolean {
+  if (input.archived || input.status !== "MANAGED") return false;
+  if (input.managementKind !== "APP") return false;
+  const pushed = input.lastDefaultPushSha?.toLowerCase() ?? null;
+  const reconciled = input.lastReconciledSha?.toLowerCase() ?? null;
+  return pushed !== null
+    && pushed === reconciled
+    && (observationSha === undefined || observationSha?.toLowerCase() === pushed);
+}
+
+export function repositoryAutomationEligible(input: Parameters<typeof repositorySourceIsCurrent>[0] | null): boolean {
+  return input !== null && repositorySourceIsCurrent(input);
+}
+
+export function repositoryDiscoveryTrigger(input: {
+  event: string;
+  action?: string;
+  defaultBranch?: string | null;
+  ref?: string;
+  after?: string;
+}): { relevant: boolean; sourceSha: string | null; sourceRef: string | null } {
+  const sourceRef = input.defaultBranch ? `refs/heads/${input.defaultBranch}` : null;
+  if (input.event === "reconcile") {
+    return {
+      relevant: true,
+      sourceSha: SHA_40.test(input.after ?? "") ? input.after!.toLowerCase() : null,
+      sourceRef,
+    };
+  }
+  if (input.event === "push") {
+    const isDefaultPush = Boolean(sourceRef) && input.ref === sourceRef;
+    return {
+      relevant: isDefaultPush,
+      sourceSha: isDefaultPush && SHA_40.test(input.after ?? "")
+        ? input.after!.toLowerCase()
+        : null,
+      sourceRef,
+    };
+  }
+  return {
+    relevant: input.event === "repository" && REPOSITORY_DISCOVERY_ACTIONS.has(input.action ?? ""),
+    sourceSha: null,
+    sourceRef,
+  };
+}
+
+type RepositoryRegistrationDependencies = {
+  client: typeof prisma;
+  now: () => Date;
+};
+
+const defaultDependencies: RepositoryRegistrationDependencies = {
+  client: prisma,
+  now: () => new Date(),
+};
+
+export type RegisterRepositoryWebhookInput = {
   event: string;
   action?: string;
   repository: RepositoryWebhookInput;
@@ -28,20 +100,127 @@ export async function registerRepositoryWebhook(input: {
   after?: string;
   deliveryId: string;
   organization: string;
-}): Promise<void> {
-  const repo = input.repository;
-  if (!Number.isSafeInteger(repo.id) || repo.id <= 0) return;
-  if (!repo.full_name.startsWith(`${input.organization}/`)) return;
-  const repoId = BigInt(repo.id);
-  const app = await prisma.app.findUnique({ where: { repoId }, select: { id: true } });
-  const archived = repo.archived === true || input.action === "archived";
-  const status = registrationStatus({ archived, managed: Boolean(app) });
-  const isDefaultPush = input.event === "push"
-    && Boolean(repo.default_branch)
-    && input.ref === `refs/heads/${repo.default_branch}`
-    && /^[0-9a-f]{40}$/i.test(input.after ?? "");
+};
 
-  await prisma.$transaction(async (tx) => {
+type RegisterRepositoryWebhookResult = {
+  duplicate: boolean;
+  enqueued: boolean;
+  runId: string | null;
+  generation: number | null;
+};
+
+/**
+ * provider readback 전에는 webhook의 rename/archive/SHA를 정본으로 쓰지 않는다.
+ * 대신 기존 generation을 즉시 폐기하고 REGISTERED로 내려 새 claim/parity를 막는다.
+ */
+export async function invalidateRepositoryDiscoveryInTransaction(
+  input: RegisterRepositoryWebhookInput,
+  tx: Prisma.TransactionClient,
+  now: Date,
+): Promise<void> {
+  const repo = input.repository;
+  if (
+    !Number.isSafeInteger(repo.id)
+    || repo.id <= 0
+    || !repo.full_name.startsWith(`${input.organization}/`)
+  ) return;
+  const repoId = BigInt(repo.id);
+  const trigger = repositoryDiscoveryTrigger({
+    event: input.event,
+    action: input.action,
+    defaultBranch: repo.default_branch,
+    ref: input.ref,
+    after: input.after,
+  });
+  const archived = repo.archived === true || input.action === "archived" || input.action === "deleted";
+  if (!trigger.relevant && !archived) return;
+  await tx.repositoryRegistration.upsert({
+    where: { repoId },
+    create: {
+      repoId,
+      repoFullName: repo.full_name,
+      defaultBranch: repo.default_branch ?? null,
+      archived: false,
+      status: "REGISTERED",
+      managementKind: "UNCLASSIFIED",
+      reconcileGeneration: 0,
+    },
+    update: {
+      status: "REGISTERED",
+    },
+  });
+  await tx.$executeRaw`
+    UPDATE repository_registration
+    SET reconcileGeneration = COALESCE(reconcileGeneration, 0) + 1
+    WHERE repoId = ${repoId}
+  `;
+  await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+  await tx.repositoryDiscoveryRun.updateMany({
+    where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
+    data: {
+      status: "STALE",
+      reasonCode: "SOURCE_DRIFT",
+      workerId: null,
+      leaseExpiresAt: null,
+      completedAt: now,
+    },
+  });
+}
+
+export async function registerRepositoryWebhookInTransaction(
+  input: RegisterRepositoryWebhookInput,
+  tx: Prisma.TransactionClient,
+  now: Date,
+): Promise<RegisterRepositoryWebhookResult> {
+  const repo = input.repository;
+  if (!Number.isSafeInteger(repo.id) || repo.id <= 0) {
+    return { duplicate: false, enqueued: false, runId: null, generation: null };
+  }
+  if (!repo.full_name.startsWith(`${input.organization}/`)) {
+    return { duplicate: false, enqueued: false, runId: null, generation: null };
+  }
+  const repoId = BigInt(repo.id);
+  const archived = repo.archived === true || input.action === "archived" || input.action === "deleted";
+  const trigger = repositoryDiscoveryTrigger({
+    event: input.event,
+    action: input.action,
+    defaultBranch: repo.default_branch,
+    ref: input.ref,
+    after: input.after,
+  });
+  const requestHash = jsonDigest({
+    event: input.event,
+    action: input.action ?? null,
+    repoId: repoId.toString(),
+    repoFullName: repo.full_name,
+    defaultBranch: repo.default_branch ?? null,
+    archived,
+    sourceSha: trigger.sourceSha,
+    sourceRef: trigger.sourceRef,
+  } as JsonValue);
+
+  const existingRun = await tx.repositoryDiscoveryRun.findUnique({
+      where: { triggerDeliveryId: input.deliveryId },
+      select: { id: true, generation: true, requestHash: true },
+    });
+    if (existingRun) {
+      if (existingRun.requestHash !== requestHash) {
+        throw new Error("REPOSITORY_DISCOVERY_DELIVERY_CONFLICT");
+      }
+      return {
+        duplicate: true,
+        enqueued: true,
+        runId: existingRun.id,
+        generation: existingRun.generation,
+      };
+    }
+    const current = await tx.repositoryRegistration.findUnique({
+      where: { repoId },
+      select: { lastDeliveryId: true },
+    });
+    if (current?.lastDeliveryId === input.deliveryId) {
+      return { duplicate: true, enqueued: false, runId: null, generation: null };
+    }
     await tx.repositoryRegistration.upsert({
       where: { repoId },
       create: {
@@ -49,42 +228,142 @@ export async function registerRepositoryWebhook(input: {
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? null,
         archived,
-        status,
-        lastDefaultPushSha: isDefaultPush ? input.after!.toLowerCase() : null,
+        status: archived ? "ARCHIVED" : "REGISTERED",
+        managementKind: "UNCLASSIFIED",
+        reconcileGeneration: 0,
+        lastDefaultPushSha: trigger.sourceSha,
         lastDeliveryId: input.deliveryId,
       },
       update: {
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? undefined,
         archived,
-        status,
-        ...(isDefaultPush ? { lastDefaultPushSha: input.after!.toLowerCase() } : {}),
+        // tag/non-default push가 NEEDS_INPUT 또는 EXCLUDED 판정을 지우지 않는다.
+        // relevant generation은 아래에서만 REGISTERED로 전환한다.
+        ...(archived ? { status: "ARCHIVED" as const } : {}),
+        ...(trigger.sourceSha ? { lastDefaultPushSha: trigger.sourceSha } : {}),
         lastDeliveryId: input.deliveryId,
       },
     });
-    if (app && input.event === "repository" && input.action === "renamed") {
-      await tx.app.update({
-        where: { id: app.id },
+    await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+
+    if (archived) {
+      await tx.repositoryDiscoveryRun.updateMany({
+        where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
         data: {
-          repoFullName: repo.full_name,
-          slug: repo.name ?? repo.full_name.split("/").at(-1)!,
+          status: "STALE",
+          reasonCode: "ARCHIVED",
+          workerId: null,
+          leaseExpiresAt: null,
+          completedAt: now,
         },
       });
+      await tx.auditLog.create({
+        data: {
+          action: `control-plane.repository.${input.event}.${input.action ?? "default"}`,
+          entityType: "RepositoryRegistration",
+          entityId: repoId.toString(),
+          payload: {
+            repoFullName: repo.full_name,
+            archived: true,
+            deliveryId: input.deliveryId,
+            discoveryEnqueued: false,
+          },
+        },
+      });
+      return { duplicate: false, enqueued: false, runId: null, generation: null };
     }
+
+    if (!trigger.relevant) {
+      return { duplicate: false, enqueued: false, runId: null, generation: null };
+    }
+
+    const registration = await tx.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId },
+      select: { reconcileGeneration: true },
+    });
+    const currentGeneration = registration.reconcileGeneration ?? 0;
+    const semanticReplay = await tx.repositoryDiscoveryRun.findFirst({
+      where: {
+        repoId,
+        generation: currentGeneration,
+        requestHash,
+        status: { in: ["QUEUED", "RUNNING", "MANAGED", "NEEDS_INPUT", "EXCLUDED"] },
+      },
+      select: { id: true, generation: true, status: true },
+    });
+    if (semanticReplay) {
+      if (semanticReplay.status === "QUEUED" || semanticReplay.status === "RUNNING") {
+        await tx.repositoryRegistration.update({
+          where: { repoId },
+          data: { status: "REGISTERED" },
+        });
+      }
+      return {
+        duplicate: true,
+        enqueued: true,
+        runId: semanticReplay.id,
+        generation: semanticReplay.generation,
+      };
+    }
+    const generation = currentGeneration + 1;
+    await tx.repositoryDiscoveryRun.updateMany({
+      where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
+      data: {
+        status: "STALE",
+        reasonCode: "SOURCE_DRIFT",
+        workerId: null,
+        leaseExpiresAt: null,
+        completedAt: now,
+      },
+    });
+    await tx.repositoryRegistration.update({
+      where: { repoId },
+      data: {
+        reconcileGeneration: generation,
+        managementKind: "UNCLASSIFIED",
+        discoveryCandidates: Prisma.DbNull,
+        lastDiscoveryReason: null,
+        // 기존 App도 새 generation이 exact HEAD로 완료되기 전에는 자동화와
+        // parity에서 current로 취급하지 않는다.
+        status: "REGISTERED",
+      },
+    });
+    const run = await tx.repositoryDiscoveryRun.create({
+      data: {
+        repoId,
+        generation,
+        triggerDeliveryId: input.deliveryId,
+        requestHash,
+        sourceSha: trigger.sourceSha,
+        sourceRef: trigger.sourceRef,
+        availableAt: now,
+      },
+    });
     await tx.auditLog.create({
       data: {
         action: `control-plane.repository.${input.event}.${input.action ?? "default"}`,
-        entityType: "RepositoryRegistration",
-        entityId: repoId.toString(),
+        entityType: "RepositoryDiscoveryRun",
+        entityId: run.id,
         payload: {
+          repoId: repoId.toString(),
           repoFullName: repo.full_name,
-          defaultBranch: repo.default_branch ?? null,
-          archived,
-          isDefaultPush,
+          sourceSha: trigger.sourceSha,
+          sourceRef: trigger.sourceRef,
           deliveryId: input.deliveryId,
+          generation,
         },
       },
     });
-  });
+  return { duplicate: false, enqueued: true, runId: run.id, generation };
 }
 
+export async function registerRepositoryWebhook(
+  input: RegisterRepositoryWebhookInput,
+  dependencies: RepositoryRegistrationDependencies = defaultDependencies,
+): Promise<RegisterRepositoryWebhookResult> {
+  const now = dependencies.now();
+  return dependencies.client.$transaction((tx) => (
+    registerRepositoryWebhookInTransaction(input, tx, now)
+  ));
+}

@@ -29,6 +29,7 @@ MANIFESTS=(
   k8s/app-ops-worker.yaml
   k8s/discord-workers.yaml
   k8s/teammate-worker.yaml
+  k8s/repository-discovery-worker.yaml
   k8s/store-review-cronjob.yaml
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml
@@ -52,6 +53,20 @@ for m in "${MANIFESTS[@]}"; do
   fi
   ok "$m ($got 곳)"
 done
+
+echo "== repository discovery worker 최소권한 =="
+discovery_worker="$root/k8s/repository-discovery-worker.yaml"
+if grep -q 'repository-discovery-worker.cjs' "$discovery_worker" &&
+   grep -q 'readOnlyRootFilesystem: true' "$discovery_worker" &&
+   grep -q 'automountServiceAccountToken: false' "$discovery_worker" &&
+   grep -q 'key: DATABASE_URL' "$discovery_worker" &&
+   grep -q 'key: GITHUB_APP_ID' "$discovery_worker" &&
+   grep -q 'key: GITHUB_PRIVATE_KEY' "$discovery_worker" &&
+   ! grep -q 'GITHUB_WEBHOOK_SECRET\|CONTROL_PLANE_ADMIN_TOKEN\|AGENT_WORKER_TOKEN' "$discovery_worker"; then
+  ok "discovery worker는 DB와 GitHub read identity만 주입"
+else
+  ng "discovery worker 최소권한 경계가 깨졌다"
+fi
 
 echo "== migration Job identity =="
 migration_out="$("$render" "$root/k8s/migration-job.yaml" "$IMG" "$SHA")"

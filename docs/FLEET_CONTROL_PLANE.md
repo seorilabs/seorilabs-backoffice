@@ -5,14 +5,20 @@
 
 ## 인증과 공통 헤더
 
-- 제어면 API: `Authorization: Bearer $CONTROL_PLANE_ADMIN_TOKEN`
-- agent queue API: `Authorization: Bearer $AGENT_WORKER_TOKEN`
-- 모든 요청: `X-Seori-Principal`에 workload identity 공개 ID
+- 제어면 API: `Authorization: Bearer $CONTROL_PLANE_ADMIN_TOKEN`과
+  `X-Seori-Principal: $CONTROL_PLANE_ADMIN_PRINCIPAL`
+- Codex agent queue API: `Authorization: Bearer $AGENT_WORKER_CODEX_TOKEN`과
+  `X-Seori-Principal: codex:seorilabs-generic-worker`
+- Claude agent queue API: `Authorization: Bearer $AGENT_WORKER_CLAUDE_TOKEN`과
+  `X-Seori-Principal: claude:seorilabs-generic-worker`
+- 두 worker capability는 서로 다른 값이어야 한다. legacy `AGENT_WORKER_TOKEN`과
+  agent queue의 `X-Admin-Token`은 인증에 사용하지 않으며, 새 capability가 없으면 fail-closed한다.
+- 제어면 principal은 token과 1:1로 결합하며 임의 header 값이나 미설정 principal은 거부한다.
 - 모든 mutation: 8자 이상의 `Idempotency-Key`
 - Config activation과 resolved manifest: `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY`
 - agent claim: worker에 노출하지 않는 `AGENT_LEASE_SIGNING_KEY`
 
-토큰 audience를 분리하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
+토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
 payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 개인 식별자를 넣지 않는다.
 
 ## API
@@ -33,6 +39,12 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/internal/agents/heartbeat` | 현재 generation lease만 연장 |
 | `POST` | `/api/internal/agents/complete` | 현재 generation을 성공 종료 |
 | `POST` | `/api/internal/agents/fail` | attempt 한도 내 재큐잉, 초과 시 dead-letter |
+| `POST` | `/api/internal/agents/readback-required` | 외부 mutation 결과 불명을 기록하고 같은 run guard를 유지 |
+| `POST` | `/api/internal/agents/readback` | 같은 run을 재claim한 새 generation lease로 `RESUME`, `COMPLETE`, `BLOCKED` 판정 |
+| `POST` | `/api/control-plane/automation-definitions` | agent, cadence, 예산 상한, 승인 정책이 고정된 routine 생성 |
+| `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
+| `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
+| `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
 
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
@@ -105,17 +117,69 @@ control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상�
 ## Queue 불변식
 
 - claim은 `AgentRun.status`와 `leaseGeneration`을 같은 transaction에서 CAS한다.
-- `AgentLease.scopeKey=repo-pr:{owner/repo}`의 nullable unique index로 repo별 자율 PR 실행을 하나로 제한한다.
-- claim 직전에 현재 `IssueMirror`의 closed, `blocked`, `approval:*`, `no-autopilot` 상태와 기존 open autopilot PR을 다시 확인한다.
+- `AgentRepoGuard.activeScopeKey=repo-pr:{owner/repo}`의 nullable unique index로 lease TTL과 무관하게 repo별 자율 PR 실행을 하나로 제한한다.
+- `PR_READY` 완료 뒤에도 guard를 유지한다. 정확한 PR이 `CLOSED` 또는 `MERGED`로 mirror/readback된 뒤에만 해제한다.
+- claim 직전에 현재 `IssueMirror`의 closed, `blocked`, `approval:*`, `no-autopilot`, `autopilot` 상태와 기존 open autopilot PR을 다시 확인한다.
 - token 원문은 저장하지 않는다. DB에는 SHA-256만 저장하고 같은 idempotency 요청의 token은 server-only HMAC으로 재생성한다.
 - heartbeat와 settle은 worker ID, token hash, generation, TTL을 모두 대조한다. 이전 generation의 completion은 거부한다.
-- 만료 lease는 scope를 해제하고 retry 또는 dead-letter로 수렴하며 모든 전이는 `AgentRunEvent`에 append한다.
+- PR 생성 권한 lease의 만료와 `RESULT_UNKNOWN`은 기존 lease를 폐기하고 run을 durable readback 대기로 전환한다. 다음 claim만 새 generation의 `READBACK_FIRST` capability를 발급하며, 이전 token의 resolution은 거부한다.
+- routine의 `approvalPolicy`, `budgetCeilingMicros`, 누적 `spentMicros`, 남은 예산과 허용 action capability는 claim에 포함된다. 모든 settlement는 `costMicros`가 필수이고 누적 예산 초과 및 `READ_ONLY`의 mutation 결과를 fail-closed한다.
+- 취소가 외부 결과 불명을 만들지 않으면 `workKey`도 같은 transaction에서 해제한다. 결과 불명 또는 active repo guard가 남은 dead-letter는 수동 retry로 우회할 수 없다.
+
+## Scheduler와 Project projection
+
+GitHub delivery와 allowlist된 Issue observation 또는 정식 tag의 공개 ref·source SHA·checksum `AutomationIngressEvent`는 같은 transaction에 기록한다. scheduler는 Issue 재처리마다 GitHub API로 현재 상태를 readback하고 durable observation보다 오래되지 않았음을 확인한 뒤 IssueMirror를 수렴시킨다. 구형 payload 없는 Issue inbox도 같은 readback 경로로 복구한다. 정식 tag는 같은 inbox에서 출시노트를 재생하되 `${GITHUB_ORG}/platform`은 immutable Platform publisher의 소유권을 보존하기 위해 외부 발행 없이 처리 완료한다. scheduler는 실패·중단된 inbox와
+마지막 occurrence 이후의 UTC schedule slot을 재소진하며 delivery source key, definition/slot unique key,
+issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume anchor로 건너뛰므로 재개가 과거 slot을
+한꺼번에 실행하지 않는다.
+
+`Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`은
+`FleetProjectProjection.desired`에만 투영된다. claim은 GitHub Issue mirror와 queue 상태만 읽으며 Project field를
+실행 신호로 사용하지 않는다. Project write 직전 current app binding을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시 읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
+Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
+
+실제 scheduler CronJob, Codex/Claude 예약 작업, `Seorilabs Fleet` Project 생성은 배포와 사용자 승인 이후의
+별도 gate다. 저장소의 설치 manifest는 `suspend: true`이며 운영 workload에 포함되지 않는다.
 
 ## GitHub repository webhook
 
 `repository`의 created, renamed, archived, unarchived, edited와 default-branch `push`를
 `RepositoryRegistration`에 repo numeric ID 기준으로 upsert한다. 이미 관리 중인 repo rename만
-`App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규 repo는 App을 추측 생성하지 않는다.
+GitHub readback까지 통과한 뒤 `App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규
+repo는 App을 추측 생성하지 않는다.
+
+webhook은 source를 직접 읽지 않는다. 같은 transaction에서 delivery와 공개 discovery payload를 inbox에
+봉인하고 registration을 `REGISTERED`로 내려 기존 generation의 QUEUED/RUNNING lease를 즉시 `STALE`로
+만든다. scheduler가 provider의 현재 numeric repository ID, canonical full name, private/archive/default
+branch와 HEAD를 readback한 뒤 그 vector로만 `RepositoryDiscoveryRun` generation을 enqueue한다. delivery
+ID가 달라도 동일 generation의 normalized request hash가 같으면 기존 run으로 접는다. 전용 worker가
+numeric repository ID, canonical full name, private/archive/default
+branch와 현재 `main` HEAD를 provider에서 다시 읽은 뒤 exact commit tree만 탐색한다. default push SHA와
+현재 HEAD가 다르거나 탐지 중 HEAD가 움직이면 이전 run은 `STALE`로 닫고 current HEAD를 새 generation으로
+enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration generation CAS에서 거부된다.
+
+탐지 파일은 verified tree에서 선택한 `package.json`, `project.godot`, native build identity,
+`export_presets.cfg`, `build.env`, `granite.config.ts`로 제한한다. 원문은 parser 호출 동안만 유지하며 DB에는
+path, blob SHA, content SHA-256, size, 상태와 파생된 공개 package/bundle/app ID만 저장한다. tree 전체 path와
+source 원문, secret-like custom package field는 저장하지 않는다.
+
+- 후보 하나: `App.status=ACTIVE` 신규 등록, `RepositoryRegistration.status=MANAGED`, exact-SHA
+  `DiscoveryObservation`을 하나의 transaction으로 완료한다.
+- 후보 0개/여러 개, package manager 모호성, build target/공개 identity 누락, unreadable source,
+  public/non-main repo: 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
+- `seorilabs/platform`은 `seorilabs-platform` package와 `spec/openapi.yaml`을 함께 확인한 뒤
+  `PLATFORM_PRODUCER`로 관리하며 RN/Godot App 후보에서 명시적으로 제외한다.
+- default push와 repository lifecycle webhook은 공개 numeric repo identity, ref, SHA를 delivery와 같은
+  transaction의 automation inbox에 checksum으로 봉인하고 기존 실행을 즉시 fail-closed한다. inbox 처리는
+  GitHub의 현재 repository identity와 HEAD를 다시 읽어 오래되거나 순서가 뒤집힌 payload를 적용하지 않는다.
+  scheduler는 GitHub redelivery에 의존하지 않고 FAILED/PENDING inbox를 재처리하며, 기존 ingress-only row도
+  동일 payload 검증 뒤 delivery 원장과 멱등 복구한다.
+
+worker poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
+durable enqueue와 실행 차단은 webhook transaction에서 즉시 완료하고, provider readback 뒤 discovery run을
+등록한다. 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
+신규 private RN/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
+completedAt, reasonCode로 자동 검증할 수 있다.
 
 ## 이관 경계
 

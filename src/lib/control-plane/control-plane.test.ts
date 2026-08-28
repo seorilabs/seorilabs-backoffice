@@ -105,6 +105,7 @@ test("자율 PR scope는 repo별 하나이며 blocked/approval/closed issue는 �
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "CLOSED", labels: [] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["blocked"] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["approval:release"] }), false);
+  assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["P1"] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["autopilot", "P1"] }), true);
 });
 

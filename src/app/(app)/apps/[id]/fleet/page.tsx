@@ -2,8 +2,13 @@ import { notFound } from "next/navigation";
 
 import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
+import { FleetAutomationControls } from "@/components/fleet/FleetAutomationControls";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
+import {
+  isManagedAutomationDefinition,
+  parseManagedAutomationPolicy,
+} from "@/lib/control-plane/automation-catalog";
 import { getFleetOperationsView } from "@/lib/control-plane/fleet-view";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 
@@ -56,8 +61,15 @@ export default async function FleetOperationsPage({
 
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
-  const latestDiscovery = fleet.discoveryObservations[0];
-  const latestParity = fleet.fleetParityWaveResults[0];
+  const latestObservedDiscovery = fleet.discoveryObservations[0];
+  const latestDiscovery = fleet.discoveryCurrent ? latestObservedDiscovery : undefined;
+  const latestObservedParity = fleet.fleetParityWaveResults[0];
+  const latestParity = latestDiscovery
+    && activeConfig
+    && latestObservedParity?.sourceSha === latestDiscovery.sourceSha
+    && latestObservedParity.configRevisionId === activeConfig.id
+    ? latestObservedParity
+    : undefined;
   const activePayload = configRevisionPayloadSchema.safeParse(activeConfig?.payload);
   const initialPayload = activePayload.success
     ? activePayload.data
@@ -73,6 +85,10 @@ export default async function FleetOperationsPage({
       }),
     };
   });
+  const visibleRuns = [
+    ...fleet.recentRuns,
+    ...fleet.deadLetters.filter((deadLetter) => !fleet.recentRuns.some((run) => run.id === deadLetter.id)),
+  ];
 
   return (
     <div className="space-y-8">
@@ -81,13 +97,30 @@ export default async function FleetOperationsPage({
         description="자동 탐지·desired state·provider readback·credential 공개 identity·agent queue를 앱 단위로 대조합니다. 이 화면은 provider write를 수행하지 않습니다."
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-          <Summary label="Discovery" value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : "미관측"} detail={dateTime(latestDiscovery?.observedAt)} />
+          <Summary
+            label="Discovery"
+            value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : latestObservedDiscovery ? "재탐지 대기" : "미관측"}
+            detail={latestDiscovery
+              ? dateTime(latestDiscovery.observedAt)
+              : fleet.repositoryRegistration?.lastDiscoveryReason ?? "current source 관측 없음"}
+            danger={Boolean(latestObservedDiscovery) && !latestDiscovery}
+          />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
           <Summary
             label="Parity gate"
-            value={latestParity?.wave.cleanupAllowed ? "2회 연속 통과" : latestParity ? `${latestParity.wave.consecutiveMatchCount}/2` : "미실행"}
-            detail={latestParity ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}` : "Fleet wave 증거 없음"}
-            danger={Boolean(latestParity) && !latestParity.wave.cleanupAllowed}
+            value={latestParity?.wave.cleanupAllowed
+              ? "2회 연속 통과"
+              : latestParity
+                ? `${latestParity.wave.consecutiveMatchCount}/2`
+                : latestObservedParity
+                  ? "현재 벡터 미검증"
+                  : "미실행"}
+            detail={latestParity
+              ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}`
+              : latestObservedParity
+                ? "과거 wave는 이력에서만 확인"
+                : "Fleet wave 증거 없음"}
+            danger={Boolean(latestObservedParity) && (!latestParity || !latestParity.wave.cleanupAllowed)}
           />
           <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
           <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />
@@ -406,60 +439,65 @@ export default async function FleetOperationsPage({
         </div>
       </WorkspaceSection>
 
-      <WorkspaceSection title="Automation queue" description="최근 run과 dead-letter를 함께 표시합니다. lease token은 저장·표시하지 않습니다.">
-        <Panel title="AutomationDefinition">
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {fleet.automationDefinitions.map((definition) => (
-              <div key={definition.id} className="rounded border border-neutral-200 px-3 py-2 text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{definition.key}</span>
-                  <Status value={definition.enabled ? "ACTIVE" : "DISABLED"} />
+      <WorkspaceSection title="Automation queue" description="routine 생성·즉시/정기 실행·pause/cancel/retry를 같은 API 계약으로 처리합니다. lease token은 저장·표시하지 않습니다.">
+        <FleetAutomationControls
+          appId={fleet.id}
+          definitions={fleet.automationDefinitions.map((definition) => {
+            const policy = parseManagedAutomationPolicy(definition.configuration);
+            const managed = isManagedAutomationDefinition(definition);
+            return {
+              id: definition.id,
+              key: definition.key,
+              template: definition.template,
+              schedule: definition.schedule,
+              agentKind: definition.agentKind,
+              model: definition.model,
+              enabled: definition.enabled && managed,
+              managed,
+              maxAttempts: definition.maxAttempts,
+              approvalPolicy: policy?.approvalPolicy ?? "UNMANAGED",
+              budgetCeilingMicros: policy?.budgetCeilingMicros ?? 0,
+            };
+          })}
+          runs={visibleRuns.map((run) => ({
+            id: run.id,
+            definitionId: run.occurrence.definition.id,
+            definitionKey: run.occurrence.definition.key,
+            issueNumber: run.issueNumber,
+            status: run.status,
+            attempts: run.attempts,
+            maxAttempts: run.maxAttempts,
+            spentMicros: run.spentMicros,
+            workerId: run.leases[0]?.workerId ?? null,
+            updatedAt: dateTime(run.updatedAt),
+            error: run.error,
+            outcome: run.outcome,
+          }))}
+        />
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="Seorilabs Fleet Project projection"
+        description="Priority·App·Kind·Lifecycle·Agent·Approval·Outcome desired state입니다. 표시 projection은 실행 claim과 완전히 분리되어 있습니다."
+      >
+        <Panel>
+          <div className="space-y-2">
+            {fleet.fleetProjectProjections.map((projection) => (
+              <details key={projection.id} className="rounded border border-neutral-200 px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-neutral-800">
+                  #{projection.issueNumber} <Status value={projection.status} />
+                  <span className="ml-2 text-xs font-normal text-neutral-400">{dateTime(projection.updatedAt)}</span>
+                </summary>
+                <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                  <pre className="overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">{jsonText(projection.desired)}</pre>
+                  <pre className="overflow-auto rounded bg-neutral-100 p-3 text-[11px] text-neutral-700">{jsonText(projection.observed ?? { status: "readback pending" })}</pre>
                 </div>
-                <div className="mt-1 text-xs text-neutral-500">{definition.template}</div>
-                <div className="mt-1 text-xs text-neutral-400">{definition.schedule ?? "수동"} · 최대 {definition.maxAttempts}회</div>
-              </div>
+                {projection.lastError && <p className="mt-2 text-xs text-red-700">{projection.lastError}</p>}
+              </details>
             ))}
-            {fleet.automationDefinitions.length === 0 && <Empty>Automation definition이 없습니다.</Empty>}
+            {fleet.fleetProjectProjections.length === 0 && <Empty>아직 Project projection 관측이 없습니다.</Empty>}
           </div>
         </Panel>
-        <div className="mt-4 grid gap-4 xl:grid-cols-3">
-          <div className="xl:col-span-2">
-            <Panel title="최근 AgentRun">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left text-xs">
-                  <thead className="border-b border-neutral-200 text-neutral-500">
-                    <tr><th className="py-2">Definition</th><th>대상</th><th>상태</th><th>시도</th><th>Lease</th><th>갱신</th></tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-100">
-                    {fleet.recentRuns.map((run) => (
-                      <tr key={run.id}>
-                        <td className="py-2 pr-3 font-medium">{run.occurrence.definition.key}</td>
-                        <td className="pr-3">{run.issueNumber ? `#${run.issueNumber}` : mono(run.id, 10)}</td>
-                        <td className="pr-3"><Status value={run.status} /></td>
-                        <td className="pr-3">{run.attempts}/{run.maxAttempts}</td>
-                        <td className="pr-3">{run.leases[0] ? `${run.leases[0].workerId} · g${run.leases[0].generation}` : "—"}</td>
-                        <td>{dateTime(run.updatedAt)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {fleet.recentRuns.length === 0 && <Empty>Agent run이 없습니다.</Empty>}
-              </div>
-            </Panel>
-          </div>
-          <Panel title="Dead-letter">
-            <div className="space-y-2">
-              {fleet.deadLetters.map((run) => (
-                <div key={run.id} className="rounded border border-red-200 bg-red-50/50 px-3 py-2 text-xs">
-                  <div className="font-medium text-red-800">{run.occurrence.definition.key} {run.issueNumber ? `#${run.issueNumber}` : ""}</div>
-                  <div className="mt-1 text-red-700">{run.error ?? "오류 상세 없음"}</div>
-                  <div className="mt-1 text-red-500">{run.attempts}/{run.maxAttempts} · {dateTime(run.updatedAt)}</div>
-                </div>
-              ))}
-              {fleet.deadLetters.length === 0 && <Empty>Dead-letter가 없습니다.</Empty>}
-            </div>
-          </Panel>
-        </div>
       </WorkspaceSection>
 
       <WorkspaceSection

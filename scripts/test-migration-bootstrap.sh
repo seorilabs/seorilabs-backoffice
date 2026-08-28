@@ -38,8 +38,11 @@ pnpm prisma migrate diff \
   --exit-code >/dev/null
 pnpm tsx scripts/verify-migration-state.ts --history=fresh
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-fleet-agent-automation.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-classifier.ts
 pnpm tsx scripts/test-legacy-shadow-import.ts
 pnpm tsx scripts/test-fleet-parity-wave.ts
 pnpm tsx scripts/test-restore-rehearsal.ts
+pnpm tsx scripts/test-repository-discovery.ts
 pnpm tsx scripts/verify-migration-state.ts --history=fresh

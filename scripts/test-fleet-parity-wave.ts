@@ -31,6 +31,7 @@ async function main(): Promise<void> {
   let clock = Date.parse("2026-08-28T02:00:00.000Z");
   let parityStatus: "MATCH" | "NEEDS_INPUT" = "MATCH";
   let importCalls = 0;
+  let mutateSourceDuringImport = false;
 
   async function recordImport(input: {
     repoId: bigint;
@@ -77,6 +78,17 @@ async function main(): Promise<void> {
         },
       });
     }
+    if (mutateSourceDuringImport) {
+      mutateSourceDuringImport = false;
+      await client.repositoryRegistration.update({
+        where: { repoId: REPO_ID },
+        data: {
+          status: "REGISTERED",
+          lastDefaultPushSha: "6".repeat(40),
+          lastReconciledSha: input.sourceSha,
+        },
+      });
+    }
     const legacyImport = await client.legacyConfigImport.findUniqueOrThrow({
       where: { id: importId },
       include: {
@@ -118,10 +130,25 @@ async function main(): Promise<void> {
         observedAt: new Date(clock += 1_000),
       },
     });
+    await client.repositoryRegistration.update({
+      where: { repoId: REPO_ID },
+      data: {
+        status: "MANAGED",
+        managementKind: "APP",
+        lastDefaultPushSha: sourceSha,
+        lastReconciledSha: sourceSha,
+      },
+    });
   }
 
   async function cleanup(): Promise<void> {
-    await client.fleetParityWaveResult.deleteMany({ where: { appId: APP_ID } });
+    const fixtureWaves = await client.fleetParityWave.findMany({
+      where: { observedBy: "integration-worker" },
+      select: { id: true },
+    });
+    await client.fleetParityWaveResult.deleteMany({
+      where: { waveId: { in: fixtureWaves.map((wave) => wave.id) } },
+    });
     await client.fleetParityWave.deleteMany({
       where: { observedBy: "integration-worker" },
     });
@@ -169,6 +196,7 @@ async function main(): Promise<void> {
         repoFullName: "seorilabs/fleet-parity-integration",
         defaultBranch: "main",
         status: "MANAGED",
+        managementKind: "APP",
       },
     });
     await discovery(APP_SHA, "first");
@@ -215,6 +243,24 @@ async function main(): Promise<void> {
     assert.equal(second.wave.consecutiveMatchCount, 2);
     assert.equal(second.wave.cleanupAllowed, true);
 
+    await client.repositoryRegistration.update({
+      where: { repoId: REPO_ID },
+      data: {
+        status: "REGISTERED",
+        lastDefaultPushSha: NEXT_SHA,
+        lastReconciledSha: APP_SHA,
+      },
+    });
+    const pendingDiscovery = await runFleetParityWave({
+      observedBy: "integration-worker",
+      idempotencyKey: "fleet-parity-wave-pending-discovery",
+    }, dependencies);
+    assert.equal(pendingDiscovery.wave.status, "BLOCKED");
+    assert.equal(pendingDiscovery.wave.results[0].status, "ERROR");
+    assert.equal(pendingDiscovery.wave.results[0].reasonCode, "REPOSITORY_NOT_MANAGED");
+    assert.equal(pendingDiscovery.wave.consecutiveMatchCount, 0);
+    assert.equal(pendingDiscovery.wave.cleanupAllowed, false);
+
     await discovery(NEXT_SHA, "next");
     const changedVector = await runFleetParityWave({
       observedBy: "integration-worker",
@@ -223,6 +269,17 @@ async function main(): Promise<void> {
     assert.equal(changedVector.wave.status, "PASSED");
     assert.equal(changedVector.wave.consecutiveMatchCount, 1);
     assert.equal(changedVector.wave.cleanupAllowed, false);
+
+    mutateSourceDuringImport = true;
+    const racedSource = await runFleetParityWave({
+      observedBy: "integration-worker",
+      idempotencyKey: "fleet-parity-wave-source-race",
+    }, dependencies);
+    assert.equal(racedSource.wave.status, "BLOCKED");
+    assert.equal(racedSource.wave.results[0].status, "ERROR");
+    assert.equal(racedSource.wave.results[0].reasonCode, "SOURCE_VECTOR_CHANGED");
+    assert.equal(racedSource.wave.cleanupAllowed, false);
+    await discovery(NEXT_SHA, "source-race-restored");
 
     parityStatus = "NEEDS_INPUT";
     const blocked = await runFleetParityWave({
