@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   readExactSourceFile,
+  SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES,
   SOURCE_OBSERVATION_MAX_BYTES,
   toSourceMetadata,
   type SourceObservationInput,
@@ -278,6 +279,34 @@ test("safe limit를 넘는 파일은 content를 디코드하지 않고 TOO_LARGE
   assert.equal(result.reason, "SIZE_LIMIT_EXCEEDED");
   assert.equal(result.size, SOURCE_OBSERVATION_MAX_BYTES + 1);
   assert.equal("text" in result, false);
+});
+
+test("명시적으로 allowlist한 lockfile만 absolute cap 안에서 큰 exact source를 읽는다", async () => {
+  const text = "x".repeat(SOURCE_OBSERVATION_MAX_BYTES + 1);
+  const { octokit } = fakeOctokit({
+    content: {
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(text, "utf8").toString("base64"),
+      sha: BLOB_SHA,
+      size: Buffer.byteLength(text),
+    },
+  });
+  const result = await readExactSourceFile(octokit, input({
+    path: "pnpm-lock.yaml",
+    allowedPaths: ["pnpm-lock.yaml"],
+    maxBytes: SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES,
+  }));
+  assert.equal(result.status, "PRESENT");
+  if (result.status !== "PRESENT") return;
+  assert.equal(result.size, SOURCE_OBSERVATION_MAX_BYTES + 1);
+
+  const invalidOverride = await readExactSourceFile(octokit, input({
+    path: "pnpm-lock.yaml",
+    allowedPaths: ["pnpm-lock.yaml"],
+    maxBytes: SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES + 1,
+  }));
+  assert.equal(invalidOverride.status, "TOO_LARGE");
 });
 
 test("빈 UTF-8 파일도 유효한 PRESENT 관측이다", async () => {

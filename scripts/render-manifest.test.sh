@@ -94,6 +94,31 @@ else
   ng "snapshot signing key가 broad Secret에 남았거나 consumer 경계가 깨졌다"
 fi
 
+echo "== Platform Fleet 공개 trust root와 producer 연결 =="
+platform_trust_env="$(awk '
+  $0 ~ "- name: PLATFORM_FLEET_APPROVAL_PUBLIC_KEYS_JSON" { capture=1 }
+  capture { print }
+  capture && /optional:/ { exit }
+' "$root/k8s/deployment.yaml")"
+platform_route="$root/src/app/api/admin/automation/platform-fleet/route.ts"
+platform_drain_line="$(grep -n 'drainPlatformFleetPlans()' "$platform_route" | head -1 | cut -d: -f1)"
+platform_producer_line="$(grep -n 'producePlatformFleetRelease()' "$platform_route" | head -1 | cut -d: -f1)"
+if printf '%s' "$platform_trust_env" | grep -q 'configMapKeyRef:' &&
+   printf '%s' "$platform_trust_env" | grep -q 'name: backoffice-platform-fleet-trust' &&
+   printf '%s' "$platform_trust_env" | grep -q 'key: trusted-release-keys.json' &&
+   printf '%s' "$platform_trust_env" | grep -q 'optional: true' &&
+   ! printf '%s' "$platform_trust_env" | grep -q 'secretKeyRef:' &&
+   grep -q 'producePlatformFleetRelease' "$platform_route" &&
+   grep -q 'let drainError: unknown' "$platform_route" &&
+   grep -q 'let producerError: unknown' "$platform_route" &&
+   [ -n "$platform_drain_line" ] &&
+   [ -n "$platform_producer_line" ] &&
+   [ "$platform_drain_line" -lt "$platform_producer_line" ]; then
+  ok "Platform Fleet는 공개 trust root로 fail-closed하고 drain/readback을 producer보다 먼저 격리 실행"
+else
+  ng "Platform Fleet trust root 또는 producer scheduler 연결이 깨졌다"
+fi
+
 provider_worker="$root/k8s/provider-execution-worker.yaml"
 provider_out="$("$render" "$provider_worker" "$IMG" "$SHA")"
 if ! grep -q ':latest' "$provider_worker" &&

@@ -1467,25 +1467,26 @@ model ProviderExecutionEvent {
 }
 
 model ReleaseCandidate {
-  id                 String                   @id @default(cuid())
-  appId              String
-  app                App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha          String                   @db.Char(40)
-  configRevisionId   String
-  configRevision     ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
-  artifactChecksum   String                   @db.Char(64)
-  market             String?                  @db.VarChar(32)
-  targetKey          String?                  @db.VarChar(191)
-  artifactType       String?                  @db.VarChar(32)
-  workflowBundleSha  String?                  @db.Char(40)
-  platformVersion    String?                  @db.VarChar(64)
-  requestHash        String?                  @db.Char(64)
-  idempotencyKey     String?                  @unique @db.VarChar(191)
-  status             ReleaseCandidateStatus   @default(PREPARED)
-  createdBy          String
-  createdAt          DateTime                 @default(now()) @db.DateTime(3)
-  gateObservations   ReleaseGateObservation[]
-  providerExecutions ProviderExecution[]
+  id                   String                   @id @default(cuid())
+  appId                String
+  app                  App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha            String                   @db.Char(40)
+  configRevisionId     String
+  configRevision       ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
+  artifactChecksum     String                   @db.Char(64)
+  market               String?                  @db.VarChar(32)
+  targetKey            String?                  @db.VarChar(191)
+  artifactType         String?                  @db.VarChar(32)
+  workflowBundleSha    String?                  @db.Char(40)
+  workflowBundleDigest String?                  @db.Char(64)
+  platformVersion      String?                  @db.VarChar(64)
+  requestHash          String?                  @db.Char(64)
+  idempotencyKey       String?                  @unique @db.VarChar(191)
+  status               ReleaseCandidateStatus   @default(PREPARED)
+  createdBy            String
+  createdAt            DateTime                 @default(now()) @db.DateTime(3)
+  gateObservations     ReleaseGateObservation[]
+  providerExecutions   ProviderExecution[]
 
   @@unique([appId, sourceSha, configRevisionId, artifactChecksum])
   @@index([appId, status, createdAt])

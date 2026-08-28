@@ -370,11 +370,6 @@ export async function reconcilePlatformFleet(input: {
     if (!verifySnapshot(release.manifest as JsonValue, input.signingKey, release.manifestDigest, release.signature)) {
       throw new ControlPlaneError("저장된 Platform release signature 검증에 실패했습니다.", 409, "PLATFORM_RELEASE_TAMPERED");
     }
-    const expectedRepoIds = manifest.consumers.map(({ repoId }) => repoId).sort();
-    const requestedRepoIds = input.consumers.map(({ repoId }) => repoId).sort();
-    if (canonicalJson(expectedRepoIds) !== canonicalJson(requestedRepoIds)) {
-      throw new ControlPlaneError("manifest consumer 전체와 reconcile input이 정확히 일치해야 합니다.", 409, "PLATFORM_CONSUMER_COHORT_MISMATCH");
-    }
     const reconcileRun = await tx.platformFleetReconcileRun.create({
       data: {
         platformReleaseId: release.id,
@@ -387,8 +382,8 @@ export async function reconcilePlatformFleet(input: {
     const repoIds = input.consumers.map(({ repoId }) => BigInt(repoId));
     const [apps, registrations, discoveries, observations, currentPlatformObservations] = await Promise.all([
       tx.app.findMany({
-        where: { repoId: { in: repoIds } },
-        select: { id: true, repoId: true, repoFullName: true, status: true },
+        where: { status: "ACTIVE" },
+        select: { id: true, repoId: true, repoFullName: true, status: true, engine: true },
       }),
       tx.repositoryRegistration.findMany({
         where: { repoId: { in: repoIds } },
@@ -429,6 +424,23 @@ export async function reconcilePlatformFleet(input: {
         select: { id: true, appId: true, resourceId: true },
       }),
     ]);
+    const appWithoutRepository = apps.find((app) => app.repoId === null);
+    if (appWithoutRepository) {
+      throw new ControlPlaneError(
+        `ACTIVE app ${appWithoutRepository.repoFullName}에 GitHub repository ID가 없습니다.`,
+        409,
+        "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
+      );
+    }
+    const activeRepoIds = apps.map((app) => app.repoId!.toString()).sort();
+    const requestedRepoIds = input.consumers.map(({ repoId }) => repoId).sort();
+    if (canonicalJson(activeRepoIds) !== canonicalJson(requestedRepoIds)) {
+      throw new ControlPlaneError(
+        "현재 ACTIVE app cohort 전체와 reconcile input이 정확히 일치해야 합니다.",
+        409,
+        "PLATFORM_CONSUMER_COHORT_MISMATCH",
+      );
+    }
     if (
       apps.length !== repoIds.length
       || registrations.length !== repoIds.length
@@ -447,7 +459,6 @@ export async function reconcilePlatformFleet(input: {
         currentObservationByRepo.set(observation.resourceId, observation);
       }
     }
-    const manifestConsumerByRepo = new Map(manifest.consumers.map((consumer) => [consumer.repoId, consumer]));
     const artifactByKind = new Map(manifest.artifacts.map((artifact) => [artifact.kind, artifact]));
     const summaries: Array<{ repoId: string; planId: string; kind: string; status: string }> = [];
 
@@ -456,8 +467,7 @@ export async function reconcilePlatformFleet(input: {
       const registration = registrationByRepo.get(consumerInput.repoId);
       const discovery = discoveryById.get(consumerInput.discoveryObservationId);
       const observationRow = observationById.get(consumerInput.providerObservationId);
-      const manifestConsumer = manifestConsumerByRepo.get(consumerInput.repoId);
-      if (!app || !registration || !discovery || !observationRow || !manifestConsumer || app.status !== "ACTIVE") {
+      if (!app || !registration || !discovery || !observationRow || app.status !== "ACTIVE") {
         throw new ControlPlaneError("ACTIVE managed consumer identity가 일치하지 않습니다.", 409, "PLATFORM_CONSUMER_IDENTITY_MISMATCH");
       }
       if (
@@ -489,10 +499,11 @@ export async function reconcilePlatformFleet(input: {
       if (observation.sourceSha.toLowerCase() !== discovery.sourceSha.toLowerCase()) {
         throw new ControlPlaneError("Platform observation source SHA가 current discovery와 다릅니다.", 409, "PLATFORM_OBSERVATION_SOURCE_MISMATCH");
       }
-      const artifact = artifactByKind.get(manifestConsumer.artifactKind);
+      const expectedArtifactKind = app.engine === "GODOT" ? "GDSCRIPT" : "TYPESCRIPT";
+      const artifact = artifactByKind.get(expectedArtifactKind);
       if (!artifact) throw new ControlPlaneError("manifest artifact가 없습니다.", 409, "PLATFORM_ARTIFACT_MISSING");
       if (observation.integration === "SDK" && observation.artifactKind !== artifact.kind) {
-        throw new ControlPlaneError("관측 SDK kind가 manifest consumer 계약과 다릅니다.", 409, "PLATFORM_ARTIFACT_KIND_MISMATCH");
+        throw new ControlPlaneError("관측 SDK kind가 ACTIVE app engine과 다릅니다.", 409, "PLATFORM_ARTIFACT_KIND_MISMATCH");
       }
       const disposition = platformFleetDisposition({
         classification: manifest.classification,
@@ -652,7 +663,9 @@ export async function reconcilePlatformFleet(input: {
       const currentBinding = await tx.platformFleetBinding.findUnique({ where: { appId: app.id } });
       const sameRelease = currentBinding?.platformReleaseId === release.id;
       const observedVersion = observation.integration === "SDK" ? observation.observedVersion : null;
-      const observedDigest = observation.integration === "SDK" ? observation.observedDigest.toLowerCase() : null;
+      const observedDigest = observation.integration === "SDK"
+        ? observation.observedDigest?.toLowerCase() ?? null
+        : null;
       const bindingState = disposition.kind === "SDK_UPDATE_PR" && planStatus === "PR_OPEN"
         ? "UPDATE_PR_OPEN"
         : disposition.kind === "SDK_UPDATE_PR" && planStatus === "PR_MERGED"

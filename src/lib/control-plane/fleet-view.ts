@@ -392,6 +392,7 @@ export async function getFleetOperationsView(appId: string) {
           targetKey: true,
           artifactType: true,
           workflowBundleSha: true,
+          workflowBundleDigest: true,
           platformVersion: true,
           status: true,
           createdBy: true,
