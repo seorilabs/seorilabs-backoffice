@@ -12,8 +12,12 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
 const APP_ID = "fleet-parity-integration-app";
 const UNMANAGED_APP_ID = "fleet-parity-unmanaged-app";
+const NO_CONFIG_APP_ID = "fleet-parity-no-config-app";
+const PLATFORM_APP_ID = "fleet-parity-platform-app";
 const CONFIG_ID = "fleet-parity-integration-config";
 const REPO_ID = 9_999_981n;
+const NO_CONFIG_REPO_ID = REPO_ID + 2n;
+const PLATFORM_REPO_ID = REPO_ID + 3n;
 const APP_SHA = "7".repeat(40);
 const NEXT_SHA = "8".repeat(40);
 const DIGEST = "9".repeat(64);
@@ -30,6 +34,7 @@ async function main(): Promise<void> {
   const client = new PrismaClient();
   let clock = Date.parse("2026-08-28T02:00:00.000Z");
   let parityStatus: "MATCH" | "NEEDS_INPUT" = "MATCH";
+  let noConfigParityStatus: "MISMATCH" | "NEEDS_INPUT" = "MISMATCH";
   let importCalls = 0;
   let mutateSourceDuringImport = false;
 
@@ -40,6 +45,9 @@ async function main(): Promise<void> {
     idempotencyKey: string;
   }): Promise<FleetParityImportResult> {
     importCalls += 1;
+    const targetAppId = input.repoId === NO_CONFIG_REPO_ID ? NO_CONFIG_APP_ID : APP_ID;
+    const targetConfigId = input.repoId === NO_CONFIG_REPO_ID ? null : CONFIG_ID;
+    const targetParityStatus = input.repoId === NO_CONFIG_REPO_ID ? noConfigParityStatus : parityStatus;
     const suffix = jsonDigest({ key: input.idempotencyKey } as JsonValue).slice(0, 20);
     const importId = `fleet-import-${suffix}`;
     const parityId = `fleet-parity-${suffix}`;
@@ -48,12 +56,12 @@ async function main(): Promise<void> {
       await client.legacyConfigImport.create({
         data: {
           id: importId,
-          appId: APP_ID,
+          appId: targetAppId,
           sourceSha: input.sourceSha,
           transformVersion: FLEET_PARITY_CONTRACT_VERSION,
           requestHash: jsonDigest({ input: suffix } as JsonValue),
           inputDigest: DIGEST,
-          status: parityStatus === "MATCH" ? "DRAFT_CREATED" : "NEEDS_INPUT",
+          status: targetParityStatus === "NEEDS_INPUT" ? "NEEDS_INPUT" : "DRAFT_CREATED",
           idempotencyKey: jsonDigest({ importId } as JsonValue),
           observedBy: input.observedBy,
           observedAt: new Date(clock += 1_000),
@@ -62,16 +70,16 @@ async function main(): Promise<void> {
       await client.shadowParityObservation.create({
         data: {
           id: parityId,
-          appId: APP_ID,
+          appId: targetAppId,
           legacyImportId: importId,
-          configRevisionId: CONFIG_ID,
+          configRevisionId: targetConfigId,
           sourceSha: input.sourceSha,
           scope: "FULL",
           contractVersion: FLEET_PARITY_CONTRACT_VERSION,
-          status: parityStatus,
-          legacyDigest: parityStatus === "MATCH" ? DIGEST : null,
-          centralDigest: parityStatus === "MATCH" ? DIGEST : null,
-          diff: parityStatus === "MATCH" ? [] : [{ path: "$", code: "TRANSFORM_NEEDS_INPUT" }],
+          status: targetParityStatus,
+          legacyDigest: targetParityStatus === "NEEDS_INPUT" ? null : DIGEST,
+          centralDigest: targetParityStatus === "MATCH" ? DIGEST : null,
+          diff: targetParityStatus === "MATCH" ? [] : [{ path: "$", code: "MISSING_IN_CENTRAL" }],
           dedupeKey: jsonDigest({ parityId } as JsonValue),
           observedBy: input.observedBy,
           observedAt: new Date(clock += 1_000),
@@ -152,10 +160,14 @@ async function main(): Promise<void> {
     await client.fleetParityWave.deleteMany({
       where: { observedBy: "integration-worker" },
     });
-    await client.shadowParityObservation.deleteMany({ where: { appId: APP_ID } });
-    await client.legacyConfigImport.deleteMany({ where: { appId: APP_ID } });
-    await client.repositoryRegistration.deleteMany({ where: { repoId: REPO_ID } });
-    await client.app.deleteMany({ where: { id: { in: [APP_ID, UNMANAGED_APP_ID] } } });
+    await client.shadowParityObservation.deleteMany({ where: { appId: { in: [APP_ID, NO_CONFIG_APP_ID] } } });
+    await client.legacyConfigImport.deleteMany({ where: { appId: { in: [APP_ID, NO_CONFIG_APP_ID] } } });
+    await client.repositoryRegistration.deleteMany({
+      where: { repoId: { in: [REPO_ID, NO_CONFIG_REPO_ID, PLATFORM_REPO_ID] } },
+    });
+    await client.app.deleteMany({
+      where: { id: { in: [APP_ID, UNMANAGED_APP_ID, NO_CONFIG_APP_ID, PLATFORM_APP_ID] } },
+    });
     await client.auditLog.deleteMany({
       where: { entityType: "FleetParityWave", actorLogin: "integration-worker" },
     });
@@ -171,6 +183,19 @@ async function main(): Promise<void> {
         displayName: "Fleet Parity Integration",
         repoFullName: "seorilabs/fleet-parity-integration",
         repoId: REPO_ID,
+        type: "APP",
+        engine: "RN",
+        status: "ACTIVE",
+        marketTargets: [],
+      },
+    });
+    await client.app.create({
+      data: {
+        id: PLATFORM_APP_ID,
+        slug: "fleet-parity-platform",
+        displayName: "Fleet Parity Platform",
+        repoFullName: "seorilabs/fleet-parity-platform",
+        repoId: PLATFORM_REPO_ID,
         type: "APP",
         engine: "RN",
         status: "ACTIVE",
@@ -197,6 +222,17 @@ async function main(): Promise<void> {
         defaultBranch: "main",
         status: "MANAGED",
         managementKind: "APP",
+      },
+    });
+    await client.repositoryRegistration.create({
+      data: {
+        repoId: PLATFORM_REPO_ID,
+        repoFullName: "seorilabs/fleet-parity-platform",
+        defaultBranch: "main",
+        status: "MANAGED",
+        managementKind: "PLATFORM_PRODUCER",
+        lastDefaultPushSha: APP_SHA,
+        lastReconciledSha: APP_SHA,
       },
     });
     await discovery(APP_SHA, "first");
@@ -293,6 +329,64 @@ async function main(): Promise<void> {
     assert.equal(blocked.wave.cleanupAllowed, false);
     assert.doesNotThrow(() => JSON.stringify(blocked));
     assert.equal("requestHash" in blocked.wave, false);
+
+    parityStatus = "MATCH";
+    await client.app.create({
+      data: {
+        id: NO_CONFIG_APP_ID,
+        slug: "fleet-parity-no-config",
+        displayName: "Fleet Parity No Config",
+        repoFullName: "seorilabs/fleet-parity-no-config",
+        repoId: NO_CONFIG_REPO_ID,
+        type: "APP",
+        engine: "RN",
+        status: "ACTIVE",
+        marketTargets: [],
+      },
+    });
+    await client.repositoryRegistration.create({
+      data: {
+        repoId: NO_CONFIG_REPO_ID,
+        repoFullName: "seorilabs/fleet-parity-no-config",
+        defaultBranch: "main",
+        status: "MANAGED",
+        managementKind: "APP",
+        lastDefaultPushSha: NEXT_SHA,
+        lastReconciledSha: NEXT_SHA,
+      },
+    });
+    await client.discoveryObservation.create({
+      data: {
+        appId: NO_CONFIG_APP_ID,
+        sourceSha: NEXT_SHA,
+        payload: {},
+        payloadHash: jsonDigest({}),
+        requestHash: jsonDigest({ suffix: "no-config" } as JsonValue),
+        idempotencyKey: "fleet-parity-discovery-no-config",
+        observedBy: "integration-worker",
+        observedAt: new Date(clock += 1_000),
+      },
+    });
+    const noConfig = await runFleetParityWave({
+      observedBy: "integration-worker",
+      idempotencyKey: "fleet-parity-wave-no-active-config",
+    }, dependencies);
+    const noConfigResult = noConfig.wave.results.find((result) => result.appId === NO_CONFIG_APP_ID);
+    assert.equal(noConfig.wave.status, "BLOCKED");
+    assert.equal(noConfig.wave.resultCount, 2);
+    assert.equal(noConfigResult?.status, "ERROR");
+    assert.equal(noConfigResult?.reasonCode, "NO_ACTIVE_CONFIG");
+    assert.equal(typeof noConfigResult?.legacyImportId, "string");
+
+    noConfigParityStatus = "NEEDS_INPUT";
+    const noConfigNeedsInput = await runFleetParityWave({
+      observedBy: "integration-worker",
+      idempotencyKey: "fleet-parity-wave-no-active-config-needs-input",
+    }, dependencies);
+    const needsInputResult = noConfigNeedsInput.wave.results.find((result) => result.appId === NO_CONFIG_APP_ID);
+    assert.equal(needsInputResult?.status, "NEEDS_INPUT");
+    assert.equal(needsInputResult?.reasonCode, "TRANSFORM_NEEDS_INPUT");
+    assert.equal(typeof needsInputResult?.legacyImportId, "string");
   } finally {
     await cleanup();
     await client.$disconnect();

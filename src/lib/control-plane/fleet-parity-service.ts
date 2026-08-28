@@ -200,6 +200,10 @@ async function createWave(input: {
     if (app.repoId === null) return [];
     const registration = managed.get(app.repoId.toString());
     if (!registration) return [];
+    // Platform producer는 앱별 legacy JSON consumer가 아니며 repository discovery도
+    // 의도적으로 DiscoveryObservation을 만들지 않는다. 오래된 App seed row가 남아
+    // 있어도 앱 parity cohort에 섞지 않는다.
+    if (registration.managementKind === "PLATFORM_PRODUCER") return [];
     const identityMatches = registration.repoFullName.toLowerCase() === app.repoFullName.toLowerCase();
     const sourceSha = app.discoveryObservations[0]?.sourceSha.toLowerCase() ?? null;
     const sourceIsCurrent = repositorySourceIsCurrent(registration, sourceSha);
@@ -209,9 +213,7 @@ async function createWave(input: {
         ? "REPOSITORY_NOT_MANAGED"
         : !sourceIsCurrent
           ? "SOURCE_NOT_RECONCILED"
-          : app.configRevisions.length === 0
-            ? "NO_ACTIVE_CONFIG"
-            : null;
+          : null;
     return [{
       appId: app.id,
       repoId: app.repoId,
@@ -329,7 +331,7 @@ async function frozenVectorStillCurrent(
     && app.repoId === result.repoId
     && app.repoFullName.toLowerCase() === result.repoFullName.toLowerCase()
     && app.discoveryObservations[0]?.sourceSha.toLowerCase() === result.sourceSha
-    && app.configRevisions[0]?.id === result.configRevisionId
+    && (app.configRevisions[0]?.id ?? null) === result.configRevisionId
     && registration !== null
     && repositorySourceIsCurrent(registration, result.sourceSha)
     && registration.repoFullName.toLowerCase() === result.repoFullName.toLowerCase();
@@ -343,12 +345,12 @@ async function processResult(
   if (result.status !== "PENDING") return;
   const client = dependencies.client;
   const observedAt = dependencies.now();
-  if (!result.sourceSha || !result.configRevisionId) {
+  if (!result.sourceSha) {
     await client.fleetParityWaveResult.updateMany({
       where: { id: result.id, status: "PENDING" },
       data: {
         status: "ERROR",
-        reasonCode: result.sourceSha ? "NO_ACTIVE_CONFIG" : "NO_CURRENT_DISCOVERY",
+        reasonCode: "NO_CURRENT_DISCOVERY",
         observedAt,
       },
     });
@@ -380,18 +382,24 @@ async function processResult(
       && parity.scope === FLEET_PARITY_SCOPE
       && parity.contractVersion === FLEET_PARITY_CONTRACT_VERSION;
     const sourceCountMatches = imported.sourceCount === FLEET_PARITY_EXPECTED_SOURCE_COUNT;
-    const status = vectorMatches && sourceCountMatches
-      ? parity.status as FleetParityResultStatus
-      : "ERROR";
+    const status = !vectorMatches || !sourceCountMatches
+      ? "ERROR"
+      : parity.status === "NEEDS_INPUT"
+        ? "NEEDS_INPUT"
+        : !result.configRevisionId
+          ? "ERROR"
+          : parity.status as FleetParityResultStatus;
     const reasonCode = !vectorMatches
       ? "SOURCE_VECTOR_CHANGED"
       : !sourceCountMatches
         ? "PARTIAL_SOURCE_VECTOR"
         : parity.status === "NEEDS_INPUT"
           ? "TRANSFORM_NEEDS_INPUT"
-          : parity.status === "MISMATCH"
-            ? "PARITY_MISMATCH"
-            : null;
+          : !result.configRevisionId
+            ? "NO_ACTIVE_CONFIG"
+            : parity.status === "MISMATCH"
+              ? "PARITY_MISMATCH"
+              : null;
     await client.fleetParityWaveResult.updateMany({
       where: { id: result.id, status: "PENDING" },
       data: {
