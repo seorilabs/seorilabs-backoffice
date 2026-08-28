@@ -1,4 +1,4 @@
-# 웹과 worker가 exact digest로 전환된 뒤, 정기 CronJob을 재개하기 전에 세 작업을
+# 웹과 worker가 exact digest로 전환된 뒤, 정기 CronJob을 재개하기 전에 다섯 작업을
 # 한 번씩 직렬 실행한다. 응답 body는 로그에 남기지 않고 실패 여부만 기록한다.
 apiVersion: batch/v1
 kind: Job
@@ -11,7 +11,7 @@ metadata:
     seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 1500
+  activeDeadlineSeconds: 2400
   ttlSecondsAfterFinished: 604800
   template:
     metadata:
@@ -48,12 +48,16 @@ spec:
               }
               call reconcile --max-time 840 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/reconcile
+              call repository_discovery_backfill --max-time 840 -XPOST \
+                http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/backfill
               call xcode_cloud_sync --max-time 300 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
               call registry_seed --max-time 300 -XPOST \
                 -H "content-type: application/json" \
                 --data '{"backfill":false}' \
                 http://backoffice.platform.svc.cluster.local/api/admin/seed
+              call platform_fleet --max-time 50 -XPOST \
+                http://backoffice.platform.svc.cluster.local/api/admin/automation/platform-fleet
               exit "$failed"
           resources:
             requests:

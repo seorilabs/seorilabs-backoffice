@@ -77,6 +77,7 @@ fi
 echo "== repository discovery worker 최소권한 =="
 discovery_worker="$root/k8s/repository-discovery-worker.yaml"
 if grep -q 'repository-discovery-worker.cjs' "$discovery_worker" &&
+   grep -q '^  replicas: 1$' "$discovery_worker" &&
    grep -q 'readOnlyRootFilesystem: true' "$discovery_worker" &&
    grep -q 'automountServiceAccountToken: false' "$discovery_worker" &&
    grep -q 'key: DATABASE_URL' "$discovery_worker" &&
@@ -181,10 +182,25 @@ fi
 if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q 'ttlSecondsAfterFinished: 604800' "$catchup_job" &&
    grep -q 'curlimages/curl@sha256:' "$catchup_job" &&
+   grep -q 'repository-discovery/backfill' "$catchup_job" &&
+   grep -q 'automation/platform-fleet' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
   ok "scheduler catch-up 격리와 감사 보존"
 else
   ng "scheduler catch-up 실행 경계가 깨졌다"
+fi
+
+echo "== repository discovery backfill 스케줄 =="
+backfill_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-repository-discovery-backfill/ { print }' "$scheduler_cronjobs")"
+if printf '%s' "$backfill_doc" | grep -q 'schedule: "7 \* \* \* \*"' &&
+   printf '%s' "$backfill_doc" | grep -q 'concurrencyPolicy: Forbid' &&
+   printf '%s' "$backfill_doc" | grep -q 'repository-discovery/backfill' &&
+   printf '%s' "$backfill_doc" | grep -q 'automountServiceAccountToken: false' &&
+   printf '%s' "$backfill_doc" | grep -q 'readOnlyRootFilesystem: true' &&
+   ! printf '%s' "$backfill_doc" | grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET'; then
+  ok "full-org backfill은 hourly read-only trigger 하나로 직렬 실행"
+else
+  ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
 fi
 
 if grep -q 'backoffLimit: 0' "$migration_job" &&
@@ -246,19 +262,21 @@ else
   ng "Fleet parity Job occurrence 또는 secret 경계가 깨졌다"
 fi
 
-if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 4 ] &&
-   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 4 ] &&
+if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 6 ] &&
+   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 6 ] &&
    ! grep -q 'name: ADMIN_TOKEN' "$scheduler_cronjobs" "$catchup_job" &&
    grep -q '/api/admin/reconcile' "$scheduler_cronjobs" &&
+   grep -q '/api/admin/repository-discovery/backfill' "$scheduler_cronjobs" &&
    grep -q '/api/admin/xcode-cloud/sync' "$scheduler_cronjobs" &&
    grep -q '/api/admin/seed' "$scheduler_cronjobs" &&
-   grep -q '/api/admin/automation/schedule' "$scheduler_cronjobs"; then
-  ok "scheduler CronJob 4개 직렬화"
+   grep -q '/api/admin/automation/schedule' "$scheduler_cronjobs" &&
+   grep -q '/api/admin/automation/platform-fleet' "$scheduler_cronjobs"; then
+  ok "scheduler CronJob 6개 직렬화"
 else
   ng "scheduler CronJob 계약이 깨졌다"
 fi

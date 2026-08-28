@@ -5,7 +5,7 @@
 1. `seorilabs-worker-contract.v1.json`의 `claim` endpoint를 `agentKind=CLAUDE`,
    `claude:seorilabs-generic-worker`, 그 principal에만 결합된 broker capability로 호출한다.
 2. claim이 없으면 정상 종료하며, queue 밖의 Issue나 PR을 새로 만들지 않는다.
-3. 지정된 repo와 issue의 현재 GitHub state/label을 readback하고 승인 gate가 있으면 중단한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.
+3. `template=repo-task-autopilot-v1`과 지정된 repo/issue만 처리한다. 현재 GitHub state/label을 readback하고 승인 gate가 있으면 중단한다. `platform-fleet-reconcile-v1`은 CODEX 전용이므로 Claude에 반환되면 구성 오류로 mutation 없이 `fail`한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.
 4. `READBACK_FIRST` claim은 기존 branch, commit, PR, check를 먼저 조회한 뒤 같은 run을 재개한다.
 5. 60초 이내 heartbeat를 유지하며 lease token과 모든 credential을 출력·파일·로그·prompt 결과에 남기지 않는다.
 6. 격리 worktree, 관련 테스트, Ready PR, Seori PR workflow를 사용하고 repo당 자율 PR 하나를 넘지 않는다. `budgetCeilingMicros`를 넘기기 전에 중단하며 API model이 필요하면 eval을 통과한 최저비용 model만 사용한다.

@@ -13,7 +13,7 @@ migration_poll="${BACKOFFICE_MIGRATION_POLL_SECONDS:-2}"
 rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
 scheduler_drain_timeout="${BACKOFFICE_SCHEDULER_DRAIN_TIMEOUT_SECONDS:-960}"
 scheduler_drain_settle="${BACKOFFICE_SCHEDULER_DRAIN_SETTLE_SECONDS:-15}"
-catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-1560}"
+catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-2460}"
 catchup_quiesce_timeout="${BACKOFFICE_CATCHUP_QUIESCE_TIMEOUT_SECONDS:-180}"
 
 if [ -z "$image" ]; then
@@ -39,8 +39,8 @@ if [[ ! "$scheduler_drain_settle" =~ ^[0-9]+$ ]]; then
   echo "오류: BACKOFFICE_SCHEDULER_DRAIN_SETTLE_SECONDS는 0 이상의 정수여야 한다" >&2
   exit 2
 fi
-if [ "$catchup_timeout" -lt 1500 ]; then
-  echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 1500이어야 한다" >&2
+if [ "$catchup_timeout" -lt 2400 ]; then
+  echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 2400이어야 한다" >&2
   exit 2
 fi
 
@@ -130,10 +130,12 @@ wait_for_deployment() {
 }
 
 scheduler_cronjobs=(
+  backoffice-repository-discovery-backfill
   backoffice-reconcile
   backoffice-xcode-cloud-sync
   backoffice-registry-seed
   backoffice-automation-scheduler
+  backoffice-platform-fleet
 )
 scheduler_restore_needed=false
 scheduler_restore_safe=true

@@ -4,6 +4,77 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
+  name: backoffice-repository-discovery-backfill
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: scheduler
+spec:
+  schedule: "7 * * * *"
+  suspend: false
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: repository-discovery-backfill
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 10001
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          containers:
+            - name: trigger
+              image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - >-
+                  token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
+                  printf 'header = "x-admin-token: %s"\n' "$token" |
+                  curl --config - -fsS -o /dev/null --max-time 840 -XPOST
+                  http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/backfill
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: admin-token
+                  mountPath: /var/run/secrets/seorilabs
+                  readOnly: true
+          volumes:
+            - name: admin-token
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: INTERNAL_ADMIN_TOKEN
+                    path: admin-token
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
   name: backoffice-reconcile
   namespace: platform
   labels:
@@ -45,6 +116,77 @@ spec:
                   printf 'header = "x-admin-token: %s"\n' "$token" |
                   curl --config - -fsS -o /dev/null --max-time 840 -XPOST
                   http://backoffice.platform.svc.cluster.local/api/admin/reconcile
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: admin-token
+                  mountPath: /var/run/secrets/seorilabs
+                  readOnly: true
+          volumes:
+            - name: admin-token
+              secret:
+                secretName: backoffice-secrets
+                defaultMode: 0440
+                items:
+                  - key: INTERNAL_ADMIN_TOKEN
+                    path: admin-token
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-platform-fleet
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: scheduler
+spec:
+  schedule: "* * * * *"
+  suspend: false
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 55
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: scheduler
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 10001
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          containers:
+            - name: trigger
+              image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - >-
+                  token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
+                  printf 'header = "x-admin-token: %s"\n' "$token" |
+                  curl --config - -fsS -o /dev/null --max-time 50 -XPOST
+                  http://backoffice.platform.svc.cluster.local/api/admin/automation/platform-fleet
               resources:
                 requests:
                   cpu: 10m

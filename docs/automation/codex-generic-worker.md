@@ -6,10 +6,14 @@
    `codex:seorilabs-generic-worker`, 그 principal에만 결합된 broker capability로 호출한다.
    호출마다 새 idempotency key를 사용한다.
 2. claim이 `null`이면 정상 종료한다. 임의의 GitHub Issue를 고르거나 새 Issue를 만들지 않는다.
-3. claim의 repo와 issue만 작업한다. GitHub에서 issue state와 `blocked`, `approval:*`, `no-autopilot`, `autopilot` label을 다시 읽고 eligibility가 달라졌으면 `fail`로 종료한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.
+3. claim의 `template`을 먼저 확인하고 알 수 없는 template은 mutation 없이 `fail`로 종료한다.
+   - `repo-task-autopilot-v1`: claim의 repo와 issue만 작업한다. GitHub에서 issue state와 `blocked`, `approval:*`, `no-autopilot`, `autopilot` label을 다시 읽고 eligibility가 달라졌으면 `fail`로 종료한다.
+   - `platform-fleet-reconcile-v1`: `issueNumber=null`이고 `taskInput.kind=PLATFORM_SDK_UPDATE`인 CODEX claim만 처리한다. task의 repo ID/full name과 현재 default source SHA가 `taskInput.repoId`, `repoFullName`, `sourceSha`와 하나라도 다르면 중단한다. Project field를 claim 근거로 사용하지 않는다.
+   `approvalPolicy=READ_ONLY`이면 어느 template에서도 변경·commit·PR을 만들지 않는다.
 4. `resumeMode=READBACK_FIRST`이면 기존 branch, commit, PR, checks를 먼저 조회한다. 이미 수행된 외부 mutation을 반복하지 않는다.
 5. lease가 남아 있는 동안만 작업하고 60초 이내 간격으로 heartbeat한다. lease token을 출력, 파일, argv, 로그, prompt 결과에 남기지 않는다.
 6. 변경은 격리 worktree에서 수행하고 관련 테스트를 실행한다. repo당 Ready PR 하나만 만들며 Seori PR workflow를 따른다. `budgetCeilingMicros`를 넘기기 전에 중단하고, API model이 필요하면 eval을 통과한 최저비용 model만 사용한다.
+   Platform claim은 `taskInput.sourceSha`에서 시작해 지정된 SDK/vendor만 `artifact.version`과 `artifact.digest`에 정확히 맞춘다. TypeScript는 지정된 `packageName`, GDScript는 고정 `releaseAssetUrl`만 사용하며 floating tag나 branch를 해석하지 않는다. `requiredChecks`를 모두 실행하고 PR 본문에 `pullRequestMarker`를 그대로 포함한다. 계약 feature 활성화, upload, 실기기 QA, 공개 rollout은 이 PR에 포함하지 않는다.
 7. 완료·실패·readback 결과는 허용된 공개 필드만 보낸다. 모든 결과에 이번 호출의 `costMicros`를 반드시 기록하고 claim의 `remainingBudgetMicros`와 action capability를 넘지 않는다.
 8. timeout 또는 API 응답 불명처럼 외부 결과가 불명확하면 공개 `RESULT_UNKNOWN` 결과와 함께 `readback-required`를 호출하고 기존 token을 폐기한다. 다음 예약 실행이 같은 run을 `READBACK_FIRST`로 재claim할 때 발급된 새 generation token으로 상태를 조회한 뒤 `readback`에 `RESUME`, `COMPLETE`, `BLOCKED` 중 하나를 제출한다.
    실행 중 Issue가 closed/blocked/approval 상태로 바뀌어 lease가 회수된 경우에도 새 작업을 만들지 말고 다음 `READBACK_FIRST` claim을 기다린다.

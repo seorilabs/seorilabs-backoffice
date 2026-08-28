@@ -104,6 +104,7 @@ model App {
   fleetLifecycleState      FleetLifecycleState?
   fleetLifecycleEvents     FleetLifecycleEvent[]
   platformFleetBinding     PlatformFleetBinding?
+  platformFleetPlans       PlatformFleetPlan[]
   credentialBindings       CredentialBinding[]
   reauthRequests           ReauthRequest[]
   automationDefinitions    AutomationDefinition[]
@@ -965,6 +966,7 @@ model DiscoveryObservation {
   observedAt               DateTime                 @db.DateTime(3)
   createdAt                DateTime                 @default(now()) @db.DateTime(3)
   repositoryDiscoveryRuns  RepositoryDiscoveryRun[]
+  platformFleetPlans       PlatformFleetPlan[]
 
   @@index([appId, sourceSha, payloadHash])
   @@index([appId, observedAt])
@@ -1322,19 +1324,20 @@ enum FleetParityResultStatus {
 }
 
 model ProviderObservation {
-  id             String   @id @default(cuid())
-  appId          String
-  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  provider       String
-  resourceType   String
-  resourceId     String
-  payload        Json
-  payloadHash    String   @db.Char(64)
-  requestHash    String?  @db.Char(64)
-  idempotencyKey String   @unique
-  observedBy     String
-  observedAt     DateTime @db.DateTime(3)
-  createdAt      DateTime @default(now()) @db.DateTime(3)
+  id                 String              @id @default(cuid())
+  appId              String
+  app                App                 @relation(fields: [appId], references: [id], onDelete: Cascade)
+  provider           String
+  resourceType       String
+  resourceId         String
+  payload            Json
+  payloadHash        String              @db.Char(64)
+  requestHash        String?             @db.Char(64)
+  idempotencyKey     String              @unique
+  observedBy         String
+  observedAt         DateTime            @db.DateTime(3)
+  createdAt          DateTime            @default(now()) @db.DateTime(3)
+  platformFleetPlans PlatformFleetPlan[]
 
   @@index([appId, provider, observedAt])
   @@map("control_plane_provider_observation")
@@ -1521,20 +1524,140 @@ enum ReleaseGateStatus {
 }
 
 model PlatformFleetBinding {
-  id                 String    @id @default(cuid())
-  appId              String    @unique
-  app                App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  id                 String           @id @default(cuid())
+  appId              String           @unique
+  app                App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  platformReleaseId  String?
+  platformRelease    PlatformRelease? @relation(fields: [platformReleaseId], references: [id], onDelete: SetNull)
   observedVersion    String?
+  observedDigest     String?          @db.Char(64)
   approvedVersion    String?
+  approvedDigest     String?          @db.Char(64)
+  manifestDigest     String?          @db.Char(64)
   contractRevision   String?
   state              String
-  sourceSha          String?   @db.Char(40)
-  exceptionExpiresAt DateTime? @db.DateTime(3)
-  updatedAt          DateTime  @updatedAt
-  createdAt          DateTime  @default(now()) @db.DateTime(3)
+  sourceSha          String?          @db.Char(40)
+  latestPlanKind     String?          @db.VarChar(32)
+  pullRequestNumber  Int?
+  pullRequestUrl     String?          @db.VarChar(512)
+  issueNumber        Int?
+  issueUrl           String?          @db.VarChar(512)
+  exceptionExpiresAt DateTime?        @db.DateTime(3)
+  updatedAt          DateTime         @updatedAt
+  createdAt          DateTime         @default(now()) @db.DateTime(3)
 
   @@index([state, exceptionExpiresAt])
+  @@index([platformReleaseId, state])
   @@map("platform_fleet_binding")
+}
+
+// Platform producer가 발행한 서명 manifest 중 FLEET_APPROVED 상태만 수용한다.
+// manifest와 digest/signature는 append-only이며 consumer plan의 exact input이 된다.
+model PlatformRelease {
+  id               String                        @id @default(cuid())
+  version          String                        @unique @db.VarChar(64)
+  sourceSha        String                        @db.Char(40)
+  classification   PlatformReleaseClassification
+  approval         PlatformReleaseApproval
+  contractRevision String                        @db.Char(64)
+  manifest         Json
+  manifestDigest   String                        @unique @db.Char(64)
+  signature        String                        @db.Char(64)
+  publishedAt      DateTime                      @db.DateTime(3)
+  observedBy       String
+  requestHash      String                        @db.Char(64)
+  idempotencyKey   String                        @unique @db.VarChar(191)
+  createdAt        DateTime                      @default(now()) @db.DateTime(3)
+  plans            PlatformFleetPlan[]
+  bindings         PlatformFleetBinding[]
+  reconcileRuns    PlatformFleetReconcileRun[]
+
+  @@index([approval, publishedAt])
+  @@map("platform_release")
+}
+
+enum PlatformReleaseClassification {
+  IMPLEMENTATION_ONLY
+  CONTRACT_CHANGE
+  CONTRACT_ADDITION
+}
+
+enum PlatformReleaseApproval {
+  FLEET_APPROVED
+}
+
+model PlatformFleetReconcileRun {
+  id                String          @id @default(cuid())
+  platformReleaseId String
+  platformRelease   PlatformRelease @relation(fields: [platformReleaseId], references: [id], onDelete: Restrict)
+  requestHash       String          @db.Char(64)
+  idempotencyKey    String          @unique @db.VarChar(191)
+  status            String          @default("RUNNING") @db.VarChar(32)
+  result            Json?
+  actor             String
+  completedAt       DateTime?       @db.DateTime(3)
+  createdAt         DateTime        @default(now()) @db.DateTime(3)
+
+  @@index([platformReleaseId, createdAt])
+  @@map("platform_fleet_reconcile_run")
+}
+
+// release/app당 정확히 하나의 durable plan만 존재한다. 구현-only plan은 기존
+// AgentRun/lease/repo guard를 사용하고 contract plan은 trusted GitHub App adapter가 처리한다.
+model PlatformFleetPlan {
+  id                     String                  @id @default(cuid())
+  platformReleaseId      String
+  platformRelease        PlatformRelease         @relation(fields: [platformReleaseId], references: [id], onDelete: Restrict)
+  appId                  String
+  app                    App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
+  discoveryObservationId String
+  discoveryObservation   DiscoveryObservation    @relation(fields: [discoveryObservationId], references: [id], onDelete: Restrict)
+  providerObservationId  String
+  providerObservation    ProviderObservation     @relation(fields: [providerObservationId], references: [id], onDelete: Restrict)
+  agentRunId             String?                 @unique
+  agentRun               AgentRun?               @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  sourceSha              String                  @db.Char(40)
+  kind                   PlatformFleetPlanKind
+  status                 PlatformFleetPlanStatus @default(PENDING)
+  desired                Json
+  desiredHash            String                  @db.Char(64)
+  workKey                String                  @unique @db.VarChar(191)
+  mutationMarker         String                  @unique @db.VarChar(191)
+  githubNumber           Int?
+  githubUrl              String?                 @db.VarChar(512)
+  attempts               Int                     @default(0)
+  lastError              String?                 @db.Text
+  readbackRequestedAt    DateTime?               @db.DateTime(3)
+  appliedAt              DateTime?               @db.DateTime(3)
+  createdAt              DateTime                @default(now()) @db.DateTime(3)
+  updatedAt              DateTime                @updatedAt
+
+  @@unique([platformReleaseId, appId])
+  @@index([status, updatedAt])
+  @@index([appId, createdAt])
+  @@map("platform_fleet_plan")
+}
+
+enum PlatformFleetPlanKind {
+  SDK_UPDATE_PR
+  CONTRACT_ISSUE
+  CUSTOM_UNMANAGED
+  MISSING_UNMANAGED
+  COMPLIANT
+}
+
+enum PlatformFleetPlanStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  PR_OPEN
+  PR_MERGED
+  ISSUE_OPEN
+  COMPLIANT
+  UNMANAGED
+  READBACK_REQUIRED
+  BLOCKED
+  SUPERSEDED
 }
 
 // secret 값이 아닌 logical credential과 공개 identity만 저장한다.
@@ -1758,6 +1881,7 @@ model AgentRun {
   workKey             String?              @unique
   issueState          String?
   labels              Json
+  taskInput           Json?
   createsPr           Boolean              @default(true)
   priority            Int                  @default(100)
   status              AgentRunStatus       @default(PENDING)
@@ -1778,6 +1902,7 @@ model AgentRun {
   events              AgentRunEvent[]
   reauthRequests      ReauthRequest[]
   repoGuard           AgentRepoGuard?
+  platformFleetPlan   PlatformFleetPlan?
 
   @@index([status, eligibleAt, priority])
   @@index([repoFullName, status])

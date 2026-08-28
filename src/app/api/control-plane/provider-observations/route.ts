@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { providerObservationSchema } from "@/lib/control-plane/contracts";
+import {
+  platformConsumerObservationPayloadSchema,
+  providerObservationSchema,
+} from "@/lib/control-plane/contracts";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import { authenticateInternalRequest, requireIdempotencyKey } from "@/lib/control-plane/security";
-import { recordProviderObservation } from "@/lib/control-plane/service";
+import { ControlPlaneError, recordProviderObservation } from "@/lib/control-plane/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,8 +17,20 @@ export async function POST(request: NextRequest) {
   if (!idempotencyKey) return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
   try {
     const body = providerObservationSchema.parse(await request.json());
+    const isPlatformConsumer = body.provider.toLowerCase() === "platform"
+      && body.resourceType === "platform-consumer";
+    if (isPlatformConsumer && body.resourceId !== body.repoId.toString()) {
+      throw new ControlPlaneError(
+        "Platform consumer observation은 numeric repo ID에 고정되어야 합니다.",
+        409,
+        "PLATFORM_PROVIDER_IDENTITY_MISMATCH",
+      );
+    }
+    const normalizedBody = isPlatformConsumer
+      ? { ...body, payload: platformConsumerObservationPayloadSchema.parse(body.payload) }
+      : body;
     const result = await recordProviderObservation({
-      ...body,
+      ...normalizedBody,
       observedBy: principal.id,
       idempotencyKey,
     });
@@ -29,4 +44,3 @@ export async function POST(request: NextRequest) {
     return controlPlaneErrorResponse(error);
   }
 }
-

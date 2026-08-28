@@ -36,6 +36,13 @@ const httpsOrigin = z.string().url().max(512).refine((value) => {
     && !url.search
     && !url.hash;
 }, "query/path/credential이 없는 정확한 HTTPS origin이 필요합니다.");
+const githubReleaseAssetUrl = httpsUrl.refine((value) => {
+  const parsed = new URL(value);
+  return parsed.hostname === "github.com"
+    && /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases\/download\/[^/]+\/[^/]+$/.test(parsed.pathname);
+}, {
+  message: "고정 GitHub Release asset URL이 필요합니다.",
+});
 
 const authorizationCredentialPattern = /\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/giu;
 const directCredentialPatterns = [
@@ -95,6 +102,144 @@ export function redactCredentialCandidates(value: string): string {
 }
 
 const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
+const platformArtifactKind = z.enum(["TYPESCRIPT", "GDSCRIPT"]);
+const platformVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+const platformArtifactSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("TYPESCRIPT"),
+    version: platformVersion,
+    digest: sha256,
+    packageName: z.string().regex(/^@[a-z0-9-]+\/[a-z0-9-]+$/),
+  }).strict(),
+  z.object({
+    kind: z.literal("GDSCRIPT"),
+    version: platformVersion,
+    digest: sha256,
+    releaseAssetUrl: githubReleaseAssetUrl,
+  }).strict(),
+]);
+
+export const platformReleaseManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  approval: z.literal("FLEET_APPROVED"),
+  version: platformVersion,
+  sourceSha: sha40,
+  contractRevision: sha256,
+  classification: z.enum(["IMPLEMENTATION_ONLY", "CONTRACT_CHANGE", "CONTRACT_ADDITION"]),
+  publishedAt: z.string().datetime({ offset: true }),
+  artifacts: z.array(platformArtifactSchema).min(1).max(2),
+  consumers: z.array(z.object({
+    repoId: numericId,
+    artifactKind: platformArtifactKind,
+  }).strict()).min(1).max(1_000),
+}).strict().superRefine((manifest, context) => {
+  const artifactKinds = manifest.artifacts.map((artifact) => artifact.kind);
+  if (new Set(artifactKinds).size !== artifactKinds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["artifacts"], message: "artifact kind는 중복될 수 없습니다." });
+  }
+  const consumerRepoIds = manifest.consumers.map((consumer) => consumer.repoId);
+  if (new Set(consumerRepoIds).size !== consumerRepoIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["consumers"], message: "consumer repo ID는 중복될 수 없습니다." });
+  }
+  manifest.consumers.forEach((consumer, index) => {
+    if (!artifactKinds.includes(consumer.artifactKind)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["consumers", index, "artifactKind"],
+        message: "consumer가 참조하는 exact artifact가 manifest에 없습니다.",
+      });
+    }
+  });
+});
+
+export const platformReleaseEnvelopeSchema = z.object({
+  manifest: platformReleaseManifestSchema,
+  manifestDigest: sha256,
+  signature: sha256,
+}).strict();
+
+export const platformConsumerObservationPayloadSchema = z.discriminatedUnion("integration", [
+  z.object({
+    schemaVersion: z.literal(1),
+    sourceSha: sha40,
+    integration: z.literal("SDK"),
+    artifactKind: platformArtifactKind,
+    observedVersion: platformVersion,
+    observedDigest: sha256,
+    contractRevision: sha256,
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal(1),
+    sourceSha: sha40,
+    integration: z.literal("CUSTOM_HTTP"),
+    evidenceDigest: sha256,
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal(1),
+    sourceSha: sha40,
+    integration: z.literal("MISSING"),
+    evidenceDigest: sha256,
+  }).strict(),
+]);
+
+export const platformFleetReconcileSchema = z.object({
+  platformReleaseId: z.string().min(1).max(191),
+  consumers: z.array(z.object({
+    repoId: numericId,
+    discoveryObservationId: z.string().min(1).max(191),
+    providerObservationId: z.string().min(1).max(191),
+  }).strict()).min(1).max(1_000),
+}).strict().superRefine((input, context) => {
+  const repoIds = input.consumers.map((consumer) => consumer.repoId);
+  if (new Set(repoIds).size !== repoIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["consumers"], message: "consumer repo ID는 중복될 수 없습니다." });
+  }
+});
+
+export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("PLATFORM_SDK_UPDATE"),
+    planId: z.string().min(1).max(191),
+    repoId: numericId,
+    repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    sourceSha: sha40,
+    manifestDigest: sha256,
+    releaseVersion: platformVersion,
+    releaseSourceSha: sha40,
+    contractRevision: sha256,
+    artifact: platformArtifactSchema,
+    pullRequestMarker: z.string().regex(/^<!-- seorilabs-platform-fleet:[0-9a-f]{64}:\d+ -->$/),
+    requiredChecks: z.array(z.enum(["test:core", "check:architecture", "check:release", "repo-contract"])).min(1).max(4),
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("PLATFORM_CONTRACT_ISSUE"),
+    planId: z.string().min(1).max(191),
+    repoId: numericId,
+    repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    sourceSha: sha40,
+    manifestDigest: sha256,
+    releaseVersion: platformVersion,
+    releaseSourceSha: sha40,
+    contractRevision: sha256,
+    classification: z.enum(["CONTRACT_CHANGE", "CONTRACT_ADDITION"]),
+    artifact: platformArtifactSchema,
+    issueMarker: z.string().regex(/^<!-- seorilabs-platform-fleet:[0-9a-f]{64}:\d+ -->$/),
+    title: z.string().min(1).max(180).refine((value) => !containsCredentialCandidate(value)),
+    body: z.string().min(1).max(20_000).refine((value) => !containsCredentialCandidate(value)),
+    labels: z.tuple([
+      z.literal("P1"),
+      z.literal("autopilot"),
+      z.literal("platform"),
+      z.literal("platform-contract"),
+    ]),
+  }).strict(),
+]);
+
+export type PlatformReleaseManifest = z.infer<typeof platformReleaseManifestSchema>;
+export type PlatformConsumerObservationPayload = z.infer<typeof platformConsumerObservationPayloadSchema>;
+export type PlatformFleetTaskInput = z.infer<typeof platformFleetTaskInputSchema>;
 
 /**
  * ProjectBlueprint는 provider에 쓸 비밀이 아니라 공개 식별자와 desired state만 보관한다.

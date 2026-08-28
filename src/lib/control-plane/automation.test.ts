@@ -709,6 +709,10 @@ test("generic worker contract은 Codex와 Claude 설치를 각각 하나로 제�
       distinctCapabilitiesRequired: boolean;
       legacySharedTokenAccepted: boolean;
     };
+    claimPolicy: {
+      fields: string[];
+      templatePolicies: Record<string, string>;
+    };
   };
   assert.deepEqual(contract.workerInstallations.map((worker) => worker.agentKind).sort(), ["CLAUDE", "CODEX"]);
   assert.equal(new Set(contract.workerInstallations.map((worker) => worker.key)).size, 2);
@@ -719,4 +723,7 @@ test("generic worker contract은 Codex와 Claude 설치를 각각 하나로 제�
   });
   assert.equal(contract.authentication.distinctCapabilitiesRequired, true);
   assert.equal(contract.authentication.legacySharedTokenAccepted, false);
+  assert.equal(contract.claimPolicy.fields.includes("template"), true);
+  assert.equal(contract.claimPolicy.fields.includes("taskInput"), true);
+  assert.match(contract.claimPolicy.templatePolicies["platform-fleet-reconcile-v1"], /CODEX/);
 });

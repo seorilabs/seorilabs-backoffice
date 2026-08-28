@@ -5,6 +5,7 @@
 - Backoffice routine template: 앱 Fleet 화면에서 Codex/Claude, 수동·매시간·매일 cadence, 1회 예산 상한, `READY_PR`/`READ_ONLY` 승인 정책을 선택한다.
 - durable scheduler endpoint: `/api/admin/automation/schedule`이 누락 schedule, webhook inbox, 만료 lease를 재조정한다.
 - generic worker contract: Codex와 Claude 각각 조직당 설치 상한 1개다.
+- Platform Fleet internal template: 검증된 서명 manifest와 exact observation에서 만든 `PLATFORM_SDK_UPDATE` task만 Codex generic worker가 처리한다. 별도 앱 routine이나 Issue를 만들지 않는다.
 - Project projector: `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`을 desired/observed ledger로 분리하고 write 뒤 readback한다.
 
 ## 운영 상태와 worker gate
@@ -23,5 +24,6 @@ deterministic scheduler는 `k8s/scheduler-cronjobs.yaml`의 `backoffice-automati
 6. generic worker에는 provider write credential을 직접 주입하지 않고, claim의 `actionCapabilities`와
    누적 예산을 강제하는 신뢰된 adapter만 사용한다. 이 경계를 검증한 뒤에만
    `AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED=true`로 전환한다. 기본 `false`에서는 `READY_PR` 생성과 claim이 모두 거부된다.
+7. `platform-fleet-reconcile-v1` claim은 `issueNumber=null`, strict `taskInput`, 현재 repo source SHA 일치를 검증한다. exact SDK/vendor와 PR marker 외의 변경, Project field 기반 claim, 계약 feature 활성화·upload·실기기 QA·공개 rollout을 거부한다.
 
 Codex와 Claude worker는 앱별로 설치하지 않는다. 기존 generic worker가 있으면 중복 생성하지 않고 같은 계약으로 업데이트한다.

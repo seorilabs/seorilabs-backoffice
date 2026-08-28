@@ -25,17 +25,38 @@ function getApp(): App {
   return appInstance;
 }
 
-let cached: { octokit: Octokit; at: number } | null = null;
+export interface InstallationContext {
+  octokit: Octokit;
+  repositorySelection: "all" | "selected";
+  targetType: string;
+  accountLogin: string | null;
+}
+
+let cached: { context: InstallationContext; at: number } | null = null;
 const TTL_MS = 30 * 60 * 1000;
 
-export async function getInstallationOctokit(): Promise<Octokit> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.octokit;
+export async function getInstallationContext(): Promise<InstallationContext> {
+  if (cached && Date.now() - cached.at < TTL_MS) return cached.context;
   const app = getApp();
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   const { data } = await app.octokit.rest.apps.getOrgInstallation({ org });
+  if (data.repository_selection !== "all" && data.repository_selection !== "selected") {
+    throw new Error("GITHUB_INSTALLATION_REPOSITORY_SELECTION_INVALID");
+  }
+  const account = data.account as { login?: unknown } | null;
   const octokit = await app.getInstallationOctokit(data.id);
-  cached = { octokit, at: Date.now() };
-  return octokit;
+  const context: InstallationContext = {
+    octokit,
+    repositorySelection: data.repository_selection,
+    targetType: data.target_type,
+    accountLogin: typeof account?.login === "string" ? account.login : null,
+  };
+  cached = { context, at: Date.now() };
+  return context;
+}
+
+export async function getInstallationOctokit(): Promise<Octokit> {
+  return (await getInstallationContext()).octokit;
 }
 
 export type { Octokit };

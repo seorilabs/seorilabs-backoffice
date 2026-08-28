@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
 
 import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
@@ -34,10 +35,10 @@ function jsonText(value: unknown): string {
 }
 
 function statusClass(status: string): string {
-  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT"].includes(status)) {
+  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT", "PR_MERGED", "ISSUE_OPEN"].includes(status)) {
     return "bg-emerald-50 text-emerald-700";
   }
-  if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH"].includes(status)) {
+  if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH", "BLOCKED"].includes(status)) {
     return "bg-red-50 text-red-700";
   }
   if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING", "WAITING_HUMAN_APPROVAL", "READBACK_REQUIRED"].includes(status)) {
@@ -466,12 +467,60 @@ export default async function FleetOperationsPage({
               <dl className="grid gap-2 text-sm sm:grid-cols-2">
                 <Meta label="상태" value={fleet.platformFleetBinding.state} />
                 <Meta label="Observed" value={fleet.platformFleetBinding.observedVersion} />
+                <Meta label="Observed digest" value={mono(fleet.platformFleetBinding.observedDigest, 18)} />
                 <Meta label="Approved" value={fleet.platformFleetBinding.approvedVersion} />
+                <Meta label="Approved digest" value={mono(fleet.platformFleetBinding.approvedDigest, 18)} />
+                <Meta label="Manifest" value={mono(fleet.platformFleetBinding.manifestDigest, 18)} />
                 <Meta label="Contract" value={fleet.platformFleetBinding.contractRevision} />
                 <Meta label="Source SHA" value={mono(fleet.platformFleetBinding.sourceSha, 12)} />
+                <Meta label="Plan" value={fleet.platformFleetBinding.latestPlanKind} />
+                <Meta
+                  label="PR"
+                  value={fleet.platformFleetBinding.pullRequestUrl
+                    ? <a className="text-blue-700 underline" href={fleet.platformFleetBinding.pullRequestUrl}>#{fleet.platformFleetBinding.pullRequestNumber}</a>
+                    : "—"}
+                />
+                <Meta
+                  label="P1 Issue"
+                  value={fleet.platformFleetBinding.issueUrl
+                    ? <a className="text-blue-700 underline" href={fleet.platformFleetBinding.issueUrl}>#{fleet.platformFleetBinding.issueNumber}</a>
+                    : "—"}
+                />
                 <Meta label="예외 만료" value={dateTime(fleet.platformFleetBinding.exceptionExpiresAt)} />
               </dl>
             ) : <Empty>Platform Fleet binding이 없습니다.</Empty>}
+          </Panel>
+          <Panel title="Platform Fleet plan 원장">
+            <div className="space-y-2">
+              {fleet.platformFleetPlans.map((plan) => (
+                <details key={plan.id} className="rounded border border-neutral-200 px-3 py-2">
+                  <summary className="cursor-pointer text-sm text-neutral-800">
+                    <span className="mr-2 font-medium">{plan.platformRelease.version} · {plan.kind}</span>
+                    <Status value={plan.status} />
+                  </summary>
+                  <dl className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
+                    <Meta label="Approval" value={plan.platformRelease.approval} />
+                    <Meta label="Classification" value={plan.platformRelease.classification} />
+                    <Meta label="Source SHA" value={mono(plan.sourceSha, 16)} />
+                    <Meta label="Manifest" value={mono(plan.platformRelease.manifestDigest, 18)} />
+                    <Meta label="Desired digest" value={mono(plan.desiredHash, 18)} />
+                    <Meta label="Contract" value={mono(plan.platformRelease.contractRevision, 18)} />
+                    <Meta label="Discovery" value={mono(plan.discoveryObservationId, 16)} />
+                    <Meta label="Provider observation" value={mono(plan.providerObservationId, 16)} />
+                    <Meta label="Exception" value={dateTime(fleet.platformFleetBinding?.exceptionExpiresAt)} />
+                    <Meta label="시도" value={String(plan.attempts)} />
+                    <Meta label="갱신" value={dateTime(plan.updatedAt)} />
+                  </dl>
+                  {plan.githubUrl && (
+                    <a className="mt-2 inline-block text-xs text-blue-700 underline" href={plan.githubUrl}>
+                      GitHub #{plan.githubNumber}
+                    </a>
+                  )}
+                  {plan.lastError && <p className="mt-2 text-xs text-red-700">{plan.lastError}</p>}
+                </details>
+              ))}
+              {fleet.platformFleetPlans.length === 0 && <Empty>Platform Fleet plan이 없습니다.</Empty>}
+            </div>
           </Panel>
           <Panel title="CredentialBinding — read-only">
             <div className="space-y-2">
@@ -600,11 +649,11 @@ function Summary({ label, value, detail, danger = false }: { label: string; valu
   );
 }
 
-function Meta({ label, value }: { label: string; value: string | null | undefined }) {
+function Meta({ label, value }: { label: string; value: ReactNode }) {
   return <div className="flex justify-between gap-3"><dt className="text-neutral-500">{label}</dt><dd className="text-right text-neutral-800">{value ?? "—"}</dd></div>;
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+function Empty({ children }: { children: ReactNode }) {
   return <div className="py-5 text-center text-sm text-neutral-400">{children}</div>;
 }
 

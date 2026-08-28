@@ -50,6 +50,14 @@ export function repositoryAutomationEligible(input: Parameters<typeof repository
   return input !== null && repositorySourceIsCurrent(input);
 }
 
+export function repositoryGenerationAfterArchive(input: {
+  archived: boolean;
+  reconcileGeneration: number | null;
+}): number {
+  const current = input.reconcileGeneration ?? 0;
+  return input.archived ? current : current + 1;
+}
+
 export function repositoryDiscoveryTrigger(input: {
   event: string;
   action?: string;
@@ -101,6 +109,39 @@ export type RegisterRepositoryWebhookInput = {
   deliveryId: string;
   organization: string;
 };
+
+export function repositoryDiscoveryRequestHashes(
+  input: RegisterRepositoryWebhookInput,
+  archived: boolean,
+  trigger: ReturnType<typeof repositoryDiscoveryTrigger>,
+): { current: string; legacyV1: string } {
+  const common = {
+    event: input.event,
+    action: input.action ?? null,
+    repoId: String(input.repository.id),
+    repoFullName: input.repository.full_name,
+    defaultBranch: input.repository.default_branch ?? null,
+    archived,
+    sourceSha: trigger.sourceSha,
+    sourceRef: trigger.sourceRef,
+  } as const;
+  return {
+    current: jsonDigest({
+      ...common,
+      private: input.repository.private ?? null,
+    } as JsonValue),
+    // 2026-08-28 이전 persisted delivery의 redelivery만 받아들이는 bounded
+    // compatibility다. 새 row에는 항상 private을 포함한 current hash를 저장한다.
+    legacyV1: jsonDigest(common as JsonValue),
+  };
+}
+
+export function repositoryDiscoveryRequestHashMatches(
+  stored: string,
+  hashes: ReturnType<typeof repositoryDiscoveryRequestHashes>,
+): boolean {
+  return stored === hashes.current || stored === hashes.legacyV1;
+}
 
 type RegisterRepositoryWebhookResult = {
   duplicate: boolean;
@@ -188,23 +229,15 @@ export async function registerRepositoryWebhookInTransaction(
     ref: input.ref,
     after: input.after,
   });
-  const requestHash = jsonDigest({
-    event: input.event,
-    action: input.action ?? null,
-    repoId: repoId.toString(),
-    repoFullName: repo.full_name,
-    defaultBranch: repo.default_branch ?? null,
-    archived,
-    sourceSha: trigger.sourceSha,
-    sourceRef: trigger.sourceRef,
-  } as JsonValue);
+  const requestHashes = repositoryDiscoveryRequestHashes(input, archived, trigger);
+  const requestHash = requestHashes.current;
 
   const existingRun = await tx.repositoryDiscoveryRun.findUnique({
       where: { triggerDeliveryId: input.deliveryId },
       select: { id: true, generation: true, requestHash: true },
     });
     if (existingRun) {
-      if (existingRun.requestHash !== requestHash) {
+      if (!repositoryDiscoveryRequestHashMatches(existingRun.requestHash, requestHashes)) {
         throw new Error("REPOSITORY_DISCOVERY_DELIVERY_CONFLICT");
       }
       return {
@@ -236,18 +269,31 @@ export async function registerRepositoryWebhookInTransaction(
       },
       update: {
         repoFullName: repo.full_name,
-        defaultBranch: repo.default_branch ?? undefined,
-        archived,
+        ...(Object.prototype.hasOwnProperty.call(repo, "default_branch")
+          ? { defaultBranch: repo.default_branch ?? null }
+          : {}),
         // tag/non-default push가 NEEDS_INPUT 또는 EXCLUDED 판정을 지우지 않는다.
         // relevant generation은 아래에서만 REGISTERED로 전환한다.
-        ...(archived ? { status: "ARCHIVED" as const } : {}),
         ...(trigger.sourceSha ? { lastDefaultPushSha: trigger.sourceSha } : {}),
         lastDeliveryId: input.deliveryId,
       },
     });
     await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+    const registration = await tx.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId },
+      select: { archived: true, reconcileGeneration: true },
+    });
 
     if (archived) {
+      const generation = repositoryGenerationAfterArchive(registration);
+      await tx.repositoryRegistration.update({
+        where: { repoId },
+        data: {
+          archived: true,
+          status: "ARCHIVED",
+          reconcileGeneration: generation,
+        },
+      });
       await tx.repositoryDiscoveryRun.updateMany({
         where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
         data: {
@@ -268,6 +314,7 @@ export async function registerRepositoryWebhookInTransaction(
             archived: true,
             deliveryId: input.deliveryId,
             discoveryEnqueued: false,
+            generation,
           },
         },
       });
@@ -278,10 +325,12 @@ export async function registerRepositoryWebhookInTransaction(
       return { duplicate: false, enqueued: false, runId: null, generation: null };
     }
 
-    const registration = await tx.repositoryRegistration.findUniqueOrThrow({
-      where: { repoId },
-      select: { reconcileGeneration: true },
-    });
+    if (registration.archived) {
+      await tx.repositoryRegistration.update({
+        where: { repoId },
+        data: { archived: false },
+      });
+    }
     const currentGeneration = registration.reconcileGeneration ?? 0;
     const semanticReplay = await tx.repositoryDiscoveryRun.findFirst({
       where: {

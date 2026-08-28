@@ -36,6 +36,8 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA, Platform version을 하나의 candidate로 고정 |
 | `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
+| `GET/POST` | `/api/control-plane/platform-releases` | 서명 검증된 `FLEET_APPROVED` release manifest를 불변 원장에 기록·조회 |
+| `POST` | `/api/control-plane/platform-fleet/reconcile` | manifest 전체 consumer cohort와 exact discovery/provider observation으로 repo별 plan을 한 번만 생성 |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
 | `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
 | `POST` | `/api/internal/agents/claim` | 최대 5분 lease와 generation capability 발급 |
@@ -48,6 +50,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
 | `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
+| `POST` | `/api/admin/automation/platform-fleet` | contract Issue plan을 GitHub App으로 read-before/write/read-after 처리하고 SDK PR 결과를 readback |
 
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
@@ -165,6 +168,38 @@ profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirect
 허용한다. resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
 `NO_WORKFLOW_CALLER_FOR_SHA`로 중단하고 추측하지 않는다.
 
+## Platform Fleet
+
+Platform producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version과 SHA-256,
+변경 분류, numeric consumer repo ID를 `platform-release` manifest에 고정한다. Backoffice는
+`FLEET_APPROVED` literal과 중앙 snapshot signature를 모두 검증한 manifest만 append-only
+`PlatformRelease`로 받는다. GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는
+계약에 들어올 수 없다.
+
+Reconcile input은 manifest의 전체 consumer cohort와 각 repo의 current default HEAD
+`DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히
+지정해야 한다. subset, stale source, 다른 app/provider identity, digest 또는 signature 불일치는 전부
+fail-closed한다.
+
+- `IMPLEMENTATION_ONLY` drift는 release/repo당 `SDK_UPDATE_PR` plan과 `AgentRun.taskInput` 하나만 만든다.
+  기존 agent lease·`repo-pr:{owner/repo}` unique guard를 그대로 사용하며 task는 exact version/digest,
+  source SHA, manifest marker와 필수 check를 포함한다.
+- `CONTRACT_CHANGE` 또는 `CONTRACT_ADDITION` drift는 영향 repo마다 P1 Issue plan 하나를 만든다.
+  label은 `P1`, `autopilot`, `platform`, `platform-contract`로 고정된다.
+- `CUSTOM_HTTP`와 `MISSING` 관측은 각각 `CUSTOM_UNMANAGED`, `MISSING_UNMANAGED`로 표시하며 자동
+  호환으로 추측하지 않는다.
+
+Issue mutation은 installation GitHub App adapter에서 marker 조회, create, exact readback 순서로만
+수행한다. create 결과가 불명이면 marker를 먼저 다시 읽고 새 Issue를 만들지 않는다. SDK PR은 generic
+worker가 capability broker를 통과해 처리하며 `RESULT_UNKNOWN`이면 같은 run이 `READBACK_FIRST`로
+재claim될 때까지 repo guard를 유지한다. Project field는 이 queue의 claim source가 아니다.
+
+ReleaseCandidate 생성은 해당 repo에 적용되는 최신 `FLEET_APPROVED` release와
+`PlatformFleetBinding`의 release ID, manifest digest, source SHA, version, artifact digest,
+contract revision 및 `COMPLIANT` 상태가 모두 일치할 때만 열린다. PR merge만으로 compliant로 승격하지
+않고 새 exact provider observation과 reconcile을 요구한다. Fleet UI에는 observed/approved
+version·digest, contract revision, PR/P1 Issue, 예외 만료와 plan 원장을 표시한다.
+
 ## 운영 UI와 재인증 경계
 
 앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
@@ -240,11 +275,22 @@ source 원문, secret-like custom package field는 저장하지 않는다.
   scheduler는 GitHub redelivery에 의존하지 않고 FAILED/PENDING inbox를 재처리하며, 기존 ingress-only row도
   동일 payload 검증 뒤 delivery 원장과 멱등 복구한다.
 
-worker poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
+worker replica는 RPI5에 1개, poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
 durable enqueue와 실행 차단은 webhook transaction에서 즉시 완료하고, provider readback 뒤 discovery run을
 등록한다. 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
 신규 private RN/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
 completedAt, reasonCode로 자동 검증할 수 있다.
+
+webhook 누락은 hourly `backoffice-repository-discovery-backfill`이 보정한다. GitHub App installation의
+App-JWT readback이 조직 전체 저장소 설치(`repository_selection=all`)와 정확한 조직 account임을 확인한 뒤
+전체 repository numeric ID를 pagination하고 `GET /repositories/{id}`로 canonical name, private/archive,
+default branch를 다시 읽고 active private repository의 exact default HEAD를 결합한다. sweep occurrence와
+공개 vector의 checksum이 synthetic reconcile delivery ID이며, 다른 sweep에서 같은 current vector가
+재관측돼도 normalized request hash로 기존 generation에 접힌다. 반면 A→B→A처럼 예전 vector가 다시
+나타나면 새 occurrence delivery가 새 generation을 만들 수 있다. canonical identity, visibility,
+default branch, archive state 또는 HEAD vector 변경만 current generation을 바꾸며, source read는 기존 worker의
+`leaseGeneration` CAS, 최대 3회 retry, append-only audit를 그대로 사용한다. backfill은 항상 `shadow`이고
+GitHub settings, caller, secret, Environment, ruleset, Issue 또는 PR을 쓰는 adapter를 호출하지 않는다.
 
 ## 이관 경계
 
