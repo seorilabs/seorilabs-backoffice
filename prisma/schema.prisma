@@ -92,6 +92,7 @@ model App {
   configRevisions          ConfigRevision[]
   legacyConfigImports      LegacyConfigImport[]
   shadowParityObservations ShadowParityObservation[]
+  fleetParityWaveResults   FleetParityWaveResult[]
   providerObservations     ProviderObservation[]
   releaseCandidates        ReleaseCandidate[]
   projectBlueprints        ProjectBlueprint[]
@@ -995,6 +996,7 @@ model ConfigRevision {
   storeAssets              StoreAsset[]
   fleetLifecycleStates     FleetLifecycleState[]
   fleetLifecycleEvents     FleetLifecycleEvent[]
+  fleetParityWaveResults   FleetParityWaveResult[]
 
   @@unique([appId, revision])
   @@unique([id, appId])
@@ -1027,8 +1029,8 @@ model ProjectBlueprint {
   payloadHash      String         @db.Char(64)
   createdAt        DateTime       @default(now()) @db.DateTime(3)
 
-  @@index([appId, createdAt])
   @@unique([configRevisionId, appId], map: "cp_project_blueprint_config_app_key")
+  @@index([appId, createdAt])
   @@map("control_plane_project_blueprint")
 }
 
@@ -1158,24 +1160,25 @@ model FleetLifecycleEvent {
 // 기존 JSON을 중앙 draft로 옮긴 한 번의 결정적 import 실행이다.
 // 원문과 상세 오류는 저장하지 않고 hash, 공개 provenance, 상태 코드만 보존한다.
 model LegacyConfigImport {
-  id                 String                    @id @default(cuid())
-  appId              String
+  id                     String                    @id @default(cuid())
+  appId                  String
   // import 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
-  app                App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sourceSha          String                    @db.Char(40)
-  sourceRef          String?                   @db.VarChar(512)
-  transformVersion   String                    @db.VarChar(64)
-  requestHash        String                    @db.Char(64)
-  inputDigest        String                    @db.Char(64)
-  status             String                    @db.VarChar(32)
-  idempotencyKey     String                    @unique @db.Char(64)
-  configRevisionId   String?
-  configRevision     ConfigRevision?           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict)
-  observedBy         String
-  observedAt         DateTime                  @db.DateTime(3)
-  createdAt          DateTime                  @default(now()) @db.DateTime(3)
-  sources            LegacyConfigSource[]
-  parityObservations ShadowParityObservation[]
+  app                    App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceSha              String                    @db.Char(40)
+  sourceRef              String?                   @db.VarChar(512)
+  transformVersion       String                    @db.VarChar(64)
+  requestHash            String                    @db.Char(64)
+  inputDigest            String                    @db.Char(64)
+  status                 String                    @db.VarChar(32)
+  idempotencyKey         String                    @unique @db.Char(64)
+  configRevisionId       String?
+  configRevision         ConfigRevision?           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict)
+  observedBy             String
+  observedAt             DateTime                  @db.DateTime(3)
+  createdAt              DateTime                  @default(now()) @db.DateTime(3)
+  sources                LegacyConfigSource[]
+  parityObservations     ShadowParityObservation[]
+  fleetParityWaveResults FleetParityWaveResult[]
 
   @@unique([id, appId])
   @@unique([configRevisionId, appId])
@@ -1212,30 +1215,106 @@ model LegacyConfigSource {
 // 동일 source SHA의 legacy parser와 중앙 resolved manifest를 비교한 append-only 관측이다.
 // diff에는 값이나 오류문이 아니라 { path, code } 항목만 저장한다.
 model ShadowParityObservation {
-  id               String             @id @default(cuid())
-  appId            String
+  id                    String                 @id @default(cuid())
+  appId                 String
   // parity 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
-  app              App                @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  legacyImportId   String
-  legacyImport     LegacyConfigImport @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
-  configRevisionId String?
-  configRevision   ConfigRevision?    @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
-  sourceSha        String             @db.Char(40)
-  scope            String             @db.VarChar(64)
-  contractVersion  String             @db.VarChar(64)
-  status           String             @db.VarChar(32)
-  legacyDigest     String?            @db.Char(64)
-  centralDigest    String?            @db.Char(64)
-  diff             Json?
-  dedupeKey        String             @unique @db.Char(64)
-  observedBy       String
-  observedAt       DateTime           @db.DateTime(3)
-  createdAt        DateTime           @default(now()) @db.DateTime(3)
+  app                   App                    @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  legacyImportId        String
+  legacyImport          LegacyConfigImport     @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
+  configRevisionId      String?
+  configRevision        ConfigRevision?        @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
+  sourceSha             String                 @db.Char(40)
+  scope                 String                 @db.VarChar(64)
+  contractVersion       String                 @db.VarChar(64)
+  status                String                 @db.VarChar(32)
+  legacyDigest          String?                @db.Char(64)
+  centralDigest         String?                @db.Char(64)
+  diff                  Json?
+  dedupeKey             String                 @unique @db.Char(64)
+  observedBy            String
+  observedAt            DateTime               @db.DateTime(3)
+  createdAt             DateTime               @default(now()) @db.DateTime(3)
+  fleetParityWaveResult FleetParityWaveResult?
 
+  @@unique([id, appId])
   @@index([appId, sourceSha, observedAt])
   @@index([legacyImportId, observedAt])
   @@index([configRevisionId, observedAt])
   @@map("control_plane_shadow_parity_observation")
+}
+
+// 관리 대상 전체를 한 번 순회한 durable parity occurrence다. 같은 idempotency
+// 요청은 이 row를 재개할 뿐 새 회차로 세지 않는다.
+model FleetParityWave {
+  id                    String                  @id @default(cuid())
+  occurrenceKey         String                  @unique @db.Char(64)
+  requestHash           String                  @db.Char(64)
+  scope                 String                  @default("FULL") @db.VarChar(64)
+  contractVersion       String                  @db.VarChar(64)
+  cohortDigest          String                  @db.Char(64)
+  vectorDigest          String?                 @db.Char(64)
+  evidenceDigest        String?                 @db.Char(64)
+  status                FleetParityWaveStatus   @default(RUNNING)
+  resultCount           Int                     @default(0)
+  matchCount            Int                     @default(0)
+  consecutiveMatchCount Int                     @default(0)
+  cleanupAllowed        Boolean                 @default(false)
+  observedBy            String
+  startedAt             DateTime                @db.DateTime(3)
+  completedAt           DateTime?               @db.DateTime(3)
+  createdAt             DateTime                @default(now()) @db.DateTime(3)
+  results               FleetParityWaveResult[]
+
+  @@index([status, createdAt])
+  @@map("control_plane_fleet_parity_wave")
+}
+
+enum FleetParityWaveStatus {
+  RUNNING
+  PASSED
+  BLOCKED
+}
+
+// Wave 시작 시 cohort와 exact vector를 먼저 고정한다. 이후 source/config가
+// 바뀌면 결과를 새 값으로 추측 갱신하지 않고 해당 회차를 fail-closed한다.
+model FleetParityWaveResult {
+  id                  String                   @id @default(cuid())
+  waveId              String
+  wave                FleetParityWave          @relation(fields: [waveId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  appId               String
+  app                 App                      @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  repoId              BigInt
+  repoFullName        String
+  sourceSha           String?                  @db.Char(40)
+  configRevisionId    String?
+  configRevision      ConfigRevision?          @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_config_app_fkey")
+  legacyImportId      String?
+  legacyImport        LegacyConfigImport?      @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_import_app_fkey")
+  parityObservationId String?
+  parityObservation   ShadowParityObservation? @relation(fields: [parityObservationId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_parity_app_fkey")
+  scope               String                   @default("FULL") @db.VarChar(64)
+  contractVersion     String                   @db.VarChar(64)
+  status              FleetParityResultStatus  @default(PENDING)
+  reasonCode          String?                  @db.VarChar(64)
+  legacyDigest        String?                  @db.Char(64)
+  centralDigest       String?                  @db.Char(64)
+  sourceCount         Int                      @default(0)
+  observedAt          DateTime?                @db.DateTime(3)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+
+  @@unique([waveId, appId])
+  @@unique([parityObservationId, appId])
+  @@index([appId, createdAt])
+  @@index([status, createdAt])
+  @@map("control_plane_fleet_parity_wave_result")
+}
+
+enum FleetParityResultStatus {
+  PENDING
+  MATCH
+  MISMATCH
+  NEEDS_INPUT
+  ERROR
 }
 
 model ProviderObservation {
@@ -1263,7 +1342,7 @@ model ReleaseCandidate {
   app               App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
   sourceSha         String                   @db.Char(40)
   configRevisionId  String
-  configRevision    ConfigRevision           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_release_candidate_config_app_fkey")
+  configRevision    ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
   artifactChecksum  String                   @db.Char(64)
   market            String?                  @db.VarChar(32)
   targetKey         String?                  @db.VarChar(191)

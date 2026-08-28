@@ -132,9 +132,6 @@ CREATE UNIQUE INDEX `control_plane_release_candidate_idempotencyKey_key`
 ALTER TABLE `control_plane_release_gate_observation`
     ADD COLUMN `requestHash` CHAR(64) NULL;
 
-ALTER TABLE `control_plane_release_candidate`
-    DROP FOREIGN KEY `control_plane_release_candidate_configRevisionId_fkey`;
-
 ALTER TABLE `control_plane_project_blueprint` ADD CONSTRAINT `control_plane_project_blueprint_appId_fkey` FOREIGN KEY (`appId`) REFERENCES `app`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE `control_plane_project_blueprint` ADD CONSTRAINT `cp_project_blueprint_config_app_fkey` FOREIGN KEY (`configRevisionId`, `appId`) REFERENCES `control_plane_config_revision`(`id`, `appId`) ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE `control_plane_market_profile` ADD CONSTRAINT `control_plane_market_profile_appId_fkey` FOREIGN KEY (`appId`) REFERENCES `app`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
@@ -149,4 +146,3 @@ ALTER TABLE `control_plane_fleet_lifecycle_state` ADD CONSTRAINT `control_plane_
 ALTER TABLE `control_plane_fleet_lifecycle_state` ADD CONSTRAINT `cp_lifecycle_state_config_app_fkey` FOREIGN KEY (`configRevisionId`, `appId`) REFERENCES `control_plane_config_revision`(`id`, `appId`) ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE `control_plane_fleet_lifecycle_event` ADD CONSTRAINT `control_plane_fleet_lifecycle_event_appId_fkey` FOREIGN KEY (`appId`) REFERENCES `app`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE `control_plane_fleet_lifecycle_event` ADD CONSTRAINT `cp_lifecycle_event_config_app_fkey` FOREIGN KEY (`configRevisionId`, `appId`) REFERENCES `control_plane_config_revision`(`id`, `appId`) ON DELETE RESTRICT ON UPDATE RESTRICT;
-ALTER TABLE `control_plane_release_candidate` ADD CONSTRAINT `cp_release_candidate_config_app_fkey` FOREIGN KEY (`configRevisionId`, `appId`) REFERENCES `control_plane_config_revision`(`id`, `appId`) ON DELETE RESTRICT ON UPDATE RESTRICT;

@@ -125,3 +125,47 @@ Platform registry와 `.seorilabs/*` consumer는 계속 동작한다. 두 번의 
 
 이 변경의 merge는 production migration 적용이나 배포를 의미하지 않는다. migration 적용, signing key
 검증, 배포와 readback은 별도 rollout gate에서 수행한다.
+
+## Legacy 종료 전 두 게이트
+
+### 1. 복구 rehearsal
+
+목적은 백업 파일이 존재한다는 사실이 아니라 **백오피스가 사라져도 그 파일로 다시 켤 수 있음**을
+증명하는 것이다. 운영 DB에는 연결하지 않는다. `restore-rehearsal-job.yaml`은 선택한 verified dump를
+read-only PVC에서 읽어 Pod 내부 MySQL 9.2 `emptyDir`에 복원하고 다음을 한 번에 확인한다.
+
+- 현재 migration/history/schema와 복구 전후 data fingerprint가 같다.
+- 복구 DB로 production Backoffice server가 Ready가 되고 resolved manifest를 HTTP로 재생한다.
+- 모든 ACTIVE snapshot 서명이 맞고 잘못된 키와 DRAFT는 기존 resolve 경계에서 거부된다.
+- verifier는 SHA, count, digest와 성공 여부만 출력한다. production DB URL/password는 Pod에 주입하지 않는다.
+- verifier 종료 시 MySQL을 내리고 Pod-scoped `emptyDir`을 폐기한다. Job은 감사용 metadata만 7일 보존한다.
+
+실행은 배포된 exact image digest, source SHA, 검증된 dump basename을 고정한다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<40자리 SHA>' \
+BACKOFFICE_RESTORE_DUMP_BASENAME='backoffice-YYYYMMDDTHHMMSSZ.sql.gz' \
+  scripts/run-restore-rehearsal.sh
+```
+
+이 Job 성공은 백업 복구 게이트만 닫는다. production DB 변경이나 legacy 파일 삭제 승인이 아니다.
+
+### 2. Fleet parity 두 회차
+
+한 회차는 현재 `ACTIVE` 앱 중 repository registration이 `MANAGED`인 전체 cohort를 먼저 고정한다.
+각 앱의 latest Discovery source SHA, ACTIVE Config revision, transform contract를 그대로 사용해 old JSON과
+Backoffice 결과를 비교한다. Job UID가 occurrence key라 container retry는 새 회차로 세지 않는다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<40자리 SHA>' \
+  scripts/run-fleet-parity-wave.sh
+```
+
+- 앱 하나라도 `MISMATCH`, `NEEDS_INPUT`, source 부족 또는 identity 오류면 wave 전체가 `BLOCKED`다.
+- `market-launch-state.json`의 provider 상태 모호성도 `NEEDS_INPUT`으로 남으며 제외하거나 성공으로 바꾸지 않는다.
+- 서로 다른 두 Job에서 cohort와 exact vector가 동일하고 모든 앱이 `FULL MATCH`일 때만
+  `consecutiveMatchCount=2`, `cleanupAllowed=true`가 된다.
+- 중간에 차단 wave, source SHA, ACTIVE revision, contract 또는 cohort가 바뀌면 연속 횟수는 초기화된다.
+- UI의 `cleanupAllowed`는 parity 선행조건만 뜻한다. restore 및 선언 마켓 build-only gate 없이 삭제하지 않는다.

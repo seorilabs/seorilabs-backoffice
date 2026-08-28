@@ -31,6 +31,7 @@ MANIFESTS=(
   k8s/teammate-worker.yaml
   k8s/store-review-cronjob.yaml
   k8s/vault-rag.yaml
+  k8s/fleet-parity-wave-job.yaml
 )
 
 echo "== 치환 =="
@@ -86,6 +87,25 @@ if printf '%s' "$resolve_out" | grep -q "generateName: backoffice-baseline-resol
   ok "baseline resolve Job exact artifact identity"
 else
   ng "baseline resolve Job artifact identity가 깨졌다"
+fi
+
+restore_dump="backoffice-20260828T010203Z.sql.gz"
+restore_out="$("$here/render-restore-rehearsal.sh" \
+  "$root/k8s/restore-rehearsal-job.yaml" "$IMG" "$SHA" "$restore_dump")"
+if printf '%s' "$restore_out" | grep -q "generateName: backoffice-restore-rehearsal-${SHA:0:12}-" &&
+   printf '%s' "$restore_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\"" &&
+   [ "$(printf '%s' "$restore_out" | grep -c "image: ${IMG}")" -eq 2 ] &&
+   [ "$(printf '%s' "$restore_out" | grep -c "value: \"${restore_dump}\"")" -eq 2 ] &&
+   ! printf '%s' "$restore_out" | grep -q '__BACKOFFICE_'; then
+  ok "restore rehearsal exact artifact와 dump identity"
+else
+  ng "restore rehearsal renderer가 exact identity를 고정하지 못했다"
+fi
+if "$here/render-restore-rehearsal.sh" \
+  "$root/k8s/restore-rehearsal-job.yaml" "$IMG" "$SHA" '../unsafe.sql.gz' >/dev/null 2>&1; then
+  ng "restore rehearsal renderer가 안전하지 않은 dump 이름을 허용했다"
+else
+  ok "restore rehearsal의 안전하지 않은 dump 이름 거부"
 fi
 
 echo "== availability-preserving deploy 계약 =="
@@ -144,6 +164,34 @@ if [ "$(grep -c '^kind: CronJob' "$backup_cronjob")" -eq 1 ] &&
   ok "backup CronJob credential 경계와 PVC mutation 분리"
 else
   ng "backup CronJob credential 경계 또는 PVC 분리가 깨졌다"
+fi
+
+restore_job="$root/k8s/restore-rehearsal-job.yaml"
+if grep -q 'claimName: backoffice-backup' "$restore_job" &&
+   grep -q 'mountPath: /backup' "$restore_job" &&
+   grep -q 'readOnly: true' "$restore_job" &&
+   grep -q 'medium: Memory' "$restore_job" &&
+   grep -q 'backoffice_rehearsal' "$restore_job" &&
+   grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
+   ! grep -q 'key: DATABASE_URL' "$restore_job" &&
+   ! grep -q 'key: DB_PASSWORD' "$restore_job" &&
+   grep -q 'CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_FILE' "$restore_job" &&
+   grep -q 'touch /state/stop' "$restore_job"; then
+  ok "restore rehearsal production DB 비접근·ephemeral cleanup 경계"
+else
+  ng "restore rehearsal 격리 또는 cleanup 경계가 깨졌다"
+fi
+
+fleet_parity_job="$root/k8s/fleet-parity-wave-job.yaml"
+if grep -q 'fieldPath: metadata.uid' "$fleet_parity_job" &&
+   grep -q 'automountServiceAccountToken: false' "$fleet_parity_job" &&
+   grep -q 'GITHUB_PRIVATE_KEY_FILE' "$fleet_parity_job" &&
+   grep -q 'path: private-key' "$fleet_parity_job" &&
+   ! grep -q 'name: GITHUB_PRIVATE_KEY$' "$fleet_parity_job" &&
+   grep -q 'ttlSecondsAfterFinished: 604800' "$fleet_parity_job"; then
+  ok "Fleet parity distinct occurrence와 secret file 경계"
+else
+  ng "Fleet parity Job occurrence 또는 secret 경계가 깨졌다"
 fi
 
 if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 3 ] &&
