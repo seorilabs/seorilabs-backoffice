@@ -49,6 +49,7 @@ type PlatformRegistrationVector = {
   status: "REGISTERED" | "NEEDS_INPUT" | "MANAGED" | "ARCHIVED";
   archived: boolean;
   managementKind: "UNCLASSIFIED" | "APP" | "PLATFORM_PRODUCER" | null;
+  classification: "PRODUCT_APP" | "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCLUDED" | null;
   lastDefaultPushSha: string | null;
   lastReconciledSha: string | null;
 };
@@ -94,7 +95,10 @@ export function resolveLegacyPlatformSourceVector(input: {
     || registration.repoFullName.toLowerCase() !== input.configured.repoFullName.toLowerCase()
     || registration.status !== "MANAGED"
     || registration.archived
-    || registration.managementKind !== "PLATFORM_PRODUCER"
+    || (
+      registration.classification !== "PLATFORM_PRODUCER"
+      && !(registration.classification === null && registration.managementKind === "PLATFORM_PRODUCER")
+    )
     || !registration.lastDefaultPushSha
     || !registration.lastReconciledSha
     || registration.lastDefaultPushSha.toLowerCase() !== registration.lastReconciledSha.toLowerCase()
@@ -593,6 +597,7 @@ export async function recordLegacyShadowImport(input: {
             status: true,
             archived: true,
             managementKind: true,
+            classification: true,
             lastDefaultPushSha: true,
             lastReconciledSha: true,
           },
@@ -685,6 +690,7 @@ export async function recordLegacyShadowImport(input: {
             status: true,
             archived: true,
             managementKind: true,
+            classification: true,
             lastDefaultPushSha: true,
             lastReconciledSha: true,
           },

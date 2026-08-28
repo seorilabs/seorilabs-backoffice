@@ -30,6 +30,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
+| `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
@@ -109,7 +110,7 @@ rollout 이전에 고정 in-cluster verifier의 최신 `PASS` 관측과 계약 d
 - market upload, processing, review, approval, deployment, public 상태는 각각 독립
   `ReleaseGateObservation`으로 남는다.
 
-trusted provider adapter는 `gcp-provisioner-v1`, `firebase-admin-v1`, `workspace-admin-v1`,
+trusted provider adapter는 `gcp-provisioner-v1`, `firebase-provisioner-v1`, `workspace-provisioner-v1`,
 `google-play-api-v1`, `app-store-connect-api-v1`, `ait-cli-v1`의 고정 command envelope만 받아야 한다.
 envelope에는 arbitrary executable, argv, env가 없으며 repo ID/source/config/desired/binding/public identity가
 들어 있다. 실제 secret 사용은 P2 Auth Broker가 logical credential lease를 발급한 뒤 trusted adapter에
@@ -357,10 +358,15 @@ enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration gene
 path, blob SHA, content SHA-256, size, 상태와 파생된 공개 package/bundle/app ID만 저장한다. tree 전체 path와
 source 원문, secret-like custom package field는 저장하지 않는다.
 
-- 후보 하나: `App.status=ACTIVE` 신규 등록, `RepositoryRegistration.status=MANAGED`, exact-SHA
+- 후보 하나: `classification=PRODUCT_APP`, `App.status=ACTIVE` 신규 등록,
+  `RepositoryRegistration.status=MANAGED`, exact-SHA
   `DiscoveryObservation`을 하나의 transaction으로 완료한다.
-- 후보 0개/여러 개, package manager 모호성, build target/공개 identity 누락, unreadable source,
-  public/non-main repo: 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
+- 중앙 정책의 `.github`, credentials, bot, Backoffice, presentations 저장소는 `INFRA_REPO`, planning,
+  공식 웹사이트와 starter template은 `EXCLUDED`로 terminal 분류하며 App row를 만들지 않는다. 정책 밖의
+  후보 0개/여러 개는 인프라로 추측하지 않고 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
+- package manager 모호성, build target/공개 identity 누락, unreadable source, 미승인 public 또는 non-main
+  repo도 `NEEDS_INPUT`이다. 공개 제품 allowlist는 source discovery만 허용하며 public PR의 ARC 실행 권한을
+  뜻하지 않는다.
 - `seorilabs/platform`은 `seorilabs-platform` package와 `spec/openapi.yaml`을 함께 확인한 뒤
   `PLATFORM_PRODUCER`로 관리하며 RN/Godot App 후보에서 명시적으로 제외한다.
 - default push와 repository lifecycle webhook은 공개 numeric repo identity, ref, SHA를 delivery와 같은
@@ -394,12 +400,31 @@ custom property와 조직 ruleset에 필요한 exact grant/event의 누락을 �
 그 권한을 가지고 있다는 readback일 뿐이며 실행 승인, 설정 변경 또는 mutation 성공을 뜻하지 않는다.
 이 단계에서 GitHub에는 installation/repository GET만 수행한다.
 
+## 중앙 desired-state DRAFT backfill
+
+hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 cohort로 고정한다. repoId가 없는
+기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
+`RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
+맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
+registration과 run은 `repository-discovery/v2`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
+ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
+할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
+
+이 worker와 API에는 activation 호출과 provider/GitHub adapter가 없다. locale을 알 수 없으면 빈 목록으로
+두며 localization 문구, ProjectBlueprint의 조직/folder/billing/project, compliance, StoreAsset checksum은
+source/provider evidence가 완전하지 않은 한 만들지 않는다. 특히 법적 선언, 계정 소유권, 결제·세금,
+심사 제출과 공개 배포 승인은 자동 생성하거나 활성화하지 않는다. `/settings`는 repository classification,
+DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다.
+
 ## 중앙 모델의 zero-state 의미
 
 - `MarketProfile`, `MarketLocalization`, `ComplianceProfile`, `StoreAsset`, `ProjectBlueprint`는
   `ConfigRevision` projection이다. ConfigRevision이 없으면 0이 정상이며, exact legacy shadow import가 만든
   DRAFT는 같은 transaction에서 표현 가능한 market/localization만 materialize한다. shadow DRAFT는 직접
   ACTIVE로 전환할 수 없다.
+- exact discovery backfill DRAFT는 확인된 MarketProfile만 materialize하며 source observation provenance를
+  FK로 보존한다. 이 DRAFT도 자동 활성화하지 않는다.
 - `ProjectBlueprint`, compliance 및 asset은 legacy source에 필요한 공개 desired state가 완전하게 있을 때만
   사람이 검토 가능한 새 DRAFT에 포함한다. 조직/folder/billing, 법적 선언, object storage checksum이나
   provider 상태를 App/Discovery 필드에서 추측하지 않는다.

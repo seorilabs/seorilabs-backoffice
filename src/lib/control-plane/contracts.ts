@@ -794,6 +794,11 @@ export const configRevisionSchema = z.object({
   payload: configRevisionPayloadSchema,
 }).strict();
 
+export const desiredStateBackfillSchema = z.object({
+  schemaVersion: z.literal(1),
+  mode: z.literal("DRAFT_ONLY"),
+}).strict();
+
 /**
  * Legacy shadow import는 원문이나 source path 목록을 호출자가 주입하지 못하게 한다.
  * 서버가 고정 allowlist와 transform version을 선택하고, 정확한 commit SHA에서만 읽는다.

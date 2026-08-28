@@ -8,8 +8,13 @@ import {
   type SourceObservationResult,
   type SourcePersistenceMetadata,
 } from "@/lib/github/source-observation";
+import {
+  repositoryClassificationPolicy,
+  repositoryPublicDiscoveryAllowed,
+  type RepositoryClassification,
+} from "@/lib/control-plane/repository-classification";
 
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v1";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v2";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -48,6 +53,9 @@ export type RepositoryDiscoveryReason =
   | "BUILD_IDENTITY_MISSING"
   | "BUILD_IDENTITY_AMBIGUOUS"
   | "PLATFORM_SDK_PRODUCER"
+  | "PLATFORM_PRODUCER_IDENTITY_INVALID"
+  | "INFRASTRUCTURE_REPOSITORY"
+  | "NON_PRODUCT_REPOSITORY"
   | "APP_IDENTITY_CONFLICT"
   | "APP_MARKET_IDENTITY_CONFLICT"
   | "DISCOVERY_SLO_EXCEEDED";
@@ -130,6 +138,7 @@ export type RepositoryDiscoveryResult =
   | (DiscoveryBase & {
       status: "ACTIVE";
       managementKind: "APP";
+      classification: "PRODUCT_APP";
       reasonCode: null;
       appType: "APP" | "GAME";
       engine: "RN" | "GODOT";
@@ -144,12 +153,14 @@ export type RepositoryDiscoveryResult =
   | (DiscoveryBase & {
       status: "NEEDS_INPUT";
       managementKind: "UNCLASSIFIED";
+      classification: null;
       reasonCode: RepositoryDiscoveryReason;
     })
   | (DiscoveryBase & {
       status: "EXCLUDED";
-      managementKind: "PLATFORM_PRODUCER";
-      reasonCode: "PLATFORM_SDK_PRODUCER";
+      managementKind: "UNCLASSIFIED" | "PLATFORM_PRODUCER";
+      classification: "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCLUDED";
+      reasonCode: "PLATFORM_SDK_PRODUCER" | "INFRASTRUCTURE_REPOSITORY" | "NON_PRODUCT_REPOSITORY";
     });
 
 type RepositoryDiscoveryUnfinished = RepositoryDiscoveryResult extends infer Result
@@ -261,7 +272,7 @@ export async function readExactRepositoryTree(
   if (repository.archived === true) {
     return { status: "NEEDS_INPUT", reasonCode: "ARCHIVED" };
   }
-  if (repository.private !== true) {
+  if (repository.private !== true && !repositoryPublicDiscoveryAllowed(input.fullName)) {
     return { status: "NEEDS_INPUT", reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY" };
   }
   if (typeof repository.default_branch !== "string" || repository.default_branch.length === 0) {
@@ -344,7 +355,7 @@ export async function readExactRepositoryTree(
       sourceSha,
       sourceRef: `refs/heads/${repository.default_branch}`,
       defaultBranch: repository.default_branch,
-      private: true,
+      private: repository.private === true,
       archived: false,
       paths: [...new Set(paths)].sort(),
       gitlinkPaths: [...new Set(gitlinkPaths)].sort(),
@@ -380,7 +391,7 @@ export async function readCurrentRepositoryHead(
     if (repository.archived === true) {
       return { status: "NEEDS_INPUT", reasonCode: "ARCHIVED" };
     }
-    if (repository.private !== true) {
+    if (repository.private !== true && !repositoryPublicDiscoveryAllowed(input.fullName)) {
       return { status: "NEEDS_INPUT", reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY" };
     }
     if (typeof repository.default_branch !== "string" || !repository.default_branch) {
@@ -698,6 +709,7 @@ function resultPayload(input: {
   snapshot: RepositoryTreeSnapshot;
   status: RepositoryDiscoveryResult["status"];
   reasonCode: RepositoryDiscoveryReason | null;
+  classification: RepositoryClassification | null;
   candidates: RepositoryDiscoveryCandidate[];
   sourceMetadata: SourcePersistenceMetadata[];
   workflowCaller?: { profile: string; packageManager: string; workingDirectory: string };
@@ -705,7 +717,7 @@ function resultPayload(input: {
   platformConsumer?: RepositoryPlatformConsumerObservation;
 }): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
     repository: {
       id: input.snapshot.repoId,
@@ -716,6 +728,7 @@ function resultPayload(input: {
     },
     status: input.status,
     reasonCode: input.reasonCode,
+    classification: input.classification,
     candidates: input.candidates.map(publicCandidate),
     workflowCaller: input.workflowCaller ?? null,
     buildTargets: (input.buildTargets ?? []).map((target) => ({
@@ -743,6 +756,7 @@ function finish<T extends RepositoryDiscoveryUnfinished>(
     snapshot,
     status: input.status,
     reasonCode: input.reasonCode,
+    classification: input.classification,
     candidates: input.candidates,
     sourceMetadata: input.sourceMetadata,
     ...(active
@@ -765,6 +779,7 @@ function needsInput(
   return finish(snapshot, {
     status: "NEEDS_INPUT" as const,
     managementKind: "UNCLASSIFIED" as const,
+    classification: null,
     reasonCode,
     candidates,
     sourceMetadata,
@@ -780,6 +795,21 @@ export async function discoverRepository(
   readSource: RepositoryDiscoverySourceReader,
 ): Promise<RepositoryDiscoveryResult> {
   const pathSet = new Set(snapshot.paths);
+  const classificationPolicy = repositoryClassificationPolicy(snapshot.fullName);
+  if (
+    classificationPolicy
+    && classificationPolicy.classification !== "PRODUCT_APP_CANDIDATE"
+    && classificationPolicy.classification !== "PLATFORM_PRODUCER"
+  ) {
+    return finish(snapshot, {
+      status: "EXCLUDED" as const,
+      managementKind: "UNCLASSIFIED" as const,
+      classification: classificationPolicy.classification,
+      reasonCode: classificationPolicy.reasonCode!,
+      candidates: [],
+      sourceMetadata: [],
+    });
+  }
   const packagePaths = snapshot.paths.filter((path) =>
     path.endsWith("package.json")
     && path.split("/").length <= 4
@@ -826,17 +856,21 @@ export async function discoverRepository(
 
   const rootPackage = packages.find((pkg) => pkg.path === "package.json");
   if (
-    snapshot.fullName.toLowerCase() === "seorilabs/platform"
+    classificationPolicy?.classification === "PLATFORM_PRODUCER"
     && rootPackage?.name === "seorilabs-platform"
     && pathSet.has("spec/openapi.yaml")
   ) {
     return finish(snapshot, {
       status: "EXCLUDED" as const,
       managementKind: "PLATFORM_PRODUCER" as const,
+      classification: "PLATFORM_PRODUCER" as const,
       reasonCode: "PLATFORM_SDK_PRODUCER" as const,
       candidates: [],
       sourceMetadata,
     });
+  }
+  if (classificationPolicy?.classification === "PLATFORM_PRODUCER") {
+    return needsInput(snapshot, "PLATFORM_PRODUCER_IDENTITY_INVALID", [], sourceMetadata);
   }
 
   const reactNativePackages = packages.filter(isPrimaryReactNativePackage);
@@ -1177,6 +1211,7 @@ export async function discoverRepository(
   return finish(snapshot, {
     status: "ACTIVE" as const,
     managementKind: "APP" as const,
+    classification: "PRODUCT_APP" as const,
     reasonCode: null,
     candidates,
     sourceMetadata,

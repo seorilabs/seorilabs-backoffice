@@ -1,6 +1,7 @@
 import { Prisma, type RepositoryRegistrationStatus } from "@prisma/client";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
 const SHA_40 = /^[0-9a-f]{40}$/i;
 const REPOSITORY_DISCOVERY_ACTIONS = new Set([
@@ -34,11 +35,17 @@ export function repositorySourceIsCurrent(input: {
   archived: boolean;
   status: string;
   managementKind: string | null;
+  classification?: string | null;
   lastDefaultPushSha: string | null;
   lastReconciledSha: string | null;
 }, observationSha?: string | null): boolean {
   if (input.archived || input.status !== "MANAGED") return false;
-  if (input.managementKind !== "APP") return false;
+  // classification=null + legacy APP는 additive rollout 중에만 허용한다. 새 분류가
+  // 한 번이라도 기록되면 PRODUCT_APP만 앱 자동화 cohort가 된다.
+  if (
+    input.classification !== "PRODUCT_APP"
+    && !(input.classification == null && input.managementKind === "APP")
+  ) return false;
   const pushed = input.lastDefaultPushSha?.toLowerCase() ?? null;
   const reconciled = input.lastReconciledSha?.toLowerCase() ?? null;
   return pushed !== null
@@ -183,11 +190,15 @@ export async function invalidateRepositoryDiscoveryInTransaction(
       defaultBranch: repo.default_branch ?? null,
       archived: false,
       status: "REGISTERED",
+      classification: null,
+      discoveryContractVersion: null,
       managementKind: "UNCLASSIFIED",
       reconcileGeneration: 0,
     },
     update: {
       status: "REGISTERED",
+      classification: null,
+      discoveryContractVersion: null,
     },
   });
   await tx.$executeRaw`
@@ -291,6 +302,8 @@ export async function registerRepositoryWebhookInTransaction(
         data: {
           archived: true,
           status: "ARCHIVED",
+          classification: "EXCLUDED",
+          discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           reconcileGeneration: generation,
         },
       });
@@ -337,6 +350,7 @@ export async function registerRepositoryWebhookInTransaction(
         repoId,
         generation: currentGeneration,
         requestHash,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         status: { in: ["QUEUED", "RUNNING", "MANAGED", "NEEDS_INPUT", "EXCLUDED"] },
       },
       select: { id: true, generation: true, status: true },
@@ -371,6 +385,8 @@ export async function registerRepositoryWebhookInTransaction(
       data: {
         reconcileGeneration: generation,
         managementKind: "UNCLASSIFIED",
+        classification: null,
+        discoveryContractVersion: null,
         discoveryCandidates: Prisma.DbNull,
         lastDiscoveryReason: null,
         // 기존 App도 새 generation이 exact HEAD로 완료되기 전에는 자동화와
@@ -384,6 +400,7 @@ export async function registerRepositoryWebhookInTransaction(
         generation,
         triggerDeliveryId: input.deliveryId,
         requestHash,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         sourceSha: trigger.sourceSha,
         sourceRef: trigger.sourceRef,
         availableAt: now,

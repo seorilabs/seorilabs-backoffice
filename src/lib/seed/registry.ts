@@ -5,19 +5,11 @@ import { env } from "@/lib/env";
 import { computeRepoSeed, type Octo, type RepoLite } from "./compute";
 import { Prisma } from "@prisma/client";
 import { syncPlatformRegistryBindings } from "@/lib/platform/registry-bindings";
+import { repositoryClassificationPolicy } from "@/lib/control-plane/repository-classification";
 
 // 레지스트리 부트스트랩. Next 런타임에서 실행(octokit 번들).
 // 순수 계산부(octokit read → marketTargets → configHash → 시드 데이터)는 compute.ts 로 분리했고,
 // 여기서는 그 결과를 받아 prisma upsert(멱등)만 수행한다.
-
-const IGNORE = new Set([
-  "gemini-pr-bot",
-  "seori-pr-bot",
-  "seorilabs-official",
-  "seorilabs-backoffice",
-  ".github",
-  "archive",
-]);
 
 async function seedRepo(
   octokit: Octo,
@@ -104,11 +96,12 @@ export async function seedRegistry(
     });
 
     const targets = repos.filter(
-      (r) =>
-        !r.archived &&
-        !r.fork &&
-        !IGNORE.has(r.name) &&
-        !r.name.startsWith("starter-template"),
+      (r) => {
+        const policy = repositoryClassificationPolicy(`${org}/${r.name}`);
+        return !r.archived
+          && !r.fork
+          && (!policy || policy.classification === "PRODUCT_APP_CANDIDATE");
+      },
     );
 
     let seeded = 0;

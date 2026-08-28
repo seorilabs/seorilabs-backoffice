@@ -14,6 +14,8 @@ export async function createDraftRevisionInTransaction(
     payloadHash: string;
     createdBy: string;
     idempotencyKey: string;
+    sourceObservationId?: string;
+    backfillContractVersion?: string;
   },
 ) {
   const latest = await tx.configRevision.aggregate({
@@ -30,6 +32,8 @@ export async function createDraftRevisionInTransaction(
       payloadHash: input.payloadHash,
       createdBy: input.createdBy,
       idempotencyKey: input.idempotencyKey,
+      sourceObservationId: input.sourceObservationId,
+      backfillContractVersion: input.backfillContractVersion,
     },
   });
 

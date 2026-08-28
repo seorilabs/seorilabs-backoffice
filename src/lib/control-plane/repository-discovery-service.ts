@@ -17,6 +17,7 @@ import { registerRepositoryWebhook } from "@/lib/control-plane/repository-regist
 import { recordDiscoveryObservationInTransaction } from "@/lib/control-plane/service";
 import { readExactSourceFile } from "@/lib/github/source-observation";
 import { prisma } from "@/lib/prisma";
+import type { RepositoryClassification } from "@/lib/control-plane/repository-classification";
 
 export type RepositoryDiscoveryClaim = {
   id: string;
@@ -58,12 +59,14 @@ function jsonInput(value: unknown): Prisma.InputJsonValue {
 function publicDiscoveryState(input: {
   sourceSha: string | null;
   reasonCode: RepositoryDiscoveryReason | null;
+  classification: RepositoryClassification | null;
   candidates: RepositoryDiscoveryResult["candidates"];
 }): Prisma.InputJsonValue {
   return jsonInput({
     contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
     sourceSha: input.sourceSha,
     reasonCode: input.reasonCode,
+    classification: input.classification,
     candidates: input.candidates,
   });
 }
@@ -170,6 +173,7 @@ async function finishWithoutObservation(input: {
   candidates?: RepositoryDiscoveryResult["candidates"];
   candidateDigest?: string | null;
   managementKind?: "UNCLASSIFIED" | "PLATFORM_PRODUCER";
+  classification?: RepositoryClassification | null;
 }, dependencies: RepositoryDiscoveryServiceDependencies): Promise<boolean> {
   const now = dependencies.now();
   return dependencies.client.$transaction(async (tx) => {
@@ -182,6 +186,8 @@ async function finishWithoutObservation(input: {
         sourceSha: input.sourceSha,
         status: input.status,
         reasonCode: input.reasonCode,
+        classification: input.classification ?? null,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         candidateDigest: input.candidateDigest
           ?? jsonDigest(candidates as unknown as JsonValue),
         workerId: null,
@@ -194,9 +200,12 @@ async function finishWithoutObservation(input: {
       data: {
         status: input.status === "EXCLUDED" ? "MANAGED" : "NEEDS_INPUT",
         managementKind: input.managementKind ?? "UNCLASSIFIED",
+        classification: input.classification ?? null,
+        discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         discoveryCandidates: publicDiscoveryState({
           sourceSha: input.sourceSha,
           reasonCode: input.reasonCode,
+          classification: input.classification ?? null,
           candidates,
         }),
         ...(input.sourceSha ? { lastDefaultPushSha: input.sourceSha } : {}),
@@ -216,6 +225,7 @@ async function finishWithoutObservation(input: {
           sourceSha: input.sourceSha,
           reasonCode: input.reasonCode,
           candidateDigest: input.candidateDigest ?? null,
+          classification: input.classification ?? null,
         },
       },
     });
@@ -289,6 +299,8 @@ async function finishActive(input: {
         data: {
           status: "NEEDS_INPUT",
           reasonCode: identityReason,
+          classification: null,
+          contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           candidateDigest: input.result.candidateDigest,
           workerId: null,
           leaseExpiresAt: null,
@@ -300,9 +312,12 @@ async function finishActive(input: {
         data: {
           status: "NEEDS_INPUT",
           managementKind: "UNCLASSIFIED",
+          classification: null,
+          discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           discoveryCandidates: publicDiscoveryState({
             sourceSha: input.snapshot.sourceSha,
             reasonCode: identityReason,
+            classification: null,
             candidates: input.result.candidates,
           }),
           lastDefaultPushSha: input.snapshot.sourceSha,
@@ -381,6 +396,8 @@ async function finishActive(input: {
       data: {
         status: "MANAGED",
         reasonCode: null,
+        classification: "PRODUCT_APP",
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         candidateDigest: input.result.candidateDigest,
         observationId: recorded.observation.id,
         workerId: null,
@@ -393,9 +410,12 @@ async function finishActive(input: {
       data: {
         status: "MANAGED",
         managementKind: "APP",
+        classification: "PRODUCT_APP",
+        discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         discoveryCandidates: publicDiscoveryState({
           sourceSha: input.snapshot.sourceSha,
           reasonCode: null,
+          classification: "PRODUCT_APP",
           candidates: input.result.candidates,
         }),
         lastDefaultPushSha: input.snapshot.sourceSha,
@@ -415,6 +435,7 @@ async function finishActive(input: {
           sourceSha: input.snapshot.sourceSha,
           observationId: recorded.observation.id,
           candidateDigest: input.result.candidateDigest,
+          classification: "PRODUCT_APP",
         },
       },
     });
@@ -780,7 +801,10 @@ export async function processRepositoryDiscoveryClaim(
       reasonCode: result.reasonCode,
       candidates: result.candidates,
       candidateDigest: result.candidateDigest,
-      managementKind: "PLATFORM_PRODUCER",
+      managementKind: result.classification === "PLATFORM_PRODUCER"
+        ? "PLATFORM_PRODUCER"
+        : "UNCLASSIFIED",
+      classification: result.classification,
     }, dependencies);
     return { status: completed ? "EXCLUDED" : "DISCARDED", reasonCode: result.reasonCode };
   }

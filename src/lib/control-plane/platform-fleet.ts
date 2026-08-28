@@ -393,6 +393,7 @@ export async function reconcilePlatformFleet(input: {
           archived: true,
           status: true,
           managementKind: true,
+          classification: true,
           lastDefaultPushSha: true,
           lastReconciledSha: true,
         },

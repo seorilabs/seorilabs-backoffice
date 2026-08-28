@@ -129,11 +129,13 @@ wait_for_deployment() {
 
 scheduler_cronjobs=(
   backoffice-repository-discovery-backfill
+  backoffice-desired-state-backfill
   backoffice-reconcile
   backoffice-xcode-cloud-sync
   backoffice-registry-seed
   backoffice-automation-scheduler
   backoffice-platform-fleet
+  backoffice-fleet-project-projection
 )
 
 verify_schedulers_resumed() {

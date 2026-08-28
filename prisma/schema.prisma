@@ -966,6 +966,7 @@ model DiscoveryObservation {
   observedAt               DateTime                 @db.DateTime(3)
   createdAt                DateTime                 @default(now()) @db.DateTime(3)
   repositoryDiscoveryRuns  RepositoryDiscoveryRun[]
+  configRevisions          ConfigRevision[]
   platformFleetPlans       PlatformFleetPlan[]
 
   @@index([appId, sourceSha, payloadHash])
@@ -983,6 +984,11 @@ model ConfigRevision {
   payloadHash              String                    @db.Char(64)
   createdBy                String
   idempotencyKey           String                    @unique
+  // 자동 backfill DRAFT가 어떤 exact-SHA observation에서 파생됐는지 보존한다.
+  // 수동/legacy revision은 null이며 source observation 자체를 desired state로 복제하지 않는다.
+  sourceObservationId      String?
+  sourceObservation        DiscoveryObservation?     @relation(fields: [sourceObservationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_config_revision_source_observation_fkey")
+  backfillContractVersion  String?                    @db.VarChar(64)
   activeSlot               String?                   @unique
   activationIdempotencyKey String?                   @unique
   activatedSnapshot        Json?
@@ -1006,6 +1012,7 @@ model ConfigRevision {
 
   @@unique([appId, revision])
   @@unique([id, appId])
+  @@unique([appId, sourceObservationId, backfillContractVersion], map: "cp_config_revision_source_backfill_key")
   @@index([appId, status])
   @@map("control_plane_config_revision")
 }
@@ -1751,6 +1758,10 @@ model RepositoryRegistration {
   archived            Boolean                      @default(false)
   status              RepositoryRegistrationStatus @default(REGISTERED)
   managementKind      RepositoryManagementKind?
+  // managementKind의 legacy APP 값을 즉시 재해석하지 않도록 둔 additive v2 분류 정본.
+  // exact provider identity와 source discovery가 끝난 terminal run만 값을 쓴다.
+  classification      RepositoryClassification?
+  discoveryContractVersion String?                    @db.VarChar(64)
   discoveryCandidates Json?
   lastDefaultPushSha  String?                      @db.Char(40)
   reconcileGeneration Int?
@@ -1778,6 +1789,13 @@ enum RepositoryManagementKind {
   PLATFORM_PRODUCER
 }
 
+enum RepositoryClassification {
+  PRODUCT_APP
+  INFRA_REPO
+  PLATFORM_PRODUCER
+  EXCLUDED
+}
+
 // webhook 응답과 GitHub source read를 분리하는 durable 재조정 원장이다.
 // leaseGeneration CAS로 사라진 worker의 늦은 완료가 최신 push를 덮지 못한다.
 model RepositoryDiscoveryRun {
@@ -1791,6 +1809,8 @@ model RepositoryDiscoveryRun {
   sourceRef         String?
   status            RepositoryDiscoveryRunStatus @default(QUEUED)
   reasonCode        String?                      @db.VarChar(64)
+  classification    RepositoryClassification?
+  contractVersion   String?                      @db.VarChar(64)
   candidateDigest   String?                      @db.Char(64)
   observationId     String?                      @unique
   observation       DiscoveryObservation?        @relation(fields: [observationId], references: [id], onDelete: SetNull)
@@ -1808,6 +1828,29 @@ model RepositoryDiscoveryRun {
   @@index([status, availableAt, createdAt])
   @@index([repoId, createdAt])
   @@map("repository_discovery_run")
+}
+
+enum DesiredStateBackfillRunStatus {
+  RUNNING
+  COMPLETED
+  PARTIAL
+}
+
+// 중앙 desired-state DRAFT backfill occurrence. 요청 멱등과 UI readback만 보존하며
+// provider/GitHub mutation 또는 secret material은 담지 않는다.
+model DesiredStateBackfillRun {
+  id              String                        @id @default(cuid())
+  idempotencyKey  String                        @unique
+  requestHash     String                        @db.Char(64)
+  contractVersion String                        @db.VarChar(64)
+  actor           String                        @db.VarChar(128)
+  status          DesiredStateBackfillRunStatus @default(RUNNING)
+  summary         Json?
+  startedAt       DateTime                      @default(now()) @db.DateTime(3)
+  completedAt     DateTime?                     @db.DateTime(3)
+
+  @@index([status, startedAt])
+  @@map("control_plane_desired_state_backfill_run")
 }
 
 enum RepositoryDiscoveryRunStatus {

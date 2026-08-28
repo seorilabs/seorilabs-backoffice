@@ -510,6 +510,8 @@ export async function getFleetOperationsView(appId: string) {
             status: true,
             archived: true,
             managementKind: true,
+            classification: true,
+            discoveryContractVersion: true,
             lastDefaultPushSha: true,
             lastReconciledSha: true,
             lastDiscoveryReason: true,

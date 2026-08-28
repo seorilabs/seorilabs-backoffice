@@ -191,6 +191,7 @@ async function createWave(input: {
           status: true,
           archived: true,
           managementKind: true,
+          classification: true,
           lastDefaultPushSha: true,
           lastReconciledSha: true,
         },
@@ -200,10 +201,13 @@ async function createWave(input: {
     if (app.repoId === null) return [];
     const registration = managed.get(app.repoId.toString());
     if (!registration) return [];
-    // Platform producer는 앱별 legacy JSON consumer가 아니며 repository discovery도
-    // 의도적으로 DiscoveryObservation을 만들지 않는다. 오래된 App seed row가 남아
-    // 있어도 앱 parity cohort에 섞지 않는다.
-    if (registration.managementKind === "PLATFORM_PRODUCER") return [];
+    // 명시적으로 non-product로 분류된 저장소는 앱별 legacy JSON consumer가 아니다.
+    // 오래된 App seed row가 남아 있어도 parity cohort에 섞지 않는다. 분류가 아직
+    // null인 row는 조용히 제외하지 않고 아래 source gate에서 오류로 남긴다.
+    if (
+      (registration.classification && registration.classification !== "PRODUCT_APP")
+      || (!registration.classification && registration.managementKind === "PLATFORM_PRODUCER")
+    ) return [];
     const identityMatches = registration.repoFullName.toLowerCase() === app.repoFullName.toLowerCase();
     const sourceSha = app.discoveryObservations[0]?.sourceSha.toLowerCase() ?? null;
     const sourceIsCurrent = repositorySourceIsCurrent(registration, sourceSha);
@@ -322,6 +326,7 @@ async function frozenVectorStillCurrent(
         archived: true,
         repoFullName: true,
         managementKind: true,
+        classification: true,
         lastDefaultPushSha: true,
         lastReconciledSha: true,
       },

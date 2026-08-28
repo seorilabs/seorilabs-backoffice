@@ -66,6 +66,7 @@ const repositoryAutomationSelect = {
   archived: true,
   status: true,
   managementKind: true,
+  classification: true,
   lastDefaultPushSha: true,
   lastReconciledSha: true,
 } as const;
