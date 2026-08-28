@@ -302,6 +302,9 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    grep -q 'medium: Memory' "$restore_job" &&
    grep -q 'backoffice_rehearsal' "$restore_job" &&
    grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'const adminPrincipal = "restore-rehearsal"' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'CONTROL_PLANE_ADMIN_PRINCIPAL: adminPrincipal' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q '"x-seori-principal": adminPrincipal' "$root/scripts/verify-restore-rehearsal.ts" &&
    grep -q 'ensureRestoredAppendOnlyTriggers' "$root/scripts/verify-restore-rehearsal.ts" &&
    grep -Fq '["db", "execute", "--stdin", "--schema"' "$root/scripts/verify-restore-rehearsal.ts" &&
    ! grep -q -- '"--url"' "$root/scripts/verify-restore-rehearsal.ts" &&

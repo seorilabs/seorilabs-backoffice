@@ -104,6 +104,7 @@ async function bootAndReplayManifest(input: {
 }) {
   const port = 3100;
   const adminToken = randomBytes(32).toString("hex");
+  const adminPrincipal = "restore-rehearsal";
   const child = spawn(process.execPath, [input.serverEntry], {
     cwd: dirname(input.serverEntry),
     env: {
@@ -113,6 +114,10 @@ async function bootAndReplayManifest(input: {
       PORT: String(port),
       AUTH_SECRET: randomBytes(32).toString("hex"),
       CONTROL_PLANE_ADMIN_TOKEN: adminToken,
+      // 운영 principal을 상속하면 아래 임시 token과 요청 principal이 서로 달라져
+      // 복원된 앱이 자기 manifest replay를 401로 거부한다. Pod 내부 child에만
+      // 쓰는 identity를 token과 함께 고정해 운영 인증 경계와 섞이지 않게 한다.
+      CONTROL_PLANE_ADMIN_PRINCIPAL: adminPrincipal,
       CONTROL_PLANE_SNAPSHOT_SIGNING_KEY: input.signingKey,
     },
     stdio: "ignore",
@@ -142,7 +147,7 @@ async function bootAndReplayManifest(input: {
         {
           headers: {
             authorization: `Bearer ${adminToken}`,
-            "x-seori-principal": "restore-rehearsal",
+            "x-seori-principal": adminPrincipal,
           },
         },
       );
