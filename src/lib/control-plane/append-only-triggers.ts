@@ -6,6 +6,8 @@
  * 없어도 schema fingerprint는 통과한다. 배포 gate가 live readback으로 다시 확인한다.
  */
 
+import { createHash } from "node:crypto";
+
 export type AppendOnlyTriggerEvent = "UPDATE" | "DELETE";
 
 export interface AppendOnlyTriggerRequirement {
@@ -13,6 +15,18 @@ export interface AppendOnlyTriggerRequirement {
   table: string;
   event: AppendOnlyTriggerEvent;
   message: string;
+}
+
+/**
+ * MySQL은 대상 table의 `TRIGGER` 권한이 없는 principal에게
+ * `information_schema.TRIGGERS`를 빈 결과로 돌려준다. 권한 부족을 리소스 부재로
+ * 읽지 않기 위해 두 상태를 분리한다.
+ */
+export type TriggerVisibility = "VISIBLE" | "FORBIDDEN";
+
+export interface AppendOnlyTriggerVerification {
+  visibility: TriggerVisibility;
+  verified: number;
 }
 
 export interface ObservedTrigger {
@@ -77,6 +91,47 @@ export function parseAppendOnlyTriggers(sql: string): AppendOnlyTriggerRequireme
  * - 필수 trigger 누락, timing/event/table/본문 변형은 모두 실패다.
  * - 보호 대상 table에 계약 밖 trigger가 추가되어도 실패한다. 우회 trigger를 허용하지 않는다.
  */
+const GRANT_PATTERN = /^GRANT\s+(.+?)\s+ON\s+(\S+)\s+TO\s/i;
+
+function unquoteIdentifier(value: string): string {
+  return value.replace(/^[`'"]|[`'"]$/g, "");
+}
+
+/**
+ * `SHOW GRANTS FOR CURRENT_USER()` 결과에서 보호 table의 trigger를 볼 수 있는지 판정한다.
+ * schema 전체 또는 보호 table 전부를 덮는 `TRIGGER`/`ALL PRIVILEGES`만 VISIBLE이다.
+ */
+export function triggerVisibilityFromGrants(
+  grants: readonly string[],
+  schema: string,
+  required: readonly AppendOnlyTriggerRequirement[] = REQUIRED_APPEND_ONLY_TRIGGERS,
+): TriggerVisibility {
+  const protectedTables = new Set(required.map((requirement) => requirement.table));
+  const covered = new Set<string>();
+
+  for (const grant of grants) {
+    const match = GRANT_PATTERN.exec(grant.trim());
+    if (!match) continue;
+    const privileges = new Set(
+      match[1].split(",").map((privilege) => privilege.trim().toUpperCase()),
+    );
+    if (!privileges.has("TRIGGER") && !privileges.has("ALL PRIVILEGES")) continue;
+
+    const [rawSchema, rawTable] = match[2].split(".");
+    if (rawSchema === undefined || rawTable === undefined) continue;
+    const grantSchema = unquoteIdentifier(rawSchema);
+    const grantTable = unquoteIdentifier(rawTable);
+    if (grantSchema !== "*" && grantSchema !== schema) continue;
+
+    if (grantTable === "*") return "VISIBLE";
+    if (protectedTables.has(grantTable)) covered.add(grantTable);
+  }
+
+  return covered.size === protectedTables.size && protectedTables.size > 0
+    ? "VISIBLE"
+    : "FORBIDDEN";
+}
+
 export function verifyAppendOnlyTriggers(
   observed: readonly ObservedTrigger[],
   required: readonly AppendOnlyTriggerRequirement[] = REQUIRED_APPEND_ONLY_TRIGGERS,
@@ -112,4 +167,42 @@ export function verifyAppendOnlyTriggers(
     throw new Error(`append-only trigger 계약 실패: ${problems.sort().join(" ")}`);
   }
   return required.length;
+}
+
+/**
+ * 배포 gate 판정. 관측 principal이 trigger를 볼 수 없으면 부재로 단정하지 않고
+ * `FORBIDDEN`으로 남긴다. 이 경우 trigger 설치·검증은 DEPLOY.md의 trusted operator
+ * 복구 Job이 담당한다.
+ */
+export function evaluateAppendOnlyTriggers(input: {
+  visibility: TriggerVisibility;
+  observed: readonly ObservedTrigger[];
+  required?: readonly AppendOnlyTriggerRequirement[];
+}): AppendOnlyTriggerVerification {
+  if (input.visibility === "FORBIDDEN") {
+    return { visibility: "FORBIDDEN", verified: 0 };
+  }
+  return {
+    visibility: "VISIBLE",
+    verified: verifyAppendOnlyTriggers(input.observed, input.required),
+  };
+}
+
+/**
+ * 계약의 canonical digest. 고정 in-cluster verifier가 자기 manifest에 구운 같은 값을
+ * 관측 결과에 함께 기록하고, 배포 script가 repo 값과 대조한다. verifier가 옛 계약으로
+ * 남아 있으면 digest가 달라 배포가 fail-closed한다.
+ */
+export function appendOnlyContractDigest(
+  required: readonly AppendOnlyTriggerRequirement[] = REQUIRED_APPEND_ONLY_TRIGGERS,
+): string {
+  const canonical = [...required]
+    .map((requirement) => ({
+      event: requirement.event,
+      message: requirement.message,
+      name: requirement.name,
+      table: requirement.table,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

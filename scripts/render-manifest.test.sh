@@ -173,6 +173,33 @@ else
   ng "provider audit partial migration 복구 경계가 깨졌다"
 fi
 
+trigger_verifier="$root/k8s/provider-audit-trigger-verifier.yaml"
+if grep -q 'kind: CronJob' "$trigger_verifier" &&
+   grep -q 'namespace: data' "$trigger_verifier" &&
+   grep -q 'image: mysql@sha256:' "$trigger_verifier" &&
+   grep -q 'mysql-root-cred' "$trigger_verifier" &&
+   grep -q 'readOnlyRootFilesystem: true' "$trigger_verifier" &&
+   grep -q "trap 'rm -f \"\$cnf\"' EXIT INT TERM" "$trigger_verifier" &&
+   grep -q 'automountServiceAccountToken: false' "$trigger_verifier" &&
+   grep -q 'image: curlimages/curl@sha256:' "$trigger_verifier" &&
+   grep -q 'kind: NetworkPolicy' "$trigger_verifier" &&
+   grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$trigger_verifier" &&
+   ! grep -qE 'CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO|MYSQL_PWD' "$trigger_verifier" &&
+   ! grep -q ':latest' "$trigger_verifier"; then
+  ok "고정 verifier는 read-only 확인과 공개 관측 기록만 수행"
+else
+  ng "trigger verifier 경계가 깨졌다"
+fi
+
+# CI deploy 경로가 verifier manifest를 apply하지 않는다. apply하면 CI가 root secret을
+# mount하는 workload spec을 바꿀 수 있게 된다.
+if ! grep -vE '^[[:space:]]*(#|echo )' "$here/deploy-backoffice.sh" \
+     | grep -qE '(apply|create|render)[[:space:]].*provider-audit-trigger'; then
+  ok "CI deploy는 verifier workload spec을 만들거나 바꾸지 않는다"
+else
+  ng "CI deploy가 verifier workload를 건드린다"
+fi
+
 restore_dump="backoffice-20260828T010203Z.sql.gz"
 restore_out="$("$here/render-restore-rehearsal.sh" \
   "$root/k8s/restore-rehearsal-job.yaml" "$IMG" "$SHA" "$restore_dump")"
@@ -224,12 +251,12 @@ fi
 
 echo "== repository discovery backfill 스케줄 =="
 backfill_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-repository-discovery-backfill/ { print }' "$scheduler_cronjobs")"
-if printf '%s' "$backfill_doc" | grep -q 'schedule: "7 \* \* \* \*"' &&
-   printf '%s' "$backfill_doc" | grep -q 'concurrencyPolicy: Forbid' &&
-   printf '%s' "$backfill_doc" | grep -q 'repository-discovery/backfill' &&
-   printf '%s' "$backfill_doc" | grep -q 'automountServiceAccountToken: false' &&
-   printf '%s' "$backfill_doc" | grep -q 'readOnlyRootFilesystem: true' &&
-   ! printf '%s' "$backfill_doc" | grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET'; then
+if grep -q 'schedule: "7 \* \* \* \*"' <<<"$backfill_doc" &&
+   grep -q 'concurrencyPolicy: Forbid' <<<"$backfill_doc" &&
+   grep -q 'repository-discovery/backfill' <<<"$backfill_doc" &&
+   grep -q 'automountServiceAccountToken: false' <<<"$backfill_doc" &&
+   grep -q 'readOnlyRootFilesystem: true' <<<"$backfill_doc" &&
+   ! grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET' <<<"$backfill_doc"; then
   ok "full-org backfill은 hourly read-only trigger 하나로 직렬 실행"
 else
   ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
@@ -322,8 +349,15 @@ if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
    grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
-   ! grep -q 'verbs:.*create' "$data_rbac"; then
-  ok "CI migration·Vault image 최소권한"
+   grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$data_rbac" &&
+   grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
+   [ "$(grep -c 'verbs: \["get"\]' "$data_rbac")" -eq 2 ] &&
+   ! grep -q 'resources: \["jobs"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["pods"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["secrets"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["pods/log"\]' "$data_rbac" &&
+   ! grep -qE 'verbs:.*(create|patch|update|delete)' "$data_rbac"; then
+  ok "CI는 data ns workload를 만들거나 바꿀 수 없고 관측만 읽는다"
 else
   ng "CI deployer 최소권한 계약이 깨졌다"
 fi

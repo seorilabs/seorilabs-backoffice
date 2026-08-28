@@ -112,6 +112,77 @@ fail-closed한다. 계약은 `src/lib/control-plane/append-only-triggers.ts`이�
 같아야 한다. 보호 table에 계약 밖 trigger가 추가돼도 실패한다. 성공 로그의
 `appendOnlyTriggers=<n>`이 검증된 trigger 수다.
 
+MySQL은 대상 table의 `TRIGGER` 권한이 없는 principal에게 `information_schema.TRIGGERS`를 빈
+결과로 돌려준다. 그래서 app verifier는 관측 전에 `SHOW GRANTS FOR CURRENT_USER()`로 가시성을 먼저
+판정하고 권한 부족을 리소스 부재로 읽지 않는다. production migration principal
+`backoffice`@`%`에는 `TRIGGER` 권한이 없으므로 로그는 `appendOnlyTriggers=FORBIDDEN(...)`이 된다.
+app user에 `TRIGGER` 권한을 주지 않는다.
+
+가시성이 없다고 검증을 건너뛰지는 않는다. 검증은 고정 in-cluster verifier가 맡는다.
+
+`k8s/provider-audit-trigger-verifier.yaml`은 `data` namespace의 CronJob과 전용 ServiceAccount,
+결과 ConfigMap `backoffice-provider-audit-trigger-state`, NetworkPolicy를 정의한다.
+
+secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
+`automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
+
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 두 trigger의
+  이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
+  개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  파일로 emptyDir에 쓴다.
+- container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
+  허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
+  key별 literal assignment만 하므로 관측 값이 shell command로 실행되지 않는다.
+
+따라서 root secret을 보는 컨테이너에는 외부로 쓸 수단이 없고, 쓸 수단이 있는 컨테이너에는 root
+secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `seccompProfile: RuntimeDefault`를
+쓴다. egress는 NetworkPolicy로 MySQL 3306과 API server의 고정 Service IP 443 및 MicroK8S
+control-plane endpoint 16443만 허용한다. Calico가 Service DNAT 전후 어느 주소에서 정책을
+판정하더라도 같은 API server 외에는 열리지 않는다. DNS는 열지 않고 kubelet이 주입한
+`MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. publisher의 API 요청은 connect/max
+timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 RPI5가 ARC build를 함께
+처리할 때 생기는 Pending 시간을 포함하되 다음 5분 주기 전에는 끝나도록 제한한다. verifier는 DDL, `GRANT`,
+복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
+`observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
+
+`scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
+한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
+max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
+같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
+
+CI deployer에는 `data` namespace의 workload mutation 권한을 일절 주지 않는다. Job·Pod 생성은
+물론 CronJob `patch`/`update`도 금지한다. RBAC는 pod template의 field를 제한할 수 없어, CronJob을
+고칠 수 있으면 Pod template에 `mysql-root-cred` 같은 임의 Secret volume을 붙일 수 있고 그 자체가
+root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`vault-writer` CronJob과
+관측 ConfigMap에 대한 `get`뿐이다. `scripts/check-ci-deployer-permissions.sh`가 이 경계를 live로
+확인한다. deploy job이 `KUBECONFIG_B64`를 설치한 직후, 배포 전에 실행한다. checker는 먼저
+`kubectl auth whoami`로 identity가 정확히 `system:serviceaccount:platform:ci-deployer`인지 보고,
+`resourceNames` Role이므로 정확한 리소스 이름(`configmap/backoffice-provider-audit-trigger-state`,
+`cronjob/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한다.
+
+거부 쪽은 `can-i`만으로 증명할 수 없다. 이름 없는 질문은 다른 `resourceNames` 권한이 남아 있어도
+`no`를 돌려주기 때문이다. 그래서 현재 identity의 `data` namespace 전체 규칙을
+`SelfSubjectRulesReview`로 읽어 `secrets`+`get`/`list`/`watch`와
+`pods`/`jobs`/`cronjobs`/`deployments`+`create`/`patch`/`update`/`delete`/`deletecollection` 조합이
+하나라도 있으면 fail-closed한다. wildcard(`*`) group·resource·verb도 같은 조합으로 친다. 권한
+목록이 불완전(`status.incomplete=true`)하면 부재를 증명할 수 없으므로 실패한다. 이 review는
+read-only이며 지속 리소스를 만들지 않는다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
+잡는 보조 검증으로 함께 유지한다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
+클러스터 접근 불가와 identity 불일치는 skip이 아니라 실패다. PR CI에는 kubeconfig가 없으므로
+static 계약 테스트 `check-ci-deployer-permissions.test.sh`만 돈다.
+
+그래서 Vault 이미지 parity는 CI가 고치지 않고 관측만 한다. deploy 로그의
+`vault_image_parity=MATCH|DRIFT|ABSENT|UNREADABLE`이 그 결과다. `MATCH`와 `ABSENT`가 아니면
+배포를 막지 않고 trusted operator 조치 명령을 함께 남긴다. 실제 갱신은 operator가
+`kubectl apply -f <(scripts/render-manifest.sh k8s/vault-rag.yaml <image> <sha>)`로 수행한다.
+
+verifier workload도 trusted operator가 직접 apply하며 deploy script는 apply하지 않는다.
+
+계약이 바뀌면 operator가 verifier를 다시 apply해야 한다. 그전까지는 `contractDigest` 불일치로
+배포가 fail-closed한다. 복구가 필요하면 위 trusted operator 복구 Job을 사람이 실행한다.
+자동 실행하지 않는다.
+
 ### Provider execution signer 활성화
 
 `k8s/provider-execution-worker.yaml`은 signer와 worker를 모두 기본 `replicas: 0`으로 둔다.
