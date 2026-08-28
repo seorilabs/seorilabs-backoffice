@@ -244,7 +244,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     let registered;
     try {
       registered = await this.#transport({
-        path: "/auth/policy-grants",
+        path: "/internal/control-plane/provider-grants",
         body: {
           idempotencyKey: `provider-policy-grant:${command.executionId}:${command.generation}`,
           workerId: this.#workerId,
@@ -277,7 +277,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     let verified;
     try {
       verified = await this.#transport({
-        path: `/auth/policy-grants/${encodeURIComponent(built.grant.id)}/verify`,
+        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/verify`,
         body: {
           workerId: this.#workerId,
           expectedDigest: built.digest,
@@ -359,7 +359,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     const command = providerCommandEnvelopeSchema.parse(envelope);
     const built = buildAuthBrokerPolicyGrant(command, this.#subject);
     const response = await this.#transport({
-      path: `/auth/policy-grants/${encodeURIComponent(built.grant.id)}/observation`,
+      path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/observation`,
       body: {
         workerId: this.#workerId,
         expectedDigest: built.digest,

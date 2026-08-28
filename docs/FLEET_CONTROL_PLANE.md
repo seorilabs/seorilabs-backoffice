@@ -106,10 +106,10 @@ envelope에는 arbitrary executable, argv, env가 없으며 repo ID/source/confi
 들어 있다. 실제 secret 사용은 P2 Auth Broker가 logical credential lease를 발급한 뒤 trusted adapter에
 직접 주입한다. worker에는 credential export API와 Kubernetes Secret `get/list/watch` 권한이 없다.
 
-worker는 lease보다 먼저 `/auth/policy-grants`에 exact singleton P2 rule과 public command digest를 등록하고,
-`/auth/policy-grants/{id}/verify`에서 policy generation, binding hash, command digest를 다시 확인한다. 둘 중
+worker는 lease보다 먼저 `/internal/control-plane/provider-grants`에 exact singleton P2 rule과 public command digest를 등록하고,
+`/internal/control-plane/provider-grants/{id}/verify`에서 policy generation, binding hash, command digest를 다시 확인한다. 둘 중
 하나라도 없거나 404, schema mismatch, digest mismatch이면 lease를 요청하지 않는다. readback은 같은 grant의
-`/auth/policy-grants/{id}/observation`에서 exact generation과 binding에 결합된 strict observation만 소비한다.
+`/internal/control-plane/provider-grants/{id}/observation`에서 exact generation과 binding에 결합된 strict observation만 소비한다.
 현재 P2 릴리스에는 이 세 endpoint가 아직 없으므로 `route_not_found`는
 `AUTH_BROKER_POLICY_GRANT_UNAVAILABLE`로 fail-closed하며 운영 활성화 blocker다.
 

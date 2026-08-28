@@ -309,7 +309,7 @@ test("현재 P2에 policy grant endpoint가 없으면 lease를 요청하지 않�
     outcome: "FAILED",
     errorCode: "AUTH_BROKER_POLICY_GRANT_UNAVAILABLE",
   });
-  assert.deepEqual(paths, ["/auth/policy-grants"]);
+  assert.deepEqual(paths, ["/internal/control-plane/provider-grants"]);
 });
 
 test("mTLS scheduler attestation은 exact SPIFFE/run/repo/worker payload에 Ed25519 서명한다", () => {
