@@ -100,8 +100,49 @@ test("empty repository의 private/public 전환은 서로 다른 semantic reconc
   }, false, trigger);
   assert.notEqual(privateHashes.current, publicHashes.current);
   assert.equal(privateHashes.legacyV1, publicHashes.legacyV1);
+  assert.notEqual(privateHashes.legacyV2, privateHashes.legacyV1);
+  assert.notEqual(privateHashes.legacyV2, publicHashes.legacyV2);
   assert.notEqual(privateHashes.current, privateHashes.legacyV1);
   assert.equal(repositoryDiscoveryRequestHashMatches(privateHashes.current, privateHashes), true);
+  assert.equal(repositoryDiscoveryRequestHashMatches(privateHashes.legacyV2, privateHashes), true);
   assert.equal(repositoryDiscoveryRequestHashMatches(privateHashes.legacyV1, privateHashes), true);
   assert.equal(repositoryDiscoveryRequestHashMatches("0".repeat(64), privateHashes), false);
+});
+
+test("fork와 classification revision은 current hash에만 exact 결합한다", () => {
+  const base = {
+    event: "reconcile",
+    action: "classification-decision",
+    repository: {
+      id: 42,
+      full_name: "seorilabs/forked-app",
+      default_branch: "main",
+      archived: false,
+      private: true,
+      fork: false,
+    },
+    after: SHA,
+    deliveryId: "classification-delivery",
+    organization: "seorilabs",
+    classificationDecisionRevision: 1,
+  };
+  const trigger = repositoryDiscoveryTrigger({
+    event: base.event,
+    action: base.action,
+    defaultBranch: base.repository.default_branch,
+    after: base.after,
+  });
+  const first = repositoryDiscoveryRequestHashes(base, false, trigger);
+  const changedFork = repositoryDiscoveryRequestHashes({
+    ...base,
+    repository: { ...base.repository, fork: true },
+  }, false, trigger);
+  const changedRevision = repositoryDiscoveryRequestHashes({
+    ...base,
+    classificationDecisionRevision: 2,
+  }, false, trigger);
+  assert.notEqual(first.current, changedFork.current);
+  assert.notEqual(first.current, changedRevision.current);
+  assert.equal(first.legacyV2, changedFork.legacyV2);
+  assert.equal(first.legacyV2, changedRevision.legacyV2);
 });

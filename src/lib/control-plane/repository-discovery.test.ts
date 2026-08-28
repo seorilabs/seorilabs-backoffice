@@ -28,6 +28,7 @@ function snapshot(
     sourceRef: "refs/heads/main",
     defaultBranch: "main",
     private: true,
+    fork: false,
     archived: false,
     paths,
     ...overrides,
@@ -406,6 +407,28 @@ test("RN과 Godot 후보가 함께 있으면 추측하지 않고 MULTIPLE_CANDID
   assert.equal(result.candidates.length, 2);
 });
 
+test("분류 revision이 선택한 exact marker만 PRODUCT_APP 후보로 사용한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "mixed",
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+    "android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.mixed" } }',
+    "project.godot": "[application]\n",
+  };
+  const result = await discoverRepository(
+    snapshot([...Object.keys(files), "pnpm-lock.yaml"]),
+    sourceReader(files),
+    { revision: 1, classification: "PRODUCT_APP", candidateMarkerPath: "package.json" },
+  );
+  assert.equal(result.status, "ACTIVE");
+  if (result.status === "ACTIVE") {
+    assert.equal(result.workflowCaller.profile, "react-native");
+    assert.equal(result.classification, "PRODUCT_APP");
+  }
+});
+
 test("platform SDK producer는 앱 profile로 위장하지 않고 명시적으로 제외한다", async () => {
   const files = {
     "package.json": JSON.stringify({ name: "seorilabs-platform", packageManager: "pnpm@11.3.0" }),
@@ -514,6 +537,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
             name: "sample-app",
             default_branch: "main",
             private: true,
+            fork: false,
             archived: false,
           } };
         },
@@ -560,6 +584,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       name: "sample-app",
       default_branch: "main",
       private: true,
+      fork: false,
       archived: false,
     } }) as never, {
       repoId: REPO_ID,
@@ -579,7 +604,13 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       fullName: "seorilabs/sample-app",
       expectedSourceSha: SHA,
     });
-    assert.deepEqual(result, { status: "STALE", reasonCode: "SOURCE_DRIFT", actualHeadSha: newer });
+    assert.deepEqual(result, {
+      status: "STALE",
+      reasonCode: "SOURCE_DRIFT",
+      actualHeadSha: newer,
+      private: true,
+      fork: false,
+    });
   });
 
   await t.test("truncated tree", async () => {
@@ -594,6 +625,49 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
     assert.equal(result.reasonCode, "TREE_TRUNCATED");
   });
 
+  await t.test("fork는 자동 PRODUCT_APP 탐지를 시작하지 않는다", async () => {
+    const before = calls.length;
+    const result = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/forked-app",
+      name: "forked-app",
+      default_branch: "main",
+      private: true,
+      fork: true,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/forked-app",
+    });
+    assert.deepEqual(result, { status: "NEEDS_INPUT", reasonCode: "FORK_REPOSITORY" });
+    assert.equal(calls.slice(before).some((call) => call.kind === "commit"), false);
+  });
+
+  await t.test("사람이 확인한 fork EXCLUDED 결정은 exact identity readback 뒤 terminal 처리한다", async () => {
+    const result = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/forked-app",
+      name: "forked-app",
+      default_branch: "main",
+      private: true,
+      fork: true,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/forked-app",
+      classificationDecision: {
+        revision: 1,
+        classification: "EXCLUDED",
+        candidateMarkerPath: null,
+      },
+    });
+    assert.deepEqual(result, {
+      status: "CLASSIFIED",
+      classification: "EXCLUDED",
+      reasonCode: "NON_PRODUCT_REPOSITORY",
+    });
+  });
+
   await t.test("중앙 정책의 공개 제품은 source read만 허용하고 미등록 public은 거부", async () => {
     const approved = await readExactRepositoryTree(fake({ repo: {
       id: REPO_ID,
@@ -601,6 +675,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       name: "periodic-table-app",
       default_branch: "main",
       private: false,
+      fork: false,
       archived: false,
     } }) as never, {
       repoId: REPO_ID,
@@ -616,6 +691,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       name: "unapproved-public-app",
       default_branch: "main",
       private: false,
+      fork: false,
       archived: false,
     } }) as never, {
       repoId: REPO_ID,

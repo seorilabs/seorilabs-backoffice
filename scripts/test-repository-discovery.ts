@@ -5,7 +5,10 @@ import type { Octokit } from "@/lib/github/app";
 import {
   claimRepositoryDiscoveryRun,
   processRepositoryDiscoveryClaim,
+  recoverRepositoryDiscoveryRuns,
 } from "@/lib/control-plane/repository-discovery-service";
+import { recordRepositoryClassificationDecision } from "@/lib/control-plane/repository-classification-decision";
+import { ControlPlaneError } from "@/lib/control-plane/service";
 import { REPOSITORY_REGISTRATION_SLO_MS } from "@/lib/control-plane/repository-discovery";
 import { registerRepositoryWebhook } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
@@ -16,6 +19,7 @@ const RN_REPO_ID = 8_900_000_001;
 const DRIFT_REPO_ID = 8_900_000_002;
 const PLATFORM_REPO_ID = 8_900_000_003;
 const ADOPTION_REPO_ID = 8_900_000_004;
+const CLASSIFICATION_REPO_ID = 8_900_000_005;
 const SOURCE_SHA = "a".repeat(40);
 const NEW_SHA = "b".repeat(40);
 const TREE_SHA = "c".repeat(40);
@@ -40,6 +44,7 @@ function fakeOctokit(input: FakeRepository): Octokit {
             name,
             default_branch: "main",
             private: true,
+            fork: false,
             archived: false,
           } };
         },
@@ -77,7 +82,13 @@ function fakeOctokit(input: FakeRepository): Octokit {
 }
 
 async function clean(): Promise<void> {
-  const repoIds = [RN_REPO_ID, DRIFT_REPO_ID, PLATFORM_REPO_ID, ADOPTION_REPO_ID].map(BigInt);
+  const repoIds = [
+    RN_REPO_ID,
+    DRIFT_REPO_ID,
+    PLATFORM_REPO_ID,
+    ADOPTION_REPO_ID,
+    CLASSIFICATION_REPO_ID,
+  ].map(BigInt);
   await prisma.repositoryRegistration.deleteMany({ where: { repoId: { in: repoIds } } });
   await prisma.app.deleteMany({ where: { repoId: { in: repoIds } } });
   await prisma.app.deleteMany({ where: { repoFullName: "seorilabs/discovery-adoption" } });
@@ -428,6 +439,182 @@ async function main(): Promise<void> {
     });
     assert.equal(adoptionApp.repoId, null);
     assert.equal(adoptionApp.playPackage, "com.seorilabs.wrong");
+
+    const classificationFiles = { "README.md": "internal repository\n" };
+    await registerRepositoryWebhook({
+      event: "repository",
+      action: "created",
+      repository: {
+        id: CLASSIFICATION_REPO_ID,
+        full_name: "seorilabs/discovery-classification",
+        name: "discovery-classification",
+        default_branch: "main",
+        private: true,
+        fork: false,
+      },
+      deliveryId: "discovery-integration-classification",
+      organization: "seorilabs",
+    }, dependencies);
+    const classificationClaim = await claimRepositoryDiscoveryRun("integration-worker-classification", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.ok(classificationClaim);
+    const unresolved = await processRepositoryDiscoveryClaim(classificationClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.equal(unresolved.status, "NEEDS_INPUT");
+    assert.equal(unresolved.reasonCode, "NO_CANDIDATE");
+    const unresolvedRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    });
+    const decisionBase = {
+      schemaVersion: 1 as const,
+      repoId: BigInt(CLASSIFICATION_REPO_ID),
+      expectedGeneration: unresolvedRegistration.reconcileGeneration ?? 0,
+      expectedDecisionRevision: unresolvedRegistration.classificationDecisionVersion,
+      candidateMarkerPath: null,
+      justification: "REPOSITORY_PURPOSE_CONFIRMED" as const,
+    };
+    const concurrent = await Promise.allSettled([
+      recordRepositoryClassificationDecision({
+        request: { ...decisionBase, classification: "INFRA_REPO" },
+        actor: "integration:human",
+        idempotencyKey: "classification-cas-infra",
+      }),
+      recordRepositoryClassificationDecision({
+        request: { ...decisionBase, classification: "EXCLUDED" },
+        actor: "integration:ai",
+        idempotencyKey: "classification-cas-excluded",
+      }),
+    ]);
+    assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(concurrent.filter((result) => (
+      result.status === "rejected"
+      && result.reason instanceof ControlPlaneError
+      && result.reason.code === "REPOSITORY_CLASSIFICATION_CONFLICT"
+    )).length, 1);
+    const winning = concurrent.find((result) => result.status === "fulfilled");
+    assert.ok(winning?.status === "fulfilled");
+    const winningDecision = winning.value;
+    const replay = await recordRepositoryClassificationDecision({
+      request: {
+        ...decisionBase,
+        classification: winningDecision.decision.classification,
+      },
+      actor: winningDecision.decision.createdBy,
+      idempotencyKey: winningDecision.decision.classification === "INFRA_REPO"
+        ? "classification-cas-infra"
+        : "classification-cas-excluded",
+    });
+    assert.equal(replay.duplicate, true);
+    assert.equal(await prisma.repositoryClassificationDecision.count({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    }), 1, "동시 분류 CAS는 append-only decision을 하나만 남겨야 한다");
+    const decisionGeneration = (await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    })).reconcileGeneration;
+    const decisionRunCount = await prisma.repositoryDiscoveryRun.count({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    });
+    await assert.rejects(registerRepositoryWebhook({
+      event: "reconcile",
+      action: "source-drift",
+      repository: {
+        id: CLASSIFICATION_REPO_ID,
+        full_name: "seorilabs/discovery-classification",
+        name: "discovery-classification",
+        default_branch: "main",
+        archived: false,
+        private: true,
+        fork: false,
+      },
+      after: NEW_SHA,
+      deliveryId: "classification-stale-zero-revision",
+      organization: "seorilabs",
+      classificationDecisionRevision: 0,
+    }, dependencies), /REPOSITORY_CLASSIFICATION_REVISION_STALE/);
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    })).reconcileGeneration, decisionGeneration, "분류 전 worker가 새 decision generation을 덮으면 안 된다");
+    assert.equal(await prisma.repositoryDiscoveryRun.count({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    }), decisionRunCount, "stale revision enqueue는 새 run을 만들면 안 된다");
+
+    const interruptedClaim = await claimRepositoryDiscoveryRun("integration-worker-interrupted", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.ok(interruptedClaim);
+    await prisma.repositoryDiscoveryRun.update({
+      where: { id: interruptedClaim.id },
+      data: { leaseExpiresAt: new Date(Date.now() - 1_000) },
+    });
+    const recovered = await recoverRepositoryDiscoveryRuns({
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.equal(recovered.requeued, 1);
+    const lateCompletion = await processRepositoryDiscoveryClaim(interruptedClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.equal(lateCompletion.status, "DISCARDED", "만료된 worker의 늦은 완료는 거부해야 한다");
+    const recoveredClaim = await claimRepositoryDiscoveryRun("integration-worker-recovered", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.ok(recoveredClaim);
+    const resolved = await processRepositoryDiscoveryClaim(recoveredClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: CLASSIFICATION_REPO_ID,
+        fullName: "seorilabs/discovery-classification",
+        headSha: SOURCE_SHA,
+        files: classificationFiles,
+      }),
+    });
+    assert.equal(resolved.status, "EXCLUDED");
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(CLASSIFICATION_REPO_ID) },
+    })).classification, winningDecision.decision.classification);
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        action: "control-plane.repository-classification.decided",
+        entityId: winningDecision.decision.id,
+      },
+    }), 1);
 
     console.log("repository discovery integration 계약 통과");
   } finally {

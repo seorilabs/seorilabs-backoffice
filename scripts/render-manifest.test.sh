@@ -275,6 +275,22 @@ else
   ng "scheduler catch-up 실행 경계가 깨졌다"
 fi
 
+catchup_enqueue_line="$(grep -n 'call_required repository_discovery_backfill' "$catchup_job" | head -1 | cut -d: -f1)"
+catchup_drain_line="$(grep -n 'call_required repository_discovery_drain' "$catchup_job" | head -1 | cut -d: -f1)"
+catchup_draft_line="$(grep -n 'call_required desired_state_backfill' "$catchup_job" | head -1 | cut -d: -f1)"
+if grep -q 'activeDeadlineSeconds: 3300' "$catchup_job" &&
+   grep -q 'call_required()' "$catchup_job" &&
+   grep -q '/api/admin/repository-discovery/drain' "$catchup_job" &&
+   [ -n "$catchup_enqueue_line" ] &&
+   [ -n "$catchup_drain_line" ] &&
+   [ -n "$catchup_draft_line" ] &&
+   [ "$catchup_enqueue_line" -lt "$catchup_drain_line" ] &&
+   [ "$catchup_drain_line" -lt "$catchup_draft_line" ]; then
+  ok "catch-up은 discovery enqueue → terminal readback drain → DRAFT를 fail-closed로 실행"
+else
+  ng "catch-up discovery/readback/DRAFT 순서 또는 실패 경계가 깨졌다"
+fi
+
 echo "== repository discovery backfill 스케줄 =="
 backfill_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-repository-discovery-backfill/ { print }' "$scheduler_cronjobs")"
 if grep -q 'schedule: "7 \* \* \* \*"' <<<"$backfill_doc" &&

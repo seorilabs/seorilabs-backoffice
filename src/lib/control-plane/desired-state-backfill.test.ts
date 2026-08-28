@@ -9,6 +9,7 @@ import {
 } from "@/lib/control-plane/desired-state-backfill";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { PROVIDER_ADAPTER_IDS } from "@/lib/control-plane/provider-adapters";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
 const SHA = "a".repeat(40);
 
@@ -26,7 +27,7 @@ function candidate(overrides: Partial<DesiredStateCandidate> = {}): DesiredState
       archived: false,
       managementKind: "APP",
       classification: "PRODUCT_APP",
-      discoveryContractVersion: "repository-discovery/v2",
+      discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
       lastDefaultPushSha: SHA,
       lastReconciledSha: SHA,
       lastDiscoveryReason: null,

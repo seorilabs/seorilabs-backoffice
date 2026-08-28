@@ -14,7 +14,7 @@ rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
 audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
 audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
 verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
-catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-2460}"
+catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-3360}"
 
 if [ -z "$image" ]; then
   echo "오류: BACKOFFICE_IMAGE가 필요하다" >&2
@@ -35,8 +35,8 @@ for value in "$migration_timeout" "$catchup_timeout" "$verify_timeout"; do
     exit 2
   fi
 done
-if [ "$catchup_timeout" -lt 2400 ]; then
-  echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 2400이어야 한다" >&2
+if [ "$catchup_timeout" -lt 3300 ]; then
+  echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 3300이어야 한다" >&2
   exit 2
 fi
 

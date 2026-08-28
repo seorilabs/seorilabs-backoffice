@@ -988,7 +988,7 @@ model ConfigRevision {
   // 수동/legacy revision은 null이며 source observation 자체를 desired state로 복제하지 않는다.
   sourceObservationId      String?
   sourceObservation        DiscoveryObservation?     @relation(fields: [sourceObservationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_config_revision_source_observation_fkey")
-  backfillContractVersion  String?                    @db.VarChar(64)
+  backfillContractVersion  String?                   @db.VarChar(64)
   activeSlot               String?                   @unique
   activationIdempotencyKey String?                   @unique
   activatedSnapshot        Json?
@@ -1752,25 +1752,28 @@ enum ReauthGate {
 
 // repository webhook의 등록 원장. stack 후보가 하나로 확정되기 전에는 App을 추측 생성하지 않는다.
 model RepositoryRegistration {
-  repoId              BigInt                       @id
-  repoFullName        String                       @unique
-  defaultBranch       String?
-  archived            Boolean                      @default(false)
-  status              RepositoryRegistrationStatus @default(REGISTERED)
-  managementKind      RepositoryManagementKind?
+  repoId                        BigInt                             @id
+  repoFullName                  String                             @unique
+  defaultBranch                 String?
+  archived                      Boolean                            @default(false)
+  fork                          Boolean?
+  status                        RepositoryRegistrationStatus       @default(REGISTERED)
+  managementKind                RepositoryManagementKind?
   // managementKind의 legacy APP 값을 즉시 재해석하지 않도록 둔 additive v2 분류 정본.
   // exact provider identity와 source discovery가 끝난 terminal run만 값을 쓴다.
-  classification      RepositoryClassification?
-  discoveryContractVersion String?                    @db.VarChar(64)
-  discoveryCandidates Json?
-  lastDefaultPushSha  String?                      @db.Char(40)
-  reconcileGeneration Int?
-  lastReconciledSha   String?                      @db.Char(40)
-  lastDiscoveryReason String?                      @db.VarChar(64)
-  lastDeliveryId      String?
-  discoveryRuns       RepositoryDiscoveryRun[]
-  createdAt           DateTime                     @default(now()) @db.DateTime(3)
-  updatedAt           DateTime                     @updatedAt
+  classification                RepositoryClassification?
+  discoveryContractVersion      String?                            @db.VarChar(64)
+  classificationDecisionVersion Int                                @default(0)
+  discoveryCandidates           Json?
+  lastDefaultPushSha            String?                            @db.Char(40)
+  reconcileGeneration           Int?
+  lastReconciledSha             String?                            @db.Char(40)
+  lastDiscoveryReason           String?                            @db.VarChar(64)
+  lastDeliveryId                String?
+  discoveryRuns                 RepositoryDiscoveryRun[]
+  classificationDecisions       RepositoryClassificationDecision[]
+  createdAt                     DateTime                           @default(now()) @db.DateTime(3)
+  updatedAt                     DateTime                           @updatedAt
 
   @@index([status, updatedAt])
   @@map("repository_registration")
@@ -1794,6 +1797,26 @@ enum RepositoryClassification {
   INFRA_REPO
   PLATFORM_PRODUCER
   EXCLUDED
+}
+
+// NEEDS_INPUT 분류를 사람과 승인된 AI가 같은 계약으로 해결하는 append-only revision.
+// 등록 row의 version과 함께 잠가 optimistic concurrency를 강제한다.
+model RepositoryClassificationDecision {
+  id                  String                   @id @default(cuid())
+  repoId              BigInt
+  registration        RepositoryRegistration   @relation(fields: [repoId], references: [repoId], onDelete: Cascade, onUpdate: Restrict)
+  revision            Int
+  classification      RepositoryClassification
+  candidateMarkerPath String?                  @db.VarChar(512)
+  justification       String                   @db.VarChar(64)
+  requestHash         String                   @db.Char(64)
+  idempotencyKey      String                   @unique
+  createdBy           String                   @db.VarChar(128)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+
+  @@unique([repoId, revision])
+  @@index([repoId, createdAt])
+  @@map("repository_classification_decision")
 }
 
 // webhook 응답과 GitHub source read를 분리하는 durable 재조정 원장이다.

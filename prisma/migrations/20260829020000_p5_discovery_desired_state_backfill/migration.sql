@@ -2,7 +2,9 @@
 -- legacy managementKind enum은 건드리지 않고 새 nullable 분류 정본을 병행한다.
 ALTER TABLE `repository_registration`
     ADD COLUMN `classification` ENUM('PRODUCT_APP', 'INFRA_REPO', 'PLATFORM_PRODUCER', 'EXCLUDED') NULL,
-    ADD COLUMN `discoveryContractVersion` VARCHAR(64) NULL;
+    ADD COLUMN `discoveryContractVersion` VARCHAR(64) NULL,
+    ADD COLUMN `fork` BOOLEAN NULL,
+    ADD COLUMN `classificationDecisionVersion` INTEGER NOT NULL DEFAULT 0;
 
 ALTER TABLE `repository_discovery_run`
     ADD COLUMN `classification` ENUM('PRODUCT_APP', 'INFRA_REPO', 'PLATFORM_PRODUCER', 'EXCLUDED') NULL,
@@ -35,3 +37,26 @@ CREATE TABLE `control_plane_desired_state_backfill_run` (
     INDEX `control_plane_desired_state_backfill_run_status_startedAt_idx`(`status`, `startedAt`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE `repository_classification_decision` (
+    `id` VARCHAR(191) NOT NULL,
+    `repoId` BIGINT NOT NULL,
+    `revision` INTEGER NOT NULL,
+    `classification` ENUM('PRODUCT_APP', 'INFRA_REPO', 'PLATFORM_PRODUCER', 'EXCLUDED') NOT NULL,
+    `candidateMarkerPath` VARCHAR(512) NULL,
+    `justification` VARCHAR(64) NOT NULL,
+    `requestHash` CHAR(64) NOT NULL,
+    `idempotencyKey` VARCHAR(191) NOT NULL,
+    `createdBy` VARCHAR(128) NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    UNIQUE INDEX `repository_classification_decision_idempotencyKey_key`(`idempotencyKey`),
+    UNIQUE INDEX `repository_classification_decision_repoId_revision_key`(`repoId`, `revision`),
+    INDEX `repository_classification_decision_repoId_createdAt_idx`(`repoId`, `createdAt`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+ALTER TABLE `repository_classification_decision`
+    ADD CONSTRAINT `repository_classification_decision_repoId_fkey`
+    FOREIGN KEY (`repoId`) REFERENCES `repository_registration`(`repoId`)
+    ON DELETE CASCADE ON UPDATE RESTRICT;

@@ -4,6 +4,12 @@ export type RepositoryClassification =
   | "PLATFORM_PRODUCER"
   | "EXCLUDED";
 
+export interface RepositoryClassificationDirective {
+  revision: number;
+  classification: RepositoryClassification;
+  candidateMarkerPath: string | null;
+}
+
 export interface RepositoryClassificationPolicy {
   classification: Exclude<RepositoryClassification, "PRODUCT_APP"> | "PRODUCT_APP_CANDIDATE";
   reasonCode: "INFRASTRUCTURE_REPOSITORY" | "NON_PRODUCT_REPOSITORY" | "PLATFORM_SDK_PRODUCER" | null;

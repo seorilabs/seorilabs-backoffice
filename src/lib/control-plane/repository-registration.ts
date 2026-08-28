@@ -18,6 +18,7 @@ export interface RepositoryWebhookInput {
   default_branch?: string | null;
   archived?: boolean;
   private?: boolean;
+  fork?: boolean;
 }
 
 export function registrationStatus(input: {
@@ -115,13 +116,14 @@ export type RegisterRepositoryWebhookInput = {
   after?: string;
   deliveryId: string;
   organization: string;
+  classificationDecisionRevision?: number;
 };
 
 export function repositoryDiscoveryRequestHashes(
   input: RegisterRepositoryWebhookInput,
   archived: boolean,
   trigger: ReturnType<typeof repositoryDiscoveryTrigger>,
-): { current: string; legacyV1: string } {
+): { current: string; legacyV2: string; legacyV1: string } {
   const common = {
     event: input.event,
     action: input.action ?? null,
@@ -136,9 +138,16 @@ export function repositoryDiscoveryRequestHashes(
     current: jsonDigest({
       ...common,
       private: input.repository.private ?? null,
+      fork: input.repository.fork ?? null,
+      classificationDecisionRevision: input.classificationDecisionRevision ?? null,
+    } as JsonValue),
+    // v2는 private provider fact를 결합했지만 fork와 분류 revision은 없었다.
+    legacyV2: jsonDigest({
+      ...common,
+      private: input.repository.private ?? null,
     } as JsonValue),
     // 2026-08-28 이전 persisted delivery의 redelivery만 받아들이는 bounded
-    // compatibility다. 새 row에는 항상 private을 포함한 current hash를 저장한다.
+    // compatibility다. 새 row에는 private/fork와 선택된 분류 revision을 포함한다.
     legacyV1: jsonDigest(common as JsonValue),
   };
 }
@@ -147,7 +156,7 @@ export function repositoryDiscoveryRequestHashMatches(
   stored: string,
   hashes: ReturnType<typeof repositoryDiscoveryRequestHashes>,
 ): boolean {
-  return stored === hashes.current || stored === hashes.legacyV1;
+  return stored === hashes.current || stored === hashes.legacyV2 || stored === hashes.legacyV1;
 }
 
 type RegisterRepositoryWebhookResult = {
@@ -189,6 +198,7 @@ export async function invalidateRepositoryDiscoveryInTransaction(
       repoFullName: repo.full_name,
       defaultBranch: repo.default_branch ?? null,
       archived: false,
+      fork: null,
       status: "REGISTERED",
       classification: null,
       discoveryContractVersion: null,
@@ -199,6 +209,7 @@ export async function invalidateRepositoryDiscoveryInTransaction(
       status: "REGISTERED",
       classification: null,
       discoveryContractVersion: null,
+      fork: null,
     },
   });
   await tx.$executeRaw`
@@ -272,6 +283,7 @@ export async function registerRepositoryWebhookInTransaction(
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? null,
         archived,
+        fork: repo.fork ?? null,
         status: archived ? "ARCHIVED" : "REGISTERED",
         managementKind: "UNCLASSIFIED",
         reconcileGeneration: 0,
@@ -286,14 +298,26 @@ export async function registerRepositoryWebhookInTransaction(
         // tag/non-default push가 NEEDS_INPUT 또는 EXCLUDED 판정을 지우지 않는다.
         // relevant generation은 아래에서만 REGISTERED로 전환한다.
         ...(trigger.sourceSha ? { lastDefaultPushSha: trigger.sourceSha } : {}),
+        ...(Object.prototype.hasOwnProperty.call(repo, "fork") ? { fork: repo.fork ?? null } : {}),
         lastDeliveryId: input.deliveryId,
       },
     });
     await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
     const registration = await tx.repositoryRegistration.findUniqueOrThrow({
       where: { repoId },
-      select: { archived: true, reconcileGeneration: true },
+      select: {
+        archived: true,
+        reconcileGeneration: true,
+        classificationDecisionVersion: true,
+      },
     });
+
+    if (
+      input.classificationDecisionRevision !== undefined
+      && input.classificationDecisionRevision !== registration.classificationDecisionVersion
+    ) {
+      throw new Error("REPOSITORY_CLASSIFICATION_REVISION_STALE");
+    }
 
     if (archived) {
       const generation = repositoryGenerationAfterArchive(registration);

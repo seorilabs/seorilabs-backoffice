@@ -1,5 +1,6 @@
 # 웹과 worker가 exact digest로 전환되고 정기 CronJob desired state를 확인한 뒤,
-# 여섯 작업을 한 번씩 직렬 실행한다. 정기 실행과 겹치더라도 endpoint의 durable
+# 작업을 직렬 실행한다. repository discovery는 enqueue, provider readback drain,
+# desired-state DRAFT 순서를 fail-closed로 고정한다. 정기 실행과 겹치더라도 endpoint의 durable
 # idempotency/CAS가 한 번만 반영하며, 응답 body는 로그에 남기지 않는다.
 apiVersion: batch/v1
 kind: Job
@@ -12,7 +13,7 @@ metadata:
     seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 2400
+  activeDeadlineSeconds: 3300
   ttlSecondsAfterFinished: 604800
   template:
     metadata:
@@ -55,10 +56,32 @@ spec:
                   failed=1
                 fi
               }
+              call_required() {
+                label="$1"
+                shift
+                status=""
+                if status="$(printf 'header = "x-admin-token: %s"\n' "$token" | \
+                  curl --config - -sS -o /dev/null -w '%{http_code}' "$@")"; then
+                  case "$status" in
+                    2??) echo "$label=ok" ;;
+                    *)
+                      echo "$label=failed_http_$status" >&2
+                      return 1
+                      ;;
+                  esac
+                else
+                  echo "$label=failed_transport" >&2
+                  return 1
+                fi
+              }
               call reconcile --max-time 840 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/reconcile
-              call repository_discovery_backfill --max-time 840 -XPOST \
+              call_required repository_discovery_backfill --max-time 600 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/backfill
+              call_required repository_discovery_drain --max-time 840 -XPOST \
+                http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/drain
+              call_required desired_state_backfill --max-time 600 -XPOST \
+                http://backoffice.platform.svc.cluster.local/api/admin/desired-state/backfill
               call xcode_cloud_sync --max-time 300 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
               call registry_seed --max-time 300 -XPOST \

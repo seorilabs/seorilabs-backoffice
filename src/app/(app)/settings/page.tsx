@@ -10,11 +10,13 @@ import {
   visibleReleaseWhere,
 } from "@/lib/domain/app-visibility";
 import { getDesiredStateBackfillSummary } from "@/lib/control-plane/desired-state-backfill";
+import { getRepositoryClassificationQueue } from "@/lib/control-plane/repository-classification-decision";
+import { RepositoryClassificationQueue } from "@/components/RepositoryClassificationQueue";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary] =
+  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue] =
     await Promise.all([
       prisma.app.count({ where: visibleAppWhere }),
       prisma.issueMirror.count({ where: visibleIssueWhere }),
@@ -23,6 +25,7 @@ export default async function SettingsPage() {
       prisma.webhookDelivery.findFirst({ orderBy: { receivedAt: "desc" } }),
       prisma.user.findMany({ where: { allowlisted: true }, select: { login: true } }),
       getDesiredStateBackfillSummary(),
+      getRepositoryClassificationQueue(),
     ]);
 
   return (
@@ -59,6 +62,13 @@ export default async function SettingsPage() {
           </div>
           <p className="mt-3 text-xs text-neutral-500">
             이 자동화는 exact-SHA discovery에서 확인된 market만 DRAFT로 만들며 활성화, provider 변경, 법적 선언, 소유권·결제·심사·공개 승인은 수행하지 않습니다.
+          </p>
+        </Card>
+
+        <Card title={`Repository 분류 입력 ${classificationQueue.length}건`}>
+          <RepositoryClassificationQueue items={classificationQueue} />
+          <p className="mt-3 text-xs text-neutral-500">
+            저장 시 source를 추측하지 않고 최신 provider identity와 exact HEAD를 다시 읽습니다. fork는 제품 앱으로 승격할 수 없습니다.
           </p>
         </Card>
 

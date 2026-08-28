@@ -14,10 +14,16 @@ import {
 } from "@/lib/control-plane/repository-discovery";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { registerRepositoryWebhook } from "@/lib/control-plane/repository-registration";
-import { recordDiscoveryObservationInTransaction } from "@/lib/control-plane/service";
+import {
+  ControlPlaneError,
+  recordDiscoveryObservationInTransaction,
+} from "@/lib/control-plane/service";
 import { readExactSourceFile } from "@/lib/github/source-observation";
 import { prisma } from "@/lib/prisma";
-import type { RepositoryClassification } from "@/lib/control-plane/repository-classification";
+import type {
+  RepositoryClassification,
+  RepositoryClassificationDirective,
+} from "@/lib/control-plane/repository-classification";
 
 export type RepositoryDiscoveryClaim = {
   id: string;
@@ -33,7 +39,9 @@ export type RepositoryDiscoveryClaim = {
     repoFullName: string;
     defaultBranch: string | null;
     archived: boolean;
+    fork: boolean | null;
     reconcileGeneration: number | null;
+    classificationDecision: RepositoryClassificationDirective | null;
   };
 };
 
@@ -567,8 +575,18 @@ export async function claimRepositoryDiscoveryRun(
         leaseExpiresAt,
         startedAt: now,
       },
-      include: { registration: true },
+      include: {
+        registration: {
+          include: {
+            classificationDecisions: {
+              orderBy: { revision: "desc" },
+              take: 1,
+            },
+          },
+        },
+      },
     });
+    const decision = updated.registration.classificationDecisions[0] ?? null;
     return {
       id: updated.id,
       repoId: updated.repoId,
@@ -583,7 +601,13 @@ export async function claimRepositoryDiscoveryRun(
         repoFullName: updated.registration.repoFullName,
         defaultBranch: updated.registration.defaultBranch,
         archived: updated.registration.archived,
+        fork: updated.registration.fork,
         reconcileGeneration: updated.registration.reconcileGeneration,
+        classificationDecision: decision ? {
+          revision: decision.revision,
+          classification: decision.classification,
+          candidateMarkerPath: decision.candidateMarkerPath,
+        } : null,
       },
     };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -649,22 +673,36 @@ async function enqueueCurrentHead(
   claim: RepositoryDiscoveryClaim,
   sourceSha: string,
   dependencies: RepositoryDiscoveryServiceDependencies,
+  providerFacts: { private: boolean; fork: boolean },
 ): Promise<void> {
-  await registerRepositoryWebhook({
-    event: "reconcile",
-    action: "source-drift",
-    repository: {
-      id: Number(claim.repoId),
-      full_name: claim.registration.repoFullName,
-      name: claim.registration.repoFullName.split("/").at(-1),
-      default_branch: claim.registration.defaultBranch ?? "main",
-      archived: false,
-      private: true,
-    },
-    after: sourceSha,
-    deliveryId: `reconcile:${claim.repoId.toString()}:${claim.generation}:${sourceSha}`,
-    organization: claim.registration.repoFullName.split("/")[0],
-  }, { client: dependencies.client, now: dependencies.now });
+  try {
+    await registerRepositoryWebhook({
+      event: "reconcile",
+      action: "source-drift",
+      repository: {
+        id: Number(claim.repoId),
+        full_name: claim.registration.repoFullName,
+        name: claim.registration.repoFullName.split("/").at(-1),
+        default_branch: claim.registration.defaultBranch ?? "main",
+        archived: false,
+        private: providerFacts.private,
+        fork: providerFacts.fork,
+      },
+      after: sourceSha,
+      deliveryId: `reconcile:${claim.repoId.toString()}:${claim.generation}:${sourceSha}`,
+      organization: claim.registration.repoFullName.split("/")[0],
+      // decision이 없었던 claim도 revision 0을 관측한 것이다. STALE 완료와
+      // enqueue 사이에 사람이 분류하면 예전 worker가 새 decision generation을
+      // 덮지 못하게 registration CAS에 항상 결합한다.
+      classificationDecisionRevision: claim.registration.classificationDecision?.revision ?? 0,
+    }, { client: dependencies.client, now: dependencies.now });
+  } catch (error) {
+    if (
+      error instanceof Error
+      && error.message === "REPOSITORY_CLASSIFICATION_REVISION_STALE"
+    ) return;
+    throw error;
+  }
 }
 
 export async function processRepositoryDiscoveryClaim(
@@ -687,6 +725,7 @@ export async function processRepositoryDiscoveryClaim(
     repoId: Number(claim.repoId),
     fullName: claim.registration.repoFullName,
     expectedSourceSha: claim.sourceSha,
+    classificationDecision: claim.registration.classificationDecision,
   });
   if (tree.status === "RETRY") {
     const status = await retryClaim(claim, dependencies);
@@ -699,8 +738,13 @@ export async function processRepositoryDiscoveryClaim(
       status: "STALE",
       reasonCode: "SOURCE_DRIFT",
     }, dependencies);
-    if (completed && tree.actualHeadSha) {
-      await enqueueCurrentHead(claim, tree.actualHeadSha, dependencies);
+    if (completed) {
+      await enqueueCurrentHead(
+        claim,
+        tree.actualHeadSha,
+        dependencies,
+        { private: tree.private, fork: tree.fork },
+      );
     }
     return { status: completed ? "STALE" : "DISCARDED", reasonCode: "SOURCE_DRIFT" };
   }
@@ -712,6 +756,17 @@ export async function processRepositoryDiscoveryClaim(
       reasonCode: tree.reasonCode,
     }, dependencies);
     return { status: completed ? "NEEDS_INPUT" : "DISCARDED", reasonCode: tree.reasonCode };
+  }
+  if (tree.status === "CLASSIFIED") {
+    const completed = await finishWithoutObservation({
+      claim,
+      sourceSha: claim.sourceSha,
+      status: "EXCLUDED",
+      reasonCode: tree.reasonCode,
+      managementKind: "UNCLASSIFIED",
+      classification: tree.classification,
+    }, dependencies);
+    return { status: completed ? "EXCLUDED" : "DISCARDED", reasonCode: tree.reasonCode };
   }
 
   const snapshot = tree.snapshot;
@@ -750,7 +805,7 @@ export async function processRepositoryDiscoveryClaim(
         allowedPaths: [path],
         ...(maxBytes === undefined ? {} : { maxBytes }),
       });
-    });
+    }, claim.registration.classificationDecision);
   } catch {
     if (claimLost) return { status: "DISCARDED", reasonCode: "SOURCE_DRIFT" };
     const status = await retryClaim(claim, dependencies);
@@ -764,6 +819,7 @@ export async function processRepositoryDiscoveryClaim(
   const head = await readCurrentRepositoryHead(octokit, {
     repoId: Number(claim.repoId),
     fullName: snapshot.fullName,
+    publicDiscoveryApproved: claim.registration.classificationDecision !== null,
   });
   if (head.status !== "READY") {
     if (head.status === "RETRY") {
@@ -789,7 +845,12 @@ export async function processRepositoryDiscoveryClaim(
       candidates: result.candidates,
       candidateDigest: result.candidateDigest,
     }, dependencies);
-    if (completed) await enqueueCurrentHead(claim, head.sourceSha, dependencies);
+    if (completed) {
+      await enqueueCurrentHead(claim, head.sourceSha, dependencies, {
+        private: snapshot.private,
+        fork: snapshot.fork,
+      });
+    }
     return { status: completed ? "STALE" : "DISCARDED", reasonCode: "SOURCE_DRIFT" };
   }
 
@@ -836,4 +897,121 @@ export async function runRepositoryDiscoveryOnce(
   if (!claim) return { claimed: false };
   const result = await processRepositoryDiscoveryClaim(claim, dependencies);
   return { claimed: true, status: result.status, reasonCode: result.reasonCode };
+}
+
+export interface RepositoryDiscoveryDrainState {
+  registrations: number;
+  settled: number;
+  queued: number;
+  running: number;
+  stale: number;
+  failed: number;
+  missing: number;
+}
+
+type RepositoryDiscoveryDrainDependencies = {
+  client: typeof prisma;
+  runOnce: (workerId: string) => Promise<{ claimed: boolean }>;
+  now: () => Date;
+  wait: (milliseconds: number) => Promise<void>;
+};
+
+const defaultDrainDependencies: RepositoryDiscoveryDrainDependencies = {
+  client: prisma,
+  runOnce: (workerId) => runRepositoryDiscoveryOnce(workerId),
+  now: () => new Date(),
+  wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+};
+
+export async function readRepositoryDiscoveryDrainState(
+  client: typeof prisma = prisma,
+): Promise<RepositoryDiscoveryDrainState> {
+  const registrations = await client.repositoryRegistration.findMany({
+    where: { archived: false },
+    select: {
+      status: true,
+      reconcileGeneration: true,
+      discoveryRuns: {
+        orderBy: [{ generation: "desc" }, { createdAt: "desc" }],
+        take: 1,
+        select: { generation: true, status: true },
+      },
+    },
+  });
+  const state: RepositoryDiscoveryDrainState = {
+    registrations: registrations.length,
+    settled: 0,
+    queued: 0,
+    running: 0,
+    stale: 0,
+    failed: 0,
+    missing: 0,
+  };
+  for (const registration of registrations) {
+    const generation = registration.reconcileGeneration ?? 0;
+    const run = registration.discoveryRuns[0];
+    if (!run || run.generation !== generation || registration.status === "REGISTERED") {
+      state.missing++;
+      continue;
+    }
+    if (run.status === "QUEUED") state.queued++;
+    else if (run.status === "RUNNING") state.running++;
+    else if (run.status === "STALE") state.stale++;
+    else if (run.status === "FAILED") state.failed++;
+    else state.settled++;
+  }
+  return state;
+}
+
+/**
+ * backfill enqueue와 desired-state DRAFT 생성 사이의 provider readback barrier다.
+ * 다른 worker가 claim한 run도 기다리고, source drift가 새 generation으로 이어지지
+ * 않은 채 멈추면 성공으로 숨기지 않고 timeout으로 중단한다.
+ */
+export async function drainRepositoryDiscoveryQueue(
+  input: { workerId: string; timeoutMs?: number; pollIntervalMs?: number },
+  dependencies: RepositoryDiscoveryDrainDependencies = defaultDrainDependencies,
+): Promise<RepositoryDiscoveryDrainState & { claimed: number }> {
+  if (!/^[A-Za-z0-9_.:@/-]{1,128}$/.test(input.workerId)) {
+    throw new ControlPlaneError("worker ID가 유효하지 않습니다.", 400, "WORKER_ID_INVALID");
+  }
+  const timeoutMs = input.timeoutMs ?? 780_000;
+  const pollIntervalMs = input.pollIntervalMs ?? 250;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 || timeoutMs > 840_000) {
+    throw new ControlPlaneError("drain timeout이 유효하지 않습니다.", 400, "DRAIN_TIMEOUT_INVALID");
+  }
+  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 10 || pollIntervalMs > 10_000) {
+    throw new ControlPlaneError("drain poll interval이 유효하지 않습니다.", 400, "DRAIN_POLL_INVALID");
+  }
+  const deadline = dependencies.now().getTime() + timeoutMs;
+  let claimed = 0;
+  let consecutiveSettledReads = 0;
+  let latest = await readRepositoryDiscoveryDrainState(dependencies.client);
+  while (true) {
+    if (latest.failed > 0) {
+      throw new ControlPlaneError(
+        `현재 generation discovery ${latest.failed}건이 실패했습니다.`,
+        503,
+        "REPOSITORY_DISCOVERY_DRAIN_FAILED",
+      );
+    }
+    const pending = latest.queued + latest.running + latest.stale + latest.missing;
+    if (pending === 0) {
+      consecutiveSettledReads++;
+      if (consecutiveSettledReads >= 2) return { ...latest, claimed };
+    } else {
+      consecutiveSettledReads = 0;
+      const result = await dependencies.runOnce(input.workerId);
+      if (result.claimed) claimed++;
+    }
+    if (dependencies.now().getTime() >= deadline) {
+      throw new ControlPlaneError(
+        `repository discovery drain이 완료되지 않았습니다: queued=${latest.queued} running=${latest.running} stale=${latest.stale} missing=${latest.missing}`,
+        503,
+        "REPOSITORY_DISCOVERY_DRAIN_TIMEOUT",
+      );
+    }
+    await dependencies.wait(pollIntervalMs);
+    latest = await readRepositoryDiscoveryDrainState(dependencies.client);
+  }
 }

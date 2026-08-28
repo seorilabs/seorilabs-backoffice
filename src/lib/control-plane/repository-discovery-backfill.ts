@@ -8,9 +8,13 @@ import {
   type RegisterRepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
+import {
+  repositoryPublicDiscoveryAllowed,
+  type RepositoryClassificationDirective,
+} from "@/lib/control-plane/repository-classification";
 
 export const REPOSITORY_DISCOVERY_BACKFILL_CONTRACT_VERSION =
-  "repository-discovery-backfill/v1";
+  "repository-discovery-backfill/v2";
 export const REPOSITORY_DISCOVERY_BACKFILL_MODE = "shadow";
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGES = 100;
@@ -34,6 +38,8 @@ export interface RepositoryReadbackVector {
   defaultBranch: string | null;
   archived: boolean;
   private: boolean;
+  fork: boolean;
+  classificationDecisionRevision: number;
   headSha: string | null;
 }
 
@@ -44,6 +50,7 @@ export interface RepositoryDiscoveryBackfillResult {
   observed: number;
   eligible: number;
   archived: number;
+  forks: number;
   publicPolicy: number;
   enqueued: number;
   duplicate: number;
@@ -54,6 +61,7 @@ export interface RepositoryDiscoveryBackfillResult {
 
 type RepositoryDiscoveryBackfillDependencies = {
   getClient: (organization: string) => Promise<RepositoryInventoryClient>;
+  classificationDecisions?: () => Promise<Map<number, RepositoryClassificationDirective>>;
   enqueue: (
     input: RegisterRepositoryWebhookInput,
     observedAt: Date,
@@ -73,6 +81,32 @@ const defaultDependencies: RepositoryDiscoveryBackfillDependencies = {
     const context = await getInstallationContext();
     assertFullOrganizationInstallation(context, organization);
     return context.octokit as unknown as RepositoryInventoryClient;
+  },
+  classificationDecisions: async () => {
+    const rows = await prisma.repositoryClassificationDecision.findMany({
+      orderBy: [{ repoId: "asc" }, { revision: "desc" }],
+      select: {
+        repoId: true,
+        revision: true,
+        classification: true,
+        candidateMarkerPath: true,
+      },
+    });
+    const decisions = new Map<number, RepositoryClassificationDirective>();
+    for (const row of rows) {
+      const repoId = Number(row.repoId);
+      if (!Number.isSafeInteger(repoId) || repoId <= 0) {
+        throw new Error("REPOSITORY_BACKFILL_IDENTITY_INVALID");
+      }
+      if (!decisions.has(repoId)) {
+        decisions.set(repoId, {
+          revision: row.revision,
+          classification: row.classification,
+          candidateMarkerPath: row.candidateMarkerPath,
+        });
+      }
+    }
+    return decisions;
   },
   enqueue: async (input, observedAt) => registerRepositoryWebhook(input, {
     client: prisma,
@@ -100,6 +134,9 @@ function httpStatus(error: unknown): number | null {
 
 function fixedErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
+  if (message === "REPOSITORY_CLASSIFICATION_REVISION_STALE") {
+    return "REPOSITORY_BACKFILL_CLASSIFICATION_STALE";
+  }
   return /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/.test(message)
     ? message
     : "REPOSITORY_BACKFILL_PROVIDER_READ_FAILED";
@@ -132,7 +169,7 @@ function parseRepositoryIdentity(
   data: unknown,
   organization: string,
   expectedRepoId: number,
-): Omit<RepositoryReadbackVector, "headSha"> {
+): Omit<RepositoryReadbackVector, "headSha" | "classificationDecisionRevision"> {
   const repository = data as {
     id?: unknown;
     full_name?: unknown;
@@ -140,6 +177,7 @@ function parseRepositoryIdentity(
     default_branch?: unknown;
     archived?: unknown;
     private?: unknown;
+    fork?: unknown;
   } | null;
   if (
     safeRepoId(repository?.id) !== expectedRepoId
@@ -147,6 +185,7 @@ function parseRepositoryIdentity(
     || typeof repository.name !== "string"
     || typeof repository.archived !== "boolean"
     || typeof repository.private !== "boolean"
+    || typeof repository.fork !== "boolean"
     || (
       repository.default_branch !== null
       && typeof repository.default_branch !== "string"
@@ -175,19 +214,21 @@ function parseRepositoryIdentity(
     defaultBranch,
     archived: repository.archived,
     private: repository.private,
+    fork: repository.fork,
   };
 }
 
 function identityMatches(
-  left: Omit<RepositoryReadbackVector, "headSha">,
-  right: Omit<RepositoryReadbackVector, "headSha">,
+  left: Omit<RepositoryReadbackVector, "headSha" | "classificationDecisionRevision">,
+  right: Omit<RepositoryReadbackVector, "headSha" | "classificationDecisionRevision">,
 ): boolean {
   return left.repoId === right.repoId
     && left.repoFullName.toLowerCase() === right.repoFullName.toLowerCase()
     && left.name === right.name
     && left.defaultBranch === right.defaultBranch
     && left.archived === right.archived
-    && left.private === right.private;
+    && left.private === right.private
+    && left.fork === right.fork;
 }
 
 /**
@@ -225,20 +266,33 @@ export async function listInstallationRepositorySeeds(
 
 /**
  * 이름이 아니라 numeric repository ID로 canonical identity를 읽는다. active private
- * 저장소는 default branch HEAD도 함께 읽고 identity를 한 번 더 확인한다.
+ * 저장소와 중앙 정책으로 허용된 public 저장소는 default branch HEAD도 함께
+ * 읽고 identity를 한 번 더 확인한다. fork는 exact identity에 포함하되 source
+ * discovery 대상으로 자동 승격하지 않는다.
  */
 export async function readRepositoryBackfillVector(
   client: RepositoryInventoryClient,
   organization: string,
   seed: RepositoryInventorySeed,
+  classificationDecision: RepositoryClassificationDirective | null = null,
 ): Promise<RepositoryReadbackVector> {
   const first = parseRepositoryIdentity((await client.request(
     "GET /repositories/{repository_id}",
     { repository_id: seed.repoId },
   )).data, organization, seed.repoId);
 
-  if (first.archived || !first.private || !first.defaultBranch) {
-    return { ...first, headSha: null };
+  const publicAllowed = first.private
+    || repositoryPublicDiscoveryAllowed(first.repoFullName)
+    || classificationDecision?.classification === "PRODUCT_APP"
+    || classificationDecision?.classification === "PLATFORM_PRODUCER";
+  if (first.archived || first.fork || !publicAllowed || !first.defaultBranch) {
+    return {
+      ...first,
+      // decision이 없다는 observation도 revision 0으로 고정한다. sweep 중 첫
+      // decision이 생기면 enqueue transaction이 stale vector를 거부해야 한다.
+      classificationDecisionRevision: classificationDecision?.revision ?? 0,
+      headSha: null,
+    };
   }
 
   const [owner, repo] = first.repoFullName.split("/");
@@ -265,7 +319,11 @@ export async function readRepositoryBackfillVector(
   if (!identityMatches(first, confirmed)) {
     throw new Error("REPOSITORY_BACKFILL_VECTOR_DRIFT");
   }
-  return { ...confirmed, headSha };
+  return {
+    ...confirmed,
+    classificationDecisionRevision: classificationDecision?.revision ?? 0,
+    headSha,
+  };
 }
 
 export function repositoryBackfillDeliveryId(
@@ -283,6 +341,8 @@ export function repositoryBackfillDeliveryId(
     defaultBranch: vector.defaultBranch,
     archived: vector.archived,
     private: vector.private,
+    fork: vector.fork,
+    classificationDecisionRevision: vector.classificationDecisionRevision,
     headSha: vector.headSha,
   } as JsonValue);
   return `repository-backfill:${digest}`;
@@ -303,10 +363,12 @@ export function repositoryBackfillRegistrationInput(
       default_branch: vector.defaultBranch,
       archived: vector.archived,
       private: vector.private,
+      fork: vector.fork,
     },
     after: vector.headSha ?? undefined,
     deliveryId: repositoryBackfillDeliveryId(organization, vector, occurrenceId),
     organization,
+    classificationDecisionRevision: vector.classificationDecisionRevision,
   };
 }
 
@@ -332,6 +394,7 @@ export async function reconcileOrganizationRepositoryDiscovery(
     observed: 0,
     eligible: 0,
     archived: 0,
+    forks: 0,
     publicPolicy: 0,
     enqueued: 0,
     duplicate: 0,
@@ -351,9 +414,13 @@ export async function reconcileOrganizationRepositoryDiscovery(
     });
     let client: RepositoryInventoryClient;
     let seeds: RepositoryInventorySeed[];
+    let classificationDecisions: Map<number, RepositoryClassificationDirective>;
     try {
       client = await dependencies.getClient(input.organization);
-      seeds = await listInstallationRepositorySeeds(client);
+      [seeds, classificationDecisions] = await Promise.all([
+        listInstallationRepositorySeeds(client),
+        dependencies.classificationDecisions?.() ?? Promise.resolve(new Map()),
+      ]);
     } catch (error) {
       const code = fixedErrorCode(error);
       await dependencies.audit({
@@ -368,6 +435,7 @@ export async function reconcileOrganizationRepositoryDiscovery(
       observed: 0,
       eligible: 0,
       archived: 0,
+      forks: 0,
       publicPolicy: 0,
       enqueued: 0,
       duplicate: 0,
@@ -375,9 +443,15 @@ export async function reconcileOrganizationRepositoryDiscovery(
     };
     for (const seed of seeds) {
       try {
-        const vector = await readRepositoryBackfillVector(client, input.organization, seed);
+        const vector = await readRepositoryBackfillVector(
+          client,
+          input.organization,
+          seed,
+          classificationDecisions.get(seed.repoId) ?? null,
+        );
         counts.observed += 1;
         if (vector.archived) counts.archived += 1;
+        else if (vector.fork) counts.forks += 1;
         else if (!vector.private) counts.publicPolicy += 1;
         else counts.eligible += 1;
         const observedAt = dependencies.now();
@@ -418,6 +492,7 @@ export async function reconcileOrganizationRepositoryDiscovery(
         observed: result.observed,
         eligible: result.eligible,
         archived: result.archived,
+        forks: result.forks,
         publicPolicy: result.publicPolicy,
         enqueued: result.enqueued,
         duplicate: result.duplicate,

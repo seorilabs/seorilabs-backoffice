@@ -224,7 +224,9 @@ kubectl -n platform create job \
 - full-org repository discovery, 중앙 desired-state DRAFT backfill, reconcile, Xcode Cloud sync, registry seed,
   Platform Fleet 및 Fleet Project projection은 `scheduler-cronjobs.yaml`이 각각
   `concurrencyPolicy: Forbid`로 실행한다. 배포는 웹과 worker 전환 뒤 CronJob desired state를
-  먼저 적용하고, 그 다음 별도 catch-up 대상 작업을 직렬 실행한다. 배포 runner나
+  먼저 적용하고, 그 다음 별도 catch-up 대상 작업을 직렬 실행한다. catch-up의 중앙 설정 경로는
+  repository discovery enqueue → 현재 generation provider readback drain → desired-state DRAFT 순서이며
+  앞 단계가 실패하거나 timeout이면 뒤 단계를 실행하지 않는다. 배포 runner나
   catch-up이 실패해도 정기 scheduler를 delete 또는 suspend하지 않는다. 같은 시각 실행은
   endpoint의 durable idempotency/CAS로 한 번만 반영되고, 보존된 Job은 TTL로 정리된다. 웹
   프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
