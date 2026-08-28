@@ -113,7 +113,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 120
+      # RPI5가 ARC build를 함께 처리할 때 Pending 시간이 deadline에 포함된다.
+      # 다음 5분 주기 전에 끝나도록 하되 scheduling 여유를 포함해 4분을 준다.
+      activeDeadlineSeconds: 240
       ttlSecondsAfterFinished: 3600
       template:
         metadata:

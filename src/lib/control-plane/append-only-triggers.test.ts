@@ -425,6 +425,17 @@ test("pod는 seccomp RuntimeDefault를 쓰고 service 환경값으로 접속한�
   assert.match(publish, /--connect-timeout 5 --max-time 15/);
 });
 
+test("verifier deadline은 RPI5 scheduling 여유를 포함하고 다음 주기보다 짧다", () => {
+  const cronJob = verifierDocument("CronJob") as unknown as {
+    spec: {
+      schedule: string;
+      jobTemplate: { spec: { activeDeadlineSeconds: number } };
+    };
+  };
+  assert.equal(cronJob.spec.schedule, "*/5 * * * *");
+  assert.equal(cronJob.spec.jobTemplate.spec.activeDeadlineSeconds, 240);
+});
+
 test("verifier ServiceAccount는 결과 ConfigMap 하나만 patch한다", () => {
   const role = verifierDocument("Role") as unknown as { rules: unknown[] };
   assert.deepEqual(role.rules, [{

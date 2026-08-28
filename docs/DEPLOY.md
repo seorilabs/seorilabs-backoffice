@@ -140,7 +140,8 @@ secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `secc
 control-plane endpoint 16443만 허용한다. Calico가 Service DNAT 전후 어느 주소에서 정책을
 판정하더라도 같은 API server 외에는 열리지 않는다. DNS는 열지 않고 kubelet이 주입한
 `MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. publisher의 API 요청은 connect/max
-timeout으로 Job deadline보다 먼저 실패한다. verifier는 DDL, `GRANT`,
+timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 RPI5가 ARC build를 함께
+처리할 때 생기는 Pending 시간을 포함하되 다음 5분 주기 전에는 끝나도록 제한한다. verifier는 DDL, `GRANT`,
 복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
