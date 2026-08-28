@@ -1,5 +1,5 @@
 # 웹과 worker가 exact digest로 전환되고 정기 CronJob desired state를 확인한 뒤,
-# 다섯 작업을 한 번씩 직렬 실행한다. 정기 실행과 겹치더라도 endpoint의 durable
+# 여섯 작업을 한 번씩 직렬 실행한다. 정기 실행과 겹치더라도 endpoint의 durable
 # idempotency/CAS가 한 번만 반영하며, 응답 body는 로그에 남기지 않는다.
 apiVersion: batch/v1
 kind: Job
@@ -67,6 +67,8 @@ spec:
                 http://backoffice.platform.svc.cluster.local/api/admin/seed
               call platform_fleet --max-time 50 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/automation/platform-fleet
+              call fleet_project_projection --max-time 50 -XPOST \
+                http://backoffice.platform.svc.cluster.local/api/admin/automation/project-projections
               exit "$failed"
           resources:
             requests:

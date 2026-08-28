@@ -368,6 +368,11 @@ export async function applyFleetProjectProjection(
   }
 }
 
+/**
+ * 정기 scheduler CronJob과 배포 catch-up Job이 같은 endpoint를 통해 이 drain을 호출한다.
+ * 중복 webhook·중복 schedule에도 claim CAS가 한 projection을 한 번만 적용한다.
+ * Fleet Project가 아직 설정되지 않은 row는 추측하지 않고 `NEEDS_INPUT`으로 닫아 fail-closed한다.
+ */
 export async function drainFleetProjectProjections(limit = 20) {
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const staleAppliedBefore = new Date(Date.now() - 6 * 60 * 60_000);
@@ -379,7 +384,6 @@ export async function drainFleetProjectProjections(limit = 20) {
         { status: "PROCESSING", updatedAt: { lte: staleBefore } },
         { status: "APPLIED", updatedAt: { lte: staleAppliedBefore } },
       ],
-      projectNodeId: { not: { startsWith: "UNCONFIGURED:" } },
     },
     orderBy: { updatedAt: "asc" },
     take: Math.max(1, Math.min(limit, 100)),
@@ -392,15 +396,24 @@ export async function drainFleetProjectProjections(limit = 20) {
   });
   let applied = 0;
   let failed = 0;
+  let needsInput = 0;
+  let superseded = 0;
   for (const row of rows) {
     try {
       const binding = await reconcileProjectionBinding(row);
-      if (binding.kind !== "CURRENT") continue;
+      if (binding.kind === "NEEDS_INPUT") {
+        needsInput += 1;
+        continue;
+      }
+      if (binding.kind !== "CURRENT") {
+        superseded += 1;
+        continue;
+      }
       const result = await applyFleetProjectProjection(row.id);
       if (result.applied) applied += 1;
     } catch {
       failed += 1;
     }
   }
-  return { scanned: rows.length, applied, failed };
+  return { scanned: rows.length, applied, failed, needsInput, superseded };
 }
