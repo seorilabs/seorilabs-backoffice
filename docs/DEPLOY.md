@@ -69,10 +69,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 ```
 `backup-cronjob.yaml`은 CI가 갱신하지만 PVC는 갱신하지 않는다. 백업 Job은 비밀번호를
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
-마지막에 완성본 이름으로 이동한다.
+마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
+권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 두 개가 있으면 보존하지만 부분·변형·
+추가 trigger는 복구하지 않고 실패한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
-주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다.
+주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
+않고 terminal condition에서 즉시 반환한다.
 CI는 build가 반환한 immutable registry digest의 migration Job으로 `prisma migrate deploy`를
 먼저 완료하고 source SHA를 별도 label로 기록한다.
 실패하면 기존 Ready 웹과 worker/CronJob은 바꾸지 않는다. 완료 Job은 7일간 남아
@@ -136,8 +140,12 @@ secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 
 따라서 root secret을 보는 컨테이너에는 외부로 쓸 수단이 없고, 쓸 수단이 있는 컨테이너에는 root
 secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `seccompProfile: RuntimeDefault`를
-쓴다. egress는 NetworkPolicy로 MySQL 3306과 API server 443만 허용한다. DNS는 열지 않고 kubelet이
-주입한 `MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. verifier는 DDL, `GRANT`,
+쓴다. egress는 NetworkPolicy로 MySQL 3306과 API server의 고정 Service IP 443 및 MicroK8S
+control-plane endpoint 16443만 허용한다. Calico가 Service DNAT 전후 어느 주소에서 정책을
+판정하더라도 같은 API server 외에는 열리지 않는다. DNS는 열지 않고 kubelet이 주입한
+`MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. publisher의 API 요청은 connect/max
+timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 RPI5가 ARC build를 함께
+처리할 때 생기는 Pending 시간을 포함하되 다음 5분 주기 전에는 끝나도록 제한한다. verifier는 DDL, `GRANT`,
 복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
@@ -163,7 +171,9 @@ root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`
 `pods`/`jobs`/`cronjobs`/`deployments`+`create`/`patch`/`update`/`delete`/`deletecollection` 조합이
 하나라도 있으면 fail-closed한다. wildcard(`*`) group·resource·verb도 같은 조합으로 친다. 권한
 목록이 불완전(`status.incomplete=true`)하면 부재를 증명할 수 없으므로 실패한다. 이 review는
-read-only이며 지속 리소스를 만들지 않는다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
+read-only이며 지속 리소스를 만들지 않는다. kubectl의 client-side schema 검증은 권한과 무관한
+CRD 목록 조회를 요구하므로 built-in review endpoint 제출에는 `--validate=false`를 사용하고,
+응답 계약은 server-side `status` 파싱으로 검증한다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
 잡는 보조 검증으로 함께 유지한다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
 클러스터 접근 불가와 identity 불일치는 skip이 아니라 실패다. PR CI에는 kubeconfig가 없으므로
 static 계약 테스트 `check-ci-deployer-permissions.test.sh`만 돈다.

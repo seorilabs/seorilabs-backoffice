@@ -6,6 +6,7 @@ import { PrismaClient } from "@prisma/client";
 
 import {
   assertIsolatedRehearsalDatabaseUrl,
+  ensureRestoredAppendOnlyTriggers,
   isolatedRehearsalDatabaseUrl,
   verifyRestoredControlPlane,
 } from "@/lib/control-plane/restore-rehearsal";
@@ -35,6 +36,7 @@ function classifiedRunFailure(baseCode: string, output: string): string {
     [/운영 legacy migration ledger가 frozen inventory와 다르다/, "LEGACY_LEDGER_DRIFT"],
     [/active migration 성공 row가 유일하지 않다/, "ACTIVE_MIGRATION_DRIFT"],
     [/schema contract 불일치/, "SCHEMA_CONTRACT_DRIFT"],
+    [/append-only trigger 계약 실패/, "APPEND_ONLY_TRIGGER_DRIFT"],
     [/application data fingerprint/, "DATA_FINGERPRINT_INVALID"],
     [/unknown database|does not exist/i, "DATABASE_MISSING"],
   ];
@@ -201,6 +203,20 @@ async function main(): Promise<void> {
   const prismaCommand = existsSync(localPrisma) ? localPrisma : "prisma";
   const verifier = join(appRoot, "scripts-dist/verify-migration-state.cjs");
   const verifyArgs = [verifier, "--history=cutover", "--print-data-fingerprint"];
+  const triggerClient = new PrismaClient({ datasourceUrl: databaseUrl });
+  const appendOnlyTriggers = await rehearsalStep(
+    "APPEND_ONLY_TRIGGER_RECONSTRUCTION_FAILED",
+    async () => {
+      try {
+        return await ensureRestoredAppendOnlyTriggers({
+          client: triggerClient,
+          databaseUrl,
+        });
+      } finally {
+        await triggerClient.$disconnect();
+      }
+    },
+  );
   const before = run(process.execPath, verifyArgs, childEnv, "MIGRATION_PRECHECK_FAILED");
   run(
     prismaCommand,
@@ -294,6 +310,7 @@ async function main(): Promise<void> {
         evidenceDigest: sha256(before),
         secondDeployNoop: true,
       },
+      appendOnlyTriggers,
       controlPlane,
       boot,
       productionDatabaseWrite: false,

@@ -64,6 +64,30 @@ export function appendOnlyActionStatement(message: string): string {
 }
 
 /**
+ * restore rehearsal의 격리 DB에서만 쓰는 canonical DDL이다. identifier와 message는
+ * repo-local 계약 상수에서 오지만, SQL 문자열을 만들기 전에 다시 제한해 계약 변경이
+ * 임의 SQL 실행 경로로 넓어지지 않게 한다.
+ */
+export function appendOnlyCreateTriggerStatement(
+  requirement: AppendOnlyTriggerRequirement,
+): string {
+  if (
+    !/^[a-z0-9_]+$/.test(requirement.name)
+    || !/^[a-z0-9_]+$/.test(requirement.table)
+    || !new Set<AppendOnlyTriggerEvent>(["UPDATE", "DELETE"]).has(requirement.event)
+    || !requirement.message
+    || /['\r\n\0]/.test(requirement.message)
+  ) {
+    throw new Error("APPEND_ONLY_TRIGGER_REQUIREMENT_UNSAFE");
+  }
+  return [
+    `CREATE TRIGGER \`${requirement.name}\``,
+    `BEFORE ${requirement.event} ON \`${requirement.table}\``,
+    `FOR EACH ROW ${appendOnlyActionStatement(requirement.message)}`,
+  ].join(" ");
+}
+
+/**
  * MySQL은 client가 보낸 statement를 그대로 보관해 trailing `;`와 공백이 남을 수 있다.
  * 같은 DDL이 설치 경로에 따라 다르게 저장되므로 비교 전에 그 부분만 없앤다.
  */

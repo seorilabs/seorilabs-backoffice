@@ -8,6 +8,7 @@ import {
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   appendOnlyContractDigest,
+  appendOnlyCreateTriggerStatement,
   parseAppendOnlyTriggers,
   evaluateAppendOnlyTriggers,
   triggerVisibilityFromGrants,
@@ -90,6 +91,20 @@ test("required trigger 계약은 migration SQL 선언과 정확히 같다", () =
 
   assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);
   assert.ok(declared.length > 0);
+});
+
+test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () => {
+  for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
+    const statement = `${appendOnlyCreateTriggerStatement(requirement)};`;
+    assert.deepEqual(parseAppendOnlyTriggers(statement), [requirement]);
+  }
+  assert.throws(
+    () => appendOnlyCreateTriggerStatement({
+      ...REQUIRED_APPEND_ONLY_TRIGGERS[0],
+      table: "unsafe`; DROP TABLE app; --",
+    }),
+    /APPEND_ONLY_TRIGGER_REQUIREMENT_UNSAFE/,
+  );
 });
 
 test("계약과 동일한 live readback만 통과한다", () => {
@@ -400,7 +415,12 @@ test("verifier egress는 MySQL과 API server로만 제한되고 DNS는 열지 �
     .flatMap((rule) => rule.ports ?? [])
     .map((port) => port.port)
     .sort((left, right) => left - right);
-  assert.deepEqual(ports, [443, 3306]);
+  assert.deepEqual(ports, [443, 3306, 16443]);
+  const cidrs = (policy.spec.egress as Array<{ to?: Array<{ ipBlock?: { cidr: string } }> }>)
+    .flatMap((rule) => rule.to ?? [])
+    .flatMap((target) => target.ipBlock?.cidr ?? [])
+    .sort();
+  assert.deepEqual(cidrs, ["10.152.183.1/32", "192.168.0.100/32"]);
   assert.equal(
     policy.spec.podSelector.matchLabels["app.kubernetes.io/component"],
     "provider-audit-trigger-verifier",
@@ -417,6 +437,18 @@ test("pod는 seccomp RuntimeDefault를 쓰고 service 환경값으로 접속한�
   assert.doesNotMatch(verify, /mysql\.data\.svc\.cluster\.local/);
   assert.match(publish, /KUBERNETES_SERVICE_HOST/);
   assert.doesNotMatch(publish, /https:\/\/kubernetes\.default\.svc\/api/);
+  assert.match(publish, /--connect-timeout 5 --max-time 15/);
+});
+
+test("verifier deadline은 RPI5 scheduling 여유를 포함하고 다음 주기보다 짧다", () => {
+  const cronJob = verifierDocument("CronJob") as unknown as {
+    spec: {
+      schedule: string;
+      jobTemplate: { spec: { activeDeadlineSeconds: number } };
+    };
+  };
+  assert.equal(cronJob.spec.schedule, "*/5 * * * *");
+  assert.equal(cronJob.spec.jobTemplate.spec.activeDeadlineSeconds, 240);
 });
 
 test("verifier ServiceAccount는 결과 ConfigMap 하나만 patch한다", () => {
@@ -456,6 +488,7 @@ test("권한 checker는 배포 kubeconfig에서만 실행되고 접근 불가를
   assert.match(checker, /get:cronjob\/vault-indexer/);
   // can-i는 named 권한을 놓치므로 전체 규칙을 review로 읽어 금지 조합 부재를 증명한다.
   assert.match(checker, /SelfSubjectRulesReview/);
+  assert.match(checker, /create --validate=false -f -/);
   assert.match(checker, /status\.resourceRules/);
   assert.match(checker, /status\.incomplete/);
   assert.match(checker, /권한 목록이 불완전해/);

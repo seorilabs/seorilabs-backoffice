@@ -401,13 +401,18 @@ Platform registry와 `.seorilabs/*` consumer는 계속 동작한다. 두 번의 
 read-only PVC에서 읽어 Pod 내부 MySQL 9.2 `emptyDir`에 복원하고 다음을 한 번에 확인한다.
 
 - 현재 migration/history/schema와 복구 전후 data fingerprint가 같다.
+- production app/backup principal에는 `TRIGGER` 권한을 주지 않으므로 logical dump는 trigger DDL을
+  명시적으로 제외한다. 보호 table의 trigger가 0건인 경우에만 exact source 계약 두 개를 Pod 내부 DB에
+  재구성하고 다시 검증한다. 부분 설치·변형·추가 trigger는 자동 수정하지 않고 fail-closed한다.
 - 복구 DB로 production Backoffice server가 Ready가 되고 resolved manifest를 HTTP로 재생한다.
 - 모든 ACTIVE snapshot 서명이 맞고 잘못된 키와 DRAFT는 기존 resolve 경계에서 거부된다.
 - signing key는 broad `backoffice-secrets`가 아니라 exact key 하나만 가진 전용 Secret volume에서 읽는다.
   전용 SealedSecret이 live에 적용되지 않았으면 web activation과 rehearsal은 fail-closed하며 다른 Secret으로
   대체하지 않는다.
-- verifier는 SHA, count, digest와 성공 여부만 출력한다. production DB URL/password는 Pod에 주입하지 않는다.
+- verifier는 SHA, count, digest, trigger 복구 mode와 성공 여부만 출력한다. production DB URL/password는
+  Pod에 주입하지 않는다.
 - verifier 종료 시 MySQL을 내리고 Pod-scoped `emptyDir`을 폐기한다. Job은 감사용 metadata만 7일 보존한다.
+- terminal Failed condition은 전체 timeout을 기다리지 않고 즉시 실패로 반환한다.
 
 실행은 배포된 exact image digest, source SHA, 검증된 dump basename을 고정한다.
 

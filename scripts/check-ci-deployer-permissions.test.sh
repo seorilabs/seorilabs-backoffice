@@ -22,7 +22,7 @@ if [[ "$args" == *"auth whoami"* ]]; then
   exit 0
 fi
 
-if [[ "$args" == *"create -f -"* ]]; then
+if [[ "$args" == *"create --validate=false -f -"* ]]; then
   cat >/dev/null
   if [ "${FAKE_RULES_UNREADABLE:-false}" = true ]; then
     printf 'Error from server: selfsubjectrulesreviews.authorization.k8s.io is forbidden\n' >&2

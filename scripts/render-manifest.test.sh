@@ -252,12 +252,12 @@ fi
 
 echo "== repository discovery backfill 스케줄 =="
 backfill_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-repository-discovery-backfill/ { print }' "$scheduler_cronjobs")"
-if printf '%s' "$backfill_doc" | grep -q 'schedule: "7 \* \* \* \*"' &&
-   printf '%s' "$backfill_doc" | grep -q 'concurrencyPolicy: Forbid' &&
-   printf '%s' "$backfill_doc" | grep -q 'repository-discovery/backfill' &&
-   printf '%s' "$backfill_doc" | grep -q 'automountServiceAccountToken: false' &&
-   printf '%s' "$backfill_doc" | grep -q 'readOnlyRootFilesystem: true' &&
-   ! printf '%s' "$backfill_doc" | grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET'; then
+if grep -q 'schedule: "7 \* \* \* \*"' <<<"$backfill_doc" &&
+   grep -q 'concurrencyPolicy: Forbid' <<<"$backfill_doc" &&
+   grep -q 'repository-discovery/backfill' <<<"$backfill_doc" &&
+   grep -q 'automountServiceAccountToken: false' <<<"$backfill_doc" &&
+   grep -q 'readOnlyRootFilesystem: true' <<<"$backfill_doc" &&
+   ! grep -q 'GITHUB_PRIVATE_KEY\|GITHUB_WEBHOOK_SECRET' <<<"$backfill_doc"; then
   ok "full-org backfill은 hourly read-only trigger 하나로 직렬 실행"
 else
   ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
@@ -286,6 +286,7 @@ if [ "$(grep -c '^kind: CronJob' "$backup_cronjob")" -eq 1 ] &&
    grep -q 'runAsNonRoot: true' "$backup_cronjob" &&
    grep -q 'readOnlyRootFilesystem: true' "$backup_cronjob" &&
    grep -q 'umask 077' "$backup_cronjob" &&
+   grep -q -- '--skip-triggers' "$backup_cronjob" &&
    grep -q 'activeDeadlineSeconds: 1800' "$backup_cronjob" &&
    grep -q 'path: db-password' "$backup_cronjob" &&
    ! grep -q 'name: MYSQL_PWD' "$backup_cronjob"; then
@@ -301,12 +302,16 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    grep -q 'medium: Memory' "$restore_job" &&
    grep -q 'backoffice_rehearsal' "$restore_job" &&
    grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'ensureRestoredAppendOnlyTriggers' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'RECONSTRUCTED_FROM_SOURCE_CONTRACT' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
    ! grep -q 'key: DATABASE_URL' "$restore_job" &&
    ! grep -q 'key: DB_PASSWORD' "$restore_job" &&
    grep -q 'CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_FILE' "$restore_job" &&
    grep -q 'secretName: backoffice-control-plane-snapshot-signing' "$restore_job" &&
    ! grep -A8 'name: signing-key' "$restore_job" | grep -q 'secretName: backoffice-secrets' &&
-   grep -q 'touch /state/stop' "$restore_job"; then
+   grep -q 'touch /state/stop' "$restore_job" &&
+   grep -q 'Failed=True' "$root/scripts/run-restore-rehearsal.sh" &&
+   ! grep -q 'wait --for=condition=complete' "$root/scripts/run-restore-rehearsal.sh"; then
   ok "restore rehearsal production DB 비접근·ephemeral cleanup 경계"
 else
   ng "restore rehearsal 격리 또는 cleanup 경계가 깨졌다"

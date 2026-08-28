@@ -80,12 +80,19 @@ spec:
               app: mysql
       ports:
         - { protocol: TCP, port: 3306 }
-    # publisher container의 API server ConfigMap patch
+    # publisher container의 API server ConfigMap patch. MicroK8S/Calico는
+    # Service DNAT 전후 어느 주소에서 NetworkPolicy를 판정할지 보장하지 않으므로
+    # 고정 Service IP와 실제 control-plane endpoint를 각각 정확한 port로 허용한다.
     - to:
         - ipBlock:
             cidr: 10.152.183.1/32
       ports:
         - { protocol: TCP, port: 443 }
+    - to:
+        - ipBlock:
+            cidr: 192.168.0.100/32
+      ports:
+        - { protocol: TCP, port: 16443 }
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -106,7 +113,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 120
+      # RPI5가 ARC build를 함께 처리할 때 Pending 시간이 deadline에 포함된다.
+      # 다음 5분 주기 전에 끝나도록 하되 scheduling 여유를 포함해 4분을 준다.
+      activeDeadlineSeconds: 240
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
@@ -238,7 +247,7 @@ spec:
                     "$status" "$total" "$exact" "$contractDigest" "$observedAt")"
                   : "${KUBERNETES_SERVICE_HOST:?KUBERNETES_SERVICE_HOST가 없다}"
                   token="$(cat /var/run/secrets/tokens/api/token)"
-                  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                  code="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
                     --cacert /var/run/secrets/tokens/api/ca.crt \
                     -H "Authorization: Bearer $token" \
                     -H 'Content-Type: application/merge-patch+json' \
