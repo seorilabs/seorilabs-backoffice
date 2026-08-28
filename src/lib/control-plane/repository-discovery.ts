@@ -45,6 +45,7 @@ export type RepositoryDiscoveryReason =
   | "BUILD_IDENTITY_AMBIGUOUS"
   | "PLATFORM_SDK_PRODUCER"
   | "APP_IDENTITY_CONFLICT"
+  | "APP_MARKET_IDENTITY_CONFLICT"
   | "DISCOVERY_SLO_EXCEEDED";
 
 export interface RepositoryTreeSnapshot {

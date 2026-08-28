@@ -27,9 +27,11 @@ import {
   durableIssueObservationHash,
   durableIngressEnvelopeHash,
   durableIssueToMirrorInput,
+  durableRepositoryDiscovery,
   durableStableTagPush,
   durableStableTagPushHash,
   parseDurableIssueObservation,
+  parseDurableRepositoryDiscovery,
   parseDurableStableTagPush,
 } from "@/lib/control-plane/automation-inbox";
 import {
@@ -49,6 +51,7 @@ import {
 import { redactFleetJson } from "@/lib/control-plane/fleet-view";
 import { authenticateInternalRequest } from "@/lib/control-plane/security";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
+import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 
 test("missed hourly schedule은 마지막 slot 다음부터 현재 경계까지 순서대로 복구한다", () => {
   const slots = dueScheduleSlots({
@@ -102,6 +105,38 @@ test("schedule과 webhook idempotency key는 동일 입력에 안정적이고 so
     definitionKey({ appId: "app-1", template: "repo-task-autopilot-v1", agentKind: "CODEX", cadence: "MANUAL" }),
     definitionKey({ appId: "app-1", template: "repo-task-autopilot-v1", agentKind: "CODEX", cadence: "DAILY" }),
   );
+});
+
+test("Fleet automation은 MANAGED exact-source registration에서만 실행된다", () => {
+  const legacyManaged = {
+    archived: false,
+    status: "MANAGED",
+    managementKind: null,
+    lastDefaultPushSha: null,
+    lastReconciledSha: null,
+  };
+  assert.equal(repositoryAutomationEligible(legacyManaged), false, "legacy row는 exact discovery 전 새 Fleet 실행을 시작하지 않는다");
+  assert.equal(repositoryAutomationEligible({
+    ...legacyManaged,
+    managementKind: "APP",
+    lastDefaultPushSha: "a".repeat(40),
+    lastReconciledSha: "a".repeat(40),
+  }), true);
+  assert.equal(repositoryAutomationEligible({
+    ...legacyManaged,
+    managementKind: "APP",
+    lastDefaultPushSha: "a".repeat(40),
+    lastReconciledSha: "b".repeat(40),
+  }), false);
+  assert.equal(repositoryAutomationEligible({
+    ...legacyManaged,
+    managementKind: "APP",
+  }), false, "APP도 exact SHA 두 값이 채워지기 전에는 실행할 수 없다");
+  assert.equal(repositoryAutomationEligible({ ...legacyManaged, status: "NEEDS_INPUT" }), false);
+  assert.equal(repositoryAutomationEligible({ ...legacyManaged, archived: true }), false);
+  assert.equal(repositoryAutomationEligible({ ...legacyManaged, managementKind: "UNCLASSIFIED" }), false);
+  assert.equal(repositoryAutomationEligible({ ...legacyManaged, managementKind: "PLATFORM_PRODUCER" }), false);
+  assert.equal(repositoryAutomationEligible(null), false);
 });
 
 test("Project projection은 고정 7개 field만 만들고 approval을 label에서 읽는다", () => {
@@ -380,6 +415,53 @@ test("정식 tag push만 durable inbox에 봉인하고 snapshot, 삭제, 손상 
   }), null);
 });
 
+test("default push와 repository lifecycle은 공개 identity만 durable discovery payload로 봉인한다", () => {
+  const discovery = durableRepositoryDiscovery({
+    event: "push",
+    repository: {
+      id: 123456,
+      full_name: "seorilabs/example",
+      name: "example",
+      default_branch: "main",
+      private: true,
+      archived: false,
+    },
+    ref: "refs/heads/main",
+    after: "a".repeat(40),
+    organization: "seorilabs",
+  });
+  assert.ok(discovery);
+  const binding = {
+    sourceKey: "github:delivery-discovery",
+    event: "push",
+    action: null,
+    repoFullName: "seorilabs/example",
+  };
+  const payloadHash = durableIngressEnvelopeHash({ ...binding, payload: discovery });
+  assert.deepEqual(parseDurableRepositoryDiscovery({
+    ...binding,
+    payload: discovery,
+    payloadHash,
+  }), discovery);
+  assert.equal(durableRepositoryDiscovery({
+    event: "push",
+    repository: {
+      id: 123456,
+      full_name: "seorilabs/example",
+      default_branch: "main",
+    },
+    ref: "refs/tags/v1.2.3",
+    after: "a".repeat(40),
+    organization: "seorilabs",
+  }), null);
+  assert.throws(() => parseDurableRepositoryDiscovery({
+    ...binding,
+    repoFullName: "seorilabs/other",
+    payload: discovery,
+    payloadHash,
+  }), /binding mismatch/);
+});
+
 test("release-note 자동 발행은 조직의 exact platform repo만 제외하고 다른 tag repo를 유지한다", () => {
   assert.equal(shouldBackofficeAutoPublishReleaseNotes("seorilabs/platform", "seorilabs"), false);
   assert.equal(shouldBackofficeAutoPublishReleaseNotes("SeoriLabs/Platform", "seorilabs"), false);
@@ -565,8 +647,21 @@ test("GitHub delivery와 automation inbox는 handler보다 먼저 같은 durable
   const webhook = readFileSync(join(process.cwd(), "src/app/api/webhooks/route.ts"), "utf8");
   const service = readFileSync(join(process.cwd(), "src/lib/control-plane/automation-service.ts"), "utf8");
   assert.ok(webhook.indexOf("const delivery = await recordWebhookDelivery") < webhook.indexOf("await handleEvent(event"));
-  assert.match(service, /prisma\.\$transaction[\s\S]*webhookDelivery\.create[\s\S]*automationIngressEvent\.create/);
+  const duplicateStart = webhook.indexOf("if (delivery.duplicate)");
+  assert.ok(duplicateStart >= 0);
+  assert.match(webhook, /repositoryDiscovery: discoveryObservation/);
+  assert.match(webhook, /stableTagObservation \|\| discoveryObservation/);
+  assert.doesNotMatch(webhook, /webhookDelivery\.deleteMany/);
+  assert.match(service, /prisma\.\$transaction[\s\S]*webhookDelivery\.createMany[\s\S]*automationIngressEvent\.createMany/);
+  assert.match(service, /parseDurableRepositoryDiscovery[\s\S]*repositoryDiscoveryReadback[\s\S]*registerRepositoryWebhook/);
   assert.match(service, /parseDurableIssueObservation[\s\S]*upsertIssue[\s\S]*issue mirror did not converge/);
+});
+
+test("Fleet UI 상단 parity gate는 현재 source와 ACTIVE config vector만 신뢰한다", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/(app)/apps/[id]/fleet/page.tsx"), "utf8");
+  assert.match(page, /latestObservedParity\?\.sourceSha === latestDiscovery\.sourceSha/);
+  assert.match(page, /latestObservedParity\.configRevisionId === activeConfig\.id/);
+  assert.match(page, /현재 벡터 미검증/);
 });
 
 test("RESULT_UNKNOWN은 새 readback lease 재claim 뒤에만 resolve되고 mutation audit은 ledger CAS와 함께 기록된다", () => {

@@ -4,6 +4,10 @@ import { z } from "zod";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
 import { normalizeLabels } from "@/lib/domain/labels";
+import {
+  repositoryDiscoveryTrigger,
+  type RepositoryWebhookInput,
+} from "@/lib/control-plane/repository-registration";
 import type { GhIssueInput } from "@/lib/sync/mirror";
 
 const CLIENT_REQUEST_MARKER = /<!--\s*bo:req=([0-9a-fA-F-]+)\s*-->/;
@@ -36,6 +40,26 @@ export const durableStableTagPushSchema = z.object({
 }).strict();
 
 export type DurableStableTagPush = z.infer<typeof durableStableTagPushSchema>;
+
+export const durableRepositoryDiscoverySchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("REPOSITORY_DISCOVERY"),
+  event: z.enum(["push", "repository"]),
+  action: z.string().max(64).nullable(),
+  organization: z.string().min(1).max(255),
+  repository: z.object({
+    id: z.number().int().positive().safe(),
+    fullName: z.string().min(3).max(255),
+    name: z.string().min(1).max(255).nullable(),
+    defaultBranch: z.string().min(1).max(255).nullable(),
+    archived: z.boolean(),
+    private: z.boolean(),
+  }).strict(),
+  ref: z.string().max(512).nullable(),
+  after: z.string().max(191).nullable(),
+}).strict();
+
+export type DurableRepositoryDiscovery = z.infer<typeof durableRepositoryDiscoverySchema>;
 
 export interface DurableIngressBinding {
   sourceKey: string;
@@ -104,8 +128,57 @@ export function durableStableTagPushHash(observation: DurableStableTagPush): str
     .digest("hex");
 }
 
+/**
+ * GitHub가 실패 delivery를 자동 재전송하지 않아도 scheduler가 repository registration을
+ * 재구성할 수 있도록 공개 repository identity와 ref/SHA만 봉인한다.
+ */
+export function durableRepositoryDiscovery(input: {
+  event: string;
+  action?: string | null;
+  repository?: Partial<RepositoryWebhookInput> | null;
+  ref?: string | null;
+  after?: string | null;
+  organization: string;
+}): DurableRepositoryDiscovery | null {
+  const repository = input.repository;
+  if (
+    (input.event !== "push" && input.event !== "repository")
+    || !Number.isSafeInteger(repository?.id)
+    || Number(repository?.id) <= 0
+    || !repository?.full_name?.startsWith(`${input.organization}/`)
+  ) return null;
+  const archived = repository.archived === true
+    || input.action === "archived"
+    || input.action === "deleted";
+  const trigger = repositoryDiscoveryTrigger({
+    event: input.event,
+    action: input.action ?? undefined,
+    defaultBranch: repository.default_branch,
+    ref: input.ref ?? undefined,
+    after: input.after ?? undefined,
+  });
+  if (!trigger.relevant && !archived) return null;
+  return durableRepositoryDiscoverySchema.parse({
+    schemaVersion: 1,
+    kind: "REPOSITORY_DISCOVERY",
+    event: input.event,
+    action: input.action ?? null,
+    organization: input.organization,
+    repository: {
+      id: repository.id,
+      fullName: repository.full_name,
+      name: repository.name ?? null,
+      defaultBranch: repository.default_branch ?? null,
+      archived: repository.archived === true,
+      private: repository.private === true,
+    },
+    ref: input.ref ?? null,
+    after: input.after ?? null,
+  });
+}
+
 export function durableIngressEnvelopeHash(input: DurableIngressBinding & {
-  payload: DurableIssueObservation | DurableStableTagPush;
+  payload: DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery;
 }): string {
   return crypto.createHash("sha256")
     .update(canonicalJson({
@@ -137,6 +210,23 @@ export function parseDurableStableTagPush(input: {
   const observation = durableStableTagPushSchema.parse(input.payload);
   if (!input.payloadHash || durableIngressEnvelopeHash({ ...input, payload: observation }) !== input.payloadHash) {
     throw new Error("automation inbox payload checksum mismatch");
+  }
+  return observation;
+}
+
+export function parseDurableRepositoryDiscovery(input: {
+  payload: unknown;
+  payloadHash: string | null;
+} & DurableIngressBinding): DurableRepositoryDiscovery {
+  const observation = durableRepositoryDiscoverySchema.parse(input.payload);
+  if (
+    observation.event !== input.event
+    || observation.action !== input.action
+    || observation.repository.fullName.toLowerCase() !== input.repoFullName.toLowerCase()
+    || !input.payloadHash
+    || durableIngressEnvelopeHash({ ...input, payload: observation }) !== input.payloadHash
+  ) {
+    throw new Error("automation inbox repository discovery binding mismatch");
   }
   return observation;
 }

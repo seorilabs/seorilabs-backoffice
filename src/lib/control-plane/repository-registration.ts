@@ -30,6 +30,26 @@ export function registrationStatus(input: {
   return "REGISTERED";
 }
 
+export function repositorySourceIsCurrent(input: {
+  archived: boolean;
+  status: string;
+  managementKind: string | null;
+  lastDefaultPushSha: string | null;
+  lastReconciledSha: string | null;
+}, observationSha?: string | null): boolean {
+  if (input.archived || input.status !== "MANAGED") return false;
+  if (input.managementKind !== "APP") return false;
+  const pushed = input.lastDefaultPushSha?.toLowerCase() ?? null;
+  const reconciled = input.lastReconciledSha?.toLowerCase() ?? null;
+  return pushed !== null
+    && pushed === reconciled
+    && (observationSha === undefined || observationSha?.toLowerCase() === pushed);
+}
+
+export function repositoryAutomationEligible(input: Parameters<typeof repositorySourceIsCurrent>[0] | null): boolean {
+  return input !== null && repositorySourceIsCurrent(input);
+}
+
 export function repositoryDiscoveryTrigger(input: {
   event: string;
   action?: string;
@@ -72,7 +92,7 @@ const defaultDependencies: RepositoryRegistrationDependencies = {
   now: () => new Date(),
 };
 
-export async function registerRepositoryWebhook(input: {
+export type RegisterRepositoryWebhookInput = {
   event: string;
   action?: string;
   repository: RepositoryWebhookInput;
@@ -80,12 +100,78 @@ export async function registerRepositoryWebhook(input: {
   after?: string;
   deliveryId: string;
   organization: string;
-}, dependencies: RepositoryRegistrationDependencies = defaultDependencies): Promise<{
+};
+
+type RegisterRepositoryWebhookResult = {
   duplicate: boolean;
   enqueued: boolean;
   runId: string | null;
   generation: number | null;
-}> {
+};
+
+/**
+ * provider readback 전에는 webhook의 rename/archive/SHA를 정본으로 쓰지 않는다.
+ * 대신 기존 generation을 즉시 폐기하고 REGISTERED로 내려 새 claim/parity를 막는다.
+ */
+export async function invalidateRepositoryDiscoveryInTransaction(
+  input: RegisterRepositoryWebhookInput,
+  tx: Prisma.TransactionClient,
+  now: Date,
+): Promise<void> {
+  const repo = input.repository;
+  if (
+    !Number.isSafeInteger(repo.id)
+    || repo.id <= 0
+    || !repo.full_name.startsWith(`${input.organization}/`)
+  ) return;
+  const repoId = BigInt(repo.id);
+  const trigger = repositoryDiscoveryTrigger({
+    event: input.event,
+    action: input.action,
+    defaultBranch: repo.default_branch,
+    ref: input.ref,
+    after: input.after,
+  });
+  const archived = repo.archived === true || input.action === "archived" || input.action === "deleted";
+  if (!trigger.relevant && !archived) return;
+  await tx.repositoryRegistration.upsert({
+    where: { repoId },
+    create: {
+      repoId,
+      repoFullName: repo.full_name,
+      defaultBranch: repo.default_branch ?? null,
+      archived: false,
+      status: "REGISTERED",
+      managementKind: "UNCLASSIFIED",
+      reconcileGeneration: 0,
+    },
+    update: {
+      status: "REGISTERED",
+    },
+  });
+  await tx.$executeRaw`
+    UPDATE repository_registration
+    SET reconcileGeneration = COALESCE(reconcileGeneration, 0) + 1
+    WHERE repoId = ${repoId}
+  `;
+  await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+  await tx.repositoryDiscoveryRun.updateMany({
+    where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
+    data: {
+      status: "STALE",
+      reasonCode: "SOURCE_DRIFT",
+      workerId: null,
+      leaseExpiresAt: null,
+      completedAt: now,
+    },
+  });
+}
+
+export async function registerRepositoryWebhookInTransaction(
+  input: RegisterRepositoryWebhookInput,
+  tx: Prisma.TransactionClient,
+  now: Date,
+): Promise<RegisterRepositoryWebhookResult> {
   const repo = input.repository;
   if (!Number.isSafeInteger(repo.id) || repo.id <= 0) {
     return { duplicate: false, enqueued: false, runId: null, generation: null };
@@ -102,7 +188,6 @@ export async function registerRepositoryWebhook(input: {
     ref: input.ref,
     after: input.after,
   });
-  const now = dependencies.now();
   const requestHash = jsonDigest({
     event: input.event,
     action: input.action ?? null,
@@ -114,8 +199,7 @@ export async function registerRepositoryWebhook(input: {
     sourceRef: trigger.sourceRef,
   } as JsonValue);
 
-  return dependencies.client.$transaction(async (tx) => {
-    const existingRun = await tx.repositoryDiscoveryRun.findUnique({
+  const existingRun = await tx.repositoryDiscoveryRun.findUnique({
       where: { triggerDeliveryId: input.deliveryId },
       select: { id: true, generation: true, requestHash: true },
     });
@@ -137,8 +221,6 @@ export async function registerRepositoryWebhook(input: {
     if (current?.lastDeliveryId === input.deliveryId) {
       return { duplicate: true, enqueued: false, runId: null, generation: null };
     }
-    const app = await tx.app.findUnique({ where: { repoId }, select: { id: true } });
-    const status = registrationStatus({ archived, managed: Boolean(app) });
     await tx.repositoryRegistration.upsert({
       where: { repoId },
       create: {
@@ -146,7 +228,7 @@ export async function registerRepositoryWebhook(input: {
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? null,
         archived,
-        status,
+        status: archived ? "ARCHIVED" : "REGISTERED",
         managementKind: "UNCLASSIFIED",
         reconcileGeneration: 0,
         lastDefaultPushSha: trigger.sourceSha,
@@ -156,7 +238,9 @@ export async function registerRepositoryWebhook(input: {
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? undefined,
         archived,
-        status,
+        // tag/non-default push가 NEEDS_INPUT 또는 EXCLUDED 판정을 지우지 않는다.
+        // relevant generation은 아래에서만 REGISTERED로 전환한다.
+        ...(archived ? { status: "ARCHIVED" as const } : {}),
         ...(trigger.sourceSha ? { lastDefaultPushSha: trigger.sourceSha } : {}),
         lastDeliveryId: input.deliveryId,
       },
@@ -206,9 +290,15 @@ export async function registerRepositoryWebhook(input: {
         requestHash,
         status: { in: ["QUEUED", "RUNNING", "MANAGED", "NEEDS_INPUT", "EXCLUDED"] },
       },
-      select: { id: true, generation: true },
+      select: { id: true, generation: true, status: true },
     });
     if (semanticReplay) {
+      if (semanticReplay.status === "QUEUED" || semanticReplay.status === "RUNNING") {
+        await tx.repositoryRegistration.update({
+          where: { repoId },
+          data: { status: "REGISTERED" },
+        });
+      }
       return {
         duplicate: true,
         enqueued: true,
@@ -234,7 +324,9 @@ export async function registerRepositoryWebhook(input: {
         managementKind: "UNCLASSIFIED",
         discoveryCandidates: Prisma.DbNull,
         lastDiscoveryReason: null,
-        status: app ? "MANAGED" : "REGISTERED",
+        // 기존 App도 새 generation이 exact HEAD로 완료되기 전에는 자동화와
+        // parity에서 current로 취급하지 않는다.
+        status: "REGISTERED",
       },
     });
     const run = await tx.repositoryDiscoveryRun.create({
@@ -263,6 +355,15 @@ export async function registerRepositoryWebhook(input: {
         },
       },
     });
-    return { duplicate: false, enqueued: true, runId: run.id, generation };
-  });
+  return { duplicate: false, enqueued: true, runId: run.id, generation };
+}
+
+export async function registerRepositoryWebhook(
+  input: RegisterRepositoryWebhookInput,
+  dependencies: RepositoryRegistrationDependencies = defaultDependencies,
+): Promise<RegisterRepositoryWebhookResult> {
+  const now = dependencies.now();
+  return dependencies.client.$transaction((tx) => (
+    registerRepositoryWebhookInTransaction(input, tx, now)
+  ));
 }

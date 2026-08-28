@@ -92,6 +92,50 @@ function aitAppName(result: Extract<RepositoryDiscoveryResult, { status: "ACTIVE
   return typeof appName === "string" ? appName : null;
 }
 
+const DISCOVERED_MARKETS = new Set(["play", "appstore", "ait"]);
+
+function normalizedMarketTargets(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.toLowerCase()))].sort()
+    : [];
+}
+
+export function appMarketIdentityConflict(input: {
+  existing: {
+    playPackage: string | null;
+    iosBundle: string | null;
+    aitAppName: string | null;
+    marketTargets: unknown;
+  };
+  discovered: {
+    playPackage: string | null;
+    iosBundle: string | null;
+    aitAppName: string | null;
+    marketTargets: string[];
+  };
+}): boolean {
+  const fieldConflict = (
+    existing: string | null,
+    discovered: string | null,
+  ) => existing !== null && existing.toLowerCase() !== discovered?.toLowerCase();
+  if (
+    fieldConflict(input.existing.playPackage, input.discovered.playPackage)
+    || fieldConflict(input.existing.iosBundle, input.discovered.iosBundle)
+    || fieldConflict(input.existing.aitAppName, input.discovered.aitAppName)
+  ) return true;
+  const existingManaged = normalizedMarketTargets(input.existing.marketTargets)
+    .filter((target) => DISCOVERED_MARKETS.has(target));
+  return existingManaged.length > 0
+    && JSON.stringify(existingManaged) !== JSON.stringify(input.discovered.marketTargets);
+}
+
+function reconciledMarketTargets(existing: unknown, discovered: readonly string[]): string[] {
+  return [...new Set([
+    ...normalizedMarketTargets(existing).filter((target) => !DISCOVERED_MARKETS.has(target)),
+    ...discovered,
+  ])].sort();
+}
+
 async function activeClaim(
   tx: Prisma.TransactionClient,
   claim: RepositoryDiscoveryClaim,
@@ -155,6 +199,7 @@ async function finishWithoutObservation(input: {
           reasonCode: input.reasonCode,
           candidates,
         }),
+        ...(input.sourceSha ? { lastDefaultPushSha: input.sourceSha } : {}),
         lastReconciledSha: input.sourceSha,
         lastDiscoveryReason: input.reasonCode,
       },
@@ -216,17 +261,34 @@ async function finishActive(input: {
       tx.app.findUnique({ where: { slug } }),
     ]);
     const adopted = byRepoId ?? (byFullName?.repoId === null ? byFullName : null);
-    const identityConflict = (
+    const android = input.result.buildTargets.find((target) => target.market === "google-play");
+    const ios = input.result.buildTargets.find((target) => target.market === "app-store");
+    const discoveredIdentity = {
+      playPackage: android?.packageId ?? null,
+      iosBundle: ios?.bundleId ?? null,
+      aitAppName: aitAppName(input.result),
+      marketTargets: marketTargets(input.result),
+    };
+    const repositoryIdentityConflict = (
       byFullName && byFullName.id !== adopted?.id
     ) || (
       bySlug && bySlug.id !== adopted?.id
     );
-    if (identityConflict) {
+    const marketIdentityConflict = Boolean(adopted && appMarketIdentityConflict({
+      existing: adopted,
+      discovered: discoveredIdentity,
+    }));
+    const identityReason: RepositoryDiscoveryReason | null = repositoryIdentityConflict
+      ? "APP_IDENTITY_CONFLICT"
+      : marketIdentityConflict
+        ? "APP_MARKET_IDENTITY_CONFLICT"
+        : null;
+    if (identityReason) {
       await tx.repositoryDiscoveryRun.update({
         where: { id: run.id },
         data: {
           status: "NEEDS_INPUT",
-          reasonCode: "APP_IDENTITY_CONFLICT",
+          reasonCode: identityReason,
           candidateDigest: input.result.candidateDigest,
           workerId: null,
           leaseExpiresAt: null,
@@ -240,11 +302,12 @@ async function finishActive(input: {
           managementKind: "UNCLASSIFIED",
           discoveryCandidates: publicDiscoveryState({
             sourceSha: input.snapshot.sourceSha,
-            reasonCode: "APP_IDENTITY_CONFLICT",
+            reasonCode: identityReason,
             candidates: input.result.candidates,
           }),
+          lastDefaultPushSha: input.snapshot.sourceSha,
           lastReconciledSha: input.snapshot.sourceSha,
-          lastDiscoveryReason: "APP_IDENTITY_CONFLICT",
+          lastDiscoveryReason: identityReason,
         },
       });
       await tx.auditLog.create({
@@ -257,16 +320,14 @@ async function finishActive(input: {
             repoId: run.repoId.toString(),
             generation: run.generation,
             sourceSha: input.snapshot.sourceSha,
-            reasonCode: "APP_IDENTITY_CONFLICT",
+            reasonCode: identityReason,
             candidateDigest: input.result.candidateDigest,
           },
         },
       });
-      return { completed: true, observationId: null, reasonCode: "APP_IDENTITY_CONFLICT" };
+      return { completed: true, observationId: null, reasonCode: identityReason };
     }
 
-    const android = input.result.buildTargets.find((target) => target.market === "google-play");
-    const ios = input.result.buildTargets.find((target) => target.market === "app-store");
     const app = adopted
       ? await tx.app.update({
           where: { id: adopted.id },
@@ -277,6 +338,10 @@ async function finishActive(input: {
             type: input.result.appType,
             engine: input.result.engine,
             isPublicRepo: !input.snapshot.private,
+            playPackage: adopted.playPackage ?? discoveredIdentity.playPackage,
+            iosBundle: adopted.iosBundle ?? discoveredIdentity.iosBundle,
+            aitAppName: adopted.aitAppName ?? discoveredIdentity.aitAppName,
+            marketTargets: reconciledMarketTargets(adopted.marketTargets, discoveredIdentity.marketTargets),
             configHash: input.result.candidateDigest,
             configSyncedAt: run.createdAt,
           },
@@ -291,10 +356,10 @@ async function finishActive(input: {
             engine: input.result.engine,
             status: "ACTIVE",
             isPublicRepo: !input.snapshot.private,
-            playPackage: android?.packageId ?? null,
-            iosBundle: ios?.bundleId ?? null,
-            aitAppName: aitAppName(input.result),
-            marketTargets: marketTargets(input.result),
+            playPackage: discoveredIdentity.playPackage,
+            iosBundle: discoveredIdentity.iosBundle,
+            aitAppName: discoveredIdentity.aitAppName,
+            marketTargets: discoveredIdentity.marketTargets,
             configHash: input.result.candidateDigest,
             configSyncedAt: run.createdAt,
           },
@@ -333,6 +398,7 @@ async function finishActive(input: {
           reasonCode: null,
           candidates: input.result.candidates,
         }),
+        lastDefaultPushSha: input.snapshot.sourceSha,
         lastReconciledSha: input.snapshot.sourceSha,
         lastDiscoveryReason: null,
       },

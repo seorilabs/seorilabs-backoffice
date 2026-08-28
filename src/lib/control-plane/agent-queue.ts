@@ -9,6 +9,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
+import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 
 class RepoScopeBusyError extends Error {}
 
@@ -327,6 +328,19 @@ async function replayClaim(input: {
   }
   const spentMicros = Number(event.run.spentMicros ?? 0n);
   const resumeMode = event.run.readbackRequestedAt ? "READBACK_FIRST" as const : "START" as const;
+  if (resumeMode === "START") {
+    const registration = await prisma.repositoryRegistration.findUnique({
+      where: { repoFullName: event.run.repoFullName },
+      select: {
+        archived: true,
+        status: true,
+        managementKind: true,
+        lastDefaultPushSha: true,
+        lastReconciledSha: true,
+      },
+    });
+    if (!repositoryAutomationEligible(registration)) return null;
+  }
   return {
     runId: event.run.id,
     repoFullName: event.run.repoFullName,
@@ -370,6 +384,19 @@ async function tryClaimRun(input: {
       if (!readbackClaim && run.status !== "PENDING") return null;
       const policy = managedPolicy(run.occurrence.definition);
       if (!policy || !run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt) return null;
+      if (!readbackClaim) {
+        const registration = await tx.repositoryRegistration.findUnique({
+          where: { repoFullName: run.repoFullName },
+          select: {
+            archived: true,
+            status: true,
+            managementKind: true,
+            lastDefaultPushSha: true,
+            lastReconciledSha: true,
+          },
+        });
+        if (!repositoryAutomationEligible(registration)) return null;
+      }
       if (policy.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced()) return null;
       const spentMicros = Number(run.spentMicros ?? 0n);
       if (!readbackClaim && spentMicros >= policy.budgetCeilingMicros) {

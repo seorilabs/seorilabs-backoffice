@@ -28,8 +28,10 @@ import {
   durableIngressEnvelopeHash,
   durableIssueToMirrorInput,
   parseDurableIssueObservation,
+  parseDurableRepositoryDiscovery,
   parseDurableStableTagPush,
   type DurableIssueObservation,
+  type DurableRepositoryDiscovery,
   type DurableStableTagPush,
 } from "@/lib/control-plane/automation-inbox";
 import {
@@ -37,6 +39,11 @@ import {
   completeAutomationMutation,
 } from "@/lib/control-plane/automation-mutation";
 import { ControlPlaneError } from "@/lib/control-plane/service";
+import {
+  invalidateRepositoryDiscoveryInTransaction,
+  repositoryAutomationEligible,
+  type RegisterRepositoryWebhookInput,
+} from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
 import type { GhIssueInput } from "@/lib/sync/mirror";
 
@@ -55,6 +62,154 @@ function retryDelay(attempts: number): number {
   return Math.min(60 * 60_000, 2 ** Math.max(0, attempts - 1) * 30_000);
 }
 
+const repositoryAutomationSelect = {
+  archived: true,
+  status: true,
+  managementKind: true,
+  lastDefaultPushSha: true,
+  lastReconciledSha: true,
+} as const;
+
+async function assertRepositoryAutomationManaged(repoFullName: string): Promise<void> {
+  const registration = await prisma.repositoryRegistration.findUnique({
+    where: { repoFullName },
+    select: repositoryAutomationSelect,
+  });
+  if (!repositoryAutomationEligible(registration)) {
+    throw new ControlPlaneError(
+      "현재 source가 재조정된 MANAGED repository만 Fleet automation을 실행할 수 있습니다.",
+      409,
+      "REPOSITORY_NOT_MANAGED",
+    );
+  }
+}
+
+function repositoryDiscoveryRegistrationInput(
+  discovery: DurableRepositoryDiscovery,
+  deliveryId: string,
+) {
+  return {
+    event: discovery.event,
+    action: discovery.action ?? undefined,
+    repository: {
+      id: discovery.repository.id,
+      full_name: discovery.repository.fullName,
+      name: discovery.repository.name ?? undefined,
+      default_branch: discovery.repository.defaultBranch,
+      archived: discovery.repository.archived,
+      private: discovery.repository.private,
+    },
+    ref: discovery.ref ?? undefined,
+    after: discovery.after ?? undefined,
+    deliveryId,
+    organization: discovery.organization,
+  };
+}
+
+type RepositoryDiscoveryReadback = (
+  discovery: DurableRepositoryDiscovery,
+  sourceKey: string,
+) => Promise<RegisterRepositoryWebhookInput>;
+
+const defaultRepositoryDiscoveryReadback: RepositoryDiscoveryReadback = async (
+  discovery,
+  sourceKey,
+) => {
+  const [observedOwner, observedRepo, ...observedRest] = discovery.repository.fullName.split("/");
+  if (!observedOwner || !observedRepo || observedRest.length > 0) {
+    throw new Error("invalid repository discovery identity");
+  }
+  const { getInstallationOctokit } = await import("@/lib/github/app");
+  const octokit = await getInstallationOctokit();
+  let repository: {
+    id?: unknown;
+    full_name?: unknown;
+    name?: unknown;
+    default_branch?: unknown;
+    archived?: unknown;
+    private?: unknown;
+  };
+  try {
+    repository = (await octokit.rest.repos.get({ owner: observedOwner, repo: observedRepo })).data;
+  } catch (error) {
+    if ((error as { status?: number }).status !== 404 || discovery.action !== "deleted") throw error;
+    repository = {
+      id: discovery.repository.id,
+      full_name: discovery.repository.fullName,
+      name: discovery.repository.name,
+      default_branch: discovery.repository.defaultBranch,
+      archived: true,
+      private: discovery.repository.private,
+    };
+  }
+  if (
+    repository.id !== discovery.repository.id
+    || typeof repository.full_name !== "string"
+    || !repository.full_name.startsWith(`${discovery.organization}/`)
+    || typeof repository.archived !== "boolean"
+    || typeof repository.private !== "boolean"
+    || (repository.name !== undefined && repository.name !== null && typeof repository.name !== "string")
+    || (
+      repository.default_branch !== undefined
+      && repository.default_branch !== null
+      && typeof repository.default_branch !== "string"
+    )
+  ) {
+    throw new Error("repository discovery provider identity mismatch");
+  }
+  const [owner, repo, ...rest] = repository.full_name.split("/");
+  if (!owner || !repo || rest.length > 0) throw new Error("invalid repository discovery provider identity");
+
+  let headSha: string | undefined;
+  const defaultBranch = typeof repository.default_branch === "string"
+    ? repository.default_branch
+    : null;
+  if (!repository.archived && defaultBranch) {
+    try {
+      const commit = (await octokit.rest.repos.getCommit({ owner, repo, ref: defaultBranch })).data;
+      if (typeof commit.sha !== "string" || !/^[0-9a-f]{40}$/i.test(commit.sha)) {
+        throw new Error("repository discovery provider HEAD invalid");
+      }
+      headSha = commit.sha.toLowerCase();
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status !== 404 && status !== 409) throw error;
+    }
+  }
+  const readbackVector = {
+    sourceKey,
+    repoId: discovery.repository.id,
+    repoFullName: repository.full_name,
+    defaultBranch,
+    archived: repository.archived,
+    private: repository.private,
+    headSha: headSha ?? null,
+  } as JsonValue;
+  return {
+    event: "reconcile",
+    action: "provider-readback",
+    repository: {
+      id: discovery.repository.id,
+      full_name: repository.full_name,
+      name: typeof repository.name === "string" ? repository.name : repo,
+      default_branch: defaultBranch,
+      archived: repository.archived,
+      private: repository.private,
+    },
+    after: headSha,
+    deliveryId: `provider-readback:${projectionHash(readbackVector)}`,
+    organization: discovery.organization,
+  };
+};
+
+type AutomationIngressDependencies = {
+  repositoryDiscoveryReadback: RepositoryDiscoveryReadback;
+};
+
+const defaultAutomationIngressDependencies: AutomationIngressDependencies = {
+  repositoryDiscoveryReadback: defaultRepositoryDiscoveryReadback,
+};
+
 export async function recordWebhookDelivery(input: {
   deliveryId: string;
   event: string;
@@ -65,15 +220,20 @@ export async function recordWebhookDelivery(input: {
   occurredAt?: Date | null;
   issue?: DurableIssueObservation | null;
   stableTagPush?: DurableStableTagPush | null;
+  repositoryDiscovery?: DurableRepositoryDiscovery | null;
 }): Promise<{ duplicate: boolean }> {
   const sourceKey = `github:${input.deliveryId}`;
   const action = input.action ?? null;
-  const durablePayload = input.issue ?? input.stableTagPush ?? null;
+  const payloads = [input.issue, input.stableTagPush, input.repositoryDiscovery]
+    .filter((payload): payload is DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery => Boolean(payload));
+  if (payloads.length > 1) throw new Error("webhook delivery has multiple durable payloads");
+  const durablePayload = payloads[0] ?? null;
   const shouldEnqueue = Boolean(
     input.repoFullName
     && (
       (input.event === "issues" && input.issueNumber && input.issueNodeId && input.issue)
       || (input.event === "push" && input.stableTagPush)
+      || ((input.event === "push" || input.event === "repository") && input.repositoryDiscovery)
     ),
   );
   const payloadHash = shouldEnqueue && input.repoFullName && durablePayload
@@ -85,62 +245,42 @@ export async function recordWebhookDelivery(input: {
       payload: durablePayload,
     })
     : null;
-  let duplicateDetected = false;
-  try {
-    const inserted = await prisma.$transaction(async (tx) => {
-      const delivery = await tx.webhookDelivery.createMany({
-        data: [{ deliveryId: input.deliveryId, event: input.event, action }],
-        skipDuplicates: true,
-      });
-      if (delivery.count === 0) return false;
-      if (shouldEnqueue && input.repoFullName && durablePayload) {
-        await tx.automationIngressEvent.create({
-          data: {
-            sourceKey,
-            event: input.event,
-            action,
-            repoFullName: input.repoFullName,
-            issueNumber: input.issueNumber,
-            issueNodeId: input.issueNodeId,
-            payload: durablePayload as Prisma.InputJsonValue,
-            payloadHash,
-            occurredAt: input.occurredAt ?? new Date(),
-          },
-        });
-      }
-      return true;
+  const occurredAt = input.occurredAt ?? new Date();
+  return prisma.$transaction(async (tx) => {
+    const inserted = await tx.webhookDelivery.createMany({
+      data: [{ deliveryId: input.deliveryId, event: input.event, action }],
+      skipDuplicates: true,
     });
-    if (inserted) return { duplicate: false };
-    duplicateDetected = true;
-  } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    duplicateDetected = true;
-  }
-  if (duplicateDetected) {
-    const delivery = await prisma.webhookDelivery.findUnique({ where: { deliveryId: input.deliveryId } });
-    if (!delivery) throw new Error("duplicate webhook delivery row missing");
+    const ingressInserted = shouldEnqueue && input.repoFullName && durablePayload
+      ? await tx.automationIngressEvent.createMany({
+        data: [{
+          sourceKey,
+          event: input.event,
+          action,
+          repoFullName: input.repoFullName,
+          issueNumber: input.issueNumber,
+          issueNodeId: input.issueNodeId,
+          payload: durablePayload as Prisma.InputJsonValue,
+          payloadHash,
+          occurredAt,
+        }],
+        skipDuplicates: true,
+      })
+      : { count: 0 };
+    if (input.repositoryDiscovery && (inserted.count === 1 || ingressInserted.count === 1)) {
+      await invalidateRepositoryDiscoveryInTransaction(
+        repositoryDiscoveryRegistrationInput(input.repositoryDiscovery, input.deliveryId),
+        tx,
+        occurredAt,
+      );
+    }
+    const delivery = await tx.webhookDelivery.findUnique({ where: { deliveryId: input.deliveryId } });
+    if (!delivery) throw new Error("webhook delivery row missing after durable write");
     if (delivery.event !== input.event || delivery.action !== action) {
       throw new ControlPlaneError("같은 delivery ID가 다른 webhook에 사용되었습니다.", 409, "WEBHOOK_DELIVERY_CONFLICT");
     }
     if (shouldEnqueue && input.repoFullName && durablePayload && payloadHash) {
-      let ingress = await prisma.automationIngressEvent.findUnique({ where: { sourceKey } });
-      if (!ingress) {
-        await prisma.automationIngressEvent.createMany({
-          data: [{
-            sourceKey,
-            event: input.event,
-            action,
-            repoFullName: input.repoFullName,
-            issueNumber: input.issueNumber,
-            issueNodeId: input.issueNodeId,
-            payload: durablePayload as Prisma.InputJsonValue,
-            payloadHash,
-            occurredAt: input.occurredAt ?? new Date(),
-          }],
-          skipDuplicates: true,
-        });
-        ingress = await prisma.automationIngressEvent.findUnique({ where: { sourceKey } });
-      }
+      const ingress = await tx.automationIngressEvent.findUnique({ where: { sourceKey } });
       if (
         !ingress
         || ingress.event !== input.event
@@ -153,9 +293,8 @@ export async function recordWebhookDelivery(input: {
         throw new ControlPlaneError("같은 delivery ID의 durable payload가 일치하지 않습니다.", 409, "WEBHOOK_DELIVERY_CONFLICT");
       }
     }
-    return { duplicate: true };
-  }
-  throw new Error("webhook delivery recording reached an invalid state");
+    return { duplicate: inserted.count === 0 };
+  });
 }
 
 async function eligibleIssue(input: {
@@ -257,6 +396,7 @@ async function dispatchDefinition(input: {
       "DEFINITION_CONTRACT_UNMANAGED",
     );
   }
+  await assertRepositoryAutomationManaged(definition.app.repoFullName);
   const idempotencyKey = automationIdempotencyKey({
     definitionId: definition.id,
     triggerKind: input.triggerKind,
@@ -383,6 +523,7 @@ export async function createAutomationDefinition(input: {
   if (!app || app.status !== "ACTIVE") {
     throw new ControlPlaneError("ACTIVE managed app을 찾을 수 없습니다.", 404, "APP_NOT_MANAGED");
   }
+  await assertRepositoryAutomationManaged(app.repoFullName);
   const key = definitionKey({
     appId: app.id,
     template: input.template,
@@ -503,6 +644,9 @@ export async function setAutomationPaused(input: {
   const now = input.now ?? new Date();
   const definition = await loadDefinition(input.definitionId);
   if (definition.cancelledAt) throw new ControlPlaneError("취소된 routine은 재개할 수 없습니다.", 409, "DEFINITION_CANCELLED");
+  if (!input.paused && definition.app) {
+    await assertRepositoryAutomationManaged(definition.app.repoFullName);
+  }
   if (definition.enabled === !input.paused) return { definition, changed: false };
   const updated = await prisma.$transaction(async (tx) => {
     const changed = await tx.automationDefinition.updateMany({
@@ -634,6 +778,17 @@ export async function retryAgentRun(input: { runId: string; actor: string; reque
       }
       if (run.status !== "DEAD_LETTER") {
         throw new ControlPlaneError("dead-letter run만 수동 재시도할 수 있습니다.", 409, "RUN_NOT_RETRYABLE");
+      }
+      const registration = await tx.repositoryRegistration.findUnique({
+        where: { repoFullName: run.repoFullName },
+        select: repositoryAutomationSelect,
+      });
+      if (!repositoryAutomationEligible(registration)) {
+        throw new ControlPlaneError(
+          "현재 source가 재조정되지 않은 repository의 run은 재시도할 수 없습니다.",
+          409,
+          "REPOSITORY_NOT_MANAGED",
+        );
       }
       await tx.agentRun.update({
         where: { id: run.id },
@@ -865,7 +1020,23 @@ async function processIngressEvent(event: {
   payloadHash: string | null;
   occurredAt: Date;
   attempts: number;
-}, now: Date, assertClaim: () => Promise<void>): Promise<void> {
+}, now: Date, assertClaim: () => Promise<void>, dependencies: AutomationIngressDependencies): Promise<void> {
+  if ((event.payload as { kind?: unknown } | null)?.kind === "REPOSITORY_DISCOVERY") {
+    const discovery = parseDurableRepositoryDiscovery({
+      payload: event.payload,
+      payloadHash: event.payloadHash,
+      sourceKey: event.sourceKey,
+      event: event.event,
+      action: event.action,
+      repoFullName: event.repoFullName,
+    });
+    await assertClaim();
+    const registrationInput = await dependencies.repositoryDiscoveryReadback(discovery, event.sourceKey);
+    await assertClaim();
+    const { registerRepositoryWebhook } = await import("@/lib/control-plane/repository-registration");
+    await registerRepositoryWebhook(registrationInput);
+    return;
+  }
   if (event.event === "push") {
     const tag = parseDurableStableTagPush({
       payload: event.payload,
@@ -977,7 +1148,7 @@ export async function drainAutomationIngress(input: {
   now?: Date;
   limit?: number;
   sourceKey?: string;
-} = {}) {
+} = {}, dependencies: AutomationIngressDependencies = defaultAutomationIngressDependencies) {
   const now = input.now ?? new Date();
   const staleBefore = new Date(now.getTime() - 5 * 60_000);
   const events = await prisma.automationIngressEvent.findMany({
@@ -1018,7 +1189,7 @@ export async function drainAutomationIngress(input: {
     heartbeat.unref();
     let processingError: unknown = null;
     try {
-      await processIngressEvent(event, now, assertClaim);
+      await processIngressEvent(event, now, assertClaim, dependencies);
     } catch (error) {
       processingError = error;
     } finally {
@@ -1083,7 +1254,22 @@ export async function scheduleDueAutomations(input: { now?: Date; perDefinitionL
   let created = 0;
   let duplicate = 0;
   let unsupported = 0;
+  let blocked = 0;
+  const registrations = await prisma.repositoryRegistration.findMany({
+    where: { repoFullName: { in: definitions.flatMap((definition) => definition.app ? [definition.app.repoFullName] : []) } },
+    select: { repoFullName: true, ...repositoryAutomationSelect },
+  });
+  const registrationByRepo = new Map(
+    registrations.map((registration) => [registration.repoFullName.toLowerCase(), registration]),
+  );
   for (const definition of definitions) {
+    if (
+      !definition.app
+      || !repositoryAutomationEligible(registrationByRepo.get(definition.app.repoFullName.toLowerCase()) ?? null)
+    ) {
+      blocked += 1;
+      continue;
+    }
     const cadence = cadenceForSchedule(definition.schedule);
     if (!cadence) {
       unsupported += 1;
@@ -1109,7 +1295,7 @@ export async function scheduleDueAutomations(input: { now?: Date; perDefinitionL
       else created += 1;
     }
   }
-  return { definitions: definitions.length, created, duplicate, unsupported };
+  return { definitions: definitions.length, created, duplicate, unsupported, blocked };
 }
 
 export async function reconcileAutomationScheduler(input: { now?: Date } = {}) {

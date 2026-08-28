@@ -17,7 +17,11 @@ import {
 } from "@/lib/control-plane/agent-queue";
 import { automationPolicy } from "@/lib/control-plane/automation-catalog";
 import { ControlPlaneError } from "@/lib/control-plane/service";
-import { durableStableTagPush } from "@/lib/control-plane/automation-inbox";
+import {
+  durableIngressEnvelopeHash,
+  durableRepositoryDiscovery,
+  durableStableTagPush,
+} from "@/lib/control-plane/automation-inbox";
 
 if (process.env.MIGRATION_FIXTURE_ACK !== "LOCAL_SCHEMA_ONLY") {
   throw new Error("MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY가 필요하다");
@@ -35,6 +39,7 @@ const nonce = crypto.randomUUID();
 const actor = `fixture:${nonce}`;
 const repoFullName = `seorilabs/p6-fixture-${nonce}`;
 const signingKey = "fleet-agent-contract-signing-key";
+let fixtureRepoId: bigint | null = null;
 process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED = "true";
 
 async function createRun(input: {
@@ -80,6 +85,18 @@ async function main() {
       type: "APP",
       engine: "RN",
       marketTargets: [],
+    },
+  });
+  fixtureRepoId = app.repoId;
+  await prisma.repositoryRegistration.create({
+    data: {
+      repoId: app.repoId!,
+      repoFullName,
+      defaultBranch: "main",
+      status: "MANAGED",
+      managementKind: "APP",
+      lastDefaultPushSha: "f".repeat(40),
+      lastReconciledSha: "f".repeat(40),
     },
   });
   await prisma.issueMirror.create({
@@ -393,11 +410,130 @@ async function main() {
     (error) => error instanceof ControlPlaneError && error.code === "WEBHOOK_DELIVERY_CONFLICT",
   );
 
+  const blockedOccurrence = await createRun({
+    definitionId: readyDefinition.id,
+    appId: app.id,
+    issueNumber: 1,
+    workKey: `${repoFullName}#repository-needs-input`,
+    createsPr: false,
+  });
+  await prisma.repositoryRegistration.update({
+    where: { repoId: app.repoId! },
+    data: { status: "NEEDS_INPUT" },
+  });
+  assert.equal(await claimAgentRun({
+    workerId: "codex:seorilabs-generic-worker",
+    agentKind: "CODEX",
+    leaseSeconds: 300,
+    idempotencyKey: `repository-needs-input:${crypto.randomUUID()}`,
+    signingKey,
+  }), null, "NEEDS_INPUT repository의 새 작업은 claim할 수 없어야 한다");
+  assert.equal((await prisma.agentRun.findUniqueOrThrow({
+    where: { id: blockedOccurrence.runs[0].id },
+  })).status, "PENDING");
+
+  const discoveryDeliveryId = `repository-discovery:${crypto.randomUUID()}`;
+  const staleWebhookRepoFullName = `${repoFullName}-before-rename`;
+  const durableDiscovery = durableRepositoryDiscovery({
+    event: "push",
+    repository: {
+      id: Number(app.repoId),
+      full_name: staleWebhookRepoFullName,
+      name: staleWebhookRepoFullName.split("/")[1],
+      default_branch: "main",
+      archived: false,
+      private: true,
+    },
+    ref: "refs/heads/main",
+    after: "e".repeat(40),
+    organization: "seorilabs",
+  });
+  assert.ok(durableDiscovery);
+  const discoverySourceKey = `github:${discoveryDeliveryId}`;
+  await prisma.automationIngressEvent.create({
+    data: {
+      sourceKey: discoverySourceKey,
+      event: "push",
+      repoFullName: staleWebhookRepoFullName,
+      payload: durableDiscovery,
+      payloadHash: durableIngressEnvelopeHash({
+        sourceKey: discoverySourceKey,
+        event: "push",
+        action: null,
+        repoFullName: staleWebhookRepoFullName,
+        payload: durableDiscovery,
+      }),
+      occurredAt: new Date(),
+    },
+  });
+  const repairedOrphan = await recordWebhookDelivery({
+    deliveryId: discoveryDeliveryId,
+    event: "push",
+    repoFullName: staleWebhookRepoFullName,
+    repositoryDiscovery: durableDiscovery,
+  });
+  assert.equal(repairedOrphan.duplicate, false, "ingress-only orphan은 delivery와 같은 원장으로 복구해야 한다");
+  const invalidatedRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+    where: { repoId: app.repoId! },
+  });
+  assert.equal(invalidatedRegistration.status, "REGISTERED");
+  assert.equal(
+    invalidatedRegistration.lastDefaultPushSha,
+    "f".repeat(40),
+    "서명된 webhook payload는 provider readback 전에는 current source 정본이 아니다",
+  );
+  assert.equal(await prisma.repositoryDiscoveryRun.count({
+    where: { triggerDeliveryId: discoveryDeliveryId },
+  }), 0);
+  assert.deepEqual(await drainAutomationIngress({ sourceKey: discoverySourceKey, limit: 1 }, {
+    repositoryDiscoveryReadback: async (_discovery, sourceKey) => ({
+      event: "reconcile",
+      action: "provider-readback",
+      repository: {
+        id: Number(app.repoId),
+        full_name: repoFullName,
+        name: repoFullName.split("/")[1],
+        default_branch: "main",
+        archived: false,
+        private: true,
+      },
+      after: "e".repeat(40),
+      deliveryId: `fixture-readback:${crypto.createHash("sha256").update(sourceKey).digest("hex")}`,
+      organization: "seorilabs",
+    }),
+  }), {
+    scanned: 1,
+    processed: 1,
+    failed: 0,
+    deadLetter: 0,
+  });
+  const providerReadRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+    where: { repoId: app.repoId! },
+  });
+  assert.equal(providerReadRegistration.status, "REGISTERED");
+  assert.equal(
+    providerReadRegistration.repoFullName,
+    repoFullName,
+    "순서가 뒤집힌 rename/push payload가 provider readback보다 우선해서는 안 된다",
+  );
+  assert.equal(providerReadRegistration.lastDefaultPushSha, "e".repeat(40));
+  assert.equal(await prisma.repositoryDiscoveryRun.count({
+    where: { sourceSha: "e".repeat(40), repoId: app.repoId! },
+  }), 1);
+
   console.log("Fleet agent automation integration 계약 통과");
 }
 
 main()
-  .finally(() => prisma.$disconnect())
+  .finally(async () => {
+    try {
+      if (fixtureRepoId !== null) {
+        await prisma.repositoryRegistration.deleteMany({ where: { repoId: fixtureRepoId } });
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
+  })
   .catch((error: unknown) => {
     console.error("Fleet agent automation integration 실패:", error instanceof Error ? error.message : "unknown");
     process.exit(1);

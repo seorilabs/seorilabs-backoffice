@@ -15,6 +15,7 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL이 필요합니다.
 const RN_REPO_ID = 8_900_000_001;
 const DRIFT_REPO_ID = 8_900_000_002;
 const PLATFORM_REPO_ID = 8_900_000_003;
+const ADOPTION_REPO_ID = 8_900_000_004;
 const SOURCE_SHA = "a".repeat(40);
 const NEW_SHA = "b".repeat(40);
 const TREE_SHA = "c".repeat(40);
@@ -76,9 +77,10 @@ function fakeOctokit(input: FakeRepository): Octokit {
 }
 
 async function clean(): Promise<void> {
-  const repoIds = [RN_REPO_ID, DRIFT_REPO_ID, PLATFORM_REPO_ID].map(BigInt);
+  const repoIds = [RN_REPO_ID, DRIFT_REPO_ID, PLATFORM_REPO_ID, ADOPTION_REPO_ID].map(BigInt);
   await prisma.repositoryRegistration.deleteMany({ where: { repoId: { in: repoIds } } });
   await prisma.app.deleteMany({ where: { repoId: { in: repoIds } } });
+  await prisma.app.deleteMany({ where: { repoFullName: "seorilabs/discovery-adoption" } });
 }
 
 async function main(): Promise<void> {
@@ -112,6 +114,29 @@ async function main(): Promise<void> {
       organization: "seorilabs",
     }, dependencies);
     assert.equal(registered.enqueued, true);
+    const pendingRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    });
+    assert.equal(pendingRegistration.status, "REGISTERED");
+    assert.equal(pendingRegistration.lastDefaultPushSha, null);
+    assert.equal(pendingRegistration.lastReconciledSha, null);
+    const pendingSemanticReplay = await registerRepositoryWebhook({
+      event: "repository",
+      action: "created",
+      repository: {
+        id: RN_REPO_ID,
+        full_name: "seorilabs/discovery-canary",
+        name: "discovery-canary",
+        default_branch: "main",
+        private: true,
+      },
+      deliveryId: "discovery-integration-created-semantic-replay",
+      organization: "seorilabs",
+    }, dependencies);
+    assert.equal(pendingSemanticReplay.duplicate, true);
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    })).status, "REGISTERED", "pending semantic replay가 MANAGED 상태를 복원하면 안 된다");
     const [firstClaim, secondClaim] = await Promise.all([
       claimRepositoryDiscoveryRun("integration-worker-a", {
         ...dependencies,
@@ -144,6 +169,7 @@ async function main(): Promise<void> {
     ]);
     assert.equal(registration.status, "MANAGED");
     assert.equal(registration.managementKind, "APP");
+    assert.equal(registration.lastDefaultPushSha, SOURCE_SHA);
     assert.equal(registration.lastReconciledSha, SOURCE_SHA);
     assert.equal(app.status, "ACTIVE");
     assert.equal(app.engine, "RN");
@@ -202,6 +228,12 @@ async function main(): Promise<void> {
       deliveryId: "discovery-integration-push-two",
       organization: "seorilabs",
     }, dependencies);
+    const pushedRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    });
+    assert.equal(pushedRegistration.status, "REGISTERED");
+    assert.equal(pushedRegistration.lastDefaultPushSha, NEW_SHA);
+    assert.equal(pushedRegistration.lastReconciledSha, SOURCE_SHA);
     const staleWorkerClaim = await claimRepositoryDiscoveryRun("integration-worker-stale", {
       ...dependencies,
       getOctokit: async () => fakeOctokit({
@@ -322,6 +354,80 @@ async function main(): Promise<void> {
     assert.equal(platformRegistration.status, "MANAGED");
     assert.equal(platformRegistration.managementKind, "PLATFORM_PRODUCER");
     assert.equal(await prisma.app.count({ where: { repoId: BigInt(PLATFORM_REPO_ID) } }), 0);
+
+    await prisma.app.create({
+      data: {
+        slug: "discovery-adoption",
+        displayName: "Discovery Adoption",
+        repoFullName: "seorilabs/discovery-adoption",
+        type: "APP",
+        engine: "RN",
+        status: "ACTIVE",
+        playPackage: "com.seorilabs.wrong",
+        marketTargets: ["play"],
+      },
+    });
+    await registerRepositoryWebhook({
+      event: "repository",
+      action: "created",
+      repository: {
+        id: ADOPTION_REPO_ID,
+        full_name: "seorilabs/discovery-adoption",
+        name: "discovery-adoption",
+        default_branch: "main",
+        private: true,
+      },
+      deliveryId: "discovery-integration-adoption",
+      organization: "seorilabs",
+    }, dependencies);
+    const adoptionClaim = await claimRepositoryDiscoveryRun("integration-worker-adoption", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: ADOPTION_REPO_ID,
+        fullName: "seorilabs/discovery-adoption",
+        headSha: SOURCE_SHA,
+        files,
+      }),
+    });
+    assert.ok(adoptionClaim);
+    const adoption = await processRepositoryDiscoveryClaim(adoptionClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: ADOPTION_REPO_ID,
+        fullName: "seorilabs/discovery-adoption",
+        headSha: SOURCE_SHA,
+        files,
+      }),
+    });
+    assert.equal(adoption.status, "NEEDS_INPUT");
+    assert.equal(adoption.reasonCode, "APP_MARKET_IDENTITY_CONFLICT");
+    const adoptionRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+    });
+    assert.equal(adoptionRegistration.status, "NEEDS_INPUT");
+    assert.equal(adoptionRegistration.lastDiscoveryReason, "APP_MARKET_IDENTITY_CONFLICT");
+    await registerRepositoryWebhook({
+      event: "push",
+      repository: {
+        id: ADOPTION_REPO_ID,
+        full_name: "seorilabs/discovery-adoption",
+        name: "discovery-adoption",
+        default_branch: "main",
+        private: true,
+      },
+      ref: "refs/tags/v1.0.0",
+      after: NEW_SHA,
+      deliveryId: "discovery-integration-adoption-tag",
+      organization: "seorilabs",
+    }, dependencies);
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+    })).status, "NEEDS_INPUT", "irrelevant tag push가 identity conflict를 지우면 안 된다");
+    const adoptionApp = await prisma.app.findUniqueOrThrow({
+      where: { repoFullName: "seorilabs/discovery-adoption" },
+    });
+    assert.equal(adoptionApp.repoId, null);
+    assert.equal(adoptionApp.playPackage, "com.seorilabs.wrong");
 
     console.log("repository discovery integration 계약 통과");
   } finally {

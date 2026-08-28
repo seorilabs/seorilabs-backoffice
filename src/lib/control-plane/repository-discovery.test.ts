@@ -10,6 +10,7 @@ import {
   type RepositoryTreeSnapshot,
 } from "@/lib/control-plane/repository-discovery";
 import type { SourceObservationResult } from "@/lib/github/source-observation";
+import { appMarketIdentityConflict } from "@/lib/control-plane/repository-discovery-service";
 
 const REPO_ID = 42;
 const SHA = "a".repeat(40);
@@ -65,6 +66,35 @@ function sourceReader(files: Record<string, string>) {
     };
   };
 }
+
+test("기존 App adoption은 비어 있는 market identity만 채우고 충돌은 NEEDS_INPUT 대상으로 판정한다", () => {
+  const discovered = {
+    playPackage: "com.seorilabs.sample",
+    iosBundle: "com.seorilabs.sample",
+    aitAppName: "sample-ait",
+    marketTargets: ["ait", "appstore", "play"],
+  };
+  assert.equal(appMarketIdentityConflict({
+    existing: { playPackage: null, iosBundle: null, aitAppName: null, marketTargets: ["web"] },
+    discovered,
+  }), false);
+  assert.equal(appMarketIdentityConflict({
+    existing: { ...discovered, marketTargets: ["play", "web", "ait", "appstore"] },
+    discovered,
+  }), false);
+  assert.equal(appMarketIdentityConflict({
+    existing: { ...discovered, playPackage: "com.seorilabs.other" },
+    discovered,
+  }), true);
+  assert.equal(appMarketIdentityConflict({
+    existing: { ...discovered, marketTargets: ["play", "appstore"] },
+    discovered,
+  }), true);
+  assert.equal(appMarketIdentityConflict({
+    existing: { ...discovered, iosBundle: "com.seorilabs.sample" },
+    discovered: { ...discovered, iosBundle: null, marketTargets: ["ait", "play"] },
+  }), true);
+});
 
 test("RN monorepo의 exact package manager, workingDirectory와 세 market target을 탐지한다", async () => {
   const canary = "discovery-secret-canary-must-not-persist";

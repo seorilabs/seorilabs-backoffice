@@ -7,6 +7,7 @@ import {
   type WorkflowCaller,
 } from "@/lib/control-plane/contracts";
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
+import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 
 export class ControlPlaneError extends Error {
@@ -797,7 +798,7 @@ export async function resolveManifest(input: {
   }, input.signingKey);
   const discovery = await prisma.discoveryObservation.findFirst({
     where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
-    orderBy: { observedAt: "desc" },
+    orderBy: latestDiscoveryObservationOrder(),
   });
   if (!discovery) {
     throw new ControlPlaneError("요청한 source SHA의 discovery observation이 없습니다.", 409, "NO_DISCOVERY_FOR_SHA");
@@ -823,7 +824,7 @@ export async function resolveManifest(input: {
     }),
     prisma.providerObservation.findMany({
       where: { appId: app.id, ...(market ? { provider: market } : {}) },
-      orderBy: { observedAt: "desc" },
+      orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     }),
     prisma.platformFleetBinding.findUnique({ where: { appId: app.id } }),
   ]);

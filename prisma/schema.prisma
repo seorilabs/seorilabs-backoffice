@@ -1617,32 +1617,32 @@ enum AutomationOccurrenceStatus {
 }
 
 model AgentRun {
-  id              String               @id @default(cuid())
-  occurrenceId    String
-  occurrence      AutomationOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  appId           String?
-  app             App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
-  repoFullName    String
-  issueNumber     Int?
-  workKey         String?              @unique
-  issueState      String?
-  labels          Json
-  createsPr       Boolean              @default(true)
-  priority        Int                  @default(100)
-  status          AgentRunStatus       @default(PENDING)
-  leaseGeneration Int                  @default(0)
-  attempts        Int                  @default(0)
-  maxAttempts     Int                  @default(3)
-  spentMicros     BigInt?
-  eligibleAt      DateTime             @default(now()) @db.DateTime(3)
-  startedAt       DateTime?            @db.DateTime(3)
-  completedAt     DateTime?            @db.DateTime(3)
-  outcome         Json?
-  error           String?              @db.Text
-  readbackRequestedAt DateTime?         @db.DateTime(3)
-  cancelledAt         DateTime?         @db.DateTime(3)
-  createdAt           DateTime          @default(now()) @db.DateTime(3)
-  updatedAt           DateTime          @updatedAt
+  id                  String               @id @default(cuid())
+  occurrenceId        String
+  occurrence          AutomationOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  appId               String?
+  app                 App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
+  repoFullName        String
+  issueNumber         Int?
+  workKey             String?              @unique
+  issueState          String?
+  labels              Json
+  createsPr           Boolean              @default(true)
+  priority            Int                  @default(100)
+  status              AgentRunStatus       @default(PENDING)
+  leaseGeneration     Int                  @default(0)
+  attempts            Int                  @default(0)
+  maxAttempts         Int                  @default(3)
+  spentMicros         BigInt?
+  eligibleAt          DateTime             @default(now()) @db.DateTime(3)
+  startedAt           DateTime?            @db.DateTime(3)
+  completedAt         DateTime?            @db.DateTime(3)
+  outcome             Json?
+  error               String?              @db.Text
+  readbackRequestedAt DateTime?            @db.DateTime(3)
+  cancelledAt         DateTime?            @db.DateTime(3)
+  createdAt           DateTime             @default(now()) @db.DateTime(3)
+  updatedAt           DateTime             @updatedAt
   leases              AgentLease[]
   events              AgentRunEvent[]
   reauthRequests      ReauthRequest[]
@@ -1740,17 +1740,17 @@ model AutomationIngressEvent {
 // PENDING row는 crash 후 동일 요청의 안전한 재실행을 허용하고, COMPLETED response는
 // side effect를 다시 만들지 않고 그대로 재생한다.
 model AutomationMutationRequest {
-  requestId   String   @id
+  requestId   String    @id
   actor       String
   operation   String
   targetKey   String
-  requestHash String   @db.Char(64)
-  status      String   @default("PENDING")
+  requestHash String    @db.Char(64)
+  status      String    @default("PENDING")
   request     Json
   response    Json?
   completedAt DateTime? @db.DateTime(3)
-  createdAt   DateTime @default(now()) @db.DateTime(3)
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now()) @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt
 
   @@index([status, updatedAt])
   @@map("automation_mutation_request")

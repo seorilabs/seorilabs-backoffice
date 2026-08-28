@@ -61,8 +61,15 @@ export default async function FleetOperationsPage({
 
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
-  const latestDiscovery = fleet.discoveryObservations[0];
-  const latestParity = fleet.fleetParityWaveResults[0];
+  const latestObservedDiscovery = fleet.discoveryObservations[0];
+  const latestDiscovery = fleet.discoveryCurrent ? latestObservedDiscovery : undefined;
+  const latestObservedParity = fleet.fleetParityWaveResults[0];
+  const latestParity = latestDiscovery
+    && activeConfig
+    && latestObservedParity?.sourceSha === latestDiscovery.sourceSha
+    && latestObservedParity.configRevisionId === activeConfig.id
+    ? latestObservedParity
+    : undefined;
   const activePayload = configRevisionPayloadSchema.safeParse(activeConfig?.payload);
   const initialPayload = activePayload.success
     ? activePayload.data
@@ -90,13 +97,30 @@ export default async function FleetOperationsPage({
         description="자동 탐지·desired state·provider readback·credential 공개 identity·agent queue를 앱 단위로 대조합니다. 이 화면은 provider write를 수행하지 않습니다."
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-          <Summary label="Discovery" value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : "미관측"} detail={dateTime(latestDiscovery?.observedAt)} />
+          <Summary
+            label="Discovery"
+            value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : latestObservedDiscovery ? "재탐지 대기" : "미관측"}
+            detail={latestDiscovery
+              ? dateTime(latestDiscovery.observedAt)
+              : fleet.repositoryRegistration?.lastDiscoveryReason ?? "current source 관측 없음"}
+            danger={Boolean(latestObservedDiscovery) && !latestDiscovery}
+          />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
           <Summary
             label="Parity gate"
-            value={latestParity?.wave.cleanupAllowed ? "2회 연속 통과" : latestParity ? `${latestParity.wave.consecutiveMatchCount}/2` : "미실행"}
-            detail={latestParity ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}` : "Fleet wave 증거 없음"}
-            danger={Boolean(latestParity) && !latestParity.wave.cleanupAllowed}
+            value={latestParity?.wave.cleanupAllowed
+              ? "2회 연속 통과"
+              : latestParity
+                ? `${latestParity.wave.consecutiveMatchCount}/2`
+                : latestObservedParity
+                  ? "현재 벡터 미검증"
+                  : "미실행"}
+            detail={latestParity
+              ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}`
+              : latestObservedParity
+                ? "과거 wave는 이력에서만 확인"
+                : "Fleet wave 증거 없음"}
+            danger={Boolean(latestObservedParity) && (!latestParity || !latestParity.wave.cleanupAllowed)}
           />
           <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
           <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />

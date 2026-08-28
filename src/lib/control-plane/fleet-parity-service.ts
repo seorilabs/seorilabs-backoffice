@@ -11,6 +11,7 @@ import {
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
+import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { assertIdempotentRequestHash, ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 
@@ -183,8 +184,16 @@ async function createWave(input: {
   const registrations = repoIds.length === 0
     ? []
     : await client.repositoryRegistration.findMany({
-        where: { repoId: { in: repoIds }, status: "MANAGED", archived: false },
-        select: { repoId: true, repoFullName: true },
+        where: { repoId: { in: repoIds } },
+        select: {
+          repoId: true,
+          repoFullName: true,
+          status: true,
+          archived: true,
+          managementKind: true,
+          lastDefaultPushSha: true,
+          lastReconciledSha: true,
+        },
       });
   const managed = new Map(registrations.map((row) => [row.repoId.toString(), row]));
   const cohort = activeApps.flatMap((app) => {
@@ -192,22 +201,27 @@ async function createWave(input: {
     const registration = managed.get(app.repoId.toString());
     if (!registration) return [];
     const identityMatches = registration.repoFullName.toLowerCase() === app.repoFullName.toLowerCase();
+    const sourceSha = app.discoveryObservations[0]?.sourceSha.toLowerCase() ?? null;
+    const sourceIsCurrent = repositorySourceIsCurrent(registration, sourceSha);
+    const reasonCode = !identityMatches
+      ? "COHORT_IDENTITY_MISMATCH"
+      : registration.status !== "MANAGED" || registration.archived
+        ? "REPOSITORY_NOT_MANAGED"
+        : !sourceIsCurrent
+          ? "SOURCE_NOT_RECONCILED"
+          : app.configRevisions.length === 0
+            ? "NO_ACTIVE_CONFIG"
+            : null;
     return [{
       appId: app.id,
       repoId: app.repoId,
       repoFullName: app.repoFullName,
-      sourceSha: app.discoveryObservations[0]?.sourceSha.toLowerCase() ?? null,
+      sourceSha,
       configRevisionId: app.configRevisions[0]?.id ?? null,
       scope: FLEET_PARITY_SCOPE,
       contractVersion: FLEET_PARITY_CONTRACT_VERSION,
-      status: (identityMatches ? "PENDING" : "ERROR") as FleetParityResultStatus,
-      reasonCode: identityMatches
-        ? app.discoveryObservations.length === 0
-          ? "NO_CURRENT_DISCOVERY"
-          : app.configRevisions.length === 0
-            ? "NO_ACTIVE_CONFIG"
-            : null
-        : "COHORT_IDENTITY_MISMATCH",
+      status: (reasonCode ? "ERROR" : "PENDING") as FleetParityResultStatus,
+      reasonCode,
       legacyDigest: null,
       centralDigest: null,
       sourceCount: 0,
@@ -277,7 +291,7 @@ async function createWave(input: {
 
 async function frozenVectorStillCurrent(
   result: SelectedWave["results"][number],
-  client: typeof prisma,
+  client: Pick<typeof prisma, "app" | "repositoryRegistration">,
 ): Promise<boolean> {
   const [app, registration] = await Promise.all([
     client.app.findUnique({
@@ -301,7 +315,14 @@ async function frozenVectorStillCurrent(
     }),
     client.repositoryRegistration.findUnique({
       where: { repoId: result.repoId },
-      select: { status: true, archived: true, repoFullName: true },
+      select: {
+        status: true,
+        archived: true,
+        repoFullName: true,
+        managementKind: true,
+        lastDefaultPushSha: true,
+        lastReconciledSha: true,
+      },
     }),
   ]);
   return app?.status === "ACTIVE"
@@ -309,8 +330,8 @@ async function frozenVectorStillCurrent(
     && app.repoFullName.toLowerCase() === result.repoFullName.toLowerCase()
     && app.discoveryObservations[0]?.sourceSha.toLowerCase() === result.sourceSha
     && app.configRevisions[0]?.id === result.configRevisionId
-    && registration?.status === "MANAGED"
-    && registration.archived === false
+    && registration !== null
+    && repositorySourceIsCurrent(registration, result.sourceSha)
     && registration.repoFullName.toLowerCase() === result.repoFullName.toLowerCase();
 }
 
@@ -399,7 +420,7 @@ async function finalizeWave(
   const client = dependencies.client;
   return client.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM control_plane_fleet_parity_wave WHERE id = ${waveId} FOR UPDATE`;
-    const current = await tx.fleetParityWave.findUniqueOrThrow({
+    let current = await tx.fleetParityWave.findUniqueOrThrow({
       where: { id: waveId },
       select: waveSelect,
     });
@@ -410,6 +431,32 @@ async function finalizeWave(
         409,
         "FLEET_PARITY_INCOMPLETE",
       );
+    }
+    for (const result of [...current.results].sort((left, right) => (
+      left.repoId < right.repoId ? -1 : left.repoId > right.repoId ? 1 : left.appId.localeCompare(right.appId)
+    ))) {
+      await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${result.repoId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM app WHERE id = ${result.appId} FOR UPDATE`;
+    }
+    let vectorChanged = false;
+    for (const result of current.results) {
+      if (result.status !== "MATCH") continue;
+      if (await frozenVectorStillCurrent(result, tx)) continue;
+      const changed = await tx.fleetParityWaveResult.updateMany({
+        where: { id: result.id, status: "MATCH" },
+        data: {
+          status: "ERROR",
+          reasonCode: "SOURCE_VECTOR_CHANGED",
+          observedAt: dependencies.now(),
+        },
+      });
+      vectorChanged ||= changed.count === 1;
+    }
+    if (vectorChanged) {
+      current = await tx.fleetParityWave.findUniqueOrThrow({
+        where: { id: waveId },
+        select: waveSelect,
+      });
     }
     const previous = await tx.fleetParityWave.findFirst({
       where: { id: { not: current.id }, status: { in: ["PASSED", "BLOCKED"] } },

@@ -4,6 +4,7 @@ import {
   redactCredentialCandidates,
 } from "@/lib/control-plane/contracts";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
+import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
 
 export function redactFleetError(value: string | null): string | null {
@@ -195,7 +196,7 @@ export async function getFleetOperationsView(appId: string) {
         },
       },
       providerObservations: {
-        orderBy: { observedAt: "desc" },
+        orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
         take: 100,
         select: {
           id: true,
@@ -304,7 +305,7 @@ export async function getFleetOperationsView(appId: string) {
           createdAt: true,
           configRevision: { select: { revision: true } },
           gateObservations: {
-            orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
+            orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
             take: 100,
             select: {
               id: true,
@@ -330,7 +331,7 @@ export async function getFleetOperationsView(appId: string) {
   });
   if (!app) return null;
 
-  const [recentRuns, deadLetters] = await Promise.all([
+  const [recentRuns, deadLetters, repositoryRegistration] = await Promise.all([
     prisma.agentRun.findMany({
       where: { appId: app.id },
       orderBy: { createdAt: "desc" },
@@ -407,6 +408,19 @@ export async function getFleetOperationsView(appId: string) {
         },
       },
     }),
+    app.repoId === null
+      ? Promise.resolve(null)
+      : prisma.repositoryRegistration.findUnique({
+          where: { repoId: app.repoId },
+          select: {
+            status: true,
+            archived: true,
+            managementKind: true,
+            lastDefaultPushSha: true,
+            lastReconciledSha: true,
+            lastDiscoveryReason: true,
+          },
+        }),
   ]);
 
   const seenProviderResources = new Set<string>();
@@ -419,6 +433,11 @@ export async function getFleetOperationsView(appId: string) {
 
   return {
     ...app,
+    repositoryRegistration,
+    discoveryCurrent: Boolean(
+      repositoryRegistration
+      && repositorySourceIsCurrent(repositoryRegistration, app.discoveryObservations[0]?.sourceSha ?? null),
+    ),
     discoveryObservations: app.discoveryObservations.map((observation) => ({
       ...observation,
       payload: redactFleetJson(observation.payload),

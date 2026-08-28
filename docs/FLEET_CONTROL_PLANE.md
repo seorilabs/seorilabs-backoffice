@@ -148,10 +148,12 @@ Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT`
 GitHub readback까지 통과한 뒤 `App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규
 repo는 App을 추측 생성하지 않는다.
 
-webhook은 source를 직접 읽지 않는다. 같은 transaction에서 `RepositoryDiscoveryRun` generation을
-enqueue하고 응답한다. delivery ID가 달라도 동일 generation의 normalized request hash가 같으면 기존
-run으로 접고, 새 generation은 이전 QUEUED/RUNNING lease를 즉시 `STALE`로 만든다. 전용 worker가 numeric
-repository ID, canonical full name, private/archive/default
+webhook은 source를 직접 읽지 않는다. 같은 transaction에서 delivery와 공개 discovery payload를 inbox에
+봉인하고 registration을 `REGISTERED`로 내려 기존 generation의 QUEUED/RUNNING lease를 즉시 `STALE`로
+만든다. scheduler가 provider의 현재 numeric repository ID, canonical full name, private/archive/default
+branch와 HEAD를 readback한 뒤 그 vector로만 `RepositoryDiscoveryRun` generation을 enqueue한다. delivery
+ID가 달라도 동일 generation의 normalized request hash가 같으면 기존 run으로 접는다. 전용 worker가
+numeric repository ID, canonical full name, private/archive/default
 branch와 현재 `main` HEAD를 provider에서 다시 읽은 뒤 exact commit tree만 탐색한다. default push SHA와
 현재 HEAD가 다르거나 탐지 중 HEAD가 움직이면 이전 run은 `STALE`로 닫고 current HEAD를 새 generation으로
 enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration generation CAS에서 거부된다.
@@ -167,12 +169,15 @@ source 원문, secret-like custom package field는 저장하지 않는다.
   public/non-main repo: 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
 - `seorilabs/platform`은 `seorilabs-platform` package와 `spec/openapi.yaml`을 함께 확인한 뒤
   `PLATFORM_PRODUCER`로 관리하며 RN/Godot App 후보에서 명시적으로 제외한다.
-- webhook handler가 durable enqueue 전에 실패하면 delivery claim을 되돌리고 503을 반환해 GitHub
-  redelivery가 동일 delivery ID로 재개할 수 있게 한다.
+- default push와 repository lifecycle webhook은 공개 numeric repo identity, ref, SHA를 delivery와 같은
+  transaction의 automation inbox에 checksum으로 봉인하고 기존 실행을 즉시 fail-closed한다. inbox 처리는
+  GitHub의 현재 repository identity와 HEAD를 다시 읽어 오래되거나 순서가 뒤집힌 payload를 적용하지 않는다.
+  scheduler는 GitHub redelivery에 의존하지 않고 FAILED/PENDING inbox를 재처리하며, 기존 ingress-only row도
+  동일 payload 검증 뒤 delivery 원장과 멱등 복구한다.
 
 worker poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
-enqueue와 registration은 webhook transaction에서
-즉시 완료하며, 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
+durable enqueue와 실행 차단은 webhook transaction에서 즉시 완료하고, provider readback 뒤 discovery run을
+등록한다. 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
 신규 private RN/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
 completedAt, reasonCode로 자동 검증할 수 있다.
 
