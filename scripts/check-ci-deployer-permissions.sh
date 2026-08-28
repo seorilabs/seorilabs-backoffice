@@ -32,7 +32,7 @@ echo "identity=${identity}"
 # 금지 조합이 하나도 없음을 확인한다. 이 review는 read-only이며 지속 리소스를 만들지 않는다.
 rules="$(printf '%s' \
   '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"'"$namespace"'"}}' \
-  | "$kubectl_bin" create -f - -o 'jsonpath={.status.incomplete}{"\n"}{range .status.resourceRules[*]}{.verbs}|{.apiGroups}|{.resources}{"\n"}{end}' 2>&1)" \
+  | "$kubectl_bin" create --validate=false -f - -o 'jsonpath={.status.incomplete}{"\n"}{range .status.resourceRules[*]}{.verbs}|{.apiGroups}|{.resources}{"\n"}{end}' 2>&1)" \
   || fail "SelfSubjectRulesReview를 읽지 못했다: ${rules}"
 
 incomplete="$(printf '%s\n' "$rules" | head -n1)"
