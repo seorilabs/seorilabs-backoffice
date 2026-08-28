@@ -63,6 +63,10 @@ export default async function FleetOperationsPage({
 
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
+  const latestShadowDraft = drafts.find((revision) => (
+    revision.legacyConfigImport?.status === "DRAFT_CREATED"
+    && configRevisionPayloadSchema.safeParse(revision.payload).success
+  ));
   const latestObservedDiscovery = fleet.discoveryObservations[0];
   const latestDiscovery = fleet.discoveryCurrent ? latestObservedDiscovery : undefined;
   const latestObservedParity = fleet.fleetParityWaveResults[0];
@@ -73,9 +77,17 @@ export default async function FleetOperationsPage({
     ? latestObservedParity
     : undefined;
   const activePayload = configRevisionPayloadSchema.safeParse(activeConfig?.payload);
+  const shadowPayload = configRevisionPayloadSchema.safeParse(latestShadowDraft?.payload);
   const initialPayload = activePayload.success
     ? activePayload.data
-    : { schemaVersion: 1 as const, markets: [] };
+    : shadowPayload.success
+      ? shadowPayload.data
+      : { schemaVersion: 1 as const, markets: [] };
+  const initialPayloadSource = activePayload.success
+    ? "ACTIVE" as const
+    : shadowPayload.success
+      ? "LEGACY_SHADOW" as const
+      : "EMPTY" as const;
   const releaseCandidates = fleet.releaseCandidates.map((candidate) => {
     const seen = new Set<string>();
     return {
@@ -294,6 +306,7 @@ export default async function FleetOperationsPage({
           appId={fleet.id}
           activeRevision={activeConfig?.revision ?? 0}
           initialPayload={jsonText(initialPayload)}
+          initialPayloadSource={initialPayloadSource}
           legacyActiveBlocked={Boolean(activeConfig) && !activePayload.success}
           shadowSourceSha={latestDiscovery?.sourceSha ?? null}
           drafts={drafts.map((draft) => ({

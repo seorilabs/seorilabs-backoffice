@@ -23,6 +23,7 @@ export function FleetConfigEditor({
   appId,
   activeRevision,
   initialPayload,
+  initialPayloadSource,
   legacyActiveBlocked,
   shadowSourceSha,
   drafts,
@@ -30,6 +31,7 @@ export function FleetConfigEditor({
   appId: string;
   activeRevision: number;
   initialPayload: string;
+  initialPayloadSource: "ACTIVE" | "LEGACY_SHADOW" | "EMPTY";
   legacyActiveBlocked: boolean;
   shadowSourceSha: string | null;
   drafts: DraftSummary[];
@@ -100,6 +102,12 @@ export function FleetConfigEditor({
           이 화면은 market/localization/asset, build pin, support URL, 공개 identity 기반 ProjectBlueprint,
           사람 승인 전 compliance draft만 허용합니다. 비밀값과 법적 승인·심사 제출·공개 배포 필드는 저장과 활성화가 모두 차단됩니다.
         </p>
+        {initialPayloadSource === "LEGACY_SHADOW" && (
+          <p className="mt-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            최신 exact-source shadow import에서 strict 비민감 validator를 통과한 payload를 편집 원본으로 불러왔습니다.
+            이 값은 아직 ACTIVE가 아니며, 일반 DRAFT로 저장한 뒤 별도 활성화해야 합니다.
+          </p>
+        )}
         {legacyActiveBlocked && (
           <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             기존 ACTIVE revision은 현재 strict 계약 밖의 payload라 편집 원본으로 복사하지 않았습니다. 서명 snapshot 조회는 유지되지만 재활성화할 수 없습니다.

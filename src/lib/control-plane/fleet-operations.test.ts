@@ -266,6 +266,10 @@ test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () 
     join(process.cwd(), "src/components/fleet/FleetConfigEditor.tsx"),
     "utf8",
   );
+  const fleetPage = readFileSync(
+    join(process.cwd(), "src/app/(app)/apps/[id]/fleet/page.tsx"),
+    "utf8",
+  );
   const actions = readFileSync(
     join(process.cwd(), "src/lib/actions/fleet-control-plane.ts"),
     "utf8",
@@ -280,6 +284,9 @@ test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () 
   assert.doesNotMatch(reauthModel, /^\s*(password|totp|cookie|recoveryCode|secret|reason)\s+/m);
   assert.doesNotMatch(credentialModel, /^\s*(value|secret|privateKey|password)\s+/m);
   assert.doesNotMatch(editor, /type=["']password["']/);
+  assert.match(editor, /initialPayloadSource === "LEGACY_SHADOW"/);
+  assert.match(fleetPage, /latestShadowDraft[\s\S]*legacyConfigImport\?\.status === "DRAFT_CREATED"/);
+  assert.match(fleetPage, /configRevisionPayloadSchema\.safeParse\(latestShadowDraft\?\.payload\)/);
   assert.match(actions, /requirePlatformReadAccess\(\)/);
   assert.match(actions, /requirePlatformWriteAccess\(app\.slug\)/);
   assert.match(actions, /uiRequestIdSchema\.parse\(input\.requestId\)/);

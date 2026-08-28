@@ -47,6 +47,7 @@ async function cleanupFixture(prisma: PrismaClient): Promise<void> {
   await prisma.storeAsset.deleteMany({ where });
   await prisma.legacyConfigImport.deleteMany({ where });
   await prisma.app.deleteMany({ where: { id: { in: appIds } } });
+  await prisma.repositoryRegistration.deleteMany({ where: { repoId: BigInt(PLATFORM_REPO_ID) } });
 }
 
 const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
@@ -203,6 +204,17 @@ async function main(): Promise<void> {
       new Date("2026-08-27T23:59:00.000Z"),
       new Date("2026-08-28T00:01:00.000Z"),
     );
+    await prisma.repositoryRegistration.create({
+      data: {
+        repoId: BigInt(PLATFORM_REPO_ID),
+        repoFullName: PLATFORM_FULL_NAME,
+        defaultBranch: "main",
+        status: "MANAGED",
+        managementKind: "PLATFORM_PRODUCER",
+        lastDefaultPushSha: PLATFORM_SHA,
+        lastReconciledSha: PLATFORM_SHA,
+      },
+    });
     await prisma.platformFleetBinding.create({
       data: { appId: APP_ID, state: "MANAGED", sourceSha: PLATFORM_SHA },
     });
@@ -258,6 +270,25 @@ async function main(): Promise<void> {
     assert.equal(first.import.sources.every((source) => typeof source.repoId === "string"), true);
     assert.doesNotThrow(() => JSON.stringify(first));
     assert.equal("requestHash" in first.import, false);
+
+    await prisma.platformFleetBinding.delete({ where: { appId: APP_ID } });
+    const registrationFallback = await recordLegacyShadowImport({
+      repoId: APP_REPO_ID,
+      sourceSha: APP_SHA,
+      observedBy: "integration-worker",
+      idempotencyKey: "legacy-shadow-integration-platform-registration-fallback",
+    }, dependencies);
+    assert.equal(registrationFallback.import.status, "DRAFT_CREATED");
+    assert.ok(registrationFallback.import.sources.some((source) => (
+      source.sourceKind === "PLATFORM_APP_REGISTRY"
+      && source.repoId?.toString() === String(PLATFORM_REPO_ID)
+      && source.sourceSha === PLATFORM_SHA
+      && source.status === "ABSENT"
+      && source.errorCode === "PATH_NOT_FOUND"
+    )));
+    await prisma.platformFleetBinding.create({
+      data: { appId: APP_ID, state: "MANAGED", sourceSha: PLATFORM_SHA },
+    });
 
     await assert.rejects(
       prisma.app.delete({ where: { id: APP_ID } }),

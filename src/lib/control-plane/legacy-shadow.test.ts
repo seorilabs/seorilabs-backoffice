@@ -12,6 +12,7 @@ import {
   type LegacySourceInput,
   type LegacySourceKind,
 } from "@/lib/control-plane/legacy-sources";
+import { resolveLegacyPlatformSourceVector } from "@/lib/control-plane/legacy-shadow-service";
 
 const APP_SHA = "a".repeat(40);
 const PLATFORM_SHA = "b".repeat(40);
@@ -55,6 +56,38 @@ test("legacy source allowlist는 exact path와 platform registry 한 항목만 �
   assert.equal(matchesLegacySourcePath("PLATFORM_APP_REGISTRY", "registry/apps/test-app.json"), true);
   assert.equal(matchesLegacySourcePath("PLATFORM_APP_REGISTRY", "registry/apps/nested/test-app.json"), false);
   assert.equal(matchesLegacySourcePath("SEORILABS_APP_YAML", "../.seorilabs/app.yaml"), false);
+});
+
+test("legacy platform source는 app binding을 우선하고 없을 때 current producer registration만 사용한다", () => {
+  const configured = { repoId: 123n, repoFullName: "seorilabs/platform" };
+  const registration = {
+    ...configured,
+    status: "MANAGED" as const,
+    archived: false,
+    managementKind: "PLATFORM_PRODUCER" as const,
+    lastDefaultPushSha: PLATFORM_SHA,
+    lastReconciledSha: PLATFORM_SHA,
+  };
+  assert.deepEqual(resolveLegacyPlatformSourceVector({
+    configured,
+    bindingSourceSha: "c".repeat(40),
+    registration,
+  }), { ...configured, sourceSha: "c".repeat(40) });
+  assert.deepEqual(resolveLegacyPlatformSourceVector({
+    configured,
+    bindingSourceSha: null,
+    registration,
+  }), { ...configured, sourceSha: PLATFORM_SHA });
+  assert.equal(resolveLegacyPlatformSourceVector({
+    configured,
+    bindingSourceSha: null,
+    registration: { ...registration, lastDefaultPushSha: "d".repeat(40) },
+  }), null);
+  assert.equal(resolveLegacyPlatformSourceVector({
+    configured,
+    bindingSourceSha: null,
+    registration: { ...registration, managementKind: "APP" },
+  }), null);
 });
 
 test("runtime의 unknown source kind와 status도 allowlist 밖에서 fail-closed한다", () => {
