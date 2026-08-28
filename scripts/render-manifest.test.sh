@@ -303,6 +303,11 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    grep -q 'backoffice_rehearsal' "$restore_job" &&
    grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
    grep -q 'ensureRestoredAppendOnlyTriggers' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -Fq '["db", "execute", "--stdin", "--schema"' "$root/scripts/verify-restore-rehearsal.ts" &&
+   ! grep -q -- '"--url"' "$root/scripts/verify-restore-rehearsal.ts" &&
+   ! grep -q '\$executeRawUnsafe' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
+   grep -q 'DROP TRIGGER IF EXISTS' "$root/scripts/test-restore-rehearsal.ts" &&
+   grep -q 'ulimit -c 0' "$restore_job" &&
    grep -q 'RECONSTRUCTED_FROM_SOURCE_CONTRACT' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
    ! grep -q 'key: DATABASE_URL' "$restore_job" &&
    ! grep -q 'key: DB_PASSWORD' "$restore_job" &&

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 import { PrismaClient } from "@prisma/client";
 
@@ -23,15 +26,51 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
   throw new Error("restore rehearsal integration fixture DB 이름은 _contract_test로 끝나야 한다");
 }
 
+const prismaCommand = existsSync(join(process.cwd(), "node_modules/.bin/prisma"))
+  ? join(process.cwd(), "node_modules/.bin/prisma")
+  : "prisma";
+
+async function executeTriggerDdl(statement: string): Promise<void> {
+  const result = spawnSync(
+    prismaCommand,
+    ["db", "execute", "--stdin", "--schema", join(process.cwd(), "prisma/schema.prisma")],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl.toString(),
+        PRISMA_HIDE_UPDATE_MESSAGE: "1",
+      },
+      input: `${statement};\n`,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error("restore rehearsal integration DDL 실패");
+  }
+}
+
 async function main(): Promise<void> {
   const client = new PrismaClient();
   const keepFixture = process.env.RESTORE_REHEARSAL_KEEP_FIXTURE === "LOCAL_CONTRACT_ONLY";
   const triggerEvidence = await ensureRestoredAppendOnlyTriggers({
     client,
     databaseUrl: databaseUrl.toString(),
+    executeTriggerDdl,
   });
   assert.equal(triggerEvidence.mode, "PRESERVED_FROM_DUMP");
   assert.equal(triggerEvidence.verified, REQUIRED_APPEND_ONLY_TRIGGERS.length);
+  for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
+    await executeTriggerDdl(`DROP TRIGGER IF EXISTS \`${requirement.name}\``);
+  }
+  const reconstructedTriggerEvidence = await ensureRestoredAppendOnlyTriggers({
+    client,
+    databaseUrl: databaseUrl.toString(),
+    executeTriggerDdl,
+  });
+  assert.equal(reconstructedTriggerEvidence.mode, "RECONSTRUCTED_FROM_SOURCE_CONTRACT");
+  assert.equal(reconstructedTriggerEvidence.verified, REQUIRED_APPEND_ONLY_TRIGGERS.length);
   await client.app.deleteMany({ where: { id: APP_ID } });
   try {
     const payload = { schemaVersion: 1, markets: [] };

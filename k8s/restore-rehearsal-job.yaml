@@ -149,6 +149,7 @@ spec:
           args:
             - |
               set -euo pipefail
+              ulimit -c 0
               trap 'touch /state/stop' EXIT
               for _ in $(seq 1 300); do
                 test ! -f /state/restore-failed || exit 1

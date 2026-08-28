@@ -73,6 +73,11 @@ kubectl apply -f k8s/backoffice-networking.yaml
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
 source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 두 개가 있으면 보존하지만 부분·변형·
 추가 trigger는 복구하지 않고 실패한다.
+`CREATE TRIGGER`는 MySQL prepared statement에서 지원되지 않으므로 Prisma `$executeRawUnsafe`로
+실행하지 않는다. verifier는 trigger가 정확히 0개일 때만 repo-local canonical DDL을
+`prisma db execute --stdin`의 전용 child process에 전달한다. 격리 DB URL은 argv나 로그에 넣지 않고
+그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 두 개를
+제거한 뒤 이 text-protocol 경로로 정확히 두 개가 재구성되는지 확인한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
 주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지

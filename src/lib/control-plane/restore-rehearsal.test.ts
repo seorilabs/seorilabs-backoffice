@@ -48,12 +48,11 @@ class FakeTriggerClient {
     })) as T;
   }
 
-  async $executeRawUnsafe(statement: string): Promise<number> {
+  async executeTriggerDdl(statement: string): Promise<void> {
     this.statements.push(statement);
     const index = REQUIRED_APPEND_ONLY_TRIGGERS.findIndex(({ name }) => statement.includes(name));
     assert.ok(index >= 0, "계약에 없는 DDL이 실행됐다");
     this.observed.push(observation(index));
-    return 0;
   }
 }
 
@@ -87,6 +86,7 @@ test("trigger가 없는 logical dump는 exact source 계약으로만 재구성�
   const evidence = await ensureRestoredAppendOnlyTriggers({
     client,
     databaseUrl: "mysql://root:test@127.0.0.1:3306/backoffice_rehearsal",
+    executeTriggerDdl: (statement) => client.executeTriggerDdl(statement),
   });
   assert.deepEqual(evidence, {
     mode: "RECONSTRUCTED_FROM_SOURCE_CONTRACT",
@@ -101,6 +101,7 @@ test("dump가 exact trigger를 보존했으면 DDL을 다시 실행하지 않는
   const evidence = await ensureRestoredAppendOnlyTriggers({
     client,
     databaseUrl: "mysql://root:test@127.0.0.1:3306/backoffice_rehearsal",
+    executeTriggerDdl: (statement) => client.executeTriggerDdl(statement),
   });
   assert.equal(evidence.mode, "PRESERVED_FROM_DUMP");
   assert.equal(evidence.verified, REQUIRED_APPEND_ONLY_TRIGGERS.length);
@@ -113,6 +114,7 @@ test("부분·변형·추가 trigger는 자동 복구하지 않고 실패한다"
     () => ensureRestoredAppendOnlyTriggers({
       client: partial,
       databaseUrl: "mysql://root:test@127.0.0.1:3306/backoffice_rehearsal",
+      executeTriggerDdl: (statement) => partial.executeTriggerDdl(statement),
     }),
     /missing:/,
   );
@@ -126,6 +128,7 @@ test("부분·변형·추가 trigger는 자동 복구하지 않고 실패한다"
     () => ensureRestoredAppendOnlyTriggers({
       client: mismatch,
       databaseUrl: "mysql://root:test@127.0.0.1:3306/backoffice_rehearsal",
+      executeTriggerDdl: (statement) => mismatch.executeTriggerDdl(statement),
     }),
     /mismatch:/,
   );
@@ -140,6 +143,7 @@ test("부분·변형·추가 trigger는 자동 복구하지 않고 실패한다"
     () => ensureRestoredAppendOnlyTriggers({
       client: extra,
       databaseUrl: "mysql://root:test@127.0.0.1:3306/backoffice_rehearsal",
+      executeTriggerDdl: (statement) => extra.executeTriggerDdl(statement),
     }),
     /unexpected:/,
   );
@@ -152,6 +156,7 @@ test("원격 DB 또는 TRIGGER 가시성 없는 principal에는 DDL을 실행하
     () => ensureRestoredAppendOnlyTriggers({
       client: remote,
       databaseUrl: "mysql://root:test@mysql.data.svc.cluster.local:3306/backoffice_rehearsal",
+      executeTriggerDdl: (statement) => remote.executeTriggerDdl(statement),
     }),
     /REHEARSAL_DATABASE_NOT_ISOLATED/,
   );
@@ -162,6 +167,7 @@ test("원격 DB 또는 TRIGGER 가시성 없는 principal에는 DDL을 실행하
     () => ensureRestoredAppendOnlyTriggers({
       client: forbidden,
       databaseUrl: "mysql://u:test@127.0.0.1:3306/backoffice_rehearsal",
+      executeTriggerDdl: (statement) => forbidden.executeTriggerDdl(statement),
     }),
     /RESTORE_TRIGGER_VISIBILITY_FORBIDDEN/,
   );
