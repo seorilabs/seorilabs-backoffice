@@ -1,6 +1,7 @@
 import { Prisma, type RepositoryRegistrationStatus } from "@prisma/client";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
 const SHA_40 = /^[0-9a-f]{40}$/i;
 const REPOSITORY_DISCOVERY_ACTIONS = new Set([
@@ -17,6 +18,7 @@ export interface RepositoryWebhookInput {
   default_branch?: string | null;
   archived?: boolean;
   private?: boolean;
+  fork?: boolean;
 }
 
 export function registrationStatus(input: {
@@ -34,11 +36,17 @@ export function repositorySourceIsCurrent(input: {
   archived: boolean;
   status: string;
   managementKind: string | null;
+  classification?: string | null;
   lastDefaultPushSha: string | null;
   lastReconciledSha: string | null;
 }, observationSha?: string | null): boolean {
   if (input.archived || input.status !== "MANAGED") return false;
-  if (input.managementKind !== "APP") return false;
+  // classification=null + legacy APP는 additive rollout 중에만 허용한다. 새 분류가
+  // 한 번이라도 기록되면 PRODUCT_APP만 앱 자동화 cohort가 된다.
+  if (
+    input.classification !== "PRODUCT_APP"
+    && !(input.classification == null && input.managementKind === "APP")
+  ) return false;
   const pushed = input.lastDefaultPushSha?.toLowerCase() ?? null;
   const reconciled = input.lastReconciledSha?.toLowerCase() ?? null;
   return pushed !== null
@@ -108,13 +116,14 @@ export type RegisterRepositoryWebhookInput = {
   after?: string;
   deliveryId: string;
   organization: string;
+  classificationDecisionRevision?: number;
 };
 
 export function repositoryDiscoveryRequestHashes(
   input: RegisterRepositoryWebhookInput,
   archived: boolean,
   trigger: ReturnType<typeof repositoryDiscoveryTrigger>,
-): { current: string; legacyV1: string } {
+): { current: string; legacyV2: string; legacyV1: string } {
   const common = {
     event: input.event,
     action: input.action ?? null,
@@ -129,9 +138,16 @@ export function repositoryDiscoveryRequestHashes(
     current: jsonDigest({
       ...common,
       private: input.repository.private ?? null,
+      fork: input.repository.fork ?? null,
+      classificationDecisionRevision: input.classificationDecisionRevision ?? null,
+    } as JsonValue),
+    // v2는 private provider fact를 결합했지만 fork와 분류 revision은 없었다.
+    legacyV2: jsonDigest({
+      ...common,
+      private: input.repository.private ?? null,
     } as JsonValue),
     // 2026-08-28 이전 persisted delivery의 redelivery만 받아들이는 bounded
-    // compatibility다. 새 row에는 항상 private을 포함한 current hash를 저장한다.
+    // compatibility다. 새 row에는 private/fork와 선택된 분류 revision을 포함한다.
     legacyV1: jsonDigest(common as JsonValue),
   };
 }
@@ -140,7 +156,7 @@ export function repositoryDiscoveryRequestHashMatches(
   stored: string,
   hashes: ReturnType<typeof repositoryDiscoveryRequestHashes>,
 ): boolean {
-  return stored === hashes.current || stored === hashes.legacyV1;
+  return stored === hashes.current || stored === hashes.legacyV2 || stored === hashes.legacyV1;
 }
 
 type RegisterRepositoryWebhookResult = {
@@ -182,12 +198,18 @@ export async function invalidateRepositoryDiscoveryInTransaction(
       repoFullName: repo.full_name,
       defaultBranch: repo.default_branch ?? null,
       archived: false,
+      fork: null,
       status: "REGISTERED",
+      classification: null,
+      discoveryContractVersion: null,
       managementKind: "UNCLASSIFIED",
       reconcileGeneration: 0,
     },
     update: {
       status: "REGISTERED",
+      classification: null,
+      discoveryContractVersion: null,
+      fork: null,
     },
   });
   await tx.$executeRaw`
@@ -261,6 +283,7 @@ export async function registerRepositoryWebhookInTransaction(
         repoFullName: repo.full_name,
         defaultBranch: repo.default_branch ?? null,
         archived,
+        fork: repo.fork ?? null,
         status: archived ? "ARCHIVED" : "REGISTERED",
         managementKind: "UNCLASSIFIED",
         reconcileGeneration: 0,
@@ -275,14 +298,26 @@ export async function registerRepositoryWebhookInTransaction(
         // tag/non-default push가 NEEDS_INPUT 또는 EXCLUDED 판정을 지우지 않는다.
         // relevant generation은 아래에서만 REGISTERED로 전환한다.
         ...(trigger.sourceSha ? { lastDefaultPushSha: trigger.sourceSha } : {}),
+        ...(Object.prototype.hasOwnProperty.call(repo, "fork") ? { fork: repo.fork ?? null } : {}),
         lastDeliveryId: input.deliveryId,
       },
     });
     await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
     const registration = await tx.repositoryRegistration.findUniqueOrThrow({
       where: { repoId },
-      select: { archived: true, reconcileGeneration: true },
+      select: {
+        archived: true,
+        reconcileGeneration: true,
+        classificationDecisionVersion: true,
+      },
     });
+
+    if (
+      input.classificationDecisionRevision !== undefined
+      && input.classificationDecisionRevision !== (registration.classificationDecisionVersion ?? 0)
+    ) {
+      throw new Error("REPOSITORY_CLASSIFICATION_REVISION_STALE");
+    }
 
     if (archived) {
       const generation = repositoryGenerationAfterArchive(registration);
@@ -291,6 +326,8 @@ export async function registerRepositoryWebhookInTransaction(
         data: {
           archived: true,
           status: "ARCHIVED",
+          classification: "EXCLUDED",
+          discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           reconcileGeneration: generation,
         },
       });
@@ -337,6 +374,7 @@ export async function registerRepositoryWebhookInTransaction(
         repoId,
         generation: currentGeneration,
         requestHash,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         status: { in: ["QUEUED", "RUNNING", "MANAGED", "NEEDS_INPUT", "EXCLUDED"] },
       },
       select: { id: true, generation: true, status: true },
@@ -371,6 +409,8 @@ export async function registerRepositoryWebhookInTransaction(
       data: {
         reconcileGeneration: generation,
         managementKind: "UNCLASSIFIED",
+        classification: null,
+        discoveryContractVersion: null,
         discoveryCandidates: Prisma.DbNull,
         lastDiscoveryReason: null,
         // 기존 App도 새 generation이 exact HEAD로 완료되기 전에는 자동화와
@@ -384,6 +424,7 @@ export async function registerRepositoryWebhookInTransaction(
         generation,
         triggerDeliveryId: input.deliveryId,
         requestHash,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         sourceSha: trigger.sourceSha,
         sourceRef: trigger.sourceRef,
         availableAt: now,

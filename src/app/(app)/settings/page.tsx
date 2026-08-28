@@ -9,11 +9,14 @@ import {
   visiblePrWhere,
   visibleReleaseWhere,
 } from "@/lib/domain/app-visibility";
+import { getDesiredStateBackfillSummary } from "@/lib/control-plane/desired-state-backfill";
+import { getRepositoryClassificationQueue } from "@/lib/control-plane/repository-classification-decision";
+import { RepositoryClassificationQueue } from "@/components/RepositoryClassificationQueue";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers] =
+  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue] =
     await Promise.all([
       prisma.app.count({ where: visibleAppWhere }),
       prisma.issueMirror.count({ where: visibleIssueWhere }),
@@ -21,6 +24,8 @@ export default async function SettingsPage() {
       prisma.releaseRecord.count({ where: visibleReleaseWhere }),
       prisma.webhookDelivery.findFirst({ orderBy: { receivedAt: "desc" } }),
       prisma.user.findMany({ where: { allowlisted: true }, select: { login: true } }),
+      getDesiredStateBackfillSummary(),
+      getRepositoryClassificationQueue(),
     ]);
 
   return (
@@ -37,6 +42,34 @@ export default async function SettingsPage() {
 
         <Card title="작업">
           <SettingsActions />
+        </Card>
+
+        <Card title="Fleet 등록과 중앙 DRAFT">
+          <Row k="Repository 분류" v={`${fleetSummary.classificationCounts.PRODUCT_APP} 제품 · ${fleetSummary.classificationCounts.INFRA_REPO} 인프라 · ${fleetSummary.classificationCounts.PLATFORM_PRODUCER} 플랫폼 · ${fleetSummary.classificationCounts.EXCLUDED} 제외 - 보관 ${fleetSummary.classificationCounts.ARCHIVED} 포함`} />
+          <Row k="미분류 / legacy" v={`${fleetSummary.classificationCounts.UNCLASSIFIED} / ${fleetSummary.classificationCounts.LEGACY_APP}`} />
+          <Row k="ACTIVE 앱" v={`${fleetSummary.activeApps}개`} />
+          <Row k="DRAFT 생성 가능" v={`${fleetSummary.readyForDraft}개`} />
+          <Row k="중앙 설정 있음" v={`${fleetSummary.alreadyConfigured}개`} />
+          <Row k="입력 필요" v={`${fleetSummary.needsInput}개`} />
+          <div className="mt-3 space-y-1 text-xs text-neutral-600">
+            {Object.entries(fleetSummary.needsInputByReason).map(([reason, count]) => (
+              <div key={reason} className="flex justify-between gap-3">
+                <span className="break-all font-mono">{reason}</span>
+                <span>{count}개</span>
+              </div>
+            ))}
+            {fleetSummary.needsInput === 0 && <p>현재 입력이 필요한 ACTIVE 앱이 없습니다.</p>}
+          </div>
+          <p className="mt-3 text-xs text-neutral-500">
+            이 자동화는 exact-SHA discovery에서 확인된 market만 DRAFT로 만들며 활성화, provider 변경, 법적 선언, 소유권·결제·심사·공개 승인은 수행하지 않습니다.
+          </p>
+        </Card>
+
+        <Card title={`Repository 분류 입력 ${classificationQueue.length}건`}>
+          <RepositoryClassificationQueue items={classificationQueue} />
+          <p className="mt-3 text-xs text-neutral-500">
+            저장 시 source를 추측하지 않고 최신 provider identity와 exact HEAD를 다시 읽습니다. fork는 제품 앱으로 승격할 수 없습니다.
+          </p>
         </Card>
 
         <Card title="Allowlist">

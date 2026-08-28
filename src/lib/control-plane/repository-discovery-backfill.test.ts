@@ -89,6 +89,7 @@ test("active private 저장소는 numeric ID와 canonical identity를 재확인�
     default_branch: "main",
     archived: false,
     private: true,
+    fork: false,
   };
   const client: RepositoryInventoryClient = {
     request(route, parameters) {
@@ -105,6 +106,8 @@ test("active private 저장소는 numeric ID와 canonical identity를 재확인�
     defaultBranch: "main",
     archived: false,
     private: true,
+    fork: false,
+    classificationDecisionRevision: 0,
     headSha: SHA,
   });
   assert.equal(calls.filter(({ route }) => route === "GET /repositories/{repository_id}").length, 2);
@@ -115,7 +118,7 @@ test("active private 저장소는 numeric ID와 canonical identity를 재확인�
   });
 });
 
-test("archive와 public repository는 source를 읽지 않고 lifecycle/policy reconcile vector만 만든다", async () => {
+test("archive와 허용되지 않은 public repository는 source를 읽지 않고 lifecycle/policy vector만 만든다", async () => {
   for (const repository of [{
     id: 11,
     full_name: "seorilabs/archived-app",
@@ -123,6 +126,7 @@ test("archive와 public repository는 source를 읽지 않고 lifecycle/policy r
     default_branch: "main",
     archived: true,
     private: true,
+    fork: false,
   }, {
     id: 12,
     full_name: "seorilabs/public-app",
@@ -130,6 +134,7 @@ test("archive와 public repository는 source를 읽지 않고 lifecycle/policy r
     default_branch: "main",
     archived: false,
     private: false,
+    fork: false,
   }]) {
     const routes: string[] = [];
     const vector = await readRepositoryBackfillVector({
@@ -141,6 +146,95 @@ test("archive와 public repository는 source를 읽지 않고 lifecycle/policy r
     assert.equal(vector.headSha, null);
     assert.deepEqual(routes, ["GET /repositories/{repository_id}"]);
   }
+});
+
+test("중앙 정책이 허용한 public repository도 exact default HEAD를 읽어 missed push를 다음 sweep에서 복구한다", async () => {
+  let head = SHA;
+  const routes: string[] = [];
+  const repository = {
+    id: 13,
+    full_name: "seorilabs/periodic-table-app",
+    name: "periodic-table-app",
+    default_branch: "main",
+    archived: false,
+    private: false,
+    fork: false,
+  };
+  const client: RepositoryInventoryClient = {
+    request(route) {
+      routes.push(route);
+      if (route === "GET /repositories/{repository_id}") return response(repository);
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}") return response({ sha: head });
+      throw new Error(`unexpected route ${route}`);
+    },
+  };
+  const first = await readRepositoryBackfillVector(client, "seorilabs", { repoId: 13 });
+  head = "b".repeat(40);
+  const second = await readRepositoryBackfillVector(client, "seorilabs", { repoId: 13 });
+  assert.equal(first.headSha, SHA);
+  assert.equal(second.headSha, head);
+  assert.notEqual(
+    repositoryBackfillDeliveryId("seorilabs", first, "hourly"),
+    repositoryBackfillDeliveryId("seorilabs", second, "hourly"),
+  );
+  assert.equal(routes.filter((route) => route.includes("commits")).length, 2);
+  assert.equal(routes.filter((route) => route === "GET /repositories/{repository_id}").length, 4);
+});
+
+test("UI/API가 승인한 public PRODUCT_APP도 hourly exact HEAD readback에 포함한다", async () => {
+  const routes: string[] = [];
+  const vector = await readRepositoryBackfillVector({
+    request(route) {
+      routes.push(route);
+      if (route === "GET /repositories/{repository_id}") {
+        return response({
+          id: 15,
+          full_name: "seorilabs/new-public-product",
+          name: "new-public-product",
+          default_branch: "main",
+          archived: false,
+          private: false,
+          fork: false,
+        });
+      }
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}") return response({ sha: SHA });
+      throw new Error(`unexpected route ${route}`);
+    },
+  }, "seorilabs", { repoId: 15 }, {
+    revision: 2,
+    classification: "PRODUCT_APP",
+    candidateMarkerPath: null,
+  });
+  assert.equal(vector.headSha, SHA);
+  assert.equal(vector.classificationDecisionRevision, 2);
+  assert.equal(routes.filter((route) => route.includes("commits")).length, 1);
+  const registration = repositoryBackfillRegistrationInput("seorilabs", vector, "hourly");
+  assert.equal(registration.classificationDecisionRevision, 2);
+});
+
+test("fork provider fact는 exact vector와 hash에 남지만 source discovery로 자동 승격하지 않는다", async () => {
+  const routes: string[] = [];
+  const vector = await readRepositoryBackfillVector({
+    request(route) {
+      routes.push(route);
+      return response({
+        id: 14,
+        full_name: "seorilabs/forked-app",
+        name: "forked-app",
+        default_branch: "main",
+        archived: false,
+        private: true,
+        fork: true,
+      });
+    },
+  }, "seorilabs", { repoId: 14 });
+  assert.equal(vector.fork, true);
+  assert.equal(vector.headSha, null);
+  assert.deepEqual(routes, ["GET /repositories/{repository_id}"]);
+  assert.notEqual(
+    repositoryBackfillDeliveryId("seorilabs", vector, "hourly"),
+    repositoryBackfillDeliveryId("seorilabs", { ...vector, fork: false }, "hourly"),
+  );
 });
 
 test("identity가 HEAD read 사이에 바뀌면 stale vector를 enqueue하지 않는다", async () => {
@@ -157,6 +251,7 @@ test("identity가 HEAD read 사이에 바뀌면 stale vector를 enqueue하지 �
         default_branch: "main",
         archived: false,
         private: true,
+        fork: false,
       });
     },
   };
@@ -174,6 +269,8 @@ test("같은 sweep occurrence와 provider vector는 같은 delivery이고 ABA �
     defaultBranch: "main",
     archived: false,
     private: true,
+    fork: false,
+    classificationDecisionRevision: 0,
     headSha: SHA,
   };
   const first = repositoryBackfillDeliveryId("seorilabs", vector, "sweep-1");
@@ -198,20 +295,28 @@ test("같은 sweep occurrence와 provider vector는 같은 delivery이고 ABA �
       default_branch: "main",
       archived: false,
       private: true,
+      fork: false,
     },
     after: SHA,
     deliveryId: first,
     organization: "seorilabs",
+    classificationDecisionRevision: 0,
   });
 });
 
 test("full-org sweep는 active private, archive, public을 각각 수렴하고 repo 실패만 partial로 격리한다", async () => {
   const repositories = new Map<number, Record<string, unknown>>([
-    [1, { id: 1, full_name: "seorilabs/app", name: "app", default_branch: "main", archived: false, private: true }],
-    [2, { id: 2, full_name: "seorilabs/old", name: "old", default_branch: "main", archived: true, private: true }],
-    [3, { id: 3, full_name: "seorilabs/public", name: "public", default_branch: "main", archived: false, private: false }],
+    [1, { id: 1, full_name: "seorilabs/app", name: "app", default_branch: "main", archived: false, private: true, fork: false }],
+    [2, { id: 2, full_name: "seorilabs/old", name: "old", default_branch: "main", archived: true, private: true, fork: false }],
+    [3, { id: 3, full_name: "seorilabs/public", name: "public", default_branch: "main", archived: false, private: false, fork: false }],
   ]);
-  const enqueued: Array<{ input: { repository: { id: number; archived?: boolean } }; at: Date }> = [];
+  const enqueued: Array<{
+    input: {
+      repository: { id: number; archived?: boolean };
+      classificationDecisionRevision?: number;
+    };
+    at: Date;
+  }> = [];
   const audits: Array<{ action: string; payload: unknown }> = [];
   const client: RepositoryInventoryClient = {
     request(route, parameters) {
@@ -245,6 +350,7 @@ test("full-org sweep는 active private, archive, public을 각각 수렴하고 r
     observed: 3,
     eligible: 1,
     archived: 1,
+    forks: 0,
     publicPolicy: 1,
     enqueued: 2,
     duplicate: 0,
@@ -253,6 +359,7 @@ test("full-org sweep는 active private, archive, public을 각각 수렴하고 r
     ok: false,
   });
   assert.deepEqual(enqueued.map(({ input }) => input.repository.id), [1, 2, 3]);
+  assert.equal(enqueued.every(({ input }) => input.classificationDecisionRevision === 0), true);
   assert.equal(enqueued.every(({ at }) => at === now), true);
   assert.deepEqual(audits.map(({ action }) => action), [
     "control-plane.repository-discovery-backfill.started",
@@ -270,6 +377,7 @@ test("backfill HTTP 경계는 인증, partial retry와 오류 비노출을 유�
     observed: 1,
     eligible: 1,
     archived: 0,
+    forks: 0,
     publicPolicy: 0,
     enqueued: 1,
     duplicate: 0,

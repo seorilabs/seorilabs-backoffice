@@ -9,6 +9,7 @@ import {
   type ProviderReadbackPayload,
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { PROVIDER_ADAPTER_IDS } from "@/lib/control-plane/provider-adapters";
 
 export const PROVIDER_EXECUTION_LEASE_TTL_SECONDS = 300;
 export const PROVIDER_EXECUTION_APPROVAL_TTL_MS = 30 * 60 * 1_000;
@@ -116,31 +117,31 @@ const BLUEPRINT_ADAPTERS = {
     provisioner: "gcp" as const,
     capability: "gcp-project-provision",
     readbackCapability: "gcp-inventory-read",
-    adapterId: "gcp-provisioner-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.GCP_PROVISIONER,
   },
   bigquery: {
     provisioner: "gcp" as const,
     capability: "gcp-project-provision",
     readbackCapability: "gcp-inventory-read",
-    adapterId: "gcp-provisioner-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.GCP_PROVISIONER,
   },
   "google-analytics": {
     provisioner: "gcp" as const,
     capability: "gcp-project-provision",
     readbackCapability: "gcp-inventory-read",
-    adapterId: "gcp-provisioner-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.GCP_PROVISIONER,
   },
   firebase: {
     provisioner: "firebase" as const,
     capability: "firebase-provision",
     readbackCapability: "firebase-inventory-read",
-    adapterId: "firebase-provisioner-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.FIREBASE_PROVISIONER,
   },
   "google-workspace": {
     provisioner: "workspace" as const,
     capability: "workspace-provision",
     readbackCapability: "workspace-inventory-read",
-    adapterId: "workspace-provisioner-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.WORKSPACE_PROVISIONER,
   },
 } as const;
 
@@ -166,7 +167,7 @@ export const MARKET_EXECUTION_CONTRACT = {
   "google-play": {
     accountBindingType: "publisher-account",
     appBindingType: "application",
-    adapterId: "google-play-api-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.GOOGLE_PLAY,
     origin: "https://androidpublisher.googleapis.com",
     readbackCapability: "google-play.readback",
     uploadCapability: "google-play.upload.internal",
@@ -174,7 +175,7 @@ export const MARKET_EXECUTION_CONTRACT = {
   "app-store": {
     accountBindingType: "team",
     appBindingType: "application",
-    adapterId: "app-store-connect-api-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.APP_STORE_CONNECT,
     origin: "https://api.appstoreconnect.apple.com",
     readbackCapability: "app-store.readback",
     uploadCapability: "app-store.upload.testflight",
@@ -182,7 +183,7 @@ export const MARKET_EXECUTION_CONTRACT = {
   "apps-in-toss": {
     accountBindingType: "workspace",
     appBindingType: "mini-app",
-    adapterId: "ait-cli-v1",
+    adapterId: PROVIDER_ADAPTER_IDS.APPS_IN_TOSS,
     origin: "https://apps-in-toss-api.toss.im",
     readbackCapability: "apps-in-toss.readback",
     uploadCapability: "apps-in-toss.upload.private",

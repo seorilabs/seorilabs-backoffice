@@ -794,6 +794,43 @@ export const configRevisionSchema = z.object({
   payload: configRevisionPayloadSchema,
 }).strict();
 
+export const desiredStateBackfillSchema = z.object({
+  schemaVersion: z.literal(1),
+  mode: z.literal("DRAFT_ONLY"),
+}).strict();
+
+const repositoryCandidateMarkerPath = z.string().min(1).max(512).refine((value) => (
+  !value.startsWith("/")
+  && !value.includes("\\")
+  && value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+), "안전한 repository candidate marker path가 필요합니다.");
+
+export const repositoryClassificationDecisionSchema = z.object({
+  schemaVersion: z.literal(1),
+  repoId: z.coerce.bigint().positive().max(BigInt(Number.MAX_SAFE_INTEGER)),
+  expectedGeneration: z.number().int().nonnegative(),
+  expectedDecisionRevision: z.number().int().nonnegative(),
+  classification: z.enum(["PRODUCT_APP", "INFRA_REPO", "PLATFORM_PRODUCER", "EXCLUDED"]),
+  candidateMarkerPath: repositoryCandidateMarkerPath.nullable(),
+  justification: z.enum([
+    "REPOSITORY_PURPOSE_CONFIRMED",
+    "APP_CANDIDATE_SELECTED",
+    "CENTRAL_POLICY_CORRECTION",
+  ]),
+}).strict().superRefine((value, context) => {
+  if (value.classification !== "PRODUCT_APP" && value.candidateMarkerPath !== null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["candidateMarkerPath"],
+      message: "PRODUCT_APP 외 분류에는 candidate marker를 지정할 수 없습니다.",
+    });
+  }
+});
+
+export type RepositoryClassificationDecisionRequest = z.infer<
+  typeof repositoryClassificationDecisionSchema
+>;
+
 /**
  * Legacy shadow import는 원문이나 source path 목록을 호출자가 주입하지 못하게 한다.
  * 서버가 고정 allowlist와 transform version을 선택하고, 정확한 commit SHA에서만 읽는다.

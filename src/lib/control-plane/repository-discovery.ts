@@ -8,8 +8,14 @@ import {
   type SourceObservationResult,
   type SourcePersistenceMetadata,
 } from "@/lib/github/source-observation";
+import {
+  repositoryClassificationPolicy,
+  repositoryPublicDiscoveryAllowed,
+  type RepositoryClassification,
+  type RepositoryClassificationDirective,
+} from "@/lib/control-plane/repository-classification";
 
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v1";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v3";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -25,6 +31,7 @@ const PACKAGE_ID = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/;
 
 export type RepositoryDiscoveryReason =
   | "ARCHIVED"
+  | "FORK_REPOSITORY"
   | "PUBLIC_REPOSITORY_REQUIRES_POLICY"
   | "EMPTY_REPOSITORY"
   | "DEFAULT_BRANCH_NOT_MAIN"
@@ -42,12 +49,16 @@ export type RepositoryDiscoveryReason =
   | "INVALID_PACKAGE_JSON"
   | "NO_CANDIDATE"
   | "MULTIPLE_CANDIDATES"
+  | "CLASSIFICATION_CANDIDATE_INVALID"
   | "PACKAGE_MANAGER_MISSING"
   | "PACKAGE_MANAGER_AMBIGUOUS"
   | "BUILD_TARGET_MISSING"
   | "BUILD_IDENTITY_MISSING"
   | "BUILD_IDENTITY_AMBIGUOUS"
   | "PLATFORM_SDK_PRODUCER"
+  | "PLATFORM_PRODUCER_IDENTITY_INVALID"
+  | "INFRASTRUCTURE_REPOSITORY"
+  | "NON_PRODUCT_REPOSITORY"
   | "APP_IDENTITY_CONFLICT"
   | "APP_MARKET_IDENTITY_CONFLICT"
   | "DISCOVERY_SLO_EXCEEDED";
@@ -60,6 +71,7 @@ export interface RepositoryTreeSnapshot {
   sourceRef: string;
   defaultBranch: string;
   private: boolean;
+  fork: boolean;
   archived: boolean;
   paths: readonly string[];
   gitlinkPaths?: readonly string[];
@@ -67,8 +79,19 @@ export interface RepositoryTreeSnapshot {
 
 export type RepositoryTreeReadResult =
   | { status: "READY"; snapshot: RepositoryTreeSnapshot }
+  | {
+      status: "CLASSIFIED";
+      classification: "INFRA_REPO" | "EXCLUDED";
+      reasonCode: "INFRASTRUCTURE_REPOSITORY" | "NON_PRODUCT_REPOSITORY";
+    }
   | { status: "NEEDS_INPUT"; reasonCode: RepositoryDiscoveryReason }
-  | { status: "STALE"; reasonCode: RepositoryDiscoveryReason; actualHeadSha?: string }
+  | {
+      status: "STALE";
+      reasonCode: RepositoryDiscoveryReason;
+      actualHeadSha: string;
+      private: boolean;
+      fork: boolean;
+    }
   | { status: "RETRY"; reasonCode: RepositoryDiscoveryReason };
 
 export type RepositoryHeadReadResult =
@@ -130,6 +153,7 @@ export type RepositoryDiscoveryResult =
   | (DiscoveryBase & {
       status: "ACTIVE";
       managementKind: "APP";
+      classification: "PRODUCT_APP";
       reasonCode: null;
       appType: "APP" | "GAME";
       engine: "RN" | "GODOT";
@@ -144,12 +168,14 @@ export type RepositoryDiscoveryResult =
   | (DiscoveryBase & {
       status: "NEEDS_INPUT";
       managementKind: "UNCLASSIFIED";
+      classification: null;
       reasonCode: RepositoryDiscoveryReason;
     })
   | (DiscoveryBase & {
       status: "EXCLUDED";
-      managementKind: "PLATFORM_PRODUCER";
-      reasonCode: "PLATFORM_SDK_PRODUCER";
+      managementKind: "UNCLASSIFIED" | "PLATFORM_PRODUCER";
+      classification: "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCLUDED";
+      reasonCode: "PLATFORM_SDK_PRODUCER" | "INFRASTRUCTURE_REPOSITORY" | "NON_PRODUCT_REPOSITORY";
     });
 
 type RepositoryDiscoveryUnfinished = RepositoryDiscoveryResult extends infer Result
@@ -222,6 +248,7 @@ export async function readExactRepositoryTree(
     repoId: number;
     fullName: string;
     expectedSourceSha?: string | null;
+    classificationDecision?: RepositoryClassificationDirective | null;
   },
 ): Promise<RepositoryTreeReadResult> {
   const identity = repoParts(input.fullName);
@@ -239,6 +266,7 @@ export async function readExactRepositoryTree(
     default_branch?: unknown;
     private?: unknown;
     archived?: unknown;
+    fork?: unknown;
   };
   try {
     repository = (await octokit.rest.repos.get(identity)).data;
@@ -253,6 +281,13 @@ export async function readExactRepositoryTree(
     return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_ID_MISMATCH" };
   }
   if (
+    typeof repository.archived !== "boolean"
+    || typeof repository.private !== "boolean"
+    || typeof repository.fork !== "boolean"
+  ) {
+    return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_IDENTITY_INVALID" };
+  }
+  if (
     typeof repository.full_name !== "string"
     || repository.full_name.toLowerCase() !== input.fullName.toLowerCase()
   ) {
@@ -261,8 +296,29 @@ export async function readExactRepositoryTree(
   if (repository.archived === true) {
     return { status: "NEEDS_INPUT", reasonCode: "ARCHIVED" };
   }
-  if (repository.private !== true) {
+  const explicitPolicy = input.classificationDecision !== null
+    && input.classificationDecision !== undefined;
+  if (
+    repository.private !== true
+    && !repositoryPublicDiscoveryAllowed(input.fullName)
+    && !explicitPolicy
+  ) {
     return { status: "NEEDS_INPUT", reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY" };
+  }
+  if (
+    input.classificationDecision?.classification === "INFRA_REPO"
+    || input.classificationDecision?.classification === "EXCLUDED"
+  ) {
+    return {
+      status: "CLASSIFIED",
+      classification: input.classificationDecision.classification,
+      reasonCode: input.classificationDecision.classification === "INFRA_REPO"
+        ? "INFRASTRUCTURE_REPOSITORY"
+        : "NON_PRODUCT_REPOSITORY",
+    };
+  }
+  if (repository.fork) {
+    return { status: "NEEDS_INPUT", reasonCode: "FORK_REPOSITORY" };
   }
   if (typeof repository.default_branch !== "string" || repository.default_branch.length === 0) {
     return { status: "NEEDS_INPUT", reasonCode: "EMPTY_REPOSITORY" };
@@ -298,7 +354,13 @@ export async function readExactRepositoryTree(
     input.expectedSourceSha
     && input.expectedSourceSha.toLowerCase() !== sourceSha
   ) {
-    return { status: "STALE", reasonCode: "SOURCE_DRIFT", actualHeadSha: sourceSha };
+    return {
+      status: "STALE",
+      reasonCode: "SOURCE_DRIFT",
+      actualHeadSha: sourceSha,
+      private: repository.private,
+      fork: repository.fork,
+    };
   }
 
   let tree: { sha?: unknown; truncated?: unknown; tree?: unknown };
@@ -344,7 +406,8 @@ export async function readExactRepositoryTree(
       sourceSha,
       sourceRef: `refs/heads/${repository.default_branch}`,
       defaultBranch: repository.default_branch,
-      private: true,
+      private: repository.private === true,
+      fork: repository.fork,
       archived: false,
       paths: [...new Set(paths)].sort(),
       gitlinkPaths: [...new Set(gitlinkPaths)].sort(),
@@ -354,7 +417,7 @@ export async function readExactRepositoryTree(
 
 export async function readCurrentRepositoryHead(
   octokit: RepositoryHeadOctokit,
-  input: { repoId: number; fullName: string },
+  input: { repoId: number; fullName: string; publicDiscoveryApproved?: boolean },
 ): Promise<RepositoryHeadReadResult> {
   const identity = repoParts(input.fullName);
   if (!identity || !validRepoId(input.repoId)) {
@@ -367,9 +430,17 @@ export async function readCurrentRepositoryHead(
       default_branch?: unknown;
       archived?: unknown;
       private?: unknown;
+      fork?: unknown;
     };
     if (repository.id !== input.repoId) {
       return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_ID_MISMATCH" };
+    }
+    if (
+      typeof repository.archived !== "boolean"
+      || typeof repository.private !== "boolean"
+      || typeof repository.fork !== "boolean"
+    ) {
+      return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_IDENTITY_INVALID" };
     }
     if (
       typeof repository.full_name !== "string"
@@ -380,7 +451,14 @@ export async function readCurrentRepositoryHead(
     if (repository.archived === true) {
       return { status: "NEEDS_INPUT", reasonCode: "ARCHIVED" };
     }
-    if (repository.private !== true) {
+    if (repository.fork) {
+      return { status: "NEEDS_INPUT", reasonCode: "FORK_REPOSITORY" };
+    }
+    if (
+      repository.private !== true
+      && !repositoryPublicDiscoveryAllowed(input.fullName)
+      && input.publicDiscoveryApproved !== true
+    ) {
       return { status: "NEEDS_INPUT", reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY" };
     }
     if (typeof repository.default_branch !== "string" || !repository.default_branch) {
@@ -698,6 +776,7 @@ function resultPayload(input: {
   snapshot: RepositoryTreeSnapshot;
   status: RepositoryDiscoveryResult["status"];
   reasonCode: RepositoryDiscoveryReason | null;
+  classification: RepositoryClassification | null;
   candidates: RepositoryDiscoveryCandidate[];
   sourceMetadata: SourcePersistenceMetadata[];
   workflowCaller?: { profile: string; packageManager: string; workingDirectory: string };
@@ -705,7 +784,7 @@ function resultPayload(input: {
   platformConsumer?: RepositoryPlatformConsumerObservation;
 }): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
     repository: {
       id: input.snapshot.repoId,
@@ -713,9 +792,11 @@ function resultPayload(input: {
       sourceSha: input.snapshot.sourceSha,
       sourceRef: input.snapshot.sourceRef,
       private: input.snapshot.private,
+      fork: input.snapshot.fork,
     },
     status: input.status,
     reasonCode: input.reasonCode,
+    classification: input.classification,
     candidates: input.candidates.map(publicCandidate),
     workflowCaller: input.workflowCaller ?? null,
     buildTargets: (input.buildTargets ?? []).map((target) => ({
@@ -743,6 +824,7 @@ function finish<T extends RepositoryDiscoveryUnfinished>(
     snapshot,
     status: input.status,
     reasonCode: input.reasonCode,
+    classification: input.classification,
     candidates: input.candidates,
     sourceMetadata: input.sourceMetadata,
     ...(active
@@ -765,6 +847,7 @@ function needsInput(
   return finish(snapshot, {
     status: "NEEDS_INPUT" as const,
     managementKind: "UNCLASSIFIED" as const,
+    classification: null,
     reasonCode,
     candidates,
     sourceMetadata,
@@ -778,8 +861,42 @@ function needsInput(
 export async function discoverRepository(
   snapshot: RepositoryTreeSnapshot,
   readSource: RepositoryDiscoverySourceReader,
+  classificationDecision: RepositoryClassificationDirective | null = null,
 ): Promise<RepositoryDiscoveryResult> {
+  if (snapshot.fork) return needsInput(snapshot, "FORK_REPOSITORY", [], []);
   const pathSet = new Set(snapshot.paths);
+  const classificationPolicy = classificationDecision
+    ? null
+    : repositoryClassificationPolicy(snapshot.fullName);
+  if (
+    classificationDecision?.classification === "INFRA_REPO"
+    || classificationDecision?.classification === "EXCLUDED"
+  ) {
+    return finish(snapshot, {
+      status: "EXCLUDED" as const,
+      managementKind: "UNCLASSIFIED" as const,
+      classification: classificationDecision.classification,
+      reasonCode: classificationDecision.classification === "INFRA_REPO"
+        ? "INFRASTRUCTURE_REPOSITORY" as const
+        : "NON_PRODUCT_REPOSITORY" as const,
+      candidates: [],
+      sourceMetadata: [],
+    });
+  }
+  if (
+    classificationPolicy
+    && classificationPolicy.classification !== "PRODUCT_APP_CANDIDATE"
+    && classificationPolicy.classification !== "PLATFORM_PRODUCER"
+  ) {
+    return finish(snapshot, {
+      status: "EXCLUDED" as const,
+      managementKind: "UNCLASSIFIED" as const,
+      classification: classificationPolicy.classification,
+      reasonCode: classificationPolicy.reasonCode!,
+      candidates: [],
+      sourceMetadata: [],
+    });
+  }
   const packagePaths = snapshot.paths.filter((path) =>
     path.endsWith("package.json")
     && path.split("/").length <= 4
@@ -825,18 +942,24 @@ export async function discoverRepository(
   }
 
   const rootPackage = packages.find((pkg) => pkg.path === "package.json");
+  const platformProducerRequested = classificationDecision?.classification === "PLATFORM_PRODUCER"
+    || classificationPolicy?.classification === "PLATFORM_PRODUCER";
   if (
-    snapshot.fullName.toLowerCase() === "seorilabs/platform"
+    platformProducerRequested
     && rootPackage?.name === "seorilabs-platform"
     && pathSet.has("spec/openapi.yaml")
   ) {
     return finish(snapshot, {
       status: "EXCLUDED" as const,
       managementKind: "PLATFORM_PRODUCER" as const,
+      classification: "PLATFORM_PRODUCER" as const,
       reasonCode: "PLATFORM_SDK_PRODUCER" as const,
       candidates: [],
       sourceMetadata,
     });
+  }
+  if (platformProducerRequested) {
+    return needsInput(snapshot, "PLATFORM_PRODUCER_IDENTITY_INVALID", [], sourceMetadata);
   }
 
   const reactNativePackages = packages.filter(isPrimaryReactNativePackage);
@@ -859,10 +982,19 @@ export async function discoverRepository(
   if (candidates.length === 0) {
     return needsInput(snapshot, "NO_CANDIDATE", candidates, sourceMetadata);
   }
-  if (candidates.length !== 1) {
+  const selectedMarker = classificationDecision?.classification === "PRODUCT_APP"
+    ? classificationDecision.candidateMarkerPath
+    : null;
+  const selectedCandidate = selectedMarker
+    ? candidates.find((item) => item.markerPath === selectedMarker)
+    : null;
+  if (selectedMarker && !selectedCandidate) {
+    return needsInput(snapshot, "CLASSIFICATION_CANDIDATE_INVALID", candidates, sourceMetadata);
+  }
+  if (!selectedCandidate && candidates.length !== 1) {
     return needsInput(snapshot, "MULTIPLE_CANDIDATES", candidates, sourceMetadata);
   }
-  const candidate = candidates[0];
+  const candidate = selectedCandidate ?? candidates[0];
   const packageManager = packageManagerFor(candidate.workingDirectory, packages, pathSet);
   if (packageManager.status !== "FOUND") {
     return needsInput(
@@ -1177,6 +1309,7 @@ export async function discoverRepository(
   return finish(snapshot, {
     status: "ACTIVE" as const,
     managementKind: "APP" as const,
+    classification: "PRODUCT_APP" as const,
     reasonCode: null,
     candidates,
     sourceMetadata,

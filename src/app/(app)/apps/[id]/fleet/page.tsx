@@ -122,7 +122,7 @@ export default async function FleetOperationsPage({
         title="Fleet 제어면"
         description="자동 탐지·desired state·provider readback·credential 공개 identity·실행 queue를 앱 단위로 대조합니다. 비밀값은 표시하지 않고 protected 작업은 이 실행 한 건만 승인합니다."
       >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
           <Summary
             label="Discovery"
             value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : latestObservedDiscovery ? "재탐지 대기" : "미관측"}
@@ -130,6 +130,15 @@ export default async function FleetOperationsPage({
               ? dateTime(latestDiscovery.observedAt)
               : fleet.repositoryRegistration?.lastDiscoveryReason ?? "current source 관측 없음"}
             danger={Boolean(latestObservedDiscovery) && !latestDiscovery}
+          />
+          <Summary
+            label="Repository class"
+            value={fleet.repositoryRegistration?.classification
+              ?? (fleet.repositoryRegistration?.managementKind === "APP" ? "APP - legacy" : "미분류")}
+            detail={fleet.repositoryRegistration
+              ? `${fleet.repositoryRegistration.status} · ${fleet.repositoryRegistration.discoveryContractVersion ?? "legacy contract"}`
+              : "registration 없음"}
+            danger={!fleet.repositoryRegistration?.classification}
           />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
           <Summary

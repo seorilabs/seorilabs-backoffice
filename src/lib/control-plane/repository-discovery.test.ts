@@ -28,6 +28,7 @@ function snapshot(
     sourceRef: "refs/heads/main",
     defaultBranch: "main",
     private: true,
+    fork: false,
     archived: false,
     paths,
     ...overrides,
@@ -139,6 +140,7 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
 
   assert.equal(result.status, "ACTIVE");
   if (result.status !== "ACTIVE") return;
+  assert.equal(result.classification, "PRODUCT_APP");
   assert.deepEqual(result.workflowCaller, {
     profile: "react-native",
     packageManager: "pnpm",
@@ -287,6 +289,7 @@ test("Godot production preset은 debug identity를 제외하고 npm caller와 ta
 
   assert.equal(result.status, "ACTIVE");
   if (result.status !== "ACTIVE") return;
+  assert.equal(result.classification, "PRODUCT_APP");
   assert.deepEqual(result.workflowCaller, {
     profile: "godot",
     packageManager: "npm",
@@ -404,6 +407,28 @@ test("RN과 Godot 후보가 함께 있으면 추측하지 않고 MULTIPLE_CANDID
   assert.equal(result.candidates.length, 2);
 });
 
+test("분류 revision이 선택한 exact marker만 PRODUCT_APP 후보로 사용한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "mixed",
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+    "android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.mixed" } }',
+    "project.godot": "[application]\n",
+  };
+  const result = await discoverRepository(
+    snapshot([...Object.keys(files), "pnpm-lock.yaml"]),
+    sourceReader(files),
+    { revision: 1, classification: "PRODUCT_APP", candidateMarkerPath: "package.json" },
+  );
+  assert.equal(result.status, "ACTIVE");
+  if (result.status === "ACTIVE") {
+    assert.equal(result.workflowCaller.profile, "react-native");
+    assert.equal(result.classification, "PRODUCT_APP");
+  }
+});
+
 test("platform SDK producer는 앱 profile로 위장하지 않고 명시적으로 제외한다", async () => {
   const files = {
     "package.json": JSON.stringify({ name: "seorilabs-platform", packageManager: "pnpm@11.3.0" }),
@@ -415,8 +440,41 @@ test("platform SDK producer는 앱 profile로 위장하지 않고 명시적으�
   ), sourceReader(files));
   assert.equal(result.status, "EXCLUDED");
   assert.equal(result.managementKind, "PLATFORM_PRODUCER");
+  assert.equal(result.classification, "PLATFORM_PRODUCER");
   assert.equal(result.reasonCode, "PLATFORM_SDK_PRODUCER");
   assert.equal(result.candidates.length, 0);
+});
+
+test("중앙 정책은 인프라와 템플릿을 앱 후보보다 먼저 terminal 분류한다", async () => {
+  const infra = await discoverRepository(snapshot(
+    ["package.json", "pnpm-lock.yaml"],
+    { fullName: "seorilabs/seorilabs-backoffice", name: "seorilabs-backoffice" },
+  ), sourceReader({
+    "package.json": JSON.stringify({
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+  }));
+  assert.equal(infra.status, "EXCLUDED");
+  if (infra.status === "EXCLUDED") {
+    assert.equal(infra.classification, "INFRA_REPO");
+    assert.equal(infra.reasonCode, "INFRASTRUCTURE_REPOSITORY");
+  }
+
+  const template = await discoverRepository(snapshot(
+    ["package.json", "pnpm-lock.yaml"],
+    { fullName: "seorilabs/starter-template-app", name: "starter-template-app" },
+  ), sourceReader({
+    "package.json": JSON.stringify({
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+  }));
+  assert.equal(template.status, "EXCLUDED");
+  if (template.status === "EXCLUDED") {
+    assert.equal(template.classification, "EXCLUDED");
+    assert.equal(template.reasonCode, "NON_PRODUCT_REPOSITORY");
+  }
 });
 
 test("tree에 있던 source가 exact SHA에서 읽히지 않으면 SOURCE_FILE_UNREADABLE이다", async () => {
@@ -479,6 +537,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
             name: "sample-app",
             default_branch: "main",
             private: true,
+            fork: false,
             archived: false,
           } };
         },
@@ -525,6 +584,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       name: "sample-app",
       default_branch: "main",
       private: true,
+      fork: false,
       archived: false,
     } }) as never, {
       repoId: REPO_ID,
@@ -544,7 +604,13 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       fullName: "seorilabs/sample-app",
       expectedSourceSha: SHA,
     });
-    assert.deepEqual(result, { status: "STALE", reasonCode: "SOURCE_DRIFT", actualHeadSha: newer });
+    assert.deepEqual(result, {
+      status: "STALE",
+      reasonCode: "SOURCE_DRIFT",
+      actualHeadSha: newer,
+      private: true,
+      fork: false,
+    });
   });
 
   await t.test("truncated tree", async () => {
@@ -557,6 +623,85 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
     });
     assert.equal(result.status, "NEEDS_INPUT");
     assert.equal(result.reasonCode, "TREE_TRUNCATED");
+  });
+
+  await t.test("fork는 자동 PRODUCT_APP 탐지를 시작하지 않는다", async () => {
+    const before = calls.length;
+    const result = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/forked-app",
+      name: "forked-app",
+      default_branch: "main",
+      private: true,
+      fork: true,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/forked-app",
+    });
+    assert.deepEqual(result, { status: "NEEDS_INPUT", reasonCode: "FORK_REPOSITORY" });
+    assert.equal(calls.slice(before).some((call) => call.kind === "commit"), false);
+  });
+
+  await t.test("사람이 확인한 fork EXCLUDED 결정은 exact identity readback 뒤 terminal 처리한다", async () => {
+    const result = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/forked-app",
+      name: "forked-app",
+      default_branch: "main",
+      private: true,
+      fork: true,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/forked-app",
+      classificationDecision: {
+        revision: 1,
+        classification: "EXCLUDED",
+        candidateMarkerPath: null,
+      },
+    });
+    assert.deepEqual(result, {
+      status: "CLASSIFIED",
+      classification: "EXCLUDED",
+      reasonCode: "NON_PRODUCT_REPOSITORY",
+    });
+  });
+
+  await t.test("중앙 정책의 공개 제품은 source read만 허용하고 미등록 public은 거부", async () => {
+    const approved = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/periodic-table-app",
+      name: "periodic-table-app",
+      default_branch: "main",
+      private: false,
+      fork: false,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/periodic-table-app",
+      expectedSourceSha: SHA,
+    });
+    assert.equal(approved.status, "READY");
+    if (approved.status === "READY") assert.equal(approved.snapshot.private, false);
+
+    const unapproved = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/unapproved-public-app",
+      name: "unapproved-public-app",
+      default_branch: "main",
+      private: false,
+      fork: false,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/unapproved-public-app",
+      expectedSourceSha: SHA,
+    });
+    assert.deepEqual(unapproved, {
+      status: "NEEDS_INPUT",
+      reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY",
+    });
   });
 });
 

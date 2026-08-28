@@ -65,6 +65,7 @@ test("legacy platform source는 app binding을 우선하고 없을 때 current p
     status: "MANAGED" as const,
     archived: false,
     managementKind: "PLATFORM_PRODUCER" as const,
+    classification: null,
     lastDefaultPushSha: PLATFORM_SHA,
     lastReconciledSha: PLATFORM_SHA,
   };
@@ -77,6 +78,15 @@ test("legacy platform source는 app binding을 우선하고 없을 때 current p
     configured,
     bindingSourceSha: null,
     registration,
+  }), { ...configured, sourceSha: PLATFORM_SHA });
+  assert.deepEqual(resolveLegacyPlatformSourceVector({
+    configured,
+    bindingSourceSha: null,
+    registration: {
+      ...registration,
+      managementKind: "UNCLASSIFIED",
+      classification: "PLATFORM_PRODUCER",
+    },
   }), { ...configured, sourceSha: PLATFORM_SHA });
   assert.equal(resolveLegacyPlatformSourceVector({
     configured,
