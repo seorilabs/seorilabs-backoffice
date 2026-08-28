@@ -6,6 +6,10 @@ const jsonRecord = z.record(z.unknown());
 
 const locale = z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/, "BCP-47 locale이 필요합니다.");
 const revisionRef = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$/);
+const numericId = z.string().regex(/^\d{1,30}$/, "숫자 provider ID가 필요합니다.");
+const gcpProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "유효한 GCP project ID가 필요합니다.");
+const region = z.string().regex(/^[a-z]+(?:-[a-z0-9]+)+\d$/, "유효한 cloud region이 필요합니다.");
+const logicalCredentialId = z.string().regex(/^(?:shared|app)\/[A-Za-z0-9._/-]{1,180}$/);
 const httpsUrl = z.string().url().max(2_048).refine((value) => {
   const parsed = new URL(value);
   return parsed.protocol === "https:"
@@ -16,6 +20,130 @@ const httpsUrl = z.string().url().max(2_048).refine((value) => {
 }, {
   message: "userinfo, query, fragment가 없는 공개 HTTPS URL이 필요합니다.",
 });
+
+const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
+
+/**
+ * ProjectBlueprint는 provider에 쓸 비밀이 아니라 공개 식별자와 desired state만 보관한다.
+ * credential은 logical ID로만 참조하며 API key, password, private key 필드는 strict schema가 거부한다.
+ */
+export const projectBlueprintSchema = z.object({
+  schemaVersion: z.literal(1),
+  organizationId: numericId,
+  folderId: numericId,
+  billingAccountId: z.string().regex(/^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$/),
+  project: z.object({
+    projectId: gcpProjectId,
+    projectNumber: numericId.optional(),
+    region,
+  }).strict(),
+  apis: z.array(z.string().regex(/^[a-z0-9.-]+\.googleapis\.com$/)).max(100),
+  iam: z.array(z.object({
+    role: z.string().regex(/^roles\/[A-Za-z0-9_.]+$/),
+    logicalPrincipalId: logicalCredentialId,
+    publicIdentity: z.string().min(3).max(512),
+  }).strict()).max(100),
+  budget: z.object({
+    currencyCode: z.enum(["KRW", "USD"]),
+    monthlyAmount: z.number().positive().max(1_000_000_000),
+    alertThresholds: z.array(z.number().positive().max(2)).min(1).max(10),
+  }).strict(),
+  firebase: z.object({
+    authProviders: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,64}$/)).max(30),
+    appCheckEnforcement: z.enum(["OFF", "MONITOR", "ENFORCED"]),
+    firestoreRulesChecksum: sha256,
+    firestoreIndexesChecksum: sha256,
+    storageRulesChecksum: sha256,
+    functions: z.object({
+      region,
+      runtime: z.string().regex(/^nodejs\d{2}$/),
+    }).strict(),
+    apps: z.array(z.object({
+      platform: z.enum(["ANDROID", "IOS", "WEB", "AIT"]),
+      publicAppId: z.string().min(1).max(255).optional(),
+      packageId: z.string().min(3).max(255).optional(),
+      bundleId: z.string().min(3).max(255).optional(),
+      aitAppName: z.string().min(1).max(191).optional(),
+    }).strict()).min(1).max(4),
+  }).strict(),
+  analytics: z.object({
+    ga4PropertyId: numericId.optional(),
+    bigQueryProjectId: gcpProjectId,
+    datasetId: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,1023}$/),
+    location: z.string().regex(/^[A-Z][A-Z0-9-]{0,19}$/),
+  }).strict(),
+  workspace: z.object({
+    groups: z.array(z.object({
+      email: z.string().email().max(320),
+      role: z.enum(["VIEWER", "OPERATOR", "ADMIN"]),
+    }).strict()).max(100),
+    domainWideDelegation: z.array(z.object({
+      publicClientId: numericId,
+      scopes: z.array(z.string().url().max(512)).min(1).max(100),
+    }).strict()).max(20),
+  }).strict(),
+  provisioners: z.object({
+    gcp: logicalCredentialId,
+    firebase: logicalCredentialId,
+    workspace: logicalCredentialId,
+  }).strict(),
+}).strict().superRefine((blueprint, context) => {
+  const unique = (values: string[], path: (string | number)[]) => {
+    if (new Set(values).size !== values.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "중복 항목은 허용되지 않습니다.", path });
+    }
+  };
+  unique(blueprint.apis, ["apis"]);
+  unique(blueprint.iam.map((binding) => `${binding.role}:${binding.publicIdentity}`), ["iam"]);
+  unique(blueprint.firebase.apps.map((app) => app.platform), ["firebase", "apps"]);
+  unique(blueprint.workspace.groups.map((group) => group.email.toLowerCase()), ["workspace", "groups"]);
+  unique(blueprint.budget.alertThresholds.map(String), ["budget", "alertThresholds"]);
+  for (const [key, value] of Object.entries(blueprint.provisioners)) {
+    if (!value.startsWith("shared/")) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "공용 provisioner 기능에는 shared logical credential만 사용할 수 있습니다.",
+        path: ["provisioners", key],
+      });
+    }
+  }
+  blueprint.firebase.apps.forEach((app, index) => {
+    const valid = app.platform === "ANDROID"
+      ? Boolean(app.packageId && !app.bundleId && !app.aitAppName)
+      : app.platform === "IOS"
+        ? Boolean(app.bundleId && !app.packageId && !app.aitAppName)
+        : app.platform === "AIT"
+          ? Boolean(app.aitAppName && !app.packageId && !app.bundleId)
+          : !app.packageId && !app.bundleId && !app.aitAppName;
+    if (!valid) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Firebase app platform과 공개 식별자 조합이 일치하지 않습니다.",
+        path: ["firebase", "apps", index],
+      });
+    }
+  });
+});
+
+export type ProjectBlueprint = z.infer<typeof projectBlueprintSchema>;
+
+export const complianceDraftSchema = z.object({
+  market,
+  declaration: z.enum([
+    "data-safety",
+    "privacy",
+    "content-rating",
+    "export-compliance",
+    "review-notes",
+  ]),
+  state: z.literal("DRAFT"),
+  draft: z.union([
+    z.string().max(10_000),
+    z.boolean(),
+    z.record(z.union([z.string().max(10_000), z.number().finite(), z.boolean(), z.null()])),
+  ]),
+  evidenceRef: revisionRef.optional(),
+}).strict();
 
 /**
  * 첫 Fleet vertical slice가 자동 활성화할 수 있는 비민감 desired state의 완전한 목록이다.
@@ -30,6 +158,7 @@ export const configRevisionPayloadSchema = z.object({
     releaseChannel: z.enum(["internal", "private", "testflight"]).optional(),
   }).strict()).max(3),
   localizations: z.array(z.object({
+    market: market.optional(),
     locale,
     displayName: z.string().min(1).max(50).optional(),
     subtitle: z.string().min(1).max(80).optional(),
@@ -37,6 +166,7 @@ export const configRevisionPayloadSchema = z.object({
     keywords: z.array(z.string().min(1).max(100)).max(20).optional(),
   }).strict()).max(50).optional(),
   assets: z.array(z.object({
+    market: market.optional(),
     kind: z.enum(["icon", "feature-graphic", "thumbnail", "screenshot"]),
     locale: locale.optional(),
     objectKey: revisionRef,
@@ -52,6 +182,8 @@ export const configRevisionPayloadSchema = z.object({
     supportUrl: httpsUrl.optional(),
     privacyPolicyUrl: httpsUrl.optional(),
   }).strict().optional(),
+  projectBlueprint: projectBlueprintSchema.optional(),
+  complianceDrafts: z.array(complianceDraftSchema).max(100).optional(),
 }).strict().superRefine((payload, context) => {
   const seenMarkets = new Set<string>();
   const channelByMarket = {
@@ -91,12 +223,30 @@ export const configRevisionPayloadSchema = z.object({
       });
     }
   });
-  const localizationLocales = payload.localizations?.map((item) => item.locale) ?? [];
+  const localizationLocales = payload.localizations?.map((item) => `${item.market ?? "all"}:${item.locale}`) ?? [];
   if (new Set(localizationLocales).size !== localizationLocales.length) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: "동일 localization locale은 한 번만 선언할 수 있습니다.",
       path: ["localizations"],
+    });
+  }
+  const assetKeys = payload.assets?.map((item) => (
+    `${item.market ?? "all"}:${item.kind}:${item.locale ?? "all"}:${item.objectKey}`
+  )) ?? [];
+  if (new Set(assetKeys).size !== assetKeys.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "동일 asset scope와 objectKey는 한 번만 선언할 수 있습니다.",
+      path: ["assets"],
+    });
+  }
+  const complianceKeys = payload.complianceDrafts?.map((item) => `${item.market}:${item.declaration}`) ?? [];
+  if (new Set(complianceKeys).size !== complianceKeys.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "동일 market declaration draft는 한 번만 선언할 수 있습니다.",
+      path: ["complianceDrafts"],
     });
   }
   if (
@@ -170,6 +320,72 @@ export const providerObservationSchema = z.object({
     metadata: jsonRecord.optional(),
   }).strict().optional(),
 }).strict();
+
+export const providerReadbackPayloadSchema = z.object({
+  schemaVersion: z.literal(1),
+  visibility: z.enum(["VISIBLE", "FORBIDDEN", "ERROR"]),
+  state: z.enum(["PRESENT", "ABSENT", "UNKNOWN"]),
+  publicIdentity: z.string().min(1).max(512).optional(),
+  attributes: jsonRecord.default({}),
+}).strict().superRefine((payload, context) => {
+  if (payload.visibility !== "VISIBLE" && payload.state !== "UNKNOWN") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "권한 부족 또는 provider 오류는 리소스 부재로 기록할 수 없습니다.",
+      path: ["state"],
+    });
+  }
+});
+
+export type ProviderReadbackPayload = z.infer<typeof providerReadbackPayloadSchema>;
+
+export const releaseCandidateSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  sourceSha: sha40,
+  configRevision: z.number().int().positive(),
+  market,
+  targetKey: z.string().min(1).max(191),
+  artifactType: z.enum(["android-aab", "ios-archive", "ait-bundle", "web-bundle"]),
+  artifactChecksum: sha256,
+  workflowBundleSha: sha40,
+  platformVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
+}).strict();
+
+export const RELEASE_GATE_NAMES = [
+  "IMPLEMENTATION",
+  "CI",
+  "ARTIFACT",
+  "RELEASE_ASSETS",
+  "COMPLIANCE_DRAFT",
+  "PROVIDER_SHELL",
+  "UPLOAD",
+  "PROCESSING",
+  "DEVICE_QA",
+  "REVIEW",
+  "APPROVAL",
+  "DEPLOYMENT",
+  "PUBLIC",
+] as const;
+
+export const RELEASE_CANDIDATE_REQUIRED_GATES = RELEASE_GATE_NAMES.slice(0, 6);
+
+export const releaseGateObservationSchema = z.object({
+  candidateId: z.string().min(1).max(191),
+  gate: z.enum(RELEASE_GATE_NAMES),
+  status: z.enum(["PENDING", "PASSED", "FAILED", "HUMAN_REQUIRED"]),
+  observedAt: z.coerce.date(),
+  evidence: z.object({
+    schemaVersion: z.literal(1),
+    sourceSha: sha40,
+    configRevision: z.number().int().positive(),
+    artifactChecksum: sha256,
+    providerReference: z.string().min(1).max(512).optional(),
+    publicIdentity: z.string().min(1).max(512).optional(),
+    note: z.string().max(2_000).optional(),
+  }).strict(),
+}).strict();
+
+export type ReleaseGateName = typeof RELEASE_GATE_NAMES[number];
 
 export const configRevisionSchema = z.object({
   repoId: z.coerce.bigint().positive(),

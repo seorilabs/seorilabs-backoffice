@@ -97,8 +97,8 @@ export function FleetConfigEditor({
           비민감 desired state JSON
         </label>
         <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-          이 화면은 schemaVersion, 비공개 market channel, localization, asset revision,
-          build pin, support URL만 허용합니다. 그 밖의 필드는 별도 사람 승인 workflow가 없어 저장과 활성화가 모두 차단됩니다.
+          이 화면은 market/localization/asset, build pin, support URL, 공개 identity 기반 ProjectBlueprint,
+          사람 승인 전 compliance draft만 허용합니다. 비밀값과 법적 승인·심사 제출·공개 배포 필드는 저장과 활성화가 모두 차단됩니다.
         </p>
         {legacyActiveBlocked && (
           <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
