@@ -56,6 +56,7 @@ import {
 import { PlatformRefundReviewPanel } from "./PlatformRefundReviewPanel";
 
 export interface PlatformWritableApp {
+  /** Platform registry의 app_id. operation 계약의 기존 필드명 slug를 유지한다. */
   slug: string;
   displayName: string;
 }

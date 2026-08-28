@@ -30,7 +30,12 @@ test("worker는 큐 actor와 활성 app 결합을 현재 권한으로 다시 확
     runAppId: "app-1",
     runActorLogin: "maintainer",
     requestedAppSlug: "lizard-tycoon",
-    app: { id: "app-1", slug: "lizard-tycoon", active: true },
+    app: {
+      id: "app-1",
+      slug: "lizard-tycoon",
+      platformAppId: null,
+      active: true,
+    },
     user: {
       id: "user-1",
       login: "maintainer",
@@ -69,6 +74,37 @@ test("worker는 큐 actor와 활성 app 결합을 현재 권한으로 다시 확
         app: { ...valid.app, active: false },
       }),
     /활성 상태/,
+  );
+});
+
+test("worker는 저장소 slug가 아니라 바인딩된 Platform app ID를 검증한다", () => {
+  const valid = {
+    runAppId: "app-saju",
+    runActorLogin: "maintainer",
+    requestedAppSlug: "ungeul",
+    app: {
+      id: "app-saju",
+      slug: "saju-reader",
+      platformAppId: "ungeul",
+      active: true,
+    },
+    user: {
+      id: "user-1",
+      login: "maintainer",
+      role: "MAINTAINER" as const,
+      allowlisted: true,
+      isAppOwner: true,
+    },
+  };
+
+  assert.doesNotThrow(() => assertQueuedPlatformWriteAccess(valid));
+  assert.throws(
+    () =>
+      assertQueuedPlatformWriteAccess({
+        ...valid,
+        requestedAppSlug: "saju-reader",
+      }),
+    /앱 결합/,
   );
 });
 

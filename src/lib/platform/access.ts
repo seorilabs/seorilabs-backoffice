@@ -1,5 +1,7 @@
 import type { UserRole } from "@prisma/client";
 
+import { resolvedPlatformAppId } from "./app-id";
+
 export class PlatformAccessError extends Error {
   constructor(message: string) {
     super(message);
@@ -34,6 +36,7 @@ export interface QueuedPlatformAccessSnapshot {
   app: {
     id: string;
     slug: string;
+    platformAppId: string | null;
     active: boolean;
   } | null;
   user: {
@@ -91,7 +94,7 @@ function assertQueuedPlatformBinding(
     !snapshot.app ||
     !snapshot.app.active ||
     snapshot.app.id !== snapshot.runAppId ||
-    snapshot.app.slug !== snapshot.requestedAppSlug
+    resolvedPlatformAppId(snapshot.app) !== snapshot.requestedAppSlug
   ) {
     throw new PlatformAccessError(
       "플랫폼 큐 요청의 앱 결합 또는 활성 상태를 확인할 수 없습니다.",
@@ -160,10 +163,17 @@ export async function requirePlatformWriteAccess(
   const user = await currentPlatformUser();
   const { prisma } = await import("@/lib/prisma");
   const app = await prisma.app.findFirst({
-    where: { slug: appSlug, status: "ACTIVE" },
+    where: {
+      status: "ACTIVE",
+      OR: [
+        { platformAppId: appSlug },
+        { platformAppId: null, slug: appSlug },
+      ],
+    },
     select: {
       id: true,
       slug: true,
+      platformAppId: true,
       owners: {
         where: { userId: user.userId, role: "OWNER" },
         select: { userId: true },
@@ -185,7 +195,7 @@ export async function requirePlatformWriteAccess(
     login: user.login,
     role: user.role,
     appId: app.id,
-    appSlug: app.slug,
+    appSlug: resolvedPlatformAppId(app),
   };
 }
 
@@ -230,6 +240,7 @@ async function revalidateQueuedPlatformAccess(input: {
       select: {
         id: true,
         slug: true,
+        platformAppId: true,
         status: true,
         owners: {
           where: user
@@ -246,7 +257,12 @@ async function revalidateQueuedPlatformAccess(input: {
       runActorLogin: input.actorLogin,
       requestedAppSlug: input.appSlug,
       app: app
-        ? { id: app.id, slug: app.slug, active: app.status === "ACTIVE" }
+        ? {
+            id: app.id,
+            slug: app.slug,
+            platformAppId: app.platformAppId,
+            active: app.status === "ACTIVE",
+          }
         : null,
       user: user
         ? {
@@ -266,7 +282,7 @@ async function revalidateQueuedPlatformAccess(input: {
       login: user!.login,
       role: user!.role,
       appId: app!.id,
-      appSlug: app!.slug,
+      appSlug: resolvedPlatformAppId(app!),
     };
   });
 }

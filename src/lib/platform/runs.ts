@@ -1,6 +1,7 @@
 import { AppOperationRunStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import {
   PLATFORM_MIN_EXECUTION_WINDOW_MS,
   PLATFORM_OUTCOME_UNKNOWN_CODE,
@@ -78,10 +79,12 @@ function platformBlockingReference(
 
 /** 서버 DB의 blocking row를 PII 없는 복구 참조로만 투영한다. */
 export async function listBlockingPlatformOperations(
-  apps: readonly { id: string; slug: string }[],
+  apps: readonly { id: string; slug: string; platformAppId: string | null }[],
 ): Promise<PlatformBlockingReference[]> {
   if (apps.length === 0) return [];
-  const appSlugById = new Map(apps.map((app) => [app.id, app.slug]));
+  const appSlugById = new Map(
+    apps.map((app) => [app.id, resolvedPlatformAppId(app)]),
+  );
   const rows = await prisma.appOperationRun.findMany({
     where: {
       appId: { in: apps.map((app) => app.id) },
