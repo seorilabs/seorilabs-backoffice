@@ -159,6 +159,89 @@ git -C "$tmp/frozen_active" commit -qm additive
 MIGRATION_FROZEN_BASE="$frozen_base" REPOSITORY_ROOT="$tmp/frozen_active" \
   "$here/check-migration-safety.sh" >/dev/null
 
+prepare_case frozen_recovery_addition
+git -C "$tmp/frozen_recovery_addition" init -q
+git -C "$tmp/frozen_recovery_addition" config user.name migration-contract
+git -C "$tmp/frozen_recovery_addition" config user.email migration-contract@localhost
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery = {};
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/frozen_recovery_addition/prisma/migration-history.json"
+git -C "$tmp/frozen_recovery_addition" add prisma
+git -C "$tmp/frozen_recovery_addition" commit -qm baseline
+recovery_base="$(git -C "$tmp/frozen_recovery_addition" rev-parse HEAD)"
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery["20260828230000_provider_execution_queue"] = {
+    sha256: "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb",
+    maxRolledBackAttempts: 1,
+    reason: "verified production recovery",
+  };
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/frozen_recovery_addition/prisma/migration-history.json"
+git -C "$tmp/frozen_recovery_addition" add prisma
+git -C "$tmp/frozen_recovery_addition" commit -qm recovery
+MIGRATION_FROZEN_BASE="$recovery_base" \
+  REPOSITORY_ROOT="$tmp/frozen_recovery_addition" \
+  "$here/check-migration-safety.sh" >/dev/null
+recovery_deployed_base="$(git -C "$tmp/frozen_recovery_addition" rev-parse HEAD)"
+
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery["20260828230000_provider_execution_queue"].reason =
+    "rewritten recovery";
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/frozen_recovery_addition/prisma/migration-history.json"
+git -C "$tmp/frozen_recovery_addition" add prisma
+git -C "$tmp/frozen_recovery_addition" commit -qm rewritten-recovery
+if MIGRATION_FROZEN_BASE="$recovery_deployed_base" \
+  REPOSITORY_ROOT="$tmp/frozen_recovery_addition" \
+  "$here/check-migration-safety.sh" >/dev/null 2>&1; then
+  echo "FAIL 이미 등록된 activeRecovery 변경이 통과했다" >&2
+  exit 1
+fi
+
+prepare_case frozen_recovery_for_new_migration
+git -C "$tmp/frozen_recovery_for_new_migration" init -q
+git -C "$tmp/frozen_recovery_for_new_migration" config user.name migration-contract
+git -C "$tmp/frozen_recovery_for_new_migration" config user.email migration-contract@localhost
+git -C "$tmp/frozen_recovery_for_new_migration" add prisma
+git -C "$tmp/frozen_recovery_for_new_migration" commit -qm baseline
+new_recovery_base="$(git -C "$tmp/frozen_recovery_for_new_migration" rev-parse HEAD)"
+mkdir -p "$tmp/frozen_recovery_for_new_migration/prisma/migrations/99999999999998_new_recovery"
+printf "ALTER TABLE \`app\` ADD COLUMN \`secondObservedAt\` DATETIME(3) NULL;\n" > \
+  "$tmp/frozen_recovery_for_new_migration/prisma/migrations/99999999999998_new_recovery/migration.sql"
+node -e '
+  const crypto = require("node:crypto");
+  const fs = require("node:fs");
+  const manifestPath = process.argv[1];
+  const migrationPath = process.argv[2];
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.activeRecovery["99999999999998_new_recovery"] = {
+    sha256: crypto.createHash("sha256").update(fs.readFileSync(migrationPath)).digest("hex"),
+    maxRolledBackAttempts: 1,
+    reason: "must not be preapproved",
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+' \
+  "$tmp/frozen_recovery_for_new_migration/prisma/migration-history.json" \
+  "$tmp/frozen_recovery_for_new_migration/prisma/migrations/99999999999998_new_recovery/migration.sql"
+git -C "$tmp/frozen_recovery_for_new_migration" add prisma
+git -C "$tmp/frozen_recovery_for_new_migration" commit -qm invalid-new-recovery
+if MIGRATION_FROZEN_BASE="$new_recovery_base" \
+  REPOSITORY_ROOT="$tmp/frozen_recovery_for_new_migration" \
+  "$here/check-migration-safety.sh" >/dev/null 2>&1; then
+  echo "FAIL 같은 변경에서 추가한 migration의 activeRecovery가 통과했다" >&2
+  exit 1
+fi
+
 prepare_case frozen_out_of_order
 git -C "$tmp/frozen_out_of_order" init -q
 git -C "$tmp/frozen_out_of_order" config user.name migration-contract
