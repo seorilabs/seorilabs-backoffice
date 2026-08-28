@@ -16,6 +16,9 @@ image="registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:${digest}"
 expected_digest="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-digest:/ { print $2; exit }' \
   "$here/../k8s/provider-audit-trigger-verifier.yaml")"
 [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]]
+now_epoch="$(date -u +%s)"
+iso_at() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+migration_completed_at="$(iso_at $((now_epoch - 60)))"
 
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
@@ -69,6 +72,10 @@ fi
 
 if [[ "$args" == *" get job "* ]]; then
   IFS='|' read -r condition job_image job_name job_sha < "$FAKE_KUBECTL_STATE"
+  if [[ "$args" == *"status.completionTime"* ]]; then
+    printf '%s' "${FAKE_MIGRATION_COMPLETED_AT:-$MIGRATION_COMPLETED_AT}"
+    exit 0
+  fi
   if [[ "$args" == *"status.conditions"* ]]; then
     printf '%s=True\n' "$condition"
   elif [[ "$args" == *"spec.template.spec.containers[0].image"* ]]; then
@@ -148,6 +155,8 @@ run_deploy() {
   FAKE_CATCHUP_CREATE_UNKNOWN="${FAKE_CATCHUP_CREATE_UNKNOWN:-false}" \
   FAKE_CATCHUP_RESULT="${FAKE_CATCHUP_RESULT:-Complete}" \
   EXPECTED_CONTRACT_DIGEST="$expected_digest" \
+  MIGRATION_COMPLETED_AT="$migration_completed_at" \
+  FAKE_MIGRATION_COMPLETED_AT="${FAKE_MIGRATION_COMPLETED_AT:-}" \
   FAKE_TRIGGER_STATUS="${FAKE_TRIGGER_STATUS:-PASS}" \
   FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-2}" \
   FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-2}" \
@@ -256,8 +265,9 @@ else
 fi
 
 echo "== trigger 관측이 계약을 만족하지 않으면 rollout 전에 멈춘다 =="
-stale="$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)"
-for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch stale missing; do
+pre_migration="$(iso_at $((now_epoch - 120)))"
+long_stale="$(iso_at $((now_epoch - 7200)))"
+for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch pre-migration stale missing; do
   : > "$log"
   case "$scenario" in
     fail) FAKE_TRIGGER_STATUS=FAIL ;;
@@ -265,7 +275,8 @@ for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch sta
     one-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=1; FAKE_TRIGGER_EXACT=1 ;;
     bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=3; FAKE_TRIGGER_EXACT=2 ;;
     digest-mismatch) FAKE_TRIGGER_DIGEST="$(printf 'c%.0s' {1..64})" ;;
-    stale) FAKE_TRIGGER_OBSERVED_AT="$stale" ;;
+    pre-migration) FAKE_TRIGGER_OBSERVED_AT="$pre_migration" ;;
+    stale) FAKE_TRIGGER_OBSERVED_AT="$long_stale" ;;
     missing) FAKE_TRIGGER_STATE_MISSING=true ;;
   esac
   if run_deploy Complete >/dev/null 2>&1; then
@@ -285,6 +296,45 @@ for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch sta
   fi
   echo "  ok   $scenario fail-closed"
 done
+
+echo "== migration 완료 이후 관측만 인정한다 =="
+: > "$log"
+FAKE_TRIGGER_OBSERVED_AT="$(iso_at $((now_epoch - 59)))"
+run_deploy Complete >/dev/null
+unset FAKE_TRIGGER_OBSERVED_AT
+if ! grep -q '^ROLLOUT backoffice$' "$log"; then
+  echo "FAIL migration 완료 이후 관측이 거부됐다" >&2
+  exit 1
+fi
+echo "  ok   완료 이후 관측은 통과"
+
+echo "== 완료와 같은 초의 관측은 race라 거부한다 =="
+: > "$log"
+FAKE_TRIGGER_OBSERVED_AT="$migration_completed_at"
+if run_deploy Complete >/dev/null 2>&1; then
+  echo "FAIL 같은 초 관측이 deploy 성공으로 처리됐다" >&2
+  exit 1
+fi
+unset FAKE_TRIGGER_OBSERVED_AT
+if grep -q '^ROLLOUT \|^APPLY_STDIN backoffice,' "$log"; then
+  echo "FAIL 같은 초 관측 뒤에도 rollout이 진행됐다" >&2
+  exit 1
+fi
+echo "  ok   fail-closed"
+
+echo "== migration 완료 시각을 못 읽으면 배포하지 않는다 =="
+: > "$log"
+FAKE_MIGRATION_COMPLETED_AT=" "
+if run_deploy Complete >/dev/null 2>&1; then
+  echo "FAIL migration 완료 시각 부재가 deploy 성공으로 처리됐다" >&2
+  exit 1
+fi
+unset FAKE_MIGRATION_COMPLETED_AT
+if grep -q '^ROLLOUT \|^APPLY_STDIN backoffice,' "$log"; then
+  echo "FAIL migration 완료 시각 부재 뒤에도 rollout이 진행됐다" >&2
+  exit 1
+fi
+echo "  ok   fail-closed"
 
 echo "== CI는 verifier workload를 만들거나 바꾸지 않는다 =="
 : > "$log"

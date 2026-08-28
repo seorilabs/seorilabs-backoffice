@@ -180,6 +180,9 @@ if grep -q 'kind: CronJob' "$trigger_verifier" &&
    grep -q 'mysql-root-cred' "$trigger_verifier" &&
    grep -q 'readOnlyRootFilesystem: true' "$trigger_verifier" &&
    grep -q "trap 'rm -f \"\$cnf\"' EXIT INT TERM" "$trigger_verifier" &&
+   grep -q 'automountServiceAccountToken: false' "$trigger_verifier" &&
+   grep -q 'image: curlimages/curl@sha256:' "$trigger_verifier" &&
+   grep -q 'kind: NetworkPolicy' "$trigger_verifier" &&
    grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$trigger_verifier" &&
    ! grep -qE 'CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO|MYSQL_PWD' "$trigger_verifier" &&
    ! grep -q ':latest' "$trigger_verifier"; then

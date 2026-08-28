@@ -121,16 +121,31 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 가시성이 없다고 검증을 건너뛰지는 않는다. 검증은 고정 in-cluster verifier가 맡는다.
 
 `k8s/provider-audit-trigger-verifier.yaml`은 `data` namespace의 CronJob과 전용 ServiceAccount,
-결과 ConfigMap `backoffice-provider-audit-trigger-state`를 정의한다. verifier는 root secret 전용
-volume으로 두 trigger의 이름, timing, event, table, action statement를 SELECT로만 확인하고 보호
-table 위 trigger 총 개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. DDL, `GRANT`,
+결과 ConfigMap `backoffice-provider-audit-trigger-state`, NetworkPolicy를 정의한다.
+
+secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
+`automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
+
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 두 trigger의
+  이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
+  개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  파일로 emptyDir에 쓴다.
+- container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
+  허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
+  key별 literal assignment만 하므로 관측 값이 shell command로 실행되지 않는다.
+
+따라서 root secret을 보는 컨테이너에는 외부로 쓸 수단이 없고, 쓸 수단이 있는 컨테이너에는 root
+secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `seccompProfile: RuntimeDefault`를
+쓴다. egress는 NetworkPolicy로 MySQL 3306과 API server 443만 허용한다. DNS는 열지 않고 kubelet이
+주입한 `MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. verifier는 DDL, `GRANT`,
 복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
 `scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
-한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고
-`observedAt`이 `BACKOFFICE_TRIGGER_OBSERVATION_MAX_AGE_SECONDS`(기본 900초) 이내일 때만
-rollout한다. 하나라도 어긋나거나 ConfigMap이 없으면 배포를 중단한다.
+한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
+max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
+같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
 
 CI deployer에는 `data` namespace의 Job·Pod 생성 권한을 주지 않는다. 주면 CI가
 `mysql-root-cred`를 mount하는 workload spec을 만들 수 있어 사실상 root secret export 권한이

@@ -1,17 +1,22 @@
 # 고정 in-cluster append-only trigger verifier.
 #
-# CI deployer는 이 workload를 만들거나 바꿀 수 없고, 결과 ConfigMap을 read-only로만
-# 읽는다. 따라서 CI는 root secret을 mount하는 spec을 만들 수 없다. verifier는 두
-# trigger의 존재와 정의만 SELECT로 확인하며 DDL, GRANT, 복구, 데이터 변경을 하지 않는다.
+# 경계 두 가지를 코드가 아니라 pod 구조로 강제한다.
 #
+# 1. CI deployer는 이 workload를 만들거나 바꿀 수 없고 결과 ConfigMap을 read-only로만
+#    읽는다. 따라서 CI가 root secret을 mount하는 spec을 만들 수 없다.
+# 2. DB root secret과 API server token을 한 컨테이너에 함께 두지 않는다. root secret을
+#    보는 init container에는 token이 없고, ConfigMap을 patch하는 publisher container에는
+#    DB secret이 없다. publisher는 공개 status 파일만 읽고 값 형식을 다시 검사한다.
+#    그래서 verifier가 secret을 공개 ConfigMap으로 흘릴 수 없다.
+#
+# verifier는 두 trigger의 존재와 정의만 SELECT하며 DDL, GRANT, 복구, 데이터 변경을 하지 않는다.
 # 이 파일은 trusted operator가 직접 apply한다. deploy script는 apply하지 않는다.
-# 계약이 바뀌면 operator가 다시 apply해야 하며, 그전까지는 contractDigest 불일치로
-# 배포가 fail-closed한다.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: backoffice-provider-audit-trigger-verifier
   namespace: data
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -54,6 +59,34 @@ data:
   contractDigest: ""
   observedAt: ""
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backoffice-provider-audit-trigger-verifier
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: provider-audit-trigger-verifier
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  # service 환경값으로 접속하므로 DNS egress가 필요 없다.
+  egress:
+    # init container의 MySQL readback
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - { protocol: TCP, port: 3306 }
+    # publisher container의 API server ConfigMap patch
+    - to:
+        - ipBlock:
+            cidr: 10.152.183.1/32
+      ports:
+        - { protocol: TCP, port: 443 }
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -83,14 +116,17 @@ spec:
         spec:
           restartPolicy: Never
           serviceAccountName: backoffice-provider-audit-trigger-verifier
-          automountServiceAccountToken: true
+          automountServiceAccountToken: false
           nodeSelector:
             kubernetes.io/hostname: rpi5
           securityContext:
             runAsUser: 10001
             runAsGroup: 10001
             fsGroup: 10001
-          containers:
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # DB root secret을 보는 유일한 컨테이너다. API server token이 없다.
             - name: verify
               image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
               env:
@@ -104,8 +140,11 @@ spec:
                   umask 077
                   cnf=/tmp/verify.cnf
                   trap 'rm -f "$cnf"' EXIT INT TERM
-                  printf '[client]\nuser=root\npassword=%s\nhost=mysql.data.svc.cluster.local\n' \
-                    "$(< /run/secrets/mysql-root-password)" > "$cnf"
+                  # DNS egress를 열지 않으려고 kubelet이 주입한 service 환경값을 쓴다.
+                  : "${MYSQL_SERVICE_HOST:?MYSQL_SERVICE_HOST가 없다}"
+                  printf '[client]\nuser=root\npassword=%s\nhost=%s\nport=%s\n' \
+                    "$(< /run/secrets/mysql-root-password)" \
+                    "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$cnf"
                   q() {
                     mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e "$1"
                   }
@@ -127,31 +166,25 @@ spec:
                         OR (TRIGGER_NAME='control_plane_provider_execution_event_no_delete' AND EVENT_MANIPULATION='DELETE') \
                       )")"
                   rm -f "$cnf"
+                  # 관측값은 숫자 두 개뿐이다. 여기서 형식을 강제하고 publisher가 다시 검사한다.
+                  case "$total" in ''|*[!0-9]*) echo "총 개수 관측 실패" >&2; exit 1;; esac
+                  case "$exact" in ''|*[!0-9]*) echo "정확 일치 관측 실패" >&2; exit 1;; esac
                   status=FAIL
                   if [ "$total" = "2" ] && [ "$exact" = "2" ]; then
                     status=PASS
                   fi
-                  observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                  patch="$(printf '{"data":{"status":"%s","total":"%s","exact":"%s","contractDigest":"%s","observedAt":"%s"}}' \
-                    "$status" "$total" "$exact" "$CONTRACT_DIGEST" "$observed_at")"
-                  token="$(< /var/run/secrets/kubernetes.io/serviceaccount/token)"
-                  code="$(curl -sS -o /dev/null -w '%{http_code}' \
-                    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-                    -H "Authorization: Bearer ${token}" \
-                    -H 'Content-Type: application/merge-patch+json' \
-                    -X PATCH \
-                    --data "$patch" \
-                    "https://kubernetes.default.svc/api/v1/namespaces/data/configmaps/backoffice-provider-audit-trigger-state")"
-                  test "$code" = "200"
-                  echo "provider audit trigger observation: status=${status} total=${total} exact=${exact} observedAt=${observed_at}"
-                  test "$status" = "PASS"
+                  umask 022
+                  {
+                    printf 'status=%s\n' "$status"
+                    printf 'total=%s\n' "$total"
+                    printf 'exact=%s\n' "$exact"
+                    printf 'contractDigest=%s\n' "$CONTRACT_DIGEST"
+                    printf 'observedAt=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  } > /var/run/observation/status
+                  echo "provider audit trigger observation: status=${status} total=${total} exact=${exact}"
               resources:
-                requests:
-                  cpu: 25m
-                  memory: 64Mi
-                limits:
-                  cpu: 250m
-                  memory: 192Mi
+                requests: { cpu: 25m, memory: 64Mi }
+                limits: { cpu: 250m, memory: 192Mi }
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -161,9 +194,77 @@ spec:
                 - name: mysql-root-password
                   mountPath: /run/secrets
                   readOnly: true
+                - name: observation
+                  mountPath: /var/run/observation
                 - name: tmp
                   mountPath: /tmp
+          containers:
+            # API server token을 가진 유일한 컨테이너다. DB secret이 없다.
+            # 공개 status 파일만 읽고 각 값의 형식을 다시 강제한 뒤 patch한다.
+            - name: publish
+              image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  umask 077
+                  status=""; total=""; exact=""; contractDigest=""; observedAt=""
+                  # 동적 실행 없이 key별 literal assignment만 한다. 값이 command
+                  # substitution을 담고 있어도 검증 전에 실행되지 않는다.
+                  while IFS='=' read -r key value; do
+                    case "$key" in
+                      status) status="$value" ;;
+                      total) total="$value" ;;
+                      exact) exact="$value" ;;
+                      contractDigest) contractDigest="$value" ;;
+                      observedAt) observedAt="$value" ;;
+                      *) echo "허용되지 않은 관측 field: $key" >&2; exit 1 ;;
+                    esac
+                  done < /var/run/observation/status
+                  # secret이 섞여 들어올 수 없도록 값 형식을 여기서 다시 강제한다.
+                  case "$status" in PASS|FAIL) ;; *) echo "status 형식 위반" >&2; exit 1 ;; esac
+                  case "$total" in ''|*[!0-9]*) echo "total 형식 위반" >&2; exit 1 ;; esac
+                  case "$exact" in ''|*[!0-9]*) echo "exact 형식 위반" >&2; exit 1 ;; esac
+                  [ "${#total}" -le 3 ] || { echo "total 길이 위반" >&2; exit 1; }
+                  [ "${#exact}" -le 3 ] || { echo "exact 길이 위반" >&2; exit 1; }
+                  [ "${#contractDigest}" -eq 64 ] || { echo "contractDigest 길이 위반" >&2; exit 1; }
+                  case "$contractDigest" in *[!0-9a-f]*) echo "contractDigest 형식 위반" >&2; exit 1 ;; esac
+                  [ "${#observedAt}" -eq 20 ] || { echo "observedAt 길이 위반" >&2; exit 1; }
+                  case "$observedAt" in
+                    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+                    *) echo "observedAt 형식 위반" >&2; exit 1 ;;
+                  esac
+                  patch="$(printf '{"data":{"status":"%s","total":"%s","exact":"%s","contractDigest":"%s","observedAt":"%s"}}' \
+                    "$status" "$total" "$exact" "$contractDigest" "$observedAt")"
+                  : "${KUBERNETES_SERVICE_HOST:?KUBERNETES_SERVICE_HOST가 없다}"
+                  token="$(cat /var/run/secrets/tokens/api/token)"
+                  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                    --cacert /var/run/secrets/tokens/api/ca.crt \
+                    -H "Authorization: Bearer $token" \
+                    -H 'Content-Type: application/merge-patch+json' \
+                    -X PATCH \
+                    --data "$patch" \
+                    "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}/api/v1/namespaces/data/configmaps/backoffice-provider-audit-trigger-state")"
+                  [ "$code" = "200" ] || { echo "관측 기록 실패: http=$code" >&2; exit 1; }
+                  echo "observation published: status=$status total=$total exact=$exact observedAt=$observedAt"
+                  [ "$status" = "PASS" ]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { cpu: 100m, memory: 96Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: observation
+                  mountPath: /var/run/observation
+                  readOnly: true
+                - name: api-token
+                  mountPath: /var/run/secrets/tokens/api
+                  readOnly: true
           volumes:
+            # init container 전용. publisher는 이 volume을 mount하지 않는다.
             - name: mysql-root-password
               secret:
                 secretName: mysql-root-cred
@@ -171,6 +272,23 @@ spec:
                 items:
                   - key: password
                     path: mysql-root-password
+            # publisher 전용. init container는 이 volume을 mount하지 않는다.
+            - name: api-token
+              projected:
+                defaultMode: 0440
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 600
+                      audience: https://kubernetes.default.svc
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+            - name: observation
+              emptyDir:
+                sizeLimit: 1Mi
             - name: tmp
               emptyDir:
                 sizeLimit: 16Mi

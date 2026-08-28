@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { parseAllDocuments } from "yaml";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,6 +16,44 @@ import {
 } from "@/lib/control-plane/append-only-triggers";
 
 const migrationsRoot = join(process.cwd(), "prisma/migrations");
+
+type YamlDocument = Record<string, never> & {
+  kind?: string;
+  [key: string]: unknown;
+};
+
+interface VerifierContainer {
+  name: string;
+  image: string;
+  args: string[];
+  volumeMounts?: Array<{ name: string; readOnly?: boolean }>;
+}
+
+interface VerifierPodSpec {
+  automountServiceAccountToken: boolean;
+  securityContext: { seccompProfile: { type: string } };
+  initContainers: VerifierContainer[];
+  containers: VerifierContainer[];
+}
+
+function verifierDocuments(): YamlDocument[] {
+  return parseAllDocuments(
+    readFileSync(join(process.cwd(), "k8s/provider-audit-trigger-verifier.yaml"), "utf8"),
+  ).map((document) => document.toJS() as YamlDocument);
+}
+
+function verifierDocument(kind: string): YamlDocument {
+  const found = verifierDocuments().find((document) => document.kind === kind);
+  assert.ok(found, `verifier ${kind}이 없다`);
+  return found;
+}
+
+function verifierPodSpec(): VerifierPodSpec {
+  const cronJob = verifierDocument("CronJob") as unknown as {
+    spec: { jobTemplate: { spec: { template: { spec: VerifierPodSpec } } } };
+  };
+  return cronJob.spec.jobTemplate.spec.template.spec;
+}
 
 function observed(
   overrides: Partial<ObservedTrigger> & Pick<ObservedTrigger, "name">,
@@ -240,7 +279,6 @@ test("배포 script는 고정 verifier 관측을 rollout 선행조건으로 둔�
   assert.ok(readbackIndex < rolloutIndex, "관측이 rollout 뒤에 있다");
   assert.match(deploy, /trigger_observation_fresh/);
   assert.match(deploy, /"\$digest" = "\$expected_digest"/);
-  assert.match(deploy, /trigger_max_age/);
   // CI는 verifier workload를 만들거나 바꾸지 않는다.
   const executable = deploy
     .split("\n")
@@ -257,4 +295,108 @@ test("CI deployer는 data namespace에서 workload를 만들 수 없다", () => 
   assert.doesNotMatch(rbac, /resources: \["secrets"\]/);
   assert.doesNotMatch(rbac, /verbs:.*create/);
   assert.doesNotMatch(rbac, /verbs:.*delete/);
+});
+
+test("DB root secret과 API token은 서로 다른 컨테이너에만 있다", () => {
+  const pod = verifierPodSpec();
+  assert.equal(pod.automountServiceAccountToken, false);
+
+  const verify = pod.initContainers.find((container) => container.name === "verify");
+  const publish = pod.containers.find((container) => container.name === "publish");
+  assert.ok(verify && publish, "verify init container와 publish container가 필요하다");
+  assert.equal(pod.containers.length, 1, "publisher 외 다른 container를 두지 않는다");
+
+  const mounts = (container: VerifierContainer) =>
+    (container.volumeMounts ?? []).map((mount) => mount.name);
+  // root secret을 보는 컨테이너에는 token이 없다.
+  assert.ok(mounts(verify).includes("mysql-root-password"));
+  assert.ok(!mounts(verify).includes("api-token"));
+  // token을 가진 컨테이너에는 DB secret이 없다.
+  assert.ok(mounts(publish).includes("api-token"));
+  assert.ok(!mounts(publish).includes("mysql-root-password"));
+  // 공개 관측 파일만 공유하며 publisher는 읽기 전용으로 받는다.
+  const shared = (publish.volumeMounts ?? []).find((mount) => mount.name === "observation");
+  assert.equal(shared?.readOnly, true);
+});
+
+test("verifier 컨테이너 이미지는 모두 immutable digest로 고정한다", () => {
+  const pod = verifierPodSpec();
+  for (const container of [...pod.initContainers, ...pod.containers]) {
+    assert.match(
+      container.image,
+      /^[^:]+@sha256:[0-9a-f]{64}$/,
+      `${container.name} 이미지가 digest로 고정되지 않았다`,
+    );
+  }
+});
+
+test("publisher는 허용된 field와 형식만 기록한다", () => {
+  const pod = verifierPodSpec();
+  const publish = pod.containers[0].args.join("\n");
+  // eval은 검증 전에 관측 값으로 shell command를 실행할 수 있어 금지한다.
+  assert.doesNotMatch(publish, /\beval\b/);
+  for (const field of ["status", "total", "exact", "contractDigest", "observedAt"]) {
+    assert.match(publish, new RegExp(`\\b${field}\\) ${field}="\\$value" ;;`));
+  }
+  assert.match(publish, /허용되지 않은 관측 field/);
+  assert.match(publish, /case "\$status" in PASS\|FAIL\)/);
+  assert.match(publish, /"\$\{#contractDigest\}" -eq 64/);
+  assert.match(publish, /"\$\{#observedAt\}" -eq 20/);
+  // publisher는 DB에 접근하지 않는다.
+  assert.doesNotMatch(publish, /mysql|SELECT|information_schema/i);
+});
+
+test("verifier egress는 MySQL과 API server로만 제한되고 DNS는 열지 않는다", () => {
+  const policy = verifierDocument("NetworkPolicy") as unknown as {
+    spec: {
+      policyTypes: string[];
+      ingress: unknown[];
+      egress: Array<{ ports?: Array<{ port: number }> }>;
+      podSelector: { matchLabels: Record<string, string> };
+    };
+  };
+  assert.deepEqual([...policy.spec.policyTypes].sort(), ["Egress", "Ingress"]);
+  assert.deepEqual(policy.spec.ingress, []);
+  const ports = policy.spec.egress
+    .flatMap((rule) => rule.ports ?? [])
+    .map((port) => port.port)
+    .sort((left, right) => left - right);
+  assert.deepEqual(ports, [443, 3306]);
+  assert.equal(
+    policy.spec.podSelector.matchLabels["app.kubernetes.io/component"],
+    "provider-audit-trigger-verifier",
+  );
+});
+
+test("pod는 seccomp RuntimeDefault를 쓰고 service 환경값으로 접속한다", () => {
+  const pod = verifierPodSpec();
+  assert.equal(pod.securityContext.seccompProfile.type, "RuntimeDefault");
+  const verify = pod.initContainers[0].args.join("\n");
+  const publish = pod.containers[0].args.join("\n");
+  // DNS를 열지 않으므로 cluster DNS 이름을 쓰지 않는다.
+  assert.match(verify, /MYSQL_SERVICE_HOST/);
+  assert.doesNotMatch(verify, /mysql\.data\.svc\.cluster\.local/);
+  assert.match(publish, /KUBERNETES_SERVICE_HOST/);
+  assert.doesNotMatch(publish, /https:\/\/kubernetes\.default\.svc\/api/);
+});
+
+test("verifier ServiceAccount는 결과 ConfigMap 하나만 patch한다", () => {
+  const role = verifierDocument("Role") as unknown as { rules: unknown[] };
+  assert.deepEqual(role.rules, [{
+    apiGroups: [""],
+    resources: ["configmaps"],
+    resourceNames: ["backoffice-provider-audit-trigger-state"],
+    verbs: ["get", "patch"],
+  }]);
+});
+
+test("배포 script는 migration 완료 이후 관측만 인정한다", () => {
+  const deploy = readFileSync(join(process.cwd(), "scripts/deploy-backoffice.sh"), "utf8");
+  assert.match(deploy, /status\.completionTime/);
+  assert.match(deploy, /migration_boundary_epoch/);
+  // 같은 초 race를 막으려면 -gt여야 한다.
+  assert.match(deploy, /"\$observed_epoch" -gt "\$migration_boundary_epoch"/);
+  assert.doesNotMatch(deploy, /"\$observed_epoch" -ge "\$migration_boundary_epoch"/);
+  // 벽시계 max age 단독 판정은 남기지 않는다.
+  assert.doesNotMatch(deploy, /trigger_max_age/);
 });
