@@ -63,6 +63,37 @@ else
   ng "web Pod source SHA identity가 깨졌다"
 fi
 
+echo "== control-plane snapshot signing Secret 격리 =="
+snapshot_secret_name="backoffice-control-plane-snapshot-signing"
+snapshot_key="CONTROL_PLANE_SNAPSHOT_SIGNING_KEY"
+snapshot_env_ref="$(awk -v key="$snapshot_key" '
+  $0 ~ "- name: " key { capture=1 }
+  capture { print }
+  capture && /optional:/ { exit }
+' "$root/k8s/deployment.yaml")"
+snapshot_sealed="$root/k8s/control-plane-snapshot-signing-sealedsecret.yaml"
+broad_sealed="$root/k8s/backoffice-sealedsecret.yaml"
+secret_example="$root/k8s/secret.example.yaml"
+sealed_key_count="$(awk '
+  /^  encryptedData:/ { encrypted=1; next }
+  /^  template:/ { encrypted=0 }
+  encrypted && /^    [A-Z0-9_]+:/ { count += 1 }
+  END { print count + 0 }
+' "$snapshot_sealed")"
+if printf '%s' "$snapshot_env_ref" | grep -q "name: ${snapshot_secret_name}" &&
+   ! printf '%s' "$snapshot_env_ref" | grep -q 'name: backoffice-secrets' &&
+   grep -q "secretName: ${snapshot_secret_name}" "$root/k8s/restore-rehearsal-job.yaml" &&
+   [ "$(grep -c "^    ${snapshot_key}:" "$snapshot_sealed")" -eq 1 ] &&
+   [ "$sealed_key_count" -eq 1 ] &&
+   [ "$(grep -c "name: ${snapshot_secret_name}$" "$snapshot_sealed")" -eq 2 ] &&
+   ! grep -q "^    ${snapshot_key}:" "$broad_sealed" &&
+   [ "$(grep -c "^  ${snapshot_key}:" "$secret_example")" -eq 1 ] &&
+   [ "$(grep -c "^  name: ${snapshot_secret_name}$" "$secret_example")" -eq 1 ]; then
+  ok "snapshot signing key는 exact-key 전용 Secret 하나에서만 공급"
+else
+  ng "snapshot signing key가 broad Secret에 남았거나 consumer 경계가 깨졌다"
+fi
+
 provider_worker="$root/k8s/provider-execution-worker.yaml"
 provider_out="$("$render" "$provider_worker" "$IMG" "$SHA")"
 if ! grep -q ':latest' "$provider_worker" &&
@@ -244,6 +275,8 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    ! grep -q 'key: DATABASE_URL' "$restore_job" &&
    ! grep -q 'key: DB_PASSWORD' "$restore_job" &&
    grep -q 'CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_FILE' "$restore_job" &&
+   grep -q 'secretName: backoffice-control-plane-snapshot-signing' "$restore_job" &&
+   ! grep -A8 'name: signing-key' "$restore_job" | grep -q 'secretName: backoffice-secrets' &&
    grep -q 'touch /state/stop' "$restore_job"; then
   ok "restore rehearsal production DB 비접근·ephemeral cleanup 경계"
 else

@@ -213,7 +213,7 @@ spec:
             medium: Memory
         - name: signing-key
           secret:
-            secretName: backoffice-secrets
+            secretName: backoffice-control-plane-snapshot-signing
             defaultMode: 0440
             items:
               - key: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY

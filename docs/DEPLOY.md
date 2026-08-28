@@ -34,7 +34,7 @@ Org `seorilabs` → Settings → Developer settings → GitHub Apps → New.
 kubectl get secret registry-pull-cred -n apps -o yaml \
   | sed 's/namespace: apps/namespace: platform/' | kubectl apply -n platform -f -
 
-# backoffice-secrets (k8s/secret.example.yaml 참고)
+# broad backoffice-secrets (k8s/secret.example.yaml 첫 번째 문서 참고)
 kubectl -n platform create secret generic backoffice-secrets \
   --from-literal=DATABASE_URL='mysql://backoffice:STRONG_PW_HERE@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=5' \
   --from-literal=DB_PASSWORD='STRONG_PW_HERE' \
@@ -196,10 +196,15 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
 
 ## 8. Sealed Secrets (시크릿 git 버전관리)
 
-`backoffice-secrets`는 **암호화된 채 git에 보관**된다(`k8s/backoffice-sealedsecret.yaml`). kube-system 의 `sealed-secrets-controller`(v0.38.1)가 복호화해 실제 Secret 을 생성.
+일반 Backoffice credential은 **암호화된 채 git에 보관**된다(`k8s/backoffice-sealedsecret.yaml`).
+ACTIVE ConfigRevision snapshot HMAC 키는 blast radius를 줄이기 위해 exact key 하나만 가진
+`backoffice-control-plane-snapshot-signing`으로 분리하고,
+`k8s/control-plane-snapshot-signing-sealedsecret.yaml`만 이 Secret을 관리한다. web Deployment와
+restore rehearsal은 전용 Secret만 참조하며 broad `backoffice-secrets`에는 이 key가 없어야 한다.
+kube-system의 `sealed-secrets-controller`(v0.38.1)가 두 SealedSecret을 각각 복호화한다.
 
 - **봉인 키 백업(필수·DR)**: `~/.config/seorilabs/sealed-secrets-master.key.yaml` — 이 키가 없으면 클러스터/컨트롤러 유실 시 SealedSecret 복호화 불가. **반드시 오프머신 안전 보관**. git 커밋 금지.
-- **시크릿 추가/회전**: 임시 평문 Secret 을 만들고 봉인 → 재커밋.
+- **일반 시크릿 추가/회전**: 임시 평문 Secret 을 만들고 봉인 → 재커밋.
   ```bash
   kubectl -n platform create secret generic backoffice-secrets \
     --from-literal=KEY=VALUE ... --dry-run=client -o yaml \
@@ -208,7 +213,15 @@ org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 reposi
   kubectl apply -f k8s/backoffice-sealedsecret.yaml   # 컨트롤러가 Secret 갱신
   ```
   (기존 Secret 이 SealedSecret 소유가 아니면 한 번 `kubectl -n platform delete secret backoffice-secrets` 후 재적용해 소유권 이관.)
-- **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) → `kubectl apply -f k8s/backoffice-sealedsecret.yaml`.
+- **snapshot signing key 추가/회전**: canonical catalog의 동일 logical credential을 전용 Secret 이름과
+  namespace에 다시 봉인한다. broad SealedSecret ciphertext를 복사하거나 두 Secret에 같은 key를 동시에
+  남기지 않는다. PR merge만으로 live Secret을 적용하지 않는다.
+- **분리 rollout**: 별도 운영 승인 뒤 전용 SealedSecret을 먼저 적용하고
+  `kubectl -n platform describe secret backoffice-control-plane-snapshot-signing`으로 key 이름과 byte 수만
+  확인한다. `.data`와 평문을 출력하지 않는다. 그 다음 web Deployment를 적용하고 snapshot activation과
+  resolved-manifest 서명 검증을 readback한다. restore rehearsal은 같은 전용 Secret이 확인된 뒤 실행한다.
+- **DR 복구**: 새 컨트롤러 설치 → 백업한 master key 적용(`kubectl apply -f sealed-secrets-master.key.yaml` 후 컨트롤러 재시작) →
+  `k8s/backoffice-sealedsecret.yaml`과 `k8s/control-plane-snapshot-signing-sealedsecret.yaml`을 각각 적용한다.
 
 Discord 운영 알림은 단일 Bot과 목적지별 channel ID를 사용한다. Bot token과
 Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, 클러스터에는
@@ -229,7 +242,7 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `AGENT_WORKER_CLAUDE_TOKEN` | Claude generic worker principal에만 결합된 agent queue Bearer capability. Codex 값과 같으면 두 worker 모두 fail-closed |
 | `AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED` | trusted adapter가 provider write와 비용 상한을 강제할 때만 `true`. 기본 `false`에서는 `READY_PR` 생성·claim 거부 |
 | `AGENT_LEASE_SIGNING_KEY` | idempotent claim capability를 파생하는 server-only HMAC 키 |
-| `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
+| `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | 전용 `backoffice-control-plane-snapshot-signing`에서만 공급하는 ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 
 역할 ID는 비밀값이 아니며 허용된 역할 mention과 명령 권한 검사에만 사용한다.
 Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
