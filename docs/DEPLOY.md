@@ -103,6 +103,15 @@ volume에서 읽어 두 DDL만 수행한다.
 두 Job 중 하나라도 실패하거나 audit event가 이미 있는데 trigger가 없으면 배포를
 중단하고 수동으로 migration history를 삭제하거나 table을 drop하지 않는다.
 
+### 감사 원장 append-only trigger 배포 gate
+
+`prisma migrate deploy` 뒤의 `verify-migration-state.cjs --history=fresh|cutover`는 schema
+fingerprint에 더해 live DB의 append-only trigger를 다시 읽는다. baseline이나 recovery resolve로
+migration row만 성공 처리돼 실제 trigger가 없으면 fingerprint는 통과하지만 이 readback이
+fail-closed한다. 계약은 `src/lib/control-plane/append-only-triggers.ts`이며 migration SQL 선언과
+같아야 한다. 보호 table에 계약 밖 trigger가 추가돼도 실패한다. 성공 로그의
+`appendOnlyTriggers=<n>`이 검증된 trigger 수다.
+
 ### Provider execution signer 활성화
 
 `k8s/provider-execution-worker.yaml`은 signer와 worker를 모두 기본 `replicas: 0`으로 둔다.
