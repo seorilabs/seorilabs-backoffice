@@ -45,7 +45,7 @@ jobs:
           MIGRATION_FROZEN_BASE: ${{ github.event.before }}
       - run: bash scripts/render-manifest.test.sh
       - run: bash scripts/deploy-backoffice.test.sh
-      - run: bash scripts/check-ci-deployer-permissions.sh
+      - run: bash scripts/check-ci-deployer-permissions.test.sh
 
   migration-contract:
     uses: ./.github/workflows/migration-contract.yml
@@ -102,6 +102,9 @@ jobs:
           chmod +x /tmp/kubectl
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          # 배포 kubeconfig의 실제 권한 경계를 먼저 확인한다. data namespace workload를
+          # 바꿀 수 있으면 임의 Secret volume을 붙일 수 있어 배포를 진행하지 않는다.
+          KUBECTL_BIN=/tmp/kubectl scripts/check-ci-deployer-permissions.sh
           if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "invalid image digest" >&2
             exit 1

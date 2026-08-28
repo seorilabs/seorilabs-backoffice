@@ -56,6 +56,7 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.ok(deployVerifyRuns.includes("pnpm typecheck"));
   assert.ok(deployVerifyRuns.includes("pnpm lint"));
   assert.ok(deployVerifyRuns.includes("pnpm test"));
+  assert.ok(deployVerifyRuns.includes("bash scripts/check-ci-deployer-permissions.test.sh"));
   assert.ok(deployVerifyRuns.includes("bash scripts/render-manifest.test.sh"));
   assert.ok(!deployVerifyRuns.includes("pnpm build"));
   assert.ok(deploy.jobs?.build?.steps?.some((step) => step.uses === "docker/build-push-action@v7"));

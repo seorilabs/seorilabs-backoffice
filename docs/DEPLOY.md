@@ -151,8 +151,14 @@ CI deployer에는 `data` namespace의 workload mutation 권한을 일절 주지 
 물론 CronJob `patch`/`update`도 금지한다. RBAC는 pod template의 field를 제한할 수 없어, CronJob을
 고칠 수 있으면 Pod template에 `mysql-root-cred` 같은 임의 Secret volume을 붙일 수 있고 그 자체가
 root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`vault-writer` CronJob과
-관측 ConfigMap에 대한 `get`뿐이다. `scripts/check-ci-deployer-permissions.sh`가 live `can-i`로
-이 경계를 확인하며 CI에서 실행한다.
+관측 ConfigMap에 대한 `get`뿐이다. `scripts/check-ci-deployer-permissions.sh`가 이 경계를 live로
+확인한다. deploy job이 `KUBECONFIG_B64`를 설치한 직후, 배포 전에 실행한다. checker는 먼저
+`kubectl auth whoami`로 identity가 정확히 `system:serviceaccount:platform:ci-deployer`인지 보고,
+`resourceNames` Role이므로 정확한 리소스 이름(`configmap/backoffice-provider-audit-trigger-state`,
+`cronjob/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한 뒤 workload·secret·ConfigMap
+mutation이 모두 거부되는지 본다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
+클러스터 접근 불가와 identity 불일치는 skip이 아니라 실패다. PR CI에는 kubeconfig가 없으므로
+static 계약 테스트 `check-ci-deployer-permissions.test.sh`만 돈다.
 
 그래서 Vault 이미지 parity는 CI가 고치지 않고 관측만 한다. deploy 로그의
 `vault_image_parity=MATCH|DRIFT|ABSENT|UNREADABLE`이 그 결과다. `MATCH`와 `ABSENT`가 아니면

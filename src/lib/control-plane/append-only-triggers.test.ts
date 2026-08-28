@@ -439,3 +439,34 @@ test("배포 script는 migration 완료 이후 관측만 인정한다", () => {
   // 벽시계 max age 단독 판정은 남기지 않는다.
   assert.doesNotMatch(deploy, /trigger_max_age/);
 });
+
+test("권한 checker는 배포 kubeconfig에서만 실행되고 접근 불가를 통과시키지 않는다", () => {
+  const checker = readFileSync(
+    join(process.cwd(), "scripts/check-ci-deployer-permissions.sh"),
+    "utf8",
+  );
+  // impersonation은 ci-deployer에 권한이 없어 쓸 수 없다.
+  assert.doesNotMatch(checker, /--as=/);
+  // 접근 불가는 skip이 아니라 실패다.
+  assert.doesNotMatch(checker, /exit 0[\s\S]*클러스터에 닿지/);
+  assert.match(checker, /auth whoami/);
+  assert.match(checker, /system:serviceaccount:platform:ci-deployer/);
+  // resourceNames Role이므로 정확한 리소스 이름으로 묻는다.
+  assert.match(checker, /get:configmap\/backoffice-provider-audit-trigger-state/);
+  assert.match(checker, /get:cronjob\/vault-indexer/);
+  for (const denied of ["create:jobs", "patch:pods", "get:secrets", "patch:cronjob/vault-indexer"]) {
+    assert.ok(checker.includes(`"${denied}"`), `${denied} 거부 검증이 없다`);
+  }
+
+  const ci = readFileSync(join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
+  const deploy = readFileSync(join(process.cwd(), ".github/workflows/deploy.yml"), "utf8");
+  // PR CI에는 kubeconfig가 없으므로 static 계약만 돈다.
+  assert.match(ci, /check-ci-deployer-permissions\.test\.sh/);
+  assert.doesNotMatch(ci, /check-ci-deployer-permissions\.sh(?!\w)/);
+  // live checker는 kubeconfig 설치 직후, 배포 전에 돈다.
+  const kubeconfigIndex = deploy.indexOf('base64 -d > "$HOME/.kube/config"');
+  const checkerIndex = deploy.indexOf("KUBECTL_BIN=/tmp/kubectl scripts/check-ci-deployer-permissions.sh");
+  const deployIndex = deploy.indexOf("scripts/deploy-backoffice.sh");
+  assert.ok(kubeconfigIndex > 0 && checkerIndex > kubeconfigIndex);
+  assert.ok(checkerIndex < deployIndex);
+});
