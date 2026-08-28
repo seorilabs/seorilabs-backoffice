@@ -57,6 +57,7 @@ export default async function FleetOperationsPage({
   const activeConfig = fleet.configRevisions.find((revision) => revision.status === "ACTIVE");
   const drafts = fleet.configRevisions.filter((revision) => revision.status === "DRAFT");
   const latestDiscovery = fleet.discoveryObservations[0];
+  const latestParity = fleet.fleetParityWaveResults[0];
   const activePayload = configRevisionPayloadSchema.safeParse(activeConfig?.payload);
   const initialPayload = activePayload.success
     ? activePayload.data
@@ -71,7 +72,12 @@ export default async function FleetOperationsPage({
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <Summary label="Discovery" value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : "미관측"} detail={dateTime(latestDiscovery?.observedAt)} />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
-          <Summary label="Legacy shadow" value={`${fleet.legacyConfigImports.length}개`} detail={fleet.legacyConfigImports[0] ? `${fleet.legacyConfigImports[0].status} · ${mono(fleet.legacyConfigImports[0].sourceSha, 12)}` : "미관측"} />
+          <Summary
+            label="Parity gate"
+            value={latestParity?.wave.cleanupAllowed ? "2회 연속 통과" : latestParity ? `${latestParity.wave.consecutiveMatchCount}/2` : "미실행"}
+            detail={latestParity ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}` : "Fleet wave 증거 없음"}
+            danger={Boolean(latestParity) && !latestParity.wave.cleanupAllowed}
+          />
           <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
           <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />
           <Summary label="Dead-letter" value={`${fleet.deadLetters.length}개`} detail={`${fleet.reauthRequests.filter((request) => request.status === "HUMAN_REAUTH_REQUIRED").length}건 재인증 필요`} danger={fleet.deadLetters.length > 0} />
@@ -128,7 +134,7 @@ export default async function FleetOperationsPage({
                     <div className="mt-1 text-[11px] text-neutral-400">input digest {mono(legacyImport.inputDigest, 20)}</div>
                   </div>
                   <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
-                    정리 금지 · occurrence + parity + build-only + 복구 증거 원장 미구현
+                    정리 금지 · Fleet wave 2회와 복구·build-only 증거를 별도로 확인
                   </span>
                 </div>
 
@@ -180,6 +186,52 @@ export default async function FleetOperationsPage({
               </article>
             ))}
             {fleet.legacyConfigImports.length === 0 && <Empty>Legacy shadow import가 없습니다.</Empty>}
+          </div>
+        </Panel>
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="Fleet parity wave"
+        description="ACTIVE·MANAGED cohort를 한 번에 고정해 비교합니다. 동일 exact vector가 별도 occurrence에서 두 번 연속 FULL MATCH여야 parity 선행조건이 열립니다."
+      >
+        <Panel title="최근 앱별 wave 결과">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left text-xs">
+              <thead className="border-b border-neutral-200 text-neutral-500">
+                <tr>
+                  <th className="py-2 pr-3">Wave</th><th className="pr-3">결과</th><th className="pr-3">Exact vector</th><th className="pr-3">전체 cohort</th><th>증거</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100">
+                {fleet.fleetParityWaveResults.map((result) => (
+                  <tr key={result.id}>
+                    <td className="py-2 pr-3 align-top">
+                      <div className="font-mono text-neutral-700">{mono(result.wave.id, 14)}</div>
+                      <div className="text-[11px] text-neutral-400">{dateTime(result.wave.completedAt ?? result.wave.startedAt)}</div>
+                    </td>
+                    <td className="pr-3 align-top">
+                      <Status value={result.status} />
+                      <div className="mt-1 text-[11px] text-neutral-500">{result.reasonCode ?? `${result.sourceCount} sources`}</div>
+                    </td>
+                    <td className="pr-3 align-top font-mono text-[11px] text-neutral-500">
+                      <div>SHA {mono(result.sourceSha, 12)}</div>
+                      <div>Config {mono(result.configRevisionId, 12)}</div>
+                      <div>{result.scope} · {result.contractVersion}</div>
+                    </td>
+                    <td className="pr-3 align-top text-neutral-600">
+                      <div><Status value={result.wave.status} /> · {result.wave.matchCount}/{result.wave.resultCount}</div>
+                      <div className="mt-1">연속 {result.wave.consecutiveMatchCount}/2 · parity 정리 선행조건 {result.wave.cleanupAllowed ? "충족" : "차단"}</div>
+                    </td>
+                    <td className="align-top font-mono text-[11px] text-neutral-500">
+                      <div>cohort {mono(result.wave.cohortDigest, 14)}</div>
+                      <div>vector {mono(result.wave.vectorDigest, 14)}</div>
+                      <div>evidence {mono(result.wave.evidenceDigest, 14)}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {fleet.fleetParityWaveResults.length === 0 && <Empty>아직 Fleet parity wave가 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>

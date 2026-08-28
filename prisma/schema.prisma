@@ -92,6 +92,7 @@ model App {
   configRevisions ConfigRevision[]
   legacyConfigImports LegacyConfigImport[]
   shadowParityObservations ShadowParityObservation[]
+  fleetParityWaveResults FleetParityWaveResult[]
   providerObservations ProviderObservation[]
   releaseCandidates ReleaseCandidate[]
   platformFleetBinding PlatformFleetBinding?
@@ -981,6 +982,7 @@ model ConfigRevision {
   releaseCandidates        ReleaseCandidate[]
   legacyConfigImport       LegacyConfigImport?
   shadowParityObservations ShadowParityObservation[]
+  fleetParityWaveResults   FleetParityWaveResult[]
 
   @@unique([appId, revision])
   @@unique([id, appId])
@@ -1015,6 +1017,7 @@ model LegacyConfigImport {
   createdAt          DateTime                  @default(now()) @db.DateTime(3)
   sources            LegacyConfigSource[]
   parityObservations ShadowParityObservation[]
+  fleetParityWaveResults FleetParityWaveResult[]
 
   @@index([appId, sourceSha, createdAt])
   @@unique([id, appId])
@@ -1070,11 +1073,87 @@ model ShadowParityObservation {
   observedBy       String
   observedAt       DateTime           @db.DateTime(3)
   createdAt        DateTime           @default(now()) @db.DateTime(3)
+  fleetParityWaveResult FleetParityWaveResult?
 
+  @@unique([id, appId])
   @@index([appId, sourceSha, observedAt])
   @@index([legacyImportId, observedAt])
   @@index([configRevisionId, observedAt])
   @@map("control_plane_shadow_parity_observation")
+}
+
+// 관리 대상 전체를 한 번 순회한 durable parity occurrence다. 같은 idempotency
+// 요청은 이 row를 재개할 뿐 새 회차로 세지 않는다.
+model FleetParityWave {
+  id                    String                  @id @default(cuid())
+  occurrenceKey         String                  @unique @db.Char(64)
+  requestHash           String                  @db.Char(64)
+  scope                 String                  @default("FULL") @db.VarChar(64)
+  contractVersion       String                  @db.VarChar(64)
+  cohortDigest          String                  @db.Char(64)
+  vectorDigest          String?                 @db.Char(64)
+  evidenceDigest        String?                 @db.Char(64)
+  status                FleetParityWaveStatus   @default(RUNNING)
+  resultCount           Int                     @default(0)
+  matchCount            Int                     @default(0)
+  consecutiveMatchCount Int                     @default(0)
+  cleanupAllowed        Boolean                 @default(false)
+  observedBy            String
+  startedAt             DateTime                @db.DateTime(3)
+  completedAt           DateTime?               @db.DateTime(3)
+  createdAt             DateTime                @default(now()) @db.DateTime(3)
+  results               FleetParityWaveResult[]
+
+  @@index([status, createdAt])
+  @@map("control_plane_fleet_parity_wave")
+}
+
+enum FleetParityWaveStatus {
+  RUNNING
+  PASSED
+  BLOCKED
+}
+
+// Wave 시작 시 cohort와 exact vector를 먼저 고정한다. 이후 source/config가
+// 바뀌면 결과를 새 값으로 추측 갱신하지 않고 해당 회차를 fail-closed한다.
+model FleetParityWaveResult {
+  id                  String                   @id @default(cuid())
+  waveId              String
+  wave                FleetParityWave          @relation(fields: [waveId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  appId               String
+  app                 App                      @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  repoId              BigInt
+  repoFullName        String
+  sourceSha           String?                  @db.Char(40)
+  configRevisionId    String?
+  configRevision      ConfigRevision?          @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_config_app_fkey")
+  legacyImportId      String?
+  legacyImport        LegacyConfigImport?      @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_import_app_fkey")
+  parityObservationId String?
+  parityObservation   ShadowParityObservation? @relation(fields: [parityObservationId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_wave_result_parity_app_fkey")
+  scope               String                   @default("FULL") @db.VarChar(64)
+  contractVersion     String                   @db.VarChar(64)
+  status              FleetParityResultStatus  @default(PENDING)
+  reasonCode          String?                  @db.VarChar(64)
+  legacyDigest        String?                  @db.Char(64)
+  centralDigest       String?                  @db.Char(64)
+  sourceCount         Int                      @default(0)
+  observedAt          DateTime?                @db.DateTime(3)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+
+  @@unique([waveId, appId])
+  @@unique([parityObservationId, appId])
+  @@index([appId, createdAt])
+  @@index([status, createdAt])
+  @@map("control_plane_fleet_parity_wave_result")
+}
+
+enum FleetParityResultStatus {
+  PENDING
+  MATCH
+  MISMATCH
+  NEEDS_INPUT
+  ERROR
 }
 
 model ProviderObservation {

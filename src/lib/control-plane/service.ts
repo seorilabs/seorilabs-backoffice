@@ -775,17 +775,15 @@ export async function resolveManifest(input: {
         where: { appId_revision: { appId: app.id, revision: input.revision } },
       })
     : await prisma.configRevision.findFirst({ where: { appId: app.id, status: "ACTIVE" } });
-  if (!revision || revision.status === "DRAFT" || !revision.activatedSnapshot) {
+  if (!revision) {
     throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
   }
-  if (!verifySnapshot(
-    revision.activatedSnapshot as JsonValue,
-    input.signingKey,
-    revision.snapshotDigest,
-    revision.snapshotSignature,
-  )) {
-    throw new ControlPlaneError("Config snapshot 서명을 검증할 수 없습니다.", 409, "INVALID_CONFIG_SIGNATURE");
-  }
+  assertResolvableConfigRevision({
+    status: revision.status,
+    activatedSnapshot: revision.activatedSnapshot,
+    snapshotDigest: revision.snapshotDigest,
+    snapshotSignature: revision.snapshotSignature,
+  }, input.signingKey);
   const discovery = await prisma.discoveryObservation.findFirst({
     where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
     orderBy: { observedAt: "desc" },
@@ -848,4 +846,24 @@ export async function resolveManifest(input: {
     providerObservations: [...latestProvider.values()],
     platformFleet,
   };
+}
+
+/** 운영 resolve와 격리 복구 rehearsal이 동일한 fail-closed 경계를 검증한다. */
+export function assertResolvableConfigRevision(revision: {
+  status: "DRAFT" | "ACTIVE" | "SUPERSEDED";
+  activatedSnapshot: unknown;
+  snapshotDigest: string | null;
+  snapshotSignature: string | null;
+}, signingKey: string): asserts revision is typeof revision & { activatedSnapshot: JsonValue } {
+  if (revision.status === "DRAFT" || !revision.activatedSnapshot) {
+    throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
+  }
+  if (!verifySnapshot(
+    revision.activatedSnapshot as JsonValue,
+    signingKey,
+    revision.snapshotDigest,
+    revision.snapshotSignature,
+  )) {
+    throw new ControlPlaneError("Config snapshot 서명을 검증할 수 없습니다.", 409, "INVALID_CONFIG_SIGNATURE");
+  }
 }

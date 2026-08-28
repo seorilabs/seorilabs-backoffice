@@ -1,0 +1,222 @@
+# 검증된 production dump를 read-only로 받아 Pod 내부 MySQL 9.2 emptyDir에만
+# 복원한다. production DATABASE_URL/DB password는 이 Pod에 주입하지 않는다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-restore-rehearsal-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: restore-rehearsal
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: restore-rehearsal
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        fsGroup: 999
+      initContainers:
+        - name: prepare-ephemeral-credential
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              umask 077
+              openssl rand -hex 24 > /state/mysql-root-password
+              chmod 0440 /state/mysql-root-password
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: state
+              mountPath: /state
+      containers:
+        - name: isolated-mysql
+          image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              trap 'kill "${mysql_pid:-}" 2>/dev/null || true' EXIT
+              docker-entrypoint.sh mysqld --skip-log-bin --skip-name-resolve &
+              mysql_pid=$!
+              while [ ! -f /state/stop ]; do
+                if ! kill -0 "$mysql_pid" 2>/dev/null; then
+                  wait "$mysql_pid"
+                  exit 1
+                fi
+                sleep 1
+              done
+              umask 077
+              printf '[client]\nuser=root\npassword=%s\nhost=127.0.0.1\n' "$(< /state/mysql-root-password)" > /state/mysql-shutdown-client.cnf
+              mysqladmin --defaults-extra-file=/state/mysql-shutdown-client.cnf shutdown
+              wait "$mysql_pid"
+              trap - EXIT
+          env:
+            - name: MYSQL_ROOT_PASSWORD_FILE
+              value: /state/mysql-root-password
+            - name: MYSQL_DATABASE
+              value: backoffice_rehearsal
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+            - name: state
+              mountPath: /state
+        - name: restore
+          image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              trap 'touch /state/restore-failed' ERR
+              dump="/backup/${REHEARSAL_DUMP_BASENAME}"
+              checksum="${dump}.sha256"
+              [[ "$REHEARSAL_DUMP_BASENAME" =~ ^backoffice-[0-9]{8}T[0-9]{6}Z\.sql\.gz$ ]]
+              test -f "$dump"
+              test -f "$checksum"
+              expected="$(tr -d '[:space:]' < "$checksum")"
+              [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+              test "$(sha256sum "$dump" | awk '{print $1}')" = "$expected"
+              gzip -t "$dump"
+              umask 077
+              printf '[client]\nuser=root\npassword=%s\nhost=127.0.0.1\n' "$(< /state/mysql-root-password)" > /state/mysql-restore-client.cnf
+              for _ in $(seq 1 120); do
+                if mysqladmin --defaults-extra-file=/state/mysql-restore-client.cnf ping --silent; then break; fi
+                sleep 1
+              done
+              mysqladmin --defaults-extra-file=/state/mysql-restore-client.cnf ping --silent
+              gzip -dc "$dump" | mysql --defaults-extra-file=/state/mysql-restore-client.cnf backoffice_rehearsal
+              printf '%s\n' "$expected" > /state/dump-sha256
+              touch /state/restored
+          env:
+            - name: REHEARSAL_DUMP_BASENAME
+              value: "__BACKOFFICE_RESTORE_DUMP_BASENAME__"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+              readOnly: true
+            - name: state
+              mountPath: /state
+        - name: verify
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              trap 'touch /state/stop' EXIT
+              for _ in $(seq 1 300); do
+                test ! -f /state/restore-failed || exit 1
+                test ! -f /state/restored || break
+                sleep 1
+              done
+              test -f /state/restored
+              node /app/scripts-dist/verify-restore-rehearsal.cjs
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: REHEARSAL_MYSQL_HOST
+              value: 127.0.0.1
+            - name: REHEARSAL_MYSQL_PORT
+              value: "3306"
+            - name: REHEARSAL_APP_ROOT
+              value: /app
+            - name: REHEARSAL_ISOLATION_MODE
+              value: POD_SCOPED_EMPTYDIR
+            - name: REHEARSAL_DB_PASSWORD_FILE
+              value: /state/mysql-root-password
+            - name: REHEARSAL_DUMP_SHA256_FILE
+              value: /state/dump-sha256
+            - name: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_FILE
+              value: /run/secrets/control-plane/snapshot-signing-key
+            - name: REHEARSAL_DUMP_BASENAME
+              value: "__BACKOFFICE_RESTORE_DUMP_BASENAME__"
+            - name: BACKOFFICE_SOURCE_SHA
+              value: "__BACKOFFICE_IMAGE_TAG__"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: signing-key
+              mountPath: /run/secrets/control-plane
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: backoffice-backup
+        - name: mysql-data
+          emptyDir: {}
+        - name: state
+          emptyDir:
+            medium: Memory
+        - name: signing-key
+          secret:
+            secretName: backoffice-secrets
+            defaultMode: 0440
+            items:
+              - key: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
+                path: snapshot-signing-key
+        - name: tmp
+          emptyDir: {}
