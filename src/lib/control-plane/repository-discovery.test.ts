@@ -6,11 +6,16 @@ import {
   discoverRepository,
   readExactRepositoryTree,
   repositoryDiscoverySloState,
+  REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH,
   REPOSITORY_DISCOVERY_TERMINAL_SLO_MS,
   type RepositoryTreeSnapshot,
 } from "@/lib/control-plane/repository-discovery";
 import type { SourceObservationResult } from "@/lib/github/source-observation";
-import { appMarketIdentityConflict } from "@/lib/control-plane/repository-discovery-service";
+import {
+  appMarketIdentityConflict,
+  reconciledMarketTargets,
+} from "@/lib/control-plane/repository-discovery-service";
+import { exactBuildTargetIdentity } from "@/lib/control-plane/build-target-identity";
 
 const REPO_ID = 42;
 const SHA = "a".repeat(40);
@@ -85,7 +90,7 @@ function vendoredChecksum(files: Record<string, string>): string {
   return hash.digest("hex");
 }
 
-test("기존 App adoption은 비어 있는 market identity만 채우고 충돌은 NEEDS_INPUT 대상으로 판정한다", () => {
+test("기존 App adoption은 non-null identity 충돌만 거부하고 desired market target은 비파괴 union한다", () => {
   const discovered = {
     playPackage: "com.seorilabs.sample",
     iosBundle: "com.seorilabs.sample",
@@ -107,11 +112,147 @@ test("기존 App adoption은 비어 있는 market identity만 채우고 충돌�
   assert.equal(appMarketIdentityConflict({
     existing: { ...discovered, marketTargets: ["play", "appstore"] },
     discovered,
-  }), true);
+  }), false);
   assert.equal(appMarketIdentityConflict({
     existing: { ...discovered, iosBundle: "com.seorilabs.sample" },
     discovered: { ...discovered, iosBundle: null, marketTargets: ["ait", "play"] },
+  }), false);
+  assert.equal(appMarketIdentityConflict({
+    existing: { ...discovered, aitAppName: "other-ait" },
+    discovered,
   }), true);
+
+  // alley-market-match/lord-ledger/slotmachine-game처럼 legacy desired target과
+  // exact source target 집합이 달라도 registration을 막거나 기존 intent를 지우지 않는다.
+  assert.deepEqual(
+    reconciledMarketTargets(["play", "appstore"], ["ait", "play"]),
+    ["ait", "appstore", "play"],
+  );
+  assert.deepEqual(
+    reconciledMarketTargets(["web", "play"], ["appstore"]),
+    ["appstore", "play", "web"],
+  );
+});
+
+test("release와 resolved manifest는 exact target 공개 identity가 null이면 fail-closed한다", () => {
+  const targets = [
+    {
+      market: "google-play",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+    {
+      market: "app-store",
+      packageId: null,
+      bundleId: "com.seorilabs.sample",
+      configuration: null,
+    },
+    {
+      market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+  ];
+  assert.deepEqual(exactBuildTargetIdentity(targets, "google-play"), { status: "IDENTITY_MISSING" });
+  assert.equal(exactBuildTargetIdentity(targets, "app-store").status, "READY");
+  assert.deepEqual(exactBuildTargetIdentity(targets, "apps-in-toss"), { status: "IDENTITY_MISSING" });
+  assert.deepEqual(exactBuildTargetIdentity([], "google-play"), { status: "TARGET_MISSING" });
+  assert.deepEqual(
+    exactBuildTargetIdentity([targets[1], targets[1]], "app-store"),
+    { status: "TARGET_AMBIGUOUS" },
+  );
+});
+
+test("nullable source identity는 exact market application ExternalBinding으로만 해소한다", () => {
+  const googleTarget = {
+    market: "google-play",
+    packageId: null,
+    bundleId: null,
+    configuration: null,
+  };
+  const appStoreTarget = {
+    market: "app-store",
+    packageId: null,
+    bundleId: null,
+    configuration: null,
+  };
+  const appsInTossTarget = {
+    market: "apps-in-toss",
+    packageId: null,
+    bundleId: null,
+    configuration: null,
+  };
+  const googleApplication = {
+    provider: "google-play",
+    bindingType: "application",
+    externalId: "com.seorilabs.sample",
+    publicIdentity: "com.seorilabs.sample",
+  };
+  assert.deepEqual(
+    exactBuildTargetIdentity([googleTarget], "google-play", [googleApplication]),
+    {
+      status: "READY",
+      target: googleTarget,
+      publicIdentity: "com.seorilabs.sample",
+      resolvedBy: "EXTERNAL_BINDING",
+    },
+  );
+  assert.equal(exactBuildTargetIdentity([appStoreTarget], "app-store", [{
+    provider: "app-store",
+    bindingType: "application",
+    externalId: "com.seorilabs.sample",
+    publicIdentity: "com.seorilabs.sample",
+  }]).status, "READY");
+  assert.equal(exactBuildTargetIdentity([appsInTossTarget], "apps-in-toss", [{
+    provider: "apps-in-toss",
+    bindingType: "mini-app",
+    externalId: "sample-app",
+    publicIdentity: "sample-app",
+  }]).status, "READY");
+
+  // provider 혼동: 다른 market application은 Google Play identity가 아니다.
+  assert.deepEqual(exactBuildTargetIdentity([googleTarget], "google-play", [{
+    ...googleApplication,
+    provider: "app-store",
+  }]), { status: "IDENTITY_MISSING" });
+  // resourceType 혼동: account/team/workspace와 AIT의 잘못된 application type은 fallback이 아니다.
+  assert.deepEqual(exactBuildTargetIdentity([googleTarget], "google-play", [{
+    ...googleApplication,
+    bindingType: "publisher-account",
+  }]), { status: "IDENTITY_MISSING" });
+  assert.deepEqual(exactBuildTargetIdentity([appsInTossTarget], "apps-in-toss", [{
+    provider: "apps-in-toss",
+    bindingType: "application",
+    externalId: "sample-app",
+    publicIdentity: "sample-app",
+  }]), { status: "IDENTITY_MISSING" });
+  // resourceId 혼동: application row의 resource ID와 public identity가 다르면 거부한다.
+  assert.deepEqual(exactBuildTargetIdentity([googleTarget], "google-play", [{
+    ...googleApplication,
+    externalId: "publisher-account-1",
+  }]), { status: "EXTERNAL_BINDING_INVALID" });
+  assert.deepEqual(exactBuildTargetIdentity([googleTarget], "google-play", [
+    googleApplication,
+    {
+      ...googleApplication,
+      externalId: "com.seorilabs.other",
+      publicIdentity: "com.seorilabs.other",
+    },
+  ]), { status: "EXTERNAL_BINDING_AMBIGUOUS" });
+  assert.deepEqual(
+    exactBuildTargetIdentity([googleTarget], "app-store", [googleApplication]),
+    { status: "TARGET_MISSING" },
+  );
+  assert.deepEqual(exactBuildTargetIdentity([{
+    ...googleTarget,
+    packageId: "com.seorilabs.source",
+  }], "google-play", [{
+    ...googleApplication,
+    externalId: "com.seorilabs.provider",
+    publicIdentity: "com.seorilabs.provider",
+  }]), { status: "IDENTITY_CONFLICT" });
 });
 
 test("RN monorepo의 exact package manager, workingDirectory와 세 market target을 탐지한다", async () => {
@@ -129,7 +270,10 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
     }),
     "apps/ait/package.json": JSON.stringify({
       name: "sample-ait",
-      dependencies: { "react-native": "0.81.0" },
+      dependencies: {
+        "react-native": "0.81.0",
+        "@apps-in-toss/framework": "2.10.7",
+      },
     }),
     "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
     "apps/mobile/ios/Sample.xcodeproj/project.pbxproj": "PRODUCT_BUNDLE_IDENTIFIER = com.seorilabs.sample;",
@@ -151,6 +295,8 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
       targetKey: "ait",
       stack: "react-native",
       market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
       configuration: { appName: "sample-ait" },
     },
     {
@@ -158,12 +304,16 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
       stack: "react-native",
       market: "google-play",
       packageId: "com.seorilabs.sample",
+      bundleId: null,
+      configuration: null,
     },
     {
       targetKey: "ios",
       stack: "react-native",
       market: "app-store",
+      packageId: null,
       bundleId: "com.seorilabs.sample",
+      configuration: null,
     },
   ]);
   assert.equal(JSON.stringify(result).includes(canary), false);
@@ -213,20 +363,63 @@ test("RN exact package와 lock integrity를 PLATFORM_SDK_UPDATE용 source observ
   assert.equal((result.payload.platformConsumer as { integration: string }).integration, "SDK");
 });
 
-test("multi-market repo의 root Granite package를 native RN 후보로 중복 계산하지 않는다", async () => {
+test("AIT-only Granite RN package를 primary candidate와 exact target으로 탐지한다", async () => {
   const files = {
     "package.json": JSON.stringify({
-      name: "sample-ait-root",
+      name: "trait-test-hub",
       packageManager: "pnpm@11.3.0",
+    }),
+    "apps/ait/package.json": JSON.stringify({
+      name: "@seorilabs/trait-test-ait",
       dependencies: {
         "react-native": "0.84.0",
         "@apps-in-toss/framework": "2.10.7",
         "@granite-js/react-native": "1.0.28",
       },
     }),
+    "apps/ait/granite.config.ts": "export default { appName: 'trait-test-hub' };",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\nimporters: {}\npackages: {}\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.workflowCaller, {
+    profile: "react-native",
+    packageManager: "pnpm",
+    workingDirectory: "apps/ait",
+  });
+  assert.deepEqual(result.candidates, [{
+    profile: "react-native",
+    workingDirectory: "apps/ait",
+    markerPath: "apps/ait/package.json",
+  }]);
+  assert.deepEqual(result.buildTargets, [{
+    targetKey: "ait",
+    stack: "react-native",
+    market: "apps-in-toss",
+    packageId: null,
+    bundleId: null,
+    configuration: { appName: "trait-test-hub" },
+  }]);
+});
+
+test("multi-market repo는 native RN 후보가 있으면 AIT delivery package를 중복 후보로 계산하지 않는다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "sample-root",
+      packageManager: "pnpm@11.3.0",
+    }),
     "apps/mobile/package.json": JSON.stringify({
       name: "sample-mobile",
       dependencies: { "react-native": "0.85.0" },
+    }),
+    "apps/ait/package.json": JSON.stringify({
+      name: "sample-ait",
+      dependencies: {
+        "react-native": "0.84.0",
+        "@apps-in-toss/framework": "2.10.7",
+        "@granite-js/react-native": "1.0.28",
+      },
     }),
     "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
     "apps/ait/granite.config.ts": "export default { appName: 'sample-ait' };",
@@ -295,6 +488,103 @@ test("Godot production preset은 package manager 없이 debug identity를 제외
     result.buildTargets.map((target) => [target.targetKey, target.packageId ?? target.bundleId ?? null]),
     [["ait", null], ["android", "com.seorilabs.game"], ["ios", "com.seorilabs.game"]],
   );
+});
+
+test("lizard 유형은 build.env의 Android target과 미관측 package identity를 분리한다", async () => {
+  const files = {
+    "project.godot": "[application]\nconfig/name=\"Lizard\"\n",
+    "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "apps/ait/granite.config.ts": "export default { appName: 'lizard-tycoon' };",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [
+    {
+      targetKey: "ait",
+      stack: "godot",
+      market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
+      configuration: { appName: "lizard-tycoon" },
+    },
+    {
+      targetKey: "android",
+      stack: "godot",
+      market: "google-play",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+  ]);
+});
+
+test("minimax 유형은 확정 전 Godot package와 bundle identity를 null observation으로 보존한다", async () => {
+  const files = {
+    "godot/project.godot": "[application]\nconfig/name=\"MiniMax\"\n",
+    "godot/export_presets.cfg": [
+      "[preset.0]", 'name="Android"', 'platform="Android"',
+      "[preset.0.options]", 'package/unique_name="확정 필요"',
+      "[preset.1]", 'name="iOS"', 'platform="iOS"',
+      "[preset.1.options]", 'application/bundle_identifier="확정 필요"',
+    ].join("\n"),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [
+    {
+      targetKey: "android",
+      stack: "godot",
+      market: "google-play",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+    {
+      targetKey: "ios",
+      stack: "godot",
+      market: "app-store",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+  ]);
+});
+
+test("spiritgate 유형은 동적 AIT appName을 null로 두고 관측된 Android identity는 유지한다", async () => {
+  const files = {
+    "project.godot": "[application]\nconfig/name=\"Spiritgate\"\n",
+    "export_presets.cfg": [
+      "[preset.0]", 'name="Android"', 'platform="Android"',
+      "[preset.0.options]", 'package/unique_name="com.seorilabs.spiritgatedefenders"',
+    ].join("\n"),
+    "apps/ait/granite.config.ts": [
+      "const appName = process.env.AIT_APP_NAME?.trim();",
+      "export default { appName };",
+    ].join("\n"),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [
+    {
+      targetKey: "ait",
+      stack: "godot",
+      market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+    {
+      targetKey: "android",
+      stack: "godot",
+      market: "google-play",
+      packageId: "com.seorilabs.spiritgatedefenders",
+      bundleId: null,
+      configuration: null,
+    },
+  ]);
 });
 
 test("Godot fixed release URL과 vendored tree checksum을 exact SDK observation으로 만든다", async () => {
@@ -499,7 +789,7 @@ test("앱 후보에 마켓 build target이 없으면 추측 등록하지 않는�
   assert.equal(result.reasonCode, "BUILD_TARGET_MISSING");
 });
 
-test("마켓 설정에서 공개 build identity를 확정하지 못하면 fail-closed한다", async () => {
+test("RN target은 동적 build identity를 null exact-source observation으로 보존한다", async () => {
   const files = {
     "package.json": JSON.stringify({
       name: "incomplete-app",
@@ -512,8 +802,36 @@ test("마켓 설정에서 공개 build identity를 확정하지 못하면 fail-c
     snapshot([...Object.keys(files), "pnpm-lock.yaml"]),
     sourceReader(files),
   );
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [{
+    targetKey: "android",
+    stack: "react-native",
+    market: "google-play",
+    packageId: null,
+    bundleId: null,
+    configuration: null,
+  }]);
+});
+
+test("같은 source target에서 서로 다른 공개 build identity가 둘 이상이면 계속 fail-closed한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "ambiguous-app",
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+    "android/app/build.gradle": [
+      'android { defaultConfig { applicationId "com.seorilabs.first" } }',
+      'android { productFlavors { second { applicationId "com.seorilabs.second" } } }',
+    ].join("\n"),
+  };
+  const result = await discoverRepository(
+    snapshot([...Object.keys(files), "pnpm-lock.yaml"]),
+    sourceReader(files),
+  );
   assert.equal(result.status, "NEEDS_INPUT");
-  assert.equal(result.reasonCode, "BUILD_IDENTITY_MISSING");
+  assert.equal(result.reasonCode, "BUILD_IDENTITY_AMBIGUOUS");
 });
 
 test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검증한다", async (t) => {
@@ -571,6 +889,55 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
     }
     assert.equal(calls.some((call) => call.kind === "commit" && call.ref === "main"), true);
     assert.equal(calls.some((call) => call.kind === "tree" && call.tree_sha === TREE_SHA), true);
+  });
+
+  await t.test("foam-party의 14-depth vendored Firebase xcframework path", async () => {
+    const firebasePath = "godot/ios/plugins/firebase_core/FirebaseCore.xcframework/macos-arm64_x86_64/FirebaseCore.framework/Versions/A/Resources/FirebaseCore_Privacy.bundle/Contents/Resources/PrivacyInfo.xcprivacy";
+    assert.equal(firebasePath.split("/").length, 14);
+    const result = await readExactRepositoryTree(fake({
+      tree: {
+        sha: TREE_SHA,
+        truncated: false,
+        tree: [{ path: firebasePath, type: "blob" }],
+      },
+    }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/sample-app",
+      expectedSourceSha: SHA,
+    });
+    assert.equal(result.status, "READY");
+    if (result.status === "READY") assert.deepEqual(result.snapshot.paths, [firebasePath]);
+  });
+
+  await t.test("tree path traversal과 명시적 depth 상한은 계속 거부", async () => {
+    const tooDeep = Array.from(
+      { length: REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH + 1 },
+      (_, index) => `d${index}`,
+    ).join("/");
+    const invalidPaths = [
+      "/absolute/path",
+      "backslash\\path",
+      "nul\0path",
+      "dot/./path",
+      "parent/../path",
+      "empty//segment",
+      tooDeep,
+    ];
+    for (const path of invalidPaths) {
+      const result = await readExactRepositoryTree(fake({
+        tree: {
+          sha: TREE_SHA,
+          truncated: false,
+          tree: [{ path, type: "blob" }],
+        },
+      }) as never, {
+        repoId: REPO_ID,
+        fullName: "seorilabs/sample-app",
+        expectedSourceSha: SHA,
+      });
+      assert.equal(result.status, "NEEDS_INPUT", path);
+      assert.equal(result.reasonCode, "TREE_INVALID", path);
+    }
   });
 
   await t.test("numeric ID mismatch", async () => {

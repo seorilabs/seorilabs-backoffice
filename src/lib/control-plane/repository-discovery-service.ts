@@ -103,8 +103,6 @@ function aitAppName(result: Extract<RepositoryDiscoveryResult, { status: "ACTIVE
   return typeof appName === "string" ? appName : null;
 }
 
-const DISCOVERED_MARKETS = new Set(["play", "appstore", "ait"]);
-
 function normalizedMarketTargets(value: unknown): string[] {
   return Array.isArray(value)
     ? [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.toLowerCase()))].sort()
@@ -128,22 +126,21 @@ export function appMarketIdentityConflict(input: {
   const fieldConflict = (
     existing: string | null,
     discovered: string | null,
-  ) => existing !== null && existing.toLowerCase() !== discovered?.toLowerCase();
+  ) => existing !== null
+    && discovered !== null
+    && existing.toLowerCase() !== discovered.toLowerCase();
   if (
     fieldConflict(input.existing.playPackage, input.discovered.playPackage)
     || fieldConflict(input.existing.iosBundle, input.discovered.iosBundle)
     || fieldConflict(input.existing.aitAppName, input.discovered.aitAppName)
   ) return true;
-  const existingManaged = normalizedMarketTargets(input.existing.marketTargets)
-    .filter((target) => DISCOVERED_MARKETS.has(target));
-  return existingManaged.length > 0
-    && JSON.stringify(existingManaged) !== JSON.stringify(input.discovered.marketTargets);
+  return false;
 }
 
-function reconciledMarketTargets(existing: unknown, discovered: readonly string[]): string[] {
+export function reconciledMarketTargets(existing: unknown, discovered: readonly string[]): string[] {
   return [...new Set([
-    ...normalizedMarketTargets(existing).filter((target) => !DISCOVERED_MARKETS.has(target)),
-    ...discovered,
+    ...normalizedMarketTargets(existing),
+    ...discovered.map((target) => target.toLowerCase()),
   ])].sort();
 }
 

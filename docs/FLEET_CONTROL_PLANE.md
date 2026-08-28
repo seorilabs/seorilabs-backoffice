@@ -358,7 +358,9 @@ enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration gene
 탐지 파일은 verified tree에서 선택한 `package.json`, `project.godot`, native build identity,
 `export_presets.cfg`, `build.env`, `granite.config.ts`로 제한한다. 원문은 parser 호출 동안만 유지하며 DB에는
 path, blob SHA, content SHA-256, size, 상태와 파생된 공개 package/bundle/app ID만 저장한다. tree 전체 path와
-source 원문, secret-like custom package field는 저장하지 않는다.
+source 원문, secret-like custom package field는 저장하지 않는다. tree path는 absolute/backslash/NUL/dot
+segment를 거부하고 512자·64 segment 상한을 적용한다. 이 상한 안의 vendored xcframework 경로는 정상 tree로
+수용하며 실제 source read는 위 allowlist와 파일별 byte 상한을 그대로 적용한다.
 
 - 후보 하나: `classification=PRODUCT_APP`, `App.status=ACTIVE` 신규 등록,
   `RepositoryRegistration.status=MANAGED`, exact-SHA
@@ -366,9 +368,17 @@ source 원문, secret-like custom package field는 저장하지 않는다.
 - 중앙 정책의 `.github`, credentials, bot, Backoffice, presentations 저장소는 `INFRA_REPO`, planning,
   공식 웹사이트와 starter template은 `EXCLUDED`로 terminal 분류하며 App row를 만들지 않는다. 정책 밖의
   후보 0개/여러 개는 인프라로 추측하지 않고 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
-- package manager 모호성, build target/공개 identity 누락, unreadable source, 미승인 public 또는 non-main
-  repo도 `NEEDS_INPUT`이다. 공개 제품 allowlist는 source discovery만 허용하며 public PR의 ARC 실행 권한을
-  뜻하지 않는다.
+- package manager 모호성, build target 누락, 서로 다른 공개 identity 복수 관측, unreadable source, 미승인
+  public 또는 non-main repo도 `NEEDS_INPUT`이다. target은 exact source에 존재하지만 package ID, bundle ID,
+  AppsInToss appName이 동적이거나 아직 확정되지 않았으면 registration을 막지 않고 nullable `BuildTarget` fact로
+  기록한다. release candidate와 resolved manifest는 source identity 또는 같은 앱의 exact provider application
+  binding이 있어야 한다. Google Play와 App Store는 `application`, AppsInToss는 `mini-app` binding만 허용하며
+  `externalId`와 non-null `publicIdentity`가 같은 공개 build identity여야 한다. 복수 application binding,
+  source와 provider identity 불일치, `publisher-account`/`team`/`workspace` 일반 계정 binding은 전부
+  fail-closed한다. 공개 제품 allowlist는 source discovery만 허용하며 public PR의 ARC 실행 권한을 뜻하지 않는다.
+- `App.marketTargets`는 legacy desired state이고 `BuildTarget`은 exact-source observation이다. 두 집합 차이는
+  identity conflict가 아니며 adoption은 기존 desired target과 새 discovered target을 비파괴 union한다. source에서
+  제거된 target은 이전 row를 지우지 않고 새 source SHA 조회에서 제외해 exact observation으로 표현한다.
 - fork는 exact provider fact와 request hash에 남기지만 `PRODUCT_APP` 또는 `PLATFORM_PRODUCER`로 자동
   승격하지 않는다. `NEEDS_INPUT`에서 사람이 `EXCLUDED`로 확인한 경우에만 새
   append-only decision revision으로 terminal 재검증한다.
@@ -413,7 +423,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v4`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v5`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.

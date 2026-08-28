@@ -15,6 +15,7 @@ import {
 import { assertObservationTime, ControlPlaneError } from "@/lib/control-plane/service";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
+import { exactBuildTargetIdentity } from "@/lib/control-plane/build-target-identity";
 
 const ARTIFACT_BY_MARKET = {
   "google-play": "android-aab",
@@ -107,14 +108,29 @@ export async function createReleaseCandidate(input: {
     if (payload.build?.platformVersion !== input.platformVersion) {
       throw new ControlPlaneError("ACTIVE revision의 Platform version과 일치하지 않습니다.", 409, "PLATFORM_VERSION_MISMATCH");
     }
-    const [discovery, target, platformBinding, approvedPlatformReleases] = await Promise.all([
+    const [discovery, target, externalBindings, platformBinding, approvedPlatformReleases] = await Promise.all([
       tx.discoveryObservation.findFirst({
         where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
         select: { id: true },
       }),
       tx.buildTarget.findUnique({
         where: { appId_targetKey: { appId: app.id, targetKey: input.targetKey } },
-        select: { observedSha: true, market: true },
+        select: {
+          observedSha: true,
+          market: true,
+          packageId: true,
+          bundleId: true,
+          configuration: true,
+        },
+      }),
+      tx.externalBinding.findMany({
+        where: { appId: app.id, provider: input.market },
+        select: {
+          provider: true,
+          bindingType: true,
+          externalId: true,
+          publicIdentity: true,
+        },
       }),
       tx.platformFleetBinding.findUnique({
         where: { appId: app.id },
@@ -135,6 +151,19 @@ export async function createReleaseCandidate(input: {
       || target.market !== input.market
     ) {
       throw new ControlPlaneError("source SHA와 market에 고정된 BuildTarget이 없습니다.", 409, "BUILD_TARGET_MISMATCH");
+    }
+    const targetIdentity = exactBuildTargetIdentity([target], input.market, externalBindings);
+    if (targetIdentity.status !== "READY") {
+      const code = targetIdentity.status === "EXTERNAL_BINDING_AMBIGUOUS"
+        ? "BUILD_IDENTITY_AMBIGUOUS"
+        : targetIdentity.status === "IDENTITY_CONFLICT"
+          ? "BUILD_IDENTITY_CONFLICT"
+          : "BUILD_IDENTITY_MISSING";
+      throw new ControlPlaneError(
+        "source SHA와 provider application binding의 공개 build identity를 확정할 수 없습니다.",
+        409,
+        code,
+      );
     }
     const latestApprovedRelease = approvedPlatformReleases[0];
     const latestApplicablePlatformRelease = latestApprovedRelease
