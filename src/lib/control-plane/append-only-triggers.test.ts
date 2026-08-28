@@ -66,6 +66,18 @@ test("trigger가 없으면 배포 gate가 fail-closed한다", () => {
   assert.throws(() => verifyAppendOnlyTriggers(partial), /missing:/);
 });
 
+test("MySQL이 보관한 trailing 세미콜론 차이는 계약 위반이 아니다", () => {
+  // MySQL 9.2는 client가 보낸 statement를 그대로 저장해 같은 migration에서도
+  // trigger마다 trailing `;` 유무가 갈린다. prisma migrate deploy 뒤 실측한 형태다.
+  const observation = REQUIRED_APPEND_ONLY_TRIGGERS.map((requirement, index) => observed({
+    name: requirement.name,
+    statement: index === 0
+      ? `${appendOnlyActionStatement(requirement.message)};`
+      : `  ${appendOnlyActionStatement(requirement.message)}  `,
+  }));
+  assert.equal(verifyAppendOnlyTriggers(observation), REQUIRED_APPEND_ONLY_TRIGGERS.length);
+});
+
 test("timing·event·table·본문 변형은 통과하지 않는다", () => {
   const [first, ...rest] = compliantObservation();
   assert.throws(

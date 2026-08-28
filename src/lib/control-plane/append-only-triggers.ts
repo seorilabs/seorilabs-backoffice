@@ -44,9 +44,17 @@ export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequiremen
 const CREATE_TRIGGER_PATTERN =
   /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
 
-/** MySQL이 information_schema.TRIGGERS에 정규화해 저장하는 본문. */
+/** MySQL이 information_schema.TRIGGERS에 저장하는 본문. */
 export function appendOnlyActionStatement(message: string): string {
   return `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '${message}'`;
+}
+
+/**
+ * MySQL은 client가 보낸 statement를 그대로 보관해 trailing `;`와 공백이 남을 수 있다.
+ * 같은 DDL이 설치 경로에 따라 다르게 저장되므로 비교 전에 그 부분만 없앤다.
+ */
+export function normalizeActionStatement(statement: string): string {
+  return statement.trim().replace(/;+$/, "").trim();
 }
 
 /** migration SQL에서 선언된 append-only trigger를 이름 순으로 추출한다. */
@@ -86,7 +94,7 @@ export function verifyAppendOnlyTriggers(
       trigger.table !== requirement.table
       || trigger.event.toUpperCase() !== requirement.event
       || trigger.timing.toUpperCase() !== "BEFORE"
-      || trigger.statement.trim() !== appendOnlyActionStatement(requirement.message)
+      || normalizeActionStatement(trigger.statement) !== appendOnlyActionStatement(requirement.message)
     ) {
       problems.push(`mismatch:${requirement.name}`);
     }
