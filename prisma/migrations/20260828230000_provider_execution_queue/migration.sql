@@ -74,9 +74,9 @@ CREATE TABLE `control_plane_provider_execution` (
     UNIQUE INDEX `control_plane_provider_execution_idempotencyKey_key`(`idempotencyKey`),
     UNIQUE INDEX `control_plane_provider_execution_activeScopeKey_key`(`activeScopeKey`),
     UNIQUE INDEX `cp_provider_execution_id_app_key`(`id`, `appId`),
-    INDEX `control_plane_provider_execution_status_availableAt_createdAt_idx`(`status`, `availableAt`, `createdAt`),
+    INDEX `cp_provider_execution_status_available_created_idx`(`status`, `availableAt`, `createdAt`),
     INDEX `control_plane_provider_execution_appId_createdAt_idx`(`appId`, `createdAt`),
-    INDEX `control_plane_provider_execution_repoId_sourceSha_configRevisionNumber_idx`(`repoId`, `sourceSha`, `configRevisionNumber`),
+    INDEX `cp_provider_execution_repo_source_config_idx`(`repoId`, `sourceSha`, `configRevisionNumber`),
     INDEX `control_plane_provider_execution_configRevisionId_appId_idx`(`configRevisionId`, `appId`),
     INDEX `control_plane_provider_execution_releaseCandidateId_idx`(`releaseCandidateId`),
     PRIMARY KEY (`id`)

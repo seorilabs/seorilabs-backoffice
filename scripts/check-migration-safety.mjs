@@ -280,6 +280,13 @@ for (const name of activeNames) {
   }
   checked += 1;
   const normalized = sql.replace(/--.*$/gm, " ").replace(/\s+/g, " ");
+  for (const match of normalized.matchAll(
+    /\b(?:INDEX|CONSTRAINT|TRIGGER)\s+`([^`]+)`/gi,
+  )) {
+    if (match[1].length > 64) {
+      fail(`MySQL identifier가 64자를 초과한다: ${name}`);
+    }
+  }
   const mutationScan = stripVerifiedAppendOnlyTriggers(normalized).replace(
     /\bON\s+UPDATE\s+(?:CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL)\b/gi,
     " ",

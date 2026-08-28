@@ -1411,9 +1411,9 @@ model ProviderExecution {
   events                           ProviderExecutionEvent[]
 
   @@unique([id, appId], map: "cp_provider_execution_id_app_key")
-  @@index([status, availableAt, createdAt])
+  @@index([status, availableAt, createdAt], map: "cp_provider_execution_status_available_created_idx")
   @@index([appId, createdAt])
-  @@index([repoId, sourceSha, configRevisionNumber])
+  @@index([repoId, sourceSha, configRevisionNumber], map: "cp_provider_execution_repo_source_config_idx")
   @@map("control_plane_provider_execution")
 }
 

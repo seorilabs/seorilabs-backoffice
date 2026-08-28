@@ -80,6 +80,14 @@ printf '%s\n' \
   "$tmp/unsafe_trigger/prisma/migrations/20260827120007_unsafe_trigger/migration.sql"
 expect_failure unsafe_trigger
 
+prepare_case identifier_too_long
+mkdir -p "$tmp/identifier_too_long/prisma/migrations/20260827120008_long_identifier"
+printf '%s\n' \
+  'CREATE TABLE `identifier_test` (`id` VARCHAR(32) NOT NULL,' \
+  'INDEX `this_mysql_index_identifier_is_deliberately_longer_than_sixty_four_chars_total` (`id`));' > \
+  "$tmp/identifier_too_long/prisma/migrations/20260827120008_long_identifier/migration.sql"
+expect_failure identifier_too_long
+
 prepare_case valid_foreign_key
 mkdir -p "$tmp/valid_foreign_key/prisma/migrations/20260827120005_add_fk"
 printf '%s\n' \
