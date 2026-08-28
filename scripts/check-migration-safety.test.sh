@@ -92,17 +92,35 @@ git -C "$tmp/frozen_active" config user.email migration-contract@localhost
 git -C "$tmp/frozen_active" add prisma
 git -C "$tmp/frozen_active" commit -qm baseline
 frozen_base="$(git -C "$tmp/frozen_active" rev-parse HEAD)"
-mkdir -p "$tmp/frozen_active/prisma/migrations/20260827120003_existing_expand"
+mkdir -p "$tmp/frozen_active/prisma/migrations/99999999999997_existing_expand"
 printf "ALTER TABLE \`app\` ADD COLUMN \`firstObservedAt\` DATETIME(3) NULL;\n" > \
-  "$tmp/frozen_active/prisma/migrations/20260827120003_existing_expand/migration.sql"
+  "$tmp/frozen_active/prisma/migrations/99999999999997_existing_expand/migration.sql"
 git -C "$tmp/frozen_active" add prisma
 git -C "$tmp/frozen_active" commit -qm additive
 MIGRATION_FROZEN_BASE="$frozen_base" REPOSITORY_ROOT="$tmp/frozen_active" \
   "$here/check-migration-safety.sh" >/dev/null
 
+prepare_case frozen_out_of_order
+git -C "$tmp/frozen_out_of_order" init -q
+git -C "$tmp/frozen_out_of_order" config user.name migration-contract
+git -C "$tmp/frozen_out_of_order" config user.email migration-contract@localhost
+git -C "$tmp/frozen_out_of_order" add prisma
+git -C "$tmp/frozen_out_of_order" commit -qm baseline
+out_of_order_base="$(git -C "$tmp/frozen_out_of_order" rev-parse HEAD)"
+mkdir -p "$tmp/frozen_out_of_order/prisma/migrations/20260828050000_late_merge"
+printf "CREATE TABLE \`late_merge\` (\`id\` VARCHAR(32) NOT NULL);\n" > \
+  "$tmp/frozen_out_of_order/prisma/migrations/20260828050000_late_merge/migration.sql"
+git -C "$tmp/frozen_out_of_order" add prisma
+git -C "$tmp/frozen_out_of_order" commit -qm out-of-order
+if MIGRATION_FROZEN_BASE="$out_of_order_base" REPOSITORY_ROOT="$tmp/frozen_out_of_order" \
+  "$here/check-migration-safety.sh" >/dev/null 2>&1; then
+  echo "FAIL 이전 migration보다 작은 이름의 새 migration이 통과했다" >&2
+  exit 1
+fi
+
 deployed_base="$(git -C "$tmp/frozen_active" rev-parse HEAD)"
 printf "ALTER TABLE \`app\` ADD COLUMN \`changedObservedAt\` DATETIME(3) NULL;\n" > \
-  "$tmp/frozen_active/prisma/migrations/20260827120003_existing_expand/migration.sql"
+  "$tmp/frozen_active/prisma/migrations/99999999999997_existing_expand/migration.sql"
 git -C "$tmp/frozen_active" add prisma
 git -C "$tmp/frozen_active" commit -qm rewritten
 if MIGRATION_FROZEN_BASE="$deployed_base" REPOSITORY_ROOT="$tmp/frozen_active" \
