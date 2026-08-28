@@ -400,7 +400,12 @@ test("verifier egress는 MySQL과 API server로만 제한되고 DNS는 열지 �
     .flatMap((rule) => rule.ports ?? [])
     .map((port) => port.port)
     .sort((left, right) => left - right);
-  assert.deepEqual(ports, [443, 3306]);
+  assert.deepEqual(ports, [443, 3306, 16443]);
+  const cidrs = (policy.spec.egress as Array<{ to?: Array<{ ipBlock?: { cidr: string } }> }>)
+    .flatMap((rule) => rule.to ?? [])
+    .flatMap((target) => target.ipBlock?.cidr ?? [])
+    .sort();
+  assert.deepEqual(cidrs, ["10.152.183.1/32", "192.168.0.100/32"]);
   assert.equal(
     policy.spec.podSelector.matchLabels["app.kubernetes.io/component"],
     "provider-audit-trigger-verifier",
@@ -417,6 +422,7 @@ test("pod는 seccomp RuntimeDefault를 쓰고 service 환경값으로 접속한�
   assert.doesNotMatch(verify, /mysql\.data\.svc\.cluster\.local/);
   assert.match(publish, /KUBERNETES_SERVICE_HOST/);
   assert.doesNotMatch(publish, /https:\/\/kubernetes\.default\.svc\/api/);
+  assert.match(publish, /--connect-timeout 5 --max-time 15/);
 });
 
 test("verifier ServiceAccount는 결과 ConfigMap 하나만 patch한다", () => {
