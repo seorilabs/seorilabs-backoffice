@@ -1,5 +1,6 @@
-# platform/ci-deployer가 data ns의 기존 Vault CronJob 두 개의 이미지 SHA만 갱신한다.
-# create/delete/list 권한과 Secret/PVC 권한은 주지 않는다.
+# platform/ci-deployer가 data ns의 기존 Vault CronJob 두 개의 이미지 SHA만 갱신하고,
+# 배포마다 read-only append-only trigger 검증 Job을 만든다.
+# Secret/PVC 권한과 Job 삭제 권한은 주지 않는다.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -10,6 +11,11 @@ rules:
     resources: ["cronjobs"]
     resourceNames: ["vault-indexer", "vault-writer"]
     verbs: ["get", "patch", "update"]
+  # provider-audit-trigger-verify Job. 생성 대상 이름이 generateName이라
+  # resourceNames로 좁힐 수 없으므로 verb를 create/get으로만 제한한다.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

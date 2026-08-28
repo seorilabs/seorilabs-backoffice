@@ -195,3 +195,34 @@ test("배포 gate script는 권한을 먼저 읽고 FORBIDDEN을 구분해 출�
   assert.match(script, /evaluateAppendOnlyTriggers/);
   assert.match(script, /FORBIDDEN\(migration principal에 TRIGGER 권한 없음/);
 });
+
+test("trusted verify Job은 계약과 같은 trigger를 read-only로만 확인한다", () => {
+  const manifest = readFileSync(
+    join(process.cwd(), "k8s/provider-audit-trigger-verify-job.yaml"),
+    "utf8",
+  );
+  for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
+    assert.ok(manifest.includes(requirement.name), `${requirement.name} 미검증`);
+    assert.ok(manifest.includes(`EVENT_MANIPULATION='${requirement.event}'`));
+    assert.ok(manifest.includes(requirement.table));
+  }
+  assert.ok(manifest.includes(appendOnlyActionStatement(REQUIRED_APPEND_ONLY_TRIGGERS[0].message)));
+  assert.match(manifest, /ACTION_TIMING='BEFORE'/);
+  // 우회 trigger 차단: 보호 table 위 전체 개수도 확인한다.
+  assert.match(manifest, /total.*!=.*"2".*\|\|.*exact.*!=.*"2"|\[ "\$total" != "2" \]/);
+  // DDL·권한 변경·데이터 변경이 없어야 한다.
+  assert.doesNotMatch(manifest, /CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO/);
+  assert.match(manifest, /namespace: data/);
+  assert.match(manifest, /readOnlyRootFilesystem: true/);
+});
+
+test("배포 script는 trigger verify Job 성공을 rollout 선행조건으로 둔다", () => {
+  const deploy = readFileSync(join(process.cwd(), "scripts/deploy-backoffice.sh"), "utf8");
+  const verifyIndex = deploy.indexOf("provider-audit-trigger-verify-job.yaml");
+  const rolloutIndex = deploy.indexOf("availability-preserving web rollout");
+  assert.ok(verifyIndex > 0, "verify Job 생성이 없다");
+  assert.ok(verifyIndex < rolloutIndex, "verify가 rollout 뒤에 있다");
+  assert.match(deploy, /wait_for_job trigger-verify/);
+  assert.match(deploy, /verify_job_sha" != "\$source_sha"/);
+  assert.match(deploy, /audit_namespace/);
+});

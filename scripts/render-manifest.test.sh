@@ -173,6 +173,21 @@ else
   ng "provider audit partial migration 복구 경계가 깨졌다"
 fi
 
+trigger_verify_out="$("$render" "$root/k8s/provider-audit-trigger-verify-job.yaml" "$IMG" "$SHA")"
+if printf '%s' "$trigger_verify_out" | grep -q "generateName: backoffice-provider-audit-trigger-verify-${SHA:0:12}-" &&
+   printf '%s' "$trigger_verify_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\"" &&
+   printf '%s' "$trigger_verify_out" | grep -q 'namespace: data' &&
+   printf '%s' "$trigger_verify_out" | grep -q 'image: mysql@sha256:' &&
+   printf '%s' "$trigger_verify_out" | grep -q 'mysql-root-cred' &&
+   printf '%s' "$trigger_verify_out" | grep -q 'readOnlyRootFilesystem: true' &&
+   printf '%s' "$trigger_verify_out" | grep -q 'backoffLimit: 0' &&
+   ! printf '%s' "$trigger_verify_out" | grep -qE 'CREATE TRIGGER|DROP TRIGGER|GRANT |ALTER |INSERT |UPDATE .*SET |DELETE FROM|MYSQL_PWD' &&
+   ! printf '%s' "$trigger_verify_out" | grep -q ':latest'; then
+  ok "trigger verify Job은 exact source SHA의 read-only 검증만 수행"
+else
+  ng "trigger verify Job 경계가 깨졌다"
+fi
+
 restore_dump="backoffice-20260828T010203Z.sql.gz"
 restore_out="$("$here/render-restore-rehearsal.sh" \
   "$root/k8s/restore-rehearsal-job.yaml" "$IMG" "$SHA" "$restore_dump")"
@@ -322,8 +337,12 @@ if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
    grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
-   ! grep -q 'verbs:.*create' "$data_rbac"; then
-  ok "CI migration·Vault image 최소권한"
+   grep -q 'resources: \["jobs"\]' "$data_rbac" &&
+   [ "$(grep -c 'verbs: \["get", "create"\]' "$data_rbac")" -eq 1 ] &&
+   ! grep -q 'resources: \["secrets"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["pods/log"\]' "$data_rbac" &&
+   ! grep -q 'verbs:.*delete' "$data_rbac"; then
+  ok "CI migration·Vault image·trigger verify Job 최소권한"
 else
   ng "CI deployer 최소권한 계약이 깨졌다"
 fi

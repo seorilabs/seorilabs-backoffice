@@ -11,6 +11,8 @@ source_sha="${BACKOFFICE_SOURCE_SHA:-}"
 migration_timeout="${BACKOFFICE_MIGRATION_TIMEOUT_SECONDS:-300}"
 migration_poll="${BACKOFFICE_MIGRATION_POLL_SECONDS:-2}"
 rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
+audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
+verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-180}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-2460}"
 
 if [ -z "$image" ]; then
@@ -26,7 +28,7 @@ if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "오류: BACKOFFICE_SOURCE_SHA는 40자리 git SHA여야 한다" >&2
   exit 2
 fi
-for value in "$migration_timeout" "$catchup_timeout"; do
+for value in "$migration_timeout" "$catchup_timeout" "$verify_timeout"; do
   if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
     echo "오류: Job timeout은 양의 정수여야 한다" >&2
     exit 2
@@ -53,8 +55,9 @@ apply_image_manifest() {
 job_failure() {
   local purpose="$1"
   local job_name="$2"
+  local job_ns="${3:-$namespace}"
   echo "오류: ${purpose} Job 실패: $job_name" >&2
-  k -n "$namespace" get job "$job_name" -o wide >&2 || true
+  k -n "$job_ns" get job "$job_name" -o wide >&2 || true
   echo "보안 정책상 Job 로그는 CI에 출력하지 않는다. trusted operator 경계에서 확인해야 한다." >&2
   return 1
 }
@@ -63,23 +66,24 @@ wait_for_job() {
   local purpose="$1"
   local job_name="$2"
   local timeout="$3"
+  local job_ns="${4:-$namespace}"
   local deadline=$((SECONDS + timeout))
   local conditions
 
   while (( SECONDS < deadline )); do
-    conditions="$(k -n "$namespace" get job "$job_name" -o 'jsonpath={range .status.conditions[*]}{.type}={.status}{"\n"}{end}')"
+    conditions="$(k -n "$job_ns" get job "$job_name" -o 'jsonpath={range .status.conditions[*]}{.type}={.status}{"\n"}{end}')"
     if [[ "$conditions" == *"Complete=True"* ]]; then
       return 0
     fi
     if [[ "$conditions" == *"Failed=True"* ]]; then
-      job_failure "$purpose" "$job_name"
+      job_failure "$purpose" "$job_name" "$job_ns"
       return 1
     fi
     sleep "$migration_poll"
   done
 
   echo "오류: ${purpose} Job timeout: ${timeout}s" >&2
-  job_failure "$purpose" "$job_name"
+  job_failure "$purpose" "$job_name" "$job_ns"
 }
 
 deployment_matches_image() {
@@ -175,6 +179,33 @@ if [[ "$image_id" != *@"${image##*@}" ]]; then
   exit 1
 fi
 echo "migration_image=$job_image image_id=${image_id:-unavailable}"
+
+# app migration principal에는 대상 table의 TRIGGER 권한이 없어
+# information_schema.TRIGGERS가 빈 결과로 보인다. 권한 부족을 부재로 읽지 않도록
+# 가시성 있는 전용 principal의 read-only Job으로 다시 확인하고, 이 Job이 성공해야만
+# rollout한다. 이 Job은 DDL, GRANT, 복구를 하지 않는다.
+echo "== provider audit trigger verify (data ns, read-only) =="
+verify_manifest="$(render provider-audit-trigger-verify-job.yaml)"
+verify_image="$(printf '%s\n' "$verify_manifest" | awk '/^          image: / { print $2; exit }')"
+if [[ ! "$verify_image" =~ ^mysql@sha256:[0-9a-f]{64}$ ]]; then
+  echo "오류: trigger verify Job 이미지가 immutable mysql digest가 아니다" >&2
+  exit 1
+fi
+verify_ref="$(printf '%s\n' "$verify_manifest" | k -n "$audit_namespace" create -f - -o name)"
+verify_name="${verify_ref##*/}"
+if [ -z "$verify_name" ]; then
+  echo "오류: 생성된 trigger verify Job 이름을 읽지 못했다" >&2
+  exit 1
+fi
+echo "trigger_verify_job=$verify_name source_sha=$source_sha"
+wait_for_job trigger-verify "$verify_name" "$verify_timeout" "$audit_namespace"
+verify_job_sha="$(k -n "$audit_namespace" get job "$verify_name" -o 'jsonpath={.metadata.labels.seorilabs\.dev/source-sha}')"
+verify_job_image="$(k -n "$audit_namespace" get job "$verify_name" -o 'jsonpath={.spec.template.spec.containers[0].image}')"
+if [ "$verify_job_sha" != "$source_sha" ] || [ "$verify_job_image" != "$verify_image" ]; then
+  echo "오류: trigger verify Job source SHA 또는 이미지 digest 불일치" >&2
+  exit 1
+fi
+echo "trigger_verify_image=$verify_job_image"
 
 echo "== availability-preserving web rollout =="
 apply_image_manifest deployment.yaml
