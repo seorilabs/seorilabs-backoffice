@@ -87,7 +87,9 @@ export function FleetConfigEditor({
                 }),
                 (result) => result.status === "DRAFT_CREATED"
                   ? `Shadow import 완료 · DRAFT revision ${result.revision} · parity ${result.parityStatus ?? "없음"}`
-                  : `Shadow import ${result.status ?? "완료"} · 사람 입력이 필요합니다.`,
+                  : result.status === "DRAFT_CREATED_WITH_INPUT"
+                    ? `안전한 항목은 DRAFT revision ${result.revision}에 채웠습니다. 남은 항목만 확인하면 됩니다.`
+                    : `Shadow import ${result.status ?? "완료"} · source 구조 확인이 필요합니다.`,
               )}
               className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
             >

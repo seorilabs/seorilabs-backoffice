@@ -71,6 +71,12 @@ export type LegacyTransformResult =
     reasons: [];
   })
   | (LegacyTransformCommon & {
+    status: "DRAFTABLE_WITH_INPUT";
+    payload: DraftableConfigRevisionPayload;
+    payloadDigest: string;
+    reasons: LegacyTransformReason[];
+  })
+  | (LegacyTransformCommon & {
     status: "NEEDS_INPUT";
     payload?: never;
     payloadDigest: null;
@@ -169,6 +175,26 @@ const MARKET_ORDER = new Map([
   ["app-store", 1],
   ["apps-in-toss", 2],
 ]);
+
+/**
+ * 이 사유들은 source vector 자체가 불완전하거나 모호하다는 뜻이 아니다.
+ * 해당 값만 ConfigRevision 밖의 중앙 모델 또는 사람 입력으로 분리하고, 이미
+ * 안전하게 구조화된 market/build 값은 검토용 DRAFT로 제공할 수 있다.
+ * DRAFTABLE_WITH_INPUT은 parity/cleanup을 계속 차단하고 직접 활성화도 금지된다.
+ */
+const REVIEWABLE_REASON_CODES = new Set<LegacyTransformReasonCode>([
+  "UNSUPPORTED_FIELD",
+  "SECRET_LIKE_KEY",
+  "LEGAL_COMPLIANCE_AMBIGUITY",
+  "PROVIDER_STATE_AMBIGUITY",
+  "LOCALIZATION_LOCALE_MISSING",
+  "FREE_TEXT_REQUIRES_INPUT",
+  "NO_REPRESENTABLE_SOURCE",
+]);
+
+function isBlockingReason(reason: LegacyTransformReason): boolean {
+  return !REVIEWABLE_REASON_CODES.has(reason.code);
+}
 
 type MutablePayload = {
   markets: Map<string, DraftableConfigRevisionPayload["markets"][number]>;
@@ -759,7 +785,9 @@ export function transformLegacySources(sources: readonly LegacySourceInput[]): L
       case "SEORILABS_APP_YAML": mergeDirectPayload(parsed, source.sourceKind, context); break;
       case "SEORILABS_BACKOFFICE_JSON": mergeDirectPayload(parsed, source.sourceKind, context); break;
     }
-    if (reasons.length === reasonCount) context.transformableKinds.add(source.sourceKind);
+    if (!reasons.slice(reasonCount).some(isBlockingReason)) {
+      context.transformableKinds.add(source.sourceKind);
+    }
   }
 
   const present = uniqueSources.filter((source) => source.status === "PRESENT").length;
@@ -803,7 +831,7 @@ export function transformLegacySources(sources: readonly LegacySourceInput[]): L
     blocked: blockedKinds.size,
   };
   const inputDigest = sourceInputDigest(sources);
-  if (finalReasons.length > 0 || !validated.success) {
+  if (finalReasons.some(isBlockingReason) || !validated.success) {
     return {
       status: "NEEDS_INPUT",
       transformVersion: LEGACY_TRANSFORM_VERSION,
@@ -821,15 +849,17 @@ export function transformLegacySources(sources: readonly LegacySourceInput[]): L
     build: validated.data.build ?? {},
     support: validated.data.support ?? {},
   });
-  return {
-    status: "DRAFTABLE",
+  const draftResult = {
     transformVersion: LEGACY_TRANSFORM_VERSION,
     inputDigest,
     payload: normalized,
     payloadDigest: sha256(canonicalJson(normalized as JsonValue)),
     coverage,
-    reasons: [],
   };
+  if (finalReasons.length > 0) {
+    return { ...draftResult, status: "DRAFTABLE_WITH_INPUT", reasons: finalReasons };
+  }
+  return { ...draftResult, status: "DRAFTABLE", reasons: [] };
 }
 
 function valueType(value: JsonValue): "null" | "array" | "object" | "scalar" {
