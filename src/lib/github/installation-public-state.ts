@@ -79,4 +79,3 @@ export function normalizeGitHubInstallationPublicState(data: unknown): GitHubIns
     suspended: installation.suspended_at !== null && installation.suspended_at !== undefined,
   };
 }
-
