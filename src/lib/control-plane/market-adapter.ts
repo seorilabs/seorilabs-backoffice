@@ -1,24 +1,5 @@
-import { z } from "zod";
 import { ControlPlaneError } from "@/lib/control-plane/service";
-
-const sha40 = z.string().regex(/^[0-9a-f]{40}$/i);
-const sha256 = z.string().regex(/^[0-9a-f]{64}$/i);
-
-export const marketReadbackSchema = z.object({
-  schemaVersion: z.literal(1),
-  market: z.enum(["google-play", "app-store", "apps-in-toss"]),
-  publicAccountId: z.string().min(1).max(191),
-  publicAppId: z.string().min(1).max(255),
-  gate: z.enum(["UPLOAD", "PROCESSING", "DEVICE_QA", "REVIEW", "APPROVAL", "DEPLOYMENT", "PUBLIC"]),
-  state: z.enum(["QUEUED", "IN_PROGRESS", "SUCCEEDED", "APPROVED", "LIVE", "FAILED", "REJECTED", "HUMAN_REQUIRED"]),
-  sourceSha: sha40,
-  configRevision: z.number().int().positive(),
-  artifactChecksum: sha256,
-  providerReference: z.string().min(1).max(512).optional(),
-  observedAt: z.coerce.date(),
-}).strict();
-
-export type MarketReadback = z.infer<typeof marketReadbackSchema>;
+import { marketReadbackSchema, type MarketReadback } from "@/lib/control-plane/contracts";
 
 const STATUS_BY_PROVIDER_STATE = {
   QUEUED: "PENDING",

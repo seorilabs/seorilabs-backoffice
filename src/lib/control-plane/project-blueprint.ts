@@ -19,6 +19,7 @@ export interface BlueprintResource {
   resourceType: string;
   resourceId: string;
   desiredHash: string;
+  desired: JsonValue;
   publicIdentity?: string;
 }
 
@@ -49,6 +50,7 @@ function resource(
     resourceType,
     resourceId,
     desiredHash: jsonDigest(desired),
+    desired,
     ...(publicIdentity ? { publicIdentity } : {}),
   };
 }

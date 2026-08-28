@@ -1,7 +1,9 @@
 # Fleet Control Plane v1
 
-이 문서는 기존 앱별 JSON consumer를 유지한 채 shadow로 도입한 첫 vertical slice의 운영 계약이다.
-이 단계는 provider 쓰기, 마켓 제출, 공개 배포, credential 값 저장·조회 기능을 제공하지 않는다.
+이 문서는 기존 앱별 JSON consumer를 유지한 채 도입한 Fleet Control Plane의 운영 계약이다.
+provider 실행 큐와 worker 경계는 구현되어 있지만 설치 manifest는 기본 `replicas: 0`이다. 아래 활성화
+gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심사 제출, 공개 배포, credential 값
+저장·조회 기능은 이 경계에 존재하지 않는다.
 
 ## 인증과 공통 헤더
 
@@ -31,6 +33,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
+| `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA, Platform version을 하나의 candidate로 고정 |
 | `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
@@ -71,8 +74,48 @@ plan API는 provider에 쓰지 않는다. `ProviderObservation.payload`의 표�
 `DRIFT`, 관측이 없으면 `UNOBSERVED`다. 필요한 shared credential binding이 없거나 같은 capability의
 `app/*` 대체 credential만 있으면 전체 plan은 `BLOCKED`다.
 
-이 slice의 출력은 `BLOCKED`, `READY_TO_APPLY`, `COMPLIANT` 중 하나다. 실제 shared keyless provisioner
-apply와 provider API readback은 별도 승인·실행 gate다.
+plan 출력은 `BLOCKED`, `READY_TO_APPLY`, `COMPLIANT` 중 하나다. `READY_TO_APPLY`는 실행 완료가 아니다.
+별도 provider execution을 만들고 Auth Broker가 허용한 shared keyless identity로 실행한 뒤 provider
+readback이 들어와야 완료된다.
+
+## Provider execution과 Auth Broker 경계
+
+`ProviderExecution`은 source SHA, ACTIVE config revision, public resource/account identity, desired payload와
+hash, primary credential과 fleet read-only credential의 logical ID·credential generation·policy generation,
+adapter/origin을 immutable binding hash로 고정한다. secret 값과 Auth Broker lease 원문은 저장하지 않는다.
+worker lease는 generation CAS와 1회용 HMAC token hash로 보호하며, stale completion은 거부한다.
+
+- `READBACK`은 사전 승인 가능한 fleet inventory identity만 사용한다.
+- production mutation, IAM, Workspace domain-wide delegation은 매 실행마다 Backoffice의 app-scoped 사람
+  승인과 15분 만료를 요구한다. 승인용 bearer endpoint는 없고 로그인된 trusted UI server action만 있다.
+- internal/private market upload만 자동화 범위다. review submit, production/public track, role/key 변경,
+  법적·결제·세금·약관 행위는 create schema에 action 자체가 없다.
+- mutation 응답 성공도 즉시 `SUCCEEDED`가 아니다. `READBACK_REQUIRED`로 전환하고 별도로 고정한
+  read-only credential로 현재 provider 상태를 읽는다. worker 응답 유실도 같은 경로이며 mutation을
+  재전송하지 않는다.
+- provider visibility `FORBIDDEN`은 resource `ABSENT`와 분리한다. 권한 부족을 리소스 부재로 해석하지 않는다.
+- market upload, processing, review, approval, deployment, public 상태는 각각 독립
+  `ReleaseGateObservation`으로 남는다.
+
+trusted provider adapter는 `gcp-provisioner-v1`, `firebase-admin-v1`, `workspace-admin-v1`,
+`google-play-api-v1`, `app-store-connect-api-v1`, `ait-cli-v1`의 고정 command envelope만 받아야 한다.
+envelope에는 arbitrary executable, argv, env가 없으며 repo ID/source/config/desired/binding/public identity가
+들어 있다. 실제 secret 사용은 P2 Auth Broker가 logical credential lease를 발급한 뒤 trusted adapter에
+직접 주입한다. worker에는 credential export API와 Kubernetes Secret `get/list/watch` 권한이 없다.
+
+운영 활성화 전에는 다음을 모두 readback으로 확인한다.
+
+1. primary/readback `CredentialBinding`의 logical ID, public credential identity, generation, exact origin,
+   adapter, auth factor를 catalog와 일치하게 backfill한다.
+2. P2 adapter registry/policy에 위 adapter와 capability를 등록하고 mTLS, attestation key, WIF/GSA identity,
+   Secret Manager resource binding을 실제 값으로 교차 검증한다.
+3. Auth Broker child가 `binding:<bindingHash>`로 exact public command envelope를 해석하고 provider 결과를
+   `observedBy=provider-adapter:<provider>`로 append하는 trusted bridge를 배치한다. secret이나 command를
+   stdout/argv/env로 전달하지 않는다.
+4. canary/fake provider에서 결과 유실, FORBIDDEN/ABSENT, stale generation, approval 만료, credential 회전,
+   동일 resource 동시 claim을 통과한 뒤 immutable image digest로 manifest를 렌더한다.
+5. 위 조건 전에는 `k8s/provider-execution-worker.yaml`의 `replicas: 0`을 변경하지 않는다. 이 manifest는
+   일반 deploy script에서 의도적으로 제외되어 운영 활성화를 우연히 켜거나 끄지 않는다.
 
 ## Release candidate와 마켓 원장
 
@@ -89,7 +132,8 @@ apply와 provider API readback은 별도 승인·실행 gate다.
 `UPLOAD`, `PROCESSING`, `DEVICE_QA`, `REVIEW`, `APPROVAL`, `DEPLOYMENT`, `PUBLIC`은 이후에도 서로 독립된
 append-only observation으로 남는다. market adapter는 예상 account/team/workspace, app ID, source SHA,
 revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMATCH` 또는
-`CANDIDATE_BINDING_MISMATCH`로 기록 자체를 거부한다. API는 provider write를 수행하지 않는다.
+`CANDIDATE_BINDING_MISMATCH`로 기록 자체를 거부한다. API는 실행을 durable queue에만 등록하며 요청
+스레드에서 provider write를 수행하지 않는다.
 
 중앙 lifecycle은 기존 화면 호환용 6단계 enum과 별도인 `FleetLifecycleState`에
 `IDEA → PLANNING → SPEC_REVIEW → APPROVED → BUILD → QA → RELEASE_ASSETS → RELEASE_CANDIDATE → SUBMITTED → REVIEW → APPROVED_FOR_RELEASE → DEPLOYED → PUBLIC_VERIFIED → MONITORED`
@@ -104,7 +148,7 @@ profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirect
 
 앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
 ProjectBlueprint와 market projection, ReleaseCandidate와 독립 gate, ProviderObservation,
-PlatformFleetBinding, CredentialBinding, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
+PlatformFleetBinding, CredentialBinding, ProviderExecution, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
 CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만 있으며 secret 값을
 저장하거나 변경하는 endpoint는 없다.
 

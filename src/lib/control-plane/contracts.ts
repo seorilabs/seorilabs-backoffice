@@ -27,6 +27,15 @@ const httpsUrl = z.string().url().max(2_048).refine((value) => {
 }, {
   message: "userinfo, query, fragment가 없는 공개 HTTPS URL이 필요합니다.",
 });
+const httpsOrigin = z.string().url().max(512).refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "https:"
+    && !url.username
+    && !url.password
+    && url.pathname === "/"
+    && !url.search
+    && !url.hash;
+}, "query/path/credential이 없는 정확한 HTTPS origin이 필요합니다.");
 
 const authorizationCredentialPattern = /\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/giu;
 const directCredentialPatterns = [
@@ -403,6 +412,131 @@ export const providerReadbackPayloadSchema = z.object({
 
 export type ProviderReadbackPayload = z.infer<typeof providerReadbackPayloadSchema>;
 
+export const marketReadbackSchema = z.object({
+  schemaVersion: z.literal(1),
+  market,
+  publicAccountId: z.string().min(1).max(191),
+  publicAppId: z.string().min(1).max(255),
+  gate: z.enum(["UPLOAD", "PROCESSING", "DEVICE_QA", "REVIEW", "APPROVAL", "DEPLOYMENT", "PUBLIC"]),
+  state: z.enum(["QUEUED", "IN_PROGRESS", "SUCCEEDED", "APPROVED", "LIVE", "FAILED", "REJECTED", "HUMAN_REQUIRED"]),
+  sourceSha: sha40,
+  configRevision: z.number().int().positive(),
+  artifactChecksum: sha256,
+  providerReference: z.string().min(1).max(512).optional(),
+  observedAt: z.coerce.date(),
+}).strict();
+
+export type MarketReadback = z.infer<typeof marketReadbackSchema>;
+
+const providerResourceSelector = z.object({
+  provider: z.enum(["gcp", "firebase", "google-analytics", "bigquery", "google-workspace"]),
+  resourceType: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  resourceId: z.string().min(1).max(191),
+}).strict();
+
+export const providerExecutionCreateSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("BLUEPRINT_RESOURCE"),
+    repoId: z.coerce.bigint().positive(),
+    sourceSha: sha40,
+    configRevision: z.number().int().positive(),
+    operation: z.enum(["READBACK", "APPLY"]),
+    resource: providerResourceSelector,
+    maxAttempts: z.number().int().min(1).max(10).default(3),
+  }).strict(),
+  z.object({
+    kind: z.literal("MARKET_RELEASE"),
+    repoId: z.coerce.bigint().positive(),
+    releaseCandidateId: z.string().min(1).max(191),
+    operation: z.enum(["READBACK", "UPLOAD_INTERNAL"]),
+    maxAttempts: z.number().int().min(1).max(10).default(3),
+  }).strict(),
+]);
+
+export type ProviderExecutionCreate = z.infer<typeof providerExecutionCreateSchema>;
+
+export const providerExecutionClaimSchema = z.object({
+  workerId: z.string().regex(/^[A-Za-z0-9._:/-]{1,128}$/),
+  leaseSeconds: z.number().int().min(30).max(300).default(300),
+}).strict();
+
+const providerExecutionObservationSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("BLUEPRINT"),
+    observedAt: z.coerce.date(),
+    payload: providerReadbackPayloadSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("MARKET"),
+    payload: marketReadbackSchema,
+  }).strict(),
+]);
+
+export const providerExecutionSettlementSchema = z.object({
+  executionId: z.string().min(1).max(191),
+  generation: z.number().int().positive(),
+  leaseToken: z.string().min(32).max(256),
+  outcome: z.enum(["COMMAND_ACCEPTED", "OBSERVED", "RESULT_UNKNOWN", "FAILED", "HUMAN_REQUIRED"]),
+  observation: providerExecutionObservationSchema.optional(),
+  errorCode: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/).optional(),
+  reauthRequestId: publicIdentifier.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.outcome === "OBSERVED" && !value.observation) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "OBSERVED 결과에는 strict observation이 필요합니다.", path: ["observation"] });
+  }
+  if (value.outcome !== "OBSERVED" && value.observation) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "observation은 OBSERVED 결과에서만 허용합니다.", path: ["observation"] });
+  }
+  if (value.outcome === "FAILED" && !value.errorCode) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "FAILED 결과에는 공개 error code가 필요합니다.", path: ["errorCode"] });
+  }
+  if (value.outcome === "HUMAN_REQUIRED" && !value.reauthRequestId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "HUMAN_REQUIRED 결과에는 ReauthRequest 공개 ID가 필요합니다.", path: ["reauthRequestId"] });
+  }
+});
+
+export const providerCommandEnvelopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  executionId: publicIdentifier,
+  generation: z.number().int().positive(),
+  resumeMode: z.enum(["START", "READBACK_FIRST"]),
+  adapterId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  operation: z.enum(["READBACK", "APPLY", "UPLOAD_INTERNAL"]),
+  provider: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+  origin: httpsOrigin,
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  repoId: z.string().regex(/^\d{1,30}$/),
+  sourceSha: sha40,
+  configRevision: z.number().int().positive(),
+  desiredHash: sha256,
+  desired: jsonRecord,
+  resource: z.object({
+    type: z.string().min(1).max(64),
+    id: z.string().min(1).max(191),
+    environment: z.string().regex(/^[A-Za-z0-9._:/-]{1,64}$/),
+    expectedPublicIdentity: z.string().min(1).max(512).nullable(),
+  }).strict(),
+  artifactChecksum: sha256.nullable(),
+  credential: z.object({
+    logicalId: logicalCredentialId,
+    generation: z.number().int().positive(),
+    policyGeneration: z.number().int().positive(),
+    capability: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,190}$/),
+    publicAccountId: z.string().min(1).max(191),
+    publicIdentity: z.string().min(1).max(512),
+    authFactors: z.array(z.enum(["api_key", "certificate", "oidc", "password", "session", "totp"])).min(1).max(3),
+  }).strict(),
+  approval: z.object({
+    id: publicIdentifier,
+    mode: z.enum(["preapproved", "per_run"]),
+    expiresAt: z.string().datetime(),
+    maxUses: z.literal(1),
+  }).strict(),
+  bindingHash: sha256,
+}).strict();
+
+export type ProviderCommandEnvelope = z.infer<typeof providerCommandEnvelopeSchema>;
+
 export const releaseCandidateSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   sourceSha: sha40,
@@ -472,16 +606,6 @@ export const configActivationSchema = z.object({
   revision: z.number().int().positive(),
   expectedActiveRevision: z.number().int().nonnegative(),
 }).strict();
-
-const httpsOrigin = z.string().url().max(512).refine((value) => {
-  const url = new URL(value);
-  return url.protocol === "https:"
-    && !url.username
-    && !url.password
-    && url.pathname === "/"
-    && !url.search
-    && !url.hash;
-}, "query/path/credential이 없는 정확한 HTTPS origin이 필요합니다.");
 
 export const reauthRequestSchema = z.object({
   repoId: z.coerce.bigint().positive(),

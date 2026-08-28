@@ -15,6 +15,7 @@ import {
   executeAutomationCommand,
 } from "@/lib/control-plane/automation-service";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
+import { approveProviderExecution } from "@/lib/control-plane/provider-execution-service";
 import {
   activateConfigRevision,
   createConfigRevision,
@@ -42,6 +43,13 @@ const trustedLocalHumanUiSchema = z.object({
   appId: z.string().min(1).max(191),
   reauthRequestId: z.string().min(1).max(191),
   expectedGeneration: z.number().int().nonnegative(),
+  requestId: uiRequestIdSchema,
+}).strict();
+const providerExecutionApprovalUiSchema = z.object({
+  appId: z.string().min(1).max(191),
+  executionId: z.string().min(1).max(191),
+  expectedGeneration: z.number().int().nonnegative(),
+  bindingHash: z.string().regex(/^[0-9a-f]{64}$/),
   requestId: uiRequestIdSchema,
 }).strict();
 
@@ -189,6 +197,36 @@ export async function markTrustedLocalPendingAction(input: {
     });
     revalidatePath(`/apps/${app.id}/fleet`);
     return { ok: true, status: result.request.status };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+export async function approveProviderExecutionAction(input: {
+  appId: string;
+  executionId: string;
+  expectedGeneration: number;
+  bindingHash: string;
+  requestId: string;
+}): Promise<FleetActionResult> {
+  try {
+    const body = providerExecutionApprovalUiSchema.parse(input);
+    const { app, actor } = await fleetWriteContext(body.appId);
+    const execution = await prisma.providerExecution.findFirst({
+      where: { id: body.executionId, appId: app.id },
+      select: { id: true },
+    });
+    if (!execution) throw new Error("앱 범위의 provider execution을 찾을 수 없습니다.");
+    const result = await approveProviderExecution({
+      executionId: body.executionId,
+      expectedGeneration: body.expectedGeneration,
+      bindingHash: body.bindingHash,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1_000),
+      actor: actor.login,
+      idempotencyKey: `ui-provider-approve:${body.requestId}`,
+    });
+    revalidatePath(`/apps/${app.id}/fleet`);
+    return { ok: true, status: result.duplicate ? "APPROVED" : "QUEUED" };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

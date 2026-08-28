@@ -94,6 +94,7 @@ model App {
   shadowParityObservations ShadowParityObservation[]
   fleetParityWaveResults   FleetParityWaveResult[]
   providerObservations     ProviderObservation[]
+  providerExecutions       ProviderExecution[]
   releaseCandidates        ReleaseCandidate[]
   projectBlueprints        ProjectBlueprint[]
   marketProfiles           MarketProfile[]
@@ -999,6 +1000,7 @@ model ConfigRevision {
   fleetLifecycleStates     FleetLifecycleState[]
   fleetLifecycleEvents     FleetLifecycleEvent[]
   fleetParityWaveResults   FleetParityWaveResult[]
+  providerExecutions       ProviderExecution[]
 
   @@unique([appId, revision])
   @@unique([id, appId])
@@ -1338,25 +1340,149 @@ model ProviderObservation {
   @@map("control_plane_provider_observation")
 }
 
+// provider 작업의 exact source/config/desired/public identity를 고정하는 durable 실행 원장이다.
+// 실제 credential 값과 auth lease ID는 저장하지 않으며 worker lease는 hash만 보관한다.
+model ProviderExecution {
+  id                               String                       @id @default(cuid())
+  appId                            String
+  app                              App                          @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  repoId                           BigInt
+  repoFullName                     String
+  sourceSha                        String                       @db.Char(40)
+  configRevisionId                 String
+  configRevision                   ConfigRevision               @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_provider_execution_config_app_fkey")
+  configRevisionNumber             Int
+  releaseCandidateId               String?
+  releaseCandidate                 ReleaseCandidate?            @relation(fields: [releaseCandidateId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  kind                             ProviderExecutionKind
+  operation                        ProviderExecutionOperation
+  actionClass                      ProviderExecutionActionClass
+  provider                         String                       @db.VarChar(32)
+  resourceType                     String                       @db.VarChar(64)
+  resourceId                       String                       @db.VarChar(191)
+  desiredHash                      String                       @db.Char(64)
+  desiredPayload                   Json
+  expectedPublicIdentity           String?                      @db.VarChar(512)
+  publicAccountId                  String                       @db.VarChar(191)
+  credentialPublicIdentity         String                       @db.VarChar(512)
+  logicalCredentialId              String                       @db.VarChar(191)
+  credentialGeneration             Int
+  policyGeneration                 Int
+  capability                       String                       @db.VarChar(191)
+  adapterId                        String                       @db.VarChar(64)
+  origin                           String                       @db.VarChar(512)
+  environment                      String                       @db.VarChar(64)
+  authFactors                      Json
+  readbackPublicAccountId          String                       @db.VarChar(191)
+  readbackCredentialPublicIdentity String                       @db.VarChar(512)
+  readbackLogicalCredentialId      String                       @db.VarChar(191)
+  readbackCredentialGeneration     Int
+  readbackPolicyGeneration         Int
+  readbackCapability               String                       @db.VarChar(191)
+  readbackAdapterId                String                       @db.VarChar(64)
+  readbackOrigin                   String                       @db.VarChar(512)
+  readbackEnvironment              String                       @db.VarChar(64)
+  readbackAuthFactors              Json
+  artifactChecksum                 String?                      @db.Char(64)
+  bindingHash                      String                       @db.Char(64)
+  requestHash                      String                       @db.Char(64)
+  idempotencyKey                   String                       @unique @db.VarChar(191)
+  status                           ProviderExecutionStatus      @default(QUEUED)
+  activeScopeKey                   String?                      @unique @db.VarChar(191)
+  attempts                         Int                          @default(0)
+  readbackAttempts                 Int                          @default(0)
+  maxAttempts                      Int                          @default(3)
+  leaseGeneration                  Int                          @default(0)
+  leaseTokenHash                   String?                      @db.Char(64)
+  workerId                         String?                      @db.VarChar(128)
+  leaseExpiresAt                   DateTime?                    @db.DateTime(3)
+  availableAt                      DateTime                     @default(now()) @db.DateTime(3)
+  readbackRequiredAt               DateTime?                    @db.DateTime(3)
+  approvedBy                       String?                      @db.VarChar(128)
+  approvalId                       String?                      @db.VarChar(191)
+  approvalBindingHash              String?                      @db.Char(64)
+  approvalExpiresAt                DateTime?                    @db.DateTime(3)
+  lastObservationId                String?                      @db.VarChar(191)
+  lastErrorCode                    String?                      @db.VarChar(128)
+  startedAt                        DateTime?                    @db.DateTime(3)
+  completedAt                      DateTime?                    @db.DateTime(3)
+  createdAt                        DateTime                     @default(now()) @db.DateTime(3)
+  updatedAt                        DateTime                     @updatedAt
+  events                           ProviderExecutionEvent[]
+
+  @@unique([id, appId], map: "cp_provider_execution_id_app_key")
+  @@index([status, availableAt, createdAt])
+  @@index([appId, createdAt])
+  @@index([repoId, sourceSha, configRevisionNumber])
+  @@map("control_plane_provider_execution")
+}
+
+enum ProviderExecutionKind {
+  BLUEPRINT_RESOURCE
+  MARKET_RELEASE
+}
+
+enum ProviderExecutionOperation {
+  READBACK
+  APPLY
+  UPLOAD_INTERNAL
+}
+
+enum ProviderExecutionActionClass {
+  READ_ONLY
+  DETERMINISTIC_MUTATION
+  PROTECTED_MUTATION
+  INTERNAL_UPLOAD
+  HUMAN_ONLY
+}
+
+enum ProviderExecutionStatus {
+  QUEUED
+  WAITING_HUMAN_APPROVAL
+  HUMAN_ONLY_BLOCKED
+  RUNNING
+  READBACK_REQUIRED
+  SUCCEEDED
+  FAILED
+  DEAD_LETTER
+  CANCELLED
+}
+
+model ProviderExecutionEvent {
+  id          String            @id @default(cuid())
+  executionId String
+  execution   ProviderExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  requestId   String?           @unique @db.VarChar(191)
+  type        String            @db.VarChar(64)
+  generation  Int?
+  actor       String            @db.VarChar(128)
+  payload     Json?
+  createdAt   DateTime          @default(now()) @db.DateTime(3)
+
+  @@index([executionId, createdAt])
+  @@map("control_plane_provider_execution_event")
+}
+
 model ReleaseCandidate {
-  id                String                   @id @default(cuid())
-  appId             String
-  app               App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha         String                   @db.Char(40)
-  configRevisionId  String
-  configRevision    ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
-  artifactChecksum  String                   @db.Char(64)
-  market            String?                  @db.VarChar(32)
-  targetKey         String?                  @db.VarChar(191)
-  artifactType      String?                  @db.VarChar(32)
-  workflowBundleSha String?                  @db.Char(40)
-  platformVersion   String?                  @db.VarChar(64)
-  requestHash       String?                  @db.Char(64)
-  idempotencyKey    String?                  @unique @db.VarChar(191)
-  status            ReleaseCandidateStatus   @default(PREPARED)
-  createdBy         String
-  createdAt         DateTime                 @default(now()) @db.DateTime(3)
-  gateObservations  ReleaseGateObservation[]
+  id                 String                   @id @default(cuid())
+  appId              String
+  app                App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha          String                   @db.Char(40)
+  configRevisionId   String
+  configRevision     ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
+  artifactChecksum   String                   @db.Char(64)
+  market             String?                  @db.VarChar(32)
+  targetKey          String?                  @db.VarChar(191)
+  artifactType       String?                  @db.VarChar(32)
+  workflowBundleSha  String?                  @db.Char(40)
+  platformVersion    String?                  @db.VarChar(64)
+  requestHash        String?                  @db.Char(64)
+  idempotencyKey     String?                  @unique @db.VarChar(191)
+  status             ReleaseCandidateStatus   @default(PREPARED)
+  createdBy          String
+  createdAt          DateTime                 @default(now()) @db.DateTime(3)
+  gateObservations   ReleaseGateObservation[]
+  providerExecutions ProviderExecution[]
 
   @@unique([appId, sourceSha, configRevisionId, artifactChecksum])
   @@index([appId, status, createdAt])
@@ -1414,21 +1540,26 @@ model PlatformFleetBinding {
 // secret 값이 아닌 logical credential과 공개 identity만 저장한다.
 // 실제 값의 조회·변경·export API는 이 데이터 모델과 Backoffice UI에 존재하지 않는다.
 model CredentialBinding {
-  id                  String                  @id @default(cuid())
-  appId               String
-  app                 App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
-  logicalCredentialId String
-  provider            String
-  capability          String
-  environment         String
-  publicIdentity      String?
-  fingerprint         String?
-  consumer            String
-  scope               Json?
-  status              CredentialBindingStatus @default(ACTIVE)
-  observedAt          DateTime                @db.DateTime(3)
-  createdAt           DateTime                @default(now()) @db.DateTime(3)
-  updatedAt           DateTime                @updatedAt
+  id                   String                  @id @default(cuid())
+  appId                String
+  app                  App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
+  logicalCredentialId  String
+  provider             String
+  capability           String
+  environment          String
+  publicIdentity       String?
+  fingerprint          String?
+  consumer             String
+  scope                Json?
+  status               CredentialBindingStatus @default(ACTIVE)
+  credentialGeneration Int?
+  policyGeneration     Int?
+  adapterId            String?                 @db.VarChar(64)
+  origin               String?                 @db.VarChar(512)
+  authFactors          Json?
+  observedAt           DateTime                @db.DateTime(3)
+  createdAt            DateTime                @default(now()) @db.DateTime(3)
+  updatedAt            DateTime                @updatedAt
 
   @@unique([appId, logicalCredentialId, capability])
   @@index([appId, provider, status])
