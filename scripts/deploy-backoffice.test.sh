@@ -23,8 +23,6 @@ set -euo pipefail
 : "${FAKE_KUBECTL_COUNTER:?}"
 : "${BACKOFFICE_IMAGE:?}"
 : "${BACKOFFICE_SOURCE_SHA:?}"
-: "${FAKE_SCHEDULERS_PRESENT:=false}"
-: "${FAKE_PATCH_FAIL_ON:=}"
 : "${FAKE_CATCHUP_CREATE_UNKNOWN:=false}"
 : "${FAKE_CATCHUP_RESULT:=Complete}"
 
@@ -91,33 +89,8 @@ if [[ "$args" == *" get cronjob vault-writer -o name"* ]]; then
   printf 'cronjob.batch/vault-writer\n'
   exit 0
 fi
-if [[ "$args" == *" get cronjob/backoffice-"* && "$args" == *" -o name"* ]]; then
-  if [ "$FAKE_SCHEDULERS_PRESENT" = true ]; then
-    cronjob="${args##*cronjob/}"
-    cronjob="${cronjob%% *}"
-    printf 'cronjob.batch/%s\n' "$cronjob"
-    exit 0
-  fi
-  printf 'Error from server (NotFound): cronjobs.batch not found\n' >&2
-  exit 1
-fi
-if [[ "$args" == *" get cronjob/backoffice-"* && "$args" == *"status.active"* ]]; then
-  exit 0
-fi
 if [[ "$args" == *" get cronjob/backoffice-"* && "$args" == *"spec.suspend"* ]]; then
   printf 'false'
-  exit 0
-fi
-if [[ "$args" == *" patch cronjob/backoffice-"* ]]; then
-  printf 'PATCH_CRONJOB %s\n' "$args" >> "$FAKE_KUBECTL_LOG"
-  if [[ "$args" == *'suspend":true'* && -n "$FAKE_PATCH_FAIL_ON" && "$args" == *"cronjob/$FAKE_PATCH_FAIL_ON"* ]]; then
-    printf 'injected patch failure\n' >&2
-    exit 1
-  fi
-  exit 0
-fi
-if [[ "$args" == *" delete cronjob "* ]]; then
-  printf 'DELETE_CRONJOBS %s\n' "$args" >> "$FAKE_KUBECTL_LOG"
   exit 0
 fi
 if [[ "$args" == *" get cronjob "* && "$args" == *"jsonpath="* ]]; then
@@ -150,13 +123,10 @@ chmod +x "$fake"
 
 run_deploy() {
   local run_image="${2:-$image}"
-  local schedulers_present="${3:-false}"
   FAKE_KUBECTL_LOG="$log" \
   FAKE_KUBECTL_STATE="$state" \
   FAKE_KUBECTL_COUNTER="$counter" \
   FAKE_MIGRATION_RESULT="$1" \
-  FAKE_SCHEDULERS_PRESENT="$schedulers_present" \
-  FAKE_PATCH_FAIL_ON="${FAKE_PATCH_FAIL_ON:-}" \
   FAKE_CATCHUP_CREATE_UNKNOWN="${FAKE_CATCHUP_CREATE_UNKNOWN:-false}" \
   FAKE_CATCHUP_RESULT="${FAKE_CATCHUP_RESULT:-Complete}" \
   KUBECTL_BIN="$fake" \
@@ -164,7 +134,6 @@ run_deploy() {
   BACKOFFICE_SOURCE_SHA="$source_sha" \
   BACKOFFICE_MIGRATION_TIMEOUT_SECONDS=2 \
   BACKOFFICE_MIGRATION_POLL_SECONDS=0 \
-  BACKOFFICE_SCHEDULER_DRAIN_SETTLE_SECONDS=0 \
   BACKOFFICE_CATCHUP_TIMEOUT_SECONDS=2400 \
   "$here/deploy-backoffice.sh"
 }
@@ -211,46 +180,16 @@ catchup_line="$(line_of '^CREATE_JOB backoffice-scheduler-catchup-')"
 if ! [ "$migration_line" -lt "$web_line" ] ||
    ! [ "$web_line" -lt "$web_rollout_line" ] ||
    ! [ "$web_rollout_line" -lt "$worker_line" ] ||
-   ! [ "$worker_line" -lt "$catchup_line" ] ||
-   ! [ "$catchup_line" -lt "$scheduler_line" ]; then
-  echo "FAIL migration → web → worker → catch-up → scheduler 순서가 깨졌다" >&2
+   ! [ "$worker_line" -lt "$scheduler_line" ] ||
+   ! [ "$scheduler_line" -lt "$catchup_line" ]; then
+  echo "FAIL migration → web → worker → scheduler → catch-up 순서가 깨졌다" >&2
   cat "$log" >&2
   exit 1
 fi
-echo "  ok   migration → web → worker → catch-up → scheduler"
+echo "  ok   migration → web → worker → scheduler → catch-up"
 echo "  ok   동일 SHA 재실행은 새 migration/catch-up attempt로 감사 가능"
 
-echo "== 기존 scheduler drain과 재개 =="
-: > "$log"
-run_deploy Complete "$image" true >/dev/null
-if [ "$(grep -c '^PATCH_CRONJOB .*suspend.*true' "$log")" -eq 6 ] &&
-   grep -q '^DELETE_CRONJOBS ' "$log" &&
-   grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log"; then
-  echo "  ok   기존 scheduler 6개 suspend → drain → orphan reset → manifest 재생성"
-else
-  echo "FAIL 기존 scheduler drain/restart 계약이 깨졌다" >&2
-  cat "$log" >&2
-  exit 1
-fi
-
-echo "== scheduler suspend 도중 실패 복구 =="
-: > "$log"
-FAKE_PATCH_FAIL_ON=backoffice-reconcile
-if run_deploy Complete "$image" true >/dev/null 2>&1; then
-  echo "FAIL scheduler suspend 실패가 deploy 성공으로 처리됐다" >&2
-  exit 1
-fi
-unset FAKE_PATCH_FAIL_ON
-if grep -q '^PATCH_CRONJOB .*backoffice-reconcile.*suspend.*true' "$log" &&
-   grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log"; then
-  echo "  ok   첫 mutation 결과 불명에도 EXIT trap이 전체 manifest를 복구"
-else
-  echo "FAIL 부분 suspend 복구 계약이 깨졌다" >&2
-  cat "$log" >&2
-  exit 1
-fi
-
-echo "== catch-up create 결과 불명은 scheduler를 겹쳐 재개하지 않는다 =="
+echo "== catch-up create 결과 불명에도 scheduler는 계속 동작한다 =="
 : > "$log"
 FAKE_CATCHUP_CREATE_UNKNOWN=true
 if run_deploy Complete "$image" true >/dev/null 2>&1; then
@@ -258,16 +197,18 @@ if run_deploy Complete "$image" true >/dev/null 2>&1; then
   exit 1
 fi
 unset FAKE_CATCHUP_CREATE_UNKNOWN
-if grep -q '^CREATE_JOB backoffice-scheduler-catchup-' "$log" &&
-   ! grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log"; then
-  echo "  ok   결과 불명 catch-up과 CronJob의 중복 실행을 fail-closed"
+unknown_scheduler_line="$(line_of '^APPLY_FILE scheduler-cronjobs.yaml$')"
+unknown_catchup_line="$(line_of '^CREATE_JOB backoffice-scheduler-catchup-')"
+if [ "$unknown_scheduler_line" -lt "$unknown_catchup_line" ] &&
+   ! grep -q '^PATCH_CRONJOB\|^DELETE_CRONJOBS' "$log"; then
+  echo "  ok   결과 불명 전에 scheduler desired state를 복구하고 중단"
 else
   echo "FAIL catch-up create 결과 불명 계약이 깨졌다" >&2
   cat "$log" >&2
   exit 1
 fi
 
-echo "== terminal catch-up 실패는 scheduler를 복구하고 배포를 실패시킨다 =="
+echo "== terminal catch-up 실패도 scheduler를 중단하지 않는다 =="
 : > "$log"
 FAKE_CATCHUP_RESULT=Failed
 if run_deploy Complete "$image" true >/dev/null 2>&1; then
@@ -276,8 +217,9 @@ if run_deploy Complete "$image" true >/dev/null 2>&1; then
 fi
 unset FAKE_CATCHUP_RESULT
 if grep -q '^CREATE_JOB backoffice-scheduler-catchup-' "$log" &&
-   grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log"; then
-  echo "  ok   terminal 실패 확인 뒤 정기 scheduler 복구"
+   grep -q '^APPLY_FILE scheduler-cronjobs.yaml$' "$log" &&
+   ! grep -q '^PATCH_CRONJOB\|^DELETE_CRONJOBS' "$log"; then
+  echo "  ok   terminal 실패를 배포 실패로 기록하되 정기 scheduler 유지"
 else
   echo "FAIL terminal catch-up 복구 계약이 깨졌다" >&2
   cat "$log" >&2
