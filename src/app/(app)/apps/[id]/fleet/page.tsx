@@ -12,6 +12,7 @@ import {
   parseManagedAutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { getFleetOperationsView } from "@/lib/control-plane/fleet-view";
+import { githubInstallationProviderPayloadSchema } from "@/lib/control-plane/github-installation-observation";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 
 export const dynamic = "force-dynamic";
@@ -35,10 +36,10 @@ function jsonText(value: unknown): string {
 }
 
 function statusClass(status: string): string {
-  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT", "PR_MERGED", "ISSUE_OPEN"].includes(status)) {
+  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT", "PR_MERGED", "ISSUE_OPEN", "GRANTED"].includes(status)) {
     return "bg-emerald-50 text-emerald-700";
   }
-  if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH", "BLOCKED"].includes(status)) {
+  if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH", "BLOCKED", "MISSING_REQUIREMENT"].includes(status)) {
     return "bg-red-50 text-red-700";
   }
   if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING", "WAITING_HUMAN_APPROVAL", "READBACK_REQUIRED"].includes(status)) {
@@ -103,6 +104,16 @@ export default async function FleetOperationsPage({
     ...fleet.recentRuns,
     ...fleet.deadLetters.filter((deadLetter) => !fleet.recentRuns.some((run) => run.id === deadLetter.id)),
   ];
+  const githubInstallation = fleet.providerObservations
+    .filter((observation) => (
+      observation.provider === "github"
+      && observation.resourceType === "github-app-installation"
+    ))
+    .map((observation) => ({
+      observation,
+      parsed: githubInstallationProviderPayloadSchema.safeParse(observation.payload),
+    }))
+    .find((item) => item.parsed.success);
 
   return (
     <div className="space-y-8">
@@ -474,6 +485,37 @@ export default async function FleetOperationsPage({
                 payload: row.payload,
               }))}
             />
+          </Panel>
+          <Panel title="GitHub App Gate 1 권한">
+            {githubInstallation?.parsed.success ? (
+              <div className="space-y-3">
+                <dl className="grid gap-1 text-xs sm:grid-cols-2">
+                  <Meta label="조직" value={githubInstallation.parsed.data.attributes.accountLogin} />
+                  <Meta label="Installation" value={githubInstallation.parsed.data.attributes.installationId} />
+                  <Meta label="저장소 범위" value={githubInstallation.parsed.data.attributes.repositorySelection} />
+                  <Meta label="중지" value={githubInstallation.parsed.data.attributes.suspended ? "예" : "아니오"} />
+                  <Meta label="관측" value={dateTime(githubInstallation.observation.observedAt)} />
+                </dl>
+                <div className="space-y-1.5">
+                  {Object.entries(githubInstallation.parsed.data.attributes.capabilities).map(([key, capability]) => (
+                    <div key={key} className="rounded border border-neutral-200 px-2.5 py-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium text-neutral-800">{key}</span>
+                        <Status value={capability.state} />
+                      </div>
+                      {capability.missing.length > 0 && (
+                        <div className="mt-1 break-words text-[11px] text-neutral-500">
+                          {capability.missing.join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] leading-relaxed text-neutral-500">
+                  GRANTED는 설치 grant가 있다는 뜻이며 GitHub write 실행 승인이나 실제 mutation 완료를 뜻하지 않습니다.
+                </p>
+              </div>
+            ) : <Empty>GitHub App installation 공개 권한 관측이 없습니다.</Empty>}
           </Panel>
           <Panel title="PlatformFleetBinding">
             {fleet.platformFleetBinding ? (

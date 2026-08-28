@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { App, Octokit } from "octokit";
+import {
+  normalizeGitHubInstallationPublicState,
+  type GitHubInstallationPublicState,
+} from "@/lib/github/installation-public-state";
 
 // GitHub App (seorilabs-backoffice) 인증.
 // - App JWT → installation token 교환은 Octokit 이 내부적으로 자동 갱신.
@@ -30,6 +34,7 @@ export interface InstallationContext {
   repositorySelection: "all" | "selected";
   targetType: string;
   accountLogin: string | null;
+  publicState: GitHubInstallationPublicState;
 }
 
 let cached: { context: InstallationContext; at: number } | null = null;
@@ -40,16 +45,14 @@ export async function getInstallationContext(): Promise<InstallationContext> {
   const app = getApp();
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   const { data } = await app.octokit.rest.apps.getOrgInstallation({ org });
-  if (data.repository_selection !== "all" && data.repository_selection !== "selected") {
-    throw new Error("GITHUB_INSTALLATION_REPOSITORY_SELECTION_INVALID");
-  }
-  const account = data.account as { login?: unknown } | null;
+  const publicState = normalizeGitHubInstallationPublicState(data);
   const octokit = await app.getInstallationOctokit(data.id);
   const context: InstallationContext = {
     octokit,
-    repositorySelection: data.repository_selection,
-    targetType: data.target_type,
-    accountLogin: typeof account?.login === "string" ? account.login : null,
+    repositorySelection: publicState.repositorySelection,
+    targetType: publicState.targetType,
+    accountLogin: publicState.accountLogin,
+    publicState,
   };
   cached = { context, at: Date.now() };
   return context;
