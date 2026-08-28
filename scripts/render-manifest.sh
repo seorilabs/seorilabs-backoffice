@@ -49,9 +49,11 @@ fi
 
 has_image=false
 has_source=false
+has_digest_placeholder=false
 grep -q "${repo}:latest" "$manifest" && has_image=true
 grep -q '__BACKOFFICE_IMAGE_TAG__' "$manifest" && has_source=true
-if [ "$has_image" = false ] && [ "$has_source" = false ]; then
+grep -q '__BACKOFFICE_IMAGE_DIGEST__' "$manifest" && has_digest_placeholder=true
+if [ "$has_image" = false ] && [ "$has_source" = false ] && [ "$has_digest_placeholder" = false ]; then
   echo "오류: $manifest 에 이미지나 source SHA placeholder가 없다. 치환이 깨졌다." >&2
   exit 1
 fi
@@ -64,9 +66,13 @@ if [ "$has_source" = true ]; then
   short_tag="${source_sha:0:12}"
   sed \
     -e "s|${repo}:latest|${image}|g" \
+    -e "s|__BACKOFFICE_IMAGE_DIGEST__|${image}|g" \
     -e "s|__BACKOFFICE_IMAGE_TAG_SHORT__|${short_tag}|g" \
     -e "s|__BACKOFFICE_IMAGE_TAG__|${source_sha}|g" \
     "$manifest"
 else
-  sed "s|${repo}:latest|${image}|g" "$manifest"
+  sed \
+    -e "s|${repo}:latest|${image}|g" \
+    -e "s|__BACKOFFICE_IMAGE_DIGEST__|${image}|g" \
+    "$manifest"
 fi

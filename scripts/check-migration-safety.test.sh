@@ -71,6 +71,23 @@ printf "UPDATE CASCADE SET \`status\` = 'PAUSED';\n" > \
   "$tmp/destructive_update_cascade/prisma/migrations/20260827120006_update_data/migration.sql"
 expect_failure destructive_update_cascade
 
+prepare_case unsafe_trigger
+mkdir -p "$tmp/unsafe_trigger/prisma/migrations/20260827120007_unsafe_trigger"
+printf '%s\n' \
+  "CREATE TRIGGER \`control_plane_provider_execution_event_no_delete\`" \
+  "BEFORE DELETE ON \`other_table\`" \
+  "FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'provider execution audit is append-only';" > \
+  "$tmp/unsafe_trigger/prisma/migrations/20260827120007_unsafe_trigger/migration.sql"
+expect_failure unsafe_trigger
+
+prepare_case identifier_too_long
+mkdir -p "$tmp/identifier_too_long/prisma/migrations/20260827120008_long_identifier"
+printf '%s\n' \
+  'CREATE TABLE `identifier_test` (`id` VARCHAR(32) NOT NULL,' \
+  'INDEX `this_mysql_index_identifier_is_deliberately_longer_than_sixty_four_chars_total` (`id`));' > \
+  "$tmp/identifier_too_long/prisma/migrations/20260827120008_long_identifier/migration.sql"
+expect_failure identifier_too_long
+
 prepare_case valid_foreign_key
 mkdir -p "$tmp/valid_foreign_key/prisma/migrations/20260827120005_add_fk"
 printf '%s\n' \

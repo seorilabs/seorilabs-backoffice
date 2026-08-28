@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
 import { FleetAutomationControls } from "@/components/fleet/FleetAutomationControls";
+import { ProviderExecutionApprovalButton } from "@/components/fleet/ProviderExecutionApprovalButton";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import {
@@ -39,7 +40,7 @@ function statusClass(status: string): string {
   if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH"].includes(status)) {
     return "bg-red-50 text-red-700";
   }
-  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING"].includes(status)) {
+  if (["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING", "NEEDS_REAUTH", "NEEDS_INPUT", "RUNNING", "WAITING_HUMAN_APPROVAL", "READBACK_REQUIRED"].includes(status)) {
     return "bg-amber-50 text-amber-800";
   }
   return "bg-neutral-100 text-neutral-600";
@@ -94,7 +95,7 @@ export default async function FleetOperationsPage({
     <div className="space-y-8">
       <WorkspaceSection
         title="Fleet 제어면"
-        description="자동 탐지·desired state·provider readback·credential 공개 identity·agent queue를 앱 단위로 대조합니다. 이 화면은 provider write를 수행하지 않습니다."
+        description="자동 탐지·desired state·provider readback·credential 공개 identity·실행 queue를 앱 단위로 대조합니다. 비밀값은 표시하지 않고 protected 작업은 이 실행 한 건만 승인합니다."
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
           <Summary
@@ -225,6 +226,61 @@ export default async function FleetOperationsPage({
               </article>
             ))}
             {releaseCandidates.length === 0 && <Empty>Release candidate가 없습니다.</Empty>}
+          </div>
+        </Panel>
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="Provider 실행 원장"
+        description="repo·source·ACTIVE config·desired hash·공개 identity·logical credential generation을 한 번에 고정합니다. apply/upload 응답만으로 완료하지 않고 반드시 provider readback으로 확인합니다."
+      >
+        <Panel>
+          <div className="space-y-3">
+            {fleet.providerExecutions.map((execution) => (
+              <article key={execution.id} className="rounded border border-neutral-200 bg-white p-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{execution.provider} · {execution.operation}</span>
+                      <Status value={execution.status} />
+                      <span className="text-xs text-neutral-400">{execution.actionClass}</span>
+                    </div>
+                    <div className="mt-1 break-all text-xs text-neutral-600">
+                      {execution.resourceType} · {execution.resourceId}
+                    </div>
+                    <div className="mt-1 grid gap-1 text-[11px] text-neutral-500 sm:grid-cols-2 xl:grid-cols-3">
+                      <span>source {mono(execution.sourceSha, 12)} · config {execution.configRevisionNumber}</span>
+                      <span>desired {mono(execution.desiredHash, 14)}</span>
+                      <span>binding {mono(execution.bindingHash, 14)}</span>
+                      <span>account {execution.publicAccountId}</span>
+                      <span>credential identity {execution.credentialPublicIdentity}</span>
+                      <span>resource identity {execution.expectedPublicIdentity ?? "—"}</span>
+                      <span>{execution.logicalCredentialId} · generation {execution.credentialGeneration}/{execution.policyGeneration}</span>
+                      <span>{execution.adapterId} · {execution.capability}</span>
+                      <span>readback {execution.readbackLogicalCredentialId} · generation {execution.readbackCredentialGeneration}/{execution.readbackPolicyGeneration}</span>
+                      <span>readback identity {execution.readbackCredentialPublicIdentity} · {execution.readbackCapability}</span>
+                      <span>apply {execution.attempts}/{execution.maxAttempts} · readback {execution.readbackAttempts}/{execution.maxAttempts}</span>
+                      <span>{dateTime(execution.updatedAt)}{execution.workerId ? ` · ${execution.workerId}` : ""}</span>
+                    </div>
+                    {execution.lastErrorCode && <div className="mt-2 text-xs text-red-700">{execution.lastErrorCode}</div>}
+                  </div>
+                  {execution.status === "WAITING_HUMAN_APPROVAL" ? (
+                    <ProviderExecutionApprovalButton
+                      appId={fleet.id}
+                      executionId={execution.id}
+                      generation={execution.leaseGeneration}
+                      bindingHash={execution.bindingHash}
+                    />
+                  ) : (
+                    <div className="text-right text-[11px] text-neutral-400">
+                      lease generation {execution.leaseGeneration}<br />
+                      {execution.readbackRequiredAt ? `readback ${dateTime(execution.readbackRequiredAt)}` : execution.approvedBy ? `승인 ${execution.approvedBy}` : ""}
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+            {fleet.providerExecutions.length === 0 && <Empty>아직 provider execution이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
@@ -430,6 +486,8 @@ export default async function FleetOperationsPage({
                     <span>identity: {binding.publicIdentity ?? "—"}</span>
                     <span>fingerprint: {mono(binding.fingerprint, 20)}</span>
                     <span>{binding.environment} · {binding.consumer}</span>
+                    <span>generation {binding.credentialGeneration ?? "미등록"}/{binding.policyGeneration ?? "미등록"}</span>
+                    <span>{binding.adapterId ?? "adapter 미등록"} · {binding.origin ?? "origin 미등록"}</span>
                   </div>
                 </div>
               ))}
