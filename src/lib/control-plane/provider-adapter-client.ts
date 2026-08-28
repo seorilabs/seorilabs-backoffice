@@ -18,7 +18,6 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
 const ATTESTATION_DOMAIN = "seori-run-attestation-v1\n";
 const RESPONSE_LIMIT = 64 * 1024;
-const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/;
 
 export interface ProviderAdapterResult {
   outcome: "COMMAND_ACCEPTED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED" | "APPROVAL_REQUIRED";
@@ -180,6 +179,14 @@ const policyGrantReferenceSchema = z.object({
 }).strict();
 
 const policyGrantResponseSchema = z.object({ policyGrant: policyGrantReferenceSchema }).strict();
+const policyGrantExecutionResponseSchema = z.object({
+  policyGrant: policyGrantReferenceSchema,
+  execution: z.object({
+    generation: z.number().int().positive(),
+    outcome: z.enum(["SUCCESS", "ADAPTER_FAILED", "HUMAN_REAUTH_REQUIRED", "RESULT_UNKNOWN"]),
+    errorCode: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,127}$/).optional(),
+  }).strict(),
+}).strict();
 const policyGrantObservationResponseSchema = z.object({
   policyGrant: policyGrantReferenceSchema,
   observation: providerExecutionObservationSchema,
@@ -234,6 +241,65 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
       && reference.bindingHash === expected.grant.bindingHash
       && reference.commandDigest === expected.grant.commandDigest
       && reference.policyGeneration === expected.grant.policyGeneration;
+  }
+
+  #grantExpectation(
+    command: ProviderCommandEnvelope,
+    built: ReturnType<typeof buildAuthBrokerPolicyGrant>,
+  ) {
+    return {
+      workerId: this.#workerId,
+      expectedDigest: built.digest,
+      expectedBindingHash: built.grant.bindingHash,
+      expectedCommandDigest: built.grant.commandDigest,
+      expectedPolicyGeneration: built.grant.policyGeneration,
+      expectedExecutionGeneration: command.generation,
+    };
+  }
+
+  #mapExecutionResponse(
+    body: unknown,
+    command: ProviderCommandEnvelope,
+    built: ReturnType<typeof buildAuthBrokerPolicyGrant>,
+  ): ProviderAdapterResult | null {
+    const parsed = policyGrantExecutionResponseSchema.safeParse(body);
+    if (
+      !parsed.success
+      || !this.#matchesGrantReference(parsed.data.policyGrant, built)
+      || parsed.data.execution.generation !== command.generation
+    ) return null;
+    const execution = parsed.data.execution;
+    if (execution.outcome === "SUCCESS") return { outcome: "COMMAND_ACCEPTED" };
+    if (execution.outcome === "ADAPTER_FAILED") {
+      return { outcome: "FAILED", errorCode: execution.errorCode ?? "TRUSTED_ADAPTER_FAILED" };
+    }
+    if (execution.outcome === "HUMAN_REAUTH_REQUIRED") {
+      return { outcome: "HUMAN_REQUIRED", errorCode: execution.errorCode ?? "HUMAN_REAUTH_REQUIRED" };
+    }
+    return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" };
+  }
+
+  async #readExecutionResult(
+    command: ProviderCommandEnvelope,
+    built: ReturnType<typeof buildAuthBrokerPolicyGrant>,
+  ): Promise<ProviderAdapterResult> {
+    let response;
+    try {
+      response = await this.#transport({
+        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/result`,
+        body: this.#grantExpectation(command, built),
+        attestation: this.#attestation(command),
+      });
+    } catch {
+      return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" };
+    }
+    if (response.status !== 200) {
+      const code = safeBrokerError(response.body);
+      return brokerGateResult(code)
+        ?? { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" };
+    }
+    return this.#mapExecutionResponse(response.body, command, built)
+      ?? { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_RESPONSE_INVALID" };
   }
 
   async #registerAndVerifyPolicyGrant(command: ProviderCommandEnvelope): Promise<
@@ -307,52 +373,32 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     const command = providerCommandEnvelopeSchema.parse(envelope);
     const policyGrant = await this.#registerAndVerifyPolicyGrant(command);
     if ("result" in policyGrant) return policyGrant.result;
-    const request = buildAuthBrokerLeaseRequest(command, this.#subject);
-    let issued;
+    const built = policyGrant.grant;
+    let consumed;
     try {
-      issued = await this.#transport({
-        path: "/auth/leases",
+      consumed = await this.#transport({
+        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/consume`,
         body: {
-          idempotencyKey: `provider-execution:${command.executionId}:${command.generation}`,
-          workerId: this.#workerId,
-          request,
+          ...this.#grantExpectation(command, built),
+          idempotencyKey: `provider-grant-consume:${command.executionId}:${command.generation}`,
         },
         attestation: this.#attestation(command),
       });
     } catch {
-      return { outcome: "FAILED", errorCode: "AUTH_BROKER_UNAVAILABLE" };
+      // consume 전송 뒤 응답을 잃었을 수 있으므로 같은 grant를 다시 consume하지 않는다.
+      return this.#readExecutionResult(command, built);
     }
-    if (issued.status !== 201 && issued.status !== 200) {
-      const errorCode = safeBrokerError(issued.body);
-      return brokerGateResult(errorCode) ?? { outcome: "FAILED", errorCode: errorCode.toUpperCase() };
+    if (consumed.status !== 200) {
+      const errorCode = safeBrokerError(consumed.body);
+      const gate = brokerGateResult(errorCode);
+      if (gate) return gate;
+      if (consumed.status >= 500 || errorCode === "auth_broker_failed") {
+        return this.#readExecutionResult(command, built);
+      }
+      return { outcome: "FAILED", errorCode: errorCode.toUpperCase() };
     }
-    const checkout = (issued.body as { credentialCheckout?: { id?: unknown; generation?: unknown } })?.credentialCheckout;
-    if (!checkout || typeof checkout.id !== "string" || !OPAQUE_ID.test(checkout.id) || !Number.isSafeInteger(checkout.generation) || Number(checkout.generation) < 1) {
-      return { outcome: "FAILED", errorCode: "AUTH_BROKER_RESPONSE_INVALID" };
-    }
-    let executed;
-    try {
-      executed = await this.#transport({
-        path: `/auth/leases/${encodeURIComponent(checkout.id)}/execute`,
-        body: {
-          expectedGeneration: checkout.generation,
-          workerId: this.#workerId,
-          context: request,
-        },
-        attestation: this.#attestation(command),
-      });
-    } catch {
-      // lease execute 요청 전송 뒤의 transport 오류는 외부 결과를 추측할 수 없다.
-      return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" };
-    }
-    if (executed.status !== 200) {
-      const errorCode = safeBrokerError(executed.body);
-      return brokerGateResult(errorCode) ?? { outcome: "RESULT_UNKNOWN", errorCode: errorCode.toUpperCase() };
-    }
-    const execution = (executed.body as { execution?: { outcome?: unknown } })?.execution;
-    if (execution?.outcome === "SUCCESS") return { outcome: "COMMAND_ACCEPTED" };
-    if (execution?.outcome === "ADAPTER_FAILED") return { outcome: "FAILED", errorCode: "TRUSTED_ADAPTER_FAILED" };
-    return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_RESPONSE_INVALID" };
+    return this.#mapExecutionResponse(consumed.body, command, built)
+      ?? this.#readExecutionResult(command, built);
   }
 
   async readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null> {

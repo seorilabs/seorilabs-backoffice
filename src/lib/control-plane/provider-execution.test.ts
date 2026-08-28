@@ -90,6 +90,21 @@ function activeGrantResponse(command = envelope()) {
   };
 }
 
+function executionResponse(
+  outcome: "SUCCESS" | "ADAPTER_FAILED" | "HUMAN_REAUTH_REQUIRED" | "RESULT_UNKNOWN",
+  errorCode?: string,
+  command = envelope(),
+) {
+  return {
+    ...activeGrantResponse(command),
+    execution: {
+      generation: command.generation,
+      outcome,
+      ...(errorCode ? { errorCode } : {}),
+    },
+  };
+}
+
 test("provider execution create 계약은 blueprint/market allowlist 밖의 법적·심사·public action을 거부한다", () => {
   const blueprint = {
     kind: "BLUEPRINT_RESOURCE",
@@ -331,26 +346,66 @@ test("mTLS scheduler attestation은 exact SPIFFE/run/repo/worker payload에 Ed25
   assert.equal(decoded.runId, "provider-execution-1");
 });
 
-test("Auth Broker execute transport가 불명확하면 adapter를 재실행하지 않고 RESULT_UNKNOWN을 반환한다", async () => {
+test("Auth Broker consume transport가 불명확하면 재consume 없이 result만 한 번 조회한다", async () => {
   const { privateKey } = generateKeyPairSync("ed25519");
-  let calls = 0;
+  const paths: string[] = [];
   const adapter = new SeoriAuthBrokerProviderAdapter({
     workerId: "provider-worker-1",
     subject: "k8s:platform:provider-execution-worker",
     clientSpiffeId: "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker",
     attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
-    transport: async () => {
-      calls += 1;
-      if (calls <= 2) return { status: 200, body: activeGrantResponse() };
-      if (calls === 3) return { status: 201, body: { credentialCheckout: { id: "checkout-1", generation: 1 } } };
-      throw new Error("response lost");
+    transport: async ({ path }) => {
+      paths.push(path);
+      if (paths.length <= 2) return { status: 200, body: activeGrantResponse() };
+      if (path.endsWith("/consume")) throw new Error("response lost");
+      return { status: 200, body: executionResponse("RESULT_UNKNOWN") };
     },
   });
   assert.deepEqual(await adapter.execute(envelope()), {
     outcome: "RESULT_UNKNOWN",
     errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN",
   });
-  assert.equal(calls, 4);
+  assert.deepEqual(paths, [
+    "/internal/control-plane/provider-grants",
+    `/internal/control-plane/provider-grants/${activeGrantResponse().policyGrant.id}/verify`,
+    `/internal/control-plane/provider-grants/${activeGrantResponse().policyGrant.id}/consume`,
+    `/internal/control-plane/provider-grants/${activeGrantResponse().policyGrant.id}/result`,
+  ]);
+  assert.equal(paths.some((path) => path.startsWith("/auth/")), false);
+});
+
+test("internal consume은 exact generation과 idempotency key를 보내고 strict 결과만 매핑한다", async () => {
+  for (const [brokerOutcome, brokerError, expected] of [
+    ["SUCCESS", undefined, { outcome: "COMMAND_ACCEPTED" }],
+    ["ADAPTER_FAILED", "SECRET_LOAD_FAILED", { outcome: "FAILED", errorCode: "SECRET_LOAD_FAILED" }],
+    ["HUMAN_REAUTH_REQUIRED", "HUMAN_REAUTH_REQUIRED", { outcome: "HUMAN_REQUIRED", errorCode: "HUMAN_REAUTH_REQUIRED" }],
+    ["RESULT_UNKNOWN", undefined, { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" }],
+  ] as const) {
+    const { privateKey } = generateKeyPairSync("ed25519");
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const adapter = new SeoriAuthBrokerProviderAdapter({
+      workerId: "provider-worker-1",
+      subject: "k8s:platform:provider-execution-worker",
+      clientSpiffeId: "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker",
+      attestationPrivateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+      transport: async ({ path, body }) => {
+        requests.push({ path, body });
+        if (requests.length <= 2) return { status: 200, body: activeGrantResponse() };
+        return { status: 200, body: executionResponse(brokerOutcome, brokerError) };
+      },
+    });
+    assert.deepEqual(await adapter.execute(envelope()), expected);
+    assert.match(requests[2].path, /\/consume$/);
+    assert.deepEqual(requests[2].body, {
+      workerId: "provider-worker-1",
+      expectedDigest: activeGrantResponse().policyGrant.digest,
+      expectedBindingHash: bindingHash,
+      expectedCommandDigest: activeGrantResponse().policyGrant.commandDigest,
+      expectedPolicyGeneration: 7,
+      expectedExecutionGeneration: 1,
+      idempotencyKey: "provider-grant-consume:provider-execution-1:1",
+    });
+  }
 });
 
 test("grant 검증 뒤 binding이 일치하는 strict provider observation만 소비한다", async () => {
@@ -364,8 +419,7 @@ test("grant 검증 뒤 binding이 일치하는 strict provider observation만 �
     transport: async () => {
       calls += 1;
       if (calls <= 2) return { status: 200, body: activeGrantResponse() };
-      if (calls === 3) return { status: 201, body: { credentialCheckout: { id: "checkout-1", generation: 1 } } };
-      if (calls === 4) return { status: 200, body: { execution: { outcome: "SUCCESS" } } };
+      if (calls === 3) return { status: 200, body: executionResponse("SUCCESS") };
       return {
         status: 200,
         body: {
@@ -392,7 +446,7 @@ test("grant 검증 뒤 binding이 일치하는 strict provider observation만 �
   assert.deepEqual(await adapter.execute(envelope()), { outcome: "COMMAND_ACCEPTED" });
   const observation = await adapter.readObservation(envelope());
   assert.equal(observation?.kind, "MARKET");
-  assert.equal(calls, 5);
+  assert.equal(calls, 4);
 });
 
 test("settlement 계약은 observation과 공개 error code 조합을 fail-closed한다", () => {
