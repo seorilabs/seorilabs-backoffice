@@ -228,8 +228,9 @@ provider account/app/source/config/artifact 문자열을 스스로 지어 외부
 - signer 응답에는 lease token, attestation, 영수증 capability를 싣지 않는다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
-profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
-허용한다. resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
+profile은 `react-native | godot`이고 workingDirectory는 repository 상대 경로만 허용한다. React Native는
+packageManager를 `npm | pnpm`으로 확정해야 하며, 자체 package manager 계약이 없는 Godot은 반드시 `null`이다.
+resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
 `NO_WORKFLOW_CALLER_FOR_SHA`로 중단하고 추측하지 않는다.
 
 ## Platform Fleet
@@ -412,7 +413,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v3`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v4`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
