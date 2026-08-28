@@ -28,6 +28,11 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
     schemaContractSha256: string;
   };
   currentSchemaContract: string;
+  activeRecovery?: Record<string, {
+    sha256: string;
+    maxRolledBackAttempts: number;
+    reason: string;
+  }>;
   legacy: {
     ledger: string;
     successfulMigrations: number;
@@ -52,6 +57,7 @@ const expectedLineage = option("expected-lineage") as
   | undefined;
 const printContract = process.argv.includes("--print-contract");
 const printDataFingerprint = process.argv.includes("--print-data-fingerprint");
+const recoveryStateMigration = option("recovery-state");
 const allowedEmptyNewTables = new Set(
   (option("allow-empty-new-tables") ?? "")
     .split(",")
@@ -115,6 +121,54 @@ function activeMigrations(): Map<string, string> {
     result.set(name, sha256(join(directory, "migration.sql")));
   }
   return result;
+}
+
+function activeRecoveryAllowance(
+  active: ReadonlyMap<string, string>,
+  name: string,
+): number {
+  const policy = manifest.activeRecovery?.[name];
+  if (!policy) return 0;
+  if (
+    active.get(name) !== policy.sha256 ||
+    !Number.isSafeInteger(policy.maxRolledBackAttempts) ||
+    policy.maxRolledBackAttempts < 1 ||
+    !policy.reason.trim()
+  ) {
+    throw new Error(`active recovery policy가 migration bytes와 맞지 않다: ${name}`);
+  }
+  return policy.maxRolledBackAttempts;
+}
+
+function verifyActiveRows(
+  active: ReadonlyMap<string, string>,
+  rows: readonly LedgerRow[],
+): Map<string, number> {
+  const succeededCounts = new Map<string, number>();
+  const rolledBackCounts = new Map<string, number>();
+  for (const row of rows) {
+    const checksum = active.get(row.name);
+    if (!checksum || row.checksum !== checksum) {
+      throw new Error(`active migration checksum이 올바르지 않다: ${row.name}`);
+    }
+    if (row.status === "SUCCEEDED") {
+      succeededCounts.set(row.name, (succeededCounts.get(row.name) ?? 0) + 1);
+      continue;
+    }
+    if (row.steps !== 0) {
+      throw new Error(`active rollback attempt가 부분 적용 step을 주장한다: ${row.name}`);
+    }
+    rolledBackCounts.set(row.name, (rolledBackCounts.get(row.name) ?? 0) + 1);
+  }
+  for (const [name, count] of rolledBackCounts) {
+    if (count > activeRecoveryAllowance(active, name)) {
+      throw new Error(`허용되지 않은 active rollback attempt가 있다: ${name}`);
+    }
+  }
+  for (const name of Object.keys(manifest.activeRecovery ?? {})) {
+    activeRecoveryAllowance(active, name);
+  }
+  return succeededCounts;
 }
 
 type LedgerRow = {
@@ -222,21 +276,11 @@ function verifyHistory(actual: LedgerRow[]): void {
       throw new Error("cutover 전 DB에 active baseline row가 이미 있다");
     }
   } else {
-    for (const [name, checksum] of active) {
-      const succeeded = activeRows.filter(
-        (row) =>
-          row.name === name && row.status === "SUCCEEDED" && row.checksum === checksum,
-      );
-      if (succeeded.length !== 1) {
+    const succeededCounts = verifyActiveRows(active, activeRows);
+    for (const name of active.keys()) {
+      if (succeededCounts.get(name) !== 1) {
         throw new Error(`active migration 성공 row가 유일하지 않다: ${name}`);
       }
-    }
-    if (
-      activeRows.some(
-        (row) => row.status !== "SUCCEEDED" || row.checksum !== active.get(row.name),
-      )
-    ) {
-      throw new Error("active migration에 rollback 또는 checksum drift가 있다");
     }
   }
 
@@ -248,6 +292,41 @@ function verifyHistory(actual: LedgerRow[]): void {
   if (unknown.length > 0) {
     throw new Error(`inventory에 없는 migration row가 있다: ${unknown[0].name}`);
   }
+}
+
+async function inspectRecoveryState(
+  prisma: PrismaClient,
+  migrationName: string,
+): Promise<"SUCCEEDED" | "UNRESOLVED_EXACT"> {
+  const active = activeMigrations();
+  activeRecoveryAllowance(active, migrationName);
+  const checksum = active.get(migrationName);
+  if (!checksum || !manifest.activeRecovery?.[migrationName]) {
+    throw new Error(`active recovery inventory에 없는 migration이다: ${migrationName}`);
+  }
+  const rows = await prisma.$queryRawUnsafe<Array<{
+    checksum: string;
+    finished: number | bigint;
+    rolledBack: number | bigint;
+  }>>(`
+    SELECT
+      checksum,
+      (finished_at IS NOT NULL) AS finished,
+      (rolled_back_at IS NOT NULL) AS rolledBack
+    FROM _prisma_migrations
+    WHERE migration_name = ?
+    ORDER BY started_at, id
+  `, migrationName);
+  if (rows.some((row) => row.checksum !== checksum)) {
+    throw new Error(`recovery migration checksum이 active bytes와 다르다: ${migrationName}`);
+  }
+  const succeeded = rows.filter((row) => Number(row.finished) === 1 && Number(row.rolledBack) === 0).length;
+  const rolledBack = rows.filter((row) => Number(row.rolledBack) === 1).length;
+  const unresolved = rows.filter((row) => Number(row.finished) === 0 && Number(row.rolledBack) === 0).length;
+  const allowance = activeRecoveryAllowance(active, migrationName);
+  if (succeeded === 1 && unresolved === 0 && rolledBack <= allowance) return "SUCCEEDED";
+  if (succeeded === 0 && unresolved === 1 && rolledBack === 0 && rows.length === 1) return "UNRESOLVED_EXACT";
+  throw new Error(`recovery migration 원장이 허용된 단일 상태가 아니다: ${migrationName}`);
 }
 
 async function classifyPredeploy(prisma: PrismaClient): Promise<"fresh" | "cutover"> {
@@ -288,16 +367,7 @@ async function classifyPredeploy(prisma: PrismaClient): Promise<"fresh" | "cutov
   }
 
   const activeRows = actual.filter((row) => active.has(row.name));
-  const activeCounts = new Map<string, number>();
-  for (const row of activeRows) {
-    if (
-      row.status !== "SUCCEEDED" ||
-      row.checksum !== active.get(row.name)
-    ) {
-      throw new Error(`active migration checksum 또는 상태가 올바르지 않다: ${row.name}`);
-    }
-    activeCounts.set(row.name, (activeCounts.get(row.name) ?? 0) + 1);
-  }
+  const activeCounts = verifyActiveRows(active, activeRows);
   const duplicate = [...activeCounts].find(([, count]) => count !== 1);
   if (duplicate) {
     throw new Error(`active migration 성공 row가 유일하지 않다: ${duplicate[0]}`);
@@ -452,6 +522,10 @@ async function dataFingerprint(
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   try {
+    if (recoveryStateMigration) {
+      console.log(await inspectRecoveryState(prisma, recoveryStateMigration));
+      return;
+    }
     if (historyMode === "predeploy") {
       const lineage = await classifyPredeploy(prisma);
       if (expectedLineage && lineage !== expectedLineage) {

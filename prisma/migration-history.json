@@ -8,6 +8,13 @@
     "schemaContractSha256": "453df49cbddfbcaf7ee5cc2c5dc741f86cf8e83880238e5749ec6ff23688498a"
   },
   "currentSchemaContract": "prisma/schema-contract-current.json",
+  "activeRecovery": {
+    "20260828230000_provider_execution_queue": {
+      "sha256": "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb",
+      "maxRolledBackAttempts": 1,
+      "reason": "production MySQL 9.2 audit trigger privilege recovery"
+    }
+  },
   "legacy": {
     "directory": "prisma/migration-archive/legacy-v1",
     "ledger": "prisma/migration-archive/production-ledger-v1.tsv",

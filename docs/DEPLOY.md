@@ -85,6 +85,35 @@ DROP/RENAME/MODIFY/데이터 삭제와 기존 writer를 깨는 NOT NULL column �
 pre-deploy migration으로 허용하지 않고 expand → backfill → contract 단계와 별도 승인을 쓴다.
 Job 실패 로그는 credential 노출 방지를 위해 CI에 출력하지 않는다.
 
+### Provider audit trigger 부분 적용 복구
+
+`20260828230000_provider_execution_queue`가 MySQL error 1419에서 멈췄고 두 provider
+execution 표와 다섯 credential metadata column은 생성됐지만 audit trigger만 없다면,
+일반 배포를 반복하지 않는다. 먼저 DB backup Job의 성공을 확인한다. 그 다음 trusted
+operator가 같은 source SHA로 `provider-audit-trigger-recovery-job.yaml`을 render해 `data`
+namespace에서 실행하고, exact trigger 두 개가 검증된 성공 Job만 증거로 사용한다. 이 Job은
+`SUPER`, `GRANT TRIGGER`, `log_bin_trust_function_creators` 변경 없이 root secret을 전용
+volume에서 읽어 두 DDL만 수행한다.
+
+그 성공 뒤 같은 immutable Backoffice image로 `provider-migration-resolve-job.yaml`을
+`platform` namespace에서 실행한다. Job은 새 recovery-state verifier로 이미 성공한 원장을
+먼저 확인해 결과 유실 재실행이면 resolve 없이 deploy/status만 검증한다. 최초 복구는 preflight가
+정확히 `미해결 migration attempt가 있다: 20260828230000_provider_execution_queue`로 실패한
+단일 상태에서만 현재 schema diff를 확인하고 migration 하나를 `--applied`로 종결한다.
+두 Job 중 하나라도 실패하거나 audit event가 이미 있는데 trigger가 없으면 배포를
+중단하고 수동으로 migration history를 삭제하거나 table을 drop하지 않는다.
+
+### Provider execution signer 활성화
+
+`k8s/provider-execution-worker.yaml`은 signer와 worker를 모두 기본 `replicas: 0`으로 둔다.
+signer에만 DB URL, queue HMAC key, broker mTLS client key, Ed25519 attestation private key를
+mount한다. worker에는 signer mTLS client identity만 주며 DB/broker/attestation volume과
+MySQL/Auth Broker network egress가 없다. `provider-execution-signer-{server,client}`와
+`provider-execution-signer-broker-client` 인증서는 각각 exact SPIFFE/DNS SAN을 검증한 실행
+복제본이어야 하고, broker client는 signer ServiceAccount identity만 사용한다. 이 logical credential의 생성·동기화,
+실제 P2 public key readback과 두 Deployment 활성화는 credential backup/restore와 fake-provider
+canary를 통과한 별도 운영 gate다. key 값은 manifest, argv, 환경변수, 로그에 넣지 않는다.
+
 ## 5. 시드 + 검증
 ```bash
 # 레지스트리 시드 헤드리스 실행. token을 셸로 꺼내지 않는다.

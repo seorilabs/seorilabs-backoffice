@@ -29,9 +29,12 @@ spec:
       app.kubernetes.io/name: backoffice
   template:
     metadata:
+      annotations:
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
       labels:
         app.kubernetes.io/name: backoffice
         app.kubernetes.io/component: web
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
     spec:
       # data ns 인덱싱 Job 생성용(Discord /index). RBAC: k8s/vault-trigger-rbac.yaml
       serviceAccountName: backoffice

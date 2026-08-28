@@ -30,6 +30,17 @@ const migrationDirectories = (root) =>
   readdirSync(root)
     .filter((name) => statSync(join(root, name)).isDirectory())
     .sort();
+const canonicalJson = (value) => {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+};
 
 const appendOnlyTriggerPattern = /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
 const appendOnlyTriggerContract = new Map([
@@ -76,7 +87,6 @@ if (frozenBase) {
     );
     if (previousManifest.status === 0) {
       const frozenPaths = [
-        "prisma/migration-history.json",
         "prisma/migration-archive/legacy-v1",
         "prisma/migration-archive/production-ledger-v1.tsv",
         "prisma/migrations/00000000000000_squashed_migrations",
@@ -91,6 +101,54 @@ if (frozenBase) {
         fail("frozen migration 파일의 base diff를 계산할 수 없다");
       } else if (changed.stdout.trim()) {
         fail(`이미 배포된 frozen migration 파일이 변경됐다: ${changed.stdout.trim()}`);
+      }
+
+      const previousManifestContents = spawnSync(
+        "git",
+        ["show", `${frozenBase}:prisma/migration-history.json`],
+        { cwd: repositoryRoot, encoding: "utf8" },
+      );
+      let addedRecoveryNames = [];
+      if (previousManifestContents.status !== 0) {
+        fail("배포 기준의 migration history manifest를 읽을 수 없다");
+      } else {
+        try {
+          const previous = JSON.parse(previousManifestContents.stdout);
+          const {
+            activeRecovery: previousRecovery = {},
+            ...previousImmutable
+          } = previous;
+          const {
+            activeRecovery: currentRecovery = {},
+            ...currentImmutable
+          } = manifest;
+          if (canonicalJson(previousImmutable) !== canonicalJson(currentImmutable)) {
+            fail("migration history manifest의 frozen 정책이 변경됐다");
+          }
+          if (
+            !previousRecovery
+            || typeof previousRecovery !== "object"
+            || Array.isArray(previousRecovery)
+            || !currentRecovery
+            || typeof currentRecovery !== "object"
+            || Array.isArray(currentRecovery)
+          ) {
+            fail("activeRecovery frozen 비교 정책이 object가 아니다");
+          } else {
+            for (const [name, policy] of Object.entries(previousRecovery)) {
+              if (
+                !Object.hasOwn(currentRecovery, name)
+                || canonicalJson(currentRecovery[name]) !== canonicalJson(policy)
+              ) {
+                fail(`이미 등록된 activeRecovery 정책이 변경됐다: ${name}`);
+              }
+            }
+            addedRecoveryNames = Object.keys(currentRecovery)
+              .filter((name) => !Object.hasOwn(previousRecovery, name));
+          }
+        } catch {
+          fail("migration history manifest frozen 비교에 실패했다");
+        }
       }
 
       const activeChanges = spawnSync(
@@ -123,6 +181,11 @@ if (frozenBase) {
             .split("\n")
             .filter((name) => /^\d+_[a-z0-9_]+$/.test(name))
             .sort();
+          for (const name of addedRecoveryNames) {
+            if (!previousNames.includes(name)) {
+              fail(`activeRecovery는 배포 기준에 존재하는 migration에만 추가할 수 있다: ${name}`);
+            }
+          }
           const lastPrevious = previousNames.at(-1);
           const addedNames = activeChanges.stdout
             .trim()
@@ -245,6 +308,38 @@ if (!activeNames.includes(baselineName)) {
   const baselinePath = join(activeRoot, baselineName, "migration.sql");
   if (sha256(baselinePath) !== manifest.baseline.sha256) {
     fail(`baseline migration checksum이 변경됐다: ${baselineName}`);
+  }
+}
+
+if (
+  !manifest.activeRecovery
+  || typeof manifest.activeRecovery !== "object"
+  || Array.isArray(manifest.activeRecovery)
+) {
+  fail("activeRecovery 정책이 object가 아니다");
+} else {
+  for (const [name, policy] of Object.entries(manifest.activeRecovery)) {
+    const keys = policy && typeof policy === "object" && !Array.isArray(policy)
+      ? Object.keys(policy).sort()
+      : [];
+    if (keys.join(",") !== "maxRolledBackAttempts,reason,sha256") {
+      fail(`activeRecovery 필드가 올바르지 않다: ${name}`);
+      continue;
+    }
+    if (!activeNames.includes(name) || name === baselineName) {
+      fail(`activeRecovery key가 실제 active migration이 아니다: ${name}`);
+      continue;
+    }
+    const sqlPath = join(activeRoot, name, "migration.sql");
+    if (!/^[a-f0-9]{64}$/.test(policy.sha256 ?? "") || sha256(sqlPath) !== policy.sha256) {
+      fail(`activeRecovery checksum이 migration bytes와 다르다: ${name}`);
+    }
+    if (!Number.isSafeInteger(policy.maxRolledBackAttempts) || policy.maxRolledBackAttempts < 1) {
+      fail(`activeRecovery maxRolledBackAttempts가 양의 정수가 아니다: ${name}`);
+    }
+    if (typeof policy.reason !== "string" || !policy.reason.trim()) {
+      fail(`activeRecovery reason이 비어 있다: ${name}`);
+    }
   }
 }
 

@@ -60,6 +60,19 @@ export function providerExecutionCredentialForClaim(
   return resumeMode === "READBACK_FIRST" ? readback : primary;
 }
 
+export function providerExecutionResumeMode(status: string): "START" | "READBACK_FIRST" {
+  return status === "READBACK_REQUIRED" ? "READBACK_FIRST" : "START";
+}
+
+export function providerApprovalRequiredSettlementStatus(input: {
+  readbackFirst: boolean;
+  readbackAttempts: number;
+  maxAttempts: number;
+}): "WAITING_HUMAN_APPROVAL" | "READBACK_REQUIRED" | "DEAD_LETTER" {
+  if (!input.readbackFirst) return "WAITING_HUMAN_APPROVAL";
+  return input.readbackAttempts >= input.maxAttempts ? "DEAD_LETTER" : "READBACK_REQUIRED";
+}
+
 export function assertDistinctProviderExecutionCredentials(
   primary: CredentialExecutionMetadata,
   readback: CredentialExecutionMetadata,
@@ -247,7 +260,7 @@ export function providerExecutionBindingHash(input: {
 }
 
 export function providerExecutionLeaseToken(input: {
-  signingKey: string;
+  signingKey: string | Buffer;
   executionId: string;
   generation: number;
   workerId: string;
