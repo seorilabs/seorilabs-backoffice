@@ -43,8 +43,11 @@ spec:
                   CHECKSUM_PART="${CHECKSUM}.partial"
                   trap 'rm -f "${PART}" "${CHECKSUM_PART}"' EXIT
                   echo "dumping to an atomic temporary file"
+                  # app/backup principal에는 TRIGGER 권한을 주지 않는다. MySQL logical dump가
+                  # trigger를 조용히 누락하는 상태를 암묵적으로 두지 않고 제외를 명시한다.
+                  # restore rehearsal은 exact source 계약을 ephemeral MySQL에만 재구성한다.
                   MYSQL_PWD="$(< /run/secrets/db-password)" \
-                    mysqldump --single-transaction --no-tablespaces \
+                    mysqldump --single-transaction --no-tablespaces --skip-triggers \
                       -h mysql.data.svc.cluster.local -u backoffice backoffice \
                     | gzip > "${PART}"
                   gzip -t "${PART}"

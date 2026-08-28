@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { PrismaClient } from "@prisma/client";
 
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
-import { verifyRestoredControlPlane } from "@/lib/control-plane/restore-rehearsal";
+import {
+  ensureRestoredAppendOnlyTriggers,
+  verifyRestoredControlPlane,
+} from "@/lib/control-plane/restore-rehearsal";
+import { REQUIRED_APPEND_ONLY_TRIGGERS } from "@/lib/control-plane/append-only-triggers";
 import { activateConfigRevision } from "@/lib/control-plane/service";
 
 const APP_ID = "restore-rehearsal-integration-app";
@@ -22,6 +26,12 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
 async function main(): Promise<void> {
   const client = new PrismaClient();
   const keepFixture = process.env.RESTORE_REHEARSAL_KEEP_FIXTURE === "LOCAL_CONTRACT_ONLY";
+  const triggerEvidence = await ensureRestoredAppendOnlyTriggers({
+    client,
+    databaseUrl: databaseUrl.toString(),
+  });
+  assert.equal(triggerEvidence.mode, "PRESERVED_FROM_DUMP");
+  assert.equal(triggerEvidence.verified, REQUIRED_APPEND_ONLY_TRIGGERS.length);
   await client.app.deleteMany({ where: { id: APP_ID } });
   try {
     const payload = { schemaVersion: 1, markets: [] };
