@@ -79,6 +79,36 @@ if (frozenBase) {
         if (nonAdditive.length > 0) {
           fail(`이미 배포된 active migration이 변경됐다: ${nonAdditive.join(", ")}`);
         }
+
+        const baseMigrations = spawnSync(
+          "git",
+          ["ls-tree", "--name-only", `${frozenBase}:prisma/migrations`],
+          { cwd: repositoryRoot, encoding: "utf8" },
+        );
+        if (baseMigrations.status !== 0) {
+          fail("배포 기준의 active migration 순서를 읽을 수 없다");
+        } else {
+          const previousNames = baseMigrations.stdout
+            .trim()
+            .split("\n")
+            .filter((name) => /^\d+_[a-z0-9_]+$/.test(name))
+            .sort();
+          const lastPrevious = previousNames.at(-1);
+          const addedNames = activeChanges.stdout
+            .trim()
+            .split("\n")
+            .filter((line) => line.startsWith("A\t"))
+            .map((line) => line.split("\t")[1] ?? "")
+            .map((path) => path.match(/^prisma\/migrations\/([^/]+)\/migration\.sql$/)?.[1])
+            .filter((name) => name !== undefined);
+          if (lastPrevious) {
+            for (const name of addedNames) {
+              if (name <= lastPrevious) {
+                fail(`새 migration은 배포 기준 마지막 migration 뒤에만 추가할 수 있다: ${name} <= ${lastPrevious}`);
+              }
+            }
+          }
+        }
       }
     }
   }
