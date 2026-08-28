@@ -167,7 +167,23 @@ revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMAT
 
 중앙 lifecycle은 기존 화면 호환용 6단계 enum과 별도인 `FleetLifecycleState`에
 `IDEA → PLANNING → SPEC_REVIEW → APPROVED → BUILD → QA → RELEASE_ASSETS → RELEASE_CANDIDATE → SUBMITTED → REVIEW → APPROVED_FOR_RELEASE → DEPLOYED → PUBLIC_VERIFIED → MONITORED`
-순서로 저장한다. 새 release-candidate 증거가 이미 더 뒤 단계인 앱을 되돌리지 않는다.
+순서로 저장한다. 전이 정책은 `src/lib/control-plane/lifecycle-policy.ts` 한 곳에만 있다.
+
+- rank가 줄어드는 전이는 어떤 경로에서도 허용하지 않는다. 새 증거가 이미 더 뒤 단계인 앱을 되돌리지 않는다.
+- `IDEA`~`RELEASE_ASSETS`는 자동 관측 증거가 없다. 신뢰된 로컬 사람 UI의 server action만 한 번에 한 단계씩
+  전진시키며, `expectedGeneration` 낙관적 동시성, 앱 범위 RBAC, request 단위 idempotency,
+  `FleetLifecycleEvent` append-only 원장과 `AuditLog`를 모두 유지한다. bearer API 경로는 열지 않는다.
+- `RELEASE_CANDIDATE`는 기존과 같이 필수 6개 gate가 모두 `PASSED`일 때 자동 승격된다.
+- 이후 외부 단계는 대응 gate가 전부 `PASSED`이고 candidate 결합(source SHA·config revision·artifact checksum)과
+  provider identity 증거가 함께 있을 때만 전진한다.
+  `SUBMITTED`는 `UPLOAD`, `REVIEW`는 `PROCESSING`·`DEVICE_QA`·`REVIEW`, `APPROVED_FOR_RELEASE`는 `APPROVAL`,
+  `DEPLOYED`는 `DEPLOYMENT`, `PUBLIC_VERIFIED`는 `PUBLIC`을 요구하고, 앞 단계 요구는 누적되므로 관측이 빠진
+  단계를 건너뛸 수 없다. `MONITORED`는 같은 공개 identity의 `PUBLIC` `PASSED` 관측이 서로 다른 시점에 두 번
+  이상 남아 공개 상태가 계속 관측될 때만 도달한다.
+- `UPLOAD`~`DEPLOYMENT`의 `PASSED` 관측은 `providerReference`, `PUBLIC`의 `PASSED` 관측은 `publicIdentity`가
+  없으면 `GATE_IDENTITY_REQUIRED`로 기록 자체를 거부한다.
+- 라벨, 마일스톤, Project field는 어떤 전이에도 입력으로 쓰지 않는다. 심사 제출·공개 배포·법적·결제 행위는
+  이 계약에 action 자체가 없다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
 profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
@@ -244,8 +260,11 @@ issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume 
 실행 신호로 사용하지 않는다. Project write 직전 current app binding을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시 읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
 Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
 
-실제 scheduler CronJob, Codex/Claude 예약 작업, `Seorilabs Fleet` Project 생성은 배포와 사용자 승인 이후의
-별도 gate다. 저장소의 설치 manifest는 `suspend: true`이며 운영 workload에 포함되지 않는다.
+`FleetProjectProjection` drain은 정기 scheduler CronJob `backoffice-fleet-project-projection`과 배포
+catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩 호출해 소진한다. 두 경로가 겹쳐도
+claim CAS가 한 projection을 한 번만 적용하며, `App.projectV2Id`가 아직 없으면 추측하지 않고 `NEEDS_INPUT`으로
+닫는다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
+`Seorilabs Fleet` Project 생성과 `App.projectV2Id` 설정은 사용자 승인이 필요한 별도 gate다.
 
 ## GitHub repository webhook
 
