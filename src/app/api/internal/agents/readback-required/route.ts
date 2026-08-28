@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { agentFailureSchema } from "@/lib/control-plane/contracts";
+
 import { settleAgentRun } from "@/lib/control-plane/agent-queue";
 import { refreshRunFleetProjection } from "@/lib/control-plane/automation-service";
+import { agentReadbackRequiredSchema } from "@/lib/control-plane/contracts";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import { authenticateInternalRequest, requireIdempotencyKey } from "@/lib/control-plane/security";
 
@@ -14,8 +15,13 @@ export async function POST(request: NextRequest) {
   const idempotencyKey = requireIdempotencyKey(request);
   if (!idempotencyKey) return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
   try {
-    const body = agentFailureSchema.parse(await request.json());
-    const result = await settleAgentRun({ ...body, workerId: principal.id, outcome: "fail", idempotencyKey });
+    const body = agentReadbackRequiredSchema.parse(await request.json());
+    const result = await settleAgentRun({
+      ...body,
+      workerId: principal.id,
+      outcome: "unknown",
+      idempotencyKey,
+    });
     await refreshRunFleetProjection(body.runId);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

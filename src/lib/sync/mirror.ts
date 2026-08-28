@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { upsertFleetProjectProjection } from "@/lib/control-plane/automation-service";
 import type {
   IssueState,
   PrState,
@@ -136,6 +137,7 @@ export async function upsertIssue(
     create: { nodeId: gh.node_id, ...data },
     update: data,
   });
+  await upsertFleetProjectProjection(repoFullName, gh.number);
 }
 
 // ── Pull Request ──────────────────────────────────────────────────────────────

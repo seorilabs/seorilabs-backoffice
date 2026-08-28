@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  AUTOMATION_APPROVAL_POLICIES,
+  AUTOMATION_AGENT_KINDS,
+  AUTOMATION_CADENCES,
+  AUTOMATION_TEMPLATE_KEY,
+} from "@/lib/control-plane/automation-catalog";
 
 const sha40 = z.string().regex(/^[0-9a-f]{40}$/i, "40자리 source SHA가 필요합니다.");
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/i, "64자리 SHA-256이 필요합니다.");
@@ -10,6 +16,7 @@ const numericId = z.string().regex(/^\d{1,30}$/, "숫자 provider ID가 필요�
 const gcpProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "유효한 GCP project ID가 필요합니다.");
 const region = z.string().regex(/^[a-z]+(?:-[a-z0-9]+)+\d$/, "유효한 cloud region이 필요합니다.");
 const logicalCredentialId = z.string().regex(/^(?:shared|app)\/[A-Za-z0-9._/-]{1,180}$/);
+const publicIdentifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/);
 const httpsUrl = z.string().url().max(2_048).refine((value) => {
   const parsed = new URL(value);
   return parsed.protocol === "https:"
@@ -461,7 +468,46 @@ export function reauthPublicReason(gate: ReauthGate): string {
 
 export const agentClaimSchema = z.object({
   workerId: z.string().min(1).max(128),
+  agentKind: z.enum(AUTOMATION_AGENT_KINDS),
   leaseSeconds: z.number().int().min(30).max(300).default(300),
+}).strict();
+
+export const agentResultSchema = z.object({
+  outcomeCode: z.enum([
+    "NO_CHANGES",
+    "PR_READY",
+    "ISSUE_RESOLVED",
+    "READBACK_CONFIRMED",
+    "RESULT_UNKNOWN",
+    "BLOCKED",
+  ]),
+  summary: z.string().min(1).max(2_000).refine((value) => (
+    !/(?:bearer\s+|password\s*[:=]|totp\s*[:=]|cookie\s*[:=]|secret\s*[:=]|api[_-]?key\s*[:=])/i.test(value)
+      && !/[A-Za-z0-9_-]{80,}/.test(value)
+  ), "credential 후보가 없는 공개 summary가 필요합니다."),
+  commitSha: sha40.optional(),
+  pullRequestNumber: z.number().int().positive().optional(),
+  pullRequestUrl: httpsUrl.optional(),
+  model: publicIdentifier.optional(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  costMicros: z.number().int().nonnegative().optional(),
+  reauthRequestId: publicIdentifier.optional(),
+}).strict().superRefine((result, context) => {
+  if (result.outcomeCode === "PR_READY" && (!result.pullRequestNumber || !result.pullRequestUrl)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "PR_READY에는 pullRequestNumber와 pullRequestUrl이 필요합니다.",
+      path: ["outcomeCode"],
+    });
+  }
+  if (result.outcomeCode !== "PR_READY" && (result.pullRequestNumber || result.pullRequestUrl)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "PR 공개 식별자는 PR_READY 결과에만 허용합니다.",
+      path: ["pullRequestNumber"],
+    });
+  }
 });
 
 export const agentLeaseActionSchema = z.object({
@@ -469,9 +515,71 @@ export const agentLeaseActionSchema = z.object({
   generation: z.number().int().positive(),
   leaseToken: z.string().min(32).max(256),
   leaseSeconds: z.number().int().min(30).max(300).default(300),
-  result: jsonRecord.optional(),
-  error: z.string().max(16_000).optional(),
+  result: agentResultSchema.optional(),
+  error: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/, "공개 error code만 허용합니다.").optional(),
+}).strict();
+
+export const agentHeartbeatSchema = agentLeaseActionSchema.omit({ result: true, error: true });
+export const agentCompletionSchema = agentLeaseActionSchema.extend({ result: agentResultSchema });
+export const agentFailureSchema = agentLeaseActionSchema.extend({
+  error: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/, "공개 error code만 허용합니다."),
 });
+export const agentReadbackRequiredSchema = agentLeaseActionSchema.extend({
+  result: agentResultSchema,
+}).superRefine((value, context) => {
+  if (value.result.outcomeCode !== "RESULT_UNKNOWN") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "readback-required에는 RESULT_UNKNOWN outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
+});
+
+export const agentReadbackResolutionSchema = z.object({
+  runId: z.string().min(1).max(191),
+  generation: z.number().int().positive(),
+  leaseToken: z.string().min(32).max(256),
+  resolution: z.enum(["RESUME", "COMPLETE", "BLOCKED"]),
+  result: agentResultSchema,
+}).strict().superRefine((value, context) => {
+  if (value.resolution === "BLOCKED" && value.result.outcomeCode !== "BLOCKED") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "BLOCKED resolution에는 BLOCKED outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
+});
+
+export const automationDefinitionCreateSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  template: z.literal(AUTOMATION_TEMPLATE_KEY),
+  agentKind: z.enum(AUTOMATION_AGENT_KINDS),
+  cadence: z.enum(AUTOMATION_CADENCES),
+  approvalPolicy: z.enum(AUTOMATION_APPROVAL_POLICIES).default("READY_PR"),
+  budgetCeilingMicros: z.number().int().positive().max(1_000_000_000).default(1_000_000),
+  model: publicIdentifier.optional(),
+  maxAttempts: z.number().int().min(1).max(10).default(3),
+}).strict();
+
+export const automationDefinitionCommandSchema = z.discriminatedUnion("command", [
+  z.object({ command: z.literal("PAUSE") }).strict(),
+  z.object({ command: z.literal("RESUME") }).strict(),
+  z.object({ command: z.literal("RUN_NOW") }).strict(),
+  z.object({ command: z.literal("CANCEL_RUN"), runId: z.string().min(1).max(191) }).strict(),
+  z.object({ command: z.literal("RETRY_RUN"), runId: z.string().min(1).max(191) }).strict(),
+]);
+
+export const fleetProjectFieldsSchema = z.object({
+  priority: z.string().min(1).max(64).nullable(),
+  app: z.string().min(1).max(191),
+  kind: z.string().min(1).max(64),
+  lifecycle: z.string().min(1).max(64),
+  agent: z.string().min(1).max(64),
+  approval: z.string().min(1).max(64),
+  outcome: z.string().min(1).max(64),
+}).strict();
 
 export const sourceShaSchema = sha40;
 export const artifactChecksumSchema = sha256;

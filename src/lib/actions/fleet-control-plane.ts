@@ -4,10 +4,16 @@ import { revalidatePath } from "next/cache";
 import { z, ZodError } from "zod";
 
 import {
+  automationDefinitionCommandSchema,
+  automationDefinitionCreateSchema,
   configActivationSchema,
   configRevisionSchema,
   legacyShadowImportRequestSchema,
 } from "@/lib/control-plane/contracts";
+import {
+  createAutomationDefinition,
+  executeAutomationCommand,
+} from "@/lib/control-plane/automation-service";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
 import {
   activateConfigRevision,
@@ -28,6 +34,7 @@ export interface FleetActionResult {
   status?: string;
   importId?: string;
   parityStatus?: string | null;
+  definitionId?: string;
 }
 
 const uiRequestIdSchema = z.string().uuid();
@@ -182,6 +189,85 @@ export async function markTrustedLocalPendingAction(input: {
     });
     revalidatePath(`/apps/${app.id}/fleet`);
     return { ok: true, status: result.request.status };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+export async function createFleetAutomationAction(input: {
+  appId: string;
+  template: string;
+  agentKind: string;
+  cadence: string;
+  approvalPolicy: string;
+  budgetCeilingMicros: number;
+  model?: string;
+  maxAttempts: number;
+  requestId: string;
+}): Promise<FleetActionResult> {
+  try {
+    const { app, actor } = await fleetWriteContext(input.appId);
+    const body = automationDefinitionCreateSchema.parse({
+      repoId: app.repoId,
+      template: input.template,
+      agentKind: input.agentKind,
+      cadence: input.cadence,
+      approvalPolicy: input.approvalPolicy,
+      budgetCeilingMicros: input.budgetCeilingMicros,
+      model: input.model || undefined,
+      maxAttempts: input.maxAttempts,
+    });
+    const requestId = uiRequestIdSchema.parse(input.requestId);
+    const result = await createAutomationDefinition({
+      ...body,
+      actor: actor.login,
+      idempotencyKey: `ui-automation-create:${requestId}`,
+    });
+    if (body.cadence === "MANUAL") {
+      await executeAutomationCommand({
+        definitionId: result.definition.id,
+        command: { command: "RUN_NOW" },
+        actor: actor.login,
+        requestId: `ui-automation-now:${requestId}`,
+      });
+    }
+    revalidatePath(`/apps/${app.id}/fleet`);
+    return {
+      ok: true,
+      definitionId: result.definition.id,
+      status: body.cadence === "MANUAL" ? "RUN_REQUESTED" : "ACTIVE",
+    };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+export async function commandFleetAutomationAction(input: {
+  appId: string;
+  definitionId: string;
+  command: string;
+  runId?: string;
+  requestId: string;
+}): Promise<FleetActionResult> {
+  try {
+    const { app, actor } = await fleetWriteContext(input.appId);
+    const definition = await prisma.automationDefinition.findUnique({
+      where: { id: input.definitionId },
+      select: { appId: true },
+    });
+    if (definition?.appId !== app.id) throw new Error("routine과 앱 권한 결합이 일치하지 않습니다.");
+    const command = automationDefinitionCommandSchema.parse({
+      command: input.command,
+      ...(input.runId ? { runId: input.runId } : {}),
+    });
+    await executeAutomationCommand({
+      definitionId: input.definitionId,
+      command,
+      actor: actor.login,
+      requestId: `ui-automation-command:${uiRequestIdSchema.parse(input.requestId)}`,
+    });
+    revalidatePath(`/apps/${app.id}/fleet`);
+    return { ok: true, status: command.command };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

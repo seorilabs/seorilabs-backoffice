@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { GENERIC_WORKER_PRINCIPALS } from "@/lib/control-plane/automation-catalog";
 import { verifyStaticToken } from "@/lib/security";
 
 export type InternalAudience = "control-plane" | "agent-worker";
@@ -35,4 +36,10 @@ export function authenticateInternalRequest(
 export function requireIdempotencyKey(request: NextRequest): string | null {
   const value = request.headers.get("idempotency-key")?.trim() ?? "";
   return /^[A-Za-z0-9._:/-]{8,191}$/.test(value) ? value : null;
+}
+
+export function agentKindForPrincipal(principalId: string): "CODEX" | "CLAUDE" | null {
+  if (principalId === GENERIC_WORKER_PRINCIPALS.CODEX) return "CODEX";
+  if (principalId === GENERIC_WORKER_PRINCIPALS.CLAUDE) return "CLAUDE";
+  return null;
 }

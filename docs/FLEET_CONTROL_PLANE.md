@@ -33,6 +33,12 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/internal/agents/heartbeat` | 현재 generation lease만 연장 |
 | `POST` | `/api/internal/agents/complete` | 현재 generation을 성공 종료 |
 | `POST` | `/api/internal/agents/fail` | attempt 한도 내 재큐잉, 초과 시 dead-letter |
+| `POST` | `/api/internal/agents/readback-required` | 외부 mutation 결과 불명을 기록하고 같은 run guard를 유지 |
+| `POST` | `/api/internal/agents/readback` | 원래 lease capability로 `RESUME`, `COMPLETE`, `BLOCKED` 판정 |
+| `POST` | `/api/control-plane/automation-definitions` | agent, cadence, 예산 상한, 승인 정책이 고정된 routine 생성 |
+| `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
+| `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
+| `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
 
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
@@ -105,11 +111,28 @@ control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상�
 ## Queue 불변식
 
 - claim은 `AgentRun.status`와 `leaseGeneration`을 같은 transaction에서 CAS한다.
-- `AgentLease.scopeKey=repo-pr:{owner/repo}`의 nullable unique index로 repo별 자율 PR 실행을 하나로 제한한다.
-- claim 직전에 현재 `IssueMirror`의 closed, `blocked`, `approval:*`, `no-autopilot` 상태와 기존 open autopilot PR을 다시 확인한다.
+- `AgentRepoGuard.activeScopeKey=repo-pr:{owner/repo}`의 nullable unique index로 lease TTL과 무관하게 repo별 자율 PR 실행을 하나로 제한한다.
+- `PR_READY` 완료 뒤에도 guard를 유지한다. 정확한 PR이 `CLOSED` 또는 `MERGED`로 mirror/readback된 뒤에만 해제한다.
+- claim 직전에 현재 `IssueMirror`의 closed, `blocked`, `approval:*`, `no-autopilot`, `autopilot` 상태와 기존 open autopilot PR을 다시 확인한다.
 - token 원문은 저장하지 않는다. DB에는 SHA-256만 저장하고 같은 idempotency 요청의 token은 server-only HMAC으로 재생성한다.
 - heartbeat와 settle은 worker ID, token hash, generation, TTL을 모두 대조한다. 이전 generation의 completion은 거부한다.
-- 만료 lease는 scope를 해제하고 retry 또는 dead-letter로 수렴하며 모든 전이는 `AgentRunEvent`에 append한다.
+- 만료 lease는 같은 run을 retry 또는 dead-letter로 수렴시키며 모든 전이는 `AgentRunEvent`에 append한다. 결과 불명은 새 Issue/PR을 만들지 않고 readback 뒤 같은 run을 재개한다.
+- routine의 `approvalPolicy`와 `budgetCeilingMicros`는 claim에 포함된다. `READ_ONLY`의 PR 결과와 예산 초과 완료는 fail-closed한다.
+
+## Scheduler와 Project projection
+
+GitHub delivery와 `AutomationIngressEvent`는 같은 transaction에 기록한다. scheduler는 실패·중단된 inbox와
+마지막 occurrence 이후의 UTC schedule slot을 재소진하며 delivery source key, definition/slot unique key,
+issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume anchor로 건너뛰므로 재개가 과거 slot을
+한꺼번에 실행하지 않는다.
+
+`Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`은
+`FleetProjectProjection.desired`에만 투영된다. claim은 GitHub Issue mirror와 queue 상태만 읽으며 Project field를
+실행 신호로 사용하지 않는다. Project write 뒤 실제 field를 다시 읽어 일치할 때만 `APPLIED`로 기록한다.
+Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
+
+실제 scheduler CronJob, Codex/Claude 예약 작업, `Seorilabs Fleet` Project 생성은 배포와 사용자 승인 이후의
+별도 gate다. 저장소의 설치 manifest는 `suspend: true`이며 운영 workload에 포함되지 않는다.
 
 ## GitHub repository webhook
 

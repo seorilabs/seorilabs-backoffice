@@ -26,6 +26,8 @@ import {
   registerRepositoryWebhook,
   type RepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
+import { recordWebhookDelivery } from "@/lib/control-plane/automation-service";
+import { reconcileTerminalRepoGuards } from "@/lib/control-plane/agent-queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,7 +133,13 @@ async function handleEvent(event: string, p: WebhookPayload, deliveryId: string)
       if (p.issue) await upsertIssue(repo, p.issue);
       break;
     case "pull_request":
-      if (p.pull_request) await upsertPr(repo, p.pull_request);
+      if (p.pull_request) {
+        await upsertPr(repo, p.pull_request);
+        await reconcileTerminalRepoGuards({
+          repoFullName: repo,
+          pullRequestNumber: p.pull_request.number,
+        });
+      }
       break;
     case "workflow_run":
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
@@ -202,12 +210,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "bad json" }, { status: 400 });
   }
 
-  // delivery 단위 멱등 가드: 이미 처리한 delivery 면 즉시 200.
-  try {
-    await prisma.webhookDelivery.create({
-      data: { deliveryId, event, action: payload.action ?? null },
-    });
-  } catch {
+  // delivery와 automation inbox를 같은 transaction에 기록한다. handler가 실패해도
+  // scheduler가 inbox를 재처리하며 동일 delivery 재전송은 한 번만 enqueue된다.
+  const delivery = await recordWebhookDelivery({
+    deliveryId,
+    event,
+    action: payload.action,
+    repoFullName: payload.repository?.full_name,
+    issueNumber: payload.issue?.number,
+    issueNodeId: payload.issue?.node_id,
+    occurredAt: payload.issue?.updated_at ? new Date(payload.issue.updated_at) : undefined,
+  });
+  if (delivery.duplicate) {
     return NextResponse.json({ status: "duplicate" });
   }
 
