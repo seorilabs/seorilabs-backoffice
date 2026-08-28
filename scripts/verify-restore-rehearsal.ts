@@ -49,12 +49,14 @@ function run(
   args: string[],
   env: NodeJS.ProcessEnv,
   failureCode: string,
+  input?: string,
 ): string {
   const result = spawnSync(command, args, {
     cwd: required("REHEARSAL_APP_ROOT"),
     env,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    input,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
   if (result.status !== 0) {
     throw new RehearsalFailure(classifiedRunFailure(
@@ -211,6 +213,15 @@ async function main(): Promise<void> {
         return await ensureRestoredAppendOnlyTriggers({
           client: triggerClient,
           databaseUrl,
+          executeTriggerDdl: async (statement) => {
+            run(
+              prismaCommand,
+              ["db", "execute", "--stdin", "--schema", join(appRoot, "prisma/schema.prisma")],
+              { ...childEnv, PRISMA_HIDE_UPDATE_MESSAGE: "1" },
+              "APPEND_ONLY_TRIGGER_DDL_FAILED",
+              `${statement};\n`,
+            );
+          },
         });
       } finally {
         await triggerClient.$disconnect();

@@ -15,6 +15,8 @@ import {
   executeAutomationCommand,
 } from "@/lib/control-plane/automation-service";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
+import { advanceFleetLifecycleStageFromHumanUi } from "@/lib/control-plane/lifecycle-service";
+import { fleetLifecycleHumanTransitionSchema } from "@/lib/control-plane/lifecycle-policy";
 import { approveProviderExecution } from "@/lib/control-plane/provider-execution-service";
 import {
   activateConfigRevision,
@@ -36,6 +38,8 @@ export interface FleetActionResult {
   importId?: string;
   parityStatus?: string | null;
   definitionId?: string;
+  stage?: string;
+  generation?: number;
 }
 
 const uiRequestIdSchema = z.string().uuid();
@@ -197,6 +201,40 @@ export async function markTrustedLocalPendingAction(input: {
     });
     revalidatePath(`/apps/${app.id}/fleet`);
     return { ok: true, status: result.request.status };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+/**
+ * IDEA~RELEASE_ASSETS 구간의 사람 전이다. 한 단계 전진만 허용하며
+ * 되돌림·건너뜀·라벨 기반 전이는 정책에서 거부한다.
+ */
+export async function advanceFleetLifecycleStageAction(input: {
+  appId: string;
+  toStage: string;
+  expectedGeneration: number;
+  requestId: string;
+}): Promise<FleetActionResult> {
+  try {
+    const { app, actor } = await fleetWriteContext(input.appId);
+    const body = fleetLifecycleHumanTransitionSchema.parse({
+      repoId: app.repoId,
+      toStage: input.toStage,
+      expectedGeneration: input.expectedGeneration,
+    });
+    const result = await advanceFleetLifecycleStageFromHumanUi({
+      ...body,
+      actor: actor.login,
+      idempotencyKey: `ui-lifecycle-advance:${uiRequestIdSchema.parse(input.requestId)}`,
+    });
+    revalidatePath(`/apps/${app.id}/fleet`);
+    return {
+      ok: true,
+      stage: result.state?.stage,
+      generation: result.state?.generation,
+      status: result.duplicate ? "DUPLICATE" : "ADVANCED",
+    };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

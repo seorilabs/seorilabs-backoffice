@@ -243,6 +243,7 @@ if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q '409) echo "$label=busy"' "$catchup_job" &&
    grep -q 'repository-discovery/backfill' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
+   grep -q 'automation/project-projections' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
   ok "scheduler catch-up 격리와 감사 보존"
 else
@@ -302,6 +303,11 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    grep -q 'backoffice_rehearsal' "$restore_job" &&
    grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
    grep -q 'ensureRestoredAppendOnlyTriggers' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -Fq '["db", "execute", "--stdin", "--schema"' "$root/scripts/verify-restore-rehearsal.ts" &&
+   ! grep -q -- '"--url"' "$root/scripts/verify-restore-rehearsal.ts" &&
+   ! grep -q '\$executeRawUnsafe' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
+   grep -q 'DROP TRIGGER IF EXISTS' "$root/scripts/test-restore-rehearsal.ts" &&
+   grep -q 'ulimit -c 0' "$restore_job" &&
    grep -q 'RECONSTRUCTED_FROM_SOURCE_CONTRACT' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
    ! grep -q 'key: DATABASE_URL' "$restore_job" &&
    ! grep -q 'key: DB_PASSWORD' "$restore_job" &&
@@ -329,23 +335,36 @@ else
   ng "Fleet parity Job occurrence 또는 secret 경계가 깨졌다"
 fi
 
-if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 6 ] &&
-   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 6 ] &&
+if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 7 ] &&
+   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 7 ] &&
    ! grep -q 'name: ADMIN_TOKEN' "$scheduler_cronjobs" "$catchup_job" &&
    grep -q '/api/admin/reconcile' "$scheduler_cronjobs" &&
    grep -q '/api/admin/repository-discovery/backfill' "$scheduler_cronjobs" &&
    grep -q '/api/admin/xcode-cloud/sync' "$scheduler_cronjobs" &&
    grep -q '/api/admin/seed' "$scheduler_cronjobs" &&
    grep -q '/api/admin/automation/schedule' "$scheduler_cronjobs" &&
-   grep -q '/api/admin/automation/platform-fleet' "$scheduler_cronjobs"; then
-  ok "scheduler CronJob 6개 직렬화"
+   grep -q '/api/admin/automation/platform-fleet' "$scheduler_cronjobs" &&
+   grep -q '/api/admin/automation/project-projections' "$scheduler_cronjobs"; then
+  ok "scheduler CronJob 7개 직렬화"
 else
   ng "scheduler CronJob 계약이 깨졌다"
+fi
+
+projection_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-fleet-project-projection/ { print }' "$scheduler_cronjobs")"
+if printf '%s' "$projection_doc" | grep -q 'schedule: "\* \* \* \* \*"' &&
+   printf '%s' "$projection_doc" | grep -q 'concurrencyPolicy: Forbid' &&
+   printf '%s' "$projection_doc" | grep -q 'automation/project-projections' &&
+   printf '%s' "$projection_doc" | grep -q 'automountServiceAccountToken: false' &&
+   [ "$(grep -c 'automation/project-projections' "$scheduler_cronjobs")" -eq 1 ] &&
+   [ "$(grep -c 'automation/project-projections' "$catchup_job")" -eq 1 ]; then
+  ok "Fleet Project projection drain은 정기 scheduler와 catch-up에 각각 한 번씩 연결된다"
+else
+  ng "Fleet Project projection drain 연결이 깨졌다"
 fi
 
 platform_rbac="$root/k8s/ci-deployer-rbac.yaml"

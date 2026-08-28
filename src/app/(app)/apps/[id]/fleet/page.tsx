@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
 import { FleetAutomationControls } from "@/components/fleet/FleetAutomationControls";
+import { FleetLifecycleControls } from "@/components/fleet/FleetLifecycleControls";
 import { ProviderExecutionApprovalButton } from "@/components/fleet/ProviderExecutionApprovalButton";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
@@ -255,6 +256,17 @@ export default async function FleetOperationsPage({
       </WorkspaceSection>
 
       <WorkspaceSection
+        title="중앙 lifecycle"
+        description="IDEA~RELEASE_ASSETS는 자동 증거가 없어 신뢰된 로컬 사람 조작으로 한 단계씩만 전진합니다. RELEASE_CANDIDATE 이후는 append-only gate observation과 exact candidate/provider identity 증거로만 전진하며 되돌림·건너뜀·라벨 기반 전이는 없습니다."
+      >
+        <FleetLifecycleControls
+          appId={fleet.id}
+          stage={fleet.fleetLifecycleState?.stage ?? "IDEA"}
+          generation={fleet.fleetLifecycleState?.generation ?? 0}
+        />
+      </WorkspaceSection>
+
+      <WorkspaceSection
         title="Provider 실행 원장"
         description="repo·source·ACTIVE config·desired hash·공개 identity·logical credential generation을 한 번에 고정합니다. apply/upload 응답만으로 완료하지 않고 반드시 provider readback으로 확인합니다."
       >
@@ -316,7 +328,7 @@ export default async function FleetOperationsPage({
         <FleetConfigEditor
           appId={fleet.id}
           activeRevision={activeConfig?.revision ?? 0}
-          initialPayload={jsonText(initialPayload)}
+          initialPayload={initialPayload}
           initialPayloadSource={initialPayloadSource}
           legacyActiveBlocked={Boolean(activeConfig) && !activePayload.success}
           shadowSourceSha={latestDiscovery?.sourceSha ?? null}

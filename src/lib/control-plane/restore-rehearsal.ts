@@ -53,7 +53,6 @@ export function assertIsolatedRehearsalDatabaseUrl(value: string): void {
 
 interface RehearsalTriggerClient {
   $queryRawUnsafe<T>(query: string, ...values: unknown[]): Promise<T>;
-  $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number>;
 }
 
 export type RestoredAppendOnlyTriggerEvidence = {
@@ -99,6 +98,7 @@ export async function ensureRestoredAppendOnlyTriggers(
   input: {
     client: RehearsalTriggerClient;
     databaseUrl: string;
+    executeTriggerDdl: (statement: string) => Promise<void>;
   },
 ): Promise<RestoredAppendOnlyTriggerEvidence> {
   assertIsolatedRehearsalDatabaseUrl(input.databaseUrl);
@@ -126,7 +126,7 @@ export async function ensureRestoredAppendOnlyTriggers(
   }
 
   for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
-    await input.client.$executeRawUnsafe(appendOnlyCreateTriggerStatement(requirement));
+    await input.executeTriggerDdl(appendOnlyCreateTriggerStatement(requirement));
   }
   const after = await observedProtectedTriggers(input.client);
   return {

@@ -167,7 +167,63 @@ revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMAT
 
 중앙 lifecycle은 기존 화면 호환용 6단계 enum과 별도인 `FleetLifecycleState`에
 `IDEA → PLANNING → SPEC_REVIEW → APPROVED → BUILD → QA → RELEASE_ASSETS → RELEASE_CANDIDATE → SUBMITTED → REVIEW → APPROVED_FOR_RELEASE → DEPLOYED → PUBLIC_VERIFIED → MONITORED`
-순서로 저장한다. 새 release-candidate 증거가 이미 더 뒤 단계인 앱을 되돌리지 않는다.
+순서로 저장한다. 전이 정책은 `src/lib/control-plane/lifecycle-policy.ts` 한 곳에만 있다.
+
+- rank가 줄어드는 전이는 어떤 경로에서도 허용하지 않는다. 새 증거가 이미 더 뒤 단계인 앱을 되돌리지 않는다.
+- `IDEA`~`RELEASE_ASSETS`는 자동 관측 증거가 없다. 신뢰된 로컬 사람 UI의 server action만 한 번에 한 단계씩
+  전진시키며, `expectedGeneration` 낙관적 동시성, 앱 범위 RBAC, request 단위 idempotency,
+  `FleetLifecycleEvent` append-only 원장과 `AuditLog`를 모두 유지한다. bearer API 경로는 열지 않는다.
+- `RELEASE_CANDIDATE`는 기존과 같이 필수 6개 gate가 모두 `PASSED`일 때 자동 승격된다.
+- 이후 외부 단계는 대응 gate가 전부 `PASSED`이고 candidate 결합(source SHA·config revision·artifact checksum)과
+  provider identity 증거가 함께 있을 때만 전진한다.
+  `SUBMITTED`는 `UPLOAD`, `REVIEW`는 `PROCESSING`·`DEVICE_QA`·`REVIEW`, `APPROVED_FOR_RELEASE`는 `APPROVAL`,
+  `DEPLOYED`는 `DEPLOYMENT`, `PUBLIC_VERIFIED`는 `PUBLIC`을 요구하고, 앞 단계 요구는 누적되므로 관측이 빠진
+  단계를 건너뛸 수 없다. `MONITORED`는 같은 공개 identity의 `PUBLIC` `PASSED` 관측이 서로 다른 시점에 두 번
+  이상 남아 공개 상태가 계속 관측될 때만 도달한다.
+- `UPLOAD`~`DEPLOYMENT`의 `PASSED` 관측은 `providerReference`, `PUBLIC`의 `PASSED` 관측은 `publicIdentity`가
+  없으면 `GATE_IDENTITY_REQUIRED`로 기록 자체를 거부한다.
+- 라벨, 마일스톤, Project field는 어떤 전이에도 입력으로 쓰지 않는다. 심사 제출·공개 배포·법적·결제 행위는
+  이 계약에 action 자체가 없다.
+
+gate 원장에 쓰는 지점은 `appendReleaseGateObservation` helper 하나뿐이다. 범용 요청 경로와 실제 provider
+settlement가 같은 transaction 안에서 이 helper만 사용하며 candidate status와 중앙 lifecycle이 함께 갱신된다.
+별도 validator나 두 번째 원장을 두지 않는다.
+
+- 범용 `POST /api/control-plane/release-gate-observations`는 release-candidate를 만드는 6개 gate만 기록할 수
+  있다. 외부 단계 gate를 임의 `providerReference`/`publicIdentity` 문자열로 요청하면 원장을 하나도 바꾸지 않고
+  `EXTERNAL_GATE_PROVIDER_ONLY`로 거부한다. 반대로 release-candidate gate를 provider settlement로 쓰는 것도
+  `CANDIDATE_GATE_PROVIDER_FORBIDDEN`으로 막는다.
+- 외부 단계 gate는 exact `ProviderExecution` settlement transaction에서만 생성된다. helper는 그 execution이
+  `MARKET_RELEASE`이고 같은 release candidate·app·source SHA·config revision·artifact checksum·공개
+  account/app identity·`bindingHash`에 결합됐는지, 그리고 같은 settlement에서 만들어진 `ProviderObservation`이
+  같은 app·provider·resource에 결합됐는지 다시 읽어 확인한다. 하나라도 다르면
+  `PROVIDER_EXECUTION_BINDING_MISMATCH` 또는 `PROVIDER_OBSERVATION_BINDING_MISMATCH`로 settlement 전체가
+  롤백된다.
+- 저장되는 evidence의 `providerExecutionId`, `providerObservationId`, `providerPolicyGrantId`는 서버가
+  파생해 덧붙인다. HTTP 요청 계약에는 이 필드가 없어 호출자가 주입할 수 없다.
+
+### 관측 신뢰 경계
+
+관측 payload는 worker가 만들지 않는다. valid mTLS identity와 살아 있는 claim을 가진 worker라도
+provider account/app/source/config/artifact 문자열을 스스로 지어 외부 gate를 전진시킬 수 없어야 한다.
+
+- signer `/v1/settlements` 요청 계약(`providerSignerSettlementRequestSchema`)에는 `observation`,
+  `observationReceipt`, `leaseToken` 자리가 없다. 이 key가 하나라도 있으면 DB에 접근하기 전에
+  `worker_supplied_observation_rejected`로 끝난다. worker의 `OBSERVED`는 "readback 명령이 성공했으니
+  signer가 관측을 직접 읽어라"는 신호일 뿐이다.
+- signer는 durable `RUNNING` claim에서 envelope을 다시 구성해 Auth Broker `OBSERVATION` stage를 직접 읽고,
+  응답의 policy grant reference(`id`/`digest`/`bindingHash`/`commandDigest`/`policyGeneration`)가 이 execution의
+  exact grant와 전부 같을 때만 관측으로 승격한다(`parseTrustedBrokerObservation`).
+- worker는 `/v1/broker-requests`로 `OBSERVATION` stage를 호출할 수 없다. 호출할 수 있으면 ordinal 예산을
+  소진시켜 signer의 신뢰 관측을 막을 수 있다.
+- `settleProviderExecution`은 관측을 동반한 settlement에 broker 영수증을 요구하고, `bindingHash`,
+  lease generation, `policyGeneration`, grant id, 재계산한 command digest가 하나라도 다르면
+  `PROVIDER_OBSERVATION_RECEIPT_MISMATCH`로 settlement 전체를 롤백한다. 영수증은 settlement hash에
+  포함되므로 같은 idempotency key로 다른 영수증을 밀어 넣을 수 없다.
+- broker가 아직 관측을 내주지 않으면(204) signer는 `RESULT_UNKNOWN`/`PROVIDER_OBSERVATION_PENDING`으로
+  durable requeue한다. 같은 `(execution, generation, stage, ordinal)` attestation은 한 번만 발급되므로
+  재시작이나 settlement 재시도는 다음 ordinal로 진행한다.
+- signer 응답에는 lease token, attestation, 영수증 capability를 싣지 않는다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
 profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
@@ -244,8 +300,11 @@ issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume 
 실행 신호로 사용하지 않는다. Project write 직전 current app binding을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시 읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
 Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
 
-실제 scheduler CronJob, Codex/Claude 예약 작업, `Seorilabs Fleet` Project 생성은 배포와 사용자 승인 이후의
-별도 gate다. 저장소의 설치 manifest는 `suspend: true`이며 운영 workload에 포함되지 않는다.
+`FleetProjectProjection` drain은 정기 scheduler CronJob `backoffice-fleet-project-projection`과 배포
+catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩 호출해 소진한다. 두 경로가 겹쳐도
+claim CAS가 한 projection을 한 번만 적용하며, `App.projectV2Id`가 아직 없으면 추측하지 않고 `NEEDS_INPUT`으로
+닫는다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
+`Seorilabs Fleet` Project 생성과 `App.projectV2Id` 설정은 사용자 승인이 필요한 별도 gate다.
 
 ## GitHub repository webhook
 

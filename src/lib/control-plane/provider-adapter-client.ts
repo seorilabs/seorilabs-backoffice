@@ -15,7 +15,19 @@ export interface ProviderAdapterResult {
 
 export interface ProviderAdapterExecutor {
   execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult>;
-  readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null>;
+}
+
+/**
+ * broker가 돌려준 관측이 어느 policy grant, 어느 execution generation, 어느 binding에
+ * 묶여 있는지를 그대로 옮긴 영수증이다. worker는 이 값을 만들 수 없다.
+ */
+export interface ProviderObservationReceipt {
+  policyGrantId: string;
+  policyGrantDigest: string;
+  bindingHash: string;
+  commandDigest: string;
+  policyGeneration: number;
+  generation: number;
 }
 
 /** worker가 durable claim의 resume mode를 무시하지 못하게 하는 단일 dispatch 경계다. */
@@ -302,12 +314,78 @@ export function sanitizeProviderBrokerResponse(
 
 type PolicyGrantReference = z.infer<typeof policyGrantReferenceSchema>;
 
+function matchesGrantReference(
+  reference: PolicyGrantReference,
+  expected: ReturnType<typeof buildAuthBrokerPolicyGrant>,
+): boolean {
+  return reference.id === expected.grant.id
+    && reference.digest === expected.digest
+    && reference.bindingHash === expected.grant.bindingHash
+    && reference.commandDigest === expected.grant.commandDigest
+    && reference.policyGeneration === expected.grant.policyGeneration;
+}
+
+/**
+ * broker OBSERVATION 응답을 신뢰 관측으로 승격하는 유일한 validator다.
+ * grant reference가 이 execution의 exact grant와 하나라도 다르면 관측을 만들지 않는다.
+ */
+export function parseTrustedBrokerObservation(input: {
+  body: unknown;
+  envelope: ProviderCommandEnvelope;
+  subject: string;
+}): { observation: ProviderExecutionObservation; receipt: ProviderObservationReceipt } {
+  const command = providerCommandEnvelopeSchema.parse(input.envelope);
+  const built = buildAuthBrokerPolicyGrant(command, input.subject);
+  const parsed = policyGrantObservationResponseSchema.safeParse(input.body);
+  if (!parsed.success || !matchesGrantReference(parsed.data.policyGrant, built)) {
+    throw new Error("AUTH_BROKER_OBSERVATION_BINDING_MISMATCH");
+  }
+  return {
+    observation: parsed.data.observation,
+    receipt: {
+      policyGrantId: parsed.data.policyGrant.id,
+      policyGrantDigest: parsed.data.policyGrant.digest,
+      bindingHash: parsed.data.policyGrant.bindingHash,
+      commandDigest: parsed.data.policyGrant.commandDigest,
+      policyGeneration: parsed.data.policyGrant.policyGeneration,
+      generation: command.generation,
+    },
+  };
+}
+
+/**
+ * 신뢰 경계 안에서만 호출한다. worker가 payload를 고르는 경로가 아니라
+ * signer가 durable claim에서 재구성한 envelope으로 broker를 직접 읽는 경로다.
+ */
+export async function readTrustedBrokerObservation(input: {
+  envelope: ProviderCommandEnvelope;
+  subject: string;
+  workerId: string;
+  ordinal: number;
+  transport: BrokerTransport;
+}): Promise<{ observation: ProviderExecutionObservation; receipt: ProviderObservationReceipt } | null> {
+  const command = providerCommandEnvelopeSchema.parse(input.envelope);
+  if (command.operation !== "READBACK") throw new Error("AUTH_BROKER_READBACK_NOT_EXECUTED");
+  const response = await input.transport(buildProviderBrokerRequest({
+    envelope: command,
+    subject: input.subject,
+    workerId: input.workerId,
+    stage: "OBSERVATION",
+    ordinal: input.ordinal,
+  }));
+  if (response.status === 204) return null;
+  if (response.status !== 200) throw new Error("AUTH_BROKER_OBSERVATION_UNAVAILABLE");
+  return parseTrustedBrokerObservation({
+    body: response.body,
+    envelope: command,
+    subject: input.subject,
+  });
+}
+
 export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   readonly #workerId: string;
   readonly #subject: string;
   readonly #transport: BrokerTransport;
-  readonly #observationOrdinals = new Map<string, number>();
-  readonly #executedReadbacks = new Set<string>();
 
   constructor(input: {
     workerId: string;
@@ -329,17 +407,6 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     });
   }
 
-  #matchesGrantReference(
-    reference: PolicyGrantReference,
-    expected: ReturnType<typeof buildAuthBrokerPolicyGrant>,
-  ): boolean {
-    return reference.id === expected.grant.id
-      && reference.digest === expected.digest
-      && reference.bindingHash === expected.grant.bindingHash
-      && reference.commandDigest === expected.grant.commandDigest
-      && reference.policyGeneration === expected.grant.policyGeneration;
-  }
-
   #mapExecutionResponse(
     body: unknown,
     command: ProviderCommandEnvelope,
@@ -348,7 +415,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     const parsed = policyGrantExecutionResponseSchema.safeParse(body);
     if (
       !parsed.success
-      || !this.#matchesGrantReference(parsed.data.policyGrant, built)
+      || !matchesGrantReference(parsed.data.policyGrant, built)
       || parsed.data.execution.generation !== command.generation
     ) return null;
     const execution = parsed.data.execution;
@@ -406,7 +473,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
       };
     }
     const registeredBody = policyGrantResponseSchema.safeParse(registered.body);
-    if (!registeredBody.success || !this.#matchesGrantReference(registeredBody.data.policyGrant, built)) {
+    if (!registeredBody.success || !matchesGrantReference(registeredBody.data.policyGrant, built)) {
       return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_INVALID" } };
     }
 
@@ -423,7 +490,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
       return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
     }
     const verifiedBody = policyGrantResponseSchema.safeParse(verified.body);
-    if (!verifiedBody.success || !this.#matchesGrantReference(verifiedBody.data.policyGrant, built)) {
+    if (!verifiedBody.success || !matchesGrantReference(verifiedBody.data.policyGrant, built)) {
       return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
     }
     return { grant: built };
@@ -432,52 +499,25 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   async execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult> {
     const command = providerCommandEnvelopeSchema.parse(envelope);
     const policyGrant = await this.#registerAndVerifyPolicyGrant(command);
-    if ("result" in policyGrant) return this.#recordExecutedReadback(command, policyGrant.result);
+    if ("result" in policyGrant) return policyGrant.result;
     const built = policyGrant.grant;
     let consumed;
     try {
       consumed = await this.#transport(this.#request(command, "CONSUME"));
     } catch {
       // consume 전송 뒤 응답을 잃었을 수 있으므로 같은 grant를 다시 consume하지 않는다.
-      return this.#recordExecutedReadback(command, await this.#readExecutionResult(command, built));
+      return this.#readExecutionResult(command, built);
     }
     if (consumed.status !== 200) {
       const errorCode = safeBrokerError(consumed.body);
       const gate = brokerGateResult(errorCode);
-      if (gate) return this.#recordExecutedReadback(command, gate);
+      if (gate) return gate;
       if (consumed.status >= 500 || errorCode === "auth_broker_failed") {
-        return this.#recordExecutedReadback(command, await this.#readExecutionResult(command, built));
+        return this.#readExecutionResult(command, built);
       }
-      return this.#recordExecutedReadback(command, { outcome: "FAILED", errorCode: errorCode.toUpperCase() });
+      return { outcome: "FAILED", errorCode: errorCode.toUpperCase() };
     }
-    const result = this.#mapExecutionResponse(consumed.body, command, built)
+    return this.#mapExecutionResponse(consumed.body, command, built)
       ?? await this.#readExecutionResult(command, built);
-    return this.#recordExecutedReadback(command, result);
-  }
-
-  #recordExecutedReadback(command: ProviderCommandEnvelope, result: ProviderAdapterResult) {
-    if (command.operation === "READBACK" && result.outcome === "COMMAND_ACCEPTED") {
-      this.#executedReadbacks.add(`${command.executionId}:${command.generation}`);
-    }
-    return result;
-  }
-
-  async readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null> {
-    const command = providerCommandEnvelopeSchema.parse(envelope);
-    const observationKey = `${command.executionId}:${command.generation}`;
-    if (command.operation !== "READBACK" || !this.#executedReadbacks.has(observationKey)) {
-      throw new Error("AUTH_BROKER_READBACK_NOT_EXECUTED");
-    }
-    const built = buildAuthBrokerPolicyGrant(command, this.#subject);
-    const ordinal = (this.#observationOrdinals.get(observationKey) ?? 0) + 1;
-    this.#observationOrdinals.set(observationKey, ordinal);
-    const response = await this.#transport(this.#request(command, "OBSERVATION", ordinal));
-    if (response.status === 204) return null;
-    if (response.status !== 200) throw new Error("AUTH_BROKER_OBSERVATION_UNAVAILABLE");
-    const parsed = policyGrantObservationResponseSchema.safeParse(response.body);
-    if (!parsed.success || !this.#matchesGrantReference(parsed.data.policyGrant, built)) {
-      throw new Error("AUTH_BROKER_OBSERVATION_BINDING_MISMATCH");
-    }
-    return parsed.data.observation;
   }
 }

@@ -17,8 +17,10 @@ import {
   buildProviderBrokerRequest,
   executeProviderAdapterClaim,
   providerBrokerRequestDigest,
+  readTrustedBrokerObservation,
   safeBrokerError,
   sanitizeProviderBrokerResponse,
+  type BrokerTransport,
   type ProviderAdapterExecutor,
 } from "@/lib/control-plane/provider-adapter-client";
 import {
@@ -524,7 +526,6 @@ test("worker resume dispatch는 READBACK_FIRST claim과 READBACK envelope 일치
       commands.push(command);
       return { outcome: "COMMAND_ACCEPTED" };
     },
-    readObservation: async () => null,
   };
   assert.deepEqual(await executeProviderAdapterClaim(adapter, {
     executionId: "provider-execution-1",
@@ -680,10 +681,7 @@ test("crash 뒤 새 generation READBACK_FIRST는 readback grant를 정확히 한
   const stages: string[] = [];
   const requests: Array<{ stage: string; body: Record<string, unknown> }> = [];
   let calls = 0;
-  const adapter = new SeoriAuthBrokerProviderAdapter({
-    workerId: "provider-worker-1",
-    subject: "k8s:platform:provider-execution-worker",
-    transport: async (request) => {
+  const transport: BrokerTransport = async (request) => {
       calls += 1;
       stages.push(request.stage);
       requests.push({ stage: request.stage, body: request.body });
@@ -711,17 +709,29 @@ test("crash 뒤 새 generation READBACK_FIRST는 readback grant를 정확히 한
           },
         },
       };
-    },
+  };
+  const adapter = new SeoriAuthBrokerProviderAdapter({
+    workerId: "provider-worker-1",
+    subject: "k8s:platform:provider-execution-worker",
+    transport,
   });
-  await assert.rejects(adapter.readObservation(command), /AUTH_BROKER_READBACK_NOT_EXECUTED/);
   assert.deepEqual(await executeProviderAdapterClaim(adapter, {
     executionId: "provider-execution-1",
     generation: 2,
     resumeMode: "READBACK_FIRST",
     envelope: command,
   }), { outcome: "COMMAND_ACCEPTED" });
-  const observation = await adapter.readObservation(command);
-  assert.equal(observation?.kind, "MARKET");
+  // 관측은 worker adapter가 아니라 signer 신뢰 경계에서만 읽는다.
+  const trusted = await readTrustedBrokerObservation({
+    envelope: command,
+    subject: "k8s:platform:provider-execution-worker",
+    workerId: "provider-worker-1",
+    ordinal: 1,
+    transport,
+  });
+  assert.equal(trusted?.observation.kind, "MARKET");
+  assert.equal(trusted?.receipt.generation, 2);
+  assert.equal(trusted?.receipt.bindingHash, command.bindingHash);
   assert.equal(calls, 4);
   assert.deepEqual(stages, ["REGISTER", "VERIFY", "CONSUME", "OBSERVATION"]);
   assert.equal(stages.filter((stage) => stage === "CONSUME").length, 1);

@@ -2,16 +2,13 @@ import { readFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { z } from "zod";
 
-import {
-  providerCommandEnvelopeSchema,
-  providerExecutionObservationSchema,
-  type ProviderExecutionObservation,
-} from "@/lib/control-plane/contracts";
+import { providerCommandEnvelopeSchema } from "@/lib/control-plane/contracts";
 import {
   SeoriAuthBrokerProviderAdapter,
   providerBrokerRequestDigest,
   type BrokerTransport,
 } from "@/lib/control-plane/provider-adapter-client";
+import { providerSignerSettlementRequestSchema } from "@/lib/control-plane/provider-settlement-request";
 
 const RESPONSE_LIMIT = 64 * 1024;
 
@@ -104,16 +101,21 @@ export class ProviderExecutionBoundaryClient {
     };
   }
 
+  /**
+   * worker는 관측 payload를 만들지 않는다. `OBSERVED`는 "readback 명령이 성공했으니
+   * signer가 broker에서 관측을 직접 읽어라"는 신호일 뿐이다.
+   */
   async settle(input: {
     executionId: string;
     generation: number;
     outcome: "COMMAND_ACCEPTED" | "OBSERVED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED" | "APPROVAL_REQUIRED";
-    observation?: ProviderExecutionObservation;
     errorCode?: string;
     idempotencyKey: string;
   }) {
-    if (input.observation) providerExecutionObservationSchema.parse(input.observation);
-    const response = await this.#transport({ path: "/v1/settlements", body: input as Record<string, unknown> });
+    const response = await this.#transport({
+      path: "/v1/settlements",
+      body: providerSignerSettlementRequestSchema.parse(input) as Record<string, unknown>,
+    });
     if (response.status !== 200) throw new Error("PROVIDER_SIGNER_SETTLEMENT_REJECTED");
     return settlementResponseSchema.parse(response.body);
   }

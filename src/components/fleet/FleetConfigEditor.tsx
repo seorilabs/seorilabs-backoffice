@@ -1,8 +1,30 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  APP_CHECK_ENFORCEMENTS,
+  ASSET_KINDS,
+  BUDGET_CURRENCIES,
+  COMPLIANCE_DECLARATIONS,
+  FIREBASE_PLATFORMS,
+  MARKETS,
+  RELEASE_CHANNEL_BY_MARKET,
+  WORKSPACE_ROLES,
+  draftFromPayload,
+  payloadFromDraft,
+  type AssetDraft,
+  type BlueprintDraft,
+  type ComplianceDraftRow,
+  type ConfigDraft,
+  type DelegationDraft,
+  type FirebaseAppDraft,
+  type IamDraft,
+  type LocalizationDraft,
+  type MarketDraft,
+  type WorkspaceGroupDraft,
+} from "@/components/fleet/config-form";
 import {
   activateFleetConfigRevisionAction,
   createFleetConfigDraftAction,
@@ -19,6 +41,161 @@ interface DraftSummary {
   activationLabel: string;
 }
 
+const inputClass = "w-full rounded border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none";
+const labelClass = "block text-[11px] font-medium uppercase tracking-wide text-neutral-500";
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="block space-y-1">
+      <span className={labelClass}>{label}</span>
+      {children}
+      {hint && <span className="block text-[11px] text-neutral-400">{hint}</span>}
+    </label>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  hint,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  placeholder?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(event) => onChange(event.target.value)}
+        className={inputClass}
+      />
+    </Field>
+  );
+}
+
+function AreaField({
+  label,
+  value,
+  onChange,
+  hint,
+  rows = 3,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  rows?: number;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <textarea
+        value={value}
+        rows={rows}
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+        className={`${inputClass} font-mono`}
+      />
+    </Field>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+  allowEmpty,
+  hint,
+}: {
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+  allowEmpty?: string;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={inputClass}
+      >
+        {allowEmpty !== undefined && <option value="">{allowEmpty}</option>}
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </Field>
+  );
+}
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded border border-neutral-200 p-3">
+      <h4 className="text-sm font-semibold text-neutral-800">{title}</h4>
+      <p className="mt-0.5 text-xs text-neutral-500">{description}</p>
+      <div className="mt-3 space-y-3">{children}</div>
+    </section>
+  );
+}
+
+function RowList<T>({
+  rows,
+  addLabel,
+  onAdd,
+  onRemove,
+  render,
+  empty,
+}: {
+  rows: T[];
+  addLabel: string;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+  render: (row: T, index: number) => ReactNode;
+  empty: string;
+}) {
+  return (
+    <div className="space-y-2">
+      {rows.map((row, index) => (
+        <div key={index} className="rounded border border-neutral-200 bg-neutral-50 p-3">
+          <div className="grid gap-3 sm:grid-cols-2">{render(row, index)}</div>
+          <button
+            type="button"
+            onClick={() => onRemove(index)}
+            className="mt-2 rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
+          >
+            이 항목 삭제
+          </button>
+        </div>
+      ))}
+      {rows.length === 0 && <p className="text-xs text-neutral-400">{empty}</p>}
+      <button
+        type="button"
+        onClick={onAdd}
+        className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+      >
+        {addLabel}
+      </button>
+    </div>
+  );
+}
+
 export function FleetConfigEditor({
   appId,
   activeRevision,
@@ -30,17 +207,48 @@ export function FleetConfigEditor({
 }: {
   appId: string;
   activeRevision: number;
-  initialPayload: string;
+  initialPayload: unknown;
   initialPayloadSource: "ACTIVE" | "LEGACY_SHADOW" | "EMPTY";
   legacyActiveBlocked: boolean;
   shadowSourceSha: string | null;
   drafts: DraftSummary[];
 }) {
-  const [payload, setPayload] = useState(initialPayload);
+  const [draft, setDraft] = useState<ConfigDraft>(() => draftFromPayload(initialPayload));
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
+
+  const payloadText = useMemo(() => JSON.stringify(payloadFromDraft(draft)), [draft]);
+
+  function patch(update: Partial<ConfigDraft>) {
+    setDraft((current) => ({ ...current, ...update }));
+  }
+  function patchBlueprint(update: Partial<BlueprintDraft>) {
+    setDraft((current) => ({ ...current, blueprint: { ...current.blueprint, ...update } }));
+  }
+  function replaceRow<K extends keyof ConfigDraft>(
+    key: K,
+    index: number,
+    update: Partial<ConfigDraft[K] extends Array<infer R> ? R : never>,
+  ) {
+    setDraft((current) => {
+      const rows = [...(current[key] as unknown as Array<Record<string, unknown>>)];
+      rows[index] = { ...rows[index], ...update };
+      return { ...current, [key]: rows } as ConfigDraft;
+    });
+  }
+  function replaceBlueprintRow<K extends keyof BlueprintDraft>(
+    key: K,
+    index: number,
+    update: Partial<BlueprintDraft[K] extends Array<infer R> ? R : never>,
+  ) {
+    setDraft((current) => {
+      const rows = [...(current.blueprint[key] as unknown as Array<Record<string, unknown>>)];
+      rows[index] = { ...rows[index], ...update };
+      return { ...current, blueprint: { ...current.blueprint, [key]: rows } };
+    });
+  }
 
   function run(
     action: () => Promise<{
@@ -51,6 +259,7 @@ export function FleetConfigEditor({
       parityStatus?: string | null;
     }>,
     success: (result: { revision?: number; status?: string; parityStatus?: string | null }) => string,
+    onSuccess?: () => void,
   ) {
     setError(null);
     setMessage(null);
@@ -61,6 +270,7 @@ export function FleetConfigEditor({
         return;
       }
       setMessage(success(result));
+      onSuccess?.();
       router.refresh();
     });
   }
@@ -97,12 +307,12 @@ export function FleetConfigEditor({
             </button>
           </div>
         </div>
-        <label className="block text-sm font-semibold text-neutral-800" htmlFor="fleet-config-payload">
-          비민감 desired state JSON
-        </label>
+
+        <div className="text-sm font-semibold text-neutral-800">비민감 desired state</div>
         <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-          이 화면은 market/localization/asset, build pin, support URL, 공개 identity 기반 ProjectBlueprint,
-          사람 승인 전 compliance draft만 허용합니다. 비밀값과 법적 승인·심사 제출·공개 배포 필드는 저장과 활성화가 모두 차단됩니다.
+          market/localization/asset, build pin, support URL, 공개 identity 기반 ProjectBlueprint,
+          사람 승인 전 compliance draft만 입력합니다. 비밀값 입력란은 없으며 법적 승인·심사 제출·공개 배포 필드는
+          저장과 활성화가 모두 차단됩니다. 검증은 서버의 control-plane validator 한 곳에서만 수행합니다.
         </p>
         {initialPayloadSource === "LEGACY_SHADOW" && (
           <p className="mt-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
@@ -115,19 +325,445 @@ export function FleetConfigEditor({
             기존 ACTIVE revision은 현재 strict 계약 밖의 payload라 편집 원본으로 복사하지 않았습니다. 서명 snapshot 조회는 유지되지만 재활성화할 수 없습니다.
           </p>
         )}
-        <textarea
-          id="fleet-config-payload"
-          value={payload}
-          onChange={(event) => setPayload(event.target.value)}
-          spellCheck={false}
-          className="mt-3 min-h-64 w-full rounded-md border border-neutral-300 bg-neutral-950 p-3 font-mono text-xs leading-relaxed text-neutral-100"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
+
+        <div className="mt-4 space-y-4">
+          <Section
+            title="MarketProfile"
+            description="마켓별 활성화 여부, 지원 locale, 사람 승인 전 단계의 release channel을 선언합니다."
+          >
+            <RowList<MarketDraft>
+              rows={draft.markets}
+              empty="선언된 market이 없습니다."
+              addLabel="market 추가"
+              onAdd={() => patch({
+                markets: [...draft.markets, { market: MARKETS[0], enabled: false, locales: "", releaseChannel: "" }],
+              })}
+              onRemove={(index) => patch({ markets: draft.markets.filter((_, item) => item !== index) })}
+              render={(row, index) => (
+                <>
+                  <SelectField
+                    label="market"
+                    value={row.market}
+                    options={MARKETS}
+                    onChange={(value) => replaceRow("markets", index, {
+                      market: value,
+                      releaseChannel: row.enabled ? RELEASE_CHANNEL_BY_MARKET[value] ?? "" : "",
+                    })}
+                  />
+                  <Field label="enabled">
+                    <label className="flex items-center gap-2 text-sm text-neutral-700">
+                      <input
+                        type="checkbox"
+                        checked={row.enabled}
+                        onChange={(event) => replaceRow("markets", index, {
+                          enabled: event.target.checked,
+                          releaseChannel: event.target.checked ? RELEASE_CHANNEL_BY_MARKET[row.market] ?? "" : "",
+                        })}
+                      />
+                      이 마켓을 활성화
+                    </label>
+                  </Field>
+                  <TextField
+                    label="locales"
+                    value={row.locales}
+                    hint="BCP-47, 쉼표 또는 공백 구분"
+                    onChange={(value) => replaceRow("markets", index, { locales: value })}
+                  />
+                  <TextField
+                    label="releaseChannel"
+                    value={row.releaseChannel}
+                    hint="활성 마켓은 계약이 정한 값만 허용합니다."
+                    onChange={(value) => replaceRow("markets", index, { releaseChannel: value })}
+                  />
+                </>
+              )}
+            />
+          </Section>
+
+          <Section
+            title="Localization"
+            description="마켓 리스팅 텍스트입니다. market을 비우면 전 마켓 공통으로 적용합니다."
+          >
+            <RowList<LocalizationDraft>
+              rows={draft.localizations}
+              empty="선언된 localization이 없습니다."
+              addLabel="localization 추가"
+              onAdd={() => patch({
+                localizations: [...draft.localizations, {
+                  market: "", locale: "", displayName: "", subtitle: "", description: "", keywords: "",
+                }],
+              })}
+              onRemove={(index) => patch({ localizations: draft.localizations.filter((_, item) => item !== index) })}
+              render={(row, index) => (
+                <>
+                  <SelectField
+                    label="market"
+                    value={row.market}
+                    options={MARKETS}
+                    allowEmpty="전 마켓 공통"
+                    onChange={(value) => replaceRow("localizations", index, { market: value })}
+                  />
+                  <TextField
+                    label="locale"
+                    value={row.locale}
+                    onChange={(value) => replaceRow("localizations", index, { locale: value })}
+                  />
+                  <TextField
+                    label="displayName"
+                    value={row.displayName}
+                    onChange={(value) => replaceRow("localizations", index, { displayName: value })}
+                  />
+                  <TextField
+                    label="subtitle"
+                    value={row.subtitle}
+                    onChange={(value) => replaceRow("localizations", index, { subtitle: value })}
+                  />
+                  <TextField
+                    label="keywords"
+                    value={row.keywords}
+                    hint="쉼표 구분, 최대 20개"
+                    onChange={(value) => replaceRow("localizations", index, { keywords: value })}
+                  />
+                  <div className="sm:col-span-2">
+                    <AreaField
+                      label="description"
+                      value={row.description}
+                      rows={4}
+                      onChange={(value) => replaceRow("localizations", index, { description: value })}
+                    />
+                  </div>
+                </>
+              )}
+            />
+          </Section>
+
+          <Section
+            title="StoreAsset"
+            description="스토어 자산은 원본을 저장하지 않고 object key와 SHA-256만 고정합니다."
+          >
+            <RowList<AssetDraft>
+              rows={draft.assets}
+              empty="선언된 asset이 없습니다."
+              addLabel="asset 추가"
+              onAdd={() => patch({
+                assets: [...draft.assets, { market: "", kind: ASSET_KINDS[0], locale: "", objectKey: "", checksum: "" }],
+              })}
+              onRemove={(index) => patch({ assets: draft.assets.filter((_, item) => item !== index) })}
+              render={(row, index) => (
+                <>
+                  <SelectField
+                    label="market"
+                    value={row.market}
+                    options={MARKETS}
+                    allowEmpty="전 마켓 공통"
+                    onChange={(value) => replaceRow("assets", index, { market: value })}
+                  />
+                  <SelectField
+                    label="kind"
+                    value={row.kind}
+                    options={ASSET_KINDS}
+                    onChange={(value) => replaceRow("assets", index, { kind: value })}
+                  />
+                  <TextField
+                    label="locale"
+                    value={row.locale}
+                    hint="비우면 locale 공통"
+                    onChange={(value) => replaceRow("assets", index, { locale: value })}
+                  />
+                  <TextField
+                    label="objectKey"
+                    value={row.objectKey}
+                    onChange={(value) => replaceRow("assets", index, { objectKey: value })}
+                  />
+                  <TextField
+                    label="checksum"
+                    value={row.checksum}
+                    hint="SHA-256 64자리"
+                    onChange={(value) => replaceRow("assets", index, { checksum: value })}
+                  />
+                </>
+              )}
+            />
+          </Section>
+
+          <Section
+            title="Build pin과 support URL"
+            description="release candidate가 대조하는 WorkflowBundle SHA·Platform version과 공개 지원 URL입니다."
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <TextField
+                label="workflowBundleSha"
+                value={draft.buildWorkflowBundleSha}
+                hint="40자리 SHA"
+                onChange={(value) => patch({ buildWorkflowBundleSha: value })}
+              />
+              <TextField
+                label="platformVersion"
+                value={draft.buildPlatformVersion}
+                hint="semver"
+                onChange={(value) => patch({ buildPlatformVersion: value })}
+              />
+              <TextField
+                label="minSdk"
+                value={draft.buildMinSdk}
+                onChange={(value) => patch({ buildMinSdk: value })}
+              />
+              <TextField
+                label="targetSdk"
+                value={draft.buildTargetSdk}
+                onChange={(value) => patch({ buildTargetSdk: value })}
+              />
+              <TextField
+                label="supportUrl"
+                value={draft.supportUrl}
+                hint="공개 HTTPS URL"
+                onChange={(value) => patch({ supportUrl: value })}
+              />
+              <TextField
+                label="privacyPolicyUrl"
+                value={draft.privacyPolicyUrl}
+                hint="공개 HTTPS URL"
+                onChange={(value) => patch({ privacyPolicyUrl: value })}
+              />
+            </div>
+          </Section>
+
+          <Section
+            title="Compliance draft"
+            description="사람 승인 전 초안만 보관합니다. 이 화면은 제출·승인 행위를 실행하지 않습니다."
+          >
+            <RowList<ComplianceDraftRow>
+              rows={draft.complianceDrafts}
+              empty="선언된 compliance draft가 없습니다."
+              addLabel="compliance draft 추가"
+              onAdd={() => patch({
+                complianceDrafts: [...draft.complianceDrafts, {
+                  market: MARKETS[0],
+                  declaration: COMPLIANCE_DECLARATIONS[0],
+                  valueKind: "text",
+                  text: "",
+                  boolean: false,
+                  record: "",
+                  evidenceRef: "",
+                }],
+              })}
+              onRemove={(index) => patch({
+                complianceDrafts: draft.complianceDrafts.filter((_, item) => item !== index),
+              })}
+              render={(row, index) => (
+                <>
+                  <SelectField
+                    label="market"
+                    value={row.market}
+                    options={MARKETS}
+                    onChange={(value) => replaceRow("complianceDrafts", index, { market: value })}
+                  />
+                  <SelectField
+                    label="declaration"
+                    value={row.declaration}
+                    options={COMPLIANCE_DECLARATIONS}
+                    onChange={(value) => replaceRow("complianceDrafts", index, { declaration: value })}
+                  />
+                  <SelectField
+                    label="draft 형태"
+                    value={row.valueKind}
+                    options={["text", "boolean", "record"]}
+                    onChange={(value) => replaceRow("complianceDrafts", index, {
+                      valueKind: value as ComplianceDraftRow["valueKind"],
+                    })}
+                  />
+                  <TextField
+                    label="evidenceRef"
+                    value={row.evidenceRef}
+                    onChange={(value) => replaceRow("complianceDrafts", index, { evidenceRef: value })}
+                  />
+                  <div className="sm:col-span-2">
+                    {row.valueKind === "boolean" ? (
+                      <Field label="draft">
+                        <label className="flex items-center gap-2 text-sm text-neutral-700">
+                          <input
+                            type="checkbox"
+                            checked={row.boolean}
+                            onChange={(event) => replaceRow("complianceDrafts", index, {
+                              boolean: event.target.checked,
+                            })}
+                          />
+                          선언 값 true
+                        </label>
+                      </Field>
+                    ) : row.valueKind === "record" ? (
+                      <AreaField
+                        label="draft"
+                        value={row.record}
+                        rows={4}
+                        hint="줄마다 key=value. true/false/숫자/빈 값은 각각 boolean, number, null로 저장합니다."
+                        onChange={(value) => replaceRow("complianceDrafts", index, { record: value })}
+                      />
+                    ) : (
+                      <AreaField
+                        label="draft"
+                        value={row.text}
+                        rows={4}
+                        onChange={(value) => replaceRow("complianceDrafts", index, { text: value })}
+                      />
+                    )}
+                  </div>
+                </>
+              )}
+            />
+          </Section>
+
+          <Section
+            title="ProjectBlueprint"
+            description="GCP·Firebase·Workspace desired state입니다. credential은 logical ID로만 참조하며 비밀값 입력란이 없습니다."
+          >
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input
+                type="checkbox"
+                checked={draft.blueprint.declared}
+                onChange={(event) => patchBlueprint({ declared: event.target.checked })}
+              />
+              이 revision에 ProjectBlueprint를 선언
+            </label>
+            {draft.blueprint.declared && (
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField label="organizationId" value={draft.blueprint.organizationId} onChange={(value) => patchBlueprint({ organizationId: value })} />
+                  <TextField label="folderId" value={draft.blueprint.folderId} onChange={(value) => patchBlueprint({ folderId: value })} />
+                  <TextField label="billingAccountId" value={draft.blueprint.billingAccountId} hint="XXXXXX-XXXXXX-XXXXXX" onChange={(value) => patchBlueprint({ billingAccountId: value })} />
+                  <TextField label="project.projectId" value={draft.blueprint.projectId} onChange={(value) => patchBlueprint({ projectId: value })} />
+                  <TextField label="project.projectNumber" value={draft.blueprint.projectNumber} hint="readback 전에는 비웁니다." onChange={(value) => patchBlueprint({ projectNumber: value })} />
+                  <TextField label="project.region" value={draft.blueprint.region} onChange={(value) => patchBlueprint({ region: value })} />
+                </div>
+                <AreaField label="apis" value={draft.blueprint.apis} hint="쉼표 또는 공백 구분 googleapis.com 목록" onChange={(value) => patchBlueprint({ apis: value })} />
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <SelectField label="budget.currencyCode" value={draft.blueprint.budgetCurrencyCode} options={BUDGET_CURRENCIES} onChange={(value) => patchBlueprint({ budgetCurrencyCode: value })} />
+                  <TextField label="budget.monthlyAmount" value={draft.blueprint.budgetMonthlyAmount} onChange={(value) => patchBlueprint({ budgetMonthlyAmount: value })} />
+                  <TextField label="budget.alertThresholds" value={draft.blueprint.budgetAlertThresholds} hint="0보다 크고 2 이하인 비율" onChange={(value) => patchBlueprint({ budgetAlertThresholds: value })} />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField label="firebase.authProviders" value={draft.blueprint.authProviders} onChange={(value) => patchBlueprint({ authProviders: value })} />
+                  <SelectField label="firebase.appCheckEnforcement" value={draft.blueprint.appCheckEnforcement} options={APP_CHECK_ENFORCEMENTS} onChange={(value) => patchBlueprint({ appCheckEnforcement: value })} />
+                  <TextField label="firestoreRulesChecksum" value={draft.blueprint.firestoreRulesChecksum} onChange={(value) => patchBlueprint({ firestoreRulesChecksum: value })} />
+                  <TextField label="firestoreIndexesChecksum" value={draft.blueprint.firestoreIndexesChecksum} onChange={(value) => patchBlueprint({ firestoreIndexesChecksum: value })} />
+                  <TextField label="storageRulesChecksum" value={draft.blueprint.storageRulesChecksum} onChange={(value) => patchBlueprint({ storageRulesChecksum: value })} />
+                  <TextField label="functions.region" value={draft.blueprint.functionsRegion} onChange={(value) => patchBlueprint({ functionsRegion: value })} />
+                  <TextField label="functions.runtime" value={draft.blueprint.functionsRuntime} hint="nodejsNN" onChange={(value) => patchBlueprint({ functionsRuntime: value })} />
+                </div>
+                <div>
+                  <div className={labelClass}>firebase.apps</div>
+                  <div className="mt-1">
+                    <RowList<FirebaseAppDraft>
+                      rows={draft.blueprint.firebaseApps}
+                      empty="선언된 Firebase app이 없습니다."
+                      addLabel="Firebase app 추가"
+                      onAdd={() => patchBlueprint({
+                        firebaseApps: [...draft.blueprint.firebaseApps, {
+                          platform: FIREBASE_PLATFORMS[0], publicAppId: "", packageId: "", bundleId: "", aitAppName: "",
+                        }],
+                      })}
+                      onRemove={(index) => patchBlueprint({
+                        firebaseApps: draft.blueprint.firebaseApps.filter((_, item) => item !== index),
+                      })}
+                      render={(row, index) => (
+                        <>
+                          <SelectField label="platform" value={row.platform} options={FIREBASE_PLATFORMS} onChange={(value) => replaceBlueprintRow("firebaseApps", index, { platform: value })} />
+                          <TextField label="publicAppId" value={row.publicAppId} onChange={(value) => replaceBlueprintRow("firebaseApps", index, { publicAppId: value })} />
+                          <TextField label="packageId" value={row.packageId} hint="ANDROID 전용" onChange={(value) => replaceBlueprintRow("firebaseApps", index, { packageId: value })} />
+                          <TextField label="bundleId" value={row.bundleId} hint="IOS 전용" onChange={(value) => replaceBlueprintRow("firebaseApps", index, { bundleId: value })} />
+                          <TextField label="aitAppName" value={row.aitAppName} hint="AIT 전용" onChange={(value) => replaceBlueprintRow("firebaseApps", index, { aitAppName: value })} />
+                        </>
+                      )}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField label="analytics.ga4PropertyId" value={draft.blueprint.ga4PropertyId} onChange={(value) => patchBlueprint({ ga4PropertyId: value })} />
+                  <TextField label="analytics.bigQueryProjectId" value={draft.blueprint.bigQueryProjectId} onChange={(value) => patchBlueprint({ bigQueryProjectId: value })} />
+                  <TextField label="analytics.datasetId" value={draft.blueprint.datasetId} onChange={(value) => patchBlueprint({ datasetId: value })} />
+                  <TextField label="analytics.location" value={draft.blueprint.analyticsLocation} hint="대문자 location 코드" onChange={(value) => patchBlueprint({ analyticsLocation: value })} />
+                </div>
+                <div>
+                  <div className={labelClass}>iam</div>
+                  <div className="mt-1">
+                    <RowList<IamDraft>
+                      rows={draft.blueprint.iam}
+                      empty="선언된 IAM binding이 없습니다."
+                      addLabel="IAM binding 추가"
+                      onAdd={() => patchBlueprint({
+                        iam: [...draft.blueprint.iam, { role: "", logicalPrincipalId: "", publicIdentity: "" }],
+                      })}
+                      onRemove={(index) => patchBlueprint({ iam: draft.blueprint.iam.filter((_, item) => item !== index) })}
+                      render={(row, index) => (
+                        <>
+                          <TextField label="role" value={row.role} hint="roles/..." onChange={(value) => replaceBlueprintRow("iam", index, { role: value })} />
+                          <TextField label="logicalPrincipalId" value={row.logicalPrincipalId} hint="shared/... 또는 app/..." onChange={(value) => replaceBlueprintRow("iam", index, { logicalPrincipalId: value })} />
+                          <TextField label="publicIdentity" value={row.publicIdentity} onChange={(value) => replaceBlueprintRow("iam", index, { publicIdentity: value })} />
+                        </>
+                      )}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className={labelClass}>workspace.groups</div>
+                  <div className="mt-1">
+                    <RowList<WorkspaceGroupDraft>
+                      rows={draft.blueprint.workspaceGroups}
+                      empty="선언된 Workspace group이 없습니다."
+                      addLabel="Workspace group 추가"
+                      onAdd={() => patchBlueprint({
+                        workspaceGroups: [...draft.blueprint.workspaceGroups, { email: "", role: WORKSPACE_ROLES[0] }],
+                      })}
+                      onRemove={(index) => patchBlueprint({
+                        workspaceGroups: draft.blueprint.workspaceGroups.filter((_, item) => item !== index),
+                      })}
+                      render={(row, index) => (
+                        <>
+                          <TextField label="email" value={row.email} onChange={(value) => replaceBlueprintRow("workspaceGroups", index, { email: value })} />
+                          <SelectField label="role" value={row.role} options={WORKSPACE_ROLES} onChange={(value) => replaceBlueprintRow("workspaceGroups", index, { role: value })} />
+                        </>
+                      )}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className={labelClass}>workspace.domainWideDelegation</div>
+                  <div className="mt-1">
+                    <RowList<DelegationDraft>
+                      rows={draft.blueprint.delegations}
+                      empty="선언된 DWD가 없습니다."
+                      addLabel="DWD 추가"
+                      onAdd={() => patchBlueprint({
+                        delegations: [...draft.blueprint.delegations, { publicClientId: "", scopes: "" }],
+                      })}
+                      onRemove={(index) => patchBlueprint({
+                        delegations: draft.blueprint.delegations.filter((_, item) => item !== index),
+                      })}
+                      render={(row, index) => (
+                        <>
+                          <TextField label="publicClientId" value={row.publicClientId} onChange={(value) => replaceBlueprintRow("delegations", index, { publicClientId: value })} />
+                          <TextField label="scopes" value={row.scopes} hint="공백 또는 쉼표 구분 scope URL" onChange={(value) => replaceBlueprintRow("delegations", index, { scopes: value })} />
+                        </>
+                      )}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <TextField label="provisioners.gcp" value={draft.blueprint.provisionerGcp} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerGcp: value })} />
+                  <TextField label="provisioners.firebase" value={draft.blueprint.provisionerFirebase} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerFirebase: value })} />
+                  <TextField label="provisioners.workspace" value={draft.blueprint.provisionerWorkspace} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerWorkspace: value })} />
+                </div>
+              </div>
+            )}
+          </Section>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
             disabled={pending}
             onClick={() => run(
-              () => validateFleetConfigDraftAction({ appId, payloadText: payload }),
+              () => validateFleetConfigDraftAction({ appId, payloadText }),
               () => "동일한 control-plane validator를 통과했습니다. 아직 저장되지 않았습니다.",
             )}
             className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
@@ -140,7 +776,7 @@ export function FleetConfigEditor({
             onClick={() => run(
               () => createFleetConfigDraftAction({
                 appId,
-                payloadText: payload,
+                payloadText,
                 requestId: crypto.randomUUID(),
               }),
               (result) => `DRAFT revision ${result.revision}을 생성했습니다.`,
@@ -161,24 +797,24 @@ export function FleetConfigEditor({
           <span className="text-xs text-neutral-500">현재 ACTIVE revision {activeRevision || "없음"}</span>
         </div>
         <div className="mt-3 divide-y divide-neutral-100 rounded border border-neutral-200">
-          {drafts.map((draft) => (
-            <div key={draft.revision} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
+          {drafts.map((item) => (
+            <div key={item.revision} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
               <div>
-                <div className="text-sm font-medium text-neutral-800">revision {draft.revision}</div>
+                <div className="text-sm font-medium text-neutral-800">revision {item.revision}</div>
                 <div className="mt-0.5 text-xs text-neutral-500">
-                  {draft.createdBy} · {draft.createdAt} · digest {draft.payloadHash.slice(0, 12)}…
+                  {item.createdBy} · {item.createdAt} · digest {item.payloadHash.slice(0, 12)}…
                 </div>
-                {!draft.activatable && (
-                  <div className="mt-1 text-xs font-medium text-amber-700">{draft.activationLabel}</div>
+                {!item.activatable && (
+                  <div className="mt-1 text-xs font-medium text-amber-700">{item.activationLabel}</div>
                 )}
               </div>
               <button
                 type="button"
-                disabled={pending || !draft.activatable}
+                disabled={pending || !item.activatable}
                 onClick={() => run(
                   () => activateFleetConfigRevisionAction({
                     appId,
-                    revision: draft.revision,
+                    revision: item.revision,
                     expectedActiveRevision: activeRevision,
                     requestId: crypto.randomUUID(),
                   }),
@@ -186,7 +822,7 @@ export function FleetConfigEditor({
                 )}
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
               >
-                {draft.activationLabel}
+                {item.activationLabel}
               </button>
             </div>
           ))}
