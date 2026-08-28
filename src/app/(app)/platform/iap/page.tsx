@@ -5,6 +5,7 @@ import {
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
+import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
 import { platformSnapshotErrorMessage } from "@/lib/platform/snapshot";
 import { listBlockingPlatformOperations } from "@/lib/platform/runs";
@@ -35,11 +36,14 @@ async function writableApps(): Promise<{
           ? {}
           : { owners: { some: { userId: actor.userId, role: "OWNER" } } }),
       },
-      select: { id: true, slug: true, displayName: true },
+      select: { id: true, slug: true, platformAppId: true, displayName: true },
       orderBy: { displayName: "asc" },
     });
     return {
-      apps: apps.map(({ slug, displayName }) => ({ slug, displayName })),
+      apps: apps.map((app) => ({
+        slug: resolvedPlatformAppId(app),
+        displayName: app.displayName,
+      })),
       blockingReferences: await listBlockingPlatformOperations(apps),
       error: null,
     };

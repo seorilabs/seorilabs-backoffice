@@ -207,8 +207,13 @@ export async function enqueuePlatformOperationAction(
 }
 
 async function platformAppId(appSlug: string): Promise<string> {
-  const app = await prisma.app.findUnique({
-    where: { slug: appSlug },
+  const app = await prisma.app.findFirst({
+    where: {
+      OR: [
+        { platformAppId: appSlug },
+        { platformAppId: null, slug: appSlug },
+      ],
+    },
     select: { id: true },
   });
   if (!app) throw new Error("플랫폼 앱 레지스트리에 연결된 앱을 찾을 수 없습니다.");
