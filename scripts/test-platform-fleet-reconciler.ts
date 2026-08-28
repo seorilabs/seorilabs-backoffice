@@ -37,11 +37,41 @@ const oldContractRevision = "d".repeat(64);
 const signingKey = "platform-fleet-integration-signing-key";
 const repoFullNameA = `seorilabs/platform-fleet-a-${nonce}`;
 const repoFullNameB = `seorilabs/platform-fleet-b-${nonce}`;
+const workflowSourceSha = "4".repeat(40);
+
+function canaryEvidence(): PlatformReleaseManifest["canaryEvidence"] {
+  return {
+    attestationSha256: `sha256:${"5".repeat(64)}`,
+    readbackKeyId: "integration-readback-key",
+    workflowBundle: {
+      repository: "seorilabs/.github",
+      sourceSha: workflowSourceSha,
+      digest: `sha256:${"6".repeat(64)}`,
+    },
+    canaries: ["godot", "react-native"].map((profile, index) => ({
+      profile: profile as "godot" | "react-native",
+      repositoryId: String(9_100 + index),
+      repositoryFullName: `seorilabs/${profile}-platform-canary`,
+      sourceSha: index === 0 ? sourceShaA : sourceShaB,
+      staticRun: {
+        runId: String(200 + index * 2), conclusion: "success" as const,
+        headSha: index === 0 ? sourceShaA : sourceShaB, workflowSourceSha,
+      },
+      buildOnlyRun: {
+        runId: String(201 + index * 2), conclusion: "success" as const,
+        headSha: index === 0 ? sourceShaA : sourceShaB, workflowSourceSha,
+        cloudBuildId: `integration-build-${index}`,
+        builderImageDigest: `sha256:${"7".repeat(64)}`,
+        buildConfigDigest: `sha256:${"8".repeat(64)}`,
+        artifact: { name: `${profile}.aab`, sha256: `sha256:${"9".repeat(64)}`, size: 1 },
+      },
+    })) as PlatformReleaseManifest["canaryEvidence"]["canaries"],
+  };
+}
 
 function releaseManifest(input: {
   version: string;
   classification: PlatformReleaseManifest["classification"];
-  consumers: bigint[];
 }): PlatformReleaseManifest {
   return {
     schemaVersion: 1,
@@ -57,10 +87,15 @@ function releaseManifest(input: {
       digest: artifactDigest,
       packageName: "@seorilabs/platform",
     }],
-    consumers: input.consumers.map((repoId) => ({
-      repoId: repoId.toString(),
-      artifactKind: "TYPESCRIPT" as const,
-    })),
+    canaryEvidence: canaryEvidence(),
+    provenance: {
+      repository: "seorilabs/platform",
+      releaseId: "9001",
+      releaseTag: `v${input.version}`,
+      rawManifestSha256: "a".repeat(64),
+      approvalSha256: "b".repeat(64),
+      approvalKeyId: "integration-approval-key",
+    },
   };
 }
 
@@ -139,6 +174,8 @@ async function addRelease(manifest: PlatformReleaseManifest, suffix: string) {
 }
 
 async function main() {
+  // 같은 disposable contract DB에서 먼저 실행된 fixture 앱은 이 테스트의 current cohort가 아니다.
+  await prisma.app.updateMany({ where: { status: "ACTIVE" }, data: { status: "PAUSED" } });
   const appIdA = `platform-fleet-a-${nonce}`;
   const appIdB = `platform-fleet-b-${nonce}`;
   const [discoveryA, discoveryB] = await Promise.all([
@@ -176,7 +213,6 @@ async function main() {
   const implementationRelease = await addRelease(releaseManifest({
     version: implementationVersion,
     classification: "IMPLEMENTATION_ONLY",
-    consumers: [repoIdA, repoIdB],
   }), "implementation");
   const implementationInput = {
     platformReleaseId: implementationRelease.release.id,
@@ -221,6 +257,28 @@ async function main() {
     where: { platformReleaseId: implementationRelease.release.id, appId: appIdA },
   }), 1);
 
+  const missingRepoAppId = `platform-fleet-missing-repo-${nonce}`;
+  await prisma.app.create({
+    data: {
+      id: missingRepoAppId,
+      slug: missingRepoAppId,
+      displayName: missingRepoAppId,
+      repoFullName: `seorilabs/${missingRepoAppId}`,
+      type: "APP",
+      engine: "RN",
+      status: "ACTIVE",
+      marketTargets: [],
+    },
+  });
+  await assert.rejects(
+    reconcilePlatformFleet({
+      ...implementationInput,
+      idempotencyKey: `platform-fleet-reconcile:missing-repo:${nonce}`,
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
+  );
+  await prisma.app.update({ where: { id: missingRepoAppId }, data: { status: "PAUSED" } });
+
   const currentContractObservationA = await addPlatformObservation({
     repoId: repoIdA,
     sourceSha: sourceShaA,
@@ -243,10 +301,10 @@ async function main() {
     (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_PROVIDER_OBSERVATION_STALE",
   );
 
+  await prisma.app.update({ where: { id: appIdB }, data: { status: "PAUSED" } });
   const contractRelease = await addRelease(releaseManifest({
     version: contractVersion,
     classification: "CONTRACT_CHANGE",
-    consumers: [repoIdA],
   }), "contract");
   const contract = await reconcilePlatformFleet({
     platformReleaseId: contractRelease.release.id,

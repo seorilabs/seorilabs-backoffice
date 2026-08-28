@@ -62,6 +62,7 @@ export interface RepositoryTreeSnapshot {
   private: boolean;
   archived: boolean;
   paths: readonly string[];
+  gitlinkPaths?: readonly string[];
 }
 
 export type RepositoryTreeReadResult =
@@ -323,12 +324,15 @@ export async function readExactRepositoryTree(
     return { status: "NEEDS_INPUT", reasonCode: "TREE_TOO_LARGE" };
   }
   const paths: string[] = [];
+  const gitlinkPaths: string[] = [];
   for (const entry of tree.tree as Array<{ path?: unknown; type?: unknown }>) {
-    if (entry.type !== "blob") continue;
+    if (entry.type === "tree") continue;
     if (!safeTreePath(entry.path)) {
       return { status: "NEEDS_INPUT", reasonCode: "TREE_INVALID" };
     }
-    paths.push(entry.path);
+    if (entry.type === "blob") paths.push(entry.path);
+    else if (entry.type === "commit") gitlinkPaths.push(entry.path);
+    else return { status: "NEEDS_INPUT", reasonCode: "TREE_INVALID" };
   }
 
   return {
@@ -343,6 +347,7 @@ export async function readExactRepositoryTree(
       private: true,
       archived: false,
       paths: [...new Set(paths)].sort(),
+      gitlinkPaths: [...new Set(gitlinkPaths)].sort(),
     },
   };
 }
@@ -944,13 +949,19 @@ export async function discoverRepository(
       pathIn(candidate.workingDirectory, "game/addons/seorilabs_platform"),
     ].filter((directory, index, values) => (
       values.indexOf(directory) === index
-      && snapshot.paths.some((path) => path.startsWith(`${directory}/`))
+      && (
+        snapshot.paths.some((path) => path.startsWith(`${directory}/`))
+        || (snapshot.gitlinkPaths ?? []).some((path) => path === directory || path.startsWith(`${directory}/`))
+      )
     ));
     const addonDirectory = addonDirectories[0]
       ?? pathIn(candidate.workingDirectory, "addons/seorilabs_platform");
     const addonPrefix = `${addonDirectory}/`;
     const addonPaths = snapshot.paths
       .filter((path) => path.startsWith(addonPrefix))
+      .sort((left, right) => left.localeCompare(right));
+    const addonGitlinkPaths = (snapshot.gitlinkPaths ?? [])
+      .filter((path) => path === addonDirectory || path.startsWith(addonPrefix))
       .sort((left, right) => left.localeCompare(right));
     if (addonDirectories.length > 1) {
       platformConsumer = {
@@ -963,6 +974,20 @@ export async function discoverRepository(
           artifactKind,
           integration: "CUSTOM_HTTP",
           reason: "MULTIPLE_ADDON_ROOTS",
+        }),
+      };
+    } else if (addonGitlinkPaths.length > 0) {
+      platformConsumer = {
+        schemaVersion: 1,
+        sourceSha: snapshot.sourceSha,
+        integration: "CUSTOM_HTTP",
+        evidenceDigest: platformEvidenceDigest({
+          contractVersion: "platform-consumer-discovery/v1",
+          sourceSha: snapshot.sourceSha,
+          artifactKind,
+          integration: "CUSTOM_HTTP",
+          reason: "ADDON_GITLINK_PRESENT",
+          gitlinkCount: addonGitlinkPaths.length,
         }),
       };
     } else if (addonPaths.length === 0) {

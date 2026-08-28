@@ -34,10 +34,10 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
-| `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA, Platform version을 하나의 candidate로 고정 |
+| `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA·digest, Platform version을 하나의 candidate로 고정 |
 | `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
-| `GET/POST` | `/api/control-plane/platform-releases` | 서명 검증된 `FLEET_APPROVED` release manifest를 불변 원장에 기록·조회 |
-| `POST` | `/api/control-plane/platform-fleet/reconcile` | manifest 전체 consumer cohort와 exact discovery/provider observation으로 repo별 plan을 한 번만 생성 |
+| `GET` | `/api/control-plane/platform-releases` | 내부 producer가 검증·기록한 `FLEET_APPROVED` release 불변 원장을 조회 |
+| `POST` | `/api/control-plane/platform-fleet/reconcile` | 현재 ACTIVE app 전체 cohort와 exact discovery/provider observation으로 repo별 plan을 한 번만 생성 |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
 | `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
 | `POST` | `/api/internal/agents/claim` | 최대 5분 lease와 generation capability 발급 |
@@ -155,7 +155,7 @@ worker는 claim과 envelope의 resume mode가 다르거나 READBACK_FIRST가 REA
 - ACTIVE ConfigRevision 번호
 - market과 BuildTarget key
 - artifact type과 SHA-256
-- full WorkflowBundle SHA와 exact Platform version
+- full WorkflowBundle SHA·digest와 exact Platform version
 
 `IMPLEMENTATION`, `CI`, `ARTIFACT`, `RELEASE_ASSETS`, `COMPLIANCE_DRAFT`, `PROVIDER_SHELL`의 최신 observation이
 모두 `PASSED`일 때만 lifecycle이 `RELEASE_CANDIDATE`가 된다. 이 상태는 upload나 제출이 아니다.
@@ -234,32 +234,35 @@ profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirect
 
 매분 RPI5 `backoffice-platform-fleet` CronJob과 배포 직후 catch-up Job은 같은 admin endpoint를 호출한다.
 producer는 GitHub App의 read-only API로 `seorilabs/platform` latest Release의 정확한 tag commit,
-`platform-release.json`, `fleet-approved.json`, GDScript artifact와 checksum asset을 읽는다. raw byte SHA-256,
-release asset size/digest, release tag/source SHA가 하나라도 다르면 아무 release나 plan을 만들지 않는다.
-TypeScript package는 Release asset이 아니라 GitHub Packages로 발행되므로, 승인 manifest가 고정한 package
-version·artifact digest와 consumer lock의 exact version·integrity를 결합해 관측한다.
+`platform-release.json`, `fleet-approved.json`, TypeScript `.tgz`, GDScript artifact와 checksum asset을 읽는다.
+raw byte SHA-256, release asset size/digest, release tag/source SHA가 하나라도 다르면 아무 release나 plan을 만들지
+않는다. TypeScript `.tgz`가 Release asset에 없으면 fail-closed하며, 실제 내려받은 동일 bytes의 SHA-256·size와
+consumer lock의 exact version·integrity를 결합해 관측한다.
 
-`fleet-approved.json`은 P3 RN/Godot static·build-only canary와 exact WorkflowBundle SHA를 포함하고,
+`fleet-approved.json`은 P3 RN/Godot static·build-only canary와 exact WorkflowBundle SHA·digest를 포함하고,
 ConfigMap `backoffice-platform-fleet-trust`의 `trusted-release-keys.json`에 등록된 ACTIVE Ed25519 공개키로
 서명이 검증되어야 한다. 승인 asset이 아직 없으면 endpoint는 `WAITING_APPROVAL`을 반환하고 DB write와
 reconcile을 모두 생략한다. 승인 asset은 있는데 trust root가 없거나 서명이 틀리면 fail-closed한다.
-공개키 ConfigMap은 secret이 아니며 private signing key나 임시 대체키를 Backoffice에 두지 않는다.
+공개키 ConfigMap은 canonical SPKI `BEGIN PUBLIC KEY` PEM만 허용한다. secret이 아니며 PKCS8 private signing
+key나 임시 대체키를 Backoffice에 두지 않는다.
 
 검증된 producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version·SHA-256,
-GDScript tree checksum, 변경 분류, numeric consumer repo ID와 raw/approval provenance를 중앙 snapshot
-signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
+GDScript tree checksum, 변경 분류, 승인 canary attestation, WorkflowBundle SHA·digest와 raw/approval provenance를
+중앙 snapshot signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
+ACTIVE app cohort는 이 불변 release manifest에 넣지 않고 reconcile 시점의 mutable current snapshot으로 읽는다.
+따라서 앱 추가·중단이 release identity를 바꾸지 않으며, 매 reconcile은 현재 ACTIVE app 전부를 요구한다.
 GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
 
 Repository discovery는 exact source SHA에서 RN의 고정 `@seorilabs/platform-sdk` version과 lock integrity,
 Godot의 vendored `SOURCE`/`VERSION`/`CHECKSUM`과 실제 tree checksum을 자동 관측한다. 범위·branch·git URL,
-lock 불일치, floating `main`, tree checksum 불일치는 `CUSTOM_HTTP`, SDK 자체가 없으면 `MISSING`으로
+lock 불일치, floating `main`, tree checksum 불일치, addon subtree gitlink는 `CUSTOM_HTTP`, SDK 자체가 없으면 `MISSING`으로
 분류한다. 현재 release의 exact package version·lock integrity 또는 fixed asset URL·검증된 tree가 일치할 때만
 approved digest와 contract revision을 얻고, 이전 exact SDK는 digest를 추측하지 않은 채 update 대상으로 남는다.
 lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 기존 256KiB 한도를 유지한다.
-ACTIVE app 중 current default HEAD discovery가 `NEEDS_INPUT`이거나 Platform evidence가 없는 repo가 하나라도
-있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다.
+ACTIVE app 중 numeric repo ID가 없거나 current default HEAD discovery가 `NEEDS_INPUT`이거나 Platform evidence가
+없는 repo가 하나라도 있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다.
 
-Reconcile input은 manifest의 전체 consumer cohort와 각 repo의 current default HEAD
+Reconcile input은 DB에서 다시 읽은 현재 ACTIVE app 전체 cohort와 각 repo의 current default HEAD
 `DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히
 지정해야 한다. subset, stale source, 다른 app/provider identity, digest 또는 signature 불일치는 전부
 fail-closed한다.
@@ -279,7 +282,8 @@ worker가 capability broker를 통과해 처리하며 `RESULT_UNKNOWN`이면 같
 
 ReleaseCandidate 생성은 해당 repo에 적용되는 최신 `FLEET_APPROVED` release와
 `PlatformFleetBinding`의 release ID, manifest digest, source SHA, version, artifact digest,
-contract revision 및 `COMPLIANT` 상태가 모두 일치할 때만 열린다. PR merge만으로 compliant로 승격하지
+contract revision 및 `COMPLIANT` 상태가 모두 일치하고 candidate의 WorkflowBundle SHA·digest가 승인 canary와
+exact match할 때만 열린다. PR merge만으로 compliant로 승격하지
 않고 새 exact provider observation과 reconcile을 요구한다. Fleet UI에는 observed/approved
 version·digest, contract revision, PR/P1 Issue, 예외 만료와 plan 원장을 표시한다.
 
@@ -326,6 +330,10 @@ catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩
 claim CAS가 한 projection을 한 번만 적용하며, `App.projectV2Id`가 아직 없으면 추측하지 않고 `NEEDS_INPUT`으로
 닫는다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
 `Seorilabs Fleet` Project 생성과 `App.projectV2Id` 설정은 사용자 승인이 필요한 별도 gate다.
+
+Platform Fleet scheduler는 기존 plan의 drain/readback을 producer보다 먼저 별도 오류 경계에서 실행한다.
+새 Release 조회나 asset 검증이 실패해도 기존 mutation readback은 이미 독립적으로 소진되며, drain 실패 또한
+producer 실행 자체를 생략시키지 않는다.
 
 ## GitHub repository webhook
 

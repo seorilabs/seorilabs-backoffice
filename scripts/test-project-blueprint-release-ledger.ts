@@ -35,6 +35,7 @@ const APP_ID = "project-blueprint-integration-app";
 const REPO_ID = 9_000_000_001n;
 const SOURCE_SHA = "b".repeat(40);
 const WORKFLOW_SHA = "c".repeat(40);
+const WORKFLOW_DIGEST = "2".repeat(64);
 const ARTIFACT_SHA = "d".repeat(64);
 const RULES_SHA = "e".repeat(64);
 const PLATFORM_ARTIFACT_SHA = "f".repeat(64);
@@ -276,7 +277,41 @@ async function main() {
       digest: PLATFORM_ARTIFACT_SHA,
       packageName: "@seorilabs/platform",
     }],
-    consumers: [{ repoId: REPO_ID.toString(), artifactKind: "TYPESCRIPT" }],
+    canaryEvidence: {
+      attestationSha256: `sha256:${"3".repeat(64)}`,
+      readbackKeyId: "integration-readback-key",
+      workflowBundle: {
+        repository: "seorilabs/.github",
+        sourceSha: WORKFLOW_SHA,
+        digest: `sha256:${WORKFLOW_DIGEST}`,
+      },
+      canaries: ["godot", "react-native"].map((profile, index) => ({
+        profile: profile as "godot" | "react-native",
+        repositoryId: String(9_200 + index),
+        repositoryFullName: `seorilabs/${profile}-release-canary`,
+        sourceSha: index === 0 ? "4".repeat(40) : "5".repeat(40),
+        staticRun: {
+          runId: String(300 + index * 2), conclusion: "success" as const,
+          headSha: index === 0 ? "4".repeat(40) : "5".repeat(40), workflowSourceSha: WORKFLOW_SHA,
+        },
+        buildOnlyRun: {
+          runId: String(301 + index * 2), conclusion: "success" as const,
+          headSha: index === 0 ? "4".repeat(40) : "5".repeat(40), workflowSourceSha: WORKFLOW_SHA,
+          cloudBuildId: `release-build-${index}`,
+          builderImageDigest: `sha256:${"6".repeat(64)}`,
+          buildConfigDigest: `sha256:${"7".repeat(64)}`,
+          artifact: { name: `${profile}.aab`, sha256: `sha256:${"8".repeat(64)}`, size: 1 },
+        },
+      })) as PlatformReleaseManifest["canaryEvidence"]["canaries"],
+    },
+    provenance: {
+      repository: "seorilabs/platform",
+      releaseId: "9200",
+      releaseTag: "v0.6.5",
+      rawManifestSha256: "9".repeat(64),
+      approvalSha256: "a".repeat(64),
+      approvalKeyId: "integration-approval-key",
+    },
   };
   const signedPlatformManifest = signSnapshot(
     platformManifest as unknown as Parameters<typeof signSnapshot>[0],
@@ -313,6 +348,21 @@ async function main() {
     },
   });
 
+  await assert.rejects(createReleaseCandidate({
+    repoId: REPO_ID,
+    sourceSha: SOURCE_SHA,
+    configRevision: 1,
+    market: "google-play",
+    targetKey: "android-release",
+    artifactType: "android-aab",
+    artifactChecksum: ARTIFACT_SHA,
+    workflowBundleSha: WORKFLOW_SHA,
+    workflowBundleDigest: "0".repeat(64),
+    platformVersion: "0.6.5",
+    actor: "integration-worker",
+    idempotencyKey: "project-blueprint-integration-candidate-wrong-bundle",
+  }), (error) => error instanceof ControlPlaneError && error.code === "WORKFLOW_BUNDLE_APPROVAL_MISMATCH");
+
   const created = await createReleaseCandidate({
     repoId: REPO_ID,
     sourceSha: SOURCE_SHA,
@@ -322,11 +372,13 @@ async function main() {
     artifactType: "android-aab",
     artifactChecksum: ARTIFACT_SHA,
     workflowBundleSha: WORKFLOW_SHA,
+    workflowBundleDigest: WORKFLOW_DIGEST,
     platformVersion: "0.6.5",
     actor: "integration-worker",
     idempotencyKey: "project-blueprint-integration-candidate",
   });
   assert.equal(created.candidate.status, "PREPARED");
+  assert.equal(created.candidate.workflowBundleDigest, WORKFLOW_DIGEST);
   const replay = await createReleaseCandidate({
     repoId: REPO_ID,
     sourceSha: SOURCE_SHA,
@@ -336,6 +388,7 @@ async function main() {
     artifactType: "android-aab",
     artifactChecksum: ARTIFACT_SHA,
     workflowBundleSha: WORKFLOW_SHA,
+    workflowBundleDigest: WORKFLOW_DIGEST,
     platformVersion: "0.6.5",
     actor: "integration-worker",
     idempotencyKey: "project-blueprint-integration-candidate",

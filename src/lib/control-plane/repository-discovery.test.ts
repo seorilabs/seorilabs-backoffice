@@ -340,6 +340,29 @@ test("Godot fixed release URL과 vendored tree checksum을 exact SDK observation
   });
 });
 
+test("Godot addon subtree에 gitlink가 있으면 관리 SDK로 승인하지 않는다", async () => {
+  const version = "1.2.3";
+  const files = {
+    "package.json": JSON.stringify({ name: "sample", packageManager: "npm@11.0.0" }),
+    "project.godot": "[application]\n",
+    "export_presets.cfg": [
+      "[preset.0]", 'name="Android"', 'platform="Android"',
+      "[preset.0.options]", 'package/unique_name="com.seorilabs.game"',
+    ].join("\n"),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    "addons/seorilabs_platform/SOURCE": `https://github.com/seorilabs/platform/releases/download/v${version}/seorilabs-platform-gdscript-${version}.tar.gz\n`,
+    "addons/seorilabs_platform/VERSION": `${version}\n`,
+    "addons/seorilabs_platform/CHECKSUM": `${"a".repeat(64)}\n`,
+  };
+  const result = await discoverRepository(
+    snapshot(Object.keys(files), { gitlinkPaths: ["addons/seorilabs_platform/vendor"] }),
+    sourceReader(files),
+  );
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.equal(result.platformConsumer.integration, "CUSTOM_HTTP");
+});
+
 test("Godot floating main SOURCE는 CUSTOM_HTTP unmanaged로 탐지한다", async () => {
   const files = {
     "package.json": JSON.stringify({ name: "sample", packageManager: "npm@11.0.0" }),
@@ -470,7 +493,10 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
           return { data: overrides.tree ?? {
             sha: TREE_SHA,
             truncated: false,
-            tree: [{ path: "package.json", type: "blob" }],
+            tree: [
+              { path: "package.json", type: "blob" },
+              { path: "addons/seorilabs_platform/vendor", type: "commit" },
+            ],
           } };
         },
       },
@@ -484,7 +510,10 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       expectedSourceSha: SHA.toUpperCase(),
     });
     assert.equal(result.status, "READY");
-    if (result.status === "READY") assert.deepEqual(result.snapshot.paths, ["package.json"]);
+    if (result.status === "READY") {
+      assert.deepEqual(result.snapshot.paths, ["package.json"]);
+      assert.deepEqual(result.snapshot.gitlinkPaths, ["addons/seorilabs_platform/vendor"]);
+    }
     assert.equal(calls.some((call) => call.kind === "commit" && call.ref === "main"), true);
     assert.equal(calls.some((call) => call.kind === "tree" && call.tree_sha === TREE_SHA), true);
   });

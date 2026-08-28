@@ -183,6 +183,20 @@ test("raw manifest byte digest와 Ed25519 fleet approval을 함께 검증한다"
     ...value,
     trustedReleaseKeysJson: "",
   }), /trust root/);
+
+  const { privateKey } = generateKeyPairSync("ed25519");
+  assert.throws(() => verifyPlatformReleaseApproval({
+    ...value,
+    trustedReleaseKeysJson: JSON.stringify({
+      schemaVersion: 1,
+      keys: [{
+        algorithm: "Ed25519",
+        keyId: "release-key-1",
+        publicKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+        status: "ACTIVE",
+      }],
+    }),
+  }), /SPKI 공개키만/);
 });
 
 test("exact dependency evidence는 현재 artifact integrity가 맞을 때만 compliant digest를 얻는다", () => {
@@ -217,6 +231,10 @@ test("exact dependency evidence는 현재 artifact integrity가 맞을 때만 co
     typescriptArtifact: value.typescriptArtifact,
   });
   assert.equal(mismatch.integration, "CUSTOM_HTTP");
+  assert.equal(materializePlatformConsumerObservation({
+    discovery: { ...discovery, lockIntegrity: valid.lockIntegrity },
+    raw: value.manifest,
+  }).integration, "CUSTOM_HTTP");
 });
 
 test("GDScript는 fixed release URL과 실제 tree checksum이 모두 맞아야 digest를 얻는다", () => {
@@ -288,6 +306,7 @@ test("승인 release는 observation, append-only record, reconcile을 같은 exa
   const bytesByName = new Map<string, Buffer>([
     ["platform-release.json", value.manifestBytes],
     ["fleet-approved.json", value.approvalBytes],
+    [value.manifest.sdk.typescript.artifact.name, value.typescriptArtifact],
     [value.manifest.sdk.gdscript.artifact.name, value.gdscriptArtifact],
     [value.manifest.sdk.gdscript.checksumArtifact.name, value.checksumArtifact],
   ]);
@@ -352,6 +371,11 @@ test("승인 release는 observation, append-only record, reconcile을 같은 exa
   assert.equal(result.status, "RECONCILED");
   assert.equal(result.recorded, 1);
   assert.equal((recordedManifest as { provenance?: { releaseId: string } }).provenance?.releaseId, "99");
+  assert.deepEqual(
+    (recordedManifest as { canaryEvidence?: unknown }).canaryEvidence,
+    canaryEvidence(),
+  );
+  assert.equal("consumers" in (recordedManifest as object), false);
   assert.equal(
     (recordedObservation as { payload: PlatformConsumerObservationPayload }).payload.integration,
     "SDK",
@@ -360,4 +384,19 @@ test("승인 release는 observation, append-only record, reconcile을 같은 exa
     (reconcileInput as { consumers: unknown[] }).consumers,
     [{ repoId: "42", discoveryObservationId: "discovery-1", providerObservationId: "provider-1" }],
   );
+
+  await assert.rejects(producePlatformFleetRelease({
+    ...dependencies,
+    latestRelease: async () => ({
+      id: 99,
+      tagName: "v1.2.3",
+      tagSourceSha: SOURCE_SHA,
+      publishedAt: "2026-08-28T00:00:00.000Z",
+      draft: false,
+      prerelease: false,
+      assets: assets.filter((asset) => asset.name !== value.manifest.sdk.typescript.artifact.name),
+    }),
+  }), (error) => (
+    (error as { code?: unknown }).code === "PLATFORM_RELEASE_ASSET_IDENTITY_INVALID"
+  ));
 });

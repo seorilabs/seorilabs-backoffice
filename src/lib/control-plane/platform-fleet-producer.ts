@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 
 import {
+  platformCanaryEvidenceSchema,
   platformConsumerObservationPayloadSchema,
   platformReleaseManifestSchema,
   type PlatformConsumerObservationPayload,
@@ -34,7 +35,6 @@ const SHA_256_REVISION = /^sha256:[0-9a-f]{64}$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
-const GITHUB_REPOSITORY = /^seorilabs\/[a-z0-9][a-z0-9._-]*$/;
 
 const rawArtifactSchema = z.object({
   name: z.string().regex(/^[A-Za-z0-9._-]+$/),
@@ -114,71 +114,6 @@ export const rawPlatformReleaseManifestSchema = z.object({
   }
 });
 
-const canaryArtifactSchema = z.object({
-  name: z.string().regex(/^[A-Za-z0-9._-]+\.aab$/),
-  sha256: z.string().regex(SHA_256_REVISION),
-  size: z.number().int().positive(),
-}).strict();
-
-const staticCanaryRunSchema = z.object({
-  runId: z.string().regex(/^\d+$/),
-  conclusion: z.literal("success"),
-  headSha: z.string().regex(SHA_40),
-  workflowSourceSha: z.string().regex(SHA_40),
-}).strict();
-
-const buildCanaryRunSchema = staticCanaryRunSchema.extend({
-  cloudBuildId: z.string().regex(SAFE_ID),
-  builderImageDigest: z.string().regex(SHA_256_REVISION),
-  buildConfigDigest: z.string().regex(SHA_256_REVISION),
-  artifact: canaryArtifactSchema,
-}).strict();
-
-const canaryEvidenceSchema = z.object({
-  attestationSha256: z.string().regex(SHA_256_REVISION),
-  readbackKeyId: z.string().regex(SAFE_ID),
-  workflowBundle: z.object({
-    repository: z.literal("seorilabs/.github"),
-    sourceSha: z.string().regex(SHA_40),
-    digest: z.string().regex(SHA_256_REVISION),
-  }).strict(),
-  canaries: z.array(z.object({
-    profile: z.enum(["godot", "react-native"]),
-    repositoryId: z.string().regex(/^\d+$/),
-    repositoryFullName: z.string().regex(GITHUB_REPOSITORY),
-    sourceSha: z.string().regex(SHA_40),
-    staticRun: staticCanaryRunSchema,
-    buildOnlyRun: buildCanaryRunSchema,
-  }).strict()).length(2),
-}).strict().superRefine((evidence, context) => {
-  if (canonicalJson(evidence.canaries.map(({ profile }) => profile)) !== canonicalJson(["godot", "react-native"])) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["canaries"], message: "canary 순서가 올바르지 않습니다." });
-  }
-  const repoIds = evidence.canaries.map(({ repositoryId }) => repositoryId);
-  const repoNames = evidence.canaries.map(({ repositoryFullName }) => repositoryFullName);
-  if (new Set(repoIds).size !== repoIds.length || new Set(repoNames).size !== repoNames.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["canaries"], message: "canary repository는 서로 달라야 합니다." });
-  }
-  evidence.canaries.forEach((canary, index) => {
-    for (const [name, run] of [["staticRun", canary.staticRun], ["buildOnlyRun", canary.buildOnlyRun]] as const) {
-      if (run.headSha !== canary.sourceSha || run.workflowSourceSha !== evidence.workflowBundle.sourceSha) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["canaries", index, name],
-          message: "canary run의 exact source SHA가 일치하지 않습니다.",
-        });
-      }
-    }
-    if (canary.staticRun.runId === canary.buildOnlyRun.runId) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["canaries", index],
-        message: "static과 build-only run은 서로 달라야 합니다.",
-      });
-    }
-  });
-});
-
 export const platformReleaseApprovalSchema = z.object({
   schemaVersion: z.literal(2),
   algorithm: z.literal("Ed25519"),
@@ -190,7 +125,7 @@ export const platformReleaseApprovalSchema = z.object({
     sourceSha: z.string().regex(SHA_40),
     releaseTag: z.string().regex(RELEASE_TAG),
     status: z.literal("fleet-approved"),
-    canaryEvidence: canaryEvidenceSchema,
+    canaryEvidence: platformCanaryEvidenceSchema,
   }).strict(),
   signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
 }).strict();
@@ -332,14 +267,25 @@ function activeTrustedKeys(json: string): Map<string, KeyObject> {
   for (const entry of registry.keys) {
     if (seen.has(entry.keyId)) fail("Fleet approval key ID가 중복되었습니다.", "PLATFORM_RELEASE_TRUST_ROOT_INVALID");
     seen.add(entry.keyId);
+    const publicKeyPem = entry.publicKeyPem.trim().replace(/\r\n/g, "\n");
+    if (
+      !/^-----BEGIN PUBLIC KEY-----\n(?:[A-Za-z0-9+/]{1,64}\n)*[A-Za-z0-9+/]{1,64}={0,2}\n-----END PUBLIC KEY-----$/.test(publicKeyPem)
+      || publicKeyPem.includes("PRIVATE KEY")
+    ) {
+      fail("Fleet approval trust root에는 SPKI 공개키만 사용할 수 있습니다.", "PLATFORM_RELEASE_TRUST_ROOT_INVALID");
+    }
     let key: KeyObject;
     try {
-      key = createPublicKey(entry.publicKeyPem);
+      key = createPublicKey(publicKeyPem);
     } catch {
       return fail("Fleet approval 공개키를 해석할 수 없습니다.", "PLATFORM_RELEASE_TRUST_ROOT_INVALID");
     }
     if (key.type !== "public" || key.asymmetricKeyType !== "ed25519") {
       fail("Fleet approval 공개키는 Ed25519여야 합니다.", "PLATFORM_RELEASE_TRUST_ROOT_INVALID");
+    }
+    const normalizedSpki = key.export({ type: "spki", format: "pem" }).toString().trim();
+    if (normalizedSpki !== publicKeyPem) {
+      fail("Fleet approval 공개키는 canonical SPKI PEM이어야 합니다.", "PLATFORM_RELEASE_TRUST_ROOT_INVALID");
     }
     if (entry.status === "ACTIVE") result.set(entry.keyId, key);
   }
@@ -393,7 +339,6 @@ function normalizedReleaseManifest(input: {
   approval: PlatformReleaseApproval;
   rawManifestSha256: string;
   approvalSha256: string;
-  consumers: ManagedPlatformConsumer[];
 }): PlatformReleaseManifest {
   return platformReleaseManifestSchema.parse({
     schemaVersion: 1,
@@ -415,16 +360,7 @@ function normalizedReleaseManifest(input: {
       releaseAssetUrl: input.raw.sdk.gdscript.source,
       treeChecksum: input.raw.sdk.gdscript.treeChecksum,
     }],
-    consumers: input.consumers
-      .map((consumer) => ({
-        repoId: consumer.repoId.toString(),
-        artifactKind: consumer.engine === "GODOT" ? "GDSCRIPT" as const : "TYPESCRIPT" as const,
-      }))
-      .sort((left, right) => {
-        const leftId = BigInt(left.repoId);
-        const rightId = BigInt(right.repoId);
-        return leftId === rightId ? 0 : leftId < rightId ? -1 : 1;
-      }),
+    canaryEvidence: input.approval.payload.canaryEvidence,
     provenance: {
       repository: PLATFORM_REPOSITORY,
       releaseId: input.source.id.toString(),
@@ -447,7 +383,7 @@ function integrityMatches(bytes: Buffer, integrity: string): boolean {
 export function materializePlatformConsumerObservation(input: {
   discovery: PlatformConsumerObservationPayload;
   raw: RawPlatformReleaseManifest;
-  /** Release가 동일 npm pack byte를 asset으로 제공할 때만 추가 검증한다. */
+  /** Release의 exact npm pack asset. 현재 TS SDK를 검증할 때 필수다. */
   typescriptArtifact?: Buffer;
 }): PlatformConsumerObservationPayload {
   const discovery = platformConsumerObservationPayloadSchema.parse(input.discovery);
@@ -460,7 +396,8 @@ export function materializePlatformConsumerObservation(input: {
     if (discovery.observedVersion !== input.raw.sdk.typescript.version) return discovery;
     if (
       !discovery.lockIntegrity
-      || (input.typescriptArtifact && !integrityMatches(input.typescriptArtifact, discovery.lockIntegrity))
+      || !input.typescriptArtifact
+      || !integrityMatches(input.typescriptArtifact, discovery.lockIntegrity)
     ) {
       return {
         schemaVersion: 1,
@@ -566,6 +503,7 @@ export async function producePlatformFleetRelease(
     trustedReleaseKeysJson: dependencies.trustedReleaseKeysJson,
   });
   const sdkArtifacts = [
+    verified.manifest.sdk.typescript.artifact,
     verified.manifest.sdk.gdscript.artifact,
     verified.manifest.sdk.gdscript.checksumArtifact,
   ];
@@ -592,7 +530,6 @@ export async function producePlatformFleetRelease(
     approval: verified.approval,
     rawManifestSha256: verified.rawManifestSha256,
     approvalSha256: verified.approvalSha256,
-    consumers,
   });
   const signed = signSnapshot(normalized as unknown as JsonValue, dependencies.signingKey);
   const releaseResult = await dependencies.recordRelease({
@@ -603,7 +540,6 @@ export async function producePlatformFleetRelease(
     idempotencyKey: producerIdempotencyKey("platform-release-producer", {
       rawManifestSha256: verified.rawManifestSha256,
       approvalSha256: verified.approvalSha256,
-      consumers: normalized.consumers,
     }),
     signingKey: dependencies.signingKey,
   });
@@ -623,6 +559,7 @@ export async function producePlatformFleetRelease(
     const payload = materializePlatformConsumerObservation({
       discovery: consumer.platformConsumer,
       raw: verified.manifest,
+      typescriptArtifact: artifactBytes.get(verified.manifest.sdk.typescript.artifact.name),
     });
     const observation = await recordObservationIdempotently(dependencies.recordObservation, {
       repoId: consumer.repoId,
@@ -762,7 +699,7 @@ async function latestReleaseFromGitHub(octokit: Octokit): Promise<PlatformReleas
 
 async function listManagedConsumers(): Promise<ManagedPlatformConsumer[]> {
   const apps = await prisma.app.findMany({
-    where: { status: "ACTIVE", repoId: { not: null }, engine: { in: ["RN", "GODOT"] } },
+    where: { status: "ACTIVE" },
     orderBy: [{ repoId: "asc" }, { id: "asc" }],
     select: {
       id: true,
@@ -776,6 +713,13 @@ async function listManagedConsumers(): Promise<ManagedPlatformConsumer[]> {
       },
     },
   });
+  const missingRepository = apps.find((app) => app.repoId === null);
+  if (missingRepository) {
+    return fail(
+      `ACTIVE app ${missingRepository.repoFullName}에 GitHub repository ID가 없습니다.`,
+      "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
+    );
+  }
   const repoIds = apps.flatMap((app) => app.repoId === null ? [] : [app.repoId]);
   const registrations = await prisma.repositoryRegistration.findMany({
     where: { repoId: { in: repoIds } },

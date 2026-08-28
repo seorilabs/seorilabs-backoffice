@@ -190,9 +190,15 @@ test("migration은 중앙 모델과 exact candidate binding을 DB에서 고정�
     process.cwd(),
     "prisma/migrations/20260828030000_project_blueprint_release_ledger/migration.sql",
   ), "utf8");
+  const approvalBindingMigration = readFileSync(join(
+    process.cwd(),
+    "prisma/migrations/20260829010000_platform_fleet_approval_binding/migration.sql",
+  ), "utf8");
   assert.match(migration, /CREATE TABLE `control_plane_project_blueprint`/);
   assert.match(migration, /CREATE TABLE `control_plane_market_profile`/);
   assert.match(migration, /CREATE TABLE `control_plane_fleet_lifecycle_state`/);
   assert.match(migration, /ADD COLUMN `workflowBundleSha` CHAR\(40\)/);
+  assert.match(approvalBindingMigration, /ADD COLUMN `workflowBundleDigest` CHAR\(64\)/);
+  assert.doesNotMatch(approvalBindingMigration, /\b(?:DROP|MODIFY|CHANGE|TRUNCATE|RENAME)\b/i);
   assert.doesNotMatch(migration, /`(?:password|totp|cookie|privateKey|apiKey)`/i);
 });

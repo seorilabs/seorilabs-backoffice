@@ -35,6 +35,7 @@ function candidateRequestHash(input: {
   artifactType: string;
   artifactChecksum: string;
   workflowBundleSha: string;
+  workflowBundleDigest: string;
   platformVersion: string;
   actor: string;
 }): string {
@@ -44,6 +45,7 @@ function candidateRequestHash(input: {
     sourceSha: input.sourceSha.toLowerCase(),
     artifactChecksum: input.artifactChecksum.toLowerCase(),
     workflowBundleSha: input.workflowBundleSha.toLowerCase(),
+    workflowBundleDigest: input.workflowBundleDigest.toLowerCase(),
   } as JsonValue);
 }
 
@@ -56,6 +58,7 @@ export async function createReleaseCandidate(input: {
   artifactType: "android-aab" | "ios-archive" | "ait-bundle" | "web-bundle";
   artifactChecksum: string;
   workflowBundleSha: string;
+  workflowBundleDigest: string;
   platformVersion: string;
   actor: string;
   idempotencyKey: string;
@@ -72,7 +75,7 @@ export async function createReleaseCandidate(input: {
   return prisma.$transaction(async (tx) => {
     const app = await tx.app.findUnique({
       where: { repoId: input.repoId },
-      select: { id: true, repoId: true },
+      select: { id: true, repoId: true, engine: true },
     });
     if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
     await tx.$queryRaw`SELECT id FROM app WHERE id = ${app.id} FOR UPDATE`;
@@ -133,18 +136,28 @@ export async function createReleaseCandidate(input: {
     ) {
       throw new ControlPlaneError("source SHA와 market에 고정된 BuildTarget이 없습니다.", 409, "BUILD_TARGET_MISMATCH");
     }
-    const repoId = app.repoId?.toString() ?? null;
-    const latestApplicablePlatformRelease = repoId
-      ? approvedPlatformReleases
-          .map((release) => ({ ...release, parsedManifest: platformReleaseManifestSchema.parse(release.manifest) }))
-          .find((release) => release.parsedManifest.consumers.some((consumer) => consumer.repoId === repoId))
+    const latestApprovedRelease = approvedPlatformReleases[0];
+    const latestApplicablePlatformRelease = latestApprovedRelease
+      ? { ...latestApprovedRelease, parsedManifest: platformReleaseManifestSchema.parse(latestApprovedRelease.manifest) }
       : null;
-    const latestConsumer = latestApplicablePlatformRelease?.parsedManifest.consumers.find(
-      (consumer) => consumer.repoId === repoId,
-    );
     const latestArtifact = latestApplicablePlatformRelease?.parsedManifest.artifacts.find(
-      (artifact) => artifact.kind === latestConsumer?.artifactKind,
+      (artifact) => artifact.kind === (app.engine === "GODOT" ? "GDSCRIPT" : "TYPESCRIPT"),
     );
+    if (
+      latestApplicablePlatformRelease
+      && (
+        latestApplicablePlatformRelease.parsedManifest.canaryEvidence.workflowBundle.sourceSha.toLowerCase()
+          !== input.workflowBundleSha.toLowerCase()
+        || latestApplicablePlatformRelease.parsedManifest.canaryEvidence.workflowBundle.digest.toLowerCase()
+          !== `sha256:${input.workflowBundleDigest.toLowerCase()}`
+      )
+    ) {
+      throw new ControlPlaneError(
+        "FLEET_APPROVED canary의 exact WorkflowBundle SHA/digest와 일치하지 않습니다.",
+        409,
+        "WORKFLOW_BUNDLE_APPROVAL_MISMATCH",
+      );
+    }
     if (
       !latestApplicablePlatformRelease
       || !platformBinding
@@ -178,6 +191,7 @@ export async function createReleaseCandidate(input: {
         targetKey: input.targetKey,
         artifactType: input.artifactType,
         workflowBundleSha: input.workflowBundleSha.toLowerCase(),
+        workflowBundleDigest: input.workflowBundleDigest.toLowerCase(),
         platformVersion: input.platformVersion,
         requestHash,
         idempotencyKey: input.idempotencyKey,
@@ -198,6 +212,7 @@ export async function createReleaseCandidate(input: {
           targetKey: candidate.targetKey,
           artifactChecksum: candidate.artifactChecksum,
           workflowBundleSha: candidate.workflowBundleSha,
+          workflowBundleDigest: candidate.workflowBundleDigest,
           platformVersion: candidate.platformVersion,
         },
       },

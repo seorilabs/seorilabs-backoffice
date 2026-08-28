@@ -235,7 +235,7 @@ export default async function FleetOperationsPage({
                       revision {candidate.configRevision.revision} · {mono(candidate.sourceSha, 12)} · {candidate.targetKey ?? "target 미기록"}
                     </div>
                     <div className="mt-1 text-[11px] text-neutral-400">
-                      artifact {mono(candidate.artifactChecksum, 16)} · bundle {mono(candidate.workflowBundleSha, 12)} · Platform {candidate.platformVersion ?? "미기록"}
+                      artifact {mono(candidate.artifactChecksum, 16)} · bundle {mono(candidate.workflowBundleSha, 12)} / {mono(candidate.workflowBundleDigest, 12)} · Platform {candidate.platformVersion ?? "미기록"}
                     </div>
                   </div>
                   <span className="text-xs text-neutral-400">{dateTime(candidate.createdAt)} · {candidate.createdBy}</span>

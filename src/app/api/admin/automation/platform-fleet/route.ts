@@ -12,11 +12,21 @@ export async function POST(request: Request) {
   if (!verifyStaticToken(request.headers.get("x-admin-token"), process.env.INTERNAL_ADMIN_TOKEN)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  let plans: Awaited<ReturnType<typeof drainPlatformFleetPlans>> | undefined;
+  let producer: Awaited<ReturnType<typeof producePlatformFleetRelease>> | undefined;
+  let drainError: unknown;
+  let producerError: unknown;
   try {
-    const producer = await producePlatformFleetRelease();
-    const plans = await drainPlatformFleetPlans();
-    return NextResponse.json({ ok: true, result: { producer, plans } });
+    plans = await drainPlatformFleetPlans();
   } catch (error) {
-    return controlPlaneErrorResponse(error);
+    drainError = error;
   }
+  try {
+    producer = await producePlatformFleetRelease();
+  } catch (error) {
+    producerError = error;
+  }
+  if (drainError) return controlPlaneErrorResponse(drainError);
+  if (producerError) return controlPlaneErrorResponse(producerError);
+  return NextResponse.json({ ok: true, result: { producer, plans } });
 }

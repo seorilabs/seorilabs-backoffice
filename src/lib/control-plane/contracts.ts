@@ -120,6 +120,68 @@ const platformArtifactSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+const platformCanaryRunSchema = z.object({
+  runId: numericId,
+  conclusion: z.literal("success"),
+  headSha: sha40,
+  workflowSourceSha: sha40,
+}).strict();
+
+export const platformCanaryEvidenceSchema = z.object({
+  attestationSha256: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  readbackKeyId: publicIdentifier,
+  workflowBundle: z.object({
+    repository: z.literal("seorilabs/.github"),
+    sourceSha: sha40,
+    digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  }).strict(),
+  canaries: z.array(z.object({
+    profile: z.enum(["godot", "react-native"]),
+    repositoryId: numericId,
+    repositoryFullName: z.string().regex(/^seorilabs\/[a-z0-9][a-z0-9._-]*$/),
+    sourceSha: sha40,
+    staticRun: platformCanaryRunSchema,
+    buildOnlyRun: platformCanaryRunSchema.extend({
+      cloudBuildId: publicIdentifier,
+      builderImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+      buildConfigDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+      artifact: z.object({
+        name: z.string().regex(/^[A-Za-z0-9._-]+\.aab$/),
+        sha256: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+        size: z.number().int().positive(),
+      }).strict(),
+    }).strict(),
+  }).strict()).length(2),
+}).strict().superRefine((evidence, context) => {
+  if (evidence.canaries.map(({ profile }) => profile).join(",") !== "godot,react-native") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["canaries"], message: "canary 순서가 올바르지 않습니다." });
+  }
+  const repoIds = evidence.canaries.map(({ repositoryId }) => repositoryId);
+  const repoNames = evidence.canaries.map(({ repositoryFullName }) => repositoryFullName);
+  if (new Set(repoIds).size !== repoIds.length || new Set(repoNames).size !== repoNames.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["canaries"], message: "canary repository는 서로 달라야 합니다." });
+  }
+  evidence.canaries.forEach((canary, index) => {
+    for (const [name, run] of [["staticRun", canary.staticRun], ["buildOnlyRun", canary.buildOnlyRun]] as const) {
+      if (run.headSha.toLowerCase() !== canary.sourceSha.toLowerCase()
+        || run.workflowSourceSha.toLowerCase() !== evidence.workflowBundle.sourceSha.toLowerCase()) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["canaries", index, name],
+          message: "canary run의 exact source SHA가 일치하지 않습니다.",
+        });
+      }
+    }
+    if (canary.staticRun.runId === canary.buildOnlyRun.runId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canaries", index],
+        message: "static과 build-only run은 서로 달라야 합니다.",
+      });
+    }
+  });
+});
+
 export const platformReleaseManifestSchema = z.object({
   schemaVersion: z.literal(1),
   approval: z.literal("FLEET_APPROVED"),
@@ -129,10 +191,7 @@ export const platformReleaseManifestSchema = z.object({
   classification: z.enum(["IMPLEMENTATION_ONLY", "CONTRACT_CHANGE", "CONTRACT_ADDITION"]),
   publishedAt: z.string().datetime({ offset: true }),
   artifacts: z.array(platformArtifactSchema).min(1).max(2),
-  consumers: z.array(z.object({
-    repoId: numericId,
-    artifactKind: platformArtifactKind,
-  }).strict()).min(1).max(1_000),
+  canaryEvidence: platformCanaryEvidenceSchema,
   provenance: z.object({
     repository: z.literal("seorilabs/platform"),
     releaseId: numericId,
@@ -140,32 +199,13 @@ export const platformReleaseManifestSchema = z.object({
     rawManifestSha256: sha256,
     approvalSha256: sha256,
     approvalKeyId: publicIdentifier,
-  }).strict().optional(),
+  }).strict(),
 }).strict().superRefine((manifest, context) => {
   const artifactKinds = manifest.artifacts.map((artifact) => artifact.kind);
   if (new Set(artifactKinds).size !== artifactKinds.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["artifacts"], message: "artifact kind는 중복될 수 없습니다." });
   }
-  const consumerRepoIds = manifest.consumers.map((consumer) => consumer.repoId);
-  if (new Set(consumerRepoIds).size !== consumerRepoIds.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["consumers"], message: "consumer repo ID는 중복될 수 없습니다." });
-  }
-  manifest.consumers.forEach((consumer, index) => {
-    if (!artifactKinds.includes(consumer.artifactKind)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["consumers", index, "artifactKind"],
-        message: "consumer가 참조하는 exact artifact가 manifest에 없습니다.",
-      });
-    }
-  });
 });
-
-export const platformReleaseEnvelopeSchema = z.object({
-  manifest: platformReleaseManifestSchema,
-  manifestDigest: sha256,
-  signature: sha256,
-}).strict();
 
 export const platformConsumerObservationPayloadSchema = z.discriminatedUnion("integration", [
   z.object({
@@ -709,6 +749,7 @@ export const releaseCandidateSchema = z.object({
   artifactType: z.enum(["android-aab", "ios-archive", "ait-bundle", "web-bundle"]),
   artifactChecksum: sha256,
   workflowBundleSha: sha40,
+  workflowBundleDigest: sha256,
   platformVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
 }).strict();
 

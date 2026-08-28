@@ -15,6 +15,28 @@ const releaseSourceSha = "2".repeat(40);
 const artifactDigest = "a".repeat(64);
 const contractRevision = "b".repeat(64);
 const manifestDigest = "c".repeat(64);
+const canaryEvidence: PlatformReleaseManifest["canaryEvidence"] = {
+  attestationSha256: `sha256:${"d".repeat(64)}`,
+  readbackKeyId: "test-readback-key",
+  workflowBundle: {
+    repository: "seorilabs/.github",
+    sourceSha: releaseSourceSha,
+    digest: `sha256:${"e".repeat(64)}`,
+  },
+  canaries: ["godot", "react-native"].map((profile, index) => ({
+    profile: profile as "godot" | "react-native",
+    repositoryId: String(9001 + index),
+    repositoryFullName: `seorilabs/${profile}-canary`,
+    sourceSha,
+    staticRun: { runId: String(100 + index * 2), conclusion: "success" as const, headSha: sourceSha, workflowSourceSha: releaseSourceSha },
+    buildOnlyRun: {
+      runId: String(101 + index * 2), conclusion: "success" as const, headSha: sourceSha, workflowSourceSha: releaseSourceSha,
+      cloudBuildId: `build-${index}`, builderImageDigest: `sha256:${"f".repeat(64)}`,
+      buildConfigDigest: `sha256:${"0".repeat(64)}`,
+      artifact: { name: `${profile}.aab`, sha256: `sha256:${"1".repeat(64)}`, size: 1 },
+    },
+  })) as PlatformReleaseManifest["canaryEvidence"]["canaries"],
+};
 
 function manifest(
   classification: PlatformReleaseManifest["classification"] = "IMPLEMENTATION_ONLY",
@@ -33,11 +55,19 @@ function manifest(
       digest: artifactDigest,
       packageName: "@seorilabs/platform",
     }],
-    consumers: [{ repoId: "1234", artifactKind: "TYPESCRIPT" }],
+    canaryEvidence,
+    provenance: {
+      repository: "seorilabs/platform",
+      releaseId: "77",
+      releaseTag: "v1.2.3",
+      rawManifestSha256: "2".repeat(64),
+      approvalSha256: "3".repeat(64),
+      approvalKeyId: "test-approval-key",
+    },
   };
 }
 
-test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail-closed한다", () => {
+test("Platform release 계약은 승인, provenance, canary, exact artifact만 불변 원장에 허용한다", () => {
   assert.deepEqual(platformReleaseManifestSchema.parse(manifest()), manifest());
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
@@ -45,15 +75,19 @@ test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
-    consumers: [
-      { repoId: "1234", artifactKind: "TYPESCRIPT" },
-      { repoId: "1234", artifactKind: "TYPESCRIPT" },
-    ],
+    provenance: undefined,
+  }).success, false);
+  assert.equal(platformReleaseManifestSchema.safeParse({
+    ...manifest(),
+    canaryEvidence: undefined,
+  }).success, false);
+  assert.equal(platformReleaseManifestSchema.safeParse({
+    ...manifest(),
+    consumers: [{ repoId: "1234", artifactKind: "TYPESCRIPT" }],
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
     artifacts: [{ kind: "GDSCRIPT", version: "1.2.3", digest: artifactDigest }],
-    consumers: [{ repoId: "1234", artifactKind: "GDSCRIPT" }],
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
@@ -64,7 +98,6 @@ test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail
       treeChecksum: contractRevision,
       releaseAssetUrl: "https://raw.githubusercontent.com/seorilabs/platform/main/platform.gd",
     }],
-    consumers: [{ repoId: "1234", artifactKind: "GDSCRIPT" }],
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
@@ -75,7 +108,6 @@ test("Platform release 계약은 승인, exact artifact, consumer 중복을 fail
       treeChecksum: contractRevision,
       releaseAssetUrl: "https://github.com/seorilabs/platform/releases/download/v1.2.3/platform.gd",
     }],
-    consumers: [{ repoId: "1234", artifactKind: "GDSCRIPT" }],
   }).success, true);
 });
 
@@ -183,10 +215,18 @@ test("durable plan은 release/repo당 하나이며 GitHub mutation은 readback-f
 test("release candidate와 운영 scheduler는 stale SDK를 fail-closed한다", () => {
   const ledger = readFileSync(join(process.cwd(), "src/lib/control-plane/release-ledger.ts"), "utf8");
   const scheduler = readFileSync(join(process.cwd(), "k8s/scheduler-cronjobs.yaml"), "utf8");
+  const schedulerRoute = readFileSync(join(
+    process.cwd(),
+    "src/app/api/admin/automation/platform-fleet/route.ts",
+  ), "utf8");
   assert.match(ledger, /latestApplicablePlatformRelease[\s\S]*platformBinding\.state !== "COMPLIANT"/);
+  assert.match(ledger, /canaryEvidence\.workflowBundle\.sourceSha[\s\S]*workflowBundleDigest/);
+  assert.match(ledger, /WORKFLOW_BUNDLE_APPROVAL_MISMATCH/);
   assert.match(ledger, /PLATFORM_FLEET_STALE/);
   assert.match(scheduler, /name: backoffice-platform-fleet/);
   assert.match(scheduler, /concurrencyPolicy: Forbid[\s\S]*\/api\/admin\/automation\/platform-fleet/);
+  assert.ok(schedulerRoute.indexOf("drainPlatformFleetPlans()") < schedulerRoute.indexOf("producePlatformFleetRelease()"));
+  assert.match(schedulerRoute, /let drainError: unknown;[\s\S]*let producerError: unknown;/);
 });
 
 test("Platform API는 secret export 표면이나 signature 값을 응답하지 않는다", () => {
@@ -203,6 +243,7 @@ test("Platform API는 secret export 표면이나 signature 값을 응답하지 �
     "src/app/api/control-plane/provider-observations/route.ts",
   ), "utf8");
   assert.doesNotMatch(route, /signature: result\.release\.signature/);
+  assert.doesNotMatch(route, /export async function POST|recordPlatformRelease/);
   assert.doesNotMatch(`${route}\n${allRoutes}`, /get-secret|print-secret|copy-password/i);
   assert.match(providerRoute, /platformConsumerObservationPayloadSchema\.parse/);
   assert.match(providerRoute, /body\.resourceId !== body\.repoId\.toString\(\)/);
