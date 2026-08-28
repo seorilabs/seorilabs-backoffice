@@ -10,6 +10,7 @@ image="${BACKOFFICE_IMAGE:-}"
 source_sha="${BACKOFFICE_SOURCE_SHA:-}"
 dump_basename="${BACKOFFICE_RESTORE_DUMP_BASENAME:-}"
 timeout="${BACKOFFICE_RESTORE_TIMEOUT_SECONDS:-1800}"
+poll="${BACKOFFICE_RESTORE_POLL_SECONDS:-2}"
 
 if [[ ! "$image" =~ ^.+@sha256:[0-9a-f]{64}$ ]]; then
   echo "오류: BACKOFFICE_IMAGE는 immutable sha256 digest여야 한다" >&2
@@ -23,8 +24,8 @@ if [[ ! "$dump_basename" =~ ^backoffice-[0-9]{8}T[0-9]{6}Z\.sql\.gz$ ]]; then
   echo "오류: BACKOFFICE_RESTORE_DUMP_BASENAME 형식이 올바르지 않다" >&2
   exit 2
 fi
-if [[ ! "$timeout" =~ ^[1-9][0-9]*$ ]]; then
-  echo "오류: BACKOFFICE_RESTORE_TIMEOUT_SECONDS는 양의 정수여야 한다" >&2
+if [[ ! "$timeout" =~ ^[1-9][0-9]*$ ]] || [[ ! "$poll" =~ ^[1-9][0-9]*$ ]]; then
+  echo "오류: restore timeout과 poll은 양의 정수여야 한다" >&2
   exit 2
 fi
 
@@ -35,9 +36,24 @@ job_name="${job_ref##*/}"
 test -n "$job_name"
 echo "restore_rehearsal_job=$job_name source_sha=$source_sha dump=$dump_basename"
 
-if ! "$kubectl_bin" -n "$namespace" wait --for=condition=complete "job/$job_name" --timeout="${timeout}s"; then
+deadline=$((SECONDS + timeout))
+conditions=""
+while (( SECONDS < deadline )); do
+  conditions="$($kubectl_bin -n "$namespace" get "job/$job_name" \
+    -o 'jsonpath={range .status.conditions[*]}{.type}={.status}{"\n"}{end}')"
+  if [[ "$conditions" == *"Complete=True"* ]]; then
+    break
+  fi
+  if [[ "$conditions" == *"Failed=True"* ]]; then
+    "$kubectl_bin" -n "$namespace" get "job/$job_name" -o wide >&2 || true
+    echo "오류: restore rehearsal Job 실패. secret 보호를 위해 자동 로그 출력은 하지 않는다." >&2
+    exit 1
+  fi
+  sleep "$poll"
+done
+if [[ "$conditions" != *"Complete=True"* ]]; then
   "$kubectl_bin" -n "$namespace" get "job/$job_name" -o wide >&2 || true
-  echo "오류: restore rehearsal Job 실패. secret 보호를 위해 자동 로그 출력은 하지 않는다." >&2
+  echo "오류: restore rehearsal Job timeout: ${timeout}s" >&2
   exit 1
 fi
 

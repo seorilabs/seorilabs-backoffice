@@ -69,10 +69,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 ```
 `backup-cronjob.yaml`은 CI가 갱신하지만 PVC는 갱신하지 않는다. 백업 Job은 비밀번호를
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
-마지막에 완성본 이름으로 이동한다.
+마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
+권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 두 개가 있으면 보존하지만 부분·변형·
+추가 trigger는 복구하지 않고 실패한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
-주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다.
+주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
+않고 terminal condition에서 즉시 반환한다.
 CI는 build가 반환한 immutable registry digest의 migration Job으로 `prisma migrate deploy`를
 먼저 완료하고 source SHA를 별도 label로 기록한다.
 실패하면 기존 Ready 웹과 worker/CronJob은 바꾸지 않는다. 완료 Job은 7일간 남아

@@ -8,6 +8,7 @@ import {
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   appendOnlyContractDigest,
+  appendOnlyCreateTriggerStatement,
   parseAppendOnlyTriggers,
   evaluateAppendOnlyTriggers,
   triggerVisibilityFromGrants,
@@ -90,6 +91,20 @@ test("required trigger 계약은 migration SQL 선언과 정확히 같다", () =
 
   assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);
   assert.ok(declared.length > 0);
+});
+
+test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () => {
+  for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
+    const statement = `${appendOnlyCreateTriggerStatement(requirement)};`;
+    assert.deepEqual(parseAppendOnlyTriggers(statement), [requirement]);
+  }
+  assert.throws(
+    () => appendOnlyCreateTriggerStatement({
+      ...REQUIRED_APPEND_ONLY_TRIGGERS[0],
+      table: "unsafe`; DROP TABLE app; --",
+    }),
+    /APPEND_ONLY_TRIGGER_REQUIREMENT_UNSAFE/,
+  );
 });
 
 test("계약과 동일한 live readback만 통과한다", () => {

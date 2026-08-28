@@ -285,6 +285,7 @@ if [ "$(grep -c '^kind: CronJob' "$backup_cronjob")" -eq 1 ] &&
    grep -q 'runAsNonRoot: true' "$backup_cronjob" &&
    grep -q 'readOnlyRootFilesystem: true' "$backup_cronjob" &&
    grep -q 'umask 077' "$backup_cronjob" &&
+   grep -q -- '--skip-triggers' "$backup_cronjob" &&
    grep -q 'activeDeadlineSeconds: 1800' "$backup_cronjob" &&
    grep -q 'path: db-password' "$backup_cronjob" &&
    ! grep -q 'name: MYSQL_PWD' "$backup_cronjob"; then
@@ -300,12 +301,16 @@ if grep -q 'claimName: backoffice-backup' "$restore_job" &&
    grep -q 'medium: Memory' "$restore_job" &&
    grep -q 'backoffice_rehearsal' "$restore_job" &&
    grep -q 'POD_SCOPED_EMPTYDIR' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'ensureRestoredAppendOnlyTriggers' "$root/scripts/verify-restore-rehearsal.ts" &&
+   grep -q 'RECONSTRUCTED_FROM_SOURCE_CONTRACT' "$root/src/lib/control-plane/restore-rehearsal.ts" &&
    ! grep -q 'key: DATABASE_URL' "$restore_job" &&
    ! grep -q 'key: DB_PASSWORD' "$restore_job" &&
    grep -q 'CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_FILE' "$restore_job" &&
    grep -q 'secretName: backoffice-control-plane-snapshot-signing' "$restore_job" &&
    ! grep -A8 'name: signing-key' "$restore_job" | grep -q 'secretName: backoffice-secrets' &&
-   grep -q 'touch /state/stop' "$restore_job"; then
+   grep -q 'touch /state/stop' "$restore_job" &&
+   grep -q 'Failed=True' "$root/scripts/run-restore-rehearsal.sh" &&
+   ! grep -q 'wait --for=condition=complete' "$root/scripts/run-restore-rehearsal.sh"; then
   ok "restore rehearsal production DB 비접근·ephemeral cleanup 경계"
 else
   ng "restore rehearsal 격리 또는 cleanup 경계가 깨졌다"

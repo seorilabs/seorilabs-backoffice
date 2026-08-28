@@ -45,6 +45,7 @@ jobs:
           MIGRATION_FROZEN_BASE: ${{ github.event.before }}
       - run: bash scripts/render-manifest.test.sh
       - run: bash scripts/deploy-backoffice.test.sh
+      - run: bash scripts/run-restore-rehearsal.test.sh
       - run: bash scripts/check-ci-deployer-permissions.test.sh
 
   migration-contract:
