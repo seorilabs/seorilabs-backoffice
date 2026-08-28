@@ -131,23 +131,34 @@ test("완전한 source vector는 비민감 필드만 deterministic DRAFTABLE pay
   assert.equal(first.coverage.reported, 7);
 });
 
-test("secret-like key는 값 노출 없이 NEEDS_INPUT으로 차단한다", () => {
+test("secret-like key는 값 노출 없이 검토용 부분 DRAFT에서 제외한다", () => {
   const secret = "should-never-appear";
   const payload = { ...safeGooglePayload(), reviewPassword: secret };
   const result = transformLegacySources(completeVector({ GOOGLE_PLAY_CONFIG: payload }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   assert.ok(result.reasons.some((reason) => reason.code === "SECRET_LIKE_KEY"));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+  if (result.status !== "DRAFTABLE_WITH_INPUT") return;
+  assert.deepEqual(result.payload.markets, [{
+    market: "google-play",
+    enabled: true,
+    locales: ["ko-KR"],
+    releaseChannel: "internal",
+  }]);
+  assert.deepEqual(result.payload.build, { minSdk: 23, targetSdk: 35 });
+  const parity = compareLegacyShadow(result, result.payload);
+  assert.equal(parity.status, "NEEDS_INPUT");
+  assert.deepEqual(parity.diffs, [{ path: "$", code: "TRANSFORM_NEEDS_INPUT" }]);
 });
 
-test("자유 텍스트 필드의 canary 값은 DRAFT payload나 결과에 남기지 않는다", () => {
+test("자유 텍스트 필드의 canary 값은 검토용 부분 DRAFT나 결과에 남기지 않는다", () => {
   const canary = "CANARY_SECRET_VALUE_7f5a9c";
   const payload = safeGooglePayload();
   payload.storeListing = {
     appName: { "ko-KR": canary },
   };
   const result = transformLegacySources(completeVector({ GOOGLE_PLAY_CONFIG: payload }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   assert.ok(result.reasons.some((reason) => reason.code === "FREE_TEXT_REQUIRES_INPUT"));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
 });
@@ -163,7 +174,7 @@ test("SemVer suffix와 workflow SHA도 승인 원장 검증 전에는 자동 이
     workflowBundleSha: workflowCanary,
   };
   const result = transformLegacySources(completeVector({ GOOGLE_PLAY_CONFIG: payload }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   assert.ok(result.reasons.some((reason) => (
     reason.code === "FREE_TEXT_REQUIRES_INPUT" && reason.path === "$.build.platformVersion"
   )));
@@ -189,7 +200,7 @@ test("중복 JSON object key는 마지막 값으로 덮지 않고 fail-closed한
   assert.ok(escaped.reasons.some((reason) => reason.code === "SOURCE_PARSE_ERROR"));
 });
 
-test("legal/provider state와 market dimension 없는 asset은 fail-closed한다", () => {
+test("legal/provider state와 미분류 asset은 부분 DRAFT 밖에 두고 cleanup을 차단한다", () => {
   const payload = {
     ...safeGooglePayload(),
     contentDeclarations: { dataSafety: "draft" },
@@ -197,14 +208,14 @@ test("legal/provider state와 market dimension 없는 asset은 fail-closed한다
     assets: { playIcon: "store/icon.png" },
   };
   const result = transformLegacySources(completeVector({ GOOGLE_PLAY_CONFIG: payload }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   const codes = new Set(result.reasons.map((reason) => reason.code));
   assert.equal(codes.has("LEGAL_COMPLIANCE_AMBIGUITY"), true);
   assert.equal(codes.has("PROVIDER_STATE_AMBIGUITY"), true);
   assert.equal(codes.has("UNSUPPORTED_FIELD"), true);
 });
 
-test("중앙 v1이 market을 표현하지 못하는 legacy asset과 외부 binding 필드는 버리지 않고 차단한다", () => {
+test("중앙에서 아직 분류하지 못한 legacy asset과 외부 binding은 부분 DRAFT 밖에 둔다", () => {
   const google = {
     ...safeGooglePayload(),
     packageName: "com.example.test",
@@ -219,13 +230,13 @@ test("중앙 v1이 market을 표현하지 못하는 legacy asset과 외부 bindi
     GOOGLE_PLAY_CONFIG: google,
     APP_STORE_CONFIG: appStore,
   }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   const unsupported = result.reasons.filter((reason) => reason.code === "UNSUPPORTED_FIELD");
   assert.ok(unsupported.some((reason) => reason.sourceKind === "GOOGLE_PLAY_CONFIG"));
   assert.ok(unsupported.some((reason) => reason.sourceKind === "APP_STORE_CONFIG"));
 });
 
-test("cross-market 자유 텍스트 metadata는 값 비교 없이 사람 입력으로 돌린다", () => {
+test("cross-market 자유 텍스트 metadata는 부분 DRAFT에서 제외하고 사람 입력으로 돌린다", () => {
   const google = {
     defaultLanguage: "ko-KR",
     storeListing: { appName: { "ko-KR": "첫 이름" } },
@@ -238,7 +249,7 @@ test("cross-market 자유 텍스트 metadata는 값 비교 없이 사람 입력�
     GOOGLE_PLAY_CONFIG: google,
     APP_STORE_CONFIG: appStore,
   }));
-  assert.equal(result.status, "NEEDS_INPUT");
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
   assert.ok(result.reasons.some((reason) => reason.code === "FREE_TEXT_REQUIRES_INPUT"));
 });
 
