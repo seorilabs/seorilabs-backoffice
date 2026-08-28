@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { App, Octokit } from "octokit";
 
 // GitHub App (seorilabs-backoffice) 인증.
@@ -14,7 +15,9 @@ function normalizePrivateKey(raw: string): string {
 function getApp(): App {
   if (appInstance) return appInstance;
   const appId = process.env.GITHUB_APP_ID;
-  const privateKeyRaw = process.env.GITHUB_PRIVATE_KEY;
+  const privateKeyPath = process.env.GITHUB_PRIVATE_KEY_FILE?.trim();
+  const privateKeyRaw = process.env.GITHUB_PRIVATE_KEY
+    ?? (privateKeyPath ? readFileSync(privateKeyPath, "utf8") : undefined);
   if (!appId || !privateKeyRaw) {
     throw new Error("GITHUB_APP_ID / GITHUB_PRIVATE_KEY 가 설정되지 않았습니다.");
   }

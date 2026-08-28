@@ -19,7 +19,7 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 
 before="$(pnpm tsx scripts/verify-migration-state.ts \
   --history=legacy --print-data-fingerprint | tail -n 1)"
-new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation"
+new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation,control_plane_fleet_parity_wave,control_plane_fleet_parity_wave_result"
 preflight_log="$(mktemp)"
 trap 'rm -f "$preflight_log"' EXIT
 if pnpm tsx scripts/verify-migration-state.ts --history=predeploy \
