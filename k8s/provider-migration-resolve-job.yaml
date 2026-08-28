@@ -1,0 +1,83 @@
+# 위 trigger recovery가 exact 정의를 검증한 뒤에만 실행하는 one-shot Job이다.
+# 부분 적용된 migration의 현재 schema를 먼저 비교하고 failed row를 applied로 종결한다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-provider-migration-resolve-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: provider-migration-resolve
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/migration: "20260828230000_provider_execution_queue"
+    seorilabs.dev/migration-sha256: "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 2592000
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: provider-migration-resolve
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: resolve
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -c 0
+              migration=20260828230000_provider_execution_queue
+              test "$(sha256sum "prisma/migrations/${migration}/migration.sql" | awk '{print $1}')" = \
+                "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb"
+              prisma migrate diff \
+                --from-schema-datasource prisma/schema.prisma \
+                --to-schema-datamodel prisma/schema.prisma \
+                --exit-code
+              prisma migrate resolve --applied "$migration"
+              prisma migrate deploy
+              prisma migrate status
+              test "$(node scripts-dist/verify-migration-state.cjs \
+                --history=predeploy --expected-lineage=cutover)" = cutover
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

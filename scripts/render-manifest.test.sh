@@ -116,6 +116,20 @@ else
   ng "baseline resolve Job artifact identity가 깨졌다"
 fi
 
+provider_trigger_out="$("$render" "$root/k8s/provider-audit-trigger-recovery-job.yaml" "$IMG" "$SHA")"
+provider_resolve_out="$("$render" "$root/k8s/provider-migration-resolve-job.yaml" "$IMG" "$SHA")"
+if printf '%s' "$provider_trigger_out" | grep -q "backoffice-provider-audit-triggers-${SHA:0:12}-" &&
+   printf '%s' "$provider_trigger_out" | grep -q 'namespace: data' &&
+   printf '%s' "$provider_trigger_out" | grep -q 'mysql-root-cred' &&
+   ! printf '%s' "$provider_trigger_out" | grep -q 'log_bin_trust_function_creators\|GRANT TRIGGER\|MYSQL_PWD' &&
+   printf '%s' "$provider_resolve_out" | grep -q "backoffice-provider-migration-resolve-${SHA:0:12}-" &&
+   printf '%s' "$provider_resolve_out" | grep -q "image: ${IMG}" &&
+   printf '%s' "$provider_resolve_out" | grep -q 'prisma migrate resolve --applied'; then
+  ok "provider audit partial migration은 exact trigger와 immutable resolve Job으로만 복구"
+else
+  ng "provider audit partial migration 복구 경계가 깨졌다"
+fi
+
 restore_dump="backoffice-20260828T010203Z.sql.gz"
 restore_out="$("$here/render-restore-rehearsal.sh" \
   "$root/k8s/restore-rehearsal-job.yaml" "$IMG" "$SHA" "$restore_dump")"

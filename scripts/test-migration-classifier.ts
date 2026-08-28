@@ -28,6 +28,9 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
 const first = "99999999999998_first_expand";
 const second = "99999999999999_second_expand";
 const fixtureId = "00000000-0000-4000-8000-000000000161";
+const recoveryFixtureId = "00000000-0000-4000-8000-000000000162";
+const extraRecoveryFixtureId = "00000000-0000-4000-8000-000000000163";
+const recoveredMigration = "20260828230000_provider_execution_queue";
 
 async function main(): Promise<void> {
   const root = process.cwd();
@@ -56,6 +59,53 @@ async function main(): Promise<void> {
   const secondChecksum = createHash("sha256").update(secondSql).digest("hex");
   const prisma = new PrismaClient();
   try {
+    const recoveredSql = readFileSync(
+      join(activeRoot, recoveredMigration, "migration.sql"),
+    );
+    const recoveredChecksum = createHash("sha256").update(recoveredSql).digest("hex");
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO _prisma_migrations
+        (id, checksum, finished_at, migration_name, logs, rolled_back_at,
+         started_at, applied_steps_count)
+       VALUES (?, ?, NULL, ?, NULL, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), 0)`,
+      recoveryFixtureId,
+      recoveredChecksum,
+      recoveredMigration,
+    );
+    const allowedRecovery = spawnSync(
+      "pnpm",
+      ["tsx", "scripts/verify-migration-state.ts", "--history=predeploy"],
+      { cwd: root, env: process.env, encoding: "utf8" },
+    );
+    if (allowedRecovery.status !== 0) {
+      throw new Error("manifest에 고정한 단일 active rollback을 허용하지 않았다");
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO _prisma_migrations
+        (id, checksum, finished_at, migration_name, logs, rolled_back_at,
+         started_at, applied_steps_count)
+       VALUES (?, ?, NULL, ?, NULL, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), 0)`,
+      extraRecoveryFixtureId,
+      recoveredChecksum,
+      recoveredMigration,
+    );
+    const excessiveRecovery = spawnSync(
+      "pnpm",
+      ["tsx", "scripts/verify-migration-state.ts", "--history=predeploy"],
+      { cwd: root, env: process.env, encoding: "utf8" },
+    );
+    const excessiveOutput = `${excessiveRecovery.stdout}${excessiveRecovery.stderr}`;
+    if (
+      excessiveRecovery.status === 0 ||
+      !excessiveOutput.includes("허용되지 않은 active rollback attempt")
+    ) {
+      throw new Error("두 번째 active rollback attempt를 거부하지 않았다");
+    }
+    await prisma.$executeRawUnsafe(
+      "DELETE FROM _prisma_migrations WHERE id = ?",
+      extraRecoveryFixtureId,
+    );
+
     await prisma.$executeRawUnsafe(
       `INSERT INTO _prisma_migrations
         (id, checksum, finished_at, migration_name, logs, rolled_back_at,
@@ -80,6 +130,11 @@ async function main(): Promise<void> {
     }
     console.log("active migration prefix classifier 계약 통과");
   } finally {
+    await prisma.$executeRawUnsafe(
+      "DELETE FROM _prisma_migrations WHERE id IN (?, ?)",
+      recoveryFixtureId,
+      extraRecoveryFixtureId,
+    );
     await prisma.$executeRawUnsafe(
       "DELETE FROM _prisma_migrations WHERE id = ?",
       fixtureId,

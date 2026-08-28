@@ -28,6 +28,11 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
     schemaContractSha256: string;
   };
   currentSchemaContract: string;
+  activeRecovery?: Record<string, {
+    sha256: string;
+    maxRolledBackAttempts: number;
+    reason: string;
+  }>;
   legacy: {
     ledger: string;
     successfulMigrations: number;
@@ -115,6 +120,54 @@ function activeMigrations(): Map<string, string> {
     result.set(name, sha256(join(directory, "migration.sql")));
   }
   return result;
+}
+
+function activeRecoveryAllowance(
+  active: ReadonlyMap<string, string>,
+  name: string,
+): number {
+  const policy = manifest.activeRecovery?.[name];
+  if (!policy) return 0;
+  if (
+    active.get(name) !== policy.sha256 ||
+    !Number.isSafeInteger(policy.maxRolledBackAttempts) ||
+    policy.maxRolledBackAttempts < 1 ||
+    !policy.reason.trim()
+  ) {
+    throw new Error(`active recovery policy가 migration bytes와 맞지 않다: ${name}`);
+  }
+  return policy.maxRolledBackAttempts;
+}
+
+function verifyActiveRows(
+  active: ReadonlyMap<string, string>,
+  rows: readonly LedgerRow[],
+): Map<string, number> {
+  const succeededCounts = new Map<string, number>();
+  const rolledBackCounts = new Map<string, number>();
+  for (const row of rows) {
+    const checksum = active.get(row.name);
+    if (!checksum || row.checksum !== checksum) {
+      throw new Error(`active migration checksum이 올바르지 않다: ${row.name}`);
+    }
+    if (row.status === "SUCCEEDED") {
+      succeededCounts.set(row.name, (succeededCounts.get(row.name) ?? 0) + 1);
+      continue;
+    }
+    if (row.steps !== 0) {
+      throw new Error(`active rollback attempt가 부분 적용 step을 주장한다: ${row.name}`);
+    }
+    rolledBackCounts.set(row.name, (rolledBackCounts.get(row.name) ?? 0) + 1);
+  }
+  for (const [name, count] of rolledBackCounts) {
+    if (count > activeRecoveryAllowance(active, name)) {
+      throw new Error(`허용되지 않은 active rollback attempt가 있다: ${name}`);
+    }
+  }
+  for (const name of Object.keys(manifest.activeRecovery ?? {})) {
+    activeRecoveryAllowance(active, name);
+  }
+  return succeededCounts;
 }
 
 type LedgerRow = {
@@ -222,21 +275,11 @@ function verifyHistory(actual: LedgerRow[]): void {
       throw new Error("cutover 전 DB에 active baseline row가 이미 있다");
     }
   } else {
-    for (const [name, checksum] of active) {
-      const succeeded = activeRows.filter(
-        (row) =>
-          row.name === name && row.status === "SUCCEEDED" && row.checksum === checksum,
-      );
-      if (succeeded.length !== 1) {
+    const succeededCounts = verifyActiveRows(active, activeRows);
+    for (const name of active.keys()) {
+      if (succeededCounts.get(name) !== 1) {
         throw new Error(`active migration 성공 row가 유일하지 않다: ${name}`);
       }
-    }
-    if (
-      activeRows.some(
-        (row) => row.status !== "SUCCEEDED" || row.checksum !== active.get(row.name),
-      )
-    ) {
-      throw new Error("active migration에 rollback 또는 checksum drift가 있다");
     }
   }
 
@@ -288,16 +331,7 @@ async function classifyPredeploy(prisma: PrismaClient): Promise<"fresh" | "cutov
   }
 
   const activeRows = actual.filter((row) => active.has(row.name));
-  const activeCounts = new Map<string, number>();
-  for (const row of activeRows) {
-    if (
-      row.status !== "SUCCEEDED" ||
-      row.checksum !== active.get(row.name)
-    ) {
-      throw new Error(`active migration checksum 또는 상태가 올바르지 않다: ${row.name}`);
-    }
-    activeCounts.set(row.name, (activeCounts.get(row.name) ?? 0) + 1);
-  }
+  const activeCounts = verifyActiveRows(active, activeRows);
   const duplicate = [...activeCounts].find(([, count]) => count !== 1);
   if (duplicate) {
     throw new Error(`active migration 성공 row가 유일하지 않다: ${duplicate[0]}`);
