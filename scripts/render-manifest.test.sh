@@ -285,12 +285,13 @@ fi
 
 fleet_parity_job="$root/k8s/fleet-parity-wave-job.yaml"
 if grep -q 'fieldPath: metadata.uid' "$fleet_parity_job" &&
+   grep -q '^  backoffLimit: 0$' "$fleet_parity_job" &&
    grep -q 'automountServiceAccountToken: false' "$fleet_parity_job" &&
    grep -q 'GITHUB_PRIVATE_KEY_FILE' "$fleet_parity_job" &&
    grep -q 'path: private-key' "$fleet_parity_job" &&
    ! grep -q 'name: GITHUB_PRIVATE_KEY$' "$fleet_parity_job" &&
    grep -q 'ttlSecondsAfterFinished: 604800' "$fleet_parity_job"; then
-  ok "Fleet parity distinct occurrence와 secret file 경계"
+  ok "Fleet parity 단일 occurrence와 secret file 경계"
 else
   ng "Fleet parity Job occurrence 또는 secret 경계가 깨졌다"
 fi
