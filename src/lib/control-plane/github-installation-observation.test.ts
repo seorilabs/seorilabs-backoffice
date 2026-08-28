@@ -126,6 +126,32 @@ test("공개 installation readback은 앱별 ProviderObservation과 repository b
   )), /token|password|private.?key|authorization/i);
 });
 
+test("installation readback 실패는 provider 원문 없이 BLOCKED partial로 수렴한다", async () => {
+  const result = await recordGitHubInstallationObservations({
+    organization: "seorilabs",
+    occurrenceId: "occurrence-failed",
+  }, {
+    getPublicState: async () => {
+      throw new Error("provider request header with private credential");
+    },
+    listApps: async () => {
+      throw new Error("must not list apps after readback failure");
+    },
+    record: async () => {
+      throw new Error("must not record after readback failure");
+    },
+    now: () => new Date("2026-08-28T08:00:00.000Z"),
+  });
+  assert.deepEqual(result, {
+    observed: 0,
+    duplicate: 0,
+    failed: 1,
+    state: "partial",
+    gate: "BLOCKED",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /provider|header|credential/i);
+});
+
 test("scheduler route와 Fleet UI는 read-only installation observation을 연결한다", () => {
   const route = readFileSync(join(
     process.cwd(),
