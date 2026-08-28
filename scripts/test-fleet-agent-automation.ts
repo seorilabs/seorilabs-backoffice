@@ -9,6 +9,7 @@ import {
   executeAutomationCommand,
   recordWebhookDelivery,
   retryAgentRun,
+  scheduleDueAutomations,
 } from "@/lib/control-plane/automation-service";
 import {
   claimAgentRun,
@@ -358,6 +359,32 @@ async function main() {
   });
   assert.equal(replayed.definition.id, created.definition.id);
   assert.equal(replayed.duplicate, true);
+  await prisma.automationDefinition.update({
+    where: { id: created.definition.id },
+    data: { createdAt: new Date("2026-08-25T01:00:00.000Z") },
+  });
+  const scheduleNow = new Date("2026-08-28T12:30:00.000Z");
+  const firstSchedule = await scheduleDueAutomations({ now: scheduleNow });
+  assert.equal(firstSchedule.created, 3, "누락된 daily slot 세 개를 한 번씩 복구해야 한다");
+  const afterFirstSchedule = {
+    occurrences: await prisma.automationOccurrence.count({
+      where: { definitionId: created.definition.id, triggerKind: "SCHEDULE" },
+    }),
+    runs: await prisma.agentRun.count({
+      where: { occurrence: { definitionId: created.definition.id, triggerKind: "SCHEDULE" } },
+    }),
+  };
+  assert.deepEqual(afterFirstSchedule, { occurrences: 3, runs: 1 });
+  const replayedSchedule = await scheduleDueAutomations({ now: scheduleNow });
+  assert.equal(replayedSchedule.created, 0);
+  assert.deepEqual({
+    occurrences: await prisma.automationOccurrence.count({
+      where: { definitionId: created.definition.id, triggerKind: "SCHEDULE" },
+    }),
+    runs: await prisma.agentRun.count({
+      where: { occurrence: { definitionId: created.definition.id, triggerKind: "SCHEDULE" } },
+    }),
+  }, afterFirstSchedule, "같은 reconcile은 occurrence와 run을 중복 생성하지 않아야 한다");
   const pauseRequestId = `definition-pause:${crypto.randomUUID()}`;
   await executeAutomationCommand({
     definitionId: created.definition.id,
@@ -400,6 +427,16 @@ async function main() {
   assert.equal((await prisma.automationIngressEvent.findUniqueOrThrow({
     where: { sourceKey: `github:${platformDeliveryId}` },
   })).status, "PROCESSED");
+  const platformRedelivery = await recordWebhookDelivery({
+    deliveryId: platformDeliveryId,
+    event: "push",
+    repoFullName: "seorilabs/platform",
+    stableTagPush: platformTag,
+  });
+  assert.equal(platformRedelivery.duplicate, true);
+  assert.equal(await prisma.automationIngressEvent.count({
+    where: { sourceKey: `github:${platformDeliveryId}` },
+  }), 1, "같은 GitHub delivery의 durable inbox는 하나여야 한다");
   await assert.rejects(
     recordWebhookDelivery({
       deliveryId: platformDeliveryId,
