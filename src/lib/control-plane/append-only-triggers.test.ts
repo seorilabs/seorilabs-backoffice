@@ -287,14 +287,53 @@ test("배포 script는 고정 verifier 관측을 rollout 선행조건으로 둔�
   assert.doesNotMatch(executable, /(apply|create|render)\s+\S*provider-audit-trigger/);
 });
 
-test("CI deployer는 data namespace에서 workload를 만들 수 없다", () => {
-  const rbac = readFileSync(join(process.cwd(), "k8s/ci-deployer-data-rbac.yaml"), "utf8");
-  assert.match(rbac, /resourceNames: \["backoffice-provider-audit-trigger-state"\]/);
-  assert.doesNotMatch(rbac, /resources: \["jobs"\]/);
-  assert.doesNotMatch(rbac, /resources: \["pods"\]/);
-  assert.doesNotMatch(rbac, /resources: \["secrets"\]/);
-  assert.doesNotMatch(rbac, /verbs:.*create/);
-  assert.doesNotMatch(rbac, /verbs:.*delete/);
+test("CI deployer는 data namespace에서 workload를 만들거나 바꿀 수 없다", () => {
+  const documents = parseAllDocuments(
+    readFileSync(join(process.cwd(), "k8s/ci-deployer-data-rbac.yaml"), "utf8"),
+  ).map((document) => document.toJS() as { kind?: string; rules?: unknown });
+  const role = documents.find((document) => document.kind === "Role") as {
+    rules: Array<{ apiGroups: string[]; resources: string[]; resourceNames?: string[]; verbs: string[] }>;
+  };
+  assert.ok(role, "Role이 없다");
+
+  // workload를 바꿀 수 있는 verb가 하나라도 있으면 Pod template에 임의 Secret volume을
+  // 붙일 수 있고, 그 자체가 root secret export 경로다.
+  const mutatingVerbs = ["create", "patch", "update", "delete", "deletecollection"];
+  for (const rule of role.rules) {
+    for (const verb of rule.verbs) {
+      assert.ok(
+        !mutatingVerbs.includes(verb),
+        `data namespace에 mutation verb가 남아 있다: ${rule.resources.join(",")} ${verb}`,
+      );
+    }
+    // 모든 규칙은 정확한 리소스 이름으로 좁혀져 있어야 한다.
+    assert.ok(
+      (rule.resourceNames ?? []).length > 0,
+      `resourceNames 없는 규칙이 있다: ${rule.resources.join(",")}`,
+    );
+    assert.ok(
+      !rule.resources.includes("secrets"),
+      "CI에 secret 접근을 주지 않는다",
+    );
+  }
+});
+
+test("배포 script는 data namespace를 read-only로만 다룬다", () => {
+  const deploy = readFileSync(join(process.cwd(), "scripts/deploy-backoffice.sh"), "utf8");
+  const executable = deploy
+    .split("\n")
+    .filter((line) => !/^\s*(#|echo )/.test(line));
+  const dataLines = executable.filter((line) => /-n data\b|k8s\/vault-rag\.yaml/.test(line));
+  assert.ok(dataLines.length > 0, "data namespace 관측 경로가 없다");
+  for (const line of dataLines) {
+    assert.doesNotMatch(
+      line,
+      /\b(apply|create|patch|replace|delete|set image)\b/,
+      `data namespace mutation이 남아 있다: ${line.trim()}`,
+    );
+  }
+  // Vault parity는 관측만 하고 배포를 막지 않는다.
+  assert.match(deploy, /vault_image_parity=/);
 });
 
 test("DB root secret과 API token은 서로 다른 컨테이너에만 있다", () => {

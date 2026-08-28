@@ -106,12 +106,14 @@ if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
   exit 0
 fi
 
-if [[ "$args" == *" get cronjob vault-indexer -o name"* ]]; then
-  printf 'cronjob.batch/vault-indexer\n'
-  exit 0
-fi
-if [[ "$args" == *" get cronjob vault-writer -o name"* ]]; then
-  printf 'cronjob.batch/vault-writer\n'
+if [[ "$args" == *" get cronjob vault-"* && "$args" == *"jobTemplate"* ]]; then
+  printf 'READ_VAULT_IMAGE\n' >> "$FAKE_KUBECTL_LOG"
+  case "${FAKE_VAULT_PARITY:-match}" in
+    match) printf '%s' "$BACKOFFICE_IMAGE" ;;
+    drift) printf 'registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:%s' "$(printf 'd%.0s' {1..64})" ;;
+    absent) printf 'Error from server (NotFound): cronjobs.batch "vault-indexer" not found\n' >&2; exit 1 ;;
+    unreadable) printf 'Error from server (Forbidden): cronjobs.batch is forbidden\n' >&2; exit 1 ;;
+  esac
   exit 0
 fi
 if [[ "$args" == *" get cronjob/backoffice-"* && "$args" == *"spec.suspend"* ]]; then
@@ -163,6 +165,7 @@ run_deploy() {
   FAKE_TRIGGER_DIGEST="${FAKE_TRIGGER_DIGEST:-$expected_digest}" \
   FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
   FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
+  FAKE_VAULT_PARITY="${FAKE_VAULT_PARITY:-match}" \
   KUBECTL_BIN="$fake" \
   BACKOFFICE_IMAGE="$run_image" \
   BACKOFFICE_SOURCE_SHA="$source_sha" \
@@ -199,7 +202,11 @@ run_deploy Complete >/dev/null
 [ "$(grep -c '^CREATE_JOB ' "$log")" -eq 4 ]
 [ "$(grep -c '^READ_TRIGGER_STATE$' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN backoffice,' "$log")" -eq 2 ]
-[ "$(grep -c '^APPLY_STDIN vault-indexer,vault-writer,' "$log")" -eq 2 ]
+if grep -q '^APPLY_STDIN vault-indexer' "$log"; then
+  echo "FAIL CI가 data namespace workload를 변경했다" >&2
+  exit 1
+fi
+[ "$(grep -c '^READ_VAULT_IMAGE$' "$log")" -eq 4 ]
 [ "$(grep -c '^APPLY_FILE backup-cronjob.yaml$' "$log")" -eq 2 ]
 if grep -q '^APPLY_FILE backup-pvc.yaml$' "$log"; then
   echo "FAIL CI deployer가 stateful PVC를 변경했다" >&2
@@ -335,6 +342,32 @@ if grep -q '^ROLLOUT \|^APPLY_STDIN backoffice,' "$log"; then
   exit 1
 fi
 echo "  ok   fail-closed"
+
+echo "== Vault 이미지 drift에도 CI는 data workload를 바꾸지 않는다 =="
+for scenario in drift absent unreadable; do
+  : > "$log"
+  FAKE_VAULT_PARITY="$scenario"
+  run_deploy Complete >/dev/null 2>&1 || true
+  unset FAKE_VAULT_PARITY
+  if grep -qE '^APPLY_STDIN vault-|^PATCH_CRONJOB|^APPLY_FILE vault-rag.yaml$' "$log"; then
+    echo "FAIL Vault $scenario 에서 CI가 data workload를 변경했다" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  echo "  ok   $scenario 에서 mutation 없음"
+done
+
+echo "== deploy script는 data namespace mutation 명령을 갖지 않는다 =="
+data_mutation="$(grep -nE '\-n data|k -n data|k8s/vault-rag.yaml' "$here/deploy-backoffice.sh" \
+  | grep -vE '^[0-9]+:[[:space:]]*#' \
+  | grep -vE '^[0-9]+:[[:space:]]*echo ' \
+  | grep -E 'apply|create|patch|replace|delete|set image' || true)"
+if [ -n "$data_mutation" ]; then
+  echo "FAIL deploy script에 data namespace mutation이 남아 있다" >&2
+  printf '%s\n' "$data_mutation" >&2
+  exit 1
+fi
+echo "  ok   data namespace는 read-only 경로만 남았다"
 
 echo "== CI는 verifier workload를 만들거나 바꾸지 않는다 =="
 : > "$log"

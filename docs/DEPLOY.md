@@ -147,10 +147,19 @@ secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `secc
 max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
 같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
 
-CI deployer에는 `data` namespace의 Job·Pod 생성 권한을 주지 않는다. 주면 CI가
-`mysql-root-cred`를 mount하는 workload spec을 만들 수 있어 사실상 root secret export 권한이
-된다. CI 권한은 이 ConfigMap 하나에 대한 `get`뿐이다. verifier workload는 trusted operator가
-직접 apply하며 deploy script는 apply하지 않는다.
+CI deployer에는 `data` namespace의 workload mutation 권한을 일절 주지 않는다. Job·Pod 생성은
+물론 CronJob `patch`/`update`도 금지한다. RBAC는 pod template의 field를 제한할 수 없어, CronJob을
+고칠 수 있으면 Pod template에 `mysql-root-cred` 같은 임의 Secret volume을 붙일 수 있고 그 자체가
+root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`vault-writer` CronJob과
+관측 ConfigMap에 대한 `get`뿐이다. `scripts/check-ci-deployer-permissions.sh`가 live `can-i`로
+이 경계를 확인하며 CI에서 실행한다.
+
+그래서 Vault 이미지 parity는 CI가 고치지 않고 관측만 한다. deploy 로그의
+`vault_image_parity=MATCH|DRIFT|ABSENT|UNREADABLE`이 그 결과다. `MATCH`와 `ABSENT`가 아니면
+배포를 막지 않고 trusted operator 조치 명령을 함께 남긴다. 실제 갱신은 operator가
+`kubectl apply -f <(scripts/render-manifest.sh k8s/vault-rag.yaml <image> <sha>)`로 수행한다.
+
+verifier workload도 trusted operator가 직접 apply하며 deploy script는 apply하지 않는다.
 
 계약이 바뀌면 operator가 verifier를 다시 apply해야 한다. 그전까지는 `contractDigest` 불일치로
 배포가 fail-closed한다. 복구가 필요하면 위 trusted operator 복구 Job을 사람이 실행한다.

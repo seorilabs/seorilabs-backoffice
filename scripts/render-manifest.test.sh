@@ -350,14 +350,14 @@ if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
    grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
    grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$data_rbac" &&
-   grep -q 'verbs: \["get"\]' "$data_rbac" &&
+   grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
+   [ "$(grep -c 'verbs: \["get"\]' "$data_rbac")" -eq 2 ] &&
    ! grep -q 'resources: \["jobs"\]' "$data_rbac" &&
    ! grep -q 'resources: \["pods"\]' "$data_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$data_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$data_rbac" &&
-   ! grep -q 'verbs:.*create' "$data_rbac" &&
-   ! grep -q 'verbs:.*delete' "$data_rbac"; then
-  ok "CI는 data ns에서 workload를 만들 수 없고 관측 ConfigMap만 읽는다"
+   ! grep -qE 'verbs:.*(create|patch|update|delete)' "$data_rbac"; then
+  ok "CI는 data ns workload를 만들거나 바꿀 수 없고 관측만 읽는다"
 else
   ng "CI deployer 최소권한 계약이 깨졌다"
 fi

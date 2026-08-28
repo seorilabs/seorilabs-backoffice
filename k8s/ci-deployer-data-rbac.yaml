@@ -1,20 +1,25 @@
-# platform/ci-deployer가 data ns의 기존 Vault CronJob 두 개의 이미지 SHA만 갱신하고,
-# 고정 verifier가 남긴 append-only trigger 관측 ConfigMap 하나를 읽는다.
+# platform/ci-deployer가 data namespace에서 가지는 권한은 read-only다.
 #
-# Job/Pod 생성 권한은 주지 않는다. 주면 CI가 mysql-root-cred를 mount하는 workload를
-# 만들 수 있어 사실상 root secret export 권한이 된다. verifier workload는 trusted
-# operator가 k8s/provider-audit-trigger-verifier.yaml로 직접 apply한다.
+# 예전에는 vault-indexer/vault-writer CronJob에 patch/update를 줘서 이미지 digest를
+# 맞췄다. 그 권한은 field 제한이 없어 CI가 Pod template에 data namespace의 임의
+# Secret volume(mysql-root-cred 포함)을 붙일 수 있었다. admission policy도 없고 두
+# CronJob은 기본 SA와 automount를 쓰므로 사실상 root secret export 경로였다.
+# 그래서 workload mutation 권한을 전부 제거한다.
+#
+# CI는 이제 관측만 한다. Vault 이미지 drift는 배포를 막지 않고 보고만 하며,
+# 실제 갱신은 trusted operator가 k8s/vault-rag.yaml로 직접 apply한다.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: backoffice-image-deployer
   namespace: data
 rules:
+  # Vault CronJob 이미지 parity 관측. 쓰기는 없다.
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     resourceNames: ["vault-indexer", "vault-writer"]
-    verbs: ["get", "patch", "update"]
-  # 고정 verifier가 남긴 공개 관측 결과 하나만 읽는다. 쓰기는 없다.
+    verbs: ["get"]
+  # 고정 verifier가 남긴 공개 관측 결과 하나만 읽는다.
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["backoffice-provider-audit-trigger-state"]

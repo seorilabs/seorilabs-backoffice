@@ -305,24 +305,30 @@ if [ "$store_review_image" != "$image" ]; then
   exit 1
 fi
 
-echo "== optional data namespace workload parity =="
-vault_indexer="$(k -n data get cronjob vault-indexer -o name 2>&1 || true)"
-vault_writer="$(k -n data get cronjob vault-writer -o name 2>&1 || true)"
-if [[ "$vault_indexer" == cronjob.batch/* && "$vault_writer" == cronjob.batch/* ]]; then
-  apply_image_manifest vault-rag.yaml
-  indexer_image="$(k -n data get cronjob vault-indexer -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
-  writer_image="$(k -n data get cronjob vault-writer -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
-  if [ "$indexer_image" != "$image" ] || [ "$writer_image" != "$image" ]; then
-    echo "오류: Vault CronJob 이미지 digest가 일치하지 않는다" >&2
-    exit 1
+# CI는 data namespace workload를 만들거나 바꾸지 않는다. CronJob patch/update는 field
+# 제한이 없어 Pod template에 임의 Secret volume을 붙일 수 있고, 그 자체가 root secret
+# export 경로다. 여기서는 이미지 parity를 관측해 보고만 하며 실제 갱신은 trusted
+# operator가 k8s/vault-rag.yaml로 직접 apply한다.
+echo "== optional data namespace image parity observation (read-only) =="
+vault_parity=MATCH
+for cronjob in vault-indexer vault-writer; do
+  if ! observed="$(k -n data get cronjob "$cronjob" \
+      -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>&1)"; then
+    if [[ "$observed" == *NotFound* ]]; then
+      [ "$vault_parity" = DRIFT ] || vault_parity=ABSENT
+    else
+      vault_parity=UNREADABLE
+    fi
+    continue
   fi
-elif [[ "$vault_indexer" == *NotFound* && "$vault_writer" == *NotFound* ]]; then
-  echo "Vault CronJob 미설치 — image parity 대상 없음"
-else
-  echo "오류: Vault CronJob 조회 권한 또는 설치 상태가 불완전하다" >&2
-  echo "vault-indexer: $vault_indexer" >&2
-  echo "vault-writer: $vault_writer" >&2
-  exit 1
+  if [ "$observed" != "$image" ]; then
+    vault_parity=DRIFT
+  fi
+done
+echo "vault_image_parity=${vault_parity} expected=${image}"
+if [ "$vault_parity" != MATCH ] && [ "$vault_parity" != ABSENT ]; then
+  echo "Vault CronJob 이미지가 이번 배포와 다르거나 읽을 수 없다. CI는 이 workload를 바꾸지 않는다." >&2
+  echo "trusted operator 조치: kubectl apply -f <(scripts/render-manifest.sh k8s/vault-rag.yaml \"$image\" \"$source_sha\")" >&2
 fi
 
 echo "배포 완료: source_sha=$source_sha image=$image"
