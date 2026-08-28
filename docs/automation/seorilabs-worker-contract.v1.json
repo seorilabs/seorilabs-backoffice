@@ -18,9 +18,16 @@
   ],
   "authentication": {
     "audience": "agent-worker",
+    "principalCapabilities": {
+      "codex:seorilabs-generic-worker": "AGENT_WORKER_CODEX_TOKEN",
+      "claude:seorilabs-generic-worker": "AGENT_WORKER_CLAUDE_TOKEN"
+    },
+    "distinctCapabilitiesRequired": true,
+    "legacySharedTokenAccepted": false,
+    "mutationCapabilityBrokerRequiredForReadyPr": true,
     "requiredHeaders": [
-      "Authorization: Bearer <broker-provided worker capability>",
-      "X-Seori-Principal: <stable worker id>",
+      "Authorization: Bearer <capability bound to the declared principal>",
+      "X-Seori-Principal: <matching stable worker id>",
       "Idempotency-Key: <unique operation id>"
     ],
     "forbidden": [
@@ -43,6 +50,10 @@
     "fields": [
       "approvalPolicy",
       "budgetCeilingMicros",
+      "spentMicros",
+      "remainingBudgetMicros",
+      "actionCapabilities",
+      "resumeMode",
       "model"
     ],
     "approvalPolicies": {
@@ -55,9 +66,20 @@
       "structuredApi": "eval-approved-lowest-cost-only"
     }
   },
+  "resultPolicy": {
+    "costMicrosRequiredOnEverySettlement": true,
+    "budgetScope": "cumulative per AgentRun including readback",
+    "readOnlyOutcomeCodes": [
+      "NO_CHANGES",
+      "READBACK_CONFIRMED",
+      "RESULT_UNKNOWN",
+      "BLOCKED"
+    ],
+    "readbackLease": "RESULT_UNKNOWN revokes the mutation lease; a later claim returns the same run with a new generation and READBACK_FIRST capability"
+  },
   "invariants": [
     "claim이 null이면 아무 Issue나 PR도 만들지 않고 종료한다",
-    "resumeMode가 READBACK_FIRST이면 같은 run의 GitHub/provider 상태를 먼저 조회한다",
+    "resumeMode가 READBACK_FIRST이면 새 generation lease로 같은 run의 GitHub/provider 상태만 먼저 조회한다",
     "repo마다 자율 PR은 동시에 하나만 존재할 수 있다",
     "approvalPolicy와 budgetCeilingMicros를 넘는 작업은 시작하지 않는다",
     "lease generation이 바뀌면 이전 completion을 제출하지 않는다",

@@ -195,7 +195,10 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
 | `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
 | `CONTROL_PLANE_ADMIN_TOKEN` | 제어면 observation/config/manifest API 전용 Bearer token |
-| `AGENT_WORKER_TOKEN` | agent queue claim/heartbeat/settle API 전용 Bearer token |
+| `CONTROL_PLANE_ADMIN_PRINCIPAL` | 위 token과 1:1로 결합되는 공개 workload identity. 기본 배포값은 `backoffice:fleet-operator` |
+| `AGENT_WORKER_CODEX_TOKEN` | Codex generic worker principal에만 결합된 agent queue Bearer capability |
+| `AGENT_WORKER_CLAUDE_TOKEN` | Claude generic worker principal에만 결합된 agent queue Bearer capability. Codex 값과 같으면 두 worker 모두 fail-closed |
+| `AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED` | trusted adapter가 provider write와 비용 상한을 강제할 때만 `true`. 기본 `false`에서는 `READY_PR` 생성·claim 거부 |
 | `AGENT_LEASE_SIGNING_KEY` | idempotent claim capability를 파생하는 server-only HMAC 키 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 
@@ -355,22 +358,23 @@ flowchart TD
 
 릴리즈 태그(`v*`) push 시 **이전 릴리즈 태그~새 태그**의 변경(머지 PR/커밋)을 GitHub compare 로 모아 Gemini로 **사용자용 출시노트(ko_KR/en_US/ja_JP/zh_CN/zh_TW/de_DE/fr_FR/es_ES)** 를 생성, `release_note` 테이블에 저장한다. 백오피스 `/release-notes`(전역 타임라인) + 앱 상세 "출시노트" 섹션에서 언어별로 전문을 열람할 수 있고, `Android용 전체 복사`로 Google Play Console의 `<ko-KR>...</ko-KR>` 일괄 입력 형식을 복사할 수 있다.
 
-태그와 GitHub Release 생성은 번역을 기다리지 않는다. tag push webhook 응답 이후 Next.js `after` 작업이 번역을 생성하고 GitHub Release 본문과 `release-notes.json` 에셋을 갱신한다.
+태그와 GitHub Release 생성은 번역을 기다리지 않는다. 정식 tag push는 공개 ref·version·source SHA만 체크섬으로 봉인해 `AutomationIngressEvent`에 먼저 기록한다. webhook 응답 이후 Next.js `after`가 exact inbox event를 소진하고, 실패하면 scheduler가 같은 event를 재생해 GitHub Release 본문과 `release-notes.json` 에셋을 갱신한다.
 
 ```mermaid
 flowchart LR
-  TAG["태그 push refs/tags/v*"] -->|webhook 200| AFTER["Next.js after"]
-  AFTER --> GEN["generateAndPublishReleaseNotes"]
+  TAG["태그 push refs/tags/v*"] --> INBOX["durable inbox - SHA와 checksum"]
+  INBOX -->|webhook 200 이후 또는 scheduler replay| GEN["generateAndPublishReleaseNotes"]
   GEN --> CMP["compareCommitsWithBasehead(prev...new)"] --> AI["Gemini → JSON 8개 언어"] --> DB[("release_note")]
   DB --> UI["/release-notes + 앱상세"]
   DB --> GH["GitHub Release 본문 + release-notes.json 갱신"]
 ```
 
 - **트리거(자동)**: webhook `push` + `created` + `ref=refs/tags/v*`. **⚠️ GitHub App 이 `push` 이벤트를 구독해야 자동 발화** — App 설정 > Permissions & events > Subscribe to events > **Push** 체크(미구독 시 자동 생성 안 됨, 수동 백필은 가능).
+- **Platform 소유권**: `${GITHUB_ORG}/platform`의 공개 GitHub Release와 immutable `release-notes.json`은 Platform publisher만 소유한다. Backoffice 자동 발행과 durable replay는 이 exact repo를 처리 완료로 소진하되 외부 write를 하지 않는다. 다른 저장소의 tag 동작은 유지한다.
 - **수동 백필/재생성**: `POST /api/admin/release-notes/generate`(x-admin-token) body `{repo, version, headSha?}`. 멱등 upsert(`@@unique([repoFullName, version])`).
 - **생성 로직**(`src/lib/core/release-notes.ts`, `src/lib/github/release.ts`): `listVersionTags`(semver 내림차순) → `previousTag` → `compareTags`(머지 PR 추출: `(#N)`/`Merge pull request #N`) → `buildReleaseNotesI18nPrompt` → Gemini JSON(`parseLooseJson` 견고 파싱).
 - **untagged 보정**: deploy `workflow_run` 의 head_branch 가 버전이 아니면(main 등) `findTagForSha(head_sha)` 로 태그를 조회해 ReleaseRecord.version 복원(출시 매트릭스). 태그 없으면 "untagged" 유지(연속배포).
-- 마이그레이션 `6_release_note`, `14_release_note_i18n`. webhook 은 생성이 느려도 200 을 막지 않도록 Next.js `after`에서 후처리한다.
+- 마이그레이션 `6_release_note`, `14_release_note_i18n`. webhook 은 생성이 느려도 200 을 막지 않도록 durable inbox 기록 뒤 Next.js `after`에서 후처리한다.
 
 ## 13. Discord 배포 완료 알림
 

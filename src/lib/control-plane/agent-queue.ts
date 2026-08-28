@@ -1,13 +1,98 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
-import { parseAutomationPolicy } from "@/lib/control-plane/automation-catalog";
+import {
+  AUTOMATION_TEMPLATE_KEY,
+  isManagedAutomationDefinition,
+  parseManagedAutomationPolicy,
+  type AutomationPolicy,
+} from "@/lib/control-plane/automation-catalog";
 import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
+import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 
 class RepoScopeBusyError extends Error {}
 
+const READ_ONLY_OUTCOME_CODES = new Set(["NO_CHANGES", "READBACK_CONFIRMED", "RESULT_UNKNOWN", "BLOCKED"]);
+
+const AGENT_ACTION_CAPABILITIES = {
+  READ_ONLY: ["github.issue.read", "github.pull_request.read", "provider.readback"],
+  READY_PR: [
+    "github.issue.read",
+    "github.pull_request.read",
+    "github.branch.write",
+    "github.commit.write",
+    "github.pull_request.create",
+    "provider.readback",
+  ],
+} as const;
+const READBACK_ACTION_CAPABILITIES = ["github.issue.read", "github.pull_request.read", "provider.readback"] as const;
+
+export function mutationCapabilityBrokerEnforced(): boolean {
+  return process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED === "true";
+}
+
+function resultCostMicros(result: Record<string, unknown>): bigint | null {
+  const value = result.costMicros;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+
+export function agentResultPolicyError(input: {
+  policy: AutomationPolicy;
+  configuredModel: string | null;
+  spentMicros: bigint | null;
+  result: Record<string, unknown>;
+}): string | null {
+  const cost = resultCostMicros(input.result);
+  if (cost === null) return "RESULT_COST_REQUIRED";
+  if ((input.spentMicros ?? 0n) + cost > BigInt(input.policy.budgetCeilingMicros)) {
+    return "BUDGET_CEILING_EXCEEDED";
+  }
+  if (
+    input.policy.approvalPolicy === "READ_ONLY"
+    && !READ_ONLY_OUTCOME_CODES.has(String(input.result.outcomeCode ?? ""))
+  ) {
+    return "APPROVAL_POLICY_VIOLATION";
+  }
+  if (input.configuredModel && input.result.model !== input.configuredModel) {
+    return "MODEL_POLICY_VIOLATION";
+  }
+  return null;
+}
+
+function managedPolicy(definition: {
+  template: string;
+  agentKind: string | null;
+  configuration: Prisma.JsonValue | null;
+}): AutomationPolicy | null {
+  return isManagedAutomationDefinition(definition)
+    ? parseManagedAutomationPolicy(definition.configuration)
+    : null;
+}
+
 function tokenHash(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function agentSettlementRequestHash(input: {
+  outcome: "complete" | "fail" | "unknown";
+  result: Record<string, unknown>;
+  error?: string;
+}): string {
+  return crypto.createHash("sha256").update(canonicalJson({
+    outcome: input.outcome,
+    result: input.result,
+    error: input.error ?? null,
+  } as JsonValue)).digest("hex");
+}
+
+export function agentReadbackRequestHash(input: {
+  resolution: "RESUME" | "COMPLETE" | "BLOCKED";
+  result: Record<string, unknown>;
+}): string {
+  return crypto.createHash("sha256").update(canonicalJson({
+    resolution: input.resolution,
+    result: input.result,
+  } as JsonValue)).digest("hex");
 }
 
 function leaseToken(input: {
@@ -104,10 +189,39 @@ export function validSettlementLease(input: {
     && input.currentGeneration === input.requestedGeneration;
 }
 
+export function expiredLeaseDisposition(input: {
+  createsPr: boolean;
+  readbackRequested: boolean;
+  attempts: number;
+  maxAttempts: number;
+}) {
+  const readbackRequired = input.readbackRequested || input.createsPr;
+  const terminal = !readbackRequired && input.attempts >= input.maxAttempts;
+  return {
+    readbackRequired,
+    terminal,
+    status: readbackRequired ? "FAILED" as const : terminal ? "DEAD_LETTER" as const : "PENDING" as const,
+    eventType: readbackRequired ? "readback_required" : terminal ? "dead_letter" : "lease_expired",
+  };
+}
+
 export async function requeueExpiredLeases(now: Date): Promise<void> {
   const expired = await prisma.agentLease.findMany({
     where: { revokedAt: null, expiresAt: { lte: now }, run: { status: "RUNNING" } },
-    select: { id: true, runId: true, generation: true, run: { select: { attempts: true, maxAttempts: true } } },
+    select: {
+      id: true,
+      runId: true,
+      generation: true,
+      run: {
+        select: {
+          attempts: true,
+          maxAttempts: true,
+          createsPr: true,
+          readbackRequestedAt: true,
+          occurrenceId: true,
+        },
+      },
+    },
     take: 100,
   });
   for (const lease of expired) {
@@ -117,33 +231,43 @@ export async function requeueExpiredLeases(now: Date): Promise<void> {
         data: { revokedAt: now, scopeKey: null },
       });
       if (revoked.count !== 1) return;
-      const terminal = lease.run.attempts >= lease.run.maxAttempts;
+      const disposition = expiredLeaseDisposition({
+        createsPr: lease.run.createsPr,
+        readbackRequested: lease.run.readbackRequestedAt !== null,
+        attempts: lease.run.attempts,
+        maxAttempts: lease.run.maxAttempts,
+      });
+      const { readbackRequired, terminal } = disposition;
       const runChanged = await tx.agentRun.updateMany({
         where: { id: lease.runId, status: "RUNNING", leaseGeneration: lease.generation },
         data: {
-          status: terminal ? "DEAD_LETTER" : "PENDING",
+          status: disposition.status,
           eligibleAt: now,
-          error: "LEASE_EXPIRED",
+          readbackRequestedAt: readbackRequired ? (lease.run.readbackRequestedAt ?? now) : null,
+          error: readbackRequired ? "LEASE_EXPIRED_READBACK_REQUIRED" : "LEASE_EXPIRED",
         },
       });
       if (runChanged.count !== 1) return;
       await tx.agentRunEvent.create({
         data: {
           runId: lease.runId,
-          type: terminal ? "dead_letter" : "lease_expired",
+          type: disposition.eventType,
           generation: lease.generation,
           actor: "system",
         },
       });
+      if (readbackRequired) {
+        await tx.automationOccurrence.update({
+          where: { id: lease.run.occurrenceId },
+          data: { status: "RUNNING", completedAt: null, result: { code: "LEASE_EXPIRED_READBACK_REQUIRED" } },
+        });
+      }
       if (terminal) {
         await releaseRepoGuard(tx, lease.runId, now);
-        const run = await tx.agentRun.findUnique({ where: { id: lease.runId }, select: { occurrenceId: true } });
-        if (run) {
-          await tx.automationOccurrence.update({
-            where: { id: run.occurrenceId },
-            data: { status: "DEAD_LETTER", completedAt: now },
-          });
-        }
+        await tx.automationOccurrence.update({
+          where: { id: lease.run.occurrenceId },
+          data: { status: "DEAD_LETTER", completedAt: now },
+        });
       }
     });
   }
@@ -158,6 +282,9 @@ export interface ClaimedAgentRun {
   model: string | null;
   approvalPolicy: string;
   budgetCeilingMicros: number;
+  spentMicros: number;
+  remainingBudgetMicros: number;
+  actionCapabilities: readonly string[];
   resumeMode: "START" | "READBACK_FIRST";
   generation: number;
   leaseToken: string;
@@ -194,7 +321,12 @@ async function replayClaim(input: {
   if (!lease || lease.revokedAt || lease.expiresAt <= input.now) {
     throw new ControlPlaneError("claim 재생 시점에 lease가 만료되었습니다.", 409, "IDEMPOTENCY_REPLAY_EXPIRED");
   }
-  const policy = parseAutomationPolicy(event.run.occurrence.definition.configuration);
+  const policy = managedPolicy(event.run.occurrence.definition);
+  if (!policy) {
+    throw new ControlPlaneError("legacy routine claim은 재생할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
+  }
+  const spentMicros = Number(event.run.spentMicros ?? 0n);
+  const resumeMode = event.run.readbackRequestedAt ? "READBACK_FIRST" as const : "START" as const;
   return {
     runId: event.run.id,
     repoFullName: event.run.repoFullName,
@@ -204,7 +336,12 @@ async function replayClaim(input: {
     model: event.run.occurrence.definition.model,
     approvalPolicy: policy.approvalPolicy,
     budgetCeilingMicros: policy.budgetCeilingMicros,
-    resumeMode: event.generation > 1 ? "READBACK_FIRST" : "START",
+    spentMicros,
+    remainingBudgetMicros: Math.max(0, policy.budgetCeilingMicros - spentMicros),
+    actionCapabilities: resumeMode === "READBACK_FIRST"
+      ? READBACK_ACTION_CAPABILITIES
+      : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
+    resumeMode,
     generation: event.generation,
     leaseToken: leaseToken({ ...input, runId: event.run.id, generation: event.generation }),
     expiresAt: lease.expiresAt,
@@ -226,10 +363,38 @@ async function tryClaimRun(input: {
         where: { id: input.runId },
         include: { occurrence: { include: { definition: true } } },
       });
-      if (!run || run.status !== "PENDING" || run.eligibleAt > input.now || !eligibleForAutopilot(run)) {
+      if (!run || run.eligibleAt > input.now) {
         return null;
       }
-      if (run.issueNumber) {
+      const readbackClaim = run.status === "FAILED" && run.readbackRequestedAt !== null;
+      if (!readbackClaim && run.status !== "PENDING") return null;
+      const policy = managedPolicy(run.occurrence.definition);
+      if (!policy || !run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt) return null;
+      if (policy.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced()) return null;
+      const spentMicros = Number(run.spentMicros ?? 0n);
+      if (!readbackClaim && spentMicros >= policy.budgetCeilingMicros) {
+        const exhausted = await tx.agentRun.updateMany({
+          where: {
+            id: run.id,
+            status: run.status,
+            leaseGeneration: run.leaseGeneration,
+          },
+          data: { status: "DEAD_LETTER", completedAt: input.now, error: "BUDGET_CEILING_EXHAUSTED" },
+        });
+        if (exhausted.count === 1) {
+          if (!readbackClaim) await releaseRepoGuard(tx, run.id, input.now);
+          await tx.automationOccurrence.update({
+            where: { id: run.occurrenceId },
+            data: { status: "DEAD_LETTER", completedAt: input.now, result: { code: "BUDGET_CEILING_EXHAUSTED" } },
+          });
+          await tx.agentRunEvent.create({
+            data: { runId: run.id, type: "budget_exhausted", actor: "system:claim" },
+          });
+        }
+        return null;
+      }
+      if (!readbackClaim && !eligibleForAutopilot(run)) return null;
+      if (!readbackClaim && run.issueNumber) {
         const issue = await tx.issueMirror.findUnique({
           where: { repoFullName_number: { repoFullName: run.repoFullName, number: run.issueNumber } },
           select: { number: true, state: true, labels: true },
@@ -240,7 +405,7 @@ async function tryClaimRun(input: {
           labels: issue.labels,
         })) return null;
       }
-      if (run.createsPr) {
+      if (!readbackClaim && run.createsPr) {
         const openAutopilotPr = await tx.pullRequestMirror.findFirst({
           where: { repoFullName: run.repoFullName, state: "OPEN", isAutopilotPr: true },
           select: { id: true },
@@ -251,11 +416,16 @@ async function tryClaimRun(input: {
       }
       const generation = run.leaseGeneration + 1;
       const changed = await tx.agentRun.updateMany({
-        where: { id: run.id, status: "PENDING", leaseGeneration: run.leaseGeneration },
+        where: {
+          id: run.id,
+          status: run.status,
+          leaseGeneration: run.leaseGeneration,
+          ...(readbackClaim ? { readbackRequestedAt: { not: null } } : {}),
+        },
         data: {
           status: "RUNNING",
           leaseGeneration: generation,
-          attempts: { increment: 1 },
+          ...(!readbackClaim ? { attempts: { increment: 1 } } : {}),
           startedAt: input.now,
           error: null,
         },
@@ -292,10 +462,15 @@ async function tryClaimRun(input: {
           type: "claimed",
           generation,
           actor: input.workerId,
-          payload: { expiresAt: expiresAt.toISOString() },
+          payload: {
+            expiresAt: expiresAt.toISOString(),
+            resumeMode: readbackClaim ? "READBACK_FIRST" : "START",
+            actionCapabilities: readbackClaim
+              ? READBACK_ACTION_CAPABILITIES
+              : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
+          },
         },
       });
-      const policy = parseAutomationPolicy(run.occurrence.definition.configuration);
       return {
         runId: run.id,
         repoFullName: run.repoFullName,
@@ -305,7 +480,12 @@ async function tryClaimRun(input: {
         model: run.occurrence.definition.model,
         approvalPolicy: policy.approvalPolicy,
         budgetCeilingMicros: policy.budgetCeilingMicros,
-        resumeMode: generation > 1 ? "READBACK_FIRST" : "START",
+        spentMicros,
+        remainingBudgetMicros: policy.budgetCeilingMicros - spentMicros,
+        actionCapabilities: readbackClaim
+          ? READBACK_ACTION_CAPABILITIES
+          : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
+        resumeMode: readbackClaim ? "READBACK_FIRST" : "START",
         generation,
         leaseToken: token,
         expiresAt,
@@ -333,9 +513,20 @@ export async function claimAgentRun(input: {
   await requeueExpiredLeases(now);
   const candidates = await prisma.agentRun.findMany({
     where: {
-      status: "PENDING",
+      OR: [
+        { status: "PENDING" },
+        { status: "FAILED", readbackRequestedAt: { not: null } },
+      ],
       eligibleAt: { lte: now },
-      occurrence: { definition: { enabled: true, agentKind: input.agentKind } },
+      occurrence: {
+        definition: {
+          enabled: true,
+          cancelledAt: null,
+          template: AUTOMATION_TEMPLATE_KEY,
+          agentKind: input.agentKind,
+          configuration: { not: Prisma.DbNull },
+        },
+      },
     },
     select: { id: true },
     orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -419,19 +610,26 @@ export async function settleAgentRun(input: {
   leaseToken: string;
   workerId: string;
   outcome: "complete" | "fail" | "unknown";
-  result?: Record<string, unknown>;
+  result: Record<string, unknown>;
   error?: string;
   idempotencyKey: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
+  const requestHash = agentSettlementRequestHash(input);
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.idempotencyKey } });
   if (replay) {
+    const policyEvents = [
+      "budget_exceeded",
+      "approval_policy_violation",
+      "model_policy_violation",
+      "result_contract_violation",
+    ];
     const expectedTypes = input.outcome === "complete"
-      ? ["completed", "budget_exceeded", "approval_policy_violation", "model_policy_violation"]
+      ? ["completed", ...policyEvents]
       : input.outcome === "unknown"
         ? ["readback_required"]
-        : ["retry_scheduled", "dead_letter"];
+        : ["retry_scheduled", "dead_letter", ...policyEvents];
     if (
       replay.runId !== input.runId
       || replay.generation !== input.generation
@@ -440,7 +638,10 @@ export async function settleAgentRun(input: {
     ) {
       throw new ControlPlaneError("idempotency key가 다른 completion에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
-    const payload = replay.payload as { status?: string; retry?: boolean } | null;
+    const payload = replay.payload as { status?: string; retry?: boolean; requestHash?: string } | null;
+    if (payload?.requestHash !== requestHash) {
+      throw new ControlPlaneError("idempotency key가 다른 completion payload에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
     return { status: payload?.status ?? "UNKNOWN", retry: payload?.retry ?? false, duplicate: true };
   }
   try {
@@ -466,25 +667,22 @@ export async function settleAgentRun(input: {
     })) {
       throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, "STALE_LEASE");
     }
-    const policy = parseAutomationPolicy(lease.run.occurrence.definition.configuration);
-    const costMicros = input.result?.costMicros;
-    const budgetExceeded = typeof costMicros === "number" && costMicros > policy.budgetCeilingMicros;
-    const approvalViolation = policy.approvalPolicy === "READ_ONLY"
-      && input.result?.outcomeCode === "PR_READY";
-    const modelViolation = Boolean(lease.run.occurrence.definition.model)
-      && Boolean(input.result)
-      && input.result?.model !== lease.run.occurrence.definition.model;
-    const policyError = budgetExceeded
-      ? "BUDGET_CEILING_EXCEEDED"
-      : approvalViolation
-        ? "APPROVAL_POLICY_VIOLATION"
-        : modelViolation
-          ? "MODEL_POLICY_VIOLATION"
-          : null;
-    const effectiveOutcome = policyError ? "fail" : input.outcome;
-    const readbackRequired = effectiveOutcome === "unknown";
-    const retry = effectiveOutcome === "fail" && !policyError && lease.run.attempts < lease.run.maxAttempts;
-    const runStatus = effectiveOutcome === "complete"
+    const policy = managedPolicy(lease.run.occurrence.definition);
+    if (!policy) {
+      throw new ControlPlaneError("legacy routine 결과는 반영할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
+    }
+    const costMicros = resultCostMicros(input.result);
+    const nextSpentMicros = (lease.run.spentMicros ?? 0n) + (costMicros ?? 0n);
+    const policyError = agentResultPolicyError({
+      policy,
+      configuredModel: lease.run.occurrence.definition.model,
+      spentMicros: lease.run.spentMicros,
+      result: input.result,
+    });
+    const readbackRequired = input.outcome === "unknown";
+    const succeeded = input.outcome === "complete" && !policyError;
+    const retry = input.outcome === "fail" && !policyError && lease.run.attempts < lease.run.maxAttempts;
+    const runStatus = succeeded
       ? "SUCCEEDED"
       : readbackRequired
         ? "FAILED"
@@ -495,10 +693,11 @@ export async function settleAgentRun(input: {
       where: { id: input.runId, status: "RUNNING", leaseGeneration: input.generation },
       data: {
         status: runStatus,
-        completedAt: effectiveOutcome === "complete" || (!retry && !readbackRequired) ? now : null,
+        completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
         eligibleAt: retry ? now : lease.run.eligibleAt,
-        outcome: input.result ? (input.result as Prisma.InputJsonValue) : undefined,
-        error: effectiveOutcome === "complete"
+        spentMicros: nextSpentMicros,
+        outcome: input.result as Prisma.InputJsonValue,
+        error: succeeded
           ? null
           : (policyError ?? input.error ?? (readbackRequired ? "PROVIDER_READBACK_REQUIRED" : "WORKER_FAILED")),
         readbackRequestedAt: readbackRequired ? now : null,
@@ -509,40 +708,42 @@ export async function settleAgentRun(input: {
       where: { id: lease.id },
       data: { revokedAt: now, scopeKey: null },
     });
-    if (input.result?.outcomeCode === "PR_READY" && !lease.run.createsPr) {
+    if (input.result.outcomeCode === "PR_READY" && !lease.run.createsPr) {
       await acquireRepoGuard(tx, { ...lease.run, createsPr: true }, now);
     }
-    const retainsPrGuard = input.result?.outcomeCode === "PR_READY";
-    if ((effectiveOutcome === "complete" && !retainsPrGuard) || (!retry && !readbackRequired && effectiveOutcome !== "complete" && !retainsPrGuard)) {
+    const retainsPrGuard = input.result.outcomeCode === "PR_READY";
+    if ((succeeded && !retainsPrGuard) || (!retry && !readbackRequired && !succeeded && !retainsPrGuard)) {
       await releaseRepoGuard(tx, input.runId, now);
     }
     await tx.automationOccurrence.update({
       where: { id: lease.run.occurrenceId },
       data: {
-        status: effectiveOutcome === "complete"
+        status: succeeded
           ? "COMPLETED"
           : readbackRequired
             ? "RUNNING"
             : retry
               ? "PENDING"
               : "DEAD_LETTER",
-        completedAt: effectiveOutcome === "complete" || (!retry && !readbackRequired) ? now : null,
+        completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
       },
     });
     await tx.agentRunEvent.create({
       data: {
         requestId: input.idempotencyKey,
         runId: input.runId,
-        type: policyError === "BUDGET_CEILING_EXCEEDED"
+        type: readbackRequired
+          ? "readback_required"
+          : policyError === "BUDGET_CEILING_EXCEEDED"
           ? "budget_exceeded"
+          : policyError === "RESULT_COST_REQUIRED"
+            ? "result_contract_violation"
           : policyError === "APPROVAL_POLICY_VIOLATION"
             ? "approval_policy_violation"
             : policyError === "MODEL_POLICY_VIOLATION"
               ? "model_policy_violation"
-            : effectiveOutcome === "complete"
+            : succeeded
               ? "completed"
-          : readbackRequired
-            ? "readback_required"
             : retry
               ? "retry_scheduled"
               : "dead_letter",
@@ -552,8 +753,11 @@ export async function settleAgentRun(input: {
           status: runStatus,
           retry,
           budgetCeilingMicros: policy.budgetCeilingMicros,
+          spentMicros: Number(nextSpentMicros),
           approvalPolicy: policy.approvalPolicy,
-          ...(input.result ? { result: input.result } : {}),
+          result: input.result,
+          ...(policyError ? { policyError } : {}),
+          requestHash,
         } as Prisma.InputJsonValue,
       },
     });
@@ -577,13 +781,13 @@ export async function resolveAgentRunReadback(input: {
   now?: Date;
 }) {
   const now = input.now ?? new Date();
+  const requestHash = agentReadbackRequestHash(input);
   const ownedLease = await prisma.agentLease.findFirst({
     where: {
       runId: input.runId,
       generation: input.generation,
       workerId: input.workerId,
       tokenHash: tokenHash(input.leaseToken),
-      revokedAt: { not: null },
     },
     select: { id: true },
   });
@@ -592,13 +796,14 @@ export async function resolveAgentRunReadback(input: {
   }
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.idempotencyKey } });
   if (replay) {
-    const payload = replay.payload as { status?: string; requestedResolution?: string } | null;
+    const payload = replay.payload as { status?: string; requestedResolution?: string; requestHash?: string } | null;
     if (
       replay.runId !== input.runId
       || replay.generation !== input.generation
       || replay.actor !== input.workerId
       || !["readback_resumed", "readback_completed", "readback_blocked", "readback_policy_blocked"].includes(replay.type)
       || payload?.requestedResolution !== input.resolution
+      || payload?.requestHash !== requestHash
     ) {
       throw new ControlPlaneError("idempotency key가 다른 readback에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -616,28 +821,34 @@ export async function resolveAgentRunReadback(input: {
           generation: input.generation,
           workerId: input.workerId,
           tokenHash: tokenHash(input.leaseToken),
+          revokedAt: null,
+          expiresAt: { gt: now },
         },
-        select: { id: true, revokedAt: true },
+        select: { id: true },
       });
       if (
         !run
-        || !sourceLease?.revokedAt
-        || run.status !== "FAILED"
+        || !sourceLease
+        || run.status !== "RUNNING"
         || !run.readbackRequestedAt
         || run.leaseGeneration !== input.generation
       ) {
         throw new ControlPlaneError("readback 대기 중인 동일 generation run이 아닙니다.", 409, "READBACK_STATE_CONFLICT");
       }
-      const policy = parseAutomationPolicy(run.occurrence.definition.configuration);
-      let policyError: string | null = null;
-      if (input.resolution === "COMPLETE") {
-        if (typeof input.result.costMicros === "number" && input.result.costMicros > policy.budgetCeilingMicros) {
-          policyError = "BUDGET_CEILING_EXCEEDED";
-        } else if (policy.approvalPolicy === "READ_ONLY" && input.result.outcomeCode === "PR_READY") {
-          policyError = "APPROVAL_POLICY_VIOLATION";
-        } else if (run.occurrence.definition.model && input.result.model !== run.occurrence.definition.model) {
-          policyError = "MODEL_POLICY_VIOLATION";
-        }
+      const policy = managedPolicy(run.occurrence.definition);
+      if (!policy) {
+        throw new ControlPlaneError("legacy routine readback은 반영할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
+      }
+      const costMicros = resultCostMicros(input.result);
+      const nextSpentMicros = (run.spentMicros ?? 0n) + (costMicros ?? 0n);
+      let policyError = agentResultPolicyError({
+        policy,
+        configuredModel: run.occurrence.definition.model,
+        spentMicros: run.spentMicros,
+        result: input.result,
+      });
+      if (!policyError && input.resolution === "RESUME" && run.attempts >= run.maxAttempts) {
+        policyError = "MAX_ATTEMPTS_EXHAUSTED";
       }
       const effectiveResolution = policyError ? "BLOCKED" : input.resolution;
       const status = effectiveResolution === "RESUME"
@@ -645,10 +856,16 @@ export async function resolveAgentRunReadback(input: {
         : effectiveResolution === "COMPLETE"
           ? "SUCCEEDED"
           : "DEAD_LETTER";
-      await tx.agentRun.update({
-        where: { id: run.id },
+      const changed = await tx.agentRun.updateMany({
+        where: {
+          id: run.id,
+          status: "RUNNING",
+          leaseGeneration: input.generation,
+          readbackRequestedAt: { not: null },
+        },
         data: {
           status,
+          spentMicros: nextSpentMicros,
           eligibleAt: effectiveResolution === "RESUME" ? now : run.eligibleAt,
           completedAt: effectiveResolution === "RESUME" ? null : now,
           readbackRequestedAt: null,
@@ -656,13 +873,20 @@ export async function resolveAgentRunReadback(input: {
           outcome: input.result as Prisma.InputJsonValue,
         },
       });
+      if (changed.count !== 1) {
+        throw new ControlPlaneError("readback 상태 CAS에 실패했습니다.", 409, "READBACK_STATE_CONFLICT");
+      }
+      await tx.agentLease.update({
+        where: { id: sourceLease.id },
+        data: { revokedAt: now, scopeKey: null },
+      });
       const retainsPrGuard = input.result.outcomeCode === "PR_READY";
       if (retainsPrGuard && !run.createsPr) {
         await acquireRepoGuard(tx, { ...run, createsPr: true }, now);
       }
-      if (effectiveResolution !== "RESUME" && !retainsPrGuard) await releaseRepoGuard(tx, run.id, now);
+      if (effectiveResolution === "COMPLETE" && !retainsPrGuard) await releaseRepoGuard(tx, run.id, now);
       let workKeyReleased = false;
-      if (effectiveResolution !== "RESUME" && run.issueNumber) {
+      if (effectiveResolution === "COMPLETE" && run.issueNumber) {
         const issue = await tx.issueMirror.findUnique({
           where: {
             repoFullName_number: {
@@ -712,8 +936,10 @@ export async function resolveAgentRunReadback(input: {
             status,
             requestedResolution: input.resolution,
             result: input.result,
+            spentMicros: Number(nextSpentMicros),
             workKeyReleased,
             ...(policyError ? { policyError } : {}),
+            requestHash,
           } as Prisma.InputJsonValue,
         },
       });

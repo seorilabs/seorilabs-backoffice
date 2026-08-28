@@ -17,6 +17,7 @@ interface DefinitionRow {
   agentKind: string | null;
   model: string | null;
   enabled: boolean;
+  managed: boolean;
   maxAttempts: number;
   approvalPolicy: string;
   budgetCeilingMicros: number;
@@ -30,6 +31,7 @@ interface RunRow {
   status: string;
   attempts: number;
   maxAttempts: number;
+  spentMicros: number;
   workerId: string | null;
   updatedAt: string;
   error: string | null;
@@ -161,7 +163,9 @@ export function FleetAutomationControls({
           <div key={definition.id} className="rounded border border-neutral-200 px-3 py-2 text-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium">{definition.agentKind ?? "미지정"} · {cadenceLabel(definition.schedule)}</span>
-              <span className={definition.enabled ? "text-emerald-700" : "text-neutral-400"}>{definition.enabled ? "ACTIVE" : "PAUSED"}</span>
+              <span className={definition.enabled ? "text-emerald-700" : "text-neutral-400"}>
+                {!definition.managed ? "UNMANAGED" : definition.enabled ? "ACTIVE" : "PAUSED"}
+              </span>
             </div>
             <div className="mt-1 truncate text-xs text-neutral-500">
               {definition.template} · {definition.model ?? "worker 최저비용 기본 model"}
@@ -170,11 +174,11 @@ export function FleetAutomationControls({
               {definition.approvalPolicy} · ${(definition.budgetCeilingMicros / 1_000_000).toFixed(2)} / run
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <button type="button" disabled={pending || !definition.enabled} onClick={() => run(
+              <button type="button" disabled={pending || !definition.enabled || !definition.managed} onClick={() => run(
                 () => commandFleetAutomationAction({ appId, definitionId: definition.id, command: "RUN_NOW", requestId: crypto.randomUUID() }),
                 "즉시 실행 occurrence를 기록했습니다.",
               )} className="rounded border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40">지금 실행</button>
-              <button type="button" disabled={pending} onClick={() => run(
+              <button type="button" disabled={pending || !definition.managed} onClick={() => run(
                 () => commandFleetAutomationAction({
                   appId,
                   definitionId: definition.id,
@@ -200,7 +204,7 @@ export function FleetAutomationControls({
                 <td className="px-3 py-2 font-medium">{runRow.definitionKey}</td>
                 <td>{runRow.issueNumber ? `#${runRow.issueNumber}` : runRow.id.slice(0, 10)}</td>
                 <td>{runRow.status}</td>
-                <td>{runRow.attempts}/{runRow.maxAttempts}</td>
+                <td>{runRow.attempts}/{runRow.maxAttempts} · ${(runRow.spentMicros / 1_000_000).toFixed(4)}</td>
                 <td>{runRow.workerId ?? "—"}</td>
                 <td className="max-w-64 truncate" title={auditSummary(runRow.outcome)}>{auditSummary(runRow.outcome)}</td>
                 <td>{runRow.updatedAt}</td>

@@ -1579,6 +1579,7 @@ model AgentRun {
   leaseGeneration Int                  @default(0)
   attempts        Int                  @default(0)
   maxAttempts     Int                  @default(3)
+  spentMicros     BigInt?
   eligibleAt      DateTime             @default(now()) @db.DateTime(3)
   startedAt       DateTime?            @db.DateTime(3)
   completedAt     DateTime?            @db.DateTime(3)
@@ -1665,6 +1666,8 @@ model AutomationIngressEvent {
   repoFullName String
   issueNumber  Int?
   issueNodeId  String?
+  payload      Json?
+  payloadHash  String?   @db.Char(64)
   occurredAt   DateTime  @db.DateTime(3)
   status       String    @default("PENDING")
   attempts     Int       @default(0)
@@ -1677,6 +1680,26 @@ model AutomationIngressEvent {
   @@index([status, eligibleAt])
   @@index([repoFullName, issueNumber])
   @@map("automation_ingress_event")
+}
+
+// 운영 명령의 Idempotency-Key를 actor/operation/target/request hash에 고정한다.
+// PENDING row는 crash 후 동일 요청의 안전한 재실행을 허용하고, COMPLETED response는
+// side effect를 다시 만들지 않고 그대로 재생한다.
+model AutomationMutationRequest {
+  requestId   String   @id
+  actor       String
+  operation   String
+  targetKey   String
+  requestHash String   @db.Char(64)
+  status      String   @default("PENDING")
+  request     Json
+  response    Json?
+  completedAt DateTime? @db.DateTime(3)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("automation_mutation_request")
 }
 
 // GitHub Project는 포트폴리오 projection일 뿐 실행 claim의 입력이 아니다.

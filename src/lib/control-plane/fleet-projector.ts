@@ -1,6 +1,10 @@
 import { Prisma } from "@prisma/client";
 
 import { fleetProjectFieldsSchema } from "@/lib/control-plane/contracts";
+import {
+  fleetProjectionBindingDisposition,
+  type FleetProjectionAppBinding,
+} from "@/lib/control-plane/fleet-projector-binding";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { getInstallationOctokit, type Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
@@ -18,6 +22,13 @@ interface ProjectField {
 interface ProjectItem {
   id: string;
   project: { id: string };
+}
+
+interface ProjectionBindingRow {
+  id: string;
+  status: string;
+  projectNodeId: string;
+  app: FleetProjectionAppBinding | null;
 }
 
 interface ProjectQuery {
@@ -115,6 +126,61 @@ function matchesDesired(observed: Record<string, string>, desired: Record<string
   ));
 }
 
+async function loadProjectionBinding(projectionId: string): Promise<ProjectionBindingRow | null> {
+  return prisma.fleetProjectProjection.findUnique({
+    where: { id: projectionId },
+    select: {
+      id: true,
+      status: true,
+      projectNodeId: true,
+      app: { select: { status: true, projectV2Id: true } },
+    },
+  });
+}
+
+async function reconcileProjectionBinding(row: ProjectionBindingRow) {
+  const disposition = fleetProjectionBindingDisposition(row);
+  if (disposition.kind === "CURRENT") return disposition;
+  const reconciled = await prisma.fleetProjectProjection.updateMany({
+    where: {
+      id: row.id,
+      status: row.status,
+      projectNodeId: row.projectNodeId,
+      ...(row.app
+        ? { app: { is: { status: row.app.status, projectV2Id: row.app.projectV2Id } } }
+        : { app: { is: null } }),
+    },
+    data: { status: disposition.kind, lastError: disposition.reason },
+  });
+  if (reconciled.count !== 1) {
+    const latest = await loadProjectionBinding(row.id);
+    if (!latest) {
+      return { kind: "SUPERSEDED" as const, reason: "Project projection이 삭제되어 적용을 중단했습니다." };
+    }
+    const latestDisposition = fleetProjectionBindingDisposition(latest);
+    if (latestDisposition.kind === "CURRENT" || latest.status === latestDisposition.kind) {
+      return latestDisposition;
+    }
+    throw new ControlPlaneError("Project projection binding reconciliation CAS에 실패했습니다.", 409, "PROJECTION_BINDING_CAS_FAILED");
+  }
+  return disposition;
+}
+
+async function reconcileCurrentProjectionBinding(projectionId: string) {
+  const row = await loadProjectionBinding(projectionId);
+  if (!row) {
+    throw new ControlPlaneError("Project projection을 찾을 수 없습니다.", 404, "PROJECTION_NOT_FOUND");
+  }
+  return reconcileProjectionBinding(row);
+}
+
+async function validateClaimedProjectionBinding(projectionId: string): Promise<boolean> {
+  const row = await loadProjectionBinding(projectionId);
+  if (!row) return false;
+  const disposition = await reconcileProjectionBinding(row);
+  return row.status === "PROCESSING" && disposition.kind === "CURRENT";
+}
+
 async function ensureProjectItem(
   octokit: Octokit,
   projectId: string,
@@ -205,13 +271,13 @@ export async function applyFleetProjectProjection(
     data: { status: "PROCESSING", attempts: { increment: 1 }, lastError: null },
   });
   if (claimed.count !== 1) return { applied: false, skipped: true };
-  const projection = await prisma.fleetProjectProjection.findUnique({ where: { id: projectionId } });
+  const projection = await prisma.fleetProjectProjection.findUnique({
+    where: { id: projectionId },
+    include: { app: { select: { status: true, projectV2Id: true } } },
+  });
   if (!projection) throw new ControlPlaneError("Project projection을 찾을 수 없습니다.", 404, "PROJECTION_NOT_FOUND");
-  if (projection.projectNodeId.startsWith("UNCONFIGURED:")) {
-    await prisma.fleetProjectProjection.update({
-      where: { id: projection.id },
-      data: { status: "NEEDS_INPUT", lastError: "Seorilabs Fleet Project node ID가 필요합니다." },
-    });
+  const initialBinding = await reconcileProjectionBinding(projection);
+  if (initialBinding.kind !== "CURRENT") {
     return { applied: false, skipped: true };
   }
   try {
@@ -233,6 +299,7 @@ export async function applyFleetProjectProjection(
     for (const name of FIELD_NAMES) {
       if (!fields.has(name)) throw new ControlPlaneError(`Fleet Project field '${name}'이 없습니다.`, 409, "PROJECT_FIELD_MISSING");
     }
+    if (!await validateClaimedProjectionBinding(projection.id)) return { applied: false, skipped: true };
     const itemId = await ensureProjectItem(
       client,
       projection.projectNodeId,
@@ -243,6 +310,7 @@ export async function applyFleetProjectProjection(
     if (!matchesDesired(before, desiredFields)) {
       for (const [name, value] of Object.entries(desiredFields)) {
         if (value === null && before[name] !== undefined) {
+          if (!await validateClaimedProjectionBinding(projection.id)) return { applied: false, skipped: true };
           await clearField({
             octokit: client,
             projectId: projection.projectNodeId,
@@ -250,6 +318,7 @@ export async function applyFleetProjectProjection(
             fieldId: fields.get(name)!.id,
           });
         } else if (value !== null && before[name] !== value) {
+          if (!await validateClaimedProjectionBinding(projection.id)) return { applied: false, skipped: true };
           await updateField({
             octokit: client,
             projectId: projection.projectNodeId,
@@ -264,14 +333,31 @@ export async function applyFleetProjectProjection(
     if (!matchesDesired(observed, desiredFields)) {
       throw new ControlPlaneError("Project write 후 readback이 desired state와 다릅니다.", 409, "PROJECT_READBACK_MISMATCH");
     }
-    await prisma.fleetProjectProjection.update({
-      where: { id: projection.id },
+    const completionBinding = await reconcileCurrentProjectionBinding(projection.id);
+    if (completionBinding.kind !== "CURRENT") return { applied: false, skipped: true };
+    const completed = await prisma.fleetProjectProjection.updateMany({
+      where: {
+        id: projection.id,
+        status: "PROCESSING",
+        projectNodeId: projection.projectNodeId,
+        app: { is: { status: "ACTIVE", projectV2Id: projection.projectNodeId } },
+      },
       data: { status: "APPLIED", observed, appliedAt: new Date(), lastError: null },
     });
+    if (completed.count !== 1) {
+      const latestBinding = await reconcileCurrentProjectionBinding(projection.id);
+      if (latestBinding.kind !== "CURRENT") return { applied: false, skipped: true };
+      throw new ControlPlaneError("Project projection completion CAS에 실패했습니다.", 409, "PROJECTION_CAS_FAILED");
+    }
     return { applied: true, skipped: false };
   } catch (error) {
-    await prisma.fleetProjectProjection.update({
-      where: { id: projection.id },
+    const failureBinding = await loadProjectionBinding(projection.id);
+    if (failureBinding) {
+      const disposition = await reconcileProjectionBinding(failureBinding);
+      if (disposition.kind !== "CURRENT") return { applied: false, skipped: true };
+    }
+    await prisma.fleetProjectProjection.updateMany({
+      where: { id: projection.id, status: "PROCESSING" },
       data: {
         status: "READBACK_REQUIRED",
         lastError: error instanceof Error ? error.message.slice(0, 1_000) : "Project projection failed",
@@ -297,12 +383,19 @@ export async function drainFleetProjectProjections(limit = 20) {
     },
     orderBy: { updatedAt: "asc" },
     take: Math.max(1, Math.min(limit, 100)),
-    select: { id: true },
+    select: {
+      id: true,
+      status: true,
+      projectNodeId: true,
+      app: { select: { status: true, projectV2Id: true } },
+    },
   });
   let applied = 0;
   let failed = 0;
   for (const row of rows) {
     try {
+      const binding = await reconcileProjectionBinding(row);
+      if (binding.kind !== "CURRENT") continue;
       const result = await applyFleetProjectProjection(row.id);
       if (result.applied) applied += 1;
     } catch {

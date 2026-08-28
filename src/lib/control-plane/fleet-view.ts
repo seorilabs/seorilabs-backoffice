@@ -1,15 +1,14 @@
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { reauthPublicReason } from "@/lib/control-plane/contracts";
+import {
+  reauthPublicReason,
+  redactCredentialCandidates,
+} from "@/lib/control-plane/contracts";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { prisma } from "@/lib/prisma";
 
 export function redactFleetError(value: string | null): string | null {
   if (!value) return value;
-  return value
-    .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
-    .replace(/((?:password|totp|cookie|secret|api[_-]?key)\s*[:=]\s*)\S+/gi, "$1[REDACTED]")
-    .replace(/[A-Za-z0-9_-]{80,}/g, "[REDACTED]")
-    .slice(0, 1_000);
+  return redactCredentialCandidates(value).slice(0, 1_000);
 }
 
 export function redactFleetJson(value: unknown): unknown {
@@ -18,7 +17,7 @@ export function redactFleetJson(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (/(password|totp|cookie|secret|credential|privatekey|apikey|recoverycode)/.test(normalized)) {
+    if (/^(?:password|passwd|pwd|totp|totpseed|otp|otpseed|cookie|secret|credential|privatekey|apikey|recoverycode|accesstoken|refreshtoken|sessiontoken|leasetoken|idtoken|authorization|clientsecret)$/.test(normalized)) {
       return [key, "[REDACTED]"];
     }
     return [key, redactFleetJson(child)];
@@ -344,6 +343,7 @@ export async function getFleetOperationsView(appId: string) {
         readbackRequestedAt: true,
         attempts: true,
         maxAttempts: true,
+        spentMicros: true,
         leaseGeneration: true,
         error: true,
         outcome: true,
@@ -381,6 +381,7 @@ export async function getFleetOperationsView(appId: string) {
         readbackRequestedAt: true,
         attempts: true,
         maxAttempts: true,
+        spentMicros: true,
         leaseGeneration: true,
         error: true,
         outcome: true,
@@ -464,12 +465,14 @@ export async function getFleetOperationsView(appId: string) {
     })),
     recentRuns: recentRuns.map((run) => ({
       ...run,
+      spentMicros: Number(run.spentMicros ?? 0n),
       status: run.status === "FAILED" && run.readbackRequestedAt ? "READBACK_REQUIRED" : run.status,
       error: redactFleetError(run.error),
       outcome: redactFleetJson(run.outcome),
     })),
     deadLetters: deadLetters.map((run) => ({
       ...run,
+      spentMicros: Number(run.spentMicros ?? 0n),
       error: redactFleetError(run.error),
       outcome: redactFleetJson(run.outcome),
     })),

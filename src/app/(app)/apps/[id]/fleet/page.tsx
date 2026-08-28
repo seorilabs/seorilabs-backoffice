@@ -5,7 +5,10 @@ import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
 import { FleetAutomationControls } from "@/components/fleet/FleetAutomationControls";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
-import { parseAutomationPolicy } from "@/lib/control-plane/automation-catalog";
+import {
+  isManagedAutomationDefinition,
+  parseManagedAutomationPolicy,
+} from "@/lib/control-plane/automation-catalog";
 import { getFleetOperationsView } from "@/lib/control-plane/fleet-view";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 
@@ -416,7 +419,8 @@ export default async function FleetOperationsPage({
         <FleetAutomationControls
           appId={fleet.id}
           definitions={fleet.automationDefinitions.map((definition) => {
-            const policy = parseAutomationPolicy(definition.configuration);
+            const policy = parseManagedAutomationPolicy(definition.configuration);
+            const managed = isManagedAutomationDefinition(definition);
             return {
               id: definition.id,
               key: definition.key,
@@ -424,10 +428,11 @@ export default async function FleetOperationsPage({
               schedule: definition.schedule,
               agentKind: definition.agentKind,
               model: definition.model,
-              enabled: definition.enabled,
+              enabled: definition.enabled && managed,
+              managed,
               maxAttempts: definition.maxAttempts,
-              approvalPolicy: policy.approvalPolicy,
-              budgetCeilingMicros: policy.budgetCeilingMicros,
+              approvalPolicy: policy?.approvalPolicy ?? "UNMANAGED",
+              budgetCeilingMicros: policy?.budgetCeilingMicros ?? 0,
             };
           })}
           runs={visibleRuns.map((run) => ({
@@ -438,6 +443,7 @@ export default async function FleetOperationsPage({
             status: run.status,
             attempts: run.attempts,
             maxAttempts: run.maxAttempts,
+            spentMicros: run.spentMicros,
             workerId: run.leases[0]?.workerId ?? null,
             updatedAt: dateTime(run.updatedAt),
             error: run.error,

@@ -28,6 +28,63 @@ const httpsUrl = z.string().url().max(2_048).refine((value) => {
   message: "userinfo, query, fragment가 없는 공개 HTTPS URL이 필요합니다.",
 });
 
+const authorizationCredentialPattern = /\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.-]{8,}/giu;
+const directCredentialPatterns = [
+  /-----BEGIN\s+(?:(?:RSA|EC|OPENSSH)\s+)?PRIVATE KEY-----/giu,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/gu,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/gu,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gu,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/gu,
+  /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/gu,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu,
+] as const;
+const labelledCredentialPattern = /\b((?:password|passwd|pwd|totp(?:[_-]?seed)?|otp(?:[_-]?seed)?|cookie|session(?:[_-]?(?:id|token))?|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret|authorization)\s*[:=]\s*)(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|[^\s,;]{4,})/giu;
+const opaqueCredentialPattern = /[A-Za-z0-9+/_=-]{32,}/gu;
+
+function matches(pattern: RegExp, value: string): boolean {
+  pattern.lastIndex = 0;
+  const result = pattern.test(value);
+  pattern.lastIndex = 0;
+  return result;
+}
+
+function isPublicOpaqueIdentifier(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function hasOpaqueCredentialCandidate(value: string): boolean {
+  opaqueCredentialPattern.lastIndex = 0;
+  for (const match of value.matchAll(opaqueCredentialPattern)) {
+    if (!isPublicOpaqueIdentifier(match[0])) return true;
+  }
+  return false;
+}
+
+export function containsCredentialCandidate(value: string): boolean {
+  return matches(authorizationCredentialPattern, value)
+    || directCredentialPatterns.some((pattern) => matches(pattern, value))
+    || matches(labelledCredentialPattern, value)
+    || hasOpaqueCredentialCandidate(value);
+}
+
+export function redactCredentialCandidates(value: string): string {
+  authorizationCredentialPattern.lastIndex = 0;
+  let redacted = value.replace(authorizationCredentialPattern, "$1 [REDACTED]");
+  for (const pattern of directCredentialPatterns) {
+    pattern.lastIndex = 0;
+    redacted = redacted.replace(pattern, "[REDACTED]");
+  }
+  labelledCredentialPattern.lastIndex = 0;
+  redacted = redacted.replace(labelledCredentialPattern, "$1[REDACTED]");
+  opaqueCredentialPattern.lastIndex = 0;
+  return redacted.replace(opaqueCredentialPattern, (candidate) => (
+    isPublicOpaqueIdentifier(candidate) ? candidate : "[REDACTED]"
+  ));
+}
+
 const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
 
 /**
@@ -481,19 +538,29 @@ export const agentResultSchema = z.object({
     "RESULT_UNKNOWN",
     "BLOCKED",
   ]),
-  summary: z.string().min(1).max(2_000).refine((value) => (
-    !/(?:bearer\s+|password\s*[:=]|totp\s*[:=]|cookie\s*[:=]|secret\s*[:=]|api[_-]?key\s*[:=])/i.test(value)
-      && !/[A-Za-z0-9_-]{80,}/.test(value)
-  ), "credential 후보가 없는 공개 summary가 필요합니다."),
+  summary: z.string().min(1).max(2_000).refine(
+    (value) => !containsCredentialCandidate(value),
+    "credential 후보가 없는 공개 summary가 필요합니다.",
+  ),
   commitSha: sha40.optional(),
   pullRequestNumber: z.number().int().positive().optional(),
   pullRequestUrl: httpsUrl.optional(),
   model: publicIdentifier.optional(),
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
-  costMicros: z.number().int().nonnegative().optional(),
+  costMicros: z.number().int().nonnegative(),
   reauthRequestId: publicIdentifier.optional(),
 }).strict().superRefine((result, context) => {
+  for (const field of ["pullRequestUrl", "model", "reauthRequestId"] as const) {
+    const value = result[field];
+    if (value && containsCredentialCandidate(value)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "credential 후보가 없는 공개 값이 필요합니다.",
+        path: [field],
+      });
+    }
+  }
   if (result.outcomeCode === "PR_READY" && (!result.pullRequestNumber || !result.pullRequestUrl)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -522,6 +589,7 @@ export const agentLeaseActionSchema = z.object({
 export const agentHeartbeatSchema = agentLeaseActionSchema.omit({ result: true, error: true });
 export const agentCompletionSchema = agentLeaseActionSchema.extend({ result: agentResultSchema });
 export const agentFailureSchema = agentLeaseActionSchema.extend({
+  result: agentResultSchema,
   error: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/, "공개 error code만 허용합니다."),
 });
 export const agentReadbackRequiredSchema = agentLeaseActionSchema.extend({
@@ -543,6 +611,13 @@ export const agentReadbackResolutionSchema = z.object({
   resolution: z.enum(["RESUME", "COMPLETE", "BLOCKED"]),
   result: agentResultSchema,
 }).strict().superRefine((value, context) => {
+  if (value.resolution === "RESUME" && value.result.outcomeCode !== "READBACK_CONFIRMED") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "RESUME resolution에는 READBACK_CONFIRMED outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
   if (value.resolution === "BLOCKED" && value.result.outcomeCode !== "BLOCKED") {
     context.addIssue({
       code: z.ZodIssueCode.custom,

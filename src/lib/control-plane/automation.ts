@@ -12,6 +12,8 @@ export {
   AUTOMATION_TEMPLATE_KEY,
   AUTOMATION_TEMPLATES,
   automationPolicy,
+  isManagedAutomationDefinition,
+  parseManagedAutomationPolicy,
   parseAutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
 export type {

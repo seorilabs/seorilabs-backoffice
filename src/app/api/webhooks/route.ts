@@ -13,8 +13,6 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { issueEventMessage } from "@/lib/notifications/issue-events";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
-import { generateAndPublishReleaseNotes } from "@/lib/core/release-ops";
-import { parseStableSemVerTag } from "@/lib/core/stable-semver";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import { env } from "@/lib/env";
 import { getInstallationOctokit } from "@/lib/github/app";
@@ -26,8 +24,15 @@ import {
   registerRepositoryWebhook,
   type RepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
-import { recordWebhookDelivery } from "@/lib/control-plane/automation-service";
+import {
+  drainAutomationIngress,
+  recordWebhookDelivery,
+} from "@/lib/control-plane/automation-service";
 import { reconcileTerminalRepoGuards } from "@/lib/control-plane/agent-queue";
+import {
+  durableIssueObservation,
+  durableStableTagPush,
+} from "@/lib/control-plane/automation-inbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -157,29 +162,6 @@ async function handleEvent(event: string, p: WebhookPayload, deliveryId: string)
           }
         });
       }
-
-      // 릴리즈 태그 생성 → 응답 이후 출시노트 생성·발행(태그/webhook 응답을 막지 않음).
-      const ref = p.ref ?? "";
-      if (ref.startsWith("refs/tags/") && p.created && !p.deleted) {
-        const version = ref.slice("refs/tags/".length);
-        // snapshot 후보 태그(vX.Y.Z-snapshot.N)는 빌드 출처일 뿐 정식 Release가 아니다.
-        if (parseStableSemVerTag(version)) {
-          after(async () => {
-            try {
-              await generateAndPublishReleaseNotes({
-                repoFullName: repo,
-                version,
-                headSha: p.after,
-              });
-            } catch (e) {
-              console.error(
-                "[webhook] 출시노트 생성 실패:",
-                e instanceof Error ? e.message : e,
-              );
-            }
-          });
-        }
-      }
       break;
     }
     default:
@@ -212,6 +194,7 @@ export async function POST(req: NextRequest) {
 
   // delivery와 automation inbox를 같은 transaction에 기록한다. handler가 실패해도
   // scheduler가 inbox를 재처리하며 동일 delivery 재전송은 한 번만 enqueue된다.
+  const stableTagObservation = event === "push" ? durableStableTagPush(payload) : null;
   const delivery = await recordWebhookDelivery({
     deliveryId,
     event,
@@ -220,7 +203,23 @@ export async function POST(req: NextRequest) {
     issueNumber: payload.issue?.number,
     issueNodeId: payload.issue?.node_id,
     occurredAt: payload.issue?.updated_at ? new Date(payload.issue.updated_at) : undefined,
+    issue: payload.issue ? durableIssueObservation(payload.issue) : undefined,
+    stableTagPush: stableTagObservation,
   });
+  if (stableTagObservation) {
+    // 응답 이후 exact sourceKey를 즉시 소진한다. 실패하거나 process가 종료돼도
+    // durable inbox의 FAILED/PENDING row를 scheduler 또는 GitHub 재전송이 재생한다.
+    after(async () => {
+      try {
+        await drainAutomationIngress({ sourceKey: `github:${deliveryId}`, limit: 1 });
+      } catch (e) {
+        console.error(
+          "[webhook] 출시노트 inbox 처리 실패:",
+          e instanceof Error ? e.message : e,
+        );
+      }
+    });
+  }
   if (delivery.duplicate) {
     return NextResponse.json({ status: "duplicate" });
   }

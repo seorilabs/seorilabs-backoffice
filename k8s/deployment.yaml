@@ -160,12 +160,22 @@ spec:
                   name: backoffice-secrets
                   key: CONTROL_PLANE_ADMIN_TOKEN
                   optional: true
-            - name: AGENT_WORKER_TOKEN
+            - name: CONTROL_PLANE_ADMIN_PRINCIPAL
+              value: "backoffice:fleet-operator"
+            - name: AGENT_WORKER_CODEX_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: backoffice-secrets
-                  key: AGENT_WORKER_TOKEN
+                  key: AGENT_WORKER_CODEX_TOKEN
                   optional: true
+            - name: AGENT_WORKER_CLAUDE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AGENT_WORKER_CLAUDE_TOKEN
+                  optional: true
+            - name: AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED
+              value: "false"
             - name: AGENT_LEASE_SIGNING_KEY
               valueFrom:
                 secretKeyRef:

@@ -9,7 +9,8 @@ import {
   definitionKey,
   dueScheduleSlots,
   fleetProjectFields,
-  parseAutomationPolicy,
+  isManagedAutomationDefinition,
+  parseManagedAutomationPolicy,
   scheduleForCadence,
   type AutomationAgentKind,
   type AutomationApprovalPolicy,
@@ -17,12 +18,27 @@ import {
 } from "@/lib/control-plane/automation";
 import {
   eligibleForAutopilot,
+  mutationCapabilityBrokerEnforced,
   reconcileTerminalRepoGuards,
   releaseRepoGuard,
 } from "@/lib/control-plane/agent-queue";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
+import {
+  durableIssueObservation,
+  durableIngressEnvelopeHash,
+  durableIssueToMirrorInput,
+  parseDurableIssueObservation,
+  parseDurableStableTagPush,
+  type DurableIssueObservation,
+  type DurableStableTagPush,
+} from "@/lib/control-plane/automation-inbox";
+import {
+  beginAutomationMutation,
+  completeAutomationMutation,
+} from "@/lib/control-plane/automation-mutation";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+import type { GhIssueInput } from "@/lib/sync/mirror";
 
 const ISSUE_TRIGGER_ACTIONS = new Set(["opened", "reopened", "labeled", "unlabeled", "edited"]);
 const CANCELLABLE_RUN_STATUSES = ["PENDING", "RUNNING"] as const;
@@ -47,33 +63,99 @@ export async function recordWebhookDelivery(input: {
   issueNumber?: number | null;
   issueNodeId?: string | null;
   occurredAt?: Date | null;
+  issue?: DurableIssueObservation | null;
+  stableTagPush?: DurableStableTagPush | null;
 }): Promise<{ duplicate: boolean }> {
+  const sourceKey = `github:${input.deliveryId}`;
+  const action = input.action ?? null;
+  const durablePayload = input.issue ?? input.stableTagPush ?? null;
+  const shouldEnqueue = Boolean(
+    input.repoFullName
+    && (
+      (input.event === "issues" && input.issueNumber && input.issueNodeId && input.issue)
+      || (input.event === "push" && input.stableTagPush)
+    ),
+  );
+  const payloadHash = shouldEnqueue && input.repoFullName && durablePayload
+    ? durableIngressEnvelopeHash({
+      sourceKey,
+      event: input.event,
+      action,
+      repoFullName: input.repoFullName,
+      payload: durablePayload,
+    })
+    : null;
+  let duplicateDetected = false;
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.webhookDelivery.create({
-        data: { deliveryId: input.deliveryId, event: input.event, action: input.action ?? null },
+    const inserted = await prisma.$transaction(async (tx) => {
+      const delivery = await tx.webhookDelivery.createMany({
+        data: [{ deliveryId: input.deliveryId, event: input.event, action }],
+        skipDuplicates: true,
       });
-      if (input.event === "issues" && input.repoFullName && input.issueNumber && input.issueNodeId) {
+      if (delivery.count === 0) return false;
+      if (shouldEnqueue && input.repoFullName && durablePayload) {
         await tx.automationIngressEvent.create({
           data: {
-            sourceKey: `github:${input.deliveryId}`,
+            sourceKey,
             event: input.event,
-            action: input.action ?? null,
+            action,
             repoFullName: input.repoFullName,
             issueNumber: input.issueNumber,
             issueNodeId: input.issueNodeId,
+            payload: durablePayload as Prisma.InputJsonValue,
+            payloadHash,
             occurredAt: input.occurredAt ?? new Date(),
           },
         });
       }
+      return true;
     });
-    return { duplicate: false };
+    if (inserted) return { duplicate: false };
+    duplicateDetected = true;
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+    duplicateDetected = true;
+  }
+  if (duplicateDetected) {
     const delivery = await prisma.webhookDelivery.findUnique({ where: { deliveryId: input.deliveryId } });
-    if (!delivery) throw error;
+    if (!delivery) throw new Error("duplicate webhook delivery row missing");
+    if (delivery.event !== input.event || delivery.action !== action) {
+      throw new ControlPlaneError("같은 delivery ID가 다른 webhook에 사용되었습니다.", 409, "WEBHOOK_DELIVERY_CONFLICT");
+    }
+    if (shouldEnqueue && input.repoFullName && durablePayload && payloadHash) {
+      let ingress = await prisma.automationIngressEvent.findUnique({ where: { sourceKey } });
+      if (!ingress) {
+        await prisma.automationIngressEvent.createMany({
+          data: [{
+            sourceKey,
+            event: input.event,
+            action,
+            repoFullName: input.repoFullName,
+            issueNumber: input.issueNumber,
+            issueNodeId: input.issueNodeId,
+            payload: durablePayload as Prisma.InputJsonValue,
+            payloadHash,
+            occurredAt: input.occurredAt ?? new Date(),
+          }],
+          skipDuplicates: true,
+        });
+        ingress = await prisma.automationIngressEvent.findUnique({ where: { sourceKey } });
+      }
+      if (
+        !ingress
+        || ingress.event !== input.event
+        || ingress.action !== action
+        || ingress.repoFullName.toLowerCase() !== input.repoFullName.toLowerCase()
+        || ingress.issueNumber !== (input.issueNumber ?? null)
+        || ingress.issueNodeId !== (input.issueNodeId ?? null)
+        || ingress.payloadHash !== payloadHash
+      ) {
+        throw new ControlPlaneError("같은 delivery ID의 durable payload가 일치하지 않습니다.", 409, "WEBHOOK_DELIVERY_CONFLICT");
+      }
+    }
     return { duplicate: true };
   }
+  throw new Error("webhook delivery recording reached an invalid state");
 }
 
 async function eligibleIssue(input: {
@@ -155,6 +237,8 @@ async function dispatchDefinition(input: {
     cancelledAt: Date | null;
     maxAttempts: number;
     configuration: Prisma.JsonValue | null;
+    template: string;
+    agentKind: string | null;
     app: { repoFullName: string; status: string } | null;
   };
   triggerKind: "MANUAL" | "SCHEDULE" | "WEBHOOK";
@@ -165,6 +249,13 @@ async function dispatchDefinition(input: {
   const { definition } = input;
   if (!definition.enabled || definition.cancelledAt || !definition.app || definition.app.status !== "ACTIVE") {
     throw new ControlPlaneError("활성 routine이 아닙니다.", 409, "DEFINITION_INACTIVE");
+  }
+  if (!isManagedAutomationDefinition(definition)) {
+    throw new ControlPlaneError(
+      "legacy 또는 계약 불명 routine은 Fleet worker에 dispatch할 수 없습니다.",
+      409,
+      "DEFINITION_CONTRACT_UNMANAGED",
+    );
   }
   const idempotencyKey = automationIdempotencyKey({
     definitionId: definition.id,
@@ -195,7 +286,7 @@ async function dispatchDefinition(input: {
     const labels = Array.isArray(issue.labels)
       ? issue.labels.filter((label): label is string => typeof label === "string")
       : [];
-    const policy = parseAutomationPolicy(definition.configuration);
+    const policy = parseManagedAutomationPolicy(definition.configuration)!;
     const occurrence = await prisma.automationOccurrence.create({
       data: {
         definitionId: definition.id,
@@ -249,6 +340,42 @@ export async function createAutomationDefinition(input: {
   actor: string;
   idempotencyKey: string;
 }) {
+  if (input.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced()) {
+    throw new ControlPlaneError(
+      "신뢰된 mutation capability broker가 강제되기 전에는 READY_PR routine을 만들 수 없습니다.",
+      503,
+      "MUTATION_CAPABILITY_BROKER_REQUIRED",
+    );
+  }
+  const mutationRequest = {
+    repoId: input.repoId.toString(),
+    template: input.template,
+    agentKind: input.agentKind,
+    cadence: input.cadence,
+    approvalPolicy: input.approvalPolicy,
+    budgetCeilingMicros: input.budgetCeilingMicros,
+    model: input.model ?? null,
+    maxAttempts: input.maxAttempts,
+  } satisfies JsonValue;
+  const mutationIdentity = {
+    requestId: input.idempotencyKey,
+    actor: input.actor,
+    operation: "CREATE",
+    targetKey: `repo:${input.repoId.toString()}:${input.template}:${input.agentKind}:${input.cadence}`,
+    request: mutationRequest,
+  } as const;
+  const mutation = await beginAutomationMutation(mutationIdentity);
+  if (mutation.replay) {
+    const replay = mutation.replay as { definition?: { id?: string } };
+    const definitionId = replay.definition?.id;
+    const definition = definitionId
+      ? await prisma.automationDefinition.findUnique({ where: { id: definitionId } })
+      : null;
+    if (!definition) {
+      throw new ControlPlaneError("완료된 routine 생성 원장의 대상을 찾을 수 없습니다.", 409, "MUTATION_TARGET_MISSING");
+    }
+    return { definition, duplicate: true };
+  }
   const app = await prisma.app.findUnique({
     where: { repoId: input.repoId },
     select: { id: true, repoFullName: true, status: true },
@@ -268,8 +395,23 @@ export async function createAutomationDefinition(input: {
     approvalPolicy: input.approvalPolicy,
     budgetCeilingMicros: input.budgetCeilingMicros,
   });
+  const complete = async (definition: NonNullable<typeof existing>, duplicate: boolean) => {
+    const sealed = await completeAutomationMutation({
+      ...mutationIdentity,
+      requestHash: mutation.requestHash,
+      response: { definition, duplicate },
+      audit: {
+        action: "automation.create",
+        entityType: "AutomationDefinition",
+        entityId: definition.id,
+        payload: mutationRequest,
+      },
+    });
+    const sealedDuplicate = Boolean((sealed as { duplicate?: unknown }).duplicate);
+    return { definition, duplicate: sealedDuplicate };
+  };
   if (existing) {
-    const existingPolicy = parseAutomationPolicy(existing.configuration);
+    const existingPolicy = parseManagedAutomationPolicy(existing.configuration);
     if (
       existing.appId !== app.id
       || existing.template !== input.template
@@ -277,50 +419,32 @@ export async function createAutomationDefinition(input: {
       || existing.schedule !== schedule
       || existing.model !== (input.model ?? null)
       || existing.maxAttempts !== input.maxAttempts
+      || !existingPolicy
       || canonicalJson(existingPolicy) !== canonicalJson(configuration)
     ) {
       throw new ControlPlaneError("같은 routine key가 다른 설정으로 이미 존재합니다.", 409, "DEFINITION_CONFLICT");
     }
-    return { definition: existing, duplicate: true };
+    return complete(existing, true);
   }
   try {
-    const definition = await prisma.$transaction(async (tx) => {
-      const created = await tx.automationDefinition.create({
-        data: {
-          key,
-          appId: app.id,
-          template: input.template,
-          schedule,
-          agentKind: input.agentKind,
-          model: input.model,
-          configuration,
-          maxAttempts: input.maxAttempts,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorLogin: input.actor,
-          action: "automation.create",
-          entityType: "AutomationDefinition",
-          entityId: created.id,
-          payload: {
-            idempotencyKey: input.idempotencyKey,
-            template: input.template,
-            agentKind: input.agentKind,
-            cadence: input.cadence,
-            approvalPolicy: input.approvalPolicy,
-            budgetCeilingMicros: input.budgetCeilingMicros,
-          },
-        },
-      });
-      return created;
+    const definition = await prisma.automationDefinition.create({
+      data: {
+        key,
+        appId: app.id,
+        template: input.template,
+        schedule,
+        agentKind: input.agentKind,
+        model: input.model,
+        configuration,
+        maxAttempts: input.maxAttempts,
+      },
     });
-    return { definition, duplicate: false };
+    return complete(definition, false);
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const concurrent = await prisma.automationDefinition.findUnique({ where: { key } });
     if (!concurrent) throw error;
-    const concurrentPolicy = parseAutomationPolicy(concurrent.configuration);
+    const concurrentPolicy = parseManagedAutomationPolicy(concurrent.configuration);
     if (
       concurrent.appId !== app.id
       || concurrent.template !== input.template
@@ -328,11 +452,12 @@ export async function createAutomationDefinition(input: {
       || concurrent.schedule !== schedule
       || concurrent.model !== (input.model ?? null)
       || concurrent.maxAttempts !== input.maxAttempts
+      || !concurrentPolicy
       || canonicalJson(concurrentPolicy) !== canonicalJson(configuration)
     ) {
       throw new ControlPlaneError("같은 routine key가 다른 설정으로 동시에 생성되었습니다.", 409, "DEFINITION_CONFLICT");
     }
-    return { definition: concurrent, duplicate: true };
+    return complete(concurrent, true);
   }
 }
 
@@ -342,6 +467,13 @@ async function loadDefinition(definitionId: string) {
     include: { app: { select: { repoFullName: true, status: true } } },
   });
   if (!definition) throw new ControlPlaneError("routine을 찾을 수 없습니다.", 404, "DEFINITION_NOT_FOUND");
+  if (!isManagedAutomationDefinition(definition)) {
+    throw new ControlPlaneError(
+      "legacy 또는 계약 불명 routine은 Fleet 명령으로 제어할 수 없습니다.",
+      409,
+      "DEFINITION_CONTRACT_UNMANAGED",
+    );
+  }
   return definition;
 }
 
@@ -442,6 +574,7 @@ export async function cancelAgentRun(input: { runId: string; actor: string; requ
           }
           : {
             status: "CANCELLED",
+            workKey: null,
             cancelledAt: now,
             completedAt: now,
             error: "CANCELLED_BY_OPERATOR",
@@ -459,7 +592,10 @@ export async function cancelAgentRun(input: { runId: string; actor: string; requ
           runId: run.id,
           type: readbackRequired ? "cancellation_readback_required" : "cancelled",
           actor: input.actor,
-          payload: { status: readbackRequired ? "READBACK_REQUIRED" : "CANCELLED" },
+          payload: {
+            status: readbackRequired ? "READBACK_REQUIRED" : "CANCELLED",
+            workKeyReleased: !readbackRequired && run.workKey !== null,
+          },
         },
       });
       return {
@@ -487,10 +623,13 @@ export async function retryAgentRun(input: { runId: string; actor: string; reque
     return await prisma.$transaction(async (tx) => {
       const run = await tx.agentRun.findUnique({
         where: { id: input.runId },
-        include: { occurrence: { include: { definition: true } } },
+        include: {
+          occurrence: { include: { definition: true } },
+          repoGuard: { select: { activeScopeKey: true } },
+        },
       });
       if (!run) throw new ControlPlaneError("run을 찾을 수 없습니다.", 404, "RUN_NOT_FOUND");
-      if (run.status === "FAILED" && run.readbackRequestedAt) {
+      if (run.readbackRequestedAt || run.repoGuard?.activeScopeKey) {
         throw new ControlPlaneError("결과 불명 run은 worker readback으로 먼저 판정해야 합니다.", 409, "READBACK_REQUIRED");
       }
       if (run.status !== "DEAD_LETTER") {
@@ -532,6 +671,16 @@ export async function executeAutomationCommand(input: {
   actor: string;
   requestId: string;
 }) {
+  const mutationRequest = input.command as unknown as JsonValue;
+  const mutationIdentity = {
+    requestId: input.requestId,
+    actor: input.actor,
+    operation: input.command.command,
+    targetKey: `definition:${input.definitionId}`,
+    request: mutationRequest,
+  } as const;
+  const mutation = await beginAutomationMutation(mutationIdentity);
+  if (mutation.replay) return mutation.replay;
   const definition = await loadDefinition(input.definitionId);
   if ("runId" in input.command) {
     const run = await prisma.agentRun.findUnique({
@@ -560,22 +709,18 @@ export async function executeAutomationCommand(input: {
       result = await retryAgentRun({ runId: input.command.runId, actor: input.actor, requestId: input.requestId });
       break;
   }
-  await prisma.auditLog.create({
-    data: {
-      actorLogin: input.actor,
+  if ("runId" in input.command) await refreshRunFleetProjection(input.command.runId);
+  return completeAutomationMutation({
+    ...mutationIdentity,
+    requestHash: mutation.requestHash,
+    response: result,
+    audit: {
       action: `automation.${input.command.command.toLowerCase()}`,
       entityType: "AutomationDefinition",
       entityId: definition.id,
-      payload: {
-        requestId: input.requestId,
-        ...(input.command.command === "CANCEL_RUN" || input.command.command === "RETRY_RUN"
-          ? { runId: input.command.runId }
-          : {}),
-      },
+      payload: mutationRequest,
     },
   });
-  if ("runId" in input.command) await refreshRunFleetProjection(input.command.runId);
-  return result;
 }
 
 async function cancelIneligibleIssueRuns(repoFullName: string, issueNumber: number, now: Date): Promise<void> {
@@ -711,19 +856,86 @@ export async function refreshRunFleetProjection(runId: string): Promise<void> {
 async function processIngressEvent(event: {
   id: string;
   sourceKey: string;
+  event: string;
   action: string | null;
   repoFullName: string;
   issueNumber: number | null;
   issueNodeId: string | null;
+  payload: Prisma.JsonValue | null;
+  payloadHash: string | null;
   occurredAt: Date;
   attempts: number;
-}, now: Date): Promise<void> {
+}, now: Date, assertClaim: () => Promise<void>): Promise<void> {
+  if (event.event === "push") {
+    const tag = parseDurableStableTagPush({
+      payload: event.payload,
+      payloadHash: event.payloadHash,
+      sourceKey: event.sourceKey,
+      event: event.event,
+      action: event.action,
+      repoFullName: event.repoFullName,
+    });
+    const { shouldBackofficeAutoPublishReleaseNotes } = await import("@/lib/core/release-ownership");
+    const { env } = await import("@/lib/env");
+    if (!shouldBackofficeAutoPublishReleaseNotes(event.repoFullName, env.githubOrg())) return;
+    await assertClaim();
+    const { resolveRefSha } = await import("@/lib/github/write");
+    const currentSha = await resolveRefSha(event.repoFullName, tag.version);
+    if (currentSha.toLowerCase() !== tag.headSha.toLowerCase()) {
+      throw new Error("provider tag SHA does not match durable observation");
+    }
+    const { generateAndPublishReleaseNotes } = await import("@/lib/core/release-ops");
+    await generateAndPublishReleaseNotes({
+      repoFullName: event.repoFullName,
+      version: tag.version,
+      headSha: tag.headSha,
+    }, {
+      assertOwnership: assertClaim,
+    });
+    return;
+  }
+  if (event.event !== "issues") throw new Error("unsupported automation inbox event");
   if (!event.issueNumber) throw new Error("issueNumber missing");
+  const durableObservation = parseDurableIssueObservation({
+    payload: event.payload,
+    payloadHash: event.payloadHash,
+    sourceKey: event.sourceKey,
+    event: event.event,
+    action: event.action,
+    repoFullName: event.repoFullName,
+  });
+  const [owner, repo, ...rest] = event.repoFullName.split("/");
+  if (!owner || !repo || rest.length > 0) throw new Error("invalid inbox repoFullName");
+  const { getInstallationOctokit } = await import("@/lib/github/app");
+  const response = await (await getInstallationOctokit()).rest.issues.get({
+    owner,
+    repo,
+    issue_number: event.issueNumber,
+  });
+  const observation = durableIssueObservation(response.data as unknown as GhIssueInput);
+  if (
+    durableObservation
+    && new Date(observation.updatedAt) < new Date(durableObservation.updatedAt)
+  ) {
+    throw new Error("provider issue readback is older than durable observation");
+  }
+  if (
+    observation.number !== event.issueNumber
+    || (event.issueNodeId && observation.nodeId !== event.issueNodeId)
+  ) {
+    throw new Error("automation inbox issue identity mismatch");
+  }
+  const { upsertIssue } = await import("@/lib/sync/mirror");
+  await upsertIssue(event.repoFullName, durableIssueToMirrorInput(observation));
   const issue = await prisma.issueMirror.findUnique({
     where: { repoFullName_number: { repoFullName: event.repoFullName, number: event.issueNumber } },
   });
-  if (!issue || (event.issueNodeId && issue.nodeId !== event.issueNodeId)) {
-    throw new Error("issue mirror not ready");
+  if (
+    !issue
+    || issue.nodeId !== observation.nodeId
+    || issue.ghUpdatedAt < new Date(observation.updatedAt)
+  ) {
+    throw new Error("issue mirror did not converge to inbox observation");
   }
   await upsertFleetProjectProjection(event.repoFullName, event.issueNumber);
   const eligible = eligibleForAutopilot({
@@ -738,7 +950,14 @@ async function processIngressEvent(event: {
   }
   if (!ISSUE_TRIGGER_ACTIONS.has(event.action ?? "")) return;
   const definitions = await prisma.automationDefinition.findMany({
-    where: { appId: issue.appId, enabled: true, cancelledAt: null },
+    where: {
+      appId: issue.appId,
+      enabled: true,
+      cancelledAt: null,
+      template: AUTOMATION_TEMPLATE_KEY,
+      agentKind: { in: ["CODEX", "CLAUDE"] },
+      configuration: { not: Prisma.DbNull },
+    },
     include: { app: { select: { repoFullName: true, status: true } } },
     orderBy: { key: "asc" },
   });
@@ -754,11 +973,16 @@ async function processIngressEvent(event: {
   await upsertFleetProjectProjection(event.repoFullName, event.issueNumber);
 }
 
-export async function drainAutomationIngress(input: { now?: Date; limit?: number } = {}) {
+export async function drainAutomationIngress(input: {
+  now?: Date;
+  limit?: number;
+  sourceKey?: string;
+} = {}) {
   const now = input.now ?? new Date();
   const staleBefore = new Date(now.getTime() - 5 * 60_000);
   const events = await prisma.automationIngressEvent.findMany({
     where: {
+      ...(input.sourceKey ? { sourceKey: input.sourceKey } : {}),
       OR: [
         { status: { in: ["PENDING", "FAILED"] }, eligibleAt: { lte: now } },
         { status: "PROCESSING", updatedAt: { lte: staleBefore } },
@@ -771,28 +995,62 @@ export async function drainAutomationIngress(input: { now?: Date; limit?: number
   let failed = 0;
   let deadLetter = 0;
   for (const event of events) {
+    const claimGeneration = event.attempts + 1;
     const claimed = await prisma.automationIngressEvent.updateMany({
       where: { id: event.id, status: event.status, attempts: event.attempts },
       data: { status: "PROCESSING", attempts: { increment: 1 }, error: null },
     });
     if (claimed.count !== 1) continue;
+    const assertClaim = async () => {
+      const alive = await prisma.automationIngressEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING", attempts: claimGeneration },
+        data: { updatedAt: new Date() },
+      });
+      if (alive.count !== 1) throw new Error("automation inbox claim lost");
+    };
+    let heartbeatError: unknown = null;
+    let heartbeatChain: Promise<void> = Promise.resolve();
+    const heartbeat = setInterval(() => {
+      heartbeatChain = heartbeatChain
+        .then(assertClaim)
+        .catch((error: unknown) => { heartbeatError = error; });
+    }, 60_000);
+    heartbeat.unref();
+    let processingError: unknown = null;
     try {
-      await processIngressEvent(event, now);
-      await prisma.automationIngressEvent.update({
-        where: { id: event.id },
+      await processIngressEvent(event, now, assertClaim);
+    } catch (error) {
+      processingError = error;
+    } finally {
+      clearInterval(heartbeat);
+      await heartbeatChain;
+    }
+    if (!processingError && heartbeatError) processingError = heartbeatError;
+    if (!processingError) {
+      try {
+        await assertClaim();
+      } catch (error) {
+        processingError = error;
+      }
+    }
+    if (!processingError) {
+      const completed = await prisma.automationIngressEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING", attempts: claimGeneration },
         data: { status: "PROCESSED", processedAt: now },
       });
-      processed += 1;
-    } catch (error) {
-      const terminal = event.attempts + 1 >= 5;
-      await prisma.automationIngressEvent.update({
-        where: { id: event.id },
+      processed += completed.count;
+      continue;
+    }
+    const terminal = claimGeneration >= 5;
+    const failedUpdate = await prisma.automationIngressEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING", attempts: claimGeneration },
         data: {
           status: terminal ? "DEAD_LETTER" : "FAILED",
-          eligibleAt: new Date(now.getTime() + retryDelay(event.attempts + 1)),
-          error: error instanceof Error ? error.message.slice(0, 1_000) : "ingress failed",
+          eligibleAt: new Date(now.getTime() + retryDelay(claimGeneration)),
+          error: processingError instanceof Error ? processingError.message.slice(0, 1_000) : "ingress failed",
         },
       });
+    if (failedUpdate.count === 1) {
       if (terminal) deadLetter += 1;
       else failed += 1;
     }
@@ -803,7 +1061,15 @@ export async function drainAutomationIngress(input: { now?: Date; limit?: number
 export async function scheduleDueAutomations(input: { now?: Date; perDefinitionLimit?: number } = {}) {
   const now = input.now ?? new Date();
   const definitions = await prisma.automationDefinition.findMany({
-    where: { enabled: true, cancelledAt: null, schedule: { not: null }, app: { status: "ACTIVE" } },
+    where: {
+      enabled: true,
+      cancelledAt: null,
+      schedule: { not: null },
+      template: AUTOMATION_TEMPLATE_KEY,
+      agentKind: { in: ["CODEX", "CLAUDE"] },
+      configuration: { not: Prisma.DbNull },
+      app: { status: "ACTIVE" },
+    },
     include: {
       app: { select: { repoFullName: true, status: true } },
       occurrences: {

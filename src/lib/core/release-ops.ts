@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { env } from "@/lib/env";
+import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
 import {
   createTag,
   createOrUpdateRelease,
@@ -55,6 +57,7 @@ import {
   resolveReleaseTagWithMarketFloor,
 } from "@/lib/core/market-version-floor";
 import { readReleaseSourceFiles } from "@/lib/github/release-source";
+import { ReleaseSourceContractError } from "@/lib/core/release-source-contract";
 import {
   createReleaseTagAtSource,
   executeMarketDeployPlan,
@@ -154,6 +157,11 @@ export async function createReleaseTagWithNotes(opts: {
   actorLabel?: string;
   prerelease?: boolean;
 }): Promise<CreateReleaseResult> {
+  if (!shouldBackofficeAutoPublishReleaseNotes(opts.repoFullName, env.githubOrg())) {
+    throw new ReleaseSourceContractError(
+      `${env.githubOrg()}/platform 릴리스는 Platform immutable publisher만 생성할 수 있습니다.`,
+    );
+  }
   // targetRef 미지정이면 repo 의 실제 default branch 를 쓴다("main" 하드코딩 금지).
   const targetRef = opts.targetRef || (await getRepoDefaultBranch(opts.repoFullName));
 
@@ -229,7 +237,12 @@ async function bumpedCandidateTag(repoFullName: string, bump: Bump): Promise<str
  */
 export async function generateAndPublishReleaseNotes(
   input: GenerateReleaseNoteInput,
+  execution: { assertOwnership?: () => Promise<void> } = {},
 ): Promise<ReleaseNoteResult | null> {
+  if (!shouldBackofficeAutoPublishReleaseNotes(input.repoFullName, env.githubOrg())) {
+    return null;
+  }
+  await execution.assertOwnership?.();
   const note = await generateReleaseNoteCore(input);
   if (!note) return null;
 
@@ -255,6 +268,7 @@ export async function generateAndPublishReleaseNotes(
   if (!row) return note;
 
   const translations = releaseNoteTranslations(row);
+  await execution.assertOwnership?.();
   const rel = await createOrUpdateRelease({
     repoFullName: input.repoFullName,
     tag: input.version,
@@ -268,8 +282,9 @@ export async function generateAndPublishReleaseNotes(
 
   // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json).
   // 실패해도 번역과 GitHub Release 본문은 유지한다.
+  const asset = buildReleaseNotesAsset({ tag: input.version, ...translations });
+  if (asset) await execution.assertOwnership?.();
   try {
-    const asset = buildReleaseNotesAsset({ tag: input.version, ...translations });
     if (asset) {
       await upsertReleaseAsset({
         repoFullName: input.repoFullName,

@@ -15,6 +15,7 @@ ALTER TABLE `automation_occurrence`
 -- AlterTable
 ALTER TABLE `agent_run`
     ADD COLUMN `workKey` VARCHAR(191) NULL,
+    ADD COLUMN `spentMicros` BIGINT NULL,
     ADD COLUMN `readbackRequestedAt` DATETIME(3) NULL,
     ADD COLUMN `cancelledAt` DATETIME(3) NULL;
 
@@ -48,6 +49,8 @@ CREATE TABLE `automation_ingress_event` (
     `repoFullName` VARCHAR(191) NOT NULL,
     `issueNumber` INTEGER NULL,
     `issueNodeId` VARCHAR(191) NULL,
+    `payload` JSON NULL,
+    `payloadHash` CHAR(64) NULL,
     `occurredAt` DATETIME(3) NOT NULL,
     `status` VARCHAR(191) NOT NULL DEFAULT 'PENDING',
     `attempts` INTEGER NOT NULL DEFAULT 0,
@@ -61,6 +64,24 @@ CREATE TABLE `automation_ingress_event` (
     INDEX `automation_ingress_event_status_eligibleAt_idx`(`status`, `eligibleAt`),
     INDEX `automation_ingress_event_repoFullName_issueNumber_idx`(`repoFullName`, `issueNumber`),
     PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `automation_mutation_request` (
+    `requestId` VARCHAR(191) NOT NULL,
+    `actor` VARCHAR(191) NOT NULL,
+    `operation` VARCHAR(191) NOT NULL,
+    `targetKey` VARCHAR(191) NOT NULL,
+    `requestHash` CHAR(64) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'PENDING',
+    `request` JSON NOT NULL,
+    `response` JSON NULL,
+    `completedAt` DATETIME(3) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    INDEX `automation_mutation_request_status_updatedAt_idx`(`status`, `updatedAt`),
+    PRIMARY KEY (`requestId`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
