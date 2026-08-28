@@ -35,14 +35,76 @@ import { prisma } from "@/lib/prisma";
 
 const PLATFORM_REPOSITORY = "platform";
 const FULL_PARITY_SCOPE = "FULL";
+const SHA_40 = /^[0-9a-f]{40}$/i;
+
+type PlatformSourceVector = {
+  repoId: bigint;
+  repoFullName: string;
+  sourceSha: string;
+};
+
+type PlatformRegistrationVector = {
+  repoId: bigint;
+  repoFullName: string;
+  status: "REGISTERED" | "NEEDS_INPUT" | "MANAGED" | "ARCHIVED";
+  archived: boolean;
+  managementKind: "UNCLASSIFIED" | "APP" | "PLATFORM_PRODUCER" | null;
+  lastDefaultPushSha: string | null;
+  lastReconciledSha: string | null;
+};
 
 type AppImportTarget = {
   id: string;
   slug: string;
   repoId: bigint;
   repoFullName: string;
-  platformFleetBinding: { sourceSha: string | null } | null;
+  platformSource: PlatformSourceVector | null;
 };
+
+function configuredPlatformRepository(input: {
+  organization: string;
+  repositoryIdText: string;
+}): { repoId: bigint; repoFullName: string } | null {
+  if (!/^\d+$/.test(input.repositoryIdText)) return null;
+  const repoId = BigInt(input.repositoryIdText);
+  if (repoId <= 0n || repoId > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return {
+    repoId,
+    repoFullName: `${input.organization}/${PLATFORM_REPOSITORY}`,
+  };
+}
+
+export function resolveLegacyPlatformSourceVector(input: {
+  configured: { repoId: bigint; repoFullName: string } | null;
+  bindingSourceSha: string | null;
+  registration: PlatformRegistrationVector | null;
+}): PlatformSourceVector | null {
+  if (!input.configured) return null;
+  if (input.bindingSourceSha !== null) {
+    if (!SHA_40.test(input.bindingSourceSha)) return null;
+    return {
+      ...input.configured,
+      sourceSha: input.bindingSourceSha.toLowerCase(),
+    };
+  }
+  const registration = input.registration;
+  if (
+    !registration
+    || registration.repoId !== input.configured.repoId
+    || registration.repoFullName.toLowerCase() !== input.configured.repoFullName.toLowerCase()
+    || registration.status !== "MANAGED"
+    || registration.archived
+    || registration.managementKind !== "PLATFORM_PRODUCER"
+    || !registration.lastDefaultPushSha
+    || !registration.lastReconciledSha
+    || registration.lastDefaultPushSha.toLowerCase() !== registration.lastReconciledSha.toLowerCase()
+    || !SHA_40.test(registration.lastReconciledSha)
+  ) return null;
+  return {
+    ...input.configured,
+    sourceSha: registration.lastReconciledSha.toLowerCase(),
+  };
+}
 
 type PersistableSource = {
   sourceKind: LegacySourceKind;
@@ -175,7 +237,7 @@ async function collectPlatformSource(
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   const repoFullName = `${org}/${PLATFORM_REPOSITORY}`;
   const path = `registry/apps/${app.slug}.json`;
-  const sourceSha = app.platformFleetBinding?.sourceSha?.toLowerCase() ?? null;
+  const sourceSha = app.platformSource?.sourceSha ?? null;
   if (!sourceSha) {
     return unavailablePlatformSource({
       repoFullName,
@@ -185,10 +247,7 @@ async function collectPlatformSource(
       errorCode: "PLATFORM_SOURCE_SHA_MISSING",
     });
   }
-  const expectedRepoIdText = process.env.PLATFORM_GITHUB_REPOSITORY_ID?.trim() ?? "";
-  const expectedRepoId = /^\d+$/.test(expectedRepoIdText)
-    ? Number(expectedRepoIdText)
-    : Number.NaN;
+  const expectedRepoId = Number(app.platformSource?.repoId ?? 0n);
   if (!Number.isSafeInteger(expectedRepoId) || expectedRepoId <= 0) {
     return unavailablePlatformSource({
       repoFullName,
@@ -196,6 +255,16 @@ async function collectPlatformSource(
       path,
       status: "IDENTITY_MISMATCH",
       errorCode: "PLATFORM_REPOSITORY_ID_NOT_CONFIGURED",
+    });
+  }
+  if (app.platformSource?.repoFullName.toLowerCase() !== repoFullName.toLowerCase()) {
+    return unavailablePlatformSource({
+      repoFullName,
+      repoId: expectedRepoId,
+      sourceSha,
+      path,
+      status: "IDENTITY_MISMATCH",
+      errorCode: "PLATFORM_REPOSITORY_IDENTITY_INVALID",
     });
   }
 
@@ -494,29 +563,57 @@ export async function recordLegacyShadowImport(input: {
 }, dependencies: LegacyShadowServiceDependencies = defaultDependencies) {
   const client = dependencies.client;
   const sourceSha = input.sourceSha.toLowerCase();
-  const app = await client.app.findUnique({
-    where: { repoId: input.repoId },
-    select: {
-      id: true,
-      slug: true,
-      repoId: true,
-      repoFullName: true,
-      platformFleetBinding: { select: { sourceSha: true } },
-      discoveryObservations: {
-        orderBy: latestDiscoveryObservationOrder(),
-        take: 1,
-        select: { id: true, sourceSha: true },
-      },
-    },
+  const organization = process.env.GITHUB_ORG ?? "seorilabs";
+  const configuredPlatform = configuredPlatformRepository({
+    organization,
+    repositoryIdText: process.env.PLATFORM_GITHUB_REPOSITORY_ID?.trim() ?? "",
   });
+  const [app, platformRegistration] = await Promise.all([
+    client.app.findUnique({
+      where: { repoId: input.repoId },
+      select: {
+        id: true,
+        slug: true,
+        repoId: true,
+        repoFullName: true,
+        platformFleetBinding: { select: { sourceSha: true } },
+        discoveryObservations: {
+          orderBy: latestDiscoveryObservationOrder(),
+          take: 1,
+          select: { id: true, sourceSha: true },
+        },
+      },
+    }),
+    configuredPlatform
+      ? client.repositoryRegistration.findUnique({
+          where: { repoId: configuredPlatform.repoId },
+          select: {
+            repoId: true,
+            repoFullName: true,
+            status: true,
+            archived: true,
+            managementKind: true,
+            lastDefaultPushSha: true,
+            lastReconciledSha: true,
+          },
+        })
+      : Promise.resolve(null),
+  ]);
   if (!app || !app.repoId) {
     throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
   }
+  const platformSource = resolveLegacyPlatformSourceVector({
+    configured: configuredPlatform,
+    bindingSourceSha: app.platformFleetBinding?.sourceSha ?? null,
+    registration: platformRegistration,
+  });
   const importTarget: AppImportTarget = {
-    ...app,
+    id: app.id,
+    slug: app.slug,
     repoId: app.repoId,
+    repoFullName: app.repoFullName,
+    platformSource,
   };
-  const platformSourceSha = app.platformFleetBinding?.sourceSha?.toLowerCase() ?? null;
   const requestHash = legacyShadowRequestHash({
     repoId: input.repoId,
     sourceSha,
@@ -577,11 +674,34 @@ export async function recordLegacyShadowImport(input: {
           },
         },
       });
+      let lockedPlatformRegistration: PlatformRegistrationVector | null = null;
+      if (configuredPlatform) {
+        await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${configuredPlatform.repoId} FOR UPDATE`;
+        lockedPlatformRegistration = await tx.repositoryRegistration.findUnique({
+          where: { repoId: configuredPlatform.repoId },
+          select: {
+            repoId: true,
+            repoFullName: true,
+            status: true,
+            archived: true,
+            managementKind: true,
+            lastDefaultPushSha: true,
+            lastReconciledSha: true,
+          },
+        });
+      }
+      const lockedPlatformSource = resolveLegacyPlatformSourceVector({
+        configured: configuredPlatform,
+        bindingSourceSha: lockedApp.platformFleetBinding?.sourceSha ?? null,
+        registration: lockedPlatformRegistration,
+      });
       if (
         lockedApp.repoId !== input.repoId
         || lockedApp.slug !== app.slug
         || lockedApp.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase()
-        || (lockedApp.platformFleetBinding?.sourceSha?.toLowerCase() ?? null) !== platformSourceSha
+        || lockedPlatformSource?.repoId !== platformSource?.repoId
+        || lockedPlatformSource?.repoFullName.toLowerCase() !== platformSource?.repoFullName.toLowerCase()
+        || lockedPlatformSource?.sourceSha !== platformSource?.sourceSha
         || lockedApp.discoveryObservations[0]?.id !== latestDiscovery.id
         || lockedApp.discoveryObservations[0]?.sourceSha.toLowerCase() !== sourceSha
       ) {
