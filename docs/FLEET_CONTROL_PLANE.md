@@ -24,6 +24,9 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
+| `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
+| `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA, Platform version을 하나의 candidate로 고정 |
+| `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
 | `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
 | `POST` | `/api/internal/agents/claim` | 최대 5분 lease와 generation capability 발급 |
@@ -35,11 +38,50 @@ Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
 
-Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 첫 slice는
-`schemaVersion`, 비공개 market channel, localization, object-storage asset revision, build pin, support URL만
-허용한다. 법적 선언, 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 변경 및 모든
-미정의 필드는 DRAFT 생성과 activation에서 fail-closed한다. 이전 validator로 만들어진 DRAFT도
+Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
+`schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
+support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.
+ProjectBlueprint의 provisioner는 등록된 `shared/*` logical credential만 참조할 수 있다. 법적 승인,
+계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 값 또는 변경 및 모든 미정의 필드는
+fail-closed한다. compliance는 이 계약에서 `DRAFT`만 만들 수 있다. 이전 validator로 만들어진 DRAFT도
 activation 시 다시 검사한다.
+
+## ProjectBlueprint와 provider readback
+
+ConfigRevision을 만들 때 `ProjectBlueprint`, `MarketProfile`, `MarketLocalization`, `ComplianceProfile`,
+`StoreAsset`을 같은 transaction에서 immutable projection으로 만든다. blueprint는 제품당 production
+project, 조직/folder/billing/region, API, IAM 공개 identity, budget, Firebase Auth/App Check/Rules/Indexes/
+Functions/앱 등록, GA4·BigQuery, Workspace group·domain-wide delegation을 고정한다.
+
+plan API는 provider에 쓰지 않는다. `ProviderObservation.payload`의 표준 readback envelope는
+`visibility=VISIBLE|FORBIDDEN|ERROR`와 `state=PRESENT|ABSENT|UNKNOWN`을 분리한다. 권한 부족과 provider
+오류는 반드시 `UNKNOWN`이며 `ABSENT`로 기록할 수 없다. 관측된 desired hash나 공개 identity가 다르면
+`DRIFT`, 관측이 없으면 `UNOBSERVED`다. 필요한 shared credential binding이 없거나 같은 capability의
+`app/*` 대체 credential만 있으면 전체 plan은 `BLOCKED`다.
+
+이 slice의 출력은 `BLOCKED`, `READY_TO_APPLY`, `COMPLIANT` 중 하나다. 실제 shared keyless provisioner
+apply와 provider API readback은 별도 승인·실행 gate다.
+
+## Release candidate와 마켓 원장
+
+`ReleaseCandidate`는 다음 값을 한 번에 고정한다.
+
+- GitHub numeric repo ID와 exact source SHA
+- ACTIVE ConfigRevision 번호
+- market과 BuildTarget key
+- artifact type과 SHA-256
+- full WorkflowBundle SHA와 exact Platform version
+
+`IMPLEMENTATION`, `CI`, `ARTIFACT`, `RELEASE_ASSETS`, `COMPLIANCE_DRAFT`, `PROVIDER_SHELL`의 최신 observation이
+모두 `PASSED`일 때만 lifecycle이 `RELEASE_CANDIDATE`가 된다. 이 상태는 upload나 제출이 아니다.
+`UPLOAD`, `PROCESSING`, `DEVICE_QA`, `REVIEW`, `APPROVAL`, `DEPLOYMENT`, `PUBLIC`은 이후에도 서로 독립된
+append-only observation으로 남는다. market adapter는 예상 account/team/workspace, app ID, source SHA,
+revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMATCH` 또는
+`CANDIDATE_BINDING_MISMATCH`로 기록 자체를 거부한다. API는 provider write를 수행하지 않는다.
+
+중앙 lifecycle은 기존 화면 호환용 6단계 enum과 별도인 `FleetLifecycleState`에
+`IDEA → PLANNING → SPEC_REVIEW → APPROVED → BUILD → QA → RELEASE_ASSETS → RELEASE_CANDIDATE → SUBMITTED → REVIEW → APPROVED_FOR_RELEASE → DEPLOYED → PUBLIC_VERIFIED → MONITORED`
+순서로 저장한다. 새 release-candidate 증거가 이미 더 뒤 단계인 앱을 되돌리지 않는다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
 profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirectory는 repository 상대 경로만
@@ -49,9 +91,10 @@ profile은 `react-native | godot`, packageManager는 `npm | pnpm`, workingDirect
 ## 운영 UI와 재인증 경계
 
 앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
-ProviderObservation, PlatformFleetBinding, CredentialBinding, AgentRun/dead-letter와 ReauthRequest를
-한 화면에서 조회한다. CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만
-있으며 secret 값을 저장하거나 변경하는 endpoint는 없다.
+ProjectBlueprint와 market projection, ReleaseCandidate와 독립 gate, ProviderObservation,
+PlatformFleetBinding, CredentialBinding, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
+CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만 있으며 secret 값을
+저장하거나 변경하는 endpoint는 없다.
 
 ReauthRequest는 strict gate enum만 저장하고 공개 설명은 서버의 고정 mapping으로 파생한다. provider
 error나 DOM free-form text를 받거나 저장하지 않는다. `HUMAN_REAUTH_REQUIRED → TRUSTED_LOCAL_PENDING`은

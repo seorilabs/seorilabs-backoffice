@@ -69,6 +69,34 @@ export async function getFleetOperationsView(appId: string) {
               status: true,
             },
           },
+          projectBlueprint: {
+            select: {
+              schemaVersion: true,
+              organizationId: true,
+              folderId: true,
+              billingAccountId: true,
+              projectId: true,
+              projectNumber: true,
+              region: true,
+              payloadHash: true,
+            },
+          },
+          marketProfiles: {
+            orderBy: { market: "asc" },
+            select: { market: true, enabled: true, releaseChannel: true, locales: true },
+          },
+          marketLocalizations: {
+            orderBy: [{ scopeKey: "asc" }, { locale: "asc" }],
+            select: { market: true, locale: true, payloadHash: true },
+          },
+          complianceProfiles: {
+            orderBy: [{ market: "asc" }, { declaration: "asc" }],
+            select: { market: true, declaration: true, state: true, payloadHash: true },
+          },
+          storeAssets: {
+            orderBy: [{ scopeKey: "asc" }, { kind: "asc" }, { objectKey: "asc" }],
+            select: { market: true, kind: true, locale: true, objectKey: true, checksum: true },
+          },
         },
       },
       legacyConfigImports: {
@@ -239,6 +267,45 @@ export async function getFleetOperationsView(appId: string) {
           createdAt: true,
         },
       },
+      releaseCandidates: {
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: {
+          id: true,
+          sourceSha: true,
+          artifactChecksum: true,
+          market: true,
+          targetKey: true,
+          artifactType: true,
+          workflowBundleSha: true,
+          platformVersion: true,
+          status: true,
+          createdBy: true,
+          createdAt: true,
+          configRevision: { select: { revision: true } },
+          gateObservations: {
+            orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
+            take: 100,
+            select: {
+              id: true,
+              gate: true,
+              status: true,
+              evidence: true,
+              observedBy: true,
+              observedAt: true,
+            },
+          },
+        },
+      },
+      fleetLifecycleState: {
+        select: {
+          stage: true,
+          sourceSha: true,
+          generation: true,
+          updatedAt: true,
+          configRevision: { select: { revision: true } },
+        },
+      },
     },
   });
   if (!app) return null;
@@ -331,6 +398,13 @@ export async function getFleetOperationsView(appId: string) {
     providerObservations: providerObservations.map((observation) => ({
       ...observation,
       payload: redactFleetJson(observation.payload),
+    })),
+    releaseCandidates: app.releaseCandidates.map((candidate) => ({
+      ...candidate,
+      gateObservations: candidate.gateObservations.map((observation) => ({
+        ...observation,
+        evidence: redactFleetJson(observation.evidence),
+      })),
     })),
     reauthRequests: app.reauthRequests.map((request) => ({
       ...request,

@@ -3,7 +3,7 @@
 // 검증 반영: WorkflowRunMirror 추가, Release 는 tag push + workflow_run 파생, v2 모델은 미생성.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // ARM64 런타임(bookworm-slim, openssl 3.x) 필수. 빌드 호스트와 별개로 명시.
   binaryTargets = ["native", "linux-arm64-openssl-3.0.x"]
 }
@@ -29,26 +29,26 @@ model App {
   isPublicRepo Boolean   @default(false)
 
   // 마켓 식별자 (미설정/example-only 이면 null + UI "확정 필요" 뱃지)
-  firebaseProject String?
+  firebaseProject      String?
   // Platform registry의 app_id. registry/apps/*.json을 GitHub에서 읽어
   // slug 또는 유일한 Firebase project 일치로 동기화한다.
-  platformAppId   String? @unique
+  platformAppId        String? @unique
   // GA4 BigQuery export 데이터셋("analytics_<propertyId>"). 지표 수집 대상 판별용.
-  ga4Dataset      String?
+  ga4Dataset           String?
   // Platform 운영 이벤트 수집 이전에 이미 만들어져 있던 Platform 계정 수.
   // 알림의 누적 순번은 이 값에 관측 이벤트 수를 더해 계산한다.
   platformUserBaseline Int?
-  playPackage     String? @unique
+  playPackage          String? @unique
   // Play Console 내부 테스트 opt-in URL. 패키지명에서 파생되지 않고 콘솔에서만 얻을 수 있어
   // 백오피스에서 직접 입력한다(시드가 덮지 않는다). 값이 있으면 Play 배포 카드에 링크를 단다.
-  playInternalTestUrl String?
-  iosBundle       String?
-  appleTeamId     String?
-  iosSku          String?
-  aitAppName      String?
+  playInternalTestUrl  String?
+  iosBundle            String?
+  appleTeamId          String?
+  iosSku               String?
+  aitAppName           String?
   // AppsInToss 콘솔 지표 수집 매핑. 워크스페이스는 단일(38345)이나 명시 저장, miniAppId 는 앱당 유일.
-  aitWorkspaceId  Int?
-  aitMiniAppId    Int?    @unique
+  aitWorkspaceId       Int?
+  aitMiniAppId         Int?    @unique
 
   // 담당제 AI 팀원(오너) 배분. teammates.ts 의 TeammateKey 문자열이며 null 은
   // 미배정(운영 총괄 순찰이 경고). 재배분은 데이터 갱신만으로 반영된다.
@@ -57,49 +57,56 @@ model App {
   marketTargets Json // ["play","appstore","ait","web"]
 
   // 부트스트랩 멱등
-  configHash     String?
-  configSyncedAt DateTime?
+  configHash       String?
+  configSyncedAt   DateTime?
   // 게임 저장소의 .seorilabs/backoffice.json 선언형 관리툴 계약.
   // 실행 코드는 저장하지 않으며, invalid manifest는 error만 보존해 앱 워크스페이스에서 노출한다.
   opsManifest      Json?
-  opsManifestError String? @db.Text
+  opsManifestError String?   @db.Text
 
   // GitHub Projects v2 연결(읽기용)
   projectV2Id String?
 
-  owners       AppOwner[]
-  transitions  StageTransition[]
-  issues       IssueMirror[]
-  pullRequests PullRequestMirror[]
-  workflowRuns WorkflowRunMirror[]
-  releases     ReleaseRecord[]
-  releaseNotes ReleaseNote[]
-  operationRuns AppOperationRun[]
-  operatorCommandRuns OperatorCommandRun[]
-  incidents     OperationalIncident[]
-  milestones    OperationalMilestone[]
-  storeReviewSyncs StoreReviewSync[]
-  storeReviewObservations StoreReviewObservation[]
-  aiDrafts     AiDraft[]
-  metrics      AppMetricDaily[]
+  owners                   AppOwner[]
+  transitions              StageTransition[]
+  issues                   IssueMirror[]
+  pullRequests             PullRequestMirror[]
+  workflowRuns             WorkflowRunMirror[]
+  releases                 ReleaseRecord[]
+  releaseNotes             ReleaseNote[]
+  operationRuns            AppOperationRun[]
+  operatorCommandRuns      OperatorCommandRun[]
+  incidents                OperationalIncident[]
+  milestones               OperationalMilestone[]
+  storeReviewSyncs         StoreReviewSync[]
+  storeReviewObservations  StoreReviewObservation[]
+  aiDrafts                 AiDraft[]
+  metrics                  AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
-  contentMetrics AppContentMetricDaily[]
+  contentMetrics           AppContentMetricDaily[]
   // AppsInToss 콘솔 일별 지표(토스 표면 DAU/세션/잔존/IAA·IAP). GA4 와 별개 소스.
-  consoleMetrics AppConsoleMetricDaily[]
-  buildTargets BuildTarget[]
-  externalBindings ExternalBinding[]
-  discoveryObservations DiscoveryObservation[]
-  configRevisions ConfigRevision[]
-  legacyConfigImports LegacyConfigImport[]
+  consoleMetrics           AppConsoleMetricDaily[]
+  buildTargets             BuildTarget[]
+  externalBindings         ExternalBinding[]
+  discoveryObservations    DiscoveryObservation[]
+  configRevisions          ConfigRevision[]
+  legacyConfigImports      LegacyConfigImport[]
   shadowParityObservations ShadowParityObservation[]
-  fleetParityWaveResults FleetParityWaveResult[]
-  providerObservations ProviderObservation[]
-  releaseCandidates ReleaseCandidate[]
-  platformFleetBinding PlatformFleetBinding?
-  credentialBindings CredentialBinding[]
-  reauthRequests ReauthRequest[]
-  automationDefinitions AutomationDefinition[]
-  agentRuns AgentRun[]
+  fleetParityWaveResults   FleetParityWaveResult[]
+  providerObservations     ProviderObservation[]
+  releaseCandidates        ReleaseCandidate[]
+  projectBlueprints        ProjectBlueprint[]
+  marketProfiles           MarketProfile[]
+  marketLocalizations      MarketLocalization[]
+  complianceProfiles       ComplianceProfile[]
+  storeAssets              StoreAsset[]
+  fleetLifecycleState      FleetLifecycleState?
+  fleetLifecycleEvents     FleetLifecycleEvent[]
+  platformFleetBinding     PlatformFleetBinding?
+  credentialBindings       CredentialBinding[]
+  reauthRequests           ReauthRequest[]
+  automationDefinitions    AutomationDefinition[]
+  agentRuns                AgentRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -217,25 +224,25 @@ enum MirrorSource {
 // PullRequestMirror
 // ──────────────────────────────────────────────────────────────────────────
 model PullRequestMirror {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   appId         String?
-  app           App?     @relation(fields: [appId], references: [id])
+  app           App?      @relation(fields: [appId], references: [id])
   repoFullName  String
   number        Int
-  nodeId        String   @unique
-  title         String   @db.Text
+  nodeId        String    @unique
+  title         String    @db.Text
   state         PrState
-  isDraft       Boolean  @default(false)
+  isDraft       Boolean   @default(false)
   authorLogin   String?
   headRef       String?
   baseRef       String?
   labels        Json
   linkedIssue   Int?
-  isAutopilotPr Boolean  @default(false)
+  isAutopilotPr Boolean   @default(false)
   mergedAt      DateTime? @db.DateTime(3)
-  ghCreatedAt   DateTime @db.DateTime(3)
-  ghUpdatedAt   DateTime @db.DateTime(3)
-  mirroredAt    DateTime @updatedAt
+  ghCreatedAt   DateTime  @db.DateTime(3)
+  ghUpdatedAt   DateTime  @db.DateTime(3)
+  mirroredAt    DateTime  @updatedAt
 
   @@unique([repoFullName, number])
   @@index([appId, state])
@@ -252,21 +259,21 @@ enum PrState {
 // WorkflowRunMirror — deploy-* 등 워크플로 실행 (출시 신호의 원천)
 // ──────────────────────────────────────────────────────────────────────────
 model WorkflowRunMirror {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   appId        String?
-  app          App?     @relation(fields: [appId], references: [id])
+  app          App?      @relation(fields: [appId], references: [id])
   repoFullName String
-  runId        BigInt   @unique
+  runId        BigInt    @unique
   name         String? // "Deploy AppsInToss"
   status       String // queued | in_progress | completed
   conclusion   String? // success | failure | cancelled | ...
   event        String? // push | workflow_dispatch
   headSha      String?
   headBranch   String? // refs/tags/v1.2.3 도 가능
-  runAttempt   Int      @default(1)
+  runAttempt   Int       @default(1)
   runStartedAt DateTime? @db.DateTime(3)
-  ghUpdatedAt  DateTime @db.DateTime(3)
-  mirroredAt   DateTime @updatedAt
+  ghUpdatedAt  DateTime  @db.DateTime(3)
+  mirroredAt   DateTime  @updatedAt
 
   @@index([appId, name])
   @@map("workflow_run_mirror")
@@ -276,24 +283,24 @@ model WorkflowRunMirror {
 // ReleaseRecord — tag push + workflow_run 에서 파생 (GitHub Release 객체 없음)
 // ──────────────────────────────────────────────────────────────────────────
 model ReleaseRecord {
-  id            String        @id @default(cuid())
-  appId         String
-  app           App           @relation(fields: [appId], references: [id], onDelete: Cascade)
-  version       String // "v1.3.2"
-  market        ReleaseMarket
-  track         String?
-  status        ReleaseStatus @default(PENDING)
-  workflowRunId BigInt?
-  workflowName  String?
+  id                  String        @id @default(cuid())
+  appId               String
+  app                 App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  version             String // "v1.3.2"
+  market              ReleaseMarket
+  track               String?
+  status              ReleaseStatus @default(PENDING)
+  workflowRunId       BigInt?
+  workflowName        String?
   // GitHub workflow_run 이 아닌 외부 배포 실행(Xcode Cloud) 식별자.
-  externalRunId String? @unique
+  externalRunId       String?       @unique
   externalBuildNumber Int?
-  commitSha     String?
-  triggeredBy   String?
-  startedAt     DateTime? @db.DateTime(3)
-  deployedAt    DateTime? @db.DateTime(3)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  commitSha           String?
+  triggeredBy         String?
+  startedAt           DateTime?     @db.DateTime(3)
+  deployedAt          DateTime?     @db.DateTime(3)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   @@unique([market, workflowRunId])
   @@index([appId, market, deployedAt])
@@ -302,12 +309,12 @@ model ReleaseRecord {
 
 // 알림 원본과 Discord 목적지별 배달 상태. 과거 provider 값은 이력 보존을 위해 유지한다.
 model NotificationEvent {
-  id         String               @id @default(cuid())
-  dedupeKey  String               @unique
+  id         String                 @id @default(cuid())
+  dedupeKey  String                 @unique
   kind       NotificationKind
   payload    Json
-  occurredAt DateTime             @default(now()) @db.DateTime(3)
-  createdAt  DateTime             @default(now())
+  occurredAt DateTime               @default(now()) @db.DateTime(3)
+  createdAt  DateTime               @default(now())
   deliveries NotificationDelivery[]
 
   @@index([kind, occurredAt])
@@ -315,20 +322,20 @@ model NotificationEvent {
 }
 
 model NotificationDelivery {
-  id             String                     @id @default(cuid())
-  eventId        String
-  event          NotificationEvent          @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  provider       NotificationProvider
-  destinationKey String
-  status         NotificationDeliveryStatus @default(PENDING)
-  attempts       Int                        @default(0)
-  nextAttemptAt  DateTime                   @default(now()) @db.DateTime(3)
-  lastError      String?                    @db.Text
+  id                String                     @id @default(cuid())
+  eventId           String
+  event             NotificationEvent          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  provider          NotificationProvider
+  destinationKey    String
+  status            NotificationDeliveryStatus @default(PENDING)
+  attempts          Int                        @default(0)
+  nextAttemptAt     DateTime                   @default(now()) @db.DateTime(3)
+  lastError         String?                    @db.Text
   providerMessageId String?
-  sentAt         DateTime?                  @db.DateTime(3)
-  deletedAt      DateTime?                  @db.DateTime(3)
-  createdAt      DateTime                   @default(now())
-  updatedAt      DateTime                   @updatedAt
+  sentAt            DateTime?                  @db.DateTime(3)
+  deletedAt         DateTime?                  @db.DateTime(3)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
 
   @@unique([eventId, provider, destinationKey])
   @@index([status, nextAttemptAt])
@@ -379,27 +386,27 @@ model OperationalEvent {
 // Discord 운영 명령 실행 원장. interaction id를 멱등 키로 삼고, 외부 쓰기는
 // 별도 worker가 처리한다. interaction token은 저장하지 않는다.
 model OperatorCommandRun {
-  id                 String               @id @default(cuid())
-  sourceInteractionId String              @unique
-  appId              String?
-  app                App?                 @relation(fields: [appId], references: [id], onDelete: SetNull)
-  operation          String
-  params             Json?
-  actorDiscordUserId String
-  actorLabel         String
-  channelId          String
-  messageId          String?
-  status             OperatorCommandStatus @default(AWAITING_CONFIRMATION)
-  attempts           Int                  @default(0)
-  summary            String?              @db.Text
-  error              String?              @db.Text
-  confirmedAt        DateTime?             @db.DateTime(3)
-  startedAt          DateTime?             @db.DateTime(3)
-  completedAt        DateTime?             @db.DateTime(3)
-  expiresAt          DateTime               @db.DateTime(3)
-  redactedAt         DateTime?              @db.DateTime(3)
-  createdAt          DateTime               @default(now()) @db.DateTime(3)
-  updatedAt          DateTime               @updatedAt
+  id                  String                @id @default(cuid())
+  sourceInteractionId String                @unique
+  appId               String?
+  app                 App?                  @relation(fields: [appId], references: [id], onDelete: SetNull)
+  operation           String
+  params              Json?
+  actorDiscordUserId  String
+  actorLabel          String
+  channelId           String
+  messageId           String?
+  status              OperatorCommandStatus @default(AWAITING_CONFIRMATION)
+  attempts            Int                   @default(0)
+  summary             String?               @db.Text
+  error               String?               @db.Text
+  confirmedAt         DateTime?             @db.DateTime(3)
+  startedAt           DateTime?             @db.DateTime(3)
+  completedAt         DateTime?             @db.DateTime(3)
+  expiresAt           DateTime              @db.DateTime(3)
+  redactedAt          DateTime?             @db.DateTime(3)
+  createdAt           DateTime              @default(now()) @db.DateTime(3)
+  updatedAt           DateTime              @updatedAt
 
   @@index([status, createdAt])
   @@index([redactedAt, expiresAt])
@@ -417,26 +424,26 @@ enum OperatorCommandStatus {
 }
 
 model OperationalIncident {
-  id                    String             @id @default(cuid())
-  dedupeKey             String             @unique
+  id                    String         @id @default(cuid())
+  dedupeKey             String         @unique
   appId                 String?
-  app                   App?               @relation(fields: [appId], references: [id], onDelete: SetNull)
+  app                   App?           @relation(fields: [appId], references: [id], onDelete: SetNull)
   source                String
   kind                  String
   severity              String
-  status                IncidentStatus     @default(OPEN)
-  summary               String             @db.Text
+  status                IncidentStatus @default(OPEN)
+  summary               String         @db.Text
   evidence              Json?
-  destinationKey        String             @default("ops-alerts")
+  destinationKey        String         @default("ops-alerts")
   providerMessageId     String?
   acknowledgedBy        String?
-  acknowledgedAt        DateTime?          @db.DateTime(3)
+  acknowledgedAt        DateTime?      @db.DateTime(3)
   assignedDiscordUserId String?
-  firstDetectedAt       DateTime            @db.DateTime(3)
-  lastDetectedAt        DateTime            @db.DateTime(3)
-  recoveredAt           DateTime?           @db.DateTime(3)
-  createdAt             DateTime            @default(now()) @db.DateTime(3)
-  updatedAt             DateTime            @updatedAt
+  firstDetectedAt       DateTime       @db.DateTime(3)
+  lastDetectedAt        DateTime       @db.DateTime(3)
+  recoveredAt           DateTime?      @db.DateTime(3)
+  createdAt             DateTime       @default(now()) @db.DateTime(3)
+  updatedAt             DateTime       @updatedAt
 
   @@index([status, severity, lastDetectedAt])
   @@index([appId, status])
@@ -450,14 +457,14 @@ enum IncidentStatus {
 }
 
 model OperationalMilestone {
-  id             String   @id @default(cuid())
-  appId          String
-  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  eventType      String
-  firstEventId   String
-  firstObservedAt DateTime @db.DateTime(3)
-  notifiedAt     DateTime? @db.DateTime(3)
-  createdAt      DateTime  @default(now()) @db.DateTime(3)
+  id              String    @id @default(cuid())
+  appId           String
+  app             App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  eventType       String
+  firstEventId    String
+  firstObservedAt DateTime  @db.DateTime(3)
+  notifiedAt      DateTime? @db.DateTime(3)
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
 
   @@unique([appId, eventType])
   @@map("operational_milestone")
@@ -640,24 +647,24 @@ enum OwnerRole {
 // AI 는 GitHub 에 직접 쓰지 않음: 이 테이블이 검토 큐 + 감사 + 재생성 근거.
 // ──────────────────────────────────────────────────────────────────────────
 model AiDraft {
-  id           String        @id @default(cuid())
-  appId        String
-  app          App           @relation(fields: [appId], references: [id], onDelete: Cascade)
-  repoFullName String
-  stage        Lifecycle // 어느 단계 에이전트 산출인가
-  kind         AiDraftKind
-  title        String?       @db.Text // 커밋(새 이슈) 시 제목
-  issueNumber  Int? // 코멘트 커밋 대상(분해 등). 새 이슈형은 null
-  inputJson    Json // 생성 입력 컨텍스트(재생성/감사)
-  outputText   String        @db.Text // LLM 산출(사람이 수정 가능)
-  model        String // "gemini-3.1-flash-lite"
-  status       AiDraftStatus @default(DRAFT)
+  id                   String        @id @default(cuid())
+  appId                String
+  app                  App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  repoFullName         String
+  stage                Lifecycle // 어느 단계 에이전트 산출인가
+  kind                 AiDraftKind
+  title                String?       @db.Text // 커밋(새 이슈) 시 제목
+  issueNumber          Int? // 코멘트 커밋 대상(분해 등). 새 이슈형은 null
+  inputJson            Json // 생성 입력 컨텍스트(재생성/감사)
+  outputText           String        @db.Text // LLM 산출(사람이 수정 가능)
+  model                String // "gemini-3.1-flash-lite"
+  status               AiDraftStatus @default(DRAFT)
   committedIssueNumber Int? // 커밋 결과 이슈 번호
-  committedUrl String?
-  committedAt  DateTime?     @db.DateTime(3)
-  createdBy    String? // github login
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  committedUrl         String?
+  committedAt          DateTime?     @db.DateTime(3)
+  createdBy            String? // github login
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   @@index([appId, stage, status])
   @@index([status, createdAt])
@@ -693,26 +700,26 @@ model AppMetricDaily {
   app   App      @relation(fields: [appId], references: [id], onDelete: Cascade)
   date  DateTime @db.Date // 지표 기준일(YYYY-MM-DD, 앱 GA4 타임존)
 
-  dau           Int    @default(0)
-  newUsers      Int    @default(0) // first_visit
-  returnRatePct Float? // 전체 재방문율(코호트 n>=1)
-  d1Pct         Float? // 그 날 신규 코호트의 D1 잔존율
-  d3Pct         Float?
-  d7Pct         Float?
-  engagedUsers  Int    @default(0)
-  avgEngageSec  Float? // user_engagement 평균 초
-  adEventUsers  Int    @default(0) // legacy 광의 광고 이벤트 고유 사용자
-  adImpressions Int    @default(0) // legacy 광의 광고 이벤트 수 — 노출로 표시하지 않음
-  adCtaUsers Int @default(0) // ad_reward_impression 고유 사용자
-  adCtaImpressions Int @default(0) // 광고 CTA 지면 노출
-  adCompletedUsers Int @default(0) // ad_reward_completed 고유 사용자
-  adCompletions Int @default(0) // 보상형 광고 완료
-  networkAdUsers Int @default(0) // 표준 ad_impression 고유 사용자
+  dau                  Int    @default(0)
+  newUsers             Int    @default(0) // first_visit
+  returnRatePct        Float? // 전체 재방문율(코호트 n>=1)
+  d1Pct                Float? // 그 날 신규 코호트의 D1 잔존율
+  d3Pct                Float?
+  d7Pct                Float?
+  engagedUsers         Int    @default(0)
+  avgEngageSec         Float? // user_engagement 평균 초
+  adEventUsers         Int    @default(0) // legacy 광의 광고 이벤트 고유 사용자
+  adImpressions        Int    @default(0) // legacy 광의 광고 이벤트 수 — 노출로 표시하지 않음
+  adCtaUsers           Int    @default(0) // ad_reward_impression 고유 사용자
+  adCtaImpressions     Int    @default(0) // 광고 CTA 지면 노출
+  adCompletedUsers     Int    @default(0) // ad_reward_completed 고유 사용자
+  adCompletions        Int    @default(0) // 보상형 광고 완료
+  networkAdUsers       Int    @default(0) // 표준 ad_impression 고유 사용자
   networkAdImpressions Int    @default(0) // SDK/네트워크 실제 광고 노출
-  dauAndroid    Int    @default(0) // platform=ANDROID DAU
-  dauIos        Int    @default(0) // platform=IOS DAU
-  dauWeb        Int    @default(0) // platform=WEB DAU
-  raw           Json? // 차원 분해(국가/기기/OS top-N) 등 부가 지표 원본 — MetricBreakdowns
+  dauAndroid           Int    @default(0) // platform=ANDROID DAU
+  dauIos               Int    @default(0) // platform=IOS DAU
+  dauWeb               Int    @default(0) // platform=WEB DAU
+  raw                  Json? // 차원 분해(국가/기기/OS top-N) 등 부가 지표 원본 — MetricBreakdowns
 
   collectedAt DateTime @default(now()) @db.DateTime(3)
 
@@ -760,9 +767,9 @@ model AppContentMetricDaily {
 // 승격 컬럼은 '일별 스칼라'만, 나머지(잔존 코호트/데모그래픽/OS별 분해)는 raw JSON.
 // ──────────────────────────────────────────────────────────────────────────
 model AppConsoleMetricDaily {
-  id    String   @id @default(cuid())
-  appId String
-  app   App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  appId     String
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
   // 콘솔 미니앱 리스팅 id. 한 App(=repo)이 콘솔에 여러 미니앱으로 등록될 수 있어(예:
   // crossword-puzzle 웹 36555 + 네이티브 게임 56407) 지표는 (appId, miniAppId, date)로 분리한다.
   miniAppId Int
@@ -874,11 +881,11 @@ model WebhookDelivery {
 }
 
 model SyncCursor {
-  repoFullName String   @id
-  lastIssueSync    DateTime?
-  lastPrSync       DateTime?
-  lastRunSync      DateTime?
-  updatedAt        DateTime @updatedAt
+  repoFullName  String    @id
+  lastIssueSync DateTime?
+  lastPrSync    DateTime?
+  lastRunSync   DateTime?
+  updatedAt     DateTime  @updatedAt
 
   @@map("sync_cursor")
 }
@@ -962,26 +969,33 @@ model DiscoveryObservation {
 }
 
 model ConfigRevision {
-  id                       String               @id @default(cuid())
+  id                       String                    @id @default(cuid())
   appId                    String
-  app                      App                  @relation(fields: [appId], references: [id], onDelete: Cascade)
+  app                      App                       @relation(fields: [appId], references: [id], onDelete: Cascade)
   revision                 Int
-  status                   ConfigRevisionStatus @default(DRAFT)
+  status                   ConfigRevisionStatus      @default(DRAFT)
   payload                  Json
-  payloadHash              String               @db.Char(64)
+  payloadHash              String                    @db.Char(64)
   createdBy                String
-  idempotencyKey           String               @unique
-  activeSlot               String?              @unique
-  activationIdempotencyKey String?              @unique
+  idempotencyKey           String                    @unique
+  activeSlot               String?                   @unique
+  activationIdempotencyKey String?                   @unique
   activatedSnapshot        Json?
-  snapshotDigest           String?              @db.Char(64)
-  snapshotSignature        String?              @db.Char(64)
-  activatedAt              DateTime?            @db.DateTime(3)
-  supersededAt             DateTime?            @db.DateTime(3)
-  createdAt                DateTime             @default(now()) @db.DateTime(3)
+  snapshotDigest           String?                   @db.Char(64)
+  snapshotSignature        String?                   @db.Char(64)
+  activatedAt              DateTime?                 @db.DateTime(3)
+  supersededAt             DateTime?                 @db.DateTime(3)
+  createdAt                DateTime                  @default(now()) @db.DateTime(3)
   releaseCandidates        ReleaseCandidate[]
   legacyConfigImport       LegacyConfigImport?
   shadowParityObservations ShadowParityObservation[]
+  projectBlueprint         ProjectBlueprint?
+  marketProfiles           MarketProfile[]
+  marketLocalizations      MarketLocalization[]
+  complianceProfiles       ComplianceProfile[]
+  storeAssets              StoreAsset[]
+  fleetLifecycleStates     FleetLifecycleState[]
+  fleetLifecycleEvents     FleetLifecycleEvent[]
   fleetParityWaveResults   FleetParityWaveResult[]
 
   @@unique([appId, revision])
@@ -996,32 +1010,179 @@ enum ConfigRevisionStatus {
   SUPERSEDED
 }
 
+// ConfigRevision payload의 사람이 조회·편집해야 하는 중앙 projection이다.
+// 비밀값은 저장하지 않고 logical credential ID와 공개 provider ID만 저장한다.
+model ProjectBlueprint {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  configRevisionId String         @unique
+  configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_project_blueprint_config_app_fkey")
+  schemaVersion    Int
+  organizationId   String         @db.VarChar(30)
+  folderId         String         @db.VarChar(30)
+  billingAccountId String         @db.VarChar(32)
+  projectId        String         @db.VarChar(30)
+  projectNumber    String?        @db.VarChar(30)
+  region           String         @db.VarChar(64)
+  payload          Json
+  payloadHash      String         @db.Char(64)
+  createdAt        DateTime       @default(now()) @db.DateTime(3)
+
+  @@unique([configRevisionId, appId], map: "cp_project_blueprint_config_app_key")
+  @@index([appId, createdAt])
+  @@map("control_plane_project_blueprint")
+}
+
+model MarketProfile {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  configRevisionId String
+  configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_market_profile_config_app_fkey")
+  market           String         @db.VarChar(32)
+  enabled          Boolean
+  releaseChannel   String?        @db.VarChar(32)
+  locales          Json
+  createdAt        DateTime       @default(now()) @db.DateTime(3)
+
+  @@unique([configRevisionId, market])
+  @@index([appId, market])
+  @@map("control_plane_market_profile")
+}
+
+model MarketLocalization {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  configRevisionId String
+  configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_market_localization_config_app_fkey")
+  market           String?        @db.VarChar(32)
+  scopeKey         String         @db.VarChar(64)
+  locale           String         @db.VarChar(16)
+  payload          Json
+  payloadHash      String         @db.Char(64)
+  createdAt        DateTime       @default(now()) @db.DateTime(3)
+
+  @@unique([configRevisionId, scopeKey, locale], map: "cp_market_loc_revision_scope_locale_key")
+  @@index([appId, locale])
+  @@map("control_plane_market_localization")
+}
+
+model ComplianceProfile {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  configRevisionId String
+  configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_compliance_profile_config_app_fkey")
+  market           String         @db.VarChar(32)
+  declaration      String         @db.VarChar(64)
+  state            String         @db.VarChar(32)
+  payload          Json
+  payloadHash      String         @db.Char(64)
+  createdAt        DateTime       @default(now()) @db.DateTime(3)
+
+  @@unique([configRevisionId, market, declaration], map: "cp_compliance_revision_market_decl_key")
+  @@index([appId, market, state])
+  @@map("control_plane_compliance_profile")
+}
+
+model StoreAsset {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  configRevisionId String
+  configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_store_asset_config_app_fkey")
+  market           String?        @db.VarChar(32)
+  scopeKey         String         @db.VarChar(64)
+  kind             String         @db.VarChar(32)
+  locale           String?        @db.VarChar(16)
+  objectKey        String         @db.VarChar(191)
+  checksum         String         @db.Char(64)
+  createdAt        DateTime       @default(now()) @db.DateTime(3)
+
+  @@unique([configRevisionId, scopeKey, kind, objectKey], map: "cp_store_asset_revision_scope_kind_object_key")
+  @@index([appId, market, kind])
+  @@map("control_plane_store_asset")
+}
+
+enum FleetLifecycleStage {
+  IDEA
+  PLANNING
+  SPEC_REVIEW
+  APPROVED
+  BUILD
+  QA
+  RELEASE_ASSETS
+  RELEASE_CANDIDATE
+  SUBMITTED
+  REVIEW
+  APPROVED_FOR_RELEASE
+  DEPLOYED
+  PUBLIC_VERIFIED
+  MONITORED
+}
+
+model FleetLifecycleState {
+  id               String              @id @default(cuid())
+  appId            String              @unique
+  app              App                 @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  stage            FleetLifecycleStage @default(IDEA)
+  sourceSha        String?             @db.Char(40)
+  configRevisionId String?
+  configRevision   ConfigRevision?     @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_lifecycle_state_config_app_fkey")
+  generation       Int                 @default(0)
+  updatedAt        DateTime            @updatedAt
+  createdAt        DateTime            @default(now()) @db.DateTime(3)
+
+  @@index([stage, updatedAt], map: "cp_lifecycle_state_stage_updated_idx")
+  @@map("control_plane_fleet_lifecycle_state")
+}
+
+model FleetLifecycleEvent {
+  id               String               @id @default(cuid())
+  appId            String
+  app              App                  @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  fromStage        FleetLifecycleStage?
+  toStage          FleetLifecycleStage
+  sourceSha        String?              @db.Char(40)
+  configRevisionId String?
+  configRevision   ConfigRevision?      @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_lifecycle_event_config_app_fkey")
+  actor            String               @db.VarChar(128)
+  idempotencyKey   String               @unique(map: "cp_lifecycle_event_idempotency_key") @db.VarChar(191)
+  evidence         Json?
+  createdAt        DateTime             @default(now()) @db.DateTime(3)
+
+  @@index([appId, createdAt])
+  @@map("control_plane_fleet_lifecycle_event")
+}
+
 // 기존 JSON을 중앙 draft로 옮긴 한 번의 결정적 import 실행이다.
 // 원문과 상세 오류는 저장하지 않고 hash, 공개 provenance, 상태 코드만 보존한다.
 model LegacyConfigImport {
-  id                 String                    @id @default(cuid())
-  appId              String
+  id                     String                    @id @default(cuid())
+  appId                  String
   // import 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
-  app                App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sourceSha          String                    @db.Char(40)
-  sourceRef          String?                   @db.VarChar(512)
-  transformVersion   String                    @db.VarChar(64)
-  requestHash        String                    @db.Char(64)
-  inputDigest        String                    @db.Char(64)
-  status             String                    @db.VarChar(32)
-  idempotencyKey     String                    @unique @db.Char(64)
-  configRevisionId   String?
-  configRevision     ConfigRevision?           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict)
-  observedBy         String
-  observedAt         DateTime                  @db.DateTime(3)
-  createdAt          DateTime                  @default(now()) @db.DateTime(3)
-  sources            LegacyConfigSource[]
-  parityObservations ShadowParityObservation[]
+  app                    App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceSha              String                    @db.Char(40)
+  sourceRef              String?                   @db.VarChar(512)
+  transformVersion       String                    @db.VarChar(64)
+  requestHash            String                    @db.Char(64)
+  inputDigest            String                    @db.Char(64)
+  status                 String                    @db.VarChar(32)
+  idempotencyKey         String                    @unique @db.Char(64)
+  configRevisionId       String?
+  configRevision         ConfigRevision?           @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict)
+  observedBy             String
+  observedAt             DateTime                  @db.DateTime(3)
+  createdAt              DateTime                  @default(now()) @db.DateTime(3)
+  sources                LegacyConfigSource[]
+  parityObservations     ShadowParityObservation[]
   fleetParityWaveResults FleetParityWaveResult[]
 
-  @@index([appId, sourceSha, createdAt])
   @@unique([id, appId])
   @@unique([configRevisionId, appId])
+  @@index([appId, sourceSha, createdAt])
   @@map("control_plane_legacy_config_import")
 }
 
@@ -1054,25 +1215,25 @@ model LegacyConfigSource {
 // 동일 source SHA의 legacy parser와 중앙 resolved manifest를 비교한 append-only 관측이다.
 // diff에는 값이나 오류문이 아니라 { path, code } 항목만 저장한다.
 model ShadowParityObservation {
-  id               String             @id @default(cuid())
-  appId            String
+  id                    String                 @id @default(cuid())
+  appId                 String
   // parity 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
-  app              App                @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  legacyImportId   String
-  legacyImport     LegacyConfigImport @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
-  configRevisionId String?
-  configRevision   ConfigRevision?    @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
-  sourceSha        String             @db.Char(40)
-  scope            String             @db.VarChar(64)
-  contractVersion  String             @db.VarChar(64)
-  status           String             @db.VarChar(32)
-  legacyDigest     String?            @db.Char(64)
-  centralDigest    String?            @db.Char(64)
-  diff             Json?
-  dedupeKey        String             @unique @db.Char(64)
-  observedBy       String
-  observedAt       DateTime           @db.DateTime(3)
-  createdAt        DateTime           @default(now()) @db.DateTime(3)
+  app                   App                    @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  legacyImportId        String
+  legacyImport          LegacyConfigImport     @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
+  configRevisionId      String?
+  configRevision        ConfigRevision?        @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
+  sourceSha             String                 @db.Char(40)
+  scope                 String                 @db.VarChar(64)
+  contractVersion       String                 @db.VarChar(64)
+  status                String                 @db.VarChar(32)
+  legacyDigest          String?                @db.Char(64)
+  centralDigest         String?                @db.Char(64)
+  diff                  Json?
+  dedupeKey             String                 @unique @db.Char(64)
+  observedBy            String
+  observedAt            DateTime               @db.DateTime(3)
+  createdAt             DateTime               @default(now()) @db.DateTime(3)
   fleetParityWaveResult FleetParityWaveResult?
 
   @@unique([id, appId])
@@ -1176,17 +1337,24 @@ model ProviderObservation {
 }
 
 model ReleaseCandidate {
-  id               String                   @id @default(cuid())
-  appId            String
-  app              App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  sourceSha        String                   @db.Char(40)
-  configRevisionId String
-  configRevision   ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
-  artifactChecksum String                   @db.Char(64)
-  status           ReleaseCandidateStatus   @default(PREPARED)
-  createdBy        String
-  createdAt        DateTime                 @default(now()) @db.DateTime(3)
-  gateObservations ReleaseGateObservation[]
+  id                String                   @id @default(cuid())
+  appId             String
+  app               App                      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  sourceSha         String                   @db.Char(40)
+  configRevisionId  String
+  configRevision    ConfigRevision           @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
+  artifactChecksum  String                   @db.Char(64)
+  market            String?                  @db.VarChar(32)
+  targetKey         String?                  @db.VarChar(191)
+  artifactType      String?                  @db.VarChar(32)
+  workflowBundleSha String?                  @db.Char(40)
+  platformVersion   String?                  @db.VarChar(64)
+  requestHash       String?                  @db.Char(64)
+  idempotencyKey    String?                  @unique @db.VarChar(191)
+  status            ReleaseCandidateStatus   @default(PREPARED)
+  createdBy         String
+  createdAt         DateTime                 @default(now()) @db.DateTime(3)
+  gateObservations  ReleaseGateObservation[]
 
   @@unique([appId, sourceSha, configRevisionId, artifactChecksum])
   @@index([appId, status, createdAt])
@@ -1208,6 +1376,7 @@ model ReleaseGateObservation {
   status      ReleaseGateStatus
   evidence    Json?
   dedupeKey   String            @unique
+  requestHash String?           @db.Char(64)
   observedBy  String
   observedAt  DateTime          @db.DateTime(3)
   createdAt   DateTime          @default(now()) @db.DateTime(3)

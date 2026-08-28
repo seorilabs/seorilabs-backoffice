@@ -28,7 +28,7 @@ function jsonText(value: unknown): string {
 }
 
 function statusClass(status: string): string {
-  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH"].includes(status)) {
+  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT"].includes(status)) {
     return "bg-emerald-50 text-emerald-700";
   }
   if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH"].includes(status)) {
@@ -62,6 +62,17 @@ export default async function FleetOperationsPage({
   const initialPayload = activePayload.success
     ? activePayload.data
     : { schemaVersion: 1 as const, markets: [] };
+  const releaseCandidates = fleet.releaseCandidates.map((candidate) => {
+    const seen = new Set<string>();
+    return {
+      ...candidate,
+      latestGates: candidate.gateObservations.filter((observation) => {
+        if (seen.has(observation.gate)) return false;
+        seen.add(observation.gate);
+        return true;
+      }),
+    };
+  });
 
   return (
     <div className="space-y-8">
@@ -69,7 +80,7 @@ export default async function FleetOperationsPage({
         title="Fleet 제어면"
         description="자동 탐지·desired state·provider readback·credential 공개 identity·agent queue를 앱 단위로 대조합니다. 이 화면은 provider write를 수행하지 않습니다."
       >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
           <Summary label="Discovery" value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : "미관측"} detail={dateTime(latestDiscovery?.observedAt)} />
           <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
           <Summary
@@ -81,7 +92,108 @@ export default async function FleetOperationsPage({
           <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
           <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />
           <Summary label="Dead-letter" value={`${fleet.deadLetters.length}개`} detail={`${fleet.reauthRequests.filter((request) => request.status === "HUMAN_REAUTH_REQUIRED").length}건 재인증 필요`} danger={fleet.deadLetters.length > 0} />
+          <Summary label="Lifecycle" value={fleet.fleetLifecycleState?.stage ?? "IDEA"} detail={fleet.fleetLifecycleState ? `generation ${fleet.fleetLifecycleState.generation}` : "중앙 lifecycle 미시작"} />
         </div>
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="ProjectBlueprint와 마켓 정본"
+        description="ACTIVE ConfigRevision에서 생성된 불변 projection입니다. 비밀값은 없으며 provider apply 전에 공개 identity와 readback 권한을 대조합니다."
+      >
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Panel title="ProjectBlueprint">
+            {activeConfig?.projectBlueprint ? (
+              <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                <Meta label="GCP project" value={activeConfig.projectBlueprint.projectId} />
+                <Meta label="Project number" value={activeConfig.projectBlueprint.projectNumber ?? "readback 대기"} />
+                <Meta label="Organization" value={activeConfig.projectBlueprint.organizationId} />
+                <Meta label="Folder" value={activeConfig.projectBlueprint.folderId} />
+                <Meta label="Billing" value={activeConfig.projectBlueprint.billingAccountId} />
+                <Meta label="Region" value={activeConfig.projectBlueprint.region} />
+                <Meta label="Payload digest" value={mono(activeConfig.projectBlueprint.payloadHash, 20)} />
+                <Meta label="Revision" value={String(activeConfig.revision)} />
+              </dl>
+            ) : <Empty>ACTIVE revision에 ProjectBlueprint가 없습니다. provider apply는 차단됩니다.</Empty>}
+          </Panel>
+          <Panel title="MarketProfile">
+            <div className="space-y-2">
+              {activeConfig?.marketProfiles.map((profile) => (
+                <div key={profile.market} className="rounded border border-neutral-200 px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{profile.market}</span>
+                    <Status value={profile.enabled ? "ACTIVE" : "DISABLED"} />
+                  </div>
+                  <div className="mt-1 text-xs text-neutral-500">
+                    {profile.releaseChannel ?? "channel 없음"} · {(profile.locales as string[]).join(", ") || "locale 없음"}
+                  </div>
+                </div>
+              ))}
+              {!activeConfig?.marketProfiles.length && <Empty>MarketProfile이 없습니다.</Empty>}
+            </div>
+          </Panel>
+          <Panel title="Localization과 StoreAsset">
+            <dl className="grid gap-2 text-sm sm:grid-cols-2">
+              <Meta label="Localization" value={`${activeConfig?.marketLocalizations.length ?? 0}개`} />
+              <Meta label="Asset" value={`${activeConfig?.storeAssets.length ?? 0}개`} />
+            </dl>
+            <div className="mt-3 space-y-1 text-xs text-neutral-500">
+              {activeConfig?.storeAssets.slice(0, 8).map((asset) => (
+                <div key={`${asset.market}:${asset.kind}:${asset.objectKey}`} className="break-all font-mono">
+                  {asset.market ?? "all"}/{asset.kind}/{asset.locale ?? "all"} · {asset.objectKey} · {mono(asset.checksum, 12)}
+                </div>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="ComplianceProfile — 사람 승인 전 draft">
+            <div className="space-y-2">
+              {activeConfig?.complianceProfiles.map((profile) => (
+                <div key={`${profile.market}:${profile.declaration}`} className="flex items-center justify-between gap-2 rounded border border-neutral-200 px-3 py-2 text-sm">
+                  <span>{profile.market} · {profile.declaration}</span>
+                  <Status value={profile.state} />
+                </div>
+              ))}
+              {!activeConfig?.complianceProfiles.length && <Empty>Compliance draft가 없습니다.</Empty>}
+            </div>
+          </Panel>
+        </div>
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="Release candidate와 독립 gate 원장"
+        description="구현·CI·artifact·자산·compliance draft·provider shell이 모두 통과해야 release-candidate가 됩니다. Upload 이후 processing, device QA, review, approval, deployment, public은 서로 대체하지 않습니다."
+      >
+        <Panel title="최근 ReleaseCandidate">
+          <div className="space-y-3">
+            {releaseCandidates.map((candidate) => (
+              <article key={candidate.id} className="rounded border border-neutral-200 bg-white p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{candidate.market ?? "legacy"} · {candidate.artifactType ?? "artifact"}</span>
+                      <Status value={candidate.status} />
+                    </div>
+                    <div className="mt-1 text-xs text-neutral-500">
+                      revision {candidate.configRevision.revision} · {mono(candidate.sourceSha, 12)} · {candidate.targetKey ?? "target 미기록"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-neutral-400">
+                      artifact {mono(candidate.artifactChecksum, 16)} · bundle {mono(candidate.workflowBundleSha, 12)} · Platform {candidate.platformVersion ?? "미기록"}
+                    </div>
+                  </div>
+                  <span className="text-xs text-neutral-400">{dateTime(candidate.createdAt)} · {candidate.createdBy}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {candidate.latestGates.map((gate) => (
+                    <span key={gate.gate} className="rounded border border-neutral-200 px-2 py-1 text-[11px]">
+                      {gate.gate} <Status value={gate.status} />
+                    </span>
+                  ))}
+                  {candidate.latestGates.length === 0 && <span className="text-xs text-neutral-400">gate observation 없음</span>}
+                </div>
+              </article>
+            ))}
+            {releaseCandidates.length === 0 && <Empty>Release candidate가 없습니다.</Empty>}
+          </div>
+        </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection

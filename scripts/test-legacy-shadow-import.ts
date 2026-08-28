@@ -32,6 +32,23 @@ const APP_FULL_NAME = "seorilabs/legacy-shadow-integration";
 const PLATFORM_FULL_NAME = "seorilabs/platform";
 const CANARY_SECRET = "canary-secret-must-not-persist";
 
+async function cleanupFixture(prisma: PrismaClient): Promise<void> {
+  const appIds = [APP_ID, SECOND_APP_ID];
+  const where = { appId: { in: appIds } };
+  // 중앙 projection은 운영 App 삭제를 의도적으로 RESTRICT한다. 통합 fixture만
+  // projection부터 명시적으로 지워 실제 운영 삭제 경계를 약화시키지 않는다.
+  await prisma.releaseCandidate.deleteMany({ where });
+  await prisma.fleetLifecycleEvent.deleteMany({ where });
+  await prisma.fleetLifecycleState.deleteMany({ where });
+  await prisma.projectBlueprint.deleteMany({ where });
+  await prisma.marketProfile.deleteMany({ where });
+  await prisma.marketLocalization.deleteMany({ where });
+  await prisma.complianceProfile.deleteMany({ where });
+  await prisma.storeAsset.deleteMany({ where });
+  await prisma.legacyConfigImport.deleteMany({ where });
+  await prisma.app.deleteMany({ where: { id: { in: appIds } } });
+}
+
 const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
 if (!["127.0.0.1", "localhost"].includes(databaseUrl.hostname)) {
   throw new Error("legacy shadow integration fixture는 loopback MySQL에서만 허용한다");
@@ -164,10 +181,7 @@ async function main(): Promise<void> {
       payload: { path: "$.appId", equals: APP_ID },
     },
   });
-  await prisma.legacyConfigImport.deleteMany({
-    where: { appId: { in: [APP_ID, SECOND_APP_ID] } },
-  });
-  await prisma.app.deleteMany({ where: { id: { in: [APP_ID, SECOND_APP_ID] } } });
+  await cleanupFixture(prisma);
   try {
     const payload = expectedPayload(safeGooglePayload);
     await prisma.app.create({
@@ -457,10 +471,7 @@ async function main(): Promise<void> {
     assert.doesNotThrow(() => JSON.stringify(listed));
     assert.equal(listed.imports.every((item) => !("requestHash" in item)), true);
   } finally {
-    await prisma.legacyConfigImport.deleteMany({
-      where: { appId: { in: [APP_ID, SECOND_APP_ID] } },
-    });
-    await prisma.app.deleteMany({ where: { id: { in: [APP_ID, SECOND_APP_ID] } } });
+    await cleanupFixture(prisma);
     await prisma.auditLog.deleteMany({
       where: {
         action: "control-plane.legacy-shadow.record",
