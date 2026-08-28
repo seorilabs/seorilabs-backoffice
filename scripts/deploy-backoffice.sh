@@ -12,7 +12,9 @@ migration_timeout="${BACKOFFICE_MIGRATION_TIMEOUT_SECONDS:-300}"
 migration_poll="${BACKOFFICE_MIGRATION_POLL_SECONDS:-2}"
 rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
 audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
-verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-180}"
+audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
+verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
+trigger_max_age="${BACKOFFICE_TRIGGER_OBSERVATION_MAX_AGE_SECONDS:-900}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-2460}"
 
 if [ -z "$image" ]; then
@@ -28,7 +30,7 @@ if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "오류: BACKOFFICE_SOURCE_SHA는 40자리 git SHA여야 한다" >&2
   exit 2
 fi
-for value in "$migration_timeout" "$catchup_timeout" "$verify_timeout"; do
+for value in "$migration_timeout" "$catchup_timeout" "$verify_timeout" "$trigger_max_age"; do
   if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
     echo "오류: Job timeout은 양의 정수여야 한다" >&2
     exit 2
@@ -182,30 +184,56 @@ echo "migration_image=$job_image image_id=${image_id:-unavailable}"
 
 # app migration principal에는 대상 table의 TRIGGER 권한이 없어
 # information_schema.TRIGGERS가 빈 결과로 보인다. 권한 부족을 부재로 읽지 않도록
-# 가시성 있는 전용 principal의 read-only Job으로 다시 확인하고, 이 Job이 성공해야만
-# rollout한다. 이 Job은 DDL, GRANT, 복구를 하지 않는다.
-echo "== provider audit trigger verify (data ns, read-only) =="
-verify_manifest="$(render provider-audit-trigger-verify-job.yaml)"
-verify_image="$(printf '%s\n' "$verify_manifest" | awk '/^          image: / { print $2; exit }')"
-if [[ ! "$verify_image" =~ ^mysql@sha256:[0-9a-f]{64}$ ]]; then
-  echo "오류: trigger verify Job 이미지가 immutable mysql digest가 아니다" >&2
+# 가시성 있는 고정 in-cluster verifier의 관측을 rollout 선행조건으로 요구한다.
+#
+# CI는 verifier workload를 만들거나 바꿀 수 없고 관측 ConfigMap을 읽기만 한다.
+# 따라서 CI가 root secret을 mount하는 spec을 만들 수 없다. verifier는 trusted
+# operator가 k8s/provider-audit-trigger-verifier.yaml로 apply한다.
+echo "== provider audit trigger observation readback (data ns, read-only) =="
+expected_digest="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-digest:/ { print $2; exit }' \
+  "$root/k8s/provider-audit-trigger-verifier.yaml")"
+if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "오류: append-only 계약 digest를 repo에서 읽지 못했다" >&2
   exit 1
 fi
-verify_ref="$(printf '%s\n' "$verify_manifest" | k -n "$audit_namespace" create -f - -o name)"
-verify_name="${verify_ref##*/}"
-if [ -z "$verify_name" ]; then
-  echo "오류: 생성된 trigger verify Job 이름을 읽지 못했다" >&2
-  exit 1
-fi
-echo "trigger_verify_job=$verify_name source_sha=$source_sha"
-wait_for_job trigger-verify "$verify_name" "$verify_timeout" "$audit_namespace"
-verify_job_sha="$(k -n "$audit_namespace" get job "$verify_name" -o 'jsonpath={.metadata.labels.seorilabs\.dev/source-sha}')"
-verify_job_image="$(k -n "$audit_namespace" get job "$verify_name" -o 'jsonpath={.spec.template.spec.containers[0].image}')"
-if [ "$verify_job_sha" != "$source_sha" ] || [ "$verify_job_image" != "$verify_image" ]; then
-  echo "오류: trigger verify Job source SHA 또는 이미지 digest 불일치" >&2
-  exit 1
-fi
-echo "trigger_verify_image=$verify_job_image"
+
+read_trigger_state() {
+  k -n "$audit_namespace" get configmap "$audit_state_configmap" \
+    -o 'jsonpath={.data.status}|{.data.total}|{.data.exact}|{.data.contractDigest}|{.data.observedAt}'
+}
+
+trigger_observation_fresh() {
+  local status total exact digest observed_at observed_epoch now_epoch age
+  IFS='|' read -r status total exact digest observed_at <<< "$1"
+  [ "$status" = PASS ] || return 1
+  [ "$total" = 2 ] || return 1
+  [ "$exact" = 2 ] || return 1
+  [ "$digest" = "$expected_digest" ] || return 1
+  [[ "$observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+  observed_epoch="$(date -u -d "$observed_at" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$observed_at" +%s 2>/dev/null || echo "")"
+  [ -n "$observed_epoch" ] || return 1
+  now_epoch="$(date -u +%s)"
+  age=$((now_epoch - observed_epoch))
+  [ "$age" -ge -60 ] || return 1
+  [ "$age" -le "$trigger_max_age" ]
+}
+
+trigger_state=""
+trigger_deadline=$((SECONDS + verify_timeout))
+while true; do
+  if trigger_state="$(read_trigger_state 2>&1)" && trigger_observation_fresh "$trigger_state"; then
+    break
+  fi
+  if (( SECONDS >= trigger_deadline )); then
+    echo "오류: append-only trigger 관측이 계약을 만족하지 않는다" >&2
+    echo "expected: status=PASS total=2 exact=2 digest=${expected_digest} age<=${trigger_max_age}s" >&2
+    echo "observed: ${trigger_state}" >&2
+    echo "복구는 trusted operator가 provider-audit-trigger-recovery-job으로 수행한다. 배포는 진행하지 않는다." >&2
+    exit 1
+  fi
+  sleep "$migration_poll"
+done
+echo "trigger_observation=${trigger_state} contract_digest=${expected_digest} source_sha=${source_sha}"
 
 echo "== availability-preserving web rollout =="
 apply_image_manifest deployment.yaml

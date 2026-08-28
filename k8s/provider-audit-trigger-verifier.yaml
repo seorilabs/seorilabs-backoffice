@@ -1,0 +1,176 @@
+# 고정 in-cluster append-only trigger verifier.
+#
+# CI deployer는 이 workload를 만들거나 바꿀 수 없고, 결과 ConfigMap을 read-only로만
+# 읽는다. 따라서 CI는 root secret을 mount하는 spec을 만들 수 없다. verifier는 두
+# trigger의 존재와 정의만 SELECT로 확인하며 DDL, GRANT, 복구, 데이터 변경을 하지 않는다.
+#
+# 이 파일은 trusted operator가 직접 apply한다. deploy script는 apply하지 않는다.
+# 계약이 바뀌면 operator가 다시 apply해야 하며, 그전까지는 contractDigest 불일치로
+# 배포가 fail-closed한다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backoffice-provider-audit-trigger-verifier
+  namespace: data
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backoffice-provider-audit-trigger-verifier
+  namespace: data
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backoffice-provider-audit-trigger-state"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backoffice-provider-audit-trigger-verifier
+  namespace: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backoffice-provider-audit-trigger-verifier
+subjects:
+  - kind: ServiceAccount
+    name: backoffice-provider-audit-trigger-verifier
+    namespace: data
+---
+# 관측 결과만 담는 공개 상태다. 비밀값이나 provider 오류 원문을 넣지 않는다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backoffice-provider-audit-trigger-state
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: provider-audit-trigger-verifier
+data:
+  status: "UNKNOWN"
+  total: "0"
+  exact: "0"
+  contractDigest: ""
+  observedAt: ""
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-provider-audit-trigger-verify
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: provider-audit-trigger-verifier
+  annotations:
+    seorilabs.dev/append-only-contract-digest: "7fd7eda916c965fcebedc988cdfd4fad1cc4f613f85d495c4381ebaa910f148a"
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: provider-audit-trigger-verifier
+        spec:
+          restartPolicy: Never
+          serviceAccountName: backoffice-provider-audit-trigger-verifier
+          automountServiceAccountToken: true
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: verify
+              image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+              env:
+                - name: CONTRACT_DIGEST
+                  value: "7fd7eda916c965fcebedc988cdfd4fad1cc4f613f85d495c4381ebaa910f148a"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  ulimit -c 0
+                  umask 077
+                  cnf=/tmp/verify.cnf
+                  trap 'rm -f "$cnf"' EXIT INT TERM
+                  printf '[client]\nuser=root\npassword=%s\nhost=mysql.data.svc.cluster.local\n' \
+                    "$(< /run/secrets/mysql-root-password)" > "$cnf"
+                  q() {
+                    mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e "$1"
+                  }
+                  # 보호 table 위 trigger는 계약된 두 개뿐이어야 한다. 우회 trigger가
+                  # 함께 설치되면 append-only가 무력화되므로 총 개수도 센다.
+                  total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
+                    WHERE TRIGGER_SCHEMA='backoffice' \
+                      AND EVENT_OBJECT_TABLE='control_plane_provider_execution_event'")"
+                  # 이름, timing, event, table, action statement가 모두 정확히 일치하는 것만 센다.
+                  # MySQL은 client가 보낸 statement를 그대로 보관하므로 trailing ';'만 정규화한다.
+                  exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
+                    WHERE TRIGGER_SCHEMA='backoffice' \
+                      AND EVENT_OBJECT_TABLE='control_plane_provider_execution_event' \
+                      AND ACTION_TIMING='BEFORE' \
+                      AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                          \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'provider execution audit is append-only'\" \
+                      AND ( \
+                        (TRIGGER_NAME='control_plane_provider_execution_event_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                        OR (TRIGGER_NAME='control_plane_provider_execution_event_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                      )")"
+                  rm -f "$cnf"
+                  status=FAIL
+                  if [ "$total" = "2" ] && [ "$exact" = "2" ]; then
+                    status=PASS
+                  fi
+                  observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  patch="$(printf '{"data":{"status":"%s","total":"%s","exact":"%s","contractDigest":"%s","observedAt":"%s"}}' \
+                    "$status" "$total" "$exact" "$CONTRACT_DIGEST" "$observed_at")"
+                  token="$(< /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                    -H "Authorization: Bearer ${token}" \
+                    -H 'Content-Type: application/merge-patch+json' \
+                    -X PATCH \
+                    --data "$patch" \
+                    "https://kubernetes.default.svc/api/v1/namespaces/data/configmaps/backoffice-provider-audit-trigger-state")"
+                  test "$code" = "200"
+                  echo "provider audit trigger observation: status=${status} total=${total} exact=${exact} observedAt=${observed_at}"
+                  test "$status" = "PASS"
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 192Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: mysql-root-password
+                  mountPath: /run/secrets
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: mysql-root-password
+              secret:
+                secretName: mysql-root-cred
+                defaultMode: 0440
+                items:
+                  - key: password
+                    path: mysql-root-password
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi

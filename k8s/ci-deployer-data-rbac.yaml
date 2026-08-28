@@ -1,6 +1,9 @@
 # platform/ci-deployer가 data ns의 기존 Vault CronJob 두 개의 이미지 SHA만 갱신하고,
-# 배포마다 read-only append-only trigger 검증 Job을 만든다.
-# Secret/PVC 권한과 Job 삭제 권한은 주지 않는다.
+# 고정 verifier가 남긴 append-only trigger 관측 ConfigMap 하나를 읽는다.
+#
+# Job/Pod 생성 권한은 주지 않는다. 주면 CI가 mysql-root-cred를 mount하는 workload를
+# 만들 수 있어 사실상 root secret export 권한이 된다. verifier workload는 trusted
+# operator가 k8s/provider-audit-trigger-verifier.yaml로 직접 apply한다.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -11,11 +14,11 @@ rules:
     resources: ["cronjobs"]
     resourceNames: ["vault-indexer", "vault-writer"]
     verbs: ["get", "patch", "update"]
-  # provider-audit-trigger-verify Job. 생성 대상 이름이 generateName이라
-  # resourceNames로 좁힐 수 없으므로 verb를 create/get으로만 제한한다.
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "create"]
+  # 고정 verifier가 남긴 공개 관측 결과 하나만 읽는다. 쓰기는 없다.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backoffice-provider-audit-trigger-state"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

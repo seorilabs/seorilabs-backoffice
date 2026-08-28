@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
+  appendOnlyContractDigest,
   parseAppendOnlyTriggers,
   evaluateAppendOnlyTriggers,
   triggerVisibilityFromGrants,
@@ -196,9 +197,9 @@ test("배포 gate script는 권한을 먼저 읽고 FORBIDDEN을 구분해 출�
   assert.match(script, /FORBIDDEN\(migration principal에 TRIGGER 권한 없음/);
 });
 
-test("trusted verify Job은 계약과 같은 trigger를 read-only로만 확인한다", () => {
+test("고정 verifier는 계약과 같은 trigger를 read-only로만 확인한다", () => {
   const manifest = readFileSync(
-    join(process.cwd(), "k8s/provider-audit-trigger-verify-job.yaml"),
+    join(process.cwd(), "k8s/provider-audit-trigger-verifier.yaml"),
     "utf8",
   );
   for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
@@ -209,20 +210,51 @@ test("trusted verify Job은 계약과 같은 trigger를 read-only로만 확인�
   assert.ok(manifest.includes(appendOnlyActionStatement(REQUIRED_APPEND_ONLY_TRIGGERS[0].message)));
   assert.match(manifest, /ACTION_TIMING='BEFORE'/);
   // 우회 trigger 차단: 보호 table 위 전체 개수도 확인한다.
-  assert.match(manifest, /total.*!=.*"2".*\|\|.*exact.*!=.*"2"|\[ "\$total" != "2" \]/);
-  // DDL·권한 변경·데이터 변경이 없어야 한다.
+  assert.match(manifest, /\[ "\$total" = "2" \] && \[ "\$exact" = "2" \]/);
   assert.doesNotMatch(manifest, /CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO/);
   assert.match(manifest, /namespace: data/);
   assert.match(manifest, /readOnlyRootFilesystem: true/);
+  // 임시 client 설정은 trap으로 지운다.
+  assert.match(manifest, /trap 'rm -f "\$cnf"' EXIT INT TERM/);
 });
 
-test("배포 script는 trigger verify Job 성공을 rollout 선행조건으로 둔다", () => {
+test("verifier manifest의 계약 digest는 코드 계약과 같다", () => {
+  const manifest = readFileSync(
+    join(process.cwd(), "k8s/provider-audit-trigger-verifier.yaml"),
+    "utf8",
+  );
+  const digest = appendOnlyContractDigest();
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  assert.match(
+    manifest,
+    new RegExp(`seorilabs\\.dev/append-only-contract-digest: "${digest}"`),
+  );
+  assert.ok(manifest.includes(`value: "${digest}"`), "CONTRACT_DIGEST env가 계약과 다르다");
+});
+
+test("배포 script는 고정 verifier 관측을 rollout 선행조건으로 둔다", () => {
   const deploy = readFileSync(join(process.cwd(), "scripts/deploy-backoffice.sh"), "utf8");
-  const verifyIndex = deploy.indexOf("provider-audit-trigger-verify-job.yaml");
+  const readbackIndex = deploy.indexOf("read_trigger_state");
   const rolloutIndex = deploy.indexOf("availability-preserving web rollout");
-  assert.ok(verifyIndex > 0, "verify Job 생성이 없다");
-  assert.ok(verifyIndex < rolloutIndex, "verify가 rollout 뒤에 있다");
-  assert.match(deploy, /wait_for_job trigger-verify/);
-  assert.match(deploy, /verify_job_sha" != "\$source_sha"/);
-  assert.match(deploy, /audit_namespace/);
+  assert.ok(readbackIndex > 0, "관측 readback이 없다");
+  assert.ok(readbackIndex < rolloutIndex, "관측이 rollout 뒤에 있다");
+  assert.match(deploy, /trigger_observation_fresh/);
+  assert.match(deploy, /"\$digest" = "\$expected_digest"/);
+  assert.match(deploy, /trigger_max_age/);
+  // CI는 verifier workload를 만들거나 바꾸지 않는다.
+  const executable = deploy
+    .split("\n")
+    .filter((line) => !/^\s*(#|echo )/.test(line))
+    .join("\n");
+  assert.doesNotMatch(executable, /(apply|create|render)\s+\S*provider-audit-trigger/);
+});
+
+test("CI deployer는 data namespace에서 workload를 만들 수 없다", () => {
+  const rbac = readFileSync(join(process.cwd(), "k8s/ci-deployer-data-rbac.yaml"), "utf8");
+  assert.match(rbac, /resourceNames: \["backoffice-provider-audit-trigger-state"\]/);
+  assert.doesNotMatch(rbac, /resources: \["jobs"\]/);
+  assert.doesNotMatch(rbac, /resources: \["pods"\]/);
+  assert.doesNotMatch(rbac, /resources: \["secrets"\]/);
+  assert.doesNotMatch(rbac, /verbs:.*create/);
+  assert.doesNotMatch(rbac, /verbs:.*delete/);
 });

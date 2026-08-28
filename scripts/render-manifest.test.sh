@@ -173,19 +173,28 @@ else
   ng "provider audit partial migration 복구 경계가 깨졌다"
 fi
 
-trigger_verify_out="$("$render" "$root/k8s/provider-audit-trigger-verify-job.yaml" "$IMG" "$SHA")"
-if printf '%s' "$trigger_verify_out" | grep -q "generateName: backoffice-provider-audit-trigger-verify-${SHA:0:12}-" &&
-   printf '%s' "$trigger_verify_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\"" &&
-   printf '%s' "$trigger_verify_out" | grep -q 'namespace: data' &&
-   printf '%s' "$trigger_verify_out" | grep -q 'image: mysql@sha256:' &&
-   printf '%s' "$trigger_verify_out" | grep -q 'mysql-root-cred' &&
-   printf '%s' "$trigger_verify_out" | grep -q 'readOnlyRootFilesystem: true' &&
-   printf '%s' "$trigger_verify_out" | grep -q 'backoffLimit: 0' &&
-   ! printf '%s' "$trigger_verify_out" | grep -qE 'CREATE TRIGGER|DROP TRIGGER|GRANT |ALTER |INSERT |UPDATE .*SET |DELETE FROM|MYSQL_PWD' &&
-   ! printf '%s' "$trigger_verify_out" | grep -q ':latest'; then
-  ok "trigger verify Job은 exact source SHA의 read-only 검증만 수행"
+trigger_verifier="$root/k8s/provider-audit-trigger-verifier.yaml"
+if grep -q 'kind: CronJob' "$trigger_verifier" &&
+   grep -q 'namespace: data' "$trigger_verifier" &&
+   grep -q 'image: mysql@sha256:' "$trigger_verifier" &&
+   grep -q 'mysql-root-cred' "$trigger_verifier" &&
+   grep -q 'readOnlyRootFilesystem: true' "$trigger_verifier" &&
+   grep -q "trap 'rm -f \"\$cnf\"' EXIT INT TERM" "$trigger_verifier" &&
+   grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$trigger_verifier" &&
+   ! grep -qE 'CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO|MYSQL_PWD' "$trigger_verifier" &&
+   ! grep -q ':latest' "$trigger_verifier"; then
+  ok "고정 verifier는 read-only 확인과 공개 관측 기록만 수행"
 else
-  ng "trigger verify Job 경계가 깨졌다"
+  ng "trigger verifier 경계가 깨졌다"
+fi
+
+# CI deploy 경로가 verifier manifest를 apply하지 않는다. apply하면 CI가 root secret을
+# mount하는 workload spec을 바꿀 수 있게 된다.
+if ! grep -vE '^[[:space:]]*(#|echo )' "$here/deploy-backoffice.sh" \
+     | grep -qE '(apply|create|render)[[:space:]].*provider-audit-trigger'; then
+  ok "CI deploy는 verifier workload spec을 만들거나 바꾸지 않는다"
+else
+  ng "CI deploy가 verifier workload를 건드린다"
 fi
 
 restore_dump="backoffice-20260828T010203Z.sql.gz"
@@ -337,12 +346,15 @@ if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
    grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
-   grep -q 'resources: \["jobs"\]' "$data_rbac" &&
-   [ "$(grep -c 'verbs: \["get", "create"\]' "$data_rbac")" -eq 1 ] &&
+   grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$data_rbac" &&
+   grep -q 'verbs: \["get"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["jobs"\]' "$data_rbac" &&
+   ! grep -q 'resources: \["pods"\]' "$data_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$data_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$data_rbac" &&
+   ! grep -q 'verbs:.*create' "$data_rbac" &&
    ! grep -q 'verbs:.*delete' "$data_rbac"; then
-  ok "CI migration·Vault image·trigger verify Job 최소권한"
+  ok "CI는 data ns에서 workload를 만들 수 없고 관측 ConfigMap만 읽는다"
 else
   ng "CI deployer 최소권한 계약이 깨졌다"
 fi

@@ -6,6 +6,8 @@
  * 없어도 schema fingerprint는 통과한다. 배포 gate가 live readback으로 다시 확인한다.
  */
 
+import { createHash } from "node:crypto";
+
 export type AppendOnlyTriggerEvent = "UPDATE" | "DELETE";
 
 export interface AppendOnlyTriggerRequirement {
@@ -184,4 +186,23 @@ export function evaluateAppendOnlyTriggers(input: {
     visibility: "VISIBLE",
     verified: verifyAppendOnlyTriggers(input.observed, input.required),
   };
+}
+
+/**
+ * 계약의 canonical digest. 고정 in-cluster verifier가 자기 manifest에 구운 같은 값을
+ * 관측 결과에 함께 기록하고, 배포 script가 repo 값과 대조한다. verifier가 옛 계약으로
+ * 남아 있으면 digest가 달라 배포가 fail-closed한다.
+ */
+export function appendOnlyContractDigest(
+  required: readonly AppendOnlyTriggerRequirement[] = REQUIRED_APPEND_ONLY_TRIGGERS,
+): string {
+  const canonical = [...required]
+    .map((requirement) => ({
+      event: requirement.event,
+      message: requirement.message,
+      name: requirement.name,
+      table: requirement.table,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

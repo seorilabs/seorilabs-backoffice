@@ -13,6 +13,9 @@ counter="$tmp/job.counter"
 source_sha="0123456789abcdef0123456789abcdef01234567"
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 image="registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:${digest}"
+expected_digest="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-digest:/ { print $2; exit }' \
+  "$here/../k8s/provider-audit-trigger-verifier.yaml")"
+[[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]]
 
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
@@ -39,21 +42,28 @@ if [[ "$args" == *"create -f - -o name"* ]]; then
   manifest_image="$(printf '%s\n' "$payload" | awk '/image: registry\.vzyx\.xyz\/seorilabs\/seorilabs-backoffice(@sha256:|:)/ { print $2; exit }')"
   condition="${FAKE_MIGRATION_RESULT:-Complete}"
   [[ "$prefix" != backoffice-scheduler-catchup-* ]] || condition="$FAKE_CATCHUP_RESULT"
-  job_sha="$BACKOFFICE_SOURCE_SHA"
-  if [[ "$prefix" == backoffice-provider-audit-trigger-verify-* ]]; then
-    condition="${FAKE_TRIGGER_VERIFY_RESULT:-Complete}"
-    manifest_image="$(printf '%s\n' "$payload" | awk '/^          image: mysql@sha256:/ { print $2; exit }')"
-    [ "${FAKE_TRIGGER_VERIFY_SHA_MISMATCH:-false}" != true ] || job_sha="ffffffffffffffffffffffffffffffffffffffff"
-    [ "${FAKE_TRIGGER_VERIFY_IMAGE_MISMATCH:-false}" != true ] || manifest_image="mysql@sha256:$(printf 'b%.0s' {1..64})"
-    printf 'CREATE_VERIFY_JOB %s %s\n' "$job" "$manifest_image" >> "$FAKE_KUBECTL_LOG"
-  fi
-  printf '%s|%s|%s|%s\n' "$condition" "$manifest_image" "$job" "$job_sha" > "$FAKE_KUBECTL_STATE"
+  printf '%s|%s|%s|%s\n' "$condition" "$manifest_image" "$job" "$BACKOFFICE_SOURCE_SHA" > "$FAKE_KUBECTL_STATE"
   printf 'CREATE_JOB %s %s\n' "$job" "$manifest_image" >> "$FAKE_KUBECTL_LOG"
   if [[ "$prefix" == backoffice-scheduler-catchup-* && "$FAKE_CATCHUP_CREATE_UNKNOWN" == true ]]; then
     printf 'injected create response loss\n' >&2
     exit 1
   fi
   printf 'job.batch/%s\n' "$job"
+  exit 0
+fi
+
+if [[ "$args" == *" get configmap backoffice-provider-audit-trigger-state"* ]]; then
+  printf 'READ_TRIGGER_STATE\n' >> "$FAKE_KUBECTL_LOG"
+  if [ "${FAKE_TRIGGER_STATE_MISSING:-false}" = true ]; then
+    printf 'Error from server (NotFound): configmaps "backoffice-provider-audit-trigger-state" not found\n' >&2
+    exit 1
+  fi
+  printf '%s|%s|%s|%s|%s' \
+    "${FAKE_TRIGGER_STATUS:-PASS}" \
+    "${FAKE_TRIGGER_TOTAL:-2}" \
+    "${FAKE_TRIGGER_EXACT:-2}" \
+    "${FAKE_TRIGGER_DIGEST:-$EXPECTED_CONTRACT_DIGEST}" \
+    "${FAKE_TRIGGER_OBSERVED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
   exit 0
 fi
 
@@ -137,16 +147,20 @@ run_deploy() {
   FAKE_MIGRATION_RESULT="$1" \
   FAKE_CATCHUP_CREATE_UNKNOWN="${FAKE_CATCHUP_CREATE_UNKNOWN:-false}" \
   FAKE_CATCHUP_RESULT="${FAKE_CATCHUP_RESULT:-Complete}" \
-  FAKE_TRIGGER_VERIFY_RESULT="${FAKE_TRIGGER_VERIFY_RESULT:-Complete}" \
-  FAKE_TRIGGER_VERIFY_SHA_MISMATCH="${FAKE_TRIGGER_VERIFY_SHA_MISMATCH:-false}" \
-  FAKE_TRIGGER_VERIFY_IMAGE_MISMATCH="${FAKE_TRIGGER_VERIFY_IMAGE_MISMATCH:-false}" \
+  EXPECTED_CONTRACT_DIGEST="$expected_digest" \
+  FAKE_TRIGGER_STATUS="${FAKE_TRIGGER_STATUS:-PASS}" \
+  FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-2}" \
+  FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-2}" \
+  FAKE_TRIGGER_DIGEST="${FAKE_TRIGGER_DIGEST:-$expected_digest}" \
+  FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
+  FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
   KUBECTL_BIN="$fake" \
   BACKOFFICE_IMAGE="$run_image" \
   BACKOFFICE_SOURCE_SHA="$source_sha" \
   BACKOFFICE_MIGRATION_TIMEOUT_SECONDS=2 \
   BACKOFFICE_MIGRATION_POLL_SECONDS=0 \
   BACKOFFICE_CATCHUP_TIMEOUT_SECONDS=2400 \
-  BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS=2 \
+  BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS=1 \
   "$here/deploy-backoffice.sh"
 }
 
@@ -173,8 +187,8 @@ echo "== 성공 순서와 동일 SHA 재실행 =="
 run_deploy Complete >/dev/null
 run_deploy Complete >/dev/null
 
-[ "$(grep -c '^CREATE_JOB ' "$log")" -eq 6 ]
-[ "$(grep -c '^CREATE_VERIFY_JOB ' "$log")" -eq 2 ]
+[ "$(grep -c '^CREATE_JOB ' "$log")" -eq 4 ]
+[ "$(grep -c '^READ_TRIGGER_STATE$' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN backoffice,' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN vault-indexer,vault-writer,' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_FILE backup-cronjob.yaml$' "$log")" -eq 2 ]
@@ -184,7 +198,7 @@ if grep -q '^APPLY_FILE backup-pvc.yaml$' "$log"; then
 fi
 
 migration_line="$(line_of '^CREATE_JOB ')"
-verify_line="$(line_of '^CREATE_VERIFY_JOB ')"
+verify_line="$(line_of '^READ_TRIGGER_STATE$')"
 web_line="$(line_of '^APPLY_STDIN backoffice,')"
 web_rollout_line="$(line_of '^ROLLOUT backoffice$')"
 scheduler_line="$(line_of '^APPLY_FILE scheduler-cronjobs.yaml$')"
@@ -241,29 +255,58 @@ else
   exit 1
 fi
 
-echo "== trigger verify 실패는 rollout 전에 배포를 멈춘다 =="
-for scenario in Failed sha-mismatch image-mismatch; do
+echo "== trigger 관측이 계약을 만족하지 않으면 rollout 전에 멈춘다 =="
+stale="$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)"
+for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch stale missing; do
   : > "$log"
   case "$scenario" in
-    Failed) FAKE_TRIGGER_VERIFY_RESULT=Failed ;;
-    sha-mismatch) FAKE_TRIGGER_VERIFY_SHA_MISMATCH=true ;;
-    image-mismatch) FAKE_TRIGGER_VERIFY_IMAGE_MISMATCH=true ;;
+    fail) FAKE_TRIGGER_STATUS=FAIL ;;
+    zero-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=0; FAKE_TRIGGER_EXACT=0 ;;
+    one-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=1; FAKE_TRIGGER_EXACT=1 ;;
+    bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=3; FAKE_TRIGGER_EXACT=2 ;;
+    digest-mismatch) FAKE_TRIGGER_DIGEST="$(printf 'c%.0s' {1..64})" ;;
+    stale) FAKE_TRIGGER_OBSERVED_AT="$stale" ;;
+    missing) FAKE_TRIGGER_STATE_MISSING=true ;;
   esac
   if run_deploy Complete >/dev/null 2>&1; then
-    echo "FAIL trigger verify $scenario 가 deploy 성공으로 처리됐다" >&2
+    echo "FAIL trigger 관측 $scenario 가 deploy 성공으로 처리됐다" >&2
     exit 1
   fi
-  unset FAKE_TRIGGER_VERIFY_RESULT FAKE_TRIGGER_VERIFY_SHA_MISMATCH FAKE_TRIGGER_VERIFY_IMAGE_MISMATCH
-  if ! grep -q '^CREATE_VERIFY_JOB ' "$log"; then
-    echo "FAIL trigger verify Job이 생성되지 않았다: $scenario" >&2
+  unset FAKE_TRIGGER_STATUS FAKE_TRIGGER_TOTAL FAKE_TRIGGER_EXACT FAKE_TRIGGER_DIGEST \
+    FAKE_TRIGGER_OBSERVED_AT FAKE_TRIGGER_STATE_MISSING
+  if ! grep -q '^READ_TRIGGER_STATE$' "$log"; then
+    echo "FAIL trigger 관측 readback이 실행되지 않았다: $scenario" >&2
     exit 1
   fi
   if grep -q '^ROLLOUT \|^APPLY_STDIN backoffice,' "$log"; then
-    echo "FAIL trigger verify $scenario 뒤에도 rollout이 진행됐다" >&2
+    echo "FAIL trigger 관측 $scenario 뒤에도 rollout이 진행됐다" >&2
     cat "$log" >&2
     exit 1
   fi
   echo "  ok   $scenario fail-closed"
 done
+
+echo "== CI는 verifier workload를 만들거나 바꾸지 않는다 =="
+: > "$log"
+run_deploy Complete >/dev/null
+if grep -q 'provider-audit-trigger-verifier' "$log" ||
+   grep -q '^CREATE_JOB backoffice-provider-audit' "$log" ||
+   grep -qi 'mysql-root-cred' "$log"; then
+  echo "FAIL CI가 verifier workload나 root secret 경계를 건드렸다" >&2
+  cat "$log" >&2
+  exit 1
+fi
+# verifier manifest는 계약 digest를 읽는 용도로만 등장해야 한다.
+# 주석과 안내 문구를 걷어낸 실행 라인에서 apply/create/render 대상이면 안 된다.
+verifier_code="$(grep -v '^[[:space:]]*#' "$here/deploy-backoffice.sh" \
+  | grep -v '^[[:space:]]*echo ' \
+  | grep 'provider-audit-trigger-verifier\|provider-audit-trigger-recovery' || true)"
+if [ "$(printf '%s\n' "$verifier_code" | grep -c 'k8s/provider-audit-trigger-verifier.yaml')" -ne 1 ] ||
+   printf '%s\n' "$verifier_code" | grep -qE '(apply|create|render)[[:space:]]'; then
+  echo "FAIL deploy script가 verifier/recovery manifest를 apply·create 대상에 포함했다" >&2
+  printf '%s\n' "$verifier_code" >&2
+  exit 1
+fi
+echo "  ok   verifier workload는 trusted operator 경계에만 있다"
 
 echo "deploy-backoffice 계약 통과"

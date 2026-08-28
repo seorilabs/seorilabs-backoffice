@@ -118,13 +118,28 @@ MySQL은 대상 table의 `TRIGGER` 권한이 없는 principal에게 `information
 `backoffice`@`%`에는 `TRIGGER` 권한이 없으므로 로그는 `appendOnlyTriggers=FORBIDDEN(...)`이 된다.
 app user에 `TRIGGER` 권한을 주지 않는다.
 
-가시성이 없다고 검증을 건너뛰지는 않는다. `scripts/deploy-backoffice.sh`는 app migration 직후,
-rollout 이전에 `data` namespace에 `provider-audit-trigger-verify-job.yaml`을 exact source SHA로
-생성하고 완료를 기다린다. 이 Job은 root secret 전용 volume으로 두 trigger의 이름, timing, event,
-table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총 개수가 2인지도 본다.
-DDL, `GRANT`, 복구를 하지 않는다. Job 실패, source SHA 불일치, 이미지 digest 불일치, trigger
-0개·1개·변형·우회 trigger는 모두 rollout 전에 배포를 중단시킨다. 복구가 필요하면 위
-trusted operator 복구 Job을 사람이 실행한다. 자동 실행하지 않는다.
+가시성이 없다고 검증을 건너뛰지는 않는다. 검증은 고정 in-cluster verifier가 맡는다.
+
+`k8s/provider-audit-trigger-verifier.yaml`은 `data` namespace의 CronJob과 전용 ServiceAccount,
+결과 ConfigMap `backoffice-provider-audit-trigger-state`를 정의한다. verifier는 root secret 전용
+volume으로 두 trigger의 이름, timing, event, table, action statement를 SELECT로만 확인하고 보호
+table 위 trigger 총 개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. DDL, `GRANT`,
+복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
+`observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
+
+`scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
+한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고
+`observedAt`이 `BACKOFFICE_TRIGGER_OBSERVATION_MAX_AGE_SECONDS`(기본 900초) 이내일 때만
+rollout한다. 하나라도 어긋나거나 ConfigMap이 없으면 배포를 중단한다.
+
+CI deployer에는 `data` namespace의 Job·Pod 생성 권한을 주지 않는다. 주면 CI가
+`mysql-root-cred`를 mount하는 workload spec을 만들 수 있어 사실상 root secret export 권한이
+된다. CI 권한은 이 ConfigMap 하나에 대한 `get`뿐이다. verifier workload는 trusted operator가
+직접 apply하며 deploy script는 apply하지 않는다.
+
+계약이 바뀌면 operator가 verifier를 다시 apply해야 한다. 그전까지는 `contractDigest` 불일치로
+배포가 fail-closed한다. 복구가 필요하면 위 trusted operator 복구 Job을 사람이 실행한다.
+자동 실행하지 않는다.
 
 ### Provider execution signer 활성화
 

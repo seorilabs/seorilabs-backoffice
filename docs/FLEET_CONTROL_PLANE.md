@@ -94,7 +94,8 @@ mutation용 identity와 readback identity는 logical credential ID와 공개 ide
 recovery resolve로 migration row만 성공 처리된 경우에도 trigger가 없으면 fail-closed한다. 관측 principal에
 `TRIGGER` 권한이 없으면 MySQL이 빈 결과를 주므로, app verifier는 grant를 먼저 읽어 `FORBIDDEN` 가시성과
 리소스 부재를 분리하고 권한 부족을 부재로 기록하지 않는다. 그 경우에도 검증을 건너뛰지 않고, 배포 script가
-rollout 이전에 가시성 있는 전용 principal의 read-only 검증 Job 성공을 요구한다.
+rollout 이전에 고정 in-cluster verifier의 최신 `PASS` 관측과 계약 digest 일치를 요구한다. CI는 그 관측을
+읽기만 하며 verifier workload를 만들거나 바꿀 수 없다.
 
 - `READBACK`은 사전 승인 가능한 fleet inventory identity만 사용한다.
 - production mutation, IAM, Workspace domain-wide delegation은 매 실행마다 Backoffice의 app-scoped 사람
