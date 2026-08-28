@@ -167,7 +167,9 @@ root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`
 `pods`/`jobs`/`cronjobs`/`deployments`+`create`/`patch`/`update`/`delete`/`deletecollection` 조합이
 하나라도 있으면 fail-closed한다. wildcard(`*`) group·resource·verb도 같은 조합으로 친다. 권한
 목록이 불완전(`status.incomplete=true`)하면 부재를 증명할 수 없으므로 실패한다. 이 review는
-read-only이며 지속 리소스를 만들지 않는다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
+read-only이며 지속 리소스를 만들지 않는다. kubectl의 client-side schema 검증은 권한과 무관한
+CRD 목록 조회를 요구하므로 built-in review endpoint 제출에는 `--validate=false`를 사용하고,
+응답 계약은 server-side `status` 파싱으로 검증한다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
 잡는 보조 검증으로 함께 유지한다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
 클러스터 접근 불가와 identity 불일치는 skip이 아니라 실패다. PR CI에는 kubeconfig가 없으므로
 static 계약 테스트 `check-ci-deployer-permissions.test.sh`만 돈다.
