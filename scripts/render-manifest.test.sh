@@ -209,18 +209,19 @@ else
   ng "Fleet parity Job occurrence 또는 secret 경계가 깨졌다"
 fi
 
-if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 3 ] &&
-   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 3 ] &&
+if [ "$(grep -c '^kind: CronJob' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'concurrencyPolicy: Forbid' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'kubernetes.io/hostname: rpi5' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'curlimages/curl@sha256:' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'suspend: false' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'curl --config - -fsS -o /dev/null' "$scheduler_cronjobs")" -eq 4 ] &&
+   [ "$(grep -c 'path: admin-token' "$scheduler_cronjobs")" -eq 4 ] &&
    ! grep -q 'name: ADMIN_TOKEN' "$scheduler_cronjobs" "$catchup_job" &&
    grep -q '/api/admin/reconcile' "$scheduler_cronjobs" &&
    grep -q '/api/admin/xcode-cloud/sync' "$scheduler_cronjobs" &&
-   grep -q '/api/admin/seed' "$scheduler_cronjobs"; then
-  ok "scheduler CronJob 3개 직렬화"
+   grep -q '/api/admin/seed' "$scheduler_cronjobs" &&
+   grep -q '/api/admin/automation/schedule' "$scheduler_cronjobs"; then
+  ok "scheduler CronJob 4개 직렬화"
 else
   ng "scheduler CronJob 계약이 깨졌다"
 fi

@@ -133,6 +133,7 @@ scheduler_cronjobs=(
   backoffice-reconcile
   backoffice-xcode-cloud-sync
   backoffice-registry-seed
+  backoffice-automation-scheduler
 )
 scheduler_restore_needed=false
 scheduler_restore_safe=true

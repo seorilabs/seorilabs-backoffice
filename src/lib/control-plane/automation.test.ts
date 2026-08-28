@@ -673,13 +673,13 @@ test("RESULT_UNKNOWN은 새 readback lease 재claim 뒤에만 resolve되고 muta
   assert.match(mutation, /status: "PENDING"[\s\S]*auditLog\.create/);
 });
 
-test("Project projection은 claim source가 아니며 설치 template은 기본 비활성이다", () => {
+test("Project projection은 claim source가 아니며 durable scheduler가 운영 manifest에 고정된다", () => {
   const queue = readFileSync(join(process.cwd(), "src/lib/control-plane/agent-queue.ts"), "utf8");
-  const schedulerTemplate = readFileSync(join(process.cwd(), "docs/automation/automation-scheduler-cronjob.yaml"), "utf8");
   const deployedSchedulers = readFileSync(join(process.cwd(), "k8s/scheduler-cronjobs.yaml"), "utf8");
   assert.doesNotMatch(queue, /fleetProjectProjection|projectNodeId|ProjectV2/);
-  assert.match(schedulerTemplate, /suspend: true/);
-  assert.doesNotMatch(deployedSchedulers, /backoffice-automation-scheduler/);
+  assert.match(deployedSchedulers, /name: backoffice-automation-scheduler/);
+  assert.match(deployedSchedulers, /schedule: "\* \* \* \* \*"[\s\S]*suspend: false/);
+  assert.match(deployedSchedulers, /\/api\/admin\/automation\/schedule/);
 });
 
 test("PR_READY repo guard는 PR closed readback 전까지 유지된다", () => {
