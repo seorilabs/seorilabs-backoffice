@@ -106,27 +106,37 @@ envelope에는 arbitrary executable, argv, env가 없으며 repo ID/source/confi
 들어 있다. 실제 secret 사용은 P2 Auth Broker가 logical credential lease를 발급한 뒤 trusted adapter에
 직접 주입한다. worker에는 credential export API와 Kubernetes Secret `get/list/watch` 권한이 없다.
 
-worker는 lease보다 먼저 `/internal/control-plane/provider-grants`에 exact singleton P2 rule과 public command digest를 등록하고,
-`/internal/control-plane/provider-grants/{id}/verify`에서 policy generation, binding hash, command digest를 다시 확인한다. 둘 중
-하나라도 없거나 404, schema mismatch, digest mismatch이면 lease를 요청하지 않는다. readback은 같은 grant의
-`/internal/control-plane/provider-grants/{id}/observation`에서 exact generation과 binding에 결합된 strict observation만 소비한다.
-현재 P2 릴리스에는 이 세 endpoint가 아직 없으므로 `route_not_found`는
-`AUTH_BROKER_POLICY_GRANT_UNAVAILABLE`로 fail-closed하며 운영 활성화 blocker다.
+worker에는 DB URL, queue HMAC key, broker mTLS key, run-attestation private key를 넣지 않는다. worker의 모든 claim,
+settlement, broker 호출은 별도 `provider-execution-signer` mTLS 경계를 통한다. signer는 DB의 실제 `RUNNING`
+execution ID/generation/worker/repository/source/binding/lease expiry를 다시 읽고, 고정 builder가 재구성한 route/body
+digest가 일치할 때만 60초 이하의 Ed25519 attestation을 한 번 발급한다. 발급 event에는 nonce digest와 exact
+route/body digest를 append-only로 먼저 기록하고 signer가 같은 요청을 broker에 직접 proxy한다. attestation은
+worker에 반환되지 않으며 같은 stage/ordinal의 재발급은 durable unique CAS로 거부된다.
+
+signer는 `/internal/control-plane/provider-grants`에 exact singleton P2 rule과 public command digest를 등록하고,
+`/internal/control-plane/provider-grants/{id}/verify`에서 policy generation, binding hash, command digest를 다시 확인한다.
+둘 중 하나라도 없거나 404, schema mismatch, digest mismatch이면 credential lease를 요청하지 않는다. readback은
+같은 grant의 `/internal/control-plane/provider-grants/{id}/observation`에서 exact generation과 binding에 결합된
+strict observation만 소비한다. P2 durable nonce journal이 signer의 각 attestation을 broker 재시작 뒤에도 한 번만
+소비한다. 같은 generation의 consume 응답이 유실되면 mutation을 재전송하지 않고 새 RESULT attestation으로만
+조회한다. 그래도 결과가 불명이면 다음 generation의 `READBACK_FIRST` claim은 `operation=READBACK`과 별도 fleet
+readback credential을 다시 검증한 새 grant를 REGISTER→VERIFY→CONSUME 정확히 한 번 실행해 observation을 만든다.
+worker는 claim과 envelope의 resume mode가 다르거나 READBACK_FIRST가 READBACK operation이 아니면 중단한다.
 
 운영 활성화 전에는 다음을 모두 readback으로 확인한다.
 
 1. primary/readback `CredentialBinding`의 logical ID, public credential identity, generation, exact origin,
    adapter, auth factor를 catalog와 일치하게 backfill한다.
-2. P2 adapter registry/policy에 위 adapter와 capability를 등록하고 mTLS, attestation key, WIF/GSA identity,
+2. P2 adapter registry/policy에 위 adapter와 capability를 등록하고 signer 전용 mTLS, attestation key, WIF/GSA identity,
    Secret Manager resource binding을 실제 값으로 교차 검증한다.
 3. P2에 policy-grant register/verify와 `binding:<bindingHash>` public command resolver, strict observation
    endpoint를 배치한다. secret이나 command를 stdout/argv/env로 전달하지 않는다.
 4. canary/fake provider에서 결과 유실, FORBIDDEN/ABSENT, stale generation, approval 만료, credential 회전,
    동일 resource 동시 claim을 통과한 뒤 immutable image digest로 manifest를 렌더한다.
-5. 위 조건 전에는 `k8s/provider-execution-worker.yaml`의 `replicas: 0`을 변경하지 않는다. 이 manifest는
+5. 위 조건 전에는 `k8s/provider-execution-worker.yaml`의 signer와 worker `replicas: 0`을 변경하지 않는다. 이 manifest는
    일반 deploy script에서 의도적으로 제외되어 운영 활성화를 우연히 켜거나 끄지 않는다. raw manifest에는
-   mutable image가 없으며 renderer가 immutable sha256 digest를 주입한다. egress는 DNS, P2 broker 8443,
-   MySQL 3306으로만 제한한다.
+   mutable image가 없으며 renderer가 immutable sha256 digest를 주입한다. worker egress는 DNS와 signer 9443만,
+   signer egress는 DNS, P2 broker 8443, MySQL 3306으로만 제한한다.
 
 ## Release candidate와 마켓 원장
 

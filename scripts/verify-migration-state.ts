@@ -57,6 +57,7 @@ const expectedLineage = option("expected-lineage") as
   | undefined;
 const printContract = process.argv.includes("--print-contract");
 const printDataFingerprint = process.argv.includes("--print-data-fingerprint");
+const recoveryStateMigration = option("recovery-state");
 const allowedEmptyNewTables = new Set(
   (option("allow-empty-new-tables") ?? "")
     .split(",")
@@ -293,6 +294,41 @@ function verifyHistory(actual: LedgerRow[]): void {
   }
 }
 
+async function inspectRecoveryState(
+  prisma: PrismaClient,
+  migrationName: string,
+): Promise<"SUCCEEDED" | "UNRESOLVED_EXACT"> {
+  const active = activeMigrations();
+  activeRecoveryAllowance(active, migrationName);
+  const checksum = active.get(migrationName);
+  if (!checksum || !manifest.activeRecovery?.[migrationName]) {
+    throw new Error(`active recovery inventory에 없는 migration이다: ${migrationName}`);
+  }
+  const rows = await prisma.$queryRawUnsafe<Array<{
+    checksum: string;
+    finished: number | bigint;
+    rolledBack: number | bigint;
+  }>>(`
+    SELECT
+      checksum,
+      (finished_at IS NOT NULL) AS finished,
+      (rolled_back_at IS NOT NULL) AS rolledBack
+    FROM _prisma_migrations
+    WHERE migration_name = ?
+    ORDER BY started_at, id
+  `, migrationName);
+  if (rows.some((row) => row.checksum !== checksum)) {
+    throw new Error(`recovery migration checksum이 active bytes와 다르다: ${migrationName}`);
+  }
+  const succeeded = rows.filter((row) => Number(row.finished) === 1 && Number(row.rolledBack) === 0).length;
+  const rolledBack = rows.filter((row) => Number(row.rolledBack) === 1).length;
+  const unresolved = rows.filter((row) => Number(row.finished) === 0 && Number(row.rolledBack) === 0).length;
+  const allowance = activeRecoveryAllowance(active, migrationName);
+  if (succeeded === 1 && unresolved === 0 && rolledBack <= allowance) return "SUCCEEDED";
+  if (succeeded === 0 && unresolved === 1 && rolledBack === 0 && rows.length === 1) return "UNRESOLVED_EXACT";
+  throw new Error(`recovery migration 원장이 허용된 단일 상태가 아니다: ${migrationName}`);
+}
+
 async function classifyPredeploy(prisma: PrismaClient): Promise<"fresh" | "cutover"> {
   const tables = await prisma.$queryRawUnsafe<Array<{ tableName: string }>>(`
     SELECT TABLE_NAME AS tableName
@@ -486,6 +522,10 @@ async function dataFingerprint(
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   try {
+    if (recoveryStateMigration) {
+      console.log(await inspectRecoveryState(prisma, recoveryStateMigration));
+      return;
+    }
     if (historyMode === "predeploy") {
       const lineage = await classifyPredeploy(prisma);
       if (expectedLineage && lineage !== expectedLineage) {

@@ -14,6 +14,158 @@ metadata:
   namespace: platform
 rules: []
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provider-execution-signer
+  namespace: platform
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: provider-execution-signer
+  namespace: platform
+rules: []
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: provider-execution-signer
+  namespace: platform
+spec:
+  selector:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: provider-execution-signer
+  ports:
+    - name: mtls
+      port: 9443
+      targetPort: mtls
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-provider-execution-signer
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: provider-execution-signer
+spec:
+  # worker와 같은 activation gate에서 함께 올린다. signer만 먼저 떠도 provider 작업은 없다.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: provider-execution-signer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: provider-execution-signer
+    spec:
+      serviceAccountName: provider-execution-signer
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provider-execution-signer
+          image: __BACKOFFICE_IMAGE_DIGEST__
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/provider-execution-attestation-signer.cjs"]
+          ports:
+            - name: mtls
+              containerPort: 9443
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=256 --dns-result-order=ipv4first --no-network-family-autoselection"
+            - name: PROVIDER_EXECUTION_WORKER_ID
+              value: provider-execution:rpi5
+            - name: PROVIDER_EXECUTION_SUBJECT
+              value: k8s:platform:provider-execution-worker
+            - name: PROVIDER_EXECUTION_WORKER_SPIFFE_ID
+              value: spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker
+            - name: PROVIDER_EXECUTION_BROKER_SPIFFE_ID
+              value: spiffe://seorilabs.local/ns/platform/sa/provider-execution-signer
+            - name: SEORI_AUTH_BROKER_ORIGIN
+              value: https://seori-auth-broker.auth-broker.svc.cluster.local:8443
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: signer-runtime
+              mountPath: /var/run/seori-provider-execution-signer
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: signer-runtime
+          projected:
+            # projected files are root:fsGroup, so the non-root process needs group-read only.
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: provider-execution-signer-server
+                  items:
+                    - key: client-ca.pem
+                      path: server/client-ca.pem
+                    - key: tls.crt
+                      path: server/tls.crt
+                    - key: tls.key
+                      path: server/tls.key
+              - secret:
+                  name: provider-execution-queue-lease
+                  items:
+                    - key: signing.key
+                      path: queue-lease/signing.key
+              - secret:
+                  name: provider-execution-signer-broker-client
+                  items:
+                    - key: ca.pem
+                      path: broker/ca.pem
+                    - key: tls.crt
+                      path: broker/tls.crt
+                    - key: tls.key
+                      path: broker/tls.key
+              - secret:
+                  name: provider-execution-attestation
+                  items:
+                    - key: private.pem
+                      path: attestation/private.pem
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,15 +219,8 @@ spec:
               value: provider-execution:rpi5
             - name: PROVIDER_EXECUTION_SUBJECT
               value: k8s:platform:provider-execution-worker
-            - name: PROVIDER_EXECUTION_SPIFFE_ID
-              value: spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker
-            - name: SEORI_AUTH_BROKER_ORIGIN
-              value: https://seori-auth-broker.auth-broker.svc.cluster.local:8443
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: DATABASE_URL
+            - name: PROVIDER_EXECUTION_SIGNER_ORIGIN
+              value: https://provider-execution-signer.platform.svc.cluster.local:9443
           resources:
             requests:
               cpu: 50m
@@ -97,27 +242,18 @@ spec:
       volumes:
         - name: runtime
           projected:
-            defaultMode: 0400
+            # projected files are root:fsGroup, so the non-root process needs group-read only.
+            defaultMode: 0440
             sources:
               - secret:
-                  name: provider-execution-queue-lease
-                  items:
-                    - key: signing.key
-                      path: queue-lease/signing.key
-              - secret:
-                  name: provider-execution-mtls
+                  name: provider-execution-signer-client
                   items:
                     - key: ca.pem
-                      path: mtls/ca.pem
+                      path: signer-client/ca.pem
                     - key: tls.crt
-                      path: mtls/tls.crt
+                      path: signer-client/tls.crt
                     - key: tls.key
-                      path: mtls/tls.key
-              - secret:
-                  name: provider-execution-attestation
-                  items:
-                    - key: private.pem
-                      path: attestation/private.pem
+                      path: signer-client/tls.key
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
@@ -134,6 +270,47 @@ spec:
       app.kubernetes.io/component: provider-execution-worker
   policyTypes: [Ingress, Egress]
   ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backoffice
+              app.kubernetes.io/component: provider-execution-signer
+      ports:
+        - { protocol: TCP, port: 9443 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provider-execution-signer
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: provider-execution-signer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backoffice
+              app.kubernetes.io/component: provider-execution-worker
+      ports:
+        - { protocol: TCP, port: 9443 }
   egress:
     - to:
         - namespaceSelector:

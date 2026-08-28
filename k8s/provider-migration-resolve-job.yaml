@@ -42,6 +42,26 @@ spec:
               migration=20260828230000_provider_execution_queue
               test "$(sha256sum "prisma/migrations/${migration}/migration.sql" | awk '{print $1}')" = \
                 "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb"
+              recovery_state="$(node scripts-dist/verify-migration-state.cjs \
+                --history=predeploy --recovery-state="$migration")"
+              if [ "$recovery_state" = "SUCCEEDED" ]; then
+                # 응답 유실 뒤 재실행은 원장을 먼저 읽고 resolve를 반복하지 않는다.
+                prisma migrate deploy
+                prisma migrate status
+                test "$(node scripts-dist/verify-migration-state.cjs \
+                  --history=predeploy --expected-lineage=cutover)" = cutover
+                echo "provider migration recovery already complete"
+                exit 0
+              fi
+              test "$recovery_state" = "UNRESOLVED_EXACT"
+              set +e
+              preflight="$(node scripts-dist/verify-migration-state.cjs \
+                --history=predeploy --expected-lineage=cutover 2>&1)"
+              preflight_status=$?
+              set -e
+              test "$preflight_status" -ne 0
+              test "$preflight" = \
+                "migration/schema 계약 실패: 미해결 migration attempt가 있다: ${migration}"
               prisma migrate diff \
                 --from-schema-datasource prisma/schema.prisma \
                 --to-schema-datamodel prisma/schema.prisma \

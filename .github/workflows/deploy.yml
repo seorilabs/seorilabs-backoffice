@@ -55,7 +55,7 @@ jobs:
     needs: [verify, migration-contract]
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
-    # ARM64 Docker 빌드 → -dind 러너(rpi4001)에서 격리.
+    # ARM64 Docker 빌드 → -dind 러너(rpi5)에서 격리.
     runs-on: seorilabs-rpi-arm64-dind
     steps:
       - uses: actions/checkout@v7

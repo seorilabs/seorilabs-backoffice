@@ -1,11 +1,3 @@
-import {
-  createPrivateKey,
-  randomBytes,
-  sign,
-  type KeyObject,
-} from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { request as httpsRequest } from "node:https";
 import { z } from "zod";
 
 import {
@@ -16,9 +8,6 @@ import {
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
-const ATTESTATION_DOMAIN = "seori-run-attestation-v1\n";
-const RESPONSE_LIMIT = 64 * 1024;
-
 export interface ProviderAdapterResult {
   outcome: "COMMAND_ACCEPTED" | "RESULT_UNKNOWN" | "FAILED" | "HUMAN_REQUIRED" | "APPROVAL_REQUIRED";
   errorCode?: string;
@@ -27,6 +16,30 @@ export interface ProviderAdapterResult {
 export interface ProviderAdapterExecutor {
   execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult>;
   readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null>;
+}
+
+/** worker가 durable claim의 resume mode를 무시하지 못하게 하는 단일 dispatch 경계다. */
+export function executeProviderAdapterClaim(
+  adapter: ProviderAdapterExecutor,
+  claim: {
+    executionId: string;
+    generation: number;
+    resumeMode: "START" | "READBACK_FIRST";
+    envelope: ProviderCommandEnvelope;
+  },
+): Promise<ProviderAdapterResult> {
+  const command = providerCommandEnvelopeSchema.parse(claim.envelope);
+  if (
+    command.executionId !== claim.executionId
+    || command.generation !== claim.generation
+    || command.resumeMode !== claim.resumeMode
+  ) {
+    throw new Error("PROVIDER_CLAIM_BINDING_MISMATCH");
+  }
+  if (claim.resumeMode === "READBACK_FIRST") {
+    if (command.operation !== "READBACK") throw new Error("PROVIDER_READBACK_COMMAND_INVALID");
+  }
+  return adapter.execute(command);
 }
 
 export function buildAuthBrokerLeaseRequest(envelope: ProviderCommandEnvelope, subject: string) {
@@ -103,44 +116,109 @@ export function buildAuthBrokerPolicyGrant(envelope: ProviderCommandEnvelope, su
   return { grant, digest: jsonDigest(grant as unknown as JsonValue) };
 }
 
-function base64UrlJson(value: Record<string, unknown>): string {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-}
+export type BrokerTransport = (input: ProviderBrokerRequest) => Promise<{ status: number; body: unknown }>;
 
-export function signRunAttestation(input: {
-  privateKey: string | Buffer | KeyObject;
-  clientSpiffeId: string;
-  subject: string;
-  runId: string;
-  repository: string;
-  workerId: string;
-  now: number;
-  nonce?: string;
-}) {
-  const payload = base64UrlJson({
-    version: 1,
-    clientSpiffeId: input.clientSpiffeId,
-    issuedAt: input.now,
-    expiresAt: input.now + 60_000,
-    nonce: input.nonce ?? randomBytes(18).toString("base64url"),
-    subject: input.subject,
-    runId: input.runId,
-    repository: input.repository,
-    workerId: input.workerId,
-  });
-  const privateKey = typeof input.privateKey === "string" || Buffer.isBuffer(input.privateKey)
-    ? createPrivateKey(input.privateKey)
-    : input.privateKey;
-  if (privateKey.asymmetricKeyType !== "ed25519") throw new Error("RUN_ATTESTATION_KEY_INVALID");
-  const signature = sign(null, Buffer.from(`${ATTESTATION_DOMAIN}${payload}`, "utf8"), privateKey).toString("base64url");
-  return `${payload}.${signature}`;
-}
+export const providerBrokerStageSchema = z.enum([
+  "REGISTER",
+  "VERIFY",
+  "CONSUME",
+  "RESULT",
+  "OBSERVATION",
+]);
+export type ProviderBrokerStage = z.infer<typeof providerBrokerStageSchema>;
 
-type BrokerTransport = (input: {
+export type ProviderBrokerRequest = {
+  executionId: string;
+  generation: number;
+  stage: ProviderBrokerStage;
+  ordinal: number;
   path: string;
   body: Record<string, unknown>;
-  attestation: string;
-}) => Promise<{ status: number; body: unknown }>;
+};
+
+/**
+ * Worker가 임의 route/body를 고르지 못하도록 signer와 adapter가 공유하는 exact request builder다.
+ * signer는 durable RUNNING claim에서 envelope을 다시 구성한 뒤 이 결과만 broker로 전송한다.
+ */
+export function buildProviderBrokerRequest(input: {
+  envelope: ProviderCommandEnvelope;
+  subject: string;
+  workerId: string;
+  stage: ProviderBrokerStage;
+  ordinal?: number;
+}): ProviderBrokerRequest {
+  const command = providerCommandEnvelopeSchema.parse(input.envelope);
+  const built = buildAuthBrokerPolicyGrant(command, input.subject);
+  const expectation = {
+    workerId: input.workerId,
+    expectedDigest: built.digest,
+    expectedBindingHash: built.grant.bindingHash,
+    expectedCommandDigest: built.grant.commandDigest,
+    expectedPolicyGeneration: built.grant.policyGeneration,
+  };
+  const ordinal = input.ordinal ?? 1;
+  if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 20) {
+    throw new Error("PROVIDER_BROKER_REQUEST_ORDINAL_INVALID");
+  }
+  if (input.stage !== "OBSERVATION" && ordinal !== 1) {
+    throw new Error("PROVIDER_BROKER_REQUEST_REPLAY_FORBIDDEN");
+  }
+  if (input.stage === "REGISTER") {
+    return {
+      executionId: command.executionId,
+      generation: command.generation,
+      stage: input.stage,
+      ordinal,
+      path: "/internal/control-plane/provider-grants",
+      body: {
+        idempotencyKey: `provider-policy-grant:${command.executionId}:${command.generation}`,
+        workerId: input.workerId,
+        grant: built.grant,
+        digest: built.digest,
+      },
+    };
+  }
+  const grantPath = `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}`;
+  if (input.stage === "VERIFY") {
+    return {
+      executionId: command.executionId,
+      generation: command.generation,
+      stage: input.stage,
+      ordinal,
+      path: `${grantPath}/verify`,
+      body: expectation,
+    };
+  }
+  const executionExpectation = {
+    ...expectation,
+    expectedExecutionGeneration: command.generation,
+  };
+  if (input.stage === "CONSUME") {
+    return {
+      executionId: command.executionId,
+      generation: command.generation,
+      stage: input.stage,
+      ordinal,
+      path: `${grantPath}/consume`,
+      body: {
+        ...executionExpectation,
+        idempotencyKey: `provider-grant-consume:${command.executionId}:${command.generation}`,
+      },
+    };
+  }
+  return {
+    executionId: command.executionId,
+    generation: command.generation,
+    stage: input.stage,
+    ordinal,
+    path: `${grantPath}/${input.stage === "RESULT" ? "result" : "observation"}`,
+    body: executionExpectation,
+  };
+}
+
+export function providerBrokerRequestDigest(request: Pick<ProviderBrokerRequest, "path" | "body">): string {
+  return jsonDigest({ path: request.path, body: request.body } as JsonValue);
+}
 
 const brokerErrorResponseSchema = z.object({
   error: z.object({
@@ -192,43 +270,62 @@ const policyGrantObservationResponseSchema = z.object({
   observation: providerExecutionObservationSchema,
 }).strict();
 
+/**
+ * Signer가 broker 응답을 worker로 넘기기 전에 공개 계약만 남긴다. provider/TLS 오류 원문이나
+ * 잘못 구현된 adapter의 secret-like 추가 필드는 worker process에 도달하지 않는다.
+ */
+export function sanitizeProviderBrokerResponse(
+  stage: ProviderBrokerStage,
+  response: { status: number; body: unknown },
+): { status: number; body: unknown } {
+  if (!Number.isSafeInteger(response.status) || response.status < 100 || response.status > 599) {
+    return { status: 502, body: { error: { code: "auth_broker_response_invalid" } } };
+  }
+  if (response.status < 200 || response.status >= 300) {
+    return {
+      status: response.status,
+      body: { error: { code: safeBrokerError(response.body) } },
+    };
+  }
+  if (stage === "OBSERVATION" && response.status === 204) {
+    return { status: 204, body: null };
+  }
+  const parsed = stage === "REGISTER" || stage === "VERIFY"
+    ? policyGrantResponseSchema.safeParse(response.body)
+    : stage === "OBSERVATION"
+      ? policyGrantObservationResponseSchema.safeParse(response.body)
+      : policyGrantExecutionResponseSchema.safeParse(response.body);
+  return parsed.success
+    ? { status: response.status, body: parsed.data }
+    : { status: 502, body: { error: { code: "auth_broker_response_invalid" } } };
+}
+
 type PolicyGrantReference = z.infer<typeof policyGrantReferenceSchema>;
 
 export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   readonly #workerId: string;
   readonly #subject: string;
-  readonly #clientSpiffeId: string;
-  readonly #attestationPrivateKey: KeyObject;
   readonly #transport: BrokerTransport;
+  readonly #observationOrdinals = new Map<string, number>();
+  readonly #executedReadbacks = new Set<string>();
 
   constructor(input: {
     workerId: string;
     subject: string;
-    clientSpiffeId: string;
-    attestationPrivateKey: string | Buffer;
     transport: BrokerTransport;
   }) {
     this.#workerId = input.workerId;
     this.#subject = input.subject;
-    this.#clientSpiffeId = input.clientSpiffeId;
-    const attestationPrivateKey = createPrivateKey(input.attestationPrivateKey);
-    if (attestationPrivateKey.asymmetricKeyType !== "ed25519") {
-      throw new Error("RUN_ATTESTATION_KEY_INVALID");
-    }
-    this.#attestationPrivateKey = attestationPrivateKey;
-    if (Buffer.isBuffer(input.attestationPrivateKey)) input.attestationPrivateKey.fill(0);
     this.#transport = input.transport;
   }
 
-  #attestation(envelope: ProviderCommandEnvelope) {
-    return signRunAttestation({
-      privateKey: this.#attestationPrivateKey,
-      clientSpiffeId: this.#clientSpiffeId,
+  #request(command: ProviderCommandEnvelope, stage: ProviderBrokerStage, ordinal = 1) {
+    return buildProviderBrokerRequest({
+      envelope: command,
       subject: this.#subject,
-      runId: envelope.executionId,
-      repository: envelope.repository,
       workerId: this.#workerId,
-      now: Date.now(),
+      stage,
+      ordinal,
     });
   }
 
@@ -241,20 +338,6 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
       && reference.bindingHash === expected.grant.bindingHash
       && reference.commandDigest === expected.grant.commandDigest
       && reference.policyGeneration === expected.grant.policyGeneration;
-  }
-
-  #grantExpectation(
-    command: ProviderCommandEnvelope,
-    built: ReturnType<typeof buildAuthBrokerPolicyGrant>,
-  ) {
-    return {
-      workerId: this.#workerId,
-      expectedDigest: built.digest,
-      expectedBindingHash: built.grant.bindingHash,
-      expectedCommandDigest: built.grant.commandDigest,
-      expectedPolicyGeneration: built.grant.policyGeneration,
-      expectedExecutionGeneration: command.generation,
-    };
   }
 
   #mapExecutionResponse(
@@ -285,11 +368,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   ): Promise<ProviderAdapterResult> {
     let response;
     try {
-      response = await this.#transport({
-        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/result`,
-        body: this.#grantExpectation(command, built),
-        attestation: this.#attestation(command),
-      });
+      response = await this.#transport(this.#request(command, "RESULT"));
     } catch {
       return { outcome: "RESULT_UNKNOWN", errorCode: "AUTH_BROKER_EXECUTION_UNKNOWN" };
     }
@@ -309,16 +388,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     const built = buildAuthBrokerPolicyGrant(command, this.#subject);
     let registered;
     try {
-      registered = await this.#transport({
-        path: "/internal/control-plane/provider-grants",
-        body: {
-          idempotencyKey: `provider-policy-grant:${command.executionId}:${command.generation}`,
-          workerId: this.#workerId,
-          grant: built.grant,
-          digest: built.digest,
-        },
-        attestation: this.#attestation(command),
-      });
+      registered = await this.#transport(this.#request(command, "REGISTER"));
     } catch {
       return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNAVAILABLE" } };
     }
@@ -342,17 +412,7 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
 
     let verified;
     try {
-      verified = await this.#transport({
-        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/verify`,
-        body: {
-          workerId: this.#workerId,
-          expectedDigest: built.digest,
-          expectedBindingHash: built.grant.bindingHash,
-          expectedCommandDigest: built.grant.commandDigest,
-          expectedPolicyGeneration: built.grant.policyGeneration,
-        },
-        attestation: this.#attestation(command),
-      });
+      verified = await this.#transport(this.#request(command, "VERIFY"));
     } catch {
       return { result: { outcome: "FAILED", errorCode: "AUTH_BROKER_POLICY_GRANT_UNVERIFIED" } };
     }
@@ -372,50 +432,46 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
   async execute(envelope: ProviderCommandEnvelope): Promise<ProviderAdapterResult> {
     const command = providerCommandEnvelopeSchema.parse(envelope);
     const policyGrant = await this.#registerAndVerifyPolicyGrant(command);
-    if ("result" in policyGrant) return policyGrant.result;
+    if ("result" in policyGrant) return this.#recordExecutedReadback(command, policyGrant.result);
     const built = policyGrant.grant;
     let consumed;
     try {
-      consumed = await this.#transport({
-        path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/consume`,
-        body: {
-          ...this.#grantExpectation(command, built),
-          idempotencyKey: `provider-grant-consume:${command.executionId}:${command.generation}`,
-        },
-        attestation: this.#attestation(command),
-      });
+      consumed = await this.#transport(this.#request(command, "CONSUME"));
     } catch {
       // consume 전송 뒤 응답을 잃었을 수 있으므로 같은 grant를 다시 consume하지 않는다.
-      return this.#readExecutionResult(command, built);
+      return this.#recordExecutedReadback(command, await this.#readExecutionResult(command, built));
     }
     if (consumed.status !== 200) {
       const errorCode = safeBrokerError(consumed.body);
       const gate = brokerGateResult(errorCode);
-      if (gate) return gate;
+      if (gate) return this.#recordExecutedReadback(command, gate);
       if (consumed.status >= 500 || errorCode === "auth_broker_failed") {
-        return this.#readExecutionResult(command, built);
+        return this.#recordExecutedReadback(command, await this.#readExecutionResult(command, built));
       }
-      return { outcome: "FAILED", errorCode: errorCode.toUpperCase() };
+      return this.#recordExecutedReadback(command, { outcome: "FAILED", errorCode: errorCode.toUpperCase() });
     }
-    return this.#mapExecutionResponse(consumed.body, command, built)
-      ?? this.#readExecutionResult(command, built);
+    const result = this.#mapExecutionResponse(consumed.body, command, built)
+      ?? await this.#readExecutionResult(command, built);
+    return this.#recordExecutedReadback(command, result);
+  }
+
+  #recordExecutedReadback(command: ProviderCommandEnvelope, result: ProviderAdapterResult) {
+    if (command.operation === "READBACK" && result.outcome === "COMMAND_ACCEPTED") {
+      this.#executedReadbacks.add(`${command.executionId}:${command.generation}`);
+    }
+    return result;
   }
 
   async readObservation(envelope: ProviderCommandEnvelope): Promise<ProviderExecutionObservation | null> {
     const command = providerCommandEnvelopeSchema.parse(envelope);
+    const observationKey = `${command.executionId}:${command.generation}`;
+    if (command.operation !== "READBACK" || !this.#executedReadbacks.has(observationKey)) {
+      throw new Error("AUTH_BROKER_READBACK_NOT_EXECUTED");
+    }
     const built = buildAuthBrokerPolicyGrant(command, this.#subject);
-    const response = await this.#transport({
-      path: `/internal/control-plane/provider-grants/${encodeURIComponent(built.grant.id)}/observation`,
-      body: {
-        workerId: this.#workerId,
-        expectedDigest: built.digest,
-        expectedBindingHash: built.grant.bindingHash,
-        expectedCommandDigest: built.grant.commandDigest,
-        expectedPolicyGeneration: built.grant.policyGeneration,
-        expectedExecutionGeneration: command.generation,
-      },
-      attestation: this.#attestation(command),
-    });
+    const ordinal = (this.#observationOrdinals.get(observationKey) ?? 0) + 1;
+    this.#observationOrdinals.set(observationKey, ordinal);
+    const response = await this.#transport(this.#request(command, "OBSERVATION", ordinal));
     if (response.status === 204) return null;
     if (response.status !== 200) throw new Error("AUTH_BROKER_OBSERVATION_UNAVAILABLE");
     const parsed = policyGrantObservationResponseSchema.safeParse(response.body);
@@ -424,81 +480,4 @@ export class SeoriAuthBrokerProviderAdapter implements ProviderAdapterExecutor {
     }
     return parsed.data.observation;
   }
-}
-
-export async function createProductionProviderAdapter(input: {
-  workerId: string;
-  subject: string;
-  clientSpiffeId: string;
-  brokerOrigin: string;
-}) {
-  const origin = new URL(input.brokerOrigin);
-  if (origin.protocol !== "https:" || origin.pathname !== "/" || origin.search || origin.hash || origin.username || origin.password) {
-    throw new Error("AUTH_BROKER_ORIGIN_INVALID");
-  }
-  const fixedRoot = "/var/run/seori-provider-execution";
-  const [ca, certificate, privateKey, attestationPrivateKey] = await Promise.all([
-    readFile(`${fixedRoot}/mtls/ca.pem`),
-    readFile(`${fixedRoot}/mtls/tls.crt`),
-    readFile(`${fixedRoot}/mtls/tls.key`),
-    readFile(`${fixedRoot}/attestation/private.pem`),
-  ]);
-  const transport: BrokerTransport = ({ path, body, attestation }) => new Promise((resolve, reject) => {
-    const encoded = Buffer.from(JSON.stringify(body), "utf8");
-    const request = httpsRequest({
-      protocol: "https:",
-      hostname: origin.hostname,
-      port: origin.port ? Number(origin.port) : 443,
-      method: "POST",
-      path,
-      ca,
-      cert: certificate,
-      key: privateKey,
-      minVersion: "TLSv1.3",
-      maxVersion: "TLSv1.3",
-      servername: origin.hostname,
-      headers: {
-        "content-type": "application/json",
-        "content-length": String(encoded.length),
-        "seori-run-attestation": attestation,
-      },
-      timeout: 10_000,
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      response.on("data", (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > RESPONSE_LIMIT) request.destroy(new Error("AUTH_BROKER_RESPONSE_LIMIT"));
-        else chunks.push(chunk);
-      });
-      response.on("end", () => {
-        const payload = Buffer.concat(chunks);
-        try {
-          resolve({ status: response.statusCode ?? 500, body: JSON.parse(payload.toString("utf8")) });
-        } catch {
-          resolve({ status: response.statusCode ?? 500, body: null });
-        } finally {
-          payload.fill(0);
-          for (const chunk of chunks) chunk.fill(0);
-        }
-      });
-    });
-    request.once("timeout", () => request.destroy(new Error("AUTH_BROKER_TIMEOUT")));
-    request.once("error", reject);
-    let cleared = false;
-    const clearEncoded = () => {
-      if (cleared) return;
-      cleared = true;
-      encoded.fill(0);
-    };
-    request.once("close", clearEncoded);
-    request.end(encoded, clearEncoded);
-  });
-  return new SeoriAuthBrokerProviderAdapter({
-    workerId: input.workerId,
-    subject: input.subject,
-    clientSpiffeId: input.clientSpiffeId,
-    attestationPrivateKey,
-    transport,
-  });
 }

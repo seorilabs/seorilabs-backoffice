@@ -39,6 +39,48 @@ printf '\n-- modified\n' >> \
   "$tmp/baseline_modified/prisma/migrations/00000000000000_squashed_migrations/migration.sql"
 expect_failure baseline_modified
 
+prepare_case active_recovery_unknown
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery.unknown_migration = {
+    sha256: "a".repeat(64), maxRolledBackAttempts: 1, reason: "test",
+  };
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/active_recovery_unknown/prisma/migration-history.json"
+expect_failure active_recovery_unknown
+
+prepare_case active_recovery_checksum
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery["20260828230000_provider_execution_queue"].sha256 = "a".repeat(64);
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/active_recovery_checksum/prisma/migration-history.json"
+expect_failure active_recovery_checksum
+
+prepare_case active_recovery_attempts
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery["20260828230000_provider_execution_queue"].maxRolledBackAttempts = 0;
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/active_recovery_attempts/prisma/migration-history.json"
+expect_failure active_recovery_attempts
+
+prepare_case active_recovery_reason
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.activeRecovery["20260828230000_provider_execution_queue"].reason = "  ";
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/active_recovery_reason/prisma/migration-history.json"
+expect_failure active_recovery_reason
+
 prepare_case unpadded
 mkdir -p "$tmp/unpadded/prisma/migrations/2026082712000_unpadded"
 printf "CREATE TABLE \`new_table\` (\`id\` VARCHAR(32) NOT NULL);\n" > \

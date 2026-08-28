@@ -248,6 +248,38 @@ if (!activeNames.includes(baselineName)) {
   }
 }
 
+if (
+  !manifest.activeRecovery
+  || typeof manifest.activeRecovery !== "object"
+  || Array.isArray(manifest.activeRecovery)
+) {
+  fail("activeRecovery 정책이 object가 아니다");
+} else {
+  for (const [name, policy] of Object.entries(manifest.activeRecovery)) {
+    const keys = policy && typeof policy === "object" && !Array.isArray(policy)
+      ? Object.keys(policy).sort()
+      : [];
+    if (keys.join(",") !== "maxRolledBackAttempts,reason,sha256") {
+      fail(`activeRecovery 필드가 올바르지 않다: ${name}`);
+      continue;
+    }
+    if (!activeNames.includes(name) || name === baselineName) {
+      fail(`activeRecovery key가 실제 active migration이 아니다: ${name}`);
+      continue;
+    }
+    const sqlPath = join(activeRoot, name, "migration.sql");
+    if (!/^[a-f0-9]{64}$/.test(policy.sha256 ?? "") || sha256(sqlPath) !== policy.sha256) {
+      fail(`activeRecovery checksum이 migration bytes와 다르다: ${name}`);
+    }
+    if (!Number.isSafeInteger(policy.maxRolledBackAttempts) || policy.maxRolledBackAttempts < 1) {
+      fail(`activeRecovery maxRolledBackAttempts가 양의 정수가 아니다: ${name}`);
+    }
+    if (typeof policy.reason !== "string" || !policy.reason.trim()) {
+      fail(`activeRecovery reason이 비어 있다: ${name}`);
+    }
+  }
+}
+
 const width = manifest.naming.width;
 const notBefore = manifest.naming.notBefore;
 const namePattern = new RegExp(`^\\d{${width}}_[a-z0-9_]+$`);

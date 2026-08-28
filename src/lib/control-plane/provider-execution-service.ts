@@ -21,11 +21,19 @@ import {
   providerExecutionCredentialForClaim,
   providerExecutionLeaseToken,
   providerExecutionLeaseTokenHash,
+  providerExecutionResumeMode,
+  providerApprovalRequiredSettlementStatus,
   providerExecutionRequiresApproval,
   type CredentialExecutionMetadata,
   type MarketName,
   type ProviderExecutionActionClass,
 } from "@/lib/control-plane/provider-execution";
+import type { ProviderBrokerStage } from "@/lib/control-plane/provider-adapter-client";
+import {
+  assertDurableProviderClaim,
+  assertProviderBrokerRequestBinding,
+  providerSignerRequestId,
+} from "@/lib/control-plane/provider-execution-signer";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
 import {
   assertObservationTime,
@@ -602,7 +610,7 @@ async function recoverExpiredProviderLeases(now: Date) {
   }
 }
 
-function replayClaimToken(input: { signingKey: string; executionId: string; generation: number; workerId: string }) {
+function replayClaimToken(input: { signingKey: string | Buffer; executionId: string; generation: number; workerId: string }) {
   return providerExecutionLeaseToken(input);
 }
 
@@ -610,7 +618,7 @@ export async function claimProviderExecution(input: {
   workerId: string;
   leaseSeconds: number;
   idempotencyKey: string;
-  signingKey: string;
+  signingKey: string | Buffer;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -645,7 +653,7 @@ export async function claimProviderExecution(input: {
       });
       continue;
     }
-    const resumeMode = candidate.status === "READBACK_REQUIRED" ? "READBACK_FIRST" as const : "START" as const;
+    const resumeMode = providerExecutionResumeMode(candidate.status);
     const generation = candidate.leaseGeneration + 1;
     const leaseToken = providerExecutionLeaseToken({ signingKey: input.signingKey, executionId: candidate.id, generation, workerId: input.workerId });
     const expiresAt = new Date(now.getTime() + input.leaseSeconds * 1_000);
@@ -796,6 +804,113 @@ function commandClaim(execution: {
   };
 }
 
+export async function authorizeProviderBrokerRequest(input: {
+  executionId: string;
+  generation: number;
+  workerId: string;
+  subject: string;
+  stage: ProviderBrokerStage;
+  ordinal: number;
+  expectedRequestDigest: string;
+  nonceDigest: string;
+  now?: Date;
+}) {
+  if (!/^[0-9a-f]{64}$/.test(input.nonceDigest)) {
+    throw new ControlPlaneError("attestation nonce digest 형식이 올바르지 않습니다.", 400, "PROVIDER_ATTESTATION_NONCE_DIGEST_INVALID");
+  }
+  const now = input.now ?? new Date();
+  return prisma.$transaction(async (tx) => {
+    const execution = await tx.providerExecution.findUnique({ where: { id: input.executionId } });
+    if (!execution) {
+      throw new ControlPlaneError("durable provider claim을 찾을 수 없습니다.", 409, "PROVIDER_SIGNER_STALE_DURABLE_CLAIM");
+    }
+    const durableClaim = assertDurableProviderClaim({
+      claim: execution,
+      executionId: input.executionId,
+      generation: input.generation,
+      workerId: input.workerId,
+      now,
+    });
+    const resumeMode = execution.readbackRequiredAt ? "READBACK_FIRST" as const : "START" as const;
+    const envelope = commandClaim(execution, resumeMode, "not-returned-to-worker").envelope;
+    const request = assertProviderBrokerRequestBinding({
+      envelope,
+      subject: input.subject,
+      workerId: input.workerId,
+      stage: input.stage,
+      ordinal: input.ordinal,
+      expectedRequestDigest: input.expectedRequestDigest,
+    });
+    const attestationExpiresAt = new Date(Math.min(
+      now.getTime() + 60_000,
+      durableClaim.leaseExpiresAt.getTime(),
+      Date.parse(envelope.approval.expiresAt),
+    ));
+    if (attestationExpiresAt.getTime() - now.getTime() < 5_000) {
+      throw new ControlPlaneError("attestation 유효기간 안에 실행할 수 없습니다.", 409, "PROVIDER_SIGNER_STALE_DURABLE_CLAIM");
+    }
+    const requestId = providerSignerRequestId(input);
+    try {
+      await tx.providerExecutionEvent.create({
+        data: {
+          executionId: execution.id,
+          requestId,
+          type: "broker_attestation_issued",
+          generation: execution.leaseGeneration,
+          actor: "system:provider-attestation-signer",
+          payload: {
+            workerId: input.workerId,
+            subject: input.subject,
+            repoId: execution.repoId.toString(),
+            repository: execution.repoFullName,
+            sourceSha: execution.sourceSha,
+            bindingHash: execution.bindingHash,
+            leaseExpiresAt: durableClaim.leaseExpiresAt.toISOString(),
+            attestationExpiresAt: attestationExpiresAt.toISOString(),
+            stage: input.stage,
+            ordinal: input.ordinal,
+            route: request.path,
+            requestDigest: input.expectedRequestDigest,
+            nonceDigest: input.nonceDigest,
+          },
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new ControlPlaneError("같은 broker request의 attestation은 다시 발급할 수 없습니다.", 409, "PROVIDER_ATTESTATION_ALREADY_ISSUED");
+      }
+      throw error;
+    }
+    return {
+      request,
+      envelope,
+      attestationExpiresAt,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function currentProviderExecutionClaim(input: {
+  executionId: string;
+  generation: number;
+  workerId: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const execution = await prisma.providerExecution.findUnique({ where: { id: input.executionId } });
+  if (!execution) {
+    throw new ControlPlaneError("durable provider claim을 찾을 수 없습니다.", 409, "PROVIDER_SIGNER_STALE_DURABLE_CLAIM");
+  }
+  const durableClaim = assertDurableProviderClaim({
+    claim: execution,
+    executionId: input.executionId,
+    generation: input.generation,
+    workerId: input.workerId,
+    now,
+  });
+  const resumeMode = durableClaim && execution.readbackRequiredAt ? "READBACK_FIRST" as const : "START" as const;
+  return commandClaim(execution, resumeMode, "not-returned-to-worker");
+}
+
 function terminal(status: string) {
   return ["SUCCEEDED", "FAILED", "DEAD_LETTER", "CANCELLED", "HUMAN_ONLY_BLOCKED"].includes(status);
 }
@@ -882,9 +997,15 @@ export async function settleProviderExecution(input: {
     let observationId: string | null = null;
 
     if (parsed.outcome === "APPROVAL_REQUIRED") {
-      status = "WAITING_HUMAN_APPROVAL";
+      status = providerApprovalRequiredSettlementStatus({
+        readbackFirst,
+        readbackAttempts: execution.readbackAttempts,
+        maxAttempts: execution.maxAttempts,
+      });
       errorCode = parsed.errorCode ?? "PER_RUN_APPROVAL_REQUIRED";
-      eventType = "human_approval_required";
+      eventType = readbackFirst
+        ? status === "DEAD_LETTER" ? "dead_letter" : "readback_required"
+        : "human_approval_required";
     } else if (parsed.outcome === "HUMAN_REQUIRED") {
       status = "FAILED";
       errorCode = "HUMAN_REAUTH_REQUIRED";

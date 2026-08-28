@@ -55,6 +55,14 @@ for m in "${MANIFESTS[@]}"; do
   ok "$m ($got 곳)"
 done
 
+deployment_out="$("$render" "$root/k8s/deployment.yaml" "$IMG" "$SHA")"
+if [ "$(printf '%s' "$deployment_out" | grep -c "seorilabs.dev/source-sha: \"${SHA}\"")" -eq 2 ] &&
+   ! printf '%s' "$deployment_out" | grep -q '__BACKOFFICE_IMAGE_TAG__'; then
+  ok "web Pod label/annotation은 exact source SHA를 노출"
+else
+  ng "web Pod source SHA identity가 깨졌다"
+fi
+
 provider_worker="$root/k8s/provider-execution-worker.yaml"
 provider_out="$("$render" "$provider_worker" "$IMG" "$SHA")"
 if ! grep -q ':latest' "$provider_worker" &&
@@ -124,6 +132,9 @@ if printf '%s' "$provider_trigger_out" | grep -q "backoffice-provider-audit-trig
    ! printf '%s' "$provider_trigger_out" | grep -q 'log_bin_trust_function_creators\|GRANT TRIGGER\|MYSQL_PWD' &&
    printf '%s' "$provider_resolve_out" | grep -q "backoffice-provider-migration-resolve-${SHA:0:12}-" &&
    printf '%s' "$provider_resolve_out" | grep -q "image: ${IMG}" &&
+   printf '%s' "$provider_resolve_out" | grep -q -- '--recovery-state="$migration"' &&
+   printf '%s' "$provider_resolve_out" | grep -q 'provider migration recovery already complete' &&
+   printf '%s' "$provider_resolve_out" | grep -q '미해결 migration attempt가 있다' &&
    printf '%s' "$provider_resolve_out" | grep -q 'prisma migrate resolve --applied'; then
   ok "provider audit partial migration은 exact trigger와 immutable resolve Job으로만 복구"
 else
