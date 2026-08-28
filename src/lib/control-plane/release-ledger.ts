@@ -5,6 +5,12 @@ import {
   RELEASE_CANDIDATE_REQUIRED_GATES,
   type ReleaseGateName,
 } from "@/lib/control-plane/contracts";
+import {
+  evidenceLifecycleStage,
+  gateIdentitySatisfied,
+  lifecycleStageRank,
+  type GateObservationFact,
+} from "@/lib/control-plane/lifecycle-policy";
 import { assertObservationTime, ControlPlaneError } from "@/lib/control-plane/service";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
@@ -216,6 +222,29 @@ export function releaseCandidateStatus(
   return "PREPARED";
 }
 
+/** append-only 관측 row에서 전이 정책이 읽는 identity 증거만 뽑아낸다. */
+function gateObservationFact(row: {
+  id: string;
+  gate: string;
+  status: ReleaseGateStatus;
+  observedAt: Date;
+  createdAt: Date;
+  evidence: Prisma.JsonValue;
+}): GateObservationFact {
+  const evidence = row.evidence && typeof row.evidence === "object" && !Array.isArray(row.evidence)
+    ? row.evidence as Record<string, unknown>
+    : {};
+  return {
+    id: row.id,
+    gate: row.gate,
+    status: row.status,
+    observedAt: row.observedAt,
+    createdAt: row.createdAt,
+    providerReference: typeof evidence.providerReference === "string" ? evidence.providerReference : null,
+    publicIdentity: typeof evidence.publicIdentity === "string" ? evidence.publicIdentity : null,
+  };
+}
+
 function gateRequestHash(input: {
   candidateId: string;
   gate: ReleaseGateName;
@@ -279,6 +308,20 @@ export async function recordReleaseGateObservation(input: {
     ) {
       throw new ControlPlaneError("Gate evidence가 candidate의 source/config/artifact와 일치하지 않습니다.", 409, "EVIDENCE_MISMATCH");
     }
+    if (
+      input.status === "PASSED"
+      && !gateIdentitySatisfied({
+        gate: input.gate,
+        providerReference: input.evidence.providerReference ?? null,
+        publicIdentity: input.evidence.publicIdentity ?? null,
+      })
+    ) {
+      throw new ControlPlaneError(
+        "외부 단계 gate의 PASSED 관측에는 exact provider/public identity 증거가 필요합니다.",
+        409,
+        "GATE_IDENTITY_REQUIRED",
+      );
+    }
     const observation = await tx.releaseGateObservation.create({
       data: {
         candidateId: candidate.id,
@@ -293,45 +336,41 @@ export async function recordReleaseGateObservation(input: {
     });
     const observations = await tx.releaseGateObservation.findMany({
       where: { candidateId: candidate.id },
-      select: { gate: true, status: true, observedAt: true, createdAt: true, id: true },
+      select: { gate: true, status: true, observedAt: true, createdAt: true, id: true, evidence: true },
     });
     const status = releaseCandidateStatus(observations);
     await tx.releaseCandidate.update({ where: { id: candidate.id }, data: { status } });
-    if (status === "READY") {
+    const evidenceStage = evidenceLifecycleStage(observations.map(gateObservationFact));
+    if (evidenceStage) {
       const state = await tx.fleetLifecycleState.findUnique({ where: { appId: candidate.appId } });
-      const rank = [
-        "IDEA", "PLANNING", "SPEC_REVIEW", "APPROVED", "BUILD", "QA", "RELEASE_ASSETS",
-        "RELEASE_CANDIDATE", "SUBMITTED", "REVIEW", "APPROVED_FOR_RELEASE", "DEPLOYED",
-        "PUBLIC_VERIFIED", "MONITORED",
-      ];
-      if (!state || rank.indexOf(state.stage) < rank.indexOf("RELEASE_CANDIDATE")) {
+      if (!state || lifecycleStageRank(state.stage) < lifecycleStageRank(evidenceStage)) {
         await tx.fleetLifecycleState.upsert({
           where: { appId: candidate.appId },
           create: {
             appId: candidate.appId,
-            stage: "RELEASE_CANDIDATE",
+            stage: evidenceStage,
             sourceSha: candidate.sourceSha,
             configRevisionId: candidate.configRevisionId,
             generation: 1,
           },
           update: {
-            stage: "RELEASE_CANDIDATE",
+            stage: evidenceStage,
             sourceSha: candidate.sourceSha,
             configRevisionId: candidate.configRevisionId,
             generation: { increment: 1 },
           },
         });
         await tx.fleetLifecycleEvent.upsert({
-          where: { idempotencyKey: `candidate-ready:${candidate.id}` },
+          where: { idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}` },
           create: {
             appId: candidate.appId,
             fromStage: state?.stage,
-            toStage: "RELEASE_CANDIDATE",
+            toStage: evidenceStage,
             sourceSha: candidate.sourceSha,
             configRevisionId: candidate.configRevisionId,
             actor: input.actor,
-            idempotencyKey: `candidate-ready:${candidate.id}`,
-            evidence: { candidateId: candidate.id },
+            idempotencyKey: `candidate-evidence:${candidate.id}:${evidenceStage}`,
+            evidence: { candidateId: candidate.id, gate: input.gate, observationId: observation.id },
           },
           update: {},
         });
@@ -348,6 +387,7 @@ export async function recordReleaseGateObservation(input: {
           gate: input.gate,
           status: input.status,
           candidateStatus: status,
+          lifecycleStage: evidenceStage,
           sourceSha: candidate.sourceSha,
           configRevision: candidate.configRevision.revision,
           artifactChecksum: candidate.artifactChecksum,
