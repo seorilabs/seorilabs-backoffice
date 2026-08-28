@@ -454,6 +454,13 @@ test("권한 checker는 배포 kubeconfig에서만 실행되고 접근 불가를
   // resourceNames Role이므로 정확한 리소스 이름으로 묻는다.
   assert.match(checker, /get:configmap\/backoffice-provider-audit-trigger-state/);
   assert.match(checker, /get:cronjob\/vault-indexer/);
+  // can-i는 named 권한을 놓치므로 전체 규칙을 review로 읽어 금지 조합 부재를 증명한다.
+  assert.match(checker, /SelfSubjectRulesReview/);
+  assert.match(checker, /status\.resourceRules/);
+  assert.match(checker, /status\.incomplete/);
+  assert.match(checker, /권한 목록이 불완전해/);
+  assert.match(checker, /pods jobs cronjobs deployments/);
+  assert.match(checker, /create patch update delete deletecollection/);
   for (const denied of ["create:jobs", "patch:pods", "get:secrets", "patch:cronjob/vault-indexer"]) {
     assert.ok(checker.includes(`"${denied}"`), `${denied} 거부 검증이 없다`);
   }

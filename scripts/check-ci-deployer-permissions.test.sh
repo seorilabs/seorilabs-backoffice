@@ -22,6 +22,20 @@ if [[ "$args" == *"auth whoami"* ]]; then
   exit 0
 fi
 
+if [[ "$args" == *"create -f -"* ]]; then
+  cat >/dev/null
+  if [ "${FAKE_RULES_UNREADABLE:-false}" = true ]; then
+    printf 'Error from server: selfsubjectrulesreviews.authorization.k8s.io is forbidden\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "${FAKE_RULES_INCOMPLETE:-false}"
+  # 기본은 이 PR이 남기는 read-only 권한이다.
+  printf '["get"]|[""]|["configmaps"]\n'
+  printf '["get"]|["batch"]|["cronjobs"]\n'
+  [ -z "${FAKE_EXTRA_RULE:-}" ] || printf '%s\n' "$FAKE_EXTRA_RULE"
+  exit 0
+fi
+
 if [[ "$args" == *"auth can-i"* ]]; then
   read -r _ _ verb resource _ <<< "$args"
   case "${verb}:${resource}" in
@@ -88,5 +102,43 @@ for pair in get:configmap/backoffice-provider-audit-trigger-state get:cronjob/va
   fi
 done
 echo "  ok   read 권한 부재도 fail-closed"
+
+echo "== rules review에 섞인 named secret·workload 권한을 잡는다 =="
+# can-i는 이름 없는 질문에 no를 돌려주므로 named 권한을 놓친다. rules review가 잡아야 한다.
+while IFS='#' read -r label rule; do
+  [ -n "$label" ] || continue
+  if run_check FAKE_EXTRA_RULE="$rule" >/dev/null 2>&1; then
+    echo "FAIL $label 이 통과로 처리됐다" >&2
+    exit 1
+  fi
+  echo "  ok   $label fail-closed"
+done <<'CASES'
+named secret get#["get"]|[""]|["secrets"]
+named secret watch#["watch"]|[""]|["secrets"]
+named cronjob patch#["patch"]|["batch"]|["cronjobs"]
+named job create#["create"]|["batch"]|["jobs"]
+pod update#["update"]|[""]|["pods"]
+deployment delete#["delete"]|["apps"]|["deployments"]
+wildcard verb on cronjobs#["*"]|["batch"]|["cronjobs"]
+wildcard resource in core group#["get"]|[""]|["*"]
+wildcard group and resource#["create"]|["*"]|["*"]
+CASES
+
+echo "== rules review를 읽지 못하거나 불완전하면 실패한다 =="
+if run_check FAKE_RULES_UNREADABLE=true >/dev/null 2>&1; then
+  echo "FAIL rules review 조회 실패가 통과로 처리됐다" >&2
+  exit 1
+fi
+if run_check FAKE_RULES_INCOMPLETE=true >/dev/null 2>&1; then
+  echo "FAIL 불완전한 권한 목록이 통과로 처리됐다" >&2
+  exit 1
+fi
+echo "  ok   fail-closed"
+
+echo "== 무해한 추가 read 권한은 통과한다 =="
+for rule in '["get"]|[""]|["configmaps"]' '["get","list"]|["batch"]|["cronjobs"]'; do
+  run_check FAKE_EXTRA_RULE="$rule" >/dev/null
+done
+echo "  ok   read-only 규칙은 허용"
 
 echo "check-ci-deployer-permissions 계약 통과"

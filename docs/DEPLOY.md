@@ -155,8 +155,16 @@ root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`
 확인한다. deploy job이 `KUBECONFIG_B64`를 설치한 직후, 배포 전에 실행한다. checker는 먼저
 `kubectl auth whoami`로 identity가 정확히 `system:serviceaccount:platform:ci-deployer`인지 보고,
 `resourceNames` Role이므로 정확한 리소스 이름(`configmap/backoffice-provider-audit-trigger-state`,
-`cronjob/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한 뒤 workload·secret·ConfigMap
-mutation이 모두 거부되는지 본다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
+`cronjob/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한다.
+
+거부 쪽은 `can-i`만으로 증명할 수 없다. 이름 없는 질문은 다른 `resourceNames` 권한이 남아 있어도
+`no`를 돌려주기 때문이다. 그래서 현재 identity의 `data` namespace 전체 규칙을
+`SelfSubjectRulesReview`로 읽어 `secrets`+`get`/`list`/`watch`와
+`pods`/`jobs`/`cronjobs`/`deployments`+`create`/`patch`/`update`/`delete`/`deletecollection` 조합이
+하나라도 있으면 fail-closed한다. wildcard(`*`) group·resource·verb도 같은 조합으로 친다. 권한
+목록이 불완전(`status.incomplete=true`)하면 부재를 증명할 수 없으므로 실패한다. 이 review는
+read-only이며 지속 리소스를 만들지 않는다. 이름을 지정한 `can-i` 거부 검증은 exact 경로 회귀를
+잡는 보조 검증으로 함께 유지한다. impersonation(`--as`)은 ci-deployer에 권한이 없어 쓰지 않으며,
 클러스터 접근 불가와 identity 불일치는 skip이 아니라 실패다. PR CI에는 kubeconfig가 없으므로
 static 계약 테스트 `check-ci-deployer-permissions.test.sh`만 돈다.
 
