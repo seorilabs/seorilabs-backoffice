@@ -209,6 +209,8 @@ export const CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION =
   "config-revision-manual-source/v1";
 export const CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION =
   "config-revision-source-rebase/v1";
+export const CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION =
+  "config-revision-source-auto-rebase/v1";
 export const CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION =
   "config-revision-discovery-projection/v2";
 
@@ -465,6 +467,61 @@ export function configSourceBindingsMatch(
     && left.sourceSha === right.sourceSha
     && left.payloadHash === right.payloadHash
   );
+}
+
+export type ConfigSourceAutoRebaseNeedsInputReason =
+  | "ACTIVE_CONFIG_MISSING"
+  | "ACTIVE_SNAPSHOT_INVALID"
+  | "BUILD_TARGET_MARKET_CHANGED"
+  | "DESIRED_PAYLOAD_CHANGED"
+  | "LEGACY_DRAFT_REQUIRES_INPUT";
+
+type SourceRebaseBuildTarget = {
+  market: string | null;
+  observedSha: string | null;
+};
+
+/**
+ * 자동 활성화는 current source에서 확인된 market 집합과 서명된 ACTIVE payload가
+ * 완전히 같은 경우에만 허용한다. locale, 법적 선언, asset, cloud/provider 설정은
+ * discovery가 판단하지 않고 payload 전체 digest 동일성으로 변경 0건을 강제한다.
+ */
+export function assessConfigSourceAutoRebaseSafety(input: {
+  sourceSha: string;
+  activePayload: Record<string, unknown>;
+  desiredPayload: Record<string, unknown>;
+  buildTargets: SourceRebaseBuildTarget[];
+}): ConfigSourceAutoRebaseNeedsInputReason | null {
+  const active = configRevisionPayloadSchema.parse(input.activePayload);
+  const desired = configRevisionPayloadSchema.parse(input.desiredPayload);
+  if (
+    jsonDigest(active as unknown as JsonValue)
+    !== jsonDigest(desired as unknown as JsonValue)
+  ) {
+    return "DESIRED_PAYLOAD_CHANGED";
+  }
+
+  const enabledMarkets = active.markets
+    .filter((profile) => profile.enabled)
+    .map((profile) => profile.market)
+    .sort();
+  const currentMarketCounts = new Map<string, number>();
+  for (const target of input.buildTargets) {
+    if (
+      target.observedSha?.toLowerCase() !== input.sourceSha.toLowerCase()
+      || !BUILD_TARGET_MARKETS.includes(target.market as BuildTargetMarket)
+    ) continue;
+    currentMarketCounts.set(target.market!, (currentMarketCounts.get(target.market!) ?? 0) + 1);
+  }
+  const currentMarkets = [...currentMarketCounts.keys()].sort();
+  if (
+    enabledMarkets.length !== currentMarkets.length
+    || enabledMarkets.some((market, index) => market !== currentMarkets[index])
+    || enabledMarkets.some((market) => currentMarketCounts.get(market) !== 1)
+  ) {
+    return "BUILD_TARGET_MARKET_CHANGED";
+  }
+  return null;
 }
 
 export function isLegacyDiscoveryProjectionSource(input: {
@@ -1366,14 +1423,113 @@ export async function createDiscoveryProjectedConfigRevision(input: {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
 
-export async function activateConfigRevision(input: {
+type ConfigRevisionActivationInput = {
   repoId: bigint;
   revision: number;
   expectedActiveRevision: number;
   actor: string;
   idempotencyKey: string;
   signingKey: string;
-}) {
+};
+
+async function activateConfigRevisionInTransaction(
+  tx: Prisma.TransactionClient,
+  input: ConfigRevisionActivationInput,
+) {
+  const app = await appForRepoId(tx, input.repoId);
+  await tx.$queryRaw`SELECT id FROM app WHERE id = ${app.id} FOR UPDATE`;
+  const active = await tx.configRevision.findFirst({
+    where: { appId: app.id, status: "ACTIVE" },
+    orderBy: { revision: "desc" },
+  });
+  const target = await tx.configRevision.findUnique({
+    where: { appId_revision: { appId: app.id, revision: input.revision } },
+    include: { legacyConfigImport: { select: { id: true } } },
+  });
+  if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
+  // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
+  assertConfigRevisionPayload(target.payload);
+  if (jsonDigest(target.payload as JsonValue) !== target.payloadHash) {
+    throw new ControlPlaneError(
+      "Config revision payload가 저장 digest와 일치하지 않습니다.",
+      409,
+      "CONFIG_REVISION_PAYLOAD_DRIFT",
+    );
+  }
+  assertActivationPreconditions({
+    actualActiveRevision: active?.revision ?? 0,
+    expectedActiveRevision: input.expectedActiveRevision,
+    targetStatus: target.status,
+    // append-only import relation이 운영자 DB 조작으로 훼손돼도 파생 DRAFT key가
+    // 남아 있는 한 activation을 fail-closed한다.
+    shadowImportId: target.legacyConfigImport?.id
+      ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
+  });
+
+  const activatedAt = new Date();
+  const snapshot = {
+    schemaVersion: 1,
+    appId: app.id,
+    repoId: app.repoId?.toString() ?? null,
+    repoFullName: app.repoFullName,
+    revision: target.revision,
+    payloadHash: target.payloadHash,
+    payload: target.payload,
+    activatedAt: activatedAt.toISOString(),
+  } as JsonValue;
+  const signed = signSnapshot(snapshot, input.signingKey);
+
+  if (active) {
+    const superseded = await tx.configRevision.updateMany({
+      where: {
+        id: active.id,
+        status: "ACTIVE",
+        activeSlot: app.id,
+      },
+      data: {
+        status: "SUPERSEDED",
+        activeSlot: null,
+        supersededAt: activatedAt,
+      },
+    });
+    if (superseded.count !== 1) {
+      throw new ControlPlaneError("ACTIVE Config revision CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
+    }
+  }
+  const updated = await tx.configRevision.updateMany({
+    where: { id: target.id, status: "DRAFT", activeSlot: null },
+    data: {
+      status: "ACTIVE",
+      activeSlot: app.id,
+      activationIdempotencyKey: input.idempotencyKey,
+      activatedSnapshot: jsonInput(snapshot),
+      snapshotDigest: signed.digest,
+      snapshotSignature: signed.signature,
+      activatedAt,
+    },
+  });
+  if (updated.count !== 1) {
+    throw new ControlPlaneError("Config revision activation CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
+  }
+  const revision = await tx.configRevision.findUniqueOrThrow({ where: { id: target.id } });
+  await tx.auditLog.create({
+    data: {
+      actorLogin: input.actor,
+      action: "control-plane.config.activate",
+      entityType: "ConfigRevision",
+      entityId: revision.id,
+      payload: {
+        appId: app.id,
+        revision: revision.revision,
+        previousRevision: active?.revision ?? null,
+        snapshotDigest: signed.digest,
+      },
+    },
+  });
+  return revision;
+}
+
+export async function activateConfigRevision(input: ConfigRevisionActivationInput) {
   const replay = await prisma.configRevision.findUnique({
     where: { activationIdempotencyKey: input.idempotencyKey },
     include: { app: { select: { repoId: true } } },
@@ -1390,83 +1546,321 @@ export async function activateConfigRevision(input: {
   }
 
   return prisma.$transaction(async (tx) => {
-    const app = await appForRepoId(tx, input.repoId);
-    await tx.$queryRaw`SELECT id FROM app WHERE id = ${app.id} FOR UPDATE`;
-    const active = await tx.configRevision.findFirst({
-      where: { appId: app.id, status: "ACTIVE" },
-      orderBy: { revision: "desc" },
-    });
-    const target = await tx.configRevision.findUnique({
-      where: { appId_revision: { appId: app.id, revision: input.revision } },
-      include: { legacyConfigImport: { select: { id: true } } },
-    });
-    if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
-    // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
-    assertConfigRevisionPayload(target.payload);
-    assertActivationPreconditions({
-      actualActiveRevision: active?.revision ?? 0,
-      expectedActiveRevision: input.expectedActiveRevision,
-      targetStatus: target.status,
-      // append-only import relation이 운영자 DB 조작으로 훼손돼도 파생 DRAFT key가
-      // 남아 있는 한 activation을 fail-closed한다.
-      shadowImportId: target.legacyConfigImport?.id
-        ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
-    });
+    const revision = await activateConfigRevisionInTransaction(tx, input);
+    return { revision, duplicate: false };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
 
-    const activatedAt = new Date();
-    const snapshot = {
-      schemaVersion: 1,
-      appId: app.id,
-      repoId: app.repoId?.toString() ?? null,
-      repoFullName: app.repoFullName,
-      revision: target.revision,
-      payloadHash: target.payloadHash,
-      payload: target.payload,
-      activatedAt: activatedAt.toISOString(),
-    } as JsonValue;
-    const signed = signSnapshot(snapshot, input.signingKey);
-
-    if (active) {
-      await tx.configRevision.update({
-        where: { id: active.id },
-        data: {
-          status: "SUPERSEDED",
-          activeSlot: null,
-          supersededAt: activatedAt,
-        },
-      });
+export type ConfigSourceAutoRebaseResult =
+  | {
+      outcome: "ALREADY_CURRENT";
+      revision: ConfigRevision;
+      sourceObservation: ConfigSourceObservation;
+      duplicate: boolean;
     }
-    const updated = await tx.configRevision.updateMany({
-      where: { id: target.id, status: "DRAFT", activeSlot: null },
-      data: {
-        status: "ACTIVE",
-        activeSlot: app.id,
-        activationIdempotencyKey: input.idempotencyKey,
-        activatedSnapshot: jsonInput(snapshot),
-        snapshotDigest: signed.digest,
-        snapshotSignature: signed.signature,
-        activatedAt,
+  | {
+      outcome: "SOURCE_REBASED_AND_ACTIVATED";
+      revision: ConfigRevision;
+      sourceObservation: ConfigSourceObservation;
+      previousRevision: number;
+      duplicate: boolean;
+    }
+  | {
+      outcome: "NEEDS_INPUT";
+      reason: ConfigSourceAutoRebaseNeedsInputReason;
+      sourceObservation: ConfigSourceObservation;
+      revision: ConfigRevision | null;
+      duplicate: false;
+    };
+
+/**
+ * Hourly desired-state scheduler 전용 source-only activation이다. caller는 SHA나
+ * revision을 고르지 못하고, registration/app lock 아래 current discovery와 ACTIVE
+ * snapshot을 다시 읽는다. payload 또는 current BuildTarget market이 달라지면
+ * 기존 DRAFT를 보존한 채 NEEDS_INPUT으로 끝낸다.
+ */
+export async function autoRebaseCurrentActiveConfigSource(input: {
+  repoId: bigint;
+  actor: string;
+  signingKey: string;
+}): Promise<ConfigSourceAutoRebaseResult> {
+  return prisma.$transaction(async (tx) => {
+    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const activeRevisions = await tx.configRevision.findMany({
+      where: { appId: source.app.id, status: "ACTIVE" },
+      orderBy: { revision: "desc" },
+      take: 2,
+      include: {
+        sourceObservation: {
+          select: {
+            id: true,
+            appId: true,
+            sourceSha: true,
+            sourceRef: true,
+            payload: true,
+            payloadHash: true,
+            requestHash: true,
+          },
+        },
       },
     });
-    if (updated.count !== 1) {
-      throw new ControlPlaneError("Config revision activation CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
+    if (activeRevisions.length !== 1) {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: "ACTIVE_CONFIG_MISSING",
+        sourceObservation: source.observation,
+        revision: activeRevisions[0] ?? null,
+        duplicate: false,
+      };
     }
-    const revision = await tx.configRevision.findUniqueOrThrow({ where: { id: target.id } });
+    const active = activeRevisions[0]!;
+    let activePayload: Record<string, unknown>;
+    try {
+      activePayload = configPayloadFromSignedSnapshot({
+        revision: active,
+        signingKey: input.signingKey,
+        appId: source.app.id,
+        repoId: input.repoId.toString(),
+        repoFullName: source.app.repoFullName,
+      });
+      const snapshot = jsonRecord(active.activatedSnapshot);
+      if (
+        active.activeSlot !== source.app.id
+        || !active.activatedAt
+        || snapshot?.activatedAt !== active.activatedAt.toISOString()
+      ) throw new Error("ACTIVE_SNAPSHOT_TIME_MISMATCH");
+    } catch {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: "ACTIVE_SNAPSHOT_INVALID",
+        sourceObservation: source.observation,
+        revision: active,
+        duplicate: false,
+      };
+    }
+
+    if (configSourceBindingsMatch(active.sourceObservation, source.observation)) {
+      return {
+        outcome: "ALREADY_CURRENT",
+        revision: active,
+        sourceObservation: source.observation,
+        duplicate: false,
+      };
+    }
+
+    const latest = await tx.configRevision.findFirst({
+      where: { appId: source.app.id },
+      orderBy: { revision: "desc" },
+      include: {
+        legacyConfigImport: { select: { id: true } },
+        sourceObservation: {
+          select: {
+            id: true,
+            appId: true,
+            sourceSha: true,
+            sourceRef: true,
+            payload: true,
+            payloadHash: true,
+            requestHash: true,
+          },
+        },
+      },
+    });
+    if (!latest) {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: "ACTIVE_CONFIG_MISSING",
+        sourceObservation: source.observation,
+        revision: active,
+        duplicate: false,
+      };
+    }
+    if (
+      latest.status === "DRAFT"
+      && (
+        latest.legacyConfigImport
+        || latest.idempotencyKey.startsWith("legacy-shadow-draft:")
+      )
+    ) {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: "LEGACY_DRAFT_REQUIRES_INPUT",
+        sourceObservation: source.observation,
+        revision: latest,
+        duplicate: false,
+      };
+    }
+
+    let desiredPayload: Record<string, unknown>;
+    try {
+      assertConfigRevisionPayload(latest.payload);
+      if (jsonDigest(latest.payload as JsonValue) !== latest.payloadHash) {
+        throw new Error("CONFIG_REVISION_PAYLOAD_DRIFT");
+      }
+      desiredPayload = latest.payload;
+    } catch {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: "DESIRED_PAYLOAD_CHANGED",
+        sourceObservation: source.observation,
+        revision: latest,
+        duplicate: false,
+      };
+    }
+    const buildTargets = await tx.buildTarget.findMany({
+      where: { appId: source.app.id },
+      orderBy: { targetKey: "asc" },
+      select: { market: true, observedSha: true },
+    });
+    const safetyReason = assessConfigSourceAutoRebaseSafety({
+      sourceSha: source.observation.sourceSha,
+      activePayload,
+      desiredPayload,
+      buildTargets,
+    });
+    if (safetyReason) {
+      return {
+        outcome: "NEEDS_INPUT",
+        reason: safetyReason,
+        sourceObservation: source.observation,
+        revision: latest,
+        duplicate: false,
+      };
+    }
+
+    const idempotencyBase = `config-source-auto-rebase:${source.app.id}:${source.observation.id}`;
+    const activationIdempotencyKey = `${idempotencyBase}:activate`;
+    const replay = await tx.configRevision.findUnique({
+      where: { activationIdempotencyKey },
+    });
+    if (replay) {
+      if (
+        replay.appId !== source.app.id
+        || replay.sourceObservationId !== source.observation.id
+        || replay.payloadHash !== active.payloadHash
+      ) {
+        throw new ControlPlaneError(
+          "같은 자동 source rebase key가 다른 revision에 사용되었습니다.",
+          409,
+          "IDEMPOTENCY_CONFLICT",
+        );
+      }
+      return {
+        outcome: "SOURCE_REBASED_AND_ACTIVATED",
+        revision: replay,
+        sourceObservation: source.observation,
+        previousRevision: active.revision,
+        duplicate: true,
+      };
+    }
+
+    let target: ConfigRevision | null = latest.status === "DRAFT"
+      && configSourceBindingsMatch(latest.sourceObservation, source.observation)
+      ? latest
+      : null;
+    if (!target) {
+      const existing = await tx.configRevision.findFirst({
+        where: {
+          appId: source.app.id,
+          sourceObservationId: source.observation.id,
+          backfillContractVersion: CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
+        },
+      });
+      if (existing) {
+        if (
+          existing.status !== "DRAFT"
+          || existing.payloadHash !== active.payloadHash
+          || jsonDigest(existing.payload as JsonValue) !== active.payloadHash
+        ) {
+          throw new ControlPlaneError(
+            "기존 자동 source rebase revision identity가 일치하지 않습니다.",
+            409,
+            "IDEMPOTENCY_CONFLICT",
+          );
+        }
+        target = existing;
+      } else {
+        target = await createDraftRevisionInTransaction(tx, {
+          appId: source.app.id,
+          payload: activePayload,
+          payloadHash: active.payloadHash,
+          createdBy: input.actor,
+          idempotencyKey: `${idempotencyBase}:draft`,
+          sourceObservationId: source.observation.id,
+          backfillContractVersion: CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
+        });
+        await tx.auditLog.create({
+          data: {
+            actorLogin: input.actor,
+            action: "control-plane.config.source-rebased",
+            entityType: "ConfigRevision",
+            entityId: target.id,
+            payload: {
+              appId: source.app.id,
+              repoId: input.repoId.toString(),
+              fromRevisionId: active.id,
+              fromRevision: active.revision,
+              fromStatus: active.status,
+              revision: target.revision,
+              payloadHash: target.payloadHash,
+              sourceObservationId: source.observation.id,
+              sourceSha: source.observation.sourceSha,
+              observationPayloadHash: source.observation.payloadHash,
+              contractVersion: CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
+              payloadChanged: false,
+              activationAttempted: true,
+            },
+          },
+        });
+      }
+    }
+    if (!target) {
+      throw new ControlPlaneError(
+        "자동 source rebase target을 확정할 수 없습니다.",
+        409,
+        "REVISION_CONFLICT",
+      );
+    }
+
+    const revision = await activateConfigRevisionInTransaction(tx, {
+      repoId: input.repoId,
+      revision: target.revision,
+      expectedActiveRevision: active.revision,
+      actor: input.actor,
+      idempotencyKey: activationIdempotencyKey,
+      signingKey: input.signingKey,
+    });
     await tx.auditLog.create({
       data: {
         actorLogin: input.actor,
-        action: "control-plane.config.activate",
+        action: "control-plane.config.source-auto-activated",
         entityType: "ConfigRevision",
         entityId: revision.id,
         payload: {
-          appId: app.id,
+          appId: source.app.id,
+          repoId: input.repoId.toString(),
+          previousRevisionId: active.id,
+          previousRevision: active.revision,
           revision: revision.revision,
-          previousRevision: active?.revision ?? null,
-          snapshotDigest: signed.digest,
+          sourceObservationId: source.observation.id,
+          sourceSha: source.observation.sourceSha,
+          payloadHash: revision.payloadHash,
+          contractVersion: CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
+          payloadChanged: false,
+          legalOrComplianceChanged: false,
+          paymentChanged: false,
+          reviewOrPublicApprovalChanged: false,
+          providerMutationAttempted: false,
         },
       },
     });
-    return { revision, duplicate: false };
+    return {
+      outcome: "SOURCE_REBASED_AND_ACTIVATED",
+      revision,
+      sourceObservation: source.observation,
+      previousRevision: active.revision,
+      duplicate: false,
+    };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 

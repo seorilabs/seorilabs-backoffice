@@ -47,7 +47,7 @@ export default async function SettingsPage() {
         <Card title="Fleet 등록과 중앙 DRAFT">
           <Row k="Repository 분류" v={`${fleetSummary.classificationCounts.PRODUCT_APP} 제품 · ${fleetSummary.classificationCounts.INFRA_REPO} 인프라 · ${fleetSummary.classificationCounts.PLATFORM_PRODUCER} 플랫폼 · ${fleetSummary.classificationCounts.EXCLUDED} 제외 - 보관 ${fleetSummary.classificationCounts.ARCHIVED} 포함`} />
           <Row k="미분류 / legacy" v={`${fleetSummary.classificationCounts.UNCLASSIFIED} / ${fleetSummary.classificationCounts.LEGACY_APP}`} />
-          <Row k="ACTIVE 앱" v={`${fleetSummary.activeApps}개`} />
+          <Row k="중앙 앱 cohort" v={`${fleetSummary.activeApps}개`} />
           <Row k="DRAFT 생성 가능" v={`${fleetSummary.readyForDraft}개`} />
           <Row k="중앙 설정 있음" v={`${fleetSummary.alreadyConfigured}개`} />
           <Row k="입력 필요" v={`${fleetSummary.needsInput}개`} />
@@ -58,10 +58,10 @@ export default async function SettingsPage() {
                 <span>{count}개</span>
               </div>
             ))}
-            {fleetSummary.needsInput === 0 && <p>현재 입력이 필요한 ACTIVE 앱이 없습니다.</p>}
+            {fleetSummary.needsInput === 0 && <p>현재 입력이 필요한 중앙 cohort 앱이 없습니다.</p>}
           </div>
           <p className="mt-3 text-xs text-neutral-500">
-            이 자동화는 exact-SHA discovery에서 확인된 market만 DRAFT로 만들며 활성화, provider 변경, 법적 선언, 소유권·결제·심사·공개 승인은 수행하지 않습니다.
+            이 자동화는 exact-SHA discovery에서 확인된 market만 새 DRAFT로 만들고, 검증된 기존 ACTIVE config의 source-only revision만 자동 활성화합니다. provider 변경, 법적 선언, 소유권·결제·심사·공개 승인은 수행하지 않습니다.
           </p>
         </Card>
 

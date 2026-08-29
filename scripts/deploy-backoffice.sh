@@ -17,7 +17,7 @@ audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
 audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
 verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-3360}"
-desired_state_backfill_contract="desired-state-draft-backfill/v2"
+desired_state_backfill_contract="desired-state-safe-source-rebase/v3"
 
 if [ -z "$image" ]; then
   echo "오류: BACKOFFICE_IMAGE가 필요하다" >&2

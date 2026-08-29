@@ -37,7 +37,7 @@ spec:
             - |
               failed=0
               source_sha="__BACKOFFICE_IMAGE_TAG__"
-              expected_backfill_contract="desired-state-draft-backfill/v2"
+              expected_backfill_contract="desired-state-safe-source-rebase/v3"
               token="$(cat /var/run/secrets/seorilabs/admin-token)"
               call() {
                 label="$1"

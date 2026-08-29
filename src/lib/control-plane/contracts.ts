@@ -921,8 +921,8 @@ export const configRevisionDiscoveryDraftSchema = configRevisionSourceRebaseSche
 }).strict();
 
 export const desiredStateBackfillSchema = z.object({
-  schemaVersion: z.literal(1),
-  mode: z.literal("DRAFT_ONLY"),
+  schemaVersion: z.literal(2),
+  mode: z.literal("DRAFT_AND_SAFE_SOURCE_REBASE"),
 }).strict();
 
 const repositoryCandidateMarkerPath = z.string().min(1).max(512).refine((value) => (

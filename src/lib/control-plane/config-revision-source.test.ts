@@ -7,6 +7,7 @@ import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revisi
 import { configRevisionDiscoveryDraftSchema } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
+  assessConfigSourceAutoRebaseSafety,
   assertConfigRevisionReplay,
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
@@ -14,6 +15,7 @@ import {
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
   CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+  CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
   CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
   ControlPlaneError,
   isLegacyDiscoveryProjectionSource,
@@ -278,6 +280,66 @@ test("일반 rebase는 legacy DRAFT를 거부하고 semantic source가 같으면
   assert.equal(configSourceBindingsMatch(left, { ...right, payloadHash: "f".repeat(64) }), false);
 });
 
+test("source-only 자동 활성화는 payload 전체와 exact-SHA market 집합이 모두 같아야 한다", () => {
+  const activePayload = {
+    schemaVersion: 1,
+    markets: [{
+      market: "google-play",
+      enabled: true,
+      locales: ["ko-KR"],
+      releaseChannel: "internal",
+    }],
+    complianceDrafts: [{
+      market: "google-play",
+      declaration: "data-safety",
+      state: "DRAFT",
+      draft: true,
+    }],
+  };
+  assert.equal(assessConfigSourceAutoRebaseSafety({
+    sourceSha: SOURCE_SHA,
+    activePayload,
+    desiredPayload: structuredClone(activePayload),
+    buildTargets: [{ market: "google-play", observedSha: SOURCE_SHA }],
+  }), null);
+  assert.equal(assessConfigSourceAutoRebaseSafety({
+    sourceSha: SOURCE_SHA,
+    activePayload,
+    desiredPayload: {
+      ...activePayload,
+      complianceDrafts: [{
+        market: "google-play",
+        declaration: "data-safety",
+        state: "DRAFT",
+        draft: false,
+      }],
+    },
+    buildTargets: [{ market: "google-play", observedSha: SOURCE_SHA }],
+  }), "DESIRED_PAYLOAD_CHANGED");
+  for (const buildTargets of [
+    [{ market: "google-play", observedSha: "c".repeat(40) }],
+    [
+      { market: "google-play", observedSha: SOURCE_SHA },
+      { market: "google-play", observedSha: SOURCE_SHA },
+    ],
+    [
+      { market: "google-play", observedSha: SOURCE_SHA },
+      { market: "app-store", observedSha: SOURCE_SHA },
+    ],
+  ]) {
+    assert.equal(assessConfigSourceAutoRebaseSafety({
+      sourceSha: SOURCE_SHA,
+      activePayload,
+      desiredPayload: activePayload,
+      buildTargets,
+    }), "BUILD_TARGET_MARKET_CHANGED");
+  }
+  assert.equal(
+    CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION,
+    "config-revision-source-auto-rebase/v1",
+  );
+});
+
 test("legacy discovery projection은 exact import relation과 parity evidence를 모두 요구한다", () => {
   const evidence = {
     revisionId: "revision-1",
@@ -312,7 +374,7 @@ test("legacy discovery projection은 exact import relation과 parity evidence를
   }).kind, "LEGACY_IMPORT");
 });
 
-test("rebase와 legacy projection은 append-only audit만 남기고 activation을 분리한다", () => {
+test("수동 rebase와 legacy projection은 activation을 분리하고 중앙 safe rebase만 원자 활성화한다", () => {
   const service = readFileSync(join(process.cwd(), "src/lib/control-plane/service.ts"), "utf8");
   const rebaseRoute = readFileSync(
     join(process.cwd(), "src/app/api/control-plane/config-revisions/rebase/route.ts"),
@@ -327,4 +389,7 @@ test("rebase와 legacy projection은 append-only audit만 남기고 activation�
   assert.match(service, /legacyPayloadCopied: false,[\s\S]*activationAttempted: false/);
   assert.doesNotMatch(rebaseRoute, /activateConfigRevision/);
   assert.doesNotMatch(projectionRoute, /activateConfigRevision/);
+  assert.match(service, /action: "control-plane\.config\.source-auto-activated"/);
+  assert.match(service, /legalOrComplianceChanged: false/);
+  assert.match(service, /providerMutationAttempted: false/);
 });
