@@ -134,7 +134,8 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
   assert.match(nextConfig, /@img/);
   assert.match(nextConfig, /sharp/);
 
-  // Prisma arm64 query engine 은 빌드 호스트가 아니라 이 선언으로 생성된다.
+  // Prisma arm64 query engine 은 빌드 호스트가 아니라 이 선언으로 생성하고,
+  // standalone을 runtime에 복사하기 전에 host-native engine을 제거한다.
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
   assert.match(schema, /binaryTargets\s*=\s*\[[^\]]*linux-arm64-openssl-3\.0\.x/);
 
@@ -146,4 +147,13 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
   );
   assert.match(dockerfile, /^FROM node:[\d.]+-bookworm-slim AS runtime$/m);
   assert.doesNotMatch(dockerfile, /FROM --platform=\$BUILDPLATFORM[^\n]*AS runtime/);
+
+  const buildIndex = dockerfile.indexOf("&& pnpm build");
+  const pruneIndex = dockerfile.indexOf(
+    "&& sh scripts/prune-standalone-prisma-engines.sh .next/standalone",
+  );
+  const runtimeIndex = dockerfile.indexOf("AS runtime");
+  assert.ok(buildIndex >= 0, "production Next build가 필요하다");
+  assert.ok(pruneIndex > buildIndex, "Prisma engine 정리는 Next build 뒤여야 한다");
+  assert.ok(runtimeIndex > pruneIndex, "Prisma engine 정리는 runtime COPY 전이어야 한다");
 });
