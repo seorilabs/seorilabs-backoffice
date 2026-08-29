@@ -25,8 +25,9 @@ pnpm build          # DATABASE_URL 더미로 OK (빌드 시 DB 미접속)
 ## 규칙
 - PR 은 Ready(Draft 금지), 제목/본문 한글. `Closes #N`.
 - GitHub Actions action 은 `global-versions.yaml` 기준 최신 stable 태그.
-- 배포는 ARM64. 이미지 빌드는 `-dind` 러너, 배포는 `seorilabs-rpi-arm64`.
-- **PR 트리거 잡은 반드시 GitHub-hosted(`ubuntu-latest`)** — public 저장소라 fork PR 코드가
-  ARC 에서 돌면 클러스터 내부 네트워크에 닿는다. self-hosted 는 `push`/`workflow_dispatch`
-  전용 잡에만 쓴다.
+- **모든 CI/CD 잡은 GitHub-hosted(`ubuntu-latest`)** — self-hosted(ARC)를 쓰지 않는다.
+  org 러너그룹의 "Allow public repositories" 는 해제 상태를 유지하며, 이 저장소를 위해
+  켜지 않는다(그룹 단위 플래그라 다른 public 저장소까지 열린다).
+- 이미지는 arm64 지만 hosted 에서 `BUILDPLATFORM` 크로스빌드한다. 배포는 공개 도달
+  가능한 k8s API(`k8s.vzyx.xyz:16443`)에 kubectl 로 적용한다.
 - 라이프사이클 자동 전이는 deploy `workflow_run` 성공만. 라벨/마일스톤 기반 자동 전이 금지(게임 레포 호환).
