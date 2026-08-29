@@ -6,6 +6,7 @@ import test from "node:test";
 import { signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
   evaluateFleetMigrationShadowReadiness,
+  readFleetMigrationBackoffice,
   type FleetMigrationAppReadback,
   type FleetMigrationBackofficeReadback,
   type FleetMigrationRepositoryRegistrationReadback,
@@ -48,6 +49,7 @@ function productApp(): FleetMigrationAppReadback {
     id: "app-product-0001",
     repoId: "101",
     repoFullName: "seorilabs/product",
+    status: "ACTIVE",
     latestDiscovery: {
       id: "discovery-product-0001",
       appId: "app-product-0001",
@@ -214,6 +216,94 @@ test("GitHub repository identity casing만 다르면 중앙 binding drift로 오
 
   assert.equal(result.state, "READY");
   assert.deepEqual(result.reasonCounts, {});
+});
+
+test("실제 Backoffice reader는 App lifecycle status로 repo binding을 거르지 않는다", async () => {
+  let appWhere: unknown = null;
+  const client = {
+    repositoryRegistration: {
+      findMany: async () => [],
+    },
+    app: {
+      findMany: async (args: { where?: unknown }) => {
+        appWhere = args.where;
+        return [{
+          id: "app-paused-0001",
+          repoId: 101n,
+          repoFullName: "seorilabs/product",
+          status: "PAUSED",
+          discoveryObservations: [],
+          configRevisions: [],
+          platformFleetBinding: null,
+          _count: { credentialBindings: 0 },
+        }];
+      },
+    },
+  } as unknown as Parameters<typeof readFleetMigrationBackoffice>[1];
+
+  const result = await readFleetMigrationBackoffice([101n], client);
+
+  assert.deepEqual(appWhere, { repoId: { in: [101n] } });
+  assert.equal(result.apps[0]?.status, "PAUSED");
+  assert.equal(result.apps[0]?.repoId, "101");
+});
+
+test("PAUSED 또는 DEPRECATED PRODUCT_APP도 존재하는 repo binding으로 읽는다", async () => {
+  for (const status of ["PAUSED", "DEPRECATED"] as const) {
+    const app = productApp();
+    app.status = status;
+    app.activeConfigs = [];
+    app.platformFleetBinding = null;
+
+    const result = await evaluateFleetMigrationShadowReadiness(
+      dependencies(readyBackoffice(app)),
+    );
+
+    assert.equal(result.state, "BLOCKED", status);
+    assert.deepEqual(result.reasonCounts, {
+      ACTIVE_CONFIG_MISSING: 1,
+      PLATFORM_FLEET_BINDING_MISSING: 1,
+    }, status);
+    const repository = result.repositories.find(({ repoId }) => repoId === "101");
+    assert.equal(repository?.appLifecycleStatus, status);
+    assert.ok(!repository?.reasonCodes.includes("APP_BINDING_MISSING"));
+  }
+});
+
+test("App row가 없는 PRODUCT_APP은 계속 APP_BINDING_MISSING으로 차단한다", async () => {
+  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+    ...readyBackoffice(),
+    apps: [],
+  }));
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(
+    result.repositories.find(({ repoId }) => repoId === "101")?.reasonCodes,
+    ["APP_BINDING_MISSING"],
+  );
+});
+
+test("비활성 App row도 non-product repository binding 존재 증거로 남는다", async () => {
+  const historical = productApp();
+  historical.id = "app-infra-historical-0001";
+  historical.repoId = "202";
+  historical.repoFullName = "seorilabs/infra";
+  historical.status = "DEPRECATED";
+  historical.latestDiscovery = null;
+  historical.activeConfigs = [];
+  historical.platformFleetBinding = null;
+
+  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+    ...readyBackoffice(),
+    apps: [productApp(), historical],
+  }));
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(result.reasonCounts, { NON_PRODUCT_APP_BINDING_PRESENT: 1 });
+  assert.equal(
+    result.repositories.find(({ repoId }) => repoId === "202")?.appLifecycleStatus,
+    "DEPRECATED",
+  );
 });
 
 test("같은 source SHA와 payloadHash를 재탐지한 새 observation row는 ACTIVE provenance를 무효화하지 않는다", async () => {
