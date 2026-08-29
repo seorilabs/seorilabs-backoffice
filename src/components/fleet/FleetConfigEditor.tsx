@@ -488,7 +488,7 @@ export function FleetConfigEditor({
 
           <Section
             title="Build pin과 support URL"
-            description="release candidate가 대조하는 WorkflowBundle SHA·Platform version과 공개 지원 URL입니다."
+            description="release candidate가 대조하는 WorkflowBundle SHA·payload digest·Platform version과 공개 지원 URL입니다."
           >
             <div className="grid gap-3 sm:grid-cols-2">
               <TextField
@@ -496,6 +496,12 @@ export function FleetConfigEditor({
                 value={draft.buildWorkflowBundleSha}
                 hint="40자리 SHA"
                 onChange={(value) => patch({ buildWorkflowBundleSha: value })}
+              />
+              <TextField
+                label="workflowBundleDigest"
+                value={draft.buildWorkflowBundleDigest}
+                hint="sha256: 접두사를 포함한 payload digest"
+                onChange={(value) => patch({ buildWorkflowBundleDigest: value })}
               />
               <TextField
                 label="platformVersion"

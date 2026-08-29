@@ -45,7 +45,17 @@ function client(overrides: {
     markets: [],
     build: { workflowBundleSha: overrides.workflowBundleSha ?? BUNDLE_SHA },
   };
-  const signed = signSnapshot(payload as JsonValue, SIGNING_KEY);
+  const snapshot = {
+    schemaVersion: 1,
+    appId: "app-runtime-1",
+    repoId: REPOSITORY_ID,
+    repoFullName: "seorilabs/runtime-canary",
+    revision: 7,
+    payloadHash: jsonDigest(payload as JsonValue),
+    payload,
+    activatedAt: "2026-08-29T00:00:00.000Z",
+  };
+  const signed = signSnapshot(snapshot as JsonValue, SIGNING_KEY);
   return {
     app: {
       async findUnique() {
@@ -67,7 +77,7 @@ function client(overrides: {
           status: "ACTIVE" as const,
           payload,
           payloadHash: jsonDigest(payload as JsonValue),
-          activatedSnapshot: payload,
+          activatedSnapshot: snapshot,
           snapshotDigest: signed.digest,
           snapshotSignature: signed.signature,
         };

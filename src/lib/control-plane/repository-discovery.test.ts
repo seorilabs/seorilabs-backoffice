@@ -280,8 +280,11 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
     "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
     "apps/mobile/ios/Sample.xcodeproj/project.pbxproj": "PRODUCT_BUNDLE_IDENTIFIER = com.seorilabs.sample;",
     "apps/ait/granite.config.ts": "export default { appName: 'sample-ait' };",
+    "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "scripts/build-android.sh": "#!/bin/sh\nexit 0\n",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
   };
-  const paths = [...Object.keys(files), "pnpm-lock.yaml"];
+  const paths = Object.keys(files);
   const result = await discoverRepository(snapshot(paths), sourceReader(files));
 
   assert.equal(result.status, "ACTIVE");
@@ -292,6 +295,15 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
     packageManager: "pnpm",
     workingDirectory: "apps/mobile",
   });
+  assert.deepEqual(result.buildBindings, [{
+    target: "android",
+    buildProfile: "react-native-android",
+    packageManager: "pnpm",
+    executionRoot: ".",
+    dependencyRoot: ".",
+    scriptPath: "scripts/build-android.sh",
+    artifactKind: "android-aab",
+  }]);
   assert.deepEqual(result.buildTargets, [
     {
       targetKey: "ait",
@@ -651,11 +663,21 @@ test("lizard 유형은 build.env의 Android target과 미관측 package identity
   const files = {
     "project.godot": "[application]\nconfig/name=\"Lizard\"\n",
     "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "scripts/build-android.sh": "#!/bin/sh\nexit 0\n",
     "apps/ait/granite.config.ts": "export default { appName: 'lizard-tycoon' };",
   };
   const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
   assert.equal(result.status, "ACTIVE");
   if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildBindings, [{
+    target: "android",
+    buildProfile: "godot-android",
+    packageManager: null,
+    executionRoot: ".",
+    dependencyRoot: ".",
+    scriptPath: "scripts/build-android.sh",
+    artifactKind: "android-aab",
+  }]);
   assert.deepEqual(result.buildTargets, [
     {
       targetKey: "ait",
@@ -1255,8 +1277,8 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v6 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v6");
+test("discovery 의미론 변경은 새 generation을 강제하는 v7 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v7");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {

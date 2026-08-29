@@ -44,6 +44,8 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={mainSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_profile={profile}&schema=workflow-bundle-v5-build[-canary]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-main discovery build binding을 모두 결합한 Android build-only readback. canary는 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR만 허용 |
+| `POST` | `/api/control-plane/workflow-bundles` | exact successful `.github` candidate run/artifact 또는 기존 candidate와 canonical Ed25519 서명을 검증해 불변 `CANDIDATE`/`APPROVED` registry record를 멱등 import. secret/private signing key를 받거나 반환하지 않음 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA·digest, Platform version을 하나의 candidate로 고정 |
@@ -73,6 +75,19 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
+
+Android build-only 권한은 ConfigRevision의 `build.workflowBundleSha` 주장만으로 열리지 않는다.
+같은 revision에 `build.workflowBundleDigest`를 `sha256:` 형식으로 고정하고, 별도 immutable registry에서
+같은 source SHA와 payload digest의 exact GitHub candidate artifact 또는 APPROVED 서명 provenance를
+readback해야 한다. repository discovery의 static `workingDirectory`와 Android `buildBindings`는 별도 사실이며,
+Happy Farm의 static `apps/mobile`을 build root로 투영하지 않는다. build binding이 없거나 둘 이상이면
+`BUILD_BINDING_OBSERVATION_MISSING`으로 중단한다.
+
+APPROVED registry는 ConfigMap `backoffice-workflow-bundle-v5-trust`의
+`trusted-approval-keys.json`에 있는 ACTIVE Ed25519 공개키와 canonical SPKI fingerprint를 사용한다.
+logical signer는 `shared/workflow-bundle/approval-signing`이며 private key, raw signature payload 또는
+secret export endpoint는 Backoffice에 두지 않는다. trust root가 없거나 revoke되면 기존 APPROVED readback도
+fail-closed하며 CANDIDATE는 successful GitHub artifact identity로 별도 검증한다.
 
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,

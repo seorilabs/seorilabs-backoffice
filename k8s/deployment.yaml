@@ -215,6 +215,14 @@ spec:
                   name: backoffice-platform-fleet-trust
                   key: trusted-release-keys.json
                   optional: true
+            # WorkflowBundle v5 승인 signer의 공개 metadata다. private key는
+            # Auth Broker signer 경계에만 있고 Backoffice에는 주입하지 않는다.
+            - name: WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: backoffice-workflow-bundle-v5-trust
+                  key: trusted-approval-keys.json
+                  optional: true
             # 챗/초안 + 볼트 검색 질의 임베딩. 인덱서는 data ns 별도 키를 사용.
             - name: GEMINI_API_KEY
               valueFrom:

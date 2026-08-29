@@ -99,6 +99,7 @@ export interface ConfigDraft {
   localizations: LocalizationDraft[];
   assets: AssetDraft[];
   buildWorkflowBundleSha: string;
+  buildWorkflowBundleDigest: string;
   buildPlatformVersion: string;
   buildMinSdk: string;
   buildTargetSdk: string;
@@ -233,6 +234,7 @@ export function emptyConfigDraft(): ConfigDraft {
     localizations: [],
     assets: [],
     buildWorkflowBundleSha: "",
+    buildWorkflowBundleDigest: "",
     buildPlatformVersion: "",
     buildMinSdk: "",
     buildTargetSdk: "",
@@ -290,6 +292,7 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
       };
     }),
     buildWorkflowBundleSha: text(build.workflowBundleSha),
+    buildWorkflowBundleDigest: text(build.workflowBundleDigest),
     buildPlatformVersion: text(build.platformVersion),
     buildMinSdk: text(build.minSdk),
     buildTargetSdk: text(build.targetSdk),
@@ -439,6 +442,9 @@ function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
 export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
   const build: Record<string, unknown> = {
     ...(trimmed(draft.buildWorkflowBundleSha) ? { workflowBundleSha: draft.buildWorkflowBundleSha.trim() } : {}),
+    ...(trimmed(draft.buildWorkflowBundleDigest)
+      ? { workflowBundleDigest: draft.buildWorkflowBundleDigest.trim() }
+      : {}),
     ...(trimmed(draft.buildPlatformVersion) ? { platformVersion: draft.buildPlatformVersion.trim() } : {}),
     ...(trimmed(draft.buildMinSdk) ? { minSdk: integer(draft.buildMinSdk) } : {}),
     ...(trimmed(draft.buildTargetSdk) ? { targetSdk: integer(draft.buildTargetSdk) } : {}),

@@ -119,6 +119,22 @@ else
   ng "Platform Fleet trust root 또는 producer scheduler 연결이 깨졌다"
 fi
 
+echo "== WorkflowBundle v5 공개 trust root 연결 =="
+workflow_bundle_trust_env="$(awk '
+  $0 ~ "- name: WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON" { capture=1 }
+  capture { print }
+  capture && /optional:/ { exit }
+' "$root/k8s/deployment.yaml")"
+if printf '%s' "$workflow_bundle_trust_env" | grep -q 'configMapKeyRef:' &&
+   printf '%s' "$workflow_bundle_trust_env" | grep -q 'name: backoffice-workflow-bundle-v5-trust' &&
+   printf '%s' "$workflow_bundle_trust_env" | grep -q 'key: trusted-approval-keys.json' &&
+   printf '%s' "$workflow_bundle_trust_env" | grep -q 'optional: true' &&
+   ! printf '%s' "$workflow_bundle_trust_env" | grep -q 'secretKeyRef:'; then
+  ok "WorkflowBundle v5는 private signer 없이 공개 trust root만 주입"
+else
+  ng "WorkflowBundle v5 공개 trust root 경계가 깨졌다"
+fi
+
 provider_worker="$root/k8s/provider-execution-worker.yaml"
 provider_out="$("$render" "$provider_worker" "$IMG" "$SHA")"
 if ! grep -q ':latest' "$provider_worker" &&

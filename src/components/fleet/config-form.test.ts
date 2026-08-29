@@ -39,6 +39,7 @@ const fullPayload = {
   ],
   build: {
     workflowBundleSha: "c".repeat(40),
+    workflowBundleDigest: `sha256:${"d".repeat(64)}`,
     platformVersion: "1.4.0",
     minSdk: 24,
     targetSdk: 35,
