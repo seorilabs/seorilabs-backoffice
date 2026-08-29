@@ -378,6 +378,27 @@ function bindStaticManifestIdentity(
   };
 }
 
+function bindBuildManifestIdentity(
+  claims: GitHubActionsBuildManifestClaims,
+): GitHubActionsBuildManifestIdentity {
+  return {
+    mode: claims.mode,
+    repositoryId: claims.repositoryId,
+    fullName: claims.fullName,
+    applicationSourceSha: claims.applicationSourceSha,
+    eventSourceSha: claims.eventSourceSha,
+    workflowBundleSha: claims.workflowBundleSha,
+    buildProfile: claims.buildProfile,
+    calledWorkflowPath: claims.calledWorkflowPath,
+    runId: claims.runId,
+    runAttempt: claims.runAttempt,
+    eventName: claims.eventName,
+    eventRef: claims.eventRef,
+    repositoryVisibility: claims.repositoryVisibility,
+    runnerEnvironment: claims.runnerEnvironment,
+  };
+}
+
 function pullRequestReadbackMatches(
   claims: GitHubActionsStaticManifestClaims,
   readback: GitHubActionsPullRequestReadback,
@@ -512,8 +533,7 @@ export async function authenticateGitHubActionsBuildManifestRequest(
       });
       if (!buildPullRequestReadbackMatches(claims, readback)) return null;
     }
-    const { pullRequestNumber: _number, headRef: _head, baseRef: _base, ...identity } = claims;
-    return identity;
+    return bindBuildManifestIdentity(claims);
   } catch {
     return null;
   }

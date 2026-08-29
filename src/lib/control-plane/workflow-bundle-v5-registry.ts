@@ -262,7 +262,8 @@ function sha256(value: string | Buffer | Uint8Array): string {
 }
 
 function bundlePayload(bundle: WorkflowBundleV5Registry): JsonValue {
-  const { integrity: _integrity, ...payload } = bundle;
+  const payload = { ...bundle } as Record<string, JsonValue>;
+  delete payload.integrity;
   return payload as JsonValue;
 }
 

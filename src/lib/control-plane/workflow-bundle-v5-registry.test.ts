@@ -7,7 +7,7 @@ import {
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
-import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   importWorkflowBundleApproval,
@@ -174,7 +174,8 @@ function approvedFixture() {
   } as JsonValue;
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const signature = sign(null, Buffer.from(canonicalJson(envelope), "utf8"), privateKey).toString("base64url");
-  const { integrity: _candidateIntegrity, ...candidatePayload } = candidate;
+  const candidatePayload = { ...candidate } as Record<string, JsonValue>;
+  delete candidatePayload.integrity;
   const approvedPayload = {
     ...candidatePayload,
     approval: {
