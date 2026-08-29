@@ -19,6 +19,10 @@
     "20260830010000_drop_retired_teammate_schema": {
       "sha256": "6a2728756ab747d1a86ed716d2569e24af8c333636c5836104deadcd94ba9d84",
       "reason": "PR #165에서 AI 팀원 체계 코드를 제거하고 배포한 뒤의 contract 단계 (app.ownerTeammate, teammate_run, discord_turn.teammate, ai_usage.teammate)"
+    },
+    "20260830020000_normalize_content_market_vocabulary": {
+      "sha256": "c90c8d4ce5c089d577cbab70197067201fe99bc8c60088c925a9ab42a165875c",
+      "reason": "컨텐츠 지표 마켓 표기 정규화 backfill — 수집 경계(normalizeContentMarket) 반영 이전에 쌓인 행을 같은 규칙으로 접는다"
     }
   },
   "legacy": {

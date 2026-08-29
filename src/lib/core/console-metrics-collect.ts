@@ -25,6 +25,26 @@ export interface ConsoleIngestResult {
   upserts: number; // 저장된 (앱×날짜) row 수
   skipped: { key: string; reason: string }[]; // 매핑/유효성 실패로 제외
   errors: { key: string; error: string }[]; // upsert 중 예외
+  // 저장은 했지만 producer 가 채워야 할 값이 비어 온 경우. 실패가 아니라 품질 신호다.
+  warnings: { key: string; warning: string }[];
+}
+
+/**
+ * raw 부가 지표에서 "키는 있는데 값이 전부 비어 있는" 경우를 찾는다.
+ *
+ * ingest 는 raw 를 그대로 저장하므로 producer(console-sync)가 구조만 만들고 값을 못 채우면
+ * 조용히 통과한다. 2026-08-30 에 `iaaByOs: {IOS: null, ANDROID: null}` 가 그렇게 몇 달간
+ * 쌓여 있었다. 저장은 막지 않되 결과에 드러내 다음 sync 에서 잡히게 한다.
+ */
+export function emptyRawSections(raw: unknown): string[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const empty: string[] = [];
+  for (const [section, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const values = Array.isArray(value) ? value : Object.values(value);
+    if (values.length > 0 && values.every((item) => item == null)) empty.push(section);
+  }
+  return empty;
 }
 
 /** "YYYY-MM-DD"(UTC 자정) Date 로 파싱. @db.Date 저장/비교용. */
@@ -60,6 +80,7 @@ export async function ingestConsoleMetrics(
     upserts: 0,
     skipped: [],
     errors: [],
+    warnings: [],
   };
 
   const apps = (payload as ConsoleMetricsPush | null)?.apps;
@@ -122,6 +143,9 @@ export async function ingestConsoleMetrics(
         raw: (day.raw ?? Prisma.JsonNull) as Prisma.InputJsonValue | typeof Prisma.JsonNull,
         collectedAt: now,
       };
+      for (const section of emptyRawSections(day.raw)) {
+        result.warnings.push({ key, warning: `raw.${section} 값이 전부 비어 있음 (${day.date})` });
+      }
       try {
         await prisma.appConsoleMetricDaily.upsert({
           where: { appId_miniAppId_date: { appId: app.id, miniAppId, date } },
