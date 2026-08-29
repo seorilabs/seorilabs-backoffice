@@ -143,41 +143,9 @@ export const env = {
   stabilityMinCredits: () => Number(optional("STABILITY_MIN_CREDITS", "200")),
   // 0 = LLM 월 예산 미확정(보고만). 유료 provider 도입 후 실측으로 확정한다.
   llmMonthlyBudgetUsd: () => Number(optional("LLM_MONTHLY_BUDGET_USD", "0")),
-  // P1·P2 자동 등록 — 실행당(=일일, 순찰은 하루 1회) 상한과 NOT_PLANNED 비율
-  // 기준(%). 비율 초과 시 자동 등록을 멈추고 전량 confirm 카드로 되돌린다.
-  teammateAutoDailyLimit: () => Number(optional("TEAMMATE_AUTO_DAILY_LIMIT", "2")),
-  teammateAutoNotPlannedDisablePct: () =>
-    Number(optional("TEAMMATE_AUTO_NOT_PLANNED_DISABLE_PCT", "30")),
-  // 페르소나별 모델 교차 배정(Anthropic·OpenAI 추가). 키 미설정 provider 는
-  // Gemini 폴백이라 플래그만 켜도 무해하다.
-  featureMultiLlm: () => bool("FEATURE_MULTI_LLM", false),
-  anthropicApiKey: () => optional("ANTHROPIC_API_KEY").trim(),
-  anthropicChatModel: () => optional("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5"),
-  anthropicBaseUrl: () => optional("ANTHROPIC_API_BASE_URL", "https://api.anthropic.com"),
-  anthropicChatTimeoutMs: () => Number(optional("ANTHROPIC_CHAT_TIMEOUT_MS", "180000")),
-  // 짧은 운영 응답 위주라 비용 통제를 위해 low 로 시작한다.
-  anthropicEffort: () => optional("ANTHROPIC_EFFORT", "low"),
-  anthropicConfigured: () =>
-    bool("FEATURE_MULTI_LLM", false) && Boolean(optional("ANTHROPIC_API_KEY").trim()),
-  openaiApiKey: () => optional("OPENAI_API_KEY").trim(),
-  openaiChatModel: () => optional("OPENAI_CHAT_MODEL", "gpt-5.6-luna"),
-  openaiBaseUrl: () => optional("OPENAI_API_BASE_URL", "https://api.openai.com"),
-  openaiChatTimeoutMs: () => Number(optional("OPENAI_CHAT_TIMEOUT_MS", "180000")),
-  // GPT-5 계열 reasoning 소모 억제. gpt-5.6 은 minimal 을 거부한다
-  // (지원: none/low/medium/high/xhigh — 2026-08-26 실호출 검증), low 로 시작.
-  openaiReasoningEffort: () => optional("OPENAI_REASONING_EFFORT", "low"),
-  openaiConfigured: () =>
-    bool("FEATURE_MULTI_LLM", false) && Boolean(optional("OPENAI_API_KEY").trim()),
-  // AI 팀원 봇(product/data/development/qa/finance). 역할별 별도 Discord 앱이며
-  // 슬래시 명령은 메인 봇 전유라 팀원에겐 APPLICATION_ID 와 BOT_TOKEN 만 필요하다.
-  featureDiscordTeammates: () => bool("FEATURE_DISCORD_TEAMMATES", false),
-  discordTeammateApplicationId: (role: string) =>
-    optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_APPLICATION_ID`).trim(),
-  discordTeammateBotToken: (role: string) =>
-    optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_BOT_TOKEN`).trim(),
-  discordTeammateConfigured: (role: string) =>
-    Boolean(optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_APPLICATION_ID`).trim()) &&
-    Boolean(optional(`DISCORD_TEAMMATE_${role.toUpperCase()}_BOT_TOKEN`).trim()),
+  // 서리(운영 총괄) 봇. 일일 재무 리포트를 이 정체로 게시한다. 미설정이면 메인 봇으로
+  // 나가므로 리포트가 사라지지는 않는다.
+  discordSeoriBotToken: () => optional("DISCORD_TEAMMATE_SEORI_BOT_TOKEN").trim(),
   discordChannelId: (key: string) =>
     optional(`DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
   discordRoleId: (key: string) =>

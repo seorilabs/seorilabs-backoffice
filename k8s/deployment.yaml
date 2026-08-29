@@ -92,10 +92,10 @@ spec:
               value: "1536"
             - name: GEMINI_TIMEOUT_MS
               value: "60000"
-            # AI 팀원 순찰 트리거 route(/api/admin/teammates/patrol)는 웹 Pod에서
-            # 돈다. 워커 플래그와 별개로 여기 없으면 CronJob 이 503으로 실패한다.
-            - name: FEATURE_DISCORD_TEAMMATES
-              value: "true"
+            # 서리 재무 리포트(/api/admin/finance-report)와 /ask 의 cost_summary 는
+            # 웹 Pod 에서 돈다. GCP 월 예산(원) 70/90/100% 에서 경고한다.
+            - name: GCP_MONTHLY_BUDGET_KRW
+              value: "20000"
             # GA4→BigQuery 지표 수집(수집/보고 CronJob + /analytics 대시보드).
             - name: FEATURE_GA4_ANALYTICS
               value: "true"
@@ -230,6 +230,27 @@ spec:
                   name: backoffice-secrets
                   key: GEMINI_API_KEY
             # GA4 BigQuery 읽기 SA 키(JSON 전체). 없으면 지표 수집이 비활성.
+            # 종량제 비용 소스. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 뜬다.
+            # GITHUB_BILLING_TOKEN 은 조직 billing 읽기 전용 fine-grained PAT
+            # (신형 청구 API 는 GitHub App 토큰을 받지 않는다).
+            - name: GITHUB_BILLING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GITHUB_BILLING_TOKEN
+                  optional: true
+            - name: GCP_BILLING_EXPORT_TABLE
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: GCP_BILLING_EXPORT_TABLE
+                  optional: true
+            - name: STABILITY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: STABILITY_API_KEY
+                  optional: true
             - name: GA4_SA_KEY_JSON
               valueFrom:
                 secretKeyRef:

@@ -6,7 +6,6 @@ import { usageCostUsd } from "@/lib/ai/pricing";
 
 export interface AiUsageContext {
   path: string;
-  teammate?: string | null;
 }
 
 export interface AiUsageRecord extends AiUsageContext {
@@ -25,7 +24,7 @@ export async function recordAiUsage(record: AiUsageRecord): Promise<void> {
         provider: record.provider,
         model: record.model,
         path: record.path,
-        teammate: record.teammate ?? null,
+        teammate: null,
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
         thinkingTokens: record.thinkingTokens ?? 0,

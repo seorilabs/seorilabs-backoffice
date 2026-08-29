@@ -26,10 +26,7 @@ const ROLE_CAPABILITIES: Record<string, DiscordCapability[]> = {
   viewer: ["read"],
 };
 
-/**
- * 역할 키의 capability 목록. AI 팀원이 같은 이름의 사람 역할 경계를 그대로
- * 상속하는 데 쓴다 — 사람 product 가 못 하는 일은 팀원 봇도 못 한다.
- */
+/** 역할 키의 capability 목록. */
 export function capabilitiesForRole(roleKey: string): readonly DiscordCapability[] {
   return ROLE_CAPABILITIES[roleKey] ?? [];
 }
@@ -52,7 +49,6 @@ export const DISCORD_CARD_CHANNEL_KEYS = [
   "release-ops", // 배포 상태 카드의 마켓 후속 작업
   "ops-alerts", // 장애 확인·담당 지정
   "metrics-daily", // 지표 계열 장애 카드
-  "app-ops", // AI 팀원 이슈 초안 confirm 카드
 ] as const;
 
 /**

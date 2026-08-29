@@ -46,6 +46,8 @@ export interface DiscordMessageOptions {
   // 원본 메시지에 대한 네이티브 답글로 보낸다. 답글이어도 allowed_mentions 는
   // 그대로 비워 두므로 핑은 발생하지 않는다.
   replyToMessageId?: string;
+  // 메인 봇이 아닌 다른 봇 정체로 보낸다(예: 서리 재무 리포트). 미지정이면 메인 봇.
+  botToken?: string;
 }
 
 export function splitDiscordText(text: string): string[] {
@@ -111,7 +113,7 @@ function safeDiscordError(status: number, body: unknown): DiscordDeliveryResult 
 async function discordRequest(
   path: string,
   init: RequestInit,
-  // AI 팀원 봇은 자기 토큰으로 발화한다. 미지정이면 메인 봇 토큰.
+  // 서리처럼 별도 정체로 발화하는 경로가 자기 토큰을 넘긴다. 미지정이면 메인 봇 토큰.
   tokenOverride?: string,
 ): Promise<DiscordDeliveryResult & { json?: unknown }> {
   const token = tokenOverride ?? env.discordBotToken();
@@ -170,7 +172,7 @@ export async function sendDiscord(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }, options.botToken);
 }
 
 export async function editDiscord(
@@ -196,12 +198,14 @@ export async function editDiscord(
 export async function deleteDiscordMessage(
   destinationKey: string,
   messageId: string,
+  // 게시한 봇 정체로 지운다. 미지정이면 메인 봇.
+  botToken?: string,
 ): Promise<DiscordDeliveryResult> {
   const channelId = discordChannelId(destinationKey);
   if (!/^\d+$/.test(channelId) || !/^\d+$/.test(messageId)) {
     return { ok: false, error: "Discord channel/message ID 오류" };
   }
-  return discordRequest(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
+  return discordRequest(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" }, botToken);
 }
 
 export async function deleteDiscordChannelMessage(

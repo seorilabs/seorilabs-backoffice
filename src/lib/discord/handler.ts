@@ -23,7 +23,6 @@ import {
   interactionChannelKeys,
   type DiscordCapability,
 } from "@/lib/discord/roles";
-import { skipTeammateFinding } from "@/lib/discord/teammate-findings";
 import { DEPLOY_CARD_ACTION_KO, DEPLOY_CARD_ACTIONS, type DeployCardAction } from "@/lib/notifications/deploy-format";
 import { requiresOperatorConfirmation } from "@/lib/discord/command-policy";
 import { selectSnapshotDeployTargets } from "@/lib/core/snapshot-candidate";
@@ -354,35 +353,6 @@ async function handleComponent(interaction: DiscordInteraction) {
       if (draft.status === "DRAFT") await prisma.aiDraft.update({ where: { id }, data: { status: "DISCARDED" } });
       return updateMessage("✖️ 초안을 취소했습니다.");
     }
-  }
-
-  // AI 팀원 순찰 초안 카드 — teammate:<confirm|cancel>:<runId>:<findingIndex>
-  if (kind === "teammate") {
-    if (!authorized(interaction, "planning") && !authorized(interaction, "bug")) {
-      return ephemeral("이슈 등록 권한이 없습니다.");
-    }
-    const findingIndex = Number(parts[3]);
-    if (!id || !Number.isInteger(findingIndex) || findingIndex < 0) {
-      return ephemeral("잘못된 초안 요청입니다.");
-    }
-    const patrolRun = await prisma.teammateRun.findUnique({ where: { id }, select: { id: true } });
-    if (!patrolRun) return ephemeral("순찰 기록을 찾을 수 없습니다.");
-    if (action === "confirm") {
-      await createOperatorCommand({
-        sourceInteractionId: interaction.id,
-        operation: "teammate_issue_create",
-        params: { runId: id, findingIndex },
-        actorDiscordUserId: userId,
-        channelId,
-        messageId,
-      });
-      return updateMessage("⏳ GitHub 이슈를 생성 중…");
-    }
-    if (action === "cancel") {
-      const skipped = await skipTeammateFinding(id, findingIndex);
-      return skipped ? updateMessage("✖️ 초안을 폐기했습니다.") : ephemeral("이미 처리된 초안입니다.");
-    }
-    return ephemeral("지원하지 않는 초안 작업입니다.");
   }
 
   if (kind === "approval") {

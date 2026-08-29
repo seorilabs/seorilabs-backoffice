@@ -23,7 +23,7 @@ export interface ChatOptions {
   /** 모델 오버라이드(페르소나 교차 배정). 미전달 시 provider 기본 모델을 쓴다. */
   model?: string;
   /** 사용량 원장(ai_usage) 귀속 컨텍스트. 미전달 시 path "unknown" 으로 기록된다. */
-  usage?: { path: string; teammate?: string | null };
+  usage?: { path: string };
 }
 
 export class GeminiNotConfiguredError extends Error {
@@ -147,7 +147,6 @@ export async function geminiChat(
             provider: "gemini",
             model,
             path: opts.usage?.path ?? "unknown",
-            teammate: opts.usage?.teammate ?? null,
             ...tokens,
           }),
         )

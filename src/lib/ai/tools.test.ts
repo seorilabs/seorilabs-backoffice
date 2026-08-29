@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TOOLS, runTool } from "@/lib/ai/tools";
 
-// 팀원 멘션이 실데이터를 조회할 수 있는 전제: 도구가 레지스트리에 실려 모델
-// 프롬프트에 노출되고, runTool 스위치가 해당 이름을 처리한다.
+// /ask 가 실데이터를 조회할 수 있는 전제: 도구가 레지스트리에 실려 모델 프롬프트에
+// 노출되고, runTool 스위치가 해당 이름을 처리한다.
 const DATA_TOOLS = [
   "app_metrics",
   "console_metrics",
@@ -11,7 +11,6 @@ const DATA_TOOLS = [
   "list_incidents",
   "list_workflow_failures",
   "review_summary",
-  "teammate_activity",
   "cost_summary",
 ];
 

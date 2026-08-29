@@ -377,41 +377,69 @@ Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확
 local client와 runtime을 모두 제공하지 않는다.
 client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
 
-### AI 팀원 봇 (teammate worker) — 담당제
+### 서리 재무 리포트
 
-담당제 팀원 6명(오너 노을/이슬/바람/새벽/마루 + 운영 총괄 서리)이 각자 별도 Discord
-앱으로 `backoffice-teammate-worker`(`k8s/teammate-worker.yaml`) 한 프로세스에서
-Gateway 연결 6개로 동작한다. 오너는 `App.ownerTeammate` 로 배분된 앱 포트폴리오를
-E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(종량제 비용·org 장애·담당
-미배정)을 본다. 순찰 보고와 confirm 카드는 통합 운영 채널
-`DISCORD_CHANNEL_APP_OPS_ID`(#app-ops) 한 곳에 모인다.
+종량제 비용은 매일 09:00 KST(`backoffice-finance-report` CronJob → `/api/admin/finance-report`)에
+`#app-ops`로 나간다. 리포트는 결정적 수치라 LLM을 쓰지 않는다.
 
-- Secret key: `DISCORD_TEAMMATE_{NOEUL,ISEUL,BARAM,SAEBYEOK,MARU,SEORI}_{APPLICATION_ID,BOT_TOKEN}`
-  (12키, 전부 `optional: true`). 기존 직군 앱 5개(프로덕트→노을 등)를 리네임 재활용해
-  토큰 값은 유지되고 env 키만 담당제 키로 재봉인한다. 원본은 `~/.config/seorilabs`
-  카탈로그 `shared/discord/teammate-<key>-bot`.
-- 포트폴리오 재배분: `UPDATE app SET ownerTeammate='<key>' WHERE slug='...'` 데이터
-  갱신만으로 반영(배포 불필요). 미배정 앱은 서리 순찰이 경고한다. `platform` 레포는
-  인프라라 의도적 미배정.
-- 운영 강도(`App.status`, 2026-08-26 도입): `ACTIVE`=정규 운영,
-  **`PAUSED`=론칭 후 방치**(지표 수집·보드 노출은 유지, 순찰은 P1·P2 급 발견만 채택 —
-  최저가 모델 담당자에게 몰아준다), **`DEPRECATED`=개발 폐기**(`visibleAppWhere` 가
-  걸러내 순찰·보드·멘션 도구에서 전부 제외). 전환은 `UPDATE app SET status=...` 만으로
-  되고, 지표 수집은 status 필터가 없어(analytics-collect) 어느 상태에서도 계속된다.
-- 운영 총괄(서리) 비용 순찰 소스 key: `GITHUB_BILLING_TOKEN`(fine-grained PAT,
-  키체인 `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`,
-  `STABILITY_API_KEY`. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 표기된다.
-- 전체 비활성: `FEATURE_DISCORD_TEAMMATES=false` 로 전환(워커가 idle 로만 남음).
-  팀원 1명만 비활성: 해당 팀원의 키 2개를 SealedSecret 에서 제거.
-- 토큰 로테이션: Developer Portal 에서 Reset Token → 키체인 갱신 → kubeseal 재봉인 →
-  apply → `kubectl -n platform rollout restart deploy/backoffice-teammate-worker`.
-- 순찰 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-teammate-patrol-<key> smoke-patrol-<key>`.
-  순찰은 pod 내 DB 근거만 쓰고, 이슈 초안은 사람이 confirm 카드 버튼으로 승인해야 등록된다.
-- 담당제 전환 정리: 구 직군 CronJob 은 apply 로 삭제되지 않으므로 전환 배포 후 1회
-  `kubectl -n platform delete cronjob backoffice-teammate-patrol-{development,product,data,qa,finance}`.
-  구 `DISCORD_TEAMMATE_{PRODUCT,DATA,DEVELOPMENT,QA,FINANCE}_*` 10키는 재봉인 시 제거한다.
-- 팀원 봇에는 Interactions Endpoint 를 설정하지 않는다 — 초안 confirm 카드는 메인 봇이
-  게시하므로 interaction 서명·검증 경로는 기존 단일 앱 그대로다.
+- 소스 4종: GitHub Actions 분량·과금, GCP billing export, `ai_usage` 원장의 LLM 비용,
+  Stability 크레딧. 임계(GitHub 70/90% + 실청구, GCP·LLM 예산 70/100%, Stability 경고선)를
+  넘으면 경고 항목이 붙는다.
+- 관련 key는 전부 optional이며 미설정 소스는 리포트에 "미설정"으로 드러난다.
+  `GITHUB_BILLING_TOKEN`(조직 billing 읽기 전용 fine-grained PAT, 키체인
+  `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`, `STABILITY_API_KEY`.
+  GCP billing 조회는 GA4 수집과 같은 read 전용 SA(`GA4_SA_KEY_JSON`)를 쓴다.
+- 예산 값은 웹 Pod의 `GCP_MONTHLY_BUDGET_KRW`, `LLM_MONTHLY_BUDGET_USD`(0=보고만).
+- 게시 정체는 서리 봇(`DISCORD_TEAMMATE_SEORI_BOT_TOKEN`, optional)이다. 알림 outbox의
+  payload `sender` 키로 notification worker가 토큰을 고르며, 보존기한 삭제도 같은 정체로
+  한다. 토큰이 없으면 메인 봇으로 나가므로 리포트가 사라지지는 않는다.
+- 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
+- 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
+
+### 서리 지표 하이라이트
+
+매일 11:00 KST(`backoffice-metric-highlights` CronJob → `/api/admin/metric-highlights`)에
+GA4·AppsInToss 콘솔 스냅샷에서 크게 움직인 항목만 추려 `#app-ops`로 나간다. 서리 봇 정체로
+게시하며 판정은 전부 결정적이라 LLM을 쓰지 않는다.
+
+- 전량 나열은 `#metrics-daily`의 지표 리포트(10:30 KST)가 이미 한다. 이 리포트는 판단만 남긴다.
+- 스케줄은 `analytics-collect`(10:00 KST) → 지표 리포트(10:30 KST) 뒤라 D-1 스냅샷이 이미 있다.
+  BigQuery·콘솔을 직접 치지 않고 저장된 `app_metric_daily`·`app_console_metric_daily`만 읽는다.
+- 판정: 최신값 vs 직전 7일 **중앙값**. 관측 4일 미만이면 판정하지 않고, 기준선이 지표별
+  최소 표본에 못 미치면 "표본 부족"으로 뺀다. 하루짜리 튐이 기준선을 흔들지 않게 평균이
+  아니라 중앙값을 쓴다(기존 이상 감지와 같은 방식).
+- 지표와 임계: GA4 DAU(기준선 10명·±30%), D1 잔존율(5%·±10%p), 보상형 광고 완료(20회·±40%),
+  콘솔 DAU(10명·±30%), 광고 수익(₩1,000·±40%), 결제 거래액(₩1,000·±40%).
+  잔존율만 %p로 보고 나머지는 상대 변화로 본다.
+- 정렬은 `변화 크기 × log10(기준선)` — 작은 앱의 큰 변화율이 판을 덮지 않게 규모를 반영한다.
+  각 방향 상위 5건까지 싣는다.
+- 기준선이 0인데 값이 임계 이상 생기면 "신규"로 하이라이트에 올린다(첫 매출 등).
+- 콘솔은 온디맨드 push라 리스팅마다 최신일이 다르다. 기준일보다 오래된 스냅샷은 항목 줄에
+  `⏳<날짜>`를 함께 찍는다.
+- 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-metric-highlights metric-highlights-manual-<고유번호>`.
+
+#### AI 팀원 체계 폐기 (2026-08-27)
+
+담당제 AI 팀원 6명(오너 노을/이슬/바람/새벽/마루 + 총괄 서리)의 순찰·스탠드업·주간
+리포트·이슈 초안 카드·멘션 대화를 모두 걷어내고 서리 재무 리포트만 남겼다. 서리는 봇
+정체로만 남고 멘션에 응답하지 않는다 — 질의는 메인 봇 `/ask`가 같은 도구로 답한다.
+
+배포 후 사람이 1회 정리할 항목:
+
+```bash
+# apply 로 지워지지 않는 구 CronJob 7개
+kubectl -n platform delete cronjob \
+  backoffice-teammate-patrol-{seori,noeul,iseul,baram,saebyeok,maru} \
+  backoffice-teammate-standup
+# 더 이상 배포되지 않는 워커
+kubectl -n platform delete deploy backoffice-teammate-worker
+```
+
+- 오너 봇 5개(`DISCORD_TEAMMATE_{NOEUL,ISEUL,BARAM,SAEBYEOK,MARU}_*` 10키)는 SealedSecret에
+  그대로 두었다. 폐기하려면 Developer Portal에서 앱을 지우고 재봉인한다. 서리 2키는 유지한다.
+- `app.ownerTeammate`, `teammate_run`, `discord_turn.teammate`, `ai_usage.teammate`는 읽는
+  코드가 없지만 컬럼·테이블은 남아 있다. expand-only 게이트가 `DROP`을 막으므로 제거는
+  별도 contract 단계와 승인으로 한다.
 
 ## 9. Gemini Stage Agent (단계별 AI)
 
