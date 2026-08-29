@@ -26,7 +26,7 @@ const SOURCE_SHA = "a".repeat(40);
 function sourceFixture(appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE") {
   const payload: Record<string, unknown> = {
     schemaVersion: 2,
-    contractVersion: "repository-discovery/v8",
+    contractVersion: "repository-discovery/v9",
     repository: {
       id: Number(REPO_ID),
       fullName: "seorilabs/happy-farm",
@@ -50,12 +50,12 @@ function sourceFixture(appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE")
       archived: false,
       status: "MANAGED",
       classification: "PRODUCT_APP",
-      discoveryContractVersion: "repository-discovery/v8",
+      discoveryContractVersion: "repository-discovery/v9",
       lastDefaultPushSha: SOURCE_SHA,
       lastReconciledSha: SOURCE_SHA,
     },
     observation: {
-      id: "discovery-happy-farm-v8",
+      id: "discovery-happy-farm-v9",
       appId: "app-happy-farm",
       sourceSha: SOURCE_SHA,
       sourceRef: "refs/heads/main",

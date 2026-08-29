@@ -19,10 +19,11 @@ import type {
   WorkflowCaller,
 } from "@/lib/control-plane/contracts";
 
-// v8: root Android binding의 pnpm lockfile도 전용 1MiB 한도로 읽는다.
+// v9: canonical preset이 없는 Godot repo의 ci/export_presets.<target>.cfg
+// fragment를 exact source로 읽어 build target false-negative를 제거한다.
 // 탐지 의미론을 바꾸고도
 // version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v8";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v9";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -521,6 +522,22 @@ function directoryOf(path: string): string {
 
 function pathIn(directory: string, suffix: string): string {
   return directory === "." ? suffix : `${directory}/${suffix}`;
+}
+
+function godotExportPresetPaths(
+  candidateDirectory: string,
+  paths: ReadonlySet<string>,
+): string[] {
+  const canonical = pathIn(candidateDirectory, "export_presets.cfg");
+  if (paths.has(canonical)) return [canonical];
+
+  const ciPrefix = pathIn(candidateDirectory, "ci/");
+  return [...paths]
+    .filter((path) => (
+      path.startsWith(ciPrefix)
+      && /^export_presets\.[A-Za-z0-9_-]+\.cfg$/.test(path.slice(ciPrefix.length))
+    ))
+    .sort();
 }
 
 function parentDirectories(directory: string): string[] {
@@ -1360,13 +1377,16 @@ export async function discoverRepository(
       });
     }
   } else {
-    const exportPath = pathIn(candidate.workingDirectory, "export_presets.cfg");
+    const exportPaths = godotExportPresetPaths(candidate.workingDirectory, pathSet);
     const buildEnvPath = pathIn(candidate.workingDirectory, "build.env");
-    const godotBuildPaths = [exportPath, buildEnvPath].filter((path) => pathSet.has(path));
+    const godotBuildPaths = [
+      ...exportPaths,
+      ...(pathSet.has(buildEnvPath) ? [buildEnvPath] : []),
+    ];
     buildSourcePaths.push(...godotBuildPaths);
     const buildReadError = await readPaths(godotBuildPaths);
     if (buildReadError) return needsInput(snapshot, buildReadError, candidates, sourceMetadata);
-    const presets = pathSet.has(exportPath) ? parseGodotExportPresets(texts.get(exportPath)!) : [];
+    const presets = exportPaths.flatMap((path) => parseGodotExportPresets(texts.get(path)!));
     const androidIds = [...new Set(presets.filter((preset) => preset.platform === "Android" && preset.packageId).map((preset) => preset.packageId!))];
     const iosIds = [...new Set(presets.filter((preset) => preset.platform === "iOS" && preset.bundleId).map((preset) => preset.bundleId!))];
     if (androidIds.length > 1 || iosIds.length > 1) {

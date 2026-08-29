@@ -79,7 +79,7 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 기존 ACTIVE snapshot도 제공하지 않는다.
 
 세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, default branch `main`, current
-`repository-discovery/v8`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+`repository-discovery/v9`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
@@ -464,7 +464,8 @@ branch와 현재 `main` HEAD를 provider에서 다시 읽은 뒤 exact commit tr
 enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration generation CAS에서 거부된다.
 
 탐지 파일은 verified tree에서 선택한 `package.json`, `project.godot`, native build identity,
-`export_presets.cfg`, `build.env`, `granite.config.ts`로 제한한다. 원문은 parser 호출 동안만 유지하며 DB에는
+canonical `export_presets.cfg` 또는 canonical이 없을 때의 `ci/export_presets.<target>.cfg` fragment,
+`build.env`, `granite.config.ts`로 제한한다. 원문은 parser 호출 동안만 유지하며 DB에는
 path, blob SHA, content SHA-256, size, 상태와 파생된 공개 package/bundle/app ID만 저장한다. tree 전체 path와
 source 원문, secret-like custom package field는 저장하지 않는다. tree path는 absolute/backslash/NUL/dot
 segment를 거부하고 512자·64 segment 상한을 적용한다. 이 상한 안의 vendored xcframework 경로는 정상 tree로
@@ -531,7 +532,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v8`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v9`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
