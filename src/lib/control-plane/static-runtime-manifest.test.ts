@@ -97,4 +97,16 @@ test("Godot/null과 JS/package-manager 조합만 허용한다", () => {
     (error) => error instanceof StaticRuntimeManifestError
       && error.code === "INVALID_STATIC_BINDING",
   );
+  assert.throws(
+    () => buildStaticRuntimeManifestReadback(input({
+      staticBinding: {
+        profile: "unknown",
+        packageManager: "pnpm",
+        workspaceRoot: ".",
+        commandDirectory: ".",
+      } as never,
+    })),
+    (error) => error instanceof StaticRuntimeManifestError
+      && error.code === "INVALID_STATIC_BINDING",
+  );
 });

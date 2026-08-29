@@ -56,9 +56,10 @@ function signatureDigest(value: string): string {
 
 export function buildStaticRuntimeManifestReadback(input: StaticRuntimeManifestInput) {
   if (
-    input.staticBinding.profile === "godot"
+    !["react-native", "capacitor", "ait-web", "godot"].includes(input.staticBinding.profile)
+    || (input.staticBinding.profile === "godot"
       ? input.staticBinding.packageManager !== null
-      : !["npm", "pnpm"].includes(input.staticBinding.packageManager)
+      : !["npm", "pnpm"].includes(input.staticBinding.packageManager))
   ) {
     throw new StaticRuntimeManifestError("INVALID_STATIC_BINDING");
   }
