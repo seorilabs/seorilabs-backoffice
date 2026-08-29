@@ -72,6 +72,20 @@ const allowedEmptyNewTables = new Set(
     .map((value) => value.trim())
     .filter(Boolean),
 );
+/**
+ * 이번 migration 구간에서 사라지는 table. before/after 두 fingerprint 모두에서 빼야
+ * 나머지 table 의 row count 가 그대로인지 비교할 수 있다.
+ *
+ * `--allow-empty-new-tables` 와 대칭이며, 같은 이름을 before 에서는 "있어야 한다",
+ * after 에서는 "없어야 한다"로 검사한다. 오타를 내면 양쪽 다 실패해 검사가 조용히
+ * 약해지지 않는다.
+ */
+const allowedRemovedTables = new Set(
+  (option("allow-removed-tables") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 if (
   !historyMode ||
   !["fresh", "legacy", "cutover", "predeploy"].includes(historyMode)
@@ -84,6 +98,11 @@ if (expectedLineage && !["fresh", "cutover"].includes(expectedLineage)) {
 for (const tableName of allowedEmptyNewTables) {
   if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
     throw new Error("--allow-empty-new-tables에 안전하지 않은 table name이 있다");
+  }
+}
+for (const tableName of allowedRemovedTables) {
+  if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
+    throw new Error("--allow-removed-tables에 안전하지 않은 table name이 있다");
   }
 }
 const contractPath = resolve(
@@ -529,6 +548,9 @@ function verifyContract(actual: SchemaContract): void {
 async function dataFingerprint(
   prisma: PrismaClient,
   allowedEmptyTables: ReadonlySet<string>,
+  removedTables: ReadonlySet<string>,
+  /** true = migration 적용 전 스냅샷(사라질 table 이 아직 있어야 한다). */
+  beforeMigration: boolean,
 ): Promise<Fingerprint> {
   const tables = await prisma.$queryRawUnsafe<Array<{ tableName: string }>>(`
     SELECT TABLE_NAME AS tableName
@@ -540,9 +562,17 @@ async function dataFingerprint(
   `);
   const counts: DatabaseRow[] = [];
   const observedAllowedEmptyTables = new Set<string>();
+  const observedRemovedTables = new Set<string>();
   for (const { tableName } of tables) {
     if (!/^[a-zA-Z0-9_]+$/.test(tableName)) {
       throw new Error("안전하지 않은 table name을 발견했다");
+    }
+    if (removedTables.has(tableName)) {
+      if (!beforeMigration) {
+        throw new Error(`제거 대상 table 이 아직 남아 있다: ${tableName}`);
+      }
+      observedRemovedTables.add(tableName);
+      continue;
     }
     const [row] = await prisma.$queryRawUnsafe<Array<{ rowCount: bigint }>>(
       `SELECT COUNT(*) AS rowCount FROM \`${tableName}\``,
@@ -561,6 +591,14 @@ async function dataFingerprint(
   );
   if (missingAllowedTable) {
     throw new Error(`허용된 신규 table이 존재하지 않는다: ${missingAllowedTable}`);
+  }
+  if (beforeMigration) {
+    const missingRemovedTable = [...removedTables].find(
+      (tableName) => !observedRemovedTables.has(tableName),
+    );
+    if (missingRemovedTable) {
+      throw new Error(`제거 대상 table 이 migration 전에도 없다: ${missingRemovedTable}`);
+    }
   }
   return fingerprint(counts);
 }
@@ -602,7 +640,13 @@ async function main(): Promise<void> {
       );
     }
     if (printDataFingerprint) {
-      const data = await dataFingerprint(prisma, allowedEmptyNewTables);
+      // legacy = 아직 migration 을 적용하지 않은 cutover 직전 스냅샷.
+      const data = await dataFingerprint(
+        prisma,
+        allowedEmptyNewTables,
+        allowedRemovedTables,
+        historyMode === "legacy",
+      );
       console.log(`application data fingerprint: tables=${data.count} sha256=${data.sha256}`);
     }
   } finally {

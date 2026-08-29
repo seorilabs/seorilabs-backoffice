@@ -90,6 +90,13 @@ CI는 build가 반환한 immutable registry digest의 migration Job으로 `prism
 반영되므로 migration과 기존 Pod가 서로 다른 artifact를 실행하지 않는다.
 
 신규 migration은 `scripts/check-migration-safety.sh`의 expand-only gate를 통과해야 한다.
+폐기된 컬럼·테이블을 실제로 지우는 contract 단계는 `prisma/migration-history.json`의
+`approvedContractMigrations`에 **이름 + migration.sql bytes checksum + 사유**를 함께 등록해야만
+예외로 통과한다. 파일을 한 글자라도 고치면 checksum이 어긋나 다시 막히고, 등록만 남고 migration이
+사라져도 실패한다. 예외는 여전히 expand → 배포 → contract 순서를 전제한다 — 구 Pod가 그 컬럼을
+참조하지 않게 된 뒤에만 등록한다.
+Table을 지우는 migration은 `scripts/test-migration-cutover.sh`의 `removed_tables`에도 넣는다.
+before/after row count fingerprint에서 양쪽 모두 빼야 나머지 table의 보존을 계속 검사할 수 있다.
 DROP/RENAME/MODIFY/데이터 삭제와 기존 writer를 깨는 NOT NULL column 추가는 한 번의
 pre-deploy migration으로 허용하지 않고 expand → backfill → contract 단계와 별도 승인을 쓴다.
 Job 실패 로그는 credential 노출 방지를 위해 CI에 출력하지 않는다.

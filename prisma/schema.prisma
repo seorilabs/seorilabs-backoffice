@@ -50,10 +50,6 @@ model App {
   aitWorkspaceId       Int?
   aitMiniAppId         Int?    @unique
 
-  // [폐기] 담당제 AI 팀원 배분. 2026-08-27 팀원 체계를 접어 읽는 코드가 사라졌다.
-  // expand-only migration 계약상 컬럼 제거는 별도 contract 단계에서 한다.
-  ownerTeammate String?
-
   marketTargets Json // ["play","appstore","ait","web"]
 
   // 부트스트랩 멱등
@@ -116,7 +112,6 @@ model App {
 
   @@index([status, currentStage])
   @@index([type, engine])
-  @@index([ownerTeammate])
   @@map("app")
 }
 
@@ -802,49 +797,19 @@ model AppConsoleMetricDaily {
 // 인프라 테이블
 // ──────────────────────────────────────────────────────────────────────────
 // Discord /ask 대화 문맥. 서버·채널·사용자 조합별로 분리한다.
-// [폐기] teammate 는 팀원 봇 대화를 메인 봇 /ask 와 격리하던 축이다. 팀원 체계를
-// 접어 신규 행은 항상 null 이며, 제거는 별도 contract 단계에서 한다.
 model DiscordTurn {
   id        String   @id @default(cuid())
   guildId   String
   channelId String
   userId    String
-  teammate  String?
   role      String
   content   String   @db.Text
   createdAt DateTime @default(now())
 
-  @@index([guildId, channelId, userId, teammate, createdAt])
+  @@index([guildId, channelId, userId, createdAt])
   @@map("discord_turn")
 }
 
-// [폐기] AI 팀원 순찰·멘션 큐. 2026-08-27 팀원 체계를 접어 쓰는 코드가 사라졌다.
-// expand-only migration 계약상 테이블 제거는 별도 contract 단계에서 한다.
-model TeammateRun {
-  id           String            @id @default(cuid())
-  teammate     String
-  trigger      String
-  dedupeKey    String            @unique
-  scope        String?           @db.Text
-  status       TeammateRunStatus @default(PENDING)
-  findingCount Int               @default(0)
-  findings     Json?
-  issueUrls    Json?
-  /// 멘션 원문(guildId/channelId/userId/messageId/text). worker 재기동으로 끊긴
-  /// 멘션을 재시도할 때 필요하다. 정상 완료 시 비운다(원문 보존 최소화 —
-  /// 대화 자체는 discord_turn 에 남는다).
-  payload      Json?
-  outcome      String?           @db.Text
-  attempts     Int               @default(0)
-  startedAt    DateTime?         @db.DateTime(3)
-  completedAt  DateTime?         @db.DateTime(3)
-  createdAt    DateTime          @default(now()) @db.DateTime(3)
-  updatedAt    DateTime          @updatedAt
-
-  @@index([teammate, createdAt])
-  @@index([status, createdAt])
-  @@map("teammate_run")
-}
 
 /// LLM 호출 사용량 원장. 모든 provider 호출 직후 fire-and-forget 으로 적재하고,
 /// 서리 재무 순찰이 월누적 비용으로 집계한다. 단가는 저장하지 않는다 —
@@ -854,8 +819,6 @@ model AiUsage {
   provider       String // "gemini" | "anthropic" | "openai"
   model          String
   path           String // "chat-agent" | "release-notes" | "unknown"
-  // [폐기] 팀원 귀속 축. 신규 행은 항상 null 이며 제거는 별도 contract 단계에서 한다.
-  teammate       String?
   inputTokens    Int      @default(0)
   outputTokens   Int      @default(0)
   thinkingTokens Int      @default(0) // Gemini 전용 — 다른 provider 는 output 에 합산 청구
@@ -867,12 +830,6 @@ model AiUsage {
   @@map("ai_usage")
 }
 
-enum TeammateRunStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-}
 
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
