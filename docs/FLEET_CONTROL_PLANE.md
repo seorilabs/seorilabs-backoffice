@@ -440,7 +440,13 @@ key를 요구하고 이전 revision을 수정하지 않으며 audit에는 공개
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.
 두 번의 terminal readback 뒤에만 중앙 DRAFT backfill을 실행하며 세 단계 중 하나라도 실패하면 catch-up Job과
-배포가 실패한다. 정기 scheduler 자체는 삭제하거나 suspend하지 않는다.
+배포가 실패한다. `desired-state-draft-backfill/v2`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
+`x-seorilabs-source-sha`로 전달한다. 배포 occurrence key와 request hash는 이 SHA, 고정 actor,
+`DEPLOY_CATCH_UP` trigger에 결합되므로 동일 SHA 재시도만 기존 run을 replay하고 같은 UTC hour의 다른 SHA는
+새 run을 만든다. hourly Cron은 source SHA가 없는 별도 `HOURLY_CRON` occurrence key를 사용한다.
+run은 공개 `trigger`, `sourceSha`, request hash를 보존하며 응답 header와 Pod termination message의
+run ID, contract, source SHA, `COMPLETED`, `failed=0` readback이 모두 맞아야 배포가 성공한다. 응답 body와
+admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler 자체는 삭제하거나 suspend하지 않는다.
 
 ## 중앙 모델의 zero-state 의미
 

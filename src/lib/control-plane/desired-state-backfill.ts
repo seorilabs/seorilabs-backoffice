@@ -8,17 +8,80 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
-export const DESIRED_STATE_BACKFILL_CONTRACT_VERSION = "desired-state-draft-backfill/v1";
+export const DESIRED_STATE_BACKFILL_CONTRACT_VERSION = "desired-state-draft-backfill/v2";
 export const DESIRED_STATE_BACKFILL_MODE = "DRAFT_ONLY" as const;
 
 const ACTOR = /^[A-Za-z0-9._:/-]{1,128}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:/-]{8,191}$/;
+const SOURCE_SHA = /^[0-9a-f]{40}$/;
 const MARKET_ORDER = ["google-play", "app-store", "apps-in-toss"] as const;
 const RELEASE_CHANNEL = {
   "google-play": "internal",
   "app-store": "testflight",
   "apps-in-toss": "private",
 } as const;
+
+export type DesiredStateBackfillTrigger =
+  | "HOURLY_CRON"
+  | "DEPLOY_CATCH_UP"
+  | "CONTROL_PLANE_API";
+
+export interface DesiredStateBackfillInvocation {
+  actor: string;
+  idempotencyKey: string;
+  trigger: DesiredStateBackfillTrigger;
+  sourceSha: string | null;
+}
+
+/**
+ * Admin scheduler 요청은 caller가 임의 key를 고르지 못하게 trigger별 namespace에
+ * 결합한다. 배포는 exact source SHA, 정기는 UTC hour occurrence가 재시도 단위다.
+ */
+export function desiredStateBackfillAdminInvocation(input: {
+  trigger: string | null;
+  sourceSha: string | null;
+  now: Date;
+}): DesiredStateBackfillInvocation {
+  if (input.trigger === "deploy-catch-up") {
+    if (!input.sourceSha || !SOURCE_SHA.test(input.sourceSha)) {
+      throw new ControlPlaneError(
+        "deploy catch-up에는 소문자 40자리 source SHA가 필요합니다.",
+        400,
+        "SOURCE_SHA_INVALID",
+      );
+    }
+    return {
+      actor: "deploy:desired-state-backfill",
+      idempotencyKey: `desired-state-backfill:deploy:${input.sourceSha}`,
+      trigger: "DEPLOY_CATCH_UP",
+      sourceSha: input.sourceSha,
+    };
+  }
+  if (input.trigger === "hourly-cron") {
+    if (input.sourceSha !== null) {
+      throw new ControlPlaneError(
+        "hourly backfill 요청에는 source SHA를 지정할 수 없습니다.",
+        400,
+        "SOURCE_SHA_NOT_ALLOWED",
+      );
+    }
+    if (!Number.isFinite(input.now.getTime())) {
+      throw new ControlPlaneError("hourly occurrence 시각이 유효하지 않습니다.", 400, "OCCURRENCE_INVALID");
+    }
+    const occurrence = input.now.toISOString().slice(0, 13).replace(/[-T:]/g, "");
+    return {
+      actor: "scheduler:desired-state-backfill",
+      idempotencyKey: `desired-state-backfill:hourly:${occurrence}`,
+      trigger: "HOURLY_CRON",
+      sourceSha: null,
+    };
+  }
+  throw new ControlPlaneError(
+    "x-seorilabs-backfill-trigger는 hourly-cron 또는 deploy-catch-up이어야 합니다.",
+    400,
+    "BACKFILL_TRIGGER_INVALID",
+  );
+}
 
 export type DesiredStateNeedsInputReason =
   | "APP_REPO_ID_MISSING"
@@ -124,7 +187,23 @@ export interface DesiredStateBackfillRunResult extends DesiredStateBackfillSumma
   runId: string;
   duplicate: boolean;
   state: "completed" | "partial" | "busy";
+  runStatus: "RUNNING" | "COMPLETED" | "PARTIAL";
+  trigger: DesiredStateBackfillTrigger;
+  sourceSha: string | null;
   ok: boolean;
+}
+
+export function desiredStateBackfillReadbackHeaders(
+  result: DesiredStateBackfillRunResult,
+): Record<string, string> {
+  return {
+    "x-seorilabs-backfill-run-id": result.runId,
+    "x-seorilabs-backfill-contract-version": result.contractVersion,
+    "x-seorilabs-backfill-trigger": result.trigger,
+    "x-seorilabs-backfill-source-sha": result.sourceSha ?? "",
+    "x-seorilabs-backfill-status": result.runStatus,
+    "x-seorilabs-backfill-failed": String(result.failed),
+  };
 }
 
 const EMPTY_PROJECTIONS = {
@@ -340,11 +419,14 @@ function summarize(items: DesiredStateBackfillItem[]): DesiredStateBackfillSumma
   };
 }
 
-function requestHash(actor: string): string {
+export function desiredStateBackfillRequestHash(input: DesiredStateBackfillInvocation): string {
   return jsonDigest({
     contractVersion: DESIRED_STATE_BACKFILL_CONTRACT_VERSION,
     mode: DESIRED_STATE_BACKFILL_MODE,
-    actor,
+    actor: input.actor,
+    idempotencyKey: input.idempotencyKey,
+    trigger: input.trigger,
+    sourceSha: input.sourceSha,
   } as JsonValue);
 }
 
@@ -358,7 +440,30 @@ function storedSummary(value: unknown): DesiredStateBackfillSummary | null {
     : null;
 }
 
-async function createRun(input: { actor: string; idempotencyKey: string; requestHash: string }) {
+export function assertDesiredStateBackfillReplay(input: {
+  stored: {
+    actor: string;
+    requestHash: string;
+    trigger: string | null;
+    sourceSha: string | null;
+  };
+  requested: DesiredStateBackfillInvocation & { requestHash: string };
+}): void {
+  if (
+    input.stored.requestHash !== input.requested.requestHash
+    || input.stored.actor !== input.requested.actor
+    || input.stored.trigger !== input.requested.trigger
+    || input.stored.sourceSha !== input.requested.sourceSha
+  ) {
+    throw new ControlPlaneError(
+      "같은 idempotency key가 다른 desired-state backfill 요청에 사용되었습니다.",
+      409,
+      "IDEMPOTENCY_CONFLICT",
+    );
+  }
+}
+
+async function createRun(input: DesiredStateBackfillInvocation & { requestHash: string }) {
   try {
     const run = await prisma.$transaction(async (tx) => {
       const created = await tx.desiredStateBackfillRun.create({
@@ -367,6 +472,8 @@ async function createRun(input: { actor: string; idempotencyKey: string; request
           idempotencyKey: input.idempotencyKey,
           requestHash: input.requestHash,
           contractVersion: DESIRED_STATE_BACKFILL_CONTRACT_VERSION,
+          trigger: input.trigger,
+          sourceSha: input.sourceSha,
         },
       });
       await tx.auditLog.create({
@@ -379,6 +486,8 @@ async function createRun(input: { actor: string; idempotencyKey: string; request
             contractVersion: DESIRED_STATE_BACKFILL_CONTRACT_VERSION,
             mode: DESIRED_STATE_BACKFILL_MODE,
             requestHash: input.requestHash,
+            trigger: input.trigger,
+            sourceSha: input.sourceSha,
           },
         },
       });
@@ -390,13 +499,7 @@ async function createRun(input: { actor: string; idempotencyKey: string; request
     const run = await prisma.desiredStateBackfillRun.findUniqueOrThrow({
       where: { idempotencyKey: input.idempotencyKey },
     });
-    if (run.requestHash !== input.requestHash || run.actor !== input.actor) {
-      throw new ControlPlaneError(
-        "같은 idempotency key가 다른 desired-state backfill 요청에 사용되었습니다.",
-        409,
-        "IDEMPOTENCY_CONFLICT",
-      );
-    }
+    assertDesiredStateBackfillReplay({ stored: run, requested: input });
     return { run, duplicate: true };
   }
 }
@@ -480,15 +583,23 @@ async function createDraftForCandidate(
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export async function runDesiredStateDraftBackfill(input: {
-  actor: string;
-  idempotencyKey: string;
-}): Promise<DesiredStateBackfillRunResult> {
+export async function runDesiredStateDraftBackfill(
+  input: DesiredStateBackfillInvocation,
+): Promise<DesiredStateBackfillRunResult> {
   if (!ACTOR.test(input.actor)) throw new ControlPlaneError("actor가 유효하지 않습니다.", 400, "ACTOR_INVALID");
   if (!IDEMPOTENCY_KEY.test(input.idempotencyKey)) {
     throw new ControlPlaneError("idempotency key가 유효하지 않습니다.", 400, "IDEMPOTENCY_KEY_INVALID");
   }
-  const hashed = requestHash(input.actor);
+  if (input.sourceSha !== null && !SOURCE_SHA.test(input.sourceSha)) {
+    throw new ControlPlaneError("source SHA가 유효하지 않습니다.", 400, "SOURCE_SHA_INVALID");
+  }
+  if (input.trigger === "DEPLOY_CATCH_UP" && input.sourceSha === null) {
+    throw new ControlPlaneError("deploy catch-up source SHA가 필요합니다.", 400, "SOURCE_SHA_INVALID");
+  }
+  if (input.trigger !== "DEPLOY_CATCH_UP" && input.sourceSha !== null) {
+    throw new ControlPlaneError("이 trigger에는 source SHA를 지정할 수 없습니다.", 400, "SOURCE_SHA_NOT_ALLOWED");
+  }
+  const hashed = desiredStateBackfillRequestHash(input);
   const created = await createRun({ ...input, requestHash: hashed });
   if (created.duplicate) {
     const summary = storedSummary(created.run.summary);
@@ -498,11 +609,23 @@ export async function runDesiredStateDraftBackfill(input: {
         runId: created.run.id,
         duplicate: true,
         state: created.run.status === "COMPLETED" ? "completed" : "partial",
+        runStatus: created.run.status,
+        trigger: input.trigger,
+        sourceSha: input.sourceSha,
         ok: created.run.status === "COMPLETED" && summary.failed === 0,
       };
     }
     const empty = summarize([]);
-    return { ...empty, runId: created.run.id, duplicate: true, state: "busy", ok: false };
+    return {
+      ...empty,
+      runId: created.run.id,
+      duplicate: true,
+      state: "busy",
+      runStatus: "RUNNING",
+      trigger: input.trigger,
+      sourceSha: input.sourceSha,
+      ok: false,
+    };
   }
 
   const candidates = await prisma.$transaction((tx) => loadCandidates(tx));
@@ -562,6 +685,8 @@ export async function runDesiredStateDraftBackfill(input: {
           needsInputByReason,
           activationAttempted: false,
           providerMutationAttempted: false,
+          trigger: input.trigger,
+          sourceSha: input.sourceSha,
         },
       },
     });
@@ -571,6 +696,9 @@ export async function runDesiredStateDraftBackfill(input: {
     runId: created.run.id,
     duplicate: false,
     state: status === "COMPLETED" ? "completed" : "partial",
+    runStatus: status,
+    trigger: input.trigger,
+    sourceSha: input.sourceSha,
     ok: status === "COMPLETED",
   };
 }
@@ -636,6 +764,9 @@ export async function getDesiredStateBackfillSummary() {
       id: latestRun.id,
       status: latestRun.status,
       actor: latestRun.actor,
+      trigger: latestRun.trigger,
+      sourceSha: latestRun.sourceSha,
+      requestHash: latestRun.requestHash,
       startedAt: latestRun.startedAt,
       completedAt: latestRun.completedAt,
       summary: storedSummary(latestRun.summary),

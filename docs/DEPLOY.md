@@ -228,7 +228,11 @@ kubectl -n platform create job \
   repository discovery enqueue → 현재 generation provider readback drain → desired-state DRAFT 순서이며
   앞 단계가 실패하거나 timeout이면 뒤 단계를 실행하지 않는다. 배포 runner나
   catch-up이 실패해도 정기 scheduler를 delete 또는 suspend하지 않는다. 같은 시각 실행은
-  endpoint의 durable idempotency/CAS로 한 번만 반영되고, 보존된 Job은 TTL로 정리된다. 웹
+  endpoint의 durable idempotency/CAS로 한 번만 반영되고, 보존된 Job은 TTL로 정리된다. desired-state
+  catch-up은 exact source SHA에 결합된 `DEPLOY_CATCH_UP` run을 만들며, 동일 SHA만 replay한다. hourly Cron은
+  source SHA가 없는 `HOURLY_CRON` occurrence라 배포와 충돌하지 않는다. 배포 스크립트는 응답 body를
+  출력하지 않고 Job termination message의 공개 run ID, contract, source SHA, `COMPLETED`, `failed=0`을
+  다시 읽어 모두 일치할 때만 성공한다. 웹
   프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
   stdin으로 전달하며 환경변수나 argv에 넣지 않는다.
 - Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).

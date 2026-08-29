@@ -116,6 +116,7 @@ spec:
                   token="$(cat /var/run/secrets/seorilabs/admin-token)" &&
                   printf 'header = "x-admin-token: %s"\n' "$token" |
                   curl --config - -fsS -o /dev/null --max-time 840 -XPOST
+                  -H 'x-seorilabs-backfill-trigger: hourly-cron'
                   http://backoffice.platform.svc.cluster.local/api/admin/desired-state/backfill
               resources:
                 requests:

@@ -163,7 +163,9 @@ fi
 
 catchup_out="$("$render" "$root/k8s/scheduler-catchup-job.yaml" "$IMG" "$SHA")"
 if printf '%s' "$catchup_out" | grep -q "generateName: backoffice-scheduler-catchup-${SHA:0:12}-" &&
-   printf '%s' "$catchup_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\""; then
+   printf '%s' "$catchup_out" | grep -q "seorilabs.dev/source-sha: \"${SHA}\"" &&
+   printf '%s' "$catchup_out" | grep -q "x-seorilabs-source-sha: ${SHA}" &&
+   ! printf '%s' "$catchup_out" | grep -q '__BACKOFFICE_IMAGE_TAG'; then
   ok "scheduler catch-up source SHA identity"
 else
   ng "scheduler catch-up source SHA identity가 깨졌다"
@@ -267,6 +269,11 @@ if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q 'curlimages/curl@sha256:' "$catchup_job" &&
    grep -q '409) echo "$label=busy"' "$catchup_job" &&
    grep -q 'repository-discovery/backfill' "$catchup_job" &&
+   grep -q 'x-seorilabs-backfill-trigger: deploy-catch-up' "$catchup_job" &&
+   grep -q 'x-seorilabs-source-sha: __BACKOFFICE_IMAGE_TAG__' "$catchup_job" &&
+   grep -q -- '-D - -o /dev/null' "$catchup_job" &&
+   grep -q '/dev/termination-log' "$catchup_job" &&
+   grep -q 'desired-state-draft-backfill/v2' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
    grep -q 'automation/project-projections' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
@@ -277,7 +284,7 @@ fi
 
 catchup_enqueue_line="$(grep -n 'call_required repository_discovery_backfill' "$catchup_job" | head -1 | cut -d: -f1)"
 catchup_drain_line="$(grep -n 'call_required repository_discovery_drain' "$catchup_job" | head -1 | cut -d: -f1)"
-catchup_draft_line="$(grep -n 'call_required desired_state_backfill' "$catchup_job" | head -1 | cut -d: -f1)"
+catchup_draft_line="$(grep -n '^              desired_state_backfill$' "$catchup_job" | head -1 | cut -d: -f1)"
 if grep -q 'activeDeadlineSeconds: 3300' "$catchup_job" &&
    grep -q 'call_required()' "$catchup_job" &&
    grep -q '/api/admin/repository-discovery/drain' "$catchup_job" &&
@@ -309,6 +316,8 @@ desired_state_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-desired-state-bac
 if grep -q 'schedule: "27 \* \* \* \*"' <<<"$desired_state_doc" &&
    grep -q 'concurrencyPolicy: Forbid' <<<"$desired_state_doc" &&
    grep -q 'desired-state/backfill' <<<"$desired_state_doc" &&
+   grep -q 'x-seorilabs-backfill-trigger: hourly-cron' <<<"$desired_state_doc" &&
+   ! grep -q 'x-seorilabs-source-sha' <<<"$desired_state_doc" &&
    grep -q 'automountServiceAccountToken: false' <<<"$desired_state_doc" &&
    grep -q 'readOnlyRootFilesystem: true' <<<"$desired_state_doc"; then
   ok "desired-state backfill은 classification 이후 DRAFT만 직렬 생성"

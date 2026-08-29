@@ -36,6 +36,8 @@ spec:
             - -ceu
             - |
               failed=0
+              source_sha="__BACKOFFICE_IMAGE_TAG__"
+              expected_backfill_contract="desired-state-draft-backfill/v2"
               token="$(cat /var/run/secrets/seorilabs/admin-token)"
               call() {
                 label="$1"
@@ -74,14 +76,72 @@ spec:
                   return 1
                 fi
               }
+              desired_state_backfill() {
+                response_headers=""
+                if ! response_headers="$(printf 'header = "x-admin-token: %s"\n' "$token" | \
+                  curl --config - -sS -D - -o /dev/null \
+                    -w 'x-seorilabs-http-status:%{http_code}\n' \
+                    --max-time 600 -XPOST \
+                    -H 'x-seorilabs-backfill-trigger: deploy-catch-up' \
+                    -H 'x-seorilabs-source-sha: __BACKOFFICE_IMAGE_TAG__' \
+                    http://backoffice.platform.svc.cluster.local/api/admin/desired-state/backfill)"; then
+                  echo "desired_state_backfill=failed_transport" >&2
+                  return 1
+                fi
+                header_value() {
+                  expected="$1"
+                  printf '%s\n' "$response_headers" | awk -v expected="$expected" '
+                    {
+                      line = $0
+                      sub(/\r$/, "", line)
+                      colon = index(line, ":")
+                      if (colon > 0 && tolower(substr(line, 1, colon - 1)) == expected) {
+                        value = substr(line, colon + 1)
+                        sub(/^[ \t]+/, "", value)
+                      }
+                    }
+                    END { print value }
+                  '
+                }
+                status="$(header_value x-seorilabs-http-status)"
+                run_id="$(header_value x-seorilabs-backfill-run-id)"
+                contract="$(header_value x-seorilabs-backfill-contract-version)"
+                trigger="$(header_value x-seorilabs-backfill-trigger)"
+                observed_sha="$(header_value x-seorilabs-backfill-source-sha)"
+                run_status="$(header_value x-seorilabs-backfill-status)"
+                failed_count="$(header_value x-seorilabs-backfill-failed)"
+                case "$status" in
+                  2??) ;;
+                  *) echo "desired_state_backfill=failed_http" >&2; return 1 ;;
+                esac
+                case "$run_id" in
+                  ""|*[!A-Za-z0-9_-]*) echo "desired_state_backfill=invalid_readback" >&2; return 1 ;;
+                esac
+                if [ "$contract" != "$expected_backfill_contract" ] ||
+                   [ "$trigger" != DEPLOY_CATCH_UP ] ||
+                   [ "$observed_sha" != "$source_sha" ] ||
+                   [ "$run_status" != COMPLETED ] ||
+                   [ "$failed_count" != 0 ]; then
+                  echo "desired_state_backfill=invalid_readback" >&2
+                  return 1
+                fi
+                {
+                  printf 'runId=%s\n' "$run_id"
+                  printf 'contractVersion=%s\n' "$contract"
+                  printf 'trigger=%s\n' "$trigger"
+                  printf 'sourceSha=%s\n' "$observed_sha"
+                  printf 'status=%s\n' "$run_status"
+                  printf 'failed=%s\n' "$failed_count"
+                } > /dev/termination-log
+                echo "desired_state_backfill=ok"
+              }
               call reconcile --max-time 840 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/reconcile
               call_required repository_discovery_backfill --max-time 600 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/backfill
               call_required repository_discovery_drain --max-time 840 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/repository-discovery/drain
-              call_required desired_state_backfill --max-time 600 -XPOST \
-                http://backoffice.platform.svc.cluster.local/api/admin/desired-state/backfill
+              desired_state_backfill
               call xcode_cloud_sync --max-time 300 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/xcode-cloud/sync
               call registry_seed --max-time 300 -XPOST \

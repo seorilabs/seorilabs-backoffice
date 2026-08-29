@@ -15,6 +15,7 @@ audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
 audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
 verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-3360}"
+desired_state_backfill_contract="desired-state-draft-backfill/v2"
 
 if [ -z "$image" ]; then
   echo "오류: BACKOFFICE_IMAGE가 필요하다" >&2
@@ -289,6 +290,28 @@ if [ "$catchup_sha" != "$source_sha" ]; then
   echo "오류: scheduler catch-up source SHA 불일치" >&2
   exit 1
 fi
+catchup_readback="$(k -n "$namespace" get pods -l "job-name=$catchup_name" \
+  -o 'jsonpath={.items[0].status.containerStatuses[0].state.terminated.message}')"
+readback_field() {
+  local key="$1"
+  printf '%s\n' "$catchup_readback" | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2) }'
+}
+backfill_run_id="$(readback_field runId)"
+backfill_contract="$(readback_field contractVersion)"
+backfill_trigger="$(readback_field trigger)"
+backfill_source_sha="$(readback_field sourceSha)"
+backfill_status="$(readback_field status)"
+backfill_failed="$(readback_field failed)"
+if [[ ! "$backfill_run_id" =~ ^[A-Za-z0-9_-]+$ ]] ||
+   [ "$backfill_contract" != "$desired_state_backfill_contract" ] ||
+   [ "$backfill_trigger" != DEPLOY_CATCH_UP ] ||
+   [ "$backfill_source_sha" != "$source_sha" ] ||
+   [ "$backfill_status" != COMPLETED ] ||
+   [ "$backfill_failed" != 0 ]; then
+  echo "오류: scheduler catch-up desired-state run readback이 배포 계약과 일치하지 않는다" >&2
+  exit 1
+fi
+echo "desired_state_backfill_run_id=${backfill_run_id} contract=${backfill_contract} source_sha=${backfill_source_sha} status=${backfill_status} failed=${backfill_failed}"
 echo "== endpoint CronJob manifests =="
 for manifest in \
   backup-cronjob.yaml \

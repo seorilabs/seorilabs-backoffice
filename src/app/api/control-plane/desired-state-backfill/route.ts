@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { desiredStateBackfillSchema } from "@/lib/control-plane/contracts";
 import {
+  desiredStateBackfillReadbackHeaders,
   getDesiredStateBackfillSummary,
   runDesiredStateDraftBackfill,
 } from "@/lib/control-plane/desired-state-backfill";
@@ -34,9 +35,12 @@ export async function POST(request: NextRequest) {
     const result = await runDesiredStateDraftBackfill({
       actor: principal.id,
       idempotencyKey,
+      trigger: "CONTROL_PLANE_API",
+      sourceSha: null,
     });
     return NextResponse.json(result, {
       status: result.state === "busy" ? 409 : result.duplicate ? 200 : 201,
+      headers: desiredStateBackfillReadbackHeaders(result),
     });
   } catch (error) {
     return controlPlaneErrorResponse(error);

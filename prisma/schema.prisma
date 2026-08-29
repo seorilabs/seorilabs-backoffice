@@ -1859,6 +1859,12 @@ enum DesiredStateBackfillRunStatus {
   PARTIAL
 }
 
+enum DesiredStateBackfillTrigger {
+  HOURLY_CRON
+  DEPLOY_CATCH_UP
+  CONTROL_PLANE_API
+}
+
 // 중앙 desired-state DRAFT backfill occurrence. 요청 멱등과 UI readback만 보존하며
 // provider/GitHub mutation 또는 secret material은 담지 않는다.
 model DesiredStateBackfillRun {
@@ -1867,12 +1873,15 @@ model DesiredStateBackfillRun {
   requestHash     String                        @db.Char(64)
   contractVersion String                        @db.VarChar(64)
   actor           String                        @db.VarChar(128)
+  trigger         DesiredStateBackfillTrigger?
+  sourceSha       String?                       @db.Char(40)
   status          DesiredStateBackfillRunStatus @default(RUNNING)
   summary         Json?
   startedAt       DateTime                      @default(now()) @db.DateTime(3)
   completedAt     DateTime?                     @db.DateTime(3)
 
   @@index([status, startedAt])
+  @@index([trigger, sourceSha, startedAt], map: "cp_desired_backfill_trigger_source_started_idx")
   @@map("control_plane_desired_state_backfill_run")
 }
 
