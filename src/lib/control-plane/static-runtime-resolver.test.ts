@@ -39,6 +39,7 @@ function client(overrides: {
   requestHash?: string | null;
   sourceRef?: string | null;
   profile?: "react-native" | "capacitor" | "ait-web" | "godot";
+  rootWorkspace?: boolean;
 } = {}) {
   const payload = {
     schemaVersion: 1,
@@ -97,6 +98,29 @@ function client(overrides: {
           workflowProfile: overrides.profile ?? "capacitor",
           workflowPackageManager: overrides.profile === "godot" ? null : "pnpm",
           workflowWorkingDirectory: overrides.profile === "godot" ? "." : "app",
+          payload: overrides.rootWorkspace
+            ? {
+                schemaVersion: 2,
+                contractVersion: "repository-discovery/v7",
+                repository: {
+                  id: Number(REPOSITORY_ID),
+                  fullName: "seorilabs/runtime-canary",
+                  sourceSha: BINDING_SHA,
+                  sourceRef: "refs/heads/main",
+                },
+                sources: ["package.json", "pnpm-lock.yaml"].map((path) => ({
+                  path,
+                  status: "PRESENT",
+                  reason: null,
+                  repoId: Number(REPOSITORY_ID),
+                  fullName: "seorilabs/runtime-canary",
+                  sourceSha: BINDING_SHA,
+                  sourceRef: "refs/heads/main",
+                  blobSha: "e".repeat(40),
+                  contentSha256: "f".repeat(64),
+                })),
+              }
+            : {},
         };
       },
     },
@@ -146,6 +170,15 @@ test("static runtime resolver는 App, ACTIVE config, exact discovery와 approved
   assert.equal(result.applicationSourceSha, APPLICATION_SHA);
   assert.equal(result.manifest.staticBinding.profile, "capacitor");
   assert.equal(result.manifest.staticBinding.workspaceRoot, "app");
+});
+
+test("root lockfile provenance가 있으면 monorepo workspace와 하위 command directory를 분리한다", async () => {
+  const result = await resolveStaticRuntimeManifest(
+    input(),
+    client({ profile: "react-native", rootWorkspace: true }) as never,
+  );
+  assert.equal(result.manifest.staticBinding.workspaceRoot, ".");
+  assert.equal(result.manifest.staticBinding.commandDirectory, "app");
 });
 
 test("bundle drift, runner boundary와 source provenance 누락은 fail-closed한다", async () => {
