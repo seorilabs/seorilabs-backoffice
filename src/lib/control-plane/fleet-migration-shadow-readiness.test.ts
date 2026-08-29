@@ -19,6 +19,7 @@ import type {
 const NOW = new Date("2026-08-29T10:00:00.000Z");
 const PRODUCT_SHA = "a".repeat(40);
 const INFRA_SHA = "b".repeat(40);
+const DISCOVERY_PAYLOAD_HASH = "c".repeat(64);
 const SNAPSHOT_SIGNING_KEY = "fleet-migration-shadow-readiness-test-key";
 
 function registration(
@@ -49,11 +50,21 @@ function productApp(): FleetMigrationAppReadback {
     repoFullName: "seorilabs/product",
     latestDiscovery: {
       id: "discovery-product-0001",
+      appId: "app-product-0001",
       sourceSha: PRODUCT_SHA,
+      sourceRef: "refs/heads/main",
+      payloadHash: DISCOVERY_PAYLOAD_HASH,
     },
     activeConfigs: [{
       id: "config-product-active-0001",
       sourceObservationId: "discovery-product-0001",
+      sourceObservation: {
+        id: "discovery-product-0001",
+        appId: "app-product-0001",
+        sourceSha: PRODUCT_SHA,
+        sourceRef: "refs/heads/main",
+        payloadHash: DISCOVERY_PAYLOAD_HASH,
+      },
       activatedSnapshot,
       snapshotDigest: signed.digest,
       snapshotSignature: signed.signature,
@@ -65,6 +76,18 @@ function productApp(): FleetMigrationAppReadback {
       state: "COMPLIANT",
     },
     activeCredentialBindingCount: 2,
+  };
+}
+
+function readyBackoffice(
+  app: FleetMigrationAppReadback = productApp(),
+): FleetMigrationBackofficeReadback {
+  return {
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [app],
   };
 }
 
@@ -90,6 +113,7 @@ function dependencies(
   backoffice: FleetMigrationBackofficeReadback,
   options: {
     backofficeDrift?: boolean;
+    discoveryObservationDrift?: boolean;
     paginationDrift?: boolean;
     providerDrift?: boolean;
   } = {},
@@ -140,6 +164,9 @@ function dependencies(
       if (options.backofficeDrift && backofficeCalls === 2) {
         current.registrations[0].status = "NEEDS_INPUT";
       }
+      if (options.discoveryObservationDrift && backofficeCalls === 2) {
+        current.apps[0].latestDiscovery!.id = "discovery-product-0002";
+      }
       return current;
     },
     verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
@@ -187,6 +214,155 @@ test("GitHub repository identity casing만 다르면 중앙 binding drift로 오
 
   assert.equal(result.state, "READY");
   assert.deepEqual(result.reasonCounts, {});
+});
+
+test("같은 source SHA와 payloadHash를 재탐지한 새 observation row는 ACTIVE provenance를 무효화하지 않는다", async () => {
+  const app = productApp();
+  app.latestDiscovery!.id = "discovery-product-0002";
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(app)),
+  );
+
+  assert.equal(result.state, "READY");
+  assert.deepEqual(result.reasonCounts, {});
+  assert.equal(app.activeConfigs[0].sourceObservationId, "discovery-product-0001");
+});
+
+test("같은 source SHA라도 discovery payloadHash가 달라지면 fail-closed한다", async () => {
+  const app = productApp();
+  app.latestDiscovery!.id = "discovery-product-0002";
+  app.latestDiscovery!.payloadHash = "d".repeat(64);
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(app)),
+  );
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(result.reasonCounts, { ACTIVE_CONFIG_SOURCE_MISMATCH: 1 });
+});
+
+test("ACTIVE provenance source SHA가 latest discovery와 provider HEAD에서 벗어나면 fail-closed한다", async () => {
+  const app = productApp();
+  app.activeConfigs[0].sourceObservation!.sourceSha = "e".repeat(40);
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(app)),
+  );
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(result.reasonCounts, { ACTIVE_CONFIG_SOURCE_MISMATCH: 1 });
+});
+
+test("ACTIVE provenance relation, app, main ref와 digest가 정확하지 않으면 fail-closed한다", async () => {
+  const variants: Array<{
+    name: string;
+    mutate: (app: FleetMigrationAppReadback) => void;
+  }> = [
+    {
+      name: "source observation relation missing",
+      mutate: (app) => {
+        app.activeConfigs[0].sourceObservation = null;
+      },
+    },
+    {
+      name: "source observation relation id mismatch",
+      mutate: (app) => {
+        app.activeConfigs[0].sourceObservation!.id = "discovery-product-other";
+      },
+    },
+    {
+      name: "cross-app provenance",
+      mutate: (app) => {
+        app.activeConfigs[0].sourceObservation!.appId = "app-other-0001";
+      },
+    },
+    {
+      name: "non-main provenance",
+      mutate: (app) => {
+        app.activeConfigs[0].sourceObservation!.sourceRef = "refs/heads/release";
+      },
+    },
+    {
+      name: "malformed payload digest",
+      mutate: (app) => {
+        app.activeConfigs[0].sourceObservation!.payloadHash = "invalid";
+      },
+    },
+  ];
+
+  for (const variant of variants) {
+    const app = productApp();
+    variant.mutate(app);
+    const result = await evaluateFleetMigrationShadowReadiness(
+      dependencies(readyBackoffice(app)),
+    );
+    assert.equal(result.state, "BLOCKED", variant.name);
+    assert.deepEqual(
+      result.reasonCounts,
+      { ACTIVE_CONFIG_SOURCE_MISMATCH: 1 },
+      variant.name,
+    );
+  }
+});
+
+test("latest discovery source SHA가 provider HEAD와 다르면 두 source gate가 모두 닫힌다", async () => {
+  const app = productApp();
+  app.latestDiscovery!.sourceSha = "e".repeat(40);
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(app)),
+  );
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(result.reasonCounts, {
+    ACTIVE_CONFIG_SOURCE_MISMATCH: 1,
+    DISCOVERY_SOURCE_MISMATCH: 1,
+  });
+});
+
+test("동일 semantic observation row가 readback 사이에 생기면 현재 실행은 중단하고 안정된 재실행만 연다", async () => {
+  await assert.rejects(
+    evaluateFleetMigrationShadowReadiness(
+      dependencies(readyBackoffice(), { discoveryObservationDrift: true }),
+    ),
+    /FLEET_MIGRATION_SHADOW_BACKOFFICE_VECTOR_DRIFT/,
+  );
+
+  const stableApp = productApp();
+  stableApp.latestDiscovery!.id = "discovery-product-0002";
+  const stable = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(stableApp)),
+  );
+  assert.equal(stable.state, "READY");
+});
+
+test("semantic source 비교는 snapshot, 단일 ACTIVE와 Platform gate를 완화하지 않는다", async () => {
+  const multipleActive = productApp();
+  const secondActive = structuredClone(multipleActive.activeConfigs[0]);
+  secondActive.id = "config-product-active-0002";
+  multipleActive.activeConfigs.push(secondActive);
+  const multipleActiveResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(multipleActive)),
+  );
+  assert.equal(multipleActiveResult.reasonCounts.ACTIVE_CONFIG_MISSING, 1);
+
+  const tamperedSnapshot = productApp();
+  tamperedSnapshot.activeConfigs[0].activatedSnapshot = { schemaVersion: 2 };
+  const tamperedSnapshotResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(tamperedSnapshot)),
+  );
+  assert.equal(tamperedSnapshotResult.reasonCounts.ACTIVE_SNAPSHOT_INVALID, 1);
+
+  const nonCompliantPlatform = productApp();
+  nonCompliantPlatform.platformFleetBinding!.state = "PENDING";
+  const nonCompliantPlatformResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(nonCompliantPlatform)),
+  );
+  assert.equal(
+    nonCompliantPlatformResult.reasonCounts.PLATFORM_FLEET_BINDING_NOT_COMPLIANT,
+    1,
+  );
 });
 
 test("classification decision은 양수 revision과 collector evidence ID를 모두 요구한다", async () => {
