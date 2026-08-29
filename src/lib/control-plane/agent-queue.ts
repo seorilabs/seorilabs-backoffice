@@ -158,6 +158,23 @@ export function validSettlementLease(input: {
     && input.currentGeneration === input.requestedGeneration;
 }
 
+export function settlementLeaseError(input: {
+  runStatus: string;
+  currentGeneration: number;
+  requestedGeneration: number;
+  sessionError: string | null;
+}): string | null {
+  if (
+    input.sessionError === "SESSION_PRINCIPAL_MISMATCH"
+    || input.sessionError === "SESSION_RUNTIME_BINDING_MISMATCH"
+  ) return input.sessionError;
+  if (
+    input.runStatus !== "RUNNING"
+    || input.currentGeneration !== input.requestedGeneration
+  ) return "STALE_LEASE";
+  return input.sessionError;
+}
+
 export function expiredLeaseDisposition(input: {
   mutationStarted: boolean;
   readbackRequested: boolean;
@@ -794,13 +811,19 @@ export async function settleAgentRun(input: {
         now,
       });
       const lease = session.lease;
-      if (sessionError || !validSettlementLease({
+      const leaseError = settlementLeaseError({
+        runStatus: lease.run.status,
+        currentGeneration: lease.run.leaseGeneration,
+        requestedGeneration: session.generation,
+        sessionError,
+      });
+      if (leaseError || !validSettlementLease({
         runStatus: lease.run.status,
         currentGeneration: lease.run.leaseGeneration,
         requestedGeneration: session.generation,
         leaseActive: !sessionError,
       })) {
-        throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, sessionError ?? "STALE_SESSION");
+        throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, leaseError ?? "STALE_SESSION");
       }
       const policy = managedPolicy(lease.run.occurrence.definition);
       if (!policy) {
