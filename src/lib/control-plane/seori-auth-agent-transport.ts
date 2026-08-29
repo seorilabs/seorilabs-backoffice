@@ -1,5 +1,5 @@
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
@@ -84,13 +84,13 @@ export async function readBoundSecretFile(input: {
   const candidate = resolve(rootPath, input.relativePath);
   const parentPath = await realpath(dirname(candidate));
   const lexicalParent = relative(rootPath, parentPath);
-  if (lexicalParent === ".." || lexicalParent.startsWith(`..${sep}`) || isAbsoluteRelative(lexicalParent)) {
+  if (lexicalParent === ".." || lexicalParent.startsWith(`..${sep}`) || isAbsolute(lexicalParent)) {
     throw new Error("SEORI_AUTH_SECRET_PATH_ESCAPE");
   }
   await lstat(candidate);
   const resolved = await realpath(candidate);
   const relativeTarget = relative(rootPath, resolved);
-  if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`) || isAbsoluteRelative(relativeTarget)) {
+  if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) {
     throw new Error("SEORI_AUTH_SECRET_TARGET_ESCAPE");
   }
   const metadata = await stat(resolved);
@@ -122,10 +122,6 @@ export async function withBoundSecretText<T>(input: {
   } finally {
     value.fill(0);
   }
-}
-
-function isAbsoluteRelative(value: string): boolean {
-  return value.startsWith(sep);
 }
 
 function assertPublicNode(value: unknown, path: string, key?: string): void {
