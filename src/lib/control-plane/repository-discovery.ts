@@ -725,9 +725,10 @@ function hasApplicationPackageMarker(
     "apps-in-toss.config.ts",
   ].some((suffix) => paths.has(pathIn(directory, suffix)))) return true;
   const iosPrefix = `${pathIn(directory, "ios/")}`;
-  return [...paths].some((path) => (
-    path.startsWith(iosPrefix) && /\.xcodeproj\/project\.pbxproj$/.test(path)
-  ));
+  for (const path of paths) {
+    if (path.startsWith(iosPrefix) && /\.xcodeproj\/project\.pbxproj$/.test(path)) return true;
+  }
+  return false;
 }
 
 /**
