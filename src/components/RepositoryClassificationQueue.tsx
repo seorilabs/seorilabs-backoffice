@@ -10,6 +10,7 @@ type Classification = "PRODUCT_APP" | "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCL
 
 function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
   const ratifyingCurrent = item.mode === "RATIFY_CURRENT";
+  const correctingPolicy = item.mode === "CORRECT_POLICY";
   const options: Classification[] = item.fork
     ? ["EXCLUDED"]
     : ["PRODUCT_APP", "INFRA_REPO", "PLATFORM_PRODUCER", "EXCLUDED"];
@@ -17,7 +18,7 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
     item.currentClassification ?? options[0],
   );
   const [candidateMarkerPath, setCandidateMarkerPath] = useState(
-    item.candidates[0]?.markerPath ?? "",
+    item.currentCandidateMarkerPath ?? item.candidates[0]?.markerPath ?? "",
   );
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -37,18 +38,22 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
         candidateMarkerPath: selectedMarker,
         justification: ratifyingCurrent
           ? "CURRENT_OBSERVATION_RATIFIED"
-          : classification === "PRODUCT_APP" && selectedMarker
-            ? "APP_CANDIDATE_SELECTED"
-            : "REPOSITORY_PURPOSE_CONFIRMED",
+          : correctingPolicy
+            ? "CENTRAL_POLICY_CORRECTION"
+            : classification === "PRODUCT_APP" && selectedMarker
+              ? "APP_CANDIDATE_SELECTED"
+              : "REPOSITORY_PURPOSE_CONFIRMED",
         requestId: crypto.randomUUID(),
       });
       if (!result.ok) {
         setMessage(result.error ?? "분류 저장 실패");
         return;
       }
-      setMessage(ratifyingCurrent
-        ? `현재 관측을 분류 revision ${result.revision}로 확정했습니다.`
-        : `분류 revision ${result.revision} 저장 · discovery 재검증 대기`);
+      setMessage(
+        ratifyingCurrent
+          ? `현재 관측을 분류 revision ${result.revision}로 확정했습니다.`
+          : `${correctingPolicy ? "교정 " : ""}분류 revision ${result.revision} 저장 · discovery 재검증 대기`,
+      );
       router.refresh();
     });
   }
@@ -60,7 +65,11 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
         <span className="font-mono text-xs text-neutral-500">repo {item.repoId} · gen {item.generation}</span>
       </div>
       <p className="mt-1 text-xs text-amber-700">
-        {ratifyingCurrent ? "현재 terminal 관측의 append-only 확정 필요" : item.reasonCode ?? "분류 입력 필요"}
+        {ratifyingCurrent
+          ? "현재 terminal 관측의 append-only 확정 필요"
+          : correctingPolicy
+            ? `${item.reasonCode ?? "source gate 미해결"} · 기존 정책과 다른 교정만 가능`
+            : item.reasonCode ?? "분류 입력 필요"}
         {item.fork ? " · fork" : ""}
       </p>
       {item.candidates.length > 0 && (
@@ -103,7 +112,13 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
           onClick={decide}
           className="rounded bg-neutral-900 px-3 py-1.5 text-white disabled:opacity-50"
         >
-          {pending ? "저장 중…" : ratifyingCurrent ? "현재 관측 확정" : "분류 후 재검증"}
+          {pending
+            ? "저장 중…"
+            : ratifyingCurrent
+              ? "현재 관측 확정"
+              : correctingPolicy
+                ? "정책 교정 후 재검증"
+                : "분류 후 재검증"}
         </button>
       </div>
       {message && <p className="mt-2 text-xs text-neutral-700">{message}</p>}

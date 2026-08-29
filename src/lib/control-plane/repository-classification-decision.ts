@@ -25,10 +25,11 @@ export interface RepositoryClassificationQueueCandidate {
 export interface RepositoryClassificationQueueItem {
   repoId: string;
   repoFullName: string;
-  mode: "DECIDE" | "RATIFY_CURRENT";
+  mode: "DECIDE" | "RATIFY_CURRENT" | "CORRECT_POLICY";
   generation: number;
   decisionRevision: number;
   currentClassification: RepositoryClassification | null;
+  currentCandidateMarkerPath: string | null;
   reasonCode: string | null;
   fork: boolean | null;
   candidates: RepositoryClassificationQueueCandidate[];
@@ -241,6 +242,11 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
       lastDiscoveryReason: true,
       fork: true,
       discoveryCandidates: true,
+      classificationDecisions: {
+        orderBy: { revision: "desc" as const },
+        take: 1,
+        select: { classification: true, candidateMarkerPath: true },
+      },
       updatedAt: true,
     },
   });
@@ -251,18 +257,27 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
       && (registration.classificationDecisionVersion ?? 0) === 0
       && registration.classification !== null
     )
-  )).map((registration) => ({
-    repoId: registration.repoId.toString(),
-    repoFullName: registration.repoFullName,
-    mode: registration.status === "MANAGED" ? "RATIFY_CURRENT" : "DECIDE",
-    generation: registration.reconcileGeneration ?? 0,
-    decisionRevision: registration.classificationDecisionVersion ?? 0,
-    currentClassification: registration.classification,
-    reasonCode: registration.lastDiscoveryReason,
-    fork: registration.fork,
-    candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
-    updatedAt: registration.updatedAt.toISOString(),
-  }));
+  )).map((registration) => {
+    const decisionRevision = registration.classificationDecisionVersion ?? 0;
+    const latestDecision = registration.classificationDecisions[0] ?? null;
+    return {
+      repoId: registration.repoId.toString(),
+      repoFullName: registration.repoFullName,
+      mode: registration.status === "MANAGED"
+        ? "RATIFY_CURRENT" as const
+        : decisionRevision > 0
+          ? "CORRECT_POLICY" as const
+          : "DECIDE" as const,
+      generation: registration.reconcileGeneration ?? 0,
+      decisionRevision,
+      currentClassification: registration.classification ?? latestDecision?.classification ?? null,
+      currentCandidateMarkerPath: latestDecision?.candidateMarkerPath ?? null,
+      reasonCode: registration.lastDiscoveryReason,
+      fork: registration.fork,
+      candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
+      updatedAt: registration.updatedAt.toISOString(),
+    };
+  });
 }
 
 export async function recordRepositoryClassificationDecision(input: {

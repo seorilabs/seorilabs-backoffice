@@ -109,8 +109,14 @@ test("MANAGED ratification은 exact terminal source, contract, candidate를 묶�
     join(process.cwd(), "src/lib/control-plane/repository-classification-decision.ts"),
     "utf8",
   );
+  const ui = readFileSync(
+    join(process.cwd(), "src/components/RepositoryClassificationQueue.tsx"),
+    "utf8",
+  );
   assert.match(service, /discoveryEnqueued: false/);
   assert.match(service, /if \(ratificationEvidence\)[\s\S]+runId: null,[\s\S]+generation: null/);
+  assert.match(ui, /CORRECT_POLICY/);
+  assert.match(ui, /CENTRAL_POLICY_CORRECTION/);
 });
 
 test("비제품 MANAGED repository는 terminal EXCLUDED 관측만 ratify한다", () => {
