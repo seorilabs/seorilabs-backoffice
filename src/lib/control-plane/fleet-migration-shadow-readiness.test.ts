@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
+import { signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
   evaluateFleetMigrationShadowReadiness,
   type FleetMigrationAppReadback,
@@ -18,6 +19,7 @@ import type {
 const NOW = new Date("2026-08-29T10:00:00.000Z");
 const PRODUCT_SHA = "a".repeat(40);
 const INFRA_SHA = "b".repeat(40);
+const SNAPSHOT_SIGNING_KEY = "fleet-migration-shadow-readiness-test-key";
 
 function registration(
   repoId: number,
@@ -39,6 +41,8 @@ function registration(
 }
 
 function productApp(): FleetMigrationAppReadback {
+  const activatedSnapshot = { schemaVersion: 1 };
+  const signed = signSnapshot(activatedSnapshot, SNAPSHOT_SIGNING_KEY);
   return {
     id: "app-product-0001",
     repoId: "101",
@@ -50,9 +54,9 @@ function productApp(): FleetMigrationAppReadback {
     activeConfigs: [{
       id: "config-product-active-0001",
       sourceObservationId: "discovery-product-0001",
-      activatedSnapshot: { schemaVersion: 1 },
-      snapshotDigest: "c".repeat(64),
-      snapshotSignature: "d".repeat(64),
+      activatedSnapshot,
+      snapshotDigest: signed.digest,
+      snapshotSignature: signed.signature,
       activatedAt: "2026-08-29T09:55:00.000Z",
     }],
     platformFleetBinding: {
@@ -138,6 +142,12 @@ function dependencies(
       }
       return current;
     },
+    verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
+      snapshot as JsonValue,
+      SNAPSHOT_SIGNING_KEY,
+      digest,
+      signature,
+    ),
     now: () => NOW,
   };
 }
@@ -203,6 +213,35 @@ test("PlatformFleetBinding은 exact source와 COMPLIANT 상태가 모두 맞아�
       "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
     ],
   );
+});
+
+test("ACTIVE snapshot 내용이나 서명이 바뀌면 readiness를 열지 않는다", async () => {
+  const app = productApp();
+  app.activeConfigs[0].activatedSnapshot = { schemaVersion: 2 };
+
+  const tampered = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [app],
+  }));
+  assert.equal(tampered.state, "BLOCKED");
+  assert.equal(tampered.reasonCounts.ACTIVE_SNAPSHOT_INVALID, 1);
+
+  const invalidVerifier = dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [productApp()],
+  });
+  invalidVerifier.verifyConfigSnapshot = () => {
+    throw new Error("trusted verifier unavailable");
+  };
+  const unavailable = await evaluateFleetMigrationShadowReadiness(invalidVerifier);
+  assert.equal(unavailable.state, "BLOCKED");
+  assert.equal(unavailable.reasonCounts.ACTIVE_SNAPSHOT_INVALID, 1);
 });
 
 test("사람 결정과 ACTIVE 중앙 증거가 없으면 repo ID/source SHA별 이유로 fail-closed한다", async () => {

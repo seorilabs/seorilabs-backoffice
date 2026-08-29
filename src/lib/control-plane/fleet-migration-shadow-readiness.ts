@@ -1,4 +1,4 @@
-import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertFullOrganizationInstallation,
   listInstallationRepositorySeeds,
@@ -26,6 +26,7 @@ type RepositoryClassification =
 export type FleetMigrationShadowReasonCode =
   | "ACTIVE_CONFIG_MISSING"
   | "ACTIVE_CONFIG_SOURCE_MISMATCH"
+  | "ACTIVE_SNAPSHOT_INVALID"
   | "ACTIVE_SNAPSHOT_MISSING"
   | "APP_BINDING_MISMATCH"
   | "APP_BINDING_MISSING"
@@ -109,6 +110,11 @@ export interface FleetMigrationShadowReadinessDependencies {
     seed: RepositoryInventorySeed,
   ) => Promise<RepositoryReadbackVector>;
   readBackoffice: (repositoryIds: bigint[]) => Promise<FleetMigrationBackofficeReadback>;
+  verifyConfigSnapshot: (
+    snapshot: JsonValue,
+    digest: string,
+    signature: string,
+  ) => boolean;
   now: () => Date;
 }
 
@@ -158,9 +164,10 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
         platformFleetBinding: {
           select: { id: true, sourceSha: true, state: true },
         },
-        credentialBindings: {
-          where: { status: "ACTIVE" },
-          select: { id: true },
+        _count: {
+          select: {
+            credentialBindings: { where: { status: "ACTIVE" } },
+          },
         },
       },
     }),
@@ -189,7 +196,7 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
         activatedAt: revision.activatedAt?.toISOString() ?? null,
       })),
       platformFleetBinding: app.platformFleetBinding,
-      activeCredentialBindingCount: app.credentialBindings.length,
+      activeCredentialBindingCount: app._count.credentialBindings,
     }]),
   };
 }
@@ -214,6 +221,12 @@ const defaultDependencies: FleetMigrationShadowReadinessDependencies = {
   listRepositories: (client) => listInstallationRepositorySeeds(client),
   readRepository: readInstalledRepositoryVector,
   readBackoffice,
+  verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
+    snapshot,
+    process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
+    digest,
+    signature,
+  ),
   now: () => new Date(),
 };
 
@@ -233,6 +246,7 @@ function repositoryReasons(
   vector: RepositoryReadbackVector,
   registration: FleetMigrationRepositoryRegistrationReadback | undefined,
   app: FleetMigrationAppReadback | undefined,
+  verifyConfigSnapshot: FleetMigrationShadowReadinessDependencies["verifyConfigSnapshot"],
 ): FleetMigrationShadowReasonCode[] {
   const reasons: FleetMigrationShadowReasonCode[] = [];
   if (!vector.headSha || !SHA_40.test(vector.headSha)) {
@@ -294,13 +308,25 @@ function repositoryReasons(
     ) {
       reasons.push("ACTIVE_CONFIG_SOURCE_MISMATCH");
     }
-    if (
+    const snapshotMissing =
       activeConfig.activatedSnapshot === null
       || !DIGEST_64.test(activeConfig.snapshotDigest ?? "")
       || !DIGEST_64.test(activeConfig.snapshotSignature ?? "")
-      || activeConfig.activatedAt === null
-    ) {
+      || activeConfig.activatedAt === null;
+    if (snapshotMissing) {
       reasons.push("ACTIVE_SNAPSHOT_MISSING");
+    } else {
+      let valid = false;
+      try {
+        valid = verifyConfigSnapshot(
+          activeConfig.activatedSnapshot!,
+          activeConfig.snapshotDigest!,
+          activeConfig.snapshotSignature!,
+        );
+      } catch {
+        valid = false;
+      }
+      if (!valid) reasons.push("ACTIVE_SNAPSHOT_INVALID");
     }
   }
   if (!app.platformFleetBinding) {
@@ -395,7 +421,12 @@ export async function evaluateFleetMigrationShadowReadiness(
       classificationDecisionRevision:
         registration?.classificationDecisionVersion ?? 0,
       activeCredentialBindingCount: app?.activeCredentialBindingCount ?? 0,
-      reasonCodes: repositoryReasons(vector, registration, app).sort(),
+      reasonCodes: repositoryReasons(
+        vector,
+        registration,
+        app,
+        dependencies.verifyConfigSnapshot,
+      ).sort(),
     };
   });
   const reasonCounts = Object.fromEntries(
