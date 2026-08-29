@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AGENT_READBACK_CAPABILITIES,
+  AGENT_READY_PR_CAPABILITIES,
+  agentExecutionPolicy,
+  agentRepositorySingletonScope,
   eligibleForAutopilot,
   parseManagedWorkerPolicy,
   parseSourceRemediationPolicy,
@@ -204,4 +208,42 @@ test("automation-catalog: sourceRemediationAutomationPolicy는 exact-keys strict
 test("automation-catalog: eligibleForAutopilot는 이전 agent-queue 구현과 동일한 계약을 유지한다", () => {
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "CLOSED", labels: [] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["autopilot", "P1"] }), true);
+});
+
+test("AC-6: source-remediation 실행 capability는 기존 GitHub READY_PR 목록과 정확히 같고 provider/build/upload/public capability가 없다", () => {
+  const policy = sourceRemediationAutomationPolicy({
+    budgetCeilingMicros: 500_000,
+    issueNumber: 30,
+    discoveryGeneration: 3,
+    sourceSha: IMMUNITY_WAR_SHA,
+    reasonCode: "NO_CANDIDATE",
+    scopeDigest: "f".repeat(64),
+  });
+  const start = agentExecutionPolicy(policy, "START");
+  assert.deepEqual(start.capabilities, AGENT_READY_PR_CAPABILITIES);
+  assert.equal(start.mutationAction, "GITHUB_READY_PR_MUTATE");
+  for (const capability of start.capabilities) {
+    assert.match(capability, /^github\.|^provider\.readback$/, `provider/build/upload/public mutation capability는 없어야 한다: ${capability}`);
+  }
+  const readback = agentExecutionPolicy(policy, "READBACK_FIRST");
+  assert.deepEqual(readback.capabilities, AGENT_READBACK_CAPABILITIES);
+  assert.equal(readback.mutationAction, null);
+});
+
+test("AC-7: source-remediation의 repo singleton scope key는 일반 READY_PR template과 같은 repo-pr: 형식을 공유한다", () => {
+  const policy = sourceRemediationAutomationPolicy({
+    budgetCeilingMicros: 500_000,
+    issueNumber: 12,
+    discoveryGeneration: 3,
+    sourceSha: ANIMAL_CHESS_SHA,
+    reasonCode: "BUILD_TARGET_MISSING",
+    scopeDigest: "f".repeat(64),
+  });
+  const executionPolicy = agentExecutionPolicy(policy, "START");
+  assert.equal(executionPolicy.repositorySingleton, "READY_PR");
+  assert.equal(
+    agentRepositorySingletonScope("seorilabs/Animal-Chess", executionPolicy),
+    "repo-pr:seorilabs/animal-chess",
+    "AgentRepoGuard.activeScopeKey unique index가 그대로 repo당 Ready PR 1개를 강제해야 한다",
+  );
 });
