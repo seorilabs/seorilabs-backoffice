@@ -23,6 +23,8 @@ const FORBIDDEN_RESPONSE_KEYS = new Set([
   "refreshtoken",
   "secret",
   "sessioncookie",
+  "token",
+  "capability",
   "totp",
   "totpseed",
 ]);
@@ -152,6 +154,25 @@ function assertPublicNode(value: unknown, path: string, key?: string): void {
 export function assertPublicAgentResponse<T>(value: T): T {
   assertPublicNode(value, "response");
   return value;
+}
+
+/** 응답 검증이나 직렬화가 실패해도 runtime 요청 핸들러 밖으로 예외를 전파하지 않는다. */
+export function serializePublicAgentResponse(statusCode: number, value: unknown): {
+  statusCode: number;
+  body: Buffer;
+} {
+  const unavailable = () => Buffer.from(
+    '{"error":{"code":"SEORI_AUTH_RUNTIME_UNAVAILABLE"}}',
+    "utf8",
+  );
+  if (statusCode >= 500) return { statusCode, body: unavailable() };
+  try {
+    const serialized = JSON.stringify(assertPublicAgentResponse(value));
+    if (serialized === undefined) throw new Error("SEORI_AUTH_PUBLIC_RESPONSE_UNSERIALIZABLE");
+    return { statusCode, body: Buffer.from(serialized, "utf8") };
+  } catch {
+    return { statusCode: 500, body: unavailable() };
+  }
 }
 
 export function workerIdentityFromMtlsPeer(input: {

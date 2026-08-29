@@ -33,6 +33,7 @@ import {
   parseExactHttpsOrigin,
   readBoundSecretFile,
   seoriAuthPublicRequestSchema,
+  serializePublicAgentResponse,
   workerIdentityFromMtlsPeer,
   withBoundSecretText,
   type WorkerPrincipal,
@@ -106,16 +107,13 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 function respond(response: ServerResponse, status: number, body: unknown): void {
-  const publicBody = status < 500
-    ? assertPublicAgentResponse(body)
-    : { error: { code: "SEORI_AUTH_RUNTIME_UNAVAILABLE" } };
-  const encoded = Buffer.from(JSON.stringify(publicBody), "utf8");
-  response.writeHead(status, {
+  const serialized = serializePublicAgentResponse(status, body);
+  response.writeHead(serialized.statusCode, {
     "content-type": "application/json",
-    "content-length": String(encoded.length),
+    "content-length": String(serialized.body.length),
     "cache-control": "no-store",
   });
-  response.end(encoded, () => encoded.fill(0));
+  response.end(serialized.body, () => serialized.body.fill(0));
 }
 
 function backofficeRequest(input: {

@@ -9,6 +9,7 @@ import {
   assertPublicAgentResponse,
   parseExactHttpsOrigin,
   readBoundSecretFile,
+  serializePublicAgentResponse,
   workerIdentityFromMtlsPeer,
 } from "@/lib/control-plane/seori-auth-agent-transport";
 
@@ -50,7 +51,21 @@ test("helper 응답은 raw credential field와 credential 후보 값을 모델�
     status: "RUNNING",
   });
   assert.throws(() => assertPublicAgentResponse({ leaseToken: "not-returned" }));
+  assert.throws(() => assertPublicAgentResponse({ token: "short" }));
+  assert.throws(() => assertPublicAgentResponse({ capability: "read" }));
   assert.throws(() => assertPublicAgentResponse({ value: "Bearer abcdefghijklmnop" }));
+
+  const rejected = serializePublicAgentResponse(200, { token: "short" });
+  try {
+    assert.equal(rejected.statusCode, 500);
+    assert.equal(
+      rejected.body.toString("utf8"),
+      '{"error":{"code":"SEORI_AUTH_RUNTIME_UNAVAILABLE"}}',
+    );
+    assert.doesNotMatch(rejected.body.toString("utf8"), /short/u);
+  } finally {
+    rejected.body.fill(0);
+  }
 });
 
 test("projected-secret symlink는 fixed root 내부만 허용하고 world-readable 또는 escape는 거부한다", async () => {
