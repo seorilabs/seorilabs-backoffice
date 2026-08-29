@@ -19,10 +19,10 @@ import type {
   WorkflowCaller,
 } from "@/lib/control-plane/contracts";
 
-// v7: static workingDirectory와 분리된 root Android build-only fact를 관측한다.
+// v8: root Android binding의 pnpm lockfile도 전용 1MiB 한도로 읽는다.
 // 탐지 의미론을 바꾸고도
 // version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v7";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v8";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -1431,12 +1431,18 @@ export async function discoverRepository(
     && (candidate.profile !== "react-native"
       || (workflowCaller.packageManager === "pnpm" && pathSet.has("pnpm-lock.yaml")))
   ) {
-    const bindingSourcePaths = candidate.profile === "react-native"
-      ? [...rootBuildPaths, "pnpm-lock.yaml"]
-      : rootBuildPaths;
-    const bindingReadError = await readPaths(bindingSourcePaths);
+    const bindingReadError = await readPaths(rootBuildPaths);
     if (bindingReadError) {
       return needsInput(snapshot, bindingReadError, candidates, sourceMetadata);
+    }
+    if (candidate.profile === "react-native") {
+      const lockReadError = await readPaths(
+        ["pnpm-lock.yaml"],
+        REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES,
+      );
+      if (lockReadError) {
+        return needsInput(snapshot, lockReadError, candidates, sourceMetadata);
+      }
     }
     buildBindings.push(candidate.profile === "react-native"
       ? {

@@ -8,6 +8,7 @@ import {
   readExactRepositoryTree,
   repositoryDiscoverySloState,
   REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+  REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES,
   REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH,
   REPOSITORY_DISCOVERY_TERMINAL_SLO_MS,
   type RepositoryTreeSnapshot,
@@ -332,6 +333,44 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
   ]);
   assert.equal(JSON.stringify(result).includes(canary), false);
   assert.equal(result.sourceMetadata.every((source) => !("text" in source)), true);
+});
+
+test("RN root Android binding의 pnpm lockfile만 전용 대용량 한도로 읽는다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "sample-mobile",
+      packageManager: "pnpm@11.3.0",
+      dependencies: { "react-native": "0.81.0" },
+    }),
+    "android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
+    "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "scripts/build-android.sh": "#!/bin/sh\nexit 0\n",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+  };
+  const readLimits = new Map<string, number | undefined>();
+  const read = sourceReader(files);
+  const result = await discoverRepository(
+    snapshot(Object.keys(files)),
+    async (path, maxBytes) => {
+      readLimits.set(path, maxBytes);
+      return read(path);
+    },
+  );
+
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.equal(readLimits.get("pnpm-lock.yaml"), REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES);
+  assert.equal(readLimits.get("build.env"), undefined);
+  assert.equal(readLimits.get("scripts/build-android.sh"), undefined);
+  assert.deepEqual(result.buildBindings, [{
+    target: "android",
+    buildProfile: "react-native-android",
+    packageManager: "pnpm",
+    executionRoot: ".",
+    dependencyRoot: ".",
+    scriptPath: "scripts/build-android.sh",
+    artifactKind: "android-aab",
+  }]);
 });
 
 test("Capacitor product는 web AIT dependency가 함께 있어도 primary static profile로 탐지한다", async () => {
@@ -1277,8 +1316,8 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v7 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v7");
+test("discovery 의미론 변경은 새 generation을 강제하는 v8 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v8");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {
