@@ -13,7 +13,16 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 if (process.env.MIGRATION_FIXTURE_ACK !== "LOCAL_SCHEMA_ONLY") {
   throw new Error("MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY가 필요하다");
 }
-const databaseUrl = new URL(process.env.DATABASE_URL ?? "");
+const databaseUrlValue = process.env.DATABASE_URL;
+if (!databaseUrlValue) {
+  throw new Error("P6 queue acceptance에는 DATABASE_URL이 필요하다");
+}
+let databaseUrl: URL;
+try {
+  databaseUrl = new URL(databaseUrlValue);
+} catch {
+  throw new Error("P6 queue acceptance DATABASE_URL 형식이 올바르지 않다");
+}
 if (!["127.0.0.1", "localhost"].includes(databaseUrl.hostname)) {
   throw new Error("P6 queue acceptance DB는 loopback MySQL에서만 허용한다");
 }
@@ -23,6 +32,7 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
 
 const prisma = new PrismaClient();
 const nonce = crypto.randomUUID();
+const repoId = (BigInt(`0x${nonce.replaceAll("-", "")}`) & ((1n << 62n) - 1n)) + 1n;
 const repoFullName = `seorilabs/p6-queue-acceptance-${nonce}`;
 const runtimeBindingDigest = "e".repeat(64);
 const firstWorker = "codex:p6-acceptance-a";
@@ -106,7 +116,7 @@ async function main() {
       slug: `p6-queue-acceptance-${nonce}`,
       displayName: "P6 Queue Acceptance",
       repoFullName,
-      repoId: BigInt(`8${Date.now()}`),
+      repoId,
       type: "APP",
       engine: "RN",
       marketTargets: [],
