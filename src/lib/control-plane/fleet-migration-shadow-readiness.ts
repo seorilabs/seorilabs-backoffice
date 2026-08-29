@@ -10,7 +10,7 @@ import {
 import { prisma } from "@/lib/prisma";
 
 export const FLEET_MIGRATION_SHADOW_READINESS_CONTRACT_VERSION =
-  "fleet-migration-shadow-readiness/v1" as const;
+  "fleet-migration-shadow-readiness/v2" as const;
 
 const ORGANIZATION = "seorilabs";
 const SHA_40 = /^[0-9a-f]{40}$/;
@@ -72,6 +72,7 @@ export interface FleetMigrationAppReadback {
   id: string;
   repoId: string;
   repoFullName: string;
+  status: "ACTIVE" | "PAUSED" | "DEPRECATED";
   latestDiscovery: FleetMigrationDiscoveryObservationReadback | null;
   activeConfigs: Array<{
     id: string;
@@ -127,9 +128,17 @@ export interface FleetMigrationShadowReadinessDependencies {
   now: () => Date;
 }
 
-async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBackofficeReadback> {
+type FleetMigrationBackofficeClient = Pick<
+  typeof prisma,
+  "repositoryRegistration" | "app"
+>;
+
+export async function readFleetMigrationBackoffice(
+  repositoryIds: bigint[],
+  client: FleetMigrationBackofficeClient = prisma,
+): Promise<FleetMigrationBackofficeReadback> {
   const [registrations, apps] = await Promise.all([
-    prisma.repositoryRegistration.findMany({
+    client.repositoryRegistration.findMany({
       where: { repoId: { in: repositoryIds } },
       orderBy: { repoId: "asc" },
       select: {
@@ -145,13 +154,16 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
         },
       },
     }),
-    prisma.app.findMany({
-      where: { status: "ACTIVE", repoId: { in: repositoryIds } },
+    client.app.findMany({
+      // PRODUCT_APP binding은 운영 활성 상태와 별개다. PAUSED/DEPRECATED App도
+      // numeric repo ID에 결합된 중앙 App이며, 누락으로 합성하면 안 된다.
+      where: { repoId: { in: repositoryIds } },
       orderBy: { repoId: "asc" },
       select: {
         id: true,
         repoId: true,
         repoFullName: true,
+        status: true,
         discoveryObservations: {
           orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
           take: 1,
@@ -210,6 +222,7 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
       id: app.id,
       repoId: app.repoId.toString(),
       repoFullName: app.repoFullName,
+      status: app.status,
       latestDiscovery: app.discoveryObservations[0] ?? null,
       activeConfigs: app.configRevisions.map((revision) => ({
         id: revision.id,
@@ -245,7 +258,7 @@ const defaultDependencies: FleetMigrationShadowReadinessDependencies = {
   },
   listRepositories: (client) => listInstallationRepositorySeeds(client),
   readRepository: readInstalledRepositoryVector,
-  readBackoffice,
+  readBackoffice: readFleetMigrationBackoffice,
   verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
     snapshot,
     process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
@@ -459,6 +472,7 @@ export async function evaluateFleetMigrationShadowReadiness(
       classification: registration?.classification ?? null,
       classificationDecisionRevision:
         registration?.classificationDecisionVersion ?? 0,
+      appLifecycleStatus: app?.status ?? null,
       activeCredentialBindingCount: app?.activeCredentialBindingCount ?? 0,
       reasonCodes: repositoryReasons(
         vector,

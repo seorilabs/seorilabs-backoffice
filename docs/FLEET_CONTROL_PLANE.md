@@ -640,9 +640,12 @@ repository collector와 같은 실행이 아니며, 그 결과를 38-repository 
 재사용하지 않는다.
 
 배포 이미지의 다음 command는 GitHub App installation pagination을 두 번 읽고, 각 active
-repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정, ACTIVE config와 signed
-snapshot, PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 DB SELECT로만 검사한다. GitHub와 DB에 쓰지
-않고 공개 repo ID, source SHA, digest, reason code만 출력한다.
+repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정과 App binding을 DB SELECT로만
+검사한다. `PAUSED` 또는 `DEPRECATED` App도 numeric repo ID가 맞으면 존재하는 binding으로 읽되,
+`PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot,
+PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 요구한다. non-product repository에 App row가
+결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다. GitHub와 DB에 쓰지 않고 공개 repo ID,
+App lifecycle status, source SHA, digest, reason code만 출력한다.
 
 ```bash
 kubectl -n platform exec deploy/backoffice -c backoffice -- \
