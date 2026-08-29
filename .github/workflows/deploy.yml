@@ -94,20 +94,21 @@ jobs:
     needs: [verify, migration-contract]
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
-    # ARM64 Docker 빌드 → -dind 러너(rpi5)에서 격리.
-    # hosted 로 옮길 수 없다: 아래 buildx endpoint 가 클러스터 내부 DNS 이고,
-    # 캐시(pnpm store/.next/cache/레이어)도 클러스터 PVC 에 있다. 러너만 바꾸면
-    # 엔드포인트를 못 찾아 조용히 깨진다. push/workflow_dispatch 전용이라
-    # fork 가 트리거할 수 없어 ARC 에 남겨도 안전하다.
-    runs-on: seorilabs-rpi-arm64-dind
+    # 이미지 빌드는 클러스터 자원이 필요 없다. registry.vzyx.xyz 는 TLS 로 공개
+    # 도달 가능하므로 hosted 에서 push 한다. verify 와 migration contract 는 #202 대로
+    # ARC 에 남아 hosted 결제 상태와 무관하게 배포 검증을 시작한다.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      # 클러스터 내 영구 BuildKit 데몬을 remote 빌더로 사용 → pnpm store/.next/cache/레이어
-      # 캐시가 PVC 에 지속되어 증분 빌드(ephemeral 러너 사이로 유지).
-      - uses: docker/setup-buildx-action@v4
+      # 런타임 스테이지(apt/useradd/prisma CLI)만 arm64 로 실행된다. 의존성 설치와
+      # next build 는 Dockerfile 의 BUILDPLATFORM 스테이지에서 러너 네이티브로 돈다.
+      - uses: docker/setup-qemu-action@v4
         with:
-          driver: remote
-          endpoint: tcp://buildkitd.platform.svc.cluster.local:1234
+          platforms: arm64
+      # 예전에는 클러스터 안의 buildkitd 를 remote driver 로 썼다. 러너가 클러스터를
+      # 떠났으므로 러너 안의 기본 driver 를 쓴다.
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: registry.vzyx.xyz
@@ -120,6 +121,9 @@ jobs:
           platforms: linux/arm64
           push: true
           provenance: false
+          # 클러스터 PVC 캐시를 대신한다. 의존성 무변경이면 deps 레이어를 재사용한다.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ${{ env.IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}

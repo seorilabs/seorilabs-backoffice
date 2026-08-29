@@ -25,7 +25,8 @@ pnpm build          # DATABASE_URL 더미로 OK (빌드 시 DB 미접속)
 ## 규칙
 - PR 은 Ready(Draft 금지), 제목/본문 한글. `Closes #N`.
 - GitHub Actions action 은 `global-versions.yaml` 기준 최신 stable 태그.
-- 배포는 ARM64. 이미지 빌드는 `-dind` 러너, 배포는 `seorilabs-rpi-arm64`.
+- 배포는 ARM64. 이미지는 hosted 러너에서 `BUILDPLATFORM` 크로스빌드한다. Deploy 의
+  `verify`/migration contract/`deploy` 는 ARC 에 남아 hosted 결제와 무관하게 시작한다.
 - **PR 트리거 잡은 반드시 GitHub-hosted(`ubuntu-latest`)** — public 저장소라 fork PR 코드가
   ARC 에서 돌면 클러스터 내부 네트워크에 닿는다. self-hosted 는 `push`/`workflow_dispatch`
   전용 잡에만 쓴다.

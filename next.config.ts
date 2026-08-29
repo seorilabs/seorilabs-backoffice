@@ -3,6 +3,13 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // 단일 컨테이너 배포용. .next/standalone 산출.
   output: "standalone",
+  // sharp 를 standalone 트레이스에서 제외한다. 이 앱은 next/image 를 쓰지 않고,
+  // sharp 는 Next 의 optional 전이 의존이라 빌드 호스트 아키텍처의 바이너리가
+  // 딸려 들어온다. 제외하면 산출물이 순수 JS + 명시된 Prisma arm64 엔진만 남아
+  // 빌드 호스트와 무관해진다(amd64 러너에서 arm64 이미지 크로스빌드).
+  outputFileTracingExcludes: {
+    "*": ["**/@img/**", "**/sharp/**"],
+  },
   // lint/typecheck 는 CI verify 잡에서 이미 수행 → 빌드 시 중복 제거(빌드 단축).
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: true },

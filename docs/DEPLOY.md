@@ -249,9 +249,14 @@ catch-up 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아�
 **러너 배치**: `ci.yml` 의 PR 잡과 PR용 `migration-contract.yml`은 모두
 GitHub-hosted 에서 돈다. 이 저장소는 public 이므로 fork PR 코드가 ARC 에서 실행되지
 않는다. `deploy.yml`은 신뢰된 `main` push와 `workflow_dispatch` 전용이며 GitHub-hosted
-결제 상태가 production 배포를 막지 않도록 `verify`는 일반 ARC, MySQL migration contract와
-이미지 `build`는 DIND ARC, `deploy`는 일반 ARC에서 실행한다. **PR 트리거 잡을 ARC 로
+결제 상태가 production 배포 **검증**을 막지 않도록 `verify`는 일반 ARC, MySQL migration
+contract는 DIND ARC, `deploy`는 일반 ARC에서 실행한다. 이미지 `build`만 GitHub-hosted다 —
+클러스터 자원이 필요 없고(§10) RPI 점유가 가장 큰 잡이기 때문이다. **PR 트리거 잡을 ARC 로
 되돌리거나 PR에서 호출 가능한 ARC reusable workflow를 만들지 않는다.**
+
+> `build`가 hosted이므로 hosted 결제가 막히면 이미지 빌드는 멈춘다. 검증(`verify`,
+> migration contract)은 ARC라 그대로 시작하고 실패 원인이 결제인지 코드인지 구분된다.
+> public 저장소의 standard 러너는 과금 대상이 아니라 이 경로는 정상 동작한다.
 
 > `ci-deployer` 최소권한 Role 은 실제 경계다. 과거 `AlwaysAllow` 인가 문제는
 > [조직 P0 #45](https://github.com/seorilabs/.github/issues/45) 에서 `Node,RBAC` 전환으로
@@ -411,18 +416,30 @@ E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(
 - **에이전트(현재)**: 기획(`PLANNING_SPEC`, `/plan` AI 버튼→폼 채움), 분해(`TASK_BREAKDOWN`, 앱 상세→대상 이슈 코멘트), 릴리스노트(`RELEASE_NOTES`, 앱 상세→새 이슈+`release-notes` 라벨). 코드 작성은 하지 않음(자율 Claude routine 담당).
 - **스키마**: `ai_draft` 테이블(마이그레이션 `1_ai_draft`). DRAFT→COMMITTED/DISCARDED.
 
-## 10. 빌드 캐시 — 영구 BuildKit 빌더 (CI 의존성)
+## 10. 이미지 빌드 — hosted 크로스빌드
 
-CI(`deploy.yml`)의 `build` 잡은 `verify`(일반 ARC)와 migration contract(DIND ARC) 성공 뒤
-ARC ephemeral 러너에서 돌며,
-**클러스터 내 영구 BuildKit 데몬**(`k8s/buildkitd.yaml`, platform ns, rpi4001)을 remote 빌더로 사용한다.
-캐시(pnpm store·`.next/cache`·레이어)가 PVC `buildkit-cache`(25Gi)에 지속되어 **증분 빌드**가 가능하다.
+`deploy.yml` 의 `build` 잡은 `verify`(일반 ARC)와 migration contract(DIND ARC) 성공 뒤
+GitHub-hosted 러너에서 arm64 이미지를 만들어 `registry.vzyx.xyz` 로 push한다. 이
+레지스트리는 TLS 로 공개 도달 가능하다.
 
-- **효과(실측)**: 콜드 ~33분 → 의존성 무변경/캐시히트 ~3분, 일반 코드 변경 ~15–18분.
-- **연결**: `deploy.yml` 의 `setup-buildx-action(driver: remote, endpoint: tcp://buildkitd.platform.svc.cluster.local:1234)`. 러너(arc-runners ns)는 platform ns ClusterIP 로 접속. PR CI만 `pnpm build`를 실행하고, main Deploy의 `verify`는 이를 생략한다. production `next build`는 Dockerfile에서 한 번 실행하며 `eslint.ignoreDuringBuilds`/`typescript.ignoreBuildErrors`는 선행 verify 잡이 게이트한다.
-- **메모리**: buildkitd limit **5Gi**, `next build` 는 Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 힙 상한(증분 시 `.next/cache` 로드로 메모리 피크↑ → OOM(exit 137) 방지). 제어플레인 노드라 한도 상향은 보수적으로.
-- **장애 시**: buildkitd 가 죽으면 이미지 빌드가 실패한다(PR CI 는 hosted 라 영향 없음). 복구 `kubectl apply -f k8s/buildkitd.yaml`. 캐시는 PVC 라 재시작에도 유지. 캐시 비우려면 `kubectl -n platform exec deploy/buildkitd -- buildctl prune`.
-- **주의**: `buildkitd.yaml`/CronJob 등 매니페스트 변경은 CI(`set image`)로 반영 안 됨 → `kubectl apply` 1회 필요.
+- **크로스빌드**: 의존성 설치와 `next build` 는 Dockerfile 의 `--platform=$BUILDPLATFORM`
+  스테이지에서 러너 네이티브 아키텍처로 돈다. 런타임 스테이지만 arm64 이고, 그 안의
+  RUN(apt, `corepack enable`, `useradd`, `npm install -g prisma`)만 QEMU 로 에뮬레이션된다.
+  무거운 JS 빌드에 QEMU 가 개입하지 않는다.
+- **산출물이 아키텍처와 무관한 근거**: Next standalone 은 순수 JS 이고, Prisma arm64
+  query engine 은 `schema.prisma` 의 `binaryTargets` 로 명시 생성되며, sharp 는
+  `next.config.ts` 의 `outputFileTracingExcludes` 로 트레이스에서 제외했다. **sharp 제외를
+  되돌리면 빌드 호스트 아키텍처의 `.node` 바이너리가 arm64 이미지에 딸려 들어간다.**
+  `images.unoptimized` 로는 제외되지 않는다(실측). 이 앱은 `next/image` 를 쓰지 않는다.
+- **캐시**: `cache-from/to: type=gha`. 의존성 무변경이면 `pnpm install` 레이어를 재사용한다.
+  BuildKit cache mount(pnpm store·`.next/cache`)는 러너가 ephemeral 이라 유지되지 않는다.
+- **메모리**: Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 `next build` 힙 상한.
+- **PR CI만 `pnpm build`를 실행**하고 main Deploy의 `verify`는 이를 생략한다. production
+  `next build`는 Dockerfile에서 한 번 실행하며 `eslint.ignoreDuringBuilds`/
+  `typescript.ignoreBuildErrors`는 선행 verify 잡이 게이트한다.
+- **`k8s/buildkitd.yaml` 과 PVC `buildkit-cache`(25Gi)는 이 경로에서 더는 쓰지 않는다.**
+  클러스터에는 남아 있으므로 회수는 별도 판단이다.
+- **주의**: CronJob 등 매니페스트 변경은 CI(`set image`)로 반영 안 됨 → `kubectl apply` 1회 필요.
 
 ## 11. Vault RAG — Obsidian 볼트 지식 + 벡터검색 + 받은함 쓰기
 
