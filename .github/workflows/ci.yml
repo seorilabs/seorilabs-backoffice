@@ -1,12 +1,24 @@
 name: CI
 
+# public repo 의 PR 은 fork 에서 온다. fork PR 코드를 self-hosted(ARC) 러너에서
+# 실행하면 클러스터 내부 네트워크(privileged buildkitd, mysql, nats)에 그대로
+# 닿으므로, PR 경로의 모든 잡은 GitHub-hosted 러너에서만 돈다.
+# self-hosted 는 push/workflow_dispatch 로만 트리거되는 deploy.yml 에 한정한다.
+
 on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    runs-on: seorilabs-rpi-arm64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,7 +48,9 @@ jobs:
           DATABASE_URL: mysql://build:build@127.0.0.1:3306/build
 
   migration-contract:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # hosted 러너에는 secret 이 주입되지 않고 클러스터 접근도 없으므로 fork PR 도
+    # 같은 계약을 통과해야 한다. 예전의 same-repo 한정 가드는 ARC 노출을 막으려던
+    # 것이라 러너 이전과 함께 제거한다.
     uses: ./.github/workflows/migration-contract.yml
     permissions:
       contents: read

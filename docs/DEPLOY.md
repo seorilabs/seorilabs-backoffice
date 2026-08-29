@@ -149,8 +149,8 @@ secret이 없다. 두 이미지는 immutable digest로 고정하며 pod는 `secc
 control-plane endpoint 16443만 허용한다. Calico가 Service DNAT 전후 어느 주소에서 정책을
 판정하더라도 같은 API server 외에는 열리지 않는다. DNS는 열지 않고 kubelet이 주입한
 `MYSQL_SERVICE_HOST`와 `KUBERNETES_SERVICE_HOST`로 접속한다. publisher의 API 요청은 connect/max
-timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 RPI5가 ARC build를 함께
-처리할 때 생기는 Pending 시간을 포함하되 다음 5분 주기 전에는 끝나도록 제한한다. verifier는 DDL, `GRANT`,
+timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 스케줄 Pending 시간을
+포함하되 다음 5분 주기 전에는 끝나도록 제한한다. verifier는 DDL, `GRANT`,
 복구, 데이터 변경을 하지 않는다. 관측 결과는 `status`, `total`, `exact`, `contractDigest`,
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
@@ -236,16 +236,23 @@ kubectl -n platform create job \
 ## 7. CI 자동배포 설정 (main push → 검증/빌드/배포)
 
 `ci.yml` 은 PR에서 정적 검증과 Next build를 완료한다. `deploy.yml` 은 push main 시
-`-arm64` 러너에서 Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너에서
-production 이미지를 한 번만 빌드/push하고 build output digest를 `-arm64` 배포에 넘긴다.
+Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너에서 production 이미지를
+한 번만 빌드/push하고 build output digest를 `-arm64` 배포에 넘긴다.
 `verify → build → deploy` 의존성으로 검증 실패 commit은 이미지 빌드나 배포를 시작하지 않는다.
 deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler CronJob →
 catch-up 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
 
-> 2026-08-27 실측에서 cluster control plane은 `--authorization-mode=AlwaysAllow`였다.
-> 따라서 아래 Role은 [조직 P0 #45](https://github.com/seorilabs/.github/issues/45)가
-> 완료돼 `Node,RBAC`로 전환되기 전에는 실제 보안 경계가 아니다. 전환에는 단일
-> control-plane restart와 별도 `approval:release`가 필요하다.
+**러너 배치**: 클러스터 접근이 필요 없는 잡(`ci.yml` 전체, `deploy.yml` 의 `verify`,
+`migration-contract`)은 GitHub-hosted 에서 돈다. self-hosted(ARC)는 클러스터 내부에
+있어야만 동작하는 두 잡에만 쓴다 — `build`(내부 DNS 의 remote BuildKit, §10)와
+`deploy`(클러스터 밖으로 열려 있지 않은 k8s API). 두 잡 모두 `push`/`workflow_dispatch`
+전용이라 fork 가 트리거할 수 없다. **PR 트리거 잡을 ARC 로 되돌리지 않는다** — 이 저장소는
+public 이며, fork PR 코드가 ARC 에서 돌면 클러스터 내부 네트워크에 그대로 닿는다.
+
+> `ci-deployer` 최소권한 Role 은 실제 경계다. 과거 `AlwaysAllow` 인가 문제는
+> [조직 P0 #45](https://github.com/seorilabs/.github/issues/45) 에서 `Node,RBAC` 전환으로
+> 종료됐다. 회귀 확인: `kubectl auth can-i get secrets -n platform
+> --as=system:serviceaccount:platform:ci-deployer` 가 `no` 여야 한다.
 
 **(a) 배포용 SA + kubeconfig**
 ```bash
@@ -400,14 +407,14 @@ E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(
 
 ## 10. 빌드 캐시 — 영구 BuildKit 빌더 (CI 의존성)
 
-CI(`deploy.yml`)의 `build` 잡은 `verify` 성공 뒤 ARC ephemeral 러너에서 돌지만,
+CI(`deploy.yml`)의 `build` 잡은 `verify`(hosted) 성공 뒤 ARC ephemeral 러너에서 돌며,
 **클러스터 내 영구 BuildKit 데몬**(`k8s/buildkitd.yaml`, platform ns, rpi4001)을 remote 빌더로 사용한다.
 캐시(pnpm store·`.next/cache`·레이어)가 PVC `buildkit-cache`(25Gi)에 지속되어 **증분 빌드**가 가능하다.
 
 - **효과(실측)**: 콜드 ~33분 → 의존성 무변경/캐시히트 ~3분, 일반 코드 변경 ~15–18분.
 - **연결**: `deploy.yml` 의 `setup-buildx-action(driver: remote, endpoint: tcp://buildkitd.platform.svc.cluster.local:1234)`. 러너(arc-runners ns)는 platform ns ClusterIP 로 접속. PR CI만 `pnpm build`를 실행하고, main Deploy의 `verify`는 이를 생략한다. production `next build`는 Dockerfile에서 한 번 실행하며 `eslint.ignoreDuringBuilds`/`typescript.ignoreBuildErrors`는 선행 verify 잡이 게이트한다.
 - **메모리**: buildkitd limit **5Gi**, `next build` 는 Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 힙 상한(증분 시 `.next/cache` 로드로 메모리 피크↑ → OOM(exit 137) 방지). 제어플레인 노드라 한도 상향은 보수적으로.
-- **장애 시**: buildkitd 가 죽으면 **모든 빌드 실패**. 복구 `kubectl apply -f k8s/buildkitd.yaml`. 캐시는 PVC 라 재시작에도 유지. 캐시 비우려면 `kubectl -n platform exec deploy/buildkitd -- buildctl prune`.
+- **장애 시**: buildkitd 가 죽으면 이미지 빌드가 실패한다(PR CI 는 hosted 라 영향 없음). 복구 `kubectl apply -f k8s/buildkitd.yaml`. 캐시는 PVC 라 재시작에도 유지. 캐시 비우려면 `kubectl -n platform exec deploy/buildkitd -- buildctl prune`.
 - **주의**: `buildkitd.yaml`/CronJob 등 매니페스트 변경은 CI(`set image`)로 반영 안 됨 → `kubectl apply` 1회 필요.
 
 ## 11. Vault RAG — Obsidian 볼트 지식 + 벡터검색 + 받은함 쓰기
