@@ -320,6 +320,70 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
   assert.equal(result.sourceMetadata.every((source) => !("text" in source)), true);
 });
 
+test("Capacitor product는 web AIT dependency가 함께 있어도 primary static profile로 탐지한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({ name: "root", packageManager: "pnpm@11.3.0" }),
+    "app/package.json": JSON.stringify({
+      name: "capacitor-product",
+      dependencies: {
+        "@capacitor/core": "8.5.0",
+        "@apps-in-toss/web-framework": "2.10.7",
+        "@seorilabs/platform-sdk": "0.6.7",
+      },
+    }),
+    "app/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.capacitor" } }',
+    "app/ios/App.xcodeproj/project.pbxproj": "PRODUCT_BUNDLE_IDENTIFIER = com.seorilabs.capacitor;",
+    "app/granite.config.ts": "export default { appName: 'capacitor-product' };",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\nimporters: {}\npackages: {}\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.workflowCaller, {
+    profile: "capacitor",
+    packageManager: "pnpm",
+    workingDirectory: "app",
+  });
+  assert.deepEqual(result.candidates, [{
+    profile: "capacitor",
+    workingDirectory: "app",
+    markerPath: "app/package.json",
+  }]);
+  assert.deepEqual(result.buildTargets.map(({ targetKey, stack }) => ({ targetKey, stack })), [
+    { targetKey: "ait", stack: "capacitor" },
+    { targetKey: "android", stack: "capacitor" },
+    { targetKey: "ios", stack: "capacitor" },
+  ]);
+});
+
+test("AppsInToss web-only product는 RN으로 추측하지 않고 ait-web profile로 탐지한다", async () => {
+  const files = {
+    "apps-in-toss/package.json": JSON.stringify({
+      name: "ait-web-product",
+      packageManager: "npm@11.0.0",
+      dependencies: { "@apps-in-toss/web-framework": "2.10.7" },
+    }),
+    "apps-in-toss/granite.config.ts": "export default { appName: 'ait-web-product' };",
+    "apps-in-toss/package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.workflowCaller, {
+    profile: "ait-web",
+    packageManager: "npm",
+    workingDirectory: "apps-in-toss",
+  });
+  assert.deepEqual(result.buildTargets, [{
+    targetKey: "ait",
+    stack: "ait-web",
+    market: "apps-in-toss",
+    packageId: null,
+    bundleId: null,
+    configuration: { appName: "ait-web-product" },
+  }]);
+});
+
 test("RN exact package와 lock integrity를 PLATFORM_SDK_UPDATE용 source observation으로 만든다", async () => {
   const files = {
     "package.json": JSON.stringify({ name: "sample", packageManager: "pnpm@11.3.0" }),

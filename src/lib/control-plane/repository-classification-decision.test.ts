@@ -51,8 +51,12 @@ test("UI에는 exact observation에서 검증된 공개 candidate marker만 노�
     { profile: "godot", workingDirectory: "game", markerPath: "game/project.godot" },
     { profile: "react-native", workingDirectory: "apps/mobile", markerPath: "apps/mobile/package.json" },
     { profile: "react-native", workingDirectory: "unsafe", markerPath: "../package.json" },
+    { profile: "capacitor", workingDirectory: "app", markerPath: "app/package.json" },
+    { profile: "ait-web", workingDirectory: "apps-in-toss", markerPath: "apps-in-toss/package.json" },
     { profile: "unknown", workingDirectory: ".", markerPath: "package.json" },
   ] }), [
+    { profile: "capacitor", workingDirectory: "app", markerPath: "app/package.json" },
+    { profile: "ait-web", workingDirectory: "apps-in-toss", markerPath: "apps-in-toss/package.json" },
     { profile: "react-native", workingDirectory: "apps/mobile", markerPath: "apps/mobile/package.json" },
     { profile: "godot", workingDirectory: "game", markerPath: "game/project.godot" },
   ]);

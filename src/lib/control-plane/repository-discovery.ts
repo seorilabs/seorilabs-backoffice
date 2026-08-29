@@ -110,7 +110,7 @@ export type RepositoryDiscoverySourceReader = (
 
 export interface RepositoryDiscoveryBuildTarget {
   targetKey: string;
-  stack: "react-native" | "godot";
+  stack: "react-native" | "capacitor" | "ait-web" | "godot";
   market: "google-play" | "app-store" | "apps-in-toss";
   packageId: string | null;
   bundleId: string | null;
@@ -118,7 +118,7 @@ export interface RepositoryDiscoveryBuildTarget {
 }
 
 export interface RepositoryDiscoveryCandidate {
-  profile: "react-native" | "godot";
+  profile: "react-native" | "capacitor" | "ait-web" | "godot";
   workingDirectory: string;
   markerPath: string;
 }
@@ -663,6 +663,18 @@ function isPrimaryReactNativePackage(pkg: ParsedPackage): boolean {
   );
 }
 
+function isCapacitorPackage(pkg: ParsedPackage): boolean {
+  return [pkg.dependencies, pkg.devDependencies].some((dependencies) =>
+    typeof dependencies["@capacitor/core"] === "string"
+  );
+}
+
+function isAppsInTossWebPackage(pkg: ParsedPackage): boolean {
+  return [pkg.dependencies, pkg.devDependencies].some((dependencies) =>
+    typeof dependencies["@apps-in-toss/web-framework"] === "string"
+  );
+}
+
 function isAppsInTossPackage(pkg: ParsedPackage): boolean {
   const deliveryDirectory = pkg.directory === "apps/ait"
     || pkg.directory.startsWith("apps/ait/")
@@ -963,12 +975,39 @@ export async function discoverRepository(
   const primaryReactNativePackages = reactNativePackages.some((pkg) => !isAppsInTossPackage(pkg))
     ? reactNativePackages.filter((pkg) => !isAppsInTossPackage(pkg))
     : reactNativePackages;
-  const candidates: RepositoryDiscoveryCandidate[] = [
+  const capacitorPackages = packages.filter(isCapacitorPackage);
+  const appsInTossWebPackages = packages.filter((pkg) => (
+    isAppsInTossWebPackage(pkg) && !isCapacitorPackage(pkg) && !isPrimaryReactNativePackage(pkg)
+  ));
+  const primaryJsCandidates: RepositoryDiscoveryCandidate[] = [
     ...primaryReactNativePackages.map((pkg) => ({
       profile: "react-native" as const,
       workingDirectory: pkg.directory,
       markerPath: pkg.path,
     })),
+    ...capacitorPackages.map((pkg) => ({
+      profile: "capacitor" as const,
+      workingDirectory: pkg.directory,
+      markerPath: pkg.path,
+    })),
+    ...appsInTossWebPackages
+      .filter((pkg) => !isAppsInTossPackage(pkg))
+      .map((pkg) => ({
+        profile: "ait-web" as const,
+        workingDirectory: pkg.directory,
+        markerPath: pkg.path,
+      })),
+  ];
+  const fallbackAitWebCandidates: RepositoryDiscoveryCandidate[] = primaryJsCandidates.length === 0
+    ? appsInTossWebPackages.map((pkg) => ({
+        profile: "ait-web" as const,
+        workingDirectory: pkg.directory,
+        markerPath: pkg.path,
+      }))
+    : [];
+  const candidates: RepositoryDiscoveryCandidate[] = [
+    ...primaryJsCandidates,
+    ...fallbackAitWebCandidates,
     ...godotPaths.map((path) => ({
       profile: "godot" as const,
       workingDirectory: directoryOf(path),
@@ -994,7 +1033,7 @@ export async function discoverRepository(
   const candidate = selectedCandidate ?? candidates[0];
   let workflowCaller: WorkflowCaller;
   let platformConsumer: RepositoryPlatformConsumerObservation;
-  if (candidate.profile === "react-native") {
+  if (candidate.profile !== "godot") {
     const packageManager = packageManagerFor(candidate.workingDirectory, packages, pathSet);
     if (packageManager.status !== "FOUND") {
       return needsInput(
@@ -1005,7 +1044,7 @@ export async function discoverRepository(
       );
     }
     workflowCaller = {
-      profile: "react-native",
+      profile: candidate.profile,
       packageManager: packageManager.value,
       workingDirectory: candidate.workingDirectory,
     };
@@ -1205,7 +1244,7 @@ export async function discoverRepository(
   const stack = candidate.profile;
   const buildTargets: RepositoryDiscoveryBuildTarget[] = [];
   const buildSourcePaths: string[] = [];
-  if (candidate.profile === "react-native") {
+  if (candidate.profile !== "godot") {
     const androidPaths = [
       pathIn(candidate.workingDirectory, "android/app/build.gradle"),
       pathIn(candidate.workingDirectory, "android/app/build.gradle.kts"),
