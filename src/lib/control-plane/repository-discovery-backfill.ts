@@ -91,6 +91,9 @@ const defaultDependencies: RepositoryDiscoveryBackfillDependencies = {
         revision: true,
         classification: true,
         candidateMarkerPath: true,
+        productDisplayName: true,
+        productType: true,
+        productEngine: true,
       },
     });
     const decisions = new Map<number, RepositoryClassificationDirective>();
@@ -104,6 +107,15 @@ const defaultDependencies: RepositoryDiscoveryBackfillDependencies = {
           revision: row.revision,
           classification: row.classification,
           candidateMarkerPath: row.candidateMarkerPath,
+          productIdentity: row.productDisplayName !== null
+            && row.productType !== null
+            && row.productEngine !== null
+            ? {
+                displayName: row.productDisplayName,
+                type: row.productType,
+                engine: row.productEngine,
+              }
+            : null,
         });
       }
     }

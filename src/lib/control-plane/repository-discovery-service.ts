@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import type {
   RepositoryClassification,
   RepositoryClassificationDirective,
+  RepositoryProductIdentity,
 } from "@/lib/control-plane/repository-classification";
 
 export type RepositoryDiscoveryClaim = {
@@ -85,6 +86,34 @@ function displayNameFromSlug(slug: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ") || slug;
+}
+
+export function resolveRepositoryProductIdentity(input: {
+  classificationDecision: RepositoryClassificationDirective | null;
+  discovered: Pick<Extract<RepositoryDiscoveryResult, { status: "ACTIVE" }>, "appType" | "engine">;
+  adopted: RepositoryProductIdentity | null;
+  fallbackDisplayName: string;
+}): { identity: RepositoryProductIdentity; conflict: boolean } {
+  const explicit = input.classificationDecision?.classification === "PRODUCT_APP"
+    ? input.classificationDecision.productIdentity
+    : null;
+  if (explicit) {
+    return {
+      identity: explicit,
+      conflict: explicit.engine !== input.discovered.engine,
+    };
+  }
+  return {
+    identity: {
+      displayName: input.adopted?.displayName ?? input.fallbackDisplayName,
+      type: input.discovered.appType,
+      engine: input.discovered.engine,
+    },
+    conflict: Boolean(input.adopted && (
+      input.adopted.type !== input.discovered.appType
+      || input.adopted.engine !== input.discovered.engine
+    )),
+  };
 }
 
 function marketTargets(result: Extract<RepositoryDiscoveryResult, { status: "ACTIVE" }>): string[] {
@@ -293,9 +322,13 @@ async function finishActive(input: {
       existing: adopted,
       discovered: discoveredIdentity,
     }));
-    const productIdentityConflict = Boolean(adopted && (
-      adopted.type !== input.result.appType || adopted.engine !== input.result.engine
-    ));
+    const resolvedProductIdentity = resolveRepositoryProductIdentity({
+      classificationDecision: input.claim.registration.classificationDecision,
+      discovered: input.result,
+      adopted,
+      fallbackDisplayName: displayNameFromSlug(slug),
+    });
+    const productIdentityConflict = resolvedProductIdentity.conflict;
     const identityReason: RepositoryDiscoveryReason | null = repositoryIdentityConflict
       ? "APP_IDENTITY_CONFLICT"
       : productIdentityConflict
@@ -368,8 +401,9 @@ async function finishActive(input: {
             slug,
             repoFullName: input.snapshot.fullName,
             repoId: run.repoId,
-            type: input.result.appType,
-            engine: input.result.engine,
+            displayName: resolvedProductIdentity.identity.displayName,
+            type: resolvedProductIdentity.identity.type,
+            engine: resolvedProductIdentity.identity.engine,
             isPublicRepo: !input.snapshot.private,
             playPackage: adopted.playPackage ?? discoveredIdentity.playPackage,
             iosBundle: adopted.iosBundle ?? discoveredIdentity.iosBundle,
@@ -382,11 +416,11 @@ async function finishActive(input: {
       : await tx.app.create({
           data: {
             slug,
-            displayName: displayNameFromSlug(slug),
+            displayName: resolvedProductIdentity.identity.displayName,
             repoFullName: input.snapshot.fullName,
             repoId: run.repoId,
-            type: input.result.appType,
-            engine: input.result.engine,
+            type: resolvedProductIdentity.identity.type,
+            engine: resolvedProductIdentity.identity.engine,
             status: "ACTIVE",
             isPublicRepo: !input.snapshot.private,
             playPackage: discoveredIdentity.playPackage,
@@ -618,6 +652,15 @@ export async function claimRepositoryDiscoveryRun(
           revision: decision.revision,
           classification: decision.classification,
           candidateMarkerPath: decision.candidateMarkerPath,
+          productIdentity: decision.productDisplayName !== null
+            && decision.productType !== null
+            && decision.productEngine !== null
+            ? {
+                displayName: decision.productDisplayName,
+                type: decision.productType,
+                engine: decision.productEngine,
+              }
+            : null,
         } : null,
       },
     };

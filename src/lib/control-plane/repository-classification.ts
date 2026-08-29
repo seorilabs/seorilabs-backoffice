@@ -4,10 +4,17 @@ export type RepositoryClassification =
   | "PLATFORM_PRODUCER"
   | "EXCLUDED";
 
+export interface RepositoryProductIdentity {
+  displayName: string;
+  type: "APP" | "GAME";
+  engine: "RN" | "GODOT";
+}
+
 export interface RepositoryClassificationDirective {
   revision: number;
   classification: RepositoryClassification;
   candidateMarkerPath: string | null;
+  productIdentity: RepositoryProductIdentity | null;
 }
 
 export interface RepositoryClassificationPolicy {
