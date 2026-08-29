@@ -57,7 +57,7 @@ unexpected_engine="$(find "$standalone_dir" \
   -print \
   -quit)"
 [ -z "$unexpected_engine" ] \
-  || fail "승인되지 않은 Prisma query engine이 남았다: $unexpected_engine"
+  || fail "승인되지 않은 Prisma query/schema engine이 남았다: $unexpected_engine"
 
 remaining_count="$(find "$standalone_dir" \
   -type f \
