@@ -31,6 +31,7 @@ import {
   exactBuildTargetIdentity,
   type BuildTargetMarket,
 } from "@/lib/control-plane/build-target-identity";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
 export class ControlPlaneError extends Error {
   constructor(
@@ -250,7 +251,10 @@ function observedStaticWorkspaceRoot(input: {
   const sources = Array.isArray(payload?.sources) ? payload.sources : [];
   if (
     payload?.schemaVersion !== 2
-    || payload?.contractVersion !== "repository-discovery/v7"
+    || (
+      payload?.contractVersion !== "repository-discovery/v7"
+      && payload?.contractVersion !== REPOSITORY_DISCOVERY_CONTRACT_VERSION
+    )
     || String(repository?.id ?? "") !== input.repositoryId
     || repository?.fullName !== input.fullName
     || repository?.sourceSha !== input.sourceSha

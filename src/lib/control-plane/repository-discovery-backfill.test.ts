@@ -182,6 +182,33 @@ test("중앙 정책이 허용한 public repository도 exact default HEAD를 읽�
   assert.equal(routes.filter((route) => route === "GET /repositories/{repository_id}").length, 4);
 });
 
+test("중앙 INFRA 정책은 source 공개 없이 public exact HEAD provenance를 고정한다", async () => {
+  const routes: string[] = [];
+  const repository = {
+    id: 16,
+    full_name: "seorilabs/seorilabs-backoffice",
+    name: "seorilabs-backoffice",
+    default_branch: "main",
+    archived: false,
+    private: false,
+    fork: false,
+  };
+  const vector = await readRepositoryBackfillVector({
+    request(route) {
+      routes.push(route);
+      if (route === "GET /repositories/{repository_id}") return response(repository);
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}") return response({ sha: SHA });
+      throw new Error(`unexpected route ${route}`);
+    },
+  }, "seorilabs", { repoId: repository.id });
+  assert.equal(vector.headSha, SHA);
+  assert.deepEqual(routes, [
+    "GET /repositories/{repository_id}",
+    "GET /repos/{owner}/{repo}/commits/{ref}",
+    "GET /repositories/{repository_id}",
+  ]);
+});
+
 test("P7 shadow inventory는 분류 전 public repository도 설치 범위 안에서 exact HEAD를 읽는다", async () => {
   const repository = {
     id: 14,
@@ -240,6 +267,39 @@ test("UI/API가 승인한 public PRODUCT_APP도 hourly exact HEAD readback에 �
   assert.equal(routes.filter((route) => route.includes("commits")).length, 1);
   const registration = repositoryBackfillRegistrationInput("seorilabs", vector, "hourly");
   assert.equal(registration.classificationDecisionRevision, 2);
+});
+
+test("UI/API가 승인한 public INFRA도 source 대신 exact HEAD provenance만 관측한다", async () => {
+  const routes: string[] = [];
+  const vector = await readRepositoryBackfillVector({
+    request(route) {
+      routes.push(route);
+      if (route === "GET /repositories/{repository_id}") {
+        return response({
+          id: 17,
+          full_name: "seorilabs/new-public-infra",
+          name: "new-public-infra",
+          default_branch: "main",
+          archived: false,
+          private: false,
+          fork: false,
+        });
+      }
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}") return response({ sha: SHA });
+      throw new Error(`unexpected route ${route}`);
+    },
+  }, "seorilabs", { repoId: 17 }, {
+    revision: 3,
+    classification: "INFRA_REPO",
+    candidateMarkerPath: null,
+  });
+  assert.equal(vector.headSha, SHA);
+  assert.equal(vector.classificationDecisionRevision, 3);
+  assert.deepEqual(routes, [
+    "GET /repositories/{repository_id}",
+    "GET /repos/{owner}/{repo}/commits/{ref}",
+    "GET /repositories/{repository_id}",
+  ]);
 });
 
 test("fork provider fact는 exact vector와 hash에 남지만 source discovery로 자동 승격하지 않는다", async () => {
