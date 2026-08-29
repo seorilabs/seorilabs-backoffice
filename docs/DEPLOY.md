@@ -246,17 +246,19 @@ Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너
 deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler CronJob →
 catch-up 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
 
-**러너 배치**: `ci.yml` 의 PR 잡과 PR용 `migration-contract.yml`은 모두
-GitHub-hosted 에서 돈다. 이 저장소는 public 이므로 fork PR 코드가 ARC 에서 실행되지
-않는다. `deploy.yml`은 신뢰된 `main` push와 `workflow_dispatch` 전용이며 GitHub-hosted
-결제 상태가 production 배포 **검증**을 막지 않도록 `verify`는 일반 ARC, MySQL migration
-contract는 DIND ARC, `deploy`는 일반 ARC에서 실행한다. 이미지 `build`만 GitHub-hosted다 —
-클러스터 자원이 필요 없고(§10) RPI 점유가 가장 큰 잡이기 때문이다. **PR 트리거 잡을 ARC 로
-되돌리거나 PR에서 호출 가능한 ARC reusable workflow를 만들지 않는다.**
+**러너 배치**: **모든 잡이 GitHub-hosted(`ubuntu-latest`)에서 돈다. self-hosted(ARC)를
+쓰지 않는다.** 이 저장소는 public 이고, org 러너그룹 "RPI ARM64 Builders" 의
+**"Allow public repositories" 는 해제 상태로 유지한다.**
 
-> `build`가 hosted이므로 hosted 결제가 막히면 이미지 빌드는 멈춘다. 검증(`verify`,
-> migration contract)은 ARC라 그대로 시작하고 실패 원인이 결제인지 코드인지 구분된다.
-> public 저장소의 standard 러너는 과금 대상이 아니라 이 경로는 정상 동작한다.
+> 그 플래그는 저장소가 아니라 **그룹 단위**다. 켜면 그룹 access list 의 모든 public
+> 저장소가 ARC 를 쓸 수 있게 된다. 그리고 `pull_request` 이벤트는 **fork 의 워크플로
+> 파일로 실행**되므로(`pull_request_target` 이 따로 있는 이유), 외부인이 그 저장소 중
+> 하나에 `runs-on: seorilabs-rpi-arm64` 워크플로를 담은 PR 을 열면 그 코드가 클러스터
+> 안에서 돈다. 이 저장소 하나를 위해 org 전체 백스톱을 내리지 않는다.
+
+배포가 hosted 에서 가능한 이유는 **k8s API 가 공개 도달 가능**하기 때문이다 —
+`k8s.vzyx.xyz:16443` 은 공개 DNS 로 해석되고 kubeconfig 에 CA 가 들어 있다. 이미지도
+클러스터 자원 없이 크로스빌드한다(§10). **어떤 잡도 ARC 로 되돌리지 않는다.**
 
 > `ci-deployer` 최소권한 Role 은 실제 경계다. 과거 `AlwaysAllow` 인가 문제는
 > [조직 P0 #45](https://github.com/seorilabs/.github/issues/45) 에서 `Node,RBAC` 전환으로
@@ -268,6 +270,8 @@ contract는 DIND ARC, `deploy`는 일반 ARC에서 실행한다. 이미지 `buil
 kubectl apply -f k8s/ci-deployer-rbac.yaml
 kubectl apply -f k8s/ci-deployer-data-rbac.yaml
 
+# server 는 GitHub-hosted 러너에서 닿아야 하므로 공개 엔드포인트여야 한다
+# (k8s.vzyx.xyz:16443). LAN 주소가 잡히면 그대로 쓰지 말고 공개 호스트로 바꾼다.
 SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
 CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
 TOKEN=$(kubectl -n platform create token ci-deployer --duration=8760h)
@@ -300,8 +304,9 @@ base64 -i /tmp/ci.kubeconfig | gh secret set KUBECONFIG_B64 -R $R
 rm -f /tmp/ci.kubeconfig
 ```
 
-**(c) ARC 러너 그룹**
-org Settings → Actions → Runner groups → **RPI ARM64 Builders** 의 repository access 에 `seorilabs-backoffice` 추가(아니면 job 이 queued 로 멈춤).
+**(c) ARC 러너 그룹 — 불필요**
+이 저장소는 self-hosted 러너를 쓰지 않는다. "RPI ARM64 Builders" 그룹에 등록하거나
+"Allow public repositories" 를 켤 필요가 없고, **켜서도 안 된다**(위 §7 러너 배치 참고).
 
 이후: main push → 자동 배포. 수동 재배포는 Actions → **Deploy** → Run workflow.
 

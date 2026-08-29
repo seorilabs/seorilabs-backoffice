@@ -51,16 +51,11 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   );
   assert.equal(ci.jobs?.verify?.["runs-on"], "ubuntu-latest");
   assert.equal(migration.jobs?.mysql92?.["runs-on"], "ubuntu-latest");
-  assert.equal(deploy.jobs?.verify?.["runs-on"], "seorilabs-rpi-arm64");
+  assert.equal(deploy.jobs?.verify?.["runs-on"], "ubuntu-latest");
   assert.equal(
-    deploy.jobs?.["migration-contract"]?.["runs-on"],
-    "seorilabs-rpi-arm64-dind",
+    deploy.jobs?.["migration-contract"]?.uses,
+    "./.github/workflows/migration-contract.yml",
   );
-  assert.deepEqual(
-    deploy.jobs?.["migration-contract"]?.strategy?.matrix?.scenario,
-    ["empty", "cutover"],
-  );
-  assert.equal(deploy.jobs?.["migration-contract"]?.uses, undefined);
   assert.deepEqual(deploy.jobs?.build?.needs, ["verify", "migration-contract"]);
   assert.equal(deploy.jobs?.deploy?.needs, "build");
   assert.equal(
@@ -73,9 +68,6 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.ok(deployVerifyRuns.includes("bash scripts/check-ci-deployer-permissions.test.sh"));
   assert.ok(deployVerifyRuns.includes("bash scripts/render-manifest.test.sh"));
   assert.ok(!deployVerifyRuns.includes("pnpm build"));
-  const deployMigrationRuns = runs(deploy.jobs?.["migration-contract"]);
-  assert.ok(deployMigrationRuns.includes("bash scripts/test-migration-bootstrap.sh"));
-  assert.ok(deployMigrationRuns.includes("bash scripts/test-migration-cutover.sh"));
   assert.ok(deploy.jobs?.build?.steps?.some((step) => step.uses === "docker/build-push-action@v7"));
   const deploySource = readFileSync(
     join(process.cwd(), ".github/workflows/deploy.yml"),
@@ -101,15 +93,27 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
     "utf8",
   );
 
-  // build 만 hosted 다. 나머지 Deploy 잡은 ARC 에 남아 hosted 결제 상태와
-  // 무관하게 배포 검증을 시작한다.
+  // self-hosted 러너를 쓰지 않는다. 이 저장소는 public 이고, org 러너그룹의
+  // "Allow public repositories" 는 해제 상태를 유지한다(그 플래그는 그룹 단위라
+  // 켜면 access list 의 모든 public 저장소가 열린다. fork PR 은 fork 의 워크플로
+  // 파일로 실행되므로 외부인이 ARC 를 겨냥할 수 있다).
+  // k8s API 는 공개 도달 가능하므로 배포도 hosted 에서 kubectl 로 수행한다.
   assert.equal(deploy.jobs?.build?.["runs-on"], "ubuntu-latest");
-  assert.equal(deploy.jobs?.verify?.["runs-on"], "seorilabs-rpi-arm64");
-  assert.equal(
-    deploy.jobs?.["migration-contract"]?.["runs-on"],
-    "seorilabs-rpi-arm64-dind",
-  );
-  assert.equal(deploy.jobs?.deploy?.["runs-on"], "seorilabs-rpi-arm64");
+  assert.equal(deploy.jobs?.verify?.["runs-on"], "ubuntu-latest");
+  assert.equal(deploy.jobs?.deploy?.["runs-on"], "ubuntu-latest");
+  for (const file of ["ci.yml", "deploy.yml", "migration-contract.yml"]) {
+    for (const [name, job] of Object.entries(workflow(file).jobs ?? {})) {
+      const runner = job["runs-on"];
+      if (runner !== undefined) {
+        assert.equal(runner, "ubuntu-latest", `${file} 의 ${name} 이 self-hosted 러너를 쓴다`);
+      }
+    }
+  }
+
+  // 러너가 amd64 이므로 kubectl 도 amd64 를 받아야 한다. 어긋나면 배포 시점에
+  // exec format error 로만 드러난다.
+  assert.match(deploySource, /bin\/linux\/amd64\/kubectl/);
+  assert.doesNotMatch(deploySource, /bin\/linux\/arm64\/kubectl/);
 
   // 러너가 클러스터를 떠났으므로 클러스터 내부 빌더를 가리키면 안 된다.
   // 남아 있으면 DNS 를 못 찾아 조용히 깨진다.
