@@ -46,6 +46,8 @@ export interface GithubUsageItem {
 /**
  * SKU 별 포함분량 환산 배수. hosted 러너 분(minute) SKU 만 분량을 소비하고
  * (macOS 10x, Windows 2x), storage/packages 는 별도 계정이라 0.
+ *
+ * 배수는 저장소 공개 여부와 무관하다. 공개 저장소 제외는 summarizeGithubUsage 가 한다.
  */
 export function githubQuotaMultiplier(sku: string): number {
   if (!/^actions /i.test(sku)) return 0;
@@ -57,14 +59,26 @@ export function githubQuotaMultiplier(sku: string): number {
 
 export interface GithubUsageSummary {
   month: string; // "YYYY-MM"
+  /** 포함분량을 소비하는 환산 분(비공개 저장소만). */
   quotaMinutes: number;
+  /** 공개 저장소라 무료인 환산 분. 분량에서 제외되지만 리포트에는 드러낸다. */
+  freeMinutes: number;
   grossUsd: number;
   netUsd: number;
   topRepos: Array<{ repo: string; quotaMinutes: number }>;
 }
 
-export function summarizeGithubUsage(items: readonly GithubUsageItem[], month: string): GithubUsageSummary {
+export function summarizeGithubUsage(
+  items: readonly GithubUsageItem[],
+  month: string,
+  /**
+   * 공개 저장소 이름. 표준 러너의 공개 저장소 사용량은 무료라 포함분량을 소비하지
+   * 않는다. 비우면 전부 분량 소비로 본다(보수적).
+   */
+  publicRepositories: ReadonlySet<string> = new Set(),
+): GithubUsageSummary {
   let quotaMinutes = 0;
+  let freeMinutes = 0;
   let grossUsd = 0;
   let netUsd = 0;
   const byRepo = new Map<string, number>();
@@ -74,8 +88,12 @@ export function summarizeGithubUsage(items: readonly GithubUsageItem[], month: s
     netUsd += item.netAmount ?? 0;
     const minutes = (item.quantity ?? 0) * githubQuotaMultiplier(item.sku ?? "");
     if (minutes <= 0) continue;
-    quotaMinutes += minutes;
     const repo = item.repositoryName || "(repo 미상)";
+    if (publicRepositories.has(repo)) {
+      freeMinutes += minutes;
+      continue;
+    }
+    quotaMinutes += minutes;
     byRepo.set(repo, (byRepo.get(repo) ?? 0) + minutes);
   }
   const topRepos = [...byRepo.entries()]
@@ -85,6 +103,7 @@ export function summarizeGithubUsage(items: readonly GithubUsageItem[], month: s
   return {
     month,
     quotaMinutes: Math.round(quotaMinutes),
+    freeMinutes: Math.round(freeMinutes),
     grossUsd: Math.round(grossUsd * 100) / 100,
     netUsd: Math.round(netUsd * 1000) / 1000,
     topRepos,
@@ -130,6 +149,29 @@ export function githubUsageWarnings(summary: GithubUsageSummary, includedMinutes
     }));
   }
   return warnings;
+}
+
+/**
+ * 조직의 공개 저장소 이름.
+ *
+ * 표준 GitHub-hosted 러너의 공개 저장소 사용량은 무료다. 청구 API 는 gross 를 그대로
+ * 싣고 같은 금액을 discount 로 상계하므로, gross·분(minute)만 보면 포함분량을 소비한
+ * 것처럼 보인다. 실제로 분량을 쓰는 것은 비공개 저장소뿐이다.
+ *
+ * 조회 실패는 빈 집합으로 흘려보낸다. 그러면 전부 분량 소비로 세어 실제보다 높게
+ * 경고하므로 조용히 과소 보고하는 쪽으로 틀리지 않는다.
+ */
+async function publicRepositoryNames(): Promise<Set<string>> {
+  try {
+    const { listOrgPublicRepositoryNames } = await import("@/lib/github/read");
+    return await listOrgPublicRepositoryNames();
+  } catch (error) {
+    console.error(
+      "[finance] 공개 저장소 목록 조회 실패:",
+      error instanceof Error ? error.message : error,
+    );
+    return new Set();
+  }
 }
 
 async function fetchGithubUsage(token: string, now: Date): Promise<GithubUsageItem[]> {
@@ -277,12 +319,15 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
   } else {
     try {
       const items = await fetchGithubUsage(githubToken, now);
-      const summary = summarizeGithubUsage(items, month);
+      const summary = summarizeGithubUsage(items, month, await publicRepositoryNames());
       const included = env.githubIncludedQuotaMinutes();
       const pct = included > 0 ? Math.round((summary.quotaMinutes / included) * 100) : 0;
       summaryLines.push(
         `- GitHub Actions: 환산 ${summary.quotaMinutes}분/${included}분 (${pct}%) · gross ${usd(summary.grossUsd)} · 실청구 ${usd(summary.netUsd)}`,
       );
+      if (summary.freeMinutes > 0) {
+        summaryLines.push(`  - 공개 저장소 ${summary.freeMinutes}분은 무료라 분량에서 제외`);
+      }
       warnings.push(...githubUsageWarnings(summary, included));
     } catch (error) {
       summaryLines.push(`- GitHub: 조회 실패 (${error instanceof Error ? error.message : "error"})`);

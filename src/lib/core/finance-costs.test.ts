@@ -36,6 +36,42 @@ test("월 사용량 요약은 해당 월만 집계하고 저장소를 분량에�
   assert.equal(summary.topRepos[0].repo, "lizard-tycoon");
 });
 
+test("공개 저장소 사용량은 포함분량을 쓰지 않는다", () => {
+  // 표준 러너의 공개 저장소 사용량은 무료다. gross 는 청구 API 에 그대로 실리지만
+  // 같은 금액이 discount 로 상계돼 실제 분량을 소비하지 않는다.
+  const items: GithubUsageItem[] = [
+    { date: "2026-08-29", sku: "Actions Linux", quantity: 669, grossAmount: 4.01, netAmount: 0, repositoryName: "seorilabs-backoffice" },
+    { date: "2026-08-29", sku: "Actions Linux", quantity: 300, grossAmount: 1.8, netAmount: 0.5, repositoryName: "happy-farm" },
+  ];
+  const summary = summarizeGithubUsage(items, "2026-08", new Set(["seorilabs-backoffice"]));
+  assert.equal(summary.quotaMinutes, 300, "비공개 저장소만 분량을 쓴다");
+  assert.equal(summary.freeMinutes, 669, "공개 저장소 분은 따로 드러낸다");
+  // gross·net 은 무료 여부와 무관하게 청구서 그대로 합산한다.
+  assert.equal(summary.grossUsd, 5.81);
+  assert.equal(summary.netUsd, 0.5);
+  // 상위 소비 목록에도 공개 저장소는 오르지 않는다.
+  assert.deepEqual(summary.topRepos, [{ repo: "happy-farm", quotaMinutes: 300 }]);
+});
+
+test("공개 저장소 목록을 못 읽으면 전부 분량 소비로 세어 과소 보고하지 않는다", () => {
+  const items: GithubUsageItem[] = [
+    { date: "2026-08-29", sku: "Actions Linux", quantity: 669, grossAmount: 4.01, netAmount: 0, repositoryName: "seorilabs-backoffice" },
+  ];
+  const summary = summarizeGithubUsage(items, "2026-08");
+  assert.equal(summary.quotaMinutes, 669);
+  assert.equal(summary.freeMinutes, 0);
+});
+
+test("공개 저장소여도 macOS 배수는 그대로 적용된다", () => {
+  // 배수 계산과 공개 저장소 제외는 별개 단계다. 순서가 뒤바뀌면 무료 분이 10배로 샌다.
+  const items: GithubUsageItem[] = [
+    { date: "2026-08-29", sku: "Actions macOS 3-core", quantity: 41, grossAmount: 2.54, netAmount: 0, repositoryName: "seorilabs-official" },
+  ];
+  const summary = summarizeGithubUsage(items, "2026-08", new Set(["seorilabs-official"]));
+  assert.equal(summary.quotaMinutes, 0);
+  assert.equal(summary.freeMinutes, 410);
+});
+
 test("실청구가 시작되면 임계와 무관하게 초과 경고를 만든다", () => {
   const summary = summarizeGithubUsage(AUGUST_ITEMS, "2026-08");
   const warnings = githubUsageWarnings(summary, 3_000);
