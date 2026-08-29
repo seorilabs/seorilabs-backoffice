@@ -344,6 +344,26 @@ test("signed mutation readback은 exact PR, 확정적 미적용, 결과 불명�
     },
   }));
   assert.equal(githubMutationReadbackDisposition({ observation: verified, grant }).status, "VERIFIED");
+  const issueLessGrant = { ...grant, issueNumber: null };
+  const issueLessPullRequest = { ...pullRequest, closesIssueNumber: null };
+  const issueLess = agentGithubObservationSchema.parse(githubObservation({
+    issue: null,
+    openAutopilotPullRequests: [issueLessPullRequest],
+    mutationTarget: {
+      expectedHeadRef: issueLessGrant.expectedHeadRef,
+      expectedMarker: issueLessGrant.expectedPullRequestMarker,
+      headState: "PRESENT",
+      headSha: issueLessPullRequest.headSha,
+      complete: true,
+      pageCount: 1,
+      terminalCursor: null,
+      pullRequests: [issueLessPullRequest],
+    },
+  }));
+  assert.equal(
+    githubMutationReadbackDisposition({ observation: issueLess, grant: issueLessGrant }).status,
+    "VERIFIED",
+  );
   const closed = agentGithubObservationSchema.parse(githubObservation({
     openAutopilotPullRequests: [],
     mutationTarget: {
@@ -516,6 +536,13 @@ test("mutation step readback은 commit, ref, PR exact binding만 VERIFIED한다"
     expectedTreeSha,
     expectedCommitSha,
   }).status, "RESULT_UNKNOWN");
+  assert.equal(githubMutationStepDisposition({
+    stepKind: "CREATE_PR",
+    observation: { ...observation("CREATE_PR"), defaultBranchRef: "refs/heads/trunk" },
+    grant,
+    expectedTreeSha,
+    expectedCommitSha,
+  }).status, "RESULT_UNKNOWN");
   const extraOpen = {
     number: 10,
     nodeId: "PR_10",
@@ -627,7 +654,25 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
       verifiedAt,
     },
   ];
+  const finalPullRequest = {
+    number: 7,
+    nodeId: "PR_7",
+    url: "https://github.com/seorilabs/example/pull/7",
+    headSha: expectedCommitSha,
+  };
   assert.equal(githubMutationStepLedgerVerified(durableSteps), true);
+  assert.equal(githubMutationStepLedgerVerified(durableSteps, finalPullRequest), true);
+  assert.equal(
+    githubMutationStepLedgerVerified(durableSteps, { ...finalPullRequest, headSha: "c".repeat(40) }),
+    false,
+    "최종 PR head가 단계 원장의 commit과 다르면 완료 evidence가 아니다",
+  );
+  assert.equal(
+    githubMutationStepLedgerVerified(durableSteps, { ...finalPullRequest, number: 8 }),
+    false,
+    "최종 PR identity가 CREATE_PR 단계 원장과 다르면 완료 evidence가 아니다",
+  );
+  assert.equal(githubMutationStepLedgerVerified(durableSteps, null), false);
   assert.equal(githubMutationStepLedgerVerified([]), false, "legacy 0-step execution은 완료 evidence가 아니다");
   assert.equal(githubMutationStepLedgerVerified(durableSteps.slice(0, 2)), false);
   assert.equal(githubMutationStepLedgerVerified(durableSteps.map((step) => (
@@ -638,6 +683,7 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     id: "execution-1",
     status: "VERIFIED",
     pullRequestNumber: 7,
+    pullRequestNodeId: "PR_7",
     pullRequestUrl: "https://github.com/seorilabs/example/pull/7",
     pullRequestHeadSha: expectedCommitSha,
     steps: durableSteps,
@@ -658,6 +704,27 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
       mutationExecutionId: verifiedExecution.id,
     },
   }), { mutationStarted: true, error: null });
+
+  const movedHeadExecution = {
+    ...verifiedExecution,
+    id: "execution-moved-head",
+    pullRequestHeadSha: "c".repeat(40),
+  };
+  const movedHead = {
+    agentMutationExecution: { findMany: async () => [movedHeadExecution] },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(await trustedMutationDisposition(movedHead, {
+    runId: "run-1",
+    sessionId: "agent-session:public-id",
+    currentGeneration: 3,
+    readbackResolution: false,
+    result: {
+      outcomeCode: "PR_READY",
+      pullRequestNumber: 7,
+      pullRequestUrl: movedHeadExecution.pullRequestUrl,
+      mutationExecutionId: movedHeadExecution.id,
+    },
+  }), { mutationStarted: true, error: "TRUSTED_MUTATION_STEP_EVIDENCE_REQUIRED" });
 
   const legacyVerifiedExecution = { ...verifiedExecution, id: "legacy-execution", steps: [] };
   const legacyVerified = {
@@ -694,6 +761,36 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     readbackResolution: true,
     result: { outcomeCode: "READBACK_CONFIRMED" },
   }), { mutationStarted: false, error: null });
+
+  const currentReadbackObservationId = "observation-current-readback";
+  const currentSessionUnknown = {
+    ...verifiedExecution,
+    id: "execution-current-readback",
+    status: "RESULT_UNKNOWN",
+    readbackObservationId: currentReadbackObservationId,
+    readbacks: [{
+      observationId: currentReadbackObservationId,
+      status: "RESULT_UNKNOWN",
+      observation: { sessionId: "agent-session:readback" },
+    }],
+  };
+  const currentSessionUnknownTx = {
+    agentMutationExecution: { findMany: async () => [currentSessionUnknown] },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(await trustedMutationDisposition(currentSessionUnknownTx, {
+    runId: "run-1",
+    sessionId: "agent-session:readback",
+    currentGeneration: 4,
+    readbackResolution: true,
+    result: { outcomeCode: "READBACK_CONFIRMED" },
+  }), { mutationStarted: true, error: null });
+  assert.deepEqual(await trustedMutationDisposition(currentSessionUnknownTx, {
+    runId: "run-1",
+    sessionId: "agent-session:other-readback",
+    currentGeneration: 4,
+    readbackResolution: true,
+    result: { outcomeCode: "READBACK_CONFIRMED" },
+  }), { mutationStarted: true, error: "TRUSTED_MUTATION_READBACK_REQUIRED" });
 });
 
 test("migration은 session CAS와 1회 JIT grant/readback ledger를 tokenless unique key로 강제한다", () => {

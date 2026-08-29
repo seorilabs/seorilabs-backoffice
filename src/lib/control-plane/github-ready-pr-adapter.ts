@@ -10,6 +10,7 @@ import {
   agentGithubMutationStepObservationSchema,
   agentGithubMutationStepPlanSchema,
   agentGithubObservationSchema,
+  containsCredentialCandidate,
   type AgentGithubMutationStepKind,
   type AgentGithubMutationStepObservation,
   type AgentGithubObservation,
@@ -22,7 +23,6 @@ const SHA256 = /^[0-9a-f]{64}$/i;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SAFE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\\)[\p{L}\p{N}._@+ -]+(?:\/[\p{L}\p{N}._@+ -]+)*$/u;
 const SENSITIVE_PATH = /(?:^|\/)(?:\.git|\.env(?:\.|$)|.*(?:credential|private[-_]?key|secret|token).*)(?:\/|$)/iu;
-const SENSITIVE_CONTENT = /(?:-----BEGIN\s+(?:(?:RSA|EC|OPENSSH)\s+)?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\b(?:password|passwd|pwd|totp(?:[_-]?seed)?|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret)\s*[:=]\s*["']?[A-Za-z0-9+/_=.-]{8,})/iu;
 const MARKER_COMMENT = /<!--\s*(seori-run:[A-Za-z0-9._:/-]{1,170})\s*-->/gu;
 // GitHub는 같은 repo의 #N뿐 아니라 `KEYWORD: owner/repo#N`도 종료 지시로
 // 해석한다. PR body와 commit message에서 adapter가 추가하는 exact `Closes #N`
@@ -43,7 +43,7 @@ function isControlPlaneConflict(error: unknown): boolean {
 
 function publicText(max: number) {
   return z.string().min(1).max(max).refine(
-    (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value) && !SENSITIVE_CONTENT.test(value),
+    (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value) && !containsCredentialCandidate(value),
     "credential 후보와 제어 문자가 없는 공개 텍스트가 필요합니다.",
   );
 }
@@ -114,6 +114,18 @@ export interface GithubCommitState {
   parentSha: string;
 }
 
+export interface GithubReadyPrRecoveryClaim {
+  executionId: string;
+  status: string;
+  repoId: string;
+  repoFullName: string;
+  issueNumber: number | null;
+  sourceSha: string;
+  expectedHeadRef: string;
+  expectedPullRequestMarker: string;
+  duplicate: boolean;
+}
+
 export interface GithubReadyPrPort {
   installationId: string;
   getRepository(repoFullName: string): Promise<GithubRepositoryState>;
@@ -149,6 +161,14 @@ export interface GithubReadyPrPort {
 }
 
 export interface GithubMutationControlPlane {
+  recover(input: {
+    requestId: string;
+    body: {
+      sessionId: string;
+      workerPrincipalId: WorkerPrincipal;
+      workerRuntimeBindingDigest: string;
+    };
+  }): Promise<GithubReadyPrRecoveryClaim>;
   authorize(input: {
     requestId: string;
     body: z.infer<typeof agentGithubMutationAuthorizeSchema>;
@@ -181,7 +201,7 @@ export interface GithubMutationControlPlane {
     expectedPullRequestMarker: string;
     sourceSha: string;
     commitDate: Date;
-    writeDisposition: "EXECUTE_ONCE" | "READBACK_THEN_EXECUTE" | "ALREADY_VERIFIED";
+    writeDisposition: "EXECUTE_ONCE" | "READBACK_THEN_EXECUTE" | "READBACK_ONLY" | "ALREADY_VERIFIED";
     duplicate: boolean;
   }>;
   planStep(input: {
@@ -258,7 +278,7 @@ function decodeFile(file: z.infer<typeof fileSchema>): PreparedGithubFile {
   try {
     if (bytes.length === 0 || bytes.length > MAX_FILE_BYTES) throw new Error("GITHUB_READY_PR_FILE_SIZE_INVALID");
     const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    if (content.includes("\0") || SENSITIVE_CONTENT.test(content)) throw new Error("GITHUB_READY_PR_FILE_CONTENT_REJECTED");
+    if (content.includes("\0") || containsCredentialCandidate(content)) throw new Error("GITHUB_READY_PR_FILE_CONTENT_REJECTED");
     return {
       path: file.path,
       content,
@@ -296,7 +316,6 @@ export function prepareGithubReadyPrCommand(raw: unknown): {
   }).sort((left, right) => left.path.localeCompare(right.path));
   const mutationIntentDigest = jsonDigest({
     schemaVersion: 1,
-    sessionId: command.sessionId,
     repoId: command.repoId,
     repoFullName: command.repoFullName.toLowerCase(),
     issueNumber: command.issueNumber,
@@ -349,6 +368,26 @@ async function readAllPullRequests(input: {
     if (current.length < PER_PAGE) return { pullRequests, pageCount: page };
   }
   throw new Error("GITHUB_READY_PR_PAGINATION_LIMIT");
+}
+
+async function readStableAllPullRequests(input: {
+  github: GithubReadyPrPort;
+  repoFullName: string;
+}): Promise<{ pullRequests: GithubPullRequestState[]; pageCount: number }> {
+  const first = await readAllPullRequests({ ...input, state: "ALL" });
+  // A single response page has no page boundary from which a concurrent state
+  // transition could skip an item. Avoid doubling the common read path while
+  // retaining the identical second traversal for multi-page snapshots.
+  if (first.pageCount === 1) return first;
+  const second = await readAllPullRequests({ ...input, state: "ALL" });
+  if (
+    first.pageCount !== second.pageCount
+    || jsonDigest(first.pullRequests as unknown as JsonValue)
+      !== jsonDigest(second.pullRequests as unknown as JsonValue)
+  ) {
+    throw new Error("GITHUB_READY_PR_UNSTABLE_SNAPSHOT");
+  }
+  return second;
 }
 
 function publicOpenPullRequest(pullRequest: GithubPullRequestState, repoFullName: string) {
@@ -415,17 +454,17 @@ export async function observeGithubReadyPr(input: {
   const issue = input.issueNumber === null
     ? null
     : await input.github.getIssue(input.repoFullName, input.issueNumber);
-  const open = await readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "OPEN" });
-  const openAutopilotPullRequests = open.pullRequests
+  // OPEN page-number pagination can skip an item when an earlier PR closes
+  // between pages. PR records cannot be deleted, so enumerate the
+  // created-ascending ALL sequence once and derive both views from it.
+  const all = await readStableAllPullRequests({ github: input.github, repoFullName: input.repoFullName });
+  const openAutopilotPullRequests = all.pullRequests
     .map((pullRequest) => publicOpenPullRequest(pullRequest, repository.fullName))
     .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicOpenPullRequest>> => Boolean(pullRequest));
-  const pageCount = open.pageCount;
+  const pageCount = all.pageCount;
   let mutationTarget: AgentGithubObservation["mutationTarget"] = null;
   if (input.expectedTarget) {
-    const [head, all] = await Promise.all([
-      input.github.getRef(input.repoFullName, input.expectedTarget.headRef),
-      readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "ALL" }),
-    ]);
+    const head = await input.github.getRef(input.repoFullName, input.expectedTarget.headRef);
     mutationTarget = {
       expectedHeadRef: input.expectedTarget.headRef,
       expectedMarker: input.expectedTarget.marker,
@@ -484,20 +523,16 @@ export async function observeGithubMutationStep(input: {
   const issue = input.issueNumber === null
     ? null
     : await input.github.getIssue(input.repoFullName, input.issueNumber);
-  const open = await readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "OPEN" });
-  const openAutopilotPullRequests = open.pullRequests
+  const all = await readStableAllPullRequests({ github: input.github, repoFullName: input.repoFullName });
+  const openAutopilotPullRequests = all.pullRequests
     .map((pullRequest) => publicOpenPullRequest(pullRequest, repository.fullName))
     .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicOpenPullRequest>> => Boolean(pullRequest));
   const commit = input.expectedCommitSha
     ? await input.github.getCommit(input.repoFullName, input.expectedCommitSha)
     : null;
-  const head = input.stepKind === "CREATE_COMMIT"
-    ? null
-    : await input.github.getRef(input.repoFullName, input.expectedHeadRef);
-  const allPullRequests = input.stepKind === "CREATE_PR"
-    ? await readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "ALL" })
-    : null;
-  const pullRequests = allPullRequests?.pullRequests
+  const head = await input.github.getRef(input.repoFullName, input.expectedHeadRef);
+  const pullRequests = input.stepKind === "CREATE_PR"
+    ? all.pullRequests
     .map((pullRequest) => publicTargetPullRequest(
       pullRequest,
       input.expectedMarker,
@@ -505,7 +540,7 @@ export async function observeGithubMutationStep(input: {
       repository.fullName,
     ))
     .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicTargetPullRequest>> => Boolean(pullRequest))
-    ?? [];
+    : [];
   const snapshot = {
     schemaVersion: 1 as const,
     stepKind: input.stepKind,
@@ -556,17 +591,20 @@ function exactStepCommit(observation: AgentGithubMutationStepObservation): boole
 function mutationStepBasePreconditions(input: {
   observation: AgentGithubMutationStepObservation;
   command: GithubReadyPrCommand;
+  expectedDefaultBranchRef: string;
   expectedHeadRef: string;
   expectedMarker: string;
 }): boolean {
   const { observation, command } = input;
   return observation.repoId === command.repoId
     && observation.repoFullName.toLowerCase() === command.repoFullName.toLowerCase()
+    && observation.defaultBranchRef === input.expectedDefaultBranchRef
     && observation.defaultBranchSha.toLowerCase() === command.sourceSha.toLowerCase()
     && observation.expectedHeadRef === input.expectedHeadRef
     && observation.expectedPullRequestMarker === input.expectedMarker
     && (observation.issue?.number ?? null) === command.issueNumber
     && (command.issueNumber === null || mutationStepIssueEligible(observation.issue))
+    && (observation.stepKind !== "CREATE_COMMIT" || observation.headSha === null)
     && observation.openAutopilotPullRequests.length === 0;
 }
 
@@ -624,6 +662,7 @@ export async function executeGithubReadyPr(input: {
   const stepKinds: AgentGithubMutationStepKind[] = ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"];
   for (const stepKind of stepKinds) {
     const claimBody = agentGithubMutationStepClaimSchema.parse({
+      sessionId: command.sessionId,
       executionId: authorization.executionId,
       workerPrincipalId: input.workerPrincipalId,
       workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
@@ -675,6 +714,7 @@ export async function executeGithubReadyPr(input: {
       if (!mutationStepBasePreconditions({
         observation: beforeTree,
         command,
+        expectedDefaultBranchRef: preObservation.defaultBranchRef,
         expectedHeadRef: claim.expectedHeadRef,
         expectedMarker: claim.expectedPullRequestMarker,
       }) || claim.expiresAt <= now()) {
@@ -693,6 +733,7 @@ export async function executeGithubReadyPr(input: {
         date: claim.commitDate,
       });
       const planBody = agentGithubMutationStepPlanSchema.parse({
+        sessionId: command.sessionId,
         executionId: claim.executionId,
         stepId: claim.stepId,
         attemptId: claim.attemptId,
@@ -737,6 +778,7 @@ export async function executeGithubReadyPr(input: {
     const basePreconditions = mutationStepBasePreconditions({
       observation: beforeWrite,
       command,
+      expectedDefaultBranchRef: preObservation.defaultBranchRef,
       expectedHeadRef: claim.expectedHeadRef,
       expectedMarker: claim.expectedPullRequestMarker,
     });
@@ -779,7 +821,7 @@ export async function executeGithubReadyPr(input: {
           ].join("\n\n");
           await input.github.createPullRequest({
             repoFullName: command.repoFullName,
-            baseBranch: preObservation.defaultBranchRef.replace(/^refs\/heads\//u, ""),
+            baseBranch: beforeWrite.defaultBranchRef.replace(/^refs\/heads\//u, ""),
             headRef: claim.expectedHeadRef,
             title: command.title,
             body,
@@ -802,6 +844,7 @@ export async function executeGithubReadyPr(input: {
       now: now(),
     });
     const completionBody = agentGithubMutationStepCompleteSchema.parse({
+      sessionId: command.sessionId,
       executionId: claim.executionId,
       stepId: claim.stepId,
       attemptId: claim.attemptId,
@@ -838,6 +881,7 @@ export async function executeGithubReadyPr(input: {
     now: now(),
   });
   const readbackBody = agentGithubMutationReadbackSchema.parse({
+    sessionId: command.sessionId,
     executionId: authorization.executionId,
     workerPrincipalId: input.workerPrincipalId,
     workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
@@ -857,6 +901,117 @@ export async function executeGithubReadyPr(input: {
     executionId: readback.executionId,
     status: readback.status,
     writeAttempted,
+    ...(readback.status === "VERIFIED" && target ? {
+      pullRequestNumber: target.number,
+      pullRequestUrl: target.url,
+    } : {}),
+  };
+}
+
+export async function recoverGithubReadyPr(input: {
+  operationId: string;
+  sessionId: string;
+  workerPrincipalId: WorkerPrincipal;
+  workerRuntimeBindingDigest: string;
+  recovery: GithubReadyPrRecoveryClaim;
+  github: GithubReadyPrPort;
+  controlPlane: GithubMutationControlPlane;
+  clock?: () => Date;
+}): Promise<{
+  executionId: string;
+  status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
+  writeAttempted: false;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+}> {
+  const now = input.clock ?? (() => new Date());
+  const stepKinds: AgentGithubMutationStepKind[] = ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"];
+  for (const stepKind of stepKinds) {
+    const claim = await input.controlPlane.claimStep({
+      requestId: mutationControlPlaneRequestId(input.operationId, `recovery:${stepKind}:claim`),
+      body: agentGithubMutationStepClaimSchema.parse({
+        sessionId: input.sessionId,
+        executionId: input.recovery.executionId,
+        workerPrincipalId: input.workerPrincipalId,
+        workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+        stepKind,
+      }),
+    });
+    if (
+      claim.executionId !== input.recovery.executionId
+      || claim.stepKind !== stepKind
+      || claim.expectedHeadRef !== input.recovery.expectedHeadRef
+      || claim.expectedPullRequestMarker !== input.recovery.expectedPullRequestMarker
+      || claim.sourceSha.toLowerCase() !== input.recovery.sourceSha.toLowerCase()
+    ) throw new Error("GITHUB_READY_PR_RECOVERY_CLAIM_BINDING_MISMATCH");
+    if (claim.writeDisposition === "ALREADY_VERIFIED") continue;
+    if (
+      claim.writeDisposition !== "READBACK_ONLY"
+      || !claim.attemptId
+      || !claim.expiresAt
+      || claim.expiresAt <= now()
+    ) throw new Error("GITHUB_READY_PR_RECOVERY_CLAIM_INVALID");
+    const observation = await observeGithubMutationStep({
+      github: input.github,
+      repoFullName: input.recovery.repoFullName,
+      issueNumber: input.recovery.issueNumber,
+      stepKind,
+      expectedHeadRef: claim.expectedHeadRef,
+      expectedMarker: claim.expectedPullRequestMarker,
+      expectedTreeSha: claim.expectedTreeSha,
+      expectedCommitSha: claim.expectedCommitSha,
+      now: now(),
+    });
+    const completion = await input.controlPlane.completeStep({
+      requestId: mutationControlPlaneRequestId(
+        input.operationId,
+        `recovery:${stepKind}:generation:${claim.generation}:complete`,
+      ),
+      body: agentGithubMutationStepCompleteSchema.parse({
+        sessionId: input.sessionId,
+        executionId: claim.executionId,
+        stepId: claim.stepId,
+        attemptId: claim.attemptId,
+        generation: claim.generation,
+        workerPrincipalId: input.workerPrincipalId,
+        workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+        stepKind,
+        observation,
+      }),
+    });
+    if (completion.status !== "VERIFIED") break;
+  }
+
+  const postObservation = await observeGithubReadyPr({
+    github: input.github,
+    repoFullName: input.recovery.repoFullName,
+    issueNumber: input.recovery.issueNumber,
+    expectedTarget: {
+      headRef: input.recovery.expectedHeadRef,
+      marker: input.recovery.expectedPullRequestMarker,
+    },
+    now: now(),
+  });
+  const readback = await input.controlPlane.readback({
+    requestId: mutationControlPlaneRequestId(
+      input.operationId,
+      `recovery:readback:${postObservation.providerSnapshotId}`,
+    ),
+    body: agentGithubMutationReadbackSchema.parse({
+      sessionId: input.sessionId,
+      executionId: input.recovery.executionId,
+      workerPrincipalId: input.workerPrincipalId,
+      workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+      observation: postObservation,
+    }),
+  });
+  const target = postObservation.mutationTarget?.pullRequests.length === 1
+    ? postObservation.mutationTarget.pullRequests[0]
+    : null;
+  return {
+    executionId: readback.executionId,
+    status: readback.status,
+    writeAttempted: false,
     ...(readback.status === "VERIFIED" && target ? {
       pullRequestNumber: target.number,
       pullRequestUrl: target.url,

@@ -46,7 +46,9 @@ Codex와 Claude worker는 앱별로 설치하지 않는다. 기존 generic worke
    즉시 revoke, step별 readback-first partial-resume canary를 통과한다. 표준 NetworkPolicy의 broad 443 egress는 운영 CNI의
    `backoffice.vzyx.xyz`와 `api.github.com` FQDN allowlist로 교체한다.
 4. `CREATE_COMMIT`, `CREATE_REF`, `CREATE_PR`별 durable CAS/readback과 exact partial resume, 각 provider write 직후
-   프로세스 종료 fixture는 구현됐다. 실제 private repository canary에서 같은 증거를 확인한다.
+   프로세스 종료 fixture는 구현됐다. lease 만료 뒤 새 `READBACK_FIRST` session은 `GITHUB_READY_PR_READBACK`으로
+   서버가 선택한 기존 execution을 write 없이 확인하고, current-session readback audit 뒤 같은 execution의 최초 미완료
+   step만 새 TTL로 재개한다. 실제 private repository canary에서 같은 증거를 확인한다.
 5. native peer attestor 또는 worker별 전용 OS UID/launchd 경계가 없으면 local transport는 계속 비활성화한다.
 6. 실제 canary 별도 검토에서 runtime gate를 열고 runtime Ready와 서명 readback을 확인한 다음에만 Backoffice
    `AGENT_TRUSTED_ADAPTER_DEPLOYED`를 `true`로 배포한다. 현재 revision에서는 이 단계로 갈 수 없다.

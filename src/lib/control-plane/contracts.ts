@@ -1115,7 +1115,17 @@ export const agentGithubMutationAuthorizeSchema = z.object({
   }
 });
 
+export const agentGithubMutationRecoveryClaimSchema = z.object({
+  sessionId: publicIdentifier,
+  workerPrincipalId: z.enum([
+    GENERIC_WORKER_PRINCIPALS.CODEX,
+    GENERIC_WORKER_PRINCIPALS.CLAUDE,
+  ]),
+  workerRuntimeBindingDigest: sha256,
+}).strict();
+
 const agentGithubMutationStepBindingSchema = z.object({
+  sessionId: publicIdentifier,
   executionId: publicIdentifier,
   workerPrincipalId: z.enum([
     GENERIC_WORKER_PRINCIPALS.CODEX,
@@ -1159,6 +1169,7 @@ export const agentGithubMutationStepCompleteSchema = agentGithubMutationStepBind
 });
 
 export const agentGithubMutationReadbackSchema = z.object({
+  sessionId: publicIdentifier,
   executionId: publicIdentifier,
   workerPrincipalId: z.enum([
     GENERIC_WORKER_PRINCIPALS.CODEX,

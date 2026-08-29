@@ -47,6 +47,7 @@ export const seoriAuthPublicRequestSchema = z.object({
     "READBACK_REQUIRED",
     "READBACK_RESOLVE",
     "GITHUB_READY_PR",
+    "GITHUB_READY_PR_READBACK",
   ]),
   body: z.unknown(),
 }).strict();

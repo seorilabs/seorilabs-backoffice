@@ -15,6 +15,7 @@ import {
 } from "@/lib/control-plane/contracts";
 import {
   executeGithubReadyPr,
+  recoverGithubReadyPr,
   type GithubIssueState,
   type GithubMutationControlPlane,
   type GithubPullRequestState,
@@ -26,7 +27,7 @@ import {
   type ScopedGithubTokenIssuer,
 } from "@/lib/control-plane/github-operation-token";
 import { signAgentAdapterAttestation } from "@/lib/control-plane/agent-adapter-attestation";
-import type { JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   agentKindForWorkerPrincipal,
   assertPublicAgentResponse,
@@ -70,6 +71,21 @@ const authorizeResponseSchema = z.object({
   }).strict(),
 }).strict();
 
+const recoveryResponseSchema = z.object({
+  ok: z.literal(true),
+  recovery: z.object({
+    executionId: z.string().min(1).max(191),
+    status: z.string().min(1).max(32),
+    repoId: z.string().regex(/^[1-9]\d{0,15}$/),
+    repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    issueNumber: z.number().int().positive().nullable(),
+    sourceSha: z.string().regex(/^[0-9a-f]{40}$/i),
+    expectedHeadRef: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,240}$/),
+    expectedPullRequestMarker: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/),
+    duplicate: z.boolean(),
+  }).strict(),
+}).strict();
+
 const stepClaimResponseSchema = z.object({
   ok: z.literal(true),
   step: z.object({
@@ -86,7 +102,7 @@ const stepClaimResponseSchema = z.object({
     expectedPullRequestMarker: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/),
     sourceSha: z.string().regex(/^[0-9a-f]{40}$/i),
     commitDate: z.coerce.date(),
-    writeDisposition: z.enum(["EXECUTE_ONCE", "READBACK_THEN_EXECUTE", "ALREADY_VERIFIED"]),
+    writeDisposition: z.enum(["EXECUTE_ONCE", "READBACK_THEN_EXECUTE", "READBACK_ONLY", "ALREADY_VERIFIED"]),
     duplicate: z.boolean(),
   }).strict(),
 }).strict();
@@ -126,6 +142,9 @@ const readbackResponseSchema = z.object({
 
 const claimBodySchema = z.object({
   leaseSeconds: z.number().int().min(30).max(300).default(300),
+}).strict();
+const recoveryRequestSchema = z.object({
+  sessionId: z.string().regex(/^agent-session:[A-Za-z0-9._:/-]{1,190}$/),
 }).strict();
 
 function asJson(value: unknown): JsonValue {
@@ -476,6 +495,10 @@ function createMutationControlPlane(attestationPrivateKey: KeyObject, backoffice
     }));
   };
   return {
+    recover: async (input) => recoveryResponseSchema.parse(await call({
+      path: "/api/internal/agent-adapter/github-mutations/recovery",
+      ...input,
+    })).recovery,
     authorize: async (input) => authorizeResponseSchema.parse(await call({
       path: "/api/internal/agent-adapter/github-mutations/authorize",
       ...input,
@@ -580,10 +603,40 @@ async function main() {
         return;
       }
       const envelope = seoriAuthPublicRequestSchema.parse(await readJson(request));
-      if (envelope.operation === "GITHUB_READY_PR" && !READY_PR_RUNTIME_OPERATIONAL) {
+      if (["GITHUB_READY_PR", "GITHUB_READY_PR_READBACK"].includes(envelope.operation) && !READY_PR_RUNTIME_OPERATIONAL) {
         throw new Error("SEORI_GITHUB_READY_PR_RUNTIME_NOT_OPERATIONAL");
       }
-      const result = envelope.operation === "GITHUB_READY_PR"
+      const result = envelope.operation === "GITHUB_READY_PR_READBACK"
+        ? await (async () => {
+          const recoveryRequest = recoveryRequestSchema.parse(envelope.body);
+          const recovery = await controlPlane.recover({
+            requestId: `ghr:${jsonDigest({ requestId: envelope.requestId } as JsonValue)}`,
+            body: {
+              sessionId: recoveryRequest.sessionId,
+              workerPrincipalId: principal,
+              workerRuntimeBindingDigest,
+            },
+          });
+          return withBoundSecretText({
+            root: FIXED_ROOT,
+            relativePath: "github/app-private.pem",
+            allowGroupRead: true,
+          }, async (privateKey) => withGithubPort({
+            privateKey,
+            repoId: recovery.repoId,
+            repoFullName: recovery.repoFullName,
+            execute: (github) => recoverGithubReadyPr({
+              operationId: envelope.requestId,
+              sessionId: recoveryRequest.sessionId,
+              workerPrincipalId: principal,
+              workerRuntimeBindingDigest,
+              recovery,
+              github,
+              controlPlane,
+            }),
+          }));
+        })()
+        : envelope.operation === "GITHUB_READY_PR"
         ? await withBoundSecretText({
           root: FIXED_ROOT,
           relativePath: "github/app-private.pem",

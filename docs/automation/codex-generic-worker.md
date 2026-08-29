@@ -10,7 +10,9 @@
    - `repo-task-autopilot-v1`: claim의 repo와 issue만 작업한다. GitHub에서 issue state와 `blocked`, `approval:*`, `no-autopilot`, `autopilot` label을 다시 읽고 eligibility가 달라졌으면 `fail`로 종료한다.
    - `platform-fleet-reconcile-v1`: `issueNumber=null`이고 `taskInput.kind=PLATFORM_SDK_UPDATE`인 CODEX claim만 처리한다. task의 repo ID/full name과 현재 default source SHA가 `taskInput.repoId`, `repoFullName`, `sourceSha`와 하나라도 다르면 중단한다. Project field를 claim 근거로 사용하지 않는다.
    `approvalPolicy=READ_ONLY`이면 어느 template에서도 변경·commit·PR을 만들지 않는다.
-4. `resumeMode=READBACK_FIRST`이면 기존 branch, commit, PR, checks를 먼저 조회한다. 이미 수행된 외부 mutation을 반복하지 않는다.
+4. `resumeMode=READBACK_FIRST`이면 일반 `GITHUB_READY_PR`을 호출하지 않고 `GITHUB_READY_PR_READBACK`만 호출한다.
+   adapter가 worker 입력이 아닌 서버의 기존 immutable ledger에서 exact commit/ref/marker를 불러와 branch, PR을 조회한다.
+   이 operation은 항상 `READBACK_ONLY`이며 외부 mutation을 수행하지 않는다.
 5. 공개 `sessionId`의 TTL이 남아 있는 동안만 작업하고 60초 이내 간격으로 helper를 통해 heartbeat한다.
    `sessionId`는 권한이 아니며 bearer 대신 쓸 수 없다. credential을 출력, 파일, argv, 로그, prompt 결과에 남기지 않는다.
 6. 현재 revision에서 `READY_PR` claim이 반환되면 step-ledger gate 구성 오류이므로 GitHub write 없이 `fail`한다.
@@ -23,8 +25,9 @@
 7. 완료·실패·readback 결과는 허용된 공개 필드만 보낸다. 모든 결과에 이번 호출의 `costMicros`를 반드시 기록하고 claim의 `remainingBudgetMicros`와 action capability를 넘지 않는다.
 8. timeout 또는 API 응답 불명처럼 외부 결과가 불명확하면 공개 `RESULT_UNKNOWN` 결과와 함께
    `readback-required`를 호출한다. 다음 예약 실행이 같은 run을 `READBACK_FIRST`로 재claim해 받은 새
-   `sessionId`로 상태를 조회한 뒤 `readback`에 `RESUME`, `COMPLETE`, `BLOCKED` 중 하나를 제출한다.
-   trusted adapter가 exact head ref와 marker의 PR/branch가 모두 없음을 서명한 경우에만 미적용으로 확정해 재개한다.
+   `sessionId`로 `GITHUB_READY_PR_READBACK`을 실행한 뒤 `readback`에 `RESUME`, `COMPLETE`, `BLOCKED` 중 하나를 제출한다.
+   일부 step이 이미 확인됐으면 전체 미적용으로 바꾸지 않고 `RESULT_UNKNOWN`을 기록한다. `RESUME` 뒤 새 START session에서
+   같은 execution ID의 이미 확인된 step은 건너뛰고, signed readback이 미적용으로 확인한 최초 미완료 step부터만 새 TTL로 재개한다.
    실행 중 Issue가 closed/blocked/approval 상태로 바뀌어 lease가 회수된 경우에도 새 작업을 만들지 말고 다음 `READBACK_FIRST` claim을 기다린다.
 9. 사람 승인, 재인증, 심사 제출, 공개 배포, role/key 변경이 필요하면 수행하지 말고 해당 gate를 남긴다.
 

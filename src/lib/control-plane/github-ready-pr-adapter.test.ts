@@ -7,6 +7,7 @@ import {
   executeGithubReadyPr,
   observeGithubReadyPr,
   prepareGithubReadyPrCommand,
+  recoverGithubReadyPr,
   type GithubCommitState,
   type GithubMutationControlPlane,
   type GithubPullRequestState,
@@ -58,8 +59,12 @@ class FakeGithub implements GithubReadyPrPort {
   readonly pageRequests: Array<{ state: "OPEN" | "ALL"; page: number }> = [];
   readonly writes: Array<"CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR"> = [];
   repositoryReads = 0;
+  defaultBranch = "main";
   defaultBranchSha = SOURCE_SHA;
   driftOnSecondRepositoryRead = false;
+  renameDefaultBranchOnRead = Number.POSITIVE_INFINITY;
+  createdPrBaseBranch: string | null = null;
+  closeFirstAfterPageOne = false;
   commit: GithubCommitState | null = null;
   headSha: string | null = null;
   pulls: GithubPullRequestState[] = Array.from({ length: 100 }, (_, index) => manualPullRequest(index + 100));
@@ -67,7 +72,8 @@ class FakeGithub implements GithubReadyPrPort {
   async getRepository() {
     this.repositoryReads += 1;
     if (this.driftOnSecondRepositoryRead && this.repositoryReads >= 2) this.defaultBranchSha = "c".repeat(40);
-    return { id: 123, fullName: REPO, defaultBranch: "main", defaultBranchSha: this.defaultBranchSha };
+    if (this.repositoryReads >= this.renameDefaultBranchOnRead) this.defaultBranch = "trunk";
+    return { id: 123, fullName: REPO, defaultBranch: this.defaultBranch, defaultBranchSha: this.defaultBranchSha };
   }
 
   async getIssue() {
@@ -83,7 +89,11 @@ class FakeGithub implements GithubReadyPrPort {
   async listPullRequests(input: { state: "OPEN" | "ALL"; page: number; perPage: number }) {
     this.pageRequests.push({ state: input.state, page: input.page });
     const visible = input.state === "OPEN" ? this.pulls.filter((pullRequest) => pullRequest.state === "OPEN") : this.pulls;
-    return visible.slice((input.page - 1) * input.perPage, input.page * input.perPage);
+    const page = structuredClone(visible.slice((input.page - 1) * input.perPage, input.page * input.perPage));
+    if (this.closeFirstAfterPageOne && input.page === 1 && this.pulls[0]) {
+      this.pulls[0].state = "CLOSED";
+    }
+    return page;
   }
 
   async getRef(_repoFullName: string, ref: string) {
@@ -116,9 +126,10 @@ class FakeGithub implements GithubReadyPrPort {
     this.headSha = input.sha;
   }
 
-  async createPullRequest(input: { headRef: string; title: string; body: string }) {
+  async createPullRequest(input: { baseBranch: string; headRef: string; title: string; body: string }) {
     assert.ok(this.headSha);
     this.writes.push("CREATE_PR");
+    this.createdPrBaseBranch = input.baseBranch;
     this.pulls.push({
       number: 7,
       nodeId: "PR_fixture_7",
@@ -128,7 +139,7 @@ class FakeGithub implements GithubReadyPrPort {
       headRef: input.headRef,
       headRepoFullName: REPO,
       headSha: this.headSha!,
-      baseRef: "refs/heads/main",
+      baseRef: `refs/heads/${input.baseBranch}`,
       baseRepoFullName: REPO,
       baseSha: SOURCE_SHA,
       body: input.body,
@@ -157,6 +168,9 @@ function controlPlane(input: {
   let crashPending = Boolean(input.crashBeforeCompletionStep);
   let claimConflictPending = Boolean(input.claimConflictOnceStep);
   return {
+    recover: async () => {
+      throw new Error("unexpected recovery claim");
+    },
     authorize: async ({ body }) => {
       input.onAuthorize?.(body as unknown as Record<string, unknown>);
       return {
@@ -261,8 +275,39 @@ test("step ledger adapter는 complete pagination 뒤 commit, ref, PR을 순서�
   assert.equal(result.status, "VERIFIED");
   assert.equal(result.pullRequestNumber, 7);
   assert.equal(result.pullRequestUrl, `https://github.com/${REPO}/pull/7`);
-  assert.ok(github.pageRequests.some((request) => request.state === "OPEN" && request.page === 2));
   assert.ok(github.pageRequests.some((request) => request.state === "ALL" && request.page === 2));
+  assert.equal(github.pageRequests.some((request) => request.state === "OPEN"), false);
+});
+
+test("CREATE_PR 직전 default branch ref가 바뀌면 PR write를 거부한다", async () => {
+  const github = new FakeGithub();
+  github.renameDefaultBranchOnRead = 7;
+  await executeGithubReadyPr({
+    operationId: "operation:renamed-default-branch",
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: "d".repeat(64),
+    rawCommand: command(),
+    github,
+    controlPlane: controlPlane({}),
+    clock: () => NOW,
+  });
+  assert.deepEqual(github.writes, ["CREATE_COMMIT", "CREATE_REF"]);
+  assert.equal(github.createdPrBaseBranch, null);
+});
+
+test("CREATE_COMMIT 직전 target ref가 생기면 tree와 commit write를 거부한다", async () => {
+  const github = new FakeGithub();
+  github.headSha = "e".repeat(40);
+  await executeGithubReadyPr({
+    operationId: "operation:preexisting-target-ref",
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: "d".repeat(64),
+    rawCommand: command(),
+    github,
+    controlPlane: controlPlane({}),
+    clock: () => NOW,
+  });
+  assert.deepEqual(github.writes, []);
 });
 
 test("이미 검증된 step replay는 GitHub write를 반복하지 않는다", async () => {
@@ -352,6 +397,123 @@ test("프로세스가 provider write 직후 종료돼도 readback-first resume�
   }
 });
 
+test("만료 뒤 recovery adapter는 서버 ledger만 읽고 GitHub write 없이 부분 적용을 RESULT_UNKNOWN으로 남긴다", async () => {
+  const github = new FakeGithub();
+  const expectedCommitSha = deterministicGithubCommitSha({
+    treeSha: TREE_SHA,
+    parentSha: SOURCE_SHA,
+    message: command().commitMessage,
+    date: NOW,
+  });
+  github.commit = { sha: expectedCommitSha, treeSha: TREE_SHA, parentSha: SOURCE_SHA };
+  const claimedKinds: string[] = [];
+  const completedKinds: string[] = [];
+  const cp = controlPlane({ readbackStatus: "RESULT_UNKNOWN" });
+  cp.claimStep = async ({ body }) => {
+    claimedKinds.push(body.stepKind);
+    const verified = body.stepKind === "CREATE_COMMIT";
+    return {
+      executionId: body.executionId,
+      stepId: `step:${body.stepKind}`,
+      stepKind: body.stepKind,
+      stepStatus: verified ? "VERIFIED" : "CLAIMED",
+      generation: 2,
+      attemptId: verified ? null : `attempt:${body.stepKind}`,
+      expiresAt: verified ? null : new Date(NOW.getTime() + 60_000),
+      expectedTreeSha: TREE_SHA,
+      expectedCommitSha,
+      expectedHeadRef: "refs/heads/seori/run-fixture-1",
+      expectedPullRequestMarker: "seori-run:fixture:1",
+      sourceSha: SOURCE_SHA,
+      commitDate: NOW,
+      writeDisposition: verified ? "ALREADY_VERIFIED" : "READBACK_ONLY",
+      duplicate: false,
+    };
+  };
+  cp.completeStep = async ({ body }) => {
+    completedKinds.push(body.stepKind);
+    return {
+      executionId: body.executionId,
+      stepId: body.stepId,
+      attemptId: body.attemptId,
+      generation: body.generation,
+      status: "NOT_APPLIED",
+      duplicate: false,
+    };
+  };
+  const result = await recoverGithubReadyPr({
+    operationId: "operation:expired-recovery",
+    sessionId: "agent-session:readback",
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: "d".repeat(64),
+    recovery: {
+      executionId: "mutation-execution:fixture",
+      status: "RESULT_UNKNOWN",
+      repoId: "123",
+      repoFullName: REPO,
+      issueNumber: 7,
+      sourceSha: SOURCE_SHA,
+      expectedHeadRef: "refs/heads/seori/run-fixture-1",
+      expectedPullRequestMarker: "seori-run:fixture:1",
+      duplicate: false,
+    },
+    github,
+    controlPlane: cp,
+    clock: () => NOW,
+  });
+  assert.deepEqual(claimedKinds, ["CREATE_COMMIT", "CREATE_REF"]);
+  assert.deepEqual(completedKinds, ["CREATE_REF"]);
+  assert.deepEqual(github.writes, []);
+  assert.deepEqual(result, {
+    executionId: "mutation-execution:fixture",
+    status: "RESULT_UNKNOWN",
+    writeAttempted: false,
+  });
+});
+
+test("recovery의 ALREADY_VERIFIED claim도 서버가 선택한 execution과 exact target에 결합한다", async () => {
+  const github = new FakeGithub();
+  const cp = controlPlane({ readbackStatus: "RESULT_UNKNOWN" });
+  cp.claimStep = async ({ body }) => ({
+    executionId: "mutation-execution:other",
+    stepId: `step:${body.stepKind}`,
+    stepKind: body.stepKind,
+    stepStatus: "VERIFIED",
+    generation: 1,
+    attemptId: null,
+    expiresAt: null,
+    expectedTreeSha: TREE_SHA,
+    expectedCommitSha: "c".repeat(40),
+    expectedHeadRef: "refs/heads/seori/run-fixture-1",
+    expectedPullRequestMarker: "seori-run:fixture:1",
+    sourceSha: SOURCE_SHA,
+    commitDate: NOW,
+    writeDisposition: "ALREADY_VERIFIED",
+    duplicate: false,
+  });
+  await assert.rejects(() => recoverGithubReadyPr({
+    operationId: "operation:recovery-mismatched-verified",
+    sessionId: "agent-session:readback",
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: "d".repeat(64),
+    recovery: {
+      executionId: "mutation-execution:fixture",
+      status: "RESULT_UNKNOWN",
+      repoId: "123",
+      repoFullName: REPO,
+      issueNumber: 7,
+      sourceSha: SOURCE_SHA,
+      expectedHeadRef: "refs/heads/seori/run-fixture-1",
+      expectedPullRequestMarker: "seori-run:fixture:1",
+      duplicate: false,
+    },
+    github,
+    controlPlane: cp,
+    clock: () => NOW,
+  }), /GITHUB_READY_PR_RECOVERY_CLAIM_BINDING_MISMATCH/u);
+  assert.deepEqual(github.writes, []);
+});
+
 test("terminal 또는 stale claim 충돌은 새 idempotency key로 다음 generation을 요청한다", async () => {
   const github = new FakeGithub();
   const claimRequestIds: string[] = [];
@@ -426,6 +588,34 @@ test("OPEN과 mutation target pagination을 서로의 pageCount에 합산하지 
   assert.equal(observation.mutationTarget?.pageCount, 2);
 });
 
+test("단일 페이지 ALL snapshot은 불필요한 두 번째 순회를 하지 않는다", async () => {
+  const github = new FakeGithub();
+  github.pulls = [];
+  await observeGithubReadyPr({ github, repoFullName: REPO, issueNumber: 7, now: NOW });
+  assert.deepEqual(github.pageRequests, [{ state: "ALL", page: 1 }]);
+});
+
+test("pagination 중 PR 상태가 바뀌면 complete snapshot으로 확정하지 않는다", async () => {
+  const github = new FakeGithub();
+  github.closeFirstAfterPageOne = true;
+  github.pulls.push({
+    ...manualPullRequest(999),
+    headRef: "refs/heads/seori/run-fixture-1",
+    body: "<!-- seori-run:fixture:1 -->",
+  });
+  await assert.rejects(() => observeGithubReadyPr({
+    github,
+    repoFullName: REPO,
+    issueNumber: 7,
+    expectedTarget: {
+      headRef: "refs/heads/seori/run-fixture-1",
+      marker: "seori-run:fixture:1",
+    },
+    now: NOW,
+  }), /GITHUB_READY_PR_UNSTABLE_SNAPSHOT/);
+  assert.equal(github.pageRequests.some((request) => request.state === "OPEN"), false);
+});
+
 test("변경 payload는 workflow, secret 경로, credential 내용, reserved PR directive를 거부한다", () => {
   assert.throws(() => prepareGithubReadyPrCommand({
     ...command(),
@@ -446,4 +636,18 @@ test("변경 payload는 workflow, secret 경로, credential 내용, reserved PR 
     ...command(),
     commitMessage: "fix: 중앙 계약 적용\n\nCloses: seorilabs/other#8",
   }));
+  for (const candidate of [
+    ["xoxb", "1234567890", "abcdefghijklmnop"].join("-"),
+    ["AK", "IAIOSFODNN7EXAMPLE"].join(""),
+    ["AI", "zaSyA123456789012345678901234567890"].join(""),
+    ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "signature123"].join("."),
+  ]) {
+    assert.throws(() => prepareGithubReadyPrCommand({
+      ...command(),
+      files: [{
+        path: "src/key.ts",
+        contentBase64: Buffer.from(candidate).toString("base64"),
+      }],
+    }));
+  }
 });
