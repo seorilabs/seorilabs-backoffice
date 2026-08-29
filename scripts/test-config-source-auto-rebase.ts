@@ -343,6 +343,33 @@ async function main() {
       data: { archived: true, status: "ARCHIVED" },
     }),
   ]);
+  await Promise.all([
+    observeSource({
+      ...paused,
+      sourceSha: SHA_B,
+      observedAt: new Date(observedAt.getTime() + 41_000),
+      markets: ["google-play"],
+    }),
+    observeSource({
+      ...deprecated,
+      sourceSha: SHA_B,
+      observedAt: new Date(observedAt.getTime() + 51_000),
+      markets: ["google-play"],
+    }),
+  ]);
+  for (const rejected of [nonProduct, archived]) {
+    await assert.rejects(
+      autoRebaseCurrentActiveConfigSource({
+        repoId: rejected.repoId,
+        actor: "scheduler:desired-state-backfill",
+        signingKey: SIGNING_KEY,
+      }),
+      (error) => error instanceof Error
+        && "code" in error
+        && error.code === "CONFIG_SOURCE_NOT_CURRENT",
+    );
+    assert.equal(await prisma.configRevision.count({ where: { appId: rejected.appId } }), 1);
+  }
   const run = await runDesiredStateDraftBackfill({
     actor: "scheduler:desired-state-backfill",
     idempotencyKey: "desired-state-safe-source-rebase:integration:1",
@@ -350,24 +377,32 @@ async function main() {
     sourceSha: null,
   }, { signingKey: SIGNING_KEY });
   assert.equal(run.failed, 0);
-  assert.equal(run.sourceRebasedAndActivated, 1);
+  assert.equal(run.sourceRebasedAndActivated, 3);
   assert.equal(run.activationAttempted, true);
   assert.equal(run.providerMutationAttempted, false);
   assert.equal(run.items.find((item) => item.appId === scheduler.appId)?.outcome,
     "SOURCE_REBASED_AND_ACTIVATED");
   assert.equal(run.items.find((item) => item.appId === paused.appId)?.outcome,
-    "ALREADY_CONFIGURED");
+    "SOURCE_REBASED_AND_ACTIVATED");
   assert.equal(run.items.find((item) => item.appId === deprecated.appId)?.outcome,
-    "ALREADY_CONFIGURED");
+    "SOURCE_REBASED_AND_ACTIVATED");
   assert.equal(run.items.some((item) => item.appId === nonProduct.appId), false);
   assert.equal(run.items.some((item) => item.appId === archived.appId), false);
   assert.equal((await prisma.configRevision.findFirstOrThrow({
     where: { appId: scheduler.appId, status: "ACTIVE" },
   })).revision, 2);
+  for (const lifecycleApp of [paused, deprecated]) {
+    const active = await prisma.configRevision.findFirstOrThrow({
+      where: { appId: lifecycleApp.appId, status: "ACTIVE" },
+      include: { sourceObservation: true },
+    });
+    assert.equal(active.revision, 2);
+    assert.equal(active.sourceObservation?.sourceSha, SHA_B);
+  }
 
   console.log(JSON.stringify({
     ok: true,
-    sourceOnlyActivated: 1,
+    sourceOnlyActivated: 3,
     duplicateRevisionCreated: 0,
     desiredPayloadChangeActivated: false,
     buildTargetChangeActivated: false,

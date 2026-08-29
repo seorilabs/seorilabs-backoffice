@@ -348,10 +348,11 @@ export function assertCurrentConfigSourceBinding(input: {
 }
 
 /**
- * DRAFT-only discovery projection은 중앙 product inventory에서 lifecycle이 중단된 앱도
- * 빠뜨리지 않는다. 이 완화는 revision/source 증거를 따로 검증하는 projection 경로에만 쓴다.
+ * 중앙 managed PRODUCT_APP cohort는 lifecycle이 중단된 앱도 inventory와 source-only
+ * revision 재결합에서 빠뜨리지 않는다. archived/non-product와 exact source drift는
+ * ACTIVE 앱과 동일하게 fail-closed한다.
  */
-export function assertDiscoveryProjectionConfigSourceBinding(input: {
+export function assertManagedProductConfigSourceBinding(input: {
   app: ConfigSourceApp;
   registration: ConfigSourceRegistration | null;
   observation: ConfigSourceObservation | null;
@@ -952,7 +953,7 @@ async function configRevisionReplayForKey(
 async function lockedCurrentConfigSource(
   tx: Prisma.TransactionClient,
   repoId: bigint,
-  options: { discoveryProjection?: boolean } = {},
+  options: { managedProductLifecycle?: boolean } = {},
 ) {
   // discovery reconciler와 동일하게 registration -> app 순으로 잠가 교착을 피한다.
   await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
@@ -996,8 +997,8 @@ async function lockedCurrentConfigSource(
     },
   });
   const binding = { app, registration, observation };
-  if (options.discoveryProjection) {
-    assertDiscoveryProjectionConfigSourceBinding(binding);
+  if (options.managedProductLifecycle) {
+    assertManagedProductConfigSourceBinding(binding);
   } else {
     assertCurrentConfigSourceBinding(binding);
   }
@@ -1290,7 +1291,7 @@ export async function createDiscoveryProjectedConfigRevision(input: {
     idempotencyKey: input.idempotencyKey,
     contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
   }, () => prisma.$transaction(async (tx) => {
-    const source = await lockedCurrentConfigSource(tx, input.repoId, { discoveryProjection: true });
+    const source = await lockedCurrentConfigSource(tx, input.repoId, { managedProductLifecycle: true });
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
       assertConfigRevisionReplay({
@@ -1585,7 +1586,7 @@ export async function autoRebaseCurrentActiveConfigSource(input: {
   signingKey: string;
 }): Promise<ConfigSourceAutoRebaseResult> {
   return prisma.$transaction(async (tx) => {
-    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const source = await lockedCurrentConfigSource(tx, input.repoId, { managedProductLifecycle: true });
     const activeRevisions = await tx.configRevision.findMany({
       where: { appId: source.app.id, status: "ACTIVE" },
       orderBy: { revision: "desc" },
