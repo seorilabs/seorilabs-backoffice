@@ -246,12 +246,12 @@ Next build를 제외한 정적 게이트를 다시 확인한 뒤, `-dind` 러너
 deploy는 exact-digest migration Job 성공 → 웹 RollingUpdate → worker → scheduler CronJob →
 catch-up 순서로 진행하며 각 workload의 digest를 다시 읽는다. 아래 3개를 1회 셋업한다.
 
-**러너 배치**: 클러스터 접근이 필요 없는 잡(`ci.yml` 전체, `deploy.yml` 의 `verify`,
-`migration-contract`)은 GitHub-hosted 에서 돈다. self-hosted(ARC)는 클러스터 내부에
-있어야만 동작하는 두 잡에만 쓴다 — `build`(내부 DNS 의 remote BuildKit, §10)와
-`deploy`(클러스터 밖으로 열려 있지 않은 k8s API). 두 잡 모두 `push`/`workflow_dispatch`
-전용이라 fork 가 트리거할 수 없다. **PR 트리거 잡을 ARC 로 되돌리지 않는다** — 이 저장소는
-public 이며, fork PR 코드가 ARC 에서 돌면 클러스터 내부 네트워크에 그대로 닿는다.
+**러너 배치**: `ci.yml` 의 PR 잡과 PR용 `migration-contract.yml`은 모두
+GitHub-hosted 에서 돈다. 이 저장소는 public 이므로 fork PR 코드가 ARC 에서 실행되지
+않는다. `deploy.yml`은 신뢰된 `main` push와 `workflow_dispatch` 전용이며 GitHub-hosted
+결제 상태가 production 배포를 막지 않도록 `verify`는 일반 ARC, MySQL migration contract와
+이미지 `build`는 DIND ARC, `deploy`는 일반 ARC에서 실행한다. **PR 트리거 잡을 ARC 로
+되돌리거나 PR에서 호출 가능한 ARC reusable workflow를 만들지 않는다.**
 
 > `ci-deployer` 최소권한 Role 은 실제 경계다. 과거 `AlwaysAllow` 인가 문제는
 > [조직 P0 #45](https://github.com/seorilabs/.github/issues/45) 에서 `Node,RBAC` 전환으로
@@ -411,7 +411,8 @@ E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(
 
 ## 10. 빌드 캐시 — 영구 BuildKit 빌더 (CI 의존성)
 
-CI(`deploy.yml`)의 `build` 잡은 `verify`(hosted) 성공 뒤 ARC ephemeral 러너에서 돌며,
+CI(`deploy.yml`)의 `build` 잡은 `verify`(일반 ARC)와 migration contract(DIND ARC) 성공 뒤
+ARC ephemeral 러너에서 돌며,
 **클러스터 내 영구 BuildKit 데몬**(`k8s/buildkitd.yaml`, platform ns, rpi4001)을 remote 빌더로 사용한다.
 캐시(pnpm store·`.next/cache`·레이어)가 PVC `buildkit-cache`(25Gi)에 지속되어 **증분 빌드**가 가능하다.
 
