@@ -1472,6 +1472,16 @@ export const automationDefinitionCreateSchema = z.object({
   maxAttempts: z.number().int().min(1).max(10).default(3),
 }).strict();
 
+export const sourceRemediationDefinitionCreateSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  issueNumber: z.number().int().positive(),
+  agentKind: z.enum(AUTOMATION_AGENT_KINDS),
+  budgetCeilingMicros: z.number().int().positive().max(1_000_000_000).default(1_000_000),
+  model: publicIdentifier.optional(),
+  maxAttempts: z.number().int().min(1).max(10).default(3),
+  verifiedBy: publicIdentifier.optional(),
+}).strict();
+
 export const automationDefinitionCommandSchema = z.discriminatedUnion("command", [
   z.object({ command: z.literal("PAUSE") }).strict(),
   z.object({ command: z.literal("RESUME") }).strict(),

@@ -70,6 +70,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/internal/agent-adapter/github-mutations/readback` | exact head ref/marker의 branch와 전체 PR 상태를 서명 readback해 `VERIFIED`, `NOT_APPLIED`, `RESULT_UNKNOWN` 기록 |
 | `POST` | `/api/control-plane/automation-definitions` | agent, cadence, 예산 상한, 승인 정책이 고정된 routine 생성 |
 | `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
+| `POST` | `/api/control-plane/source-remediation-definitions` | P6/P7 discovery catch-22 전용 단발 routine 생성. exact repo/issue/discovery generation/source SHA/reason을 잠그고 같은 transaction에서 occurrence·AgentRun까지 만든다 |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
 | `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
 | `POST` | `/api/admin/automation/platform-fleet` | latest Platform Release/approval을 검증·record/reconcile한 뒤 기존 contract Issue/SDK PR plan을 readback-first로 drain |
@@ -424,6 +425,44 @@ control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상�
 - PR 생성 권한 lease의 만료와 `RESULT_UNKNOWN`은 기존 lease를 폐기하고 run을 durable readback 대기로 전환한다. 다음 claim만 새 generation의 `READBACK_FIRST` capability를 발급한다. 이 session은 서버가 선택한 기존 execution에 대한 read-only recovery만 수행하며, 이전 token의 resolution과 새 mutation은 거부한다.
 - routine의 `approvalPolicy`, `budgetCeilingMicros`, 누적 `spentMicros`, 남은 예산과 허용 action capability는 claim에 포함된다. 모든 settlement는 `costMicros`가 필수이고 누적 예산 초과 및 `READ_ONLY`의 mutation 결과를 fail-closed한다.
 - 취소가 외부 결과 불명을 만들지 않으면 `workKey`도 같은 transaction에서 해제한다. 결과 불명 또는 active repo guard가 남은 dead-letter는 수동 retry로 우회할 수 없다.
+
+## Source remediation (P6/P7 discovery catch-22)
+
+`RepositoryClassificationDecision`으로 이미 `classification=PRODUCT_APP`이 append-only로 확정됐지만
+실제 discovery는 `NO_CANDIDATE`(`PRODUCT_SOURCE_CANDIDATE_MISSING`) 또는
+`BUILD_TARGET_MISSING`(`PRODUCT_BUILD_TARGET_MISSING`)으로 `NEEDS_INPUT`에 머무는 repository는 일반
+`repositoryAutomationEligible`(`RepositoryRegistration.status=MANAGED`) guard를 통과하지 못해
+`AutomationDefinition`/`AgentRun`을 만들 수 없다. 그 결손을 고치는 코드 PR 자체가 이 automation 없이는
+나올 수 없는 catch-22다. `repo-source-remediation-v1` template은 이 상태만 겨냥한 별도 좁은 gate이며,
+그 외 모든 template의 MANAGED guard(`assertRepositoryAutomationManaged`, `tryClaimRun`의 일반 분기)는
+그대로 둔다.
+
+- `POST /api/control-plane/source-remediation-definitions`는 정의 생성 시점에 다음을 모두 검증하고,
+  통과하면 같은 흐름에서 `AutomationDefinition`(`schedule=null`, cadence 없는 단발) 하나와
+  그 유일한 `AutomationOccurrence`/`AgentRun`을 만든다. 이후 재호출은 `AutomationMutationRequest`
+  idempotency로 replay되며 두 번째 정의를 만들지 않는다.
+  - App이 `ACTIVE`(`PAUSED`/`DEPRECATED`는 거부 — 예: DEPRECATED 상태의 저장소는 자동 claim 대상이 아니다)
+  - `RepositoryRegistration`이 non-archived, `classification=PRODUCT_APP`, `status=NEEDS_INPUT`,
+    `lastDiscoveryReason`이 `NO_CANDIDATE`/`BUILD_TARGET_MISSING` 중 하나
+  - 대상 `IssueMirror`가 open, `P1`, `autopilot`이고 blocked/no-autopilot/approval label이 없음
+  - issue가 Backoffice 생성(`source=BACKOFFICE`)이거나, 아니면 명시적 `verifiedBy` 사람/승인된 AI 검증자가 있음
+  - 이 issue를 이미 다른 run이 `workKey`로 소비하지 않았음
+  - 정의 생성 시 현재 `reconcileGeneration`, source SHA, reason, issue 제목+라벨 digest를
+    `configuration`에 잠근다(이후 수정 경로 없음)
+- claim(`tryClaimRun`)은 이 template일 때만 일반 `repositoryAutomationEligible` 대신
+  `repositorySourceRemediationEligible`을 쓴다. registration의 현재 generation/source SHA/reason이
+  정의가 잠근 값과 정확히 같고, 결합된 App이 여전히 `ACTIVE`일 때만 통과한다 — 재push로 discovery가
+  다시 돌면(generation 전진) 기존 run은 자동으로 다시 막힌다.
+- 같은 claim은 issue를 다시 읽어 open/P1/autopilot과 제목+라벨 scope digest가 정의 생성 시점과
+  같은지 재확인한다. 임의 사용자 편집으로 제목이나 라벨이 바뀌면(scope 확장 의심) 다르더라도
+  fail-closed한다. GitHub 원문 body는 `IssueMirror`에 없어 이 계약의 scope 밖이다.
+- approval policy는 항상 `READY_PR`이며 `AGENT_READY_PR_CAPABILITIES`(GitHub read/branch/commit/PR만)로
+  고정된다. 이 template도 다른 READY_PR routine과 같은 `repo-pr:{owner/repo}` singleton guard를 공유해
+  repo당 Ready PR을 최대 1개로 제한하며, provider/build/upload/public mutation capability는 애초에
+  이 목록에 없다.
+- `trustedMutationAdapterConfigured()`(GitHub READY_PR runtime canary)는 이 template도 그대로
+  적용된다 — 위 gate를 모두 통과해도 canary가 승인되기 전에는 claim 자체가 fail-closed다. 이 PR은
+  그 canary/runtime activation gate를 열지 않는다.
 
 ## Scheduler와 Project projection
 

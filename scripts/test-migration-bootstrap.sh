@@ -45,6 +45,8 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-classifier.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-desired-state-backfill-source-binding.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-source-remediation.ts
 pnpm tsx scripts/test-legacy-shadow-import.ts
 pnpm tsx scripts/test-fleet-parity-wave.ts
 pnpm tsx scripts/test-restore-rehearsal.ts
