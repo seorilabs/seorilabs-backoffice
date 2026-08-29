@@ -11,7 +11,7 @@ import {
   assertConfigRevisionReplay,
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
-  assertDiscoveryProjectionConfigSourceBinding,
+  assertManagedProductConfigSourceBinding,
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
   CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
@@ -93,20 +93,36 @@ test("MANAGED PRODUCT_APP의 exact registered default branch discovery만 Config
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture("ACTIVE", "develop")));
 });
 
-test("revision 0 discovery projection만 PAUSED/DEPRECATED product source를 읽을 수 있다", () => {
+test("중앙 managed product 경로는 PAUSED/DEPRECATED의 exact source를 읽을 수 있다", () => {
   for (const status of ["PAUSED", "DEPRECATED"] as const) {
     const fixture = sourceFixture(status);
     assert.throws(
       () => assertCurrentConfigSourceBinding(fixture),
       (error) => error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_NOT_CURRENT",
     );
-    assert.doesNotThrow(() => assertDiscoveryProjectionConfigSourceBinding(fixture));
+    assert.doesNotThrow(() => assertManagedProductConfigSourceBinding(fixture));
     assert.deepEqual(resolveDiscoveryProjectionSource({
       appStatus: status,
       actualLatestRevision: 0,
       legacyImportCount: 0,
       fromRevision: null,
     }), { kind: "EMPTY_CONFIG" });
+  }
+});
+
+test("중앙 managed product 경로도 archived/non-product/source drift는 거부한다", () => {
+  const archived = sourceFixture("PAUSED");
+  archived.registration.archived = true;
+  archived.registration.status = "ARCHIVED";
+  const nonProduct = sourceFixture("DEPRECATED");
+  nonProduct.registration.classification = "INFRA_REPO";
+  const stale = sourceFixture("PAUSED");
+  stale.registration.lastReconciledSha = "c".repeat(40);
+  for (const fixture of [archived, nonProduct, stale]) {
+    assert.throws(
+      () => assertManagedProductConfigSourceBinding(fixture),
+      (error) => error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_NOT_CURRENT",
+    );
   }
 });
 
