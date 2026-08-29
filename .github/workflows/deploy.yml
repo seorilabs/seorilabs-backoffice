@@ -24,9 +24,10 @@ jobs:
   verify:
     # PR 에서 통과한 Next build 는 반복하지 않는다. main 직접 push까지 보호하는
     # 정적 게이트만 실행하고, 실제 production build 는 아래 Docker job이 한 번 맡는다.
-    # 클러스터 접근이 필요 없는 정적 게이트라 hosted 로 둔다(RPI 점유 해소).
+    # 이 workflow 는 신뢰된 main push/workflow_dispatch 에서만 실행된다. production
+    # deploy를 GitHub-hosted 결제 상태와 분리하기 위해 일반 ARC에서 검증한다.
     # kubectl 을 부르는 검증 스크립트는 전부 KUBECTL_BIN 에 stub 을 주입한다.
-    runs-on: ubuntu-latest
+    runs-on: seorilabs-rpi-arm64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -51,9 +52,43 @@ jobs:
       - run: bash scripts/check-ci-deployer-permissions.test.sh
 
   migration-contract:
-    uses: ./.github/workflows/migration-contract.yml
-    permissions:
-      contents: read
+    name: migration-contract / MySQL 9.2 ${{ matrix.scenario }}
+    # PR용 reusable contract는 hosted에만 남긴다. main deploy 계약은 push/dispatch
+    # 전용 workflow 안에서 DIND ARC로 실행해 hosted 결제 장애와 분리한다.
+    runs-on: seorilabs-rpi-arm64-dind
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [empty, cutover]
+    services:
+      mysql:
+        image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+        env:
+          MYSQL_ROOT_PASSWORD: bootstrap-test-only
+          MYSQL_DATABASE: backoffice_${{ matrix.scenario }}_contract_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -pbootstrap-test-only --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
+    env:
+      DATABASE_URL: mysql://root:bootstrap-test-only@127.0.0.1:3306/backoffice_${{ matrix.scenario }}_contract_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.16.0"
+          check-latest: false
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - if: matrix.scenario == 'empty'
+        run: bash scripts/test-migration-bootstrap.sh
+      - if: matrix.scenario == 'cutover'
+        run: bash scripts/test-migration-cutover.sh
 
   build:
     needs: [verify, migration-contract]
