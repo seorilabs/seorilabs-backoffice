@@ -93,3 +93,53 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.match(migrationSource, /scripts\/test-migration-cutover\.sh/);
   assert.ok(migration.on?.workflow_call !== undefined);
 });
+
+test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한다", () => {
+  const deploy = workflow("deploy.yml");
+  const deploySource = readFileSync(
+    join(process.cwd(), ".github/workflows/deploy.yml"),
+    "utf8",
+  );
+
+  // build 만 hosted 다. 나머지 Deploy 잡은 ARC 에 남아 hosted 결제 상태와
+  // 무관하게 배포 검증을 시작한다.
+  assert.equal(deploy.jobs?.build?.["runs-on"], "ubuntu-latest");
+  assert.equal(deploy.jobs?.verify?.["runs-on"], "seorilabs-rpi-arm64");
+  assert.equal(
+    deploy.jobs?.["migration-contract"]?.["runs-on"],
+    "seorilabs-rpi-arm64-dind",
+  );
+  assert.equal(deploy.jobs?.deploy?.["runs-on"], "seorilabs-rpi-arm64");
+
+  // 러너가 클러스터를 떠났으므로 클러스터 내부 빌더를 가리키면 안 된다.
+  // 남아 있으면 DNS 를 못 찾아 조용히 깨진다.
+  assert.doesNotMatch(deploySource, /driver:\s*remote/);
+  assert.doesNotMatch(deploySource, /buildkitd\.platform\.svc\.cluster\.local/);
+
+  // 런타임 스테이지만 타깃 아키텍처로 실행되므로 QEMU 가 필요하다.
+  assert.ok(
+    deploy.jobs?.build?.steps?.some((step) =>
+      step.uses?.startsWith("docker/setup-qemu-action@")
+    ),
+  );
+
+  // 크로스빌드가 성립하려면 산출물이 빌드 호스트 아키텍처와 무관해야 한다.
+  // sharp 제외를 되돌리면 빌드 호스트의 .node 가 arm64 이미지에 딸려 들어간다.
+  const nextConfig = readFileSync(join(process.cwd(), "next.config.ts"), "utf8");
+  assert.match(nextConfig, /outputFileTracingExcludes/);
+  assert.match(nextConfig, /@img/);
+  assert.match(nextConfig, /sharp/);
+
+  // Prisma arm64 query engine 은 빌드 호스트가 아니라 이 선언으로 생성된다.
+  const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+  assert.match(schema, /binaryTargets\s*=\s*\[[^\]]*linux-arm64-openssl-3\.0\.x/);
+
+  // 무거운 JS 빌드는 BUILDPLATFORM(러너 네이티브)에서, 런타임 스테이지만 타깃에서.
+  const dockerfile = readFileSync(join(process.cwd(), "Dockerfile"), "utf8");
+  assert.match(
+    dockerfile,
+    /FROM --platform=\$BUILDPLATFORM node:[\d.]+-bookworm-slim AS build-base/,
+  );
+  assert.match(dockerfile, /^FROM node:[\d.]+-bookworm-slim AS runtime$/m);
+  assert.doesNotMatch(dockerfile, /FROM --platform=\$BUILDPLATFORM[^\n]*AS runtime/);
+});
