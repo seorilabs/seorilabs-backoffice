@@ -237,6 +237,22 @@ test("cross-repo marker PR과 marker 없는 seori branch PR도 singleton blocker
   assert.equal(observation.openAutopilotPullRequests[0].marker, "unmanaged-seori-pr:1");
 });
 
+test("OPEN과 mutation target pagination을 서로의 pageCount에 합산하지 않는다", async () => {
+  const github = new FakeGithub();
+  const observation = await observeGithubReadyPr({
+    github,
+    repoFullName: REPO,
+    issueNumber: 7,
+    expectedTarget: {
+      headRef: "refs/heads/seori/run-fixture-1",
+      marker: "seori-run:fixture:1",
+    },
+    now: NOW,
+  });
+  assert.equal(observation.pageCount, 2);
+  assert.equal(observation.mutationTarget?.pageCount, 2);
+});
+
 test("변경 payload는 workflow, secret 경로, credential 내용, reserved PR directive를 거부한다", () => {
   assert.throws(() => prepareGithubReadyPrCommand({
     ...command(),

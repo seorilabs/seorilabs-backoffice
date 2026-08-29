@@ -307,14 +307,13 @@ export async function observeGithubReadyPr(input: {
   const openAutopilotPullRequests = open.pullRequests
     .map((pullRequest) => publicOpenPullRequest(pullRequest, repository.fullName))
     .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicOpenPullRequest>> => Boolean(pullRequest));
-  let pageCount = open.pageCount;
+  const pageCount = open.pageCount;
   let mutationTarget: AgentGithubObservation["mutationTarget"] = null;
   if (input.expectedTarget) {
     const [head, all] = await Promise.all([
       input.github.getRef(input.repoFullName, input.expectedTarget.headRef),
       readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "ALL" }),
     ]);
-    pageCount += all.pageCount;
     mutationTarget = {
       expectedHeadRef: input.expectedTarget.headRef,
       expectedMarker: input.expectedTarget.marker,
