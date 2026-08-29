@@ -105,6 +105,14 @@ export function redactCredentialCandidates(value: string): string {
 const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
 const platformArtifactKind = z.enum(["TYPESCRIPT", "GDSCRIPT"]);
 const platformVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+export const PLATFORM_AFFECTED_CONSUMERS = {
+  cohort: "backoffice-active-apps",
+  resolution: "reconcile-time",
+} as const;
+export const platformAffectedConsumersSchema = z.object({
+  cohort: z.literal(PLATFORM_AFFECTED_CONSUMERS.cohort),
+  resolution: z.literal(PLATFORM_AFFECTED_CONSUMERS.resolution),
+}).strict();
 const platformArtifactSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("TYPESCRIPT"),
@@ -190,6 +198,7 @@ export const platformReleaseManifestSchema = z.object({
   sourceSha: sha40,
   contractRevision: sha256,
   classification: z.enum(["IMPLEMENTATION_ONLY", "CONTRACT_CHANGE", "CONTRACT_ADDITION"]),
+  affectedConsumers: platformAffectedConsumersSchema,
   publishedAt: z.string().datetime({ offset: true }),
   artifacts: z.array(platformArtifactSchema).min(1).max(2),
   canaryEvidence: platformCanaryEvidenceSchema,
@@ -294,6 +303,46 @@ export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
 export type PlatformReleaseManifest = z.infer<typeof platformReleaseManifestSchema>;
 export type PlatformConsumerObservationPayload = z.infer<typeof platformConsumerObservationPayloadSchema>;
 export type PlatformFleetTaskInput = z.infer<typeof platformFleetTaskInputSchema>;
+
+/**
+ * v0.6.7은 affectedConsumers가 normalized manifest에 추가되기 전에 발행·저장됐다.
+ * 저장 bytes/digest/signature는 그대로 검증하고, 읽는 순간에만 단일 논리 selector를
+ * 투영한다. 다른 version이나 명시된 잘못된 selector에는 호환 범위를 넓히지 않는다.
+ */
+export function isStoredPlatformReleaseV067Omission(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (
+    value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && !Object.prototype.hasOwnProperty.call(value, "affectedConsumers")
+    && (value as Record<string, unknown>).version === "0.6.7"
+  ) {
+    const provenance = (value as Record<string, unknown>).provenance;
+    if (
+      provenance !== null
+      && typeof provenance === "object"
+      && !Array.isArray(provenance)
+      && (provenance as Record<string, unknown>).releaseTag === "v0.6.7"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function parseStoredPlatformReleaseManifest(value: unknown): PlatformReleaseManifest {
+  const current = platformReleaseManifestSchema.safeParse(value);
+  if (current.success) return current.data;
+  if (isStoredPlatformReleaseV067Omission(value)) {
+    return platformReleaseManifestSchema.parse({
+      ...value,
+      affectedConsumers: { ...PLATFORM_AFFECTED_CONSUMERS },
+    });
+  }
+  return platformReleaseManifestSchema.parse(value);
+}
 
 /**
  * ProjectBlueprint는 provider에 쓸 비밀이 아니라 공개 식별자와 desired state만 보관한다.

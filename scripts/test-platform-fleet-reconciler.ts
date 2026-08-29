@@ -4,10 +4,11 @@ import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 
 import {
+  PLATFORM_AFFECTED_CONSUMERS,
   platformFleetTaskInputSchema,
   type PlatformReleaseManifest,
 } from "@/lib/control-plane/contracts";
-import { signSnapshot, type JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
   applyPlatformContractIssuePlan,
   reconcilePlatformFleet,
@@ -80,6 +81,7 @@ function releaseManifest(input: {
     sourceSha: releaseSourceSha,
     contractRevision,
     classification: input.classification,
+    affectedConsumers: PLATFORM_AFFECTED_CONSUMERS,
     publishedAt: new Date().toISOString(),
     artifacts: [{
       kind: "TYPESCRIPT",
@@ -256,6 +258,138 @@ async function main() {
   assert.equal(await prisma.platformFleetPlan.count({
     where: { platformReleaseId: implementationRelease.release.id, appId: appIdA },
   }), 1);
+
+  await assert.rejects(
+    reconcilePlatformFleet({
+      ...implementationInput,
+      consumers: [implementationInput.consumers[0]],
+      idempotencyKey: `platform-fleet-reconcile:cohort-omission:${nonce}`,
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_CONSUMER_COHORT_MISMATCH",
+  );
+
+  const normalizedLegacyManifest = releaseManifest({
+    version: "0.6.7",
+    classification: "IMPLEMENTATION_ONLY",
+  });
+  const storedLegacyManifest = structuredClone(normalizedLegacyManifest) as unknown as Record<string, unknown>;
+  delete storedLegacyManifest.affectedConsumers;
+  const storedLegacySignature = signSnapshot(storedLegacyManifest as JsonValue, signingKey);
+  const storedLegacyActor = "scheduler:platform-fleet-producer";
+  const storedLegacyRequestHash = jsonDigest({
+    manifest: storedLegacyManifest,
+    manifestDigest: storedLegacySignature.digest,
+    signature: storedLegacySignature.signature,
+    actor: storedLegacyActor,
+  } as JsonValue);
+  const storedLegacyIdempotencyKey = `platform-release-producer:${jsonDigest({
+    rawManifestSha256: normalizedLegacyManifest.provenance.rawManifestSha256,
+    approvalSha256: normalizedLegacyManifest.provenance.approvalSha256,
+  } as JsonValue)}`;
+  const storedLegacyRelease = await prisma.platformRelease.create({
+    data: {
+      version: "0.6.7",
+      sourceSha: releaseSourceSha,
+      classification: "IMPLEMENTATION_ONLY",
+      approval: "FLEET_APPROVED",
+      contractRevision,
+      manifest: storedLegacyManifest as Prisma.InputJsonValue,
+      manifestDigest: storedLegacySignature.digest,
+      signature: storedLegacySignature.signature,
+      publishedAt: new Date(storedLegacyManifest.publishedAt as string),
+      observedBy: storedLegacyActor,
+      requestHash: storedLegacyRequestHash,
+      idempotencyKey: storedLegacyIdempotencyKey,
+    },
+  });
+  const normalizedLegacySignature = signSnapshot(normalizedLegacyManifest as unknown as JsonValue, signingKey);
+  const rereadLegacyRelease = await recordPlatformRelease({
+    manifest: normalizedLegacyManifest,
+    manifestDigest: normalizedLegacySignature.digest,
+    signature: normalizedLegacySignature.signature,
+    actor: storedLegacyActor,
+    idempotencyKey: storedLegacyIdempotencyKey,
+    signingKey,
+  });
+  assert.equal(rereadLegacyRelease.duplicate, true);
+  assert.equal(rereadLegacyRelease.release.id, storedLegacyRelease.id);
+  for (const incompatibleManifest of [
+    {
+      ...normalizedLegacyManifest,
+      version: "0.6.8",
+      provenance: { ...normalizedLegacyManifest.provenance, releaseTag: "v0.6.8" },
+    },
+    {
+      ...normalizedLegacyManifest,
+      sourceSha: "4".repeat(40),
+    },
+    {
+      ...normalizedLegacyManifest,
+      provenance: { ...normalizedLegacyManifest.provenance, rawManifestSha256: "d".repeat(64) },
+    },
+    {
+      ...normalizedLegacyManifest,
+      provenance: { ...normalizedLegacyManifest.provenance, approvalSha256: "c".repeat(64) },
+    },
+    {
+      ...normalizedLegacyManifest,
+      classification: "CONTRACT_CHANGE" as const,
+    },
+  ]) {
+    const incompatibleSignature = signSnapshot(incompatibleManifest as unknown as JsonValue, signingKey);
+    await assert.rejects(
+      recordPlatformRelease({
+        manifest: incompatibleManifest,
+        manifestDigest: incompatibleSignature.digest,
+        signature: incompatibleSignature.signature,
+        actor: storedLegacyActor,
+        idempotencyKey: storedLegacyIdempotencyKey,
+        signingKey,
+      }),
+      (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
+    );
+  }
+  await assert.rejects(
+    recordPlatformRelease({
+      manifest: normalizedLegacyManifest,
+      manifestDigest: normalizedLegacySignature.digest,
+      signature: normalizedLegacySignature.signature,
+      actor: "integration:unexpected-platform-producer",
+      idempotencyKey: storedLegacyIdempotencyKey,
+      signingKey,
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  const differentKeySignature = signSnapshot(normalizedLegacyManifest as unknown as JsonValue, signingKey);
+  await assert.rejects(
+    recordPlatformRelease({
+      manifest: normalizedLegacyManifest,
+      manifestDigest: differentKeySignature.digest,
+      signature: differentKeySignature.signature,
+      actor: storedLegacyActor,
+      idempotencyKey: `platform-release-producer:different-${nonce}`,
+      signingKey,
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_RELEASE_CONFLICT",
+  );
+  const storedLegacyResult = await reconcilePlatformFleet({
+    ...implementationInput,
+    platformReleaseId: storedLegacyRelease.id,
+    idempotencyKey: `platform-fleet-reconcile:legacy-v0.6.7:${nonce}`,
+  });
+  assert.equal(storedLegacyResult.duplicate, false);
+  const storedLegacyReadback = await prisma.platformRelease.findUniqueOrThrow({
+    where: { id: storedLegacyRelease.id },
+  });
+  assert.equal(storedLegacyReadback.manifestDigest, storedLegacySignature.digest);
+  assert.equal(storedLegacyReadback.signature, storedLegacySignature.signature);
+  assert.equal(storedLegacyReadback.requestHash, storedLegacyRequestHash);
+  assert.equal(storedLegacyReadback.idempotencyKey, storedLegacyIdempotencyKey);
+  assert.equal(await prisma.platformRelease.count({ where: { version: "0.6.7" } }), 1);
+  assert.equal(
+    Object.hasOwn(storedLegacyReadback.manifest as Record<string, unknown>, "affectedConsumers"),
+    false,
+  );
 
   const missingRepoAppId = `platform-fleet-missing-repo-${nonce}`;
   await prisma.app.create({

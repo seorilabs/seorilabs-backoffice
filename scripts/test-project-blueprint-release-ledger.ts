@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Prisma } from "@prisma/client";
 import {
+  PLATFORM_AFFECTED_CONSUMERS,
   RELEASE_CANDIDATE_REQUIRED_GATES,
   type PlatformReleaseManifest,
   type ProjectBlueprint,
@@ -270,6 +271,7 @@ async function main() {
     sourceSha: "a".repeat(40),
     contractRevision: PLATFORM_CONTRACT_REVISION,
     classification: "IMPLEMENTATION_ONLY",
+    affectedConsumers: PLATFORM_AFFECTED_CONSUMERS,
     publishedAt: observedAt.toISOString(),
     artifacts: [{
       kind: "TYPESCRIPT",
