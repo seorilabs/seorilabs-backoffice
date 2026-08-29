@@ -105,8 +105,8 @@ strict validator가 해당 필드와 호출자 supplied run/generation을 거부
 principal, 같은 principal의 다른 client certificate 또는 stale generation completion은 CAS 전에 거부한다.
 
 `READY_PR` write 권한과 repo singleton은 mutable `AgentRun.createsPr`가 아니라 managed definition의
-`approvalPolicy`와 resume mode에서만 파생한다. 현재 shadow GitHub adapter는 다음 경계를 검증하지만
-durable step ledger가 없어 운영 mutation에는 사용할 수 없다.
+`approvalPolicy`와 resume mode에서만 파생한다. GitHub adapter는 durable step ledger까지 구현했지만
+실제 GitHub canary와 운영 replica 승인이 남아 있어 runtime activation은 계속 fail-closed다.
 
 1. command의 numeric repo ID 하나와 `contents:write`, `issues:read`, `pull_requests:write`만 지정해
    operation-scoped GitHub installation token을 발급한다. token 응답의 repository/permission과 GitHub repo
@@ -118,15 +118,18 @@ durable step ledger가 없어 운영 mutation에는 사용할 수 없다.
 4. 변경 파일 내용 자체는 보내지 않고 경로·mode·content SHA-256을 정규화한 `mutationIntentDigest`를 만든다.
    route/body/idempotency key/runtime/60초 TTL에 결합된 Ed25519 attestation을 보내며 Backoffice는 전역 1회 nonce를 소비한다.
 5. Backoffice가 session principal, current registration/source, issue eligibility, repo guard와 intent digest를 다시 확인하고 token 원문이
-   없는 action grant와 mutation execution을 같은 transaction에서 즉시 `CONSUMED`로 기록한다.
-6. adapter는 write 직전에 repository/issue/전체 PR/target ref를 다시 읽는다. 상태가 바뀌었으면 쓰지 않는다.
-   최초 authorization만 `writeDisposition=EXECUTE_ONCE`를 반환한다. 같은 idempotency key의 duplicate는
-   `writeDisposition=READBACK_ONLY`로 강등되며 adapter는 write를 반복하지 않고 exact head ref와 PR marker만 readback한다.
-7. shadow 구현의 `applyReadyPr`는 tree, commit, ref, PR 네 개의 외부 mutation이다. ref 생성 뒤 PR 생성이나
-   응답이 실패하면 기존 composite idempotency만으로는 안전하게 재개할 수 없다. 따라서
-   `trustedGithubStepLedgerImplemented()`는 `false`이며 `AGENT_TRUSTED_ADAPTER_DEPLOYED=true`도 activation을 열지 않는다.
-8. shadow readback은 complete target snapshot이 exact PR을 찾으면 `VERIFIED`, branch와 모든 marker PR이 없으면 `NOT_APPLIED`,
-   그 외 상태는 `RESULT_UNKNOWN`이다. worker의 `PR_READY` 문자열만으로는 run을 완료할 수 없다.
+   없는 action grant, mutation execution, `CREATE_COMMIT`/`CREATE_REF`/`CREATE_PR` step을 같은 transaction에서 만든다.
+6. authorization은 write 권한이 아니라 `STEP_LEDGER` 진입점이다. 각 step은 별도 request id, generation CAS, 60초 이하 TTL,
+   worker instance digest, adapter runtime identity에 결합된다. 만료된 attempt는 `STALE`로 닫고 다음 generation만 claim한다.
+7. `CREATE_COMMIT`은 content-addressed tree를 만든 뒤 고정 author/committer/date로 expected commit SHA를 계산해 DB에 먼저
+   `PLANNED`로 기록한다. 이후 commit, ref, PR 모두 provider readback에서 exact expected 상태가 없을 때만 한 번 쓰며,
+   응답 유실 뒤에는 저장된 SHA/ref/marker를 먼저 조회해 완료된 단계를 건너뛴다.
+8. step completion은 attempt ID와 generation이 current이고 TTL이 남아 있을 때만 수용한다. provider write 직후 프로세스를
+   강제 종료하는 세 지점의 회귀 fixture가 각 write를 한 번만 수행함을 검증한다. 전체 target snapshot이 exact PR을 찾고
+   세 step이 모두 `VERIFIED`일 때만 execution을 `VERIFIED`로 닫는다. 일부 step이 시작된 뒤 branch/PR이 없다는 관측은
+   `NOT_APPLIED`가 아니라 `RESULT_UNKNOWN`이다.
+9. `trustedGithubStepLedgerImplemented()`는 `true`지만 `trustedGithubRuntimeCanaryApproved()`와
+   `READY_PR_RUNTIME_OPERATIONAL`은 `false`, runtime replica는 0이다. 따라서 설정값만 바꿔 운영 mutation을 열 수 없다.
 
 모델이 호출하는 공개 경계는 `scripts-dist/seori-auth-agent-client.cjs`의 stdin JSON 하나다. K8s client는
 projected client certificate로 TLS 1.3 mTLS만 사용한다. native peer attestor 또는 worker별 전용 OS UID/launchd
@@ -136,13 +139,12 @@ Backoffice worker bearer, adapter bearer, Ed25519 private key와 GitHub App priv
 
 사람 재인증, 심사 제출, 공개 배포, role/permission/key 변경은 이 action policy에 존재하지 않는다.
 
-### READY_PR 활성화를 위한 다음 수직 슬라이스
+### READY_PR 활성화를 위한 남은 운영 gate
 
-다음 구현은 한 composite grant가 아니라 `CREATE_COMMIT`, `CREATE_REF`, `CREATE_PR`별 durable state와
-JIT capability를 가져야 한다. `CREATE_COMMIT` 안의 tree/commit은 content-addressed 결과를 exact SHA로 기록하고,
-각 단계는 fresh GitHub readback 뒤 한 번만 권한을 발급·소비한다. 응답 유실 시 저장된 expected/output SHA,
-exact branch ref, exact PR marker/head/base를 다시 읽어 이미 끝난 단계를 건너뛰고 남은 단계에만 새 capability를
-발급한다. 이 ledger와 partial-failure fixture가 통과하기 전에는 P6와 `READY_PR` activation을 완료로 표시하지 않는다.
+durable ledger와 partial-failure fixture는 구현됐다. 남은 범위는 fake repository가 아닌 실제 private canary에서
+각 단계의 응답 유실·token revoke·재시작 readback을 증명하고, immutable runtime image와 제한 egress를 검증한 뒤
+`trustedGithubRuntimeCanaryApproved()`, `READY_PR_RUNTIME_OPERATIONAL`, replica를 별도 승인으로 여는 일이다.
+그 전에는 P6와 `READY_PR` 운영 activation을 완료로 표시하지 않는다.
 
 ## Provider execution과 Auth Broker 경계
 

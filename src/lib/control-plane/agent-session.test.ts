@@ -18,6 +18,8 @@ import {
   agentWorkerSessionStateError,
   githubInstallationBindingError,
   githubMutationReadbackDisposition,
+  githubMutationStepLedgerVerified,
+  githubMutationStepDisposition,
   githubObservationTimingError,
   mutationReadbackTerminalEvidenceError,
   mutationReadbackTransitionError,
@@ -27,6 +29,7 @@ import {
   agentCompletionSchema,
   agentFailureSchema,
   agentGithubMutationAuthorizeSchema,
+  agentGithubMutationStepObservationSchema,
   agentGithubObservationSchema,
   agentHeartbeatSchema,
   agentReadbackResolutionSchema,
@@ -430,6 +433,117 @@ test("signed mutation readback은 exact PR, 확정적 미적용, 결과 불명�
   }), "MUTATION_READBACK_TERMINAL_CONFLICT");
 });
 
+test("mutation step readback은 commit, ref, PR exact binding만 VERIFIED한다", () => {
+  const expectedTreeSha = "b".repeat(40);
+  const expectedCommitSha = "d".repeat(40);
+  const expectedHeadRef = "refs/heads/seori/run-1-3";
+  const expectedMarker = "seori-run:run-1:3";
+  const grant = {
+    repoId: 123n,
+    repoFullName: "seorilabs/example",
+    issueNumber: 7,
+    sourceSha: SOURCE_SHA,
+    expectedHeadRef,
+    expectedPullRequestMarker: expectedMarker,
+    observation: { defaultBranchRef: "refs/heads/main", githubInstallationId: "101" },
+  };
+  const observation = (stepKind: "CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR") => (
+    agentGithubMutationStepObservationSchema.parse({
+      schemaVersion: 1,
+      stepKind,
+      githubInstallationId: "101",
+      providerSnapshotId: `snapshot:${stepKind}`,
+      complete: true,
+      observedAt: NOW,
+      repoId: "123",
+      repoFullName: "seorilabs/example",
+      defaultBranchRef: "refs/heads/main",
+      defaultBranchSha: SOURCE_SHA,
+      issue: {
+        number: 7,
+        nodeId: "I_7",
+        state: "OPEN",
+        labels: ["autopilot", "P1"],
+        updatedAt: NOW,
+      },
+      expectedHeadRef,
+      expectedPullRequestMarker: expectedMarker,
+      expectedTreeSha,
+      expectedCommitSha,
+      commit: { sha: expectedCommitSha, treeSha: expectedTreeSha, parentSha: SOURCE_SHA },
+      headSha: stepKind === "CREATE_COMMIT" ? null : expectedCommitSha,
+      openAutopilotPullRequests: stepKind === "CREATE_PR" ? [{
+        number: 9,
+        nodeId: "PR_9",
+        url: "https://github.com/seorilabs/example/pull/9",
+        state: "OPEN",
+        draft: false,
+        headRef: expectedHeadRef,
+        headSha: expectedCommitSha,
+        baseRef: "refs/heads/main",
+        baseSha: SOURCE_SHA,
+        marker: expectedMarker,
+        closesIssueNumber: 7,
+      }] : [],
+      pullRequests: stepKind === "CREATE_PR" ? [{
+        number: 9,
+        nodeId: "PR_9",
+        url: "https://github.com/seorilabs/example/pull/9",
+        state: "OPEN",
+        draft: false,
+        headRef: expectedHeadRef,
+        headSha: expectedCommitSha,
+        baseRef: "refs/heads/main",
+        baseSha: SOURCE_SHA,
+        marker: expectedMarker,
+        closesIssueNumber: 7,
+      }] : [],
+    })
+  );
+  for (const stepKind of ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"] as const) {
+    assert.equal(githubMutationStepDisposition({
+      stepKind,
+      observation: observation(stepKind),
+      grant,
+      expectedTreeSha,
+      expectedCommitSha,
+    }).status, "VERIFIED");
+  }
+  assert.equal(githubMutationStepDisposition({
+    stepKind: "CREATE_REF",
+    observation: { ...observation("CREATE_REF"), headSha: "e".repeat(40) },
+    grant,
+    expectedTreeSha,
+    expectedCommitSha,
+  }).status, "RESULT_UNKNOWN");
+  const extraOpen = {
+    number: 10,
+    nodeId: "PR_10",
+    url: "https://github.com/seorilabs/example/pull/10",
+    state: "OPEN" as const,
+    draft: false,
+    headRef: "refs/heads/seori/other-run",
+    headSha: "e".repeat(40),
+    baseRef: "refs/heads/main",
+    baseSha: SOURCE_SHA,
+    marker: "seori-run:other:1",
+    closesIssueNumber: 8,
+  };
+  assert.equal(githubMutationStepDisposition({
+    stepKind: "CREATE_PR",
+    observation: {
+      ...observation("CREATE_PR"),
+      openAutopilotPullRequests: [
+        ...observation("CREATE_PR").openAutopilotPullRequests,
+        extraOpen,
+      ],
+    },
+    grant,
+    expectedTreeSha,
+    expectedCommitSha,
+  }).status, "RESULT_UNKNOWN");
+});
+
 test("READY_PR singleton과 write action은 run.createsPr가 아니라 managed action policy에서만 파생된다", () => {
   const ready = agentExecutionPolicy(automationPolicy({ approvalPolicy: "READY_PR", budgetCeilingMicros: 1 }), "START");
   const readOnly = agentExecutionPolicy(automationPolicy({ approvalPolicy: "READ_ONLY", budgetCeilingMicros: 1 }), "START");
@@ -462,12 +576,71 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     },
   }), { mutationStarted: false, error: "TRUSTED_MUTATION_EVIDENCE_REQUIRED" });
 
+  const expectedTreeSha = "d".repeat(40);
+  const expectedCommitSha = "b".repeat(40);
+  const mutationInputDigest = "e".repeat(64);
+  const verifiedAt = new Date(NOW);
+  const durableSteps = [
+    {
+      kind: "CREATE_COMMIT",
+      ordinal: 1,
+      status: "VERIFIED",
+      generation: 2,
+      inputDigest: mutationInputDigest,
+      expectedTreeSha,
+      expectedCommitSha,
+      outputSha: expectedCommitSha,
+      outputNumber: null,
+      outputNodeId: null,
+      outputUrl: null,
+      claimExpiresAt: null,
+      verifiedAt,
+    },
+    {
+      kind: "CREATE_REF",
+      ordinal: 2,
+      status: "VERIFIED",
+      generation: 1,
+      inputDigest: mutationInputDigest,
+      expectedTreeSha,
+      expectedCommitSha,
+      outputSha: expectedCommitSha,
+      outputNumber: null,
+      outputNodeId: null,
+      outputUrl: null,
+      claimExpiresAt: null,
+      verifiedAt,
+    },
+    {
+      kind: "CREATE_PR",
+      ordinal: 3,
+      status: "VERIFIED",
+      generation: 1,
+      inputDigest: mutationInputDigest,
+      expectedTreeSha,
+      expectedCommitSha,
+      outputSha: expectedCommitSha,
+      outputNumber: 7,
+      outputNodeId: "PR_7",
+      outputUrl: "https://github.com/seorilabs/example/pull/7",
+      claimExpiresAt: null,
+      verifiedAt,
+    },
+  ];
+  assert.equal(githubMutationStepLedgerVerified(durableSteps), true);
+  assert.equal(githubMutationStepLedgerVerified([]), false, "legacy 0-step execution은 완료 evidence가 아니다");
+  assert.equal(githubMutationStepLedgerVerified(durableSteps.slice(0, 2)), false);
+  assert.equal(githubMutationStepLedgerVerified(durableSteps.map((step) => (
+    step.kind === "CREATE_REF" ? { ...step, status: "RESULT_UNKNOWN" } : step
+  ))), false);
+
   const verifiedExecution = {
     id: "execution-1",
     status: "VERIFIED",
     pullRequestNumber: 7,
     pullRequestUrl: "https://github.com/seorilabs/example/pull/7",
-    pullRequestHeadSha: "b".repeat(40),
+    pullRequestHeadSha: expectedCommitSha,
+    steps: durableSteps,
   };
   const withExecution = {
     agentMutationExecution: { findMany: async () => [verifiedExecution] },
@@ -485,6 +658,24 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
       mutationExecutionId: verifiedExecution.id,
     },
   }), { mutationStarted: true, error: null });
+
+  const legacyVerifiedExecution = { ...verifiedExecution, id: "legacy-execution", steps: [] };
+  const legacyVerified = {
+    agentMutationExecution: { findMany: async () => [legacyVerifiedExecution] },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(await trustedMutationDisposition(legacyVerified, {
+    runId: "run-1",
+    sessionId: "agent-session:public-id",
+    currentGeneration: 3,
+    readbackResolution: false,
+    result: {
+      outcomeCode: "PR_READY",
+      pullRequestNumber: 7,
+      pullRequestUrl: legacyVerifiedExecution.pullRequestUrl,
+      commitSha: legacyVerifiedExecution.pullRequestHeadSha,
+      mutationExecutionId: legacyVerifiedExecution.id,
+    },
+  }), { mutationStarted: true, error: "TRUSTED_MUTATION_STEP_EVIDENCE_REQUIRED" });
   assert.deepEqual(await trustedMutationDisposition(withExecution, {
     runId: "run-1",
     sessionId: "agent-session:public-id",
@@ -494,7 +685,7 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
   }), { mutationStarted: true, error: "TRUSTED_MUTATION_READBACK_REQUIRED" });
 
   const notApplied = {
-    agentMutationExecution: { findMany: async () => [{ ...verifiedExecution, status: "NOT_APPLIED" }] },
+    agentMutationExecution: { findMany: async () => [{ ...verifiedExecution, status: "NOT_APPLIED", steps: [] }] },
   } as unknown as Prisma.TransactionClient;
   assert.deepEqual(await trustedMutationDisposition(notApplied, {
     runId: "run-1",
@@ -520,4 +711,15 @@ test("migration은 session CAS와 1회 JIT grant/readback ledger를 tokenless un
   assert.match(grantTable, /UNIQUE INDEX `agent_action_grant_request_id_key`/);
   assert.match(grantTable, /UNIQUE INDEX `agent_action_grant_run_generation_action_key`/);
   assert.doesNotMatch(grantTable, /(?:token|secret|credential)/i);
+
+  const stepMigration = readFileSync(join(
+    process.cwd(),
+    "prisma/migrations/20260829130000_agent_mutation_step_ledger/migration.sql",
+  ), "utf8");
+  assert.match(stepMigration, /CREATE TABLE `agent_mutation_step`[\s\S]*agent_mutation_step_execution_kind_key/);
+  assert.match(stepMigration, /CREATE TABLE `agent_mutation_step_attempt`[\s\S]*agent_mutation_step_attempt_generation_key/);
+  assert.match(stepMigration, /`runtimeBindingDigest` CHAR\(64\) NOT NULL/);
+  assert.match(stepMigration, /UNIQUE INDEX `agent_mutation_step_attempt_request_id_key`/);
+  assert.match(stepMigration, /UNIQUE INDEX `agent_mutation_step_attempt_completion_request_id_key`/);
+  assert.doesNotMatch(stepMigration, /(?:leaseToken|grantToken|actionToken|secret|credential)/i);
 });

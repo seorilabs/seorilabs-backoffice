@@ -52,6 +52,7 @@ import { redactFleetJson } from "@/lib/control-plane/fleet-view";
 import {
   authenticateInternalRequest,
   trustedGithubStepLedgerImplemented,
+  trustedGithubRuntimeCanaryApproved,
   trustedMutationAdapterConfigured,
 } from "@/lib/control-plane/security";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
@@ -556,8 +557,9 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
       type: "spki",
       format: "pem",
     }).toString();
-    assert.equal(trustedGithubStepLedgerImplemented(), false);
-    assert.equal(trustedMutationAdapterConfigured(), false, "durable GitHub step ledger 전에는 activation을 열지 않는다");
+    assert.equal(trustedGithubStepLedgerImplemented(), true);
+    assert.equal(trustedGithubRuntimeCanaryApproved(), false);
+    assert.equal(trustedMutationAdapterConfigured(), false, "실제 GitHub canary 승인 전에는 activation을 열지 않는다");
     process.env.AGENT_WORKER_CODEX_TOKEN = "adapter-test-token";
     assert.equal(trustedMutationAdapterConfigured(), false, "worker token 재사용을 거부한다");
     delete process.env.AGENT_WORKER_CODEX_TOKEN;

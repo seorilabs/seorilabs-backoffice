@@ -1,10 +1,17 @@
+import { createHash, randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
 import { z } from "zod";
 
 import {
   agentGithubMutationAuthorizeSchema,
   agentGithubMutationReadbackSchema,
+  agentGithubMutationStepClaimSchema,
+  agentGithubMutationStepCompleteSchema,
+  agentGithubMutationStepObservationSchema,
+  agentGithubMutationStepPlanSchema,
   agentGithubObservationSchema,
+  type AgentGithubMutationStepKind,
+  type AgentGithubMutationStepObservation,
   type AgentGithubObservation,
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
@@ -25,6 +32,14 @@ const PER_PAGE = 100;
 const MAX_PAGES = 1_000;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
+function mutationControlPlaneRequestId(operationId: string, phase: string): string {
+  return `ghm:${jsonDigest({ schemaVersion: 1, operationId, phase })}`;
+}
+
+function isControlPlaneConflict(error: unknown): boolean {
+  return error instanceof Error && error.message === "SEORI_BACKOFFICE_REJECTED_409";
+}
 
 function publicText(max: number) {
   return z.string().min(1).max(max).refine(
@@ -93,6 +108,12 @@ export interface GithubPullRequestState {
   body: string;
 }
 
+export interface GithubCommitState {
+  sha: string;
+  treeSha: string;
+  parentSha: string;
+}
+
 export interface GithubReadyPrPort {
   installationId: string;
   getRepository(repoFullName: string): Promise<GithubRepositoryState>;
@@ -104,16 +125,26 @@ export interface GithubReadyPrPort {
     perPage: number;
   }): Promise<GithubPullRequestState[]>;
   getRef(repoFullName: string, ref: string): Promise<{ sha: string } | null>;
-  applyReadyPr(input: {
+  getCommit(repoFullName: string, sha: string): Promise<GithubCommitState | null>;
+  createTree(input: {
     repoFullName: string;
     sourceSha: string;
-    expectedHeadRef: string;
-    expectedMarker: string;
-    issueNumber: number | null;
+    files: PreparedGithubFile[];
+  }): Promise<{ sha: string }>;
+  createCommit(input: {
+    repoFullName: string;
+    sourceSha: string;
+    treeSha: string;
+    message: string;
+    date: Date;
+  }): Promise<{ sha: string }>;
+  createRef(input: { repoFullName: string; ref: string; sha: string }): Promise<void>;
+  createPullRequest(input: {
+    repoFullName: string;
+    baseBranch: string;
+    headRef: string;
     title: string;
     body: string;
-    commitMessage: string;
-    files: PreparedGithubFile[];
   }): Promise<void>;
 }
 
@@ -128,14 +159,95 @@ export interface GithubMutationControlPlane {
     expectedHeadRef: string;
     expectedPullRequestMarker: string;
     expiresAt: Date;
+    commitDate: Date;
     status: string;
-    writeDisposition: "EXECUTE_ONCE" | "READBACK_ONLY";
+    writeDisposition: "STEP_LEDGER";
+    duplicate: boolean;
+  }>;
+  claimStep(input: {
+    requestId: string;
+    body: z.infer<typeof agentGithubMutationStepClaimSchema>;
+  }): Promise<{
+    executionId: string;
+    stepId: string;
+    stepKind: AgentGithubMutationStepKind;
+    stepStatus: string;
+    generation: number;
+    attemptId: string | null;
+    expiresAt: Date | null;
+    expectedTreeSha: string | null;
+    expectedCommitSha: string | null;
+    expectedHeadRef: string;
+    expectedPullRequestMarker: string;
+    sourceSha: string;
+    commitDate: Date;
+    writeDisposition: "EXECUTE_ONCE" | "READBACK_THEN_EXECUTE" | "ALREADY_VERIFIED";
+    duplicate: boolean;
+  }>;
+  planStep(input: {
+    requestId: string;
+    body: z.infer<typeof agentGithubMutationStepPlanSchema>;
+  }): Promise<{
+    executionId: string;
+    stepId: string;
+    attemptId: string;
+    generation: number;
+    status: string;
+    expectedTreeSha: string;
+    expectedCommitSha: string;
+    duplicate: boolean;
+  }>;
+  completeStep(input: {
+    requestId: string;
+    body: z.infer<typeof agentGithubMutationStepCompleteSchema>;
+  }): Promise<{
+    executionId: string;
+    stepId: string;
+    attemptId: string;
+    generation: number;
+    status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
     duplicate: boolean;
   }>;
   readback(input: {
     requestId: string;
     body: z.infer<typeof agentGithubMutationReadbackSchema>;
   }): Promise<{ executionId: string; status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN"; duplicate: boolean }>;
+}
+
+export const GITHUB_AUTOMATION_COMMIT_IDENTITY = {
+  name: "Seorilabs Automation",
+  email: "automation@seorilabs.com",
+} as const;
+
+/** GitHub createCommit에 전달하는 exact identity/date로 Git commit object SHA를 미리 계산한다. */
+export function deterministicGithubCommitSha(input: {
+  treeSha: string;
+  parentSha: string;
+  message: string;
+  date: Date;
+}): string {
+  if (!SHA40.test(input.treeSha) || !SHA40.test(input.parentSha) || Number.isNaN(input.date.getTime())) {
+    throw new Error("GITHUB_READY_PR_COMMIT_PLAN_INVALID");
+  }
+  const timestamp = Math.floor(input.date.getTime() / 1_000);
+  const identity = `${GITHUB_AUTOMATION_COMMIT_IDENTITY.name} <${GITHUB_AUTOMATION_COMMIT_IDENTITY.email}> ${timestamp} +0000`;
+  const body = [
+    `tree ${input.treeSha.toLowerCase()}`,
+    `parent ${input.parentSha.toLowerCase()}`,
+    `author ${identity}`,
+    `committer ${identity}`,
+    "",
+    input.message,
+  ].join("\n");
+  const bytes = Buffer.from(body, "utf8");
+  try {
+    return createHash("sha1")
+      .update(`commit ${bytes.length}\0`, "utf8")
+      .update(bytes)
+      .digest("hex");
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 function decodeFile(file: z.infer<typeof fileSchema>): PreparedGithubFile {
@@ -356,18 +468,106 @@ export async function observeGithubReadyPr(input: {
   return agentGithubObservationSchema.parse({ ...snapshot, providerSnapshotId });
 }
 
-function sameWritePreconditions(left: AgentGithubObservation, right: AgentGithubObservation): boolean {
-  return left.repoId === right.repoId
-    && left.repoFullName.toLowerCase() === right.repoFullName.toLowerCase()
-    && left.defaultBranchRef === right.defaultBranchRef
-    && left.defaultBranchSha.toLowerCase() === right.defaultBranchSha.toLowerCase()
-    && (left.issue?.number ?? null) === (right.issue?.number ?? null)
-    && left.issue?.state === right.issue?.state
-    && JSON.stringify(left.issue?.labels.map((label) => label.toLowerCase()).sort() ?? [])
-      === JSON.stringify(right.issue?.labels.map((label) => label.toLowerCase()).sort() ?? [])
-    && right.openAutopilotPullRequests.length === 0
-    && right.mutationTarget?.headState === "ABSENT"
-    && right.mutationTarget.pullRequests.length === 0;
+export async function observeGithubMutationStep(input: {
+  github: GithubReadyPrPort;
+  repoFullName: string;
+  issueNumber: number | null;
+  stepKind: AgentGithubMutationStepKind;
+  expectedHeadRef: string;
+  expectedMarker: string;
+  expectedTreeSha: string | null;
+  expectedCommitSha: string | null;
+  now?: Date;
+}): Promise<AgentGithubMutationStepObservation> {
+  const observedAt = input.now ?? new Date();
+  const repository = await input.github.getRepository(input.repoFullName);
+  const issue = input.issueNumber === null
+    ? null
+    : await input.github.getIssue(input.repoFullName, input.issueNumber);
+  const open = await readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "OPEN" });
+  const openAutopilotPullRequests = open.pullRequests
+    .map((pullRequest) => publicOpenPullRequest(pullRequest, repository.fullName))
+    .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicOpenPullRequest>> => Boolean(pullRequest));
+  const commit = input.expectedCommitSha
+    ? await input.github.getCommit(input.repoFullName, input.expectedCommitSha)
+    : null;
+  const head = input.stepKind === "CREATE_COMMIT"
+    ? null
+    : await input.github.getRef(input.repoFullName, input.expectedHeadRef);
+  const allPullRequests = input.stepKind === "CREATE_PR"
+    ? await readAllPullRequests({ github: input.github, repoFullName: input.repoFullName, state: "ALL" })
+    : null;
+  const pullRequests = allPullRequests?.pullRequests
+    .map((pullRequest) => publicTargetPullRequest(
+      pullRequest,
+      input.expectedMarker,
+      input.expectedHeadRef,
+      repository.fullName,
+    ))
+    .filter((pullRequest): pullRequest is NonNullable<ReturnType<typeof publicTargetPullRequest>> => Boolean(pullRequest))
+    ?? [];
+  const snapshot = {
+    schemaVersion: 1 as const,
+    stepKind: input.stepKind,
+    githubInstallationId: input.github.installationId,
+    providerSnapshotId: "pending",
+    complete: true as const,
+    observedAt,
+    repoId: String(repository.id),
+    repoFullName: repository.fullName,
+    defaultBranchRef: `refs/heads/${repository.defaultBranch}`,
+    defaultBranchSha: repository.defaultBranchSha,
+    issue,
+    expectedHeadRef: input.expectedHeadRef,
+    expectedPullRequestMarker: input.expectedMarker,
+    expectedTreeSha: input.expectedTreeSha,
+    expectedCommitSha: input.expectedCommitSha,
+    commit,
+    headSha: head?.sha ?? null,
+    openAutopilotPullRequests,
+    pullRequests,
+  };
+  const providerSnapshotId = `ghstep:${jsonDigest({
+    ...snapshot,
+    observedAt: observedAt.toISOString(),
+    issue: issue ? { ...issue, updatedAt: issue.updatedAt.toISOString() } : null,
+    providerSnapshotId: null,
+  } as unknown as JsonValue).slice(0, 48)}`;
+  return agentGithubMutationStepObservationSchema.parse({ ...snapshot, providerSnapshotId });
+}
+
+function mutationStepIssueEligible(issue: AgentGithubMutationStepObservation["issue"]): boolean {
+  if (!issue || issue.state !== "OPEN") return false;
+  const labels = issue.labels.map((label) => label.toLowerCase());
+  return labels.includes("autopilot")
+    && !labels.some((label) => label === "blocked" || label === "no-autopilot" || label.startsWith("approval:"));
+}
+
+function exactStepCommit(observation: AgentGithubMutationStepObservation): boolean {
+  return Boolean(
+    observation.commit
+    && observation.expectedTreeSha
+    && observation.expectedCommitSha
+    && observation.commit.sha.toLowerCase() === observation.expectedCommitSha.toLowerCase()
+    && observation.commit.treeSha.toLowerCase() === observation.expectedTreeSha.toLowerCase(),
+  );
+}
+
+function mutationStepBasePreconditions(input: {
+  observation: AgentGithubMutationStepObservation;
+  command: GithubReadyPrCommand;
+  expectedHeadRef: string;
+  expectedMarker: string;
+}): boolean {
+  const { observation, command } = input;
+  return observation.repoId === command.repoId
+    && observation.repoFullName.toLowerCase() === command.repoFullName.toLowerCase()
+    && observation.defaultBranchSha.toLowerCase() === command.sourceSha.toLowerCase()
+    && observation.expectedHeadRef === input.expectedHeadRef
+    && observation.expectedPullRequestMarker === input.expectedMarker
+    && (observation.issue?.number ?? null) === command.issueNumber
+    && (command.issueNumber === null || mutationStepIssueEligible(observation.issue))
+    && observation.openAutopilotPullRequests.length === 0;
 }
 
 export async function executeGithubReadyPr(input: {
@@ -409,52 +609,222 @@ export async function executeGithubReadyPr(input: {
     observation: preObservation,
   });
   const authorization = await input.controlPlane.authorize({
-    requestId: `${input.operationId}:authorize`,
+    requestId: mutationControlPlaneRequestId(input.operationId, "authorize"),
     body: authorizationBody,
   });
   if (
     authorization.action !== "GITHUB_READY_PR_MUTATE"
     || authorization.mutationIntentDigest.toLowerCase() !== prepared.mutationIntentDigest
     || !SHA256.test(authorization.mutationIntentDigest)
+    || authorization.writeDisposition !== "STEP_LEDGER"
+    || authorization.commitDate.getTime() > authorization.expiresAt.getTime()
   ) throw new Error("GITHUB_READY_PR_AUTHORIZATION_BINDING_MISMATCH");
 
   let writeAttempted = false;
-  if (authorization.writeDisposition === "EXECUTE_ONCE") {
-    if (authorization.duplicate || authorization.status !== "CONSUMED" || authorization.expiresAt <= now()) {
-      throw new Error("GITHUB_READY_PR_AUTHORIZATION_INVALID");
+  const stepKinds: AgentGithubMutationStepKind[] = ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"];
+  for (const stepKind of stepKinds) {
+    const claimBody = agentGithubMutationStepClaimSchema.parse({
+      executionId: authorization.executionId,
+      workerPrincipalId: input.workerPrincipalId,
+      workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+      stepKind,
+    });
+    const stableClaimRequestId = mutationControlPlaneRequestId(input.operationId, `step:${stepKind}:claim`);
+    let claim: Awaited<ReturnType<GithubMutationControlPlane["claimStep"]>>;
+    try {
+      claim = await input.controlPlane.claimStep({ requestId: stableClaimRequestId, body: claimBody });
+    } catch (error) {
+      if (!isControlPlaneConflict(error)) throw error;
+      // 같은 logical operation의 이전 attempt가 terminal/stale이면 새 generation을
+      // 받아야 한다. 아직 active면 control-plane CAS가 이 재시도도 거부한다.
+      claim = await input.controlPlane.claimStep({
+        requestId: mutationControlPlaneRequestId(
+          input.operationId,
+          `step:${stepKind}:claim:resume:${randomUUID()}`,
+        ),
+        body: claimBody,
+      });
     }
-    const beforeWrite = await observeGithubReadyPr({
+    if (
+      claim.executionId !== authorization.executionId
+      || claim.stepKind !== stepKind
+      || claim.sourceSha.toLowerCase() !== command.sourceSha.toLowerCase()
+      || claim.expectedHeadRef !== authorization.expectedHeadRef
+      || claim.expectedPullRequestMarker !== authorization.expectedPullRequestMarker
+      || claim.commitDate.getTime() !== authorization.commitDate.getTime()
+    ) throw new Error("GITHUB_READY_PR_STEP_CLAIM_BINDING_MISMATCH");
+    if (claim.writeDisposition === "ALREADY_VERIFIED") continue;
+    if (!claim.attemptId || !claim.expiresAt || claim.expiresAt <= now()) {
+      throw new Error("GITHUB_READY_PR_STEP_CLAIM_INVALID");
+    }
+
+    let expectedTreeSha = claim.expectedTreeSha;
+    let expectedCommitSha = claim.expectedCommitSha;
+    if (stepKind === "CREATE_COMMIT" && (!expectedTreeSha || !expectedCommitSha)) {
+      const beforeTree = await observeGithubMutationStep({
+        github: input.github,
+        repoFullName: command.repoFullName,
+        issueNumber: command.issueNumber,
+        stepKind,
+        expectedHeadRef: claim.expectedHeadRef,
+        expectedMarker: claim.expectedPullRequestMarker,
+        expectedTreeSha: null,
+        expectedCommitSha: null,
+        now: now(),
+      });
+      if (!mutationStepBasePreconditions({
+        observation: beforeTree,
+        command,
+        expectedHeadRef: claim.expectedHeadRef,
+        expectedMarker: claim.expectedPullRequestMarker,
+      }) || claim.expiresAt <= now()) {
+        break;
+      }
+      const tree = await input.github.createTree({
+        repoFullName: command.repoFullName,
+        sourceSha: command.sourceSha.toLowerCase(),
+        files: prepared.files,
+      });
+      expectedTreeSha = tree.sha.toLowerCase();
+      expectedCommitSha = deterministicGithubCommitSha({
+        treeSha: expectedTreeSha,
+        parentSha: command.sourceSha,
+        message: command.commitMessage,
+        date: claim.commitDate,
+      });
+      const planBody = agentGithubMutationStepPlanSchema.parse({
+        executionId: claim.executionId,
+        stepId: claim.stepId,
+        attemptId: claim.attemptId,
+        generation: claim.generation,
+        workerPrincipalId: input.workerPrincipalId,
+        workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+        stepKind,
+        expectedTreeSha,
+        expectedCommitSha,
+      });
+      const plan = await input.controlPlane.planStep({
+        requestId: mutationControlPlaneRequestId(
+          input.operationId,
+          `step:${stepKind}:generation:${claim.generation}:plan`,
+        ),
+        body: planBody,
+      });
+      if (
+        plan.executionId !== claim.executionId
+        || plan.stepId !== claim.stepId
+        || plan.attemptId !== claim.attemptId
+        || plan.generation !== claim.generation
+        || plan.expectedTreeSha.toLowerCase() !== expectedTreeSha
+        || plan.expectedCommitSha.toLowerCase() !== expectedCommitSha
+      ) throw new Error("GITHUB_READY_PR_COMMIT_PLAN_BINDING_MISMATCH");
+    }
+    if (!expectedTreeSha || !expectedCommitSha) {
+      throw new Error("GITHUB_READY_PR_STEP_EXPECTATION_MISSING");
+    }
+
+    const beforeWrite = await observeGithubMutationStep({
       github: input.github,
       repoFullName: command.repoFullName,
       issueNumber: command.issueNumber,
-      expectedTarget: {
-        headRef: authorization.expectedHeadRef,
-        marker: authorization.expectedPullRequestMarker,
-      },
+      stepKind,
+      expectedHeadRef: claim.expectedHeadRef,
+      expectedMarker: claim.expectedPullRequestMarker,
+      expectedTreeSha,
+      expectedCommitSha,
       now: now(),
     });
-    // complete pagination이 오래 걸려 session/JIT grant가 만료될 수 있으므로 실제
-    // mutation 진입 직전에 TTL을 다시 확인한다. 만료 시 write 없이 signed readback만 한다.
-    if (sameWritePreconditions(preObservation, beforeWrite) && authorization.expiresAt > now()) {
-      writeAttempted = true;
+    const basePreconditions = mutationStepBasePreconditions({
+      observation: beforeWrite,
+      command,
+      expectedHeadRef: claim.expectedHeadRef,
+      expectedMarker: claim.expectedPullRequestMarker,
+    });
+    if (basePreconditions && claim.expiresAt > now()) {
       try {
-        await input.github.applyReadyPr({
-          repoFullName: command.repoFullName,
-          sourceSha: command.sourceSha.toLowerCase(),
-          expectedHeadRef: authorization.expectedHeadRef,
-          expectedMarker: authorization.expectedPullRequestMarker,
-          issueNumber: command.issueNumber,
-          title: command.title,
-          body: command.body,
-          commitMessage: command.commitMessage,
-          files: prepared.files,
-        });
+        if (stepKind === "CREATE_COMMIT" && beforeWrite.commit === null) {
+          writeAttempted = true;
+          const commit = await input.github.createCommit({
+            repoFullName: command.repoFullName,
+            sourceSha: command.sourceSha.toLowerCase(),
+            treeSha: expectedTreeSha,
+            message: command.commitMessage,
+            date: claim.commitDate,
+          });
+          if (commit.sha.toLowerCase() !== expectedCommitSha) {
+            throw new Error("GITHUB_READY_PR_COMMIT_SHA_MISMATCH");
+          }
+        } else if (
+          stepKind === "CREATE_REF"
+          && exactStepCommit(beforeWrite)
+          && beforeWrite.headSha === null
+        ) {
+          writeAttempted = true;
+          await input.github.createRef({
+            repoFullName: command.repoFullName,
+            ref: claim.expectedHeadRef,
+            sha: expectedCommitSha,
+          });
+        } else if (
+          stepKind === "CREATE_PR"
+          && exactStepCommit(beforeWrite)
+          && beforeWrite.headSha?.toLowerCase() === expectedCommitSha
+          && beforeWrite.pullRequests.length === 0
+        ) {
+          writeAttempted = true;
+          const body = [
+            command.body.trim(),
+            ...(command.issueNumber === null ? [] : [`Closes #${command.issueNumber}`]),
+            `<!-- ${claim.expectedPullRequestMarker} -->`,
+          ].join("\n\n");
+          await input.github.createPullRequest({
+            repoFullName: command.repoFullName,
+            baseBranch: preObservation.defaultBranchRef.replace(/^refs\/heads\//u, ""),
+            headRef: claim.expectedHeadRef,
+            title: command.title,
+            body,
+          });
+        }
       } catch {
-        // GitHub가 일부 mutation을 적용한 뒤 응답을 잃었을 수 있다. 재시도하지 않고 readback으로만 판정한다.
+        // Provider 응답 유실과 부분 적용을 구분할 수 없으므로 같은 write를 반복하지 않고 즉시 readback한다.
       }
     }
-  } else if (authorization.writeDisposition !== "READBACK_ONLY" || !authorization.duplicate) {
-    throw new Error("GITHUB_READY_PR_WRITE_DISPOSITION_INVALID");
+
+    const afterWrite = await observeGithubMutationStep({
+      github: input.github,
+      repoFullName: command.repoFullName,
+      issueNumber: command.issueNumber,
+      stepKind,
+      expectedHeadRef: claim.expectedHeadRef,
+      expectedMarker: claim.expectedPullRequestMarker,
+      expectedTreeSha,
+      expectedCommitSha,
+      now: now(),
+    });
+    const completionBody = agentGithubMutationStepCompleteSchema.parse({
+      executionId: claim.executionId,
+      stepId: claim.stepId,
+      attemptId: claim.attemptId,
+      generation: claim.generation,
+      workerPrincipalId: input.workerPrincipalId,
+      workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+      stepKind,
+      observation: afterWrite,
+    });
+    const completion = await input.controlPlane.completeStep({
+      requestId: mutationControlPlaneRequestId(
+        input.operationId,
+        `step:${stepKind}:generation:${claim.generation}:complete`,
+      ),
+      body: completionBody,
+    });
+    if (
+      completion.executionId !== claim.executionId
+      || completion.stepId !== claim.stepId
+      || completion.attemptId !== claim.attemptId
+      || completion.generation !== claim.generation
+    ) throw new Error("GITHUB_READY_PR_STEP_COMPLETION_BINDING_MISMATCH");
+    if (completion.status !== "VERIFIED") break;
   }
 
   const postObservation = await observeGithubReadyPr({
@@ -474,7 +844,10 @@ export async function executeGithubReadyPr(input: {
     observation: postObservation,
   });
   const readback = await input.controlPlane.readback({
-    requestId: `${input.operationId}:readback`,
+    requestId: mutationControlPlaneRequestId(
+      input.operationId,
+      `readback:${postObservation.providerSnapshotId}`,
+    ),
     body: readbackBody,
   });
   const target = postObservation.mutationTarget?.pullRequests.length === 1

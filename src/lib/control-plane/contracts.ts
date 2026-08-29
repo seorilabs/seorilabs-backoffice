@@ -1015,6 +1015,90 @@ export const agentGithubObservationSchema = z.object({
 
 export type AgentGithubObservation = z.infer<typeof agentGithubObservationSchema>;
 
+export const AGENT_GITHUB_MUTATION_STEP_KINDS = [
+  "CREATE_COMMIT",
+  "CREATE_REF",
+  "CREATE_PR",
+] as const;
+
+export const agentGithubMutationStepKindSchema = z.enum(AGENT_GITHUB_MUTATION_STEP_KINDS);
+export type AgentGithubMutationStepKind = z.infer<typeof agentGithubMutationStepKindSchema>;
+
+const githubMutationStepCommitSchema = z.object({
+  sha: sha40,
+  treeSha: sha40,
+  parentSha: sha40,
+}).strict();
+
+/**
+ * Trusted adapter가 step 직전/직후 provider에서 다시 읽은 공개 상태다.
+ * credential, capability, installation token은 포함하지 않는다.
+ */
+export const agentGithubMutationStepObservationSchema = z.object({
+  schemaVersion: z.literal(1),
+  stepKind: agentGithubMutationStepKindSchema,
+  githubInstallationId: numericId,
+  providerSnapshotId: publicIdentifier,
+  complete: z.literal(true),
+  observedAt: z.coerce.date(),
+  repoId: numericId,
+  repoFullName: githubRepository,
+  defaultBranchRef: githubRef,
+  defaultBranchSha: sha40,
+  issue: githubObservationIssueSchema.nullable(),
+  expectedHeadRef: githubRef,
+  expectedPullRequestMarker: publicIdentifier,
+  expectedTreeSha: sha40.nullable(),
+  expectedCommitSha: sha40.nullable(),
+  commit: githubMutationStepCommitSchema.nullable(),
+  headSha: sha40.nullable(),
+  openAutopilotPullRequests: z.array(githubObservationPullRequestSchema).max(100),
+  pullRequests: z.array(githubMutationTargetPullRequestSchema).max(10),
+}).strict().superRefine((observation, context) => {
+  if ((observation.expectedTreeSha === null) !== (observation.expectedCommitSha === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["expectedCommitSha"],
+      message: "expected tree와 commit SHA는 함께 제공해야 합니다.",
+    });
+  }
+  for (const [index, pullRequest] of observation.openAutopilotPullRequests.entries()) {
+    const expectedUrl = `https://github.com/${observation.repoFullName}/pull/${pullRequest.number}`;
+    if (pullRequest.url !== expectedUrl) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["openAutopilotPullRequests", index, "url"],
+        message: "step open PR readback의 repository/number binding이 다릅니다.",
+      });
+    }
+  }
+  if (observation.commit && observation.expectedCommitSha !== observation.commit.sha) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["commit", "sha"],
+      message: "commit readback SHA가 expected commit SHA와 다릅니다.",
+    });
+  }
+  for (const [index, pullRequest] of observation.pullRequests.entries()) {
+    const expectedUrl = `https://github.com/${observation.repoFullName}/pull/${pullRequest.number}`;
+    if (
+      pullRequest.url !== expectedUrl
+      || pullRequest.headRef !== observation.expectedHeadRef
+      || pullRequest.marker !== observation.expectedPullRequestMarker
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pullRequests", index],
+        message: "step PR readback의 repository, head ref, marker binding이 다릅니다.",
+      });
+    }
+  }
+});
+
+export type AgentGithubMutationStepObservation = z.infer<
+  typeof agentGithubMutationStepObservationSchema
+>;
+
 export const agentGithubMutationAuthorizeSchema = z.object({
   sessionId: publicIdentifier,
   workerPrincipalId: z.enum([
@@ -1028,6 +1112,49 @@ export const agentGithubMutationAuthorizeSchema = z.object({
 }).strict().superRefine((value, context) => {
   if (value.observation.mutationTarget !== null) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "pre-mutation observation에는 target readback을 넣을 수 없습니다.", path: ["observation", "mutationTarget"] });
+  }
+});
+
+const agentGithubMutationStepBindingSchema = z.object({
+  executionId: publicIdentifier,
+  workerPrincipalId: z.enum([
+    GENERIC_WORKER_PRINCIPALS.CODEX,
+    GENERIC_WORKER_PRINCIPALS.CLAUDE,
+  ]),
+  workerRuntimeBindingDigest: sha256,
+  stepKind: agentGithubMutationStepKindSchema,
+}).strict();
+
+export const agentGithubMutationStepClaimSchema = agentGithubMutationStepBindingSchema;
+
+export const agentGithubMutationStepPlanSchema = agentGithubMutationStepBindingSchema.extend({
+  stepId: publicIdentifier,
+  attemptId: publicIdentifier,
+  generation: z.number().int().positive(),
+  expectedTreeSha: sha40,
+  expectedCommitSha: sha40,
+}).strict().superRefine((value, context) => {
+  if (value.stepKind !== "CREATE_COMMIT") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["stepKind"],
+      message: "commit plan은 CREATE_COMMIT step에만 허용됩니다.",
+    });
+  }
+});
+
+export const agentGithubMutationStepCompleteSchema = agentGithubMutationStepBindingSchema.extend({
+  stepId: publicIdentifier,
+  attemptId: publicIdentifier,
+  generation: z.number().int().positive(),
+  observation: agentGithubMutationStepObservationSchema,
+}).strict().superRefine((value, context) => {
+  if (value.observation.stepKind !== value.stepKind) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["observation", "stepKind"],
+      message: "completion과 provider observation의 step kind가 다릅니다.",
+    });
   }
 });
 

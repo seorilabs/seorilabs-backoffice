@@ -90,7 +90,7 @@
       "model"
     ],
     "approvalPolicies": {
-      "READY_PR": "durable CREATE_COMMIT/CREATE_REF/CREATE_PR step ledger 전에는 생성과 claim을 fail-closed",
+      "READY_PR": "durable step ledger가 구현되어도 실제 GitHub canary와 runtime replica 승인 전에는 생성과 claim을 fail-closed",
       "READ_ONLY": "GitHub와 provider readback만 허용하고 PR을 만들지 않음"
     },
     "templatePolicies": {
@@ -107,8 +107,10 @@
     "costMicrosRequiredOnEverySettlement": true,
     "budgetScope": "cumulative per AgentRun including readback",
     "authorizationWriteDisposition": {
-      "first": "EXECUTE_ONCE",
-      "duplicate": "READBACK_ONLY"
+      "authorization": "STEP_LEDGER",
+      "newStep": "EXECUTE_ONCE",
+      "plannedResume": "READBACK_THEN_EXECUTE",
+      "verifiedStep": "ALREADY_VERIFIED"
     },
     "readOnlyOutcomeCodes": [
       "NO_CHANGES",
@@ -132,7 +134,7 @@
     "session은 runtime binding digest에 고정되어 같은 principal의 다른 client instance가 heartbeat, settlement, readback, mutation을 재사용할 수 없다",
     "JIT execution은 normalized mutation intent digest에 결합하고 write 직전 source, issue, singleton, target ref를 다시 읽는다",
     "CREATE_COMMIT, CREATE_REF, CREATE_PR은 각각 durable consume/readback을 가지며 exact partial readback 뒤 남은 단계만 재개해야 한다",
-    "JIT execution duplicate 응답은 mutation 재실행이 아니라 signed readback만 허용한다",
+    "JIT step duplicate와 process restart는 provider signed readback을 먼저 수행하고 이미 적용된 mutation을 반복하지 않는다",
     "approvalPolicy와 budgetCeilingMicros를 넘는 작업은 시작하지 않는다",
     "lease generation이 바뀌면 이전 completion을 제출하지 않는다",
     "외부 mutation 결과가 불명확하면 새 Issue나 PR을 만들지 않고 readbackRequired를 기록한다",

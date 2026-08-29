@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
 import {
+  deterministicGithubCommitSha,
   executeGithubReadyPr,
   observeGithubReadyPr,
   prepareGithubReadyPrCommand,
+  type GithubCommitState,
   type GithubMutationControlPlane,
   type GithubPullRequestState,
   type GithubReadyPrPort,
 } from "@/lib/control-plane/github-ready-pr-adapter";
 
 const SOURCE_SHA = "a".repeat(40);
-const HEAD_SHA = "b".repeat(40);
+const TREE_SHA = "b".repeat(40);
 const NOW = new Date("2026-08-29T03:00:00.000Z");
 const REPO = "seorilabs/example";
 
@@ -53,10 +56,12 @@ function manualPullRequest(number: number): GithubPullRequestState {
 class FakeGithub implements GithubReadyPrPort {
   readonly installationId = "101";
   readonly pageRequests: Array<{ state: "OPEN" | "ALL"; page: number }> = [];
-  applyCount = 0;
+  readonly writes: Array<"CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR"> = [];
   repositoryReads = 0;
   defaultBranchSha = SOURCE_SHA;
   driftOnSecondRepositoryRead = false;
+  commit: GithubCommitState | null = null;
+  headSha: string | null = null;
   pulls: GithubPullRequestState[] = Array.from({ length: 100 }, (_, index) => manualPullRequest(index + 100));
 
   async getRepository() {
@@ -82,39 +87,75 @@ class FakeGithub implements GithubReadyPrPort {
   }
 
   async getRef(_repoFullName: string, ref: string) {
-    const pullRequest = this.pulls.find((candidate) => candidate.headRef === ref);
-    return pullRequest ? { sha: pullRequest.headSha } : null;
+    return ref === "refs/heads/seori/run-fixture-1" && this.headSha ? { sha: this.headSha } : null;
   }
 
-  async applyReadyPr(input: {
-    expectedHeadRef: string;
-    expectedMarker: string;
-    issueNumber: number | null;
-    title: string;
-  }) {
-    this.applyCount += 1;
+  async getCommit(_repoFullName: string, sha: string) {
+    return this.commit?.sha === sha ? this.commit : null;
+  }
+
+  async createTree() {
+    return { sha: TREE_SHA };
+  }
+
+  async createCommit(input: { sourceSha: string; treeSha: string; message: string; date: Date }) {
+    const sha = deterministicGithubCommitSha({
+      treeSha: input.treeSha,
+      parentSha: input.sourceSha,
+      message: input.message,
+      date: input.date,
+    });
+    this.writes.push("CREATE_COMMIT");
+    this.commit = { sha, treeSha: input.treeSha, parentSha: input.sourceSha };
+    return { sha };
+  }
+
+  async createRef(input: { ref: string; sha: string }) {
+    assert.equal(input.ref, "refs/heads/seori/run-fixture-1");
+    this.writes.push("CREATE_REF");
+    this.headSha = input.sha;
+  }
+
+  async createPullRequest(input: { headRef: string; title: string; body: string }) {
+    assert.ok(this.headSha);
+    this.writes.push("CREATE_PR");
     this.pulls.push({
       number: 7,
       nodeId: "PR_fixture_7",
       url: `https://github.com/${REPO}/pull/7`,
       state: "OPEN",
       draft: false,
-      headRef: input.expectedHeadRef,
+      headRef: input.headRef,
       headRepoFullName: REPO,
-      headSha: HEAD_SHA,
+      headSha: this.headSha!,
       baseRef: "refs/heads/main",
       baseRepoFullName: REPO,
       baseSha: SOURCE_SHA,
-      body: `${input.title}\n\nCloses #${input.issueNumber}\n\n<!-- ${input.expectedMarker} -->`,
+      body: input.body,
     });
   }
 }
 
 function controlPlane(input: {
-  duplicate?: boolean;
   readbackStatus?: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
   onAuthorize?: (body: Record<string, unknown>) => void;
+  onClaimRequest?: (requestId: string) => void;
+  verifiedSteps?: boolean;
+  crashBeforeCompletionStep?: "CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR";
+  claimConflictOnceStep?: "CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR";
 } = {}): GithubMutationControlPlane {
+  let expectedTreeSha: string | null = input.verifiedSteps ? TREE_SHA : null;
+  let expectedCommitSha: string | null = input.verifiedSteps
+    ? deterministicGithubCommitSha({
+      treeSha: TREE_SHA,
+      parentSha: SOURCE_SHA,
+      message: command().commitMessage,
+      date: NOW,
+    })
+    : null;
+  const verified = new Set<string>(input.verifiedSteps ? ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"] : []);
+  let crashPending = Boolean(input.crashBeforeCompletionStep);
+  let claimConflictPending = Boolean(input.claimConflictOnceStep);
   return {
     authorize: async ({ body }) => {
       input.onAuthorize?.(body as unknown as Record<string, unknown>);
@@ -125,9 +166,68 @@ function controlPlane(input: {
         expectedHeadRef: "refs/heads/seori/run-fixture-1",
         expectedPullRequestMarker: "seori-run:fixture:1",
         expiresAt: new Date(NOW.getTime() + 60_000),
+        commitDate: NOW,
         status: "CONSUMED",
-        writeDisposition: input.duplicate ? "READBACK_ONLY" : "EXECUTE_ONCE",
-        duplicate: input.duplicate ?? false,
+        writeDisposition: "STEP_LEDGER",
+        duplicate: false,
+      };
+    },
+    claimStep: async ({ requestId, body }) => {
+      input.onClaimRequest?.(requestId);
+      if (claimConflictPending && input.claimConflictOnceStep === body.stepKind) {
+        claimConflictPending = false;
+        throw new Error("SEORI_BACKOFFICE_REJECTED_409");
+      }
+      return {
+        executionId: body.executionId,
+        stepId: `step:${body.stepKind}`,
+        stepKind: body.stepKind,
+        stepStatus: verified.has(body.stepKind) ? "VERIFIED" : expectedCommitSha && body.stepKind === "CREATE_COMMIT" ? "PLANNED" : "CLAIMED",
+        generation: 1,
+        attemptId: verified.has(body.stepKind) ? null : `attempt:${body.stepKind}`,
+        expiresAt: verified.has(body.stepKind) ? null : new Date(NOW.getTime() + 60_000),
+        expectedTreeSha,
+        expectedCommitSha,
+        expectedHeadRef: "refs/heads/seori/run-fixture-1",
+        expectedPullRequestMarker: "seori-run:fixture:1",
+        sourceSha: SOURCE_SHA,
+        commitDate: NOW,
+        writeDisposition: verified.has(body.stepKind)
+          ? "ALREADY_VERIFIED" as const
+          : expectedCommitSha && body.stepKind === "CREATE_COMMIT"
+            ? "READBACK_THEN_EXECUTE" as const
+            : "EXECUTE_ONCE" as const,
+        duplicate: false,
+      };
+    },
+    planStep: async ({ body }) => {
+      expectedTreeSha = body.expectedTreeSha;
+      expectedCommitSha = body.expectedCommitSha;
+      return {
+        executionId: body.executionId,
+        stepId: body.stepId,
+        attemptId: body.attemptId,
+        generation: body.generation,
+        status: "PLANNED",
+        expectedTreeSha,
+        expectedCommitSha,
+        duplicate: false,
+      };
+    },
+    completeStep: async ({ body }) => {
+      if (crashPending && input.crashBeforeCompletionStep === body.stepKind) {
+        crashPending = false;
+        throw new Error("SIMULATED_PROCESS_CRASH");
+      }
+      const status = input.readbackStatus ?? "VERIFIED";
+      if (status === "VERIFIED") verified.add(body.stepKind);
+      return {
+        executionId: body.executionId,
+        stepId: body.stepId,
+        attemptId: body.attemptId,
+        generation: body.generation,
+        status,
+        duplicate: false,
       };
     },
     readback: async ({ body }) => ({
@@ -138,7 +238,7 @@ function controlPlane(input: {
   };
 }
 
-test("shadow adapter는 complete pagination 뒤 JIT authorize, 비활성 composite attempt, fresh signed readback 순서를 검증한다", async () => {
+test("step ledger adapter는 complete pagination 뒤 commit, ref, PR을 순서대로 한 번씩 생성한다", async () => {
   const github = new FakeGithub();
   let authorizedPrincipal = "";
   const result = await executeGithubReadyPr({
@@ -157,7 +257,7 @@ test("shadow adapter는 complete pagination 뒤 JIT authorize, 비활성 composi
     clock: () => NOW,
   });
   assert.equal(authorizedPrincipal, "codex:seorilabs-generic-worker");
-  assert.equal(github.applyCount, 1);
+  assert.deepEqual(github.writes, ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]);
   assert.equal(result.status, "VERIFIED");
   assert.equal(result.pullRequestNumber, 7);
   assert.equal(result.pullRequestUrl, `https://github.com/${REPO}/pull/7`);
@@ -165,13 +265,21 @@ test("shadow adapter는 complete pagination 뒤 JIT authorize, 비활성 composi
   assert.ok(github.pageRequests.some((request) => request.state === "ALL" && request.page === 2));
 });
 
-test("동일 idempotency authorization의 READBACK_ONLY는 GitHub write를 반복하지 않는다", async () => {
+test("이미 검증된 step replay는 GitHub write를 반복하지 않는다", async () => {
   const github = new FakeGithub();
+  const headSha = deterministicGithubCommitSha({
+    treeSha: TREE_SHA,
+    parentSha: SOURCE_SHA,
+    message: command().commitMessage,
+    date: NOW,
+  });
+  github.commit = { sha: headSha, treeSha: TREE_SHA, parentSha: SOURCE_SHA };
+  github.headSha = headSha;
   github.pulls.push({
     ...manualPullRequest(7),
     nodeId: "PR_fixture_7",
     headRef: "refs/heads/seori/run-fixture-1",
-    headSha: HEAD_SHA,
+    headSha,
     body: "Closes #7\n\n<!-- seori-run:fixture:1 -->",
   });
   const result = await executeGithubReadyPr({
@@ -180,10 +288,10 @@ test("동일 idempotency authorization의 READBACK_ONLY는 GitHub write를 반�
     workerRuntimeBindingDigest: "e".repeat(64),
     rawCommand: command(),
     github,
-    controlPlane: controlPlane({ duplicate: true }),
+    controlPlane: controlPlane({ verifiedSteps: true }),
     clock: () => NOW,
   });
-  assert.equal(github.applyCount, 0);
+  assert.deepEqual(github.writes, []);
   assert.equal(result.status, "VERIFIED");
 });
 
@@ -199,7 +307,7 @@ test("JIT 승인 뒤 default SHA나 target ref가 달라지면 write 없이 read
     controlPlane: controlPlane({ readbackStatus: "NOT_APPLIED" }),
     clock: () => NOW,
   });
-  assert.equal(github.applyCount, 0);
+  assert.deepEqual(github.writes, []);
   assert.equal(result.writeAttempted, false);
   assert.equal(result.status, "NOT_APPLIED");
 });
@@ -219,9 +327,74 @@ test("complete pre-write readback 중 JIT 승인이 만료되면 write 없이 re
       return clockCalls >= 4 ? new Date(NOW.getTime() + 60_000) : NOW;
     },
   });
-  assert.equal(github.applyCount, 0);
+  assert.deepEqual(github.writes, []);
   assert.equal(result.writeAttempted, false);
   assert.equal(result.status, "NOT_APPLIED");
+});
+
+test("프로세스가 provider write 직후 종료돼도 readback-first resume은 각 step을 중복 생성하지 않는다", async () => {
+  for (const crashStep of ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"] as const) {
+    const github = new FakeGithub();
+    const durableControlPlane = controlPlane({ crashBeforeCompletionStep: crashStep });
+    const execute = () => executeGithubReadyPr({
+      operationId: `operation:crash:${crashStep}`,
+      workerPrincipalId: "codex:seorilabs-generic-worker",
+      workerRuntimeBindingDigest: "d".repeat(64),
+      rawCommand: command(),
+      github,
+      controlPlane: durableControlPlane,
+      clock: () => NOW,
+    });
+    await assert.rejects(execute, /SIMULATED_PROCESS_CRASH/u);
+    const resumed = await execute();
+    assert.equal(resumed.status, "VERIFIED");
+    assert.deepEqual(github.writes, ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]);
+  }
+});
+
+test("terminal 또는 stale claim 충돌은 새 idempotency key로 다음 generation을 요청한다", async () => {
+  const github = new FakeGithub();
+  const claimRequestIds: string[] = [];
+  const result = await executeGithubReadyPr({
+    operationId: "operation:stale-claim-resume",
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: "d".repeat(64),
+    rawCommand: command(),
+    github,
+    controlPlane: controlPlane({
+      claimConflictOnceStep: "CREATE_COMMIT",
+      onClaimRequest: (requestId) => claimRequestIds.push(requestId),
+    }),
+    clock: () => NOW,
+  });
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(github.writes, ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]);
+  assert.equal(claimRequestIds.length, 4);
+  assert.notEqual(claimRequestIds[0], claimRequestIds[1]);
+  assert.ok(claimRequestIds.every((requestId) => /^ghm:[0-9a-f]{64}$/u.test(requestId)));
+});
+
+test("deterministic commit SHA는 Git commit object hash와 일치한다", () => {
+  const timestamp = Math.floor(NOW.getTime() / 1_000);
+  const identity = `Seorilabs Automation <automation@seorilabs.com> ${timestamp} +0000`;
+  const body = [
+    `tree ${TREE_SHA}`,
+    `parent ${SOURCE_SHA}`,
+    `author ${identity}`,
+    `committer ${identity}`,
+    "",
+    command().commitMessage,
+  ].join("\n");
+  const gitSha = execFileSync("git", ["hash-object", "-t", "commit", "--stdin"], {
+    input: body,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(deterministicGithubCommitSha({
+    treeSha: TREE_SHA,
+    parentSha: SOURCE_SHA,
+    message: command().commitMessage,
+    date: NOW,
+  }), gitSha);
 });
 
 test("cross-repo marker PR과 marker 없는 seori branch PR도 singleton blocker로 관측한다", async () => {

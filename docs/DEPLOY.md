@@ -358,7 +358,7 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `AGENT_WORKER_CLAUDE_TOKEN` | Claude generic worker principal에만 결합된 agent queue Bearer capability. Codex 값과 같으면 두 worker 모두 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_PRINCIPAL` | worker principal과 달라야 하는 seori-auth GitHub mutation adapter 공개 identity |
 | `AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY` | attestation에 허용할 exact workload runtime identity. 서명자가 임의 runtime 문자열을 주장하지 못하게 고정 |
-| `AGENT_TRUSTED_ADAPTER_DEPLOYED` | durable `CREATE_COMMIT/CREATE_REF/CREATE_PR` step ledger와 canary 뒤에만 `true`. 현재 코드 gate가 미구현 상태라 값을 바꿔도 `READY_PR` 생성/claim은 fail-closed |
+| `AGENT_TRUSTED_ADAPTER_DEPLOYED` | durable `CREATE_COMMIT/CREATE_REF/CREATE_PR` step ledger와 실제 GitHub canary 뒤에만 `true`. ledger는 구현됐지만 runtime canary gate가 닫혀 있어 값을 바꿔도 `READY_PR` 생성/claim은 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_TOKEN` | 위 adapter에만 결합된 bearer. worker/모델에 주입하지 않으며 worker token 재사용 시 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_PUBLIC_KEY` | route/body/idempotency key/runtime/60초 TTL attestation 검증용 Ed25519 공개키. private key는 adapter에만 둠 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | 전용 `backoffice-control-plane-snapshot-signing`에서만 공급하는 ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |

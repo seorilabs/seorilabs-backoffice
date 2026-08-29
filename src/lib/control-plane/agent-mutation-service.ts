@@ -5,7 +5,11 @@ import {
   agentRepositorySingletonScope,
   parseManagedWorkerPolicy,
 } from "@/lib/control-plane/automation-catalog";
-import type { AgentGithubObservation } from "@/lib/control-plane/contracts";
+import type {
+  AgentGithubMutationStepKind,
+  AgentGithubMutationStepObservation,
+  AgentGithubObservation,
+} from "@/lib/control-plane/contracts";
 import { githubInstallationProviderPayloadSchema } from "@/lib/control-plane/github-installation-observation";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
@@ -16,6 +20,7 @@ export const GITHUB_READY_PR_MUTATION_ACTION = "GITHUB_READY_PR_MUTATE" as const
 const OBSERVATION_MAX_AGE_MS = 60_000;
 const OBSERVATION_FUTURE_SKEW_MS = 5_000;
 const GRANT_TTL_MS = 5 * 60_000;
+const STEP_ATTEMPT_TTL_MS = 60_000;
 
 function normalizedLabels(labels: readonly string[]): string[] {
   return labels.map((label) => label.toLowerCase()).sort();
@@ -285,13 +290,71 @@ function assertPreMutationObservation(input: {
   }
 }
 
+function assertMutationAuthorizationReplayObservation(input: {
+  observation: AgentGithubObservation;
+  grant: {
+    repoId: bigint;
+    repoFullName: string;
+    issueNumber: number | null;
+    sourceSha: string;
+    expectedHeadRef: string;
+    expectedPullRequestMarker: string;
+    observation: {
+      githubInstallationId: string;
+      defaultBranchRef: string;
+    };
+  };
+}): void {
+  const { observation, grant } = input;
+  if (
+    observation.githubInstallationId !== grant.observation.githubInstallationId
+    || observation.repoId !== grant.repoId.toString()
+    || observation.repoFullName.toLowerCase() !== grant.repoFullName.toLowerCase()
+    || observation.defaultBranchRef !== grant.observation.defaultBranchRef
+    || observation.defaultBranchSha.toLowerCase() !== grant.sourceSha.toLowerCase()
+    || (observation.issue?.number ?? null) !== grant.issueNumber
+    || (grant.issueNumber !== null && !githubIssueEligible(observation.issue))
+    || observation.mutationTarget !== null
+  ) {
+    throw new ControlPlaneError(
+      "mutation authorization replay의 repository/source/issue binding이 다릅니다.",
+      409,
+      "GITHUB_MUTATION_REPLAY_OBSERVATION_MISMATCH",
+    );
+  }
+  if (observation.openAutopilotPullRequests.length === 0) return;
+  if (observation.openAutopilotPullRequests.length !== 1) {
+    throw new ControlPlaneError(
+      "mutation authorization replay에서 다른 READY PR을 발견했습니다.",
+      409,
+      "GITHUB_MUTATION_REPLAY_SINGLETON_MISMATCH",
+    );
+  }
+  const pullRequest = observation.openAutopilotPullRequests[0];
+  if (
+    pullRequest.state !== "OPEN"
+    || pullRequest.draft
+    || pullRequest.headRef !== grant.expectedHeadRef
+    || pullRequest.baseRef !== grant.observation.defaultBranchRef
+    || pullRequest.baseSha.toLowerCase() !== grant.sourceSha.toLowerCase()
+    || pullRequest.marker !== grant.expectedPullRequestMarker
+    || pullRequest.closesIssueNumber !== grant.issueNumber
+  ) {
+    throw new ControlPlaneError(
+      "mutation authorization replay의 기존 READY PR이 grant와 일치하지 않습니다.",
+      409,
+      "GITHUB_MUTATION_REPLAY_TARGET_MISMATCH",
+    );
+  }
+}
+
 function publicAuthorization(grant: {
   action: string;
   mutationIntentDigest: string;
   expectedHeadRef: string;
   expectedPullRequestMarker: string;
   expiresAt: Date;
-  execution: { id: string; status: string } | null;
+  execution: { id: string; status: string; startedAt: Date } | null;
 }, duplicate: boolean) {
   if (!grant.execution) throw new ControlPlaneError("consumed grant execution을 찾을 수 없습니다.", 409, "MUTATION_EXECUTION_MISSING");
   return {
@@ -301,8 +364,9 @@ function publicAuthorization(grant: {
     expectedHeadRef: grant.expectedHeadRef,
     expectedPullRequestMarker: grant.expectedPullRequestMarker,
     expiresAt: grant.expiresAt,
+    commitDate: grant.execution.startedAt,
     status: grant.execution.status,
-    writeDisposition: duplicate ? "READBACK_ONLY" as const : "EXECUTE_ONCE" as const,
+    writeDisposition: "STEP_LEDGER" as const,
     duplicate,
   };
 }
@@ -324,12 +388,30 @@ export async function authorizeGithubReadyPrMutation(input: {
   const bindingDigest = mutationRequestDigest(input);
   const replay = await prisma.agentActionGrant.findUnique({
     where: { requestId: input.idempotencyKey },
-    include: { execution: true },
+    include: {
+      execution: true,
+      observation: true,
+      session: { include: { lease: { include: { run: true } } } },
+    },
   });
   if (replay) {
-    if (replay.bindingDigest !== bindingDigest || replay.sessionId !== input.sessionId || replay.action !== input.action) {
+    if (
+      replay.sessionId !== input.sessionId
+      || replay.action !== input.action
+      || replay.principalId !== input.workerPrincipalId
+      || replay.session.runtimeBindingDigest !== input.workerRuntimeBindingDigest
+      || replay.adapterPrincipalId !== input.adapterPrincipalId
+      || replay.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
+      || replay.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
+    ) {
       throw new ControlPlaneError("idempotency key가 다른 mutation authorization에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
+    assertSessionState(replay.session, input.workerPrincipalId, input.workerRuntimeBindingDigest, now);
+    if (replay.revokedAt || replay.expiresAt <= now) {
+      throw new ControlPlaneError("mutation authorization replay가 만료되었습니다.", 409, "STALE_MUTATION_GRANT");
+    }
+    assertFreshObservation(input.observation, now);
+    assertMutationAuthorizationReplayObservation({ observation: input.observation, grant: replay });
     return publicAuthorization(replay, true);
   }
   assertFreshObservation(input.observation, now);
@@ -469,6 +551,13 @@ export async function authorizeGithubReadyPrMutation(input: {
           bindingDigest,
           status: "CONSUMED",
           startedAt: now,
+          steps: {
+            create: [
+              { kind: "CREATE_COMMIT", ordinal: 1 },
+              { kind: "CREATE_REF", ordinal: 2 },
+              { kind: "CREATE_PR", ordinal: 3 },
+            ],
+          },
         },
       });
       await tx.agentRunEvent.create({
@@ -498,6 +587,767 @@ export async function authorizeGithubReadyPrMutation(input: {
       && ["P2002", "P2034"].includes(error.code)
       && (input.retryAttempt ?? 0) < 2
     ) return authorizeGithubReadyPrMutation({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
+    throw error;
+  }
+}
+
+function stepObservationJson(observation: AgentGithubMutationStepObservation): JsonValue {
+  return {
+    ...observation,
+    observedAt: observation.observedAt.toISOString(),
+    defaultBranchSha: observation.defaultBranchSha.toLowerCase(),
+    issue: observation.issue ? {
+      ...observation.issue,
+      labels: normalizedLabels(observation.issue.labels),
+      updatedAt: observation.issue.updatedAt.toISOString(),
+    } : null,
+    expectedTreeSha: observation.expectedTreeSha?.toLowerCase() ?? null,
+    expectedCommitSha: observation.expectedCommitSha?.toLowerCase() ?? null,
+    commit: observation.commit ? {
+      sha: observation.commit.sha.toLowerCase(),
+      treeSha: observation.commit.treeSha.toLowerCase(),
+      parentSha: observation.commit.parentSha.toLowerCase(),
+    } : null,
+    headSha: observation.headSha?.toLowerCase() ?? null,
+    openAutopilotPullRequests: observation.openAutopilotPullRequests.map((pullRequest) => ({
+      ...pullRequest,
+      headSha: pullRequest.headSha.toLowerCase(),
+      baseSha: pullRequest.baseSha.toLowerCase(),
+    })),
+    pullRequests: observation.pullRequests.map((pullRequest) => ({
+      ...pullRequest,
+      headSha: pullRequest.headSha.toLowerCase(),
+      baseSha: pullRequest.baseSha.toLowerCase(),
+    })),
+  } as JsonValue;
+}
+
+const mutationStepExecutionInclude = {
+  grant: {
+    include: {
+      observation: true,
+      session: { include: { lease: { include: { run: true } } } },
+    },
+  },
+  steps: { orderBy: { ordinal: "asc" as const } },
+} as const;
+
+type MutationStepExecution = Prisma.AgentMutationExecutionGetPayload<{
+  include: typeof mutationStepExecutionInclude;
+}>;
+
+function assertMutationStepExecutionBinding(input: {
+  execution: MutationStepExecution;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  adapterPrincipalId: string;
+  adapterRuntimeIdentity: string;
+  now: Date;
+}): void {
+  const { execution, now } = input;
+  const { grant } = execution;
+  if (
+    execution.action !== GITHUB_READY_PR_MUTATION_ACTION
+    || execution.grant.principalId !== input.workerPrincipalId
+    || grant.session.principalId !== input.workerPrincipalId
+    || grant.session.runtimeBindingDigest !== input.workerRuntimeBindingDigest
+    || execution.runId !== grant.runId
+    || execution.sessionId !== grant.sessionId
+    || execution.generation !== grant.generation
+    || grant.session.runId !== grant.runId
+    || grant.session.generation !== grant.generation
+    || execution.adapterPrincipalId !== input.adapterPrincipalId
+    || grant.adapterPrincipalId !== input.adapterPrincipalId
+    || execution.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
+    || grant.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
+    || grant.revokedAt
+  ) {
+    throw new ControlPlaneError("mutation step adapter binding이 다릅니다.", 409, "MUTATION_STEP_ADAPTER_MISMATCH");
+  }
+  assertSessionState(grant.session, input.workerPrincipalId, input.workerRuntimeBindingDigest, now);
+  if (grant.expiresAt <= now) {
+    throw new ControlPlaneError("mutation grant가 만료되었습니다.", 409, "STALE_MUTATION_GRANT");
+  }
+}
+
+function publicStepClaim(input: {
+  execution: MutationStepExecution;
+  step: MutationStepExecution["steps"][number];
+  attempt: {
+    id: string;
+    generation: number;
+    expiresAt: Date;
+    status: string;
+  } | null;
+  duplicate: boolean;
+}) {
+  const commitStep = input.execution.steps.find((step) => step.kind === "CREATE_COMMIT");
+  const expectedTreeSha = input.step.kind === "CREATE_COMMIT"
+    ? input.step.expectedTreeSha
+    : commitStep?.outputSha
+      ? commitStep.expectedTreeSha
+      : null;
+  const expectedCommitSha = input.step.kind === "CREATE_COMMIT"
+    ? input.step.expectedCommitSha
+    : commitStep?.outputSha ?? null;
+  return {
+    executionId: input.execution.id,
+    stepId: input.step.id,
+    stepKind: input.step.kind as AgentGithubMutationStepKind,
+    stepStatus: input.step.status,
+    generation: input.attempt?.generation ?? input.step.generation,
+    attemptId: input.attempt?.id ?? null,
+    expiresAt: input.attempt?.expiresAt ?? null,
+    expectedTreeSha,
+    expectedCommitSha,
+    expectedHeadRef: input.execution.grant.expectedHeadRef,
+    expectedPullRequestMarker: input.execution.grant.expectedPullRequestMarker,
+    sourceSha: input.execution.grant.sourceSha,
+    commitDate: input.execution.startedAt,
+    writeDisposition: input.step.status === "VERIFIED"
+      ? "ALREADY_VERIFIED" as const
+      : input.step.status === "PLANNED" || input.step.status === "RESULT_UNKNOWN"
+        ? "READBACK_THEN_EXECUTE" as const
+        : "EXECUTE_ONCE" as const,
+    duplicate: input.duplicate,
+  };
+}
+
+export async function claimGithubMutationStep(input: {
+  executionId: string;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  stepKind: AgentGithubMutationStepKind;
+  adapterPrincipalId: string;
+  adapterRuntimeIdentity: string;
+  idempotencyKey: string;
+  now?: Date;
+  retryAttempt?: number;
+}) {
+  const now = input.now ?? new Date();
+  const requestDigest = jsonDigest({
+    executionId: input.executionId,
+    workerPrincipalId: input.workerPrincipalId,
+    workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+    stepKind: input.stepKind,
+    adapterPrincipalId: input.adapterPrincipalId,
+    adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+  });
+  const replay = await prisma.agentMutationStepAttempt.findUnique({
+    where: { requestId: input.idempotencyKey },
+    include: { step: { include: { execution: { include: mutationStepExecutionInclude } } } },
+  });
+  if (replay) {
+    if (
+      replay.bindingDigest !== requestDigest
+      || replay.step.executionId !== input.executionId
+      || replay.step.kind !== input.stepKind
+    ) throw new ControlPlaneError("idempotency key가 다른 mutation step claim에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    assertMutationStepExecutionBinding({ execution: replay.step.execution, ...input, now });
+    if (replay.step.status === "VERIFIED") {
+      return publicStepClaim({
+        execution: replay.step.execution,
+        step: replay.step,
+        attempt: null,
+        duplicate: true,
+      });
+    }
+    if (replay.step.status !== "VERIFIED" && ["VERIFIED", "NOT_APPLIED", "RESULT_UNKNOWN"].includes(replay.status)) {
+      throw new ControlPlaneError(
+        "terminal mutation step attempt는 새 claim으로만 재개할 수 있습니다.",
+        409,
+        "MUTATION_STEP_ATTEMPT_TERMINAL",
+      );
+    }
+    if (
+      replay.generation !== replay.step.generation
+      || replay.expiresAt <= now
+      || replay.status === "STALE"
+    ) throw new ControlPlaneError("mutation step claim이 만료되었거나 대체되었습니다.", 409, "STALE_MUTATION_STEP_ATTEMPT");
+    return publicStepClaim({
+      execution: replay.step.execution,
+      step: replay.step,
+      attempt: replay,
+      duplicate: true,
+    });
+  }
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const execution = await tx.agentMutationExecution.findUnique({
+        where: { id: input.executionId },
+        include: mutationStepExecutionInclude,
+      });
+      if (!execution) throw new ControlPlaneError("mutation execution을 찾을 수 없습니다.", 404, "MUTATION_EXECUTION_NOT_FOUND");
+      assertMutationStepExecutionBinding({ execution, ...input, now });
+      const step = execution.steps.find((candidate) => candidate.kind === input.stepKind);
+      if (!step) throw new ControlPlaneError("mutation step을 찾을 수 없습니다.", 404, "MUTATION_STEP_NOT_FOUND");
+      if (step.status === "VERIFIED") {
+        return publicStepClaim({ execution, step, attempt: null, duplicate: false });
+      }
+      if (["VERIFIED", "NOT_APPLIED"].includes(execution.status)) {
+        throw new ControlPlaneError(
+          "terminal mutation execution에는 새 step 작업을 시작할 수 없습니다.",
+          409,
+          "MUTATION_EXECUTION_TERMINAL",
+        );
+      }
+      const predecessor = execution.steps.find((candidate) => candidate.ordinal === step.ordinal - 1);
+      if (predecessor && (predecessor.status !== "VERIFIED" || !predecessor.outputSha)) {
+        throw new ControlPlaneError("이전 mutation step이 provider readback으로 확정되지 않았습니다.", 409, "MUTATION_STEP_PREDECESSOR_UNVERIFIED");
+      }
+      const activeAttempt = await tx.agentMutationStepAttempt.findUnique({
+        where: { stepId_generation: { stepId: step.id, generation: step.generation } },
+      });
+      if (activeAttempt && ["CLAIMED", "PLANNED"].includes(activeAttempt.status)) {
+        if (activeAttempt.expiresAt > now) {
+          throw new ControlPlaneError("mutation step을 다른 실행이 사용 중입니다.", 409, "MUTATION_STEP_ALREADY_CLAIMED");
+        }
+        const expired = await tx.agentMutationStepAttempt.updateMany({
+          where: {
+            id: activeAttempt.id,
+            generation: step.generation,
+            status: { in: ["CLAIMED", "PLANNED"] },
+            expiresAt: { lte: now },
+          },
+          data: { status: "STALE", completedAt: now },
+        });
+        if (expired.count !== 1) {
+          throw new ControlPlaneError("mutation step claim CAS가 충돌했습니다.", 409, "MUTATION_STEP_CAS_CONFLICT");
+        }
+      }
+      const generation = step.generation + 1;
+      const resumesCommitPlan = step.kind === "CREATE_COMMIT"
+        && Boolean(step.expectedTreeSha && step.expectedCommitSha);
+      const expiresAt = new Date(Math.min(
+        now.getTime() + STEP_ATTEMPT_TTL_MS,
+        execution.grant.expiresAt.getTime(),
+        execution.grant.session.expiresAt.getTime(),
+        execution.grant.session.lease.expiresAt.getTime(),
+      ));
+      if (expiresAt <= now) throw new ControlPlaneError("mutation step claim 전에 TTL이 만료되었습니다.", 409, "STALE_MUTATION_STEP_ATTEMPT");
+      const attempt = await tx.agentMutationStepAttempt.create({
+        data: {
+          stepId: step.id,
+          sessionId: execution.grant.sessionId,
+          generation,
+          principalId: input.workerPrincipalId,
+          runtimeBindingDigest: input.workerRuntimeBindingDigest,
+          adapterPrincipalId: input.adapterPrincipalId,
+          adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+          requestId: input.idempotencyKey,
+          bindingDigest: requestDigest,
+          status: resumesCommitPlan ? "PLANNED" : "CLAIMED",
+          expiresAt,
+        },
+      });
+      const updatedCount = await tx.agentMutationStep.updateMany({
+        where: { id: step.id, generation: step.generation, status: { not: "VERIFIED" } },
+        data: {
+          generation,
+          status: resumesCommitPlan ? "PLANNED" : "CLAIMED",
+          inputDigest: execution.grant.mutationIntentDigest,
+          expectedTreeSha: step.kind === "CREATE_COMMIT" ? step.expectedTreeSha : predecessor?.expectedTreeSha,
+          expectedCommitSha: step.kind === "CREATE_COMMIT" ? step.expectedCommitSha : predecessor?.outputSha,
+          claimExpiresAt: expiresAt,
+        },
+      });
+      if (updatedCount.count !== 1) {
+        throw new ControlPlaneError("mutation step generation CAS가 충돌했습니다.", 409, "MUTATION_STEP_CAS_CONFLICT");
+      }
+      const updatedStep = await tx.agentMutationStep.findUniqueOrThrow({ where: { id: step.id } });
+      await tx.agentMutationExecution.update({
+        where: { id: execution.id },
+        data: { status: execution.status === "RESULT_UNKNOWN" ? "RESULT_UNKNOWN" : "IN_PROGRESS" },
+      });
+      await tx.agentRunEvent.create({
+        data: {
+          runId: execution.runId,
+          type: "mutation_step_claimed",
+          generation: execution.generation,
+          actor: input.adapterPrincipalId,
+          payload: {
+            executionId: execution.id,
+            stepId: step.id,
+            stepKind: step.kind,
+            stepGeneration: generation,
+            attemptId: attempt.id,
+            adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+            expiresAt: expiresAt.toISOString(),
+          },
+        },
+      });
+      return publicStepClaim({
+        execution: { ...execution, steps: execution.steps.map((candidate) => (
+          candidate.id === updatedStep.id ? updatedStep : candidate
+        )) },
+        step: updatedStep,
+        attempt,
+        duplicate: false,
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError
+      && ["P2002", "P2034"].includes(error.code)
+      && (input.retryAttempt ?? 0) < 2
+    ) return claimGithubMutationStep({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
+    throw error;
+  }
+}
+
+export async function planGithubCommitMutationStep(input: {
+  executionId: string;
+  stepId: string;
+  attemptId: string;
+  generation: number;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  stepKind: "CREATE_COMMIT";
+  expectedTreeSha: string;
+  expectedCommitSha: string;
+  adapterPrincipalId: string;
+  adapterRuntimeIdentity: string;
+  idempotencyKey: string;
+  now?: Date;
+  retryAttempt?: number;
+}) {
+  const now = input.now ?? new Date();
+  const planDigest = jsonDigest({
+    executionId: input.executionId,
+    stepId: input.stepId,
+    attemptId: input.attemptId,
+    generation: input.generation,
+    workerPrincipalId: input.workerPrincipalId,
+    workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+    stepKind: input.stepKind,
+    expectedTreeSha: input.expectedTreeSha.toLowerCase(),
+    expectedCommitSha: input.expectedCommitSha.toLowerCase(),
+    adapterPrincipalId: input.adapterPrincipalId,
+    adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+  });
+  const replay = await prisma.agentMutationStepAttempt.findUnique({ where: { planRequestId: input.idempotencyKey } });
+  if (replay) {
+    if (replay.id !== input.attemptId || replay.planDigest !== planDigest) {
+      throw new ControlPlaneError("idempotency key가 다른 commit plan에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    if (replay.expiresAt <= now || replay.status !== "PLANNED") {
+      throw new ControlPlaneError("commit plan attempt가 stale 상태입니다.", 409, "STALE_MUTATION_STEP_ATTEMPT");
+    }
+    return {
+      executionId: input.executionId,
+      stepId: replay.stepId,
+      attemptId: replay.id,
+      generation: replay.generation,
+      status: replay.status,
+      expectedTreeSha: input.expectedTreeSha.toLowerCase(),
+      expectedCommitSha: input.expectedCommitSha.toLowerCase(),
+      duplicate: true,
+    };
+  }
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const attempt = await tx.agentMutationStepAttempt.findUnique({
+        where: { id: input.attemptId },
+        include: { step: { include: { execution: { include: mutationStepExecutionInclude } } }, session: true },
+      });
+      if (!attempt || attempt.stepId !== input.stepId || attempt.step.executionId !== input.executionId) {
+        throw new ControlPlaneError("commit plan attempt를 찾을 수 없습니다.", 404, "MUTATION_STEP_ATTEMPT_NOT_FOUND");
+      }
+      const execution = attempt.step.execution;
+      assertMutationStepExecutionBinding({ execution, ...input, now });
+      if (
+        attempt.step.kind !== "CREATE_COMMIT"
+        || attempt.generation !== input.generation
+        || attempt.step.generation !== input.generation
+        || attempt.sessionId !== execution.grant.sessionId
+        || attempt.principalId !== input.workerPrincipalId
+        || attempt.runtimeBindingDigest !== input.workerRuntimeBindingDigest
+        || attempt.adapterPrincipalId !== input.adapterPrincipalId
+        || attempt.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
+        || attempt.expiresAt <= now
+        || attempt.step.claimExpiresAt === null
+        || attempt.step.claimExpiresAt <= now
+        || attempt.status !== "CLAIMED"
+        || attempt.step.status !== "CLAIMED"
+      ) throw new ControlPlaneError("commit plan attempt가 stale 상태입니다.", 409, "STALE_MUTATION_STEP_ATTEMPT");
+      const attemptUpdate = await tx.agentMutationStepAttempt.updateMany({
+        where: { id: attempt.id, generation: input.generation, status: "CLAIMED", expiresAt: { gt: now } },
+        data: {
+          status: "PLANNED",
+          planRequestId: input.idempotencyKey,
+          planDigest,
+        },
+      });
+      const stepUpdate = await tx.agentMutationStep.updateMany({
+        where: { id: input.stepId, generation: input.generation, status: "CLAIMED", claimExpiresAt: { gt: now } },
+        data: {
+          status: "PLANNED",
+          expectedTreeSha: input.expectedTreeSha.toLowerCase(),
+          expectedCommitSha: input.expectedCommitSha.toLowerCase(),
+        },
+      });
+      if (attemptUpdate.count !== 1 || stepUpdate.count !== 1) {
+        throw new ControlPlaneError("commit plan generation CAS가 충돌했습니다.", 409, "MUTATION_STEP_CAS_CONFLICT");
+      }
+      await tx.agentRunEvent.create({
+        data: {
+          runId: execution.runId,
+          type: "mutation_step_planned",
+          generation: execution.generation,
+          actor: input.adapterPrincipalId,
+          payload: {
+            executionId: execution.id,
+            stepId: input.stepId,
+            stepKind: input.stepKind,
+            stepGeneration: input.generation,
+            attemptId: input.attemptId,
+            expectedTreeSha: input.expectedTreeSha.toLowerCase(),
+            expectedCommitSha: input.expectedCommitSha.toLowerCase(),
+          },
+        },
+      });
+      return {
+        executionId: execution.id,
+        stepId: input.stepId,
+        attemptId: input.attemptId,
+        generation: input.generation,
+        status: "PLANNED" as const,
+        expectedTreeSha: input.expectedTreeSha.toLowerCase(),
+        expectedCommitSha: input.expectedCommitSha.toLowerCase(),
+        duplicate: false,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError
+      && ["P2002", "P2034"].includes(error.code)
+      && (input.retryAttempt ?? 0) < 2
+    ) return planGithubCommitMutationStep({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
+    throw error;
+  }
+}
+
+export function githubMutationStepDisposition(input: {
+  stepKind: AgentGithubMutationStepKind;
+  observation: AgentGithubMutationStepObservation;
+  grant: {
+    repoId: bigint;
+    repoFullName: string;
+    issueNumber: number | null;
+    sourceSha: string;
+    expectedHeadRef: string;
+    expectedPullRequestMarker: string;
+    observation: { defaultBranchRef: string; githubInstallationId: string };
+  };
+  expectedTreeSha: string | null;
+  expectedCommitSha: string | null;
+}): {
+  status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
+  outputSha: string | null;
+  pullRequest: GithubMutationTargetPullRequest | null;
+} {
+  const { observation, grant } = input;
+  if (
+    observation.stepKind !== input.stepKind
+    || observation.githubInstallationId !== grant.observation.githubInstallationId
+    || observation.repoId !== grant.repoId.toString()
+    || observation.repoFullName.toLowerCase() !== grant.repoFullName.toLowerCase()
+    || observation.defaultBranchRef !== grant.observation.defaultBranchRef
+    || observation.defaultBranchSha.toLowerCase() !== grant.sourceSha.toLowerCase()
+    || (observation.issue?.number ?? null) !== grant.issueNumber
+    || observation.expectedHeadRef !== grant.expectedHeadRef
+    || observation.expectedPullRequestMarker !== grant.expectedPullRequestMarker
+    || observation.expectedTreeSha?.toLowerCase() !== input.expectedTreeSha?.toLowerCase()
+    || observation.expectedCommitSha?.toLowerCase() !== input.expectedCommitSha?.toLowerCase()
+    || (grant.issueNumber !== null && !githubIssueEligible(observation.issue))
+  ) return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  if (!input.expectedTreeSha || !input.expectedCommitSha) {
+    return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  }
+  const exactCommit = observation.commit
+    && observation.commit.sha.toLowerCase() === input.expectedCommitSha.toLowerCase()
+    && observation.commit.treeSha.toLowerCase() === input.expectedTreeSha.toLowerCase()
+    && observation.commit.parentSha.toLowerCase() === grant.sourceSha.toLowerCase();
+  if (input.stepKind === "CREATE_COMMIT") {
+    if (
+      observation.headSha !== null
+      || observation.openAutopilotPullRequests.length !== 0
+      || observation.pullRequests.length !== 0
+    ) {
+      return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+    }
+    return exactCommit
+      ? { status: "VERIFIED", outputSha: observation.commit!.sha.toLowerCase(), pullRequest: null }
+      : observation.commit === null
+        ? { status: "NOT_APPLIED", outputSha: null, pullRequest: null }
+        : { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  }
+  if (!exactCommit || observation.pullRequests.length > (input.stepKind === "CREATE_PR" ? 1 : 0)) {
+    return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  }
+  if (input.stepKind === "CREATE_REF") {
+    if (observation.openAutopilotPullRequests.length !== 0 || observation.pullRequests.length !== 0) {
+      return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+    }
+    return observation.headSha === null
+      ? { status: "NOT_APPLIED", outputSha: null, pullRequest: null }
+      : observation.headSha.toLowerCase() === input.expectedCommitSha.toLowerCase()
+        ? { status: "VERIFIED", outputSha: observation.headSha.toLowerCase(), pullRequest: null }
+        : { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  }
+  if (observation.headSha?.toLowerCase() !== input.expectedCommitSha.toLowerCase()) {
+    return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  }
+  if (observation.pullRequests.length === 0) {
+    return { status: "NOT_APPLIED", outputSha: null, pullRequest: null };
+  }
+  const pullRequest = observation.pullRequests[0];
+  const openPullRequest = observation.openAutopilotPullRequests[0];
+  if (
+    pullRequest.state !== "OPEN"
+    || pullRequest.draft
+    || pullRequest.headRef !== grant.expectedHeadRef
+    || pullRequest.headSha.toLowerCase() !== input.expectedCommitSha.toLowerCase()
+    || pullRequest.baseRef !== grant.observation.defaultBranchRef
+    || pullRequest.baseSha.toLowerCase() !== grant.sourceSha.toLowerCase()
+    || pullRequest.marker !== grant.expectedPullRequestMarker
+    || pullRequest.closesIssueNumber !== grant.issueNumber
+    || observation.openAutopilotPullRequests.length !== 1
+    || openPullRequest?.number !== pullRequest.number
+    || openPullRequest?.nodeId !== pullRequest.nodeId
+    || openPullRequest?.url !== pullRequest.url
+    || openPullRequest?.headRef !== pullRequest.headRef
+    || openPullRequest?.headSha.toLowerCase() !== pullRequest.headSha.toLowerCase()
+    || openPullRequest?.baseRef !== pullRequest.baseRef
+    || openPullRequest?.baseSha.toLowerCase() !== pullRequest.baseSha.toLowerCase()
+    || openPullRequest?.marker !== pullRequest.marker
+    || openPullRequest?.closesIssueNumber !== pullRequest.closesIssueNumber
+  ) return { status: "RESULT_UNKNOWN", outputSha: null, pullRequest: null };
+  return { status: "VERIFIED", outputSha: pullRequest.headSha.toLowerCase(), pullRequest };
+}
+
+type GithubMutationStepLedgerEvidence = {
+  kind: string;
+  ordinal: number;
+  status: string;
+  generation: number;
+  inputDigest: string | null;
+  expectedTreeSha: string | null;
+  expectedCommitSha: string | null;
+  outputSha: string | null;
+  outputNumber: number | null;
+  outputNodeId: string | null;
+  outputUrl: string | null;
+  claimExpiresAt: Date | null;
+  verifiedAt: Date | null;
+};
+
+/**
+ * 최종 VERIFIED execution은 상태 문자열만 신뢰하지 않는다. 외부 mutation 순서와
+ * 각 단계의 exact output이 모두 남아 있어야만 worker 완료 근거로 사용할 수 있다.
+ */
+export function githubMutationStepLedgerVerified(
+  steps: readonly GithubMutationStepLedgerEvidence[],
+): boolean {
+  if (steps.length !== 3) return false;
+  const [commit, ref, pullRequest] = [...steps].sort((left, right) => left.ordinal - right.ordinal);
+  if (
+    commit.kind !== "CREATE_COMMIT" || commit.ordinal !== 1
+    || ref.kind !== "CREATE_REF" || ref.ordinal !== 2
+    || pullRequest.kind !== "CREATE_PR" || pullRequest.ordinal !== 3
+    || [commit, ref, pullRequest].some((step) => (
+      step.status !== "VERIFIED"
+      || step.generation <= 0
+      || !step.inputDigest
+      || step.claimExpiresAt !== null
+      || step.verifiedAt === null
+    ))
+  ) return false;
+  const expectedTreeSha = commit.expectedTreeSha?.toLowerCase() ?? null;
+  const expectedCommitSha = commit.expectedCommitSha?.toLowerCase() ?? null;
+  if (
+    !expectedTreeSha
+    || !expectedCommitSha
+    || commit.outputSha?.toLowerCase() !== expectedCommitSha
+    || commit.outputNumber !== null
+    || commit.outputNodeId !== null
+    || commit.outputUrl !== null
+  ) return false;
+  if ([ref, pullRequest].some((step) => (
+    step.inputDigest !== commit.inputDigest
+    || step.expectedTreeSha?.toLowerCase() !== expectedTreeSha
+    || step.expectedCommitSha?.toLowerCase() !== expectedCommitSha
+    || step.outputSha?.toLowerCase() !== expectedCommitSha
+  ))) return false;
+  return ref.outputNumber === null
+    && ref.outputNodeId === null
+    && ref.outputUrl === null
+    && Number.isSafeInteger(pullRequest.outputNumber)
+    && (pullRequest.outputNumber ?? 0) > 0
+    && Boolean(pullRequest.outputNodeId)
+    && Boolean(pullRequest.outputUrl);
+}
+
+export async function completeGithubMutationStep(input: {
+  executionId: string;
+  stepId: string;
+  attemptId: string;
+  generation: number;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  stepKind: AgentGithubMutationStepKind;
+  observation: AgentGithubMutationStepObservation;
+  adapterPrincipalId: string;
+  adapterRuntimeIdentity: string;
+  idempotencyKey: string;
+  now?: Date;
+  retryAttempt?: number;
+}) {
+  const now = input.now ?? new Date();
+  const completionDigest = jsonDigest({
+    executionId: input.executionId,
+    stepId: input.stepId,
+    attemptId: input.attemptId,
+    generation: input.generation,
+    workerPrincipalId: input.workerPrincipalId,
+    workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
+    stepKind: input.stepKind,
+    adapterPrincipalId: input.adapterPrincipalId,
+    adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+    observation: stepObservationJson(input.observation),
+  });
+  const replay = await prisma.agentMutationStepAttempt.findUnique({ where: { completionRequestId: input.idempotencyKey } });
+  if (replay) {
+    if (replay.id !== input.attemptId || replay.completionDigest !== completionDigest) {
+      throw new ControlPlaneError("idempotency key가 다른 mutation step completion에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    return {
+      executionId: input.executionId,
+      stepId: replay.stepId,
+      attemptId: replay.id,
+      generation: replay.generation,
+      status: replay.status as "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN",
+      duplicate: true,
+    };
+  }
+  assertFreshObservation(input.observation as unknown as AgentGithubObservation, now);
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const attempt = await tx.agentMutationStepAttempt.findUnique({
+        where: { id: input.attemptId },
+        include: { step: { include: { execution: { include: mutationStepExecutionInclude } } }, session: true },
+      });
+      if (!attempt || attempt.stepId !== input.stepId || attempt.step.executionId !== input.executionId) {
+        throw new ControlPlaneError("mutation step attempt를 찾을 수 없습니다.", 404, "MUTATION_STEP_ATTEMPT_NOT_FOUND");
+      }
+      const execution = attempt.step.execution;
+      assertMutationStepExecutionBinding({ execution, ...input, now });
+      if (
+        attempt.step.kind !== input.stepKind
+        || attempt.generation !== input.generation
+        || attempt.step.generation !== input.generation
+        || attempt.sessionId !== execution.grant.sessionId
+        || attempt.sessionId !== attempt.session.id
+        || attempt.principalId !== input.workerPrincipalId
+        || attempt.runtimeBindingDigest !== input.workerRuntimeBindingDigest
+        || attempt.adapterPrincipalId !== input.adapterPrincipalId
+        || attempt.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
+        || attempt.expiresAt <= now
+        || attempt.step.claimExpiresAt === null
+        || attempt.step.claimExpiresAt <= now
+        || !["CLAIMED", "PLANNED"].includes(attempt.status)
+        || !["CLAIMED", "PLANNED"].includes(attempt.step.status)
+      ) throw new ControlPlaneError("mutation step completion이 stale 상태입니다.", 409, "STALE_MUTATION_STEP_ATTEMPT");
+      if (input.stepKind === "CREATE_COMMIT" && attempt.step.status !== "PLANNED") {
+        throw new ControlPlaneError("CREATE_COMMIT은 durable plan 뒤에만 완료할 수 있습니다.", 409, "MUTATION_COMMIT_PLAN_REQUIRED");
+      }
+      const disposition = githubMutationStepDisposition({
+        stepKind: input.stepKind,
+        observation: input.observation,
+        grant: execution.grant,
+        expectedTreeSha: attempt.step.expectedTreeSha,
+        expectedCommitSha: attempt.step.expectedCommitSha,
+      });
+      const attemptUpdate = await tx.agentMutationStepAttempt.updateMany({
+        where: {
+          id: attempt.id,
+          generation: input.generation,
+          status: { in: ["CLAIMED", "PLANNED"] },
+          expiresAt: { gt: now },
+        },
+        data: {
+          status: disposition.status,
+          completionRequestId: input.idempotencyKey,
+          completionDigest,
+          completedAt: now,
+        },
+      });
+      const nextStepStatus = disposition.status === "NOT_APPLIED" ? "PENDING" : disposition.status;
+      const stepUpdate = await tx.agentMutationStep.updateMany({
+        where: {
+          id: attempt.step.id,
+          generation: input.generation,
+          status: { in: ["CLAIMED", "PLANNED"] },
+          claimExpiresAt: { gt: now },
+        },
+        data: {
+          status: nextStepStatus,
+          outputSha: disposition.outputSha,
+          outputNumber: disposition.pullRequest?.number ?? null,
+          outputNodeId: disposition.pullRequest?.nodeId ?? null,
+          outputUrl: disposition.pullRequest?.url ?? null,
+          lastReadbackDigest: jsonDigest(stepObservationJson(input.observation)),
+          claimExpiresAt: null,
+          verifiedAt: disposition.status === "VERIFIED" ? now : null,
+        },
+      });
+      if (attemptUpdate.count !== 1 || stepUpdate.count !== 1) {
+        throw new ControlPlaneError("mutation step completion generation CAS가 충돌했습니다.", 409, "MUTATION_STEP_CAS_CONFLICT");
+      }
+      await tx.agentMutationExecution.update({
+        where: { id: execution.id },
+        data: { status: disposition.status === "RESULT_UNKNOWN" ? "RESULT_UNKNOWN" : "IN_PROGRESS" },
+      });
+      await tx.agentRunEvent.create({
+        data: {
+          runId: execution.runId,
+          type: disposition.status === "VERIFIED"
+            ? "mutation_step_verified"
+            : disposition.status === "NOT_APPLIED"
+              ? "mutation_step_not_applied"
+              : "mutation_step_unknown",
+          generation: execution.generation,
+          actor: input.adapterPrincipalId,
+          payload: {
+            executionId: execution.id,
+            stepId: input.stepId,
+            stepKind: input.stepKind,
+            stepGeneration: input.generation,
+            attemptId: input.attemptId,
+            status: disposition.status,
+            ...(disposition.outputSha ? { outputSha: disposition.outputSha } : {}),
+            ...(disposition.pullRequest ? {
+              pullRequestNumber: disposition.pullRequest.number,
+              pullRequestUrl: disposition.pullRequest.url,
+            } : {}),
+          },
+        },
+      });
+      return {
+        executionId: execution.id,
+        stepId: input.stepId,
+        attemptId: input.attemptId,
+        generation: input.generation,
+        status: disposition.status,
+        duplicate: false,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError
+      && ["P2002", "P2034"].includes(error.code)
+      && (input.retryAttempt ?? 0) < 2
+    ) return completeGithubMutationStep({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
     throw error;
   }
 }
@@ -583,7 +1433,7 @@ export function mutationReadbackTransitionError(input: {
       ? null
       : "MUTATION_READBACK_TERMINAL_CONFLICT";
   }
-  if (!["CONSUMED", "RESULT_UNKNOWN"].includes(input.currentStatus)) {
+  if (!["CONSUMED", "IN_PROGRESS", "RESULT_UNKNOWN"].includes(input.currentStatus)) {
     return "MUTATION_READBACK_STATE_INVALID";
   }
   return null;
@@ -655,7 +1505,7 @@ export async function recordGithubMutationReadback(input: {
     return await prisma.$transaction(async (tx) => {
       const execution = await tx.agentMutationExecution.findUnique({
         where: { id: input.executionId },
-        include: { grant: { include: { observation: true, session: true } } },
+        include: { grant: { include: { observation: true, session: true } }, steps: true },
       });
       if (!execution) throw new ControlPlaneError("mutation execution을 찾을 수 없습니다.", 404, "MUTATION_EXECUTION_NOT_FOUND");
       if (
@@ -675,7 +1525,14 @@ export async function recordGithubMutationReadback(input: {
         || execution.grant.revokedAt
       ) throw new ControlPlaneError("mutation execution adapter binding이 다릅니다.", 409, "MUTATION_ADAPTER_MISMATCH");
       const disposition = githubMutationReadbackDisposition({ observation: input.observation, grant: execution.grant });
-      const { status, pullRequest } = disposition;
+      const allStepsVerified = githubMutationStepLedgerVerified(execution.steps);
+      const anyStepStarted = execution.steps.some((step) => step.generation > 0 || step.status !== "PENDING");
+      const status = disposition.status === "VERIFIED" && !allStepsVerified
+        ? "RESULT_UNKNOWN" as const
+        : disposition.status === "NOT_APPLIED" && anyStepStarted
+          ? "RESULT_UNKNOWN" as const
+          : disposition.status;
+      const pullRequest = status === "VERIFIED" ? disposition.pullRequest : null;
       const transitionError = mutationReadbackTransitionError({
         currentStatus: execution.status,
         nextStatus: status,
@@ -802,14 +1659,17 @@ export async function trustedMutationDisposition(
       runId: input.runId,
       ...(input.readbackResolution ? { generation: { lte: input.currentGeneration } } : { sessionId: input.sessionId }),
     },
-    include: { grant: true },
+    include: { grant: true, steps: true },
     orderBy: { createdAt: "desc" },
   });
   const mutationStarted = executions.some((execution) => execution.status !== "NOT_APPLIED");
   const unresolvedMutation = executions.some((execution) => (
-    execution.status !== "VERIFIED" && execution.status !== "NOT_APPLIED"
+    execution.status !== "NOT_APPLIED"
+    && (execution.status !== "VERIFIED" || !githubMutationStepLedgerVerified(execution.steps))
   ));
-  const verifiedMutation = executions.some((execution) => execution.status === "VERIFIED");
+  const verifiedMutation = executions.some((execution) => (
+    execution.status === "VERIFIED" && githubMutationStepLedgerVerified(execution.steps)
+  ));
   const outcomeCode = String(input.result.outcomeCode ?? "");
   const executionId = typeof input.result.mutationExecutionId === "string"
     ? input.result.mutationExecutionId
@@ -817,6 +1677,9 @@ export async function trustedMutationDisposition(
   if (outcomeCode === "PR_READY") {
     if (!executionId) return { mutationStarted, error: "TRUSTED_MUTATION_EVIDENCE_REQUIRED" };
     const execution = executions.find((candidate) => candidate.id === executionId);
+    if (execution?.status === "VERIFIED" && !githubMutationStepLedgerVerified(execution.steps)) {
+      return { mutationStarted, error: "TRUSTED_MUTATION_STEP_EVIDENCE_REQUIRED" };
+    }
     if (
       !execution
       || execution.status !== "VERIFIED"
