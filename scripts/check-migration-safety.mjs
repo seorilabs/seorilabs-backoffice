@@ -140,14 +140,26 @@ if (frozenBase) {
           const previous = JSON.parse(previousManifestContents.stdout);
           const {
             activeRecovery: previousRecovery = {},
+            approvedContractMigrations: previousContract = {},
             ...previousImmutable
           } = previous;
           const {
             activeRecovery: currentRecovery = {},
+            approvedContractMigrations: currentContract = {},
             ...currentImmutable
           } = manifest;
           if (canonicalJson(previousImmutable) !== canonicalJson(currentImmutable)) {
             fail("migration history manifest의 frozen 정책이 변경됐다");
+          }
+          // 새 contract 예외는 새 migration 과 함께 추가된다. 이미 배포된 예외를
+          // 뒤에서 고쳐 다른 migration 을 열어 주지는 못하게 기존 항목은 동결한다.
+          for (const [name, policy] of Object.entries(previousContract)) {
+            if (
+              !Object.hasOwn(currentContract, name)
+              || canonicalJson(currentContract[name]) !== canonicalJson(policy)
+            ) {
+              fail(`이미 등록된 contract migration 승인이 변경됐다: ${name}`);
+            }
           }
           if (
             !previousRecovery

@@ -321,4 +321,28 @@ printf "DROP TABLE \`app_owner\`;\n" > \
   "$tmp/contract_scope_leak/prisma/migrations/99999999999995_other_drop/migration.sql"
 expect_failure contract_scope_leak
 
+# 이미 배포된 contract 예외는 frozen base 비교에서 동결된다. 뒤에서 checksum 만
+# 바꿔치면 다른 migration 의 DROP 이 열릴 수 있으므로 변경 자체를 막는다.
+prepare_case contract_frozen_mutation
+git -C "$tmp/contract_frozen_mutation" init -q
+git -C "$tmp/contract_frozen_mutation" add prisma
+git -C "$tmp/contract_frozen_mutation" -c user.email=t@t -c user.name=t commit -qm base
+contract_base="$(git -C "$tmp/contract_frozen_mutation" rev-parse HEAD)"
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const name = process.argv[2];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.approvedContractMigrations[name].reason = "사후 변경";
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/contract_frozen_mutation/prisma/migration-history.json" "$approved_name"
+git -C "$tmp/contract_frozen_mutation" add prisma
+git -C "$tmp/contract_frozen_mutation" -c user.email=t@t -c user.name=t commit -qm mutate
+if MIGRATION_FROZEN_BASE="$contract_base" \
+  REPOSITORY_ROOT="$tmp/contract_frozen_mutation" \
+  "$here/check-migration-safety.sh" >/dev/null 2>&1; then
+  echo "FAIL 이미 등록된 contract 승인 변경이 통과했다" >&2
+  exit 1
+fi
+
 echo "migration safety 계약 통과"
