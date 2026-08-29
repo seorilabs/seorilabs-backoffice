@@ -107,7 +107,7 @@ const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
 const platformArtifactKind = z.enum(["TYPESCRIPT", "GDSCRIPT"]);
 const platformVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
 export const PLATFORM_AFFECTED_CONSUMERS = {
-  cohort: "backoffice-active-apps",
+  cohort: "backoffice-managed-product-apps",
   resolution: "reconcile-time",
 } as const;
 export const platformAffectedConsumersSchema = z.object({
@@ -297,6 +297,29 @@ export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
       z.literal("autopilot"),
       z.literal("platform"),
       z.literal("platform-contract"),
+    ]),
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("PLATFORM_INTEGRATION_REMEDIATION_ISSUE"),
+    planId: z.string().min(1).max(191),
+    repoId: numericId,
+    repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    sourceSha: sha40,
+    manifestDigest: sha256,
+    releaseVersion: platformVersion,
+    releaseSourceSha: sha40,
+    contractRevision: sha256,
+    integration: z.enum(["CUSTOM_HTTP", "MISSING"]),
+    artifact: platformArtifactSchema,
+    issueMarker: z.string().regex(/^<!-- seorilabs-platform-remediation:v1:\d+ -->$/),
+    title: z.string().min(1).max(180).refine((value) => !containsCredentialCandidate(value)),
+    body: z.string().min(1).max(20_000).refine((value) => !containsCredentialCandidate(value)),
+    labels: z.tuple([
+      z.literal("P1"),
+      z.literal("autopilot"),
+      z.literal("platform"),
+      z.literal("platform-remediation"),
     ]),
   }).strict(),
 ]);
