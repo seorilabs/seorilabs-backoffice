@@ -4,13 +4,17 @@ import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-rev
 import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revision-discovery-projection";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
-import { ControlPlaneError } from "@/lib/control-plane/service";
+import {
+  autoRebaseCurrentActiveConfigSource,
+  ControlPlaneError,
+  type ConfigSourceAutoRebaseNeedsInputReason,
+} from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
-export const DESIRED_STATE_BACKFILL_CONTRACT_VERSION = "desired-state-draft-backfill/v2";
-export const DESIRED_STATE_BACKFILL_MODE = "DRAFT_ONLY" as const;
+export const DESIRED_STATE_BACKFILL_CONTRACT_VERSION = "desired-state-safe-source-rebase/v3";
+export const DESIRED_STATE_BACKFILL_MODE = "DRAFT_AND_SAFE_SOURCE_REBASE" as const;
 
 const ACTOR = /^[A-Za-z0-9._:/-]{1,128}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:/-]{8,191}$/;
@@ -91,7 +95,8 @@ export type DesiredStateNeedsInputReason =
   | "DISCOVERY_OBSERVATION_MISSING"
   | "DISCOVERY_SOURCE_STALE"
   | "BUILD_TARGET_MISSING"
-  | "CONCURRENT_STATE_CHANGED";
+  | "CONCURRENT_STATE_CHANGED"
+  | ConfigSourceAutoRebaseNeedsInputReason;
 
 export interface DesiredStateCandidate {
   appId: string;
@@ -99,7 +104,17 @@ export interface DesiredStateCandidate {
   repoFullName: string;
   repoId: string | null;
   status: string;
-  configuredRevision: { id: string; revision: number; status: string } | null;
+  configuredRevision: {
+    id: string;
+    revision: number;
+    status: string;
+    sourceObservation: {
+      appId: string;
+      sourceSha: string;
+      sourceRef: string | null;
+      payloadHash: string;
+    } | null;
+  } | null;
   registration: {
     repoId: string;
     status: string;
@@ -114,6 +129,7 @@ export interface DesiredStateCandidate {
   observation: {
     id: string;
     sourceSha: string;
+    sourceRef: string | null;
     payloadHash: string;
     observedAt: Date;
   } | null;
@@ -129,6 +145,12 @@ type DesiredStateAssessment =
       outcome: "READY";
       sourceObservationId: string;
       payload: Record<string, unknown>;
+    }
+  | {
+      outcome: "SOURCE_RECONCILE";
+      revisionId: string;
+      revision: number;
+      revisionStatus: string;
     }
   | {
       outcome: "ALREADY_CONFIGURED";
@@ -147,7 +169,13 @@ export interface DesiredStateBackfillItem {
   slug: string;
   repoFullName: string;
   repoId: string | null;
-  outcome: "DRAFT_CREATED" | "ALREADY_CONFIGURED" | "NEEDS_INPUT" | "FAILED";
+  outcome:
+    | "DRAFT_CREATED"
+    | "SOURCE_RECONCILE_READY"
+    | "SOURCE_REBASED_AND_ACTIVATED"
+    | "ALREADY_CONFIGURED"
+    | "NEEDS_INPUT"
+    | "FAILED";
   reason: DesiredStateNeedsInputReason | "INTERNAL_ERROR" | null;
   detail: string | null;
   sourceObservationId: string | null;
@@ -167,10 +195,11 @@ export interface DesiredStateBackfillSummary {
   mode: typeof DESIRED_STATE_BACKFILL_MODE;
   activeApps: number;
   draftCreated: number;
+  sourceRebasedAndActivated: number;
   alreadyConfigured: number;
   needsInput: number;
   failed: number;
-  activationAttempted: false;
+  activationAttempted: boolean;
   providerMutationAttempted: false;
   deferredHumanOrProviderFields: readonly [
     "PROJECT_BLUEPRINT_INCOMPLETE",
@@ -262,8 +291,24 @@ export function assessDesiredStateCandidate(
     return needsInput("DISCOVERY_SOURCE_STALE", registration.lastDiscoveryReason);
   }
   if (candidate.configuredRevision) {
+    const configuredSource = candidate.configuredRevision.sourceObservation;
+    if (
+      candidate.configuredRevision.status === "ACTIVE"
+      && configuredSource
+      && configuredSource.appId === candidate.appId
+      && configuredSource.sourceSha === observation.sourceSha
+      && configuredSource.sourceRef === observation.sourceRef
+      && configuredSource.payloadHash === observation.payloadHash
+    ) {
+      return {
+        outcome: "ALREADY_CONFIGURED",
+        revisionId: candidate.configuredRevision.id,
+        revision: candidate.configuredRevision.revision,
+        revisionStatus: candidate.configuredRevision.status,
+      };
+    }
     return {
-      outcome: "ALREADY_CONFIGURED",
+      outcome: "SOURCE_RECONCILE",
       revisionId: candidate.configuredRevision.id,
       revision: candidate.configuredRevision.revision,
       revisionStatus: candidate.configuredRevision.status,
@@ -284,12 +329,30 @@ const desiredStateCandidateSelect = Prisma.validator<Prisma.AppSelect>()({
     where: { status: { in: ["DRAFT", "ACTIVE"] } },
     orderBy: { revision: "desc" },
     take: 1,
-    select: { id: true, revision: true, status: true },
+    select: {
+      id: true,
+      revision: true,
+      status: true,
+      sourceObservation: {
+        select: {
+          appId: true,
+          sourceSha: true,
+          sourceRef: true,
+          payloadHash: true,
+        },
+      },
+    },
   },
   discoveryObservations: {
     orderBy: latestDiscoveryObservationOrder(),
     take: 1,
-    select: { id: true, sourceSha: true, payloadHash: true, observedAt: true },
+    select: {
+      id: true,
+      sourceSha: true,
+      sourceRef: true,
+      payloadHash: true,
+      observedAt: true,
+    },
   },
   buildTargets: {
     select: { targetKey: true, market: true, observedSha: true },
@@ -361,7 +424,7 @@ function baseItem(candidate: DesiredStateCandidate): Omit<DesiredStateBackfillIt
 
 function assessmentItem(
   candidate: DesiredStateCandidate,
-  assessment: Exclude<DesiredStateAssessment, { outcome: "READY" }>,
+  assessment: Exclude<DesiredStateAssessment, { outcome: "READY" | "SOURCE_RECONCILE" }>,
 ): DesiredStateBackfillItem {
   if (assessment.outcome === "ALREADY_CONFIGURED") {
     return {
@@ -391,10 +454,13 @@ function summarize(items: DesiredStateBackfillItem[]): DesiredStateBackfillSumma
     mode: DESIRED_STATE_BACKFILL_MODE,
     activeApps: items.length,
     draftCreated: items.filter((item) => item.outcome === "DRAFT_CREATED").length,
+    sourceRebasedAndActivated: items.filter((item) => (
+      item.outcome === "SOURCE_REBASED_AND_ACTIVATED"
+    )).length,
     alreadyConfigured: items.filter((item) => item.outcome === "ALREADY_CONFIGURED").length,
     needsInput: items.filter((item) => item.outcome === "NEEDS_INPUT").length,
     failed: items.filter((item) => item.outcome === "FAILED").length,
-    activationAttempted: false,
+    activationAttempted: items.some((item) => item.outcome === "SOURCE_REBASED_AND_ACTIVATED"),
     providerMutationAttempted: false,
     deferredHumanOrProviderFields: [
       "PROJECT_BLUEPRINT_INCOMPLETE",
@@ -525,6 +591,17 @@ async function createDraftForCandidate(
       };
     }
     const assessment = assessDesiredStateCandidate(current);
+    if (assessment.outcome === "SOURCE_RECONCILE") {
+      return {
+        ...baseItem(current),
+        outcome: "NEEDS_INPUT",
+        reason: "CONCURRENT_STATE_CHANGED",
+        detail: "config revision created during draft backfill",
+        sourceObservationId: current.observation?.id ?? null,
+        configRevisionId: assessment.revisionId,
+        revision: assessment.revision,
+      };
+    }
     if (assessment.outcome !== "READY") return assessmentItem(current, assessment);
     const payloadHash = jsonDigest(assessment.payload as JsonValue);
     const revision = await createDraftRevisionInTransaction(tx, {
@@ -570,8 +647,78 @@ async function createDraftForCandidate(
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
+const SOURCE_RECONCILE_STATE_CHANGE_CODES = new Set([
+  "APP_NOT_FOUND",
+  "CONFIG_SOURCE_APP_MISMATCH",
+  "CONFIG_SOURCE_NOT_CURRENT",
+  "CONFIG_SOURCE_NOT_READY",
+  "CONFIG_SOURCE_PROVENANCE_INVALID",
+  "REVISION_CONFLICT",
+]);
+
+async function reconcileConfigSourceForCandidate(
+  candidate: DesiredStateCandidate,
+  actor: string,
+  signingKey: string,
+): Promise<DesiredStateBackfillItem> {
+  if (!candidate.repoId) {
+    return {
+      ...baseItem(candidate),
+      outcome: "NEEDS_INPUT",
+      reason: "CONCURRENT_STATE_CHANGED",
+      detail: "app repository binding missing",
+      sourceObservationId: candidate.observation?.id ?? null,
+      configRevisionId: candidate.configuredRevision?.id ?? null,
+      revision: candidate.configuredRevision?.revision ?? null,
+    };
+  }
+  try {
+    const result = await autoRebaseCurrentActiveConfigSource({
+      repoId: BigInt(candidate.repoId),
+      actor,
+      signingKey,
+    });
+    if (result.outcome === "NEEDS_INPUT") {
+      return {
+        ...baseItem(candidate),
+        outcome: "NEEDS_INPUT",
+        reason: result.reason,
+        detail: null,
+        sourceObservationId: result.sourceObservation.id,
+        configRevisionId: result.revision?.id ?? null,
+        revision: result.revision?.revision ?? null,
+      };
+    }
+    return {
+      ...baseItem(candidate),
+      outcome: result.outcome === "ALREADY_CURRENT"
+        ? "ALREADY_CONFIGURED"
+        : "SOURCE_REBASED_AND_ACTIVATED",
+      reason: null,
+      detail: result.duplicate ? "IDEMPOTENT_REPLAY" : null,
+      sourceObservationId: result.sourceObservation.id,
+      configRevisionId: result.revision.id,
+      revision: result.revision.revision,
+    };
+  } catch (error) {
+    if (error instanceof ControlPlaneError && SOURCE_RECONCILE_STATE_CHANGE_CODES.has(error.code)) {
+      return {
+        ...baseItem(candidate),
+        outcome: "NEEDS_INPUT",
+        reason: "CONCURRENT_STATE_CHANGED",
+        detail: error.code,
+        sourceObservationId: candidate.observation?.id ?? null,
+        configRevisionId: candidate.configuredRevision?.id ?? null,
+        revision: candidate.configuredRevision?.revision ?? null,
+      };
+    }
+    throw error;
+  }
+}
+
 export async function runDesiredStateDraftBackfill(
   input: DesiredStateBackfillInvocation,
+  options: { signingKey: string },
 ): Promise<DesiredStateBackfillRunResult> {
   if (!ACTOR.test(input.actor)) throw new ControlPlaneError("actor가 유효하지 않습니다.", 400, "ACTOR_INVALID");
   if (!IDEMPOTENCY_KEY.test(input.idempotencyKey)) {
@@ -619,6 +766,26 @@ export async function runDesiredStateDraftBackfill(
   const items: DesiredStateBackfillItem[] = [];
   for (const candidate of candidates) {
     const assessment = assessDesiredStateCandidate(candidate);
+    if (assessment.outcome === "SOURCE_RECONCILE") {
+      try {
+        items.push(await reconcileConfigSourceForCandidate(
+          candidate,
+          input.actor,
+          options.signingKey,
+        ));
+      } catch {
+        items.push({
+          ...baseItem(candidate),
+          outcome: "FAILED",
+          reason: "INTERNAL_ERROR",
+          detail: null,
+          sourceObservationId: candidate.observation?.id ?? null,
+          configRevisionId: assessment.revisionId,
+          revision: assessment.revision,
+        });
+      }
+      continue;
+    }
     if (assessment.outcome !== "READY") {
       items.push(assessmentItem(candidate, assessment));
       continue;
@@ -666,11 +833,12 @@ export async function runDesiredStateDraftBackfill(
         payload: {
           activeApps: summary.activeApps,
           draftCreated: summary.draftCreated,
+          sourceRebasedAndActivated: summary.sourceRebasedAndActivated,
           alreadyConfigured: summary.alreadyConfigured,
           needsInput: summary.needsInput,
           failed: summary.failed,
           needsInputByReason,
-          activationAttempted: false,
+          activationAttempted: summary.activationAttempted,
           providerMutationAttempted: false,
           trigger: input.trigger,
           sourceSha: input.sourceSha,
@@ -717,6 +885,16 @@ export async function getDesiredStateBackfillSummary() {
           detail: null,
           sourceObservationId: assessment.sourceObservationId,
         }
+      : assessment.outcome === "SOURCE_RECONCILE"
+        ? {
+            ...baseItem(candidate),
+            outcome: "SOURCE_RECONCILE_READY" as const,
+            reason: null,
+            detail: assessment.revisionStatus,
+            sourceObservationId: candidate.observation?.id ?? null,
+            configRevisionId: assessment.revisionId,
+            revision: assessment.revision,
+          }
       : assessmentItem(candidate, assessment);
   });
   const classificationCounts = {
@@ -743,6 +921,9 @@ export async function getDesiredStateBackfillSummary() {
     classificationCounts,
     activeApps: candidates.length,
     readyForDraft: items.filter((item) => item.outcome === "READY").length,
+    readyForSourceReconcile: items.filter((item) => (
+      item.outcome === "SOURCE_RECONCILE_READY"
+    )).length,
     alreadyConfigured: items.filter((item) => item.outcome === "ALREADY_CONFIGURED").length,
     needsInput: items.filter((item) => item.outcome === "NEEDS_INPUT").length,
     needsInputByReason,

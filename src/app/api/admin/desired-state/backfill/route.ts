@@ -22,7 +22,9 @@ export async function POST(request: Request) {
       sourceSha: request.headers.get("x-seorilabs-source-sha"),
       now: new Date(),
     });
-    const result = await runDesiredStateDraftBackfill(invocation);
+    const result = await runDesiredStateDraftBackfill(invocation, {
+      signingKey: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
+    });
     return NextResponse.json(result, {
       status: result.state === "busy" ? 409 : result.ok ? 200 : 500,
       headers: desiredStateBackfillReadbackHeaders(result),

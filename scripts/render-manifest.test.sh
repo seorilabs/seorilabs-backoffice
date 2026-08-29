@@ -288,7 +288,7 @@ if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q 'x-seorilabs-source-sha: __BACKOFFICE_IMAGE_TAG__' "$catchup_job" &&
    grep -q -- '-D - -o /dev/null' "$catchup_job" &&
    grep -q '/dev/termination-log' "$catchup_job" &&
-   grep -q 'desired-state-draft-backfill/v2' "$catchup_job" &&
+   grep -q 'desired-state-safe-source-rebase/v3' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
    grep -q 'automation/project-projections' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
@@ -326,7 +326,7 @@ else
   ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
 fi
 
-echo "== desired-state DRAFT backfill 스케줄 =="
+echo "== desired-state DRAFT와 safe source rebase 스케줄 =="
 desired_state_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-desired-state-backfill/ { print }' "$scheduler_cronjobs")"
 if grep -q 'schedule: "27 \* \* \* \*"' <<<"$desired_state_doc" &&
    grep -q 'concurrencyPolicy: Forbid' <<<"$desired_state_doc" &&
@@ -335,7 +335,7 @@ if grep -q 'schedule: "27 \* \* \* \*"' <<<"$desired_state_doc" &&
    ! grep -q 'x-seorilabs-source-sha' <<<"$desired_state_doc" &&
    grep -q 'automountServiceAccountToken: false' <<<"$desired_state_doc" &&
    grep -q 'readOnlyRootFilesystem: true' <<<"$desired_state_doc"; then
-  ok "desired-state backfill은 classification 이후 DRAFT만 직렬 생성"
+  ok "desired-state backfill은 classification 이후 DRAFT와 safe source rebase를 직렬 실행"
 else
   ng "desired-state backfill schedule 또는 최소권한 경계가 깨졌다"
 fi

@@ -41,7 +41,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
 | `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
 | `POST` | `/api/control-plane/config-revisions/discovery-draft` | `mode=DRAFT_ONLY`에서 revision 0/no-import 또는 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
-| `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
+| `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / config가 없으면 exact discovery market `DRAFT`, valid ACTIVE의 source만 바뀌었으면 동일 payload의 새 revision을 원자적으로 자동 활성화 |
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류·product identity 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
@@ -85,7 +85,8 @@ caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revisi
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
 모두 0건이거나 append-only import/parity 증거가 있는 latest legacy DRAFT에만 허용된다. revision 0 경로는
 `PAUSED/DEPRECATED` product inventory도 누락하지 않지만, exact current discovery와 BuildTarget만 사용한다.
-두 경로 모두 `DRAFT_ONLY`이며 법적/provider/free-text/localization/asset/build 값을 복사하거나 추측하지 않는다.
+수동 rebase와 discovery projection은 모두 `DRAFT_ONLY`이며 법적/provider/free-text/localization/asset/build
+값을 추측하지 않는다. 아래 중앙 scheduler의 자동 활성화는 별도 source-only 계약으로 제한한다.
 
 Android build-only 권한은 ConfigRevision의 `build.workflowBundleSha` 주장만으로 열리지 않는다.
 같은 revision에 `build.workflowBundleDigest`를 `sha256:` 형식으로 고정하고, 별도 immutable registry에서
@@ -527,7 +528,7 @@ custom property와 조직 ruleset에 필요한 exact grant/event의 누락을 �
 그 권한을 가지고 있다는 readback일 뿐이며 실행 승인, 설정 변경 또는 mutation 성공을 뜻하지 않는다.
 이 단계에서 GitHub에는 installation/repository GET만 수행한다.
 
-## 중앙 desired-state DRAFT backfill
+## 중앙 desired-state DRAFT와 safe source rebase
 
 hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 cohort로 고정한다. repoId가 없는
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
@@ -538,10 +539,18 @@ registration과 run은 `repository-discovery/v10`을 함께 저장하므로 lega
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
 
-이 worker와 API에는 activation 호출과 provider/GitHub adapter가 없다. locale을 알 수 없으면 빈 목록으로
-두며 localization 문구, ProjectBlueprint의 조직/folder/billing/project, compliance, StoreAsset checksum은
-source/provider evidence가 완전하지 않은 한 만들지 않는다. 특히 법적 선언, 계정 소유권, 결제·세금,
-심사 제출과 공개 배포 승인은 자동 생성하거나 활성화하지 않는다. `/settings`는 repository classification,
+기존 ACTIVE가 latest discovery보다 오래된 경우에는 같은 transaction에서 MANAGED PRODUCT_APP 등록,
+default-branch exact discovery, current-SHA BuildTarget을 다시 잠가 읽는다. 기존 ACTIVE snapshot의 HMAC,
+revision identity, payload digest가 모두 유효하고 latest DRAFT를 포함한 desired payload 전체 digest와 enabled
+market 집합이 그대로일 때만 source-only immutable revision을 만들고 `DRAFT → ACTIVE` CAS를 수행한다.
+같은 source observation은 contract unique key와 deterministic activation key로 한 번만 처리한다. payload,
+BuildTarget market, legacy DRAFT 또는 snapshot이 다르면 기존 DRAFT/ACTIVE를 변경하지 않고 `NEEDS_INPUT`으로
+남긴다. audit에는 변경 0건과 source/revision 공개 identity만 기록하며 provider execution, 법적·결제·심사,
+공개 승인 원장은 건드리지 않는다.
+
+locale을 알 수 없으면 빈 목록으로 두며 localization 문구, ProjectBlueprint의 조직/folder/billing/project,
+compliance, StoreAsset checksum은 source/provider evidence가 완전하지 않은 한 새로 만들지 않는다. 특히 법적
+선언, 계정 소유권, 결제·세금, 심사 제출과 공개 배포 승인은 자동 생성하지 않는다. `/settings`는 repository classification,
 DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다. 같은 설정 화면과 internal API는 동일한 strict
 validator와 transaction service를 사용한다. nullable expand column의 `classificationDecisionVersion=null`은
 revision `0`으로만 해석하며 분류 결정은 이 revision CAS와 idempotency
@@ -566,7 +575,7 @@ null로 되돌리지 않는다. 대신 `PRODUCT_SOURCE_CANDIDATE_MISSING`,
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.
 두 번의 terminal readback 뒤에만 중앙 DRAFT backfill을 실행하며 세 단계 중 하나라도 실패하면 catch-up Job과
-배포가 실패한다. `desired-state-draft-backfill/v2`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
+배포가 실패한다. `desired-state-safe-source-rebase/v3`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
 `x-seorilabs-source-sha`로 전달한다. 배포 occurrence key와 request hash는 이 SHA, 고정 actor,
 `DEPLOY_CATCH_UP` trigger에 결합되므로 동일 SHA 재시도만 기존 run을 replay하고 같은 UTC hour의 다른 SHA는
 새 run을 만든다. hourly Cron은 source SHA가 없는 별도 `HOURLY_CRON` occurrence key를 사용한다.

@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   await prisma.desiredStateBackfillRun.deleteMany({ where: { id: { in: [...IDS] } } });
   try {
     const common = {
-      contractVersion: "desired-state-draft-backfill/v2",
+      contractVersion: "desired-state-safe-source-rebase/v3",
       actor: "deploy:desired-state-backfill",
       status: "COMPLETED" as const,
       summary: { failed: 0 },
