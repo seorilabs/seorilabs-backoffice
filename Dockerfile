@@ -40,7 +40,9 @@ ENV DATABASE_URL="mysql://build:build@127.0.0.1:3306/build"
 # node 힙 상한으로 피크 억제.
 ENV NODE_OPTIONS=--max-old-space-size=2048
 RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
-  pnpm prisma generate && pnpm build
+  pnpm prisma generate \
+  && pnpm build \
+  && sh scripts/prune-standalone-prisma-engines.sh .next/standalone
 # data ns CronJob 용 인덱서/라이터 엔트리를 단일 CJS 로 번들(@prisma/client 는 external).
 RUN pnpm build:scripts
 
