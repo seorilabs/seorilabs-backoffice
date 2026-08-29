@@ -2032,25 +2032,26 @@ model AgentLease {
 // public sessionId는 credential이 아니며 worker bearer 대신 사용할 수 없다. 실제 권한은
 // seori-auth helper의 workload identity와 이 immutable run binding을 함께 검증한다.
 model AgentWorkerSession {
-  id                   String                   @id @db.VarChar(64)
-  leaseId              String                   @unique
-  lease                AgentLease               @relation(fields: [leaseId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "agent_worker_session_lease_id_fkey")
+  id                   String                     @id @db.VarChar(64)
+  leaseId              String                     @unique
+  lease                AgentLease                 @relation(fields: [leaseId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "agent_worker_session_lease_id_fkey")
   runId                String
   generation           Int
-  principalId          String                   @db.VarChar(128)
-  runtimeBindingDigest String                   @db.Char(64)
+  principalId          String                     @db.VarChar(128)
+  runtimeBindingDigest String                     @db.Char(64)
   repoId               BigInt
-  repoFullName         String                   @db.VarChar(191)
+  repoFullName         String                     @db.VarChar(191)
   issueNumber          Int?
-  sourceSha            String                   @db.Char(40)
-  expiresAt            DateTime                 @db.DateTime(3)
-  heartbeatAt          DateTime                 @db.DateTime(3)
-  revokedAt            DateTime?                @db.DateTime(3)
-  settledAt            DateTime?                @db.DateTime(3)
-  createdAt            DateTime                 @default(now()) @db.DateTime(3)
-  updatedAt            DateTime                 @updatedAt
+  sourceSha            String                     @db.Char(40)
+  expiresAt            DateTime                   @db.DateTime(3)
+  heartbeatAt          DateTime                   @db.DateTime(3)
+  revokedAt            DateTime?                  @db.DateTime(3)
+  settledAt            DateTime?                  @db.DateTime(3)
+  createdAt            DateTime                   @default(now()) @db.DateTime(3)
+  updatedAt            DateTime                   @updatedAt
   observations         AgentGithubObservation[]
   grants               AgentActionGrant[]
+  mutationStepAttempts AgentMutationStepAttempt[]
 
   @@unique([runId, generation], map: "agent_worker_session_run_generation_key")
   @@index([principalId, expiresAt], map: "agent_worker_session_principal_expiry_idx")
@@ -2141,9 +2142,9 @@ model AgentActionGrant {
   @@map("agent_action_grant")
 }
 
-// 현재 row는 shadow composite attempt의 시작과 readback을 기록한다. 실제 READY_PR activation은
-// CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable ledger가 도입된 뒤에만 가능하다. 이후 worker settlement는
-// trusted adapter가 별도 attestation으로 기록한 VERIFIED readback만 PR_READY 근거로 사용할 수 있다.
+// execution은 CREATE_COMMIT/CREATE_REF/CREATE_PR durable step ledger의 소유자다.
+// worker settlement는 세 단계와 trusted adapter가 별도 attestation으로 기록한 최종 VERIFIED
+// readback이 모두 일치할 때만 PR_READY 근거로 사용할 수 있다.
 model AgentMutationExecution {
   id                     String                  @id @default(cuid())
   grantId                String                  @unique(map: "agent_mutation_execution_grant_id_key")
@@ -2171,10 +2172,73 @@ model AgentMutationExecution {
   createdAt              DateTime                @default(now()) @db.DateTime(3)
   updatedAt              DateTime                @updatedAt
   readbacks              AgentMutationReadback[]
+  steps                  AgentMutationStep[]
 
   @@index([runId, generation, status], map: "agent_mutation_execution_run_gen_status_idx")
   @@index([sessionId, status], map: "agent_mutation_execution_session_status_idx")
   @@map("agent_mutation_execution")
+}
+
+// READY_PR mutation은 외부에 보이는 순서대로 CREATE_COMMIT -> CREATE_REF ->
+// CREATE_PR 세 단계만 허용한다. 각 단계의 generation과 status는 provider write와
+// 별도로 영속화되어 runtime 강제 종료 뒤에도 readback부터 재개할 수 있다.
+model AgentMutationStep {
+  id                 String                     @id @default(cuid())
+  executionId        String
+  execution          AgentMutationExecution     @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_step_execution_id_fkey")
+  kind               String                     @db.VarChar(32)
+  ordinal            Int
+  status             String                     @default("PENDING") @db.VarChar(32)
+  generation         Int                        @default(0)
+  inputDigest        String?                    @db.Char(64)
+  expectedTreeSha    String?                    @db.Char(40)
+  expectedCommitSha  String?                    @db.Char(40)
+  outputSha          String?                    @db.Char(40)
+  outputNumber       Int?
+  outputNodeId       String?                    @db.VarChar(191)
+  outputUrl          String?                    @db.VarChar(2048)
+  lastReadbackDigest String?                    @db.Char(64)
+  claimExpiresAt     DateTime?                  @db.DateTime(3)
+  verifiedAt         DateTime?                  @db.DateTime(3)
+  createdAt          DateTime                   @default(now()) @db.DateTime(3)
+  updatedAt          DateTime                   @updatedAt
+  attempts           AgentMutationStepAttempt[]
+
+  @@unique([executionId, kind], map: "agent_mutation_step_execution_kind_key")
+  @@unique([executionId, ordinal], map: "agent_mutation_step_execution_ordinal_key")
+  @@index([status, claimExpiresAt], map: "agent_mutation_step_status_expiry_idx")
+  @@map("agent_mutation_step")
+}
+
+// requestId는 HTTP 재전송 멱등키이고 generation은 해당 step의 CAS 세대다.
+// claim/plan/completion은 같은 session, runtime fingerprint, adapter identity에
+// 묶이며 capability나 provider token을 저장하지 않는다.
+model AgentMutationStepAttempt {
+  id                     String             @id @default(cuid())
+  stepId                 String
+  step                   AgentMutationStep  @relation(fields: [stepId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_step_attempt_step_id_fkey")
+  sessionId              String             @db.VarChar(64)
+  session                AgentWorkerSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_step_attempt_session_id_fkey")
+  generation             Int
+  principalId            String             @db.VarChar(128)
+  runtimeBindingDigest   String             @db.Char(64)
+  adapterPrincipalId     String             @db.VarChar(128)
+  adapterRuntimeIdentity String             @db.VarChar(191)
+  requestId              String             @unique(map: "agent_mutation_step_attempt_request_id_key") @db.VarChar(191)
+  bindingDigest          String             @db.Char(64)
+  status                 String             @default("CLAIMED") @db.VarChar(32)
+  expiresAt              DateTime           @db.DateTime(3)
+  planRequestId          String?            @unique(map: "agent_mutation_step_attempt_plan_request_id_key") @db.VarChar(191)
+  planDigest             String?            @db.Char(64)
+  completionRequestId    String?            @unique(map: "agent_mutation_step_attempt_completion_request_id_key") @db.VarChar(191)
+  completionDigest       String?            @db.Char(64)
+  completedAt            DateTime?          @db.DateTime(3)
+  createdAt              DateTime           @default(now()) @db.DateTime(3)
+
+  @@unique([stepId, generation], map: "agent_mutation_step_attempt_generation_key")
+  @@index([sessionId, expiresAt], map: "agent_mutation_step_attempt_session_expiry_idx")
+  @@index([status, expiresAt], map: "agent_mutation_step_attempt_status_expiry_idx")
+  @@map("agent_mutation_step_attempt")
 }
 
 model AgentMutationReadback {

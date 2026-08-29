@@ -84,11 +84,18 @@ function configuredTrustedAdapter(): {
 }
 
 export function trustedMutationAdapterConfigured(): boolean {
-  return trustedGithubStepLedgerImplemented() && configuredTrustedAdapter() !== null;
+  return trustedGithubStepLedgerImplemented()
+    && trustedGithubRuntimeCanaryApproved()
+    && configuredTrustedAdapter() !== null;
 }
 
-/** CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable consume/readback가 도입되기 전에는 READY_PR을 열지 않는다. */
+/** CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable CAS, idempotency, readback ledger 구현 여부다. */
 export function trustedGithubStepLedgerImplemented(): boolean {
+  return true;
+}
+
+/** 실제 GitHub canary와 replicas 승인은 별도 운영 gate로 계속 fail-closed한다. */
+export function trustedGithubRuntimeCanaryApproved(): boolean {
   return false;
 }
 

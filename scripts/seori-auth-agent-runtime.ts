@@ -15,6 +15,7 @@ import {
 } from "@/lib/control-plane/contracts";
 import {
   executeGithubReadyPr,
+  recoverGithubReadyPr,
   type GithubIssueState,
   type GithubMutationControlPlane,
   type GithubPullRequestState,
@@ -26,7 +27,7 @@ import {
   type ScopedGithubTokenIssuer,
 } from "@/lib/control-plane/github-operation-token";
 import { signAgentAdapterAttestation } from "@/lib/control-plane/agent-adapter-attestation";
-import type { JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   agentKindForWorkerPrincipal,
   assertPublicAgentResponse,
@@ -44,7 +45,7 @@ const RESPONSE_LIMIT = 512 * 1024;
 const FIXED_ROOT = process.env.SEORI_AUTH_AGENT_RUNTIME_ROOT?.trim() || "/var/run/seori-auth-agent-runtime";
 // 동일 OS UID의 모델 프로세스를 native peer attestation 없이 구분할 수 없으므로 runtime은 mTLS만 제공한다.
 const transport = z.literal("mtls").parse(process.env.SEORI_AUTH_AGENT_TRANSPORT?.trim());
-// 외부 mutation step ledger가 구현되기 전에는 manifest 오설정으로도 READY_PR을 실행할 수 없다.
+// durable step ledger 구현과 별개로 실제 GitHub canary 승인이 끝날 때까지 runtime은 fail-closed다.
 const READY_PR_RUNTIME_OPERATIONAL = false as const;
 const backofficeOrigin = parseExactHttpsOrigin(process.env.SEORI_BACKOFFICE_ORIGIN?.trim() || "");
 const adapterPrincipalId = process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() || "";
@@ -63,8 +64,71 @@ const authorizeResponseSchema = z.object({
     expectedHeadRef: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,240}$/),
     expectedPullRequestMarker: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/),
     expiresAt: z.coerce.date(),
+    commitDate: z.coerce.date(),
     status: z.string().min(1).max(32),
-    writeDisposition: z.enum(["EXECUTE_ONCE", "READBACK_ONLY"]),
+    writeDisposition: z.literal("STEP_LEDGER"),
+    duplicate: z.boolean(),
+  }).strict(),
+}).strict();
+
+const recoveryResponseSchema = z.object({
+  ok: z.literal(true),
+  recovery: z.object({
+    executionId: z.string().min(1).max(191),
+    status: z.string().min(1).max(32),
+    repoId: z.string().regex(/^[1-9]\d{0,15}$/),
+    repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    issueNumber: z.number().int().positive().nullable(),
+    sourceSha: z.string().regex(/^[0-9a-f]{40}$/i),
+    expectedHeadRef: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,240}$/),
+    expectedPullRequestMarker: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/),
+    duplicate: z.boolean(),
+  }).strict(),
+}).strict();
+
+const stepClaimResponseSchema = z.object({
+  ok: z.literal(true),
+  step: z.object({
+    executionId: z.string().min(1).max(191),
+    stepId: z.string().min(1).max(191),
+    stepKind: z.enum(["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]),
+    stepStatus: z.string().min(1).max(32),
+    generation: z.number().int().nonnegative(),
+    attemptId: z.string().min(1).max(191).nullable(),
+    expiresAt: z.coerce.date().nullable(),
+    expectedTreeSha: z.string().regex(/^[0-9a-f]{40}$/i).nullable(),
+    expectedCommitSha: z.string().regex(/^[0-9a-f]{40}$/i).nullable(),
+    expectedHeadRef: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,240}$/),
+    expectedPullRequestMarker: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/),
+    sourceSha: z.string().regex(/^[0-9a-f]{40}$/i),
+    commitDate: z.coerce.date(),
+    writeDisposition: z.enum(["EXECUTE_ONCE", "READBACK_THEN_EXECUTE", "READBACK_ONLY", "ALREADY_VERIFIED"]),
+    duplicate: z.boolean(),
+  }).strict(),
+}).strict();
+
+const stepPlanResponseSchema = z.object({
+  ok: z.literal(true),
+  plan: z.object({
+    executionId: z.string().min(1).max(191),
+    stepId: z.string().min(1).max(191),
+    attemptId: z.string().min(1).max(191),
+    generation: z.number().int().positive(),
+    status: z.string().min(1).max(32),
+    expectedTreeSha: z.string().regex(/^[0-9a-f]{40}$/i),
+    expectedCommitSha: z.string().regex(/^[0-9a-f]{40}$/i),
+    duplicate: z.boolean(),
+  }).strict(),
+}).strict();
+
+const stepCompletionResponseSchema = z.object({
+  ok: z.literal(true),
+  completion: z.object({
+    executionId: z.string().min(1).max(191),
+    stepId: z.string().min(1).max(191),
+    attemptId: z.string().min(1).max(191),
+    generation: z.number().int().positive(),
+    status: z.enum(["VERIFIED", "NOT_APPLIED", "RESULT_UNKNOWN"]),
     duplicate: z.boolean(),
   }).strict(),
 }).strict();
@@ -78,6 +142,9 @@ const readbackResponseSchema = z.object({
 
 const claimBodySchema = z.object({
   leaseSeconds: z.number().int().min(30).max(300).default(300),
+}).strict();
+const recoveryRequestSchema = z.object({
+  sessionId: z.string().regex(/^agent-session:[A-Za-z0-9._:/-]{1,190}$/),
 }).strict();
 
 function asJson(value: unknown): JsonValue {
@@ -256,34 +323,34 @@ class OctokitGithubReadyPrPort implements GithubReadyPrPort {
     }
   }
 
-  async applyReadyPr(input: {
+  async getCommit(repoFullName: string, sha: string): Promise<{
+    sha: string;
+    treeSha: string;
+    parentSha: string;
+  } | null> {
+    try {
+      const result = await this.octokit.rest.git.getCommit({
+        ...this.split(repoFullName),
+        commit_sha: sha,
+      });
+      if (result.data.parents.length !== 1) throw new Error("SEORI_GITHUB_COMMIT_PARENT_INVALID");
+      return {
+        sha: result.data.sha,
+        treeSha: result.data.tree.sha,
+        parentSha: result.data.parents[0].sha,
+      };
+    } catch (error) {
+      if (typeof error === "object" && error && "status" in error && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async createTree(input: {
     repoFullName: string;
     sourceSha: string;
-    expectedHeadRef: string;
-    expectedMarker: string;
-    issueNumber: number | null;
-    title: string;
-    body: string;
-    commitMessage: string;
     files: Array<{ path: string; content: string; mode: "100644" | "100755" }>;
-  }): Promise<void> {
+  }): Promise<{ sha: string }> {
     const binding = this.split(input.repoFullName);
-    const [repository, existingRef] = await Promise.all([
-      this.getRepository(input.repoFullName),
-      this.getRef(input.repoFullName, input.expectedHeadRef),
-    ]);
-    if (repository.defaultBranchSha.toLowerCase() !== input.sourceSha || existingRef) {
-      throw new Error("SEORI_GITHUB_WRITE_PRECONDITION_CHANGED");
-    }
-    if (input.issueNumber !== null) {
-      const issue = await this.getIssue(input.repoFullName, input.issueNumber);
-      const labels = issue.labels.map((label) => label.toLowerCase());
-      if (
-        issue.state !== "OPEN"
-        || !labels.includes("autopilot")
-        || labels.some((label) => label === "blocked" || label === "no-autopilot" || label.startsWith("approval:"))
-      ) throw new Error("SEORI_GITHUB_ISSUE_NO_LONGER_ELIGIBLE");
-    }
     const baseCommit = await this.octokit.rest.git.getCommit({ ...binding, commit_sha: input.sourceSha });
     const tree = await this.octokit.rest.git.createTree({
       ...binding,
@@ -296,28 +363,54 @@ class OctokitGithubReadyPrPort implements GithubReadyPrPort {
       })),
     });
     if (tree.data.sha === baseCommit.data.tree.sha) throw new Error("SEORI_GITHUB_NO_CHANGES");
+    return { sha: tree.data.sha };
+  }
+
+  async createCommit(input: {
+    repoFullName: string;
+    sourceSha: string;
+    treeSha: string;
+    message: string;
+    date: Date;
+  }): Promise<{ sha: string }> {
+    const binding = this.split(input.repoFullName);
+    const identity = {
+      name: "Seorilabs Automation",
+      email: "automation@seorilabs.com",
+      date: input.date.toISOString(),
+    };
     const commit = await this.octokit.rest.git.createCommit({
       ...binding,
-      message: input.commitMessage,
-      tree: tree.data.sha,
+      message: input.message,
+      tree: input.treeSha,
       parents: [input.sourceSha],
+      author: identity,
+      committer: identity,
     });
+    return { sha: commit.data.sha };
+  }
+
+  async createRef(input: { repoFullName: string; ref: string; sha: string }): Promise<void> {
     await this.octokit.rest.git.createRef({
-      ...binding,
-      ref: input.expectedHeadRef,
-      sha: commit.data.sha,
+      ...this.split(input.repoFullName),
+      ref: input.ref,
+      sha: input.sha,
     });
-    const body = [
-      input.body.trim(),
-      ...(input.issueNumber === null ? [] : [`Closes #${input.issueNumber}`]),
-      `<!-- ${input.expectedMarker} -->`,
-    ].join("\n\n");
+  }
+
+  async createPullRequest(input: {
+    repoFullName: string;
+    baseBranch: string;
+    headRef: string;
+    title: string;
+    body: string;
+  }): Promise<void> {
     await this.octokit.rest.pulls.create({
-      ...binding,
+      ...this.split(input.repoFullName),
       title: input.title,
-      body,
-      head: input.expectedHeadRef.replace(/^refs\/heads\//u, ""),
-      base: repository.defaultBranch,
+      body: input.body,
+      head: input.headRef.replace(/^refs\/heads\//u, ""),
+      base: input.baseBranch,
       draft: false,
     });
   }
@@ -402,10 +495,26 @@ function createMutationControlPlane(attestationPrivateKey: KeyObject, backoffice
     }));
   };
   return {
+    recover: async (input) => recoveryResponseSchema.parse(await call({
+      path: "/api/internal/agent-adapter/github-mutations/recovery",
+      ...input,
+    })).recovery,
     authorize: async (input) => authorizeResponseSchema.parse(await call({
       path: "/api/internal/agent-adapter/github-mutations/authorize",
       ...input,
     })).authorization,
+    claimStep: async (input) => stepClaimResponseSchema.parse(await call({
+      path: "/api/internal/agent-adapter/github-mutations/steps/claim",
+      ...input,
+    })).step,
+    planStep: async (input) => stepPlanResponseSchema.parse(await call({
+      path: "/api/internal/agent-adapter/github-mutations/steps/plan",
+      ...input,
+    })).plan,
+    completeStep: async (input) => stepCompletionResponseSchema.parse(await call({
+      path: "/api/internal/agent-adapter/github-mutations/steps/complete",
+      ...input,
+    })).completion,
     readback: async (input) => readbackResponseSchema.parse(await call({
       path: "/api/internal/agent-adapter/github-mutations/readback",
       ...input,
@@ -494,10 +603,40 @@ async function main() {
         return;
       }
       const envelope = seoriAuthPublicRequestSchema.parse(await readJson(request));
-      if (envelope.operation === "GITHUB_READY_PR" && !READY_PR_RUNTIME_OPERATIONAL) {
+      if (["GITHUB_READY_PR", "GITHUB_READY_PR_READBACK"].includes(envelope.operation) && !READY_PR_RUNTIME_OPERATIONAL) {
         throw new Error("SEORI_GITHUB_READY_PR_RUNTIME_NOT_OPERATIONAL");
       }
-      const result = envelope.operation === "GITHUB_READY_PR"
+      const result = envelope.operation === "GITHUB_READY_PR_READBACK"
+        ? await (async () => {
+          const recoveryRequest = recoveryRequestSchema.parse(envelope.body);
+          const recovery = await controlPlane.recover({
+            requestId: `ghr:${jsonDigest({ requestId: envelope.requestId } as JsonValue)}`,
+            body: {
+              sessionId: recoveryRequest.sessionId,
+              workerPrincipalId: principal,
+              workerRuntimeBindingDigest,
+            },
+          });
+          return withBoundSecretText({
+            root: FIXED_ROOT,
+            relativePath: "github/app-private.pem",
+            allowGroupRead: true,
+          }, async (privateKey) => withGithubPort({
+            privateKey,
+            repoId: recovery.repoId,
+            repoFullName: recovery.repoFullName,
+            execute: (github) => recoverGithubReadyPr({
+              operationId: envelope.requestId,
+              sessionId: recoveryRequest.sessionId,
+              workerPrincipalId: principal,
+              workerRuntimeBindingDigest,
+              recovery,
+              github,
+              controlPlane,
+            }),
+          }));
+        })()
+        : envelope.operation === "GITHUB_READY_PR"
         ? await withBoundSecretText({
           root: FIXED_ROOT,
           relativePath: "github/app-private.pem",

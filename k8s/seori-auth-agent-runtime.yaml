@@ -7,8 +7,8 @@
 # - CREATE_COMMIT/CREATE_REF/CREATE_PR durable step ledger와 partial-resume 검증
 # - Calico/Cilium에서 backoffice.vzyx.xyz와 api.github.com만 허용하는 FQDN egress 적용
 #
-# runtime이 실제 Ready여도 durable step-ledger code gate가 현재 false이므로 READY_PR은 활성화되지 않는다.
-# AGENT_TRUSTED_ADAPTER_DEPLOYED는 그 ledger가 별도 검토를 통과한 뒤에만 바꾼다.
+# runtime이 실제 Ready여도 GitHub canary 승인 gate가 현재 false이므로 READY_PR은 활성화되지 않는다.
+# AGENT_TRUSTED_ADAPTER_DEPLOYED는 실제 private canary가 별도 검토를 통과한 뒤에만 바꾼다.
 apiVersion: v1
 kind: Namespace
 metadata:

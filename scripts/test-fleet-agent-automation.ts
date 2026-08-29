@@ -14,16 +14,24 @@ import {
 import {
   claimAgentRun,
   heartbeatAgentRun,
+  reconcileTerminalRepoGuards,
   resolveAgentRunReadback,
   settleAgentRun,
 } from "@/lib/control-plane/agent-queue";
 import {
   authorizeGithubReadyPrMutation,
+  claimGithubMutationRecovery,
+  claimGithubMutationStep,
+  completeGithubMutationStep,
   GITHUB_READY_PR_MUTATION_ACTION,
+  planGithubCommitMutationStep,
   recordGithubMutationReadback,
 } from "@/lib/control-plane/agent-mutation-service";
 import { automationPolicy } from "@/lib/control-plane/automation-catalog";
-import { agentGithubObservationSchema } from "@/lib/control-plane/contracts";
+import {
+  agentGithubMutationStepObservationSchema,
+  agentGithubObservationSchema,
+} from "@/lib/control-plane/contracts";
 import { githubInstallationProviderPayload } from "@/lib/control-plane/github-installation-observation";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
@@ -89,6 +97,101 @@ async function createRun(input: {
       },
     },
     include: { runs: true },
+  });
+}
+
+async function openFixtureMutationSession(input: {
+  runId: string;
+  occurrenceId: string;
+  issueNumber: number;
+  expectedStatus: "PENDING" | "FAILED";
+  expectedGeneration: number;
+  generation: number;
+  now: Date;
+  createRepoGuard: boolean;
+  incrementAttempts: boolean;
+  requireReadback: boolean;
+}) {
+  if (fixtureRepoId === null) throw new Error("fixture repo가 준비되지 않았다");
+  return prisma.$transaction(async (tx) => {
+    const changed = await tx.agentRun.updateMany({
+      where: {
+        id: input.runId,
+        status: input.expectedStatus,
+        leaseGeneration: input.expectedGeneration,
+        ...(input.requireReadback ? { readbackRequestedAt: { not: null } } : { readbackRequestedAt: null }),
+      },
+      data: {
+        status: "RUNNING",
+        leaseGeneration: input.generation,
+        ...(input.incrementAttempts ? { attempts: { increment: 1 } } : {}),
+        startedAt: input.now,
+        error: null,
+      },
+    });
+    assert.equal(changed.count, 1, "fixture mutation session 상태 전이가 유일해야 한다");
+    const activeScopeKey = `repo-pr:${repoFullName.toLowerCase()}`;
+    if (input.createRepoGuard) {
+      await tx.agentRepoGuard.create({
+        data: {
+          runId: input.runId,
+          repoFullName,
+          activeScopeKey,
+          acquiredAt: input.now,
+        },
+      });
+    } else {
+      const guard = await tx.agentRepoGuard.findUnique({ where: { runId: input.runId } });
+      assert.equal(guard?.activeScopeKey, activeScopeKey, "복구 session은 기존 repo guard를 유지해야 한다");
+    }
+    const expiresAt = new Date(input.now.getTime() + 300_000);
+    const lease = await tx.agentLease.create({
+      data: {
+        runId: input.runId,
+        generation: input.generation,
+        tokenHash: crypto.createHash("sha256").update(crypto.randomUUID()).digest("hex"),
+        workerId: "codex:seorilabs-generic-worker",
+        scopeKey: activeScopeKey,
+        expiresAt,
+        heartbeatAt: input.now,
+      },
+    });
+    const session = await tx.agentWorkerSession.create({
+      data: {
+        id: `agent-session:${crypto.randomUUID()}`,
+        leaseId: lease.id,
+        runId: input.runId,
+        generation: input.generation,
+        principalId: "codex:seorilabs-generic-worker",
+        runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+        repoId: fixtureRepoId!,
+        repoFullName,
+        issueNumber: input.issueNumber,
+        sourceSha: "f".repeat(40),
+        expiresAt,
+        heartbeatAt: input.now,
+      },
+    });
+    await tx.automationOccurrence.update({
+      where: { id: input.occurrenceId },
+      data: { status: "RUNNING", completedAt: null },
+    });
+    await tx.agentRunEvent.create({
+      data: {
+        runId: input.runId,
+        type: "claimed",
+        generation: input.generation,
+        actor: "codex:seorilabs-generic-worker",
+        payload: {
+          sessionId: session.id,
+          resumeMode: input.requireReadback ? "READBACK_FIRST" : "START",
+          repoId: fixtureRepoId!.toString(),
+          sourceSha: "f".repeat(40),
+          runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+        },
+      },
+    });
+    return { sessionId: session.id, runId: input.runId, generation: input.generation, expiresAt };
   });
 }
 
@@ -193,7 +296,7 @@ async function main() {
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `ready-pr-disabled:${crypto.randomUUID()}`,
-  }), null, "durable GitHub step ledger 전에는 READY_PR claim이 fail-closed여야 한다");
+  }), null, "실제 GitHub canary 승인 전에는 READY_PR claim이 fail-closed여야 한다");
   assert.equal(await prisma.agentRepoGuard.findUnique({
     where: { runId: readyOccurrence.runs[0].id },
   }), null, "차단된 READY_PR claim은 repo guard도 획득하지 않아야 한다");
@@ -444,7 +547,7 @@ async function main() {
     idempotencyKey: authorizationKey,
   });
   assert.equal(authorization.status, "CONSUMED");
-  assert.equal(authorization.writeDisposition, "EXECUTE_ONCE");
+  assert.equal(authorization.writeDisposition, "STEP_LEDGER");
   assert.equal(JSON.stringify(authorization).match(/(?:lease|grant|action)Token/gi), null);
   const replayedAuthorization = await authorizeGithubReadyPrMutation({
     sessionId: jitClaim.sessionId,
@@ -458,54 +561,722 @@ async function main() {
     idempotencyKey: authorizationKey,
   });
   assert.equal(replayedAuthorization.duplicate, true);
-  assert.equal(replayedAuthorization.writeDisposition, "READBACK_ONLY");
-  const absentObservation = agentGithubObservationSchema.parse({
+  assert.equal(replayedAuthorization.writeDisposition, "STEP_LEDGER");
+  const replayObservedAt = new Date(observedAt.getTime() + 1_000);
+  const refreshedAuthorization = await authorizeGithubReadyPrMutation({
+    sessionId: jitClaim.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: "a".repeat(64),
+    observation: agentGithubObservationSchema.parse({
+      ...preObservation,
+      providerSnapshotId: `fixture-pre-restart-${nonce}`,
+      observedAt: replayObservedAt,
+      issue: { ...preObservation.issue!, updatedAt: replayObservedAt },
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: authorizationKey,
+    now: replayObservedAt,
+  });
+  assert.equal(refreshedAuthorization.duplicate, true, "프로세스 재시작의 새 observation도 같은 grant로 재개한다");
+
+  const expectedTreeSha = "b".repeat(40);
+  const expectedCommitSha = "c".repeat(40);
+  const stepClaimedAt = new Date();
+  const commitClaimKey = `jit-step-commit:${crypto.randomUUID()}`;
+  const commitClaim = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: commitClaimKey,
+    now: stepClaimedAt,
+  });
+  assert.equal(commitClaim.generation, 1);
+  assert.equal(commitClaim.writeDisposition, "EXECUTE_ONCE");
+  assert.ok(commitClaim.attemptId);
+  const duplicateCommitClaim = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: commitClaimKey,
+    now: new Date(stepClaimedAt.getTime() + 1_000),
+  });
+  assert.equal(duplicateCommitClaim.duplicate, true);
+  assert.equal(duplicateCommitClaim.attemptId, commitClaim.attemptId);
+  const commitPlan = await planGithubCommitMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    stepId: commitClaim.stepId,
+    attemptId: commitClaim.attemptId!,
+    generation: commitClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    expectedTreeSha,
+    expectedCommitSha,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-plan:${crypto.randomUUID()}`,
+    now: new Date(stepClaimedAt.getTime() + 2_000),
+  });
+  assert.equal(commitPlan.status, "PLANNED");
+
+  const stepObservation = (input: {
+    stepKind: "CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR";
+    observedAt: Date;
+    headSha: string | null;
+    pullRequests?: Array<{
+      number: number;
+      nodeId: string;
+      url: string;
+      state: "OPEN" | "CLOSED" | "MERGED";
+      draft: boolean;
+      headRef: string;
+      headSha: string;
+      baseRef: string;
+      baseSha: string;
+      marker: string;
+      closesIssueNumber: number | null;
+    }>;
+  }) => agentGithubMutationStepObservationSchema.parse({
+    schemaVersion: 1,
+    stepKind: input.stepKind,
+    githubInstallationId: "101",
+    providerSnapshotId: `fixture-step-${input.stepKind}-${input.observedAt.getTime()}`,
+    complete: true,
+    observedAt: input.observedAt,
+    repoId: app.repoId!.toString(),
+    repoFullName,
+    defaultBranchRef: "refs/heads/main",
+    defaultBranchSha: "f".repeat(40),
+    issue: {
+      number: 2,
+      nodeId: `fixture-issue-jit-${nonce}`,
+      state: "OPEN",
+      labels: ["autopilot", "P1"],
+      updatedAt: input.observedAt,
+    },
+    expectedHeadRef: authorization.expectedHeadRef,
+    expectedPullRequestMarker: authorization.expectedPullRequestMarker,
+    expectedTreeSha,
+    expectedCommitSha,
+    commit: { sha: expectedCommitSha, treeSha: expectedTreeSha, parentSha: "f".repeat(40) },
+    headSha: input.headSha,
+    openAutopilotPullRequests: input.stepKind === "CREATE_PR" ? input.pullRequests ?? [] : [],
+    pullRequests: input.pullRequests ?? [],
+  });
+  const staleCompletionAt = new Date(stepClaimedAt.getTime() + 61_000);
+  await assert.rejects(() => completeGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    stepId: commitClaim.stepId,
+    attemptId: commitClaim.attemptId!,
+    generation: commitClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    observation: stepObservation({ stepKind: "CREATE_COMMIT", observedAt: staleCompletionAt, headSha: null }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-stale-complete:${crypto.randomUUID()}`,
+    now: staleCompletionAt,
+  }), (error: unknown) => (
+    typeof error === "object" && error !== null && "code" in error && error.code === "STALE_MUTATION_STEP_ATTEMPT"
+  ));
+  const resumedAt = new Date(staleCompletionAt.getTime() + 1_000);
+  const resumedCommitClaim = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-commit-resume:${crypto.randomUUID()}`,
+    now: resumedAt,
+  });
+  assert.equal(resumedCommitClaim.generation, 2);
+  assert.equal(resumedCommitClaim.writeDisposition, "READBACK_THEN_EXECUTE");
+  const commitCompletion = await completeGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    stepId: resumedCommitClaim.stepId,
+    attemptId: resumedCommitClaim.attemptId!,
+    generation: resumedCommitClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    observation: stepObservation({
+      stepKind: "CREATE_COMMIT",
+      observedAt: new Date(resumedAt.getTime() + 1_000),
+      headSha: null,
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-commit-complete:${crypto.randomUUID()}`,
+    now: new Date(resumedAt.getTime() + 1_000),
+  });
+  assert.equal(commitCompletion.status, "VERIFIED");
+
+  const refClaim = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_REF",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-ref:${crypto.randomUUID()}`,
+    now: new Date(resumedAt.getTime() + 2_000),
+  });
+  assert.equal((await completeGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    stepId: refClaim.stepId,
+    attemptId: refClaim.attemptId!,
+    generation: refClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_REF",
+    observation: stepObservation({
+      stepKind: "CREATE_REF",
+      observedAt: new Date(resumedAt.getTime() + 3_000),
+      headSha: expectedCommitSha,
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-ref-complete:${crypto.randomUUID()}`,
+    now: new Date(resumedAt.getTime() + 3_000),
+  })).status, "VERIFIED");
+
+  const pullRequest = {
+    number: 17,
+    nodeId: `fixture-pr-${nonce}`,
+    url: `https://github.com/${repoFullName}/pull/17`,
+    state: "OPEN" as const,
+    draft: false,
+    headRef: authorization.expectedHeadRef,
+    headSha: expectedCommitSha,
+    baseRef: "refs/heads/main",
+    baseSha: "f".repeat(40),
+    marker: authorization.expectedPullRequestMarker,
+    closesIssueNumber: 2,
+  };
+  const prClaim = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_PR",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-pr:${crypto.randomUUID()}`,
+    now: new Date(resumedAt.getTime() + 4_000),
+  });
+  assert.equal((await completeGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    stepId: prClaim.stepId,
+    attemptId: prClaim.attemptId!,
+    generation: prClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_PR",
+    observation: stepObservation({
+      stepKind: "CREATE_PR",
+      observedAt: new Date(resumedAt.getTime() + 5_000),
+      headSha: expectedCommitSha,
+      pullRequests: [pullRequest],
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-step-pr-complete:${crypto.randomUUID()}`,
+    now: new Date(resumedAt.getTime() + 5_000),
+  })).status, "VERIFIED");
+  const durableSteps = await prisma.agentMutationStep.findMany({
+    where: { executionId: authorization.executionId },
+    include: { attempts: { orderBy: { generation: "asc" } } },
+    orderBy: { ordinal: "asc" },
+  });
+  assert.deepEqual(durableSteps.map((step) => [step.kind, step.status]), [
+    ["CREATE_COMMIT", "VERIFIED"],
+    ["CREATE_REF", "VERIFIED"],
+    ["CREATE_PR", "VERIFIED"],
+  ]);
+  assert.deepEqual(durableSteps[0].attempts.map((attempt) => attempt.status), ["STALE", "VERIFIED"]);
+  const verifiedCommitReplay = await claimGithubMutationStep({
+    sessionId: jitClaim.sessionId,
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: commitClaimKey,
+    now: new Date(resumedAt.getTime() + 6_000),
+  });
+  assert.equal(verifiedCommitReplay.writeDisposition, "ALREADY_VERIFIED");
+  assert.equal(verifiedCommitReplay.attemptId, null);
+
+  const postPrReplayAt = new Date(resumedAt.getTime() + 7_000);
+  const postPrAuthorizationReplay = await authorizeGithubReadyPrMutation({
+    sessionId: jitClaim.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: "a".repeat(64),
+    observation: agentGithubObservationSchema.parse({
+      ...preObservation,
+      providerSnapshotId: `fixture-post-pr-restart-${nonce}`,
+      observedAt: postPrReplayAt,
+      issue: { ...preObservation.issue!, updatedAt: postPrReplayAt },
+      openAutopilotPullRequests: [pullRequest],
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: authorizationKey,
+    now: postPrReplayAt,
+  });
+  assert.equal(postPrAuthorizationReplay.duplicate, true, "PR write 직후 재시작도 exact target만 허용해 재개한다");
+
+  const verifiedObservation = agentGithubObservationSchema.parse({
     ...preObservation,
     providerSnapshotId: `fixture-post-${nonce}`,
     observedAt: new Date(),
+    openAutopilotPullRequests: [{ ...pullRequest, state: "OPEN" }],
     mutationTarget: {
       expectedHeadRef: authorization.expectedHeadRef,
       expectedMarker: authorization.expectedPullRequestMarker,
-      headState: "ABSENT",
-      headSha: null,
+      headState: "PRESENT",
+      headSha: expectedCommitSha,
       complete: true,
       pageCount: 1,
       terminalCursor: null,
-      pullRequests: [],
+      pullRequests: [pullRequest],
     },
   });
   await assert.rejects(() => recordGithubMutationReadback({
+    sessionId: jitClaim.sessionId,
     executionId: authorization.executionId,
     workerPrincipalId: "claude:seorilabs-generic-worker",
     workerRuntimeBindingDigest: CLAUDE_RUNTIME_BINDING,
-    observation: absentObservation,
+    observation: verifiedObservation,
     adapterPrincipalId: "seori-auth:github-mutation-adapter",
     adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
     idempotencyKey: `jit-cross-principal-readback:${crypto.randomUUID()}`,
   }), (error: unknown) => (
-    typeof error === "object" && error !== null && "code" in error && error.code === "MUTATION_ADAPTER_MISMATCH"
+    typeof error === "object" && error !== null && "code" in error && error.code === "MUTATION_STEP_SESSION_MISMATCH"
   ));
   const readback = await recordGithubMutationReadback({
+    sessionId: jitClaim.sessionId,
     executionId: authorization.executionId,
     workerPrincipalId: "codex:seorilabs-generic-worker",
     workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
-    observation: absentObservation,
+    observation: verifiedObservation,
     adapterPrincipalId: "seori-auth:github-mutation-adapter",
     adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
     idempotencyKey: `jit-readback:${crypto.randomUUID()}`,
   });
-  assert.equal(readback.readback.status, "NOT_APPLIED");
+  assert.equal(readback.readback.status, "VERIFIED");
   await settleAgentRun({
     sessionId: jitClaim.sessionId,
     workerId: "codex:seorilabs-generic-worker",
     runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     outcome: "complete",
-    result: { outcomeCode: "NO_CHANGES", summary: "Signed readback confirmed no mutation", costMicros: 0 },
+    result: {
+      outcomeCode: "PR_READY",
+      summary: "Step ledger와 signed readback이 PR을 확인했다",
+      commitSha: expectedCommitSha,
+      pullRequestNumber: pullRequest.number,
+      pullRequestUrl: pullRequest.url,
+      mutationExecutionId: authorization.executionId,
+      costMicros: 0,
+    },
     idempotencyKey: `jit-complete:${crypto.randomUUID()}`,
   });
   assert.equal((await prisma.agentRun.findUniqueOrThrow({ where: { id: jitClaim.runId } })).status, "SUCCEEDED");
   await prisma.issueMirror.update({
     where: { repoFullName_number: { repoFullName, number: 2 } },
+    data: { state: "CLOSED", isAutopilot: false, ghUpdatedAt: new Date() },
+  });
+  await prisma.pullRequestMirror.create({
+    data: {
+      appId: app.id,
+      repoFullName,
+      number: pullRequest.number,
+      nodeId: pullRequest.nodeId,
+      title: "JIT mutation contract",
+      state: "CLOSED",
+      authorLogin: "seori-auth",
+      headRef: authorization.expectedHeadRef.replace("refs/heads/", ""),
+      baseRef: "main",
+      labels: ["autopilot"],
+      linkedIssue: 2,
+      isAutopilotPr: true,
+      ghCreatedAt: new Date(),
+      ghUpdatedAt: new Date(),
+    },
+  });
+  assert.deepEqual(await reconcileTerminalRepoGuards({
+    repoFullName,
+    pullRequestNumber: pullRequest.number,
+  }), { scanned: 1, released: 1 });
+
+  await prisma.issueMirror.create({
+    data: {
+      appId: app.id,
+      repoFullName,
+      number: 3,
+      nodeId: `fixture-issue-recovery-${nonce}`,
+      title: "TTL mutation recovery contract",
+      state: "OPEN",
+      assignees: [],
+      labels: ["autopilot", "P1"],
+      priority: "P1",
+      isAutopilot: true,
+      ghCreatedAt: new Date(),
+      ghUpdatedAt: new Date(),
+    },
+  });
+  const recoveryOccurrence = await createRun({
+    definitionId: readyDefinition.id,
+    appId: app.id,
+    issueNumber: 3,
+    workKey: `${repoFullName}#ttl-recovery`,
+    createsPr: false,
+  });
+  const recoveryRunId = recoveryOccurrence.runs[0].id;
+  const recoveryStartedAt = new Date();
+  const recoveryStart = await openFixtureMutationSession({
+    runId: recoveryRunId,
+    occurrenceId: recoveryOccurrence.id,
+    issueNumber: 3,
+    expectedStatus: "PENDING",
+    expectedGeneration: 0,
+    generation: 1,
+    now: recoveryStartedAt,
+    createRepoGuard: true,
+    incrementAttempts: true,
+    requireReadback: false,
+  });
+  const recoveryPreObservation = (observedAt: Date, providerSnapshotId: string) => (
+    agentGithubObservationSchema.parse({
+      schemaVersion: 1,
+      githubInstallationId: "101",
+      providerSnapshotId,
+      complete: true,
+      pageCount: 1,
+      terminalCursor: null,
+      observedAt,
+      repoId: app.repoId!.toString(),
+      repoFullName,
+      defaultBranchRef: "refs/heads/main",
+      defaultBranchSha: "f".repeat(40),
+      issue: {
+        number: 3,
+        nodeId: `fixture-issue-recovery-${nonce}`,
+        state: "OPEN",
+        labels: ["autopilot", "P1"],
+        updatedAt: observedAt,
+      },
+      openAutopilotPullRequests: [],
+      mutationTarget: null,
+    })
+  );
+  const recoveryIntentDigest = "9".repeat(64);
+  const recoveryAuthorization = await authorizeGithubReadyPrMutation({
+    sessionId: recoveryStart.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: recoveryIntentDigest,
+    observation: recoveryPreObservation(recoveryStartedAt, `fixture-recovery-pre-${nonce}`),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-authorize:${crypto.randomUUID()}`,
+    now: recoveryStartedAt,
+  });
+  const recoveryTreeSha = "1".repeat(40);
+  const recoveryCommitSha = "2".repeat(40);
+  const recoveryStepObservation = (input: {
+    stepKind: "CREATE_COMMIT" | "CREATE_REF" | "CREATE_PR";
+    observedAt: Date;
+    headSha: string | null;
+  }) => agentGithubMutationStepObservationSchema.parse({
+    schemaVersion: 1,
+    stepKind: input.stepKind,
+    githubInstallationId: "101",
+    providerSnapshotId: `fixture-recovery-step-${input.stepKind}-${input.observedAt.getTime()}`,
+    complete: true,
+    observedAt: input.observedAt,
+    repoId: app.repoId!.toString(),
+    repoFullName,
+    defaultBranchRef: "refs/heads/main",
+    defaultBranchSha: "f".repeat(40),
+    issue: {
+      number: 3,
+      nodeId: `fixture-issue-recovery-${nonce}`,
+      state: "OPEN",
+      labels: ["autopilot", "P1"],
+      updatedAt: input.observedAt,
+    },
+    expectedHeadRef: recoveryAuthorization.expectedHeadRef,
+    expectedPullRequestMarker: recoveryAuthorization.expectedPullRequestMarker,
+    expectedTreeSha: recoveryTreeSha,
+    expectedCommitSha: recoveryCommitSha,
+    commit: {
+      sha: recoveryCommitSha,
+      treeSha: recoveryTreeSha,
+      parentSha: "f".repeat(40),
+    },
+    headSha: input.headSha,
+    openAutopilotPullRequests: [],
+    pullRequests: [],
+  });
+  const recoveryCommitClaimedAt = new Date(recoveryStartedAt.getTime() + 1_000);
+  const recoveryCommitClaim = await claimGithubMutationStep({
+    sessionId: recoveryStart.sessionId,
+    executionId: recoveryAuthorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-commit-claim:${crypto.randomUUID()}`,
+    now: recoveryCommitClaimedAt,
+  });
+  await planGithubCommitMutationStep({
+    sessionId: recoveryStart.sessionId,
+    executionId: recoveryAuthorization.executionId,
+    stepId: recoveryCommitClaim.stepId,
+    attemptId: recoveryCommitClaim.attemptId!,
+    generation: recoveryCommitClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    expectedTreeSha: recoveryTreeSha,
+    expectedCommitSha: recoveryCommitSha,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-commit-plan:${crypto.randomUUID()}`,
+    now: new Date(recoveryStartedAt.getTime() + 2_000),
+  });
+  assert.equal((await completeGithubMutationStep({
+    sessionId: recoveryStart.sessionId,
+    executionId: recoveryAuthorization.executionId,
+    stepId: recoveryCommitClaim.stepId,
+    attemptId: recoveryCommitClaim.attemptId!,
+    generation: recoveryCommitClaim.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    observation: recoveryStepObservation({
+      stepKind: "CREATE_COMMIT",
+      observedAt: new Date(recoveryStartedAt.getTime() + 3_000),
+      headSha: null,
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-commit-complete:${crypto.randomUUID()}`,
+    now: new Date(recoveryStartedAt.getTime() + 3_000),
+  })).status, "VERIFIED");
+  await settleAgentRun({
+    sessionId: recoveryStart.sessionId,
+    workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+    outcome: "unknown",
+    result: {
+      outcomeCode: "RESULT_UNKNOWN",
+      summary: "commit readback 뒤 worker가 종료됐다",
+      mutationExecutionId: recoveryAuthorization.executionId,
+      costMicros: 0,
+    },
+    idempotencyKey: `recovery-result-unknown:${crypto.randomUUID()}`,
+    now: new Date(recoveryStartedAt.getTime() + 4_000),
+  });
+  const recoveryFailed = await prisma.agentRun.findUniqueOrThrow({
+    where: { id: recoveryRunId },
+    include: { repoGuard: true },
+  });
+  assert.equal(recoveryFailed.status, "FAILED");
+  assert.ok(recoveryFailed.readbackRequestedAt);
+  assert.equal(recoveryFailed.repoGuard?.activeScopeKey, `repo-pr:${repoFullName.toLowerCase()}`);
+
+  const recoveryReadbackAt = new Date(recoveryStart.expiresAt.getTime() + 1_000);
+  const recoveryReadbackSession = await openFixtureMutationSession({
+    runId: recoveryRunId,
+    occurrenceId: recoveryOccurrence.id,
+    issueNumber: 3,
+    expectedStatus: "FAILED",
+    expectedGeneration: 1,
+    generation: 2,
+    now: recoveryReadbackAt,
+    createRepoGuard: false,
+    incrementAttempts: false,
+    requireReadback: true,
+  });
+  const recovery = await claimGithubMutationRecovery({
+    sessionId: recoveryReadbackSession.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-readback-claim:${crypto.randomUUID()}`,
+    now: recoveryReadbackAt,
+  });
+  assert.equal(recovery.executionId, recoveryAuthorization.executionId);
+  assert.equal(recovery.sourceSha, "f".repeat(40));
+  const recoveredCommit = await claimGithubMutationStep({
+    sessionId: recoveryReadbackSession.sessionId,
+    executionId: recovery.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-readback-commit:${crypto.randomUUID()}`,
+    now: new Date(recoveryReadbackAt.getTime() + 1_000),
+  });
+  assert.equal(recoveredCommit.writeDisposition, "ALREADY_VERIFIED");
+  assert.equal(recoveredCommit.attemptId, null);
+  const recoveredRef = await claimGithubMutationStep({
+    sessionId: recoveryReadbackSession.sessionId,
+    executionId: recovery.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_REF",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-readback-ref:${crypto.randomUUID()}`,
+    now: new Date(recoveryReadbackAt.getTime() + 2_000),
+  });
+  assert.equal(recoveredRef.writeDisposition, "READBACK_ONLY");
+  assert.equal((await completeGithubMutationStep({
+    sessionId: recoveryReadbackSession.sessionId,
+    executionId: recovery.executionId,
+    stepId: recoveredRef.stepId,
+    attemptId: recoveredRef.attemptId!,
+    generation: recoveredRef.generation,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_REF",
+    observation: recoveryStepObservation({
+      stepKind: "CREATE_REF",
+      observedAt: new Date(recoveryReadbackAt.getTime() + 3_000),
+      headSha: null,
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-readback-ref-complete:${crypto.randomUUID()}`,
+    now: new Date(recoveryReadbackAt.getTime() + 3_000),
+  })).status, "NOT_APPLIED");
+  const recoveryFinalObservedAt = new Date(recoveryReadbackAt.getTime() + 4_000);
+  const recoveryFinalReadback = await recordGithubMutationReadback({
+    sessionId: recoveryReadbackSession.sessionId,
+    executionId: recovery.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    observation: agentGithubObservationSchema.parse({
+      ...recoveryPreObservation(recoveryFinalObservedAt, `fixture-recovery-final-${nonce}`),
+      mutationTarget: {
+        expectedHeadRef: recoveryAuthorization.expectedHeadRef,
+        expectedMarker: recoveryAuthorization.expectedPullRequestMarker,
+        headState: "ABSENT",
+        headSha: null,
+        complete: true,
+        pageCount: 1,
+        terminalCursor: null,
+        pullRequests: [],
+      },
+    }),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-final-readback:${crypto.randomUUID()}`,
+    now: recoveryFinalObservedAt,
+  });
+  assert.equal(recoveryFinalReadback.readback.status, "RESULT_UNKNOWN");
+  await resolveAgentRunReadback({
+    sessionId: recoveryReadbackSession.sessionId,
+    workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+    resolution: "RESUME",
+    result: {
+      outcomeCode: "READBACK_CONFIRMED",
+      summary: "commit만 적용되고 branch는 없음을 확인했다",
+      costMicros: 0,
+    },
+    idempotencyKey: `recovery-resolve:${crypto.randomUUID()}`,
+    now: new Date(recoveryReadbackAt.getTime() + 5_000),
+  });
+  assert.equal((await prisma.agentRun.findUniqueOrThrow({ where: { id: recoveryRunId } })).status, "PENDING");
+
+  const recoveryResumeAt = new Date(recoveryReadbackAt.getTime() + 6_000);
+  const recoveryResumeSession = await openFixtureMutationSession({
+    runId: recoveryRunId,
+    occurrenceId: recoveryOccurrence.id,
+    issueNumber: 3,
+    expectedStatus: "PENDING",
+    expectedGeneration: 2,
+    generation: 3,
+    now: recoveryResumeAt,
+    createRepoGuard: false,
+    incrementAttempts: true,
+    requireReadback: false,
+  });
+  const resumedRecoveryAuthorization = await authorizeGithubReadyPrMutation({
+    sessionId: recoveryResumeSession.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: recoveryIntentDigest,
+    observation: recoveryPreObservation(recoveryResumeAt, `fixture-recovery-resume-${nonce}`),
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-resume-authorize:${crypto.randomUUID()}`,
+    now: recoveryResumeAt,
+  });
+  assert.equal(resumedRecoveryAuthorization.executionId, recoveryAuthorization.executionId);
+  assert.equal(resumedRecoveryAuthorization.duplicate, false);
+  const resumedVerifiedCommit = await claimGithubMutationStep({
+    sessionId: recoveryResumeSession.sessionId,
+    executionId: recovery.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_COMMIT",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-resume-commit:${crypto.randomUUID()}`,
+    now: new Date(recoveryResumeAt.getTime() + 1_000),
+  });
+  assert.equal(resumedVerifiedCommit.writeDisposition, "ALREADY_VERIFIED");
+  const resumedRef = await claimGithubMutationStep({
+    sessionId: recoveryResumeSession.sessionId,
+    executionId: recovery.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    stepKind: "CREATE_REF",
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `recovery-resume-ref:${crypto.randomUUID()}`,
+    now: new Date(recoveryResumeAt.getTime() + 2_000),
+  });
+  assert.equal(resumedRef.writeDisposition, "EXECUTE_ONCE");
+  assert.ok(resumedRef.expiresAt && resumedRef.expiresAt > recoveryStart.expiresAt);
+  assert.equal((await prisma.agentMutationStepAttempt.findUniqueOrThrow({
+    where: { id: resumedRef.attemptId! },
+  })).sessionId, recoveryResumeSession.sessionId);
+  await prisma.issueMirror.update({
+    where: { repoFullName_number: { repoFullName, number: 3 } },
     data: { state: "CLOSED", isAutopilot: false, ghUpdatedAt: new Date() },
   });
 
