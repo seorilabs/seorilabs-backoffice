@@ -605,3 +605,32 @@ BACKOFFICE_SOURCE_SHA='<40자리 SHA>' \
   `consecutiveMatchCount=2`, `cleanupAllowed=true`가 된다.
 - 중간에 차단 wave, source SHA, ACTIVE revision, contract 또는 cohort가 바뀌면 연속 횟수는 초기화된다.
 - UI의 `cleanupAllowed`는 parity 선행조건만 뜻한다. restore 및 선언 마켓 build-only gate 없이 삭제하지 않는다.
+
+### 3. P7 38-repository BOOTSTRAP shadow readiness
+
+기존 `fleet-parity-wave`는 ACTIVE 앱의 legacy config parity 원장이다. P7의 GitHub App 전체
+repository collector와 같은 실행이 아니며, 그 결과를 38-repository BOOTSTRAP inventory로
+재사용하지 않는다.
+
+배포 이미지의 다음 command는 GitHub App installation pagination을 두 번 읽고, 각 active
+repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정, ACTIVE config와 signed
+snapshot, PlatformFleetBinding의 exact source 결합을 DB SELECT로만 검사한다. GitHub와 DB에 쓰지
+않고 공개 repo ID, source SHA, digest, reason code만 출력한다.
+
+```bash
+kubectl -n platform exec deploy/backoffice -c backoffice -- \
+  node /app/scripts-dist/fleet-migration-shadow-readiness.cjs
+```
+
+`state=READY`는 collector의 Backoffice 공개 증거 선행조건만 통과했다는 뜻이다. 실제 BOOTSTRAP
+shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 운영 adapter를 추가로
+연결해야 한다.
+
+1. GitHub App capability, complete pagination, HEAD/tree/BLOB GET adapter
+2. legacy schema validator와 candidate replacement/proof public readback
+3. durable collection occurrence claim/complete/read adapter
+4. inventory public-key metadata readback과 secret-free Ed25519 signing service adapter
+
+issuer가 authoritative inventory를 발급한 뒤에만 `createFleetMigrationPlan`을 실행한다. durable
+state authority와 `trusted-cleanup-executor`는 승인된 cleanup PR 단계에서만 사용하며 두 번의
+read-only shadow에는 claim이나 mutation을 만들지 않는다.
