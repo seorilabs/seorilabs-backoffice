@@ -11,6 +11,8 @@ source_sha="${BACKOFFICE_SOURCE_SHA:-}"
 migration_timeout="${BACKOFFICE_MIGRATION_TIMEOUT_SECONDS:-300}"
 migration_poll="${BACKOFFICE_MIGRATION_POLL_SECONDS:-2}"
 rollout_timeout="${BACKOFFICE_ROLLOUT_TIMEOUT:-300s}"
+deployment_state_timeout="${BACKOFFICE_DEPLOYMENT_STATE_TIMEOUT_SECONDS:-300}"
+deployment_state_poll="${BACKOFFICE_DEPLOYMENT_STATE_POLL_SECONDS:-1}"
 audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
 audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
 verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
@@ -36,6 +38,11 @@ for value in "$migration_timeout" "$catchup_timeout" "$verify_timeout"; do
     exit 2
   fi
 done
+if [[ ! "$deployment_state_timeout" =~ ^[1-9][0-9]*$ ]] ||
+   [[ ! "$deployment_state_poll" =~ ^[0-9]+$ ]]; then
+  echo "오류: deployment exact-state timeout은 양의 정수이고 poll은 0 이상의 정수여야 한다" >&2
+  exit 2
+fi
 if [ "$catchup_timeout" -lt 3300 ]; then
   echo "오류: BACKOFFICE_CATCHUP_TIMEOUT_SECONDS는 Job activeDeadlineSeconds 이상인 3300이어야 한다" >&2
   exit 2
@@ -110,10 +117,24 @@ deployment_matches_image() {
     [ "$images" = "${image}," ]
 }
 
+wait_for_exact_deployment_state() {
+  local deployment="$1"
+  local deadline=$((SECONDS + deployment_state_timeout))
+
+  while (( SECONDS < deadline )); do
+    if deployment_matches_image "$deployment"; then
+      return 0
+    fi
+    sleep "$deployment_state_poll"
+  done
+
+  deployment_matches_image "$deployment"
+}
+
 wait_for_deployment() {
   local deployment="$1"
   if k -n "$namespace" rollout status "deployment/$deployment" --timeout="$rollout_timeout"; then
-    if deployment_matches_image "$deployment"; then
+    if wait_for_exact_deployment_state "$deployment"; then
       return 0
     fi
     echo "오류: deployment/$deployment rollout은 끝났지만 exact digest desired state가 아니다" >&2
