@@ -5,9 +5,13 @@ import test from "node:test";
 import {
   eligibleForAutopilot,
   firstSuccessfulClaim,
-  repoPrScope,
   validSettlementLease,
 } from "@/lib/control-plane/agent-queue";
+import {
+  agentExecutionPolicy,
+  agentRepositorySingletonScope,
+  automationPolicy,
+} from "@/lib/control-plane/automation-catalog";
 import { canonicalJson, signSnapshot, verifySnapshot } from "@/lib/control-plane/json";
 import {
   assertActivationPreconditions,
@@ -100,8 +104,10 @@ test("stale generation completion과 비활성 lease를 거부한다", () => {
 });
 
 test("자율 PR scope는 repo별 하나이며 blocked/approval/closed issue는 제외한다", () => {
-  assert.equal(repoPrScope("seorilabs/Happy-Farm", true), "repo-pr:seorilabs/happy-farm");
-  assert.equal(repoPrScope("seorilabs/Happy-Farm", false), null);
+  const readyPr = agentExecutionPolicy(automationPolicy({ approvalPolicy: "READY_PR", budgetCeilingMicros: 1 }), "START");
+  const readOnly = agentExecutionPolicy(automationPolicy({ approvalPolicy: "READ_ONLY", budgetCeilingMicros: 1 }), "START");
+  assert.equal(agentRepositorySingletonScope("seorilabs/Happy-Farm", readyPr), "repo-pr:seorilabs/happy-farm");
+  assert.equal(agentRepositorySingletonScope("seorilabs/Happy-Farm", readOnly), null);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "CLOSED", labels: [] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["blocked"] }), false);
   assert.equal(eligibleForAutopilot({ issueNumber: 1, issueState: "OPEN", labels: ["approval:release"] }), false);

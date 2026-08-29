@@ -10,13 +10,19 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const principal = authenticateInternalRequest(request, "agent-worker");
-  if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!principal?.runtimeBindingDigest) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const idempotencyKey = requireIdempotencyKey(request);
   if (!idempotencyKey) return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
   try {
     const body = agentFailureSchema.parse(await request.json());
-    const result = await settleAgentRun({ ...body, workerId: principal.id, outcome: "fail", idempotencyKey });
-    await refreshRunFleetProjection(body.runId);
+    const result = await settleAgentRun({
+      ...body,
+      workerId: principal.id,
+      runtimeBindingDigest: principal.runtimeBindingDigest,
+      outcome: "fail",
+      idempotencyKey,
+    });
+    await refreshRunFleetProjection(result.runId);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return controlPlaneErrorResponse(error);

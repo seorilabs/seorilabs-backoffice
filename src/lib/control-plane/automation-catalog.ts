@@ -25,6 +25,56 @@ export interface AutomationPolicy {
   claimSource: "github-issue-mirror" | "platform-fleet-plan";
 }
 
+export const AGENT_READBACK_CAPABILITIES = [
+  "github.issue.read",
+  "github.pull_request.read",
+  "provider.readback",
+] as const;
+
+export const AGENT_READY_PR_CAPABILITIES = [
+  ...AGENT_READBACK_CAPABILITIES,
+  "github.branch.write",
+  "github.commit.write",
+  "github.pull_request.create",
+] as const;
+
+export interface AgentExecutionPolicy {
+  capabilities: readonly string[];
+  repositorySingleton: "READY_PR" | null;
+  mutationAction: "GITHUB_READY_PR_MUTATE" | null;
+}
+
+/** Repo singleton과 mutation 권한은 mutable AgentRun.createsPr가 아니라 signed definition 정책에서 파생한다. */
+export function agentExecutionPolicy(
+  policy: AutomationPolicy,
+  resumeMode: "START" | "READBACK_FIRST",
+): AgentExecutionPolicy {
+  if (resumeMode === "READBACK_FIRST") {
+    return {
+      capabilities: AGENT_READBACK_CAPABILITIES,
+      repositorySingleton: policy.approvalPolicy === "READY_PR" ? "READY_PR" : null,
+      mutationAction: null,
+    };
+  }
+  if (policy.approvalPolicy === "READY_PR") {
+    return {
+      capabilities: AGENT_READY_PR_CAPABILITIES,
+      repositorySingleton: "READY_PR",
+      mutationAction: "GITHUB_READY_PR_MUTATE",
+    };
+  }
+  return { capabilities: AGENT_READBACK_CAPABILITIES, repositorySingleton: null, mutationAction: null };
+}
+
+export function agentRepositorySingletonScope(
+  repoFullName: string,
+  executionPolicy: AgentExecutionPolicy,
+): string | null {
+  return executionPolicy.repositorySingleton === "READY_PR"
+    ? `repo-pr:${repoFullName.toLowerCase()}`
+    : null;
+}
+
 export function platformFleetAutomationPolicy(input: {
   budgetCeilingMicros: number;
 }): AutomationPolicy {

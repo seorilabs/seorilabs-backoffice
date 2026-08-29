@@ -18,7 +18,6 @@ import {
 } from "@/lib/control-plane/automation";
 import {
   eligibleForAutopilot,
-  mutationCapabilityBrokerEnforced,
   reconcileTerminalRepoGuards,
   releaseRepoGuard,
 } from "@/lib/control-plane/agent-queue";
@@ -45,6 +44,7 @@ import {
   type RegisterRepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
+import { trustedMutationAdapterConfigured } from "@/lib/control-plane/security";
 import type { GhIssueInput } from "@/lib/sync/mirror";
 
 const ISSUE_TRIGGER_ACTIONS = new Set(["opened", "reopened", "labeled", "unlabeled", "edited"]);
@@ -481,9 +481,9 @@ export async function createAutomationDefinition(input: {
   actor: string;
   idempotencyKey: string;
 }) {
-  if (input.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced()) {
+  if (input.approvalPolicy === "READY_PR" && !trustedMutationAdapterConfigured()) {
     throw new ControlPlaneError(
-      "신뢰된 mutation capability broker가 강제되기 전에는 READY_PR routine을 만들 수 없습니다.",
+      "신뢰된 seori-auth mutation adapter identity가 준비되기 전에는 READY_PR routine을 만들 수 없습니다.",
       503,
       "MUTATION_CAPABILITY_BROKER_REQUIRED",
     );
@@ -679,7 +679,13 @@ export async function setAutomationPaused(input: {
   return { definition: updated ?? await loadDefinition(definition.id), changed: Boolean(updated) };
 }
 
-export async function cancelAgentRun(input: { runId: string; actor: string; requestId: string; now?: Date }) {
+export async function cancelAgentRun(input: {
+  runId: string;
+  actor: string;
+  requestId: string;
+  now?: Date;
+  retryAttempt?: number;
+}) {
   const now = input.now ?? new Date();
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.requestId } });
   if (replay) {
@@ -707,7 +713,15 @@ export async function cancelAgentRun(input: { runId: string; actor: string; requ
         where: { runId: run.id, revokedAt: null },
         data: { revokedAt: now, scopeKey: null },
       });
-      const readbackRequired = run.status === "RUNNING" && run.createsPr;
+      await tx.agentWorkerSession.updateMany({
+        where: { runId: run.id, revokedAt: null },
+        data: { revokedAt: now, expiresAt: now },
+      });
+      const mutationStarted = run.status === "RUNNING" && Boolean(await tx.agentMutationExecution.findFirst({
+        where: { runId: run.id, generation: run.leaseGeneration, status: { not: "NOT_APPLIED" } },
+        select: { id: true },
+      }));
+      const readbackRequired = mutationStarted;
       if (!readbackRequired) await releaseRepoGuard(tx, run.id, now);
       await tx.agentRun.update({
         where: { id: run.id },
@@ -750,12 +764,22 @@ export async function cancelAgentRun(input: { runId: string; actor: string; requ
       };
     });
   } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    return cancelAgentRun({ ...input, now });
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError)
+      || error.code !== "P2002"
+      || (input.retryAttempt ?? 0) >= 2
+    ) throw error;
+    return cancelAgentRun({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
   }
 }
 
-export async function retryAgentRun(input: { runId: string; actor: string; requestId: string; now?: Date }) {
+export async function retryAgentRun(input: {
+  runId: string;
+  actor: string;
+  requestId: string;
+  now?: Date;
+  retryAttempt?: number;
+}) {
   const now = input.now ?? new Date();
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.requestId } });
   if (replay) {
@@ -811,8 +835,12 @@ export async function retryAgentRun(input: { runId: string; actor: string; reque
       return { runId: run.id, status: "PENDING" as const, duplicate: false };
     });
   } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    return retryAgentRun({ ...input, now });
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError)
+      || error.code !== "P2002"
+      || (input.retryAttempt ?? 0) >= 2
+    ) throw error;
+    return retryAgentRun({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
   }
 }
 

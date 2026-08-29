@@ -2010,21 +2010,188 @@ model AgentRepoGuard {
 }
 
 model AgentLease {
-  id          String    @id @default(cuid())
-  runId       String
-  run         AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
-  generation  Int
-  tokenHash   String    @db.Char(64)
-  workerId    String
-  scopeKey    String?   @unique
-  expiresAt   DateTime  @db.DateTime(3)
-  heartbeatAt DateTime  @db.DateTime(3)
-  revokedAt   DateTime? @db.DateTime(3)
-  createdAt   DateTime  @default(now()) @db.DateTime(3)
+  id            String              @id @default(cuid())
+  runId         String
+  run           AgentRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  generation    Int
+  // 서버 내부의 폐기 nonce hash다. 원문 capability는 생성 직후 버리고 worker 응답에 내보내지 않는다.
+  tokenHash     String              @db.Char(64)
+  workerId      String
+  scopeKey      String?             @unique
+  expiresAt     DateTime            @db.DateTime(3)
+  heartbeatAt   DateTime            @db.DateTime(3)
+  revokedAt     DateTime?           @db.DateTime(3)
+  createdAt     DateTime            @default(now()) @db.DateTime(3)
+  workerSession AgentWorkerSession?
 
   @@unique([runId, generation])
   @@index([workerId, expiresAt])
   @@map("agent_lease")
+}
+
+// public sessionId는 credential이 아니며 worker bearer 대신 사용할 수 없다. 실제 권한은
+// seori-auth helper의 workload identity와 이 immutable run binding을 함께 검증한다.
+model AgentWorkerSession {
+  id                   String                   @id @db.VarChar(64)
+  leaseId              String                   @unique
+  lease                AgentLease               @relation(fields: [leaseId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "agent_worker_session_lease_id_fkey")
+  runId                String
+  generation           Int
+  principalId          String                   @db.VarChar(128)
+  runtimeBindingDigest String                   @db.Char(64)
+  repoId               BigInt
+  repoFullName         String                   @db.VarChar(191)
+  issueNumber          Int?
+  sourceSha            String                   @db.Char(40)
+  expiresAt            DateTime                 @db.DateTime(3)
+  heartbeatAt          DateTime                 @db.DateTime(3)
+  revokedAt            DateTime?                @db.DateTime(3)
+  settledAt            DateTime?                @db.DateTime(3)
+  createdAt            DateTime                 @default(now()) @db.DateTime(3)
+  updatedAt            DateTime                 @updatedAt
+  observations         AgentGithubObservation[]
+  grants               AgentActionGrant[]
+
+  @@unique([runId, generation], map: "agent_worker_session_run_generation_key")
+  @@index([principalId, expiresAt], map: "agent_worker_session_principal_expiry_idx")
+  @@index([runtimeBindingDigest, expiresAt], map: "agent_worker_session_runtime_expiry_idx")
+  @@index([repoId, sourceSha], map: "agent_worker_session_repo_source_idx")
+  @@map("agent_worker_session")
+}
+
+// Trusted GitHub adapter가 complete pagination과 현재 repo/issue/PR 공개 상태를
+// Ed25519 attestation으로 봉인한 observation이다.
+model AgentGithubObservation {
+  id                        String                  @id @default(cuid())
+  sessionId                 String                  @db.VarChar(64)
+  session                   AgentWorkerSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "agent_github_observation_session_id_fkey")
+  phase                     String                  @db.VarChar(16)
+  adapterPrincipalId        String                  @db.VarChar(128)
+  adapterRuntimeIdentity    String                  @db.VarChar(191)
+  githubInstallationId      String                  @db.VarChar(30)
+  providerSnapshotId        String                  @db.VarChar(191)
+  pageCount                 Int
+  repoId                    BigInt
+  repoFullName              String                  @db.VarChar(191)
+  defaultBranchRef          String                  @db.VarChar(255)
+  defaultBranchSha          String                  @db.Char(40)
+  issueNumber               Int?
+  issueNodeId               String?                 @db.VarChar(191)
+  issueState                String?                 @db.VarChar(16)
+  issueLabels               Json?
+  issueUpdatedAt            DateTime?               @db.DateTime(3)
+  openAutopilotPullRequests Json
+  mutationTarget            Json?
+  payloadDigest             String                  @db.Char(64)
+  observedAt                DateTime                @db.DateTime(3)
+  createdAt                 DateTime                @default(now()) @db.DateTime(3)
+  grants                    AgentActionGrant[]
+  readbacks                 AgentMutationReadback[]
+
+  @@index([sessionId, phase, observedAt], map: "agent_github_observation_session_phase_idx")
+  @@index([repoId, observedAt], map: "agent_github_observation_repo_observed_idx")
+  @@map("agent_github_observation")
+}
+
+// Ed25519 route/body attestation nonce는 전 route에서 한 번만 소비한다. 만료 row는
+// 새 attestation을 검증할 때 함께 정리해 무한 증가하지 않는다.
+model AgentAdapterNonce {
+  nonceDigest     String   @id @db.Char(64)
+  route           String   @db.VarChar(191)
+  bodyDigest      String   @db.Char(64)
+  runtimeIdentity String   @db.VarChar(191)
+  expiresAt       DateTime @db.DateTime(3)
+  createdAt       DateTime @default(now()) @db.DateTime(3)
+
+  @@index([expiresAt], map: "agent_adapter_nonce_expires_idx")
+  @@map("agent_adapter_nonce")
+}
+
+// grant는 trusted adapter의 최신 observation 뒤에 발급되고 같은 transaction에서 즉시
+// 소비된다. token 원문이나 token hash를 worker/API 계약에 만들지 않는다.
+model AgentActionGrant {
+  id                        String                  @id @default(cuid())
+  sessionId                 String                  @db.VarChar(64)
+  session                   AgentWorkerSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "agent_action_grant_session_id_fkey")
+  observationId             String                  @unique(map: "agent_action_grant_observation_id_key")
+  observation               AgentGithubObservation  @relation(fields: [observationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_action_grant_observation_id_fkey")
+  runId                     String
+  generation                Int
+  principalId               String                  @db.VarChar(128)
+  adapterPrincipalId        String                  @db.VarChar(128)
+  adapterRuntimeIdentity    String                  @db.VarChar(191)
+  repoId                    BigInt
+  repoFullName              String                  @db.VarChar(191)
+  issueNumber               Int?
+  sourceSha                 String                  @db.Char(40)
+  action                    String                  @db.VarChar(64)
+  mutationIntentDigest      String                  @db.Char(64)
+  expectedHeadRef           String                  @db.VarChar(255)
+  expectedPullRequestMarker String                  @db.VarChar(191)
+  bindingDigest             String                  @db.Char(64)
+  requestId                 String                  @unique(map: "agent_action_grant_request_id_key") @db.VarChar(191)
+  expiresAt                 DateTime                @db.DateTime(3)
+  consumedAt                DateTime                @db.DateTime(3)
+  revokedAt                 DateTime?               @db.DateTime(3)
+  createdAt                 DateTime                @default(now()) @db.DateTime(3)
+  execution                 AgentMutationExecution?
+
+  @@unique([runId, generation, action], map: "agent_action_grant_run_generation_action_key")
+  @@index([repoFullName, expiresAt], map: "agent_action_grant_repo_expiry_idx")
+  @@map("agent_action_grant")
+}
+
+// 현재 row는 shadow composite attempt의 시작과 readback을 기록한다. 실제 READY_PR activation은
+// CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable ledger가 도입된 뒤에만 가능하다. 이후 worker settlement는
+// trusted adapter가 별도 attestation으로 기록한 VERIFIED readback만 PR_READY 근거로 사용할 수 있다.
+model AgentMutationExecution {
+  id                     String                  @id @default(cuid())
+  grantId                String                  @unique(map: "agent_mutation_execution_grant_id_key")
+  grant                  AgentActionGrant        @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_execution_grant_id_fkey")
+  runId                  String
+  sessionId              String                  @db.VarChar(64)
+  generation             Int
+  action                 String                  @db.VarChar(64)
+  adapterPrincipalId     String                  @db.VarChar(128)
+  adapterRuntimeIdentity String                  @db.VarChar(191)
+  bindingDigest          String                  @db.Char(64)
+  status                 String                  @db.VarChar(32)
+  readbackObservationId  String?                 @db.VarChar(191)
+  pullRequestNumber      Int?
+  pullRequestNodeId      String?                 @db.VarChar(191)
+  pullRequestUrl         String?                 @db.VarChar(2048)
+  pullRequestHeadRef     String?                 @db.VarChar(255)
+  pullRequestHeadSha     String?                 @db.Char(40)
+  pullRequestBaseSha     String?                 @db.Char(40)
+  pullRequestMarker      String?                 @db.VarChar(191)
+  closesClaimedIssue     Boolean?
+  resultDigest           String?                 @db.Char(64)
+  startedAt              DateTime                @default(now()) @db.DateTime(3)
+  verifiedAt             DateTime?               @db.DateTime(3)
+  createdAt              DateTime                @default(now()) @db.DateTime(3)
+  updatedAt              DateTime                @updatedAt
+  readbacks              AgentMutationReadback[]
+
+  @@index([runId, generation, status], map: "agent_mutation_execution_run_gen_status_idx")
+  @@index([sessionId, status], map: "agent_mutation_execution_session_status_idx")
+  @@map("agent_mutation_execution")
+}
+
+model AgentMutationReadback {
+  id                     String                 @id @default(cuid())
+  executionId            String
+  execution              AgentMutationExecution @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_readback_execution_id_fkey")
+  observationId          String                 @unique(map: "agent_mutation_readback_observation_id_key")
+  observation            AgentGithubObservation @relation(fields: [observationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "agent_mutation_readback_observation_id_fkey")
+  adapterPrincipalId     String                 @db.VarChar(128)
+  adapterRuntimeIdentity String                 @db.VarChar(191)
+  status                 String                 @db.VarChar(32)
+  resultDigest           String                 @db.Char(64)
+  requestId              String                 @unique(map: "agent_mutation_readback_request_id_key") @db.VarChar(191)
+  createdAt              DateTime               @default(now()) @db.DateTime(3)
+
+  @@index([executionId, createdAt], map: "agent_mutation_readback_execution_created_idx")
+  @@map("agent_mutation_readback")
 }
 
 model AgentRunEvent {

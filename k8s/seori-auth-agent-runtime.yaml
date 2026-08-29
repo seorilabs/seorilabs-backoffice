@@ -1,0 +1,203 @@
+# P6 generic agent credential/mutation boundary.
+#
+# 기본 replicas=0은 의도적이다. 다음이 모두 끝나기 전에는 올리지 않는다.
+# - Secret Manager/로컬 canonical catalog 공개 identity 대조
+# - Codex/Claude client certificate의 unique /instance/{id} SPIFFE SAN, fingerprint, serial 검증
+# - Ed25519 canary authorize/readback 및 repository-scoped token/revoke 검증
+# - CREATE_COMMIT/CREATE_REF/CREATE_PR durable step ledger와 partial-resume 검증
+# - Calico/Cilium에서 backoffice.vzyx.xyz와 api.github.com만 허용하는 FQDN egress 적용
+#
+# runtime이 실제 Ready여도 durable step-ledger code gate가 현재 false이므로 READY_PR은 활성화되지 않는다.
+# AGENT_TRUSTED_ADAPTER_DEPLOYED는 그 ledger가 별도 검토를 통과한 뒤에만 바꾼다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth-broker
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: seori-auth-agent-runtime
+  namespace: auth-broker
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: seori-auth-agent-runtime
+  namespace: auth-broker
+rules: []
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seori-auth-agent-runtime
+  namespace: auth-broker
+spec:
+  selector:
+    app.kubernetes.io/name: seori-auth-agent-runtime
+  ports:
+    - name: mtls
+      port: 9443
+      targetPort: mtls
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seori-auth-agent-runtime
+  namespace: auth-broker
+  labels:
+    app.kubernetes.io/name: seori-auth-agent-runtime
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seori-auth-agent-runtime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: seori-auth-agent-runtime
+        app.kubernetes.io/component: github-ready-pr-adapter
+    spec:
+      serviceAccountName: seori-auth-agent-runtime
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runtime
+          image: __BACKOFFICE_IMAGE_DIGEST__
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/seori-auth-agent-runtime.cjs"]
+          ports:
+            - name: mtls
+              containerPort: 9443
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=384 --dns-result-order=ipv4first --no-network-family-autoselection"
+            - name: SEORI_AUTH_AGENT_TRANSPORT
+              value: mtls
+            - name: SEORI_AUTH_AGENT_RUNTIME_ROOT
+              value: /var/run/seori-auth-agent-runtime
+            - name: SEORI_AUTH_AGENT_PORT
+              value: "9443"
+            - name: SEORI_AUTH_CODEX_SPIFFE_PREFIX
+              value: spiffe://seorilabs.local/ns/agents/sa/codex-generic-worker/instance
+            - name: SEORI_AUTH_CLAUDE_SPIFFE_PREFIX
+              value: spiffe://seorilabs.local/ns/agents/sa/claude-generic-worker/instance
+            - name: SEORI_BACKOFFICE_ORIGIN
+              value: https://backoffice.vzyx.xyz
+            - name: AGENT_TRUSTED_ADAPTER_PRINCIPAL
+              value: seori-auth:github-adapter
+            - name: AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY
+              value: spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-github-adapter
+            - name: SEORI_GITHUB_APP_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: seori-auth-agent-public-bindings
+                  key: GITHUB_APP_ID
+          readinessProbe:
+            tcpSocket:
+              port: mtls
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/run/seori-auth-agent-runtime
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: runtime
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: seori-auth-agent-backoffice
+                  items:
+                    - { key: ca.pem, path: backoffice/ca.pem }
+                    - { key: adapter.bearer, path: backoffice/adapter.bearer }
+                    - { key: codex.bearer, path: backoffice/codex.bearer }
+                    - { key: claude.bearer, path: backoffice/claude.bearer }
+              - secret:
+                  name: seori-auth-agent-attestation
+                  items:
+                    - { key: private.pem, path: adapter/attestation-private.pem }
+              - secret:
+                  name: seori-auth-agent-github
+                  items:
+                    - { key: app-private.pem, path: github/app-private.pem }
+              - secret:
+                  name: seori-auth-agent-server
+                  items:
+                    - { key: client-ca.pem, path: server/client-ca.pem }
+                    - { key: tls.crt, path: server/tls.crt }
+                    - { key: tls.key, path: server/tls.key }
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seori-auth-agent-runtime
+  namespace: auth-broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seori-auth-agent-runtime
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              seorilabs.dev/seori-auth-client: "true"
+      ports:
+        - { protocol: TCP, port: 9443 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 표준 NetworkPolicy에는 FQDN selector가 없다. replicas=0 activation gate에서
+    # 이 broad 443 rule을 backoffice.vzyx.xyz/api.github.com FQDN 정책으로 교체한다.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }

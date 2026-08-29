@@ -1,35 +1,25 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
+  agentExecutionPolicy,
+  agentRepositorySingletonScope,
   MANAGED_WORKER_TEMPLATE_KEYS,
   parseManagedWorkerPolicy,
   type AutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
+import {
+  agentWorkerSessionStateError,
+  trustedMutationDisposition,
+} from "@/lib/control-plane/agent-mutation-service";
 import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
+import { trustedMutationAdapterConfigured } from "@/lib/control-plane/security";
 
 class RepoScopeBusyError extends Error {}
 
 const READ_ONLY_OUTCOME_CODES = new Set(["NO_CHANGES", "READBACK_CONFIRMED", "RESULT_UNKNOWN", "BLOCKED"]);
-
-const AGENT_ACTION_CAPABILITIES = {
-  READ_ONLY: ["github.issue.read", "github.pull_request.read", "provider.readback"],
-  READY_PR: [
-    "github.issue.read",
-    "github.pull_request.read",
-    "github.branch.write",
-    "github.commit.write",
-    "github.pull_request.create",
-    "provider.readback",
-  ],
-} as const;
-const READBACK_ACTION_CAPABILITIES = ["github.issue.read", "github.pull_request.read", "provider.readback"] as const;
-
-export function mutationCapabilityBrokerEnforced(): boolean {
-  return process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED === "true";
-}
 
 function resultCostMicros(result: Record<string, unknown>): bigint | null {
   const value = result.costMicros;
@@ -67,8 +57,8 @@ function managedPolicy(definition: {
   return parseManagedWorkerPolicy(definition);
 }
 
-function tokenHash(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
+function internalLeaseNonceHash(): string {
+  return crypto.createHash("sha256").update(crypto.randomBytes(32)).digest("hex");
 }
 
 export function agentSettlementRequestHash(input: {
@@ -91,25 +81,6 @@ export function agentReadbackRequestHash(input: {
     resolution: input.resolution,
     result: input.result,
   } as JsonValue)).digest("hex");
-}
-
-function leaseToken(input: {
-  signingKey: string;
-  requestId: string;
-  workerId: string;
-  runId: string;
-  generation: number;
-}): string {
-  if (!input.signingKey) {
-    throw new ControlPlaneError("AGENT_LEASE_SIGNING_KEY가 필요합니다.", 503, "LEASE_SIGNING_UNAVAILABLE");
-  }
-  return crypto.createHmac("sha256", input.signingKey)
-    .update(`${input.requestId}:${input.workerId}:${input.runId}:${input.generation}`)
-    .digest("base64url");
-}
-
-export function repoPrScope(repoFullName: string, createsPr: boolean): string | null {
-  return createsPr ? `repo-pr:${repoFullName.toLowerCase()}` : null;
 }
 
 export function eligibleForAutopilot(input: {
@@ -140,10 +111,10 @@ export async function releaseRepoGuard(
 
 async function acquireRepoGuard(
   tx: Prisma.TransactionClient,
-  run: { id: string; repoFullName: string; createsPr: boolean },
+  run: { id: string; repoFullName: string },
+  activeScopeKey: string | null,
   now: Date,
 ): Promise<boolean> {
-  const activeScopeKey = repoPrScope(run.repoFullName, run.createsPr);
   if (!activeScopeKey) return true;
   const existing = await tx.agentRepoGuard.findUnique({ where: { runId: run.id } });
   if (existing?.activeScopeKey === activeScopeKey) return true;
@@ -188,12 +159,12 @@ export function validSettlementLease(input: {
 }
 
 export function expiredLeaseDisposition(input: {
-  createsPr: boolean;
+  mutationStarted: boolean;
   readbackRequested: boolean;
   attempts: number;
   maxAttempts: number;
 }) {
-  const readbackRequired = input.readbackRequested || input.createsPr;
+  const readbackRequired = input.readbackRequested || input.mutationStarted;
   const terminal = !readbackRequired && input.attempts >= input.maxAttempts;
   return {
     readbackRequired,
@@ -214,7 +185,6 @@ export async function requeueExpiredLeases(now: Date): Promise<void> {
         select: {
           attempts: true,
           maxAttempts: true,
-          createsPr: true,
           readbackRequestedAt: true,
           occurrenceId: true,
         },
@@ -229,8 +199,16 @@ export async function requeueExpiredLeases(now: Date): Promise<void> {
         data: { revokedAt: now, scopeKey: null },
       });
       if (revoked.count !== 1) return;
+      await tx.agentWorkerSession.updateMany({
+        where: { leaseId: lease.id, revokedAt: null },
+        data: { revokedAt: now, expiresAt: now },
+      });
+      const mutationStarted = await tx.agentMutationExecution.findFirst({
+        where: { runId: lease.runId, generation: lease.generation, status: { not: "NOT_APPLIED" } },
+        select: { id: true },
+      });
       const disposition = expiredLeaseDisposition({
-        createsPr: lease.run.createsPr,
+        mutationStarted: mutationStarted !== null,
         readbackRequested: lease.run.readbackRequestedAt !== null,
         attempts: lease.run.attempts,
         maxAttempts: lease.run.maxAttempts,
@@ -254,24 +232,23 @@ export async function requeueExpiredLeases(now: Date): Promise<void> {
           actor: "system",
         },
       });
-      if (readbackRequired) {
-        await tx.automationOccurrence.update({
-          where: { id: lease.run.occurrenceId },
-          data: { status: "RUNNING", completedAt: null, result: { code: "LEASE_EXPIRED_READBACK_REQUIRED" } },
-        });
-      }
-      if (terminal) {
+      if (!readbackRequired) {
         await releaseRepoGuard(tx, lease.runId, now);
-        await tx.automationOccurrence.update({
-          where: { id: lease.run.occurrenceId },
-          data: { status: "DEAD_LETTER", completedAt: now },
-        });
       }
+      await tx.automationOccurrence.update({
+        where: { id: lease.run.occurrenceId },
+        data: readbackRequired
+          ? { status: "RUNNING", completedAt: null, result: { code: "LEASE_EXPIRED_READBACK_REQUIRED" } }
+          : terminal
+            ? { status: "DEAD_LETTER", completedAt: now, result: { code: "LEASE_EXPIRED" } }
+            : { status: "PENDING", completedAt: null, result: { code: "LEASE_EXPIRED" } },
+      });
     });
   }
 }
 
 export interface ClaimedAgentRun {
+  sessionId: string;
   runId: string;
   repoFullName: string;
   issueNumber: number | null;
@@ -286,7 +263,6 @@ export interface ClaimedAgentRun {
   actionCapabilities: readonly string[];
   resumeMode: "START" | "READBACK_FIRST";
   generation: number;
-  leaseToken: string;
   expiresAt: Date;
   duplicate: boolean;
 }
@@ -294,8 +270,8 @@ export interface ClaimedAgentRun {
 async function replayClaim(input: {
   requestId: string;
   workerId: string;
+  runtimeBindingDigest: string;
   agentKind: "CODEX" | "CLAUDE";
-  signingKey: string;
   now: Date;
 }): Promise<ClaimedAgentRun | null> {
   const event = await prisma.agentRunEvent.findUnique({
@@ -303,7 +279,7 @@ async function replayClaim(input: {
     include: {
       run: {
         include: {
-          leases: true,
+          leases: { include: { workerSession: true } },
           occurrence: { include: { definition: true } },
         },
       },
@@ -317,30 +293,45 @@ async function replayClaim(input: {
     throw new ControlPlaneError("claim agent 종류가 기존 요청과 다릅니다.", 409, "IDEMPOTENCY_CONFLICT");
   }
   const lease = event.run.leases.find((candidate) => candidate.generation === event.generation);
-  if (!lease || lease.revokedAt || lease.expiresAt <= input.now) {
+  const session = lease?.workerSession;
+  if (!lease || !session || lease.revokedAt || session.revokedAt || lease.expiresAt <= input.now || session.expiresAt <= input.now) {
     throw new ControlPlaneError("claim 재생 시점에 lease가 만료되었습니다.", 409, "IDEMPOTENCY_REPLAY_EXPIRED");
   }
+  const sessionError = agentWorkerSessionStateError({
+    sessionId: session.id,
+    sessionRunId: session.runId,
+    sessionGeneration: session.generation,
+    sessionPrincipalId: session.principalId,
+    sessionRuntimeBindingDigest: session.runtimeBindingDigest,
+    sessionRepoId: session.repoId,
+    sessionRepoFullName: session.repoFullName,
+    sessionIssueNumber: session.issueNumber,
+    sessionSourceSha: session.sourceSha,
+    sessionExpiresAt: session.expiresAt,
+    sessionRevokedAt: session.revokedAt,
+    requestedPrincipalId: input.workerId,
+    requestedRuntimeBindingDigest: input.runtimeBindingDigest,
+    leaseRunId: lease.runId,
+    leaseGeneration: lease.generation,
+    leaseWorkerId: lease.workerId,
+    leaseExpiresAt: lease.expiresAt,
+    leaseRevokedAt: lease.revokedAt,
+    runStatus: event.run.status,
+    runGeneration: event.run.leaseGeneration,
+    runRepoFullName: event.run.repoFullName,
+    runIssueNumber: event.run.issueNumber,
+    now: input.now,
+  });
+  if (sessionError) throw new ControlPlaneError("claim session binding이 유효하지 않습니다.", 409, sessionError);
   const policy = managedPolicy(event.run.occurrence.definition);
   if (!policy) {
     throw new ControlPlaneError("legacy routine claim은 재생할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
   }
   const spentMicros = Number(event.run.spentMicros ?? 0n);
   const resumeMode = event.run.readbackRequestedAt ? "READBACK_FIRST" as const : "START" as const;
-  if (resumeMode === "START") {
-    const registration = await prisma.repositoryRegistration.findUnique({
-      where: { repoFullName: event.run.repoFullName },
-      select: {
-        archived: true,
-        status: true,
-        managementKind: true,
-        classification: true,
-        lastDefaultPushSha: true,
-        lastReconciledSha: true,
-      },
-    });
-    if (!repositoryAutomationEligible(registration)) return null;
-  }
+  const executionPolicy = agentExecutionPolicy(policy, resumeMode);
   return {
+    sessionId: session.id,
     runId: event.run.id,
     repoFullName: event.run.repoFullName,
     issueNumber: event.run.issueNumber,
@@ -352,12 +343,9 @@ async function replayClaim(input: {
     spentMicros,
     remainingBudgetMicros: Math.max(0, policy.budgetCeilingMicros - spentMicros),
     taskInput: event.run.taskInput,
-    actionCapabilities: resumeMode === "READBACK_FIRST"
-      ? READBACK_ACTION_CAPABILITIES
-      : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
+    actionCapabilities: executionPolicy.capabilities,
     resumeMode,
     generation: event.generation,
-    leaseToken: leaseToken({ ...input, runId: event.run.id, generation: event.generation }),
     expiresAt: lease.expiresAt,
     duplicate: true,
   };
@@ -366,10 +354,11 @@ async function replayClaim(input: {
 async function tryClaimRun(input: {
   runId: string;
   workerId: string;
+  runtimeBindingDigest: string;
   leaseSeconds: number;
   now: Date;
   idempotencyKey: string;
-  signingKey: string;
+  retryAttempt?: number;
 }): Promise<ClaimedAgentRun | null> {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -383,22 +372,35 @@ async function tryClaimRun(input: {
       const readbackClaim = run.status === "FAILED" && run.readbackRequestedAt !== null;
       if (!readbackClaim && run.status !== "PENDING") return null;
       const policy = managedPolicy(run.occurrence.definition);
-      if (!policy || !run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt) return null;
-      if (!readbackClaim) {
-        const registration = await tx.repositoryRegistration.findUnique({
-          where: { repoFullName: run.repoFullName },
-          select: {
-            archived: true,
-            status: true,
-            managementKind: true,
-            classification: true,
-            lastDefaultPushSha: true,
-            lastReconciledSha: true,
-          },
-        });
-        if (!repositoryAutomationEligible(registration)) return null;
-      }
-      if (policy.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced()) return null;
+      if (!policy || (!readbackClaim && (!run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt))) return null;
+      const resumeMode = readbackClaim ? "READBACK_FIRST" as const : "START" as const;
+      const executionPolicy = agentExecutionPolicy(policy, resumeMode);
+      if (executionPolicy.repositorySingleton && !trustedMutationAdapterConfigured()) return null;
+      const registration = await tx.repositoryRegistration.findUnique({
+        where: { repoFullName: run.repoFullName },
+        select: {
+          repoId: true,
+          repoFullName: true,
+          defaultBranch: true,
+          archived: true,
+          status: true,
+          managementKind: true,
+          classification: true,
+          lastDefaultPushSha: true,
+          lastReconciledSha: true,
+        },
+      });
+      const priorSession = readbackClaim
+        ? await tx.agentWorkerSession.findFirst({
+          where: { runId: run.id, generation: { lte: run.leaseGeneration } },
+          orderBy: { generation: "desc" },
+        })
+        : null;
+      if (!readbackClaim && !repositoryAutomationEligible(registration)) return null;
+      if (readbackClaim && !priorSession) return null;
+      const repoId = priorSession?.repoId ?? registration?.repoId;
+      const sourceSha = priorSession?.sourceSha ?? registration?.lastDefaultPushSha;
+      if (!repoId || !sourceSha) return null;
       const spentMicros = Number(run.spentMicros ?? 0n);
       if (!readbackClaim && spentMicros >= policy.budgetCeilingMicros) {
         const exhausted = await tx.agentRun.updateMany({
@@ -433,7 +435,7 @@ async function tryClaimRun(input: {
           labels: issue.labels,
         })) return null;
       }
-      if (!readbackClaim && run.createsPr) {
+      if (!readbackClaim && executionPolicy.repositorySingleton) {
         const openAutopilotPr = await tx.pullRequestMirror.findFirst({
           where: { repoFullName: run.repoFullName, state: "OPEN", isAutopilotPr: true },
           select: { id: true },
@@ -459,22 +461,32 @@ async function tryClaimRun(input: {
         },
       });
       if (changed.count !== 1) return null;
-      if (!(await acquireRepoGuard(tx, run, input.now))) throw new RepoScopeBusyError();
-      const token = leaseToken({
-        signingKey: input.signingKey,
-        requestId: input.idempotencyKey,
-        workerId: input.workerId,
-        runId: run.id,
-        generation,
-      });
+      const activeScopeKey = agentRepositorySingletonScope(run.repoFullName, executionPolicy);
+      if (!(await acquireRepoGuard(tx, run, activeScopeKey, input.now))) throw new RepoScopeBusyError();
       const expiresAt = new Date(input.now.getTime() + input.leaseSeconds * 1000);
-      await tx.agentLease.create({
+      const lease = await tx.agentLease.create({
         data: {
           runId: run.id,
           generation,
-          tokenHash: tokenHash(token),
+          tokenHash: internalLeaseNonceHash(),
           workerId: input.workerId,
-          scopeKey: repoPrScope(run.repoFullName, run.createsPr),
+          scopeKey: activeScopeKey,
+          heartbeatAt: input.now,
+          expiresAt,
+        },
+      });
+      const session = await tx.agentWorkerSession.create({
+        data: {
+          id: `agent-session:${crypto.randomUUID()}`,
+          leaseId: lease.id,
+          runId: run.id,
+          generation,
+          principalId: input.workerId,
+          runtimeBindingDigest: input.runtimeBindingDigest,
+          repoId,
+          repoFullName: run.repoFullName,
+          issueNumber: run.issueNumber,
+          sourceSha: sourceSha.toLowerCase(),
           heartbeatAt: input.now,
           expiresAt,
         },
@@ -491,15 +503,18 @@ async function tryClaimRun(input: {
           generation,
           actor: input.workerId,
           payload: {
+            sessionId: session.id,
             expiresAt: expiresAt.toISOString(),
-            resumeMode: readbackClaim ? "READBACK_FIRST" : "START",
-            actionCapabilities: readbackClaim
-              ? READBACK_ACTION_CAPABILITIES
-              : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
+            resumeMode,
+            repoId: repoId.toString(),
+            sourceSha: sourceSha.toLowerCase(),
+            runtimeBindingDigest: input.runtimeBindingDigest,
+            actionCapabilities: executionPolicy.capabilities,
           },
         },
       });
       return {
+        sessionId: session.id,
         runId: run.id,
         repoFullName: run.repoFullName,
         issueNumber: run.issueNumber,
@@ -511,12 +526,9 @@ async function tryClaimRun(input: {
         spentMicros,
         remainingBudgetMicros: policy.budgetCeilingMicros - spentMicros,
         taskInput: run.taskInput,
-        actionCapabilities: readbackClaim
-          ? READBACK_ACTION_CAPABILITIES
-          : AGENT_ACTION_CAPABILITIES[policy.approvalPolicy],
-        resumeMode: readbackClaim ? "READBACK_FIRST" : "START",
+        actionCapabilities: executionPolicy.capabilities,
+        resumeMode,
         generation,
-        leaseToken: token,
         expiresAt,
         duplicate: false,
       };
@@ -524,16 +536,21 @@ async function tryClaimRun(input: {
   } catch (error) {
     if (error instanceof RepoScopeBusyError) return null;
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return null;
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError
+      && error.code === "P2034"
+      && (input.retryAttempt ?? 0) < 2
+    ) return tryClaimRun({ ...input, retryAttempt: (input.retryAttempt ?? 0) + 1 });
     throw error;
   }
 }
 
 export async function claimAgentRun(input: {
   workerId: string;
+  runtimeBindingDigest: string;
   agentKind: "CODEX" | "CLAUDE";
   leaseSeconds: number;
   idempotencyKey: string;
-  signingKey: string;
   now?: Date;
 }): Promise<ClaimedAgentRun | null> {
   const now = input.now ?? new Date();
@@ -549,8 +566,6 @@ export async function claimAgentRun(input: {
       eligibleAt: { lte: now },
       occurrence: {
         definition: {
-          enabled: true,
-          cancelledAt: null,
           template: { in: [...MANAGED_WORKER_TEMPLATE_KEYS] },
           agentKind: input.agentKind,
           configuration: { not: Prisma.DbNull },
@@ -568,81 +583,149 @@ export async function claimAgentRun(input: {
   return claimed ?? replayClaim({ ...input, requestId: input.idempotencyKey, now });
 }
 
-async function activeLease(input: {
-  runId: string;
-  generation: number;
-  leaseToken: string;
-  workerId: string;
-  now: Date;
-}) {
-  return prisma.agentLease.findFirst({
-    where: {
-      runId: input.runId,
-      generation: input.generation,
-      tokenHash: tokenHash(input.leaseToken),
-      workerId: input.workerId,
-      revokedAt: null,
-      expiresAt: { gt: input.now },
-    },
-  });
-}
-
 export async function heartbeatAgentRun(input: {
-  runId: string;
-  generation: number;
-  leaseToken: string;
+  sessionId: string;
   workerId: string;
+  runtimeBindingDigest: string;
   leaseSeconds: number;
   idempotencyKey: string;
   now?: Date;
+  retryAttempt?: number;
 }) {
   const now = input.now ?? new Date();
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.idempotencyKey } });
   if (replay) {
-    if (replay.runId !== input.runId || replay.generation !== input.generation || replay.actor !== input.workerId || replay.type !== "heartbeat") {
+    const payload = replay.payload as { sessionId?: string; expiresAt?: string; runtimeBindingDigest?: string } | null;
+    if (
+      payload?.sessionId !== input.sessionId
+      || payload.runtimeBindingDigest !== input.runtimeBindingDigest
+      || replay.actor !== input.workerId
+      || replay.type !== "heartbeat"
+    ) {
       throw new ControlPlaneError("idempotency key가 다른 heartbeat에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
-    const payload = replay.payload as { expiresAt?: string } | null;
-    return { expiresAt: new Date(payload?.expiresAt ?? 0), duplicate: true };
+    const session = await prisma.agentWorkerSession.findUnique({
+      where: { id: input.sessionId },
+      include: { lease: { include: { run: true } } },
+    });
+    if (!session || replay.runId !== session.runId || replay.generation !== session.generation) {
+      throw new ControlPlaneError("heartbeat replay session binding이 다릅니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    const sessionError = agentWorkerSessionStateError({
+      sessionId: session.id,
+      sessionRunId: session.runId,
+      sessionGeneration: session.generation,
+    sessionPrincipalId: session.principalId,
+    sessionRuntimeBindingDigest: session.runtimeBindingDigest,
+      sessionRepoId: session.repoId,
+      sessionRepoFullName: session.repoFullName,
+      sessionIssueNumber: session.issueNumber,
+      sessionSourceSha: session.sourceSha,
+      sessionExpiresAt: session.expiresAt,
+      sessionRevokedAt: session.revokedAt,
+    requestedPrincipalId: input.workerId,
+    requestedRuntimeBindingDigest: input.runtimeBindingDigest,
+      leaseRunId: session.lease.runId,
+      leaseGeneration: session.lease.generation,
+      leaseWorkerId: session.lease.workerId,
+      leaseExpiresAt: session.lease.expiresAt,
+      leaseRevokedAt: session.lease.revokedAt,
+      runStatus: session.lease.run.status,
+      runGeneration: session.lease.run.leaseGeneration,
+      runRepoFullName: session.lease.run.repoFullName,
+      runIssueNumber: session.lease.run.issueNumber,
+      now,
+    });
+    if (sessionError) {
+      throw new ControlPlaneError("heartbeat replay session이 더 이상 유효하지 않습니다.", 409, sessionError);
+    }
+    const replayExpiresAt = new Date(payload.expiresAt ?? 0);
+    if (!Number.isFinite(replayExpiresAt.getTime())) {
+      throw new ControlPlaneError("heartbeat replay payload가 유효하지 않습니다.", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    return { sessionId: input.sessionId, expiresAt: replayExpiresAt, duplicate: true };
   }
-  const lease = await activeLease({ ...input, now });
-  if (!lease) throw new ControlPlaneError("유효한 agent lease가 아닙니다.", 409, "STALE_LEASE");
   const expiresAt = new Date(now.getTime() + input.leaseSeconds * 1000);
   try {
     await prisma.$transaction(async (tx) => {
-      const updated = await tx.agentLease.updateMany({
-        where: { id: lease.id, revokedAt: null, expiresAt: { gt: now } },
+      const session = await tx.agentWorkerSession.findUnique({
+        where: { id: input.sessionId },
+        include: { lease: { include: { run: true } } },
+      });
+      if (!session) throw new ControlPlaneError("agent worker session을 찾을 수 없습니다.", 404, "SESSION_NOT_FOUND");
+      const sessionError = agentWorkerSessionStateError({
+        sessionId: session.id,
+        sessionRunId: session.runId,
+        sessionGeneration: session.generation,
+        sessionPrincipalId: session.principalId,
+        sessionRuntimeBindingDigest: session.runtimeBindingDigest,
+        sessionRepoId: session.repoId,
+        sessionRepoFullName: session.repoFullName,
+        sessionIssueNumber: session.issueNumber,
+        sessionSourceSha: session.sourceSha,
+        sessionExpiresAt: session.expiresAt,
+        sessionRevokedAt: session.revokedAt,
+        requestedPrincipalId: input.workerId,
+        requestedRuntimeBindingDigest: input.runtimeBindingDigest,
+        leaseRunId: session.lease.runId,
+        leaseGeneration: session.lease.generation,
+        leaseWorkerId: session.lease.workerId,
+        leaseExpiresAt: session.lease.expiresAt,
+        leaseRevokedAt: session.lease.revokedAt,
+        runStatus: session.lease.run.status,
+        runGeneration: session.lease.run.leaseGeneration,
+        runRepoFullName: session.lease.run.repoFullName,
+        runIssueNumber: session.lease.run.issueNumber,
+        now,
+      });
+      if (sessionError) throw new ControlPlaneError("유효한 agent session이 아닙니다.", 409, sessionError);
+      const updatedLease = await tx.agentLease.updateMany({
+        where: { id: session.leaseId, revokedAt: null, expiresAt: { gt: now } },
         data: { heartbeatAt: now, expiresAt },
       });
-      if (updated.count !== 1) throw new ControlPlaneError("agent lease heartbeat CAS에 실패했습니다.", 409, "STALE_LEASE");
+      const updatedSession = await tx.agentWorkerSession.updateMany({
+        where: { id: session.id, revokedAt: null, expiresAt: { gt: now } },
+        data: { heartbeatAt: now, expiresAt },
+      });
+      if (updatedLease.count !== 1 || updatedSession.count !== 1) {
+        throw new ControlPlaneError("agent session heartbeat CAS에 실패했습니다.", 409, "STALE_SESSION");
+      }
       await tx.agentRunEvent.create({
         data: {
           requestId: input.idempotencyKey,
-          runId: input.runId,
+          runId: session.runId,
           type: "heartbeat",
-          generation: input.generation,
+          generation: session.generation,
           actor: input.workerId,
-          payload: { expiresAt: expiresAt.toISOString() },
+          payload: {
+            sessionId: session.id,
+            expiresAt: expiresAt.toISOString(),
+            runtimeBindingDigest: input.runtimeBindingDigest,
+          },
         },
       });
     });
-    return { expiresAt, duplicate: false };
+    return { sessionId: input.sessionId, expiresAt, duplicate: false };
   } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    return heartbeatAgentRun({ ...input, now });
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError)
+      || !["P2002", "P2034"].includes(error.code)
+      || (input.retryAttempt ?? 0) >= 2
+    ) throw error;
+    return heartbeatAgentRun({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
   }
 }
 
 export async function settleAgentRun(input: {
-  runId: string;
-  generation: number;
-  leaseToken: string;
+  sessionId: string;
   workerId: string;
+  runtimeBindingDigest: string;
   outcome: "complete" | "fail" | "unknown";
   result: Record<string, unknown>;
   error?: string;
   idempotencyKey: string;
   now?: Date;
+  retryAttempt?: number;
 }) {
   const now = input.now ?? new Date();
   const requestHash = agentSettlementRequestHash(input);
@@ -655,212 +738,294 @@ export async function settleAgentRun(input: {
       "result_contract_violation",
     ];
     const expectedTypes = input.outcome === "complete"
-      ? ["completed", ...policyEvents]
+      ? ["completed", "readback_required", ...policyEvents]
       : input.outcome === "unknown"
         ? ["readback_required"]
-        : ["retry_scheduled", "dead_letter", ...policyEvents];
-    if (
-      replay.runId !== input.runId
-      || replay.generation !== input.generation
-      || replay.actor !== input.workerId
-      || !expectedTypes.includes(replay.type)
-    ) {
+        : ["retry_scheduled", "dead_letter", "readback_required", "human_reauth_required", ...policyEvents];
+    if (replay.actor !== input.workerId || !expectedTypes.includes(replay.type)) {
       throw new ControlPlaneError("idempotency key가 다른 completion에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
-    const payload = replay.payload as { status?: string; retry?: boolean; requestHash?: string } | null;
-    if (payload?.requestHash !== requestHash) {
+    const payload = replay.payload as {
+      sessionId?: string;
+      status?: string;
+      retry?: boolean;
+      requestHash?: string;
+      runtimeBindingDigest?: string;
+    } | null;
+    if (
+      payload?.sessionId !== input.sessionId
+      || payload.requestHash !== requestHash
+      || payload.runtimeBindingDigest !== input.runtimeBindingDigest
+    ) {
       throw new ControlPlaneError("idempotency key가 다른 completion payload에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
-    return { status: payload?.status ?? "UNKNOWN", retry: payload?.retry ?? false, duplicate: true };
+    return { runId: replay.runId, status: payload.status ?? "UNKNOWN", retry: payload.retry ?? false, duplicate: true };
   }
   try {
     const settled = await prisma.$transaction(async (tx) => {
-    const lease = await tx.agentLease.findFirst({
-      where: {
-        runId: input.runId,
-        generation: input.generation,
-        tokenHash: tokenHash(input.leaseToken),
-        workerId: input.workerId,
-        revokedAt: null,
-        expiresAt: { gt: now },
-      },
-      include: {
-        run: { include: { occurrence: { include: { definition: true } } } },
-      },
-    });
-    if (!lease || !validSettlementLease({
-      runStatus: lease.run.status,
-      currentGeneration: lease.run.leaseGeneration,
-      requestedGeneration: input.generation,
-      leaseActive: true,
-    })) {
-      throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, "STALE_LEASE");
-    }
-    const policy = managedPolicy(lease.run.occurrence.definition);
-    if (!policy) {
-      throw new ControlPlaneError("legacy routine 결과는 반영할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
-    }
-    const costMicros = resultCostMicros(input.result);
-    const nextSpentMicros = (lease.run.spentMicros ?? 0n) + (costMicros ?? 0n);
-    const policyError = agentResultPolicyError({
-      policy,
-      configuredModel: lease.run.occurrence.definition.model,
-      spentMicros: lease.run.spentMicros,
-      result: input.result,
-    });
-    const readbackRequired = input.outcome === "unknown";
-    const succeeded = input.outcome === "complete" && !policyError;
-    const retry = input.outcome === "fail" && !policyError && lease.run.attempts < lease.run.maxAttempts;
-    const runStatus = succeeded
-      ? "SUCCEEDED"
-      : readbackRequired
-        ? "FAILED"
-        : retry
-          ? "PENDING"
-          : "DEAD_LETTER";
-    const changed = await tx.agentRun.updateMany({
-      where: { id: input.runId, status: "RUNNING", leaseGeneration: input.generation },
-      data: {
-        status: runStatus,
-        completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
-        eligibleAt: retry ? now : lease.run.eligibleAt,
-        spentMicros: nextSpentMicros,
-        outcome: input.result as Prisma.InputJsonValue,
-        error: succeeded
-          ? null
-          : (policyError ?? input.error ?? (readbackRequired ? "PROVIDER_READBACK_REQUIRED" : "WORKER_FAILED")),
-        readbackRequestedAt: readbackRequired ? now : null,
-      },
-    });
-    if (changed.count !== 1) throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, "STALE_LEASE");
-    await tx.agentLease.update({
-      where: { id: lease.id },
-      data: { revokedAt: now, scopeKey: null },
-    });
-    if (input.result.outcomeCode === "PR_READY" && !lease.run.createsPr) {
-      await acquireRepoGuard(tx, { ...lease.run, createsPr: true }, now);
-    }
-    const retainsPrGuard = input.result.outcomeCode === "PR_READY";
-    if ((succeeded && !retainsPrGuard) || (!retry && !readbackRequired && !succeeded && !retainsPrGuard)) {
-      await releaseRepoGuard(tx, input.runId, now);
-    }
-    await tx.automationOccurrence.update({
-      where: { id: lease.run.occurrenceId },
-      data: {
-        status: succeeded
-          ? "COMPLETED"
-          : readbackRequired
-            ? "RUNNING"
-            : retry
-              ? "PENDING"
-              : "DEAD_LETTER",
-        completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
-      },
-    });
-    await tx.agentRunEvent.create({
-      data: {
-        requestId: input.idempotencyKey,
-        runId: input.runId,
-        type: readbackRequired
-          ? "readback_required"
-          : policyError === "BUDGET_CEILING_EXCEEDED"
-          ? "budget_exceeded"
-          : policyError === "RESULT_COST_REQUIRED"
-            ? "result_contract_violation"
-          : policyError === "APPROVAL_POLICY_VIOLATION"
-            ? "approval_policy_violation"
-            : policyError === "MODEL_POLICY_VIOLATION"
-              ? "model_policy_violation"
-            : succeeded
-              ? "completed"
-            : retry
-              ? "retry_scheduled"
-              : "dead_letter",
-        generation: input.generation,
-        actor: input.workerId,
-        payload: {
+      const session = await tx.agentWorkerSession.findUnique({
+        where: { id: input.sessionId },
+        include: { lease: { include: { run: { include: { occurrence: { include: { definition: true } } } } } } },
+      });
+      if (!session) throw new ControlPlaneError("agent worker session을 찾을 수 없습니다.", 404, "SESSION_NOT_FOUND");
+      const sessionError = agentWorkerSessionStateError({
+        sessionId: session.id,
+        sessionRunId: session.runId,
+        sessionGeneration: session.generation,
+        sessionPrincipalId: session.principalId,
+        sessionRuntimeBindingDigest: session.runtimeBindingDigest,
+        sessionRepoId: session.repoId,
+        sessionRepoFullName: session.repoFullName,
+        sessionIssueNumber: session.issueNumber,
+        sessionSourceSha: session.sourceSha,
+        sessionExpiresAt: session.expiresAt,
+        sessionRevokedAt: session.revokedAt,
+        requestedPrincipalId: input.workerId,
+        requestedRuntimeBindingDigest: input.runtimeBindingDigest,
+        leaseRunId: session.lease.runId,
+        leaseGeneration: session.lease.generation,
+        leaseWorkerId: session.lease.workerId,
+        leaseExpiresAt: session.lease.expiresAt,
+        leaseRevokedAt: session.lease.revokedAt,
+        runStatus: session.lease.run.status,
+        runGeneration: session.lease.run.leaseGeneration,
+        runRepoFullName: session.lease.run.repoFullName,
+        runIssueNumber: session.lease.run.issueNumber,
+        now,
+      });
+      const lease = session.lease;
+      if (sessionError || !validSettlementLease({
+        runStatus: lease.run.status,
+        currentGeneration: lease.run.leaseGeneration,
+        requestedGeneration: session.generation,
+        leaseActive: !sessionError,
+      })) {
+        throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, sessionError ?? "STALE_SESSION");
+      }
+      const policy = managedPolicy(lease.run.occurrence.definition);
+      if (!policy) {
+        throw new ControlPlaneError("legacy routine 결과는 반영할 수 없습니다.", 409, "DEFINITION_CONTRACT_UNMANAGED");
+      }
+      const costMicros = resultCostMicros(input.result);
+      const nextSpentMicros = (lease.run.spentMicros ?? 0n) + (costMicros ?? 0n);
+      const resultPolicyError = agentResultPolicyError({
+        policy,
+        configuredModel: lease.run.occurrence.definition.model,
+        spentMicros: lease.run.spentMicros,
+        result: input.result,
+      });
+      const mutation = await trustedMutationDisposition(tx, {
+        runId: lease.run.id,
+        sessionId: session.id,
+        currentGeneration: session.generation,
+        readbackResolution: false,
+        result: input.result,
+      });
+      const reauthRequestId = typeof input.result.reauthRequestId === "string"
+        ? input.result.reauthRequestId
+        : null;
+      let reauthBindingError: string | null = null;
+      if (input.error === "HUMAN_REAUTH_REQUIRED" || reauthRequestId) {
+        const reauth = reauthRequestId
+          ? await tx.reauthRequest.findUnique({
+            where: { id: reauthRequestId },
+            select: { appId: true, runId: true, status: true },
+          })
+          : null;
+        if (
+          !reauth
+          || reauth.appId !== lease.run.appId
+          || reauth.runId !== lease.run.id
+          || !["HUMAN_REAUTH_REQUIRED", "TRUSTED_LOCAL_PENDING"].includes(reauth.status)
+        ) reauthBindingError = "REAUTH_REQUEST_BINDING_MISMATCH";
+      }
+      const readbackRequired = input.outcome === "unknown"
+        || (mutation.mutationStarted && (input.outcome === "fail" || mutation.error !== null));
+      const policyError = resultPolicyError ?? reauthBindingError ?? (!readbackRequired ? mutation.error : null);
+      const succeeded = input.outcome === "complete" && !policyError && !readbackRequired;
+      const humanReauthRequired = input.outcome === "fail"
+        && input.error === "HUMAN_REAUTH_REQUIRED"
+        && input.result.outcomeCode === "BLOCKED"
+        && reauthRequestId !== null
+        && reauthBindingError === null;
+      const retry = input.outcome === "fail"
+        && !policyError
+        && !readbackRequired
+        && !mutation.mutationStarted
+        && !humanReauthRequired
+        && lease.run.attempts < lease.run.maxAttempts;
+      const runStatus = succeeded
+        ? "SUCCEEDED"
+        : readbackRequired
+          ? "FAILED"
+          : retry
+            ? "PENDING"
+            : "DEAD_LETTER";
+      const changed = await tx.agentRun.updateMany({
+        where: { id: lease.run.id, status: "RUNNING", leaseGeneration: session.generation },
+        data: {
           status: runStatus,
-          retry,
-          budgetCeilingMicros: policy.budgetCeilingMicros,
-          spentMicros: Number(nextSpentMicros),
-          approvalPolicy: policy.approvalPolicy,
-          result: input.result,
-          ...(policyError ? { policyError } : {}),
-          requestHash,
-        } as Prisma.InputJsonValue,
-      },
-    });
-    return { status: runStatus, retry, duplicate: false };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+          completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
+          eligibleAt: retry ? now : lease.run.eligibleAt,
+          spentMicros: nextSpentMicros,
+          outcome: input.result as Prisma.InputJsonValue,
+          error: succeeded
+            ? null
+            : (policyError ?? mutation.error ?? input.error ?? (readbackRequired ? "MUTATION_READBACK_REQUIRED" : "WORKER_FAILED")),
+          readbackRequestedAt: readbackRequired ? now : null,
+        },
+      });
+      if (changed.count !== 1) {
+        throw new ControlPlaneError("stale completion은 반영할 수 없습니다.", 409, "STALE_LEASE");
+      }
+      await tx.agentLease.update({
+        where: { id: lease.id },
+        data: { revokedAt: now, scopeKey: null },
+      });
+      await tx.agentWorkerSession.update({
+        where: { id: session.id },
+        data: { revokedAt: now, settledAt: now, expiresAt: now },
+      });
+      if (!mutation.mutationStarted) await releaseRepoGuard(tx, lease.run.id, now);
+      await tx.automationOccurrence.update({
+        where: { id: lease.run.occurrenceId },
+        data: {
+          status: succeeded
+            ? "COMPLETED"
+            : readbackRequired
+              ? "RUNNING"
+              : retry
+                ? "PENDING"
+                : "DEAD_LETTER",
+          completedAt: succeeded || (!retry && !readbackRequired) ? now : null,
+        },
+      });
+      await tx.agentRunEvent.create({
+        data: {
+          requestId: input.idempotencyKey,
+          runId: lease.run.id,
+          type: readbackRequired
+            ? "readback_required"
+            : humanReauthRequired
+              ? "human_reauth_required"
+            : policyError === "BUDGET_CEILING_EXCEEDED"
+              ? "budget_exceeded"
+              : policyError === "RESULT_COST_REQUIRED"
+                ? "result_contract_violation"
+                : policyError === "REAUTH_REQUEST_BINDING_MISMATCH"
+                  ? "result_contract_violation"
+                : policyError === "APPROVAL_POLICY_VIOLATION"
+                  ? "approval_policy_violation"
+                  : policyError === "MODEL_POLICY_VIOLATION"
+                    ? "model_policy_violation"
+                    : succeeded
+                      ? "completed"
+                      : retry
+                        ? "retry_scheduled"
+                        : "dead_letter",
+          generation: session.generation,
+          actor: input.workerId,
+          payload: {
+            sessionId: session.id,
+            status: runStatus,
+            retry,
+            budgetCeilingMicros: policy.budgetCeilingMicros,
+            spentMicros: Number(nextSpentMicros),
+            approvalPolicy: policy.approvalPolicy,
+            result: input.result,
+            mutationStarted: mutation.mutationStarted,
+            ...(mutation.error ? { mutationError: mutation.error } : {}),
+            ...(policyError ? { policyError } : {}),
+            requestHash,
+            runtimeBindingDigest: input.runtimeBindingDigest,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return { runId: lease.run.id, status: runStatus, retry, duplicate: false };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return settled;
   } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    return settleAgentRun({ ...input, now });
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError)
+      || !["P2002", "P2034"].includes(error.code)
+      || (input.retryAttempt ?? 0) >= 2
+    ) throw error;
+    return settleAgentRun({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
   }
 }
 
 export async function resolveAgentRunReadback(input: {
-  runId: string;
-  generation: number;
-  leaseToken: string;
+  sessionId: string;
   workerId: string;
+  runtimeBindingDigest: string;
   resolution: "RESUME" | "COMPLETE" | "BLOCKED";
   result: Record<string, unknown>;
   idempotencyKey: string;
   now?: Date;
+  retryAttempt?: number;
 }) {
   const now = input.now ?? new Date();
   const requestHash = agentReadbackRequestHash(input);
-  const ownedLease = await prisma.agentLease.findFirst({
-    where: {
-      runId: input.runId,
-      generation: input.generation,
-      workerId: input.workerId,
-      tokenHash: tokenHash(input.leaseToken),
-    },
-    select: { id: true },
-  });
-  if (!ownedLease) {
-    throw new ControlPlaneError("readback source lease 소유권이 일치하지 않습니다.", 409, "READBACK_LEASE_MISMATCH");
-  }
   const replay = await prisma.agentRunEvent.findUnique({ where: { requestId: input.idempotencyKey } });
   if (replay) {
-    const payload = replay.payload as { status?: string; requestedResolution?: string; requestHash?: string } | null;
+    const payload = replay.payload as {
+      sessionId?: string;
+      status?: string;
+      requestedResolution?: string;
+      requestHash?: string;
+      runtimeBindingDigest?: string;
+    } | null;
     if (
-      replay.runId !== input.runId
-      || replay.generation !== input.generation
-      || replay.actor !== input.workerId
+      replay.actor !== input.workerId
       || !["readback_resumed", "readback_completed", "readback_blocked", "readback_policy_blocked"].includes(replay.type)
+      || payload?.sessionId !== input.sessionId
       || payload?.requestedResolution !== input.resolution
       || payload?.requestHash !== requestHash
+      || payload?.runtimeBindingDigest !== input.runtimeBindingDigest
     ) {
       throw new ControlPlaneError("idempotency key가 다른 readback에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
-    return { status: payload?.status ?? "UNKNOWN", duplicate: true };
+    return { runId: replay.runId, status: payload?.status ?? "UNKNOWN", duplicate: true };
   }
   try {
     return await prisma.$transaction(async (tx) => {
-      const run = await tx.agentRun.findUnique({
-        where: { id: input.runId },
-        include: { occurrence: { include: { definition: true } } },
+      const session = await tx.agentWorkerSession.findUnique({
+        where: { id: input.sessionId },
+        include: { lease: { include: { run: { include: { occurrence: { include: { definition: true } } } } } } },
       });
-      const sourceLease = await tx.agentLease.findFirst({
-        where: {
-          runId: input.runId,
-          generation: input.generation,
-          workerId: input.workerId,
-          tokenHash: tokenHash(input.leaseToken),
-          revokedAt: null,
-          expiresAt: { gt: now },
-        },
-        select: { id: true },
+      if (!session) throw new ControlPlaneError("agent worker session을 찾을 수 없습니다.", 404, "SESSION_NOT_FOUND");
+      const run = session.lease.run;
+      const sourceLease = session.lease;
+      const sessionError = agentWorkerSessionStateError({
+        sessionId: session.id,
+        sessionRunId: session.runId,
+        sessionGeneration: session.generation,
+        sessionPrincipalId: session.principalId,
+        sessionRuntimeBindingDigest: session.runtimeBindingDigest,
+        sessionRepoId: session.repoId,
+        sessionRepoFullName: session.repoFullName,
+        sessionIssueNumber: session.issueNumber,
+        sessionSourceSha: session.sourceSha,
+        sessionExpiresAt: session.expiresAt,
+        sessionRevokedAt: session.revokedAt,
+        requestedPrincipalId: input.workerId,
+        requestedRuntimeBindingDigest: input.runtimeBindingDigest,
+        leaseRunId: sourceLease.runId,
+        leaseGeneration: sourceLease.generation,
+        leaseWorkerId: sourceLease.workerId,
+        leaseExpiresAt: sourceLease.expiresAt,
+        leaseRevokedAt: sourceLease.revokedAt,
+        runStatus: run.status,
+        runGeneration: run.leaseGeneration,
+        runRepoFullName: run.repoFullName,
+        runIssueNumber: run.issueNumber,
+        now,
       });
       if (
-        !run
-        || !sourceLease
+        sessionError
         || run.status !== "RUNNING"
         || !run.readbackRequestedAt
-        || run.leaseGeneration !== input.generation
+        || run.leaseGeneration !== session.generation
       ) {
         throw new ControlPlaneError("readback 대기 중인 동일 generation run이 아닙니다.", 409, "READBACK_STATE_CONFLICT");
       }
@@ -876,6 +1041,14 @@ export async function resolveAgentRunReadback(input: {
         spentMicros: run.spentMicros,
         result: input.result,
       });
+      const mutation = await trustedMutationDisposition(tx, {
+        runId: run.id,
+        sessionId: session.id,
+        currentGeneration: session.generation,
+        readbackResolution: true,
+        result: input.result,
+      });
+      if (!policyError && mutation.error) policyError = mutation.error;
       if (!policyError && input.resolution === "RESUME" && run.attempts >= run.maxAttempts) {
         policyError = "MAX_ATTEMPTS_EXHAUSTED";
       }
@@ -889,7 +1062,7 @@ export async function resolveAgentRunReadback(input: {
         where: {
           id: run.id,
           status: "RUNNING",
-          leaseGeneration: input.generation,
+          leaseGeneration: session.generation,
           readbackRequestedAt: { not: null },
         },
         data: {
@@ -909,11 +1082,12 @@ export async function resolveAgentRunReadback(input: {
         where: { id: sourceLease.id },
         data: { revokedAt: now, scopeKey: null },
       });
-      const retainsPrGuard = input.result.outcomeCode === "PR_READY";
-      if (retainsPrGuard && !run.createsPr) {
-        await acquireRepoGuard(tx, { ...run, createsPr: true }, now);
-      }
-      if (effectiveResolution === "COMPLETE" && !retainsPrGuard) await releaseRepoGuard(tx, run.id, now);
+      await tx.agentWorkerSession.update({
+        where: { id: session.id },
+        data: { revokedAt: now, settledAt: now, expiresAt: now },
+      });
+      const retainsPrGuard = mutation.mutationStarted;
+      if (!retainsPrGuard) await releaseRepoGuard(tx, run.id, now);
       let workKeyReleased = false;
       if (effectiveResolution === "COMPLETE" && run.issueNumber) {
         const issue = await tx.issueMirror.findUnique({
@@ -959,24 +1133,32 @@ export async function resolveAgentRunReadback(input: {
             : effectiveResolution === "COMPLETE"
               ? "readback_completed"
               : "readback_blocked",
-          generation: input.generation,
+          generation: session.generation,
           actor: input.workerId,
           payload: {
+            sessionId: session.id,
             status,
             requestedResolution: input.resolution,
             result: input.result,
             spentMicros: Number(nextSpentMicros),
             workKeyReleased,
+            mutationStarted: mutation.mutationStarted,
+            ...(mutation.error ? { mutationError: mutation.error } : {}),
             ...(policyError ? { policyError } : {}),
             requestHash,
+            runtimeBindingDigest: input.runtimeBindingDigest,
           } as Prisma.InputJsonValue,
         },
       });
-      return { status, duplicate: false };
+      return { runId: run.id, status, duplicate: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    return resolveAgentRunReadback({ ...input, now });
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError)
+      || !["P2002", "P2034"].includes(error.code)
+      || (input.retryAttempt ?? 0) >= 2
+    ) throw error;
+    return resolveAgentRunReadback({ ...input, now, retryAttempt: (input.retryAttempt ?? 0) + 1 });
   }
 }
 
