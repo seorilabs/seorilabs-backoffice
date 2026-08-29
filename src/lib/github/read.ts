@@ -88,6 +88,20 @@ export async function getOrgDefaultBranches(): Promise<Map<string, string>> {
   );
 }
 
+/**
+ * 조직의 공개 저장소 이름 집합. 청구 계산에서 무료 사용량을 가려내는 데 쓴다.
+ * 이름만 필요하므로 full_name 이 아니라 repo name 으로 돌려준다(청구 API 표기와 일치).
+ */
+export async function listOrgPublicRepositoryNames(): Promise<Set<string>> {
+  const octokit = await getInstallationOctokit();
+  const repos = await octokit.paginate(octokit.rest.repos.listForOrg, {
+    org: env.githubOrg(),
+    per_page: 100,
+    type: "public",
+  });
+  return new Set(repos.map((repo) => repo.name));
+}
+
 /** 단일 저장소의 실제 default branch. workflow_dispatch ref 선택에 사용한다. */
 export async function getRepoDefaultBranch(repoFullName: string): Promise<string> {
   const octokit = await getInstallationOctokit();

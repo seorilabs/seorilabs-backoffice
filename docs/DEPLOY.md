@@ -385,6 +385,10 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 소스 4종: GitHub Actions 분량·과금, GCP billing export, `ai_usage` 원장의 LLM 비용,
   Stability 크레딧. 임계(GitHub 70/90% + 실청구, GCP·LLM 예산 70/100%, Stability 경고선)를
   넘으면 경고 항목이 붙는다.
+- **공개 저장소의 표준 러너 사용량은 포함분량을 소비하지 않는다.** 청구 API는 gross를 그대로
+  싣고 같은 금액을 discount로 상계하므로 분(minute)만 보면 분량을 쓴 것처럼 보인다. 리포트는
+  조직 공개 저장소 목록을 조회해 그 분을 빼고, 뺀 양을 "공개 저장소 N분은 무료라 분량에서 제외"로
+  드러낸다. 목록 조회가 실패하면 전부 분량 소비로 세어(보수적) 과소 보고하지 않는다.
 - 관련 key는 전부 optional이며 미설정 소스는 리포트에 "미설정"으로 드러난다.
   `GITHUB_BILLING_TOKEN`(조직 billing 읽기 전용 fine-grained PAT, 키체인
   `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`, `STABILITY_API_KEY`.
