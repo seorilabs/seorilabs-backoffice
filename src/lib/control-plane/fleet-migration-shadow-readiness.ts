@@ -60,14 +60,23 @@ export interface FleetMigrationRepositoryRegistrationReadback {
   decision: FleetMigrationClassificationDecisionReadback | null;
 }
 
+export interface FleetMigrationDiscoveryObservationReadback {
+  id: string;
+  appId: string;
+  sourceSha: string;
+  sourceRef: string | null;
+  payloadHash: string;
+}
+
 export interface FleetMigrationAppReadback {
   id: string;
   repoId: string;
   repoFullName: string;
-  latestDiscovery: { id: string; sourceSha: string } | null;
+  latestDiscovery: FleetMigrationDiscoveryObservationReadback | null;
   activeConfigs: Array<{
     id: string;
     sourceObservationId: string | null;
+    sourceObservation: FleetMigrationDiscoveryObservationReadback | null;
     activatedSnapshot: JsonValue | null;
     snapshotDigest: string | null;
     snapshotSignature: string | null;
@@ -146,7 +155,13 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
         discoveryObservations: {
           orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
           take: 1,
-          select: { id: true, sourceSha: true },
+          select: {
+            id: true,
+            appId: true,
+            sourceSha: true,
+            sourceRef: true,
+            payloadHash: true,
+          },
         },
         configRevisions: {
           where: { status: "ACTIVE" },
@@ -155,6 +170,15 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
           select: {
             id: true,
             sourceObservationId: true,
+            sourceObservation: {
+              select: {
+                id: true,
+                appId: true,
+                sourceSha: true,
+                sourceRef: true,
+                payloadHash: true,
+              },
+            },
             activatedSnapshot: true,
             snapshotDigest: true,
             snapshotSignature: true,
@@ -190,6 +214,7 @@ async function readBackoffice(repositoryIds: bigint[]): Promise<FleetMigrationBa
       activeConfigs: app.configRevisions.map((revision) => ({
         id: revision.id,
         sourceObservationId: revision.sourceObservationId,
+        sourceObservation: revision.sourceObservation,
         activatedSnapshot: revision.activatedSnapshot as JsonValue | null,
         snapshotDigest: revision.snapshotDigest,
         snapshotSignature: revision.snapshotSignature,
@@ -302,9 +327,23 @@ function repositoryReasons(
     reasons.push("ACTIVE_CONFIG_MISSING");
   } else {
     const activeConfig = app.activeConfigs[0];
+    const sourceObservation = activeConfig.sourceObservation;
+    const latestDiscovery = app.latestDiscovery;
     if (
-      !app.latestDiscovery
-      || activeConfig.sourceObservationId !== app.latestDiscovery.id
+      !sourceObservation
+      || !latestDiscovery
+      || activeConfig.sourceObservationId !== sourceObservation.id
+      || sourceObservation.appId !== app.id
+      || latestDiscovery.appId !== app.id
+      || sourceObservation.sourceRef !== "refs/heads/main"
+      || latestDiscovery.sourceRef !== "refs/heads/main"
+      || !SHA_40.test(sourceObservation.sourceSha)
+      || !SHA_40.test(latestDiscovery.sourceSha)
+      || sourceObservation.sourceSha !== latestDiscovery.sourceSha
+      || sourceObservation.sourceSha !== vector.headSha
+      || !DIGEST_64.test(sourceObservation.payloadHash)
+      || !DIGEST_64.test(latestDiscovery.payloadHash)
+      || sourceObservation.payloadHash !== latestDiscovery.payloadHash
     ) {
       reasons.push("ACTIVE_CONFIG_SOURCE_MISMATCH");
     }
