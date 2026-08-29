@@ -43,9 +43,35 @@ test("관측일이 모자라면 기준선을 세우지 않는다", () => {
 });
 
 test("표본이 작은 앱은 판정하지 않는다", () => {
-  // DAU 기준선 10 미만 — 3명이 6명이 된 것은 소식이 아니다.
-  assert.equal(movement({ latest: 6, baseline: 3 }).verdict, "insufficient");
-  assert.equal(movement({ baseline: null }).verdict, "insufficient");
+  // DAU 기준선 5 미만 — 2명이 4명이 된 것은 소식이 아니다.
+  assert.equal(movement({ latest: 4, baseline: 2 }).verdict, "insufficient");
+  assert.equal(movement({ baseline: null, latest: 7 }).verdict, "insufficient");
+});
+
+test("창 전체가 0 인 지표는 표본 부족이 아니라 미집계다", () => {
+  // 광고가 없는 앱의 광고 수익까지 "표본 부족"으로 세면 리포트가 0 으로 뒤덮인다.
+  assert.equal(movement({ metricKey: "console_iaa", latest: 0, baseline: 0 }).verdict, "absent");
+  assert.equal(movement({ metricKey: "console_iap", latest: 0, baseline: null }).verdict, "absent");
+  // 값이 있다가 0 이 된 것은 미집계가 아니라 실제 하락이다.
+  assert.equal(movement({ metricKey: "console_iaa", latest: 0, baseline: 200 }).verdict, "lowlight");
+});
+
+test("상대 변화만으로는 작은 수의 잡음을 막지 못해 절대 변화도 함께 본다", () => {
+  // 기준선 6 → 9 는 +50% 지만 3명 차이다. 절대 임계 3명을 딱 채워야 소식이 된다.
+  assert.equal(movement({ latest: 9, baseline: 6 }).verdict, "highlight");
+  assert.equal(movement({ latest: 8, baseline: 6 }).verdict, "flat", "2명 차이는 잡음");
+  // 콘솔 광고 수익도 마찬가지 — 14원이 20원이 된 것은 +43% 지만 소식이 아니다.
+  assert.equal(movement({ metricKey: "console_iaa", latest: 20, baseline: 14 }).verdict, "insufficient");
+  assert.equal(movement({ metricKey: "console_iaa", latest: 219, baseline: 60 }).verdict, "highlight");
+});
+
+test("모수가 작은 잔존율은 값이 크게 흔들려도 판정하지 않는다", () => {
+  const base = { metricKey: "ga4_d1", latest: 47, baseline: 25 } as const;
+  // 신규 3명 코호트의 D1 47% 는 한두 명이 만든 숫자다.
+  assert.equal(movement({ ...base, sample: 3 }).verdict, "insufficient");
+  assert.equal(movement({ ...base, sample: undefined }).verdict, "insufficient");
+  // 코호트가 충분하면 같은 값이 하이라이트가 된다.
+  assert.equal(movement({ ...base, sample: 40 }).verdict, "highlight");
 });
 
 test("없던 것이 뚜렷하게 생기면 신규 하이라이트로 올린다", () => {
@@ -74,11 +100,11 @@ test("상승은 하이라이트, 하락은 로우라이트로 갈린다", () => 
 
 test("잔존율은 상대 변화가 아니라 %p 로 본다", () => {
   // 12% → 20% 는 상대로 +67% 지만 실제 개선은 8%p 다.
-  const up = movement({ metricKey: "ga4_d1", latest: 20, baseline: 12 });
-  assert.equal(up.verdict, "flat", "8%p 는 임계 10%p 미만");
-  const big = movement({ metricKey: "ga4_d1", latest: 25, baseline: 12 });
+  const up = movement({ metricKey: "ga4_d1", latest: 20, baseline: 12, sample: 40 });
+  assert.equal(up.verdict, "flat", "8%p 는 임계 15%p 미만");
+  const big = movement({ metricKey: "ga4_d1", latest: 30, baseline: 12, sample: 40 });
   assert.equal(big.verdict, "highlight");
-  assert.equal(Math.round(big.change as number), 13);
+  assert.equal(Math.round(big.change as number), 18);
 });
 
 test("정렬은 변화율만이 아니라 규모까지 반영한다", () => {
@@ -90,16 +116,16 @@ test("정렬은 변화율만이 아니라 규모까지 반영한다", () => {
 
 test("시계열에서 지표별 움직임을 뽑고 미수집 값은 건너뛴다", () => {
   const rows = [
-    { date: new Date("2026-08-28T00:00:00Z"), dau: 400, d1Pct: null },
-    { date: new Date("2026-08-27T00:00:00Z"), dau: 100, d1Pct: 11 },
-    { date: new Date("2026-08-26T00:00:00Z"), dau: 100, d1Pct: 12 },
-    { date: new Date("2026-08-25T00:00:00Z"), dau: 100, d1Pct: 12 },
-    { date: new Date("2026-08-24T00:00:00Z"), dau: 100, d1Pct: 12 },
+    { date: new Date("2026-08-28T00:00:00Z"), dau: 400, d1Pct: null, newUsers: 40 },
+    { date: new Date("2026-08-27T00:00:00Z"), dau: 100, d1Pct: 11, newUsers: 40 },
+    { date: new Date("2026-08-26T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
+    { date: new Date("2026-08-25T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
+    { date: new Date("2026-08-24T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
   ];
   const movements = movementsFromSeries("행복 농장 타이쿤", rows, [
     { key: "ga4_dau", pick: (row) => row.dau },
     // 최신 행의 값이 null 이면 그 지표는 관측 자체가 없다.
-    { key: "ga4_d1", pick: (row) => row.d1Pct },
+    { key: "ga4_d1", pick: (row) => row.d1Pct, sample: (row) => row.newUsers },
   ]);
   assert.deepEqual(movements.map((m) => m.metricKey), ["ga4_dau"]);
   assert.equal(movements[0].verdict, "highlight");
@@ -120,7 +146,8 @@ test("리포트는 포트폴리오 합계와 양쪽 목록, 처리 건수를 함
       movement({ label: "행복 농장 타이쿤", latest: 420, baseline: 250 }),
       movement({ label: "크로스워드", metricKey: "console_iaa", latest: 400, baseline: 4_000 }),
       movement({ label: "무변동 앱", latest: 260, baseline: 250 }),
-      movement({ label: "작은 앱", latest: 6, baseline: 3 }),
+      movement({ label: "작은 앱", latest: 4, baseline: 2 }),
+      movement({ label: "광고 없는 앱", metricKey: "console_iap", latest: 0, baseline: 0 }),
     ],
   });
   assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} (D-1)**`);
@@ -130,7 +157,7 @@ test("리포트는 포트폴리오 합계와 양쪽 목록, 처리 건수를 함
   assert.ok(text.includes("1. **행복 농장 타이쿤** · GA4 DAU 420명 (기준 250명, +68%)"));
   assert.ok(text.includes("🔴 **로우라이트**"));
   assert.ok(text.includes("1. **크로스워드** · 콘솔 광고 수익 ₩400 (기준 ₩4,000, -90%)"));
-  assert.ok(text.endsWith("변동 없음 1건 · 표본 부족 1건 · 관측 4건"));
+  assert.ok(text.endsWith("판정 4건 (변동 없음 1 · 표본 부족 1) · 미집계 1건"), text);
 });
 
 test("움직임이 없으면 없다고 말한다", () => {

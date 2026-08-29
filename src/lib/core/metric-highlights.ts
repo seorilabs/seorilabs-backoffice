@@ -30,6 +30,16 @@ export interface MetricSpec {
   minBaseline: number;
   /** 이 변화 이상만 하이라이트·로우라이트가 된다. 비율 지표는 %p, 나머지는 %. */
   minChange: number;
+  /**
+   * 상대 변화와 함께 요구하는 최소 절대 변화량. 규모가 작은 포트폴리오에서는
+   * 3명이 5명이 되어도 +67% 라 상대 임계만으로는 잡음이 리포트를 덮는다.
+   */
+  minAbsDelta?: number;
+  /**
+   * 이 지표를 판정하기 위해 필요한 최소 모수. 잔존율처럼 분모가 작으면 값 자체가
+   * 흔들리는 지표에 건다(D1 은 신규 사용자 수).
+   */
+  minSample?: number;
   /** 잔존율처럼 그 자체가 퍼센트인 지표. 상대 변화가 아니라 %p 로 본다. */
   pointScale?: boolean;
   format: (value: number) => string;
@@ -39,13 +49,16 @@ const count = (unit: string) => (value: number) => `${Math.round(value).toLocale
 const won = (value: number) => `₩${Math.round(value).toLocaleString("ko-KR")}`;
 const percent = (value: number) => `${value.toFixed(1)}%`;
 
+// 임계는 2026-08-29 실측 분포에 맞춘 값이다(전체 GA4 DAU 75명, 콘솔 일 광고수익 ₩38).
+// 포트폴리오가 커지면 minBaseline·minAbsDelta 를 함께 올린다.
 export const METRIC_SPECS: MetricSpec[] = [
-  { key: "ga4_dau", ko: "DAU", source: "GA4", minBaseline: 10, minChange: 30, format: count("명") },
-  { key: "ga4_d1", ko: "D1 잔존율", source: "GA4", minBaseline: 5, minChange: 10, pointScale: true, format: percent },
-  { key: "ga4_ad_completions", ko: "보상형 광고 완료", source: "GA4", minBaseline: 20, minChange: 40, format: count("회") },
-  { key: "console_dau", ko: "토스 DAU", source: "콘솔", minBaseline: 10, minChange: 30, format: count("명") },
-  { key: "console_iaa", ko: "광고 수익", source: "콘솔", minBaseline: 1_000, minChange: 40, format: won },
-  { key: "console_iap", ko: "결제 거래액", source: "콘솔", minBaseline: 1_000, minChange: 40, format: won },
+  { key: "ga4_dau", ko: "DAU", source: "GA4", minBaseline: 5, minChange: 30, minAbsDelta: 3, format: count("명") },
+  // 신규 20명 미만 코호트의 D1 은 한두 명에 수십 %p 가 움직여 판정하지 않는다.
+  { key: "ga4_d1", ko: "D1 잔존율", source: "GA4", minBaseline: 5, minChange: 15, minSample: 20, pointScale: true, format: percent },
+  { key: "ga4_ad_completions", ko: "보상형 광고 완료", source: "GA4", minBaseline: 10, minChange: 40, minAbsDelta: 5, format: count("회") },
+  { key: "console_dau", ko: "토스 DAU", source: "콘솔", minBaseline: 5, minChange: 40, minAbsDelta: 3, format: count("명") },
+  { key: "console_iaa", ko: "광고 수익", source: "콘솔", minBaseline: 50, minChange: 50, minAbsDelta: 50, format: won },
+  { key: "console_iap", ko: "결제 거래액", source: "콘솔", minBaseline: 1_000, minChange: 40, minAbsDelta: 1_000, format: won },
 ];
 
 const SPEC_BY_KEY = new Map(METRIC_SPECS.map((spec) => [spec.key, spec]));
@@ -57,11 +70,14 @@ export interface MovementInput {
   latest: number;
   /** 직전 7일 중앙값. 관측이 모자라면 null. */
   baseline: number | null;
+  /** 지표의 모수(D1 의 신규 사용자 수 등). spec.minSample 이 있는 지표만 쓴다. */
+  sample?: number | null;
   /** 이 값의 기준일. 리포트 기준일과 다르면 리포트에 함께 표기한다. */
   date: string;
 }
 
-export type MovementVerdict = "highlight" | "lowlight" | "flat" | "insufficient";
+/** absent = 관측 창 전체가 0 이라 애초에 말할 것이 없는 지표(광고 없는 앱의 광고 수익 등). */
+export type MovementVerdict = "highlight" | "lowlight" | "flat" | "insufficient" | "absent";
 
 export interface Movement extends MovementInput {
   spec: MetricSpec;
@@ -91,7 +107,16 @@ export function evaluateMovement(input: MovementInput): Movement {
   if (!spec) throw new Error(`알 수 없는 지표: ${input.metricKey}`);
   const base = { ...input, spec };
 
+  // 창 전체가 0 이면 그 앱에 없는 지표다. 표본 부족이 아니라 관측 대상이 아니다.
+  if (input.latest === 0 && (input.baseline === 0 || input.baseline == null)) {
+    return { ...base, verdict: "absent", change: null, score: 0 };
+  }
   if (input.baseline == null) return { ...base, verdict: "insufficient", change: null, score: 0 };
+
+  // 모수가 작으면 값 자체가 흔들려 변화를 신호로 읽을 수 없다.
+  if (spec.minSample != null && (input.sample ?? 0) < spec.minSample) {
+    return { ...base, verdict: "insufficient", change: null, score: 0 };
+  }
 
   // 기준선이 임계 미만이면 표본이 작다. 다만 없던 것이 뚜렷하게 생긴 경우는
   // 그 자체가 소식이라 "신규"로 올린다.
@@ -105,7 +130,10 @@ export function evaluateMovement(input: MovementInput): Movement {
   const change = spec.pointScale
     ? input.latest - input.baseline
     : ((input.latest - input.baseline) / input.baseline) * 100;
-  if (Math.abs(change) < spec.minChange) return { ...base, verdict: "flat", change, score: 0 };
+  const absDelta = Math.abs(input.latest - input.baseline);
+  if (Math.abs(change) < spec.minChange || absDelta < (spec.minAbsDelta ?? 0)) {
+    return { ...base, verdict: "flat", change, score: 0 };
+  }
   return {
     ...base,
     verdict: change > 0 ? "highlight" : "lowlight",
@@ -189,9 +217,14 @@ export function renderHighlightReport(input: {
     lines.push("", "임계를 넘은 변동 없음");
   }
 
-  const flat = input.movements.filter((movement) => movement.verdict === "flat").length;
-  const insufficient = input.movements.filter((movement) => movement.verdict === "insufficient").length;
-  lines.push("", `변동 없음 ${flat}건 · 표본 부족 ${insufficient}건 · 관측 ${input.movements.length}건`);
+  const tally = (verdict: MovementVerdict) =>
+    input.movements.filter((movement) => movement.verdict === verdict).length;
+  const absent = tally("absent");
+  const judged = input.movements.length - absent;
+  lines.push(
+    "",
+    `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 미집계 ${absent}건`,
+  );
   return lines.join("\n");
 }
 
@@ -202,21 +235,23 @@ export function metricHighlightDedupeKey(refDate: string): string {
 
 // ── 수집 ────────────────────────────────────────────────────────────────────
 
-const GA4_METRIC_PICKERS: Array<{ key: string; pick: (row: Ga4Row) => number | null }> = [
-  { key: "ga4_dau", pick: (row) => row.dau },
-  { key: "ga4_d1", pick: (row) => row.d1Pct },
-  { key: "ga4_ad_completions", pick: (row) => row.adCompletions },
+const GA4_METRIC_PICKERS = [
+  { key: "ga4_dau", pick: (row: Ga4Row) => row.dau },
+  // D1 은 신규 사용자 코호트가 모수다. 코호트가 작으면 판정하지 않는다.
+  { key: "ga4_d1", pick: (row: Ga4Row) => row.d1Pct, sample: (row: Ga4Row) => row.newUsers },
+  { key: "ga4_ad_completions", pick: (row: Ga4Row) => row.adCompletions },
 ];
 
-const CONSOLE_METRIC_PICKERS: Array<{ key: string; pick: (row: ConsoleRow) => number | null }> = [
-  { key: "console_dau", pick: (row) => row.dau },
-  { key: "console_iaa", pick: (row) => row.iaaEarningKrw },
-  { key: "console_iap", pick: (row) => row.iapTrxAmountKrw },
+const CONSOLE_METRIC_PICKERS = [
+  { key: "console_dau", pick: (row: ConsoleRow) => row.dau },
+  { key: "console_iaa", pick: (row: ConsoleRow) => row.iaaEarningKrw },
+  { key: "console_iap", pick: (row: ConsoleRow) => row.iapTrxAmountKrw },
 ];
 
 interface Ga4Row {
   date: Date;
   dau: number;
+  newUsers: number;
   d1Pct: number | null;
   adCompletions: number;
 }
@@ -232,12 +267,17 @@ interface ConsoleRow {
 export function movementsFromSeries<T extends { date: Date }>(
   label: string,
   rowsDesc: readonly T[],
-  pickers: ReadonlyArray<{ key: string; pick: (row: T) => number | null }>,
+  pickers: ReadonlyArray<{
+    key: string;
+    pick: (row: T) => number | null;
+    /** 모수를 요구하는 지표(D1)만 선언한다. 기준선과 같은 창의 중앙값을 쓴다. */
+    sample?: (row: T) => number | null;
+  }>,
 ): Movement[] {
   const latest = rowsDesc[0];
   if (!latest) return [];
   const date = isoDate(latest.date);
-  return pickers.flatMap(({ key, pick }) => {
+  return pickers.flatMap(({ key, pick, sample }) => {
     const value = pick(latest);
     if (value == null) return [];
     return [
@@ -246,6 +286,7 @@ export function movementsFromSeries<T extends { date: Date }>(
         metricKey: key,
         latest: value,
         baseline: baselineOf(rowsDesc.slice(1).map(pick)),
+        ...(sample ? { sample: baselineOf(rowsDesc.map(sample)) } : {}),
         date,
       }),
     ];
@@ -288,7 +329,7 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
       where: { appId: app.id },
       orderBy: { date: "desc" },
       take: BASELINE_DAYS + 1,
-      select: { date: true, dau: true, d1Pct: true, adCompletions: true },
+      select: { date: true, dau: true, newUsers: true, d1Pct: true, adCompletions: true },
     })) as Ga4Row[];
     // 기준일 스냅샷이 아직 없는 앱은 어제를 말할 수 없다. 합계도 오염시키지 않는다.
     if (rows.length === 0 || isoDate(rows[0].date) !== refDate) continue;
