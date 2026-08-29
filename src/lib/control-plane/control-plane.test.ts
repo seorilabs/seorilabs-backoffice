@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   eligibleForAutopilot,
   firstSuccessfulClaim,
+  settlementLeaseError,
   validSettlementLease,
 } from "@/lib/control-plane/agent-queue";
 import {
@@ -101,6 +102,24 @@ test("stale generation completion과 비활성 lease를 거부한다", () => {
     requestedGeneration: 3,
     leaseActive: true,
   }), true);
+  assert.equal(settlementLeaseError({
+    runStatus: "RUNNING",
+    currentGeneration: 3,
+    requestedGeneration: 2,
+    sessionError: "SESSION_BINDING_MISMATCH",
+  }), "STALE_LEASE");
+  assert.equal(settlementLeaseError({
+    runStatus: "RUNNING",
+    currentGeneration: 3,
+    requestedGeneration: 3,
+    sessionError: "STALE_SESSION",
+  }), "STALE_SESSION");
+  assert.equal(settlementLeaseError({
+    runStatus: "SUCCEEDED",
+    currentGeneration: 3,
+    requestedGeneration: 2,
+    sessionError: "SESSION_PRINCIPAL_MISMATCH",
+  }), "SESSION_PRINCIPAL_MISMATCH");
 });
 
 test("자율 PR scope는 repo별 하나이며 blocked/approval/closed issue는 제외한다", () => {

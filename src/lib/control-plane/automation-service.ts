@@ -1004,29 +1004,38 @@ export async function upsertFleetProjectProjection(repoFullName: string, issueNu
   const existing = await prisma.fleetProjectProjection.findUnique({
     where: { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } },
   });
-  return prisma.fleetProjectProjection.upsert({
-    where: { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } },
-    create: {
-      appId: issue.app.id,
-      projectNodeId,
-      issueNodeId: issue.nodeId,
-      repoFullName,
-      issueNumber,
-      desired,
-      desiredHash,
-      status,
-      lastError: bindingError,
-    },
-    update: bindingError
-      ? { repoFullName, issueNumber, desired, desiredHash, status, lastError: bindingError }
-      : existing?.desiredHash === desiredHash
-        ? {
-          repoFullName,
-          issueNumber,
-          ...(existing.status === "NEEDS_INPUT" ? { status: "PENDING", lastError: null } : {}),
-        }
-        : { desired, desiredHash, status, observed: Prisma.DbNull, lastError: null, appliedAt: null },
-  });
+  const update = bindingError
+    ? { repoFullName, issueNumber, desired, desiredHash, status, lastError: bindingError }
+    : existing?.desiredHash === desiredHash
+      ? {
+        repoFullName,
+        issueNumber,
+        ...(existing.status === "NEEDS_INPUT" ? { status: "PENDING", lastError: null } : {}),
+      }
+      : { desired, desiredHash, status, observed: Prisma.DbNull, lastError: null, appliedAt: null };
+  const where = { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } };
+  try {
+    return await prisma.fleetProjectProjection.upsert({
+      where,
+      create: {
+        appId: issue.app.id,
+        projectNodeId,
+        issueNodeId: issue.nodeId,
+        repoFullName,
+        issueNumber,
+        desired,
+        desiredHash,
+        status,
+        lastError: bindingError,
+      },
+      update,
+    });
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+    // MySQL의 emulated upsert는 동시 최초 생성에서 unique race가 날 수 있다.
+    // 이미 만들어진 동일 projection을 같은 desired state로 수렴시킨다.
+    return prisma.fleetProjectProjection.update({ where, data: update });
+  }
 }
 
 export async function refreshRunFleetProjection(runId: string): Promise<void> {
