@@ -1,7 +1,8 @@
 name: Deploy
 
 # main push 시 검증→이미지 빌드→배포. 사전: REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64 secret
-# + 레포를 ARC "RPI ARM64 Builders" 러너 그룹에 추가 (DEPLOY.md §7).
+# (DEPLOY.md §7). 전 잡이 GitHub-hosted 이며 self-hosted 러너 그룹 등록은 필요 없다.
+# KUBECONFIG_B64 의 server 는 hosted 러너에서 닿는 공개 엔드포인트여야 한다.
 on:
   workflow_dispatch:
     inputs:
@@ -59,8 +60,8 @@ jobs:
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
     # 이미지 빌드는 클러스터 자원이 필요 없다. registry.vzyx.xyz 는 TLS 로 공개
-    # 도달 가능하므로 hosted 에서 push 한다. verify 와 migration contract 는 #202 대로
-    # ARC 에 남아 hosted 결제 상태와 무관하게 배포 검증을 시작한다.
+    # 도달 가능하므로 hosted 에서 push 한다. arm64 이미지는 Dockerfile 의
+    # BUILDPLATFORM 크로스빌드로 만든다.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

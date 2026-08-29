@@ -423,8 +423,7 @@ E2E 책임지고(멘션 대화·순찰·이슈 초안), 서리는 조직 횡단(
 
 ## 10. 이미지 빌드 — hosted 크로스빌드
 
-`deploy.yml` 의 `build` 잡은 `verify`(일반 ARC)와 migration contract(DIND ARC) 성공 뒤
-GitHub-hosted 러너에서 arm64 이미지를 만들어 `registry.vzyx.xyz` 로 push한다. 이
+`deploy.yml` 의 `build` 잡은 `verify` 와 migration contract 성공 뒤 GitHub-hosted 러너에서 arm64 이미지를 만들어 `registry.vzyx.xyz` 로 push한다. 이
 레지스트리는 TLS 로 공개 도달 가능하다.
 
 - **크로스빌드**: 의존성 설치와 `next build` 는 Dockerfile 의 `--platform=$BUILDPLATFORM`
