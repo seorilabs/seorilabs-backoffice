@@ -1,7 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  androidBuildBindingObservationSchema,
   configRevisionPayloadSchema,
+  type AndroidBuildBindingObservation,
   workflowCallerSchema,
   type ReauthGate,
   type WorkflowCaller,
@@ -10,6 +12,7 @@ import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-rev
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
+  type GitHubActionsBuildManifestIdentity,
   GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS,
   type GitHubActionsStaticManifestIdentity,
   type GitHubActionsStaticWorkflowPath,
@@ -19,6 +22,10 @@ import {
   StaticRuntimeManifestError,
   type StaticRuntimeBinding,
 } from "@/lib/control-plane/static-runtime-manifest";
+import {
+  buildRuntimeManifestReadback,
+  BuildRuntimeManifestError,
+} from "@/lib/control-plane/build-runtime-manifest";
 import {
   BUILD_TARGET_MARKETS,
   exactBuildTargetIdentity,
@@ -103,6 +110,7 @@ export function discoveryObservationRequestHash(input: {
   observedAt: Date;
   observedBy: string;
   workflowCaller: WorkflowCaller;
+  buildBindings?: AndroidBuildBindingObservation[];
   payload: Record<string, unknown>;
   buildTargets: Array<{
     targetKey: string;
@@ -120,6 +128,7 @@ export function discoveryObservationRequestHash(input: {
     observedAt: input.observedAt.toISOString(),
     observedBy: input.observedBy,
     workflowCaller: input.workflowCaller,
+    ...(input.buildBindings === undefined ? {} : { buildBindings: input.buildBindings }),
     payload: input.payload,
     buildTargets: input.buildTargets.map((target) => ({
       targetKey: target.targetKey,
@@ -228,6 +237,7 @@ export type DiscoveryObservationInput = {
   observedBy: string;
   idempotencyKey: string;
   workflowCaller: WorkflowCaller;
+  buildBindings?: AndroidBuildBindingObservation[];
   payload: Record<string, unknown>;
   buildTargets: Array<{
     targetKey: string;
@@ -264,6 +274,8 @@ export async function recordDiscoveryObservationInTransaction(
       replay.workflowProfile !== input.workflowCaller.profile
       || replay.workflowPackageManager !== input.workflowCaller.packageManager
       || replay.workflowWorkingDirectory !== input.workflowCaller.workingDirectory
+      || jsonDigest((replay.buildBindings ?? []) as JsonValue)
+        !== jsonDigest((input.buildBindings ?? []) as JsonValue)
     ) {
       throw new ControlPlaneError("idempotency key가 다른 workflow caller에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -279,6 +291,9 @@ export async function recordDiscoveryObservationInTransaction(
       workflowProfile: input.workflowCaller.profile,
       workflowPackageManager: input.workflowCaller.packageManager,
       workflowWorkingDirectory: input.workflowCaller.workingDirectory,
+      buildBindings: input.buildBindings?.length
+        ? jsonInput(input.buildBindings)
+        : Prisma.DbNull,
       observedAt: input.observedAt,
       observedBy: input.observedBy,
       idempotencyKey: input.idempotencyKey,
@@ -805,12 +820,13 @@ export async function resolveManifest(input: {
   if (!revision) {
     throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
   }
-  assertResolvableConfigRevision({
-    status: revision.status,
-    activatedSnapshot: revision.activatedSnapshot,
-    snapshotDigest: revision.snapshotDigest,
-    snapshotSignature: revision.snapshotSignature,
-  }, input.signingKey);
+  const configPayload = configPayloadFromSignedSnapshot({
+    revision,
+    signingKey: input.signingKey,
+    appId: app.id,
+    repoId: input.repoId.toString(),
+    repoFullName: app.repoFullName,
+  });
   const discovery = await prisma.discoveryObservation.findFirst({
     where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
     orderBy: latestDiscoveryObservationOrder(),
@@ -823,7 +839,6 @@ export async function resolveManifest(input: {
     packageManager: discovery.workflowPackageManager,
     workingDirectory: discovery.workflowWorkingDirectory,
   });
-  const configPayload = configRevisionPayloadSchema.parse(revision.payload);
   const requestedMarket = input.market?.toLowerCase();
   if (
     requestedMarket
@@ -903,6 +918,14 @@ export async function resolveManifest(input: {
       digest: revision.snapshotDigest,
       signature: revision.snapshotSignature,
     },
+    ...(configPayload.build?.workflowBundleSha && configPayload.build.workflowBundleDigest
+      ? {
+          workflowBundleBinding: {
+            sourceSha: configPayload.build.workflowBundleSha.toLowerCase(),
+            payloadDigest: configPayload.build.workflowBundleDigest.toLowerCase(),
+          },
+        }
+      : {}),
     market: market ?? null,
     buildTargets,
     externalBindings,
@@ -958,13 +981,13 @@ export async function resolveStaticRuntimeManifest(input: {
   if (!revision) {
     throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
   }
-  assertResolvableConfigRevision({
-    status: revision.status,
-    activatedSnapshot: revision.activatedSnapshot,
-    snapshotDigest: revision.snapshotDigest,
-    snapshotSignature: revision.snapshotSignature,
-  }, input.signingKey);
-  const configPayload = configRevisionPayloadSchema.parse(revision.payload);
+  const configPayload = configPayloadFromSignedSnapshot({
+    revision,
+    signingKey: input.signingKey,
+    appId: app.id,
+    repoId: input.identity.repositoryId,
+    repoFullName: app.repoFullName,
+  });
   if (
     !configPayload.build?.workflowBundleSha
     || configPayload.build.workflowBundleSha.toLowerCase() !== input.identity.workflowBundleSha
@@ -1065,6 +1088,195 @@ export async function resolveStaticRuntimeManifest(input: {
   }
 }
 
+export async function resolveBuildRuntimeManifest(input: {
+  identity: GitHubActionsBuildManifestIdentity;
+  signingKey: string;
+  snapshotSignatureKeyId: string;
+  snapshotSignaturePolicyRevision: string;
+}, client: Pick<
+  typeof prisma,
+  "app" | "configRevision" | "discoveryObservation" | "workflowBundleRegistryRecord"
+> = prisma) {
+  const repositoryId = BigInt(input.identity.repositoryId);
+  const app = await client.app.findUnique({
+    where: { repoId: repositoryId },
+    select: {
+      id: true,
+      repoId: true,
+      repoFullName: true,
+      status: true,
+      isPublicRepo: true,
+    },
+  });
+  if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  if (app.repoId !== repositoryId || app.repoFullName !== input.identity.fullName) {
+    throw new ControlPlaneError(
+      "GitHub OIDC repository identity가 중앙 App binding과 일치하지 않습니다.",
+      403,
+      "REPOSITORY_IDENTITY_MISMATCH",
+    );
+  }
+  if (app.isPublicRepo || input.identity.repositoryVisibility !== "private"
+    || input.identity.runnerEnvironment !== "self-hosted") {
+    throw new ControlPlaneError(
+      "Android build-only runtime은 private repository의 trusted self-hosted 경계만 허용합니다.",
+      403,
+      "RUNNER_TRUST_BOUNDARY_MISMATCH",
+    );
+  }
+  if (app.status !== "ACTIVE") {
+    throw new ControlPlaneError(
+      "ACTIVE 앱만 build-only runtime을 사용할 수 있습니다.",
+      403,
+      `${app.status}_BUILD_RUNTIME_FORBIDDEN`,
+    );
+  }
+
+  const revision = await client.configRevision.findFirst({
+    where: { appId: app.id, status: "ACTIVE" },
+  });
+  if (!revision) {
+    throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
+  }
+  const configPayload = configPayloadFromSignedSnapshot({
+    revision,
+    signingKey: input.signingKey,
+    appId: app.id,
+    repoId: input.identity.repositoryId,
+    repoFullName: app.repoFullName,
+  });
+  if (
+    configPayload.build?.workflowBundleSha?.toLowerCase() !== input.identity.workflowBundleSha
+    || !configPayload.build.workflowBundleDigest
+  ) {
+    throw new ControlPlaneError(
+      "ACTIVE revision이 WorkflowBundle source SHA와 payload digest를 함께 승인하지 않았습니다.",
+      409,
+      "WORKFLOW_BUNDLE_BINDING_MISSING",
+    );
+  }
+  const workflowBundlePayloadDigest = configPayload.build.workflowBundleDigest.toLowerCase();
+  const registry = await client.workflowBundleRegistryRecord.findFirst({
+    where: {
+      registryId: "seorilabs-workflow-bundles-v5",
+      subject: `workflow-bundle-v5:${input.identity.workflowBundleSha}`,
+      sourceSha: input.identity.workflowBundleSha,
+      workflowExecutionSha: input.identity.workflowBundleSha,
+      payloadDigest: workflowBundlePayloadDigest,
+      approvalState: input.identity.mode,
+    },
+  });
+  if (
+    !registry
+    || registry.sourceSha !== input.identity.workflowBundleSha
+    || registry.workflowExecutionSha !== input.identity.workflowBundleSha
+    || registry.payloadDigest !== workflowBundlePayloadDigest
+    || registry.approvalState !== input.identity.mode
+  ) {
+    throw new ControlPlaneError(
+      "Config와 분리된 immutable WorkflowBundle registry readback이 없습니다.",
+      409,
+      "WORKFLOW_BUNDLE_REGISTRY_READBACK_MISSING",
+    );
+  }
+  if (
+    input.identity.mode === "CANDIDATE"
+      ? !registry.artifactRunId || !registry.artifactId || !registry.artifactDigest
+      : !registry.approvalPayloadDigest || !registry.approvalKeyId || !registry.approvalPolicyRevision
+  ) {
+    throw new ControlPlaneError(
+      "WorkflowBundle registry provenance가 불완전합니다.",
+      409,
+      "WORKFLOW_BUNDLE_REGISTRY_PROVENANCE_INVALID",
+    );
+  }
+  const { verifyWorkflowBundleRegistryReadback } = await import(
+    "@/lib/control-plane/workflow-bundle-v5-registry"
+  );
+  verifyWorkflowBundleRegistryReadback(
+    registry,
+    process.env.WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON ?? "",
+  );
+
+  const discovery = await client.discoveryObservation.findFirst({
+    where: {
+      appId: app.id,
+      sourceSha: input.identity.applicationSourceSha,
+    },
+    orderBy: latestDiscoveryObservationOrder(),
+  });
+  if (!discovery) {
+    throw new ControlPlaneError(
+      "application source SHA의 discovery observation이 없습니다.",
+      409,
+      "NO_DISCOVERY_FOR_SHA",
+    );
+  }
+  if (discovery.sourceRef !== "refs/heads/main" || !discovery.requestHash) {
+    throw new ControlPlaneError(
+      "main exact-SHA discovery provenance를 검증할 수 없습니다.",
+      409,
+      "DISCOVERY_PROVENANCE_INVALID",
+    );
+  }
+  const bindingResult = androidBuildBindingObservationSchema.array().length(1).safeParse(
+    discovery.buildBindings,
+  );
+  if (!bindingResult.success) {
+    throw new ControlPlaneError(
+      "exact-SHA discovery에 단일 Android build binding fact가 없습니다.",
+      409,
+      "BUILD_BINDING_OBSERVATION_MISSING",
+    );
+  }
+  const buildBinding = bindingResult.data[0];
+  if (buildBinding.buildProfile !== input.identity.buildProfile) {
+    throw new ControlPlaneError(
+      "호출된 중앙 build workflow와 discovery build profile이 일치하지 않습니다.",
+      409,
+      "BUILD_WORKFLOW_PROFILE_MISMATCH",
+    );
+  }
+  if (!revision.snapshotDigest || !revision.snapshotSignature) {
+    throw new ControlPlaneError(
+      "Config snapshot 서명 provenance를 확인할 수 없습니다.",
+      409,
+      "INVALID_CONFIG_SIGNATURE",
+    );
+  }
+  try {
+    return buildRuntimeManifestReadback({
+      mode: input.identity.mode,
+      lifecycleState: app.status,
+      repositoryId: input.identity.repositoryId,
+      fullName: app.repoFullName,
+      applicationSourceSha: input.identity.applicationSourceSha,
+      eventSourceSha: input.identity.eventSourceSha,
+      observationId: discovery.id,
+      observationRequestHash: discovery.requestHash,
+      configRevisionId: revision.id,
+      configRevision: revision.revision,
+      configRevisionPayloadHash: revision.payloadHash,
+      signedSnapshotDigest: revision.snapshotDigest,
+      snapshotSignature: revision.snapshotSignature,
+      snapshotSignatureKeyId: input.snapshotSignatureKeyId,
+      snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+      workflowBundleSourceSha: registry.sourceSha,
+      workflowBundlePayloadDigest: registry.payloadDigest,
+      buildBinding,
+    });
+  } catch (error) {
+    if (error instanceof BuildRuntimeManifestError) {
+      throw new ControlPlaneError(
+        "서명된 build runtime manifest provenance를 생성할 수 없습니다.",
+        error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
+        error.code,
+      );
+    }
+    throw error;
+  }
+}
+
 /** 운영 resolve와 격리 복구 rehearsal이 동일한 fail-closed 경계를 검증한다. */
 export function assertResolvableConfigRevision(revision: {
   status: "DRAFT" | "ACTIVE" | "SUPERSEDED";
@@ -1083,4 +1295,58 @@ export function assertResolvableConfigRevision(revision: {
   )) {
     throw new ControlPlaneError("Config snapshot 서명을 검증할 수 없습니다.", 409, "INVALID_CONFIG_SIGNATURE");
   }
+}
+
+function configPayloadFromSignedSnapshot(input: {
+  revision: {
+    id: string;
+    revision: number;
+    status: "DRAFT" | "ACTIVE" | "SUPERSEDED";
+    payload: unknown;
+    payloadHash: string;
+    activatedSnapshot: unknown;
+    snapshotDigest: string | null;
+    snapshotSignature: string | null;
+  };
+  signingKey: string;
+  appId: string;
+  repoId: string;
+  repoFullName: string;
+}) {
+  assertResolvableConfigRevision({
+    status: input.revision.status,
+    activatedSnapshot: input.revision.activatedSnapshot,
+    snapshotDigest: input.revision.snapshotDigest,
+    snapshotSignature: input.revision.snapshotSignature,
+  }, input.signingKey);
+  const snapshot = input.revision.activatedSnapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new ControlPlaneError(
+      "서명된 Config snapshot envelope를 확인할 수 없습니다.",
+      409,
+      "INVALID_CONFIG_SIGNATURE",
+    );
+  }
+  const snapshotRecord = snapshot as Record<string, unknown>;
+  const snapshotPayload = snapshotRecord.payload;
+  if (
+    snapshotRecord.schemaVersion !== 1
+    || snapshotRecord.appId !== input.appId
+    || snapshotRecord.repoId !== input.repoId
+    || snapshotRecord.repoFullName !== input.repoFullName
+    || snapshotRecord.revision !== input.revision.revision
+    || snapshotRecord.payloadHash !== input.revision.payloadHash
+    || !snapshotPayload
+    || typeof snapshotPayload !== "object"
+    || Array.isArray(snapshotPayload)
+    || jsonDigest(snapshotPayload as JsonValue) !== input.revision.payloadHash
+    || jsonDigest(input.revision.payload as JsonValue) !== input.revision.payloadHash
+  ) {
+    throw new ControlPlaneError(
+      "서명된 Config snapshot identity와 immutable revision이 일치하지 않습니다.",
+      409,
+      "INVALID_CONFIG_SIGNATURE",
+    );
+  }
+  return configRevisionPayloadSchema.parse(snapshotPayload);
 }

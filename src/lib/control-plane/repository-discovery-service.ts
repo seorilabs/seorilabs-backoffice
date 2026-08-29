@@ -393,6 +393,7 @@ async function finishActive(input: {
       observedBy: input.claim.workerId,
       idempotencyKey: `repository-discovery:${run.id}`,
       workflowCaller: input.result.workflowCaller,
+      buildBindings: input.result.buildBindings,
       payload: input.result.payload,
       buildTargets: input.result.buildTargets,
     });

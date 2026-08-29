@@ -457,9 +457,9 @@ function transformBuild(
   path: string,
 ): void {
   if (value === undefined) return;
-  const allowed = new Set(["workflowBundleSha", "platformVersion", "minSdk", "targetSdk"]);
+  const allowed = new Set(["workflowBundleSha", "workflowBundleDigest", "platformVersion", "minSdk", "targetSdk"]);
   if (!assertAllowedKeys(value, allowed, sourceKind, context.reasons, path)) return;
-  for (const key of ["workflowBundleSha", "platformVersion"] as const) {
+  for (const key of ["workflowBundleSha", "workflowBundleDigest", "platformVersion"] as const) {
     const item = readOptionalString(value[key], sourceKind, context.reasons, `${path}.${key}`);
     if (item !== undefined) {
       // 형식상 SHA/SemVer여도 임의 문자열을 secret carrier로 쓸 수 있다. 승인된

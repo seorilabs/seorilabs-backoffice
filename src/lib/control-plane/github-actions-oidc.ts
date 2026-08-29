@@ -15,12 +15,23 @@ const GITHUB_ACTIONS_JWKS = createRemoteJWKSet(
 );
 const SEORILABS_ORGANIZATION_ID = "283115031";
 const STATIC_CALLER_PATH = ".github/workflows/org-contract.yml";
+const BUILD_CALLER_PATH = ".github/workflows/android-build-only.yml";
 export const GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS = {
   javascript: ".github/workflows/js-static-checks-v1.yml",
   godot: ".github/workflows/godot-checks-v3.yml",
 } as const;
 export type GitHubActionsStaticWorkflowPath =
   (typeof GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS)[keyof typeof GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS];
+export const GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS = {
+  "react-native-android": ".github/workflows/rn-build-android-cloud-v2.yml",
+  "godot-android": ".github/workflows/godot-build-android-cloud-v2.yml",
+} as const;
+export type GitHubActionsBuildProfile = keyof typeof GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS;
+export type GitHubActionsBuildManifestMode = "CANDIDATE" | "APPROVED";
+const GITHUB_ACTIONS_BUILD_CANARIES = {
+  "1250442131": { fullName: "seorilabs/happy-farm", buildProfile: "react-native-android" },
+  "1265192029": { fullName: "seorilabs/lizard-tycoon", buildProfile: "godot-android" },
+} as const;
 const SHA = /^[0-9a-f]{40}$/;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/;
@@ -50,6 +61,38 @@ export interface GitHubActionsStaticManifestExpectation {
   repositoryId: string;
   applicationSourceSha: string;
   bindingSourceSha: string;
+}
+
+export interface GitHubActionsBuildManifestIdentity {
+  mode: GitHubActionsBuildManifestMode;
+  repositoryId: string;
+  fullName: string;
+  applicationSourceSha: string;
+  eventSourceSha: string;
+  workflowBundleSha: string;
+  buildProfile: GitHubActionsBuildProfile;
+  calledWorkflowPath: (typeof GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS)[GitHubActionsBuildProfile];
+  runId: string;
+  runAttempt: string;
+  eventName: "pull_request" | "workflow_dispatch";
+  eventRef: string;
+  repositoryVisibility: "private";
+  runnerEnvironment: "self-hosted";
+}
+
+export interface GitHubActionsBuildManifestExpectation {
+  mode: GitHubActionsBuildManifestMode;
+  repositoryId: string;
+  applicationSourceSha: string;
+  eventSourceSha: string;
+  workflowBundleSha: string;
+  buildProfile: GitHubActionsBuildProfile;
+}
+
+interface GitHubActionsBuildManifestClaims extends GitHubActionsBuildManifestIdentity {
+  pullRequestNumber: number | null;
+  headRef: string;
+  baseRef: string;
 }
 
 interface GitHubActionsStaticManifestClaims
@@ -194,6 +237,102 @@ export function assertGitHubActionsStaticManifestClaims(
   };
 }
 
+export function assertGitHubActionsBuildManifestClaims(
+  payload: JWTPayload,
+  expectation: GitHubActionsBuildManifestExpectation,
+): GitHubActionsBuildManifestClaims {
+  const repositoryId = requiredString(payload, "repository_id");
+  const fullName = requiredString(payload, "repository");
+  const repositoryOwner = requiredString(payload, "repository_owner");
+  const repositoryOwnerId = requiredString(payload, "repository_owner_id");
+  const eventSourceSha = requiredString(payload, "sha");
+  const callerWorkflowSha = requiredString(payload, "workflow_sha");
+  const workflowBundleSha = requiredString(payload, "job_workflow_sha");
+  const callerWorkflowRef = requiredString(payload, "workflow_ref");
+  const calledWorkflowRef = requiredString(payload, "job_workflow_ref");
+  const runId = requiredString(payload, "run_id");
+  const runAttempt = requiredString(payload, "run_attempt");
+  const eventName = requiredString(payload, "event_name");
+  const eventRef = requiredString(payload, "ref");
+  const repositoryVisibility = requiredString(payload, "repository_visibility");
+  const runnerEnvironment = requiredString(payload, "runner_environment");
+  const headRef = optionalString(payload, "head_ref");
+  const baseRef = optionalString(payload, "base_ref");
+  const calledWorkflowPath = GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS[expectation.buildProfile];
+
+  if (
+    repositoryId !== expectation.repositoryId
+    || !POSITIVE_INTEGER.test(repositoryId)
+    || !REPOSITORY.test(fullName)
+    || repositoryOwner !== "seorilabs"
+    || repositoryOwnerId !== SEORILABS_ORGANIZATION_ID
+    || !SHA.test(expectation.applicationSourceSha)
+    || eventSourceSha !== expectation.eventSourceSha
+    || !SHA.test(eventSourceSha)
+    || callerWorkflowSha !== eventSourceSha
+    || workflowBundleSha !== expectation.workflowBundleSha
+    || !SHA.test(workflowBundleSha)
+    || !POSITIVE_INTEGER.test(runId)
+    || !POSITIVE_INTEGER.test(runAttempt)
+    || repositoryVisibility !== "private"
+    || runnerEnvironment !== "self-hosted"
+    || calledWorkflowRef !== `seorilabs/.github/${calledWorkflowPath}@${workflowBundleSha}`
+    || callerWorkflowRef !== `${fullName}/${BUILD_CALLER_PATH}@${eventRef}`
+  ) {
+    unauthorized();
+  }
+
+  let pullRequestNumber: number | null = null;
+  if (expectation.mode === "APPROVED") {
+    if (
+      eventName !== "workflow_dispatch"
+      || eventRef !== "refs/heads/main"
+      || expectation.applicationSourceSha !== eventSourceSha
+      || headRef !== ""
+      || baseRef !== ""
+    ) {
+      unauthorized();
+    }
+  } else {
+    const canary = GITHUB_ACTIONS_BUILD_CANARIES[repositoryId as keyof typeof GITHUB_ACTIONS_BUILD_CANARIES];
+    const match = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(eventRef);
+    if (
+      eventName !== "pull_request"
+      || !canary
+      || canary.fullName !== fullName
+      || canary.buildProfile !== expectation.buildProfile
+      || !match
+      || baseRef !== "main"
+      || headRef !== `seori/workflow-bundle-v5-canary/${repositoryId}/${workflowBundleSha.slice(0, 12)}`
+      || expectation.applicationSourceSha === eventSourceSha
+    ) {
+      unauthorized();
+    }
+    pullRequestNumber = Number(match[1]);
+    if (!Number.isSafeInteger(pullRequestNumber)) unauthorized();
+  }
+
+  return {
+    mode: expectation.mode,
+    repositoryId,
+    fullName,
+    applicationSourceSha: expectation.applicationSourceSha,
+    eventSourceSha,
+    workflowBundleSha,
+    buildProfile: expectation.buildProfile,
+    calledWorkflowPath,
+    runId,
+    runAttempt,
+    eventName: eventName as GitHubActionsBuildManifestIdentity["eventName"],
+    eventRef,
+    repositoryVisibility: "private",
+    runnerEnvironment: "self-hosted",
+    pullRequestNumber,
+    headRef,
+    baseRef,
+  };
+}
+
 async function readPullRequestFromGitHub(
   input: GitHubActionsPullRequestReadInput,
 ): Promise<GitHubActionsPullRequestReadback> {
@@ -254,6 +393,24 @@ function pullRequestReadbackMatches(
     && readback.headRepositoryFullName === claims.fullName
     && readback.headRef === claims.headRef
     && readback.mergeCommitSha === claims.applicationSourceSha;
+}
+
+function buildPullRequestReadbackMatches(
+  claims: GitHubActionsBuildManifestClaims,
+  readback: GitHubActionsPullRequestReadback,
+): boolean {
+  return claims.mode === "CANDIDATE"
+    && claims.pullRequestNumber !== null
+    && readback.number === claims.pullRequestNumber
+    && readback.state === "open"
+    && readback.baseRepositoryId === claims.repositoryId
+    && readback.baseRepositoryFullName === claims.fullName
+    && readback.baseRef === "main"
+    && readback.baseSha === claims.applicationSourceSha
+    && readback.headRepositoryId === claims.repositoryId
+    && readback.headRepositoryFullName === claims.fullName
+    && readback.headRef === claims.headRef
+    && readback.mergeCommitSha === claims.eventSourceSha;
 }
 
 export async function verifyGitHubActionsOidcToken(
@@ -321,6 +478,42 @@ export async function authenticateGitHubActionsStaticManifestRequest(
       if (!pullRequestReadbackMatches(claims, readback)) return null;
     }
     return bindStaticManifestIdentity(claims);
+  } catch {
+    return null;
+  }
+}
+
+export async function authenticateGitHubActionsBuildManifestRequest(
+  request: NextRequest,
+  expectation: GitHubActionsBuildManifestExpectation,
+  verifier: GitHubActionsOidcVerifier = defaultVerifier,
+  readPullRequest: GitHubActionsPullRequestReader = readPullRequestFromGitHub,
+): Promise<GitHubActionsBuildManifestIdentity | null> {
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!authorization.startsWith("Bearer ")) return null;
+  const token = authorization.slice("Bearer ".length).trim();
+  if (token.length > 16 * 1024 || !JWT.test(token)) return null;
+  try {
+    const { payload, protectedHeader } = await verifier(token);
+    if (protectedHeader.alg !== "RS256" || protectedHeader.typ !== "JWT") return null;
+    const claims = assertGitHubActionsBuildManifestClaims(payload, expectation);
+    if (
+      request.headers.get("x-seori-principal")
+      !== `github-actions:${claims.repositoryId}:${claims.runId}`
+    ) {
+      return null;
+    }
+    if (claims.mode === "CANDIDATE") {
+      if (claims.pullRequestNumber === null) return null;
+      const readback = await readPullRequest({
+        repositoryId: claims.repositoryId,
+        fullName: claims.fullName,
+        pullRequestNumber: claims.pullRequestNumber,
+      });
+      if (!buildPullRequestReadbackMatches(claims, readback)) return null;
+    }
+    const { pullRequestNumber: _number, headRef: _head, baseRef: _base, ...identity } = claims;
+    return identity;
   } catch {
     return null;
   }

@@ -1,0 +1,41 @@
+ALTER TABLE `control_plane_discovery_observation`
+  ADD COLUMN `buildBindings` JSON NULL;
+
+CREATE TABLE `control_plane_workflow_bundle_registry` (
+  `id` VARCHAR(191) NOT NULL,
+  `registryId` VARCHAR(64) NOT NULL,
+  `subject` VARCHAR(191) NOT NULL,
+  `approvalState` ENUM('CANDIDATE', 'APPROVED') NOT NULL,
+  `sourceSha` CHAR(40) NOT NULL,
+  `workflowExecutionSha` CHAR(40) NOT NULL,
+  `bundleVersion` VARCHAR(64) NOT NULL,
+  `payloadDigest` VARCHAR(71) NOT NULL,
+  `candidateDigest` VARCHAR(71) NULL,
+  `contractDigestsDigest` VARCHAR(71) NOT NULL,
+  `runtimeAssetDigestsDigest` VARCHAR(71) NOT NULL,
+  `evidenceDigest` VARCHAR(71) NULL,
+  `approvalPayloadDigest` VARCHAR(71) NULL,
+  `approvalKeyId` VARCHAR(128) NULL,
+  `approvalPolicyRevision` VARCHAR(128) NULL,
+  `bundle` JSON NOT NULL,
+  `artifactRepository` VARCHAR(191) NULL,
+  `artifactRepositoryId` BIGINT NULL,
+  `artifactWorkflowPath` VARCHAR(191) NULL,
+  `artifactRunId` BIGINT NULL,
+  `artifactRunAttempt` INTEGER NULL,
+  `artifactId` BIGINT NULL,
+  `artifactName` VARCHAR(191) NULL,
+  `artifactDigest` VARCHAR(71) NULL,
+  `approvalSlot` CHAR(64) NULL,
+  `requestHash` CHAR(64) NOT NULL,
+  `idempotencyKey` VARCHAR(191) NOT NULL,
+  `observedBy` VARCHAR(128) NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+  UNIQUE INDEX `control_plane_workflow_bundle_registry_artifactId_key`(`artifactId`),
+  UNIQUE INDEX `control_plane_workflow_bundle_registry_approvalSlot_key`(`approvalSlot`),
+  UNIQUE INDEX `control_plane_workflow_bundle_registry_idempotencyKey_key`(`idempotencyKey`),
+  UNIQUE INDEX `cp_workflow_bundle_registry_identity`(`registryId`, `subject`, `payloadDigest`),
+  INDEX `cp_workflow_bundle_registry_source_state`(`sourceSha`, `approvalState`, `createdAt`),
+  PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

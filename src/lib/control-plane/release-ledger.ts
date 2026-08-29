@@ -105,6 +105,16 @@ export async function createReleaseCandidate(input: {
     if (payload.build?.workflowBundleSha?.toLowerCase() !== input.workflowBundleSha.toLowerCase()) {
       throw new ControlPlaneError("ACTIVE revision의 WorkflowBundle SHA와 일치하지 않습니다.", 409, "WORKFLOW_BUNDLE_MISMATCH");
     }
+    if (
+      payload.build?.workflowBundleDigest?.toLowerCase()
+      !== `sha256:${input.workflowBundleDigest.toLowerCase()}`
+    ) {
+      throw new ControlPlaneError(
+        "ACTIVE revision의 WorkflowBundle payload digest와 일치하지 않습니다.",
+        409,
+        "WORKFLOW_BUNDLE_DIGEST_MISMATCH",
+      );
+    }
     if (payload.build?.platformVersion !== input.platformVersion) {
       throw new ControlPlaneError("ACTIVE revision의 Platform version과 일치하지 않습니다.", 409, "PLATFORM_VERSION_MISMATCH");
     }

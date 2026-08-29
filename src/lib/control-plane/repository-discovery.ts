@@ -14,12 +14,15 @@ import {
   type RepositoryClassification,
   type RepositoryClassificationDirective,
 } from "@/lib/control-plane/repository-classification";
-import type { WorkflowCaller } from "@/lib/control-plane/contracts";
+import type {
+  AndroidBuildBindingObservation,
+  WorkflowCaller,
+} from "@/lib/control-plane/contracts";
 
-// v6: v5 배포 뒤 추가된 Capacitor/AIT profile과 application-package
-// disambiguation을 새 generation으로 다시 관측한다. 탐지 의미론을 바꾸고도
+// v7: static workingDirectory와 분리된 root Android build-only fact를 관측한다.
+// 탐지 의미론을 바꾸고도
 // version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v6";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v7";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -163,6 +166,7 @@ export type RepositoryDiscoveryResult =
       appType: "APP" | "GAME";
       engine: "RN" | "GODOT";
       workflowCaller: WorkflowCaller;
+      buildBindings: AndroidBuildBindingObservation[];
       buildTargets: RepositoryDiscoveryBuildTarget[];
       platformConsumer: RepositoryPlatformConsumerObservation;
     })
@@ -845,6 +849,7 @@ function resultPayload(input: {
   candidates: RepositoryDiscoveryCandidate[];
   sourceMetadata: SourcePersistenceMetadata[];
   workflowCaller?: WorkflowCaller;
+  buildBindings?: AndroidBuildBindingObservation[];
   buildTargets?: RepositoryDiscoveryBuildTarget[];
   platformConsumer?: RepositoryPlatformConsumerObservation;
 }): Record<string, unknown> {
@@ -864,6 +869,7 @@ function resultPayload(input: {
     classification: input.classification,
     candidates: input.candidates.map(publicCandidate),
     workflowCaller: input.workflowCaller ?? null,
+    buildBindings: input.buildBindings ?? [],
     buildTargets: (input.buildTargets ?? []).map((target) => ({
       targetKey: target.targetKey,
       stack: target.stack,
@@ -895,6 +901,7 @@ function finish<T extends RepositoryDiscoveryUnfinished>(
     ...(active
       ? {
           workflowCaller: active.workflowCaller,
+          buildBindings: active.buildBindings,
           buildTargets: active.buildTargets,
           platformConsumer: active.platformConsumer,
         }
@@ -1414,6 +1421,44 @@ export async function discoverRepository(
     return needsInput(snapshot, "BUILD_TARGET_MISSING", candidates, sourceMetadata);
   }
 
+  const buildBindings: AndroidBuildBindingObservation[] = [];
+  const hasAndroidTarget = buildTargets.some((target) => target.targetKey === "android");
+  const rootBuildPaths = ["build.env", "scripts/build-android.sh"];
+  if (
+    hasAndroidTarget
+    && (candidate.profile === "react-native" || candidate.profile === "godot")
+    && rootBuildPaths.every((path) => pathSet.has(path))
+    && (candidate.profile !== "react-native"
+      || (workflowCaller.packageManager === "pnpm" && pathSet.has("pnpm-lock.yaml")))
+  ) {
+    const bindingSourcePaths = candidate.profile === "react-native"
+      ? [...rootBuildPaths, "pnpm-lock.yaml"]
+      : rootBuildPaths;
+    const bindingReadError = await readPaths(bindingSourcePaths);
+    if (bindingReadError) {
+      return needsInput(snapshot, bindingReadError, candidates, sourceMetadata);
+    }
+    buildBindings.push(candidate.profile === "react-native"
+      ? {
+          target: "android",
+          buildProfile: "react-native-android",
+          packageManager: "pnpm",
+          executionRoot: ".",
+          dependencyRoot: ".",
+          scriptPath: "scripts/build-android.sh",
+          artifactKind: "android-aab",
+        }
+      : {
+          target: "android",
+          buildProfile: "godot-android",
+          packageManager: null,
+          executionRoot: ".",
+          dependencyRoot: ".",
+          scriptPath: "scripts/build-android.sh",
+          artifactKind: "android-aab",
+        });
+  }
+
   return finish(snapshot, {
     status: "ACTIVE" as const,
     managementKind: "APP" as const,
@@ -1424,6 +1469,7 @@ export async function discoverRepository(
     appType: candidate.profile === "godot" ? "GAME" as const : "APP" as const,
     engine: candidate.profile === "godot" ? "GODOT" as const : "RN" as const,
     workflowCaller,
+    buildBindings,
     buildTargets: buildTargets.sort((left, right) => left.targetKey.localeCompare(right.targetKey)),
     platformConsumer,
   });

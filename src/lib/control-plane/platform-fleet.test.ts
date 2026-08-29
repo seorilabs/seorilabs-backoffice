@@ -254,6 +254,7 @@ test("release candidate와 운영 scheduler는 stale SDK를 fail-closed한다", 
   ), "utf8");
   assert.match(ledger, /latestApplicablePlatformRelease[\s\S]*platformBinding\.state !== "COMPLIANT"/);
   assert.match(ledger, /canaryEvidence\.workflowBundle\.sourceSha[\s\S]*workflowBundleDigest/);
+  assert.match(ledger, /payload\.build\?\.workflowBundleDigest[\s\S]*WORKFLOW_BUNDLE_DIGEST_MISMATCH/);
   assert.match(ledger, /WORKFLOW_BUNDLE_APPROVAL_MISMATCH/);
   assert.match(ledger, /PLATFORM_FLEET_STALE/);
   assert.match(scheduler, /name: backoffice-platform-fleet/);

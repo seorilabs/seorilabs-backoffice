@@ -9,6 +9,7 @@ import {
 
 const sha40 = z.string().regex(/^[0-9a-f]{40}$/i, "40자리 source SHA가 필요합니다.");
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/i, "64자리 SHA-256이 필요합니다.");
+const prefixedSha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/i, "sha256: 접두사가 있는 SHA-256이 필요합니다.");
 const jsonRecord = z.record(z.unknown());
 
 const locale = z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/, "BCP-47 locale이 필요합니다.");
@@ -495,6 +496,7 @@ export const configRevisionPayloadSchema = z.object({
   }).strict()).max(500).optional(),
   build: z.object({
     workflowBundleSha: sha40.optional(),
+    workflowBundleDigest: prefixedSha256.optional(),
     platformVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/).optional(),
     minSdk: z.number().int().min(21).max(100).optional(),
     targetSdk: z.number().int().min(21).max(100).optional(),
@@ -590,6 +592,37 @@ const workflowWorkingDirectory = z.string().min(1).max(255).refine((value) => {
     && value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, "repository 상대 workingDirectory가 필요합니다.");
 
+const androidBuildDirectory = z.string().min(1).max(255).refine((value) => (
+  value === "."
+  || (!value.startsWith("/")
+    && !value.endsWith("/")
+    && !value.includes("\\")
+    && value.split("/").every((segment) => /^[A-Za-z0-9_@-]+(?:\.[A-Za-z0-9_@-]+)*$/.test(segment)))
+), "안전한 repository 상대 Android build directory가 필요합니다.");
+
+export const androidBuildBindingObservationSchema = z.discriminatedUnion("buildProfile", [
+  z.object({
+    target: z.literal("android"),
+    buildProfile: z.literal("react-native-android"),
+    packageManager: z.literal("pnpm"),
+    executionRoot: androidBuildDirectory,
+    dependencyRoot: androidBuildDirectory,
+    scriptPath: z.literal("scripts/build-android.sh"),
+    artifactKind: z.literal("android-aab"),
+  }).strict(),
+  z.object({
+    target: z.literal("android"),
+    buildProfile: z.literal("godot-android"),
+    packageManager: z.null(),
+    executionRoot: androidBuildDirectory,
+    dependencyRoot: androidBuildDirectory,
+    scriptPath: z.literal("scripts/build-android.sh"),
+    artifactKind: z.literal("android-aab"),
+  }).strict(),
+]);
+
+export type AndroidBuildBindingObservation = z.infer<typeof androidBuildBindingObservationSchema>;
+
 export const workflowCallerSchema = z.discriminatedUnion("profile", [
   z.object({
     profile: z.literal("react-native"),
@@ -621,6 +654,7 @@ export const discoveryObservationSchema = z.object({
   sourceRef: z.string().min(1).max(255).optional(),
   observedAt: z.coerce.date(),
   workflowCaller: workflowCallerSchema,
+  buildBindings: z.array(androidBuildBindingObservationSchema).max(1).optional(),
   payload: jsonRecord,
   buildTargets: z.array(z.object({
     targetKey: z.string().min(1).max(191),
@@ -642,6 +676,21 @@ export const discoveryObservationSchema = z.object({
     }
     seenTargetKeys.add(target.targetKey);
   });
+  const expectedBuildProfile = observation.workflowCaller.profile === "react-native"
+    ? "react-native-android"
+    : observation.workflowCaller.profile === "godot"
+      ? "godot-android"
+      : null;
+  if (
+    observation.buildBindings?.length === 1
+    && observation.buildBindings[0].buildProfile !== expectedBuildProfile
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "build binding과 workflow caller profile이 일치하지 않습니다.",
+      path: ["buildBindings", 0, "buildProfile"],
+    });
+  }
 });
 
 export const providerObservationSchema = z.object({
