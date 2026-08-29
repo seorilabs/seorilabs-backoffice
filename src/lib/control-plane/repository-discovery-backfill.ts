@@ -9,6 +9,7 @@ import {
 } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
 import {
+  repositoryClassificationPolicy,
   repositoryPublicDiscoveryAllowed,
   type RepositoryClassificationDirective,
 } from "@/lib/control-plane/repository-classification";
@@ -268,6 +269,8 @@ export async function listInstallationRepositorySeeds(
  * 이름이 아니라 numeric repository ID로 canonical identity를 읽는다. active private
  * DISCOVERY_ALLOWED에서는 active private 저장소와 중앙 정책으로 허용된 public
  * 저장소의 default branch HEAD를 읽되 fork를 source discovery 대상으로 삼지 않는다.
+ * 중앙 INFRA/EXCLUDED 정책과 append-only 분류 결정은 public HEAD 관측만 허용한다.
+ * 실제 source 파일은 discovery가 해당 정책에서 terminal 분류된 뒤 읽지 않는다.
  * ALL_INSTALLED shadow inventory에서는 fork도 HEAD를 읽지만 자동 분류·승격하지 않는다.
  * HEAD read 뒤에는 canonical identity를 한 번 더 확인한다.
  */
@@ -283,15 +286,17 @@ async function readRepositoryVector(
     { repository_id: seed.repoId },
   )).data, organization, seed.repoId);
 
-  const publicAllowed = sourcePolicy === "ALL_INSTALLED"
+  const centralPolicy = repositoryClassificationPolicy(first.repoFullName);
+  const publicHeadAllowed = sourcePolicy === "ALL_INSTALLED"
     || first.private
     || repositoryPublicDiscoveryAllowed(first.repoFullName)
-    || classificationDecision?.classification === "PRODUCT_APP"
-    || classificationDecision?.classification === "PLATFORM_PRODUCER";
+    || classificationDecision !== null
+    || centralPolicy?.classification === "INFRA_REPO"
+    || centralPolicy?.classification === "EXCLUDED";
   if (
     first.archived
     || (sourcePolicy === "DISCOVERY_ALLOWED" && first.fork)
-    || !publicAllowed
+    || !publicHeadAllowed
     || !first.defaultBranch
   ) {
     return {
