@@ -177,13 +177,25 @@ spec:
                   name: backoffice-secrets
                   key: AGENT_WORKER_CLAUDE_TOKEN
                   optional: true
-            - name: AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED
+            - name: AGENT_TRUSTED_ADAPTER_PRINCIPAL
+              value: "seori-auth:github-adapter"
+            - name: AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY
+              value: "spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-github-adapter"
+            # k8s/seori-auth-agent-runtime.yaml은 기본 replicas=0이다. durable step ledger와
+            # signed readback canary 확인 전에는 code gate까지 READY_PR을 fail-closed한다.
+            - name: AGENT_TRUSTED_ADAPTER_DEPLOYED
               value: "false"
-            - name: AGENT_LEASE_SIGNING_KEY
+            - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: backoffice-secrets
-                  key: AGENT_LEASE_SIGNING_KEY
+                  key: AGENT_TRUSTED_ADAPTER_TOKEN
+                  optional: true
+            - name: AGENT_TRUSTED_ADAPTER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: AGENT_TRUSTED_ADAPTER_PUBLIC_KEY
                   optional: true
             - name: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
               valueFrom:

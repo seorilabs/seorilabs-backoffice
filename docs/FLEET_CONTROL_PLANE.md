@@ -9,10 +9,9 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
 
 - 제어면 API: `Authorization: Bearer $CONTROL_PLANE_ADMIN_TOKEN`과
   `X-Seori-Principal: $CONTROL_PLANE_ADMIN_PRINCIPAL`
-- Codex agent queue API: `Authorization: Bearer $AGENT_WORKER_CODEX_TOKEN`과
-  `X-Seori-Principal: codex:seorilabs-generic-worker`
-- Claude agent queue API: `Authorization: Bearer $AGENT_WORKER_CLAUDE_TOKEN`과
-  `X-Seori-Principal: claude:seorilabs-generic-worker`
+- Codex/Claude agent queue API의 bearer와 principal header는 K8s mTLS `seori-auth` runtime이 붙인다.
+  모델은 Authorization header나 token을 받지 않고 공개 `sessionId`만 사용한다. 동일 OS UID에서
+  Codex/Claude를 구분할 native peer attestor가 없어 local transport 코드와 runtime은 제공하지 않는다.
 - 두 worker capability는 서로 다른 값이어야 한다. legacy `AGENT_WORKER_TOKEN`과
   agent queue의 `X-Admin-Token`은 인증에 사용하지 않으며, 새 capability가 없으면 fail-closed한다.
 - 제어면 principal은 token과 1:1로 결합하며 임의 header 값이나 미설정 principal은 거부한다.
@@ -22,6 +21,13 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
   caller와 called reusable workflow exact SHA, event source SHA를 모두 검증한다. `CONTROL_PLANE_ADMIN_TOKEN`은
   이 경로의 대체 인증으로 허용하지 않는다.
 - agent claim: worker에 노출하지 않는 `AGENT_LEASE_SIGNING_KEY`
+- GitHub mutation adapter: worker와 다른 `AGENT_TRUSTED_ADAPTER_PRINCIPAL`/bearer, exact
+  `AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY` 및 Backoffice에 등록된 Ed25519 공개키. route/body/idempotency key를
+  함께 서명하며 private key와
+  attestation은 모델이나 Backoffice 응답에 노출하지 않는다.
+- `k8s/seori-auth-agent-runtime.yaml`은 기본 `replicas: 0`이고 Backoffice의
+  `AGENT_TRUSTED_ADAPTER_DEPLOYED=false`, 코드의 미구현 durable step-ledger gate와 함께 잠긴다.
+  현재 revision에서는 환경변수를 바꿔도 `READY_PR`을 생성하거나 claim할 수 없다.
 
 토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
 payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 개인 식별자를 넣지 않는다.
@@ -46,12 +52,14 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/platform-fleet/reconcile` | 현재 ACTIVE app 전체 cohort와 exact discovery/provider observation으로 repo별 plan을 한 번만 생성 |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
 | `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
-| `POST` | `/api/internal/agents/claim` | 최대 5분 lease와 generation capability 발급 |
-| `POST` | `/api/internal/agents/heartbeat` | 현재 generation lease만 연장 |
+| `POST` | `/api/internal/agents/claim` | 최대 5분 내부 lease에 결합된 공개 `sessionId` 발급. raw lease/grant 없음 |
+| `POST` | `/api/internal/agents/heartbeat` | principal/session/run/generation/repo/issue/source 결합이 유효한 현재 session만 연장 |
 | `POST` | `/api/internal/agents/complete` | 현재 generation을 성공 종료 |
 | `POST` | `/api/internal/agents/fail` | attempt 한도 내 재큐잉, 초과 시 dead-letter |
 | `POST` | `/api/internal/agents/readback-required` | 외부 mutation 결과 불명을 기록하고 같은 run guard를 유지 |
 | `POST` | `/api/internal/agents/readback` | 같은 run을 재claim한 새 generation lease로 `RESUME`, `COMPLETE`, `BLOCKED` 판정 |
+| `POST` | `/api/internal/agent-adapter/github-mutations/authorize` | trusted adapter의 60초 Ed25519 route/body attestation과 complete GitHub snapshot을 소비해 tokenless JIT execution 생성 |
+| `POST` | `/api/internal/agent-adapter/github-mutations/readback` | exact head ref/marker의 branch와 전체 PR 상태를 서명 readback해 `VERIFIED`, `NOT_APPLIED`, `RESULT_UNKNOWN` 기록 |
 | `POST` | `/api/control-plane/automation-definitions` | agent, cadence, 예산 상한, 승인 정책이 고정된 routine 생성 |
 | `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
@@ -86,6 +94,55 @@ plan API는 provider에 쓰지 않는다. `ProviderObservation.payload`의 표�
 plan 출력은 `BLOCKED`, `READY_TO_APPLY`, `COMPLIANT` 중 하나다. `READY_TO_APPLY`는 실행 완료가 아니다.
 별도 provider execution을 만들고 Auth Broker가 허용한 shared keyless identity로 실행한 뒤 provider
 readback이 들어와야 완료된다.
+
+## Agent session과 GitHub JIT mutation 경계
+
+agent queue의 `sessionId`는 공개 locator일 뿐 credential이 아니다. 실제 권한은 helper가 보유한 workload
+identity와 client certificate의 instance SAN/fingerprint/serial digest, DB의 `runId`, generation, principal,
+numeric repo ID/full name, issue number, exact source SHA, TTL을
+모두 비교해 판정한다. heartbeat, complete, fail, readback 요청 JSON에는 lease/grant/action token 필드가 없으며
+strict validator가 해당 필드와 호출자 supplied run/generation을 거부한다. TTL 만료, revoked session, 다른
+principal, 같은 principal의 다른 client certificate 또는 stale generation completion은 CAS 전에 거부한다.
+
+`READY_PR` write 권한과 repo singleton은 mutable `AgentRun.createsPr`가 아니라 managed definition의
+`approvalPolicy`와 resume mode에서만 파생한다. 현재 shadow GitHub adapter는 다음 경계를 검증하지만
+durable step ledger가 없어 운영 mutation에는 사용할 수 없다.
+
+1. command의 numeric repo ID 하나와 `contents:write`, `issues:read`, `pull_requests:write`만 지정해
+   operation-scoped GitHub installation token을 발급한다. token 응답의 repository/permission과 GitHub repo
+   ID/full name readback이 정확해야 다음 단계로 가며, 성공·실패와 무관하게 작업 직후 token을 폐기한다.
+2. GitHub App으로 exact repository/default SHA, issue state/label, open autopilot PR 전체를 페이지 끝까지 읽는다.
+3. K8s client certificate의 exact `/instance/{unique-id}` SPIFFE SAN, fingerprint, serial에서 Codex/Claude
+   principal과 session runtime binding을 얻는다. worker JSON의 principal
+   주장은 받지 않는다. mode `0600`만으로 같은 UID 프로세스를 구분할 수 없어 local runtime은 fail-closed다.
+4. 변경 파일 내용 자체는 보내지 않고 경로·mode·content SHA-256을 정규화한 `mutationIntentDigest`를 만든다.
+   route/body/idempotency key/runtime/60초 TTL에 결합된 Ed25519 attestation을 보내며 Backoffice는 전역 1회 nonce를 소비한다.
+5. Backoffice가 session principal, current registration/source, issue eligibility, repo guard와 intent digest를 다시 확인하고 token 원문이
+   없는 action grant와 mutation execution을 같은 transaction에서 즉시 `CONSUMED`로 기록한다.
+6. adapter는 write 직전에 repository/issue/전체 PR/target ref를 다시 읽는다. 상태가 바뀌었으면 쓰지 않는다.
+   최초 authorization만 `writeDisposition=EXECUTE_ONCE`를 반환한다. 같은 idempotency key의 duplicate는
+   `writeDisposition=READBACK_ONLY`로 강등되며 adapter는 write를 반복하지 않고 exact head ref와 PR marker만 readback한다.
+7. shadow 구현의 `applyReadyPr`는 tree, commit, ref, PR 네 개의 외부 mutation이다. ref 생성 뒤 PR 생성이나
+   응답이 실패하면 기존 composite idempotency만으로는 안전하게 재개할 수 없다. 따라서
+   `trustedGithubStepLedgerImplemented()`는 `false`이며 `AGENT_TRUSTED_ADAPTER_DEPLOYED=true`도 activation을 열지 않는다.
+8. shadow readback은 complete target snapshot이 exact PR을 찾으면 `VERIFIED`, branch와 모든 marker PR이 없으면 `NOT_APPLIED`,
+   그 외 상태는 `RESULT_UNKNOWN`이다. worker의 `PR_READY` 문자열만으로는 run을 완료할 수 없다.
+
+모델이 호출하는 공개 경계는 `scripts-dist/seori-auth-agent-client.cjs`의 stdin JSON 하나다. K8s client는
+projected client certificate로 TLS 1.3 mTLS만 사용한다. native peer attestor 또는 worker별 전용 OS UID/launchd
+경계가 구현되기 전에는 local transport를 client와 runtime 양쪽에 두지 않는다. K8s runtime만
+Backoffice worker bearer, adapter bearer, Ed25519 private key와 GitHub App private key 파일을 읽는다. 응답은
+공개 `sessionId`, 실행 상태, PR number/URL만 통과하며 credential 후보 key/value가 있으면 전체 응답을 폐기한다.
+
+사람 재인증, 심사 제출, 공개 배포, role/permission/key 변경은 이 action policy에 존재하지 않는다.
+
+### READY_PR 활성화를 위한 다음 수직 슬라이스
+
+다음 구현은 한 composite grant가 아니라 `CREATE_COMMIT`, `CREATE_REF`, `CREATE_PR`별 durable state와
+JIT capability를 가져야 한다. `CREATE_COMMIT` 안의 tree/commit은 content-addressed 결과를 exact SHA로 기록하고,
+각 단계는 fresh GitHub readback 뒤 한 번만 권한을 발급·소비한다. 응답 유실 시 저장된 expected/output SHA,
+exact branch ref, exact PR marker/head/base를 다시 읽어 이미 끝난 단계를 건너뛰고 남은 단계에만 새 capability를
+발급한다. 이 ledger와 partial-failure fixture가 통과하기 전에는 P6와 `READY_PR` activation을 완료로 표시하지 않는다.
 
 ## Provider execution과 Auth Broker 경계
 

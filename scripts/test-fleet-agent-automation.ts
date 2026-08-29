@@ -13,10 +13,19 @@ import {
 } from "@/lib/control-plane/automation-service";
 import {
   claimAgentRun,
+  heartbeatAgentRun,
   resolveAgentRunReadback,
   settleAgentRun,
 } from "@/lib/control-plane/agent-queue";
+import {
+  authorizeGithubReadyPrMutation,
+  GITHUB_READY_PR_MUTATION_ACTION,
+  recordGithubMutationReadback,
+} from "@/lib/control-plane/agent-mutation-service";
 import { automationPolicy } from "@/lib/control-plane/automation-catalog";
+import { agentGithubObservationSchema } from "@/lib/control-plane/contracts";
+import { githubInstallationProviderPayload } from "@/lib/control-plane/github-installation-observation";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   durableIngressEnvelopeHash,
@@ -37,11 +46,18 @@ if (!databaseUrl.pathname.slice(1).endsWith("_contract_test")) {
 
 const prisma = new PrismaClient();
 const nonce = crypto.randomUUID();
+const CODEX_RUNTIME_BINDING = "c".repeat(64);
+const CLAUDE_RUNTIME_BINDING = "d".repeat(64);
 const actor = `fixture:${nonce}`;
 const repoFullName = `seorilabs/p6-fixture-${nonce}`;
-const signingKey = "fleet-agent-contract-signing-key";
 let fixtureRepoId: bigint | null = null;
-process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED = "true";
+process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL = "seori-auth:github-mutation-adapter";
+process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY = "fixture:rpi5:github-adapter";
+process.env.AGENT_TRUSTED_ADAPTER_TOKEN = "fixture-distinct-adapter-token";
+process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = crypto.generateKeyPairSync("ed25519").publicKey.export({
+  type: "spki",
+  format: "pem",
+}).toString();
 
 async function createRun(input: {
   definitionId: string;
@@ -100,6 +116,43 @@ async function main() {
       lastReconciledSha: "f".repeat(40),
     },
   });
+  const githubInstallation = githubInstallationProviderPayload({
+    installationId: "101",
+    appId: "202",
+    targetId: "303",
+    accountLogin: "seorilabs",
+    targetType: "Organization",
+    repositorySelection: "all",
+    suspended: false,
+    permissions: {
+      metadata: "read",
+      contents: "write",
+      pull_requests: "write",
+      workflows: "write",
+      issues: "write",
+      checks: "write",
+      actions: "write",
+      environments: "write",
+      organization_actions_variables: "write",
+      organization_secrets: "write",
+      organization_custom_properties: "admin",
+      organization_administration: "write",
+    },
+    events: ["push", "repository", "pull_request", "issues", "issue_comment", "workflow_run"],
+  }, "seorilabs");
+  await prisma.providerObservation.create({
+    data: {
+      appId: app.id,
+      provider: "github",
+      resourceType: "github-app-installation",
+      resourceId: githubInstallation.attributes.installationId,
+      payload: githubInstallation,
+      payloadHash: jsonDigest(githubInstallation as JsonValue),
+      idempotencyKey: `fixture-github-installation:${nonce}`,
+      observedBy: "fixture:github-installation-readback",
+      observedAt: new Date(),
+    },
+  });
   await prisma.issueMirror.create({
     data: {
       appId: app.id,
@@ -131,25 +184,56 @@ async function main() {
     definitionId: readyDefinition.id,
     appId: app.id,
     issueNumber: 1,
+    workKey: `${repoFullName}#ready-pr-disabled`,
+    createsPr: false,
+  });
+  assert.equal(await claimAgentRun({
+    workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+    agentKind: "CODEX",
+    leaseSeconds: 300,
+    idempotencyKey: `ready-pr-disabled:${crypto.randomUUID()}`,
+  }), null, "durable GitHub step ledger 전에는 READY_PR claim이 fail-closed여야 한다");
+  assert.equal(await prisma.agentRepoGuard.findUnique({
+    where: { runId: readyOccurrence.runs[0].id },
+  }), null, "차단된 READY_PR claim은 repo guard도 획득하지 않아야 한다");
+
+  const codexReadOnlyDefinition = await prisma.automationDefinition.create({
+    data: {
+      key: `fixture-codex-read-only-${nonce}`,
+      appId: app.id,
+      template: "repo-task-autopilot-v1",
+      agentKind: "CODEX",
+      configuration: automationPolicy({ approvalPolicy: "READ_ONLY", budgetCeilingMicros: 100 }),
+    },
+  });
+  const readbackOccurrence = await createRun({
+    definitionId: codexReadOnlyDefinition.id,
+    appId: app.id,
+    issueNumber: 1,
     workKey: `${repoFullName}#readback`,
     createsPr: true,
   });
   const firstClaim = await claimAgentRun({
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `claim:${crypto.randomUUID()}`,
-    signingKey,
   });
-  assert.equal(firstClaim?.runId, readyOccurrence.runs[0].id);
+  assert.equal(firstClaim?.runId, readbackOccurrence.runs[0].id);
   assert.equal(firstClaim.resumeMode, "START");
+  assert.equal((firstClaim as unknown as Record<string, unknown>).leaseToken, undefined);
+  const claimedGuard = await prisma.agentRepoGuard.findUnique({
+    where: { runId: firstClaim.runId },
+  });
+  assert.equal(claimedGuard, null, "READ_ONLY는 run.createsPr 값과 무관하게 singleton을 획득하지 않는다");
   await settleAgentRun({
-    runId: firstClaim.runId,
-    generation: firstClaim.generation,
-    leaseToken: firstClaim.leaseToken,
+    sessionId: firstClaim.sessionId,
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     outcome: "unknown",
-    result: { outcomeCode: "RESULT_UNKNOWN", summary: "PR API response timed out", costMicros: 10 },
+    result: { outcomeCode: "RESULT_UNKNOWN", summary: "Read-only provider response timed out", costMicros: 10 },
     idempotencyKey: `unknown:${crypto.randomUUID()}`,
   });
   const unknown = await prisma.agentRun.findUniqueOrThrow({
@@ -159,14 +243,17 @@ async function main() {
   assert.equal(unknown.status, "FAILED");
   assert.ok(unknown.readbackRequestedAt);
   assert.ok(unknown.leases[0].revokedAt);
-  assert.ok(unknown.repoGuard?.activeScopeKey);
+  assert.equal(
+    unknown.repoGuard?.activeScopeKey ?? null,
+    null,
+    "READ_ONLY 결과 불명은 repo singleton을 만들지 않는다",
+  );
 
   await assert.rejects(
     resolveAgentRunReadback({
-      runId: firstClaim.runId,
-      generation: firstClaim.generation,
-      leaseToken: firstClaim.leaseToken,
+      sessionId: firstClaim.sessionId,
       workerId: "codex:seorilabs-generic-worker",
+      runtimeBindingDigest: CODEX_RUNTIME_BINDING,
       resolution: "RESUME",
       result: { outcomeCode: "READBACK_CONFIRMED", summary: "No PR exists", costMicros: 0 },
       idempotencyKey: `stale-readback:${crypto.randomUUID()}`,
@@ -176,20 +263,19 @@ async function main() {
 
   const readbackClaim = await claimAgentRun({
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `readback-claim:${crypto.randomUUID()}`,
-    signingKey,
   });
   assert.equal(readbackClaim?.runId, firstClaim.runId);
   assert.equal(readbackClaim.resumeMode, "READBACK_FIRST");
   assert.equal(readbackClaim.generation, firstClaim.generation + 1);
   assert.equal(readbackClaim.actionCapabilities.includes("github.pull_request.create"), false);
   await resolveAgentRunReadback({
-    runId: readbackClaim.runId,
-    generation: readbackClaim.generation,
-    leaseToken: readbackClaim.leaseToken,
+    sessionId: readbackClaim.sessionId,
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     resolution: "RESUME",
     result: { outcomeCode: "READBACK_CONFIRMED", summary: "No PR exists", costMicros: 5 },
     idempotencyKey: `readback-resolve:${crypto.randomUUID()}`,
@@ -201,22 +287,226 @@ async function main() {
 
   const resumedClaim = await claimAgentRun({
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `resumed-claim:${crypto.randomUUID()}`,
-    signingKey,
   });
   assert.equal(resumedClaim?.runId, firstClaim.runId);
   assert.equal(resumedClaim.resumeMode, "START");
-  assert.equal(resumedClaim.actionCapabilities.includes("github.pull_request.create"), true);
-  await settleAgentRun({
-    runId: resumedClaim.runId,
-    generation: resumedClaim.generation,
-    leaseToken: resumedClaim.leaseToken,
+  assert.equal(resumedClaim.actionCapabilities.includes("github.pull_request.create"), false);
+  const heartbeatKey = `heartbeat:${crypto.randomUUID()}`;
+  await heartbeatAgentRun({
+    sessionId: resumedClaim.sessionId,
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+    leaseSeconds: 300,
+    idempotencyKey: heartbeatKey,
+  });
+  await settleAgentRun({
+    sessionId: resumedClaim.sessionId,
+    workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     outcome: "complete",
     result: { outcomeCode: "NO_CHANGES", summary: "No change required", costMicros: 0 },
     idempotencyKey: `complete:${crypto.randomUUID()}`,
+  });
+  await assert.rejects(
+    heartbeatAgentRun({
+      sessionId: resumedClaim.sessionId,
+      workerId: "codex:seorilabs-generic-worker",
+      runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+      leaseSeconds: 300,
+      idempotencyKey: heartbeatKey,
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "STALE_SESSION",
+  );
+
+  await prisma.issueMirror.create({
+    data: {
+      appId: app.id,
+      repoFullName,
+      number: 2,
+      nodeId: `fixture-issue-jit-${nonce}`,
+      title: "JIT mutation contract",
+      state: "OPEN",
+      assignees: [],
+      labels: ["autopilot", "P1"],
+      priority: "P1",
+      isAutopilot: true,
+      ghCreatedAt: new Date(),
+      ghUpdatedAt: new Date(),
+    },
+  });
+  const jitOccurrence = await createRun({
+    definitionId: readyDefinition.id,
+    appId: app.id,
+    issueNumber: 2,
+    workKey: `${repoFullName}#jit`,
+    createsPr: false,
+  });
+  // 운영 claim 경계는 닫아 둔 채, migration/transaction 계약만 검증하는 shadow session을 직접 만든다.
+  const jitClaim = await prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 300_000);
+    await tx.agentRun.update({
+      where: { id: jitOccurrence.runs[0].id },
+      data: { status: "RUNNING", leaseGeneration: 1, attempts: { increment: 1 }, startedAt: now },
+    });
+    await tx.automationOccurrence.update({
+      where: { id: jitOccurrence.id },
+      data: { status: "RUNNING" },
+    });
+    await tx.agentRepoGuard.create({
+      data: {
+        runId: jitOccurrence.runs[0].id,
+        repoFullName,
+        activeScopeKey: `repo-pr:${repoFullName.toLowerCase()}`,
+        acquiredAt: now,
+      },
+    });
+    const lease = await tx.agentLease.create({
+      data: {
+        runId: jitOccurrence.runs[0].id,
+        generation: 1,
+        tokenHash: "e".repeat(64),
+        workerId: "codex:seorilabs-generic-worker",
+        scopeKey: `repo-pr:${repoFullName.toLowerCase()}`,
+        expiresAt,
+        heartbeatAt: now,
+      },
+    });
+    const session = await tx.agentWorkerSession.create({
+      data: {
+        id: `agent-session:${crypto.randomUUID()}`,
+        leaseId: lease.id,
+        runId: jitOccurrence.runs[0].id,
+        generation: 1,
+        principalId: "codex:seorilabs-generic-worker",
+        runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+        repoId: app.repoId!,
+        repoFullName,
+        issueNumber: 2,
+        sourceSha: "f".repeat(40),
+        expiresAt,
+        heartbeatAt: now,
+      },
+    });
+    return { sessionId: session.id, runId: jitOccurrence.runs[0].id, generation: 1 };
+  });
+  assert.equal(jitClaim.runId, jitOccurrence.runs[0].id);
+  const observedAt = new Date();
+  const preObservation = agentGithubObservationSchema.parse({
+    schemaVersion: 1,
+    githubInstallationId: "101",
+    providerSnapshotId: `fixture-pre-${nonce}`,
+    complete: true,
+    pageCount: 1,
+    terminalCursor: null,
+    observedAt,
+    repoId: app.repoId!.toString(),
+    repoFullName,
+    defaultBranchRef: "refs/heads/main",
+    defaultBranchSha: "f".repeat(40),
+    issue: {
+      number: 2,
+      nodeId: `fixture-issue-jit-${nonce}`,
+      state: "OPEN",
+      labels: ["autopilot", "P1"],
+      updatedAt: observedAt,
+    },
+    openAutopilotPullRequests: [],
+    mutationTarget: null,
+  });
+  const authorizationKey = `jit-authorize:${crypto.randomUUID()}`;
+  await assert.rejects(() => authorizeGithubReadyPrMutation({
+    sessionId: jitClaim.sessionId,
+    workerPrincipalId: "claude:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CLAUDE_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: "a".repeat(64),
+    observation: preObservation,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-cross-principal:${crypto.randomUUID()}`,
+  }), (error: unknown) => (
+    typeof error === "object" && error !== null && "code" in error && error.code === "SESSION_PRINCIPAL_MISMATCH"
+  ));
+  const authorization = await authorizeGithubReadyPrMutation({
+    sessionId: jitClaim.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: "a".repeat(64),
+    observation: preObservation,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: authorizationKey,
+  });
+  assert.equal(authorization.status, "CONSUMED");
+  assert.equal(authorization.writeDisposition, "EXECUTE_ONCE");
+  assert.equal(JSON.stringify(authorization).match(/(?:lease|grant|action)Token/gi), null);
+  const replayedAuthorization = await authorizeGithubReadyPrMutation({
+    sessionId: jitClaim.sessionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    action: GITHUB_READY_PR_MUTATION_ACTION,
+    mutationIntentDigest: "a".repeat(64),
+    observation: preObservation,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: authorizationKey,
+  });
+  assert.equal(replayedAuthorization.duplicate, true);
+  assert.equal(replayedAuthorization.writeDisposition, "READBACK_ONLY");
+  const absentObservation = agentGithubObservationSchema.parse({
+    ...preObservation,
+    providerSnapshotId: `fixture-post-${nonce}`,
+    observedAt: new Date(),
+    mutationTarget: {
+      expectedHeadRef: authorization.expectedHeadRef,
+      expectedMarker: authorization.expectedPullRequestMarker,
+      headState: "ABSENT",
+      headSha: null,
+      complete: true,
+      pageCount: 1,
+      terminalCursor: null,
+      pullRequests: [],
+    },
+  });
+  await assert.rejects(() => recordGithubMutationReadback({
+    executionId: authorization.executionId,
+    workerPrincipalId: "claude:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CLAUDE_RUNTIME_BINDING,
+    observation: absentObservation,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-cross-principal-readback:${crypto.randomUUID()}`,
+  }), (error: unknown) => (
+    typeof error === "object" && error !== null && "code" in error && error.code === "MUTATION_ADAPTER_MISMATCH"
+  ));
+  const readback = await recordGithubMutationReadback({
+    executionId: authorization.executionId,
+    workerPrincipalId: "codex:seorilabs-generic-worker",
+    workerRuntimeBindingDigest: CODEX_RUNTIME_BINDING,
+    observation: absentObservation,
+    adapterPrincipalId: "seori-auth:github-mutation-adapter",
+    adapterRuntimeIdentity: "fixture:rpi5:github-adapter",
+    idempotencyKey: `jit-readback:${crypto.randomUUID()}`,
+  });
+  assert.equal(readback.readback.status, "NOT_APPLIED");
+  await settleAgentRun({
+    sessionId: jitClaim.sessionId,
+    workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
+    outcome: "complete",
+    result: { outcomeCode: "NO_CHANGES", summary: "Signed readback confirmed no mutation", costMicros: 0 },
+    idempotencyKey: `jit-complete:${crypto.randomUUID()}`,
+  });
+  assert.equal((await prisma.agentRun.findUniqueOrThrow({ where: { id: jitClaim.runId } })).status, "SUCCEEDED");
+  await prisma.issueMirror.update({
+    where: { repoFullName_number: { repoFullName, number: 2 } },
+    data: { state: "CLOSED", isAutopilot: false, ghUpdatedAt: new Date() },
   });
 
   const legacyDefinition = await prisma.automationDefinition.create({
@@ -231,10 +521,10 @@ async function main() {
   });
   assert.equal(await claimAgentRun({
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `legacy-claim:${crypto.randomUUID()}`,
-    signingKey,
   }), null);
 
   const readOnlyDefinition = await prisma.automationDefinition.create({
@@ -246,6 +536,7 @@ async function main() {
       configuration: automationPolicy({ approvalPolicy: "READ_ONLY", budgetCeilingMicros: 100 }),
     },
   });
+
   const cancelledOccurrence = await createRun({
     definitionId: readOnlyDefinition.id,
     appId: app.id,
@@ -306,26 +597,25 @@ async function main() {
   });
   const policyClaim = await claimAgentRun({
     workerId: "claude:seorilabs-generic-worker",
+    runtimeBindingDigest: CLAUDE_RUNTIME_BINDING,
     agentKind: "CLAUDE",
     leaseSeconds: 300,
     idempotencyKey: `policy-claim:${crypto.randomUUID()}`,
-    signingKey,
   });
   assert.equal(policyClaim?.runId, replacement.runs[0].id);
   await cancelAgentRun({ runId: policyClaim.runId, actor, requestId: `cancel-replacement:${crypto.randomUUID()}` });
   const policyClaim2 = await claimAgentRun({
     workerId: "claude:seorilabs-generic-worker",
+    runtimeBindingDigest: CLAUDE_RUNTIME_BINDING,
     agentKind: "CLAUDE",
     leaseSeconds: 300,
     idempotencyKey: `policy-claim-2:${crypto.randomUUID()}`,
-    signingKey,
   });
   assert.equal(policyClaim2?.runId, policyOccurrence.runs[0].id);
   await settleAgentRun({
-    runId: policyClaim2.runId,
-    generation: policyClaim2.generation,
-    leaseToken: policyClaim2.leaseToken,
+    sessionId: policyClaim2.sessionId,
     workerId: "claude:seorilabs-generic-worker",
+    runtimeBindingDigest: CLAUDE_RUNTIME_BINDING,
     outcome: "complete",
     result: { outcomeCode: "ISSUE_RESOLVED", summary: "Mutation claimed", costMicros: 1 },
     idempotencyKey: `policy-settle:${crypto.randomUUID()}`,
@@ -333,6 +623,55 @@ async function main() {
   const policyBlocked = await prisma.agentRun.findUniqueOrThrow({ where: { id: policyClaim2.runId } });
   assert.equal(policyBlocked.status, "DEAD_LETTER");
   assert.equal(policyBlocked.error, "APPROVAL_POLICY_VIOLATION");
+
+  const reauthOccurrence = await createRun({
+    definitionId: readOnlyDefinition.id,
+    appId: app.id,
+    issueNumber: 1,
+    workKey: `${repoFullName}#reauth`,
+    createsPr: false,
+  });
+  const reauth = await prisma.reauthRequest.create({
+    data: {
+      appId: app.id,
+      runId: reauthOccurrence.runs[0].id,
+      provider: "github",
+      origin: "https://github.com",
+      publicAccountId: "seorilabs",
+      capability: "github.pull_request.create",
+      gate: "HUMAN_MFA",
+      idempotencyKey: `fixture-reauth:${crypto.randomUUID()}`,
+      requestedBy: "fixture:trusted-adapter",
+    },
+  });
+  const reauthClaim = await claimAgentRun({
+    workerId: "claude:seorilabs-generic-worker",
+    runtimeBindingDigest: CLAUDE_RUNTIME_BINDING,
+    agentKind: "CLAUDE",
+    leaseSeconds: 300,
+    idempotencyKey: `reauth-claim:${crypto.randomUUID()}`,
+  });
+  assert.equal(reauthClaim?.runId, reauthOccurrence.runs[0].id);
+  await settleAgentRun({
+    sessionId: reauthClaim.sessionId,
+    workerId: "claude:seorilabs-generic-worker",
+    runtimeBindingDigest: CLAUDE_RUNTIME_BINDING,
+    outcome: "fail",
+    result: {
+      outcomeCode: "BLOCKED",
+      summary: "사람 재인증이 필요함",
+      costMicros: 0,
+      reauthRequestId: reauth.id,
+    },
+    error: "HUMAN_REAUTH_REQUIRED",
+    idempotencyKey: `reauth-fail:${crypto.randomUUID()}`,
+  });
+  const reauthBlocked = await prisma.agentRun.findUniqueOrThrow({ where: { id: reauthClaim.runId } });
+  assert.equal(reauthBlocked.status, "DEAD_LETTER");
+  assert.equal(reauthBlocked.error, "HUMAN_REAUTH_REQUIRED");
+  assert.equal(await prisma.agentRunEvent.count({
+    where: { runId: reauthClaim.runId, type: "human_reauth_required" },
+  }), 1);
 
   const createRequestId = `definition-create:${crypto.randomUUID()}`;
   const created = await createAutomationDefinition({
@@ -460,10 +799,10 @@ async function main() {
   });
   assert.equal(await claimAgentRun({
     workerId: "codex:seorilabs-generic-worker",
+    runtimeBindingDigest: CODEX_RUNTIME_BINDING,
     agentKind: "CODEX",
     leaseSeconds: 300,
     idempotencyKey: `repository-needs-input:${crypto.randomUUID()}`,
-    signingKey,
   }), null, "NEEDS_INPUT repository의 새 작업은 claim할 수 없어야 한다");
   assert.equal((await prisma.agentRun.findUniqueOrThrow({
     where: { id: blockedOccurrence.runs[0].id },

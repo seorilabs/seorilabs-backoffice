@@ -4,6 +4,7 @@ import {
   AUTOMATION_AGENT_KINDS,
   AUTOMATION_CADENCES,
   AUTOMATION_TEMPLATE_KEY,
+  GENERIC_WORKER_PRINCIPALS,
 } from "@/lib/control-plane/automation-catalog";
 
 const sha40 = z.string().regex(/^[0-9a-f]{40}$/i, "40자리 source SHA가 필요합니다.");
@@ -911,6 +912,139 @@ export const agentClaimSchema = z.object({
   leaseSeconds: z.number().int().min(30).max(300).default(300),
 }).strict();
 
+const githubRepository = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
+const githubRef = z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,240}$/);
+const githubLabel = z.string().min(1).max(128).refine(
+  (value) => !/[\u0000-\u001f\u007f]/u.test(value) && !containsCredentialCandidate(value),
+  "control character와 credential 후보가 없는 공개 GitHub label이 필요합니다.",
+);
+const githubObservationIssueSchema = z.object({
+  number: z.number().int().positive(),
+  nodeId: publicIdentifier,
+  state: z.enum(["OPEN", "CLOSED"]),
+  labels: z.array(githubLabel).max(100),
+  updatedAt: z.coerce.date(),
+}).strict();
+
+const githubObservationPullRequestSchema = z.object({
+  number: z.number().int().positive(),
+  nodeId: publicIdentifier,
+  url: httpsUrl,
+  state: z.literal("OPEN"),
+  draft: z.boolean(),
+  headRef: githubRef,
+  headSha: sha40,
+  baseRef: githubRef,
+  baseSha: sha40,
+  marker: publicIdentifier,
+  closesIssueNumber: z.number().int().positive().nullable(),
+}).strict();
+
+const githubMutationTargetPullRequestSchema = z.object({
+  number: z.number().int().positive(),
+  nodeId: publicIdentifier,
+  url: httpsUrl,
+  state: z.enum(["OPEN", "CLOSED", "MERGED"]),
+  draft: z.boolean(),
+  headRef: githubRef,
+  headSha: sha40,
+  baseRef: githubRef,
+  baseSha: sha40,
+  marker: publicIdentifier,
+  closesIssueNumber: z.number().int().positive().nullable(),
+}).strict();
+
+const githubMutationTargetSchema = z.object({
+  expectedHeadRef: githubRef,
+  expectedMarker: publicIdentifier,
+  headState: z.enum(["ABSENT", "PRESENT"]),
+  headSha: sha40.nullable(),
+  complete: z.literal(true),
+  pageCount: z.number().int().positive().max(1_000),
+  terminalCursor: z.null(),
+  pullRequests: z.array(githubMutationTargetPullRequestSchema).max(10),
+}).strict().superRefine((target, context) => {
+  if ((target.headState === "ABSENT") !== (target.headSha === null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "head ref state와 SHA binding이 다릅니다.", path: ["headSha"] });
+  }
+  for (const [index, pullRequest] of target.pullRequests.entries()) {
+    if (pullRequest.headRef !== target.expectedHeadRef || pullRequest.marker !== target.expectedMarker) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "target PR의 head ref 또는 marker가 다릅니다.", path: ["pullRequests", index] });
+    }
+  }
+});
+
+export const agentGithubObservationSchema = z.object({
+  schemaVersion: z.literal(1),
+  githubInstallationId: numericId,
+  providerSnapshotId: publicIdentifier,
+  complete: z.literal(true),
+  pageCount: z.number().int().positive().max(1_000),
+  terminalCursor: z.null(),
+  observedAt: z.coerce.date(),
+  repoId: numericId,
+  repoFullName: githubRepository,
+  defaultBranchRef: githubRef,
+  defaultBranchSha: sha40,
+  issue: githubObservationIssueSchema.nullable(),
+  openAutopilotPullRequests: z.array(githubObservationPullRequestSchema).max(100),
+  mutationTarget: githubMutationTargetSchema.nullable(),
+}).strict().superRefine((observation, context) => {
+  const issueLabels = observation.issue?.labels.map((label) => label.toLowerCase()) ?? [];
+  if (new Set(issueLabels).size !== issueLabels.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "GitHub issue label은 대소문자 무시 중복이 없어야 합니다.", path: ["issue", "labels"] });
+  }
+  const numbers = observation.openAutopilotPullRequests.map((pullRequest) => pullRequest.number);
+  const nodeIds = observation.openAutopilotPullRequests.map((pullRequest) => pullRequest.nodeId);
+  if (new Set(numbers).size !== numbers.length || new Set(nodeIds).size !== nodeIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "complete GitHub PR observation에 중복 PR이 있습니다.", path: ["openAutopilotPullRequests"] });
+  }
+  for (const [index, pullRequest] of observation.openAutopilotPullRequests.entries()) {
+    const expectedUrl = `https://github.com/${observation.repoFullName}/pull/${pullRequest.number}`;
+    if (pullRequest.url !== expectedUrl) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "PR URL과 repository/number binding이 다릅니다.", path: ["openAutopilotPullRequests", index, "url"] });
+    }
+  }
+  for (const [index, pullRequest] of observation.mutationTarget?.pullRequests.entries() ?? []) {
+    const expectedUrl = `https://github.com/${observation.repoFullName}/pull/${pullRequest.number}`;
+    if (pullRequest.url !== expectedUrl) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "target PR URL과 repository/number binding이 다릅니다.", path: ["mutationTarget", "pullRequests", index, "url"] });
+    }
+  }
+});
+
+export type AgentGithubObservation = z.infer<typeof agentGithubObservationSchema>;
+
+export const agentGithubMutationAuthorizeSchema = z.object({
+  sessionId: publicIdentifier,
+  workerPrincipalId: z.enum([
+    GENERIC_WORKER_PRINCIPALS.CODEX,
+    GENERIC_WORKER_PRINCIPALS.CLAUDE,
+  ]),
+  workerRuntimeBindingDigest: sha256,
+  action: z.literal("GITHUB_READY_PR_MUTATE"),
+  mutationIntentDigest: sha256,
+  observation: agentGithubObservationSchema,
+}).strict().superRefine((value, context) => {
+  if (value.observation.mutationTarget !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "pre-mutation observation에는 target readback을 넣을 수 없습니다.", path: ["observation", "mutationTarget"] });
+  }
+});
+
+export const agentGithubMutationReadbackSchema = z.object({
+  executionId: publicIdentifier,
+  workerPrincipalId: z.enum([
+    GENERIC_WORKER_PRINCIPALS.CODEX,
+    GENERIC_WORKER_PRINCIPALS.CLAUDE,
+  ]),
+  workerRuntimeBindingDigest: sha256,
+  observation: agentGithubObservationSchema,
+}).strict().superRefine((value, context) => {
+  if (value.observation.mutationTarget === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "post-mutation readback에는 complete target observation이 필요합니다.", path: ["observation", "mutationTarget"] });
+  }
+});
+
 export const agentResultSchema = z.object({
   outcomeCode: z.enum([
     "NO_CHANGES",
@@ -932,8 +1066,9 @@ export const agentResultSchema = z.object({
   outputTokens: z.number().int().nonnegative().optional(),
   costMicros: z.number().int().nonnegative(),
   reauthRequestId: publicIdentifier.optional(),
+  mutationExecutionId: publicIdentifier.optional(),
 }).strict().superRefine((result, context) => {
-  for (const field of ["pullRequestUrl", "model", "reauthRequestId"] as const) {
+  for (const field of ["pullRequestUrl", "model", "reauthRequestId", "mutationExecutionId"] as const) {
     const value = result[field];
     if (value && containsCredentialCandidate(value)) {
       context.addIssue({
@@ -957,24 +1092,65 @@ export const agentResultSchema = z.object({
       path: ["pullRequestNumber"],
     });
   }
+  if (result.outcomeCode === "PR_READY" && !result.mutationExecutionId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "PR_READY에는 trusted adapter mutationExecutionId가 필요합니다.",
+      path: ["mutationExecutionId"],
+    });
+  }
+  if (!["PR_READY", "RESULT_UNKNOWN"].includes(result.outcomeCode) && result.mutationExecutionId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "mutationExecutionId는 PR_READY 또는 RESULT_UNKNOWN에서만 허용합니다.",
+      path: ["mutationExecutionId"],
+    });
+  }
+  if (result.reauthRequestId && result.outcomeCode !== "BLOCKED") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "reauthRequestId는 BLOCKED 결과에만 허용합니다.",
+      path: ["reauthRequestId"],
+    });
+  }
 });
 
-export const agentLeaseActionSchema = z.object({
-  runId: z.string().min(1).max(191),
-  generation: z.number().int().positive(),
-  leaseToken: z.string().min(32).max(256),
-  leaseSeconds: z.number().int().min(30).max(300).default(300),
-  result: agentResultSchema.optional(),
-  error: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/, "공개 error code만 허용합니다.").optional(),
+export const agentSessionActionSchema = z.object({
+  sessionId: publicIdentifier,
 }).strict();
 
-export const agentHeartbeatSchema = agentLeaseActionSchema.omit({ result: true, error: true });
-export const agentCompletionSchema = agentLeaseActionSchema.extend({ result: agentResultSchema });
-export const agentFailureSchema = agentLeaseActionSchema.extend({
+export const agentHeartbeatSchema = agentSessionActionSchema.extend({
+  leaseSeconds: z.number().int().min(30).max(300).default(300),
+});
+export const agentCompletionSchema = agentSessionActionSchema.extend({ result: agentResultSchema }).superRefine((value, context) => {
+  if (!["NO_CHANGES", "PR_READY", "ISSUE_RESOLVED"].includes(value.result.outcomeCode)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "complete endpoint에는 확정 성공 outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
+});
+export const agentFailureSchema = agentSessionActionSchema.extend({
   result: agentResultSchema,
   error: z.string().regex(/^[A-Z][A-Z0-9_.:-]{0,127}$/, "공개 error code만 허용합니다."),
+}).superRefine((value, context) => {
+  if (value.result.outcomeCode !== "BLOCKED") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "fail endpoint에는 BLOCKED outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
+  if (value.error === "HUMAN_REAUTH_REQUIRED" && !value.result.reauthRequestId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "사람 재인증 중단에는 공개 reauthRequestId가 필요합니다.",
+      path: ["result", "reauthRequestId"],
+    });
+  }
 });
-export const agentReadbackRequiredSchema = agentLeaseActionSchema.extend({
+export const agentReadbackRequiredSchema = agentSessionActionSchema.extend({
   result: agentResultSchema,
 }).superRefine((value, context) => {
   if (value.result.outcomeCode !== "RESULT_UNKNOWN") {
@@ -987,9 +1163,7 @@ export const agentReadbackRequiredSchema = agentLeaseActionSchema.extend({
 });
 
 export const agentReadbackResolutionSchema = z.object({
-  runId: z.string().min(1).max(191),
-  generation: z.number().int().positive(),
-  leaseToken: z.string().min(32).max(256),
+  sessionId: publicIdentifier,
   resolution: z.enum(["RESUME", "COMPLETE", "BLOCKED"]),
   result: agentResultSchema,
 }).strict().superRefine((value, context) => {
@@ -1004,6 +1178,16 @@ export const agentReadbackResolutionSchema = z.object({
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: "BLOCKED resolution에는 BLOCKED outcomeCode가 필요합니다.",
+      path: ["result", "outcomeCode"],
+    });
+  }
+  if (
+    value.resolution === "COMPLETE"
+    && !["NO_CHANGES", "PR_READY", "ISSUE_RESOLVED"].includes(value.result.outcomeCode)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "COMPLETE resolution에는 확정 성공 outcomeCode가 필요합니다.",
       path: ["result", "outcomeCode"],
     });
   }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,7 +21,6 @@ import {
   agentReadbackRequestHash,
   agentSettlementRequestHash,
   expiredLeaseDisposition,
-  mutationCapabilityBrokerEnforced,
 } from "@/lib/control-plane/agent-queue";
 import {
   durableIssueObservation,
@@ -39,7 +39,7 @@ import {
   automationMutationRequestHash,
 } from "@/lib/control-plane/automation-mutation";
 import {
-  agentLeaseActionSchema,
+  agentSessionActionSchema,
   agentCompletionSchema,
   agentReadbackRequiredSchema,
   agentReadbackResolutionSchema,
@@ -49,7 +49,11 @@ import {
   redactCredentialCandidates,
 } from "@/lib/control-plane/contracts";
 import { redactFleetJson } from "@/lib/control-plane/fleet-view";
-import { authenticateInternalRequest } from "@/lib/control-plane/security";
+import {
+  authenticateInternalRequest,
+  trustedGithubStepLedgerImplemented,
+  trustedMutationAdapterConfigured,
+} from "@/lib/control-plane/security";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 
@@ -165,6 +169,7 @@ test("worker 결과 계약은 공개 usage만 허용하고 credential 후보와 
     summary: "PR #123 checks passed",
     pullRequestNumber: 123,
     pullRequestUrl: "https://github.com/seorilabs/example/pull/123",
+    mutationExecutionId: "mutation-execution-123",
     model: "gpt-5.6-sol",
     inputTokens: 1_000,
     outputTokens: 200,
@@ -182,27 +187,18 @@ test("worker 결과 계약은 공개 usage만 허용하고 credential 후보와 
     ...result,
     pullRequestUrl: `https://github.com/seorilabs/example/pull/${syntheticToken}`,
   }).success, false);
-  assert.equal(agentLeaseActionSchema.safeParse({
+  assert.equal(agentSessionActionSchema.safeParse({ sessionId: "session-1" }).success, true);
+  assert.equal(agentSessionActionSchema.safeParse({
+    sessionId: "session-1",
     runId: "run-1",
     generation: 1,
     leaseToken: "x".repeat(32),
-    error: "WORKER_FAILED",
-  }).success, true);
-  assert.equal(agentLeaseActionSchema.safeParse({
-    runId: "run-1",
-    generation: 1,
-    leaseToken: "x".repeat(32),
-    error: "password=hunter2",
   }).success, false);
   assert.equal(agentCompletionSchema.safeParse({
-    runId: "run-1",
-    generation: 1,
-    leaseToken: "x".repeat(32),
+    sessionId: "session-1",
   }).success, false);
   assert.equal(agentReadbackRequiredSchema.safeParse({
-    runId: "run-1",
-    generation: 1,
-    leaseToken: "x".repeat(32),
+    sessionId: "session-1",
     result: { outcomeCode: "RESULT_UNKNOWN", summary: "PR create response timed out", costMicros: 0 },
   }).success, true);
 });
@@ -239,9 +235,14 @@ test("agent worker bearer는 고유 principal token에 결합되고 legacy share
     "AGENT_WORKER_CLAUDE_TOKEN",
   ] as const;
   const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
-  const request = (principal: string, token: string, header = "authorization") => new NextRequest(
+  const runtimeBinding = "a".repeat(64);
+  const request = (principal: string, token: string, header = "authorization", binding = runtimeBinding) => new NextRequest(
     "https://backoffice.invalid/api/internal/agents/claim",
-    { headers: { [header]: header === "authorization" ? `Bearer ${token}` : token, "x-seori-principal": principal } },
+    { headers: {
+      [header]: header === "authorization" ? `Bearer ${token}` : token,
+      "x-seori-principal": principal,
+      ...(binding ? { "x-seori-worker-runtime-binding": binding } : {}),
+    } },
   );
   try {
     process.env.AGENT_WORKER_TOKEN = "legacy-unit-token";
@@ -258,6 +259,10 @@ test("agent worker bearer는 고유 principal token에 결합되고 legacy share
       request("codex:seorilabs-generic-worker", "codex-unit-token"),
       "agent-worker",
     )?.id, "codex:seorilabs-generic-worker");
+    assert.equal(authenticateInternalRequest(
+      request("codex:seorilabs-generic-worker", "codex-unit-token", "authorization", ""),
+      "agent-worker",
+    ), null);
     assert.equal(authenticateInternalRequest(
       request("claude:seorilabs-generic-worker", "codex-unit-token"),
       "agent-worker",
@@ -317,22 +322,22 @@ test("control-plane admin token은 설정된 단일 workload principal과 결합
   }
 });
 
-test("readback resolution은 재claim한 generation lease capability와 비용을 요구한다", () => {
+test("readback resolution은 공개 session ID와 비용을 요구하고 raw lease 입력을 거부한다", () => {
   const base = {
-    runId: "run-1",
-    generation: 2,
-    leaseToken: "x".repeat(32),
+    sessionId: "session-2",
     resolution: "RESUME",
     result: { outcomeCode: "READBACK_CONFIRMED", summary: "PR does not exist", costMicros: 0 },
   };
   assert.equal(agentReadbackResolutionSchema.safeParse(base).success, true);
-  const withoutLease = {
-    runId: base.runId,
-    generation: base.generation,
+  const withoutSession = {
     resolution: base.resolution,
     result: base.result,
   };
-  assert.equal(agentReadbackResolutionSchema.safeParse(withoutLease).success, false);
+  assert.equal(agentReadbackResolutionSchema.safeParse(withoutSession).success, false);
+  assert.equal(agentReadbackResolutionSchema.safeParse({
+    ...base,
+    leaseToken: "x".repeat(32),
+  }).success, false);
   assert.equal(agentReadbackResolutionSchema.safeParse({
     ...base,
     result: { ...base.result, outcomeCode: "NO_CHANGES" },
@@ -527,26 +532,53 @@ test("READ_ONLY action과 누적 run budget은 settlement 전에 fail-closed한�
   }), "RESULT_COST_REQUIRED");
 });
 
-test("READY_PR은 trusted mutation capability broker가 강제되기 전 생성과 claim이 fail-closed다", () => {
-  const original = process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED;
+test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생성과 claim이 fail-closed다", () => {
+  const names = [
+    "AGENT_TRUSTED_ADAPTER_PRINCIPAL",
+    "AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY",
+    "AGENT_TRUSTED_ADAPTER_DEPLOYED",
+    "AGENT_TRUSTED_ADAPTER_TOKEN",
+    "AGENT_TRUSTED_ADAPTER_PUBLIC_KEY",
+    "AGENT_WORKER_CODEX_TOKEN",
+    "CONTROL_PLANE_ADMIN_PRINCIPAL",
+  ] as const;
+  const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   try {
-    delete process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED;
-    assert.equal(mutationCapabilityBrokerEnforced(), false);
-    process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED = "true";
-    assert.equal(mutationCapabilityBrokerEnforced(), true);
+    for (const name of names) delete process.env[name];
+    assert.equal(trustedMutationAdapterConfigured(), false);
+    process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL = "seori-auth:github-adapter";
+    process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/github-adapter";
+    process.env.AGENT_TRUSTED_ADAPTER_DEPLOYED = "true";
+    process.env.AGENT_TRUSTED_ADAPTER_TOKEN = "adapter-test-token";
+    process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = "not-an-ed25519-public-key";
+    assert.equal(trustedMutationAdapterConfigured(), false, "검증 불가능한 public key를 거부한다");
+    process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
+      type: "spki",
+      format: "pem",
+    }).toString();
+    assert.equal(trustedGithubStepLedgerImplemented(), false);
+    assert.equal(trustedMutationAdapterConfigured(), false, "durable GitHub step ledger 전에는 activation을 열지 않는다");
+    process.env.AGENT_WORKER_CODEX_TOKEN = "adapter-test-token";
+    assert.equal(trustedMutationAdapterConfigured(), false, "worker token 재사용을 거부한다");
+    delete process.env.AGENT_WORKER_CODEX_TOKEN;
+    process.env.CONTROL_PLANE_ADMIN_PRINCIPAL = "seori-auth:github-adapter";
+    assert.equal(trustedMutationAdapterConfigured(), false, "admin principal 재사용을 거부한다");
     const service = readFileSync(join(process.cwd(), "src/lib/control-plane/automation-service.ts"), "utf8");
     const queue = readFileSync(join(process.cwd(), "src/lib/control-plane/agent-queue.ts"), "utf8");
     assert.match(service, /approvalPolicy === "READY_PR"[\s\S]*MUTATION_CAPABILITY_BROKER_REQUIRED/);
-    assert.match(queue, /policy\.approvalPolicy === "READY_PR" && !mutationCapabilityBrokerEnforced\(\)/);
+    assert.match(queue, /executionPolicy\.repositorySingleton && !trustedMutationAdapterConfigured\(\)/);
   } finally {
-    if (original === undefined) delete process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED;
-    else process.env.AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED = original;
+    for (const name of names) {
+      const value = original[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });
 
 test("PR-capable lease 만료는 시도 상한에서도 dead-letter 대신 durable readback으로 간다", () => {
   assert.deepEqual(expiredLeaseDisposition({
-    createsPr: true,
+    mutationStarted: true,
     readbackRequested: false,
     attempts: 3,
     maxAttempts: 3,
@@ -557,13 +589,13 @@ test("PR-capable lease 만료는 시도 상한에서도 dead-letter 대신 durab
     eventType: "readback_required",
   });
   assert.equal(expiredLeaseDisposition({
-    createsPr: false,
+    mutationStarted: false,
     readbackRequested: false,
     attempts: 3,
     maxAttempts: 3,
   }).status, "DEAD_LETTER");
   assert.equal(expiredLeaseDisposition({
-    createsPr: false,
+    mutationStarted: false,
     readbackRequested: true,
     attempts: 3,
     maxAttempts: 3,
@@ -668,8 +700,9 @@ test("RESULT_UNKNOWN은 새 readback lease 재claim 뒤에만 resolve되고 muta
   const queue = readFileSync(join(process.cwd(), "src/lib/control-plane/agent-queue.ts"), "utf8");
   const mutation = readFileSync(join(process.cwd(), "src/lib/control-plane/automation-mutation.ts"), "utf8");
   assert.match(queue, /status: "FAILED", readbackRequestedAt: \{ not: null \}/);
-  assert.match(queue, /const sourceLease[\s\S]*revokedAt: null[\s\S]*run\.status !== "RUNNING"[\s\S]*readbackRequestedAt/);
-  assert.doesNotMatch(queue, /readback source lease[\s\S]{0,500}revokedAt: \{ not: null \}/);
+  assert.match(queue, /const priorSession = readbackClaim[\s\S]*generation: \{ lte: run\.leaseGeneration \}[\s\S]*sourceSha/);
+  assert.match(queue, /const sourceLease = session\.lease[\s\S]*agentWorkerSessionStateError[\s\S]*run\.status !== "RUNNING"[\s\S]*readbackRequestedAt/);
+  assert.match(queue, /agentWorkerSession\.update[\s\S]*revokedAt: now, settledAt: now, expiresAt: now/);
   assert.match(mutation, /status: "PENDING"[\s\S]*auditLog\.create/);
 });
 
@@ -705,9 +738,12 @@ test("generic worker contract은 Codex와 Claude 설치를 각각 하나로 제�
   ), "utf8")) as {
     workerInstallations: Array<{ key: string; agentKind: string; maximumActiveInstallations: number }>;
     authentication: {
-      principalCapabilities: Record<string, string>;
+      transport: { local: string; kubernetes: string };
       distinctCapabilitiesRequired: boolean;
       legacySharedTokenAccepted: boolean;
+      workerVisibleCredentialMaterial: boolean;
+      publicSessionField: string;
+      forbidden: string[];
     };
     claimPolicy: {
       fields: string[];
@@ -717,12 +753,13 @@ test("generic worker contract은 Codex와 Claude 설치를 각각 하나로 제�
   assert.deepEqual(contract.workerInstallations.map((worker) => worker.agentKind).sort(), ["CLAUDE", "CODEX"]);
   assert.equal(new Set(contract.workerInstallations.map((worker) => worker.key)).size, 2);
   assert.equal(contract.workerInstallations.every((worker) => worker.maximumActiveInstallations === 1), true);
-  assert.deepEqual(contract.authentication.principalCapabilities, {
-    "codex:seorilabs-generic-worker": "AGENT_WORKER_CODEX_TOKEN",
-    "claude:seorilabs-generic-worker": "AGENT_WORKER_CLAUDE_TOKEN",
-  });
+  assert.match(contract.authentication.transport.local, /seori-auth/);
+  assert.match(contract.authentication.transport.kubernetes, /seori-auth/);
   assert.equal(contract.authentication.distinctCapabilitiesRequired, true);
   assert.equal(contract.authentication.legacySharedTokenAccepted, false);
+  assert.equal(contract.authentication.workerVisibleCredentialMaterial, false);
+  assert.equal(contract.authentication.publicSessionField, "sessionId");
+  assert.equal(contract.authentication.forbidden.includes("leaseToken"), true);
   assert.equal(contract.claimPolicy.fields.includes("template"), true);
   assert.equal(contract.claimPolicy.fields.includes("taskInput"), true);
   assert.match(contract.claimPolicy.templatePolicies["platform-fleet-reconcile-v1"], /CODEX/);

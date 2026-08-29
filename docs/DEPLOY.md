@@ -356,8 +356,11 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `CONTROL_PLANE_ADMIN_PRINCIPAL` | 위 token과 1:1로 결합되는 공개 workload identity. 기본 배포값은 `backoffice:fleet-operator` |
 | `AGENT_WORKER_CODEX_TOKEN` | Codex generic worker principal에만 결합된 agent queue Bearer capability |
 | `AGENT_WORKER_CLAUDE_TOKEN` | Claude generic worker principal에만 결합된 agent queue Bearer capability. Codex 값과 같으면 두 worker 모두 fail-closed |
-| `AGENT_MUTATION_CAPABILITY_BROKER_ENFORCED` | trusted adapter가 provider write와 비용 상한을 강제할 때만 `true`. 기본 `false`에서는 `READY_PR` 생성·claim 거부 |
-| `AGENT_LEASE_SIGNING_KEY` | idempotent claim capability를 파생하는 server-only HMAC 키 |
+| `AGENT_TRUSTED_ADAPTER_PRINCIPAL` | worker principal과 달라야 하는 seori-auth GitHub mutation adapter 공개 identity |
+| `AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY` | attestation에 허용할 exact workload runtime identity. 서명자가 임의 runtime 문자열을 주장하지 못하게 고정 |
+| `AGENT_TRUSTED_ADAPTER_DEPLOYED` | durable `CREATE_COMMIT/CREATE_REF/CREATE_PR` step ledger와 canary 뒤에만 `true`. 현재 코드 gate가 미구현 상태라 값을 바꿔도 `READY_PR` 생성/claim은 fail-closed |
+| `AGENT_TRUSTED_ADAPTER_TOKEN` | 위 adapter에만 결합된 bearer. worker/모델에 주입하지 않으며 worker token 재사용 시 fail-closed |
+| `AGENT_TRUSTED_ADAPTER_PUBLIC_KEY` | route/body/idempotency key/runtime/60초 TTL attestation 검증용 Ed25519 공개키. private key는 adapter에만 둠 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | 전용 `backoffice-control-plane-snapshot-signing`에서만 공급하는 ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID` | snapshot signer의 공개 logical key ID. runtime manifest가 raw HMAC 대신 이 ID와 signature digest만 반환 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION` | snapshot 서명 정책의 공개 revision. key ID와 함께 없으면 v5 runtime readback 거부 |
@@ -365,6 +368,13 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 역할 ID는 비밀값이 아니며 허용된 역할 mention과 명령 권한 검사에만 사용한다.
 Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_DAYS`(기본 30일)가
 지나면 notification worker가 Discord에서 삭제한다.
+
+P6 agent runtime은 `k8s/seori-auth-agent-runtime.yaml`에 별도로 있고 기본 scale은 0이다. 이 manifest는
+Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확인한 실행 복제본만 projected volume으로
+받는다. runtime은 exact SPIFFE client certificate를 사용하는 K8s mTLS만 지원한다. local transport 코드는
+포함하지 않으며 동일 UID Codex/Claude를 구분할 native peer attestor나 전용 OS UID 경계가 구현되기 전에는
+local client와 runtime을 모두 제공하지 않는다.
+client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
 
 ### AI 팀원 봇 (teammate worker) — 담당제
 

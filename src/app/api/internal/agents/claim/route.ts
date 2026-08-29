@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const principal = authenticateInternalRequest(request, "agent-worker");
-  if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!principal?.runtimeBindingDigest) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const idempotencyKey = requireIdempotencyKey(request);
   if (!idempotencyKey) return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
   try {
@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
     }
     const claim = await claimAgentRun({
       ...body,
+      runtimeBindingDigest: principal.runtimeBindingDigest,
       idempotencyKey,
-      signingKey: process.env.AGENT_LEASE_SIGNING_KEY ?? "",
     });
     return NextResponse.json({ ok: true, claim });
   } catch (error) {
