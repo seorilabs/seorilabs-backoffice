@@ -5,6 +5,7 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
+import { metricNarrative, narrativeFacts } from "@/lib/core/metric-narrative";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
@@ -162,11 +163,41 @@ function movementLine(movement: Movement, refDate: string, index: number): strin
   return `${index + 1}. **${movement.label}** · ${spec.source} ${spec.ko} ${value} (기준 ${base}, ${delta})${stamp}`;
 }
 
+/** 콘솔 유입경로 한 항목(검색/전체탭 등). 비율은 0~1. */
+export interface ReferrerShare {
+  dimension: string;
+  rate: number;
+}
+
+/** 콘솔 raw.referrer 를 리스팅 합산으로 접는다. 값이 없으면 빈 배열. */
+export function foldReferrers(raws: ReadonlyArray<unknown>): ReferrerShare[] {
+  const weight = new Map<string, number>();
+  for (const raw of raws) {
+    const rows = (raw as { referrer?: unknown } | null)?.referrer;
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      const dimension = (row as { dimension?: unknown })?.dimension;
+      const value = (row as { value?: unknown })?.value;
+      if (typeof dimension !== "string" || !dimension || typeof value !== "number" || value <= 0) continue;
+      weight.set(dimension, (weight.get(dimension) ?? 0) + value);
+    }
+  }
+  const total = [...weight.values()].reduce((sum, v) => sum + v, 0);
+  if (total <= 0) return [];
+  // 비율은 리스팅별 rate 평균이 아니라 유입 수 합으로 다시 계산한다. 규모가 다른
+  // 리스팅의 비율을 평균하면 작은 리스팅이 과대 대표된다.
+  return [...weight.entries()]
+    .map(([dimension, value]) => ({ dimension, rate: value / total }))
+    .sort((a, b) => b.rate - a.rate);
+}
+
 export interface PortfolioTotals {
   /** 기준일 GA4 DAU 합과 그 전날 합. 전날 값이 없으면 null. */
   ga4Dau: { latest: number; previous: number | null; apps: number };
   /** 콘솔 광고 수익·결제 거래액 합(기준일 스냅샷이 있는 리스팅만). */
   console: { iaaKrw: number; iapKrw: number; previousIaaKrw: number | null; listings: number };
+  /** 콘솔 유입경로 비중(합산). 수집 값이 없으면 빈 배열이라 줄 자체가 빠진다. */
+  referrers?: ReferrerShare[];
 }
 
 function totalLine(label: string, latest: string, previous: string | null, changePct: number | null): string {
@@ -183,6 +214,8 @@ export function renderHighlightReport(input: {
   refDate: string;
   totals: PortfolioTotals;
   movements: readonly Movement[];
+  /** LLM 해설(선택). 생성 실패 시 없이 나간다 — 리포트를 LLM 가용성에 묶지 않는다. */
+  narrative?: string | null;
 }): string {
   const { totals } = input;
   const lines = [`📈 **${SENDER_KO} 지표 하이라이트 · ${input.refDate} (D-1)**`];
@@ -203,6 +236,16 @@ export function renderHighlightReport(input: {
     ) + ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅`,
   );
 
+  const referrers = totals.referrers ?? [];
+  if (referrers.length > 0) {
+    lines.push(
+      `유입경로: ${referrers
+        .slice(0, 4)
+        .map((item) => `${item.dimension} ${(item.rate * 100).toFixed(0)}%`)
+        .join(" · ")}`,
+    );
+  }
+
   const highlights = rankMovements(input.movements, "highlight").slice(0, TOP_N);
   const lowlights = rankMovements(input.movements, "lowlight").slice(0, TOP_N);
   if (highlights.length > 0) {
@@ -216,6 +259,10 @@ export function renderHighlightReport(input: {
   if (highlights.length === 0 && lowlights.length === 0) {
     lines.push("", "임계를 넘은 변동 없음");
   }
+
+  // 해설은 목록 뒤에 둔다. 수치를 먼저 보고 해석을 읽는 순서가 맞고, 해설이 빠져도
+  // 리포트 구조가 흔들리지 않는다.
+  if (input.narrative) lines.push("", `🧠 ${input.narrative}`);
 
   const tally = (verdict: MovementVerdict) =>
     input.movements.filter((movement) => movement.verdict === verdict).length;
@@ -261,6 +308,7 @@ interface ConsoleRow {
   dau: number | null;
   iaaEarningKrw: number;
   iapTrxAmountKrw: number;
+  raw?: unknown;
 }
 
 /** 시계열(최신순) → 지표별 움직임. 최신 행이 없으면 아무것도 만들지 않는다. */
@@ -295,6 +343,8 @@ export function movementsFromSeries<T extends { date: Date }>(
 
 export interface MetricHighlightResult {
   refDate: string;
+  /** 해설이 붙었는지. false = Gemini 미설정이거나 생성 실패(리포트는 정상 발송). */
+  narrated: boolean;
   highlights: number;
   lowlights: number;
   observations: number;
@@ -323,6 +373,7 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
     ga4Dau: { latest: 0, previous: 0, apps: 0 },
     console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: 0, listings: 0 },
   };
+  const consoleRaws: unknown[] = [];
 
   for (const app of apps.filter((app) => resolveGa4Target(app))) {
     const rows = (await prisma.appMetricDaily.findMany({
@@ -354,7 +405,7 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
         where: { appId: app.id, miniAppId: target.miniAppId },
         orderBy: { date: "desc" },
         take: BASELINE_DAYS + 1,
-        select: { date: true, dau: true, iaaEarningKrw: true, iapTrxAmountKrw: true },
+        select: { date: true, dau: true, iaaEarningKrw: true, iapTrxAmountKrw: true, raw: true },
       })) as ConsoleRow[];
       if (rows.length === 0) continue;
       movements.push(...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS));
@@ -364,16 +415,20 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
       totals.console.iapKrw += rows[0].iapTrxAmountKrw;
       totals.console.previousIaaKrw = (totals.console.previousIaaKrw ?? 0) + (rows[1]?.iaaEarningKrw ?? 0);
       totals.console.listings += 1;
+      consoleRaws.push(rows[0].raw);
     }
   }
 
+  totals.referrers = foldReferrers(consoleRaws);
+
   const dedupeKey = metricHighlightDedupeKey(refDate);
+  const narrative = await metricNarrative(narrativeFacts({ refDate, totals, movements }));
   await enqueueNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
     payload: {
-      text: renderHighlightReport({ refDate, totals, movements }),
+      text: renderHighlightReport({ refDate, totals, movements, narrative }),
       sender: SEORI_SENDER,
     },
     destinations: discordDestinations(["app-ops"]),
@@ -381,6 +436,7 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
 
   return {
     refDate,
+    narrated: narrative != null,
     highlights: rankMovements(movements, "highlight").length,
     lowlights: rankMovements(movements, "lowlight").length,
     observations: movements.length,
