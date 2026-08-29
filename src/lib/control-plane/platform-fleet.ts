@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
-import { Prisma, type PlatformFleetPlanStatus } from "@prisma/client";
+import { Prisma, type PlatformFleetPlanStatus, type PlatformRelease } from "@prisma/client";
 
 import {
   agentResultSchema,
+  isStoredPlatformReleaseV067Omission,
+  parseStoredPlatformReleaseManifest,
   platformConsumerObservationPayloadSchema,
   platformFleetTaskInputSchema,
   platformReleaseManifestSchema,
@@ -69,6 +71,52 @@ function releaseRequestHash(input: {
   } as JsonValue);
 }
 
+function existingV067ReleaseMatchesReadOnly(input: {
+  stored: PlatformRelease;
+  incoming: PlatformReleaseManifest;
+  incomingActor: string;
+  incomingIdempotencyKey: string;
+  signingKey: string;
+}): boolean {
+  if (!isStoredPlatformReleaseV067Omission(input.stored.manifest)) return false;
+  if (!verifySnapshot(
+    input.stored.manifest as JsonValue,
+    input.signingKey,
+    input.stored.manifestDigest,
+    input.stored.signature,
+  )) {
+    throw new ControlPlaneError(
+      "저장된 v0.6.7 Platform release signature 검증에 실패했습니다.",
+      409,
+      "PLATFORM_RELEASE_TAMPERED",
+    );
+  }
+  const expectedStoredRequestHash = jsonDigest({
+    manifest: input.stored.manifest,
+    manifestDigest: input.stored.manifestDigest.toLowerCase(),
+    signature: input.stored.signature.toLowerCase(),
+    actor: input.stored.observedBy,
+  } as JsonValue);
+  if (input.stored.requestHash !== expectedStoredRequestHash) {
+    throw new ControlPlaneError(
+      "저장된 v0.6.7 Platform release idempotency identity가 유효하지 않습니다.",
+      409,
+      "PLATFORM_RELEASE_TAMPERED",
+    );
+  }
+  const projected = parseStoredPlatformReleaseManifest(input.stored.manifest);
+  return input.stored.version === projected.version
+    && input.stored.observedBy === input.incomingActor
+    && input.stored.idempotencyKey === input.incomingIdempotencyKey
+    && input.stored.sourceSha === projected.sourceSha.toLowerCase()
+    && input.stored.classification === projected.classification
+    && input.stored.approval === projected.approval
+    && input.stored.contractRevision === projected.contractRevision.toLowerCase()
+    && input.stored.publishedAt.toISOString() === new Date(projected.publishedAt).toISOString()
+    && canonicalJson(projected as unknown as JsonValue)
+      === canonicalJson(input.incoming as unknown as JsonValue);
+}
+
 export async function recordPlatformRelease(input: {
   manifest: PlatformReleaseManifest;
   manifestDigest: string;
@@ -92,6 +140,15 @@ export async function recordPlatformRelease(input: {
   const requestHash = releaseRequestHash({ manifest, manifestDigest, signature, actor: input.actor });
   const replay = await prisma.platformRelease.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
   if (replay) {
+    if (existingV067ReleaseMatchesReadOnly({
+      stored: replay,
+      incoming: manifest,
+      incomingActor: input.actor,
+      incomingIdempotencyKey: input.idempotencyKey,
+      signingKey: input.signingKey,
+    })) {
+      return { release: replay, duplicate: true };
+    }
     if (replay.requestHash !== requestHash || replay.manifestDigest !== manifestDigest) {
       throw new ControlPlaneError("idempotency key가 다른 Platform release에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -103,6 +160,15 @@ export async function recordPlatformRelease(input: {
         where: { OR: [{ version: manifest.version }, { manifestDigest }] },
       });
       if (conflicting) {
+        if (existingV067ReleaseMatchesReadOnly({
+          stored: conflicting,
+          incoming: manifest,
+          incomingActor: input.actor,
+          incomingIdempotencyKey: input.idempotencyKey,
+          signingKey: input.signingKey,
+        })) {
+          return { release: conflicting, duplicate: true };
+        }
         if (
           conflicting.version !== manifest.version
           || conflicting.manifestDigest !== manifestDigest
@@ -366,10 +432,10 @@ export async function reconcilePlatformFleet(input: {
     if (!release || release.approval !== "FLEET_APPROVED") {
       throw new ControlPlaneError("FLEET_APPROVED Platform release를 찾을 수 없습니다.", 404, "PLATFORM_RELEASE_NOT_APPROVED");
     }
-    const manifest = platformReleaseManifestSchema.parse(release.manifest);
     if (!verifySnapshot(release.manifest as JsonValue, input.signingKey, release.manifestDigest, release.signature)) {
       throw new ControlPlaneError("저장된 Platform release signature 검증에 실패했습니다.", 409, "PLATFORM_RELEASE_TAMPERED");
     }
+    const manifest = parseStoredPlatformReleaseManifest(release.manifest);
     const reconcileRun = await tx.platformFleetReconcileRun.create({
       data: {
         platformReleaseId: release.id,

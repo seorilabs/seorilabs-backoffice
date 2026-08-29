@@ -1,7 +1,7 @@
 import { Prisma, type ReleaseGateStatus } from "@prisma/client";
 import {
   configRevisionPayloadSchema,
-  platformReleaseManifestSchema,
+  parseStoredPlatformReleaseManifest,
   RELEASE_CANDIDATE_REQUIRED_GATES,
   type ReleaseGateName,
 } from "@/lib/control-plane/contracts";
@@ -167,7 +167,7 @@ export async function createReleaseCandidate(input: {
     }
     const latestApprovedRelease = approvedPlatformReleases[0];
     const latestApplicablePlatformRelease = latestApprovedRelease
-      ? { ...latestApprovedRelease, parsedManifest: platformReleaseManifestSchema.parse(latestApprovedRelease.manifest) }
+      ? { ...latestApprovedRelease, parsedManifest: parseStoredPlatformReleaseManifest(latestApprovedRelease.manifest) }
       : null;
     const latestArtifact = latestApplicablePlatformRelease?.parsedManifest.artifacts.find(
       (artifact) => artifact.kind === (app.engine === "GODOT" ? "GDSCRIPT" : "TYPESCRIPT"),

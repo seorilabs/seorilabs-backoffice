@@ -325,8 +325,12 @@ key나 임시 대체키를 Backoffice에 두지 않는다.
 검증된 producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version·SHA-256,
 GDScript tree checksum, 변경 분류, 승인 canary attestation, WorkflowBundle SHA·digest와 raw/approval provenance를
 중앙 snapshot signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
-ACTIVE app cohort는 이 불변 release manifest에 넣지 않고 reconcile 시점의 mutable current snapshot으로 읽는다.
-따라서 앱 추가·중단이 release identity를 바꾸지 않으며, 매 reconcile은 현재 ACTIVE app 전부를 요구한다.
+raw·정규화 manifest에는 영향 consumer 선택 계약
+`cohort=backoffice-active-apps`, `resolution=reconcile-time`을 포함한다. 구체 repo ID 목록은 release 뒤에도
+바뀌므로 immutable asset에 복사하지 않고 reconcile 시점의 current snapshot에서 확정한다. 따라서 앱
+추가·중단이 release identity를 바꾸지 않으며, 매 reconcile은 현재 ACTIVE app 전부를 요구한다. 기존 공개
+`v0.6.7` raw·normalized manifest에 선택 필드가 없을 때만 같은 단일 계약을 read-time에 투영한다. 저장된
+manifest, digest, signature, idempotency identity는 바꾸지 않으며 `v0.6.6`, `v0.6.8+` 누락은 거부한다.
 GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
 
 Repository discovery는 exact source SHA에서 RN의 고정 `@seorilabs/platform-sdk` version과 lock integrity,

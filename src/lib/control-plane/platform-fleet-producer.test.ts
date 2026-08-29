@@ -6,11 +6,15 @@ import {
 } from "node:crypto";
 import test from "node:test";
 
-import type { PlatformConsumerObservationPayload } from "@/lib/control-plane/contracts";
+import {
+  PLATFORM_AFFECTED_CONSUMERS,
+  type PlatformConsumerObservationPayload,
+} from "@/lib/control-plane/contracts";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import {
   materializePlatformConsumerObservation,
   producePlatformFleetRelease,
+  rawPlatformReleaseManifestSchema,
   verifyPlatformReleaseApproval,
   type PlatformFleetProducerDependencies,
   type RawPlatformReleaseManifest,
@@ -68,6 +72,7 @@ function rawManifest(input: {
       baseRevision: `sha256:${CONTRACT_REVISION}`,
       classification: "implementation-only",
       supportedApiMajor: 1,
+      affectedConsumers: PLATFORM_AFFECTED_CONSUMERS,
       affectedTracks: ["gdscript"],
       affectedCapabilities: ["core"],
     },
@@ -197,6 +202,60 @@ test("raw manifest byte digest와 Ed25519 fleet approval을 함께 검증한다"
       }],
     }),
   }), /SPKI 공개키만/);
+});
+
+test("영향 consumer 선택 계약을 검증하고 v0.6.7 omission만 같은 cohort로 정규화한다", () => {
+  const value = fixtures();
+  assert.deepEqual(value.manifest.contract.affectedConsumers, PLATFORM_AFFECTED_CONSUMERS);
+
+  const missing = structuredClone(value.manifest) as unknown as Record<string, unknown>;
+  delete (missing.contract as Record<string, unknown>).affectedConsumers;
+  assert.throws(() => verifyPlatformReleaseApproval({
+    ...value,
+    manifestBytes: Buffer.from(`${JSON.stringify(missing)}\n`, "utf8"),
+  }));
+
+  const legacy = structuredClone(value.manifest) as unknown as Record<string, unknown>;
+  const legacySdk = (legacy.sdk as Record<string, unknown>).gdscript as Record<string, unknown>;
+  const legacyVersion = "0.6.7";
+  const legacyArtifactName = `seorilabs-platform-gdscript-${legacyVersion}.tar.gz`;
+  (legacy.release as Record<string, unknown>).tag = `v${legacyVersion}`;
+  legacySdk.version = legacyVersion;
+  legacySdk.source = `https://github.com/seorilabs/platform/releases/download/v${legacyVersion}/${legacyArtifactName}`;
+  (legacySdk.artifact as Record<string, unknown>).name = legacyArtifactName;
+  (legacySdk.checksumArtifact as Record<string, unknown>).name = `${legacyArtifactName}.sha256`;
+  delete (legacy.contract as Record<string, unknown>).affectedConsumers;
+  const legacyBytes = Buffer.from(`${JSON.stringify(legacy)}\n`, "utf8");
+  const legacyApproval = signedApproval(legacyBytes);
+  const verified = verifyPlatformReleaseApproval({
+    manifestBytes: legacyBytes,
+    approvalBytes: Buffer.from(`${JSON.stringify(legacyApproval.approval)}\n`, "utf8"),
+    trustedReleaseKeysJson: legacyApproval.trustedReleaseKeysJson,
+  });
+  assert.deepEqual(verified.manifest.contract.affectedConsumers, PLATFORM_AFFECTED_CONSUMERS);
+
+  for (const version of ["0.6.6", "0.6.8"]) {
+    const unsupportedOmission = structuredClone(value.manifest) as unknown as Record<string, unknown>;
+    const sdk = (unsupportedOmission.sdk as Record<string, unknown>).gdscript as Record<string, unknown>;
+    const artifactName = `seorilabs-platform-gdscript-${version}.tar.gz`;
+    (unsupportedOmission.release as Record<string, unknown>).tag = `v${version}`;
+    sdk.version = version;
+    sdk.source = `https://github.com/seorilabs/platform/releases/download/v${version}/${artifactName}`;
+    (sdk.artifact as Record<string, unknown>).name = artifactName;
+    (sdk.checksumArtifact as Record<string, unknown>).name = `${artifactName}.sha256`;
+    delete (unsupportedOmission.contract as Record<string, unknown>).affectedConsumers;
+    assert.equal(rawPlatformReleaseManifestSchema.safeParse(unsupportedOmission).success, false);
+  }
+
+  const invalid = structuredClone(value.manifest) as unknown as Record<string, unknown>;
+  (invalid.contract as Record<string, unknown>).affectedConsumers = {
+    cohort: "repository-file-list",
+    resolution: "release-time",
+  };
+  assert.throws(() => verifyPlatformReleaseApproval({
+    ...value,
+    manifestBytes: Buffer.from(`${JSON.stringify(invalid)}\n`, "utf8"),
+  }));
 });
 
 test("exact dependency evidence는 현재 artifact integrity가 맞을 때만 compliant digest를 얻는다", () => {
@@ -374,6 +433,10 @@ test("승인 release는 observation, append-only record, reconcile을 같은 exa
   assert.deepEqual(
     (recordedManifest as { canaryEvidence?: unknown }).canaryEvidence,
     canaryEvidence(),
+  );
+  assert.deepEqual(
+    (recordedManifest as { affectedConsumers?: unknown }).affectedConsumers,
+    PLATFORM_AFFECTED_CONSUMERS,
   );
   assert.equal("consumers" in (recordedManifest as object), false);
   assert.equal(

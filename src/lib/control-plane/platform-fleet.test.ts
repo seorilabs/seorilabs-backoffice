@@ -4,6 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  PLATFORM_AFFECTED_CONSUMERS,
+  parseStoredPlatformReleaseManifest,
   platformFleetTaskInputSchema,
   platformReleaseManifestSchema,
   type PlatformReleaseManifest,
@@ -48,6 +50,7 @@ function manifest(
     sourceSha: releaseSourceSha,
     contractRevision,
     classification,
+    affectedConsumers: PLATFORM_AFFECTED_CONSUMERS,
     publishedAt: "2026-08-28T00:00:00.000Z",
     artifacts: [{
       kind: "TYPESCRIPT",
@@ -83,6 +86,10 @@ test("Platform release 계약은 승인, provenance, canary, exact artifact만 �
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
+    affectedConsumers: { cohort: "repository-file-list", resolution: "release-time" },
+  }).success, false);
+  assert.equal(platformReleaseManifestSchema.safeParse({
+    ...manifest(),
     consumers: [{ repoId: "1234", artifactKind: "TYPESCRIPT" }],
   }).success, false);
   assert.equal(platformReleaseManifestSchema.safeParse({
@@ -109,6 +116,32 @@ test("Platform release 계약은 승인, provenance, canary, exact artifact만 �
       releaseAssetUrl: "https://github.com/seorilabs/platform/releases/download/v1.2.3/platform.gd",
     }],
   }).success, true);
+});
+
+test("저장된 normalized v0.6.7 omission만 digest identity 변경 없이 read-time 투영한다", () => {
+  const storedV067 = structuredClone(manifest()) as unknown as Record<string, unknown>;
+  storedV067.version = "0.6.7";
+  (storedV067.provenance as Record<string, unknown>).releaseTag = "v0.6.7";
+  delete storedV067.affectedConsumers;
+  const storedBytes = JSON.stringify(storedV067);
+
+  assert.equal(platformReleaseManifestSchema.safeParse(storedV067).success, false);
+  assert.deepEqual(
+    parseStoredPlatformReleaseManifest(storedV067).affectedConsumers,
+    PLATFORM_AFFECTED_CONSUMERS,
+  );
+  assert.equal(JSON.stringify(storedV067), storedBytes);
+  assert.equal(Object.hasOwn(storedV067, "affectedConsumers"), false);
+
+  for (const version of ["0.6.6", "0.6.8"]) {
+    const unsupported = structuredClone(storedV067) as Record<string, unknown>;
+    unsupported.version = version;
+    (unsupported.provenance as Record<string, unknown>).releaseTag = `v${version}`;
+    assert.throws(() => parseStoredPlatformReleaseManifest(unsupported));
+  }
+  const mismatchedTag = structuredClone(storedV067) as Record<string, unknown>;
+  (mismatchedTag.provenance as Record<string, unknown>).releaseTag = "v0.6.8";
+  assert.throws(() => parseStoredPlatformReleaseManifest(mismatchedTag));
 });
 
 test("구현 drift와 계약 drift를 분리하고 custom/missing을 unmanaged로 관측한다", () => {

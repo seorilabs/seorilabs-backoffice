@@ -7,6 +7,8 @@ import {
 import { z } from "zod";
 
 import {
+  PLATFORM_AFFECTED_CONSUMERS,
+  platformAffectedConsumersSchema,
   platformCanaryEvidenceSchema,
   platformConsumerObservationPayloadSchema,
   platformReleaseManifestSchema,
@@ -35,6 +37,10 @@ const SHA_256_REVISION = /^sha256:[0-9a-f]{64}$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+
+function allowsAffectedConsumersOmission(version: string): boolean {
+  return version === "0.6.7";
+}
 
 const rawArtifactSchema = z.object({
   name: z.string().regex(/^[A-Za-z0-9._-]+$/),
@@ -69,6 +75,7 @@ export const rawPlatformReleaseManifestSchema = z.object({
     baseRevision: z.string().regex(SHA_256_REVISION),
     classification: z.enum(["implementation-only", "contract-additive", "contract-breaking"]),
     supportedApiMajor: z.number().int().positive(),
+    affectedConsumers: platformAffectedConsumersSchema.optional(),
     affectedTracks: z.array(z.enum(["gdscript", "typescript"])).min(1).max(2),
     affectedCapabilities: z.array(z.string().regex(/^[a-z][a-z0-9_-]*$/)).min(1).max(100),
   }).strict(),
@@ -87,6 +94,16 @@ export const rawPlatformReleaseManifestSchema = z.object({
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: "Platform release tag와 SDK artifact identity가 일치하지 않습니다.",
+    });
+  }
+  if (
+    manifest.contract.affectedConsumers === undefined
+    && !allowsAffectedConsumersOmission(manifest.sdk.gdscript.version)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["contract", "affectedConsumers"],
+      message: "영향 consumer 선택 계약이 필요합니다.",
     });
   }
   for (const [path, values] of [
@@ -112,7 +129,13 @@ export const rawPlatformReleaseManifestSchema = z.object({
       message: "계약 변경 release는 두 SDK track을 모두 포함해야 합니다.",
     });
   }
-});
+}).transform((manifest) => ({
+  ...manifest,
+  contract: {
+    ...manifest.contract,
+    affectedConsumers: manifest.contract.affectedConsumers ?? { ...PLATFORM_AFFECTED_CONSUMERS },
+  },
+}));
 
 export const platformReleaseApprovalSchema = z.object({
   schemaVersion: z.literal(2),
@@ -347,6 +370,7 @@ function normalizedReleaseManifest(input: {
     sourceSha: input.raw.release.sourceSha,
     contractRevision: input.raw.contract.revision.slice("sha256:".length),
     classification: classification(input.raw.contract.classification),
+    affectedConsumers: input.raw.contract.affectedConsumers,
     publishedAt: new Date(input.source.publishedAt).toISOString(),
     artifacts: [{
       kind: "TYPESCRIPT",
