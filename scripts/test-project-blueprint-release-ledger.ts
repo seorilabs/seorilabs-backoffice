@@ -62,7 +62,7 @@ function discoveryPayload(input: {
 }) {
   return {
     schemaVersion: 2,
-    contractVersion: "repository-discovery/v8",
+    contractVersion: "repository-discovery/v9",
     repository: {
       id: Number(input.repoId),
       fullName: input.repoFullName,
@@ -87,7 +87,7 @@ async function recordManagedRegistration(input: {
       status: "MANAGED",
       managementKind: "APP",
       classification: "PRODUCT_APP",
-      discoveryContractVersion: "repository-discovery/v8",
+      discoveryContractVersion: "repository-discovery/v9",
       lastDefaultPushSha: input.sourceSha,
       lastReconciledSha: input.sourceSha,
     },

@@ -698,6 +698,44 @@ test("Godot production preset은 package manager 없이 debug identity를 제외
   );
 });
 
+test("canonical preset이 없으면 Godot CI preset fragment에서 exact Android target을 탐지한다", async () => {
+  const files = {
+    "project.godot": "[application]\nconfig/name=\"Merge Battle\"\n",
+    "ci/export_presets.web.cfg": [
+      "[preset.0]",
+      'name="Web"',
+      'platform="Web"',
+    ].join("\n"),
+    "ci/export_presets.android.cfg": [
+      "[preset.1]",
+      'name="Android"',
+      'platform="Android"',
+      "[preset.1.options]",
+      'package/unique_name="com.seorilabs.mergearmada"',
+    ].join("\n"),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [{
+    targetKey: "android",
+    stack: "godot",
+    market: "google-play",
+    packageId: "com.seorilabs.mergearmada",
+    bundleId: null,
+    configuration: null,
+  }]);
+  assert.deepEqual(
+    result.sourceMetadata.map(({ path }) => path).sort(),
+    [
+      "ci/export_presets.android.cfg",
+      "ci/export_presets.web.cfg",
+      "project.godot",
+    ],
+  );
+});
+
 test("lizard 유형은 build.env의 Android target과 미관측 package identity를 분리한다", async () => {
   const files = {
     "project.godot": "[application]\nconfig/name=\"Lizard\"\n",
@@ -1316,8 +1354,8 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v8 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v8");
+test("discovery 의미론 변경은 새 generation을 강제하는 v9 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v9");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {
