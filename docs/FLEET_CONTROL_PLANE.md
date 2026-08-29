@@ -40,7 +40,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
-| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 큐 조회 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 결정 기록 |
+| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
