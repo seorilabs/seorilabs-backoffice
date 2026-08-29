@@ -916,7 +916,9 @@ export const configRevisionSourceRebaseSchema = z.object({
   expectedLatestRevision: z.number().int().nonnegative(),
 }).strict();
 
-export const configRevisionDiscoveryDraftSchema = configRevisionSourceRebaseSchema;
+export const configRevisionDiscoveryDraftSchema = configRevisionSourceRebaseSchema.extend({
+  mode: z.literal("DRAFT_ONLY"),
+}).strict();
 
 export const desiredStateBackfillSchema = z.object({
   schemaVersion: z.literal(1),

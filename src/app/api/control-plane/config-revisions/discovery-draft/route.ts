@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
       sourceObservationId: result.sourceObservation.id,
       sourceSha: result.sourceObservation.sourceSha,
       legacyPayloadCopied: false,
+      mode: body.mode,
       activationAttempted: false,
     }, { status: result.duplicate ? 200 : 201 });
   } catch (error) {

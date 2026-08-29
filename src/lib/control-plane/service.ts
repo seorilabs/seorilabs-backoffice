@@ -193,7 +193,7 @@ export const CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION =
 export const CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION =
   "config-revision-source-rebase/v1";
 export const CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION =
-  "config-revision-discovery-projection/v1";
+  "config-revision-discovery-projection/v2";
 
 const SHA_40 = /^[0-9a-f]{40}$/;
 const DIGEST_64 = /^[0-9a-f]{64}$/;
@@ -202,7 +202,7 @@ type ConfigSourceApp = {
   id: string;
   repoId: bigint | null;
   repoFullName: string;
-  status: string;
+  status: "ACTIVE" | "PAUSED" | "DEPRECATED";
 };
 
 type ConfigSourceRegistration = {
@@ -261,15 +261,11 @@ export function assertConfigSourceObservationIntegrity(input: {
 }
 
 /** caller가 source를 고르지 못하게 서버가 고른 최신 observation과 등록 원장을 결합한다. */
-export function assertCurrentConfigSourceBinding(input: {
+function assertExactConfigSourceBinding(input: {
   app: ConfigSourceApp;
   registration: ConfigSourceRegistration | null;
   observation: ConfigSourceObservation | null;
-}): asserts input is {
-  app: ConfigSourceApp & { repoId: bigint; status: "ACTIVE" };
-  registration: ConfigSourceRegistration;
-  observation: ConfigSourceObservation;
-} {
+}, allowedAppStatuses: ReadonlySet<ConfigSourceApp["status"]>): void {
   const { app, registration, observation } = input;
   if (!app.repoId || !registration || !observation) {
     throw new ControlPlaneError(
@@ -280,7 +276,7 @@ export function assertCurrentConfigSourceBinding(input: {
   }
   const sourceSha = observation.sourceSha;
   if (
-    app.status !== "ACTIVE"
+    !allowedAppStatuses.has(app.status)
     || registration.repoId !== app.repoId
     || registration.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase()
     || registration.archived
@@ -313,6 +309,34 @@ export function assertCurrentConfigSourceBinding(input: {
       "CONFIG_SOURCE_APP_MISMATCH",
     );
   }
+}
+
+export function assertCurrentConfigSourceBinding(input: {
+  app: ConfigSourceApp;
+  registration: ConfigSourceRegistration | null;
+  observation: ConfigSourceObservation | null;
+}): asserts input is {
+  app: ConfigSourceApp & { repoId: bigint; status: "ACTIVE" };
+  registration: ConfigSourceRegistration;
+  observation: ConfigSourceObservation;
+} {
+  assertExactConfigSourceBinding(input, new Set(["ACTIVE"]));
+}
+
+/**
+ * DRAFT-only discovery projection은 중앙 product inventory에서 lifecycle이 중단된 앱도
+ * 빠뜨리지 않는다. 이 완화는 revision/source 증거를 따로 검증하는 projection 경로에만 쓴다.
+ */
+export function assertDiscoveryProjectionConfigSourceBinding(input: {
+  app: ConfigSourceApp;
+  registration: ConfigSourceRegistration | null;
+  observation: ConfigSourceObservation | null;
+}): asserts input is {
+  app: ConfigSourceApp & { repoId: bigint };
+  registration: ConfigSourceRegistration;
+  observation: ConfigSourceObservation;
+} {
+  assertExactConfigSourceBinding(input, new Set(["ACTIVE", "PAUSED", "DEPRECATED"]));
 }
 
 export function assertExpectedLatestConfigRevision(input: {
@@ -426,6 +450,7 @@ export function isLegacyDiscoveryProjectionSource(input: {
   status: string;
   idempotencyKey: string;
   legacyConfigImport: {
+    id: string;
     configRevisionId: string | null;
     status: string;
     transformVersion: string;
@@ -440,6 +465,52 @@ export function isLegacyDiscoveryProjectionSource(input: {
     && ["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
     && legacyImport.parityObservations.length === 1
     && legacyImport.parityObservations[0]?.contractVersion === legacyImport.transformVersion;
+}
+
+type LegacyDiscoveryProjectionRevision = Parameters<typeof isLegacyDiscoveryProjectionSource>[0];
+
+export type DiscoveryProjectionSource =
+  | { kind: "EMPTY_CONFIG" }
+  | {
+      kind: "LEGACY_IMPORT";
+      revision: LegacyDiscoveryProjectionRevision;
+      legacyImport: NonNullable<LegacyDiscoveryProjectionRevision["legacyConfigImport"]>;
+      parity: NonNullable<LegacyDiscoveryProjectionRevision["legacyConfigImport"]>["parityObservations"][number];
+    };
+
+/**
+ * 기존 revision을 복제하지 않는 projection의 유일한 두 source를 고정한다.
+ * lifecycle이 PAUSED/DEPRECATED인 앱은 revision과 legacy import가 모두 0인 경우만 허용한다.
+ */
+export function resolveDiscoveryProjectionSource(input: {
+  appStatus: ConfigSourceApp["status"];
+  actualLatestRevision: number;
+  legacyImportCount: number;
+  fromRevision: LegacyDiscoveryProjectionRevision | null;
+}): DiscoveryProjectionSource {
+  if (
+    input.actualLatestRevision === 0
+    && input.fromRevision === null
+    && input.legacyImportCount === 0
+  ) {
+    return { kind: "EMPTY_CONFIG" };
+  }
+  if (
+    input.appStatus === "ACTIVE"
+    && input.actualLatestRevision > 0
+    && input.fromRevision !== null
+    && isLegacyDiscoveryProjectionSource(input.fromRevision)
+  ) {
+    const legacyImport = input.fromRevision.legacyConfigImport;
+    const parity = legacyImport?.parityObservations[0];
+    if (!legacyImport || !parity) throw new Error("legacy projection invariant");
+    return { kind: "LEGACY_IMPORT", revision: input.fromRevision, legacyImport, parity };
+  }
+  throw new ControlPlaneError(
+    "revision 0/no-import 또는 검증된 latest legacy shadow DRAFT만 discovery projection할 수 있습니다.",
+    409,
+    "DISCOVERY_PROJECTION_NOT_ALLOWED",
+  );
 }
 
 export function assertActivationPreconditions(input: {
@@ -801,6 +872,7 @@ async function configRevisionReplayForKey(
 async function lockedCurrentConfigSource(
   tx: Prisma.TransactionClient,
   repoId: bigint,
+  options: { discoveryProjection?: boolean } = {},
 ) {
   // discovery reconciler와 동일하게 registration -> app 순으로 잠가 교착을 피한다.
   await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
@@ -844,7 +916,11 @@ async function lockedCurrentConfigSource(
     },
   });
   const binding = { app, registration, observation };
-  assertCurrentConfigSourceBinding(binding);
+  if (options.discoveryProjection) {
+    assertDiscoveryProjectionConfigSourceBinding(binding);
+  } else {
+    assertCurrentConfigSourceBinding(binding);
+  }
   return binding;
 }
 
@@ -1105,12 +1181,13 @@ export async function rebaseLatestConfigRevisionSource(input: {
 }
 
 /**
- * 검토 불가 legacy DRAFT를 승격하지 않고 exact discovery BuildTarget만 새 DRAFT로
- * 투영한다. 기존 legacy payload와 parity 결과는 감사 근거일 뿐 입력으로 쓰지 않는다.
+ * ConfigRevision이 전혀 없거나 검토 불가 legacy DRAFT만 있는 앱에 exact discovery
+ * BuildTarget만 새 DRAFT로 투영한다. 기존 legacy payload는 입력으로 쓰지 않는다.
  */
 export async function createDiscoveryProjectedConfigRevision(input: {
   repoId: bigint;
   expectedLatestRevision: number;
+  mode: "DRAFT_ONLY";
   actor: string;
   idempotencyKey: string;
 }) {
@@ -1133,7 +1210,7 @@ export async function createDiscoveryProjectedConfigRevision(input: {
     idempotencyKey: input.idempotencyKey,
     contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
   }, () => prisma.$transaction(async (tx) => {
-    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const source = await lockedCurrentConfigSource(tx, input.repoId, { discoveryProjection: true });
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
       assertConfigRevisionReplay({
@@ -1173,22 +1250,22 @@ export async function createDiscoveryProjectedConfigRevision(input: {
         },
       },
     });
-    const legacyImport = fromRevision?.legacyConfigImport;
-    const parity = legacyImport?.parityObservations[0];
-    if (!fromRevision || !isLegacyDiscoveryProjectionSource({
-      revisionId: fromRevision.id,
-      status: fromRevision.status,
-      idempotencyKey: fromRevision.idempotencyKey,
-      legacyConfigImport: fromRevision.legacyConfigImport,
-    })) {
-      throw new ControlPlaneError(
-        "latest legacy shadow DRAFT와 append-only import/parity 증거가 필요합니다.",
-        409,
-        "LEGACY_DISCOVERY_PROJECTION_NOT_ALLOWED",
-      );
-    }
-    // 위 assertion 이후 정확히 한 건의 append-only parity가 보장된다.
-    if (!legacyImport || !parity) throw new Error("legacy projection invariant");
+    const legacyImportCount = await tx.legacyConfigImport.count({
+      where: { appId: source.app.id },
+    });
+    const projectionSource = resolveDiscoveryProjectionSource({
+      appStatus: source.app.status,
+      actualLatestRevision,
+      legacyImportCount,
+      fromRevision: fromRevision
+        ? {
+            revisionId: fromRevision.id,
+            status: fromRevision.status,
+            idempotencyKey: fromRevision.idempotencyKey,
+            legacyConfigImport: fromRevision.legacyConfigImport,
+          }
+        : null,
+    });
     const buildTargets = await tx.buildTarget.findMany({
       where: { appId: source.app.id },
       orderBy: { targetKey: "asc" },
@@ -1224,13 +1301,23 @@ export async function createDiscoveryProjectedConfigRevision(input: {
         payload: {
           appId: source.app.id,
           repoId: input.repoId.toString(),
-          fromRevisionId: fromRevision.id,
-          fromRevision: fromRevision.revision,
-          legacyImportId: legacyImport.id,
-          legacyImportStatus: legacyImport.status,
-          legacyParityObservationId: parity.id,
-          legacyParityStatus: parity.status,
-          legacyTransformVersion: legacyImport.transformVersion,
+          appStatus: source.app.status,
+          projectionSource: projectionSource.kind,
+          ...(projectionSource.kind === "LEGACY_IMPORT"
+            ? {
+                fromRevisionId: projectionSource.revision.revisionId,
+                fromRevision: actualLatestRevision,
+                legacyImportId: projectionSource.legacyImport.id,
+                legacyImportStatus: projectionSource.legacyImport.status,
+                legacyParityObservationId: projectionSource.parity.id,
+                legacyParityStatus: projectionSource.parity.status,
+                legacyTransformVersion: projectionSource.legacyImport.transformVersion,
+              }
+            : {
+                fromRevisionId: null,
+                fromRevision: null,
+                legacyImportCount,
+              }),
           revision: revision.revision,
           expectedLatestRevision: input.expectedLatestRevision,
           payloadHash,
@@ -1247,6 +1334,7 @@ export async function createDiscoveryProjectedConfigRevision(input: {
             "build",
           ],
           legacyPayloadCopied: false,
+          mode: input.mode,
           activationAttempted: false,
         },
       },

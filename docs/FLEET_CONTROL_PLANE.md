@@ -40,7 +40,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
 | `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
-| `POST` | `/api/control-plane/config-revisions/discovery-draft` | 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
+| `POST` | `/api/control-plane/config-revisions/discovery-draft` | `mode=DRAFT_ONLY`에서 revision 0/no-import 또는 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
@@ -82,8 +82,10 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 `repository-discovery/v8`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
-legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 append-only import/parity
-증거가 있는 latest legacy DRAFT에만 허용되고 법적/provider/free-text/localization/asset 값을 복사하지 않는다.
+legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
+모두 0건이거나 append-only import/parity 증거가 있는 latest legacy DRAFT에만 허용된다. revision 0 경로는
+`PAUSED/DEPRECATED` product inventory도 누락하지 않지만, exact current discovery와 BuildTarget만 사용한다.
+두 경로 모두 `DRAFT_ONLY`이며 법적/provider/free-text/localization/asset/build 값을 복사하거나 추측하지 않는다.
 
 Android build-only 권한은 ConfigRevision의 `build.workflowBundleSha` 주장만으로 열리지 않는다.
 같은 revision에 `build.workflowBundleDigest`를 `sha256:` 형식으로 고정하고, 별도 immutable registry에서

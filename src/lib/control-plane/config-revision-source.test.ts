@@ -4,23 +4,26 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revision-discovery-projection";
+import { configRevisionDiscoveryDraftSchema } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertConfigRevisionReplay,
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
+  assertDiscoveryProjectionConfigSourceBinding,
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
   CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
   CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
   ControlPlaneError,
   isLegacyDiscoveryProjectionSource,
+  resolveDiscoveryProjectionSource,
 } from "@/lib/control-plane/service";
 
 const REPO_ID = 1_250_442_131n;
 const SOURCE_SHA = "a".repeat(40);
 
-function sourceFixture() {
+function sourceFixture(appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE") {
   const payload: Record<string, unknown> = {
     schemaVersion: 2,
     contractVersion: "repository-discovery/v8",
@@ -38,7 +41,7 @@ function sourceFixture() {
       id: "app-happy-farm",
       repoId: REPO_ID,
       repoFullName: "seorilabs/happy-farm",
-      status: "ACTIVE",
+      status: appStatus,
     },
     registration: {
       repoId: REPO_ID,
@@ -81,6 +84,57 @@ function replayFixture(contractVersion: string | null = CONFIG_REVISION_SOURCE_R
 
 test("MANAGED PRODUCT_APP의 exact main discovery만 ConfigRevision source가 된다", () => {
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture()));
+});
+
+test("revision 0 discovery projection만 PAUSED/DEPRECATED product source를 읽을 수 있다", () => {
+  for (const status of ["PAUSED", "DEPRECATED"] as const) {
+    const fixture = sourceFixture(status);
+    assert.throws(
+      () => assertCurrentConfigSourceBinding(fixture),
+      (error) => error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_NOT_CURRENT",
+    );
+    assert.doesNotThrow(() => assertDiscoveryProjectionConfigSourceBinding(fixture));
+    assert.deepEqual(resolveDiscoveryProjectionSource({
+      appStatus: status,
+      actualLatestRevision: 0,
+      legacyImportCount: 0,
+      fromRevision: null,
+    }), { kind: "EMPTY_CONFIG" });
+  }
+});
+
+test("revision 0 projection은 legacy import나 기존 revision이 있으면 fail-closed한다", () => {
+  for (const input of [
+    {
+      appStatus: "PAUSED" as const,
+      actualLatestRevision: 0,
+      legacyImportCount: 1,
+      fromRevision: null,
+    },
+    {
+      appStatus: "DEPRECATED" as const,
+      actualLatestRevision: 1,
+      legacyImportCount: 0,
+      fromRevision: null,
+    },
+  ]) {
+    assert.throws(
+      () => resolveDiscoveryProjectionSource(input),
+      (error) => error instanceof ControlPlaneError && error.code === "DISCOVERY_PROJECTION_NOT_ALLOWED",
+    );
+  }
+});
+
+test("discovery projection 요청은 DRAFT_ONLY를 명시해야 한다", () => {
+  assert.equal(configRevisionDiscoveryDraftSchema.safeParse({
+    repoId: REPO_ID,
+    expectedLatestRevision: 0,
+  }).success, false);
+  assert.equal(configRevisionDiscoveryDraftSchema.safeParse({
+    repoId: REPO_ID,
+    expectedLatestRevision: 0,
+    mode: "DRAFT_ONLY",
+  }).success, true);
 });
 
 test("source app identity와 ref drift를 fail-closed한다", () => {
@@ -225,6 +279,7 @@ test("legacy discovery projection은 exact import relation과 parity evidence를
     status: "DRAFT",
     idempotencyKey: "legacy-shadow-draft:example",
     legacyConfigImport: {
+      id: "legacy-import-1",
       configRevisionId: "revision-1",
       status: "DRAFT_CREATED_WITH_INPUT",
       transformVersion: "legacy-config-shadow/v3",
@@ -244,6 +299,12 @@ test("legacy discovery projection은 exact import relation과 parity evidence를
     ...evidence,
     legacyConfigImport: { ...evidence.legacyConfigImport, configRevisionId: "revision-other" },
   }), false);
+  assert.equal(resolveDiscoveryProjectionSource({
+    appStatus: "ACTIVE",
+    actualLatestRevision: 1,
+    legacyImportCount: 1,
+    fromRevision: evidence,
+  }).kind, "LEGACY_IMPORT");
 });
 
 test("rebase와 legacy projection은 append-only audit만 남기고 activation을 분리한다", () => {
