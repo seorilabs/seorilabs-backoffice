@@ -24,11 +24,13 @@ export interface BlueprintResource {
 }
 
 export interface BlueprintObservation {
+  id?: string;
   provider: string;
   resourceType: string;
   resourceId: string;
   payload: unknown;
   observedAt: Date;
+  createdAt?: Date;
 }
 
 export interface PublicCredentialBinding {
@@ -148,7 +150,11 @@ function latestObservation(
       && observation.resourceType === desired.resourceType
       && observation.resourceId === desired.resourceId
     ))
-    .sort((left, right) => right.observedAt.getTime() - left.observedAt.getTime())[0];
+    .sort((left, right) => (
+      right.observedAt.getTime() - left.observedAt.getTime()
+      || (right.createdAt?.getTime() ?? 0) - (left.createdAt?.getTime() ?? 0)
+      || (right.id ?? "").localeCompare(left.id ?? "")
+    ))[0];
 }
 
 export function blueprintResourceState(
@@ -209,10 +215,14 @@ export function evaluateProjectBlueprint(input: {
     };
   });
 
-  const resources = compileBlueprintResources(blueprint).map((desired) => ({
-    ...desired,
-    state: blueprintResourceState(desired, latestObservation(input.observations, desired)),
-  }));
+  const resources = compileBlueprintResources(blueprint).map((desired) => {
+    const observation = latestObservation(input.observations, desired);
+    return {
+      ...desired,
+      state: blueprintResourceState(desired, observation),
+      providerObservationId: observation?.id ?? null,
+    };
+  });
   const permissionBlocked = resources.some((candidate) => (
     candidate.state === "FORBIDDEN"
     || candidate.state === "ERROR"

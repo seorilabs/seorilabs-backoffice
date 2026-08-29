@@ -6,7 +6,7 @@ import {
   type PlatformReleaseManifest,
   type ProjectBlueprint,
 } from "@/lib/control-plane/contracts";
-import { signSnapshot } from "@/lib/control-plane/json";
+import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
 import { buildAuthBrokerPolicyGrant } from "@/lib/control-plane/provider-adapter-client";
 import {
@@ -21,6 +21,7 @@ import {
   activateConfigRevision,
   createConfigRevision,
   recordDiscoveryObservation,
+  recordProviderObservation,
 } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 
@@ -40,25 +41,32 @@ const WORKFLOW_DIGEST = "2".repeat(64);
 const ARTIFACT_SHA = "d".repeat(64);
 const RULES_SHA = "e".repeat(64);
 const PLATFORM_ARTIFACT_SHA = "f".repeat(64);
+const PLATFORM_GDSCRIPT_SHA = "6".repeat(64);
+const PLATFORM_GDSCRIPT_TREE_SHA = "7".repeat(64);
 const PLATFORM_CONTRACT_REVISION = "1".repeat(64);
 const PUBLISHER_ACCOUNT = "1234567890123456789";
 const PACKAGE_ID = "com.seorilabs.blueprint";
 const SIGNING_KEY = "integration-provider-lease-signing-key-0123456789";
 const WORKER_ID = "integration-provider-worker";
 const SUBJECT = "k8s:platform:provider-execution-worker";
+const GODOT_APP_ID = "project-blueprint-godot-integration-app";
+const GODOT_REPO_ID = 9_000_000_002n;
+const GODOT_SOURCE_SHA = "4".repeat(40);
+const GODOT_ARTIFACT_SHA = "5".repeat(64);
+const GODOT_PACKAGE_ID = "com.seorilabs.blueprint.godot";
 
 /**
  * gate 원장에 실제로 남은 관측과 lifecycle 상태를 한 번에 읽는다.
  * 거부 경로가 정말 0 mutation인지 판정하는 기준이다.
  */
-async function ledgerSnapshot(candidateId: string) {
+async function ledgerSnapshot(candidateId: string, appId = APP_ID) {
   const [gates, candidate, lifecycle, events, audits, observations, executionEvents] = await Promise.all([
     prisma.releaseGateObservation.count({ where: { candidateId } }),
     prisma.releaseCandidate.findUniqueOrThrow({ where: { id: candidateId }, select: { status: true } }),
-    prisma.fleetLifecycleState.findUnique({ where: { appId: APP_ID }, select: { stage: true, generation: true } }),
-    prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }),
+    prisma.fleetLifecycleState.findUnique({ where: { appId }, select: { stage: true, generation: true } }),
+    prisma.fleetLifecycleEvent.count({ where: { appId } }),
     prisma.auditLog.count(),
-    prisma.providerObservation.count({ where: { appId: APP_ID } }),
+    prisma.providerObservation.count({ where: { appId } }),
     prisma.providerExecutionEvent.count(),
   ]);
   return {
@@ -78,8 +86,9 @@ async function expectRejected(
   candidateId: string,
   run: () => Promise<unknown>,
   expectedCode: string,
+  appId = APP_ID,
 ) {
-  const before = await ledgerSnapshot(candidateId);
+  const before = await ledgerSnapshot(candidateId, appId);
   let code: string | null = null;
   try {
     await run();
@@ -87,7 +96,7 @@ async function expectRejected(
     code = error instanceof ControlPlaneError ? error.code : (error as Error).message;
   }
   assert.equal(code, expectedCode, `${label}: 예상 거부 코드가 아니다`);
-  assert.deepEqual(await ledgerSnapshot(candidateId), before, `${label}: 거부 경로가 원장을 변경했다`);
+  assert.deepEqual(await ledgerSnapshot(candidateId, appId), before, `${label}: 거부 경로가 원장을 변경했다`);
 }
 
 /**
@@ -159,13 +168,18 @@ async function runMarketSettlement(input: {
   return { execution: enqueued.execution, claim, observation, receipt };
 }
 
-function blueprint(): ProjectBlueprint {
+function blueprint(input: {
+  projectId?: string;
+  packageId?: string;
+} = {}): ProjectBlueprint {
+  const projectId = input.projectId ?? "blueprint-prod";
+  const packageId = input.packageId ?? PACKAGE_ID;
   return {
     schemaVersion: 1,
     organizationId: "123456789",
     folderId: "234567890",
     billingAccountId: "ABCDEF-123456-789ABC",
-    project: { projectId: "blueprint-prod", projectNumber: "345678901", region: "asia-northeast3" },
+    project: { projectId, projectNumber: "345678901", region: "asia-northeast3" },
     apis: ["firebase.googleapis.com"],
     iam: [],
     budget: { currencyCode: "KRW", monthlyAmount: 100_000, alertThresholds: [0.5, 1] },
@@ -176,10 +190,10 @@ function blueprint(): ProjectBlueprint {
       firestoreIndexesChecksum: RULES_SHA,
       storageRulesChecksum: RULES_SHA,
       functions: { region: "asia-northeast3", runtime: "nodejs24" },
-      apps: [{ platform: "ANDROID", packageId: "com.seorilabs.blueprint" }],
+      apps: [{ platform: "ANDROID", packageId }],
     },
     analytics: {
-      bigQueryProjectId: "blueprint-prod",
+      bigQueryProjectId: projectId,
       datasetId: "analytics_blueprint",
       location: "ASIA-NORTHEAST3",
     },
@@ -190,6 +204,273 @@ function blueprint(): ProjectBlueprint {
       workspace: "shared/google-workspace/provisioner",
     },
   };
+}
+
+function configPayload(input: {
+  projectBlueprint?: ProjectBlueprint;
+  assetKey: string;
+}) {
+  return {
+    schemaVersion: 1,
+    markets: [{ market: "google-play" as const, enabled: true, locales: ["ko-KR"], releaseChannel: "internal" as const }],
+    ...(input.projectBlueprint ? { projectBlueprint: input.projectBlueprint } : {}),
+    build: {
+      workflowBundleSha: WORKFLOW_SHA,
+      workflowBundleDigest: `sha256:${WORKFLOW_DIGEST}`,
+      platformVersion: "0.6.5",
+      minSdk: 24,
+      targetSdk: 36,
+    },
+    complianceDrafts: [{ market: "google-play" as const, declaration: "data-safety" as const, state: "DRAFT" as const, draft: true }],
+    assets: [{ market: "google-play" as const, kind: "icon", objectKey: input.assetKey, checksum: RULES_SHA }],
+  };
+}
+
+async function recordCompliantBlueprintReadbacks(input: {
+  repoId: bigint;
+  sourceSha: string;
+  configRevision: number;
+  keyPrefix: string;
+  observedAt: Date;
+}) {
+  const plan = await getProjectBlueprintPlan({
+    repoId: input.repoId,
+    sourceSha: input.sourceSha,
+    configRevision: input.configRevision,
+  });
+  for (const [index, resource] of plan.resources.entries()) {
+    const payload = {
+      schemaVersion: 1,
+      visibility: "VISIBLE",
+      state: "PRESENT",
+      ...(resource.publicIdentity ? { publicIdentity: resource.publicIdentity } : {}),
+      attributes: { desiredHash: resource.desiredHash },
+    };
+    await recordProviderObservation({
+      repoId: input.repoId,
+      provider: resource.provider,
+      resourceType: resource.resourceType,
+      resourceId: resource.resourceId,
+      observedAt: new Date(input.observedAt.getTime() + index),
+      observedBy: "integration-worker",
+      idempotencyKey: `${input.keyPrefix}-resource-${index}`,
+      payload,
+    });
+  }
+  return getProjectBlueprintPlan({
+    repoId: input.repoId,
+    sourceSha: input.sourceSha,
+    configRevision: input.configRevision,
+  });
+}
+
+async function runGodotReleaseCandidateFixture(input: {
+  platformReleaseId: string;
+  manifestDigest: string;
+  observedAt: Date;
+}) {
+  await prisma.app.create({
+    data: {
+      id: GODOT_APP_ID,
+      slug: "project-blueprint-godot-integration",
+      displayName: "Project Blueprint Godot Integration",
+      repoFullName: "seorilabs/project-blueprint-godot-integration",
+      repoId: GODOT_REPO_ID,
+      type: "GAME",
+      engine: "GODOT",
+      marketTargets: ["play"],
+    },
+  });
+  await recordDiscoveryObservation({
+    repoId: GODOT_REPO_ID,
+    sourceSha: GODOT_SOURCE_SHA,
+    sourceRef: "refs/heads/main",
+    observedAt: input.observedAt,
+    observedBy: "integration-worker",
+    idempotencyKey: "project-blueprint-godot-discovery",
+    workflowCaller: { profile: "godot", packageManager: null, workingDirectory: "." },
+    payload: { stack: "godot" },
+    buildTargets: [{
+      targetKey: "android-release",
+      stack: "godot",
+      market: "google-play",
+      packageId: GODOT_PACKAGE_ID,
+    }],
+  });
+  const withoutBlueprint = await createConfigRevision({
+    repoId: GODOT_REPO_ID,
+    actor: "integration-human",
+    idempotencyKey: "project-blueprint-godot-config-without-blueprint",
+    payload: configPayload({ assetKey: "apps/blueprint-godot/icon" }),
+  });
+  assert.equal(withoutBlueprint.revision.revision, 1);
+  await activateConfigRevision({
+    repoId: GODOT_REPO_ID,
+    revision: 1,
+    expectedActiveRevision: 0,
+    actor: "integration-human",
+    idempotencyKey: "project-blueprint-godot-activate-without-blueprint",
+    signingKey: "integration-signing-key",
+  });
+  await prisma.credentialBinding.createMany({
+    data: [
+      ["shared/gcp/provisioner-session", "gcp-project-provision"],
+      ["shared/gcp/firebase-automation", "firebase-provision"],
+      ["shared/google-workspace/provisioner", "workspace-provision"],
+    ].map(([logicalCredentialId, capability]) => ({
+      appId: GODOT_APP_ID,
+      logicalCredentialId,
+      provider: "google",
+      capability,
+      environment: "production",
+      publicIdentity: `${capability}@example.invalid`,
+      consumer: "project-blueprint-godot-integration",
+      observedAt: input.observedAt,
+    })),
+  });
+  await prisma.platformFleetBinding.create({
+    data: {
+      appId: GODOT_APP_ID,
+      platformReleaseId: input.platformReleaseId,
+      observedVersion: "0.6.5",
+      observedDigest: PLATFORM_GDSCRIPT_SHA,
+      approvedVersion: "0.6.5",
+      approvedDigest: PLATFORM_GDSCRIPT_SHA,
+      manifestDigest: input.manifestDigest,
+      contractRevision: PLATFORM_CONTRACT_REVISION,
+      state: "COMPLIANT",
+      sourceSha: GODOT_SOURCE_SHA,
+    },
+  });
+  const missingBlueprintCandidate = await createReleaseCandidate({
+    repoId: GODOT_REPO_ID,
+    sourceSha: GODOT_SOURCE_SHA,
+    configRevision: 1,
+    market: "google-play",
+    targetKey: "android-release",
+    artifactType: "android-aab",
+    artifactChecksum: GODOT_ARTIFACT_SHA,
+    workflowBundleSha: WORKFLOW_SHA,
+    workflowBundleDigest: WORKFLOW_DIGEST,
+    platformVersion: "0.6.5",
+    actor: "integration-worker",
+    idempotencyKey: "project-blueprint-godot-candidate-without-blueprint",
+  });
+  await expectRejected(
+    "godot provider shell blueprint missing",
+    missingBlueprintCandidate.candidate.id,
+    () => recordReleaseGateObservation({
+      candidateId: missingBlueprintCandidate.candidate.id,
+      gate: "PROVIDER_SHELL",
+      status: "PASSED",
+      observedAt: new Date(input.observedAt.getTime() + 1_000),
+      evidence: {
+        schemaVersion: 1,
+        sourceSha: GODOT_SOURCE_SHA,
+        configRevision: 1,
+        artifactChecksum: GODOT_ARTIFACT_SHA,
+      },
+      actor: "integration-worker",
+      idempotencyKey: "project-blueprint-godot-provider-shell-missing",
+    }),
+    "BLUEPRINT_NOT_CONFIGURED",
+    GODOT_APP_ID,
+  );
+
+  const configured = await createConfigRevision({
+    repoId: GODOT_REPO_ID,
+    actor: "integration-human",
+    idempotencyKey: "project-blueprint-godot-config-compliant",
+    payload: configPayload({
+      projectBlueprint: blueprint({
+        projectId: "blueprint-godot-prod",
+        packageId: GODOT_PACKAGE_ID,
+      }),
+      assetKey: "apps/blueprint-godot/icon",
+    }),
+  });
+  assert.equal(configured.revision.revision, 2);
+  await activateConfigRevision({
+    repoId: GODOT_REPO_ID,
+    revision: 2,
+    expectedActiveRevision: 1,
+    actor: "integration-human",
+    idempotencyKey: "project-blueprint-godot-activate-compliant",
+    signingKey: "integration-signing-key",
+  });
+  const candidate = await createReleaseCandidate({
+    repoId: GODOT_REPO_ID,
+    sourceSha: GODOT_SOURCE_SHA,
+    configRevision: 2,
+    market: "google-play",
+    targetKey: "android-release",
+    artifactType: "android-aab",
+    artifactChecksum: GODOT_ARTIFACT_SHA,
+    workflowBundleSha: WORKFLOW_SHA,
+    workflowBundleDigest: WORKFLOW_DIGEST,
+    platformVersion: "0.6.5",
+    actor: "integration-worker",
+    idempotencyKey: "project-blueprint-godot-candidate-compliant",
+  });
+  for (const [index, gate] of RELEASE_CANDIDATE_REQUIRED_GATES.filter((name) => name !== "PROVIDER_SHELL").entries()) {
+    await recordReleaseGateObservation({
+      candidateId: candidate.candidate.id,
+      gate,
+      status: "PASSED",
+      observedAt: new Date(input.observedAt.getTime() + 2_000 + index),
+      evidence: {
+        schemaVersion: 1,
+        sourceSha: GODOT_SOURCE_SHA,
+        configRevision: 2,
+        artifactChecksum: GODOT_ARTIFACT_SHA,
+      },
+      actor: "integration-worker",
+      idempotencyKey: `project-blueprint-godot-gate-${gate.toLowerCase()}`,
+    });
+  }
+  const readyToApply = await getProjectBlueprintPlan({
+    repoId: GODOT_REPO_ID,
+    sourceSha: GODOT_SOURCE_SHA,
+    configRevision: 2,
+  });
+  assert.equal(readyToApply.status, "READY_TO_APPLY");
+  const compliant = await recordCompliantBlueprintReadbacks({
+    repoId: GODOT_REPO_ID,
+    sourceSha: GODOT_SOURCE_SHA,
+    configRevision: 2,
+    keyPrefix: "project-blueprint-godot-compliant",
+    observedAt: new Date(input.observedAt.getTime() + 90_000),
+  });
+  assert.equal(compliant.status, "COMPLIANT");
+  assert.equal(compliant.appId, GODOT_APP_ID);
+  await recordReleaseGateObservation({
+    candidateId: candidate.candidate.id,
+    gate: "PROVIDER_SHELL",
+    status: "PASSED",
+    observedAt: new Date(input.observedAt.getTime() + 110_000),
+    evidence: {
+      schemaVersion: 1,
+      sourceSha: GODOT_SOURCE_SHA,
+      configRevision: 2,
+      artifactChecksum: GODOT_ARTIFACT_SHA,
+    },
+    actor: "integration-worker",
+    idempotencyKey: "project-blueprint-godot-provider-shell-compliant",
+  });
+  const [storedCandidate, lifecycle, shellGate] = await Promise.all([
+    prisma.releaseCandidate.findUniqueOrThrow({ where: { id: candidate.candidate.id } }),
+    prisma.fleetLifecycleState.findUniqueOrThrow({ where: { appId: GODOT_APP_ID } }),
+    prisma.releaseGateObservation.findFirstOrThrow({
+      where: { candidateId: candidate.candidate.id, gate: "PROVIDER_SHELL" },
+    }),
+  ]);
+  assert.equal(storedCandidate.status, "READY");
+  assert.equal(lifecycle.stage, "RELEASE_CANDIDATE");
+  assert.equal((shellGate.evidence as { projectBlueprint?: { appId?: string; configRevision?: number } })
+    .projectBlueprint?.appId, GODOT_APP_ID);
+  assert.equal((shellGate.evidence as { projectBlueprint?: { appId?: string; configRevision?: number } })
+    .projectBlueprint?.configRevision, 2);
+  return { candidateStatus: storedCandidate.status, lifecycleStage: lifecycle.stage };
 }
 
 async function main() {
@@ -226,20 +507,7 @@ async function main() {
     repoId: REPO_ID,
     actor: "integration-human",
     idempotencyKey: "project-blueprint-integration-config",
-    payload: {
-      schemaVersion: 1,
-      markets: [{ market: "google-play", enabled: true, locales: ["ko-KR"], releaseChannel: "internal" }],
-      projectBlueprint: blueprint(),
-      build: {
-        workflowBundleSha: WORKFLOW_SHA,
-        workflowBundleDigest: `sha256:${WORKFLOW_DIGEST}`,
-        platformVersion: "0.6.5",
-        minSdk: 24,
-        targetSdk: 36,
-      },
-      complianceDrafts: [{ market: "google-play", declaration: "data-safety", state: "DRAFT", draft: true }],
-      assets: [{ market: "google-play", kind: "icon", objectKey: "apps/blueprint/icon", checksum: RULES_SHA }],
-    },
+    payload: configPayload({ projectBlueprint: blueprint(), assetKey: "apps/blueprint/icon" }),
   });
   assert.equal(draft.revision.revision, 1);
   await activateConfigRevision({
@@ -284,6 +552,12 @@ async function main() {
       version: "0.6.5",
       digest: PLATFORM_ARTIFACT_SHA,
       packageName: "@seorilabs/platform",
+    }, {
+      kind: "GDSCRIPT",
+      version: "0.6.5",
+      digest: PLATFORM_GDSCRIPT_SHA,
+      releaseAssetUrl: "https://github.com/seorilabs/platform/releases/download/v0.6.5/platform-gdscript.zip",
+      treeChecksum: PLATFORM_GDSCRIPT_TREE_SHA,
     }],
     canaryEvidence: {
       attestationSha256: `sha256:${"3".repeat(64)}`,
@@ -403,8 +677,8 @@ async function main() {
   });
   assert.equal(replay.duplicate, true);
 
-  for (const [index, gate] of RELEASE_CANDIDATE_REQUIRED_GATES.entries()) {
-    const request = {
+  for (const [index, gate] of RELEASE_CANDIDATE_REQUIRED_GATES.filter((name) => name !== "PROVIDER_SHELL").entries()) {
+    await recordReleaseGateObservation({
       candidateId: created.candidate.id,
       gate,
       status: "PASSED" as const,
@@ -417,22 +691,158 @@ async function main() {
       },
       actor: "integration-worker",
       idempotencyKey: `project-blueprint-integration-gate-${gate.toLowerCase()}`,
-    };
-    if (index === 0) {
-      const concurrent = await Promise.all([
-        recordReleaseGateObservation(request),
-        recordReleaseGateObservation(request),
-      ]);
-      assert.equal(concurrent.filter((result) => result.duplicate).length, 1);
-    } else {
-      await recordReleaseGateObservation(request);
-    }
+    });
   }
+
+  const providerShellEvidence = {
+    schemaVersion: 1 as const,
+    sourceSha: SOURCE_SHA,
+    configRevision: 1,
+    artifactChecksum: ARTIFACT_SHA,
+  };
+  const providerShellRequest = (idempotencyKey: string) => ({
+    candidateId: created.candidate.id,
+    gate: "PROVIDER_SHELL" as const,
+    status: "PASSED" as const,
+    observedAt: new Date(observedAt.getTime() + 80_000),
+    evidence: providerShellEvidence,
+    actor: "integration-worker",
+    idempotencyKey,
+  });
+
+  await expectRejected(
+    "provider shell source mismatch",
+    created.candidate.id,
+    () => recordReleaseGateObservation({
+      ...providerShellRequest("project-blueprint-provider-shell-source-mismatch"),
+      evidence: {
+        ...providerShellEvidence,
+        sourceSha: "9".repeat(40),
+      },
+    }),
+    "EVIDENCE_MISMATCH",
+  );
+  await expectRejected(
+    "provider shell config mismatch",
+    created.candidate.id,
+    () => recordReleaseGateObservation({
+      ...providerShellRequest("project-blueprint-provider-shell-config-mismatch"),
+      evidence: {
+        ...providerShellEvidence,
+        configRevision: 2,
+      },
+    }),
+    "EVIDENCE_MISMATCH",
+  );
+
+  // shared credential만 준비되고 provider readback이 없으면 임의 PASSED를 원장에 넣을 수 없다.
+  await expectRejected(
+    "provider shell ready-to-apply",
+    created.candidate.id,
+    () => recordReleaseGateObservation(providerShellRequest("project-blueprint-provider-shell-unobserved")),
+    "PROVIDER_SHELL_NOT_COMPLIANT",
+  );
+
+  const compliantPlan = await recordCompliantBlueprintReadbacks({
+    repoId: REPO_ID,
+    sourceSha: SOURCE_SHA,
+    configRevision: 1,
+    keyPrefix: "project-blueprint-integration-compliant",
+    observedAt: new Date(observedAt.getTime() + 30_000),
+  });
+  assert.equal(compliantPlan.status, "COMPLIANT");
+  assert.equal(compliantPlan.appId, APP_ID);
+
+  // 더 최신 readback이 drift면 과거 PRESENT가 있어도 fail-closed한다.
+  const driftResource = compliantPlan.resources[0];
+  await recordProviderObservation({
+    repoId: REPO_ID,
+    provider: driftResource.provider,
+    resourceType: driftResource.resourceType,
+    resourceId: driftResource.resourceId,
+    observedAt: new Date(observedAt.getTime() + 60_000),
+    observedBy: "integration-worker",
+    idempotencyKey: "project-blueprint-integration-drift",
+    payload: {
+      schemaVersion: 1,
+      visibility: "VISIBLE",
+      state: "PRESENT",
+      ...(driftResource.publicIdentity ? { publicIdentity: driftResource.publicIdentity } : {}),
+      attributes: { desiredHash: "0".repeat(64) },
+    },
+  });
+  assert.equal(
+    (await getProjectBlueprintPlan({ repoId: REPO_ID, sourceSha: SOURCE_SHA, configRevision: 1 })).status,
+    "READY_TO_APPLY",
+  );
+  await expectRejected(
+    "provider shell drift",
+    created.candidate.id,
+    () => recordReleaseGateObservation(providerShellRequest("project-blueprint-provider-shell-drift")),
+    "PROVIDER_SHELL_NOT_COMPLIANT",
+  );
+
+  await recordProviderObservation({
+    repoId: REPO_ID,
+    provider: driftResource.provider,
+    resourceType: driftResource.resourceType,
+    resourceId: driftResource.resourceId,
+    observedAt: new Date(observedAt.getTime() + 70_000),
+    observedBy: "integration-worker",
+    idempotencyKey: "project-blueprint-integration-drift-recovered",
+    payload: {
+      schemaVersion: 1,
+      visibility: "VISIBLE",
+      state: "PRESENT",
+      ...(driftResource.publicIdentity ? { publicIdentity: driftResource.publicIdentity } : {}),
+      attributes: { desiredHash: driftResource.desiredHash },
+    },
+  });
+  const recoveredPlan = await getProjectBlueprintPlan({
+    repoId: REPO_ID,
+    sourceSha: SOURCE_SHA,
+    configRevision: 1,
+  });
+  assert.equal(recoveredPlan.status, "COMPLIANT");
+
+  // 같은 exact request의 동시 호출도 서버 검증된 PROVIDER_SHELL 관측 하나만 만든다.
+  const concurrentProviderShell = await Promise.all([
+    recordReleaseGateObservation(providerShellRequest("project-blueprint-provider-shell-compliant")),
+    recordReleaseGateObservation(providerShellRequest("project-blueprint-provider-shell-compliant")),
+  ]);
+  assert.equal(concurrentProviderShell.filter((result) => result.duplicate).length, 1);
+  const providerShell = await prisma.releaseGateObservation.findFirstOrThrow({
+    where: { candidateId: created.candidate.id, gate: "PROVIDER_SHELL" },
+  });
+  const storedProviderShellEvidence = providerShell.evidence as Record<string, unknown>;
+  assert.deepEqual(storedProviderShellEvidence.projectBlueprint, {
+    schemaVersion: 1,
+    appId: APP_ID,
+    projectId: recoveredPlan.projectId,
+    sourceSha: SOURCE_SHA,
+    configRevision: 1,
+    planDigest: jsonDigest(recoveredPlan as unknown as JsonValue),
+    providerObservationIds: recoveredPlan.resources.flatMap((resource) => (
+      resource.providerObservationId ? [resource.providerObservationId] : []
+    )),
+  });
+  assert.equal(
+    (storedProviderShellEvidence.projectBlueprint as { providerObservationIds?: unknown[] })
+      .providerObservationIds?.length,
+    recoveredPlan.resources.length,
+  );
+
   const candidate = await prisma.releaseCandidate.findUniqueOrThrow({ where: { id: created.candidate.id } });
   const lifecycle = await prisma.fleetLifecycleState.findUniqueOrThrow({ where: { appId: APP_ID } });
   assert.equal(candidate.status, "READY");
   assert.equal(lifecycle.stage, "RELEASE_CANDIDATE");
   assert.equal(await prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }), 1);
+
+  const godotResult = await runGodotReleaseCandidateFixture({
+    platformReleaseId: platformRelease.id,
+    manifestDigest: signedPlatformManifest.digest,
+    observedAt: new Date(observedAt.getTime() + 120_000),
+  });
 
   const candidateId = created.candidate.id;
 
@@ -668,6 +1078,10 @@ async function main() {
     gateObservations: final.gates,
     lifecycleEvents: final.events,
     resourceCount: plan.resources.length,
+    releaseCandidateEngines: {
+      reactNative: { candidateStatus: candidate.status, lifecycleStage: lifecycle.stage },
+      godot: godotResult,
+    },
     productionProviderWrite: false,
   }));
 }

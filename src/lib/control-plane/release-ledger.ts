@@ -16,6 +16,7 @@ import { assertObservationTime, ControlPlaneError } from "@/lib/control-plane/se
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import { exactBuildTargetIdentity } from "@/lib/control-plane/build-target-identity";
+import { getProjectBlueprintPlanWithClient } from "@/lib/control-plane/project-blueprint-service";
 
 const ARTIFACT_BY_MARKET = {
   "google-play": "android-aab",
@@ -361,7 +362,10 @@ export async function appendReleaseGateObservation(input: {
   const { tx } = input;
   const candidate = await tx.releaseCandidate.findUnique({
     where: { id: input.candidateId },
-    include: { configRevision: { select: { revision: true } } },
+    include: {
+      app: { select: { repoId: true } },
+      configRevision: { select: { revision: true } },
+    },
   });
   if (!candidate) throw new ControlPlaneError("Release candidate를 찾을 수 없습니다.", 404, "CANDIDATE_NOT_FOUND");
   if (
@@ -401,6 +405,52 @@ export async function appendReleaseGateObservation(input: {
   }
 
   let evidence: Record<string, unknown> = { ...input.evidence };
+  if (input.gate === "PROVIDER_SHELL" && input.status === "PASSED") {
+    if (!candidate.app.repoId) {
+      throw new ControlPlaneError(
+        "Release candidate의 GitHub repository binding이 없습니다.",
+        409,
+        "CANDIDATE_REPOSITORY_BINDING_MISSING",
+      );
+    }
+    const plan = await getProjectBlueprintPlanWithClient(tx, {
+      appId: candidate.appId,
+      repoId: candidate.app.repoId,
+      sourceSha: candidate.sourceSha,
+      configRevision: candidate.configRevision.revision,
+    });
+    if (plan.status !== "COMPLIANT") {
+      throw new ControlPlaneError(
+        "ProjectBlueprint provider readback이 COMPLIANT일 때만 PROVIDER_SHELL을 통과할 수 있습니다.",
+        409,
+        "PROVIDER_SHELL_NOT_COMPLIANT",
+      );
+    }
+    const providerObservationIds = plan.resources.flatMap((resource) => (
+      resource.providerObservationId ? [resource.providerObservationId] : []
+    ));
+    if (providerObservationIds.length !== plan.resources.length) {
+      throw new ControlPlaneError(
+        "ProjectBlueprint COMPLIANT 판정의 exact provider observation을 확정할 수 없습니다.",
+        409,
+        "PROVIDER_SHELL_NOT_COMPLIANT",
+      );
+    }
+    const planDigest = jsonDigest(plan as unknown as JsonValue);
+    // HTTP 요청 계약에 없는 exact app/source/config의 서버 파생 provenance만 저장한다.
+    evidence = {
+      ...evidence,
+      projectBlueprint: {
+        schemaVersion: 1,
+        appId: plan.appId,
+        projectId: plan.projectId,
+        sourceSha: plan.sourceSha,
+        configRevision: plan.configRevision,
+        planDigest,
+        providerObservationIds,
+      },
+    };
+  }
   if (input.origin.kind === "PROVIDER_SETTLEMENT") {
     const origin = input.origin;
     const execution = await tx.providerExecution.findUnique({
