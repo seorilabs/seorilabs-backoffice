@@ -24,7 +24,9 @@ jobs:
   verify:
     # PR 에서 통과한 Next build 는 반복하지 않는다. main 직접 push까지 보호하는
     # 정적 게이트만 실행하고, 실제 production build 는 아래 Docker job이 한 번 맡는다.
-    runs-on: seorilabs-rpi-arm64
+    # 클러스터 접근이 필요 없는 정적 게이트라 hosted 로 둔다(RPI 점유 해소).
+    # kubectl 을 부르는 검증 스크립트는 전부 KUBECTL_BIN 에 stub 을 주입한다.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,6 +60,10 @@ jobs:
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
     # ARM64 Docker 빌드 → -dind 러너(rpi5)에서 격리.
+    # hosted 로 옮길 수 없다: 아래 buildx endpoint 가 클러스터 내부 DNS 이고,
+    # 캐시(pnpm store/.next/cache/레이어)도 클러스터 PVC 에 있다. 러너만 바꾸면
+    # 엔드포인트를 못 찾아 조용히 깨진다. push/workflow_dispatch 전용이라
+    # fork 가 트리거할 수 없어 ARC 에 남겨도 안전하다.
     runs-on: seorilabs-rpi-arm64-dind
     steps:
       - uses: actions/checkout@v7
@@ -89,6 +95,7 @@ jobs:
   deploy:
     if: github.event_name != 'workflow_dispatch' || inputs.deploy
     needs: build
+    # k8s API 는 클러스터 밖으로 열려 있지 않다. ARC 고정.
     runs-on: seorilabs-rpi-arm64
     steps:
       - uses: actions/checkout@v7 # k8s 매니페스트 apply 를 위해 레포 파일 필요
