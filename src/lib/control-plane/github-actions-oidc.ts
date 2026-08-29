@@ -46,6 +46,38 @@ export interface GitHubActionsStaticManifestExpectation {
   bindingSourceSha: string;
 }
 
+interface GitHubActionsStaticManifestClaims
+  extends Omit<GitHubActionsStaticManifestIdentity, "bindingSourceSha"> {
+  requestedBindingSourceSha: string;
+  callerWorkflowSha: string;
+  pullRequestNumber: number | null;
+  headRef: string;
+  baseRef: string;
+}
+
+export interface GitHubActionsPullRequestReadback {
+  number: number;
+  state: string;
+  baseRepositoryId: string;
+  baseRepositoryFullName: string;
+  baseRef: string;
+  baseSha: string;
+  headRepositoryId: string;
+  headRepositoryFullName: string;
+  headRef: string;
+  mergeCommitSha: string;
+}
+
+export interface GitHubActionsPullRequestReadInput {
+  repositoryId: string;
+  fullName: string;
+  pullRequestNumber: number;
+}
+
+export type GitHubActionsPullRequestReader = (
+  input: GitHubActionsPullRequestReadInput,
+) => Promise<GitHubActionsPullRequestReadback>;
+
 function unauthorized(): never {
   throw new Error("GITHUB_ACTIONS_OIDC_UNAUTHORIZED");
 }
@@ -66,13 +98,13 @@ function optionalString(payload: JWTPayload, claim: string): string {
 export function assertGitHubActionsStaticManifestClaims(
   payload: JWTPayload,
   expectation: GitHubActionsStaticManifestExpectation,
-): GitHubActionsStaticManifestIdentity {
+): GitHubActionsStaticManifestClaims {
   const repositoryId = requiredString(payload, "repository_id");
   const fullName = requiredString(payload, "repository");
   const repositoryOwner = requiredString(payload, "repository_owner");
   const repositoryOwnerId = requiredString(payload, "repository_owner_id");
   const applicationSourceSha = requiredString(payload, "sha");
-  const bindingSourceSha = requiredString(payload, "workflow_sha");
+  const callerWorkflowSha = requiredString(payload, "workflow_sha");
   const workflowBundleSha = requiredString(payload, "job_workflow_sha");
   const callerWorkflowRef = requiredString(payload, "workflow_ref");
   const calledWorkflowRef = requiredString(payload, "job_workflow_ref");
@@ -92,9 +124,9 @@ export function assertGitHubActionsStaticManifestClaims(
     || repositoryOwner !== "seorilabs"
     || repositoryOwnerId !== SEORILABS_ORGANIZATION_ID
     || applicationSourceSha !== expectation.applicationSourceSha
-    || bindingSourceSha !== expectation.bindingSourceSha
     || !SHA.test(applicationSourceSha)
-    || !SHA.test(bindingSourceSha)
+    || !SHA.test(expectation.bindingSourceSha)
+    || !SHA.test(callerWorkflowSha)
     || !SHA.test(workflowBundleSha)
     || !POSITIVE_INTEGER.test(runId)
     || !POSITIVE_INTEGER.test(runAttempt)
@@ -106,18 +138,24 @@ export function assertGitHubActionsStaticManifestClaims(
     unauthorized();
   }
 
+  let pullRequestNumber: number | null = null;
   if (eventName === "pull_request") {
+    const match = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(eventRef);
     if (
-      !/^refs\/pull\/[1-9][0-9]*\/merge$/.test(eventRef)
+      !match
       || baseRef !== "main"
       || headRef.length === 0
+      || callerWorkflowSha !== applicationSourceSha
     ) {
       unauthorized();
     }
+    pullRequestNumber = Number(match[1]);
+    if (!Number.isSafeInteger(pullRequestNumber)) unauthorized();
   } else if (eventName === "push" || eventName === "workflow_dispatch") {
     if (
       eventRef !== "refs/heads/main"
-      || bindingSourceSha !== applicationSourceSha
+      || callerWorkflowSha !== applicationSourceSha
+      || expectation.bindingSourceSha !== applicationSourceSha
       || headRef !== ""
       || baseRef !== ""
     ) {
@@ -131,7 +169,8 @@ export function assertGitHubActionsStaticManifestClaims(
     repositoryId,
     fullName,
     applicationSourceSha,
-    bindingSourceSha,
+    requestedBindingSourceSha: expectation.bindingSourceSha,
+    callerWorkflowSha,
     workflowBundleSha,
     runId,
     runAttempt,
@@ -139,7 +178,71 @@ export function assertGitHubActionsStaticManifestClaims(
     eventRef,
     repositoryVisibility: repositoryVisibility as GitHubActionsStaticManifestIdentity["repositoryVisibility"],
     runnerEnvironment: runnerEnvironment as GitHubActionsStaticManifestIdentity["runnerEnvironment"],
+    pullRequestNumber,
+    headRef,
+    baseRef,
   };
+}
+
+async function readPullRequestFromGitHub(
+  input: GitHubActionsPullRequestReadInput,
+): Promise<GitHubActionsPullRequestReadback> {
+  const [owner, repo, extra] = input.fullName.split("/");
+  if (!owner || !repo || extra !== undefined) unauthorized();
+  const { getInstallationOctokit } = await import("@/lib/github/app");
+  const client = await getInstallationOctokit();
+  const response = await client.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: input.pullRequestNumber,
+  });
+  return {
+    number: response.data.number,
+    state: response.data.state,
+    baseRepositoryId: String(response.data.base.repo?.id ?? ""),
+    baseRepositoryFullName: response.data.base.repo?.full_name ?? "",
+    baseRef: response.data.base.ref,
+    baseSha: response.data.base.sha.toLowerCase(),
+    headRepositoryId: String(response.data.head.repo?.id ?? ""),
+    headRepositoryFullName: response.data.head.repo?.full_name ?? "",
+    headRef: response.data.head.ref,
+    mergeCommitSha: response.data.merge_commit_sha?.toLowerCase() ?? "",
+  };
+}
+
+function bindStaticManifestIdentity(
+  claims: GitHubActionsStaticManifestClaims,
+): GitHubActionsStaticManifestIdentity {
+  return {
+    repositoryId: claims.repositoryId,
+    fullName: claims.fullName,
+    applicationSourceSha: claims.applicationSourceSha,
+    bindingSourceSha: claims.requestedBindingSourceSha,
+    workflowBundleSha: claims.workflowBundleSha,
+    runId: claims.runId,
+    runAttempt: claims.runAttempt,
+    eventName: claims.eventName,
+    eventRef: claims.eventRef,
+    repositoryVisibility: claims.repositoryVisibility,
+    runnerEnvironment: claims.runnerEnvironment,
+  };
+}
+
+function pullRequestReadbackMatches(
+  claims: GitHubActionsStaticManifestClaims,
+  readback: GitHubActionsPullRequestReadback,
+): boolean {
+  return claims.pullRequestNumber !== null
+    && readback.number === claims.pullRequestNumber
+    && readback.state === "open"
+    && readback.baseRepositoryId === claims.repositoryId
+    && readback.baseRepositoryFullName === claims.fullName
+    && readback.baseRef === claims.baseRef
+    && readback.baseSha === claims.requestedBindingSourceSha
+    && readback.headRepositoryId === claims.repositoryId
+    && readback.headRepositoryFullName === claims.fullName
+    && readback.headRef === claims.headRef
+    && readback.mergeCommitSha === claims.applicationSourceSha;
 }
 
 export async function verifyGitHubActionsOidcToken(
@@ -181,6 +284,7 @@ export async function authenticateGitHubActionsStaticManifestRequest(
   request: NextRequest,
   expectation: GitHubActionsStaticManifestExpectation,
   verifier: GitHubActionsOidcVerifier = defaultVerifier,
+  readPullRequest: GitHubActionsPullRequestReader = readPullRequestFromGitHub,
 ): Promise<GitHubActionsStaticManifestIdentity | null> {
   const authorization = request.headers.get("authorization") ?? "";
   if (!authorization.startsWith("Bearer ")) return null;
@@ -189,14 +293,23 @@ export async function authenticateGitHubActionsStaticManifestRequest(
   try {
     const { payload, protectedHeader } = await verifier(token);
     if (protectedHeader.alg !== "RS256" || protectedHeader.typ !== "JWT") return null;
-    const identity = assertGitHubActionsStaticManifestClaims(payload, expectation);
+    const claims = assertGitHubActionsStaticManifestClaims(payload, expectation);
     if (
       request.headers.get("x-seori-principal")
-      !== `github-actions:${identity.repositoryId}:${identity.runId}`
+      !== `github-actions:${claims.repositoryId}:${claims.runId}`
     ) {
       return null;
     }
-    return identity;
+    if (claims.eventName === "pull_request") {
+      if (claims.pullRequestNumber === null) return null;
+      const readback = await readPullRequest({
+        repositoryId: claims.repositoryId,
+        fullName: claims.fullName,
+        pullRequestNumber: claims.pullRequestNumber,
+      });
+      if (!pullRequestReadbackMatches(claims, readback)) return null;
+    }
+    return bindStaticManifestIdentity(claims);
   } catch {
     return null;
   }
