@@ -229,6 +229,55 @@ export function resolvedWorkflowCaller(input: {
   );
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function observedStaticWorkspaceRoot(input: {
+  payload: unknown;
+  caller: WorkflowCaller;
+  repositoryId: string;
+  fullName: string;
+  sourceSha: string;
+}): string {
+  if (input.caller.profile === "godot" || input.caller.workingDirectory === ".") {
+    return input.caller.workingDirectory;
+  }
+  const payload = jsonRecord(input.payload);
+  const repository = jsonRecord(payload?.repository);
+  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
+  if (
+    payload?.schemaVersion !== 2
+    || payload?.contractVersion !== "repository-discovery/v7"
+    || String(repository?.id ?? "") !== input.repositoryId
+    || repository?.fullName !== input.fullName
+    || repository?.sourceSha !== input.sourceSha
+    || repository?.sourceRef !== "refs/heads/main"
+  ) {
+    return input.caller.workingDirectory;
+  }
+  const lockPath = input.caller.packageManager === "pnpm"
+    ? "pnpm-lock.yaml"
+    : "package-lock.json";
+  const observedAtRoot = (expectedPath: string) => sources.some((value) => {
+    const source = jsonRecord(value);
+    return source?.path === expectedPath
+      && source.status === "PRESENT"
+      && source.reason === null
+      && String(source.repoId ?? "") === input.repositoryId
+      && source.fullName === input.fullName
+      && source.sourceSha === input.sourceSha
+      && source.sourceRef === "refs/heads/main"
+      && /^[0-9a-f]{40}$/.test(String(source.blobSha ?? ""))
+      && /^[0-9a-f]{64}$/.test(String(source.contentSha256 ?? ""));
+  });
+  return observedAtRoot("package.json") && observedAtRoot(lockPath)
+    ? "."
+    : input.caller.workingDirectory;
+}
+
 export type DiscoveryObservationInput = {
   repoId: bigint;
   sourceSha: string;
@@ -1037,7 +1086,13 @@ export async function resolveStaticRuntimeManifest(input: {
     );
   }
   const workflowDirectories = {
-    workspaceRoot: workflowCaller.workingDirectory,
+    workspaceRoot: observedStaticWorkspaceRoot({
+      payload: discovery.payload,
+      caller: workflowCaller,
+      repositoryId: input.identity.repositoryId,
+      fullName: app.repoFullName,
+      sourceSha: input.identity.bindingSourceSha,
+    }),
     commandDirectory: workflowCaller.workingDirectory,
   };
   const staticBinding: StaticRuntimeBinding = workflowCaller.profile === "godot"
