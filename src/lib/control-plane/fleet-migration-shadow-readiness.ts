@@ -256,7 +256,7 @@ function repositoryReasons(
     reasons.push("REPOSITORY_REGISTRATION_MISSING");
     return reasons;
   }
-  if (registration.repoFullName !== vector.repoFullName) {
+  if (registration.repoFullName.toLowerCase() !== vector.repoFullName.toLowerCase()) {
     reasons.push("REPOSITORY_IDENTITY_MISMATCH");
   }
   if (registration.status !== "MANAGED") {
@@ -292,7 +292,7 @@ function repositoryReasons(
     reasons.push("APP_BINDING_MISSING");
     return reasons;
   }
-  if (app.repoFullName !== vector.repoFullName) {
+  if (app.repoFullName.toLowerCase() !== vector.repoFullName.toLowerCase()) {
     reasons.push("APP_BINDING_MISMATCH");
   }
   if (!app.latestDiscovery || app.latestDiscovery.sourceSha !== vector.headSha) {

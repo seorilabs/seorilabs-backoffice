@@ -266,9 +266,10 @@ export async function listInstallationRepositorySeeds(
 
 /**
  * 이름이 아니라 numeric repository ID로 canonical identity를 읽는다. active private
- * 저장소와 중앙 정책으로 허용된 public 저장소는 default branch HEAD도 함께
- * 읽고 identity를 한 번 더 확인한다. fork는 exact identity에 포함하되 source
- * discovery 대상으로 자동 승격하지 않는다.
+ * DISCOVERY_ALLOWED에서는 active private 저장소와 중앙 정책으로 허용된 public
+ * 저장소의 default branch HEAD를 읽되 fork를 source discovery 대상으로 삼지 않는다.
+ * ALL_INSTALLED shadow inventory에서는 fork도 HEAD를 읽지만 자동 분류·승격하지 않는다.
+ * HEAD read 뒤에는 canonical identity를 한 번 더 확인한다.
  */
 async function readRepositoryVector(
   client: RepositoryInventoryClient,

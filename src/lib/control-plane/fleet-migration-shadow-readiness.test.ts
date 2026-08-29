@@ -173,6 +173,22 @@ test("full-org pagination과 exact source/중앙 증거가 모두 맞으면 read
   assert.equal(result.repositories[0].activeCredentialBindingCount, 0);
 });
 
+test("GitHub repository identity casing만 다르면 중앙 binding drift로 오인하지 않는다", async () => {
+  const app = productApp();
+  app.repoFullName = "SeoriLabs/Product";
+
+  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "SEORILABS/PRODUCT", "PRODUCT_APP"),
+      registration(202, "SEORILABS/INFRA", "INFRA_REPO"),
+    ],
+    apps: [app],
+  }));
+
+  assert.equal(result.state, "READY");
+  assert.deepEqual(result.reasonCounts, {});
+});
+
 test("classification decision은 양수 revision과 collector evidence ID를 모두 요구한다", async () => {
   const invalidRevision = registration(101, "seorilabs/product", "PRODUCT_APP");
   invalidRevision.classificationDecisionVersion = 0;
