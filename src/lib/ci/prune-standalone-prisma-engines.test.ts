@@ -101,3 +101,40 @@ test("target engine이 중복이면 다른 engine을 지우기 전에 실패한�
   assert.match(result.stderr, /count=2/);
   assert.equal(existsSync(hostEngine), true);
 });
+
+test("target engine이 비어 있으면 다른 engine을 지우기 전에 실패한다", (t) => {
+  const root = fixture(t);
+  const client = "node_modules/.prisma/client";
+  const target = put(root, `${client}/${targetName}`, "");
+  const hostEngine = put(
+    root,
+    `${client}/libquery_engine-debian-openssl-3.0.x.so.node`,
+  );
+
+  const result = prune(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /비어 있다/);
+  assert.equal(existsSync(target), true);
+  assert.equal(existsSync(hostEngine), true);
+});
+
+test("일반 파일이 아닌 Prisma engine이 있으면 삭제 전에 실패한다", (t) => {
+  const root = fixture(t);
+  const client = "node_modules/.prisma/client";
+  const target = put(root, `${client}/${targetName}`, "arm64-engine");
+  const hostEngine = put(
+    root,
+    `${client}/libquery_engine-debian-openssl-3.0.x.so.node`,
+  );
+  const nonRegularEngine = join(root, `${client}/schema-engine-directory`);
+  mkdirSync(nonRegularEngine, { recursive: true });
+
+  const result = prune(root);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /일반 파일이 아닌 Prisma engine/);
+  assert.equal(readFileSync(target, "utf8"), "arm64-engine");
+  assert.equal(existsSync(hostEngine), true);
+  assert.equal(existsSync(nonRegularEngine), true);
+});
