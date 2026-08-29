@@ -10,6 +10,7 @@ fake="$tmp/kubectl"
 log="$tmp/kubectl.log"
 state="$tmp/job.state"
 counter="$tmp/job.counter"
+deployment_counter="$tmp/deployment.counter"
 source_sha="0123456789abcdef0123456789abcdef01234567"
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 image="registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:${digest}"
@@ -27,10 +28,17 @@ set -euo pipefail
 : "${FAKE_KUBECTL_LOG:?}"
 : "${FAKE_KUBECTL_STATE:?}"
 : "${FAKE_KUBECTL_COUNTER:?}"
+: "${FAKE_DEPLOYMENT_COUNTER:?}"
 : "${BACKOFFICE_IMAGE:?}"
 : "${BACKOFFICE_SOURCE_SHA:?}"
 : "${FAKE_CATCHUP_CREATE_UNKNOWN:=false}"
 : "${FAKE_CATCHUP_RESULT:=Complete}"
+: "${FAKE_BACKFILL_RUN_ID=desired-state-run-fake}"
+: "${FAKE_BACKFILL_CONTRACT:=desired-state-draft-backfill/v2}"
+: "${FAKE_BACKFILL_TRIGGER:=DEPLOY_CATCH_UP}"
+: "${FAKE_BACKFILL_SOURCE_SHA:=$BACKOFFICE_SOURCE_SHA}"
+: "${FAKE_BACKFILL_STATUS:=COMPLETED}"
+: "${FAKE_BACKFILL_FAILED:=0}"
 
 args="$*"
 
@@ -89,7 +97,17 @@ if [[ "$args" == *" get job "* ]]; then
 fi
 
 if [[ "$args" == *" get pods -l job-name="* ]]; then
-  printf '%s' "$BACKOFFICE_IMAGE"
+  if [[ "$args" == *"state.terminated.message"* ]]; then
+    printf 'runId=%s\ncontractVersion=%s\ntrigger=%s\nsourceSha=%s\nstatus=%s\nfailed=%s\n' \
+      "$FAKE_BACKFILL_RUN_ID" \
+      "$FAKE_BACKFILL_CONTRACT" \
+      "$FAKE_BACKFILL_TRIGGER" \
+      "$FAKE_BACKFILL_SOURCE_SHA" \
+      "$FAKE_BACKFILL_STATUS" \
+      "$FAKE_BACKFILL_FAILED"
+  else
+    printf '%s' "$BACKOFFICE_IMAGE"
+  fi
   exit 0
 fi
 
@@ -102,6 +120,14 @@ if [[ "$args" == *" rollout status deployment/"* ]]; then
 fi
 
 if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
+  count=0
+  [ ! -f "$FAKE_DEPLOYMENT_COUNTER" ] || count="$(cat "$FAKE_DEPLOYMENT_COUNTER")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$FAKE_DEPLOYMENT_COUNTER"
+  if [ "$count" -le "${FAKE_DEPLOYMENT_STALE_READS:-0}" ]; then
+    printf '2|1|1|1|1|1|1||%s,' "$BACKOFFICE_IMAGE"
+    exit 0
+  fi
   printf '1|1|1|1|1|1|1||%s,' "$BACKOFFICE_IMAGE"
   exit 0
 fi
@@ -153,9 +179,17 @@ run_deploy() {
   FAKE_KUBECTL_LOG="$log" \
   FAKE_KUBECTL_STATE="$state" \
   FAKE_KUBECTL_COUNTER="$counter" \
+  FAKE_DEPLOYMENT_COUNTER="$deployment_counter" \
+  FAKE_DEPLOYMENT_STALE_READS="${FAKE_DEPLOYMENT_STALE_READS:-0}" \
   FAKE_MIGRATION_RESULT="$1" \
   FAKE_CATCHUP_CREATE_UNKNOWN="${FAKE_CATCHUP_CREATE_UNKNOWN:-false}" \
   FAKE_CATCHUP_RESULT="${FAKE_CATCHUP_RESULT:-Complete}" \
+  FAKE_BACKFILL_RUN_ID="${FAKE_BACKFILL_RUN_ID-desired-state-run-fake}" \
+  FAKE_BACKFILL_CONTRACT="${FAKE_BACKFILL_CONTRACT:-desired-state-draft-backfill/v2}" \
+  FAKE_BACKFILL_TRIGGER="${FAKE_BACKFILL_TRIGGER:-DEPLOY_CATCH_UP}" \
+  FAKE_BACKFILL_SOURCE_SHA="${FAKE_BACKFILL_SOURCE_SHA:-$source_sha}" \
+  FAKE_BACKFILL_STATUS="${FAKE_BACKFILL_STATUS:-COMPLETED}" \
+  FAKE_BACKFILL_FAILED="${FAKE_BACKFILL_FAILED:-0}" \
   EXPECTED_CONTRACT_DIGEST="$expected_digest" \
   MIGRATION_COMPLETED_AT="$migration_completed_at" \
   FAKE_MIGRATION_COMPLETED_AT="${FAKE_MIGRATION_COMPLETED_AT:-}" \
@@ -171,6 +205,8 @@ run_deploy() {
   BACKOFFICE_SOURCE_SHA="$source_sha" \
   BACKOFFICE_MIGRATION_TIMEOUT_SECONDS=2 \
   BACKOFFICE_MIGRATION_POLL_SECONDS=0 \
+  BACKOFFICE_DEPLOYMENT_STATE_TIMEOUT_SECONDS=2 \
+  BACKOFFICE_DEPLOYMENT_STATE_POLL_SECONDS=0 \
   BACKOFFICE_CATCHUP_TIMEOUT_SECONDS=3300 \
   BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS=1 \
   "$here/deploy-backoffice.sh"
@@ -232,7 +268,40 @@ if ! [ "$migration_line" -lt "$verify_line" ] ||
   exit 1
 fi
 echo "  ok   migration → trigger-verify → web → worker → scheduler → catch-up"
-echo "  ok   동일 SHA 재실행은 새 migration/catch-up attempt로 감사 가능"
+echo "  ok   동일 SHA 재실행은 같은 source-bound desired-state run으로 검증"
+
+echo "== rollout condition이 먼저 끝나도 새 generation exact state를 기다린다 =="
+: > "$log"
+rm -f "$deployment_counter"
+FAKE_DEPLOYMENT_STALE_READS=1
+run_deploy Complete >/dev/null
+unset FAKE_DEPLOYMENT_STALE_READS
+if [ "$(cat "$deployment_counter")" -gt 1 ]; then
+  echo "  ok   observedGeneration 지연 뒤 exact digest state 확인"
+else
+  echo "FAIL deployment exact-state 재확인이 실행되지 않았다" >&2
+  exit 1
+fi
+
+echo "== desired-state source-bound readback이 어긋나면 배포 실패 =="
+for scenario in source status failed contract trigger missing-run; do
+  : > "$log"
+  case "$scenario" in
+    source) FAKE_BACKFILL_SOURCE_SHA="$(printf 'b%.0s' {1..40})" ;;
+    status) FAKE_BACKFILL_STATUS=PARTIAL ;;
+    failed) FAKE_BACKFILL_FAILED=1 ;;
+    contract) FAKE_BACKFILL_CONTRACT=desired-state-draft-backfill/v1 ;;
+    trigger) FAKE_BACKFILL_TRIGGER=HOURLY_CRON ;;
+    missing-run) FAKE_BACKFILL_RUN_ID= ;;
+  esac
+  if run_deploy Complete >/dev/null 2>&1; then
+    echo "FAIL desired-state $scenario readback이 deploy 성공으로 처리됐다" >&2
+    exit 1
+  fi
+  unset FAKE_BACKFILL_SOURCE_SHA FAKE_BACKFILL_STATUS FAKE_BACKFILL_FAILED \
+    FAKE_BACKFILL_CONTRACT FAKE_BACKFILL_TRIGGER FAKE_BACKFILL_RUN_ID
+  echo "  ok   $scenario fail-closed"
+done
 
 echo "== catch-up create 결과 불명에도 scheduler는 계속 동작한다 =="
 : > "$log"

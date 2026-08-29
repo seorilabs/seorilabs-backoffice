@@ -6,12 +6,12 @@
     "sha256": "53861d7e4869f04f5c5fa38aff32951d75a8afe6398d6e77a2db602d58217752"
   },
   "columns": {
-    "count": 986,
-    "sha256": "6dc0e075652a1caae7881dd650e0075d8f7685a6e8634add0790c8feafcf9e16"
+    "count": 988,
+    "sha256": "7a7bf2dfa4161e3c2027e27ed1e1ba77828d4177627be5a0a7ff33956042c63c"
   },
   "indexes": {
-    "count": 451,
-    "sha256": "14bcc457e798cbbf63d171603d83bd60065c1832ac43c316a6172187766b8a3a"
+    "count": 454,
+    "sha256": "b7e6f64b1ee1c3aae2c75812a43b238f73c11aa23fe2072e5c45e2707ad0d52f"
   },
   "foreignKeys": {
     "count": 93,

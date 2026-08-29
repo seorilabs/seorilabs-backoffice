@@ -4,12 +4,17 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  assertDesiredStateBackfillReplay,
   assessDesiredStateCandidate,
+  DESIRED_STATE_BACKFILL_CONTRACT_VERSION,
+  desiredStateBackfillAdminInvocation,
+  desiredStateBackfillRequestHash,
   type DesiredStateCandidate,
 } from "@/lib/control-plane/desired-state-backfill";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { PROVIDER_ADAPTER_IDS } from "@/lib/control-plane/provider-adapters";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
+import { ControlPlaneError } from "@/lib/control-plane/service";
 
 const SHA = "a".repeat(40);
 
@@ -108,6 +113,112 @@ test("기존 ACTIVE/DRAFT가 있으면 새 revision 대신 멱등 readback을 �
   });
 });
 
+test("배포 catch-up은 동일 SHA만 같은 key/hash로 replay하고 같은 UTC hour의 다른 SHA를 분리한다", () => {
+  const now = new Date("2026-08-29T03:45:00.000Z");
+  const first = desiredStateBackfillAdminInvocation({
+    trigger: "deploy-catch-up",
+    sourceSha: SHA,
+    now,
+  });
+  const retry = desiredStateBackfillAdminInvocation({
+    trigger: "deploy-catch-up",
+    sourceSha: SHA,
+    now: new Date("2026-08-29T03:59:59.999Z"),
+  });
+  const nextDeploy = desiredStateBackfillAdminInvocation({
+    trigger: "deploy-catch-up",
+    sourceSha: "b".repeat(40),
+    now,
+  });
+
+  assert.deepEqual(retry, first);
+  assert.equal(desiredStateBackfillRequestHash(retry), desiredStateBackfillRequestHash(first));
+  assert.notEqual(nextDeploy.idempotencyKey, first.idempotencyKey);
+  assert.notEqual(
+    desiredStateBackfillRequestHash(nextDeploy),
+    desiredStateBackfillRequestHash(first),
+  );
+  assert.match(first.idempotencyKey, new RegExp(`${SHA}$`));
+});
+
+test("hourly Cron occurrence는 deploy namespace와 분리되고 같은 hour에서만 replay한다", () => {
+  const first = desiredStateBackfillAdminInvocation({
+    trigger: "hourly-cron",
+    sourceSha: null,
+    now: new Date("2026-08-29T03:00:00.000Z"),
+  });
+  const sameHour = desiredStateBackfillAdminInvocation({
+    trigger: "hourly-cron",
+    sourceSha: null,
+    now: new Date("2026-08-29T03:59:59.999Z"),
+  });
+  const nextHour = desiredStateBackfillAdminInvocation({
+    trigger: "hourly-cron",
+    sourceSha: null,
+    now: new Date("2026-08-29T04:00:00.000Z"),
+  });
+  const deploy = desiredStateBackfillAdminInvocation({
+    trigger: "deploy-catch-up",
+    sourceSha: SHA,
+    now: new Date("2026-08-29T03:00:00.000Z"),
+  });
+
+  assert.equal(sameHour.idempotencyKey, first.idempotencyKey);
+  assert.notEqual(nextHour.idempotencyKey, first.idempotencyKey);
+  assert.notEqual(deploy.idempotencyKey, first.idempotencyKey);
+  assert.equal(first.trigger, "HOURLY_CRON");
+  assert.equal(first.sourceSha, null);
+});
+
+test("admin trigger는 exact lowercase SHA와 trigger/source 조합을 fail-closed로 검증한다", () => {
+  const now = new Date("2026-08-29T03:00:00.000Z");
+  const invalid = [
+    { trigger: "deploy-catch-up", sourceSha: "a".repeat(39), code: "SOURCE_SHA_INVALID" },
+    { trigger: "deploy-catch-up", sourceSha: "A".repeat(40), code: "SOURCE_SHA_INVALID" },
+    { trigger: "hourly-cron", sourceSha: SHA, code: "SOURCE_SHA_NOT_ALLOWED" },
+    { trigger: null, sourceSha: null, code: "BACKFILL_TRIGGER_INVALID" },
+  ] as const;
+  for (const entry of invalid) {
+    assert.throws(
+      () => desiredStateBackfillAdminInvocation({ ...entry, now }),
+      (error) => error instanceof ControlPlaneError && error.code === entry.code,
+    );
+  }
+});
+
+test("stored replay는 actor, trigger, source SHA와 전체 request hash가 모두 같아야 한다", () => {
+  const requested = desiredStateBackfillAdminInvocation({
+    trigger: "deploy-catch-up",
+    sourceSha: SHA,
+    now: new Date("2026-08-29T03:00:00.000Z"),
+  });
+  const requestHash = desiredStateBackfillRequestHash(requested);
+  const stored = {
+    actor: requested.actor,
+    requestHash,
+    trigger: requested.trigger,
+    sourceSha: requested.sourceSha,
+  };
+  assert.doesNotThrow(() => assertDesiredStateBackfillReplay({
+    stored,
+    requested: { ...requested, requestHash },
+  }));
+  for (const mismatch of [
+    { ...stored, actor: "deploy:other" },
+    { ...stored, requestHash: "f".repeat(64) },
+    { ...stored, trigger: "HOURLY_CRON" },
+    { ...stored, sourceSha: "b".repeat(40) },
+  ]) {
+    assert.throws(
+      () => assertDesiredStateBackfillReplay({
+        stored: mismatch,
+        requested: { ...requested, requestHash },
+      }),
+      (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
+    );
+  }
+});
+
 test("backfill 실행 경계는 DRAFT 전용이고 activation/provider mutation을 호출하지 않는다", () => {
   const source = readFileSync(join(process.cwd(), "src/lib/control-plane/desired-state-backfill.ts"), "utf8");
   assert.match(source, /createDraftRevisionInTransaction/);
@@ -140,6 +251,19 @@ test("migration과 API가 additive provenance, durable idempotency, scheduler �
     /\b(?:DROP|MODIFY|CHANGE|DELETE\s+FROM|UPDATE\s+)\b/i,
   );
 
+  const sourceBindingMigration = readFileSync(join(
+    process.cwd(),
+    "prisma/migrations/20260829030000_desired_state_backfill_source_binding/migration.sql",
+  ), "utf8");
+  assert.match(sourceBindingMigration, /ADD COLUMN `trigger`/);
+  assert.match(sourceBindingMigration, /ADD COLUMN `sourceSha` CHAR\(40\) NULL/);
+  assert.match(sourceBindingMigration, /DEPLOY_CATCH_UP/);
+  assert.doesNotMatch(
+    sourceBindingMigration,
+    /\b(?:DROP|MODIFY|CHANGE|DELETE\s+FROM|UPDATE\s+)\b/i,
+  );
+  assert.equal(DESIRED_STATE_BACKFILL_CONTRACT_VERSION, "desired-state-draft-backfill/v2");
+
   const api = readFileSync(join(
     process.cwd(),
     "src/app/api/control-plane/desired-state-backfill/route.ts",
@@ -151,6 +275,15 @@ test("migration과 API가 additive provenance, durable idempotency, scheduler �
   const scheduler = readFileSync(join(process.cwd(), "k8s/scheduler-cronjobs.yaml"), "utf8");
   assert.match(scheduler, /name: backoffice-desired-state-backfill/);
   assert.match(scheduler, /api\/admin\/desired-state\/backfill/);
+  assert.match(scheduler, /x-seorilabs-backfill-trigger: hourly-cron/);
+
+  const adminRoute = readFileSync(join(
+    process.cwd(),
+    "src/app/api/admin/desired-state/backfill/route.ts",
+  ), "utf8");
+  assert.match(adminRoute, /x-seorilabs-backfill-trigger/);
+  assert.match(adminRoute, /x-seorilabs-source-sha/);
+  assert.match(adminRoute, /desiredStateBackfillReadbackHeaders/);
 });
 
 test("discovery semantic replay는 현재 분류 계약의 run만 재사용한다", () => {
