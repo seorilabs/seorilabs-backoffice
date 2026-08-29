@@ -6,6 +6,7 @@ import test from "node:test";
 import { repositoryClassificationDecisionSchema } from "@/lib/control-plane/contracts";
 import {
   repositoryClassificationCandidates,
+  validateCurrentRepositoryClassificationRatification,
 } from "@/lib/control-plane/repository-classification-decision";
 import {
   drainRepositoryDiscoveryQueue,
@@ -41,9 +42,134 @@ test("분류 API와 사람 UI는 같은 strict validator와 transaction service�
   assert.match(service, /FOR UPDATE/);
   assert.match(service, /classificationDecisionVersion/);
   assert.match(service, /control-plane\.repository-classification\.decided/);
+  assert.match(service, /control-plane\.repository-classification\.ratified/);
   assert.doesNotMatch(service, /deleteMany|\.delete\(|\.update\(\{\s*where:\s*\{\s*id: decision/);
   assert.match(discoveryService, /classificationDecision\?\.revision \?\? 0/);
   assert.match(discoveryService, /REPOSITORY_CLASSIFICATION_REVISION_STALE/);
+});
+
+function ratificationEvidence() {
+  const sourceSha = "a".repeat(40);
+  const candidates = [{
+    profile: "react-native" as const,
+    workingDirectory: "apps/mobile",
+    markerPath: "apps/mobile/package.json",
+  }];
+  return {
+    expectedGeneration: 6,
+    expectedDecisionRevision: 0,
+    classification: "PRODUCT_APP" as const,
+    candidateMarkerPath: "apps/mobile/package.json",
+    registration: {
+      classification: "PRODUCT_APP" as const,
+      discoveryContractVersion: "repository-discovery/v6",
+      discoveryCandidates: {
+        contractVersion: "repository-discovery/v6",
+        sourceSha,
+        reasonCode: null,
+        classification: "PRODUCT_APP",
+        candidates,
+      },
+      lastDefaultPushSha: sourceSha,
+      lastReconciledSha: sourceSha,
+      reconcileGeneration: 6,
+    },
+    latestDecision: null,
+    terminalRun: {
+      id: "run-current",
+      generation: 6,
+      sourceSha,
+      status: "MANAGED" as const,
+      classification: "PRODUCT_APP" as const,
+      contractVersion: "repository-discovery/v6",
+      candidateDigest: "54412bd5c6f0216c5b6a6373f9312d1bb15b3c31cc134c4b48ad317a010c53ba",
+      observationId: "observation-current",
+      completedAt: new Date("2026-08-29T00:00:00.000Z"),
+    },
+  };
+}
+
+test("MANAGED ratification은 exact terminal source, contract, candidate를 묶고 discovery를 재실행하지 않는다", () => {
+  const request = repositoryClassificationDecisionSchema.parse({
+    schemaVersion: 1,
+    repoId: "42",
+    expectedGeneration: 6,
+    expectedDecisionRevision: 0,
+    classification: "PRODUCT_APP",
+    candidateMarkerPath: "apps/mobile/package.json",
+    justification: "CURRENT_OBSERVATION_RATIFIED",
+  });
+  assert.equal(request.justification, "CURRENT_OBSERVATION_RATIFIED");
+
+  const result = validateCurrentRepositoryClassificationRatification(ratificationEvidence());
+  assert.equal(result.terminalRunId, "run-current");
+  assert.equal(result.candidateDigest, ratificationEvidence().terminalRun.candidateDigest);
+
+  const service = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/repository-classification-decision.ts"),
+    "utf8",
+  );
+  assert.match(service, /discoveryEnqueued: false/);
+  assert.match(service, /if \(ratificationEvidence\)[\s\S]+runId: null,[\s\S]+generation: null/);
+});
+
+test("비제품 MANAGED repository는 terminal EXCLUDED 관측만 ratify한다", () => {
+  const product = ratificationEvidence();
+  const evidence = {
+    ...product,
+    classification: "INFRA_REPO" as const,
+    candidateMarkerPath: null,
+    registration: {
+      ...product.registration,
+      classification: "INFRA_REPO" as const,
+      discoveryCandidates: {
+        contractVersion: "repository-discovery/v6",
+        sourceSha: product.registration.lastReconciledSha,
+        reasonCode: "INFRASTRUCTURE_REPOSITORY",
+        classification: "INFRA_REPO",
+        candidates: [],
+      },
+    },
+    terminalRun: {
+      ...product.terminalRun,
+      status: "EXCLUDED" as const,
+      classification: "INFRA_REPO" as const,
+      candidateDigest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      observationId: null,
+    },
+  };
+  assert.equal(
+    validateCurrentRepositoryClassificationRatification(evidence).terminalRunId,
+    "run-current",
+  );
+});
+
+test("MANAGED ratification은 source drift, candidate drift와 기존 decision을 fail-closed한다", () => {
+  const sourceDrift = ratificationEvidence();
+  sourceDrift.terminalRun.sourceSha = "b".repeat(40);
+  assert.throws(
+    () => validateCurrentRepositoryClassificationRatification(sourceDrift),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "REPOSITORY_CLASSIFICATION_RATIFICATION_EVIDENCE_STALE",
+  );
+
+  const candidateDrift = ratificationEvidence();
+  candidateDrift.candidateMarkerPath = "package.json";
+  assert.throws(
+    () => validateCurrentRepositoryClassificationRatification(candidateDrift),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "REPOSITORY_CLASSIFICATION_RATIFICATION_CANDIDATE_INVALID",
+  );
+
+  const existing = {
+    ...ratificationEvidence(),
+    latestDecision: { revision: 1 },
+  };
+  assert.throws(
+    () => validateCurrentRepositoryClassificationRatification(existing),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "REPOSITORY_CLASSIFICATION_RATIFICATION_DECISION_EXISTS",
+  );
 });
 
 test("UI에는 exact observation에서 검증된 공개 candidate marker만 노출한다", () => {

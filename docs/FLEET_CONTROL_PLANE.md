@@ -528,6 +528,13 @@ DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다. 같
 validator와 transaction service를 사용한다. nullable expand column의 `classificationDecisionVersion=null`은
 revision `0`으로만 해석하며 분류 결정은 이 revision CAS와 idempotency
 key를 요구하고 이전 revision을 수정하지 않으며 audit에는 공개 repo/candidate identity만 남긴다.
+이미 exact terminal discovery로 `MANAGED`인 repository에 decision revision이 없는 경우에는
+`CURRENT_OBSERVATION_RATIFIED`만 허용한다. 요청 분류, 단일 product candidate marker, generation,
+default push/reconciled/source SHA, discovery contract, candidate digest와 terminal observation을 모두
+같은 transaction에서 재검증한 뒤 revision 1만 append한다. 이 경로는 registration의 관측 상태를 바꾸거나
+discovery를 enqueue하지 않는다. 이후 분류 변경은 `CENTRAL_POLICY_CORRECTION` 새 revision으로만 기록하며
+새 generation discovery를 enqueue한다. 따라서 ratification 오류는 row 삭제나 revision 되감기가 아니라
+후속 교정 revision과 exact-source 재탐지로 복구한다.
 
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.

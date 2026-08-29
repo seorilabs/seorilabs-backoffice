@@ -28,7 +28,11 @@ export async function decideRepositoryClassificationAction(input: {
   expectedDecisionRevision: number;
   classification: "PRODUCT_APP" | "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCLUDED";
   candidateMarkerPath: string | null;
-  justification: "REPOSITORY_PURPOSE_CONFIRMED" | "APP_CANDIDATE_SELECTED" | "CENTRAL_POLICY_CORRECTION";
+  justification:
+    | "REPOSITORY_PURPOSE_CONFIRMED"
+    | "APP_CANDIDATE_SELECTED"
+    | "CURRENT_OBSERVATION_RATIFIED"
+    | "CENTRAL_POLICY_CORRECTION";
   requestId: string;
 }): Promise<RepositoryClassificationActionResult> {
   try {

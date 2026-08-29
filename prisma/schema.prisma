@@ -1846,8 +1846,9 @@ enum RepositoryClassification {
   EXCLUDED
 }
 
-// NEEDS_INPUT 분류를 사람과 승인된 AI가 같은 계약으로 해결하는 append-only revision.
-// 등록 row의 version과 함께 잠가 optimistic concurrency를 강제한다.
+// NEEDS_INPUT 결정과 기존 MANAGED terminal 관측 ratification을 사람과 승인된 AI가
+// 같은 계약으로 기록하는 append-only revision. 등록 row의 version과 함께 잠가
+// optimistic concurrency를 강제하며 교정도 새 revision으로만 남긴다.
 model RepositoryClassificationDecision {
   id                  String                   @id @default(cuid())
   repoId              BigInt
