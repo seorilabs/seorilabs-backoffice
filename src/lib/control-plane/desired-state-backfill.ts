@@ -255,7 +255,7 @@ function needsInput(
 export function assessDesiredStateCandidate(
   candidate: DesiredStateCandidate,
 ): DesiredStateAssessment {
-  if (candidate.status !== "ACTIVE") {
+  if (!["ACTIVE", "PAUSED", "DEPRECATED"].includes(candidate.status)) {
     return needsInput("CONCURRENT_STATE_CHANGED", `app status=${candidate.status}`);
   }
   if (!candidate.repoId) return needsInput("APP_REPO_ID_MISSING");
@@ -364,8 +364,25 @@ async function loadCandidates(
   tx: Prisma.TransactionClient,
   appId?: string,
 ): Promise<DesiredStateCandidate[]> {
+  const productRepoIds = appId
+    ? []
+    : (await tx.repositoryRegistration.findMany({
+        where: {
+          classification: "PRODUCT_APP",
+          archived: false,
+          status: { not: "ARCHIVED" },
+        },
+        select: { repoId: true },
+      })).map((registration) => registration.repoId);
   const apps = await tx.app.findMany({
-    where: appId ? { id: appId } : { status: "ACTIVE" },
+    where: appId
+      ? { id: appId }
+      : {
+          OR: [
+            { status: "ACTIVE" },
+            { repoId: { in: productRepoIds } },
+          ],
+        },
     orderBy: [{ slug: "asc" }, { id: "asc" }],
     select: desiredStateCandidateSelect,
   });

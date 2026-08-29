@@ -309,6 +309,40 @@ async function main() {
     observedAt: new Date(observedAt.getTime() + 31_000),
     markets: ["google-play"],
   });
+  const paused = await createFixture({
+    suffix: "paused",
+    repoId: 9_000_000_095n,
+    observedAt: new Date(observedAt.getTime() + 40_000),
+  });
+  const deprecated = await createFixture({
+    suffix: "deprecated",
+    repoId: 9_000_000_096n,
+    observedAt: new Date(observedAt.getTime() + 50_000),
+  });
+  const nonProduct = await createFixture({
+    suffix: "non-product",
+    repoId: 9_000_000_097n,
+    observedAt: new Date(observedAt.getTime() + 60_000),
+  });
+  const archived = await createFixture({
+    suffix: "archived",
+    repoId: 9_000_000_098n,
+    observedAt: new Date(observedAt.getTime() + 70_000),
+  });
+  await Promise.all([
+    prisma.app.update({ where: { id: paused.appId }, data: { status: "PAUSED" } }),
+    prisma.app.update({ where: { id: deprecated.appId }, data: { status: "DEPRECATED" } }),
+    prisma.app.update({ where: { id: nonProduct.appId }, data: { status: "PAUSED" } }),
+    prisma.app.update({ where: { id: archived.appId }, data: { status: "DEPRECATED" } }),
+    prisma.repositoryRegistration.update({
+      where: { repoId: nonProduct.repoId },
+      data: { classification: "INFRA_REPO" },
+    }),
+    prisma.repositoryRegistration.update({
+      where: { repoId: archived.repoId },
+      data: { archived: true, status: "ARCHIVED" },
+    }),
+  ]);
   const run = await runDesiredStateDraftBackfill({
     actor: "scheduler:desired-state-backfill",
     idempotencyKey: "desired-state-safe-source-rebase:integration:1",
@@ -321,6 +355,12 @@ async function main() {
   assert.equal(run.providerMutationAttempted, false);
   assert.equal(run.items.find((item) => item.appId === scheduler.appId)?.outcome,
     "SOURCE_REBASED_AND_ACTIVATED");
+  assert.equal(run.items.find((item) => item.appId === paused.appId)?.outcome,
+    "ALREADY_CONFIGURED");
+  assert.equal(run.items.find((item) => item.appId === deprecated.appId)?.outcome,
+    "ALREADY_CONFIGURED");
+  assert.equal(run.items.some((item) => item.appId === nonProduct.appId), false);
+  assert.equal(run.items.some((item) => item.appId === archived.appId), false);
   assert.equal((await prisma.configRevision.findFirstOrThrow({
     where: { appId: scheduler.appId, status: "ACTIVE" },
   })).revision, 2);
@@ -332,6 +372,7 @@ async function main() {
     desiredPayloadChangeActivated: false,
     buildTargetChangeActivated: false,
     invalidSnapshotActivated: false,
+    pausedAndDeprecatedProductCohort: true,
     providerMutationAttempted: false,
   }));
 }

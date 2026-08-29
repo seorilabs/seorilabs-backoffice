@@ -172,6 +172,34 @@ test("ACTIVE revision은 semantic source가 current일 때만 이미 설정됨�
   })).outcome, "SOURCE_RECONCILE");
 });
 
+test("PAUSED와 DEPRECATED PRODUCT_APP도 중앙 DRAFT와 current config 판정에서 누락하지 않는다", () => {
+  const current = candidate();
+  const configuredRevision = {
+    id: "revision-lifecycle",
+    revision: 4,
+    status: "ACTIVE",
+    sourceObservation: {
+      appId: current.appId,
+      sourceSha: current.observation!.sourceSha,
+      sourceRef: current.observation!.sourceRef,
+      payloadHash: current.observation!.payloadHash,
+    },
+  };
+  for (const status of ["PAUSED", "DEPRECATED"] as const) {
+    assert.equal(assessDesiredStateCandidate(candidate({ status })).outcome, "READY", status);
+    assert.deepEqual(
+      assessDesiredStateCandidate(candidate({ status, configuredRevision })),
+      {
+        outcome: "ALREADY_CONFIGURED",
+        revisionId: configuredRevision.id,
+        revision: configuredRevision.revision,
+        revisionStatus: configuredRevision.status,
+      },
+      status,
+    );
+  }
+});
+
 test("desired-state API는 safe source rebase v2 요청 계약만 받는다", () => {
   assert.equal(desiredStateBackfillSchema.safeParse({
     schemaVersion: 2,
