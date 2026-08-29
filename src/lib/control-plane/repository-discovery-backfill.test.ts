@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   assertFullOrganizationInstallation,
   listInstallationRepositorySeeds,
+  readInstalledRepositoryVector,
   readRepositoryBackfillVector,
   reconcileOrganizationRepositoryDiscovery,
   repositoryBackfillDeliveryId,
@@ -179,6 +180,35 @@ test("중앙 정책이 허용한 public repository도 exact default HEAD를 읽�
   );
   assert.equal(routes.filter((route) => route.includes("commits")).length, 2);
   assert.equal(routes.filter((route) => route === "GET /repositories/{repository_id}").length, 4);
+});
+
+test("P7 shadow inventory는 분류 전 public repository도 설치 범위 안에서 exact HEAD를 읽는다", async () => {
+  const repository = {
+    id: 14,
+    full_name: "seorilabs/public-unclassified",
+    name: "public-unclassified",
+    default_branch: "trunk",
+    archived: false,
+    private: false,
+    fork: false,
+  };
+  const routes: string[] = [];
+  const result = await readInstalledRepositoryVector({
+    request(route) {
+      routes.push(route);
+      if (route === "GET /repositories/{repository_id}") return response(repository);
+      if (route === "GET /repos/{owner}/{repo}/commits/{ref}") {
+        return response({ sha: SHA });
+      }
+      throw new Error(`unexpected route ${route}`);
+    },
+  }, "seorilabs", { repoId: repository.id });
+  assert.equal(result.headSha, SHA);
+  assert.deepEqual(routes, [
+    "GET /repositories/{repository_id}",
+    "GET /repos/{owner}/{repo}/commits/{ref}",
+    "GET /repositories/{repository_id}",
+  ]);
 });
 
 test("UI/API가 승인한 public PRODUCT_APP도 hourly exact HEAD readback에 포함한다", async () => {

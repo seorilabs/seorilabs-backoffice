@@ -266,26 +266,34 @@ export async function listInstallationRepositorySeeds(
 
 /**
  * 이름이 아니라 numeric repository ID로 canonical identity를 읽는다. active private
- * 저장소와 중앙 정책으로 허용된 public 저장소는 default branch HEAD도 함께
- * 읽고 identity를 한 번 더 확인한다. fork는 exact identity에 포함하되 source
- * discovery 대상으로 자동 승격하지 않는다.
+ * DISCOVERY_ALLOWED에서는 active private 저장소와 중앙 정책으로 허용된 public
+ * 저장소의 default branch HEAD를 읽되 fork를 source discovery 대상으로 삼지 않는다.
+ * ALL_INSTALLED shadow inventory에서는 fork도 HEAD를 읽지만 자동 분류·승격하지 않는다.
+ * HEAD read 뒤에는 canonical identity를 한 번 더 확인한다.
  */
-export async function readRepositoryBackfillVector(
+async function readRepositoryVector(
   client: RepositoryInventoryClient,
   organization: string,
   seed: RepositoryInventorySeed,
-  classificationDecision: RepositoryClassificationDirective | null = null,
+  classificationDecision: RepositoryClassificationDirective | null,
+  sourcePolicy: "DISCOVERY_ALLOWED" | "ALL_INSTALLED",
 ): Promise<RepositoryReadbackVector> {
   const first = parseRepositoryIdentity((await client.request(
     "GET /repositories/{repository_id}",
     { repository_id: seed.repoId },
   )).data, organization, seed.repoId);
 
-  const publicAllowed = first.private
+  const publicAllowed = sourcePolicy === "ALL_INSTALLED"
+    || first.private
     || repositoryPublicDiscoveryAllowed(first.repoFullName)
     || classificationDecision?.classification === "PRODUCT_APP"
     || classificationDecision?.classification === "PLATFORM_PRODUCER";
-  if (first.archived || first.fork || !publicAllowed || !first.defaultBranch) {
+  if (
+    first.archived
+    || (sourcePolicy === "DISCOVERY_ALLOWED" && first.fork)
+    || !publicAllowed
+    || !first.defaultBranch
+  ) {
     return {
       ...first,
       // decision이 없다는 observation도 revision 0으로 고정한다. sweep 중 첫
@@ -324,6 +332,40 @@ export async function readRepositoryBackfillVector(
     classificationDecisionRevision: classificationDecision?.revision ?? 0,
     headSha,
   };
+}
+
+export async function readRepositoryBackfillVector(
+  client: RepositoryInventoryClient,
+  organization: string,
+  seed: RepositoryInventorySeed,
+  classificationDecision: RepositoryClassificationDirective | null = null,
+): Promise<RepositoryReadbackVector> {
+  return readRepositoryVector(
+    client,
+    organization,
+    seed,
+    classificationDecision,
+    "DISCOVERY_ALLOWED",
+  );
+}
+
+/**
+ * P7 BOOTSTRAP shadow는 설치에 보이는 active repository 전체의 exact default HEAD를
+ * 분류 결과와 무관하게 읽어야 한다. 이 함수도 GitHub GET만 사용하며 discovery
+ * enqueue나 repository 설정 변경을 수행하지 않는다.
+ */
+export async function readInstalledRepositoryVector(
+  client: RepositoryInventoryClient,
+  organization: string,
+  seed: RepositoryInventorySeed,
+): Promise<RepositoryReadbackVector> {
+  return readRepositoryVector(
+    client,
+    organization,
+    seed,
+    null,
+    "ALL_INSTALLED",
+  );
 }
 
 export function repositoryBackfillDeliveryId(
