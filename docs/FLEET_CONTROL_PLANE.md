@@ -486,7 +486,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v5`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v6`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.

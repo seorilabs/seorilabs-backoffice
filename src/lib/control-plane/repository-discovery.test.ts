@@ -4,8 +4,10 @@ import test from "node:test";
 
 import {
   discoverRepository,
+  readCurrentRepositoryHead,
   readExactRepositoryTree,
   repositoryDiscoverySloState,
+  REPOSITORY_DISCOVERY_CONTRACT_VERSION,
   REPOSITORY_DISCOVERY_MAX_TREE_PATH_DEPTH,
   REPOSITORY_DISCOVERY_TERMINAL_SLO_MS,
   type RepositoryTreeSnapshot,
@@ -356,6 +358,33 @@ test("Capacitor product는 web AIT dependency가 함께 있어도 primary static
   ]);
 });
 
+test("workspace RN application marker가 유일하면 peer dependency UI library를 후보에서 제외한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({ name: "workspace", packageManager: "pnpm@11.3.0" }),
+    "apps/mobile/package.json": JSON.stringify({
+      name: "@sample/mobile",
+      dependencies: { "react-native": "0.86.0" },
+    }),
+    "apps/mobile/app.json": JSON.stringify({ name: "sample" }),
+    "apps/mobile/android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
+    "packages/product-ui/package.json": JSON.stringify({
+      name: "@sample/product-ui",
+      peerDependencies: { "react-native": ">=0.84.0" },
+      devDependencies: { "react-native": "0.86.0" },
+    }),
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\nimporters: {}\npackages: {}\n",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.candidates, [{
+    profile: "react-native",
+    workingDirectory: "apps/mobile",
+    markerPath: "apps/mobile/package.json",
+  }]);
+  assert.equal(result.workflowCaller.workingDirectory, "apps/mobile");
+});
+
 test("AppsInToss web-only product는 RN으로 추측하지 않고 ait-web profile로 탐지한다", async () => {
   const files = {
     "apps-in-toss/package.json": JSON.stringify({
@@ -382,6 +411,66 @@ test("AppsInToss web-only product는 RN으로 추측하지 않고 ait-web profil
     bundleId: null,
     configuration: { appName: "ait-web-product" },
   }]);
+});
+
+test("AIT application marker가 유일하면 workspace의 web framework library를 후보에서 제외한다", async () => {
+  const files = {
+    "package.json": JSON.stringify({
+      name: "ait-product",
+      packageManager: "npm@11.0.0",
+      dependencies: { "@apps-in-toss/web-framework": "2.10.7" },
+    }),
+    "granite.config.ts": "export default { appName: 'ait-product' };",
+    "packages/ait-core/package.json": JSON.stringify({
+      name: "@sample/ait-core",
+      dependencies: { "@apps-in-toss/web-framework": "2.10.7" },
+    }),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.candidates, [{
+    profile: "ait-web",
+    workingDirectory: ".",
+    markerPath: "package.json",
+  }]);
+  assert.deepEqual(result.buildTargets.map((target) => target.targetKey), ["ait"]);
+});
+
+test("Godot 제품의 AIT web delivery package는 별도 제품 후보가 아니라 nullable companion target이다", async () => {
+  const files = {
+    "godot/project.godot": "[application]\nconfig/name=\"Sample\"\n",
+    "godot/export_presets.cfg": [
+      "[preset.0]",
+      'name="Android"',
+      'platform="Android"',
+      "[preset.0.options]",
+      'package/unique_name="com.seorilabs.sample"',
+    ].join("\n"),
+    "ait/apps-in-toss-web/package.json": JSON.stringify({
+      name: "sample-ait-web",
+      dependencies: { "@apps-in-toss/web-framework": "3.0.5" },
+    }),
+    "ait/apps-in-toss-web/apps-in-toss.config.ts": "export default { appName: 'sample-ait' };",
+    "ait/apps-in-toss-web/package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: {} }),
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.candidates, [{
+    profile: "godot",
+    workingDirectory: "godot",
+    markerPath: "godot/project.godot",
+  }]);
+  assert.deepEqual(result.buildTargets.map(({ targetKey, market, configuration }) => ({
+    targetKey,
+    market,
+    configuration,
+  })), [
+    { targetKey: "ait", market: "apps-in-toss", configuration: { appName: "sample-ait" } },
+    { targetKey: "android", market: "google-play", configuration: null },
+  ]);
 });
 
 test("RN exact package와 lock integrity를 PLATFORM_SDK_UPDATE용 source observation으로 만든다", async () => {
@@ -510,7 +599,11 @@ test("RN floating Platform dependency는 관리 SDK로 추측하지 않는다", 
     "android/app/build.gradle": 'android { defaultConfig { applicationId "com.seorilabs.sample" } }',
     "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
   };
-  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  const read = sourceReader(files);
+  const result = await discoverRepository(snapshot(Object.keys(files)), async (path) => {
+    assert.notEqual(path, "pnpm-lock.yaml", "floating dependency의 lockfile은 읽지 않아야 한다");
+    return read(path);
+  });
   assert.equal(result.status, "ACTIVE");
   if (result.status !== "ACTIVE") return;
   assert.equal(result.platformConsumer.integration, "CUSTOM_HTTP");
@@ -1130,6 +1223,40 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY",
     });
   });
+
+  await t.test("중앙 exact INFRA 정책은 public source gate 전에 terminal 분류한다", async () => {
+    const before = calls.length;
+    const octokit = fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/seorilabs-backoffice",
+      name: "seorilabs-backoffice",
+      default_branch: "main",
+      private: false,
+      fork: false,
+      archived: false,
+    } });
+    const classified = await readExactRepositoryTree(octokit as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/seorilabs-backoffice",
+      expectedSourceSha: SHA,
+    });
+    assert.deepEqual(classified, {
+      status: "CLASSIFIED",
+      classification: "INFRA_REPO",
+      reasonCode: "INFRASTRUCTURE_REPOSITORY",
+    });
+    assert.equal(calls.slice(before).some((call) => call.kind === "commit" || call.kind === "tree"), false);
+
+    const head = await readCurrentRepositoryHead(octokit as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/seorilabs-backoffice",
+    });
+    assert.deepEqual(head, { status: "READY", sourceSha: SHA, sourceRef: "refs/heads/main" });
+  });
+});
+
+test("discovery 의미론 변경은 새 generation을 강제하는 v6 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v6");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {
