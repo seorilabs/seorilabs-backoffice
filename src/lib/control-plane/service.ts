@@ -9,6 +9,7 @@ import {
   type WorkflowCaller,
 } from "@/lib/control-plane/contracts";
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
+import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revision-discovery-projection";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
@@ -185,6 +186,208 @@ export function assertConfigRevisionPayload(payload: unknown): asserts payload i
     403,
     "HUMAN_APPROVAL_REQUIRED",
   );
+}
+
+export const CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION =
+  "config-revision-manual-source/v1";
+export const CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION =
+  "config-revision-source-rebase/v1";
+export const CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION =
+  "config-revision-discovery-projection/v1";
+
+const SHA_40 = /^[0-9a-f]{40}$/;
+const DIGEST_64 = /^[0-9a-f]{64}$/;
+
+type ConfigSourceApp = {
+  id: string;
+  repoId: bigint | null;
+  repoFullName: string;
+  status: string;
+};
+
+type ConfigSourceRegistration = {
+  repoId: bigint;
+  repoFullName: string;
+  defaultBranch: string | null;
+  archived: boolean;
+  status: string;
+  classification: string | null;
+  discoveryContractVersion: string | null;
+  lastDefaultPushSha: string | null;
+  lastReconciledSha: string | null;
+};
+
+type ConfigSourceObservation = {
+  id: string;
+  appId: string;
+  sourceSha: string;
+  sourceRef: string | null;
+  payload: unknown;
+  payloadHash: string;
+  requestHash: string | null;
+};
+
+/** DB row 자체의 app/ref/SHA/payload provenance가 훼손되면 replay도 거부한다. */
+export function assertConfigSourceObservationIntegrity(input: {
+  appId: string;
+  repoId: bigint;
+  observation: ConfigSourceObservation;
+}): void {
+  const payload = jsonRecord(input.observation.payload);
+  const repository = jsonRecord(payload?.repository);
+  if (
+    input.observation.appId !== input.appId
+    || input.observation.sourceRef !== "refs/heads/main"
+    || !SHA_40.test(input.observation.sourceSha)
+    || !DIGEST_64.test(input.observation.payloadHash)
+    || !DIGEST_64.test(input.observation.requestHash ?? "")
+    || jsonDigest(input.observation.payload as JsonValue) !== input.observation.payloadHash
+    || payload?.schemaVersion !== 2
+    || payload?.contractVersion !== REPOSITORY_DISCOVERY_CONTRACT_VERSION
+    || payload?.status !== "ACTIVE"
+    || payload?.classification !== "PRODUCT_APP"
+    || typeof repository?.id !== "number"
+    || !Number.isSafeInteger(repository.id)
+    || BigInt(repository.id) !== input.repoId
+    || repository.sourceRef !== input.observation.sourceRef
+    || repository.sourceSha !== input.observation.sourceSha
+  ) {
+    throw new ControlPlaneError(
+      "Config source discovery의 app/ref/SHA/payload provenance가 유효하지 않습니다.",
+      409,
+      "CONFIG_SOURCE_PROVENANCE_INVALID",
+    );
+  }
+}
+
+/** caller가 source를 고르지 못하게 서버가 고른 최신 observation과 등록 원장을 결합한다. */
+export function assertCurrentConfigSourceBinding(input: {
+  app: ConfigSourceApp;
+  registration: ConfigSourceRegistration | null;
+  observation: ConfigSourceObservation | null;
+}): asserts input is {
+  app: ConfigSourceApp & { repoId: bigint; status: "ACTIVE" };
+  registration: ConfigSourceRegistration;
+  observation: ConfigSourceObservation;
+} {
+  const { app, registration, observation } = input;
+  if (!app.repoId || !registration || !observation) {
+    throw new ControlPlaneError(
+      "관리 등록 또는 latest discovery가 없습니다.",
+      409,
+      "CONFIG_SOURCE_NOT_READY",
+    );
+  }
+  const sourceSha = observation.sourceSha;
+  if (
+    app.status !== "ACTIVE"
+    || registration.repoId !== app.repoId
+    || registration.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase()
+    || registration.archived
+    || registration.status !== "MANAGED"
+    || registration.classification !== "PRODUCT_APP"
+    || registration.defaultBranch !== "main"
+    || registration.discoveryContractVersion !== REPOSITORY_DISCOVERY_CONTRACT_VERSION
+    || registration.lastDefaultPushSha?.toLowerCase() !== sourceSha
+    || registration.lastReconciledSha?.toLowerCase() !== sourceSha
+  ) {
+    throw new ControlPlaneError(
+      "Repository registration과 latest main discovery가 exact source로 수렴하지 않았습니다.",
+      409,
+      "CONFIG_SOURCE_NOT_CURRENT",
+    );
+  }
+  assertConfigSourceObservationIntegrity({
+    appId: app.id,
+    repoId: app.repoId,
+    observation,
+  });
+  const repository = jsonRecord(jsonRecord(observation.payload)?.repository);
+  if (
+    repository?.fullName !== app.repoFullName
+    || repository?.fullName !== registration.repoFullName
+  ) {
+    throw new ControlPlaneError(
+      "Discovery repository identity가 App 및 registration binding과 일치하지 않습니다.",
+      409,
+      "CONFIG_SOURCE_APP_MISMATCH",
+    );
+  }
+}
+
+export function assertExpectedLatestConfigRevision(input: {
+  expectedLatestRevision: number;
+  actualLatestRevision: number;
+}): void {
+  if (input.expectedLatestRevision !== input.actualLatestRevision) {
+    throw new ControlPlaneError(
+      `Config revision 충돌: expected=${input.expectedLatestRevision}, actual=${input.actualLatestRevision}`,
+      409,
+      "REVISION_CONFLICT",
+    );
+  }
+}
+
+type ConfigRevisionReplay = {
+  revision: number;
+  appId: string;
+  sourceObservationId: string | null;
+  payload: unknown;
+  payloadHash: string;
+  createdBy: string;
+  backfillContractVersion: string | null;
+  app: { id: string; repoId: bigint | null };
+  sourceObservation: ConfigSourceObservation | null;
+};
+
+/** 별도 requestHash column 없이도 모든 caller 입력을 immutable row identity로 검증한다. */
+export function assertConfigRevisionReplay(input: {
+  stored: ConfigRevisionReplay;
+  repoId: bigint;
+  actor: string;
+  expectedLatestRevision: number;
+  contractVersion: string;
+  payloadHash?: string;
+}): void {
+  const { stored } = input;
+  if (
+    stored.app.id !== stored.appId
+    || stored.app.repoId !== input.repoId
+    || stored.createdBy !== input.actor
+    || stored.revision !== input.expectedLatestRevision + 1
+    || stored.backfillContractVersion !== input.contractVersion
+    || stored.sourceObservationId !== stored.sourceObservation?.id
+    || (input.payloadHash !== undefined && stored.payloadHash !== input.payloadHash)
+    || !DIGEST_64.test(stored.payloadHash)
+    || jsonDigest(stored.payload as JsonValue) !== stored.payloadHash
+  ) {
+    throw new ControlPlaneError(
+      "같은 idempotency key가 다른 config revision 요청에 사용되었습니다.",
+      409,
+      "IDEMPOTENCY_CONFLICT",
+    );
+  }
+  assertConfigRevisionPayload(stored.payload);
+  if (!stored.sourceObservation) {
+    throw new ControlPlaneError(
+      "idempotent config revision의 source provenance가 없습니다.",
+      409,
+      "IDEMPOTENCY_CONFLICT",
+    );
+  }
+  try {
+    assertConfigSourceObservationIntegrity({
+      appId: stored.appId,
+      repoId: input.repoId,
+      observation: stored.sourceObservation,
+    });
+  } catch {
+    throw new ControlPlaneError(
+      "idempotent config revision의 source provenance가 일치하지 않습니다.",
+      409,
+      "IDEMPOTENCY_CONFLICT",
+    );
+  }
 }
 
 export function assertActivationPreconditions(input: {
@@ -518,45 +721,144 @@ export async function recordProviderObservation(input: {
   });
 }
 
+const configRevisionReplayInclude = Prisma.validator<Prisma.ConfigRevisionInclude>()({
+  app: { select: { id: true, repoId: true } },
+  sourceObservation: {
+    select: {
+      id: true,
+      appId: true,
+      sourceSha: true,
+      sourceRef: true,
+      payload: true,
+      payloadHash: true,
+      requestHash: true,
+    },
+  },
+});
+
+async function configRevisionReplayForKey(
+  client: Prisma.TransactionClient | typeof prisma,
+  idempotencyKey: string,
+) {
+  return client.configRevision.findUnique({
+    where: { idempotencyKey },
+    include: configRevisionReplayInclude,
+  });
+}
+
+async function lockedCurrentConfigSource(
+  tx: Prisma.TransactionClient,
+  repoId: bigint,
+) {
+  // discovery reconciler와 동일하게 registration -> app 순으로 잠가 교착을 피한다.
+  await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+  const initialApp = await tx.app.findUnique({
+    where: { repoId },
+    select: { id: true },
+  });
+  if (!initialApp) {
+    throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  }
+  await tx.$queryRaw`SELECT id FROM app WHERE id = ${initialApp.id} FOR UPDATE`;
+  const app = await tx.app.findUniqueOrThrow({
+    where: { id: initialApp.id },
+    select: { id: true, repoId: true, repoFullName: true, status: true },
+  });
+  const registration = await tx.repositoryRegistration.findUnique({
+    where: { repoId },
+    select: {
+      repoId: true,
+      repoFullName: true,
+      defaultBranch: true,
+      archived: true,
+      status: true,
+      classification: true,
+      discoveryContractVersion: true,
+      lastDefaultPushSha: true,
+      lastReconciledSha: true,
+    },
+  });
+  const observation = await tx.discoveryObservation.findFirst({
+    where: { appId: app.id },
+    orderBy: latestDiscoveryObservationOrder(),
+    select: {
+      id: true,
+      appId: true,
+      sourceSha: true,
+      sourceRef: true,
+      payload: true,
+      payloadHash: true,
+      requestHash: true,
+    },
+  });
+  const binding = { app, registration, observation };
+  assertCurrentConfigSourceBinding(binding);
+  return binding;
+}
+
+async function latestConfigRevisionNumber(
+  tx: Prisma.TransactionClient,
+  appId: string,
+): Promise<number> {
+  const latest = await tx.configRevision.aggregate({
+    where: { appId },
+    _max: { revision: true },
+  });
+  return latest._max.revision ?? 0;
+}
+
 export async function createConfigRevision(input: {
   repoId: bigint;
+  expectedLatestRevision: number;
   payload: Record<string, unknown>;
   actor: string;
   idempotencyKey: string;
 }) {
   assertConfigRevisionPayload(input.payload);
   const payloadHash = jsonDigest(input.payload as JsonValue);
-  const replay = await prisma.configRevision.findUnique({
-    where: { idempotencyKey: input.idempotencyKey },
-    include: { app: { select: { repoId: true } } },
-  });
+  const replay = await configRevisionReplayForKey(prisma, input.idempotencyKey);
   if (replay) {
-    assertIdempotentPayload(replay.payloadHash, payloadHash);
-    if (replay.app.repoId !== input.repoId) {
-      throw new ControlPlaneError("idempotency key가 다른 config 요청에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
-    }
-    return { revision: replay, duplicate: true };
+    assertConfigRevisionReplay({
+      stored: replay,
+      repoId: input.repoId,
+      actor: input.actor,
+      expectedLatestRevision: input.expectedLatestRevision,
+      contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+      payloadHash,
+    });
+    return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
 
   return prisma.$transaction(async (tx) => {
-    const app = await appForRepoId(tx, input.repoId);
-    await tx.$queryRaw`SELECT id FROM app WHERE id = ${app.id} FOR UPDATE`;
-    const afterLockReplay = await tx.configRevision.findUnique({
-      where: { idempotencyKey: input.idempotencyKey },
-    });
+    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
-      assertIdempotentPayload(afterLockReplay.payloadHash, payloadHash);
-      if (afterLockReplay.appId !== app.id) {
-        throw new ControlPlaneError("idempotency key가 다른 config 요청에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
-      }
-      return { revision: afterLockReplay, duplicate: true };
+      assertConfigRevisionReplay({
+        stored: afterLockReplay,
+        repoId: input.repoId,
+        actor: input.actor,
+        expectedLatestRevision: input.expectedLatestRevision,
+        contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+        payloadHash,
+      });
+      return {
+        revision: afterLockReplay,
+        sourceObservation: afterLockReplay.sourceObservation!,
+        duplicate: true,
+      };
     }
+    assertExpectedLatestConfigRevision({
+      expectedLatestRevision: input.expectedLatestRevision,
+      actualLatestRevision: await latestConfigRevisionNumber(tx, source.app.id),
+    });
     const revision = await createDraftRevisionInTransaction(tx, {
-      appId: app.id,
+      appId: source.app.id,
       payload: input.payload,
       payloadHash,
       createdBy: input.actor,
       idempotencyKey: input.idempotencyKey,
+      sourceObservationId: source.observation.id,
+      backfillContractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
     });
     await tx.auditLog.create({
       data: {
@@ -564,10 +866,309 @@ export async function createConfigRevision(input: {
         action: "control-plane.config.create",
         entityType: "ConfigRevision",
         entityId: revision.id,
-        payload: { appId: app.id, revision: revision.revision, payloadHash },
+        payload: {
+          appId: source.app.id,
+          repoId: input.repoId.toString(),
+          revision: revision.revision,
+          expectedLatestRevision: input.expectedLatestRevision,
+          payloadHash,
+          sourceObservationId: source.observation.id,
+          sourceSha: source.observation.sourceSha,
+          observationPayloadHash: source.observation.payloadHash,
+          contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+          activationAttempted: false,
+        },
       },
     });
-    return { revision, duplicate: false };
+    return { revision, sourceObservation: source.observation, duplicate: false };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function rebaseLatestConfigRevisionSource(input: {
+  repoId: bigint;
+  expectedLatestRevision: number;
+  actor: string;
+  idempotencyKey: string;
+}) {
+  const replay = await configRevisionReplayForKey(prisma, input.idempotencyKey);
+  if (replay) {
+    assertConfigRevisionReplay({
+      stored: replay,
+      repoId: input.repoId,
+      actor: input.actor,
+      expectedLatestRevision: input.expectedLatestRevision,
+      contractVersion: CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
+    });
+    return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
+    if (afterLockReplay) {
+      assertConfigRevisionReplay({
+        stored: afterLockReplay,
+        repoId: input.repoId,
+        actor: input.actor,
+        expectedLatestRevision: input.expectedLatestRevision,
+        contractVersion: CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
+      });
+      return {
+        revision: afterLockReplay,
+        sourceObservation: afterLockReplay.sourceObservation!,
+        duplicate: true,
+      };
+    }
+    const actualLatestRevision = await latestConfigRevisionNumber(tx, source.app.id);
+    assertExpectedLatestConfigRevision({
+      expectedLatestRevision: input.expectedLatestRevision,
+      actualLatestRevision,
+    });
+    const fromRevision = await tx.configRevision.findUnique({
+      where: {
+        appId_revision: {
+          appId: source.app.id,
+          revision: actualLatestRevision,
+        },
+      },
+      include: {
+        legacyConfigImport: { select: { id: true } },
+        sourceObservation: {
+          select: {
+            id: true,
+            appId: true,
+            sourceSha: true,
+            sourceRef: true,
+            payload: true,
+            payloadHash: true,
+            requestHash: true,
+          },
+        },
+      },
+    });
+    if (!fromRevision) {
+      throw new ControlPlaneError(
+        "재결합할 기존 Config revision이 없습니다.",
+        409,
+        "CONFIG_REVISION_REBASE_SOURCE_MISSING",
+      );
+    }
+    if (
+      !["DRAFT", "ACTIVE"].includes(fromRevision.status)
+      || fromRevision.legacyConfigImport
+      || fromRevision.idempotencyKey.startsWith("legacy-shadow-draft:")
+    ) {
+      throw new ControlPlaneError(
+        "latest DRAFT 또는 ACTIVE revision만 source rebase할 수 있습니다.",
+        409,
+        "CONFIG_REVISION_NOT_REBASABLE",
+      );
+    }
+    assertConfigRevisionPayload(fromRevision.payload);
+    if (
+      !DIGEST_64.test(fromRevision.payloadHash)
+      || jsonDigest(fromRevision.payload as JsonValue) !== fromRevision.payloadHash
+    ) {
+      throw new ControlPlaneError(
+        "기존 Config revision payload가 저장 digest와 일치하지 않습니다.",
+        409,
+        "CONFIG_REVISION_PAYLOAD_DRIFT",
+      );
+    }
+    if (
+      fromRevision.sourceObservation
+      && fromRevision.sourceObservation.appId === source.app.id
+      && fromRevision.sourceObservation.sourceRef === source.observation.sourceRef
+      && fromRevision.sourceObservation.sourceSha === source.observation.sourceSha
+      && fromRevision.sourceObservation.payloadHash === source.observation.payloadHash
+    ) {
+      throw new ControlPlaneError(
+        "latest Config revision은 이미 현재 discovery source에 결합되어 있습니다.",
+        409,
+        "CONFIG_SOURCE_ALREADY_CURRENT",
+      );
+    }
+
+    const revision = await createDraftRevisionInTransaction(tx, {
+      appId: source.app.id,
+      payload: fromRevision.payload,
+      payloadHash: fromRevision.payloadHash,
+      createdBy: input.actor,
+      idempotencyKey: input.idempotencyKey,
+      sourceObservationId: source.observation.id,
+      backfillContractVersion: CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
+    });
+    await tx.auditLog.create({
+      data: {
+        actorLogin: input.actor,
+        action: "control-plane.config.source-rebased",
+        entityType: "ConfigRevision",
+        entityId: revision.id,
+        payload: {
+          appId: source.app.id,
+          repoId: input.repoId.toString(),
+          fromRevisionId: fromRevision.id,
+          fromRevision: fromRevision.revision,
+          fromStatus: fromRevision.status,
+          revision: revision.revision,
+          expectedLatestRevision: input.expectedLatestRevision,
+          payloadHash: revision.payloadHash,
+          sourceObservationId: source.observation.id,
+          sourceSha: source.observation.sourceSha,
+          observationPayloadHash: source.observation.payloadHash,
+          contractVersion: CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
+          payloadChanged: false,
+          activationAttempted: false,
+        },
+      },
+    });
+    return { revision, sourceObservation: source.observation, duplicate: false };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+/**
+ * 검토 불가 legacy DRAFT를 승격하지 않고 exact discovery BuildTarget만 새 DRAFT로
+ * 투영한다. 기존 legacy payload와 parity 결과는 감사 근거일 뿐 입력으로 쓰지 않는다.
+ */
+export async function createDiscoveryProjectedConfigRevision(input: {
+  repoId: bigint;
+  expectedLatestRevision: number;
+  actor: string;
+  idempotencyKey: string;
+}) {
+  const replay = await configRevisionReplayForKey(prisma, input.idempotencyKey);
+  if (replay) {
+    assertConfigRevisionReplay({
+      stored: replay,
+      repoId: input.repoId,
+      actor: input.actor,
+      expectedLatestRevision: input.expectedLatestRevision,
+      contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+    });
+    return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const source = await lockedCurrentConfigSource(tx, input.repoId);
+    const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
+    if (afterLockReplay) {
+      assertConfigRevisionReplay({
+        stored: afterLockReplay,
+        repoId: input.repoId,
+        actor: input.actor,
+        expectedLatestRevision: input.expectedLatestRevision,
+        contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+      });
+      return {
+        revision: afterLockReplay,
+        sourceObservation: afterLockReplay.sourceObservation!,
+        duplicate: true,
+      };
+    }
+    const actualLatestRevision = await latestConfigRevisionNumber(tx, source.app.id);
+    assertExpectedLatestConfigRevision({
+      expectedLatestRevision: input.expectedLatestRevision,
+      actualLatestRevision,
+    });
+    const fromRevision = await tx.configRevision.findUnique({
+      where: {
+        appId_revision: {
+          appId: source.app.id,
+          revision: actualLatestRevision,
+        },
+      },
+      include: {
+        legacyConfigImport: {
+          include: {
+            parityObservations: {
+              orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+              take: 1,
+              select: { id: true, status: true, contractVersion: true },
+            },
+          },
+        },
+      },
+    });
+    const legacyImport = fromRevision?.legacyConfigImport;
+    const parity = legacyImport?.parityObservations[0];
+    if (
+      !fromRevision
+      || fromRevision.status !== "DRAFT"
+      || !fromRevision.idempotencyKey.startsWith("legacy-shadow-draft:")
+      || !legacyImport
+      || legacyImport.configRevisionId !== fromRevision.id
+      || !["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
+      || !parity
+    ) {
+      throw new ControlPlaneError(
+        "latest legacy shadow DRAFT와 append-only import/parity 증거가 필요합니다.",
+        409,
+        "LEGACY_DISCOVERY_PROJECTION_NOT_ALLOWED",
+      );
+    }
+    const buildTargets = await tx.buildTarget.findMany({
+      where: { appId: source.app.id },
+      orderBy: { targetKey: "asc" },
+      select: { market: true, observedSha: true },
+    });
+    const payload = projectDiscoveryConfigPayload({
+      sourceSha: source.observation.sourceSha,
+      buildTargets,
+    });
+    if (!payload) {
+      throw new ControlPlaneError(
+        "latest exact-SHA BuildTarget에 투영 가능한 market이 없습니다.",
+        409,
+        "BUILD_TARGET_MISSING",
+      );
+    }
+    const payloadHash = jsonDigest(payload as JsonValue);
+    const revision = await createDraftRevisionInTransaction(tx, {
+      appId: source.app.id,
+      payload,
+      payloadHash,
+      createdBy: input.actor,
+      idempotencyKey: input.idempotencyKey,
+      sourceObservationId: source.observation.id,
+      backfillContractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+    });
+    await tx.auditLog.create({
+      data: {
+        actorLogin: input.actor,
+        action: "control-plane.config.discovery-projected",
+        entityType: "ConfigRevision",
+        entityId: revision.id,
+        payload: {
+          appId: source.app.id,
+          repoId: input.repoId.toString(),
+          fromRevisionId: fromRevision.id,
+          fromRevision: fromRevision.revision,
+          legacyImportId: legacyImport.id,
+          legacyImportStatus: legacyImport.status,
+          legacyParityObservationId: parity.id,
+          legacyParityStatus: parity.status,
+          legacyTransformVersion: legacyImport.transformVersion,
+          revision: revision.revision,
+          expectedLatestRevision: input.expectedLatestRevision,
+          payloadHash,
+          sourceObservationId: source.observation.id,
+          sourceSha: source.observation.sourceSha,
+          observationPayloadHash: source.observation.payloadHash,
+          contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+          excludedUnobservedFields: [
+            "projectBlueprint",
+            "localizations",
+            "complianceDrafts",
+            "assets",
+            "support",
+            "build",
+          ],
+          legacyPayloadCopied: false,
+          activationAttempted: false,
+        },
+      },
+    });
+    return { revision, sourceObservation: source.observation, duplicate: false };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 

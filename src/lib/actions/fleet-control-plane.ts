@@ -93,12 +93,17 @@ function parsePayloadText(payloadText: string): Record<string, unknown> {
 /** UI와 internal API가 같은 Zod 계약을 사용하며 이 action은 저장하지 않는다. */
 export async function validateFleetConfigDraftAction(input: {
   appId: string;
+  expectedLatestRevision: number;
   payloadText: string;
 }): Promise<FleetActionResult> {
   try {
     await requirePlatformReadAccess();
     const app = await fleetApp(input.appId);
-    configRevisionSchema.parse({ repoId: app.repoId, payload: parsePayloadText(input.payloadText) });
+    configRevisionSchema.parse({
+      repoId: app.repoId,
+      expectedLatestRevision: input.expectedLatestRevision,
+      payload: parsePayloadText(input.payloadText),
+    });
     return { ok: true };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
@@ -107,6 +112,7 @@ export async function validateFleetConfigDraftAction(input: {
 
 export async function createFleetConfigDraftAction(input: {
   appId: string;
+  expectedLatestRevision: number;
   payloadText: string;
   requestId: string;
 }): Promise<FleetActionResult> {
@@ -114,6 +120,7 @@ export async function createFleetConfigDraftAction(input: {
     const { app, actor } = await fleetWriteContext(input.appId);
     const body = configRevisionSchema.parse({
       repoId: app.repoId,
+      expectedLatestRevision: input.expectedLatestRevision,
       payload: parsePayloadText(input.payloadText),
     });
     const result = await createConfigRevision({

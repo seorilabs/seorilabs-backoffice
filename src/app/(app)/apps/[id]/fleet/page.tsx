@@ -337,6 +337,7 @@ export default async function FleetOperationsPage({
         <FleetConfigEditor
           appId={fleet.id}
           activeRevision={activeConfig?.revision ?? 0}
+          latestRevision={fleet.configRevisions[0]?.revision ?? 0}
           initialPayload={initialPayload}
           initialPayloadSource={initialPayloadSource}
           legacyActiveBlocked={Boolean(activeConfig) && !activePayload.success}

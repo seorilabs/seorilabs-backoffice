@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { configRevisionSchema } from "@/lib/control-plane/contracts";
+
+import { configRevisionSourceRebaseSchema } from "@/lib/control-plane/contracts";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import { authenticateInternalRequest, requireIdempotencyKey } from "@/lib/control-plane/security";
-import { createConfigRevision } from "@/lib/control-plane/service";
+import { rebaseLatestConfigRevisionSource } from "@/lib/control-plane/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,10 +12,16 @@ export async function POST(request: NextRequest) {
   const principal = authenticateInternalRequest(request, "control-plane");
   if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const idempotencyKey = requireIdempotencyKey(request);
-  if (!idempotencyKey) return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
+  if (!idempotencyKey) {
+    return NextResponse.json({ error: "valid Idempotency-Key required" }, { status: 400 });
+  }
   try {
-    const body = configRevisionSchema.parse(await request.json());
-    const result = await createConfigRevision({ ...body, actor: principal.id, idempotencyKey });
+    const body = configRevisionSourceRebaseSchema.parse(await request.json());
+    const result = await rebaseLatestConfigRevisionSource({
+      ...body,
+      actor: principal.id,
+      idempotencyKey,
+    });
     return NextResponse.json({
       ok: true,
       duplicate: result.duplicate,
@@ -24,6 +31,7 @@ export async function POST(request: NextRequest) {
       payloadHash: result.revision.payloadHash,
       sourceObservationId: result.sourceObservation.id,
       sourceSha: result.sourceObservation.sourceSha,
+      activationAttempted: false,
     }, { status: result.duplicate ? 200 : 201 });
   } catch (error) {
     return controlPlaneErrorResponse(error);
