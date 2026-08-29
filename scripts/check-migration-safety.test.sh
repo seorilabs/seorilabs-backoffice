@@ -271,4 +271,54 @@ if MIGRATION_FROZEN_BASE="$deployed_base" REPOSITORY_ROOT="$tmp/frozen_active" \
   exit 1
 fi
 
+# ── 승인된 contract migration 예외 ────────────────────────────────────────────
+# 예외는 이름 + bytes checksum + 사유 셋이 모두 맞을 때만 열린다. 하나라도 어긋나면
+# expand-only 게이트가 다시 닫혀야 폐기 SQL이 조용히 섞여 들어가지 않는다.
+approved_name=20260830010000_drop_retired_teammate_schema
+
+prepare_case contract_unapproved
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  delete manifest.approvedContractMigrations;
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/contract_unapproved/prisma/migration-history.json"
+expect_failure contract_unapproved
+
+prepare_case contract_checksum
+printf '\n-- drift\n' >> \
+  "$tmp/contract_checksum/prisma/migrations/$approved_name/migration.sql"
+expect_failure contract_checksum
+
+prepare_case contract_reason_blank
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const name = process.argv[2];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.approvedContractMigrations[name].reason = "   ";
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/contract_reason_blank/prisma/migration-history.json" "$approved_name"
+expect_failure contract_reason_blank
+
+prepare_case contract_stale_entry
+node -e '
+  const fs = require("node:fs");
+  const path = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+  manifest.approvedContractMigrations["99999999999996_gone"] = {
+    sha256: "a".repeat(64), reason: "이미 사라진 migration",
+  };
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+' "$tmp/contract_stale_entry/prisma/migration-history.json"
+expect_failure contract_stale_entry
+
+# 승인되지 않은 다른 migration은 예외 등록이 있어도 여전히 막힌다.
+prepare_case contract_scope_leak
+mkdir -p "$tmp/contract_scope_leak/prisma/migrations/99999999999995_other_drop"
+printf "DROP TABLE \`app_owner\`;\n" > \
+  "$tmp/contract_scope_leak/prisma/migrations/99999999999995_other_drop/migration.sql"
+expect_failure contract_scope_leak
+
 echo "migration safety 계약 통과"

@@ -17,8 +17,12 @@ pnpm prisma db execute \
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/seed-legacy-migration-fixture.ts
 
+# 이번 구간에서 사라지는 table. before/after 양쪽에서 빼야 나머지 row count 비교가
+# 성립한다. before 에는 있어야 하고 after 에는 없어야 한다(양방향 검사).
+removed_tables="teammate_run"
 before="$(pnpm tsx scripts/verify-migration-state.ts \
-  --history=legacy --print-data-fingerprint | tail -n 1)"
+  --history=legacy --print-data-fingerprint \
+  --allow-removed-tables="$removed_tables" | tail -n 1)"
 new_empty_tables="control_plane_legacy_config_import,control_plane_legacy_config_source,control_plane_shadow_parity_observation,control_plane_fleet_parity_wave,control_plane_fleet_parity_wave_result,control_plane_project_blueprint,control_plane_market_profile,control_plane_market_localization,control_plane_compliance_profile,control_plane_store_asset,control_plane_fleet_lifecycle_state,control_plane_fleet_lifecycle_event,agent_repo_guard,automation_ingress_event,fleet_project_projection,automation_mutation_request,repository_discovery_run,control_plane_provider_execution,control_plane_provider_execution_event,platform_release,platform_fleet_reconcile_run,platform_fleet_plan,control_plane_desired_state_backfill_run,repository_classification_decision,agent_worker_session,agent_github_observation,agent_adapter_nonce,agent_action_grant,agent_mutation_execution,agent_mutation_readback,agent_mutation_step,agent_mutation_step_attempt,control_plane_workflow_bundle_registry"
 preflight_log="$(mktemp)"
 trap 'rm -f "$preflight_log"' EXIT
@@ -46,7 +50,8 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/seed-legacy-migration-fixture.ts --verify-cutover
 after="$(pnpm tsx scripts/verify-migration-state.ts \
   --history=cutover --print-data-fingerprint \
-  --allow-empty-new-tables="$new_empty_tables" | tail -n 1)"
+  --allow-empty-new-tables="$new_empty_tables" \
+  --allow-removed-tables="$removed_tables" | tail -n 1)"
 if [ "$before" != "$after" ]; then
   echo "오류: migration 과정에서 기존 application table row count가 바뀌었다" >&2
   exit 1

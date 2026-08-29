@@ -24,7 +24,6 @@ export async function recordAiUsage(record: AiUsageRecord): Promise<void> {
         provider: record.provider,
         model: record.model,
         path: record.path,
-        teammate: null,
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
         thinkingTokens: record.thinkingTokens ?? 0,

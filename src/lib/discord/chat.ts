@@ -50,8 +50,7 @@ export async function previewDiscordChat(userText: string): Promise<string> {
   ]);
 }
 
-// 대화는 메인 봇 /ask 하나뿐이다. discord_turn.teammate 컬럼은 contract 단계에서
-// 제거될 때까지 남으므로 키에 null 을 명시해 기존 행·복합 인덱스와 계속 맞춘다.
+// 대화는 메인 봇 /ask 하나뿐이라 서버·채널·사용자 조합이 곧 조회키다.
 export function discordTurnKey(input: {
   guildId: string;
   channelId: string;
@@ -61,7 +60,6 @@ export function discordTurnKey(input: {
     guildId: input.guildId,
     channelId: input.channelId,
     userId: input.userId,
-    teammate: null,
   };
 }
 

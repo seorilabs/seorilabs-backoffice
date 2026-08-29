@@ -15,6 +15,12 @@
       "reason": "production MySQL 9.2 audit trigger privilege recovery"
     }
   },
+  "approvedContractMigrations": {
+    "20260830010000_drop_retired_teammate_schema": {
+      "sha256": "6a2728756ab747d1a86ed716d2569e24af8c333636c5836104deadcd94ba9d84",
+      "reason": "PR #165에서 AI 팀원 체계 코드를 제거하고 배포한 뒤의 contract 단계 (app.ownerTeammate, teammate_run, discord_turn.teammate, ai_usage.teammate)"
+    }
+  },
   "legacy": {
     "directory": "prisma/migration-archive/legacy-v1",
     "ledger": "prisma/migration-archive/production-ledger-v1.tsv",

@@ -72,6 +72,30 @@ function stripVerifiedAppendOnlyTriggers(sql) {
   );
 }
 
+/**
+ * expand-only 계약의 예외로 승인된 contract migration인가.
+ *
+ * 폐기된 컬럼·테이블은 결국 지워야 하는데, 게이트가 DROP을 무조건 막으면 스키마에
+ * 죽은 정의가 영구히 쌓인다. 대신 이름과 **bytes checksum**과 사유를 manifest에 함께
+ * 남긴 migration만 예외로 둔다. 파일을 한 글자라도 고치면 checksum이 어긋나 다시 막힌다.
+ *
+ * 예외는 여전히 expand → 배포 → contract 순서를 전제한다. 구 Pod가 참조하지 않게 된
+ * 뒤에만 등록한다.
+ */
+function approvedContractMigration(name, sqlPath) {
+  const policy = manifest.approvedContractMigrations?.[name];
+  if (!policy) return false;
+  if (typeof policy.reason !== "string" || !policy.reason.trim()) {
+    fail(`승인된 contract migration에 사유가 없다: ${name}`);
+    return false;
+  }
+  if (policy.sha256 !== sha256(sqlPath)) {
+    fail(`승인된 contract migration의 checksum이 파일과 다르다: ${name}`);
+    return false;
+  }
+  return true;
+}
+
 const frozenBase = process.env.MIGRATION_FROZEN_BASE;
 if (frozenBase) {
   const commit = spawnSync("git", ["cat-file", "-e", `${frozenBase}^{commit}`], {
@@ -209,6 +233,12 @@ if (frozenBase) {
 
 if (manifest.version !== 1 || manifest.provider !== "mysql") {
   fail("migration history manifest version 또는 provider가 올바르지 않다");
+}
+for (const name of Object.keys(manifest.approvedContractMigrations ?? {})) {
+  // 이미 지워진 migration의 예외가 manifest에 남아 다음 migration을 조용히 열어 주지 않게 한다.
+  if (!migrationDirectories(activeRoot).includes(name)) {
+    fail(`승인된 contract migration이 실제로 없다: ${name}`);
+  }
 }
 const migrationLock = readFileSync(join(activeRoot, "migration_lock.toml"), "utf8");
 if (!/^provider\s*=\s*"mysql"\s*$/m.test(migrationLock)) {
@@ -390,6 +420,7 @@ for (const name of activeNames) {
     /\b(DROP|TRUNCATE|RENAME|MODIFY|CHANGE)\b|\bDELETE\s+FROM\b|\bBEFORE\s+DELETE\b|\bUPDATE\s+/i.test(
       mutationScan,
     )
+    && !approvedContractMigration(name, sqlPath)
   ) {
     fail(`expand-only 금지 SQL이 있다: ${name}`);
   }
