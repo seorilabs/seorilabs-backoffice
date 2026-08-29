@@ -9,6 +9,7 @@ import {
   rankMovements,
   renderHighlightReport,
   type Movement,
+  foldReferrers,
   type PortfolioTotals,
 } from "@/lib/core/metric-highlights";
 
@@ -160,6 +161,33 @@ test("리포트는 포트폴리오 합계와 양쪽 목록, 처리 건수를 함
   assert.ok(text.endsWith("판정 4건 (변동 없음 1 · 표본 부족 1) · 미집계 1건"), text);
 });
 
+test("해설은 목록 뒤에 붙고, 없으면 리포트 구조가 그대로다", () => {
+  const base = {
+    refDate: REF,
+    totals: TOTALS,
+    movements: [movement({ label: "행복 농장 타이쿤", latest: 420, baseline: 250 })],
+  };
+  const without = renderHighlightReport(base);
+  assert.ok(!without.includes("🧠"));
+
+  const withText = renderHighlightReport({ ...base, narrative: "체스 하락이 두 소스에서 함께 나타난다." });
+  assert.ok(withText.includes("🧠 체스 하락이 두 소스에서 함께 나타난다."));
+  // 해설은 목록 뒤·집계 앞에 온다. 수치를 먼저 보고 해석을 읽는 순서.
+  assert.ok(withText.indexOf("🟢 **하이라이트**") < withText.indexOf("🧠"));
+  assert.ok(withText.indexOf("🧠") < withText.indexOf("판정 "));
+  // 해설 유무가 나머지 줄을 바꾸지 않는다 — 해설만 빠지고 리포트는 그대로다.
+  const strip = (text: string) =>
+    text.split("\n").filter((line) => !line.startsWith("🧠")).join("\n").replace(/\n{3,}/g, "\n\n");
+  assert.equal(strip(withText), strip(without));
+});
+
+test("해설이 null·빈 문자열이면 붙이지 않는다", () => {
+  for (const narrative of [null, undefined, ""]) {
+    const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [], narrative });
+    assert.ok(!text.includes("🧠"), String(narrative));
+  }
+});
+
 test("움직임이 없으면 없다고 말한다", () => {
   const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] });
   assert.ok(text.includes("임계를 넘은 변동 없음"));
@@ -188,6 +216,35 @@ test("전일 합계가 없으면 변화율을 지어내지 않는다", () => {
   assert.ok(text.includes("GA4 DAU 합계 100명 · 대상 1개 앱"));
   // 전일 0 에서 나눗셈으로 Infinity 를 만들지 않는다.
   assert.ok(text.includes("콘솔 광고 수익 ₩0 · 결제 ₩0 · 대상 0개 리스팅"));
+});
+
+test("유입경로는 리스팅 rate 평균이 아니라 유입 수 합으로 다시 계산한다", () => {
+  // 규모가 다른 리스팅의 비율을 평균하면 작은 리스팅이 과대 대표된다.
+  const folded = foldReferrers([
+    { referrer: [{ dimension: "검색", value: 1, rate: 0.5 }, { dimension: "전체탭", value: 1, rate: 0.5 }] },
+    { referrer: [{ dimension: "전체탭", value: 98, rate: 1 }] },
+  ]);
+  assert.deepEqual(folded, [
+    { dimension: "전체탭", rate: 99 / 100 },
+    { dimension: "검색", rate: 1 / 100 },
+  ]);
+});
+
+test("유입경로 값이 없거나 형식이 어긋나면 빈 배열로 조용히 빠진다", () => {
+  assert.deepEqual(foldReferrers([]), []);
+  assert.deepEqual(foldReferrers([null, undefined, {}, { referrer: null }]), []);
+  assert.deepEqual(foldReferrers([{ referrer: [{ dimension: "", value: 5 }] }]), []);
+  assert.deepEqual(foldReferrers([{ referrer: [{ dimension: "검색", value: 0 }] }]), []);
+});
+
+test("유입경로가 있으면 요약에 붙고 없으면 줄 자체가 빠진다", () => {
+  const withRef = renderHighlightReport({
+    refDate: REF,
+    totals: { ...TOTALS, referrers: [{ dimension: "전체탭", rate: 0.83 }, { dimension: "검색", rate: 0.17 }] },
+    movements: [],
+  });
+  assert.ok(withRef.includes("유입경로: 전체탭 83% · 검색 17%"));
+  assert.ok(!renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] }).includes("유입경로"));
 });
 
 test("리포트는 기준일 기준 하루 1건이다", () => {
