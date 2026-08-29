@@ -10,6 +10,7 @@ import {
 } from "@/lib/ga4/datasets";
 import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { ga4ContentSource } from "@/lib/analytics/ga4-content-source";
+import { foldByContentMarket } from "@/lib/analytics/content-market";
 import type { AppContentSpec } from "@/lib/analytics/content-spec";
 import type { ContentMetricsSource, ContentMetricSnapshot } from "@/lib/analytics/content-source";
 import type { Ga4Target } from "@/lib/ga4/datasets";
@@ -122,7 +123,15 @@ export async function collectAppContentMetrics(
         startSuffix,
         endSuffix,
       );
-      for (const [market, byDate] of Object.entries(byMarket)) {
+      // 마켓 키는 스펙 작성자마다 표기가 갈린다(레포 manifest vs 내장 레지스트리).
+      // 저장 직전에 정규 어휘로 접어 같은 마켓이 두 행으로 갈리지 않게 한다.
+      const { folded, collisions } = foldByContentMarket(
+        Object.entries(byMarket) as Array<[string, Record<string, ContentMetricSnapshot>]>,
+      );
+      for (const collision of collisions) {
+        result.errors.push({ slug: app.slug, error: `마켓 표기 충돌: ${collision}` });
+      }
+      for (const [market, byDate] of folded) {
         for (const [dateStr, snapshot] of Object.entries(byDate)) {
           const date = parseIsoDate(dateStr);
           const data = buildContentUpsert(snapshot, now);

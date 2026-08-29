@@ -256,7 +256,15 @@ export function buildDailyBreakdownsSql(
         ) AS platform,
         IFNULL(NULLIF(geo.country, ''), '(unknown)') AS country,
         IFNULL(NULLIF(device.category, ''), '(unknown)') AS device_cat,
-        IFNULL(NULLIF(TRIM(CONCAT(IFNULL(device.operating_system, ''), ' ', IFNULL(device.operating_system_version, ''))), ''), '(unknown)') AS os_dim
+        -- operating_system_version 이 이미 OS 이름을 포함하는 기기가 있어(예: 'Android 14')
+        -- 그대로 이어붙이면 'Android Android 14' 가 된다. 중복 접두사를 제거한다.
+        IFNULL(NULLIF(TRIM(
+          CASE
+            WHEN device.operating_system IS NULL OR device.operating_system = '' THEN IFNULL(device.operating_system_version, '')
+            WHEN STARTS_WITH(IFNULL(device.operating_system_version, ''), device.operating_system) THEN device.operating_system_version
+            ELSE CONCAT(device.operating_system, ' ', IFNULL(device.operating_system_version, ''))
+          END
+        ), ''), '(unknown)') AS os_dim
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     )

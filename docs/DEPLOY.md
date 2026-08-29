@@ -407,6 +407,31 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
 
+### 컨텐츠 지표 마켓 어휘
+
+컨텐츠 지표 스펙은 두 곳에서 온다 — 레포의 `.seorilabs/backoffice.json`(manifest)과 백오피스
+내장 레지스트리(`src/lib/analytics/specs/`). 작성자가 달라 같은 마켓이 여러 표기로 쌓여 있었다
+(2026-08-30 실측: crossword 하이픈, happy-farm 밑줄, foam·slot 플랫폼 어휘).
+
+- 정규 어휘는 `all`/`ait`/`play`/`appstore`/`web`이며 `src/lib/analytics/content-market.ts`가 단일 소스다.
+  저장소가 이미 쓰는 `App.marketTargets`·`ReleaseMarket`과 같은 어휘다.
+- 수집 경계(`app-content-metrics-collect`)가 저장 직전에 접는다. 레포 manifest는 백오피스가
+  통제할 수 없으므로 **쓰기 경계에서 정규화하는 것이 유일하게 신뢰할 수 있는 지점**이다.
+- 서로 다른 표기가 같은 정규 키로 접히면 덮어쓰지 않고 수집 결과의 `errors`에 충돌로 남긴다.
+  스냅샷은 합산 가능한 구조가 아니라 조용히 덮으면 하루치가 사라진다.
+- **`web`은 접지 않는다.** AIT 서면인지 독립 웹인지 문자열만으로 알 수 없다. 의도를 아는 스펙이
+  정규 키를 직접 선언한다(foam은 라벨이 이미 "AIT"라 `ait`로 선언을 바꿨다).
+- 기존 행은 `20260830020000_normalize_content_market_vocabulary` backfill이 같은 규칙으로 맞춘다.
+  대상 키 행이 이미 있으면 건드리지 않으므로(unique 충돌 방지) 접히지 못한 잔여 행은 원래 표기로
+  남아 눈에 띈다.
+
+### AppsInToss 콘솔 raw 품질
+
+ingest는 `day.raw`를 그대로 저장하므로 producer(`console-sync` 스킬)가 구조만 만들고 값을 못
+채우면 조용히 통과한다. 2026-08-30에 `iaaByOs: {IOS: null, ANDROID: null}`가 몇 달간 쌓여 있던
+것이 발견됐다. 이제 ingest가 `raw.<구획>`의 값이 전부 null이면 응답 `warnings`에 올린다. push
+후 `warnings`가 비어 있는지 확인한다 — 비어 있지 않으면 그 지표는 아직 쓸 수 없다.
+
 ### 서리 지표 하이라이트
 
 매일 11:00 KST(`backoffice-metric-highlights` CronJob → `/api/admin/metric-highlights`)에

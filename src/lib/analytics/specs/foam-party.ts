@@ -9,11 +9,13 @@ import type { AppContentSpec } from "@/lib/analytics/content-spec";
 export const foamPartyContentSpec: AppContentSpec = {
   slug: "foam-party",
   market: {
-    platformMap: { android: "android", ios: "ios", web: "web" },
+    // 이 게임의 web 서면은 AppsInToss 다(기존 라벨이 이미 "AIT"). 플랫폼 이름 대신
+    // 마켓 정규 키를 직접 선언해 저장 표기가 갈리지 않게 한다.
+    platformMap: { android: "play", ios: "appstore", web: "ait" },
     values: [
-      { key: "android", label: "Google Play" },
-      { key: "ios", label: "App Store" },
-      { key: "web", label: "AIT" },
+      { key: "play", label: "Google Play" },
+      { key: "appstore", label: "App Store" },
+      { key: "ait", label: "AppsInToss" },
     ],
   },
   metrics: [

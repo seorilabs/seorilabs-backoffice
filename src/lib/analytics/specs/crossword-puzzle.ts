@@ -11,11 +11,12 @@ export const crosswordPuzzleContentSpec: AppContentSpec = {
   slug: "crossword-puzzle",
   market: {
     param: "market",
-    platformMap: { android: "google-play", ios: "app-store", web: "apps-in-toss" },
+    // 앱이 보내는 param 값(google-play 등)은 수집 경계의 normalizeContentMarket 이 접는다.
+    platformMap: { android: "play", ios: "appstore", web: "ait" },
     values: [
-      { key: "apps-in-toss", label: "AppsInToss" },
-      { key: "google-play", label: "Google Play" },
-      { key: "app-store", label: "App Store" },
+      { key: "ait", label: "AppsInToss" },
+      { key: "play", label: "Google Play" },
+      { key: "appstore", label: "App Store" },
     ],
   },
   metrics: [
