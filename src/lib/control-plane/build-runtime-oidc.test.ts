@@ -52,6 +52,7 @@ const candidateExpectation = {
   eventSourceSha: EVENT_SHA,
   workflowBundleSha: BUNDLE_SHA,
   buildProfile: "react-native-android" as const,
+  defaultBranch: "main",
 };
 
 test("build canary OIDC는 고정 repo/profile/head와 exact central SHA에 결합된다", () => {
@@ -63,7 +64,7 @@ test("build canary OIDC는 고정 repo/profile/head와 exact central SHA에 결�
   assert.equal(identity.pullRequestNumber, 91);
 });
 
-test("일반 APPROVED build는 main workflow_dispatch와 동일 source만 허용한다", () => {
+test("일반 APPROVED build는 registered default branch workflow_dispatch와 동일 source만 허용한다", () => {
   const payload = candidateClaims({
     sha: APPLICATION_SHA,
     ref: "refs/heads/main",
@@ -81,6 +82,26 @@ test("일반 APPROVED build는 main workflow_dispatch와 동일 source만 허용
   assert.equal(identity.mode, "APPROVED");
   assert.equal(identity.applicationSourceSha, identity.eventSourceSha);
   assert.equal(identity.pullRequestNumber, null);
+});
+
+test("일반 APPROVED build는 등록된 non-main default branch도 exact ref로 결합한다", () => {
+  const payload = candidateClaims({
+    sha: APPLICATION_SHA,
+    ref: "refs/heads/develop",
+    workflow_ref: `${FULL_NAME}/.github/workflows/android-build-only.yml@refs/heads/develop`,
+    workflow_sha: APPLICATION_SHA,
+    event_name: "workflow_dispatch",
+    head_ref: "",
+    base_ref: "",
+  });
+  const identity = assertGitHubActionsBuildManifestClaims(payload, {
+    ...candidateExpectation,
+    mode: "APPROVED",
+    eventSourceSha: APPLICATION_SHA,
+    defaultBranch: "develop",
+  });
+  assert.equal(identity.defaultBranch, "develop");
+  assert.equal(identity.eventRef, "refs/heads/develop");
 });
 
 test("candidate alias, public runner, 임의 branch와 profile 교차 대체를 거부한다", () => {

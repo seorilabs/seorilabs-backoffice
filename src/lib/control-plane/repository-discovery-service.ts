@@ -177,7 +177,7 @@ async function finishWithoutObservation(input: {
   reasonCode: RepositoryDiscoveryReason;
   candidates?: RepositoryDiscoveryResult["candidates"];
   candidateDigest?: string | null;
-  managementKind?: "UNCLASSIFIED" | "PLATFORM_PRODUCER";
+  managementKind?: "UNCLASSIFIED" | "APP" | "PLATFORM_PRODUCER";
   classification?: RepositoryClassification | null;
 }, dependencies: RepositoryDiscoveryServiceDependencies): Promise<boolean> {
   const now = dependencies.now();
@@ -293,18 +293,25 @@ async function finishActive(input: {
       existing: adopted,
       discovered: discoveredIdentity,
     }));
+    const productIdentityConflict = Boolean(adopted && (
+      adopted.type !== input.result.appType || adopted.engine !== input.result.engine
+    ));
     const identityReason: RepositoryDiscoveryReason | null = repositoryIdentityConflict
       ? "APP_IDENTITY_CONFLICT"
-      : marketIdentityConflict
-        ? "APP_MARKET_IDENTITY_CONFLICT"
-        : null;
+      : productIdentityConflict
+        ? "APP_IDENTITY_CONFLICT"
+        : marketIdentityConflict
+          ? "APP_MARKET_IDENTITY_CONFLICT"
+          : null;
     if (identityReason) {
       await tx.repositoryDiscoveryRun.update({
         where: { id: run.id },
         data: {
           status: "NEEDS_INPUT",
           reasonCode: identityReason,
-          classification: null,
+          classification: input.claim.registration.classificationDecision?.classification === "PRODUCT_APP"
+            ? "PRODUCT_APP"
+            : null,
           contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           candidateDigest: input.result.candidateDigest,
           workerId: null,
@@ -316,13 +323,19 @@ async function finishActive(input: {
         where: { repoId: run.repoId },
         data: {
           status: "NEEDS_INPUT",
-          managementKind: "UNCLASSIFIED",
-          classification: null,
+          managementKind: input.claim.registration.classificationDecision?.classification === "PRODUCT_APP"
+            ? "APP"
+            : "UNCLASSIFIED",
+          classification: input.claim.registration.classificationDecision?.classification === "PRODUCT_APP"
+            ? "PRODUCT_APP"
+            : null,
           discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
           discoveryCandidates: publicDiscoveryState({
             sourceSha: input.snapshot.sourceSha,
             reasonCode: identityReason,
-            classification: null,
+            classification: input.claim.registration.classificationDecision?.classification === "PRODUCT_APP"
+              ? "PRODUCT_APP"
+              : null,
             candidates: input.result.candidates,
           }),
           lastDefaultPushSha: input.snapshot.sourceSha,
@@ -646,6 +659,7 @@ async function retryClaim(
       sourceSha: claim.sourceSha,
       status: "FAILED",
       reasonCode,
+      ...unresolvedClassification(claim),
     }, dependencies);
     return completed ? "FAILED" : "DISCARDED";
   }
@@ -667,9 +681,16 @@ async function retryClaim(
   return updated ? "RETRY" : "DISCARDED";
 }
 
+function unresolvedClassification(claim: RepositoryDiscoveryClaim) {
+  return claim.registration.classificationDecision?.classification === "PRODUCT_APP"
+    ? { managementKind: "APP" as const, classification: "PRODUCT_APP" as const }
+    : {};
+}
+
 async function enqueueCurrentHead(
   claim: RepositoryDiscoveryClaim,
   sourceSha: string,
+  defaultBranch: string,
   dependencies: RepositoryDiscoveryServiceDependencies,
   providerFacts: { private: boolean; fork: boolean },
 ): Promise<void> {
@@ -681,7 +702,7 @@ async function enqueueCurrentHead(
         id: Number(claim.repoId),
         full_name: claim.registration.repoFullName,
         name: claim.registration.repoFullName.split("/").at(-1),
-        default_branch: claim.registration.defaultBranch ?? "main",
+        default_branch: defaultBranch,
         archived: false,
         private: providerFacts.private,
         fork: providerFacts.fork,
@@ -711,6 +732,7 @@ export async function processRepositoryDiscoveryClaim(
   reasonCode: RepositoryDiscoveryReason | null;
   observationId?: string | null;
 }> {
+  const unresolvedProduct = unresolvedClassification(claim);
   let octokit: Octokit;
   try {
     octokit = await dependencies.getOctokit();
@@ -735,11 +757,13 @@ export async function processRepositoryDiscoveryClaim(
       sourceSha: claim.sourceSha,
       status: "STALE",
       reasonCode: "SOURCE_DRIFT",
+      ...unresolvedProduct,
     }, dependencies);
     if (completed) {
       await enqueueCurrentHead(
         claim,
         tree.actualHeadSha,
+        tree.defaultBranch,
         dependencies,
         { private: tree.private, fork: tree.fork },
       );
@@ -752,6 +776,7 @@ export async function processRepositoryDiscoveryClaim(
       sourceSha: claim.sourceSha,
       status: "NEEDS_INPUT",
       reasonCode: tree.reasonCode,
+      ...unresolvedProduct,
     }, dependencies);
     return { status: completed ? "NEEDS_INPUT" : "DISCARDED", reasonCode: tree.reasonCode };
   }
@@ -831,6 +856,7 @@ export async function processRepositoryDiscoveryClaim(
       reasonCode: head.reasonCode,
       candidates: result.candidates,
       candidateDigest: result.candidateDigest,
+      ...unresolvedProduct,
     }, dependencies);
     return { status: completed ? "NEEDS_INPUT" : "DISCARDED", reasonCode: head.reasonCode };
   }
@@ -842,9 +868,10 @@ export async function processRepositoryDiscoveryClaim(
       reasonCode: "SOURCE_DRIFT",
       candidates: result.candidates,
       candidateDigest: result.candidateDigest,
+      ...unresolvedProduct,
     }, dependencies);
     if (completed) {
-      await enqueueCurrentHead(claim, head.sourceSha, dependencies, {
+      await enqueueCurrentHead(claim, head.sourceSha, head.defaultBranch, dependencies, {
         private: snapshot.private,
         fork: snapshot.fork,
       });
@@ -875,6 +902,7 @@ export async function processRepositoryDiscoveryClaim(
       reasonCode: result.reasonCode,
       candidates: result.candidates,
       candidateDigest: result.candidateDigest,
+      ...unresolvedProduct,
     }, dependencies);
     return { status: completed ? "NEEDS_INPUT" : "DISCARDED", reasonCode: result.reasonCode };
   }

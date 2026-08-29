@@ -15,11 +15,12 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 
 test("분류 API와 사람 UI는 같은 strict validator와 transaction service를 사용한다", () => {
   const valid = repositoryClassificationDecisionSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     repoId: "42",
     expectedGeneration: 3,
     expectedDecisionRevision: 1,
     classification: "PRODUCT_APP",
+    productIdentity: { displayName: "Sample App", type: "APP", engine: "RN" },
     candidateMarkerPath: "apps/mobile/package.json",
     justification: "APP_CANDIDATE_SELECTED",
   });
@@ -27,7 +28,16 @@ test("분류 API와 사람 UI는 같은 strict validator와 transaction service�
   assert.equal(repositoryClassificationDecisionSchema.safeParse({
     ...valid,
     classification: "EXCLUDED",
+    productIdentity: null,
     candidateMarkerPath: "apps/mobile/package.json",
+  }).success, false);
+  assert.equal(repositoryClassificationDecisionSchema.safeParse({
+    ...valid,
+    productIdentity: null,
+  }).success, false);
+  assert.equal(repositoryClassificationDecisionSchema.safeParse({
+    ...valid,
+    classification: "INFRA_REPO",
   }).success, false);
 
   const root = process.cwd();
@@ -91,11 +101,12 @@ function ratificationEvidence() {
 
 test("MANAGED ratification은 exact terminal source, contract, candidate를 묶고 discovery를 재실행하지 않는다", () => {
   const request = repositoryClassificationDecisionSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     repoId: "42",
     expectedGeneration: 6,
     expectedDecisionRevision: 0,
     classification: "PRODUCT_APP",
+    productIdentity: { displayName: "Sample App", type: "APP", engine: "RN" },
     candidateMarkerPath: "apps/mobile/package.json",
     justification: "CURRENT_OBSERVATION_RATIFIED",
   });

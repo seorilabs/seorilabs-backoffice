@@ -18,12 +18,14 @@ import type {
   AndroidBuildBindingObservation,
   WorkflowCaller,
 } from "@/lib/control-plane/contracts";
+import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 
-// v9: canonical preset이 없는 Godot repo의 ci/export_presets.<target>.cfg
-// fragment를 exact source로 읽어 build target false-negative를 제거한다.
+// v10: GitHub에 등록된 exact default branch/ref를 source fact로 사용한다.
+// v9의 canonical preset이 없는 Godot repo ci/export_presets.<target>.cfg
+// fragment 탐지도 그대로 보존한다.
 // 탐지 의미론을 바꾸고도
 // version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v9";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v10";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -43,7 +45,6 @@ export type RepositoryDiscoveryReason =
   | "FORK_REPOSITORY"
   | "PUBLIC_REPOSITORY_REQUIRES_POLICY"
   | "EMPTY_REPOSITORY"
-  | "DEFAULT_BRANCH_NOT_MAIN"
   | "REPOSITORY_IDENTITY_INVALID"
   | "REPOSITORY_ID_MISMATCH"
   | "REPOSITORY_FULL_NAME_MISMATCH"
@@ -98,13 +99,14 @@ export type RepositoryTreeReadResult =
       status: "STALE";
       reasonCode: RepositoryDiscoveryReason;
       actualHeadSha: string;
+      defaultBranch: string;
       private: boolean;
       fork: boolean;
     }
   | { status: "RETRY"; reasonCode: RepositoryDiscoveryReason };
 
 export type RepositoryHeadReadResult =
-  | { status: "READY"; sourceSha: string; sourceRef: string }
+  | { status: "READY"; sourceSha: string; sourceRef: string; defaultBranch: string }
   | {
       status: "NEEDS_INPUT" | "RETRY";
       reasonCode: RepositoryDiscoveryReason;
@@ -346,9 +348,8 @@ export async function readExactRepositoryTree(
   if (typeof repository.default_branch !== "string" || repository.default_branch.length === 0) {
     return { status: "NEEDS_INPUT", reasonCode: "EMPTY_REPOSITORY" };
   }
-  if (repository.default_branch !== "main") {
-    return { status: "NEEDS_INPUT", reasonCode: "DEFAULT_BRANCH_NOT_MAIN" };
-  }
+  const sourceRef = repositoryDefaultBranchRef(repository.default_branch);
+  if (!sourceRef) return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_IDENTITY_INVALID" };
 
   let commit: {
     sha?: unknown;
@@ -381,6 +382,7 @@ export async function readExactRepositoryTree(
       status: "STALE",
       reasonCode: "SOURCE_DRIFT",
       actualHeadSha: sourceSha,
+      defaultBranch: repository.default_branch,
       private: repository.private,
       fork: repository.fork,
     };
@@ -427,7 +429,7 @@ export async function readExactRepositoryTree(
       fullName: repository.full_name,
       name: typeof repository.name === "string" ? repository.name : identity.repo,
       sourceSha,
-      sourceRef: `refs/heads/${repository.default_branch}`,
+      sourceRef,
       defaultBranch: repository.default_branch,
       private: repository.private === true,
       fork: repository.fork,
@@ -491,9 +493,8 @@ export async function readCurrentRepositoryHead(
     if (typeof repository.default_branch !== "string" || !repository.default_branch) {
       return { status: "NEEDS_INPUT", reasonCode: "EMPTY_REPOSITORY" };
     }
-    if (repository.default_branch !== "main") {
-      return { status: "NEEDS_INPUT", reasonCode: "DEFAULT_BRANCH_NOT_MAIN" };
-    }
+    const sourceRef = repositoryDefaultBranchRef(repository.default_branch);
+    if (!sourceRef) return { status: "NEEDS_INPUT", reasonCode: "REPOSITORY_IDENTITY_INVALID" };
     const commit = (await octokit.rest.repos.getCommit({
       ...identity,
       ref: repository.default_branch,
@@ -504,7 +505,8 @@ export async function readCurrentRepositoryHead(
     return {
       status: "READY",
       sourceSha: commit.sha.toLowerCase(),
-      sourceRef: `refs/heads/${repository.default_branch}`,
+      sourceRef,
+      defaultBranch: repository.default_branch,
     };
   } catch (error) {
     const status = httpStatus(error);

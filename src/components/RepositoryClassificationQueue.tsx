@@ -20,6 +20,13 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
   const [candidateMarkerPath, setCandidateMarkerPath] = useState(
     item.currentCandidateMarkerPath ?? item.candidates[0]?.markerPath ?? "",
   );
+  const [displayName, setDisplayName] = useState(item.currentProductIdentity?.displayName ?? "");
+  const [productType, setProductType] = useState<"APP" | "GAME">(
+    item.currentProductIdentity?.type ?? "APP",
+  );
+  const [productEngine, setProductEngine] = useState<"RN" | "GODOT">(
+    item.currentProductIdentity?.engine ?? "RN",
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -36,6 +43,9 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
         expectedDecisionRevision: item.decisionRevision,
         classification,
         candidateMarkerPath: selectedMarker,
+        productIdentity: classification === "PRODUCT_APP"
+          ? { displayName, type: productType, engine: productEngine }
+          : null,
         justification: ratifyingCurrent
           ? "CURRENT_OBSERVATION_RATIFIED"
           : correctingPolicy
@@ -77,6 +87,48 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
           후보: {item.candidates.map((candidate) => candidate.markerPath).join(", ")}
         </p>
       )}
+      {classification === "PRODUCT_APP" && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <label className="grid gap-1 text-xs text-neutral-600 sm:col-span-3">
+            제품 표시 이름
+            <input
+              value={displayName}
+              disabled={pending || ratifyingCurrent}
+              onChange={(event) => setDisplayName(event.target.value)}
+              maxLength={191}
+              required
+              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900"
+            />
+          </label>
+          <label className="grid gap-1 text-xs text-neutral-600">
+            제품 유형
+            <select
+              value={productType}
+              disabled={pending || ratifyingCurrent}
+              onChange={(event) => setProductType(event.target.value as "APP" | "GAME")}
+              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900"
+            >
+              <option value="APP">APP</option>
+              <option value="GAME">GAME</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-neutral-600">
+            엔진
+            <select
+              value={productEngine}
+              disabled={pending || ratifyingCurrent}
+              onChange={(event) => setProductEngine(event.target.value as "RN" | "GODOT")}
+              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900"
+            >
+              <option value="RN">RN</option>
+              <option value="GODOT">GODOT</option>
+            </select>
+          </label>
+          <p className="self-end text-xs text-neutral-500">
+            source/build가 없으면 PLANNING으로 등록되고 릴리스 gate는 열리지 않습니다.
+          </p>
+        </div>
+      )}
       <div className="mt-3 flex flex-wrap gap-2">
         {ratifyingCurrent ? (
           <span className="rounded border border-neutral-200 bg-neutral-50 px-2 py-1.5 font-mono text-xs">
@@ -108,7 +160,7 @@ function QueueItem({ item }: { item: RepositoryClassificationQueueItem }) {
         )}
         <button
           type="button"
-          disabled={pending}
+          disabled={pending || (classification === "PRODUCT_APP" && displayName.trim().length === 0)}
           onClick={decide}
           className="rounded bg-neutral-900 px-3 py-1.5 text-white disabled:opacity-50"
         >

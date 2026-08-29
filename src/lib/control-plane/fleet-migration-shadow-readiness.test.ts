@@ -31,6 +31,7 @@ function registration(
   return {
     repoId: String(repoId),
     repoFullName,
+    defaultBranch: "main",
     status: "MANAGED",
     classification,
     classificationDecisionVersion: 1,
@@ -39,6 +40,7 @@ function registration(
       revision: 1,
       classification,
     },
+    lastDiscoveryReason: null,
   };
 }
 
@@ -283,6 +285,62 @@ test("App row가 없는 PRODUCT_APP은 계속 APP_BINDING_MISSING으로 차단�
   );
 });
 
+test("keeum·animal-chess·immunity-war·merge-lizard 형태는 classification drift 대신 정확한 planning gate로 남는다", async () => {
+  const cases = [
+    ["NO_CANDIDATE", "PRODUCT_SOURCE_CANDIDATE_MISSING"],
+    ["BUILD_TARGET_MISSING", "PRODUCT_BUILD_TARGET_MISSING"],
+    ["TREE_TRUNCATED", "PRODUCT_DISCOVERY_NOT_READY"],
+  ] as const;
+  for (const [discoveryReason, expectedReason] of cases) {
+    const planning = registration(101, "seorilabs/product", "PRODUCT_APP");
+    planning.status = "NEEDS_INPUT";
+    planning.lastDiscoveryReason = discoveryReason;
+    const app = productApp();
+    app.latestDiscovery = null;
+    app.activeConfigs = [];
+    app.platformFleetBinding = null;
+
+    const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+      registrations: [
+        planning,
+        registration(202, "seorilabs/infra", "INFRA_REPO"),
+      ],
+      apps: [app],
+    }));
+
+    assert.equal(result.state, "BLOCKED", discoveryReason);
+    assert.deepEqual(result.reasonCounts, { [expectedReason]: 1 }, discoveryReason);
+    const product = result.repositories.find(({ repoId }) => repoId === "101");
+    assert.deepEqual(product?.reasonCodes, [expectedReason], discoveryReason);
+  }
+});
+
+test("dpti-app 형태의 non-main product는 GitHub에 등록된 exact default branch/ref로 readiness를 판정한다", async () => {
+  const app = productApp();
+  app.latestDiscovery!.sourceRef = "refs/heads/develop";
+  app.activeConfigs[0].sourceObservation!.sourceRef = "refs/heads/develop";
+  const productRegistration = registration(101, "seorilabs/product", "PRODUCT_APP");
+  productRegistration.defaultBranch = "develop";
+  const deps = dependencies({
+    registrations: [
+      productRegistration,
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [app],
+  });
+  const originalReadRepository = deps.readRepository;
+  deps.readRepository = async (client, organization, seed) => {
+    const readback = await originalReadRepository(client, organization, seed);
+    if (seed.repoId === 101) readback.defaultBranch = "develop";
+    return readback;
+  };
+
+  const result = await evaluateFleetMigrationShadowReadiness(deps);
+
+  assert.equal(result.state, "READY");
+  assert.deepEqual(result.reasonCounts, {});
+});
+
 test("비활성 App row도 non-product repository binding 존재 증거로 남는다", async () => {
   const historical = productApp();
   historical.id = "app-infra-historical-0001";
@@ -344,7 +402,7 @@ test("ACTIVE provenance source SHA가 latest discovery와 provider HEAD에서 �
   assert.deepEqual(result.reasonCounts, { ACTIVE_CONFIG_SOURCE_MISMATCH: 1 });
 });
 
-test("ACTIVE provenance relation, app, main ref와 digest가 정확하지 않으면 fail-closed한다", async () => {
+test("ACTIVE provenance relation, app, registered default ref와 digest가 정확하지 않으면 fail-closed한다", async () => {
   const variants: Array<{
     name: string;
     mutate: (app: FleetMigrationAppReadback) => void;
@@ -368,7 +426,7 @@ test("ACTIVE provenance relation, app, main ref와 digest가 정확하지 않으
       },
     },
     {
-      name: "non-main provenance",
+      name: "non-default provenance",
       mutate: (app) => {
         app.activeConfigs[0].sourceObservation!.sourceRef = "refs/heads/release";
       },

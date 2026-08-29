@@ -1147,6 +1147,32 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
     assert.equal(calls.some((call) => call.kind === "tree" && call.tree_sha === TREE_SHA), true);
   });
 
+  await t.test("registered non-main default branch", async () => {
+    const before = calls.length;
+    const result = await readExactRepositoryTree(fake({ repo: {
+      id: REPO_ID,
+      full_name: "seorilabs/sample-app",
+      name: "sample-app",
+      default_branch: "develop",
+      private: true,
+      fork: false,
+      archived: false,
+    } }) as never, {
+      repoId: REPO_ID,
+      fullName: "seorilabs/sample-app",
+      expectedSourceSha: SHA,
+    });
+    assert.equal(result.status, "READY");
+    if (result.status === "READY") {
+      assert.equal(result.snapshot.defaultBranch, "develop");
+      assert.equal(result.snapshot.sourceRef, "refs/heads/develop");
+    }
+    assert.equal(
+      calls.slice(before).some((call) => call.kind === "commit" && call.ref === "develop"),
+      true,
+    );
+  });
+
   await t.test("foam-party의 14-depth vendored Firebase xcframework path", async () => {
     const firebasePath = "godot/ios/plugins/firebase_core/FirebaseCore.xcframework/macos-arm64_x86_64/FirebaseCore.framework/Versions/A/Resources/FirebaseCore_Privacy.bundle/Contents/Resources/PrivacyInfo.xcprivacy";
     assert.equal(firebasePath.split("/").length, 14);
@@ -1227,6 +1253,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       status: "STALE",
       reasonCode: "SOURCE_DRIFT",
       actualHeadSha: newer,
+      defaultBranch: "main",
       private: true,
       fork: false,
     });
@@ -1350,12 +1377,17 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
       repoId: REPO_ID,
       fullName: "seorilabs/seorilabs-backoffice",
     });
-    assert.deepEqual(head, { status: "READY", sourceSha: SHA, sourceRef: "refs/heads/main" });
+    assert.deepEqual(head, {
+      status: "READY",
+      sourceSha: SHA,
+      sourceRef: "refs/heads/main",
+      defaultBranch: "main",
+    });
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v9 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v9");
+test("discovery 의미론 변경은 새 generation을 강제하는 v10 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v10");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {

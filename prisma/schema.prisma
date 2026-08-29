@@ -1765,7 +1765,7 @@ model RepositoryRegistration {
   status                        RepositoryRegistrationStatus       @default(REGISTERED)
   managementKind                RepositoryManagementKind?
   // managementKind의 legacy APP 값을 즉시 재해석하지 않도록 둔 additive v2 분류 정본.
-  // exact provider identity와 source discovery가 끝난 terminal run만 값을 쓴다.
+  // discovery terminal fact 또는 append-only explicit decision이 쓰며 source/build 미준비가 값을 지우지 않는다.
   classification                RepositoryClassification?
   discoveryContractVersion      String?                            @db.VarChar(64)
   classificationDecisionVersion Int?                               @default(0)
@@ -1814,6 +1814,11 @@ model RepositoryClassificationDecision {
   revision            Int
   classification      RepositoryClassification
   candidateMarkerPath String?                  @db.VarChar(512)
+  // PRODUCT_APP의 중앙 desired identity. source/build observation이 아직 없는
+  // planning 제품도 App에 등록하되, 이 값으로 build target을 합성하지 않는다.
+  productDisplayName  String?                  @db.VarChar(191)
+  productType         AppType?
+  productEngine       AppEngine?
   justification       String                   @db.VarChar(64)
   requestHash         String                   @db.Char(64)
   idempotencyKey      String                   @unique

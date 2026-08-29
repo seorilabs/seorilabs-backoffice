@@ -27,6 +27,7 @@ export interface StaticRuntimeManifestInput {
   repositoryId: string;
   fullName: string;
   bindingSourceSha: string;
+  sourceRef: string;
   applicationSourceSha: string;
   observationId: string;
   observationRequestHash: string;
@@ -63,6 +64,9 @@ export function buildStaticRuntimeManifestReadback(input: StaticRuntimeManifestI
   ) {
     throw new StaticRuntimeManifestError("INVALID_STATIC_BINDING");
   }
+  if (!input.sourceRef.startsWith("refs/heads/")) {
+    throw new StaticRuntimeManifestError("INVALID_SOURCE_REF");
+  }
   if (
     !PUBLIC_ID.test(input.snapshotSignatureKeyId)
     || !PUBLIC_ID.test(input.snapshotSignaturePolicyRevision)
@@ -75,7 +79,7 @@ export function buildStaticRuntimeManifestReadback(input: StaticRuntimeManifestI
     repositoryId: input.repositoryId,
     fullName: input.fullName,
     sourceSha: input.bindingSourceSha,
-    sourceRef: "refs/heads/main" as const,
+    sourceRef: input.sourceRef,
     observationId: input.observationId,
     observationDigest: sha256Prefix(input.observationRequestHash),
     configRevisionId: input.configRevisionId,

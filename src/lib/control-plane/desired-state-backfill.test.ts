@@ -74,6 +74,30 @@ test("legacy 또는 non-product repository는 중앙 DRAFT 대상이 아니다",
   if (infra.outcome === "NEEDS_INPUT") assert.equal(infra.reason, "REPOSITORY_NOT_PRODUCT_APP");
 });
 
+test("keeum·animal-chess·immunity-war·merge-lizard 형태는 구성을 추측하지 않고 정확한 source/build gate로 멈춘다", () => {
+  const cases = [
+    ["NO_CANDIDATE", "PRODUCT_SOURCE_CANDIDATE_MISSING"],
+    ["BUILD_TARGET_MISSING", "PRODUCT_BUILD_TARGET_MISSING"],
+    ["TREE_TRUNCATED", "PRODUCT_DISCOVERY_NOT_READY"],
+  ] as const;
+  for (const [lastDiscoveryReason, expectedReason] of cases) {
+    const result = assessDesiredStateCandidate(candidate({
+      registration: {
+        ...candidate().registration!,
+        status: "NEEDS_INPUT",
+        lastDiscoveryReason,
+      },
+      observation: null,
+      buildTargets: [],
+    }));
+    assert.deepEqual(result, {
+      outcome: "NEEDS_INPUT",
+      reason: expectedReason,
+      detail: lastDiscoveryReason,
+    });
+  }
+});
+
 test("exact source가 어긋나면 오래된 observation으로 DRAFT를 만들지 않는다", () => {
   const result = assessDesiredStateCandidate(candidate({
     registration: { ...candidate().registration!, lastDefaultPushSha: "c".repeat(40) },

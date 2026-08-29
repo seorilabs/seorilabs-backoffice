@@ -6,6 +6,7 @@ import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-o
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 
 export const DESIRED_STATE_BACKFILL_CONTRACT_VERSION = "desired-state-draft-backfill/v2";
@@ -84,6 +85,9 @@ export type DesiredStateNeedsInputReason =
   | "REPOSITORY_NOT_MANAGED"
   | "REPOSITORY_CLASSIFICATION_PENDING"
   | "REPOSITORY_NOT_PRODUCT_APP"
+  | "PRODUCT_SOURCE_CANDIDATE_MISSING"
+  | "PRODUCT_BUILD_TARGET_MISSING"
+  | "PRODUCT_DISCOVERY_NOT_READY"
   | "DISCOVERY_OBSERVATION_MISSING"
   | "DISCOVERY_SOURCE_STALE"
   | "BUILD_TARGET_MISSING"
@@ -233,9 +237,6 @@ export function assessDesiredStateCandidate(
   if (registration.archived || registration.status === "ARCHIVED") {
     return needsInput("REPOSITORY_ARCHIVED");
   }
-  if (registration.status !== "MANAGED") {
-    return needsInput("REPOSITORY_NOT_MANAGED", registration.lastDiscoveryReason);
-  }
   if (!registration.classification) {
     return needsInput("REPOSITORY_CLASSIFICATION_PENDING", registration.managementKind);
   }
@@ -244,6 +245,12 @@ export function assessDesiredStateCandidate(
   }
   if (registration.classification !== "PRODUCT_APP") {
     return needsInput("REPOSITORY_NOT_PRODUCT_APP", registration.classification);
+  }
+  if (registration.status !== "MANAGED") {
+    return needsInput(
+      repositoryProductPlanningReason(registration.lastDiscoveryReason),
+      registration.lastDiscoveryReason,
+    );
   }
   const observation = candidate.observation;
   if (!observation) return needsInput("DISCOVERY_OBSERVATION_MISSING");

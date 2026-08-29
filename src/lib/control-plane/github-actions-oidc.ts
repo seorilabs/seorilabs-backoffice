@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 import {
   createRemoteJWKSet,
   jwtVerify,
@@ -53,6 +54,7 @@ export interface GitHubActionsStaticManifestIdentity {
   runAttempt: string;
   eventName: "pull_request" | "push" | "workflow_dispatch";
   eventRef: string;
+  defaultBranch: string;
   repositoryVisibility: "public" | "private" | "internal";
   runnerEnvironment: "github-hosted" | "self-hosted";
 }
@@ -61,6 +63,7 @@ export interface GitHubActionsStaticManifestExpectation {
   repositoryId: string;
   applicationSourceSha: string;
   bindingSourceSha: string;
+  defaultBranch: string;
 }
 
 export interface GitHubActionsBuildManifestIdentity {
@@ -76,6 +79,7 @@ export interface GitHubActionsBuildManifestIdentity {
   runAttempt: string;
   eventName: "pull_request" | "workflow_dispatch";
   eventRef: string;
+  defaultBranch: string;
   repositoryVisibility: "private";
   runnerEnvironment: "self-hosted";
 }
@@ -87,6 +91,7 @@ export interface GitHubActionsBuildManifestExpectation {
   eventSourceSha: string;
   workflowBundleSha: string;
   buildProfile: GitHubActionsBuildProfile;
+  defaultBranch: string;
 }
 
 interface GitHubActionsBuildManifestClaims extends GitHubActionsBuildManifestIdentity {
@@ -168,6 +173,8 @@ export function assertGitHubActionsStaticManifestClaims(
   const calledWorkflowPath = Object.values(GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS).find(
     (path) => calledWorkflowRef === `seorilabs/.github/${path}@${workflowBundleSha}`,
   );
+  const defaultBranch = expectation.defaultBranch;
+  const defaultBranchRef = repositoryDefaultBranchRef(defaultBranch);
 
   if (
     repositoryId !== expectation.repositoryId
@@ -185,6 +192,7 @@ export function assertGitHubActionsStaticManifestClaims(
     || !["public", "private", "internal"].includes(repositoryVisibility)
     || !["github-hosted", "self-hosted"].includes(runnerEnvironment)
     || !calledWorkflowPath
+    || !defaultBranchRef
     || callerWorkflowRef !== `${fullName}/${STATIC_CALLER_PATH}@${eventRef}`
   ) {
     unauthorized();
@@ -195,7 +203,7 @@ export function assertGitHubActionsStaticManifestClaims(
     const match = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(eventRef);
     if (
       !match
-      || baseRef !== "main"
+      || baseRef !== defaultBranch
       || headRef.length === 0
       || callerWorkflowSha !== applicationSourceSha
     ) {
@@ -205,7 +213,7 @@ export function assertGitHubActionsStaticManifestClaims(
     if (!Number.isSafeInteger(pullRequestNumber)) unauthorized();
   } else if (eventName === "push" || eventName === "workflow_dispatch") {
     if (
-      eventRef !== "refs/heads/main"
+      eventRef !== defaultBranchRef
       || callerWorkflowSha !== applicationSourceSha
       || expectation.bindingSourceSha !== applicationSourceSha
       || headRef !== ""
@@ -229,6 +237,7 @@ export function assertGitHubActionsStaticManifestClaims(
     runAttempt,
     eventName,
     eventRef,
+    defaultBranch,
     repositoryVisibility: repositoryVisibility as GitHubActionsStaticManifestIdentity["repositoryVisibility"],
     runnerEnvironment: runnerEnvironment as GitHubActionsStaticManifestIdentity["runnerEnvironment"],
     pullRequestNumber,
@@ -259,6 +268,8 @@ export function assertGitHubActionsBuildManifestClaims(
   const headRef = optionalString(payload, "head_ref");
   const baseRef = optionalString(payload, "base_ref");
   const calledWorkflowPath = GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS[expectation.buildProfile];
+  const defaultBranch = expectation.defaultBranch;
+  const defaultBranchRef = repositoryDefaultBranchRef(defaultBranch);
 
   if (
     repositoryId !== expectation.repositoryId
@@ -278,6 +289,7 @@ export function assertGitHubActionsBuildManifestClaims(
     || runnerEnvironment !== "self-hosted"
     || calledWorkflowRef !== `seorilabs/.github/${calledWorkflowPath}@${workflowBundleSha}`
     || callerWorkflowRef !== `${fullName}/${BUILD_CALLER_PATH}@${eventRef}`
+    || !defaultBranchRef
   ) {
     unauthorized();
   }
@@ -286,7 +298,7 @@ export function assertGitHubActionsBuildManifestClaims(
   if (expectation.mode === "APPROVED") {
     if (
       eventName !== "workflow_dispatch"
-      || eventRef !== "refs/heads/main"
+      || eventRef !== defaultBranchRef
       || expectation.applicationSourceSha !== eventSourceSha
       || headRef !== ""
       || baseRef !== ""
@@ -302,7 +314,7 @@ export function assertGitHubActionsBuildManifestClaims(
       || canary.fullName !== fullName
       || canary.buildProfile !== expectation.buildProfile
       || !match
-      || baseRef !== "main"
+      || baseRef !== defaultBranch
       || headRef !== `seori/workflow-bundle-v5-canary/${repositoryId}/${workflowBundleSha.slice(0, 12)}`
       || expectation.applicationSourceSha === eventSourceSha
     ) {
@@ -325,6 +337,7 @@ export function assertGitHubActionsBuildManifestClaims(
     runAttempt,
     eventName: eventName as GitHubActionsBuildManifestIdentity["eventName"],
     eventRef,
+    defaultBranch,
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",
     pullRequestNumber,
@@ -373,6 +386,7 @@ function bindStaticManifestIdentity(
     runAttempt: claims.runAttempt,
     eventName: claims.eventName,
     eventRef: claims.eventRef,
+    defaultBranch: claims.defaultBranch,
     repositoryVisibility: claims.repositoryVisibility,
     runnerEnvironment: claims.runnerEnvironment,
   };
@@ -394,6 +408,7 @@ function bindBuildManifestIdentity(
     runAttempt: claims.runAttempt,
     eventName: claims.eventName,
     eventRef: claims.eventRef,
+    defaultBranch: claims.defaultBranch,
     repositoryVisibility: claims.repositoryVisibility,
     runnerEnvironment: claims.runnerEnvironment,
   };
@@ -426,7 +441,7 @@ function buildPullRequestReadbackMatches(
     && readback.state === "open"
     && readback.baseRepositoryId === claims.repositoryId
     && readback.baseRepositoryFullName === claims.fullName
-    && readback.baseRef === "main"
+    && readback.baseRef === claims.defaultBranch
     && readback.baseSha === claims.applicationSourceSha
     && readback.headRepositoryId === claims.repositoryId
     && readback.headRepositoryFullName === claims.fullName

@@ -28,6 +28,11 @@ export async function decideRepositoryClassificationAction(input: {
   expectedDecisionRevision: number;
   classification: "PRODUCT_APP" | "INFRA_REPO" | "PLATFORM_PRODUCER" | "EXCLUDED";
   candidateMarkerPath: string | null;
+  productIdentity: {
+    displayName: string;
+    type: "APP" | "GAME";
+    engine: "RN" | "GODOT";
+  } | null;
   justification:
     | "REPOSITORY_PURPOSE_CONFIRMED"
     | "APP_CANDIDATE_SELECTED"
@@ -39,12 +44,13 @@ export async function decideRepositoryClassificationAction(input: {
     const actor = await requirePlatformReadAccess();
     if (actor.role !== "ADMIN") throw new Error("Repository 분류 변경은 ADMIN만 할 수 있습니다.");
     const request = repositoryClassificationDecisionSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       repoId: input.repoId,
       expectedGeneration: input.expectedGeneration,
       expectedDecisionRevision: input.expectedDecisionRevision,
       classification: input.classification,
       candidateMarkerPath: input.candidateMarkerPath,
+      productIdentity: input.productIdentity,
       justification: input.justification,
     });
     const result = await recordRepositoryClassificationDecision({

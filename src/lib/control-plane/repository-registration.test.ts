@@ -33,6 +33,29 @@ test("default branch push만 exact SHA discovery를 enqueue한다", () => {
   });
 });
 
+test("provider가 확인한 non-main default branch도 exact heads ref로 결합한다", () => {
+  assert.deepEqual(repositoryDiscoveryTrigger({
+    event: "push",
+    defaultBranch: "develop",
+    ref: "refs/heads/develop",
+    after: SHA,
+  }), {
+    relevant: true,
+    sourceSha: SHA,
+    sourceRef: "refs/heads/develop",
+  });
+  assert.deepEqual(repositoryDiscoveryTrigger({
+    event: "push",
+    defaultBranch: "refs/heads/develop",
+    ref: "refs/heads/develop",
+    after: SHA,
+  }), {
+    relevant: false,
+    sourceSha: null,
+    sourceRef: null,
+  });
+});
+
 test("created/renamed 이벤트는 worker readback에서 HEAD를 결합하도록 enqueue한다", () => {
   for (const action of ["created", "renamed"] as const) {
     assert.deepEqual(repositoryDiscoveryTrigger({

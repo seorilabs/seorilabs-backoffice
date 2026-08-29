@@ -17,6 +17,7 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import { exactBuildTargetIdentity } from "@/lib/control-plane/build-target-identity";
 import { getProjectBlueprintPlanWithClient } from "@/lib/control-plane/project-blueprint-service";
+import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 
 const ARTIFACT_BY_MARKET = {
   "google-play": "android-aab",
@@ -87,6 +88,18 @@ export async function createReleaseCandidate(input: {
         throw new ControlPlaneError("idempotency key가 다른 release candidate에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
       }
       return { candidate: afterLockReplay, duplicate: true };
+    }
+    const registration = await tx.repositoryRegistration.findUnique({
+      where: { repoId: input.repoId },
+      select: { status: true, classification: true, lastDiscoveryReason: true },
+    });
+    if (registration?.classification === "PRODUCT_APP" && registration.status !== "MANAGED") {
+      const reason = repositoryProductPlanningReason(registration.lastDiscoveryReason);
+      throw new ControlPlaneError(
+        "source/build discovery가 완료되지 않은 planning 제품은 release candidate를 만들 수 없습니다.",
+        409,
+        reason,
+      );
     }
     const revision = await tx.configRevision.findUnique({
       where: { appId_revision: { appId: app.id, revision: input.configRevision } },
