@@ -230,7 +230,13 @@ async function main() {
       schemaVersion: 1,
       markets: [{ market: "google-play", enabled: true, locales: ["ko-KR"], releaseChannel: "internal" }],
       projectBlueprint: blueprint(),
-      build: { workflowBundleSha: WORKFLOW_SHA, platformVersion: "0.6.5", minSdk: 24, targetSdk: 36 },
+      build: {
+        workflowBundleSha: WORKFLOW_SHA,
+        workflowBundleDigest: `sha256:${WORKFLOW_DIGEST}`,
+        platformVersion: "0.6.5",
+        minSdk: 24,
+        targetSdk: 36,
+      },
       complianceDrafts: [{ market: "google-play", declaration: "data-safety", state: "DRAFT", draft: true }],
       assets: [{ market: "google-play", kind: "icon", objectKey: "apps/blueprint/icon", checksum: RULES_SHA }],
     },
@@ -363,7 +369,7 @@ async function main() {
     platformVersion: "0.6.5",
     actor: "integration-worker",
     idempotencyKey: "project-blueprint-integration-candidate-wrong-bundle",
-  }), (error) => error instanceof ControlPlaneError && error.code === "WORKFLOW_BUNDLE_APPROVAL_MISMATCH");
+  }), (error) => error instanceof ControlPlaneError && error.code === "WORKFLOW_BUNDLE_DIGEST_MISMATCH");
 
   const created = await createReleaseCandidate({
     repoId: REPO_ID,
