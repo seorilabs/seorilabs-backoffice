@@ -1,18 +1,28 @@
+import { Prisma } from "@prisma/client";
 import { projectBlueprintSchema } from "@/lib/control-plane/contracts";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { evaluateProjectBlueprint } from "@/lib/control-plane/project-blueprint";
 import { prisma } from "@/lib/prisma";
 
-/** provider write 없이 exact source/config에 고정된 apply/readback plan만 반환한다. */
-export async function getProjectBlueprintPlan(input: {
+type ProjectBlueprintPlanClient = Prisma.TransactionClient | typeof prisma;
+
+export interface ProjectBlueprintPlanInput {
+  appId: string;
   repoId: bigint;
   sourceSha: string;
   configRevision: number;
-}) {
-  const app = await prisma.app.findUnique({
-    where: { repoId: input.repoId },
+}
+
+/** transaction snapshot에서 exact app/source/config에 고정된 apply/readback plan만 반환한다. */
+export async function getProjectBlueprintPlanWithClient(
+  client: ProjectBlueprintPlanClient,
+  input: ProjectBlueprintPlanInput,
+) {
+  const app = await client.app.findUnique({
+    where: { id: input.appId },
     select: {
       id: true,
+      repoId: true,
       discoveryObservations: {
         where: { sourceSha: input.sourceSha.toLowerCase() },
         take: 1,
@@ -31,11 +41,13 @@ export async function getProjectBlueprintPlan(input: {
         orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
         take: 2_000,
         select: {
+          id: true,
           provider: true,
           resourceType: true,
           resourceId: true,
           payload: true,
           observedAt: true,
+          createdAt: true,
         },
       },
       credentialBindings: {
@@ -48,7 +60,9 @@ export async function getProjectBlueprintPlan(input: {
       },
     },
   });
-  if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  if (!app || app.repoId !== input.repoId) {
+    throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  }
   if (app.discoveryObservations.length !== 1) {
     throw new ControlPlaneError(
       "정확한 source SHA의 DiscoveryObservation이 필요합니다.",
@@ -65,12 +79,29 @@ export async function getProjectBlueprintPlan(input: {
     throw new ControlPlaneError("ACTIVE revision에 ProjectBlueprint가 없습니다.", 409, "BLUEPRINT_NOT_CONFIGURED");
   }
   const blueprint = projectBlueprintSchema.parse(revision.projectBlueprint.payload);
-  return evaluateProjectBlueprint({
-    repoId: input.repoId,
-    sourceSha: input.sourceSha,
-    configRevision: revision.revision,
-    blueprint,
-    observations: app.providerObservations,
-    credentialBindings: app.credentialBindings,
+  return {
+    appId: app.id,
+    ...evaluateProjectBlueprint({
+      repoId: input.repoId,
+      sourceSha: input.sourceSha,
+      configRevision: revision.revision,
+      blueprint,
+      observations: app.providerObservations,
+      credentialBindings: app.credentialBindings,
+    }),
+  };
+}
+
+/** provider write 없이 exact source/config에 고정된 apply/readback plan만 반환한다. */
+export async function getProjectBlueprintPlan(input: {
+  repoId: bigint;
+  sourceSha: string;
+  configRevision: number;
+}) {
+  const app = await prisma.app.findUnique({
+    where: { repoId: input.repoId },
+    select: { id: true },
   });
+  if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  return getProjectBlueprintPlanWithClient(prisma, { ...input, appId: app.id });
 }

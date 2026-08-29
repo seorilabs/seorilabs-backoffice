@@ -133,6 +133,64 @@ test("shared identity가 없고 앱별 대체 credential만 있으면 plan을 �
   assert.equal(result.credentialChecks[0].state, "APP_SPECIFIC_SUBSTITUTE_REJECTED");
 });
 
+test("ProjectBlueprint는 모든 exact readback만 COMPLIANT이고 최신 drift를 우선한다", () => {
+  const desired = compileBlueprintResources(blueprint());
+  const observedAt = new Date("2026-08-29T00:00:00.000Z");
+  const credentials = [
+    ["shared/gcp/provisioner-session", "gcp-project-provision"],
+    ["shared/gcp/firebase-automation", "firebase-provision"],
+    ["shared/google-workspace/provisioner", "workspace-provision"],
+  ].map(([logicalCredentialId, capability]) => ({
+    logicalCredentialId,
+    capability,
+    status: "ACTIVE" as const,
+  }));
+  const observations = desired.map((resource) => ({
+    provider: resource.provider,
+    resourceType: resource.resourceType,
+    resourceId: resource.resourceId,
+    observedAt,
+    payload: {
+      schemaVersion: 1,
+      visibility: "VISIBLE",
+      state: "PRESENT",
+      ...(resource.publicIdentity ? { publicIdentity: resource.publicIdentity } : {}),
+      attributes: { desiredHash: resource.desiredHash },
+    },
+  }));
+  const compliant = evaluateProjectBlueprint({
+    repoId: 1n,
+    sourceSha,
+    configRevision: 1,
+    blueprint: blueprint(),
+    observations,
+    credentialBindings: credentials,
+  });
+  assert.equal(compliant.status, "COMPLIANT");
+
+  const drifted = evaluateProjectBlueprint({
+    repoId: 1n,
+    sourceSha,
+    configRevision: 1,
+    blueprint: blueprint(),
+    observations: [{
+      ...observations[0],
+      observedAt: new Date(observedAt.getTime() + 1),
+      payload: {
+        ...observations[0].payload,
+        attributes: { desiredHash: "0".repeat(64) },
+      },
+    }, ...observations],
+    credentialBindings: credentials,
+  });
+  assert.equal(drifted.status, "READY_TO_APPLY");
+  assert.equal(drifted.resources.find((resource) => (
+    resource.provider === desired[0].provider
+    && resource.resourceType === desired[0].resourceType
+    && resource.resourceId === desired[0].resourceId
+  ))?.state, "DRIFT");
+});
+
 test("마켓 readback은 account/app/candidate identity가 다르면 원장에 넣지 않는다", () => {
   const readback = {
     schemaVersion: 1,

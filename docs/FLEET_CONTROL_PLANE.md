@@ -247,6 +247,11 @@ worker는 claim과 envelope의 resume mode가 다르거나 READBACK_FIRST가 REA
 
 `IMPLEMENTATION`, `CI`, `ARTIFACT`, `RELEASE_ASSETS`, `COMPLIANCE_DRAFT`, `PROVIDER_SHELL`의 최신 observation이
 모두 `PASSED`일 때만 lifecycle이 `RELEASE_CANDIDATE`가 된다. 이 상태는 upload나 제출이 아니다.
+`PROVIDER_SHELL=PASSED`는 일반 caller evidence만으로 기록할 수 없다. release candidate와 같은 transaction에서
+exact app ID·source SHA·ACTIVE config revision의 ProjectBlueprint를 다시 계산해 `COMPLIANT`일 때만 기록하며,
+Blueprint가 없으면 `BLUEPRINT_NOT_CONFIGURED`, readback·공용 provisioner가 미준수이면
+`PROVIDER_SHELL_NOT_COMPLIANT`로 원장 변경 없이 거부한다. 저장 evidence의 app ID·project ID·source SHA·revision·
+plan digest·exact provider observation ID는 서버가 계산하며 HTTP 요청 계약에는 이 provenance 필드가 없다.
 `UPLOAD`, `PROCESSING`, `DEVICE_QA`, `REVIEW`, `APPROVAL`, `DEPLOYMENT`, `PUBLIC`은 이후에도 서로 독립된
 append-only observation으로 남는다. market adapter는 예상 account/team/workspace, app ID, source SHA,
 revision, artifact checksum 중 하나라도 다르면 `PROVIDER_IDENTITY_MISMATCH` 또는
