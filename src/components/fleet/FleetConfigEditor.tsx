@@ -199,6 +199,7 @@ function RowList<T>({
 export function FleetConfigEditor({
   appId,
   activeRevision,
+  latestRevision,
   initialPayload,
   initialPayloadSource,
   legacyActiveBlocked,
@@ -207,6 +208,7 @@ export function FleetConfigEditor({
 }: {
   appId: string;
   activeRevision: number;
+  latestRevision: number;
   initialPayload: unknown;
   initialPayloadSource: "ACTIVE" | "LEGACY_SHADOW" | "EMPTY";
   legacyActiveBlocked: boolean;
@@ -769,7 +771,11 @@ export function FleetConfigEditor({
             type="button"
             disabled={pending}
             onClick={() => run(
-              () => validateFleetConfigDraftAction({ appId, payloadText }),
+              () => validateFleetConfigDraftAction({
+                appId,
+                expectedLatestRevision: latestRevision,
+                payloadText,
+              }),
               () => "동일한 control-plane validator를 통과했습니다. 아직 저장되지 않았습니다.",
             )}
             className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
@@ -782,6 +788,7 @@ export function FleetConfigEditor({
             onClick={() => run(
               () => createFleetConfigDraftAction({
                 appId,
+                expectedLatestRevision: latestRevision,
                 payloadText,
                 requestId: crypto.randomUUID(),
               }),

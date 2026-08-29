@@ -907,7 +907,17 @@ export type ReleaseGateName = typeof RELEASE_GATE_NAMES[number];
 
 export const configRevisionSchema = z.object({
   repoId: z.coerce.bigint().positive(),
+  expectedLatestRevision: z.number().int().nonnegative(),
   payload: configRevisionPayloadSchema,
+}).strict();
+
+export const configRevisionSourceRebaseSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  expectedLatestRevision: z.number().int().nonnegative(),
+}).strict();
+
+export const configRevisionDiscoveryDraftSchema = configRevisionSourceRebaseSchema.extend({
+  mode: z.literal("DRAFT_ONLY"),
 }).strict();
 
 export const desiredStateBackfillSchema = z.object({

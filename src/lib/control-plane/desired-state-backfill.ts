@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 
-import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
+import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revision-discovery-projection";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
@@ -14,12 +14,6 @@ export const DESIRED_STATE_BACKFILL_MODE = "DRAFT_ONLY" as const;
 const ACTOR = /^[A-Za-z0-9._:/-]{1,128}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:/-]{8,191}$/;
 const SOURCE_SHA = /^[0-9a-f]{40}$/;
-const MARKET_ORDER = ["google-play", "app-store", "apps-in-toss"] as const;
-const RELEASE_CHANNEL = {
-  "google-play": "internal",
-  "app-store": "testflight",
-  "apps-in-toss": "private",
-} as const;
 
 export type DesiredStateBackfillTrigger =
   | "HOURLY_CRON"
@@ -268,22 +262,8 @@ export function assessDesiredStateCandidate(
       revisionStatus: candidate.configuredRevision.status,
     };
   }
-  const observedMarkets = new Set(candidate.buildTargets
-    .filter((target) => target.observedSha?.toLowerCase() === sourceSha)
-    .map((target) => target.market)
-    .filter((market): market is typeof MARKET_ORDER[number] => (
-      market !== null && MARKET_ORDER.includes(market as typeof MARKET_ORDER[number])
-    )));
-  const markets = MARKET_ORDER
-    .filter((market) => observedMarkets.has(market))
-    .map((market) => ({
-      market,
-      enabled: true,
-      locales: [],
-      releaseChannel: RELEASE_CHANNEL[market],
-    }));
-  if (markets.length === 0) return needsInput("BUILD_TARGET_MISSING");
-  const payload = configRevisionPayloadSchema.parse({ schemaVersion: 1, markets });
+  const payload = projectDiscoveryConfigPayload({ sourceSha, buildTargets: candidate.buildTargets });
+  if (!payload) return needsInput("BUILD_TARGET_MISSING");
   return { outcome: "READY", sourceObservationId: observation.id, payload };
 }
 
