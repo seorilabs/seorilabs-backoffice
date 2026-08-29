@@ -364,23 +364,8 @@ async function enrollProductApp(
     );
   }
   if (adopted) {
-    return {
-      app: await tx.app.update({
-        where: { id: adopted.id },
-        data: {
-          slug,
-          repoId: input.repoId,
-          repoFullName: input.repoFullName,
-          displayName: input.productIdentity.displayName,
-          type: input.productIdentity.type,
-          engine: input.productIdentity.engine,
-        },
-      }),
-      created: false,
-    };
-  }
-  return {
-    app: await tx.app.create({
+    return tx.app.update({
+      where: { id: adopted.id },
       data: {
         slug,
         repoId: input.repoId,
@@ -388,11 +373,20 @@ async function enrollProductApp(
         displayName: input.productIdentity.displayName,
         type: input.productIdentity.type,
         engine: input.productIdentity.engine,
-        marketTargets: [],
       },
-    }),
-    created: true,
-  };
+    });
+  }
+  return tx.app.create({
+    data: {
+      slug,
+      repoId: input.repoId,
+      repoFullName: input.repoFullName,
+      displayName: input.productIdentity.displayName,
+      type: input.productIdentity.type,
+      engine: input.productIdentity.engine,
+      marketTargets: [],
+    },
+  });
 }
 
 export async function recordRepositoryClassificationDecision(input: {
@@ -657,14 +651,18 @@ export async function recordRepositoryClassificationDecision(input: {
       : null;
 
     const revision = currentDecisionRevision + 1;
-    const enrollment = request.classification === "PRODUCT_APP"
+    const enrolledApp = request.classification === "PRODUCT_APP"
       ? await enrollProductApp(tx, {
           repoId: registration.repoId,
           repoFullName: registration.repoFullName,
           productIdentity: request.productIdentity!,
         })
       : null;
-    const enrolledApp = enrollment?.app ?? null;
+    const needsPlanningLifecycle = enrolledApp !== null
+      && await tx.fleetLifecycleState.findUnique({
+        where: { appId: enrolledApp.id },
+        select: { id: true },
+      }) === null;
     const decision = await tx.repositoryClassificationDecision.create({
       data: {
         repoId: registration.repoId,
@@ -680,13 +678,13 @@ export async function recordRepositoryClassificationDecision(input: {
         createdBy: input.actor,
       },
     });
-    if (enrollment?.created) {
+    if (needsPlanningLifecycle && enrolledApp) {
       await tx.fleetLifecycleState.create({
-        data: { appId: enrolledApp!.id, stage: "PLANNING", generation: 1 },
+        data: { appId: enrolledApp.id, stage: "PLANNING", generation: 1 },
       });
       await tx.fleetLifecycleEvent.create({
         data: {
-          appId: enrolledApp!.id,
+          appId: enrolledApp.id,
           fromStage: "IDEA",
           toStage: "PLANNING",
           actor: input.actor,

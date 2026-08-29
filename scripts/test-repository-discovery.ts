@@ -349,6 +349,12 @@ async function main(): Promise<void> {
       where: { app: { repoId: BigInt(RN_REPO_ID) } },
     }), 1, "새 generation 뒤 stale worker는 observation을 추가할 수 없다");
     await prisma.repositoryRegistration.delete({ where: { repoId: BigInt(RN_REPO_ID) } });
+    await prisma.fleetLifecycleEvent.deleteMany({
+      where: { app: { repoId: BigInt(RN_REPO_ID) } },
+    });
+    await prisma.fleetLifecycleState.deleteMany({
+      where: { app: { repoId: BigInt(RN_REPO_ID) } },
+    });
     await prisma.app.delete({ where: { repoId: BigInt(RN_REPO_ID) } });
 
     await registerRepositoryWebhook({
@@ -504,6 +510,58 @@ async function main(): Promise<void> {
     });
     assert.equal(adoptionApp.repoId, null);
     assert.equal(adoptionApp.playPackage, "com.seorilabs.wrong");
+    const adoptionDecision = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 2,
+        repoId: BigInt(ADOPTION_REPO_ID),
+        expectedGeneration: adoptionRegistration.reconcileGeneration ?? 0,
+        expectedDecisionRevision: adoptionRegistration.classificationDecisionVersion ?? 0,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: null,
+        productIdentity: {
+          displayName: "Discovery Adoption",
+          type: "APP",
+          engine: "RN",
+        },
+        justification: "REPOSITORY_PURPOSE_CONFIRMED",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-adopt-existing-product",
+    });
+    assert.ok(adoptionDecision.runId);
+    const adoptedApp = await prisma.app.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+      include: { fleetLifecycleState: true },
+    });
+    assert.equal(adoptedApp.id, adoptionApp.id);
+    assert.equal(adoptedApp.fleetLifecycleState?.stage, "PLANNING");
+    const adoptionRecheckClaim = await claimRepositoryDiscoveryRun(
+      "integration-worker-adoption-recheck",
+      {
+        ...dependencies,
+        getOctokit: async () => fakeOctokit({
+          repoId: ADOPTION_REPO_ID,
+          fullName: "seorilabs/discovery-adoption",
+          headSha: SOURCE_SHA,
+          files,
+        }),
+      },
+    );
+    assert.ok(adoptionRecheckClaim);
+    const adoptionRecheck = await processRepositoryDiscoveryClaim(adoptionRecheckClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: ADOPTION_REPO_ID,
+        fullName: "seorilabs/discovery-adoption",
+        headSha: SOURCE_SHA,
+        files,
+      }),
+    });
+    assert.equal(adoptionRecheck.status, "NEEDS_INPUT");
+    assert.equal(adoptionRecheck.reasonCode, "APP_MARKET_IDENTITY_CONFLICT");
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+    })).classification, "PRODUCT_APP");
 
     // keeum처럼 build marker가 아직 없는 product도 중앙 identity만 등록하고
     // observation/BuildTarget은 source fact 없이 만들지 않는다.
