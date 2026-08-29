@@ -18,6 +18,9 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
 - 제어면 principal은 token과 1:1로 결합하며 임의 header 값이나 미설정 principal은 거부한다.
 - 모든 mutation: 8자 이상의 `Idempotency-Key`
 - Config activation과 resolved manifest: 전용 Secret `backoffice-control-plane-snapshot-signing`의 `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY`
+- WorkflowBundle v5 static readback: GitHub issuer 서명, audience `seorilabs-control-plane`, 숫자 org/repo ID,
+  caller와 called reusable workflow exact SHA, event source SHA를 모두 검증한다. `CONTROL_PLANE_ADMIN_TOKEN`은
+  이 경로의 대체 인증으로 허용하지 않는다.
 - agent claim: worker에 노출하지 않는 `AGENT_LEASE_SIGNING_KEY`
 
 토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
@@ -34,6 +37,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 큐 조회 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 결정 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 signed base와 merge SHA를 분리 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA·digest, Platform version을 하나의 candidate로 고정 |
@@ -228,8 +232,10 @@ provider account/app/source/config/artifact 문자열을 스스로 지어 외부
 - signer 응답에는 lease token, attestation, 영수증 capability를 싣지 않는다.
 
 DiscoveryObservation의 `workflowCaller` 필드명은 `profile`, `packageManager`, `workingDirectory`다.
-profile은 `react-native | godot`이고 workingDirectory는 repository 상대 경로만 허용한다. React Native는
-packageManager를 `npm | pnpm`으로 확정해야 하며, 자체 package manager 계약이 없는 Godot은 반드시 `null`이다.
+profile은 `react-native | capacitor | ait-web | godot`이고 workingDirectory는 repository 상대 경로만 허용한다.
+JS profile은 packageManager를 `npm | pnpm`으로 확정해야 하며, 자체 package manager 계약이 없는 Godot은
+반드시 `null`이다. Capacitor는 `@capacitor/core`, AIT web은 `@apps-in-toss/web-framework` exact package fact로
+탐지하며 여러 product 후보가 남으면 하나를 추측하지 않는다.
 resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
 `NO_WORKFLOW_CALLER_FOR_SHA`로 중단하고 추측하지 않는다.
 
@@ -383,7 +389,7 @@ segment를 거부하고 512자·64 segment 상한을 적용한다. 이 상한 �
   승격하지 않는다. `NEEDS_INPUT`에서 사람이 `EXCLUDED`로 확인한 경우에만 새
   append-only decision revision으로 terminal 재검증한다.
 - `seorilabs/platform`은 `seorilabs-platform` package와 `spec/openapi.yaml`을 함께 확인한 뒤
-  `PLATFORM_PRODUCER`로 관리하며 RN/Godot App 후보에서 명시적으로 제외한다.
+  `PLATFORM_PRODUCER`로 관리하며 RN/Capacitor/AIT web/Godot App 후보에서 명시적으로 제외한다.
 - default push와 repository lifecycle webhook은 공개 numeric repo identity, ref, SHA를 delivery와 같은
   transaction의 automation inbox에 checksum으로 봉인하고 기존 실행을 즉시 fail-closed한다. inbox 처리는
   GitHub의 현재 repository identity와 HEAD를 다시 읽어 오래되거나 순서가 뒤집힌 payload를 적용하지 않는다.
@@ -393,7 +399,7 @@ segment를 거부하고 512자·64 segment 상한을 적용한다. 이 상한 �
 worker replica는 RPI5에 1개, poll은 2초, lease는 90초이며 exact source file read 전에 갱신한다. 최대 시도는 3회다.
 durable enqueue와 실행 차단은 webhook transaction에서 즉시 완료하고, provider readback 뒤 discovery run을
 등록한다. 10분을 넘긴 non-terminal run은 `DISCOVERY_SLO_EXCEEDED`로 `NEEDS_INPUT` 종료한다. 따라서
-신규 private RN/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
+신규 private RN/Capacitor/AIT web/Godot repo의 5분 등록/10분 bootstrap 또는 정확한 needs-input SLO를 DB의 createdAt,
 completedAt, reasonCode로 자동 검증할 수 있다.
 
 webhook 누락은 hourly `backoffice-repository-discovery-backfill`이 보정한다. GitHub App installation의

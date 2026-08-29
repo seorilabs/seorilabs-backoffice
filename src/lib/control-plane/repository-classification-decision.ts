@@ -13,7 +13,7 @@ const ACTOR = /^[A-Za-z0-9_.:@/-]{1,128}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:/-]{8,191}$/;
 
 export interface RepositoryClassificationQueueCandidate {
-  profile: "react-native" | "godot";
+  profile: "react-native" | "capacitor" | "ait-web" | "godot";
   workingDirectory: string;
   markerPath: string;
 }
@@ -49,12 +49,13 @@ export function repositoryClassificationCandidates(
     const item = candidate as Record<string, unknown>;
     const profile = item.profile;
     if (
-      (profile !== "react-native" && profile !== "godot")
+      typeof profile !== "string"
+      || !["react-native", "capacitor", "ait-web", "godot"].includes(profile)
       || typeof item.workingDirectory !== "string"
       || !safeMarkerPath(item.markerPath)
     ) return [];
     return [{
-      profile,
+      profile: profile as RepositoryClassificationQueueCandidate["profile"],
       workingDirectory: item.workingDirectory,
       markerPath: item.markerPath,
     }];

@@ -18,7 +18,7 @@ export interface RepositoryClassificationPolicy {
 
 /**
  * 모바일 제품이 아닌 조직 저장소의 중앙 분류 계약이다. 앱 저장소마다 선언 파일을
- * 요구하지 않으며, 이 목록 밖에서 RN/Godot 제품 근거가 없으면 추측하지 않고
+ * 요구하지 않으며, 이 목록 밖에서 RN/Capacitor/AIT web/Godot 제품 근거가 없으면 추측하지 않고
  * NO_CANDIDATE로 남긴다.
  */
 const EXACT_POLICIES = new Map<string, RepositoryClassificationPolicy>([

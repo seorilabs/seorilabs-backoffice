@@ -547,6 +547,16 @@ export const workflowCallerSchema = z.discriminatedUnion("profile", [
     workingDirectory: workflowWorkingDirectory,
   }).strict(),
   z.object({
+    profile: z.literal("capacitor"),
+    packageManager: z.enum(["npm", "pnpm"]),
+    workingDirectory: workflowWorkingDirectory,
+  }).strict(),
+  z.object({
+    profile: z.literal("ait-web"),
+    packageManager: z.enum(["npm", "pnpm"]),
+    workingDirectory: workflowWorkingDirectory,
+  }).strict(),
+  z.object({
     profile: z.literal("godot"),
     packageManager: z.null(),
     workingDirectory: workflowWorkingDirectory,

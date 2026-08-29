@@ -9,6 +9,11 @@ import {
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
+import type { GitHubActionsStaticManifestIdentity } from "@/lib/control-plane/github-actions-oidc";
+import {
+  buildStaticRuntimeManifestReadback,
+  StaticRuntimeManifestError,
+} from "@/lib/control-plane/static-runtime-manifest";
 import {
   BUILD_TARGET_MARKETS,
   exactBuildTargetIdentity,
@@ -899,6 +904,146 @@ export async function resolveManifest(input: {
     providerObservations: [...latestProvider.values()],
     platformFleet,
   };
+}
+
+export async function resolveStaticRuntimeManifest(input: {
+  identity: GitHubActionsStaticManifestIdentity;
+  signingKey: string;
+  snapshotSignatureKeyId: string;
+  snapshotSignaturePolicyRevision: string;
+}, client: Pick<typeof prisma, "app" | "configRevision" | "discoveryObservation"> = prisma) {
+  const repositoryId = BigInt(input.identity.repositoryId);
+  const app = await client.app.findUnique({
+    where: { repoId: repositoryId },
+    select: {
+      id: true,
+      repoId: true,
+      repoFullName: true,
+      status: true,
+      isPublicRepo: true,
+    },
+  });
+  if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
+  if (
+    app.repoId !== repositoryId
+    || app.repoFullName !== input.identity.fullName
+  ) {
+    throw new ControlPlaneError(
+      "GitHub OIDC repository identity가 중앙 App binding과 일치하지 않습니다.",
+      403,
+      "REPOSITORY_IDENTITY_MISMATCH",
+    );
+  }
+  const expectedVisibility = app.isPublicRepo ? "public" : "private";
+  const expectedRunner = app.isPublicRepo ? "github-hosted" : "self-hosted";
+  if (
+    input.identity.repositoryVisibility !== expectedVisibility
+    || input.identity.runnerEnvironment !== expectedRunner
+  ) {
+    throw new ControlPlaneError(
+      "repository visibility 또는 runner trust boundary가 중앙 binding과 일치하지 않습니다.",
+      403,
+      "RUNNER_TRUST_BOUNDARY_MISMATCH",
+    );
+  }
+
+  const revision = await client.configRevision.findFirst({
+    where: { appId: app.id, status: "ACTIVE" },
+  });
+  if (!revision) {
+    throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
+  }
+  assertResolvableConfigRevision({
+    status: revision.status,
+    activatedSnapshot: revision.activatedSnapshot,
+    snapshotDigest: revision.snapshotDigest,
+    snapshotSignature: revision.snapshotSignature,
+  }, input.signingKey);
+  const configPayload = configRevisionPayloadSchema.parse(revision.payload);
+  if (
+    !configPayload.build?.workflowBundleSha
+    || configPayload.build.workflowBundleSha.toLowerCase() !== input.identity.workflowBundleSha
+  ) {
+    throw new ControlPlaneError(
+      "ACTIVE revision이 요청한 WorkflowBundle SHA를 승인하지 않았습니다.",
+      409,
+      "WORKFLOW_BUNDLE_NOT_APPROVED",
+    );
+  }
+
+  const discovery = await client.discoveryObservation.findFirst({
+    where: {
+      appId: app.id,
+      sourceSha: input.identity.bindingSourceSha,
+    },
+    orderBy: latestDiscoveryObservationOrder(),
+  });
+  if (!discovery) {
+    throw new ControlPlaneError(
+      "binding source SHA의 discovery observation이 없습니다.",
+      409,
+      "NO_DISCOVERY_FOR_SHA",
+    );
+  }
+  if (discovery.sourceRef !== "refs/heads/main" || !discovery.requestHash) {
+    throw new ControlPlaneError(
+      "main exact-SHA discovery provenance를 검증할 수 없습니다.",
+      409,
+      "DISCOVERY_PROVENANCE_INVALID",
+    );
+  }
+  const workflowCaller = resolvedWorkflowCaller({
+    profile: discovery.workflowProfile,
+    packageManager: discovery.workflowPackageManager,
+    workingDirectory: discovery.workflowWorkingDirectory,
+  });
+  if (workflowCaller.profile === "godot") {
+    throw new ControlPlaneError(
+      "Godot은 별도 고정 WorkflowBundle caller를 사용합니다.",
+      409,
+      "STATIC_WORKFLOW_PROFILE_UNSUPPORTED",
+    );
+  }
+  if (!revision.snapshotDigest || !revision.snapshotSignature) {
+    throw new ControlPlaneError(
+      "Config snapshot 서명 provenance를 확인할 수 없습니다.",
+      409,
+      "INVALID_CONFIG_SIGNATURE",
+    );
+  }
+  try {
+    return buildStaticRuntimeManifestReadback({
+      lifecycleState: app.status,
+      repositoryId: input.identity.repositoryId,
+      fullName: app.repoFullName,
+      bindingSourceSha: input.identity.bindingSourceSha,
+      applicationSourceSha: input.identity.applicationSourceSha,
+      observationId: discovery.id,
+      observationRequestHash: discovery.requestHash,
+      configRevisionId: revision.id,
+      configRevision: revision.revision,
+      configRevisionPayloadHash: revision.payloadHash,
+      signedSnapshotDigest: revision.snapshotDigest,
+      snapshotSignature: revision.snapshotSignature,
+      snapshotSignatureKeyId: input.snapshotSignatureKeyId,
+      snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+      staticBinding: {
+        profile: workflowCaller.profile,
+        packageManager: workflowCaller.packageManager,
+        workspaceRoot: workflowCaller.workingDirectory,
+        commandDirectory: workflowCaller.workingDirectory,
+      },
+    });
+  } catch (error) {
+    if (error instanceof StaticRuntimeManifestError) {
+      throw new ControlPlaneError(
+        "서명된 runtime manifest provenance를 생성할 수 없습니다.",
+        error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
+        error.code,
+      );
+    }
+    throw error;
+  }
 }
 
 /** 운영 resolve와 격리 복구 rehearsal이 동일한 fail-closed 경계를 검증한다. */

@@ -148,6 +148,24 @@ test("workflow caller는 exact source observation의 strict projection만 허용
     packageManager: null,
     workingDirectory: ".",
   });
+  assert.deepEqual(resolvedWorkflowCaller({
+    profile: "capacitor",
+    packageManager: "pnpm",
+    workingDirectory: "app",
+  }), {
+    profile: "capacitor",
+    packageManager: "pnpm",
+    workingDirectory: "app",
+  });
+  assert.deepEqual(resolvedWorkflowCaller({
+    profile: "ait-web",
+    packageManager: "npm",
+    workingDirectory: "apps-in-toss",
+  }), {
+    profile: "ait-web",
+    packageManager: "npm",
+    workingDirectory: "apps-in-toss",
+  });
   assert.throws(
     () => resolvedWorkflowCaller({ profile: "godot", packageManager: "npm", workingDirectory: "." }),
     (error) => error instanceof ControlPlaneError && error.code === "NO_WORKFLOW_CALLER_FOR_SHA",
