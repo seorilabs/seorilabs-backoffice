@@ -1,7 +1,8 @@
 name: Deploy
 
 # main push 시 검증→이미지 빌드→배포. 사전: REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64 secret
-# + 레포를 ARC "RPI ARM64 Builders" 러너 그룹에 추가 (DEPLOY.md §7).
+# (DEPLOY.md §7). 전 잡이 GitHub-hosted 이며 self-hosted 러너 그룹 등록은 필요 없다.
+# KUBECONFIG_B64 의 server 는 hosted 러너에서 닿는 공개 엔드포인트여야 한다.
 on:
   workflow_dispatch:
     inputs:
@@ -24,10 +25,8 @@ jobs:
   verify:
     # PR 에서 통과한 Next build 는 반복하지 않는다. main 직접 push까지 보호하는
     # 정적 게이트만 실행하고, 실제 production build 는 아래 Docker job이 한 번 맡는다.
-    # 이 workflow 는 신뢰된 main push/workflow_dispatch 에서만 실행된다. production
-    # deploy를 GitHub-hosted 결제 상태와 분리하기 위해 일반 ARC에서 검증한다.
     # kubectl 을 부르는 검증 스크립트는 전부 KUBECTL_BIN 에 stub 을 주입한다.
-    runs-on: seorilabs-rpi-arm64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,62 +51,29 @@ jobs:
       - run: bash scripts/check-ci-deployer-permissions.test.sh
 
   migration-contract:
-    name: migration-contract / MySQL 9.2 ${{ matrix.scenario }}
-    # PR용 reusable contract는 hosted에만 남긴다. main deploy 계약은 push/dispatch
-    # 전용 workflow 안에서 DIND ARC로 실행해 hosted 결제 장애와 분리한다.
-    runs-on: seorilabs-rpi-arm64-dind
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario: [empty, cutover]
-    services:
-      mysql:
-        image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
-        env:
-          MYSQL_ROOT_PASSWORD: bootstrap-test-only
-          MYSQL_DATABASE: backoffice_${{ matrix.scenario }}_contract_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -uroot -pbootstrap-test-only --silent"
-          --health-interval=2s
-          --health-timeout=2s
-          --health-retries=30
-    env:
-      DATABASE_URL: mysql://root:bootstrap-test-only@127.0.0.1:3306/backoffice_${{ matrix.scenario }}_contract_test
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24.16.0"
-          check-latest: false
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm prisma generate
-      - if: matrix.scenario == 'empty'
-        run: bash scripts/test-migration-bootstrap.sh
-      - if: matrix.scenario == 'cutover'
-        run: bash scripts/test-migration-cutover.sh
+    uses: ./.github/workflows/migration-contract.yml
+    permissions:
+      contents: read
 
   build:
     needs: [verify, migration-contract]
     outputs:
       image_digest: ${{ steps.image.outputs.digest }}
-    # ARM64 Docker 빌드 → -dind 러너(rpi5)에서 격리.
-    # hosted 로 옮길 수 없다: 아래 buildx endpoint 가 클러스터 내부 DNS 이고,
-    # 캐시(pnpm store/.next/cache/레이어)도 클러스터 PVC 에 있다. 러너만 바꾸면
-    # 엔드포인트를 못 찾아 조용히 깨진다. push/workflow_dispatch 전용이라
-    # fork 가 트리거할 수 없어 ARC 에 남겨도 안전하다.
-    runs-on: seorilabs-rpi-arm64-dind
+    # 이미지 빌드는 클러스터 자원이 필요 없다. registry.vzyx.xyz 는 TLS 로 공개
+    # 도달 가능하므로 hosted 에서 push 한다. arm64 이미지는 Dockerfile 의
+    # BUILDPLATFORM 크로스빌드로 만든다.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      # 클러스터 내 영구 BuildKit 데몬을 remote 빌더로 사용 → pnpm store/.next/cache/레이어
-      # 캐시가 PVC 에 지속되어 증분 빌드(ephemeral 러너 사이로 유지).
-      - uses: docker/setup-buildx-action@v4
+      # 런타임 스테이지(apt/useradd/prisma CLI)만 arm64 로 실행된다. 의존성 설치와
+      # next build 는 Dockerfile 의 BUILDPLATFORM 스테이지에서 러너 네이티브로 돈다.
+      - uses: docker/setup-qemu-action@v4
         with:
-          driver: remote
-          endpoint: tcp://buildkitd.platform.svc.cluster.local:1234
+          platforms: arm64
+      # 예전에는 클러스터 안의 buildkitd 를 remote driver 로 썼다. 러너가 클러스터를
+      # 떠났으므로 러너 안의 기본 driver 를 쓴다.
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: registry.vzyx.xyz
@@ -120,6 +86,9 @@ jobs:
           platforms: linux/arm64
           push: true
           provenance: false
+          # 클러스터 PVC 캐시를 대신한다. 의존성 무변경이면 deps 레이어를 재사용한다.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ${{ env.IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -130,8 +99,10 @@ jobs:
   deploy:
     if: github.event_name != 'workflow_dispatch' || inputs.deploy
     needs: build
-    # k8s API 는 클러스터 밖으로 열려 있지 않다. ARC 고정.
-    runs-on: seorilabs-rpi-arm64
+    # k8s API(k8s.vzyx.xyz:16443)는 공개 도달 가능하고 kubeconfig 에 CA 가 들어 있다.
+    # 첫 kubectl 동작이 auth whoami 라 접속·신원이 어긋나면 아무것도 바꾸기 전에
+    # fail-closed 된다.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7 # k8s 매니페스트 apply 를 위해 레포 파일 필요
       - name: Deploy to platform ns
@@ -141,7 +112,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl"
+          curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x /tmp/kubectl
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
