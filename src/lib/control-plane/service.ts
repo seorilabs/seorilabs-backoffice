@@ -33,6 +33,7 @@ import {
   type BuildTargetMarket,
 } from "@/lib/control-plane/build-target-identity";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
+import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 
 export class ControlPlaneError extends Error {
   constructor(
@@ -45,6 +46,22 @@ export class ControlPlaneError extends Error {
 }
 
 export const MAX_OBSERVATION_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+
+export async function readRepositoryDefaultBranch(repoId: bigint): Promise<string> {
+  const registration = await prisma.repositoryRegistration.findUnique({
+    where: { repoId },
+    select: { archived: true, defaultBranch: true },
+  });
+  const defaultBranch = registration?.defaultBranch ?? null;
+  if (registration?.archived || !repositoryDefaultBranchRef(defaultBranch)) {
+    throw new ControlPlaneError(
+      "GitHub provider에서 확인한 repository default branch가 없습니다.",
+      409,
+      "REPOSITORY_DEFAULT_BRANCH_NOT_READY",
+    );
+  }
+  return defaultBranch!;
+}
 
 /** caller clock 오류가 event-time latest pointer를 영구 오염시키지 못하게 한다. */
 export function assertObservationTime(
@@ -231,13 +248,16 @@ type ConfigSourceObservation = {
 export function assertConfigSourceObservationIntegrity(input: {
   appId: string;
   repoId: bigint;
+  expectedSourceRef?: string;
   observation: ConfigSourceObservation;
 }): void {
   const payload = jsonRecord(input.observation.payload);
   const repository = jsonRecord(payload?.repository);
+  const expectedSourceRef = input.expectedSourceRef ?? input.observation.sourceRef;
   if (
     input.observation.appId !== input.appId
-    || input.observation.sourceRef !== "refs/heads/main"
+    || !expectedSourceRef?.startsWith("refs/heads/")
+    || input.observation.sourceRef !== expectedSourceRef
     || !SHA_40.test(input.observation.sourceSha)
     || !DIGEST_64.test(input.observation.payloadHash)
     || !DIGEST_64.test(input.observation.requestHash ?? "")
@@ -275,6 +295,7 @@ function assertExactConfigSourceBinding(input: {
     );
   }
   const sourceSha = observation.sourceSha;
+  const expectedSourceRef = repositoryDefaultBranchRef(registration.defaultBranch);
   if (
     !allowedAppStatuses.has(app.status)
     || registration.repoId !== app.repoId
@@ -282,13 +303,13 @@ function assertExactConfigSourceBinding(input: {
     || registration.archived
     || registration.status !== "MANAGED"
     || registration.classification !== "PRODUCT_APP"
-    || registration.defaultBranch !== "main"
+    || expectedSourceRef === null
     || registration.discoveryContractVersion !== REPOSITORY_DISCOVERY_CONTRACT_VERSION
     || registration.lastDefaultPushSha?.toLowerCase() !== sourceSha
     || registration.lastReconciledSha?.toLowerCase() !== sourceSha
   ) {
     throw new ControlPlaneError(
-      "Repository registration과 latest main discovery가 exact source로 수렴하지 않았습니다.",
+      "Repository registration과 latest default-branch discovery가 exact source로 수렴하지 않았습니다.",
       409,
       "CONFIG_SOURCE_NOT_CURRENT",
     );
@@ -296,6 +317,7 @@ function assertExactConfigSourceBinding(input: {
   assertConfigSourceObservationIntegrity({
     appId: app.id,
     repoId: app.repoId,
+    expectedSourceRef,
     observation,
   });
   const repository = jsonRecord(jsonRecord(observation.payload)?.repository);
@@ -568,6 +590,7 @@ function observedStaticWorkspaceRoot(input: {
   repositoryId: string;
   fullName: string;
   sourceSha: string;
+  sourceRef: string;
 }): string {
   if (input.caller.profile === "godot" || input.caller.workingDirectory === ".") {
     return input.caller.workingDirectory;
@@ -584,7 +607,7 @@ function observedStaticWorkspaceRoot(input: {
     || String(repository?.id ?? "") !== input.repositoryId
     || repository?.fullName !== input.fullName
     || repository?.sourceSha !== input.sourceSha
-    || repository?.sourceRef !== "refs/heads/main"
+    || repository?.sourceRef !== input.sourceRef
   ) {
     return input.caller.workingDirectory;
   }
@@ -599,7 +622,7 @@ function observedStaticWorkspaceRoot(input: {
       && String(source.repoId ?? "") === input.repositoryId
       && source.fullName === input.fullName
       && source.sourceSha === input.sourceSha
-      && source.sourceRef === "refs/heads/main"
+      && source.sourceRef === input.sourceRef
       && /^[0-9a-f]{40}$/.test(String(source.blobSha ?? ""))
       && /^[0-9a-f]{64}$/.test(String(source.contentSha256 ?? ""));
   });
@@ -1764,7 +1787,10 @@ export async function resolveStaticRuntimeManifest(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
-}, client: Pick<typeof prisma, "app" | "configRevision" | "discoveryObservation"> = prisma) {
+}, client: Pick<
+  typeof prisma,
+  "app" | "configRevision" | "discoveryObservation" | "repositoryRegistration"
+> = prisma) {
   const repositoryId = BigInt(input.identity.repositoryId);
   const app = await client.app.findUnique({
     where: { repoId: repositoryId },
@@ -1785,6 +1811,22 @@ export async function resolveStaticRuntimeManifest(input: {
       "GitHub OIDC repository identity가 중앙 App binding과 일치하지 않습니다.",
       403,
       "REPOSITORY_IDENTITY_MISMATCH",
+    );
+  }
+  const registration = await client.repositoryRegistration.findUnique({
+    where: { repoId: repositoryId },
+    select: { defaultBranch: true, archived: true },
+  });
+  const expectedSourceRef = repositoryDefaultBranchRef(registration?.defaultBranch ?? null);
+  if (
+    registration?.archived
+    || registration?.defaultBranch !== input.identity.defaultBranch
+    || !expectedSourceRef
+  ) {
+    throw new ControlPlaneError(
+      "runtime 요청과 현재 repository default branch binding이 일치하지 않습니다.",
+      409,
+      "REPOSITORY_DEFAULT_BRANCH_MISMATCH",
     );
   }
   const expectedVisibility = app.isPublicRepo ? "public" : "private";
@@ -1838,9 +1880,9 @@ export async function resolveStaticRuntimeManifest(input: {
       "NO_DISCOVERY_FOR_SHA",
     );
   }
-  if (discovery.sourceRef !== "refs/heads/main" || !discovery.requestHash) {
+  if (discovery.sourceRef !== expectedSourceRef || !discovery.requestHash) {
     throw new ControlPlaneError(
-      "main exact-SHA discovery provenance를 검증할 수 없습니다.",
+      "default branch exact-SHA discovery provenance를 검증할 수 없습니다.",
       409,
       "DISCOVERY_PROVENANCE_INVALID",
     );
@@ -1868,6 +1910,7 @@ export async function resolveStaticRuntimeManifest(input: {
       repositoryId: input.identity.repositoryId,
       fullName: app.repoFullName,
       sourceSha: input.identity.bindingSourceSha,
+      sourceRef: expectedSourceRef,
     }),
     commandDirectory: workflowCaller.workingDirectory,
   };
@@ -1895,6 +1938,7 @@ export async function resolveStaticRuntimeManifest(input: {
       repositoryId: input.identity.repositoryId,
       fullName: app.repoFullName,
       bindingSourceSha: input.identity.bindingSourceSha,
+      sourceRef: expectedSourceRef,
       applicationSourceSha: input.identity.applicationSourceSha,
       observationId: discovery.id,
       observationRequestHash: discovery.requestHash,
@@ -1926,7 +1970,7 @@ export async function resolveBuildRuntimeManifest(input: {
   snapshotSignaturePolicyRevision: string;
 }, client: Pick<
   typeof prisma,
-  "app" | "configRevision" | "discoveryObservation" | "workflowBundleRegistryRecord"
+  "app" | "configRevision" | "discoveryObservation" | "workflowBundleRegistryRecord" | "repositoryRegistration"
 > = prisma) {
   const repositoryId = BigInt(input.identity.repositoryId);
   const app = await client.app.findUnique({
@@ -1945,6 +1989,22 @@ export async function resolveBuildRuntimeManifest(input: {
       "GitHub OIDC repository identity가 중앙 App binding과 일치하지 않습니다.",
       403,
       "REPOSITORY_IDENTITY_MISMATCH",
+    );
+  }
+  const registration = await client.repositoryRegistration.findUnique({
+    where: { repoId: repositoryId },
+    select: { defaultBranch: true, archived: true },
+  });
+  const expectedSourceRef = repositoryDefaultBranchRef(registration?.defaultBranch ?? null);
+  if (
+    registration?.archived
+    || registration?.defaultBranch !== input.identity.defaultBranch
+    || !expectedSourceRef
+  ) {
+    throw new ControlPlaneError(
+      "build 요청과 현재 repository default branch binding이 일치하지 않습니다.",
+      409,
+      "REPOSITORY_DEFAULT_BRANCH_MISMATCH",
     );
   }
   if (app.isPublicRepo || input.identity.repositoryVisibility !== "private"
@@ -2043,9 +2103,9 @@ export async function resolveBuildRuntimeManifest(input: {
       "NO_DISCOVERY_FOR_SHA",
     );
   }
-  if (discovery.sourceRef !== "refs/heads/main" || !discovery.requestHash) {
+  if (discovery.sourceRef !== expectedSourceRef || !discovery.requestHash) {
     throw new ControlPlaneError(
-      "main exact-SHA discovery provenance를 검증할 수 없습니다.",
+      "default branch exact-SHA discovery provenance를 검증할 수 없습니다.",
       409,
       "DISCOVERY_PROVENANCE_INVALID",
     );
@@ -2082,6 +2142,7 @@ export async function resolveBuildRuntimeManifest(input: {
       repositoryId: input.identity.repositoryId,
       fullName: app.repoFullName,
       applicationSourceSha: input.identity.applicationSourceSha,
+      sourceRef: expectedSourceRef,
       eventSourceSha: input.identity.eventSourceSha,
       observationId: discovery.id,
       observationRequestHash: discovery.requestHash,

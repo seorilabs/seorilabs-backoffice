@@ -12,6 +12,7 @@ import {
   resolveBuildRuntimeManifest,
   resolveManifest,
   resolveStaticRuntimeManifest,
+  readRepositoryDefaultBranch,
 } from "@/lib/control-plane/service";
 
 export const runtime = "nodejs";
@@ -58,6 +59,7 @@ export async function GET(
       const mode: GitHubActionsBuildManifestMode = requestedSchema.endsWith("-canary")
         ? "CANDIDATE"
         : "APPROVED";
+      const defaultBranch = await readRepositoryDefaultBranch(repoId);
       const identity = await authenticateGitHubActionsBuildManifestRequest(request, {
         mode,
         repositoryId: repoId.toString(),
@@ -65,6 +67,7 @@ export async function GET(
         eventSourceSha: eventSourceSha.toLowerCase(),
         workflowBundleSha: workflowBundleSha.toLowerCase(),
         buildProfile,
+        defaultBranch,
       });
       if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       const response = await resolveBuildRuntimeManifest({
@@ -89,10 +92,12 @@ export async function GET(
       const applicationSourceSha = sourceShaSchema.parse(
         request.nextUrl.searchParams.get("application_ref"),
       );
+      const defaultBranch = await readRepositoryDefaultBranch(repoId);
       const identity = await authenticateGitHubActionsStaticManifestRequest(request, {
         repositoryId: repoId.toString(),
         applicationSourceSha,
         bindingSourceSha: sourceSha,
+        defaultBranch,
       });
       if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       const response = await resolveStaticRuntimeManifest({

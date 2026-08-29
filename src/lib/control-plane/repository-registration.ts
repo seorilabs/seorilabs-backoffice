@@ -1,7 +1,12 @@
-import { Prisma, type RepositoryRegistrationStatus } from "@prisma/client";
+import {
+  Prisma,
+  type RepositoryClassification,
+  type RepositoryRegistrationStatus,
+} from "@prisma/client";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
+import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 
 const SHA_40 = /^[0-9a-f]{40}$/i;
 const REPOSITORY_DISCOVERY_ACTIONS = new Set([
@@ -58,6 +63,19 @@ export function repositoryAutomationEligible(input: Parameters<typeof repository
   return input !== null && repositorySourceIsCurrent(input);
 }
 
+function classificationBinding(classification: RepositoryClassification | null) {
+  if (classification === "PRODUCT_APP") {
+    return { classification, managementKind: "APP" as const };
+  }
+  if (classification === "PLATFORM_PRODUCER") {
+    return { classification, managementKind: "PLATFORM_PRODUCER" as const };
+  }
+  return {
+    classification,
+    managementKind: "UNCLASSIFIED" as const,
+  };
+}
+
 export function repositoryGenerationAfterArchive(input: {
   archived: boolean;
   reconcileGeneration: number | null;
@@ -73,7 +91,7 @@ export function repositoryDiscoveryTrigger(input: {
   ref?: string;
   after?: string;
 }): { relevant: boolean; sourceSha: string | null; sourceRef: string | null } {
-  const sourceRef = input.defaultBranch ? `refs/heads/${input.defaultBranch}` : null;
+  const sourceRef = repositoryDefaultBranchRef(input.defaultBranch ?? null);
   if (input.event === "reconcile") {
     return {
       relevant: true,
@@ -207,7 +225,6 @@ export async function invalidateRepositoryDiscoveryInTransaction(
     },
     update: {
       status: "REGISTERED",
-      classification: null,
       discoveryContractVersion: null,
       fork: null,
     },
@@ -218,6 +235,15 @@ export async function invalidateRepositoryDiscoveryInTransaction(
     WHERE repoId = ${repoId}
   `;
   await tx.$queryRaw`SELECT repoId FROM repository_registration WHERE repoId = ${repoId} FOR UPDATE`;
+  const explicitDecision = await tx.repositoryClassificationDecision.findFirst({
+    where: { repoId },
+    orderBy: { revision: "desc" },
+    select: { classification: true },
+  });
+  await tx.repositoryRegistration.update({
+    where: { repoId },
+    data: classificationBinding(explicitDecision?.classification ?? null),
+  });
   await tx.repositoryDiscoveryRun.updateMany({
     where: { repoId, status: { in: ["QUEUED", "RUNNING"] } },
     data: {
@@ -309,6 +335,11 @@ export async function registerRepositoryWebhookInTransaction(
         archived: true,
         reconcileGeneration: true,
         classificationDecisionVersion: true,
+        classificationDecisions: {
+          orderBy: { revision: "desc" },
+          take: 1,
+          select: { classification: true },
+        },
       },
     });
 
@@ -408,8 +439,7 @@ export async function registerRepositoryWebhookInTransaction(
       where: { repoId },
       data: {
         reconcileGeneration: generation,
-        managementKind: "UNCLASSIFIED",
-        classification: null,
+        ...classificationBinding(registration.classificationDecisions[0]?.classification ?? null),
         discoveryContractVersion: null,
         discoveryCandidates: Prisma.DbNull,
         lastDiscoveryReason: null,

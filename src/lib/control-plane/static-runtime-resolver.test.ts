@@ -27,6 +27,7 @@ function identity(
     runAttempt: "1",
     eventName: "pull_request",
     eventRef: "refs/pull/91/merge",
+    defaultBranch: "main",
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",
     ...overrides,
@@ -38,9 +39,14 @@ function client(overrides: {
   workflowBundleSha?: string;
   requestHash?: string | null;
   sourceRef?: string | null;
+  defaultBranch?: string;
   profile?: "react-native" | "capacitor" | "ait-web" | "godot";
   rootWorkspace?: boolean;
 } = {}) {
+  const defaultBranch = overrides.defaultBranch ?? "main";
+  const sourceRef = overrides.sourceRef === undefined
+    ? `refs/heads/${defaultBranch}`
+    : overrides.sourceRef;
   const payload = {
     schemaVersion: 1,
     markets: [],
@@ -58,6 +64,11 @@ function client(overrides: {
   };
   const signed = signSnapshot(snapshot as JsonValue, SIGNING_KEY);
   return {
+    repositoryRegistration: {
+      async findUnique() {
+        return { defaultBranch, archived: false };
+      },
+    },
     app: {
       async findUnique() {
         return {
@@ -89,9 +100,7 @@ function client(overrides: {
         return {
           id: "observation-runtime-1",
           sourceSha: BINDING_SHA,
-          sourceRef: overrides.sourceRef === undefined
-            ? "refs/heads/main"
-            : overrides.sourceRef,
+          sourceRef,
           requestHash: overrides.requestHash === undefined
             ? "d".repeat(64)
             : overrides.requestHash,
@@ -106,7 +115,7 @@ function client(overrides: {
                   id: Number(REPOSITORY_ID),
                   fullName: "seorilabs/runtime-canary",
                   sourceSha: BINDING_SHA,
-                  sourceRef: "refs/heads/main",
+                  sourceRef,
                 },
                 sources: ["package.json", "pnpm-lock.yaml"].map((path) => ({
                   path,
@@ -115,7 +124,7 @@ function client(overrides: {
                   repoId: Number(REPOSITORY_ID),
                   fullName: "seorilabs/runtime-canary",
                   sourceSha: BINDING_SHA,
-                  sourceRef: "refs/heads/main",
+                  sourceRef,
                   blobSha: "e".repeat(40),
                   contentSha256: "f".repeat(64),
                 })),
@@ -170,6 +179,15 @@ test("static runtime resolver는 App, ACTIVE config, exact discovery와 approved
   assert.equal(result.applicationSourceSha, APPLICATION_SHA);
   assert.equal(result.manifest.staticBinding.profile, "capacitor");
   assert.equal(result.manifest.staticBinding.workspaceRoot, "app");
+});
+
+test("static runtime resolver는 registered non-main default branch/ref를 그대로 반환한다", async () => {
+  const result = await resolveStaticRuntimeManifest(
+    input(identity({ defaultBranch: "develop" })),
+    client({ defaultBranch: "develop" }) as never,
+  );
+  assert.equal(result.state, "VERIFIED");
+  assert.equal(result.manifest.sourceRef, "refs/heads/develop");
 });
 
 test("root lockfile provenance가 있으면 monorepo workspace와 하위 command directory를 분리한다", async () => {

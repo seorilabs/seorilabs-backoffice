@@ -30,6 +30,11 @@ export interface RepositoryClassificationQueueItem {
   decisionRevision: number;
   currentClassification: RepositoryClassification | null;
   currentCandidateMarkerPath: string | null;
+  currentProductIdentity: {
+    displayName: string;
+    type: "APP" | "GAME";
+    engine: "RN" | "GODOT";
+  } | null;
   reasonCode: string | null;
   fork: boolean | null;
   candidates: RepositoryClassificationQueueCandidate[];
@@ -220,6 +225,7 @@ function classificationRequestHash(input: RepositoryClassificationDecisionReques
     expectedDecisionRevision: input.expectedDecisionRevision,
     classification: input.classification,
     candidateMarkerPath: input.candidateMarkerPath,
+    productIdentity: input.productIdentity,
     justification: input.justification,
   } as JsonValue);
 }
@@ -245,11 +251,24 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
       classificationDecisions: {
         orderBy: { revision: "desc" as const },
         take: 1,
-        select: { classification: true, candidateMarkerPath: true },
+        select: {
+          classification: true,
+          candidateMarkerPath: true,
+          productDisplayName: true,
+          productType: true,
+          productEngine: true,
+        },
       },
       updatedAt: true,
     },
   });
+  const apps = await prisma.app.findMany({
+    where: { repoId: { in: registrations.map(({ repoId }) => repoId) } },
+    select: { repoId: true, displayName: true, type: true, engine: true },
+  });
+  const appsByRepoId = new Map(apps.flatMap((app) => (
+    app.repoId === null ? [] : [[app.repoId.toString(), app] as const]
+  )));
   return registrations.filter((registration) => (
     registration.status === "NEEDS_INPUT"
     || (
@@ -260,6 +279,16 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
   )).map((registration) => {
     const decisionRevision = registration.classificationDecisionVersion ?? 0;
     const latestDecision = registration.classificationDecisions[0] ?? null;
+    const app = appsByRepoId.get(registration.repoId.toString()) ?? null;
+    const decisionIdentity = latestDecision?.productDisplayName
+      && latestDecision.productType
+      && latestDecision.productEngine
+      ? {
+          displayName: latestDecision.productDisplayName,
+          type: latestDecision.productType,
+          engine: latestDecision.productEngine,
+        }
+      : null;
     return {
       repoId: registration.repoId.toString(),
       repoFullName: registration.repoFullName,
@@ -272,11 +301,91 @@ export async function getRepositoryClassificationQueue(): Promise<RepositoryClas
       decisionRevision,
       currentClassification: registration.classification ?? latestDecision?.classification ?? null,
       currentCandidateMarkerPath: latestDecision?.candidateMarkerPath ?? null,
+      currentProductIdentity: decisionIdentity ?? (app ? {
+        displayName: app.displayName,
+        type: app.type,
+        engine: app.engine,
+      } : null),
       reasonCode: registration.lastDiscoveryReason,
       fork: registration.fork,
       candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
       updatedAt: registration.updatedAt.toISOString(),
     };
+  });
+}
+
+function productIdentityMatches(
+  left: { productDisplayName: string | null; productType: string | null; productEngine: string | null },
+  right: RepositoryClassificationDecisionRequest["productIdentity"],
+): boolean {
+  return right === null
+    ? left.productDisplayName === null && left.productType === null && left.productEngine === null
+    : left.productDisplayName === right.displayName
+      && left.productType === right.type
+      && left.productEngine === right.engine;
+}
+
+function managementKindFor(classification: RepositoryClassification) {
+  if (classification === "PRODUCT_APP") return "APP" as const;
+  if (classification === "PLATFORM_PRODUCER") return "PLATFORM_PRODUCER" as const;
+  return "UNCLASSIFIED" as const;
+}
+
+async function enrollProductApp(
+  tx: Prisma.TransactionClient,
+  input: {
+    repoId: bigint;
+    repoFullName: string;
+    productIdentity: NonNullable<RepositoryClassificationDecisionRequest["productIdentity"]>;
+  },
+) {
+  const slug = input.repoFullName.split("/").at(-1);
+  if (!slug) {
+    throw new ControlPlaneError(
+      "repository 이름에서 product slug를 확정할 수 없습니다.",
+      409,
+      "APP_IDENTITY_CONFLICT",
+    );
+  }
+  const [byRepoId, byFullName, bySlug] = await Promise.all([
+    tx.app.findUnique({ where: { repoId: input.repoId } }),
+    tx.app.findUnique({ where: { repoFullName: input.repoFullName } }),
+    tx.app.findUnique({ where: { slug } }),
+  ]);
+  const adopted = byRepoId ?? (byFullName?.repoId === null ? byFullName : null);
+  if (
+    (byFullName && byFullName.id !== adopted?.id)
+    || (bySlug && bySlug.id !== adopted?.id)
+  ) {
+    throw new ControlPlaneError(
+      "중앙 App identity가 다른 repository binding과 충돌합니다.",
+      409,
+      "APP_IDENTITY_CONFLICT",
+    );
+  }
+  if (adopted) {
+    return tx.app.update({
+      where: { id: adopted.id },
+      data: {
+        slug,
+        repoId: input.repoId,
+        repoFullName: input.repoFullName,
+        displayName: input.productIdentity.displayName,
+        type: input.productIdentity.type,
+        engine: input.productIdentity.engine,
+      },
+    });
+  }
+  return tx.app.create({
+    data: {
+      slug,
+      repoId: input.repoId,
+      repoFullName: input.repoFullName,
+      displayName: input.productIdentity.displayName,
+      type: input.productIdentity.type,
+      engine: input.productIdentity.engine,
+      marketTargets: [],
+    },
   });
 }
 
@@ -292,6 +401,11 @@ export async function recordRepositoryClassificationDecision(input: {
     revision: number;
     classification: RepositoryClassification;
     candidateMarkerPath: string | null;
+    productIdentity: {
+      displayName: string;
+      type: "APP" | "GAME";
+      engine: "RN" | "GODOT";
+    } | null;
     createdBy: string;
     createdAt: Date;
   };
@@ -332,6 +446,13 @@ export async function recordRepositoryClassificationDecision(input: {
           revision: replay.revision,
           classification: replay.classification,
           candidateMarkerPath: replay.candidateMarkerPath,
+          productIdentity: replay.productDisplayName && replay.productType && replay.productEngine
+            ? {
+                displayName: replay.productDisplayName,
+                type: replay.productType,
+                engine: replay.productEngine,
+              }
+            : null,
           createdBy: replay.createdBy,
           createdAt: replay.createdAt,
         },
@@ -368,7 +489,14 @@ export async function recordRepositoryClassificationDecision(input: {
       tx.repositoryClassificationDecision.findFirst({
         where: { repoId: registration.repoId },
         orderBy: { revision: "desc" },
-        select: { revision: true, classification: true, candidateMarkerPath: true },
+        select: {
+          revision: true,
+          classification: true,
+          candidateMarkerPath: true,
+          productDisplayName: true,
+          productType: true,
+          productEngine: true,
+        },
       }),
       tx.repositoryDiscoveryRun.findUnique({
         where: {
@@ -454,6 +582,7 @@ export async function recordRepositoryClassificationDecision(input: {
       if (
         latestDecision.classification === request.classification
         && latestDecision.candidateMarkerPath === request.candidateMarkerPath
+        && productIdentityMatches(latestDecision, request.productIdentity)
       ) {
         throw new ControlPlaneError(
           "현재 분류와 같은 중앙 정책 교정은 새 revision으로 기록하지 않습니다.",
@@ -522,18 +651,52 @@ export async function recordRepositoryClassificationDecision(input: {
       : null;
 
     const revision = currentDecisionRevision + 1;
+    const enrolledApp = request.classification === "PRODUCT_APP"
+      ? await enrollProductApp(tx, {
+          repoId: registration.repoId,
+          repoFullName: registration.repoFullName,
+          productIdentity: request.productIdentity!,
+        })
+      : null;
+    const needsPlanningLifecycle = enrolledApp !== null
+      && await tx.fleetLifecycleState.findUnique({
+        where: { appId: enrolledApp.id },
+        select: { id: true },
+      }) === null;
     const decision = await tx.repositoryClassificationDecision.create({
       data: {
         repoId: registration.repoId,
         revision,
         classification: request.classification,
         candidateMarkerPath: request.candidateMarkerPath,
+        productDisplayName: request.productIdentity?.displayName ?? null,
+        productType: request.productIdentity?.type ?? null,
+        productEngine: request.productIdentity?.engine ?? null,
         justification: request.justification,
         requestHash,
         idempotencyKey: input.idempotencyKey,
         createdBy: input.actor,
       },
     });
+    if (needsPlanningLifecycle && enrolledApp) {
+      await tx.fleetLifecycleState.create({
+        data: { appId: enrolledApp.id, stage: "PLANNING", generation: 1 },
+      });
+      await tx.fleetLifecycleEvent.create({
+        data: {
+          appId: enrolledApp.id,
+          fromStage: "IDEA",
+          toStage: "PLANNING",
+          actor: input.actor,
+          idempotencyKey: `repository-product-enrollment:${registration.repoId.toString()}:${revision}:${requestHash}`,
+          evidence: {
+            transitionSource: "REPOSITORY_PRODUCT_ENROLLMENT",
+            classificationDecisionId: decision.id,
+            classificationDecisionRevision: revision,
+          },
+        },
+      });
+    }
     const changed = await tx.repositoryRegistration.updateMany({
       where: {
         repoId: registration.repoId,
@@ -555,7 +718,11 @@ export async function recordRepositoryClassificationDecision(input: {
             ]
           : [{ classificationDecisionVersion: request.expectedDecisionRevision }],
       },
-      data: { classificationDecisionVersion: revision },
+      data: {
+        classificationDecisionVersion: revision,
+        classification: request.classification,
+        managementKind: managementKindFor(request.classification),
+      },
     });
     if (changed.count !== 1) {
       throw new ControlPlaneError(
@@ -583,6 +750,8 @@ export async function recordRepositoryClassificationDecision(input: {
             revision,
             classification: request.classification,
             candidateMarkerPath: request.candidateMarkerPath,
+            productIdentity: request.productIdentity,
+            appId: enrolledApp?.id ?? null,
             justification: request.justification,
             requestHash,
             discoveryEnqueued: false,
@@ -597,6 +766,13 @@ export async function recordRepositoryClassificationDecision(input: {
           revision: decision.revision,
           classification: decision.classification,
           candidateMarkerPath: decision.candidateMarkerPath,
+          productIdentity: decision.productDisplayName && decision.productType && decision.productEngine
+            ? {
+                displayName: decision.productDisplayName,
+                type: decision.productType,
+                engine: decision.productEngine,
+              }
+            : null,
           createdBy: decision.createdBy,
           createdAt: decision.createdAt,
         },
@@ -642,6 +818,8 @@ export async function recordRepositoryClassificationDecision(input: {
           revision,
           classification: request.classification,
           candidateMarkerPath: request.candidateMarkerPath,
+          productIdentity: request.productIdentity,
+          appId: enrolledApp?.id ?? null,
           justification: request.justification,
           requestHash,
           runId: trigger.runId,
@@ -657,6 +835,13 @@ export async function recordRepositoryClassificationDecision(input: {
         revision: decision.revision,
         classification: decision.classification,
         candidateMarkerPath: decision.candidateMarkerPath,
+        productIdentity: decision.productDisplayName && decision.productType && decision.productEngine
+          ? {
+              displayName: decision.productDisplayName,
+              type: decision.productType,
+              engine: decision.productEngine,
+            }
+          : null,
         createdBy: decision.createdBy,
         createdAt: decision.createdAt,
       },
@@ -694,6 +879,13 @@ export async function recordRepositoryClassificationDecision(input: {
         revision: replay.revision,
         classification: replay.classification,
         candidateMarkerPath: replay.candidateMarkerPath,
+        productIdentity: replay.productDisplayName && replay.productType && replay.productEngine
+          ? {
+              displayName: replay.productDisplayName,
+              type: replay.productType,
+              engine: replay.productEngine,
+            }
+          : null,
         createdBy: replay.createdBy,
         createdAt: replay.createdAt,
       },

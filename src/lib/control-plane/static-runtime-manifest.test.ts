@@ -13,6 +13,7 @@ function input(overrides: Partial<StaticRuntimeManifestInput> = {}): StaticRunti
     repositoryId: "7001",
     fullName: "seorilabs/runtime-canary",
     bindingSourceSha: "a".repeat(40),
+    sourceRef: "refs/heads/main",
     applicationSourceSha: "b".repeat(40),
     observationId: "observation-runtime-1",
     observationRequestHash: "1".repeat(64),

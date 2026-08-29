@@ -98,6 +98,7 @@ function identity(
     runAttempt: "1",
     eventName: "pull_request",
     eventRef: "refs/pull/91/merge",
+    defaultBranch: "main",
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",
     ...overrides,
@@ -110,7 +111,9 @@ function client(overrides: {
   registry?: boolean;
   buildBindings?: unknown;
   unsignedConfigDigest?: string;
+  defaultBranch?: string;
 } = {}) {
+  const defaultBranch = overrides.defaultBranch ?? "main";
   const payload = {
     schemaVersion: 1,
     markets: [],
@@ -139,6 +142,11 @@ function client(overrides: {
   };
   const signed = signSnapshot(snapshot as JsonValue, SIGNING_KEY);
   return {
+    repositoryRegistration: {
+      async findUnique() {
+        return { defaultBranch, archived: false };
+      },
+    },
     app: {
       async findUnique() {
         return {
@@ -211,7 +219,7 @@ function client(overrides: {
         return {
           id: "observation-build-1",
           sourceSha: SOURCE_SHA,
-          sourceRef: "refs/heads/main",
+          sourceRef: `refs/heads/${defaultBranch}`,
           requestHash: "8".repeat(64),
           buildBindings: overrides.buildBindings === undefined
             ? [{
@@ -253,6 +261,15 @@ test("build canary resolver는 ACTIVE config, durable artifact registry와 별�
     scriptPath: "scripts/build-android.sh",
     artifactKind: "android-aab",
   });
+});
+
+test("build resolver는 registered non-main default branch/ref를 그대로 반환한다", async () => {
+  const result = await resolveBuildRuntimeManifest(
+    input(identity({ defaultBranch: "develop" })),
+    client({ defaultBranch: "develop" }) as never,
+  );
+  assert.equal(result.state, "VERIFIED");
+  assert.equal(result.manifest.sourceRef, "refs/heads/develop");
 });
 
 test("config SHA 단독 주장, registry 부재와 build observation 누락은 fail-closed한다", async () => {

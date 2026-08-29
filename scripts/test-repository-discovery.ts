@@ -12,6 +12,7 @@ import {
   recordRepositoryClassificationDecision,
 } from "@/lib/control-plane/repository-classification-decision";
 import { ControlPlaneError } from "@/lib/control-plane/service";
+import { createReleaseCandidate } from "@/lib/control-plane/release-ledger";
 import { REPOSITORY_REGISTRATION_SLO_MS } from "@/lib/control-plane/repository-discovery";
 import { registerRepositoryWebhook } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
@@ -23,6 +24,7 @@ const DRIFT_REPO_ID = 8_900_000_002;
 const PLATFORM_REPO_ID = 8_900_000_003;
 const ADOPTION_REPO_ID = 8_900_000_004;
 const CLASSIFICATION_REPO_ID = 8_900_000_005;
+const PLANNING_REPO_ID = 8_900_000_006;
 const SOURCE_SHA = "a".repeat(40);
 const NEW_SHA = "b".repeat(40);
 const TREE_SHA = "c".repeat(40);
@@ -33,6 +35,7 @@ type FakeRepository = {
   fullName: string;
   headSha: string;
   files: Record<string, string>;
+  defaultBranch?: string;
 };
 
 function fakeOctokit(input: FakeRepository): Octokit {
@@ -45,14 +48,14 @@ function fakeOctokit(input: FakeRepository): Octokit {
             id: input.repoId,
             full_name: input.fullName,
             name,
-            default_branch: "main",
+            default_branch: input.defaultBranch ?? "main",
             private: true,
             fork: false,
             archived: false,
           } };
         },
         async getCommit(args: { ref: string }) {
-          if (args.ref !== "main" && args.ref !== input.headSha) {
+          if (args.ref !== (input.defaultBranch ?? "main") && args.ref !== input.headSha) {
             throw Object.assign(new Error("not found"), { status: 404 });
           }
           return { data: { sha: input.headSha, commit: { tree: { sha: TREE_SHA } } } };
@@ -91,8 +94,11 @@ async function clean(): Promise<void> {
     PLATFORM_REPO_ID,
     ADOPTION_REPO_ID,
     CLASSIFICATION_REPO_ID,
+    PLANNING_REPO_ID,
   ].map(BigInt);
   await prisma.repositoryRegistration.deleteMany({ where: { repoId: { in: repoIds } } });
+  await prisma.fleetLifecycleEvent.deleteMany({ where: { app: { repoId: { in: repoIds } } } });
+  await prisma.fleetLifecycleState.deleteMany({ where: { app: { repoId: { in: repoIds } } } });
   await prisma.app.deleteMany({ where: { repoId: { in: repoIds } } });
   await prisma.app.deleteMany({ where: { repoFullName: "seorilabs/discovery-adoption" } });
 }
@@ -204,12 +210,13 @@ async function main(): Promise<void> {
     assert.equal(ratificationQueueItem.candidates[0]?.markerPath, "package.json");
     const ratification = await recordRepositoryClassificationDecision({
       request: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repoId: BigInt(RN_REPO_ID),
         expectedGeneration: ratificationQueueItem.generation,
         expectedDecisionRevision: ratificationQueueItem.decisionRevision,
         classification: "PRODUCT_APP",
         candidateMarkerPath: "package.json",
+        productIdentity: ratificationQueueItem.currentProductIdentity,
         justification: "CURRENT_OBSERVATION_RATIFIED",
       },
       actor: "integration:admin",
@@ -234,12 +241,13 @@ async function main(): Promise<void> {
     }), 1);
     const ratificationReplay = await recordRepositoryClassificationDecision({
       request: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repoId: BigInt(RN_REPO_ID),
         expectedGeneration: ratificationQueueItem.generation,
         expectedDecisionRevision: ratificationQueueItem.decisionRevision,
         classification: "PRODUCT_APP",
         candidateMarkerPath: "package.json",
+        productIdentity: ratificationQueueItem.currentProductIdentity,
         justification: "CURRENT_OBSERVATION_RATIFIED",
       },
       actor: "integration:admin",
@@ -298,6 +306,8 @@ async function main(): Promise<void> {
       where: { repoId: BigInt(RN_REPO_ID) },
     });
     assert.equal(pushedRegistration.status, "REGISTERED");
+    assert.equal(pushedRegistration.classification, "PRODUCT_APP");
+    assert.equal(pushedRegistration.managementKind, "APP");
     assert.equal(pushedRegistration.lastDefaultPushSha, NEW_SHA);
     assert.equal(pushedRegistration.lastReconciledSha, SOURCE_SHA);
     const staleWorkerClaim = await claimRepositoryDiscoveryRun("integration-worker-stale", {
@@ -339,6 +349,12 @@ async function main(): Promise<void> {
       where: { app: { repoId: BigInt(RN_REPO_ID) } },
     }), 1, "새 generation 뒤 stale worker는 observation을 추가할 수 없다");
     await prisma.repositoryRegistration.delete({ where: { repoId: BigInt(RN_REPO_ID) } });
+    await prisma.fleetLifecycleEvent.deleteMany({
+      where: { app: { repoId: BigInt(RN_REPO_ID) } },
+    });
+    await prisma.fleetLifecycleState.deleteMany({
+      where: { app: { repoId: BigInt(RN_REPO_ID) } },
+    });
     await prisma.app.delete({ where: { repoId: BigInt(RN_REPO_ID) } });
 
     await registerRepositoryWebhook({
@@ -494,6 +510,227 @@ async function main(): Promise<void> {
     });
     assert.equal(adoptionApp.repoId, null);
     assert.equal(adoptionApp.playPackage, "com.seorilabs.wrong");
+    const adoptionDecision = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 2,
+        repoId: BigInt(ADOPTION_REPO_ID),
+        expectedGeneration: adoptionRegistration.reconcileGeneration ?? 0,
+        expectedDecisionRevision: adoptionRegistration.classificationDecisionVersion ?? 0,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: null,
+        productIdentity: {
+          displayName: "Discovery Adoption",
+          type: "APP",
+          engine: "RN",
+        },
+        justification: "REPOSITORY_PURPOSE_CONFIRMED",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-adopt-existing-product",
+    });
+    assert.ok(adoptionDecision.runId);
+    const adoptedApp = await prisma.app.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+      include: { fleetLifecycleState: true },
+    });
+    assert.equal(adoptedApp.id, adoptionApp.id);
+    assert.equal(adoptedApp.fleetLifecycleState?.stage, "PLANNING");
+    const adoptionRecheckClaim = await claimRepositoryDiscoveryRun(
+      "integration-worker-adoption-recheck",
+      {
+        ...dependencies,
+        getOctokit: async () => fakeOctokit({
+          repoId: ADOPTION_REPO_ID,
+          fullName: "seorilabs/discovery-adoption",
+          headSha: SOURCE_SHA,
+          files,
+        }),
+      },
+    );
+    assert.ok(adoptionRecheckClaim);
+    const adoptionRecheck = await processRepositoryDiscoveryClaim(adoptionRecheckClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: ADOPTION_REPO_ID,
+        fullName: "seorilabs/discovery-adoption",
+        headSha: SOURCE_SHA,
+        files,
+      }),
+    });
+    assert.equal(adoptionRecheck.status, "NEEDS_INPUT");
+    assert.equal(adoptionRecheck.reasonCode, "APP_MARKET_IDENTITY_CONFLICT");
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+    })).classification, "PRODUCT_APP");
+
+    // keeum처럼 build marker가 아직 없는 product도 중앙 identity만 등록하고
+    // observation/BuildTarget은 source fact 없이 만들지 않는다.
+    const planningFiles = { "README.md": "planning product\n" };
+    await registerRepositoryWebhook({
+      event: "repository",
+      action: "created",
+      repository: {
+        id: PLANNING_REPO_ID,
+        full_name: "seorilabs/discovery-planning-product",
+        name: "discovery-planning-product",
+        default_branch: "develop",
+        private: true,
+        fork: false,
+      },
+      deliveryId: "discovery-integration-planning-created",
+      organization: "seorilabs",
+    }, dependencies);
+    const planningClaim = await claimRepositoryDiscoveryRun("integration-worker-planning-initial", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: PLANNING_REPO_ID,
+        fullName: "seorilabs/discovery-planning-product",
+        defaultBranch: "develop",
+        headSha: SOURCE_SHA,
+        files: planningFiles,
+      }),
+    });
+    assert.ok(planningClaim);
+    const planningUnresolved = await processRepositoryDiscoveryClaim(planningClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: PLANNING_REPO_ID,
+        fullName: "seorilabs/discovery-planning-product",
+        defaultBranch: "develop",
+        headSha: SOURCE_SHA,
+        files: planningFiles,
+      }),
+    });
+    assert.equal(planningUnresolved.status, "NEEDS_INPUT");
+    assert.equal(planningUnresolved.reasonCode, "NO_CANDIDATE");
+    const planningRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(PLANNING_REPO_ID) },
+    });
+    const planningDecision = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 2,
+        repoId: BigInt(PLANNING_REPO_ID),
+        expectedGeneration: planningRegistration.reconcileGeneration ?? 0,
+        expectedDecisionRevision: planningRegistration.classificationDecisionVersion ?? 0,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: null,
+        productIdentity: {
+          displayName: "Discovery Planning Product",
+          type: "APP",
+          engine: "RN",
+        },
+        justification: "REPOSITORY_PURPOSE_CONFIRMED",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-planning-product",
+    });
+    assert.ok(planningDecision.runId);
+    const planningRecheckClaim = await claimRepositoryDiscoveryRun("integration-worker-planning-recheck", {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: PLANNING_REPO_ID,
+        fullName: "seorilabs/discovery-planning-product",
+        defaultBranch: "develop",
+        headSha: SOURCE_SHA,
+        files: planningFiles,
+      }),
+    });
+    assert.ok(planningRecheckClaim);
+    const planningRecheck = await processRepositoryDiscoveryClaim(planningRecheckClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: PLANNING_REPO_ID,
+        fullName: "seorilabs/discovery-planning-product",
+        defaultBranch: "develop",
+        headSha: SOURCE_SHA,
+        files: planningFiles,
+      }),
+    });
+    assert.equal(planningRecheck.status, "NEEDS_INPUT");
+    assert.equal(planningRecheck.reasonCode, "NO_CANDIDATE");
+    const [planningReadback, planningApp] = await Promise.all([
+      prisma.repositoryRegistration.findUniqueOrThrow({
+        where: { repoId: BigInt(PLANNING_REPO_ID) },
+      }),
+      prisma.app.findUniqueOrThrow({
+        where: { repoId: BigInt(PLANNING_REPO_ID) },
+        include: { fleetLifecycleState: true, buildTargets: true, discoveryObservations: true },
+      }),
+    ]);
+    assert.equal(planningReadback.defaultBranch, "develop");
+    assert.equal(planningReadback.classification, "PRODUCT_APP");
+    assert.equal(planningReadback.managementKind, "APP");
+    assert.equal(planningReadback.status, "NEEDS_INPUT");
+    assert.equal(planningReadback.lastDiscoveryReason, "NO_CANDIDATE");
+    assert.equal(planningApp.displayName, "Discovery Planning Product");
+    assert.equal(planningApp.fleetLifecycleState?.stage, "PLANNING");
+    assert.equal(planningApp.buildTargets.length, 0);
+    assert.equal(planningApp.discoveryObservations.length, 0);
+    await assert.rejects(createReleaseCandidate({
+      repoId: BigInt(PLANNING_REPO_ID),
+      sourceSha: SOURCE_SHA,
+      configRevision: 1,
+      market: "google-play",
+      targetKey: "android",
+      artifactType: "android-aab",
+      artifactChecksum: "e".repeat(64),
+      workflowBundleSha: "f".repeat(40),
+      workflowBundleDigest: "1".repeat(64),
+      platformVersion: "1.0.0",
+      actor: "integration:admin",
+      idempotencyKey: "release-candidate-planning-product",
+    }), (error) => error instanceof ControlPlaneError
+      && error.code === "PRODUCT_SOURCE_CANDIDATE_MISSING");
+    await registerRepositoryWebhook({
+      event: "push",
+      repository: {
+        id: PLANNING_REPO_ID,
+        full_name: "seorilabs/discovery-planning-product",
+        name: "discovery-planning-product",
+        default_branch: "develop",
+        private: true,
+        fork: false,
+      },
+      ref: "refs/heads/develop",
+      after: NEW_SHA,
+      deliveryId: "discovery-integration-planning-new-head",
+      organization: "seorilabs",
+    }, dependencies);
+    const planningInvalidated = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(PLANNING_REPO_ID) },
+    });
+    assert.equal(planningInvalidated.status, "REGISTERED");
+    assert.equal(planningInvalidated.classification, "PRODUCT_APP");
+    assert.equal(planningInvalidated.managementKind, "APP");
+    const planningNewHeadClaim = await claimRepositoryDiscoveryRun(
+      "integration-worker-planning-new-head",
+      {
+        ...dependencies,
+        getOctokit: async () => fakeOctokit({
+          repoId: PLANNING_REPO_ID,
+          fullName: "seorilabs/discovery-planning-product",
+          defaultBranch: "develop",
+          headSha: NEW_SHA,
+          files: planningFiles,
+        }),
+      },
+    );
+    assert.ok(planningNewHeadClaim);
+    const planningNewHead = await processRepositoryDiscoveryClaim(planningNewHeadClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: PLANNING_REPO_ID,
+        fullName: "seorilabs/discovery-planning-product",
+        defaultBranch: "develop",
+        headSha: NEW_SHA,
+        files: planningFiles,
+      }),
+    });
+    assert.equal(planningNewHead.status, "NEEDS_INPUT");
+    assert.equal(planningNewHead.reasonCode, "NO_CANDIDATE");
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(PLANNING_REPO_ID) },
+    })).classification, "PRODUCT_APP");
 
     const classificationFiles = { "README.md": "internal repository\n" };
     await registerRepositoryWebhook({
@@ -540,11 +777,12 @@ async function main(): Promise<void> {
     });
     assert.equal(unresolvedRegistration.classificationDecisionVersion, null);
     const decisionBase = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       repoId: BigInt(CLASSIFICATION_REPO_ID),
       expectedGeneration: unresolvedRegistration.reconcileGeneration ?? 0,
       expectedDecisionRevision: unresolvedRegistration.classificationDecisionVersion ?? 0,
       candidateMarkerPath: null,
+      productIdentity: null,
       justification: "REPOSITORY_PURPOSE_CONFIRMED" as const,
     };
     const concurrent = await Promise.allSettled([

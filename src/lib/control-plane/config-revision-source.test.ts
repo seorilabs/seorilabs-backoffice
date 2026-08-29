@@ -23,15 +23,19 @@ import {
 const REPO_ID = 1_250_442_131n;
 const SOURCE_SHA = "a".repeat(40);
 
-function sourceFixture(appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE") {
+function sourceFixture(
+  appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE",
+  defaultBranch = "main",
+) {
+  const sourceRef = `refs/heads/${defaultBranch}`;
   const payload: Record<string, unknown> = {
     schemaVersion: 2,
-    contractVersion: "repository-discovery/v9",
+    contractVersion: "repository-discovery/v10",
     repository: {
       id: Number(REPO_ID),
       fullName: "seorilabs/happy-farm",
       sourceSha: SOURCE_SHA,
-      sourceRef: "refs/heads/main",
+      sourceRef,
     },
     status: "ACTIVE",
     classification: "PRODUCT_APP",
@@ -46,19 +50,19 @@ function sourceFixture(appStatus: "ACTIVE" | "PAUSED" | "DEPRECATED" = "ACTIVE")
     registration: {
       repoId: REPO_ID,
       repoFullName: "seorilabs/happy-farm",
-      defaultBranch: "main",
+      defaultBranch,
       archived: false,
       status: "MANAGED",
       classification: "PRODUCT_APP",
-      discoveryContractVersion: "repository-discovery/v9",
+      discoveryContractVersion: "repository-discovery/v10",
       lastDefaultPushSha: SOURCE_SHA,
       lastReconciledSha: SOURCE_SHA,
     },
     observation: {
-      id: "discovery-happy-farm-v9",
+      id: "discovery-happy-farm-v10",
       appId: "app-happy-farm",
       sourceSha: SOURCE_SHA,
-      sourceRef: "refs/heads/main",
+      sourceRef,
       payload,
       payloadHash: jsonDigest(payload as JsonValue),
       requestHash: "b".repeat(64),
@@ -82,8 +86,9 @@ function replayFixture(contractVersion: string | null = CONFIG_REVISION_SOURCE_R
   };
 }
 
-test("MANAGED PRODUCT_APP의 exact main discovery만 ConfigRevision source가 된다", () => {
+test("MANAGED PRODUCT_APP의 exact registered default branch discovery만 ConfigRevision source가 된다", () => {
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture()));
+  assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture("ACTIVE", "develop")));
 });
 
 test("revision 0 discovery projection만 PAUSED/DEPRECATED product source를 읽을 수 있다", () => {

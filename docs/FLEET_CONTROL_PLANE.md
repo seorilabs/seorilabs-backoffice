@@ -42,7 +42,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
 | `POST` | `/api/control-plane/config-revisions/discovery-draft` | `mode=DRAFT_ONLY`에서 revision 0/no-import 또는 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
-| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 기록 |
+| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류·product identity 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
@@ -78,8 +78,8 @@ Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
 
-세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, default branch `main`, current
-`repository-discovery/v9`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, GitHub에 등록된 exact default branch/ref, current
+`repository-discovery/v10`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
@@ -459,7 +459,7 @@ webhook은 source를 직접 읽지 않는다. 같은 transaction에서 delivery�
 branch와 HEAD를 readback한 뒤 그 vector로만 `RepositoryDiscoveryRun` generation을 enqueue한다. delivery
 ID가 달라도 동일 generation의 normalized request hash가 같으면 기존 run으로 접는다. 전용 worker가
 numeric repository ID, canonical full name, private/fork/archive/default
-branch와 현재 `main` HEAD를 provider에서 다시 읽은 뒤 exact commit tree만 탐색한다. default push SHA와
+branch와 해당 default branch HEAD를 provider에서 다시 읽은 뒤 exact commit tree만 탐색한다. default push SHA와
 현재 HEAD가 다르거나 탐지 중 HEAD가 움직이면 이전 run은 `STALE`로 닫고 current HEAD를 새 generation으로
 enqueue한다. 만료 worker의 완료는 `leaseGeneration`과 registration generation CAS에서 거부된다.
 
@@ -478,7 +478,8 @@ segment를 거부하고 512자·64 segment 상한을 적용한다. 이 상한 �
   공식 웹사이트와 starter template은 `EXCLUDED`로 terminal 분류하며 App row를 만들지 않는다. 정책 밖의
   후보 0개/여러 개는 인프라로 추측하지 않고 이유 코드가 있는 `NEEDS_INPUT`으로 닫는다.
 - package manager 모호성, build target 누락, 서로 다른 공개 identity 복수 관측, unreadable source, 미승인
-  public 또는 non-main repo도 `NEEDS_INPUT`이다. target은 exact source에 존재하지만 package ID, bundle ID,
+  public repository는 `NEEDS_INPUT`이다. default branch 이름은 `main`으로 강제하지 않고 GitHub numeric
+  repository readback에서 확인한 정확한 branch/ref에 모든 source·config·runtime 증거를 결합한다. target은 exact source에 존재하지만 package ID, bundle ID,
   AppsInToss appName이 동적이거나 아직 확정되지 않았으면 registration을 막지 않고 nullable `BuildTarget` fact로
   기록한다. release candidate와 resolved manifest는 source identity 또는 같은 앱의 exact provider application
   binding이 있어야 한다. Google Play와 App Store는 `application`, AppsInToss는 `mini-app` binding만 허용하며
@@ -532,7 +533,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v9`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v10`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
@@ -552,6 +553,15 @@ default push/reconciled/source SHA, discovery contract, candidate digest와 term
 discovery를 enqueue하지 않는다. 이후 분류 변경은 `CENTRAL_POLICY_CORRECTION` 새 revision으로만 기록하며
 새 generation discovery를 enqueue한다. 따라서 ratification 오류는 row 삭제나 revision 되감기가 아니라
 후속 교정 revision과 exact-source 재탐지로 복구한다.
+
+`PRODUCT_APP` decision v2는 `displayName`, `type`, `engine`의 최소 product identity를 필수로
+결합한다. 같은 strict validator와 transaction service를 사람 UI와 승인된 AI API가
+공유하며, source candidate가 없는 docs-only repository도 App과 `FleetLifecycleState=PLANNING`으로
+중앙 등록할 수 있다. 이 분류·identity는 desired state이므로 후속 source discovery가
+`NO_CANDIDATE`, `BUILD_TARGET_MISSING` 또는 읽기 오류로 끝나더라도 `PRODUCT_APP`을
+null로 되돌리지 않는다. 대신 `PRODUCT_SOURCE_CANDIDATE_MISSING`,
+`PRODUCT_BUILD_TARGET_MISSING`, `PRODUCT_DISCOVERY_NOT_READY`로 구성·release·migration gate를
+닫는다. observation, BuildTarget, market identity는 source/provider 증거 없이 생성하지 않는다.
 
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.

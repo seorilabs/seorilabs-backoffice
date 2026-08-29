@@ -8,6 +8,8 @@ import {
   type RepositoryReadbackVector,
 } from "@/lib/control-plane/repository-discovery-backfill";
 import { prisma } from "@/lib/prisma";
+import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
+import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 
 export const FLEET_MIGRATION_SHADOW_READINESS_CONTRACT_VERSION =
   "fleet-migration-shadow-readiness/v2" as const;
@@ -40,6 +42,10 @@ export type FleetMigrationShadowReasonCode =
   | "PLATFORM_FLEET_BINDING_MISSING"
   | "PLATFORM_FLEET_BINDING_NOT_COMPLIANT"
   | "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH"
+  | "PRODUCT_BUILD_TARGET_MISSING"
+  | "PRODUCT_DISCOVERY_NOT_READY"
+  | "PRODUCT_SOURCE_CANDIDATE_MISSING"
+  | "REPOSITORY_DEFAULT_BRANCH_MISMATCH"
   | "REPOSITORY_IDENTITY_MISMATCH"
   | "REPOSITORY_NOT_MANAGED"
   | "REPOSITORY_REGISTRATION_MISSING"
@@ -54,10 +60,12 @@ export interface FleetMigrationClassificationDecisionReadback {
 export interface FleetMigrationRepositoryRegistrationReadback {
   repoId: string;
   repoFullName: string;
+  defaultBranch: string | null;
   status: "REGISTERED" | "NEEDS_INPUT" | "MANAGED" | "ARCHIVED";
   classification: RepositoryClassification | null;
   classificationDecisionVersion: number;
   decision: FleetMigrationClassificationDecisionReadback | null;
+  lastDiscoveryReason: string | null;
 }
 
 export interface FleetMigrationDiscoveryObservationReadback {
@@ -144,9 +152,11 @@ export async function readFleetMigrationBackoffice(
       select: {
         repoId: true,
         repoFullName: true,
+        defaultBranch: true,
         status: true,
         classification: true,
         classificationDecisionVersion: true,
+        lastDiscoveryReason: true,
         classificationDecisions: {
           orderBy: { revision: "desc" },
           take: 1,
@@ -212,11 +222,13 @@ export async function readFleetMigrationBackoffice(
     registrations: registrations.map((registration) => ({
       repoId: registration.repoId.toString(),
       repoFullName: registration.repoFullName,
+      defaultBranch: registration.defaultBranch,
       status: registration.status,
       classification: registration.classification,
       classificationDecisionVersion:
         registration.classificationDecisionVersion ?? 0,
       decision: registration.classificationDecisions[0] ?? null,
+      lastDiscoveryReason: registration.lastDiscoveryReason,
     })),
     apps: apps.flatMap((app) => app.repoId === null ? [] : [{
       id: app.id,
@@ -297,7 +309,10 @@ function repositoryReasons(
   if (registration.repoFullName.toLowerCase() !== vector.repoFullName.toLowerCase()) {
     reasons.push("REPOSITORY_IDENTITY_MISMATCH");
   }
-  if (registration.status !== "MANAGED") {
+  if (registration.defaultBranch !== vector.defaultBranch) {
+    reasons.push("REPOSITORY_DEFAULT_BRANCH_MISMATCH");
+  }
+  if (registration.status !== "MANAGED" && registration.classification !== "PRODUCT_APP") {
     reasons.push("REPOSITORY_NOT_MANAGED");
   }
   if (!registration.classification) {
@@ -333,7 +348,16 @@ function repositoryReasons(
   if (app.repoFullName.toLowerCase() !== vector.repoFullName.toLowerCase()) {
     reasons.push("APP_BINDING_MISMATCH");
   }
-  if (!app.latestDiscovery || app.latestDiscovery.sourceSha !== vector.headSha) {
+  if (registration.status !== "MANAGED") {
+    reasons.push(repositoryProductPlanningReason(registration.lastDiscoveryReason));
+    return reasons;
+  }
+  const expectedSourceRef = repositoryDefaultBranchRef(registration.defaultBranch);
+  if (
+    !app.latestDiscovery
+    || app.latestDiscovery.sourceSha !== vector.headSha
+    || app.latestDiscovery.sourceRef !== expectedSourceRef
+  ) {
     reasons.push("DISCOVERY_SOURCE_MISMATCH");
   }
   if (app.activeConfigs.length !== 1) {
@@ -348,8 +372,9 @@ function repositoryReasons(
       || activeConfig.sourceObservationId !== sourceObservation.id
       || sourceObservation.appId !== app.id
       || latestDiscovery.appId !== app.id
-      || sourceObservation.sourceRef !== "refs/heads/main"
-      || latestDiscovery.sourceRef !== "refs/heads/main"
+      || expectedSourceRef === null
+      || sourceObservation.sourceRef !== expectedSourceRef
+      || latestDiscovery.sourceRef !== expectedSourceRef
       || !SHA_40.test(sourceObservation.sourceSha)
       || !SHA_40.test(latestDiscovery.sourceSha)
       || sourceObservation.sourceSha !== latestDiscovery.sourceSha

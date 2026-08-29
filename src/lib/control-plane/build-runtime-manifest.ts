@@ -19,6 +19,7 @@ export interface BuildRuntimeManifestInput {
   repositoryId: string;
   fullName: string;
   applicationSourceSha: string;
+  sourceRef: string;
   eventSourceSha: string;
   observationId: string;
   observationRequestHash: string;
@@ -45,6 +46,9 @@ function signatureDigest(value: string): string {
 }
 
 export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
+  if (!input.sourceRef.startsWith("refs/heads/")) {
+    throw new BuildRuntimeManifestError("INVALID_SOURCE_REF");
+  }
   if (
     !PUBLIC_ID.test(input.snapshotSignatureKeyId)
     || !PUBLIC_ID.test(input.snapshotSignaturePolicyRevision)
@@ -60,7 +64,7 @@ export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
     repositoryId: input.repositoryId,
     fullName: input.fullName,
     sourceSha: input.applicationSourceSha,
-    sourceRef: "refs/heads/main" as const,
+    sourceRef: input.sourceRef,
     observationId: input.observationId,
     observationDigest: sha256Prefix(input.observationRequestHash),
     configRevisionId: input.configRevisionId,

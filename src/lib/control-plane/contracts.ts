@@ -931,13 +931,20 @@ const repositoryCandidateMarkerPath = z.string().min(1).max(512).refine((value) 
   && value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
 ), "안전한 repository candidate marker path가 필요합니다.");
 
+const repositoryProductIdentitySchema = z.object({
+  displayName: z.string().trim().min(1).max(191),
+  type: z.enum(["APP", "GAME"]),
+  engine: z.enum(["RN", "GODOT"]),
+}).strict();
+
 export const repositoryClassificationDecisionSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   repoId: z.coerce.bigint().positive().max(BigInt(Number.MAX_SAFE_INTEGER)),
   expectedGeneration: z.number().int().nonnegative(),
   expectedDecisionRevision: z.number().int().nonnegative(),
   classification: z.enum(["PRODUCT_APP", "INFRA_REPO", "PLATFORM_PRODUCER", "EXCLUDED"]),
   candidateMarkerPath: repositoryCandidateMarkerPath.nullable(),
+  productIdentity: repositoryProductIdentitySchema.nullable(),
   justification: z.enum([
     "REPOSITORY_PURPOSE_CONFIRMED",
     "APP_CANDIDATE_SELECTED",
@@ -950,6 +957,20 @@ export const repositoryClassificationDecisionSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["candidateMarkerPath"],
       message: "PRODUCT_APP 외 분류에는 candidate marker를 지정할 수 없습니다.",
+    });
+  }
+  if (value.classification === "PRODUCT_APP" && value.productIdentity === null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["productIdentity"],
+      message: "PRODUCT_APP에는 중앙 product identity가 필요합니다.",
+    });
+  }
+  if (value.classification !== "PRODUCT_APP" && value.productIdentity !== null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["productIdentity"],
+      message: "PRODUCT_APP 외 분류에는 product identity를 지정할 수 없습니다.",
     });
   }
 });

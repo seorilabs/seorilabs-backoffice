@@ -49,10 +49,27 @@ test("GitHub OIDC push identity는 숫자 org/repo와 caller/called exact SHA에
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: APPLICATION_SHA,
+    defaultBranch: "main",
   });
   assert.equal(identity.workflowBundleSha, BUNDLE_SHA);
   assert.equal(identity.calledWorkflowPath, ".github/workflows/js-static-checks-v1.yml");
   assert.equal(identity.eventName, "push");
+});
+
+test("GitHub OIDC는 등록된 non-main default branch만 push source로 허용한다", () => {
+  const identity = assertGitHubActionsStaticManifestClaims(claims({
+    sub: "repo:seorilabs/runtime-canary:ref:refs/heads/develop",
+    ref: "refs/heads/develop",
+    workflow_ref:
+      "seorilabs/runtime-canary/.github/workflows/org-contract.yml@refs/heads/develop",
+  }), {
+    repositoryId: "7001",
+    applicationSourceSha: APPLICATION_SHA,
+    bindingSourceSha: APPLICATION_SHA,
+    defaultBranch: "develop",
+  });
+  assert.equal(identity.defaultBranch, "develop");
+  assert.equal(identity.eventRef, "refs/heads/develop");
 });
 
 test("Godot v3 workflow는 별도 exact called path identity로 보존된다", () => {
@@ -63,6 +80,7 @@ test("Godot v3 workflow는 별도 exact called path identity로 보존된다", (
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: APPLICATION_SHA,
+    defaultBranch: "main",
   });
   assert.equal(identity.calledWorkflowPath, ".github/workflows/godot-checks-v3.yml");
 });
@@ -83,6 +101,7 @@ test("same-repo PR은 merge source와 signed base binding을 분리한다", () =
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
+    defaultBranch: "main",
   });
   assert.equal(claimIdentity.requestedBindingSourceSha, BINDING_SHA);
   assert.equal(claimIdentity.callerWorkflowSha, APPLICATION_SHA);
@@ -95,6 +114,7 @@ test("OIDC identity alias, source substitution, floating workflow와 runner mism
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: APPLICATION_SHA,
+    defaultBranch: "main",
   };
   for (const payload of [
     claims({ repository_owner_id: "1" }),
@@ -131,6 +151,7 @@ test("request principal은 서명된 repo/run identity와 정확히 일치해야
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: APPLICATION_SHA,
+    defaultBranch: "main",
   };
   assert.ok(await authenticateGitHubActionsStaticManifestRequest(
     makeRequest("github-actions:7001:1234"),
@@ -178,6 +199,7 @@ test("same-repo PR은 GitHub App의 exact base, merge, head repo readback 뒤에
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
+    defaultBranch: "main",
   };
   const exactReadback = {
     number: 91,
@@ -232,6 +254,7 @@ test("PR OIDC workflow_sha를 base SHA로 위조하고 fork head를 결합하면
     repositoryId: "7001",
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
+    defaultBranch: "main",
   };
   assert.throws(
     () => assertGitHubActionsStaticManifestClaims(claims({
