@@ -299,6 +299,7 @@ async function runGodotReleaseCandidateFixture(input: {
   });
   const withoutBlueprint = await createConfigRevision({
     repoId: GODOT_REPO_ID,
+    expectedLatestRevision: 0,
     actor: "integration-human",
     idempotencyKey: "project-blueprint-godot-config-without-blueprint",
     payload: configPayload({ assetKey: "apps/blueprint-godot/icon" }),
@@ -379,6 +380,7 @@ async function runGodotReleaseCandidateFixture(input: {
 
   const configured = await createConfigRevision({
     repoId: GODOT_REPO_ID,
+    expectedLatestRevision: 1,
     actor: "integration-human",
     idempotencyKey: "project-blueprint-godot-config-compliant",
     payload: configPayload({
@@ -505,6 +507,7 @@ async function main() {
   });
   const draft = await createConfigRevision({
     repoId: REPO_ID,
+    expectedLatestRevision: 0,
     actor: "integration-human",
     idempotencyKey: "project-blueprint-integration-config",
     payload: configPayload({ projectBlueprint: blueprint(), assetKey: "apps/blueprint/icon" }),
