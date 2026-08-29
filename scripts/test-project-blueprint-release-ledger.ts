@@ -55,6 +55,45 @@ const GODOT_SOURCE_SHA = "4".repeat(40);
 const GODOT_ARTIFACT_SHA = "5".repeat(64);
 const GODOT_PACKAGE_ID = "com.seorilabs.blueprint.godot";
 
+function discoveryPayload(input: {
+  repoId: bigint;
+  repoFullName: string;
+  sourceSha: string;
+}) {
+  return {
+    schemaVersion: 2,
+    contractVersion: "repository-discovery/v8",
+    repository: {
+      id: Number(input.repoId),
+      fullName: input.repoFullName,
+      sourceSha: input.sourceSha,
+      sourceRef: "refs/heads/main",
+    },
+    status: "ACTIVE",
+    classification: "PRODUCT_APP",
+  };
+}
+
+async function recordManagedRegistration(input: {
+  repoId: bigint;
+  repoFullName: string;
+  sourceSha: string;
+}) {
+  await prisma.repositoryRegistration.create({
+    data: {
+      repoId: input.repoId,
+      repoFullName: input.repoFullName,
+      defaultBranch: "main",
+      status: "MANAGED",
+      managementKind: "APP",
+      classification: "PRODUCT_APP",
+      discoveryContractVersion: "repository-discovery/v8",
+      lastDefaultPushSha: input.sourceSha,
+      lastReconciledSha: input.sourceSha,
+    },
+  });
+}
+
 /**
  * gate 원장에 실제로 남은 관측과 lifecycle 상태를 한 번에 읽는다.
  * 거부 경로가 정말 0 mutation인지 판정하는 기준이다.
@@ -281,6 +320,11 @@ async function runGodotReleaseCandidateFixture(input: {
       marketTargets: ["play"],
     },
   });
+  await recordManagedRegistration({
+    repoId: GODOT_REPO_ID,
+    repoFullName: "seorilabs/project-blueprint-godot-integration",
+    sourceSha: GODOT_SOURCE_SHA,
+  });
   await recordDiscoveryObservation({
     repoId: GODOT_REPO_ID,
     sourceSha: GODOT_SOURCE_SHA,
@@ -289,7 +333,11 @@ async function runGodotReleaseCandidateFixture(input: {
     observedBy: "integration-worker",
     idempotencyKey: "project-blueprint-godot-discovery",
     workflowCaller: { profile: "godot", packageManager: null, workingDirectory: "." },
-    payload: { stack: "godot" },
+    payload: discoveryPayload({
+      repoId: GODOT_REPO_ID,
+      repoFullName: "seorilabs/project-blueprint-godot-integration",
+      sourceSha: GODOT_SOURCE_SHA,
+    }),
     buildTargets: [{
       targetKey: "android-release",
       stack: "godot",
@@ -488,6 +536,11 @@ async function main() {
       marketTargets: ["play"],
     },
   });
+  await recordManagedRegistration({
+    repoId: REPO_ID,
+    repoFullName: "seorilabs/project-blueprint-integration",
+    sourceSha: SOURCE_SHA,
+  });
   const observedAt = new Date();
   await recordDiscoveryObservation({
     repoId: REPO_ID,
@@ -497,7 +550,11 @@ async function main() {
     observedBy: "integration-worker",
     idempotencyKey: "project-blueprint-integration-discovery",
     workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
-    payload: { stack: "react-native" },
+    payload: discoveryPayload({
+      repoId: REPO_ID,
+      repoFullName: "seorilabs/project-blueprint-integration",
+      sourceSha: SOURCE_SHA,
+    }),
     buildTargets: [{
       targetKey: "android-release",
       stack: "react-native",

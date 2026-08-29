@@ -7,12 +7,14 @@ import { projectDiscoveryConfigPayload } from "@/lib/control-plane/config-revisi
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertConfigRevisionReplay,
+  assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
   assertExpectedLatestConfigRevision,
+  configSourceBindingsMatch,
   CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
-  CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
   CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
   ControlPlaneError,
+  isLegacyDiscoveryProjectionSource,
 } from "@/lib/control-plane/service";
 
 const REPO_ID = 1_250_442_131n;
@@ -61,7 +63,7 @@ function sourceFixture() {
   };
 }
 
-function replayFixture(contractVersion = CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION) {
+function replayFixture(contractVersion: string | null = CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION) {
   const source = sourceFixture();
   const payload: Record<string, unknown> = { schemaVersion: 1, markets: [] };
   return {
@@ -153,11 +155,11 @@ test("rebase replay는 repo, actor, expected revision, operation 전체 충돌�
 test("manual create replay는 payload 충돌을 거부한다", () => {
   assert.throws(
     () => assertConfigRevisionReplay({
-      stored: replayFixture(CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION),
+      stored: replayFixture(null),
       repoId: REPO_ID,
       actor: "operator:seorilabs",
       expectedLatestRevision: 7,
-      contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+      contractVersion: null,
       payloadHash: "f".repeat(64),
     }),
     (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
@@ -200,6 +202,48 @@ test("legacy projection replay는 clone과 다른 contract를 요구한다", () 
     expectedLatestRevision: 7,
     contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
   }));
+});
+
+test("일반 rebase는 legacy DRAFT를 거부하고 semantic source가 같으면 row ID가 달라도 current다", () => {
+  assert.throws(
+    () => assertConfigRevisionRebaseSource({
+      status: "DRAFT",
+      idempotencyKey: "legacy-shadow-draft:example",
+      legacyConfigImport: { id: "legacy-import-1" },
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "CONFIG_REVISION_NOT_REBASABLE",
+  );
+  const left = sourceFixture().observation;
+  const right = { ...sourceFixture().observation, id: "same-facts-new-row" };
+  assert.equal(configSourceBindingsMatch(left, right), true);
+  assert.equal(configSourceBindingsMatch(left, { ...right, payloadHash: "f".repeat(64) }), false);
+});
+
+test("legacy discovery projection은 exact import relation과 parity evidence를 모두 요구한다", () => {
+  const evidence = {
+    revisionId: "revision-1",
+    status: "DRAFT",
+    idempotencyKey: "legacy-shadow-draft:example",
+    legacyConfigImport: {
+      configRevisionId: "revision-1",
+      status: "DRAFT_CREATED_WITH_INPUT",
+      transformVersion: "legacy-config-shadow/v3",
+      parityObservations: [{
+        id: "parity-1",
+        status: "NEEDS_INPUT",
+        contractVersion: "legacy-config-shadow/v3",
+      }],
+    },
+  };
+  assert.equal(isLegacyDiscoveryProjectionSource(evidence), true);
+  assert.equal(isLegacyDiscoveryProjectionSource({
+    ...evidence,
+    legacyConfigImport: { ...evidence.legacyConfigImport, parityObservations: [] },
+  }), false);
+  assert.equal(isLegacyDiscoveryProjectionSource({
+    ...evidence,
+    legacyConfigImport: { ...evidence.legacyConfigImport, configRevisionId: "revision-other" },
+  }), false);
 });
 
 test("rebase와 legacy projection은 append-only audit만 남기고 activation을 분리한다", () => {

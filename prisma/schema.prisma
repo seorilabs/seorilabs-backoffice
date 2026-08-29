@@ -989,8 +989,8 @@ model ConfigRevision {
   payloadHash              String                    @db.Char(64)
   createdBy                String
   idempotencyKey           String                    @unique
-  // 자동 backfill DRAFT가 어떤 exact-SHA observation에서 파생됐는지 보존한다.
-  // 수동/legacy revision은 null이며 source observation 자체를 desired state로 복제하지 않는다.
+  // DRAFT가 어떤 exact-SHA observation에 결합됐는지 보존한다. 수동 입력은
+  // sourceObservationId만, 자동 projection/backfill은 contract version도 함께 기록한다.
   sourceObservationId      String?
   sourceObservation        DiscoveryObservation?     @relation(fields: [sourceObservationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_config_revision_source_observation_fkey")
   backfillContractVersion  String?                   @db.VarChar(64)

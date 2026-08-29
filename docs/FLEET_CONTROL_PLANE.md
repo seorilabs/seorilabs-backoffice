@@ -38,7 +38,9 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | --- | --- | --- |
 | `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
-| `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
+| `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
+| `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
+| `POST` | `/api/control-plane/config-revisions/discovery-draft` | 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
@@ -75,6 +77,13 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
+
+세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, default branch `main`, current
+`repository-discovery/v8`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
+caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
+legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 append-only import/parity
+증거가 있는 latest legacy DRAFT에만 허용되고 법적/provider/free-text/localization/asset 값을 복사하지 않는다.
 
 Android build-only 권한은 ConfigRevision의 `build.workflowBundleSha` 주장만으로 열리지 않는다.
 같은 revision에 `build.workflowBundleDigest`를 `sha256:` 형식으로 고정하고, 별도 immutable registry에서
@@ -520,7 +529,7 @@ hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 
 기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v6`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v8`를 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.

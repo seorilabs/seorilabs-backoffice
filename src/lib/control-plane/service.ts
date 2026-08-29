@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type ConfigRevision } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   androidBuildBindingObservationSchema,
@@ -346,7 +346,7 @@ export function assertConfigRevisionReplay(input: {
   repoId: bigint;
   actor: string;
   expectedLatestRevision: number;
-  contractVersion: string;
+  contractVersion: string | null;
   payloadHash?: string;
 }): void {
   const { stored } = input;
@@ -388,6 +388,58 @@ export function assertConfigRevisionReplay(input: {
       "IDEMPOTENCY_CONFLICT",
     );
   }
+}
+
+export function assertConfigRevisionRebaseSource(input: {
+  status: string;
+  idempotencyKey: string;
+  legacyConfigImport: { id: string } | null;
+}): void {
+  if (
+    !["DRAFT", "ACTIVE"].includes(input.status)
+    || input.legacyConfigImport
+    || input.idempotencyKey.startsWith("legacy-shadow-draft:")
+  ) {
+    throw new ControlPlaneError(
+      "latest DRAFT 또는 ACTIVE revision만 source rebase할 수 있습니다.",
+      409,
+      "CONFIG_REVISION_NOT_REBASABLE",
+    );
+  }
+}
+
+export function configSourceBindingsMatch(
+  left: Pick<ConfigSourceObservation, "appId" | "sourceRef" | "sourceSha" | "payloadHash"> | null,
+  right: Pick<ConfigSourceObservation, "appId" | "sourceRef" | "sourceSha" | "payloadHash">,
+): boolean {
+  return Boolean(
+    left
+    && left.appId === right.appId
+    && left.sourceRef === right.sourceRef
+    && left.sourceSha === right.sourceSha
+    && left.payloadHash === right.payloadHash
+  );
+}
+
+export function isLegacyDiscoveryProjectionSource(input: {
+  revisionId: string;
+  status: string;
+  idempotencyKey: string;
+  legacyConfigImport: {
+    configRevisionId: string | null;
+    status: string;
+    transformVersion: string;
+    parityObservations: Array<{ id: string; status: string; contractVersion: string }>;
+  } | null;
+}): boolean {
+  const legacyImport = input.legacyConfigImport;
+  return input.status === "DRAFT"
+    && input.idempotencyKey.startsWith("legacy-shadow-draft:")
+    && legacyImport !== null
+    && legacyImport.configRevisionId === input.revisionId
+    && ["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
+    && legacyImport.parityObservations.length === 1
+    && legacyImport.parityObservations[0]?.contractVersion === legacyImport.transformVersion;
 }
 
 export function assertActivationPreconditions(input: {
@@ -807,6 +859,36 @@ async function latestConfigRevisionNumber(
   return latest._max.revision ?? 0;
 }
 
+type ConfigRevisionMutationIdentity = {
+  repoId: bigint;
+  actor: string;
+  expectedLatestRevision: number;
+  idempotencyKey: string;
+  contractVersion: string | null;
+  payloadHash?: string;
+};
+
+async function runConfigRevisionMutation(
+  identity: ConfigRevisionMutationIdentity,
+  mutation: () => Promise<{
+    revision: ConfigRevision;
+    sourceObservation: NonNullable<ConfigRevisionReplay["sourceObservation"]>;
+    duplicate: boolean;
+  }>,
+) {
+  try {
+    return await mutation();
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+      throw error;
+    }
+    const replay = await configRevisionReplayForKey(prisma, identity.idempotencyKey);
+    if (!replay) throw error;
+    assertConfigRevisionReplay({ stored: replay, ...identity });
+    return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
+  }
+}
+
 export async function createConfigRevision(input: {
   repoId: bigint;
   expectedLatestRevision: number;
@@ -823,13 +905,20 @@ export async function createConfigRevision(input: {
       repoId: input.repoId,
       actor: input.actor,
       expectedLatestRevision: input.expectedLatestRevision,
-      contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+      contractVersion: null,
       payloadHash,
     });
     return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runConfigRevisionMutation({
+    repoId: input.repoId,
+    actor: input.actor,
+    expectedLatestRevision: input.expectedLatestRevision,
+    idempotencyKey: input.idempotencyKey,
+    contractVersion: null,
+    payloadHash,
+  }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
@@ -838,7 +927,7 @@ export async function createConfigRevision(input: {
         repoId: input.repoId,
         actor: input.actor,
         expectedLatestRevision: input.expectedLatestRevision,
-        contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+        contractVersion: null,
         payloadHash,
       });
       return {
@@ -858,7 +947,6 @@ export async function createConfigRevision(input: {
       createdBy: input.actor,
       idempotencyKey: input.idempotencyKey,
       sourceObservationId: source.observation.id,
-      backfillContractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
     });
     await tx.auditLog.create({
       data: {
@@ -881,7 +969,7 @@ export async function createConfigRevision(input: {
       },
     });
     return { revision, sourceObservation: source.observation, duplicate: false };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
 
 export async function rebaseLatestConfigRevisionSource(input: {
@@ -902,7 +990,13 @@ export async function rebaseLatestConfigRevisionSource(input: {
     return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runConfigRevisionMutation({
+    repoId: input.repoId,
+    actor: input.actor,
+    expectedLatestRevision: input.expectedLatestRevision,
+    idempotencyKey: input.idempotencyKey,
+    contractVersion: CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION,
+  }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
@@ -953,17 +1047,7 @@ export async function rebaseLatestConfigRevisionSource(input: {
         "CONFIG_REVISION_REBASE_SOURCE_MISSING",
       );
     }
-    if (
-      !["DRAFT", "ACTIVE"].includes(fromRevision.status)
-      || fromRevision.legacyConfigImport
-      || fromRevision.idempotencyKey.startsWith("legacy-shadow-draft:")
-    ) {
-      throw new ControlPlaneError(
-        "latest DRAFT 또는 ACTIVE revision만 source rebase할 수 있습니다.",
-        409,
-        "CONFIG_REVISION_NOT_REBASABLE",
-      );
-    }
+    assertConfigRevisionRebaseSource(fromRevision);
     assertConfigRevisionPayload(fromRevision.payload);
     if (
       !DIGEST_64.test(fromRevision.payloadHash)
@@ -975,13 +1059,7 @@ export async function rebaseLatestConfigRevisionSource(input: {
         "CONFIG_REVISION_PAYLOAD_DRIFT",
       );
     }
-    if (
-      fromRevision.sourceObservation
-      && fromRevision.sourceObservation.appId === source.app.id
-      && fromRevision.sourceObservation.sourceRef === source.observation.sourceRef
-      && fromRevision.sourceObservation.sourceSha === source.observation.sourceSha
-      && fromRevision.sourceObservation.payloadHash === source.observation.payloadHash
-    ) {
+    if (configSourceBindingsMatch(fromRevision.sourceObservation, source.observation)) {
       throw new ControlPlaneError(
         "latest Config revision은 이미 현재 discovery source에 결합되어 있습니다.",
         409,
@@ -1023,7 +1101,7 @@ export async function rebaseLatestConfigRevisionSource(input: {
       },
     });
     return { revision, sourceObservation: source.observation, duplicate: false };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
 
 /**
@@ -1048,7 +1126,13 @@ export async function createDiscoveryProjectedConfigRevision(input: {
     return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runConfigRevisionMutation({
+    repoId: input.repoId,
+    actor: input.actor,
+    expectedLatestRevision: input.expectedLatestRevision,
+    idempotencyKey: input.idempotencyKey,
+    contractVersion: CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
+  }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
@@ -1091,21 +1175,20 @@ export async function createDiscoveryProjectedConfigRevision(input: {
     });
     const legacyImport = fromRevision?.legacyConfigImport;
     const parity = legacyImport?.parityObservations[0];
-    if (
-      !fromRevision
-      || fromRevision.status !== "DRAFT"
-      || !fromRevision.idempotencyKey.startsWith("legacy-shadow-draft:")
-      || !legacyImport
-      || legacyImport.configRevisionId !== fromRevision.id
-      || !["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
-      || !parity
-    ) {
+    if (!fromRevision || !isLegacyDiscoveryProjectionSource({
+      revisionId: fromRevision.id,
+      status: fromRevision.status,
+      idempotencyKey: fromRevision.idempotencyKey,
+      legacyConfigImport: fromRevision.legacyConfigImport,
+    })) {
       throw new ControlPlaneError(
         "latest legacy shadow DRAFT와 append-only import/parity 증거가 필요합니다.",
         409,
         "LEGACY_DISCOVERY_PROJECTION_NOT_ALLOWED",
       );
     }
+    // 위 assertion 이후 정확히 한 건의 append-only parity가 보장된다.
+    if (!legacyImport || !parity) throw new Error("legacy projection invariant");
     const buildTargets = await tx.buildTarget.findMany({
       where: { appId: source.app.id },
       orderBy: { targetKey: "asc" },
@@ -1169,7 +1252,7 @@ export async function createDiscoveryProjectedConfigRevision(input: {
       },
     });
     return { revision, sourceObservation: source.observation, duplicate: false };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
 
 export async function activateConfigRevision(input: {
