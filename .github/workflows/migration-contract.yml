@@ -1,5 +1,9 @@
 name: Migration contract
 
+# GitHub-hosted 러너. PR(fork 포함)과 main Deploy 양쪽에서 호출되며 secret 도
+# 클러스터 접근도 필요 없다. `-dind` 스케일셋은 maxRunners=1 이라 아래 2개
+# 시나리오가 직렬화됐지만, hosted 에서는 병렬로 돈다.
+
 on:
   workflow_call:
 
@@ -9,7 +13,7 @@ permissions:
 jobs:
   mysql92:
     name: MySQL 9.2 ${{ matrix.scenario }}
-    runs-on: seorilabs-rpi-arm64-dind
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
