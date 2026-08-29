@@ -16,7 +16,10 @@ import {
 } from "@/lib/control-plane/repository-classification";
 import type { WorkflowCaller } from "@/lib/control-plane/contracts";
 
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v5";
+// v6: v5 배포 뒤 추가된 Capacitor/AIT profile과 application-package
+// disambiguation을 새 generation으로 다시 관측한다. 탐지 의미론을 바꾸고도
+// version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v6";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -295,6 +298,22 @@ export async function readExactRepositoryTree(
   if (repository.archived === true) {
     return { status: "NEEDS_INPUT", reasonCode: "ARCHIVED" };
   }
+  const classificationPolicy = input.classificationDecision
+    ? null
+    : repositoryClassificationPolicy(input.fullName);
+  if (
+    classificationPolicy
+    && (classificationPolicy.classification === "INFRA_REPO"
+      || classificationPolicy.classification === "EXCLUDED")
+  ) {
+    return {
+      status: "CLASSIFIED",
+      classification: classificationPolicy.classification,
+      reasonCode: classificationPolicy.classification === "INFRA_REPO"
+        ? "INFRASTRUCTURE_REPOSITORY"
+        : "NON_PRODUCT_REPOSITORY",
+    };
+  }
   const explicitPolicy = input.classificationDecision !== null
     && input.classificationDecision !== undefined;
   if (
@@ -453,9 +472,13 @@ export async function readCurrentRepositoryHead(
     if (repository.fork) {
       return { status: "NEEDS_INPUT", reasonCode: "FORK_REPOSITORY" };
     }
+    const classificationPolicy = repositoryClassificationPolicy(input.fullName);
+    const centrallyClassifiedNonProduct = classificationPolicy?.classification === "INFRA_REPO"
+      || classificationPolicy?.classification === "EXCLUDED";
     if (
       repository.private !== true
       && !repositoryPublicDiscoveryAllowed(input.fullName)
+      && !centrallyClassifiedNonProduct
       && input.publicDiscoveryApproved !== true
     ) {
       return { status: "NEEDS_INPUT", reasonCode: "PUBLIC_REPOSITORY_REQUIRES_POLICY" };
@@ -688,6 +711,39 @@ function isAppsInTossPackage(pkg: ParsedPackage): boolean {
   ));
 }
 
+function hasApplicationPackageMarker(
+  directory: string,
+  paths: ReadonlySet<string>,
+): boolean {
+  if ([
+    "android/app/build.gradle",
+    "android/app/build.gradle.kts",
+    "app.json",
+    "app.config.js",
+    "app.config.ts",
+    "granite.config.ts",
+    "apps-in-toss.config.ts",
+  ].some((suffix) => paths.has(pathIn(directory, suffix)))) return true;
+  const iosPrefix = `${pathIn(directory, "ios/")}`;
+  for (const path of paths) {
+    if (path.startsWith(iosPrefix) && /\.xcodeproj\/project\.pbxproj$/.test(path)) return true;
+  }
+  return false;
+}
+
+/**
+ * 같은 profile의 workspace library가 react-native/AIT peer dependency만 가진
+ * 경우 실제 application package와 중복 후보가 되지 않게 한다. marker가 정확히
+ * 하나일 때만 좁히며 0개/여러 개면 기존 fail-closed 후보를 유지한다.
+ */
+function preferApplicationPackage(
+  packages: readonly ParsedPackage[],
+  paths: ReadonlySet<string>,
+): ParsedPackage[] {
+  const applications = packages.filter((pkg) => hasApplicationPackageMarker(pkg.directory, paths));
+  return applications.length === 1 ? applications : [...packages];
+}
+
 function packageManagerFor(
   candidateDirectory: string,
   packages: readonly ParsedPackage[],
@@ -918,7 +974,15 @@ export async function discoverRepository(
   const granitePaths = snapshot.paths.filter((path) =>
     path.endsWith("granite.config.ts") && path.split("/").length <= 5
   );
-  const configPaths = new Set<string>([...packagePaths, ...godotPaths, ...granitePaths]);
+  const appsInTossConfigPaths = snapshot.paths.filter((path) =>
+    path.endsWith("apps-in-toss.config.ts") && path.split("/").length <= 5
+  );
+  const configPaths = new Set<string>([
+    ...packagePaths,
+    ...godotPaths,
+    ...granitePaths,
+    ...appsInTossConfigPaths,
+  ]);
   if (packagePaths.length > REPOSITORY_DISCOVERY_MAX_PACKAGE_FILES) {
     return needsInput(snapshot, "TOO_MANY_DISCOVERY_FILES", [], []);
   }
@@ -971,11 +1035,14 @@ export async function discoverRepository(
     return needsInput(snapshot, "PLATFORM_PRODUCER_IDENTITY_INVALID", [], sourceMetadata);
   }
 
-  const reactNativePackages = packages.filter(isPrimaryReactNativePackage);
-  const primaryReactNativePackages = reactNativePackages.some((pkg) => !isAppsInTossPackage(pkg))
+  const reactNativePackages = packages
+    .filter(isPrimaryReactNativePackage)
+    .filter((pkg) => !isCapacitorPackage(pkg));
+  const nonDeliveryReactNativePackages = reactNativePackages.some((pkg) => !isAppsInTossPackage(pkg))
     ? reactNativePackages.filter((pkg) => !isAppsInTossPackage(pkg))
     : reactNativePackages;
-  const capacitorPackages = packages.filter(isCapacitorPackage);
+  const primaryReactNativePackages = preferApplicationPackage(nonDeliveryReactNativePackages, pathSet);
+  const capacitorPackages = preferApplicationPackage(packages.filter(isCapacitorPackage), pathSet);
   const appsInTossWebPackages = packages.filter((pkg) => (
     isAppsInTossWebPackage(pkg) && !isCapacitorPackage(pkg) && !isPrimaryReactNativePackage(pkg)
   ));
@@ -990,29 +1057,23 @@ export async function discoverRepository(
       workingDirectory: pkg.directory,
       markerPath: pkg.path,
     })),
-    ...appsInTossWebPackages
-      .filter((pkg) => !isAppsInTossPackage(pkg))
-      .map((pkg) => ({
-        profile: "ait-web" as const,
-        workingDirectory: pkg.directory,
-        markerPath: pkg.path,
-      })),
   ];
-  const fallbackAitWebCandidates: RepositoryDiscoveryCandidate[] = primaryJsCandidates.length === 0
-    ? appsInTossWebPackages.map((pkg) => ({
+  const godotCandidates: RepositoryDiscoveryCandidate[] = godotPaths.map((path) => ({
+    profile: "godot" as const,
+    workingDirectory: directoryOf(path),
+    markerPath: path,
+  }));
+  const primaryNonAitCandidates = [...primaryJsCandidates, ...godotCandidates];
+  const fallbackAitWebCandidates: RepositoryDiscoveryCandidate[] = primaryNonAitCandidates.length === 0
+    ? preferApplicationPackage(appsInTossWebPackages, pathSet).map((pkg) => ({
         profile: "ait-web" as const,
         workingDirectory: pkg.directory,
         markerPath: pkg.path,
       }))
     : [];
   const candidates: RepositoryDiscoveryCandidate[] = [
-    ...primaryJsCandidates,
+    ...primaryNonAitCandidates,
     ...fallbackAitWebCandidates,
-    ...godotPaths.map((path) => ({
-      profile: "godot" as const,
-      workingDirectory: directoryOf(path),
-      markerPath: path,
-    })),
   ].sort((left, right) => left.markerPath.localeCompare(right.markerPath));
 
   if (candidates.length === 0) {
@@ -1067,7 +1128,9 @@ export async function discoverRepository(
     } else {
       const declaredVersion = exactPlatformVersion(declaredSpec);
       const lockPath = packageLockPath(candidate.workingDirectory, packageManager.value, pathSet);
-      if (lockPath) {
+      // floating dependency는 exact SDK 증거가 될 수 없으므로 lockfile을 읽지 않는다.
+      // 큰 lockfile 때문에 제품/target 탐지 전체가 막히지 않게 fail-closed 결과만 남긴다.
+      if (declaredVersion && lockPath) {
         const lockReadError = await readPaths([lockPath], REPOSITORY_DISCOVERY_MAX_LOCKFILE_BYTES);
         if (lockReadError) return needsInput(snapshot, lockReadError, candidates, sourceMetadata);
       }
@@ -1329,10 +1392,11 @@ export async function discoverRepository(
     }
   }
 
-  const graniteReadError = await readPaths(granitePaths);
-  if (graniteReadError) return needsInput(snapshot, graniteReadError, candidates, sourceMetadata);
-  if (granitePaths.length > 0) {
-    const appNames = parseGraniteAppNames(granitePaths.map((path) => texts.get(path)!));
+  const appsInTossTargetPaths = [...granitePaths, ...appsInTossConfigPaths];
+  const appsInTossReadError = await readPaths(appsInTossTargetPaths);
+  if (appsInTossReadError) return needsInput(snapshot, appsInTossReadError, candidates, sourceMetadata);
+  if (appsInTossTargetPaths.length > 0) {
+    const appNames = parseGraniteAppNames(appsInTossTargetPaths.map((path) => texts.get(path)!));
     if (appNames.length > 1) {
       return needsInput(snapshot, "BUILD_IDENTITY_AMBIGUOUS", candidates, sourceMetadata);
     }
