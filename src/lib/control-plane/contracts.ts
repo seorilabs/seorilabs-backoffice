@@ -931,6 +931,7 @@ export const repositoryClassificationDecisionSchema = z.object({
   justification: z.enum([
     "REPOSITORY_PURPOSE_CONFIRMED",
     "APP_CANDIDATE_SELECTED",
+    "CURRENT_OBSERVATION_RATIFIED",
     "CENTRAL_POLICY_CORRECTION",
   ]),
 }).strict().superRefine((value, context) => {

@@ -1,4 +1,8 @@
-import { Prisma, type RepositoryClassification } from "@prisma/client";
+import {
+  Prisma,
+  type RepositoryClassification,
+  type RepositoryDiscoveryRunStatus,
+} from "@prisma/client";
 
 import {
   repositoryClassificationDecisionSchema,
@@ -21,8 +25,11 @@ export interface RepositoryClassificationQueueCandidate {
 export interface RepositoryClassificationQueueItem {
   repoId: string;
   repoFullName: string;
+  mode: "DECIDE" | "RATIFY_CURRENT" | "CORRECT_POLICY";
   generation: number;
   decisionRevision: number;
+  currentClassification: RepositoryClassification | null;
+  currentCandidateMarkerPath: string | null;
   reasonCode: string | null;
   fork: boolean | null;
   candidates: RepositoryClassificationQueueCandidate[];
@@ -64,6 +71,147 @@ export function repositoryClassificationCandidates(
     .sort((left, right) => left.markerPath.localeCompare(right.markerPath));
 }
 
+interface RepositoryClassificationRatificationEvidence {
+  expectedGeneration: number;
+  expectedDecisionRevision: number;
+  classification: RepositoryClassification;
+  candidateMarkerPath: string | null;
+  registration: {
+    classification: RepositoryClassification | null;
+    discoveryContractVersion: string | null;
+    discoveryCandidates: unknown;
+    lastDefaultPushSha: string | null;
+    lastReconciledSha: string | null;
+    reconcileGeneration: number | null;
+  };
+  latestDecision: { revision: number } | null;
+  terminalRun: {
+    id: string;
+    generation: number;
+    sourceSha: string | null;
+    status: RepositoryDiscoveryRunStatus;
+    classification: RepositoryClassification | null;
+    contractVersion: string | null;
+    candidateDigest: string | null;
+    observationId: string | null;
+    completedAt: Date | null;
+  } | null;
+}
+
+function publicCandidateState(value: unknown): {
+  contractVersion: string;
+  sourceSha: string;
+  classification: RepositoryClassification;
+  candidates: RepositoryClassificationQueueCandidate[];
+  candidateDigest: string;
+} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const state = value as Record<string, unknown>;
+  if (
+    typeof state.contractVersion !== "string"
+    || typeof state.sourceSha !== "string"
+    || !["PRODUCT_APP", "INFRA_REPO", "PLATFORM_PRODUCER", "EXCLUDED"].includes(
+      String(state.classification),
+    )
+    || !Array.isArray(state.candidates)
+  ) return null;
+  const candidates = repositoryClassificationCandidates(value);
+  if (candidates.length !== state.candidates.length) return null;
+  const exactCandidates = state.candidates.every((candidate, index) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+    const item = candidate as Record<string, unknown>;
+    const keys = Object.keys(item).sort();
+    const parsed = candidates[index];
+    return keys.join(",") === "markerPath,profile,workingDirectory"
+      && parsed?.profile === item.profile
+      && parsed.workingDirectory === item.workingDirectory
+      && parsed.markerPath === item.markerPath;
+  });
+  if (!exactCandidates) return null;
+  return {
+    contractVersion: state.contractVersion,
+    sourceSha: state.sourceSha,
+    classification: state.classification as RepositoryClassification,
+    candidates,
+    candidateDigest: jsonDigest(candidates as unknown as JsonValue),
+  };
+}
+
+/**
+ * 이미 terminal discovery로 관리 중인 repository에는 관측값과 같은 revision 1만
+ * 추가할 수 있다. source, contract, candidate digest 중 하나라도 움직였으면 새
+ * discovery가 먼저 끝나야 하며 ratification으로 상태를 덮어쓰지 않는다.
+ */
+export function validateCurrentRepositoryClassificationRatification(
+  evidence: RepositoryClassificationRatificationEvidence,
+): { terminalRunId: string; candidateDigest: string } {
+  if (evidence.expectedDecisionRevision !== 0 || evidence.latestDecision !== null) {
+    throw new ControlPlaneError(
+      "이미 repository 분류 결정이 존재합니다.",
+      409,
+      "REPOSITORY_CLASSIFICATION_RATIFICATION_DECISION_EXISTS",
+    );
+  }
+  if (evidence.registration.classification !== evidence.classification) {
+    throw new ControlPlaneError(
+      "현재 repository 분류와 ratification 요청이 다릅니다.",
+      409,
+      "REPOSITORY_CLASSIFICATION_RATIFICATION_MISMATCH",
+    );
+  }
+  const state = publicCandidateState(evidence.registration.discoveryCandidates);
+  const run = evidence.terminalRun;
+  const sourceSha = evidence.registration.lastReconciledSha;
+  if (
+    !state
+    || !run
+    || run.completedAt === null
+    || run.generation !== evidence.expectedGeneration
+    || evidence.registration.reconcileGeneration !== evidence.expectedGeneration
+    || sourceSha === null
+    || evidence.registration.lastDefaultPushSha !== sourceSha
+    || run.sourceSha !== sourceSha
+    || state.sourceSha !== sourceSha
+    || evidence.registration.discoveryContractVersion === null
+    || run.contractVersion !== evidence.registration.discoveryContractVersion
+    || state.contractVersion !== evidence.registration.discoveryContractVersion
+    || run.classification !== evidence.classification
+    || state.classification !== evidence.classification
+    || run.candidateDigest !== state.candidateDigest
+  ) {
+    throw new ControlPlaneError(
+      "현재 terminal discovery 근거가 registration과 정확히 일치하지 않습니다.",
+      409,
+      "REPOSITORY_CLASSIFICATION_RATIFICATION_EVIDENCE_STALE",
+    );
+  }
+  if (evidence.classification === "PRODUCT_APP") {
+    if (
+      run.status !== "MANAGED"
+      || run.observationId === null
+      || state.candidates.length !== 1
+      || evidence.candidateMarkerPath !== state.candidates[0]?.markerPath
+    ) {
+      throw new ControlPlaneError(
+        "PRODUCT_APP ratification에는 exact observation의 단일 candidate marker가 필요합니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_RATIFICATION_CANDIDATE_INVALID",
+      );
+    }
+  } else if (
+    run.status !== "EXCLUDED"
+    || run.observationId !== null
+    || evidence.candidateMarkerPath !== null
+  ) {
+    throw new ControlPlaneError(
+      "비제품 repository ratification 근거가 terminal exclusion과 일치하지 않습니다.",
+      409,
+      "REPOSITORY_CLASSIFICATION_RATIFICATION_TERMINAL_INVALID",
+    );
+  }
+  return { terminalRunId: run.id, candidateDigest: state.candidateDigest };
+}
+
 function classificationRequestHash(input: RepositoryClassificationDecisionRequest): string {
   return jsonDigest({
     schemaVersion: input.schemaVersion,
@@ -82,29 +230,54 @@ function deliveryId(repoId: bigint, revision: number, requestHash: string): stri
 
 export async function getRepositoryClassificationQueue(): Promise<RepositoryClassificationQueueItem[]> {
   const registrations = await prisma.repositoryRegistration.findMany({
-    where: { archived: false, status: "NEEDS_INPUT" },
+    where: { archived: false, status: { in: ["NEEDS_INPUT", "MANAGED"] } },
     orderBy: [{ updatedAt: "asc" }, { repoFullName: "asc" }],
     select: {
       repoId: true,
       repoFullName: true,
+      status: true,
+      classification: true,
       reconcileGeneration: true,
       classificationDecisionVersion: true,
       lastDiscoveryReason: true,
       fork: true,
       discoveryCandidates: true,
+      classificationDecisions: {
+        orderBy: { revision: "desc" as const },
+        take: 1,
+        select: { classification: true, candidateMarkerPath: true },
+      },
       updatedAt: true,
     },
   });
-  return registrations.map((registration) => ({
-    repoId: registration.repoId.toString(),
-    repoFullName: registration.repoFullName,
-    generation: registration.reconcileGeneration ?? 0,
-    decisionRevision: registration.classificationDecisionVersion ?? 0,
-    reasonCode: registration.lastDiscoveryReason,
-    fork: registration.fork,
-    candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
-    updatedAt: registration.updatedAt.toISOString(),
-  }));
+  return registrations.filter((registration) => (
+    registration.status === "NEEDS_INPUT"
+    || (
+      registration.status === "MANAGED"
+      && (registration.classificationDecisionVersion ?? 0) === 0
+      && registration.classification !== null
+    )
+  )).map((registration) => {
+    const decisionRevision = registration.classificationDecisionVersion ?? 0;
+    const latestDecision = registration.classificationDecisions[0] ?? null;
+    return {
+      repoId: registration.repoId.toString(),
+      repoFullName: registration.repoFullName,
+      mode: registration.status === "MANAGED"
+        ? "RATIFY_CURRENT" as const
+        : decisionRevision > 0
+          ? "CORRECT_POLICY" as const
+          : "DECIDE" as const,
+      generation: registration.reconcileGeneration ?? 0,
+      decisionRevision,
+      currentClassification: registration.classification ?? latestDecision?.classification ?? null,
+      currentCandidateMarkerPath: latestDecision?.candidateMarkerPath ?? null,
+      reasonCode: registration.lastDiscoveryReason,
+      fork: registration.fork,
+      candidates: repositoryClassificationCandidates(registration.discoveryCandidates),
+      updatedAt: registration.updatedAt.toISOString(),
+    };
+  });
 }
 
 export async function recordRepositoryClassificationDecision(input: {
@@ -176,10 +349,13 @@ export async function recordRepositoryClassificationDecision(input: {
         archived: true,
         fork: true,
         status: true,
+        classification: true,
+        discoveryContractVersion: true,
         reconcileGeneration: true,
         classificationDecisionVersion: true,
         discoveryCandidates: true,
         lastDefaultPushSha: true,
+        lastReconciledSha: true,
         lastDiscoveryReason: true,
       },
     });
@@ -188,6 +364,32 @@ export async function recordRepositoryClassificationDecision(input: {
     }
     const generation = registration.reconcileGeneration ?? 0;
     const currentDecisionRevision = registration.classificationDecisionVersion ?? 0;
+    const [latestDecision, terminalRun] = await Promise.all([
+      tx.repositoryClassificationDecision.findFirst({
+        where: { repoId: registration.repoId },
+        orderBy: { revision: "desc" },
+        select: { revision: true, classification: true, candidateMarkerPath: true },
+      }),
+      tx.repositoryDiscoveryRun.findUnique({
+        where: {
+          repoId_generation: {
+            repoId: registration.repoId,
+            generation,
+          },
+        },
+        select: {
+          id: true,
+          generation: true,
+          sourceSha: true,
+          status: true,
+          classification: true,
+          contractVersion: true,
+          candidateDigest: true,
+          observationId: true,
+          completedAt: true,
+        },
+      }),
+    ]);
     if (
       generation !== request.expectedGeneration
       || currentDecisionRevision !== request.expectedDecisionRevision
@@ -198,11 +400,72 @@ export async function recordRepositoryClassificationDecision(input: {
         "REPOSITORY_CLASSIFICATION_CONFLICT",
       );
     }
-    if (registration.archived || registration.status !== "NEEDS_INPUT") {
+    if (
+      registration.archived
+      || (registration.status !== "NEEDS_INPUT" && registration.status !== "MANAGED")
+    ) {
       throw new ControlPlaneError(
-        "현재 NEEDS_INPUT repository만 분류할 수 있습니다.",
+        "현재 NEEDS_INPUT 또는 MANAGED repository만 분류할 수 있습니다.",
         409,
         "REPOSITORY_CLASSIFICATION_STATE_CONFLICT",
+      );
+    }
+    const ratifyingCurrent = request.justification === "CURRENT_OBSERVATION_RATIFIED";
+    const correctingPolicy = request.justification === "CENTRAL_POLICY_CORRECTION";
+    if (ratifyingCurrent && registration.status !== "MANAGED") {
+      throw new ControlPlaneError(
+        "현재 관측 ratification은 MANAGED repository에만 허용됩니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_RATIFICATION_STATE_CONFLICT",
+      );
+    }
+    if (!ratifyingCurrent && registration.status === "MANAGED" && !correctingPolicy) {
+      throw new ControlPlaneError(
+        "MANAGED repository는 현재 관측 ratification 또는 중앙 정책 교정만 허용됩니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_STATE_CONFLICT",
+      );
+    }
+    if (currentDecisionRevision === 0 && latestDecision !== null) {
+      throw new ControlPlaneError(
+        "repository 분류 decision ledger가 registration revision과 일치하지 않습니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_LEDGER_CONFLICT",
+      );
+    }
+    if (
+      currentDecisionRevision > 0
+      && latestDecision?.revision !== currentDecisionRevision
+    ) {
+      throw new ControlPlaneError(
+        "repository 분류 decision ledger가 registration revision과 일치하지 않습니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_LEDGER_CONFLICT",
+      );
+    }
+    if (correctingPolicy) {
+      if (currentDecisionRevision === 0 || latestDecision === null) {
+        throw new ControlPlaneError(
+          "중앙 정책 교정에는 기존 분류 decision revision이 필요합니다.",
+          409,
+          "REPOSITORY_CLASSIFICATION_CORRECTION_BASE_MISSING",
+        );
+      }
+      if (
+        latestDecision.classification === request.classification
+        && latestDecision.candidateMarkerPath === request.candidateMarkerPath
+      ) {
+        throw new ControlPlaneError(
+          "현재 분류와 같은 중앙 정책 교정은 새 revision으로 기록하지 않습니다.",
+          409,
+          "REPOSITORY_CLASSIFICATION_CORRECTION_NOOP",
+        );
+      }
+    } else if (!ratifyingCurrent && currentDecisionRevision > 0) {
+      throw new ControlPlaneError(
+        "기존 분류를 바꾸려면 중앙 정책 교정 justification이 필요합니다.",
+        409,
+        "REPOSITORY_CLASSIFICATION_CORRECTION_REQUIRED",
       );
     }
     if (
@@ -239,6 +502,25 @@ export async function recordRepositoryClassificationDecision(input: {
       );
     }
 
+    const ratificationEvidence = ratifyingCurrent
+      ? validateCurrentRepositoryClassificationRatification({
+          expectedGeneration: request.expectedGeneration,
+          expectedDecisionRevision: request.expectedDecisionRevision,
+          classification: request.classification,
+          candidateMarkerPath: request.candidateMarkerPath,
+          registration: {
+            classification: registration.classification,
+            discoveryContractVersion: registration.discoveryContractVersion,
+            discoveryCandidates: registration.discoveryCandidates,
+            lastDefaultPushSha: registration.lastDefaultPushSha,
+            lastReconciledSha: registration.lastReconciledSha,
+            reconcileGeneration: registration.reconcileGeneration,
+          },
+          latestDecision,
+          terminalRun,
+        })
+      : null;
+
     const revision = currentDecisionRevision + 1;
     const decision = await tx.repositoryClassificationDecision.create({
       data: {
@@ -255,9 +537,17 @@ export async function recordRepositoryClassificationDecision(input: {
     const changed = await tx.repositoryRegistration.updateMany({
       where: {
         repoId: registration.repoId,
-        status: "NEEDS_INPUT",
+        status: registration.status,
         archived: false,
         reconcileGeneration: request.expectedGeneration,
+        ...(ratificationEvidence
+          ? {
+              classification: request.classification,
+              discoveryContractVersion: registration.discoveryContractVersion,
+              lastDefaultPushSha: registration.lastDefaultPushSha,
+              lastReconciledSha: registration.lastReconciledSha,
+            }
+          : {}),
         OR: request.expectedDecisionRevision === 0
           ? [
               { classificationDecisionVersion: null },
@@ -273,6 +563,46 @@ export async function recordRepositoryClassificationDecision(input: {
         409,
         "REPOSITORY_CLASSIFICATION_CONFLICT",
       );
+    }
+
+    if (ratificationEvidence) {
+      await tx.auditLog.create({
+        data: {
+          actorLogin: input.actor,
+          action: "control-plane.repository-classification.ratified",
+          entityType: "RepositoryClassificationDecision",
+          entityId: decision.id,
+          payload: {
+            repoId: registration.repoId.toString(),
+            repoFullName: registration.repoFullName,
+            generation,
+            sourceSha: registration.lastReconciledSha,
+            contractVersion: registration.discoveryContractVersion,
+            terminalRunId: ratificationEvidence.terminalRunId,
+            candidateDigest: ratificationEvidence.candidateDigest,
+            revision,
+            classification: request.classification,
+            candidateMarkerPath: request.candidateMarkerPath,
+            justification: request.justification,
+            requestHash,
+            discoveryEnqueued: false,
+          },
+        },
+      });
+      return {
+        duplicate: false,
+        decision: {
+          id: decision.id,
+          repoId: decision.repoId.toString(),
+          revision: decision.revision,
+          classification: decision.classification,
+          candidateMarkerPath: decision.candidateMarkerPath,
+          createdBy: decision.createdBy,
+          createdAt: decision.createdAt,
+        },
+        runId: null,
+        generation: null,
+      };
     }
 
     const trigger = await registerRepositoryWebhookInTransaction({

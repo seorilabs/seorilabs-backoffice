@@ -7,7 +7,10 @@ import {
   processRepositoryDiscoveryClaim,
   recoverRepositoryDiscoveryRuns,
 } from "@/lib/control-plane/repository-discovery-service";
-import { recordRepositoryClassificationDecision } from "@/lib/control-plane/repository-classification-decision";
+import {
+  getRepositoryClassificationQueue,
+  recordRepositoryClassificationDecision,
+} from "@/lib/control-plane/repository-classification-decision";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { REPOSITORY_REGISTRATION_SLO_MS } from "@/lib/control-plane/repository-discovery";
 import { registerRepositoryWebhook } from "@/lib/control-plane/repository-registration";
@@ -192,6 +195,58 @@ async function main(): Promise<void> {
       "webhook registration과 durable enqueue는 5분 SLO 안에 끝나야 한다",
     );
     assert.equal(JSON.stringify(observations[0].payload).includes(CANARY), false);
+
+    const ratificationQueueItem = (await getRepositoryClassificationQueue())
+      .find((item) => item.repoId === RN_REPO_ID.toString());
+    assert.ok(ratificationQueueItem);
+    assert.equal(ratificationQueueItem.mode, "RATIFY_CURRENT");
+    assert.equal(ratificationQueueItem.currentClassification, "PRODUCT_APP");
+    assert.equal(ratificationQueueItem.candidates[0]?.markerPath, "package.json");
+    const ratification = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 1,
+        repoId: BigInt(RN_REPO_ID),
+        expectedGeneration: ratificationQueueItem.generation,
+        expectedDecisionRevision: ratificationQueueItem.decisionRevision,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: "package.json",
+        justification: "CURRENT_OBSERVATION_RATIFIED",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-ratify-current-rn",
+    });
+    assert.equal(ratification.runId, null);
+    assert.equal(ratification.generation, null);
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    })).classificationDecisionVersion, 1);
+    assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    })).status, "MANAGED");
+    assert.equal(await prisma.repositoryDiscoveryRun.count({
+      where: { repoId: BigInt(RN_REPO_ID) },
+    }), 1, "ratification은 discovery를 enqueue하지 않아야 한다");
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        action: "control-plane.repository-classification.ratified",
+        entityId: ratification.decision.id,
+      },
+    }), 1);
+    const ratificationReplay = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 1,
+        repoId: BigInt(RN_REPO_ID),
+        expectedGeneration: ratificationQueueItem.generation,
+        expectedDecisionRevision: ratificationQueueItem.decisionRevision,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: "package.json",
+        justification: "CURRENT_OBSERVATION_RATIFIED",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-ratify-current-rn",
+    });
+    assert.equal(ratificationReplay.duplicate, true);
+    assert.equal(ratificationReplay.runId, null);
 
     const duplicate = await registerRepositoryWebhook({
       event: "repository",

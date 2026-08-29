@@ -40,7 +40,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | immutable `DRAFT` revision 생성 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
-| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 큐 조회 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 결정 기록 |
+| `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
@@ -528,6 +528,13 @@ DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다. 같
 validator와 transaction service를 사용한다. nullable expand column의 `classificationDecisionVersion=null`은
 revision `0`으로만 해석하며 분류 결정은 이 revision CAS와 idempotency
 key를 요구하고 이전 revision을 수정하지 않으며 audit에는 공개 repo/candidate identity만 남긴다.
+이미 exact terminal discovery로 `MANAGED`인 repository에 decision revision이 없는 경우에는
+`CURRENT_OBSERVATION_RATIFIED`만 허용한다. 요청 분류, 단일 product candidate marker, generation,
+default push/reconciled/source SHA, discovery contract, candidate digest와 terminal observation을 모두
+같은 transaction에서 재검증한 뒤 revision 1만 append한다. 이 경로는 registration의 관측 상태를 바꾸거나
+discovery를 enqueue하지 않는다. 이후 분류 변경은 `CENTRAL_POLICY_CORRECTION` 새 revision으로만 기록하며
+새 generation discovery를 enqueue한다. 따라서 ratification 오류는 row 삭제나 revision 되감기가 아니라
+후속 교정 revision과 exact-source 재탐지로 복구한다.
 
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.
