@@ -62,3 +62,39 @@ test("공개 signer identity 또는 provenance digest가 없으면 fail-closed�
     );
   }
 });
+
+test("Godot/null과 JS/package-manager 조합만 허용한다", () => {
+  const godot = buildStaticRuntimeManifestReadback(input({
+    staticBinding: {
+      profile: "godot",
+      packageManager: null,
+      workspaceRoot: ".",
+      commandDirectory: ".",
+    },
+  }));
+  assert.equal(godot.manifest.staticBinding.packageManager, null);
+  assert.throws(
+    () => buildStaticRuntimeManifestReadback(input({
+      staticBinding: {
+        profile: "godot",
+        packageManager: "pnpm",
+        workspaceRoot: ".",
+        commandDirectory: ".",
+      } as never,
+    })),
+    (error) => error instanceof StaticRuntimeManifestError
+      && error.code === "INVALID_STATIC_BINDING",
+  );
+  assert.throws(
+    () => buildStaticRuntimeManifestReadback(input({
+      staticBinding: {
+        profile: "react-native",
+        packageManager: null,
+        workspaceRoot: ".",
+        commandDirectory: ".",
+      } as never,
+    })),
+    (error) => error instanceof StaticRuntimeManifestError
+      && error.code === "INVALID_STATIC_BINDING",
+  );
+});

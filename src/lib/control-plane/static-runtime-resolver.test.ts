@@ -22,6 +22,7 @@ function identity(
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
     workflowBundleSha: BUNDLE_SHA,
+    calledWorkflowPath: ".github/workflows/js-static-checks-v1.yml",
     runId: "1234",
     runAttempt: "1",
     eventName: "pull_request",
@@ -37,6 +38,7 @@ function client(overrides: {
   workflowBundleSha?: string;
   requestHash?: string | null;
   sourceRef?: string | null;
+  profile?: "react-native" | "capacitor" | "ait-web" | "godot";
 } = {}) {
   const payload = {
     schemaVersion: 1,
@@ -82,9 +84,9 @@ function client(overrides: {
           requestHash: overrides.requestHash === undefined
             ? "d".repeat(64)
             : overrides.requestHash,
-          workflowProfile: "capacitor",
-          workflowPackageManager: "pnpm",
-          workflowWorkingDirectory: "app",
+          workflowProfile: overrides.profile ?? "capacitor",
+          workflowPackageManager: overrides.profile === "godot" ? null : "pnpm",
+          workflowWorkingDirectory: overrides.profile === "godot" ? "." : "app",
         };
       },
     },
@@ -96,6 +98,34 @@ const input = (value = identity()) => ({
   signingKey: SIGNING_KEY,
   snapshotSignatureKeyId: "control-plane-snapshot-v1",
   snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+});
+
+test("Godot은 전용 v3 workflow identity와 null package manager일 때만 resolve된다", async () => {
+  const result = await resolveStaticRuntimeManifest(input(identity({
+    calledWorkflowPath: ".github/workflows/godot-checks-v3.yml",
+  })), client({ profile: "godot" }) as never);
+  assert.equal(result.manifest.staticBinding.profile, "godot");
+  assert.equal(result.manifest.staticBinding.packageManager, null);
+  assert.equal(result.manifest.staticBinding.workspaceRoot, ".");
+});
+
+test("called workflow path와 discovery profile 교차 대체는 fail-closed한다", async () => {
+  for (const value of [
+    {
+      identity: identity({ calledWorkflowPath: ".github/workflows/js-static-checks-v1.yml" }),
+      client: client({ profile: "godot" }),
+    },
+    {
+      identity: identity({ calledWorkflowPath: ".github/workflows/godot-checks-v3.yml" }),
+      client: client({ profile: "react-native" }),
+    },
+  ]) {
+    await assert.rejects(
+      () => resolveStaticRuntimeManifest(input(value.identity), value.client as never),
+      (error) => error instanceof ControlPlaneError
+        && error.code === "STATIC_WORKFLOW_PROFILE_MISMATCH",
+    );
+  }
 });
 
 test("static runtime resolver는 App, ACTIVE config, exact discovery와 approved bundle을 함께 결합한다", async () => {

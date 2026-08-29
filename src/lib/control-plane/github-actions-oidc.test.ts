@@ -51,7 +51,20 @@ test("GitHub OIDC push identity는 숫자 org/repo와 caller/called exact SHA에
     bindingSourceSha: APPLICATION_SHA,
   });
   assert.equal(identity.workflowBundleSha, BUNDLE_SHA);
+  assert.equal(identity.calledWorkflowPath, ".github/workflows/js-static-checks-v1.yml");
   assert.equal(identity.eventName, "push");
+});
+
+test("Godot v3 workflow는 별도 exact called path identity로 보존된다", () => {
+  const identity = assertGitHubActionsStaticManifestClaims(claims({
+    job_workflow_ref:
+      `seorilabs/.github/.github/workflows/godot-checks-v3.yml@${BUNDLE_SHA}`,
+  }), {
+    repositoryId: "7001",
+    applicationSourceSha: APPLICATION_SHA,
+    bindingSourceSha: APPLICATION_SHA,
+  });
+  assert.equal(identity.calledWorkflowPath, ".github/workflows/godot-checks-v3.yml");
 });
 
 test("same-repo PR은 merge source와 signed base binding을 분리한다", () => {
@@ -88,6 +101,7 @@ test("OIDC identity alias, source substitution, floating workflow와 runner mism
     claims({ repository_id: "7002" }),
     claims({ sha: "d".repeat(40) }),
     claims({ job_workflow_ref: "seorilabs/.github/.github/workflows/js-static-checks-v1.yml@main" }),
+    claims({ job_workflow_ref: `seorilabs/.github/.github/workflows/unknown.yml@${BUNDLE_SHA}` }),
     claims({ workflow_ref: "seorilabs/runtime-canary/.github/workflows/weak.yml@refs/heads/main" }),
     claims({ event_name: "pull_request_target" }),
     claims({ runner_environment: "github-hosted", repository_visibility: "secret" }),

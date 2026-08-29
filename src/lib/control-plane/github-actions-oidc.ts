@@ -15,7 +15,12 @@ const GITHUB_ACTIONS_JWKS = createRemoteJWKSet(
 );
 const SEORILABS_ORGANIZATION_ID = "283115031";
 const STATIC_CALLER_PATH = ".github/workflows/org-contract.yml";
-const STATIC_REUSABLE_WORKFLOW_PATH = ".github/workflows/js-static-checks-v1.yml";
+export const GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS = {
+  javascript: ".github/workflows/js-static-checks-v1.yml",
+  godot: ".github/workflows/godot-checks-v3.yml",
+} as const;
+export type GitHubActionsStaticWorkflowPath =
+  (typeof GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS)[keyof typeof GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS];
 const SHA = /^[0-9a-f]{40}$/;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/;
@@ -32,6 +37,7 @@ export interface GitHubActionsStaticManifestIdentity {
   applicationSourceSha: string;
   bindingSourceSha: string;
   workflowBundleSha: string;
+  calledWorkflowPath: GitHubActionsStaticWorkflowPath;
   runId: string;
   runAttempt: string;
   eventName: "pull_request" | "push" | "workflow_dispatch";
@@ -116,6 +122,9 @@ export function assertGitHubActionsStaticManifestClaims(
   const runnerEnvironment = requiredString(payload, "runner_environment");
   const headRef = optionalString(payload, "head_ref");
   const baseRef = optionalString(payload, "base_ref");
+  const calledWorkflowPath = Object.values(GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS).find(
+    (path) => calledWorkflowRef === `seorilabs/.github/${path}@${workflowBundleSha}`,
+  );
 
   if (
     repositoryId !== expectation.repositoryId
@@ -132,7 +141,7 @@ export function assertGitHubActionsStaticManifestClaims(
     || !POSITIVE_INTEGER.test(runAttempt)
     || !["public", "private", "internal"].includes(repositoryVisibility)
     || !["github-hosted", "self-hosted"].includes(runnerEnvironment)
-    || calledWorkflowRef !== `seorilabs/.github/${STATIC_REUSABLE_WORKFLOW_PATH}@${workflowBundleSha}`
+    || !calledWorkflowPath
     || callerWorkflowRef !== `${fullName}/${STATIC_CALLER_PATH}@${eventRef}`
   ) {
     unauthorized();
@@ -172,6 +181,7 @@ export function assertGitHubActionsStaticManifestClaims(
     requestedBindingSourceSha: expectation.bindingSourceSha,
     callerWorkflowSha,
     workflowBundleSha,
+    calledWorkflowPath,
     runId,
     runAttempt,
     eventName,
@@ -219,6 +229,7 @@ function bindStaticManifestIdentity(
     applicationSourceSha: claims.applicationSourceSha,
     bindingSourceSha: claims.requestedBindingSourceSha,
     workflowBundleSha: claims.workflowBundleSha,
+    calledWorkflowPath: claims.calledWorkflowPath,
     runId: claims.runId,
     runAttempt: claims.runAttempt,
     eventName: claims.eventName,
