@@ -58,7 +58,7 @@ function productApp(): FleetMigrationAppReadback {
     platformFleetBinding: {
       id: "platform-binding-product-0001",
       sourceSha: PRODUCT_SHA,
-      state: "MATCH",
+      state: "COMPLIANT",
     },
     activeCredentialBindingCount: 2,
   };
@@ -143,12 +143,14 @@ function dependencies(
 }
 
 test("full-org pagination과 exact source/중앙 증거가 모두 맞으면 read-only readiness가 열린다", async () => {
+  const app = productApp();
+  app.activeCredentialBindingCount = 0;
   const result = await evaluateFleetMigrationShadowReadiness(dependencies({
     registrations: [
       registration(101, "seorilabs/product", "PRODUCT_APP"),
       registration(202, "seorilabs/infra", "INFRA_REPO"),
     ],
-    apps: [productApp()],
+    apps: [app],
   }));
   assert.equal(result.state, "READY");
   assert.equal(result.providerRepositoryCount, 2);
@@ -158,7 +160,49 @@ test("full-org pagination과 exact source/중앙 증거가 모두 맞으면 read
   assert.match(result.cohortDigest, /^[0-9a-f]{64}$/);
   assert.match(result.evidenceDigest, /^[0-9a-f]{64}$/);
   assert.equal(result.repositories[0].sourceSha, PRODUCT_SHA);
-  assert.equal(result.repositories[0].activeCredentialBindingCount, 2);
+  assert.equal(result.repositories[0].activeCredentialBindingCount, 0);
+});
+
+test("classification decision은 양수 revision과 collector evidence ID를 모두 요구한다", async () => {
+  const invalidRevision = registration(101, "seorilabs/product", "PRODUCT_APP");
+  invalidRevision.classificationDecisionVersion = 0;
+  invalidRevision.decision!.revision = 0;
+  const invalidId = registration(202, "seorilabs/infra", "INFRA_REPO");
+  invalidId.decision!.id = "";
+
+  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [invalidRevision, invalidId],
+    apps: [productApp()],
+  }));
+
+  assert.equal(result.state, "BLOCKED");
+  assert.equal(result.reasonCounts.CLASSIFICATION_DECISION_INVALID, 2);
+});
+
+test("PlatformFleetBinding은 exact source와 COMPLIANT 상태가 모두 맞아야 한다", async () => {
+  const app = productApp();
+  app.platformFleetBinding = {
+    id: "platform-binding-product-0001",
+    sourceSha: "e".repeat(40),
+    state: "PENDING",
+  };
+
+  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [app],
+  }));
+
+  assert.equal(result.state, "BLOCKED");
+  assert.deepEqual(
+    result.repositories.find(({ repoId }) => repoId === "101")?.reasonCodes,
+    [
+      "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
+      "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
+    ],
+  );
 });
 
 test("사람 결정과 ACTIVE 중앙 증거가 없으면 repo ID/source SHA별 이유로 fail-closed한다", async () => {

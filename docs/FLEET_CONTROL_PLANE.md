@@ -614,7 +614,7 @@ repository collector와 같은 실행이 아니며, 그 결과를 38-repository 
 
 배포 이미지의 다음 command는 GitHub App installation pagination을 두 번 읽고, 각 active
 repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정, ACTIVE config와 signed
-snapshot, PlatformFleetBinding의 exact source 결합을 DB SELECT로만 검사한다. GitHub와 DB에 쓰지
+snapshot, PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 DB SELECT로만 검사한다. GitHub와 DB에 쓰지
 않고 공개 repo ID, source SHA, digest, reason code만 출력한다.
 
 ```bash

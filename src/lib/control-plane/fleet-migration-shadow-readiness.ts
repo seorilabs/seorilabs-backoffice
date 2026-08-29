@@ -15,6 +15,7 @@ export const FLEET_MIGRATION_SHADOW_READINESS_CONTRACT_VERSION =
 const ORGANIZATION = "seorilabs";
 const SHA_40 = /^[0-9a-f]{40}$/;
 const DIGEST_64 = /^[0-9a-f]{64}$/;
+const CLASSIFICATION_DECISION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 type RepositoryClassification =
   | "PRODUCT_APP"
@@ -29,12 +30,14 @@ export type FleetMigrationShadowReasonCode =
   | "APP_BINDING_MISMATCH"
   | "APP_BINDING_MISSING"
   | "CLASSIFICATION_DECISION_DRIFT"
+  | "CLASSIFICATION_DECISION_INVALID"
   | "CLASSIFICATION_DECISION_MISSING"
   | "CLASSIFICATION_MISSING"
   | "DISCOVERY_SOURCE_MISMATCH"
   | "FORK_CLASSIFICATION_INVALID"
   | "NON_PRODUCT_APP_BINDING_PRESENT"
   | "PLATFORM_FLEET_BINDING_MISSING"
+  | "PLATFORM_FLEET_BINDING_NOT_COMPLIANT"
   | "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH"
   | "REPOSITORY_IDENTITY_MISMATCH"
   | "REPOSITORY_NOT_MANAGED"
@@ -251,6 +254,14 @@ function repositoryReasons(
   if (!registration.decision) {
     reasons.push("CLASSIFICATION_DECISION_MISSING");
   } else if (
+    !Number.isSafeInteger(registration.classificationDecisionVersion)
+    || registration.classificationDecisionVersion < 1
+    || !Number.isSafeInteger(registration.decision.revision)
+    || registration.decision.revision < 1
+    || !CLASSIFICATION_DECISION_ID.test(registration.decision.id)
+  ) {
+    reasons.push("CLASSIFICATION_DECISION_INVALID");
+  } else if (
     registration.decision.revision !== registration.classificationDecisionVersion
     || registration.decision.classification !== registration.classification
   ) {
@@ -294,8 +305,13 @@ function repositoryReasons(
   }
   if (!app.platformFleetBinding) {
     reasons.push("PLATFORM_FLEET_BINDING_MISSING");
-  } else if (app.platformFleetBinding.sourceSha !== vector.headSha) {
-    reasons.push("PLATFORM_FLEET_BINDING_SOURCE_MISMATCH");
+  } else {
+    if (app.platformFleetBinding.sourceSha !== vector.headSha) {
+      reasons.push("PLATFORM_FLEET_BINDING_SOURCE_MISMATCH");
+    }
+    if (app.platformFleetBinding.state !== "COMPLIANT") {
+      reasons.push("PLATFORM_FLEET_BINDING_NOT_COMPLIANT");
+    }
   }
   return reasons;
 }
