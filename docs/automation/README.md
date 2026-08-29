@@ -20,8 +20,10 @@ deterministic scheduler는 `k8s/scheduler-cronjobs.yaml`의 `backoffice-automati
    모델은 token이나 Authorization header를 만들지 않고 공개 `sessionId`만 전달한다.
    legacy `AGENT_WORKER_TOKEN`은 worker principal을 증명하지 못하므로 사용하지 않는다.
 3. Codex와 Claude generic worker가 각각 0개 또는 1개인지 확인한다. 이미 있으면 새로 만들지 않고 업데이트한다.
-4. GitHub App의 기존 권한으로 Fleet Project read/write가 가능한지 확인한다. 권한이 없으면 확대하지 않고 projection을 `READBACK_REQUIRED`로 둔다.
-   관리 앱의 `projectV2Id`는 승인된 단일 `Seorilabs Fleet` Project node ID와 모두 일치해야 하며 projector는 Project나 field/option을 생성하지 않는다.
+4. 중앙 `FleetProjectBinding`에 조직 단일 `Seorilabs Fleet` owner/number를 revision으로 등록하고 GitHub App의
+   `organization_projects:write` grant와 공개 node/title/URL을 readback한다. 권한이 없으면 Project를 absent로
+   추측하지 않고 `HUMAN_PERMISSION_REQUIRED`로 둔다. 앱별 `projectV2Id` 입력은 없으며 projector는 Project나
+   field/option을 생성하지 않는다.
 5. canary 앱에서 claim 경쟁, TTL 재claim, 결과 불명 readback, repo PR guard를 검증한다.
 6. generic worker에는 GitHub/provider write credential을 직접 주입하지 않는다.
    `READY_PR`은 worker와 다른 adapter identity, exact runtime identity, Ed25519 공개키 외에도

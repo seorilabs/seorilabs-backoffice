@@ -473,14 +473,24 @@ issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume 
 
 `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`은
 `FleetProjectProjection.desired`에만 투영된다. claim은 GitHub Issue mirror와 queue 상태만 읽으며 Project field를
-실행 신호로 사용하지 않는다. Project write 직전 current app binding을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시 읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
-Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
+실행 신호로 사용하지 않는다. `FleetProjectBinding` singleton은 owner organization, project number,
+고정 title `Seorilabs Fleet`, 검증된 node ID와 GitHub App의 공개 `organization_projects` grant만 저장한다.
+`PUT /api/control-plane/fleet-project-binding`은 optimistic revision과 Idempotency-Key를 요구하며 Project를
+생성·변경하지 않는다. Project write 직전 exact `ACTIVE + MANAGED + PRODUCT_APP + current source`와 중앙
+binding revision을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시
+읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
+
+GitHub App installation에 organization Projects `write` 이상이 없으면 Project query를 실행하지 않고
+`HUMAN_PERMISSION_REQUIRED / GITHUB_ORG_PROJECTS_WRITE_PERMISSION_REQUIRED`로 닫는다. 이 상태를 Project
+부재로 해석하지 않는다. 권한이 확인된 뒤 node/title/owner/number/URL readback이 불일치할 때만
+`IDENTITY_MISMATCH`, provider read 실패는 `READBACK_REQUIRED`다.
 
 `FleetProjectProjection` drain은 정기 scheduler CronJob `backoffice-fleet-project-projection`과 배포
 catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩 호출해 소진한다. 두 경로가 겹쳐도
-claim CAS가 한 projection을 한 번만 적용하며, `App.projectV2Id`가 아직 없으면 추측하지 않고 `NEEDS_INPUT`으로
-닫는다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
-`Seorilabs Fleet` Project 생성과 `App.projectV2Id` 설정은 사용자 승인이 필요한 별도 gate다.
+claim CAS가 한 projection을 한 번만 적용한다. 같은 endpoint가 중앙 binding readback과 기존 ACTIVE
+PRODUCT_APP Issue source reconciliation을 먼저 수행하므로 앱별 `projectV2Id` 입력은 필요하지 않다.
+`k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
+`Seorilabs Fleet` Project 생성과 GitHub App organization Projects 권한 승인은 사람 전용 gate다.
 
 Platform Fleet scheduler는 기존 plan의 drain/readback을 producer보다 먼저 별도 오류 경계에서 실행한다.
 새 Release 조회나 asset 검증이 실패해도 기존 mutation readback은 이미 독립적으로 소진되며, drain 실패 또한

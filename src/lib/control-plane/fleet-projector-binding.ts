@@ -1,39 +1,38 @@
-import type { AppStatus } from "@prisma/client";
-
-export interface FleetProjectionAppBinding {
-  status: AppStatus;
-  projectV2Id: string | null;
-}
+import type { FleetProjectSourceDisposition } from "@/lib/control-plane/fleet-project-binding";
 
 export type FleetProjectionBindingDisposition =
   | { kind: "CURRENT" }
   | { kind: "NEEDS_INPUT"; reason: string }
+  | { kind: "READBACK_REQUIRED"; reason: string }
   | { kind: "SUPERSEDED"; reason: string };
 
 /**
- * Projection row가 만들어진 뒤 App의 Fleet Project binding이 바뀔 수 있다.
- * 외부 write 전에 현재 App binding과 row target이 정확히 같은지 판정한다.
+ * Projection row의 target/revision과 조직 단일 Fleet Project source를 비교한다.
+ * 앱별 projectV2Id는 입력에 존재하지 않으며 PRODUCT_APP/source eligibility도
+ * 중앙 resolver가 같은 시점의 공개 DB state에서 판정한다.
  */
 export function fleetProjectionBindingDisposition(input: {
   projectNodeId: string;
-  app: FleetProjectionAppBinding | null;
+  bindingRevision: number | null;
+  source: FleetProjectSourceDisposition;
 }): FleetProjectionBindingDisposition {
-  if (!input.app) {
-    return { kind: "SUPERSEDED", reason: "Projection app이 삭제되어 더 이상 적용할 수 없습니다." };
+  if (input.source.kind === "INELIGIBLE") {
+    return { kind: "SUPERSEDED", reason: input.source.reason };
   }
-  if (input.app.status !== "ACTIVE") {
-    return { kind: "SUPERSEDED", reason: "Projection app이 ACTIVE 상태가 아니어서 적용 대상에서 제외되었습니다." };
+  if (input.source.kind === "NEEDS_INPUT") {
+    return { kind: "NEEDS_INPUT", reason: input.source.reason };
   }
-  if (input.projectNodeId.startsWith("UNCONFIGURED:")) {
-    return input.app.projectV2Id
-      ? { kind: "SUPERSEDED", reason: "App의 Fleet Project binding이 새로 설정되어 기존 미설정 projection을 폐기했습니다." }
-      : { kind: "NEEDS_INPUT", reason: "Seorilabs Fleet Project node ID가 필요합니다." };
+  if (input.source.kind === "READBACK_REQUIRED") {
+    return { kind: "READBACK_REQUIRED", reason: input.source.reason };
   }
-  if (!input.app.projectV2Id) {
-    return { kind: "SUPERSEDED", reason: "App의 Fleet Project binding이 제거되어 기존 projection을 폐기했습니다." };
-  }
-  if (input.app.projectV2Id !== input.projectNodeId) {
-    return { kind: "SUPERSEDED", reason: "App의 Fleet Project binding이 변경되어 기존 projection을 폐기했습니다." };
+  if (
+    input.projectNodeId !== input.source.projectNodeId
+    || input.bindingRevision !== input.source.bindingRevision
+  ) {
+    return {
+      kind: "SUPERSEDED",
+      reason: "조직 Fleet Project target 또는 desired-state revision이 변경되었습니다.",
+    };
   }
   return { kind: "CURRENT" };
 }

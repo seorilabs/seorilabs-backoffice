@@ -27,6 +27,10 @@
     "20260830030000_repository_product_enrollment": {
       "sha256": "e9a5e47005aaa1af1660e2e357ec478a24d666e89d7f3ab6c68c1ee55d3fe3eb",
       "reason": "PRODUCT_APP decision에 중앙 product identity를 additive nullable column으로 보존해 source/build 준비 전 planning 제품을 등록한다"
+    },
+    "20260830040000_fleet_project_binding": {
+      "sha256": "cc98113d3097f4aadb761024026af9d754c3ce1ebcccdf376b62a8df402ea14e",
+      "reason": "조직 단일 Seorilabs Fleet Project desired-state와 공개 identity·권한 readback을 additive schema로 보존한다"
     }
   },
   "legacy": {

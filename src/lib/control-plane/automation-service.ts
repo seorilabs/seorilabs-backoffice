@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, type FleetProjectProjection } from "@prisma/client";
 
 import {
   AUTOMATION_TEMPLATE_KEY,
@@ -37,6 +37,10 @@ import {
   beginAutomationMutation,
   completeAutomationMutation,
 } from "@/lib/control-plane/automation-mutation";
+import {
+  FLEET_PROJECT_UNCONFIGURED_ID,
+  resolveFleetProjectSource,
+} from "@/lib/control-plane/fleet-project-binding";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   invalidateRepositoryDiscoveryInTransaction,
@@ -955,13 +959,31 @@ async function cancelIneligibleIssueRuns(repoFullName: string, issueNumber: numb
 }
 
 export async function upsertFleetProjectProjection(repoFullName: string, issueNumber: number) {
+  // 모든 eligible issue는 앱별 ID가 아닌 조직 단일 Seorilabs Fleet Project resolver를 공유한다.
   const issue = await prisma.issueMirror.findUnique({
     where: { repoFullName_number: { repoFullName, number: issueNumber } },
     include: {
-      app: { select: { id: true, slug: true, currentStage: true, projectV2Id: true } },
+      app: {
+        select: {
+          id: true,
+          slug: true,
+          currentStage: true,
+          status: true,
+          repoId: true,
+          repoFullName: true,
+        },
+      },
     },
   });
   if (!issue?.app) return null;
+  const source = await resolveFleetProjectSource(issue.app);
+  if (source.kind === "INELIGIBLE") {
+    await prisma.fleetProjectProjection.updateMany({
+      where: { issueNodeId: issue.nodeId, status: { not: "SUPERSEDED" } },
+      data: { status: "SUPERSEDED", lastError: source.reason },
+    });
+    return null;
+  }
   const run = await prisma.agentRun.findFirst({
     where: { workKey: issueWorkKey(repoFullName, issueNumber) },
     orderBy: { updatedAt: "desc" },
@@ -984,42 +1006,56 @@ export async function upsertFleetProjectProjection(repoFullName: string, issueNu
     issueState: issue.state,
   });
   const desiredHash = projectionHash(desired);
-  const projectNodeId = issue.app.projectV2Id ?? `UNCONFIGURED:${issue.app.id}`;
-  const conflictingBinding = issue.app.projectV2Id
-    ? await prisma.app.findFirst({
-      where: {
-        id: { not: issue.app.id },
-        status: "ACTIVE",
-        projectV2Id: { not: null, notIn: [issue.app.projectV2Id] },
-      },
-      select: { id: true },
-    })
-    : null;
-  const bindingError = !issue.app.projectV2Id
-    ? "Seorilabs Fleet Project node ID가 필요합니다."
-    : conflictingBinding
-      ? "ACTIVE managed app의 Project node ID가 단일 Seorilabs Fleet Project로 일치하지 않습니다."
-      : null;
-  const status = bindingError ? "NEEDS_INPUT" : "PENDING";
+  const projectNodeId = source.kind === "CURRENT"
+    ? source.projectNodeId
+    : FLEET_PROJECT_UNCONFIGURED_ID;
+  const bindingRevision = source.kind === "CURRENT" ? source.bindingRevision : null;
+  const bindingError = source.kind === "CURRENT" ? null : source.reason;
+  const status = source.kind === "CURRENT"
+    ? "PENDING"
+    : source.kind === "READBACK_REQUIRED"
+      ? "READBACK_REQUIRED"
+      : "NEEDS_INPUT";
   const existing = await prisma.fleetProjectProjection.findUnique({
     where: { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } },
   });
   const update = bindingError
-    ? { repoFullName, issueNumber, desired, desiredHash, status, lastError: bindingError }
+    ? {
+      repoFullName,
+      issueNumber,
+      bindingRevision,
+      desired,
+      desiredHash,
+      status,
+      lastError: bindingError,
+    }
     : existing?.desiredHash === desiredHash
       ? {
         repoFullName,
         issueNumber,
-        ...(existing.status === "NEEDS_INPUT" ? { status: "PENDING", lastError: null } : {}),
+        bindingRevision,
+        ...(["NEEDS_INPUT", "READBACK_REQUIRED", "SUPERSEDED"].includes(existing.status)
+          ? { status: "PENDING", lastError: null }
+          : {}),
       }
-      : { desired, desiredHash, status, observed: Prisma.DbNull, lastError: null, appliedAt: null };
+      : {
+        bindingRevision,
+        desired,
+        desiredHash,
+        status,
+        observed: Prisma.DbNull,
+        lastError: null,
+        appliedAt: null,
+      };
   const where = { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } };
+  let projection: FleetProjectProjection;
   try {
-    return await prisma.fleetProjectProjection.upsert({
+    projection = await prisma.fleetProjectProjection.upsert({
       where,
       create: {
         appId: issue.app.id,
         projectNodeId,
+        bindingRevision,
         issueNodeId: issue.nodeId,
         repoFullName,
         issueNumber,
@@ -1034,8 +1070,20 @@ export async function upsertFleetProjectProjection(repoFullName: string, issueNu
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     // MySQL의 emulated upsert는 동시 최초 생성에서 unique race가 날 수 있다.
     // 이미 만들어진 동일 projection을 같은 desired state로 수렴시킨다.
-    return prisma.fleetProjectProjection.update({ where, data: update });
+    projection = await prisma.fleetProjectProjection.update({ where, data: update });
   }
+  await prisma.fleetProjectProjection.updateMany({
+    where: {
+      issueNodeId: issue.nodeId,
+      id: { not: projection.id },
+      status: { not: "SUPERSEDED" },
+    },
+    data: {
+      status: "SUPERSEDED",
+      lastError: "조직 Fleet Project binding revision과 일치하는 projection으로 대체되었습니다.",
+    },
+  });
+  return projection;
 }
 
 export async function refreshRunFleetProjection(runId: string): Promise<void> {

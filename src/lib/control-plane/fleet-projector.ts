@@ -3,10 +3,16 @@ import { Prisma } from "@prisma/client";
 import { fleetProjectFieldsSchema } from "@/lib/control-plane/contracts";
 import {
   fleetProjectionBindingDisposition,
-  type FleetProjectionAppBinding,
 } from "@/lib/control-plane/fleet-projector-binding";
+import {
+  reconcileFleetProjectBinding,
+  resolveFleetProjectSource,
+  type FleetProjectSourceApp,
+  type FleetProjectSourceDisposition,
+} from "@/lib/control-plane/fleet-project-binding";
+import { upsertFleetProjectProjection } from "@/lib/control-plane/automation-service";
 import { ControlPlaneError } from "@/lib/control-plane/service";
-import { getInstallationOctokit, type Octokit } from "@/lib/github/app";
+import { getInstallationContext, type Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
 const FIELD_NAMES = ["Priority", "App", "Kind", "Lifecycle", "Agent", "Approval", "Outcome"] as const;
@@ -28,7 +34,9 @@ interface ProjectionBindingRow {
   id: string;
   status: string;
   projectNodeId: string;
-  app: FleetProjectionAppBinding | null;
+  bindingRevision: number | null;
+  app: FleetProjectSourceApp | null;
+  source: FleetProjectSourceDisposition;
 }
 
 interface ProjectQuery {
@@ -127,15 +135,21 @@ function matchesDesired(observed: Record<string, string>, desired: Record<string
 }
 
 async function loadProjectionBinding(projectionId: string): Promise<ProjectionBindingRow | null> {
-  return prisma.fleetProjectProjection.findUnique({
+  const row = await prisma.fleetProjectProjection.findUnique({
     where: { id: projectionId },
     select: {
       id: true,
       status: true,
       projectNodeId: true,
-      app: { select: { status: true, projectV2Id: true } },
+      bindingRevision: true,
+      app: { select: { id: true, status: true, repoId: true, repoFullName: true } },
     },
   });
+  if (!row) return null;
+  const source = row.app
+    ? await resolveFleetProjectSource(row.app)
+    : { kind: "INELIGIBLE" as const, reason: "Projection app이 삭제되었습니다." };
+  return { ...row, source };
 }
 
 async function reconcileProjectionBinding(row: ProjectionBindingRow) {
@@ -146,9 +160,7 @@ async function reconcileProjectionBinding(row: ProjectionBindingRow) {
       id: row.id,
       status: row.status,
       projectNodeId: row.projectNodeId,
-      ...(row.app
-        ? { app: { is: { status: row.app.status, projectV2Id: row.app.projectV2Id } } }
-        : { app: { is: null } }),
+      bindingRevision: row.bindingRevision,
     },
     data: { status: disposition.kind, lastError: disposition.reason },
   });
@@ -252,9 +264,8 @@ async function clearField(input: {
   });
 }
 
-export async function applyFleetProjectProjection(
+async function applyFleetProjectProjection(
   projectionId: string,
-  octokit?: Octokit,
 ) {
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const staleAppliedBefore = new Date(Date.now() - 6 * 60 * 60_000);
@@ -273,26 +284,48 @@ export async function applyFleetProjectProjection(
   if (claimed.count !== 1) return { applied: false, skipped: true };
   const projection = await prisma.fleetProjectProjection.findUnique({
     where: { id: projectionId },
-    include: { app: { select: { status: true, projectV2Id: true } } },
   });
   if (!projection) throw new ControlPlaneError("Project projection을 찾을 수 없습니다.", 404, "PROJECTION_NOT_FOUND");
-  const initialBinding = await reconcileProjectionBinding(projection);
+  const bindingRow = await loadProjectionBinding(projection.id);
+  if (!bindingRow) throw new ControlPlaneError("Project projection을 찾을 수 없습니다.", 404, "PROJECTION_NOT_FOUND");
+  const initialBinding = await reconcileProjectionBinding(bindingRow);
   if (initialBinding.kind !== "CURRENT") {
     return { applied: false, skipped: true };
   }
   try {
-    const client = octokit ?? await getInstallationOctokit();
+    let installationContext: Awaited<ReturnType<typeof getInstallationContext>>;
+    try {
+      // Admin endpoint가 직전에 fresh installation readback을 완료해 같은 context를 cache한다.
+      // issue마다 새 installation token을 만들지 않고, 동일 run 안의 검증된 context만 재사용한다.
+      installationContext = await getInstallationContext();
+    } catch (error) {
+      await reconcileFleetProjectBinding({
+        getInstallationContext: async () => { throw error; },
+        now: () => new Date(),
+      });
+      await reconcileCurrentProjectionBinding(projection.id);
+      return { applied: false, skipped: true };
+    }
+    const bindingReadback = await reconcileFleetProjectBinding({
+      getInstallationContext: async () => installationContext,
+      now: () => new Date(),
+    });
+    if (bindingReadback.gate !== "VERIFIED") {
+      await reconcileCurrentProjectionBinding(projection.id);
+      return { applied: false, skipped: true };
+    }
+    const client = installationContext.octokit;
     const desired = fleetProjectFieldsSchema.parse(projection.desired);
     const desiredFields = desiredByField(desired);
-    const context = await client.graphql<ProjectQuery>(PROJECT_QUERY, {
+    const projectContext = await client.graphql<ProjectQuery>(PROJECT_QUERY, {
       projectId: projection.projectNodeId,
       issueId: projection.issueNodeId,
     });
-    if (!context.project || !context.issue) {
+    if (!projectContext.project || !projectContext.issue) {
       throw new ControlPlaneError("Project 또는 Issue node를 읽을 수 없습니다.", 409, "PROJECT_READBACK_MISSING");
     }
     const fields = new Map(
-      context.project.fields.nodes
+      projectContext.project.fields.nodes
         .filter((field): field is ProjectField => Boolean(field?.id && field.name))
         .map((field) => [field.name, field]),
     );
@@ -304,7 +337,7 @@ export async function applyFleetProjectProjection(
       client,
       projection.projectNodeId,
       projection.issueNodeId,
-      context.issue.projectItems.nodes.find((item): item is ProjectItem => item?.project.id === projection.projectNodeId),
+      projectContext.issue.projectItems.nodes.find((item): item is ProjectItem => item?.project.id === projection.projectNodeId),
     );
     const before = await readItemValues(client, itemId);
     if (!matchesDesired(before, desiredFields)) {
@@ -340,7 +373,7 @@ export async function applyFleetProjectProjection(
         id: projection.id,
         status: "PROCESSING",
         projectNodeId: projection.projectNodeId,
-        app: { is: { status: "ACTIVE", projectV2Id: projection.projectNodeId } },
+        bindingRevision: projection.bindingRevision,
       },
       data: { status: "APPLIED", observed, appliedAt: new Date(), lastError: null },
     });
@@ -373,7 +406,7 @@ export async function applyFleetProjectProjection(
  * 중복 webhook·중복 schedule에도 claim CAS가 한 projection을 한 번만 적용한다.
  * Fleet Project가 아직 설정되지 않은 row는 추측하지 않고 `NEEDS_INPUT`으로 닫아 fail-closed한다.
  */
-export async function drainFleetProjectProjections(limit = 20) {
+async function drainFleetProjectProjections(limit = 20) {
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const staleAppliedBefore = new Date(Date.now() - 6 * 60 * 60_000);
   const rows = await prisma.fleetProjectProjection.findMany({
@@ -387,22 +420,26 @@ export async function drainFleetProjectProjections(limit = 20) {
     },
     orderBy: { updatedAt: "asc" },
     take: Math.max(1, Math.min(limit, 100)),
-    select: {
-      id: true,
-      status: true,
-      projectNodeId: true,
-      app: { select: { status: true, projectV2Id: true } },
-    },
+    select: { id: true },
   });
   let applied = 0;
   let failed = 0;
   let needsInput = 0;
   let superseded = 0;
-  for (const row of rows) {
+  for (const candidate of rows) {
     try {
+      const row = await loadProjectionBinding(candidate.id);
+      if (!row) {
+        superseded += 1;
+        continue;
+      }
       const binding = await reconcileProjectionBinding(row);
       if (binding.kind === "NEEDS_INPUT") {
         needsInput += 1;
+        continue;
+      }
+      if (binding.kind === "READBACK_REQUIRED") {
+        failed += 1;
         continue;
       }
       if (binding.kind !== "CURRENT") {
@@ -416,4 +453,36 @@ export async function drainFleetProjectProjections(limit = 20) {
     }
   }
   return { scanned: rows.length, applied, failed, needsInput, superseded };
+}
+
+/**
+ * 중앙 binding activation 직후에도 기존 ACTIVE PRODUCT_APP Issue가 빠지지 않도록
+ * 현재 mirror 전체를 source resolver로 재판정한다. resolver가 exact PRODUCT_APP가
+ * 아닌 앱의 과거 projection을 SUPERSEDED로 닫는다.
+ */
+export async function reconcileFleetProjectProjectionSources() {
+  const issues = await prisma.issueMirror.findMany({
+    where: { app: { is: { status: "ACTIVE" } } },
+    orderBy: [{ repoFullName: "asc" }, { number: "asc" }],
+    select: { repoFullName: true, number: true },
+  });
+  let projected = 0;
+  let excluded = 0;
+  for (const issue of issues) {
+    const projection = await upsertFleetProjectProjection(issue.repoFullName, issue.number);
+    if (projection) projected += 1;
+    else excluded += 1;
+  }
+  return { scanned: issues.length, projected, excluded };
+}
+
+/**
+ * 공개 scheduler entrypoint. fresh installation/binding readback과 source cohort 수렴이
+ * 끝난 뒤에만 private drain을 실행해, 단독 호출이 permission preflight를 건너뛰지 못하게 한다.
+ */
+export async function reconcileFleetProjectProjections(limit = 20) {
+  const binding = await reconcileFleetProjectBinding();
+  const sources = await reconcileFleetProjectProjectionSources();
+  const projections = await drainFleetProjectProjections(limit);
+  return { binding, sources, projections };
 }

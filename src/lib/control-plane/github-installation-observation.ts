@@ -6,7 +6,7 @@ import type { GitHubInstallationPublicState } from "@/lib/github/installation-pu
 import { prisma } from "@/lib/prisma";
 
 export const GITHUB_INSTALLATION_OBSERVATION_VERSION =
-  "github-installation-readback/v1" as const;
+  "github-installation-readback/v2" as const;
 
 const CAPABILITY_REQUIREMENTS = {
   repositoryDiscovery: {
@@ -47,6 +47,10 @@ const CAPABILITY_REQUIREMENTS = {
   },
   organizationRulesets: {
     permissions: { organization_administration: "write" },
+    events: [],
+  },
+  organizationProjects: {
+    permissions: { organization_projects: "write" },
     events: [],
   },
 } as const;
