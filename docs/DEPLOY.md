@@ -396,6 +396,28 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
 
+### 서리 지표 하이라이트
+
+매일 11:00 KST(`backoffice-metric-highlights` CronJob → `/api/admin/metric-highlights`)에
+GA4·AppsInToss 콘솔 스냅샷에서 크게 움직인 항목만 추려 `#app-ops`로 나간다. 서리 봇 정체로
+게시하며 판정은 전부 결정적이라 LLM을 쓰지 않는다.
+
+- 전량 나열은 `#metrics-daily`의 지표 리포트(10:30 KST)가 이미 한다. 이 리포트는 판단만 남긴다.
+- 스케줄은 `analytics-collect`(10:00 KST) → 지표 리포트(10:30 KST) 뒤라 D-1 스냅샷이 이미 있다.
+  BigQuery·콘솔을 직접 치지 않고 저장된 `app_metric_daily`·`app_console_metric_daily`만 읽는다.
+- 판정: 최신값 vs 직전 7일 **중앙값**. 관측 4일 미만이면 판정하지 않고, 기준선이 지표별
+  최소 표본에 못 미치면 "표본 부족"으로 뺀다. 하루짜리 튐이 기준선을 흔들지 않게 평균이
+  아니라 중앙값을 쓴다(기존 이상 감지와 같은 방식).
+- 지표와 임계: GA4 DAU(기준선 10명·±30%), D1 잔존율(5%·±10%p), 보상형 광고 완료(20회·±40%),
+  콘솔 DAU(10명·±30%), 광고 수익(₩1,000·±40%), 결제 거래액(₩1,000·±40%).
+  잔존율만 %p로 보고 나머지는 상대 변화로 본다.
+- 정렬은 `변화 크기 × log10(기준선)` — 작은 앱의 큰 변화율이 판을 덮지 않게 규모를 반영한다.
+  각 방향 상위 5건까지 싣는다.
+- 기준선이 0인데 값이 임계 이상 생기면 "신규"로 하이라이트에 올린다(첫 매출 등).
+- 콘솔은 온디맨드 push라 리스팅마다 최신일이 다르다. 기준일보다 오래된 스냅샷은 항목 줄에
+  `⏳<날짜>`를 함께 찍는다.
+- 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-metric-highlights metric-highlights-manual-<고유번호>`.
+
 #### AI 팀원 체계 폐기 (2026-08-27)
 
 담당제 AI 팀원 6명(오너 노을/이슬/바람/새벽/마루 + 총괄 서리)의 순찰·스탠드업·주간

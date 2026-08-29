@@ -312,3 +312,49 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+---
+# 서리 일일 지표 하이라이트·로우라이트 — GA4·AppsInToss 콘솔 스냅샷에서 크게 움직인
+# 항목만 추려 #app-ops 에 남긴다. analytics-collect(10:00 KST)와 지표 리포트(10:30 KST)
+# 뒤에 돌아야 D-1 스냅샷이 이미 들어와 있다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-metric-highlights
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "0 2 * * *" # 02:00 UTC = 11:00 KST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 150 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/metric-highlights
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
