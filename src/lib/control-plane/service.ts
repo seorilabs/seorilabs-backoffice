@@ -9,10 +9,15 @@ import {
 import { createDraftRevisionInTransaction } from "@/lib/control-plane/config-revision-store";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { jsonDigest, signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
-import type { GitHubActionsStaticManifestIdentity } from "@/lib/control-plane/github-actions-oidc";
+import {
+  GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS,
+  type GitHubActionsStaticManifestIdentity,
+  type GitHubActionsStaticWorkflowPath,
+} from "@/lib/control-plane/github-actions-oidc";
 import {
   buildStaticRuntimeManifestReadback,
   StaticRuntimeManifestError,
+  type StaticRuntimeBinding,
 } from "@/lib/control-plane/static-runtime-manifest";
 import {
   BUILD_TARGET_MARKETS,
@@ -997,13 +1002,32 @@ export async function resolveStaticRuntimeManifest(input: {
     packageManager: discovery.workflowPackageManager,
     workingDirectory: discovery.workflowWorkingDirectory,
   });
-  if (workflowCaller.profile === "godot") {
+  const expectedCalledWorkflowPath: GitHubActionsStaticWorkflowPath =
+    workflowCaller.profile === "godot"
+      ? GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.godot
+      : GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.javascript;
+  if (input.identity.calledWorkflowPath !== expectedCalledWorkflowPath) {
     throw new ControlPlaneError(
-      "Godot은 별도 고정 WorkflowBundle caller를 사용합니다.",
+      "호출된 중앙 workflow와 exact-SHA discovery profile이 일치하지 않습니다.",
       409,
-      "STATIC_WORKFLOW_PROFILE_UNSUPPORTED",
+      "STATIC_WORKFLOW_PROFILE_MISMATCH",
     );
   }
+  const workflowDirectories = {
+    workspaceRoot: workflowCaller.workingDirectory,
+    commandDirectory: workflowCaller.workingDirectory,
+  };
+  const staticBinding: StaticRuntimeBinding = workflowCaller.profile === "godot"
+    ? {
+        ...workflowDirectories,
+        profile: workflowCaller.profile,
+        packageManager: workflowCaller.packageManager,
+      }
+    : {
+        ...workflowDirectories,
+        profile: workflowCaller.profile,
+        packageManager: workflowCaller.packageManager,
+      };
   if (!revision.snapshotDigest || !revision.snapshotSignature) {
     throw new ControlPlaneError(
       "Config snapshot 서명 provenance를 확인할 수 없습니다.",
@@ -1027,12 +1051,7 @@ export async function resolveStaticRuntimeManifest(input: {
       snapshotSignature: revision.snapshotSignature,
       snapshotSignatureKeyId: input.snapshotSignatureKeyId,
       snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
-      staticBinding: {
-        profile: workflowCaller.profile,
-        packageManager: workflowCaller.packageManager,
-        workspaceRoot: workflowCaller.workingDirectory,
-        commandDirectory: workflowCaller.workingDirectory,
-      },
+      staticBinding,
     });
   } catch (error) {
     if (error instanceof StaticRuntimeManifestError) {

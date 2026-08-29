@@ -10,6 +10,18 @@ export class StaticRuntimeManifestError extends Error {
   }
 }
 
+export type StaticRuntimeBinding = {
+  profile: "react-native" | "capacitor" | "ait-web";
+  packageManager: "npm" | "pnpm";
+  workspaceRoot: string;
+  commandDirectory: string;
+} | {
+  profile: "godot";
+  packageManager: null;
+  workspaceRoot: string;
+  commandDirectory: string;
+};
+
 export interface StaticRuntimeManifestInput {
   lifecycleState: "ACTIVE" | "PAUSED" | "DEPRECATED";
   repositoryId: string;
@@ -25,12 +37,7 @@ export interface StaticRuntimeManifestInput {
   snapshotSignature: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
-  staticBinding: {
-    profile: "react-native" | "capacitor" | "ait-web";
-    packageManager: "npm" | "pnpm";
-    workspaceRoot: string;
-    commandDirectory: string;
-  };
+  staticBinding: StaticRuntimeBinding;
 }
 
 function sha256Prefix(value: string): string {
@@ -48,6 +55,14 @@ function signatureDigest(value: string): string {
 }
 
 export function buildStaticRuntimeManifestReadback(input: StaticRuntimeManifestInput) {
+  if (
+    !["react-native", "capacitor", "ait-web", "godot"].includes(input.staticBinding.profile)
+    || (input.staticBinding.profile === "godot"
+      ? input.staticBinding.packageManager !== null
+      : !["npm", "pnpm"].includes(input.staticBinding.packageManager))
+  ) {
+    throw new StaticRuntimeManifestError("INVALID_STATIC_BINDING");
+  }
   if (
     !PUBLIC_ID.test(input.snapshotSignatureKeyId)
     || !PUBLIC_ID.test(input.snapshotSignaturePolicyRevision)

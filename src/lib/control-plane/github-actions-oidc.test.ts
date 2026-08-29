@@ -51,13 +51,26 @@ test("GitHub OIDC push identity는 숫자 org/repo와 caller/called exact SHA에
     bindingSourceSha: APPLICATION_SHA,
   });
   assert.equal(identity.workflowBundleSha, BUNDLE_SHA);
+  assert.equal(identity.calledWorkflowPath, ".github/workflows/js-static-checks-v1.yml");
   assert.equal(identity.eventName, "push");
 });
 
-test("same-repo PR은 merge source와 signed base binding을 분리한다", () => {
+test("Godot v3 workflow는 별도 exact called path identity로 보존된다", () => {
   const identity = assertGitHubActionsStaticManifestClaims(claims({
+    job_workflow_ref:
+      `seorilabs/.github/.github/workflows/godot-checks-v3.yml@${BUNDLE_SHA}`,
+  }), {
+    repositoryId: "7001",
+    applicationSourceSha: APPLICATION_SHA,
+    bindingSourceSha: APPLICATION_SHA,
+  });
+  assert.equal(identity.calledWorkflowPath, ".github/workflows/godot-checks-v3.yml");
+});
+
+test("same-repo PR은 merge source와 signed base binding을 분리한다", () => {
+  const claimIdentity = assertGitHubActionsStaticManifestClaims(claims({
     sha: APPLICATION_SHA,
-    workflow_sha: BINDING_SHA,
+    workflow_sha: APPLICATION_SHA,
     ref: "refs/pull/91/merge",
     workflow_ref:
       "seorilabs/runtime-canary/.github/workflows/org-contract.yml@refs/pull/91/merge",
@@ -71,8 +84,10 @@ test("same-repo PR은 merge source와 signed base binding을 분리한다", () =
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
   });
-  assert.equal(identity.bindingSourceSha, BINDING_SHA);
-  assert.equal(identity.applicationSourceSha, APPLICATION_SHA);
+  assert.equal(claimIdentity.requestedBindingSourceSha, BINDING_SHA);
+  assert.equal(claimIdentity.callerWorkflowSha, APPLICATION_SHA);
+  assert.equal(claimIdentity.applicationSourceSha, APPLICATION_SHA);
+  assert.equal(claimIdentity.pullRequestNumber, 91);
 });
 
 test("OIDC identity alias, source substitution, floating workflow와 runner mismatch는 거부된다", () => {
@@ -86,6 +101,7 @@ test("OIDC identity alias, source substitution, floating workflow와 runner mism
     claims({ repository_id: "7002" }),
     claims({ sha: "d".repeat(40) }),
     claims({ job_workflow_ref: "seorilabs/.github/.github/workflows/js-static-checks-v1.yml@main" }),
+    claims({ job_workflow_ref: `seorilabs/.github/.github/workflows/unknown.yml@${BUNDLE_SHA}` }),
     claims({ workflow_ref: "seorilabs/runtime-canary/.github/workflows/weak.yml@refs/heads/main" }),
     claims({ event_name: "pull_request_target" }),
     claims({ runner_environment: "github-hosted", repository_visibility: "secret" }),
@@ -131,6 +147,105 @@ test("request principal은 서명된 repo/run identity와 정확히 일치해야
     expectation,
     async () => ({ payload: claims(), protectedHeader: { alg: "HS256", typ: "JWT" } }),
   ), null);
+});
+
+test("same-repo PR은 GitHub App의 exact base, merge, head repo readback 뒤에만 identity를 발급한다", async () => {
+  const verifier = async () => ({
+    payload: claims({
+      sha: APPLICATION_SHA,
+      workflow_sha: APPLICATION_SHA,
+      ref: "refs/pull/91/merge",
+      workflow_ref:
+        "seorilabs/runtime-canary/.github/workflows/org-contract.yml@refs/pull/91/merge",
+      event_name: "pull_request",
+      head_ref: "feature/runtime",
+      base_ref: "main",
+      repository_visibility: "public",
+      runner_environment: "github-hosted",
+    }),
+    protectedHeader: { alg: "RS256", typ: "JWT" },
+  });
+  const request = new NextRequest(
+    "https://backoffice.vzyx.xyz/api/control-plane/apps/7001/resolved-manifest",
+    {
+      headers: {
+        authorization: "Bearer a.b.c",
+        "x-seori-principal": "github-actions:7001:1234",
+      },
+    },
+  );
+  const expectation = {
+    repositoryId: "7001",
+    applicationSourceSha: APPLICATION_SHA,
+    bindingSourceSha: BINDING_SHA,
+  };
+  const exactReadback = {
+    number: 91,
+    state: "open",
+    baseRepositoryId: "7001",
+    baseRepositoryFullName: "seorilabs/runtime-canary",
+    baseRef: "main",
+    baseSha: BINDING_SHA,
+    headRepositoryId: "7001",
+    headRepositoryFullName: "seorilabs/runtime-canary",
+    headRef: "feature/runtime",
+    mergeCommitSha: APPLICATION_SHA,
+  };
+  const identity = await authenticateGitHubActionsStaticManifestRequest(
+    request,
+    expectation,
+    verifier,
+    async (input) => {
+      assert.deepEqual(input, {
+        repositoryId: "7001",
+        fullName: "seorilabs/runtime-canary",
+        pullRequestNumber: 91,
+      });
+      return exactReadback;
+    },
+  );
+  assert.equal(identity?.bindingSourceSha, BINDING_SHA);
+  assert.equal(identity?.applicationSourceSha, APPLICATION_SHA);
+
+  for (const readback of [
+    { ...exactReadback, baseSha: "d".repeat(40) },
+    { ...exactReadback, mergeCommitSha: "d".repeat(40) },
+    { ...exactReadback, headRepositoryId: "7002" },
+    { ...exactReadback, headRepositoryFullName: "attacker/runtime-canary" },
+    { ...exactReadback, headRef: "other-feature" },
+    { ...exactReadback, state: "closed" },
+  ]) {
+    assert.equal(
+      await authenticateGitHubActionsStaticManifestRequest(
+        request,
+        expectation,
+        verifier,
+        async () => readback,
+      ),
+      null,
+    );
+  }
+});
+
+test("PR OIDC workflow_sha를 base SHA로 위조하고 fork head를 결합하면 거부된다", async () => {
+  const expectation = {
+    repositoryId: "7001",
+    applicationSourceSha: APPLICATION_SHA,
+    bindingSourceSha: BINDING_SHA,
+  };
+  assert.throws(
+    () => assertGitHubActionsStaticManifestClaims(claims({
+      sha: APPLICATION_SHA,
+      workflow_sha: BINDING_SHA,
+      ref: "refs/pull/91/merge",
+      workflow_ref:
+        "seorilabs/runtime-canary/.github/workflows/org-contract.yml@refs/pull/91/merge",
+      event_name: "pull_request",
+      head_ref: "feature/runtime",
+      base_ref: "main",
+    }), expectation),
+    /GITHUB_ACTIONS_OIDC_UNAUTHORIZED/,
+  );
 });
 
 test("production verifier는 GitHub issuer, audience, RS256 signature와 time claims를 검증한다", async () => {
