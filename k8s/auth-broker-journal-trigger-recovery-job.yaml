@@ -56,7 +56,7 @@ spec:
                 SUM(finished_at IS NULL AND rolled_back_at IS NULL), ':',
                 SUM(finished_at IS NOT NULL AND rolled_back_at IS NULL), ':',
                 SUM(rolled_back_at IS NOT NULL), ':',
-                SUM(applied_steps_count=0)
+                SUM(applied_steps_count=0))
                 FROM backoffice._prisma_migrations
                 WHERE migration_name='20260830050000_auth_broker_journal_checkpoint'")"
               test "$history_state" = "1:1:1:0:0:1"
