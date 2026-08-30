@@ -65,6 +65,10 @@ spec:
               writer_bytes="$(wc -c < /run/secrets/writer/password | tr -d ' ')"
               test "$shadow_bytes" = "${#shadow_password}"
               test "$writer_bytes" = "${#writer_password}"
+              # MySQL option file의 backslash escape나 주석 문법으로 값이 변하지 않도록
+              # 이 두 신규 principal은 padding 없는 48-byte base64 형식만 허용한다.
+              [[ "$shadow_password" =~ ^[A-Za-z0-9+/]{64}$ ]]
+              [[ "$writer_password" =~ ^[A-Za-z0-9+/]{64}$ ]]
               shadow_hex="$(printf '%s' "$shadow_password" | od -An -v -tx1 | tr -d ' \n')"
               writer_hex="$(printf '%s' "$writer_password" | od -An -v -tx1 | tr -d ' \n')"
               case "$shadow_hex:$writer_hex" in *[!0-9a-f:]*) echo "credential encoding invalid" >&2; exit 1;; esac

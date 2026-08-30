@@ -172,6 +172,13 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
   assert.match(provisioning, /test "\$shadow_bytes" = "\$\{#shadow_password\}"/u);
   assert.match(provisioning, /writer_bytes="\$\(wc -c < \/run\/secrets\/writer\/password/u);
   assert.match(provisioning, /test "\$writer_bytes" = "\$\{#writer_password\}"/u);
+  assert.match(provisioning, /\[\[ "\$shadow_password" =~ \^\[A-Za-z0-9\+\/\]\{64\}\$ \]\]/u);
+  assert.match(provisioning, /\[\[ "\$writer_password" =~ \^\[A-Za-z0-9\+\/\]\{64\}\$ \]\]/u);
+  assert.ok(
+    provisioning.indexOf('[[ "$shadow_password" =~ ^[A-Za-z0-9+/]{64}$ ]]')
+      < provisioning.indexOf('CONCAT("CREATE USER'),
+    "password 형식 검증은 CREATE USER보다 먼저 실행돼야 한다",
+  );
   assert.doesNotMatch(provisioning, /od -An -v -tx1 \/run\/secrets\/(?:shadow|writer)\/password/u);
   assert.match(provisioning, /ttlSecondsAfterFinished: 600/u);
   assert.match(provisioning, /trap 'rm -f "\$root_cnf" "\$shadow_cnf" "\$writer_cnf" "\$create_sql" "\$trigger_sql"'/u);
