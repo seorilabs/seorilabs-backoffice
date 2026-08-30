@@ -182,6 +182,25 @@ export async function renderDeployCard(
   };
 }
 
+/**
+ * 이 카드 메시지를 더 이어 쓸 수 없는가. 그러면 편집을 포기하고 새 카드를 보낸다.
+ *
+ * - 10008: 사람이 카드를 지웠다.
+ * - 403: 다른 봇 정체가 올린 메시지라 우리가 편집할 수 없다. 봇 앱이 바뀌었거나
+ *   과거 다른 정체가 같은 앱·마켓·버전의 카드를 올린 경우다. 실측: slotmachine
+ *   untagged PLAY 카드가 이 이유로 dead letter 4건(2026-08-25·08-29).
+ *
+ * 둘 다 재시도로 풀리지 않는다. 새 카드를 보내면 다음 갱신이 그 카드를 집어 자기
+ * 복구된다(previousReleaseMessage 가 가장 최근 카드를 고른다).
+ */
+export function isUnreusableCard(result: {
+  statusCode?: number;
+  errorCode?: number;
+}): boolean {
+  if (result.statusCode === 404 && result.errorCode === 10_008) return true;
+  return result.statusCode === 403;
+}
+
 async function deliverDeployCompletion(
   payload: DeployCompletionPayload,
   destinationKey: string,
@@ -192,7 +211,7 @@ async function deliverDeployCompletion(
   const messageId = await previousReleaseMessage(card.release, destinationKey);
   if (messageId) {
     const edited = await editDiscord(destinationKey, messageId, card.text, options);
-    if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
+    if (edited.ok || !isUnreusableCard(edited)) return edited;
   }
   return sendDiscord(destinationKey, card.text, options);
 }
