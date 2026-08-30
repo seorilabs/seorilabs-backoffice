@@ -9,7 +9,10 @@ import {
   type GhPrInput,
   type GhRunInput,
 } from "@/lib/sync/mirror";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import {
+  discordDestinationOrFallback,
+  discordDestinations,
+} from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { issueEventMessage } from "@/lib/notifications/issue-events";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
@@ -101,7 +104,9 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
             stateReason: p.issue.state_reason,
           }),
         },
-        destinations: discordDestinations(["backoffice"]),
+        // 전체 이슈가 흐르는 알림이라 버튼 카드가 놓이는 #backoffice 와 분리한다.
+        // 전용 채널을 아직 설정하지 않았으면 기존 채널로 계속 보낸다.
+        destinations: discordDestinationOrFallback("github-issues", "backoffice"),
       });
     }
   } catch (e) {
