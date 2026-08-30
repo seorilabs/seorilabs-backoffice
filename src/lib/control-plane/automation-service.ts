@@ -21,6 +21,11 @@ import {
   reconcileTerminalRepoGuards,
   releaseRepoGuard,
 } from "@/lib/control-plane/agent-queue";
+import {
+  parseSourceRemediationPolicy,
+  SOURCE_REMEDIATION_TEMPLATE_KEY,
+} from "@/lib/control-plane/automation-catalog";
+import { templateRepositoryAutomationEligible } from "@/lib/control-plane/source-remediation";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import {
   durableIssueObservation,
@@ -73,6 +78,9 @@ const repositoryAutomationSelect = {
   classification: true,
   lastDefaultPushSha: true,
   lastReconciledSha: true,
+  // 단발 source-remediation run의 retry는 정의가 잠근 generation/reason까지 대조한다.
+  reconcileGeneration: true,
+  lastDiscoveryReason: true,
 } as const;
 
 async function assertRepositoryAutomationManaged(repoFullName: string): Promise<void> {
@@ -634,13 +642,25 @@ export async function createAutomationDefinition(input: {
   }
 }
 
-async function loadDefinition(definitionId: string) {
+/**
+ * PAUSE/RESUME/RUN_NOW는 cadence가 있는 repo-task-autopilot-v1 정의에만 의미가 있어 기존 gate를 그대로 둔다.
+ * CANCEL_RUN/RETRY_RUN은 run 범위 명령이라 단발 source-remediation 정의에도 허용한다. 이 template은
+ * 정의를 두 번 만들 수 없고(DEFINITION_CONFLICT) dead-letter run이 workKey를 계속 잡고 있어
+ * (SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED) 이 경로가 없으면 P7 catch-22가 영구화된다.
+ */
+const RUN_SCOPED_AUTOMATION_COMMANDS = new Set(["CANCEL_RUN", "RETRY_RUN"]);
+
+async function loadDefinition(definitionId: string, command?: string) {
   const definition = await prisma.automationDefinition.findUnique({
     where: { id: definitionId },
     include: { app: { select: { repoFullName: true, status: true } } },
   });
   if (!definition) throw new ControlPlaneError("routine을 찾을 수 없습니다.", 404, "DEFINITION_NOT_FOUND");
-  if (!isManagedAutomationDefinition(definition)) {
+  const runScopedSourceRemediation = command !== undefined
+    && RUN_SCOPED_AUTOMATION_COMMANDS.has(command)
+    && definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY
+    && parseSourceRemediationPolicy(definition.configuration) !== null;
+  if (!isManagedAutomationDefinition(definition) && !runScopedSourceRemediation) {
     throw new ControlPlaneError(
       "legacy 또는 계약 불명 routine은 Fleet 명령으로 제어할 수 없습니다.",
       409,
@@ -839,12 +859,30 @@ export async function retryAgentRun(input: {
         where: { repoFullName: run.repoFullName },
         select: repositoryAutomationSelect,
       });
-      if (!repositoryAutomationEligible(registration)) {
+      // claim(tryClaimRun)과 정확히 같은 template 분기를 쓴다. source-remediation은 정의가 잠근
+      // generation/source SHA/reason이 지금도 같을 때만 통과하므로 재시도가 gate를 넓히지 않는다.
+      if (!templateRepositoryAutomationEligible({
+        template: run.occurrence.definition.template,
+        configuration: run.occurrence.definition.configuration,
+        registration,
+      })) {
         throw new ControlPlaneError(
           "현재 source가 재조정되지 않은 repository의 run은 재시도할 수 없습니다.",
           409,
           "REPOSITORY_NOT_MANAGED",
         );
+      }
+      if (run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY) {
+        const app = run.appId
+          ? await tx.app.findUnique({ where: { id: run.appId }, select: { status: true } })
+          : null;
+        if (!app || app.status !== "ACTIVE") {
+          throw new ControlPlaneError(
+            "ACTIVE App에 결합된 source-remediation run만 재시도할 수 있습니다.",
+            409,
+            "APP_NOT_ELIGIBLE",
+          );
+        }
       }
       await tx.agentRun.update({
         where: { id: run.id },
@@ -896,7 +934,7 @@ export async function executeAutomationCommand(input: {
   } as const;
   const mutation = await beginAutomationMutation(mutationIdentity);
   if (mutation.replay) return mutation.replay;
-  const definition = await loadDefinition(input.definitionId);
+  const definition = await loadDefinition(input.definitionId, input.command.command);
   if ("runId" in input.command) {
     const run = await prisma.agentRun.findUnique({
       where: { id: input.command.runId },

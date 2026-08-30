@@ -26,7 +26,9 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
   함께 서명하며 private key와
   attestation은 모델이나 Backoffice 응답에 노출하지 않는다.
 - `k8s/seori-auth-agent-runtime.yaml`은 기본 `replicas: 0`이고 Backoffice의
-  `AGENT_TRUSTED_ADAPTER_DEPLOYED=false`, 코드의 미구현 durable step-ledger gate와 함께 잠긴다.
+  `AGENT_TRUSTED_ADAPTER_DEPLOYED=false`, 코드의 `trustedGithubRuntimeCanaryApproved()=false`
+  runtime canary gate와 함께 잠긴다. durable step ledger 자체는 구현됐으므로
+  (`trustedGithubStepLedgerImplemented()=true`) 남은 잠금은 canary 승인과 replica뿐이며,
   현재 revision에서는 환경변수를 바꿔도 `READY_PR`을 생성하거나 claim할 수 없다.
 
 토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
@@ -509,6 +511,14 @@ control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상�
 - `trustedMutationAdapterConfigured()`(GitHub READY_PR runtime canary)는 이 template도 그대로
   적용된다 — 위 gate를 모두 통과해도 canary가 승인되기 전에는 claim 자체가 fail-closed다. 이 PR은
   그 canary/runtime activation gate를 열지 않는다.
+- dead-letter 복구는 `RETRY_RUN` 하나뿐이다. 단발 정의는 같은 repo에 두 번 만들 수 없고
+  (`DEFINITION_CONFLICT`) dead-letter run이 issue `workKey`를 계속 쥐고 있어
+  (`SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED`) 다른 우회 경로가 없다. 따라서 run 범위 명령
+  (`CANCEL_RUN`, `RETRY_RUN`)만 이 template에도 허용하고 정의 범위 명령
+  (`PAUSE`, `RESUME`, `RUN_NOW`)은 계속 `DEFINITION_CONTRACT_UNMANAGED`로 닫는다.
+  `retryAgentRun`은 claim과 같은 `templateRepositoryAutomationEligible` 판정을 공유하므로,
+  정의가 잠근 generation/source SHA/reason이 지금도 정확히 같을 때만 run을 `PENDING`으로
+  되돌린다. 되살린 run도 claim 시점의 issue scope digest와 READY_PR canary gate를 다시 통과해야 한다.
 
 ## Scheduler와 Project projection
 

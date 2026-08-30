@@ -14,7 +14,7 @@ import {
 } from "@/lib/control-plane/automation-catalog";
 import {
   issueEligibleForSourceRemediation,
-  repositorySourceRemediationEligible,
+  templateRepositoryAutomationEligible,
 } from "@/lib/control-plane/source-remediation";
 import {
   agentWorkerSessionStateError,
@@ -23,7 +23,6 @@ import {
 import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
-import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import {
   trustedMutationAdapterConfigured,
   workflowBundleCandidateExecutorConfigured,
@@ -421,11 +420,14 @@ async function tryClaimRun(input: {
       // source-remediation은 일반 MANAGED guard를 우회하는 유일한 template이다. registration이
       // MANAGED가 아니어도, 정의 생성 시 잠근 generation/source SHA/reason이 지금도 정확히 같을
       // 때만 통과한다 — 다른 모든 template은 기존 repositoryAutomationEligible 그대로다.
+      // 같은 판정을 수동 retry(retryAgentRun)와 공유해 두 경로가 어긋나지 않게 한다.
       const isSourceRemediation = run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY;
-      if (!readbackClaim && !isSourceRemediation && !repositoryAutomationEligible(registration)) return null;
+      if (!readbackClaim && !templateRepositoryAutomationEligible({
+        template: run.occurrence.definition.template,
+        configuration: run.occurrence.definition.configuration,
+        registration,
+      })) return null;
       if (!readbackClaim && isSourceRemediation) {
-        const remediationPolicy = policy as SourceRemediationPolicy;
-        if (!repositorySourceRemediationEligible(registration, remediationPolicy)) return null;
         const remediationApp = run.appId
           ? await tx.app.findUnique({ where: { id: run.appId }, select: { status: true } })
           : null;
