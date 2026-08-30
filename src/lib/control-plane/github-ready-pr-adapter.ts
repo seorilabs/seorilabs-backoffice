@@ -3,12 +3,7 @@ import { TextDecoder } from "node:util";
 import { z } from "zod";
 
 import {
-  agentGithubMutationAuthorizeSchema,
-  agentGithubMutationReadbackSchema,
-  agentGithubMutationStepClaimSchema,
-  agentGithubMutationStepCompleteSchema,
   agentGithubMutationStepObservationSchema,
-  agentGithubMutationStepPlanSchema,
   agentGithubObservationSchema,
   containsCredentialCandidate,
   type AgentGithubMutationStepKind,
@@ -17,6 +12,12 @@ import {
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import type { WorkerPrincipal } from "@/lib/control-plane/seori-auth-agent-transport";
+import {
+  prepareWorkflowBundleCandidateFiles,
+  workflowBundleCandidateCommand,
+  workflowBundleCandidateTaskSchema,
+  type WorkflowBundleCandidateTask,
+} from "@/lib/control-plane/workflow-bundle-candidate-contract";
 
 const SHA40 = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -165,13 +166,20 @@ export interface GithubMutationControlPlane {
     requestId: string;
     body: {
       sessionId: string;
-      workerPrincipalId: WorkerPrincipal;
+      workerPrincipalId: string;
       workerRuntimeBindingDigest: string;
     };
   }): Promise<GithubReadyPrRecoveryClaim>;
   authorize(input: {
     requestId: string;
-    body: z.infer<typeof agentGithubMutationAuthorizeSchema>;
+    body: {
+      sessionId: string;
+      workerPrincipalId: string;
+      workerRuntimeBindingDigest: string;
+      action: "GITHUB_READY_PR_MUTATE";
+      mutationIntentDigest: string;
+      observation: AgentGithubObservation;
+    };
   }): Promise<{
     executionId: string;
     action: "GITHUB_READY_PR_MUTATE";
@@ -186,7 +194,13 @@ export interface GithubMutationControlPlane {
   }>;
   claimStep(input: {
     requestId: string;
-    body: z.infer<typeof agentGithubMutationStepClaimSchema>;
+    body: {
+      sessionId: string;
+      executionId: string;
+      workerPrincipalId: string;
+      workerRuntimeBindingDigest: string;
+      stepKind: AgentGithubMutationStepKind;
+    };
   }): Promise<{
     executionId: string;
     stepId: string;
@@ -206,7 +220,18 @@ export interface GithubMutationControlPlane {
   }>;
   planStep(input: {
     requestId: string;
-    body: z.infer<typeof agentGithubMutationStepPlanSchema>;
+    body: {
+      sessionId: string;
+      executionId: string;
+      stepId: string;
+      attemptId: string;
+      generation: number;
+      workerPrincipalId: string;
+      workerRuntimeBindingDigest: string;
+      stepKind: "CREATE_COMMIT";
+      expectedTreeSha: string;
+      expectedCommitSha: string;
+    };
   }): Promise<{
     executionId: string;
     stepId: string;
@@ -219,7 +244,17 @@ export interface GithubMutationControlPlane {
   }>;
   completeStep(input: {
     requestId: string;
-    body: z.infer<typeof agentGithubMutationStepCompleteSchema>;
+    body: {
+      sessionId: string;
+      executionId: string;
+      stepId: string;
+      attemptId: string;
+      generation: number;
+      workerPrincipalId: string;
+      workerRuntimeBindingDigest: string;
+      stepKind: AgentGithubMutationStepKind;
+      observation: AgentGithubMutationStepObservation;
+    };
   }): Promise<{
     executionId: string;
     stepId: string;
@@ -230,7 +265,13 @@ export interface GithubMutationControlPlane {
   }>;
   readback(input: {
     requestId: string;
-    body: z.infer<typeof agentGithubMutationReadbackSchema>;
+    body: {
+      sessionId: string;
+      executionId: string;
+      workerPrincipalId: string;
+      workerRuntimeBindingDigest: string;
+      observation: AgentGithubObservation;
+    };
   }): Promise<{ executionId: string; status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN"; duplicate: boolean }>;
 }
 
@@ -624,6 +665,29 @@ export async function executeGithubReadyPr(input: {
   pullRequestUrl?: string;
 }> {
   const prepared = prepareGithubReadyPrCommand(input.rawCommand);
+  return executePreparedGithubReadyPr({ ...input, prepared });
+}
+
+async function executePreparedGithubReadyPr(input: {
+  operationId: string;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  prepared: {
+    command: GithubReadyPrCommand;
+    files: PreparedGithubFile[];
+    mutationIntentDigest: string;
+  };
+  github: GithubReadyPrPort;
+  controlPlane: GithubMutationControlPlane;
+  clock?: () => Date;
+}): Promise<{
+  executionId: string;
+  status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
+  writeAttempted: boolean;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+}> {
+  const prepared = input.prepared;
   const { command } = prepared;
   const now = input.clock ?? (() => new Date());
   const preObservation = await observeGithubReadyPr({
@@ -638,14 +702,14 @@ export async function executeGithubReadyPr(input: {
     preObservation.repoFullName.toLowerCase() !== command.repoFullName.toLowerCase()
     || preObservation.defaultBranchSha.toLowerCase() !== command.sourceSha.toLowerCase()
   ) throw new Error("GITHUB_READY_PR_SOURCE_BINDING_MISMATCH");
-  const authorizationBody = agentGithubMutationAuthorizeSchema.parse({
+  const authorizationBody = {
     sessionId: command.sessionId,
     workerPrincipalId: input.workerPrincipalId,
     workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
-    action: "GITHUB_READY_PR_MUTATE",
+    action: "GITHUB_READY_PR_MUTATE" as const,
     mutationIntentDigest: prepared.mutationIntentDigest,
     observation: preObservation,
-  });
+  };
   const authorization = await input.controlPlane.authorize({
     requestId: mutationControlPlaneRequestId(input.operationId, "authorize"),
     body: authorizationBody,
@@ -661,13 +725,13 @@ export async function executeGithubReadyPr(input: {
   let writeAttempted = false;
   const stepKinds: AgentGithubMutationStepKind[] = ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"];
   for (const stepKind of stepKinds) {
-    const claimBody = agentGithubMutationStepClaimSchema.parse({
+    const claimBody = {
       sessionId: command.sessionId,
       executionId: authorization.executionId,
       workerPrincipalId: input.workerPrincipalId,
       workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
       stepKind,
-    });
+    };
     const stableClaimRequestId = mutationControlPlaneRequestId(input.operationId, `step:${stepKind}:claim`);
     let claim: Awaited<ReturnType<GithubMutationControlPlane["claimStep"]>>;
     try {
@@ -732,7 +796,7 @@ export async function executeGithubReadyPr(input: {
         message: command.commitMessage,
         date: claim.commitDate,
       });
-      const planBody = agentGithubMutationStepPlanSchema.parse({
+      const planBody = {
         sessionId: command.sessionId,
         executionId: claim.executionId,
         stepId: claim.stepId,
@@ -743,7 +807,7 @@ export async function executeGithubReadyPr(input: {
         stepKind,
         expectedTreeSha,
         expectedCommitSha,
-      });
+      };
       const plan = await input.controlPlane.planStep({
         requestId: mutationControlPlaneRequestId(
           input.operationId,
@@ -843,7 +907,7 @@ export async function executeGithubReadyPr(input: {
       expectedCommitSha,
       now: now(),
     });
-    const completionBody = agentGithubMutationStepCompleteSchema.parse({
+    const completionBody = {
       sessionId: command.sessionId,
       executionId: claim.executionId,
       stepId: claim.stepId,
@@ -853,7 +917,7 @@ export async function executeGithubReadyPr(input: {
       workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
       stepKind,
       observation: afterWrite,
-    });
+    };
     const completion = await input.controlPlane.completeStep({
       requestId: mutationControlPlaneRequestId(
         input.operationId,
@@ -880,13 +944,13 @@ export async function executeGithubReadyPr(input: {
     },
     now: now(),
   });
-  const readbackBody = agentGithubMutationReadbackSchema.parse({
+  const readbackBody = {
     sessionId: command.sessionId,
     executionId: authorization.executionId,
     workerPrincipalId: input.workerPrincipalId,
     workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
     observation: postObservation,
-  });
+  };
   const readback = await input.controlPlane.readback({
     requestId: mutationControlPlaneRequestId(
       input.operationId,
@@ -908,10 +972,32 @@ export async function executeGithubReadyPr(input: {
   };
 }
 
+export async function executeWorkflowBundleCandidateReadyPr(input: {
+  operationId: string;
+  workerPrincipalId: string;
+  workerRuntimeBindingDigest: string;
+  task: WorkflowBundleCandidateTask;
+  sessionId: string;
+  github: GithubReadyPrPort;
+  controlPlane: GithubMutationControlPlane;
+  clock?: () => Date;
+}) {
+  const task = workflowBundleCandidateTaskSchema.parse(input.task);
+  const command = workflowBundleCandidateCommand(task, input.sessionId) as GithubReadyPrCommand;
+  return executePreparedGithubReadyPr({
+    ...input,
+    prepared: {
+      command,
+      files: prepareWorkflowBundleCandidateFiles(task),
+      mutationIntentDigest: task.mutation.intentDigest,
+    },
+  });
+}
+
 export async function recoverGithubReadyPr(input: {
   operationId: string;
   sessionId: string;
-  workerPrincipalId: WorkerPrincipal;
+  workerPrincipalId: string;
   workerRuntimeBindingDigest: string;
   recovery: GithubReadyPrRecoveryClaim;
   github: GithubReadyPrPort;
@@ -929,13 +1015,13 @@ export async function recoverGithubReadyPr(input: {
   for (const stepKind of stepKinds) {
     const claim = await input.controlPlane.claimStep({
       requestId: mutationControlPlaneRequestId(input.operationId, `recovery:${stepKind}:claim`),
-      body: agentGithubMutationStepClaimSchema.parse({
+      body: {
         sessionId: input.sessionId,
         executionId: input.recovery.executionId,
         workerPrincipalId: input.workerPrincipalId,
         workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
         stepKind,
-      }),
+      },
     });
     if (
       claim.executionId !== input.recovery.executionId
@@ -967,7 +1053,7 @@ export async function recoverGithubReadyPr(input: {
         input.operationId,
         `recovery:${stepKind}:generation:${claim.generation}:complete`,
       ),
-      body: agentGithubMutationStepCompleteSchema.parse({
+      body: {
         sessionId: input.sessionId,
         executionId: claim.executionId,
         stepId: claim.stepId,
@@ -977,7 +1063,7 @@ export async function recoverGithubReadyPr(input: {
         workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
         stepKind,
         observation,
-      }),
+      },
     });
     if (completion.status !== "VERIFIED") break;
   }
@@ -997,13 +1083,13 @@ export async function recoverGithubReadyPr(input: {
       input.operationId,
       `recovery:readback:${postObservation.providerSnapshotId}`,
     ),
-    body: agentGithubMutationReadbackSchema.parse({
+    body: {
       sessionId: input.sessionId,
       executionId: input.recovery.executionId,
       workerPrincipalId: input.workerPrincipalId,
       workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
       observation: postObservation,
-    }),
+    },
   });
   const target = postObservation.mutationTarget?.pullRequests.length === 1
     ? postObservation.mutationTarget.pullRequests[0]

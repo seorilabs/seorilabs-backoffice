@@ -80,8 +80,8 @@ export async function getInstallationOctokit(): Promise<Octokit> {
 }
 
 /**
- * Fleet 표준 label transport 전용 issuer다. App JWT로 repository 하나와 exact
- * permission의 installation token만 만들고, token은 callback 경계 안에서 폐기한다.
+ * Fleet trusted transport 공용 issuer다. App JWT로 repository 하나와 capability별
+ * exact permission의 installation token만 만들고, token은 callback 경계 안에서 폐기한다.
  */
 export async function getFleetScopedGithubTokenIssuer(): Promise<{
   installationId: string;

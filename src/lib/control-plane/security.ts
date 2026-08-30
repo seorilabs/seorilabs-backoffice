@@ -45,13 +45,18 @@ function configuredAgentWorkerTokens(): ReadonlyMap<string, string> | null {
   return new Map(entries);
 }
 
-function configuredTrustedAdapter(): {
+function configuredTrustedAdapter(
+  deploymentGate: "generic" | "workflow-bundle-candidate" = "generic",
+): {
   principal: string;
   runtimeIdentity: string;
   token: string;
   publicKey: string;
 } | null {
-  if (process.env.AGENT_TRUSTED_ADAPTER_DEPLOYED !== "true") return null;
+  const deployed = deploymentGate === "workflow-bundle-candidate"
+    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED === "true"
+    : process.env.AGENT_TRUSTED_ADAPTER_DEPLOYED === "true";
+  if (!deployed) return null;
   const principal = process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "";
   const runtimeIdentity = process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY?.trim() ?? "";
   const token = process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim() ?? "";
@@ -87,6 +92,12 @@ export function trustedMutationAdapterConfigured(): boolean {
   return trustedGithubStepLedgerImplemented()
     && trustedGithubRuntimeCanaryApproved()
     && configuredTrustedAdapter() !== null;
+}
+
+/** 후보 executor는 generic agent runtime canary와 별도 배포 gate를 가진다. */
+export function workflowBundleCandidateExecutorConfigured(): boolean {
+  return trustedGithubStepLedgerImplemented()
+    && configuredTrustedAdapter("workflow-bundle-candidate") !== null;
 }
 
 /** CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable CAS, idempotency, readback ledger 구현 여부다. */
@@ -141,6 +152,21 @@ export function authenticateInternalRequest(
   return { id, audience, runtimeBindingDigest: null };
 }
 
+/** 후보 executor 전용 workload gate. generic READY_PR runtime을 켜지 않는다. */
+export function authenticateWorkflowBundleCandidateExecutorRequest(
+  request: NextRequest,
+): InternalPrincipal | null {
+  const id = principalId(request);
+  const adapter = configuredTrustedAdapter("workflow-bundle-candidate");
+  if (
+    !id
+    || !adapter
+    || id !== adapter.principal
+    || !verifyStaticToken(authorizationBearerToken(request), adapter.token)
+  ) return null;
+  return { id, audience: "agent-adapter", runtimeBindingDigest: null };
+}
+
 function publicJson(value: unknown): JsonValue | null {
   try {
     return JSON.parse(JSON.stringify(value)) as JsonValue;
@@ -158,9 +184,10 @@ export async function verifyAndConsumeAgentAdapterAttestation(input: {
   route: string;
   idempotencyKey: string;
   body: unknown;
+  deploymentGate?: "generic" | "workflow-bundle-candidate";
   now?: Date;
 }): Promise<AgentAdapterAttestationPayload | null> {
-  const adapter = configuredTrustedAdapter();
+  const adapter = configuredTrustedAdapter(input.deploymentGate);
   const token = input.request.headers.get("x-seori-adapter-attestation")?.trim() ?? "";
   const body = publicJson(input.body);
   const now = input.now ?? new Date();

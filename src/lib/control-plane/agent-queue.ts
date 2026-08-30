@@ -7,6 +7,8 @@ import {
   MANAGED_WORKER_TEMPLATE_KEYS,
   parseManagedWorkerPolicy,
   SOURCE_REMEDIATION_TEMPLATE_KEY,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
   type AutomationPolicy,
   type SourceRemediationPolicy,
 } from "@/lib/control-plane/automation-catalog";
@@ -22,7 +24,10 @@ import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
-import { trustedMutationAdapterConfigured } from "@/lib/control-plane/security";
+import {
+  trustedMutationAdapterConfigured,
+  workflowBundleCandidateExecutorConfigured,
+} from "@/lib/control-plane/security";
 
 class RepoScopeBusyError extends Error {}
 
@@ -282,7 +287,7 @@ async function replayClaim(input: {
   requestId: string;
   workerId: string;
   runtimeBindingDigest: string;
-  agentKind: "CODEX" | "CLAUDE";
+  agentKind: "CODEX" | "CLAUDE" | null;
   now: Date;
 }): Promise<ClaimedAgentRun | null> {
   const event = await prisma.agentRunEvent.findUnique({
@@ -369,6 +374,7 @@ async function tryClaimRun(input: {
   leaseSeconds: number;
   now: Date;
   idempotencyKey: string;
+  trustedMutationRuntimeAvailable?: boolean;
   retryAttempt?: number;
 }): Promise<ClaimedAgentRun | null> {
   try {
@@ -386,7 +392,10 @@ async function tryClaimRun(input: {
       if (!policy || (!readbackClaim && (!run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt))) return null;
       const resumeMode = readbackClaim ? "READBACK_FIRST" as const : "START" as const;
       const executionPolicy = agentExecutionPolicy(policy, resumeMode);
-      if (executionPolicy.repositorySingleton && !trustedMutationAdapterConfigured()) return null;
+      if (
+        executionPolicy.repositorySingleton
+        && !(input.trustedMutationRuntimeAvailable ?? trustedMutationAdapterConfigured())
+      ) return null;
       const registration = await tx.repositoryRegistration.findUnique({
         where: { repoFullName: run.repoFullName },
         select: {
@@ -619,6 +628,55 @@ export async function claimAgentRun(input: {
     (runId) => tryClaimRun({ ...input, runId, now }),
   );
   return claimed ?? replayClaim({ ...input, requestId: input.idempotencyKey, now });
+}
+
+/**
+ * 고정 candidate executor만 agentKind=null 전용 definition을 claim한다. 일반
+ * Codex/Claude worker query에는 이 queue가 섞이지 않는다.
+ */
+export async function claimWorkflowBundleCandidateRun(input: {
+  workerId: typeof WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL;
+  runtimeBindingDigest: string;
+  leaseSeconds: number;
+  idempotencyKey: string;
+  runId?: string;
+  now?: Date;
+}): Promise<ClaimedAgentRun | null> {
+  if (!workflowBundleCandidateExecutorConfigured()) return null;
+  const now = input.now ?? new Date();
+  const replay = await replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
+  if (replay) return replay;
+  await requeueExpiredLeases(now);
+  const candidates = await prisma.agentRun.findMany({
+    where: {
+      ...(input.runId ? { id: input.runId } : {}),
+      OR: [
+        { status: "PENDING" },
+        { status: "FAILED", readbackRequestedAt: { not: null } },
+      ],
+      eligibleAt: { lte: now },
+      occurrence: {
+        definition: {
+          template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
+          agentKind: null,
+          configuration: { not: Prisma.DbNull },
+        },
+      },
+    },
+    select: { id: true },
+    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+    take: 10,
+  });
+  const claimed = await firstSuccessfulClaim(
+    candidates.map(({ id }) => id),
+    (runId) => tryClaimRun({
+      ...input,
+      runId,
+      now,
+      trustedMutationRuntimeAvailable: true,
+    }),
+  );
+  return claimed ?? replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
 }
 
 export async function heartbeatAgentRun(input: {

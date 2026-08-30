@@ -195,6 +195,10 @@ spec:
             # signed readback canary 확인 전에는 code gate까지 READY_PR을 fail-closed한다.
             - name: AGENT_TRUSTED_ADAPTER_DEPLOYED
               value: "false"
+            # 후보 executor는 별도 suspended CronJob과 App permission canary를 통과한
+            # 뒤에만 켠다. generic READY_PR runtime gate와 서로 승격시키지 않는다.
+            - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED
+              value: "false"
             - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -1,0 +1,43 @@
+# WorkflowBundle candidate executor 운영 계약
+
+## 목적과 범위
+
+`workflow-bundle-candidate-executor-v1`은 중앙 WorkflowBundle v5 `CANDIDATE`를 Happy Farm과 Lizard Tycoon의 static check·Android build-only에서 검증하기 위한 전용 deterministic worker다. 일반 Codex/Claude queue나 개인 PAT를 사용하지 않는다. 마켓 업로드, 심사, 공개 배포, role·permission·key 변경은 이 계약에 없다.
+
+제어 경계는 다음과 같다.
+
+- `POST /api/control-plane/workflow-bundle-candidate-executions`: `PLAN` 또는 `ENQUEUE`. exact registry record, MANAGED PRODUCT_APP registration, default-branch source, ACTIVE signed ConfigRevision, GitHub App installation observation을 결합한다.
+- `GET /api/control-plane/workflow-bundle-candidate-executions?runId=...`: 공개 run·step 결과와 readback 상태만 반환한다.
+- `POST /api/internal/workflow-bundle-candidate-executor`: adapter bearer와 30초 Ed25519 route/body attestation을 모두 소비한다. secret이나 installation token을 반환하지 않는다.
+- `k8s/workflow-bundle-candidate-executor.yaml`: immutable Backoffice image로 실행하는 `suspend: true` CronJob이다.
+
+## 불변 task와 mutation
+
+task는 candidate registry record ID/SHA/payload/artifact, ACTIVE config revision/snapshot digest, repository ID/full name/default source, GitHub installation ID, branch, PR marker, 생성 caller 두 파일과 각 digest를 하나의 `planDigest`로 고정한다. 수정 가능한 파일은 다음 둘뿐이다.
+
+- `.github/workflows/org-contract.yml`
+- `.github/workflows/android-build-only.yml`
+
+worker는 repository 하나에 제한된 GitHub App installation token을 callback 내부에서만 사용하고 즉시 폐기한다. token permission은 `contents:write`, `workflows:write`, `pull_requests:write`, `issues:read`, `metadata:read` exact set이다. `CREATE_COMMIT`, `CREATE_REF`, `CREATE_PR` 각각은 기존 `AgentActionGrant`와 durable step CAS/readback ledger를 통과해야 한다.
+
+각 write 직전 다음을 다시 읽는다.
+
+- 현재 default branch와 exact source SHA
+- issue가 있으면 OPEN + `autopilot`, 그리고 `blocked`, `no-autopilot`, `approval:*` 부재
+- repository의 open autonomous Ready PR 0개
+- exact CANDIDATE record와 ACTIVE signed ConfigRevision
+- GitHub App `callerBootstrapPullRequest=GRANTED`
+
+provider 응답 유실이나 process 종료 뒤에는 같은 write를 반복하지 않는다. 기존 execution과 branch/commit/PR을 `READBACK_FIRST`로 확인한 뒤에만 미완료 step을 재개한다.
+
+## 활성화 gate
+
+현재 manifest는 의도적으로 실행되지 않는다. 다음이 모두 확인된 뒤 별도 운영 변경으로만 활성화한다.
+
+1. GitHub App installation observation에 `contents:write`, `workflows:write`, `pull_requests:write`와 `pull_request` event가 `GRANTED`로 보인다.
+2. `backoffice.vzyx.xyz`와 `api.github.com`만 허용하는 CNI FQDN egress가 적용됐다.
+3. projected secret의 공개 App ID, adapter principal, Ed25519 fingerprint가 canonical credential inventory와 일치한다. 키를 새로 만들거나 원문을 출력하지 않는다.
+4. manifest를 exact image digest로 render하고 fake private repository에서 token scope/revoke, look-alike repo 거부, 세 단계 partial-resume를 검증한다.
+5. Backoffice의 `WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED=true`와 CronJob `suspend=false`를 같은 승인 변경으로 반영한다.
+
+어느 조건이라도 빠지면 `PLAN`은 공개 missing permission을 `BLOCKED`로 표시하고 `ENQUEUE/claim`은 fail-closed한다. 일반 `AGENT_TRUSTED_ADAPTER_DEPLOYED`나 generic READY_PR canary를 이 worker가 대신 열지 않는다.

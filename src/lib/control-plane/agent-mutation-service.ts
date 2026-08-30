@@ -4,6 +4,8 @@ import {
   agentExecutionPolicy,
   agentRepositorySingletonScope,
   parseManagedWorkerPolicy,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
 } from "@/lib/control-plane/automation-catalog";
 import type {
   AgentGithubMutationStepKind,
@@ -15,6 +17,7 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+import { workflowBundleCandidateTaskSchema } from "@/lib/control-plane/workflow-bundle-candidate-contract";
 
 export const GITHUB_READY_PR_MUTATION_ACTION = "GITHUB_READY_PR_MUTATE" as const;
 const OBSERVATION_MAX_AGE_MS = 60_000;
@@ -155,6 +158,7 @@ function mutationRequestDigest(input: {
   adapterPrincipalId: string;
   adapterRuntimeIdentity: string;
   observation: AgentGithubObservation;
+  expectedTarget?: { headRef: string; marker: string };
 }): string {
   return jsonDigest({
     sessionId: input.sessionId,
@@ -164,8 +168,60 @@ function mutationRequestDigest(input: {
     mutationIntentDigest: input.mutationIntentDigest.toLowerCase(),
     adapterPrincipalId: input.adapterPrincipalId,
     adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+    ...(input.expectedTarget ? { expectedTarget: input.expectedTarget } : {}),
     observation: observationJson(input.observation),
   });
+}
+
+export function resolveGithubMutationTarget(input: {
+  definition: { template: string; agentKind: string | null };
+  taskInput: Prisma.JsonValue | null;
+  session: { repoId: bigint; repoFullName: string; issueNumber: number | null; sourceSha: string };
+  workerPrincipalId: string;
+  mutationIntentDigest: string;
+  requested?: { headRef: string; marker: string };
+  generated: { headRef: string; marker: string };
+}): { headRef: string; marker: string } {
+  const candidateDefinition = input.definition.template === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY;
+  if (!candidateDefinition) {
+    if (input.requested) {
+      throw new ControlPlaneError(
+        "일반 READY_PR definition은 custom mutation target을 사용할 수 없습니다.",
+        409,
+        "CUSTOM_MUTATION_TARGET_FORBIDDEN",
+      );
+    }
+    return input.generated;
+  }
+  if (
+    input.definition.agentKind !== null
+    || input.workerPrincipalId !== WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL
+    || !input.requested
+  ) {
+    throw new ControlPlaneError(
+      "WorkflowBundle candidate executor identity 또는 target이 일치하지 않습니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_BINDING_MISMATCH",
+    );
+  }
+  const task = workflowBundleCandidateTaskSchema.safeParse(input.taskInput);
+  if (
+    !task.success
+    || task.data.repository.id !== input.session.repoId.toString()
+    || task.data.repository.fullName.toLowerCase() !== input.session.repoFullName.toLowerCase()
+    || task.data.repository.issueNumber !== input.session.issueNumber
+    || task.data.repository.sourceSha !== input.session.sourceSha.toLowerCase()
+    || task.data.mutation.intentDigest !== input.mutationIntentDigest.toLowerCase()
+    || task.data.github.expectedHeadRef !== input.requested.headRef
+    || task.data.github.expectedPullRequestMarker !== input.requested.marker
+  ) {
+    throw new ControlPlaneError(
+      "WorkflowBundle candidate task와 JIT mutation target이 일치하지 않습니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_TASK_BINDING_MISMATCH",
+    );
+  }
+  return input.requested;
 }
 
 function readbackRequestDigest(input: {
@@ -402,6 +458,7 @@ export async function authorizeGithubReadyPrMutation(input: {
   adapterPrincipalId: string;
   adapterRuntimeIdentity: string;
   idempotencyKey: string;
+  expectedTarget?: { headRef: string; marker: string };
   now?: Date;
   retryAttempt?: number;
 }) {
@@ -424,6 +481,7 @@ export async function authorizeGithubReadyPrMutation(input: {
       || replay.adapterPrincipalId !== input.adapterPrincipalId
       || replay.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
       || replay.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
+      || replay.bindingDigest !== bindingDigest
     ) {
       throw new ControlPlaneError("idempotency key가 다른 mutation authorization에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -463,6 +521,18 @@ export async function authorizeGithubReadyPrMutation(input: {
       if (!singletonScope || run.repoGuard?.activeScopeKey !== singletonScope) {
         throw new ControlPlaneError("repo READY_PR singleton을 현재 run이 보유하지 않습니다.", 409, "REPO_SINGLETON_NOT_OWNED");
       }
+      const target = resolveGithubMutationTarget({
+        definition: run.occurrence.definition,
+        taskInput: run.taskInput,
+        session,
+        workerPrincipalId: input.workerPrincipalId,
+        mutationIntentDigest: input.mutationIntentDigest,
+        requested: input.expectedTarget,
+        generated: {
+          headRef: `refs/heads/seori/run-${run.id.slice(0, 20)}-${session.generation}`,
+          marker: `seori-run:${run.id}:${session.generation}`,
+        },
+      });
       const registration = await tx.repositoryRegistration.findUnique({
         where: { repoId: session.repoId },
         select: {
@@ -524,6 +594,8 @@ export async function authorizeGithubReadyPrMutation(input: {
           || resumable.grant.issueNumber !== session.issueNumber
           || resumable.grant.sourceSha.toLowerCase() !== session.sourceSha.toLowerCase()
           || resumable.grant.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
+          || resumable.grant.expectedHeadRef !== target.headRef
+          || resumable.grant.expectedPullRequestMarker !== target.marker
           || githubMutationStepLedgerVerified(resumable.steps)
         ) {
           throw new ControlPlaneError("기존 mutation execution의 resume binding이 다릅니다.", 409, "MUTATION_RESUME_BINDING_MISMATCH");
@@ -607,8 +679,8 @@ export async function authorizeGithubReadyPrMutation(input: {
           observedAt: input.observation.observedAt,
         },
       });
-      const expectedHeadRef = `refs/heads/seori/run-${run.id.slice(0, 20)}-${session.generation}`;
-      const expectedPullRequestMarker = `seori-run:${run.id}:${session.generation}`;
+      const expectedHeadRef = target.headRef;
+      const expectedPullRequestMarker = target.marker;
       const grant = await tx.agentActionGrant.create({
         data: {
           sessionId: session.id,
