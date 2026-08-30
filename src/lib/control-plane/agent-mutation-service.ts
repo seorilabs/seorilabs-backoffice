@@ -481,7 +481,10 @@ export async function authorizeGithubReadyPrMutation(input: {
       || replay.adapterPrincipalId !== input.adapterPrincipalId
       || replay.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
       || replay.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
-      || replay.bindingDigest !== bindingDigest
+      || (input.expectedTarget !== undefined && (
+        replay.expectedHeadRef !== input.expectedTarget.headRef
+        || replay.expectedPullRequestMarker !== input.expectedTarget.marker
+      ))
     ) {
       throw new ControlPlaneError("idempotency key가 다른 mutation authorization에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -594,8 +597,10 @@ export async function authorizeGithubReadyPrMutation(input: {
           || resumable.grant.issueNumber !== session.issueNumber
           || resumable.grant.sourceSha.toLowerCase() !== session.sourceSha.toLowerCase()
           || resumable.grant.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
-          || resumable.grant.expectedHeadRef !== target.headRef
-          || resumable.grant.expectedPullRequestMarker !== target.marker
+          || (input.expectedTarget !== undefined && (
+            resumable.grant.expectedHeadRef !== target.headRef
+            || resumable.grant.expectedPullRequestMarker !== target.marker
+          ))
           || githubMutationStepLedgerVerified(resumable.steps)
         ) {
           throw new ControlPlaneError("기존 mutation execution의 resume binding이 다릅니다.", 409, "MUTATION_RESUME_BINDING_MISMATCH");
