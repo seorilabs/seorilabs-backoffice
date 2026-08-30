@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
-import { createAutomationDefinition } from "@/lib/control-plane/automation-service";
+import {
+  createAutomationDefinition,
+  executeAutomationCommand,
+} from "@/lib/control-plane/automation-service";
 import { claimAgentRun } from "@/lib/control-plane/agent-queue";
 import { AUTOMATION_TEMPLATE_KEY, SOURCE_REMEDIATION_TEMPLATE_KEY } from "@/lib/control-plane/automation-catalog";
 import { createSourceRemediationDefinition } from "@/lib/control-plane/source-remediation";
@@ -247,6 +250,93 @@ async function main() {
     0,
     "DEPRECATED App은 source-remediation 정의를 하나도 만들면 안 된다",
   );
+
+  // dead-letter 복구: 단발 정의는 두 번 만들 수 없고(DEFINITION_CONFLICT) dead-letter run이
+  // workKey를 계속 잡고 있어(SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED) 수동 retry가 유일한
+  // 복구 경로다. 이 경로가 막히면 P7 catch-22가 영구화된다.
+  await prisma.agentRun.update({
+    where: { id: created.runId! },
+    data: { status: "DEAD_LETTER", completedAt: new Date(), error: "MAX_ATTEMPTS" },
+  });
+  await assert.rejects(
+    createSourceRemediationDefinition({
+      repoId: immunityWar.repoId,
+      issueNumber: 30,
+      agentKind: "CLAUDE",
+      budgetCeilingMicros: 500_000,
+      maxAttempts: 3,
+      actor,
+      idempotencyKey: `source-remediation:${nonce}:immunity-war:recreate`,
+    }),
+    (error: unknown) => error instanceof ControlPlaneError
+      && ["DEFINITION_CONFLICT", "SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED"].includes(error.code ?? ""),
+    "dead-letter 뒤 두 번째 정의 생성은 계속 막혀 있어야 한다",
+  );
+  await executeAutomationCommand({
+    definitionId: created.definition.id,
+    command: { command: "RETRY_RUN", runId: created.runId! },
+    actor,
+    requestId: `retry:${nonce}:immunity-war`,
+  });
+  const retried = await prisma.agentRun.findUniqueOrThrow({ where: { id: created.runId! } });
+  assert.equal(retried.status, "PENDING", "dead-letter source-remediation run은 수동 retry로 되살아나야 한다");
+  assert.equal(retried.completedAt, null);
+  assert.equal(
+    retried.maxAttempts,
+    3 + 3,
+    "retry는 기존 정의의 maxAttempts만큼만 예산을 늘려야 한다",
+  );
+
+  // 되살린 뒤에도 claim은 READY_PR runtime canary와 정의가 잠근 source에 계속 묶여 있어야 한다.
+  assert.equal(
+    await claimAgentRun({
+      workerId: "claude:seorilabs-generic-worker",
+      runtimeBindingDigest: "e".repeat(64),
+      agentKind: "CLAUDE",
+      leaseSeconds: 300,
+      idempotencyKey: `claim:${nonce}:immunity-war:after-retry`,
+    }),
+    null,
+    "retry가 READY_PR runtime canary gate를 열면 안 된다",
+  );
+
+  // 정의 범위 명령은 단발 template에 여전히 닫혀 있다.
+  for (const command of ["PAUSE", "RESUME", "RUN_NOW"] as const) {
+    await assert.rejects(
+      executeAutomationCommand({
+        definitionId: created.definition.id,
+        command: { command },
+        actor,
+        requestId: `${command.toLowerCase()}:${nonce}:immunity-war`,
+      }),
+      (error: unknown) => error instanceof ControlPlaneError && error.code === "DEFINITION_CONTRACT_UNMANAGED",
+      `${command}은 단발 source-remediation 정의에서 계속 거부돼야 한다`,
+    );
+  }
+
+  // discovery가 다시 돌아 generation이 전진하면 수동 retry도 같은 이유로 막힌다.
+  await prisma.repositoryRegistration.update({
+    where: { repoId: immunityWar.repoId },
+    data: { reconcileGeneration: 4 },
+  });
+  await prisma.agentRun.update({
+    where: { id: created.runId! },
+    data: { status: "DEAD_LETTER", completedAt: new Date(), error: "MAX_ATTEMPTS" },
+  });
+  await assert.rejects(
+    executeAutomationCommand({
+      definitionId: created.definition.id,
+      command: { command: "RETRY_RUN", runId: created.runId! },
+      actor,
+      requestId: `retry:${nonce}:immunity-war:stale`,
+    }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === "REPOSITORY_NOT_MANAGED",
+    "정의가 잠근 discovery generation이 바뀌면 retry도 fail-closed여야 한다",
+  );
+  await prisma.repositoryRegistration.update({
+    where: { repoId: immunityWar.repoId },
+    data: { reconcileGeneration: 3 },
+  });
 
   // 일반 MANAGED guard는 이 template과 무관하게 그대로다: NEEDS_INPUT repo에서
   // repo-task-autopilot-v1 정의는 여전히 REPOSITORY_NOT_MANAGED로 거부돼야 한다.
