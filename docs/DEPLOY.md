@@ -392,6 +392,7 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `DISCORD_CHANNEL_RELEASE_OPS_ID` | `#release-ops` |
 | `DISCORD_CHANNEL_OPS_ALERTS_ID` | `#ops-alerts` |
 | `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
+| `DISCORD_CHANNEL_GITHUB_ISSUES_ID` | `#github-issues` (선택). GitHub 이슈 생성·종료 알림 전용. 미설정이면 `#backoffice`로 폴백한다 |
 | `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
 | `CONTROL_PLANE_ADMIN_TOKEN` | 제어면 observation/config/manifest API 전용 Bearer token |
 | `CONTROL_PLANE_ADMIN_PRINCIPAL` | 위 token과 1:1로 결합되는 공개 workload identity. 기본 배포값은 `backoffice:fleet-operator` |
@@ -444,6 +445,21 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
   한다. 토큰이 없으면 메인 봇으로 나가므로 리포트가 사라지지는 않는다.
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
+
+### GitHub 이슈 알림 채널
+
+이슈 생성·종료 알림은 등급과 무관하게 전체 이슈가 흐른다(최근 7일 기준 생성 250건·종료 221건,
+하루 60건대). 버튼 카드가 놓이는 `#backoffice`와 섞이면 승인·넛지 카드가 묻히므로 전용 채널로
+분리한다.
+
+- `DISCORD_CHANNEL_GITHUB_ISSUES_ID`가 설정돼 있으면 그쪽으로, 없으면 `#backoffice`로 간다.
+  폴백은 **enqueue 시점**에 정한다 — 전달 단계에서 정하면 채널 미설정 구간의 알림이 재시도
+  끝에 dead letter로 사라진다.
+- enqueue는 웹 Pod가 하므로 **웹 Pod와 notification worker 양쪽에** 이 key가 있어야 한다.
+- `github-issues`는 카드 채널(`DISCORD_CARD_CHANNEL_KEYS`)이 아니다. 버튼을 놓지 않으므로
+  인터랙션 허용 범위를 넓히지 않는다.
+- 승인 카드·단계 넛지·일일 다이제스트·주간 LiveOps·Godot 버전 체크는 버튼이 실리므로
+  `#backoffice`에 남는다.
 
 ### 컨텐츠 지표 마켓 어휘
 
