@@ -446,6 +446,18 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
 
+### 배포 카드 이어 쓰기
+
+같은 앱·마켓·버전의 배포 카드는 하나를 계속 편집한다(`previousReleaseMessage`). 편집이
+실패하면 두 경우만 새 카드로 넘어간다.
+
+- `404`+`10008` — 사람이 카드를 지웠다.
+- `403` — 다른 봇 정체가 올린 메시지라 편집 권한이 없다. 봇 앱이 바뀌었거나 과거 다른
+  정체가 같은 키의 카드를 올린 경우다. 실측: `slotmachine-game untagged PLAY` 카드가
+  이 이유로 dead letter 4건(2026-08-25·08-29)이 됐고 그동안 카드 갱신이 멈춰 있었다.
+
+429·5xx는 기다리면 풀리므로 새 카드를 보내지 않는다 — 보내면 채널에 중복 카드가 쌓인다.
+
 ### GitHub 이슈 알림 채널
 
 이슈 생성·종료 알림은 등급과 무관하게 전체 이슈가 흐른다(최근 7일 기준 생성 250건·종료 221건,
@@ -470,11 +482,10 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 연결 PR은 `PullRequestMirror.linkedIssue`(PR 본문의 `closes #N` 파싱)에서 찾는다.
 - **기능 도입 전에 열린 이슈는 붙일 부모 메시지가 없다.** 종료 쓰레드는 enqueue 시점에 부모
   존재를 확인하고 없으면 건너뛴다. 영원히 재시도하다 dead letter가 되는 것을 막는다.
-- **봇 역할에 `CREATE_PUBLIC_THREADS`가 있어야 한다.** 없으면 쓰레드 생성이 403으로 막힌다.
-  Server Settings → Roles → 봇 역할에서 "Create Public Threads"를 켜거나, `#issues` 채널
-  권한에 봇 역할 overwrite로 허용한다. 이 403은 재시도로 풀리지 않으므로 **첫 시도에 바로
-  dead letter**로 보내고 `lastError`에 필요한 권한 이름을 남긴다 — 이벤트마다 10번씩
-  재시도하면 원인이 로그에 묻히고 실패 행만 10배로 쌓인다.
+- 봇 역할에 `CREATE_PUBLIC_THREADS`가 필요하다(2026-08-30 기준 전 채널에서 보유 확인).
+  권한이 빠지면 403이 나는데 이는 재시도로 풀리지 않으므로 **첫 시도에 바로 dead letter**로
+  보내고 `lastError`에 필요한 권한 이름을 남긴다 — 이벤트마다 10번씩 재시도하면 원인이
+  로그에 묻히고 실패 행만 10배로 쌓인다.
 - 쓰레드 게시는 `NotificationKind`가 아니라 payload의 `thread` 필드로 구분한다. `kind`는
   MySQL ENUM이라 값 추가에 `ALTER MODIFY`가 필요한데 expand-only 게이트가 막는다.
 
