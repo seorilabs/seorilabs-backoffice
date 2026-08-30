@@ -100,3 +100,70 @@ export function issueClosedThreadText(input: {
       : "✅ 처리완료";
   return [reason, "", ...lines].join("\n");
 }
+
+
+// ── 쓰레드 게시 계획 ──────────────────────────────────────────────────────────
+
+export interface IssueThreadDeps {
+  /**
+   * 같은 이슈의 "생성" 쓰레드 알림 dedupeKey. 없으면 붙일 부모 메시지가 없다는 뜻이다.
+   * (기능 도입 전에 열린 이슈, 또는 생성 알림이 보존기한으로 지워진 경우)
+   */
+  findOpenedThreadKey(threadName: string): Promise<string | null>;
+  listComments(): Promise<IssueComment[]>;
+  listLinkedPulls(): Promise<LinkedPull[]>;
+}
+
+export interface IssueThreadPlan {
+  dedupeKey: string;
+  text: string;
+  parentDedupeKey: string;
+  threadName: string;
+}
+
+/**
+ * 이슈 이벤트 → 쓰레드 게시 계획. null 이면 게시하지 않는다.
+ *
+ * 생성은 부모가 같은 요청에서 막 enqueue 되므로 존재를 확인하지 않는다 — 첫 전달
+ * 시도가 실패해도 outbox 재시도가 곧 해소한다. 종료는 반대로 부모가 영영 안 생길 수
+ * 있어(도입 전 이슈) 여기서 확인하고 없으면 건너뛴다. 같은 재시도 정책을 쓰면 후자가
+ * 매일 dead letter 를 쌓는다.
+ */
+export async function planIssueThread(
+  input: {
+    action: "opened" | "closed";
+    parentDedupeKey: string;
+    repo: string;
+    number: number;
+    title: string;
+    body?: string | null;
+    stateReason?: string | null;
+  },
+  deps: IssueThreadDeps,
+): Promise<IssueThreadPlan | null> {
+  const threadName = issueThreadName(input.repo, input.number, input.title);
+  const dedupeKey = `${input.parentDedupeKey}:thread`;
+
+  if (input.action === "opened") {
+    return {
+      dedupeKey,
+      text: issueOpenedThreadText(input.body),
+      parentDedupeKey: input.parentDedupeKey,
+      threadName,
+    };
+  }
+
+  const openedThreadKey = await deps.findOpenedThreadKey(threadName);
+  if (!openedThreadKey) return null;
+
+  const [comments, pulls] = await Promise.all([deps.listComments(), deps.listLinkedPulls()]);
+  const text = issueClosedThreadText({ stateReason: input.stateReason, comments, pulls });
+  if (!text) return null;
+  return {
+    dedupeKey,
+    text,
+    // 종료 맥락은 "생성" 알림 메시지의 쓰레드에 붙는다. 종료 메시지가 아니다.
+    parentDedupeKey: openedThreadKey.replace(/:thread$/, ""),
+    threadName,
+  };
+}

@@ -15,11 +15,7 @@ import {
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { issueEventMessage } from "@/lib/notifications/issue-events";
-import {
-  issueClosedThreadText,
-  issueOpenedThreadText,
-  issueThreadName,
-} from "@/lib/notifications/issue-thread";
+import { planIssueThread } from "@/lib/notifications/issue-thread";
 import { listIssueComments } from "@/lib/github/read";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
@@ -117,7 +113,6 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
         destinations,
       });
       await enqueueIssueThread({
-        deliveryId,
         parentDedupeKey,
         destinations,
         repo,
@@ -130,78 +125,68 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
   }
 }
 
-/**
- * 이슈 알림에 딸릴 쓰레드를 예약한다.
- *
- * 생성: 본문을 그대로 남긴다. 부모 알림이 같은 요청에서 막 enqueue 됐으므로 첫 시도는
- * 실패할 수 있고, outbox 재시도가 해소한다.
- * 종료: 댓글·연결 PR 을 모아 붙인다. 붙일 부모가 아예 없으면(기능 도입 전에 열린 이슈)
- * enqueue 자체를 건너뛴다 — 영원히 재시도하다 dead letter 가 되는 것을 막는다.
- */
+/** 이슈 알림에 딸릴 쓰레드를 예약한다. 판단은 planIssueThread 가 하고 여기선 배선만 한다. */
 async function enqueueIssueThread(input: {
-  deliveryId: string;
   parentDedupeKey: string;
   destinations: ReturnType<typeof discordDestinations>;
   repo: string;
   issue: GhIssueInput;
   action: "opened" | "closed";
 }): Promise<void> {
-  const threadName = issueThreadName(input.repo, input.issue.number, input.issue.title);
-  if (input.action === "opened") {
-    await enqueueNotification({
-      dedupeKey: `${input.parentDedupeKey}:thread`,
-      kind: "OPS_ALERT",
-      payload: {
-        text: issueOpenedThreadText(input.issue.body),
-        thread: { parentDedupeKey: input.parentDedupeKey, threadName },
-      },
-      destinations: input.destinations,
-    });
-    return;
-  }
-
-  // 종료 쓰레드는 생성 알림 메시지에 붙는다. 그 메시지가 없으면 맥락을 남길 곳이 없다.
-  const openedParent = await prisma.notificationDelivery.findFirst({
-    where: {
-      provider: "DISCORD",
-      status: "SENT",
-      deletedAt: null,
-      providerMessageId: { not: null },
-      event: { payload: { path: "$.thread.threadName", equals: threadName } },
-    },
-    select: { event: { select: { dedupeKey: true } } },
-  });
-  const openedThreadKey = openedParent?.event.dedupeKey;
-  if (!openedThreadKey) return;
-  const parentDedupeKey = openedThreadKey.replace(/:thread$/, "");
-
   const repoFullName = `seorilabs/${input.repo}`;
-  const [comments, pulls] = await Promise.all([
-    listIssueComments(repoFullName, input.issue.number).catch((error) => {
-      console.error("[discord] 이슈 댓글 조회 실패:", error instanceof Error ? error.message : error);
-      return [];
-    }),
-    prisma.pullRequestMirror.findMany({
-      where: { repoFullName, linkedIssue: input.issue.number },
-      orderBy: { number: "asc" },
-      select: { number: true, title: true, state: true },
-    }),
-  ]);
-  const text = issueClosedThreadText({
-    stateReason: input.issue.state_reason,
-    comments,
-    pulls: pulls.map((pull) => ({
-      number: pull.number,
-      title: pull.title,
-      url: `https://github.com/${repoFullName}/pull/${pull.number}`,
-      merged: pull.state === "MERGED",
-    })),
-  });
-  if (!text) return;
+  const plan = await planIssueThread(
+    {
+      action: input.action,
+      parentDedupeKey: input.parentDedupeKey,
+      repo: input.repo,
+      number: input.issue.number,
+      title: input.issue.title,
+      body: input.issue.body,
+      stateReason: input.issue.state_reason,
+    },
+    {
+      findOpenedThreadKey: async (threadName) =>
+        (
+          await prisma.notificationDelivery.findFirst({
+            where: {
+              provider: "DISCORD",
+              status: "SENT",
+              deletedAt: null,
+              providerMessageId: { not: null },
+              event: { payload: { path: "$.thread.threadName", equals: threadName } },
+            },
+            select: { event: { select: { dedupeKey: true } } },
+          })
+        )?.event.dedupeKey ?? null,
+      listComments: () =>
+        listIssueComments(repoFullName, input.issue.number).catch((error) => {
+          // 댓글을 못 읽어도 PR 링크만으로 쓰레드를 남긴다.
+          console.error("[discord] 이슈 댓글 조회 실패:", error instanceof Error ? error.message : error);
+          return [];
+        }),
+      listLinkedPulls: async () =>
+        (
+          await prisma.pullRequestMirror.findMany({
+            where: { repoFullName, linkedIssue: input.issue.number },
+            orderBy: { number: "asc" },
+            select: { number: true, title: true, state: true },
+          })
+        ).map((pull) => ({
+          number: pull.number,
+          title: pull.title,
+          url: `https://github.com/${repoFullName}/pull/${pull.number}`,
+          merged: pull.state === "MERGED",
+        })),
+    },
+  );
+  if (!plan) return;
   await enqueueNotification({
-    dedupeKey: `${input.parentDedupeKey}:thread`,
+    dedupeKey: plan.dedupeKey,
     kind: "OPS_ALERT",
-    payload: { text, thread: { parentDedupeKey, threadName } },
+    payload: {
+      text: plan.text,
+      thread: { parentDedupeKey: plan.parentDedupeKey, threadName: plan.threadName },
+    },
     destinations: input.destinations,
   });
 }

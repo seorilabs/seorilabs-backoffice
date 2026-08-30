@@ -5,6 +5,8 @@ import {
   issueOpenedThreadText,
   issueThreadName,
   issueThreadPayload,
+  planIssueThread,
+  type IssueThreadDeps,
 } from "@/lib/notifications/issue-thread";
 
 test("쓰레드 이름은 100자 안에서 이슈 번호를 반드시 남긴다", () => {
@@ -82,4 +84,95 @@ test("쓰레드 payload 는 필수 필드가 다 있을 때만 인식된다", ()
   ]) {
     assert.equal(issueThreadPayload(invalid as never), null, JSON.stringify(invalid));
   }
+});
+
+// ── 게시 계획 ────────────────────────────────────────────────────────────────
+
+function deps(
+  overrides: Partial<Omit<IssueThreadDeps, "findOpenedThreadKey">> & { openedKey?: string | null } = {},
+): IssueThreadDeps & { lookups: string[] } {
+  const lookups: string[] = [];
+  const { openedKey = null, ...rest } = overrides;
+  return {
+    lookups,
+    // 조회 인자를 기록해 "생성은 조회하지 않는다"를 검증할 수 있게 한다.
+    findOpenedThreadKey: async (name) => {
+      lookups.push(name);
+      return openedKey;
+    },
+    listComments: async () => [],
+    listLinkedPulls: async () => [],
+    ...rest,
+  };
+}
+
+const OPENED = {
+  action: "opened" as const,
+  parentDedupeKey: "github:d1:issue-opened",
+  repo: "happy-farm",
+  number: 466,
+  title: "튜토리얼 완주 13%",
+};
+
+test("생성은 부모 존재를 확인하지 않고 바로 예약한다", async () => {
+  // 부모가 같은 요청에서 막 enqueue 되므로 아직 SENT 가 아니다. 여기서 막으면
+  // 생성 쓰레드가 영영 안 붙는다.
+  const d = deps();
+  const plan = await planIssueThread({ ...OPENED, body: "본문" }, d);
+  assert.deepEqual(plan, {
+    dedupeKey: "github:d1:issue-opened:thread",
+    text: "본문",
+    parentDedupeKey: "github:d1:issue-opened",
+    threadName: "happy-farm #466 튜토리얼 완주 13%",
+  });
+  assert.deepEqual(d.lookups, [], "생성은 부모를 조회하지 않는다");
+});
+
+test("종료는 생성 알림 메시지의 쓰레드에 붙는다", async () => {
+  const plan = await planIssueThread(
+    { ...OPENED, action: "closed", parentDedupeKey: "github:d2:issue-closed", stateReason: "completed" },
+    deps({
+      openedKey: "github:d1:issue-opened:thread",
+      listComments: async () => [{ author: "magicsih", body: "확인" }],
+    }),
+  );
+  // 종료 메시지가 아니라 생성 메시지가 부모다 — 한 이슈의 맥락이 한 쓰레드에 모인다.
+  assert.equal(plan!.parentDedupeKey, "github:d1:issue-opened");
+  assert.equal(plan!.dedupeKey, "github:d2:issue-closed:thread");
+  assert.ok(plan!.text.includes("확인"));
+});
+
+test("도입 전에 열린 이슈의 종료는 예약 자체를 건너뛴다", async () => {
+  // 부모가 영영 안 생기므로 enqueue 하면 매일 dead letter 가 쌓인다.
+  const d = deps({ openedKey: null, listComments: async () => [{ author: "a", body: "b" }] });
+  const plan = await planIssueThread(
+    { ...OPENED, action: "closed", parentDedupeKey: "github:d2:issue-closed" },
+    d,
+  );
+  assert.equal(plan, null);
+  assert.deepEqual(d.lookups, ["happy-farm #466 튜토리얼 완주 13%"]);
+});
+
+test("부모가 있어도 붙일 맥락이 없으면 예약하지 않는다", async () => {
+  const plan = await planIssueThread(
+    { ...OPENED, action: "closed", parentDedupeKey: "github:d2:issue-closed" },
+    deps({ openedKey: "github:d1:issue-opened:thread" }),
+  );
+  assert.equal(plan, null);
+});
+
+test("댓글 조회가 실패해도 PR 링크만으로 쓰레드를 남긴다", async () => {
+  // 배선(webhook)이 실패를 빈 배열로 흘려보내므로 계획 단계는 PR 만으로 성립해야 한다.
+  const plan = await planIssueThread(
+    { ...OPENED, action: "closed", parentDedupeKey: "github:d2:issue-closed" },
+    deps({
+      openedKey: "github:d1:issue-opened:thread",
+      listComments: async () => [],
+      listLinkedPulls: async () => [
+        { number: 7, title: "fix", url: "https://github.com/seorilabs/happy-farm/pull/7", merged: true },
+      ],
+    }),
+  );
+  assert.ok(plan!.text.includes("머지됨 [#7 fix]"));
+  assert.ok(!plan!.text.includes("댓글"));
 });
