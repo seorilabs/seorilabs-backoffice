@@ -24,6 +24,10 @@ export const GENERIC_WORKER_PRINCIPALS = {
 } as const;
 export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL =
   "seori-auth:workflow-bundle-candidate-executor" as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL =
+  "seori-auth:workflow-bundle-candidate-adapter" as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY =
+  "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor" as const;
 
 export type AutomationCadence = typeof AUTOMATION_CADENCES[number];
 export type AutomationAgentKind = typeof AUTOMATION_AGENT_KINDS[number];

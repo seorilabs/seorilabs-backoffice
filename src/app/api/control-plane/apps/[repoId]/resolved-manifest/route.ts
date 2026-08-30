@@ -14,6 +14,7 @@ import {
   resolveStaticRuntimeManifest,
   readRepositoryDefaultBranch,
 } from "@/lib/control-plane/service";
+import { readWorkflowBundleCandidateOidcBinding } from "@/lib/control-plane/workflow-bundle-candidate-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +61,13 @@ export async function GET(
         ? "CANDIDATE"
         : "APPROVED";
       const defaultBranch = await readRepositoryDefaultBranch(repoId);
+      const candidateBinding = mode === "CANDIDATE"
+        ? await readWorkflowBundleCandidateOidcBinding({
+            repositoryId: repoId.toString(),
+            sourceSha: sourceSha.toLowerCase(),
+            workflowBundleSha: workflowBundleSha.toLowerCase(),
+          })
+        : null;
       const identity = await authenticateGitHubActionsBuildManifestRequest(request, {
         mode,
         repositoryId: repoId.toString(),
@@ -68,6 +76,7 @@ export async function GET(
         workflowBundleSha: workflowBundleSha.toLowerCase(),
         buildProfile,
         defaultBranch,
+        candidateHeadRef: candidateBinding?.expectedHeadRef ?? null,
       });
       if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       const response = await resolveBuildRuntimeManifest({

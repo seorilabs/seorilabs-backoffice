@@ -1148,6 +1148,7 @@ export async function resolveAgentRunReadback(input: {
         sessionId: session.id,
         currentGeneration: session.generation,
         readbackResolution: true,
+        readbackResolutionAction: input.resolution,
         result: input.result,
       });
       if (!policyError && mutation.error) policyError = mutation.error;

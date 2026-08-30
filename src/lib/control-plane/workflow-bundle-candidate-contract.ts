@@ -83,7 +83,7 @@ export const workflowBundleCandidateTaskSchema = z.object({
   }).strict(),
   github: z.object({
     installationId: z.string().regex(/^[1-9][0-9]{0,29}$/u),
-    expectedHeadRef: z.string().regex(/^refs\/heads\/seori\/workflow-bundle-v5-canary\/[1-9][0-9]{0,31}\/[0-9a-f]{12}$/u),
+    expectedHeadRef: z.string().regex(/^refs\/heads\/seori\/workflow-bundle-v5-canary\/[1-9][0-9]{0,31}\/[0-9a-f]{12}\/[0-9a-f]{64}$/u),
     expectedPullRequestMarker: z.string().regex(PUBLIC_ID),
   }).strict(),
   mutation: z.object({
@@ -105,12 +105,24 @@ export const workflowBundleCandidateTaskSchema = z.object({
       message: "고정 canary repository가 아닙니다.",
     });
   }
-  const expectedHeadRef = candidateHeadRef(task.repository.id, task.candidate.sourceSha);
+  const planIdentity = candidatePlanIdentity(task);
+  const expectedHeadRef = candidateHeadRef(
+    task.repository.id,
+    task.candidate.sourceSha,
+    planIdentity,
+  );
   if (task.github.expectedHeadRef !== expectedHeadRef) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["github", "expectedHeadRef"],
       message: "candidate branch가 record source와 일치하지 않습니다.",
+    });
+  }
+  if (task.github.expectedPullRequestMarker !== candidateMarker(task.repository.id, planIdentity)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["github", "expectedPullRequestMarker"],
+      message: "candidate PR marker가 plan identity와 일치하지 않습니다.",
     });
   }
   const paths = task.mutation.files.map((file) => file.path);
@@ -164,6 +176,11 @@ export type WorkflowBundleCandidateTask = z.infer<typeof workflowBundleCandidate
 export const workflowBundleCandidateExecutorRequestSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("CLAIM") }).strict(),
   z.object({
+    operation: z.literal("HEARTBEAT"),
+    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
+    generation: z.number().int().positive(),
+  }).strict(),
+  z.object({
     operation: z.literal("AUTHORIZE"),
     sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
     mutationIntentDigest: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -209,7 +226,7 @@ export const workflowBundleCandidateExecutorRequestSchema = z.discriminatedUnion
     operation: z.literal("SETTLE"),
     sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
     mode: z.enum(["START", "READBACK_FIRST"]),
-    status: z.enum(["VERIFIED", "NOT_APPLIED", "RESULT_UNKNOWN", "FAILED"]),
+    status: z.enum(["VERIFIED", "NOT_APPLIED", "PARTIAL_VERIFIED", "RESULT_UNKNOWN", "FAILED"]),
     executionId: z.string().regex(PUBLIC_ID).nullable(),
     pullRequestNumber: z.number().int().positive().nullable(),
     pullRequestUrl: z.string().url().startsWith("https://github.com/").nullable(),
@@ -267,12 +284,29 @@ function buildPermissions(profile: "react-native-android" | "godot-android") {
     : { contents: "read", "id-token": "write" };
 }
 
-export function candidateHeadRef(repositoryId: string, candidateSourceSha: string): string {
-  return `refs/heads/seori/workflow-bundle-v5-canary/${repositoryId}/${candidateSourceSha.slice(0, 12)}`;
+export function candidateHeadRef(
+  repositoryId: string,
+  candidateSourceSha: string,
+  planIdentity: string,
+): string {
+  return `refs/heads/seori/workflow-bundle-v5-canary/${repositoryId}/${candidateSourceSha.slice(0, 12)}/${planIdentity}`;
 }
 
-function candidateMarker(repositoryId: string, candidateSourceSha: string, sourceSha: string): string {
-  return `seori-run:workflow-bundle-v5-canary:${repositoryId}:${candidateSourceSha.slice(0, 12)}:${sourceSha.slice(0, 12)}`;
+function candidateMarker(repositoryId: string, planIdentity: string): string {
+  return `seori-run:workflow-bundle-v5-canary:${repositoryId}:${planIdentity}`;
+}
+
+function candidatePlanIdentity(
+  task: Pick<WorkflowBundleCandidateTask, "candidate" | "config" | "repository" | "github" | "mutation">,
+): string {
+  return jsonDigest({
+    schemaVersion: 1,
+    candidate: task.candidate,
+    config: task.config,
+    repository: task.repository,
+    githubInstallationId: task.github.installationId,
+    mutationIntentDigest: task.mutation.intentDigest,
+  } as unknown as JsonValue);
 }
 
 function candidateTaskPlanDigest(task: Omit<WorkflowBundleCandidateTask, "planDigest"> | WorkflowBundleCandidateTask): string {
@@ -417,8 +451,8 @@ export function buildWorkflowBundleCandidateTask(input: {
     },
     github: {
       installationId: input.installationId,
-      expectedHeadRef: candidateHeadRef(input.repositoryId, bundle.source.sha),
-      expectedPullRequestMarker: candidateMarker(input.repositoryId, bundle.source.sha, input.sourceSha),
+      expectedHeadRef: "refs/heads/placeholder",
+      expectedPullRequestMarker: "placeholder",
     },
     mutation: {
       title,
@@ -429,6 +463,12 @@ export function buildWorkflowBundleCandidateTask(input: {
     },
   };
   partial.mutation.intentDigest = candidateMutationIntentDigest(partial);
+  const planIdentity = candidatePlanIdentity(partial as unknown as Pick<
+    WorkflowBundleCandidateTask,
+    "candidate" | "config" | "repository" | "github" | "mutation"
+  >);
+  partial.github.expectedHeadRef = candidateHeadRef(input.repositoryId, bundle.source.sha, planIdentity);
+  partial.github.expectedPullRequestMarker = candidateMarker(input.repositoryId, planIdentity);
   const task = {
     ...partial,
     planDigest: candidateTaskPlanDigest(partial as Omit<WorkflowBundleCandidateTask, "planDigest">),

@@ -199,6 +199,22 @@ spec:
             # 뒤에만 켠다. generic READY_PR runtime gate와 서로 승격시키지 않는다.
             - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED
               value: "false"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
+              value: "seori-auth:workflow-bundle-candidate-adapter"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
+              value: "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
+                  optional: true
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
+                  optional: true
             - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:

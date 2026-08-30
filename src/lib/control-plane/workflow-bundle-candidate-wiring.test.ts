@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+
+import { WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY } from "@/lib/control-plane/automation-catalog";
+import {
+  signAgentAdapterAttestation,
+  verifyAgentAdapterAttestation,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
+} from "@/lib/control-plane/agent-adapter-attestation";
 
 function source(path: string): string {
   return readFileSync(join(process.cwd(), path), "utf8");
@@ -17,6 +25,12 @@ test("candidate executor는 suspended immutable worker와 별도 server gate로 
   assert.match(manifest, /automountServiceAccountToken: false/u);
   assert.match(manifest, /workflow-bundle-candidate-executor\.cjs/u);
   assert.match(manifest, /GITHUB_PRIVATE_KEY_FILE/u);
+  assert.match(manifest, /WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL/u);
+  assert.match(manifest, /spiffe:\/\/seorilabs\.local\/ns\/auth-broker\/sa\/workflow-bundle-candidate-executor/u);
+  assert.match(manifest, /workflow-bundle-candidate-backoffice/u);
+  assert.match(manifest, /workflow-bundle-candidate-attestation/u);
+  assert.match(manifest, /workflow-bundle-candidate-github/u);
+  assert.doesNotMatch(manifest, /seori-auth-agent-(?:backoffice|attestation|github)|AGENT_TRUSTED_ADAPTER_/u);
   assert.doesNotMatch(manifest, /ghp_|github_pat_|PERSONAL_ACCESS_TOKEN|GITHUB_TOKEN/u);
   assert.match(deployment, /name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED\s+value: "false"/u);
   assert.match(packageJson, /scripts\/workflow-bundle-candidate-executor\.ts/u);
@@ -29,7 +43,53 @@ test("candidate internal API는 bearer와 route-body attestation을 함께 소�
   assert.match(route, /verifyAndConsumeAgentAdapterAttestation/u);
   assert.match(route, /deploymentGate: "workflow-bundle-candidate"/u);
   assert.match(security, /WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED === "true"/u);
+  assert.match(route, /heartbeatCandidateExecutor/u);
+  assert.match(source("scripts/workflow-bundle-candidate-executor.ts"), /HEARTBEAT_INTERVAL_MS = 60_000/u);
   assert.doesNotMatch(route, /GITHUB_PRIVATE_KEY|createInstallationAccessToken/u);
+});
+
+test("candidate executor attestation은 exact route에서 실제 sign-verify되고 유사 경로는 거부된다", () => {
+  const now = new Date("2026-08-30T00:00:00.000Z");
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const requestId = "workflow-bundle-candidate:claim:session-1";
+  const body = { operation: "CLAIM" };
+  const token = signAgentAdapterAttestation({
+    privateKey,
+    runtimeIdentity: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+    route: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
+    requestId,
+    body,
+    issuedAt: now.getTime(),
+    expiresAt: now.getTime() + 30_000,
+    nonce: "candidate-attestation-1",
+  });
+
+  assert.equal(verifyAgentAdapterAttestation({
+    token,
+    publicKey,
+    route: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
+    requestId,
+    body,
+    now,
+  })?.runtimeIdentity, WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY);
+  assert.equal(verifyAgentAdapterAttestation({
+    token,
+    publicKey,
+    route: `${WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE}/lookalike`,
+    requestId,
+    body,
+    now,
+  }), null);
+  assert.throws(() => signAgentAdapterAttestation({
+    privateKey,
+    runtimeIdentity: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+    route: `${WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE}/lookalike`,
+    requestId,
+    body,
+    issuedAt: now.getTime(),
+    expiresAt: now.getTime() + 30_000,
+    nonce: "candidate-attestation-lookalike",
+  }), /AGENT_ADAPTER_ATTESTATION_PAYLOAD_INVALID/u);
 });
 
 test("candidate GitHub transport는 installation token을 callback 밖으로 반환하지 않는다", () => {

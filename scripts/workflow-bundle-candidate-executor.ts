@@ -2,8 +2,15 @@ import { createPrivateKey, randomUUID, type KeyObject } from "node:crypto";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { z } from "zod";
 
-import { WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL } from "@/lib/control-plane/automation-catalog";
-import { signAgentAdapterAttestation } from "@/lib/control-plane/agent-adapter-attestation";
+import {
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+} from "@/lib/control-plane/automation-catalog";
+import {
+  signAgentAdapterAttestation,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
+} from "@/lib/control-plane/agent-adapter-attestation";
 import {
   executeWorkflowBundleCandidateReadyPr,
   recoverGithubReadyPr,
@@ -23,14 +30,15 @@ import { withWorkflowBundleCandidateGithub } from "@/lib/github/workflow-bundle-
 
 const FIXED_ROOT = process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ROOT?.trim()
   || "/var/run/workflow-bundle-candidate-executor";
-const ROUTE = "/api/internal/workflow-bundle-candidate-executor";
+const ROUTE = WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE;
 const RESPONSE_LIMIT = 3 * 1024 * 1024;
+const HEARTBEAT_INTERVAL_MS = 60_000;
 const backofficeOrigin = parseExactHttpsOrigin(process.env.SEORI_BACKOFFICE_ORIGIN?.trim() || "");
-const adapterPrincipalId = process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() || "";
-const adapterRuntimeIdentity = process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY?.trim() || "";
+const adapterPrincipalId = process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() || "";
+const adapterRuntimeIdentity = process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY?.trim() || "";
 const podUid = process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTION_ID?.trim() || "";
-if (!/^[A-Za-z0-9._:/-]{1,128}$/u.test(adapterPrincipalId)) throw new Error("CANDIDATE_ADAPTER_PRINCIPAL_INVALID");
-if (!/^[A-Za-z0-9._:/-]{1,191}$/u.test(adapterRuntimeIdentity)) throw new Error("CANDIDATE_ADAPTER_RUNTIME_INVALID");
+if (adapterPrincipalId !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL) throw new Error("CANDIDATE_ADAPTER_PRINCIPAL_INVALID");
+if (adapterRuntimeIdentity !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY) throw new Error("CANDIDATE_ADAPTER_RUNTIME_INVALID");
 if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,190}$/u.test(podUid)) throw new Error("CANDIDATE_EXECUTION_ID_INVALID");
 
 const publicId = z.string().min(1).max(191);
@@ -133,6 +141,15 @@ const settlementSchema = z.object({
     status: publicId,
     duplicate: z.boolean(),
     retry: z.boolean().optional(),
+  }).strict(),
+}).strict();
+const heartbeatSchema = z.object({
+  ok: z.literal(true),
+  heartbeat: z.object({
+    sessionId: publicId,
+    generation: z.number().int().positive(),
+    expiresAt: z.coerce.date(),
+    duplicate: z.boolean(),
   }).strict(),
 }).strict();
 
@@ -276,7 +293,7 @@ async function settle(input: {
   call: ReturnType<typeof requestClient>;
   sessionId: string;
   mode: "START" | "READBACK_FIRST";
-  status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN" | "FAILED";
+  status: "VERIFIED" | "NOT_APPLIED" | "PARTIAL_VERIFIED" | "RESULT_UNKNOWN" | "FAILED";
   executionId: string | null;
   pullRequestNumber?: number;
   pullRequestUrl?: string;
@@ -312,6 +329,37 @@ async function runWithSecrets(input: { bearer: string; ca: Buffer; attestationKe
     console.log("[workflow-bundle-candidate-executor] no claim");
     return;
   }
+  let heartbeatSequence = 0;
+  let heartbeatError: unknown = null;
+  let heartbeatChain: Promise<void> = Promise.resolve();
+  const heartbeat = async () => {
+    heartbeatSequence += 1;
+    const response = heartbeatSchema.parse(await call({
+      operation: "HEARTBEAT",
+      sessionId: claim.sessionId,
+      generation: claim.generation,
+    }, `wbc:${jsonDigest({
+      podUid,
+      sessionId: claim.sessionId,
+      generation: claim.generation,
+      operation: "heartbeat",
+      sequence: heartbeatSequence,
+    })}`)).heartbeat;
+    if (response.sessionId !== claim.sessionId || response.generation !== claim.generation) {
+      throw new Error("CANDIDATE_HEARTBEAT_BINDING_MISMATCH");
+    }
+  };
+  await heartbeat();
+  const heartbeatTimer = setInterval(() => {
+    heartbeatChain = heartbeatChain.then(heartbeat).catch((error: unknown) => {
+      heartbeatError = error;
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+  const guardedCall: ReturnType<typeof requestClient> = async (body, requestId) => {
+    if (heartbeatError) throw heartbeatError;
+    return call(body, requestId);
+  };
   let executionId: string | null = null;
   const workerRuntimeBindingDigest = jsonDigest({
     schemaVersion: 1,
@@ -321,7 +369,7 @@ async function runWithSecrets(input: { bearer: string; ca: Buffer; attestationKe
     workload: "workflow-bundle-candidate-executor",
   });
   const controlPlane = controlPlaneFor({
-    call,
+    call: guardedCall,
     captureExecutionId: (value) => { executionId = value; },
   });
   try {
@@ -360,17 +408,28 @@ async function runWithSecrets(input: { bearer: string; ca: Buffer; attestationKe
             });
           })(),
     });
+    clearInterval(heartbeatTimer);
+    await heartbeatChain;
+    if (heartbeatError) throw heartbeatError;
+    const settlementStatus = claim.resumeMode === "READBACK_FIRST"
+      && result.status === "RESULT_UNKNOWN"
+      && "safeToResume" in result
+      && result.safeToResume
+      ? "PARTIAL_VERIFIED" as const
+      : result.status;
     await settle({
       call,
       sessionId: claim.sessionId,
       mode: claim.resumeMode,
-      status: result.status,
+      status: settlementStatus,
       executionId: result.executionId,
       pullRequestNumber: result.pullRequestNumber,
       pullRequestUrl: result.pullRequestUrl,
     });
-    console.log(`[workflow-bundle-candidate-executor] settled status=${result.status}`);
+    console.log(`[workflow-bundle-candidate-executor] settled status=${settlementStatus}`);
   } catch (error) {
+    clearInterval(heartbeatTimer);
+    await heartbeatChain;
     const code = publicError(error);
     await settle({
       call,

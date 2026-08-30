@@ -2,7 +2,11 @@ import {
   WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
   WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
 } from "@/lib/control-plane/automation-catalog";
-import { resolveAgentRunReadback, settleAgentRun } from "@/lib/control-plane/agent-queue";
+import {
+  heartbeatAgentRun,
+  resolveAgentRunReadback,
+  settleAgentRun,
+} from "@/lib/control-plane/agent-queue";
 import {
   authorizeGithubReadyPrMutation,
   claimGithubMutationRecovery,
@@ -92,6 +96,51 @@ export async function claimCandidateExecutor(identity: AdapterIdentity) {
     expiresAt: claimed.expiresAt,
     task: claimed.task,
   };
+}
+
+export function workflowBundleCandidateHeartbeatGenerationError(input: {
+  requestedGeneration: number;
+  sessionGeneration: number;
+  leaseGeneration: number;
+  runGeneration: number;
+}): "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH" | null {
+  return input.requestedGeneration === input.sessionGeneration
+    && input.requestedGeneration === input.leaseGeneration
+    && input.requestedGeneration === input.runGeneration
+    ? null
+    : "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH";
+}
+
+export async function heartbeatCandidateExecutor(input: AdapterIdentity & {
+  sessionId: string;
+  generation: number;
+}) {
+  const { session } = await sessionTask({
+    sessionId: input.sessionId,
+    runtimeBindingDigest: input.runtimeBindingDigest,
+    requireCurrent: false,
+  });
+  const generationError = workflowBundleCandidateHeartbeatGenerationError({
+    requestedGeneration: input.generation,
+    sessionGeneration: session.generation,
+    leaseGeneration: session.lease.generation,
+    runGeneration: session.lease.run.leaseGeneration,
+  });
+  if (generationError) {
+    throw new ControlPlaneError(
+      "candidate heartbeat generation binding이 일치하지 않습니다.",
+      409,
+      generationError,
+    );
+  }
+  const heartbeat = await heartbeatAgentRun({
+    sessionId: input.sessionId,
+    workerId: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+    runtimeBindingDigest: input.runtimeBindingDigest,
+    leaseSeconds: 300,
+    idempotencyKey: input.idempotencyKey,
+  });
+  return { ...heartbeat, generation: input.generation };
 }
 
 export async function authorizeCandidateMutation(input: AdapterIdentity & {
@@ -263,7 +312,7 @@ export async function readbackCandidateMutation(input: AdapterIdentity & {
 export async function settleCandidateExecutor(input: AdapterIdentity & {
   sessionId: string;
   mode: "START" | "READBACK_FIRST";
-  status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN" | "FAILED";
+  status: "VERIFIED" | "NOT_APPLIED" | "PARTIAL_VERIFIED" | "RESULT_UNKNOWN" | "FAILED";
   executionId: string | null;
   pullRequestNumber: number | null;
   pullRequestUrl: string | null;
@@ -294,25 +343,37 @@ export async function settleCandidateExecutor(input: AdapterIdentity & {
       "WORKFLOW_BUNDLE_CANDIDATE_SETTLEMENT_EVIDENCE_MISSING",
     );
   }
+  if (input.status === "PARTIAL_VERIFIED" && (input.mode !== "READBACK_FIRST" || !input.executionId)) {
+    throw new ControlPlaneError(
+      "PARTIAL_VERIFIED settlement에는 READBACK_FIRST exact execution evidence가 필요합니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_PARTIAL_EVIDENCE_MISSING",
+    );
+  }
   if (input.mode === "READBACK_FIRST") {
     const resolution = input.status === "VERIFIED"
       ? "COMPLETE"
-      : input.status === "NOT_APPLIED"
+      : ["NOT_APPLIED", "PARTIAL_VERIFIED"].includes(input.status)
         ? "RESUME"
         : "BLOCKED";
     const result = input.status === "VERIFIED"
       ? verifiedResult
+      : input.status === "PARTIAL_VERIFIED"
+        ? {
+            outcomeCode: "READBACK_PARTIAL_VERIFIED",
+            summary: "검증된 mutation prefix 다음 단계가 미적용임을 확인해 동일 run을 재개합니다.",
+            mutationExecutionId: input.executionId!,
+            costMicros: 0,
+          }
       : input.status === "NOT_APPLIED"
         ? {
             outcomeCode: "NO_CHANGES",
             summary: "이전 mutation이 적용되지 않았음을 exact readback으로 확인했습니다.",
-            mutationExecutionId: input.executionId,
             costMicros: 0,
           }
         : {
             outcomeCode: "READBACK_CONFIRMED",
             summary: "이전 mutation 결과를 확정할 수 없어 자동 재시도를 차단했습니다.",
-            mutationExecutionId: input.executionId,
             costMicros: 0,
           };
     return resolveAgentRunReadback({

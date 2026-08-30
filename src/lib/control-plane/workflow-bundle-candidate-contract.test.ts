@@ -8,6 +8,7 @@ import {
   parseManagedWorkerPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { resolveGithubMutationTarget } from "@/lib/control-plane/agent-mutation-service";
+import { workflowBundleCandidateHeartbeatGenerationError } from "@/lib/control-plane/workflow-bundle-candidate-executor-service";
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
@@ -98,8 +99,14 @@ function bundle() {
   };
 }
 
-function task() {
+function task(input: {
+  appSha?: string;
+  configId?: string;
+  configRevision?: number;
+  snapshotDigest?: string;
+} = {}) {
   const candidate = bundle();
+  const appSha = input.appSha ?? APP_SHA;
   return buildWorkflowBundleCandidateTask({
     record: {
       id: "candidate-record-1",
@@ -113,13 +120,13 @@ function task() {
     },
     resolved: {
       app: { status: "ACTIVE", repoFullName: "seorilabs/happy-farm", repoId: "1250442131" },
-      source: { sha: APP_SHA, ref: "refs/heads/main" },
+      source: { sha: appSha, ref: "refs/heads/main" },
       workflowCaller: { profile: "react-native" },
       config: {
-        id: "config-revision-5",
-        revision: 5,
+        id: input.configId ?? "config-revision-5",
+        revision: input.configRevision ?? 5,
         status: "ACTIVE",
-        digest: "7".repeat(64),
+        digest: input.snapshotDigest ?? "7".repeat(64),
         signature: "8".repeat(64),
       },
       workflowBundleBinding: {
@@ -129,7 +136,7 @@ function task() {
     },
     repositoryId: "1250442131",
     fullName: "seorilabs/happy-farm",
-    sourceSha: APP_SHA,
+    sourceSha: appSha,
     defaultBranch: "main",
     issueNumber: null,
     installationId: "12345678",
@@ -138,11 +145,10 @@ function task() {
 
 test("candidate task는 exact registry/config/source와 두 caller만 고정한다", () => {
   const candidate = task();
-  assert.equal(
-    candidate.github.expectedHeadRef,
-    `refs/heads/seori/workflow-bundle-v5-canary/1250442131/${BUNDLE_SHA.slice(0, 12)}`,
-  );
-  assert.equal(candidate.github.expectedHeadRef, candidateHeadRef("1250442131", BUNDLE_SHA));
+  assert.equal(candidate.github.expectedHeadRef.startsWith(
+    `refs/heads/seori/workflow-bundle-v5-canary/1250442131/${BUNDLE_SHA.slice(0, 12)}/`,
+  ), true);
+  assert.match(candidate.github.expectedHeadRef, /\/[0-9a-f]{12}\/[0-9a-f]{64}$/u);
   assert.match(candidate.github.expectedPullRequestMarker, /^seori-run:workflow-bundle-v5-canary:/u);
   const files = prepareWorkflowBundleCandidateFiles(candidate);
   assert.deepEqual(files.map((file) => file.path), [
@@ -181,7 +187,11 @@ test("candidate task의 caller, digest, config binding 변조는 fail-closed한�
   assert.equal(workflowBundleCandidateTaskSchema.safeParse(tampered).success, false);
 
   const wrongBinding = structuredClone(candidate);
-  wrongBinding.github.expectedHeadRef = candidateHeadRef("1250442131", "b".repeat(40));
+  wrongBinding.github.expectedHeadRef = candidateHeadRef(
+    "1250442131",
+    "b".repeat(40),
+    "c".repeat(64),
+  );
   assert.equal(workflowBundleCandidateTaskSchema.safeParse(wrongBinding).success, false);
 
   assert.throws(() => buildWorkflowBundleCandidateTask({
@@ -217,6 +227,25 @@ test("candidate task의 caller, digest, config binding 변조는 fail-closed한�
   }), /WORKFLOW_BUNDLE_CANDIDATE_ACTIVE_CONFIG_MISMATCH/u);
 });
 
+test("candidate branch는 같은 plan replay에 안정적이고 source 또는 config가 바뀌면 충돌하지 않는다", () => {
+  const first = task();
+  const replay = task();
+  const nextSource = task({ appSha: "b".repeat(40) });
+  const nextConfig = task({
+    configId: "config-revision-6",
+    configRevision: 6,
+    snapshotDigest: "9".repeat(64),
+  });
+
+  assert.equal(replay.planDigest, first.planDigest);
+  assert.equal(replay.github.expectedHeadRef, first.github.expectedHeadRef);
+  assert.notEqual(nextSource.planDigest, first.planDigest);
+  assert.notEqual(nextSource.github.expectedHeadRef, first.github.expectedHeadRef);
+  assert.notEqual(nextConfig.planDigest, first.planDigest);
+  assert.notEqual(nextConfig.github.expectedHeadRef, first.github.expectedHeadRef);
+  assert.notEqual(nextSource.github.expectedHeadRef, nextConfig.github.expectedHeadRef);
+});
+
 test("candidate executor definition과 내부 operation은 strict exact 계약이다", () => {
   assert.deepEqual(parseManagedWorkerPolicy({
     template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
@@ -235,6 +264,15 @@ test("candidate executor definition과 내부 operation은 strict exact 계약�
   }), null);
   assert.equal(workflowBundleCandidateExecutorRequestSchema.safeParse({ operation: "CLAIM" }).success, true);
   assert.equal(workflowBundleCandidateExecutorRequestSchema.safeParse({
+    operation: "HEARTBEAT",
+    sessionId: "agent-session:00000000-0000-4000-8000-000000000001",
+    generation: 2,
+  }).success, true);
+  assert.equal(workflowBundleCandidateExecutorRequestSchema.safeParse({
+    operation: "HEARTBEAT",
+    sessionId: "agent-session:00000000-0000-4000-8000-000000000001",
+  }).success, false);
+  assert.equal(workflowBundleCandidateExecutorRequestSchema.safeParse({
     operation: "CLAIM",
     capability: "unexpected",
   }).success, false);
@@ -242,6 +280,27 @@ test("candidate executor definition과 내부 operation은 strict exact 계약�
     canonicalJson(workflowBundleCandidateTaskSchema.parse(task()) as unknown as JsonValue),
     canonicalJson(task() as unknown as JsonValue),
   );
+});
+
+test("candidate heartbeat는 claim session의 동일 generation에만 결합된다", () => {
+  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+    requestedGeneration: 3,
+    sessionGeneration: 3,
+    leaseGeneration: 3,
+    runGeneration: 3,
+  }), null);
+  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+    requestedGeneration: 2,
+    sessionGeneration: 3,
+    leaseGeneration: 3,
+    runGeneration: 3,
+  }), "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH");
+  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+    requestedGeneration: 3,
+    sessionGeneration: 3,
+    leaseGeneration: 2,
+    runGeneration: 3,
+  }), "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH");
 });
 
 test("candidate custom ref는 signed task와 전용 principal에만 결합된다", () => {

@@ -1,7 +1,12 @@
 import type { NextRequest } from "next/server";
-import { createPublicKey } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import { GENERIC_WORKER_PRINCIPALS } from "@/lib/control-plane/automation-catalog";
+import {
+  GENERIC_WORKER_PRINCIPALS,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+} from "@/lib/control-plane/automation-catalog";
 import {
   agentAdapterNonceDigest,
   verifyAgentAdapterAttestation,
@@ -40,6 +45,7 @@ function configuredAgentWorkerTokens(): ReadonlyMap<string, string> | null {
     process.env.CONTROL_PLANE_ADMIN_TOKEN?.trim(),
     process.env.INTERNAL_ADMIN_TOKEN?.trim(),
     process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim(),
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
   ].filter((value): value is string => Boolean(value));
   if (new Set(tokens).size !== tokens.length || tokens.some((token) => reservedTokens.includes(token))) return null;
   return new Map(entries);
@@ -57,25 +63,58 @@ function configuredTrustedAdapter(
     ? process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED === "true"
     : process.env.AGENT_TRUSTED_ADAPTER_DEPLOYED === "true";
   if (!deployed) return null;
-  const principal = process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "";
-  const runtimeIdentity = process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY?.trim() ?? "";
-  const token = process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim() ?? "";
-  const publicKey = process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY?.trim() ?? "";
+  const candidate = deploymentGate === "workflow-bundle-candidate";
+  const principal = candidate
+    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? ""
+    : process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "";
+  const runtimeIdentity = candidate
+    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY?.trim() ?? ""
+    : process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY?.trim() ?? "";
+  const token = candidate
+    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim() ?? ""
+    : process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim() ?? "";
+  const publicKey = candidate
+    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY?.trim() ?? ""
+    : process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY?.trim() ?? "";
   const reservedPrincipals = new Set<string>([
     ...Object.values(GENERIC_WORKER_PRINCIPALS),
+    WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
     process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim() ?? "",
+    candidate
+      ? process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? ""
+      : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? "",
   ].filter(Boolean));
   const reservedTokens = [
     process.env.AGENT_WORKER_CODEX_TOKEN?.trim(),
     process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim(),
     process.env.CONTROL_PLANE_ADMIN_TOKEN?.trim(),
     process.env.INTERNAL_ADMIN_TOKEN?.trim(),
+    candidate
+      ? process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim()
+      : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
   ].filter((value): value is string => Boolean(value));
   let validPublicKey = false;
+  let publicKeyFingerprint = "";
   try {
-    validPublicKey = createPublicKey(publicKey).asymmetricKeyType === "ed25519";
+    const key = createPublicKey(publicKey);
+    validPublicKey = key.asymmetricKeyType === "ed25519";
+    publicKeyFingerprint = createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex");
   } catch {
     validPublicKey = false;
+  }
+  const peerPublicKey = candidate
+    ? process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY?.trim() ?? ""
+    : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY?.trim() ?? "";
+  let peerPublicKeyFingerprint = "";
+  try {
+    const key = createPublicKey(peerPublicKey);
+    if (key.asymmetricKeyType === "ed25519") {
+      peerPublicKeyFingerprint = createHash("sha256")
+        .update(key.export({ type: "spki", format: "der" }))
+        .digest("hex");
+    }
+  } catch {
+    peerPublicKeyFingerprint = "";
   }
   if (
     !/^[A-Za-z0-9._:/-]{1,128}$/.test(principal)
@@ -84,6 +123,11 @@ function configuredTrustedAdapter(
     || !validPublicKey
     || reservedPrincipals.has(principal)
     || reservedTokens.includes(token)
+    || (publicKeyFingerprint && publicKeyFingerprint === peerPublicKeyFingerprint)
+    || (candidate && (
+      principal !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
+      || runtimeIdentity !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
+    ))
   ) return null;
   return { principal, runtimeIdentity, token, publicKey };
 }
@@ -133,12 +177,15 @@ export function authenticateInternalRequest(
     const expectedPrincipal = process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim();
     const lowerPrivilegePrincipals = new Set<string>([
       ...Object.values(GENERIC_WORKER_PRINCIPALS),
+      WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
       process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "",
+      process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? "",
     ].filter(Boolean));
     const lowerPrivilegeTokens = [
       process.env.AGENT_WORKER_CODEX_TOKEN?.trim(),
       process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim(),
       process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim(),
+      process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
     ].filter((value): value is string => Boolean(value));
     if (
       !expectedPrincipal

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE } from "@/lib/control-plane/agent-adapter-attestation";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import {
   authenticateWorkflowBundleCandidateExecutorRequest,
@@ -12,6 +13,7 @@ import {
   claimCandidateExecutor,
   claimCandidateMutationStep,
   completeCandidateMutationStep,
+  heartbeatCandidateExecutor,
   planCandidateCommitStep,
   readbackCandidateMutation,
   recoverCandidateMutation,
@@ -23,7 +25,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const ROUTE = "/api/internal/workflow-bundle-candidate-executor";
+const ROUTE = WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE;
 
 export async function POST(request: NextRequest) {
   const principal = authenticateWorkflowBundleCandidateExecutorRequest(request);
@@ -57,6 +59,11 @@ export async function POST(request: NextRequest) {
     switch (body.operation) {
       case "CLAIM":
         return NextResponse.json({ ok: true, claim: await claimCandidateExecutor(identity) });
+      case "HEARTBEAT":
+        return NextResponse.json({
+          ok: true,
+          heartbeat: await heartbeatCandidateExecutor({ ...identity, ...body }),
+        });
       case "AUTHORIZE":
         return NextResponse.json({
           ok: true,

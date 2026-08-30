@@ -397,6 +397,72 @@ export async function assertWorkflowBundleCandidateTaskCurrent(
   return task;
 }
 
+export async function readWorkflowBundleCandidateOidcBinding(input: {
+  repositoryId: string;
+  sourceSha: string;
+  workflowBundleSha: string;
+}) {
+  const repoId = BigInt(input.repositoryId);
+  const app = await prisma.app.findUnique({
+    where: { repoId },
+    select: { repoFullName: true },
+  });
+  if (!app) {
+    throw new ControlPlaneError(
+      "candidate OIDC repository binding이 없습니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_OIDC_PLAN_MISSING",
+    );
+  }
+  const runs = await prisma.agentRun.findMany({
+    where: {
+      repoFullName: app.repoFullName,
+      status: { in: ["RUNNING", "SUCCEEDED", "FAILED"] },
+      occurrence: {
+        definition: { template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY },
+      },
+    },
+    include: { repoGuard: true },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 20,
+  });
+  const matches: Array<{ runId: string; task: WorkflowBundleCandidateTask }> = [];
+  for (const run of runs) {
+    const parsed = workflowBundleCandidateTaskSchema.safeParse(run.taskInput);
+    if (
+      !parsed.success
+      || parsed.data.repository.id !== input.repositoryId
+      || parsed.data.repository.sourceSha !== input.sourceSha.toLowerCase()
+      || parsed.data.candidate.sourceSha !== input.workflowBundleSha.toLowerCase()
+      || run.repoGuard?.activeScopeKey !== `repo-pr:${app.repoFullName.toLowerCase()}`
+      || (run.status === "FAILED" && !run.readbackRequestedAt)
+    ) continue;
+    try {
+      await assertWorkflowBundleCandidateTaskCurrent(parsed.data);
+      matches.push({ runId: run.id, task: parsed.data });
+    } catch {
+      // stale signed tasks cannot authorize a current canary OIDC request
+    }
+  }
+  if (matches.length !== 1) {
+    throw new ControlPlaneError(
+      matches.length === 0
+        ? "현재 candidate OIDC plan을 찾을 수 없습니다."
+        : "candidate OIDC plan이 둘 이상이라 exact branch를 고를 수 없습니다.",
+      409,
+      matches.length === 0
+        ? "WORKFLOW_BUNDLE_CANDIDATE_OIDC_PLAN_MISSING"
+        : "WORKFLOW_BUNDLE_CANDIDATE_OIDC_PLAN_AMBIGUOUS",
+    );
+  }
+  const match = matches[0]!;
+  return {
+    runId: match.runId,
+    planDigest: match.task.planDigest,
+    expectedHeadRef: match.task.github.expectedHeadRef.replace(/^refs\/heads\//u, ""),
+  };
+}
+
 export async function claimNextWorkflowBundleCandidate(input: {
   runtimeBindingDigest: string;
   idempotencyKey: string;

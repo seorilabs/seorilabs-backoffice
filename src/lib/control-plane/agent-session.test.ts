@@ -706,6 +706,55 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     },
   }), { mutationStarted: true, error: null });
 
+  const resumedExecution = {
+    ...verifiedExecution,
+    id: "execution-resumed",
+    sessionId: "agent-session:original",
+    adapterPrincipalId: "seori-auth:workflow-bundle-candidate-adapter",
+    adapterRuntimeIdentity: "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor",
+  };
+  const resumedTx = {
+    agentMutationExecution: { findMany: async () => [resumedExecution] },
+    agentRunEvent: {
+      findFirst: async () => ({
+        actor: resumedExecution.adapterPrincipalId,
+        payload: {
+          sessionId: "agent-session:public-id",
+          executionId: resumedExecution.id,
+          adapterRuntimeIdentity: resumedExecution.adapterRuntimeIdentity,
+        },
+      }),
+    },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(await trustedMutationDisposition(resumedTx, {
+    runId: "run-1",
+    sessionId: "agent-session:public-id",
+    currentGeneration: 3,
+    readbackResolution: false,
+    result: {
+      outcomeCode: "PR_READY",
+      pullRequestNumber: 7,
+      pullRequestUrl: resumedExecution.pullRequestUrl,
+      mutationExecutionId: resumedExecution.id,
+    },
+  }), { mutationStarted: true, error: null });
+  const unboundResumeTx = {
+    agentMutationExecution: { findMany: async () => [resumedExecution] },
+    agentRunEvent: { findFirst: async () => null },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(await trustedMutationDisposition(unboundResumeTx, {
+    runId: "run-1",
+    sessionId: "agent-session:public-id",
+    currentGeneration: 3,
+    readbackResolution: false,
+    result: {
+      outcomeCode: "PR_READY",
+      pullRequestNumber: 7,
+      pullRequestUrl: resumedExecution.pullRequestUrl,
+      mutationExecutionId: resumedExecution.id,
+    },
+  }), { mutationStarted: false, error: "TRUSTED_MUTATION_EVIDENCE_REQUIRED" });
+
   const movedHeadExecution = {
     ...verifiedExecution,
     id: "execution-moved-head",
@@ -760,6 +809,7 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     sessionId: "agent-session:readback",
     currentGeneration: 4,
     readbackResolution: true,
+    readbackResolutionAction: "BLOCKED",
     result: { outcomeCode: "READBACK_CONFIRMED" },
   }), { mutationStarted: false, error: null });
 
@@ -783,6 +833,7 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     sessionId: "agent-session:readback",
     currentGeneration: 4,
     readbackResolution: true,
+    readbackResolutionAction: "BLOCKED",
     result: { outcomeCode: "READBACK_CONFIRMED" },
   }), { mutationStarted: true, error: null });
   assert.deepEqual(await trustedMutationDisposition(currentSessionUnknownTx, {
@@ -790,6 +841,7 @@ test("worker가 주장한 PR 결과는 trusted mutation ledger의 VERIFIED execu
     sessionId: "agent-session:other-readback",
     currentGeneration: 4,
     readbackResolution: true,
+    readbackResolutionAction: "BLOCKED",
     result: { outcomeCode: "READBACK_CONFIRMED" },
   }), { mutationStarted: true, error: "TRUSTED_MUTATION_READBACK_REQUIRED" });
 });

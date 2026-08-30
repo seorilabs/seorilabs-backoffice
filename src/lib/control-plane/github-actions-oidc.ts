@@ -92,6 +92,7 @@ export interface GitHubActionsBuildManifestExpectation {
   workflowBundleSha: string;
   buildProfile: GitHubActionsBuildProfile;
   defaultBranch: string;
+  candidateHeadRef: string | null;
 }
 
 interface GitHubActionsBuildManifestClaims extends GitHubActionsBuildManifestIdentity {
@@ -297,7 +298,8 @@ export function assertGitHubActionsBuildManifestClaims(
   let pullRequestNumber: number | null = null;
   if (expectation.mode === "APPROVED") {
     if (
-      eventName !== "workflow_dispatch"
+      expectation.candidateHeadRef !== null
+      || eventName !== "workflow_dispatch"
       || eventRef !== defaultBranchRef
       || expectation.applicationSourceSha !== eventSourceSha
       || headRef !== ""
@@ -308,6 +310,9 @@ export function assertGitHubActionsBuildManifestClaims(
   } else {
     const canary = GITHUB_ACTIONS_BUILD_CANARIES[repositoryId as keyof typeof GITHUB_ACTIONS_BUILD_CANARIES];
     const match = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(eventRef);
+    const candidateHead = expectation.candidateHeadRef === null
+      ? null
+      : /^seori\/workflow-bundle-v5-canary\/([1-9][0-9]{0,31})\/([0-9a-f]{12})\/([0-9a-f]{64})$/u.exec(expectation.candidateHeadRef);
     if (
       eventName !== "pull_request"
       || !canary
@@ -315,7 +320,9 @@ export function assertGitHubActionsBuildManifestClaims(
       || canary.buildProfile !== expectation.buildProfile
       || !match
       || baseRef !== defaultBranch
-      || headRef !== `seori/workflow-bundle-v5-canary/${repositoryId}/${workflowBundleSha.slice(0, 12)}`
+      || headRef !== expectation.candidateHeadRef
+      || candidateHead?.[1] !== repositoryId
+      || candidateHead?.[2] !== workflowBundleSha.slice(0, 12)
       || expectation.applicationSourceSha === eventSourceSha
     ) {
       unauthorized();

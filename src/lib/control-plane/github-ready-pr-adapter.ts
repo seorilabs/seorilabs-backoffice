@@ -1007,11 +1007,14 @@ export async function recoverGithubReadyPr(input: {
   executionId: string;
   status: "VERIFIED" | "NOT_APPLIED" | "RESULT_UNKNOWN";
   writeAttempted: false;
+  safeToResume: boolean;
   pullRequestNumber?: number;
   pullRequestUrl?: string;
 }> {
   const now = input.clock ?? (() => new Date());
   const stepKinds: AgentGithubMutationStepKind[] = ["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"];
+  let verifiedPrefixLength = 0;
+  let firstUnappliedOrdinal: number | null = null;
   for (const stepKind of stepKinds) {
     const claim = await input.controlPlane.claimStep({
       requestId: mutationControlPlaneRequestId(input.operationId, `recovery:${stepKind}:claim`),
@@ -1030,7 +1033,10 @@ export async function recoverGithubReadyPr(input: {
       || claim.expectedPullRequestMarker !== input.recovery.expectedPullRequestMarker
       || claim.sourceSha.toLowerCase() !== input.recovery.sourceSha.toLowerCase()
     ) throw new Error("GITHUB_READY_PR_RECOVERY_CLAIM_BINDING_MISMATCH");
-    if (claim.writeDisposition === "ALREADY_VERIFIED") continue;
+    if (claim.writeDisposition === "ALREADY_VERIFIED") {
+      verifiedPrefixLength += 1;
+      continue;
+    }
     if (
       claim.writeDisposition !== "READBACK_ONLY"
       || !claim.attemptId
@@ -1065,7 +1071,14 @@ export async function recoverGithubReadyPr(input: {
         observation,
       },
     });
-    if (completion.status !== "VERIFIED") break;
+    if (completion.status === "VERIFIED") {
+      verifiedPrefixLength += 1;
+      continue;
+    }
+    if (completion.status === "NOT_APPLIED") {
+      firstUnappliedOrdinal = stepKinds.indexOf(stepKind) + 1;
+    }
+    break;
   }
 
   const postObservation = await observeGithubReadyPr({
@@ -1098,6 +1111,12 @@ export async function recoverGithubReadyPr(input: {
     executionId: readback.executionId,
     status: readback.status,
     writeAttempted: false,
+    // 서버는 settlement 때 durable step ledger와 현재 readback을 다시 검증한다.
+    // 여기서는 worker가 RESULT_UNKNOWN을 무조건 BLOCKED로 오인하지 않도록
+    // 연속 VERIFIED prefix 바로 다음 단계가 NOT_APPLIED였다는 공개 힌트만 준다.
+    safeToResume: readback.status === "RESULT_UNKNOWN"
+      && verifiedPrefixLength > 0
+      && firstUnappliedOrdinal === verifiedPrefixLength + 1,
     ...(readback.status === "VERIFIED" && target ? {
       pullRequestNumber: target.number,
       pullRequestUrl: target.url,
