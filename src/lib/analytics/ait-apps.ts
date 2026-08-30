@@ -38,7 +38,6 @@ export const AIT_LISTINGS: AitListing[] = [
   // crossword-puzzle repo 는 콘솔에 둘로 등록됨. primary=네이티브 게임(56407, 7/25 론칭, 주력).
   { appSlug: "crossword-puzzle", miniAppId: 56407, label: "네이티브 게임", primary: true },
   { appSlug: "crossword-puzzle", miniAppId: 36555, label: "웹", primary: false },
-  { appSlug: "vocab-swipe", miniAppId: 36976, label: "vocab-swipe", primary: true },
   { appSlug: "lucid-reversi", miniAppId: 44056, label: "lucid-reversi", primary: true },
   { appSlug: "foam-party", miniAppId: 50736, label: "foam-party", primary: true },
   { appSlug: "trait-test-hub", miniAppId: 54985, label: "trait-test-hub", primary: true },
