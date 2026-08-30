@@ -1,9 +1,7 @@
 import {
-  bumpStableSemVerTag,
   compareStableSemVerTags,
   normalizeStableSemVerTag,
   parseStableSemVerTag,
-  type Bump,
 } from "@/lib/core/stable-semver";
 
 type JsonObject = Record<string, unknown>;
@@ -62,26 +60,4 @@ export function marketVersionFloorFromConfigs(input: {
   ].filter((value): value is string => value !== null);
 
   return candidates.sort((a, b) => compareStableSemVerTags(b, a))[0] ?? null;
-}
-
-/**
- * 태그 계보와 마켓 원장 중 높은 쪽을 기준으로 다음 태그를 **추천**한다.
- *
- * 마켓 원장은 이미 배포된 버전이라 "그 이상"이라는 사실이 태그가 가리키는 소스의 버전을 보증하지
- * 못한다(v1.2.0 태그 / 소스 1.1.12 장애). 그래서 floor 는 추천에만 쓰고, 명시 태그는 그대로 쓴다.
- * 실제 릴리스·배포 허가는 `assertReleaseSourceContract` 가 SHA 단위로 판단한다.
- */
-export function resolveReleaseTagWithMarketFloor(input: {
-  latestTag: string | null;
-  marketFloor: string | null;
-  explicitTag?: string;
-  bump: Bump;
-}): string {
-  if (input.explicitTag) return normalizeStableSemVerTag(input.explicitTag);
-
-  const candidates = [input.latestTag, input.marketFloor]
-    .filter((value): value is string => Boolean(value))
-    .map(normalizeStableSemVerTag);
-  const base = candidates.sort((a, b) => compareStableSemVerTags(b, a))[0] ?? null;
-  return bumpStableSemVerTag(base, input.bump);
 }

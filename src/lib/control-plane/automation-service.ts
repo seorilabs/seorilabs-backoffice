@@ -1163,8 +1163,8 @@ async function processIngressEvent(event: {
     const { env } = await import("@/lib/env");
     if (!shouldBackofficeAutoPublishReleaseNotes(event.repoFullName, env.githubOrg())) return;
     await assertClaim();
-    const { resolveRefSha } = await import("@/lib/github/write");
-    const currentSha = await resolveRefSha(event.repoFullName, tag.version);
+    const { resolveStableTagSha } = await import("@/lib/github/release");
+    const currentSha = await resolveStableTagSha(event.repoFullName, tag.version);
     if (currentSha.toLowerCase() !== tag.headSha.toLowerCase()) {
       throw new Error("provider tag SHA does not match durable observation");
     }

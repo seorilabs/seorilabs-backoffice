@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireSession } from "@/lib/auth-helpers";
 import { listVersionTags } from "@/lib/github/release";
+import { requireReleaseWriteAccess } from "@/lib/core/release-access";
 import { HIDDEN_APP_ERROR, isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import { parsePlayInternalTestUrl } from "@/lib/domain/play-internal-test";
 import {
@@ -39,19 +40,18 @@ export async function createReleaseAction(
   bump: string,
   explicitTag = "",
 ): Promise<{ ok: boolean; tag?: string; url?: string; error?: string }> {
-  const session = await requireSession();
   if (!BUMPS.has(bump)) return { ok: false, error: "잘못된 증가 단위" };
   const requestedTag = explicitTag.trim();
   if (requestedTag && !EXPLICIT_TAG_RE.test(requestedTag)) {
     return { ok: false, error: "직접 지정 버전은 vX.Y.Z 형식이어야 합니다." };
   }
   try {
-    const repoFullName = await repoOf(appId);
+    const actor = await requireReleaseWriteAccess(appId);
     const r = await createReleaseTagWithNotes({
-      repoFullName,
+      repoFullName: actor.repoFullName,
       tag: requestedTag || undefined,
       bump: bump as Bump,
-      actorLabel: `web:${session.user.login ?? "?"}`,
+      actorLabel: `web:${actor.login}`,
     });
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);
@@ -69,31 +69,28 @@ export async function setPlayInternalTestUrlAction(
   appId: string,
   url: string,
 ): Promise<{ ok: boolean; url?: string | null; error?: string }> {
-  const session = await requireSession();
   const parsed = parsePlayInternalTestUrl(url);
   if (!parsed.ok) return { ok: false, error: parsed.error };
-  const app = await prisma.app.findUnique({
-    where: { id: appId },
-    select: { id: true, status: true },
-  });
-  if (!app) return { ok: false, error: "앱을 찾을 수 없습니다." };
-  if (isDisabledAppStatus(app.status)) return { ok: false, error: HIDDEN_APP_ERROR };
-
-  const next = parsed.url;
-  await prisma.app.update({ where: { id: appId }, data: { playInternalTestUrl: next } });
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: session.user.login ?? null,
-        action: "app.playInternalTestUrl.set",
-        entityType: "App",
-        entityId: appId,
-        payload: { url: next },
-      },
-    })
-    .catch(() => {});
-  revalidatePath(`/apps/${appId}`);
-  return { ok: true, url: next };
+  try {
+    const actor = await requireReleaseWriteAccess(appId);
+    const next = parsed.url;
+    await prisma.app.update({ where: { id: actor.appId }, data: { playInternalTestUrl: next } });
+    await prisma.auditLog
+      .create({
+        data: {
+          actorLogin: actor.login,
+          action: "app.playInternalTestUrl.set",
+          entityType: "App",
+          entityId: actor.appId,
+          payload: { url: next },
+        },
+      })
+      .catch(() => {});
+    revalidatePath(`/apps/${actor.appId}`);
+    return { ok: true, url: next };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 export async function listAppTagsAction(appId: string): Promise<{ tags: string[] }> {
@@ -112,16 +109,15 @@ export async function deployAction(
   tag: string,
   target: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const session = await requireSession();
   if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
   if (!TARGETS.has(target)) return { ok: false, error: "잘못된 배포 대상" };
   try {
-    const repoFullName = await repoOf(appId);
+    const actor = await requireReleaseWriteAccess(appId);
     await dispatchMarketDeploy({
-      repoFullName,
+      repoFullName: actor.repoFullName,
       target: target as DeployTarget,
       tag,
-      actorLabel: `web:${session.user.login ?? "?"}`,
+      actorLabel: `web:${actor.login}`,
     });
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);
@@ -137,14 +133,13 @@ export async function promoteToProductionAction(
   appId: string,
   tag: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const session = await requireSession();
   if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
   try {
-    const repoFullName = await repoOf(appId);
+    const actor = await requireReleaseWriteAccess(appId);
     await promoteGooglePlay({
-      repoFullName,
+      repoFullName: actor.repoFullName,
       tag,
-      actorLabel: `web:${session.user.login ?? "?"}`,
+      actorLabel: `web:${actor.login}`,
     });
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);
@@ -160,14 +155,13 @@ export async function prepareAppStoreAction(
   appId: string,
   tag: string,
 ): Promise<{ ok: boolean; ready?: boolean; reason?: string; error?: string }> {
-  const session = await requireSession();
   if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
   try {
-    const repoFullName = await repoOf(appId);
+    const actor = await requireReleaseWriteAccess(appId);
     const r = await prepareAppStore({
-      repoFullName,
+      repoFullName: actor.repoFullName,
       tag,
-      actorLabel: `web:${session.user.login ?? "?"}`,
+      actorLabel: `web:${actor.login}`,
     });
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);
@@ -182,14 +176,13 @@ export async function submitAppStoreAction(
   appId: string,
   tag: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const session = await requireSession();
   if (!TAG_RE.test(tag)) return { ok: false, error: "잘못된 태그(vX.Y.Z)" };
   try {
-    const repoFullName = await repoOf(appId);
+    const actor = await requireReleaseWriteAccess(appId);
     await submitAppStore({
-      repoFullName,
+      repoFullName: actor.repoFullName,
       tag,
-      actorLabel: `web:${session.user.login ?? "?"}`,
+      actorLabel: `web:${actor.login}`,
     });
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);

@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  marketVersionFloorFromConfigs,
-  resolveReleaseTagWithMarketFloor,
-} from "@/lib/core/market-version-floor";
+import { marketVersionFloorFromConfigs } from "@/lib/core/market-version-floor";
 
 test("Google Play와 App Store config 중 높은 버전을 마켓 floor로 사용한다", () => {
   assert.equal(
@@ -62,41 +59,5 @@ test("release.* 값이 stable SemVer가 아니면 조용히 무시하지 않고 
         appStore: null,
       }),
     /release.versionName가 stable SemVer가 아닙니다/,
-  );
-});
-
-test("태그 계보가 마켓 원장보다 낮으면 마켓 기준으로 bump한다", () => {
-  assert.equal(
-    resolveReleaseTagWithMarketFloor({
-      latestTag: "v0.0.2",
-      marketFloor: "v1.0.3",
-      bump: "patch",
-    }),
-    "v1.0.4",
-  );
-});
-
-// 인수조건: 마켓 floor 는 추천용이다. 배포 허가는 소스 계약이 판단한다.
-test("명시 태그는 마켓 원장과 비교하지 않고 그대로 쓴다", () => {
-  assert.equal(
-    resolveReleaseTagWithMarketFloor({
-      latestTag: "v0.0.2",
-      marketFloor: "v1.0.3",
-      explicitTag: "v0.0.3",
-      bump: "patch",
-    }),
-    "v0.0.3",
-  );
-});
-
-test("명시 태그는 정규화만 거친다", () => {
-  assert.equal(
-    resolveReleaseTagWithMarketFloor({
-      latestTag: "v0.0.2",
-      marketFloor: "v1.0.3",
-      explicitTag: "1.0.3",
-      bump: "patch",
-    }),
-    "v1.0.3",
   );
 });
