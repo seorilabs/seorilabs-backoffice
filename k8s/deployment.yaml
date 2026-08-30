@@ -73,6 +73,16 @@ spec:
               value: seorilabs
             - name: PLATFORM_GITHUB_REPOSITORY_ID
               value: "1317999271"
+            # .github repo-contract의 Fleet 표준 label catalog를 immutable source/blob/digest로 읽는다.
+            # 값은 공개 trust root이며 label 정의를 Backoffice에 복사하지 않는다.
+            - name: FLEET_STANDARD_LABELS_CONTRACT_REPOSITORY_ID
+              value: "1241442018"
+            - name: FLEET_STANDARD_LABELS_CONTRACT_SOURCE_SHA
+              value: "0b6346713a64f6309fa32d1d3e09747c9db4ccb4"
+            - name: FLEET_STANDARD_LABELS_CATALOG_BLOB_SHA
+              value: "cfc0c5f52c87e1808264224cb55666896b51336c"
+            - name: FLEET_STANDARD_LABELS_CATALOG_DIGEST
+              value: "sha256:0968c206c075b06b54a47ca9dcf7be48f5f0e02ff7988d3fd6b029b8bcf66c22"
             - name: ALLOWLIST_LOGINS
               value: "magicsih"
             - name: FEATURE_GEMINI_ENABLED

@@ -4,6 +4,9 @@ import {
   normalizeGitHubInstallationPublicState,
   type GitHubInstallationPublicState,
 } from "@/lib/github/installation-public-state";
+import type {
+  FleetScopedGithubTokenIssuer,
+} from "@/lib/github/scoped-installation-client";
 
 // GitHub App (seorilabs-backoffice) 인증.
 // - App JWT → installation token 교환은 Octokit 이 내부적으로 자동 갱신.
@@ -38,7 +41,18 @@ export interface InstallationContext {
 }
 
 let cached: { context: InstallationContext; at: number } | null = null;
+let publicStateCache: { state: GitHubInstallationPublicState; at: number } | null = null;
 const TTL_MS = 30 * 60 * 1000;
+
+async function getInstallationPublicState(): Promise<GitHubInstallationPublicState> {
+  if (publicStateCache && Date.now() - publicStateCache.at < TTL_MS) return publicStateCache.state;
+  const app = getApp();
+  const org = process.env.GITHUB_ORG ?? "seorilabs";
+  const { data } = await app.octokit.rest.apps.getOrgInstallation({ org });
+  const state = normalizeGitHubInstallationPublicState(data);
+  publicStateCache = { state, at: Date.now() };
+  return state;
+}
 
 export async function getInstallationContext(
   options: { forceRefresh?: boolean } = {},
@@ -48,6 +62,7 @@ export async function getInstallationContext(
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   const { data } = await app.octokit.rest.apps.getOrgInstallation({ org });
   const publicState = normalizeGitHubInstallationPublicState(data);
+  publicStateCache = { state: publicState, at: Date.now() };
   const octokit = await app.getInstallationOctokit(data.id);
   const context: InstallationContext = {
     octokit,
@@ -62,6 +77,56 @@ export async function getInstallationContext(
 
 export async function getInstallationOctokit(): Promise<Octokit> {
   return (await getInstallationContext()).octokit;
+}
+
+/**
+ * Fleet 표준 label transport 전용 issuer다. App JWT로 repository 하나와 exact
+ * permission의 installation token만 만들고, token은 callback 경계 안에서 폐기한다.
+ */
+export async function getFleetScopedGithubTokenIssuer(): Promise<{
+  installationId: string;
+  issuer: FleetScopedGithubTokenIssuer<Octokit>;
+}> {
+  const app = getApp();
+  const publicState = await getInstallationPublicState();
+  const org = process.env.GITHUB_ORG ?? "seorilabs";
+  if (
+    org !== "seorilabs"
+    || publicState.accountLogin !== org
+    || publicState.targetType !== "Organization"
+    || publicState.repositorySelection !== "all"
+    || publicState.suspended
+  ) {
+    throw new Error("FLEET_GITHUB_INSTALLATION_IDENTITY_INVALID");
+  }
+  return {
+    installationId: publicState.installationId,
+    issuer: {
+      async createAccessToken(input) {
+        const response = await app.octokit.rest.apps.createInstallationAccessToken({
+          installation_id: input.installationId,
+          repository_ids: [...input.repositoryIds],
+          permissions: { ...input.permissions },
+        });
+        return {
+          token: response.data.token,
+          expiresAt: response.data.expires_at,
+          permissions: response.data.permissions ?? {},
+          repositories: (response.data.repositories ?? []).map((repository) => ({
+            id: repository.id,
+            fullName: repository.full_name,
+          })),
+        };
+      },
+      createClient(token) {
+        return new Octokit({ auth: token });
+      },
+      async revokeAccessToken(token) {
+        const client = new Octokit({ auth: token });
+        await client.request("DELETE /installation/token");
+      },
+    },
+  };
 }
 
 export type { Octokit };
