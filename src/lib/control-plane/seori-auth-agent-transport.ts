@@ -1,4 +1,5 @@
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -95,15 +96,39 @@ export async function readBoundSecretFile(input: {
     throw new Error("SEORI_AUTH_SECRET_TARGET_ESCAPE");
   }
   const metadata = await stat(resolved);
-  if (!metadata.isFile() || (metadata.mode & 0o007) !== 0 || (!input.allowGroupRead && (metadata.mode & 0o070) !== 0)) {
+  if (
+    !metadata.isFile()
+    // projected Secret의 0440은 허용하지만 group write/execute, 모든 execute,
+    // special bit, world access는 허용하지 않는다.
+    || (metadata.mode & 0o7137) !== 0
+    || (!input.allowGroupRead && (metadata.mode & 0o040) !== 0)
+  ) {
     throw new Error("SEORI_AUTH_SECRET_FILE_UNSAFE");
   }
-  const value = await readFile(resolved);
-  if (value.length === 0 || value.length > (input.maxBytes ?? 64 * 1024)) {
-    value.fill(0);
+  const maximum = input.maxBytes ?? 64 * 1024;
+  if (metadata.size < 1 || metadata.size > maximum) {
     throw new Error("SEORI_AUTH_SECRET_FILE_SIZE_INVALID");
   }
-  return value;
+  const handle = await open(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat();
+    if (
+      opened.dev !== metadata.dev
+      || opened.ino !== metadata.ino
+      || opened.uid !== metadata.uid
+      || opened.gid !== metadata.gid
+      || opened.mode !== metadata.mode
+      || opened.size !== metadata.size
+    ) throw new Error("SEORI_AUTH_SECRET_FILE_DRIFT");
+    const value = await handle.readFile();
+    if (value.length === 0 || value.length > maximum) {
+      value.fill(0);
+      throw new Error("SEORI_AUTH_SECRET_FILE_SIZE_INVALID");
+    }
+    return value;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function withBoundSecretText<T>(input: {

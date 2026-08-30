@@ -1,0 +1,49 @@
+# trusted operator가 shadow 실행 전에 한 번 설치한다. Job 생성 스크립트에는 고정
+# NetworkPolicy mutation 권한을 주지 않는다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backoffice-fleet-migration-bootstrap-shadow
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-bootstrap-shadow
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+          podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - { protocol: TCP, port: 3306 }
+    # 표준 NetworkPolicy에는 FQDN selector가 없다. private/cluster 대역은 모두
+    # 거부하고 HTTPS public egress만 연다. capability는 contents/metadata read-only,
+    # exact 실행/cohort/TTL에 서명되고 terminal에서 폐기된다.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - { protocol: TCP, port: 443 }

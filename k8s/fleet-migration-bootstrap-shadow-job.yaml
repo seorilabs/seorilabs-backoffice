@@ -1,0 +1,131 @@
+# P7 production BOOTSTRAP collector one-shot. production Backoffice DB principal,
+# GitHub App private key, config HMAC은 받지 않는다. 실행 직전 발급된 read-only
+# installation token과 public Ed25519 attestation만 사용하고 terminal에서 token을 폐기한다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-fleet-bootstrap-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-bootstrap-shadow
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+spec:
+  # immutable image/source/detector/resources readback 전에는 Pod를 만들지 않는다.
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: fleet-migration-bootstrap-shadow
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap-shadow
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          command: ["node", "/app/scripts-dist/fleet-migration-bootstrap-shadow.cjs"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536 --expose-gc"
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: GITHUB_ORG
+              value: seorilabs
+            - name: BACKOFFICE_SOURCE_SHA
+              value: "__BACKOFFICE_IMAGE_TAG__"
+            - name: FLEET_MIGRATION_DETECTOR_SOURCE_SHA
+              value: "__FLEET_MIGRATION_DETECTOR_SOURCE_SHA__"
+            - name: FLEET_MIGRATION_JOB_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
+            - name: FLEET_MIGRATION_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: FLEET_MIGRATION_EXECUTION_ID
+              value: "__FLEET_MIGRATION_EXECUTION_ID__"
+            - name: FLEET_MIGRATION_RUNTIME_ATTESTATION_ROOT
+              value: /run/fleet-runtime/public
+            - name: FLEET_MIGRATION_RUNTIME_ATTESTATION_FILE
+              value: runtime-attestation.json
+            - name: FLEET_MIGRATION_RUNTIME_PUBLIC_KEY_ROOT
+              value: /run/fleet-runtime/public
+            - name: FLEET_MIGRATION_RUNTIME_PUBLIC_KEY_FILE
+              value: runtime-attestation-public.pem
+            - name: FLEET_MIGRATION_RUNTIME_ATTESTATION_KEY_ID
+              value: fleet-migration-runtime-v1
+            - name: FLEET_MIGRATION_RUNTIME_ATTESTATION_KEY_FINGERPRINT
+              value: "__FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT__"
+            - name: FLEET_MIGRATION_RUNTIME_ATTESTATION_POLICY_REVISION
+              value: fleet-migration-runtime-policy-v1
+            - name: FLEET_MIGRATION_GITHUB_TOKEN_ROOT
+              value: /run/fleet-runtime/github
+            - name: FLEET_MIGRATION_GITHUB_TOKEN_FILE
+              value: installation.token
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-migration-shadow-db
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: runtime-public-attestation
+              mountPath: /run/fleet-runtime/public
+              readOnly: true
+            - name: github-read-token
+              mountPath: /run/fleet-runtime/github
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: runtime-public-attestation
+          projected:
+            defaultMode: 0440
+            sources:
+              - configMap:
+                  name: "__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__"
+                  items:
+                    - { key: runtime-attestation.json, path: runtime-attestation.json }
+                    - { key: runtime-attestation-public.pem, path: runtime-attestation-public.pem }
+        - name: github-read-token
+          secret:
+            secretName: "__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__"
+            defaultMode: 0440
+            items:
+              - key: installation.token
+                path: installation.token
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }

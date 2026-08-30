@@ -1,0 +1,24 @@
+# Trusted operator가 proof writer 실행 전에 설치한다. writer는 GitHub/provider로
+# 나가지 않고 전용 INSERT-only MySQL principal로 현재 공개 state를 재검증한다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backoffice-fleet-migration-proof-writer
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-proof-writer
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+          podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - { protocol: TCP, port: 3306 }

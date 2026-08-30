@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/u;
 const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
+const EXECUTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
   "github.standard-labels.contract.read": Object.freeze({
@@ -8,6 +11,10 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
   }),
   "github.standard-labels.read": Object.freeze({
     issues: "read",
+    metadata: "read",
+  }),
+  "github.fleet-migration.shadow-read": Object.freeze({
+    contents: "read",
     metadata: "read",
   }),
   "github.standard-labels.ensure": Object.freeze({
@@ -37,7 +44,7 @@ export interface FleetScopedGithubTokenResponse {
 export interface FleetScopedGithubTokenIssuer<Client> {
   createAccessToken(input: {
     installationId: number;
-    repositoryIds: readonly [number];
+    repositoryIds: readonly [number, ...number[]];
     permissions: FleetGitHubCapabilityPermissions;
   }): Promise<FleetScopedGithubTokenResponse>;
   createClient(token: string): Client;
@@ -51,23 +58,51 @@ function numericId(value: string, error: string): number {
   return numeric;
 }
 
+interface ExactRepositoryScope {
+  id: number;
+  fullName: string;
+}
+
+function exactRepositories(repositories: readonly ExactRepositoryScope[]): readonly [ExactRepositoryScope, ...ExactRepositoryScope[]] {
+  if (repositories.length < 1 || repositories.length > 500) {
+    throw new Error("FLEET_GITHUB_TOKEN_SCOPE_MISMATCH");
+  }
+  const normalized = repositories.map((repository) => {
+    if (
+      !Number.isSafeInteger(repository.id)
+      || repository.id <= 0
+      || !REPOSITORY.test(repository.fullName)
+    ) throw new Error("FLEET_GITHUB_TOKEN_SCOPE_MISMATCH");
+    return { id: repository.id, fullName: repository.fullName };
+  }).sort((left, right) => left.id - right.id || left.fullName.localeCompare(right.fullName));
+  if (
+    new Set(normalized.map(({ id }) => id)).size !== normalized.length
+    || new Set(normalized.map(({ fullName }) => fullName.toLowerCase())).size !== normalized.length
+  ) throw new Error("FLEET_GITHUB_TOKEN_SCOPE_MISMATCH");
+  return normalized as [ExactRepositoryScope, ...ExactRepositoryScope[]];
+}
+
 function assertExactScope(input: {
   response: FleetScopedGithubTokenResponse;
-  repositoryId: number;
-  repositoryFullName: string;
+  repositories: readonly [ExactRepositoryScope, ...ExactRepositoryScope[]];
   expectedPermissions: FleetGitHubCapabilityPermissions;
   now: Date;
 }): void {
   const expiresAt = Date.parse(input.response.expiresAt);
+  const actualRepositories = exactRepositories(input.response.repositories);
   if (
     typeof input.response.token !== "string"
     || input.response.token.length < 20
+    || input.response.token.length > 1024
+    || /[\s\u0000-\u001f\u007f]/u.test(input.response.token)
     || !Number.isFinite(expiresAt)
     || expiresAt <= input.now.getTime()
     || expiresAt > input.now.getTime() + 60 * 60_000 + 5_000
-    || input.response.repositories.length !== 1
-    || input.response.repositories[0]?.id !== input.repositoryId
-    || input.response.repositories[0]?.fullName.toLowerCase() !== input.repositoryFullName.toLowerCase()
+    || actualRepositories.length !== input.repositories.length
+    || input.repositories.some((repository, index) => (
+      actualRepositories[index]?.id !== repository.id
+      || actualRepositories[index]?.fullName.toLowerCase() !== repository.fullName.toLowerCase()
+    ))
   ) {
     throw new Error("FLEET_GITHUB_TOKEN_SCOPE_MISMATCH");
   }
@@ -82,6 +117,79 @@ function assertExactScope(input: {
     ))
   ) {
     throw new Error("FLEET_GITHUB_TOKEN_PERMISSION_MISMATCH");
+  }
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export interface FleetMigrationGithubCapabilityReceipt {
+  executionId: string;
+  tokenSha256: string;
+  tokenExpiresAt: string;
+  permissions: typeof FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.fleet-migration.shadow-read"];
+  repositories: ReadonlyArray<{ id: string; fullName: string }>;
+}
+
+/**
+ * trusted runtime issuer가 exact cohort read token을 broker sink에 직접 넘기는 경계다.
+ * raw token은 반환하지 않는다. sink 수락 전 오류에서는 즉시 revoke하고, 수락 뒤에는
+ * SHADOW_RUNTIME attestation에 receipt를 결합한 worker가 terminal에서 revoke한다.
+ */
+export async function issueFleetMigrationGithubCapabilityToSink<Client>(input: {
+  issuer: FleetScopedGithubTokenIssuer<Client>;
+  installationId: string;
+  executionId: string;
+  repositories: readonly [{ id: string; fullName: string }, ...Array<{ id: string; fullName: string }>];
+  deliver: (delivery: {
+    token: string;
+    receipt: FleetMigrationGithubCapabilityReceipt;
+  }) => Promise<void>;
+  now?: () => Date;
+}): Promise<FleetMigrationGithubCapabilityReceipt> {
+  if (!EXECUTION_ID.test(input.executionId)) {
+    throw new Error("FLEET_GITHUB_EXECUTION_ID_INVALID");
+  }
+  const installationId = numericId(input.installationId, "FLEET_GITHUB_INSTALLATION_ID_INVALID");
+  const repositories = exactRepositories(input.repositories.map((repository) => ({
+    id: numericId(repository.id, "FLEET_GITHUB_REPOSITORY_ID_INVALID"),
+    fullName: repository.fullName,
+  })));
+  const permissions = FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.fleet-migration.shadow-read"];
+  const response = await input.issuer.createAccessToken({
+    installationId,
+    repositoryIds: repositories.map(({ id }) => id) as [number, ...number[]],
+    permissions,
+  });
+  try {
+    assertExactScope({
+      response,
+      repositories,
+      expectedPermissions: permissions,
+      now: input.now?.() ?? new Date(),
+    });
+    const receipt = Object.freeze({
+      executionId: input.executionId,
+      tokenSha256: sha256(response.token),
+      tokenExpiresAt: new Date(Date.parse(response.expiresAt)).toISOString(),
+      permissions,
+      repositories: Object.freeze(repositories.map((repository) => Object.freeze({
+        id: String(repository.id),
+        fullName: repository.fullName,
+      }))),
+    });
+    await input.deliver({ token: response.token, receipt });
+    return receipt;
+  } catch (error) {
+    try {
+      await input.issuer.revokeAccessToken(response.token);
+    } catch (revokeError) {
+      throw new Error("FLEET_GITHUB_TOKEN_REVOKE_FAILED", {
+        cause: new AggregateError([error, revokeError]),
+      });
+    }
+    throw error;
   }
 }
 
@@ -110,25 +218,30 @@ export async function withFleetScopedGithubClient<Client, Result>(input: {
     repositoryIds: [repositoryId],
     permissions,
   });
-  let operationError: unknown = null;
+  let operationError: unknown;
+  let result: Result | undefined;
   try {
     assertExactScope({
       response,
-      repositoryId,
-      repositoryFullName: input.repositoryFullName,
+      repositories: [{ id: repositoryId, fullName: input.repositoryFullName }],
       expectedPermissions: permissions,
       now: input.now?.() ?? new Date(),
     });
     const client = input.issuer.createClient(response.token);
-    return await input.execute(client);
+    result = await input.execute(client);
   } catch (error) {
     operationError = error;
-    throw error;
   } finally {
     try {
       await input.issuer.revokeAccessToken(response.token);
-    } catch {
-      if (!operationError) throw new Error("FLEET_GITHUB_TOKEN_REVOKE_FAILED");
+    } catch (revokeError) {
+      throw new Error("FLEET_GITHUB_TOKEN_REVOKE_FAILED", {
+        cause: operationError
+          ? new AggregateError([operationError, revokeError])
+          : revokeError,
+      });
     }
   }
+  if (operationError) throw operationError;
+  return result as Result;
 }

@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backoffice-fleet-migration-security-provisioning
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-security-provisioning
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - { protocol: TCP, port: 3306 }
