@@ -321,6 +321,10 @@ test("고정 verifier는 계약과 같은 trigger를 read-only로만 확인한�
     assert.ok(manifest.includes(requirement.name), `${requirement.name} 미검증`);
     assert.ok(manifest.includes(`EVENT_MANIPULATION='${requirement.event}'`));
     assert.ok(manifest.includes(requirement.table));
+    assert.ok(
+      manifest.includes(`\\\"${appendOnlyActionStatement(requirement.message)}\\\"`),
+      `${requirement.name} action statement의 shell 인용이 보존되지 않는다`,
+    );
   }
   assert.ok(manifest.includes(appendOnlyActionStatement(REQUIRED_APPEND_ONLY_TRIGGERS[0].message)));
   assert.match(manifest, /ACTION_TIMING='BEFORE'/);
