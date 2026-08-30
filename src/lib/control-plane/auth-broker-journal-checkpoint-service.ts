@@ -136,24 +136,6 @@ export async function advanceAuthBrokerJournalCheckpoint(input: {
   const nextGeneration = input.expectedGeneration + 1n;
   try {
     const advanced = await prisma.$transaction(async (tx) => {
-      const current = await tx.authBrokerJournalCheckpoint.findUnique({
-        where: { journalId: input.journalId },
-      });
-      if (!current) {
-        throw new ControlPlaneError(
-          "journalId의 genesis row가 없습니다. genesis를 먼저 호출해야 합니다.",
-          404,
-          "AUTH_BROKER_JOURNAL_CHECKPOINT_NOT_FOUND",
-        );
-      }
-      assertInvariantOrFailClosed(current);
-      if (current.generation !== input.expectedGeneration || current.checkpointDigest !== input.expectedDigest) {
-        throw new ControlPlaneError(
-          "expected checkpoint 상태가 현재 상태와 다릅니다.",
-          409,
-          "AUTH_BROKER_JOURNAL_CHECKPOINT_CAS_MISMATCH",
-        );
-      }
       const changed = await tx.authBrokerJournalCheckpoint.updateMany({
         where: {
           journalId: input.journalId,
@@ -169,38 +151,71 @@ export async function advanceAuthBrokerJournalCheckpoint(input: {
         },
       });
       if (changed.count !== 1) {
+        const current = await tx.authBrokerJournalCheckpoint.findUnique({
+          where: { journalId: input.journalId },
+        });
+        if (!current) {
+          throw new ControlPlaneError(
+            "journalId의 genesis row가 없습니다. genesis를 먼저 호출해야 합니다.",
+            404,
+            "AUTH_BROKER_JOURNAL_CHECKPOINT_NOT_FOUND",
+          );
+        }
+        assertInvariantOrFailClosed(current);
         throw new ControlPlaneError(
           "expected checkpoint 상태가 현재 상태와 다릅니다.",
           409,
           "AUTH_BROKER_JOURNAL_CHECKPOINT_CAS_MISMATCH",
         );
       }
+      const checkpoint = await tx.authBrokerJournalCheckpoint.findUniqueOrThrow({
+        where: { journalId: input.journalId },
+      });
+      assertInvariantOrFailClosed(checkpoint);
       await tx.authBrokerJournalCheckpointEvent.create({
         data: {
-          checkpointId: current.id,
+          checkpointId: checkpoint.id,
           journalId: input.journalId,
           requestId: idempotencyKey,
           type: "ADVANCED",
-          fromGeneration: current.generation,
+          fromGeneration: input.expectedGeneration,
           toGeneration: nextGeneration,
-          fromSequence: current.sequence,
+          fromSequence: input.expectedGeneration,
           toSequence: nextGeneration,
-          fromDigest: current.checkpointDigest,
+          fromDigest: input.expectedDigest,
           toDigest: input.nextDigest,
           actor: input.actor,
         },
       });
-      return tx.authBrokerJournalCheckpoint.findUniqueOrThrow({ where: { id: current.id } });
+      return checkpoint;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     assertInvariantOrFailClosed(advanced);
     return { outcome: "ADVANCED", checkpoint: serializeAuthBrokerJournalCheckpoint(advanced) };
   } catch (error) {
     // 같은 logical request가 동시에 먼저 커밋했으면 updateMany CAS 실패나 transaction
     // conflict 형태가 달라도 exact event readback으로 처음 결과에 수렴한다.
-    const replayed = await replayAdvance({ ...input, idempotencyKey });
+    const replayed = await replayAdvanceAfterConcurrentOutcome({ ...input, idempotencyKey }, error);
     if (replayed) return replayed;
     throw error;
   }
+}
+
+async function replayAdvanceAfterConcurrentOutcome(
+  input: Parameters<typeof replayAdvance>[0],
+  error: unknown,
+): Promise<Awaited<ReturnType<typeof replayAdvance>>> {
+  const isConcurrentConflict =
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2002" || error.code === "P2034");
+  const attempts = isConcurrentConflict ? 6 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const replayed = await replayAdvance(input);
+    if (replayed) return replayed;
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
+  return null;
 }
 
 async function replayAdvance(input: {
