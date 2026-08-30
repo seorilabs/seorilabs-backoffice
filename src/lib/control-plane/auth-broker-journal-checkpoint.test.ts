@@ -38,46 +38,87 @@ test("genesis idempotency key는 journalId에서만 결정된다", () => {
   const first = authBrokerJournalCheckpointGenesisIdempotencyKey("nonce-journal");
   const second = authBrokerJournalCheckpointGenesisIdempotencyKey("nonce-journal");
   assert.equal(first, second);
-  assert.equal(first, "journal-genesis:nonce-journal");
+  assert.match(first, /^journal-genesis:[0-9a-f]{64}$/);
   assert.notEqual(first, authBrokerJournalCheckpointGenesisIdempotencyKey("other-journal"));
+  assert.ok(authBrokerJournalCheckpointGenesisIdempotencyKey("a".repeat(191)).length <= 191);
 });
 
-test("advance idempotency key는 (journalId, expectedGeneration, nextDigest)에서만 결정된다", () => {
+test("advance idempotency key는 exact expected/current/next binding에서 결정된다", () => {
   const digestA = "a".repeat(64);
   const digestB = "b".repeat(64);
-  const key = (overrides: Partial<{ journalId: string; expectedGeneration: bigint; nextDigest: string }> = {}) =>
+  const key = (overrides: Partial<{
+    journalId: string;
+    expectedGeneration: bigint;
+    expectedDigest: string;
+    nextDigest: string;
+  }> = {}) =>
     authBrokerJournalCheckpointAdvanceIdempotencyKey({
       journalId: "nonce-journal",
       expectedGeneration: 0n,
+      expectedDigest: AUTH_BROKER_JOURNAL_CHECKPOINT_GENESIS_DIGEST,
       nextDigest: digestA,
       ...overrides,
     });
 
   assert.equal(key(), key());
-  assert.equal(key(), "journal-cas:nonce-journal:0:" + digestA);
+  assert.match(key(), /^journal-cas:[0-9a-f]{64}$/);
   assert.notEqual(key(), key({ journalId: "other-journal" }));
   assert.notEqual(key(), key({ expectedGeneration: 1n }));
+  assert.notEqual(key(), key({ expectedDigest: digestB }));
   assert.notEqual(key(), key({ nextDigest: digestB }));
+  assert.ok(key({ journalId: "a".repeat(191) }).length <= 191);
 
   assert.throws(
-    () => authBrokerJournalCheckpointAdvanceIdempotencyKey({ journalId: "x", expectedGeneration: -1n, nextDigest: digestA }),
+    () => authBrokerJournalCheckpointAdvanceIdempotencyKey({
+      journalId: "x",
+      expectedGeneration: -1n,
+      expectedDigest: digestB,
+      nextDigest: digestA,
+    }),
     /AUTH_BROKER_JOURNAL_EXPECTED_GENERATION_INVALID/,
   );
   assert.throws(
-    () => authBrokerJournalCheckpointAdvanceIdempotencyKey({ journalId: "x", expectedGeneration: 0n, nextDigest: "not-hex" }),
+    () => authBrokerJournalCheckpointAdvanceIdempotencyKey({
+      journalId: "x",
+      expectedGeneration: 0n,
+      expectedDigest: "not-hex",
+      nextDigest: digestA,
+    }),
+    /AUTH_BROKER_JOURNAL_EXPECTED_DIGEST_INVALID/,
+  );
+  assert.throws(
+    () => authBrokerJournalCheckpointAdvanceIdempotencyKey({
+      journalId: "x",
+      expectedGeneration: 0n,
+      expectedDigest: digestB,
+      nextDigest: "not-hex",
+    }),
     /AUTH_BROKER_JOURNAL_NEXT_DIGEST_INVALID/,
   );
 });
 
-test("strict generation==sequence 불변식", () => {
-  assert.doesNotThrow(() => assertAuthBrokerJournalCheckpointInvariant({ generation: 0n, sequence: 0n }));
-  assert.doesNotThrow(() => assertAuthBrokerJournalCheckpointInvariant({ generation: 42n, sequence: 42n }));
+test("checkpoint row의 identity, counter와 digest 불변식", () => {
+  const valid = { journalId: "nonce-journal", checkpointDigest: "a".repeat(64) };
+  assert.doesNotThrow(() => assertAuthBrokerJournalCheckpointInvariant({ ...valid, generation: 0n, sequence: 0n }));
+  assert.doesNotThrow(() => assertAuthBrokerJournalCheckpointInvariant({ ...valid, generation: 42n, sequence: 42n }));
   assert.throws(
-    () => assertAuthBrokerJournalCheckpointInvariant({ generation: 5n, sequence: 4n }),
+    () => assertAuthBrokerJournalCheckpointInvariant({ ...valid, generation: 5n, sequence: 4n }),
     /AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION/,
   );
   assert.throws(
-    () => assertAuthBrokerJournalCheckpointInvariant({ generation: 4n, sequence: 5n }),
+    () => assertAuthBrokerJournalCheckpointInvariant({ ...valid, generation: 4n, sequence: 5n }),
+    /AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION/,
+  );
+  assert.throws(
+    () => assertAuthBrokerJournalCheckpointInvariant({ ...valid, generation: -1n, sequence: -1n }),
+    /AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION/,
+  );
+  assert.throws(
+    () => assertAuthBrokerJournalCheckpointInvariant({ ...valid, checkpointDigest: "bad", generation: 0n, sequence: 0n }),
+    /AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION/,
+  );
+  assert.throws(
+    () => assertAuthBrokerJournalCheckpointInvariant({ ...valid, journalId: "Bad", generation: 0n, sequence: 0n }),
     /AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION/,
   );
 });

@@ -24,26 +24,33 @@ export function assertAuthBrokerJournalId(journalId: string): void {
   }
 }
 
-/** journalId별 genesis row 생성은 멱등이다. 같은 journalId는 항상 같은 idempotency key다. */
+/** journalId별 genesis row 생성은 멱등이다. 같은 journalId는 항상 같은 고정 길이 key다. */
 export function authBrokerJournalCheckpointGenesisIdempotencyKey(journalId: string): string {
   assertAuthBrokerJournalId(journalId);
-  return `journal-genesis:${journalId}`;
+  return `journal-genesis:${jsonDigest({ schemaVersion: 1, journalId })}`;
 }
 
 /**
- * CAS advance의 idempotency key는 (journalId, expectedGeneration, nextDigest) 세 값에서만
- * 결정된다. 호출자가 key를 직접 고르지 않는다 — 서버가 요청 필드에서 유도해, 같은 논리
- * 연산의 재시도는 항상 같은 key로 수렴하고 다른 연산은 항상 다른 key가 된다.
+ * CAS advance의 idempotency key는 exact expected/current/next binding 전체에서 결정된다.
+ * 고정 길이 digest를 써 journalId 최대 길이에서도 DB VARCHAR(191)를 넘지 않는다.
  */
 export function authBrokerJournalCheckpointAdvanceIdempotencyKey(input: {
   journalId: string;
   expectedGeneration: bigint;
+  expectedDigest: string;
   nextDigest: string;
 }): string {
   assertAuthBrokerJournalId(input.journalId);
   if (input.expectedGeneration < 0n) throw new Error("AUTH_BROKER_JOURNAL_EXPECTED_GENERATION_INVALID");
+  if (!/^[0-9a-f]{64}$/.test(input.expectedDigest)) throw new Error("AUTH_BROKER_JOURNAL_EXPECTED_DIGEST_INVALID");
   if (!/^[0-9a-f]{64}$/.test(input.nextDigest)) throw new Error("AUTH_BROKER_JOURNAL_NEXT_DIGEST_INVALID");
-  return `journal-cas:${input.journalId}:${input.expectedGeneration.toString()}:${input.nextDigest}`;
+  return `journal-cas:${jsonDigest({
+    schemaVersion: 1,
+    journalId: input.journalId,
+    expectedGeneration: input.expectedGeneration.toString(),
+    expectedDigest: input.expectedDigest,
+    nextDigest: input.nextDigest,
+  })}`;
 }
 
 /**
@@ -51,10 +58,18 @@ export function authBrokerJournalCheckpointAdvanceIdempotencyKey(input: {
  * 계약 밖에서 바뀐 것이므로 CAS를 시도하지 않고 즉시 예외를 던진다.
  */
 export function assertAuthBrokerJournalCheckpointInvariant(input: {
+  journalId: string;
   generation: bigint;
   sequence: bigint;
+  checkpointDigest: string;
 }): void {
-  if (input.generation !== input.sequence) {
+  if (
+    !AUTH_BROKER_JOURNAL_ID_PATTERN.test(input.journalId)
+    || input.generation < 0n
+    || input.sequence < 0n
+    || input.generation !== input.sequence
+    || !/^[0-9a-f]{64}$/.test(input.checkpointDigest)
+  ) {
     throw new Error("AUTH_BROKER_JOURNAL_CHECKPOINT_INVARIANT_VIOLATION");
   }
 }

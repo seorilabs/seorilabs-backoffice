@@ -108,7 +108,8 @@ export async function readAuthBrokerJournalCheckpoint(input: {
 /**
  * strict generation==sequence CAS. `expectedGeneration`/`expectedDigest`(expected)가
  * 현재 row(current)와 정확히 같을 때만 `expectedGeneration+1`(next)로 정확히 한 단계
- * 전진한다. idempotency key는 (journalId, expectedGeneration, nextDigest)에서만 결정되므로
+ * 전진한다. idempotency key는 (journalId, expectedGeneration, expectedDigest, nextDigest)에서
+ * 결정되므로
  * 같은 논리 연산의 재시도는 새 row를 만들지 않고 처음 결과를 그대로 반환한다(`REPLAYED`).
  */
 export async function advanceAuthBrokerJournalCheckpoint(input: {
@@ -125,10 +126,11 @@ export async function advanceAuthBrokerJournalCheckpoint(input: {
   const idempotencyKey = authBrokerJournalCheckpointAdvanceIdempotencyKey({
     journalId: input.journalId,
     expectedGeneration: input.expectedGeneration,
+    expectedDigest: input.expectedDigest,
     nextDigest: input.nextDigest,
   });
 
-  const replay = await replayAdvance(idempotencyKey, input.journalId);
+  const replay = await replayAdvance({ ...input, idempotencyKey });
   if (replay) return replay;
 
   const nextGeneration = input.expectedGeneration + 1n;
@@ -193,22 +195,36 @@ export async function advanceAuthBrokerJournalCheckpoint(input: {
     assertInvariantOrFailClosed(advanced);
     return { outcome: "ADVANCED", checkpoint: serializeAuthBrokerJournalCheckpoint(advanced) };
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      // 동시 요청이 같은 idempotency key로 먼저 커밋했다. replay 경로로 그 결과를 읽는다.
-      const replayed = await replayAdvance(idempotencyKey, input.journalId);
-      if (replayed) return replayed;
-    }
+    // 같은 logical request가 동시에 먼저 커밋했으면 updateMany CAS 실패나 transaction
+    // conflict 형태가 달라도 exact event readback으로 처음 결과에 수렴한다.
+    const replayed = await replayAdvance({ ...input, idempotencyKey });
+    if (replayed) return replayed;
     throw error;
   }
 }
 
-async function replayAdvance(
-  idempotencyKey: string,
-  journalId: string,
-): Promise<{ outcome: "REPLAYED"; checkpoint: SerializedCheckpoint } | null> {
-  const event = await prisma.authBrokerJournalCheckpointEvent.findUnique({ where: { requestId: idempotencyKey } });
+async function replayAdvance(input: {
+  idempotencyKey: string;
+  journalId: string;
+  expectedGeneration: bigint;
+  expectedDigest: string;
+  nextDigest: string;
+}): Promise<{ outcome: "REPLAYED"; checkpoint: SerializedCheckpoint } | null> {
+  const event = await prisma.authBrokerJournalCheckpointEvent.findUnique({
+    where: { requestId: input.idempotencyKey },
+  });
   if (!event) return null;
-  if (event.type !== "ADVANCED" || event.journalId !== journalId) {
+  const nextGeneration = input.expectedGeneration + 1n;
+  if (
+    event.type !== "ADVANCED"
+    || event.journalId !== input.journalId
+    || event.fromGeneration !== input.expectedGeneration
+    || event.toGeneration !== nextGeneration
+    || event.fromSequence !== input.expectedGeneration
+    || event.toSequence !== nextGeneration
+    || event.fromDigest !== input.expectedDigest
+    || event.toDigest !== input.nextDigest
+  ) {
     throw new ControlPlaneError(
       "idempotency key가 다른 journal checkpoint 연산에 사용되었습니다.",
       409,
@@ -224,5 +240,16 @@ async function replayAdvance(
     );
   }
   assertInvariantOrFailClosed(checkpoint);
+  if (
+    checkpoint.generation !== nextGeneration
+    || checkpoint.sequence !== nextGeneration
+    || checkpoint.checkpointDigest !== input.nextDigest
+  ) {
+    throw new ControlPlaneError(
+      "replay 대상 checkpoint가 이미 다른 상태로 전진했습니다.",
+      409,
+      "AUTH_BROKER_JOURNAL_CHECKPOINT_REPLAY_STATE_MISMATCH",
+    );
+  }
   return { outcome: "REPLAYED", checkpoint: serializeAuthBrokerJournalCheckpoint(checkpoint) };
 }

@@ -40,13 +40,7 @@ export interface ObservedTrigger {
 const PROVIDER_EXECUTION_AUDIT_MESSAGE = "provider execution audit is append-only";
 const AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE = "auth broker journal checkpoint audit is append-only";
 
-/**
- * live DB에 반드시 존재해야 하는 append-only trigger 중, 고정 in-cluster
- * `k8s/provider-audit-trigger-verifier.yaml`이 배포 gate로 관측하는 계약이다.
- * migration SQL과 동일해야 하며, 이 목록을 바꾸면 verifier manifest도 함께 갱신해야 한다
- * (`appendOnlyContractDigest()`가 그 manifest에 박힌 digest와 대조된다).
- */
-export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+const PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
     name: "control_plane_provider_execution_event_no_delete",
     table: "control_plane_provider_execution_event",
@@ -61,14 +55,7 @@ export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequiremen
   },
 ];
 
-/**
- * P2 Auth Broker journal checkpoint 감사 원장의 append-only trigger 계약이다. migration SQL과
- * 동일해야 한다. `k8s/provider-audit-trigger-verifier.yaml`은 아직 이 table을 관측하지
- * 않는다 — 그 manifest는 trusted operator가 직접 apply하는 별도 운영 gate이며, 이 계약을
- * 편입하려면 그 SQL query·digest·total/exact 계약을 별도로 재검토해야 한다. 지금은
- * migration-safety static gate와 MySQL 9.2 integration test가 이 trigger의 존재와
- * append-only 동작을 검증한다.
- */
+/** P2 Auth Broker journal checkpoint 감사 원장의 독립 append-only trigger 계약이다. */
 export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
     name: "control_plane_auth_broker_journal_checkpoint_event_no_delete",
@@ -83,6 +70,15 @@ export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly Appen
     message: AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE,
   },
 ];
+
+/**
+ * live DB에 반드시 존재하고 고정 in-cluster verifier가 관측하는 전체 계약이다.
+ * migration SQL, restore rehearsal, verifier manifest와 digest가 모두 같아야 한다.
+ */
+export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+  ...PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS,
+  ...AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
+].sort((left, right) => left.name.localeCompare(right.name));
 
 const CREATE_TRIGGER_PATTERN =
   /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;

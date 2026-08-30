@@ -142,9 +142,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 두 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 네 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 4인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -162,7 +162,7 @@ timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 �
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
 `scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
-한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+한다. `status=PASS`, `total=4`, `exact=4`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
 이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
 max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
 같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.

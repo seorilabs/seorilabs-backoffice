@@ -252,8 +252,8 @@ mTLS 서버(worker가 쓰는 `/v1/claims`·`/v1/broker-requests`·`/v1/settlemen
   expectedDigest, nextDigest}`. strict `generation==sequence` CAS다. 현재 row의
   generation·checkpointDigest가 요청의 expected와 정확히 같을 때만 정확히 한 단계
   (`expectedGeneration+1`)만 전진한다. idempotency key는 클라이언트가 고르지 않고
-  `(journalId, expectedGeneration, nextDigest)`에서 서버가 결정론적으로 유도해, 같은 논리
-  연산의 재시도는 항상 같은 key로 수렴하고 새 row를 만들지 않는다(REPLAYED).
+  journalId, expected generation·digest, next digest 전체에서 고정 길이 digest로 유도해,
+  같은 논리 연산의 재시도는 항상 같은 key로 수렴하고 새 row를 만들지 않는다(REPLAYED).
 - `POST /v1/auth-broker/journal-checkpoints/read` — `{journalId}`. "unknown outcome
   readback" 전용 진입점이다. broker가 advance 응답을 잃었을 때 자신이 재구성한
   idempotency key가 반영됐는지 현재 generation/digest만 보고 스스로 판정한다. Backoffice는
@@ -267,11 +267,10 @@ generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/toke
 계약 자체에 없다. 감사는 `control_plane_auth_broker_journal_checkpoint_event`
 append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
 원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
-살아있는 `k8s/provider-audit-trigger-verifier.yaml` 배포 gate는 아직 이 table을 관측하지
-않는다 — 그 manifest는 trusted operator가 직접 apply하는 별도 운영 경계라 이번 변경에서
-편입하지 않았다. migration-safety static gate와 MySQL 9.2 integration test
-(`scripts/test-auth-broker-journal-checkpoint.ts`)가 이 trigger의 존재와 append-only 동작을
-검증한다.
+살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 두 table의 네 trigger를 하나의 signed
+digest 계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
+(`scripts/test-auth-broker-journal-checkpoint.ts`), migration 이후 in-cluster readback을 모두
+통과해야 rollout이 진행된다.
 
 k8s에는 `k8s/provider-execution-worker.yaml`의 signer Deployment에
 `AUTH_BROKER_CLIENT_SPIFFE_ID` 값과, `auth-broker` 네임스페이스의 `seori-auth-broker` pod에서

@@ -34,6 +34,7 @@ const JOURNAL_ID = "integration-nonce-journal";
 const OTHER_JOURNAL_ID = "integration-second-journal";
 const DIGEST_1 = "1".repeat(64);
 const DIGEST_2 = "2".repeat(64);
+const DIGEST_3 = "3".repeat(64);
 
 async function expectControlPlaneError(code: string, run: () => Promise<unknown>) {
   try {
@@ -99,6 +100,16 @@ async function main() {
   const eventCountAfterReplay = await prisma.authBrokerJournalCheckpointEvent.count({ where: { journalId: JOURNAL_ID } });
   assert.equal(eventCountAfterReplay, 2, "genesis 1건 + advance 1건만 있어야 한다(재생은 추가하지 않음)");
 
+  // 같은 generation/nextDigest라도 expectedDigest가 다르면 이전 성공을 replay할 수 없다.
+  await expectControlPlaneError("AUTH_BROKER_JOURNAL_CHECKPOINT_CAS_MISMATCH", () =>
+    advanceAuthBrokerJournalCheckpoint({
+      journalId: JOURNAL_ID,
+      expectedGeneration: 0n,
+      expectedDigest: "f".repeat(64),
+      nextDigest: DIGEST_1,
+      actor: ACTOR,
+    }));
+
   // 5. stale expected(generation 0으로 재시도, 이미 1로 전진한 뒤)는 CAS_MISMATCH다.
   //    idempotency key가 이전과 달라야 replay 경로를 타지 않고 실제 CAS 비교를 거친다.
   await expectControlPlaneError("AUTH_BROKER_JOURNAL_CHECKPOINT_CAS_MISMATCH", () =>
@@ -143,6 +154,32 @@ async function main() {
   // 9. 서로 다른 journalId는 독립된 counter다.
   const secondJournal = await genesisAuthBrokerJournalCheckpoint({ journalId: OTHER_JOURNAL_ID, actor: ACTOR });
   assert.equal(secondJournal.checkpoint.generation, "0");
+  const concurrent = await Promise.all([
+    advanceAuthBrokerJournalCheckpoint({
+      journalId: OTHER_JOURNAL_ID,
+      expectedGeneration: 0n,
+      expectedDigest: AUTH_BROKER_JOURNAL_CHECKPOINT_GENESIS_DIGEST,
+      nextDigest: DIGEST_3,
+      actor: ACTOR,
+    }),
+    advanceAuthBrokerJournalCheckpoint({
+      journalId: OTHER_JOURNAL_ID,
+      expectedGeneration: 0n,
+      expectedDigest: AUTH_BROKER_JOURNAL_CHECKPOINT_GENESIS_DIGEST,
+      nextDigest: DIGEST_3,
+      actor: ACTOR,
+    }),
+  ]);
+  assert.deepEqual(
+    concurrent.map((result) => result.outcome).sort(),
+    ["ADVANCED", "REPLAYED"],
+    "동시 duplicate도 한 번만 advance하고 같은 결과에 수렴해야 한다",
+  );
+  assert.equal(
+    await prisma.authBrokerJournalCheckpointEvent.count({ where: { journalId: OTHER_JOURNAL_ID } }),
+    2,
+    "두 동시 요청 뒤에도 genesis와 advance event가 각각 한 건이어야 한다",
+  );
   const stillTwo = await readAuthBrokerJournalCheckpoint({ journalId: JOURNAL_ID });
   assert.equal(stillTwo.checkpoint?.generation, "2", "다른 journalId genesis가 기존 journal에 영향을 주면 안 된다");
 
