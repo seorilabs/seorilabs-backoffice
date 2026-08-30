@@ -41,6 +41,7 @@ spec:
           args:
             - |
               set -euo pipefail
+              export LC_ALL=C
               ulimit -c 0
               umask 077
               root_cnf=/tmp/root.cnf
@@ -54,10 +55,18 @@ spec:
                 "$(< /run/secrets/root/password)" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$root_cnf"
               shadow_user="$(< /run/secrets/shadow/username)"
               writer_user="$(< /run/secrets/writer/username)"
+              shadow_password="$(< /run/secrets/shadow/password)"
+              writer_password="$(< /run/secrets/writer/password)"
               test "$shadow_user" = "fleet_migration_shadow"
               test "$writer_user" = "fleet_migration_proof_writer"
-              shadow_hex="$(od -An -v -tx1 /run/secrets/shadow/password | tr -d ' \n')"
-              writer_hex="$(od -An -v -tx1 /run/secrets/writer/password | tr -d ' \n')"
+              # command substitution strips trailing newlines. Secret bytes and the value later
+              # supplied to mysql must therefore be identical before any CREATE USER is allowed.
+              shadow_bytes="$(wc -c < /run/secrets/shadow/password | tr -d ' ')"
+              writer_bytes="$(wc -c < /run/secrets/writer/password | tr -d ' ')"
+              test "$shadow_bytes" = "${#shadow_password}"
+              test "$writer_bytes" = "${#writer_password}"
+              shadow_hex="$(printf '%s' "$shadow_password" | od -An -v -tx1 | tr -d ' \n')"
+              writer_hex="$(printf '%s' "$writer_password" | od -An -v -tx1 | tr -d ' \n')"
               case "$shadow_hex:$writer_hex" in *[!0-9a-f:]*) echo "credential encoding invalid" >&2; exit 1;; esac
               test "${#shadow_hex}" -ge 48
               test "${#writer_hex}" -ge 48
@@ -183,9 +192,9 @@ spec:
               exact_grants fleet_migration_proof_writer 13 1
 
               printf '[client]\nuser=%s\npassword=%s\nhost=%s\nport=%s\ndatabase=backoffice\n' \
-                "$shadow_user" "$(< /run/secrets/shadow/password)" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$shadow_cnf"
+                "$shadow_user" "$shadow_password" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$shadow_cnf"
               printf '[client]\nuser=%s\npassword=%s\nhost=%s\nport=%s\ndatabase=backoffice\n' \
-                "$writer_user" "$(< /run/secrets/writer/password)" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$writer_cnf"
+                "$writer_user" "$writer_password" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$writer_cnf"
               test "$(mysql --defaults-extra-file="$shadow_cnf" --batch --skip-column-names -e 'SELECT COUNT(*) FROM control_plane_fleet_migration_collection_occurrence')" -ge 0
               test "$(mysql --defaults-extra-file="$writer_cnf" --batch --skip-column-names -e 'SELECT COUNT(*) FROM control_plane_fleet_migration_proof_snapshot')" -ge 0
               echo "fleet migration principals and append-only triggers verified"

@@ -168,6 +168,11 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
   assert.doesNotMatch(provisioning, /GRANT (?:UPDATE|DELETE|ALL|CREATE|DROP|ALTER)\b/u);
   assert.match(provisioning, /information_schema\.APPLICABLE_ROLES/u);
   assert.match(provisioning, /information_schema\.TABLE_PRIVILEGES/u);
+  assert.match(provisioning, /shadow_bytes="\$\(wc -c < \/run\/secrets\/shadow\/password/u);
+  assert.match(provisioning, /test "\$shadow_bytes" = "\$\{#shadow_password\}"/u);
+  assert.match(provisioning, /writer_bytes="\$\(wc -c < \/run\/secrets\/writer\/password/u);
+  assert.match(provisioning, /test "\$writer_bytes" = "\$\{#writer_password\}"/u);
+  assert.doesNotMatch(provisioning, /od -An -v -tx1 \/run\/secrets\/(?:shadow|writer)\/password/u);
   assert.match(provisioning, /ttlSecondsAfterFinished: 600/u);
   assert.match(provisioning, /trap 'rm -f "\$root_cnf" "\$shadow_cnf" "\$writer_cnf" "\$create_sql" "\$trigger_sql"'/u);
 
