@@ -124,6 +124,42 @@ function publicErrorCode(error: unknown, fallback: string): string {
   return /^[A-Z][A-Z0-9_]{7,190}$/u.test(message) ? message : fallback;
 }
 
+function receiptMatchesTask(
+  receipt: FleetStandardLabelApplyReceipt,
+  task: FleetStandardLabelTask,
+): boolean {
+  const keys = Object.keys(receipt).sort();
+  const expectedKeys = [
+    "action",
+    "afterReadbackDigest",
+    "beforeReadbackDigest",
+    "catalogDigest",
+    "catalogVersion",
+    "customLabelsDigest",
+    "method",
+    "mutations",
+    "repositoryFullName",
+    "repositoryId",
+    "state",
+  ].sort();
+  const digest = /^sha256:[0-9a-f]{64}$/u;
+  return canonicalJson(keys as unknown as JsonValue) === canonicalJson(expectedKeys as unknown as JsonValue)
+    && receipt.action === FLEET_STANDARD_LABEL_ACTION
+    && receipt.repositoryId === task.repositoryId
+    && receipt.repositoryFullName === task.repositoryFullName
+    && receipt.catalogVersion === task.contract.catalogVersion
+    && receipt.catalogDigest === task.contract.catalogDigest
+    && receipt.method === "UPSERT_FIXED_LABELS_PRESERVE_CUSTOM"
+    && Number.isSafeInteger(receipt.mutations)
+    && receipt.mutations >= 0
+    && receipt.mutations <= task.operation.payload.labels.length
+    && ((receipt.state === "UNCHANGED" && receipt.mutations === 0)
+      || (receipt.state === "UPDATED" && receipt.mutations > 0))
+    && digest.test(receipt.beforeReadbackDigest)
+    && digest.test(receipt.afterReadbackDigest)
+    && digest.test(receipt.customLabelsDigest);
+}
+
 function contractPublicIdentity(contract: FleetStandardLabelContract) {
   return {
     repositoryId: contract.repositoryId,
@@ -491,9 +527,19 @@ export async function planFleetStandardLabels(input: {
 
 function taskMatchesContract(task: FleetStandardLabelTask, contract: FleetStandardLabelContract): boolean {
   const expected = contractPublicIdentity(contract);
+  const expectedOperation = fleetStandardLabelOperation({
+    contract,
+    repositoryId: task.repositoryId,
+    repositoryFullName: task.repositoryFullName,
+  });
+  const { desiredDigest, ...taskWithoutDigest } = task;
   return canonicalJson(task.contract as unknown as JsonValue) === canonicalJson(expected as unknown as JsonValue)
-    && task.operation.payload.catalogDigest === contract.catalogDigest
-    && task.operation.payload.catalogVersion === contract.catalog.catalogVersion;
+    && canonicalJson(task.operation as unknown as JsonValue) === canonicalJson(expectedOperation as unknown as JsonValue)
+    && task.plannedObservation.kind === FLEET_STANDARD_LABEL_ACTION
+    && task.plannedObservation.repositoryId === task.repositoryId
+    && task.plannedObservation.catalogDigest === contract.catalogDigest
+    && task.plannedObservation.catalogVersion === contract.catalog.catalogVersion
+    && desiredDigest === fleetStandardLabelDesiredDigest(taskWithoutDigest);
 }
 
 async function registrationStillMatches(
@@ -664,6 +710,13 @@ async function completeRun(input: {
   receipt: FleetStandardLabelApplyReceipt;
   now: Date;
 }): Promise<void> {
+  if (!receiptMatchesTask(input.receipt, input.task)) {
+    throw new ControlPlaneError(
+      "label adapter receipt가 exact task binding과 다릅니다.",
+      409,
+      "FLEET_STANDARD_LABEL_RECEIPT_INVALID",
+    );
+  }
   await input.dependencies.client.$transaction(async (tx) => {
     const registration = await tx.repositoryRegistration.findUnique({
       where: { repoId: BigInt(input.task.repositoryId) },
@@ -688,7 +741,12 @@ async function completeRun(input: {
       );
     }
     const updated = await tx.agentRun.updateMany({
-      where: { id: input.runId, status: "RUNNING", leaseGeneration: input.generation },
+      where: {
+        id: input.runId,
+        status: "RUNNING",
+        leaseGeneration: input.generation,
+        eligibleAt: { gt: input.now },
+      },
       data: {
         status: "SUCCEEDED",
         completedAt: input.now,
@@ -742,6 +800,7 @@ async function failRun(input: {
   generation: number;
   task: FleetStandardLabelTask;
   mutationStarted: boolean;
+  readbackFirst: boolean;
   error: string;
   now: Date;
 }): Promise<"READBACK_FIRST" | "RETRYABLE" | "DEAD_LETTER"> {
@@ -750,19 +809,20 @@ async function failRun(input: {
     if (!current || current.status !== "RUNNING" || current.leaseGeneration !== input.generation) {
       return "READBACK_FIRST" as const;
     }
-    const deadLetter = !input.mutationStarted && current.attempts >= current.maxAttempts;
-    const status = input.mutationStarted ? "FAILED" : deadLetter ? "DEAD_LETTER" : "PENDING";
+    const resultUnknown = input.mutationStarted || input.readbackFirst;
+    const deadLetter = !resultUnknown && current.attempts >= current.maxAttempts;
+    const status = resultUnknown ? "FAILED" : deadLetter ? "DEAD_LETTER" : "PENDING";
     await tx.agentRun.update({
       where: { id: input.runId },
       data: {
         status,
         eligibleAt: input.now,
         completedAt: deadLetter ? input.now : null,
-        readbackRequestedAt: input.mutationStarted ? input.now : null,
+        readbackRequestedAt: resultUnknown ? (current.readbackRequestedAt ?? input.now) : null,
         error: input.error,
       },
     });
-    if (!input.mutationStarted) {
+    if (!resultUnknown) {
       await tx.agentRepoGuard.updateMany({
         where: { runId: input.runId, activeScopeKey: { not: null } },
         data: { activeScopeKey: null, releasedAt: input.now },
@@ -772,7 +832,7 @@ async function failRun(input: {
       data: {
         requestId: `fleet-label-failed:${input.runId}:g${input.generation}`,
         runId: input.runId,
-        type: input.mutationStarted ? "readback_required" : deadLetter ? "dead_letter" : "retry_scheduled",
+        type: resultUnknown ? "readback_required" : deadLetter ? "dead_letter" : "retry_scheduled",
         generation: input.generation,
         actor: "backoffice:fleet-standard-label-adapter",
         payload: {
@@ -780,10 +840,11 @@ async function failRun(input: {
           repositoryId: input.task.repositoryId,
           error: input.error,
           mutationStarted: input.mutationStarted,
+          readbackFirst: input.readbackFirst,
         },
       },
     });
-    return input.mutationStarted ? "READBACK_FIRST" : deadLetter ? "DEAD_LETTER" : "RETRYABLE";
+    return resultUnknown ? "READBACK_FIRST" : deadLetter ? "DEAD_LETTER" : "RETRYABLE";
   });
 }
 
@@ -791,6 +852,7 @@ async function staleRun(input: {
   dependencies: FleetStandardLabelServiceDependencies;
   runId: string;
   task: FleetStandardLabelTask;
+  reason: "FLEET_STANDARD_LABEL_REGISTRATION_STALE" | "FLEET_STANDARD_LABEL_TASK_UNTRUSTED";
   now: Date;
 }): Promise<void> {
   await input.dependencies.client.$transaction(async (tx) => {
@@ -799,7 +861,16 @@ async function staleRun(input: {
       data: {
         status: "CANCELLED",
         completedAt: input.now,
-        error: "FLEET_STANDARD_LABEL_REGISTRATION_STALE",
+        cancelledAt: input.now,
+        error: input.reason,
+        readbackRequestedAt: null,
+        outcome: {
+          code: input.reason,
+          action: FLEET_STANDARD_LABEL_ACTION,
+          repositoryId: input.task.repositoryId,
+          expectedRegistrationGeneration: input.task.registrationGeneration,
+          reason: input.reason,
+        },
       },
     });
     await tx.agentRepoGuard.updateMany({
@@ -816,6 +887,7 @@ async function staleRun(input: {
           action: FLEET_STANDARD_LABEL_ACTION,
           repositoryId: input.task.repositoryId,
           expectedRegistrationGeneration: input.task.registrationGeneration,
+          reason: input.reason,
         },
       }],
       skipDuplicates: true,
@@ -830,11 +902,7 @@ function replayReceipt(task: FleetStandardLabelTask, run: { outcome: Prisma.Json
   const receipt = outcome?.receipt;
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return null;
   const candidate = receipt as unknown as FleetStandardLabelApplyReceipt;
-  return candidate.action === FLEET_STANDARD_LABEL_ACTION
-    && candidate.repositoryId === task.repositoryId
-    && candidate.catalogDigest === task.contract.catalogDigest
-    ? candidate
-    : null;
+  return receiptMatchesTask(candidate, task) ? candidate : null;
 }
 
 async function reconcileOccurrenceState(input: {
@@ -927,8 +995,13 @@ export async function applyFleetStandardLabels(input: {
   let mutationAttempted = false;
   for (const run of occurrence.runs) {
     const task = fleetStandardLabelTaskSchema.parse(run.taskInput);
-    if (!taskMatchesContract(task, contract) || !(await registrationStillMatches(dependencies, task))) {
-      await staleRun({ dependencies, runId: run.id, task, now: dependencies.now() });
+    const trustedTask = taskMatchesContract(task, contract);
+    const currentRegistration = trustedTask && await registrationStillMatches(dependencies, task);
+    if (!trustedTask || !currentRegistration) {
+      const reason = trustedTask
+        ? "FLEET_STANDARD_LABEL_REGISTRATION_STALE" as const
+        : "FLEET_STANDARD_LABEL_TASK_UNTRUSTED" as const;
+      await staleRun({ dependencies, runId: run.id, task, reason, now: dependencies.now() });
       items.push({
         runId: run.id,
         repositoryId: task.repositoryId,
@@ -936,7 +1009,7 @@ export async function applyFleetStandardLabels(input: {
         generation: run.leaseGeneration,
         outcome: "STALE",
         mutations: 0,
-        error: "FLEET_STANDARD_LABEL_PLAN_STALE",
+        error: reason,
         receipt: null,
       });
       continue;
@@ -1035,6 +1108,7 @@ export async function applyFleetStandardLabels(input: {
         generation: claim.generation,
         task,
         mutationStarted,
+        readbackFirst: claim.readbackFirst,
         error: code,
         now: dependencies.now(),
       });

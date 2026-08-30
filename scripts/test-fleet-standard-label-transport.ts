@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 import type {
   FleetStandardLabelApplyReceipt,
@@ -69,6 +69,7 @@ class FixtureTransport implements FleetStandardLabelGithubTransport {
   reads = 0;
   ensureCalls = 0;
   failAfterFirstMutation = new Set<string>();
+  failReads = new Set<string>();
 
   async readContract() {
     return contract;
@@ -87,6 +88,9 @@ class FixtureTransport implements FleetStandardLabelGithubTransport {
     operation: FleetStandardLabelOperation;
   }) {
     this.reads += 1;
+    if (this.failReads.delete(input.repositoryId)) {
+      throw new Error("FLEET_STANDARD_LABEL_READBACK_FAILED");
+    }
     const normalized = this.observation(input.repositoryId, input.operation);
     return {
       identity: {
@@ -295,6 +299,22 @@ async function main(): Promise<void> {
   });
   assert.equal(unknownRun.status, "FAILED");
   assert.ok(unknownRun.readbackRequestedAt);
+  transport.failReads.add(repositoryIds[2].toString());
+  const failedReadback = await applyFleetStandardLabels({
+    actor,
+    idempotencyKey: requestId("apply-readback-failed"),
+    planId: unknownPlan.planId,
+    planDigest: unknownPlan.planDigest,
+  }, dependencies());
+  assert.equal(failedReadback.readbackFirst, 1);
+  const stillUnknown = await prisma.agentRun.findUniqueOrThrow({
+    where: { id: unknownRun.id },
+    include: { repoGuard: true },
+  });
+  assert.equal(stillUnknown.status, "FAILED");
+  assert.ok(stillUnknown.readbackRequestedAt, "readback 실패가 기존 결과 불명 표식을 지우면 안 된다");
+  assert.equal(stillUnknown.repoGuard?.activeScopeKey, `repo-label:${repositoryNames[2].toLowerCase()}`);
+
   const resumed = await applyFleetStandardLabels({
     actor,
     idempotencyKey: requestId("apply-resume"),
@@ -307,6 +327,38 @@ async function main(): Promise<void> {
   assert.equal(events.some((event) => event.type === "readback_required"), true);
   assert.equal(events.some((event) => event.type === "readback_claimed"), true);
   assert.equal(events.some((event) => event.type === "completed"), true);
+
+  transport.labels.set(repositoryIds[2].toString(), []);
+  const tamperedPlan = await planFleetStandardLabels({
+    actor,
+    idempotencyKey: requestId("plan-tampered-task"),
+  }, dependencies());
+  const tamperedRun = await prisma.agentRun.findFirstOrThrow({
+    where: { occurrenceId: tamperedPlan.planId, repoFullName: repositoryNames[2] },
+  });
+  const tamperedTask = tamperedRun.taskInput as Record<string, unknown>;
+  const operation = tamperedTask.operation as { payload: { labels: unknown[] } };
+  operation.payload.labels = [
+    ...operation.payload.labels,
+    { name: "untrusted", color: "000000", description: "중앙 catalog 외 라벨" },
+  ];
+  await prisma.agentRun.update({
+    where: { id: tamperedRun.id },
+    data: { taskInput: tamperedTask as Prisma.InputJsonValue },
+  });
+  const ensureBeforeTamperedTask = transport.ensureCalls;
+  const tamperedApply = await applyFleetStandardLabels({
+    actor,
+    idempotencyKey: requestId("apply-tampered-task"),
+    planId: tamperedPlan.planId,
+    planDigest: tamperedPlan.planDigest,
+  }, dependencies());
+  assert.equal(tamperedApply.stale, 1);
+  assert.equal(
+    tamperedApply.items.find((item) => item.runId === tamperedRun.id)?.error,
+    "FLEET_STANDARD_LABEL_TASK_UNTRUSTED",
+  );
+  assert.equal(transport.ensureCalls, ensureBeforeTamperedTask, "중앙 catalog와 다른 task는 write 전에 거부해야 한다");
 
   const audit = await prisma.auditLog.findMany({ where: { actorLogin: actor } });
   assert.equal(audit.some((row) => row.action === "fleet.standard-labels.plan"), true);

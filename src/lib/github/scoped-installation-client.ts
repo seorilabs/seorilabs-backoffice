@@ -89,7 +89,7 @@ export async function withFleetScopedGithubClient<Client, Result>(input: {
   repositoryId: string;
   repositoryFullName: string;
   execute: (client: Client) => Promise<Result>;
-  now?: Date;
+  now?: () => Date;
 }): Promise<Result> {
   if (!REPOSITORY.test(input.repositoryFullName)) {
     throw new Error("FLEET_GITHUB_REPOSITORY_INVALID");
@@ -110,7 +110,7 @@ export async function withFleetScopedGithubClient<Client, Result>(input: {
       repositoryId,
       repositoryFullName: input.repositoryFullName,
       expectedPermissions: permissions,
-      now: input.now ?? new Date(),
+      now: input.now?.() ?? new Date(),
     });
     const client = input.issuer.createClient(response.token);
     return await input.execute(client);

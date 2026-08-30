@@ -54,7 +54,7 @@ test("표준 label write token은 대상 repository 하나와 exact issues:write
     capability: "github.standard-labels.ensure",
     repositoryId: "123",
     repositoryFullName: "seorilabs/example",
-    now: new Date("2026-08-30T01:00:00.000Z"),
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
     execute: async (client) => {
       fixture.calls.execute += 1;
       assert.equal(client.marker, "fixture");
@@ -84,7 +84,7 @@ test("계약 source와 readback capability는 write permission을 가질 수 없
       capability,
       repositoryId: "123",
       repositoryFullName: "seorilabs/example",
-      now: new Date("2026-08-30T01:00:00.000Z"),
+      now: () => new Date("2026-08-30T01:00:00.000Z"),
       execute: async () => undefined,
     });
     const request = fixture.calls.create[0] as { permissions: Record<string, string> };
@@ -105,7 +105,7 @@ test("repository나 permission scope가 넓으면 callback 전에 거부하고 t
       capability: "github.standard-labels.ensure",
       repositoryId: "123",
       repositoryFullName: "seorilabs/example",
-      now: new Date("2026-08-30T01:00:00.000Z"),
+      now: () => new Date("2026-08-30T01:00:00.000Z"),
       execute: async () => {
         fixture.calls.execute += 1;
       },
@@ -123,7 +123,7 @@ test("client 생성 또는 provider operation 실패에서도 발급 token을 �
     capability: "github.standard-labels.ensure",
     repositoryId: "123",
     repositoryFullName: "seorilabs/example",
-    now: new Date("2026-08-30T01:00:00.000Z"),
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
     execute: async () => undefined,
   }), /fixture client failure/u);
   assert.equal(createFailure.calls.revoke, 1);
@@ -135,7 +135,7 @@ test("client 생성 또는 provider operation 실패에서도 발급 token을 �
     capability: "github.standard-labels.ensure",
     repositoryId: "123",
     repositoryFullName: "seorilabs/example",
-    now: new Date("2026-08-30T01:00:00.000Z"),
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
     execute: async () => {
       throw new Error("fixture operation failure");
     },

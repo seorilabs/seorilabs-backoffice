@@ -189,7 +189,7 @@ export function createFleetStandardLabelGithubAdapter(
           capability: "github.standard-labels.contract.read",
           repositoryId: config.repositoryId,
           repositoryFullName: config.repositoryFullName,
-          now: dependencies.now(),
+          now: dependencies.now,
           execute: async (client) => {
             await readRepositoryIdentity({
               client,
@@ -223,7 +223,7 @@ export function createFleetStandardLabelGithubAdapter(
           capability: "github.standard-labels.read",
           repositoryId: input.repositoryId,
           repositoryFullName: input.repositoryFullName,
-          now: dependencies.now(),
+          now: dependencies.now,
           execute: async (client) => {
             const identity = await readRepositoryIdentity({ client, ...input });
             const labels = await readStableLabels({ client, repositoryFullName: input.repositoryFullName });
@@ -244,7 +244,7 @@ export function createFleetStandardLabelGithubAdapter(
           capability: "github.standard-labels.ensure",
           repositoryId: input.repositoryId,
           repositoryFullName: input.repositoryFullName,
-          now: dependencies.now(),
+          now: dependencies.now,
           execute: async (client) => {
             await readRepositoryIdentity({ client, ...input });
             const beforeLabels = await readStableLabels({
