@@ -7,8 +7,14 @@ import {
   settleAgentRun,
 } from "@/lib/control-plane/agent-queue";
 import { automationPolicy } from "@/lib/control-plane/automation-catalog";
-import { scheduleDueAutomations } from "@/lib/control-plane/automation-service";
+import { durableIssueObservation } from "@/lib/control-plane/automation-inbox";
+import {
+  drainAutomationIngress,
+  recordWebhookDelivery,
+  scheduleDueAutomations,
+} from "@/lib/control-plane/automation-service";
 import { ControlPlaneError } from "@/lib/control-plane/service";
+import type { GhIssueInput } from "@/lib/sync/mirror";
 
 if (process.env.MIGRATION_FIXTURE_ACK !== "LOCAL_SCHEMA_ONLY") {
   throw new Error("MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY가 필요하다");
@@ -39,6 +45,23 @@ const firstWorker = "codex:p6-acceptance-a";
 const secondWorker = "codex:p6-acceptance-b";
 const reclaimedWorker = "codex:p6-acceptance-reclaim";
 let fixtureRepoId: bigint | null = null;
+
+function githubIssue(number: number): GhIssueInput {
+  return {
+    number,
+    node_id: `p6-acceptance-issue-${number}:${nonce}`,
+    title: `P6 queue acceptance ${number}`,
+    state: "open",
+    state_reason: null,
+    body: null,
+    user: { login: "p6-acceptance" },
+    assignees: [],
+    labels: ["autopilot", "P1"],
+    milestone: null,
+    created_at: "2026-08-25T00:00:00.000Z",
+    updated_at: "2026-08-29T01:00:00.000Z",
+  };
+}
 
 async function createIssue(appId: string, number: number) {
   return prisma.issueMirror.create({
@@ -262,6 +285,118 @@ async function main() {
     }),
   }, catchUpCounts, "catch-up 재실행은 occurrence와 run을 중복 생성하지 않아야 한다");
 
+  await prisma.automationDefinition.updateMany({
+    where: { appId: app.id },
+    data: { enabled: false },
+  });
+  const webhookIssueNumber = 4;
+  await createIssue(app.id, webhookIssueNumber);
+  const webhookDefinition = await createDefinition({
+    appId: app.id,
+    suffix: "duplicate-webhook",
+  });
+  const deliveryId = `p6-duplicate-webhook:${nonce}`;
+  const sourceKey = `github:${deliveryId}`;
+  const observedIssue = githubIssue(webhookIssueNumber);
+  const durableIssue = durableIssueObservation(observedIssue);
+  const webhookRecords = await Promise.all([
+    recordWebhookDelivery({
+      deliveryId,
+      event: "issues",
+      action: "opened",
+      repoFullName,
+      issueNumber: webhookIssueNumber,
+      issueNodeId: observedIssue.node_id,
+      occurredAt: new Date(observedIssue.updated_at),
+      issue: durableIssue,
+    }),
+    recordWebhookDelivery({
+      deliveryId,
+      event: "issues",
+      action: "opened",
+      repoFullName,
+      issueNumber: webhookIssueNumber,
+      issueNodeId: observedIssue.node_id,
+      occurredAt: new Date(observedIssue.updated_at),
+      issue: durableIssue,
+    }),
+  ]);
+  assert.deepEqual(
+    webhookRecords.map(({ duplicate }) => duplicate).sort(),
+    [false, true],
+    "동일 GitHub delivery의 경쟁 기록 중 하나만 최초 기록이어야 한다",
+  );
+  const issueReadback = async (requestedRepo: string, requestedNumber: number) => {
+    assert.equal(requestedRepo, repoFullName);
+    assert.equal(requestedNumber, webhookIssueNumber);
+    return structuredClone(observedIssue);
+  };
+  const issueMirrorWrite = async (requestedRepo: string, issue: GhIssueInput) => {
+    assert.equal(requestedRepo, repoFullName);
+    assert.equal(issue.number, webhookIssueNumber);
+    await prisma.issueMirror.update({
+      where: {
+        repoFullName_number: {
+          repoFullName: requestedRepo,
+          number: issue.number,
+        },
+      },
+      data: {
+        nodeId: issue.node_id,
+        title: issue.title,
+        state: issue.state.toUpperCase() === "OPEN" ? "OPEN" : "CLOSED",
+        assignees: [],
+        labels: ["autopilot", "P1"],
+        priority: "P1",
+        isAutopilot: true,
+        ghUpdatedAt: new Date(issue.updated_at),
+      },
+    });
+  };
+  const webhookDrains = await Promise.all([
+    drainAutomationIngress({ sourceKey, limit: 1 }, {
+      repositoryDiscoveryReadback: async () => assert.fail("issue webhook은 repository readback을 호출하면 안 된다"),
+      issueReadback,
+      issueMirrorWrite,
+    }),
+    drainAutomationIngress({ sourceKey, limit: 1 }, {
+      repositoryDiscoveryReadback: async () => assert.fail("issue webhook은 repository readback을 호출하면 안 된다"),
+      issueReadback,
+      issueMirrorWrite,
+    }),
+  ]);
+  const drainedWebhookIngress = await prisma.automationIngressEvent.findUniqueOrThrow({
+    where: { sourceKey },
+  });
+  assert.equal(
+    webhookDrains.reduce((sum, result) => sum + result.processed, 0),
+    1,
+    `경쟁 drain 중 하나만 durable event를 처리해야 한다: ${JSON.stringify({ webhookDrains, status: drainedWebhookIngress.status, error: drainedWebhookIngress.error })}`,
+  );
+  assert.equal(
+    webhookDrains.reduce((sum, result) => sum + result.failed + result.deadLetter, 0),
+    0,
+  );
+  const webhookCounts = {
+    deliveries: await prisma.webhookDelivery.count({ where: { deliveryId } }),
+    ingressEvents: await prisma.automationIngressEvent.count({ where: { sourceKey } }),
+    occurrences: await prisma.automationOccurrence.count({
+      where: { definitionId: webhookDefinition.id, triggerKind: "WEBHOOK" },
+    }),
+    runs: await prisma.agentRun.count({
+      where: {
+        workKey: `issue:${repoFullName.toLowerCase()}#${webhookIssueNumber}`,
+        occurrence: { definitionId: webhookDefinition.id, triggerKind: "WEBHOOK" },
+      },
+    }),
+  };
+  assert.deepEqual(
+    webhookCounts,
+    { deliveries: 1, ingressEvents: 1, occurrences: 1, runs: 1 },
+    "duplicate issue webhook은 delivery부터 AgentRun까지 하나의 workKey로 수렴해야 한다",
+  );
+  assert.equal(drainedWebhookIngress.status, "PROCESSED");
+
   console.log(JSON.stringify({
     contract: "P6_DURABLE_QUEUE_ACCEPTANCE",
     concurrentClaim: { runId: run.id, successCount: successfulClaims.length },
@@ -273,6 +408,11 @@ async function main() {
     },
     scheduleIdempotency: { definitionId: oneSlotDefinition.id, ...oneSlotCounts },
     missedScheduleCatchUp: { definitionId: catchUpDefinition.id, ...catchUpCounts },
+    duplicateWebhookExactlyOnce: {
+      definitionId: webhookDefinition.id,
+      sourceKey,
+      ...webhookCounts,
+    },
   }));
 }
 
