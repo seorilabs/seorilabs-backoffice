@@ -6,6 +6,7 @@ import {
   issueThreadName,
   issueThreadPayload,
   planIssueThread,
+  threadStartFailure,
   type IssueThreadDeps,
 } from "@/lib/notifications/issue-thread";
 
@@ -175,4 +176,19 @@ test("댓글 조회가 실패해도 PR 링크만으로 쓰레드를 남긴다", 
   );
   assert.ok(plan!.text.includes("머지됨 [#7 fix]"));
   assert.ok(!plan!.text.includes("댓글"));
+});
+
+test("쓰레드 생성 권한 부족은 재시도하지 않고 사유를 남긴다", () => {
+  const denied = threadStartFailure({ ok: false, error: "Discord HTTP 403: Missing Permissions", statusCode: 403 });
+  assert.equal(denied.terminal, true);
+  assert.ok(denied.error!.includes("CREATE_PUBLIC_THREADS"));
+});
+
+test("일시적 실패는 재시도 대상으로 남긴다", () => {
+  // 429·5xx·네트워크는 기다리면 풀린다. terminal 로 만들면 알림이 사라진다.
+  for (const statusCode of [429, 500, 502, undefined]) {
+    const result = threadStartFailure({ ok: false, error: "일시 오류", statusCode });
+    assert.equal(result.terminal, undefined, String(statusCode));
+    assert.equal(result.error, "일시 오류");
+  }
 });

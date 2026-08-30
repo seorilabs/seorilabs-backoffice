@@ -167,3 +167,21 @@ export async function planIssueThread(
     threadName,
   };
 }
+
+
+/**
+ * 쓰레드 생성 실패를 전달 결과로 옮긴다.
+ *
+ * 권한 부족(403)은 재시도로 풀리지 않는다. 봇 역할에 CREATE_PUBLIC_THREADS 를 주기
+ * 전까지 이벤트마다 열 번씩 실패하면 원인이 로그에 묻힌다. 즉시 끝내고 사유를 남긴다.
+ */
+export function threadStartFailure<T extends { ok: boolean; error?: string; statusCode?: number }>(
+  result: T,
+): T & { terminal?: boolean } {
+  if (result.statusCode !== 403) return result;
+  return {
+    ...result,
+    terminal: true,
+    error: `${result.error ?? "권한 부족"} — 봇 역할에 CREATE_PUBLIC_THREADS 필요`,
+  };
+}
