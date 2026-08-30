@@ -19,7 +19,7 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/repository-discovery-worker.ts scripts/provider-execution-worker.ts scripts/provider-execution-attestation-signer.ts scripts/seori-auth-agent-runtime.ts scripts/seori-auth-agent-client.ts scripts/workflow-bundle-candidate-executor.ts scripts/verify-migration-state.ts scripts/verify-restore-rehearsal.ts scripts/fleet-parity-wave.ts scripts/fleet-migration-shadow-readiness.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
+    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/repository-discovery-worker.ts scripts/provider-execution-worker.ts scripts/provider-execution-attestation-signer.ts scripts/seori-auth-agent-runtime.ts scripts/seori-auth-agent-client.ts scripts/workflow-bundle-candidate-executor.ts scripts/verify-migration-state.ts scripts/verify-restore-rehearsal.ts scripts/fleet-parity-wave.ts scripts/fleet-migration-shadow-readiness.ts scripts/fleet-migration-bootstrap-shadow.ts scripts/fleet-migration-inventory-issuer.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -27,6 +27,7 @@
     "@google-cloud/bigquery": "^8.3.1",
     "@nats-io/transport-node": "^3.4.0",
     "@prisma/client": "^6.3.0",
+    "@seorilabs/repo-contract": "github:seorilabs/.github#fb1aa36d5ad7e40759f1734f52273611bbeec853&path:packages/repo-contract",
     "fflate": "0.8.3",
     "firebase-admin": "13.10.0",
     "google-auth-library": "^10.9.1",

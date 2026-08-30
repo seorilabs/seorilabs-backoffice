@@ -789,5 +789,32 @@ shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 
 4. inventory public-key metadata readback과 secret-free Ed25519 signing service adapter
 
 issuer가 authoritative inventory를 발급한 뒤에만 `createFleetMigrationPlan`을 실행한다. durable
-state authority와 `trusted-cleanup-executor`는 승인된 cleanup PR 단계에서만 사용하며 두 번의
-read-only shadow에는 claim이나 mutation을 만들지 않는다.
+state authority와 `trusted-cleanup-executor`는 승인된 cleanup PR 단계에서만 사용한다. 두 번의
+read-only shadow는 GitHub 및 App/config/provider 도메인 상태를 변경하지 않고, 실행 자체를 독립적으로
+감사하기 위한 collection occurrence claim/complete만 기록한다.
+
+운영 BOOTSTRAP collector는 web pod에서 실행하지 않는다. 768Mi web container에서 readiness child가
+exit 137을 반환한 live 근거가 있으므로, 동일 image digest와 Backoffice source SHA 및 live detector
+SHA를 고정한 one-shot Job만 사용한다. Job은 RPI5에 memory request 768Mi/limit 2Gi,
+`backoffLimit: 0`으로 생성된다. 최초에는 suspend한 채 immutable image/source/detector/resource binding을
+readback하고 일치할 때만 시작하며, Job controller UID와 Pod UID를 각각 delivery/run identity로 사용한다.
+실패 또는 OOM은 같은 Job을 재시도하지 않고 terminal 상태로 남긴다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<배포 Backoffice 40자리 SHA>' \
+FLEET_MIGRATION_DETECTOR_SOURCE_SHA='<live seorilabs/.github 40자리 HEAD>' \
+  scripts/run-fleet-migration-bootstrap-shadow.sh
+```
+
+두 shadow는 위 명령을 각각 새 Job으로 실행한다. 서로 다른 Job UID는 같은 provider vector라도 별도
+`FleetMigrationCollectionOccurrence`로 감사된다. 실행 중 허용되는 DB write는 이 occurrence의
+claim/complete뿐이며 App, config, provider, GitHub 상태는 읽기만 한다. 출력은 공개 digest와
+occurrence identity만 포함한다. `fleet-migration-shadow-readiness` 결과는 선행조건으로만 쓰고 inventory나
+proof로 복사하지 않는다. replacement/proof는 exact repository/source/tree/blob inventory/detector와
+readiness evidence에 묶인 기존 `FleetMigrationProofSnapshot`이 없으면 fail-closed한다.
+
+authoritative 발급은 두 shadow와 별도 단계다. `fleet-migration-inventory-issuer.cjs`는 canonical catalog의
+공개 Ed25519 metadata 및 고정 public key를 대조하고 mTLS signing service에 payload만 전달한다. private
+signing key의 파일·환경변수·export API는 Backoffice에 존재하지 않는다. 이번 코드 이관은 Job 실행,
+실제 signing, plan 생성 또는 cleanup을 수행하지 않는다.
