@@ -209,10 +209,37 @@ const defaultRepositoryDiscoveryReadback: RepositoryDiscoveryReadback = async (
 
 type AutomationIngressDependencies = {
   repositoryDiscoveryReadback: RepositoryDiscoveryReadback;
+  issueReadback?: (repoFullName: string, issueNumber: number) => Promise<GhIssueInput>;
+  issueMirrorWrite?: (repoFullName: string, issue: GhIssueInput) => Promise<void>;
+};
+
+const defaultIssueReadback = async (
+  repoFullName: string,
+  issueNumber: number,
+): Promise<GhIssueInput> => {
+  const [owner, repo, ...rest] = repoFullName.split("/");
+  if (!owner || !repo || rest.length > 0) throw new Error("invalid inbox repoFullName");
+  const { getInstallationOctokit } = await import("@/lib/github/app");
+  const response = await (await getInstallationOctokit()).rest.issues.get({
+    owner,
+    repo,
+    issue_number: issueNumber,
+  });
+  return response.data as unknown as GhIssueInput;
+};
+
+const defaultIssueMirrorWrite = async (
+  repoFullName: string,
+  issue: GhIssueInput,
+): Promise<void> => {
+  const { upsertIssue } = await import("@/lib/sync/mirror");
+  await upsertIssue(repoFullName, issue);
 };
 
 const defaultAutomationIngressDependencies: AutomationIngressDependencies = {
   repositoryDiscoveryReadback: defaultRepositoryDiscoveryReadback,
+  issueReadback: defaultIssueReadback,
+  issueMirrorWrite: defaultIssueMirrorWrite,
 };
 
 export async function recordWebhookDelivery(input: {
@@ -1161,15 +1188,10 @@ async function processIngressEvent(event: {
     action: event.action,
     repoFullName: event.repoFullName,
   });
-  const [owner, repo, ...rest] = event.repoFullName.split("/");
-  if (!owner || !repo || rest.length > 0) throw new Error("invalid inbox repoFullName");
-  const { getInstallationOctokit } = await import("@/lib/github/app");
-  const response = await (await getInstallationOctokit()).rest.issues.get({
-    owner,
-    repo,
-    issue_number: event.issueNumber,
-  });
-  const observation = durableIssueObservation(response.data as unknown as GhIssueInput);
+  const readIssue = dependencies.issueReadback ?? defaultIssueReadback;
+  const observation = durableIssueObservation(
+    await readIssue(event.repoFullName, event.issueNumber),
+  );
   if (
     durableObservation
     && new Date(observation.updatedAt) < new Date(durableObservation.updatedAt)
@@ -1182,8 +1204,11 @@ async function processIngressEvent(event: {
   ) {
     throw new Error("automation inbox issue identity mismatch");
   }
-  const { upsertIssue } = await import("@/lib/sync/mirror");
-  await upsertIssue(event.repoFullName, durableIssueToMirrorInput(observation));
+  const writeIssueMirror = dependencies.issueMirrorWrite ?? defaultIssueMirrorWrite;
+  await writeIssueMirror(
+    event.repoFullName,
+    durableIssueToMirrorInput(observation),
+  );
   const issue = await prisma.issueMirror.findUnique({
     where: { repoFullName_number: { repoFullName: event.repoFullName, number: event.issueNumber } },
   });

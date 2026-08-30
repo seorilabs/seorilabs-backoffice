@@ -13,6 +13,11 @@
       "sha256": "f4e7711ecd3e0c92105640498d17bbc1606801b957febe5c871260f7e7a7cbeb",
       "maxRolledBackAttempts": 1,
       "reason": "production MySQL 9.2 audit trigger privilege recovery"
+    },
+    "20260830050000_auth_broker_journal_checkpoint": {
+      "sha256": "3f81cb1f28ad4d2056ccda52be84a52772307f78151c32fe2a73aa8e30d8d3c5",
+      "maxRolledBackAttempts": 1,
+      "reason": "production MySQL 9.2 auth broker journal trigger privilege recovery"
     }
   },
   "approvedContractMigrations": {

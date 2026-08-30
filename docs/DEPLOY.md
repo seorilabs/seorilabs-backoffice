@@ -71,13 +71,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
-source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 두 개가 있으면 보존하지만 부분·변형·
-추가 trigger는 복구하지 않고 실패한다.
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 네 개가 있으면 보존하지만 부분·변형·
+추가 trigger는 복구하지 않고 실패한다. 현재 전체 계약은 provider execution 두 개와 Auth Broker
+journal checkpoint 두 개, 총 네 개다.
 `CREATE TRIGGER`는 MySQL prepared statement에서 지원되지 않으므로 Prisma `$executeRawUnsafe`로
-실행하지 않는다. verifier는 trigger가 정확히 0개일 때만 repo-local canonical DDL을
+실행하지 않는다. verifier는 trigger가 정확히 0개일 때만 repo-local canonical DDL 네 개를
 `prisma db execute --stdin`의 전용 child process에 전달한다. 격리 DB URL은 argv나 로그에 넣지 않고
-그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 두 개를
-제거한 뒤 이 text-protocol 경로로 정확히 두 개가 재구성되는지 확인한다.
+그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 네 개를
+제거한 뒤 이 text-protocol 경로로 정확히 네 개가 재구성되는지 확인한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
 주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
@@ -90,6 +91,9 @@ CI는 build가 반환한 immutable registry digest의 migration Job으로 `prism
 반영되므로 migration과 기존 Pod가 서로 다른 artifact를 실행하지 않는다.
 
 신규 migration은 `scripts/check-migration-safety.sh`의 expand-only gate를 통과해야 한다.
+새 migration의 inline `CREATE TRIGGER`는 금지한다. production app principal에는 의도적으로
+`TRIGGER` 권한이 없으므로, privileged DDL은 migration에 섞지 않고 trusted-operator 전용 manifest와
+고정 live verifier로 설치한다. 이미 배포된 migration SQL은 checksum을 보존하며 수정하지 않는다.
 폐기된 컬럼·테이블을 실제로 지우는 contract 단계는 `prisma/migration-history.json`의
 `approvedContractMigrations`에 **이름 + migration.sql bytes checksum + 사유**를 함께 등록해야만
 예외로 통과한다. 파일을 한 글자라도 고치면 checksum이 어긋나 다시 막히고, 등록만 남고 migration이
@@ -118,6 +122,28 @@ volume에서 읽어 두 DDL만 수행한다.
 단일 상태에서만 현재 schema diff를 확인하고 migration 하나를 `--applied`로 종결한다.
 두 Job 중 하나라도 실패하거나 audit event가 이미 있는데 trigger가 없으면 배포를
 중단하고 수동으로 migration history를 삭제하거나 table을 drop하지 않는다.
+
+### Auth Broker journal checkpoint trigger 부분 적용 복구
+
+`20260830050000_auth_broker_journal_checkpoint`가 MySQL error 1419에서 멈췄고 두 checkpoint
+표와 foreign key는 생성됐지만 audit trigger만 없다면 일반 배포를 반복하지 않는다. 먼저 실패한
+migration Job의 완료 시각 이후에 one-off DB backup을 실행하고 `Complete`를 확인한다. backup Job
+자체의 gzip 무결성·SHA-256 검증까지 통과한 이 실행만 복구 전 snapshot 증거로 인정한다. 그 다음
+trusted operator가 같은 source SHA와 immutable image digest로
+`auth-broker-journal-trigger-recovery-job.yaml`을 render해 `data` namespace에서 실행한다.
+Job은 migration name·checksum·`applied_steps_count=0`의 미해결 row가 정확히 하나이고, 두 신규 표의
+engine·collation·21개 column·foreign key, 빈 checkpoint/event 원장, 해당 보호 표의 trigger 0개를
+확인한 뒤 두 canonical DDL만 root 경계에서 설치한다. 부분·변형·추가 trigger, schema drift나 선행
+데이터가 있으면 아무것도 고치지 않고 실패한다.
+
+trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같은 immutable image로
+`platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
+미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
+`status=PASS`, `total=4`, `exact=4` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
+`log_bin_trust_function_creators`도 변경하지 않는다.
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·네 trigger·migration
+lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
 
