@@ -42,6 +42,8 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-fleet-agent-automation.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm test:p6-project-binding
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-classifier.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-desired-state-backfill-source-binding.ts

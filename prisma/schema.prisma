@@ -60,7 +60,8 @@ model App {
   opsManifest      Json?
   opsManifestError String?   @db.Text
 
-  // GitHub Projects v2 연결(읽기용)
+  // Legacy per-app ProjectV2 cache. P6 이후 projector는 이 값을 읽지 않고
+  // 조직 단일 FleetProjectBinding만 참조한다. P7 cleanup 전까지 호환용으로 보존한다.
   projectV2Id String?
 
   owners                   AppOwner[]
@@ -810,7 +811,6 @@ model DiscordTurn {
   @@map("discord_turn")
 }
 
-
 /// LLM 호출 사용량 원장. 모든 provider 호출 직후 fire-and-forget 으로 적재하고,
 /// 서리 재무 순찰이 월누적 비용으로 집계한다. 단가는 저장하지 않는다 —
 /// 비용은 조회 시점에 pricing.ts 단가표로 환산한다(단가 개정 시 소급 반영).
@@ -829,7 +829,6 @@ model AiUsage {
   @@index([provider, model, createdAt])
   @@map("ai_usage")
 }
-
 
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
@@ -2330,25 +2329,64 @@ model AutomationMutationRequest {
   @@map("automation_mutation_request")
 }
 
+enum FleetProjectBindingStatus {
+  PENDING
+  VERIFIED
+  HUMAN_PERMISSION_REQUIRED
+  READBACK_REQUIRED
+  IDENTITY_MISMATCH
+}
+
+// 조직 전체가 공유하는 단 하나의 GitHub ProjectV2 desired-state binding.
+// 앱별 project ID를 복제하지 않고 공개 owner/number/title/node identity와
+// GitHub App organization_projects permission readback만 보존한다.
+model FleetProjectBinding {
+  id                    String                    @id @db.VarChar(64)
+  organizationLogin     String                    @db.VarChar(39)
+  projectNumber         Int
+  expectedTitle         String                    @db.VarChar(191)
+  revision              Int                       @default(1)
+  projectNodeId         String?                   @db.VarChar(191)
+  observedProjectNodeId String?                   @db.VarChar(191)
+  organizationNodeId    String?                   @db.VarChar(191)
+  observedTitle         String?                   @db.VarChar(191)
+  observedUrl           String?                   @db.VarChar(2048)
+  permissionLevel       String?                   @db.VarChar(16)
+  missingRequirements   Json?
+  status                FleetProjectBindingStatus @default(PENDING)
+  lastErrorCode         String?                   @db.VarChar(96)
+  lastError             String?                   @db.Text
+  observedAt            DateTime?                 @db.DateTime(3)
+  verifiedAt            DateTime?                 @db.DateTime(3)
+  createdBy             String                    @db.VarChar(128)
+  updatedBy             String                    @db.VarChar(128)
+  createdAt             DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt             DateTime                  @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("fleet_project_binding")
+}
+
 // GitHub Project는 포트폴리오 projection일 뿐 실행 claim의 입력이 아니다.
 // desired/observed를 따로 보존해 permission 부재나 drift를 UI에서 fail-closed로 보인다.
 model FleetProjectProjection {
-  id            String    @id @default(cuid())
-  appId         String?
-  app           App?      @relation(fields: [appId], references: [id], onDelete: SetNull)
-  projectNodeId String
-  issueNodeId   String
-  repoFullName  String
-  issueNumber   Int
-  desired       Json
-  desiredHash   String    @db.Char(64)
-  observed      Json?
-  status        String    @default("PENDING")
-  attempts      Int       @default(0)
-  lastError     String?   @db.Text
-  appliedAt     DateTime? @db.DateTime(3)
-  createdAt     DateTime  @default(now()) @db.DateTime(3)
-  updatedAt     DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  appId           String?
+  app             App?      @relation(fields: [appId], references: [id], onDelete: SetNull)
+  projectNodeId   String
+  bindingRevision Int?
+  issueNodeId     String
+  repoFullName    String
+  issueNumber     Int
+  desired         Json
+  desiredHash     String    @db.Char(64)
+  observed        Json?
+  status          String    @default("PENDING")
+  attempts        Int       @default(0)
+  lastError       String?   @db.Text
+  appliedAt       DateTime? @db.DateTime(3)
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
+  updatedAt       DateTime  @updatedAt
 
   @@unique([projectNodeId, issueNodeId])
   @@index([appId, status])

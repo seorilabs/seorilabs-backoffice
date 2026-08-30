@@ -31,6 +31,7 @@ function grantedState(): GitHubInstallationPublicState {
       organization_actions_variables: "write",
       organization_administration: "write",
       organization_custom_properties: "admin",
+      organization_projects: "write",
       organization_secrets: "write",
       pull_requests: "write",
       workflows: "write",
@@ -86,6 +87,7 @@ test("Gate 1 capability는 full-org, exact permission, required event를 각각 
   assert.ok(blocked.callerBootstrapPullRequest.missing.includes("permission:pull_requests:write"));
   assert.ok(blocked.organizationVariables.missing.includes("permission:organization_actions_variables:write"));
   assert.ok(blocked.organizationRulesets.missing.includes("permission:organization_administration:write"));
+  assert.ok(blocked.organizationProjects.missing.includes("permission:organization_projects:write"));
 });
 
 test("공개 installation readback은 앱별 ProviderObservation과 repository binding만 기록한다", async () => {

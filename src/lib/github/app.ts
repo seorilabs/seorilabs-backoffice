@@ -40,8 +40,10 @@ export interface InstallationContext {
 let cached: { context: InstallationContext; at: number } | null = null;
 const TTL_MS = 30 * 60 * 1000;
 
-export async function getInstallationContext(): Promise<InstallationContext> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.context;
+export async function getInstallationContext(
+  options: { forceRefresh?: boolean } = {},
+): Promise<InstallationContext> {
+  if (!options.forceRefresh && cached && Date.now() - cached.at < TTL_MS) return cached.context;
   const app = getApp();
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   const { data } = await app.octokit.rest.apps.getOrgInstallation({ org });

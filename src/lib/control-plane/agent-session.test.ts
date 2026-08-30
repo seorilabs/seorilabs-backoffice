@@ -116,6 +116,7 @@ function githubInstallationPayload() {
       organization_actions_variables: "write",
       organization_secrets: "write",
       organization_custom_properties: "admin",
+      organization_projects: "write",
       organization_administration: "write",
     },
     events: ["push", "repository", "pull_request", "issues", "issue_comment", "workflow_run"],
