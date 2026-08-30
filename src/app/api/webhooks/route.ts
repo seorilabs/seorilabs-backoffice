@@ -15,6 +15,12 @@ import {
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { issueEventMessage } from "@/lib/notifications/issue-events";
+import {
+  issueClosedThreadText,
+  issueOpenedThreadText,
+  issueThreadName,
+} from "@/lib/notifications/issue-thread";
+import { listIssueComments } from "@/lib/github/read";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import { env } from "@/lib/env";
@@ -91,8 +97,10 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
     // 이슈 생성·종료 → 즉시 알림. 등급과 무관하게 전체 이슈를 알린다.
     if (event === "issues" && (p.action === "opened" || p.action === "closed") && p.issue) {
       const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
+      const parentDedupeKey = `github:${deliveryId}:issue-${p.action}`;
+      const destinations = discordDestinationOrFallback("github-issues", "backoffice");
       await enqueueNotification({
-        dedupeKey: `github:${deliveryId}:issue-${p.action}`,
+        dedupeKey: parentDedupeKey,
         kind: "OPS_ALERT",
         payload: {
           text: issueEventMessage({
@@ -106,12 +114,96 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
         },
         // 전체 이슈가 흐르는 알림이라 버튼 카드가 놓이는 #backoffice 와 분리한다.
         // 전용 채널을 아직 설정하지 않았으면 기존 채널로 계속 보낸다.
-        destinations: discordDestinationOrFallback("github-issues", "backoffice"),
+        destinations,
+      });
+      await enqueueIssueThread({
+        deliveryId,
+        parentDedupeKey,
+        destinations,
+        repo,
+        issue: p.issue,
+        action: p.action,
       });
     }
   } catch (e) {
     console.error("[discord] notifyHooks error:", e);
   }
+}
+
+/**
+ * 이슈 알림에 딸릴 쓰레드를 예약한다.
+ *
+ * 생성: 본문을 그대로 남긴다. 부모 알림이 같은 요청에서 막 enqueue 됐으므로 첫 시도는
+ * 실패할 수 있고, outbox 재시도가 해소한다.
+ * 종료: 댓글·연결 PR 을 모아 붙인다. 붙일 부모가 아예 없으면(기능 도입 전에 열린 이슈)
+ * enqueue 자체를 건너뛴다 — 영원히 재시도하다 dead letter 가 되는 것을 막는다.
+ */
+async function enqueueIssueThread(input: {
+  deliveryId: string;
+  parentDedupeKey: string;
+  destinations: ReturnType<typeof discordDestinations>;
+  repo: string;
+  issue: GhIssueInput;
+  action: "opened" | "closed";
+}): Promise<void> {
+  const threadName = issueThreadName(input.repo, input.issue.number, input.issue.title);
+  if (input.action === "opened") {
+    await enqueueNotification({
+      dedupeKey: `${input.parentDedupeKey}:thread`,
+      kind: "OPS_ALERT",
+      payload: {
+        text: issueOpenedThreadText(input.issue.body),
+        thread: { parentDedupeKey: input.parentDedupeKey, threadName },
+      },
+      destinations: input.destinations,
+    });
+    return;
+  }
+
+  // 종료 쓰레드는 생성 알림 메시지에 붙는다. 그 메시지가 없으면 맥락을 남길 곳이 없다.
+  const openedParent = await prisma.notificationDelivery.findFirst({
+    where: {
+      provider: "DISCORD",
+      status: "SENT",
+      deletedAt: null,
+      providerMessageId: { not: null },
+      event: { payload: { path: "$.thread.threadName", equals: threadName } },
+    },
+    select: { event: { select: { dedupeKey: true } } },
+  });
+  const openedThreadKey = openedParent?.event.dedupeKey;
+  if (!openedThreadKey) return;
+  const parentDedupeKey = openedThreadKey.replace(/:thread$/, "");
+
+  const repoFullName = `seorilabs/${input.repo}`;
+  const [comments, pulls] = await Promise.all([
+    listIssueComments(repoFullName, input.issue.number).catch((error) => {
+      console.error("[discord] 이슈 댓글 조회 실패:", error instanceof Error ? error.message : error);
+      return [];
+    }),
+    prisma.pullRequestMirror.findMany({
+      where: { repoFullName, linkedIssue: input.issue.number },
+      orderBy: { number: "asc" },
+      select: { number: true, title: true, state: true },
+    }),
+  ]);
+  const text = issueClosedThreadText({
+    stateReason: input.issue.state_reason,
+    comments,
+    pulls: pulls.map((pull) => ({
+      number: pull.number,
+      title: pull.title,
+      url: `https://github.com/${repoFullName}/pull/${pull.number}`,
+      merged: pull.state === "MERGED",
+    })),
+  });
+  if (!text) return;
+  await enqueueNotification({
+    dedupeKey: `${input.parentDedupeKey}:thread`,
+    kind: "OPS_ALERT",
+    payload: { text, thread: { parentDedupeKey, threadName } },
+    destinations: input.destinations,
+  });
 }
 
 function repoName(p: WebhookPayload): string | null {

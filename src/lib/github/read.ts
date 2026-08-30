@@ -233,6 +233,28 @@ export async function getIssue(
   };
 }
 
+/** 이슈 댓글(오래된 순). 종료 알림 쓰레드에 붙일 맥락이라 상한을 둔다. */
+export async function listIssueComments(
+  repoFullName: string,
+  issueNumber: number,
+  limit = 20,
+): Promise<Array<{ author: string; body: string }>> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const res = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    per_page: Math.min(limit, 100),
+  });
+  return res.data
+    .map((comment) => ({
+      author: comment.user?.login ?? "unknown",
+      body: comment.body ?? "",
+    }))
+    .filter((comment) => comment.body.trim().length > 0);
+}
+
 // 기획 에이전트용: 실제 레포의 README + 파일 트리(요약)를 가져와 기획을 코드베이스에 정합시킨다.
 // 실패해도 throw 안 함(컨텍스트는 옵셔널). 크기 제한으로 프롬프트 폭주 방지.
 const TREE_IGNORE =
