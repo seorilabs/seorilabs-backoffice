@@ -28,6 +28,15 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
     pull_requests: "write",
     workflows: "write",
   }),
+  "github.release.write": Object.freeze({
+    contents: "write",
+    metadata: "read",
+  }),
+  "github.workflow-dispatch.write": Object.freeze({
+    actions: "write",
+    contents: "read",
+    metadata: "read",
+  }),
 } as const);
 
 export type FleetGitHubCapability = keyof typeof FLEET_GITHUB_CAPABILITY_PERMISSIONS;

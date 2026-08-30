@@ -9,7 +9,7 @@ import {
 } from "@/lib/core/release-marker-history";
 
 // release-ops 는 prisma/octokit 을 직접 잡고 있어 단위 실행 대상이 아니다. 대신 코어 계약
-// (release-orchestrator / release-source-contract)을 실제로 경유하는지, 우회 경로가 남아 있지
+// (release-orchestrator / stable-release-authority)을 실제로 경유하는지, 우회 경로가 남아 있지
 // 않은지를 배선 수준에서 고정한다. 코어 자체의 동작은 release-orchestrator.test.ts 가 검증한다.
 
 function source(path: string): string {
@@ -78,7 +78,7 @@ test("과거 chore(release) 커밋은 출시노트 집계에서 계속 제외된
 });
 
 // 인수조건: createReleaseTagWithNotes 는 SHA 확정·검증·write 순서를 코어에 위임한다.
-test("createReleaseTagWithNotes 는 계약 코어를 경유해서만 태그와 Release 를 만든다", () => {
+test("createReleaseTagWithNotes 는 stable tag 권한 코어를 경유해서만 태그와 Release 를 만든다", () => {
   const body = bodyOf(source(RELEASE_OPS), "createReleaseTagWithNotes");
 
   assert.match(body, /await previewStableRelease\(\{/);
@@ -94,35 +94,25 @@ test("createReleaseTagWithNotes 는 계약 코어를 경유해서만 태그와 R
   const core = bodyOf(source(ORCHESTRATOR), "createReleaseTagAtSource");
   const resolve = core.indexOf("opts.source.resolveRefSha(");
   const expected = core.indexOf("opts.expectedSha !== sha");
-  const read = core.indexOf("opts.source.readReleaseSourceFiles(sha)");
-  const verify = core.indexOf("assertReleaseSourceContract({");
   const tag = core.indexOf("opts.writer.createTag(");
   const release = core.indexOf("opts.writer.createOrUpdateRelease(");
-  assert.ok([resolve, expected, read, verify, tag, release].every((index) => index !== -1));
-  assert.ok(resolve < expected && expected < read && read < verify && verify < tag && tag < release);
+  assert.ok([resolve, expected, tag, release].every((index) => index !== -1));
+  assert.ok(resolve < expected && expected < tag && tag < release);
+  assert.doesNotMatch(core, /readReleaseSourceFiles|project\.godot|google-play\.config/u);
 });
 
-// 인수조건: marketVersionFloor 는 다음 태그 추천 경로에만 남는다.
-test("marketVersionFloor 는 추천 경로에만 쓰이고 배포 허가에는 쓰이지 않는다", () => {
+// 인수조건: stable 릴리스는 repo-local version 파일과 market floor를 읽지 않는다.
+test("stable 후보와 배포 권한은 GitHub stable tag와 commit SHA만 사용한다", () => {
   const text = source(RELEASE_OPS);
-
-  assert.equal(text.includes("assertTagAtOrAboveMarketFloor"), false);
-  assert.equal(
-    source("src/lib/core/market-version-floor.ts").includes("assertTagAtOrAboveMarketFloor"),
-    false,
-  );
-
-  // 추천 경로에만 남아 있다.
-  assert.match(bodyOf(text, "previewNextTag"), /marketVersionFloor\(repoFullName\)/);
+  assert.doesNotMatch(text, /marketVersionFloor|getRepoJsonFile|readReleaseSourceFiles/u);
+  assert.match(bodyOf(text, "previewNextTag"), /bumpStableSemVerTag\(latest, bump\)/);
   const bumped = text.slice(text.indexOf("async function bumpedCandidateTag("));
   assert.ok(bumped.length > 0, "bumpedCandidateTag 가 없습니다");
-  assert.match(bumped.slice(0, bumped.indexOf("\n}\n")), /resolveReleaseTagWithMarketFloor\(\{/);
-  // 배포 dispatch 경로에는 floor 가 전혀 등장하지 않는다.
+  assert.match(bumped.slice(0, bumped.indexOf("\n}\n")), /bumpStableSemVerTag\(/);
   const deploy = bodyOf(text, "dispatchMarketDeploy");
-  assert.equal(deploy.includes("marketVersionFloor"), false);
-  assert.equal(deploy.includes("MarketFloor"), false);
   assert.match(deploy, /await planMarketDeploy\(\{/);
   assert.match(deploy, /await executeMarketDeployPlan\(\{/);
+  assert.match(text, /resolveTagSha: \(tag\) => resolveStableTagSha\(repoFullName, tag\)/);
 });
 
 // 인수조건: preflight 실패 뒤 부분 ReleaseRecord 가 남지 않고, Xcode Cloud 가 마지막이다.
@@ -139,12 +129,13 @@ test("ReleaseRecord 는 preflight 통과 뒤 마지막 Xcode Cloud 실행에서�
   assert.equal(plan.includes("dispatchWorkflow("), false);
   assert.equal(plan.includes("dispatchXcodeCloudRelease("), false);
   assert.match(plan, /validateXcodeCloudRelease\(/);
-  assert.match(plan, /assertReleaseSourceContract\(\{/);
+  assert.match(plan, /opts\.source\.resolveTagSha\(tag\)/);
+  assert.match(plan, /stableReleaseAuthority\(tag, sha\)/);
 
   // 실행은 GitHub 먼저, Xcode Cloud 마지막.
   const execute = bodyOf(source(ORCHESTRATOR), "executeMarketDeployPlan");
   const github = execute.indexOf("dispatchWorkflow(plan.github)");
-  const xcodeCall = execute.indexOf("dispatchXcodeCloudRelease({ tag: plan.xcodeCloud.tag })");
+  const xcodeCall = execute.indexOf("dispatchXcodeCloudRelease(plan.xcodeCloud)");
   assert.ok(github !== -1 && xcodeCall !== -1);
   assert.ok(github < xcodeCall, "GitHub dispatch 가 Xcode Cloud 보다 먼저여야 한다");
 });
@@ -154,10 +145,67 @@ test("배포 audit payload 는 검증된 SHA 와 실제 실행 결과만 기록�
   const deploy = bodyOf(source(RELEASE_OPS), "dispatchMarketDeploy");
   const payload = deploy.slice(deploy.indexOf("payload: {"), deploy.indexOf("} as object"));
 
-  assert.match(payload, /tag: result\.contract\.tag/);
+  assert.match(payload, /tag: result\.authority\.tag/);
   assert.match(payload, /sha: result\.sha/);
+  assert.match(payload, /authority: result\.authority\.kind/);
   assert.match(payload, /workflowFile: result\.workflowFile \?\? null/);
   assert.match(payload, /xcodeCloudBuild: result\.xcodeCloudBuild \?\? null/);
   // 요청값을 그대로 신뢰해 기록하지 않는다.
   assert.equal(payload.includes("tag: opts.tag"), false);
+});
+
+test("웹 릴리스와 build mutation은 현재 DB role과 AppOwner write gate를 먼저 통과한다", () => {
+  const releaseActions = source("src/lib/actions/release.ts");
+  assert.equal(
+    (releaseActions.match(/requireReleaseWriteAccess\(appId\)/g) ?? []).length,
+    6,
+  );
+
+  const builds = bodyOf(source("src/lib/actions/builds.ts"), "dispatchBuildAction");
+  const access = builds.indexOf("requireReleaseWriteAccess(appId)");
+  const exactTag = builds.indexOf("resolveStableTagSha(repoFullName, releaseTag)");
+  const contract = builds.indexOf("getWorkflowDispatchInputNames(");
+  const dispatch = builds.indexOf("dispatchWorkflow({");
+  assert.ok(access !== -1 && exactTag !== -1 && contract !== -1 && dispatch !== -1);
+  assert.ok(access < exactTag && exactTag < contract && contract < dispatch);
+  assert.match(builds, /workflowFile,[\s\S]*releaseSha/);
+  assert.match(builds, /ref: releaseTag/);
+  assert.match(builds, /expectedTag: \{ tag: releaseTag, sha: releaseSha \}/);
+  assert.doesNotMatch(builds, /resolveRefSha\(/);
+});
+
+test("Play 승격과 App Store provider write는 exact stable tag SHA 뒤에만 실행된다", () => {
+  const text = source(RELEASE_OPS);
+  const promote = bodyOf(text, "promoteGooglePlay");
+  assert.ok(
+    promote.indexOf("resolveStableAuthority(opts.repoFullName, tag)")
+      < promote.indexOf("dispatchWorkflow({"),
+  );
+  assert.match(promote, /expectedTag: \{ tag: authority\.tag, sha: authority\.sha \}/);
+
+  const providers: Record<string, string> = {
+    prepareAppStore: "prepareAppStoreSubmission({",
+    submitAppStore: "submitAppStoreForReview({",
+    createAppStoreReview: "createAppStoreReviewSubmission({",
+    removeAppStoreReview: "removeAppStoreReviewSubmissionItem({",
+    cancelAppStoreReview: "cancelAppStoreReviewSubmission({",
+  };
+  for (const [name, providerCall] of Object.entries(providers)) {
+    const body = bodyOf(text, name);
+    const authority = body.indexOf("resolveStableAuthority(");
+    const provider = body.indexOf(providerCall);
+    assert.ok(authority !== -1 && provider !== -1, name);
+    assert.ok(authority < provider, `${name} provider write가 tag peel보다 먼저다`);
+  }
+});
+
+test("Release와 workflow dispatch는 provider write 직전 tag와 expected SHA를 다시 결합한다", () => {
+  const releaseWrite = source("src/lib/github/release-write-operations.ts");
+  const write = source("src/lib/github/write.ts");
+  assert.match(releaseWrite, /target_commitish: expectedSha/);
+  assert.match(releaseWrite, /await assertTagBinding\(\)/);
+  assert.match(write, /GITHUB_WORKFLOW_RELEASE_TAG_BINDING_REQUIRED/);
+  assert.match(write, /dispatchWorkflowWithExactTagBinding\(client/);
+  assert.match(releaseWrite, /readExactTagCommitSha\(client/);
+  assert.match(releaseWrite, /GITHUB_WORKFLOW_RELEASE_TAG_SHA_MISMATCH/);
 });

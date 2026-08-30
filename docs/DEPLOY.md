@@ -677,12 +677,12 @@ data ns                                   platform ns
 
 | 단계 | 하는 일 | 외부 write |
 |---|---|---|
-| preview | repo 의 default branch 를 조회해 **exact SHA 를 고정**하고, 그 SHA 의 소스 원장에서 후보 태그를 확정한다 | 없음 |
-| confirm | 같은 SHA·후보 태그·소스 버전을 **다시 검증**한 뒤에만 `createTag` → `createOrUpdateRelease` | 검증 통과 후에만 |
+| preview | repo의 default branch를 조회해 **exact SHA를 고정**하고 GitHub stable tag 계보에서 후보를 확정한다 | 없음 |
+| confirm | 같은 SHA·후보 stable tag를 **다시 검증**한 뒤에만 `createTag` → exact peeled commit readback → `createOrUpdateRelease` | 검증 통과 후에만 |
 
 - 확인 사이에 default branch 가 움직였으면 write 없이 중단한다.
-- `bump` 는 소스에 없는 버전을 만들지 않는다. pinned-source repo 는 후보 태그가 항상 소스 버전이며, 버전을 올리려면 repo 의 원장을 먼저 올린다.
-- 소스 버전 계약(`src/lib/core/release-source-contract.ts`)은 SHA 시점의 repo-local 선언으로 판별한다. `scripts/check_release_version.py`=pinned-source(3원장 정합+태그 일치 강제), `scripts/resolve-release-version.mjs`=tag-derived, 둘 다 없으면 tag-derived-caller.
+- stable 릴리스 버전의 유일한 권한은 GitHub stable tag `vX.Y.Z`와 exact commit SHA다. `bump`는 최신 stable tag에서 계산하고 명시 태그는 그대로 사용한다.
+- `project.godot`, Play/App Store JSON, repo-local 버전 검사 스크립트는 후보와 배포 권한에 관여하지 않는다. stale 값이 있어도 exact stable tag가 빌드 버전을 결정한다.
 
 ### 배포 — preflight 전부 → GitHub → Xcode Cloud
 
@@ -690,7 +690,7 @@ data ns                                   platform ns
 flowchart TD
   A["배포 요청 - tag, target"] --> B["preflight - 외부 write 0"]
   B --> B1["태그가 가리키는 exact SHA"]
-  B --> B2["그 SHA 의 소스 버전 계약"]
+  B --> B2["exact refs tags stable tag의 peeled commit SHA"]
   B --> B3["caller workflow_dispatch 선언"]
   B --> B4["보낼 inputs 가 전부 선언돼 있는지"]
   B --> B5["Xcode Cloud 제품 - repo - 수동 태그 조건"]
@@ -707,7 +707,7 @@ flowchart TD
 
 - 되돌릴 수 없는 Xcode Cloud 실행이 항상 마지막이다. GitHub 이 거부하면 `ciBuildRuns` 는 0회로 남는다.
 - `APPSTORE` 단독도 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
-- 배포 audit(`release.deploy.dispatch`)에는 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
+- 배포 audit(`release.deploy.dispatch`)에는 검증된 GitHub stable tag·peeled commit SHA와 실제 dispatch 결과만 남긴다.
 - 개별 마켓 workflow 내부의 exact 버전 검증은 마지막 방어막으로 그대로 둔다.
 
 ## 12. 출시노트 (Release Notes) — 태그 diff 기반 8개 언어 유저 공지

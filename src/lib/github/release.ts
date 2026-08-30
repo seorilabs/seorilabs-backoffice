@@ -1,4 +1,5 @@
 import { getInstallationOctokit } from "@/lib/github/app";
+import { readExactTagCommitSha } from "@/lib/github/release-write-operations";
 import { excludeHistoricalReleaseMarkers } from "@/lib/core/release-marker-history";
 import {
   compareStableSemVerTagsDesc,
@@ -15,6 +16,16 @@ function splitRepo(full: string): { owner: string; repo: string } {
 export interface VersionTag {
   name: string;
   sha: string;
+}
+
+/** exact refs/tags/vX.Y.Z만 읽고 annotated tag도 실제 commit까지 peel한다. */
+export async function resolveStableTagSha(
+  repoFullName: string,
+  tag: string,
+): Promise<string> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  return readExactTagCommitSha(octokit, { owner, repo, tag });
 }
 
 /** stable·후보·레거시를 포함한 전체 태그. 후보 순번 충돌 방지에 사용한다. */
@@ -38,10 +49,16 @@ export async function listVersionTags(
 ): Promise<VersionTag[]> {
   const octokit = await getInstallationOctokit();
   const { owner, repo } = splitRepo(repoFullName);
-  const res = await octokit.rest.repos.listTags({ owner, repo, per_page: limit });
+  // snapshot/legacy 태그가 첫 페이지를 채워도 뒤 페이지의 stable 태그를 놓치지 않는다.
+  // `limit`은 provider page size가 아니라 stable 정렬 이후 반환 개수다.
+  const tags = await octokit.paginate(octokit.rest.repos.listTags, {
+    owner,
+    repo,
+    per_page: 100,
+  });
   return stableVersionTags(
-    res.data.map((tag) => ({ name: tag.name, sha: tag.commit.sha })),
-  );
+    tags.map((tag) => ({ name: tag.name, sha: tag.commit.sha })),
+  ).slice(0, limit);
 }
 
 /** version 직전(더 낮은) 릴리즈 태그. 없으면 null(첫 릴리스). */
