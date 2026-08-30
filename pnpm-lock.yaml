@@ -24,8 +24,8 @@ importers:
         specifier: ^6.3.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       '@seorilabs/repo-contract':
-        specifier: github:seorilabs/.github#fb1aa36d5ad7e40759f1734f52273611bbeec853&path:/packages/repo-contract
-        version: https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853#path:/packages/repo-contract
+        specifier: github:seorilabs/.github#1e13d5df860241cd962c11e722d07a89ff08799d&path:/packages/repo-contract
+        version: https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract
       fflate:
         specifier: 0.8.3
         version: 0.8.3
@@ -905,8 +905,8 @@ packages:
   '@rushstack/eslint-patch@1.16.1':
     resolution: {integrity: sha512-TvZbIpeKqGQQ7X0zSCvPH9riMSFQFSggnfBjFZ1mEoILW+UuXCKwOoPcgjMwiUtRqFZ8jWhPJc4um14vC6I4ag==}
 
-  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853#path:/packages/repo-contract':
-    resolution: {gitHosted: true, path: /packages/repo-contract, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853}
+  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract':
+    resolution: {gitHosted: true, path: /packages/repo-contract, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d}
     version: 0.5.0
     engines: {node: 24.x}
     hasBin: true
@@ -3802,7 +3802,7 @@ snapshots:
 
   '@rushstack/eslint-patch@1.16.1': {}
 
-  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853#path:/packages/repo-contract':
+  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract':
     dependencies:
       ajv: 8.20.0
       yaml: 2.9.0
