@@ -45,8 +45,8 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류·product identity 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={mainSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_profile={profile}&schema=workflow-bundle-v5-build[-canary]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-main discovery build binding을 모두 결합한 Android build-only readback. canary는 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR만 허용 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함. 기간제 dependency audit 예외는 signed config의 `STATIC_CHECK` source가 application SHA와 같고 만료 전일 때만 manifest digest에 포함 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={mainSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_profile={profile}&schema=workflow-bundle-v5-build[-canary]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-main discovery build binding을 모두 결합한 Android build-only readback. canary는 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR만 허용. 기간제 dependency audit 예외는 `ANDROID_BUILD_ONLY` source가 exact application SHA와 같고 만료 전일 때만 포함 |
 | `POST` | `/api/control-plane/workflow-bundles` | exact successful `.github` candidate run/artifact 또는 기존 candidate와 canonical Ed25519 서명을 검증해 불변 `CANDIDATE`/`APPROVED` registry record를 멱등 import. secret/private signing key를 받거나 반환하지 않음 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
@@ -105,6 +105,10 @@ fail-closed하며 CANDIDATE는 successful GitHub artifact identity로 별도 검
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
 support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.
+Happy Farm dependency audit 예외는 `build.dependencyAuditException` 단일 객체로만 저장하며, repository
+identity, static merge source와 Android base source, 각 lockfile digest, 정렬된 high advisory 3건과 만료를
+signed snapshot에 함께 고정한다. 해당 객체는 static check와 Android build-only manifest에만 전달하고
+source 또는 만료가 다르면 fail-closed한다. release, upload, review, public action 권한으로 해석하지 않는다.
 ProjectBlueprint의 provisioner는 등록된 `shared/*` logical credential만 참조할 수 있다. 법적 승인,
 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 값 또는 변경 및 모든 미정의 필드는
 fail-closed한다. compliance는 이 계약에서 `DRAFT`만 만들 수 있다. 이전 validator로 만들어진 DRAFT도

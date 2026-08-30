@@ -467,6 +467,67 @@ export const complianceDraftSchema = z.object({
   evidenceRef: revisionRef.optional(),
 }).strict();
 
+const dependencyAuditAdvisorySchema = z.object({
+  ghsa: z.string().regex(/^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/),
+  module: z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/),
+  severity: z.literal("high"),
+  versions: z.array(
+    z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+  ).min(1).max(20).superRefine((versions, context) => {
+    if (new Set(versions).size !== versions.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "version은 중복될 수 없습니다." });
+    }
+    if (versions.some((version, index) => index > 0 && versions[index - 1]!.localeCompare(version) >= 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "version은 오름차순으로 정렬해야 합니다." });
+    }
+  }),
+}).strict();
+
+const dependencyAuditSourceSha = z.string().regex(
+  /^[0-9a-f]{40}$/,
+  "소문자 40자리 application source SHA가 필요합니다.",
+);
+const dependencyAuditLockfileSha256 = z.string().regex(
+  /^sha256:[0-9a-f]{64}$/,
+  "sha256: 접두사가 있는 소문자 lockfile SHA-256이 필요합니다.",
+);
+
+export const dependencyAuditExceptionSchema = z.object({
+  schemaVersion: z.literal(1),
+  repositoryId: z.literal("1250442131"),
+  fullName: z.literal("seorilabs/happy-farm"),
+  bindings: z.tuple([
+    z.object({
+      actionClass: z.literal("STATIC_CHECK"),
+      sourceSha: dependencyAuditSourceSha,
+      lockfileSha256: dependencyAuditLockfileSha256,
+    }).strict(),
+    z.object({
+      actionClass: z.literal("ANDROID_BUILD_ONLY"),
+      sourceSha: dependencyAuditSourceSha,
+      lockfileSha256: dependencyAuditLockfileSha256,
+    }).strict(),
+  ]),
+  expiresAt: z.string().datetime({ offset: true }),
+  reason: z.string().min(1).max(240).refine(
+    (value) => value === value.trim()
+      && !/[\u0000-\u001f\u007f]/u.test(value)
+      && !containsCredentialCandidate(value),
+    "공개 가능한 단일행 사유가 필요합니다.",
+  ),
+  advisories: z.array(dependencyAuditAdvisorySchema).length(3).superRefine((advisories, context) => {
+    const identities = advisories.map((advisory) => `${advisory.ghsa}:${advisory.module}`);
+    if (new Set(identities).size !== identities.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 중복될 수 없습니다." });
+    }
+    if (identities.some((identity, index) => index > 0 && identities[index - 1]!.localeCompare(identity) >= 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 GHSA와 module 순으로 정렬해야 합니다." });
+    }
+  }),
+}).strict();
+
+export type DependencyAuditException = z.infer<typeof dependencyAuditExceptionSchema>;
+
 /**
  * 첫 Fleet vertical slice가 자동 활성화할 수 있는 비민감 desired state의 완전한 목록이다.
  * strict object 밖의 값은 이름이나 중첩 위치와 무관하게 fail-closed한다.
@@ -497,6 +558,7 @@ export const configRevisionPayloadSchema = z.object({
   build: z.object({
     workflowBundleSha: sha40.optional(),
     workflowBundleDigest: prefixedSha256.optional(),
+    dependencyAuditException: dependencyAuditExceptionSchema.optional(),
     platformVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/).optional(),
     minSdk: z.number().int().min(21).max(100).optional(),
     targetSdk: z.number().int().min(21).max(100).optional(),

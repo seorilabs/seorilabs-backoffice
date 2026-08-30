@@ -534,6 +534,18 @@ export function FleetConfigEditor({
                 onChange={(value) => patch({ privacyPolicyUrl: value })}
               />
             </div>
+            {draft.buildDependencyAuditException && (
+              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+                <div className="font-semibold">서명된 dependency audit 예외</div>
+                <div className="mt-1 font-mono">
+                  expiresAt {String(draft.buildDependencyAuditException.expiresAt ?? "미기록")}
+                </div>
+                <div className="mt-1">
+                  static check와 Android build-only 범위에서만 사용합니다. 이 구조화 편집기는 객체를
+                  수정하지 않고 다음 DRAFT에 그대로 보존합니다.
+                </div>
+              </div>
+            )}
           </Section>
 
           <Section

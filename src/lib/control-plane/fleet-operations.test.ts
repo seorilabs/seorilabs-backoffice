@@ -21,6 +21,41 @@ import {
 } from "@/lib/control-plane/service";
 import { redactFleetError, redactFleetJson } from "@/lib/control-plane/fleet-view";
 
+const dependencyAuditException = {
+  schemaVersion: 1 as const,
+  repositoryId: "1250442131" as const,
+  fullName: "seorilabs/happy-farm" as const,
+  bindings: [
+    {
+      actionClass: "STATIC_CHECK" as const,
+      sourceSha: "3d8c7f96eb6bb9ef47b3d5485cb5faf1408373a2",
+      lockfileSha256: "sha256:bb7c039ab9bb3b0deb3755e124a2f248f44b09c984cc12e1a5450686e18bd3c5",
+    },
+    {
+      actionClass: "ANDROID_BUILD_ONLY" as const,
+      sourceSha: "376c31350558c3ac4ed88907c4a35b0e443b5cd7",
+      lockfileSha256: "sha256:bb0676484da96a39896ceefa3f74b047eab4705dc3f81c87a31ffb88fdd0b1a8",
+    },
+  ],
+  expiresAt: "2026-09-13T00:00:00Z",
+  reason: "공식 패치 대기 중인 build-time dependency advisory 3건",
+  advisories: [
+    { ghsa: "GHSA-2p57-rm9w-gvfp", module: "ip", severity: "high" as const, versions: ["1.1.9"] },
+    {
+      ghsa: "GHSA-5p2g-fcmc-qvqq",
+      module: "image-size",
+      severity: "high" as const,
+      versions: ["0.6.3", "1.2.1"],
+    },
+    {
+      ghsa: "GHSA-w3rx-r6r6-pgpr",
+      module: "image-size",
+      severity: "high" as const,
+      versions: ["0.6.3", "1.2.1"],
+    },
+  ],
+};
+
 test("비민감 Config payload는 UI와 API 공용 validator를 통과한다", () => {
   const payload = {
     schemaVersion: 1,
@@ -37,6 +72,46 @@ test("비민감 Config payload는 UI와 API 공용 validator를 통과한다", (
   };
   assert.deepEqual(configRevisionPayloadSchema.parse(payload), payload);
   assert.doesNotThrow(() => assertConfigRevisionPayload(payload));
+});
+
+test("dependency audit 예외는 Happy Farm의 두 build-only source와 정렬된 high 3건만 허용한다", () => {
+  const payload = {
+    schemaVersion: 1 as const,
+    markets: [],
+    build: { dependencyAuditException },
+  };
+  assert.deepEqual(configRevisionPayloadSchema.parse(payload), payload);
+  assert.doesNotThrow(() => assertConfigRevisionPayload(payload));
+
+  const invalidExceptions = [
+    { ...dependencyAuditException, repositoryId: "7001" },
+    { ...dependencyAuditException, fullName: "seorilabs/other-app" },
+    { ...dependencyAuditException, bindings: [...dependencyAuditException.bindings].reverse() },
+    { ...dependencyAuditException, expiresAt: "2026-09-13" },
+    { ...dependencyAuditException, reason: "token=not-public-credential-value" },
+    { ...dependencyAuditException, actionClass: "BUILD_ONLY" },
+    {
+      ...dependencyAuditException,
+      advisories: [...dependencyAuditException.advisories].reverse(),
+    },
+    {
+      ...dependencyAuditException,
+      advisories: dependencyAuditException.advisories.map((advisory, index) => index === 1
+        ? { ...advisory, versions: ["1.2.1", "0.6.3"] }
+        : advisory),
+    },
+    {
+      ...dependencyAuditException,
+      advisories: dependencyAuditException.advisories.slice(0, 2),
+    },
+  ];
+  for (const exception of invalidExceptions) {
+    assert.equal(configRevisionPayloadSchema.safeParse({
+      schemaVersion: 1,
+      markets: [],
+      build: { dependencyAuditException: exception },
+    }).success, false);
+  }
 });
 
 test("strict allowlist 밖의 공개 배포·심사 alias는 DRAFT 생성과 activation 모두 fail-closed한다", () => {
