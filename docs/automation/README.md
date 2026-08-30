@@ -6,6 +6,7 @@
 - durable scheduler endpoint: `/api/admin/automation/schedule`이 누락 schedule, webhook inbox, 만료 lease를 재조정한다.
 - generic worker contract: Codex와 Claude 각각 조직당 설치 상한 1개다.
 - Platform Fleet internal template: 검증된 서명 manifest와 exact observation에서 만든 `PLATFORM_SDK_UPDATE` task만 Codex generic worker가 처리한다. 별도 앱 routine이나 Issue를 만들지 않는다.
+- Source remediation internal template(`repo-source-remediation-v1`): `classification=PRODUCT_APP`이지만 discovery가 `NO_CANDIDATE`/`BUILD_TARGET_MISSING`으로 `NEEDS_INPUT`인 repository의 catch-22 전용 단발 routine이다. 앱 Fleet 화면의 일반 routine picker가 아니라 `/api/control-plane/source-remediation-definitions`로만 만들며, 나머지 template의 `RepositoryRegistration.status=MANAGED` guard는 전혀 건드리지 않는다. 자세한 조건은 `docs/FLEET_CONTROL_PLANE.md`의 "Source remediation" 절.
 - Project projector: `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`을 desired/observed ledger로 분리하고 write 뒤 readback한다.
 
 ## 운영 상태와 worker gate

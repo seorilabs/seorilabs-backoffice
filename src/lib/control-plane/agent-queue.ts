@@ -3,10 +3,17 @@ import { Prisma } from "@prisma/client";
 import {
   agentExecutionPolicy,
   agentRepositorySingletonScope,
+  eligibleForAutopilot,
   MANAGED_WORKER_TEMPLATE_KEYS,
   parseManagedWorkerPolicy,
+  SOURCE_REMEDIATION_TEMPLATE_KEY,
   type AutomationPolicy,
+  type SourceRemediationPolicy,
 } from "@/lib/control-plane/automation-catalog";
+import {
+  issueEligibleForSourceRemediation,
+  repositorySourceRemediationEligible,
+} from "@/lib/control-plane/source-remediation";
 import {
   agentWorkerSessionStateError,
   trustedMutationDisposition,
@@ -83,20 +90,7 @@ export function agentReadbackRequestHash(input: {
   } as JsonValue)).digest("hex");
 }
 
-export function eligibleForAutopilot(input: {
-  issueNumber?: number | null;
-  issueState?: string | null;
-  labels: unknown;
-}): boolean {
-  if (input.issueNumber && input.issueState?.toUpperCase() !== "OPEN") return false;
-  const labels = Array.isArray(input.labels)
-    ? input.labels.filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase())
-    : [];
-  if (input.issueNumber && !labels.includes("autopilot")) return false;
-  return !labels.some((label) =>
-    label === "blocked" || label === "no-autopilot" || label.startsWith("approval:"),
-  );
-}
+export { eligibleForAutopilot };
 
 export async function releaseRepoGuard(
   tx: Prisma.TransactionClient,
@@ -405,6 +399,8 @@ async function tryClaimRun(input: {
           classification: true,
           lastDefaultPushSha: true,
           lastReconciledSha: true,
+          reconcileGeneration: true,
+          lastDiscoveryReason: true,
         },
       });
       const priorSession = readbackClaim
@@ -413,7 +409,19 @@ async function tryClaimRun(input: {
           orderBy: { generation: "desc" },
         })
         : null;
-      if (!readbackClaim && !repositoryAutomationEligible(registration)) return null;
+      // source-remediation은 일반 MANAGED guard를 우회하는 유일한 template이다. registration이
+      // MANAGED가 아니어도, 정의 생성 시 잠근 generation/source SHA/reason이 지금도 정확히 같을
+      // 때만 통과한다 — 다른 모든 template은 기존 repositoryAutomationEligible 그대로다.
+      const isSourceRemediation = run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY;
+      if (!readbackClaim && !isSourceRemediation && !repositoryAutomationEligible(registration)) return null;
+      if (!readbackClaim && isSourceRemediation) {
+        const remediationPolicy = policy as SourceRemediationPolicy;
+        if (!repositorySourceRemediationEligible(registration, remediationPolicy)) return null;
+        const remediationApp = run.appId
+          ? await tx.app.findUnique({ where: { id: run.appId }, select: { status: true } })
+          : null;
+        if (!remediationApp || remediationApp.status !== "ACTIVE") return null;
+      }
       if (readbackClaim && !priorSession) return null;
       const repoId = priorSession?.repoId ?? registration?.repoId;
       const sourceSha = priorSession?.sourceSha ?? registration?.lastDefaultPushSha;
@@ -444,13 +452,26 @@ async function tryClaimRun(input: {
       if (!readbackClaim && run.issueNumber) {
         const issue = await tx.issueMirror.findUnique({
           where: { repoFullName_number: { repoFullName: run.repoFullName, number: run.issueNumber } },
-          select: { number: true, state: true, labels: true },
+          select: {
+            number: true,
+            state: true,
+            labels: true,
+            title: true,
+            priority: true,
+            isAutopilot: true,
+            isBlocked: true,
+          },
         });
         if (!issue || !eligibleForAutopilot({
           issueNumber: issue.number,
           issueState: issue.state,
           labels: issue.labels,
         })) return null;
+        // 임의 사용자 편집으로 issue 제목/라벨 scope가 정의 생성 시점과 달라졌으면
+        // GitHub readback 재검증에서 fail-closed한다.
+        if (isSourceRemediation && !issueEligibleForSourceRemediation(issue, policy as SourceRemediationPolicy)) {
+          return null;
+        }
       }
       if (!readbackClaim && executionPolicy.repositorySingleton) {
         const openAutopilotPr = await tx.pullRequestMirror.findFirst({
