@@ -470,6 +470,11 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 연결 PR은 `PullRequestMirror.linkedIssue`(PR 본문의 `closes #N` 파싱)에서 찾는다.
 - **기능 도입 전에 열린 이슈는 붙일 부모 메시지가 없다.** 종료 쓰레드는 enqueue 시점에 부모
   존재를 확인하고 없으면 건너뛴다. 영원히 재시도하다 dead letter가 되는 것을 막는다.
+- **봇 역할에 `CREATE_PUBLIC_THREADS`가 있어야 한다.** 없으면 쓰레드 생성이 403으로 막힌다.
+  Server Settings → Roles → 봇 역할에서 "Create Public Threads"를 켜거나, `#issues` 채널
+  권한에 봇 역할 overwrite로 허용한다. 이 403은 재시도로 풀리지 않으므로 **첫 시도에 바로
+  dead letter**로 보내고 `lastError`에 필요한 권한 이름을 남긴다 — 이벤트마다 10번씩
+  재시도하면 원인이 로그에 묻히고 실패 행만 10배로 쌓인다.
 - 쓰레드 게시는 `NotificationKind`가 아니라 payload의 `thread` 필드로 구분한다. `kind`는
   MySQL ENUM이라 값 추가에 `ALTER MODIFY`가 필요한데 expand-only 게이트가 막는다.
 

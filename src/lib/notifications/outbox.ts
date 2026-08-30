@@ -84,6 +84,24 @@ export interface DeliveryOverrideResult {
   error?: string;
   messageId?: string;
   retryAfterMs?: number;
+  /**
+   * 재시도해도 결과가 바뀌지 않는 실패(권한 부족 등). 즉시 dead letter 로 보낸다.
+   * 설정을 고쳐야 풀리는 실패를 10회씩 재시도하면 원인이 로그에 묻히고, 이벤트마다
+   * 실패 행이 10배로 쌓인다.
+   */
+  terminal?: boolean;
+}
+
+/**
+ * 이 실패를 더 재시도할지. terminal 로 표시된 실패는 시도 횟수와 무관하게 끝낸다
+ * (설정을 고쳐야 풀리는 실패를 반복해도 결과가 같고, 실패 행만 배로 쌓인다).
+ */
+export function isTerminalFailure(
+  result: Pick<DeliveryOverrideResult, "terminal">,
+  attempts: number,
+  maxAttempts = MAX_ATTEMPTS,
+): boolean {
+  return result.terminal === true || attempts >= maxAttempts;
 }
 
 export async function drainNotifications(
@@ -147,7 +165,7 @@ export async function drainNotifications(
         });
       } else {
         const attempts = row.attempts + 1;
-        const terminal = attempts >= MAX_ATTEMPTS;
+        const terminal = isTerminalFailure(result, attempts);
         if (terminal) deadLetter++;
         await prisma.notificationDelivery.update({
           where: { id: row.id },
@@ -173,7 +191,7 @@ export async function drainNotifications(
             kind: row.event.kind,
             provider: row.provider,
             destinationKey: row.destinationKey,
-            terminal: !result.ok && row.attempts + 1 >= MAX_ATTEMPTS,
+            terminal: !result.ok && isTerminalFailure(result, row.attempts + 1),
             error: result.error ?? null,
           },
         },

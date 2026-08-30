@@ -10,7 +10,7 @@ import {
 } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
 import { senderBotToken } from "@/lib/notifications/sender";
-import { issueThreadPayload } from "@/lib/notifications/issue-thread";
+import { issueThreadPayload, threadStartFailure } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
 import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
 import {
@@ -274,7 +274,7 @@ async function deliverIssueThread(
     parent.providerMessageId,
     thread.threadName,
   );
-  if (!started.ok) return started;
+  if (!started.ok) return threadStartFailure(started);
   const sent = await createDiscordChannelMessage(parent.providerMessageId, thread.text, {
     plain: true,
   });
