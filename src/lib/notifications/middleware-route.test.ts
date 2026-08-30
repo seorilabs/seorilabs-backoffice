@@ -13,10 +13,15 @@ function routeFiles(directory: string): string[] {
   });
 }
 
-test("서명된 operational-events webhook만 세션 인증에서 제외한다", () => {
+test("자체 인증하는 internal API만 명시적으로 세션 인증에서 제외한다", () => {
   assert.match(source, /api\/internal\/platform\/operational-events\(\?:\/\|\$\)/);
+  // worker/adapter bearer + principal + runtime binding으로 각 route가 401 fail-closed하는
+  // P6 agent queue 경계다. 여기서 빠지면 세션 미들웨어가 가로채 로그인 HTML(200)이 돌아간다.
+  assert.match(source, /api\/internal\/\(\?:agents\|agent-adapter\|workflow-bundle-candidate-executor\)\(\?:\/\|\$\)/);
   assert.doesNotMatch(source, /grafana\/alerts/);
+  // `api/internal` 통째 제외는 계속 금지한다 — 새 internal route가 자체 인증 없이 열릴 수 있다.
   assert.doesNotMatch(source, /api\/internal\)\(\?:\/\|\$\)/);
+  assert.doesNotMatch(source, /\|internal\)\(\?:\/\|\$\)/);
 });
 
 test("자체 bearer token을 검증하는 control-plane API는 세션 인증에서 제외한다", () => {
