@@ -48,6 +48,8 @@ pnpm prisma migrate deploy
 pnpm prisma migrate status >/dev/null
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/seed-legacy-migration-fixture.ts --verify-cutover
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-auth-broker-recovery-history-query.ts
 after="$(pnpm tsx scripts/verify-migration-state.ts \
   --history=cutover --print-data-fingerprint \
   --allow-empty-new-tables="$new_empty_tables" \
