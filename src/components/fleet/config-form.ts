@@ -100,6 +100,7 @@ export interface ConfigDraft {
   assets: AssetDraft[];
   buildWorkflowBundleSha: string;
   buildWorkflowBundleDigest: string;
+  buildDependencyAuditException: Record<string, unknown> | null;
   buildPlatformVersion: string;
   buildMinSdk: string;
   buildTargetSdk: string;
@@ -235,6 +236,7 @@ export function emptyConfigDraft(): ConfigDraft {
     assets: [],
     buildWorkflowBundleSha: "",
     buildWorkflowBundleDigest: "",
+    buildDependencyAuditException: null,
     buildPlatformVersion: "",
     buildMinSdk: "",
     buildTargetSdk: "",
@@ -293,6 +295,9 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
     }),
     buildWorkflowBundleSha: text(build.workflowBundleSha),
     buildWorkflowBundleDigest: text(build.workflowBundleDigest),
+    buildDependencyAuditException: Object.keys(record(build.dependencyAuditException)).length > 0
+      ? record(build.dependencyAuditException)
+      : null,
     buildPlatformVersion: text(build.platformVersion),
     buildMinSdk: text(build.minSdk),
     buildTargetSdk: text(build.targetSdk),
@@ -444,6 +449,9 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
     ...(trimmed(draft.buildWorkflowBundleSha) ? { workflowBundleSha: draft.buildWorkflowBundleSha.trim() } : {}),
     ...(trimmed(draft.buildWorkflowBundleDigest)
       ? { workflowBundleDigest: draft.buildWorkflowBundleDigest.trim() }
+      : {}),
+    ...(draft.buildDependencyAuditException
+      ? { dependencyAuditException: draft.buildDependencyAuditException }
       : {}),
     ...(trimmed(draft.buildPlatformVersion) ? { platformVersion: draft.buildPlatformVersion.trim() } : {}),
     ...(trimmed(draft.buildMinSdk) ? { minSdk: integer(draft.buildMinSdk) } : {}),

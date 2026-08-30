@@ -4,6 +4,7 @@ import {
   androidBuildBindingObservationSchema,
   configRevisionPayloadSchema,
   type AndroidBuildBindingObservation,
+  type DependencyAuditException,
   workflowCallerSchema,
   type ReauthGate,
   type WorkflowCaller,
@@ -43,6 +44,55 @@ export class ControlPlaneError extends Error {
   ) {
     super(message);
   }
+}
+
+type DependencyAuditActionClass = DependencyAuditException["bindings"][number]["actionClass"];
+
+function resolveDependencyAuditException(input: {
+  exception: DependencyAuditException | undefined;
+  actionClass: DependencyAuditActionClass;
+  repositoryId: string;
+  fullName: string;
+  applicationSourceSha: string;
+  now: Date;
+}): DependencyAuditException | undefined {
+  if (!input.exception) return undefined;
+  if (!Number.isFinite(input.now.getTime())) {
+    throw new ControlPlaneError(
+      "dependency audit 예외의 만료 시각을 검증할 수 없습니다.",
+      503,
+      "DEPENDENCY_AUDIT_EXCEPTION_CLOCK_INVALID",
+    );
+  }
+  if (
+    input.exception.repositoryId !== input.repositoryId
+    || input.exception.fullName !== input.fullName
+  ) {
+    throw new ControlPlaneError(
+      "dependency audit 예외의 repository identity가 runtime 요청과 일치하지 않습니다.",
+      409,
+      "DEPENDENCY_AUDIT_EXCEPTION_IDENTITY_MISMATCH",
+    );
+  }
+  const binding = input.exception.bindings.find(
+    (candidate) => candidate.actionClass === input.actionClass,
+  );
+  if (!binding || binding.sourceSha !== input.applicationSourceSha) {
+    throw new ControlPlaneError(
+      "dependency audit 예외의 exact source binding이 runtime 요청과 일치하지 않습니다.",
+      409,
+      "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+    );
+  }
+  const expiresAt = Date.parse(input.exception.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= input.now.getTime()) {
+    throw new ControlPlaneError(
+      "dependency audit 예외가 만료되었습니다.",
+      409,
+      "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED",
+    );
+  }
+  return input.exception;
 }
 
 export const MAX_OBSERVATION_FUTURE_SKEW_MS = 5 * 60 * 1_000;
@@ -2182,6 +2232,7 @@ export async function resolveStaticRuntimeManifest(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  now?: Date;
 }, client: Pick<
   typeof prisma,
   "app" | "configRevision" | "discoveryObservation" | "repositoryRegistration"
@@ -2260,6 +2311,14 @@ export async function resolveStaticRuntimeManifest(input: {
       "WORKFLOW_BUNDLE_NOT_APPROVED",
     );
   }
+  const dependencyAuditException = resolveDependencyAuditException({
+    exception: configPayload.build.dependencyAuditException,
+    actionClass: "STATIC_CHECK",
+    repositoryId: input.identity.repositoryId,
+    fullName: app.repoFullName,
+    applicationSourceSha: input.identity.applicationSourceSha,
+    now: input.now ?? new Date(),
+  });
 
   const discovery = await client.discoveryObservation.findFirst({
     where: {
@@ -2345,6 +2404,7 @@ export async function resolveStaticRuntimeManifest(input: {
       snapshotSignatureKeyId: input.snapshotSignatureKeyId,
       snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
       staticBinding,
+      dependencyAuditException,
     });
   } catch (error) {
     if (error instanceof StaticRuntimeManifestError) {
@@ -2363,6 +2423,7 @@ export async function resolveBuildRuntimeManifest(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  now?: Date;
 }, client: Pick<
   typeof prisma,
   "app" | "configRevision" | "discoveryObservation" | "workflowBundleRegistryRecord" | "repositoryRegistration"
@@ -2442,6 +2503,14 @@ export async function resolveBuildRuntimeManifest(input: {
     );
   }
   const workflowBundlePayloadDigest = configPayload.build.workflowBundleDigest.toLowerCase();
+  const dependencyAuditException = resolveDependencyAuditException({
+    exception: configPayload.build.dependencyAuditException,
+    actionClass: "ANDROID_BUILD_ONLY",
+    repositoryId: input.identity.repositoryId,
+    fullName: app.repoFullName,
+    applicationSourceSha: input.identity.applicationSourceSha,
+    now: input.now ?? new Date(),
+  });
   const registry = await client.workflowBundleRegistryRecord.findFirst({
     where: {
       registryId: "seorilabs-workflow-bundles-v5",
@@ -2551,6 +2620,7 @@ export async function resolveBuildRuntimeManifest(input: {
       workflowBundleSourceSha: registry.sourceSha,
       workflowBundlePayloadDigest: registry.payloadDigest,
       buildBinding,
+      dependencyAuditException,
     });
   } catch (error) {
     if (error instanceof BuildRuntimeManifestError) {

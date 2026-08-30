@@ -40,6 +40,30 @@ const fullPayload = {
   build: {
     workflowBundleSha: "c".repeat(40),
     workflowBundleDigest: `sha256:${"d".repeat(64)}`,
+    dependencyAuditException: {
+      schemaVersion: 1,
+      repositoryId: "1250442131",
+      fullName: "seorilabs/happy-farm",
+      bindings: [
+        {
+          actionClass: "STATIC_CHECK",
+          sourceSha: "3d8c7f96eb6bb9ef47b3d5485cb5faf1408373a2",
+          lockfileSha256: "sha256:bb7c039ab9bb3b0deb3755e124a2f248f44b09c984cc12e1a5450686e18bd3c5",
+        },
+        {
+          actionClass: "ANDROID_BUILD_ONLY",
+          sourceSha: "376c31350558c3ac4ed88907c4a35b0e443b5cd7",
+          lockfileSha256: "sha256:bb0676484da96a39896ceefa3f74b047eab4705dc3f81c87a31ffb88fdd0b1a8",
+        },
+      ],
+      expiresAt: "2026-09-13T00:00:00Z",
+      reason: "공식 패치 대기 중인 build-time dependency advisory 3건",
+      advisories: [
+        { ghsa: "GHSA-2p57-rm9w-gvfp", module: "ip", severity: "high", versions: ["1.1.9"] },
+        { ghsa: "GHSA-5p2g-fcmc-qvqq", module: "image-size", severity: "high", versions: ["0.6.3", "1.2.1"] },
+        { ghsa: "GHSA-w3rx-r6r6-pgpr", module: "image-size", severity: "high", versions: ["0.6.3", "1.2.1"] },
+      ],
+    },
     platformVersion: "1.4.0",
     minSdk: 24,
     targetSdk: 35,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { DependencyAuditException } from "@/lib/control-plane/contracts";
 import type { GitHubActionsStaticManifestIdentity } from "@/lib/control-plane/github-actions-oidc";
 import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
@@ -8,17 +9,45 @@ import {
 } from "@/lib/control-plane/service";
 
 const SIGNING_KEY = "unit-test-snapshot-signing-key";
-const REPOSITORY_ID = "7001";
-const APPLICATION_SHA = "a".repeat(40);
-const BINDING_SHA = "b".repeat(40);
+const REPOSITORY_ID = "1250442131";
+const FULL_NAME = "seorilabs/happy-farm";
+const APPLICATION_SHA = "3d8c7f96eb6bb9ef47b3d5485cb5faf1408373a2";
+const BINDING_SHA = "376c31350558c3ac4ed88907c4a35b0e443b5cd7";
 const BUNDLE_SHA = "c".repeat(40);
+
+function dependencyAuditException(): DependencyAuditException {
+  return {
+    schemaVersion: 1 as const,
+    repositoryId: "1250442131",
+    fullName: "seorilabs/happy-farm",
+    bindings: [
+      {
+        actionClass: "STATIC_CHECK" as const,
+        sourceSha: APPLICATION_SHA,
+        lockfileSha256: "sha256:bb7c039ab9bb3b0deb3755e124a2f248f44b09c984cc12e1a5450686e18bd3c5",
+      },
+      {
+        actionClass: "ANDROID_BUILD_ONLY" as const,
+        sourceSha: BINDING_SHA,
+        lockfileSha256: "sha256:bb0676484da96a39896ceefa3f74b047eab4705dc3f81c87a31ffb88fdd0b1a8",
+      },
+    ],
+    expiresAt: "2026-09-13T00:00:00Z",
+    reason: "공식 패치 대기 중인 build-time dependency advisory 3건",
+    advisories: [
+      { ghsa: "GHSA-2p57-rm9w-gvfp", module: "ip", severity: "high" as const, versions: ["1.1.9"] },
+      { ghsa: "GHSA-5p2g-fcmc-qvqq", module: "image-size", severity: "high" as const, versions: ["0.6.3", "1.2.1"] },
+      { ghsa: "GHSA-w3rx-r6r6-pgpr", module: "image-size", severity: "high" as const, versions: ["0.6.3", "1.2.1"] },
+    ],
+  };
+}
 
 function identity(
   overrides: Partial<GitHubActionsStaticManifestIdentity> = {},
 ): GitHubActionsStaticManifestIdentity {
   return {
     repositoryId: REPOSITORY_ID,
-    fullName: "seorilabs/runtime-canary",
+    fullName: FULL_NAME,
     applicationSourceSha: APPLICATION_SHA,
     bindingSourceSha: BINDING_SHA,
     workflowBundleSha: BUNDLE_SHA,
@@ -42,7 +71,12 @@ function client(overrides: {
   defaultBranch?: string;
   profile?: "react-native" | "capacitor" | "ait-web" | "godot";
   rootWorkspace?: boolean;
+  dependencyAuditException?: ReturnType<typeof dependencyAuditException>;
+  repositoryId?: string;
+  fullName?: string;
 } = {}) {
+  const repositoryId = overrides.repositoryId ?? REPOSITORY_ID;
+  const fullName = overrides.fullName ?? FULL_NAME;
   const defaultBranch = overrides.defaultBranch ?? "main";
   const sourceRef = overrides.sourceRef === undefined
     ? `refs/heads/${defaultBranch}`
@@ -50,13 +84,18 @@ function client(overrides: {
   const payload = {
     schemaVersion: 1,
     markets: [],
-    build: { workflowBundleSha: overrides.workflowBundleSha ?? BUNDLE_SHA },
+    build: {
+      workflowBundleSha: overrides.workflowBundleSha ?? BUNDLE_SHA,
+      ...(overrides.dependencyAuditException
+        ? { dependencyAuditException: overrides.dependencyAuditException }
+        : {}),
+    },
   };
   const snapshot = {
     schemaVersion: 1,
     appId: "app-runtime-1",
-    repoId: REPOSITORY_ID,
-    repoFullName: "seorilabs/runtime-canary",
+    repoId: repositoryId,
+    repoFullName: fullName,
     revision: 7,
     payloadHash: jsonDigest(payload as JsonValue),
     payload,
@@ -73,8 +112,8 @@ function client(overrides: {
       async findUnique() {
         return {
           id: "app-runtime-1",
-          repoId: BigInt(REPOSITORY_ID),
-          repoFullName: "seorilabs/runtime-canary",
+          repoId: BigInt(repositoryId),
+          repoFullName: fullName,
           status: "ACTIVE" as const,
           isPublicRepo: overrides.public ?? false,
         };
@@ -112,8 +151,8 @@ function client(overrides: {
                 schemaVersion: 2,
                 contractVersion: "repository-discovery/v7",
                 repository: {
-                  id: Number(REPOSITORY_ID),
-                  fullName: "seorilabs/runtime-canary",
+                  id: Number(repositoryId),
+                  fullName,
                   sourceSha: BINDING_SHA,
                   sourceRef,
                 },
@@ -121,8 +160,8 @@ function client(overrides: {
                   path,
                   status: "PRESENT",
                   reason: null,
-                  repoId: Number(REPOSITORY_ID),
-                  fullName: "seorilabs/runtime-canary",
+                  repoId: Number(repositoryId),
+                  fullName,
                   sourceSha: BINDING_SHA,
                   sourceRef,
                   blobSha: "e".repeat(40),
@@ -136,11 +175,12 @@ function client(overrides: {
   };
 }
 
-const input = (value = identity()) => ({
+const input = (value = identity(), now = new Date("2026-08-30T00:00:00Z")) => ({
   identity: value,
   signingKey: SIGNING_KEY,
   snapshotSignatureKeyId: "control-plane-snapshot-v1",
   snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+  now,
 });
 
 test("Godot은 전용 v3 workflow identity와 null package manager일 때만 resolve된다", async () => {
@@ -179,6 +219,56 @@ test("static runtime resolver는 App, ACTIVE config, exact discovery와 approved
   assert.equal(result.applicationSourceSha, APPLICATION_SHA);
   assert.equal(result.manifest.staticBinding.profile, "capacitor");
   assert.equal(result.manifest.staticBinding.workspaceRoot, "app");
+});
+
+test("static runtime은 signed snapshot의 exact merge-source 예외를 digest에 포함한다", async () => {
+  const exception = dependencyAuditException();
+  const result = await resolveStaticRuntimeManifest(
+    input(),
+    client({ dependencyAuditException: exception }) as never,
+  );
+  assert.deepEqual(result.manifest.dependencyAuditException, exception);
+  assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+});
+
+test("static dependency audit 예외는 identity, source, expiry와 clock drift를 fail-closed한다", async () => {
+  const exception = dependencyAuditException();
+  const cases = [
+    {
+      identity: identity({ repositoryId: "7001", fullName: "seorilabs/runtime-canary" }),
+      client: client({
+        dependencyAuditException: exception,
+        repositoryId: "7001",
+        fullName: "seorilabs/runtime-canary",
+      }),
+      now: new Date("2026-08-30T00:00:00Z"),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_IDENTITY_MISMATCH",
+    },
+    {
+      identity: identity({ applicationSourceSha: "f".repeat(40) }),
+      client: client({ dependencyAuditException: exception }),
+      now: new Date("2026-08-30T00:00:00Z"),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+    },
+    {
+      identity: identity(),
+      client: client({ dependencyAuditException: exception }),
+      now: new Date("2026-09-13T00:00:00Z"),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED",
+    },
+    {
+      identity: identity(),
+      client: client({ dependencyAuditException: exception }),
+      now: new Date(Number.NaN),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_CLOCK_INVALID",
+    },
+  ];
+  for (const value of cases) {
+    await assert.rejects(
+      () => resolveStaticRuntimeManifest(input(value.identity, value.now), value.client as never),
+      (error) => error instanceof ControlPlaneError && error.code === value.code,
+    );
+  }
 });
 
 test("static runtime resolver는 registered non-main default branch/ref를 그대로 반환한다", async () => {
