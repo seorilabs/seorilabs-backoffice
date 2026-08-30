@@ -461,6 +461,18 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
 - 승인 카드·단계 넛지·일일 다이제스트·주간 LiveOps·Godot 버전 체크는 버튼이 실리므로
   `#backoffice`에 남는다.
 
+채널에는 한 줄만 남기고 길어지는 맥락은 **그 메시지에서 시작한 쓰레드**로 보낸다.
+
+- 생성 시 쓰레드에 이슈 본문을 남긴다. `<!-- ... -->` 마커 주석은 걷어내고 1,200자에서 자른다.
+  본문이 비어도 쓰레드는 연다 — 종료 시 붙일 댓글·PR이 갈 곳이 필요하다.
+- 종료 시 같은 쓰레드에 연결 PR(머지 여부 포함)과 댓글을 붙인다. 붙일 맥락이 하나도 없으면
+  게시하지 않는다 — 채널 메시지가 이미 종료 사실을 알린다.
+- 연결 PR은 `PullRequestMirror.linkedIssue`(PR 본문의 `closes #N` 파싱)에서 찾는다.
+- **기능 도입 전에 열린 이슈는 붙일 부모 메시지가 없다.** 종료 쓰레드는 enqueue 시점에 부모
+  존재를 확인하고 없으면 건너뛴다. 영원히 재시도하다 dead letter가 되는 것을 막는다.
+- 쓰레드 게시는 `NotificationKind`가 아니라 payload의 `thread` 필드로 구분한다. `kind`는
+  MySQL ENUM이라 값 추가에 `ALTER MODIFY`가 필요한데 expand-only 게이트가 막는다.
+
 ### 컨텐츠 지표 마켓 어휘
 
 컨텐츠 지표 스펙은 두 곳에서 온다 — 레포의 `.seorilabs/backoffice.json`(manifest)과 백오피스
