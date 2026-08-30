@@ -906,7 +906,7 @@ packages:
     resolution: {integrity: sha512-TvZbIpeKqGQQ7X0zSCvPH9riMSFQFSggnfBjFZ1mEoILW+UuXCKwOoPcgjMwiUtRqFZ8jWhPJc4um14vC6I4ag==}
 
   '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853#path:/packages/repo-contract':
-    resolution: {gitHosted: true, integrity: sha512-YSGZMTRLk6NdUIxqStn/7unQ57I/k5A/FNRNbSRp2rWPQppBc+V41AljtCGiT32VtEN2Rf0lZhdSHreQ8CRJAQ==, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853}
+    resolution: {gitHosted: true, path: /packages/repo-contract, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/fb1aa36d5ad7e40759f1734f52273611bbeec853}
     version: 0.5.0
     engines: {node: 24.x}
     hasBin: true
