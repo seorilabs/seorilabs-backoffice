@@ -216,6 +216,26 @@ else
   ng "provider audit partial migration 복구 경계가 깨졌다"
 fi
 
+auth_broker_trigger_out="$("$render" "$root/k8s/auth-broker-journal-trigger-recovery-job.yaml" "$IMG" "$SHA")"
+auth_broker_resolve_out="$("$render" "$root/k8s/auth-broker-journal-migration-resolve-job.yaml" "$IMG" "$SHA")"
+if printf '%s' "$auth_broker_trigger_out" | grep -q "backoffice-auth-broker-journal-triggers-${SHA:0:12}-" &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'namespace: data' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'mysql-root-cred' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'history_state.*1:1:1:0:0' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$checkpoints" = "0"' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$events" = "0"' &&
+   ! printf '%s' "$auth_broker_trigger_out" | grep -q 'log_bin_trust_function_creators\|GRANT TRIGGER\|MYSQL_PWD' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q "backoffice-auth-broker-journal-migration-resolve-${SHA:0:12}-" &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q "image: ${IMG}" &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q -- '--recovery-state="$migration"' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q 'auth broker journal migration recovery already complete' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q '미해결 migration attempt가 있다' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q 'prisma migrate resolve --applied'; then
+  ok "auth broker journal partial migration은 exact trigger와 immutable resolve Job으로만 복구"
+else
+  ng "auth broker journal partial migration 복구 경계가 깨졌다"
+fi
+
 trigger_verifier="$root/k8s/provider-audit-trigger-verifier.yaml"
 if grep -q 'kind: CronJob' "$trigger_verifier" &&
    grep -q 'namespace: data' "$trigger_verifier" &&
