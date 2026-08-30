@@ -201,6 +201,7 @@ async function main(): Promise<void> {
   const readsAfterPlan = transport.reads;
   const replayedPlan = await planFleetStandardLabels({ actor, idempotencyKey: planKey }, dependencies());
   assert.equal(replayedPlan.planId, plan.planId);
+  assert.equal(replayedPlan.duplicate, true);
   assert.equal(transport.reads, readsAfterPlan, "동일 plan idempotency replay는 provider를 다시 읽지 않아야 한다");
 
   const definition = await prisma.automationDefinition.findUniqueOrThrow({
@@ -240,6 +241,7 @@ async function main(): Promise<void> {
     planDigest: plan.planDigest,
   }, dependencies());
   assert.equal(replayedApply.planId, plan.planId);
+  assert.equal(replayedApply.duplicate, true);
   assert.equal(transport.ensureCalls, ensureAfterApply, "동일 apply idempotency replay는 mutation을 반복하지 않아야 한다");
 
   transport.labels.set(repositoryIds[0].toString(), [

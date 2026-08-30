@@ -388,7 +388,12 @@ export async function planFleetStandardLabels(input: {
     request: { mode: "PLAN" } as JsonValue,
   };
   const begun = await beginAutomationMutation(mutation);
-  if (begun.replay) return begun.replay as unknown as FleetStandardLabelPlanResult;
+  if (begun.replay) {
+    return {
+      ...begun.replay as unknown as FleetStandardLabelPlanResult,
+      duplicate: true,
+    };
+  }
 
   const definition = await requireAutomationDefinition(dependencies);
   const contract = await dependencies.transport.readContract(fleetStandardLabelContractSourceConfig());
@@ -892,7 +897,12 @@ export async function applyFleetStandardLabels(input: {
     } as JsonValue,
   };
   const begun = await beginAutomationMutation(mutation);
-  if (begun.replay) return begun.replay as unknown as FleetStandardLabelApplyResult;
+  if (begun.replay) {
+    return {
+      ...begun.replay as unknown as FleetStandardLabelApplyResult,
+      duplicate: true,
+    };
+  }
 
   const definition = await requireAutomationDefinition(dependencies);
   const occurrence = await dependencies.client.automationOccurrence.findUnique({
