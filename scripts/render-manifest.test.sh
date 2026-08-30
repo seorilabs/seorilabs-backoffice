@@ -290,7 +290,7 @@ if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q '/dev/termination-log' "$catchup_job" &&
    grep -q 'desired-state-safe-source-rebase/v3' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
-   grep -q 'automation/project-projections' "$catchup_job" &&
+   ! grep -q 'automation/project-projections' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
   ok "scheduler catch-up 격리와 감사 보존"
 else
@@ -442,8 +442,8 @@ if printf '%s' "$projection_doc" | grep -q 'schedule: "\* \* \* \* \*"' &&
    printf '%s' "$projection_doc" | grep -q 'automation/project-projections' &&
    printf '%s' "$projection_doc" | grep -q 'automountServiceAccountToken: false' &&
    [ "$(grep -c 'automation/project-projections' "$scheduler_cronjobs")" -eq 1 ] &&
-   [ "$(grep -c 'automation/project-projections' "$catchup_job")" -eq 1 ]; then
-  ok "Fleet Project projection drain은 정기 scheduler와 catch-up에 각각 한 번씩 연결된다"
+   [ "$(grep -c 'automation/project-projections' "$catchup_job")" -eq 0 ]; then
+  ok "Fleet Project projection drain은 중복 catch-up 없이 전용 scheduler에만 연결된다"
 else
   ng "Fleet Project projection drain 연결이 깨졌다"
 fi
