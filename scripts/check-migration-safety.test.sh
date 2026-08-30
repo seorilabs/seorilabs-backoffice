@@ -208,6 +208,28 @@ if MIGRATION_FROZEN_BASE="$recovery_deployed_base" \
   exit 1
 fi
 
+prepare_case frozen_inline_trigger
+git -C "$tmp/frozen_inline_trigger" init -q
+git -C "$tmp/frozen_inline_trigger" config user.name migration-contract
+git -C "$tmp/frozen_inline_trigger" config user.email migration-contract@localhost
+git -C "$tmp/frozen_inline_trigger" add prisma
+git -C "$tmp/frozen_inline_trigger" commit -qm baseline
+inline_trigger_base="$(git -C "$tmp/frozen_inline_trigger" rev-parse HEAD)"
+mkdir -p "$tmp/frozen_inline_trigger/prisma/migrations/99999999999999_inline_trigger"
+printf '%s\n' \
+  'CREATE TRIGGER `control_plane_provider_execution_event_no_delete`' \
+  'BEFORE DELETE ON `control_plane_provider_execution_event`' \
+  "FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'provider execution audit is append-only';" > \
+  "$tmp/frozen_inline_trigger/prisma/migrations/99999999999999_inline_trigger/migration.sql"
+git -C "$tmp/frozen_inline_trigger" add prisma
+git -C "$tmp/frozen_inline_trigger" commit -qm inline-trigger
+if MIGRATION_FROZEN_BASE="$inline_trigger_base" \
+  REPOSITORY_ROOT="$tmp/frozen_inline_trigger" \
+  "$here/check-migration-safety.sh" >/dev/null 2>&1; then
+  echo "FAIL 신규 inline CREATE TRIGGER migration이 통과했다" >&2
+  exit 1
+fi
+
 prepare_case frozen_recovery_for_new_migration
 git -C "$tmp/frozen_recovery_for_new_migration" init -q
 git -C "$tmp/frozen_recovery_for_new_migration" config user.name migration-contract

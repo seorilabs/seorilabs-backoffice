@@ -91,6 +91,9 @@ CI는 build가 반환한 immutable registry digest의 migration Job으로 `prism
 반영되므로 migration과 기존 Pod가 서로 다른 artifact를 실행하지 않는다.
 
 신규 migration은 `scripts/check-migration-safety.sh`의 expand-only gate를 통과해야 한다.
+새 migration의 inline `CREATE TRIGGER`는 금지한다. production app principal에는 의도적으로
+`TRIGGER` 권한이 없으므로, privileged DDL은 migration에 섞지 않고 trusted-operator 전용 manifest와
+고정 live verifier로 설치한다. 이미 배포된 migration SQL은 checksum을 보존하며 수정하지 않는다.
 폐기된 컬럼·테이블을 실제로 지우는 contract 단계는 `prisma/migration-history.json`의
 `approvedContractMigrations`에 **이름 + migration.sql bytes checksum + 사유**를 함께 등록해야만
 예외로 통과한다. 파일을 한 글자라도 고치면 checksum이 어긋나 다시 막히고, 등록만 남고 migration이
