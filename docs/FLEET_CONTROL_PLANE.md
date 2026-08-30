@@ -489,11 +489,12 @@ GitHub App installation에 organization Projects `write` 이상이 없으면 Pro
 부재로 해석하지 않는다. 권한이 확인된 뒤 node/title/owner/number/URL readback이 불일치할 때만
 `IDENTITY_MISMATCH`, provider read 실패는 `READBACK_REQUIRED`다.
 
-`FleetProjectProjection` drain은 정기 scheduler CronJob `backoffice-fleet-project-projection`과 배포
-catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩 호출해 소진한다. 두 경로가 겹쳐도
-claim CAS가 한 projection을 한 번만 적용한다. 같은 endpoint가 중앙 binding readback과 기존 ACTIVE
-PRODUCT_APP Issue source reconciliation을 먼저 수행하므로 앱별 `projectV2Id` 입력은 필요하지 않다.
-`k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
+`FleetProjectProjection` drain은 전용 scheduler CronJob `backoffice-fleet-project-projection`이
+`/api/admin/automation/project-projections`를 매분 호출해 소진한다. CronJob은 배포 중에도
+`suspend: false`로 계속 실행되므로 배포 catch-up Job은 source 전체 scan과 외부 GitHub readback을
+중복 호출하지 않는다. 중복 schedule과 webhook은 projection claim CAS가 한 번만 적용한다. 같은 endpoint가
+중앙 binding readback과 기존 ACTIVE PRODUCT_APP Issue source reconciliation을 먼저 수행하므로 앱별
+`projectV2Id` 입력은 필요하지 않다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 배포 스크립트가 직접 apply한다.
 `Seorilabs Fleet` Project 생성과 GitHub App organization Projects 권한 승인은 사람 전용 gate다.
 
 Platform Fleet scheduler는 기존 plan의 drain/readback을 producer보다 먼저 별도 오류 경계에서 실행한다.

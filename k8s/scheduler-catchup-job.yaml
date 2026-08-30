@@ -150,8 +150,9 @@ spec:
                 http://backoffice.platform.svc.cluster.local/api/admin/seed
               call platform_fleet --max-time 50 -XPOST \
                 http://backoffice.platform.svc.cluster.local/api/admin/automation/platform-fleet
-              call fleet_project_projection --max-time 50 -XPOST \
-                http://backoffice.platform.svc.cluster.local/api/admin/automation/project-projections
+              # Fleet Project projection은 매분 실행되는 전용 CronJob이 배포 중에도 계속
+              # 소진한다. source 전체 scan과 외부 GitHub readback을 catch-up에서 중복 호출하면
+              # 같은 분의 CronJob과 겹쳐 배포 결과만 불명확해지므로 여기서는 실행하지 않는다.
               exit "$failed"
           resources:
             requests:
