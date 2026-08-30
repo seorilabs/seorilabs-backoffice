@@ -1,0 +1,151 @@
+# WorkflowBundle v5 CANDIDATE용 trusted GitHub App executor.
+# GitHub App의 contents/workflows/pull_requests write 공개 readback과 FQDN egress,
+# Backoffice의 WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED=true가 모두 검증되기
+# 전에는 suspend를 해제하지 않는다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workflow-bundle-candidate-executor
+  namespace: auth-broker
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: workflow-bundle-candidate-executor
+  namespace: auth-broker
+spec:
+  schedule: "*/5 * * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: workflow-bundle-candidate-executor
+            app.kubernetes.io/component: trusted-github-app-executor
+        spec:
+          restartPolicy: Never
+          serviceAccountName: workflow-bundle-candidate-executor
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: executor
+              image: __BACKOFFICE_IMAGE_DIGEST__
+              imagePullPolicy: IfNotPresent
+              workingDir: /app
+              command: ["node", "/app/scripts-dist/workflow-bundle-candidate-executor.cjs"]
+              env:
+                - name: NODE_ENV
+                  value: production
+                - name: HOME
+                  value: /tmp
+                - name: CHECKPOINT_DISABLE
+                  value: "1"
+                - name: NODE_OPTIONS
+                  value: "--max-old-space-size=384 --dns-result-order=ipv4first --no-network-family-autoselection"
+                - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ROOT
+                  value: /var/run/workflow-bundle-candidate-executor
+                - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTION_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.uid
+                - name: SEORI_BACKOFFICE_ORIGIN
+                  value: https://backoffice.vzyx.xyz
+                - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
+                  value: seori-auth:workflow-bundle-candidate-adapter
+                - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
+                  value: spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor
+                - name: GITHUB_ORG
+                  value: seorilabs
+                - name: GITHUB_APP_ID
+                  valueFrom:
+                    configMapKeyRef:
+                      name: seori-auth-agent-public-bindings
+                      key: GITHUB_APP_ID
+                - name: GITHUB_PRIVATE_KEY_FILE
+                  value: /var/run/workflow-bundle-candidate-executor/github/app-private.pem
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 192Mi
+                limits:
+                  cpu: "1"
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: runtime
+                  mountPath: /var/run/workflow-bundle-candidate-executor
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: runtime
+              projected:
+                defaultMode: 0440
+                sources:
+                  - secret:
+                      name: workflow-bundle-candidate-backoffice
+                      items:
+                        - { key: ca.pem, path: backoffice/ca.pem }
+                        - { key: adapter.bearer, path: backoffice/adapter.bearer }
+                  - secret:
+                      name: workflow-bundle-candidate-attestation
+                      items:
+                        - { key: private.pem, path: adapter/attestation-private.pem }
+                  - secret:
+                      name: workflow-bundle-candidate-github
+                      items:
+                        - { key: app-private.pem, path: github/app-private.pem }
+            - name: tmp
+              emptyDir:
+                sizeLimit: 32Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workflow-bundle-candidate-executor
+  namespace: auth-broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: workflow-bundle-candidate-executor
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 표준 NetworkPolicy에는 FQDN selector가 없다. suspend 해제 gate에서
+    # backoffice.vzyx.xyz와 api.github.com만 허용하는 CNI FQDN 정책으로 교체한다.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }

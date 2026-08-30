@@ -46,6 +46,8 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-fleet-standard-label-transport.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-workflow-bundle-candidate-executor.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-classifier.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-desired-state-backfill-source-binding.ts

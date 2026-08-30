@@ -54,6 +54,7 @@ import {
   trustedGithubStepLedgerImplemented,
   trustedGithubRuntimeCanaryApproved,
   trustedMutationAdapterConfigured,
+  workflowBundleCandidateExecutorConfigured,
 } from "@/lib/control-plane/security";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
@@ -540,6 +541,11 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
     "AGENT_TRUSTED_ADAPTER_DEPLOYED",
     "AGENT_TRUSTED_ADAPTER_TOKEN",
     "AGENT_TRUSTED_ADAPTER_PUBLIC_KEY",
+    "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED",
+    "WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL",
+    "WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY",
+    "WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN",
+    "WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY",
     "AGENT_WORKER_CODEX_TOKEN",
     "CONTROL_PLANE_ADMIN_PRINCIPAL",
   ] as const;
@@ -553,13 +559,35 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
     process.env.AGENT_TRUSTED_ADAPTER_TOKEN = "adapter-test-token";
     process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = "not-an-ed25519-public-key";
     assert.equal(trustedMutationAdapterConfigured(), false, "검증 불가능한 public key를 거부한다");
-    process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
+    const genericPublicKey = generateKeyPairSync("ed25519").publicKey.export({
       type: "spki",
       format: "pem",
     }).toString();
+    process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY = genericPublicKey;
     assert.equal(trustedGithubStepLedgerImplemented(), true);
     assert.equal(trustedGithubRuntimeCanaryApproved(), false);
     assert.equal(trustedMutationAdapterConfigured(), false, "실제 GitHub canary 승인 전에는 activation을 열지 않는다");
+    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "candidate executor는 별도 deploy gate 전에는 닫혀 있다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED = "true";
+    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic adapter credential로 candidate gate를 열 수 없다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL = "seori-auth:workflow-bundle-candidate-adapter";
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor";
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "candidate-adapter-test-token";
+    const candidatePublicKey = generateKeyPairSync("ed25519").publicKey.export({
+      type: "spki",
+      format: "pem",
+    }).toString();
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = candidatePublicKey;
+    assert.equal(workflowBundleCandidateExecutorConfigured(), true, "candidate 전용 workload identity와 credential에서만 열린다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "adapter-test-token";
+    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic adapter bearer 재사용을 거부한다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "candidate-adapter-test-token";
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = genericPublicKey;
+    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic attestation key 재사용을 거부한다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = candidatePublicKey;
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-github-adapter";
+    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic SPIFFE identity 재사용을 거부한다");
+    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor";
     process.env.AGENT_WORKER_CODEX_TOKEN = "adapter-test-token";
     assert.equal(trustedMutationAdapterConfigured(), false, "worker token 재사용을 거부한다");
     delete process.env.AGENT_WORKER_CODEX_TOKEN;
@@ -568,7 +596,7 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
     const service = readFileSync(join(process.cwd(), "src/lib/control-plane/automation-service.ts"), "utf8");
     const queue = readFileSync(join(process.cwd(), "src/lib/control-plane/agent-queue.ts"), "utf8");
     assert.match(service, /approvalPolicy === "READY_PR"[\s\S]*MUTATION_CAPABILITY_BROKER_REQUIRED/);
-    assert.match(queue, /executionPolicy\.repositorySingleton && !trustedMutationAdapterConfigured\(\)/);
+    assert.match(queue, /trustedMutationRuntimeAvailable \?\? trustedMutationAdapterConfigured\(\)/);
   } finally {
     for (const name of names) {
       const value = original[name];

@@ -368,6 +368,10 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `AGENT_TRUSTED_ADAPTER_DEPLOYED` | durable `CREATE_COMMIT/CREATE_REF/CREATE_PR` step ledger와 실제 GitHub canary 뒤에만 `true`. ledger는 구현됐지만 runtime canary gate가 닫혀 있어 값을 바꿔도 `READY_PR` 생성/claim은 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_TOKEN` | 위 adapter에만 결합된 bearer. worker/모델에 주입하지 않으며 worker token 재사용 시 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_PUBLIC_KEY` | route/body/idempotency key/runtime/60초 TTL attestation 검증용 Ed25519 공개키. private key는 adapter에만 둠 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL` | 후보 executor 전용 공개 adapter identity. `seori-auth:workflow-bundle-candidate-adapter` exact 값만 허용 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY` | 후보 executor ServiceAccount에 고정된 exact SPIFFE identity. generic adapter identity 재사용 금지 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN` | 후보 executor 전용 bearer. generic adapter/worker/admin token과 같으면 fail-closed |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY` | 후보 executor 전용 Ed25519 공개키. generic adapter key와 fingerprint가 같으면 fail-closed |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | 전용 `backoffice-control-plane-snapshot-signing`에서만 공급하는 ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID` | snapshot signer의 공개 logical key ID. runtime manifest가 raw HMAC 대신 이 ID와 signature digest만 반환 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION` | snapshot 서명 정책의 공개 revision. key ID와 함께 없으면 v5 runtime readback 거부 |

@@ -13,7 +13,8 @@ const APPLICATION_SHA = "b".repeat(40);
 const BUNDLE_SHA = "c".repeat(40);
 const REPOSITORY_ID = "1250442131";
 const FULL_NAME = "seorilabs/happy-farm";
-const HEAD_REF = `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}`;
+const PLAN_IDENTITY = "d".repeat(64);
+const HEAD_REF = `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}/${PLAN_IDENTITY}`;
 
 function candidateClaims(overrides: Partial<JWTPayload> = {}): JWTPayload {
   return {
@@ -53,6 +54,7 @@ const candidateExpectation = {
   workflowBundleSha: BUNDLE_SHA,
   buildProfile: "react-native-android" as const,
   defaultBranch: "main",
+  candidateHeadRef: HEAD_REF,
 };
 
 test("build canary OIDC는 고정 repo/profile/head와 exact central SHA에 결합된다", () => {
@@ -78,6 +80,7 @@ test("일반 APPROVED build는 registered default branch workflow_dispatch와 �
     ...candidateExpectation,
     mode: "APPROVED",
     eventSourceSha: APPLICATION_SHA,
+    candidateHeadRef: null,
   });
   assert.equal(identity.mode, "APPROVED");
   assert.equal(identity.applicationSourceSha, identity.eventSourceSha);
@@ -99,6 +102,7 @@ test("일반 APPROVED build는 등록된 non-main default branch도 exact ref로
     mode: "APPROVED",
     eventSourceSha: APPLICATION_SHA,
     defaultBranch: "develop",
+    candidateHeadRef: null,
   });
   assert.equal(identity.defaultBranch, "develop");
   assert.equal(identity.eventRef, "refs/heads/develop");
@@ -109,6 +113,9 @@ test("candidate alias, public runner, 임의 branch와 profile 교차 대체를 
     [candidateClaims({ repository_id: "1265192029" }), candidateExpectation],
     [candidateClaims({ repository_visibility: "public", runner_environment: "github-hosted" }), candidateExpectation],
     [candidateClaims({ head_ref: "feature/untrusted" }), candidateExpectation],
+    [candidateClaims({ head_ref: `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}` }), candidateExpectation],
+    [candidateClaims({ head_ref: `${HEAD_REF}/lookalike` }), candidateExpectation],
+    [candidateClaims(), { ...candidateExpectation, candidateHeadRef: `${HEAD_REF.slice(0, -1)}e` }],
     [candidateClaims(), { ...candidateExpectation, buildProfile: "godot-android" as const }],
     [candidateClaims({ job_workflow_sha: "d".repeat(40) }), candidateExpectation],
   ] as const) {

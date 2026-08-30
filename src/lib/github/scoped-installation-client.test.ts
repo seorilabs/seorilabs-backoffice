@@ -93,6 +93,31 @@ test("계약 source와 readback capability는 write permission을 가질 수 없
   }
 });
 
+test("WorkflowBundle candidate token은 한 repository와 caller PR 최소 permission만 대여한다", async () => {
+  const fixture = fixtureIssuer({});
+  await withFleetScopedGithubClient({
+    issuer: fixture.issuer,
+    installationId: "99",
+    capability: "github.workflow-bundle-candidate.ready-pr",
+    repositoryId: "123",
+    repositoryFullName: "seorilabs/example",
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
+    execute: async () => undefined,
+  });
+  assert.deepEqual(fixture.calls.create, [{
+    installationId: 99,
+    repositoryIds: [123],
+    permissions: {
+      contents: "write",
+      issues: "read",
+      metadata: "read",
+      pull_requests: "write",
+      workflows: "write",
+    },
+  }]);
+  assert.equal(fixture.calls.revoke, 1);
+});
+
 test("repository나 permission scope가 넓으면 callback 전에 거부하고 token을 폐기한다", async () => {
   for (const fixture of [
     fixtureIssuer({ repositoryId: 124 }),

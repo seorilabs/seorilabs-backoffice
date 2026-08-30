@@ -8,6 +8,7 @@
 - Platform Fleet internal template: 검증된 서명 manifest와 exact observation에서 만든 `PLATFORM_SDK_UPDATE` task만 Codex generic worker가 처리한다. 별도 앱 routine이나 Issue를 만들지 않는다.
 - Source remediation internal template(`repo-source-remediation-v1`): `classification=PRODUCT_APP`이지만 discovery가 `NO_CANDIDATE`/`BUILD_TARGET_MISSING`으로 `NEEDS_INPUT`인 repository의 catch-22 전용 단발 routine이다. 앱 Fleet 화면의 일반 routine picker가 아니라 `/api/control-plane/source-remediation-definitions`로만 만들며, 나머지 template의 `RepositoryRegistration.status=MANAGED` guard는 전혀 건드리지 않는다. 자세한 조건은 `docs/FLEET_CONTROL_PLANE.md`의 "Source remediation" 절.
 - Project projector: `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`을 desired/observed ledger로 분리하고 write 뒤 readback한다.
+- WorkflowBundle candidate executor: signed ACTIVE config가 exact CANDIDATE record를 승인한 두 고정 canary repository에서만 중앙 generator caller 두 파일을 Ready PR로 만든다. 운영/활성화 gate는 [workflow-bundle-candidate-executor.md](./workflow-bundle-candidate-executor.md)를 따른다.
 
 ## 운영 상태와 worker gate
 

@@ -4,6 +4,8 @@ import {
   agentExecutionPolicy,
   agentRepositorySingletonScope,
   parseManagedWorkerPolicy,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
 } from "@/lib/control-plane/automation-catalog";
 import type {
   AgentGithubMutationStepKind,
@@ -15,6 +17,7 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+import { workflowBundleCandidateTaskSchema } from "@/lib/control-plane/workflow-bundle-candidate-contract";
 
 export const GITHUB_READY_PR_MUTATION_ACTION = "GITHUB_READY_PR_MUTATE" as const;
 const OBSERVATION_MAX_AGE_MS = 60_000;
@@ -155,6 +158,7 @@ function mutationRequestDigest(input: {
   adapterPrincipalId: string;
   adapterRuntimeIdentity: string;
   observation: AgentGithubObservation;
+  expectedTarget?: { headRef: string; marker: string };
 }): string {
   return jsonDigest({
     sessionId: input.sessionId,
@@ -164,8 +168,60 @@ function mutationRequestDigest(input: {
     mutationIntentDigest: input.mutationIntentDigest.toLowerCase(),
     adapterPrincipalId: input.adapterPrincipalId,
     adapterRuntimeIdentity: input.adapterRuntimeIdentity,
+    ...(input.expectedTarget ? { expectedTarget: input.expectedTarget } : {}),
     observation: observationJson(input.observation),
   });
+}
+
+export function resolveGithubMutationTarget(input: {
+  definition: { template: string; agentKind: string | null };
+  taskInput: Prisma.JsonValue | null;
+  session: { repoId: bigint; repoFullName: string; issueNumber: number | null; sourceSha: string };
+  workerPrincipalId: string;
+  mutationIntentDigest: string;
+  requested?: { headRef: string; marker: string };
+  generated: { headRef: string; marker: string };
+}): { headRef: string; marker: string } {
+  const candidateDefinition = input.definition.template === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY;
+  if (!candidateDefinition) {
+    if (input.requested) {
+      throw new ControlPlaneError(
+        "일반 READY_PR definition은 custom mutation target을 사용할 수 없습니다.",
+        409,
+        "CUSTOM_MUTATION_TARGET_FORBIDDEN",
+      );
+    }
+    return input.generated;
+  }
+  if (
+    input.definition.agentKind !== null
+    || input.workerPrincipalId !== WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL
+    || !input.requested
+  ) {
+    throw new ControlPlaneError(
+      "WorkflowBundle candidate executor identity 또는 target이 일치하지 않습니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_BINDING_MISMATCH",
+    );
+  }
+  const task = workflowBundleCandidateTaskSchema.safeParse(input.taskInput);
+  if (
+    !task.success
+    || task.data.repository.id !== input.session.repoId.toString()
+    || task.data.repository.fullName.toLowerCase() !== input.session.repoFullName.toLowerCase()
+    || task.data.repository.issueNumber !== input.session.issueNumber
+    || task.data.repository.sourceSha !== input.session.sourceSha.toLowerCase()
+    || task.data.mutation.intentDigest !== input.mutationIntentDigest.toLowerCase()
+    || task.data.github.expectedHeadRef !== input.requested.headRef
+    || task.data.github.expectedPullRequestMarker !== input.requested.marker
+  ) {
+    throw new ControlPlaneError(
+      "WorkflowBundle candidate task와 JIT mutation target이 일치하지 않습니다.",
+      409,
+      "WORKFLOW_BUNDLE_CANDIDATE_TASK_BINDING_MISMATCH",
+    );
+  }
+  return input.requested;
 }
 
 function readbackRequestDigest(input: {
@@ -402,6 +458,7 @@ export async function authorizeGithubReadyPrMutation(input: {
   adapterPrincipalId: string;
   adapterRuntimeIdentity: string;
   idempotencyKey: string;
+  expectedTarget?: { headRef: string; marker: string };
   now?: Date;
   retryAttempt?: number;
 }) {
@@ -424,6 +481,10 @@ export async function authorizeGithubReadyPrMutation(input: {
       || replay.adapterPrincipalId !== input.adapterPrincipalId
       || replay.adapterRuntimeIdentity !== input.adapterRuntimeIdentity
       || replay.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
+      || (input.expectedTarget !== undefined && (
+        replay.expectedHeadRef !== input.expectedTarget.headRef
+        || replay.expectedPullRequestMarker !== input.expectedTarget.marker
+      ))
     ) {
       throw new ControlPlaneError("idempotency key가 다른 mutation authorization에 사용되었습니다.", 409, "IDEMPOTENCY_CONFLICT");
     }
@@ -463,6 +524,18 @@ export async function authorizeGithubReadyPrMutation(input: {
       if (!singletonScope || run.repoGuard?.activeScopeKey !== singletonScope) {
         throw new ControlPlaneError("repo READY_PR singleton을 현재 run이 보유하지 않습니다.", 409, "REPO_SINGLETON_NOT_OWNED");
       }
+      const target = resolveGithubMutationTarget({
+        definition: run.occurrence.definition,
+        taskInput: run.taskInput,
+        session,
+        workerPrincipalId: input.workerPrincipalId,
+        mutationIntentDigest: input.mutationIntentDigest,
+        requested: input.expectedTarget,
+        generated: {
+          headRef: `refs/heads/seori/run-${run.id.slice(0, 20)}-${session.generation}`,
+          marker: `seori-run:${run.id}:${session.generation}`,
+        },
+      });
       const registration = await tx.repositoryRegistration.findUnique({
         where: { repoId: session.repoId },
         select: {
@@ -524,6 +597,10 @@ export async function authorizeGithubReadyPrMutation(input: {
           || resumable.grant.issueNumber !== session.issueNumber
           || resumable.grant.sourceSha.toLowerCase() !== session.sourceSha.toLowerCase()
           || resumable.grant.mutationIntentDigest !== input.mutationIntentDigest.toLowerCase()
+          || (input.expectedTarget !== undefined && (
+            resumable.grant.expectedHeadRef !== target.headRef
+            || resumable.grant.expectedPullRequestMarker !== target.marker
+          ))
           || githubMutationStepLedgerVerified(resumable.steps)
         ) {
           throw new ControlPlaneError("기존 mutation execution의 resume binding이 다릅니다.", 409, "MUTATION_RESUME_BINDING_MISMATCH");
@@ -607,8 +684,8 @@ export async function authorizeGithubReadyPrMutation(input: {
           observedAt: input.observation.observedAt,
         },
       });
-      const expectedHeadRef = `refs/heads/seori/run-${run.id.slice(0, 20)}-${session.generation}`;
-      const expectedPullRequestMarker = `seori-run:${run.id}:${session.generation}`;
+      const expectedHeadRef = target.headRef;
+      const expectedPullRequestMarker = target.marker;
       const grant = await tx.agentActionGrant.create({
         data: {
           sessionId: session.id,
@@ -1481,6 +1558,7 @@ type GithubMutationStepLedgerEvidence = {
   outputNumber: number | null;
   outputNodeId: string | null;
   outputUrl: string | null;
+  lastReadbackDigest?: string | null;
   claimExpiresAt: Date | null;
   verifiedAt: Date | null;
 };
@@ -1568,6 +1646,79 @@ export function githubMutationStepLedgerVerified(
         && finalPullRequest.headSha.toLowerCase() === expectedCommitSha
       )
     );
+}
+
+/**
+ * READBACK_FIRST가 외부 쓰기를 하지 않은 채 확인한 exact partial prefix다.
+ * 연속 VERIFIED 단계 다음 하나가 provider에서 NOT_APPLIED로 확인된 경우만
+ * 같은 run의 다음 generation이 남은 단계부터 다시 시작할 수 있다.
+ */
+export function githubMutationStepLedgerSafeToResume(
+  steps: readonly GithubMutationStepLedgerEvidence[],
+): boolean {
+  if (steps.length !== 3) return false;
+  const ordered = [...steps].sort((left, right) => left.ordinal - right.ordinal);
+  const [commit, ref, pullRequest] = ordered;
+  if (
+    commit.kind !== "CREATE_COMMIT" || commit.ordinal !== 1
+    || ref.kind !== "CREATE_REF" || ref.ordinal !== 2
+    || pullRequest.kind !== "CREATE_PR" || pullRequest.ordinal !== 3
+  ) return false;
+  const firstUnverified = ordered.findIndex((step) => step.status !== "VERIFIED");
+  if (firstUnverified < 1 || firstUnverified > 2) return false;
+  const verified = ordered.slice(0, firstUnverified);
+  const next = ordered[firstUnverified]!;
+  const tail = ordered.slice(firstUnverified + 1);
+  const expectedTreeSha = commit.expectedTreeSha?.toLowerCase() ?? null;
+  const expectedCommitSha = commit.expectedCommitSha?.toLowerCase() ?? null;
+  if (
+    !expectedTreeSha
+    || !expectedCommitSha
+    || !/^[0-9a-f]{40}$/u.test(expectedTreeSha)
+    || !/^[0-9a-f]{40}$/u.test(expectedCommitSha)
+    || !commit.inputDigest
+    || verified.some((step) => (
+      step.status !== "VERIFIED"
+      || step.generation <= 0
+      || step.inputDigest !== commit.inputDigest
+      || step.expectedTreeSha?.toLowerCase() !== expectedTreeSha
+      || step.expectedCommitSha?.toLowerCase() !== expectedCommitSha
+      || step.outputSha?.toLowerCase() !== expectedCommitSha
+      || step.outputNumber !== null
+      || step.outputNodeId !== null
+      || step.outputUrl !== null
+      || step.claimExpiresAt !== null
+      || step.verifiedAt === null
+    ))
+  ) return false;
+  if (
+    next.status !== "PENDING"
+    || next.generation <= 0
+    || next.inputDigest !== commit.inputDigest
+    || next.expectedTreeSha?.toLowerCase() !== expectedTreeSha
+    || next.expectedCommitSha?.toLowerCase() !== expectedCommitSha
+    || next.outputSha !== null
+    || next.outputNumber !== null
+    || next.outputNodeId !== null
+    || next.outputUrl !== null
+    || !/^[0-9a-f]{64}$/u.test(next.lastReadbackDigest ?? "")
+    || next.claimExpiresAt !== null
+    || next.verifiedAt !== null
+  ) return false;
+  return tail.every((step) => (
+    step.status === "PENDING"
+    && step.generation === 0
+    && step.inputDigest === null
+    && step.expectedTreeSha === null
+    && step.expectedCommitSha === null
+    && step.outputSha === null
+    && step.outputNumber === null
+    && step.outputNodeId === null
+    && step.outputUrl === null
+    && (step.lastReadbackDigest ?? null) === null
+    && step.claimExpiresAt === null
+    && step.verifiedAt === null
+  ));
 }
 
 export async function completeGithubMutationStep(input: {
@@ -2060,13 +2211,24 @@ export async function trustedMutationDisposition(
     sessionId: string;
     currentGeneration: number;
     readbackResolution: boolean;
+    readbackResolutionAction?: "RESUME" | "COMPLETE" | "BLOCKED";
     result: Record<string, unknown>;
   },
 ): Promise<{ mutationStarted: boolean; error: string | null }> {
-  const executions = await tx.agentMutationExecution.findMany({
+  const requestedExecutionId = typeof input.result.mutationExecutionId === "string"
+    ? input.result.mutationExecutionId
+    : null;
+  let executions = await tx.agentMutationExecution.findMany({
     where: {
       runId: input.runId,
-      ...(input.readbackResolution ? { generation: { lte: input.currentGeneration } } : { sessionId: input.sessionId }),
+      ...(input.readbackResolution
+        ? { generation: { lte: input.currentGeneration } }
+        : {
+            OR: [
+              { sessionId: input.sessionId },
+              ...(requestedExecutionId ? [{ id: requestedExecutionId }] : []),
+            ],
+          }),
     },
     include: {
       grant: true,
@@ -2079,6 +2241,36 @@ export async function trustedMutationDisposition(
     },
     orderBy: { createdAt: "desc" },
   });
+  if (!input.readbackResolution) {
+    const resumed = executions.find((execution) => (
+      execution.id === requestedExecutionId
+      && typeof execution.sessionId === "string"
+      && execution.sessionId !== input.sessionId
+    ));
+    if (resumed) {
+      const event = await tx.agentRunEvent.findFirst({
+        where: {
+          runId: input.runId,
+          generation: input.currentGeneration,
+          type: "mutation_execution_resumed",
+          actor: resumed.adapterPrincipalId,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      const payload = event?.payload as {
+        sessionId?: string;
+        executionId?: string;
+        adapterRuntimeIdentity?: string;
+      } | null;
+      if (
+        payload?.sessionId !== input.sessionId
+        || payload.executionId !== resumed.id
+        || payload.adapterRuntimeIdentity !== resumed.adapterRuntimeIdentity
+      ) {
+        executions = executions.filter((execution) => execution.id !== resumed.id);
+      }
+    }
+  }
   const mutationStarted = executions.some((execution) => execution.status !== "NOT_APPLIED");
   const unresolvedMutation = executions.some((execution) => (
     execution.status !== "NOT_APPLIED"
@@ -2092,33 +2284,49 @@ export async function trustedMutationDisposition(
     && githubMutationStepLedgerVerified(execution.steps, finalPullRequestEvidence(execution))
   ));
   const outcomeCode = String(input.result.outcomeCode ?? "");
-  const executionId = typeof input.result.mutationExecutionId === "string"
-    ? input.result.mutationExecutionId
-    : null;
+  const executionId = requestedExecutionId;
   const externallyStartedExecutions = executions.filter((execution) => execution.status !== "NOT_APPLIED");
   const unresolvedExecution = externallyStartedExecutions.length === 1
     ? externallyStartedExecutions[0]
     : null;
   const latestReadback = unresolvedExecution?.readbacks?.[0];
   const currentSessionUnknownReadbackConfirmed = input.readbackResolution
+    && input.readbackResolutionAction === "BLOCKED"
     && outcomeCode === "READBACK_CONFIRMED"
     && unresolvedExecution?.status === "RESULT_UNKNOWN"
     && latestReadback !== undefined
     && unresolvedExecution.readbackObservationId === latestReadback?.observationId
     && latestReadback.status === "RESULT_UNKNOWN"
     && latestReadback.observation.sessionId === input.sessionId;
+  const currentSessionPartialReadbackConfirmed = input.readbackResolution
+    && input.readbackResolutionAction === "RESUME"
+    && outcomeCode === "READBACK_PARTIAL_VERIFIED"
+    && executionId === unresolvedExecution?.id
+    && unresolvedExecution?.status === "RESULT_UNKNOWN"
+    && latestReadback !== undefined
+    && unresolvedExecution.readbackObservationId === latestReadback.observationId
+    && latestReadback.status === "RESULT_UNKNOWN"
+    && latestReadback.observation.sessionId === input.sessionId
+    && githubMutationStepLedgerSafeToResume(unresolvedExecution.steps);
   if (outcomeCode === "PR_READY") {
     if (!executionId) return { mutationStarted, error: "TRUSTED_MUTATION_EVIDENCE_REQUIRED" };
     const execution = executions.find((candidate) => candidate.id === executionId);
+    if (!execution) {
+      return {
+        mutationStarted,
+        error: mutationStarted
+          ? "TRUSTED_MUTATION_RESULT_MISMATCH"
+          : "TRUSTED_MUTATION_EVIDENCE_REQUIRED",
+      };
+    }
     if (
-      execution?.status === "VERIFIED"
+      execution.status === "VERIFIED"
       && !githubMutationStepLedgerVerified(execution.steps, finalPullRequestEvidence(execution))
     ) {
       return { mutationStarted, error: "TRUSTED_MUTATION_STEP_EVIDENCE_REQUIRED" };
     }
     if (
-      !execution
-      || execution.status !== "VERIFIED"
+      execution.status !== "VERIFIED"
       || execution.pullRequestNumber !== input.result.pullRequestNumber
       || execution.pullRequestUrl !== input.result.pullRequestUrl
       || (input.result.commitSha && execution.pullRequestHeadSha !== String(input.result.commitSha).toLowerCase())
@@ -2129,6 +2337,7 @@ export async function trustedMutationDisposition(
     (unresolvedMutation || verifiedMutation)
     && outcomeCode !== "RESULT_UNKNOWN"
     && !currentSessionUnknownReadbackConfirmed
+    && !currentSessionPartialReadbackConfirmed
   ) {
     return { mutationStarted: true, error: "TRUSTED_MUTATION_READBACK_REQUIRED" };
   }

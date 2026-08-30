@@ -468,6 +468,7 @@ test("만료 뒤 recovery adapter는 서버 ledger만 읽고 GitHub write 없이
     executionId: "mutation-execution:fixture",
     status: "RESULT_UNKNOWN",
     writeAttempted: false,
+    safeToResume: true,
   });
 });
 

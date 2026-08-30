@@ -14,6 +14,13 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
     issues: "write",
     metadata: "read",
   }),
+  "github.workflow-bundle-candidate.ready-pr": Object.freeze({
+    contents: "write",
+    issues: "read",
+    metadata: "read",
+    pull_requests: "write",
+    workflows: "write",
+  }),
 } as const);
 
 export type FleetGitHubCapability = keyof typeof FLEET_GITHUB_CAPABILITY_PERMISSIONS;

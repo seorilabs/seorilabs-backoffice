@@ -1381,6 +1381,7 @@ export const agentResultSchema = z.object({
     "PR_READY",
     "ISSUE_RESOLVED",
     "READBACK_CONFIRMED",
+    "READBACK_PARTIAL_VERIFIED",
     "RESULT_UNKNOWN",
     "BLOCKED",
   ]),
@@ -1429,10 +1430,20 @@ export const agentResultSchema = z.object({
       path: ["mutationExecutionId"],
     });
   }
-  if (!["PR_READY", "RESULT_UNKNOWN"].includes(result.outcomeCode) && result.mutationExecutionId) {
+  if (
+    !["PR_READY", "READBACK_PARTIAL_VERIFIED", "RESULT_UNKNOWN"].includes(result.outcomeCode)
+    && result.mutationExecutionId
+  ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "mutationExecutionId는 PR_READY 또는 RESULT_UNKNOWN에서만 허용합니다.",
+      message: "mutationExecutionId는 trusted mutation 결과에서만 허용합니다.",
+      path: ["mutationExecutionId"],
+    });
+  }
+  if (result.outcomeCode === "READBACK_PARTIAL_VERIFIED" && !result.mutationExecutionId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "partial readback 재개에는 mutationExecutionId가 필요합니다.",
       path: ["mutationExecutionId"],
     });
   }
