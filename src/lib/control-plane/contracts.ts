@@ -104,6 +104,7 @@ export function redactCredentialCandidates(value: string): string {
 }
 
 const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
+export const storeAssetKindSchema = z.enum(["icon", "feature-graphic", "thumbnail", "screenshot"]);
 const platformArtifactKind = z.enum(["TYPESCRIPT", "GDSCRIPT"]);
 const platformVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
 export const PLATFORM_AFFECTED_CONSUMERS = {
@@ -550,7 +551,7 @@ export const configRevisionPayloadSchema = z.object({
   }).strict()).max(50).optional(),
   assets: z.array(z.object({
     market: market.optional(),
-    kind: z.enum(["icon", "feature-graphic", "thumbnail", "screenshot"]),
+    kind: storeAssetKindSchema,
     locale: locale.optional(),
     objectKey: revisionRef,
     checksum: sha256,
@@ -1021,6 +1022,21 @@ export const configRevisionSchema = z.object({
   expectedLatestRevision: z.number().int().nonnegative(),
   payload: configRevisionPayloadSchema,
 }).strict();
+
+/**
+ * StoreAsset 원본을 중앙 object storage에 올리기 전에 고정하는 공개 좌표다.
+ * objectKey와 checksum은 서버가 실제 bytes와 readback으로 계산하므로 caller가
+ * 제공할 수 없다.
+ */
+export const storeAssetUploadMetadataSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  expectedLatestRevision: z.coerce.number().int().nonnegative(),
+  market: market.optional(),
+  kind: storeAssetKindSchema,
+  locale: locale.optional(),
+}).strict();
+
+export type StoreAssetUploadMetadata = z.infer<typeof storeAssetUploadMetadataSchema>;
 
 export const configRevisionSourceRebaseSchema = z.object({
   repoId: z.coerce.bigint().positive(),

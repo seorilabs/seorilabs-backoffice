@@ -170,3 +170,15 @@ test("편집기는 raw JSON escape hatch와 클라이언트 이중 validator를 
   // 비밀값 입력 필드를 만들지 않는다.
   assert.doesNotMatch(editor, /type="password"|apiKey|clientSecret|privateKey|accessToken/i);
 });
+
+test("StoreAsset UI는 수동 object key 입력 대신 중앙 upload와 readback receipt를 사용한다", () => {
+  const editor = readFileSync(join(process.cwd(), "src/components/fleet/FleetConfigEditor.tsx"), "utf8");
+  assert.match(editor, /type="file"/);
+  assert.match(editor, /accept="image\/png,image\/jpeg"/);
+  assert.match(editor, /\/api\/platform\/apps\/\$\{encodeURIComponent\(appId\)\}\/store-assets/);
+  assert.match(editor, /"Idempotency-Key": `ui-store-asset:/);
+  assert.match(editor, /objectKey: string; checksum: string/);
+  assert.match(editor, /SHA-256 readback 검증/);
+  assert.doesNotMatch(editor, /<TextField\s+label="objectKey"/);
+  assert.doesNotMatch(editor, /<TextField\s+label="checksum"/);
+});
