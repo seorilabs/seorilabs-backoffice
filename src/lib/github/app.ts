@@ -192,8 +192,9 @@ export async function readFleetGitHubAppPublicSource(): Promise<FleetGitHubAppPu
 }
 
 /**
- * Fleet trusted transport 공용 issuer다. App JWT로 repository 하나와 capability별
- * exact permission의 installation token만 만들고, token은 callback 경계 안에서 폐기한다.
+ * Fleet trusted transport 공용 issuer다. App JWT로 capability에 지정된 exact repository
+ * cohort와 permission의 installation token만 만든다. 일반 operation token은 callback
+ * 경계에서 즉시 폐기하고 migration handoff token은 signed 실행에 결합되어 terminal에서 폐기된다.
  */
 export async function getFleetScopedGithubTokenIssuer(): Promise<{
   installationId: string;

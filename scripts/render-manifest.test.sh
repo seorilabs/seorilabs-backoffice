@@ -34,6 +34,7 @@ MANIFESTS=(
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml
   k8s/fleet-migration-bootstrap-shadow-job.yaml
+  k8s/fleet-migration-proof-writer-job.yaml
   k8s/workflow-bundle-candidate-executor.yaml
 )
 

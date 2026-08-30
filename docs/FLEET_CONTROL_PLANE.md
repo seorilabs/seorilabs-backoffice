@@ -267,8 +267,9 @@ generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/toke
 계약 자체에 없다. 감사는 `control_plane_auth_broker_journal_checkpoint_event`
 append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
 원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
-살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 두 table의 네 trigger를 하나의 signed
-digest 계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
+살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 이 두 table의 네 trigger와 Fleet migration
+proof/claim/completion 세 table의 여섯 trigger를 합친 전체 열 trigger를 하나의 signed digest
+계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
 (`scripts/test-auth-broker-journal-checkpoint.ts`), migration 이후 in-cluster readback을 모두
 통과해야 rollout이 진행된다.
 
@@ -718,7 +719,7 @@ read-only PVC에서 읽어 Pod 내부 MySQL 9.2 `emptyDir`에 복원하고 다�
 
 - 현재 migration/history/schema와 복구 전후 data fingerprint가 같다.
 - production app/backup principal에는 `TRIGGER` 권한을 주지 않으므로 logical dump는 trigger DDL을
-  명시적으로 제외한다. 보호 table의 trigger가 0건인 경우에만 exact source 계약 두 개를 Pod 내부 DB에
+  명시적으로 제외한다. 보호 table의 trigger가 0건인 경우에만 exact source 계약 열 개를 Pod 내부 DB에
   재구성하고 다시 검증한다. 부분 설치·변형·추가 trigger는 자동 수정하지 않고 fail-closed한다.
 - 복구 DB로 production Backoffice server가 Ready가 되고 resolved manifest를 HTTP로 재생한다.
 - 모든 ACTIVE snapshot 서명이 맞고 잘못된 키와 DRAFT는 기존 resolve 경계에서 거부된다.
@@ -766,18 +767,13 @@ BACKOFFICE_SOURCE_SHA='<40자리 SHA>' \
 repository collector와 같은 실행이 아니며, 그 결과를 38-repository BOOTSTRAP inventory로
 재사용하지 않는다.
 
-배포 이미지의 다음 command는 GitHub App installation pagination을 두 번 읽고, 각 active
+배포 이미지의 readiness library는 GitHub App installation pagination을 두 번 읽고, 각 active
 repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정과 App binding을 DB SELECT로만
 검사한다. `PAUSED` 또는 `DEPRECATED` App도 numeric repo ID가 맞으면 존재하는 binding으로 읽되,
 `PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot,
 PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 요구한다. non-product repository에 App row가
 결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다. GitHub와 DB에 쓰지 않고 공개 repo ID,
 App lifecycle status, source SHA, digest, reason code만 출력한다.
-
-```bash
-kubectl -n platform exec deploy/backoffice -c backoffice -- \
-  node /app/scripts-dist/fleet-migration-shadow-readiness.cjs
-```
 
 `state=READY`는 collector의 Backoffice 공개 증거 선행조건만 통과했다는 뜻이다. 실제 BOOTSTRAP
 shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 운영 adapter를 추가로
@@ -804,17 +800,30 @@ readback하고 일치할 때만 시작하며, Job controller UID와 Pod UID를 �
 BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
 BACKOFFICE_SOURCE_SHA='<배포 Backoffice 40자리 SHA>' \
 FLEET_MIGRATION_DETECTOR_SOURCE_SHA='<live seorilabs/.github 40자리 HEAD>' \
+FLEET_MIGRATION_EXECUTION_ID='<signed execution ID>' \
+FLEET_MIGRATION_RUNTIME_CONFIG_MAP='<signed public runtime ConfigMap>' \
+FLEET_MIGRATION_GITHUB_TOKEN_SECRET='<one-run token Secret>' \
   scripts/run-fleet-migration-bootstrap-shadow.sh
 ```
 
 두 shadow는 위 명령을 각각 새 Job으로 실행한다. 서로 다른 Job UID는 같은 provider vector라도 별도
-`FleetMigrationCollectionOccurrence`로 감사된다. 실행 중 허용되는 DB write는 이 occurrence의
-claim/complete뿐이며 App, config, provider, GitHub 상태는 읽기만 한다. 출력은 공개 digest와
+`FleetMigrationCollectionOccurrence`로 감사된다. 실행 중 허용되는 DB write는 전용 principal의
+claim INSERT와 completion INSERT뿐이며 App, config, provider, GitHub 상태는 읽기만 한다. 출력은 공개 digest와
 occurrence identity만 포함한다. `fleet-migration-shadow-readiness` 결과는 선행조건으로만 쓰고 inventory나
 proof로 복사하지 않는다. replacement/proof는 exact repository/source/tree/blob inventory/detector와
-readiness evidence에 묶인 기존 `FleetMigrationProofSnapshot`이 없으면 fail-closed한다.
+readiness evidence/cohort 및 stable Backoffice state에 묶인 승인된 INSERT-only
+`FleetMigrationProofSnapshot`이 없으면 fail-closed한다.
+
+shadow Job에는 production `DATABASE_URL`, GitHub App private key, config HMAC을 넣지 않는다.
+trusted issuer가 exact cohort에 한정한 `contents:read`/`metadata:read` installation token과
+execution/source/TTL/proof 목록을 묶은 공개 Ed25519 attestation을 별도 projected object로 공급한다.
+token은 한 번만 소비되고 terminal에서 폐기되며 폐기 실패도 실행 실패다. 실행 직전 proof writer,
+DB principal/trigger provisioning, projected object 준비와 전체 명령은
+`docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다. 중앙 collector v2에 넘길 finalization contract는
+`docs/FLEET_MIGRATION_COLLECTOR_HANDOFF.md`에 고정했다.
 
 authoritative 발급은 두 shadow와 별도 단계다. `fleet-migration-inventory-issuer.cjs`는 canonical catalog의
-공개 Ed25519 metadata 및 고정 public key를 대조하고 mTLS signing service에 payload만 전달한다. private
+공개 Ed25519 metadata 및 고정 public key를 대조하고 mTLS signing service에 payload만 전달한다. mTLS
+material은 고정 root 아래 Kubernetes projected 0440 상대 경로만 허용한다. private
 signing key의 파일·환경변수·export API는 Backoffice에 존재하지 않는다. 이번 코드 이관은 Job 실행,
 실제 signing, plan 생성 또는 cleanup을 수행하지 않는다.

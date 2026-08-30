@@ -7,6 +7,8 @@ import { request as httpsRequest, type RequestOptions } from "node:https";
 import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
 import { fleetMigrationInventoryIssuerContract } from "@seorilabs/repo-contract/trusted-inventory-issuer";
 
+import { readBoundSecretFile } from "@/lib/control-plane/seori-auth-agent-transport";
+
 const MAX_PUBLIC_METADATA_BYTES = 64 * 1024;
 const MAX_SIGNING_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MAX_SIGNING_RESPONSE_BYTES = 8 * 1024;
@@ -203,12 +205,30 @@ export function createFleetMigrationInventoryIssuerAdapters(input: {
   });
 }
 
-async function readMtlsFile(path: string): Promise<Buffer> {
-  return readFixedPublicFile(path, 1024 * 1024);
+export async function withFleetMigrationMtlsMaterial<Result>(input: {
+  root: string;
+  caFile: string;
+  certificateFile: string;
+  privateKeyFile: string;
+}, execute: (material: { ca: Buffer; certificate: Buffer; privateKey: Buffer }) => Promise<Result>): Promise<Result> {
+  let ca: Buffer | undefined;
+  let certificate: Buffer | undefined;
+  let privateKey: Buffer | undefined;
+  try {
+    ca = await readBoundSecretFile({ root: input.root, relativePath: input.caFile, allowGroupRead: true, maxBytes: 1024 * 1024 });
+    certificate = await readBoundSecretFile({ root: input.root, relativePath: input.certificateFile, allowGroupRead: true, maxBytes: 1024 * 1024 });
+    privateKey = await readBoundSecretFile({ root: input.root, relativePath: input.privateKeyFile, allowGroupRead: true, maxBytes: 1024 * 1024 });
+    return await execute({ ca, certificate, privateKey });
+  } finally {
+    ca?.fill(0);
+    certificate?.fill(0);
+    privateKey?.fill(0);
+  }
 }
 
 export function createFleetMigrationMtlsSigningTransport(input: {
   origin: string;
+  root: string;
   caFile: string;
   certificateFile: string;
   privateKeyFile: string;
@@ -223,11 +243,6 @@ export function createFleetMigrationMtlsSigningTransport(input: {
     || origin.password
   ) fail("FLEET_MIGRATION_SIGNING_SERVICE_ORIGIN_INVALID");
   return async (request) => {
-    const [ca, certificate, privateKey] = await Promise.all([
-      readMtlsFile(input.caFile),
-      readMtlsFile(input.certificateFile),
-      readMtlsFile(input.privateKeyFile),
-    ]);
     const body = Buffer.from(JSON.stringify({
       algorithm: request.algorithm,
       collectionCapabilityEvidenceDigest: request.collectionCapabilityEvidenceDigest,
@@ -245,57 +260,56 @@ export function createFleetMigrationMtlsSigningTransport(input: {
       signedAt: request.signedAt,
     }), "utf8");
     try {
-      return await new Promise<FleetMigrationSigningServiceResponse>((resolve, reject) => {
-        const options: RequestOptions = {
-          protocol: "https:",
-          hostname: origin.hostname,
-          port: origin.port ? Number(origin.port) : 443,
-          method: "POST",
-          path: SIGNING_ROUTE,
-          ca,
-          cert: certificate,
-          key: privateKey,
-          servername: origin.hostname,
-          minVersion: "TLSv1.3",
-          maxVersion: "TLSv1.3",
-          timeout: 10_000,
-          headers: {
-            "content-type": "application/json",
-            "content-length": String(body.length),
-          },
-        };
-        const outgoing = httpsRequest(options, (incoming) => {
-          const chunks: Buffer[] = [];
-          let size = 0;
-          incoming.on("data", (chunk: Buffer) => {
-            const copy = Buffer.from(chunk);
-            size += copy.length;
-            if (size > MAX_SIGNING_RESPONSE_BYTES) {
-              copy.fill(0);
-              outgoing.destroy(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_LIMIT"));
-            } else chunks.push(copy);
+      return await withFleetMigrationMtlsMaterial(input, async ({ ca, certificate, privateKey }) => (
+        new Promise<FleetMigrationSigningServiceResponse>((resolve, reject) => {
+          const options: RequestOptions = {
+            protocol: "https:",
+            hostname: origin.hostname,
+            port: origin.port ? Number(origin.port) : 443,
+            method: "POST",
+            path: SIGNING_ROUTE,
+            ca,
+            cert: certificate,
+            key: privateKey,
+            servername: origin.hostname,
+            minVersion: "TLSv1.3",
+            maxVersion: "TLSv1.3",
+            timeout: 10_000,
+            headers: {
+              "content-type": "application/json",
+              "content-length": String(body.length),
+            },
+          };
+          const outgoing = httpsRequest(options, (incoming) => {
+            const chunks: Buffer[] = [];
+            let size = 0;
+            incoming.on("data", (chunk: Buffer) => {
+              const copy = Buffer.from(chunk);
+              size += copy.length;
+              if (size > MAX_SIGNING_RESPONSE_BYTES) {
+                copy.fill(0);
+                outgoing.destroy(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_LIMIT"));
+              } else chunks.push(copy);
+            });
+            incoming.on("end", () => {
+              const response = Buffer.concat(chunks);
+              try {
+                if (incoming.statusCode !== 200) fail("FLEET_MIGRATION_SIGNING_SERVICE_REJECTED");
+                resolve(JSON.parse(response.toString("utf8")) as FleetMigrationSigningServiceResponse);
+              } catch {
+                reject(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_INVALID"));
+              } finally {
+                response.fill(0);
+                chunks.forEach((chunk) => chunk.fill(0));
+              }
+            });
           });
-          incoming.on("end", () => {
-            const response = Buffer.concat(chunks);
-            try {
-              if (incoming.statusCode !== 200) fail("FLEET_MIGRATION_SIGNING_SERVICE_REJECTED");
-              resolve(JSON.parse(response.toString("utf8")) as FleetMigrationSigningServiceResponse);
-            } catch {
-              reject(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_INVALID"));
-            } finally {
-              response.fill(0);
-              chunks.forEach((chunk) => chunk.fill(0));
-            }
-          });
-        });
-        outgoing.once("timeout", () => outgoing.destroy(new Error("FLEET_MIGRATION_SIGNING_SERVICE_TIMEOUT")));
-        outgoing.once("error", reject);
-        outgoing.end(body);
-      });
+          outgoing.once("timeout", () => outgoing.destroy(new Error("FLEET_MIGRATION_SIGNING_SERVICE_TIMEOUT")));
+          outgoing.once("error", reject);
+          outgoing.end(body);
+        })
+      ));
     } finally {
-      ca.fill(0);
-      certificate.fill(0);
-      privateKey.fill(0);
       body.fill(0);
     }
   };

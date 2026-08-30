@@ -1330,46 +1330,68 @@ model FleetParityWaveResult {
 // shadow 실행은 이 row를 만들거나 갱신하지 않으며 exact Git tree/blob inventory와
 // detector source가 모두 일치하는 기존 증거만 읽는다. secret/private key 컬럼은 없다.
 model FleetMigrationProofSnapshot {
-  id                      String   @id @default(cuid())
-  repositoryId            BigInt
-  repositoryFullName      String   @db.VarChar(191)
-  sourceSha               String   @db.Char(40)
-  treeSha                 String   @db.Char(40)
-  blobInventoryDigest     String   @db.VarChar(71)
-  detectorSourceSha       String   @db.Char(40)
-  readinessEvidenceDigest String   @db.Char(64)
-  candidates              Json
-  candidatesDigest        String   @db.VarChar(71)
-  observedAt              DateTime @db.DateTime(3)
-  createdAt               DateTime @default(now()) @db.DateTime(3)
+  id                            String   @id @default(cuid())
+  repositoryId                  BigInt
+  repositoryFullName            String   @db.VarChar(191)
+  sourceSha                     String   @db.Char(40)
+  treeSha                       String   @db.Char(40)
+  blobInventoryDigest           String   @db.VarChar(71)
+  detectorSourceSha             String   @db.Char(40)
+  readinessEvidenceDigest       String   @db.Char(64)
+  readinessCohortDigest         String   @db.Char(64)
+  stableBackofficeStateDigest   String   @db.Char(64)
+  candidates                    Json
+  candidatesDigest              String   @db.VarChar(71)
+  proofDigest                   String   @unique(map: "cp_fleet_migration_proof_digest") @db.Char(64)
+  approvalId                    String   @db.VarChar(127)
+  approvalAttestation           Json
+  approvalAttestationDigest     String   @db.Char(64)
+  idempotencyKey                String   @unique(map: "cp_fleet_migration_proof_idempotency") @db.VarChar(191)
+  requestHash                   String   @db.Char(64)
+  createdBy                     String   @db.VarChar(128)
+  observedAt                    DateTime @db.DateTime(3)
+  createdAt                     DateTime @default(now()) @db.DateTime(3)
 
-  @@unique([repositoryId, sourceSha, treeSha, blobInventoryDigest, detectorSourceSha], map: "cp_fleet_migration_proof_source_key")
-  @@index([repositoryId, observedAt], map: "cp_fleet_migration_proof_repo_time")
+  @@unique([repositoryId, sourceSha, treeSha, blobInventoryDigest, detectorSourceSha, readinessEvidenceDigest, readinessCohortDigest, stableBackofficeStateDigest, candidatesDigest], map: "cp_fleet_migration_proof_revision_key")
+  @@index([repositoryId, sourceSha, detectorSourceSha, observedAt], map: "cp_fleet_migration_proof_repo_time")
   @@map("control_plane_fleet_migration_proof_snapshot")
 }
 
-// collector가 provider readback을 끝낸 뒤 claim하는 append-only 실행 원장이다.
-// delivery(Job UID)별로 독립 occurrence를 만들며 collection은 중앙 계약이 이미
-// secret-free public surface로 검증한 JSON만 저장한다.
+// collector가 provider readback을 끝낸 뒤 INSERT-only로 claim하는 실행 원장이다.
+// terminal collection은 별도 INSERT-only completion row에 저장해 UPDATE 권한 없이
+// exact-once를 강제한다.
 model FleetMigrationCollectionOccurrence {
-  id                   String                                   @id @default(cuid())
-  deliveryId           String                                   @unique(map: "cp_fleet_migration_occurrence_delivery") @db.VarChar(127)
-  runId                String                                   @db.VarChar(127)
-  providerVectorDigest String                                   @db.VarChar(71)
-  inventoryDigest      String                                   @db.VarChar(71)
-  collectionDigest     String?                                  @db.VarChar(71)
-  collection           Json?
-  status               FleetMigrationCollectionOccurrenceStatus @default(CLAIMED)
-  createdAt            DateTime                                 @default(now()) @db.DateTime(3)
-  completedAt          DateTime?                                @db.DateTime(3)
+  id                   String                              @id @default(cuid())
+  deliveryId           String                              @unique(map: "cp_fleet_migration_occurrence_delivery") @db.VarChar(127)
+  runId                String                              @db.VarChar(127)
+  providerVectorDigest String                              @db.VarChar(71)
+  inventoryDigest      String                              @db.VarChar(71)
+  createdAt            DateTime                            @default(now()) @db.DateTime(3)
+  completion           FleetMigrationCollectionCompletion?
 
-  @@index([providerVectorDigest, status, createdAt], map: "cp_fleet_migration_occurrence_vector_state")
+  @@unique([id, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_occurrence_identity")
+  @@index([providerVectorDigest, createdAt], map: "cp_fleet_migration_occurrence_vector_time")
   @@map("control_plane_fleet_migration_collection_occurrence")
 }
 
-enum FleetMigrationCollectionOccurrenceStatus {
-  CLAIMED
-  COMPLETED
+model FleetMigrationCollectionCompletion {
+  id                    String                             @id @default(cuid())
+  occurrenceId          String                             @unique(map: "cp_fleet_migration_completion_occurrence_key")
+  deliveryId            String                             @db.VarChar(127)
+  runId                 String                             @db.VarChar(127)
+  providerVectorDigest  String                             @db.VarChar(71)
+  inventoryDigest       String                             @db.VarChar(71)
+  collectionDigest      String                             @db.VarChar(71)
+  finalGithubDigest     String                             @db.VarChar(71)
+  finalBackofficeDigest String                             @db.VarChar(71)
+  finalizationDigest    String                             @db.VarChar(71)
+  collection            Json
+  completedAt           DateTime                           @default(now()) @db.DateTime(3)
+  occurrence            FleetMigrationCollectionOccurrence @relation(fields: [occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], references: [id, deliveryId, runId, providerVectorDigest, inventoryDigest], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_completion_occurrence_fkey")
+
+  @@unique([occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_completion_identity")
+  @@index([providerVectorDigest, completedAt], map: "cp_fleet_migration_completion_vector_time")
+  @@map("control_plane_fleet_migration_collection_completion")
 }
 
 enum FleetParityResultStatus {

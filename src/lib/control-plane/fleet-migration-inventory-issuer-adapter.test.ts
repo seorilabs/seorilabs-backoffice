@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmod, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -10,6 +10,7 @@ import { fleetMigrationInventoryIssuerContract } from "@seorilabs/repo-contract/
 import {
   createFleetMigrationInventoryIssuerAdapters,
   loadFleetMigrationInventoryPublicIdentity,
+  withFleetMigrationMtlsMaterial,
 } from "@/lib/control-plane/fleet-migration-inventory-issuer-adapter";
 
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -133,5 +134,58 @@ test("signing response with any undeclared field is rejected", async () => {
   await assert.rejects(
     adapter.signInventoryPayload(signingRequest(Buffer.from("payload", "utf8"))),
     /FLEET_MIGRATION_INVENTORY_SIGNING_RESPONSE_INVALID/,
+  );
+});
+
+async function projectedMtlsFixture(mode = 0o440) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "fleet-inventory-mtls-")));
+  const revision = join(root, "..2026_08_30_00_00_00.000000001");
+  await mkdir(revision, { mode: 0o700 });
+  for (const [name, value] of [
+    ["ca.pem", "projected-ca"],
+    ["tls.crt", "projected-certificate"],
+    ["tls.key", "projected-private-key"],
+  ] as const) {
+    const path = join(revision, name);
+    await writeFile(path, value, { mode });
+    await chmod(path, mode);
+  }
+  await symlink(revision.split("/").at(-1)!, join(root, "..data"));
+  for (const name of ["ca.pem", "tls.crt", "tls.key"]) {
+    await symlink(join("..data", name), join(root, name));
+  }
+  return { root, caFile: "ca.pem", certificateFile: "tls.crt", privateKeyFile: "tls.key" };
+}
+
+test("mTLS loader accepts Kubernetes projected 0440 symlinks and zeroizes every buffer", async () => {
+  const fixture = await projectedMtlsFixture();
+  let captured: Buffer[] = [];
+  const result = await withFleetMigrationMtlsMaterial(fixture, async (material) => {
+    captured = [material.ca, material.certificate, material.privateKey];
+    assert.equal(material.ca.toString("utf8"), "projected-ca");
+    assert.equal(material.certificate.toString("utf8"), "projected-certificate");
+    assert.equal(material.privateKey.toString("utf8"), "projected-private-key");
+    return "ok";
+  });
+  assert.equal(result, "ok");
+  assert.equal(captured.every((value) => value.every((byte) => byte === 0)), true);
+});
+
+test("mTLS loader rejects writable/executable/world-readable material and a target outside the fixed root", async () => {
+  for (const mode of [0o460, 0o450, 0o644]) {
+    await assert.rejects(
+      withFleetMigrationMtlsMaterial(await projectedMtlsFixture(mode), async () => "unexpected"),
+      /SEORI_AUTH_SECRET_FILE_UNSAFE/,
+    );
+  }
+
+  const fixture = await projectedMtlsFixture();
+  const outside = join(await realpath(await mkdtemp(join(tmpdir(), "fleet-mtls-outside-"))), "outside.key");
+  await writeFile(outside, "outside-private-key", { mode: 0o400 });
+  const escapedKey = join(fixture.root, "escaped.key");
+  await symlink(outside, escapedKey);
+  await assert.rejects(
+    withFleetMigrationMtlsMaterial({ ...fixture, privateKeyFile: "escaped.key" }, async () => "unexpected"),
+    /SEORI_AUTH_SECRET_TARGET_ESCAPE/,
   );
 });

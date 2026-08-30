@@ -1,6 +1,9 @@
 import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
 
+import { projectBlueprintSchema, providerReadbackPayloadSchema } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { compileBlueprintResources, type BlueprintResource } from "@/lib/control-plane/project-blueprint";
+import { decideBlueprintReadback } from "@/lib/control-plane/provider-execution";
 import { prisma } from "@/lib/prisma";
 
 const ORGANIZATION_ID = "283115031";
@@ -86,28 +89,160 @@ function parseRequest(value: Record<string, unknown>): BackofficeRequest {
   return value as unknown as BackofficeRequest;
 }
 
-function publicProviderObservations(rows: Array<{
+interface ProviderObservationRow {
   id: string;
   provider: string;
   resourceType: string;
   resourceId: string;
   payload: unknown;
   payloadHash: string;
-}>): Array<Record<string, unknown>> {
-  return rows.flatMap((row) => {
-    const payload = row.payload as { state?: unknown } | null;
-    if (payload?.state !== "MATCH") return [];
-    const publicIdentity = `${row.resourceType}:${row.resourceId}`;
-    if (publicIdentity.length < 1 || publicIdentity.length > 512) return [];
-    return [{
+  observedAt: Date;
+  createdAt: Date;
+}
+
+interface ProviderExecutionRow {
+  id: string;
+  provider: string;
+  resourceType: string;
+  resourceId: string;
+  sourceSha: string;
+  configRevisionId: string;
+  desiredHash: string;
+  expectedPublicIdentity: string | null;
+  lastObservationId: string | null;
+  status: string;
+  leaseGeneration: number;
+  completedAt: Date | null;
+  createdAt: Date;
+}
+
+function providerResourceKey(value: { provider: string; resourceType: string; resourceId: string }): string {
+  return JSON.stringify([value.provider.toLowerCase(), value.resourceType, value.resourceId]);
+}
+
+export function publicFleetMigrationProviderObservations(input: {
+  rows: ProviderObservationRow[];
+  executions: ProviderExecutionRow[];
+  desiredResources: readonly BlueprintResource[];
+  sourceSha: string;
+  configRevisionId: string;
+}): Array<Record<string, unknown>> {
+  if (input.rows.length > 10_000 || input.executions.length > 10_000) {
+    fail("FLEET_MIGRATION_PROVIDER_HISTORY_LIMIT_EXCEEDED");
+  }
+  const observations = new Map(input.rows.map((row) => [row.id, row]));
+  const desired = new Map(input.desiredResources.map((resource) => [providerResourceKey(resource), resource]));
+  if (
+    desired.size !== input.desiredResources.length
+    || desired.size < 1
+    || desired.size > 100
+  ) fail("FLEET_MIGRATION_PROVIDER_DESIRED_RESOURCE_SET_INVALID");
+  const latest = new Map<string, ProviderExecutionRow>();
+  const executions = input.executions
+    .filter((execution) => (
+      execution.sourceSha === input.sourceSha
+      && execution.configRevisionId === input.configRevisionId
+    ))
+    .sort((left, right) => (
+      right.createdAt.getTime() - left.createdAt.getTime()
+      || right.id.localeCompare(left.id)
+    ));
+  for (const execution of executions) {
+    const key = providerResourceKey(execution);
+    if (!latest.has(key)) latest.set(key, execution);
+  }
+  if (
+    latest.size !== desired.size
+    || [...latest.keys()].some((key) => !desired.has(key))
+    || [...desired.keys()].some((key) => !latest.has(key))
+  ) fail("FLEET_MIGRATION_PROVIDER_EXECUTION_COVERAGE_INCOMPLETE");
+
+  const result: Array<Record<string, unknown>> = [];
+  for (const [key, expected] of [...desired.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const execution = latest.get(key)!;
+    const row = execution.lastObservationId ? observations.get(execution.lastObservationId) : undefined;
+    if (
+      execution.desiredHash !== expected.desiredHash
+      || execution.expectedPublicIdentity !== (expected.publicIdentity ?? null)
+      || execution.status !== "SUCCEEDED"
+      || !execution.completedAt
+      || !row
+      || providerResourceKey(row) !== providerResourceKey(execution)
+      || row.observedAt.getTime() > execution.completedAt.getTime()
+      || row.createdAt.getTime() > execution.completedAt.getTime()
+      || !/^[0-9a-f]{64}$/u.test(row.payloadHash)
+      || jsonDigest(row.payload as JsonValue) !== row.payloadHash
+    ) fail("FLEET_MIGRATION_PROVIDER_OBSERVATION_PROVENANCE_INVALID");
+    const payload = providerReadbackPayloadSchema.safeParse(row.payload);
+    if (!payload.success) fail("FLEET_MIGRATION_PROVIDER_OBSERVATION_INVALID");
+    const decision = decideBlueprintReadback(payload.data, {
+      desiredHash: execution.desiredHash,
+      publicIdentity: execution.expectedPublicIdentity,
+    });
+    if (decision !== "COMPLIANT") {
+      fail(`FLEET_MIGRATION_PROVIDER_LATEST_STATE_${decision}`);
+    }
+    const publicIdentity = payload.data.publicIdentity ?? `${row.resourceType}:${row.resourceId}`;
+    if (publicIdentity.length < 1 || publicIdentity.length > 512) {
+      fail("FLEET_MIGRATION_PROVIDER_PUBLIC_IDENTITY_INVALID");
+    }
+    result.push({
       observationId: row.id,
-      revision: "1",
+      revision: String(Math.max(1, execution.leaseGeneration)),
       digest: `sha256:${row.payloadHash}`,
       provider: row.provider,
       publicIdentity,
       state: "MATCH",
-    }];
-  }).sort((left, right) => String(left.observationId).localeCompare(String(right.observationId)));
+    });
+  }
+  return result.sort((left, right) => String(left.observationId).localeCompare(String(right.observationId)));
+}
+
+export function stableFleetMigrationBackofficeStateDigest(
+  publicEvidence: Record<string, unknown>,
+): string {
+  const providerObservations = (publicEvidence.providerObservations as Array<Record<string, unknown>>)
+    .map((item) => {
+      const stable = { ...item };
+      Reflect.deleteProperty(stable, "evidenceDigest");
+      Reflect.deleteProperty(stable, "observationId");
+      return stable;
+    })
+    .sort((left, right) => String(left.digest).localeCompare(String(right.digest)));
+  const credentialBindings = (publicEvidence.credentialBindings as Array<Record<string, unknown>>)
+    .map((item) => {
+      const stable = { ...item };
+      Reflect.deleteProperty(stable, "evidenceDigest");
+      Reflect.deleteProperty(stable, "observationId");
+      return stable;
+    })
+    .sort((left, right) => String(left.logicalCredentialId).localeCompare(String(right.logicalCredentialId)));
+  return jsonDigest({
+    classification: publicEvidence.classification as JsonValue,
+    classificationDecisionRevision: publicEvidence.classificationDecisionRevision as JsonValue,
+    classificationDecisionId: publicEvidence.classificationDecisionId as JsonValue,
+    app: publicEvidence.app as JsonValue,
+    activeConfig: publicEvidence.activeConfig as JsonValue,
+    signedSnapshot: publicEvidence.signedSnapshot as JsonValue,
+    platformFleetBinding: publicEvidence.platformFleetBinding as JsonValue,
+    providerObservations: providerObservations as unknown as JsonValue,
+    credentialBindings: credentialBindings as unknown as JsonValue,
+  });
+}
+
+export function fleetMigrationProofDigest(input: {
+  repositoryId: string;
+  repositoryFullName: string;
+  sourceSha: string;
+  treeSha: string;
+  blobInventoryDigest: string;
+  detectorSourceSha: string;
+  readinessEvidenceDigest: string;
+  readinessCohortDigest: string;
+  stableBackofficeStateDigest: string;
+  candidatesDigest: string;
+}): string {
+  return jsonDigest(input as unknown as JsonValue);
 }
 
 function publicCredentialBindings(rows: Array<{
@@ -151,24 +286,29 @@ function publicCredentialBindings(rows: Array<{
 export function createFleetMigrationBackofficeAdapter(input: {
   detectorSourceSha: string;
   readinessEvidenceDigest: string;
+  readinessCohortDigest: string;
   snapshotSigningKeyId: string;
   snapshotPolicyRevision: string;
+  approvedProofDigests: readonly string[];
   client?: BackofficeClient;
   now?: () => Date;
 }) {
   if (
     !SHA.test(input.detectorSourceSha)
     || !/^[0-9a-f]{64}$/u.test(input.readinessEvidenceDigest)
+    || !/^[0-9a-f]{64}$/u.test(input.readinessCohortDigest)
     || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(input.snapshotSigningKeyId)
     || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(input.snapshotPolicyRevision)
+    || input.approvedProofDigests.some((value) => !/^[0-9a-f]{64}$/u.test(value))
+    || new Set(input.approvedProofDigests).size !== input.approvedProofDigests.length
   ) fail("FLEET_MIGRATION_BACKOFFICE_CONFIGURATION_INVALID");
   const client = input.client ?? prisma;
+  const approvedProofDigests = new Set(input.approvedProofDigests);
 
-  return Object.freeze({
-    async readBackofficePublicEvidence(value: Record<string, unknown>) {
+  async function readBackoffice(value: Record<string, unknown>, requireProof: boolean) {
       const request = parseRequest(value);
       const repositoryId = BigInt(request.repositoryId);
-      const [registration, app, proofSnapshot, platformRegistration] = await Promise.all([
+      const [registration, app, platformRegistration] = await Promise.all([
         client.repositoryRegistration.findUnique({
           where: { repoId: repositoryId },
           select: {
@@ -209,6 +349,7 @@ export function createFleetMigrationBackofficeAdapter(input: {
                 snapshotSignature: true,
                 sourceObservationId: true,
                 activatedAt: true,
+                projectBlueprint: { select: { payload: true } },
               },
             },
             platformFleetBinding: {
@@ -221,8 +362,8 @@ export function createFleetMigrationBackofficeAdapter(input: {
               },
             },
             providerObservations: {
-              orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
-              take: 100,
+              orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+              take: 10_001,
               select: {
                 id: true,
                 provider: true,
@@ -230,6 +371,30 @@ export function createFleetMigrationBackofficeAdapter(input: {
                 resourceId: true,
                 payload: true,
                 payloadHash: true,
+                observedAt: true,
+                createdAt: true,
+              },
+            },
+            providerExecutions: {
+              where: {
+                kind: "BLUEPRINT_RESOURCE",
+              },
+              orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+              take: 10_001,
+              select: {
+                id: true,
+                provider: true,
+                resourceType: true,
+                resourceId: true,
+                sourceSha: true,
+                configRevisionId: true,
+                desiredHash: true,
+                expectedPublicIdentity: true,
+                lastObservationId: true,
+                status: true,
+                leaseGeneration: true,
+                completedAt: true,
+                createdAt: true,
               },
             },
             credentialBindings: {
@@ -247,17 +412,6 @@ export function createFleetMigrationBackofficeAdapter(input: {
                 credentialGeneration: true,
                 policyGeneration: true,
               },
-            },
-          },
-        }),
-        client.fleetMigrationProofSnapshot.findUnique({
-          where: {
-            repositoryId_sourceSha_treeSha_blobInventoryDigest_detectorSourceSha: {
-              repositoryId,
-              sourceSha: request.sourceSha,
-              treeSha: request.treeSha,
-              blobInventoryDigest: request.blobInventoryDigest,
-              detectorSourceSha: input.detectorSourceSha,
             },
           },
         }),
@@ -292,6 +446,7 @@ export function createFleetMigrationBackofficeAdapter(input: {
         const discovery = app.discoveryObservations[0];
         const config = app.configRevisions[0];
         const binding = app.platformFleetBinding;
+        const blueprint = projectBlueprintSchema.safeParse(config?.projectBlueprint?.payload);
         if (
           app.configRevisions.length !== 1
           || app.repoId !== repositoryId
@@ -304,6 +459,7 @@ export function createFleetMigrationBackofficeAdapter(input: {
           || !config.snapshotDigest
           || !config.snapshotSignature
           || !config.activatedAt
+          || !blueprint.success
           || !binding
           || binding.state !== "COMPLIANT"
           || binding.sourceSha !== request.sourceSha
@@ -343,7 +499,13 @@ export function createFleetMigrationBackofficeAdapter(input: {
           state: "ACTIVE",
         };
         platformFleetBinding = { ...bindingValue, digest: digest({ ...bindingValue, manifestDigest: binding.platformRelease.manifestDigest }) };
-        providerObservations = publicProviderObservations(app.providerObservations);
+        providerObservations = publicFleetMigrationProviderObservations({
+          rows: app.providerObservations,
+          executions: app.providerExecutions,
+          desiredResources: compileBlueprintResources(blueprint.data),
+          sourceSha: request.sourceSha,
+          configRevisionId: config.id,
+        });
         credentialBindings = publicCredentialBindings(app.credentialBindings);
       }
       const now = input.now?.() ?? new Date();
@@ -367,12 +529,48 @@ export function createFleetMigrationBackofficeAdapter(input: {
         credentialBindings,
       });
 
+      const stableBackofficeStateDigest = stableFleetMigrationBackofficeStateDigest(publicEvidence);
+      if (!requireProof) {
+        assertSecretFree(publicEvidence);
+        return { publicEvidence, stableBackofficeStateDigest };
+      }
+      const proofSnapshot = await client.fleetMigrationProofSnapshot.findFirst({
+        where: {
+          repositoryId,
+          repositoryFullName: request.fullName,
+          sourceSha: request.sourceSha,
+          treeSha: request.treeSha,
+          blobInventoryDigest: request.blobInventoryDigest,
+          detectorSourceSha: input.detectorSourceSha,
+          readinessEvidenceDigest: input.readinessEvidenceDigest,
+          readinessCohortDigest: input.readinessCohortDigest,
+          stableBackofficeStateDigest,
+        },
+        orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      });
+
       if (
         !proofSnapshot
         || proofSnapshot.repositoryFullName !== request.fullName
         || proofSnapshot.readinessEvidenceDigest !== input.readinessEvidenceDigest
+        || proofSnapshot.readinessCohortDigest !== input.readinessCohortDigest
+        || proofSnapshot.stableBackofficeStateDigest !== stableBackofficeStateDigest
         || !Array.isArray(proofSnapshot.candidates)
         || proofSnapshot.candidatesDigest !== digest(proofSnapshot.candidates)
+        || proofSnapshot.proofDigest !== fleetMigrationProofDigest({
+          repositoryId: request.repositoryId,
+          repositoryFullName: request.fullName,
+          sourceSha: request.sourceSha,
+          treeSha: request.treeSha,
+          blobInventoryDigest: request.blobInventoryDigest,
+          detectorSourceSha: input.detectorSourceSha,
+          readinessEvidenceDigest: input.readinessEvidenceDigest,
+          readinessCohortDigest: input.readinessCohortDigest,
+          stableBackofficeStateDigest,
+          candidatesDigest: proofSnapshot.candidatesDigest,
+        })
+        || !approvedProofDigests.has(proofSnapshot.proofDigest)
+        || proofSnapshot.approvalAttestationDigest !== jsonDigest(proofSnapshot.approvalAttestation as JsonValue)
       ) fail("FLEET_MIGRATION_PROOF_SNAPSHOT_MISSING_OR_STALE");
       const candidates = structuredClone(proofSnapshot.candidates) as Array<Record<string, unknown>>;
       const scannedByKey = new Map(request.detections.map((scanned) => {
@@ -410,6 +608,10 @@ export function createFleetMigrationBackofficeAdapter(input: {
       }
       assertSecretFree({ publicEvidence, candidates });
       return { publicEvidence, candidates };
-    },
+  }
+
+  return Object.freeze({
+    readBackofficePublicEvidence: (value: Record<string, unknown>) => readBackoffice(value, true),
+    readStableBackofficeState: (value: Record<string, unknown>) => readBackoffice(value, false),
   });
 }

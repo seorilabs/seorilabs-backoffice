@@ -41,6 +41,7 @@ async function main(): Promise<void> {
     catalog: publicIdentity.catalog,
     signingTransport: createFleetMigrationMtlsSigningTransport({
       origin: required("FLEET_MIGRATION_SIGNING_SERVICE_ORIGIN"),
+      root: required("FLEET_MIGRATION_SIGNING_SERVICE_MTLS_ROOT"),
       caFile: required("FLEET_MIGRATION_SIGNING_SERVICE_CA_FILE"),
       certificateFile: required("FLEET_MIGRATION_SIGNING_SERVICE_CERT_FILE"),
       privateKeyFile: required("FLEET_MIGRATION_SIGNING_SERVICE_KEY_FILE"),

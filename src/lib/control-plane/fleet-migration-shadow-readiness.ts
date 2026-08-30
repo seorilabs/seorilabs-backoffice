@@ -1,4 +1,4 @@
-import { jsonDigest, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertFullOrganizationInstallation,
   listInstallationRepositorySeeds,
@@ -128,11 +128,15 @@ export interface FleetMigrationShadowReadinessDependencies {
     seed: RepositoryInventorySeed,
   ) => Promise<RepositoryReadbackVector>;
   readBackoffice: (repositoryIds: bigint[]) => Promise<FleetMigrationBackofficeReadback>;
-  verifyConfigSnapshot: (
-    snapshot: JsonValue,
-    digest: string,
-    signature: string,
-  ) => boolean;
+  verifyConfigSnapshot: (input: {
+    repositoryId: string;
+    appId: string;
+    configRevisionId: string;
+    sourceSha: string;
+    snapshot: JsonValue;
+    digest: string;
+    signature: string;
+  }) => boolean;
   now: () => Date;
 }
 
@@ -271,12 +275,9 @@ const defaultDependencies: FleetMigrationShadowReadinessDependencies = {
   listRepositories: (client) => listInstallationRepositorySeeds(client),
   readRepository: readInstalledRepositoryVector,
   readBackoffice: readFleetMigrationBackoffice,
-  verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
-    snapshot,
-    process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
-    digest,
-    signature,
-  ),
+  // web/runtime default에는 HMAC verifier를 두지 않는다. production shadow는
+  // trusted verifier의 Ed25519 public attestation callback을 명시적으로 주입한다.
+  verifyConfigSnapshot: () => false,
   now: () => new Date(),
 };
 
@@ -395,11 +396,15 @@ function repositoryReasons(
     } else {
       let valid = false;
       try {
-        valid = verifyConfigSnapshot(
-          activeConfig.activatedSnapshot!,
-          activeConfig.snapshotDigest!,
-          activeConfig.snapshotSignature!,
-        );
+        valid = verifyConfigSnapshot({
+          repositoryId: String(vector.repoId),
+          appId: app.id,
+          configRevisionId: activeConfig.id,
+          sourceSha: vector.headSha!,
+          snapshot: activeConfig.activatedSnapshot!,
+          digest: activeConfig.snapshotDigest!,
+          signature: activeConfig.snapshotSignature!,
+        });
       } catch {
         valid = false;
       }
