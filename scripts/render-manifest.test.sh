@@ -222,6 +222,7 @@ if printf '%s' "$auth_broker_trigger_out" | grep -q "backoffice-auth-broker-jour
    printf '%s' "$auth_broker_trigger_out" | grep -q 'namespace: data' &&
    printf '%s' "$auth_broker_trigger_out" | grep -q 'mysql-root-cred' &&
    printf '%s' "$auth_broker_trigger_out" | grep -q 'history_state.*1:1:1:0:0:1' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -Fq 'SUM(applied_steps_count=0))' &&
    printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_tables" = "2"' &&
    printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_columns" = "21"' &&
    printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_foreign_keys" = "1"' &&

@@ -90,6 +90,26 @@ async function main(): Promise<void> {
        WHERE migration_name = ?`,
       pendingRecoveryMigration,
     );
+    const recoveryManifest = readFileSync(
+      join(root, "k8s/auth-broker-journal-trigger-recovery-job.yaml"),
+      "utf8",
+    );
+    const recoveryQueryMatch = recoveryManifest.match(
+      /history_state="\$\(q "(SELECT CONCAT\([\s\S]*?WHERE migration_name='20260830050000_auth_broker_journal_checkpoint')"\)"/,
+    );
+    if (!recoveryQueryMatch) {
+      throw new Error("auth broker journal recovery history query를 찾지 못했다");
+    }
+    const recoveryQuery = recoveryQueryMatch[1].replace(
+      "FROM backoffice._prisma_migrations",
+      "FROM _prisma_migrations",
+    );
+    const recoveryRows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      recoveryQuery,
+    );
+    if (Object.values(recoveryRows[0] ?? {})[0] !== "1:1:1:0:0:1") {
+      throw new Error("auth broker journal recovery history query 결과가 정확하지 않다");
+    }
     const exactPendingRecovery = spawnSync(
       "pnpm",
       [
