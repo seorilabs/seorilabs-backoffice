@@ -16,7 +16,10 @@ digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 image="registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:${digest}"
 expected_digest="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-digest:/ { print $2; exit }' \
   "$here/../k8s/provider-audit-trigger-verifier.yaml")"
+expected_count="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-count:/ { print $2; exit }' \
+  "$here/../k8s/provider-audit-trigger-verifier.yaml")"
 [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]]
+[[ "$expected_count" =~ ^[1-9][0-9]*$ ]]
 now_epoch="$(date -u +%s)"
 iso_at() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 migration_completed_at="$(iso_at $((now_epoch - 60)))"
@@ -71,8 +74,8 @@ if [[ "$args" == *" get configmap backoffice-provider-audit-trigger-state"* ]]; 
   fi
   printf '%s|%s|%s|%s|%s' \
     "${FAKE_TRIGGER_STATUS:-PASS}" \
-    "${FAKE_TRIGGER_TOTAL:-4}" \
-    "${FAKE_TRIGGER_EXACT:-4}" \
+    "${FAKE_TRIGGER_TOTAL:-$EXPECTED_CONTRACT_COUNT}" \
+    "${FAKE_TRIGGER_EXACT:-$EXPECTED_CONTRACT_COUNT}" \
     "${FAKE_TRIGGER_DIGEST:-$EXPECTED_CONTRACT_DIGEST}" \
     "${FAKE_TRIGGER_OBSERVED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
   exit 0
@@ -191,11 +194,12 @@ run_deploy() {
   FAKE_BACKFILL_STATUS="${FAKE_BACKFILL_STATUS:-COMPLETED}" \
   FAKE_BACKFILL_FAILED="${FAKE_BACKFILL_FAILED:-0}" \
   EXPECTED_CONTRACT_DIGEST="$expected_digest" \
+  EXPECTED_CONTRACT_COUNT="$expected_count" \
   MIGRATION_COMPLETED_AT="$migration_completed_at" \
   FAKE_MIGRATION_COMPLETED_AT="${FAKE_MIGRATION_COMPLETED_AT:-}" \
   FAKE_TRIGGER_STATUS="${FAKE_TRIGGER_STATUS:-PASS}" \
-  FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-4}" \
-  FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-4}" \
+  FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-$expected_count}" \
+  FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-$expected_count}" \
   FAKE_TRIGGER_DIGEST="${FAKE_TRIGGER_DIGEST:-$expected_digest}" \
   FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
   FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
@@ -349,7 +353,7 @@ for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch pre
     fail) FAKE_TRIGGER_STATUS=FAIL ;;
     zero-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=0; FAKE_TRIGGER_EXACT=0 ;;
     one-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=1; FAKE_TRIGGER_EXACT=1 ;;
-    bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=5; FAKE_TRIGGER_EXACT=4 ;;
+    bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=$((expected_count + 1)); FAKE_TRIGGER_EXACT="$expected_count" ;;
     digest-mismatch) FAKE_TRIGGER_DIGEST="$(printf 'c%.0s' {1..64})" ;;
     pre-migration) FAKE_TRIGGER_OBSERVED_AT="$pre_migration" ;;
     stale) FAKE_TRIGGER_OBSERVED_AT="$long_stale" ;;
@@ -448,12 +452,12 @@ if grep -q 'provider-audit-trigger-verifier' "$log" ||
   cat "$log" >&2
   exit 1
 fi
-# verifier manifest는 계약 digest를 읽는 용도로만 등장해야 한다.
+# verifier manifest는 계약 digest와 count를 읽는 용도로만 등장해야 한다.
 # 주석과 안내 문구를 걷어낸 실행 라인에서 apply/create/render 대상이면 안 된다.
 verifier_code="$(grep -v '^[[:space:]]*#' "$here/deploy-backoffice.sh" \
   | grep -v '^[[:space:]]*echo ' \
   | grep 'provider-audit-trigger-verifier\|provider-audit-trigger-recovery' || true)"
-if [ "$(printf '%s\n' "$verifier_code" | grep -c 'k8s/provider-audit-trigger-verifier.yaml')" -ne 1 ] ||
+if [ "$(printf '%s\n' "$verifier_code" | grep -c 'k8s/provider-audit-trigger-verifier.yaml')" -ne 2 ] ||
    printf '%s\n' "$verifier_code" | grep -qE '(apply|create|render)[[:space:]]'; then
   echo "FAIL deploy script가 verifier/recovery manifest를 apply·create 대상에 포함했다" >&2
   printf '%s\n' "$verifier_code" >&2
