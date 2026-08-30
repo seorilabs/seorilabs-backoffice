@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   appendOnlyContractDigest,
@@ -15,6 +16,17 @@ import {
   verifyAppendOnlyTriggers,
   type ObservedTrigger,
 } from "@/lib/control-plane/append-only-triggers";
+
+// migration.sql 전체를 스캔해 append-only trigger를 발견하면, 살아있는
+// k8s/provider-audit-trigger-verifier.yaml이 관측하는 REQUIRED_APPEND_ONLY_TRIGGERS(그
+// digest·total/exact 계약은 그 manifest와 정확히 결합돼 있다) 또는 아직 그 verifier가
+// 편입하지 않은 다른 append-only 계약(P2 auth broker journal checkpoint 등) 중 하나에
+// 반드시 속해야 한다. 이렇게 두 계약의 합집합으로 검사해야 우회 trigger를 계속 잡아내면서도
+// verifier가 아직 모르는 신규 append-only 표를 오탐으로 막지 않는다.
+const KNOWN_APPEND_ONLY_TRIGGERS = [
+  ...REQUIRED_APPEND_ONLY_TRIGGERS,
+  ...AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
+].sort((left, right) => left.name.localeCompare(right.name));
 
 const migrationsRoot = join(process.cwd(), "prisma/migrations");
 
@@ -89,12 +101,12 @@ test("required trigger 계약은 migration SQL 선언과 정확히 같다", () =
     })
     .sort((left, right) => left.name.localeCompare(right.name));
 
-  assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);
+  assert.deepEqual(declared, KNOWN_APPEND_ONLY_TRIGGERS);
   assert.ok(declared.length > 0);
 });
 
 test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () => {
-  for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
+  for (const requirement of KNOWN_APPEND_ONLY_TRIGGERS) {
     const statement = `${appendOnlyCreateTriggerStatement(requirement)};`;
     assert.deepEqual(parseAppendOnlyTriggers(statement), [requirement]);
   }
@@ -104,6 +116,26 @@ test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () 
       table: "unsafe`; DROP TABLE app; --",
     }),
     /APPEND_ONLY_TRIGGER_REQUIREMENT_UNSAFE/,
+  );
+});
+
+test("auth broker journal checkpoint trigger는 provider execution 계약과 독립적으로 검증된다", () => {
+  assert.equal(AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.length, 2);
+  const observation = AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.map((requirement) => ({
+    name: requirement.name,
+    table: requirement.table,
+    event: requirement.event,
+    timing: "BEFORE",
+    statement: appendOnlyActionStatement(requirement.message),
+  }));
+  assert.equal(
+    verifyAppendOnlyTriggers(observation, AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS),
+    AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.length,
+  );
+  // 서로 다른 계약이므로 provider execution 관측만으로는 이 계약을 통과할 수 없다.
+  assert.throws(
+    () => verifyAppendOnlyTriggers(compliantObservation(), AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS),
+    /missing:/,
   );
 });
 

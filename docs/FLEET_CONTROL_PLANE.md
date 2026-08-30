@@ -237,6 +237,48 @@ strict observation만 소비한다. P2 durable nonce journal이 signer의 각 at
 readback credential을 다시 검증한 새 grant를 REGISTER→VERIFY→CONSUME 정확히 한 번 실행해 observation을 만든다.
 worker는 claim과 envelope의 resume mode가 다르거나 READBACK_FIRST가 READBACK operation이 아니면 중단한다.
 
+### P2 journal checkpoint의 Backoffice durable authority
+
+P2 Auth Broker가 signer attestation을 재시작 뒤에도 정확히 한 번만 소비하려면 자신의
+durable nonce journal이 어디까지 commit됐는지 재시작에도 잃지 않아야 한다. 그 checkpoint의
+durable authority는 Backoffice가 맡는다. `provider-execution-attestation-signer`의 기존
+mTLS 서버(worker가 쓰는 `/v1/claims`·`/v1/broker-requests`·`/v1/settlements`와 같은 프로세스,
+같은 9443 포트)에 broker 전용 고정 route 세 개만 추가한다.
+
+- `POST /v1/auth-broker/journal-checkpoints/genesis` — `{journalId}`. journalId별 genesis
+  row를 멱등 생성한다(`generation=sequence=0`, opaque 고정 digest). 이미 있으면 새로 만들지
+  않고 기존 row를 그대로 반환한다.
+- `POST /v1/auth-broker/journal-checkpoints/advance` — `{journalId, expectedGeneration,
+  expectedDigest, nextDigest}`. strict `generation==sequence` CAS다. 현재 row의
+  generation·checkpointDigest가 요청의 expected와 정확히 같을 때만 정확히 한 단계
+  (`expectedGeneration+1`)만 전진한다. idempotency key는 클라이언트가 고르지 않고
+  `(journalId, expectedGeneration, nextDigest)`에서 서버가 결정론적으로 유도해, 같은 논리
+  연산의 재시도는 항상 같은 key로 수렴하고 새 row를 만들지 않는다(REPLAYED).
+- `POST /v1/auth-broker/journal-checkpoints/read` — `{journalId}`. "unknown outcome
+  readback" 전용 진입점이다. broker가 advance 응답을 잃었을 때 자신이 재구성한
+  idempotency key가 반영됐는지 현재 generation/digest만 보고 스스로 판정한다. Backoffice는
+  event 목록 조회를 제공하지 않는다.
+
+세 route 모두 `assertAuthBrokerPeer`로 exact broker client SPIFFE URI SAN
+(`AUTH_BROKER_CLIENT_SPIFFE_ID`, 기본값 `spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-broker`)만
+허용하며, 같은 프로세스의 worker 전용 route를 검증하는 `assertWorkerPeer`와는 완전히 분리된
+identity다. body는 고정 zod `.strict()` 계약(`authBrokerJournalCheckpoint*Schema`, journalId,
+generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/token/cookie/TOTP 필드는
+계약 자체에 없다. 감사는 `control_plane_auth_broker_journal_checkpoint_event`
+append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
+원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
+살아있는 `k8s/provider-audit-trigger-verifier.yaml` 배포 gate는 아직 이 table을 관측하지
+않는다 — 그 manifest는 trusted operator가 직접 apply하는 별도 운영 경계라 이번 변경에서
+편입하지 않았다. migration-safety static gate와 MySQL 9.2 integration test
+(`scripts/test-auth-broker-journal-checkpoint.ts`)가 이 trigger의 존재와 append-only 동작을
+검증한다.
+
+k8s에는 `k8s/provider-execution-worker.yaml`의 signer Deployment에
+`AUTH_BROKER_CLIENT_SPIFFE_ID` 값과, `auth-broker` 네임스페이스의 `seori-auth-broker` pod에서
+9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 추가했다. signer/worker
+`replicas: 0`과 기존 fail-closed provider execution activation gate는 그대로 유지한다 —
+이 변경은 activation gate를 열지 않는다.
+
 운영 활성화 전에는 다음을 모두 readback으로 확인한다.
 
 1. primary/readback `CredentialBinding`의 logical ID, public credential identity, generation, exact origin,

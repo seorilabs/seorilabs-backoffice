@@ -212,6 +212,14 @@ MySQL/Auth Broker network egress가 없다. `provider-execution-signer-{server,c
 실제 P2 public key readback과 두 Deployment 활성화는 credential backup/restore와 fake-provider
 canary를 통과한 별도 운영 gate다. key 값은 manifest, argv, 환경변수, 로그에 넣지 않는다.
 
+같은 signer 프로세스에 P2 journal checkpoint durable authority route 세 개를 추가하며
+(`docs/FLEET_CONTROL_PLANE.md`의 "P2 journal checkpoint의 Backoffice durable authority" 참고),
+manifest에는 `AUTH_BROKER_CLIENT_SPIFFE_ID` 값과 `auth-broker` 네임스페이스 `seori-auth-broker`
+pod에서 9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 추가했다. 이 두 값 모두
+signer가 이미 mount하는 mesh client CA로 검증하므로 새 Secret volume은 필요 없다.
+signer/worker `replicas: 0`은 그대로 유지하며, 이번 변경은 provider execution activation
+gate를 열지 않는다.
+
 ## 5. 시드 + 검증
 ```bash
 # 레지스트리 시드 헤드리스 실행. token을 셸로 꺼내지 않는다.

@@ -38,8 +38,14 @@ export interface ObservedTrigger {
 }
 
 const PROVIDER_EXECUTION_AUDIT_MESSAGE = "provider execution audit is append-only";
+const AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE = "auth broker journal checkpoint audit is append-only";
 
-/** live DB에 반드시 존재해야 하는 append-only trigger. migration SQL과 동일해야 한다. */
+/**
+ * live DB에 반드시 존재해야 하는 append-only trigger 중, 고정 in-cluster
+ * `k8s/provider-audit-trigger-verifier.yaml`이 배포 gate로 관측하는 계약이다.
+ * migration SQL과 동일해야 하며, 이 목록을 바꾸면 verifier manifest도 함께 갱신해야 한다
+ * (`appendOnlyContractDigest()`가 그 manifest에 박힌 digest와 대조된다).
+ */
 export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
     name: "control_plane_provider_execution_event_no_delete",
@@ -52,6 +58,29 @@ export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequiremen
     table: "control_plane_provider_execution_event",
     event: "UPDATE",
     message: PROVIDER_EXECUTION_AUDIT_MESSAGE,
+  },
+];
+
+/**
+ * P2 Auth Broker journal checkpoint 감사 원장의 append-only trigger 계약이다. migration SQL과
+ * 동일해야 한다. `k8s/provider-audit-trigger-verifier.yaml`은 아직 이 table을 관측하지
+ * 않는다 — 그 manifest는 trusted operator가 직접 apply하는 별도 운영 gate이며, 이 계약을
+ * 편입하려면 그 SQL query·digest·total/exact 계약을 별도로 재검토해야 한다. 지금은
+ * migration-safety static gate와 MySQL 9.2 integration test가 이 trigger의 존재와
+ * append-only 동작을 검증한다.
+ */
+export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+  {
+    name: "control_plane_auth_broker_journal_checkpoint_event_no_delete",
+    table: "control_plane_auth_broker_journal_checkpoint_event",
+    event: "DELETE",
+    message: AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_auth_broker_journal_checkpoint_event_no_update",
+    table: "control_plane_auth_broker_journal_checkpoint_event",
+    event: "UPDATE",
+    message: AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE,
   },
 ];
 
