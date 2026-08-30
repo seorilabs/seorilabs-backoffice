@@ -10,6 +10,7 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   buildStoreAssetObjectKey,
   GoogleCloudStoreAssetObjectStore,
+  MAX_STORE_ASSET_BYTES,
   type StoreAssetObjectReadback,
   type StoreAssetObjectStore,
   type StoreAssetUploadDependencies,
@@ -159,6 +160,37 @@ test("deterministic key는 numeric app identity와 revision/market/locale에 고
     checksum,
     extension: "png",
   }), `apps/123456789/revisions/8/markets/google-play/locales/ko/icon/${checksum}.png`);
+});
+
+test("파일 크기와 MIME magic 불일치는 object mutation 전에 거부한다", async () => {
+  const fixture = dependencies();
+
+  await assert.rejects(
+    () => uploadStoreAsset(uploadInput(new Uint8Array()), fixture.deps),
+    (error: unknown) => error instanceof ControlPlaneError
+      && error.code === "STORE_ASSET_FILE_SIZE_INVALID",
+  );
+  await assert.rejects(
+    () => uploadStoreAsset(uploadInput(new Uint8Array(MAX_STORE_ASSET_BYTES + 1)), fixture.deps),
+    (error: unknown) => error instanceof ControlPlaneError
+      && error.code === "STORE_ASSET_FILE_SIZE_INVALID",
+  );
+  await assert.rejects(
+    () => uploadStoreAsset(uploadInput(Buffer.from("not-an-image")), fixture.deps),
+    (error: unknown) => error instanceof ControlPlaneError
+      && error.code === "STORE_ASSET_FILE_TYPE_UNSUPPORTED",
+  );
+  await assert.rejects(
+    () => uploadStoreAsset({
+      ...uploadInput(JPEG),
+      declaredContentType: "image/png",
+    }, fixture.deps),
+    (error: unknown) => error instanceof ControlPlaneError
+      && error.code === "STORE_ASSET_CONTENT_TYPE_MISMATCH",
+  );
+
+  assert.equal(fixture.store.puts, 0);
+  assert.equal(fixture.audits.length, 0);
 });
 
 test("upload 뒤 object bytes를 다시 읽어 SHA-256을 검증하고 mutation audit를 한 번만 봉인한다", async () => {
