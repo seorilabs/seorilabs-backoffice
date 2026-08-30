@@ -126,12 +126,15 @@ volume에서 읽어 두 DDL만 수행한다.
 ### Auth Broker journal checkpoint trigger 부분 적용 복구
 
 `20260830050000_auth_broker_journal_checkpoint`가 MySQL error 1419에서 멈췄고 두 checkpoint
-표와 foreign key는 생성됐지만 audit trigger만 없다면 일반 배포를 반복하지 않는다. 먼저 DB backup
-Job의 성공을 확인한다. 그 다음 trusted operator가 같은 source SHA와 immutable image digest로
+표와 foreign key는 생성됐지만 audit trigger만 없다면 일반 배포를 반복하지 않는다. 먼저 실패한
+migration Job의 완료 시각 이후에 one-off DB backup을 실행하고 `Complete`를 확인한다. backup Job
+자체의 gzip 무결성·SHA-256 검증까지 통과한 이 실행만 복구 전 snapshot 증거로 인정한다. 그 다음
+trusted operator가 같은 source SHA와 immutable image digest로
 `auth-broker-journal-trigger-recovery-job.yaml`을 render해 `data` namespace에서 실행한다.
-Job은 migration name·checksum의 미해결 row가 정확히 하나이고, 두 신규 표와 빈 checkpoint/event
-원장, 해당 보호 표의 trigger 0개를 확인한 뒤 두 canonical DDL만 root 경계에서 설치한다. 부분·변형·
-추가 trigger나 선행 데이터가 있으면 아무것도 고치지 않고 실패한다.
+Job은 migration name·checksum·`applied_steps_count=0`의 미해결 row가 정확히 하나이고, 두 신규 표의
+engine·collation·21개 column·foreign key, 빈 checkpoint/event 원장, 해당 보호 표의 trigger 0개를
+확인한 뒤 두 canonical DDL만 root 경계에서 설치한다. 부분·변형·추가 trigger, schema drift나 선행
+데이터가 있으면 아무것도 고치지 않고 실패한다.
 
 trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같은 immutable image로
 `platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
@@ -139,6 +142,8 @@ trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같�
 `status=PASS`, `total=4`, `exact=4` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
 직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
 `log_bin_trust_function_creators`도 변경하지 않는다.
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·네 trigger·migration
+lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
 

@@ -55,10 +55,11 @@ spec:
                 SUM(checksum='3f81cb1f28ad4d2056ccda52be84a52772307f78151c32fe2a73aa8e30d8d3c5'), ':',
                 SUM(finished_at IS NULL AND rolled_back_at IS NULL), ':',
                 SUM(finished_at IS NOT NULL AND rolled_back_at IS NULL), ':',
-                SUM(rolled_back_at IS NOT NULL)
+                SUM(rolled_back_at IS NOT NULL), ':',
+                SUM(applied_steps_count=0)
                 FROM backoffice._prisma_migrations
                 WHERE migration_name='20260830050000_auth_broker_journal_checkpoint'")"
-              test "$history_state" = "1:1:1:0:0"
+              test "$history_state" = "1:1:1:0:0:1"
 
               tables="$(q "SELECT COUNT(*) FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA='backoffice'
@@ -67,6 +68,71 @@ spec:
                     'control_plane_auth_broker_journal_checkpoint_event'
                   )")"
               test "$tables" = "2"
+              exact_tables="$(q "SELECT COUNT(*) FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND ENGINE='InnoDB'
+                  AND TABLE_COLLATION='utf8mb4_unicode_ci'
+                  AND TABLE_NAME IN (
+                    'control_plane_auth_broker_journal_checkpoint',
+                    'control_plane_auth_broker_journal_checkpoint_event'
+                  )")"
+              test "$exact_tables" = "2"
+              columns="$(q "SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND TABLE_NAME IN (
+                    'control_plane_auth_broker_journal_checkpoint',
+                    'control_plane_auth_broker_journal_checkpoint_event'
+                  )")"
+              test "$columns" = "21"
+              exact_columns="$(q "SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND (
+                    (TABLE_NAME='control_plane_auth_broker_journal_checkpoint' AND (
+                      (COLUMN_NAME='id' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='journalId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='generation' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='sequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='checkpointDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='updatedBy' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='createdAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='updatedAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO')
+                    )) OR
+                    (TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event' AND (
+                      (COLUMN_NAME='id' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='checkpointId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='journalId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='requestId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='type' AND COLUMN_TYPE='varchar(16)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromGeneration' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toGeneration' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromSequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toSequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='actor' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='createdAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO')
+                    ))
+                  )")"
+              test "$exact_columns" = "21"
+              foreign_keys="$(q "SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS
+                WHERE CONSTRAINT_SCHEMA='backoffice'
+                  AND TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event'")"
+              test "$foreign_keys" = "1"
+              exact_foreign_keys="$(q "SELECT COUNT(*)
+                FROM information_schema.KEY_COLUMN_USAGE k
+                JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+                  ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA
+                  AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME
+                  AND r.TABLE_NAME=k.TABLE_NAME
+                WHERE k.CONSTRAINT_SCHEMA='backoffice'
+                  AND k.TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event'
+                  AND k.CONSTRAINT_NAME='control_plane_auth_broker_journal_checkpoint_event_checkpoi_fkey'
+                  AND k.COLUMN_NAME='checkpointId'
+                  AND k.REFERENCED_TABLE_NAME='control_plane_auth_broker_journal_checkpoint'
+                  AND k.REFERENCED_COLUMN_NAME='id'
+                  AND r.UPDATE_RULE='RESTRICT'
+                  AND r.DELETE_RULE='RESTRICT'")"
+              test "$exact_foreign_keys" = "1"
               checkpoints="$(q "SELECT COUNT(*) FROM backoffice.control_plane_auth_broker_journal_checkpoint")"
               events="$(q "SELECT COUNT(*) FROM backoffice.control_plane_auth_broker_journal_checkpoint_event")"
               test "$checkpoints" = "0"

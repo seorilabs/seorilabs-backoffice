@@ -31,6 +31,7 @@ const fixtureId = "00000000-0000-4000-8000-000000000161";
 const recoveryFixtureId = "00000000-0000-4000-8000-000000000162";
 const extraRecoveryFixtureId = "00000000-0000-4000-8000-000000000163";
 const recoveredMigration = "20260828230000_provider_execution_queue";
+const pendingRecoveryMigration = "20260830050000_auth_broker_journal_checkpoint";
 
 async function main(): Promise<void> {
   const root = process.cwd();
@@ -59,6 +60,59 @@ async function main(): Promise<void> {
   const secondChecksum = createHash("sha256").update(secondSql).digest("hex");
   const prisma = new PrismaClient();
   try {
+    await prisma.$executeRawUnsafe(
+      `UPDATE _prisma_migrations
+       SET finished_at = NULL, rolled_back_at = NULL, applied_steps_count = 1
+       WHERE migration_name = ?`,
+      pendingRecoveryMigration,
+    );
+    const nonzeroPendingRecovery = spawnSync(
+      "pnpm",
+      [
+        "tsx",
+        "scripts/verify-migration-state.ts",
+        "--history=predeploy",
+        `--recovery-state=${pendingRecoveryMigration}`,
+      ],
+      { cwd: root, env: process.env, encoding: "utf8" },
+    );
+    const nonzeroPendingOutput =
+      `${nonzeroPendingRecovery.stdout}${nonzeroPendingRecovery.stderr}`;
+    if (
+      nonzeroPendingRecovery.status === 0
+      || !nonzeroPendingOutput.includes("applied step이 0이 아니다")
+    ) {
+      throw new Error("nonzero applied step의 unresolved recovery를 거부하지 않았다");
+    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE _prisma_migrations
+       SET applied_steps_count = 0
+       WHERE migration_name = ?`,
+      pendingRecoveryMigration,
+    );
+    const exactPendingRecovery = spawnSync(
+      "pnpm",
+      [
+        "tsx",
+        "scripts/verify-migration-state.ts",
+        "--history=predeploy",
+        `--recovery-state=${pendingRecoveryMigration}`,
+      ],
+      { cwd: root, env: process.env, encoding: "utf8" },
+    );
+    if (
+      exactPendingRecovery.status !== 0
+      || exactPendingRecovery.stdout.trim() !== "UNRESOLVED_EXACT"
+    ) {
+      throw new Error("zero applied step의 단일 unresolved recovery를 인식하지 못했다");
+    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE _prisma_migrations
+       SET finished_at = CURRENT_TIMESTAMP(3), rolled_back_at = NULL, applied_steps_count = 1
+       WHERE migration_name = ?`,
+      pendingRecoveryMigration,
+    );
+
     const recoveredSql = readFileSync(
       join(activeRoot, recoveredMigration, "migration.sql"),
     );
@@ -130,6 +184,14 @@ async function main(): Promise<void> {
     }
     console.log("active migration prefix classifier 계약 통과");
   } finally {
+    await prisma.$executeRawUnsafe(
+      `UPDATE _prisma_migrations
+       SET finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP(3)),
+           rolled_back_at = NULL,
+           applied_steps_count = 1
+       WHERE migration_name = ?`,
+      pendingRecoveryMigration,
+    );
     await prisma.$executeRawUnsafe(
       "DELETE FROM _prisma_migrations WHERE id IN (?, ?)",
       recoveryFixtureId,
