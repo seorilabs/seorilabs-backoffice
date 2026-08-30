@@ -71,8 +71,8 @@ if [[ "$args" == *" get configmap backoffice-provider-audit-trigger-state"* ]]; 
   fi
   printf '%s|%s|%s|%s|%s' \
     "${FAKE_TRIGGER_STATUS:-PASS}" \
-    "${FAKE_TRIGGER_TOTAL:-2}" \
-    "${FAKE_TRIGGER_EXACT:-2}" \
+    "${FAKE_TRIGGER_TOTAL:-4}" \
+    "${FAKE_TRIGGER_EXACT:-4}" \
     "${FAKE_TRIGGER_DIGEST:-$EXPECTED_CONTRACT_DIGEST}" \
     "${FAKE_TRIGGER_OBSERVED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
   exit 0
@@ -194,8 +194,8 @@ run_deploy() {
   MIGRATION_COMPLETED_AT="$migration_completed_at" \
   FAKE_MIGRATION_COMPLETED_AT="${FAKE_MIGRATION_COMPLETED_AT:-}" \
   FAKE_TRIGGER_STATUS="${FAKE_TRIGGER_STATUS:-PASS}" \
-  FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-2}" \
-  FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-2}" \
+  FAKE_TRIGGER_TOTAL="${FAKE_TRIGGER_TOTAL:-4}" \
+  FAKE_TRIGGER_EXACT="${FAKE_TRIGGER_EXACT:-4}" \
   FAKE_TRIGGER_DIGEST="${FAKE_TRIGGER_DIGEST:-$expected_digest}" \
   FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
   FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
@@ -349,7 +349,7 @@ for scenario in fail zero-trigger one-trigger bypass-trigger digest-mismatch pre
     fail) FAKE_TRIGGER_STATUS=FAIL ;;
     zero-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=0; FAKE_TRIGGER_EXACT=0 ;;
     one-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=1; FAKE_TRIGGER_EXACT=1 ;;
-    bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=3; FAKE_TRIGGER_EXACT=2 ;;
+    bypass-trigger) FAKE_TRIGGER_STATUS=FAIL; FAKE_TRIGGER_TOTAL=5; FAKE_TRIGGER_EXACT=4 ;;
     digest-mismatch) FAKE_TRIGGER_DIGEST="$(printf 'c%.0s' {1..64})" ;;
     pre-migration) FAKE_TRIGGER_OBSERVED_AT="$pre_migration" ;;
     stale) FAKE_TRIGGER_OBSERVED_AT="$long_stale" ;;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   appendOnlyContractDigest,
@@ -104,6 +105,29 @@ test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () 
       table: "unsafe`; DROP TABLE app; --",
     }),
     /APPEND_ONLY_TRIGGER_REQUIREMENT_UNSAFE/,
+  );
+});
+
+test("auth broker journal checkpoint trigger는 provider execution 계약과 독립적으로 검증된다", () => {
+  assert.equal(AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.length, 2);
+  const observation = AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.map((requirement) => ({
+    name: requirement.name,
+    table: requirement.table,
+    event: requirement.event,
+    timing: "BEFORE",
+    statement: appendOnlyActionStatement(requirement.message),
+  }));
+  assert.equal(
+    verifyAppendOnlyTriggers(observation, AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS),
+    AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.length,
+  );
+  const providerOnly = compliantObservation().filter(
+    ({ table }) => table === "control_plane_provider_execution_event",
+  );
+  // 서로 다른 계약이므로 provider execution 관측만으로는 이 계약을 통과할 수 없다.
+  assert.throws(
+    () => verifyAppendOnlyTriggers(providerOnly, AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS),
+    /missing:/,
   );
 });
 
@@ -213,9 +237,16 @@ test("schema 또는 전역 TRIGGER 권한은 VISIBLE이다", () => {
 });
 
 test("보호 table 전부에 table 단위 TRIGGER 권한이 있어야 VISIBLE이다", () => {
-  const table = REQUIRED_APPEND_ONLY_TRIGGERS[0].table;
-  const partial = [`GRANT TRIGGER ON \`backoffice\`.\`${table}\` TO \`u\`@\`%\``];
-  assert.equal(triggerVisibilityFromGrants(partial, "backoffice"), "VISIBLE");
+  const tables = [...new Set(REQUIRED_APPEND_ONLY_TRIGGERS.map(({ table }) => table))];
+  const partial = [`GRANT TRIGGER ON \`backoffice\`.\`${tables[0]}\` TO \`u\`@\`%\``];
+  assert.equal(triggerVisibilityFromGrants(partial, "backoffice"), "FORBIDDEN");
+  assert.equal(
+    triggerVisibilityFromGrants(
+      tables.map((table) => `GRANT TRIGGER ON \`backoffice\`.\`${table}\` TO \`u\`@\`%\``),
+      "backoffice",
+    ),
+    "VISIBLE",
+  );
   assert.equal(
     triggerVisibilityFromGrants(
       [`GRANT TRIGGER ON \`backoffice\`.\`unrelated\` TO \`u\`@\`%\``],
@@ -264,7 +295,7 @@ test("고정 verifier는 계약과 같은 trigger를 read-only로만 확인한�
   assert.ok(manifest.includes(appendOnlyActionStatement(REQUIRED_APPEND_ONLY_TRIGGERS[0].message)));
   assert.match(manifest, /ACTION_TIMING='BEFORE'/);
   // 우회 trigger 차단: 보호 table 위 전체 개수도 확인한다.
-  assert.match(manifest, /\[ "\$total" = "2" \] && \[ "\$exact" = "2" \]/);
+  assert.match(manifest, /\[ "\$total" = "4" \] && \[ "\$exact" = "4" \]/);
   assert.doesNotMatch(manifest, /CREATE TRIGGER|DROP TRIGGER|GRANT |REVOKE |ALTER TABLE|DELETE FROM|INSERT INTO/);
   assert.match(manifest, /namespace: data/);
   assert.match(manifest, /readOnlyRootFilesystem: true/);

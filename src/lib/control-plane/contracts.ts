@@ -918,6 +918,55 @@ export const providerCommandEnvelopeSchema = z.object({
 
 export type ProviderCommandEnvelope = z.infer<typeof providerCommandEnvelopeSchema>;
 
+// P2 Seori Auth Broker journal checkpoint. exact broker client SPIFFE identity만 이 route를
+// 호출하며, 고정 body schema 밖의 필드는 모두 거부한다(.strict()). secret/token/cookie/TOTP
+// 필드는 애초에 존재하지 않는다 — checkpointDigest는 broker가 만든 opaque sha256 digest다.
+const authBrokerJournalId = z.string().regex(
+  /^[a-z0-9][a-z0-9._:-]{0,190}$/,
+  "소문자로 시작하는 journal 식별자가 필요합니다.",
+);
+
+export const authBrokerJournalCheckpointStateSchema = z.object({
+  journalId: authBrokerJournalId,
+  generation: numericId,
+  sequence: numericId,
+  checkpointDigest: sha256,
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export type AuthBrokerJournalCheckpointState = z.infer<typeof authBrokerJournalCheckpointStateSchema>;
+
+export const authBrokerJournalCheckpointGenesisRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+}).strict();
+
+export const authBrokerJournalCheckpointGenesisResponseSchema = z.object({
+  checkpoint: authBrokerJournalCheckpointStateSchema,
+  created: z.boolean(),
+}).strict();
+
+export const authBrokerJournalCheckpointReadRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+}).strict();
+
+export const authBrokerJournalCheckpointReadResponseSchema = z.object({
+  checkpoint: authBrokerJournalCheckpointStateSchema.nullable(),
+}).strict();
+
+// 다음 상태는 항상 expectedGeneration+1이다 — 호출자가 임의 목표 generation을 고를 수
+// 없고, 매 advance는 정확히 한 단계만 진행한다(broker 원장의 gapless 전제).
+export const authBrokerJournalCheckpointAdvanceRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+  expectedGeneration: z.coerce.bigint().nonnegative(),
+  expectedDigest: sha256,
+  nextDigest: sha256,
+}).strict();
+
+export const authBrokerJournalCheckpointAdvanceResponseSchema = z.object({
+  outcome: z.enum(["ADVANCED", "REPLAYED"]),
+  checkpoint: authBrokerJournalCheckpointStateSchema,
+}).strict();
+
 export const releaseCandidateSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   sourceSha: sha40,

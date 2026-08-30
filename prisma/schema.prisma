@@ -1477,6 +1477,49 @@ model ProviderExecutionEvent {
   @@map("control_plane_provider_execution_event")
 }
 
+// P2 Seori Auth Broker journal checkpoint의 Backoffice durable authority. broker의
+// nonce/replay-protection journal이 재시작해도 마지막 commit 위치를 잃지 않도록 CAS로
+// 진행시킨다. journalId별 genesis row가 있고, generation은 row-version CAS counter,
+// sequence는 broker가 commit한 논리 위치다. 정상 진행에서는 항상 generation==sequence이며
+// 어긋나면(변조·직접 DB 조작) 즉시 fail-closed한다. secret 값은 저장하지 않고 broker가
+// 만든 opaque digest만 보존한다.
+model AuthBrokerJournalCheckpoint {
+  id               String                             @id @default(cuid())
+  journalId        String                             @unique @db.VarChar(191)
+  generation       BigInt                             @default(0)
+  sequence         BigInt                             @default(0)
+  checkpointDigest String                             @db.Char(64)
+  updatedBy        String                             @db.VarChar(191)
+  createdAt        DateTime                           @default(now()) @db.DateTime(3)
+  updatedAt        DateTime                           @updatedAt
+  events           AuthBrokerJournalCheckpointEvent[]
+
+  @@map("control_plane_auth_broker_journal_checkpoint")
+}
+
+// append-only 감사 원장. MySQL BEFORE UPDATE/DELETE trigger가 애플리케이션 실수나 ORM
+// 경로와 무관하게 append-only를 강제한다. migration principal에 CREATE TRIGGER 권한이
+// 없으면 배포가 fail-closed한다(다른 provider execution 감사 trigger와 동일 계약).
+model AuthBrokerJournalCheckpointEvent {
+  id             String                      @id @default(cuid())
+  checkpointId   String
+  checkpoint     AuthBrokerJournalCheckpoint @relation(fields: [checkpointId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  journalId      String                      @db.VarChar(191)
+  requestId      String                      @unique @db.VarChar(191)
+  type           String                      @db.VarChar(16)
+  fromGeneration BigInt?
+  toGeneration   BigInt
+  fromSequence   BigInt?
+  toSequence     BigInt
+  fromDigest     String?                     @db.Char(64)
+  toDigest       String                      @db.Char(64)
+  actor          String                      @db.VarChar(191)
+  createdAt      DateTime                    @default(now()) @db.DateTime(3)
+
+  @@index([journalId, createdAt], map: "cp_auth_broker_journal_checkpoint_event_journal_created_idx")
+  @@map("control_plane_auth_broker_journal_checkpoint_event")
+}
+
 model ReleaseCandidate {
   id                   String                   @id @default(cuid())
   appId                String

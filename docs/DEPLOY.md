@@ -142,9 +142,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 두 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 네 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 4인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -162,7 +162,7 @@ timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 �
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
 `scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
-한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+한다. `status=PASS`, `total=4`, `exact=4`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
 이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
 max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
 같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
@@ -211,6 +211,14 @@ MySQL/Auth Broker network egress가 없다. `provider-execution-signer-{server,c
 복제본이어야 하고, broker client는 signer ServiceAccount identity만 사용한다. 이 logical credential의 생성·동기화,
 실제 P2 public key readback과 두 Deployment 활성화는 credential backup/restore와 fake-provider
 canary를 통과한 별도 운영 gate다. key 값은 manifest, argv, 환경변수, 로그에 넣지 않는다.
+
+같은 signer 프로세스에 P2 journal checkpoint durable authority route 세 개를 추가하며
+(`docs/FLEET_CONTROL_PLANE.md`의 "P2 journal checkpoint의 Backoffice durable authority" 참고),
+manifest에는 `AUTH_BROKER_CLIENT_SPIFFE_ID` 값과 `auth-broker` 네임스페이스 `seori-auth-broker`
+pod에서 9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 추가했다. 이 두 값 모두
+signer가 이미 mount하는 mesh client CA로 검증하므로 새 Secret volume은 필요 없다.
+signer/worker `replicas: 0`은 그대로 유지하며, 이번 변경은 provider execution activation
+gate를 열지 않는다.
 
 ## 5. 시드 + 검증
 ```bash

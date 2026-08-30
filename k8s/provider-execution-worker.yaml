@@ -103,6 +103,12 @@ spec:
               value: spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker
             - name: PROVIDER_EXECUTION_BROKER_SPIFFE_ID
               value: spiffe://seorilabs.local/ns/platform/sa/provider-execution-signer
+            # P2 Auth Broker journal checkpoint route 전용. broker가 이 signer를 호출할 때
+            # 제시하는 client 인증서의 exact SPIFFE URI SAN만 허용한다. worker 경로와는
+            # 완전히 분리된 identity이며, provider execution activation gate와 무관하게
+            # 값만 준비해 둔다(아래 replicas는 여전히 0).
+            - name: AUTH_BROKER_CLIENT_SPIFFE_ID
+              value: spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-broker
             - name: SEORI_AUTH_BROKER_ORIGIN
               value: https://seori-auth-broker.auth-broker.svc.cluster.local:8443
             - name: DATABASE_URL
@@ -309,6 +315,19 @@ spec:
             matchLabels:
               app.kubernetes.io/name: backoffice
               app.kubernetes.io/component: provider-execution-worker
+      ports:
+        - { protocol: TCP, port: 9443 }
+    # P2 Auth Broker journal checkpoint route 전용. worker와 별개로, broker 자신이
+    # exact client 인증서로 이 signer를 호출한다. 두 mTLS peer의 route 권한은 app 코드가
+    # SPIFFE URI SAN으로 분리하며, 이 규칙은 그 대상을 auth-broker 네임스페이스의
+    # seori-auth-broker pod 하나로만 좁힌다.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auth-broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seori-auth-broker
       ports:
         - { protocol: TCP, port: 9443 }
   egress:

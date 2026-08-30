@@ -43,14 +43,43 @@ const canonicalJson = (value) => {
 };
 
 const appendOnlyTriggerPattern = /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
+// 이 static gate가 알아야 하는 모든 append-only trigger 계약의 합집합이다. 각 계약은
+// 독립 감사 원장을 가질 수 있고(예: provider execution vs P2 auth broker journal
+// checkpoint), 살아있는 in-cluster verifier가 아직 관측하지 않는 계약도 포함한다 —
+// 그 verifier 편입 여부와 무관하게 이 CI gate는 정의된 append-only DDL을 항상 인식해야
+// expand-only 위반으로 오탐하지 않는다.
 const appendOnlyTriggerContract = new Map([
   [
     "control_plane_provider_execution_event_no_update",
-    { event: "UPDATE", table: "control_plane_provider_execution_event" },
+    {
+      event: "UPDATE",
+      table: "control_plane_provider_execution_event",
+      message: "provider execution audit is append-only",
+    },
   ],
   [
     "control_plane_provider_execution_event_no_delete",
-    { event: "DELETE", table: "control_plane_provider_execution_event" },
+    {
+      event: "DELETE",
+      table: "control_plane_provider_execution_event",
+      message: "provider execution audit is append-only",
+    },
+  ],
+  [
+    "control_plane_auth_broker_journal_checkpoint_event_no_update",
+    {
+      event: "UPDATE",
+      table: "control_plane_auth_broker_journal_checkpoint_event",
+      message: "auth broker journal checkpoint audit is append-only",
+    },
+  ],
+  [
+    "control_plane_auth_broker_journal_checkpoint_event_no_delete",
+    {
+      event: "DELETE",
+      table: "control_plane_auth_broker_journal_checkpoint_event",
+      message: "auth broker journal checkpoint audit is append-only",
+    },
   ],
 ]);
 
@@ -63,7 +92,7 @@ function stripVerifiedAppendOnlyTriggers(sql) {
         contract
         && contract.event === event.toUpperCase()
         && contract.table === table.toLowerCase()
-        && message === "provider execution audit is append-only"
+        && contract.message === message
       ) {
         return " ";
       }
