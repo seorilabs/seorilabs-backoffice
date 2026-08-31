@@ -1924,11 +1924,19 @@ model CredentialBinding {
   origin               String?                 @db.VarChar(512)
   authFactors          Json?
   observedAt           DateTime                @db.DateTime(3)
+  // catalog의 검증된 공개 projection을 optimistic concurrency로 갱신한다.
+  // 기존 row는 nullable provenance로 남겨 자동 승격하지 않고 다음 검증 import가 채운다.
+  revision             Int?
+  catalogEntryDigest   String?                 @db.Char(64)
+  catalogSnapshotDigest String?                @db.Char(64)
+  catalogContractVersion String?               @db.VarChar(64)
+  observedBy           String?                 @db.VarChar(128)
   createdAt            DateTime                @default(now()) @db.DateTime(3)
   updatedAt            DateTime                @updatedAt
 
   @@unique([appId, logicalCredentialId, capability])
   @@index([appId, provider, status])
+  @@index([appId, status, revision], map: "cp_credential_binding_app_status_revision_idx")
   @@map("control_plane_credential_binding")
 }
 

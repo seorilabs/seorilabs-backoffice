@@ -942,6 +942,66 @@ export const providerCommandEnvelopeSchema = z.object({
 
 export type ProviderCommandEnvelope = z.infer<typeof providerCommandEnvelopeSchema>;
 
+const credentialPublicIdentity = z.string().min(1).max(512).refine((value) => (
+  /^[A-Za-z0-9][A-Za-z0-9@._:/+=,-]*$/.test(value)
+  && !containsCredentialCandidate(value)
+), "비밀 후보가 아닌 공개 account/key identity가 필요합니다.");
+const credentialFingerprint = z.string().refine((value) => (
+  /^(?:sha256:)?[0-9a-f]{64}$/i.test(value)
+  || /^(?:[0-9a-f]{2}:){31}[0-9a-f]{2}$/i.test(value)
+), "공개 SHA-256 fingerprint가 필요합니다.");
+const credentialScope = z.string().min(1).max(191).refine((value) => (
+  /^[A-Za-z0-9][A-Za-z0-9@._:/+=,-]*$/.test(value)
+  && !containsCredentialCandidate(value)
+), "비밀 후보가 아닌 공개 credential scope가 필요합니다.");
+
+/**
+ * ~/.config/seorilabs catalog 검증기가 보내는 공개 projection만 허용한다.
+ * secret, password, TOTP, cookie, raw API key를 담을 필드가 없으며 strict object 밖 값은 거부한다.
+ */
+export const credentialBindingImportSchema = z.object({
+  schemaVersion: z.literal(1),
+  repoId: z.coerce.bigint().positive(),
+  expectedRevision: z.number().int().nonnegative(),
+  binding: z.object({
+    logicalCredentialId,
+    provider: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+    capability: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,190}$/),
+    environment: z.string().regex(/^[A-Za-z0-9._:/-]{1,64}$/),
+    publicIdentity: credentialPublicIdentity,
+    fingerprint: credentialFingerprint,
+    consumer: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    scope: z.array(credentialScope).min(1).max(50),
+    status: z.enum(["ACTIVE", "SUSPENDED", "REVOKED", "NEEDS_REAUTH"]),
+    credentialGeneration: z.number().int().positive(),
+    policyGeneration: z.number().int().positive(),
+    adapterId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+    origin: httpsOrigin,
+    authFactors: z.array(z.enum(["api_key", "certificate", "oidc"])).min(1).max(3),
+  }).strict(),
+  provenance: z.object({
+    catalogEntryDigest: sha256,
+    catalogSnapshotDigest: sha256,
+    catalogContractVersion: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/),
+    observedAt: z.coerce.date(),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  for (const [path, values] of [
+    [["binding", "scope"], value.binding.scope] as const,
+    [["binding", "authFactors"], value.binding.authFactors] as const,
+  ]) {
+    if (new Set(values).size !== values.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "credential 공개 scope와 auth factor는 중복될 수 없습니다.",
+        path: [...path],
+      });
+    }
+  }
+});
+
+export type CredentialBindingImport = z.infer<typeof credentialBindingImportSchema>;
+
 // P2 Seori Auth Broker journal checkpoint. exact broker client SPIFFE identity만 이 route를
 // 호출하며, 고정 body schema 밖의 필드는 모두 거부한다(.strict()). secret/token/cookie/TOTP
 // 필드는 애초에 존재하지 않는다 — checkpointDigest는 broker가 만든 opaque sha256 digest다.
