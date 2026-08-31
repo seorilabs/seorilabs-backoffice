@@ -59,6 +59,9 @@ importers:
       seorilabs-org-contracts:
         specifier: github:seorilabs/.github#f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
         version: https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
+      undici:
+        specifier: 8.9.0
+        version: 8.9.0
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
@@ -2971,6 +2974,10 @@ packages:
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+
+  undici@8.9.0:
+    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
+    engines: {node: '>=22.19.0'}
 
   universal-github-app-jwt@2.2.2:
     resolution: {integrity: sha512-dcmbeSrOdTnsjGjUfAlqNDJrhxXizjAz94ija9Qw8YkZ1uu0d+GoZzyH+Jb9tIIqvGsadUfwg+22k5aDqqwzbw==}
@@ -6250,6 +6257,8 @@ snapshots:
       which-boxed-primitive: 1.1.1
 
   undici-types@7.18.2: {}
+
+  undici@8.9.0: {}
 
   universal-github-app-jwt@2.2.2: {}
 

@@ -1,0 +1,254 @@
+# P2/P6 trusted workloads의 유일한 외부 HTTPS 출구다. proxy는 exact CONNECT
+# hostname:443 allowlist와 client SPIFFE identity를 검증하고, 호출 workload는 이
+# Service 외의 Internet egress를 갖지 않는다. 실제 replicas는 immutable image와
+# cert-manager readback, exact-host canary와 private DNS answer 거부 검증 뒤 별도 활성화한다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: seori-auth-egress-proxy
+  namespace: auth-broker
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: seori-auth-egress-proxy
+  namespace: auth-broker
+rules: []
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: seori-auth-egress-proxy-tls
+  namespace: auth-broker
+spec:
+  secretName: seori-auth-egress-proxy-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [server auth]
+  dnsNames:
+    - seori-auth-egress-proxy
+    - seori-auth-egress-proxy.auth-broker
+    - seori-auth-egress-proxy.auth-broker.svc
+    - seori-auth-egress-proxy.auth-broker.svc.cluster.local
+  uris:
+    - spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-proxy
+  issuerRef:
+    name: auth-broker-egress-ca
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: seori-auth-agent-egress-tls
+  namespace: auth-broker
+spec:
+  secretName: seori-auth-agent-egress-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [client auth]
+  uris:
+    - spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime
+  issuerRef:
+    name: auth-broker-egress-ca
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: seori-auth-egress-canary-tls
+  namespace: auth-broker
+spec:
+  secretName: seori-auth-egress-canary-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [client auth]
+  uris:
+    - spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary
+  issuerRef:
+    name: auth-broker-egress-ca
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: workflow-bundle-candidate-egress-tls
+  namespace: auth-broker
+spec:
+  secretName: workflow-bundle-candidate-egress-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [client auth]
+  uris:
+    - spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor
+  issuerRef:
+    name: auth-broker-egress-ca
+    kind: Issuer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seori-auth-egress-proxy
+  namespace: auth-broker
+spec:
+  selector:
+    app.kubernetes.io/name: seori-auth-egress-proxy
+  ports:
+    - name: mtls-connect
+      port: 8443
+      targetPort: mtls-connect
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seori-auth-egress-proxy
+  namespace: auth-broker
+  labels:
+    app.kubernetes.io/name: seori-auth-egress-proxy
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seori-auth-egress-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: seori-auth-egress-proxy
+        app.kubernetes.io/component: exact-https-egress
+    spec:
+      serviceAccountName: seori-auth-egress-proxy
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proxy
+          image: __BACKOFFICE_IMAGE_DIGEST__
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/seori-auth-egress-proxy.cjs"]
+          ports:
+            - name: mtls-connect
+              containerPort: 8443
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=128 --dns-result-order=ipv4first --no-network-family-autoselection"
+            - name: SEORI_EGRESS_PROXY_ROOT
+              value: /var/run/seori-auth-egress-proxy
+            - name: SEORI_EGRESS_PROXY_PORT
+              value: "8443"
+            - name: SEORI_EGRESS_ALLOWED_HOSTS
+              value: backoffice.vzyx.xyz,api.github.com,sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com
+            - name: SEORI_EGRESS_ALLOWED_CLIENT_SPIFFE_IDS
+              value: spiffe://seorilabs.local/ns/auth-broker/sa/auth-broker,spiffe://seorilabs.local/ns/auth-broker/sa/password-loader,spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer,spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime,spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor,spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary
+          readinessProbe:
+            tcpSocket:
+              port: mtls-connect
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/seori-auth-egress-proxy/server
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: seori-auth-egress-proxy-tls
+            defaultMode: 0440
+            items:
+              - { key: ca.crt, path: client-ca.pem }
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seori-auth-egress-proxy
+  namespace: auth-broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seori-auth-egress-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - seori-auth-broker
+                  - seori-password-loader
+                  - seori-totp-signer
+                  - seori-auth-agent-runtime
+                  - workflow-bundle-candidate-executor
+                  - seori-auth-egress-canary
+      ports:
+        - { protocol: TCP, port: 8443 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Internet egress는 이 무권한 proxy Pod 하나에만 있고 애플리케이션의 exact
+    # CONNECT allowlist와 upstream TLS 검증이 함께 적용된다.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }

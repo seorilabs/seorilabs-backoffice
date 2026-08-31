@@ -1,5 +1,4 @@
 import { createPrivateKey, randomUUID, type KeyObject } from "node:crypto";
-import { request as httpsRequest, type RequestOptions } from "node:https";
 import { z } from "zod";
 
 import {
@@ -17,6 +16,11 @@ import {
   type GithubMutationControlPlane,
 } from "@/lib/control-plane/github-ready-pr-adapter";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import {
+  createExactMtlsProxyClient,
+  exactHostSet,
+  readBoundedResponseBody,
+} from "@/lib/control-plane/mtls-egress-proxy";
 import {
   workflowBundleCandidateTaskSchema,
   type WorkflowBundleCandidateTask,
@@ -161,8 +165,8 @@ function callBackoffice(input: {
   body: JsonValue;
   requestId: string;
   bearer: string;
-  ca: Buffer;
   attestationKey: KeyObject;
+  fetchImpl: typeof globalThis.fetch;
 }): Promise<unknown> {
   const issuedAt = Date.now();
   const attestation = signAgentAdapterAttestation({
@@ -175,59 +179,48 @@ function callBackoffice(input: {
     expiresAt: issuedAt + 30_000,
     nonce: randomUUID(),
   });
-  return new Promise((resolve, reject) => {
+  return (async () => {
     const encoded = Buffer.from(JSON.stringify(input.body), "utf8");
-    const options: RequestOptions = {
-      protocol: "https:",
-      hostname: backofficeOrigin.hostname,
-      port: backofficeOrigin.port ? Number(backofficeOrigin.port) : 443,
-      method: "POST",
-      path: ROUTE,
-      ca: input.ca,
-      minVersion: "TLSv1.3",
-      maxVersion: "TLSv1.3",
-      servername: backofficeOrigin.hostname,
-      timeout: 20_000,
-      headers: {
-        "content-type": "application/json",
-        "content-length": String(encoded.length),
-        authorization: `Bearer ${input.bearer}`,
-        "x-seori-principal": adapterPrincipalId,
-        "x-seori-adapter-attestation": attestation,
-        "idempotency-key": input.requestId,
-      },
-    };
-    const outgoing = httpsRequest(options, (incoming) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      incoming.on("data", (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > RESPONSE_LIMIT) outgoing.destroy(new Error("CANDIDATE_BACKOFFICE_RESPONSE_TOO_LARGE"));
-        else chunks.push(Buffer.from(chunk));
+    let response: Response;
+    try {
+      response = await input.fetchImpl(new URL(ROUTE, backofficeOrigin), {
+        method: "POST",
+        body: encoded,
+        signal: AbortSignal.timeout(20_000),
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(encoded.length),
+          authorization: `Bearer ${input.bearer}`,
+          "x-seori-principal": adapterPrincipalId,
+          "x-seori-adapter-attestation": attestation,
+          "idempotency-key": input.requestId,
+        },
       });
-      incoming.on("end", () => {
-        const payload = Buffer.concat(chunks);
-        try {
-          if ((incoming.statusCode ?? 500) < 200 || (incoming.statusCode ?? 500) >= 300) {
-            reject(new Error(`SEORI_BACKOFFICE_REJECTED_${incoming.statusCode ?? 500}`));
-          } else {
-            resolve(JSON.parse(payload.toString("utf8")));
-          }
-        } catch (error) {
-          reject(error);
-        } finally {
-          payload.fill(0);
-          chunks.forEach((chunk) => chunk.fill(0));
-        }
-      });
-    });
-    outgoing.once("timeout", () => outgoing.destroy(new Error("CANDIDATE_BACKOFFICE_TIMEOUT")));
-    outgoing.once("error", reject);
-    outgoing.end(encoded, () => encoded.fill(0));
-  });
+    } finally {
+      encoded.fill(0);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`SEORI_BACKOFFICE_REJECTED_${response.status}`);
+    }
+    const payload = await readBoundedResponseBody(
+      response,
+      RESPONSE_LIMIT,
+      "CANDIDATE_BACKOFFICE_RESPONSE_TOO_LARGE",
+    );
+    try {
+      return JSON.parse(payload.toString("utf8"));
+    } finally {
+      payload.fill(0);
+    }
+  })();
 }
 
-function requestClient(input: { bearer: string; ca: Buffer; attestationKey: KeyObject }) {
+function requestClient(input: {
+  bearer: string;
+  attestationKey: KeyObject;
+  fetchImpl: typeof globalThis.fetch;
+}) {
   return (body: unknown, requestId: string) => callBackoffice({
     ...input,
     body: publicJson(body),
@@ -321,8 +314,17 @@ function publicError(error: unknown): string {
       : "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_FAILED";
 }
 
-async function runWithSecrets(input: { bearer: string; ca: Buffer; attestationKey: KeyObject }) {
-  const call = requestClient(input);
+async function runWithSecrets(input: {
+  bearer: string;
+  attestationKey: KeyObject;
+  backofficeFetch: typeof globalThis.fetch;
+  githubFetch: typeof globalThis.fetch;
+}) {
+  const call = requestClient({
+    bearer: input.bearer,
+    attestationKey: input.attestationKey,
+    fetchImpl: input.backofficeFetch,
+  });
   const claimRequestId = `wbc:${jsonDigest({ podUid, operation: "claim" })}`;
   const claim = claimSchema.parse(await call({ operation: "CLAIM" }, claimRequestId)).claim;
   if (!claim) {
@@ -377,6 +379,7 @@ async function runWithSecrets(input: { bearer: string; ca: Buffer; attestationKe
       installationId: claim.task.github.installationId,
       repositoryId: claim.task.repository.id,
       repositoryFullName: claim.task.repository.fullName,
+      requestFetch: input.githubFetch,
       execute: async (github) => claim.resumeMode === "START"
         ? executeWorkflowBundleCandidateReadyPr({
             operationId: claim.sessionId,
@@ -457,14 +460,40 @@ async function main() {
   const attestationKey = createPrivateKey(keyBytes);
   keyBytes.fill(0);
   if (attestationKey.asymmetricKeyType !== "ed25519") throw new Error("CANDIDATE_ATTESTATION_KEY_INVALID");
+  const proxyBinding = {
+    root: FIXED_ROOT,
+    proxyOrigin: process.env.SEORI_EGRESS_PROXY_ORIGIN?.trim() || "",
+    proxyServerName: process.env.SEORI_EGRESS_PROXY_SERVER_NAME?.trim() || "",
+  };
+  const backofficeEgress = await createExactMtlsProxyClient({
+    ...proxyBinding,
+    allowedHosts: exactHostSet("backoffice.vzyx.xyz"),
+    targetCa: ca,
+  });
+  let githubEgress;
+  try {
+    githubEgress = await createExactMtlsProxyClient({
+      ...proxyBinding,
+      allowedHosts: exactHostSet("api.github.com"),
+    });
+  } catch (error) {
+    await backofficeEgress.close();
+    throw error;
+  }
   try {
     await withBoundSecretText({
       root: FIXED_ROOT,
       relativePath: "backoffice/adapter.bearer",
       allowGroupRead: true,
       maxBytes: 4096,
-    }, (bearer) => runWithSecrets({ bearer, ca, attestationKey }));
+    }, (bearer) => runWithSecrets({
+      bearer,
+      attestationKey,
+      backofficeFetch: backofficeEgress.fetch,
+      githubFetch: githubEgress.fetch,
+    }));
   } finally {
+    await Promise.all([backofficeEgress.close(), githubEgress.close()]);
     ca.fill(0);
   }
 }

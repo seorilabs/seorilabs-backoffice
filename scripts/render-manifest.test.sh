@@ -38,6 +38,8 @@ MANIFESTS=(
   k8s/fleet-migration-inventory-issuer-job.yaml
   k8s/fleet-migration-inventory-signer.yaml
   k8s/workflow-bundle-candidate-executor.yaml
+  k8s/seori-auth-egress-proxy.yaml
+  k8s/seori-auth-egress-canary-job.yaml
 )
 
 echo "== 치환 =="

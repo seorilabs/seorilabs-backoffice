@@ -441,6 +441,23 @@ Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확
 포함하지 않으며 동일 UID Codex/Claude를 구분할 native peer attestor나 전용 OS UID 경계가 구현되기 전에는
 local client와 runtime을 모두 제공하지 않는다.
 client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
+runtime과 WorkflowBundle candidate executor의 Internet 443 직접 egress는 금지한다. 두 workload는
+`k8s/seori-auth-egress-proxy.yaml`의 mTLS Service만 호출하며, proxy는 exact client SPIFFE ID와 고정 HTTPS hostname,
+public DNS answer를 확인한다. proxy Deployment도 기본 replicas 0이며 cert-manager certificate와 실제
+look-alike·DNS-rebinding canary 전에는 활성화하지 않는다.
+
+trusted operator는 새 immutable Backoffice image가 배포된 뒤 같은 source/image에 결합해 아래 one-shot을 실행한다.
+스크립트는 기존 proxy가 이미 활성 상태면 건드리지 않고 중단한다. 신규 support 객체를 replicas 0으로 적용하고 네
+certificate의 Ready를 확인한 뒤에만 proxy를 1로 올린다. GitHub API TLS 성공 1건과 유사 도메인·비허용 host·IP·잘못된
+port 거부 4건의 exact 로그가 다르면 proxy를 다시 0으로 내린다. private DNS answer 거부는 동일 resolver의 fixture
+test로 고정한다. agent runtime과 candidate executor는 계속 0/suspend다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<40자리 sha>' \
+SEORI_EGRESS_CANARY_CONFIRM_SHA='<같은 40자리 sha>' \
+scripts/run-seori-auth-egress-canary.sh
+```
 
 ### 중앙 StoreAsset object storage
 

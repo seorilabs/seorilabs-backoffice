@@ -185,9 +185,10 @@ export async function withWorkflowBundleCandidateGithub<Result>(input: {
   installationId: string;
   repositoryId: string;
   repositoryFullName: string;
+  requestFetch?: typeof globalThis.fetch;
   execute: (github: GithubReadyPrPort) => Promise<Result>;
 }): Promise<Result> {
-  const scoped = await getFleetScopedGithubTokenIssuer();
+  const scoped = await getFleetScopedGithubTokenIssuer({ requestFetch: input.requestFetch });
   if (scoped.installationId !== input.installationId) {
     throw new Error("WORKFLOW_BUNDLE_CANDIDATE_INSTALLATION_ID_MISMATCH");
   }

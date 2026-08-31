@@ -206,8 +206,11 @@ Backoffice worker bearer, adapter bearer, Ed25519 private key와 GitHub App priv
 ### READY_PR 활성화를 위한 남은 운영 gate
 
 durable ledger와 partial-failure fixture는 구현됐다. 남은 범위는 fake repository가 아닌 실제 private canary에서
-각 단계의 응답 유실·token revoke·재시작 readback을 증명하고, immutable runtime image와 제한 egress를 검증한 뒤
+각 단계의 응답 유실·token revoke·재시작 readback을 증명하고, immutable runtime image와 proxy-only egress의
+look-alike·redirect·DNS-rebinding 거부를 검증한 뒤
 `trustedGithubRuntimeCanaryApproved()`, `READY_PR_RUNTIME_OPERATIONAL`, replica를 별도 승인으로 여는 일이다.
+외부 HTTPS는 `k8s/seori-auth-egress-proxy.yaml`의 mTLS CONNECT proxy 한 곳으로만 나간다. 호출 workload에는 broad
+443 egress가 없고 proxy가 exact client SPIFFE ID, 고정 hostname, public DNS answer를 검증한다.
 그 전에는 P6와 `READY_PR` 운영 activation을 완료로 표시하지 않는다.
 
 ## Provider execution과 Auth Broker 경계

@@ -1,0 +1,125 @@
+# Trusted operator one-shot. 이름은 source SHA로 고정되며 같은 source 재실행은
+# 기존 Job readback만 사용한다. 로그는 secret-free exact 한 줄만 허용한다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: seori-auth-egress-canary
+  namespace: auth-broker
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: seori-auth-egress-canary
+  namespace: auth-broker
+rules: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seori-auth-egress-canary-__BACKOFFICE_IMAGE_TAG_SHORT__
+  namespace: auth-broker
+  labels:
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seori-auth-egress-canary
+      seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seori-auth-egress-proxy
+      ports:
+        - { protocol: TCP, port: 8443 }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seori-auth-egress-canary-__BACKOFFICE_IMAGE_TAG_SHORT__
+  namespace: auth-broker
+  labels:
+    app.kubernetes.io/name: seori-auth-egress-canary
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: seori-auth-egress-canary
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: seori-auth-egress-canary
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: canary
+          image: __BACKOFFICE_IMAGE_DIGEST__
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["node", "/app/scripts-dist/seori-auth-egress-canary.cjs"]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=96 --dns-result-order=ipv4first --no-network-family-autoselection"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: egress
+              mountPath: /var/run/seori-auth-egress-canary/egress
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: egress
+          secret:
+            secretName: seori-auth-egress-canary-tls
+            defaultMode: 0440
+            items:
+              - { key: ca.crt, path: ca.pem }
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi
