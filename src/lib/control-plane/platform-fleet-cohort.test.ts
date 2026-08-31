@@ -95,6 +95,7 @@ test("NEEDS_INPUT과 discovery 누락을 구분하고 부분 fanout을 차단한
   const apps = [
     app({ repoId: 10n, discovery: null }),
     app({ repoId: 11n, discovery: null }),
+    app({ repoId: 12n }),
   ];
   const registrations = [
     registration({
@@ -104,11 +105,12 @@ test("NEEDS_INPUT과 discovery 누락을 구분하고 부분 fanout을 차단한
       lastDiscoveryReason: "NO_CANDIDATE",
     }),
     registration({ repoId: 11n }),
+    registration({ repoId: 12n }),
   ];
   const coverage = resolvePlatformFleetConsumerCoverage({ apps, registrations });
 
-  assert.equal(coverage.denominator, 2);
-  assert.equal(coverage.ready, 0);
+  assert.equal(coverage.denominator, 3);
+  assert.equal(coverage.ready, 1);
   assert.equal(coverage.blocked, 2);
   assert.equal(coverage.reasonCounts.REGISTRATION_NEEDS_INPUT, 1);
   assert.equal(coverage.reasonCounts.DISCOVERY_MISSING, 1);
@@ -125,7 +127,7 @@ test("NEEDS_INPUT과 discovery 누락을 구분하고 부분 fanout을 차단한
     loadExactManagedPlatformConsumers(client),
     (error) => error instanceof ControlPlaneError
       && error.code === "PLATFORM_DISCOVERY_COHORT_INCOMPLETE"
-      && error.message.includes("denominator=2,ready=0,blocked=2")
+      && error.message.includes("denominator=3,ready=1,blocked=2")
       && error.message.includes("REGISTRATION_NEEDS_INPUT=1")
       && error.message.includes("DISCOVERY_MISSING=1"),
   );

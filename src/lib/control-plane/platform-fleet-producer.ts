@@ -414,7 +414,13 @@ export function materializePlatformConsumerObservation(input: {
   if (!discovery.evidenceDigest) {
     return fail("exact discovery에 Platform evidence digest가 없습니다.", "PLATFORM_DISCOVERY_EVIDENCE_INCOMPLETE");
   }
-  const contractRevision = input.raw.contract.revision.slice("sha256:".length);
+  // implementation-only release는 계약 revision 자체가 바뀌지 않으므로 exact
+  // artifact provenance로 null revision을 안전하게 보강할 수 있다. 반대로 계약
+  // 추가/변경에서 desired revision을 observation으로 복사하면 앱 source가 적응한
+  // 것처럼 보이므로 discovery가 실제로 가진 revision을 그대로 보존한다.
+  const contractRevision = input.raw.contract.classification === "implementation-only"
+    ? input.raw.contract.revision.slice("sha256:".length)
+    : discovery.contractRevision;
   if (discovery.artifactKind === "TYPESCRIPT") {
     if (discovery.observedVersion !== input.raw.sdk.typescript.version) return discovery;
     if (

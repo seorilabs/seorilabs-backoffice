@@ -9,6 +9,7 @@ import {
   platformFleetTaskInputSchema,
   platformReleaseManifestSchema,
   redactCredentialCandidates,
+  type PlatformConsumerObservationPayload,
   type PlatformFleetTaskInput,
   type PlatformReleaseManifest,
 } from "@/lib/control-plane/contracts";
@@ -238,6 +239,7 @@ function contractIssueTask(input: {
   manifest: PlatformReleaseManifest;
   manifestDigest: string;
   artifact: PlatformReleaseManifest["artifacts"][number];
+  observation: PlatformConsumerObservationPayload;
 }): PlatformFleetTaskInput {
   const marker = platformMarker(input.manifestDigest, input.repoId);
   const change = input.manifest.classification === "CONTRACT_ADDITION" ? "추가" : "변경";
@@ -266,6 +268,7 @@ function contractIssueTask(input: {
       `- Manifest digest: \`${input.manifestDigest}\``,
       `- Contract revision: \`${input.manifest.contractRevision}\``,
       `- SDK: ${input.artifact.kind} ${input.artifact.version} / \`${input.artifact.digest}\``,
+      `- 현재 탑재 상태: \`${input.observation.integration}\``,
       "",
       "코드와 테스트 적응까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
     ].join("\n"),
@@ -655,6 +658,7 @@ export async function reconcilePlatformFleet(input: {
               manifest,
               manifestDigest: release.manifestDigest,
               artifact,
+              observation,
             })
           : disposition.kind === "CUSTOM_UNMANAGED" || disposition.kind === "MISSING_UNMANAGED"
             ? integrationRemediationIssueTask({

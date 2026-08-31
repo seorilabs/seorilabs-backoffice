@@ -258,7 +258,7 @@ test("영향 consumer 선택 계약을 검증하고 v0.6.7 omission만 같은 co
   }));
 });
 
-test("exact dependency evidence는 현재 artifact integrity가 맞을 때만 compliant digest를 얻는다", () => {
+test("implementation-only exact dependency evidence만 현재 contract revision을 보강한다", () => {
   const value = fixtures();
   const discovery: PlatformConsumerObservationPayload = {
     schemaVersion: 1,
@@ -294,6 +294,55 @@ test("exact dependency evidence는 현재 artifact integrity가 맞을 때만 co
     discovery: { ...discovery, lockIntegrity: valid.lockIntegrity },
     raw: value.manifest,
   }).integration, "CUSTOM_HTTP");
+});
+
+test("계약 변경 release는 desired contract revision을 source observation으로 합성하지 않는다", () => {
+  const value = fixtures();
+  const contractManifest = structuredClone(value.manifest);
+  contractManifest.contract.classification = "contract-additive";
+  contractManifest.contract.baseRevision = `sha256:${"f".repeat(64)}`;
+  contractManifest.contract.affectedTracks = ["gdscript", "typescript"];
+  const lockIntegrity = `sha512-${createHash("sha512").update(value.typescriptArtifact).digest("base64")}`;
+  const typescript = materializePlatformConsumerObservation({
+    discovery: {
+      schemaVersion: 1,
+      sourceSha: SOURCE_SHA,
+      integration: "SDK",
+      artifactKind: "TYPESCRIPT",
+      observedVersion: contractManifest.sdk.typescript.version,
+      observedDigest: null,
+      contractRevision: null,
+      evidenceDigest: "d".repeat(64),
+      lockIntegrity,
+    },
+    raw: contractManifest,
+    typescriptArtifact: value.typescriptArtifact,
+  });
+  assert.equal(typescript.integration, "SDK");
+  if (typescript.integration !== "SDK") return;
+  assert.equal(typescript.observedDigest, contractManifest.sdk.typescript.artifact.sha256);
+  assert.equal(typescript.contractRevision, null);
+
+  const previousRevision = "e".repeat(64);
+  const gdscript = materializePlatformConsumerObservation({
+    discovery: {
+      schemaVersion: 1,
+      sourceSha: SOURCE_SHA,
+      integration: "SDK",
+      artifactKind: "GDSCRIPT",
+      observedVersion: contractManifest.sdk.gdscript.version,
+      observedDigest: null,
+      contractRevision: previousRevision,
+      evidenceDigest: "e".repeat(64),
+      releaseAssetUrl: contractManifest.sdk.gdscript.source,
+      treeChecksum: contractManifest.sdk.gdscript.treeChecksum,
+    },
+    raw: contractManifest,
+  });
+  assert.equal(gdscript.integration, "SDK");
+  if (gdscript.integration !== "SDK") return;
+  assert.equal(gdscript.observedDigest, contractManifest.sdk.gdscript.artifact.sha256);
+  assert.equal(gdscript.contractRevision, previousRevision);
 });
 
 test("GDScript는 fixed release URL과 실제 tree checksum이 모두 맞아야 digest를 얻는다", () => {

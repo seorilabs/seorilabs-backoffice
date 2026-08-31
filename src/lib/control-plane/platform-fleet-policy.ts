@@ -15,6 +15,13 @@ export function platformFleetDisposition(input: {
   artifact: PlatformReleaseManifest["artifacts"][number];
   observation: PlatformConsumerObservationPayload;
 }): PlatformFleetDisposition {
+  // 계약 추가/변경은 현재 SDK byte나 integration 상태보다 먼저 사람이 검토할
+  // repo별 적응 작업을 만든다. 그렇지 않으면 같은 package byte를 쓰는 consumer는
+  // COMPLIANT로, custom/missing consumer는 remediation으로 빠져 계약 fan-out에서
+  // 누락된다.
+  if (input.classification !== "IMPLEMENTATION_ONLY") {
+    return { kind: "CONTRACT_ISSUE", status: "PENDING", bindingState: "CONTRACT_ISSUE_PENDING" };
+  }
   if (input.observation.integration === "CUSTOM_HTTP") {
     return {
       kind: "CUSTOM_UNMANAGED",
@@ -41,8 +48,5 @@ export function platformFleetDisposition(input: {
       )
     );
   if (current) return { kind: "COMPLIANT", status: "COMPLIANT", bindingState: "COMPLIANT" };
-  if (input.classification === "IMPLEMENTATION_ONLY") {
-    return { kind: "SDK_UPDATE_PR", status: "QUEUED", bindingState: "UPDATE_PR_QUEUED" };
-  }
-  return { kind: "CONTRACT_ISSUE", status: "PENDING", bindingState: "CONTRACT_ISSUE_PENDING" };
+  return { kind: "SDK_UPDATE_PR", status: "QUEUED", bindingState: "UPDATE_PR_QUEUED" };
 }
