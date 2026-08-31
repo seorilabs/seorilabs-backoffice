@@ -9,6 +9,7 @@ import {
   validateLegacyResolutionDispositions,
   type LegacyResolutionBinding,
 } from "@/lib/control-plane/legacy-config-resolution";
+import { legacyConfigResolutionRequestSchema } from "@/lib/control-plane/contracts";
 import type { LegacyTransformResult } from "@/lib/control-plane/legacy-shadow";
 import { LEGACY_TRANSFORM_VERSION } from "@/lib/control-plane/legacy-sources";
 
@@ -89,6 +90,44 @@ test("자동 승인은 legacy desired state가 전혀 없는 exact source만 허
     evidenceKinds: new Set(["CONFIG_REVISION"]),
     approvalKind: "AUTOMATION",
   }), { ok: true });
+});
+
+test("감사 사유는 실제 중앙 대체 또는 비운영 무시 disposition과 일치해야 한다", () => {
+  const base = {
+    schemaVersion: 1 as const,
+    repoId: 1n,
+    legacyImportId: "legacy-import-1",
+    expectedResolutionRevision: 0,
+    expectedActiveConfigRevision: 1,
+  };
+  assert.equal(legacyConfigResolutionRequestSchema.safeParse({
+    ...base,
+    dispositions: [{ reasonCode: "NO_REPRESENTABLE_SOURCE", targets: ["CONFIG_REVISION"] }],
+    justification: "NO_LEGACY_DESIRED_STATE",
+  }).success, false);
+  assert.equal(legacyConfigResolutionRequestSchema.safeParse({
+    ...base,
+    dispositions: [{ reasonCode: "UNSUPPORTED_FIELD", targets: ["IGNORED_NON_OPERATIONAL"] }],
+    justification: "CENTRAL_STATE_REVIEWED",
+  }).success, false);
+  assert.equal(legacyConfigResolutionRequestSchema.safeParse({
+    ...base,
+    dispositions: [{ reasonCode: "UNSUPPORTED_FIELD", targets: ["IGNORED_NON_OPERATIONAL"] }],
+    justification: "IGNORED_NON_OPERATIONAL_REVIEWED",
+  }).success, true);
+  assert.equal(legacyConfigResolutionRequestSchema.safeParse({
+    ...base,
+    dispositions: [{ reasonCode: "UNSUPPORTED_FIELD", targets: ["CONFIG_REVISION"] }],
+    justification: "IGNORED_NON_OPERATIONAL_REVIEWED",
+  }).success, false);
+  assert.equal(legacyConfigResolutionRequestSchema.safeParse({
+    ...base,
+    dispositions: [{
+      reasonCode: "UNSUPPORTED_FIELD",
+      targets: ["CONFIG_REVISION", "IGNORED_NON_OPERATIONAL"],
+    }],
+    justification: "IGNORED_NON_OPERATIONAL_REVIEWED",
+  }).success, false);
 });
 
 test("source parse와 provenance 계열 오류는 resolution으로 우회할 수 없다", () => {

@@ -93,6 +93,17 @@ export function LegacyConfigResolutionButton({
     setError("");
     setMessage("");
     startTransition(async () => {
+      const dispositions = reasonCodes.map((reasonCode) => ({
+        reasonCode,
+        targets: selected[reasonCode] ?? [],
+      }));
+      const ignored = dispositions.some((disposition) => (
+        disposition.targets.includes("IGNORED_NON_OPERATIONAL")
+      ));
+      const noLegacyDesiredState = dispositions.length === 1
+        && dispositions[0].reasonCode === "NO_REPRESENTABLE_SOURCE"
+        && dispositions[0].targets.length === 1
+        && dispositions[0].targets[0] === "IGNORED_NON_OPERATIONAL";
       const result = await approveLegacyConfigResolutionAction({
         appId,
         requestId: crypto.randomUUID(),
@@ -102,13 +113,12 @@ export function LegacyConfigResolutionButton({
           legacyImportId,
           expectedResolutionRevision,
           expectedActiveConfigRevision: activeConfigRevision,
-          dispositions: reasonCodes.map((reasonCode) => ({
-            reasonCode,
-            targets: selected[reasonCode] ?? [],
-          })),
-          justification: reasonCodes.length === 1 && reasonCodes[0] === "NO_REPRESENTABLE_SOURCE"
+          dispositions,
+          justification: noLegacyDesiredState
             ? "NO_LEGACY_DESIRED_STATE"
-            : "CENTRAL_STATE_REVIEWED",
+            : ignored
+              ? "IGNORED_NON_OPERATIONAL_REVIEWED"
+              : "CENTRAL_STATE_REVIEWED",
         },
       });
       if (!result.ok) {

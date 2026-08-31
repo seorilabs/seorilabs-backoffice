@@ -123,7 +123,13 @@ export async function legacyCentralStateSnapshot(
     }),
     tx.providerObservation.findMany({
       where: { appId: input.appId },
-      orderBy: [{ provider: "asc" }, { resourceType: "asc" }, { resourceId: "asc" }, { observedAt: "desc" }],
+      orderBy: [
+        { provider: "asc" },
+        { resourceType: "asc" },
+        { resourceId: "asc" },
+        { observedAt: "desc" },
+        { id: "desc" },
+      ],
       select: {
         id: true,
         provider: true,
@@ -286,6 +292,7 @@ const resolutionSelect = {
 function resolutionRequestHash(input: {
   request: LegacyConfigResolutionRequest;
   approvalKind: LegacyResolutionApprovalKind;
+  actor: string;
 }): string {
   return jsonDigest({
     scope: "legacy-config-resolution/v1",
@@ -297,6 +304,7 @@ function resolutionRequestHash(input: {
         .sort((left, right) => left.reasonCode.localeCompare(right.reasonCode)),
     },
     approvalKind: input.approvalKind,
+    actor: input.actor,
   } as JsonValue);
 }
 
@@ -333,7 +341,11 @@ export async function recordLegacyConfigResolution(input: {
   if (!IDEMPOTENCY_KEY.test(input.idempotencyKey)) {
     throw new ControlPlaneError("idempotency key가 유효하지 않습니다.", 400, "IDEMPOTENCY_KEY_INVALID");
   }
-  const requestHash = resolutionRequestHash({ request, approvalKind: input.approvalKind });
+  const requestHash = resolutionRequestHash({
+    request,
+    approvalKind: input.approvalKind,
+    actor: input.actor,
+  });
   const replay = await prisma.legacyConfigResolution.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
     select: resolutionSelect,

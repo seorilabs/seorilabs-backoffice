@@ -119,6 +119,17 @@ async function main() {
     assert.equal(replay.duplicate, true);
     assert.equal(replay.resolution.id, first.resolution.id);
 
+    await assert.rejects(
+      recordLegacyConfigResolution({
+        request,
+        actor: "integration-other-human",
+        approvalKind: "HUMAN",
+        idempotencyKey: `legacy-resolution-first:${FIXTURE_SUFFIX}`,
+      }),
+      (error: unknown) => error instanceof ControlPlaneError
+        && error.code === "IDEMPOTENCY_CONFLICT",
+    );
+
     const applicable = await prisma.$transaction((tx) => findApplicableLegacyConfigResolution(tx, {
       appId: APP_ID,
       sourceSha: SOURCE_SHA,
