@@ -60,8 +60,9 @@ root credential은 이 provisioning Job에만 mount되고 shadow/proof runtime�
 
 동시에 proof/claim/completion/authoritative issuance의 UPDATE와 DELETE를 막는 여덟
 trigger를 설치한다. 기존 여섯 개가 정확히 설치된 DB에는 issuance 두 개만 추가하며,
-그 외 부분 설치, 변형, 추가 trigger는 자동 복구하지 않는다. 이후 고정 verifier가
-기존 네 trigger와 합친 `total=12`, `exact=12`, repo contract digest를 새 migration
+legacy config resolution 원장의 UPDATE와 DELETE를 막는 두 trigger도 별도 exact 계약으로
+설치한다. 그 외 부분 설치, 변형, 추가 trigger는 자동 복구하지 않는다. 이후 고정 verifier가
+기존 네 trigger와 합친 `total=14`, `exact=14`, repo contract digest를 새 migration
 완료 시각 이후에 관측해야 rollout gate가 열린다.
 
 ## 2. INSERT-only proof 생성
