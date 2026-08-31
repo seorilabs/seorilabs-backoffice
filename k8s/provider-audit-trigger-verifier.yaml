@@ -9,7 +9,7 @@
 #    DB secret이 없다. publisher는 공개 status 파일만 읽고 값 형식을 다시 검사한다.
 #    그래서 verifier가 secret을 공개 ConfigMap으로 흘릴 수 없다.
 #
-# verifier는 네 trigger의 존재와 정의만 SELECT하며 DDL, GRANT, 복구, 데이터 변경을 하지 않는다.
+# verifier는 계약된 trigger의 존재와 정의만 SELECT하며 DDL, GRANT, 복구, 데이터 변경을 하지 않는다.
 # 이 파일은 trusted operator가 직접 apply한다. deploy script는 apply하지 않는다.
 apiVersion: v1
 kind: ServiceAccount
@@ -103,7 +103,8 @@ metadata:
     app.kubernetes.io/name: backoffice
     app.kubernetes.io/component: provider-audit-trigger-verifier
   annotations:
-    seorilabs.dev/append-only-contract-digest: "ff4dc162eb4f55f8a0a527bf32e25ca707fa0a89eff48f8979d91c542aac83a4"
+    seorilabs.dev/append-only-contract-digest: "e0b7c5835a296bf1e504c92e26dff658110618773f76dee7cc453d78ca87cc09"
+    seorilabs.dev/append-only-contract-count: "10"
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -140,7 +141,7 @@ spec:
               image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
               env:
                 - name: CONTRACT_DIGEST
-                  value: "ff4dc162eb4f55f8a0a527bf32e25ca707fa0a89eff48f8979d91c542aac83a4"
+                  value: "e0b7c5835a296bf1e504c92e26dff658110618773f76dee7cc453d78ca87cc09"
               command: ["/bin/bash", "-c"]
               args:
                 - |
@@ -157,13 +158,16 @@ spec:
                   q() {
                     mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e "$1"
                   }
-                  # 보호 table 위 trigger는 계약된 네 개뿐이어야 한다. 우회 trigger가
+                  # 보호 table 위 trigger는 계약된 열 개뿐이어야 한다. 우회 trigger가
                   # 함께 설치되면 append-only가 무력화되므로 총 개수도 센다.
                   total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
                     WHERE TRIGGER_SCHEMA='backoffice' \
                       AND EVENT_OBJECT_TABLE IN ( \
                         'control_plane_provider_execution_event', \
-                        'control_plane_auth_broker_journal_checkpoint_event' \
+                        'control_plane_auth_broker_journal_checkpoint_event', \
+                        'control_plane_fleet_migration_proof_snapshot', \
+                        'control_plane_fleet_migration_collection_occurrence', \
+                        'control_plane_fleet_migration_collection_completion' \
                       )")"
                   # 이름, timing, event, table, action statement가 모두 정확히 일치하는 것만 센다.
                   # MySQL은 client가 보낸 statement를 그대로 보관하므로 trailing ';'만 정규화한다.
@@ -189,13 +193,40 @@ spec:
                             OR (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_delete' AND EVENT_MANIPULATION='DELETE') \
                           ) \
                         ) \
+                        OR ( \
+                          EVENT_OBJECT_TABLE='control_plane_fleet_migration_proof_snapshot' \
+                          AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                            \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration proof audit is append-only'\" \
+                          AND ( \
+                            (TRIGGER_NAME='control_plane_fleet_migration_proof_snapshot_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                            OR (TRIGGER_NAME='control_plane_fleet_migration_proof_snapshot_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                          ) \
+                        ) \
+                        OR ( \
+                          EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_occurrence' \
+                          AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                            \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration occurrence audit is append-only'\" \
+                          AND ( \
+                            (TRIGGER_NAME='control_plane_fleet_migration_collection_occurrence_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                            OR (TRIGGER_NAME='control_plane_fleet_migration_collection_occurrence_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                          ) \
+                        ) \
+                        OR ( \
+                          EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_completion' \
+                          AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                            \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration completion audit is append-only'\" \
+                          AND ( \
+                            (TRIGGER_NAME='control_plane_fleet_migration_collection_completion_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                            OR (TRIGGER_NAME='control_plane_fleet_migration_collection_completion_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                          ) \
+                        ) \
                       )")"
                   rm -f "$cnf"
                   # 관측값은 숫자 두 개뿐이다. 여기서 형식을 강제하고 publisher가 다시 검사한다.
                   case "$total" in ''|*[!0-9]*) echo "총 개수 관측 실패" >&2; exit 1;; esac
                   case "$exact" in ''|*[!0-9]*) echo "정확 일치 관측 실패" >&2; exit 1;; esac
                   status=FAIL
-                  if [ "$total" = "4" ] && [ "$exact" = "4" ]; then
+                  if [ "$total" = "10" ] && [ "$exact" = "10" ]; then
                     status=PASS
                   fi
                   umask 022

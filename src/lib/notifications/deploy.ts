@@ -10,6 +10,7 @@ import {
 } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
 import { senderBotToken } from "@/lib/notifications/sender";
+import { issueThreadPayload, threadStartFailure } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
 import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
 import {
@@ -181,6 +182,25 @@ export async function renderDeployCard(
   };
 }
 
+/**
+ * 이 카드 메시지를 더 이어 쓸 수 없는가. 그러면 편집을 포기하고 새 카드를 보낸다.
+ *
+ * - 10008: 사람이 카드를 지웠다.
+ * - 403: 다른 봇 정체가 올린 메시지라 우리가 편집할 수 없다. 봇 앱이 바뀌었거나
+ *   과거 다른 정체가 같은 앱·마켓·버전의 카드를 올린 경우다. 실측: slotmachine
+ *   untagged PLAY 카드가 이 이유로 dead letter 4건(2026-08-25·08-29).
+ *
+ * 둘 다 재시도로 풀리지 않는다. 새 카드를 보내면 다음 갱신이 그 카드를 집어 자기
+ * 복구된다(previousReleaseMessage 가 가장 최근 카드를 고른다).
+ */
+export function isUnreusableCard(result: {
+  statusCode?: number;
+  errorCode?: number;
+}): boolean {
+  if (result.statusCode === 404 && result.errorCode === 10_008) return true;
+  return result.statusCode === 403;
+}
+
 async function deliverDeployCompletion(
   payload: DeployCompletionPayload,
   destinationKey: string,
@@ -191,7 +211,7 @@ async function deliverDeployCompletion(
   const messageId = await previousReleaseMessage(card.release, destinationKey);
   if (messageId) {
     const edited = await editDiscord(destinationKey, messageId, card.text, options);
-    if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
+    if (edited.ok || !isUnreusableCard(edited)) return edited;
   }
   return sendDiscord(destinationKey, card.text, options);
 }
@@ -243,6 +263,43 @@ function identityRowPayload(payload: Prisma.JsonValue): IdentityRowPayload | nul
  * 댓글은 편집하지 않으므로 message ID를 남기지 않는다. 보존기한 정리는 채널 기준으로
  * 지우는데 댓글은 쓰레드 안에 있어 대상이 아니고, 카드가 지워질 때 쓰레드와 함께 사라진다.
  */
+/**
+ * 이슈 알림 메시지의 쓰레드에 맥락(본문·댓글·PR)을 남긴다.
+ *
+ * 부모 알림이 아직 안 나갔으면 붙일 곳이 없으므로 실패로 돌려 재시도에 맡긴다
+ * (같은 webhook 요청에서 둘 다 enqueue 되므로 보통 다음 drain 에서 해소된다).
+ * 쓰레드는 원본 메시지에서 시작하므로 ID 가 메시지 ID 와 같아 따로 저장하지 않는다.
+ */
+async function deliverIssueThread(
+  payload: Prisma.JsonValue,
+  destinationKey: string,
+): Promise<DeliveryOverrideResult> {
+  const thread = issueThreadPayload(payload);
+  if (!thread) return { ok: false, error: "invalid issue thread payload" };
+  const parent = await prisma.notificationDelivery.findFirst({
+    where: {
+      provider: "DISCORD",
+      destinationKey,
+      status: "SENT",
+      deletedAt: null,
+      providerMessageId: { not: null },
+      event: { dedupeKey: thread.parentDedupeKey },
+    },
+    select: { providerMessageId: true },
+  });
+  if (!parent?.providerMessageId) return { ok: false, error: "부모 이슈 알림 발송 대기 중" };
+  const started = await startDiscordThread(
+    discordChannelId(destinationKey),
+    parent.providerMessageId,
+    thread.threadName,
+  );
+  if (!started.ok) return threadStartFailure(started);
+  const sent = await createDiscordChannelMessage(parent.providerMessageId, thread.text, {
+    plain: true,
+  });
+  return sent.ok ? { ok: true } : sent;
+}
+
 async function deliverIdentityRow(
   payload: Prisma.JsonValue,
   destinationKey: string,
@@ -309,6 +366,9 @@ export async function drainAllNotifications(limit = 30) {
       return result;
     }
     if (kind === "IDENTITY_ROW") return deliverIdentityRow(payload, destinationKey);
+    // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
+    // 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
+    if (issueThreadPayload(payload)) return deliverIssueThread(payload, destinationKey);
     const text = plainTextPayload(kind, payload);
     if (!text) return { ok: false, error: "알림 payload 형식 오류" };
     // 신규 계정 요약은 같은 카드를 계속 갱신한다. 사람이 지웠으면 새로 만든다.

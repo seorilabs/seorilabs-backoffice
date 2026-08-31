@@ -163,12 +163,10 @@ flowchart LR
 
 ## 5. 버전 source of truth
 
-- **태그가 기준.** `vMAJOR.MINOR.PATCH`(stable SemVer)만 허용.
+- **stable 릴리스 버전 권한은 GitHub stable tag 하나다.** `vMAJOR.MINOR.PATCH`와 exact peeled commit SHA만 허용하며 repo-local 버전 파일은 권한으로 읽지 않는다.
 - Discord `/snapshot app target`은 `main` HEAD에 `vMAJOR.MINOR.PATCH-snapshot.N` 후보 태그를 붙여 선택한 내부 테스트 채널을 트리거한다. 공개 이력이 있으면 stable 태그와 마켓 원장 중 최댓값의 다음 patch를 base로 삼고, `main` package version이 이미 더 높으면 그 선언을 다시 증가시키지 않는다. 공개 이력이 없는 초기 앱은 package version을 그대로 첫 base로 사용하며 snapshot 순번은 선택된 base 안에서 `1..99`만 허용한다. `.99`를 사용한 base는 다음 package version을 선언하기 전까지 fail-closed한다. `target`은 정식 배포와 같은 `AIT`, `PLAY`, `APPSTORE`, `ALL` 중 하나이며 `APPSTORE`는 TestFlight 내부 테스트를 뜻하고 `ALL`은 앱에 등록된 마켓만 실행한다. AppsInToss는 후보 배포, Google Play는 `internal/completed`, iOS는 GitHub macOS가 아니라 Xcode Cloud를 사용한다. 선택한 마켓이 등록되지 않았으면 외부 쓰기 전에 중단한다. 저장소의 기본 브랜치와 후보 소스는 모두 `main`이어야 하며, 실행 ref는 후보 태그로 고정해 `workflow_run`이 후보 버전을 정확히 기록하게 한다. 후보 태그는 GitHub Release·출시노트·정식 라이프사이클 전이 대상이 아니다.
 - 후보 태그를 받는 AIT·Play caller는 `workflow_dispatch.inputs.snapshot_candidate`를 명시적으로 선언해야 하며 Backoffice는 후보 실행에만 `snapshot_candidate=true`를 전달한다. AIT caller가 `upload` 입력을 선언하면 비공개 후보 업로드를 위해 `upload=true`도 강제하고, always-upload caller처럼 입력을 선언하지 않은 workflow에는 미선언 값을 보내지 않는다. 선택한 caller에 이 capability가 없으면 후보 태그를 만들기 전 preview/preflight에서 중단한다. preview는 `main` SHA를 먼저 확정하고 package/config/caller capability를 모두 그 exact SHA에서 읽는다. confirm은 현재 `main`이 해당 SHA인지 확인하고 같은 SHA의 caller 및 Xcode 계약을 먼저 검증한다. `createTag` 바로 전에는 `main` SHA와 exact SHA의 package/config·현재 태그 목록을 함께 다시 읽고, SHA와 다음 후보가 확인값과 정확히 같은지 검사한 뒤 다른 원격 조회 없이 태그를 생성한다. 앱 저장소의 배포 계약은 prerelease ref를 checkout할 수 있어야 한다. Android는 후보마다 Play의 기존 값보다 큰 고유 `versionCode`를 만들어야 하고, iOS는 `vX.Y.Z-snapshot.N`에서 `CFBundleShortVersionString=X.Y.Z`와 단조 증가 `CFBundleVersion`을 분리해야 한다. Xcode Cloud는 자동 Tag 변경 조건을 두지 않고 Manual Tag 시작 조건이 `v` 접두사 태그를 허용하도록 등록하며, Backoffice는 수동 조건이 요청 태그를 허용하는지 외부 write 전에 검증한다. stable 태그만 허용하는 repo-local resolver는 후보 배포 전에 해당 저장소에서 먼저 확장한다.
-- RN: `scripts/resolve-release-version.mjs`가 태그에서 `version_name`, `android_version_code`(세그먼트 base 1000), `apple_marketing_version`, `apple_build_number`를 파생. (happy-farm/crossword 검증됨)
-- Godot: `play-store/google-play.config.json`의 `release.versionName/versionCode`를 읽고 태그(`v$versionName`)와 일치 검증.(lucid-chess)
-- → 표준 리졸버를 org 공통 스크립트로 승격(템플릿에 포함). 마켓별 versionCode/buildNumber 충돌은 업로드 직전 검증.
+- RN·Godot 모두 마케팅 버전은 stable tag에서 파생한다. `versionCode`·`buildNumber` 같은 마켓별 단조 증가 값은 빌드/업로드 단계에서 별도 파생하고 provider 충돌을 업로드 전에 검증한다.
 
 ---
 
@@ -218,9 +216,9 @@ sequenceDiagram
     participant MK as 마켓(AIT/GPS/APS)
 
     U->>BO: ① Release 태그 생성 요청(repo, bump/tag)
-    BO->>GH: preview - default branch exact SHA 고정 + 소스 버전에서 후보 태그 확정 [contents:read]
+    BO->>GH: preview - default branch exact SHA 고정 + stable tag 계보에서 후보 확정 [contents:read]
     U->>BO: 확인
-    BO->>GH: confirm - 같은 SHA·후보 태그·소스 버전 재검증 [contents:read]
+    BO->>GH: confirm - 같은 SHA·후보 stable tag 재검증 [contents:read]
     BO->>GH: createTag(vX.Y.Z) → 승인된 소스 SHA 에 태그 [contents:write]
     BO-->>U: 태그 + GitHub Release 즉시 생성
     GH-->>BO: tag push webhook
@@ -233,7 +231,7 @@ sequenceDiagram
     U->>BO: ④ 배포 대상 선택(태그/마켓: AIT/GPS/APS/Deploy All)
     BO->>DC: confirm 버튼
     U->>DC: 확인
-    BO->>GH: ⑤ preflight - 태그 SHA, 소스 버전, dispatch 계약, inputs, Xcode 조건 [read only]
+    BO->>GH: ⑤ preflight - exact tag commit SHA, dispatch 계약, inputs, Xcode 조건 [read only]
     BO->>GH: ⑥ createWorkflowDispatch(deploy-*.yml, release_tag) [actions:write]
     BO->>MK: ⑥-1 Xcode Cloud ciBuildRuns - GitHub dispatch 성공 뒤 마지막
     GH->>MK: ⑦ 빌드 → 서명 → 업로드(출시노트 동봉)
@@ -243,19 +241,15 @@ sequenceDiagram
 ```
 
 - **릴리즈 태그는 승인된 소스 SHA 를 직접 가리킨다.** 백오피스는 대상 ref 의 SHA 를 한 번 확정하고 그 SHA 에 태그를 단다. 브랜치 ref 를 갱신하거나 커밋을 만들지 않는다. **릴리즈 마커 커밋 정책은 폐기됐다** — 파일 변경이 없는 `chore(release): vX.Y.Z` 커밋을 릴리즈 소스로 만들고 브랜치 HEAD 까지 움직였기 때문이다. 폐기 이전에 쌓인 마커 커밋은 히스토리에 남아 있으므로 출시노트 집계에서만 계속 제외한다(읽기 호환).
-- **preview 는 default branch 의 exact SHA 를 고정한다.** 후보 태그·소스 버전·SHA 를 확인 카드에 담고, confirm 단계에서 같은 값을 다시 검증한다. 그 사이 브랜치가 움직였으면 write 없이 중단한다. default branch 이름은 repo 에서 조회하며 `main` 으로 하드코딩하지 않는다.
-- **bump 는 소스에 없는 버전을 만들지 않는다.** pinned-source repo 는 소스가 버전 원장을 소유하므로 후보 태그가 항상 소스 버전이다. 버전을 올리려면 repo 의 원장을 먼저 올린다. 소스 원장이 없는 계약에서만 태그 계보·마켓 원장 기준 bump 를 쓴다.
-- **fail-closed 소스 버전 계약**: 태그 생성 전과 마켓 배포 dispatch 전에, 해당 SHA 의 repo-local 버전 원장을 백오피스가 직접 읽어 태그와 정확히 일치하는지 검증한다. 위반이면 GitHub tag, GitHub Release, 브랜치 ref 갱신, Xcode Cloud `ciBuildRuns` POST, workflow dispatch 중 무엇도 실행하지 않는다.
-  - `scripts/check_release_version.py` 를 선언한 repo(pinned-source): `project.godot` 의 `application/config/version`, `play-store/google-play.config.json` 의 `release.versionName`, `app-store/app-store.config.json` 의 `release.appleMarketingVersion` 이 서로 같고 태그와도 같아야 한다.
-  - `scripts/resolve-release-version.mjs` 를 선언한 repo(tag-derived, org RN 표준): 버전이 태그의 순수 함수라 비교할 원장이 없다.
-  - 둘 다 없는 repo(tag-derived-caller): Godot caller 가 `version_name` 을 required 입력으로 받고 백오피스가 태그에서 파생해 넘긴다. repo 가 강제하는 pinned 원장이 없다.
-- **마켓 config 의 버전(floor)은 다음 태그 추천에만 쓴다.** 이미 배포된 마켓 버전보다 태그가 높다는 사실은 태그가 가리키는 소스가 그 버전이라는 증거가 아니다(태그 v1.2.0 / 소스 1.1.12 장애). 배포 허가는 위 소스 계약이 판단한다.
+- **preview 는 default branch 의 exact SHA 를 고정한다.** 후보 stable tag와 SHA를 확인 카드에 담고 confirm 단계에서 같은 값을 다시 검증한다. 그 사이 브랜치가 움직였으면 write 없이 중단한다. default branch 이름은 repo에서 조회하며 `main`으로 하드코딩하지 않는다.
+- **bump 는 GitHub stable tag 계보만 사용한다.** 명시 태그가 없으면 최신 `vX.Y.Z`에서 증가시키며 `project.godot`, Play/App Store JSON, repo-local 검사 스크립트의 stale 값은 후보 생성이나 배포 허가에 관여하지 않는다.
+- **fail-closed GitHub tag 권한**: 태그 생성은 확인한 branch commit에 exact ref를 만든 뒤 다시 peel해 같은 commit인지 검증한다. 배포는 exact `refs/tags/vX.Y.Z`를 읽어 얻은 peeled commit SHA를 권한으로 사용한다. 같은 이름의 branch, 일반 422 응답, repo-local 버전 파일은 태그 존재·일치 증거가 아니다.
 - **배포는 preflight 전부 → GitHub dispatch → Xcode Cloud 순서다.** 되돌릴 수 없는 외부 실행을 마지막에 둔다.
-  - preflight(외부 write 0): 태그가 가리키는 exact SHA, 그 SHA 의 소스 버전, caller 의 `workflow_dispatch` 선언 존재, 실제로 보낼 입력이 모두 선언돼 있는지, Xcode Cloud 제품·repository·수동 태그 시작 조건까지 확인해 실행 계획을 확정한다.
+  - preflight(외부 write 0): exact stable tag의 peeled commit SHA, caller의 `workflow_dispatch` 선언 존재, 실제로 보낼 입력이 모두 선언돼 있는지, Xcode Cloud 제품·repository·수동 태그 시작 조건까지 확인해 실행 계획을 확정한다.
   - 실행: GitHub `workflow_dispatch` 를 먼저 보낸다. GitHub 이 422(선언되지 않은 입력·정의 불일치) 등으로 거부하면 거기서 중단되므로 `ciBuildRuns` POST 는 0회로 남는다. Xcode Cloud 는 GitHub 이 성공한 뒤에만 실행한다.
   - `APPSTORE` 단독(Xcode Cloud 경로)은 GitHub dispatch 가 없지만 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
   - 배포 audit 에는 **검증된 태그 SHA 와 실제 dispatch 결과만** 남긴다. 요청값을 그대로 신뢰해 기록하지 않는다.
-- **개별 마켓 workflow 내부의 exact 검증은 마지막 방어막으로 유지한다.** 백오피스 검증은 그 앞단에서 외부 실행이 만들어지는 것 자체를 막는다.
+- **개별 마켓 workflow는 tag에서 빌드 버전을 파생한다.** 마켓별 단조 증가 값과 artifact identity 검증은 마지막 방어막으로 유지하며, 백오피스는 그 앞단에서 exact tag commit과 dispatch 계약을 고정한다.
 - Discord API의 `429`/`5xx`/네트워크 오류는 요청 내 제한 재시도 후 outbox가 30초 지수 backoff, 최대 30분 간격으로 재시도한다.
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 추적하고 1분마다 `ciBuildRuns/{id}`를 조회한다. `COMPLETE/SUCCEEDED`는 성공, 그 외 완료 결과는 실패로 처리한다.
 - Xcode Cloud workflow 선택은 제품의 첫 활성 workflow를 사용하지 않는다. workflow repository가 요청 repo와 일치하고 `APP_STORE_ELIGIBLE` iOS Archive인 후보가 정확히 1개일 때만 실행하며, 태그 ref도 제품의 첫 primary repository가 아니라 선택한 workflow에 연결된 repository에서 찾는다.

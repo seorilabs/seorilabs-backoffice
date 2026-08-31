@@ -16,7 +16,9 @@ import {
   issueEligibleForSourceRemediation,
   repositorySourceRemediationEligible,
   sourceRemediationScopeDigest,
+  templateRepositoryAutomationEligible,
 } from "@/lib/control-plane/source-remediation";
+import { AUTOMATION_TEMPLATE_KEY } from "@/lib/control-plane/automation-catalog";
 
 // P7 catch-22 fixture: classification=PRODUCT_APP이지만 discovery가 NEEDS_INPUT인 세 저장소.
 const IMMUNITY_WAR_SHA = "a".repeat(40);
@@ -245,5 +247,102 @@ test("AC-7: source-remediation의 repo singleton scope key는 일반 READY_PR te
     agentRepositorySingletonScope("seorilabs/Animal-Chess", executionPolicy),
     "repo-pr:seorilabs/animal-chess",
     "AgentRepoGuard.activeScopeKey unique index가 그대로 repo당 Ready PR 1개를 강제해야 한다",
+  );
+});
+
+// claim과 dead-letter 수동 retry가 같은 판정을 공유하는지 고정한다. 두 경로가 어긋나면
+// NEEDS_INPUT repository의 단발 run이 dead-letter 뒤 영구히 되살아나지 못한다.
+function remediationConfiguration(overrides: Partial<{
+  discoveryGeneration: number;
+  sourceSha: string;
+  reasonCode: "NO_CANDIDATE" | "BUILD_TARGET_MISSING";
+}> = {}) {
+  return sourceRemediationAutomationPolicy({
+    budgetCeilingMicros: 500_000,
+    issueNumber: 30,
+    discoveryGeneration: 3,
+    sourceSha: IMMUNITY_WAR_SHA,
+    reasonCode: "NO_CANDIDATE",
+    scopeDigest: "f".repeat(64),
+    ...overrides,
+  });
+}
+
+function managedRegistration() {
+  return registration({
+    status: "MANAGED",
+    lastReconciledSha: IMMUNITY_WAR_SHA,
+    lastDefaultPushSha: IMMUNITY_WAR_SHA,
+  });
+}
+
+test("source-remediation template은 NEEDS_INPUT registration에서도 공유 guard를 통과한다", () => {
+  assert.equal(
+    templateRepositoryAutomationEligible({
+      template: SOURCE_REMEDIATION_TEMPLATE_KEY,
+      configuration: remediationConfiguration(),
+      registration: { ...registration(), managementKind: "APP" },
+    }),
+    true,
+    "MANAGED가 아니어도 정의가 잠근 generation/SHA/reason이 같으면 claim과 retry가 모두 통과해야 한다",
+  );
+});
+
+test("source-remediation 공유 guard는 잠근 generation/SHA/reason이 어긋나면 fail-closed한다", () => {
+  for (const broken of [
+    { reconcileGeneration: 4 },
+    { lastReconciledSha: ANIMAL_CHESS_SHA, lastDefaultPushSha: ANIMAL_CHESS_SHA },
+    { lastDiscoveryReason: "BUILD_TARGET_MISSING" },
+    { classification: null },
+    { archived: true },
+    { status: "MANAGED" },
+  ]) {
+    assert.equal(
+      templateRepositoryAutomationEligible({
+        template: SOURCE_REMEDIATION_TEMPLATE_KEY,
+        configuration: remediationConfiguration(),
+        registration: { ...registration(broken), managementKind: "APP" },
+      }),
+      false,
+      `${JSON.stringify(broken)}는 재시도/claim 모두 거부돼야 한다`,
+    );
+  }
+  assert.equal(
+    templateRepositoryAutomationEligible({
+      template: SOURCE_REMEDIATION_TEMPLATE_KEY,
+      configuration: { schemaVersion: 1 },
+      registration: { ...registration(), managementKind: "APP" },
+    }),
+    false,
+    "계약 밖 configuration은 통과시키지 않는다",
+  );
+  assert.equal(
+    templateRepositoryAutomationEligible({
+      template: SOURCE_REMEDIATION_TEMPLATE_KEY,
+      configuration: remediationConfiguration(),
+      registration: null,
+    }),
+    false,
+  );
+});
+
+test("공유 guard는 다른 template의 MANAGED 요구를 그대로 유지한다", () => {
+  assert.equal(
+    templateRepositoryAutomationEligible({
+      template: AUTOMATION_TEMPLATE_KEY,
+      configuration: remediationConfiguration(),
+      registration: { ...registration(), managementKind: "APP" },
+    }),
+    false,
+    "NEEDS_INPUT registration은 일반 template에서 계속 거부돼야 한다",
+  );
+  assert.equal(
+    templateRepositoryAutomationEligible({
+      template: AUTOMATION_TEMPLATE_KEY,
+      configuration: null,
+      registration: { ...managedRegistration(), managementKind: "APP" },
+    }),
+    true,
+    "MANAGED + current source인 일반 template은 기존과 동일하게 통과해야 한다",
   );
 });

@@ -39,6 +39,9 @@ export interface ObservedTrigger {
 
 const PROVIDER_EXECUTION_AUDIT_MESSAGE = "provider execution audit is append-only";
 const AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE = "auth broker journal checkpoint audit is append-only";
+const FLEET_MIGRATION_PROOF_AUDIT_MESSAGE = "fleet migration proof audit is append-only";
+const FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE = "fleet migration occurrence audit is append-only";
+const FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE = "fleet migration completion audit is append-only";
 
 const PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
@@ -71,6 +74,46 @@ export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly Appen
   },
 ];
 
+/** P7 proof, claim, completion 원장을 UPDATE/DELETE 없이 고정하는 독립 계약이다. */
+export const FLEET_MIGRATION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+  {
+    name: "control_plane_fleet_migration_proof_snapshot_no_delete",
+    table: "control_plane_fleet_migration_proof_snapshot",
+    event: "DELETE",
+    message: FLEET_MIGRATION_PROOF_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_proof_snapshot_no_update",
+    table: "control_plane_fleet_migration_proof_snapshot",
+    event: "UPDATE",
+    message: FLEET_MIGRATION_PROOF_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_collection_occurrence_no_delete",
+    table: "control_plane_fleet_migration_collection_occurrence",
+    event: "DELETE",
+    message: FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_collection_occurrence_no_update",
+    table: "control_plane_fleet_migration_collection_occurrence",
+    event: "UPDATE",
+    message: FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_collection_completion_no_delete",
+    table: "control_plane_fleet_migration_collection_completion",
+    event: "DELETE",
+    message: FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_collection_completion_no_update",
+    table: "control_plane_fleet_migration_collection_completion",
+    event: "UPDATE",
+    message: FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE,
+  },
+];
+
 /**
  * live DB에 반드시 존재하고 고정 in-cluster verifier가 관측하는 전체 계약이다.
  * migration SQL, restore rehearsal, verifier manifest와 digest가 모두 같아야 한다.
@@ -78,6 +121,7 @@ export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly Appen
 export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   ...PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS,
   ...AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
+  ...FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
 ].sort((left, right) => left.name.localeCompare(right.name));
 
 const CREATE_TRIGGER_PATTERN =

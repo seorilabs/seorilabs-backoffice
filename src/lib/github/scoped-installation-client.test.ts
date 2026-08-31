@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
   FLEET_GITHUB_CAPABILITY_PERMISSIONS,
+  issueFleetMigrationGithubCapabilityToSink,
   withFleetScopedGithubClient,
   type FleetScopedGithubTokenIssuer,
 } from "@/lib/github/scoped-installation-client";
@@ -16,6 +18,7 @@ function fixtureIssuer(input: {
   repositoryFullName?: string;
   permissions?: Record<string, string>;
   createClientFailure?: boolean;
+  revokeFailure?: boolean;
 }) {
   const calls = {
     create: [] as unknown[],
@@ -41,6 +44,7 @@ function fixtureIssuer(input: {
     },
     async revokeAccessToken() {
       calls.revoke += 1;
+      if (input.revokeFailure) throw new Error("fixture revoke failure");
     },
   };
   return { calls, issuer };
@@ -166,4 +170,143 @@ test("client 생성 또는 provider operation 실패에서도 발급 token을 �
     },
   }), /fixture operation failure/u);
   assert.equal(operationFailure.calls.revoke, 1);
+});
+
+test("operation 실패와 revoke 실패가 겹쳐도 token 폐기 실패를 fail-closed한다", async () => {
+  const fixture = fixtureIssuer({ revokeFailure: true });
+  await assert.rejects(() => withFleetScopedGithubClient({
+    issuer: fixture.issuer,
+    installationId: "99",
+    capability: "github.standard-labels.ensure",
+    repositoryId: "123",
+    repositoryFullName: "seorilabs/example",
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
+    execute: async () => {
+      throw new Error("fixture operation failure");
+    },
+  }), /FLEET_GITHUB_TOKEN_REVOKE_FAILED/u);
+  assert.equal(fixture.calls.revoke, 1);
+});
+
+test("migration issuer는 exact multi-repository read capability를 sink에만 전달한다", async () => {
+  const token = "fixture-migration-token-never-returned";
+  const calls = {
+    create: [] as unknown[],
+    deliver: 0,
+    revoke: 0,
+  };
+  const issuer: FleetScopedGithubTokenIssuer<FixtureClient> = {
+    async createAccessToken(request) {
+      calls.create.push(request);
+      return {
+        token,
+        expiresAt: "2026-08-30T01:30:00.000Z",
+        permissions: request.permissions,
+        // provider 순서와 무관하게 exact set을 검증해야 한다.
+        repositories: [
+          { id: 456, fullName: "seorilabs/other" },
+          { id: 123, fullName: "seorilabs/example" },
+        ],
+      };
+    },
+    createClient() {
+      return { marker: "fixture" };
+    },
+    async revokeAccessToken() {
+      calls.revoke += 1;
+    },
+  };
+  const receipt = await issueFleetMigrationGithubCapabilityToSink({
+    issuer,
+    installationId: "99",
+    executionId: "migration-shadow-run-1",
+    repositories: [
+      { id: "456", fullName: "seorilabs/other" },
+      { id: "123", fullName: "seorilabs/example" },
+    ],
+    now: () => new Date("2026-08-30T01:00:00.000Z"),
+    deliver: async (delivery) => {
+      calls.deliver += 1;
+      assert.equal(delivery.token, token);
+      assert.equal(delivery.receipt.executionId, "migration-shadow-run-1");
+    },
+  });
+  assert.deepEqual(calls.create, [{
+    installationId: 99,
+    repositoryIds: [123, 456],
+    permissions: FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.fleet-migration.shadow-read"],
+  }]);
+  assert.equal(calls.deliver, 1);
+  assert.equal(calls.revoke, 0, "accepted one-run token은 runtime terminal에서 폐기한다");
+  assert.equal(receipt.tokenSha256, createHash("sha256").update(token).digest("hex"));
+  assert.deepEqual(receipt.repositories, [
+    { id: "123", fullName: "seorilabs/example" },
+    { id: "456", fullName: "seorilabs/other" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(receipt), new RegExp(token, "u"));
+});
+
+test("migration token의 cohort, permission, sink가 다르면 handoff 전에 폐기한다", async () => {
+  const cases = [
+    {
+      repositories: [
+        { id: 123, fullName: "seorilabs/example" },
+        { id: 999, fullName: "seorilabs/unapproved" },
+      ],
+      permissions: { contents: "read", metadata: "read" },
+      deliveryFailure: false,
+    },
+    {
+      repositories: [
+        { id: 123, fullName: "seorilabs/example" },
+        { id: 456, fullName: "seorilabs/other" },
+      ],
+      permissions: { contents: "write", metadata: "read" },
+      deliveryFailure: false,
+    },
+    {
+      repositories: [
+        { id: 123, fullName: "seorilabs/example" },
+        { id: 456, fullName: "seorilabs/other" },
+      ],
+      permissions: { contents: "read", metadata: "read" },
+      deliveryFailure: true,
+    },
+  ];
+  for (const fixture of cases) {
+    let delivered = 0;
+    let revoked = 0;
+    const issuer: FleetScopedGithubTokenIssuer<FixtureClient> = {
+      async createAccessToken() {
+        return {
+          token: "fixture-migration-token-never-returned",
+          expiresAt: "2026-08-30T01:30:00.000Z",
+          permissions: fixture.permissions,
+          repositories: fixture.repositories,
+        };
+      },
+      createClient() {
+        return { marker: "fixture" };
+      },
+      async revokeAccessToken() {
+        revoked += 1;
+      },
+    };
+    await assert.rejects(() => issueFleetMigrationGithubCapabilityToSink({
+      issuer,
+      installationId: "99",
+      executionId: "migration-shadow-run-1",
+      repositories: [
+        { id: "123", fullName: "seorilabs/example" },
+        { id: "456", fullName: "seorilabs/other" },
+      ],
+      now: () => new Date("2026-08-30T01:00:00.000Z"),
+      deliver: async () => {
+        delivered += 1;
+        if (fixture.deliveryFailure) throw new Error("fixture sink failure");
+      },
+    }), /FLEET_GITHUB_TOKEN_(?:SCOPE|PERMISSION)_MISMATCH|fixture sink failure/u);
+    assert.equal(delivered, fixture.deliveryFailure ? 1 : 0);
+    assert.equal(revoked, 1);
+  }
 });

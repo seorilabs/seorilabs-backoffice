@@ -485,7 +485,7 @@ test("release-note 자동 발행은 조직의 exact platform repo만 제외하�
     service,
     /shouldBackofficeAutoPublishReleaseNotes\(event\.repoFullName, env\.githubOrg\(\)\)[\s\S]*generateAndPublishReleaseNotes/,
   );
-  assert.match(service, /resolveRefSha\(event\.repoFullName, tag\.version\)[\s\S]*tag\.headSha/);
+  assert.match(service, /resolveStableTagSha\(event\.repoFullName, tag\.version\)[\s\S]*tag\.headSha/);
   assert.match(service, /status: "PROCESSING", attempts: claimGeneration/);
   assert.ok(
     releaseOps.indexOf("shouldBackofficeAutoPublishReleaseNotes(opts.repoFullName")

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyRawSections } from "@/lib/core/console-metrics-collect";
+import {
+  emptyRawSections,
+  isConsoleMetricCollectionActive,
+} from "@/lib/core/console-metrics-collect";
+
+test("ACTIVE 앱만 신규 콘솔 지표 수집 대상이다", () => {
+  assert.equal(isConsoleMetricCollectionActive("ACTIVE"), true);
+  assert.equal(isConsoleMetricCollectionActive("PAUSED"), false);
+  assert.equal(isConsoleMetricCollectionActive("DEPRECATED"), false);
+});
 
 test("raw 구조만 있고 값이 전부 비면 저장은 하되 경고로 드러낸다", () => {
   // producer 가 키만 만들고 값을 못 채우는 사고가 실제로 있었다

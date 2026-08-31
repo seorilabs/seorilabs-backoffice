@@ -71,14 +71,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
-source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 네 개가 있으면 보존하지만 부분·변형·
-추가 trigger는 복구하지 않고 실패한다. 현재 전체 계약은 provider execution 두 개와 Auth Broker
-journal checkpoint 두 개, 총 네 개다.
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 열 개가 있으면 보존하지만 부분·변형·
+추가 trigger는 복구하지 않고 실패한다. 현재 전체 계약은 provider execution 두 개, Auth Broker
+journal checkpoint 두 개, Fleet migration proof/claim/completion 여섯 개, 총 열 개다.
 `CREATE TRIGGER`는 MySQL prepared statement에서 지원되지 않으므로 Prisma `$executeRawUnsafe`로
-실행하지 않는다. verifier는 trigger가 정확히 0개일 때만 repo-local canonical DDL 네 개를
+실행하지 않는다. verifier는 보호 table trigger가 정확히 0개일 때만 repo-local canonical DDL 열 개를
 `prisma db execute --stdin`의 전용 child process에 전달한다. 격리 DB URL은 argv나 로그에 넣지 않고
-그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 네 개를
-제거한 뒤 이 text-protocol 경로로 정확히 네 개가 재구성되는지 확인한다.
+그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 열 개를
+제거한 뒤 이 text-protocol 경로로 정확히 열 개가 재구성되는지 확인한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
 주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
@@ -139,10 +139,12 @@ engine·collation·21개 column·foreign key, 빈 checkpoint/event 원장, 해�
 trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같은 immutable image로
 `platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
 미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
-`status=PASS`, `total=4`, `exact=4` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+Fleet migration migration 뒤에는 trusted operator가
+`fleet-migration-security-provisioning-job.yaml`로 여섯 trigger와 두 전용 DB principal의 exact grant를
+설치한다. 이후 `status=PASS`, `total=10`, `exact=10` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
 직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
 `log_bin_trust_function_creators`도 변경하지 않는다.
-복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·네 trigger·migration
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열 trigger·migration
 lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
@@ -168,9 +170,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 네 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 4인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 10인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -188,7 +190,7 @@ timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 �
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
 `scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
-한다. `status=PASS`, `total=4`, `exact=4`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+한다. `status=PASS`, `total=10`, `exact=10`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
 이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
 max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
 같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
@@ -392,6 +394,7 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `DISCORD_CHANNEL_RELEASE_OPS_ID` | `#release-ops` |
 | `DISCORD_CHANNEL_OPS_ALERTS_ID` | `#ops-alerts` |
 | `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
+| `DISCORD_CHANNEL_GITHUB_ISSUES_ID` | `#github-issues` (선택). GitHub 이슈 생성·종료 알림 전용. 미설정이면 `#backoffice`로 폴백한다 |
 | `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
 | `CONTROL_PLANE_ADMIN_TOKEN` | 제어면 observation/config/manifest API 전용 Bearer token |
 | `CONTROL_PLANE_ADMIN_PRINCIPAL` | 위 token과 1:1로 결합되는 공개 workload identity. 기본 배포값은 `backoffice:fleet-operator` |
@@ -462,6 +465,49 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
   한다. 토큰이 없으면 메인 봇으로 나가므로 리포트가 사라지지는 않는다.
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
+
+### 배포 카드 이어 쓰기
+
+같은 앱·마켓·버전의 배포 카드는 하나를 계속 편집한다(`previousReleaseMessage`). 편집이
+실패하면 두 경우만 새 카드로 넘어간다.
+
+- `404`+`10008` — 사람이 카드를 지웠다.
+- `403` — 다른 봇 정체가 올린 메시지라 편집 권한이 없다. 봇 앱이 바뀌었거나 과거 다른
+  정체가 같은 키의 카드를 올린 경우다. 실측: `slotmachine-game untagged PLAY` 카드가
+  이 이유로 dead letter 4건(2026-08-25·08-29)이 됐고 그동안 카드 갱신이 멈춰 있었다.
+
+429·5xx는 기다리면 풀리므로 새 카드를 보내지 않는다 — 보내면 채널에 중복 카드가 쌓인다.
+
+### GitHub 이슈 알림 채널
+
+이슈 생성·종료 알림은 등급과 무관하게 전체 이슈가 흐른다(최근 7일 기준 생성 250건·종료 221건,
+하루 60건대). 버튼 카드가 놓이는 `#backoffice`와 섞이면 승인·넛지 카드가 묻히므로 전용 채널로
+분리한다.
+
+- `DISCORD_CHANNEL_GITHUB_ISSUES_ID`가 설정돼 있으면 그쪽으로, 없으면 `#backoffice`로 간다.
+  폴백은 **enqueue 시점**에 정한다 — 전달 단계에서 정하면 채널 미설정 구간의 알림이 재시도
+  끝에 dead letter로 사라진다.
+- enqueue는 웹 Pod가 하므로 **웹 Pod와 notification worker 양쪽에** 이 key가 있어야 한다.
+- `github-issues`는 카드 채널(`DISCORD_CARD_CHANNEL_KEYS`)이 아니다. 버튼을 놓지 않으므로
+  인터랙션 허용 범위를 넓히지 않는다.
+- 승인 카드·단계 넛지·일일 다이제스트·주간 LiveOps·Godot 버전 체크는 버튼이 실리므로
+  `#backoffice`에 남는다.
+
+채널에는 한 줄만 남기고 길어지는 맥락은 **그 메시지에서 시작한 쓰레드**로 보낸다.
+
+- 생성 시 쓰레드에 이슈 본문을 남긴다. `<!-- ... -->` 마커 주석은 걷어내고 1,200자에서 자른다.
+  본문이 비어도 쓰레드는 연다 — 종료 시 붙일 댓글·PR이 갈 곳이 필요하다.
+- 종료 시 같은 쓰레드에 연결 PR(머지 여부 포함)과 댓글을 붙인다. 붙일 맥락이 하나도 없으면
+  게시하지 않는다 — 채널 메시지가 이미 종료 사실을 알린다.
+- 연결 PR은 `PullRequestMirror.linkedIssue`(PR 본문의 `closes #N` 파싱)에서 찾는다.
+- **기능 도입 전에 열린 이슈는 붙일 부모 메시지가 없다.** 종료 쓰레드는 enqueue 시점에 부모
+  존재를 확인하고 없으면 건너뛴다. 영원히 재시도하다 dead letter가 되는 것을 막는다.
+- 봇 역할에 `CREATE_PUBLIC_THREADS`가 필요하다(2026-08-30 기준 전 채널에서 보유 확인).
+  권한이 빠지면 403이 나는데 이는 재시도로 풀리지 않으므로 **첫 시도에 바로 dead letter**로
+  보내고 `lastError`에 필요한 권한 이름을 남긴다 — 이벤트마다 10번씩 재시도하면 원인이
+  로그에 묻히고 실패 행만 10배로 쌓인다.
+- 쓰레드 게시는 `NotificationKind`가 아니라 payload의 `thread` 필드로 구분한다. `kind`는
+  MySQL ENUM이라 값 추가에 `ALTER MODIFY`가 필요한데 expand-only 게이트가 막는다.
 
 ### 컨텐츠 지표 마켓 어휘
 
@@ -649,12 +695,12 @@ data ns                                   platform ns
 
 | 단계 | 하는 일 | 외부 write |
 |---|---|---|
-| preview | repo 의 default branch 를 조회해 **exact SHA 를 고정**하고, 그 SHA 의 소스 원장에서 후보 태그를 확정한다 | 없음 |
-| confirm | 같은 SHA·후보 태그·소스 버전을 **다시 검증**한 뒤에만 `createTag` → `createOrUpdateRelease` | 검증 통과 후에만 |
+| preview | repo의 default branch를 조회해 **exact SHA를 고정**하고 GitHub stable tag 계보에서 후보를 확정한다 | 없음 |
+| confirm | 같은 SHA·후보 stable tag를 **다시 검증**한 뒤에만 `createTag` → exact peeled commit readback → `createOrUpdateRelease` | 검증 통과 후에만 |
 
 - 확인 사이에 default branch 가 움직였으면 write 없이 중단한다.
-- `bump` 는 소스에 없는 버전을 만들지 않는다. pinned-source repo 는 후보 태그가 항상 소스 버전이며, 버전을 올리려면 repo 의 원장을 먼저 올린다.
-- 소스 버전 계약(`src/lib/core/release-source-contract.ts`)은 SHA 시점의 repo-local 선언으로 판별한다. `scripts/check_release_version.py`=pinned-source(3원장 정합+태그 일치 강제), `scripts/resolve-release-version.mjs`=tag-derived, 둘 다 없으면 tag-derived-caller.
+- stable 릴리스 버전의 유일한 권한은 GitHub stable tag `vX.Y.Z`와 exact commit SHA다. `bump`는 최신 stable tag에서 계산하고 명시 태그는 그대로 사용한다.
+- `project.godot`, Play/App Store JSON, repo-local 버전 검사 스크립트는 후보와 배포 권한에 관여하지 않는다. stale 값이 있어도 exact stable tag가 빌드 버전을 결정한다.
 
 ### 배포 — preflight 전부 → GitHub → Xcode Cloud
 
@@ -662,7 +708,7 @@ data ns                                   platform ns
 flowchart TD
   A["배포 요청 - tag, target"] --> B["preflight - 외부 write 0"]
   B --> B1["태그가 가리키는 exact SHA"]
-  B --> B2["그 SHA 의 소스 버전 계약"]
+  B --> B2["exact refs tags stable tag의 peeled commit SHA"]
   B --> B3["caller workflow_dispatch 선언"]
   B --> B4["보낼 inputs 가 전부 선언돼 있는지"]
   B --> B5["Xcode Cloud 제품 - repo - 수동 태그 조건"]
@@ -679,7 +725,7 @@ flowchart TD
 
 - 되돌릴 수 없는 Xcode Cloud 실행이 항상 마지막이다. GitHub 이 거부하면 `ciBuildRuns` 는 0회로 남는다.
 - `APPSTORE` 단독도 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
-- 배포 audit(`release.deploy.dispatch`)에는 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
+- 배포 audit(`release.deploy.dispatch`)에는 검증된 GitHub stable tag·peeled commit SHA와 실제 dispatch 결과만 남긴다.
 - 개별 마켓 workflow 내부의 exact 버전 검증은 마지막 방어막으로 그대로 둔다.
 
 ## 12. 출시노트 (Release Notes) — 태그 diff 기반 8개 언어 유저 공지

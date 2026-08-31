@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import {
   eligibleForAutopilot,
+  parseSourceRemediationPolicy,
   SOURCE_REMEDIATION_ELIGIBLE_REASON_CODES,
   SOURCE_REMEDIATION_TEMPLATE_KEY,
   sourceRemediationAutomationPolicy,
@@ -9,6 +10,7 @@ import {
   type SourceRemediationEligibleReasonCode,
   type SourceRemediationPolicy,
 } from "@/lib/control-plane/automation-catalog";
+import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { definitionKey } from "@/lib/control-plane/automation";
 import {
   beginAutomationMutation,
@@ -64,6 +66,44 @@ export function repositorySourceRemediationEligible(
   if ((registration.reconcileGeneration ?? 0) !== policy.discoveryGeneration) return false;
   const currentSha = (registration.lastReconciledSha ?? registration.lastDefaultPushSha)?.toLowerCase() ?? null;
   return currentSha !== null && currentSha === policy.sourceSha.toLowerCase();
+}
+
+/**
+ * claim과 dead-letter 수동 retry가 같은 registration 판정을 쓰도록 template 분기를 한 곳에 모은다.
+ * source-remediation은 registration이 NEEDS_INPUT으로 남아 있는 유일한 template이라 일반
+ * MANAGED guard로는 영원히 통과할 수 없다. 그 외 모든 template은 기존
+ * repositoryAutomationEligible을 그대로 사용한다.
+ */
+export function templateRepositoryAutomationEligible(input: {
+  template: string;
+  configuration: unknown;
+  registration: {
+    archived: boolean;
+    status: string;
+    managementKind: string | null;
+    classification?: string | null;
+    reconcileGeneration?: number | null;
+    lastDefaultPushSha: string | null;
+    lastReconciledSha: string | null;
+    lastDiscoveryReason?: string | null;
+  } | null;
+}): boolean {
+  if (input.template !== SOURCE_REMEDIATION_TEMPLATE_KEY) {
+    return repositoryAutomationEligible(input.registration);
+  }
+  const policy = parseSourceRemediationPolicy(input.configuration);
+  if (!policy) return false;
+  const registration = input.registration;
+  if (!registration) return false;
+  return repositorySourceRemediationEligible({
+    archived: registration.archived,
+    status: registration.status,
+    classification: registration.classification ?? null,
+    reconcileGeneration: registration.reconcileGeneration ?? null,
+    lastReconciledSha: registration.lastReconciledSha,
+    lastDefaultPushSha: registration.lastDefaultPushSha,
+    lastDiscoveryReason: registration.lastDiscoveryReason ?? null,
+  }, policy);
 }
 
 /** claim 직전 GitHub 미러 재확인: 상태/라벨/우선순위/scope digest 중 하나라도 어긋나면 거부한다. */

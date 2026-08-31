@@ -1,0 +1,239 @@
+# P7 Fleet migration proof/occurrence append-only trigger와 두 전용 DB principal을
+# 설치하는 trusted-operator 전용 one-shot Job이다. CI deployer는 이 manifest를
+# 적용하지 않으며, extra grant나 기존 trigger drift를 자동 수정하지 않고 중단한다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-fleet-migration-security-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-security-provisioning
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/migration: "20260830060000_fleet_migration_bootstrap_shadow"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  # root credential을 mount한 privileged execution surface는 감사 readback 뒤
+  # 10분 안에 Job/Pod째 제거한다. 장기 감사는 public verifier ConfigMap이 맡는다.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: fleet-migration-security-provisioning
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provision
+          image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export LC_ALL=C
+              ulimit -c 0
+              umask 077
+              root_cnf=/tmp/root.cnf
+              shadow_cnf=/tmp/shadow.cnf
+              writer_cnf=/tmp/writer.cnf
+              create_sql=/tmp/create-users.sql
+              trigger_sql=/tmp/fleet-triggers.sql
+              trap 'rm -f "$root_cnf" "$shadow_cnf" "$writer_cnf" "$create_sql" "$trigger_sql"' EXIT INT TERM
+              : "${MYSQL_SERVICE_HOST:?MYSQL_SERVICE_HOST가 없다}"
+              printf '[client]\nuser=root\npassword=%s\nhost=%s\nport=%s\n' \
+                "$(< /run/secrets/root/password)" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$root_cnf"
+              shadow_user="$(< /run/secrets/shadow/username)"
+              writer_user="$(< /run/secrets/writer/username)"
+              shadow_password="$(< /run/secrets/shadow/password)"
+              writer_password="$(< /run/secrets/writer/password)"
+              test "$shadow_user" = "fleet_migration_shadow"
+              test "$writer_user" = "fleet_migration_proof_writer"
+              # command substitution strips trailing newlines. Secret bytes and the value later
+              # supplied to mysql must therefore be identical before any CREATE USER is allowed.
+              shadow_bytes="$(wc -c < /run/secrets/shadow/password | tr -d ' ')"
+              writer_bytes="$(wc -c < /run/secrets/writer/password | tr -d ' ')"
+              test "$shadow_bytes" = "${#shadow_password}"
+              test "$writer_bytes" = "${#writer_password}"
+              # MySQL option file의 backslash escape나 주석 문법으로 값이 변하지 않도록
+              # 이 두 신규 principal은 padding 없는 48-byte base64 형식만 허용한다.
+              [[ "$shadow_password" =~ ^[A-Za-z0-9+/]{64}$ ]]
+              [[ "$writer_password" =~ ^[A-Za-z0-9+/]{64}$ ]]
+              shadow_hex="$(printf '%s' "$shadow_password" | od -An -v -tx1 | tr -d ' \n')"
+              writer_hex="$(printf '%s' "$writer_password" | od -An -v -tx1 | tr -d ' \n')"
+              case "$shadow_hex:$writer_hex" in *[!0-9a-f:]*) echo "credential encoding invalid" >&2; exit 1;; esac
+              test "${#shadow_hex}" -ge 48
+              test "${#writer_hex}" -ge 48
+              q() {
+                mysql --defaults-extra-file="$root_cnf" --batch --skip-column-names \
+                  --connect-timeout=5 -e "$1"
+              }
+
+              tables="$(q "SELECT COUNT(*) FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA='backoffice' AND TABLE_NAME IN (
+                  'app','repository_registration','repository_classification_decision',
+                  'control_plane_discovery_observation','control_plane_config_revision',
+                  'platform_fleet_binding','platform_release','control_plane_provider_observation',
+                  'control_plane_credential_binding','control_plane_provider_execution',
+                  'control_plane_fleet_migration_proof_snapshot',
+                  'control_plane_fleet_migration_collection_occurrence',
+                  'control_plane_fleet_migration_collection_completion'
+                )")"
+              test "$tables" = "13"
+
+              cat > "$create_sql" <<SQL
+              SET @shadow_exists = (SELECT COUNT(*) FROM mysql.user WHERE User='fleet_migration_shadow' AND Host='%');
+              SET @shadow_sql = IF(@shadow_exists=0,
+                CONCAT("CREATE USER 'fleet_migration_shadow'@'%' IDENTIFIED BY ", QUOTE(CONVERT(0x${shadow_hex} USING utf8mb4))),
+                'DO 0');
+              PREPARE shadow_stmt FROM @shadow_sql; EXECUTE shadow_stmt; DEALLOCATE PREPARE shadow_stmt;
+              SET @writer_exists = (SELECT COUNT(*) FROM mysql.user WHERE User='fleet_migration_proof_writer' AND Host='%');
+              SET @writer_sql = IF(@writer_exists=0,
+                CONCAT("CREATE USER 'fleet_migration_proof_writer'@'%' IDENTIFIED BY ", QUOTE(CONVERT(0x${writer_hex} USING utf8mb4))),
+                'DO 0');
+              PREPARE writer_stmt FROM @writer_sql; EXECUTE writer_stmt; DEALLOCATE PREPARE writer_stmt;
+              SQL
+              mysql --defaults-extra-file="$root_cnf" --connect-timeout=5 < "$create_sql"
+              : > "$create_sql"
+
+              readonly_tables=(
+                app repository_registration repository_classification_decision
+                control_plane_discovery_observation control_plane_config_revision
+                platform_fleet_binding platform_release control_plane_provider_observation
+                control_plane_credential_binding control_plane_provider_execution
+                control_plane_fleet_migration_proof_snapshot
+                control_plane_fleet_migration_collection_occurrence
+                control_plane_fleet_migration_collection_completion
+              )
+              for table in "${readonly_tables[@]}"; do
+                q "GRANT SELECT ON backoffice.\`${table}\` TO 'fleet_migration_shadow'@'%'"
+                q "GRANT SELECT ON backoffice.\`${table}\` TO 'fleet_migration_proof_writer'@'%'"
+              done
+              q "GRANT INSERT ON backoffice.control_plane_fleet_migration_collection_occurrence TO 'fleet_migration_shadow'@'%'"
+              q "GRANT INSERT ON backoffice.control_plane_fleet_migration_collection_completion TO 'fleet_migration_shadow'@'%'"
+              q "GRANT INSERT ON backoffice.control_plane_fleet_migration_proof_snapshot TO 'fleet_migration_proof_writer'@'%'"
+
+              fleet_total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice' AND EVENT_OBJECT_TABLE IN (
+                  'control_plane_fleet_migration_proof_snapshot',
+                  'control_plane_fleet_migration_collection_occurrence',
+                  'control_plane_fleet_migration_collection_completion')")"
+              fleet_exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice' AND ACTION_TIMING='BEFORE' AND (
+                  (TRIGGER_NAME='control_plane_fleet_migration_proof_snapshot_no_update'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_proof_snapshot'
+                    AND EVENT_MANIPULATION='UPDATE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration proof audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_fleet_migration_proof_snapshot_no_delete'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_proof_snapshot'
+                    AND EVENT_MANIPULATION='DELETE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration proof audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_fleet_migration_collection_occurrence_no_update'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_occurrence'
+                    AND EVENT_MANIPULATION='UPDATE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration occurrence audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_fleet_migration_collection_occurrence_no_delete'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_occurrence'
+                    AND EVENT_MANIPULATION='DELETE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration occurrence audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_fleet_migration_collection_completion_no_update'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_completion'
+                    AND EVENT_MANIPULATION='UPDATE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration completion audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_fleet_migration_collection_completion_no_delete'
+                    AND EVENT_OBJECT_TABLE='control_plane_fleet_migration_collection_completion'
+                    AND EVENT_MANIPULATION='DELETE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration completion audit is append-only'\"))")"
+              if [ "$fleet_total:$fleet_exact" != "6:6" ]; then
+                test "$fleet_total" = "0"
+                cat > "$trigger_sql" <<'SQL'
+              USE backoffice;
+              CREATE TRIGGER `control_plane_fleet_migration_proof_snapshot_no_update` BEFORE UPDATE ON `control_plane_fleet_migration_proof_snapshot` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration proof audit is append-only';
+              CREATE TRIGGER `control_plane_fleet_migration_proof_snapshot_no_delete` BEFORE DELETE ON `control_plane_fleet_migration_proof_snapshot` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration proof audit is append-only';
+              CREATE TRIGGER `control_plane_fleet_migration_collection_occurrence_no_update` BEFORE UPDATE ON `control_plane_fleet_migration_collection_occurrence` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration occurrence audit is append-only';
+              CREATE TRIGGER `control_plane_fleet_migration_collection_occurrence_no_delete` BEFORE DELETE ON `control_plane_fleet_migration_collection_occurrence` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration occurrence audit is append-only';
+              CREATE TRIGGER `control_plane_fleet_migration_collection_completion_no_update` BEFORE UPDATE ON `control_plane_fleet_migration_collection_completion` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration completion audit is append-only';
+              CREATE TRIGGER `control_plane_fleet_migration_collection_completion_no_delete` BEFORE DELETE ON `control_plane_fleet_migration_collection_completion` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration completion audit is append-only';
+              SQL
+                mysql --defaults-extra-file="$root_cnf" --connect-timeout=5 < "$trigger_sql"
+                : > "$trigger_sql"
+              fi
+
+              exact_grants() {
+                user="$1"; expected_select="$2"; expected_insert="$3"
+                principals="$(q "SELECT COUNT(*) FROM mysql.user WHERE User='${user}' AND Host='%'")"
+                roles="$(q "SELECT COUNT(*) FROM information_schema.APPLICABLE_ROLES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))")"
+                global="$(q "SELECT COUNT(*) FROM information_schema.USER_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))
+                    AND PRIVILEGE_TYPE <> 'USAGE'")"
+                schema="$(q "SELECT COUNT(*) FROM information_schema.SCHEMA_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))")"
+                columns="$(q "SELECT COUNT(*) FROM information_schema.COLUMN_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))")"
+                selected="$(q "SELECT COUNT(*) FROM information_schema.TABLE_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))
+                    AND TABLE_SCHEMA='backoffice' AND PRIVILEGE_TYPE='SELECT'")"
+                inserted="$(q "SELECT COUNT(*) FROM information_schema.TABLE_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))
+                    AND TABLE_SCHEMA='backoffice' AND PRIVILEGE_TYPE='INSERT'")"
+                total="$(q "SELECT COUNT(*) FROM information_schema.TABLE_PRIVILEGES
+                  WHERE GRANTEE=CONCAT(CHAR(39),'${user}',CHAR(39),'@',CHAR(39),'%',CHAR(39))")"
+                test "$principals:$roles:$global:$schema:$columns:$selected:$inserted:$total" = \
+                  "1:0:0:0:0:${expected_select}:${expected_insert}:$((expected_select + expected_insert))"
+              }
+              exact_grants fleet_migration_shadow 13 2
+              exact_grants fleet_migration_proof_writer 13 1
+
+              printf '[client]\nuser=%s\npassword=%s\nhost=%s\nport=%s\ndatabase=backoffice\n' \
+                "$shadow_user" "$shadow_password" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$shadow_cnf"
+              printf '[client]\nuser=%s\npassword=%s\nhost=%s\nport=%s\ndatabase=backoffice\n' \
+                "$writer_user" "$writer_password" "$MYSQL_SERVICE_HOST" "${MYSQL_SERVICE_PORT:-3306}" > "$writer_cnf"
+              test "$(mysql --defaults-extra-file="$shadow_cnf" --batch --skip-column-names -e 'SELECT COUNT(*) FROM control_plane_fleet_migration_collection_occurrence')" -ge 0
+              test "$(mysql --defaults-extra-file="$writer_cnf" --batch --skip-column-names -e 'SELECT COUNT(*) FROM control_plane_fleet_migration_proof_snapshot')" -ge 0
+              echo "fleet migration principals and append-only triggers verified"
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: mysql-root-password, mountPath: /run/secrets/root, readOnly: true }
+            - { name: shadow-db-credential, mountPath: /run/secrets/shadow, readOnly: true }
+            - { name: proof-writer-db-credential, mountPath: /run/secrets/writer, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: mysql-root-password
+          secret:
+            secretName: mysql-root-cred
+            defaultMode: 0440
+            items: [{ key: password, path: password }]
+        - name: shadow-db-credential
+          secret:
+            secretName: fleet-migration-shadow-db-credential
+            defaultMode: 0440
+            items:
+              - { key: username, path: username }
+              - { key: password, path: password }
+        - name: proof-writer-db-credential
+          secret:
+            secretName: fleet-migration-proof-writer-db-credential
+            defaultMode: 0440
+            items:
+              - { key: username, path: username }
+              - { key: password, path: password }
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
