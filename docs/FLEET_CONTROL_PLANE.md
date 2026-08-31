@@ -292,7 +292,7 @@ generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/toke
 append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
 원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
 살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 이 두 table의 네 trigger와 Fleet migration
-proof/claim/completion 세 table의 여섯 trigger를 합친 전체 열 trigger를 하나의 signed digest
+proof/claim/completion/authoritative issuance 네 table의 여덟 trigger를 합친 전체 열두 trigger를 하나의 signed digest
 계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
 (`scripts/test-auth-broker-journal-checkpoint.ts`), migration 이후 in-cluster readback을 모두
 통과해야 rollout이 진행된다.
@@ -821,7 +821,7 @@ PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 요구한다. non
 App lifecycle status, source SHA, digest, reason code만 출력한다.
 
 `state=READY`는 collector의 Backoffice 공개 증거 선행조건만 통과했다는 뜻이다. 실제 BOOTSTRAP
-shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 운영 adapter를 추가로
+shadow는 중앙 `seorilabs-org-contracts/repo-contract/fleet-migration-collector`에 다음 운영 adapter를 추가로
 연결해야 한다.
 
 1. GitHub App capability, complete pagination, HEAD/tree/BLOB GET adapter
@@ -870,5 +870,23 @@ DB principal/trigger provisioning, projected object 준비와 전체 명령은
 authoritative 발급은 두 shadow와 별도 단계다. `fleet-migration-inventory-issuer.cjs`는 canonical catalog의
 공개 Ed25519 metadata 및 고정 public key를 대조하고 mTLS signing service에 payload만 전달한다. mTLS
 material은 고정 root 아래 Kubernetes projected 0440 상대 경로만 허용한다. private
-signing key의 파일·환경변수·export API는 Backoffice에 존재하지 않는다. 이번 코드 이관은 Job 실행,
-실제 signing, plan 생성 또는 cleanup을 수행하지 않는다.
+signing key의 파일·환경변수·export API는 Backoffice에 존재하지 않는다. 발급 결과는 dedicated
+INSERT-only DB principal로 completion에 결합된 authoritative issuance 원장에 exact-once 보존한다.
+`fleet-p7-trusted-readback.cjs`는 이 원장을 다시 검증해 trusted inventory binding, 현재 중앙 SHA의
+caller readback과 secret-free P7 aggregate를 만든다. 이번 코드 이관은 Job 실행, 실제 signing,
+plan 생성 또는 cleanup을 수행하지 않는다.
+
+signer는 승인자가 아니라 exact issuer SPIFFE 뒤의 key-isolation 경계다. capability/collection digest의
+실제 승인 여부는 issuer의 live capability와 durable collection readback이 결정한다. signer는 canonical
+payload, key ID/fingerprint/algorithm, inventory binding과 시간창만 검증한다. signer Deployment는
+`replicas: 0`, issuer Job은 `suspend: true`로 제공하며 real mTLS/signing/GitHub App/DB execution copy를
+공개 identity로 검증하기 전에는 활성화하지 않는다. exact route/TLS 1.3/mTLS, non-root/read-only,
+core dump·Node inspector/report 차단, signer egress 0은 manifest와 fake-key canary로 고정한다.
+별도 승인으로 signer가 exact 1-replica Ready가 된 뒤 trusted operator는
+`scripts/run-fleet-migration-inventory-issuer.sh`로 source/image/credential public binding을
+readback하고 occurrence ID SHA-256 fixed name으로 4-document manifest의 Job 하나만
+create한 뒤 검증된 UID와 resourceVersion의 원자적 CAS로만 unsuspend한다. create 또는 activation 결과
+불명은 named Job을 `READBACK_FIRST`로 남기며, 성공 로그도 exact
+Job UID가 소유한 단일 Succeeded Pod와 public-field allowlist를 통과한 재구성 JSON만 출력한다.
+signer scale, credential 생성·변경, 결과 불명 occurrence 자동 재시도는 하지 않는다. 상세 activation 경계는
+`docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다.

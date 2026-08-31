@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 
-import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
 
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import type { RepositoryInventoryClient } from "@/lib/control-plane/repository-discovery-backfill";

@@ -71,6 +71,15 @@ spec:
               value: "https://backoffice.vzyx.xyz"
             - name: GITHUB_ORG
               value: seorilabs
+            # P7 cleanup의 ISSUE/EXECUTE는 동일한 공개 Ed25519 trust root를 읽는다.
+            # ConfigMap은 non-optional이다. 없으면 maxUnavailable=0인 rollout이
+            # fail-closed하고 기존 Ready Pod를 보존한다.
+            - name: FLEET_MIGRATION_INVENTORY_PUBLIC_ROOT
+              value: /run/fleet-inventory/public
+            - name: FLEET_MIGRATION_INVENTORY_PUBLIC_KEY_FILE
+              value: public-key.pem
+            - name: FLEET_MIGRATION_INVENTORY_PUBLIC_CATALOG_FILE
+              value: catalog.json
             - name: PLATFORM_GITHUB_REPOSITORY_ID
               value: "1317999271"
             # .github repo-contract의 Fleet 표준 label catalog를 immutable source/blob/digest로 읽는다.
@@ -398,8 +407,18 @@ spec:
               mountPath: /tmp
             - name: next-cache
               mountPath: /app/.next/cache
+            - name: fleet-migration-inventory-public-identity
+              mountPath: /run/fleet-inventory/public
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
         - name: next-cache
           emptyDir: {}
+        - name: fleet-migration-inventory-public-identity
+          configMap:
+            name: fleet-migration-inventory-public-identity
+            defaultMode: 0440
+            items:
+              - { key: public-key.pem, path: public-key.pem }
+              - { key: catalog.json, path: catalog.json }

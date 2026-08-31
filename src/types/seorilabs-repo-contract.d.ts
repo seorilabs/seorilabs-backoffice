@@ -1,4 +1,4 @@
-declare module "@seorilabs/repo-contract/fleet-migration-collector" {
+declare module "seorilabs-org-contracts/repo-contract/fleet-migration-collector" {
   export interface FleetMigrationCollection extends Record<string, unknown> {
     state: "FIXTURE_COMPLETE" | "SHADOW_COMPLETE";
     collectionDigest: string;
@@ -27,19 +27,25 @@ declare module "@seorilabs/repo-contract/fleet-migration-collector" {
   };
 }
 
-declare module "@seorilabs/repo-contract/fleet-migration-legacy-validator" {
+declare module "seorilabs-org-contracts/repo-contract/fleet-migration-legacy-validator" {
   export function validateFleetMigrationLegacyDocument(
     request: Record<string, unknown>,
   ): Record<string, unknown>;
 }
 
-declare module "@seorilabs/repo-contract/fleet-migration" {
+declare module "seorilabs-org-contracts/repo-contract/fleet-migration" {
   import type { KeyObject } from "node:crypto";
 
   export function computeFleetEvidenceDigest(value: unknown): string;
   export function loadTrustedFleetMigrationInventoryBinding(input: {
     inventory: Record<string, unknown>;
     trustedInventoryKeys: Record<string, KeyObject>;
+    now: string;
+  }): Record<string, unknown>;
+  export function createFleetCallerMigrationReadback(input: {
+    inventory: Record<string, unknown>;
+    trustedInventoryBinding: Record<string, unknown>;
+    currentCentralSourceSha: string;
     now: string;
   }): Record<string, unknown>;
   export function validateFleetMigrationPlan(
@@ -55,7 +61,7 @@ declare module "@seorilabs/repo-contract/fleet-migration" {
   };
 }
 
-declare module "@seorilabs/repo-contract/trusted-inventory-issuer" {
+declare module "seorilabs-org-contracts/repo-contract/trusted-inventory-issuer" {
   import type { KeyObject } from "node:crypto";
 
   export function createFleetMigrationInventoryIssuer(
@@ -72,11 +78,12 @@ declare module "@seorilabs/repo-contract/trusted-inventory-issuer" {
     signingCredentialId: string;
     keyId: string;
     keyPurpose: string;
+    policyRevision: string;
     signingKeyReadbackContract: string;
   };
 }
 
-declare module "@seorilabs/repo-contract/trusted-cleanup-executor" {
+declare module "seorilabs-org-contracts/repo-contract/trusted-cleanup-executor" {
   import type { KeyObject } from "node:crypto";
 
   export function computeFleetCleanupApprovalScopeDigest(input: {

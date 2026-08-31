@@ -71,14 +71,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
-source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 열 개가 있으면 보존하지만 부분·변형·
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 열두 개가 있으면 보존하지만 부분·변형·
 추가 trigger는 복구하지 않고 실패한다. 현재 전체 계약은 provider execution 두 개, Auth Broker
-journal checkpoint 두 개, Fleet migration proof/claim/completion 여섯 개, 총 열 개다.
+journal checkpoint 두 개, Fleet migration proof/claim/completion/issuance 여덟 개, 총 열두 개다.
 `CREATE TRIGGER`는 MySQL prepared statement에서 지원되지 않으므로 Prisma `$executeRawUnsafe`로
-실행하지 않는다. verifier는 보호 table trigger가 정확히 0개일 때만 repo-local canonical DDL 열 개를
+실행하지 않는다. verifier는 보호 table trigger가 정확히 0개일 때만 repo-local canonical DDL 열두 개를
 `prisma db execute --stdin`의 전용 child process에 전달한다. 격리 DB URL은 argv나 로그에 넣지 않고
-그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 열 개를
-제거한 뒤 이 text-protocol 경로로 정확히 열 개가 재구성되는지 확인한다.
+그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 열두 개를
+제거한 뒤 이 text-protocol 경로로 정확히 열두 개가 재구성되는지 확인한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
 주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
@@ -139,12 +139,12 @@ engine·collation·21개 column·foreign key, 빈 checkpoint/event 원장, 해�
 trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같은 immutable image로
 `platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
 미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
-Fleet migration migration 뒤에는 trusted operator가
-`fleet-migration-security-provisioning-job.yaml`로 여섯 trigger와 두 전용 DB principal의 exact grant를
-설치한다. 이후 `status=PASS`, `total=10`, `exact=10` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+Fleet migration 뒤에는 trusted operator가
+`fleet-migration-security-provisioning-job.yaml`로 여덟 trigger와 세 전용 DB principal의 exact grant를
+설치한다. 이후 `status=PASS`, `total=12`, `exact=12` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
 직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
 `log_bin_trust_function_creators`도 변경하지 않는다.
-복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열 trigger·migration
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열두 trigger·migration
 lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
@@ -170,9 +170,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열두 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 10인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 12인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -247,6 +247,23 @@ pod에서 9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 
 signer가 이미 mount하는 mesh client CA로 검증하므로 새 Secret volume은 필요 없다.
 signer/worker `replicas: 0`은 그대로 유지하며, 이번 변경은 provider execution activation
 gate를 열지 않는다.
+
+### Fleet migration inventory signer 활성화
+
+`k8s/fleet-migration-inventory-signer.yaml`과
+`k8s/fleet-migration-inventory-issuer-job.yaml`은 일반 배포 뒤에도 각각 `replicas: 0`,
+`suspend: true`를 유지한다. exact source/image와 canonical credential의 공개 identity를 trusted
+operator가 별도로 readback하기 전에는 scale 또는 unsuspend하지 않는다. signer는 issuer의 live
+capability 결정을 대신하지 않는 key-isolation 경계이며 raw key/export endpoint를 제공하지 않는다.
+activation, 전용 DB principal, mTLS SPIFFE와 append-only 원장 절차는
+`docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다.
+
+production web의 cleanup ISSUE/EXECUTE loader도 동일한 공개 trust root를 사용한다.
+`fleet-migration-inventory-public-identity` ConfigMap은 `/run/fleet-inventory/public`에 read-only,
+non-optional로 mount되며 key는 `public-key.pem`, `catalog.json` 두 개다. 배포 전에 공개 metadata
+ConfigMap을 준비하지 않으면 새 Pod는 시작되지 않는다. 이때 `maxUnavailable: 0`이 기존 Ready Pod를
+유지하고 rollout은 fail-closed한다. ConfigMap을 optional로 바꾸거나 공개 identity 검증을 건너뛰어
+rollout을 성공시키지 않는다.
 
 ## 5. 시드 + 검증
 ```bash

@@ -1,11 +1,9 @@
 import { Buffer } from "node:buffer";
 import { createHash, createPublicKey, type KeyObject } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 
-import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
-import { fleetMigrationInventoryIssuerContract } from "@seorilabs/repo-contract/trusted-inventory-issuer";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
+import { fleetMigrationInventoryIssuerContract } from "seorilabs-org-contracts/repo-contract/trusted-inventory-issuer";
 
 import { readBoundSecretFile } from "@/lib/control-plane/seori-auth-agent-transport";
 
@@ -56,31 +54,6 @@ function evidence<T extends Record<string, unknown>>(value: T): T & { evidenceDi
   return result;
 }
 
-async function readFixedPublicFile(path: string, maximumBytes: number): Promise<Buffer> {
-  if (!path.startsWith("/") || await realpath(path) !== path) {
-    fail("FLEET_MIGRATION_PUBLIC_METADATA_PATH_INVALID");
-  }
-  const before = await stat(path, { bigint: true });
-  if (!before.isFile() || (before.mode & 0o022n) !== 0n || before.size < 1n || before.size > BigInt(maximumBytes)) {
-    fail("FLEET_MIGRATION_PUBLIC_METADATA_FILE_INVALID");
-  }
-  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  try {
-    const opened = await handle.stat({ bigint: true });
-    if (
-      opened.dev !== before.dev
-      || opened.ino !== before.ino
-      || opened.uid !== before.uid
-      || opened.gid !== before.gid
-      || opened.mode !== before.mode
-      || opened.size !== before.size
-    ) fail("FLEET_MIGRATION_PUBLIC_METADATA_FILE_DRIFT");
-    return await handle.readFile();
-  } finally {
-    await handle.close();
-  }
-}
-
 function parseCatalogEntry(bytes: Buffer): PublicCatalogEntry {
   let value: unknown;
   try {
@@ -105,12 +78,23 @@ function parseCatalogEntry(bytes: Buffer): PublicCatalogEntry {
 }
 
 export async function loadFleetMigrationInventoryPublicIdentity(input: {
+  root: string;
   publicKeyFile: string;
   publicCatalogFile: string;
 }): Promise<{ publicKey: KeyObject; catalog: PublicCatalogEntry }> {
   const [publicKeyBytes, catalogBytes] = await Promise.all([
-    readFixedPublicFile(input.publicKeyFile, MAX_PUBLIC_METADATA_BYTES),
-    readFixedPublicFile(input.publicCatalogFile, MAX_PUBLIC_METADATA_BYTES),
+    readBoundSecretFile({
+      root: input.root,
+      relativePath: input.publicKeyFile,
+      allowGroupRead: true,
+      maxBytes: MAX_PUBLIC_METADATA_BYTES,
+    }),
+    readBoundSecretFile({
+      root: input.root,
+      relativePath: input.publicCatalogFile,
+      allowGroupRead: true,
+      maxBytes: MAX_PUBLIC_METADATA_BYTES,
+    }),
   ]);
   try {
     const publicKey = createPublicKey(publicKeyBytes);
@@ -283,15 +267,28 @@ export function createFleetMigrationMtlsSigningTransport(input: {
           const outgoing = httpsRequest(options, (incoming) => {
             const chunks: Buffer[] = [];
             let size = 0;
+            let settled = false;
+            const rejectResponse = (error: Error) => {
+              if (settled) return;
+              settled = true;
+              chunks.forEach((chunk) => chunk.fill(0));
+              incoming.destroy();
+              reject(error);
+            };
             incoming.on("data", (chunk: Buffer) => {
               const copy = Buffer.from(chunk);
               size += copy.length;
               if (size > MAX_SIGNING_RESPONSE_BYTES) {
                 copy.fill(0);
-                outgoing.destroy(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_LIMIT"));
+                rejectResponse(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_LIMIT"));
               } else chunks.push(copy);
             });
+            incoming.once("error", () => {
+              rejectResponse(new Error("FLEET_MIGRATION_SIGNING_SERVICE_RESPONSE_INVALID"));
+            });
             incoming.on("end", () => {
+              if (settled) return;
+              settled = true;
               const response = Buffer.concat(chunks);
               try {
                 if (incoming.statusCode !== 200) fail("FLEET_MIGRATION_SIGNING_SERVICE_REJECTED");

@@ -1388,10 +1388,33 @@ model FleetMigrationCollectionCompletion {
   collection            Json
   completedAt           DateTime                           @default(now()) @db.DateTime(3)
   occurrence            FleetMigrationCollectionOccurrence @relation(fields: [occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], references: [id, deliveryId, runId, providerVectorDigest, inventoryDigest], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_completion_occurrence_fkey")
+  authoritativeIssuance FleetMigrationAuthoritativeIssuance?
 
   @@unique([occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_completion_identity")
   @@index([providerVectorDigest, completedAt], map: "cp_fleet_migration_completion_vector_time")
   @@map("control_plane_fleet_migration_collection_completion")
+}
+
+// trusted issuer가 서명한 authoritative inventory 전체를 public JSON 그대로 보존하는
+// INSERT-only 원장이다. signature와 fingerprint는 공개 검증 재료이며 secret 값은 저장하지 않는다.
+model FleetMigrationAuthoritativeIssuance {
+  id                   String                              @id @default(cuid())
+  occurrenceId         String                              @unique(map: "cp_fleet_migration_issuance_occurrence_key")
+  runId                String                              @db.VarChar(127)
+  providerVectorDigest String                              @db.VarChar(71)
+  inventoryId          String                              @unique(map: "cp_fleet_migration_issuance_inventory_id_key") @db.VarChar(127)
+  inventoryDigest      String                              @unique(map: "cp_fleet_migration_issuance_inventory_digest_key") @db.VarChar(71)
+  issuanceDigest       String                              @unique(map: "cp_fleet_migration_issuance_digest_key") @db.VarChar(71)
+  keyFingerprint       String                              @db.VarChar(71)
+  signedAt             DateTime                            @db.DateTime(3)
+  expiresAt            DateTime                            @db.DateTime(3)
+  issuance             Json
+  createdAt            DateTime                            @default(now()) @db.DateTime(3)
+  completion           FleetMigrationCollectionCompletion @relation(fields: [occurrenceId], references: [occurrenceId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_issuance_completion_fkey")
+
+  @@unique([occurrenceId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_issuance_identity_key")
+  @@index([expiresAt, createdAt], map: "cp_fleet_migration_issuance_expiry_idx")
+  @@map("control_plane_fleet_migration_authoritative_issuance")
 }
 
 // P7 cleanup capability가 결합되는 repository-plan 단위 CAS 정본이다.

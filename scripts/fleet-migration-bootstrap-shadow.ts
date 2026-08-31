@@ -1,9 +1,9 @@
 import {
   createFleetMigrationReadOnlyCollector,
   fleetMigrationCollectorContract,
-} from "@seorilabs/repo-contract/fleet-migration-collector";
-import { validateFleetMigrationLegacyDocument } from "@seorilabs/repo-contract/fleet-migration-legacy-validator";
-import { fleetMigrationContract } from "@seorilabs/repo-contract/fleet-migration";
+} from "seorilabs-org-contracts/repo-contract/fleet-migration-collector";
+import { validateFleetMigrationLegacyDocument } from "seorilabs-org-contracts/repo-contract/fleet-migration-legacy-validator";
+import { fleetMigrationContract } from "seorilabs-org-contracts/repo-contract/fleet-migration";
 
 import { createFleetMigrationBackofficeAdapter } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
 import { createFleetMigrationFinalizer } from "@/lib/control-plane/fleet-migration-finalizer";

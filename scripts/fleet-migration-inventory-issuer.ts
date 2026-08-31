@@ -1,6 +1,7 @@
-import { createFleetMigrationInventoryIssuer } from "@seorilabs/repo-contract/trusted-inventory-issuer";
+import { createFleetMigrationInventoryIssuer } from "seorilabs-org-contracts/repo-contract/trusted-inventory-issuer";
 
 import { createFleetMigrationGitHubAdapter } from "@/lib/control-plane/fleet-migration-github-adapter";
+import { createFleetMigrationAuthoritativeIssuanceStore } from "@/lib/control-plane/fleet-migration-authoritative-issuance";
 import {
   createFleetMigrationInventoryIssuerAdapters,
   createFleetMigrationMtlsSigningTransport,
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     },
   });
   const publicIdentity = await loadFleetMigrationInventoryPublicIdentity({
+    root: required("FLEET_MIGRATION_INVENTORY_PUBLIC_ROOT"),
     publicKeyFile: required("FLEET_MIGRATION_INVENTORY_PUBLIC_KEY_FILE"),
     publicCatalogFile: required("FLEET_MIGRATION_INVENTORY_PUBLIC_CATALOG_FILE"),
   });
@@ -49,6 +51,14 @@ async function main(): Promise<void> {
   });
   const occurrence = createFleetMigrationOccurrenceStore();
   const collection = await occurrence.read({ occurrenceId, runId, providerVectorDigest });
+  const durableIssuance = createFleetMigrationAuthoritativeIssuanceStore();
+  const existing = await durableIssuance.readByOccurrence({
+    occurrenceId,
+    runId,
+    providerVectorDigest,
+    publicKey: publicIdentity.publicKey,
+    now: new Date(),
+  });
   const issuer = createFleetMigrationInventoryIssuer({
     inventoryPublicKey: publicIdentity.publicKey,
     clock: () => new Date(),
@@ -57,11 +67,22 @@ async function main(): Promise<void> {
     readSigningKeyPublicIdentity: signing.readSigningKeyPublicIdentity,
     signInventoryPayload: signing.signInventoryPayload,
   });
-  const issuance = await issuer.issueAuthoritative(collection);
+  const preserved = existing
+    ? { state: "REPLAYED" as const, issuance: existing }
+    : await durableIssuance.preserve({
+      occurrenceId,
+      runId,
+      providerVectorDigest,
+      issuance: await issuer.issueAuthoritative(collection),
+      publicKey: publicIdentity.publicKey,
+      now: new Date(),
+    });
+  const issuance = preserved.issuance;
   process.stdout.write(`${JSON.stringify({
     schemaVersion: 1,
     contract: issuance.contract,
-    state: issuance.state,
+    state: preserved.state,
+    authoritativeState: issuance.state,
     inventoryDigest: issuance.inventoryDigest,
     issuanceDigest: issuance.issuanceDigest,
     keyFingerprint: issuance.keyFingerprint,

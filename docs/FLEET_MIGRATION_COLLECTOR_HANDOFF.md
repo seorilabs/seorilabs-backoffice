@@ -1,7 +1,7 @@
 # 중앙 collector interface handoff
 
 이번 Backoffice 보안 수정은 충돌 중인 `seorilabs/.github` 파일을 변경하지 않는다. 현재
-`@seorilabs/repo-contract/fleet-migration-collector`의 v1 callback을 다음 wrapper로 안전하게
+`seorilabs-org-contracts/repo-contract/fleet-migration-collector`의 v1 callback을 다음 wrapper로 안전하게
 유지한다.
 
 - `completeOccurrence`는 Backoffice finalizer가 GitHub 전체 cohort와 Backoffice stable

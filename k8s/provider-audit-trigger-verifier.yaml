@@ -103,8 +103,8 @@ metadata:
     app.kubernetes.io/name: backoffice
     app.kubernetes.io/component: provider-audit-trigger-verifier
   annotations:
-    seorilabs.dev/append-only-contract-digest: "e0b7c5835a296bf1e504c92e26dff658110618773f76dee7cc453d78ca87cc09"
-    seorilabs.dev/append-only-contract-count: "10"
+    seorilabs.dev/append-only-contract-digest: "2ca059d5747e9f956cb221fe3677e60fb2725a188dc47e5619422d07e992a732"
+    seorilabs.dev/append-only-contract-count: "12"
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -141,7 +141,7 @@ spec:
               image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
               env:
                 - name: CONTRACT_DIGEST
-                  value: "e0b7c5835a296bf1e504c92e26dff658110618773f76dee7cc453d78ca87cc09"
+                  value: "2ca059d5747e9f956cb221fe3677e60fb2725a188dc47e5619422d07e992a732"
               command: ["/bin/bash", "-c"]
               args:
                 - |
@@ -158,7 +158,7 @@ spec:
                   q() {
                     mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e "$1"
                   }
-                  # 보호 table 위 trigger는 계약된 열 개뿐이어야 한다. 우회 trigger가
+                  # 보호 table 위 trigger는 계약된 열두 개뿐이어야 한다. 우회 trigger가
                   # 함께 설치되면 append-only가 무력화되므로 총 개수도 센다.
                   total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
                     WHERE TRIGGER_SCHEMA='backoffice' \
@@ -167,7 +167,8 @@ spec:
                         'control_plane_auth_broker_journal_checkpoint_event', \
                         'control_plane_fleet_migration_proof_snapshot', \
                         'control_plane_fleet_migration_collection_occurrence', \
-                        'control_plane_fleet_migration_collection_completion' \
+                        'control_plane_fleet_migration_collection_completion', \
+                        'control_plane_fleet_migration_authoritative_issuance' \
                       )")"
                   # 이름, timing, event, table, action statement가 모두 정확히 일치하는 것만 센다.
                   # MySQL은 client가 보낸 statement를 그대로 보관하므로 trailing ';'만 정규화한다.
@@ -220,13 +221,22 @@ spec:
                             OR (TRIGGER_NAME='control_plane_fleet_migration_collection_completion_no_delete' AND EVENT_MANIPULATION='DELETE') \
                           ) \
                         ) \
+                        OR ( \
+                          EVENT_OBJECT_TABLE='control_plane_fleet_migration_authoritative_issuance' \
+                          AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                            \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fleet migration authoritative issuance audit is append-only'\" \
+                          AND ( \
+                            (TRIGGER_NAME='control_plane_fleet_migration_authoritative_issuance_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                            OR (TRIGGER_NAME='control_plane_fleet_migration_authoritative_issuance_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                          ) \
+                        ) \
                       )")"
                   rm -f "$cnf"
                   # 관측값은 숫자 두 개뿐이다. 여기서 형식을 강제하고 publisher가 다시 검사한다.
                   case "$total" in ''|*[!0-9]*) echo "총 개수 관측 실패" >&2; exit 1;; esac
                   case "$exact" in ''|*[!0-9]*) echo "정확 일치 관측 실패" >&2; exit 1;; esac
                   status=FAIL
-                  if [ "$total" = "10" ] && [ "$exact" = "10" ]; then
+                  if [ "$total" = "12" ] && [ "$exact" = "12" ]; then
                     status=PASS
                   fi
                   umask 022

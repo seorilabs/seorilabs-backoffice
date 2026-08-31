@@ -101,14 +101,14 @@ test("required trigger 계약은 migration 또는 trusted-operator 선언과 정
   assert.ok(declared.length > 0);
 });
 
-test("Fleet migration proof, claim, completion은 각각 UPDATE와 DELETE를 거부한다", () => {
-  assert.equal(FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.length, 6);
+test("Fleet migration proof, claim, completion, authoritative issuance는 각각 UPDATE와 DELETE를 거부한다", () => {
+  assert.equal(FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.length, 8);
   assert.equal(
     verifyAppendOnlyTriggers(
       FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.map((requirement) => observed({ name: requirement.name })),
       FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
     ),
-    6,
+    8,
   );
 });
 
