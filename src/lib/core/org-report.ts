@@ -361,6 +361,51 @@ export interface OrgTrendPoint {
   consoleIapTrxKrw: number | null;
 }
 
+export interface TrendGa4Sums {
+  dau: number | null;
+  newUsers: number | null;
+  adCompletions: number | null;
+  dauAndroid: number | null;
+  dauIos: number | null;
+  dauWeb: number | null;
+}
+
+export interface TrendConsoleSums {
+  dau: number | null;
+  iaaEarningKrw: number | null;
+  iapTrxAmountKrw: number | null;
+}
+
+/**
+ * 일별 합산 값을 endDate(포함) 기준 과거 days 일의 날짜 격자로 정렬한다(순수).
+ * 수집이 없는 날은 null 로 남겨 차트가 선을 끊게 한다 — 0 으로 채우면 없던 날에도
+ * 그 값이었다는 거짓을 만든다.
+ */
+export function alignTrendGrid(
+  endDate: string,
+  days: number,
+  ga4ByDate: ReadonlyMap<string, TrendGa4Sums>,
+  consoleByDate: ReadonlyMap<string, TrendConsoleSums>,
+): OrgTrendPoint[] {
+  return dateWindow(parseIsoDate(endDate), days).map((date) => {
+    const key = isoDate(date);
+    const ga4 = ga4ByDate.get(key);
+    const console_ = consoleByDate.get(key);
+    return {
+      date: key,
+      ga4Dau: ga4?.dau ?? null,
+      ga4NewUsers: ga4?.newUsers ?? null,
+      adCompletions: ga4?.adCompletions ?? null,
+      dauAndroid: ga4?.dauAndroid ?? null,
+      dauIos: ga4?.dauIos ?? null,
+      dauWeb: ga4?.dauWeb ?? null,
+      consoleDau: console_?.dau ?? null,
+      consoleIaaKrw: console_?.iaaEarningKrw ?? null,
+      consoleIapTrxKrw: console_?.iapTrxAmountKrw ?? null,
+    };
+  });
+}
+
 /**
  * 추이 그래프용 Org 합산 시계열. endDate(포함)부터 과거 days 일을 날짜 격자로 정렬해
  * 수집이 없는 날은 null 로 남긴다(차트가 선을 끊는다). 원본 테이블을 읽으므로 GA4
@@ -368,8 +413,7 @@ export interface OrgTrendPoint {
  */
 export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTrendPoint[]> {
   const end = parseIsoDate(endDate);
-  const dates = dateWindow(end, days);
-  const range = { gte: dates[0], lte: end };
+  const range = { gte: dateWindow(end, days)[0], lte: end };
   const [ga4Rows, consoleRows] = await Promise.all([
     prisma.appMetricDaily.groupBy({
       by: ["date"],
@@ -389,23 +433,10 @@ export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTre
       _sum: { dau: true, iaaEarningKrw: true, iapTrxAmountKrw: true },
     }),
   ]);
-  const ga4ByDate = new Map(ga4Rows.map((row) => [isoDate(row.date), row._sum]));
-  const consoleByDate = new Map(consoleRows.map((row) => [isoDate(row.date), row._sum]));
-  return dates.map((date) => {
-    const key = isoDate(date);
-    const ga4 = ga4ByDate.get(key);
-    const console_ = consoleByDate.get(key);
-    return {
-      date: key,
-      ga4Dau: ga4?.dau ?? null,
-      ga4NewUsers: ga4?.newUsers ?? null,
-      adCompletions: ga4?.adCompletions ?? null,
-      dauAndroid: ga4?.dauAndroid ?? null,
-      dauIos: ga4?.dauIos ?? null,
-      dauWeb: ga4?.dauWeb ?? null,
-      consoleDau: console_?.dau ?? null,
-      consoleIaaKrw: console_?.iaaEarningKrw ?? null,
-      consoleIapTrxKrw: console_?.iapTrxAmountKrw ?? null,
-    };
-  });
+  return alignTrendGrid(
+    endDate,
+    days,
+    new Map(ga4Rows.map((row) => [isoDate(row.date), row._sum])),
+    new Map(consoleRows.map((row) => [isoDate(row.date), row._sum])),
+  );
 }

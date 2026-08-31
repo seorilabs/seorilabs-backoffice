@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { isoDate, latestClosedDay } from "@/lib/ga4/datasets";
 import { getOrgReport, orgTrendSeries, type OrgTrendPoint } from "@/lib/core/org-report";
-import { clampReportDate, parseReportDate } from "@/lib/report/params";
+import { parseReportDate, resolveReportRange } from "@/lib/report/params";
 import { ReportDatePicker } from "@/components/report/ReportDatePicker";
 import { ReportLineChart } from "@/components/report/ReportLineChart";
 import {
@@ -98,8 +97,15 @@ export default async function OrgReportPage({
       _max: { date: true },
     }),
   ]);
-  const mins = [ga4Range._min.date, consoleRange._min.date].filter((d): d is Date => d != null);
-  const maxes = [ga4Range._max.date, consoleRange._max.date].filter((d): d is Date => d != null);
+  const requested = parseReportDate(sp.date);
+  const range = resolveReportRange({
+    requested,
+    bounds: [
+      { min: ga4Range._min.date, max: ga4Range._max.date },
+      { min: consoleRange._min.date, max: consoleRange._max.date },
+    ],
+    now,
+  });
 
   const header = (
     <>
@@ -110,7 +116,7 @@ export default async function OrgReportPage({
     </>
   );
 
-  if (mins.length === 0 || maxes.length === 0) {
+  if (!range) {
     return (
       <div className="px-4 py-6 sm:p-8">
         {header}
@@ -120,14 +126,7 @@ export default async function OrgReportPage({
       </div>
     );
   }
-
-  const minDate = isoDate(new Date(Math.min(...mins.map((d) => d.getTime()))));
-  const dataMax = isoDate(new Date(Math.max(...maxes.map((d) => d.getTime()))));
-  const cap = isoDate(latestClosedDay(now));
-  const maxDate = dataMax < cap ? dataMax : cap;
-
-  const requested = parseReportDate(sp.date);
-  const { date: selected, clamped } = clampReportDate(requested ?? maxDate, minDate, maxDate);
+  const { min: minDate, max: maxDate, selected, clamped } = range;
 
   const [view, trend] = await Promise.all([
     getOrgReport(selected, now),

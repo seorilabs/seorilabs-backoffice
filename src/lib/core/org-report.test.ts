@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { evaluateMovement, type ConsoleRow, type Ga4Row, type HighlightData } from "@/lib/core/metric-highlights";
-import { assembleOrgReportDocument } from "@/lib/core/org-report";
+import { alignTrendGrid, assembleOrgReportDocument } from "@/lib/core/org-report";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
 const REF = "2026-08-31";
@@ -198,6 +198,60 @@ test("재계산 문서는 해설·비용 없이 origin 만 다르게 나온다",
   // 수치는 발행 문서와 동일하다 — 같은 조립기를 쓰는 것이 재계산 fallback 의 전제다.
   assert.deepEqual(recomputed.summary, published.summary);
   assert.deepEqual(recomputed.apps, published.apps);
+});
+
+// ── alignTrendGrid: 추이 시계열의 선택일 끝점 격자 ──────────────────────────
+
+const GA4_SUMS = { dau: 60, newUsers: 6, adCompletions: 30, dauAndroid: 40, dauIos: 10, dauWeb: 10 };
+const CONSOLE_SUMS = { dau: 30, iaaEarningKrw: 2_000, iapTrxAmountKrw: 0 };
+
+test("추이 격자는 선택일을 끝점으로 과거 N일을 이어 만든다", () => {
+  const grid = alignTrendGrid(
+    "2026-08-31",
+    4,
+    new Map([
+      ["2026-08-31", GA4_SUMS],
+      ["2026-08-28", GA4_SUMS],
+    ]),
+    new Map([["2026-08-31", CONSOLE_SUMS]]),
+  );
+  // 오래된→최신, 선택일 포함 정확히 4일.
+  assert.deepEqual(grid.map((point) => point.date), [
+    "2026-08-28",
+    "2026-08-29",
+    "2026-08-30",
+    "2026-08-31",
+  ]);
+  assert.equal(grid[3].ga4Dau, 60);
+  assert.equal(grid[3].consoleIaaKrw, 2_000);
+  // 과거 날짜를 선택하면 그 날짜가 끝점이 된다 — 과거 추이를 이어서 본다.
+  const past = alignTrendGrid("2026-08-29", 2, new Map([["2026-08-28", GA4_SUMS]]), new Map());
+  assert.deepEqual(past.map((point) => point.date), ["2026-08-28", "2026-08-29"]);
+  assert.equal(past[0].ga4Dau, 60);
+});
+
+test("수집이 없는 날은 0 이 아니라 null 로 남아 차트가 선을 끊는다", () => {
+  const grid = alignTrendGrid(
+    "2026-08-31",
+    4,
+    new Map([
+      ["2026-08-31", GA4_SUMS],
+      ["2026-08-28", GA4_SUMS],
+    ]),
+    new Map(),
+  );
+  assert.equal(grid[1].ga4Dau, null);
+  assert.equal(grid[2].ga4Dau, null);
+  assert.equal(grid[1].consoleIaaKrw, null);
+  // 콘솔 dau 가 전 리스팅 null(미집계)이면 합산도 null 로 보존된다.
+  const nullDau = alignTrendGrid(
+    "2026-08-31",
+    1,
+    new Map(),
+    new Map([["2026-08-31", { ...CONSOLE_SUMS, dau: null }]]),
+  );
+  assert.equal(nullDau[0].consoleDau, null);
+  assert.equal(nullDau[0].consoleIaaKrw, 2_000);
 });
 
 test("판정 전량이 직렬화되어 문서에 남는다", () => {
