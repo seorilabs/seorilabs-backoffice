@@ -55,15 +55,19 @@ repository, workflow는 기존 execution binding과 충돌하므로 mutation을 
     "id": "repository-id",
     "fullName": "seorilabs/repository",
     "sourceSha": "40-character-sha",
+    "defaultRef": "refs/heads/main",
     "treeSha": "40-character-sha"
   },
   "digests": {
-    "issuance": "sha256:...",
-    "inventory": "sha256:...",
-    "plan": "sha256:...",
-    "chainHead": null,
-    "fileActionSet": "sha256:...",
-    "replacementFiles": "sha256:..."
+    "issuanceDigest": "sha256:...",
+    "inventoryDigest": "sha256:...",
+    "planDigest": "sha256:...",
+    "receiptDigest": "sha256:..."
+  },
+  "actionScope": {
+    "chainHeadDigest": null,
+    "fileActionSetDigest": "sha256:...",
+    "replacementFilesDigest": "sha256:..."
   },
   "receipt": {}
 }

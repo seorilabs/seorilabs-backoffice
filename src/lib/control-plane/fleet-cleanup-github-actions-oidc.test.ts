@@ -41,19 +41,18 @@ function claims(overrides: Partial<JWTPayload> = {}): JWTPayload {
   };
 }
 
-function request(runId = RUN_ID, runAttempt = RUN_ATTEMPT) {
+function request() {
   return new NextRequest("https://backoffice.example/api/internal/fleet-migration/cleanup-capabilities", {
     method: "POST",
     headers: {
       authorization: "Bearer header.payload.signature",
-      "x-seori-principal": `github-actions:1241442018:${runId}:${runAttempt}`,
     },
   });
 }
 
 async function authenticate(payload: JWTPayload, runId = RUN_ID, runAttempt = RUN_ATTEMPT) {
   return authenticateFleetCleanupGithubActionsRequest({
-    request: request(runId, runAttempt),
+    request: request(),
     expectedRunId: runId,
     expectedRunAttempt: runAttempt,
     verifier: async () => ({ payload, protectedHeader: { alg: "RS256", typ: "JWT" } }),
@@ -88,17 +87,8 @@ test("fork/ref/path/SHA/runner/visibility/event/audience/run drift는 모두 거
   for (const payload of invalid) assert.equal(await authenticate(payload), null);
 });
 
-test("body run binding이나 principal이 OIDC와 다르면 거부한다", async () => {
+test("body run binding이 OIDC와 다르면 거부한다", async () => {
   assert.equal(await authenticate(claims(), "99999999999", RUN_ATTEMPT), null);
-  const mismatchedPrincipal = request();
-  mismatchedPrincipal.headers.set("x-seori-principal", "github-actions:1241442018:1:1");
-  assert.equal(await authenticateFleetCleanupGithubActionsRequest({
-    request: mismatchedPrincipal,
-    expectedRunId: RUN_ID,
-    expectedRunAttempt: RUN_ATTEMPT,
-    verifier: async () => ({ payload: claims(), protectedHeader: { alg: "RS256", typ: "JWT" } }),
-    readWorkflowHead: async () => WORKFLOW_SHA,
-  }), null);
 });
 
 test("EXECUTE body는 capability/scope/run binding만 받고 target identity 주장을 거부한다", () => {

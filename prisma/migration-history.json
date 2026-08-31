@@ -36,6 +36,10 @@
     "20260830040000_fleet_project_binding": {
       "sha256": "cc98113d3097f4aadb761024026af9d754c3ce1ebcccdf376b62a8df402ea14e",
       "reason": "조직 단일 Seorilabs Fleet Project desired-state와 공개 identity·권한 readback을 additive schema로 보존한다"
+    },
+    "20260831010000_fleet_cleanup_exact_authority": {
+      "sha256": "b00d8c90879b53058209136874e74ff4d5df1c66147950c440d8a84e549296d0",
+      "reason": "P7 Ready PR capability, authority generation, execution/step ledger를 durable CAS와 exact repository-plan binding으로 보존한다"
     }
   },
   "legacy": {

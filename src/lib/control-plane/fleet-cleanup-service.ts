@@ -132,26 +132,52 @@ export async function executeFleetCleanupCapability(input: {
       });
     },
   });
+  const receiptValue = receipt as {
+    state: string;
+    organizationId: string;
+    installationId: string;
+    issuanceDigest: string;
+    inventoryDigest: string;
+    planDigest: string;
+    receiptDigest: string;
+    repository: {
+      id: string;
+      fullName: string;
+      sourceSha: string;
+      defaultRef: string;
+      treeSha: string;
+    };
+  };
+  if (
+    receiptValue.state !== "READY_PR_CREATED"
+    || receiptValue.organizationId !== capability.authority.organizationId
+    || receiptValue.installationId !== capability.authority.installationId
+    || receiptValue.issuanceDigest !== capability.authority.issuanceDigest
+    || receiptValue.inventoryDigest !== capability.authority.inventoryDigest
+    || receiptValue.planDigest !== capability.authority.planDigest
+    || receiptValue.repository.id !== capability.authority.repositoryId.toString()
+    || receiptValue.repository.fullName !== capability.authority.repositoryFullName
+    || receiptValue.repository.sourceSha !== capability.authority.sourceSha
+    || receiptValue.repository.treeSha !== capability.authority.treeSha
+  ) throw new Error("FLEET_CLEANUP_RECEIPT_CAPABILITY_MISMATCH");
   return Object.freeze({
     contract: "seorilabs-fleet-cleanup-execution-response-v1",
-    state: "READY_PR_CREATED",
+    state: receiptValue.state,
     capabilityId: capability.id,
     approvalScopeDigest: capability.approvalScopeDigest,
-    organizationId: capability.authority.organizationId,
-    installationId: capability.authority.installationId,
-    repository: {
-      id: capability.authority.repositoryId.toString(),
-      fullName: capability.authority.repositoryFullName,
-      sourceSha: capability.authority.sourceSha,
-      treeSha: capability.authority.treeSha,
-    },
+    organizationId: receiptValue.organizationId,
+    installationId: receiptValue.installationId,
+    repository: structuredClone(receiptValue.repository),
     digests: {
-      issuance: capability.authority.issuanceDigest,
-      inventory: capability.authority.inventoryDigest,
-      plan: capability.authority.planDigest,
-      chainHead: capability.authority.chainHeadDigest,
-      fileActionSet: capability.fileActionSetDigest,
-      replacementFiles: capability.replacementFilesDigest,
+      issuanceDigest: receiptValue.issuanceDigest,
+      inventoryDigest: receiptValue.inventoryDigest,
+      planDigest: receiptValue.planDigest,
+      receiptDigest: receiptValue.receiptDigest,
+    },
+    actionScope: {
+      chainHeadDigest: capability.authority.chainHeadDigest,
+      fileActionSetDigest: capability.fileActionSetDigest,
+      replacementFilesDigest: capability.replacementFilesDigest,
     },
     receipt,
   });

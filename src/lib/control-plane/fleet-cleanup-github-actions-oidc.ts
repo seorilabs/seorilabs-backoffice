@@ -105,7 +105,6 @@ export async function authenticateFleetCleanupGithubActionsRequest(input: {
       || requiredString(payload, "runner_environment") !== "github-hosted"
       || (payload.head_ref ?? "") !== ""
       || (payload.base_ref ?? "") !== ""
-      || input.request.headers.get("x-seori-principal") !== `github-actions:${FLEET_CLEANUP_EXECUTOR_REPOSITORY_ID}:${runId}:${runAttempt}`
     ) return null;
     return {
       repositoryId: FLEET_CLEANUP_EXECUTOR_REPOSITORY_ID,

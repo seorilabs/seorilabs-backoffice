@@ -21,8 +21,13 @@ test("response outer는 scope/repo/action digest와 inner receipt를 공개 결�
     "approvalScopeDigest",
     "organizationId",
     "installationId",
-    "fileActionSet",
-    "replacementFiles",
+    "issuanceDigest",
+    "inventoryDigest",
+    "planDigest",
+    "receiptDigest",
+    "actionScope",
+    "fileActionSetDigest",
+    "replacementFilesDigest",
     "receipt",
   ]) assert.match(service, new RegExp(field, "u"));
 });
