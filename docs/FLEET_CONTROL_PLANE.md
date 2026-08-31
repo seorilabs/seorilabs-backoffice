@@ -884,6 +884,9 @@ payload, key ID/fingerprint/algorithm, inventory binding과 시간창만 검증�
 core dump·Node inspector/report 차단, signer egress 0은 manifest와 fake-key canary로 고정한다.
 별도 승인으로 signer가 exact 1-replica Ready가 된 뒤 trusted operator는
 `scripts/run-fleet-migration-inventory-issuer.sh`로 source/image/credential public binding을
-readback하고 4-document manifest에서 Job 하나만 생성·unsuspend한다. signer scale, credential
-생성·변경, 결과 불명 occurrence 자동 재시도는 하지 않는다. 상세 activation 경계는
+readback하고 occurrence ID SHA-256 fixed name으로 4-document manifest의 Job 하나만
+create한 뒤 검증된 UID와 resourceVersion의 원자적 CAS로만 unsuspend한다. create 또는 activation 결과
+불명은 named Job을 `READBACK_FIRST`로 남기며, 성공 로그도 exact
+Job UID가 소유한 단일 Succeeded Pod와 public-field allowlist를 통과한 재구성 JSON만 출력한다.
+signer scale, credential 생성·변경, 결과 불명 occurrence 자동 재시도는 하지 않는다. 상세 activation 경계는
 `docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다.

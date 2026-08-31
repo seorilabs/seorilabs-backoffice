@@ -186,10 +186,20 @@ FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST='sha256:<provider vector digest>' \
 runner는 OCI revision, canonical ServiceAccount/Role/NetworkPolicy, signer Deployment/Service와
 exact source/image digest의 단일 Ready Pod/EndpointSlice, execution copy의 credential ID와 key-name을
 공개 metadata로 검증한다. 그 뒤 4-document issuer manifest에서 **Job 문서만** 추출하고,
-미치환 placeholder 0과 suspend/input/env/volume/security binding을 create 전후로 확인한 다음 해당
-Job만 unsuspend한다. signer scale, Secret/ConfigMap 생성·변경, 지원 리소스 apply, 자동 재시도는 하지
-않는다. 기존 occurrence/run Job이 있거나 결과가 불명이면 새 Job을 만들지 않고 기존 결과를 먼저
-readback한다.
+미치환 placeholder 0과 suspend/input/env/volume/security binding을 create 전후로 확인한다.
+Job name은 occurrence ID의 SHA-256 앞 160 bit를 사용한 63자
+`fleet-inventory-issuer-<40 hex>`로 고정한다. source SHA는 name에 넣지 않으므로 재배포 뒤에도 같은
+occurrence create는 Kubernetes 자체에서 충돌한다. create가 `AlreadyExists`, timeout 또는 결과 불명으로
+끝나면 named Job의 occurrence/run/provider/source 공개 marker만 대조하고 patch 없이
+`READBACK_FIRST`로 종료한다.
+
+새 create가 확정된 Job만 검증 시점의 UID와 resourceVersion을 JSON Patch test로 원자적으로 고정해
+unsuspend한다. 검증 뒤 객체가 바뀌거나 patch 결과가 불명이면 `READBACK_FIRST`로 중단한다. 완료 뒤에는 exact 1 Pod의 Job UID controller ownerRef,
+source label, issuer-only container와 ServiceAccount, init/ephemeral container 0, immutable spec image와
+runtime imageID digest, `Succeeded`/exit 0을 검증한 뒤 그 Pod의 마지막 로그만 읽는다. terminal JSON은
+exact public key allowlist로 검증하고 새 JSON으로 재구성하므로 raw 로그나 unknown/secret 후보 필드는
+stdout에 전달하지 않는다. signer scale, Secret/ConfigMap 생성·변경, 지원 리소스 apply, 자동 재시도는
+하지 않는다.
 
 issuer는 서명 직후 dedicated `fleet_migration_inventory_issuer` DB principal로 completion과
 inventory digest를 대조하고 authoritative issuance 공개 JSON을 INSERT-only 원장에 한 번 보존한다.

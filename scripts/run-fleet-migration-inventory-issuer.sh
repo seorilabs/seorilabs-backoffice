@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+set +x
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 kubectl_bin="${KUBECTL_BIN:-kubectl}"
 crane_bin="${CRANE_BIN:-crane}"
 jq_bin="${JQ_BIN:-jq}"
+openssl_bin="${OPENSSL_BIN:-openssl}"
+od_bin="${OD_BIN:-od}"
+tr_bin="${TR_BIN:-tr}"
 namespace="platform"
 image="${BACKOFFICE_IMAGE:-}"
 image_digest="${image##*@}"
@@ -43,9 +47,23 @@ if [[ ! "$timeout" =~ ^[1-9][0-9]*$ ]] || [ "$timeout" -gt 1200 ]; then
   echo "오류: FLEET_MIGRATION_INVENTORY_ISSUER_TIMEOUT_SECONDS는 1..1200이어야 한다" >&2
   exit 2
 fi
-for command in "$kubectl_bin" "$crane_bin" "$jq_bin"; do
+for command in "$kubectl_bin" "$crane_bin" "$jq_bin" "$openssl_bin" "$od_bin" "$tr_bin"; do
   command -v "$command" >/dev/null || { echo "오류: 필수 실행 도구가 없다" >&2; exit 2; }
 done
+
+# DB 정본의 occurrenceId unique와 같은 키를 Kubernetes create CAS에도 사용한다.
+# source SHA를 name에 넣지 않으므로 같은 occurrence는 재배포 뒤에도 같은 이름에 충돌한다.
+occurrence_digest="$(printf '%s' "$occurrence_id" \
+  | "$openssl_bin" dgst -sha256 -binary \
+  | "$od_bin" -An -v -tx1 \
+  | "$tr_bin" -d ' \n')"
+if [[ ! "$occurrence_digest" =~ ^[0-9a-f]{64}$ ]]; then
+  fail "occurrenceId SHA-256 계산 결과가 canonical hex digest가 아니다"
+fi
+job_name="fleet-inventory-issuer-${occurrence_digest:0:40}"
+if [ "${#job_name}" -ne 63 ] || [[ ! "$job_name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])$ ]]; then
+  fail "occurrence 기반 issuer Job name이 DNS-1123 계약과 다르다"
+fi
 
 # 공개 OCI revision만 읽고 exact source가 아닌 image 실행을 거부한다.
 image_revision="$($crane_bin config "$image" | "$jq_bin" -er '.config.Labels["org.opencontainers.image.revision"]')"
@@ -55,7 +73,8 @@ rendered_issuer="$("$here/render-manifest.sh" "$root/k8s/fleet-migration-invento
   | sed \
       -e "s|__FLEET_MIGRATION_OCCURRENCE_ID__|$occurrence_id|g" \
       -e "s|__FLEET_MIGRATION_RUN_ID__|$run_id|g" \
-      -e "s|__FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST__|$provider_vector_digest|g")"
+      -e "s|__FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST__|$provider_vector_digest|g" \
+      -e "s|__FLEET_MIGRATION_JOB_NAME__|$job_name|g")"
 rendered_signer="$("$here/render-manifest.sh" "$root/k8s/fleet-migration-inventory-signer.yaml" "$image" "$source_sha")"
 if grep -q '__[A-Z0-9_]*__\|:latest' <<<"$rendered_issuer$rendered_signer"; then
   fail "canonical manifest에 unresolved placeholder 또는 mutable image가 남았다"
@@ -84,6 +103,10 @@ expected_issuer_policy="$(printf '%s' "$issuer_documents" | "$jq_bin" -Sc '[.[] 
 expected_signer="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Deployment")][0]')"
 expected_service="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Service")][0]')"
 expected_signer_policy="$(printf '%s' "$signer_documents" | "$jq_bin" -Sc '[.[] | select(.kind == "NetworkPolicy")][0].spec')"
+if [ "$(printf '%s' "$expected_job" | "$jq_bin" -er '.metadata.name')" != "$job_name" ] \
+  || printf '%s' "$expected_job" | "$jq_bin" -e '.metadata | has("generateName")' >/dev/null; then
+  fail "issuer Job이 occurrence 기반 fixed-name CAS와 다르다"
+fi
 
 # issuer/signer support boundary는 trusted operator가 미리 설치해야 한다. 이 runner는
 # ServiceAccount, Role, NetworkPolicy, Deployment 또는 Service를 apply/patch하지 않는다.
@@ -220,26 +243,32 @@ if ! printf '%s' "$endpoints" | "$jq_bin" -e --arg pod "$signer_pod_name" '
   fail "signer Service endpoint가 exact Ready Pod identity와 결합되지 않았다"
 fi
 
-# 같은 occurrence/run의 기존 Job이 있으면 새 mutation을 만들지 않는다. 결과 불명은
-# 기존 Job을 사람이 readback해야 하며 이 runner가 자동 재실행하지 않는다.
-existing_jobs="$($kubectl_bin -n "$namespace" get jobs -l 'app.kubernetes.io/component=fleet-migration-inventory-issuer' -o json)"
-if printf '%s' "$existing_jobs" | "$jq_bin" -e --arg occurrence "$occurrence_id" --arg run "$run_id" '
-  any(.items[]; .metadata.annotations["seorilabs.dev/occurrence-id"] == $occurrence or .metadata.annotations["seorilabs.dev/run-id"] == $run)
-' >/dev/null; then
-  fail "같은 occurrence/run의 issuer Job이 이미 있다. 기존 결과를 먼저 readback해야 한다"
+# fixed name create가 곧 Kubernetes CAS다. AlreadyExists, timeout, 연결 단절처럼 create 결과가
+# 확정되지 않으면 named Job의 공개 identity marker만 읽고 무조건 READBACK_FIRST로 종료한다.
+# 이 branch에서는 Job을 patch하거나 create를 반복하지 않는다.
+job_ref=""
+if ! job_ref="$(printf '%s' "$expected_job" | "$kubectl_bin" create -f - -o name 2>/dev/null)"; then
+  readback_marker=""
+  readback_template="{{if eq .metadata.name \"$job_name\"}}n{{end}}{{if eq (index .metadata.annotations \"seorilabs.dev/occurrence-id\") \"$occurrence_id\"}}o{{end}}{{if eq (index .metadata.annotations \"seorilabs.dev/run-id\") \"$run_id\"}}r{{end}}{{if eq (index .metadata.annotations \"seorilabs.dev/provider-vector-digest\") \"$provider_vector_digest\"}}p{{end}}{{if eq (index .metadata.labels \"seorilabs.dev/source-sha\") \"$source_sha\"}}s{{end}}"
+  if readback_marker="$($kubectl_bin -n "$namespace" get "job/$job_name" -o "go-template=$readback_template" 2>/dev/null)" \
+    && [ "$readback_marker" = "norps" ]; then
+    fail "READBACK_FIRST: occurrence CAS Job이 이미 존재하거나 create 결과가 불명이다. 기존 named Job을 별도 readback한다"
+  fi
+  fail "READBACK_FIRST: create 결과가 불명이고 named Job의 exact public identity를 확인하지 못했다"
+fi
+if [ "$job_ref" != "job.batch/$job_name" ]; then
+  fail "생성된 issuer Job identity가 canonical fixed job.batch name과 다르다"
 fi
 
-job_ref="$(printf '%s' "$expected_job" | "$kubectl_bin" create -f - -o name)"
-job_prefix="backoffice-fleet-inventory-issuer-${source_sha:0:12}-"
-if [[ ! "$job_ref" =~ ^job\.batch/(${job_prefix}[a-z0-9]{5})$ ]]; then
-  fail "생성된 issuer Job identity가 canonical job.batch/generateName과 다르다"
+actual_job=""
+if ! actual_job="$($kubectl_bin -n "$namespace" get "job/$job_name" -o json 2>/dev/null)"; then
+  fail "READBACK_FIRST: created issuer Job의 exact binding readback 결과가 불명이다"
 fi
-job_name="${BASH_REMATCH[1]}"
-
-actual_job="$($kubectl_bin -n "$namespace" get "job/$job_name" -o json)"
 if ! printf '%s\n%s\n' "$expected_job" "$actual_job" | "$jq_bin" -e -s '
   .[0] as $e | .[1] as $a
-  | $a.spec.suspend == true
+  | $a.metadata.name == $e.metadata.name
+  and ($a.metadata.uid | type == "string" and length > 0)
+  and $a.spec.suspend == true
   and $a.spec.backoffLimit == $e.spec.backoffLimit
   and $a.spec.activeDeadlineSeconds == $e.spec.activeDeadlineSeconds
   and $a.spec.ttlSecondsAfterFinished == $e.spec.ttlSecondsAfterFinished
@@ -279,14 +308,35 @@ if ! printf '%s\n%s\n' "$expected_job" "$actual_job" | "$jq_bin" -e -s '
 ' >/dev/null; then
   fail "created issuer Job의 source/input/env/volume/security/suspend binding 불일치"
 fi
+created_job_uid="$(printf '%s' "$actual_job" | "$jq_bin" -er '.metadata.uid')"
+created_job_resource_version="$(printf '%s' "$actual_job" | "$jq_bin" -er '.metadata.resourceVersion')"
+if [ -z "$created_job_uid" ] || [ -z "$created_job_resource_version" ]; then
+  fail "created issuer Job의 UID/resourceVersion을 고정하지 못했다"
+fi
 if [ -n "$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')" ]; then
   fail "binding 검증 전 suspended issuer Job에 Pod가 생겼다"
 fi
 
-# 이 runner가 수행하는 유일한 activation mutation이다. signer와 credential object는 건드리지 않는다.
-"$kubectl_bin" -n "$namespace" patch "job/$job_name" --type=merge -p '{"spec":{"suspend":false}}' >/dev/null
-if [ "$($kubectl_bin -n "$namespace" get "job/$job_name" -o 'jsonpath={.spec.suspend}')" != "false" ]; then
-  fail "검증된 issuer Job을 시작하지 못했다"
+# 이 runner가 수행하는 유일한 activation mutation이다. 검증 이후 Job이 바뀌면 UID 또는
+# resourceVersion JSON Patch test가 원자적으로 실패한다. signer와 credential object는 건드리지 않는다.
+unsuspend_patch="$("$jq_bin" -cn \
+  --arg uid "$created_job_uid" --arg resourceVersion "$created_job_resource_version" \
+  '[
+    {"op":"test","path":"/metadata/uid","value":$uid},
+    {"op":"test","path":"/metadata/resourceVersion","value":$resourceVersion},
+    {"op":"test","path":"/spec/suspend","value":true},
+    {"op":"replace","path":"/spec/suspend","value":false}
+  ]')"
+if ! "$kubectl_bin" -n "$namespace" patch "job/$job_name" --type=json -p "$unsuspend_patch" >/dev/null 2>&1; then
+  unsuspend_patch=""
+  fail "READBACK_FIRST: 검증된 issuer Job의 UID/resourceVersion activation CAS가 실패하거나 결과가 불명이다"
+fi
+unsuspend_patch=""
+activated_job="$($kubectl_bin -n "$namespace" get "job/$job_name" -o json)"
+if ! printf '%s' "$activated_job" | "$jq_bin" -e \
+  --arg uid "$created_job_uid" --arg resourceVersion "$created_job_resource_version" \
+  '.metadata.uid == $uid and .metadata.resourceVersion != $resourceVersion and .spec.suspend == false' >/dev/null; then
+  fail "READBACK_FIRST: activation 뒤 issuer Job UID/suspend readback이 불명이다"
 fi
 
 deadline=$(( $(date +%s) + timeout ))
@@ -302,28 +352,80 @@ if [ -z "$terminal" ]; then
   fail "issuer Job terminal 상태 timeout. 자동 재실행하지 않는다"
 fi
 if [ "$terminal" = "failed" ]; then
-  pod_name="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')"
-  reason="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.reason}')"
-  exit_code="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.exitCode}')"
-  fail "issuer Job failed reason=$reason exit_code=$exit_code. 동일 occurrence를 반복하지 않는다"
+  fail "issuer Job이 failed terminal이다. 동일 occurrence를 반복하지 않고 named Job을 별도 readback한다"
 fi
 
-evidence="$($kubectl_bin -n "$namespace" logs "job/$job_name" -c issuer --tail=1)"
-if ! printf '%s\n' "$evidence" | "$jq_bin" -e \
-  --arg occurrence "$occurrence_id" --arg run "$run_id" --arg provider "$provider_vector_digest" '
-    .schemaVersion == 1
-    and .contract == "seorilabs-fleet-migration-authoritative-inventory-v1"
-    and (.state == "PRESERVED" or .state == "REPLAYED")
-    and .authoritativeState == "READY"
-    and .occurrenceId == $occurrence
-    and .runId == $run
-    and .providerVectorDigest == $provider
-    and (.inventoryDigest | test("^sha256:[0-9a-f]{64}$"))
-    and (.issuanceDigest | test("^sha256:[0-9a-f]{64}$"))
-    and (.keyFingerprint | test("^sha256:[0-9a-f]{64}$"))
-    and .privateKeyInput == false
-    and .secretValuesReturned == false
-  ' >/dev/null; then
+# Complete condition만으로 임의 Pod log를 읽지 않는다. Job UID에 controller ownerRef로
+# 결합된 exact 1 Pod가 동일 source/image digest로 Succeeded/exit 0인 것을 먼저 검증한다.
+completed_job="$($kubectl_bin -n "$namespace" get "job/$job_name" -o json)"
+if ! printf '%s' "$completed_job" | "$jq_bin" -e \
+  --arg job "$job_name" --arg occurrence "$occurrence_id" --arg run "$run_id" --arg provider "$provider_vector_digest" \
+  --arg createdJobUid "$created_job_uid" --arg image "$image" --arg source "$source_sha" '
+  .metadata.name == $job
+  and .metadata.uid == $createdJobUid
+  and .metadata.labels["seorilabs.dev/source-sha"] == $source
+  and .metadata.annotations["seorilabs.dev/occurrence-id"] == $occurrence
+  and .metadata.annotations["seorilabs.dev/run-id"] == $run
+  and .metadata.annotations["seorilabs.dev/provider-vector-digest"] == $provider
+  and .spec.suspend == false
+  and .status.succeeded == 1
+  and ((.status.failed // 0) == 0)
+  and ((.status.active // 0) == 0)
+  and (.status.conditions | any(.type == "Complete" and .status == "True"))
+  and (.spec.template.spec.containers | length) == 1
+  and .spec.template.metadata.labels["seorilabs.dev/source-sha"] == $source
+  and .spec.template.spec.containers[0].name == "issuer"
+  and .spec.template.spec.containers[0].image == $image
+' >/dev/null; then
+  fail "completed issuer Job의 UID/source/image/success binding 불일치"
+fi
+job_uid="$(printf '%s' "$completed_job" | "$jq_bin" -er '.metadata.uid')"
+issuer_pods="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o json)"
+if ! printf '%s' "$issuer_pods" | "$jq_bin" -e \
+  --arg job "$job_name" --arg jobUid "$job_uid" --arg image "$image" --arg digest "$image_digest" --arg source "$source_sha" '
+  (.items | length) == 1
+  and (.items[0] as $p
+    | $p.metadata.deletionTimestamp == null
+    and $p.metadata.labels["job-name"] == $job
+    and $p.metadata.labels["seorilabs.dev/source-sha"] == $source
+    and ($p.metadata.ownerReferences | length) == 1
+    and $p.metadata.ownerReferences[0].apiVersion == "batch/v1"
+    and $p.metadata.ownerReferences[0].kind == "Job"
+    and $p.metadata.ownerReferences[0].name == $job
+    and $p.metadata.ownerReferences[0].uid == $jobUid
+    and $p.metadata.ownerReferences[0].controller == true
+    and $p.spec.serviceAccountName == "fleet-migration-inventory-issuer"
+    and $p.spec.automountServiceAccountToken == false
+    and (($p.spec.initContainers // []) | length) == 0
+    and (($p.spec.ephemeralContainers // []) | length) == 0
+    and ($p.spec.containers | length) == 1
+    and $p.spec.containers[0].name == "issuer"
+    and $p.spec.containers[0].image == $image
+    and $p.spec.restartPolicy == "Never"
+    and $p.status.phase == "Succeeded"
+    and ($p.status.containerStatuses | length) == 1
+    and $p.status.containerStatuses[0].name == "issuer"
+    and ((try ($p.status.containerStatuses[0].imageID | capture("(?<digest>sha256:[0-9a-f]{64})$").digest) catch null) == $digest)
+    and $p.status.containerStatuses[0].restartCount == 0
+    and $p.status.containerStatuses[0].state.terminated.exitCode == 0
+    and $p.status.containerStatuses[0].state.terminated.reason == "Completed")
+' >/dev/null; then
+  fail "issuer terminal Pod의 Job owner/source/imageID/Succeeded/exit binding 불일치"
+fi
+issuer_pod_name="$(printf '%s' "$issuer_pods" | "$jq_bin" -er '.items[0].metadata.name')"
+
+evidence="$($kubectl_bin -n "$namespace" logs "pod/$issuer_pod_name" -c issuer --tail=1)"
+evidence_filter="$root/scripts/fleet-migration-inventory-issuer-evidence.jq"
+if [ ! -f "$evidence_filter" ]; then
+  evidence=""
+  fail "issuer terminal evidence allowlist가 없다"
+fi
+sanitized_evidence=""
+if ! sanitized_evidence="$(printf '%s\n' "$evidence" | "$jq_bin" -ce \
+  --arg occurrence "$occurrence_id" --arg run "$run_id" --arg provider "$provider_vector_digest" \
+  -f "$evidence_filter" 2>/dev/null)"; then
+  evidence=""
   fail "issuer의 secret-free authoritative terminal readback을 검증하지 못했다"
 fi
-printf '%s\n' "$evidence"
+evidence=""
+printf '%s\n' "$sanitized_evidence"

@@ -17,7 +17,9 @@ rules: []
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: backoffice-fleet-inventory-issuer-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  # occurrenceId SHA-256의 앞 160 bit로 만든 63자 고정 DNS name이다.
+  # source SHA를 넣지 않아 재배포 중에도 같은 occurrence create가 Kubernetes CAS가 된다.
+  name: "__FLEET_MIGRATION_JOB_NAME__"
   namespace: platform
   labels:
     app.kubernetes.io/name: backoffice
