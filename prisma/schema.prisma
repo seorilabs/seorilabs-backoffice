@@ -88,6 +88,7 @@ model App {
   discoveryObservations    DiscoveryObservation[]
   configRevisions          ConfigRevision[]
   legacyConfigImports      LegacyConfigImport[]
+  legacyConfigResolutions  LegacyConfigResolution[]
   shadowParityObservations ShadowParityObservation[]
   fleetParityWaveResults   FleetParityWaveResult[]
   providerObservations     ProviderObservation[]
@@ -1003,6 +1004,7 @@ model ConfigRevision {
   createdAt                DateTime                  @default(now()) @db.DateTime(3)
   releaseCandidates        ReleaseCandidate[]
   legacyConfigImport       LegacyConfigImport?
+  legacyConfigResolutions  LegacyConfigResolution[]
   shadowParityObservations ShadowParityObservation[]
   projectBlueprint         ProjectBlueprint?
   marketProfiles           MarketProfile[]
@@ -1186,6 +1188,10 @@ model LegacyConfigImport {
   transformVersion       String                    @db.VarChar(64)
   requestHash            String                    @db.Char(64)
   inputDigest            String                    @db.Char(64)
+  // raw key/path/value 대신 고정 reason code 집합만 보존한다. exact source와
+  // 중앙 상태의 사람 검토 결정을 재사용할 때 이 digest가 달라지면 fail-closed한다.
+  reasonCodes            Json?
+  reasonCodesDigest      String?                   @db.Char(64)
   status                 String                    @db.VarChar(32)
   idempotencyKey         String                    @unique @db.Char(64)
   configRevisionId       String?
@@ -1195,12 +1201,50 @@ model LegacyConfigImport {
   createdAt              DateTime                  @default(now()) @db.DateTime(3)
   sources                LegacyConfigSource[]
   parityObservations     ShadowParityObservation[]
+  resolutionSources      LegacyConfigResolution[]  @relation("LegacyResolutionSourceImport")
   fleetParityWaveResults FleetParityWaveResult[]
 
   @@unique([id, appId])
   @@unique([configRevisionId, appId])
   @@index([appId, sourceSha, createdAt])
+  @@index([appId, sourceSha, transformVersion, reasonCodesDigest], map: "cp_legacy_import_resolution_lookup")
   @@map("control_plane_legacy_config_import")
+}
+
+// legacy JSON의 검토 필요 사유를 exact source vector와 현재 중앙 상태에 묶는
+// append-only 승인 원장이다. 원문, field path, secret 값은 저장하지 않는다.
+// source나 중앙 상태가 바뀌면 digest 불일치로 자동 무효화된다.
+model LegacyConfigResolution {
+  id                   String                    @id @default(cuid())
+  appId                String
+  app                  App                       @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_legacy_resolution_app_fkey")
+  sourceImportId       String
+  sourceImport         LegacyConfigImport        @relation("LegacyResolutionSourceImport", fields: [sourceImportId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_legacy_resolution_import_app_fkey")
+  configRevisionId     String
+  configRevision       ConfigRevision            @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_legacy_resolution_config_app_fkey")
+  sourceSha            String                    @db.Char(40)
+  transformVersion     String                    @db.VarChar(64)
+  inputDigest          String                    @db.Char(64)
+  reasonCodes          Json
+  reasonCodesDigest    String                    @db.Char(64)
+  centralStateDigest   String                    @db.Char(64)
+  centralEvidenceKinds Json
+  dispositions         Json
+  dispositionDigest    String                    @db.Char(64)
+  revision             Int
+  approvalKind         String                    @db.VarChar(32)
+  justification        String                    @db.VarChar(64)
+  requestHash          String                    @db.Char(64)
+  resolutionDigest     String                    @unique @db.Char(64)
+  idempotencyKey       String                    @unique @db.VarChar(191)
+  createdBy            String                    @db.VarChar(128)
+  createdAt            DateTime                  @default(now()) @db.DateTime(3)
+  parityObservations   ShadowParityObservation[]
+
+  @@unique([appId, sourceSha, transformVersion, revision], map: "cp_legacy_resolution_revision_key")
+  @@index([appId, sourceSha, transformVersion, inputDigest, reasonCodesDigest], map: "cp_legacy_resolution_exact_lookup")
+  @@index([configRevisionId, centralStateDigest], map: "cp_legacy_resolution_central_lookup")
+  @@map("control_plane_legacy_config_resolution")
 }
 
 // import 입력 하나의 파일 provenance. path 자체는 조회용이고 고유성은 고정 길이 hash로 판정한다.
@@ -1232,31 +1276,34 @@ model LegacyConfigSource {
 // 동일 source SHA의 legacy parser와 중앙 resolved manifest를 비교한 append-only 관측이다.
 // diff에는 값이나 오류문이 아니라 { path, code } 항목만 저장한다.
 model ShadowParityObservation {
-  id                    String                 @id @default(cuid())
-  appId                 String
+  id                       String                  @id @default(cuid())
+  appId                    String
   // parity 원장이 있으면 App은 물리 삭제하지 않고 archive해야 한다.
-  app                   App                    @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  legacyImportId        String
-  legacyImport          LegacyConfigImport     @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
-  configRevisionId      String?
-  configRevision        ConfigRevision?        @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
-  sourceSha             String                 @db.Char(40)
-  scope                 String                 @db.VarChar(64)
-  contractVersion       String                 @db.VarChar(64)
-  status                String                 @db.VarChar(32)
-  legacyDigest          String?                @db.Char(64)
-  centralDigest         String?                @db.Char(64)
-  diff                  Json?
-  dedupeKey             String                 @unique @db.Char(64)
-  observedBy            String
-  observedAt            DateTime               @db.DateTime(3)
-  createdAt             DateTime               @default(now()) @db.DateTime(3)
-  fleetParityWaveResult FleetParityWaveResult?
+  app                      App                     @relation(fields: [appId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  legacyImportId           String
+  legacyImport             LegacyConfigImport      @relation(fields: [legacyImportId, appId], references: [id, appId], onDelete: Cascade, onUpdate: Restrict, map: "cp_shadow_parity_import_app_fkey")
+  configRevisionId         String?
+  configRevision           ConfigRevision?         @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_config_app_fkey")
+  legacyConfigResolutionId String?
+  legacyConfigResolution   LegacyConfigResolution? @relation(fields: [legacyConfigResolutionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_shadow_parity_resolution_fkey")
+  sourceSha                String                  @db.Char(40)
+  scope                    String                  @db.VarChar(64)
+  contractVersion          String                  @db.VarChar(64)
+  status                   String                  @db.VarChar(32)
+  legacyDigest             String?                 @db.Char(64)
+  centralDigest            String?                 @db.Char(64)
+  diff                     Json?
+  dedupeKey                String                  @unique @db.Char(64)
+  observedBy               String
+  observedAt               DateTime                @db.DateTime(3)
+  createdAt                DateTime                @default(now()) @db.DateTime(3)
+  fleetParityWaveResult    FleetParityWaveResult?
 
   @@unique([id, appId])
   @@index([appId, sourceSha, observedAt])
   @@index([legacyImportId, observedAt])
   @@index([configRevisionId, observedAt])
+  @@index([legacyConfigResolutionId, observedAt], map: "cp_shadow_parity_resolution_time")
   @@map("control_plane_shadow_parity_observation")
 }
 
@@ -1330,27 +1377,27 @@ model FleetParityWaveResult {
 // shadow 실행은 이 row를 만들거나 갱신하지 않으며 exact Git tree/blob inventory와
 // detector source가 모두 일치하는 기존 증거만 읽는다. secret/private key 컬럼은 없다.
 model FleetMigrationProofSnapshot {
-  id                            String   @id @default(cuid())
-  repositoryId                  BigInt
-  repositoryFullName            String   @db.VarChar(191)
-  sourceSha                     String   @db.Char(40)
-  treeSha                       String   @db.Char(40)
-  blobInventoryDigest           String   @db.VarChar(71)
-  detectorSourceSha             String   @db.Char(40)
-  readinessEvidenceDigest       String   @db.Char(64)
-  readinessCohortDigest         String   @db.Char(64)
-  stableBackofficeStateDigest   String   @db.Char(64)
-  candidates                    Json
-  candidatesDigest              String   @db.VarChar(71)
-  proofDigest                   String   @unique(map: "cp_fleet_migration_proof_digest") @db.Char(64)
-  approvalId                    String   @db.VarChar(127)
-  approvalAttestation           Json
-  approvalAttestationDigest     String   @db.Char(64)
-  idempotencyKey                String   @unique(map: "cp_fleet_migration_proof_idempotency") @db.VarChar(191)
-  requestHash                   String   @db.Char(64)
-  createdBy                     String   @db.VarChar(128)
-  observedAt                    DateTime @db.DateTime(3)
-  createdAt                     DateTime @default(now()) @db.DateTime(3)
+  id                          String   @id @default(cuid())
+  repositoryId                BigInt
+  repositoryFullName          String   @db.VarChar(191)
+  sourceSha                   String   @db.Char(40)
+  treeSha                     String   @db.Char(40)
+  blobInventoryDigest         String   @db.VarChar(71)
+  detectorSourceSha           String   @db.Char(40)
+  readinessEvidenceDigest     String   @db.Char(64)
+  readinessCohortDigest       String   @db.Char(64)
+  stableBackofficeStateDigest String   @db.Char(64)
+  candidates                  Json
+  candidatesDigest            String   @db.VarChar(71)
+  proofDigest                 String   @unique(map: "cp_fleet_migration_proof_digest") @db.Char(64)
+  approvalId                  String   @db.VarChar(127)
+  approvalAttestation         Json
+  approvalAttestationDigest   String   @db.Char(64)
+  idempotencyKey              String   @unique(map: "cp_fleet_migration_proof_idempotency") @db.VarChar(191)
+  requestHash                 String   @db.Char(64)
+  createdBy                   String   @db.VarChar(128)
+  observedAt                  DateTime @db.DateTime(3)
+  createdAt                   DateTime @default(now()) @db.DateTime(3)
 
   @@unique([repositoryId, sourceSha, treeSha, blobInventoryDigest, detectorSourceSha, readinessEvidenceDigest, readinessCohortDigest, stableBackofficeStateDigest, candidatesDigest], map: "cp_fleet_migration_proof_revision_key")
   @@index([repositoryId, sourceSha, detectorSourceSha, observedAt], map: "cp_fleet_migration_proof_repo_time")
@@ -1375,19 +1422,19 @@ model FleetMigrationCollectionOccurrence {
 }
 
 model FleetMigrationCollectionCompletion {
-  id                    String                             @id @default(cuid())
-  occurrenceId          String                             @unique(map: "cp_fleet_migration_completion_occurrence_key")
-  deliveryId            String                             @db.VarChar(127)
-  runId                 String                             @db.VarChar(127)
-  providerVectorDigest  String                             @db.VarChar(71)
-  inventoryDigest       String                             @db.VarChar(71)
-  collectionDigest      String                             @db.VarChar(71)
-  finalGithubDigest     String                             @db.VarChar(71)
-  finalBackofficeDigest String                             @db.VarChar(71)
-  finalizationDigest    String                             @db.VarChar(71)
+  id                    String                               @id @default(cuid())
+  occurrenceId          String                               @unique(map: "cp_fleet_migration_completion_occurrence_key")
+  deliveryId            String                               @db.VarChar(127)
+  runId                 String                               @db.VarChar(127)
+  providerVectorDigest  String                               @db.VarChar(71)
+  inventoryDigest       String                               @db.VarChar(71)
+  collectionDigest      String                               @db.VarChar(71)
+  finalGithubDigest     String                               @db.VarChar(71)
+  finalBackofficeDigest String                               @db.VarChar(71)
+  finalizationDigest    String                               @db.VarChar(71)
   collection            Json
-  completedAt           DateTime                           @default(now()) @db.DateTime(3)
-  occurrence            FleetMigrationCollectionOccurrence @relation(fields: [occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], references: [id, deliveryId, runId, providerVectorDigest, inventoryDigest], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_completion_occurrence_fkey")
+  completedAt           DateTime                             @default(now()) @db.DateTime(3)
+  occurrence            FleetMigrationCollectionOccurrence   @relation(fields: [occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], references: [id, deliveryId, runId, providerVectorDigest, inventoryDigest], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_completion_occurrence_fkey")
   authoritativeIssuance FleetMigrationAuthoritativeIssuance?
 
   @@unique([occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_completion_identity")
@@ -1398,18 +1445,18 @@ model FleetMigrationCollectionCompletion {
 // trusted issuer가 서명한 authoritative inventory 전체를 public JSON 그대로 보존하는
 // INSERT-only 원장이다. signature와 fingerprint는 공개 검증 재료이며 secret 값은 저장하지 않는다.
 model FleetMigrationAuthoritativeIssuance {
-  id                   String                              @id @default(cuid())
-  occurrenceId         String                              @unique(map: "cp_fleet_migration_issuance_occurrence_key")
-  runId                String                              @db.VarChar(127)
-  providerVectorDigest String                              @db.VarChar(71)
-  inventoryId          String                              @unique(map: "cp_fleet_migration_issuance_inventory_id_key") @db.VarChar(127)
-  inventoryDigest      String                              @unique(map: "cp_fleet_migration_issuance_inventory_digest_key") @db.VarChar(71)
-  issuanceDigest       String                              @unique(map: "cp_fleet_migration_issuance_digest_key") @db.VarChar(71)
-  keyFingerprint       String                              @db.VarChar(71)
-  signedAt             DateTime                            @db.DateTime(3)
-  expiresAt            DateTime                            @db.DateTime(3)
+  id                   String                             @id @default(cuid())
+  occurrenceId         String                             @unique(map: "cp_fleet_migration_issuance_occurrence_key")
+  runId                String                             @db.VarChar(127)
+  providerVectorDigest String                             @db.VarChar(71)
+  inventoryId          String                             @unique(map: "cp_fleet_migration_issuance_inventory_id_key") @db.VarChar(127)
+  inventoryDigest      String                             @unique(map: "cp_fleet_migration_issuance_inventory_digest_key") @db.VarChar(71)
+  issuanceDigest       String                             @unique(map: "cp_fleet_migration_issuance_digest_key") @db.VarChar(71)
+  keyFingerprint       String                             @db.VarChar(71)
+  signedAt             DateTime                           @db.DateTime(3)
+  expiresAt            DateTime                           @db.DateTime(3)
   issuance             Json
-  createdAt            DateTime                            @default(now()) @db.DateTime(3)
+  createdAt            DateTime                           @default(now()) @db.DateTime(3)
   completion           FleetMigrationCollectionCompletion @relation(fields: [occurrenceId], references: [occurrenceId], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_issuance_completion_fkey")
 
   @@unique([occurrenceId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_issuance_identity_key")
@@ -1421,26 +1468,26 @@ model FleetMigrationAuthoritativeIssuance {
 // GitHub provider token과 lease 원문은 저장하지 않으며 한 authority에는 동시에 한 execution만
 // 예약할 수 있다. generation은 Ready PR 생성 receipt를 소비할 때만 증가한다.
 model FleetCleanupAuthority {
-  id                 String                    @id @default(cuid())
-  organizationId     String                    @db.VarChar(32)
-  installationId     String                    @db.VarChar(32)
-  repositoryId       BigInt
-  repositoryFullName String                    @db.VarChar(191)
-  sourceSha          String                    @db.Char(40)
-  treeSha            String                    @db.Char(40)
-  issuanceDigest     String                    @db.VarChar(71)
-  inventoryDigest    String                    @db.VarChar(71)
-  planDigest         String                    @db.VarChar(71)
-  chainHeadDigest    String?                   @db.VarChar(71)
+  id                  String                   @id @default(cuid())
+  organizationId      String                   @db.VarChar(32)
+  installationId      String                   @db.VarChar(32)
+  repositoryId        BigInt
+  repositoryFullName  String                   @db.VarChar(191)
+  sourceSha           String                   @db.Char(40)
+  treeSha             String                   @db.Char(40)
+  issuanceDigest      String                   @db.VarChar(71)
+  inventoryDigest     String                   @db.VarChar(71)
+  planDigest          String                   @db.VarChar(71)
+  chainHeadDigest     String?                  @db.VarChar(71)
   fileActionSetDigest String                   @db.VarChar(71)
-  authorityRevision  String                    @db.VarChar(127)
-  generation         Int                       @default(1)
-  state              String                    @default("ACTIVE") @db.VarChar(32)
-  activeExecutionKey String?                   @db.VarChar(71)
-  createdAt          DateTime                  @default(now()) @db.DateTime(3)
-  updatedAt          DateTime                  @updatedAt
-  capabilities       FleetCleanupCapability[]
-  executions         FleetCleanupExecution[]
+  authorityRevision   String                   @db.VarChar(127)
+  generation          Int                      @default(1)
+  state               String                   @default("ACTIVE") @db.VarChar(32)
+  activeExecutionKey  String?                  @db.VarChar(71)
+  createdAt           DateTime                 @default(now()) @db.DateTime(3)
+  updatedAt           DateTime                 @updatedAt
+  capabilities        FleetCleanupCapability[]
+  executions          FleetCleanupExecution[]
 
   @@unique([repositoryId, issuanceDigest, inventoryDigest, planDigest, sourceSha], map: "cp_fleet_cleanup_authority_binding_key")
   @@index([repositoryId, state, updatedAt], map: "cp_fleet_cleanup_authority_repo_state")
@@ -1451,27 +1498,27 @@ model FleetCleanupAuthority {
 // scope를 최대 15분 동안만 허용한다. replacementFiles에는 공개 workflow replacement만
 // 저장하며 credential/token/lease 값은 허용하지 않는다.
 model FleetCleanupCapability {
-  id                     String                   @id @default(cuid())
+  id                     String                 @id @default(cuid())
   authorityId            String
-  authority              FleetCleanupAuthority    @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_capability_authority_fkey")
-  issueNumber             Int
-  approvalScopeDigest     String                   @db.VarChar(71)
-  issuance                Json
-  plan                    Json
-  fileActionSet           Json
-  fileActionSetDigest     String                   @db.VarChar(71)
+  authority              FleetCleanupAuthority  @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_capability_authority_fkey")
+  issueNumber            Int
+  approvalScopeDigest    String                 @db.VarChar(71)
+  issuance               Json
+  plan                   Json
+  fileActionSet          Json
+  fileActionSetDigest    String                 @db.VarChar(71)
   replacementFiles       Json
-  replacementFilesDigest String                   @db.VarChar(71)
-  action                  String                   @default("READY_PR_ONLY") @db.VarChar(32)
-  state                   String                   @default("ACTIVE") @db.VarChar(32)
-  requestId               String                   @unique(map: "cp_fleet_cleanup_capability_request_key") @db.VarChar(191)
-  requestDigest           String                   @db.VarChar(71)
-  approvedBy              String                   @db.VarChar(128)
-  approvedAt              DateTime                 @db.DateTime(3)
-  expiresAt               DateTime                 @db.DateTime(3)
-  consumedAt              DateTime?                @db.DateTime(3)
-  createdAt               DateTime                 @default(now()) @db.DateTime(3)
-  execution               FleetCleanupExecution?
+  replacementFilesDigest String                 @db.VarChar(71)
+  action                 String                 @default("READY_PR_ONLY") @db.VarChar(32)
+  state                  String                 @default("ACTIVE") @db.VarChar(32)
+  requestId              String                 @unique(map: "cp_fleet_cleanup_capability_request_key") @db.VarChar(191)
+  requestDigest          String                 @db.VarChar(71)
+  approvedBy             String                 @db.VarChar(128)
+  approvedAt             DateTime               @db.DateTime(3)
+  expiresAt              DateTime               @db.DateTime(3)
+  consumedAt             DateTime?              @db.DateTime(3)
+  createdAt              DateTime               @default(now()) @db.DateTime(3)
+  execution              FleetCleanupExecution?
 
   @@index([authorityId, approvalScopeDigest, issueNumber], map: "cp_fleet_cleanup_capability_scope_idx")
   @@index([state, expiresAt], map: "cp_fleet_cleanup_capability_state_expiry")
@@ -1479,40 +1526,40 @@ model FleetCleanupCapability {
 }
 
 model FleetCleanupExecution {
-  id                      String                    @id @default(cuid())
+  id                      String                      @id @default(cuid())
   authorityId             String
-  authority               FleetCleanupAuthority     @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_authority_fkey")
-  capabilityId            String                    @unique(map: "cp_fleet_cleanup_execution_capability_key")
-  capability              FleetCleanupCapability    @relation(fields: [capabilityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_capability_fkey")
-  executionKey            String                    @unique(map: "cp_fleet_cleanup_execution_key") @db.VarChar(71)
-  reservationId           String                    @unique(map: "cp_fleet_cleanup_reservation_key") @db.VarChar(127)
-  organizationId          String                    @db.VarChar(32)
-  installationId          String                    @db.VarChar(32)
-  issuanceDigest          String                    @db.VarChar(71)
-  inventoryDigest         String                    @db.VarChar(71)
-  planDigest              String                    @db.VarChar(71)
-  runId                   String                    @db.VarChar(127)
-  workerId                String                    @db.VarChar(127)
+  authority               FleetCleanupAuthority       @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_authority_fkey")
+  capabilityId            String                      @unique(map: "cp_fleet_cleanup_execution_capability_key")
+  capability              FleetCleanupCapability      @relation(fields: [capabilityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_capability_fkey")
+  executionKey            String                      @unique(map: "cp_fleet_cleanup_execution_key") @db.VarChar(71)
+  reservationId           String                      @unique(map: "cp_fleet_cleanup_reservation_key") @db.VarChar(127)
+  organizationId          String                      @db.VarChar(32)
+  installationId          String                      @db.VarChar(32)
+  issuanceDigest          String                      @db.VarChar(71)
+  inventoryDigest         String                      @db.VarChar(71)
+  planDigest              String                      @db.VarChar(71)
+  runId                   String                      @db.VarChar(127)
+  workerId                String                      @db.VarChar(127)
   repositoryId            BigInt
-  repositoryFullName      String                    @db.VarChar(191)
-  sourceSha               String                    @db.Char(40)
+  repositoryFullName      String                      @db.VarChar(191)
+  sourceSha               String                      @db.Char(40)
   issueNumber             Int
-  chainHeadDigest         String?                   @db.VarChar(71)
+  chainHeadDigest         String?                     @db.VarChar(71)
   expectedStateGeneration Int
   reservedStateGeneration Int
-  executionGeneration     Int                       @default(1)
-  state                   String                    @default("RUNNING") @db.VarChar(32)
-  leaseTokenDigest        String                    @db.Char(64)
-  expiresAt               DateTime                  @db.DateTime(3)
+  executionGeneration     Int                         @default(1)
+  state                   String                      @default("RUNNING") @db.VarChar(32)
+  leaseTokenDigest        String                      @db.Char(64)
+  expiresAt               DateTime                    @db.DateTime(3)
   mutationSet             Json?
-  mutationsDigest         String?                   @db.VarChar(71)
-  commitDate              DateTime?                 @db.DateTime(3)
-  expectedTreeSha         String?                   @db.Char(40)
-  expectedCommitSha       String?                   @db.Char(40)
-  receiptDigest           String?                   @db.VarChar(71)
-  completedAt             DateTime?                 @db.DateTime(3)
-  createdAt               DateTime                  @default(now()) @db.DateTime(3)
-  updatedAt               DateTime                  @updatedAt
+  mutationsDigest         String?                     @db.VarChar(71)
+  commitDate              DateTime?                   @db.DateTime(3)
+  expectedTreeSha         String?                     @db.Char(40)
+  expectedCommitSha       String?                     @db.Char(40)
+  receiptDigest           String?                     @db.VarChar(71)
+  completedAt             DateTime?                   @db.DateTime(3)
+  createdAt               DateTime                    @default(now()) @db.DateTime(3)
+  updatedAt               DateTime                    @updatedAt
   steps                   FleetCleanupExecutionStep[]
 
   @@index([authorityId, state, expiresAt], map: "cp_fleet_cleanup_execution_authority_state")
@@ -1520,16 +1567,16 @@ model FleetCleanupExecution {
 }
 
 model FleetCleanupExecutionStep {
-  id            String                 @id @default(cuid())
+  id            String                @id @default(cuid())
   executionId   String
-  execution     FleetCleanupExecution  @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_step_execution_fkey")
-  kind          String                 @db.VarChar(32)
+  execution     FleetCleanupExecution @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_step_execution_fkey")
+  kind          String                @db.VarChar(32)
   ordinal       Int
-  operationId   String                 @db.VarChar(71)
-  state         String                 @default("PENDING") @db.VarChar(32)
-  receiptDigest String?                @db.VarChar(71)
-  createdAt     DateTime               @default(now()) @db.DateTime(3)
-  updatedAt     DateTime               @updatedAt
+  operationId   String                @db.VarChar(71)
+  state         String                @default("PENDING") @db.VarChar(32)
+  receiptDigest String?               @db.VarChar(71)
+  createdAt     DateTime              @default(now()) @db.DateTime(3)
+  updatedAt     DateTime              @updatedAt
 
   @@unique([executionId, kind], map: "cp_fleet_cleanup_step_kind_key")
   @@unique([executionId, ordinal], map: "cp_fleet_cleanup_step_ordinal_key")
@@ -1929,33 +1976,33 @@ enum PlatformFleetPlanStatus {
 // secret 값이 아닌 logical credential과 공개 identity만 저장한다.
 // 실제 값의 조회·변경·export API는 이 데이터 모델과 Backoffice UI에 존재하지 않는다.
 model CredentialBinding {
-  id                   String                  @id @default(cuid())
-  appId                String
-  app                  App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
-  logicalCredentialId  String
-  provider             String
-  capability           String
-  environment          String
-  publicIdentity       String?
-  fingerprint          String?
-  consumer             String
-  scope                Json?
-  status               CredentialBindingStatus @default(ACTIVE)
-  credentialGeneration Int?
-  policyGeneration     Int?
-  adapterId            String?                 @db.VarChar(64)
-  origin               String?                 @db.VarChar(512)
-  authFactors          Json?
-  observedAt           DateTime                @db.DateTime(3)
+  id                     String                  @id @default(cuid())
+  appId                  String
+  app                    App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
+  logicalCredentialId    String
+  provider               String
+  capability             String
+  environment            String
+  publicIdentity         String?
+  fingerprint            String?
+  consumer               String
+  scope                  Json?
+  status                 CredentialBindingStatus @default(ACTIVE)
+  credentialGeneration   Int?
+  policyGeneration       Int?
+  adapterId              String?                 @db.VarChar(64)
+  origin                 String?                 @db.VarChar(512)
+  authFactors            Json?
+  observedAt             DateTime                @db.DateTime(3)
   // catalog의 검증된 공개 projection을 optimistic concurrency로 갱신한다.
   // 기존 row는 nullable provenance로 남겨 자동 승격하지 않고 다음 검증 import가 채운다.
-  revision             Int?
-  catalogEntryDigest   String?                 @db.Char(64)
-  catalogSnapshotDigest String?                @db.Char(64)
-  catalogContractVersion String?               @db.VarChar(64)
-  observedBy           String?                 @db.VarChar(128)
-  createdAt            DateTime                @default(now()) @db.DateTime(3)
-  updatedAt            DateTime                @updatedAt
+  revision               Int?
+  catalogEntryDigest     String?                 @db.Char(64)
+  catalogSnapshotDigest  String?                 @db.Char(64)
+  catalogContractVersion String?                 @db.VarChar(64)
+  observedBy             String?                 @db.VarChar(128)
+  createdAt              DateTime                @default(now()) @db.DateTime(3)
+  updatedAt              DateTime                @updatedAt
 
   @@unique([appId, logicalCredentialId, capability])
   @@index([appId, provider, status])

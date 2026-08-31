@@ -43,6 +43,7 @@ const FLEET_MIGRATION_PROOF_AUDIT_MESSAGE = "fleet migration proof audit is appe
 const FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE = "fleet migration occurrence audit is append-only";
 const FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE = "fleet migration completion audit is append-only";
 const FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE = "fleet migration authoritative issuance audit is append-only";
+const LEGACY_CONFIG_RESOLUTION_AUDIT_MESSAGE = "legacy config resolution audit is append-only";
 
 const PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
@@ -127,6 +128,22 @@ export const FLEET_MIGRATION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerReq
   },
 ];
 
+/** 중앙 상태 대체에 대한 사람/자동화 승인은 새 revision만 추가할 수 있다. */
+export const LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+  {
+    name: "control_plane_legacy_config_resolution_no_delete",
+    table: "control_plane_legacy_config_resolution",
+    event: "DELETE",
+    message: LEGACY_CONFIG_RESOLUTION_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_legacy_config_resolution_no_update",
+    table: "control_plane_legacy_config_resolution",
+    event: "UPDATE",
+    message: LEGACY_CONFIG_RESOLUTION_AUDIT_MESSAGE,
+  },
+];
+
 /**
  * live DB에 반드시 존재하고 고정 in-cluster verifier가 관측하는 전체 계약이다.
  * migration SQL, restore rehearsal, verifier manifest와 digest가 모두 같아야 한다.
@@ -135,6 +152,7 @@ export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequiremen
   ...PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS,
   ...AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
   ...FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
+  ...LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS,
 ].sort((left, right) => left.name.localeCompare(right.name));
 
 const CREATE_TRIGGER_PATTERN =
