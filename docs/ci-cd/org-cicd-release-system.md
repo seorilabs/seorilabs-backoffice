@@ -285,13 +285,17 @@ flowchart TD
   D -->|AIT| DA[deploy-apps-in-toss]
   D -->|GPS| DG[deploy-google-play]
   D -->|APS| DP[deploy-app-store]
-  D -->|All| ALL[deploy-all → 3개 workflow_call]
+  D -->|All| ALL[deploy-all - 등록 마켓 실행 계획]
   DA & DG & DP & ALL --> W[workflow_run webhook]
   W --> BO2[Backoffice 미러+전이] --> DCN[Discord 성공/실패]
 ```
 
 - 배포 워크플로우는 **`workflow_dispatch` + `workflow_call`**만(자동 tag-push 트리거는 기본 비활성; 필요 repo만 옵션). backoffice가 dispatch로 구동 → "원하는 태그를 골라" 배포 가능(원칙 #2·#3).
-- Deploy All은 `resolve`(최신/지정 태그) → 3개 `workflow_call`(`secrets: inherit`). 마켓별 toggle 입력 제공.
+- Deploy All은 exact stable 태그와 각 caller 입력 계약을 먼저 검증한다. Google Play caller가 upload 입력을
+  선언한 경우 `internal/completed` 업로드를 명시하고, Xcode Cloud 앱은 GitHub dispatch가 성공한 뒤 iOS
+  archive를 마지막에 시작한다. AppsInToss trusted upload adapter가 없는 앱은 AIT upload를 준비됨으로
+  표시하거나 암묵적으로 활성화하지 않는다. build, internal upload, provider processing, device QA,
+  review submit, approval, production rollout, public verification은 각각 독립 gate다.
 
 ---
 

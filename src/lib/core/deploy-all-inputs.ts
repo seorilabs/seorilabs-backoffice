@@ -13,3 +13,22 @@ export function buildDeployAllAppStoreInputs(
 ): Record<string, string> {
   return declared.has("deploy_app_store") ? { deploy_app_store: "false" } : {};
 }
+
+/**
+ * Deploy All을 명시적으로 실행한 경우 Play는 build-only가 아니라 internal
+ * upload + completed까지가 표준 후보 경계다. 일부 caller는 이 값을 job에
+ * 고정하고, 일부는 google_play_* input을 선언하므로 선언된 경우만 명시한다.
+ * 선언하지 않은 input을 보내 GitHub 422를 만들지 않는다.
+ */
+export function buildDeployAllGooglePlayInputs(
+  declared: ReadonlySet<string>,
+): Record<string, string> {
+  const inputs: Record<string, string> = {};
+  if (declared.has("deploy_google_play")) inputs.deploy_google_play = "true";
+  if (declared.has("google_play_upload")) inputs.google_play_upload = "true";
+  if (declared.has("google_play_track")) inputs.google_play_track = "internal";
+  if (declared.has("google_play_release_status")) {
+    inputs.google_play_release_status = "completed";
+  }
+  return inputs;
+}

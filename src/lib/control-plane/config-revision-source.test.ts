@@ -32,7 +32,7 @@ function sourceFixture(
   const sourceRef = `refs/heads/${defaultBranch}`;
   const payload: Record<string, unknown> = {
     schemaVersion: 2,
-    contractVersion: "repository-discovery/v10",
+    contractVersion: "repository-discovery/v11",
     repository: {
       id: Number(REPO_ID),
       fullName: "seorilabs/happy-farm",
@@ -56,7 +56,7 @@ function sourceFixture(
       archived: false,
       status: "MANAGED",
       classification: "PRODUCT_APP",
-      discoveryContractVersion: "repository-discovery/v10",
+      discoveryContractVersion: "repository-discovery/v11",
       lastDefaultPushSha: SOURCE_SHA,
       lastReconciledSha: SOURCE_SHA,
     },

@@ -53,7 +53,7 @@ export default async function AppReleasesPage({
 
       <WorkspaceSection
         title="릴리스 실행"
-        description="명시적 태그를 만들고 마켓별 배포 workflow를 시작합니다."
+        description="명시적 태그를 만들고 후보 빌드·내부 업로드를 시작합니다. 심사·승인·공개는 별도 gate입니다."
       >
         <Panel>
           <ReleaseControls appId={app.id} targets={targets} />

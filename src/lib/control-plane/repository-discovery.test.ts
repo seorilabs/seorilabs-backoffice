@@ -830,6 +830,59 @@ test("lizard 유형은 build.env의 Android target과 미관측 package identity
   ]);
 });
 
+test("lizard Xcode Cloud bootstrap에서 App Store bundle·team·scheme을 exact-source로 관측한다", async () => {
+  const projectPath = "xcode-cloud/LizardTerrarium.xcodeproj";
+  const files = {
+    "project.godot": "[application]\nconfig/name=\"Lizard\"\n",
+    "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "scripts/build-android.sh": "#!/bin/sh\nexit 0\n",
+    "xcode-cloud/ci_scripts/ci_post_clone.sh": "#!/bin/sh\nexit 0\n",
+    [`${projectPath}/project.pbxproj`]: [
+      "DEVELOPMENT_TEAM = HCDUXX4Z3X;",
+      "PRODUCT_BUNDLE_IDENTIFIER = com.seorilabs.lizardtycoon;",
+      "PRODUCT_NAME = LizardTerrarium;",
+    ].join("\n"),
+    [`${projectPath}/xcshareddata/xcschemes/LizardTerrarium.xcscheme`]: "<Scheme/>",
+    "apps/ait/granite.config.ts": "export default { appName: 'lizard-tycoon' };",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [
+    {
+      targetKey: "ait",
+      stack: "godot",
+      market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
+      configuration: { appName: "lizard-tycoon" },
+    },
+    {
+      targetKey: "android",
+      stack: "godot",
+      market: "google-play",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+    {
+      targetKey: "ios",
+      stack: "godot",
+      market: "app-store",
+      packageId: null,
+      bundleId: "com.seorilabs.lizardtycoon",
+      configuration: {
+        delivery: "xcode-cloud",
+        projectPath,
+        scheme: "LizardTerrarium",
+        appleTeamId: "HCDUXX4Z3X",
+      },
+    },
+  ]);
+  assert.ok(result.sourceMetadata.some(({ path }) => path === `${projectPath}/project.pbxproj`));
+  assert.ok(result.sourceMetadata.some(({ path }) => path.endsWith("LizardTerrarium.xcscheme")));
+});
+
 test("minimax 유형은 확정 전 Godot package와 bundle identity를 null observation으로 보존한다", async () => {
   const files = {
     "godot/project.godot": "[application]\nconfig/name=\"MiniMax\"\n",
@@ -1447,8 +1500,8 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v10 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v10");
+test("discovery 의미론 변경은 새 generation을 강제하는 v11 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v11");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {

@@ -84,7 +84,7 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 기존 ACTIVE snapshot도 제공하지 않는다.
 
 세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, GitHub에 등록된 exact default branch/ref, current
-`repository-discovery/v10`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+`repository-discovery/v11`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
@@ -662,7 +662,7 @@ hourly `backoffice-desired-state-backfill`은 기존 `App.status=ACTIVE` row에 
 repoId가 없는 기존 ACTIVE 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v10`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v11`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
@@ -723,8 +723,11 @@ admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler
   사람이 검토 가능한 새 DRAFT에 포함한다. 조직/folder/billing, 법적 선언, object storage checksum이나
   provider 상태를 App/Discovery 필드에서 추측하지 않는다.
 - `ProviderObservation`과 `ExternalBinding`은 provider GET/readback producer가 실행된 경우에만 생긴다.
-  GitHub installation readback은 위 hourly backfill이 공급하지만 GCP/Firebase/Workspace/마켓 readback은
-  각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
+  GitHub installation readback은 위 hourly backfill이 공급한다. Xcode Cloud hourly sync는 exact-source
+  App Store `BuildTarget`이 준비된 allowlist 앱에 한해 App Store Connect app과 Xcode Cloud
+  product/workflow/repository의 공개 identity를 읽고 observation/binding을 함께 갱신한다. 권한·네트워크 오류는
+  리소스 부재로 합성하지 않고 `UNKNOWN`으로 남긴다. GCP/Firebase/Workspace와 아직 producer가 연결되지 않은
+  마켓 readback은 각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
 - `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin을
   모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로 capability를 추측하지 않는다.
 - `ReleaseCandidate`와 `ReleaseGateObservation`은 ACTIVE revision, exact source, artifact checksum,

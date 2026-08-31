@@ -87,8 +87,10 @@ jobs:
           push: true
           provenance: false
           # 클러스터 PVC 캐시를 대신한다. 의존성 무변경이면 deps 레이어를 재사용한다.
+          # min은 최종 이미지에 포함되는 레이어만 export해 Actions storage 증가를 제한한다.
+          # cache import와 image push/digest 산출 방식은 바뀌지 않는다.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           tags: ${{ env.IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}

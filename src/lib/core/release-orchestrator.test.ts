@@ -269,6 +269,28 @@ test("정상 ALL은 preflight 뒤 GitHub 먼저, Xcode Cloud 마지막이다", a
   ]);
 });
 
+test("Lizard ALL은 Play internal upload를 명시하고 Xcode Cloud를 마지막에 실행한다", async () => {
+  const h = harness({
+    declared: new Set([
+      "release_tag",
+      "deploy_ait",
+      "deploy_google_play",
+      "google_play_upload",
+      "google_play_track",
+      "google_play_release_status",
+    ]),
+  });
+  await deploy(h, "ALL", "v1.2.4", true);
+  assert.deepEqual(h.dispatched[0].inputs, {
+    release_tag: "v1.2.4",
+    deploy_google_play: "true",
+    google_play_upload: "true",
+    google_play_track: "internal",
+    google_play_release_status: "completed",
+  });
+  assert.deepEqual(h.calls.slice(-2), ["dispatchWorkflow", "dispatchXcodeCloudRelease"]);
+});
+
 test("APPSTORE 단독은 exact tag preflight 뒤에만 Xcode Cloud를 실행한다", async () => {
   const h = harness();
   const result = await deploy(h, "APPSTORE", "v1.2.2", true);

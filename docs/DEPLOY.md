@@ -760,7 +760,13 @@ flowchart LR
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
-- `lizard-tycoon`은 `com.seorilabs.lizardtycoon` Xcode Cloud 제품(`LizardTerrarium`)과 `Lizard Tycoon Release` workflow를 사용한다. Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그 커밋에서 Godot iOS 프로젝트를 재생성한다. workflow에는 환경변수 `GODOT_ANALYTICS_ID`와 secret `GODOT_ANALYTICS_SECRET`이 있어야 빌드가 통과한다.
+- `lizard-tycoon`은 App Store Connect app `6786516830`, bundle `com.seorilabs.lizardtycoon`,
+  Xcode Cloud product `1F1C8BCC-7F10-4096-8563-6F375D5DB624`(`LizardTerrarium`), workflow
+  `9AAF9F76-B518-42A9-9218-475CE2155345`(`Lizard Tycoon Release`), repository
+  `ae0b4198-432d-42b8-bde8-3c2b84631655`(`seorilabs/lizard-tycoon`), team `HCDUXX4Z3X`를 사용한다.
+  Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그
+  커밋에서 Godot iOS 프로젝트를 재생성한다. hourly readback은 이 공개 identity와 active iOS Archive,
+  `v` manual tag 조건을 검증해 binding을 갱신하며 secret 값은 observation에 저장하지 않는다.
 - `jomul`은 `com.seorilabs.jomul` Xcode Cloud 제품과 `Jomul App Store Archive` workflow를 사용한다. 2026-08-16 live readback에서 primary repository `seorilabs/jomul`과 활성 `APP_STORE_ELIGIBLE` iOS Archive workflow가 정확히 하나임을 확인했다. repo의 `deploy-app-store.yml`은 마켓 지원 탐지용 fail-closed 표준 진입점이며, 실제 App Store 실행은 Backoffice가 ASC API로 Xcode Cloud에 요청한다.
 - 관련 마이그레이션: `16_deploy_completion_notifications`, `20_discord_operational_notifications`, `24_drop_telegram_legacy`.
 
