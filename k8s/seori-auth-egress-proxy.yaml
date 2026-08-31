@@ -169,10 +169,14 @@ spec:
               value: /var/run/seori-auth-egress-proxy
             - name: SEORI_EGRESS_PROXY_PORT
               value: "8443"
-            - name: SEORI_EGRESS_ALLOWED_HOSTS
-              value: backoffice.vzyx.xyz,api.github.com,sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com
-            - name: SEORI_EGRESS_ALLOWED_CLIENT_SPIFFE_IDS
-              value: spiffe://seorilabs.local/ns/auth-broker/sa/auth-broker,spiffe://seorilabs.local/ns/auth-broker/sa/password-loader,spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer,spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime,spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor,spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary
+            - name: SEORI_EGRESS_CLIENT_HOST_POLICIES
+              value: >-
+                spiffe://seorilabs.local/ns/auth-broker/sa/auth-broker=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/password-loader=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime=backoffice.vzyx.xyz,api.github.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor=backoffice.vzyx.xyz,api.github.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary=api.github.com
           readinessProbe:
             tcpSocket:
               port: mtls-connect
@@ -250,5 +254,24 @@ spec:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.31.196.0/24
+              - 192.52.193.0/24
+              - 192.88.99.0/24
+              - 192.168.0.0/16
+              - 192.175.48.0/24
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
       ports:
         - { protocol: TCP, port: 443 }

@@ -3,11 +3,13 @@ import test from "node:test";
 
 import {
   exactHostSet,
+  exactClientHostPolicies,
   exactPeerSpiffeIdentity,
   exactSpiffeSet,
   isPublicConnectAddress,
   parseConnectAuthority,
   readBoundedResponseBody,
+  rejectRedirectResponse,
   resolvePublicConnectAddress,
 } from "./mtls-egress-proxy";
 
@@ -26,6 +28,25 @@ test("exact allowlists reject duplicates, IP literals, and malformed identities"
   ].join(","));
   assert.equal(identities.size, 2);
   assert.throws(() => exactSpiffeSet("spiffe://look-alike.invalid/ns/auth-broker/sa/runtime"));
+});
+
+test("client identity마다 허용 origin을 별도 결합한다", () => {
+  const runtime = "spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime";
+  const signer = "spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer";
+  const policies = exactClientHostPolicies([
+    `${runtime}=backoffice.vzyx.xyz,api.github.com`,
+    `${signer}=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com`,
+  ].join(";"));
+  assert.deepEqual([...policies.get(runtime) ?? []], ["backoffice.vzyx.xyz", "api.github.com"]);
+  assert.deepEqual([...policies.get(signer) ?? []], [
+    "sts.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "secretmanager.googleapis.com",
+  ]);
+  assert.equal(policies.get(runtime)?.has("secretmanager.googleapis.com"), false);
+  assert.throws(() => exactClientHostPolicies(`${runtime}=api.github.com;${runtime}=backoffice.vzyx.xyz`));
+  assert.throws(() => exactClientHostPolicies(`${runtime}=127.0.0.1`));
+  assert.throws(() => exactClientHostPolicies(`${runtime}=api.github.com;`));
 });
 
 test("CONNECT is exact host and port 443 only", () => {
@@ -49,7 +70,11 @@ test("private, loopback, documentation, mapped, and multicast addresses are reje
     "169.254.1.1",
     "172.16.0.1",
     "192.0.2.1",
+    "192.31.196.1",
+    "192.52.193.1",
+    "192.88.99.1",
     "192.168.1.1",
+    "192.175.48.1",
     "198.18.0.1",
     "198.51.100.1",
     "203.0.113.1",
@@ -57,7 +82,25 @@ test("private, loopback, documentation, mapped, and multicast addresses are reje
     "255.255.255.255",
   ]) assert.equal(isPublicConnectAddress(address, 4), false, address);
   assert.equal(isPublicConnectAddress("20.200.245.245", 4), true);
-  for (const address of ["::", "::1", "fc00::1", "fd00::1", "fe80::1", "ff02::1", "2001:db8::1", "::ffff:127.0.0.1"]) {
+  for (const address of [
+    "::",
+    "::1",
+    "::ffff:127.0.0.1",
+    "64:ff9b::7f00:1",
+    "64:ff9b:1::a00:1",
+    "100::1",
+    "2001::1",
+    "2001:2::1",
+    "2001:db8::1",
+    "2002:7f00:1::1",
+    "2620:4f:8000::1",
+    "3fff::1",
+    "5f00::1",
+    "fc00::1",
+    "fd00::1",
+    "fe80::1",
+    "ff02::1",
+  ]) {
     assert.equal(isPublicConnectAddress(address, 6), false, address);
   }
   assert.equal(isPublicConnectAddress("2606:50c0:8000::154", 6), true);
@@ -129,4 +172,16 @@ test("chunked response도 선언 길이와 무관하게 상한에서 중단한�
     ),
     /TEST_RESPONSE_TOO_LARGE/u,
   );
+});
+
+test("redirect response는 target을 따라가지 않고 공개 오류로 거부한다", async () => {
+  await assert.rejects(
+    rejectRedirectResponse(new Response(null, {
+      status: 302,
+      headers: { location: "https://look-alike.invalid/" },
+    })),
+    /SEORI_EGRESS_REDIRECT_REJECTED/u,
+  );
+  const notModified = new Response(null, { status: 304 });
+  assert.equal(await rejectRedirectResponse(notModified), notModified);
 });

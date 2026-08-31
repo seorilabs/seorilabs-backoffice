@@ -3,9 +3,8 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TLSSocket } from "node:tls";
 
 import {
-  exactHostSet,
+  exactClientHostPolicies,
   exactPeerSpiffeIdentity,
-  exactSpiffeSet,
   parseConnectAuthority,
   resolvePublicConnectAddress,
 } from "@/lib/control-plane/mtls-egress-proxy";
@@ -21,10 +20,10 @@ if (!Number.isSafeInteger(PORT) || PORT < 1024 || PORT > 65535) {
   throw new Error("SEORI_EGRESS_PROXY_PORT_INVALID");
 }
 
-const allowedHosts = exactHostSet(process.env.SEORI_EGRESS_ALLOWED_HOSTS?.trim() || "");
-const allowedClientSpiffeIds = exactSpiffeSet(
-  process.env.SEORI_EGRESS_ALLOWED_CLIENT_SPIFFE_IDS?.trim() || "",
+const clientHostPolicies = exactClientHostPolicies(
+  process.env.SEORI_EGRESS_CLIENT_HOST_POLICIES?.trim() || "",
 );
+const allowedClientSpiffeIds = new Set(clientHostPolicies.keys());
 
 function reject(socket: TLSSocket, status = "403 Forbidden"): void {
   if (!socket.destroyed && socket.writable) {
@@ -96,7 +95,9 @@ async function main(): Promise<void> {
           throw new Error("SEORI_EGRESS_CONNECT_REJECTED");
         }
         const peer = socket.getPeerCertificate(true);
-        exactPeerSpiffeIdentity(peer.subjectaltname, allowedClientSpiffeIds);
+        const clientIdentity = exactPeerSpiffeIdentity(peer.subjectaltname, allowedClientSpiffeIds);
+        const allowedHosts = clientHostPolicies.get(clientIdentity);
+        if (!allowedHosts) throw new Error("SEORI_EGRESS_CLIENT_POLICY_NOT_FOUND");
         const target = parseConnectAuthority(request.url || "", allowedHosts);
         const resolved = await resolvePublicConnectAddress(target.hostname);
         upstream = connectTcp({
@@ -134,7 +135,7 @@ async function main(): Promise<void> {
     }
   });
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[seori-auth-egress-proxy] ready port=${PORT} allowedHosts=${allowedHosts.size}`);
+    console.log(`[seori-auth-egress-proxy] ready port=${PORT} allowedClients=${clientHostPolicies.size}`);
   });
   const shutdown = () => server.close(() => {
     clientCa.fill(0);

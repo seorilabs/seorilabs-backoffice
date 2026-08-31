@@ -12,6 +12,26 @@ const PROXY_PORT = 8443;
 const TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 4 * 1024;
 
+async function expectRedirectRejected(proxy: {
+  fetch: typeof globalThis.fetch;
+}): Promise<void> {
+  try {
+    const response = await proxy.fetch("https://api.github.com/repos/seorilabs/.github/tarball/main", {
+      method: "GET",
+      headers: {
+        accept: "application/vnd.github+json",
+        "user-agent": "seorilabs-egress-canary/1",
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    await response.body?.cancel();
+  } catch (error) {
+    if (error instanceof Error && error.message === "SEORI_EGRESS_REDIRECT_REJECTED") return;
+    throw new Error("SEORI_EGRESS_CANARY_REDIRECT_CHECK_FAILED", { cause: error });
+  }
+  throw new Error("SEORI_EGRESS_CANARY_REDIRECT_NOT_REJECTED");
+}
+
 async function expectConnectRejected(input: {
   authority: string;
   ca: Buffer;
@@ -102,6 +122,7 @@ async function main(): Promise<void> {
     });
     if (response.status !== 200) throw new Error("SEORI_EGRESS_CANARY_POSITIVE_FAILED");
     await response.body?.cancel();
+    await expectRedirectRejected(proxy);
 
     ca = await readBoundSecretFile({ root: ROOT, relativePath: "egress/ca.pem", allowGroupRead: true });
     certificate = await readBoundSecretFile({
@@ -122,7 +143,7 @@ async function main(): Promise<void> {
     ]) {
       await expectConnectRejected({ authority, ca, certificate, privateKey });
     }
-    console.log('{"state":"CANARY_OK","secretExposed":false,"positive":1,"rejected":4}');
+    console.log('{"state":"CANARY_OK","secretExposed":false,"positive":1,"rejected":5,"redirectRejected":1}');
   } finally {
     ca?.fill(0);
     certificate?.fill(0);

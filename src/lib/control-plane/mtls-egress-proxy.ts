@@ -1,5 +1,5 @@
 import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 
@@ -7,6 +7,7 @@ import { readBoundSecretFile } from "@/lib/control-plane/seori-auth-agent-transp
 
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 const SPIFFE_ID = /^spiffe:\/\/seorilabs\.local\/ns\/[a-z0-9-]{1,63}\/sa\/[a-z0-9-]{1,63}$/u;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function canonicalHostname(value: string): string {
   const hostname = value.trim().toLowerCase();
@@ -35,6 +36,35 @@ export function exactSpiffeSet(raw: string): ReadonlySet<string> {
     throw new Error("SEORI_EGRESS_SPIFFE_ALLOWLIST_INVALID");
   }
   return new Set(values);
+}
+
+export function exactClientHostPolicies(raw: string): ReadonlyMap<string, ReadonlySet<string>> {
+  if (raw.length < 1 || raw.length > 8192) {
+    throw new Error("SEORI_EGRESS_CLIENT_HOST_POLICIES_INVALID");
+  }
+  const entries = raw.split(";").map((entry) => entry.trim());
+  if (entries.length < 1 || entries.length > 16) {
+    throw new Error("SEORI_EGRESS_CLIENT_HOST_POLICIES_INVALID");
+  }
+  const policies = new Map<string, ReadonlySet<string>>();
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator < 1 || separator !== entry.lastIndexOf("=")) {
+      throw new Error("SEORI_EGRESS_CLIENT_HOST_POLICIES_INVALID");
+    }
+    const identity = entry.slice(0, separator).trim();
+    if (!SPIFFE_ID.test(identity) || policies.has(identity)) {
+      throw new Error("SEORI_EGRESS_CLIENT_HOST_POLICIES_INVALID");
+    }
+    let hosts: ReadonlySet<string>;
+    try {
+      hosts = exactHostSet(entry.slice(separator + 1));
+    } catch (error) {
+      throw new Error("SEORI_EGRESS_CLIENT_HOST_POLICIES_INVALID", { cause: error });
+    }
+    policies.set(identity, hosts);
+  }
+  return policies;
 }
 
 export function parseConnectAuthority(
@@ -79,7 +109,11 @@ const NON_PUBLIC_IPV4 = Object.freeze([
   ["172.16.0.0", 12],
   ["192.0.0.0", 24],
   ["192.0.2.0", 24],
+  ["192.31.196.0", 24],
+  ["192.52.193.0", 24],
+  ["192.88.99.0", 24],
   ["192.168.0.0", 16],
+  ["192.175.48.0", 24],
   ["198.18.0.0", 15],
   ["198.51.100.0", 24],
   ["203.0.113.0", 24],
@@ -87,23 +121,29 @@ const NON_PUBLIC_IPV4 = Object.freeze([
   ["240.0.0.0", 4],
 ] as const);
 
+// IANA IPv6 address space에서 현재 일반 Global Unicast로 배정되는 2000::/3만
+// 후보로 삼고, 그 안의 special-purpose block도 전부 거부한다. Provider endpoint가
+// translation/anycast/benchmark/documentation 주소를 사용할 이유가 없으므로
+// availability보다 SSRF fail-closed를 우선한다.
+const GLOBAL_UNICAST_IPV6 = new BlockList();
+GLOBAL_UNICAST_IPV6.addSubnet("2000::", 3, "ipv6");
+const SPECIAL_PURPOSE_IPV6 = new BlockList();
+for (const [address, prefix] of [
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["2620:4f:8000::", 48],
+  ["3fff::", 20],
+] as const) SPECIAL_PURPOSE_IPV6.addSubnet(address, prefix, "ipv6");
+
 export function isPublicConnectAddress(address: string, family: number): boolean {
   if (family === 4) {
     const numeric = ipv4Number(address);
     return numeric !== null && !NON_PUBLIC_IPV4.some(([base, prefix]) => ipv4InCidr(numeric, base, prefix));
   }
   if (family !== 6 || isIP(address) !== 6) return false;
-  const normalized = address.toLowerCase();
-  return !(
-    normalized === "::"
-    || normalized === "::1"
-    || normalized.startsWith("fc")
-    || normalized.startsWith("fd")
-    || /^fe[89ab]/u.test(normalized)
-    || normalized.startsWith("ff")
-    || normalized.startsWith("2001:db8:")
-    || normalized.startsWith("::ffff:")
-  );
+  return GLOBAL_UNICAST_IPV6.check(address, "ipv6")
+    && !SPECIAL_PURPOSE_IPV6.check(address, "ipv6");
 }
 
 export async function resolvePublicConnectAddress(
@@ -189,6 +229,16 @@ export async function readBoundedResponseBody(
     chunks.forEach((chunk) => chunk.fill(0));
     reader.releaseLock();
   }
+}
+
+export async function rejectRedirectResponse(response: Response): Promise<Response> {
+  if (!REDIRECT_STATUSES.has(response.status)) return response;
+  try {
+    await response.body?.cancel();
+  } catch {
+    // body cancel 실패가 fail-closed redirect 거부를 바꾸지 않게 한다.
+  }
+  throw new Error("SEORI_EGRESS_REDIRECT_REJECTED");
 }
 
 export async function createExactMtlsProxyClient(input: {
@@ -293,9 +343,12 @@ export async function createExactMtlsProxyClient(input: {
       ) throw new Error("SEORI_EGRESS_REQUEST_URL_REJECTED");
       const proxyInit = Object.assign({}, init ?? {}, {
         dispatcher,
-        redirect: "error" as const,
+        // manual은 redirect target으로 새 요청을 만들지 않는다. 아래에서 redirect
+        // status 자체도 반환하지 않고 안정적인 공개 오류로 fail-closed한다.
+        redirect: "manual" as const,
       });
-      return undiciFetch(request as never, proxyInit as never) as unknown as Promise<Response>;
+      const response = await undiciFetch(request as never, proxyInit as never) as unknown as Response;
+      return rejectRedirectResponse(response);
     }) as typeof globalThis.fetch,
     close: async () => {
       if (closed) return;

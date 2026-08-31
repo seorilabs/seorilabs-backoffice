@@ -12,7 +12,7 @@ source_sha="${BACKOFFICE_SOURCE_SHA:-}"
 confirmation="${SEORI_EGRESS_CANARY_CONFIRM_SHA:-}"
 namespace=auth-broker
 deployment=seori-auth-egress-proxy
-expected_log='{"state":"CANARY_OK","secretExposed":false,"positive":1,"rejected":4}'
+expected_log='{"state":"CANARY_OK","secretExposed":false,"positive":1,"rejected":5,"redirectRejected":1}'
 
 if [[ ! "$image" =~ ^.+@sha256:[0-9a-f]{64}$ ]] || [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "오류: immutable BACKOFFICE_IMAGE와 40자리 BACKOFFICE_SOURCE_SHA가 필요하다" >&2

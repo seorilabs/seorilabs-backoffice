@@ -210,7 +210,8 @@ durable ledger와 partial-failure fixture는 구현됐다. 남은 범위는 fake
 look-alike·redirect·DNS-rebinding 거부를 검증한 뒤
 `trustedGithubRuntimeCanaryApproved()`, `READY_PR_RUNTIME_OPERATIONAL`, replica를 별도 승인으로 여는 일이다.
 외부 HTTPS는 `k8s/seori-auth-egress-proxy.yaml`의 mTLS CONNECT proxy 한 곳으로만 나간다. 호출 workload에는 broad
-443 egress가 없고 proxy가 exact client SPIFFE ID, 고정 hostname, public DNS answer를 검증한다.
+443 egress가 없고 proxy가 exact client SPIFFE ID별 허용 hostname, public DNS answer와 IANA special-purpose 제외를
+검증한다. redirect는 target을 따라가지 않고 공개 오류로 fail-closed한다.
 그 전에는 P6와 `READY_PR` 운영 activation을 완료로 표시하지 않는다.
 
 ## Provider execution과 Auth Broker 경계
