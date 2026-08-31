@@ -144,6 +144,12 @@ export const LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyT
   },
 ];
 
+/** 일반 migration principal 대신 trusted operator가 설치하는 trigger 계약이다. */
+export const TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
+  ...FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
+  ...LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS,
+].sort((left, right) => left.name.localeCompare(right.name));
+
 /**
  * live DB에 반드시 존재하고 고정 in-cluster verifier가 관측하는 전체 계약이다.
  * migration SQL, restore rehearsal, verifier manifest와 digest가 모두 같아야 한다.

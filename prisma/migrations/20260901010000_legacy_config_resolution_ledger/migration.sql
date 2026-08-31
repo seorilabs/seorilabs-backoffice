@@ -56,13 +56,3 @@ ALTER TABLE `control_plane_shadow_parity_observation`
     FOREIGN KEY (`legacyConfigResolutionId`)
     REFERENCES `control_plane_legacy_config_resolution`(`id`)
     ON DELETE RESTRICT ON UPDATE RESTRICT;
-
--- 승인 원장은 새 revision INSERT만 허용한다. migration principal에 CREATE TRIGGER
--- 권한이 없으면 배포가 fail-closed한다.
-CREATE TRIGGER `control_plane_legacy_config_resolution_no_update`
-BEFORE UPDATE ON `control_plane_legacy_config_resolution`
-FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
-
-CREATE TRIGGER `control_plane_legacy_config_resolution_no_delete`
-BEFORE DELETE ON `control_plane_legacy_config_resolution`
-FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
