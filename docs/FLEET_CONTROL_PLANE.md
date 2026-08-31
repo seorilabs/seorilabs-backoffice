@@ -41,6 +41,8 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
+| `POST` | `/api/control-plane/store-assets` | internal workload가 PNG/JPEG 원본을 중앙 private object storage에 create-only 업로드하고 generation별 CRC32C·SHA-256 readback을 검증. objectKey/checksum만 반환 |
+| `POST` | `/api/platform/apps/{appId}/store-assets` | 동일 service/validator를 쓰는 세션 보호 Backoffice UI 경로. same-origin, 현재 DB role/AppOwner, `Idempotency-Key`, numeric repo binding을 모두 재검증 |
 | `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
 | `POST` | `/api/control-plane/config-revisions/discovery-draft` | `mode=DRAFT_ONLY`에서 revision 0/no-import 또는 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
 | `GET/POST` | `/api/control-plane/desired-state-backfill` | 기존 ACTIVE 앱과 비보관 PRODUCT_APP에 결합된 PAUSED/DEPRECATED 앱의 분류·입력 필요 요약 조회 / config가 없으면 exact discovery market `DRAFT`, valid ACTIVE config의 source만 바뀌었으면 동일 payload의 새 revision을 원자적으로 자동 활성화 |
@@ -115,6 +117,25 @@ ProjectBlueprint의 provisioner는 등록된 `shared/*` logical credential만 �
 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 값 또는 변경 및 모든 미정의 필드는
 fail-closed한다. compliance는 이 계약에서 `DRAFT`만 만들 수 있다. 이전 validator로 만들어진 DRAFT도
 activation 시 다시 검사한다.
+
+StoreAsset 원본은 caller가 `objectKey`나 checksum을 정하지 않는다. 서버가 실제 image bytes로 SHA-256을
+계산하고 `apps/{numericRepoId}/revisions/{nextRevision}/markets/{market|all}/locales/{locale|all}/...` 형태의
+deterministic key를 만든다. Google Cloud Storage 업로드는 `ifGenerationMatch=0`과 CRC32C 검증으로 기존
+객체를 덮어쓰지 않는다. 업로드 직후 exact generation을 다시 다운로드해 size, content type, 공개 custom
+metadata와 SHA-256을 모두 대조한 뒤에만 mutation ledger와 append-only audit를 완료한다. 완료된 idempotency
+replay도 object를 다시 읽어 현재 무결성을 확인한다. object bytes, 파일명, credential은 DB·audit·응답에
+저장하지 않는다. `CONTROL_PLANE_STORE_ASSET_BUCKET` 또는 ADC/workload identity가 없으면 upload만
+`STORE_ASSET_STORAGE_NOT_CONFIGURED`/`STORE_ASSET_STORAGE_UNAVAILABLE`로 fail-closed하며 기존 manifest 조회와
+ConfigRevision 기능은 계속 동작한다. route는 `Content-Length`를 신뢰하지 않고 request stream을 직접 계수해
+chunked/길이 미지정 요청도 multipart 전체 21 MiB에서 중단한다. UI route는 production `AUTH_URL`의 HTTPS
+origin과 실제 request URL·Origin이 모두 같아야 하며 `AUTH_URL` 미설정 시 fail-closed한다.
+
+upload 전에 mutation `PENDING` row에 deterministic object key와 checksum을 먼저 기록한다. 따라서 upload 뒤
+process/CAS 실패는 같은 idempotency key로 create-only 재시도할 수 있고, 동일 logical request의 `created` 값은
+object metadata의 request digest로 결정된다. 다만 ConfigRevision drift 또는 사용자가 draft를 저장하지 않아
+참조되지 않은 content-addressed object는 이 slice에서 즉시 삭제하지 않는다. web workload에 object delete
+권한을 주지 않으며, mutation ledger와 ConfigRevision reference를 대조하는 별도 GC가 검증되기 전에는 해당
+object가 남을 수 있다.
 
 ## ProjectBlueprint와 provider readback
 

@@ -425,6 +425,24 @@ Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확
 local client와 runtime을 모두 제공하지 않는다.
 client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
 
+### 중앙 StoreAsset object storage
+
+- `CONTROL_PLANE_STORE_ASSET_BUCKET`은 기존 Google Cloud Storage bucket의 공개 이름이다. 값이 없으면 upload
+  route만 fail-closed하며 bucket을 자동 생성하거나 다른 앱의 Firebase bucket을 추측하지 않는다.
+- Backoffice web workload는 정적 JSON key 대신 ADC/WIF로 해당 bucket의 object create/get 권한만 가진다.
+  bucket 생성, IAM 부여, lifecycle/versioning, uniform bucket-level access와 public access prevention 설정은
+  별도 인프라 승인 및 provider readback gate다.
+- 운영 활성화 전 canary PNG로 upload → generation readback → SHA-256 일치 → audit 공개 필드만 기록됨을
+  확인한다. object bytes, credential, 원본 파일명은 로그나 DB에 남기지 않는다.
+- Ingress upload 한도는 25 MiB이고 application은 chunked/Content-Length 미지정 요청을 포함한 multipart
+  전체를 21 MiB, image 원본을 20 MiB로 제한한다. PNG/JPEG 이외의 content는 store별 변환·검증
+  파이프라인에서 먼저 변환한 뒤 올린다.
+- production UI upload는 `AUTH_URL` HTTPS origin, 실제 request URL, `Origin`이 모두 일치해야 한다.
+  `AUTH_URL`이 없거나 Host만 바꾼 요청은 fail-closed한다.
+- ConfigRevision에 참조되지 않은 immutable object는 upload mutation ledger로 식별할 수 있지만 자동 GC는
+  아직 활성화하지 않는다. object delete 권한과 GC를 추가하기 전 ledger/reference dry-run 및 복구 검증을
+  별도 승인한다.
+
 ### 서리 재무 리포트
 
 종량제 비용은 매일 09:00 KST(`backoffice-finance-report` CronJob → `/api/admin/finance-report`)에
