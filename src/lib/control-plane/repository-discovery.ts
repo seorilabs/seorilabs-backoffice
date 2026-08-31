@@ -20,12 +20,12 @@ import type {
 } from "@/lib/control-plane/contracts";
 import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 
-// v10: GitHub에 등록된 exact default branch/ref를 source fact로 사용한다.
-// v9의 canonical preset이 없는 Godot repo ci/export_presets.<target>.cfg
-// fragment 탐지도 그대로 보존한다.
+// v11: Godot Xcode Cloud bootstrap project도 exact-source App Store BuildTarget으로
+// 탐지한다. v10의 GitHub default branch/ref source fact과 canonical preset이 없는
+// ci/export_presets.<target>.cfg fragment 탐지도 그대로 보존한다.
 // 탐지 의미론을 바꾸고도
 // version을 유지하면 hourly backfill이 같은 terminal run을 replay한다.
-export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v10";
+export const REPOSITORY_DISCOVERY_CONTRACT_VERSION = "repository-discovery/v11";
 export const REPOSITORY_REGISTRATION_SLO_MS = 5 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_TERMINAL_SLO_MS = 10 * 60 * 1_000;
 export const REPOSITORY_DISCOVERY_LEASE_MS = 90 * 1_000;
@@ -810,6 +810,27 @@ function parsePackageIds(texts: readonly string[], pattern: RegExp): string[] {
   return [...values].sort();
 }
 
+function parseXcodeSettingValues(texts: readonly string[], setting: string): string[] {
+  const values = new Set<string>();
+  const escaped = setting.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`\\b${escaped}\\s*=\\s*([^;]+);`, "g");
+  for (const text of texts) {
+    for (const match of text.matchAll(pattern)) {
+      const value = match[1]?.trim().replace(/^["']|["']$/g, "");
+      if (value) values.add(value);
+    }
+  }
+  return [...values].sort();
+}
+
+function xcodeProjectPath(projectFile: string): string {
+  return projectFile.slice(0, -"/project.pbxproj".length);
+}
+
+function xcodeSchemeName(schemePath: string): string {
+  return schemePath.slice(schemePath.lastIndexOf("/") + 1).replace(/\.xcscheme$/, "");
+}
+
 function parseGraniteAppNames(texts: readonly string[]): string[] {
   const values = new Set<string>();
   for (const text of texts) {
@@ -1381,24 +1402,56 @@ export async function discoverRepository(
   } else {
     const exportPaths = godotExportPresetPaths(candidate.workingDirectory, pathSet);
     const buildEnvPath = pathIn(candidate.workingDirectory, "build.env");
+    const xcodePrefixes = [
+      pathIn(candidate.workingDirectory, "ios/"),
+      pathIn(candidate.workingDirectory, "xcode-cloud/"),
+    ];
+    const xcodeProjectPaths = snapshot.paths.filter((path) => (
+      xcodePrefixes.some((prefix) => path.startsWith(prefix))
+      && /\.xcodeproj\/project\.pbxproj$/.test(path)
+    ));
+    const xcodeSchemePaths = snapshot.paths.filter((path) => (
+      xcodeProjectPaths.some((projectPath) => (
+        path.startsWith(`${xcodeProjectPath(projectPath)}/xcshareddata/xcschemes/`)
+      ))
+      && /\.xcscheme$/.test(path)
+    ));
     const godotBuildPaths = [
       ...exportPaths,
       ...(pathSet.has(buildEnvPath) ? [buildEnvPath] : []),
+      ...xcodeProjectPaths,
+      ...xcodeSchemePaths,
     ];
     buildSourcePaths.push(...godotBuildPaths);
     const buildReadError = await readPaths(godotBuildPaths);
     if (buildReadError) return needsInput(snapshot, buildReadError, candidates, sourceMetadata);
     const presets = exportPaths.flatMap((path) => parseGodotExportPresets(texts.get(path)!));
     const androidIds = [...new Set(presets.filter((preset) => preset.platform === "Android" && preset.packageId).map((preset) => preset.packageId!))];
-    const iosIds = [...new Set(presets.filter((preset) => preset.platform === "iOS" && preset.bundleId).map((preset) => preset.bundleId!))];
-    if (androidIds.length > 1 || iosIds.length > 1) {
+    const xcodeProjectTexts = xcodeProjectPaths.map((path) => texts.get(path)!);
+    const iosIds = [...new Set([
+      ...presets.filter((preset) => preset.platform === "iOS" && preset.bundleId).map((preset) => preset.bundleId!),
+      ...parseXcodeSettingValues(xcodeProjectTexts, "PRODUCT_BUNDLE_IDENTIFIER")
+        .filter((value) => PACKAGE_ID.test(value)),
+    ])].sort();
+    const appleTeamIds = parseXcodeSettingValues(xcodeProjectTexts, "DEVELOPMENT_TEAM")
+      .filter((value) => /^[A-Z0-9]{10}$/.test(value));
+    const schemeNames = [...new Set(xcodeSchemePaths.map(xcodeSchemeName))].sort();
+    if (
+      androidIds.length > 1
+      || iosIds.length > 1
+      || appleTeamIds.length > 1
+      || xcodeProjectPaths.length > 1
+      || schemeNames.length > 1
+    ) {
       return needsInput(snapshot, "BUILD_IDENTITY_AMBIGUOUS", candidates, sourceMetadata);
     }
     const buildEnv = pathSet.has(buildEnvPath) ? texts.get(buildEnvPath)! : "";
     const hasAndroidTarget = presets.some((preset) => preset.platform === "Android")
       || /^AAB_PATH=/m.test(buildEnv);
     const hasIosTarget = presets.some((preset) => preset.platform === "iOS")
-      || pathSet.has(pathIn(candidate.workingDirectory, "ios/ci_scripts/ci_post_clone.sh"));
+      || xcodeProjectPaths.length === 1
+      || pathSet.has(pathIn(candidate.workingDirectory, "ios/ci_scripts/ci_post_clone.sh"))
+      || pathSet.has(pathIn(candidate.workingDirectory, "xcode-cloud/ci_scripts/ci_post_clone.sh"));
     if (hasAndroidTarget) {
       buildTargets.push({
         targetKey: "android",
@@ -1410,13 +1463,23 @@ export async function discoverRepository(
       });
     }
     if (hasIosTarget) {
+      const projectPath = xcodeProjectPaths[0]
+        ? xcodeProjectPath(xcodeProjectPaths[0])
+        : null;
       buildTargets.push({
         targetKey: "ios",
         stack,
         market: "app-store",
         packageId: null,
         bundleId: iosIds[0] ?? null,
-        configuration: null,
+        configuration: projectPath ? {
+          delivery: projectPath.includes("/xcode-cloud/") || projectPath.startsWith("xcode-cloud/")
+            ? "xcode-cloud"
+            : "xcode",
+          projectPath,
+          ...(schemeNames[0] ? { scheme: schemeNames[0] } : {}),
+          ...(appleTeamIds[0] ? { appleTeamId: appleTeamIds[0] } : {}),
+        } : null,
       });
     }
   }

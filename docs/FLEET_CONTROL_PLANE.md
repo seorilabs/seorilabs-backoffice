@@ -50,7 +50,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함. 기간제 dependency audit 예외는 signed config의 `STATIC_CHECK` source가 application SHA와 같고 만료 전일 때만 manifest digest에 포함 |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={mainSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_profile={profile}&schema=workflow-bundle-v5-build[-canary]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-main discovery build binding을 모두 결합한 Android build-only readback. canary는 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR만 허용. 기간제 dependency audit 예외는 `ANDROID_BUILD_ONLY` source가 exact application SHA와 같고 만료 전일 때만 포함 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sourceSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_target=android&build_profile={profile}&schema=workflow-bundle-v5-build[-canary|-release]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-source discovery build binding을 결합한 Android build-only readback. canary는 `plan_identity`와 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR을 요구한다. release는 `release_ref=refs/tags/vX.Y.Z`와 `release_tag=vX.Y.Z`, GitHub App의 peeled tag commit readback, APPROVED bundle을 모두 요구한다. 기간제 dependency audit 예외는 `ANDROID_BUILD_ONLY` source가 exact application SHA와 같고 만료 전일 때만 포함 |
 | `POST` | `/api/control-plane/workflow-bundles` | exact successful `.github` candidate run/artifact 또는 기존 candidate와 canonical Ed25519 서명을 검증해 불변 `CANDIDATE`/`APPROVED` registry record를 멱등 import. secret/private signing key를 받거나 반환하지 않음 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
@@ -84,7 +84,7 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 기존 ACTIVE snapshot도 제공하지 않는다.
 
 세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, GitHub에 등록된 exact default branch/ref, current
-`repository-discovery/v10`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+`repository-discovery/v11`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
@@ -662,7 +662,7 @@ hourly `backoffice-desired-state-backfill`은 기존 `App.status=ACTIVE` row에 
 repoId가 없는 기존 ACTIVE 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v10`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v11`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
@@ -723,8 +723,11 @@ admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler
   사람이 검토 가능한 새 DRAFT에 포함한다. 조직/folder/billing, 법적 선언, object storage checksum이나
   provider 상태를 App/Discovery 필드에서 추측하지 않는다.
 - `ProviderObservation`과 `ExternalBinding`은 provider GET/readback producer가 실행된 경우에만 생긴다.
-  GitHub installation readback은 위 hourly backfill이 공급하지만 GCP/Firebase/Workspace/마켓 readback은
-  각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
+  GitHub installation readback은 위 hourly backfill이 공급한다. Xcode Cloud hourly sync는 exact-source
+  App Store `BuildTarget`이 준비된 allowlist 앱에 한해 App Store Connect app과 Xcode Cloud
+  product/workflow/repository의 공개 identity를 읽고 observation/binding을 함께 갱신한다. 권한·네트워크 오류는
+  리소스 부재로 합성하지 않고 `UNKNOWN`으로 남긴다. GCP/Firebase/Workspace와 아직 producer가 연결되지 않은
+  마켓 readback은 각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
 - `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin을
   모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로 capability를 추측하지 않는다.
 - `ReleaseCandidate`와 `ReleaseGateObservation`은 ACTIVE revision, exact source, artifact checksum,

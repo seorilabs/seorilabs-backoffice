@@ -1,4 +1,7 @@
-import { buildDeployAllAppStoreInputs } from "@/lib/core/deploy-all-inputs";
+import {
+  buildDeployAllAppStoreInputs,
+  buildDeployAllGooglePlayInputs,
+} from "@/lib/core/deploy-all-inputs";
 import { MARKET_WORKFLOW, type DeployTarget } from "@/lib/core/deploy-targets";
 import { buildGooglePlayUploadInputs } from "@/lib/core/gplay-inputs";
 import {
@@ -212,8 +215,11 @@ export async function planMarketDeploy(opts: {
     if (opts.iosViaXcodeCloud && opts.target === "ALL") {
       Object.assign(inputs, buildDeployAllAppStoreInputs(declared.inputNames));
     }
+    if (opts.target === "ALL") {
+      Object.assign(inputs, buildDeployAllGooglePlayInputs(declared.inputNames));
+    }
     // PLAY 단독: 백오피스/Discord 에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
-    // 배포까지 진행한다(ALL 의 google-play 잡은 이미 upload=true 로 하드코딩되어 별도 처리 불필요).
+    // 배포까지 진행한다. ALL은 위에서 deploy-all이 선언한 prefixed input을 따로 채운다.
     if (opts.target === "PLAY") {
       Object.assign(
         inputs,
