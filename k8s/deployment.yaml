@@ -73,6 +73,16 @@ spec:
               value: seorilabs
             - name: PLATFORM_GITHUB_REPOSITORY_ID
               value: "1317999271"
+            # .github repo-contract의 Fleet 표준 label catalog를 immutable source/blob/digest로 읽는다.
+            # 값은 공개 trust root이며 label 정의를 Backoffice에 복사하지 않는다.
+            - name: FLEET_STANDARD_LABELS_CONTRACT_REPOSITORY_ID
+              value: "1241442018"
+            - name: FLEET_STANDARD_LABELS_CONTRACT_SOURCE_SHA
+              value: "0b6346713a64f6309fa32d1d3e09747c9db4ccb4"
+            - name: FLEET_STANDARD_LABELS_CATALOG_BLOB_SHA
+              value: "cfc0c5f52c87e1808264224cb55666896b51336c"
+            - name: FLEET_STANDARD_LABELS_CATALOG_DIGEST
+              value: "sha256:0968c206c075b06b54a47ca9dcf7be48f5f0e02ff7988d3fd6b029b8bcf66c22"
             - name: ALLOWLIST_LOGINS
               value: "magicsih"
             - name: FEATURE_GEMINI_ENABLED
@@ -185,6 +195,26 @@ spec:
             # signed readback canary 확인 전에는 code gate까지 READY_PR을 fail-closed한다.
             - name: AGENT_TRUSTED_ADAPTER_DEPLOYED
               value: "false"
+            # 후보 executor는 별도 suspended CronJob과 App permission canary를 통과한
+            # 뒤에만 켠다. generic READY_PR runtime gate와 서로 승격시키지 않는다.
+            - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED
+              value: "false"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
+              value: "seori-auth:workflow-bundle-candidate-adapter"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
+              value: "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor"
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
+                  optional: true
+            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
+                  optional: true
             - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -288,6 +318,10 @@ spec:
             # 담당제 통합 운영 채널 — confirm 카드 버튼 allowlist 검증에 필요.
             - name: DISCORD_CHANNEL_APP_OPS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
+            # GitHub 이슈 알림 전용 채널. enqueue 가 이 값의 유무로 목적지를 정하므로
+            # 웹 Pod 에도 있어야 한다. 미설정이면 #backoffice 로 폴백한다.
+            - name: DISCORD_CHANNEL_GITHUB_ISSUES_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
             - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
             - name: DISCORD_ROLE_OPERATOR_ID

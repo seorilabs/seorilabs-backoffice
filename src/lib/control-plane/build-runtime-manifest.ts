@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 
-import type { AndroidBuildBindingObservation } from "@/lib/control-plane/contracts";
+import type {
+  AndroidBuildBindingObservation,
+  DependencyAuditException,
+} from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
@@ -14,7 +17,8 @@ export class BuildRuntimeManifestError extends Error {
 }
 
 export interface BuildRuntimeManifestInput {
-  mode: "CANDIDATE" | "APPROVED";
+  mode: "CANDIDATE" | "APPROVED" | "RELEASE";
+  workflowBundleApprovalState: "CANDIDATE" | "APPROVED";
   lifecycleState: "ACTIVE" | "PAUSED" | "DEPRECATED";
   repositoryId: string;
   fullName: string;
@@ -33,6 +37,7 @@ export interface BuildRuntimeManifestInput {
   workflowBundleSourceSha: string;
   workflowBundlePayloadDigest: string;
   buildBinding: AndroidBuildBindingObservation;
+  dependencyAuditException?: DependencyAuditException;
 }
 
 function sha256Prefix(value: string): string {
@@ -46,7 +51,12 @@ function signatureDigest(value: string): string {
 }
 
 export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
-  if (!input.sourceRef.startsWith("refs/heads/")) {
+  if (
+    !input.sourceRef.startsWith("refs/heads/")
+    && !/^refs\/tags\/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(
+      input.sourceRef,
+    )
+  ) {
     throw new BuildRuntimeManifestError("INVALID_SOURCE_REF");
   }
   if (
@@ -79,10 +89,13 @@ export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
     workflowBundle: {
       sourceSha: input.workflowBundleSourceSha,
       payloadDigest: input.workflowBundlePayloadDigest,
-      approvalState: input.mode,
+      approvalState: input.workflowBundleApprovalState,
       buildProfiles: ["react-native-android", "godot-android"],
     },
     buildBinding: input.buildBinding,
+    ...(input.dependencyAuditException
+      ? { dependencyAuditException: input.dependencyAuditException }
+      : {}),
   };
   return {
     schemaVersion: 1 as const,

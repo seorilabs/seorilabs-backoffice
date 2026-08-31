@@ -11,7 +11,10 @@ import {
   desiredStateBackfillRequestHash,
   type DesiredStateCandidate,
 } from "@/lib/control-plane/desired-state-backfill";
-import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
+import {
+  configRevisionPayloadSchema,
+  desiredStateBackfillSchema,
+} from "@/lib/control-plane/contracts";
 import { PROVIDER_ADAPTER_IDS } from "@/lib/control-plane/provider-adapters";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 import { ControlPlaneError } from "@/lib/control-plane/service";
@@ -40,6 +43,7 @@ function candidate(overrides: Partial<DesiredStateCandidate> = {}): DesiredState
     observation: {
       id: "observation-1",
       sourceSha: SHA,
+      sourceRef: "refs/heads/main",
       payloadHash: "b".repeat(64),
       observedAt: new Date("2026-08-29T00:00:00.000Z"),
     },
@@ -125,16 +129,86 @@ test("확인된 build target만 market DRAFT로 만들고 사람/provider 필드
   assert.equal("assets" in result.payload, false);
 });
 
-test("기존 ACTIVE/DRAFT가 있으면 새 revision 대신 멱등 readback을 반환한다", () => {
+test("기존 ACTIVE/DRAFT는 source 안전성 재평가 대상으로 보낸다", () => {
   const result = assessDesiredStateCandidate(candidate({
-    configuredRevision: { id: "revision-1", revision: 3, status: "DRAFT" },
+    configuredRevision: {
+      id: "revision-1",
+      revision: 3,
+      status: "DRAFT",
+      sourceObservation: null,
+    },
   }));
   assert.deepEqual(result, {
-    outcome: "ALREADY_CONFIGURED",
+    outcome: "SOURCE_RECONCILE",
     revisionId: "revision-1",
     revision: 3,
     revisionStatus: "DRAFT",
   });
+});
+
+test("ACTIVE revision은 semantic source가 current일 때만 이미 설정됨으로 판정한다", () => {
+  const current = candidate();
+  const configuredRevision = {
+    id: "revision-1",
+    revision: 3,
+    status: "ACTIVE",
+    sourceObservation: {
+      appId: current.appId,
+      sourceSha: current.observation!.sourceSha,
+      sourceRef: current.observation!.sourceRef,
+      payloadHash: current.observation!.payloadHash,
+    },
+  };
+  assert.equal(assessDesiredStateCandidate(candidate({ configuredRevision })).outcome,
+    "ALREADY_CONFIGURED");
+  assert.equal(assessDesiredStateCandidate(candidate({
+    configuredRevision: {
+      ...configuredRevision,
+      sourceObservation: {
+        ...configuredRevision.sourceObservation,
+        sourceSha: "c".repeat(40),
+      },
+    },
+  })).outcome, "SOURCE_RECONCILE");
+});
+
+test("PAUSED와 DEPRECATED PRODUCT_APP도 중앙 DRAFT와 current config 판정에서 누락하지 않는다", () => {
+  const current = candidate();
+  const configuredRevision = {
+    id: "revision-lifecycle",
+    revision: 4,
+    status: "ACTIVE",
+    sourceObservation: {
+      appId: current.appId,
+      sourceSha: current.observation!.sourceSha,
+      sourceRef: current.observation!.sourceRef,
+      payloadHash: current.observation!.payloadHash,
+    },
+  };
+  for (const status of ["PAUSED", "DEPRECATED"] as const) {
+    assert.equal(assessDesiredStateCandidate(candidate({ status })).outcome, "READY", status);
+    assert.deepEqual(
+      assessDesiredStateCandidate(candidate({ status, configuredRevision })),
+      {
+        outcome: "ALREADY_CONFIGURED",
+        revisionId: configuredRevision.id,
+        revision: configuredRevision.revision,
+        revisionStatus: configuredRevision.status,
+      },
+      status,
+    );
+  }
+});
+
+test("desired-state API는 safe source rebase v2 요청 계약만 받는다", () => {
+  assert.equal(desiredStateBackfillSchema.safeParse({
+    schemaVersion: 2,
+    mode: "DRAFT_AND_SAFE_SOURCE_REBASE",
+  }).success, true);
+  assert.equal(desiredStateBackfillSchema.safeParse({
+    schemaVersion: 1,
+    mode: "DRAFT_ONLY",
+  }).success, false);
 });
 
 test("배포 catch-up은 동일 SHA만 같은 key/hash로 replay하고 같은 UTC hour의 다른 SHA를 분리한다", () => {
@@ -243,10 +317,10 @@ test("stored replay는 actor, trigger, source SHA와 전체 request hash가 모�
   }
 });
 
-test("backfill 실행 경계는 DRAFT 전용이고 activation/provider mutation을 호출하지 않는다", () => {
+test("backfill은 source-only 안전 activation만 호출하고 provider mutation은 호출하지 않는다", () => {
   const source = readFileSync(join(process.cwd(), "src/lib/control-plane/desired-state-backfill.ts"), "utf8");
   assert.match(source, /createDraftRevisionInTransaction/);
-  assert.doesNotMatch(source, /activateConfigRevision\s*\(/);
+  assert.match(source, /autoRebaseCurrentActiveConfigSource\s*\(/);
   assert.doesNotMatch(source, /providerExecution|octokit|pulls\.create|repos\.update/);
   assert.match(source, /sourceObservationId/);
   assert.match(source, /FOR UPDATE/);
@@ -286,7 +360,7 @@ test("migration과 API가 additive provenance, durable idempotency, scheduler �
     sourceBindingMigration,
     /\b(?:DROP|MODIFY|CHANGE|DELETE\s+FROM|UPDATE\s+)\b/i,
   );
-  assert.equal(DESIRED_STATE_BACKFILL_CONTRACT_VERSION, "desired-state-draft-backfill/v2");
+  assert.equal(DESIRED_STATE_BACKFILL_CONTRACT_VERSION, "desired-state-safe-source-rebase/v3");
 
   const api = readFileSync(join(
     process.cwd(),

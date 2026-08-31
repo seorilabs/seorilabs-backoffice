@@ -3,10 +3,19 @@ import { Prisma } from "@prisma/client";
 import {
   agentExecutionPolicy,
   agentRepositorySingletonScope,
+  eligibleForAutopilot,
   MANAGED_WORKER_TEMPLATE_KEYS,
   parseManagedWorkerPolicy,
+  SOURCE_REMEDIATION_TEMPLATE_KEY,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
   type AutomationPolicy,
+  type SourceRemediationPolicy,
 } from "@/lib/control-plane/automation-catalog";
+import {
+  issueEligibleForSourceRemediation,
+  templateRepositoryAutomationEligible,
+} from "@/lib/control-plane/source-remediation";
 import {
   agentWorkerSessionStateError,
   trustedMutationDisposition,
@@ -14,8 +23,10 @@ import {
 import { prisma } from "@/lib/prisma";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
-import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
-import { trustedMutationAdapterConfigured } from "@/lib/control-plane/security";
+import {
+  trustedMutationAdapterConfigured,
+  workflowBundleCandidateExecutorConfigured,
+} from "@/lib/control-plane/security";
 
 class RepoScopeBusyError extends Error {}
 
@@ -83,20 +94,7 @@ export function agentReadbackRequestHash(input: {
   } as JsonValue)).digest("hex");
 }
 
-export function eligibleForAutopilot(input: {
-  issueNumber?: number | null;
-  issueState?: string | null;
-  labels: unknown;
-}): boolean {
-  if (input.issueNumber && input.issueState?.toUpperCase() !== "OPEN") return false;
-  const labels = Array.isArray(input.labels)
-    ? input.labels.filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase())
-    : [];
-  if (input.issueNumber && !labels.includes("autopilot")) return false;
-  return !labels.some((label) =>
-    label === "blocked" || label === "no-autopilot" || label.startsWith("approval:"),
-  );
-}
+export { eligibleForAutopilot };
 
 export async function releaseRepoGuard(
   tx: Prisma.TransactionClient,
@@ -288,7 +286,7 @@ async function replayClaim(input: {
   requestId: string;
   workerId: string;
   runtimeBindingDigest: string;
-  agentKind: "CODEX" | "CLAUDE";
+  agentKind: "CODEX" | "CLAUDE" | null;
   now: Date;
 }): Promise<ClaimedAgentRun | null> {
   const event = await prisma.agentRunEvent.findUnique({
@@ -375,6 +373,7 @@ async function tryClaimRun(input: {
   leaseSeconds: number;
   now: Date;
   idempotencyKey: string;
+  trustedMutationRuntimeAvailable?: boolean;
   retryAttempt?: number;
 }): Promise<ClaimedAgentRun | null> {
   try {
@@ -392,7 +391,10 @@ async function tryClaimRun(input: {
       if (!policy || (!readbackClaim && (!run.occurrence.definition.enabled || run.occurrence.definition.cancelledAt))) return null;
       const resumeMode = readbackClaim ? "READBACK_FIRST" as const : "START" as const;
       const executionPolicy = agentExecutionPolicy(policy, resumeMode);
-      if (executionPolicy.repositorySingleton && !trustedMutationAdapterConfigured()) return null;
+      if (
+        executionPolicy.repositorySingleton
+        && !(input.trustedMutationRuntimeAvailable ?? trustedMutationAdapterConfigured())
+      ) return null;
       const registration = await tx.repositoryRegistration.findUnique({
         where: { repoFullName: run.repoFullName },
         select: {
@@ -405,6 +407,8 @@ async function tryClaimRun(input: {
           classification: true,
           lastDefaultPushSha: true,
           lastReconciledSha: true,
+          reconcileGeneration: true,
+          lastDiscoveryReason: true,
         },
       });
       const priorSession = readbackClaim
@@ -413,7 +417,22 @@ async function tryClaimRun(input: {
           orderBy: { generation: "desc" },
         })
         : null;
-      if (!readbackClaim && !repositoryAutomationEligible(registration)) return null;
+      // source-remediation은 일반 MANAGED guard를 우회하는 유일한 template이다. registration이
+      // MANAGED가 아니어도, 정의 생성 시 잠근 generation/source SHA/reason이 지금도 정확히 같을
+      // 때만 통과한다 — 다른 모든 template은 기존 repositoryAutomationEligible 그대로다.
+      // 같은 판정을 수동 retry(retryAgentRun)와 공유해 두 경로가 어긋나지 않게 한다.
+      const isSourceRemediation = run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY;
+      if (!readbackClaim && !templateRepositoryAutomationEligible({
+        template: run.occurrence.definition.template,
+        configuration: run.occurrence.definition.configuration,
+        registration,
+      })) return null;
+      if (!readbackClaim && isSourceRemediation) {
+        const remediationApp = run.appId
+          ? await tx.app.findUnique({ where: { id: run.appId }, select: { status: true } })
+          : null;
+        if (!remediationApp || remediationApp.status !== "ACTIVE") return null;
+      }
       if (readbackClaim && !priorSession) return null;
       const repoId = priorSession?.repoId ?? registration?.repoId;
       const sourceSha = priorSession?.sourceSha ?? registration?.lastDefaultPushSha;
@@ -444,13 +463,26 @@ async function tryClaimRun(input: {
       if (!readbackClaim && run.issueNumber) {
         const issue = await tx.issueMirror.findUnique({
           where: { repoFullName_number: { repoFullName: run.repoFullName, number: run.issueNumber } },
-          select: { number: true, state: true, labels: true },
+          select: {
+            number: true,
+            state: true,
+            labels: true,
+            title: true,
+            priority: true,
+            isAutopilot: true,
+            isBlocked: true,
+          },
         });
         if (!issue || !eligibleForAutopilot({
           issueNumber: issue.number,
           issueState: issue.state,
           labels: issue.labels,
         })) return null;
+        // 임의 사용자 편집으로 issue 제목/라벨 scope가 정의 생성 시점과 달라졌으면
+        // GitHub readback 재검증에서 fail-closed한다.
+        if (isSourceRemediation && !issueEligibleForSourceRemediation(issue, policy as SourceRemediationPolicy)) {
+          return null;
+        }
       }
       if (!readbackClaim && executionPolicy.repositorySingleton) {
         const openAutopilotPr = await tx.pullRequestMirror.findFirst({
@@ -598,6 +630,55 @@ export async function claimAgentRun(input: {
     (runId) => tryClaimRun({ ...input, runId, now }),
   );
   return claimed ?? replayClaim({ ...input, requestId: input.idempotencyKey, now });
+}
+
+/**
+ * 고정 candidate executor만 agentKind=null 전용 definition을 claim한다. 일반
+ * Codex/Claude worker query에는 이 queue가 섞이지 않는다.
+ */
+export async function claimWorkflowBundleCandidateRun(input: {
+  workerId: typeof WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL;
+  runtimeBindingDigest: string;
+  leaseSeconds: number;
+  idempotencyKey: string;
+  runId?: string;
+  now?: Date;
+}): Promise<ClaimedAgentRun | null> {
+  if (!workflowBundleCandidateExecutorConfigured()) return null;
+  const now = input.now ?? new Date();
+  const replay = await replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
+  if (replay) return replay;
+  await requeueExpiredLeases(now);
+  const candidates = await prisma.agentRun.findMany({
+    where: {
+      ...(input.runId ? { id: input.runId } : {}),
+      OR: [
+        { status: "PENDING" },
+        { status: "FAILED", readbackRequestedAt: { not: null } },
+      ],
+      eligibleAt: { lte: now },
+      occurrence: {
+        definition: {
+          template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
+          agentKind: null,
+          configuration: { not: Prisma.DbNull },
+        },
+      },
+    },
+    select: { id: true },
+    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+    take: 10,
+  });
+  const claimed = await firstSuccessfulClaim(
+    candidates.map(({ id }) => id),
+    (runId) => tryClaimRun({
+      ...input,
+      runId,
+      now,
+      trustedMutationRuntimeAvailable: true,
+    }),
+  );
+  return claimed ?? replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
 }
 
 export async function heartbeatAgentRun(input: {
@@ -1069,6 +1150,7 @@ export async function resolveAgentRunReadback(input: {
         sessionId: session.id,
         currentGeneration: session.generation,
         readbackResolution: true,
+        readbackResolutionAction: input.resolution,
         result: input.result,
       });
       if (!policyError && mutation.error) policyError = mutation.error;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { DependencyAuditException } from "@/lib/control-plane/contracts";
 import type { GitHubActionsBuildManifestIdentity } from "@/lib/control-plane/github-actions-oidc";
 import { canonicalJson, jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
@@ -10,9 +11,37 @@ import {
 
 const SIGNING_KEY = "unit-test-build-snapshot-signing-key";
 const REPOSITORY_ID = "1250442131";
-const SOURCE_SHA = "a".repeat(40);
+const SOURCE_SHA = "376c31350558c3ac4ed88907c4a35b0e443b5cd7";
+const STATIC_SOURCE_SHA = "3d8c7f96eb6bb9ef47b3d5485cb5faf1408373a2";
 const EVENT_SHA = "b".repeat(40);
 const BUNDLE_SHA = "c".repeat(40);
+
+function dependencyAuditException(): DependencyAuditException {
+  return {
+    schemaVersion: 1 as const,
+    repositoryId: "1250442131",
+    fullName: "seorilabs/happy-farm",
+    bindings: [
+      {
+        actionClass: "STATIC_CHECK" as const,
+        sourceSha: STATIC_SOURCE_SHA,
+        lockfileSha256: "sha256:bb7c039ab9bb3b0deb3755e124a2f248f44b09c984cc12e1a5450686e18bd3c5",
+      },
+      {
+        actionClass: "ANDROID_BUILD_ONLY" as const,
+        sourceSha: SOURCE_SHA,
+        lockfileSha256: "sha256:bb0676484da96a39896ceefa3f74b047eab4705dc3f81c87a31ffb88fdd0b1a8",
+      },
+    ],
+    expiresAt: "2026-09-13T00:00:00Z",
+    reason: "공식 패치 대기 중인 build-time dependency advisory 3건",
+    advisories: [
+      { ghsa: "GHSA-2p57-rm9w-gvfp", module: "ip", severity: "high" as const, versions: ["1.1.9"] },
+      { ghsa: "GHSA-5p2g-fcmc-qvqq", module: "image-size", severity: "high" as const, versions: ["0.6.3", "1.2.1"] },
+      { ghsa: "GHSA-w3rx-r6r6-pgpr", module: "image-size", severity: "high" as const, versions: ["0.6.3", "1.2.1"] },
+    ],
+  };
+}
 
 function sha256(value: JsonValue): string {
   return `sha256:${jsonDigest(value)}`;
@@ -98,6 +127,8 @@ function identity(
     runAttempt: "1",
     eventName: "pull_request",
     eventRef: "refs/pull/91/merge",
+    releaseRef: null,
+    releaseTag: null,
     defaultBranch: "main",
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",
@@ -112,6 +143,8 @@ function client(overrides: {
   buildBindings?: unknown;
   unsignedConfigDigest?: string;
   defaultBranch?: string;
+  dependencyAuditException?: ReturnType<typeof dependencyAuditException>;
+  unsignedDependencyAuditException?: ReturnType<typeof dependencyAuditException>;
 } = {}) {
   const defaultBranch = overrides.defaultBranch ?? "main";
   const payload = {
@@ -122,12 +155,23 @@ function client(overrides: {
       ...(overrides.configDigest === null
         ? {}
         : { workflowBundleDigest: overrides.configDigest ?? bundleDigest }),
+      ...(overrides.dependencyAuditException
+        ? { dependencyAuditException: overrides.dependencyAuditException }
+        : {}),
     },
   };
-  const storedPayload = overrides.unsignedConfigDigest
+  const storedPayload = overrides.unsignedConfigDigest || overrides.unsignedDependencyAuditException
     ? {
         ...payload,
-        build: { ...payload.build, workflowBundleDigest: overrides.unsignedConfigDigest },
+        build: {
+          ...payload.build,
+          ...(overrides.unsignedConfigDigest
+            ? { workflowBundleDigest: overrides.unsignedConfigDigest }
+            : {}),
+          ...(overrides.unsignedDependencyAuditException
+            ? { dependencyAuditException: overrides.unsignedDependencyAuditException }
+            : {}),
+        },
       }
     : payload;
   const snapshot = {
@@ -238,11 +282,12 @@ function client(overrides: {
   };
 }
 
-const input = (value = identity()) => ({
+const input = (value = identity(), now = new Date("2026-08-30T00:00:00Z")) => ({
   identity: value,
   signingKey: SIGNING_KEY,
   snapshotSignatureKeyId: "control-plane-snapshot-v1",
   snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+  now,
 });
 
 test("build canary resolver는 ACTIVE config, durable artifact registry와 별도 root fact를 결합한다", async () => {
@@ -252,6 +297,7 @@ test("build canary resolver는 ACTIVE config, durable artifact registry와 별�
   assert.equal(result.applicationSourceSha, SOURCE_SHA);
   assert.equal(result.eventSourceSha, EVENT_SHA);
   assert.equal(result.manifest.workflowBundle.payloadDigest, bundleDigest);
+  assert.equal("dependencyAuditException" in result.manifest, false);
   assert.deepEqual(result.manifest.buildBinding, {
     target: "android",
     buildProfile: "react-native-android",
@@ -261,6 +307,46 @@ test("build canary resolver는 ACTIVE config, durable artifact registry와 별�
     scriptPath: "scripts/build-android.sh",
     artifactKind: "android-aab",
   });
+});
+
+test("build-only runtime은 signed snapshot의 exact base-source 예외를 digest에 포함한다", async () => {
+  const exception = dependencyAuditException();
+  const result = await resolveBuildRuntimeManifest(
+    input(),
+    client({ dependencyAuditException: exception }) as never,
+  );
+  assert.deepEqual(result.manifest.dependencyAuditException, exception);
+  assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+});
+
+test("build-only dependency audit 예외는 source, expiry와 clock drift를 fail-closed한다", async () => {
+  const exception = dependencyAuditException();
+  const cases = [
+    {
+      identity: identity({ applicationSourceSha: "f".repeat(40) }),
+      now: new Date("2026-08-30T00:00:00Z"),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+    },
+    {
+      identity: identity(),
+      now: new Date("2026-09-13T00:00:00Z"),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED",
+    },
+    {
+      identity: identity(),
+      now: new Date(Number.NaN),
+      code: "DEPENDENCY_AUDIT_EXCEPTION_CLOCK_INVALID",
+    },
+  ];
+  for (const value of cases) {
+    await assert.rejects(
+      () => resolveBuildRuntimeManifest(
+        input(value.identity, value.now),
+        client({ dependencyAuditException: exception }) as never,
+      ),
+      (error) => error instanceof ControlPlaneError && error.code === value.code,
+    );
+  }
 });
 
 test("build resolver는 registered non-main default branch/ref를 그대로 반환한다", async () => {
@@ -302,6 +388,16 @@ test("서명 snapshot 밖에서 바뀐 config binding은 registry가 있어도 �
     () => resolveBuildRuntimeManifest(
       input(),
       client({ unsignedConfigDigest: `sha256:${"f".repeat(64)}` }) as never,
+    ),
+    (error) => error instanceof ControlPlaneError && error.code === "INVALID_CONFIG_SIGNATURE",
+  );
+});
+
+test("signed snapshot 밖에서 추가한 dependency audit 예외는 manifest에 포함하지 않는다", async () => {
+  await assert.rejects(
+    () => resolveBuildRuntimeManifest(
+      input(),
+      client({ unsignedDependencyAuditException: dependencyAuditException() }) as never,
     ),
     (error) => error instanceof ControlPlaneError && error.code === "INVALID_CONFIG_SIGNATURE",
   );

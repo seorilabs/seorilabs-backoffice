@@ -1,0 +1,212 @@
+# 20260830050000_auth_broker_journal_checkpoint가 두 audit trigger에서만 멈춘 경우의
+# trusted-operator one-shot 복구다. 전역 MySQL 설정이나 app user 권한은 바꾸지 않는다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-auth-broker-journal-triggers-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: auth-broker-journal-trigger-recovery
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/migration: "20260830050000_auth_broker_journal_checkpoint"
+    seorilabs.dev/migration-sha256: "3f81cb1f28ad4d2056ccda52be84a52772307f78151c32fe2a73aa8e30d8d3c5"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 2592000
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: auth-broker-journal-trigger-recovery
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: install
+          image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -c 0
+              umask 077
+              cnf=/tmp/root.cnf
+              trap 'rm -f "$cnf"' EXIT INT TERM
+              printf '[client]\nuser=root\npassword=%s\nhost=mysql.data.svc.cluster.local\n' \
+                "$(< /run/secrets/mysql-root-password)" > "$cnf"
+              q() {
+                mysql --defaults-extra-file="$cnf" --batch --skip-column-names \
+                  --connect-timeout=5 -e "$1"
+              }
+
+              history_table="$(q "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='backoffice' AND TABLE_NAME='_prisma_migrations'")"
+              test "$history_table" = "1"
+              history_state="$(q "SELECT CONCAT(
+                COUNT(*), ':',
+                SUM(checksum='3f81cb1f28ad4d2056ccda52be84a52772307f78151c32fe2a73aa8e30d8d3c5'), ':',
+                SUM(finished_at IS NULL AND rolled_back_at IS NULL), ':',
+                SUM(finished_at IS NOT NULL AND rolled_back_at IS NULL), ':',
+                SUM(rolled_back_at IS NOT NULL), ':',
+                SUM(applied_steps_count=0))
+                FROM backoffice._prisma_migrations
+                WHERE migration_name='20260830050000_auth_broker_journal_checkpoint'")"
+              test "$history_state" = "1:1:1:0:0:1"
+
+              tables="$(q "SELECT COUNT(*) FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND TABLE_NAME IN (
+                    'control_plane_auth_broker_journal_checkpoint',
+                    'control_plane_auth_broker_journal_checkpoint_event'
+                  )")"
+              test "$tables" = "2"
+              exact_tables="$(q "SELECT COUNT(*) FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND ENGINE='InnoDB'
+                  AND TABLE_COLLATION='utf8mb4_unicode_ci'
+                  AND TABLE_NAME IN (
+                    'control_plane_auth_broker_journal_checkpoint',
+                    'control_plane_auth_broker_journal_checkpoint_event'
+                  )")"
+              test "$exact_tables" = "2"
+              columns="$(q "SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND TABLE_NAME IN (
+                    'control_plane_auth_broker_journal_checkpoint',
+                    'control_plane_auth_broker_journal_checkpoint_event'
+                  )")"
+              test "$columns" = "21"
+              exact_columns="$(q "SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA='backoffice'
+                  AND (
+                    (TABLE_NAME='control_plane_auth_broker_journal_checkpoint' AND (
+                      (COLUMN_NAME='id' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='journalId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='generation' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='sequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='checkpointDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='updatedBy' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='createdAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='updatedAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO')
+                    )) OR
+                    (TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event' AND (
+                      (COLUMN_NAME='id' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='checkpointId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='journalId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='requestId' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='type' AND COLUMN_TYPE='varchar(16)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromGeneration' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toGeneration' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromSequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toSequence' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='fromDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='YES') OR
+                      (COLUMN_NAME='toDigest' AND COLUMN_TYPE='char(64)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='actor' AND COLUMN_TYPE='varchar(191)' AND IS_NULLABLE='NO') OR
+                      (COLUMN_NAME='createdAt' AND COLUMN_TYPE='datetime(3)' AND IS_NULLABLE='NO')
+                    ))
+                  )")"
+              test "$exact_columns" = "21"
+              foreign_keys="$(q "SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS
+                WHERE CONSTRAINT_SCHEMA='backoffice'
+                  AND TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event'")"
+              test "$foreign_keys" = "1"
+              exact_foreign_keys="$(q "SELECT COUNT(*)
+                FROM information_schema.KEY_COLUMN_USAGE k
+                JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+                  ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA
+                  AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME
+                  AND r.TABLE_NAME=k.TABLE_NAME
+                WHERE k.CONSTRAINT_SCHEMA='backoffice'
+                  AND k.TABLE_NAME='control_plane_auth_broker_journal_checkpoint_event'
+                  AND k.CONSTRAINT_NAME='control_plane_auth_broker_journal_checkpoint_event_checkpoi_fkey'
+                  AND k.COLUMN_NAME='checkpointId'
+                  AND k.REFERENCED_TABLE_NAME='control_plane_auth_broker_journal_checkpoint'
+                  AND k.REFERENCED_COLUMN_NAME='id'
+                  AND r.UPDATE_RULE='RESTRICT'
+                  AND r.DELETE_RULE='RESTRICT'")"
+              test "$exact_foreign_keys" = "1"
+              checkpoints="$(q "SELECT COUNT(*) FROM backoffice.control_plane_auth_broker_journal_checkpoint")"
+              events="$(q "SELECT COUNT(*) FROM backoffice.control_plane_auth_broker_journal_checkpoint_event")"
+              test "$checkpoints" = "0"
+              test "$events" = "0"
+
+              total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_auth_broker_journal_checkpoint_event'")"
+              exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_auth_broker_journal_checkpoint_event'
+                  AND ACTION_TIMING='BEFORE'
+                  AND ACTION_STATEMENT=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth broker journal checkpoint audit is append-only'\"
+                  AND (
+                    (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_update' AND EVENT_MANIPULATION='UPDATE')
+                    OR (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_delete' AND EVENT_MANIPULATION='DELETE')
+                  )")"
+              if [ "$total" = "2" ] && [ "$exact" = "2" ]; then
+                echo "auth broker journal audit triggers already verified"
+                exit 0
+              fi
+              test "$total" = "0"
+              test "$exact" = "0"
+
+              mysql --defaults-extra-file="$cnf" --connect-timeout=5 backoffice <<'SQL'
+              CREATE TRIGGER control_plane_auth_broker_journal_checkpoint_event_no_update
+              BEFORE UPDATE ON control_plane_auth_broker_journal_checkpoint_event
+              FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth broker journal checkpoint audit is append-only';
+              CREATE TRIGGER control_plane_auth_broker_journal_checkpoint_event_no_delete
+              BEFORE DELETE ON control_plane_auth_broker_journal_checkpoint_event
+              FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth broker journal checkpoint audit is append-only';
+              SQL
+
+              total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_auth_broker_journal_checkpoint_event'")"
+              exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_auth_broker_journal_checkpoint_event'
+                  AND ACTION_TIMING='BEFORE'
+                  AND ACTION_STATEMENT=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth broker journal checkpoint audit is append-only'\"
+                  AND (
+                    (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_update' AND EVENT_MANIPULATION='UPDATE')
+                    OR (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_delete' AND EVENT_MANIPULATION='DELETE')
+                  )")"
+              test "$total" = "2"
+              test "$exact" = "2"
+              echo "auth broker journal audit triggers installed and verified"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: mysql-root-password
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: mysql-root-password
+          secret:
+            secretName: mysql-root-cred
+            defaultMode: 0440
+            items:
+              - key: password
+                path: mysql-root-password
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

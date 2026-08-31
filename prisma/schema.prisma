@@ -60,7 +60,8 @@ model App {
   opsManifest      Json?
   opsManifestError String?   @db.Text
 
-  // GitHub Projects v2 연결(읽기용)
+  // Legacy per-app ProjectV2 cache. P6 이후 projector는 이 값을 읽지 않고
+  // 조직 단일 FleetProjectBinding만 참조한다. P7 cleanup 전까지 호환용으로 보존한다.
   projectV2Id String?
 
   owners                   AppOwner[]
@@ -810,7 +811,6 @@ model DiscordTurn {
   @@map("discord_turn")
 }
 
-
 /// LLM 호출 사용량 원장. 모든 provider 호출 직후 fire-and-forget 으로 적재하고,
 /// 서리 재무 순찰이 월누적 비용으로 집계한다. 단가는 저장하지 않는다 —
 /// 비용은 조회 시점에 pricing.ts 단가표로 환산한다(단가 개정 시 소급 반영).
@@ -829,7 +829,6 @@ model AiUsage {
   @@index([provider, model, createdAt])
   @@map("ai_usage")
 }
-
 
 model WebhookDelivery {
   deliveryId String   @id // X-GitHub-Delivery
@@ -1327,6 +1326,194 @@ model FleetParityWaveResult {
   @@map("control_plane_fleet_parity_wave_result")
 }
 
+// P7 BOOTSTRAP collector가 읽는 replacement/proof의 불변 공개 snapshot이다.
+// shadow 실행은 이 row를 만들거나 갱신하지 않으며 exact Git tree/blob inventory와
+// detector source가 모두 일치하는 기존 증거만 읽는다. secret/private key 컬럼은 없다.
+model FleetMigrationProofSnapshot {
+  id                            String   @id @default(cuid())
+  repositoryId                  BigInt
+  repositoryFullName            String   @db.VarChar(191)
+  sourceSha                     String   @db.Char(40)
+  treeSha                       String   @db.Char(40)
+  blobInventoryDigest           String   @db.VarChar(71)
+  detectorSourceSha             String   @db.Char(40)
+  readinessEvidenceDigest       String   @db.Char(64)
+  readinessCohortDigest         String   @db.Char(64)
+  stableBackofficeStateDigest   String   @db.Char(64)
+  candidates                    Json
+  candidatesDigest              String   @db.VarChar(71)
+  proofDigest                   String   @unique(map: "cp_fleet_migration_proof_digest") @db.Char(64)
+  approvalId                    String   @db.VarChar(127)
+  approvalAttestation           Json
+  approvalAttestationDigest     String   @db.Char(64)
+  idempotencyKey                String   @unique(map: "cp_fleet_migration_proof_idempotency") @db.VarChar(191)
+  requestHash                   String   @db.Char(64)
+  createdBy                     String   @db.VarChar(128)
+  observedAt                    DateTime @db.DateTime(3)
+  createdAt                     DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([repositoryId, sourceSha, treeSha, blobInventoryDigest, detectorSourceSha, readinessEvidenceDigest, readinessCohortDigest, stableBackofficeStateDigest, candidatesDigest], map: "cp_fleet_migration_proof_revision_key")
+  @@index([repositoryId, sourceSha, detectorSourceSha, observedAt], map: "cp_fleet_migration_proof_repo_time")
+  @@map("control_plane_fleet_migration_proof_snapshot")
+}
+
+// collector가 provider readback을 끝낸 뒤 INSERT-only로 claim하는 실행 원장이다.
+// terminal collection은 별도 INSERT-only completion row에 저장해 UPDATE 권한 없이
+// exact-once를 강제한다.
+model FleetMigrationCollectionOccurrence {
+  id                   String                              @id @default(cuid())
+  deliveryId           String                              @unique(map: "cp_fleet_migration_occurrence_delivery") @db.VarChar(127)
+  runId                String                              @db.VarChar(127)
+  providerVectorDigest String                              @db.VarChar(71)
+  inventoryDigest      String                              @db.VarChar(71)
+  createdAt            DateTime                            @default(now()) @db.DateTime(3)
+  completion           FleetMigrationCollectionCompletion?
+
+  @@unique([id, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_occurrence_identity")
+  @@index([providerVectorDigest, createdAt], map: "cp_fleet_migration_occurrence_vector_time")
+  @@map("control_plane_fleet_migration_collection_occurrence")
+}
+
+model FleetMigrationCollectionCompletion {
+  id                    String                             @id @default(cuid())
+  occurrenceId          String                             @unique(map: "cp_fleet_migration_completion_occurrence_key")
+  deliveryId            String                             @db.VarChar(127)
+  runId                 String                             @db.VarChar(127)
+  providerVectorDigest  String                             @db.VarChar(71)
+  inventoryDigest       String                             @db.VarChar(71)
+  collectionDigest      String                             @db.VarChar(71)
+  finalGithubDigest     String                             @db.VarChar(71)
+  finalBackofficeDigest String                             @db.VarChar(71)
+  finalizationDigest    String                             @db.VarChar(71)
+  collection            Json
+  completedAt           DateTime                           @default(now()) @db.DateTime(3)
+  occurrence            FleetMigrationCollectionOccurrence @relation(fields: [occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], references: [id, deliveryId, runId, providerVectorDigest, inventoryDigest], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_migration_completion_occurrence_fkey")
+
+  @@unique([occurrenceId, deliveryId, runId, providerVectorDigest, inventoryDigest], map: "cp_fleet_migration_completion_identity")
+  @@index([providerVectorDigest, completedAt], map: "cp_fleet_migration_completion_vector_time")
+  @@map("control_plane_fleet_migration_collection_completion")
+}
+
+// P7 cleanup capability가 결합되는 repository-plan 단위 CAS 정본이다.
+// GitHub provider token과 lease 원문은 저장하지 않으며 한 authority에는 동시에 한 execution만
+// 예약할 수 있다. generation은 Ready PR 생성 receipt를 소비할 때만 증가한다.
+model FleetCleanupAuthority {
+  id                 String                    @id @default(cuid())
+  organizationId     String                    @db.VarChar(32)
+  installationId     String                    @db.VarChar(32)
+  repositoryId       BigInt
+  repositoryFullName String                    @db.VarChar(191)
+  sourceSha          String                    @db.Char(40)
+  treeSha            String                    @db.Char(40)
+  issuanceDigest     String                    @db.VarChar(71)
+  inventoryDigest    String                    @db.VarChar(71)
+  planDigest         String                    @db.VarChar(71)
+  chainHeadDigest    String?                   @db.VarChar(71)
+  fileActionSetDigest String                   @db.VarChar(71)
+  authorityRevision  String                    @db.VarChar(127)
+  generation         Int                       @default(1)
+  state              String                    @default("ACTIVE") @db.VarChar(32)
+  activeExecutionKey String?                   @db.VarChar(71)
+  createdAt          DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt          DateTime                  @updatedAt
+  capabilities       FleetCleanupCapability[]
+  executions         FleetCleanupExecution[]
+
+  @@unique([repositoryId, issuanceDigest, inventoryDigest, planDigest, sourceSha], map: "cp_fleet_cleanup_authority_binding_key")
+  @@index([repositoryId, state, updatedAt], map: "cp_fleet_cleanup_authority_repo_state")
+  @@map("control_plane_fleet_cleanup_authority")
+}
+
+// control-plane approval은 PLAN_ONLY repository의 exact action/file set과 runtime approval
+// scope를 최대 15분 동안만 허용한다. replacementFiles에는 공개 workflow replacement만
+// 저장하며 credential/token/lease 값은 허용하지 않는다.
+model FleetCleanupCapability {
+  id                     String                   @id @default(cuid())
+  authorityId            String
+  authority              FleetCleanupAuthority    @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_capability_authority_fkey")
+  issueNumber             Int
+  approvalScopeDigest     String                   @db.VarChar(71)
+  issuance                Json
+  plan                    Json
+  fileActionSet           Json
+  fileActionSetDigest     String                   @db.VarChar(71)
+  replacementFiles       Json
+  replacementFilesDigest String                   @db.VarChar(71)
+  action                  String                   @default("READY_PR_ONLY") @db.VarChar(32)
+  state                   String                   @default("ACTIVE") @db.VarChar(32)
+  requestId               String                   @unique(map: "cp_fleet_cleanup_capability_request_key") @db.VarChar(191)
+  requestDigest           String                   @db.VarChar(71)
+  approvedBy              String                   @db.VarChar(128)
+  approvedAt              DateTime                 @db.DateTime(3)
+  expiresAt               DateTime                 @db.DateTime(3)
+  consumedAt              DateTime?                @db.DateTime(3)
+  createdAt               DateTime                 @default(now()) @db.DateTime(3)
+  execution               FleetCleanupExecution?
+
+  @@index([authorityId, approvalScopeDigest, issueNumber], map: "cp_fleet_cleanup_capability_scope_idx")
+  @@index([state, expiresAt], map: "cp_fleet_cleanup_capability_state_expiry")
+  @@map("control_plane_fleet_cleanup_capability")
+}
+
+model FleetCleanupExecution {
+  id                      String                    @id @default(cuid())
+  authorityId             String
+  authority               FleetCleanupAuthority     @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_authority_fkey")
+  capabilityId            String                    @unique(map: "cp_fleet_cleanup_execution_capability_key")
+  capability              FleetCleanupCapability    @relation(fields: [capabilityId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_execution_capability_fkey")
+  executionKey            String                    @unique(map: "cp_fleet_cleanup_execution_key") @db.VarChar(71)
+  reservationId           String                    @unique(map: "cp_fleet_cleanup_reservation_key") @db.VarChar(127)
+  organizationId          String                    @db.VarChar(32)
+  installationId          String                    @db.VarChar(32)
+  issuanceDigest          String                    @db.VarChar(71)
+  inventoryDigest         String                    @db.VarChar(71)
+  planDigest              String                    @db.VarChar(71)
+  runId                   String                    @db.VarChar(127)
+  workerId                String                    @db.VarChar(127)
+  repositoryId            BigInt
+  repositoryFullName      String                    @db.VarChar(191)
+  sourceSha               String                    @db.Char(40)
+  issueNumber             Int
+  chainHeadDigest         String?                   @db.VarChar(71)
+  expectedStateGeneration Int
+  reservedStateGeneration Int
+  executionGeneration     Int                       @default(1)
+  state                   String                    @default("RUNNING") @db.VarChar(32)
+  leaseTokenDigest        String                    @db.Char(64)
+  expiresAt               DateTime                  @db.DateTime(3)
+  mutationSet             Json?
+  mutationsDigest         String?                   @db.VarChar(71)
+  commitDate              DateTime?                 @db.DateTime(3)
+  expectedTreeSha         String?                   @db.Char(40)
+  expectedCommitSha       String?                   @db.Char(40)
+  receiptDigest           String?                   @db.VarChar(71)
+  completedAt             DateTime?                 @db.DateTime(3)
+  createdAt               DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt               DateTime                  @updatedAt
+  steps                   FleetCleanupExecutionStep[]
+
+  @@index([authorityId, state, expiresAt], map: "cp_fleet_cleanup_execution_authority_state")
+  @@map("control_plane_fleet_cleanup_execution")
+}
+
+model FleetCleanupExecutionStep {
+  id            String                 @id @default(cuid())
+  executionId   String
+  execution     FleetCleanupExecution  @relation(fields: [executionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "cp_fleet_cleanup_step_execution_fkey")
+  kind          String                 @db.VarChar(32)
+  ordinal       Int
+  operationId   String                 @db.VarChar(71)
+  state         String                 @default("PENDING") @db.VarChar(32)
+  receiptDigest String?                @db.VarChar(71)
+  createdAt     DateTime               @default(now()) @db.DateTime(3)
+  updatedAt     DateTime               @updatedAt
+
+  @@unique([executionId, kind], map: "cp_fleet_cleanup_step_kind_key")
+  @@unique([executionId, ordinal], map: "cp_fleet_cleanup_step_ordinal_key")
+  @@unique([executionId, operationId], map: "cp_fleet_cleanup_step_operation_key")
+  @@map("control_plane_fleet_cleanup_execution_step")
+}
+
 enum FleetParityResultStatus {
   PENDING
   MATCH
@@ -1476,6 +1663,49 @@ model ProviderExecutionEvent {
 
   @@index([executionId, createdAt])
   @@map("control_plane_provider_execution_event")
+}
+
+// P2 Seori Auth Broker journal checkpoint의 Backoffice durable authority. broker의
+// nonce/replay-protection journal이 재시작해도 마지막 commit 위치를 잃지 않도록 CAS로
+// 진행시킨다. journalId별 genesis row가 있고, generation은 row-version CAS counter,
+// sequence는 broker가 commit한 논리 위치다. 정상 진행에서는 항상 generation==sequence이며
+// 어긋나면(변조·직접 DB 조작) 즉시 fail-closed한다. secret 값은 저장하지 않고 broker가
+// 만든 opaque digest만 보존한다.
+model AuthBrokerJournalCheckpoint {
+  id               String                             @id @default(cuid())
+  journalId        String                             @unique @db.VarChar(191)
+  generation       BigInt                             @default(0)
+  sequence         BigInt                             @default(0)
+  checkpointDigest String                             @db.Char(64)
+  updatedBy        String                             @db.VarChar(191)
+  createdAt        DateTime                           @default(now()) @db.DateTime(3)
+  updatedAt        DateTime                           @updatedAt
+  events           AuthBrokerJournalCheckpointEvent[]
+
+  @@map("control_plane_auth_broker_journal_checkpoint")
+}
+
+// append-only 감사 원장. MySQL BEFORE UPDATE/DELETE trigger가 애플리케이션 실수나 ORM
+// 경로와 무관하게 append-only를 강제한다. migration principal에 CREATE TRIGGER 권한이
+// 없으면 배포가 fail-closed한다(다른 provider execution 감사 trigger와 동일 계약).
+model AuthBrokerJournalCheckpointEvent {
+  id             String                      @id @default(cuid())
+  checkpointId   String
+  checkpoint     AuthBrokerJournalCheckpoint @relation(fields: [checkpointId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  journalId      String                      @db.VarChar(191)
+  requestId      String                      @unique @db.VarChar(191)
+  type           String                      @db.VarChar(16)
+  fromGeneration BigInt?
+  toGeneration   BigInt
+  fromSequence   BigInt?
+  toSequence     BigInt
+  fromDigest     String?                     @db.Char(64)
+  toDigest       String                      @db.Char(64)
+  actor          String                      @db.VarChar(191)
+  createdAt      DateTime                    @default(now()) @db.DateTime(3)
+
+  @@index([journalId, createdAt], map: "cp_auth_broker_journal_checkpoint_event_journal_created_idx")
+  @@map("control_plane_auth_broker_journal_checkpoint_event")
 }
 
 model ReleaseCandidate {
@@ -2330,25 +2560,64 @@ model AutomationMutationRequest {
   @@map("automation_mutation_request")
 }
 
+enum FleetProjectBindingStatus {
+  PENDING
+  VERIFIED
+  HUMAN_PERMISSION_REQUIRED
+  READBACK_REQUIRED
+  IDENTITY_MISMATCH
+}
+
+// 조직 전체가 공유하는 단 하나의 GitHub ProjectV2 desired-state binding.
+// 앱별 project ID를 복제하지 않고 공개 owner/number/title/node identity와
+// GitHub App organization_projects permission readback만 보존한다.
+model FleetProjectBinding {
+  id                    String                    @id @db.VarChar(64)
+  organizationLogin     String                    @db.VarChar(39)
+  projectNumber         Int
+  expectedTitle         String                    @db.VarChar(191)
+  revision              Int                       @default(1)
+  projectNodeId         String?                   @db.VarChar(191)
+  observedProjectNodeId String?                   @db.VarChar(191)
+  organizationNodeId    String?                   @db.VarChar(191)
+  observedTitle         String?                   @db.VarChar(191)
+  observedUrl           String?                   @db.VarChar(2048)
+  permissionLevel       String?                   @db.VarChar(16)
+  missingRequirements   Json?
+  status                FleetProjectBindingStatus @default(PENDING)
+  lastErrorCode         String?                   @db.VarChar(96)
+  lastError             String?                   @db.Text
+  observedAt            DateTime?                 @db.DateTime(3)
+  verifiedAt            DateTime?                 @db.DateTime(3)
+  createdBy             String                    @db.VarChar(128)
+  updatedBy             String                    @db.VarChar(128)
+  createdAt             DateTime                  @default(now()) @db.DateTime(3)
+  updatedAt             DateTime                  @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("fleet_project_binding")
+}
+
 // GitHub Project는 포트폴리오 projection일 뿐 실행 claim의 입력이 아니다.
 // desired/observed를 따로 보존해 permission 부재나 drift를 UI에서 fail-closed로 보인다.
 model FleetProjectProjection {
-  id            String    @id @default(cuid())
-  appId         String?
-  app           App?      @relation(fields: [appId], references: [id], onDelete: SetNull)
-  projectNodeId String
-  issueNodeId   String
-  repoFullName  String
-  issueNumber   Int
-  desired       Json
-  desiredHash   String    @db.Char(64)
-  observed      Json?
-  status        String    @default("PENDING")
-  attempts      Int       @default(0)
-  lastError     String?   @db.Text
-  appliedAt     DateTime? @db.DateTime(3)
-  createdAt     DateTime  @default(now()) @db.DateTime(3)
-  updatedAt     DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  appId           String?
+  app             App?      @relation(fields: [appId], references: [id], onDelete: SetNull)
+  projectNodeId   String
+  bindingRevision Int?
+  issueNodeId     String
+  repoFullName    String
+  issueNumber     Int
+  desired         Json
+  desiredHash     String    @db.Char(64)
+  observed        Json?
+  status          String    @default("PENDING")
+  attempts        Int       @default(0)
+  lastError       String?   @db.Text
+  appliedAt       DateTime? @db.DateTime(3)
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
+  updatedAt       DateTime  @updatedAt
 
   @@unique([projectNodeId, issueNodeId])
   @@index([appId, status])

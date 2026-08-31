@@ -196,6 +196,116 @@ function RowList<T>({
   );
 }
 
+interface StoreAssetUploadApiResponse {
+  ok?: boolean;
+  message?: string;
+  issues?: Array<{ message?: string }>;
+  receipt?: {
+    objectKey?: string;
+    checksum?: string;
+    generation?: string;
+    created?: boolean;
+  };
+}
+
+function StoreAssetUploadField({
+  appId,
+  expectedLatestRevision,
+  asset,
+  disabled,
+  onUploaded,
+  onMessage,
+  onError,
+}: {
+  appId: string;
+  expectedLatestRevision: number;
+  asset: AssetDraft;
+  disabled: boolean;
+  onUploaded: (receipt: { objectKey: string; checksum: string }) => void;
+  onMessage: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const binding = JSON.stringify({
+    expectedLatestRevision,
+    market: asset.market,
+    locale: asset.locale,
+    kind: asset.kind,
+  });
+  const [selection, setSelection] = useState<{
+    file: File;
+    requestId: string;
+    binding: string;
+  } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const selectionMatches = selection?.binding === binding;
+
+  async function upload() {
+    if (!selection || !selectionMatches) return;
+    setUploading(true);
+    onError("");
+    try {
+      const formData = new FormData();
+      formData.set("expectedLatestRevision", String(expectedLatestRevision));
+      if (asset.market) formData.set("market", asset.market);
+      formData.set("kind", asset.kind);
+      if (asset.locale) formData.set("locale", asset.locale);
+      formData.set("file", selection.file);
+      const response = await fetch(`/api/platform/apps/${encodeURIComponent(appId)}/store-assets`, {
+        method: "POST",
+        headers: { "Idempotency-Key": `ui-store-asset:${selection.requestId}` },
+        body: formData,
+      });
+      const result = await response.json().catch(() => ({})) as StoreAssetUploadApiResponse;
+      const objectKey = result.receipt?.objectKey;
+      const checksum = result.receipt?.checksum;
+      if (!response.ok || !result.ok || typeof objectKey !== "string" || typeof checksum !== "string") {
+        const issueMessage = result.issues?.map((issue) => issue.message).filter(Boolean).join(" ");
+        throw new Error(result.message || issueMessage || "StoreAsset upload를 처리하지 못했습니다.");
+      }
+      onUploaded({ objectKey, checksum });
+      onMessage(
+        `StoreAsset upload와 SHA-256 readback 검증을 완료했습니다 · generation ${result.receipt?.generation ?? "확인됨"}`,
+      );
+      setSelection(null);
+    } catch (uploadError) {
+      onError(uploadError instanceof Error ? uploadError.message : "StoreAsset upload를 처리하지 못했습니다.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded border border-neutral-200 bg-white p-3">
+      <Field
+        label="asset 원본"
+        hint="PNG/JPEG, 최대 20 MiB · 중앙 private object storage에 저장 후 SHA-256을 다시 읽어 검증합니다."
+      >
+        <input
+          type="file"
+          accept="image/png,image/jpeg"
+          disabled={disabled || uploading}
+          onChange={(event) => {
+            const file = event.target.files?.[0] ?? null;
+            setSelection(file ? { file, requestId: crypto.randomUUID(), binding } : null);
+          }}
+          className={inputClass}
+        />
+      </Field>
+      {!selectionMatches && selection && (
+        <p className="text-xs text-amber-700">market·locale·kind가 변경되었습니다. 파일을 다시 선택하세요.</p>
+      )}
+      <button
+        type="button"
+        disabled={disabled || uploading || !selectionMatches}
+        onClick={upload}
+        className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+      >
+        {uploading ? "업로드·검증 중…" : "중앙 저장소에 업로드·검증"}
+      </button>
+    </div>
+  );
+}
+
 export function FleetConfigEditor({
   appId,
   activeRevision,
@@ -441,7 +551,7 @@ export function FleetConfigEditor({
 
           <Section
             title="StoreAsset"
-            description="스토어 자산은 원본을 저장하지 않고 object key와 SHA-256만 고정합니다."
+            description="스토어 자산 원본을 중앙 private object storage에 올리고, 서버가 다시 읽어 검증한 object key와 SHA-256만 desired state에 고정합니다."
           >
             <RowList<AssetDraft>
               rows={draft.assets}
@@ -472,17 +582,33 @@ export function FleetConfigEditor({
                     hint="비우면 locale 공통"
                     onChange={(value) => replaceRow("assets", index, { locale: value })}
                   />
-                  <TextField
-                    label="objectKey"
-                    value={row.objectKey}
-                    onChange={(value) => replaceRow("assets", index, { objectKey: value })}
-                  />
-                  <TextField
-                    label="checksum"
-                    value={row.checksum}
-                    hint="SHA-256 64자리"
-                    onChange={(value) => replaceRow("assets", index, { checksum: value })}
-                  />
+                  <div className="sm:col-span-2">
+                    <StoreAssetUploadField
+                      appId={appId}
+                      expectedLatestRevision={latestRevision}
+                      asset={row}
+                      disabled={pending}
+                      onUploaded={(receipt) => replaceRow("assets", index, receipt)}
+                      onMessage={(nextMessage) => {
+                        setError(null);
+                        setMessage(nextMessage);
+                      }}
+                      onError={(nextError) => {
+                        setMessage(null);
+                        setError(nextError || null);
+                      }}
+                    />
+                  </div>
+                  <Field label="검증된 objectKey">
+                    <code className="block min-h-8 break-all rounded border border-neutral-200 bg-neutral-100 px-2 py-1.5 text-xs text-neutral-700">
+                      {row.objectKey || "업로드 전"}
+                    </code>
+                  </Field>
+                  <Field label="검증된 checksum" hint="서버 upload 후 object readback SHA-256">
+                    <code className="block min-h-8 break-all rounded border border-neutral-200 bg-neutral-100 px-2 py-1.5 text-xs text-neutral-700">
+                      {row.checksum || "업로드 전"}
+                    </code>
+                  </Field>
                 </>
               )}
             />
@@ -534,6 +660,18 @@ export function FleetConfigEditor({
                 onChange={(value) => patch({ privacyPolicyUrl: value })}
               />
             </div>
+            {draft.buildDependencyAuditException && (
+              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+                <div className="font-semibold">서명된 dependency audit 예외</div>
+                <div className="mt-1 font-mono">
+                  expiresAt {String(draft.buildDependencyAuditException.expiresAt ?? "미기록")}
+                </div>
+                <div className="mt-1">
+                  static check와 Android build-only 범위에서만 사용합니다. 이 구조화 편집기는 객체를
+                  수정하지 않고 다음 DRAFT에 그대로 보존합니다.
+                </div>
+              </div>
+            )}
           </Section>
 
           <Section

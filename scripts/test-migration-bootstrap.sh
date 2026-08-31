@@ -18,6 +18,8 @@ pnpm prisma migrate diff \
   --exit-code >/dev/null
 
 pnpm prisma migrate deploy
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-install-fleet-migration-triggers.ts
 
 if [ "$(pnpm tsx scripts/verify-migration-state.ts --history=predeploy)" != "fresh" ]; then
   echo "오류: baseline 적용 뒤 predeploy가 fresh 계보를 인식하지 못했다" >&2
@@ -42,13 +44,25 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-fleet-agent-automation.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm test:p6-project-binding
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-fleet-standard-label-transport.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-workflow-bundle-candidate-executor.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-auth-broker-recovery-history-query.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-classifier.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-desired-state-backfill-source-binding.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-source-remediation.ts
 pnpm tsx scripts/test-legacy-shadow-import.ts
 pnpm tsx scripts/test-fleet-parity-wave.ts
 pnpm tsx scripts/test-restore-rehearsal.ts
 pnpm tsx scripts/test-repository-discovery.ts
 pnpm tsx scripts/test-platform-fleet-reconciler.ts
 pnpm tsx scripts/test-project-blueprint-release-ledger.ts
+pnpm tsx scripts/test-config-source-auto-rebase.ts
+pnpm tsx scripts/test-auth-broker-journal-checkpoint.ts
 pnpm tsx scripts/verify-migration-state.ts --history=fresh

@@ -26,19 +26,16 @@ test("문서에 릴리즈 마커 커밋 생성 절차가 남아 있지 않다", 
   }
 });
 
-// 인수조건: exact-source preflight 가 두 문서 모두에 원장화돼 있다.
-test("문서에 exact-source preflight 가 원장화돼 있다", () => {
-  const org = doc(ORG_DOC);
-  assert.match(org, /fail-closed 소스 버전 계약/);
-  assert.match(org, /scripts\/check_release_version\.py/);
-  assert.match(org, /scripts\/resolve-release-version\.mjs/);
-  assert.match(org, /default branch 의 exact SHA 를 고정/);
-  assert.match(org, /bump 는 소스에 없는 버전을 만들지 않는다/);
-
-  const deploy = doc(DEPLOY_DOC);
-  assert.match(deploy, /exact SHA 를 고정/);
-  assert.match(deploy, /소스에 없는 버전을 만들지 않는다/);
-  assert.match(deploy, /pinned-source/);
+// 인수조건: GitHub stable tag + peeled commit SHA만 버전 권한으로 문서화한다.
+test("문서에 stable tag 단일 권한과 obsolete reader 제거가 원장화돼 있다", () => {
+  for (const path of [ORG_DOC, DEPLOY_DOC]) {
+    const text = doc(path);
+    assert.match(text, /GitHub stable tag/, path);
+    assert.match(text, /exact commit SHA|peeled commit SHA/, path);
+    assert.doesNotMatch(text, /scripts\/check_release_version\.py|pinned-source/, path);
+  }
+  assert.match(doc(ORG_DOC), /default branch 의 exact SHA 를 고정/);
+  assert.match(doc(DEPLOY_DOC), /exact SHA(?:를| 를) 고정/);
 });
 
 // 인수조건: GitHub-first / Xcode-last 규칙이 두 문서 모두에 원장화돼 있다.

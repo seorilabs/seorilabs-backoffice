@@ -335,11 +335,13 @@ async function inspectRecoveryState(
     checksum: string;
     finished: number | bigint;
     rolledBack: number | bigint;
+    appliedSteps: number | bigint;
   }>>(`
     SELECT
       checksum,
       (finished_at IS NOT NULL) AS finished,
-      (rolled_back_at IS NOT NULL) AS rolledBack
+      (rolled_back_at IS NOT NULL) AS rolledBack,
+      applied_steps_count AS appliedSteps
     FROM _prisma_migrations
     WHERE migration_name = ?
     ORDER BY started_at, id
@@ -349,7 +351,13 @@ async function inspectRecoveryState(
   }
   const succeeded = rows.filter((row) => Number(row.finished) === 1 && Number(row.rolledBack) === 0).length;
   const rolledBack = rows.filter((row) => Number(row.rolledBack) === 1).length;
-  const unresolved = rows.filter((row) => Number(row.finished) === 0 && Number(row.rolledBack) === 0).length;
+  const unresolvedRows = rows.filter(
+    (row) => Number(row.finished) === 0 && Number(row.rolledBack) === 0,
+  );
+  if (unresolvedRows.some((row) => Number(row.appliedSteps) !== 0)) {
+    throw new Error(`recovery migration 미해결 attempt의 applied step이 0이 아니다: ${migrationName}`);
+  }
+  const unresolved = unresolvedRows.length;
   const allowance = activeRecoveryAllowance(active, migrationName);
   if (succeeded === 1 && unresolved === 0 && rolledBack <= allowance) return "SUCCEEDED";
   if (succeeded === 0 && unresolved === 1 && rolledBack === 0 && rows.length === 1) return "UNRESOLVED_EXACT";

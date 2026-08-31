@@ -104,6 +104,7 @@ export function redactCredentialCandidates(value: string): string {
 }
 
 const market = z.enum(["google-play", "app-store", "apps-in-toss"]);
+export const storeAssetKindSchema = z.enum(["icon", "feature-graphic", "thumbnail", "screenshot"]);
 const platformArtifactKind = z.enum(["TYPESCRIPT", "GDSCRIPT"]);
 const platformVersion = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
 export const PLATFORM_AFFECTED_CONSUMERS = {
@@ -490,6 +491,67 @@ export const complianceDraftSchema = z.object({
   evidenceRef: revisionRef.optional(),
 }).strict();
 
+const dependencyAuditAdvisorySchema = z.object({
+  ghsa: z.string().regex(/^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/),
+  module: z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/),
+  severity: z.literal("high"),
+  versions: z.array(
+    z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+  ).min(1).max(20).superRefine((versions, context) => {
+    if (new Set(versions).size !== versions.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "version은 중복될 수 없습니다." });
+    }
+    if (versions.some((version, index) => index > 0 && versions[index - 1]!.localeCompare(version) >= 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "version은 오름차순으로 정렬해야 합니다." });
+    }
+  }),
+}).strict();
+
+const dependencyAuditSourceSha = z.string().regex(
+  /^[0-9a-f]{40}$/,
+  "소문자 40자리 application source SHA가 필요합니다.",
+);
+const dependencyAuditLockfileSha256 = z.string().regex(
+  /^sha256:[0-9a-f]{64}$/,
+  "sha256: 접두사가 있는 소문자 lockfile SHA-256이 필요합니다.",
+);
+
+export const dependencyAuditExceptionSchema = z.object({
+  schemaVersion: z.literal(1),
+  repositoryId: z.literal("1250442131"),
+  fullName: z.literal("seorilabs/happy-farm"),
+  bindings: z.tuple([
+    z.object({
+      actionClass: z.literal("STATIC_CHECK"),
+      sourceSha: dependencyAuditSourceSha,
+      lockfileSha256: dependencyAuditLockfileSha256,
+    }).strict(),
+    z.object({
+      actionClass: z.literal("ANDROID_BUILD_ONLY"),
+      sourceSha: dependencyAuditSourceSha,
+      lockfileSha256: dependencyAuditLockfileSha256,
+    }).strict(),
+  ]),
+  expiresAt: z.string().datetime({ offset: true }),
+  reason: z.string().min(1).max(240).refine(
+    (value) => value === value.trim()
+      && !/[\u0000-\u001f\u007f]/u.test(value)
+      && !containsCredentialCandidate(value),
+    "공개 가능한 단일행 사유가 필요합니다.",
+  ),
+  advisories: z.array(dependencyAuditAdvisorySchema).length(3).superRefine((advisories, context) => {
+    const identities = advisories.map((advisory) => `${advisory.ghsa}:${advisory.module}`);
+    if (new Set(identities).size !== identities.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 중복될 수 없습니다." });
+    }
+    if (identities.some((identity, index) => index > 0 && identities[index - 1]!.localeCompare(identity) >= 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 GHSA와 module 순으로 정렬해야 합니다." });
+    }
+  }),
+}).strict();
+
+export type DependencyAuditException = z.infer<typeof dependencyAuditExceptionSchema>;
+
 /**
  * 첫 Fleet vertical slice가 자동 활성화할 수 있는 비민감 desired state의 완전한 목록이다.
  * strict object 밖의 값은 이름이나 중첩 위치와 무관하게 fail-closed한다.
@@ -512,7 +574,7 @@ export const configRevisionPayloadSchema = z.object({
   }).strict()).max(50).optional(),
   assets: z.array(z.object({
     market: market.optional(),
-    kind: z.enum(["icon", "feature-graphic", "thumbnail", "screenshot"]),
+    kind: storeAssetKindSchema,
     locale: locale.optional(),
     objectKey: revisionRef,
     checksum: sha256,
@@ -520,6 +582,7 @@ export const configRevisionPayloadSchema = z.object({
   build: z.object({
     workflowBundleSha: sha40.optional(),
     workflowBundleDigest: prefixedSha256.optional(),
+    dependencyAuditException: dependencyAuditExceptionSchema.optional(),
     platformVersion: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/).optional(),
     minSdk: z.number().int().min(21).max(100).optional(),
     targetSdk: z.number().int().min(21).max(100).optional(),
@@ -879,6 +942,55 @@ export const providerCommandEnvelopeSchema = z.object({
 
 export type ProviderCommandEnvelope = z.infer<typeof providerCommandEnvelopeSchema>;
 
+// P2 Seori Auth Broker journal checkpoint. exact broker client SPIFFE identity만 이 route를
+// 호출하며, 고정 body schema 밖의 필드는 모두 거부한다(.strict()). secret/token/cookie/TOTP
+// 필드는 애초에 존재하지 않는다 — checkpointDigest는 broker가 만든 opaque sha256 digest다.
+const authBrokerJournalId = z.string().regex(
+  /^[a-z0-9][a-z0-9._:-]{0,190}$/,
+  "소문자로 시작하는 journal 식별자가 필요합니다.",
+);
+
+export const authBrokerJournalCheckpointStateSchema = z.object({
+  journalId: authBrokerJournalId,
+  generation: numericId,
+  sequence: numericId,
+  checkpointDigest: sha256,
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export type AuthBrokerJournalCheckpointState = z.infer<typeof authBrokerJournalCheckpointStateSchema>;
+
+export const authBrokerJournalCheckpointGenesisRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+}).strict();
+
+export const authBrokerJournalCheckpointGenesisResponseSchema = z.object({
+  checkpoint: authBrokerJournalCheckpointStateSchema,
+  created: z.boolean(),
+}).strict();
+
+export const authBrokerJournalCheckpointReadRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+}).strict();
+
+export const authBrokerJournalCheckpointReadResponseSchema = z.object({
+  checkpoint: authBrokerJournalCheckpointStateSchema.nullable(),
+}).strict();
+
+// 다음 상태는 항상 expectedGeneration+1이다 — 호출자가 임의 목표 generation을 고를 수
+// 없고, 매 advance는 정확히 한 단계만 진행한다(broker 원장의 gapless 전제).
+export const authBrokerJournalCheckpointAdvanceRequestSchema = z.object({
+  journalId: authBrokerJournalId,
+  expectedGeneration: z.coerce.bigint().nonnegative(),
+  expectedDigest: sha256,
+  nextDigest: sha256,
+}).strict();
+
+export const authBrokerJournalCheckpointAdvanceResponseSchema = z.object({
+  outcome: z.enum(["ADVANCED", "REPLAYED"]),
+  checkpoint: authBrokerJournalCheckpointStateSchema,
+}).strict();
+
 export const releaseCandidateSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   sourceSha: sha40,
@@ -934,6 +1046,21 @@ export const configRevisionSchema = z.object({
   payload: configRevisionPayloadSchema,
 }).strict();
 
+/**
+ * StoreAsset 원본을 중앙 object storage에 올리기 전에 고정하는 공개 좌표다.
+ * objectKey와 checksum은 서버가 실제 bytes와 readback으로 계산하므로 caller가
+ * 제공할 수 없다.
+ */
+export const storeAssetUploadMetadataSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  expectedLatestRevision: z.coerce.number().int().nonnegative(),
+  market: market.optional(),
+  kind: storeAssetKindSchema,
+  locale: locale.optional(),
+}).strict();
+
+export type StoreAssetUploadMetadata = z.infer<typeof storeAssetUploadMetadataSchema>;
+
 export const configRevisionSourceRebaseSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   expectedLatestRevision: z.number().int().nonnegative(),
@@ -944,8 +1071,8 @@ export const configRevisionDiscoveryDraftSchema = configRevisionSourceRebaseSche
 }).strict();
 
 export const desiredStateBackfillSchema = z.object({
-  schemaVersion: z.literal(1),
-  mode: z.literal("DRAFT_ONLY"),
+  schemaVersion: z.literal(2),
+  mode: z.literal("DRAFT_AND_SAFE_SOURCE_REBASE"),
 }).strict();
 
 const repositoryCandidateMarkerPath = z.string().min(1).max(512).refine((value) => (
@@ -1342,6 +1469,7 @@ export const agentResultSchema = z.object({
     "PR_READY",
     "ISSUE_RESOLVED",
     "READBACK_CONFIRMED",
+    "READBACK_PARTIAL_VERIFIED",
     "RESULT_UNKNOWN",
     "BLOCKED",
   ]),
@@ -1390,10 +1518,20 @@ export const agentResultSchema = z.object({
       path: ["mutationExecutionId"],
     });
   }
-  if (!["PR_READY", "RESULT_UNKNOWN"].includes(result.outcomeCode) && result.mutationExecutionId) {
+  if (
+    !["PR_READY", "READBACK_PARTIAL_VERIFIED", "RESULT_UNKNOWN"].includes(result.outcomeCode)
+    && result.mutationExecutionId
+  ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "mutationExecutionId는 PR_READY 또는 RESULT_UNKNOWN에서만 허용합니다.",
+      message: "mutationExecutionId는 trusted mutation 결과에서만 허용합니다.",
+      path: ["mutationExecutionId"],
+    });
+  }
+  if (result.outcomeCode === "READBACK_PARTIAL_VERIFIED" && !result.mutationExecutionId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "partial readback 재개에는 mutationExecutionId가 필요합니다.",
       path: ["mutationExecutionId"],
     });
   }
@@ -1493,6 +1631,16 @@ export const automationDefinitionCreateSchema = z.object({
   budgetCeilingMicros: z.number().int().positive().max(1_000_000_000).default(1_000_000),
   model: publicIdentifier.optional(),
   maxAttempts: z.number().int().min(1).max(10).default(3),
+}).strict();
+
+export const sourceRemediationDefinitionCreateSchema = z.object({
+  repoId: z.coerce.bigint().positive(),
+  issueNumber: z.number().int().positive(),
+  agentKind: z.enum(AUTOMATION_AGENT_KINDS),
+  budgetCeilingMicros: z.number().int().positive().max(1_000_000_000).default(1_000_000),
+  model: publicIdentifier.optional(),
+  maxAttempts: z.number().int().min(1).max(10).default(3),
+  verifiedBy: publicIdentifier.optional(),
 }).strict();
 
 export const automationDefinitionCommandSchema = z.discriminatedUnion("command", [

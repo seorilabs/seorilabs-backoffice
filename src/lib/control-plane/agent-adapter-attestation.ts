@@ -13,6 +13,14 @@ const DOMAIN = "seori-agent-adapter-attestation-v1\n";
 const SHA256 = /^[0-9a-f]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9._:/-]{1,191}$/;
 
+export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE =
+  "/api/internal/workflow-bundle-candidate-executor";
+
+function isAgentAdapterAttestationRoute(route: string): boolean {
+  return route.startsWith("/api/internal/agent-adapter/")
+    || route === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE;
+}
+
 export interface AgentAdapterAttestationPayload {
   version: 1;
   runtimeIdentity: string;
@@ -49,7 +57,7 @@ function parsePayload(encoded: string): AgentAdapterAttestationPayload | null {
       || typeof value.runtimeIdentity !== "string"
       || !IDENTIFIER.test(value.runtimeIdentity)
       || typeof value.route !== "string"
-      || !value.route.startsWith("/api/internal/agent-adapter/")
+      || !isAgentAdapterAttestationRoute(value.route)
       || typeof value.requestId !== "string"
       || !IDENTIFIER.test(value.requestId)
       || typeof value.bodyDigest !== "string"

@@ -520,7 +520,7 @@ async function main(): Promise<void> {
         candidateMarkerPath: null,
         productIdentity: {
           displayName: "Discovery Adoption",
-          type: "APP",
+          type: "GAME",
           engine: "RN",
         },
         justification: "REPOSITORY_PURPOSE_CONFIRMED",
@@ -534,6 +534,8 @@ async function main(): Promise<void> {
       include: { fleetLifecycleState: true },
     });
     assert.equal(adoptedApp.id, adoptionApp.id);
+    assert.equal(adoptedApp.type, "GAME");
+    assert.equal(adoptedApp.engine, "RN");
     assert.equal(adoptedApp.fleetLifecycleState?.stage, "PLANNING");
     const adoptionRecheckClaim = await claimRepositoryDiscoveryRun(
       "integration-worker-adoption-recheck",
@@ -548,6 +550,16 @@ async function main(): Promise<void> {
       },
     );
     assert.ok(adoptionRecheckClaim);
+    assert.deepEqual(adoptionRecheckClaim.registration.classificationDecision, {
+      revision: 1,
+      classification: "PRODUCT_APP",
+      candidateMarkerPath: null,
+      productIdentity: {
+        displayName: "Discovery Adoption",
+        type: "GAME",
+        engine: "RN",
+      },
+    });
     const adoptionRecheck = await processRepositoryDiscoveryClaim(adoptionRecheckClaim, {
       ...dependencies,
       getOctokit: async () => fakeOctokit({
@@ -562,6 +574,63 @@ async function main(): Promise<void> {
     assert.equal((await prisma.repositoryRegistration.findUniqueOrThrow({
       where: { repoId: BigInt(ADOPTION_REPO_ID) },
     })).classification, "PRODUCT_APP");
+
+    const adoptedGameRegistration = await prisma.repositoryRegistration.findUniqueOrThrow({
+      where: { repoId: BigInt(ADOPTION_REPO_ID) },
+    });
+    const engineConflictDecision = await recordRepositoryClassificationDecision({
+      request: {
+        schemaVersion: 2,
+        repoId: BigInt(ADOPTION_REPO_ID),
+        expectedGeneration: adoptedGameRegistration.reconcileGeneration ?? 0,
+        expectedDecisionRevision: adoptedGameRegistration.classificationDecisionVersion ?? 0,
+        classification: "PRODUCT_APP",
+        candidateMarkerPath: null,
+        productIdentity: {
+          displayName: "Discovery Adoption",
+          type: "GAME",
+          engine: "GODOT",
+        },
+        justification: "CENTRAL_POLICY_CORRECTION",
+      },
+      actor: "integration:admin",
+      idempotencyKey: "classification-adoption-engine-conflict",
+    });
+    assert.ok(engineConflictDecision.runId);
+    const engineConflictClaim = await claimRepositoryDiscoveryRun(
+      "integration-worker-adoption-engine-conflict",
+      {
+        ...dependencies,
+        getOctokit: async () => fakeOctokit({
+          repoId: ADOPTION_REPO_ID,
+          fullName: "seorilabs/discovery-adoption",
+          headSha: SOURCE_SHA,
+          files,
+        }),
+      },
+    );
+    assert.ok(engineConflictClaim);
+    assert.equal(engineConflictClaim.registration.classificationDecision?.productIdentity?.engine, "GODOT");
+    const engineConflict = await processRepositoryDiscoveryClaim(engineConflictClaim, {
+      ...dependencies,
+      getOctokit: async () => fakeOctokit({
+        repoId: ADOPTION_REPO_ID,
+        fullName: "seorilabs/discovery-adoption",
+        headSha: SOURCE_SHA,
+        files,
+      }),
+    });
+    assert.equal(engineConflict.status, "NEEDS_INPUT");
+    assert.equal(engineConflict.reasonCode, "APP_IDENTITY_CONFLICT");
+    const [engineConflictRegistration, engineConflictApp] = await Promise.all([
+      prisma.repositoryRegistration.findUniqueOrThrow({
+        where: { repoId: BigInt(ADOPTION_REPO_ID) },
+      }),
+      prisma.app.findUniqueOrThrow({ where: { repoId: BigInt(ADOPTION_REPO_ID) } }),
+    ]);
+    assert.equal(engineConflictRegistration.lastDiscoveryReason, "APP_IDENTITY_CONFLICT");
+    assert.equal(engineConflictApp.type, "GAME");
+    assert.equal(engineConflictApp.engine, "GODOT");
 
     // keeum처럼 build marker가 아직 없는 product도 중앙 identity만 등록하고
     // observation/BuildTarget은 source fact 없이 만들지 않는다.

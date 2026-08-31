@@ -43,14 +43,43 @@ const canonicalJson = (value) => {
 };
 
 const appendOnlyTriggerPattern = /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
+// 이 static gate가 알아야 하는 모든 append-only trigger 계약의 합집합이다. 각 계약은
+// 독립 감사 원장을 가질 수 있고(예: provider execution vs P2 auth broker journal
+// checkpoint), 살아있는 in-cluster verifier가 아직 관측하지 않는 계약도 포함한다 —
+// 그 verifier 편입 여부와 무관하게 이 CI gate는 정의된 append-only DDL을 항상 인식해야
+// expand-only 위반으로 오탐하지 않는다.
 const appendOnlyTriggerContract = new Map([
   [
     "control_plane_provider_execution_event_no_update",
-    { event: "UPDATE", table: "control_plane_provider_execution_event" },
+    {
+      event: "UPDATE",
+      table: "control_plane_provider_execution_event",
+      message: "provider execution audit is append-only",
+    },
   ],
   [
     "control_plane_provider_execution_event_no_delete",
-    { event: "DELETE", table: "control_plane_provider_execution_event" },
+    {
+      event: "DELETE",
+      table: "control_plane_provider_execution_event",
+      message: "provider execution audit is append-only",
+    },
+  ],
+  [
+    "control_plane_auth_broker_journal_checkpoint_event_no_update",
+    {
+      event: "UPDATE",
+      table: "control_plane_auth_broker_journal_checkpoint_event",
+      message: "auth broker journal checkpoint audit is append-only",
+    },
+  ],
+  [
+    "control_plane_auth_broker_journal_checkpoint_event_no_delete",
+    {
+      event: "DELETE",
+      table: "control_plane_auth_broker_journal_checkpoint_event",
+      message: "auth broker journal checkpoint audit is append-only",
+    },
   ],
 ]);
 
@@ -63,7 +92,7 @@ function stripVerifiedAppendOnlyTriggers(sql) {
         contract
         && contract.event === event.toUpperCase()
         && contract.table === table.toLowerCase()
-        && message === "provider execution audit is append-only"
+        && contract.message === message
       ) {
         return " ";
       }
@@ -97,6 +126,7 @@ function approvedContractMigration(name, sqlPath) {
 }
 
 const frozenBase = process.env.MIGRATION_FROZEN_BASE;
+const addedActiveMigrations = new Set();
 if (frozenBase) {
   const commit = spawnSync("git", ["cat-file", "-e", `${frozenBase}^{commit}`], {
     cwd: repositoryRoot,
@@ -230,6 +260,7 @@ if (frozenBase) {
             .map((line) => line.split("\t")[1] ?? "")
             .map((path) => path.match(/^prisma\/migrations\/([^/]+)\/migration\.sql$/)?.[1])
             .filter((name) => name !== undefined);
+          for (const name of addedNames) addedActiveMigrations.add(name);
           if (lastPrevious) {
             for (const name of addedNames) {
               if (name <= lastPrevious) {
@@ -417,6 +448,13 @@ for (const name of activeNames) {
   }
   checked += 1;
   const normalized = sql.replace(/--.*$/gm, " ").replace(/\s+/g, " ");
+  // production app principal에는 의도적으로 TRIGGER 권한이 없다. 새 Prisma migration에
+  // privileged DDL을 넣으면 table/FK만 auto-commit된 뒤 migration history가 실패 상태로
+  // 남는다. 신규 trigger는 trusted-operator 전용 manifest와 live verifier로 설치한다.
+  // 이미 배포 기준에 포함된 과거 migration bytes는 frozen checksum으로 그대로 보존한다.
+  if (addedActiveMigrations.has(name) && /\bCREATE\s+TRIGGER\b/i.test(normalized)) {
+    fail(`신규 migration에 CREATE TRIGGER를 넣을 수 없다: ${name}`);
+  }
   for (const match of normalized.matchAll(
     /\b(?:INDEX|CONSTRAINT|TRIGGER)\s+`([^`]+)`/gi,
   )) {

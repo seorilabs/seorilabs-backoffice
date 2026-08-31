@@ -1,8 +1,53 @@
-import { getInstallationOctokit } from "@/lib/github/app";
+import {
+  getFleetScopedGithubTokenIssuer,
+  getInstallationOctokit,
+  type Octokit,
+} from "@/lib/github/app";
+import {
+  createOrUpdateReleaseWithExactLookup,
+  createTagWithExactReadback,
+  dispatchWorkflowWithExactTagBinding,
+  upsertReleaseAssetWithExactBinding,
+} from "@/lib/github/release-write-operations";
+import {
+  withFleetScopedGithubClient,
+  type FleetGitHubCapability,
+} from "@/lib/github/scoped-installation-client";
+
+const COMMIT_SHA = /^[a-f0-9]{40}$/u;
+const STABLE_TAG = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 
 function splitRepo(repoFullName: string): { owner: string; repo: string } {
+  if (!/^seorilabs\/[A-Za-z0-9._-]+$/u.test(repoFullName)) {
+    throw new Error("GITHUB_REPOSITORY_INVALID");
+  }
   const [owner, repo] = repoFullName.split("/");
   return { owner, repo };
+}
+
+async function withRepositoryMutationClient<Result>(input: {
+  repoFullName: string;
+  capability: FleetGitHubCapability;
+  execute: (client: Octokit, identity: { owner: string; repo: string }) => Promise<Result>;
+}): Promise<Result> {
+  const identity = splitRepo(input.repoFullName);
+  const installationClient = await getInstallationOctokit();
+  const repository = await installationClient.rest.repos.get(identity);
+  if (
+    !Number.isSafeInteger(repository.data.id)
+    || repository.data.id <= 0
+    || repository.data.full_name.toLowerCase() !== input.repoFullName.toLowerCase()
+  ) throw new Error("GITHUB_REPOSITORY_IDENTITY_MISMATCH");
+
+  const scoped = await getFleetScopedGithubTokenIssuer();
+  return withFleetScopedGithubClient({
+    issuer: scoped.issuer,
+    installationId: scoped.installationId,
+    capability: input.capability,
+    repositoryId: String(repository.data.id),
+    repositoryFullName: repository.data.full_name,
+    execute: (client) => input.execute(client, identity),
+  });
 }
 
 // 백오피스 → GitHub 최소 write 3종 (installation token). 모두 webhook 으로 미러에 재수렴.
@@ -80,68 +125,40 @@ export async function resolveRefSha(repoFullName: string, ref: string): Promise<
   return res.data.sha;
 }
 
-/** lightweight 태그 생성. 이미 존재하면 동일 SHA→idempotent, 다른 SHA→throw. */
+/** exact repository-scoped token으로 태그를 생성하고 peeled commit을 재검증한다. */
 export async function createTag(opts: {
   repoFullName: string;
   tag: string;
   sha: string;
 }): Promise<{ created: boolean }> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(opts.repoFullName);
-  try {
-    await octokit.rest.git.createRef({ owner, repo, ref: `refs/tags/${opts.tag}`, sha: opts.sha });
-    return { created: true };
-  } catch (e) {
-    const status = (e as { status?: number }).status;
-    if (status === 422) {
-      const existing = await octokit.rest.git
-        .getRef({ owner, repo, ref: `tags/${opts.tag}` })
-        .catch(() => null);
-      const existingSha = existing?.data.object.sha;
-      if (existingSha && existingSha !== opts.sha) {
-        throw new Error(
-          `태그 ${opts.tag} 가 다른 커밋(${existingSha.slice(0, 7)})에 이미 존재합니다.`,
-        );
-      }
-      return { created: false };
-    }
-    throw e;
-  }
+  return withRepositoryMutationClient({
+    repoFullName: opts.repoFullName,
+    capability: "github.release.write",
+    execute: (client, identity) => createTagWithExactReadback(client, { ...identity, ...opts }),
+  });
 }
 
 /** 태그에 GitHub Release 생성 또는 갱신(본문=출시노트). */
 export async function createOrUpdateRelease(opts: {
   repoFullName: string;
   tag: string;
+  expectedSha: string;
   name?: string;
   body: string;
   prerelease?: boolean;
 }): Promise<{ url: string; id: number }> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(opts.repoFullName);
-  const existing = await octokit.rest.repos
-    .getReleaseByTag({ owner, repo, tag: opts.tag })
-    .catch(() => null);
-  if (existing) {
-    const res = await octokit.rest.repos.updateRelease({
-      owner,
-      repo,
-      release_id: existing.data.id,
-      name: opts.name ?? opts.tag,
+  return withRepositoryMutationClient({
+    repoFullName: opts.repoFullName,
+    capability: "github.release.write",
+    execute: (client, identity) => createOrUpdateReleaseWithExactLookup(client, {
+      ...identity,
+      tag: opts.tag,
+      expectedSha: opts.expectedSha,
+      name: opts.name,
       body: opts.body,
-      ...(opts.prerelease != null ? { prerelease: opts.prerelease } : {}),
-    });
-    return { url: res.data.html_url, id: res.data.id };
-  }
-  const res = await octokit.rest.repos.createRelease({
-    owner,
-    repo,
-    tag_name: opts.tag,
-    name: opts.name ?? opts.tag,
-    body: opts.body,
-    prerelease: opts.prerelease ?? false,
+      prerelease: opts.prerelease,
+    }),
   });
-  return { url: res.data.html_url, id: res.data.id };
 }
 
 /** Release 에 에셋 업로드. 동일 이름 에셋이 있으면 교체(GitHub 는 중복 이름을 거부).
@@ -150,42 +167,25 @@ export async function createOrUpdateRelease(opts: {
 export async function upsertReleaseAsset(opts: {
   repoFullName: string;
   releaseId: number;
+  tag: string;
+  expectedSha: string;
   name: string;
   contentType: string;
   data: string;
 }): Promise<{ url: string }> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(opts.repoFullName);
-
-  const doUpload = () =>
-    octokit.rest.repos.uploadReleaseAsset({
-      owner,
-      repo,
-      release_id: opts.releaseId,
+  return withRepositoryMutationClient({
+    repoFullName: opts.repoFullName,
+    capability: "github.release.write",
+    execute: (client, identity) => upsertReleaseAssetWithExactBinding(client, {
+      ...identity,
+      releaseId: opts.releaseId,
+      tag: opts.tag,
+      expectedSha: opts.expectedSha,
       name: opts.name,
-      // octokit 타입은 data:string 을 요구. JSON 문자열을 원문 바디로 전송.
+      contentType: opts.contentType,
       data: opts.data,
-      headers: { "content-type": opts.contentType },
-    });
-
-  try {
-    const res = await doUpload();
-    return { url: res.data.browser_download_url };
-  } catch (err: unknown) {
-    // 422 = 이름 충돌 → 기존 에셋 삭제 후 재업로드
-    if ((err as { status?: number }).status !== 422) throw err;
-    const existing = await octokit.rest.repos.listReleaseAssets({
-      owner,
-      repo,
-      release_id: opts.releaseId,
-      per_page: 100,
-    });
-    for (const a of existing.data.filter((a) => a.name === opts.name)) {
-      await octokit.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
-    }
-    const res = await doUpload();
-    return { url: res.data.browser_download_url };
-  }
+    }),
+  });
 }
 
 /** workflow_dispatch 트리거. inputs 값은 문자열. */
@@ -194,14 +194,47 @@ export async function dispatchWorkflow(opts: {
   workflowFile: string;
   ref: string; // 태그 또는 브랜치
   inputs?: Record<string, string>;
+  expectedTag?: { tag: string; sha: string };
 }): Promise<void> {
-  const octokit = await getInstallationOctokit();
-  const { owner, repo } = splitRepo(opts.repoFullName);
-  await octokit.rest.actions.createWorkflowDispatch({
-    owner,
-    repo,
-    workflow_id: opts.workflowFile,
-    ref: opts.ref,
-    ...(opts.inputs ? { inputs: opts.inputs } : {}),
+  const releaseTag = opts.inputs?.release_tag;
+  if (
+    releaseTag !== undefined
+    && (opts.expectedTag?.tag !== releaseTag || !opts.expectedTag.sha)
+  ) {
+    throw new Error("GITHUB_WORKFLOW_RELEASE_TAG_BINDING_REQUIRED");
+  }
+  if (
+    opts.expectedTag
+    && (
+      !COMMIT_SHA.test(opts.expectedTag.sha.toLowerCase())
+      || (STABLE_TAG.test(opts.ref) && opts.expectedTag.tag !== opts.ref)
+    )
+  ) {
+    throw new Error("GITHUB_WORKFLOW_RELEASE_TAG_BINDING_MISMATCH");
+  }
+  await withRepositoryMutationClient({
+    repoFullName: opts.repoFullName,
+    capability: "github.workflow-dispatch.write",
+    execute: async (client, { owner, repo }) => {
+      if (opts.expectedTag) {
+        await dispatchWorkflowWithExactTagBinding(client, {
+          owner,
+          repo,
+          workflowFile: opts.workflowFile,
+          ref: opts.ref,
+          inputs: opts.inputs ?? {},
+          expectedTag: opts.expectedTag.tag,
+          expectedSha: opts.expectedTag.sha,
+        });
+        return;
+      }
+      await client.rest.actions.createWorkflowDispatch({
+        owner,
+        repo,
+        workflow_id: opts.workflowFile,
+        ref: opts.ref,
+        ...(opts.inputs ? { inputs: opts.inputs } : {}),
+      });
+    },
   });
 }

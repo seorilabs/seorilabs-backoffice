@@ -34,6 +34,16 @@ import {
   runAttestationNonceDigest,
   signRunAttestation,
 } from "@/lib/control-plane/provider-execution-signer";
+import {
+  authBrokerJournalCheckpointAdvanceRequestSchema,
+  authBrokerJournalCheckpointGenesisRequestSchema,
+  authBrokerJournalCheckpointReadRequestSchema,
+} from "@/lib/control-plane/contracts";
+import {
+  advanceAuthBrokerJournalCheckpoint,
+  genesisAuthBrokerJournalCheckpoint,
+  readAuthBrokerJournalCheckpoint,
+} from "@/lib/control-plane/auth-broker-journal-checkpoint-service";
 import { ControlPlaneError, recordReauthRequest } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 
@@ -45,6 +55,12 @@ const workerSpiffeId = process.env.PROVIDER_EXECUTION_WORKER_SPIFFE_ID?.trim()
   || "spiffe://seorilabs.local/ns/platform/sa/provider-execution-worker";
 const brokerSpiffeId = process.env.PROVIDER_EXECUTION_BROKER_SPIFFE_ID?.trim()
   || "spiffe://seorilabs.local/ns/platform/sa/provider-execution-signer";
+// P2 Auth Broker가 journal checkpoint route를 호출할 때 제시하는 client 인증서의 exact
+// SPIFFE URI SAN이다. brokerSpiffeId(위)와는 방향이 반대다 — brokerSpiffeId는 signer가
+// broker를 호출할 때 스스로 내세우는 identity이고, 이 값은 broker가 signer를 호출할 때
+// signer가 검증하는 identity다.
+const authBrokerClientSpiffeId = process.env.AUTH_BROKER_CLIENT_SPIFFE_ID?.trim()
+  || "spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-broker";
 const brokerOriginInput = process.env.SEORI_AUTH_BROKER_ORIGIN?.trim();
 if (!brokerOriginInput) throw new Error("SEORI_AUTH_BROKER_ORIGIN_REQUIRED");
 const brokerOrigin = new URL(brokerOriginInput);
@@ -115,6 +131,17 @@ function assertWorkerPeer(socket: TLSSocket) {
     throw new Error("WORKER_SPIFFE_ID_MISMATCH");
   }
 }
+
+/** journal checkpoint route 전용. worker mTLS 검증과 완전히 분리된 exact identity다. */
+function assertAuthBrokerPeer(socket: TLSSocket) {
+  if (!socket.authorized) throw new Error("AUTH_BROKER_MTLS_REQUIRED");
+  const certificate = socket.getPeerCertificate(true);
+  if (certificate.subjectaltname !== `URI:${authBrokerClientSpiffeId}`) {
+    throw new Error("AUTH_BROKER_SPIFFE_ID_MISMATCH");
+  }
+}
+
+const AUTH_BROKER_JOURNAL_CHECKPOINT_ROUTE_PREFIX = "/v1/auth-broker/journal-checkpoints/";
 
 async function main() {
   const fixedRoot = "/var/run/seori-provider-execution-signer";
@@ -279,9 +306,44 @@ async function main() {
     maxVersion: "TLSv1.3",
   }, async (request, response) => {
     try {
-      assertWorkerPeer(request.socket as TLSSocket);
+      const isAuthBrokerRoute = typeof request.url === "string"
+        && request.url.startsWith(AUTH_BROKER_JOURNAL_CHECKPOINT_ROUTE_PREFIX);
+      // worker와 broker는 서로 다른 client 인증서를 쓰는 완전히 분리된 peer다. 경로별로
+      // 정확히 하나의 identity만 검증하며 둘을 겹쳐 받지 않는다.
+      if (isAuthBrokerRoute) {
+        assertAuthBrokerPeer(request.socket as TLSSocket);
+      } else {
+        assertWorkerPeer(request.socket as TLSSocket);
+      }
       if (request.method !== "POST" || request.headers["content-type"] !== "application/json") {
         respond(response, 404, { error: { code: "route_not_found" } });
+        return;
+      }
+      if (request.url === "/v1/auth-broker/journal-checkpoints/genesis") {
+        const body = authBrokerJournalCheckpointGenesisRequestSchema.parse(await readJson(request));
+        const result = await genesisAuthBrokerJournalCheckpoint({
+          journalId: body.journalId,
+          actor: authBrokerClientSpiffeId,
+        });
+        respond(response, 200, result);
+        return;
+      }
+      if (request.url === "/v1/auth-broker/journal-checkpoints/read") {
+        const body = authBrokerJournalCheckpointReadRequestSchema.parse(await readJson(request));
+        const result = await readAuthBrokerJournalCheckpoint({ journalId: body.journalId });
+        respond(response, 200, result);
+        return;
+      }
+      if (request.url === "/v1/auth-broker/journal-checkpoints/advance") {
+        const body = authBrokerJournalCheckpointAdvanceRequestSchema.parse(await readJson(request));
+        const result = await advanceAuthBrokerJournalCheckpoint({
+          journalId: body.journalId,
+          expectedGeneration: body.expectedGeneration,
+          expectedDigest: body.expectedDigest,
+          nextDigest: body.nextDigest,
+          actor: authBrokerClientSpiffeId,
+        });
+        respond(response, 200, result);
         return;
       }
       if (request.url === "/v1/claims") {

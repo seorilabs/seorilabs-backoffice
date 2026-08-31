@@ -13,7 +13,8 @@ const APPLICATION_SHA = "b".repeat(40);
 const BUNDLE_SHA = "c".repeat(40);
 const REPOSITORY_ID = "1250442131";
 const FULL_NAME = "seorilabs/happy-farm";
-const HEAD_REF = `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}`;
+const PLAN_IDENTITY = "d".repeat(64);
+const HEAD_REF = `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}/${PLAN_IDENTITY}`;
 
 function candidateClaims(overrides: Partial<JWTPayload> = {}): JWTPayload {
   return {
@@ -53,6 +54,10 @@ const candidateExpectation = {
   workflowBundleSha: BUNDLE_SHA,
   buildProfile: "react-native-android" as const,
   defaultBranch: "main",
+  candidateHeadRef: HEAD_REF,
+  candidatePlanIdentity: PLAN_IDENTITY,
+  releaseRef: null,
+  releaseTag: null,
 };
 
 test("build canary OIDC는 고정 repo/profile/head와 exact central SHA에 결합된다", () => {
@@ -78,6 +83,8 @@ test("일반 APPROVED build는 registered default branch workflow_dispatch와 �
     ...candidateExpectation,
     mode: "APPROVED",
     eventSourceSha: APPLICATION_SHA,
+    candidateHeadRef: null,
+    candidatePlanIdentity: null,
   });
   assert.equal(identity.mode, "APPROVED");
   assert.equal(identity.applicationSourceSha, identity.eventSourceSha);
@@ -99,9 +106,73 @@ test("일반 APPROVED build는 등록된 non-main default branch도 exact ref로
     mode: "APPROVED",
     eventSourceSha: APPLICATION_SHA,
     defaultBranch: "develop",
+    candidateHeadRef: null,
+    candidatePlanIdentity: null,
   });
   assert.equal(identity.defaultBranch, "develop");
   assert.equal(identity.eventRef, "refs/heads/develop");
+});
+
+test("RELEASE build는 exact stable tag caller와 승인된 central SHA에 결합된다", () => {
+  const releaseTag = "v1.2.3";
+  const releaseRef = `refs/tags/${releaseTag}`;
+  const payload = candidateClaims({
+    sha: EVENT_SHA,
+    ref: releaseRef,
+    workflow_ref: `${FULL_NAME}/.github/workflows/android-build-only.yml@${releaseRef}`,
+    workflow_sha: APPLICATION_SHA,
+    event_name: "push",
+    head_ref: "",
+    base_ref: "",
+  });
+  const identity = assertGitHubActionsBuildManifestClaims(payload, {
+    ...candidateExpectation,
+    mode: "RELEASE",
+    candidateHeadRef: null,
+    candidatePlanIdentity: null,
+    releaseRef,
+    releaseTag,
+  });
+  assert.equal(identity.mode, "RELEASE");
+  assert.equal(identity.applicationSourceSha, APPLICATION_SHA);
+  assert.equal(identity.eventSourceSha, EVENT_SHA);
+  assert.equal(identity.releaseRef, releaseRef);
+  assert.equal(identity.releaseTag, releaseTag);
+});
+
+test("RELEASE build는 prerelease, tag/ref/source와 caller identity 불일치를 거부한다", () => {
+  const releaseTag = "v1.2.3";
+  const releaseRef = `refs/tags/${releaseTag}`;
+  const expectation = {
+    ...candidateExpectation,
+    mode: "RELEASE" as const,
+    candidateHeadRef: null,
+    candidatePlanIdentity: null,
+    releaseRef,
+    releaseTag,
+  };
+  const exact = candidateClaims({
+    sha: EVENT_SHA,
+    ref: releaseRef,
+    workflow_ref: `${FULL_NAME}/.github/workflows/android-build-only.yml@${releaseRef}`,
+    workflow_sha: APPLICATION_SHA,
+    event_name: "push",
+    head_ref: "",
+    base_ref: "",
+  });
+  for (const [payload, expected] of [
+    [exact, { ...expectation, releaseTag: "v1.2.3-rc.1", releaseRef: "refs/tags/v1.2.3-rc.1" }],
+    [exact, { ...expectation, releaseRef: "refs/tags/v1.2.4" }],
+    [{ ...exact, workflow_sha: "e".repeat(40) }, expectation],
+    [{ ...exact, workflow_ref: `${FULL_NAME}/.github/workflows/build-android.yml@${releaseRef}` }, expectation],
+    [{ ...exact, ref: "refs/heads/main" }, expectation],
+    [{ ...exact, event_name: "pull_request" }, expectation],
+  ] as const) {
+    assert.throws(
+      () => assertGitHubActionsBuildManifestClaims(payload, expected),
+      /GITHUB_ACTIONS_OIDC_UNAUTHORIZED/,
+    );
+  }
 });
 
 test("candidate alias, public runner, 임의 branch와 profile 교차 대체를 거부한다", () => {
@@ -109,6 +180,9 @@ test("candidate alias, public runner, 임의 branch와 profile 교차 대체를 
     [candidateClaims({ repository_id: "1265192029" }), candidateExpectation],
     [candidateClaims({ repository_visibility: "public", runner_environment: "github-hosted" }), candidateExpectation],
     [candidateClaims({ head_ref: "feature/untrusted" }), candidateExpectation],
+    [candidateClaims({ head_ref: `seori/workflow-bundle-v5-canary/${REPOSITORY_ID}/${BUNDLE_SHA.slice(0, 12)}` }), candidateExpectation],
+    [candidateClaims({ head_ref: `${HEAD_REF}/lookalike` }), candidateExpectation],
+    [candidateClaims(), { ...candidateExpectation, candidateHeadRef: `${HEAD_REF.slice(0, -1)}e` }],
     [candidateClaims(), { ...candidateExpectation, buildProfile: "godot-android" as const }],
     [candidateClaims({ job_workflow_sha: "d".repeat(40) }), candidateExpectation],
   ] as const) {
@@ -162,4 +236,56 @@ test("candidate identity는 GitHub App exact base/merge/head readback 뒤에만 
       async () => readback,
     ), null);
   }
+});
+
+test("release identity는 GitHub App이 exact tag를 peeled commit으로 재확인한 뒤에만 발급된다", async () => {
+  const releaseTag = "v1.2.3";
+  const releaseRef = `refs/tags/${releaseTag}`;
+  const request = new NextRequest("https://backoffice.vzyx.xyz/runtime", {
+    headers: {
+      authorization: "Bearer a.b.c",
+      "x-seori-principal": `github-actions:${REPOSITORY_ID}:1234`,
+    },
+  });
+  const verifier = async () => ({
+    payload: candidateClaims({
+      sha: EVENT_SHA,
+      ref: releaseRef,
+      workflow_ref: `${FULL_NAME}/.github/workflows/android-build-only.yml@${releaseRef}`,
+      workflow_sha: APPLICATION_SHA,
+      event_name: "push",
+      head_ref: "",
+      base_ref: "",
+    }),
+    protectedHeader: { alg: "RS256", typ: "JWT" },
+  });
+  const expectation = {
+    ...candidateExpectation,
+    mode: "RELEASE" as const,
+    candidateHeadRef: null,
+    candidatePlanIdentity: null,
+    releaseRef,
+    releaseTag,
+  };
+  const unexpectedPullRead = async () => {
+    throw new Error("release must not read a pull request");
+  };
+  assert.ok(await authenticateGitHubActionsBuildManifestRequest(
+    request,
+    expectation,
+    verifier,
+    unexpectedPullRead,
+    async (fullName, tag) => {
+      assert.equal(fullName, FULL_NAME);
+      assert.equal(tag, releaseTag);
+      return APPLICATION_SHA;
+    },
+  ));
+  assert.equal(await authenticateGitHubActionsBuildManifestRequest(
+    request,
+    expectation,
+    verifier,
+    unexpectedPullRead,
+    async () => "e".repeat(40),
+  ), null);
 });

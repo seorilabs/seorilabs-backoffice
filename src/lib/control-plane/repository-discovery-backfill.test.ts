@@ -261,6 +261,7 @@ test("UI/API가 승인한 public PRODUCT_APP도 hourly exact HEAD readback에 �
     revision: 2,
     classification: "PRODUCT_APP",
     candidateMarkerPath: null,
+    productIdentity: { displayName: "New Public Product", type: "APP", engine: "RN" },
   });
   assert.equal(vector.headSha, SHA);
   assert.equal(vector.classificationDecisionRevision, 2);
@@ -292,6 +293,7 @@ test("UI/API가 승인한 public INFRA도 source 대신 exact HEAD provenance만
     revision: 3,
     classification: "INFRA_REPO",
     candidateMarkerPath: null,
+    productIdentity: null,
   });
   assert.equal(vector.headSha, SHA);
   assert.equal(vector.classificationDecisionRevision, 3);

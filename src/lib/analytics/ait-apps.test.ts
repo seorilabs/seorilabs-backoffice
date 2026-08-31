@@ -70,6 +70,12 @@ test("신규 lizard-tycoon 리스팅은 61736을 primary로 사용한다", () =>
   assert.equal(AIT_MINIAPP_BY_SLUG["lizard-tycoon"], 61736);
 });
 
+test("운영 종료한 vocab-swipe 리스팅은 수집 대상에서 제외한다", () => {
+  assert.deepEqual(listingsForSlug("vocab-swipe"), []);
+  assert.equal(primaryListingForSlug("vocab-swipe"), undefined);
+  assert.equal(AIT_MINIAPP_BY_SLUG["vocab-swipe"], undefined);
+});
+
 // 무결성: miniAppId 는 리스팅 전역 유일(저장 유니크 키 전제).
 test("miniAppId 는 전역 유일", () => {
   const ids = AIT_LISTINGS.map((l) => l.miniAppId);

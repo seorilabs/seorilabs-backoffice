@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, type FleetProjectProjection } from "@prisma/client";
 
 import {
   AUTOMATION_TEMPLATE_KEY,
@@ -21,6 +21,11 @@ import {
   reconcileTerminalRepoGuards,
   releaseRepoGuard,
 } from "@/lib/control-plane/agent-queue";
+import {
+  parseSourceRemediationPolicy,
+  SOURCE_REMEDIATION_TEMPLATE_KEY,
+} from "@/lib/control-plane/automation-catalog";
+import { templateRepositoryAutomationEligible } from "@/lib/control-plane/source-remediation";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import {
   durableIssueObservation,
@@ -37,6 +42,10 @@ import {
   beginAutomationMutation,
   completeAutomationMutation,
 } from "@/lib/control-plane/automation-mutation";
+import {
+  FLEET_PROJECT_UNCONFIGURED_ID,
+  resolveFleetProjectSource,
+} from "@/lib/control-plane/fleet-project-binding";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   invalidateRepositoryDiscoveryInTransaction,
@@ -69,6 +78,9 @@ const repositoryAutomationSelect = {
   classification: true,
   lastDefaultPushSha: true,
   lastReconciledSha: true,
+  // 단발 source-remediation run의 retry는 정의가 잠근 generation/reason까지 대조한다.
+  reconcileGeneration: true,
+  lastDiscoveryReason: true,
 } as const;
 
 async function assertRepositoryAutomationManaged(repoFullName: string): Promise<void> {
@@ -205,10 +217,37 @@ const defaultRepositoryDiscoveryReadback: RepositoryDiscoveryReadback = async (
 
 type AutomationIngressDependencies = {
   repositoryDiscoveryReadback: RepositoryDiscoveryReadback;
+  issueReadback?: (repoFullName: string, issueNumber: number) => Promise<GhIssueInput>;
+  issueMirrorWrite?: (repoFullName: string, issue: GhIssueInput) => Promise<void>;
+};
+
+const defaultIssueReadback = async (
+  repoFullName: string,
+  issueNumber: number,
+): Promise<GhIssueInput> => {
+  const [owner, repo, ...rest] = repoFullName.split("/");
+  if (!owner || !repo || rest.length > 0) throw new Error("invalid inbox repoFullName");
+  const { getInstallationOctokit } = await import("@/lib/github/app");
+  const response = await (await getInstallationOctokit()).rest.issues.get({
+    owner,
+    repo,
+    issue_number: issueNumber,
+  });
+  return response.data as unknown as GhIssueInput;
+};
+
+const defaultIssueMirrorWrite = async (
+  repoFullName: string,
+  issue: GhIssueInput,
+): Promise<void> => {
+  const { upsertIssue } = await import("@/lib/sync/mirror");
+  await upsertIssue(repoFullName, issue);
 };
 
 const defaultAutomationIngressDependencies: AutomationIngressDependencies = {
   repositoryDiscoveryReadback: defaultRepositoryDiscoveryReadback,
+  issueReadback: defaultIssueReadback,
+  issueMirrorWrite: defaultIssueMirrorWrite,
 };
 
 export async function recordWebhookDelivery(input: {
@@ -603,13 +642,25 @@ export async function createAutomationDefinition(input: {
   }
 }
 
-async function loadDefinition(definitionId: string) {
+/**
+ * PAUSE/RESUME/RUN_NOW는 cadence가 있는 repo-task-autopilot-v1 정의에만 의미가 있어 기존 gate를 그대로 둔다.
+ * CANCEL_RUN/RETRY_RUN은 run 범위 명령이라 단발 source-remediation 정의에도 허용한다. 이 template은
+ * 정의를 두 번 만들 수 없고(DEFINITION_CONFLICT) dead-letter run이 workKey를 계속 잡고 있어
+ * (SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED) 이 경로가 없으면 P7 catch-22가 영구화된다.
+ */
+const RUN_SCOPED_AUTOMATION_COMMANDS = new Set(["CANCEL_RUN", "RETRY_RUN"]);
+
+async function loadDefinition(definitionId: string, command?: string) {
   const definition = await prisma.automationDefinition.findUnique({
     where: { id: definitionId },
     include: { app: { select: { repoFullName: true, status: true } } },
   });
   if (!definition) throw new ControlPlaneError("routine을 찾을 수 없습니다.", 404, "DEFINITION_NOT_FOUND");
-  if (!isManagedAutomationDefinition(definition)) {
+  const runScopedSourceRemediation = command !== undefined
+    && RUN_SCOPED_AUTOMATION_COMMANDS.has(command)
+    && definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY
+    && parseSourceRemediationPolicy(definition.configuration) !== null;
+  if (!isManagedAutomationDefinition(definition) && !runScopedSourceRemediation) {
     throw new ControlPlaneError(
       "legacy 또는 계약 불명 routine은 Fleet 명령으로 제어할 수 없습니다.",
       409,
@@ -808,12 +859,30 @@ export async function retryAgentRun(input: {
         where: { repoFullName: run.repoFullName },
         select: repositoryAutomationSelect,
       });
-      if (!repositoryAutomationEligible(registration)) {
+      // claim(tryClaimRun)과 정확히 같은 template 분기를 쓴다. source-remediation은 정의가 잠근
+      // generation/source SHA/reason이 지금도 같을 때만 통과하므로 재시도가 gate를 넓히지 않는다.
+      if (!templateRepositoryAutomationEligible({
+        template: run.occurrence.definition.template,
+        configuration: run.occurrence.definition.configuration,
+        registration,
+      })) {
         throw new ControlPlaneError(
           "현재 source가 재조정되지 않은 repository의 run은 재시도할 수 없습니다.",
           409,
           "REPOSITORY_NOT_MANAGED",
         );
+      }
+      if (run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY) {
+        const app = run.appId
+          ? await tx.app.findUnique({ where: { id: run.appId }, select: { status: true } })
+          : null;
+        if (!app || app.status !== "ACTIVE") {
+          throw new ControlPlaneError(
+            "ACTIVE App에 결합된 source-remediation run만 재시도할 수 있습니다.",
+            409,
+            "APP_NOT_ELIGIBLE",
+          );
+        }
       }
       await tx.agentRun.update({
         where: { id: run.id },
@@ -865,7 +934,7 @@ export async function executeAutomationCommand(input: {
   } as const;
   const mutation = await beginAutomationMutation(mutationIdentity);
   if (mutation.replay) return mutation.replay;
-  const definition = await loadDefinition(input.definitionId);
+  const definition = await loadDefinition(input.definitionId, input.command.command);
   if ("runId" in input.command) {
     const run = await prisma.agentRun.findUnique({
       where: { id: input.command.runId },
@@ -955,13 +1024,31 @@ async function cancelIneligibleIssueRuns(repoFullName: string, issueNumber: numb
 }
 
 export async function upsertFleetProjectProjection(repoFullName: string, issueNumber: number) {
+  // 모든 eligible issue는 앱별 ID가 아닌 조직 단일 Seorilabs Fleet Project resolver를 공유한다.
   const issue = await prisma.issueMirror.findUnique({
     where: { repoFullName_number: { repoFullName, number: issueNumber } },
     include: {
-      app: { select: { id: true, slug: true, currentStage: true, projectV2Id: true } },
+      app: {
+        select: {
+          id: true,
+          slug: true,
+          currentStage: true,
+          status: true,
+          repoId: true,
+          repoFullName: true,
+        },
+      },
     },
   });
   if (!issue?.app) return null;
+  const source = await resolveFleetProjectSource(issue.app);
+  if (source.kind === "INELIGIBLE") {
+    await prisma.fleetProjectProjection.updateMany({
+      where: { issueNodeId: issue.nodeId, status: { not: "SUPERSEDED" } },
+      data: { status: "SUPERSEDED", lastError: source.reason },
+    });
+    return null;
+  }
   const run = await prisma.agentRun.findFirst({
     where: { workKey: issueWorkKey(repoFullName, issueNumber) },
     orderBy: { updatedAt: "desc" },
@@ -984,42 +1071,56 @@ export async function upsertFleetProjectProjection(repoFullName: string, issueNu
     issueState: issue.state,
   });
   const desiredHash = projectionHash(desired);
-  const projectNodeId = issue.app.projectV2Id ?? `UNCONFIGURED:${issue.app.id}`;
-  const conflictingBinding = issue.app.projectV2Id
-    ? await prisma.app.findFirst({
-      where: {
-        id: { not: issue.app.id },
-        status: "ACTIVE",
-        projectV2Id: { not: null, notIn: [issue.app.projectV2Id] },
-      },
-      select: { id: true },
-    })
-    : null;
-  const bindingError = !issue.app.projectV2Id
-    ? "Seorilabs Fleet Project node ID가 필요합니다."
-    : conflictingBinding
-      ? "ACTIVE managed app의 Project node ID가 단일 Seorilabs Fleet Project로 일치하지 않습니다."
-      : null;
-  const status = bindingError ? "NEEDS_INPUT" : "PENDING";
+  const projectNodeId = source.kind === "CURRENT"
+    ? source.projectNodeId
+    : FLEET_PROJECT_UNCONFIGURED_ID;
+  const bindingRevision = source.kind === "CURRENT" ? source.bindingRevision : null;
+  const bindingError = source.kind === "CURRENT" ? null : source.reason;
+  const status = source.kind === "CURRENT"
+    ? "PENDING"
+    : source.kind === "READBACK_REQUIRED"
+      ? "READBACK_REQUIRED"
+      : "NEEDS_INPUT";
   const existing = await prisma.fleetProjectProjection.findUnique({
     where: { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } },
   });
   const update = bindingError
-    ? { repoFullName, issueNumber, desired, desiredHash, status, lastError: bindingError }
+    ? {
+      repoFullName,
+      issueNumber,
+      bindingRevision,
+      desired,
+      desiredHash,
+      status,
+      lastError: bindingError,
+    }
     : existing?.desiredHash === desiredHash
       ? {
         repoFullName,
         issueNumber,
-        ...(existing.status === "NEEDS_INPUT" ? { status: "PENDING", lastError: null } : {}),
+        bindingRevision,
+        ...(["NEEDS_INPUT", "READBACK_REQUIRED", "SUPERSEDED"].includes(existing.status)
+          ? { status: "PENDING", lastError: null }
+          : {}),
       }
-      : { desired, desiredHash, status, observed: Prisma.DbNull, lastError: null, appliedAt: null };
+      : {
+        bindingRevision,
+        desired,
+        desiredHash,
+        status,
+        observed: Prisma.DbNull,
+        lastError: null,
+        appliedAt: null,
+      };
   const where = { projectNodeId_issueNodeId: { projectNodeId, issueNodeId: issue.nodeId } };
+  let projection: FleetProjectProjection;
   try {
-    return await prisma.fleetProjectProjection.upsert({
+    projection = await prisma.fleetProjectProjection.upsert({
       where,
       create: {
         appId: issue.app.id,
         projectNodeId,
+        bindingRevision,
         issueNodeId: issue.nodeId,
         repoFullName,
         issueNumber,
@@ -1034,8 +1135,20 @@ export async function upsertFleetProjectProjection(repoFullName: string, issueNu
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     // MySQL의 emulated upsert는 동시 최초 생성에서 unique race가 날 수 있다.
     // 이미 만들어진 동일 projection을 같은 desired state로 수렴시킨다.
-    return prisma.fleetProjectProjection.update({ where, data: update });
+    projection = await prisma.fleetProjectProjection.update({ where, data: update });
   }
+  await prisma.fleetProjectProjection.updateMany({
+    where: {
+      issueNodeId: issue.nodeId,
+      id: { not: projection.id },
+      status: { not: "SUPERSEDED" },
+    },
+    data: {
+      status: "SUPERSEDED",
+      lastError: "조직 Fleet Project binding revision과 일치하는 projection으로 대체되었습니다.",
+    },
+  });
+  return projection;
 }
 
 export async function refreshRunFleetProjection(runId: string): Promise<void> {
@@ -1088,8 +1201,8 @@ async function processIngressEvent(event: {
     const { env } = await import("@/lib/env");
     if (!shouldBackofficeAutoPublishReleaseNotes(event.repoFullName, env.githubOrg())) return;
     await assertClaim();
-    const { resolveRefSha } = await import("@/lib/github/write");
-    const currentSha = await resolveRefSha(event.repoFullName, tag.version);
+    const { resolveStableTagSha } = await import("@/lib/github/release");
+    const currentSha = await resolveStableTagSha(event.repoFullName, tag.version);
     if (currentSha.toLowerCase() !== tag.headSha.toLowerCase()) {
       throw new Error("provider tag SHA does not match durable observation");
     }
@@ -1113,15 +1226,10 @@ async function processIngressEvent(event: {
     action: event.action,
     repoFullName: event.repoFullName,
   });
-  const [owner, repo, ...rest] = event.repoFullName.split("/");
-  if (!owner || !repo || rest.length > 0) throw new Error("invalid inbox repoFullName");
-  const { getInstallationOctokit } = await import("@/lib/github/app");
-  const response = await (await getInstallationOctokit()).rest.issues.get({
-    owner,
-    repo,
-    issue_number: event.issueNumber,
-  });
-  const observation = durableIssueObservation(response.data as unknown as GhIssueInput);
+  const readIssue = dependencies.issueReadback ?? defaultIssueReadback;
+  const observation = durableIssueObservation(
+    await readIssue(event.repoFullName, event.issueNumber),
+  );
   if (
     durableObservation
     && new Date(observation.updatedAt) < new Date(durableObservation.updatedAt)
@@ -1134,8 +1242,11 @@ async function processIngressEvent(event: {
   ) {
     throw new Error("automation inbox issue identity mismatch");
   }
-  const { upsertIssue } = await import("@/lib/sync/mirror");
-  await upsertIssue(event.repoFullName, durableIssueToMirrorInput(observation));
+  const writeIssueMirror = dependencies.issueMirrorWrite ?? defaultIssueMirrorWrite;
+  await writeIssueMirror(
+    event.repoFullName,
+    durableIssueToMirrorInput(observation),
+  );
   const issue = await prisma.issueMirror.findUnique({
     where: { repoFullName_number: { repoFullName: event.repoFullName, number: event.issueNumber } },
   });

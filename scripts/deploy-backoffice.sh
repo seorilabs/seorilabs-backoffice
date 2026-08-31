@@ -17,7 +17,7 @@ audit_namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
 audit_state_configmap="${BACKOFFICE_AUDIT_STATE_CONFIGMAP:-backoffice-provider-audit-trigger-state}"
 verify_timeout="${BACKOFFICE_TRIGGER_VERIFY_TIMEOUT_SECONDS:-660}"
 catchup_timeout="${BACKOFFICE_CATCHUP_TIMEOUT_SECONDS:-3360}"
-desired_state_backfill_contract="desired-state-draft-backfill/v2"
+desired_state_backfill_contract="desired-state-safe-source-rebase/v3"
 
 if [ -z "$image" ]; then
   echo "오류: BACKOFFICE_IMAGE가 필요하다" >&2
@@ -223,8 +223,10 @@ echo "migration_completed_at=$migration_completed_at"
 echo "== provider audit trigger observation readback (data ns, read-only) =="
 expected_digest="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-digest:/ { print $2; exit }' \
   "$root/k8s/provider-audit-trigger-verifier.yaml")"
-if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "오류: append-only 계약 digest를 repo에서 읽지 못했다" >&2
+expected_trigger_count="$(awk -F'"' '/seorilabs\.dev\/append-only-contract-count:/ { print $2; exit }' \
+  "$root/k8s/provider-audit-trigger-verifier.yaml")"
+if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]] || [[ ! "$expected_trigger_count" =~ ^[1-9][0-9]*$ ]]; then
+  echo "오류: append-only 계약 digest/count를 repo에서 읽지 못했다" >&2
   exit 1
 fi
 
@@ -245,8 +247,8 @@ trigger_observation_fresh() {
   local status total exact digest observed_at observed_epoch
   IFS='|' read -r status total exact digest observed_at <<< "$1"
   [ "$status" = PASS ] || return 1
-  [ "$total" = 2 ] || return 1
-  [ "$exact" = 2 ] || return 1
+  [ "$total" = "$expected_trigger_count" ] || return 1
+  [ "$exact" = "$expected_trigger_count" ] || return 1
   [ "$digest" = "$expected_digest" ] || return 1
   [[ "$observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
   observed_epoch="$(utc_epoch "$observed_at")" || return 1
@@ -267,7 +269,7 @@ while true; do
   fi
   if (( SECONDS >= trigger_deadline )); then
     echo "오류: append-only trigger 관측이 계약을 만족하지 않는다" >&2
-    echo "expected: status=PASS total=2 exact=2 digest=${expected_digest} observedAt>${migration_completed_at}" >&2
+    echo "expected: status=PASS total=${expected_trigger_count} exact=${expected_trigger_count} digest=${expected_digest} observedAt>${migration_completed_at}" >&2
     echo "observed: ${trigger_state}" >&2
     echo "복구는 trusted operator가 provider-audit-trigger-recovery-job으로 수행한다. 배포는 진행하지 않는다." >&2
     exit 1

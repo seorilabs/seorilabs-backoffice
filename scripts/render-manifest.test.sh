@@ -33,6 +33,9 @@ MANIFESTS=(
   k8s/store-review-cronjob.yaml
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml
+  k8s/fleet-migration-bootstrap-shadow-job.yaml
+  k8s/fleet-migration-proof-writer-job.yaml
+  k8s/workflow-bundle-candidate-executor.yaml
 )
 
 echo "== 치환 =="
@@ -215,6 +218,30 @@ else
   ng "provider audit partial migration 복구 경계가 깨졌다"
 fi
 
+auth_broker_trigger_out="$("$render" "$root/k8s/auth-broker-journal-trigger-recovery-job.yaml" "$IMG" "$SHA")"
+auth_broker_resolve_out="$("$render" "$root/k8s/auth-broker-journal-migration-resolve-job.yaml" "$IMG" "$SHA")"
+if printf '%s' "$auth_broker_trigger_out" | grep -q "backoffice-auth-broker-journal-triggers-${SHA:0:12}-" &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'namespace: data' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'mysql-root-cred' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'history_state.*1:1:1:0:0:1' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -Fq 'SUM(applied_steps_count=0))' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_tables" = "2"' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_columns" = "21"' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$exact_foreign_keys" = "1"' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$checkpoints" = "0"' &&
+   printf '%s' "$auth_broker_trigger_out" | grep -q 'test "$events" = "0"' &&
+   ! printf '%s' "$auth_broker_trigger_out" | grep -q 'log_bin_trust_function_creators\|GRANT TRIGGER\|MYSQL_PWD' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q "backoffice-auth-broker-journal-migration-resolve-${SHA:0:12}-" &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q "image: ${IMG}" &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q -- '--recovery-state="$migration"' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q 'auth broker journal migration recovery already complete' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q '미해결 migration attempt가 있다' &&
+   printf '%s' "$auth_broker_resolve_out" | grep -q 'prisma migrate resolve --applied'; then
+  ok "auth broker journal partial migration은 exact trigger와 immutable resolve Job으로만 복구"
+else
+  ng "auth broker journal partial migration 복구 경계가 깨졌다"
+fi
+
 trigger_verifier="$root/k8s/provider-audit-trigger-verifier.yaml"
 if grep -q 'kind: CronJob' "$trigger_verifier" &&
    grep -q 'namespace: data' "$trigger_verifier" &&
@@ -288,9 +315,9 @@ if grep -q 'automountServiceAccountToken: false' "$catchup_job" &&
    grep -q 'x-seorilabs-source-sha: __BACKOFFICE_IMAGE_TAG__' "$catchup_job" &&
    grep -q -- '-D - -o /dev/null' "$catchup_job" &&
    grep -q '/dev/termination-log' "$catchup_job" &&
-   grep -q 'desired-state-draft-backfill/v2' "$catchup_job" &&
+   grep -q 'desired-state-safe-source-rebase/v3' "$catchup_job" &&
    grep -q 'automation/platform-fleet' "$catchup_job" &&
-   grep -q 'automation/project-projections' "$catchup_job" &&
+   ! grep -q 'automation/project-projections' "$catchup_job" &&
    grep -q 'kubernetes.io/hostname: rpi5' "$catchup_job"; then
   ok "scheduler catch-up 격리와 감사 보존"
 else
@@ -326,7 +353,7 @@ else
   ng "repository discovery backfill schedule 또는 최소권한 경계가 깨졌다"
 fi
 
-echo "== desired-state DRAFT backfill 스케줄 =="
+echo "== desired-state DRAFT와 safe source rebase 스케줄 =="
 desired_state_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-desired-state-backfill/ { print }' "$scheduler_cronjobs")"
 if grep -q 'schedule: "27 \* \* \* \*"' <<<"$desired_state_doc" &&
    grep -q 'concurrencyPolicy: Forbid' <<<"$desired_state_doc" &&
@@ -335,7 +362,7 @@ if grep -q 'schedule: "27 \* \* \* \*"' <<<"$desired_state_doc" &&
    ! grep -q 'x-seorilabs-source-sha' <<<"$desired_state_doc" &&
    grep -q 'automountServiceAccountToken: false' <<<"$desired_state_doc" &&
    grep -q 'readOnlyRootFilesystem: true' <<<"$desired_state_doc"; then
-  ok "desired-state backfill은 classification 이후 DRAFT만 직렬 생성"
+  ok "desired-state backfill은 classification 이후 DRAFT와 safe source rebase를 직렬 실행"
 else
   ng "desired-state backfill schedule 또는 최소권한 경계가 깨졌다"
 fi
@@ -442,8 +469,8 @@ if printf '%s' "$projection_doc" | grep -q 'schedule: "\* \* \* \* \*"' &&
    printf '%s' "$projection_doc" | grep -q 'automation/project-projections' &&
    printf '%s' "$projection_doc" | grep -q 'automountServiceAccountToken: false' &&
    [ "$(grep -c 'automation/project-projections' "$scheduler_cronjobs")" -eq 1 ] &&
-   [ "$(grep -c 'automation/project-projections' "$catchup_job")" -eq 1 ]; then
-  ok "Fleet Project projection drain은 정기 scheduler와 catch-up에 각각 한 번씩 연결된다"
+   [ "$(grep -c 'automation/project-projections' "$catchup_job")" -eq 0 ]; then
+  ok "Fleet Project projection drain은 중복 catch-up 없이 전용 scheduler에만 연결된다"
 else
   ng "Fleet Project projection drain 연결이 깨졌다"
 fi

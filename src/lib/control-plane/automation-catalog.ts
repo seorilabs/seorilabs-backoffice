@@ -1,20 +1,38 @@
 export const AUTOMATION_TEMPLATE_KEY = "repo-task-autopilot-v1" as const;
 export const PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY = "platform-fleet-reconcile-v1" as const;
+// P7 catch-22 전용: classification=PRODUCT_APP이지만 discovery가 NEEDS_INPUT인 repository의
+// discovery 결손(NO_CANDIDATE/BUILD_TARGET_MISSING)만 고치는 단발성 routine이다. 일반
+// repositoryAutomationEligible MANAGED guard는 그대로 두고, 이 template 전용 좁은 gate만 우회한다.
+export const SOURCE_REMEDIATION_TEMPLATE_KEY = "repo-source-remediation-v1" as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY =
+  "workflow-bundle-candidate-executor-v1" as const;
 export const MANAGED_WORKER_TEMPLATE_KEYS = [
   AUTOMATION_TEMPLATE_KEY,
   PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY,
+  SOURCE_REMEDIATION_TEMPLATE_KEY,
 ] as const;
 export const AUTOMATION_CADENCES = ["MANUAL", "HOURLY", "DAILY"] as const;
 export const AUTOMATION_AGENT_KINDS = ["CODEX", "CLAUDE"] as const;
 export const AUTOMATION_APPROVAL_POLICIES = ["READY_PR", "READ_ONLY"] as const;
+// registration.lastDiscoveryReason이 이 두 값일 때만 explicit PRODUCT_APP decision이
+// source-remediation 대상이 된다. repositoryProductPlanningReason의 PRODUCT_DISCOVERY_NOT_READY
+// catch-all(SOURCE_DRIFT, APP_IDENTITY_CONFLICT 등)은 코드 PR로 고칠 수 있는 결손이 아니므로 제외한다.
+export const SOURCE_REMEDIATION_ELIGIBLE_REASON_CODES = ["NO_CANDIDATE", "BUILD_TARGET_MISSING"] as const;
 export const GENERIC_WORKER_PRINCIPALS = {
   CODEX: "codex:seorilabs-generic-worker",
   CLAUDE: "claude:seorilabs-generic-worker",
 } as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL =
+  "seori-auth:workflow-bundle-candidate-executor" as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL =
+  "seori-auth:workflow-bundle-candidate-adapter" as const;
+export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY =
+  "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor" as const;
 
 export type AutomationCadence = typeof AUTOMATION_CADENCES[number];
 export type AutomationAgentKind = typeof AUTOMATION_AGENT_KINDS[number];
 export type AutomationApprovalPolicy = typeof AUTOMATION_APPROVAL_POLICIES[number];
+export type SourceRemediationEligibleReasonCode = typeof SOURCE_REMEDIATION_ELIGIBLE_REASON_CODES[number];
 
 export interface AutomationPolicy {
   [key: string]: string | number | boolean;
@@ -22,7 +40,47 @@ export interface AutomationPolicy {
   approvalPolicy: AutomationApprovalPolicy;
   budgetCeilingMicros: number;
   createsPr: boolean;
-  claimSource: "github-issue-mirror" | "platform-fleet-plan";
+  claimSource:
+    | "github-issue-mirror"
+    | "platform-fleet-plan"
+    | "source-remediation-issue"
+    | "workflow-bundle-candidate";
+}
+
+export const WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY = Object.freeze({
+  schemaVersion: 1,
+  approvalPolicy: "READY_PR",
+  budgetCeilingMicros: 1,
+  createsPr: true,
+  claimSource: "workflow-bundle-candidate",
+} satisfies AutomationPolicy);
+
+function parseWorkflowBundleCandidatePolicy(value: unknown): AutomationPolicy | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const expected = WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY as Record<string, unknown>;
+  const keys = Object.keys(candidate).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  if (
+    keys.length !== expectedKeys.length
+    || keys.some((key, index) => key !== expectedKeys[index])
+    || expectedKeys.some((key) => candidate[key] !== expected[key])
+  ) return null;
+  return WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY;
+}
+
+/**
+ * 정의 시점에 잠근 exact 대상: repo numeric ID(appId로 결합), 단일 issue, discovery
+ * generation/source SHA/reason, issue 제목+라벨 scope digest. claim 시 이 값 그대로
+ * registration/IssueMirror와 다시 CAS 비교하며, 정의 이후에는 바꿀 수 없다.
+ */
+export interface SourceRemediationPolicy extends AutomationPolicy {
+  claimSource: "source-remediation-issue";
+  issueNumber: number;
+  discoveryGeneration: number;
+  sourceSha: string;
+  reasonCode: SourceRemediationEligibleReasonCode;
+  scopeDigest: string;
 }
 
 export const AGENT_READBACK_CAPABILITIES = [
@@ -162,7 +220,74 @@ export function parseManagedPlatformFleetPolicy(value: unknown): AutomationPolic
   return platformFleetAutomationPolicy({ budgetCeilingMicros: Number(candidate.budgetCeilingMicros) });
 }
 
-/** worker claim 경계는 UI에서 만드는 이슈 routine과 내부 Platform plan을 함께 수용한다. */
+export function sourceRemediationAutomationPolicy(input: {
+  budgetCeilingMicros: number;
+  issueNumber: number;
+  discoveryGeneration: number;
+  sourceSha: string;
+  reasonCode: SourceRemediationEligibleReasonCode;
+  scopeDigest: string;
+}): SourceRemediationPolicy {
+  return {
+    schemaVersion: 1,
+    approvalPolicy: "READY_PR",
+    budgetCeilingMicros: input.budgetCeilingMicros,
+    createsPr: true,
+    claimSource: "source-remediation-issue",
+    issueNumber: input.issueNumber,
+    discoveryGeneration: input.discoveryGeneration,
+    sourceSha: input.sourceSha,
+    reasonCode: input.reasonCode,
+    scopeDigest: input.scopeDigest,
+  };
+}
+
+/** 정의 생성 이후 수정 경로가 없는 exact 대상 잠금. 누락/추가 field는 전부 fail-closed다. */
+export function parseSourceRemediationPolicy(value: unknown): SourceRemediationPolicy | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate).sort();
+  const expectedKeys = [
+    "approvalPolicy",
+    "budgetCeilingMicros",
+    "claimSource",
+    "createsPr",
+    "discoveryGeneration",
+    "issueNumber",
+    "reasonCode",
+    "schemaVersion",
+    "scopeDigest",
+    "sourceSha",
+  ].sort();
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) return null;
+  if (
+    candidate.schemaVersion !== 1
+    || candidate.claimSource !== "source-remediation-issue"
+    || candidate.approvalPolicy !== "READY_PR"
+    || candidate.createsPr !== true
+    || !Number.isSafeInteger(candidate.budgetCeilingMicros)
+    || Number(candidate.budgetCeilingMicros) <= 0
+    || !Number.isSafeInteger(candidate.issueNumber)
+    || Number(candidate.issueNumber) <= 0
+    || !Number.isSafeInteger(candidate.discoveryGeneration)
+    || Number(candidate.discoveryGeneration) < 0
+    || typeof candidate.sourceSha !== "string"
+    || !/^[0-9a-f]{40}$/i.test(candidate.sourceSha)
+    || typeof candidate.scopeDigest !== "string"
+    || !/^[0-9a-f]{64}$/i.test(candidate.scopeDigest)
+    || !SOURCE_REMEDIATION_ELIGIBLE_REASON_CODES.includes(candidate.reasonCode as SourceRemediationEligibleReasonCode)
+  ) return null;
+  return sourceRemediationAutomationPolicy({
+    budgetCeilingMicros: Number(candidate.budgetCeilingMicros),
+    issueNumber: Number(candidate.issueNumber),
+    discoveryGeneration: Number(candidate.discoveryGeneration),
+    sourceSha: candidate.sourceSha.toLowerCase(),
+    reasonCode: candidate.reasonCode as SourceRemediationEligibleReasonCode,
+    scopeDigest: candidate.scopeDigest.toLowerCase(),
+  });
+}
+
+/** worker claim 경계는 UI에서 만드는 이슈 routine과 내부 Platform plan, source-remediation 단발 대상을 함께 수용한다. */
 export function parseManagedWorkerPolicy(input: {
   template: string;
   agentKind: string | null;
@@ -176,6 +301,16 @@ export function parseManagedWorkerPolicy(input: {
   if (input.template === PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY) {
     return input.agentKind === "CODEX"
       ? parseManagedPlatformFleetPolicy(input.configuration)
+      : null;
+  }
+  if (input.template === SOURCE_REMEDIATION_TEMPLATE_KEY) {
+    return AUTOMATION_AGENT_KINDS.includes(input.agentKind as AutomationAgentKind)
+      ? parseSourceRemediationPolicy(input.configuration)
+      : null;
+  }
+  if (input.template === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY) {
+    return input.agentKind === null
+      ? parseWorkflowBundleCandidatePolicy(input.configuration)
       : null;
   }
   return null;
@@ -197,6 +332,21 @@ export function isManagedAutomationDefinition(input: {
   return input.template === AUTOMATION_TEMPLATE_KEY
     && AUTOMATION_AGENT_KINDS.includes(input.agentKind as AutomationAgentKind)
     && parseManagedAutomationPolicy(input.configuration) !== null;
+}
+
+export function eligibleForAutopilot(input: {
+  issueNumber?: number | null;
+  issueState?: string | null;
+  labels: unknown;
+}): boolean {
+  if (input.issueNumber && input.issueState?.toUpperCase() !== "OPEN") return false;
+  const labels = Array.isArray(input.labels)
+    ? input.labels.filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase())
+    : [];
+  if (input.issueNumber && !labels.includes("autopilot")) return false;
+  return !labels.some((label) =>
+    label === "blocked" || label === "no-autopilot" || label.startsWith("approval:"),
+  );
 }
 
 export const AUTOMATION_TEMPLATES = [{

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { Prisma, type AppStatus } from "@prisma/client";
 import type {
   ConsoleMetricsPush,
   ConsoleAppPush,
@@ -27,6 +27,11 @@ export interface ConsoleIngestResult {
   errors: { key: string; error: string }[]; // upsert 중 예외
   // 저장은 했지만 producer 가 채워야 할 값이 비어 온 경우. 실패가 아니라 품질 신호다.
   warnings: { key: string; warning: string }[];
+}
+
+/** ACTIVE 앱만 신규 콘솔 지표 수집 대상이다. PAUSED/DEPRECATED의 과거 행은 보존한다. */
+export function isConsoleMetricCollectionActive(status: AppStatus): boolean {
+  return status === "ACTIVE";
 }
 
 /**
@@ -90,7 +95,7 @@ export async function ingestConsoleMetrics(
 
   // App 해석 인덱스(slug / aitMiniAppId). 한 번만 로드.
   const registry = await prisma.app.findMany({
-    select: { id: true, slug: true, aitMiniAppId: true },
+    select: { id: true, slug: true, status: true, aitMiniAppId: true },
   });
   const bySlug = new Map(registry.map((a) => [a.slug, a]));
   const byMiniApp = new Map(
@@ -106,6 +111,10 @@ export async function ingestConsoleMetrics(
       (push.miniAppId != null ? byMiniApp.get(push.miniAppId) : undefined);
     if (!app) {
       result.skipped.push({ key, reason: "App 매핑 없음(slug/miniAppId 불일치)" });
+      continue;
+    }
+    if (!isConsoleMetricCollectionActive(app.status)) {
+      result.skipped.push({ key, reason: `App 운영 중지(status=${app.status})` });
       continue;
     }
     if (push.miniAppId == null) {
@@ -211,7 +220,7 @@ export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
     _count: { _all: true },
   });
   const registry = await prisma.app.findMany({
-    select: { id: true, slug: true, aitMiniAppId: true },
+    select: { id: true, slug: true, status: true, aitMiniAppId: true },
   });
 
   const bySlug = new Map(registry.map((a) => [a.slug, a]));
@@ -219,14 +228,23 @@ export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
 
   // 대상 리스팅 = 코드 표 ∪ DB(aitMiniAppId 설정됐으나 표에 없는 앱의 primary).
   type Target = { slug: string; miniAppId: number; label?: string };
-  const targets: Target[] = AIT_LISTINGS.map((l) => ({
-    slug: l.appSlug,
-    miniAppId: l.miniAppId,
-    label: l.label,
-  }));
-  const known = new Set(AIT_LISTINGS.map((l) => `${l.appSlug}:${l.miniAppId}`));
+  const targets: Target[] = AIT_LISTINGS
+    .filter((l) => {
+      const app = bySlug.get(l.appSlug);
+      return !app || isConsoleMetricCollectionActive(app.status);
+    })
+    .map((l) => ({
+      slug: l.appSlug,
+      miniAppId: l.miniAppId,
+      label: l.label,
+    }));
+  const known = new Set(targets.map((l) => `${l.slug}:${l.miniAppId}`));
   for (const a of registry) {
-    if (a.aitMiniAppId != null && !known.has(`${a.slug}:${a.aitMiniAppId}`)) {
+    if (
+      isConsoleMetricCollectionActive(a.status)
+      && a.aitMiniAppId != null
+      && !known.has(`${a.slug}:${a.aitMiniAppId}`)
+    ) {
       targets.push({ slug: a.slug, miniAppId: a.aitMiniAppId });
     }
   }

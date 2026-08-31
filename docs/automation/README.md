@@ -6,7 +6,9 @@
 - durable scheduler endpoint: `/api/admin/automation/schedule`이 누락 schedule, webhook inbox, 만료 lease를 재조정한다.
 - generic worker contract: Codex와 Claude 각각 조직당 설치 상한 1개다.
 - Platform Fleet internal template: 검증된 서명 manifest와 exact observation에서 만든 `PLATFORM_SDK_UPDATE` task만 Codex generic worker가 처리한다. 별도 앱 routine이나 Issue를 만들지 않는다.
+- Source remediation internal template(`repo-source-remediation-v1`): `classification=PRODUCT_APP`이지만 discovery가 `NO_CANDIDATE`/`BUILD_TARGET_MISSING`으로 `NEEDS_INPUT`인 repository의 catch-22 전용 단발 routine이다. 앱 Fleet 화면의 일반 routine picker가 아니라 `/api/control-plane/source-remediation-definitions`로만 만들며, 나머지 template의 `RepositoryRegistration.status=MANAGED` guard는 전혀 건드리지 않는다. 자세한 조건은 `docs/FLEET_CONTROL_PLANE.md`의 "Source remediation" 절.
 - Project projector: `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`을 desired/observed ledger로 분리하고 write 뒤 readback한다.
+- WorkflowBundle candidate executor: signed ACTIVE config가 exact CANDIDATE record를 승인한 두 고정 canary repository에서만 중앙 generator caller 두 파일을 Ready PR로 만든다. 운영/활성화 gate는 [workflow-bundle-candidate-executor.md](./workflow-bundle-candidate-executor.md)를 따른다.
 
 ## 운영 상태와 worker gate
 
@@ -19,8 +21,10 @@ deterministic scheduler는 `k8s/scheduler-cronjobs.yaml`의 `backoffice-automati
    모델은 token이나 Authorization header를 만들지 않고 공개 `sessionId`만 전달한다.
    legacy `AGENT_WORKER_TOKEN`은 worker principal을 증명하지 못하므로 사용하지 않는다.
 3. Codex와 Claude generic worker가 각각 0개 또는 1개인지 확인한다. 이미 있으면 새로 만들지 않고 업데이트한다.
-4. GitHub App의 기존 권한으로 Fleet Project read/write가 가능한지 확인한다. 권한이 없으면 확대하지 않고 projection을 `READBACK_REQUIRED`로 둔다.
-   관리 앱의 `projectV2Id`는 승인된 단일 `Seorilabs Fleet` Project node ID와 모두 일치해야 하며 projector는 Project나 field/option을 생성하지 않는다.
+4. 중앙 `FleetProjectBinding`에 조직 단일 `Seorilabs Fleet` owner/number를 revision으로 등록하고 GitHub App의
+   `organization_projects:write` grant와 공개 node/title/URL을 readback한다. 권한이 없으면 Project를 absent로
+   추측하지 않고 `HUMAN_PERMISSION_REQUIRED`로 둔다. 앱별 `projectV2Id` 입력은 없으며 projector는 Project나
+   field/option을 생성하지 않는다.
 5. canary 앱에서 claim 경쟁, TTL 재claim, 결과 불명 readback, repo PR guard를 검증한다.
 6. generic worker에는 GitHub/provider write credential을 직접 주입하지 않는다.
    `READY_PR`은 worker와 다른 adapter identity, exact runtime identity, Ed25519 공개키 외에도

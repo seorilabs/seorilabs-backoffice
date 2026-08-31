@@ -14,7 +14,7 @@ const TARGET_LABEL: Record<string, string> = {
   AIT: "AppsInToss",
   PLAY: "Google Play",
   APPSTORE: "App Store",
-  ALL: "전체(Deploy All)",
+  ALL: "전체 후보(Deploy All)",
 };
 
 // App.marketTargets(소문자) → 배포 대상 후보(+2개 이상이면 ALL).
@@ -70,13 +70,16 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
 
   function doDeploy() {
     if (!tag || !target) return;
-    if (!window.confirm(`${tag} → ${TARGET_LABEL[target]} 배포를 실행할까요?`)) return;
+    if (!window.confirm(
+      `${tag} → ${TARGET_LABEL[target]} 빌드/내부 업로드를 실행할까요?\n`
+        + "심사 제출·승인·공개 배포는 포함되지 않습니다.",
+    )) return;
     setDepMsg(null);
     start(async () => {
       const r = await deployAction(appId, tag, target);
       setDepMsg(
         r.ok
-          ? `🚀 ${TARGET_LABEL[target]} 배포 트리거됨 — 완료 시 알림`
+          ? `🚀 ${TARGET_LABEL[target]} 후보 실행 트리거됨 — 처리·QA·심사·공개는 별도`
           : `실패: ${r.error}`,
       );
     });
@@ -160,7 +163,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
 
       {/* 릴리즈 태그 기준 마켓 배포 */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="w-20 text-xs font-medium text-neutral-500">배포</span>
+        <span className="w-20 text-xs font-medium text-neutral-500">후보 실행</span>
         {markets.length === 0 ? (
           <span className="text-xs text-neutral-400">배포 마켓 미설정</span>
         ) : tags.length === 0 ? (
@@ -192,7 +195,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
               ))}
             </select>
             <button onClick={doDeploy} disabled={pending} className={btn}>
-              📦 배포
+              📦 빌드/내부 업로드
             </button>
           </>
         )}
@@ -223,8 +226,8 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
       )}
 
       <p className="text-[11px] text-neutral-400">
-        릴리즈 태그는 명시적으로 생성되며, 마켓 배포는 태그를 기준으로 트리거됩니다. 결과는 워크플로 완료 시
-        미러/알림으로 반영됩니다.
+        명시적 stable 태그만 사용합니다. 이 실행은 후보 빌드와 허용된 내부 업로드까지입니다.
+        처리, 실기기 QA, 심사 제출, 승인, production 배포, 공개 상태는 각각 별도 gate로 확인합니다.
       </p>
     </div>
   );

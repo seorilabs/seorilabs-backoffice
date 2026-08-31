@@ -26,7 +26,9 @@ gate 전에는 provider 쓰기나 마켓 upload가 일어나지 않는다. 심�
   함께 서명하며 private key와
   attestation은 모델이나 Backoffice 응답에 노출하지 않는다.
 - `k8s/seori-auth-agent-runtime.yaml`은 기본 `replicas: 0`이고 Backoffice의
-  `AGENT_TRUSTED_ADAPTER_DEPLOYED=false`, 코드의 미구현 durable step-ledger gate와 함께 잠긴다.
+  `AGENT_TRUSTED_ADAPTER_DEPLOYED=false`, 코드의 `trustedGithubRuntimeCanaryApproved()=false`
+  runtime canary gate와 함께 잠긴다. durable step ledger 자체는 구현됐으므로
+  (`trustedGithubStepLedgerImplemented()=true`) 남은 잠금은 canary 승인과 replica뿐이며,
   현재 revision에서는 환경변수를 바꿔도 `READY_PR`을 생성하거나 claim할 수 없다.
 
 토큰 audience와 worker principal을 함께 결합하며, audit에는 principal, logical entity ID, digest와 공개 식별자만 남긴다.
@@ -39,14 +41,16 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
+| `POST` | `/api/control-plane/store-assets` | internal workload가 PNG/JPEG 원본을 중앙 private object storage에 create-only 업로드하고 generation별 CRC32C·SHA-256 readback을 검증. objectKey/checksum만 반환 |
+| `POST` | `/api/platform/apps/{appId}/store-assets` | 동일 service/validator를 쓰는 세션 보호 Backoffice UI 경로. same-origin, 현재 DB role/AppOwner, `Idempotency-Key`, numeric repo binding을 모두 재검증 |
 | `POST` | `/api/control-plane/config-revisions/rebase` | latest non-legacy `DRAFT/ACTIVE` payload를 바꾸지 않고 current discovery에 새 `DRAFT`로 재결합. activation 없음 |
 | `POST` | `/api/control-plane/config-revisions/discovery-draft` | `mode=DRAFT_ONLY`에서 revision 0/no-import 또는 검토 불가 legacy DRAFT 대신 exact-SHA BuildTarget market만 새 `DRAFT`로 투영. legacy payload 복사와 activation 없음 |
-| `GET/POST` | `/api/control-plane/desired-state-backfill` | ACTIVE 앱 전체의 분류·입력 필요 요약 조회 / exact discovery에서 확인된 market만 중앙 `DRAFT`로 멱등 backfill |
+| `GET/POST` | `/api/control-plane/desired-state-backfill` | 기존 ACTIVE 앱과 비보관 PRODUCT_APP에 결합된 PAUSED/DEPRECATED 앱의 분류·입력 필요 요약 조회 / config가 없으면 exact discovery market `DRAFT`, valid ACTIVE config의 source만 바뀌었으면 동일 payload의 새 revision을 원자적으로 자동 활성화 |
 | `GET/POST` | `/api/control-plane/repository-classification-decisions` | `NEEDS_INPUT` 결정·후속 정책 교정 및 decision 없는 `MANAGED` 관측 확정 큐 / generation과 decision revision CAS로 사람·승인된 AI의 append-only 분류·product identity 기록 |
 | `POST` | `/api/control-plane/config-revisions/activate` | `expectedActiveRevision` CAS로 `DRAFT → ACTIVE`, 이전 ACTIVE는 `SUPERSEDED` |
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sha}&market=&revision=` | exact SHA observation의 `workflowCaller`와 서명 검증된 config snapshot 조립 |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함 |
-| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={mainSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_profile={profile}&schema=workflow-bundle-v5-build[-canary]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-main discovery build binding을 모두 결합한 Android build-only readback. canary는 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR만 허용 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={bindingSha}&application_ref={eventSha}&schema=workflow-bundle-v5-static` | GitHub OIDC와 ACTIVE config가 승인한 WorkflowBundle SHA로 static runtime binding readback. main push는 두 SHA가 같고 same-repo PR은 OIDC merge SHA와 GitHub App이 읽은 exact base/head repository를 분리 결합. JS profile은 `js-static-checks-v1.yml`, Godot은 `godot-checks-v3.yml` exact called path와 일치해야 함. 기간제 dependency audit 예외는 signed config의 `STATIC_CHECK` source가 application SHA와 같고 만료 전일 때만 manifest digest에 포함 |
+| `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sourceSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_target=android&build_profile={profile}&schema=workflow-bundle-v5-build[-canary|-release]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-source discovery build binding을 결합한 Android build-only readback. canary는 `plan_identity`와 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR을 요구한다. release는 `release_ref=refs/tags/vX.Y.Z`와 `release_tag=vX.Y.Z`, GitHub App의 peeled tag commit readback, APPROVED bundle을 모두 요구한다. 기간제 dependency audit 예외는 `ANDROID_BUILD_ONLY` source가 exact application SHA와 같고 만료 전일 때만 포함 |
 | `POST` | `/api/control-plane/workflow-bundles` | exact successful `.github` candidate run/artifact 또는 기존 candidate와 canonical Ed25519 서명을 검증해 불변 `CANDIDATE`/`APPROVED` registry record를 멱등 import. secret/private signing key를 받거나 반환하지 않음 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
@@ -70,6 +74,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/internal/agent-adapter/github-mutations/readback` | exact head ref/marker의 branch와 전체 PR 상태를 서명 readback해 `VERIFIED`, `NOT_APPLIED`, `RESULT_UNKNOWN` 기록 |
 | `POST` | `/api/control-plane/automation-definitions` | agent, cadence, 예산 상한, 승인 정책이 고정된 routine 생성 |
 | `POST` | `/api/control-plane/automation-definitions/{id}/commands` | 즉시 실행, pause/resume, run cancel/dead-letter retry |
+| `POST` | `/api/control-plane/source-remediation-definitions` | P6/P7 discovery catch-22 전용 단발 routine 생성. exact repo/issue/discovery generation/source SHA/reason을 잠그고 같은 transaction에서 occurrence·AgentRun까지 만든다 |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
 | `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
 | `POST` | `/api/admin/automation/platform-fleet` | latest Platform Release/approval을 검증·record/reconcile한 뒤 기존 contract Issue/SDK PR plan을 readback-first로 drain |
@@ -79,13 +84,14 @@ HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키
 기존 ACTIVE snapshot도 제공하지 않는다.
 
 세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, GitHub에 등록된 exact default branch/ref, current
-`repository-discovery/v10`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
+`repository-discovery/v11`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은
 serializable transaction 안에서 다시 확인한다. source app/ref/SHA/payload digest가 어긋나거나
 caller의 `expectedLatestRevision`이 현재 revision과 다르면 아무 revision과 audit도 만들지 않는다.
 legacy shadow DRAFT는 일반 rebase할 수 없다. 별도 discovery projection은 ConfigRevision과 legacy import가
 모두 0건이거나 append-only import/parity 증거가 있는 latest legacy DRAFT에만 허용된다. revision 0 경로는
 `PAUSED/DEPRECATED` product inventory도 누락하지 않지만, exact current discovery와 BuildTarget만 사용한다.
-두 경로 모두 `DRAFT_ONLY`이며 법적/provider/free-text/localization/asset/build 값을 복사하거나 추측하지 않는다.
+수동 rebase와 discovery projection은 모두 `DRAFT_ONLY`이며 법적/provider/free-text/localization/asset/build
+값을 추측하지 않는다. 아래 중앙 scheduler의 자동 활성화는 별도 source-only 계약으로 제한한다.
 
 Android build-only 권한은 ConfigRevision의 `build.workflowBundleSha` 주장만으로 열리지 않는다.
 같은 revision에 `build.workflowBundleDigest`를 `sha256:` 형식으로 고정하고, 별도 immutable registry에서
@@ -103,10 +109,33 @@ fail-closed하며 CANDIDATE는 successful GitHub artifact identity로 별도 검
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
 support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.
+Happy Farm dependency audit 예외는 `build.dependencyAuditException` 단일 객체로만 저장하며, repository
+identity, static merge source와 Android base source, 각 lockfile digest, 정렬된 high advisory 3건과 만료를
+signed snapshot에 함께 고정한다. 해당 객체는 static check와 Android build-only manifest에만 전달하고
+source 또는 만료가 다르면 fail-closed한다. release, upload, review, public action 권한으로 해석하지 않는다.
 ProjectBlueprint의 provisioner는 등록된 `shared/*` logical credential만 참조할 수 있다. 법적 승인,
 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 값 또는 변경 및 모든 미정의 필드는
 fail-closed한다. compliance는 이 계약에서 `DRAFT`만 만들 수 있다. 이전 validator로 만들어진 DRAFT도
 activation 시 다시 검사한다.
+
+StoreAsset 원본은 caller가 `objectKey`나 checksum을 정하지 않는다. 서버가 실제 image bytes로 SHA-256을
+계산하고 `apps/{numericRepoId}/revisions/{nextRevision}/markets/{market|all}/locales/{locale|all}/...` 형태의
+deterministic key를 만든다. Google Cloud Storage 업로드는 `ifGenerationMatch=0`과 CRC32C 검증으로 기존
+객체를 덮어쓰지 않는다. 업로드 직후 exact generation을 다시 다운로드해 size, content type, 공개 custom
+metadata와 SHA-256을 모두 대조한 뒤에만 mutation ledger와 append-only audit를 완료한다. 완료된 idempotency
+replay도 object를 다시 읽어 현재 무결성을 확인한다. object bytes, 파일명, credential은 DB·audit·응답에
+저장하지 않는다. `CONTROL_PLANE_STORE_ASSET_BUCKET` 또는 ADC/workload identity가 없으면 upload만
+`STORE_ASSET_STORAGE_NOT_CONFIGURED`/`STORE_ASSET_STORAGE_UNAVAILABLE`로 fail-closed하며 기존 manifest 조회와
+ConfigRevision 기능은 계속 동작한다. route는 `Content-Length`를 신뢰하지 않고 request stream을 직접 계수해
+chunked/길이 미지정 요청도 multipart 전체 21 MiB에서 중단한다. UI route는 production `AUTH_URL`의 HTTPS
+origin과 실제 request URL·Origin이 모두 같아야 하며 `AUTH_URL` 미설정 시 fail-closed한다.
+
+upload 전에 mutation `PENDING` row에 deterministic object key와 checksum을 먼저 기록한다. 따라서 upload 뒤
+process/CAS 실패는 같은 idempotency key로 create-only 재시도할 수 있고, 동일 logical request의 `created` 값은
+object metadata의 request digest로 결정된다. 다만 ConfigRevision drift 또는 사용자가 draft를 저장하지 않아
+참조되지 않은 content-addressed object는 이 slice에서 즉시 삭제하지 않는다. web workload에 object delete
+권한을 주지 않으며, mutation ledger와 ConfigRevision reference를 대조하는 별도 GC가 검증되기 전에는 해당
+object가 남을 수 있다.
 
 ## ProjectBlueprint와 provider readback
 
@@ -230,6 +259,48 @@ strict observation만 소비한다. P2 durable nonce journal이 signer의 각 at
 조회한다. 그래도 결과가 불명이면 다음 generation의 `READBACK_FIRST` claim은 `operation=READBACK`과 별도 fleet
 readback credential을 다시 검증한 새 grant를 REGISTER→VERIFY→CONSUME 정확히 한 번 실행해 observation을 만든다.
 worker는 claim과 envelope의 resume mode가 다르거나 READBACK_FIRST가 READBACK operation이 아니면 중단한다.
+
+### P2 journal checkpoint의 Backoffice durable authority
+
+P2 Auth Broker가 signer attestation을 재시작 뒤에도 정확히 한 번만 소비하려면 자신의
+durable nonce journal이 어디까지 commit됐는지 재시작에도 잃지 않아야 한다. 그 checkpoint의
+durable authority는 Backoffice가 맡는다. `provider-execution-attestation-signer`의 기존
+mTLS 서버(worker가 쓰는 `/v1/claims`·`/v1/broker-requests`·`/v1/settlements`와 같은 프로세스,
+같은 9443 포트)에 broker 전용 고정 route 세 개만 추가한다.
+
+- `POST /v1/auth-broker/journal-checkpoints/genesis` — `{journalId}`. journalId별 genesis
+  row를 멱등 생성한다(`generation=sequence=0`, opaque 고정 digest). 이미 있으면 새로 만들지
+  않고 기존 row를 그대로 반환한다.
+- `POST /v1/auth-broker/journal-checkpoints/advance` — `{journalId, expectedGeneration,
+  expectedDigest, nextDigest}`. strict `generation==sequence` CAS다. 현재 row의
+  generation·checkpointDigest가 요청의 expected와 정확히 같을 때만 정확히 한 단계
+  (`expectedGeneration+1`)만 전진한다. idempotency key는 클라이언트가 고르지 않고
+  journalId, expected generation·digest, next digest 전체에서 고정 길이 digest로 유도해,
+  같은 논리 연산의 재시도는 항상 같은 key로 수렴하고 새 row를 만들지 않는다(REPLAYED).
+- `POST /v1/auth-broker/journal-checkpoints/read` — `{journalId}`. "unknown outcome
+  readback" 전용 진입점이다. broker가 advance 응답을 잃었을 때 자신이 재구성한
+  idempotency key가 반영됐는지 현재 generation/digest만 보고 스스로 판정한다. Backoffice는
+  event 목록 조회를 제공하지 않는다.
+
+세 route 모두 `assertAuthBrokerPeer`로 exact broker client SPIFFE URI SAN
+(`AUTH_BROKER_CLIENT_SPIFFE_ID`, 기본값 `spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-broker`)만
+허용하며, 같은 프로세스의 worker 전용 route를 검증하는 `assertWorkerPeer`와는 완전히 분리된
+identity다. body는 고정 zod `.strict()` 계약(`authBrokerJournalCheckpoint*Schema`, journalId,
+generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/token/cookie/TOTP 필드는
+계약 자체에 없다. 감사는 `control_plane_auth_broker_journal_checkpoint_event`
+append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
+원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
+살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 이 두 table의 네 trigger와 Fleet migration
+proof/claim/completion 세 table의 여섯 trigger를 합친 전체 열 trigger를 하나의 signed digest
+계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
+(`scripts/test-auth-broker-journal-checkpoint.ts`), migration 이후 in-cluster readback을 모두
+통과해야 rollout이 진행된다.
+
+k8s에는 `k8s/provider-execution-worker.yaml`의 signer Deployment에
+`AUTH_BROKER_CLIENT_SPIFFE_ID` 값과, `auth-broker` 네임스페이스의 `seori-auth-broker` pod에서
+9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 추가했다. signer/worker
+`replicas: 0`과 기존 fail-closed provider execution activation gate는 그대로 유지한다 —
+이 변경은 activation gate를 열지 않는다.
 
 운영 활성화 전에는 다음을 모두 readback으로 확인한다.
 
@@ -429,6 +500,52 @@ control-plane bearer endpoint는 이 전이를 제공하지 않는다. 이 상�
 - routine의 `approvalPolicy`, `budgetCeilingMicros`, 누적 `spentMicros`, 남은 예산과 허용 action capability는 claim에 포함된다. 모든 settlement는 `costMicros`가 필수이고 누적 예산 초과 및 `READ_ONLY`의 mutation 결과를 fail-closed한다.
 - 취소가 외부 결과 불명을 만들지 않으면 `workKey`도 같은 transaction에서 해제한다. 결과 불명 또는 active repo guard가 남은 dead-letter는 수동 retry로 우회할 수 없다.
 
+## Source remediation (P6/P7 discovery catch-22)
+
+`RepositoryClassificationDecision`으로 이미 `classification=PRODUCT_APP`이 append-only로 확정됐지만
+실제 discovery는 `NO_CANDIDATE`(`PRODUCT_SOURCE_CANDIDATE_MISSING`) 또는
+`BUILD_TARGET_MISSING`(`PRODUCT_BUILD_TARGET_MISSING`)으로 `NEEDS_INPUT`에 머무는 repository는 일반
+`repositoryAutomationEligible`(`RepositoryRegistration.status=MANAGED`) guard를 통과하지 못해
+`AutomationDefinition`/`AgentRun`을 만들 수 없다. 그 결손을 고치는 코드 PR 자체가 이 automation 없이는
+나올 수 없는 catch-22다. `repo-source-remediation-v1` template은 이 상태만 겨냥한 별도 좁은 gate이며,
+그 외 모든 template의 MANAGED guard(`assertRepositoryAutomationManaged`, `tryClaimRun`의 일반 분기)는
+그대로 둔다.
+
+- `POST /api/control-plane/source-remediation-definitions`는 정의 생성 시점에 다음을 모두 검증하고,
+  통과하면 같은 흐름에서 `AutomationDefinition`(`schedule=null`, cadence 없는 단발) 하나와
+  그 유일한 `AutomationOccurrence`/`AgentRun`을 만든다. 이후 재호출은 `AutomationMutationRequest`
+  idempotency로 replay되며 두 번째 정의를 만들지 않는다.
+  - App이 `ACTIVE`(`PAUSED`/`DEPRECATED`는 거부 — 예: DEPRECATED 상태의 저장소는 자동 claim 대상이 아니다)
+  - `RepositoryRegistration`이 non-archived, `classification=PRODUCT_APP`, `status=NEEDS_INPUT`,
+    `lastDiscoveryReason`이 `NO_CANDIDATE`/`BUILD_TARGET_MISSING` 중 하나
+  - 대상 `IssueMirror`가 open, `P1`, `autopilot`이고 blocked/no-autopilot/approval label이 없음
+  - issue가 Backoffice 생성(`source=BACKOFFICE`)이거나, 아니면 명시적 `verifiedBy` 사람/승인된 AI 검증자가 있음
+  - 이 issue를 이미 다른 run이 `workKey`로 소비하지 않았음
+  - 정의 생성 시 현재 `reconcileGeneration`, source SHA, reason, issue 제목+라벨 digest를
+    `configuration`에 잠근다(이후 수정 경로 없음)
+- claim(`tryClaimRun`)은 이 template일 때만 일반 `repositoryAutomationEligible` 대신
+  `repositorySourceRemediationEligible`을 쓴다. registration의 현재 generation/source SHA/reason이
+  정의가 잠근 값과 정확히 같고, 결합된 App이 여전히 `ACTIVE`일 때만 통과한다 — 재push로 discovery가
+  다시 돌면(generation 전진) 기존 run은 자동으로 다시 막힌다.
+- 같은 claim은 issue를 다시 읽어 open/P1/autopilot과 제목+라벨 scope digest가 정의 생성 시점과
+  같은지 재확인한다. 임의 사용자 편집으로 제목이나 라벨이 바뀌면(scope 확장 의심) 다르더라도
+  fail-closed한다. GitHub 원문 body는 `IssueMirror`에 없어 이 계약의 scope 밖이다.
+- approval policy는 항상 `READY_PR`이며 `AGENT_READY_PR_CAPABILITIES`(GitHub read/branch/commit/PR만)로
+  고정된다. 이 template도 다른 READY_PR routine과 같은 `repo-pr:{owner/repo}` singleton guard를 공유해
+  repo당 Ready PR을 최대 1개로 제한하며, provider/build/upload/public mutation capability는 애초에
+  이 목록에 없다.
+- `trustedMutationAdapterConfigured()`(GitHub READY_PR runtime canary)는 이 template도 그대로
+  적용된다 — 위 gate를 모두 통과해도 canary가 승인되기 전에는 claim 자체가 fail-closed다. 이 PR은
+  그 canary/runtime activation gate를 열지 않는다.
+- dead-letter 복구는 `RETRY_RUN` 하나뿐이다. 단발 정의는 같은 repo에 두 번 만들 수 없고
+  (`DEFINITION_CONFLICT`) dead-letter run이 issue `workKey`를 계속 쥐고 있어
+  (`SOURCE_REMEDIATION_WORK_ALREADY_CLAIMED`) 다른 우회 경로가 없다. 따라서 run 범위 명령
+  (`CANCEL_RUN`, `RETRY_RUN`)만 이 template에도 허용하고 정의 범위 명령
+  (`PAUSE`, `RESUME`, `RUN_NOW`)은 계속 `DEFINITION_CONTRACT_UNMANAGED`로 닫는다.
+  `retryAgentRun`은 claim과 같은 `templateRepositoryAutomationEligible` 판정을 공유하므로,
+  정의가 잠근 generation/source SHA/reason이 지금도 정확히 같을 때만 run을 `PENDING`으로
+  되돌린다. 되살린 run도 claim 시점의 issue scope digest와 READY_PR canary gate를 다시 통과해야 한다.
+
 ## Scheduler와 Project projection
 
 GitHub delivery와 allowlist된 Issue observation 또는 정식 tag의 공개 ref·source SHA·checksum `AutomationIngressEvent`는 같은 transaction에 기록한다. scheduler는 Issue 재처리마다 GitHub API로 현재 상태를 readback하고 durable observation보다 오래되지 않았음을 확인한 뒤 IssueMirror를 수렴시킨다. 구형 payload 없는 Issue inbox도 같은 readback 경로로 복구한다. 정식 tag는 같은 inbox에서 출시노트를 재생하되 `${GITHUB_ORG}/platform`은 immutable Platform publisher의 소유권을 보존하기 위해 외부 발행 없이 처리 완료한다. scheduler는 실패·중단된 inbox와
@@ -438,14 +555,25 @@ issue work key로 중복 occurrence와 run을 막는다. pause 기간은 resume 
 
 `Priority`, `App`, `Kind`, `Lifecycle`, `Agent`, `Approval`, `Outcome`은
 `FleetProjectProjection.desired`에만 투영된다. claim은 GitHub Issue mirror와 queue 상태만 읽으며 Project field를
-실행 신호로 사용하지 않는다. Project write 직전 current app binding을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시 읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
-Project ID나 permission이 없으면 추측·권한 확대 없이 `NEEDS_INPUT` 또는 `READBACK_REQUIRED`로 남긴다.
+실행 신호로 사용하지 않는다. `FleetProjectBinding` singleton은 owner organization, project number,
+고정 title `Seorilabs Fleet`, 검증된 node ID와 GitHub App의 공개 `organization_projects` grant만 저장한다.
+`PUT /api/control-plane/fleet-project-binding`은 optimistic revision과 Idempotency-Key를 요구하며 Project를
+생성·변경하지 않는다. Project write 직전 exact `ACTIVE + MANAGED + PRODUCT_APP + current source`와 중앙
+binding revision을 다시 확인하고 stale binding은 `SUPERSEDED`로 닫는다. Project write 뒤 실제 field를 다시
+읽어 current relation CAS가 일치할 때만 `APPLIED`로 기록한다.
 
-`FleetProjectProjection` drain은 정기 scheduler CronJob `backoffice-fleet-project-projection`과 배포
-catch-up Job이 각각 `/api/admin/automation/project-projections`를 한 번씩 호출해 소진한다. 두 경로가 겹쳐도
-claim CAS가 한 projection을 한 번만 적용하며, `App.projectV2Id`가 아직 없으면 추측하지 않고 `NEEDS_INPUT`으로
-닫는다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 `suspend: false`로 배포 스크립트가 직접 apply한다.
-`Seorilabs Fleet` Project 생성과 `App.projectV2Id` 설정은 사용자 승인이 필요한 별도 gate다.
+GitHub App installation에 organization Projects `write` 이상이 없으면 Project query를 실행하지 않고
+`HUMAN_PERMISSION_REQUIRED / GITHUB_ORG_PROJECTS_WRITE_PERMISSION_REQUIRED`로 닫는다. 이 상태를 Project
+부재로 해석하지 않는다. 권한이 확인된 뒤 node/title/owner/number/URL readback이 불일치할 때만
+`IDENTITY_MISMATCH`, provider read 실패는 `READBACK_REQUIRED`다.
+
+`FleetProjectProjection` drain은 전용 scheduler CronJob `backoffice-fleet-project-projection`이
+`/api/admin/automation/project-projections`를 매분 호출해 소진한다. CronJob은 배포 중에도
+`suspend: false`로 계속 실행되므로 배포 catch-up Job은 source 전체 scan과 외부 GitHub readback을
+중복 호출하지 않는다. 중복 schedule과 webhook은 projection claim CAS가 한 번만 적용한다. 같은 endpoint가
+중앙 binding readback과 기존 ACTIVE PRODUCT_APP Issue source reconciliation을 먼저 수행하므로 앱별
+`projectV2Id` 입력은 필요하지 않다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 배포 스크립트가 직접 apply한다.
+`Seorilabs Fleet` Project 생성과 GitHub App organization Projects 권한 승인은 사람 전용 gate다.
 
 Platform Fleet scheduler는 기존 plan의 drain/readback을 producer보다 먼저 별도 오류 경계에서 실행한다.
 새 Release 조회나 asset 검증이 실패해도 기존 mutation readback은 이미 독립적으로 소진되며, drain 실패 또한
@@ -532,21 +660,30 @@ custom property와 조직 ruleset에 필요한 exact grant/event의 누락을 �
 그 권한을 가지고 있다는 readback일 뿐이며 실행 승인, 설정 변경 또는 mutation 성공을 뜻하지 않는다.
 이 단계에서 GitHub에는 installation/repository GET만 수행한다.
 
-## 중앙 desired-state DRAFT backfill
+## 중앙 desired-state DRAFT와 safe source rebase
 
-hourly `backoffice-desired-state-backfill`은 모든 `App.status=ACTIVE` row를 cohort로 고정한다. repoId가 없는
-기존 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
+hourly `backoffice-desired-state-backfill`은 기존 `App.status=ACTIVE` row에 더해 비보관
+`RepositoryRegistration.classification=PRODUCT_APP`에 결합된 `PAUSED/DEPRECATED` App도 cohort로 고정한다.
+repoId가 없는 기존 ACTIVE 앱도 제외하지 않고 `APP_REPO_ID_MISSING`으로 표시한다. exact current
 `RepositoryRegistration.classification=PRODUCT_APP`, `DiscoveryObservation`, 같은 SHA의 BuildTarget이 모두
 맞을 때만 확인된 market과 internal/private/TestFlight channel을 새 ConfigRevision `DRAFT`로 만든다.
-registration과 run은 `repository-discovery/v10`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
+registration과 run은 `repository-discovery/v11`을 함께 저장하므로 legacy terminal run은 hourly sweep에서
 새 generation으로 재탐지되며 이름만 바꾼 분류로 간주되지 않는다.
 ConfigRevision은 `sourceObservationId` FK와 backfill contract version을 보존하고 app row lock 아래 revision을
 할당한다. 같은 observation의 동시 실행은 unique key와 stable idempotency key로 하나만 생성된다.
 
-이 worker와 API에는 activation 호출과 provider/GitHub adapter가 없다. locale을 알 수 없으면 빈 목록으로
-두며 localization 문구, ProjectBlueprint의 조직/folder/billing/project, compliance, StoreAsset checksum은
-source/provider evidence가 완전하지 않은 한 만들지 않는다. 특히 법적 선언, 계정 소유권, 결제·세금,
-심사 제출과 공개 배포 승인은 자동 생성하거나 활성화하지 않는다. `/settings`는 repository classification,
+기존 ACTIVE가 latest discovery보다 오래된 경우에는 같은 transaction에서 MANAGED PRODUCT_APP 등록,
+default-branch exact discovery, current-SHA BuildTarget을 다시 잠가 읽는다. 기존 ACTIVE snapshot의 HMAC,
+revision identity, payload digest가 모두 유효하고 latest DRAFT를 포함한 desired payload 전체 digest와 enabled
+market 집합이 그대로일 때만 source-only immutable revision을 만들고 `DRAFT → ACTIVE` CAS를 수행한다.
+같은 source observation은 contract unique key와 deterministic activation key로 한 번만 처리한다. payload,
+BuildTarget market, legacy DRAFT 또는 snapshot이 다르면 기존 DRAFT/ACTIVE를 변경하지 않고 `NEEDS_INPUT`으로
+남긴다. audit에는 변경 0건과 source/revision 공개 identity만 기록하며 provider execution, 법적·결제·심사,
+공개 승인 원장은 건드리지 않는다.
+
+locale을 알 수 없으면 빈 목록으로 두며 localization 문구, ProjectBlueprint의 조직/folder/billing/project,
+compliance, StoreAsset checksum은 source/provider evidence가 완전하지 않은 한 새로 만들지 않는다. 특히 법적
+선언, 계정 소유권, 결제·세금, 심사 제출과 공개 배포 승인은 자동 생성하지 않는다. `/settings`는 repository classification,
 DRAFT 가능/기존 설정/needs-input 수와 이유를 함께 표시한다. 같은 설정 화면과 internal API는 동일한 strict
 validator와 transaction service를 사용한다. nullable expand column의 `classificationDecisionVersion=null`은
 revision `0`으로만 해석하며 분류 결정은 이 revision CAS와 idempotency
@@ -571,7 +708,7 @@ null로 되돌리지 않는다. 대신 `PRODUCT_SOURCE_CANDIDATE_MISSING`,
 배포 catch-up은 full-org discovery enqueue가 성공한 뒤 현재 generation의 provider readback이 terminal 상태가
 될 때까지 drain한다. `FAILED`, 재enqueue 없이 남은 `STALE`, 누락 current run은 성공으로 숨기지 않는다.
 두 번의 terminal readback 뒤에만 중앙 DRAFT backfill을 실행하며 세 단계 중 하나라도 실패하면 catch-up Job과
-배포가 실패한다. `desired-state-draft-backfill/v2`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
+배포가 실패한다. `desired-state-safe-source-rebase/v3`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
 `x-seorilabs-source-sha`로 전달한다. 배포 occurrence key와 request hash는 이 SHA, 고정 actor,
 `DEPLOY_CATCH_UP` trigger에 결합되므로 동일 SHA 재시도만 기존 run을 replay하고 같은 UTC hour의 다른 SHA는
 새 run을 만든다. hourly Cron은 source SHA가 없는 별도 `HOURLY_CRON` occurrence key를 사용한다.
@@ -591,8 +728,11 @@ admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler
   사람이 검토 가능한 새 DRAFT에 포함한다. 조직/folder/billing, 법적 선언, object storage checksum이나
   provider 상태를 App/Discovery 필드에서 추측하지 않는다.
 - `ProviderObservation`과 `ExternalBinding`은 provider GET/readback producer가 실행된 경우에만 생긴다.
-  GitHub installation readback은 위 hourly backfill이 공급하지만 GCP/Firebase/Workspace/마켓 readback은
-  각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
+  GitHub installation readback은 위 hourly backfill이 공급한다. Xcode Cloud hourly sync는 exact-source
+  App Store `BuildTarget`이 준비된 allowlist 앱에 한해 App Store Connect app과 Xcode Cloud
+  product/workflow/repository의 공개 identity를 읽고 observation/binding을 함께 갱신한다. 권한·네트워크 오류는
+  리소스 부재로 합성하지 않고 `UNKNOWN`으로 남긴다. GCP/Firebase/Workspace와 아직 producer가 연결되지 않은
+  마켓 readback은 각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
 - `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin을
   모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로 capability를 추측하지 않는다.
 - `ReleaseCandidate`와 `ReleaseGateObservation`은 ACTIVE revision, exact source, artifact checksum,
@@ -618,7 +758,7 @@ read-only PVC에서 읽어 Pod 내부 MySQL 9.2 `emptyDir`에 복원하고 다�
 
 - 현재 migration/history/schema와 복구 전후 data fingerprint가 같다.
 - production app/backup principal에는 `TRIGGER` 권한을 주지 않으므로 logical dump는 trigger DDL을
-  명시적으로 제외한다. 보호 table의 trigger가 0건인 경우에만 exact source 계약 두 개를 Pod 내부 DB에
+  명시적으로 제외한다. 보호 table의 trigger가 0건인 경우에만 exact source 계약 열 개를 Pod 내부 DB에
   재구성하고 다시 검증한다. 부분 설치·변형·추가 trigger는 자동 수정하지 않고 fail-closed한다.
 - 복구 DB로 production Backoffice server가 Ready가 되고 resolved manifest를 HTTP로 재생한다.
 - 모든 ACTIVE snapshot 서명이 맞고 잘못된 키와 DRAFT는 기존 resolve 경계에서 거부된다.
@@ -666,18 +806,13 @@ BACKOFFICE_SOURCE_SHA='<40자리 SHA>' \
 repository collector와 같은 실행이 아니며, 그 결과를 38-repository BOOTSTRAP inventory로
 재사용하지 않는다.
 
-배포 이미지의 다음 command는 GitHub App installation pagination을 두 번 읽고, 각 active
+배포 이미지의 readiness library는 GitHub App installation pagination을 두 번 읽고, 각 active
 repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정과 App binding을 DB SELECT로만
 검사한다. `PAUSED` 또는 `DEPRECATED` App도 numeric repo ID가 맞으면 존재하는 binding으로 읽되,
 `PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot,
 PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 요구한다. non-product repository에 App row가
 결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다. GitHub와 DB에 쓰지 않고 공개 repo ID,
 App lifecycle status, source SHA, digest, reason code만 출력한다.
-
-```bash
-kubectl -n platform exec deploy/backoffice -c backoffice -- \
-  node /app/scripts-dist/fleet-migration-shadow-readiness.cjs
-```
 
 `state=READY`는 collector의 Backoffice 공개 증거 선행조건만 통과했다는 뜻이다. 실제 BOOTSTRAP
 shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 운영 adapter를 추가로
@@ -689,5 +824,45 @@ shadow는 중앙 `@seorilabs/repo-contract/fleet-migration-collector`에 다음 
 4. inventory public-key metadata readback과 secret-free Ed25519 signing service adapter
 
 issuer가 authoritative inventory를 발급한 뒤에만 `createFleetMigrationPlan`을 실행한다. durable
-state authority와 `trusted-cleanup-executor`는 승인된 cleanup PR 단계에서만 사용하며 두 번의
-read-only shadow에는 claim이나 mutation을 만들지 않는다.
+state authority와 `trusted-cleanup-executor`는 승인된 cleanup PR 단계에서만 사용한다. 두 번의
+read-only shadow는 GitHub 및 App/config/provider 도메인 상태를 변경하지 않고, 실행 자체를 독립적으로
+감사하기 위한 collection occurrence claim/complete만 기록한다.
+
+운영 BOOTSTRAP collector는 web pod에서 실행하지 않는다. 768Mi web container에서 readiness child가
+exit 137을 반환한 live 근거가 있으므로, 동일 image digest와 Backoffice source SHA 및 live detector
+SHA를 고정한 one-shot Job만 사용한다. Job은 RPI5에 memory request 768Mi/limit 2Gi,
+`backoffLimit: 0`으로 생성된다. 최초에는 suspend한 채 immutable image/source/detector/resource binding을
+readback하고 일치할 때만 시작하며, Job controller UID와 Pod UID를 각각 delivery/run identity로 사용한다.
+실패 또는 OOM은 같은 Job을 재시도하지 않고 terminal 상태로 남긴다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<배포 Backoffice 40자리 SHA>' \
+FLEET_MIGRATION_DETECTOR_SOURCE_SHA='<live seorilabs/.github 40자리 HEAD>' \
+FLEET_MIGRATION_EXECUTION_ID='<signed execution ID>' \
+FLEET_MIGRATION_RUNTIME_CONFIG_MAP='<signed public runtime ConfigMap>' \
+FLEET_MIGRATION_GITHUB_TOKEN_SECRET='<one-run token Secret>' \
+  scripts/run-fleet-migration-bootstrap-shadow.sh
+```
+
+두 shadow는 위 명령을 각각 새 Job으로 실행한다. 서로 다른 Job UID는 같은 provider vector라도 별도
+`FleetMigrationCollectionOccurrence`로 감사된다. 실행 중 허용되는 DB write는 전용 principal의
+claim INSERT와 completion INSERT뿐이며 App, config, provider, GitHub 상태는 읽기만 한다. 출력은 공개 digest와
+occurrence identity만 포함한다. `fleet-migration-shadow-readiness` 결과는 선행조건으로만 쓰고 inventory나
+proof로 복사하지 않는다. replacement/proof는 exact repository/source/tree/blob inventory/detector와
+readiness evidence/cohort 및 stable Backoffice state에 묶인 승인된 INSERT-only
+`FleetMigrationProofSnapshot`이 없으면 fail-closed한다.
+
+shadow Job에는 production `DATABASE_URL`, GitHub App private key, config HMAC을 넣지 않는다.
+trusted issuer가 exact cohort에 한정한 `contents:read`/`metadata:read` installation token과
+execution/source/TTL/proof 목록을 묶은 공개 Ed25519 attestation을 별도 projected object로 공급한다.
+token은 한 번만 소비되고 terminal에서 폐기되며 폐기 실패도 실행 실패다. 실행 직전 proof writer,
+DB principal/trigger provisioning, projected object 준비와 전체 명령은
+`docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다. 중앙 collector v2에 넘길 finalization contract는
+`docs/FLEET_MIGRATION_COLLECTOR_HANDOFF.md`에 고정했다.
+
+authoritative 발급은 두 shadow와 별도 단계다. `fleet-migration-inventory-issuer.cjs`는 canonical catalog의
+공개 Ed25519 metadata 및 고정 public key를 대조하고 mTLS signing service에 payload만 전달한다. mTLS
+material은 고정 root 아래 Kubernetes projected 0440 상대 경로만 허용한다. private
+signing key의 파일·환경변수·export API는 Backoffice에 존재하지 않는다. 이번 코드 이관은 Job 실행,
+실제 signing, plan 생성 또는 cleanup을 수행하지 않는다.

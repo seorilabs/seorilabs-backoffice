@@ -37,6 +37,8 @@ export async function POST(request: NextRequest) {
       idempotencyKey,
       trigger: "CONTROL_PLANE_API",
       sourceSha: null,
+    }, {
+      signingKey: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
     });
     return NextResponse.json(result, {
       status: result.state === "busy" ? 409 : result.duplicate ? 200 : 201,

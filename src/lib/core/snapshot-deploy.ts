@@ -312,6 +312,7 @@ export async function createAndDispatchSnapshotDeploy(opts: {
         workflowFile: plan.workflowFile,
         ref: plan.dispatchRef,
         inputs: plan.inputs,
+        expectedTag: { tag: opts.tag, sha: opts.expectedSha },
       });
       destinations.push({
         target: plan.target,

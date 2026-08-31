@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { DependencyAuditException } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
@@ -39,6 +40,7 @@ export interface StaticRuntimeManifestInput {
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
   staticBinding: StaticRuntimeBinding;
+  dependencyAuditException?: DependencyAuditException;
 }
 
 function sha256Prefix(value: string): string {
@@ -92,6 +94,9 @@ export function buildStaticRuntimeManifestReadback(input: StaticRuntimeManifestI
       digest: signatureDigest(input.snapshotSignature),
     },
     staticBinding: input.staticBinding,
+    ...(input.dependencyAuditException
+      ? { dependencyAuditException: input.dependencyAuditException }
+      : {}),
   };
   return {
     schemaVersion: 1 as const,

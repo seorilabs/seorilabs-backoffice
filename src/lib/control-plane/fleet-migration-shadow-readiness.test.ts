@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { signSnapshot, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
+import { signSnapshot, verifySnapshot } from "@/lib/control-plane/json";
 import {
   evaluateFleetMigrationShadowReadiness,
   readFleetMigrationBackoffice,
@@ -173,8 +173,8 @@ function dependencies(
       }
       return current;
     },
-    verifyConfigSnapshot: (snapshot, digest, signature) => verifySnapshot(
-      snapshot as JsonValue,
+    verifyConfigSnapshot: ({ snapshot, digest, signature }) => verifySnapshot(
+      snapshot,
       SNAPSHOT_SIGNING_KEY,
       digest,
       signature,

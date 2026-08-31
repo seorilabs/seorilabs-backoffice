@@ -17,6 +17,7 @@ import type { SourceObservationResult } from "@/lib/github/source-observation";
 import {
   appMarketIdentityConflict,
   reconciledMarketTargets,
+  resolveRepositoryProductIdentity,
 } from "@/lib/control-plane/repository-discovery-service";
 import { exactBuildTargetIdentity } from "@/lib/control-plane/build-target-identity";
 
@@ -135,6 +136,32 @@ test("기존 App adoption은 non-null identity 충돌만 거부하고 desired ma
     reconciledMarketTargets(["web", "play"], ["appstore"]),
     ["appstore", "play", "web"],
   );
+});
+
+test("명시적 product identity가 없으면 정상 APP source 계약을 유지하고 실제 engine 충돌은 거부한다", () => {
+  assert.deepEqual(resolveRepositoryProductIdentity({
+    classificationDecision: null,
+    discovered: { appType: "APP", engine: "RN" },
+    adopted: { displayName: "Sample App", type: "APP", engine: "RN" },
+    fallbackDisplayName: "Fallback",
+  }), {
+    identity: { displayName: "Sample App", type: "APP", engine: "RN" },
+    conflict: false,
+  });
+  assert.deepEqual(resolveRepositoryProductIdentity({
+    classificationDecision: {
+      revision: 2,
+      classification: "PRODUCT_APP",
+      candidateMarkerPath: "package.json",
+      productIdentity: { displayName: "Sample Game", type: "GAME", engine: "GODOT" },
+    },
+    discovered: { appType: "APP", engine: "RN" },
+    adopted: { displayName: "Sample Game", type: "GAME", engine: "GODOT" },
+    fallbackDisplayName: "Fallback",
+  }), {
+    identity: { displayName: "Sample Game", type: "GAME", engine: "GODOT" },
+    conflict: true,
+  });
 });
 
 test("release와 resolved manifest는 exact target 공개 identity가 null이면 fail-closed한다", () => {
@@ -333,6 +360,20 @@ test("RN monorepo의 exact package manager, workingDirectory와 세 market targe
   ]);
   assert.equal(JSON.stringify(result).includes(canary), false);
   assert.equal(result.sourceMetadata.every((source) => !("text" in source)), true);
+  assert.deepEqual(resolveRepositoryProductIdentity({
+    classificationDecision: {
+      revision: 1,
+      classification: "PRODUCT_APP",
+      candidateMarkerPath: "apps/mobile/package.json",
+      productIdentity: { displayName: "Crossword Puzzle", type: "GAME", engine: "RN" },
+    },
+    discovered: result,
+    adopted: { displayName: "Crossword Puzzle", type: "GAME", engine: "RN" },
+    fallbackDisplayName: "Fallback",
+  }), {
+    identity: { displayName: "Crossword Puzzle", type: "GAME", engine: "RN" },
+    conflict: false,
+  });
 });
 
 test("RN root Android binding의 pnpm lockfile만 전용 대용량 한도로 읽는다", async () => {
@@ -407,6 +448,20 @@ test("Capacitor product는 web AIT dependency가 함께 있어도 primary static
     { targetKey: "android", stack: "capacitor" },
     { targetKey: "ios", stack: "capacitor" },
   ]);
+  assert.deepEqual(resolveRepositoryProductIdentity({
+    classificationDecision: {
+      revision: 1,
+      classification: "PRODUCT_APP",
+      candidateMarkerPath: "app/package.json",
+      productIdentity: { displayName: "Match Picture", type: "GAME", engine: "RN" },
+    },
+    discovered: result,
+    adopted: { displayName: "Match Picture", type: "GAME", engine: "RN" },
+    fallbackDisplayName: "Fallback",
+  }), {
+    identity: { displayName: "Match Picture", type: "GAME", engine: "RN" },
+    conflict: false,
+  });
 });
 
 test("workspace RN application marker가 유일하면 peer dependency UI library를 후보에서 제외한다", async () => {
@@ -775,6 +830,59 @@ test("lizard 유형은 build.env의 Android target과 미관측 package identity
   ]);
 });
 
+test("lizard Xcode Cloud bootstrap에서 App Store bundle·team·scheme을 exact-source로 관측한다", async () => {
+  const projectPath = "xcode-cloud/LizardTerrarium.xcodeproj";
+  const files = {
+    "project.godot": "[application]\nconfig/name=\"Lizard\"\n",
+    "build.env": "AAB_PATH=release-artifacts/android/app-release.aab\n",
+    "scripts/build-android.sh": "#!/bin/sh\nexit 0\n",
+    "xcode-cloud/ci_scripts/ci_post_clone.sh": "#!/bin/sh\nexit 0\n",
+    [`${projectPath}/project.pbxproj`]: [
+      "DEVELOPMENT_TEAM = HCDUXX4Z3X;",
+      "PRODUCT_BUNDLE_IDENTIFIER = com.seorilabs.lizardtycoon;",
+      "PRODUCT_NAME = LizardTerrarium;",
+    ].join("\n"),
+    [`${projectPath}/xcshareddata/xcschemes/LizardTerrarium.xcscheme`]: "<Scheme/>",
+    "apps/ait/granite.config.ts": "export default { appName: 'lizard-tycoon' };",
+  };
+  const result = await discoverRepository(snapshot(Object.keys(files)), sourceReader(files));
+  assert.equal(result.status, "ACTIVE");
+  if (result.status !== "ACTIVE") return;
+  assert.deepEqual(result.buildTargets, [
+    {
+      targetKey: "ait",
+      stack: "godot",
+      market: "apps-in-toss",
+      packageId: null,
+      bundleId: null,
+      configuration: { appName: "lizard-tycoon" },
+    },
+    {
+      targetKey: "android",
+      stack: "godot",
+      market: "google-play",
+      packageId: null,
+      bundleId: null,
+      configuration: null,
+    },
+    {
+      targetKey: "ios",
+      stack: "godot",
+      market: "app-store",
+      packageId: null,
+      bundleId: "com.seorilabs.lizardtycoon",
+      configuration: {
+        delivery: "xcode-cloud",
+        projectPath,
+        scheme: "LizardTerrarium",
+        appleTeamId: "HCDUXX4Z3X",
+      },
+    },
+  ]);
+  assert.ok(result.sourceMetadata.some(({ path }) => path === `${projectPath}/project.pbxproj`));
+  assert.ok(result.sourceMetadata.some(({ path }) => path.endsWith("LizardTerrarium.xcscheme")));
+});
+
 test("minimax 유형은 확정 전 Godot package와 bundle identity를 null observation으로 보존한다", async () => {
   const files = {
     "godot/project.godot": "[application]\nconfig/name=\"MiniMax\"\n",
@@ -962,7 +1070,12 @@ test("분류 revision이 선택한 exact marker만 PRODUCT_APP 후보로 사용�
   const result = await discoverRepository(
     snapshot([...Object.keys(files), "pnpm-lock.yaml"]),
     sourceReader(files),
-    { revision: 1, classification: "PRODUCT_APP", candidateMarkerPath: "package.json" },
+    {
+      revision: 1,
+      classification: "PRODUCT_APP",
+      candidateMarkerPath: "package.json",
+      productIdentity: { displayName: "Sample App", type: "APP", engine: "RN" },
+    },
   );
   assert.equal(result.status, "ACTIVE");
   if (result.status === "ACTIVE") {
@@ -1305,6 +1418,7 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
         revision: 1,
         classification: "EXCLUDED",
         candidateMarkerPath: null,
+        productIdentity: null,
       },
     });
     assert.deepEqual(result, {
@@ -1386,8 +1500,8 @@ test("GitHub numeric identity, exact default HEAD와 non-truncated tree를 검�
   });
 });
 
-test("discovery 의미론 변경은 새 generation을 강제하는 v10 계약이다", () => {
-  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v10");
+test("discovery 의미론 변경은 새 generation을 강제하는 v11 계약이다", () => {
+  assert.equal(REPOSITORY_DISCOVERY_CONTRACT_VERSION, "repository-discovery/v11");
 });
 
 test("10분 안에 끝나지 않은 non-terminal run만 OVERDUE로 분류한다", () => {

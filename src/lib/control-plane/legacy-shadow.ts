@@ -642,10 +642,12 @@ function mergeDirectPayload(
   for (const [key, value] of Object.entries(parsed.data.build ?? {})) {
     if (typeof value === "string") {
       addReason(context.reasons, "FREE_TEXT_REQUIRES_INPUT", `$.build.${key}`, sourceKind);
-    } else {
+    } else if (typeof value === "number") {
       mergeScalar(
         context.draft.build as Record<string, unknown>, key, value, sourceKind, context.reasons, `$.build.${key}`,
       );
+    } else {
+      addReason(context.reasons, "UNSUPPORTED_FIELD", `$.build.${key}`, sourceKind);
     }
   }
   for (const [key, value] of Object.entries(parsed.data.support ?? {})) {

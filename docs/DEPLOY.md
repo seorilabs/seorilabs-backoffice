@@ -71,13 +71,14 @@ kubectl apply -f k8s/backoffice-networking.yaml
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
-source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 두 개가 있으면 보존하지만 부분·변형·
-추가 trigger는 복구하지 않고 실패한다.
+source 계약을 Pod-scoped MySQL에만 재구성한다. 이미 exact trigger 열 개가 있으면 보존하지만 부분·변형·
+추가 trigger는 복구하지 않고 실패한다. 현재 전체 계약은 provider execution 두 개, Auth Broker
+journal checkpoint 두 개, Fleet migration proof/claim/completion 여섯 개, 총 열 개다.
 `CREATE TRIGGER`는 MySQL prepared statement에서 지원되지 않으므로 Prisma `$executeRawUnsafe`로
-실행하지 않는다. verifier는 trigger가 정확히 0개일 때만 repo-local canonical DDL을
+실행하지 않는다. verifier는 보호 table trigger가 정확히 0개일 때만 repo-local canonical DDL 열 개를
 `prisma db execute --stdin`의 전용 child process에 전달한다. 격리 DB URL은 argv나 로그에 넣지 않고
-그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 두 개를
-제거한 뒤 이 text-protocol 경로로 정확히 두 개가 재구성되는지 확인한다.
+그 child의 환경에만 주입하며 core dump를 비활성화한다. MySQL 9.2 통합 계약은 실제 trigger 열 개를
+제거한 뒤 이 text-protocol 경로로 정확히 열 개가 재구성되는지 확인한다.
 백업 복구 증명은 운영 DB에 restore하지 않고 `docs/FLEET_CONTROL_PLANE.md`의
 `run-restore-rehearsal.sh`로 별도 수행한다. 이 Job에는 production DATABASE_URL과 DB password를
 주입하지 않으며, Pod 내부 MySQL 9.2가 종료된 뒤에만 성공한다. 실패한 Job은 30분 timeout을 기다리지
@@ -90,6 +91,9 @@ CI는 build가 반환한 immutable registry digest의 migration Job으로 `prism
 반영되므로 migration과 기존 Pod가 서로 다른 artifact를 실행하지 않는다.
 
 신규 migration은 `scripts/check-migration-safety.sh`의 expand-only gate를 통과해야 한다.
+새 migration의 inline `CREATE TRIGGER`는 금지한다. production app principal에는 의도적으로
+`TRIGGER` 권한이 없으므로, privileged DDL은 migration에 섞지 않고 trusted-operator 전용 manifest와
+고정 live verifier로 설치한다. 이미 배포된 migration SQL은 checksum을 보존하며 수정하지 않는다.
 폐기된 컬럼·테이블을 실제로 지우는 contract 단계는 `prisma/migration-history.json`의
 `approvedContractMigrations`에 **이름 + migration.sql bytes checksum + 사유**를 함께 등록해야만
 예외로 통과한다. 파일을 한 글자라도 고치면 checksum이 어긋나 다시 막히고, 등록만 남고 migration이
@@ -119,6 +123,30 @@ volume에서 읽어 두 DDL만 수행한다.
 두 Job 중 하나라도 실패하거나 audit event가 이미 있는데 trigger가 없으면 배포를
 중단하고 수동으로 migration history를 삭제하거나 table을 drop하지 않는다.
 
+### Auth Broker journal checkpoint trigger 부분 적용 복구
+
+`20260830050000_auth_broker_journal_checkpoint`가 MySQL error 1419에서 멈췄고 두 checkpoint
+표와 foreign key는 생성됐지만 audit trigger만 없다면 일반 배포를 반복하지 않는다. 먼저 실패한
+migration Job의 완료 시각 이후에 one-off DB backup을 실행하고 `Complete`를 확인한다. backup Job
+자체의 gzip 무결성·SHA-256 검증까지 통과한 이 실행만 복구 전 snapshot 증거로 인정한다. 그 다음
+trusted operator가 같은 source SHA와 immutable image digest로
+`auth-broker-journal-trigger-recovery-job.yaml`을 render해 `data` namespace에서 실행한다.
+Job은 migration name·checksum·`applied_steps_count=0`의 미해결 row가 정확히 하나이고, 두 신규 표의
+engine·collation·21개 column·foreign key, 빈 checkpoint/event 원장, 해당 보호 표의 trigger 0개를
+확인한 뒤 두 canonical DDL만 root 경계에서 설치한다. 부분·변형·추가 trigger, schema drift나 선행
+데이터가 있으면 아무것도 고치지 않고 실패한다.
+
+trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같은 immutable image로
+`platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
+미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
+Fleet migration migration 뒤에는 trusted operator가
+`fleet-migration-security-provisioning-job.yaml`로 여섯 trigger와 두 전용 DB principal의 exact grant를
+설치한다. 이후 `status=PASS`, `total=10`, `exact=10` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
+`log_bin_trust_function_creators`도 변경하지 않는다.
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열 trigger·migration
+lineage를 다시 검증한다.
+
 ### 감사 원장 append-only trigger 배포 gate
 
 `prisma migrate deploy` 뒤의 `verify-migration-state.cjs --history=fresh|cutover`는 schema
@@ -142,9 +170,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 두 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 2인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 10인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -162,7 +190,7 @@ timeout으로 Job deadline보다 먼저 실패한다. Job의 4분 deadline은 �
 `observedAt`만 남기며 비밀값이나 provider 오류 원문을 담지 않는다.
 
 `scripts/deploy-backoffice.sh`는 app migration 직후, rollout 이전에 이 ConfigMap을 **읽기만**
-한다. `status=PASS`, `total=2`, `exact=2`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
+한다. `status=PASS`, `total=10`, `exact=10`, repo 계약과 같은 `contractDigest`, 그리고 `observedAt`이
 이번 배포 migration Job의 `status.completionTime`보다 **엄격히 이후**일 때만 rollout한다. 벽시계
 max age가 아니라 migration 경계로 판정하므로 migration 이전 상태를 근거로 rollout하지 않으며,
 같은 초 race도 거부한다. 완료 시각을 읽지 못하거나 ConfigMap이 없으면 배포를 중단한다.
@@ -211,6 +239,14 @@ MySQL/Auth Broker network egress가 없다. `provider-execution-signer-{server,c
 복제본이어야 하고, broker client는 signer ServiceAccount identity만 사용한다. 이 logical credential의 생성·동기화,
 실제 P2 public key readback과 두 Deployment 활성화는 credential backup/restore와 fake-provider
 canary를 통과한 별도 운영 gate다. key 값은 manifest, argv, 환경변수, 로그에 넣지 않는다.
+
+같은 signer 프로세스에 P2 journal checkpoint durable authority route 세 개를 추가하며
+(`docs/FLEET_CONTROL_PLANE.md`의 "P2 journal checkpoint의 Backoffice durable authority" 참고),
+manifest에는 `AUTH_BROKER_CLIENT_SPIFFE_ID` 값과 `auth-broker` 네임스페이스 `seori-auth-broker`
+pod에서 9443으로 들어오는 ingress `NetworkPolicy` 규칙만 additive로 추가했다. 이 두 값 모두
+signer가 이미 mount하는 mesh client CA로 검증하므로 새 Secret volume은 필요 없다.
+signer/worker `replicas: 0`은 그대로 유지하며, 이번 변경은 provider execution activation
+gate를 열지 않는다.
 
 ## 5. 시드 + 검증
 ```bash
@@ -358,6 +394,7 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `DISCORD_CHANNEL_RELEASE_OPS_ID` | `#release-ops` |
 | `DISCORD_CHANNEL_OPS_ALERTS_ID` | `#ops-alerts` |
 | `DISCORD_CHANNEL_USER_REVIEWS_ID` | `#user-reviews` |
+| `DISCORD_CHANNEL_GITHUB_ISSUES_ID` | `#github-issues` (선택). GitHub 이슈 생성·종료 알림 전용. 미설정이면 `#backoffice`로 폴백한다 |
 | `PLATFORM_EVENT_SHARED_SECRET` | Platform HMAC 검증 |
 | `CONTROL_PLANE_ADMIN_TOKEN` | 제어면 observation/config/manifest API 전용 Bearer token |
 | `CONTROL_PLANE_ADMIN_PRINCIPAL` | 위 token과 1:1로 결합되는 공개 workload identity. 기본 배포값은 `backoffice:fleet-operator` |
@@ -368,6 +405,10 @@ Platform HMAC 원본은 `~/.config/seorilabs` 카탈로그에서 관리하고, �
 | `AGENT_TRUSTED_ADAPTER_DEPLOYED` | durable `CREATE_COMMIT/CREATE_REF/CREATE_PR` step ledger와 실제 GitHub canary 뒤에만 `true`. ledger는 구현됐지만 runtime canary gate가 닫혀 있어 값을 바꿔도 `READY_PR` 생성/claim은 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_TOKEN` | 위 adapter에만 결합된 bearer. worker/모델에 주입하지 않으며 worker token 재사용 시 fail-closed |
 | `AGENT_TRUSTED_ADAPTER_PUBLIC_KEY` | route/body/idempotency key/runtime/60초 TTL attestation 검증용 Ed25519 공개키. private key는 adapter에만 둠 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL` | 후보 executor 전용 공개 adapter identity. `seori-auth:workflow-bundle-candidate-adapter` exact 값만 허용 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY` | 후보 executor ServiceAccount에 고정된 exact SPIFFE identity. generic adapter identity 재사용 금지 |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN` | 후보 executor 전용 bearer. generic adapter/worker/admin token과 같으면 fail-closed |
+| `WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY` | 후보 executor 전용 Ed25519 공개키. generic adapter key와 fingerprint가 같으면 fail-closed |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY` | 전용 `backoffice-control-plane-snapshot-signing`에서만 공급하는 ACTIVE ConfigRevision snapshot HMAC 서명. 미설정 시 activation 거부 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID` | snapshot signer의 공개 logical key ID. runtime manifest가 raw HMAC 대신 이 ID와 signature digest만 반환 |
 | `CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION` | snapshot 서명 정책의 공개 revision. key ID와 함께 없으면 v5 runtime readback 거부 |
@@ -383,6 +424,24 @@ Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확
 포함하지 않으며 동일 UID Codex/Claude를 구분할 native peer attestor나 전용 OS UID 경계가 구현되기 전에는
 local client와 runtime을 모두 제공하지 않는다.
 client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
+
+### 중앙 StoreAsset object storage
+
+- `CONTROL_PLANE_STORE_ASSET_BUCKET`은 기존 Google Cloud Storage bucket의 공개 이름이다. 값이 없으면 upload
+  route만 fail-closed하며 bucket을 자동 생성하거나 다른 앱의 Firebase bucket을 추측하지 않는다.
+- Backoffice web workload는 정적 JSON key 대신 ADC/WIF로 해당 bucket의 object create/get 권한만 가진다.
+  bucket 생성, IAM 부여, lifecycle/versioning, uniform bucket-level access와 public access prevention 설정은
+  별도 인프라 승인 및 provider readback gate다.
+- 운영 활성화 전 canary PNG로 upload → generation readback → SHA-256 일치 → audit 공개 필드만 기록됨을
+  확인한다. object bytes, credential, 원본 파일명은 로그나 DB에 남기지 않는다.
+- Ingress upload 한도는 25 MiB이고 application은 chunked/Content-Length 미지정 요청을 포함한 multipart
+  전체를 21 MiB, image 원본을 20 MiB로 제한한다. PNG/JPEG 이외의 content는 store별 변환·검증
+  파이프라인에서 먼저 변환한 뒤 올린다.
+- production UI upload는 `AUTH_URL` HTTPS origin, 실제 request URL, `Origin`이 모두 일치해야 한다.
+  `AUTH_URL`이 없거나 Host만 바꾼 요청은 fail-closed한다.
+- ConfigRevision에 참조되지 않은 immutable object는 upload mutation ledger로 식별할 수 있지만 자동 GC는
+  아직 활성화하지 않는다. object delete 권한과 GC를 추가하기 전 ledger/reference dry-run 및 복구 검증을
+  별도 승인한다.
 
 ### 서리 재무 리포트
 
@@ -406,6 +465,49 @@ client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 
   한다. 토큰이 없으면 메인 봇으로 나가므로 리포트가 사라지지는 않는다.
 - 수동 발화: `kubectl -n platform create job --from=cronjob/backoffice-finance-report finance-report-manual-<고유번호>`.
 - 같은 수치는 `/ask`의 `cost_summary` 도구로도 즉시 조회할 수 있다.
+
+### 배포 카드 이어 쓰기
+
+같은 앱·마켓·버전의 배포 카드는 하나를 계속 편집한다(`previousReleaseMessage`). 편집이
+실패하면 두 경우만 새 카드로 넘어간다.
+
+- `404`+`10008` — 사람이 카드를 지웠다.
+- `403` — 다른 봇 정체가 올린 메시지라 편집 권한이 없다. 봇 앱이 바뀌었거나 과거 다른
+  정체가 같은 키의 카드를 올린 경우다. 실측: `slotmachine-game untagged PLAY` 카드가
+  이 이유로 dead letter 4건(2026-08-25·08-29)이 됐고 그동안 카드 갱신이 멈춰 있었다.
+
+429·5xx는 기다리면 풀리므로 새 카드를 보내지 않는다 — 보내면 채널에 중복 카드가 쌓인다.
+
+### GitHub 이슈 알림 채널
+
+이슈 생성·종료 알림은 등급과 무관하게 전체 이슈가 흐른다(최근 7일 기준 생성 250건·종료 221건,
+하루 60건대). 버튼 카드가 놓이는 `#backoffice`와 섞이면 승인·넛지 카드가 묻히므로 전용 채널로
+분리한다.
+
+- `DISCORD_CHANNEL_GITHUB_ISSUES_ID`가 설정돼 있으면 그쪽으로, 없으면 `#backoffice`로 간다.
+  폴백은 **enqueue 시점**에 정한다 — 전달 단계에서 정하면 채널 미설정 구간의 알림이 재시도
+  끝에 dead letter로 사라진다.
+- enqueue는 웹 Pod가 하므로 **웹 Pod와 notification worker 양쪽에** 이 key가 있어야 한다.
+- `github-issues`는 카드 채널(`DISCORD_CARD_CHANNEL_KEYS`)이 아니다. 버튼을 놓지 않으므로
+  인터랙션 허용 범위를 넓히지 않는다.
+- 승인 카드·단계 넛지·일일 다이제스트·주간 LiveOps·Godot 버전 체크는 버튼이 실리므로
+  `#backoffice`에 남는다.
+
+채널에는 한 줄만 남기고 길어지는 맥락은 **그 메시지에서 시작한 쓰레드**로 보낸다.
+
+- 생성 시 쓰레드에 이슈 본문을 남긴다. `<!-- ... -->` 마커 주석은 걷어내고 1,200자에서 자른다.
+  본문이 비어도 쓰레드는 연다 — 종료 시 붙일 댓글·PR이 갈 곳이 필요하다.
+- 종료 시 같은 쓰레드에 연결 PR(머지 여부 포함)과 댓글을 붙인다. 붙일 맥락이 하나도 없으면
+  게시하지 않는다 — 채널 메시지가 이미 종료 사실을 알린다.
+- 연결 PR은 `PullRequestMirror.linkedIssue`(PR 본문의 `closes #N` 파싱)에서 찾는다.
+- **기능 도입 전에 열린 이슈는 붙일 부모 메시지가 없다.** 종료 쓰레드는 enqueue 시점에 부모
+  존재를 확인하고 없으면 건너뛴다. 영원히 재시도하다 dead letter가 되는 것을 막는다.
+- 봇 역할에 `CREATE_PUBLIC_THREADS`가 필요하다(2026-08-30 기준 전 채널에서 보유 확인).
+  권한이 빠지면 403이 나는데 이는 재시도로 풀리지 않으므로 **첫 시도에 바로 dead letter**로
+  보내고 `lastError`에 필요한 권한 이름을 남긴다 — 이벤트마다 10번씩 재시도하면 원인이
+  로그에 묻히고 실패 행만 10배로 쌓인다.
+- 쓰레드 게시는 `NotificationKind`가 아니라 payload의 `thread` 필드로 구분한다. `kind`는
+  MySQL ENUM이라 값 추가에 `ALTER MODIFY`가 필요한데 expand-only 게이트가 막는다.
 
 ### 컨텐츠 지표 마켓 어휘
 
@@ -593,12 +695,12 @@ data ns                                   platform ns
 
 | 단계 | 하는 일 | 외부 write |
 |---|---|---|
-| preview | repo 의 default branch 를 조회해 **exact SHA 를 고정**하고, 그 SHA 의 소스 원장에서 후보 태그를 확정한다 | 없음 |
-| confirm | 같은 SHA·후보 태그·소스 버전을 **다시 검증**한 뒤에만 `createTag` → `createOrUpdateRelease` | 검증 통과 후에만 |
+| preview | repo의 default branch를 조회해 **exact SHA를 고정**하고 GitHub stable tag 계보에서 후보를 확정한다 | 없음 |
+| confirm | 같은 SHA·후보 stable tag를 **다시 검증**한 뒤에만 `createTag` → exact peeled commit readback → `createOrUpdateRelease` | 검증 통과 후에만 |
 
 - 확인 사이에 default branch 가 움직였으면 write 없이 중단한다.
-- `bump` 는 소스에 없는 버전을 만들지 않는다. pinned-source repo 는 후보 태그가 항상 소스 버전이며, 버전을 올리려면 repo 의 원장을 먼저 올린다.
-- 소스 버전 계약(`src/lib/core/release-source-contract.ts`)은 SHA 시점의 repo-local 선언으로 판별한다. `scripts/check_release_version.py`=pinned-source(3원장 정합+태그 일치 강제), `scripts/resolve-release-version.mjs`=tag-derived, 둘 다 없으면 tag-derived-caller.
+- stable 릴리스 버전의 유일한 권한은 GitHub stable tag `vX.Y.Z`와 exact commit SHA다. `bump`는 최신 stable tag에서 계산하고 명시 태그는 그대로 사용한다.
+- `project.godot`, Play/App Store JSON, repo-local 버전 검사 스크립트는 후보와 배포 권한에 관여하지 않는다. stale 값이 있어도 exact stable tag가 빌드 버전을 결정한다.
 
 ### 배포 — preflight 전부 → GitHub → Xcode Cloud
 
@@ -606,7 +708,7 @@ data ns                                   platform ns
 flowchart TD
   A["배포 요청 - tag, target"] --> B["preflight - 외부 write 0"]
   B --> B1["태그가 가리키는 exact SHA"]
-  B --> B2["그 SHA 의 소스 버전 계약"]
+  B --> B2["exact refs tags stable tag의 peeled commit SHA"]
   B --> B3["caller workflow_dispatch 선언"]
   B --> B4["보낼 inputs 가 전부 선언돼 있는지"]
   B --> B5["Xcode Cloud 제품 - repo - 수동 태그 조건"]
@@ -623,7 +725,7 @@ flowchart TD
 
 - 되돌릴 수 없는 Xcode Cloud 실행이 항상 마지막이다. GitHub 이 거부하면 `ciBuildRuns` 는 0회로 남는다.
 - `APPSTORE` 단독도 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
-- 배포 audit(`release.deploy.dispatch`)에는 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
+- 배포 audit(`release.deploy.dispatch`)에는 검증된 GitHub stable tag·peeled commit SHA와 실제 dispatch 결과만 남긴다.
 - 개별 마켓 workflow 내부의 exact 버전 검증은 마지막 방어막으로 그대로 둔다.
 
 ## 12. 출시노트 (Release Notes) — 태그 diff 기반 8개 언어 유저 공지
@@ -658,7 +760,13 @@ flowchart LR
 - Xcode Cloud App Store 배포는 `ReleaseRecord.externalRunId`로 실행을 저장하고 서버 scheduler가 Node 전용 admin route를 통해 1분마다 App Store Connect `ciBuildRuns/{id}`를 조회한다. 완료 결과는 동일 outbox로 알리고 성공 시 기존 라이프사이클 전이도 실행한다.
 - `lucid-chess`는 `com.etlegame.chess` Xcode Cloud 제품과 `Lucid Chess Release` workflow를 사용한다. repo의 표준 `deploy-app-store.yml`이 market target 신호를 제공하고, Backoffice allowlist가 GitHub dispatch 대신 ASC `ciBuildRuns` 경로를 선택한다.
 - `cycle-pair`는 `com.seorilabs.cyclepair` Xcode Cloud 제품과 `Cycle Pair Release` workflow를 사용한다. 같은 제품에 다른 repo workflow가 남아 있어도 workflow repository가 요청 repo와 정확히 일치하는 `APP_STORE_ELIGIBLE` iOS Archive만 선택하며, 0개 또는 복수면 실행하지 않는다.
-- `lizard-tycoon`은 `com.seorilabs.lizardtycoon` Xcode Cloud 제품(`LizardTerrarium`)과 `Lizard Tycoon Release` workflow를 사용한다. Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그 커밋에서 Godot iOS 프로젝트를 재생성한다. workflow에는 환경변수 `GODOT_ANALYTICS_ID`와 secret `GODOT_ANALYTICS_SECRET`이 있어야 빌드가 통과한다.
+- `lizard-tycoon`은 App Store Connect app `6786516830`, bundle `com.seorilabs.lizardtycoon`,
+  Xcode Cloud product `1F1C8BCC-7F10-4096-8563-6F375D5DB624`(`LizardTerrarium`), workflow
+  `9AAF9F76-B518-42A9-9218-475CE2155345`(`Lizard Tycoon Release`), repository
+  `ae0b4198-432d-42b8-bde8-3c2b84631655`(`seorilabs/lizard-tycoon`), team `HCDUXX4Z3X`를 사용한다.
+  Godot repo라 `xcode-cloud/LizardTerrarium.xcodeproj`가 bootstrap container이고, `ci_post_clone.sh`가 태그
+  커밋에서 Godot iOS 프로젝트를 재생성한다. hourly readback은 이 공개 identity와 active iOS Archive,
+  `v` manual tag 조건을 검증해 binding을 갱신하며 secret 값은 observation에 저장하지 않는다.
 - `jomul`은 `com.seorilabs.jomul` Xcode Cloud 제품과 `Jomul App Store Archive` workflow를 사용한다. 2026-08-16 live readback에서 primary repository `seorilabs/jomul`과 활성 `APP_STORE_ELIGIBLE` iOS Archive workflow가 정확히 하나임을 확인했다. repo의 `deploy-app-store.yml`은 마켓 지원 탐지용 fail-closed 표준 진입점이며, 실제 App Store 실행은 Backoffice가 ASC API로 Xcode Cloud에 요청한다.
 - 관련 마이그레이션: `16_deploy_completion_notifications`, `20_discord_operational_notifications`, `24_drop_telegram_legacy`.
 
