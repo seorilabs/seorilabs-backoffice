@@ -45,6 +45,15 @@ test("경고는 건수와 함께 번호·근거까지 펼친다", () => {
   assert.ok(!text.includes("경고 없음"));
 });
 
+test("링크가 있으면 푸터로 붙고 없으면 리포트가 그대로다", () => {
+  const base = { month: "2026-08", summaryLines: SUMMARY, warnings: [] };
+  const withLink = renderFinanceReport({ ...base, link: "https://backoffice.example.com/report" });
+  assert.ok(withLink.endsWith("🔗 https://backoffice.example.com/report"));
+  for (const link of [undefined, null, ""]) {
+    assert.ok(!renderFinanceReport({ ...base, link }).includes("🔗"), String(link));
+  }
+});
+
 test("리포트는 KST 날짜로 하루 1건이다", () => {
   // 00:00 UTC 발화는 KST 로 같은 날 09:00 이다. UTC 날짜로 잡으면 자정 근처 재시도가
   // 다른 키를 만들어 같은 날 리포트가 두 번 올라간다.

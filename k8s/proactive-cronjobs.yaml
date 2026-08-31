@@ -313,9 +313,11 @@ spec:
                 capabilities:
                   drop: ["ALL"]
 ---
-# 서리 일일 지표 하이라이트·로우라이트 — GA4·AppsInToss 콘솔 스냅샷에서 크게 움직인
-# 항목만 추려 #app-ops 에 남긴다. analytics-collect(10:00 KST)와 지표 리포트(10:30 KST)
-# 뒤에 돌아야 D-1 스냅샷이 이미 들어와 있다.
+# 서리 일일 지표 하이라이트·로우라이트 + Org 종합 보고서 발행 — GA4·AppsInToss 콘솔
+# 스냅샷에서 크게 움직인 항목만 추려 #app-ops 에 남기고, 같은 계산 결과를 OrgReportDaily
+# 스냅샷(백오피스 /report)으로 저장한다. analytics-collect(10:00 KST)와 지표 리포트
+# (10:30 KST) 뒤에 돌아야 D-1 스냅샷이 이미 들어와 있다.
+# 시간 예산: 종량제 비용 4소스(각 15s timeout) + LLM 해설이 얹혀 여유를 둔다.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -331,7 +333,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 180
+      activeDeadlineSeconds: 300
       template:
         spec:
           restartPolicy: OnFailure
@@ -342,7 +344,7 @@ spec:
                 - sh
                 - -c
                 - >-
-                  curl -fsS --max-time 150 -XPOST
+                  curl -fsS --max-time 280 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
                   http://backoffice.platform.svc.cluster.local/api/admin/metric-highlights
               env:

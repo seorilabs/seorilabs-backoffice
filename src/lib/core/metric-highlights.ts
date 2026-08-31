@@ -1,5 +1,6 @@
+import type { AppType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { isoDate, latestClosedDay, resolveGa4Target } from "@/lib/ga4/datasets";
+import { isoDate, latestClosedDay, parseIsoDate, resolveGa4Target } from "@/lib/ga4/datasets";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -216,6 +217,8 @@ export function renderHighlightReport(input: {
   movements: readonly Movement[];
   /** LLM 해설(선택). 생성 실패 시 없이 나간다 — 리포트를 LLM 가용성에 묶지 않는다. */
   narrative?: string | null;
+  /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
+  reportUrl?: string | null;
 }): string {
   const { totals } = input;
   const lines = [`📈 **${SENDER_KO} 지표 하이라이트 · ${input.refDate} (D-1)**`];
@@ -272,6 +275,7 @@ export function renderHighlightReport(input: {
     "",
     `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 미집계 ${absent}건`,
   );
+  if (input.reportUrl) lines.push("", `🔗 ${input.reportUrl}`);
   return lines.join("\n");
 }
 
@@ -295,19 +299,26 @@ const CONSOLE_METRIC_PICKERS = [
   { key: "console_iap", pick: (row: ConsoleRow) => row.iapTrxAmountKrw },
 ];
 
-interface Ga4Row {
+export interface Ga4Row {
   date: Date;
   dau: number;
   newUsers: number;
   d1Pct: number | null;
   adCompletions: number;
+  engagedUsers: number;
+  dauAndroid: number;
+  dauIos: number;
+  dauWeb: number;
 }
 
-interface ConsoleRow {
+export interface ConsoleRow {
   date: Date;
   dau: number | null;
+  newUsers: number | null;
   iaaEarningKrw: number;
   iapTrxAmountKrw: number;
+  iapSettlementKrw: number;
+  payingUsers: number;
   raw?: unknown;
 }
 
@@ -351,9 +362,47 @@ export interface MetricHighlightResult {
   dedupeKey: string;
 }
 
-/** 저장된 스냅샷 → 하이라이트·로우라이트 리포트 → 알림 outbox. */
-export async function sendMetricHighlightReport(now = new Date()): Promise<MetricHighlightResult> {
-  const refDate = isoDate(latestClosedDay(now));
+/** GA4 수집 대상 앱 하나의 시계열(최신순, BASELINE_DAYS+1 창). 최신 행은 기준일 값이다. */
+export interface Ga4AppSeries {
+  app: { id: string; slug: string; displayName: string; type: AppType };
+  rowsDesc: Ga4Row[];
+}
+
+/** 콘솔 리스팅 하나의 시계열(최신순). 온디맨드 push 라 최신 행의 날짜가 기준일보다 늦을 수 있다. */
+export interface ConsoleListingSeries {
+  app: { id: string; slug: string; displayName: string; type: AppType };
+  miniAppId: number;
+  /** 리포트 표기용 라벨. 다중 리스팅이면 "앱명(리스팅)" 형태. */
+  label: string;
+  /** 다중 리스팅 구분 라벨(단일 리스팅이면 null). */
+  listingLabel: string | null;
+  rowsDesc: ConsoleRow[];
+}
+
+/**
+ * 하이라이트 판정에 쓰인 적재·판정 결과 일체. Discord 리포트와 Org 종합 보고서 스냅샷이
+ * 같은 계산 결과를 공유하기 위해 원시 시계열까지 함께 담는다(재질의 없이 분해 생성).
+ */
+export interface HighlightData {
+  refDate: string;
+  totals: PortfolioTotals;
+  movements: Movement[];
+  ga4Series: Ga4AppSeries[];
+  consoleSeries: ConsoleListingSeries[];
+  /** 콘솔 대상이지만 push 수집이 한 번도 없는 리스팅 라벨. */
+  consoleMissing: string[];
+}
+
+/**
+ * 저장된 GA4·콘솔 스냅샷을 읽어 판정까지 마친다. refDateOverride 를 주면 그 날짜를
+ * 기준일로 하는 소급 계산이 된다(과거 날짜 보고서 재계산·수동 재발행용).
+ */
+export async function collectHighlightData(
+  now: Date,
+  refDateOverride?: string,
+): Promise<HighlightData> {
+  const refDate = refDateOverride ?? isoDate(latestClosedDay(now));
+  const upTo = parseIsoDate(refDate);
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
@@ -361,6 +410,7 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
       id: true,
       slug: true,
       displayName: true,
+      type: true,
       firebaseProject: true,
       ga4Dataset: true,
       aitWorkspaceId: true,
@@ -374,13 +424,26 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
     console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: 0, listings: 0 },
   };
   const consoleRaws: unknown[] = [];
+  const ga4Series: Ga4AppSeries[] = [];
+  const consoleSeries: ConsoleListingSeries[] = [];
+  const consoleMissing: string[] = [];
 
   for (const app of apps.filter((app) => resolveGa4Target(app))) {
     const rows = (await prisma.appMetricDaily.findMany({
-      where: { appId: app.id },
+      where: { appId: app.id, date: { lte: upTo } },
       orderBy: { date: "desc" },
       take: BASELINE_DAYS + 1,
-      select: { date: true, dau: true, newUsers: true, d1Pct: true, adCompletions: true },
+      select: {
+        date: true,
+        dau: true,
+        newUsers: true,
+        d1Pct: true,
+        adCompletions: true,
+        engagedUsers: true,
+        dauAndroid: true,
+        dauIos: true,
+        dauWeb: true,
+      },
     })) as Ga4Row[];
     // 기준일 스냅샷이 아직 없는 앱은 어제를 말할 수 없다. 합계도 오염시키지 않는다.
     if (rows.length === 0 || isoDate(rows[0].date) !== refDate) continue;
@@ -388,6 +451,10 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
     totals.ga4Dau.latest += rows[0].dau;
     totals.ga4Dau.previous = (totals.ga4Dau.previous ?? 0) + (rows[1]?.dau ?? 0);
     totals.ga4Dau.apps += 1;
+    ga4Series.push({
+      app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+      rowsDesc: rows,
+    });
   }
 
   for (const app of apps.filter((app) => resolveAitTarget(app))) {
@@ -397,17 +464,30 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
           miniAppId: listing.miniAppId,
           // 리스팅이 하나면 라벨이 앱명과 중복이라 생략한다.
           label: listings.length > 1 ? `${app.displayName}(${listing.label})` : app.displayName,
+          listingLabel: listings.length > 1 ? listing.label : null,
         }))
-      : [{ miniAppId: resolveAitTarget(app)!.miniAppId, label: app.displayName }];
+      : [{ miniAppId: resolveAitTarget(app)!.miniAppId, label: app.displayName, listingLabel: null }];
 
     for (const target of targets) {
       const rows = (await prisma.appConsoleMetricDaily.findMany({
-        where: { appId: app.id, miniAppId: target.miniAppId },
+        where: { appId: app.id, miniAppId: target.miniAppId, date: { lte: upTo } },
         orderBy: { date: "desc" },
         take: BASELINE_DAYS + 1,
-        select: { date: true, dau: true, iaaEarningKrw: true, iapTrxAmountKrw: true, raw: true },
+        select: {
+          date: true,
+          dau: true,
+          newUsers: true,
+          iaaEarningKrw: true,
+          iapTrxAmountKrw: true,
+          iapSettlementKrw: true,
+          payingUsers: true,
+          raw: true,
+        },
       })) as ConsoleRow[];
-      if (rows.length === 0) continue;
+      if (rows.length === 0) {
+        consoleMissing.push(target.label);
+        continue;
+      }
       movements.push(...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS));
       // 콘솔은 온디맨드 push 라 리스팅마다 최신일이 다르다. 합계는 각 리스팅의
       // 최신 스냅샷을 쓰되, 오래된 값은 각 항목 줄에 기준일이 함께 찍힌다.
@@ -416,19 +496,54 @@ export async function sendMetricHighlightReport(now = new Date()): Promise<Metri
       totals.console.previousIaaKrw = (totals.console.previousIaaKrw ?? 0) + (rows[1]?.iaaEarningKrw ?? 0);
       totals.console.listings += 1;
       consoleRaws.push(rows[0].raw);
+      consoleSeries.push({
+        app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+        miniAppId: target.miniAppId,
+        label: target.label,
+        listingLabel: target.listingLabel,
+        rowsDesc: rows,
+      });
     }
   }
 
   totals.referrers = foldReferrers(consoleRaws);
 
+  return { refDate, totals, movements, ga4Series, consoleSeries, consoleMissing };
+}
+
+export interface MetricHighlightOptions {
+  /** 이미 적재·판정을 마친 데이터. 주면 재계산 없이 그대로 발송한다(Org 보고서와 공유). */
+  data?: HighlightData;
+  /** LLM 해설. undefined 면 여기서 생성하고, null 이면 해설 없이 발송한다. */
+  narrative?: string | null;
+  /** 백오피스 Org 종합 보고서 링크. 없으면 푸터를 생략한다. */
+  reportUrl?: string | null;
+}
+
+/** 저장된 스냅샷 → 하이라이트·로우라이트 리포트 → 알림 outbox. */
+export async function sendMetricHighlightReport(
+  now = new Date(),
+  options: MetricHighlightOptions = {},
+): Promise<MetricHighlightResult> {
+  const { refDate, totals, movements } = options.data ?? (await collectHighlightData(now));
+
   const dedupeKey = metricHighlightDedupeKey(refDate);
-  const narrative = await metricNarrative(narrativeFacts({ refDate, totals, movements }));
+  const narrative =
+    options.narrative !== undefined
+      ? options.narrative
+      : await metricNarrative(narrativeFacts({ refDate, totals, movements }));
   await enqueueNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
     payload: {
-      text: renderHighlightReport({ refDate, totals, movements, narrative }),
+      text: renderHighlightReport({
+        refDate,
+        totals,
+        movements,
+        narrative,
+        reportUrl: options.reportUrl,
+      }),
       sender: SEORI_SENDER,
     },
     destinations: discordDestinations(["app-ops"]),

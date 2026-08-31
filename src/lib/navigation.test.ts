@@ -16,19 +16,24 @@ function link(href: string): NavigationLink {
 }
 
 describe("좌측 내비게이션 구조", () => {
-  it("플랫폼과 앱 두 섹션을 고정된 순서로 제공한다", () => {
+  it("조직·플랫폼·앱 세 섹션을 고정된 순서로 제공한다", () => {
     assert.deepEqual(
       NAVIGATION_SECTIONS.map((section) => [section.key, section.label]),
       [
+        ["org", "조직"],
         ["platform", "플랫폼"],
         ["apps", "앱"],
       ],
     );
   });
 
-  it("플랫폼 링크와 기존 앱 링크를 모두 보존한다", () => {
+  it("조직·플랫폼 링크와 기존 앱 링크를 모두 보존한다", () => {
     assert.deepEqual(
       NAVIGATION_SECTIONS[0]?.links.map(({ href, label }) => [href, label]),
+      [["/report", "종합 지표 보고서"]],
+    );
+    assert.deepEqual(
+      NAVIGATION_SECTIONS[1]?.links.map(({ href, label }) => [href, label]),
       [
         ["/platform", "개요"],
         ["/platform/auth", "인증"],
@@ -36,7 +41,7 @@ describe("좌측 내비게이션 구조", () => {
       ],
     );
     assert.deepEqual(
-      NAVIGATION_SECTIONS[1]?.links.map(({ href }) => href),
+      NAVIGATION_SECTIONS[2]?.links.map(({ href }) => href),
       [
         "/",
         "/board",

@@ -7,12 +7,17 @@ export interface NavigationLink {
 }
 
 export interface NavigationSection {
-  key: "platform" | "apps";
+  key: "org" | "platform" | "apps";
   label: string;
   links: readonly NavigationLink[];
 }
 
 export const NAVIGATION_SECTIONS: readonly NavigationSection[] = [
+  {
+    key: "org",
+    label: "조직",
+    links: [{ href: "/report", label: "종합 지표 보고서", match: "nested" }],
+  },
   {
     key: "platform",
     label: "플랫폼",
