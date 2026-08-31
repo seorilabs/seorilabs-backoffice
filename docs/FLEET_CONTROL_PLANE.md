@@ -53,6 +53,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `GET` | `/api/control-plane/apps/{repoId}/resolved-manifest?ref={sourceSha}&event_ref={eventSha}&workflow_sha={bundleSha}&build_target=android&build_profile={profile}&schema=workflow-bundle-v5-build[-canary|-release]` | private repo의 trusted self-hosted GitHub OIDC, exact caller/called workflow SHA, ACTIVE config SHA+payload digest, immutable bundle registry, exact-source discovery build binding을 결합한 Android build-only readback. canary는 `plan_identity`와 고정 Happy Farm/RN·Lizard Tycoon/Godot same-repo PR을 요구한다. release는 `release_ref=refs/tags/vX.Y.Z`와 `release_tag=vX.Y.Z`, GitHub App의 peeled tag commit readback, APPROVED bundle을 모두 요구한다. 기간제 dependency audit 예외는 `ANDROID_BUILD_ONLY` source가 exact application SHA와 같고 만료 전일 때만 포함 |
 | `POST` | `/api/control-plane/workflow-bundles` | exact successful `.github` candidate run/artifact 또는 기존 candidate와 canonical Ed25519 서명을 검증해 불변 `CANDIDATE`/`APPROVED` registry record를 멱등 import. secret/private signing key를 받거나 반환하지 않음 |
 | `GET` | `/api/control-plane/apps/{repoId}/project-blueprint-plan?ref={sha}&revision=` | exact SHA와 ACTIVE revision의 GCP/Firebase/Workspace plan 및 readback 상태 계산. provider write 없음 |
+| `GET/POST` | `/api/control-plane/credential-bindings?repoId=` | app별 secret-free CredentialBinding 조회 / 검증된 catalog entry·snapshot digest, 공개 identity/fingerprint, generation, adapter/origin을 `expectedRevision` CAS와 `Idempotency-Key`로 import. secret 조회·export 없음 |
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA·digest, Platform version을 하나의 candidate로 고정 |
 | `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
@@ -481,8 +482,10 @@ version·digest, contract revision, PR/P1 Issue, 예외 만료와 plan 원장을
 앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
 ProjectBlueprint와 market projection, ReleaseCandidate와 독립 gate, ProviderObservation,
 PlatformFleetBinding, CredentialBinding, ProviderExecution, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
-CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만 있으며 secret 값을
-저장하거나 변경하는 endpoint는 없다.
+CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만 있다. 검증된 catalog
+projection import endpoint는 catalog entry/snapshot digest, `expectedRevision`, credential/policy generation을
+모두 확인하고 같은 transaction에서 mutation receipt와 audit를 봉인한다. 실행 metadata가 바뀌는데 generation이
+전진하지 않거나 과거 observation이면 거부한다. secret 값을 조회·export하거나 raw credential을 변경하는 endpoint는 없다.
 
 ReauthRequest는 strict gate enum만 저장하고 공개 설명은 서버의 고정 mapping으로 파생한다. provider
 error나 DOM free-form text를 받거나 저장하지 않는다. `HUMAN_REAUTH_REQUIRED → TRUSTED_LOCAL_PENDING`은
@@ -735,8 +738,9 @@ admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler
   product/workflow/repository의 공개 identity를 읽고 observation/binding을 함께 갱신한다. 권한·네트워크 오류는
   리소스 부재로 합성하지 않고 `UNKNOWN`으로 남긴다. GCP/Firebase/Workspace와 아직 producer가 연결되지 않은
   마켓 readback은 각 provider의 read-only identity가 연결되기 전까지 0이 정상이다.
-- `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin을
-  모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로 capability를 추측하지 않는다.
+- `CredentialBinding`은 catalog의 logical ID, 공개 identity/fingerprint, scope, generation, adapter/origin과
+  entry/snapshot digest를 모두 검증한 import가 들어오기 전까지 0이며, catalog 목적이나 파일 경로만으로
+  capability를 추측하지 않는다. import는 app repository consumer와 exact revision을 대조하고 public projection만 저장한다.
 - `ReleaseCandidate`와 `ReleaseGateObservation`은 ACTIVE revision, exact source, artifact checksum,
   WorkflowBundle SHA, Platform version 및 독립 gate evidence가 생긴 뒤에만 기록한다. 코드/빌드가 있다는
   이유로 release candidate나 upload/public 상태를 합성하지 않는다.
