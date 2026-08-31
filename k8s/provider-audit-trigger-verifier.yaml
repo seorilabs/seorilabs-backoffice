@@ -103,8 +103,8 @@ metadata:
     app.kubernetes.io/name: backoffice
     app.kubernetes.io/component: provider-audit-trigger-verifier
   annotations:
-    seorilabs.dev/append-only-contract-digest: "2ca059d5747e9f956cb221fe3677e60fb2725a188dc47e5619422d07e992a732"
-    seorilabs.dev/append-only-contract-count: "12"
+    seorilabs.dev/append-only-contract-digest: "0cf6d66f2509bf2c3af531086501189eedfb8c533c716331d5665653e0c14dcd"
+    seorilabs.dev/append-only-contract-count: "14"
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -141,7 +141,7 @@ spec:
               image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
               env:
                 - name: CONTRACT_DIGEST
-                  value: "2ca059d5747e9f956cb221fe3677e60fb2725a188dc47e5619422d07e992a732"
+                  value: "0cf6d66f2509bf2c3af531086501189eedfb8c533c716331d5665653e0c14dcd"
               command: ["/bin/bash", "-c"]
               args:
                 - |
@@ -158,13 +158,14 @@ spec:
                   q() {
                     mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e "$1"
                   }
-                  # 보호 table 위 trigger는 계약된 열두 개뿐이어야 한다. 우회 trigger가
+                  # 보호 table 위 trigger는 계약된 열네 개뿐이어야 한다. 우회 trigger가
                   # 함께 설치되면 append-only가 무력화되므로 총 개수도 센다.
                   total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
                     WHERE TRIGGER_SCHEMA='backoffice' \
                       AND EVENT_OBJECT_TABLE IN ( \
                         'control_plane_provider_execution_event', \
                         'control_plane_auth_broker_journal_checkpoint_event', \
+                        'control_plane_legacy_config_resolution', \
                         'control_plane_fleet_migration_proof_snapshot', \
                         'control_plane_fleet_migration_collection_occurrence', \
                         'control_plane_fleet_migration_collection_completion', \
@@ -192,6 +193,15 @@ spec:
                           AND ( \
                             (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_update' AND EVENT_MANIPULATION='UPDATE') \
                             OR (TRIGGER_NAME='control_plane_auth_broker_journal_checkpoint_event_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                          ) \
+                        ) \
+                        OR ( \
+                          EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution' \
+                          AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                            \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only'\" \
+                          AND ( \
+                            (TRIGGER_NAME='control_plane_legacy_config_resolution_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                            OR (TRIGGER_NAME='control_plane_legacy_config_resolution_no_delete' AND EVENT_MANIPULATION='DELETE') \
                           ) \
                         ) \
                         OR ( \
@@ -236,7 +246,7 @@ spec:
                   case "$total" in ''|*[!0-9]*) echo "총 개수 관측 실패" >&2; exit 1;; esac
                   case "$exact" in ''|*[!0-9]*) echo "정확 일치 관측 실패" >&2; exit 1;; esac
                   status=FAIL
-                  if [ "$total" = "12" ] && [ "$exact" = "12" ]; then
+                  if [ "$total" = "14" ] && [ "$exact" = "14" ]; then
                     status=PASS
                   fi
                   umask 022

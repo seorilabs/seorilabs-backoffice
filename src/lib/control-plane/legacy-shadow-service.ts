@@ -9,6 +9,12 @@ import {
   type LegacyTransformResult,
 } from "@/lib/control-plane/legacy-shadow";
 import {
+  applyLegacyConfigResolution,
+  legacyResolutionReasonCodes,
+  legacyResolutionReasonCodesDigest,
+} from "@/lib/control-plane/legacy-config-resolution";
+import { findApplicableLegacyConfigResolution } from "@/lib/control-plane/legacy-config-resolution-service";
+import {
   LEGACY_SOURCE_DEFINITIONS,
   LEGACY_TRANSFORM_VERSION,
   type LegacySourceInput,
@@ -480,6 +486,8 @@ function importSelect() {
     transformVersion: true,
     requestHash: true,
     inputDigest: true,
+    reasonCodes: true,
+    reasonCodesDigest: true,
     status: true,
     configRevisionId: true,
     observedBy: true,
@@ -522,6 +530,7 @@ function importSelect() {
         legacyDigest: true,
         centralDigest: true,
         diff: true,
+        legacyConfigResolutionId: true,
         observedBy: true,
         observedAt: true,
       },
@@ -660,6 +669,8 @@ export async function recordLegacyShadowImport(input: {
   }
   const transformed = transformLegacySources(collected.transformInputs);
   const inputDigest = persistedInputDigest(transformed, collected.persisted);
+  const reasonCodes = legacyResolutionReasonCodes(transformed);
+  const reasonCodesDigest = legacyResolutionReasonCodesDigest(reasonCodes);
   const observedAt = dependencies.now();
 
   try {
@@ -751,6 +762,8 @@ export async function recordLegacyShadowImport(input: {
           transformVersion: LEGACY_TRANSFORM_VERSION,
           requestHash,
           inputDigest,
+          reasonCodes: jsonInput(reasonCodes),
+          reasonCodesDigest,
           status: transformed.status === "DRAFTABLE"
             ? "DRAFT_CREATED"
             : transformed.status === "DRAFTABLE_WITH_INPUT"
@@ -791,7 +804,29 @@ export async function recordLegacyShadowImport(input: {
       });
 
       // Import가 생성한 DRAFT 자체와 비교하면 tautological MATCH가 되므로 금지한다.
-      const parity = compareLegacyShadow(transformed, active?.payload ?? null);
+      // 검토가 필요한 source는 exact source/input/reason/ACTIVE 중앙 상태에 묶인
+      // append-only resolution이 있을 때만 MATCH로 승격한다.
+      const applicableResolution = active && transformed.status !== "DRAFTABLE"
+        ? await findApplicableLegacyConfigResolution(tx, {
+            appId: app.id,
+            sourceSha,
+            transformVersion: LEGACY_TRANSFORM_VERSION,
+            inputDigest,
+            reasonCodesDigest,
+            configRevisionId: active.id,
+          })
+        : null;
+      const parity = applicableResolution
+        ? applyLegacyConfigResolution({
+            transform: transformed,
+            persistedInputDigest: inputDigest,
+            sourceSha,
+            configRevisionId: active!.id,
+            centralPayload: active!.payload,
+            centralStateDigest: applicableResolution.centralStateDigest,
+            resolution: applicableResolution.resolution,
+          }) ?? compareLegacyShadow(transformed, active?.payload ?? null)
+        : compareLegacyShadow(transformed, active?.payload ?? null);
       const diff = persistedDiff(transformed, parity);
       const dedupeKey = jsonDigest({
         appId: app.id,
@@ -802,12 +837,15 @@ export async function recordLegacyShadowImport(input: {
         scope: FULL_PARITY_SCOPE,
         centralConfigRevisionId: active?.id ?? null,
         centralPayloadHash: active?.payloadHash ?? null,
+        legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
+        centralStateDigest: applicableResolution?.centralStateDigest ?? null,
       } as JsonValue);
       const parityObservation = await tx.shadowParityObservation.create({
         data: {
           appId: app.id,
           legacyImportId: legacyImport.id,
           configRevisionId: active?.id,
+          legacyConfigResolutionId: applicableResolution?.resolution?.id,
           sourceSha,
           scope: FULL_PARITY_SCOPE,
           contractVersion: LEGACY_TRANSFORM_VERSION,
@@ -845,6 +883,8 @@ export async function recordLegacyShadowImport(input: {
             reasonCodes: transformed.status !== "DRAFTABLE"
               ? [...new Set(transformed.reasons.map((reason) => reason.code))].sort()
               : [],
+            reasonCodesDigest,
+            legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
           },
         },
       });

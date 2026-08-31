@@ -140,11 +140,12 @@ trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같�
 `platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
 미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
 Fleet migration 뒤에는 trusted operator가
-`fleet-migration-security-provisioning-job.yaml`로 여덟 trigger와 세 전용 DB principal의 exact grant를
-설치한다. 이후 `status=PASS`, `total=12`, `exact=12` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+`fleet-migration-security-provisioning-job.yaml`로 Fleet migration 여덟 trigger, legacy config
+resolution 두 trigger, 세 전용 DB principal의 exact grant를 설치한다. 이후 `status=PASS`,
+`total=14`, `exact=14` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
 직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
 `log_bin_trust_function_creators`도 변경하지 않는다.
-복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열두 trigger·migration
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열네 trigger·migration
 lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
@@ -170,9 +171,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열두 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열네 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 12인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 14인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이

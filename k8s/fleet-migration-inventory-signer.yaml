@@ -136,4 +136,3 @@ spec:
               app.kubernetes.io/name: backoffice
               app.kubernetes.io/component: fleet-migration-inventory-issuer
       ports: [{ protocol: TCP, port: 9444 }]
-  egress: []

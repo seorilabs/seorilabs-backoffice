@@ -81,6 +81,22 @@ const appendOnlyTriggerContract = new Map([
       message: "auth broker journal checkpoint audit is append-only",
     },
   ],
+  [
+    "control_plane_legacy_config_resolution_no_update",
+    {
+      event: "UPDATE",
+      table: "control_plane_legacy_config_resolution",
+      message: "legacy config resolution audit is append-only",
+    },
+  ],
+  [
+    "control_plane_legacy_config_resolution_no_delete",
+    {
+      event: "DELETE",
+      table: "control_plane_legacy_config_resolution",
+      message: "legacy config resolution audit is append-only",
+    },
+  ],
 ]);
 
 function stripVerifiedAppendOnlyTriggers(sql) {

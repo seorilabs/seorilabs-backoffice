@@ -5,9 +5,14 @@ import { Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { FleetConfigEditor } from "@/components/fleet/FleetConfigEditor";
 import { FleetAutomationControls } from "@/components/fleet/FleetAutomationControls";
 import { FleetLifecycleControls } from "@/components/fleet/FleetLifecycleControls";
+import { LegacyConfigResolutionButton } from "@/components/fleet/LegacyConfigResolutionButton";
 import { ProviderExecutionApprovalButton } from "@/components/fleet/ProviderExecutionApprovalButton";
 import { TrustedLocalPendingButton } from "@/components/fleet/TrustedLocalPendingButton";
-import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
+import {
+  configRevisionPayloadSchema,
+  legacyConfigResolutionReasonCodeSchema,
+  type LegacyConfigResolutionRequest,
+} from "@/lib/control-plane/contracts";
 import {
   isManagedAutomationDefinition,
   parseManagedAutomationPolicy,
@@ -115,6 +120,19 @@ export default async function FleetOperationsPage({
       parsed: githubInstallationProviderPayloadSchema.safeParse(observation.payload),
     }))
     .find((item) => item.parsed.success);
+  type LegacyEvidenceKind = LegacyConfigResolutionRequest["dispositions"][number]["targets"][number];
+  const availableLegacyEvidenceKinds: LegacyEvidenceKind[] = [
+    ...(activeConfig ? ["CONFIG_REVISION" as const] : []),
+    ...(fleet.buildTargets.length > 0 ? ["BUILD_TARGET" as const] : []),
+    ...(fleet.externalBindings.length > 0 ? ["EXTERNAL_BINDING" as const] : []),
+    ...((activeConfig?.marketLocalizations.length ?? 0) > 0 ? ["MARKET_LOCALIZATION" as const] : []),
+    ...((activeConfig?.complianceProfiles.length ?? 0) > 0 ? ["COMPLIANCE_PROFILE" as const] : []),
+    ...((activeConfig?.storeAssets.length ?? 0) > 0 ? ["STORE_ASSET" as const] : []),
+    ...(fleet.providerObservations.length > 0 ? ["PROVIDER_OBSERVATION" as const] : []),
+    ...(fleet.platformFleetBinding ? ["PLATFORM_FLEET_BINDING" as const] : []),
+    ...(fleet.credentialBindings.length > 0 ? ["CREDENTIAL_BINDING" as const] : []),
+    ...(fleet.automationDefinitions.length > 0 ? ["AUTOMATION_DEFINITION" as const] : []),
+  ];
 
   return (
     <div className="space-y-8">
@@ -363,7 +381,16 @@ export default async function FleetOperationsPage({
       >
         <Panel title="최근 shadow import">
           <div className="space-y-3">
-            {fleet.legacyConfigImports.map((legacyImport) => (
+            {fleet.legacyConfigImports.map((legacyImport) => {
+              const parsedReasonCodes = legacyConfigResolutionReasonCodeSchema.array().safeParse(legacyImport.reasonCodes);
+              const latestResolution = fleet.legacyConfigResolutions.find((resolution) => (
+                resolution.sourceSha === legacyImport.sourceSha
+                && resolution.transformVersion === legacyImport.transformVersion
+              ));
+              const importResolution = fleet.legacyConfigResolutions.find((resolution) => (
+                resolution.sourceImportId === legacyImport.id
+              ));
+              return (
               <article key={legacyImport.id} className="rounded border border-neutral-200 bg-white p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
@@ -380,11 +407,38 @@ export default async function FleetOperationsPage({
                       {legacyImport.sourceRef ?? "sourceRef 없음"} · {legacyImport.transformVersion} · {legacyImport.observedBy} · {dateTime(legacyImport.observedAt)}
                     </div>
                     <div className="mt-1 text-[11px] text-neutral-400">input digest {mono(legacyImport.inputDigest, 20)}</div>
+                    {parsedReasonCodes.success && parsedReasonCodes.data.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {parsedReasonCodes.data.map((code) => (
+                          <span key={code} className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[10px] text-amber-900">{code}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
                     정리 금지 · Fleet wave 2회와 복구·build-only 증거를 별도로 확인
                   </span>
                 </div>
+
+                {importResolution && (
+                  <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                    이 import에 기록된 resolution revision {importResolution.revision} · {importResolution.approvalKind} · {importResolution.createdBy} · {dateTime(importResolution.createdAt)} · digest {mono(importResolution.resolutionDigest, 14)}
+                  </div>
+                )}
+                {fleet.repoId !== null && activeConfig && parsedReasonCodes.success && parsedReasonCodes.data.length > 0 && (
+                  <div className="mt-3">
+                    <LegacyConfigResolutionButton
+                      appId={fleet.id}
+                      repoId={fleet.repoId.toString()}
+                      sourceSha={legacyImport.sourceSha}
+                      legacyImportId={legacyImport.id}
+                      activeConfigRevision={activeConfig.revision}
+                      expectedResolutionRevision={latestResolution?.revision ?? 0}
+                      reasonCodes={parsedReasonCodes.data}
+                      availableEvidenceKinds={availableLegacyEvidenceKinds}
+                    />
+                  </div>
+                )}
 
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full min-w-[900px] text-left text-[11px]">
@@ -425,6 +479,7 @@ export default async function FleetOperationsPage({
                         <Meta label="관측자" value={parity.observedBy} />
                         <Meta label="Legacy digest" value={mono(parity.legacyDigest, 16)} />
                         <Meta label="Central digest" value={mono(parity.centralDigest, 16)} />
+                        <Meta label="Resolution" value={mono(parity.legacyConfigResolutionId, 16)} />
                       </dl>
                       <pre className="mt-2 max-h-48 overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">{jsonText(parity.diff ?? [])}</pre>
                     </details>
@@ -432,7 +487,8 @@ export default async function FleetOperationsPage({
                   {legacyImport.parityObservations.length === 0 && <Empty>Parity observation이 없습니다.</Empty>}
                 </div>
               </article>
-            ))}
+              );
+            })}
             {fleet.legacyConfigImports.length === 0 && <Empty>Legacy shadow import가 없습니다.</Empty>}
           </div>
         </Panel>
