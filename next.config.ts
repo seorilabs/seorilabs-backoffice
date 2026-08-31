@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // repo-contract의 fleet validator는 import.meta.url 기준으로 패키지에 동봉된 JSON schema를
+  // 런타임 로드한다. webpack이 이를 client-style로 번들하면 존재하지 않는 source checkout
+  // fallback까지 정적 resolve하므로 server package 그대로 standalone trace에 포함한다.
+  serverExternalPackages: ["@seorilabs/repo-contract"],
   // 단일 컨테이너 배포용. .next/standalone 산출.
   output: "standalone",
   // sharp 를 standalone 트레이스에서 제외한다. 이 앱은 next/image 를 쓰지 않고,
