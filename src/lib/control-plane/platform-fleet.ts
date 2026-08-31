@@ -18,6 +18,7 @@ import {
   platformFleetAutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { canonicalJson, jsonDigest, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
+import { loadExactManagedPlatformConsumers } from "@/lib/control-plane/platform-fleet-cohort";
 import { platformFleetDisposition } from "@/lib/control-plane/platform-fleet-policy";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { assertObservationTime, ControlPlaneError } from "@/lib/control-plane/service";
@@ -27,6 +28,13 @@ const PLATFORM_PROVIDER = "platform";
 const PLATFORM_CONSUMER_RESOURCE = "platform-consumer";
 const PLATFORM_PLAN_BUDGET_MICROS = 2_000_000;
 const REQUIRED_CHECKS = ["test:core", "check:architecture", "check:release", "repo-contract"] as const;
+const PLATFORM_ISSUE_LABELS = {
+  P1: { color: "E99695", description: "최우선" },
+  autopilot: { color: "0E8A16", description: "자율 스케줄러 처리 대상" },
+  platform: { color: "0052CC", description: "Seorilabs Platform 연동" },
+  "platform-contract": { color: "FBCA04", description: "Platform 계약 변경 대응" },
+  "platform-remediation": { color: "D4C5F9", description: "Platform SDK 비관리 상태 해소" },
+} as const;
 
 function jsonInput(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
@@ -46,6 +54,10 @@ function publicError(error: unknown): string {
 
 function platformMarker(manifestDigest: string, repoId: string): string {
   return `<!-- seorilabs-platform-fleet:${manifestDigest}:${repoId} -->`;
+}
+
+function platformRemediationMarker(repoId: string): string {
+  return `<!-- seorilabs-platform-remediation:v1:${repoId} -->`;
 }
 
 function platformPlanWorkKey(manifestDigest: string, repoId: string): string {
@@ -261,6 +273,55 @@ function contractIssueTask(input: {
   });
 }
 
+function integrationRemediationIssueTask(input: {
+  planId: string;
+  repoId: string;
+  repoFullName: string;
+  sourceSha: string;
+  manifest: PlatformReleaseManifest;
+  manifestDigest: string;
+  artifact: PlatformReleaseManifest["artifacts"][number];
+  integration: "CUSTOM_HTTP" | "MISSING";
+}): PlatformFleetTaskInput {
+  const marker = platformRemediationMarker(input.repoId);
+  const custom = input.integration === "CUSTOM_HTTP";
+  return platformFleetTaskInputSchema.parse({
+    schemaVersion: 1,
+    kind: "PLATFORM_INTEGRATION_REMEDIATION_ISSUE",
+    planId: input.planId,
+    repoId: input.repoId,
+    repoFullName: input.repoFullName,
+    sourceSha: input.sourceSha,
+    manifestDigest: input.manifestDigest,
+    releaseVersion: input.manifest.version,
+    releaseSourceSha: input.manifest.sourceSha,
+    contractRevision: input.manifest.contractRevision,
+    integration: input.integration,
+    artifact: input.artifact,
+    issueMarker: marker,
+    title: custom
+      ? "[P1] Platform custom HTTP 연동을 공식 SDK로 전환"
+      : "[P1] Platform 공식 SDK 탑재",
+    body: [
+      marker,
+      "",
+      custom
+        ? "현재 custom HTTP 연동을 중앙 Platform SDK 계약으로 전환합니다."
+        : "현재 누락된 중앙 Platform SDK를 탑재합니다.",
+      "",
+      `- 기준 source SHA: \`${input.sourceSha}\``,
+      `- 승인 Platform release: \`${input.manifest.version}\` / \`${input.manifest.sourceSha}\``,
+      `- Manifest digest: \`${input.manifestDigest}\``,
+      `- Contract revision: \`${input.manifest.contractRevision}\``,
+      `- SDK: ${input.artifact.kind} ${input.artifact.version} / \`${input.artifact.digest}\``,
+      `- 탐지 상태: \`${input.integration}\``,
+      "",
+      "공식 SDK 탑재와 회귀 테스트까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
+    ].join("\n"),
+    labels: ["P1", "autopilot", "platform", "platform-remediation"],
+  });
+}
+
 function sdkUpdateTask(input: {
   planId: string;
   repoId: string;
@@ -445,29 +506,8 @@ export async function reconcilePlatformFleet(input: {
       },
     });
 
-    const repoIds = input.consumers.map(({ repoId }) => BigInt(repoId));
-    const [apps, registrations, discoveries, observations, currentPlatformObservations] = await Promise.all([
-      tx.app.findMany({
-        where: { status: "ACTIVE" },
-        select: { id: true, repoId: true, repoFullName: true, status: true, engine: true },
-      }),
-      tx.repositoryRegistration.findMany({
-        where: { repoId: { in: repoIds } },
-        select: {
-          repoId: true,
-          repoFullName: true,
-          archived: true,
-          status: true,
-          managementKind: true,
-          classification: true,
-          lastDefaultPushSha: true,
-          lastReconciledSha: true,
-        },
-      }),
-      tx.discoveryObservation.findMany({
-        where: { id: { in: input.consumers.map(({ discoveryObservationId }) => discoveryObservationId) } },
-        select: { id: true, appId: true, sourceSha: true, payload: true, payloadHash: true },
-      }),
+    const cohort = await loadExactManagedPlatformConsumers(tx);
+    const [observations, currentPlatformObservations] = await Promise.all([
       tx.providerObservation.findMany({
         where: { id: { in: input.consumers.map(({ providerObservationId }) => providerObservationId) } },
         select: {
@@ -491,34 +531,19 @@ export async function reconcilePlatformFleet(input: {
         select: { id: true, appId: true, resourceId: true },
       }),
     ]);
-    const appWithoutRepository = apps.find((app) => app.repoId === null);
-    if (appWithoutRepository) {
-      throw new ControlPlaneError(
-        `ACTIVE app ${appWithoutRepository.repoFullName}에 GitHub repository ID가 없습니다.`,
-        409,
-        "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
-      );
-    }
-    const activeRepoIds = apps.map((app) => app.repoId!.toString()).sort();
+    const exactRepoIds = cohort.map(({ registration }) => registration.repoId.toString()).sort();
     const requestedRepoIds = input.consumers.map(({ repoId }) => repoId).sort();
-    if (canonicalJson(activeRepoIds) !== canonicalJson(requestedRepoIds)) {
+    if (canonicalJson(exactRepoIds) !== canonicalJson(requestedRepoIds)) {
       throw new ControlPlaneError(
-        "현재 ACTIVE app cohort 전체와 reconcile input이 정확히 일치해야 합니다.",
+        "현재 exact MANAGED PRODUCT_APP cohort 전체와 reconcile input이 정확히 일치해야 합니다.",
         409,
         "PLATFORM_CONSUMER_COHORT_MISMATCH",
       );
     }
-    if (
-      apps.length !== repoIds.length
-      || registrations.length !== repoIds.length
-      || discoveries.length !== repoIds.length
-      || observations.length !== repoIds.length
-    ) {
+    if (observations.length !== cohort.length) {
       throw new ControlPlaneError("모든 manifest consumer의 exact 관리 observation이 필요합니다.", 409, "PLATFORM_OBSERVATION_COHORT_INCOMPLETE");
     }
-    const appByRepo = new Map(apps.map((app) => [app.repoId!.toString(), app]));
-    const registrationByRepo = new Map(registrations.map((row) => [row.repoId.toString(), row]));
-    const discoveryById = new Map(discoveries.map((row) => [row.id, row]));
+    const consumerByRepo = new Map(cohort.map((entry) => [entry.registration.repoId.toString(), entry]));
     const observationById = new Map(observations.map((row) => [row.id, row]));
     const currentObservationByRepo = new Map<string, { id: string; appId: string }>();
     for (const observation of currentPlatformObservations) {
@@ -530,12 +555,19 @@ export async function reconcilePlatformFleet(input: {
     const summaries: Array<{ repoId: string; planId: string; kind: string; status: string }> = [];
 
     for (const consumerInput of input.consumers) {
-      const app = appByRepo.get(consumerInput.repoId);
-      const registration = registrationByRepo.get(consumerInput.repoId);
-      const discovery = discoveryById.get(consumerInput.discoveryObservationId);
+      const consumer = consumerByRepo.get(consumerInput.repoId);
+      const app = consumer?.app;
+      const registration = consumer?.registration;
+      const discovery = consumer?.discovery;
       const observationRow = observationById.get(consumerInput.providerObservationId);
-      if (!app || !registration || !discovery || !observationRow || app.status !== "ACTIVE") {
-        throw new ControlPlaneError("ACTIVE managed consumer identity가 일치하지 않습니다.", 409, "PLATFORM_CONSUMER_IDENTITY_MISMATCH");
+      if (
+        !app
+        || !registration
+        || !discovery
+        || !observationRow
+        || consumerInput.discoveryObservationId !== discovery.id
+      ) {
+        throw new ControlPlaneError("exact MANAGED PRODUCT_APP consumer identity가 일치하지 않습니다.", 409, "PLATFORM_CONSUMER_IDENTITY_MISMATCH");
       }
       if (
         registration.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase()
@@ -570,7 +602,7 @@ export async function reconcilePlatformFleet(input: {
       const artifact = artifactByKind.get(expectedArtifactKind);
       if (!artifact) throw new ControlPlaneError("manifest artifact가 없습니다.", 409, "PLATFORM_ARTIFACT_MISSING");
       if (observation.integration === "SDK" && observation.artifactKind !== artifact.kind) {
-        throw new ControlPlaneError("관측 SDK kind가 ACTIVE app engine과 다릅니다.", 409, "PLATFORM_ARTIFACT_KIND_MISMATCH");
+        throw new ControlPlaneError("관측 SDK kind가 PRODUCT_APP engine과 다릅니다.", 409, "PLATFORM_ARTIFACT_KIND_MISMATCH");
       }
       const disposition = platformFleetDisposition({
         classification: manifest.classification,
@@ -624,18 +656,29 @@ export async function reconcilePlatformFleet(input: {
               manifestDigest: release.manifestDigest,
               artifact,
             })
-          : {
-              schemaVersion: 1,
-              kind: disposition.kind,
-              repoId: consumerInput.repoId,
-              repoFullName: app.repoFullName,
-              sourceSha: discovery.sourceSha,
-              manifestDigest: release.manifestDigest,
-              releaseVersion: manifest.version,
-              contractRevision: manifest.contractRevision,
-              artifact,
-              observation,
-            } as const;
+          : disposition.kind === "CUSTOM_UNMANAGED" || disposition.kind === "MISSING_UNMANAGED"
+            ? integrationRemediationIssueTask({
+                planId,
+                repoId: consumerInput.repoId,
+                repoFullName: app.repoFullName,
+                sourceSha: discovery.sourceSha,
+                manifest,
+                manifestDigest: release.manifestDigest,
+                artifact,
+                integration: disposition.kind === "CUSTOM_UNMANAGED" ? "CUSTOM_HTTP" : "MISSING",
+              })
+            : {
+                schemaVersion: 1,
+                kind: disposition.kind,
+                repoId: consumerInput.repoId,
+                repoFullName: app.repoFullName,
+                sourceSha: discovery.sourceSha,
+                manifestDigest: release.manifestDigest,
+                releaseVersion: manifest.version,
+                contractRevision: manifest.contractRevision,
+                artifact,
+                observation,
+              } as const;
       const desiredHash = jsonDigest(task as unknown as JsonValue);
       const workKey = platformPlanWorkKey(release.manifestDigest, consumerInput.repoId);
       const marker = platformMarker(release.manifestDigest, consumerInput.repoId);
@@ -645,6 +688,12 @@ export async function reconcilePlatformFleet(input: {
           planStatus = existing.status;
         }
         if (disposition.kind === "CONTRACT_ISSUE" && ["PROCESSING", "ISSUE_OPEN", "READBACK_REQUIRED", "BLOCKED"].includes(existing.status)) {
+          planStatus = existing.status;
+        }
+        if (
+          (disposition.kind === "CUSTOM_UNMANAGED" || disposition.kind === "MISSING_UNMANAGED")
+          && ["PROCESSING", "ISSUE_OPEN", "READBACK_REQUIRED", "BLOCKED"].includes(existing.status)
+        ) {
           planStatus = existing.status;
         }
       }
@@ -739,6 +788,10 @@ export async function reconcilePlatformFleet(input: {
           ? "PLATFORM_OBSERVATION_PENDING"
           : disposition.kind === "CONTRACT_ISSUE" && planStatus === "ISSUE_OPEN"
             ? "CONTRACT_ISSUE_OPEN"
+            : disposition.kind === "CUSTOM_UNMANAGED" && planStatus === "ISSUE_OPEN"
+              ? "CUSTOM_UNMANAGED_REMEDIATION_ISSUE_OPEN"
+              : disposition.kind === "MISSING_UNMANAGED" && planStatus === "ISSUE_OPEN"
+                ? "MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN"
             : disposition.bindingState;
       await tx.platformFleetBinding.upsert({
         where: { appId: app.id },
@@ -815,6 +868,7 @@ export async function reconcilePlatformFleet(input: {
 export interface PlatformGithubIssue {
   number: number;
   url: string;
+  state: "open" | "closed";
   title: string;
   body: string;
   labels: string[];
@@ -832,8 +886,17 @@ export interface PlatformGithubPullRequest {
 }
 
 export interface TrustedPlatformGithubAdapter {
+  ensureLabels(repoFullName: string, labels: string[]): Promise<void>;
   findIssueByMarker(repoFullName: string, marker: string): Promise<PlatformGithubIssue | null>;
   createIssue(input: { repoFullName: string; title: string; body: string; labels: string[] }): Promise<number>;
+  updateIssue(input: {
+    repoFullName: string;
+    issueNumber: number;
+    title: string;
+    body: string;
+    labels: string[];
+    state: "open";
+  }): Promise<void>;
   readIssue(repoFullName: string, issueNumber: number): Promise<PlatformGithubIssue>;
   readPullRequest(repoFullName: string, pullRequestNumber: number): Promise<PlatformGithubPullRequest>;
 }
@@ -846,6 +909,34 @@ async function trustedGithubAdapter(): Promise<TrustedPlatformGithubAdapter> {
   const { getInstallationOctokit } = await import("@/lib/github/app");
   const client = await getInstallationOctokit();
   return {
+    async ensureLabels(repoFullName, labels) {
+      const { owner, repo } = repoParts(repoFullName);
+      const existing = new Set<string>();
+      for await (const response of client.paginate.iterator(client.rest.issues.listLabelsForRepo, {
+        owner,
+        repo,
+        per_page: 100,
+      })) {
+        for (const label of response.data) existing.add(label.name.toLowerCase());
+      }
+      for (const label of labels) {
+        if (existing.has(label.toLowerCase())) continue;
+        const spec = PLATFORM_ISSUE_LABELS[label as keyof typeof PLATFORM_ISSUE_LABELS];
+        if (!spec) {
+          throw new ControlPlaneError("허용되지 않은 Platform Issue label입니다.", 409, "PLATFORM_ISSUE_LABEL_UNMANAGED");
+        }
+        try {
+          await client.rest.issues.createLabel({ owner, repo, name: label, ...spec });
+        } catch (error) {
+          try {
+            await client.rest.issues.getLabel({ owner, repo, name: label });
+          } catch {
+            throw error;
+          }
+        }
+        existing.add(label.toLowerCase());
+      }
+    },
     async findIssueByMarker(repoFullName, marker) {
       const { owner, repo } = repoParts(repoFullName);
       let matched: PlatformGithubIssue | null = null;
@@ -863,6 +954,7 @@ async function trustedGithubAdapter(): Promise<TrustedPlatformGithubAdapter> {
           matched = {
             number: issue.number,
             url: issue.html_url,
+            state: issue.state as "open" | "closed",
             title: issue.title,
             body: issue.body ?? "",
             labels: issueLabels(issue.labels),
@@ -882,6 +974,18 @@ async function trustedGithubAdapter(): Promise<TrustedPlatformGithubAdapter> {
       });
       return response.data.number;
     },
+    async updateIssue(input) {
+      const { owner, repo } = repoParts(input.repoFullName);
+      await client.rest.issues.update({
+        owner,
+        repo,
+        issue_number: input.issueNumber,
+        title: input.title,
+        body: input.body,
+        labels: input.labels,
+        state: input.state,
+      });
+    },
     async readIssue(repoFullName, issueNumber) {
       const { owner, repo } = repoParts(repoFullName);
       const response = await client.rest.issues.get({ owner, repo, issue_number: issueNumber });
@@ -889,6 +993,7 @@ async function trustedGithubAdapter(): Promise<TrustedPlatformGithubAdapter> {
       return {
         number: response.data.number,
         url: response.data.html_url,
+        state: response.data.state as "open" | "closed",
         title: response.data.title,
         body: response.data.body ?? "",
         labels: issueLabels(response.data.labels),
@@ -922,15 +1027,42 @@ function assertContractIssueReadback(issue: PlatformGithubIssue, task: Extract<P
   }
 }
 
-export async function applyPlatformContractIssuePlan(
+type PlatformRemediationIssueTask = Extract<
+  PlatformFleetTaskInput,
+  { kind: "PLATFORM_INTEGRATION_REMEDIATION_ISSUE" }
+>;
+
+function remediationIssueMatches(issue: PlatformGithubIssue, task: PlatformRemediationIssueTask): boolean {
+  const labels = new Set(issue.labels.map((label) => label.toLowerCase()));
+  return issue.state === "open"
+    && issue.title === task.title
+    && issue.body.trim() === task.body.trim()
+    && task.labels.every((label) => labels.has(label.toLowerCase()));
+}
+
+function assertRemediationIssueReadback(issue: PlatformGithubIssue, task: PlatformRemediationIssueTask) {
+  if (!remediationIssueMatches(issue, task)) {
+    throw new ControlPlaneError(
+      "GitHub Issue readback이 exact Platform remediation plan과 다릅니다.",
+      409,
+      "PLATFORM_REMEDIATION_ISSUE_READBACK_MISMATCH",
+    );
+  }
+}
+
+async function applyPlatformIssuePlan(
   planId: string,
+  mode: "contract" | "remediation",
   adapter?: TrustedPlatformGithubAdapter,
 ) {
+  const planKinds = mode === "contract"
+    ? ["CONTRACT_ISSUE"] as const
+    : ["CUSTOM_UNMANAGED", "MISSING_UNMANAGED"] as const;
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const claimed = await prisma.platformFleetPlan.updateMany({
     where: {
       id: planId,
-      kind: "CONTRACT_ISSUE",
+      kind: { in: [...planKinds] },
       OR: [
         { status: { in: ["PENDING", "READBACK_REQUIRED"] } },
         { status: "PROCESSING", updatedAt: { lte: staleBefore } },
@@ -945,13 +1077,22 @@ export async function applyPlatformContractIssuePlan(
   });
   if (!plan) throw new ControlPlaneError("Platform Fleet plan을 찾을 수 없습니다.", 404, "PLATFORM_PLAN_NOT_FOUND");
   const task = platformFleetTaskInputSchema.parse(plan.desired);
-  if (task.kind !== "PLATFORM_CONTRACT_ISSUE") {
-    throw new ControlPlaneError("contract Issue task가 아닙니다.", 409, "PLATFORM_PLAN_KIND_MISMATCH");
+  if (
+    (task.kind !== "PLATFORM_CONTRACT_ISSUE" && task.kind !== "PLATFORM_INTEGRATION_REMEDIATION_ISSUE")
+    || (mode === "contract" && task.kind !== "PLATFORM_CONTRACT_ISSUE")
+    || (mode === "remediation" && task.kind !== "PLATFORM_INTEGRATION_REMEDIATION_ISSUE")
+  ) {
+    throw new ControlPlaneError("Platform Issue task kind가 plan과 다릅니다.", 409, "PLATFORM_PLAN_KIND_MISMATCH");
   }
+  const issueTask = task;
   const registration = plan.app.repoId
     ? await prisma.repositoryRegistration.findUnique({ where: { repoId: plan.app.repoId } })
     : null;
-  if (!registration || !repositorySourceIsCurrent(registration, plan.sourceSha)) {
+  if (
+    !registration
+    || registration.classification !== "PRODUCT_APP"
+    || !repositorySourceIsCurrent(registration, plan.sourceSha)
+  ) {
     await prisma.$transaction(async (tx) => {
       await tx.platformFleetPlan.updateMany({
         where: { id: plan.id, status: "PROCESSING", desiredHash: plan.desiredHash },
@@ -966,25 +1107,48 @@ export async function applyPlatformContractIssuePlan(
   }
   try {
     const client = adapter ?? await trustedGithubAdapter();
-    let issue = await client.findIssueByMarker(plan.app.repoFullName, task.issueMarker);
+    await client.ensureLabels(plan.app.repoFullName, [...issueTask.labels]);
+    let issue = await client.findIssueByMarker(plan.app.repoFullName, issueTask.issueMarker);
     let issueNumber = issue?.number ?? null;
     if (!issue) {
       try {
         issueNumber = await client.createIssue({
           repoFullName: plan.app.repoFullName,
-          title: task.title,
-          body: task.body,
-          labels: [...task.labels],
+          title: issueTask.title,
+          body: issueTask.body,
+          labels: [...issueTask.labels],
         });
       } catch (error) {
-        issue = await client.findIssueByMarker(plan.app.repoFullName, task.issueMarker);
+        issue = await client.findIssueByMarker(plan.app.repoFullName, issueTask.issueMarker);
         if (!issue) throw error;
         issueNumber = issue.number;
       }
     }
-    if (!issueNumber) throw new Error("Platform contract issue readback missing");
+    if (!issueNumber) throw new Error("Platform issue readback missing");
+    if (
+      mode === "remediation"
+      && issueTask.kind === "PLATFORM_INTEGRATION_REMEDIATION_ISSUE"
+      && issue
+      && !remediationIssueMatches(issue, issueTask)
+    ) {
+      await client.updateIssue({
+        repoFullName: plan.app.repoFullName,
+        issueNumber,
+        title: issueTask.title,
+        body: issueTask.body,
+        labels: [...new Set([...issue.labels, ...issueTask.labels])],
+        state: "open",
+      });
+    }
     const readback = await client.readIssue(plan.app.repoFullName, issueNumber);
-    assertContractIssueReadback(readback, task);
+    if (issueTask.kind === "PLATFORM_CONTRACT_ISSUE") assertContractIssueReadback(readback, issueTask);
+    else assertRemediationIssueReadback(readback, issueTask);
+    const bindingState = mode === "contract"
+      ? "CONTRACT_ISSUE_OPEN"
+      : `${plan.kind}_REMEDIATION_ISSUE_OPEN`;
+    const auditAction = mode === "contract"
+      ? "control-plane.platform-fleet.contract-issue.readback"
+      : "control-plane.platform-fleet.remediation-issue.readback";
     await prisma.$transaction(async (tx) => {
       const completed = await tx.platformFleetPlan.updateMany({
         where: {
@@ -1006,23 +1170,24 @@ export async function applyPlatformContractIssuePlan(
       await tx.platformFleetBinding.updateMany({
         where: { appId: plan.appId, platformReleaseId: plan.platformReleaseId },
         data: {
-          state: "CONTRACT_ISSUE_OPEN",
+          state: bindingState,
           issueNumber: readback.number,
           issueUrl: readback.url,
-          latestPlanKind: "CONTRACT_ISSUE",
+          latestPlanKind: plan.kind,
         },
       });
       await tx.auditLog.create({
         data: {
           actorLogin: "system:platform-fleet-github-app",
-          action: "control-plane.platform-fleet.contract-issue.readback",
+          action: auditAction,
           entityType: "PlatformFleetPlan",
           entityId: plan.id,
           payload: {
             repoFullName: plan.app.repoFullName,
             issueNumber: readback.number,
-            manifestDigest: task.manifestDigest,
-            sourceSha: task.sourceSha,
+            manifestDigest: issueTask.manifestDigest,
+            sourceSha: issueTask.sourceSha,
+            planKind: plan.kind,
           },
         },
       });
@@ -1040,11 +1205,29 @@ export async function applyPlatformContractIssuePlan(
       });
       await tx.platformFleetBinding.updateMany({
         where: { appId: plan.appId, platformReleaseId: plan.platformReleaseId },
-        data: { state: "ISSUE_READBACK_REQUIRED" },
+        data: {
+          state: mode === "contract"
+            ? "ISSUE_READBACK_REQUIRED"
+            : "REMEDIATION_ISSUE_READBACK_REQUIRED",
+        },
       });
     });
     throw error;
   }
+}
+
+export async function applyPlatformContractIssuePlan(
+  planId: string,
+  adapter?: TrustedPlatformGithubAdapter,
+) {
+  return applyPlatformIssuePlan(planId, "contract", adapter);
+}
+
+export async function applyPlatformRemediationIssuePlan(
+  planId: string,
+  adapter?: TrustedPlatformGithubAdapter,
+) {
+  return applyPlatformIssuePlan(planId, "remediation", adapter);
 }
 
 function pullRequestNumber(outcome: Prisma.JsonValue | null): number | null {
@@ -1167,21 +1350,27 @@ export async function refreshPlatformSdkUpdatePlans(
 
 export async function drainPlatformFleetPlans(limit = 20) {
   const refresh = await refreshPlatformSdkUpdatePlans(undefined, limit);
+  const staleBefore = new Date(Date.now() - 5 * 60_000);
   const issuePlans = await prisma.platformFleetPlan.findMany({
     where: {
-      kind: "CONTRACT_ISSUE",
-      status: { in: ["PENDING", "READBACK_REQUIRED"] },
+      kind: { in: ["CONTRACT_ISSUE", "CUSTOM_UNMANAGED", "MISSING_UNMANAGED"] },
+      OR: [
+        { status: { in: ["PENDING", "READBACK_REQUIRED"] } },
+        { status: "PROCESSING", updatedAt: { lte: staleBefore } },
+      ],
     },
     orderBy: { updatedAt: "asc" },
     take: Math.max(1, Math.min(limit, 100)),
-    select: { id: true },
+    select: { id: true, kind: true },
   });
   let applied = 0;
   let failed = 0;
   const adapter = issuePlans.length > 0 ? await trustedGithubAdapter() : undefined;
   for (const plan of issuePlans) {
     try {
-      const result = await applyPlatformContractIssuePlan(plan.id, adapter);
+      const result = plan.kind === "CONTRACT_ISSUE"
+        ? await applyPlatformContractIssuePlan(plan.id, adapter)
+        : await applyPlatformRemediationIssuePlan(plan.id, adapter);
       if (result.applied) applied += 1;
     } catch {
       failed += 1;

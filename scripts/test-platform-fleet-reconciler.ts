@@ -11,11 +11,13 @@ import {
 import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import {
   applyPlatformContractIssuePlan,
+  applyPlatformRemediationIssuePlan,
   reconcilePlatformFleet,
   recordPlatformRelease,
   type PlatformGithubIssue,
   type TrustedPlatformGithubAdapter,
 } from "@/lib/control-plane/platform-fleet";
+import { loadExactManagedPlatformConsumers } from "@/lib/control-plane/platform-fleet-cohort";
 import { prisma } from "@/lib/prisma";
 import {
   ControlPlaneError,
@@ -28,8 +30,10 @@ const implementationVersion = `0.${Date.now()}.0`;
 const contractVersion = `0.${Date.now()}.1`;
 const repoIdA = BigInt(`8${Date.now()}`);
 const repoIdB = repoIdA + 1n;
+const repoIdC = repoIdA + 2n;
 const sourceShaA = "1".repeat(40);
 const sourceShaB = "2".repeat(40);
+const sourceShaC = "5".repeat(40);
 const releaseSourceSha = "3".repeat(40);
 const artifactDigest = "a".repeat(64);
 const oldArtifactDigest = "b".repeat(64);
@@ -38,6 +42,7 @@ const oldContractRevision = "d".repeat(64);
 const signingKey = "platform-fleet-integration-signing-key";
 const repoFullNameA = `seorilabs/platform-fleet-a-${nonce}`;
 const repoFullNameB = `seorilabs/platform-fleet-b-${nonce}`;
+const repoFullNameC = `seorilabs/platform-fleet-c-${nonce}`;
 const workflowSourceSha = "4".repeat(40);
 
 function canaryEvidence(): PlatformReleaseManifest["canaryEvidence"] {
@@ -107,6 +112,8 @@ async function addApp(input: {
   repoId: bigint;
   repoFullName: string;
   sourceSha: string;
+  status: "ACTIVE" | "PAUSED" | "DEPRECATED";
+  platformConsumer: Record<string, unknown>;
 }) {
   await prisma.app.create({
     data: {
@@ -117,7 +124,7 @@ async function addApp(input: {
       repoFullName: input.repoFullName,
       type: "APP",
       engine: "RN",
-      status: "ACTIVE",
+      status: input.status,
       marketTargets: [],
     },
   });
@@ -128,6 +135,7 @@ async function addApp(input: {
       defaultBranch: "main",
       status: "MANAGED",
       managementKind: "APP",
+      classification: "PRODUCT_APP",
       lastDefaultPushSha: input.sourceSha,
       lastReconciledSha: input.sourceSha,
     },
@@ -140,7 +148,11 @@ async function addApp(input: {
     observedBy: "integration:platform-fleet",
     idempotencyKey: `platform-fleet-discovery:${input.repoId}:${nonce}`,
     workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
-    payload: { stack: "react-native", fixture: "platform-fleet" },
+    payload: {
+      stack: "react-native",
+      fixture: "platform-fleet",
+      platformConsumer: input.platformConsumer,
+    },
     buildTargets: [],
   });
 }
@@ -176,41 +188,133 @@ async function addRelease(manifest: PlatformReleaseManifest, suffix: string) {
 }
 
 async function main() {
-  // 같은 disposable contract DB에서 먼저 실행된 fixture 앱은 이 테스트의 current cohort가 아니다.
-  await prisma.app.updateMany({ where: { status: "ACTIVE" }, data: { status: "PAUSED" } });
+  // 같은 disposable contract DB에서 먼저 실행된 fixture의 분류는 이 테스트 cohort와 격리한다.
+  await prisma.repositoryRegistration.updateMany({
+    where: { classification: "PRODUCT_APP" },
+    data: { classification: "EXCLUDED" },
+  });
   const appIdA = `platform-fleet-a-${nonce}`;
   const appIdB = `platform-fleet-b-${nonce}`;
-  const [discoveryA, discoveryB] = await Promise.all([
-    addApp({ id: appIdA, slug: appIdA, repoId: repoIdA, repoFullName: repoFullNameA, sourceSha: sourceShaA }),
-    addApp({ id: appIdB, slug: appIdB, repoId: repoIdB, repoFullName: repoFullNameB, sourceSha: sourceShaB }),
+  const appIdC = `platform-fleet-c-${nonce}`;
+  const sdkDiscoveryPayload = {
+    schemaVersion: 1,
+    sourceSha: sourceShaA,
+    integration: "SDK",
+    artifactKind: "TYPESCRIPT",
+    observedVersion: "0.9.0",
+    observedDigest: oldArtifactDigest,
+    contractRevision: oldContractRevision,
+  } as const;
+  const customDiscoveryPayload = {
+    schemaVersion: 1,
+    sourceSha: sourceShaB,
+    integration: "CUSTOM_HTTP",
+    evidenceDigest: oldArtifactDigest,
+  } as const;
+  const missingDiscoveryPayload = {
+    schemaVersion: 1,
+    sourceSha: sourceShaC,
+    integration: "MISSING",
+    evidenceDigest: oldArtifactDigest,
+  } as const;
+  const [discoveryA, discoveryB, discoveryC] = await Promise.all([
+    addApp({
+      id: appIdA,
+      slug: appIdA,
+      repoId: repoIdA,
+      repoFullName: repoFullNameA,
+      sourceSha: sourceShaA,
+      status: "ACTIVE",
+      platformConsumer: sdkDiscoveryPayload,
+    }),
+    addApp({
+      id: appIdB,
+      slug: appIdB,
+      repoId: repoIdB,
+      repoFullName: repoFullNameB,
+      sourceSha: sourceShaB,
+      status: "ACTIVE",
+      platformConsumer: customDiscoveryPayload,
+    }),
+    addApp({
+      id: appIdC,
+      slug: appIdC,
+      repoId: repoIdC,
+      repoFullName: repoFullNameC,
+      sourceSha: sourceShaC,
+      status: "ACTIVE",
+      platformConsumer: missingDiscoveryPayload,
+    }),
   ]);
-  const [sdkObservationA, customObservationB] = await Promise.all([
+  const [sdkObservationA, customObservationB, missingObservationC] = await Promise.all([
     addPlatformObservation({
       repoId: repoIdA,
       sourceSha: sourceShaA,
       suffix: "implementation-sdk",
-      payload: {
-        schemaVersion: 1,
-        sourceSha: sourceShaA,
-        integration: "SDK",
-        artifactKind: "TYPESCRIPT",
-        observedVersion: "0.9.0",
-        observedDigest: oldArtifactDigest,
-        contractRevision: oldContractRevision,
-      },
+      payload: sdkDiscoveryPayload,
     }),
     addPlatformObservation({
       repoId: repoIdB,
       sourceSha: sourceShaB,
       suffix: "custom-http",
-      payload: {
-        schemaVersion: 1,
-        sourceSha: sourceShaB,
-        integration: "CUSTOM_HTTP",
-        evidenceDigest: oldArtifactDigest,
-      },
+      payload: customDiscoveryPayload,
+    }),
+    addPlatformObservation({
+      repoId: repoIdC,
+      sourceSha: sourceShaC,
+      suffix: "missing",
+      payload: missingDiscoveryPayload,
     }),
   ]);
+
+  const excludedRegistrations = [
+    { suffix: "legacy", classification: null, archived: false, status: "MANAGED", managementKind: "APP" },
+    { suffix: "infra", classification: "INFRA_REPO", archived: false, status: "MANAGED", managementKind: "UNCLASSIFIED" },
+    { suffix: "producer", classification: "PLATFORM_PRODUCER", archived: false, status: "MANAGED", managementKind: "PLATFORM_PRODUCER" },
+    { suffix: "excluded", classification: "EXCLUDED", archived: false, status: "MANAGED", managementKind: "UNCLASSIFIED" },
+    { suffix: "archived", classification: "PRODUCT_APP", archived: true, status: "ARCHIVED", managementKind: "APP" },
+  ] as const;
+  for (const [index, excluded] of excludedRegistrations.entries()) {
+    const repoId = repoIdC + BigInt(index + 1);
+    const id = `platform-fleet-${excluded.suffix}-${nonce}`;
+    const repoFullName = `seorilabs/${id}`;
+    await prisma.app.create({
+      data: {
+        id,
+        slug: id,
+        displayName: id,
+        repoId,
+        repoFullName,
+        type: "APP",
+        engine: "RN",
+        status: "ACTIVE",
+        marketTargets: [],
+      },
+    });
+    await prisma.repositoryRegistration.create({
+      data: {
+        repoId,
+        repoFullName,
+        defaultBranch: "main",
+        archived: excluded.archived,
+        status: excluded.status,
+        managementKind: excluded.managementKind,
+        classification: excluded.classification,
+        lastDefaultPushSha: sourceShaA,
+        lastReconciledSha: sourceShaA,
+      },
+    });
+  }
+  const exactCohort = await loadExactManagedPlatformConsumers(prisma);
+  assert.deepEqual(
+    exactCohort.map(({ app }) => ({ repoId: app.repoId, status: app.status })),
+    [
+      { repoId: repoIdA, status: "ACTIVE" },
+      { repoId: repoIdB, status: "ACTIVE" },
+      { repoId: repoIdC, status: "ACTIVE" },
+    ],
+    "producer/reconcile 공용 cohort는 ACTIVE PRODUCT_APP만 포함해야 한다",
+  );
 
   const implementationRelease = await addRelease(releaseManifest({
     version: implementationVersion,
@@ -229,6 +333,11 @@ async function main() {
         discoveryObservationId: discoveryB.observation.id,
         providerObservationId: customObservationB.observation.id,
       },
+      {
+        repoId: repoIdC.toString(),
+        discoveryObservationId: discoveryC.observation.id,
+        providerObservationId: missingObservationC.observation.id,
+      },
     ],
     actor: "integration:platform-fleet",
     idempotencyKey: `platform-fleet-reconcile:implementation:${nonce}`,
@@ -240,20 +349,36 @@ async function main() {
     where: { platformReleaseId: implementationRelease.release.id },
     include: { agentRun: true },
   });
-  assert.equal(implementationPlans.length, 2);
+  assert.equal(implementationPlans.length, 3);
   const sdkPlan = implementationPlans.find((plan) => plan.appId === appIdA);
   const customPlan = implementationPlans.find((plan) => plan.appId === appIdB);
+  const missingPlan = implementationPlans.find((plan) => plan.appId === appIdC);
+  if (!sdkPlan || !customPlan || !missingPlan) assert.fail("세 consumer의 Platform plan이 모두 필요합니다.");
   assert.equal(sdkPlan?.kind, "SDK_UPDATE_PR");
   assert.equal(sdkPlan?.status, "QUEUED");
   assert.ok(sdkPlan?.agentRun);
   assert.equal(customPlan?.kind, "CUSTOM_UNMANAGED");
-  assert.equal(customPlan?.status, "UNMANAGED");
+  assert.equal(customPlan?.status, "PENDING");
   assert.equal(customPlan?.agentRunId, null);
+  assert.equal(missingPlan?.kind, "MISSING_UNMANAGED");
+  assert.equal(missingPlan?.status, "PENDING");
+  assert.equal(missingPlan?.agentRunId, null);
   const sdkTask = platformFleetTaskInputSchema.parse(sdkPlan?.agentRun?.taskInput);
   assert.equal(sdkTask.kind, "PLATFORM_SDK_UPDATE");
   if (sdkTask.kind !== "PLATFORM_SDK_UPDATE") assert.fail("SDK update task가 필요합니다.");
   assert.equal(sdkTask.artifact.digest, artifactDigest);
   assert.equal(sdkTask.sourceSha, sourceShaA);
+  const customTask = platformFleetTaskInputSchema.parse(customPlan?.desired);
+  assert.equal(customTask.kind, "PLATFORM_INTEGRATION_REMEDIATION_ISSUE");
+  if (customTask.kind !== "PLATFORM_INTEGRATION_REMEDIATION_ISSUE") assert.fail("custom remediation task가 필요합니다.");
+  assert.equal(customTask.integration, "CUSTOM_HTTP");
+  assert.equal(customTask.issueMarker, `<!-- seorilabs-platform-remediation:v1:${repoIdB} -->`);
+  const missingTask = platformFleetTaskInputSchema.parse(missingPlan?.desired);
+  assert.equal(missingTask.kind, "PLATFORM_INTEGRATION_REMEDIATION_ISSUE");
+  if (missingTask.kind !== "PLATFORM_INTEGRATION_REMEDIATION_ISSUE") assert.fail("missing remediation task가 필요합니다.");
+  assert.equal(missingTask.integration, "MISSING");
+  assert.equal(missingTask.issueMarker, `<!-- seorilabs-platform-remediation:v1:${repoIdC} -->`);
+  assert.notEqual(customTask.issueMarker, missingTask.issueMarker);
   assert.equal((await reconcilePlatformFleet(implementationInput)).duplicate, true);
   assert.equal(await prisma.platformFleetPlan.count({
     where: { platformReleaseId: implementationRelease.release.id, appId: appIdA },
@@ -266,6 +391,97 @@ async function main() {
       idempotencyKey: `platform-fleet-reconcile:cohort-omission:${nonce}`,
     }),
     (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_CONSUMER_COHORT_MISMATCH",
+  );
+
+  const customCalls: string[] = [];
+  let customIssue: PlatformGithubIssue = {
+    number: 41,
+    url: "https://github.com/seorilabs/example/issues/41",
+    state: "closed",
+    title: "이전 remediation",
+    body: `${customTask.issueMarker}\n이전 source`,
+    labels: ["no-autopilot"],
+  };
+  const customAdapter: TrustedPlatformGithubAdapter = {
+    async ensureLabels() {
+      customCalls.push("ensure-labels");
+    },
+    async findIssueByMarker() {
+      customCalls.push("read-before");
+      return { ...customIssue, labels: [...customIssue.labels] };
+    },
+    async createIssue() {
+      throw new Error("stable remediation marker는 중복 Issue를 만들면 안 됩니다.");
+    },
+    async updateIssue(input) {
+      customCalls.push("update-existing");
+      customIssue = {
+        ...customIssue,
+        state: input.state,
+        title: input.title,
+        body: input.body,
+        labels: [...input.labels],
+      };
+    },
+    async readIssue() {
+      customCalls.push("read-after");
+      return { ...customIssue, labels: [...customIssue.labels] };
+    },
+    async readPullRequest() {
+      throw new Error("unexpected pull request read");
+    },
+  };
+  const customApplied = await applyPlatformRemediationIssuePlan(customPlan.id, customAdapter);
+  assert.equal(customApplied.applied, true);
+  assert.deepEqual(customCalls, ["ensure-labels", "read-before", "update-existing", "read-after"]);
+  assert.equal(customIssue.state, "open");
+  assert.ok(customIssue.labels.includes("platform-remediation"));
+  assert.ok(customIssue.labels.includes("no-autopilot"), "운영자가 붙인 차단 label을 제거하면 안 된다");
+  assert.equal((await prisma.platformFleetPlan.findUniqueOrThrow({ where: { id: customPlan.id } })).status, "ISSUE_OPEN");
+  assert.equal(
+    (await prisma.platformFleetBinding.findUniqueOrThrow({ where: { appId: appIdB } })).state,
+    "CUSTOM_UNMANAGED_REMEDIATION_ISSUE_OPEN",
+  );
+  assert.equal((await applyPlatformRemediationIssuePlan(customPlan.id, customAdapter)).skipped, true);
+
+  const missingCalls: string[] = [];
+  const missingIssue = (): PlatformGithubIssue => ({
+    number: 43,
+    url: "https://github.com/seorilabs/example/issues/43",
+    state: "open",
+    title: missingTask.title,
+    body: missingTask.body,
+    labels: [...missingTask.labels],
+  });
+  const missingAdapter: TrustedPlatformGithubAdapter = {
+    async ensureLabels() {
+      missingCalls.push("ensure-labels");
+    },
+    async findIssueByMarker() {
+      missingCalls.push("read-before");
+      return null;
+    },
+    async createIssue() {
+      missingCalls.push("create");
+      return 43;
+    },
+    async updateIssue() {
+      throw new Error("new remediation Issue는 update할 필요가 없습니다.");
+    },
+    async readIssue() {
+      missingCalls.push("read-after");
+      return missingIssue();
+    },
+    async readPullRequest() {
+      throw new Error("unexpected pull request read");
+    },
+  };
+  const missingApplied = await applyPlatformRemediationIssuePlan(missingPlan.id, missingAdapter);
+  assert.equal(missingApplied.applied, true);
+  assert.deepEqual(missingCalls, ["ensure-labels", "read-before", "create", "read-after"]);
+  assert.equal(
+    (await prisma.platformFleetBinding.findUniqueOrThrow({ where: { appId: appIdC } })).state,
+    "MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN",
   );
 
   const normalizedLegacyManifest = releaseManifest({
@@ -391,28 +607,6 @@ async function main() {
     false,
   );
 
-  const missingRepoAppId = `platform-fleet-missing-repo-${nonce}`;
-  await prisma.app.create({
-    data: {
-      id: missingRepoAppId,
-      slug: missingRepoAppId,
-      displayName: missingRepoAppId,
-      repoFullName: `seorilabs/${missingRepoAppId}`,
-      type: "APP",
-      engine: "RN",
-      status: "ACTIVE",
-      marketTargets: [],
-    },
-  });
-  await assert.rejects(
-    reconcilePlatformFleet({
-      ...implementationInput,
-      idempotencyKey: `platform-fleet-reconcile:missing-repo:${nonce}`,
-    }),
-    (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
-  );
-  await prisma.app.update({ where: { id: missingRepoAppId }, data: { status: "PAUSED" } });
-
   const currentContractObservationA = await addPlatformObservation({
     repoId: repoIdA,
     sourceSha: sourceShaA,
@@ -435,7 +629,10 @@ async function main() {
     (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_PROVIDER_OBSERVATION_STALE",
   );
 
-  await prisma.app.update({ where: { id: appIdB }, data: { status: "PAUSED" } });
+  await prisma.repositoryRegistration.updateMany({
+    where: { repoId: { in: [repoIdB, repoIdC] } },
+    data: { classification: "EXCLUDED" },
+  });
   const contractRelease = await addRelease(releaseManifest({
     version: contractVersion,
     classification: "CONTRACT_CHANGE",
@@ -465,11 +662,15 @@ async function main() {
   const issue = (): PlatformGithubIssue => ({
     number: 42,
     url: "https://github.com/seorilabs/example/issues/42",
+    state: "open",
     title: issueTask.title,
     body: issueTask.body,
     labels: [...issueTask.labels],
   });
   const adapter: TrustedPlatformGithubAdapter = {
+    async ensureLabels() {
+      calls.push("ensure-labels");
+    },
     async findIssueByMarker() {
       calls.push("read-before");
       return null;
@@ -477,6 +678,9 @@ async function main() {
     async createIssue() {
       calls.push("create");
       return 42;
+    },
+    async updateIssue() {
+      throw new Error("contract Issue 기존 동작은 자동 update하지 않습니다.");
     },
     async readIssue() {
       calls.push("read-after");
@@ -488,7 +692,7 @@ async function main() {
   };
   const applied = await applyPlatformContractIssuePlan(contractPlan.id, adapter);
   assert.equal(applied.applied, true);
-  assert.deepEqual(calls, ["read-before", "create", "read-after"]);
+  assert.deepEqual(calls, ["ensure-labels", "read-before", "create", "read-after"]);
   assert.equal((await prisma.platformFleetPlan.findUniqueOrThrow({ where: { id: contractPlan.id } })).status, "ISSUE_OPEN");
   assert.equal((await prisma.platformFleetBinding.findUniqueOrThrow({ where: { appId: appIdA } })).issueNumber, 42);
   assert.equal((await applyPlatformContractIssuePlan(contractPlan.id, adapter)).skipped, true);
@@ -505,6 +709,10 @@ async function main() {
   console.log(JSON.stringify({
     ok: true,
     implementationPlans: implementationPlans.map(({ kind, status }) => ({ kind, status })),
+    remediationIssues: {
+      custom: { number: customApplied.issueNumber, status: "ISSUE_OPEN", reused: true },
+      missing: { number: missingApplied.issueNumber, status: "ISSUE_OPEN", reused: false },
+    },
     contractIssue: { number: applied.issueNumber, status: "ISSUE_OPEN" },
     githubMutation: "fake-adapter-only",
     productionProviderWrite: false,

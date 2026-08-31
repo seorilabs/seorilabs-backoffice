@@ -428,9 +428,13 @@ key나 임시 대체키를 Backoffice에 두지 않는다.
 GDScript tree checksum, 변경 분류, 승인 canary attestation, WorkflowBundle SHA·digest와 raw/approval provenance를
 중앙 snapshot signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
 raw·정규화 manifest에는 영향 consumer 선택 계약
-`cohort=backoffice-active-apps`, `resolution=reconcile-time`을 포함한다. 구체 repo ID 목록은 release 뒤에도
+`cohort=backoffice-managed-product-apps`, `resolution=reconcile-time`을 포함한다. 구체 repo ID 목록은 release 뒤에도
 바뀌므로 immutable asset에 복사하지 않고 reconcile 시점의 current snapshot에서 확정한다. 따라서 앱
-추가·중단이 release identity를 바꾸지 않으며, 매 reconcile은 현재 ACTIVE app 전부를 요구한다. 기존 공개
+lifecycle 변경이 release identity를 바꾸지 않으며, 매 reconcile은 `ACTIVE` App과 비보관 `PRODUCT_APP`
+registration의 교집합을 분모로 고정한다. `MANAGED` registration, App binding, current default HEAD discovery를
+모두 만족한 consumer만 fanout하되 `NEEDS_INPUT`과 discovery 누락은 서로 다른 blocker로 관측하고 하나라도
+있으면 부분 fanout을 금지한다. `PAUSED`·`DEPRECATED` App, `INFRA_REPO`·`PLATFORM_PRODUCER`·`EXCLUDED`와 분류
+정본이 없는 legacy App row는 cohort에서 제외한다. 기존 공개
 `v0.6.7` raw·normalized manifest에 선택 필드가 없을 때만 같은 단일 계약을 read-time에 투영한다. 저장된
 manifest, digest, signature, idempotency identity는 바꾸지 않으며 `v0.6.6`, `v0.6.8+` 누락은 거부한다.
 GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
@@ -441,10 +445,11 @@ lock 불일치, floating `main`, tree checksum 불일치, addon subtree gitlink�
 분류한다. 현재 release의 exact package version·lock integrity 또는 fixed asset URL·검증된 tree가 일치할 때만
 approved digest와 contract revision을 얻고, 이전 exact SDK는 digest를 추측하지 않은 채 update 대상으로 남는다.
 lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 기존 256KiB 한도를 유지한다.
-ACTIVE app 중 numeric repo ID가 없거나 current default HEAD discovery가 `NEEDS_INPUT`이거나 Platform evidence가
-없는 repo가 하나라도 있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다.
+ACTIVE PRODUCT_APP 분모에서 registration이 `NEEDS_INPUT`이거나 current default HEAD Platform evidence가 없는
+repo가 하나라도 있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다. 오류에는 denominator,
+ready, blocked와 공개 reason별 건수를 남기며 secret이나 discovery payload는 포함하지 않는다.
 
-Reconcile input은 DB에서 다시 읽은 현재 ACTIVE app 전체 cohort와 각 repo의 current default HEAD
+Reconcile input은 producer와 같은 selector로 DB에서 다시 읽은 전체 cohort와 각 repo의 current default HEAD
 `DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히
 지정해야 한다. subset, stale source, 다른 app/provider identity, digest 또는 signature 불일치는 전부
 fail-closed한다.
@@ -454,11 +459,13 @@ fail-closed한다.
   source SHA, manifest marker와 필수 check를 포함한다.
 - `CONTRACT_CHANGE` 또는 `CONTRACT_ADDITION` drift는 영향 repo마다 P1 Issue plan 하나를 만든다.
   label은 `P1`, `autopilot`, `platform`, `platform-contract`로 고정된다.
-- `CUSTOM_HTTP`와 `MISSING` 관측은 각각 `CUSTOM_UNMANAGED`, `MISSING_UNMANAGED`로 표시하며 자동
-  호환으로 추측하지 않는다.
+- `CUSTOM_HTTP`와 `MISSING` 관측은 각각 `CUSTOM_UNMANAGED`, `MISSING_UNMANAGED`로 표시하되 terminal
+  `UNMANAGED`로 끝내지 않는다. repo ID에 고정된 `seorilabs-platform-remediation:v1` marker와
+  `P1`, `autopilot`, `platform`, `platform-remediation` label을 가진 remediation Issue를 하나만 만들고,
+  새 release/source 또는 두 관측 상태 사이 전이는 같은 Issue를 갱신·재개한 뒤 exact readback한다.
 
-Issue mutation은 installation GitHub App adapter에서 marker 조회, create, exact readback 순서로만
-수행한다. create 결과가 불명이면 marker를 먼저 다시 읽고 새 Issue를 만들지 않는다. SDK PR은 generic
+Issue mutation은 installation GitHub App adapter에서 required label idempotent 보장, marker 조회, create/update,
+exact readback 순서로만 수행한다. create 결과가 불명이면 marker를 먼저 다시 읽고 새 Issue를 만들지 않는다. SDK PR은 generic
 worker가 capability broker를 통과해 처리하며 `RESULT_UNKNOWN`이면 같은 run이 `READBACK_FIRST`로
 재claim될 때까지 repo guard를 유지한다. Project field는 이 queue의 claim source가 아니다.
 

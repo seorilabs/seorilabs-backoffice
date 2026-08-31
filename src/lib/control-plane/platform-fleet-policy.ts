@@ -16,10 +16,18 @@ export function platformFleetDisposition(input: {
   observation: PlatformConsumerObservationPayload;
 }): PlatformFleetDisposition {
   if (input.observation.integration === "CUSTOM_HTTP") {
-    return { kind: "CUSTOM_UNMANAGED", status: "UNMANAGED", bindingState: "CUSTOM_UNMANAGED" };
+    return {
+      kind: "CUSTOM_UNMANAGED",
+      status: "PENDING",
+      bindingState: "CUSTOM_UNMANAGED_REMEDIATION_PENDING",
+    };
   }
   if (input.observation.integration === "MISSING") {
-    return { kind: "MISSING_UNMANAGED", status: "UNMANAGED", bindingState: "MISSING_UNMANAGED" };
+    return {
+      kind: "MISSING_UNMANAGED",
+      status: "PENDING",
+      bindingState: "MISSING_UNMANAGED_REMEDIATION_PENDING",
+    };
   }
   const current = input.observation.artifactKind === input.artifact.kind
     && input.observation.observedVersion === input.artifact.version

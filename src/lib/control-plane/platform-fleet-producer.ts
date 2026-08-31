@@ -15,10 +15,9 @@ import {
   type PlatformConsumerObservationPayload,
   type PlatformReleaseManifest,
 } from "@/lib/control-plane/contracts";
-import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { canonicalJson, jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import { recordPlatformRelease, reconcilePlatformFleet } from "@/lib/control-plane/platform-fleet";
-import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
+import { loadExactManagedPlatformConsumers } from "@/lib/control-plane/platform-fleet-cohort";
 import { ControlPlaneError, recordProviderObservation } from "@/lib/control-plane/service";
 import type { Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
@@ -546,7 +545,7 @@ export async function producePlatformFleetRelease(
 
   const consumers = await dependencies.listConsumers();
   if (consumers.length === 0) {
-    fail("ACTIVE Platform consumer cohort가 비어 있습니다.", "PLATFORM_DISCOVERY_COHORT_INCOMPLETE");
+    fail("exact MANAGED PRODUCT_APP Platform consumer cohort가 비어 있습니다.", "PLATFORM_DISCOVERY_COHORT_INCOMPLETE");
   }
   const normalized = normalizedReleaseManifest({
     source,
@@ -722,59 +721,8 @@ async function latestReleaseFromGitHub(octokit: Octokit): Promise<PlatformReleas
 }
 
 async function listManagedConsumers(): Promise<ManagedPlatformConsumer[]> {
-  const apps = await prisma.app.findMany({
-    where: { status: "ACTIVE" },
-    orderBy: [{ repoId: "asc" }, { id: "asc" }],
-    select: {
-      id: true,
-      repoId: true,
-      repoFullName: true,
-      engine: true,
-      discoveryObservations: {
-        orderBy: latestDiscoveryObservationOrder(),
-        take: 1,
-        select: { id: true, sourceSha: true, payload: true, payloadHash: true, observedAt: true },
-      },
-    },
-  });
-  const missingRepository = apps.find((app) => app.repoId === null);
-  if (missingRepository) {
-    return fail(
-      `ACTIVE app ${missingRepository.repoFullName}에 GitHub repository ID가 없습니다.`,
-      "PLATFORM_ACTIVE_REPOSITORY_ID_REQUIRED",
-    );
-  }
-  const repoIds = apps.flatMap((app) => app.repoId === null ? [] : [app.repoId]);
-  const registrations = await prisma.repositoryRegistration.findMany({
-    where: { repoId: { in: repoIds } },
-    select: {
-      repoId: true,
-      repoFullName: true,
-      archived: true,
-      status: true,
-      managementKind: true,
-      lastDefaultPushSha: true,
-      lastReconciledSha: true,
-    },
-  });
-  const registrationByRepo = new Map(registrations.map((entry) => [entry.repoId.toString(), entry]));
-  return apps.map((app) => {
-    const repoId = app.repoId;
-    const discovery = app.discoveryObservations[0];
-    const registration = repoId === null ? undefined : registrationByRepo.get(repoId.toString());
-    if (
-      repoId === null
-      || !registration
-      || registration.repoFullName.toLowerCase() !== app.repoFullName.toLowerCase()
-      || !discovery
-      || !repositorySourceIsCurrent(registration, discovery.sourceSha)
-      || jsonDigest(discovery.payload as JsonValue) !== discovery.payloadHash
-    ) {
-      return fail(
-        `ACTIVE app ${app.repoFullName}의 exact discovery가 완료되지 않았습니다.`,
-        "PLATFORM_DISCOVERY_COHORT_INCOMPLETE",
-      );
-    }
+  const cohort = await loadExactManagedPlatformConsumers(prisma);
+  return cohort.map(({ app, discovery }) => {
     const discoveryPayload = discovery.payload as Record<string, unknown>;
     const platformConsumer = platformConsumerObservationPayloadSchema.parse(discoveryPayload.platformConsumer);
     const expectedKind = app.engine === "GODOT" ? "GDSCRIPT" : "TYPESCRIPT";
@@ -783,12 +731,12 @@ async function listManagedConsumers(): Promise<ManagedPlatformConsumer[]> {
       || (platformConsumer.integration === "SDK" && platformConsumer.artifactKind !== expectedKind)
     ) {
       return fail(
-        `ACTIVE app ${app.repoFullName}의 Platform discovery identity가 일치하지 않습니다.`,
+        `PRODUCT_APP ${app.repoFullName}의 Platform discovery identity가 일치하지 않습니다.`,
         "PLATFORM_DISCOVERY_EVIDENCE_INVALID",
       );
     }
     return {
-      repoId,
+      repoId: app.repoId,
       repoFullName: app.repoFullName,
       engine: app.engine,
       sourceSha: discovery.sourceSha,

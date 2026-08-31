@@ -71,6 +71,10 @@ function manifest(
 }
 
 test("Platform release 계약은 승인, provenance, canary, exact artifact만 불변 원장에 허용한다", () => {
+  assert.deepEqual(PLATFORM_AFFECTED_CONSUMERS, {
+    cohort: "backoffice-managed-product-apps",
+    resolution: "reconcile-time",
+  });
   assert.deepEqual(platformReleaseManifestSchema.parse(manifest()), manifest());
   assert.equal(platformReleaseManifestSchema.safeParse({
     ...manifest(),
@@ -144,7 +148,7 @@ test("저장된 normalized v0.6.7 omission만 digest identity 변경 없이 read
   assert.throws(() => parseStoredPlatformReleaseManifest(mismatchedTag));
 });
 
-test("구현 drift와 계약 drift를 분리하고 custom/missing을 unmanaged로 관측한다", () => {
+test("구현 drift와 계약 drift를 분리하고 custom/missing remediation을 큐잉한다", () => {
   const artifact = manifest().artifacts[0];
   const observed = {
     schemaVersion: 1 as const,
@@ -177,18 +181,24 @@ test("구현 drift와 계약 drift를 분리하고 custom/missing을 unmanaged�
     artifact,
     observation: observed,
   }).kind, "CONTRACT_ISSUE");
-  assert.equal(platformFleetDisposition({
+  const custom = platformFleetDisposition({
     classification: "CONTRACT_ADDITION",
     contractRevision,
     artifact,
     observation: { schemaVersion: 1, sourceSha, integration: "CUSTOM_HTTP", evidenceDigest: artifactDigest },
-  }).kind, "CUSTOM_UNMANAGED");
-  assert.equal(platformFleetDisposition({
+  });
+  assert.equal(custom.kind, "CUSTOM_UNMANAGED");
+  assert.equal(custom.status, "PENDING");
+  assert.equal(custom.bindingState, "CUSTOM_UNMANAGED_REMEDIATION_PENDING");
+  const missing = platformFleetDisposition({
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
     observation: { schemaVersion: 1, sourceSha, integration: "MISSING", evidenceDigest: artifactDigest },
-  }).kind, "MISSING_UNMANAGED");
+  });
+  assert.equal(missing.kind, "MISSING_UNMANAGED");
+  assert.equal(missing.status, "PENDING");
+  assert.equal(missing.bindingState, "MISSING_UNMANAGED_REMEDIATION_PENDING");
   assert.equal(platformFleetDisposition({
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
@@ -228,6 +238,35 @@ test("contract Issue task는 P1/autopilot/platform labels를 고정하고 secret
   assert.equal(platformFleetTaskInputSchema.safeParse({ ...task, apiKey: "forbidden" }).success, false);
 });
 
+test("custom/missing remediation Issue는 contract와 다른 stable marker와 label을 사용한다", () => {
+  const task = {
+    schemaVersion: 1 as const,
+    kind: "PLATFORM_INTEGRATION_REMEDIATION_ISSUE" as const,
+    planId: "plan-remediation-1",
+    repoId: "1234",
+    repoFullName: "seorilabs/example",
+    sourceSha,
+    manifestDigest,
+    releaseVersion: "1.2.3",
+    releaseSourceSha,
+    contractRevision,
+    integration: "CUSTOM_HTTP" as const,
+    artifact: manifest().artifacts[0],
+    issueMarker: "<!-- seorilabs-platform-remediation:v1:1234 -->",
+    title: "[P1] Platform custom HTTP 연동을 공식 SDK로 전환",
+    body: "<!-- seorilabs-platform-remediation:v1:1234 -->\n공식 SDK 전환",
+    labels: ["P1", "autopilot", "platform", "platform-remediation"] as const,
+  };
+  const parsed = platformFleetTaskInputSchema.parse(task);
+  assert.equal(parsed.kind, "PLATFORM_INTEGRATION_REMEDIATION_ISSUE");
+  assert.deepEqual(parsed.labels, task.labels);
+  assert.notEqual(task.issueMarker, `<!-- seorilabs-platform-fleet:${manifestDigest}:1234 -->`);
+  assert.equal(platformFleetTaskInputSchema.safeParse({
+    ...task,
+    issueMarker: `<!-- seorilabs-platform-fleet:${manifestDigest}:1234 -->`,
+  }).success, false);
+});
+
 test("durable plan은 release/repo당 하나이며 GitHub mutation은 readback-first adapter 경계만 사용한다", () => {
   const migration = readFileSync(join(
     process.cwd(),
@@ -239,6 +278,7 @@ test("durable plan은 release/repo당 하나이며 GitHub mutation은 readback-f
   assert.match(migration, /UNIQUE INDEX `platform_fleet_plan_platformReleaseId_appId_key`/);
   assert.match(migration, /UNIQUE INDEX `platform_fleet_plan_workKey_key`/);
   assert.match(service, /findIssueByMarker[\s\S]*createIssue[\s\S]*readIssue/);
+  assert.match(service, /ensureLabels[\s\S]*findIssueByMarker/);
   assert.match(service, /catch \(error\)[\s\S]*findIssueByMarker[\s\S]*if \(!issue\) throw error/);
   assert.match(service, /status: "READBACK_REQUIRED"[\s\S]*readbackRequestedAt: new Date\(\)/);
   assert.match(queue, /claimSource: "platform-fleet-plan"|parseManagedWorkerPolicy/);
