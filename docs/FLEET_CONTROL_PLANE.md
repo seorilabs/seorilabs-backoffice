@@ -430,10 +430,11 @@ GDScript tree checksum, 변경 분류, 승인 canary attestation, WorkflowBundle
 raw·정규화 manifest에는 영향 consumer 선택 계약
 `cohort=backoffice-managed-product-apps`, `resolution=reconcile-time`을 포함한다. 구체 repo ID 목록은 release 뒤에도
 바뀌므로 immutable asset에 복사하지 않고 reconcile 시점의 current snapshot에서 확정한다. 따라서 앱
-lifecycle 변경이 release identity를 바꾸지 않으며, 매 reconcile은 비보관 `PRODUCT_APP` 분류, `MANAGED`
-registration, App binding, current default HEAD discovery를 모두 만족하는 exact cohort 전부를 요구한다. App의
-`PAUSED`·`DEPRECATED` 상태도 Platform 탑재 의무에서 제외하지 않고, `INFRA_REPO`·`PLATFORM_PRODUCER`·`EXCLUDED`와
-분류 정본이 없는 legacy App row는 cohort에서 제외한다. 기존 공개
+lifecycle 변경이 release identity를 바꾸지 않으며, 매 reconcile은 `ACTIVE` App과 비보관 `PRODUCT_APP`
+registration의 교집합을 분모로 고정한다. `MANAGED` registration, App binding, current default HEAD discovery를
+모두 만족한 consumer만 fanout하되 `NEEDS_INPUT`과 discovery 누락은 서로 다른 blocker로 관측하고 하나라도
+있으면 부분 fanout을 금지한다. `PAUSED`·`DEPRECATED` App, `INFRA_REPO`·`PLATFORM_PRODUCER`·`EXCLUDED`와 분류
+정본이 없는 legacy App row는 cohort에서 제외한다. 기존 공개
 `v0.6.7` raw·normalized manifest에 선택 필드가 없을 때만 같은 단일 계약을 read-time에 투영한다. 저장된
 manifest, digest, signature, idempotency identity는 바꾸지 않으며 `v0.6.6`, `v0.6.8+` 누락은 거부한다.
 GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
@@ -444,8 +445,9 @@ lock 불일치, floating `main`, tree checksum 불일치, addon subtree gitlink�
 분류한다. 현재 release의 exact package version·lock integrity 또는 fixed asset URL·검증된 tree가 일치할 때만
 approved digest와 contract revision을 얻고, 이전 exact SDK는 digest를 추측하지 않은 채 update 대상으로 남는다.
 lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 기존 256KiB 한도를 유지한다.
-exact MANAGED PRODUCT_APP 중 App binding 또는 current default HEAD Platform evidence가 없는 repo가 하나라도
-있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다.
+ACTIVE PRODUCT_APP 분모에서 registration이 `NEEDS_INPUT`이거나 current default HEAD Platform evidence가 없는
+repo가 하나라도 있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다. 오류에는 denominator,
+ready, blocked와 공개 reason별 건수를 남기며 secret이나 discovery payload는 포함하지 않는다.
 
 Reconcile input은 producer와 같은 selector로 DB에서 다시 읽은 전체 cohort와 각 repo의 current default HEAD
 `DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히

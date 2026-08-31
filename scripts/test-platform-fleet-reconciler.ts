@@ -233,7 +233,7 @@ async function main() {
       repoId: repoIdB,
       repoFullName: repoFullNameB,
       sourceSha: sourceShaB,
-      status: "PAUSED",
+      status: "ACTIVE",
       platformConsumer: customDiscoveryPayload,
     }),
     addApp({
@@ -242,7 +242,7 @@ async function main() {
       repoId: repoIdC,
       repoFullName: repoFullNameC,
       sourceSha: sourceShaC,
-      status: "DEPRECATED",
+      status: "ACTIVE",
       platformConsumer: missingDiscoveryPayload,
     }),
   ]);
@@ -310,10 +310,10 @@ async function main() {
     exactCohort.map(({ app }) => ({ repoId: app.repoId, status: app.status })),
     [
       { repoId: repoIdA, status: "ACTIVE" },
-      { repoId: repoIdB, status: "PAUSED" },
-      { repoId: repoIdC, status: "DEPRECATED" },
+      { repoId: repoIdB, status: "ACTIVE" },
+      { repoId: repoIdC, status: "ACTIVE" },
     ],
-    "producer/reconcile 공용 cohort는 strict PRODUCT_APP만 포함하고 lifecycle 상태로 제외하지 않아야 한다",
+    "producer/reconcile 공용 cohort는 ACTIVE PRODUCT_APP만 포함해야 한다",
   );
 
   const implementationRelease = await addRelease(releaseManifest({
