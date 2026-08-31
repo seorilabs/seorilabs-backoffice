@@ -34,22 +34,35 @@ export async function GET(
     if (
       requestedSchema === "workflow-bundle-v5-build"
       || requestedSchema === "workflow-bundle-v5-build-canary"
+      || requestedSchema === "workflow-bundle-v5-build-release"
     ) {
-      const allowedKeys = new Set([
+      const mode: GitHubActionsBuildManifestMode = requestedSchema.endsWith("-canary")
+        ? "CANDIDATE"
+        : requestedSchema.endsWith("-release")
+          ? "RELEASE"
+          : "APPROVED";
+      const requiredKeys = [
         "ref",
         "event_ref",
         "workflow_sha",
+        "build_target",
         "build_profile",
         "schema",
-      ]);
+        ...(mode === "CANDIDATE" ? ["plan_identity"] : []),
+        ...(mode === "RELEASE" ? ["release_ref", "release_tag"] : []),
+      ];
+      const allowedKeys = new Set(requiredKeys);
       if (
         [...request.nextUrl.searchParams.keys()].some((key) => !allowedKeys.has(key))
-        || [...allowedKeys].some((key) => request.nextUrl.searchParams.getAll(key).length !== 1)
+        || requiredKeys.some((key) => request.nextUrl.searchParams.getAll(key).length !== 1)
       ) {
         return NextResponse.json({ error: "invalid query" }, { status: 400 });
       }
       const eventSourceSha = sourceShaSchema.parse(request.nextUrl.searchParams.get("event_ref"));
       const workflowBundleSha = sourceShaSchema.parse(request.nextUrl.searchParams.get("workflow_sha"));
+      if (request.nextUrl.searchParams.get("build_target") !== "android") {
+        return NextResponse.json({ error: "invalid build_target" }, { status: 400 });
+      }
       const rawBuildProfile = request.nextUrl.searchParams.get("build_profile");
       if (!(["react-native-android", "godot-android"] as const).includes(
         rawBuildProfile as GitHubActionsBuildProfile,
@@ -57,9 +70,30 @@ export async function GET(
         return NextResponse.json({ error: "invalid build_profile" }, { status: 400 });
       }
       const buildProfile = rawBuildProfile as GitHubActionsBuildProfile;
-      const mode: GitHubActionsBuildManifestMode = requestedSchema.endsWith("-canary")
-        ? "CANDIDATE"
-        : "APPROVED";
+      const candidatePlanIdentity = mode === "CANDIDATE"
+        ? request.nextUrl.searchParams.get("plan_identity")
+        : null;
+      if (
+        candidatePlanIdentity !== null
+        && !/^[0-9a-f]{64}$/.test(candidatePlanIdentity)
+      ) {
+        return NextResponse.json({ error: "invalid plan_identity" }, { status: 400 });
+      }
+      const releaseRef = mode === "RELEASE"
+        ? request.nextUrl.searchParams.get("release_ref")
+        : null;
+      const releaseTag = mode === "RELEASE"
+        ? request.nextUrl.searchParams.get("release_tag")
+        : null;
+      if (
+        releaseTag !== null
+        && (
+          !/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(releaseTag)
+          || releaseRef !== `refs/tags/${releaseTag}`
+        )
+      ) {
+        return NextResponse.json({ error: "invalid release ref" }, { status: 400 });
+      }
       const defaultBranch = await readRepositoryDefaultBranch(repoId);
       const candidateBinding = mode === "CANDIDATE"
         ? await readWorkflowBundleCandidateOidcBinding({
@@ -77,6 +111,9 @@ export async function GET(
         buildProfile,
         defaultBranch,
         candidateHeadRef: candidateBinding?.expectedHeadRef ?? null,
+        candidatePlanIdentity,
+        releaseRef,
+        releaseTag,
       });
       if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       const response = await resolveBuildRuntimeManifest({

@@ -127,6 +127,8 @@ function identity(
     runAttempt: "1",
     eventName: "pull_request",
     eventRef: "refs/pull/91/merge",
+    releaseRef: null,
+    releaseTag: null,
     defaultBranch: "main",
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",

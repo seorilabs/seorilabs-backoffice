@@ -17,7 +17,8 @@ export class BuildRuntimeManifestError extends Error {
 }
 
 export interface BuildRuntimeManifestInput {
-  mode: "CANDIDATE" | "APPROVED";
+  mode: "CANDIDATE" | "APPROVED" | "RELEASE";
+  workflowBundleApprovalState: "CANDIDATE" | "APPROVED";
   lifecycleState: "ACTIVE" | "PAUSED" | "DEPRECATED";
   repositoryId: string;
   fullName: string;
@@ -50,7 +51,12 @@ function signatureDigest(value: string): string {
 }
 
 export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
-  if (!input.sourceRef.startsWith("refs/heads/")) {
+  if (
+    !input.sourceRef.startsWith("refs/heads/")
+    && !/^refs\/tags\/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(
+      input.sourceRef,
+    )
+  ) {
     throw new BuildRuntimeManifestError("INVALID_SOURCE_REF");
   }
   if (
@@ -83,7 +89,7 @@ export function buildRuntimeManifestReadback(input: BuildRuntimeManifestInput) {
     workflowBundle: {
       sourceSha: input.workflowBundleSourceSha,
       payloadDigest: input.workflowBundlePayloadDigest,
-      approvalState: input.mode,
+      approvalState: input.workflowBundleApprovalState,
       buildProfiles: ["react-native-android", "godot-android"],
     },
     buildBinding: input.buildBinding,

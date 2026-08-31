@@ -2451,10 +2451,14 @@ export async function resolveBuildRuntimeManifest(input: {
     where: { repoId: repositoryId },
     select: { defaultBranch: true, archived: true },
   });
-  const expectedSourceRef = repositoryDefaultBranchRef(registration?.defaultBranch ?? null);
+  const defaultBranchSourceRef = repositoryDefaultBranchRef(registration?.defaultBranch ?? null);
+  const expectedSourceRef = input.identity.mode === "RELEASE"
+    ? input.identity.releaseRef
+    : defaultBranchSourceRef;
   if (
     registration?.archived
     || registration?.defaultBranch !== input.identity.defaultBranch
+    || !defaultBranchSourceRef
     || !expectedSourceRef
   ) {
     throw new ControlPlaneError(
@@ -2503,6 +2507,9 @@ export async function resolveBuildRuntimeManifest(input: {
     );
   }
   const workflowBundlePayloadDigest = configPayload.build.workflowBundleDigest.toLowerCase();
+  const workflowBundleApprovalState = input.identity.mode === "RELEASE"
+    ? "APPROVED"
+    : input.identity.mode;
   const dependencyAuditException = resolveDependencyAuditException({
     exception: configPayload.build.dependencyAuditException,
     actionClass: "ANDROID_BUILD_ONLY",
@@ -2518,7 +2525,7 @@ export async function resolveBuildRuntimeManifest(input: {
       sourceSha: input.identity.workflowBundleSha,
       workflowExecutionSha: input.identity.workflowBundleSha,
       payloadDigest: workflowBundlePayloadDigest,
-      approvalState: input.identity.mode,
+      approvalState: workflowBundleApprovalState,
     },
   });
   if (
@@ -2526,7 +2533,7 @@ export async function resolveBuildRuntimeManifest(input: {
     || registry.sourceSha !== input.identity.workflowBundleSha
     || registry.workflowExecutionSha !== input.identity.workflowBundleSha
     || registry.payloadDigest !== workflowBundlePayloadDigest
-    || registry.approvalState !== input.identity.mode
+    || registry.approvalState !== workflowBundleApprovalState
   ) {
     throw new ControlPlaneError(
       "Config와 분리된 immutable WorkflowBundle registry readback이 없습니다.",
@@ -2535,7 +2542,7 @@ export async function resolveBuildRuntimeManifest(input: {
     );
   }
   if (
-    input.identity.mode === "CANDIDATE"
+    workflowBundleApprovalState === "CANDIDATE"
       ? !registry.artifactRunId || !registry.artifactId || !registry.artifactDigest
       : !registry.approvalPayloadDigest || !registry.approvalKeyId || !registry.approvalPolicyRevision
   ) {
@@ -2567,7 +2574,7 @@ export async function resolveBuildRuntimeManifest(input: {
       "NO_DISCOVERY_FOR_SHA",
     );
   }
-  if (discovery.sourceRef !== expectedSourceRef || !discovery.requestHash) {
+  if (discovery.sourceRef !== defaultBranchSourceRef || !discovery.requestHash) {
     throw new ControlPlaneError(
       "default branch exact-SHA discovery provenance를 검증할 수 없습니다.",
       409,
@@ -2602,6 +2609,7 @@ export async function resolveBuildRuntimeManifest(input: {
   try {
     return buildRuntimeManifestReadback({
       mode: input.identity.mode,
+      workflowBundleApprovalState,
       lifecycleState: app.status,
       repositoryId: input.identity.repositoryId,
       fullName: app.repoFullName,

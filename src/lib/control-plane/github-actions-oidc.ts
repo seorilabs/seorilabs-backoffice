@@ -28,12 +28,14 @@ export const GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS = {
   "godot-android": ".github/workflows/godot-build-android-cloud-v2.yml",
 } as const;
 export type GitHubActionsBuildProfile = keyof typeof GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS;
-export type GitHubActionsBuildManifestMode = "CANDIDATE" | "APPROVED";
+export type GitHubActionsBuildManifestMode = "CANDIDATE" | "APPROVED" | "RELEASE";
 const GITHUB_ACTIONS_BUILD_CANARIES = {
   "1250442131": { fullName: "seorilabs/happy-farm", buildProfile: "react-native-android" },
   "1265192029": { fullName: "seorilabs/lizard-tycoon", buildProfile: "godot-android" },
 } as const;
 const SHA = /^[0-9a-f]{40}$/;
+const STABLE_RELEASE_TAG = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
+const PLAN_IDENTITY = /^[0-9a-f]{64}$/;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/;
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -77,8 +79,10 @@ export interface GitHubActionsBuildManifestIdentity {
   calledWorkflowPath: (typeof GITHUB_ACTIONS_BUILD_WORKFLOW_PATHS)[GitHubActionsBuildProfile];
   runId: string;
   runAttempt: string;
-  eventName: "pull_request" | "workflow_dispatch";
+  eventName: "pull_request" | "push" | "workflow_dispatch";
   eventRef: string;
+  releaseRef: string | null;
+  releaseTag: string | null;
   defaultBranch: string;
   repositoryVisibility: "private";
   runnerEnvironment: "self-hosted";
@@ -93,6 +97,9 @@ export interface GitHubActionsBuildManifestExpectation {
   buildProfile: GitHubActionsBuildProfile;
   defaultBranch: string;
   candidateHeadRef: string | null;
+  candidatePlanIdentity: string | null;
+  releaseRef: string | null;
+  releaseTag: string | null;
 }
 
 interface GitHubActionsBuildManifestClaims extends GitHubActionsBuildManifestIdentity {
@@ -132,6 +139,16 @@ export interface GitHubActionsPullRequestReadInput {
 export type GitHubActionsPullRequestReader = (
   input: GitHubActionsPullRequestReadInput,
 ) => Promise<GitHubActionsPullRequestReadback>;
+
+export type GitHubActionsReleaseTagReader = (
+  fullName: string,
+  tag: string,
+) => Promise<string>;
+
+async function readReleaseTagFromGitHub(fullName: string, tag: string): Promise<string> {
+  const { resolveStableTagSha } = await import("@/lib/github/release");
+  return resolveStableTagSha(fullName, tag);
+}
 
 function unauthorized(): never {
   throw new Error("GITHUB_ACTIONS_OIDC_UNAUTHORIZED");
@@ -281,7 +298,6 @@ export function assertGitHubActionsBuildManifestClaims(
     || !SHA.test(expectation.applicationSourceSha)
     || eventSourceSha !== expectation.eventSourceSha
     || !SHA.test(eventSourceSha)
-    || callerWorkflowSha !== eventSourceSha
     || workflowBundleSha !== expectation.workflowBundleSha
     || !SHA.test(workflowBundleSha)
     || !POSITIVE_INTEGER.test(runId)
@@ -299,15 +315,19 @@ export function assertGitHubActionsBuildManifestClaims(
   if (expectation.mode === "APPROVED") {
     if (
       expectation.candidateHeadRef !== null
+      || expectation.candidatePlanIdentity !== null
+      || expectation.releaseRef !== null
+      || expectation.releaseTag !== null
       || eventName !== "workflow_dispatch"
       || eventRef !== defaultBranchRef
       || expectation.applicationSourceSha !== eventSourceSha
+      || callerWorkflowSha !== eventSourceSha
       || headRef !== ""
       || baseRef !== ""
     ) {
       unauthorized();
     }
-  } else {
+  } else if (expectation.mode === "CANDIDATE") {
     const canary = GITHUB_ACTIONS_BUILD_CANARIES[repositoryId as keyof typeof GITHUB_ACTIONS_BUILD_CANARIES];
     const match = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(eventRef);
     const candidateHead = expectation.candidateHeadRef === null
@@ -323,12 +343,36 @@ export function assertGitHubActionsBuildManifestClaims(
       || headRef !== expectation.candidateHeadRef
       || candidateHead?.[1] !== repositoryId
       || candidateHead?.[2] !== workflowBundleSha.slice(0, 12)
+      || candidateHead?.[3] !== expectation.candidatePlanIdentity
+      || !PLAN_IDENTITY.test(expectation.candidatePlanIdentity ?? "")
+      || expectation.releaseRef !== null
+      || expectation.releaseTag !== null
+      || callerWorkflowSha !== eventSourceSha
       || expectation.applicationSourceSha === eventSourceSha
     ) {
       unauthorized();
     }
     pullRequestNumber = Number(match[1]);
     if (!Number.isSafeInteger(pullRequestNumber)) unauthorized();
+  } else {
+    const expectedReleaseRef = expectation.releaseTag === null
+      ? null
+      : `refs/tags/${expectation.releaseTag}`;
+    if (
+      expectation.candidateHeadRef !== null
+      || expectation.candidatePlanIdentity !== null
+      || expectation.releaseRef === null
+      || expectation.releaseTag === null
+      || !STABLE_RELEASE_TAG.test(expectation.releaseTag)
+      || expectation.releaseRef !== expectedReleaseRef
+      || eventRef !== expectation.releaseRef
+      || !["push", "workflow_dispatch"].includes(eventName)
+      || callerWorkflowSha !== expectation.applicationSourceSha
+      || headRef !== ""
+      || baseRef !== ""
+    ) {
+      unauthorized();
+    }
   }
 
   return {
@@ -344,6 +388,8 @@ export function assertGitHubActionsBuildManifestClaims(
     runAttempt,
     eventName: eventName as GitHubActionsBuildManifestIdentity["eventName"],
     eventRef,
+    releaseRef: expectation.releaseRef,
+    releaseTag: expectation.releaseTag,
     defaultBranch,
     repositoryVisibility: "private",
     runnerEnvironment: "self-hosted",
@@ -415,6 +461,8 @@ function bindBuildManifestIdentity(
     runAttempt: claims.runAttempt,
     eventName: claims.eventName,
     eventRef: claims.eventRef,
+    releaseRef: claims.releaseRef,
+    releaseTag: claims.releaseTag,
     defaultBranch: claims.defaultBranch,
     repositoryVisibility: claims.repositoryVisibility,
     runnerEnvironment: claims.runnerEnvironment,
@@ -531,6 +579,7 @@ export async function authenticateGitHubActionsBuildManifestRequest(
   expectation: GitHubActionsBuildManifestExpectation,
   verifier: GitHubActionsOidcVerifier = defaultVerifier,
   readPullRequest: GitHubActionsPullRequestReader = readPullRequestFromGitHub,
+  readReleaseTag: GitHubActionsReleaseTagReader = readReleaseTagFromGitHub,
 ): Promise<GitHubActionsBuildManifestIdentity | null> {
   const authorization = request.headers.get("authorization") ?? "";
   if (!authorization.startsWith("Bearer ")) return null;
@@ -554,6 +603,14 @@ export async function authenticateGitHubActionsBuildManifestRequest(
         pullRequestNumber: claims.pullRequestNumber,
       });
       if (!buildPullRequestReadbackMatches(claims, readback)) return null;
+    } else if (claims.mode === "RELEASE") {
+      if (
+        claims.releaseTag === null
+        || await readReleaseTag(claims.fullName, claims.releaseTag)
+          !== claims.applicationSourceSha
+      ) {
+        return null;
+      }
     }
     return bindBuildManifestIdentity(claims);
   } catch {
