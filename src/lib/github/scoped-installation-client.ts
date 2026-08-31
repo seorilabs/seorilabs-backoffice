@@ -17,6 +17,17 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
     contents: "read",
     metadata: "read",
   }),
+  "github.fleet-cleanup.ready-pr": Object.freeze({
+    contents: "write",
+    issues: "read",
+    metadata: "read",
+    pull_requests: "write",
+    workflows: "write",
+  }),
+  "github.fleet-cleanup.executor-identity.read": Object.freeze({
+    contents: "read",
+    metadata: "read",
+  }),
   "github.standard-labels.ensure": Object.freeze({
     issues: "write",
     metadata: "read",
