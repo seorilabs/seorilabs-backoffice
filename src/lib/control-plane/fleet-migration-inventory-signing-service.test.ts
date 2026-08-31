@@ -420,7 +420,8 @@ test("disabled manifests keep signer key-isolated and issuer non-authoritative u
     assert.match(manifest, /--no-report-on-fatalerror/u);
     assert.doesNotMatch(manifest, /command: \["\/bin\/(?:ba)?sh"/u);
   }
-  assert.match(signer, /egress: \[\]/u);
+  assert.match(signer, /policyTypes: \[Ingress, Egress\]/u);
+  assert.doesNotMatch(signer, /^\s*egress:/mu);
   assert.match(signer, /name: fleet-release-approval-signing/u);
   assert.doesNotMatch(issuer, /name: fleet-release-approval-signing/u);
   assert.doesNotMatch(signerEntrypoint, /stdout\.write\([^\n]*(?:secret|privateKey|fingerprint)/iu);
