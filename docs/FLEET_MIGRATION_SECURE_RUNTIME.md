@@ -163,6 +163,34 @@ execution copy의 logical ID/fingerprint/SPIFFE 및 exact image/source를 truste
 - issuer GitHub App: `shared/github/backoffice-app` →
   `platform/fleet-migration-inventory-issuer-github-app/private-key.pem`
 
+모든 execution copy에는 `seorilabs.dev/credential-id` annotation으로 위 logical ID를 exact하게
+기록한다. `fleet-migration-inventory-public-identity` ConfigMap도 signing logical ID를 사용한다.
+`registry-pull-cred`는 catalog credential이 아닌 cluster imagePullSecret이므로 type과
+`.dockerconfigjson` key-name만 검증하고 임의 logical ID를 붙이지 않는다. Secret 실행 복제본은
+client-side `kubectl apply`로 만들지 않는다. 그렇게 하면 Secret data가
+`kubectl.kubernetes.io/last-applied-configuration` annotation에 다시 복제될 수 있다.
+
+signer의 real credential activation과 exact 1-replica Ready readback이 별도 승인으로 끝난 뒤에만
+다음 trusted operator runner로 authoritative issuer를 한 번 실행한다. occurrence/run은
+`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`, provider vector는 `sha256:<64 hex>` 형식이어야 한다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<배포 Backoffice 40자리 SHA>' \
+FLEET_MIGRATION_OCCURRENCE_ID='<durable completed occurrence ID>' \
+FLEET_MIGRATION_RUN_ID='<durable completed run ID>' \
+FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST='sha256:<provider vector digest>' \
+  scripts/run-fleet-migration-inventory-issuer.sh
+```
+
+runner는 OCI revision, canonical ServiceAccount/Role/NetworkPolicy, signer Deployment/Service와
+exact source/image digest의 단일 Ready Pod/EndpointSlice, execution copy의 credential ID와 key-name을
+공개 metadata로 검증한다. 그 뒤 4-document issuer manifest에서 **Job 문서만** 추출하고,
+미치환 placeholder 0과 suspend/input/env/volume/security binding을 create 전후로 확인한 다음 해당
+Job만 unsuspend한다. signer scale, Secret/ConfigMap 생성·변경, 지원 리소스 apply, 자동 재시도는 하지
+않는다. 기존 occurrence/run Job이 있거나 결과가 불명이면 새 Job을 만들지 않고 기존 결과를 먼저
+readback한다.
+
 issuer는 서명 직후 dedicated `fleet_migration_inventory_issuer` DB principal로 completion과
 inventory digest를 대조하고 authoritative issuance 공개 JSON을 INSERT-only 원장에 한 번 보존한다.
 같은 occurrence의 재실행은 원장의 동일 issuance를 검증해 `REPLAYED`로 반환하며 새 서명이나 새 row를

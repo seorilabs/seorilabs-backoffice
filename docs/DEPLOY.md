@@ -258,6 +258,13 @@ capability 결정을 대신하지 않는 key-isolation 경계이며 raw key/expo
 activation, 전용 DB principal, mTLS SPIFFE와 append-only 원장 절차는
 `docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다.
 
+production web의 cleanup ISSUE/EXECUTE loader도 동일한 공개 trust root를 사용한다.
+`fleet-migration-inventory-public-identity` ConfigMap은 `/run/fleet-inventory/public`에 read-only,
+non-optional로 mount되며 key는 `public-key.pem`, `catalog.json` 두 개다. 배포 전에 공개 metadata
+ConfigMap을 준비하지 않으면 새 Pod는 시작되지 않는다. 이때 `maxUnavailable: 0`이 기존 Ready Pod를
+유지하고 rollout은 fail-closed한다. ConfigMap을 optional로 바꾸거나 공개 identity 검증을 건너뛰어
+rollout을 성공시키지 않는다.
+
 ## 5. 시드 + 검증
 ```bash
 # 레지스트리 시드 헤드리스 실행. token을 셸로 꺼내지 않는다.

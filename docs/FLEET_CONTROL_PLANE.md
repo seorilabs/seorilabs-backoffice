@@ -882,3 +882,8 @@ payload, key ID/fingerprint/algorithm, inventory binding과 시간창만 검증�
 `replicas: 0`, issuer Job은 `suspend: true`로 제공하며 real mTLS/signing/GitHub App/DB execution copy를
 공개 identity로 검증하기 전에는 활성화하지 않는다. exact route/TLS 1.3/mTLS, non-root/read-only,
 core dump·Node inspector/report 차단, signer egress 0은 manifest와 fake-key canary로 고정한다.
+별도 승인으로 signer가 exact 1-replica Ready가 된 뒤 trusted operator는
+`scripts/run-fleet-migration-inventory-issuer.sh`로 source/image/credential public binding을
+readback하고 4-document manifest에서 Job 하나만 생성·unsuspend한다. signer scale, credential
+생성·변경, 결과 불명 occurrence 자동 재시도는 하지 않는다. 상세 activation 경계는
+`docs/FLEET_MIGRATION_SECURE_RUNTIME.md`를 따른다.

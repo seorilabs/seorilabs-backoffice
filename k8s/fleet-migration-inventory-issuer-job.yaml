@@ -28,6 +28,9 @@ metadata:
     seorilabs.dev/database-credential-id: shared/seori-auth/fleet-migration-inventory-issuer-db
     seorilabs.dev/client-mtls-credential-id: shared/platform/fleet-migration-inventory-issuer-client-mtls
     seorilabs.dev/github-app-credential-id: shared/github/backoffice-app
+    seorilabs.dev/occurrence-id: "__FLEET_MIGRATION_OCCURRENCE_ID__"
+    seorilabs.dev/run-id: "__FLEET_MIGRATION_RUN_ID__"
+    seorilabs.dev/provider-vector-digest: "__FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST__"
 spec:
   suspend: true
   backoffLimit: 0
