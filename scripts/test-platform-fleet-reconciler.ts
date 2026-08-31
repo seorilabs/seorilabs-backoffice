@@ -616,9 +616,9 @@ async function main() {
       sourceSha: sourceShaA,
       integration: "SDK",
       artifactKind: "TYPESCRIPT",
-      observedVersion: implementationVersion,
-      observedDigest: oldArtifactDigest,
-      contractRevision: oldContractRevision,
+      observedVersion: contractVersion,
+      observedDigest: artifactDigest,
+      contractRevision,
     },
   });
   await assert.rejects(
@@ -629,34 +629,63 @@ async function main() {
     (error) => error instanceof ControlPlaneError && error.code === "PLATFORM_PROVIDER_OBSERVATION_STALE",
   );
 
-  await prisma.repositoryRegistration.updateMany({
-    where: { repoId: { in: [repoIdB, repoIdC] } },
-    data: { classification: "EXCLUDED" },
-  });
   const contractRelease = await addRelease(releaseManifest({
     version: contractVersion,
-    classification: "CONTRACT_CHANGE",
+    classification: "CONTRACT_ADDITION",
   }), "contract");
   const contract = await reconcilePlatformFleet({
     platformReleaseId: contractRelease.release.id,
-    consumers: [{
-      repoId: repoIdA.toString(),
-      discoveryObservationId: discoveryA.observation.id,
-      providerObservationId: currentContractObservationA.observation.id,
-    }],
+    consumers: [
+      {
+        repoId: repoIdA.toString(),
+        discoveryObservationId: discoveryA.observation.id,
+        providerObservationId: currentContractObservationA.observation.id,
+      },
+      {
+        repoId: repoIdB.toString(),
+        discoveryObservationId: discoveryB.observation.id,
+        providerObservationId: customObservationB.observation.id,
+      },
+      {
+        repoId: repoIdC.toString(),
+        discoveryObservationId: discoveryC.observation.id,
+        providerObservationId: missingObservationC.observation.id,
+      },
+    ],
     actor: "integration:platform-fleet",
     idempotencyKey: `platform-fleet-reconcile:contract:${nonce}`,
     signingKey,
   });
   assert.equal(contract.duplicate, false);
-  const contractPlan = await prisma.platformFleetPlan.findFirstOrThrow({
-    where: { platformReleaseId: contractRelease.release.id, appId: appIdA },
+  const contractPlans = await prisma.platformFleetPlan.findMany({
+    where: { platformReleaseId: contractRelease.release.id },
   });
-  assert.equal(contractPlan.kind, "CONTRACT_ISSUE");
-  assert.equal(contractPlan.status, "PENDING");
+  assert.equal(contractPlans.length, 3);
+  assert.deepEqual(
+    contractPlans.map(({ kind, status }) => ({ kind, status })),
+    Array.from({ length: 3 }, () => ({ kind: "CONTRACT_ISSUE", status: "PENDING" })),
+  );
+  const contractPlan = contractPlans.find((plan) => plan.appId === appIdA);
+  const customContractPlan = contractPlans.find((plan) => plan.appId === appIdB);
+  const missingContractPlan = contractPlans.find((plan) => plan.appId === appIdC);
+  if (!contractPlan || !customContractPlan || !missingContractPlan) {
+    assert.fail("SDK/custom/missing consumer의 contract Issue plan이 모두 필요합니다.");
+  }
   const issueTask = platformFleetTaskInputSchema.parse(contractPlan.desired);
   assert.equal(issueTask.kind, "PLATFORM_CONTRACT_ISSUE");
   if (issueTask.kind !== "PLATFORM_CONTRACT_ISSUE") assert.fail("contract Issue task가 필요합니다.");
+  const customContractTask = platformFleetTaskInputSchema.parse(customContractPlan.desired);
+  const missingContractTask = platformFleetTaskInputSchema.parse(missingContractPlan.desired);
+  for (const [task, integration] of [
+    [issueTask, "SDK"],
+    [customContractTask, "CUSTOM_HTTP"],
+    [missingContractTask, "MISSING"],
+  ] as const) {
+    assert.equal(task.kind, "PLATFORM_CONTRACT_ISSUE");
+    if (task.kind !== "PLATFORM_CONTRACT_ISSUE") assert.fail("contract Issue task가 필요합니다.");
+    assert.deepEqual(task.labels, ["P1", "autopilot", "platform", "platform-contract"]);
+    assert.ok(task.body.includes(`현재 탑재 상태: \`${integration}\``));
+  }
 
   const calls: string[] = [];
   const issue = (): PlatformGithubIssue => ({
@@ -667,17 +696,19 @@ async function main() {
     body: issueTask.body,
     labels: [...issueTask.labels],
   });
+  let markerReads = 0;
   const adapter: TrustedPlatformGithubAdapter = {
     async ensureLabels() {
       calls.push("ensure-labels");
     },
     async findIssueByMarker() {
-      calls.push("read-before");
-      return null;
+      markerReads += 1;
+      calls.push(markerReads === 1 ? "read-before" : "read-after-ambiguous-create");
+      return markerReads === 1 ? null : issue();
     },
     async createIssue() {
       calls.push("create");
-      return 42;
+      throw new Error("provider 결과 불명: marker readback이 필요합니다.");
     },
     async updateIssue() {
       throw new Error("contract Issue 기존 동작은 자동 update하지 않습니다.");
@@ -692,7 +723,13 @@ async function main() {
   };
   const applied = await applyPlatformContractIssuePlan(contractPlan.id, adapter);
   assert.equal(applied.applied, true);
-  assert.deepEqual(calls, ["ensure-labels", "read-before", "create", "read-after"]);
+  assert.deepEqual(calls, [
+    "ensure-labels",
+    "read-before",
+    "create",
+    "read-after-ambiguous-create",
+    "read-after",
+  ]);
   assert.equal((await prisma.platformFleetPlan.findUniqueOrThrow({ where: { id: contractPlan.id } })).status, "ISSUE_OPEN");
   assert.equal((await prisma.platformFleetBinding.findUniqueOrThrow({ where: { appId: appIdA } })).issueNumber, 42);
   assert.equal((await applyPlatformContractIssuePlan(contractPlan.id, adapter)).skipped, true);
@@ -713,7 +750,15 @@ async function main() {
       custom: { number: customApplied.issueNumber, status: "ISSUE_OPEN", reused: true },
       missing: { number: missingApplied.issueNumber, status: "ISSUE_OPEN", reused: false },
     },
-    contractIssue: { number: applied.issueNumber, status: "ISSUE_OPEN" },
+    contractIssues: {
+      planned: contractPlans.length,
+      sdkCurrent: true,
+      custom: true,
+      missing: true,
+      number: applied.issueNumber,
+      status: "ISSUE_OPEN",
+      ambiguousCreateRecoveredByMarker: true,
+    },
     githubMutation: "fake-adapter-only",
     productionProviderWrite: false,
   }));

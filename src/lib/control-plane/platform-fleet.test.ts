@@ -148,9 +148,9 @@ test("저장된 normalized v0.6.7 omission만 digest identity 변경 없이 read
   assert.throws(() => parseStoredPlatformReleaseManifest(mismatchedTag));
 });
 
-test("구현 drift와 계약 drift를 분리하고 custom/missing remediation을 큐잉한다", () => {
+test("계약 변경은 현재 integration보다 우선하고 구현 전용 분류는 기존 동작을 유지한다", () => {
   const artifact = manifest().artifacts[0];
-  const observed = {
+  const stale = {
     schemaVersion: 1 as const,
     sourceSha,
     integration: "SDK" as const,
@@ -163,29 +163,55 @@ test("구현 drift와 계약 drift를 분리하고 custom/missing remediation을
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
-    observation: observed,
+    observation: stale,
   }).kind, "SDK_UPDATE_PR");
   assert.equal(platformFleetDisposition({
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
     observation: {
-      ...observed,
+      ...stale,
       observedDigest: null,
       contractRevision: null,
     },
   }).kind, "SDK_UPDATE_PR");
-  assert.equal(platformFleetDisposition({
-    classification: "CONTRACT_CHANGE",
+  const current = {
+    ...stale,
+    observedVersion: artifact.version,
+    observedDigest: artifact.digest,
     contractRevision,
-    artifact,
-    observation: observed,
-  }).kind, "CONTRACT_ISSUE");
+  };
+  const customObservation = {
+    schemaVersion: 1 as const,
+    sourceSha,
+    integration: "CUSTOM_HTTP" as const,
+    evidenceDigest: artifactDigest,
+  };
+  const missingObservation = {
+    schemaVersion: 1 as const,
+    sourceSha,
+    integration: "MISSING" as const,
+    evidenceDigest: artifactDigest,
+  };
+  for (const classification of ["CONTRACT_ADDITION", "CONTRACT_CHANGE"] as const) {
+    for (const observation of [current, customObservation, missingObservation]) {
+      assert.deepEqual(platformFleetDisposition({
+        classification,
+        contractRevision,
+        artifact,
+        observation,
+      }), {
+        kind: "CONTRACT_ISSUE",
+        status: "PENDING",
+        bindingState: "CONTRACT_ISSUE_PENDING",
+      });
+    }
+  }
   const custom = platformFleetDisposition({
-    classification: "CONTRACT_ADDITION",
+    classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
-    observation: { schemaVersion: 1, sourceSha, integration: "CUSTOM_HTTP", evidenceDigest: artifactDigest },
+    observation: customObservation,
   });
   assert.equal(custom.kind, "CUSTOM_UNMANAGED");
   assert.equal(custom.status, "PENDING");
@@ -194,7 +220,7 @@ test("구현 drift와 계약 drift를 분리하고 custom/missing remediation을
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
-    observation: { schemaVersion: 1, sourceSha, integration: "MISSING", evidenceDigest: artifactDigest },
+    observation: missingObservation,
   });
   assert.equal(missing.kind, "MISSING_UNMANAGED");
   assert.equal(missing.status, "PENDING");
@@ -203,12 +229,7 @@ test("구현 drift와 계약 drift를 분리하고 custom/missing remediation을
     classification: "IMPLEMENTATION_ONLY",
     contractRevision,
     artifact,
-    observation: {
-      ...observed,
-      observedVersion: artifact.version,
-      observedDigest: artifact.digest,
-      contractRevision,
-    },
+    observation: current,
   }).kind, "COMPLIANT");
 });
 
