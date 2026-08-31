@@ -49,7 +49,7 @@ RUN pnpm build:scripts
 # ── runtime: TARGETPLATFORM(arm64) 슬림 standalone + prisma migrate(deploy) 가능 ──
 FROM node:24.16.0-bookworm-slim AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates util-linux \
   && rm -rf /var/lib/apt/lists/*
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

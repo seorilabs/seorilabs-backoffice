@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { Prisma } from "@prisma/client";
-import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
-import { createTrustedFleetCleanupStateStore } from "@seorilabs/repo-contract/trusted-cleanup-executor";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
+import { createTrustedFleetCleanupStateStore } from "seorilabs-org-contracts/repo-contract/trusted-cleanup-executor";
 
 import {
   FLEET_CLEANUP_CAPABILITY_TTL_SECONDS,

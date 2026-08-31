@@ -1,4 +1,4 @@
-import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
 
 import { projectBlueprintSchema, providerReadbackPayloadSchema } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";

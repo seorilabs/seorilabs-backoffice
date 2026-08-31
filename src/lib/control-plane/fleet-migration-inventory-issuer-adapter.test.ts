@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 
-import { fleetMigrationInventoryIssuerContract } from "@seorilabs/repo-contract/trusted-inventory-issuer";
+import { fleetMigrationInventoryIssuerContract } from "seorilabs-org-contracts/repo-contract/trusted-inventory-issuer";
 
 import {
   createFleetMigrationInventoryIssuerAdapters,
@@ -37,7 +37,13 @@ async function publicIdentityFixture() {
     revision: "catalog-revision-0001",
   }), { mode: 0o400 });
   await chmod(directory, 0o700);
-  return { directory, publicKeyFile, publicCatalogFile, fingerprint };
+  return {
+    directory,
+    root: directory,
+    publicKeyFile: "inventory-public.pem",
+    publicCatalogFile: "inventory-public.json",
+    fingerprint,
+  };
 }
 
 function signingRequest(payload: Buffer) {
@@ -66,10 +72,13 @@ test("public catalog and exact Ed25519 SPKI fingerprint are read without private
   assert.equal(identity.catalog.keyFingerprint, fixture.fingerprint);
 
   const link = join(fixture.directory, "public-link.pem");
-  await symlink(fixture.publicKeyFile, link);
+  const outsideDirectory = await realpath(await mkdtemp(join(tmpdir(), "fleet-inventory-public-outside-")));
+  const outside = join(outsideDirectory, "outside.pem");
+  await writeFile(outside, "outside-public-metadata", { mode: 0o400 });
+  await symlink(outside, link);
   await assert.rejects(
-    loadFleetMigrationInventoryPublicIdentity({ ...fixture, publicKeyFile: link }),
-    /FLEET_MIGRATION_PUBLIC_METADATA_PATH_INVALID/,
+    loadFleetMigrationInventoryPublicIdentity({ ...fixture, publicKeyFile: "public-link.pem" }),
+    /SEORI_AUTH_SECRET_TARGET_ESCAPE/,
   );
 });
 

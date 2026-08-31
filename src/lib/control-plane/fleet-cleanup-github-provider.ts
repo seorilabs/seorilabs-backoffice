@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Octokit } from "octokit";
 
-import { computeFleetEvidenceDigest } from "@seorilabs/repo-contract/fleet-migration";
-import { createTrustedFleetCleanupGitHubAdapter } from "@seorilabs/repo-contract/trusted-cleanup-executor";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
+import { createTrustedFleetCleanupGitHubAdapter } from "seorilabs-org-contracts/repo-contract/trusted-cleanup-executor";
 
 import {
   deterministicGithubCommitSha,

@@ -1,0 +1,139 @@
+# P7 authoritative inventory 전용 mTLS signer다. 기본 replicas=0이며 catalog/public
+# identity와 세 execution copy를 검증한 뒤 trusted operator가 별도로 활성화한다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet-migration-inventory-signer
+  namespace: platform
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-migration-inventory-signer
+  namespace: platform
+rules: []
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-migration-inventory-signer
+  namespace: platform
+  annotations:
+    seorilabs.dev/signing-credential-id: shared/platform/fleet-release-approval-signing
+spec:
+  selector:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-inventory-signer
+  ports:
+    - { name: mtls, port: 9444, targetPort: mtls }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-fleet-migration-inventory-signer
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-inventory-signer
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/signing-credential-id: shared/platform/fleet-release-approval-signing
+    seorilabs.dev/server-mtls-credential-id: shared/platform/fleet-migration-inventory-signer-server-mtls
+    seorilabs.dev/activation: credential-readback-required
+spec:
+  replicas: 0
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-inventory-signer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: fleet-migration-inventory-signer
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+    spec:
+      serviceAccountName: fleet-migration-inventory-signer
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      shareProcessNamespace: false
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets: [{ name: registry-pull-cred }]
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: signer
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          # prlimit가 core dump를 hard-limit 0으로 고정한 뒤 shell 없이 Node를 exec한다.
+          command: ["/usr/bin/prlimit", "--core=0:0", "--", "node", "/app/scripts-dist/fleet-migration-inventory-signer.cjs"]
+          ports: [{ name: mtls, containerPort: 9444 }]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HOME, value: /tmp }
+            - { name: CHECKPOINT_DISABLE, value: "1" }
+            - { name: NODE_OPTIONS, value: "--max-old-space-size=192 --disable-sigusr1 --no-report-on-fatalerror --no-report-on-signal --no-report-uncaught-exception" }
+            - { name: FLEET_MIGRATION_SIGNER_PORT, value: "9444" }
+            - { name: FLEET_MIGRATION_SIGNER_INVENTORY_KEY_FINGERPRINT, value: "sha256:5458c56b0e687c6328c54fce00f17112b5e1f0fc2704f1fe9fd055ec731b1525" }
+          readinessProbe:
+            tcpSocket: { port: mtls }
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: { port: mtls }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: signer-runtime, mountPath: /var/run/seori-fleet-migration-inventory-signer, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: signer-runtime
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: fleet-migration-inventory-signer-server
+                  items:
+                    - { key: client-ca.pem, path: server/client-ca.pem }
+                    - { key: tls.crt, path: server/tls.crt }
+                    - { key: tls.key, path: server/tls.key }
+              - secret:
+                  name: fleet-release-approval-signing
+                  items:
+                    - { key: private-key.pem, path: signing/private-key.pem }
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fleet-migration-inventory-signer
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-inventory-signer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backoffice
+              app.kubernetes.io/component: fleet-migration-inventory-issuer
+      ports: [{ protocol: TCP, port: 9444 }]
+  egress: []

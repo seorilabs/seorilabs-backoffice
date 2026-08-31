@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { validateFleetMigrationCollection } from "@seorilabs/repo-contract/fleet-migration-collector";
+import { validateFleetMigrationCollection } from "seorilabs-org-contracts/repo-contract/fleet-migration-collector";
 
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";

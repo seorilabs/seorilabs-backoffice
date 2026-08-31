@@ -1,4 +1,4 @@
-import { createTrustedFleetCleanupExecutor } from "@seorilabs/repo-contract/trusted-cleanup-executor";
+import { createTrustedFleetCleanupExecutor } from "seorilabs-org-contracts/repo-contract/trusted-cleanup-executor";
 
 import {
   createFleetCleanupStateProvider,
@@ -25,6 +25,7 @@ function required(name: string): string {
 
 async function publicIdentity() {
   return loadFleetMigrationInventoryPublicIdentity({
+    root: required("FLEET_MIGRATION_INVENTORY_PUBLIC_ROOT"),
     publicKeyFile: required("FLEET_MIGRATION_INVENTORY_PUBLIC_KEY_FILE"),
     publicCatalogFile: required("FLEET_MIGRATION_INVENTORY_PUBLIC_CATALOG_FILE"),
   });

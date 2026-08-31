@@ -42,6 +42,7 @@ const AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE = "auth broker journal checkp
 const FLEET_MIGRATION_PROOF_AUDIT_MESSAGE = "fleet migration proof audit is append-only";
 const FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE = "fleet migration occurrence audit is append-only";
 const FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE = "fleet migration completion audit is append-only";
+const FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE = "fleet migration authoritative issuance audit is append-only";
 
 const PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
@@ -74,7 +75,7 @@ export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly Appen
   },
 ];
 
-/** P7 proof, claim, completion 원장을 UPDATE/DELETE 없이 고정하는 독립 계약이다. */
+/** P7 proof, claim, completion, authoritative issuance 원장을 UPDATE/DELETE 없이 고정한다. */
 export const FLEET_MIGRATION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   {
     name: "control_plane_fleet_migration_proof_snapshot_no_delete",
@@ -111,6 +112,18 @@ export const FLEET_MIGRATION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerReq
     table: "control_plane_fleet_migration_collection_completion",
     event: "UPDATE",
     message: FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_authoritative_issuance_no_delete",
+    table: "control_plane_fleet_migration_authoritative_issuance",
+    event: "DELETE",
+    message: FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE,
+  },
+  {
+    name: "control_plane_fleet_migration_authoritative_issuance_no_update",
+    table: "control_plane_fleet_migration_authoritative_issuance",
+    event: "UPDATE",
+    message: FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE,
   },
 ];
 

@@ -26,9 +26,6 @@ importers:
       '@prisma/client':
         specifier: ^6.3.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
-      '@seorilabs/repo-contract':
-        specifier: github:seorilabs/.github#1e13d5df860241cd962c11e722d07a89ff08799d&path:/packages/repo-contract
-        version: https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract
       fflate:
         specifier: 0.8.3
         version: 0.8.3
@@ -59,6 +56,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.7(react@19.2.7)
+      seorilabs-org-contracts:
+        specifier: github:seorilabs/.github#f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
+        version: https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
@@ -923,12 +923,6 @@ packages:
 
   '@rushstack/eslint-patch@1.16.1':
     resolution: {integrity: sha512-TvZbIpeKqGQQ7X0zSCvPH9riMSFQFSggnfBjFZ1mEoILW+UuXCKwOoPcgjMwiUtRqFZ8jWhPJc4um14vC6I4ag==}
-
-  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract':
-    resolution: {gitHosted: true, path: /packages/repo-contract, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d}
-    version: 0.5.0
-    engines: {node: 24.x}
-    hasBin: true
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2754,6 +2748,11 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203:
+    resolution: {gitHosted: true, integrity: sha512-6vJ2A3OYZmCvP+tGff4zjIShwKirAiZahCNI/0+PIoxo5UH+biMpvuue7uOLZ+/3SuVlimC8BsvOOwmGbKJ+Ow==, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203}
+    version: 0.5.0
+    engines: {node: 24.x}
+
   set-function-length@1.2.2:
     resolution: {integrity: sha512-pgRc4hJ4/sNjWCSS9AmnS40x3bNMDTknHgL5UaMBTMyJnU90EgWh1Rz+MC9eFu4BuN/UwZjKQuY/1v3rM7HMfg==}
     engines: {node: '>= 0.4'}
@@ -3855,11 +3854,6 @@ snapshots:
   '@rtsao/scc@1.1.0': {}
 
   '@rushstack/eslint-patch@1.16.1': {}
-
-  '@seorilabs/repo-contract@https://codeload.github.com/seorilabs/.github/tar.gz/1e13d5df860241cd962c11e722d07a89ff08799d#path:/packages/repo-contract':
-    dependencies:
-      ajv: 8.20.0
-      yaml: 2.9.0
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -5938,6 +5932,11 @@ snapshots:
   semver@6.3.1: {}
 
   semver@7.8.4: {}
+
+  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203:
+    dependencies:
+      ajv: 8.20.0
+      yaml: 2.9.0
 
   set-function-length@1.2.2:
     dependencies:

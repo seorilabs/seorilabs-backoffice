@@ -1,0 +1,165 @@
+# Authoritative inventory를 발급하고 INSERT-only 원장에 보존하는 suspended one-shot Job.
+# real credential execution copy와 exact occurrence binding을 readback하기 전에는 시작하지 않는다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet-migration-inventory-issuer
+  namespace: platform
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-migration-inventory-issuer
+  namespace: platform
+rules: []
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backoffice-fleet-inventory-issuer-__BACKOFFICE_IMAGE_TAG_SHORT__-
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-inventory-issuer
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/signing-credential-id: shared/platform/fleet-release-approval-signing
+    seorilabs.dev/database-credential-id: shared/seori-auth/fleet-migration-inventory-issuer-db
+    seorilabs.dev/client-mtls-credential-id: shared/platform/fleet-migration-inventory-issuer-client-mtls
+    seorilabs.dev/github-app-credential-id: shared/github/backoffice-app
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: fleet-migration-inventory-issuer
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+    spec:
+      serviceAccountName: fleet-migration-inventory-issuer
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      shareProcessNamespace: false
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets: [{ name: registry-pull-cred }]
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: issuer
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command: ["/usr/bin/prlimit", "--core=0:0", "--", "node", "/app/scripts-dist/fleet-migration-inventory-issuer.cjs"]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HOME, value: /tmp }
+            - { name: CHECKPOINT_DISABLE, value: "1" }
+            - { name: NODE_OPTIONS, value: "--max-old-space-size=768 --disable-sigusr1 --no-report-on-fatalerror --no-report-on-signal --no-report-uncaught-exception" }
+            - { name: GITHUB_ORG, value: seorilabs }
+            - { name: GITHUB_APP_ID, value: "4124446" }
+            - { name: GITHUB_PRIVATE_KEY_FILE, value: /run/fleet-inventory/github/private-key.pem }
+            - { name: FLEET_MIGRATION_OCCURRENCE_ID, value: "__FLEET_MIGRATION_OCCURRENCE_ID__" }
+            - { name: FLEET_MIGRATION_RUN_ID, value: "__FLEET_MIGRATION_RUN_ID__" }
+            - { name: FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST, value: "__FLEET_MIGRATION_PROVIDER_VECTOR_DIGEST__" }
+            - { name: FLEET_MIGRATION_INVENTORY_PUBLIC_ROOT, value: /run/fleet-inventory/public }
+            - { name: FLEET_MIGRATION_INVENTORY_PUBLIC_KEY_FILE, value: public-key.pem }
+            - { name: FLEET_MIGRATION_INVENTORY_PUBLIC_CATALOG_FILE, value: catalog.json }
+            - { name: FLEET_MIGRATION_SIGNING_SERVICE_ORIGIN, value: https://fleet-migration-inventory-signer.platform.svc.cluster.local:9444 }
+            - { name: FLEET_MIGRATION_SIGNING_SERVICE_MTLS_ROOT, value: /run/fleet-inventory/mtls }
+            - { name: FLEET_MIGRATION_SIGNING_SERVICE_CA_FILE, value: ca.pem }
+            - { name: FLEET_MIGRATION_SIGNING_SERVICE_CERT_FILE, value: tls.crt }
+            - { name: FLEET_MIGRATION_SIGNING_SERVICE_KEY_FILE, value: tls.key }
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-migration-inventory-issuer-db
+                  key: DATABASE_URL
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: github-app, mountPath: /run/fleet-inventory/github, readOnly: true }
+            - { name: public-identity, mountPath: /run/fleet-inventory/public, readOnly: true }
+            - { name: mtls-client, mountPath: /run/fleet-inventory/mtls, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: github-app
+          secret:
+            secretName: fleet-migration-inventory-issuer-github-app
+            defaultMode: 0440
+            items: [{ key: private-key.pem, path: private-key.pem }]
+        - name: public-identity
+          configMap:
+            name: fleet-migration-inventory-public-identity
+            defaultMode: 0440
+            items:
+              - { key: public-key.pem, path: public-key.pem }
+              - { key: catalog.json, path: catalog.json }
+        - name: mtls-client
+          secret:
+            secretName: fleet-migration-inventory-signer-client
+            defaultMode: 0440
+            items:
+              - { key: ca.pem, path: ca.pem }
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+        - name: tmp
+          emptyDir: { sizeLimit: 32Mi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fleet-migration-inventory-issuer
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-inventory-issuer
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backoffice
+              app.kubernetes.io/component: fleet-migration-inventory-signer
+      ports: [{ protocol: TCP, port: 9444 }]
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: data }
+          podSelector:
+            matchLabels: { app: mysql }
+      ports: [{ protocol: TCP, port: 3306 }]
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports: [{ protocol: TCP, port: 443 }]

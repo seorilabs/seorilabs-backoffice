@@ -133,6 +133,8 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
   // 크로스빌드가 성립하려면 산출물이 빌드 호스트 아키텍처와 무관해야 한다.
   // sharp 제외를 되돌리면 빌드 호스트의 .node 가 arm64 이미지에 딸려 들어간다.
   const nextConfig = readFileSync(join(process.cwd(), "next.config.ts"), "utf8");
+  assert.match(nextConfig, /serverExternalPackages: \["seorilabs-org-contracts"\]/);
+  assert.doesNotMatch(nextConfig, /@seorilabs\/repo-contract/);
   assert.match(nextConfig, /outputFileTracingExcludes/);
   assert.match(nextConfig, /@img/);
   assert.match(nextConfig, /sharp/);

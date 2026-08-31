@@ -3,14 +3,14 @@ import { createHash, type KeyObject } from "node:crypto";
 import {
   loadTrustedFleetMigrationInventoryBinding,
   validateFleetMigrationPlan,
-} from "@seorilabs/repo-contract/fleet-migration";
+} from "seorilabs-org-contracts/repo-contract/fleet-migration";
 import {
   computeFleetCleanupApprovalScopeDigest,
-} from "@seorilabs/repo-contract/trusted-cleanup-executor";
+} from "seorilabs-org-contracts/repo-contract/trusted-cleanup-executor";
 import {
   fleetMigrationInventoryIssuerContract,
   validateFleetMigrationAuthoritativeInventory,
-} from "@seorilabs/repo-contract/trusted-inventory-issuer";
+} from "seorilabs-org-contracts/repo-contract/trusted-inventory-issuer";
 import { z } from "zod";
 
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";

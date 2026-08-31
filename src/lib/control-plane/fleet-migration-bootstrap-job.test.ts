@@ -162,9 +162,13 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
   const provisioning = readFileSync(join(ROOT, "k8s/fleet-migration-security-provisioning-job.yaml"), "utf8");
   assert.match(provisioning, /fleet_migration_shadow/u);
   assert.match(provisioning, /fleet_migration_proof_writer/u);
+  assert.match(provisioning, /fleet_migration_inventory_issuer/u);
   assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_collection_occurrence/u);
   assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_collection_completion/u);
   assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_proof_snapshot/u);
+  assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_authoritative_issuance/u);
+  assert.match(provisioning, /exact_grants fleet_migration_inventory_issuer 4 1/u);
+  assert.match(provisioning, /secretName: fleet-migration-inventory-issuer-db-credential/u);
   assert.doesNotMatch(provisioning, /GRANT (?:UPDATE|DELETE|ALL|CREATE|DROP|ALTER)\b/u);
   assert.match(provisioning, /information_schema\.APPLICABLE_ROLES/u);
   assert.match(provisioning, /information_schema\.TABLE_PRIVILEGES/u);
@@ -172,16 +176,19 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
   assert.match(provisioning, /test "\$shadow_bytes" = "\$\{#shadow_password\}"/u);
   assert.match(provisioning, /writer_bytes="\$\(wc -c < \/run\/secrets\/writer\/password/u);
   assert.match(provisioning, /test "\$writer_bytes" = "\$\{#writer_password\}"/u);
+  assert.match(provisioning, /issuer_bytes="\$\(wc -c < \/run\/secrets\/issuer\/password/u);
+  assert.match(provisioning, /test "\$issuer_bytes" = "\$\{#issuer_password\}"/u);
   assert.match(provisioning, /\[\[ "\$shadow_password" =~ \^\[A-Za-z0-9\+\/\]\{64\}\$ \]\]/u);
   assert.match(provisioning, /\[\[ "\$writer_password" =~ \^\[A-Za-z0-9\+\/\]\{64\}\$ \]\]/u);
+  assert.match(provisioning, /\[\[ "\$issuer_password" =~ \^\[A-Za-z0-9\+\/\]\{64\}\$ \]\]/u);
   assert.ok(
     provisioning.indexOf('[[ "$shadow_password" =~ ^[A-Za-z0-9+/]{64}$ ]]')
       < provisioning.indexOf('CONCAT("CREATE USER'),
     "password 형식 검증은 CREATE USER보다 먼저 실행돼야 한다",
   );
-  assert.doesNotMatch(provisioning, /od -An -v -tx1 \/run\/secrets\/(?:shadow|writer)\/password/u);
+  assert.doesNotMatch(provisioning, /od -An -v -tx1 \/run\/secrets\/(?:shadow|writer|issuer)\/password/u);
   assert.match(provisioning, /ttlSecondsAfterFinished: 600/u);
-  assert.match(provisioning, /trap 'rm -f "\$root_cnf" "\$shadow_cnf" "\$writer_cnf" "\$create_sql" "\$trigger_sql"'/u);
+  assert.match(provisioning, /trap 'rm -f "\$root_cnf" "\$shadow_cnf" "\$writer_cnf" "\$issuer_cnf" "\$create_sql" "\$trigger_sql"'/u);
 
   const shadow = readFileSync(join(ROOT, "k8s/fleet-migration-bootstrap-shadow-job.yaml"), "utf8");
   const proofWriter = readFileSync(join(ROOT, "k8s/fleet-migration-proof-writer-job.yaml"), "utf8");
