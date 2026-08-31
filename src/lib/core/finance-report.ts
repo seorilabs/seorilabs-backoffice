@@ -1,6 +1,7 @@
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { collectFinanceCosts, financeMonth, type CostWarning } from "@/lib/core/finance-costs";
+import { orgReportUrl } from "@/lib/core/org-report-link";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 
 // 서리 일일 재무 리포트. 종량제 4소스(GitHub Actions·GCP·LLM·Stability)의 이번 달
@@ -18,17 +19,20 @@ export function renderFinanceReport(input: {
   month: string;
   summaryLines: readonly string[];
   warnings: readonly CostWarning[];
+  /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
+  link?: string | null;
 }): string {
   const lines = [`💰 **${SENDER_KO} 재무 리포트 · ${input.month}**`, ...input.summaryLines];
   if (input.warnings.length === 0) {
     lines.push("", "경고 없음");
-    return lines.join("\n");
+  } else {
+    lines.push("", `⚠️ 경고 ${input.warnings.length}건`);
+    input.warnings.forEach((item, index) => {
+      lines.push("", `**${index + 1}. ${item.title}**`, item.detail);
+      for (const evidence of item.evidence) lines.push(`- ${evidence}`);
+    });
   }
-  lines.push("", `⚠️ 경고 ${input.warnings.length}건`);
-  input.warnings.forEach((item, index) => {
-    lines.push("", `**${index + 1}. ${item.title}**`, item.detail);
-    for (const evidence of item.evidence) lines.push(`- ${evidence}`);
-  });
+  if (input.link) lines.push("", `🔗 ${input.link}`);
   return lines.join("\n");
 }
 
@@ -48,7 +52,8 @@ export async function sendFinanceReport(now = new Date()): Promise<FinanceReport
     kind: "OPS_ALERT",
     occurredAt: now,
     payload: {
-      text: renderFinanceReport({ month, summaryLines, warnings }),
+      // 09:00 시점엔 그날 보고서가 아직 발행 전이라 날짜 없이 최신 보고서로 링크한다.
+      text: renderFinanceReport({ month, summaryLines, warnings, link: orgReportUrl() }),
       // 메인 봇이 아니라 서리 정체로 게시한다. 토큰 값은 payload 에 담지 않는다.
       sender: SEORI_SENDER,
     },

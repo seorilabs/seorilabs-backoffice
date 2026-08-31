@@ -250,3 +250,15 @@ test("유입경로가 있으면 요약에 붙고 없으면 줄 자체가 빠진�
 test("리포트는 기준일 기준 하루 1건이다", () => {
   assert.equal(metricHighlightDedupeKey(REF), "metric-highlight:2026-08-28");
 });
+
+test("보고서 링크가 있으면 푸터로 붙고 없으면 리포트가 그대로다", () => {
+  const base = { refDate: REF, totals: TOTALS, movements: [] };
+  const withLink = renderHighlightReport({
+    ...base,
+    reportUrl: `https://backoffice.example.com/report?date=${REF}`,
+  });
+  assert.ok(withLink.endsWith(`🔗 https://backoffice.example.com/report?date=${REF}`));
+  for (const reportUrl of [undefined, null, ""]) {
+    assert.ok(!renderHighlightReport({ ...base, reportUrl }).includes("🔗"), String(reportUrl));
+  }
+});

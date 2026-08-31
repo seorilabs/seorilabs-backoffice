@@ -293,11 +293,24 @@ export function stabilityWarnings(credits: number, minCredits: number): CostWarn
 
 // ── 수집 본체 ───────────────────────────────────────────────────────────────
 
+/**
+ * 소스별 구조화 수치. Org 종합 보고서 스냅샷이 문자열(summaryLines)이 아니라 숫자로
+ * 비용을 보존하기 위한 것. 미설정·조회 실패 소스는 해당 키가 null 이다.
+ */
+export interface FinanceCostFigures {
+  github: { quotaMinutes: number; includedMinutes: number; grossUsd: number; netUsd: number } | null;
+  gcp: { total: number; currency: string } | null;
+  llm: { totalUsd: number } | null;
+  stability: { credits: number } | null;
+}
+
 export interface FinanceCollectResult {
   /** 임계값을 넘은 경고. 비어 있으면 리포트는 "경고 없음" 이다. */
   warnings: CostWarning[];
   /** 경고와 무관하게 항상 싣는 이번 달 현황 스냅샷. */
   summaryLines: string[];
+  /** summaryLines 와 같은 수집에서 나온 구조화 수치. */
+  figures: FinanceCostFigures;
 }
 
 /** KST 기준 이번 달("YYYY-MM" / invoice "YYYYMM"). */
@@ -311,6 +324,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
   const { month, invoiceMonth } = financeMonth(now);
   const warnings: CostWarning[] = [];
   const summaryLines: string[] = [`이번 달(${month}) 종량제 현황`];
+  const figures: FinanceCostFigures = { github: null, gcp: null, llm: null, stability: null };
 
   // GitHub Actions 분량
   const githubToken = env.githubBillingToken();
@@ -325,6 +339,12 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
       summaryLines.push(
         `- GitHub Actions: 환산 ${summary.quotaMinutes}분/${included}분 (${pct}%) · gross ${usd(summary.grossUsd)} · 실청구 ${usd(summary.netUsd)}`,
       );
+      figures.github = {
+        quotaMinutes: summary.quotaMinutes,
+        includedMinutes: included,
+        grossUsd: summary.grossUsd,
+        netUsd: summary.netUsd,
+      };
       if (summary.freeMinutes > 0) {
         summaryLines.push(`  - 공개 저장소 ${summary.freeMinutes}분은 무료라 분량에서 제외`);
       }
@@ -348,6 +368,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
       );
       const rendered = renderGcpCostLines(rows.map((row) => ({ ...row, net_cost: Number(row.net_cost) })));
       summaryLines.push(`- ${rendered.lines[0]}`, ...rendered.lines.slice(1));
+      figures.gcp = { total: rendered.total, currency: rendered.currency };
       if (rendered.currency === "KRW") {
         warnings.push(...gcpBudgetWarnings(rendered.total, env.gcpMonthlyBudgetKrw(), invoiceMonth));
       }
@@ -363,6 +384,7 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
     const llm = await monthlyAiUsageSummary(now);
     const detail = llm.lines.length ? ` (${llm.lines.join(" · ")})` : " (호출 없음)";
     summaryLines.push(`- LLM: ${usd(llm.totalUsd)}${detail}`);
+    figures.llm = { totalUsd: llm.totalUsd };
     warnings.push(...llmBudgetWarnings(llm.totalUsd, env.llmMonthlyBudgetUsd(), month));
   } catch (error) {
     summaryLines.push(`- LLM: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
@@ -376,11 +398,12 @@ export async function collectFinanceCosts(now: Date): Promise<FinanceCollectResu
     try {
       const credits = await fetchStabilityCredits(stabilityKey);
       summaryLines.push(`- Stability 크레딧: ${Math.round(credits)}`);
+      figures.stability = { credits };
       warnings.push(...stabilityWarnings(credits, env.stabilityMinCredits()));
     } catch (error) {
       summaryLines.push(`- Stability: 조회 실패 (${error instanceof Error ? error.message : "error"})`);
     }
   }
 
-  return { warnings, summaryLines };
+  return { warnings, summaryLines, figures };
 }
