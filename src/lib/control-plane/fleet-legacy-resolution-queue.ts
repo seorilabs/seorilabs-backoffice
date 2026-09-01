@@ -9,6 +9,8 @@ import { prisma } from "@/lib/prisma";
 type ReasonCode = LegacyConfigResolutionRequest["dispositions"][number]["reasonCode"];
 export type EvidenceKind = LegacyConfigResolutionRequest["dispositions"][number]["targets"][number];
 
+const LEGACY_RESOLUTION_QUERY_CHUNK_SIZE = 100;
+
 type QueueSourceRow = {
   id: string;
   repoId: bigint | null;
@@ -63,6 +65,16 @@ export type FleetLegacyResolutionQueueItem = {
 
 function resolutionKey(appId: string, sourceSha: string, transformVersion: string): string {
   return `${appId}\u0000${sourceSha}\u0000${transformVersion}`;
+}
+
+export function chunkFleetLegacyResolutionKeys<T>(keys: readonly T[]): T[][] {
+  return Array.from(
+    { length: Math.ceil(keys.length / LEGACY_RESOLUTION_QUERY_CHUNK_SIZE) },
+    (_, index) => keys.slice(
+      index * LEGACY_RESOLUTION_QUERY_CHUNK_SIZE,
+      (index + 1) * LEGACY_RESOLUTION_QUERY_CHUNK_SIZE,
+    ),
+  );
 }
 
 function evidenceKinds(row: QueueSourceRow): EvidenceKind[] {
@@ -127,7 +139,7 @@ export function projectFleetLegacyResolutionQueueItem(
 }
 
 /**
- * 앱별 화면을 순회하지 않아도 사람이 처리할 legacy gate를 한 곳에서 보는 read model이다.
+ * ACTIVE 앱별 화면을 순회하지 않아도 사람이 처리할 legacy gate를 한 곳에서 보는 read model이다.
  * 값과 field path는 읽지 않고 고정 reason code와 중앙 evidence 존재 여부만 반환한다.
  */
 export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolutionQueueItem[]> {
@@ -193,17 +205,20 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
       transformVersion: legacyImport.transformVersion,
     }] as const];
   }));
-  const latestResolutions = exactKeys.size === 0
-    ? []
-    : await prisma.legacyConfigResolution.groupBy({
-        by: ["appId", "sourceSha", "transformVersion"],
-        where: { OR: [...exactKeys.values()] },
-        _max: { revision: true },
-      });
-  const latestRevisionByKey = new Map(latestResolutions.map((resolution) => [
-    resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
-    resolution._max.revision ?? 0,
-  ]));
+  const latestRevisionByKey = new Map<string, number>();
+  for (const exactKeyChunk of chunkFleetLegacyResolutionKeys([...exactKeys.values()])) {
+    const latestResolutions = await prisma.legacyConfigResolution.groupBy({
+      by: ["appId", "sourceSha", "transformVersion"],
+      where: { OR: exactKeyChunk },
+      _max: { revision: true },
+    });
+    for (const resolution of latestResolutions) {
+      latestRevisionByKey.set(
+        resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
+        resolution._max.revision ?? 0,
+      );
+    }
+  }
 
   return rows
     .map((row) => {

@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { projectFleetLegacyResolutionQueueItem } from "@/lib/control-plane/fleet-legacy-resolution-queue";
+import {
+  chunkFleetLegacyResolutionKeys,
+  projectFleetLegacyResolutionQueueItem,
+} from "@/lib/control-plane/fleet-legacy-resolution-queue";
 
 function sourceRow() {
   return {
@@ -91,6 +94,7 @@ test("중앙 queue 조회는 exact source tuple의 최신 resolution과 존재 �
   );
   assert.match(source, /legacyConfigResolution\.groupBy\(\{/);
   assert.match(source, /by: \["appId", "sourceSha", "transformVersion"\]/);
+  assert.match(source, /where: \{ OR: exactKeyChunk \}/);
   assert.doesNotMatch(source, /legacyConfigResolutions:\s*\{[\s\S]*?take:\s*100/);
   for (const relation of [
     "marketLocalizations",
@@ -101,4 +105,13 @@ test("중앙 queue 조회는 exact source tuple의 최신 resolution과 존재 �
   ]) {
     assert.match(source, new RegExp(`${relation}: \\{ take: 1, select:`));
   }
+});
+
+test("resolution exact key 조회는 앱이 늘어나도 100개 이하 query로 나눈다", () => {
+  const keys = Array.from({ length: 205 }, (_, index) => `key-${index}`);
+  const chunks = chunkFleetLegacyResolutionKeys(keys);
+
+  assert.deepEqual(chunks.map((chunk) => chunk.length), [100, 100, 5]);
+  assert.deepEqual(chunks.flat(), keys);
+  assert.deepEqual(chunkFleetLegacyResolutionKeys([]), []);
 });
