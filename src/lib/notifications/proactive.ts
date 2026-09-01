@@ -4,7 +4,12 @@ import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere, visibleReleaseWhere } from "@/lib/domain/app-visibility";
+import {
+  approvalIssueWhere,
+  visibleAppWhere,
+  visibleIssueWhere,
+  visibleReleaseWhere,
+} from "@/lib/domain/app-visibility";
 import { geminiComplete } from "@/lib/ai/gemini";
 import { getOrgDefaultBranches } from "@/lib/github/read";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -59,13 +64,19 @@ export interface DailyDigestResult {
 
 export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   const window = previousKstDayWindow(now);
-  const [apps, openIssues, mergedCandidates, releases, defaultBranches] = await Promise.all([
+  const [apps, openIssues, approvalIssues, mergedCandidates, releases, defaultBranches] = await Promise.all([
     prisma.app.findMany({ where: visibleAppWhere, select: { currentStage: true } }),
     prisma.issueMirror.findMany({
       where: { ...visibleIssueWhere, state: "OPEN" },
       orderBy: { priority: "asc" },
       take: 300,
       select: { id: true, number: true, title: true, repoFullName: true, priority: true, labels: true },
+    }),
+    prisma.issueMirror.findMany({
+      where: { ...approvalIssueWhere, state: "OPEN" },
+      orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+      take: 500,
+      select: { id: true, number: true, title: true, repoFullName: true, labels: true },
     }),
     prisma.pullRequestMirror.findMany({
       where: { app: { is: visibleAppWhere }, state: "MERGED", mergedAt: { gte: window.start, lt: window.end } },
@@ -77,7 +88,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     getOrgDefaultBranches(),
   ]);
   const { mergedPrs, unresolvedCount } = filterDefaultBranchMerges(mergedCandidates, defaultBranches);
-  const pending = openIssues.filter((issue) => hasApproval(asStringArray(issue.labels), "planning") || hasApproval(asStringArray(issue.labels), "release"));
+  const pending = approvalIssues.filter((issue) => hasApproval(asStringArray(issue.labels), "planning") || hasApproval(asStringArray(issue.labels), "release"));
   const p1 = openIssues.filter((issue) => issue.priority === "P1");
   const stageCounts: Record<string, number> = {};
   for (const app of apps) stageCounts[app.currentStage] = (stageCounts[app.currentStage] ?? 0) + 1;

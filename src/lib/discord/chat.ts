@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
+import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { GeminiNotConfiguredError, type ChatMessage } from "@/lib/ai/gemini";
@@ -16,15 +16,15 @@ export async function factorySnapshot(): Promise<string> {
   const stageLine = Object.entries(byStage)
     .map(([stage, count]) => `${STAGE_KO[stage as keyof typeof STAGE_KO] ?? stage} ${count}`)
     .join(", ");
-  const [p1, openIssues] = await Promise.all([
+  const [p1, approvalIssues] = await Promise.all([
     prisma.issueMirror.count({ where: { ...visibleIssueWhere, state: "OPEN", priority: "P1" } }),
     prisma.issueMirror.findMany({
-      where: { ...visibleIssueWhere, state: "OPEN" },
+      where: { ...approvalIssueWhere, state: "OPEN" },
       select: { labels: true },
-      take: 300,
+      take: 500,
     }),
   ]);
-  const approvals = openIssues.filter((issue) => {
+  const approvals = approvalIssues.filter((issue) => {
     const labels = asStringArray(issue.labels);
     return hasApproval(labels, "planning") || hasApproval(labels, "release");
   }).length;

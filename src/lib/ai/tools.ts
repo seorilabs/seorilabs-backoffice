@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
+import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import type { IncidentStatus, Lifecycle, Priority, ReleaseStatus } from "@prisma/client";
 
 // 채팅 비서가 사실 기반으로 답하도록 호출하는 read-only 도구.
@@ -182,9 +182,9 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
     }
     case "list_approvals": {
       const open = await prisma.issueMirror.findMany({
-        where: { ...visibleIssueWhere, state: "OPEN" },
+        where: { ...approvalIssueWhere, state: "OPEN" },
         orderBy: [{ priority: "asc" }],
-        take: 200,
+        take: 500,
       });
       const pend = open.filter((i) => {
         const l = asStringArray(i.labels);

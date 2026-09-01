@@ -18,6 +18,14 @@ export const visibleIssueWhere = {
   app: { is: visibleAppWhere },
 } satisfies Prisma.IssueMirrorWhereInput;
 
+// 승인 원장은 제품 앱뿐 아니라 조직 인프라 저장소의 사람 gate도 보여야 한다.
+// appId가 없는 이슈는 RepositoryRegistration으로 관리되는 INFRA_REPO일 수 있으므로
+// 승인 화면·AI·Discord에서 숨기지 않는다. 앱에 연결된 이슈는 기존과 동일하게
+// DEPRECATED 앱을 제외한다.
+export const approvalIssueWhere = {
+  OR: [visibleIssueWhere, { appId: null }],
+} satisfies Prisma.IssueMirrorWhereInput;
+
 export const visiblePrWhere = {
   app: { is: visibleAppWhere },
 } satisfies Prisma.PullRequestMirrorWhereInput;

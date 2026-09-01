@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
+import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
 import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
@@ -51,9 +51,9 @@ export async function findVisibleApp(slug: string) {
 
 export async function approvalsQuery(): Promise<DiscordQueryResult> {
   const open = await prisma.issueMirror.findMany({
-    where: { ...visibleIssueWhere, state: "OPEN" },
+    where: { ...approvalIssueWhere, state: "OPEN" },
     orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
-    take: 200,
+    take: 500,
   });
   const pending = open.filter((issue) => {
     const labels = asStringArray(issue.labels);

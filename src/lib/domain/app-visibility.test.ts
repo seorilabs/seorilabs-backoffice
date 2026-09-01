@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   DISABLED_APP_STATUS,
   WRITABLE_APP_STATUSES,
+  approvalIssueWhere,
   isDisabledAppStatus,
   isWritableAppStatus,
   visibleAppWhere,
@@ -17,4 +18,13 @@ test("DEPRECATED 는 DB 전용 비활성 플래그이며 앱에서 쓰기 가능
 
 test("visibleAppWhere 는 비활성 앱을 제외한다", () => {
   assert.deepEqual(visibleAppWhere, { status: { not: "DEPRECATED" } });
+});
+
+test("approvalIssueWhere 는 visible 앱과 appId 없는 조직 인프라 이슈를 함께 포함한다", () => {
+  assert.deepEqual(approvalIssueWhere, {
+    OR: [
+      { app: { is: { status: { not: "DEPRECATED" } } } },
+      { appId: null },
+    ],
+  });
 });
