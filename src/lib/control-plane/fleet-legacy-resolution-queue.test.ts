@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import { projectFleetLegacyResolutionQueueItem } from "@/lib/control-plane/fleet-legacy-resolution-queue";
@@ -80,4 +82,23 @@ test("검토 불가능한 import와 지원하지 않는 reason은 선행 조치�
     "REASON_LEDGER_INVALID",
   ]);
   assert.deepEqual(item.rawReasonCodes, ["INVALID_DESIRED_STATE"]);
+});
+
+test("중앙 queue 조회는 exact source tuple의 최신 resolution과 존재 여부만 읽는다", () => {
+  const source = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/fleet-legacy-resolution-queue.ts"),
+    "utf8",
+  );
+  assert.match(source, /legacyConfigResolution\.groupBy\(\{/);
+  assert.match(source, /by: \["appId", "sourceSha", "transformVersion"\]/);
+  assert.doesNotMatch(source, /legacyConfigResolutions:\s*\{[\s\S]*?take:\s*100/);
+  for (const relation of [
+    "marketLocalizations",
+    "complianceProfiles",
+    "storeAssets",
+    "buildTargets",
+    "externalBindings",
+  ]) {
+    assert.match(source, new RegExp(`${relation}: \\{ take: 1, select:`));
+  }
 });

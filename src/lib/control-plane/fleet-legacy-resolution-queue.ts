@@ -61,6 +61,10 @@ export type FleetLegacyResolutionQueueItem = {
   blockers: string[];
 };
 
+function resolutionKey(appId: string, sourceSha: string, transformVersion: string): string {
+  return `${appId}\u0000${sourceSha}\u0000${transformVersion}`;
+}
+
 function evidenceKinds(row: QueueSourceRow): EvidenceKind[] {
   const active = row.configRevisions[0];
   return [
@@ -145,13 +149,13 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
         select: {
           id: true,
           revision: true,
-          marketLocalizations: { select: { id: true } },
-          complianceProfiles: { select: { id: true } },
-          storeAssets: { select: { id: true } },
+          marketLocalizations: { take: 1, select: { id: true } },
+          complianceProfiles: { take: 1, select: { id: true } },
+          storeAssets: { take: 1, select: { id: true } },
         },
       },
-      buildTargets: { select: { id: true } },
-      externalBindings: { select: { id: true } },
+      buildTargets: { take: 1, select: { id: true } },
+      externalBindings: { take: 1, select: { id: true } },
       providerObservations: { take: 1, select: { id: true } },
       platformFleetBinding: { select: { id: true } },
       credentialBindings: {
@@ -176,15 +180,51 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
           },
         },
       },
-      legacyConfigResolutions: {
-        orderBy: { revision: "desc" },
-        take: 100,
-        select: { sourceSha: true, transformVersion: true, revision: true },
-      },
     },
   });
 
+  const exactKeys = new Map(rows.flatMap((row) => {
+    const legacyImport = row.legacyConfigImports[0];
+    if (!legacyImport) return [];
+    const key = resolutionKey(row.id, legacyImport.sourceSha, legacyImport.transformVersion);
+    return [[key, {
+      appId: row.id,
+      sourceSha: legacyImport.sourceSha,
+      transformVersion: legacyImport.transformVersion,
+    }] as const];
+  }));
+  const latestResolutions = exactKeys.size === 0
+    ? []
+    : await prisma.legacyConfigResolution.groupBy({
+        by: ["appId", "sourceSha", "transformVersion"],
+        where: { OR: [...exactKeys.values()] },
+        _max: { revision: true },
+      });
+  const latestRevisionByKey = new Map(latestResolutions.map((resolution) => [
+    resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
+    resolution._max.revision ?? 0,
+  ]));
+
   return rows
-    .map((row) => projectFleetLegacyResolutionQueueItem(row))
+    .map((row) => {
+      const legacyImport = row.legacyConfigImports[0];
+      const latestRevision = legacyImport
+        ? latestRevisionByKey.get(resolutionKey(
+            row.id,
+            legacyImport.sourceSha,
+            legacyImport.transformVersion,
+          )) ?? 0
+        : 0;
+      return projectFleetLegacyResolutionQueueItem({
+        ...row,
+        legacyConfigResolutions: legacyImport && latestRevision > 0
+          ? [{
+              sourceSha: legacyImport.sourceSha,
+              transformVersion: legacyImport.transformVersion,
+              revision: latestRevision,
+            }]
+          : [],
+      });
+    })
     .filter((item): item is FleetLegacyResolutionQueueItem => item !== null);
 }
