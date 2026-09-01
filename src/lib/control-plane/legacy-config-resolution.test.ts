@@ -9,7 +9,10 @@ import {
   validateLegacyResolutionDispositions,
   type LegacyResolutionBinding,
 } from "@/lib/control-plane/legacy-config-resolution";
-import { legacyConfigResolutionRequestSchema } from "@/lib/control-plane/contracts";
+import {
+  legacyConfigResolutionRepoIdSchema,
+  legacyConfigResolutionRequestSchema,
+} from "@/lib/control-plane/contracts";
 import type { LegacyTransformResult } from "@/lib/control-plane/legacy-shadow";
 import { LEGACY_TRANSFORM_VERSION } from "@/lib/control-plane/legacy-sources";
 
@@ -128,6 +131,20 @@ test("감사 사유는 실제 중앙 대체 또는 비운영 무시 disposition�
     }],
     justification: "IGNORED_NON_OPERATIONAL_REVIEWED",
   }).success, false);
+});
+
+test("조회 repoId는 잘못된 query를 예외 없이 400 경계로 분류한다", () => {
+  for (const value of [null, "", "abc", "0", "-1", "1.5", "9007199254740992"]) {
+    assert.equal(legacyConfigResolutionRepoIdSchema.safeParse(value).success, false, String(value));
+  }
+  assert.equal(legacyConfigResolutionRepoIdSchema.safeParse("1").success, true);
+
+  const route = readFileSync(join(
+    process.cwd(),
+    "src/app/api/control-plane/legacy-config-resolutions/route.ts",
+  ), "utf8");
+  assert.match(route, /legacyConfigResolutionRepoIdSchema\.safeParse/u);
+  assert.doesNotMatch(route, /BigInt\(request\.nextUrl/u);
 });
 
 test("source parse와 provenance 계열 오류는 resolution으로 우회할 수 없다", () => {

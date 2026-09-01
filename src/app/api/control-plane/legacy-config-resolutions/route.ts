@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { legacyConfigResolutionRequestSchema } from "@/lib/control-plane/contracts";
+import {
+  legacyConfigResolutionRepoIdSchema,
+  legacyConfigResolutionRequestSchema,
+} from "@/lib/control-plane/contracts";
 import {
   listLegacyConfigResolutions,
   recordLegacyConfigResolution,
@@ -15,11 +18,13 @@ export async function GET(request: NextRequest) {
   const principal = authenticateInternalRequest(request, "control-plane");
   if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
-    const repoId = BigInt(request.nextUrl.searchParams.get("repoId") ?? "0");
-    if (repoId <= 0n || repoId > BigInt(Number.MAX_SAFE_INTEGER)) {
+    const parsedRepoId = legacyConfigResolutionRepoIdSchema.safeParse(
+      request.nextUrl.searchParams.get("repoId"),
+    );
+    if (!parsedRepoId.success) {
       return NextResponse.json({ error: "valid repoId required" }, { status: 400 });
     }
-    return NextResponse.json(await listLegacyConfigResolutions({ repoId }));
+    return NextResponse.json(await listLegacyConfigResolutions({ repoId: parsedRepoId.data }));
   } catch (error) {
     return controlPlaneErrorResponse(error);
   }

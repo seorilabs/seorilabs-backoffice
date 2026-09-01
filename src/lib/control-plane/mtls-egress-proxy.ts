@@ -122,8 +122,8 @@ const NON_PUBLIC_IPV4 = Object.freeze([
 ] as const);
 
 // IANA IPv6 address space에서 현재 일반 Global Unicast로 배정되는 2000::/3만
-// 후보로 삼고, 그 안의 special-purpose block도 전부 거부한다. Provider endpoint가
-// translation/anycast/benchmark/documentation 주소를 사용할 이유가 없으므로
+// 후보로 삼고, 아래에 열거한 translation/anycast/benchmark/documentation prefix를
+// 추가로 거부한다. Provider endpoint가 이 주소를 사용할 이유가 없으므로
 // availability보다 SSRF fail-closed를 우선한다.
 const GLOBAL_UNICAST_IPV6 = new BlockList();
 GLOBAL_UNICAST_IPV6.addSubnet("2000::", 3, "ipv6");
@@ -270,7 +270,7 @@ export async function createExactMtlsProxyClient(input: {
     || origin.pathname !== "/"
     || origin.search
     || origin.hash
-    || (origin.port && origin.port !== "8443")
+    || origin.port !== "8443"
   ) throw new Error("SEORI_EGRESS_PROXY_ORIGIN_INVALID");
   let ca: Buffer | undefined;
   let certificate: Buffer | undefined;

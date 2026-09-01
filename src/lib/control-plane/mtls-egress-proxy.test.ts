@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   exactHostSet,
   exactClientHostPolicies,
+  createExactMtlsProxyClient,
   exactPeerSpiffeIdentity,
   exactSpiffeSet,
   isPublicConnectAddress,
@@ -12,6 +13,20 @@ import {
   rejectRedirectResponse,
   resolvePublicConnectAddress,
 } from "./mtls-egress-proxy";
+
+test("mTLS proxy origin은 명시적 8443 포트만 허용한다", async () => {
+  for (const proxyOrigin of ["https://egress.example", "https://egress.example:443"]) {
+    await assert.rejects(
+      createExactMtlsProxyClient({
+        root: "/definitely-missing-seori-egress-binding",
+        proxyOrigin,
+        proxyServerName: "egress.example",
+        allowedHosts: exactHostSet("api.github.com"),
+      }),
+      /SEORI_EGRESS_PROXY_ORIGIN_INVALID/u,
+    );
+  }
+});
 
 test("exact allowlists reject duplicates, IP literals, and malformed identities", () => {
   assert.deepEqual([...exactHostSet("api.github.com,backoffice.vzyx.xyz")], [

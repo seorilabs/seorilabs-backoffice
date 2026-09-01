@@ -1225,9 +1225,14 @@ export const legacyConfigResolutionTargetSchema = z.enum([
   "IGNORED_NON_OPERATIONAL",
 ]);
 
+export const legacyConfigResolutionRepoIdSchema = z.coerce
+  .bigint()
+  .positive()
+  .max(BigInt(Number.MAX_SAFE_INTEGER));
+
 export const legacyConfigResolutionRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  repoId: z.coerce.bigint().positive().max(BigInt(Number.MAX_SAFE_INTEGER)),
+  repoId: legacyConfigResolutionRepoIdSchema,
   legacyImportId: z.string().min(1).max(191),
   expectedResolutionRevision: z.number().int().nonnegative(),
   expectedActiveConfigRevision: z.number().int().positive(),
