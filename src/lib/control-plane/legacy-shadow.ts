@@ -172,6 +172,14 @@ const PROVIDER_STATE_KEYS = new Set([
   "track",
 ]);
 
+const CREDENTIAL_OBSERVATION_KEYS = new Set([
+  "evidence",
+  "loginSmoke",
+  "reference",
+  "status",
+  "verifiedAt",
+]);
+
 const MARKET_ORDER = new Map([
   ["google-play", 0],
   ["app-store", 1],
@@ -233,6 +241,33 @@ function isSecretLikeKey(key: string): boolean {
     || /(?:password|passwd|secret|tokens?|privatekey|credentials?|cookie|totp|recoverycodes?)$/.test(key);
 }
 
+/**
+ * legacy schema에서 `key`가 credential이 아니라 공개 식별자로 정의된 경로만 예외로 둔다.
+ * 일반 `key`는 계속 secret carrier로 취급해 새롭거나 오염된 shape를 fail-closed한다.
+ */
+function isKnownPublicIdentifierKey(sourceKind: LegacySourceKind, path: string): boolean {
+  if (sourceKind === "PLATFORM_APP_REGISTRY") {
+    return /^\$\.ads\.placements\[\d+\]\.reward\.key$/.test(path);
+  }
+  if (sourceKind !== "SEORILABS_BACKOFFICE_JSON") return false;
+  if (/^\$\.tools\[\d+\]\.operations\[\d+\]\.inputs\[\d+\]\.key$/.test(path)) return true;
+  return /^\$\.analytics\.content\.(?:market\.values|metrics|derived|distributions|groups)\[\d+\](?:\.(?:metrics|derived)\[\d+\])?\.key$/.test(path);
+}
+
+/**
+ * 일부 구형 market JSON의 review.credentials는 자격증명 값이 아니라 사람 로그인
+ * 점검의 공개 상태 envelope다. 이 고정 shape만 parent key 오탐에서 제외하고,
+ * 내부는 계속 재귀 스캔하므로 password/token 같은 실제 필드는 그대로 차단된다.
+ */
+function isCredentialObservationEnvelope(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false;
+  return Object.entries(value).every(([key, nested]) => {
+    if (!CREDENTIAL_OBSERVATION_KEYS.has(key)) return false;
+    if (key === "loginSmoke") return nested === null || isCredentialObservationEnvelope(nested);
+    return nested === null || ["string", "number", "boolean"].includes(typeof nested);
+  });
+}
+
 function childPath(path: string, key: string): string {
   return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)
     ? `${path}.${key}`
@@ -271,7 +306,17 @@ function scanForbiddenKeys(
   for (const [key, nested] of Object.entries(value)) {
     const keyPath = childPath(path, key);
     const normalized = normalizedKey(key);
-    if (isSecretLikeKey(normalized)) addReason(reasons, "SECRET_LIKE_KEY", keyPath, sourceKind);
+    if (
+      isSecretLikeKey(normalized)
+      && !(normalized === "key" && isKnownPublicIdentifierKey(sourceKind, keyPath))
+      && !(
+        keyPath === "$.review.credentials"
+        && normalized === "credentials"
+        && isCredentialObservationEnvelope(nested)
+      )
+    ) {
+      addReason(reasons, "SECRET_LIKE_KEY", keyPath, sourceKind);
+    }
     if (
       LEGAL_KEYS.has(normalized)
       || normalized.endsWith("rating")

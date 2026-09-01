@@ -4,6 +4,11 @@ import {
   legacyConfigResolutionReasonCodeSchema,
   type LegacyConfigResolutionRequest,
 } from "@/lib/control-plane/contracts";
+import {
+  missingLegacyResolutionEvidenceKinds,
+  suggestedLegacyResolutionDispositions,
+  type LegacyResolutionDisposition,
+} from "@/lib/control-plane/legacy-config-resolution-selection";
 import { prisma } from "@/lib/prisma";
 
 type ReasonCode = LegacyConfigResolutionRequest["dispositions"][number]["reasonCode"];
@@ -37,12 +42,14 @@ type QueueSourceRow = {
     parityObservations: Array<{
       status: string;
       legacyConfigResolutionId: string | null;
+      observedAt: Date;
     }>;
   }>;
   legacyConfigResolutions: Array<{
     sourceSha: string;
     transformVersion: string;
     revision: number;
+    createdAt: Date;
   }>;
 };
 
@@ -59,7 +66,11 @@ export type FleetLegacyResolutionQueueItem = {
   reasonCodes: ReasonCode[];
   rawReasonCodes: string[];
   availableEvidenceKinds: EvidenceKind[];
+  suggestedDispositions: LegacyResolutionDisposition[];
+  missingEvidenceKinds: EvidenceKind[];
   reviewable: boolean;
+  approvalReady: boolean;
+  awaitingParity: boolean;
   blockers: string[];
 };
 
@@ -113,12 +124,28 @@ export function projectFleetLegacyResolutionQueueItem(
     ...(active ? [] : ["ACTIVE_CONFIG_MISSING"]),
     ...(parsed.success && parsed.data.length > 0 ? [] : ["REASON_LEDGER_INVALID"]),
   ];
-  const expectedResolutionRevision = row.legacyConfigResolutions
+  const latestResolution = row.legacyConfigResolutions
     .filter((resolution) => (
       resolution.sourceSha === legacyImport.sourceSha
       && resolution.transformVersion === legacyImport.transformVersion
     ))
-    .reduce((latest, resolution) => Math.max(latest, resolution.revision), 0);
+    .reduce<(typeof row.legacyConfigResolutions)[number] | null>((latest, resolution) => (
+      !latest || resolution.revision > latest.revision ? resolution : latest
+    ), null);
+  const expectedResolutionRevision = latestResolution?.revision ?? 0;
+  const awaitingParity = Boolean(
+    latestResolution
+    && (!parity || latestResolution.createdAt.getTime() > parity.observedAt.getTime()),
+  );
+  const availableEvidenceKinds = evidenceKinds(row);
+  const suggestedDispositions = parsed.success
+    ? suggestedLegacyResolutionDispositions({
+        reasonCodes: parsed.data,
+        availableEvidenceKinds,
+      })
+    : [];
+  const missingEvidenceKinds = missingLegacyResolutionEvidenceKinds(suggestedDispositions);
+  const reviewable = blockers.length === 0;
 
   return {
     appId: row.id,
@@ -132,8 +159,15 @@ export function projectFleetLegacyResolutionQueueItem(
     expectedResolutionRevision,
     reasonCodes: parsed.success ? parsed.data : [],
     rawReasonCodes,
-    availableEvidenceKinds: evidenceKinds(row),
-    reviewable: blockers.length === 0,
+    availableEvidenceKinds,
+    suggestedDispositions,
+    missingEvidenceKinds,
+    reviewable,
+    approvalReady: reviewable
+      && !awaitingParity
+      && suggestedDispositions.length > 0
+      && suggestedDispositions.every((disposition) => disposition.targets.length > 0),
+    awaitingParity,
     blockers,
   };
 }
@@ -188,7 +222,7 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
           parityObservations: {
             orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
             take: 1,
-            select: { status: true, legacyConfigResolutionId: true },
+            select: { status: true, legacyConfigResolutionId: true, observedAt: true },
           },
         },
       },
@@ -205,38 +239,41 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
       transformVersion: legacyImport.transformVersion,
     }] as const];
   }));
-  const latestRevisionByKey = new Map<string, number>();
+  const latestResolutionByKey = new Map<string, { revision: number; createdAt: Date }>();
   for (const exactKeyChunk of chunkFleetLegacyResolutionKeys([...exactKeys.values()])) {
     const latestResolutions = await prisma.legacyConfigResolution.groupBy({
       by: ["appId", "sourceSha", "transformVersion"],
       where: { OR: exactKeyChunk },
-      _max: { revision: true },
+      _max: { revision: true, createdAt: true },
     });
     for (const resolution of latestResolutions) {
-      latestRevisionByKey.set(
-        resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
-        resolution._max.revision ?? 0,
-      );
+      if (resolution._max.revision && resolution._max.createdAt) {
+        latestResolutionByKey.set(
+          resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
+          { revision: resolution._max.revision, createdAt: resolution._max.createdAt },
+        );
+      }
     }
   }
 
   return rows
     .map((row) => {
       const legacyImport = row.legacyConfigImports[0];
-      const latestRevision = legacyImport
-        ? latestRevisionByKey.get(resolutionKey(
+      const latestResolution = legacyImport
+        ? latestResolutionByKey.get(resolutionKey(
             row.id,
             legacyImport.sourceSha,
             legacyImport.transformVersion,
-          )) ?? 0
-        : 0;
+          )) ?? null
+        : null;
       return projectFleetLegacyResolutionQueueItem({
         ...row,
-        legacyConfigResolutions: legacyImport && latestRevision > 0
+        legacyConfigResolutions: legacyImport && latestResolution
           ? [{
               sourceSha: legacyImport.sourceSha,
               transformVersion: legacyImport.transformVersion,
-              revision: latestRevision,
+              revision: latestResolution.revision,
+              createdAt: latestResolution.createdAt,
             }]
           : [],
       });

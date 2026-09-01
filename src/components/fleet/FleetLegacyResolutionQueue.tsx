@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LegacyConfigResolutionButton } from "@/components/fleet/LegacyConfigResolutionButton";
+import { LegacyConfigResolutionBatchButton } from "@/components/fleet/LegacyConfigResolutionBatchButton";
 import type { FleetLegacyResolutionQueueItem } from "@/lib/control-plane/fleet-legacy-resolution-queue";
 
 function shortSha(value: string): string {
@@ -13,6 +14,8 @@ export function FleetLegacyResolutionQueue({
   items: FleetLegacyResolutionQueueItem[];
 }) {
   const reviewableCount = items.filter((item) => item.reviewable).length;
+  const approvalReadyCount = items.filter((item) => item.approvalReady).length;
+  const awaitingParityCount = items.filter((item) => item.awaitingParity).length;
 
   if (items.length === 0) {
     return <p className="text-xs text-emerald-700">현재 사람이 처리할 legacy 설정 gate가 없습니다.</p>;
@@ -23,15 +26,20 @@ export function FleetLegacyResolutionQueue({
       <div className="flex flex-wrap gap-2 text-xs">
         <span className="rounded bg-amber-100 px-2 py-1 text-amber-900">전체 {items.length}건</span>
         <span className="rounded bg-blue-100 px-2 py-1 text-blue-900">검토 양식 {reviewableCount}건</span>
-        <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">선행 조치 필요 {items.length - reviewableCount}건</span>
+        <span className="rounded bg-emerald-100 px-2 py-1 text-emerald-900">승인 가능 {approvalReadyCount}건</span>
+        <span className="rounded bg-violet-100 px-2 py-1 text-violet-900">parity 대기 {awaitingParityCount}건</span>
+        <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">중앙 증거 준비 필요 {reviewableCount - approvalReadyCount - awaitingParityCount}건</span>
+        <span className="rounded bg-red-50 px-2 py-1 text-red-700">원본 보정 필요 {items.length - reviewableCount}건</span>
       </div>
+
+      <LegacyConfigResolutionBatchButton items={items} />
 
       {items.map((item) => (
         <details key={`${item.appId}:${item.legacyImportId}`} className="rounded border border-neutral-200 bg-white">
           <summary className="cursor-pointer list-none px-3 py-2 text-sm">
             <span className="font-medium">{item.repoFullName}</span>
-            <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${item.reviewable ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>
-              {item.reviewable ? "검토 양식" : "선행 조치 필요"}
+            <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${item.approvalReady ? "bg-emerald-100 text-emerald-800" : item.awaitingParity ? "bg-violet-100 text-violet-800" : item.reviewable ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>
+              {item.approvalReady ? "승인 가능" : item.awaitingParity ? "parity 재검증 대기" : item.reviewable ? "중앙 증거 입력 필요" : "원본 보정 필요"}
             </span>
             <span className="ml-2 font-mono text-[11px] text-neutral-400">{shortSha(item.sourceSha)}</span>
           </summary>
@@ -47,8 +55,17 @@ export function FleetLegacyResolutionQueue({
             <div className="mt-1 text-[11px] text-neutral-500">
               중앙 증거: {item.availableEvidenceKinds.join(", ") || "없음"}
             </div>
+            {item.missingEvidenceKinds.length > 0 && (
+              <div className="mt-1 text-[11px] font-medium text-amber-700">
+                추가 입력: {item.missingEvidenceKinds.join(", ")}
+              </div>
+            )}
 
-            {item.reviewable && item.activeConfigRevision !== null ? (
+            {item.awaitingParity ? (
+              <p className="mt-3 text-xs text-violet-700">
+                최신 append-only 승인이 기록됐습니다. 다음 Fleet parity wave 결과 전에는 중복 승인하지 않습니다.
+              </p>
+            ) : item.reviewable && item.activeConfigRevision !== null ? (
               <div className="mt-3">
                 <LegacyConfigResolutionButton
                   appId={item.appId}
