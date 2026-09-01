@@ -587,7 +587,7 @@ async function main() {
     allowedHosts: exactHostSet("backoffice.vzyx.xyz"),
     targetCa: backofficeCa,
   });
-  let githubEgress;
+  let githubEgress: Awaited<ReturnType<typeof createExactMtlsProxyClient>>;
   try {
     githubEgress = await createExactMtlsProxyClient({
       ...proxyBinding,

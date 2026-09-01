@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import type { LegacyConfigResolutionRequest } from "@/lib/control-plane/contracts";
+import { nextLegacyResolutionTargets } from "@/lib/control-plane/legacy-config-resolution-selection";
 import { approveLegacyConfigResolutionAction } from "@/lib/actions/legacy-config-resolution";
 
 type ReasonCode = LegacyConfigResolutionRequest["dispositions"][number]["reasonCode"];
@@ -77,10 +78,8 @@ export function LegacyConfigResolutionButton({
 
   function toggle(reasonCode: ReasonCode, target: Target) {
     setSelected((current) => {
-      const values = new Set(current[reasonCode] ?? []);
-      if (values.has(target)) values.delete(target);
-      else values.add(target);
-      return { ...current, [reasonCode]: [...values].sort() as Target[] };
+      const targets = nextLegacyResolutionTargets(current[reasonCode] ?? [], target);
+      return { ...current, [reasonCode]: targets };
     });
   }
 
