@@ -14,11 +14,13 @@ import { getRepositoryClassificationQueue } from "@/lib/control-plane/repository
 import { RepositoryClassificationQueue } from "@/components/RepositoryClassificationQueue";
 import { getFleetLegacyResolutionQueue } from "@/lib/control-plane/fleet-legacy-resolution-queue";
 import { FleetLegacyResolutionQueue } from "@/components/fleet/FleetLegacyResolutionQueue";
+import { getFleetComplianceDraftQueue } from "@/lib/control-plane/fleet-compliance-draft-queue";
+import { FleetComplianceDraftBatch } from "@/components/fleet/FleetComplianceDraftBatch";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue, legacyResolutionQueue] =
+  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue, legacyResolutionQueue, complianceDraftQueue] =
     await Promise.all([
       prisma.app.count({ where: visibleAppWhere }),
       prisma.issueMirror.count({ where: visibleIssueWhere }),
@@ -29,6 +31,7 @@ export default async function SettingsPage() {
       getDesiredStateBackfillSummary(),
       getRepositoryClassificationQueue(),
       getFleetLegacyResolutionQueue(),
+      getFleetComplianceDraftQueue(),
     ]);
 
   return (
@@ -82,6 +85,12 @@ export default async function SettingsPage() {
         <Card title="Allowlist">
           <Row k="ENV ALLOWLIST_LOGINS" v={env.allowlistLogins().join(", ") || "(없음)"} />
           <Row k="허용된 사용자(DB)" v={allowUsers.map((u) => `@${u.login}`).join(", ") || "(없음)"} />
+        </Card>
+      </section>
+
+      <section className="mt-4 max-w-5xl">
+        <Card title={`Fleet Compliance 중앙 입력 ${complianceDraftQueue.length}건`}>
+          <FleetComplianceDraftBatch items={complianceDraftQueue} />
         </Card>
       </section>
 

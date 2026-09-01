@@ -768,6 +768,15 @@ CredentialBinding이 없으면 일괄 승인 대상에 포함하지 않으며, �
 않는다. resolution이 최신 parity보다 뒤에 기록된 앱은 `parity 재검증 대기`로 분리해 같은 승인을 중복
 기록하지 않는다.
 
+`COMPLIANCE_PROFILE`이 부족한 앱은 Settings의 사람 전용 중앙 입력 queue에서 처리한다. 이 queue는
+raw legacy 값이나 field path를 보여주지 않고 exact app/repo/source SHA, ACTIVE/latest revision,
+enabled market만 고정한다. 사람은 enabled market마다 실제 확인한 compliance 초안을 입력해야 하며,
+서버는 선택 전체를 mutation 전에 다시 읽는다. 기존 미완료 DRAFT, source drift, projection drift가
+있으면 시작하지 않는다. 통과한 앱은 기존 ConfigRevision validator와 optimistic concurrency로 새
+DRAFT를 만든 뒤 같은 사람 동작 안에서 signed ACTIVE snapshot으로 전환한다. 실행 중 race는 앱별
+CREATE/ACTIVATE 단계와 revision을 명시하며, 마켓 심사 제출·승인·공개 배포는 수행하지 않는다.
+credential 후보가 포함된 초안은 저장 전에 거부한다.
+
 ## 이관 경계
 
 이 migration은 additive다. Play/App Store/AppsInToss JSON, `market-launch-state.json`,

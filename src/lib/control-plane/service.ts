@@ -427,6 +427,22 @@ export function assertExpectedLatestConfigRevision(input: {
   }
 }
 
+export function assertExpectedConfigSourceSha(input: {
+  expectedSourceSha?: string;
+  actualSourceSha: string;
+}): void {
+  if (
+    input.expectedSourceSha !== undefined
+    && input.expectedSourceSha !== input.actualSourceSha
+  ) {
+    throw new ControlPlaneError(
+      `Config source SHA 충돌: expected=${input.expectedSourceSha}, actual=${input.actualSourceSha}`,
+      409,
+      "CONFIG_SOURCE_SHA_MISMATCH",
+    );
+  }
+}
+
 type ConfigRevisionReplay = {
   revision: number;
   appId: string;
@@ -447,6 +463,7 @@ export function assertConfigRevisionReplay(input: {
   expectedLatestRevision: number;
   contractVersion: string | null;
   payloadHash?: string;
+  expectedSourceSha?: string;
 }): void {
   const { stored } = input;
   if (
@@ -457,6 +474,8 @@ export function assertConfigRevisionReplay(input: {
     || stored.backfillContractVersion !== input.contractVersion
     || stored.sourceObservationId !== stored.sourceObservation?.id
     || (input.payloadHash !== undefined && stored.payloadHash !== input.payloadHash)
+    || (input.expectedSourceSha !== undefined
+      && stored.sourceObservation?.sourceSha !== input.expectedSourceSha)
     || !DIGEST_64.test(stored.payloadHash)
     || jsonDigest(stored.payload as JsonValue) !== stored.payloadHash
   ) {
@@ -1073,6 +1092,7 @@ type ConfigRevisionMutationIdentity = {
   idempotencyKey: string;
   contractVersion: string | null;
   payloadHash?: string;
+  expectedSourceSha?: string;
 };
 
 async function runConfigRevisionMutation(
@@ -1102,6 +1122,7 @@ export async function createConfigRevision(input: {
   payload: Record<string, unknown>;
   actor: string;
   idempotencyKey: string;
+  expectedSourceSha?: string;
 }) {
   assertConfigRevisionPayload(input.payload);
   const payloadHash = jsonDigest(input.payload as JsonValue);
@@ -1114,6 +1135,7 @@ export async function createConfigRevision(input: {
       expectedLatestRevision: input.expectedLatestRevision,
       contractVersion: null,
       payloadHash,
+      expectedSourceSha: input.expectedSourceSha,
     });
     return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
@@ -1125,6 +1147,7 @@ export async function createConfigRevision(input: {
     idempotencyKey: input.idempotencyKey,
     contractVersion: null,
     payloadHash,
+    expectedSourceSha: input.expectedSourceSha,
   }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
@@ -1136,6 +1159,7 @@ export async function createConfigRevision(input: {
         expectedLatestRevision: input.expectedLatestRevision,
         contractVersion: null,
         payloadHash,
+        expectedSourceSha: input.expectedSourceSha,
       });
       return {
         revision: afterLockReplay,
@@ -1143,6 +1167,10 @@ export async function createConfigRevision(input: {
         duplicate: true,
       };
     }
+    assertExpectedConfigSourceSha({
+      expectedSourceSha: input.expectedSourceSha,
+      actualSourceSha: source.observation.sourceSha,
+    });
     assertExpectedLatestConfigRevision({
       expectedLatestRevision: input.expectedLatestRevision,
       actualLatestRevision: await latestConfigRevisionNumber(tx, source.app.id),
@@ -1169,6 +1197,7 @@ export async function createConfigRevision(input: {
           payloadHash,
           sourceObservationId: source.observation.id,
           sourceSha: source.observation.sourceSha,
+          expectedSourceSha: input.expectedSourceSha ?? null,
           observationPayloadHash: source.observation.payloadHash,
           contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
           activationAttempted: false,
