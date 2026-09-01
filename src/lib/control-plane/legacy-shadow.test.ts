@@ -273,6 +273,22 @@ test("App Store scalar listing과 build 표식은 shape 오류 대신 중앙 검
   assert.doesNotMatch(JSON.stringify(result), new RegExp(buildCanary));
 });
 
+test("scalar build 예외는 App Store에만 허용하고 다른 market은 shape 오류로 차단한다", () => {
+  for (const [sourceKind, payload] of [
+    ["GOOGLE_PLAY_CONFIG", { defaultLanguage: "ko-KR", build: "unexpected-scalar" }],
+    ["APPS_IN_TOSS_CONFIG", { locale: "ko-KR", build: "unexpected-scalar" }],
+  ] as const) {
+    const result = transformLegacySources(completeVector({ [sourceKind]: payload }));
+
+    assert.equal(result.status, "NEEDS_INPUT");
+    assert.ok(result.reasons.some((reason) => (
+      reason.code === "INVALID_SOURCE_SHAPE"
+      && reason.sourceKind === sourceKind
+      && reason.path === "$.build"
+    )));
+  }
+});
+
 test("임의의 잘못된 Backoffice JSON은 도구 manifest로 오인하지 않는다", () => {
   const result = transformLegacySources(completeVector({
     SEORILABS_BACKOFFICE_JSON: {

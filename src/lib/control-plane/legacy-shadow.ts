@@ -460,9 +460,10 @@ function transformBuild(
   value: unknown,
   sourceKind: LegacySourceKind,
   path: string,
+  allowLegacyScalar = false,
 ): void {
   if (value === undefined) return;
-  if (typeof value === "string") {
+  if (typeof value === "string" && allowLegacyScalar) {
     // 초기 App Store 설정은 archive/build 표식을 scalar로 기록했다. 값을
     // ConfigRevision으로 추측해 옮기지 않고 BuildTarget 사람 검토로 분리한다.
     addReason(context.reasons, "UNSUPPORTED_FIELD", path, sourceKind);
@@ -577,7 +578,7 @@ function transformAppStore(source: Record<string, unknown>, context: TransformCo
       }
     }
   }
-  transformBuild(context, source.build, kind, "$.build");
+  transformBuild(context, source.build, kind, "$.build", true);
   transformSupport(context, source, kind);
   mergeMarket(context, "app-store", enabled, locales, kind);
 }
