@@ -241,18 +241,37 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
   }));
   const latestResolutionByKey = new Map<string, { revision: number; createdAt: Date }>();
   for (const exactKeyChunk of chunkFleetLegacyResolutionKeys([...exactKeys.values()])) {
-    const latestResolutions = await prisma.legacyConfigResolution.groupBy({
+    const maxRevisions = await prisma.legacyConfigResolution.groupBy({
       by: ["appId", "sourceSha", "transformVersion"],
       where: { OR: exactKeyChunk },
-      _max: { revision: true, createdAt: true },
+      _max: { revision: true },
+    });
+    const exactLatestRevisionKeys = maxRevisions.flatMap((resolution) => (
+      resolution._max.revision
+        ? [{
+            appId: resolution.appId,
+            sourceSha: resolution.sourceSha,
+            transformVersion: resolution.transformVersion,
+            revision: resolution._max.revision,
+          }]
+        : []
+    ));
+    if (exactLatestRevisionKeys.length === 0) continue;
+    const latestResolutions = await prisma.legacyConfigResolution.findMany({
+      where: { OR: exactLatestRevisionKeys },
+      select: {
+        appId: true,
+        sourceSha: true,
+        transformVersion: true,
+        revision: true,
+        createdAt: true,
+      },
     });
     for (const resolution of latestResolutions) {
-      if (resolution._max.revision && resolution._max.createdAt) {
-        latestResolutionByKey.set(
-          resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
-          { revision: resolution._max.revision, createdAt: resolution._max.createdAt },
-        );
-      }
+      latestResolutionByKey.set(
+        resolutionKey(resolution.appId, resolution.sourceSha, resolution.transformVersion),
+        { revision: resolution.revision, createdAt: resolution.createdAt },
+      );
     }
   }
 

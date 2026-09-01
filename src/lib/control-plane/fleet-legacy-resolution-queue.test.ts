@@ -160,7 +160,11 @@ test("중앙 queue 조회는 exact source tuple의 최신 resolution과 존재 �
   assert.match(source, /legacyConfigResolution\.groupBy\(\{/);
   assert.match(source, /by: \["appId", "sourceSha", "transformVersion"\]/);
   assert.match(source, /where: \{ OR: exactKeyChunk \}/);
-  assert.match(source, /_max: \{ revision: true, createdAt: true \}/);
+  assert.match(source, /_max: \{ revision: true \}/);
+  assert.match(source, /legacyConfigResolution\.findMany\(\{/);
+  assert.match(source, /where: \{ OR: exactLatestRevisionKeys \}/);
+  assert.match(source, /revision: resolution\._max\.revision/);
+  assert.doesNotMatch(source, /_max: \{ revision: true, createdAt: true \}/);
   assert.doesNotMatch(source, /legacyConfigResolutions:\s*\{[\s\S]*?take:\s*100/);
   for (const relation of [
     "marketLocalizations",
