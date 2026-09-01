@@ -35,7 +35,7 @@ export function ProviderExecutionApprovalButton({
               requestId: crypto.randomUUID(),
             });
             if (!result.ok) {
-              setError(result.error ?? "provider 실행 승인 실패");
+              setError(result.error ?? "마켓·서비스 작업을 승인하지 못했습니다.");
               return;
             }
             router.refresh();

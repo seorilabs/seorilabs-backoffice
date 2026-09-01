@@ -178,7 +178,9 @@ test("StoreAsset UI는 수동 object key 입력 대신 중앙 upload와 readback
   assert.match(editor, /\/api\/platform\/apps\/\$\{encodeURIComponent\(appId\)\}\/store-assets/);
   assert.match(editor, /"Idempotency-Key": `ui-store-asset:/);
   assert.match(editor, /objectKey: string; checksum: string/);
-  assert.match(editor, /SHA-256 readback 검증/);
+  assert.match(editor, /저장된 파일이 원본과 일치하는지 확인했습니다/);
+  assert.match(editor, /파일 확인값/);
+  assert.match(editor, /저장된 파일을 다시 읽어 확인한 SHA-256/);
   assert.doesNotMatch(editor, /<TextField\s+label="objectKey"/);
   assert.doesNotMatch(editor, /<TextField\s+label="checksum"/);
 });

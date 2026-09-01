@@ -33,6 +33,9 @@ test("앱 워크스페이스는 Fleet을 포함한 고정 관리 영역을 제�
     ],
   );
   assert.equal(tabs[0].href, "/apps/app_1");
+  assert.equal(tabs.find((tab) => tab.key === "fleet")?.label, "앱 통합 관리");
+  assert.equal(tabs.find((tab) => tab.key === "fleet")?.href, "/apps/app_1/fleet");
+  assert.equal(tabs.find((tab) => tab.key === "flags")?.label, "기능 켜기·끄기");
 });
 
 test("manifest 도구와 분석 소스에 따라 준비 상태를 계산한다", () => {

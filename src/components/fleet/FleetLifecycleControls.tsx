@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { advanceFleetLifecycleStageAction } from "@/lib/actions/fleet-control-plane";
+import { lifecycleStageLabel } from "@/lib/control-plane/presentation";
 import {
   FLEET_LIFECYCLE_STAGES,
   HUMAN_TRANSITION_STAGES,
@@ -33,11 +34,11 @@ export function FleetLifecycleControls({
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-neutral-800">중앙 lifecycle 전이</div>
+          <div className="text-sm font-semibold text-neutral-800">개발·출시 단계 변경</div>
           <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-            현재 <span className="font-mono">{stage}</span> · generation {generation}.
-            RELEASE_CANDIDATE 이후는 append-only gate observation과 exact provider/public identity 증거로만 전진하며,
-            되돌림·건너뜀·라벨 기반 전이는 허용하지 않습니다.
+            현재 <span title={stage}>{lifecycleStageLabel(stage)}</span> · 변경 차수 {generation}.
+            출시 후보부터는 해당 빌드와 마켓 계정의 확인 결과가 있어야 진행할 수 있습니다.
+            단계를 되돌리거나 건너뛰거나, 상태 표시만 바꿔 완료할 수 없습니다.
           </p>
         </div>
         {humanAdvancable ? (
@@ -55,22 +56,22 @@ export function FleetLifecycleControls({
                   requestId: crypto.randomUUID(),
                 });
                 if (!result.ok) {
-                  setError(result.error ?? "lifecycle 전이를 처리하지 못했습니다.");
+                  setError(result.error ?? "단계 변경을 처리하지 못했습니다.");
                   return;
                 }
                 setMessage(result.status === "DUPLICATE"
-                  ? `이미 반영된 요청입니다. 현재 ${result.stage}.`
-                  : `${result.stage} 단계로 전진했습니다. generation ${result.generation}.`);
+                  ? `이미 반영된 요청입니다. 현재 ${lifecycleStageLabel(result.stage ?? stage)}.`
+                  : `${lifecycleStageLabel(result.stage ?? stage)} 단계로 이동했습니다. 변경 차수 ${result.generation}.`);
                 router.refresh();
               });
             }}
             className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
           >
-            {nextStage}(으)로 전진
+            {lifecycleStageLabel(nextStage)} 단계로 이동
           </button>
         ) : (
           <span className="rounded border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs text-neutral-600">
-            {nextStage ? `${nextStage}은 gate 증거 전용` : "마지막 단계"}
+            {nextStage ? `${lifecycleStageLabel(nextStage)}: 확인 결과 필요` : "마지막 단계"}
           </span>
         )}
       </div>
