@@ -10,6 +10,7 @@ import {
 } from "@/lib/sync/mirror";
 import { env } from "@/lib/env";
 import { syncPlatformRegistryBindings } from "@/lib/platform/registry-bindings";
+import { reconcileRepositoryWhere } from "@/lib/sync/reconcile-scope";
 
 // 한 레포의 issue/PR/workflow_run 을 installation token 으로 증분 동기화.
 export async function backfillRepo(repoFullName: string): Promise<void> {
@@ -83,16 +84,20 @@ export async function reconcileAll(): Promise<ReconcileRunResult> {
   }
   running = true;
   try {
-    const apps = await prisma.app.findMany({ select: { repoFullName: true } });
+    const repositories = await prisma.repositoryRegistration.findMany({
+      where: reconcileRepositoryWhere,
+      orderBy: { repoFullName: "asc" },
+      select: { repoFullName: true },
+    });
     let succeeded = 0;
     let failed = 0;
-    for (const a of apps) {
+    for (const repository of repositories) {
       try {
-        await backfillRepo(a.repoFullName);
+        await backfillRepo(repository.repoFullName);
         succeeded++;
       } catch (e) {
         failed++;
-        console.error(`[reconcile] ${a.repoFullName} 실패:`, e);
+        console.error(`[reconcile] ${repository.repoFullName} 실패:`, e);
       }
     }
     try {
@@ -105,7 +110,7 @@ export async function reconcileAll(): Promise<ReconcileRunResult> {
       console.error("[reconcile] Platform registry binding 실패:", e);
     }
     return {
-      repos: apps.length,
+      repos: repositories.length,
       succeeded,
       failed,
       state: failed === 0 ? "completed" : "partial",

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
-import { visibleIssueWhere } from "@/lib/domain/app-visibility";
+import { approvalIssueWhere } from "@/lib/domain/app-visibility";
 import { PriorityTag } from "@/components/badges";
 import { ApprovalControls } from "@/components/ApprovalControls";
 
@@ -9,9 +9,16 @@ export const dynamic = "force-dynamic";
 
 export default async function ApprovalsPage() {
   const open = await prisma.issueMirror.findMany({
-    where: { ...visibleIssueWhere, state: "OPEN" },
+    where: { ...approvalIssueWhere, state: "OPEN" },
     orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
-    take: 500,
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      repoFullName: true,
+      priority: true,
+      labels: true,
+    },
   });
 
   const planning = open.filter((i) => hasApproval(asStringArray(i.labels), "planning"));

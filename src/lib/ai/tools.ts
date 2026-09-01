@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
+import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 import type { IncidentStatus, Lifecycle, Priority, ReleaseStatus } from "@prisma/client";
 
 // 채팅 비서가 사실 기반으로 답하도록 호출하는 read-only 도구.
@@ -181,18 +181,13 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
         .join("\n");
     }
     case "list_approvals": {
-      const open = await prisma.issueMirror.findMany({
-        where: { ...visibleIssueWhere, state: "OPEN" },
-        orderBy: [{ priority: "asc" }],
-        take: 200,
+      const pending = await prisma.issueMirror.findMany({
+        where: { ...approvalIssueWhere, state: "OPEN" },
+        orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+        take: 20,
       });
-      const pend = open.filter((i) => {
-        const l = asStringArray(i.labels);
-        return hasApproval(l, "planning") || hasApproval(l, "release");
-      });
-      if (pend.length === 0) return "승인 대기 없음";
-      return pend
-        .slice(0, 20)
+      if (pending.length === 0) return "승인 대기 없음";
+      return pending
         .map((i) => {
           const gate = hasApproval(asStringArray(i.labels), "release") ? "release" : "planning";
           return `- ${repoShort(i.repoFullName)} #${i.number} (${gate}) ${i.title}`;

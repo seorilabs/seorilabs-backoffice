@@ -4,7 +4,12 @@ import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { visibleAppWhere, visibleIssueWhere, visibleReleaseWhere } from "@/lib/domain/app-visibility";
+import {
+  approvalIssueWhere,
+  visibleAppWhere,
+  visibleIssueWhere,
+  visibleReleaseWhere,
+} from "@/lib/domain/app-visibility";
 import { geminiComplete } from "@/lib/ai/gemini";
 import { getOrgDefaultBranches } from "@/lib/github/read";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -59,13 +64,20 @@ export interface DailyDigestResult {
 
 export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   const window = previousKstDayWindow(now);
-  const [apps, openIssues, mergedCandidates, releases, defaultBranches] = await Promise.all([
+  const [apps, openIssues, approvalCount, approvalIssues, mergedCandidates, releases, defaultBranches] = await Promise.all([
     prisma.app.findMany({ where: visibleAppWhere, select: { currentStage: true } }),
     prisma.issueMirror.findMany({
       where: { ...visibleIssueWhere, state: "OPEN" },
       orderBy: { priority: "asc" },
       take: 300,
       select: { id: true, number: true, title: true, repoFullName: true, priority: true, labels: true },
+    }),
+    prisma.issueMirror.count({ where: { ...approvalIssueWhere, state: "OPEN" } }),
+    prisma.issueMirror.findMany({
+      where: { ...approvalIssueWhere, state: "OPEN" },
+      orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+      take: 5,
+      select: { id: true, number: true, title: true, repoFullName: true, labels: true },
     }),
     prisma.pullRequestMirror.findMany({
       where: { app: { is: visibleAppWhere }, state: "MERGED", mergedAt: { gte: window.start, lt: window.end } },
@@ -77,13 +89,12 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     getOrgDefaultBranches(),
   ]);
   const { mergedPrs, unresolvedCount } = filterDefaultBranchMerges(mergedCandidates, defaultBranches);
-  const pending = openIssues.filter((issue) => hasApproval(asStringArray(issue.labels), "planning") || hasApproval(asStringArray(issue.labels), "release"));
   const p1 = openIssues.filter((issue) => issue.priority === "P1");
   const stageCounts: Record<string, number> = {};
   for (const app of apps) stageCounts[app.currentStage] = (stageCounts[app.currentStage] ?? 0) + 1;
   const lines = [
     "**☀️ 오늘의 공장 다이제스트**",
-    `📋 승인 대기 **${pending.length}** · 🔥 열린 P1 **${p1.length}**`,
+    `📋 승인 대기 **${approvalCount}** · 🔥 열린 P1 **${p1.length}**`,
     `📦 전일 default branch 병합 **${mergedPrs.length}** · 🚀 릴리스 **${releases}**`,
     `📊 ${Object.entries(stageCounts).map(([stage, count]) => `${STAGE_KO[stage as Lifecycle]} ${count}`).join(" · ") || "앱 없음"}`,
     "",
@@ -96,7 +107,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     try {
       const summary = await geminiComplete({
         system: "제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 추정하지 않는다.",
-        prompt: [`승인대기 ${pending.length}건`, `P1 ${p1.length}건`, ...mergedPrPromptLines(mergedPrs)].join("\n"),
+        prompt: [`승인대기 ${approvalCount}건`, `P1 ${p1.length}건`, ...mergedPrPromptLines(mergedPrs)].join("\n"),
         maxTokens: 240,
         usage: { path: "proactive" },
       });
@@ -106,7 +117,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
       // 확정 목록은 AI 실패와 무관하게 큐에 넣는다.
     }
   }
-  const components = pending.slice(0, 5).map((issue) => {
+  const components = approvalIssues.map((issue) => {
     const gate = hasApproval(asStringArray(issue.labels), "release") ? "release" : "planning";
     return { type: 1, components: [{ type: 2, style: 3, label: `${issue.repoFullName.replace("seorilabs/", "")} #${issue.number} 승인`.slice(0, 80), custom_id: `approval:${gate}:${issue.id}` }] };
   });
