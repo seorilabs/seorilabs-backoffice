@@ -12,11 +12,13 @@ import {
 import { getDesiredStateBackfillSummary } from "@/lib/control-plane/desired-state-backfill";
 import { getRepositoryClassificationQueue } from "@/lib/control-plane/repository-classification-decision";
 import { RepositoryClassificationQueue } from "@/components/RepositoryClassificationQueue";
+import { getFleetLegacyResolutionQueue } from "@/lib/control-plane/fleet-legacy-resolution-queue";
+import { FleetLegacyResolutionQueue } from "@/components/fleet/FleetLegacyResolutionQueue";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue] =
+  const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue, legacyResolutionQueue] =
     await Promise.all([
       prisma.app.count({ where: visibleAppWhere }),
       prisma.issueMirror.count({ where: visibleIssueWhere }),
@@ -26,6 +28,7 @@ export default async function SettingsPage() {
       prisma.user.findMany({ where: { allowlisted: true }, select: { login: true } }),
       getDesiredStateBackfillSummary(),
       getRepositoryClassificationQueue(),
+      getFleetLegacyResolutionQueue(),
     ]);
 
   return (
@@ -70,6 +73,10 @@ export default async function SettingsPage() {
           <p className="mt-3 text-xs text-neutral-500">
             저장 시 source를 추측하지 않고 최신 provider identity와 exact HEAD를 다시 읽습니다. fork는 제품 앱으로 승격할 수 없습니다.
           </p>
+        </Card>
+
+        <Card title={`Legacy 중앙 대체 검토 ${legacyResolutionQueue.length}건`}>
+          <FleetLegacyResolutionQueue items={legacyResolutionQueue} />
         </Card>
 
         <Card title="Allowlist">
