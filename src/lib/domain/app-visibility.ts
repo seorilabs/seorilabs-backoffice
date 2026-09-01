@@ -20,10 +20,18 @@ export const visibleIssueWhere = {
 
 // 승인 원장은 제품 앱뿐 아니라 조직 인프라 저장소의 사람 gate도 보여야 한다.
 // appId가 없는 이슈는 RepositoryRegistration으로 관리되는 INFRA_REPO일 수 있으므로
-// 승인 화면·AI·Discord에서 숨기지 않는다. 앱에 연결된 이슈는 기존과 동일하게
-// DEPRECATED 앱을 제외한다.
+// 숨기지 않는다. 승인 라벨도 DB에서 먼저 제한해 조회 상한 전에 다른 OPEN 이슈가
+// 승인 항목을 밀어내지 못하게 한다.
 export const approvalIssueWhere = {
-  OR: [visibleIssueWhere, { appId: null }],
+  AND: [
+    { OR: [visibleIssueWhere, { appId: null }] },
+    {
+      OR: [
+        { labels: { array_contains: "approval:planning" } },
+        { labels: { array_contains: "approval:release" } },
+      ],
+    },
+  ],
 } satisfies Prisma.IssueMirrorWhereInput;
 
 export const visiblePrWhere = {

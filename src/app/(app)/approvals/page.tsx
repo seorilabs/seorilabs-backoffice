@@ -11,7 +11,14 @@ export default async function ApprovalsPage() {
   const open = await prisma.issueMirror.findMany({
     where: { ...approvalIssueWhere, state: "OPEN" },
     orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
-    take: 500,
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      repoFullName: true,
+      priority: true,
+      labels: true,
+    },
   });
 
   const planning = open.filter((i) => hasApproval(asStringArray(i.labels), "planning"));

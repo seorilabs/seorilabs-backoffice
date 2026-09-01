@@ -20,11 +20,21 @@ test("visibleAppWhere 는 비활성 앱을 제외한다", () => {
   assert.deepEqual(visibleAppWhere, { status: { not: "DEPRECATED" } });
 });
 
-test("approvalIssueWhere 는 visible 앱과 appId 없는 조직 인프라 이슈를 함께 포함한다", () => {
+test("approvalIssueWhere 는 승인 라벨이 있는 visible 앱과 appId 없는 조직 이슈만 포함한다", () => {
   assert.deepEqual(approvalIssueWhere, {
-    OR: [
-      { app: { is: { status: { not: "DEPRECATED" } } } },
-      { appId: null },
+    AND: [
+      {
+        OR: [
+          { app: { is: { status: { not: "DEPRECATED" } } } },
+          { appId: null },
+        ],
+      },
+      {
+        OR: [
+          { labels: { array_contains: "approval:planning" } },
+          { labels: { array_contains: "approval:release" } },
+        ],
+      },
     ],
   });
 });

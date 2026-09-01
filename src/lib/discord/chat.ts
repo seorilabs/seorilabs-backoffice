@@ -1,8 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
-import { asStringArray } from "@/lib/format";
-import { hasApproval } from "@/lib/domain/labels";
 import { GeminiNotConfiguredError, type ChatMessage } from "@/lib/ai/gemini";
 import { runChatAgent } from "@/lib/ai/chat-agent";
 
@@ -16,18 +14,10 @@ export async function factorySnapshot(): Promise<string> {
   const stageLine = Object.entries(byStage)
     .map(([stage, count]) => `${STAGE_KO[stage as keyof typeof STAGE_KO] ?? stage} ${count}`)
     .join(", ");
-  const [p1, approvalIssues] = await Promise.all([
+  const [p1, approvals] = await Promise.all([
     prisma.issueMirror.count({ where: { ...visibleIssueWhere, state: "OPEN", priority: "P1" } }),
-    prisma.issueMirror.findMany({
-      where: { ...approvalIssueWhere, state: "OPEN" },
-      select: { labels: true },
-      take: 500,
-    }),
+    prisma.issueMirror.count({ where: { ...approvalIssueWhere, state: "OPEN" } }),
   ]);
-  const approvals = approvalIssues.filter((issue) => {
-    const labels = asStringArray(issue.labels);
-    return hasApproval(labels, "planning") || hasApproval(labels, "release");
-  }).length;
   return `앱/게임 총 ${apps.length}개 (단계: ${stageLine || "없음"})\n열린 P1 ${p1}건, 승인 대기 ${approvals}건`;
 }
 

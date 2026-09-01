@@ -50,18 +50,17 @@ export async function findVisibleApp(slug: string) {
 }
 
 export async function approvalsQuery(): Promise<DiscordQueryResult> {
-  const open = await prisma.issueMirror.findMany({
-    where: { ...approvalIssueWhere, state: "OPEN" },
-    orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
-    take: 500,
-  });
-  const pending = open.filter((issue) => {
-    const labels = asStringArray(issue.labels);
-    return hasApproval(labels, "planning") || hasApproval(labels, "release");
-  });
-  if (pending.length === 0) return { content: "✅ 승인 대기 없음" };
+  const where = { ...approvalIssueWhere, state: "OPEN" } as const;
+  const [pendingCount, visible] = await Promise.all([
+    prisma.issueMirror.count({ where }),
+    prisma.issueMirror.findMany({
+      where,
+      orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
+      take: 5,
+    }),
+  ]);
+  if (pendingCount === 0) return { content: "✅ 승인 대기 없음" };
 
-  const visible = pending.slice(0, 5);
   const components: DiscordActionRow[] = visible.map((issue) => {
     const gate = hasApproval(asStringArray(issue.labels), "release") ? "release" : "planning";
     return {
@@ -78,8 +77,8 @@ export async function approvalsQuery(): Promise<DiscordQueryResult> {
     const gate = hasApproval(asStringArray(issue.labels), "release") ? "출시" : "기획";
     return `• **${issue.repoFullName.replace("seorilabs/", "")} #${issue.number}** · ${gate}\n  ${issue.title}`;
   });
-  if (pending.length > visible.length) lines.push(`…외 ${pending.length - visible.length}건은 웹 백오피스에서 확인`);
-  return { content: clip(`**승인 대기 ${pending.length}건**\n${lines.join("\n")}`), components };
+  if (pendingCount > visible.length) lines.push(`…외 ${pendingCount - visible.length}건은 웹 백오피스에서 확인`);
+  return { content: clip(`**승인 대기 ${pendingCount}건**\n${lines.join("\n")}`), components };
 }
 
 export async function p1Query(): Promise<DiscordQueryResult> {
