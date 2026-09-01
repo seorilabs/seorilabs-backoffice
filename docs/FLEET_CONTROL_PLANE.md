@@ -777,6 +777,14 @@ DRAFT를 만든 뒤 같은 사람 동작 안에서 signed ACTIVE snapshot으로 
 CREATE/ACTIVATE 단계와 revision을 명시하며, 마켓 심사 제출·승인·공개 배포는 수행하지 않는다.
 credential 후보가 포함된 초안은 저장 전에 거부한다.
 
+전체 설정 비교는 선언된 7개 원본 모두가 exact SHA에서 `ABSENT/PATH_NOT_FOUND`이고 미해결 사유가
+`NO_REPRESENTABLE_SOURCE` 하나뿐일 때만 `NO_LEGACY_DESIRED_STATE`를 자동 기록한다. 기존 설정 검토
+서비스의 validator, ACTIVE 설정 revision CAS, 멱등 키와 append-only audit를 그대로 사용하며 등록 상태나
+source가 바뀌면 중단한다. 이어 별도 원본 관측으로 비교 결과를 다시 계산한다. 판정 저장만으로 `MATCH`를
+만들거나 이전 관측을 덮지 않는다. 같은 실행 재개는 판정과 재관측을 재사용하고, 이후 설정 버전이 바뀌면
+새 설정에 결합된 판정을 기록한다. 접근 거부·읽기 오류·정책·신고·마켓·자격증명 관련 검토는 자동 승인하지
+않으며 두 번 연속 전체 비교, 빌드와 복구 검증을 요구하는 삭제 조건도 완화하지 않는다.
+
 ## 이관 경계
 
 이 migration은 additive다. Play/App Store/AppsInToss JSON, `market-launch-state.json`,

@@ -552,16 +552,14 @@ async function replayForKey(
   return replay;
 }
 
-function publicImport<T extends {
-  requestHash: string;
-  sources: Array<{ repoId: bigint | null }>;
-  parityObservations: unknown[];
-}>(value: T) {
-  const { requestHash, ...safeValue } = value;
+function publicImport(value: Prisma.LegacyConfigImportGetPayload<{
+  select: ReturnType<typeof importSelect>;
+}>) {
+  const { requestHash, sources, ...safeValue } = value;
   void requestHash;
   return {
     ...safeValue,
-    sources: value.sources.map((source) => ({
+    sources: sources.map((source) => ({
       ...source,
       repoId: source.repoId?.toString() ?? null,
     })),

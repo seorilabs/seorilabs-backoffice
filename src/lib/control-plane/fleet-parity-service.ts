@@ -9,6 +9,7 @@ import {
   type FleetParityVectorItem,
 } from "@/lib/control-plane/fleet-parity";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
+import { recordFleetParityImport } from "@/lib/control-plane/fleet-parity-import";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
@@ -31,7 +32,7 @@ export type FleetParityServiceDependencies = {
 
 const defaultDependencies: FleetParityServiceDependencies = {
   client: prisma,
-  recordImport: (input) => recordLegacyShadowImport(input),
+  recordImport: (input) => recordFleetParityImport(input),
   now: () => new Date(),
 };
 
