@@ -181,4 +181,6 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
   assert.match(action, /stage: "ACTIVATE"/);
   assert.doesNotMatch(action, /provider.*submit|public.*release/i);
   assert.doesNotMatch(component, /type="password"|secretValue|privateKey|accessToken/i);
+  assert.match(component, /selected\.size >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
+  assert.match(component, /selectedItems\.length >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
 });

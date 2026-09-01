@@ -82,12 +82,20 @@ export function FleetComplianceDraftBatch({
 
   function toggle(item: FleetComplianceDraftQueueItem) {
     if (!item.eligible && !selected.has(item.appId)) return;
+    if (
+      !selected.has(item.appId)
+      && selected.size >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT
+    ) {
+      setError(`한 번에 최대 ${FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT}개 앱만 선택할 수 있습니다.`);
+      return;
+    }
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(item.appId)) next.delete(item.appId);
       else next.add(item.appId);
       return next;
     });
+    setError("");
     setRequestIds((current) => (
       current[item.appId]
         ? current
@@ -251,7 +259,9 @@ export function FleetComplianceDraftBatch({
                     className="mt-0.5"
                     type="checkbox"
                     checked={isSelected}
-                    disabled={pending || (!item.eligible && !isSelected)}
+                    disabled={pending || (!isSelected && (
+                      !item.eligible || selectedItems.length >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT
+                    ))}
                     onChange={() => toggle(item)}
                   />
                   <span className="min-w-0">
