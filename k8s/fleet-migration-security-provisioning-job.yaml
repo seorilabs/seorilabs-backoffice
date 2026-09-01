@@ -12,6 +12,7 @@ metadata:
     seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
   annotations:
     seorilabs.dev/migration: "20260830060000_fleet_migration_bootstrap_shadow"
+    seorilabs.dev/legacy-config-resolution-migration: "20260901010000_legacy_config_resolution_ledger"
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 300
@@ -223,6 +224,35 @@ spec:
                   'control_plane_fleet_migration_collection_completion',
                   'control_plane_fleet_migration_authoritative_issuance')")"
               test "$installed_fleet_triggers" = "8"
+
+              legacy_resolution_total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution'")"
+              legacy_resolution_exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice' AND ACTION_TIMING='BEFORE' AND (
+                  (TRIGGER_NAME='control_plane_legacy_config_resolution_no_update'
+                    AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution'
+                    AND EVENT_MANIPULATION='UPDATE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only'\") OR
+                  (TRIGGER_NAME='control_plane_legacy_config_resolution_no_delete'
+                    AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution'
+                    AND EVENT_MANIPULATION='DELETE'
+                    AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT))=\"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only'\"))")"
+              if [ "$legacy_resolution_total:$legacy_resolution_exact" = "0:0" ]; then
+                cat > "$trigger_sql" <<'SQL'
+              USE backoffice;
+              CREATE TRIGGER `control_plane_legacy_config_resolution_no_update` BEFORE UPDATE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
+              CREATE TRIGGER `control_plane_legacy_config_resolution_no_delete` BEFORE DELETE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
+              SQL
+                mysql --defaults-extra-file="$root_cnf" --connect-timeout=5 < "$trigger_sql"
+                : > "$trigger_sql"
+              else
+                test "$legacy_resolution_total:$legacy_resolution_exact" = "2:2"
+              fi
+              installed_legacy_resolution_triggers="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA='backoffice'
+                  AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution'")"
+              test "$installed_legacy_resolution_triggers" = "2"
 
               exact_grants() {
                 user="$1"; expected_select="$2"; expected_insert="$3"

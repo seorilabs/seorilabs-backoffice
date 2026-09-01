@@ -898,6 +898,112 @@ function collectDiffs(left: JsonValue, right: JsonValue, path: string, diffs: Le
   if (left !== right) diffs.push({ path, code: "VALUE_MISMATCH" });
 }
 
+/**
+ * 사람이 중앙 원장으로 분리했다고 승인한 값은 legacy payload에 남지 않는다.
+ * 따라서 reviewable transform은 legacy가 실제로 구조화한 값만 중앙 상태에 그대로
+ * 존재하는지 확인한다. 중앙에만 있는 locale, asset, support 값은 승인된 중앙 원장
+ * 소유이므로 비교 대상에서 제외하지만 legacy 쪽 값을 바꾸거나 빼는 것은 허용하지 않는다.
+ */
+function collectResolvedSubsetDiffs(
+  left: JsonValue,
+  right: JsonValue,
+  path: string,
+  diffs: LegacyParityDiff[],
+): void {
+  const leftType = valueType(left);
+  const rightType = valueType(right);
+  if (leftType !== rightType) {
+    diffs.push({ path, code: "TYPE_MISMATCH" });
+    return;
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length > right.length) {
+      diffs.push({ path, code: "ARRAY_LENGTH_MISMATCH" });
+      return;
+    }
+    const used = new Set<number>();
+    for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+      let matched = false;
+      for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+        if (used.has(rightIndex)) continue;
+        const candidateDiffs: LegacyParityDiff[] = [];
+        collectResolvedSubsetDiffs(left[leftIndex], right[rightIndex], `${path}[${leftIndex}]`, candidateDiffs);
+        if (candidateDiffs.length === 0) {
+          used.add(rightIndex);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) diffs.push({ path: `${path}[${leftIndex}]`, code: "VALUE_MISMATCH" });
+    }
+    return;
+  }
+  if (isRecord(left) && isRecord(right)) {
+    for (const key of Object.keys(left).sort(compareText)) {
+      const nestedPath = childPath(path, key);
+      if (!(key in right)) diffs.push({ path: nestedPath, code: "MISSING_IN_CENTRAL" });
+      else collectResolvedSubsetDiffs(left[key] as JsonValue, right[key] as JsonValue, nestedPath, diffs);
+    }
+    return;
+  }
+  if (left !== right) diffs.push({ path, code: "VALUE_MISMATCH" });
+}
+
+export function compareResolvedLegacySubset(
+  legacy: LegacyTransformResult,
+  centralPayload: unknown,
+): LegacyShadowParity {
+  const central = configRevisionPayloadSchema.safeParse(centralPayload);
+  const canonicalCentral = central.success
+    ? canonicalPayload({
+      markets: new Map(central.data.markets.map((market) => [market.market, market])),
+      localizations: new Map((central.data.localizations ?? []).map((item) => [item.locale, item])),
+      assets: central.data.assets ?? [],
+      build: central.data.build ?? {},
+      support: central.data.support ?? {},
+    })
+    : null;
+  const centralDigest = canonicalCentral
+    ? sha256(canonicalJson(canonicalCentral as JsonValue))
+    : null;
+  if (legacy.status !== "DRAFTABLE_WITH_INPUT" || legacy.coverage.status !== "COMPLETE") {
+    return {
+      status: "NEEDS_INPUT",
+      transformVersion: legacy.transformVersion,
+      inputDigest: legacy.inputDigest,
+      coverage: legacy.coverage,
+      legacyDigest: legacy.status === "NEEDS_INPUT" ? null : legacy.payloadDigest,
+      centralDigest,
+      diffs: [{
+        path: "$",
+        code: legacy.coverage.status === "PARTIAL" ? "PARTIAL_COVERAGE" : "TRANSFORM_NEEDS_INPUT",
+      }],
+    };
+  }
+  if (!canonicalCentral) {
+    return {
+      status: "NEEDS_INPUT",
+      transformVersion: legacy.transformVersion,
+      inputDigest: legacy.inputDigest,
+      coverage: legacy.coverage,
+      legacyDigest: legacy.payloadDigest,
+      centralDigest: null,
+      diffs: [{ path: "$", code: "TARGET_INVALID" }],
+    };
+  }
+  const diffs: LegacyParityDiff[] = [];
+  collectResolvedSubsetDiffs(legacy.payload as JsonValue, canonicalCentral as JsonValue, "$", diffs);
+  return {
+    status: diffs.length === 0 ? "MATCH" : "MISMATCH",
+    transformVersion: legacy.transformVersion,
+    inputDigest: legacy.inputDigest,
+    coverage: legacy.coverage,
+    legacyDigest: legacy.payloadDigest,
+    centralDigest,
+    diffs,
+  };
+}
+
 export function compareLegacyShadow(
   legacy: LegacyTransformResult,
   centralPayload: unknown,

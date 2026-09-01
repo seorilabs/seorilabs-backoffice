@@ -19,8 +19,7 @@ function normalizePrivateKey(raw: string): string {
   return raw.includes("\\n") ? raw.replace(/\\n/g, "\n") : raw;
 }
 
-function getApp(): App {
-  if (appInstance) return appInstance;
+function createApp(requestFetch?: typeof globalThis.fetch): App {
   const appId = process.env.GITHUB_APP_ID;
   const privateKeyPath = process.env.GITHUB_PRIVATE_KEY_FILE?.trim();
   const privateKeyRaw = process.env.GITHUB_PRIVATE_KEY
@@ -28,7 +27,19 @@ function getApp(): App {
   if (!appId || !privateKeyRaw) {
     throw new Error("GITHUB_APP_ID / GITHUB_PRIVATE_KEY 가 설정되지 않았습니다.");
   }
-  appInstance = new App({ appId, privateKey: normalizePrivateKey(privateKeyRaw) });
+  const BoundOctokit = requestFetch
+    ? Octokit.defaults({ request: { fetch: requestFetch } })
+    : Octokit;
+  return new App({
+    appId,
+    privateKey: normalizePrivateKey(privateKeyRaw),
+    Octokit: BoundOctokit,
+  });
+}
+
+function getApp(): App {
+  if (appInstance) return appInstance;
+  appInstance = createApp();
   return appInstance;
 }
 
@@ -196,13 +207,22 @@ export async function readFleetGitHubAppPublicSource(): Promise<FleetGitHubAppPu
  * cohort와 permission의 installation token만 만든다. 일반 operation token은 callback
  * 경계에서 즉시 폐기하고 migration handoff token은 signed 실행에 결합되어 terminal에서 폐기된다.
  */
-export async function getFleetScopedGithubTokenIssuer(): Promise<{
+export async function getFleetScopedGithubTokenIssuer(options: {
+  requestFetch?: typeof globalThis.fetch;
+} = {}): Promise<{
   installationId: string;
   issuer: FleetScopedGithubTokenIssuer<Octokit>;
 }> {
-  const app = getApp();
-  const publicState = await getInstallationPublicState();
+  const app = options.requestFetch ? createApp(options.requestFetch) : getApp();
   const org = process.env.GITHUB_ORG ?? "seorilabs";
+  const publicState = options.requestFetch
+    ? normalizeGitHubInstallationPublicState(
+      (await app.octokit.rest.apps.getOrgInstallation({ org })).data,
+    )
+    : await getInstallationPublicState();
+  const BoundOctokit = options.requestFetch
+    ? Octokit.defaults({ request: { fetch: options.requestFetch } })
+    : Octokit;
   if (
     org !== "seorilabs"
     || publicState.accountLogin !== org
@@ -232,10 +252,10 @@ export async function getFleetScopedGithubTokenIssuer(): Promise<{
         };
       },
       createClient(token) {
-        return new Octokit({ auth: token });
+        return new BoundOctokit({ auth: token });
       },
       async revokeAccessToken(token) {
-        const client = new Octokit({ auth: token });
+        const client = new BoundOctokit({ auth: token });
         await client.request("DELETE /installation/token");
       },
     },

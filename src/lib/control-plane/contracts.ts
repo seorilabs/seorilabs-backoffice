@@ -1200,6 +1200,111 @@ export const legacyShadowImportRequestSchema = z.object({
 
 export type LegacyShadowImportRequest = z.infer<typeof legacyShadowImportRequestSchema>;
 
+export const legacyConfigResolutionReasonCodeSchema = z.enum([
+  "UNSUPPORTED_FIELD",
+  "SECRET_LIKE_KEY",
+  "LEGAL_COMPLIANCE_AMBIGUITY",
+  "PROVIDER_STATE_AMBIGUITY",
+  "LOCALIZATION_LOCALE_MISSING",
+  "FREE_TEXT_REQUIRES_INPUT",
+  "CONFLICTING_DESIRED_STATE",
+  "NO_REPRESENTABLE_SOURCE",
+]);
+
+export const legacyConfigResolutionTargetSchema = z.enum([
+  "CONFIG_REVISION",
+  "BUILD_TARGET",
+  "MARKET_LOCALIZATION",
+  "COMPLIANCE_PROFILE",
+  "PROVIDER_OBSERVATION",
+  "STORE_ASSET",
+  "EXTERNAL_BINDING",
+  "PLATFORM_FLEET_BINDING",
+  "CREDENTIAL_BINDING",
+  "AUTOMATION_DEFINITION",
+  "IGNORED_NON_OPERATIONAL",
+]);
+
+export const legacyConfigResolutionRepoIdSchema = z.coerce
+  .bigint()
+  .positive()
+  .max(BigInt(Number.MAX_SAFE_INTEGER));
+
+export const legacyConfigResolutionRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  repoId: legacyConfigResolutionRepoIdSchema,
+  legacyImportId: z.string().min(1).max(191),
+  expectedResolutionRevision: z.number().int().nonnegative(),
+  expectedActiveConfigRevision: z.number().int().positive(),
+  dispositions: z.array(z.object({
+    reasonCode: legacyConfigResolutionReasonCodeSchema,
+    targets: z.array(legacyConfigResolutionTargetSchema).min(1).max(11),
+  }).strict()).min(1).max(20),
+  justification: z.enum([
+    "CENTRAL_STATE_REVIEWED",
+    "IGNORED_NON_OPERATIONAL_REVIEWED",
+    "NO_LEGACY_DESIRED_STATE",
+  ]),
+}).strict().superRefine((value, context) => {
+  const reasonCodes = value.dispositions.map((item) => item.reasonCode);
+  if (new Set(reasonCodes).size !== reasonCodes.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["dispositions"],
+      message: "reason code마다 disposition은 하나만 지정할 수 있습니다.",
+    });
+  }
+  value.dispositions.forEach((disposition, index) => {
+    if (new Set(disposition.targets).size !== disposition.targets.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dispositions", index, "targets"],
+        message: "같은 중앙 target을 중복 지정할 수 없습니다.",
+      });
+    }
+    if (
+      disposition.targets.includes("IGNORED_NON_OPERATIONAL")
+      && disposition.targets.length !== 1
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dispositions", index, "targets"],
+        message: "비운영 값 무시는 중앙 모델 연결과 동시에 지정할 수 없습니다.",
+      });
+    }
+  });
+  const ignored = value.dispositions.some((disposition) => (
+    disposition.targets.includes("IGNORED_NON_OPERATIONAL")
+  ));
+  const noLegacyDesiredState = value.dispositions.length === 1
+    && value.dispositions[0].reasonCode === "NO_REPRESENTABLE_SOURCE"
+    && value.dispositions[0].targets.length === 1
+    && value.dispositions[0].targets[0] === "IGNORED_NON_OPERATIONAL";
+  if (value.justification === "NO_LEGACY_DESIRED_STATE" && !noLegacyDesiredState) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["justification"],
+      message: "legacy desired state 부재 확인은 NO_REPRESENTABLE_SOURCE를 비운영 값으로만 무시할 때 허용됩니다.",
+    });
+  }
+  if (value.justification === "CENTRAL_STATE_REVIEWED" && ignored) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["justification"],
+      message: "비운영 값 무시에는 전용 사람 검토 사유가 필요합니다.",
+    });
+  }
+  if (value.justification === "IGNORED_NON_OPERATIONAL_REVIEWED" && !ignored) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["justification"],
+      message: "비운영 값 무시 사유는 IGNORED_NON_OPERATIONAL target이 있을 때만 허용됩니다.",
+    });
+  }
+});
+
+export type LegacyConfigResolutionRequest = z.infer<typeof legacyConfigResolutionRequestSchema>;
+
 export const configActivationSchema = z.object({
   repoId: z.coerce.bigint().positive(),
   revision: z.number().int().positive(),

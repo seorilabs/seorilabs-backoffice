@@ -1,6 +1,6 @@
 import { createPrivateKey, randomUUID, type KeyObject } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createServer as createHttpsServer, request as httpsRequest, type RequestOptions } from "node:https";
+import { createServer as createHttpsServer } from "node:https";
 import type { TLSSocket } from "node:tls";
 import { App, Octokit } from "octokit";
 import { z } from "zod";
@@ -28,6 +28,11 @@ import {
 } from "@/lib/control-plane/github-operation-token";
 import { signAgentAdapterAttestation } from "@/lib/control-plane/agent-adapter-attestation";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import {
+  createExactMtlsProxyClient,
+  exactHostSet,
+  readBoundedResponseBody,
+} from "@/lib/control-plane/mtls-egress-proxy";
 import {
   agentKindForWorkerPrincipal,
   assertPublicAgentResponse,
@@ -189,63 +194,49 @@ function backofficeRequest(input: {
   principalId: string;
   bearer: string;
   requestId: string;
-  ca: Buffer;
+  fetchImpl: typeof globalThis.fetch;
   attestation?: string;
   workerRuntimeBindingDigest?: string;
 }): Promise<unknown> {
-  return new Promise((resolve, reject) => {
+  return (async () => {
     const encoded = Buffer.from(JSON.stringify(input.body), "utf8");
-    const options: RequestOptions = {
-      protocol: "https:",
-      hostname: backofficeOrigin.hostname,
-      port: backofficeOrigin.port ? Number(backofficeOrigin.port) : 443,
-      method: "POST",
-      path: input.path,
-      ca: input.ca,
-      minVersion: "TLSv1.3",
-      maxVersion: "TLSv1.3",
-      servername: backofficeOrigin.hostname,
-      headers: {
-        "content-type": "application/json",
-        "content-length": String(encoded.length),
-        "authorization": `Bearer ${input.bearer}`,
-        "x-seori-principal": input.principalId,
-        "idempotency-key": input.requestId,
-        ...(input.workerRuntimeBindingDigest
-          ? { "x-seori-worker-runtime-binding": input.workerRuntimeBindingDigest }
-          : {}),
-        ...(input.attestation ? { "x-seori-adapter-attestation": input.attestation } : {}),
-      },
-      timeout: 15_000,
-    };
-    const outgoing = httpsRequest(options, (incoming) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      incoming.on("data", (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > RESPONSE_LIMIT) outgoing.destroy(new Error("SEORI_BACKOFFICE_RESPONSE_TOO_LARGE"));
-        else chunks.push(Buffer.from(chunk));
+    const signal = AbortSignal.timeout(15_000);
+    let response: Response;
+    try {
+      response = await input.fetchImpl(new URL(input.path, backofficeOrigin), {
+        method: "POST",
+        body: encoded,
+        signal,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(encoded.length),
+          "authorization": `Bearer ${input.bearer}`,
+          "x-seori-principal": input.principalId,
+          "idempotency-key": input.requestId,
+          ...(input.workerRuntimeBindingDigest
+            ? { "x-seori-worker-runtime-binding": input.workerRuntimeBindingDigest }
+            : {}),
+          ...(input.attestation ? { "x-seori-adapter-attestation": input.attestation } : {}),
+        },
       });
-      incoming.on("end", () => {
-        const payload = Buffer.concat(chunks);
-        try {
-          if ((incoming.statusCode ?? 500) < 200 || (incoming.statusCode ?? 500) >= 300) {
-            reject(new Error(`SEORI_BACKOFFICE_REJECTED_${incoming.statusCode ?? 500}`));
-            return;
-          }
-          resolve(assertPublicAgentResponse(JSON.parse(payload.toString("utf8"))));
-        } catch (error) {
-          reject(error);
-        } finally {
-          payload.fill(0);
-          chunks.forEach((entry) => entry.fill(0));
-        }
-      });
-    });
-    outgoing.once("timeout", () => outgoing.destroy(new Error("SEORI_BACKOFFICE_TIMEOUT")));
-    outgoing.once("error", reject);
-    outgoing.end(encoded, () => encoded.fill(0));
-  });
+    } finally {
+      encoded.fill(0);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`SEORI_BACKOFFICE_REJECTED_${response.status}`);
+    }
+    const payload = await readBoundedResponseBody(
+      response,
+      RESPONSE_LIMIT,
+      "SEORI_BACKOFFICE_RESPONSE_TOO_LARGE",
+    );
+    try {
+      return assertPublicAgentResponse(JSON.parse(payload.toString("utf8")));
+    } finally {
+      payload.fill(0);
+    }
+  })();
 }
 
 class OctokitGithubReadyPrPort implements GithubReadyPrPort {
@@ -420,12 +411,14 @@ async function withGithubPort<Result>(input: {
   privateKey: string;
   repoFullName: string;
   repoId: string;
+  fetchImpl: typeof globalThis.fetch;
   execute: (github: GithubReadyPrPort) => Promise<Result>;
 }): Promise<Result> {
   const { privateKey, repoFullName, repoId } = input;
   const [owner, repo] = repoFullName.split("/");
   if (!owner || !repo) throw new Error("SEORI_GITHUB_REPOSITORY_INVALID");
-  const app = new App({ appId: githubAppId, privateKey });
+  const ProxyOctokit = Octokit.defaults({ request: { fetch: input.fetchImpl } });
+  const app = new App({ appId: githubAppId, privateKey, Octokit: ProxyOctokit });
   const installation = await app.octokit.rest.apps.getRepoInstallation({ owner, repo });
   const issuer: ScopedGithubTokenIssuer<Octokit> = {
     createAccessToken: async ({ installationId, repositoryIds, permissions }) => {
@@ -443,7 +436,7 @@ async function withGithubPort<Result>(input: {
         })),
       };
     },
-    createClient: (token) => new Octokit({ auth: token }),
+    createClient: (token) => new ProxyOctokit({ auth: token }),
     getRepository: async (client, fullName) => {
       const [boundOwner, boundRepo] = fullName.split("/");
       if (!boundOwner || !boundRepo) throw new Error("SEORI_GITHUB_REPOSITORY_INVALID");
@@ -451,7 +444,7 @@ async function withGithubPort<Result>(input: {
       return { id: repository.data.id, fullName: repository.data.full_name };
     },
     revokeAccessToken: async (token) => {
-      await new Octokit({ auth: token }).rest.apps.revokeInstallationAccessToken();
+      await new ProxyOctokit({ auth: token }).rest.apps.revokeInstallationAccessToken();
     },
   };
   return withScopedGithubReadyPrClient({
@@ -465,7 +458,10 @@ async function withGithubPort<Result>(input: {
   });
 }
 
-function createMutationControlPlane(attestationPrivateKey: KeyObject, backofficeCa: Buffer): GithubMutationControlPlane {
+function createMutationControlPlane(
+  attestationPrivateKey: KeyObject,
+  fetchImpl: typeof globalThis.fetch,
+): GithubMutationControlPlane {
   const call = async (input: { path: string; requestId: string; body: unknown }) => {
     const body = asJson(input.body);
     const issuedAt = Date.now();
@@ -490,7 +486,7 @@ function createMutationControlPlane(attestationPrivateKey: KeyObject, backoffice
       principalId: adapterPrincipalId,
       bearer,
       requestId: input.requestId,
-      ca: backofficeCa,
+      fetchImpl,
       attestation,
     }));
   };
@@ -534,7 +530,7 @@ async function proxyQueue(input: {
   operation: "CLAIM" | "HEARTBEAT" | "COMPLETE" | "FAIL" | "READBACK_REQUIRED" | "READBACK_RESOLVE";
   requestId: string;
   rawBody: unknown;
-  backofficeCa: Buffer;
+  fetchImpl: typeof globalThis.fetch;
 }): Promise<unknown> {
   const routes = {
     CLAIM: "/api/internal/agents/claim",
@@ -570,7 +566,7 @@ async function proxyQueue(input: {
     principalId: input.principal,
     bearer,
     requestId: input.requestId,
-    ca: input.backofficeCa,
+    fetchImpl: input.fetchImpl,
     workerRuntimeBindingDigest: input.workerRuntimeBindingDigest,
   }));
 }
@@ -581,6 +577,26 @@ async function main() {
     relativePath: "backoffice/ca.pem",
     allowGroupRead: true,
   });
+  const proxyBinding = {
+    root: FIXED_ROOT,
+    proxyOrigin: process.env.SEORI_EGRESS_PROXY_ORIGIN?.trim() || "",
+    proxyServerName: process.env.SEORI_EGRESS_PROXY_SERVER_NAME?.trim() || "",
+  };
+  const backofficeEgress = await createExactMtlsProxyClient({
+    ...proxyBinding,
+    allowedHosts: exactHostSet("backoffice.vzyx.xyz"),
+    targetCa: backofficeCa,
+  });
+  let githubEgress: Awaited<ReturnType<typeof createExactMtlsProxyClient>>;
+  try {
+    githubEgress = await createExactMtlsProxyClient({
+      ...proxyBinding,
+      allowedHosts: exactHostSet("api.github.com"),
+    });
+  } catch (error) {
+    await backofficeEgress.close();
+    throw error;
+  }
   const attestationKeyBytes = await readBoundSecretFile({
     root: FIXED_ROOT,
     relativePath: "adapter/attestation-private.pem",
@@ -589,7 +605,10 @@ async function main() {
   const attestationPrivateKey = createPrivateKey(attestationKeyBytes);
   attestationKeyBytes.fill(0);
   if (attestationPrivateKey.asymmetricKeyType !== "ed25519") throw new Error("SEORI_ADAPTER_ATTESTATION_KEY_INVALID");
-  const controlPlane = createMutationControlPlane(attestationPrivateKey, backofficeCa);
+  const controlPlane = createMutationControlPlane(
+    attestationPrivateKey,
+    backofficeEgress.fetch,
+  );
 
   const handle = async (
     principal: WorkerPrincipal,
@@ -625,6 +644,7 @@ async function main() {
             privateKey,
             repoId: recovery.repoId,
             repoFullName: recovery.repoFullName,
+            fetchImpl: githubEgress.fetch,
             execute: (github) => recoverGithubReadyPr({
               operationId: envelope.requestId,
               sessionId: recoveryRequest.sessionId,
@@ -650,6 +670,7 @@ async function main() {
             privateKey,
             repoId: binding.repoId,
             repoFullName: binding.repoFullName,
+            fetchImpl: githubEgress.fetch,
             execute: (github) => executeGithubReadyPr({
               operationId: envelope.requestId,
               workerPrincipalId: principal,
@@ -666,7 +687,7 @@ async function main() {
           operation: envelope.operation,
           requestId: envelope.requestId,
           rawBody: envelope.body,
-          backofficeCa,
+          fetchImpl: backofficeEgress.fetch,
         });
       respond(response, 200, { ok: true, result });
     } catch (error) {
@@ -710,12 +731,15 @@ async function main() {
     }
   });
   server.listen(port, "0.0.0.0", () => console.log(`[seori-auth-agent-runtime] ready transport=mtls port=${port}`));
-  const shutdown = () => server.close(() => {
+  const shutdown = () => server.close(() => void Promise.all([
+    backofficeEgress.close(),
+    githubEgress.close(),
+  ]).finally(() => {
     backofficeCa.fill(0);
     clientCa.fill(0);
     certificate.fill(0);
     key.fill(0);
-  });
+  }));
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }

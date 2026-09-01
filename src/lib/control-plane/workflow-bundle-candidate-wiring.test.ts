@@ -30,6 +30,9 @@ test("candidate executor는 suspended immutable worker와 별도 server gate로 
   assert.match(manifest, /workflow-bundle-candidate-backoffice/u);
   assert.match(manifest, /workflow-bundle-candidate-attestation/u);
   assert.match(manifest, /workflow-bundle-candidate-github/u);
+  assert.match(manifest, /workflow-bundle-candidate-egress-tls/u);
+  assert.match(manifest, /SEORI_EGRESS_PROXY_ORIGIN/u);
+  assert.doesNotMatch(manifest, /cidr: 0\.0\.0\.0\/0|port: 443/u);
   assert.doesNotMatch(manifest, /seori-auth-agent-(?:backoffice|attestation|github)|AGENT_TRUSTED_ADAPTER_/u);
   assert.doesNotMatch(manifest, /ghp_|github_pat_|PERSONAL_ACCESS_TOKEN|GITHUB_TOKEN/u);
   assert.match(deployment, /name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED\s+value: "false"/u);
@@ -97,6 +100,7 @@ test("candidate GitHub transport는 installation token을 callback 밖으로 반
   const scoped = source("src/lib/github/scoped-installation-client.ts");
   assert.match(transport, /withFleetScopedGithubClient/u);
   assert.match(transport, /github\.workflow-bundle-candidate\.ready-pr/u);
+  assert.match(transport, /requestFetch/u);
   assert.match(scoped, /finally[\s\S]*revokeAccessToken/u);
   assert.doesNotMatch(transport, /process\.env\.(?:GITHUB_TOKEN|GH_TOKEN)|Authorization: token/u);
 });

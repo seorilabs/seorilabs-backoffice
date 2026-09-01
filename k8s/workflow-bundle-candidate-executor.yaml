@@ -1,5 +1,5 @@
 # WorkflowBundle v5 CANDIDATE용 trusted GitHub App executor.
-# GitHub App의 contents/workflows/pull_requests write 공개 readback과 FQDN egress,
+# GitHub App의 contents/workflows/pull_requests write 공개 readback과 mTLS egress proxy,
 # Backoffice의 WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED=true가 모두 검증되기
 # 전에는 suspend를 해제하지 않는다.
 apiVersion: v1
@@ -39,6 +39,7 @@ spec:
           imagePullSecrets:
             - name: registry-pull-cred
           securityContext:
+            runAsNonRoot: true
             runAsUser: 10001
             runAsGroup: 10001
             fsGroup: 10001
@@ -67,6 +68,10 @@ spec:
                       fieldPath: metadata.uid
                 - name: SEORI_BACKOFFICE_ORIGIN
                   value: https://backoffice.vzyx.xyz
+                - name: SEORI_EGRESS_PROXY_ORIGIN
+                  value: https://seori-auth-egress-proxy.auth-broker.svc.cluster.local:8443
+                - name: SEORI_EGRESS_PROXY_SERVER_NAME
+                  value: seori-auth-egress-proxy.auth-broker.svc.cluster.local
                 - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
                   value: seori-auth:workflow-bundle-candidate-adapter
                 - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
@@ -98,6 +103,9 @@ spec:
                   readOnly: true
                 - name: tmp
                   mountPath: /tmp
+                - name: egress
+                  mountPath: /var/run/workflow-bundle-candidate-executor/egress
+                  readOnly: true
           volumes:
             - name: runtime
               projected:
@@ -119,6 +127,14 @@ spec:
             - name: tmp
               emptyDir:
                 sizeLimit: 32Mi
+            - name: egress
+              secret:
+                secretName: workflow-bundle-candidate-egress-tls
+                defaultMode: 0440
+                items:
+                  - { key: ca.crt, path: ca.pem }
+                  - { key: tls.crt, path: tls.crt }
+                  - { key: tls.key, path: tls.key }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -142,10 +158,9 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
-    # 표준 NetworkPolicy에는 FQDN selector가 없다. suspend 해제 gate에서
-    # backoffice.vzyx.xyz와 api.github.com만 허용하는 CNI FQDN 정책으로 교체한다.
     - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seori-auth-egress-proxy
       ports:
-        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 8443 }

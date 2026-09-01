@@ -47,8 +47,10 @@ Codex와 Claude worker는 앱별로 설치하지 않는다. 기존 generic worke
 2. manifest를 immutable image digest로 render하고 `replicas: 0` 상태에서 server/client certificate SAN,
    Backoffice exact HTTPS origin, GitHub App installation 공개 ID를 readback한다.
 3. fake repository에서 complete pagination, cross-principal 거부, repository ID 1개·최소 permission token과
-   즉시 revoke, step별 readback-first partial-resume canary를 통과한다. 표준 NetworkPolicy의 broad 443 egress는 운영 CNI의
-   `backoffice.vzyx.xyz`와 `api.github.com` FQDN allowlist로 교체한다.
+   즉시 revoke, step별 readback-first partial-resume canary를 통과한다. Calico OSS의 표준 NetworkPolicy는 FQDN을
+   제한하지 못하므로 runtime과 candidate executor는 `seori-auth-egress-proxy:8443`만 호출한다. proxy만 Internet 443을
+   가지며 mTLS client SPIFFE ID마다 exact CONNECT hostname을 따로 결합하고 public DNS answer와 IANA special-purpose
+   제외를 검증한다. redirect는 따르지 않으며 upstream TLS 검증은 client가 유지한다.
 4. `CREATE_COMMIT`, `CREATE_REF`, `CREATE_PR`별 durable CAS/readback과 exact partial resume, 각 provider write 직후
    프로세스 종료 fixture는 구현됐다. lease 만료 뒤 새 `READBACK_FIRST` session은 `GITHUB_READY_PR_READBACK`으로
    서버가 선택한 기존 execution을 write 없이 확인하고, current-session readback audit 뒤 같은 execution의 최초 미완료

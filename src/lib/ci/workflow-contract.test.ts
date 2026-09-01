@@ -76,9 +76,10 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.match(deploySource, /Record immutable candidate/);
   assert.match(deploySource, /org\.opencontainers\.image\.revision=/);
   assert.doesNotMatch(deploySource, /\$\{\{ env\.IMAGE \}\}:latest/);
-  assert.match(deploySource, /cache-from:\s*type=gha/);
-  assert.match(deploySource, /cache-to:\s*type=gha,mode=min/);
-  assert.doesNotMatch(deploySource, /cache-to:\s*type=gha,mode=max/);
+  assert.match(deploySource, /cache-from:\s*type=registry,ref=\$\{\{ env\.IMAGE \}\}:buildcache/);
+  assert.match(deploySource, /cache-to:\s*type=inline/);
+  assert.match(deploySource, /\$\{\{ env\.IMAGE \}\}:buildcache/);
+  assert.doesNotMatch(deploySource, /type=gha/);
   const migrationSource = readFileSync(
     join(process.cwd(), ".github/workflows/migration-contract.yml"),
     "utf8",

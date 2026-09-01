@@ -7,8 +7,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
-  FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
   REQUIRED_APPEND_ONLY_TRIGGERS,
+  TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS,
   appendOnlyCreateTriggerStatement,
   verifyAppendOnlyTriggers,
   type ObservedTrigger,
@@ -74,14 +74,14 @@ async function observed(): Promise<ObservedTrigger[]> {
 
 async function main(): Promise<void> {
   const before = await observed();
-  const fleetTables = new Set(FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.map(({ table }) => table));
-  const fleetBefore = before.filter(({ table }) => fleetTables.has(table));
-  if (fleetBefore.length === 0) {
-    for (const requirement of FLEET_MIGRATION_APPEND_ONLY_TRIGGERS) {
+  const operatorTables = new Set(TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS.map(({ table }) => table));
+  const operatorBefore = before.filter(({ table }) => operatorTables.has(table));
+  if (operatorBefore.length === 0) {
+    for (const requirement of TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS) {
       executeTriggerDdl(appendOnlyCreateTriggerStatement(requirement));
     }
   } else {
-    verifyAppendOnlyTriggers(fleetBefore, FLEET_MIGRATION_APPEND_ONLY_TRIGGERS);
+    verifyAppendOnlyTriggers(operatorBefore, TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS);
   }
   const after = await observed();
   const verified = verifyAppendOnlyTriggers(after, REQUIRED_APPEND_ONLY_TRIGGERS);

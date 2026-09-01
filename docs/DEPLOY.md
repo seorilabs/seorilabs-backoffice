@@ -140,11 +140,12 @@ trigger Job 성공 뒤 `auth-broker-journal-migration-resolve-job.yaml`을 같�
 `platform` namespace에서 실행한다. resolver는 schema diff가 비어 있고 recovery inventory의 단일
 미해결 attempt가 정확할 때만 `prisma migrate resolve --applied`를 실행한다. 성공 후 고정 verifier의
 Fleet migration 뒤에는 trusted operator가
-`fleet-migration-security-provisioning-job.yaml`로 여덟 trigger와 세 전용 DB principal의 exact grant를
-설치한다. 이후 `status=PASS`, `total=12`, `exact=12` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
+`fleet-migration-security-provisioning-job.yaml`로 Fleet migration 여덟 trigger, legacy config
+resolution 두 trigger, 세 전용 DB principal의 exact grant를 설치한다. 이후 `status=PASS`,
+`total=14`, `exact=14` readback을 확인하고 같은 main SHA 배포를 재실행한다. history row를
 직접 고치거나 table·trigger를 drop하지 않으며 `SUPER`, `GRANT TRIGGER`,
 `log_bin_trust_function_creators`도 변경하지 않는다.
-복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열두 trigger·migration
+복구 rollout 완료 뒤에는 새 backup을 만들고 격리 restore rehearsal로 schema·열네 trigger·migration
 lineage를 다시 검증한다.
 
 ### 감사 원장 append-only trigger 배포 gate
@@ -170,9 +171,9 @@ app user에 `TRIGGER` 권한을 주지 않는다.
 secret 유출 경계는 코드가 아니라 pod 구조로 강제한다. pod는
 `automountServiceAccountToken: false`이고 컨테이너가 둘로 나뉜다.
 
-- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열두 trigger의
+- init container `verify` — `mysql-root-cred`만 mount한다. API server token이 없다. 열네 trigger의
   이름, timing, event, table, action statement를 SELECT로만 확인하고 보호 table 위 trigger 총
-  개수가 12인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
+  개수가 14인지도 본다. 임시 client 설정 파일은 trap으로 지운다. 결과는 공개 값만 담은 status
   파일로 emptyDir에 쓴다.
 - container `publish` — projected KSA token과 공개 status 파일만 mount한다. DB secret이 없다.
   허용된 다섯 field만 읽고 각 값의 형식을 다시 강제한 뒤 ConfigMap을 patch한다. 동적 실행 없이
@@ -441,6 +442,24 @@ Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확
 포함하지 않으며 동일 UID Codex/Claude를 구분할 native peer attestor나 전용 OS UID 경계가 구현되기 전에는
 local client와 runtime을 모두 제공하지 않는다.
 client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
+runtime과 WorkflowBundle candidate executor의 Internet 443 직접 egress는 금지한다. 두 workload는
+`k8s/seori-auth-egress-proxy.yaml`의 mTLS Service만 호출하며, proxy는 exact client SPIFFE ID별로 허용된 HTTPS hostname을
+따로 결합하고 public DNS answer를 확인한다. proxy Deployment도 기본 replicas 0이며 cert-manager certificate와 실제
+look-alike·redirect·DNS-rebinding canary 전에는 활성화하지 않는다.
+
+trusted operator는 새 immutable Backoffice image가 배포된 뒤 같은 source/image에 결합해 아래 one-shot을 실행한다.
+스크립트는 기존 proxy가 이미 활성 상태면 건드리지 않고 중단한다. 신규 support 객체를 replicas 0으로 적용하고 네
+certificate의 Ready를 확인한 뒤에만 proxy를 1로 올린다. GitHub API TLS 성공 1건과 redirect·유사 도메인·비허용
+host·IP·잘못된 port 거부 5건의 exact 로그가 다르면 proxy를 다시 0으로 내린다. private DNS answer와 IANA
+special-purpose address 거부는 동일 resolver의 fixture test로 고정한다. agent runtime과 candidate executor는 계속
+0/suspend다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<40자리 sha>' \
+SEORI_EGRESS_CANARY_CONFIRM_SHA='<같은 40자리 sha>' \
+scripts/run-seori-auth-egress-canary.sh
+```
 
 ### 중앙 StoreAsset object storage
 
@@ -654,7 +673,9 @@ kubectl -n platform delete deploy backoffice-teammate-worker
   `next.config.ts` 의 `outputFileTracingExcludes` 로 트레이스에서 제외했다. **sharp 제외를
   되돌리면 빌드 호스트 아키텍처의 `.node` 바이너리가 arm64 이미지에 딸려 들어간다.**
   `images.unoptimized` 로는 제외되지 않는다(실측). 이 앱은 `next/image` 를 쓰지 않는다.
-- **캐시**: `cache-from/to: type=gha`. 의존성 무변경이면 `pnpm install` 레이어를 재사용한다.
+- **캐시**: GitHub Actions 저장공간을 사용하지 않는다. 최종 이미지 레이어 캐시를
+  `registry.vzyx.xyz/...:buildcache`의 단일 mutable tag에 inline으로 기록하고 다음 빌드에서
+  `type=registry`로 읽는다. immutable source SHA tag와 배포 digest는 그대로 유지한다.
   BuildKit cache mount(pnpm store·`.next/cache`)는 러너가 ephemeral 이라 유지되지 않는다.
 - **메모리**: Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 `next build` 힙 상한.
 - **PR CI만 `pnpm build`를 실행**하고 main Deploy의 `verify`는 이를 생략한다. production

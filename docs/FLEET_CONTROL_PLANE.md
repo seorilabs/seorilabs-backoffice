@@ -206,8 +206,12 @@ Backoffice worker bearer, adapter bearer, Ed25519 private key와 GitHub App priv
 ### READY_PR 활성화를 위한 남은 운영 gate
 
 durable ledger와 partial-failure fixture는 구현됐다. 남은 범위는 fake repository가 아닌 실제 private canary에서
-각 단계의 응답 유실·token revoke·재시작 readback을 증명하고, immutable runtime image와 제한 egress를 검증한 뒤
+각 단계의 응답 유실·token revoke·재시작 readback을 증명하고, immutable runtime image와 proxy-only egress의
+look-alike·redirect·DNS-rebinding 거부를 검증한 뒤
 `trustedGithubRuntimeCanaryApproved()`, `READY_PR_RUNTIME_OPERATIONAL`, replica를 별도 승인으로 여는 일이다.
+외부 HTTPS는 `k8s/seori-auth-egress-proxy.yaml`의 mTLS CONNECT proxy 한 곳으로만 나간다. 호출 workload에는 broad
+443 egress가 없고 proxy가 exact client SPIFFE ID별 허용 hostname, public DNS answer와 IANA special-purpose 제외를
+검증한다. redirect는 target을 따라가지 않고 공개 오류로 fail-closed한다.
 그 전에는 P6와 `READY_PR` 운영 activation을 완료로 표시하지 않는다.
 
 ## Provider execution과 Auth Broker 경계
@@ -292,7 +296,8 @@ generation/sequence 숫자 문자열, sha256 digest)만 허용하고 secret/toke
 append-only 원장(MySQL BEFORE UPDATE/DELETE trigger)에 남으며 provider execution 감사
 원장과는 독립된 trigger 계약(`AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS`)이다.
 살아있는 `k8s/provider-audit-trigger-verifier.yaml`도 이 두 table의 네 trigger와 Fleet migration
-proof/claim/completion/authoritative issuance 네 table의 여덟 trigger를 합친 전체 열두 trigger를 하나의 signed digest
+proof/claim/completion/authoritative issuance 네 table의 여덟 trigger, legacy config resolution
+두 trigger를 합친 전체 열네 trigger를 하나의 signed digest
 계약으로 관측한다. migration-safety static gate, MySQL 9.2 integration test
 (`scripts/test-auth-broker-journal-checkpoint.ts`), migration 이후 in-cluster readback을 모두
 통과해야 rollout이 진행된다.
