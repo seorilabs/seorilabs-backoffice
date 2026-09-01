@@ -111,6 +111,8 @@ export type LegacyShadowParity = {
 const MAX_SOURCE_BYTES = 1_000_000;
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const LEGACY_BACKOFFICE_TOOL_MANIFEST_SCHEMA =
+  "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json";
 
 const SECRET_KEYS = new Set([
   "accesstoken",
@@ -678,10 +680,17 @@ function mergeDirectPayload(
 function isLegacyBackofficeToolManifest(source: Record<string, unknown>): boolean {
   const allowed = new Set(["$schema", "version", "summary", "tools", "analytics"]);
   return Object.keys(source).every((key) => allowed.has(key))
-    && typeof source.$schema === "string"
-    && Number.isInteger(source.version)
+    && source.$schema === LEGACY_BACKOFFICE_TOOL_MANIFEST_SCHEMA
+    && source.version === 1
     && typeof source.summary === "string"
+    && source.summary.trim().length > 0
     && Array.isArray(source.tools)
+    && source.tools.length > 0
+    && source.tools.every((tool) => (
+      isRecord(tool)
+      && typeof tool.id === "string"
+      && tool.id.trim().length > 0
+    ))
     && (source.analytics === undefined || isRecord(source.analytics));
 }
 

@@ -231,7 +231,7 @@ test("구형 Backoffice 도구 manifest는 desired state 오류가 아니라 사
   const result = transformLegacySources(completeVector({
     GOOGLE_PLAY_CONFIG: safeGooglePayload(),
     SEORILABS_BACKOFFICE_JSON: {
-      $schema: "https://backoffice.example/schema.json",
+      $schema: "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json",
       version: 1,
       summary: summaryCanary,
       tools: [{ id: toolCanary }],
@@ -299,6 +299,22 @@ test("임의의 잘못된 Backoffice JSON은 도구 manifest로 오인하지 않
 
   assert.equal(result.status, "NEEDS_INPUT");
   assert.ok(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"));
+});
+
+test("look-alike Backoffice JSON은 exact schema와 유효한 tool id가 없으면 차단한다", () => {
+  const schema = "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json";
+  for (const payload of [
+    { $schema: "https://example.invalid/manifest.schema.json", version: 1, summary: "summary", tools: [{ id: "tool" }] },
+    { $schema: schema, version: 2, summary: "summary", tools: [{ id: "tool" }] },
+    { $schema: schema, version: 1, summary: "summary", tools: [] },
+    { $schema: schema, version: 1, summary: "summary", tools: [{}] },
+    { $schema: schema, version: 1, summary: "summary", tools: [{ id: "" }] },
+  ]) {
+    const result = transformLegacySources(completeVector({ SEORILABS_BACKOFFICE_JSON: payload }));
+
+    assert.equal(result.status, "NEEDS_INPUT");
+    assert.ok(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"));
+  }
 });
 
 test("중앙에서 아직 분류하지 못한 legacy asset과 외부 binding은 부분 DRAFT 밖에 둔다", () => {
