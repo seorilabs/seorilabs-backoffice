@@ -20,6 +20,8 @@ concurrency:
 
 env:
   IMAGE: registry.vzyx.xyz/seorilabs/seorilabs-backoffice
+  # Docker 자동 build record도 중앙 release policy의 3일 보존을 적용한다.
+  DOCKER_BUILD_RECORD_RETENTION_DAYS: "3"
 
 jobs:
   verify:

@@ -7,11 +7,13 @@ import { parse } from "yaml";
 interface WorkflowStep {
   run?: string;
   uses?: string;
+  env?: Record<string, unknown>;
 }
 
 interface WorkflowJob {
   if?: string;
   needs?: string | string[];
+  env?: Record<string, unknown>;
   "runs-on"?: string;
   strategy?: {
     matrix?: {
@@ -24,6 +26,7 @@ interface WorkflowJob {
 
 interface Workflow {
   on?: Record<string, unknown>;
+  env?: Record<string, unknown>;
   jobs?: Record<string, WorkflowJob>;
 }
 
@@ -88,6 +91,25 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
   assert.match(migrationSource, /scripts\/test-migration-bootstrap\.sh/);
   assert.match(migrationSource, /scripts\/test-migration-cutover\.sh/);
   assert.ok(migration.on?.workflow_call !== undefined);
+});
+
+test("Docker build record는 설치된 중앙 release policy의 보존 기간을 따른다", () => {
+  const policy = parse(readFileSync(join(
+    process.cwd(), "node_modules/seorilabs-org-contracts/contracts/release-policy.yaml",
+  ), "utf8")) as { artifacts: { retentionDays: number } };
+  const deploy = workflow("deploy.yml");
+  const build = deploy.jobs?.build;
+  const steps = build?.steps?.filter((step) =>
+    step.uses?.startsWith("docker/build-push-action@")
+  ) ?? [];
+  assert.ok(steps.length > 0, "실제 Docker build step을 검증해야 한다");
+  for (const step of steps) {
+    const env = { ...deploy.env, ...build?.env, ...step.env };
+    assert.equal(
+      String(env.DOCKER_BUILD_RECORD_RETENTION_DAYS),
+      String(policy.artifacts.retentionDays),
+    );
+  }
 });
 
 test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한다", () => {
