@@ -750,6 +750,24 @@ admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler
   WorkflowBundle SHA, Platform version 및 독립 gate evidence가 생긴 뒤에만 기록한다. 코드/빌드가 있다는
   이유로 release candidate나 upload/public 상태를 합성하지 않는다.
 
+### Legacy 중앙 검토 queue
+
+Settings의 중앙 queue는 ACTIVE 앱별 최신 import와 exact source SHA, ACTIVE ConfigRevision,
+resolution revision, 공개 reason code와 존재하는 중앙 evidence kind만 표시한다. legacy 원문 값이나
+field path는 UI에 전달하지 않는다. 도구 입력, analytics metric, 광고 reward처럼 schema에 공개 식별자로
+등록된 정확한 경로의 `key`만 예외이며, 미등록 `key`, `apiKey`, `privateKey`, `password`, `token`, `secret`
+등 credential carrier는 값과 무관하게 계속 차단한다. 고정된 `review.credentials` 공개 상태 envelope도
+ProviderObservation으로 처리하되 내부에 password/token 필드가 생기면 다시 secret gate가 열린다.
+
+ADMIN은 중앙 증거가 모두 준비된 항목을 한 번의 확인으로 최대 25개까지 승인할 수 있다. 서버는 mutation
+전에 선택 전체의 app/repo/import/source SHA/ACTIVE revision/resolution revision을 다시 읽고 하나라도
+stale이면 아무 항목도 시작하지 않는다. 실행은 기존 앱별 Serializable transaction과 optimistic CAS,
+idempotency key, append-only audit를 그대로 사용한다. preflight 뒤 동시 변경이 발생하면 이미 성공한 앱은
+유지하고 실패한 앱과 사유를 응답해 결과 불명 상태로 만들지 않는다. ComplianceProfile과
+CredentialBinding이 없으면 일괄 승인 대상에 포함하지 않으며, 법적 선언이나 credential 값을 자동 생성하지
+않는다. resolution이 최신 parity보다 뒤에 기록된 앱은 `parity 재검증 대기`로 분리해 같은 승인을 중복
+기록하지 않는다.
+
 ## 이관 경계
 
 이 migration은 additive다. Play/App Store/AppsInToss JSON, `market-launch-state.json`,

@@ -4,48 +4,16 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import type { LegacyConfigResolutionRequest } from "@/lib/control-plane/contracts";
-import { nextLegacyResolutionTargets } from "@/lib/control-plane/legacy-config-resolution-selection";
+import {
+  LEGACY_RESOLUTION_TARGETS_BY_REASON,
+  legacyResolutionJustification,
+  nextLegacyResolutionTargets,
+  suggestedLegacyResolutionTargets,
+} from "@/lib/control-plane/legacy-config-resolution-selection";
 import { approveLegacyConfigResolutionAction } from "@/lib/actions/legacy-config-resolution";
 
 type ReasonCode = LegacyConfigResolutionRequest["dispositions"][number]["reasonCode"];
 type Target = LegacyConfigResolutionRequest["dispositions"][number]["targets"][number];
-
-const TARGETS_BY_REASON: Record<ReasonCode, readonly Target[]> = {
-  UNSUPPORTED_FIELD: [
-    "CONFIG_REVISION",
-    "BUILD_TARGET",
-    "MARKET_LOCALIZATION",
-    "COMPLIANCE_PROFILE",
-    "PROVIDER_OBSERVATION",
-    "STORE_ASSET",
-    "EXTERNAL_BINDING",
-    "PLATFORM_FLEET_BINDING",
-    "CREDENTIAL_BINDING",
-    "AUTOMATION_DEFINITION",
-    "IGNORED_NON_OPERATIONAL",
-  ],
-  SECRET_LIKE_KEY: ["CREDENTIAL_BINDING"],
-  LEGAL_COMPLIANCE_AMBIGUITY: ["COMPLIANCE_PROFILE"],
-  PROVIDER_STATE_AMBIGUITY: ["PROVIDER_OBSERVATION"],
-  LOCALIZATION_LOCALE_MISSING: ["CONFIG_REVISION", "MARKET_LOCALIZATION"],
-  FREE_TEXT_REQUIRES_INPUT: ["CONFIG_REVISION", "MARKET_LOCALIZATION"],
-  CONFLICTING_DESIRED_STATE: ["CONFIG_REVISION"],
-  NO_REPRESENTABLE_SOURCE: ["CONFIG_REVISION", "IGNORED_NON_OPERATIONAL"],
-};
-
-function suggestedTargets(reasonCode: ReasonCode, available: ReadonlySet<Target>): Target[] {
-  if (reasonCode === "NO_REPRESENTABLE_SOURCE") return ["IGNORED_NON_OPERATIONAL"];
-  if (reasonCode === "UNSUPPORTED_FIELD") {
-    const concrete = TARGETS_BY_REASON[reasonCode].filter((target) => (
-      target !== "IGNORED_NON_OPERATIONAL" && target !== "CONFIG_REVISION" && available.has(target)
-    ));
-    return concrete.length > 0 ? concrete : ["CONFIG_REVISION"];
-  }
-  const preferred = TARGETS_BY_REASON[reasonCode].find((target) => (
-    target === "IGNORED_NON_OPERATIONAL" || available.has(target)
-  ));
-  return preferred ? [preferred] : [];
-}
 
 export function LegacyConfigResolutionButton({
   appId,
@@ -70,7 +38,10 @@ export function LegacyConfigResolutionButton({
   const [pending, startTransition] = useTransition();
   const available = useMemo(() => new Set(availableEvidenceKinds), [availableEvidenceKinds]);
   const [selected, setSelected] = useState<Record<string, Target[]>>(() => Object.fromEntries(
-    reasonCodes.map((reasonCode) => [reasonCode, suggestedTargets(reasonCode, available)]),
+    reasonCodes.map((reasonCode) => [
+      reasonCode,
+      suggestedLegacyResolutionTargets(reasonCode, available),
+    ]),
   ));
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -96,13 +67,6 @@ export function LegacyConfigResolutionButton({
         reasonCode,
         targets: selected[reasonCode] ?? [],
       }));
-      const ignored = dispositions.some((disposition) => (
-        disposition.targets.includes("IGNORED_NON_OPERATIONAL")
-      ));
-      const noLegacyDesiredState = dispositions.length === 1
-        && dispositions[0].reasonCode === "NO_REPRESENTABLE_SOURCE"
-        && dispositions[0].targets.length === 1
-        && dispositions[0].targets[0] === "IGNORED_NON_OPERATIONAL";
       const result = await approveLegacyConfigResolutionAction({
         appId,
         requestId: crypto.randomUUID(),
@@ -113,11 +77,7 @@ export function LegacyConfigResolutionButton({
           expectedResolutionRevision,
           expectedActiveConfigRevision: activeConfigRevision,
           dispositions,
-          justification: noLegacyDesiredState
-            ? "NO_LEGACY_DESIRED_STATE"
-            : ignored
-              ? "IGNORED_NON_OPERATIONAL_REVIEWED"
-              : "CENTRAL_STATE_REVIEWED",
+          justification: legacyResolutionJustification(dispositions),
         },
       });
       if (!result.ok) {
@@ -140,7 +100,7 @@ export function LegacyConfigResolutionButton({
           <div key={reasonCode} className="rounded border border-amber-200 bg-white p-2">
             <div className="font-mono text-[11px] font-medium text-neutral-800">{reasonCode}</div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {TARGETS_BY_REASON[reasonCode].map((target) => {
+              {LEGACY_RESOLUTION_TARGETS_BY_REASON[reasonCode].map((target) => {
                 const evidenceAvailable = target === "IGNORED_NON_OPERATIONAL" || available.has(target);
                 const checked = selected[reasonCode]?.includes(target) ?? false;
                 return (

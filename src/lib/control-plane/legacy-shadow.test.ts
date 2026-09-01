@@ -228,14 +228,18 @@ test("legal/provider state와 미분류 asset은 부분 DRAFT 밖에 두고 clea
 test("구형 Backoffice 도구 manifest는 desired state 오류가 아니라 사람 검토 대상으로 분리한다", () => {
   const summaryCanary = "legacy-summary-must-not-persist";
   const toolCanary = "legacy-tool-must-not-persist";
+  const fieldKeyCanary = "ordinary-field-key-must-not-persist";
   const result = transformLegacySources(completeVector({
     GOOGLE_PLAY_CONFIG: safeGooglePayload(),
     SEORILABS_BACKOFFICE_JSON: {
       $schema: "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json",
       version: 1,
       summary: summaryCanary,
-      tools: [{ id: toolCanary }],
-      analytics: { enabled: true },
+      tools: [{
+        id: toolCanary,
+        operations: [{ inputs: [{ key: fieldKeyCanary }] }],
+      }],
+      analytics: { content: { metrics: [{ key: fieldKeyCanary }] } },
     },
   }));
 
@@ -243,9 +247,108 @@ test("구형 Backoffice 도구 manifest는 desired state 오류가 아니라 사
   assert.ok(result.reasons.some((reason) => (
     reason.code === "UNSUPPORTED_FIELD" && reason.sourceKind === "SEORILABS_BACKOFFICE_JSON"
   )));
+  assert.equal(result.reasons.some((reason) => reason.code === "SECRET_LIKE_KEY"), false);
   assert.equal(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"), false);
   assert.doesNotMatch(JSON.stringify(result), new RegExp(summaryCanary));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(toolCanary));
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(fieldKeyCanary));
+});
+
+test("등록 schema의 공개 식별자 key만 예외로 두고 apiKey와 privateKey는 계속 차단한다", () => {
+  const ordinaryKeyCanary = "ordinary-domain-key-must-not-persist";
+  const secretCanary = "actual-secret-carrier-must-not-persist";
+  const result = transformLegacySources(completeVector({
+    GOOGLE_PLAY_CONFIG: {
+      ...safeGooglePayload(),
+      firebase: { apiKey: secretCanary, privateKey: secretCanary },
+    },
+    PLATFORM_APP_REGISTRY: {
+      platformVersion: "v1.0.0",
+      ads: { placements: [{ reward: { key: ordinaryKeyCanary } }] },
+    },
+  }));
+
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
+  const secretPaths = result.reasons
+    .filter((reason) => reason.code === "SECRET_LIKE_KEY")
+    .map((reason) => reason.path);
+  assert.deepEqual(secretPaths, ["$.firebase.apiKey", "$.firebase.privateKey"]);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(ordinaryKeyCanary));
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(secretCanary));
+});
+
+test("등록되지 않은 일반 key 경로는 다시 secret carrier로 fail-closed한다", () => {
+  const keyCanary = "unknown-key-carrier-must-not-persist";
+  const result = transformLegacySources(completeVector({
+    GOOGLE_PLAY_CONFIG: {
+      ...safeGooglePayload(),
+      reward: { key: keyCanary },
+    },
+  }));
+
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
+  assert.equal(result.reasons.some((reason) => (
+    reason.code === "SECRET_LIKE_KEY" && reason.path === "$.reward.key"
+  )), true);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(keyCanary));
+});
+
+test("review.credentials 공개 상태 envelope는 비밀로 오인하지 않고 실제 중첩 password는 차단한다", () => {
+  const publicObservation = {
+    status: "not-required",
+    reference: null,
+    verifiedAt: null,
+    evidence: null,
+    loginSmoke: {
+      status: "not-required",
+      reference: null,
+      verifiedAt: null,
+      evidence: null,
+    },
+  };
+  const safe = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: { enabled: true, review: { credentials: publicObservation } },
+  }));
+  assert.equal(safe.status, "DRAFTABLE_WITH_INPUT");
+  assert.equal(safe.reasons.some((reason) => reason.code === "SECRET_LIKE_KEY"), false);
+  assert.equal(safe.reasons.some((reason) => reason.code === "PROVIDER_STATE_AMBIGUITY"), true);
+
+  const wrongPath = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: { enabled: true, credentials: publicObservation },
+  }));
+  assert.equal(wrongPath.reasons.some((reason) => reason.code === "SECRET_LIKE_KEY"), true);
+
+  const secretCanary = "nested-password-must-not-persist";
+  const unsafe = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: {
+      enabled: true,
+      review: { credentials: { ...publicObservation, password: secretCanary } },
+    },
+  }));
+  assert.equal(unsafe.status, "DRAFTABLE_WITH_INPUT");
+  assert.equal(unsafe.reasons.some((reason) => reason.code === "SECRET_LIKE_KEY"), true);
+  assert.doesNotMatch(JSON.stringify(unsafe), new RegExp(secretCanary));
+});
+
+test("review.credentials 공개 상태 envelope는 제한 깊이를 넘으면 fail-closed한다", () => {
+  let loginSmoke: Record<string, unknown> = {
+    status: "not-required",
+  };
+  for (let depth = 0; depth < 66; depth += 1) {
+    loginSmoke = { loginSmoke };
+  }
+
+  const result = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: {
+      enabled: true,
+      review: { credentials: loginSmoke },
+    },
+  }));
+
+  assert.equal(result.reasons.some((reason) => (
+    reason.code === "SECRET_LIKE_KEY" && reason.path === "$.review.credentials"
+  )), true);
+  assert.equal(result.reasons.some((reason) => reason.code === "INVALID_SOURCE_SHAPE"), true);
 });
 
 test("App Store scalar listing과 build 표식은 shape 오류 대신 중앙 검토 대상으로 분리한다", () => {
