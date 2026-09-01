@@ -179,6 +179,31 @@ test("Config 계약은 market·locale 중복, channel 조합, SDK 역전을 거�
   }
 });
 
+test("Config 계약은 canonical BCP 47 script·region locale을 허용한다", () => {
+  const valid = configRevisionPayloadSchema.safeParse({
+    schemaVersion: 1,
+    markets: [{
+      market: "google-play",
+      enabled: true,
+      locales: ["zh-Hans", "zh-Hant", "sr-Latn-RS", "es-419"],
+      releaseChannel: "internal",
+    }],
+  });
+  assert.equal(valid.success, true);
+
+  for (const invalidLocale of ["zh_hans", "ZH-HANS", "en-us", "x-private"]) {
+    assert.equal(configRevisionPayloadSchema.safeParse({
+      schemaVersion: 1,
+      markets: [{
+        market: "google-play",
+        enabled: true,
+        locales: [invalidLocale],
+        releaseChannel: "internal",
+      }],
+    }).success, false);
+  }
+});
+
 test("ReauthRequest는 정확한 HTTPS origin과 공개 필드만 허용한다", () => {
   const valid = {
     repoId: "123",

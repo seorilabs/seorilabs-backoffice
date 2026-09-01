@@ -111,6 +111,8 @@ export type LegacyShadowParity = {
 const MAX_SOURCE_BYTES = 1_000_000;
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const LEGACY_BACKOFFICE_TOOL_MANIFEST_SCHEMA =
+  "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json";
 
 const SECRET_KEYS = new Set([
   "accesstoken",
@@ -393,9 +395,14 @@ function readLocalizedStrings(
   sourceKind: LegacySourceKind,
   reasons: LegacyTransformReason[],
   path: string,
+  fallbackLocale?: string,
 ): Map<string, string> {
   const result = new Map<string, string>();
   if (value === undefined) return result;
+  if (typeof value === "string" && fallbackLocale) {
+    result.set(fallbackLocale, value);
+    return result;
+  }
   if (!isRecord(value)) {
     addReason(reasons, "INVALID_SOURCE_SHAPE", path, sourceKind);
     return result;
@@ -455,8 +462,16 @@ function transformBuild(
   value: unknown,
   sourceKind: LegacySourceKind,
   path: string,
+  allowLegacyScalar = false,
 ): void {
   if (value === undefined) return;
+  if (typeof value === "string" && allowLegacyScalar) {
+    // 초기 App Store 설정은 archive/build 표식을 scalar로 기록했다. 값을
+    // ConfigRevision으로 추측해 옮기지 않고 BuildTarget 사람 검토로 분리한다.
+    addReason(context.reasons, "UNSUPPORTED_FIELD", path, sourceKind);
+    addReason(context.reasons, "FREE_TEXT_REQUIRES_INPUT", path, sourceKind);
+    return;
+  }
   const allowed = new Set(["workflowBundleSha", "workflowBundleDigest", "platformVersion", "minSdk", "targetSdk"]);
   if (!assertAllowedKeys(value, allowed, sourceKind, context.reasons, path)) return;
   for (const key of ["workflowBundleSha", "workflowBundleDigest", "platformVersion"] as const) {
@@ -545,14 +560,14 @@ function transformAppStore(source: Record<string, unknown>, context: TransformCo
         ["description", "description"],
       ] as const) {
         for (const [locale, text] of readLocalizedStrings(
-          source.storeListing[key], kind, context.reasons, `$.storeListing.${key}`,
+          source.storeListing[key], kind, context.reasons, `$.storeListing.${key}`, primaryLanguage,
         )) {
           locales.add(locale);
           mergeLocalization(context, locale, field, text, kind);
         }
       }
       for (const [locale, keywords] of readLocalizedStrings(
-        source.storeListing.keywords, kind, context.reasons, "$.storeListing.keywords",
+        source.storeListing.keywords, kind, context.reasons, "$.storeListing.keywords", primaryLanguage,
       )) {
         locales.add(locale);
         mergeLocalization(
@@ -565,7 +580,7 @@ function transformAppStore(source: Record<string, unknown>, context: TransformCo
       }
     }
   }
-  transformBuild(context, source.build, kind, "$.build");
+  transformBuild(context, source.build, kind, "$.build", true);
   transformSupport(context, source, kind);
   mergeMarket(context, "app-store", enabled, locales, kind);
 }
@@ -618,6 +633,12 @@ function mergeDirectPayload(
   sourceKind: "SEORILABS_APP_YAML" | "SEORILABS_BACKOFFICE_JSON",
   context: TransformContext,
 ): void {
+  if (sourceKind === "SEORILABS_BACKOFFICE_JSON" && isLegacyBackofficeToolManifest(source)) {
+    // v1 Backoffice 도구 manifest는 앱 desired state가 아니다. 원문을 중앙
+    // ConfigRevision으로 복사하지 않고 AutomationDefinition/비운영 값 사람 검토로 보낸다.
+    addReason(context.reasons, "UNSUPPORTED_FIELD", "$", sourceKind);
+    return;
+  }
   const parsed = configRevisionPayloadSchema.safeParse(source);
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {
@@ -654,6 +675,23 @@ function mergeDirectPayload(
     void value;
     addReason(context.reasons, "FREE_TEXT_REQUIRES_INPUT", `$.support.${key}`, sourceKind);
   }
+}
+
+function isLegacyBackofficeToolManifest(source: Record<string, unknown>): boolean {
+  const allowed = new Set(["$schema", "version", "summary", "tools", "analytics"]);
+  return Object.keys(source).every((key) => allowed.has(key))
+    && source.$schema === LEGACY_BACKOFFICE_TOOL_MANIFEST_SCHEMA
+    && source.version === 1
+    && typeof source.summary === "string"
+    && source.summary.trim().length > 0
+    && Array.isArray(source.tools)
+    && source.tools.length > 0
+    && source.tools.every((tool) => (
+      isRecord(tool)
+      && typeof tool.id === "string"
+      && tool.id.trim().length > 0
+    ))
+    && (source.analytics === undefined || isRecord(source.analytics));
 }
 
 function canonicalPayload(draft: MutablePayload): DraftableConfigRevisionPayload {

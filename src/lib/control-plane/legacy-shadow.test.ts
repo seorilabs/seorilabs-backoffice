@@ -225,6 +225,98 @@ test("legal/provider state와 미분류 asset은 부분 DRAFT 밖에 두고 clea
   assert.equal(codes.has("UNSUPPORTED_FIELD"), true);
 });
 
+test("구형 Backoffice 도구 manifest는 desired state 오류가 아니라 사람 검토 대상으로 분리한다", () => {
+  const summaryCanary = "legacy-summary-must-not-persist";
+  const toolCanary = "legacy-tool-must-not-persist";
+  const result = transformLegacySources(completeVector({
+    GOOGLE_PLAY_CONFIG: safeGooglePayload(),
+    SEORILABS_BACKOFFICE_JSON: {
+      $schema: "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json",
+      version: 1,
+      summary: summaryCanary,
+      tools: [{ id: toolCanary }],
+      analytics: { enabled: true },
+    },
+  }));
+
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
+  assert.ok(result.reasons.some((reason) => (
+    reason.code === "UNSUPPORTED_FIELD" && reason.sourceKind === "SEORILABS_BACKOFFICE_JSON"
+  )));
+  assert.equal(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"), false);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(summaryCanary));
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(toolCanary));
+});
+
+test("App Store scalar listing과 build 표식은 shape 오류 대신 중앙 검토 대상으로 분리한다", () => {
+  const listingCanary = "legacy-listing-must-not-persist";
+  const buildCanary = "legacy-build-must-not-persist";
+  const result = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: {
+      primaryLanguage: "ko-KR",
+      build: buildCanary,
+      storeListing: {
+        subtitle: listingCanary,
+        description: listingCanary,
+        keywords: listingCanary,
+      },
+    },
+  }));
+
+  assert.equal(result.status, "DRAFTABLE_WITH_INPUT");
+  assert.equal(result.reasons.some((reason) => reason.code === "INVALID_SOURCE_SHAPE"), false);
+  assert.ok(result.reasons.some((reason) => (
+    reason.code === "UNSUPPORTED_FIELD" && reason.path === "$.build"
+  )));
+  assert.ok(result.reasons.some((reason) => reason.code === "FREE_TEXT_REQUIRES_INPUT"));
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(listingCanary));
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(buildCanary));
+});
+
+test("scalar build 예외는 App Store에만 허용하고 다른 market은 shape 오류로 차단한다", () => {
+  for (const [sourceKind, payload] of [
+    ["GOOGLE_PLAY_CONFIG", { defaultLanguage: "ko-KR", build: "unexpected-scalar" }],
+    ["APPS_IN_TOSS_CONFIG", { locale: "ko-KR", build: "unexpected-scalar" }],
+  ] as const) {
+    const result = transformLegacySources(completeVector({ [sourceKind]: payload }));
+
+    assert.equal(result.status, "NEEDS_INPUT");
+    assert.ok(result.reasons.some((reason) => (
+      reason.code === "INVALID_SOURCE_SHAPE"
+      && reason.sourceKind === sourceKind
+      && reason.path === "$.build"
+    )));
+  }
+});
+
+test("임의의 잘못된 Backoffice JSON은 도구 manifest로 오인하지 않는다", () => {
+  const result = transformLegacySources(completeVector({
+    SEORILABS_BACKOFFICE_JSON: {
+      version: 1,
+      summary: "missing schema and tools",
+    },
+  }));
+
+  assert.equal(result.status, "NEEDS_INPUT");
+  assert.ok(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"));
+});
+
+test("look-alike Backoffice JSON은 exact schema와 유효한 tool id가 없으면 차단한다", () => {
+  const schema = "https://raw.githubusercontent.com/seorilabs/seorilabs-backoffice/main/docs/app-ops/manifest.schema.json";
+  for (const payload of [
+    { $schema: "https://example.invalid/manifest.schema.json", version: 1, summary: "summary", tools: [{ id: "tool" }] },
+    { $schema: schema, version: 2, summary: "summary", tools: [{ id: "tool" }] },
+    { $schema: schema, version: 1, summary: "summary", tools: [] },
+    { $schema: schema, version: 1, summary: "summary", tools: [{}] },
+    { $schema: schema, version: 1, summary: "summary", tools: [{ id: "" }] },
+  ]) {
+    const result = transformLegacySources(completeVector({ SEORILABS_BACKOFFICE_JSON: payload }));
+
+    assert.equal(result.status, "NEEDS_INPUT");
+    assert.ok(result.reasons.some((reason) => reason.code === "INVALID_DESIRED_STATE"));
+  }
+});
+
 test("중앙에서 아직 분류하지 못한 legacy asset과 외부 binding은 부분 DRAFT 밖에 둔다", () => {
   const google = {
     ...safeGooglePayload(),
