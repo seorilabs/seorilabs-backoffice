@@ -98,6 +98,18 @@ test("기존 DRAFT, source drift, projection drift는 중앙 activation을 fail-
   ]);
 });
 
+test("ACTIVE가 없으면 missing만 보고 revision changed를 중복 표시하지 않는다", () => {
+  const missing = projectFleetComplianceDraftQueueItem({
+    legacy: legacy({ activeConfigRevision: null }),
+    app: { ...app(), configRevisions: [] },
+    latestRevision: null,
+  });
+
+  assert.equal(missing.eligible, false);
+  assert.ok(missing.blockers.includes("ACTIVE_CONFIG_MISSING"));
+  assert.ok(!missing.blockers.includes("ACTIVE_REVISION_CHANGED"));
+});
+
 test("Settings client에는 ACTIVE payload와 내부 idempotency state를 전달하지 않는다", () => {
   const projected = projectFleetComplianceDraftQueueItem({
     legacy: legacy(),

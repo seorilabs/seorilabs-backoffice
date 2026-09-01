@@ -105,6 +105,19 @@ test("enabled market 누락과 credential 후보가 있는 초안은 mutation �
     }),
     /credential 후보/,
   );
+
+  assert.throws(
+    () => prepareFleetComplianceDraftBatch({
+      queue: [queue()],
+      selections: [selection({
+        complianceDrafts: selection().complianceDrafts.map((draft) => ({
+          ...draft,
+          draft: { apiKey: "abcd" },
+        })),
+      })],
+    }),
+    /credential 후보/,
+  );
 });
 
 test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 허용한다", () => {

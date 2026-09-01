@@ -93,7 +93,7 @@ export function projectFleetComplianceDraftQueueItem(input: {
       && (active?.complianceProfiles.length ?? 0) === 0
       ? ["ACTIVE_COMPLIANCE_PROJECTION_DRIFT" as const]
       : []),
-    ...(active?.revision !== input.legacy.activeConfigRevision
+    ...(active && active.revision !== input.legacy.activeConfigRevision
       ? ["ACTIVE_REVISION_CHANGED" as const]
       : []),
     ...(!currentSourceSha ? ["CURRENT_DISCOVERY_MISSING" as const] : []),

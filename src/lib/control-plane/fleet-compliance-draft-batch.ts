@@ -16,7 +16,7 @@ function hasCredentialCandidate(value: unknown): boolean {
   if (typeof value === "string") return containsCredentialCandidate(value);
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.entries(value).some(([key, nested]) => (
-    /(?:password|passwd|secret|tokens?|privatekey|credentials?|cookie|totp|recoverycodes?)/i.test(
+    /(?:password|passwd|secret|tokens?|apikey|privatekey|credentials?|cookie|totp|recoverycodes?)/i.test(
       key.replace(/[^a-z0-9]/gi, ""),
     )
     || hasCredentialCandidate(nested)
