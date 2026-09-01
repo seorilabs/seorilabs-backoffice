@@ -33,7 +33,7 @@ export function TrustedLocalPendingButton({
               requestId: crypto.randomUUID(),
             });
             if (!result.ok) {
-              setError(result.error ?? "trusted-local 대기 전환 실패");
+              setError(result.error ?? "내 기기에서 로그인 대기 상태로 바꾸지 못했습니다.");
               return;
             }
             router.refresh();
@@ -41,7 +41,7 @@ export function TrustedLocalPendingButton({
         }}
         className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
       >
-        {pending ? "기록 중…" : "trusted-local 처리 대기"}
+        {pending ? "기록 중…" : "내 기기에서 로그인 대기로 표시"}
       </button>
       {error && <div className="mt-1 max-w-xs text-xs text-red-700">{error}</div>}
     </div>

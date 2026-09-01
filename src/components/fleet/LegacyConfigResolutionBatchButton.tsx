@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { approveLegacyConfigResolutionBatchAction } from "@/lib/actions/legacy-config-resolution";
 import type { FleetLegacyResolutionQueueItem } from "@/lib/control-plane/fleet-legacy-resolution-queue";
 import { LEGACY_RESOLUTION_BATCH_LIMIT } from "@/lib/control-plane/legacy-config-resolution-selection";
+import { legacyEvidenceLabel } from "@/lib/control-plane/presentation";
 
 function itemKey(item: FleetLegacyResolutionQueueItem): string {
   return `${item.appId}:${item.legacyImportId}`;
@@ -47,7 +48,7 @@ export function LegacyConfigResolutionBatchButton({
     if (pending || selectedItems.length === 0) return;
     const repositories = selectedItems.map((item) => item.repoFullName).join("\n- ");
     const confirmed = window.confirm(
-      `${selectedItems.length}개 앱의 exact source와 ACTIVE revision에서 중앙 상태가 legacy 설정을 대체함을 한 번에 승인합니다.\n\n- ${repositories}\n\n각 앱은 독립 CAS와 append-only 감사 기록을 사용하며 변경된 항목은 거부됩니다. 계속할까요?`,
+      `${selectedItems.length}개 앱의 현재 소스와 적용 설정 버전을 기준으로 중앙 설정이 기존 설정을 대체하도록 한 번에 승인합니다.\n\n- ${repositories}\n\n앱마다 변경 여부를 다시 확인하고 승인 이력을 남깁니다. 그동안 변경된 항목은 승인되지 않습니다. 계속할까요?`,
     );
     if (!confirmed) return;
     setMessage("");
@@ -65,7 +66,7 @@ export function LegacyConfigResolutionBatchButton({
         })),
       });
       if (result.completedCount > 0) {
-        setMessage(`${result.completedCount}건의 append-only resolution을 기록했습니다. 다음 parity wave에서 exact 상태를 재검증합니다.`);
+        setMessage(`${result.completedCount}건의 검토 결과를 새 이력으로 기록했습니다. 다음 전체 앱 설정 비교에서 다시 확인합니다.`);
       }
       if (!result.ok) {
         const failures = result.results
@@ -80,10 +81,10 @@ export function LegacyConfigResolutionBatchButton({
 
   return (
     <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs">
-      <div className="font-medium text-blue-950">중앙 상태 일괄 승인</div>
+      <div className="font-medium text-blue-950">중앙 설정으로 대체 일괄 승인</div>
       <p className="mt-1 leading-relaxed text-blue-900">
-        비밀값이나 legacy 원문을 읽지 않습니다. 선택한 앱마다 현재 source, ACTIVE revision,
-        resolution revision과 중앙 증거를 서버가 다시 대조합니다.
+        비밀값이나 기존 설정의 원문을 읽지 않습니다. 선택한 앱마다 현재 소스, 적용 설정 버전,
+        검토 버전과 중앙의 확인 기록을 서버가 다시 대조합니다.
       </p>
       {allReadyItems.length > LEGACY_RESOLUTION_BATCH_LIMIT && (
         <p className="mt-1 text-amber-800">
@@ -103,11 +104,11 @@ export function LegacyConfigResolutionBatchButton({
             <span>
               <span className="block font-medium">{item.repoFullName}</span>
               <span className="font-mono text-[10px] text-neutral-400">
-                {item.sourceSha.slice(0, 12)} · ACTIVE {item.activeConfigRevision}
+                {item.sourceSha.slice(0, 12)} · 적용 설정 {item.activeConfigRevision}
               </span>
               <span className="mt-0.5 block text-[10px] text-neutral-500">
                 {item.suggestedDispositions.map((disposition) => (
-                  `${disposition.reasonCode} → ${disposition.targets.join("+")}`
+                  `${disposition.reasonCode} → ${disposition.targets.map(legacyEvidenceLabel).join(" + ")}`
                 )).join(" · ")}
               </span>
             </span>

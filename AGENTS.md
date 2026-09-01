@@ -2,6 +2,7 @@
 
 ## 원칙
 - 한글을 주 언어로. 간결·실무적으로.
+- 사용자 화면의 메뉴·버튼·상태·안내는 쉬운 한국어로 쓴다. `Fleet`은 `앱 통합 관리`, `ConfigRevision`은 `설정 버전`, `lifecycle`은 `개발·출시 단계`로 표시한다. 내부 식별자·API·저장값은 표시 용어와 분리해 유지하고 업로드·심사·배포·공개 확인은 구분한다.
 - GitHub = source of truth. 이 앱 DB 는 미러 + 라이프사이클 상태. 미러를 GitHub 로 역기록하지 않는다(단방향).
 - 모든 쓰기는 `GitHub API → webhook → 미러 upsert` 로 수렴. 미러 테이블에 직접 INSERT 금지(서버 액션도 GitHub write 후 미러).
 

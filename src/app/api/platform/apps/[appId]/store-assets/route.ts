@@ -39,14 +39,14 @@ export async function POST(
     });
     if (!app?.repoId) {
       throw new ControlPlaneError(
-        "GitHub numeric repo ID가 있는 Fleet 앱을 찾을 수 없습니다.",
+        "GitHub 저장소 ID가 등록된 앱을 찾을 수 없습니다.",
         404,
         "APP_NOT_FOUND",
       );
     }
     const actor = await requirePlatformWriteAccess(app.slug);
     if (actor.appId !== app.id) {
-      throw new PlatformAccessError("Fleet 앱 권한 결합이 일치하지 않습니다.");
+      throw new PlatformAccessError("이 앱에 대한 작업 권한이 일치하지 않습니다.");
     }
     const parsed = await parseStoreAssetUploadRequest(request, app.repoId);
     const result = await uploadStoreAsset({

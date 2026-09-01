@@ -723,7 +723,7 @@ test("Fleet UI 상단 parity gate는 현재 source와 ACTIVE config vector만 �
   const page = readFileSync(join(process.cwd(), "src/app/(app)/apps/[id]/fleet/page.tsx"), "utf8");
   assert.match(page, /latestObservedParity\?\.sourceSha === latestDiscovery\.sourceSha/);
   assert.match(page, /latestObservedParity\.configRevisionId === activeConfig\.id/);
-  assert.match(page, /현재 벡터 미검증/);
+  assert.match(page, /현재 소스·설정 미확인/);
 });
 
 test("RESULT_UNKNOWN은 새 readback lease 재claim 뒤에만 resolve되고 mutation audit은 ledger CAS와 함께 기록된다", () => {

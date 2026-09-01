@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { legacyEvidenceLabel, managementStatusLabel } from "@/lib/control-plane/presentation";
 
 import { LegacyConfigResolutionButton } from "@/components/fleet/LegacyConfigResolutionButton";
 import { LegacyConfigResolutionBatchButton } from "@/components/fleet/LegacyConfigResolutionBatchButton";
@@ -18,7 +19,7 @@ export function FleetLegacyResolutionQueue({
   const awaitingParityCount = items.filter((item) => item.awaitingParity).length;
 
   if (items.length === 0) {
-    return <p className="text-xs text-emerald-700">현재 사람이 처리할 legacy 설정 gate가 없습니다.</p>;
+    return <p className="text-xs text-emerald-700">현재 검토가 필요한 기존 설정이 없습니다.</p>;
   }
 
   return (
@@ -27,7 +28,7 @@ export function FleetLegacyResolutionQueue({
         <span className="rounded bg-amber-100 px-2 py-1 text-amber-900">전체 {items.length}건</span>
         <span className="rounded bg-blue-100 px-2 py-1 text-blue-900">검토 양식 {reviewableCount}건</span>
         <span className="rounded bg-emerald-100 px-2 py-1 text-emerald-900">승인 가능 {approvalReadyCount}건</span>
-        <span className="rounded bg-violet-100 px-2 py-1 text-violet-900">parity 대기 {awaitingParityCount}건</span>
+        <span className="rounded bg-violet-100 px-2 py-1 text-violet-900">설정 비교 대기 {awaitingParityCount}건</span>
         <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">중앙 증거 준비 필요 {reviewableCount - approvalReadyCount - awaitingParityCount}건</span>
         <span className="rounded bg-red-50 px-2 py-1 text-red-700">원본 보정 필요 {items.length - reviewableCount}건</span>
       </div>
@@ -39,7 +40,7 @@ export function FleetLegacyResolutionQueue({
           <summary className="cursor-pointer list-none px-3 py-2 text-sm">
             <span className="font-medium">{item.repoFullName}</span>
             <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] ${item.approvalReady ? "bg-emerald-100 text-emerald-800" : item.awaitingParity ? "bg-violet-100 text-violet-800" : item.reviewable ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>
-              {item.approvalReady ? "승인 가능" : item.awaitingParity ? "parity 재검증 대기" : item.reviewable ? "중앙 증거 입력 필요" : "원본 보정 필요"}
+              {item.approvalReady ? "승인 가능" : item.awaitingParity ? "설정 재비교 대기" : item.reviewable ? "중앙 증거 입력 필요" : "원본 보정 필요"}
             </span>
             <span className="ml-2 font-mono text-[11px] text-neutral-400">{shortSha(item.sourceSha)}</span>
           </summary>
@@ -50,20 +51,20 @@ export function FleetLegacyResolutionQueue({
               ))}
             </div>
             <div className="mt-2 text-[11px] text-neutral-500">
-              Import {item.importStatus} · parity {item.parityStatus ?? "없음"} · ACTIVE revision {item.activeConfigRevision ?? "없음"}
+              가져오기 {managementStatusLabel(item.importStatus)} · 비교 {managementStatusLabel(item.parityStatus ?? "없음")} · 적용 설정 버전 {item.activeConfigRevision ?? "없음"}
             </div>
             <div className="mt-1 text-[11px] text-neutral-500">
-              중앙 증거: {item.availableEvidenceKinds.join(", ") || "없음"}
+              중앙 증거: {item.availableEvidenceKinds.map(legacyEvidenceLabel).join(", ") || "없음"}
             </div>
             {item.missingEvidenceKinds.length > 0 && (
               <div className="mt-1 text-[11px] font-medium text-amber-700">
-                추가 입력: {item.missingEvidenceKinds.join(", ")}
+                추가 입력: {item.missingEvidenceKinds.map(legacyEvidenceLabel).join(", ")}
               </div>
             )}
 
             {item.awaitingParity ? (
               <p className="mt-3 text-xs text-violet-700">
-                최신 append-only 승인이 기록됐습니다. 다음 Fleet parity wave 결과 전에는 중복 승인하지 않습니다.
+                최신 승인 이력이 기록됐습니다. 다음 전체 앱 설정 비교 결과가 나오기 전에는 중복 승인하지 않습니다.
               </p>
             ) : item.reviewable && item.activeConfigRevision !== null ? (
               <div className="mt-3">
@@ -85,15 +86,15 @@ export function FleetLegacyResolutionQueue({
             )}
 
             <Link className="mt-3 inline-block text-xs text-blue-700 underline" href={`/apps/${item.appId}/fleet`}>
-              앱의 전체 Fleet 증거 보기
+              앱 통합 관리에서 전체 확인 기록 보기
             </Link>
           </div>
         </details>
       ))}
 
       <p className="text-xs leading-relaxed text-neutral-500">
-        이 화면은 비밀값과 원문 field path를 읽지 않습니다. 실제 저장은 앱 화면과 동일한 validator,
-        optimistic concurrency, append-only audit를 사용하며 source 또는 중앙 상태가 바뀌면 자동 무효화됩니다.
+        이 화면은 비밀값과 원본 필드 경로를 읽지 않습니다. 앱 화면과 같은 기준으로 입력과 변경 여부를 확인하고
+        승인 이력을 남깁니다. 소스 또는 중앙 설정이 바뀌면 기존 승인은 자동으로 무효화됩니다.
       </p>
     </div>
   );

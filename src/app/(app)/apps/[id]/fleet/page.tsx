@@ -18,6 +18,7 @@ import {
   parseManagedAutomationPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { getFleetOperationsView } from "@/lib/control-plane/fleet-view";
+import { configOptionLabel, lifecycleStageLabel, managementStatusLabel, releaseGateLabel } from "@/lib/control-plane/presentation";
 import { githubInstallationProviderPayloadSchema } from "@/lib/control-plane/github-installation-observation";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 
@@ -55,7 +56,7 @@ function statusClass(status: string): string {
 }
 
 function Status({ value }: { value: string }) {
-  return <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${statusClass(value)}`}>{value}</span>;
+  return <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${statusClass(value)}`} title={value}>{managementStatusLabel(value)}</span>;
 }
 
 export default async function FleetOperationsPage({
@@ -137,132 +138,132 @@ export default async function FleetOperationsPage({
   return (
     <div className="space-y-8">
       <WorkspaceSection
-        title="Fleet 제어면"
-        description="자동 탐지·desired state·provider readback·credential 공개 identity·실행 queue를 앱 단위로 대조합니다. 비밀값은 표시하지 않고 protected 작업은 이 실행 한 건만 승인합니다."
+        title="앱 통합 관리"
+        description="앱 설정, 마켓·서비스 상태, 연결 계정, 자동 작업을 한곳에서 확인합니다. 비밀값은 표시하지 않으며 승인이 필요한 작업은 한 건씩 승인합니다."
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
           <Summary
-            label="Discovery"
+            label="소스 확인"
             value={latestDiscovery ? mono(latestDiscovery.sourceSha, 12) : latestObservedDiscovery ? "재탐지 대기" : "미관측"}
             detail={latestDiscovery
               ? dateTime(latestDiscovery.observedAt)
-              : fleet.repositoryRegistration?.lastDiscoveryReason ?? "current source 관측 없음"}
+              : fleet.repositoryRegistration?.lastDiscoveryReason ?? "현재 소스 확인 기록 없음"}
             danger={Boolean(latestObservedDiscovery) && !latestDiscovery}
           />
           <Summary
-            label="Repository class"
-            value={fleet.repositoryRegistration?.classification
-              ?? (fleet.repositoryRegistration?.managementKind === "APP" ? "APP - legacy" : "미분류")}
+            label="저장소 분류"
+            value={managementStatusLabel(fleet.repositoryRegistration?.classification
+              ?? (fleet.repositoryRegistration?.managementKind === "APP" ? "기존 앱" : "미분류"))}
             detail={fleet.repositoryRegistration
-              ? `${fleet.repositoryRegistration.status} · ${fleet.repositoryRegistration.discoveryContractVersion ?? "legacy contract"}`
-              : "registration 없음"}
+              ? `${managementStatusLabel(fleet.repositoryRegistration.status)} · ${fleet.repositoryRegistration.discoveryContractVersion ?? "이전 규격"}`
+              : "등록 정보 없음"}
             danger={!fleet.repositoryRegistration?.classification}
           />
-          <Summary label="ACTIVE Config" value={activeConfig ? `revision ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "새 변경 fail-closed"} />
+          <Summary label="적용 중인 설정" value={activeConfig ? `설정 버전 ${activeConfig.revision}` : "없음"} detail={activeConfig ? mono(activeConfig.snapshotDigest, 12) : "확인 전 변경 차단"} />
           <Summary
-            label="Parity gate"
+            label="기존 설정 비교"
             value={latestParity?.wave.cleanupAllowed
               ? "2회 연속 통과"
               : latestParity
                 ? `${latestParity.wave.consecutiveMatchCount}/2`
                 : latestObservedParity
-                  ? "현재 벡터 미검증"
+                  ? "현재 소스·설정 미확인"
                   : "미실행"}
             detail={latestParity
-              ? `${latestParity.status} · ${mono(latestParity.wave.evidenceDigest, 12)}`
+              ? `${managementStatusLabel(latestParity.status)} · ${mono(latestParity.wave.evidenceDigest, 12)}`
               : latestObservedParity
-                ? "과거 wave는 이력에서만 확인"
-                : "Fleet wave 증거 없음"}
+                ? "이전 비교 결과는 이력에서 확인"
+                : "전체 앱 비교 기록 없음"}
             danger={Boolean(latestObservedParity) && (!latestParity || !latestParity.wave.cleanupAllowed)}
           />
-          <Summary label="Platform Fleet" value={fleet.platformFleetBinding?.state ?? "미연결"} detail={fleet.platformFleetBinding?.observedVersion ?? "observed version 없음"} />
-          <Summary label="Credential Binding" value={`${fleet.credentialBindings.length}개`} detail="공개 metadata만 조회" />
-          <Summary label="Dead-letter" value={`${fleet.deadLetters.length}개`} detail={`${fleet.reauthRequests.filter((request) => request.status === "HUMAN_REAUTH_REQUIRED").length}건 재인증 필요`} danger={fleet.deadLetters.length > 0} />
-          <Summary label="Lifecycle" value={fleet.fleetLifecycleState?.stage ?? "IDEA"} detail={fleet.fleetLifecycleState ? `generation ${fleet.fleetLifecycleState.generation}` : "중앙 lifecycle 미시작"} />
+          <Summary label="공통 기능 버전" value={managementStatusLabel(fleet.platformFleetBinding?.state ?? "미연결")} detail={fleet.platformFleetBinding?.observedVersion ?? "적용 버전 미확인"} />
+          <Summary label="연결 계정·키" value={`${fleet.credentialBindings.length}개`} detail="비밀값을 제외한 연결 정보" />
+          <Summary label="처리 실패 작업" value={`${fleet.deadLetters.length}개`} detail={`${fleet.reauthRequests.filter((request) => request.status === "HUMAN_REAUTH_REQUIRED").length}건 재인증 필요`} danger={fleet.deadLetters.length > 0} />
+          <Summary label="개발·출시 단계" value={lifecycleStageLabel(fleet.fleetLifecycleState?.stage ?? "IDEA")} detail={fleet.fleetLifecycleState ? `변경 차수 ${fleet.fleetLifecycleState.generation}` : "개발·출시 단계 미설정"} />
         </div>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="ProjectBlueprint와 마켓 정본"
-        description="ACTIVE ConfigRevision에서 생성된 불변 projection입니다. 비밀값은 없으며 provider apply 전에 공개 identity와 readback 권한을 대조합니다."
+        title="클라우드·마켓 설정"
+        description="현재 적용된 설정입니다. 외부 서비스에 반영하기 전에 연결 계정과 결과 조회 권한을 확인합니다. 비밀값은 표시하지 않습니다."
       >
         <div className="grid gap-4 xl:grid-cols-2">
-          <Panel title="ProjectBlueprint">
+          <Panel title="클라우드 구성">
             {activeConfig?.projectBlueprint ? (
               <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <Meta label="GCP project" value={activeConfig.projectBlueprint.projectId} />
-                <Meta label="Project number" value={activeConfig.projectBlueprint.projectNumber ?? "readback 대기"} />
-                <Meta label="Organization" value={activeConfig.projectBlueprint.organizationId} />
-                <Meta label="Folder" value={activeConfig.projectBlueprint.folderId} />
-                <Meta label="Billing" value={activeConfig.projectBlueprint.billingAccountId} />
-                <Meta label="Region" value={activeConfig.projectBlueprint.region} />
-                <Meta label="Payload digest" value={mono(activeConfig.projectBlueprint.payloadHash, 20)} />
-                <Meta label="Revision" value={String(activeConfig.revision)} />
+                <Meta label="GCP 프로젝트" value={activeConfig.projectBlueprint.projectId} />
+                <Meta label="프로젝트 번호" value={activeConfig.projectBlueprint.projectNumber ?? "외부 결과 확인 대기"} />
+                <Meta label="조직" value={activeConfig.projectBlueprint.organizationId} />
+                <Meta label="폴더" value={activeConfig.projectBlueprint.folderId} />
+                <Meta label="결제 계정" value={activeConfig.projectBlueprint.billingAccountId} />
+                <Meta label="지역" value={activeConfig.projectBlueprint.region} />
+                <Meta label="설정 확인값" value={mono(activeConfig.projectBlueprint.payloadHash, 20)} />
+                <Meta label="설정 버전" value={String(activeConfig.revision)} />
               </dl>
-            ) : <Empty>ACTIVE revision에 ProjectBlueprint가 없습니다. provider apply는 차단됩니다.</Empty>}
+            ) : <Empty>현재 설정에 클라우드 구성이 없어 외부 서비스에 반영할 수 없습니다.</Empty>}
           </Panel>
-          <Panel title="MarketProfile">
+          <Panel title="마켓 설정">
             <div className="space-y-2">
               {activeConfig?.marketProfiles.map((profile) => (
                 <div key={profile.market} className="rounded border border-neutral-200 px-3 py-2 text-sm">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{profile.market}</span>
+                    <span className="font-medium">{configOptionLabel(profile.market)}</span>
                     <Status value={profile.enabled ? "ACTIVE" : "DISABLED"} />
                   </div>
                   <div className="mt-1 text-xs text-neutral-500">
-                    {profile.releaseChannel ?? "channel 없음"} · {(profile.locales as string[]).join(", ") || "locale 없음"}
+                    {configOptionLabel(profile.releaseChannel ?? "배포 채널 없음")} · {(profile.locales as string[]).join(", ") || "언어 미설정"}
                   </div>
                 </div>
               ))}
-              {!activeConfig?.marketProfiles.length && <Empty>MarketProfile이 없습니다.</Empty>}
+              {!activeConfig?.marketProfiles.length && <Empty>마켓 설정이 없습니다.</Empty>}
             </div>
           </Panel>
-          <Panel title="Localization과 StoreAsset">
+          <Panel title="스토어 소개·이미지">
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <Meta label="Localization" value={`${activeConfig?.marketLocalizations.length ?? 0}개`} />
-              <Meta label="Asset" value={`${activeConfig?.storeAssets.length ?? 0}개`} />
+              <Meta label="언어별 소개" value={`${activeConfig?.marketLocalizations.length ?? 0}개`} />
+              <Meta label="이미지·파일" value={`${activeConfig?.storeAssets.length ?? 0}개`} />
             </dl>
             <div className="mt-3 space-y-1 text-xs text-neutral-500">
               {activeConfig?.storeAssets.slice(0, 8).map((asset) => (
                 <div key={`${asset.market}:${asset.kind}:${asset.objectKey}`} className="break-all font-mono">
-                  {asset.market ?? "all"}/{asset.kind}/{asset.locale ?? "all"} · {asset.objectKey} · {mono(asset.checksum, 12)}
+                  {configOptionLabel(asset.market ?? "전체")}/{configOptionLabel(asset.kind)}/{asset.locale ?? "전체 언어"} · {asset.objectKey} · {mono(asset.checksum, 12)}
                 </div>
               ))}
             </div>
           </Panel>
-          <Panel title="ComplianceProfile — 사람 승인 전 draft">
+          <Panel title="정책·신고 정보 초안">
             <div className="space-y-2">
               {activeConfig?.complianceProfiles.map((profile) => (
                 <div key={`${profile.market}:${profile.declaration}`} className="flex items-center justify-between gap-2 rounded border border-neutral-200 px-3 py-2 text-sm">
-                  <span>{profile.market} · {profile.declaration}</span>
+                  <span>{configOptionLabel(profile.market)} · {configOptionLabel(profile.declaration)}</span>
                   <Status value={profile.state} />
                 </div>
               ))}
-              {!activeConfig?.complianceProfiles.length && <Empty>Compliance draft가 없습니다.</Empty>}
+              {!activeConfig?.complianceProfiles.length && <Empty>정책·신고 정보 초안이 없습니다.</Empty>}
             </div>
           </Panel>
         </div>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="Release candidate와 독립 gate 원장"
-        description="구현·CI·artifact·자산·compliance draft·provider shell이 모두 통과해야 release-candidate가 됩니다. Upload 이후 processing, device QA, review, approval, deployment, public은 서로 대체하지 않습니다."
+        title="출시 후보·단계별 확인"
+        description="기능 구현, 자동 검사, 빌드, 출시 자료, 정책 초안, 마켓 앱 등록을 모두 확인해야 출시 후보가 됩니다. 업로드·마켓 처리·실기기 확인·심사·승인·배포·공개 확인은 각각 별도로 기록합니다."
       >
-        <Panel title="최근 ReleaseCandidate">
+        <Panel title="최근 출시 후보">
           <div className="space-y-3">
             {releaseCandidates.map((candidate) => (
               <article key={candidate.id} className="rounded border border-neutral-200 bg-white p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{candidate.market ?? "legacy"} · {candidate.artifactType ?? "artifact"}</span>
+                      <span className="font-medium">{configOptionLabel(candidate.market ?? "이전 등록")} · {candidate.artifactType ?? "빌드 결과물"}</span>
                       <Status value={candidate.status} />
                     </div>
                     <div className="mt-1 text-xs text-neutral-500">
-                      revision {candidate.configRevision.revision} · {mono(candidate.sourceSha, 12)} · {candidate.targetKey ?? "target 미기록"}
+                      설정 버전 {candidate.configRevision.revision} · {mono(candidate.sourceSha, 12)} · {candidate.targetKey ?? "빌드 대상 미기록"}
                     </div>
                     <div className="mt-1 text-[11px] text-neutral-400">
-                      artifact {mono(candidate.artifactChecksum, 16)} · bundle {mono(candidate.workflowBundleSha, 12)} / {mono(candidate.workflowBundleDigest, 12)} · Platform {candidate.platformVersion ?? "미기록"}
+                      빌드 파일 {mono(candidate.artifactChecksum, 16)} · 공통 빌드 {mono(candidate.workflowBundleSha, 12)} / {mono(candidate.workflowBundleDigest, 12)} · 공통 기능 {candidate.platformVersion ?? "미기록"}
                     </div>
                   </div>
                   <span className="text-xs text-neutral-400">{dateTime(candidate.createdAt)} · {candidate.createdBy}</span>
@@ -270,21 +271,21 @@ export default async function FleetOperationsPage({
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {candidate.latestGates.map((gate) => (
                     <span key={gate.gate} className="rounded border border-neutral-200 px-2 py-1 text-[11px]">
-                      {gate.gate} <Status value={gate.status} />
+                      {releaseGateLabel(gate.gate)} <Status value={gate.status} />
                     </span>
                   ))}
-                  {candidate.latestGates.length === 0 && <span className="text-xs text-neutral-400">gate observation 없음</span>}
+                  {candidate.latestGates.length === 0 && <span className="text-xs text-neutral-400">단계별 확인 기록 없음</span>}
                 </div>
               </article>
             ))}
-            {releaseCandidates.length === 0 && <Empty>Release candidate가 없습니다.</Empty>}
+            {releaseCandidates.length === 0 && <Empty>출시 후보가 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="중앙 lifecycle"
-        description="IDEA~RELEASE_ASSETS는 자동 증거가 없어 신뢰된 로컬 사람 조작으로 한 단계씩만 전진합니다. RELEASE_CANDIDATE 이후는 append-only gate observation과 exact candidate/provider identity 증거로만 전진하며 되돌림·건너뜀·라벨 기반 전이는 없습니다."
+        title="개발·출시 단계"
+        description="아이디어부터 출시 자료 준비까지는 사용자가 한 단계씩 진행합니다. 출시 후보부터는 해당 빌드와 마켓 계정의 확인 결과가 있어야 진행합니다. 단계를 건너뛰거나 상태 표시만 바꿔 완료할 수 없습니다."
       >
         <FleetLifecycleControls
           appId={fleet.id}
@@ -294,8 +295,8 @@ export default async function FleetOperationsPage({
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="Provider 실행 원장"
-        description="repo·source·ACTIVE config·desired hash·공개 identity·logical credential generation을 한 번에 고정합니다. apply/upload 응답만으로 완료하지 않고 반드시 provider readback으로 확인합니다."
+        title="마켓·서비스 작업 이력"
+        description="각 작업에 앱, 소스 버전, 적용 설정, 연결 계정을 고정해 기록합니다. 요청 전송이나 업로드 응답만으로 완료하지 않고 외부 서비스의 실제 결과를 다시 확인합니다."
       >
         <Panel>
           <div className="space-y-3">
@@ -312,17 +313,17 @@ export default async function FleetOperationsPage({
                       {execution.resourceType} · {execution.resourceId}
                     </div>
                     <div className="mt-1 grid gap-1 text-[11px] text-neutral-500 sm:grid-cols-2 xl:grid-cols-3">
-                      <span>source {mono(execution.sourceSha, 12)} · config {execution.configRevisionNumber}</span>
-                      <span>desired {mono(execution.desiredHash, 14)}</span>
-                      <span>binding {mono(execution.bindingHash, 14)}</span>
-                      <span>account {execution.publicAccountId}</span>
-                      <span>credential identity {execution.credentialPublicIdentity}</span>
-                      <span>resource identity {execution.expectedPublicIdentity ?? "—"}</span>
-                      <span>{execution.logicalCredentialId} · generation {execution.credentialGeneration}/{execution.policyGeneration}</span>
+                      <span>소스 {mono(execution.sourceSha, 12)} · 설정 버전 {execution.configRevisionNumber}</span>
+                      <span>목표 설정 {mono(execution.desiredHash, 14)}</span>
+                      <span>연결 확인값 {mono(execution.bindingHash, 14)}</span>
+                      <span>계정 {execution.publicAccountId}</span>
+                      <span>연결 계정 ID {execution.credentialPublicIdentity}</span>
+                      <span>대상 리소스 ID {execution.expectedPublicIdentity ?? "—"}</span>
+                      <span>{execution.logicalCredentialId} · 변경 차수 {execution.credentialGeneration}/{execution.policyGeneration}</span>
                       <span>{execution.adapterId} · {execution.capability}</span>
-                      <span>readback {execution.readbackLogicalCredentialId} · generation {execution.readbackCredentialGeneration}/{execution.readbackPolicyGeneration}</span>
-                      <span>readback identity {execution.readbackCredentialPublicIdentity} · {execution.readbackCapability}</span>
-                      <span>apply {execution.attempts}/{execution.maxAttempts} · readback {execution.readbackAttempts}/{execution.maxAttempts}</span>
+                      <span>결과 조회 계정 {execution.readbackLogicalCredentialId} · 변경 차수 {execution.readbackCredentialGeneration}/{execution.readbackPolicyGeneration}</span>
+                      <span>결과 조회 계정 ID {execution.readbackCredentialPublicIdentity} · {execution.readbackCapability}</span>
+                      <span>실행 {execution.attempts}/{execution.maxAttempts} · 결과 확인 {execution.readbackAttempts}/{execution.maxAttempts}</span>
                       <span>{dateTime(execution.updatedAt)}{execution.workerId ? ` · ${execution.workerId}` : ""}</span>
                     </div>
                     {execution.lastErrorCode && <div className="mt-2 text-xs text-red-700">{execution.lastErrorCode}</div>}
@@ -336,21 +337,21 @@ export default async function FleetOperationsPage({
                     />
                   ) : (
                     <div className="text-right text-[11px] text-neutral-400">
-                      lease generation {execution.leaseGeneration}<br />
-                      {execution.readbackRequiredAt ? `readback ${dateTime(execution.readbackRequiredAt)}` : execution.approvedBy ? `승인 ${execution.approvedBy}` : ""}
+                      실행 권한 차수 {execution.leaseGeneration}<br />
+                      {execution.readbackRequiredAt ? `결과 확인 요청 ${dateTime(execution.readbackRequiredAt)}` : execution.approvedBy ? `승인 ${execution.approvedBy}` : ""}
                     </div>
                   )}
                 </div>
               </article>
             ))}
-            {fleet.providerExecutions.length === 0 && <Empty>아직 provider execution이 없습니다.</Empty>}
+            {fleet.providerExecutions.length === 0 && <Empty>마켓·서비스 실행 기록이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="ConfigRevision"
-        description="검증과 저장, activation 모두 internal API와 같은 validator/service를 사용합니다. ACTIVE snapshot은 생성 후 수정되지 않습니다."
+        title="설정 버전"
+        description="사람과 자동 작업에 같은 검증 기준을 적용합니다. 먼저 초안을 저장한 뒤 적용하며, 이미 적용된 설정은 덮어쓰지 않고 새 버전으로 보관합니다."
       >
         <FleetConfigEditor
           appId={fleet.id}
@@ -367,19 +368,19 @@ export default async function FleetOperationsPage({
             createdAt: dateTime(draft.createdAt),
             activatable: !draft.legacyConfigImport && configRevisionPayloadSchema.safeParse(draft.payload).success,
             activationLabel: draft.legacyConfigImport
-              ? `Legacy shadow import ${draft.legacyConfigImport.status} — 활성화 금지`
+              ? `기존 설정 가져오기 ${managementStatusLabel(draft.legacyConfigImport.status)} — 적용 불가`
               : configRevisionPayloadSchema.safeParse(draft.payload).success
-                ? "ACTIVE 전환"
-                : "strict 계약 밖 DRAFT",
+                ? "설정 적용"
+                : "현재 규격에 맞지 않는 초안",
           }))}
         />
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="Legacy JSON shadow import"
-        description="정확한 source SHA에서 읽은 공개 provenance와 중앙 ACTIVE 계약의 parity만 표시합니다. 원문은 저장·표시하지 않으며 imported DRAFT는 활성화할 수 없습니다. 정리는 연속 full MATCH 2회와 선언 마켓 build-only·장애 복구 증거가 모두 있어야 합니다."
+        title="기존 설정 가져오기·비교"
+        description="어느 소스에서 가져왔는지와 현재 중앙 설정과의 비교 결과를 표시합니다. 원문은 저장하거나 표시하지 않으며 가져온 초안은 바로 적용할 수 없습니다. 전체 비교 2회 연속 일치, 대상 마켓 시험 빌드, 장애 복구 확인을 모두 통과해야 기존 파일을 삭제할 수 있습니다."
       >
-        <Panel title="최근 shadow import">
+        <Panel title="최근 가져오기 기록">
           <div className="space-y-3">
             {fleet.legacyConfigImports.map((legacyImport) => {
               const parsedReasonCodes = legacyConfigResolutionReasonCodeSchema.array().safeParse(legacyImport.reasonCodes);
@@ -399,14 +400,14 @@ export default async function FleetOperationsPage({
                       <Status value={legacyImport.status} />
                       {legacyImport.configRevision && (
                         <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
-                          DRAFT revision {legacyImport.configRevision.revision}
+                          초안 버전 {legacyImport.configRevision.revision}
                         </span>
                       )}
                     </div>
                     <div className="mt-1 text-xs text-neutral-500">
-                      {legacyImport.sourceRef ?? "sourceRef 없음"} · {legacyImport.transformVersion} · {legacyImport.observedBy} · {dateTime(legacyImport.observedAt)}
+                      {legacyImport.sourceRef ?? "원본 참조 없음"} · {legacyImport.transformVersion} · {legacyImport.observedBy} · {dateTime(legacyImport.observedAt)}
                     </div>
-                    <div className="mt-1 text-[11px] text-neutral-400">input digest {mono(legacyImport.inputDigest, 20)}</div>
+                    <div className="mt-1 text-[11px] text-neutral-400">입력 확인값 {mono(legacyImport.inputDigest, 20)}</div>
                     {parsedReasonCodes.success && parsedReasonCodes.data.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {parsedReasonCodes.data.map((code) => (
@@ -416,13 +417,13 @@ export default async function FleetOperationsPage({
                     )}
                   </div>
                   <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
-                    정리 금지 · Fleet wave 2회와 복구·build-only 증거를 별도로 확인
+                    삭제 보류 · 전체 비교 2회와 복구·시험 빌드 결과 확인 필요
                   </span>
                 </div>
 
                 {importResolution && (
                   <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                    이 import에 기록된 resolution revision {importResolution.revision} · {importResolution.approvalKind} · {importResolution.createdBy} · {dateTime(importResolution.createdAt)} · digest {mono(importResolution.resolutionDigest, 14)}
+                    가져온 설정의 검토 버전 {importResolution.revision} · {importResolution.approvalKind} · {importResolution.createdBy} · {dateTime(importResolution.createdAt)} · 확인값 {mono(importResolution.resolutionDigest, 14)}
                   </div>
                 )}
                 {fleet.repoId !== null && activeConfig && parsedReasonCodes.success && parsedReasonCodes.data.length > 0 && (
@@ -443,7 +444,7 @@ export default async function FleetOperationsPage({
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full min-w-[900px] text-left text-[11px]">
                     <thead className="border-b border-neutral-200 text-neutral-500">
-                      <tr><th className="py-1.5 pr-3">Source</th><th className="pr-3">Repository</th><th className="pr-3">상태</th><th className="pr-3">Blob</th><th className="pr-3">Content SHA-256</th><th>관측</th></tr>
+                      <tr><th className="py-1.5 pr-3">원본</th><th className="pr-3">저장소</th><th className="pr-3">상태</th><th className="pr-3">파일 버전</th><th className="pr-3">내용 확인값</th><th>관측</th></tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-100">
                       {legacyImport.sources.map((source) => (
@@ -464,7 +465,7 @@ export default async function FleetOperationsPage({
                       ))}
                     </tbody>
                   </table>
-                  {legacyImport.sources.length === 0 && <Empty>Source metadata가 없습니다.</Empty>}
+                  {legacyImport.sources.length === 0 && <Empty>원본 정보가 없습니다.</Empty>}
                 </div>
 
                 <div className="mt-3 space-y-2">
@@ -472,38 +473,38 @@ export default async function FleetOperationsPage({
                     <details key={parity.id} className="rounded border border-neutral-200 px-3 py-2">
                       <summary className="cursor-pointer text-xs text-neutral-700">
                         <span className="mr-2 inline-block"><Status value={parity.status} /></span>
-                        {parity.scope} · contract {parity.contractVersion} · {dateTime(parity.observedAt)}
+                        {parity.scope} · 비교 규격 {parity.contractVersion} · {dateTime(parity.observedAt)}
                       </summary>
                       <dl className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
-                        <Meta label="비교 Config" value={parity.configRevisionId ? mono(parity.configRevisionId, 16) : "없음"} />
+                        <Meta label="비교 설정" value={parity.configRevisionId ? mono(parity.configRevisionId, 16) : "없음"} />
                         <Meta label="관측자" value={parity.observedBy} />
-                        <Meta label="Legacy digest" value={mono(parity.legacyDigest, 16)} />
-                        <Meta label="Central digest" value={mono(parity.centralDigest, 16)} />
-                        <Meta label="Resolution" value={mono(parity.legacyConfigResolutionId, 16)} />
+                        <Meta label="기존 설정 확인값" value={mono(parity.legacyDigest, 16)} />
+                        <Meta label="중앙 설정 확인값" value={mono(parity.centralDigest, 16)} />
+                        <Meta label="검토 기록" value={mono(parity.legacyConfigResolutionId, 16)} />
                       </dl>
                       <pre className="mt-2 max-h-48 overflow-auto rounded bg-neutral-950 p-3 text-[11px] text-neutral-100">{jsonText(parity.diff ?? [])}</pre>
                     </details>
                   ))}
-                  {legacyImport.parityObservations.length === 0 && <Empty>Parity observation이 없습니다.</Empty>}
+                  {legacyImport.parityObservations.length === 0 && <Empty>설정 비교 결과가 없습니다.</Empty>}
                 </div>
               </article>
               );
             })}
-            {fleet.legacyConfigImports.length === 0 && <Empty>Legacy shadow import가 없습니다.</Empty>}
+            {fleet.legacyConfigImports.length === 0 && <Empty>기존 설정을 가져온 기록이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="Fleet parity wave"
-        description="ACTIVE·MANAGED cohort를 한 번에 고정해 비교합니다. 동일 exact vector가 별도 occurrence에서 두 번 연속 FULL MATCH여야 parity 선행조건이 열립니다."
+        title="전체 앱 설정 비교"
+        description="관리 중인 전체 앱의 소스와 설정 버전을 고정해 비교합니다. 같은 대상을 두 번 별도로 비교해 모두 일치해야 기존 설정 삭제를 위한 비교 조건을 충족합니다."
       >
-        <Panel title="최근 앱별 wave 결과">
+        <Panel title="최근 앱별 비교 결과">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-left text-xs">
               <thead className="border-b border-neutral-200 text-neutral-500">
                 <tr>
-                  <th className="py-2 pr-3">Wave</th><th className="pr-3">결과</th><th className="pr-3">Exact vector</th><th className="pr-3">전체 cohort</th><th>증거</th>
+                  <th className="py-2 pr-3">비교 실행</th><th className="pr-3">결과</th><th className="pr-3">대상 소스·설정</th><th className="pr-3">전체 앱</th><th>증거</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
@@ -515,47 +516,47 @@ export default async function FleetOperationsPage({
                     </td>
                     <td className="pr-3 align-top">
                       <Status value={result.status} />
-                      <div className="mt-1 text-[11px] text-neutral-500">{result.reasonCode ?? `${result.sourceCount} sources`}</div>
+                      <div className="mt-1 text-[11px] text-neutral-500">{result.reasonCode ?? `원본 ${result.sourceCount}개`}</div>
                     </td>
                     <td className="pr-3 align-top font-mono text-[11px] text-neutral-500">
-                      <div>SHA {mono(result.sourceSha, 12)}</div>
-                      <div>Config {mono(result.configRevisionId, 12)}</div>
+                      <div>소스 {mono(result.sourceSha, 12)}</div>
+                      <div>설정 {mono(result.configRevisionId, 12)}</div>
                       <div>{result.scope} · {result.contractVersion}</div>
                     </td>
                     <td className="pr-3 align-top text-neutral-600">
                       <div><Status value={result.wave.status} /> · {result.wave.matchCount}/{result.wave.resultCount}</div>
-                      <div className="mt-1">연속 {result.wave.consecutiveMatchCount}/2 · parity 정리 선행조건 {result.wave.cleanupAllowed ? "충족" : "차단"}</div>
+                      <div className="mt-1">연속 {result.wave.consecutiveMatchCount}/2 · 설정 비교 조건 {result.wave.cleanupAllowed ? "충족" : "차단"}</div>
                     </td>
                     <td className="align-top font-mono text-[11px] text-neutral-500">
-                      <div>cohort {mono(result.wave.cohortDigest, 14)}</div>
-                      <div>vector {mono(result.wave.vectorDigest, 14)}</div>
-                      <div>evidence {mono(result.wave.evidenceDigest, 14)}</div>
+                      <div>대상 앱 {mono(result.wave.cohortDigest, 14)}</div>
+                      <div>대상 버전 {mono(result.wave.vectorDigest, 14)}</div>
+                      <div>확인 결과 {mono(result.wave.evidenceDigest, 14)}</div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {fleet.fleetParityWaveResults.length === 0 && <Empty>아직 Fleet parity wave가 없습니다.</Empty>}
+            {fleet.fleetParityWaveResults.length === 0 && <Empty>전체 앱 비교 기록이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
 
-      <WorkspaceSection title="관측과 binding" description="observation은 append-only이며 credential은 logical ID와 공개 identity만 표시합니다.">
+      <WorkspaceSection title="확인 기록·계정 연결" description="확인 기록은 덮어쓰지 않고 이력으로 남깁니다. 계정·키는 비밀값 없이 등록 ID와 공개 계정 정보만 표시합니다.">
         <div className="grid gap-4 xl:grid-cols-2">
-          <Panel title="DiscoveryObservation">
+          <Panel title="소스 확인 기록">
             <ObservationList
-              empty="Discovery observation이 없습니다."
+              empty="소스 확인 기록이 없습니다."
               rows={fleet.discoveryObservations.map((row) => ({
                 id: row.id,
                 title: `${mono(row.sourceSha, 12)}${row.sourceRef ? ` · ${row.sourceRef}` : ""}`,
-                subtitle: `${dateTime(row.observedAt)} · ${row.observedBy} · ${row.workflowProfile ?? "caller 미탐지"}/${row.workflowPackageManager ?? "—"} @ ${row.workflowWorkingDirectory ?? "—"}`,
+                subtitle: `${dateTime(row.observedAt)} · ${row.observedBy} · ${row.workflowProfile ?? "빌드 설정 미확인"}/${row.workflowPackageManager ?? "—"} @ ${row.workflowWorkingDirectory ?? "—"}`,
                 payload: row.payload,
               }))}
             />
           </Panel>
-          <Panel title="ProviderObservation">
+          <Panel title="마켓·서비스 확인 기록">
             <ObservationList
-              empty="Provider observation이 없습니다."
+              empty="마켓·서비스 확인 기록이 없습니다."
               rows={fleet.providerObservations.map((row) => ({
                 id: row.id,
                 title: `${row.provider} · ${row.resourceType} · ${row.resourceId}`,
@@ -564,12 +565,12 @@ export default async function FleetOperationsPage({
               }))}
             />
           </Panel>
-          <Panel title="GitHub App Gate 1 권한">
+          <Panel title="GitHub 연동 권한">
             {githubInstallation?.parsed.success ? (
               <div className="space-y-3">
                 <dl className="grid gap-1 text-xs sm:grid-cols-2">
                   <Meta label="조직" value={githubInstallation.parsed.data.attributes.accountLogin} />
-                  <Meta label="Installation" value={githubInstallation.parsed.data.attributes.installationId} />
+                  <Meta label="설치 번호" value={githubInstallation.parsed.data.attributes.installationId} />
                   <Meta label="저장소 범위" value={githubInstallation.parsed.data.attributes.repositorySelection} />
                   <Meta label="중지" value={githubInstallation.parsed.data.attributes.suspended ? "예" : "아니오"} />
                   <Meta label="관측" value={dateTime(githubInstallation.observation.observedAt)} />
@@ -590,23 +591,23 @@ export default async function FleetOperationsPage({
                   ))}
                 </div>
                 <p className="text-[11px] leading-relaxed text-neutral-500">
-                  GRANTED는 설치 grant가 있다는 뜻이며 GitHub write 실행 승인이나 실제 mutation 완료를 뜻하지 않습니다.
+                  권한 있음은 GitHub 연동 권한만 뜻합니다. 개별 작업의 실행 승인이나 변경 완료를 뜻하지 않습니다.
                 </p>
               </div>
-            ) : <Empty>GitHub App installation 공개 권한 관측이 없습니다.</Empty>}
+            ) : <Empty>GitHub 연동 권한을 확인한 기록이 없습니다.</Empty>}
           </Panel>
-          <Panel title="PlatformFleetBinding">
+          <Panel title="공통 기능 적용 현황">
             {fleet.platformFleetBinding ? (
               <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <Meta label="상태" value={fleet.platformFleetBinding.state} />
-                <Meta label="Observed" value={fleet.platformFleetBinding.observedVersion} />
-                <Meta label="Observed digest" value={mono(fleet.platformFleetBinding.observedDigest, 18)} />
-                <Meta label="Approved" value={fleet.platformFleetBinding.approvedVersion} />
-                <Meta label="Approved digest" value={mono(fleet.platformFleetBinding.approvedDigest, 18)} />
-                <Meta label="Manifest" value={mono(fleet.platformFleetBinding.manifestDigest, 18)} />
-                <Meta label="Contract" value={fleet.platformFleetBinding.contractRevision} />
-                <Meta label="Source SHA" value={mono(fleet.platformFleetBinding.sourceSha, 12)} />
-                <Meta label="Plan" value={fleet.platformFleetBinding.latestPlanKind} />
+                <Meta label="상태" value={managementStatusLabel(fleet.platformFleetBinding.state)} />
+                <Meta label="적용 버전" value={fleet.platformFleetBinding.observedVersion} />
+                <Meta label="적용 파일 확인값" value={mono(fleet.platformFleetBinding.observedDigest, 18)} />
+                <Meta label="승인 버전" value={fleet.platformFleetBinding.approvedVersion} />
+                <Meta label="승인 파일 확인값" value={mono(fleet.platformFleetBinding.approvedDigest, 18)} />
+                <Meta label="구성 확인값" value={mono(fleet.platformFleetBinding.manifestDigest, 18)} />
+                <Meta label="연동 규격" value={fleet.platformFleetBinding.contractRevision} />
+                <Meta label="소스 버전" value={mono(fleet.platformFleetBinding.sourceSha, 12)} />
+                <Meta label="예정 작업" value={fleet.platformFleetBinding.latestPlanKind} />
                 <Meta
                   label="PR"
                   value={fleet.platformFleetBinding.pullRequestUrl
@@ -614,16 +615,16 @@ export default async function FleetOperationsPage({
                     : "—"}
                 />
                 <Meta
-                  label="P1 Issue"
+                  label="우선 처리 작업"
                   value={fleet.platformFleetBinding.issueUrl
                     ? <a className="text-blue-700 underline" href={fleet.platformFleetBinding.issueUrl}>#{fleet.platformFleetBinding.issueNumber}</a>
                     : "—"}
                 />
                 <Meta label="예외 만료" value={dateTime(fleet.platformFleetBinding.exceptionExpiresAt)} />
               </dl>
-            ) : <Empty>Platform Fleet binding이 없습니다.</Empty>}
+            ) : <Empty>공통 기능 연결 정보가 없습니다.</Empty>}
           </Panel>
-          <Panel title="Platform Fleet plan 원장">
+          <Panel title="공통 기능 업데이트 이력">
             <div className="space-y-2">
               {fleet.platformFleetPlans.map((plan) => (
                 <details key={plan.id} className="rounded border border-neutral-200 px-3 py-2">
@@ -632,15 +633,15 @@ export default async function FleetOperationsPage({
                     <Status value={plan.status} />
                   </summary>
                   <dl className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
-                    <Meta label="Approval" value={plan.platformRelease.approval} />
-                    <Meta label="Classification" value={plan.platformRelease.classification} />
-                    <Meta label="Source SHA" value={mono(plan.sourceSha, 16)} />
-                    <Meta label="Manifest" value={mono(plan.platformRelease.manifestDigest, 18)} />
-                    <Meta label="Desired digest" value={mono(plan.desiredHash, 18)} />
-                    <Meta label="Contract" value={mono(plan.platformRelease.contractRevision, 18)} />
-                    <Meta label="Discovery" value={mono(plan.discoveryObservationId, 16)} />
-                    <Meta label="Provider observation" value={mono(plan.providerObservationId, 16)} />
-                    <Meta label="Exception" value={dateTime(fleet.platformFleetBinding?.exceptionExpiresAt)} />
+                    <Meta label="승인" value={plan.platformRelease.approval} />
+                    <Meta label="변경 분류" value={plan.platformRelease.classification} />
+                    <Meta label="소스 버전" value={mono(plan.sourceSha, 16)} />
+                    <Meta label="구성 확인값" value={mono(plan.platformRelease.manifestDigest, 18)} />
+                    <Meta label="목표 설정 확인값" value={mono(plan.desiredHash, 18)} />
+                    <Meta label="연동 규격" value={mono(plan.platformRelease.contractRevision, 18)} />
+                    <Meta label="소스 확인" value={mono(plan.discoveryObservationId, 16)} />
+                    <Meta label="서비스 확인 기록" value={mono(plan.providerObservationId, 16)} />
+                    <Meta label="예외 만료" value={dateTime(fleet.platformFleetBinding?.exceptionExpiresAt)} />
                     <Meta label="시도" value={String(plan.attempts)} />
                     <Meta label="갱신" value={dateTime(plan.updatedAt)} />
                   </dl>
@@ -652,10 +653,10 @@ export default async function FleetOperationsPage({
                   {plan.lastError && <p className="mt-2 text-xs text-red-700">{plan.lastError}</p>}
                 </details>
               ))}
-              {fleet.platformFleetPlans.length === 0 && <Empty>Platform Fleet plan이 없습니다.</Empty>}
+              {fleet.platformFleetPlans.length === 0 && <Empty>공통 기능 업데이트 계획이 없습니다.</Empty>}
             </div>
           </Panel>
-          <Panel title="CredentialBinding — read-only">
+          <Panel title="연결 계정·키 정보 — 조회 전용">
             <div className="space-y-2">
               {fleet.credentialBindings.map((binding) => (
                 <div key={binding.id} className="rounded border border-neutral-200 px-3 py-2 text-sm">
@@ -664,22 +665,22 @@ export default async function FleetOperationsPage({
                     <Status value={binding.status} />
                   </div>
                   <div className="mt-1 grid gap-1 text-xs text-neutral-500 sm:grid-cols-2">
-                    <span>logical ID: <code>{binding.logicalCredentialId}</code></span>
-                    <span>identity: {binding.publicIdentity ?? "—"}</span>
-                    <span>fingerprint: {mono(binding.fingerprint, 20)}</span>
+                    <span>등록 ID: <code>{binding.logicalCredentialId}</code></span>
+                    <span>공개 계정 ID: {binding.publicIdentity ?? "—"}</span>
+                    <span>지문: {mono(binding.fingerprint, 20)}</span>
                     <span>{binding.environment} · {binding.consumer}</span>
-                    <span>generation {binding.credentialGeneration ?? "미등록"}/{binding.policyGeneration ?? "미등록"}</span>
-                    <span>{binding.adapterId ?? "adapter 미등록"} · {binding.origin ?? "origin 미등록"}</span>
+                    <span>변경 차수 {binding.credentialGeneration ?? "미등록"}/{binding.policyGeneration ?? "미등록"}</span>
+                    <span>{binding.adapterId ?? "연결 도구 미등록"} · {binding.origin ?? "허용 주소 미등록"}</span>
                   </div>
                 </div>
               ))}
-              {fleet.credentialBindings.length === 0 && <Empty>등록된 공개 credential binding이 없습니다.</Empty>}
+              {fleet.credentialBindings.length === 0 && <Empty>등록된 계정·키 연결 정보가 없습니다.</Empty>}
             </div>
           </Panel>
         </div>
       </WorkspaceSection>
 
-      <WorkspaceSection title="Automation queue" description="routine 생성·즉시/정기 실행·pause/cancel/retry를 같은 API 계약으로 처리합니다. lease token은 저장·표시하지 않습니다.">
+      <WorkspaceSection title="자동 작업" description="자동 작업을 만들고 즉시 또는 정기 실행하거나 일시중지·취소·재시도합니다. 실행에 필요한 임시 인증 정보는 이 화면에 저장하거나 표시하지 않습니다.">
         <FleetAutomationControls
           appId={fleet.id}
           definitions={fleet.automationDefinitions.map((definition) => {
@@ -717,8 +718,8 @@ export default async function FleetOperationsPage({
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="Seorilabs Fleet Project projection"
-        description="Priority·App·Kind·Lifecycle·Agent·Approval·Outcome desired state입니다. 표시 projection은 실행 claim과 완전히 분리되어 있습니다."
+        title="GitHub 작업 보드 동기화"
+        description="우선순위, 앱, 작업 유형, 진행 단계, 담당 도구, 승인, 결과를 GitHub 작업 보드에 동기화합니다. 보드 표시를 바꾸는 것만으로 작업이 실행되지는 않습니다."
       >
         <Panel>
           <div className="space-y-2">
@@ -735,14 +736,14 @@ export default async function FleetOperationsPage({
                 {projection.lastError && <p className="mt-2 text-xs text-red-700">{projection.lastError}</p>}
               </details>
             ))}
-            {fleet.fleetProjectProjections.length === 0 && <Empty>아직 Project projection 관측이 없습니다.</Empty>}
+            {fleet.fleetProjectProjections.length === 0 && <Empty>작업 보드 동기화 기록이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>
 
       <WorkspaceSection
-        title="사람 재인증 대기"
-        description="공개 account ID와 gate만 기록합니다. 비밀번호·TOTP·cookie·복구 코드 입력 또는 조회 UI는 제공하지 않습니다."
+        title="직접 로그인 필요"
+        description="어느 계정에 어떤 확인이 필요한지만 기록합니다. 비밀번호, 일회용 인증 코드, 로그인 정보, 복구 코드는 이 화면에서 입력하거나 조회하지 않습니다."
       >
         <Panel>
           <div className="space-y-2">
@@ -753,18 +754,18 @@ export default async function FleetOperationsPage({
                     <span className="font-medium">{request.provider} · {request.gate}</span>
                     <Status value={request.status} />
                   </div>
-                  <div className="mt-1 text-xs text-neutral-600">{request.origin} · account {request.publicAccountId}</div>
+                  <div className="mt-1 text-xs text-neutral-600">{request.origin} · 계정 {request.publicAccountId}</div>
                   <div className="mt-1 text-xs text-neutral-500">{request.capability} · {request.reason}</div>
-                  <div className="mt-1 text-[11px] text-neutral-400">요청 {dateTime(request.createdAt)} · {request.requestedBy}{request.runId ? ` · run ${mono(request.runId, 10)}` : ""}</div>
+                  <div className="mt-1 text-[11px] text-neutral-400">요청 {dateTime(request.createdAt)} · {request.requestedBy}{request.runId ? ` · 작업 ${mono(request.runId, 10)}` : ""}</div>
                 </div>
                 {request.status === "HUMAN_REAUTH_REQUIRED" ? (
                   <TrustedLocalPendingButton appId={fleet.id} requestId={request.id} generation={request.generation} />
                 ) : (
-                  <div className="text-right text-xs text-amber-700">trusted local 처리 대기<br />{dateTime(request.trustedLocalRequestedAt)}</div>
+                  <div className="text-right text-xs text-amber-700">내 기기에서 로그인 대기<br />{dateTime(request.trustedLocalRequestedAt)}</div>
                 )}
               </div>
             ))}
-            {fleet.reauthRequests.length === 0 && <Empty>사람 재인증 요청이 없습니다.</Empty>}
+            {fleet.reauthRequests.length === 0 && <Empty>직접 로그인이 필요한 요청이 없습니다.</Empty>}
           </div>
         </Panel>
       </WorkspaceSection>

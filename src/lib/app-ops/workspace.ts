@@ -10,12 +10,12 @@ import {
 export const APP_WORKSPACE_TABS = [
   { key: "overview", segment: "", label: "개요" },
   { key: "metrics", segment: "metrics", label: "지표" },
-  { key: "operations", segment: "operations", label: "오퍼레이션" },
-  { key: "commerce", segment: "commerce", label: "결제·IAP" },
+  { key: "operations", segment: "operations", label: "운영" },
+  { key: "commerce", segment: "commerce", label: "앱 내 결제" },
   { key: "ads", segment: "ads", label: "광고" },
   { key: "content", segment: "content", label: "콘텐츠" },
-  { key: "flags", segment: "flags", label: "Feature Flags" },
-  { key: "fleet", segment: "fleet", label: "Fleet" },
+  { key: "flags", segment: "flags", label: "기능 켜기·끄기" },
+  { key: "fleet", segment: "fleet", label: "앱 통합 관리" },
   { key: "development", segment: "development", label: "개발" },
   { key: "releases", segment: "releases", label: "릴리스" },
 ] as const;

@@ -62,7 +62,7 @@ function errorMessage(error: unknown): string {
   if (error instanceof ZodError) {
     return error.issues.map((issue) => issue.message).join(" ");
   }
-  return error instanceof Error ? error.message : "Fleet 요청을 처리하지 못했습니다.";
+  return error instanceof Error ? error.message : "앱 관리 요청을 처리하지 못했습니다.";
 }
 
 async function fleetApp(appId: string) {
@@ -71,14 +71,14 @@ async function fleetApp(appId: string) {
     select: { id: true, slug: true, repoId: true },
   });
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
-  if (!app.repoId) throw new Error("GitHub numeric repo ID가 없어 Fleet 설정을 변경할 수 없습니다.");
+  if (!app.repoId) throw new Error("GitHub 저장소 ID가 없어 앱 설정을 변경할 수 없습니다.");
   return { id: app.id, slug: app.slug, repoId: app.repoId };
 }
 
 async function fleetWriteContext(appId: string) {
   const app = await fleetApp(appId);
   const actor = await requirePlatformWriteAccess(app.slug);
-  if (actor.appId !== app.id) throw new Error("Fleet 앱 권한 결합이 일치하지 않습니다.");
+  if (actor.appId !== app.id) throw new Error("이 앱에 대한 작업 권한이 일치하지 않습니다.");
   return { app, actor };
 }
 
