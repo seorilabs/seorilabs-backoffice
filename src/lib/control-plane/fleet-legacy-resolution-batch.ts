@@ -81,8 +81,11 @@ export function prepareFleetLegacyResolutionBatch(input: {
       );
     }
     if (!current.reviewable || !current.approvalReady) {
+      const detail = current.missingEvidenceKinds.join(", ")
+        || current.blockers.join(", ")
+        || (current.awaitingParity ? "PARITY_RECHECK_PENDING" : "APPROVAL_NOT_READY");
       throw new ControlPlaneError(
-        `Legacy 설정 검토에 필요한 중앙 증거가 부족합니다: ${current.missingEvidenceKinds.join(", ") || current.blockers.join(", ")}`,
+        `Legacy 설정 검토를 아직 승인할 수 없습니다: ${detail}`,
         409,
         "LEGACY_RESOLUTION_BATCH_EVIDENCE_MISSING",
       );

@@ -28,7 +28,7 @@ export function LegacyConfigResolutionBatchButton({
   if (readyItems.length === 0) {
     return (
       <p className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-        현재 일괄 승인 가능한 항목은 없습니다. 아래에 표시된 ComplianceProfile 또는 CredentialBinding을 먼저 준비하세요.
+        현재 일괄 승인 가능한 항목은 없습니다. 아래 항목별 대기 사유와 필요한 중앙 증거를 확인하세요.
       </p>
     );
   }

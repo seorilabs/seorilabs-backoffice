@@ -330,6 +330,27 @@ test("review.credentials 공개 상태 envelope는 비밀로 오인하지 않고
   assert.doesNotMatch(JSON.stringify(unsafe), new RegExp(secretCanary));
 });
 
+test("review.credentials 공개 상태 envelope는 제한 깊이를 넘으면 fail-closed한다", () => {
+  let loginSmoke: Record<string, unknown> = {
+    status: "not-required",
+  };
+  for (let depth = 0; depth < 66; depth += 1) {
+    loginSmoke = { loginSmoke };
+  }
+
+  const result = transformLegacySources(completeVector({
+    APP_STORE_CONFIG: {
+      enabled: true,
+      review: { credentials: loginSmoke },
+    },
+  }));
+
+  assert.equal(result.reasons.some((reason) => (
+    reason.code === "SECRET_LIKE_KEY" && reason.path === "$.review.credentials"
+  )), true);
+  assert.equal(result.reasons.some((reason) => reason.code === "INVALID_SOURCE_SHAPE"), true);
+});
+
 test("App Store scalar listing과 build 표식은 shape 오류 대신 중앙 검토 대상으로 분리한다", () => {
   const listingCanary = "legacy-listing-must-not-persist";
   const buildCanary = "legacy-build-must-not-persist";

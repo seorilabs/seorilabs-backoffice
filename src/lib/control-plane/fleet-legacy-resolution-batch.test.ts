@@ -106,6 +106,24 @@ test("필수 중앙 증거가 없거나 같은 import를 중복 지정하면 거
   );
 });
 
+test("parity 재검증 대기 항목은 빈 문자열 대신 명시적 사유로 거부한다", () => {
+  assert.throws(
+    () => prepareFleetLegacyResolutionBatch({
+      queue: [queueItem({
+        approvalReady: false,
+        awaitingParity: true,
+      })],
+      selections: [selection()],
+    }),
+    (error: unknown) => (
+      error instanceof Error
+      && "code" in error
+      && error.code === "LEGACY_RESOLUTION_BATCH_EVIDENCE_MISSING"
+      && error.message.includes("PARITY_RECHECK_PENDING")
+    ),
+  );
+});
+
 test("뒤 앱의 race 실패가 앞 앱의 성공 결과를 지우지 않고 둘 다 명시한다", async () => {
   const second = queueItem({
     appId: "app-2",
@@ -168,5 +186,7 @@ test("일괄 UI는 전체 preflight 뒤 기존 개별 CAS 원장을 사용하고
   assert.match(action, /approvalKind: "HUMAN"/);
   assert.match(action, /revalidatePath\("\/settings"\)/);
   assert.match(component, /LEGACY_RESOLUTION_BATCH_LIMIT/);
+  assert.match(component, /항목별 대기 사유와 필요한 중앙 증거/);
+  assert.doesNotMatch(component, /ComplianceProfile 또는 CredentialBinding을 먼저 준비/);
   assert.doesNotMatch(component, /type="password"|secretValue|privateKey|accessToken/i);
 });
