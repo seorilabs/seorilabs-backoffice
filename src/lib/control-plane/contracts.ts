@@ -12,7 +12,12 @@ const sha256 = z.string().regex(/^[0-9a-f]{64}$/i, "64자리 SHA-256이 필요�
 const prefixedSha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/i, "sha256: 접두사가 있는 SHA-256이 필요합니다.");
 const jsonRecord = z.record(z.unknown());
 
-const locale = z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/, "BCP-47 locale이 필요합니다.");
+// Fleet store metadata가 쓰는 canonical BCP 47 subset: language, optional
+// ISO 15924 script, optional ISO 3166-1/UN M.49 region.
+const locale = z.string().regex(
+  /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/,
+  "BCP-47 locale이 필요합니다.",
+);
 const revisionRef = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$/);
 const numericId = z.string().regex(/^\d{1,30}$/, "숫자 provider ID가 필요합니다.");
 const gcpProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "유효한 GCP project ID가 필요합니다.");

@@ -393,9 +393,14 @@ function readLocalizedStrings(
   sourceKind: LegacySourceKind,
   reasons: LegacyTransformReason[],
   path: string,
+  fallbackLocale?: string,
 ): Map<string, string> {
   const result = new Map<string, string>();
   if (value === undefined) return result;
+  if (typeof value === "string" && fallbackLocale) {
+    result.set(fallbackLocale, value);
+    return result;
+  }
   if (!isRecord(value)) {
     addReason(reasons, "INVALID_SOURCE_SHAPE", path, sourceKind);
     return result;
@@ -457,6 +462,13 @@ function transformBuild(
   path: string,
 ): void {
   if (value === undefined) return;
+  if (typeof value === "string") {
+    // 초기 App Store 설정은 archive/build 표식을 scalar로 기록했다. 값을
+    // ConfigRevision으로 추측해 옮기지 않고 BuildTarget 사람 검토로 분리한다.
+    addReason(context.reasons, "UNSUPPORTED_FIELD", path, sourceKind);
+    addReason(context.reasons, "FREE_TEXT_REQUIRES_INPUT", path, sourceKind);
+    return;
+  }
   const allowed = new Set(["workflowBundleSha", "workflowBundleDigest", "platformVersion", "minSdk", "targetSdk"]);
   if (!assertAllowedKeys(value, allowed, sourceKind, context.reasons, path)) return;
   for (const key of ["workflowBundleSha", "workflowBundleDigest", "platformVersion"] as const) {
@@ -545,14 +557,14 @@ function transformAppStore(source: Record<string, unknown>, context: TransformCo
         ["description", "description"],
       ] as const) {
         for (const [locale, text] of readLocalizedStrings(
-          source.storeListing[key], kind, context.reasons, `$.storeListing.${key}`,
+          source.storeListing[key], kind, context.reasons, `$.storeListing.${key}`, primaryLanguage,
         )) {
           locales.add(locale);
           mergeLocalization(context, locale, field, text, kind);
         }
       }
       for (const [locale, keywords] of readLocalizedStrings(
-        source.storeListing.keywords, kind, context.reasons, "$.storeListing.keywords",
+        source.storeListing.keywords, kind, context.reasons, "$.storeListing.keywords", primaryLanguage,
       )) {
         locales.add(locale);
         mergeLocalization(
@@ -618,6 +630,12 @@ function mergeDirectPayload(
   sourceKind: "SEORILABS_APP_YAML" | "SEORILABS_BACKOFFICE_JSON",
   context: TransformContext,
 ): void {
+  if (sourceKind === "SEORILABS_BACKOFFICE_JSON" && isLegacyBackofficeToolManifest(source)) {
+    // v1 Backoffice 도구 manifest는 앱 desired state가 아니다. 원문을 중앙
+    // ConfigRevision으로 복사하지 않고 AutomationDefinition/비운영 값 사람 검토로 보낸다.
+    addReason(context.reasons, "UNSUPPORTED_FIELD", "$", sourceKind);
+    return;
+  }
   const parsed = configRevisionPayloadSchema.safeParse(source);
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {
@@ -654,6 +672,16 @@ function mergeDirectPayload(
     void value;
     addReason(context.reasons, "FREE_TEXT_REQUIRES_INPUT", `$.support.${key}`, sourceKind);
   }
+}
+
+function isLegacyBackofficeToolManifest(source: Record<string, unknown>): boolean {
+  const allowed = new Set(["$schema", "version", "summary", "tools", "analytics"]);
+  return Object.keys(source).every((key) => allowed.has(key))
+    && typeof source.$schema === "string"
+    && Number.isInteger(source.version)
+    && typeof source.summary === "string"
+    && Array.isArray(source.tools)
+    && (source.analytics === undefined || isRecord(source.analytics));
 }
 
 function canonicalPayload(draft: MutablePayload): DraftableConfigRevisionPayload {
