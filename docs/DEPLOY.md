@@ -673,7 +673,9 @@ kubectl -n platform delete deploy backoffice-teammate-worker
   `next.config.ts` 의 `outputFileTracingExcludes` 로 트레이스에서 제외했다. **sharp 제외를
   되돌리면 빌드 호스트 아키텍처의 `.node` 바이너리가 arm64 이미지에 딸려 들어간다.**
   `images.unoptimized` 로는 제외되지 않는다(실측). 이 앱은 `next/image` 를 쓰지 않는다.
-- **캐시**: `cache-from/to: type=gha`. 의존성 무변경이면 `pnpm install` 레이어를 재사용한다.
+- **캐시**: GitHub Actions 저장공간을 사용하지 않는다. 최종 이미지 레이어 캐시를
+  `registry.vzyx.xyz/...:buildcache`의 단일 mutable tag에 inline으로 기록하고 다음 빌드에서
+  `type=registry`로 읽는다. immutable source SHA tag와 배포 digest는 그대로 유지한다.
   BuildKit cache mount(pnpm store·`.next/cache`)는 러너가 ephemeral 이라 유지되지 않는다.
 - **메모리**: Dockerfile `NODE_OPTIONS=--max-old-space-size=2048` 로 `next build` 힙 상한.
 - **PR CI만 `pnpm build`를 실행**하고 main Deploy의 `verify`는 이를 생략한다. production
