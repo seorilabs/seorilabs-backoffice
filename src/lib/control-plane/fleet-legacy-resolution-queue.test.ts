@@ -141,9 +141,12 @@ test("검토 불가능한 import와 지원하지 않는 reason은 선행 조치�
   row.configRevisions = [];
   row.legacyConfigImports[0]!.status = "NEEDS_INPUT";
   row.legacyConfigImports[0]!.reasonCodes = ["INVALID_DESIRED_STATE"];
+  row.legacyConfigResolutions[0]!.createdAt = new Date("2026-01-03T00:00:00.000Z");
   const item = projectFleetLegacyResolutionQueueItem(row);
   assert.ok(item);
   assert.equal(item.reviewable, false);
+  assert.equal(item.awaitingParity, false);
+  assert.equal(item.approvalReady, false);
   assert.deepEqual(item.blockers, [
     "IMPORT_NOT_REVIEWABLE",
     "ACTIVE_CONFIG_MISSING",

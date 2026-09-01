@@ -133,10 +133,6 @@ export function projectFleetLegacyResolutionQueueItem(
       !latest || resolution.revision > latest.revision ? resolution : latest
     ), null);
   const expectedResolutionRevision = latestResolution?.revision ?? 0;
-  const awaitingParity = Boolean(
-    latestResolution
-    && (!parity || latestResolution.createdAt.getTime() > parity.observedAt.getTime()),
-  );
   const availableEvidenceKinds = evidenceKinds(row);
   const suggestedDispositions = parsed.success
     ? suggestedLegacyResolutionDispositions({
@@ -146,6 +142,10 @@ export function projectFleetLegacyResolutionQueueItem(
     : [];
   const missingEvidenceKinds = missingLegacyResolutionEvidenceKinds(suggestedDispositions);
   const reviewable = blockers.length === 0;
+  const awaitingParity = reviewable && Boolean(
+    latestResolution
+    && (!parity || latestResolution.createdAt.getTime() > parity.observedAt.getTime()),
+  );
 
   return {
     appId: row.id,
