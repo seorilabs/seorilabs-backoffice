@@ -23,6 +23,14 @@ export type PreparedFleetLegacyResolutionBatchItem = {
   request: LegacyConfigResolutionRequest;
 };
 
+export type FleetLegacyResolutionBatchExecutionResult = {
+  appId: string;
+  repoFullName: string;
+  ok: boolean;
+  revision?: number;
+  error?: string;
+};
+
 function exactSelectionMatches(
   current: FleetLegacyResolutionQueueItem,
   selection: FleetLegacyResolutionBatchSelection,
@@ -95,4 +103,34 @@ export function prepareFleetLegacyResolutionBatch(input: {
       }),
     };
   });
+}
+
+/**
+ * preflight가 끝난 앱을 순서대로 실행한다. 앱별 transaction이므로 뒤 항목의 race는
+ * 앞에서 확정된 append-only 기록을 되돌리지 않으며, 각 결과를 공개 필드로 남긴다.
+ */
+export async function executePreparedFleetLegacyResolutionBatch(input: {
+  items: readonly PreparedFleetLegacyResolutionBatchItem[];
+  execute: (item: PreparedFleetLegacyResolutionBatchItem) => Promise<number>;
+  formatError: (error: unknown) => string;
+}): Promise<FleetLegacyResolutionBatchExecutionResult[]> {
+  const results: FleetLegacyResolutionBatchExecutionResult[] = [];
+  for (const item of input.items) {
+    try {
+      results.push({
+        appId: item.appId,
+        repoFullName: item.repoFullName,
+        ok: true,
+        revision: await input.execute(item),
+      });
+    } catch (error) {
+      results.push({
+        appId: item.appId,
+        repoFullName: item.repoFullName,
+        ok: false,
+        error: input.formatError(error),
+      });
+    }
+  }
+  return results;
 }

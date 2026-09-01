@@ -11,6 +11,7 @@ import {
   LEGACY_RESOLUTION_BATCH_LIMIT,
 } from "@/lib/control-plane/legacy-config-resolution-selection";
 import {
+  executePreparedFleetLegacyResolutionBatch,
   prepareFleetLegacyResolutionBatch,
   type FleetLegacyResolutionBatchSelection,
 } from "@/lib/control-plane/fleet-legacy-resolution-batch";
@@ -95,30 +96,19 @@ export async function approveLegacyConfigResolutionBatchAction(input: {
       queue: await getFleetLegacyResolutionQueue(),
       selections: body.items,
     });
-    const results: LegacyConfigResolutionBatchActionResult["results"] = [];
-    for (const item of prepared) {
-      try {
+    const results = await executePreparedFleetLegacyResolutionBatch({
+      items: prepared,
+      execute: async (item) => {
         const result = await recordLegacyConfigResolution({
           request: item.request,
           actor: actor.login,
           approvalKind: "HUMAN",
           idempotencyKey: `ui-legacy-config-resolution:${item.requestId}`,
         });
-        results.push({
-          appId: item.appId,
-          repoFullName: item.repoFullName,
-          ok: true,
-          revision: result.resolution.revision,
-        });
-      } catch (error) {
-        results.push({
-          appId: item.appId,
-          repoFullName: item.repoFullName,
-          ok: false,
-          error: errorMessage(error),
-        });
-      }
-    }
+        return result.resolution.revision;
+      },
+      formatError: errorMessage,
+    });
     for (const item of prepared) revalidatePath(`/apps/${item.appId}/fleet`);
     revalidatePath("/settings");
     const failedCount = results.filter((result) => !result.ok).length;

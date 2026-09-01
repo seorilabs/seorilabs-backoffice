@@ -69,6 +69,26 @@ test("중앙 legacy queue는 공개 reason과 실제 evidence만 투영한다", 
     { reasonCode: "FREE_TEXT_REQUIRES_INPUT", targets: ["CONFIG_REVISION"] },
     { reasonCode: "PROVIDER_STATE_AMBIGUITY", targets: ["PROVIDER_OBSERVATION"] },
   ]);
+  assert.deepEqual(Object.keys(item).sort(), [
+    "activeConfigRevision",
+    "appId",
+    "approvalReady",
+    "availableEvidenceKinds",
+    "awaitingParity",
+    "blockers",
+    "expectedResolutionRevision",
+    "importStatus",
+    "legacyImportId",
+    "missingEvidenceKinds",
+    "parityStatus",
+    "rawReasonCodes",
+    "reasonCodes",
+    "repoFullName",
+    "repoId",
+    "reviewable",
+    "sourceSha",
+    "suggestedDispositions",
+  ]);
 });
 
 test("법적 선언과 credential 공개 증거가 없으면 검토 가능하지만 승인은 차단한다", () => {

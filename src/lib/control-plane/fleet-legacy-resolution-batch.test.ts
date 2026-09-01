@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  executePreparedFleetLegacyResolutionBatch,
   prepareFleetLegacyResolutionBatch,
   type FleetLegacyResolutionBatchSelection,
 } from "@/lib/control-plane/fleet-legacy-resolution-batch";
@@ -105,6 +106,53 @@ test("필수 중앙 증거가 없거나 같은 import를 중복 지정하면 거
   );
 });
 
+test("뒤 앱의 race 실패가 앞 앱의 성공 결과를 지우지 않고 둘 다 명시한다", async () => {
+  const second = queueItem({
+    appId: "app-2",
+    repoId: "456",
+    repoFullName: "seorilabs/second-app",
+    legacyImportId: "import-2",
+    sourceSha: "b".repeat(40),
+  });
+  const prepared = prepareFleetLegacyResolutionBatch({
+    queue: [queueItem(), second],
+    selections: [
+      selection(),
+      selection({
+        appId: second.appId,
+        repoId: second.repoId,
+        sourceSha: second.sourceSha,
+        legacyImportId: second.legacyImportId,
+        requestId: "22222222-2222-4222-8222-222222222222",
+      }),
+    ],
+  });
+
+  const results = await executePreparedFleetLegacyResolutionBatch({
+    items: prepared,
+    execute: async (item) => {
+      if (item.appId === second.appId) throw new Error("revision race");
+      return 3;
+    },
+    formatError: (error) => error instanceof Error ? error.message : "unknown",
+  });
+
+  assert.deepEqual(results, [
+    {
+      appId: "app-1",
+      repoFullName: "seorilabs/example-app",
+      ok: true,
+      revision: 3,
+    },
+    {
+      appId: "app-2",
+      repoFullName: "seorilabs/second-app",
+      ok: false,
+      error: "revision race",
+    },
+  ]);
+});
+
 test("일괄 UI는 전체 preflight 뒤 기존 개별 CAS 원장을 사용하고 비밀 입력면을 만들지 않는다", () => {
   const action = readFileSync(
     join(process.cwd(), "src/lib/actions/legacy-config-resolution.ts"),
@@ -115,7 +163,7 @@ test("일괄 UI는 전체 preflight 뒤 기존 개별 CAS 원장을 사용하고
     "utf8",
   );
 
-  assert.ok(action.indexOf("prepareFleetLegacyResolutionBatch({") < action.indexOf("for (const item of prepared)"));
+  assert.ok(action.indexOf("prepareFleetLegacyResolutionBatch({") < action.indexOf("executePreparedFleetLegacyResolutionBatch({"));
   assert.match(action, /recordLegacyConfigResolution\(\{/);
   assert.match(action, /approvalKind: "HUMAN"/);
   assert.match(action, /revalidatePath\("\/settings"\)/);
