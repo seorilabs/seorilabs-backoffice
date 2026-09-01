@@ -12,6 +12,7 @@ import {
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
   assertManagedProductConfigSourceBinding,
+  assertExpectedConfigSourceSha,
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
   CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION,
@@ -204,6 +205,21 @@ test("create/rebase는 latest revision optimistic concurrency를 강제한다", 
   );
 });
 
+test("사람 batch create는 current discovery의 exact source SHA를 강제한다", () => {
+  assert.doesNotThrow(() => assertExpectedConfigSourceSha({
+    expectedSourceSha: SOURCE_SHA,
+    actualSourceSha: SOURCE_SHA,
+  }));
+  assert.doesNotThrow(() => assertExpectedConfigSourceSha({ actualSourceSha: SOURCE_SHA }));
+  assert.throws(
+    () => assertExpectedConfigSourceSha({
+      expectedSourceSha: SOURCE_SHA,
+      actualSourceSha: "b".repeat(40),
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_SHA_MISMATCH",
+  );
+});
+
 test("rebase replay는 repo, actor, expected revision, operation 전체 충돌을 거부한다", () => {
   const stored = replayFixture();
   assert.doesNotThrow(() => assertConfigRevisionReplay({
@@ -238,6 +254,17 @@ test("manual create replay는 payload 충돌을 거부한다", () => {
       expectedLatestRevision: 7,
       contractVersion: null,
       payloadHash: "f".repeat(64),
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  assert.throws(
+    () => assertConfigRevisionReplay({
+      stored: replayFixture(null),
+      repoId: REPO_ID,
+      actor: "operator:seorilabs",
+      expectedLatestRevision: 7,
+      contractVersion: null,
+      expectedSourceSha: "b".repeat(40),
     }),
     (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
   );
