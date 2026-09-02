@@ -1,0 +1,26 @@
+---
+# WorkflowBundle v5 승인 서명 공개키 registry. 공개 데이터(keyId, policyRevision, SPKI PEM,
+# fingerprint)만 담는다. 개인키 원본은 ~/.config/seorilabs 카탈로그의
+# shared/workflow-bundle/approval-signing에만 있고 Backoffice로 넘기지 않는다.
+# Backoffice web은 이 key를 WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON으로 읽어
+# APPROVED bundle import와 runtime readback을 검증한다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backoffice-workflow-bundle-v5-trust
+  namespace: platform
+data:
+  trusted-approval-keys.json: |
+    {
+      "schemaVersion": 1,
+      "keys": [
+        {
+          "algorithm": "Ed25519",
+          "keyId": "workflow-bundle-v5-20260902-145012ae1370",
+          "policyRevision": "workflow-bundle-v5-approval-v1",
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGFZTC5N2bry9kF3ZeQiF0OZXBEAjEFycpo/BtPyRwG4=\n-----END PUBLIC KEY-----\n",
+          "fingerprint": "sha256:145012ae1370a7e776710879fc857b6853d67dafffda41d8c2ffd7278fd17728",
+          "status": "ACTIVE"
+        }
+      ]
+    }
