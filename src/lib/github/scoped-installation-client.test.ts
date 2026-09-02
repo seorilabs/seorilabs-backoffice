@@ -80,6 +80,7 @@ test("계약 source와 readback capability는 write permission을 가질 수 없
   for (const capability of [
     "github.standard-labels.contract.read",
     "github.standard-labels.read",
+    "github.workflow-bundle-candidate.read",
   ] as const) {
     const fixture = fixtureIssuer({});
     await withFleetScopedGithubClient({

@@ -217,6 +217,7 @@ function archive(bundle: ReturnType<typeof candidateBundle>): Buffer {
 
 function memoryClient(seed: Array<Record<string, unknown>> = []) {
   const rows = [...seed];
+  const audits: unknown[] = [];
   const recordApi = {
     async findUnique({ where }: { where: { idempotencyKey: string } }) {
       return rows.find((row) => row.idempotencyKey === where.idempotencyKey) ?? null;
@@ -250,11 +251,12 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
   };
   return {
     rows,
+    audits,
     workflowBundleRegistryRecord: recordApi,
     async $transaction(callback: (tx: unknown) => Promise<unknown>) {
       return callback({
         workflowBundleRegistryRecord: recordApi,
-        auditLog: { async create() { return {}; } },
+        auditLog: { async create(input: unknown) { audits.push(input); return {}; } },
       });
     },
   };
@@ -300,6 +302,61 @@ test("candidate import는 exact successful GitHub artifact와 bundle integrity�
   assert.equal(result.record.approvalState, "CANDIDATE");
   assert.equal(result.record.payloadDigest, (candidate.integrity as { payloadDigest: string }).payloadDigest);
   assert.equal(client.rows.length, 1);
+});
+
+test("candidate import는 artifact 검증 후 원장 transaction에서 claim을 확인하고 소유권을 잃으면 쓰지 않는다", async () => {
+  for (const claimAlive of [true, false]) {
+    const bytes = archive(candidateBundle());
+    const client = memoryClient();
+    let artifactRead = false;
+    let claimChecks = 0;
+    const imported = importWorkflowBundleCandidate({
+      sourceSha: BUNDLE_SHA,
+      runId: 1n,
+      runAttempt: 1,
+      artifactId: 2n,
+      idempotencyKey: `candidate-import:claim:${claimAlive}`,
+      actor: "test:registry-importer",
+      async assertWriteAllowed(tx) {
+        assert.equal(artifactRead, true);
+        assert.equal(tx.workflowBundleRegistryRecord, client.workflowBundleRegistryRecord);
+        assert.equal(client.rows.length, 0);
+        assert.equal(client.audits.length, 0);
+        claimChecks += 1;
+        if (!claimAlive) throw new Error("claim lost");
+      },
+    }, client as never, {
+      trustedApprovalKeysJson: "",
+      async readCandidateArtifact() {
+        artifactRead = true;
+        return {
+          repository: "seorilabs/.github",
+          repositoryId: "1241442018",
+          sourceSha: BUNDLE_SHA,
+          workflowPath: ".github/workflows/workflow-bundle-v5-candidate.yml",
+          eventName: "push",
+          headBranch: "main",
+          runId: 1n,
+          runAttempt: 1,
+          runStatus: "completed",
+          runConclusion: "success",
+          artifactId: 2n,
+          artifactName: `workflow-bundle-v5-candidate-${BUNDLE_SHA}`,
+          artifactDigest: digest(bytes),
+          artifactExpired: false,
+          artifactWorkflowRunId: 1n,
+          artifactWorkflowRepositoryId: "1241442018",
+          artifactWorkflowHeadSha: BUNDLE_SHA,
+          archive: bytes,
+        };
+      },
+    });
+    if (claimAlive) await imported;
+    else await assert.rejects(imported, { message: "claim lost" });
+    assert.equal(claimChecks, 1);
+    assert.equal(client.rows.length, claimAlive ? 1 : 0);
+    assert.equal(client.audits.length, claimAlive ? 1 : 0);
+  }
 });
 
 test("candidate import는 look-alike repo, 실패 run과 artifact digest drift를 거부한다", async () => {

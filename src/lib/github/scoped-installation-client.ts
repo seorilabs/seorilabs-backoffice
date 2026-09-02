@@ -5,6 +5,7 @@ const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
 const EXECUTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
+  "github.workflow-bundle-candidate.read": Object.freeze({ actions: "read", metadata: "read" }),
   "github.bootstrap.properties-read": Object.freeze({ metadata: "read" }),
   "github.bootstrap.owner-read": Object.freeze({ metadata: "read", members: "read" }),
   "github.bootstrap.properties-write": Object.freeze({ metadata: "read", repository_custom_properties: "write" }),
