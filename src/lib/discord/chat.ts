@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
-import { GeminiNotConfiguredError, type ChatMessage } from "@/lib/ai/gemini";
+import { LlmNotConfiguredError, type ChatMessage } from "@/lib/ai/llm";
 import { runChatAgent } from "@/lib/ai/chat-agent";
 
 const HISTORY_TURNS = 10;
@@ -103,7 +103,7 @@ export async function handleDiscordChat(input: {
       { role: "user", content: input.text },
     ]);
   } catch (error) {
-    if (error instanceof GeminiNotConfiguredError) return "AI 채팅이 비활성 상태입니다.";
+    if (error instanceof LlmNotConfiguredError) return "AI 채팅이 비활성 상태입니다.";
     console.error("[discord] chat error", error instanceof Error ? error.message : "error");
     return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도하세요.";
   }

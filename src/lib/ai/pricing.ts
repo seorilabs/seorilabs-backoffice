@@ -10,6 +10,9 @@ export interface ModelPrice {
 
 export const LLM_PRICES: Record<string, ModelPrice> = {
   "gemini-3.1-flash-lite": { inputUsdPerMTok: 0.25, outputUsdPerMTok: 1.5 },
+  // 표시 정가 $0.60/$2.40 에 상시 50% 할인 적용가. Coding Plan quota 로 호출하면
+  // 실청구 0 이지만 원장은 API 단가 기준으로 환산해 기회비용을 남긴다.
+  "MiniMax-M3": { inputUsdPerMTok: 0.3, outputUsdPerMTok: 1.2 },
   // 2026-12-31 까지의 프로모션 단가($0.75/$3.75) — 2027-01-01 부터 $1.50/$7.50.
   "gemini-3.7-flash": { inputUsdPerMTok: 0.75, outputUsdPerMTok: 3.75 },
   "claude-haiku-4-5": { inputUsdPerMTok: 1, outputUsdPerMTok: 5 },

@@ -45,7 +45,8 @@ kubectl -n platform create secret generic backoffice-secrets \
   --from-file=GITHUB_PRIVATE_KEY=./backoffice-app.private-key.pem \
   --from-literal=GITHUB_WEBHOOK_SECRET='<webhook secret>' \
   --from-literal=INTERNAL_ADMIN_TOKEN="$(openssl rand -hex 24)" \
-  --from-literal=GEMINI_API_KEY=''
+  --from-literal=GEMINI_API_KEY='' \
+  --from-literal=MINIMAX_API_KEY=''
 ```
 
 ## 4. 이미지 빌드 & 배포
@@ -296,7 +297,7 @@ kubectl -n platform create job \
   다시 읽어 모두 일치할 때만 성공한다. 웹
   프로세스 안에는 scheduler가 없다. 내부 admin token은 Secret volume에서 읽어 curl config
   stdin으로 전달하며 환경변수나 argv에 넣지 않는다.
-- Gemini Stage Agent는 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
+- 챗 LLM은 `CHAT_LLM_PROVIDER`(기본 minimax)로 라우팅한다. MiniMax는 `FEATURE_MINIMAX_ENABLED=true` + `MINIMAX_API_KEY`, Gemini 폴백·임베딩은 `FEATURE_GEMINI_ENABLED=true` + `GEMINI_API_KEY`(§9).
 
 ## 7. CI 자동배포 설정 (main push → 검증/빌드/배포)
 

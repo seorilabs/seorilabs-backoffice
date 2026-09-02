@@ -45,6 +45,23 @@ export const env = {
   geminiEmbedDim: () => Number(optional("GEMINI_EMBED_DIM", "1536")),
   geminiTimeoutMs: () => Number(optional("GEMINI_TIMEOUT_MS", "60000")),
   geminiConfigured: () => Boolean(optional("GEMINI_API_KEY").trim()),
+  // MiniMax Anthropic 호환 API: M3 챗. Coding Plan quota 를 공유한다.
+  featureMinimax: () => bool("FEATURE_MINIMAX_ENABLED", false),
+  minimaxApiKey: () => optional("MINIMAX_API_KEY"),
+  minimaxChatModel: () => optional("MINIMAX_CHAT_MODEL", "MiniMax-M3"),
+  minimaxChatTimeoutMs: () => Number(optional("MINIMAX_CHAT_TIMEOUT_MS", "180000")),
+  minimaxBaseUrl: () => optional("MINIMAX_API_BASE_URL", "https://api.minimax.io"),
+  minimaxChatConfigured: () =>
+    bool("FEATURE_MINIMAX_ENABLED", false) &&
+    Boolean(optional("MINIMAX_API_KEY").trim()),
+  // 챗 LLM 라우팅. 임베딩은 provider 와 무관하게 Gemini 를 유지한다.
+  chatLlmProvider: (): "minimax" | "gemini" => {
+    const value = optional("CHAT_LLM_PROVIDER", "minimax").trim().toLowerCase();
+    if (value !== "minimax" && value !== "gemini") {
+      throw new Error(`CHAT_LLM_PROVIDER 는 minimax 또는 gemini 여야 합니다: ${value}`);
+    }
+    return value;
+  },
   // Vault RAG(Obsidian 볼트 지식). 인덱서/라이터는 data ns 에서 PVC 마운트.
   featureVaultRag: () => bool("FEATURE_VAULT_RAG", false),
   vaultPath: () => optional("VAULT_PATH", "/vault"),

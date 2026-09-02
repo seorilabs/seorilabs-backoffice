@@ -96,6 +96,16 @@ spec:
               value: "magicsih"
             - name: FEATURE_GEMINI_ENABLED
               value: "true"
+            # 챗 LLM 라우팅: MiniMax M3 (Anthropic 호환). 임베딩은 Gemini 유지.
+            # 롤백은 CHAT_LLM_PROVIDER=gemini 패치 한 번이다.
+            - name: CHAT_LLM_PROVIDER
+              value: "minimax"
+            - name: FEATURE_MINIMAX_ENABLED
+              value: "true"
+            - name: MINIMAX_CHAT_MODEL
+              value: "MiniMax-M3"
+            - name: MINIMAX_CHAT_TIMEOUT_MS
+              value: "180000"
             - name: GEMINI_API_BASE_URL
               value: "https://generativelanguage.googleapis.com/v1beta"
             - name: GEMINI_CHAT_MODEL
@@ -268,6 +278,11 @@ spec:
                 secretKeyRef:
                   name: backoffice-secrets
                   key: GEMINI_API_KEY
+            - name: MINIMAX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: MINIMAX_API_KEY
             # GA4 BigQuery 읽기 SA 키(JSON 전체). 없으면 지표 수집이 비활성.
             # 종량제 비용 소스. 전부 optional — 미설정 소스는 리포트에 "미설정" 으로 뜬다.
             # GITHUB_BILLING_TOKEN 은 조직 billing 읽기 전용 fine-grained PAT

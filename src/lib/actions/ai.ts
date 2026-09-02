@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireSession } from "@/lib/auth-helpers";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
-import { geminiComplete, GeminiNotConfiguredError } from "@/lib/ai/gemini";
+import { llmComplete, llmChatConfigured, llmChatModel, LlmNotConfiguredError } from "@/lib/ai/llm";
 import { buildPlanningPrompt } from "@/lib/ai/agents";
 import { getRepoContext } from "@/lib/github/read";
 import {
@@ -25,7 +25,7 @@ export interface DraftView {
 }
 
 function notConfiguredMessage(e: unknown): string {
-  if (e instanceof GeminiNotConfiguredError) return e.message;
+  if (e instanceof LlmNotConfiguredError) return e.message;
   return e instanceof Error ? e.message : "AI 생성 실패";
 }
 
@@ -37,7 +37,7 @@ export async function generatePlanningDraft(input: {
 }): Promise<{ text: string }> {
   const session = await requireSession();
   const login = session.user.login ?? "unknown";
-  if (!env.geminiChatConfigured()) throw new GeminiNotConfiguredError();
+  if (!llmChatConfigured()) throw new LlmNotConfiguredError(env.chatLlmProvider());
 
   const app = await prisma.app.findFirst({
     where: { repoFullName: input.repoFullName, ...visibleAppWhere },
@@ -57,7 +57,7 @@ export async function generatePlanningDraft(input: {
 
   let text: string;
   try {
-    text = await geminiComplete({ system, prompt, usage: { path: "action" } });
+    text = await llmComplete({ system, prompt, usage: { path: "action" } });
   } catch (e) {
     throw new Error(notConfiguredMessage(e));
   }
@@ -68,7 +68,7 @@ export async function generatePlanningDraft(input: {
       action: "ai.planning_draft",
       entityType: "App",
       entityId: app.id,
-      payload: { repo: input.repoFullName, model: env.geminiChatModel() },
+      payload: { repo: input.repoFullName, model: llmChatModel() },
     },
   });
   return { text };

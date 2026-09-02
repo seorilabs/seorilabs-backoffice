@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { geminiComplete } from "@/lib/ai/gemini";
+import { llmComplete, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import { parseLooseJson } from "@/lib/ai/json";
 import { buildReleaseNotesI18nPrompt } from "@/lib/ai/agents";
 import { normalizeStoreNotes } from "@/lib/core/store-notes";
@@ -51,8 +51,8 @@ export async function generateReleaseNoteCore(
     console.warn(`[release-notes] ${HIDDEN_APP_ERROR}`);
     return null;
   }
-  if (!env.geminiChatConfigured()) {
-    console.warn("[release-notes] Gemini 미구성 — 생성 스킵");
+  if (!llmChatConfigured()) {
+    console.warn("[release-notes] 챗 LLM 미구성 — 생성 스킵");
     return null;
   }
 
@@ -77,7 +77,7 @@ export async function generateReleaseNoteCore(
     commitCount: cmp?.commitCount ?? 0,
   });
 
-  const raw = await geminiComplete({
+  const raw = await llmComplete({
     system,
     prompt,
     maxTokens: 4000,
@@ -106,7 +106,7 @@ export async function generateReleaseNoteCore(
       commitCount: cmp?.commitCount ?? 0,
     } as object,
     status: "GENERATED" as const,
-    model: env.geminiChatModel(),
+    model: llmChatModel(),
   };
 
   const note = await prisma.releaseNote.upsert({

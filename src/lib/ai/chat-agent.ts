@@ -1,4 +1,4 @@
-import { geminiChat, type ChatMessage } from "@/lib/ai/gemini";
+import { llmChat, type ChatMessage } from "@/lib/ai/llm";
 import { TOOLS, runTool } from "@/lib/ai/tools";
 import { stripFences, extractObject } from "@/lib/ai/json";
 
@@ -62,7 +62,7 @@ export async function runChatAgent(
   messages: ChatMessage[],
   options: RunChatAgentOptions = {},
 ): Promise<string> {
-  const chat = geminiChat;
+  const chat = llmChat;
   const usage = options.usage ?? { path: "chat-agent" };
   const [system, ...rest] = messages;
   const convo: ChatMessage[] = [
