@@ -38,6 +38,7 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 
 | Method | Path | 계약 |
 | --- | --- | --- |
+| `GET` | `/api/control-plane/github-bootstrap` | 공용 GitHub App으로 현재 중앙 정책 SHA와 관리 속성 6개를 읽는 전용 조회. token이나 실행 권한을 반환하지 않으며 GitHub·DB 변경 없음 |
 | `POST` | `/api/control-plane/discovery-observations` | 정확한 40자리 source SHA의 탐지 결과, strict `workflowCaller`, build target projection 기록 |
 | `POST` | `/api/control-plane/provider-observations` | provider readback과 공개 external binding 기록 |
 | `POST` | `/api/control-plane/config-revisions` | `expectedLatestRevision` CAS와 server-selected latest exact discovery에 결합한 immutable `DRAFT` 생성 |
@@ -83,6 +84,37 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
 기존 ACTIVE snapshot도 제공하지 않는다.
+
+### GitHub 공통 관리 설정
+
+설정 화면의 **GitHub 공통 관리 설정 → 변경 목록 확인 → 이번 변경만 승인하고 적용**이
+P3의 조직 관리 속성 4개와 Happy Farm/Lizard Tycoon 시범 표시값을 연결한다. 이는 신규 저장소의
+전체 bootstrap, WorkflowBundle 승인, 브랜치 보호 활성화 또는 앱 이관 완료가 아니다.
+현재 DB에서 allowlist·ADMIN·숫자 GitHub 사용자 ID를 확인하고 공식 membership API에서 같은 사용자의
+`active/admin` 조직 소유권을 재검증한 사람 세션만 실행을 승인할 수 있고, 내부 API와 Codex/Claude
+worker는 이 경로로 쓰기 승인을 할 수 없다. 새 GitHub App/key는 만들지 않으며 기존
+`shared/github/backoffice-app-private-key`와 App 4124446/installation 142120077을 재사용한다.
+
+정책은 `.github`의 실제 main SHA에서 읽은 `contracts/fleet-p3-runtime.yaml`과 Git blob digest로
+검증한다. 계획은 기존 `AutomationDefinition/Occurrence/AgentRun`에 불변으로 기록하며, 조직당
+하나의 `AgentRepoGuard`, generation CAS, 5분·1회 사람 승인, 요청 idempotency를 사용한다.
+각 변경 전에는 이전에 읽은 상태와 현재 상태를 대조하고 시도 이벤트를 먼저 남긴다. 성공 응답이
+끊기면 같은 run에서 provider를 먼저 읽고 이미 일치하는 작업은 반복하지 않는다. 완료는 실제
+조회 결과가 일치하고 lease가 여전히 유효할 때만 기록한다. 외부 GitHub API는 DB transaction의
+참여자가 아니므로 사람의 동시 콘솔 변경까지 원자적으로 잠근다고 주장하지 않는다.
+
+설정 변경 권한은 해당 요청 동안 필요한 custom-property 권한과 정확한 저장소 한 곳으로만
+대여하고 반환 전에 폐기한다. GitHub API origin을 고정하고 redirect를 금지한다. 다른 사용자
+속성, workflow/태그, 브랜치 보호, IAM/키, 마켓 상태는 변경하지 않는다.
+[GitHub 조직 속성 API](https://docs.github.com/en/rest/orgs/custom-properties?apiVersion=2026-03-10)와
+[저장소 속성 API](https://docs.github.com/en/rest/repos/custom-properties?apiVersion=2026-03-10)를 사용한다.
+
+작업 실패·계획 변경·시도 소진 뒤에는 **결과 재확인 후 이전 실행 종료**로 모든 대상의 실제
+상태를 다시 읽는다. 모두 일치하면 성공, 일부만 적용됐다면 `CANCELLED/CLOSED_AFTER_READBACK`으로
+이전 실행만 닫는다. 이미 적용된 값은 되돌리지 않으며 새 계획은 실제 현재 상태에서 만든다.
+조회 실패나 아직 만료되지 않은 실행 중 lease가 있으면 guard를 유지한다. 이 복구 동작은
+쓰기 token을 발급하지 않는다. 조회·시도·승인·완료는 별도 event/audit로 남기고 provider 오류
+원문이나 credential 값은 응답과 DB에 보존하지 않는다.
 
 세 DRAFT 생성 경로는 `MANAGED/PRODUCT_APP`, GitHub에 등록된 exact default branch/ref, current
 `repository-discovery/v11`, `lastDefaultPushSha=lastReconciledSha=latest discovery SHA`를 같은

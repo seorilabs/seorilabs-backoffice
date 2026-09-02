@@ -16,8 +16,10 @@ import { getFleetLegacyResolutionQueue } from "@/lib/control-plane/fleet-legacy-
 import { FleetLegacyResolutionQueue } from "@/components/fleet/FleetLegacyResolutionQueue";
 import { getFleetComplianceDraftQueue } from "@/lib/control-plane/fleet-compliance-draft-queue";
 import { FleetComplianceDraftBatch } from "@/components/fleet/FleetComplianceDraftBatch";
+import { GitHubBootstrapControls } from "@/components/fleet/GitHubBootstrapControls";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 export default async function SettingsPage() {
   const [appCount, issueCount, prCount, releaseCount, lastDelivery, allowUsers, fleetSummary, classificationQueue, legacyResolutionQueue, complianceDraftQueue] =
@@ -48,6 +50,10 @@ export default async function SettingsPage() {
 
         <Card title="작업">
           <SettingsActions />
+        </Card>
+
+        <Card title="GitHub 공통 관리 설정">
+          <GitHubBootstrapControls />
         </Card>
 
         <Card title="앱 등록·설정 초안">

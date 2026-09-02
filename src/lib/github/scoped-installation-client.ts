@@ -5,6 +5,10 @@ const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
 const EXECUTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
+  "github.bootstrap.properties-read": Object.freeze({ metadata: "read" }),
+  "github.bootstrap.owner-read": Object.freeze({ metadata: "read", members: "read" }),
+  "github.bootstrap.properties-write": Object.freeze({ metadata: "read", repository_custom_properties: "write" }),
+  "github.bootstrap.schema-write": Object.freeze({ metadata: "read", organization_custom_properties: "admin" }),
   "github.fleet-p7.organization-read": Object.freeze({ metadata: "read", organization_administration: "read" }),
   "github.fleet-p7.properties-read": Object.freeze({ metadata: "read", organization_custom_properties: "read" }),
   "github.fleet-p7.protection-read": Object.freeze({ metadata: "read", administration: "read" }),
