@@ -118,6 +118,19 @@ test("v5 승인 trust ConfigMap manifest는 공개 Ed25519 key registry만 담�
   );
 });
 
+test("후보 executor adapter 실행 복제본은 backoffice-secrets에 암호문으로만 봉인된다", () => {
+  const sealed = source("k8s/backoffice-sealedsecret.yaml");
+  const deployment = source("k8s/deployment.yaml");
+  for (const key of ["WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN", "WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY"]) {
+    const match = sealed.match(new RegExp(`^    ${key}: (\\S+)$`, "mu"));
+    assert.ok(match, `${key} sealed ciphertext missing`);
+    // kubeseal 암호문은 base64이며 bearer(43자)나 PEM 원문보다 길다.
+    assert.match(match![1]!, /^Ag[A-Za-z0-9+/=]{300,}$/u);
+    assert.match(deployment, new RegExp(`key: ${key}\\s+optional: true`, "u"));
+  }
+  assert.doesNotMatch(sealed, /-----BEGIN|PRIVATE KEY|adapter\.bearer/u);
+});
+
 test("candidate GitHub transport는 installation token을 callback 밖으로 반환하지 않는다", () => {
   const transport = source("src/lib/github/workflow-bundle-candidate-client.ts");
   const scoped = source("src/lib/github/scoped-installation-client.ts");
