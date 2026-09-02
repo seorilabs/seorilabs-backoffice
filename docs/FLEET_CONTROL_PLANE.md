@@ -591,6 +591,19 @@ producer 실행 자체를 생략시키지 않는다.
 
 ## GitHub repository webhook
 
+App capability 공개 조회는 `GET /app`과 `GET /app/hook/config`를 분리해서 사용한다.
+GitHub는 이 응답에 `hook_config.active`를 제공하지 않는다. `webhookActive`는 관리 화면의
+토글을 추정한 값이 아니라, 현재 installation의 가장 최근 delivery가 설정 변경 이후·15분
+이내이며 2xx이고, 상세 delivery의 URL·ID·guid·시각·installation·repository·event가 일치할
+때만 참이다. TLS 검증과 JSON 전송도 필수다. 오래된 성공으로 최신 실패를 덮지 않는다.
+큰 delivery ID는 설치된 Octokit의 bigint parser를 사용하고 URL에는 손실 없는 문자열로 넣는다.
+request/response payload·signature·secret은 공개 DTO와 오류에서 모두 제외한다.
+
+배포된 신뢰된 Backoffice runtime에서 `node scripts-dist/fleet-github-app-readback.cjs`로
+동일 경로를 읽기 전용 진단할 수 있다. App JWT는 기존 Octokit 내부에서만 사용하고 installation
+token을 발급하지 않는다. 이 조회는 최근 delivery의 동작 검증이다. `repository` event의
+durable acceptance, 실행기 활성화, 앱 이관 완료를 증명하지 않으며 기존 별도 gate를 유지한다.
+
 `repository`의 created, renamed, archived, unarchived, edited와 default-branch `push`를
 `RepositoryRegistration`에 repo numeric ID 기준으로 upsert한다. 이미 관리 중인 repo rename만
 GitHub readback까지 통과한 뒤 `App.repoFullName`과 slug에 반영한다. 아직 stack이 확정되지 않은 신규
