@@ -3,9 +3,10 @@ import { createFleetP7RequestFetch, createFleetP7ScopedReadClient } from "@/lib/
 import { getFleetScopedGithubTokenIssuer, readFleetGitHubAppPublicSource } from "@/lib/github/app";
 
 async function main(): Promise<void> {
-  const client = createFleetP7ScopedReadClient(await getFleetScopedGithubTokenIssuer({ requestFetch: createFleetP7RequestFetch() }));
+  const requestFetch = createFleetP7RequestFetch();
+  const client = createFleetP7ScopedReadClient(await getFleetScopedGithubTokenIssuer({ requestFetch }));
   const observation = await createFleetP7GitHubReadbackAdapter({
-    client, readAppSource: readFleetGitHubAppPublicSource,
+    client, readAppSource: () => readFleetGitHubAppPublicSource({ requestFetch }),
   }).observeCurrentTargets();
   process.stdout.write(`${JSON.stringify({
     schemaVersion: 1, mode: "READ_ONLY_PROVIDER_OBSERVATION", authoritativeInventoryVerified: false,

@@ -31,10 +31,11 @@ async function main(): Promise<void> {
     publicKey: publicIdentity.publicKey,
     now,
   });
-  const client = createFleetP7ScopedReadClient(await getFleetScopedGithubTokenIssuer({ requestFetch: createFleetP7RequestFetch() }));
+  const requestFetch = createFleetP7RequestFetch();
+  const client = createFleetP7ScopedReadClient(await getFleetScopedGithubTokenIssuer({ requestFetch }));
   const github = createFleetP7GitHubReadbackAdapter({
     client,
-    readAppSource: readFleetGitHubAppPublicSource,
+    readAppSource: () => readFleetGitHubAppPublicSource({ requestFetch }),
   });
   const aggregate = await createFleetP7TrustedAggregateReadback({
     issuance,
