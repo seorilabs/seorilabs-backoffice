@@ -143,8 +143,8 @@ export function PlatformIapConsole({
       )}
 
       <PlatformPanel
-        title="최근 주문"
-        description="원문 영수증과 구매 토큰을 제외한 운영용 주문 요약입니다."
+        title="최근 확인된 주문"
+        description="구매 시각은 마켓 거래 시각이고, 최근 확인은 Platform이 같은 주문을 마지막으로 검증한 시각입니다. 동일 주문 재확인은 새 IAP 지급 알림을 만들지 않습니다."
         trailing={<span className="text-xs text-neutral-400">{orders.length}건</span>}
       >
         {orders.length === 0 ? (
@@ -161,7 +161,7 @@ export function PlatformIapConsole({
                   <th className="px-3 py-2 font-medium">사용자</th>
                   <th className="px-3 py-2 font-medium">Entitlement</th>
                   <th className="px-3 py-2 font-medium">상태</th>
-                  <th className="px-3 py-2 font-medium">관찰 시각</th>
+                  <th className="px-3 py-2 font-medium">구매·최근 확인</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
@@ -191,7 +191,10 @@ export function PlatformIapConsole({
                       </PlatformBadge>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
-                      {formatPlatformTimestamp(order.observedAt ?? order.purchasedAt)}
+                      <div>구매 {formatPlatformTimestamp(order.purchasedAt)}</div>
+                      <div className="mt-0.5 text-[11px] text-neutral-400">
+                        최근 확인 {formatPlatformTimestamp(order.observedAt)}
+                      </div>
                     </td>
                   </tr>
                 ))}

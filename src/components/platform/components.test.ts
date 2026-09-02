@@ -265,6 +265,8 @@ describe("플랫폼 표현 컴포넌트", () => {
             market: "app_store",
             productId: "premium.product",
             state: "active",
+            purchasedAt: "2026-08-16T17:52:42Z",
+            observedAt: "2026-09-02T03:53:53Z",
             receipt: "must-not-render-receipt",
             purchaseToken: "must-not-render-purchase-token",
           },
@@ -284,6 +286,9 @@ describe("플랫폼 표현 컴포넌트", () => {
 
     assert.match(html, /Production 원장/);
     assert.match(html, /order-safe/);
+    assert.match(html, /구매 2026\. 8\. 17\. 오전 2:52/);
+    assert.match(html, /최근 확인 2026\. 9\. 2\. 오후 12:53/);
+    assert.match(html, /동일 주문 재확인은 새 IAP 지급 알림을 만들지 않습니다/);
     assert.match(html, /원 지급 grant-request-safe/);
     assert.doesNotMatch(html, /must-not-render/);
   });
