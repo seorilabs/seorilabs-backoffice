@@ -2340,12 +2340,15 @@ export async function resolveStaticRuntimeManifest(input: {
       "WORKFLOW_BUNDLE_NOT_APPROVED",
     );
   }
+  // STATIC_CHECK 예외는 ACTIVE 설정·discovery가 결합된 기본 브랜치 exact source
+  // (bindingSourceSha)에 묶인다. main 실행은 application source와 같고, 후보 PR 실행은
+  // merge 커밋이 아니라 PR base다. lockfile digest 결합은 중앙 staging이 별도로 강제한다.
   const dependencyAuditException = resolveDependencyAuditException({
     exception: configPayload.build.dependencyAuditException,
     actionClass: "STATIC_CHECK",
     repositoryId: input.identity.repositoryId,
     fullName: app.repoFullName,
-    applicationSourceSha: input.identity.applicationSourceSha,
+    applicationSourceSha: input.identity.bindingSourceSha,
     now: input.now ?? new Date(),
   });
 

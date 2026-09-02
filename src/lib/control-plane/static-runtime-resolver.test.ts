@@ -23,7 +23,7 @@ function dependencyAuditException(): DependencyAuditException {
     bindings: [
       {
         actionClass: "STATIC_CHECK" as const,
-        sourceSha: APPLICATION_SHA,
+        sourceSha: BINDING_SHA,
         lockfileSha256: "sha256:bb7c039ab9bb3b0deb3755e124a2f248f44b09c984cc12e1a5450686e18bd3c5",
       },
       {
@@ -221,7 +221,7 @@ test("static runtime resolver는 App, ACTIVE config, exact discovery와 approved
   assert.equal(result.manifest.staticBinding.workspaceRoot, "app");
 });
 
-test("static runtime은 signed snapshot의 exact merge-source 예외를 digest에 포함한다", async () => {
+test("static runtime은 signed snapshot의 exact base-source 예외를 digest에 포함한다", async () => {
   const exception = dependencyAuditException();
   const result = await resolveStaticRuntimeManifest(
     input(),
@@ -245,7 +245,7 @@ test("static dependency audit 예외는 identity, source, expiry와 clock drift�
       code: "DEPENDENCY_AUDIT_EXCEPTION_IDENTITY_MISMATCH",
     },
     {
-      identity: identity({ applicationSourceSha: "f".repeat(40) }),
+      identity: identity({ bindingSourceSha: "f".repeat(40) }),
       client: client({ dependencyAuditException: exception }),
       now: new Date("2026-08-30T00:00:00Z"),
       code: "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
