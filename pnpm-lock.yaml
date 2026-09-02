@@ -57,8 +57,8 @@ importers:
         specifier: ^19.0.0
         version: 19.2.7(react@19.2.7)
       seorilabs-org-contracts:
-        specifier: github:seorilabs/.github#f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
-        version: https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203
+        specifier: github:seorilabs/.github#60878a7031a0b2d62008d81a0a5d413dd245e93e
+        version: https://codeload.github.com/seorilabs/.github/tar.gz/60878a7031a0b2d62008d81a0a5d413dd245e93e
       undici:
         specifier: 8.9.0
         version: 8.9.0
@@ -2751,8 +2751,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203:
-    resolution: {gitHosted: true, integrity: sha512-6vJ2A3OYZmCvP+tGff4zjIShwKirAiZahCNI/0+PIoxo5UH+biMpvuue7uOLZ+/3SuVlimC8BsvOOwmGbKJ+Ow==, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203}
+  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/60878a7031a0b2d62008d81a0a5d413dd245e93e:
+    resolution: {gitHosted: true, integrity: sha512-+hLSe6BYlgmZDaACMLPPtfNQ5prLKWUFZXi2J/1zzre8pP48N1NyY2JMRQysd8vRTzzqq5EmhWmxFAL0HCE33g==, tarball: https://codeload.github.com/seorilabs/.github/tar.gz/60878a7031a0b2d62008d81a0a5d413dd245e93e}
     version: 0.5.0
     engines: {node: 24.x}
 
@@ -5940,7 +5940,7 @@ snapshots:
 
   semver@7.8.4: {}
 
-  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203:
+  seorilabs-org-contracts@https://codeload.github.com/seorilabs/.github/tar.gz/60878a7031a0b2d62008d81a0a5d413dd245e93e:
     dependencies:
       ajv: 8.20.0
       yaml: 2.9.0

@@ -97,8 +97,10 @@ export async function getInstallationOctokit(): Promise<Octokit> {
  * Fleet collector capability용 live public readback이다. App JWT와 installation
  * token은 반환하지 않고 provider가 공개한 identity/permission/event만 남긴다.
  */
-export async function readFleetGitHubAppPublicSource(): Promise<FleetGitHubAppPublicSource> {
-  const app = getApp();
+export async function readFleetGitHubAppPublicSource(options: {
+  requestFetch?: typeof globalThis.fetch;
+} = {}): Promise<FleetGitHubAppPublicSource> {
+  const app = options.requestFetch ? createApp(options.requestFetch) : getApp();
   const org = process.env.GITHUB_ORG ?? "seorilabs";
   return readGitHubAppPublicSource(app.octokit, org);
 }

@@ -2,7 +2,8 @@ import { createFleetMigrationAuthoritativeIssuanceStore } from "@/lib/control-pl
 import { createFleetP7GitHubReadbackAdapter } from "@/lib/control-plane/fleet-p7-github-readback";
 import { createFleetP7TrustedAggregateReadback } from "@/lib/control-plane/fleet-p7-trusted-readback";
 import { loadFleetMigrationInventoryPublicIdentity } from "@/lib/control-plane/fleet-migration-inventory-issuer-adapter";
-import { getInstallationContext, readFleetGitHubAppPublicSource } from "@/lib/github/app";
+import { createFleetP7RequestFetch, createFleetP7ScopedReadClient } from "@/lib/control-plane/fleet-p7-scoped-read-client";
+import { getFleetScopedGithubTokenIssuer, readFleetGitHubAppPublicSource } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
 function required(name: string): string {
@@ -30,10 +31,11 @@ async function main(): Promise<void> {
     publicKey: publicIdentity.publicKey,
     now,
   });
-  const context = await getInstallationContext({ forceRefresh: true });
+  const requestFetch = createFleetP7RequestFetch();
+  const client = createFleetP7ScopedReadClient(await getFleetScopedGithubTokenIssuer({ requestFetch }));
   const github = createFleetP7GitHubReadbackAdapter({
-    client: context.octokit,
-    readAppSource: readFleetGitHubAppPublicSource,
+    client,
+    readAppSource: () => readFleetGitHubAppPublicSource({ requestFetch }),
   });
   const aggregate = await createFleetP7TrustedAggregateReadback({
     issuance,

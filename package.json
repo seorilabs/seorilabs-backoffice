@@ -19,7 +19,7 @@
     "prisma:generate": "prisma generate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/repository-discovery-worker.ts scripts/provider-execution-worker.ts scripts/provider-execution-attestation-signer.ts scripts/seori-auth-agent-runtime.ts scripts/seori-auth-agent-client.ts scripts/seori-auth-egress-proxy.ts scripts/seori-auth-egress-canary.ts scripts/workflow-bundle-candidate-executor.ts scripts/verify-migration-state.ts scripts/verify-restore-rehearsal.ts scripts/fleet-parity-wave.ts scripts/fleet-migration-shadow-readiness.ts scripts/fleet-migration-bootstrap-shadow.ts scripts/fleet-migration-proof-writer.ts scripts/fleet-migration-inventory-issuer.ts scripts/fleet-migration-inventory-signer.ts scripts/fleet-p7-trusted-readback.ts scripts/fleet-github-app-readback.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
+    "build:scripts": "esbuild scripts/index-vault.ts scripts/vault-writer.ts scripts/app-ops-worker.ts scripts/operator-command-worker.ts scripts/notification-worker.ts scripts/store-review-collector.ts scripts/repository-discovery-worker.ts scripts/provider-execution-worker.ts scripts/provider-execution-attestation-signer.ts scripts/seori-auth-agent-runtime.ts scripts/seori-auth-agent-client.ts scripts/seori-auth-egress-proxy.ts scripts/seori-auth-egress-canary.ts scripts/workflow-bundle-candidate-executor.ts scripts/verify-migration-state.ts scripts/verify-restore-rehearsal.ts scripts/fleet-parity-wave.ts scripts/fleet-migration-shadow-readiness.ts scripts/fleet-migration-bootstrap-shadow.ts scripts/fleet-migration-proof-writer.ts scripts/fleet-migration-inventory-issuer.ts scripts/fleet-migration-inventory-signer.ts scripts/fleet-p7-trusted-readback.ts scripts/fleet-p7-github-observation.ts scripts/fleet-github-app-readback.ts --bundle --platform=node --format=cjs --target=node24 --outdir=scripts-dist --out-extension:.js=.cjs --external:@prisma/client --external:.prisma/client --alias:@=./src"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -38,7 +38,7 @@
     "prom-client": "^15.1.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "seorilabs-org-contracts": "github:seorilabs/.github#f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203",
+    "seorilabs-org-contracts": "github:seorilabs/.github#60878a7031a0b2d62008d81a0a5d413dd245e93e",
     "undici": "8.9.0",
     "yaml": "^2.9.0",
     "zod": "^3.24.1"

@@ -5,6 +5,9 @@ const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
 const EXECUTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
+  "github.fleet-p7.organization-read": Object.freeze({ metadata: "read", organization_administration: "read" }),
+  "github.fleet-p7.properties-read": Object.freeze({ metadata: "read", organization_custom_properties: "read" }),
+  "github.fleet-p7.protection-read": Object.freeze({ metadata: "read", administration: "read" }),
   "github.standard-labels.contract.read": Object.freeze({
     contents: "read",
     metadata: "read",
