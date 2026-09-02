@@ -9,7 +9,7 @@ export interface AiUsageContext {
 }
 
 export interface AiUsageRecord extends AiUsageContext {
-  provider: "gemini" | "anthropic" | "openai";
+  provider: "gemini" | "minimax" | "anthropic" | "openai";
   model: string;
   inputTokens: number;
   outputTokens: number;

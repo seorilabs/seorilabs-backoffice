@@ -10,7 +10,7 @@ import {
   visibleIssueWhere,
   visibleReleaseWhere,
 } from "@/lib/domain/app-visibility";
-import { geminiComplete } from "@/lib/ai/gemini";
+import { llmComplete, llmChatConfigured } from "@/lib/ai/llm";
 import { getOrgDefaultBranches } from "@/lib/github/read";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
@@ -36,7 +36,7 @@ function button(label: string, customId: string) {
 export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise<void> {
   try {
     const mapping = STAGE_NUDGE[stage];
-    if (!mapping || !env.geminiChatConfigured()) return;
+    if (!mapping || !llmChatConfigured()) return;
     const app = await prisma.app.findFirst({ where: { id: appId, ...visibleAppWhere }, select: { displayName: true } });
     if (!app) return;
     await enqueueNotification({
@@ -103,9 +103,9 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   ];
   if (unresolvedCount) lines.push(`• ⚠️ default branch 확인 실패로 제외 ${unresolvedCount}건`);
   let geminiUsed = false;
-  if (mergedPrs.length && env.geminiChatConfigured() && shouldUseDailyDigestGemini(window.label, env.dailyDigestGeminiRolloutPercent())) {
+  if (mergedPrs.length && llmChatConfigured() && shouldUseDailyDigestGemini(window.label, env.dailyDigestGeminiRolloutPercent())) {
     try {
-      const summary = await geminiComplete({
+      const summary = await llmComplete({
         system: "제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 추정하지 않는다.",
         prompt: [`승인대기 ${approvalCount}건`, `P1 ${p1.length}건`, ...mergedPrPromptLines(mergedPrs)].join("\n"),
         maxTokens: 240,

@@ -2,7 +2,7 @@ import type { AiDraftKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
-import { geminiComplete } from "@/lib/ai/gemini";
+import { llmComplete, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import {
   AGENTS,
   buildPlanningPrompt,
@@ -35,7 +35,7 @@ export async function createPlanningDraftCore(input: {
   title?: string;
   actorLabel?: string;
 }): Promise<PlanningDraftResult> {
-  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
+  if (!llmChatConfigured()) throw new Error("챗 LLM 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
 
@@ -51,7 +51,7 @@ export async function createPlanningDraftCore(input: {
     codebaseContext: codebaseContext || undefined,
   });
   // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
-  const outputText = await geminiComplete({
+  const outputText = await llmComplete({
     system,
     prompt,
     maxTokens: 2048,
@@ -67,7 +67,7 @@ export async function createPlanningDraftCore(input: {
       title,
       inputJson: { idea: input.idea },
       outputText,
-      model: env.geminiChatModel(),
+      model: llmChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });
@@ -88,7 +88,7 @@ export async function createBugDraftCore(input: {
   title?: string;
   actorLabel?: string;
 }): Promise<PlanningDraftResult> {
-  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
+  if (!llmChatConfigured()) throw new Error("챗 LLM 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
 
@@ -105,7 +105,7 @@ export async function createBugDraftCore(input: {
     codebaseContext: codebaseContext || undefined,
   });
   // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
-  const outputText = await geminiComplete({
+  const outputText = await llmComplete({
     system,
     prompt,
     maxTokens: 2048,
@@ -121,7 +121,7 @@ export async function createBugDraftCore(input: {
       title,
       inputJson: { symptom: input.symptom },
       outputText,
-      model: env.geminiChatModel(),
+      model: llmChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });
@@ -152,7 +152,7 @@ export async function generateStageDraftCore(input: {
   issueNumber?: number;
   actorLabel?: string;
 }): Promise<StageDraftResult> {
-  if (!env.geminiChatConfigured()) throw new Error("Gemini 비활성");
+  if (!llmChatConfigured()) throw new Error("챗 LLM 비활성");
   const app = await prisma.app.findFirst({ where: { id: input.appId, ...visibleAppWhere } });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
   const meta = AGENTS[input.kind];
@@ -251,7 +251,7 @@ export async function generateStageDraftCore(input: {
     throw new Error("지원하지 않는 에이전트입니다.");
   }
 
-  const outputText = await geminiComplete({ system, prompt, maxTokens: 2048, usage: { path: "draft" } });
+  const outputText = await llmComplete({ system, prompt, maxTokens: 2048, usage: { path: "draft" } });
 
   const draft = await prisma.aiDraft.create({
     data: {
@@ -263,7 +263,7 @@ export async function generateStageDraftCore(input: {
       issueNumber,
       inputJson,
       outputText,
-      model: env.geminiChatModel(),
+      model: llmChatModel(),
       createdBy: input.actorLabel ?? null,
     },
   });

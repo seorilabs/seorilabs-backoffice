@@ -142,6 +142,10 @@ spec:
             - { name: CHECKPOINT_DISABLE, value: "1" }
             - { name: OPERATOR_COMMAND_POLL_INTERVAL_MS, value: "1000" }
             - { name: FEATURE_GEMINI_ENABLED, value: "true" }
+            - { name: CHAT_LLM_PROVIDER, value: "minimax" }
+            - { name: FEATURE_MINIMAX_ENABLED, value: "true" }
+            - { name: MINIMAX_CHAT_MODEL, value: "MiniMax-M3" }
+            - { name: MINIMAX_CHAT_TIMEOUT_MS, value: "180000" }
             - { name: GEMINI_CHAT_MODEL, value: gemini-3.1-flash-lite }
             - { name: GEMINI_EMBED_MODEL, value: gemini-embedding-001 }
             - { name: GEMINI_EMBED_DIM, value: "1536" }
@@ -160,6 +164,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_PRIVATE_KEY } }
             - name: GEMINI_API_KEY
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GEMINI_API_KEY } }
+            - name: MINIMAX_API_KEY
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: MINIMAX_API_KEY } }
             - name: APP_STORE_CONNECT_API_KEY_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: APP_STORE_CONNECT_API_KEY_ID, optional: true } }
             - name: APP_STORE_CONNECT_ISSUER_ID

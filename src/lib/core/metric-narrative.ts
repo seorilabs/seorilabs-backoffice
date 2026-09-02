@@ -1,4 +1,4 @@
-import { geminiChat } from "@/lib/ai/gemini";
+import { llmChat, llmChatConfigured } from "@/lib/ai/llm";
 import { env } from "@/lib/env";
 import type { Movement, PortfolioTotals } from "@/lib/core/metric-highlights";
 
@@ -65,9 +65,9 @@ const SYSTEM_PROMPT = [
  * 리포트 발송이 LLM 가용성에 묶이면 안 된다.
  */
 export async function metricNarrative(facts: string): Promise<string | null> {
-  if (!env.geminiChatConfigured()) return null;
+  if (!llmChatConfigured()) return null;
   try {
-    const reply = await geminiChat(
+    const reply = await llmChat(
       [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: facts },
