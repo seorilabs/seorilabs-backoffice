@@ -175,7 +175,10 @@ export async function applyGitHubBootstrap(input: z.infer<typeof applySchema> & 
           requestId: `github-bootstrap-attempt:${body.runId}:${generation}:${index}`, type: "provider_write_started", actor,
           payload: { index, target: operation.target, kind: operation.kind, desiredDigest, beforeDigest, sourceSha: planned.plan.sourceSha } } });
         mutationAttempts += 1;
-        await adapter.apply(operation);
+        await adapter.apply(operation, async () => {
+          await requireAdmin(actor, dependencies);
+          await assertLease(body.runId, generation, dependencies);
+        });
         mutations += 1;
       }
       if (githubSettingsDigest(await adapter.read(operation)) !== desiredDigest) fail("GITHUB_BOOTSTRAP_READBACK_MISMATCH");

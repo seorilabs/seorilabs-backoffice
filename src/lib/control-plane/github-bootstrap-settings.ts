@@ -96,11 +96,13 @@ function assertApp(source: FleetGitHubAppPublicSource, now: Date): void {
     || app.id !== APP_ID || app.slug !== "seorilabs-backoffice" || app.ownerId !== ORGANIZATION_ID
     || app.ownerLogin !== "seorilabs" || !app.active || !app.webhookActive
     || app.webhookUrl !== "https://backoffice.vzyx.xyz/api/webhooks"
+    || !["read", "write"].includes(app.permissions.members ?? "")
     || installation.installationId !== INSTALLATION_ID || installation.appId !== APP_ID
     || installation.targetId !== ORGANIZATION_ID || installation.accountLogin !== "seorilabs"
     || installation.targetType !== "Organization" || installation.repositorySelection !== "all" || installation.suspended
     || installation.permissions.organization_custom_properties !== "admin"
     || installation.permissions.repository_custom_properties !== "write"
+    || !["read", "write"].includes(installation.permissions.members ?? "")
     || !installation.events.includes("repository") || !installation.events.includes("push")) {
     fail("GITHUB_BOOTSTRAP_APP_APPROVAL_REQUIRED");
   }
@@ -111,7 +113,19 @@ export interface GitHubBootstrapAdapter {
   plan(): Promise<GitHubBootstrapPlan>;
   verify(plan: GitHubBootstrapPlan): Promise<void>;
   read(operation: GitHubBootstrapOperation): Promise<unknown>;
-  apply(operation: GitHubBootstrapOperation): Promise<void>;
+  apply(operation: GitHubBootstrapOperation, assertWriteLease: () => Promise<void>): Promise<void>;
+}
+
+/** SDK queues/retries must not turn an expired approval into a later write. */
+export function createGitHubBootstrapWriteFetch(assertWriteLease: () => Promise<void>, transport: typeof globalThis.fetch = globalThis.fetch): typeof globalThis.fetch {
+  let dispatched = false;
+  return createFleetP7RequestFetch(async (input, init) => {
+    if (dispatched) fail("GITHUB_BOOTSTRAP_READBACK_REQUIRED");
+    await assertWriteLease();
+    if (dispatched) fail("GITHUB_BOOTSTRAP_READBACK_REQUIRED");
+    dispatched = true;
+    return transport(input, init);
+  });
 }
 
 export function createGitHubBootstrapAdapter(input: {
@@ -205,7 +219,7 @@ export function createGitHubBootstrapAdapter(input: {
       verifiedOperations = new Set(parsed.operations.map(githubSettingsDigest));
     },
     read,
-    async apply(operation) {
+    async apply(operation, assertWriteLease) {
       if (!verifiedOperations.has(githubSettingsDigest(operation))) fail("GITHUB_BOOTSTRAP_OPERATION_NOT_VERIFIED");
       // The service additionally requires a human approval and a live database CAS lease.
       await identity(operation.target);
@@ -218,9 +232,13 @@ export function createGitHubBootstrapAdapter(input: {
         repositoryId: operation.target.repositoryId, repositoryFullName: operation.target.fullName,
         execute: async (client) => {
           const { property_name: name, ...body } = operation.desired;
+          // Identity readback and token issuance can outlive the human approval.
+          // Recheck the current generation/TTL after both, immediately before the mutation.
+          await assertWriteLease();
           await client.request(schema ? "PUT /orgs/{org}/properties/schema/{custom_property_name}" : "PATCH /repos/{owner}/{repo}/properties/values", {
             ...(schema ? { org: "seorilabs", custom_property_name: name, ...body } : { ...parameters(operation.target), properties: Object.entries(operation.desired).map(([property_name, value]) => ({ property_name, value })) }),
             baseUrl: "https://api.github.com", headers: { "X-GitHub-Api-Version": API_VERSION },
+            request: { retries: 0, fetch: createGitHubBootstrapWriteFetch(assertWriteLease) },
           });
         },
       });

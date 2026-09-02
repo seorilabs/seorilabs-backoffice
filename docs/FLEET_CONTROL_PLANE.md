@@ -94,6 +94,8 @@ P3의 조직 관리 속성 4개와 Happy Farm/Lizard Tycoon 시범 표시값을 
 `active/admin` 조직 소유권을 재검증한 사람 세션만 실행을 승인할 수 있고, 내부 API와 Codex/Claude
 worker는 이 경로로 쓰기 승인을 할 수 없다. 새 GitHub App/key는 만들지 않으며 기존
 `shared/github/backoffice-app-private-key`와 App 4124446/installation 142120077을 재사용한다.
+계획을 표시하기 전에 App과 installation 양쪽에 조직 소유권 조회용 `members:read`가
+승인됐는지도 확인한다. 해당 요청은 metadata·members 읽기 권한만 대여한다.
 
 정책은 `.github`의 실제 main SHA에서 읽은 `contracts/fleet-p3-runtime.yaml`과 Git blob digest로
 검증한다. 계획은 기존 `AutomationDefinition/Occurrence/AgentRun`에 불변으로 기록하며, 조직당
@@ -102,6 +104,9 @@ worker는 이 경로로 쓰기 승인을 할 수 없다. 새 GitHub App/key는 �
 끊기면 같은 run에서 provider를 먼저 읽고 이미 일치하는 작업은 반복하지 않는다. 완료는 실제
 조회 결과가 일치하고 lease가 여전히 유효할 때만 기록한다. 외부 GitHub API는 DB transaction의
 참여자가 아니므로 사람의 동시 콘솔 변경까지 원자적으로 잠근다고 주장하지 않는다.
+저장소 identity 조회와 token 발급 뒤, SDK 대기 뒤의 실제 HTTP 전송 직전에도 ADMIN·generation·TTL을
+재검증한다. 한 operation의 transport는 한 번만 전송하며, 응답 유실 뒤 SDK 재시도도 차단해
+반드시 같은 run의 readback으로 돌아온다.
 
 설정 변경 권한은 해당 요청 동안 필요한 custom-property 권한과 정확한 저장소 한 곳으로만
 대여하고 반환 전에 폐기한다. GitHub API origin을 고정하고 redirect를 금지한다. 다른 사용자

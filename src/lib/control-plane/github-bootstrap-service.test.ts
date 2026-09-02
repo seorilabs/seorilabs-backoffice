@@ -32,6 +32,7 @@ function fixture() {
   let stealGeneration = false;
   let alternatePlan = false;
   let owner = true;
+  let beforeWrite: () => void = () => {};
   const events: Array<Record<string, unknown>> = [];
   const audits: Array<Record<string, unknown>> = [];
   const provider = new Map<number, unknown>(plan.operations.map((_, index) => [index, null]));
@@ -89,7 +90,9 @@ function fixture() {
         if (expireAfterRead) clock += 300_001;
         return provider.get(indexOf(operation));
       },
-      apply: async (operation) => {
+      apply: async (operation, assertWriteLease) => {
+        beforeWrite();
+        await assertWriteLease();
         writes += 1;
         provider.set(indexOf(operation), operation.desired);
         if (stealGeneration) run.leaseGeneration += 1;
@@ -104,6 +107,9 @@ function fixture() {
     exhaustAttempts: () => { run.attempts = 3; }, expireRunning: () => { run.status = "RUNNING"; run.eligibleAt = new Date(clock - 1); },
     alternatePlan: () => { alternatePlan = true; },
     denyOwner: () => { owner = false; },
+    expireBeforeWrite: () => { beforeWrite = () => { clock += 300_001; }; },
+    stealBeforeWrite: () => { beforeWrite = () => { run.leaseGeneration += 1; }; },
+    denyAdminBeforeWrite: () => { beforeWrite = () => { admin = false; }; },
   };
 }
 
@@ -190,6 +196,24 @@ test("실행 중단 뒤 TTL이 지난 run을 다시 claim할 수 있다", async 
   const result = await applyGitHubBootstrap(item.request(), item.dependencies);
   assert.equal(result.status, "SUCCEEDED");
   assert.equal(item.state().writes, 6);
+});
+
+test("adapter 준비 중 만료·재claim·권한 회수가 발생하면 마지막 쓰기 경계에서 거부한다", async () => {
+  for (const mutate of [
+    (item: ReturnType<typeof fixture>) => item.expireBeforeWrite(),
+    (item: ReturnType<typeof fixture>) => item.stealBeforeWrite(),
+  ]) {
+    const item = fixture(); mutate(item);
+    await assert.rejects(applyGitHubBootstrap(item.request(), item.dependencies), /LEASE_STALE/u);
+    assert.equal(item.state().writes, 0);
+    assert.ok(item.state().guard?.activeScopeKey);
+    assert.notEqual(item.state().run.status, "SUCCEEDED");
+  }
+  const denied = fixture(); denied.denyAdminBeforeWrite();
+  const result = await applyGitHubBootstrap(denied.request(), denied.dependencies);
+  assert.equal(result.outcome?.code, "GITHUB_BOOTSTRAP_HUMAN_ADMIN_REQUIRED");
+  assert.equal(denied.state().writes, 0);
+  assert.ok(denied.state().guard?.activeScopeKey);
 });
 
 test("정책 변경·시도 소진 뒤에도 읽기 전용 복구로 현재 상태를 확인하고 이전 계획을 닫는다", async () => {
