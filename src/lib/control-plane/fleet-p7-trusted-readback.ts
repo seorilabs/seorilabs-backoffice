@@ -19,9 +19,10 @@ type TrustedBindingLoader = typeof loadTrustedFleetMigrationInventoryBinding;
 type CallerReadbackFactory = typeof createFleetCallerMigrationReadback;
 
 export interface FleetP7TrustedAggregateReadback {
+  centralContract: FleetP7GitHubPublicReadback["centralContract"];
   installation: Record<string, unknown> | null;
   organizationCustomProperties: Array<Record<string, unknown>> | null;
-  rulesets: Array<Record<string, unknown>> | null;
+  protection: FleetP7GitHubPublicReadback["protection"];
   defaultBranchOrgContractCallers: Array<{ fullName: string }> | null;
   cloudBuildBindings: null;
   callerMigration: Record<string, unknown>;
@@ -104,12 +105,13 @@ export async function createFleetP7TrustedAggregateReadback(input: {
     now: input.now.toISOString(),
   });
   const aggregate: FleetP7TrustedAggregateReadback = {
+    centralContract: github.centralContract,
     installation: github.installation,
     organizationCustomProperties: github.organizationCustomProperties,
-    rulesets: github.rulesets,
+    protection: github.protection,
     defaultBranchOrgContractCallers: github.defaultBranchOrgContractCallers,
-    // P3 GCP provider readback은 별도 owner gate다. 값이 없을 때 desired state로 꾸미지 않고
-    // 중앙 p7-gate-report가 HUMAN_APPROVAL_REQUIRED로 닫도록 null을 유지한다.
+    // 조회하지 않은 GCP 상태를 desired state로 꾸미지 않는다. 실제 적용 여부와 별개로
+    // 중앙 p7-gate-report가 MACHINE_BLOCKED로 누락된 관측을 표시한다.
     cloudBuildBindings: null,
     callerMigration,
     publicRepositories: publicRepositories(inventory),

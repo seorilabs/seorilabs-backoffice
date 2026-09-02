@@ -929,6 +929,22 @@ INSERT-only DB principal로 completion에 결합된 authoritative issuance 원�
 caller readback과 secret-free P7 aggregate를 만든다. 이번 코드 이관은 Job 실행, 실제 signing,
 plan 생성 또는 cleanup을 수행하지 않는다.
 
+P7 GitHub 관측은 설치된 계약 코드의 immutable dependency pin과 실제 중앙 main을 분리한다.
+시작 시 숫자 조직/저장소 identity와 main SHA를 읽고 그 SHA의 P3 v4 계약 및 Git blob digest를
+검증한다. 해당 계약의 target ID와 inventory ID/source SHA가 같아야 하며, 중앙과 target의 main을
+종료 직전에 다시 읽어 관측 중 변경을 거부한다. 옛 v3 Evaluate parser와 main SHA 상수는 사용하지
+않는다. Team 보호 상태는 중앙 package의 `github-settings-readback` 판정기를 재사용한다.
+각 GET은 한 저장소와 해당 작업의 read permission만 가진 installation token을 대여하고, 반환 전에
+폐기한다. scope 확장 또는 폐기 실패는 선택적 관측 누락으로 숨기지 않고 전체 실행을 중단한다.
+일반 403/404는 보호 설정 부재가 아니며 exact `Branch not protected` 404만 부재 관측이다.
+
+`node /app/scripts-dist/fleet-p7-github-observation.cjs`는 같은 운영 경로의 공개 provider 조회 전용이다.
+중앙 계약에서 실제 target을 읽으며 임의 repository·URL·파일·branch·쓰기 요청은 허용하지 않는다.
+이 진단은 `authoritativeInventoryVerified=false`, `executionAllowed=false`이며 signed inventory,
+P7 완료, cleanup 또는 보호 ACTIVE 승인을 만들지 않는다. caller 파일 조회가 불가능하면 전체
+caller 관측을 `null`로 두고, settings/protection 관측과 별도로 처리한다. 원장 기반 집계는 여전히
+`fleet-p7-trusted-readback.cjs`와 실제 authoritative issuance를 요구한다.
+
 signer는 승인자가 아니라 exact issuer SPIFFE 뒤의 key-isolation 경계다. capability/collection digest의
 실제 승인 여부는 issuer의 live capability와 durable collection readback이 결정한다. signer는 canonical
 payload, key ID/fingerprint/algorithm, inventory binding과 시간창만 검증한다. signer Deployment는

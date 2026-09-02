@@ -68,9 +68,11 @@ test("trusted binding에서 current central SHA caller readback과 P7 aggregate�
     },
     readGitHub: async () => ({
       currentCentralSourceSha: CENTRAL_SHA,
+      centralContract: { sourceSha: CENTRAL_SHA, schemaVersion: 4, contentDigest: "sha256:" + "1".repeat(64) },
       installation: { app_id: 4124446 },
       organizationCustomProperties: [],
-      rulesets: [],
+      protection: { providerMode: "REPO_BRANCH_PROTECTION", rolloutMode: "SHADOW", observationMode: "READ_ONLY",
+        existingProtectionChanged: false, activationAllowed: false, repositories: [], ready: false },
       defaultBranchOrgContractCallers: [],
     }),
   });
@@ -78,6 +80,9 @@ test("trusted binding에서 current central SHA caller readback과 P7 aggregate�
   assert.equal(calls[1]?.currentCentralSourceSha, CENTRAL_SHA);
   assert.equal(result.callerMigration.currentCentralSourceSha, CENTRAL_SHA);
   assert.equal(result.cloudBuildBindings, null);
+  assert.equal(result.protection?.activationAllowed, false);
+  assert.equal(result.centralContract.sourceSha, CENTRAL_SHA);
+  assert.equal(Object.hasOwn(result, "rulesets"), false);
   assert.deepEqual(result.publicRepositories, [
     { fullName: "seorilabs/public-app", requiresRelease: true },
     { fullName: "seorilabs/public-infra", requiresRelease: false },
@@ -94,9 +99,10 @@ test("aggregate 공개 readback에 private surface가 섞이면 거부한다", a
       createCallerReadback: () => ({ contract: "caller-readback" }),
       readGitHub: async () => ({
         currentCentralSourceSha: CENTRAL_SHA,
+        centralContract: { sourceSha: CENTRAL_SHA, schemaVersion: 4, contentDigest: "sha256:" + "1".repeat(64) },
         installation: { token: "forbidden" },
         organizationCustomProperties: null,
-        rulesets: null,
+        protection: null,
         defaultBranchOrgContractCallers: null,
       }),
     }),
@@ -111,8 +117,10 @@ test("pinned repo-contract가 trusted binding과 caller projection API를 함께
   const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(
+  assert.match(
     packageJson.dependencies["seorilabs-org-contracts"],
-    "github:seorilabs/.github#f610f09b8e4b0cc8b19ed37673ea4d8b21c3f203",
+    /^github:seorilabs\/\.github#[a-f0-9]{40}$/u,
   );
+  const settings = await import("seorilabs-org-contracts/repo-contract/github-settings-readback");
+  assert.equal(typeof settings.githubProtectionReadback, "function");
 });
