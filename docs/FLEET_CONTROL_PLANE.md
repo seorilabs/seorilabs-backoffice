@@ -144,6 +144,33 @@ logical signer는 `shared/workflow-bundle/approval-signing`이며 private key, r
 secret export endpoint는 Backoffice에 두지 않는다. trust root가 없거나 revoke되면 기존 APPROVED readback도
 fail-closed하며 CANDIDATE는 successful GitHub artifact identity로 별도 검증한다.
 
+### 공통 빌드 후보 자동 수집
+
+`seorilabs/.github`의 숫자 repository ID `1241442018`과
+`.github/workflows/workflow-bundle-v5-candidate.yml`이 일치하는 `main`의 성공한
+`push`/`workflow_dispatch`만 후보 수집 신호다. 서명된 `workflow_run.completed` 수신 시
+공개 run ID·attempt·source SHA만 기존 durable inbox에 함께 기록한다. 원문 payload나 artifact
+다운로드 URL은 저장하지 않는다. 응답 뒤 처리가 실패하거나 서버가 종료돼도 기존 scheduler가
+generation CAS·heartbeat·재시도·dead-letter 경계를 통해 같은 요청을 복구한다.
+
+기존 전체 reconcile은 지정된 후보 workflow의 최근 3일을 페이지 단위로 조회해 수신되지 않은
+완료 알림도 보충한다. 일반 저장소의 최근 50개 run에 의존하지 않으며 최대 1,000개 조회 경계에
+도달하면 불완전한 결과를 완료로 표시하지 않는다. 복구 신호는 run/attempt별로 한 번만 기록한다.
+
+새 후보는 기존 `importWorkflowBundleCandidate`가 실제 GitHub run·artifact·archive checksum과
+bundle integrity를 다시 검증한 뒤 원장 쓰기와 같은 transaction에서 수집 claim을 확인하고
+불변 원장과 감사 이벤트에 기록한다. 수동 등록/동시 worker와
+경합하면 원장을 재조회하며, 이미 검증된 같은 source의 후보는 Actions 파일이 만료돼도 재사용한다.
+저장소가 다르거나 PR·실패 실행·알 수 없는 artifact·checksum 오류인 경우에는 import하지 않는다.
+조회에는 공용 App의 중앙 저장소 한 곳에 한정된 `actions:read`/`metadata:read` token만 대여하고
+실패 시에도 폐기한다. provider 오류의 header·signed URL·cause는 로그와 inbox에 전달하지 않는다.
+
+이 경로는 `CANDIDATE`를 수집할 뿐 ConfigRevision 활성화, `APPROVED` 승격, 앱 빌드, 태그,
+마켓 업로드·심사·공개 배포를 실행하지 않는다. 새로운 Actions artifact나 빌드 작업을 만들지 않으며
+기존의 작은 후보 JSON만 읽는다. GitHub API의 관측 계약은
+[workflow_run 이벤트](https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_run)와
+[실행별 artifact 조회](https://docs.github.com/en/rest/actions/artifacts#list-workflow-run-artifacts)를 따른다.
+
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
 support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.

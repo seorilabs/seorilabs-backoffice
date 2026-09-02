@@ -11,11 +11,12 @@ import { z } from "zod";
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
+import { WORKFLOW_BUNDLE_CANDIDATE_SOURCE } from "@/lib/control-plane/workflow-bundle-candidate-source";
 
-const REGISTRY_ID = "seorilabs-workflow-bundles-v5";
-const REGISTRY_REPOSITORY = "seorilabs/.github";
-const REGISTRY_REPOSITORY_ID = "1241442018";
-const CANDIDATE_WORKFLOW_PATH = ".github/workflows/workflow-bundle-v5-candidate.yml";
+const REGISTRY_ID = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.registryId;
+const REGISTRY_REPOSITORY = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.repository;
+const REGISTRY_REPOSITORY_ID = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.repositoryId;
+const CANDIDATE_WORKFLOW_PATH = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.workflowPath;
 const MAX_ARTIFACT_ARCHIVE_BYTES = 4 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
@@ -525,48 +526,49 @@ async function readCandidateArtifactFromGitHub(input: {
   }
   // Registry validation/readback is pure. Load GitHub App auth only for a live
   // candidate import so tests and approved readback never initialize a secret client.
-  const { getInstallationOctokit } = await import("@/lib/github/app");
-  const client = await getInstallationOctokit();
-  const owner = "seorilabs";
-  const repo = ".github";
-  const [runResponse, artifactResponse] = await Promise.all([
-    client.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(input.runId) }),
-    client.rest.actions.getArtifact({ owner, repo, artifact_id: Number(input.artifactId) }),
-  ]);
-  const download = await client.rest.actions.downloadArtifact({
-    owner,
-    repo,
-    artifact_id: Number(input.artifactId),
-    archive_format: "zip",
+  const { withWorkflowBundleRegistryReadClient } = await import("@/lib/github/workflow-bundle-registry-client");
+  return withWorkflowBundleRegistryReadClient(async (client) => {
+    const owner = "seorilabs";
+    const repo = ".github";
+    const [runResponse, artifactResponse] = await Promise.all([
+      client.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(input.runId) }),
+      client.rest.actions.getArtifact({ owner, repo, artifact_id: Number(input.artifactId) }),
+    ]);
+    const download = await client.rest.actions.downloadArtifact({
+      owner,
+      repo,
+      artifact_id: Number(input.artifactId),
+      archive_format: "zip",
+    });
+    const archive = bufferFromOctokitData(download.data);
+    if (!archive) {
+      fail("GitHub candidate artifact bytes를 읽을 수 없습니다.", "WORKFLOW_BUNDLE_ARTIFACT_READ_FAILED", 503);
+    }
+    const run = runResponse.data;
+    const artifact = artifactResponse.data;
+    return {
+      repository: run.repository.full_name,
+      repositoryId: String(run.repository.id),
+      sourceSha: run.head_sha.toLowerCase(),
+      workflowPath: run.path,
+      eventName: run.event,
+      headBranch: run.head_branch ?? "",
+      runId: BigInt(run.id),
+      runAttempt: run.run_attempt ?? 0,
+      runStatus: run.status ?? "",
+      runConclusion: run.conclusion ?? null,
+      artifactId: BigInt(artifact.id),
+      artifactName: artifact.name,
+      artifactDigest: artifact.digest ?? null,
+      artifactExpired: artifact.expired,
+      artifactWorkflowRunId: artifact.workflow_run?.id ? BigInt(artifact.workflow_run.id) : null,
+      artifactWorkflowRepositoryId: artifact.workflow_run?.repository_id
+        ? String(artifact.workflow_run.repository_id)
+        : null,
+      artifactWorkflowHeadSha: artifact.workflow_run?.head_sha?.toLowerCase() ?? null,
+      archive,
+    };
   });
-  const archive = bufferFromOctokitData(download.data);
-  if (!archive) {
-    fail("GitHub candidate artifact bytes를 읽을 수 없습니다.", "WORKFLOW_BUNDLE_ARTIFACT_READ_FAILED", 503);
-  }
-  const run = runResponse.data;
-  const artifact = artifactResponse.data;
-  return {
-    repository: run.repository.full_name,
-    repositoryId: String(run.repository.id),
-    sourceSha: run.head_sha.toLowerCase(),
-    workflowPath: run.path,
-    eventName: run.event,
-    headBranch: run.head_branch ?? "",
-    runId: BigInt(run.id),
-    runAttempt: run.run_attempt ?? 0,
-    runStatus: run.status ?? "",
-    runConclusion: run.conclusion ?? null,
-    artifactId: BigInt(artifact.id),
-    artifactName: artifact.name,
-    artifactDigest: artifact.digest ?? null,
-    artifactExpired: artifact.expired,
-    artifactWorkflowRunId: artifact.workflow_run?.id ? BigInt(artifact.workflow_run.id) : null,
-    artifactWorkflowRepositoryId: artifact.workflow_run?.repository_id
-      ? String(artifact.workflow_run.repository_id)
-      : null,
-    artifactWorkflowHeadSha: artifact.workflow_run?.head_sha?.toLowerCase() ?? null,
-    archive,
-  };
 }
 
 function defaultDependencies(): WorkflowBundleRegistryDependencies {
@@ -589,6 +591,7 @@ export async function importWorkflowBundleCandidate(input: {
   artifactId: bigint;
   idempotencyKey: string;
   actor: string;
+  assertWriteAllowed?: (tx: Prisma.TransactionClient) => Promise<void>;
 }, client: WorkflowBundleRegistryClient = prisma, dependencies = defaultDependencies()) {
   const requestHash = jsonDigest({
     mode: "CANDIDATE",
@@ -636,6 +639,8 @@ export async function importWorkflowBundleCandidate(input: {
   let record;
   try {
     record = await client.$transaction(async (tx) => {
+      // 수집 worker는 provider 조회 뒤 같은 transaction에서 현재 generation을 잠근다.
+      await input.assertWriteAllowed?.(tx);
       const created = await tx.workflowBundleRegistryRecord.create({
         data: {
           registryId: REGISTRY_ID,

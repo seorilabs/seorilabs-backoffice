@@ -11,6 +11,7 @@ import {
 import { env } from "@/lib/env";
 import { syncPlatformRegistryBindings } from "@/lib/platform/registry-bindings";
 import { reconcileRepositoryWhere } from "@/lib/sync/reconcile-scope";
+import { backfillWorkflowBundleCandidates } from "@/lib/control-plane/workflow-bundle-candidate-sync";
 
 // 한 레포의 issue/PR/workflow_run 을 installation token 으로 증분 동기화.
 export async function backfillRepo(repoFullName: string): Promise<void> {
@@ -91,6 +92,12 @@ export async function reconcileAll(): Promise<ReconcileRunResult> {
     });
     let succeeded = 0;
     let failed = 0;
+    try {
+      await backfillWorkflowBundleCandidates();
+    } catch (error) {
+      failed += 1;
+      console.error("[reconcile] 공통 빌드 후보 수집 실패:", error instanceof Error ? error.message : "CANDIDATE_BACKFILL_FAILED");
+    }
     for (const repository of repositories) {
       try {
         await backfillRepo(repository.repoFullName);

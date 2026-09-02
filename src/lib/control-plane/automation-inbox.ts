@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { parseStableSemVerTag } from "@/lib/core/stable-semver";
@@ -9,6 +10,10 @@ import {
   type RepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
 import type { GhIssueInput } from "@/lib/sync/mirror";
+import {
+  durableWorkflowBundleCandidateSchema,
+  type DurableWorkflowBundleCandidate,
+} from "@/lib/control-plane/workflow-bundle-candidate-source";
 
 const CLIENT_REQUEST_MARKER = /<!--\s*bo:req=([0-9a-fA-F-]+)\s*-->/;
 
@@ -67,6 +72,10 @@ export interface DurableIngressBinding {
   action: string | null;
   repoFullName: string;
 }
+
+export type AutomationIngressClaimCheck = (
+  client?: Pick<Prisma.TransactionClient, "automationIngressEvent">,
+) => Promise<void>;
 
 /**
  * webhook 원문 전체나 issue body를 durable inbox에 복제하지 않는다. scheduler가
@@ -178,7 +187,7 @@ export function durableRepositoryDiscovery(input: {
 }
 
 export function durableIngressEnvelopeHash(input: DurableIngressBinding & {
-  payload: DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery;
+  payload: DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery | DurableWorkflowBundleCandidate;
 }): string {
   return crypto.createHash("sha256")
     .update(canonicalJson({
@@ -228,6 +237,21 @@ export function parseDurableRepositoryDiscovery(input: {
   ) {
     throw new Error("automation inbox repository discovery binding mismatch");
   }
+  return observation;
+}
+
+export function parseDurableWorkflowBundleCandidate(input: {
+  payload: unknown;
+  payloadHash: string | null;
+} & DurableIngressBinding): DurableWorkflowBundleCandidate {
+  const observation = durableWorkflowBundleCandidateSchema.parse(input.payload);
+  if (
+    input.event !== "workflow_run"
+    || input.action !== "completed"
+    || input.repoFullName !== observation.repository
+    || !input.payloadHash
+    || durableIngressEnvelopeHash({ ...input, payload: observation }) !== input.payloadHash
+  ) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_INGRESS_BINDING_MISMATCH");
   return observation;
 }
 

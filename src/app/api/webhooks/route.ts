@@ -36,6 +36,7 @@ import {
   durableRepositoryDiscovery,
   durableStableTagPush,
 } from "@/lib/control-plane/automation-inbox";
+import { durableWorkflowBundleCandidate } from "@/lib/control-plane/workflow-bundle-candidate-source";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -260,6 +261,12 @@ export async function POST(req: NextRequest) {
   // delivery와 automation inbox를 같은 transaction에 기록한다. handler가 실패해도
   // scheduler가 inbox를 재처리하며 동일 delivery 재전송은 한 번만 enqueue된다.
   const stableTagObservation = event === "push" ? durableStableTagPush(payload) : null;
+  const workflowBundleCandidate = durableWorkflowBundleCandidate({
+    event,
+    action: payload.action,
+    repository: payload.repository,
+    workflowRun: payload.workflow_run,
+  });
   const discoveryObservation = durableRepositoryDiscovery({
     event,
     action: payload.action,
@@ -279,8 +286,9 @@ export async function POST(req: NextRequest) {
     issue: payload.issue ? durableIssueObservation(payload.issue) : undefined,
     stableTagPush: stableTagObservation,
     repositoryDiscovery: discoveryObservation,
+    workflowBundleCandidate,
   });
-  if (stableTagObservation || discoveryObservation) {
+  if (stableTagObservation || discoveryObservation || workflowBundleCandidate) {
     // 응답 이후 exact sourceKey를 즉시 소진한다. 실패하거나 process가 종료돼도
     // durable inbox의 FAILED/PENDING row를 scheduler 또는 GitHub 재전송이 재생한다.
     after(async () => {
