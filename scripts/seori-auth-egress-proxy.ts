@@ -3,6 +3,7 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TLSSocket } from "node:tls";
 
 import {
+  connectHostHeaderMatches,
   exactClientHostPolicies,
   exactPeerSpiffeIdentity,
   parseConnectAuthority,
@@ -90,7 +91,7 @@ async function main(): Promise<void> {
           !socket.authorized
           || head.length > MAX_HEAD_BYTES
           || request.headers["proxy-authorization"]
-          || request.headers.host !== request.url
+          || !connectHostHeaderMatches(request.headers.host, request.url ?? "")
         ) {
           throw new Error("SEORI_EGRESS_CONNECT_REJECTED");
         }

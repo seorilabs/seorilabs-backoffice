@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  connectHostHeaderMatches,
   exactHostSet,
   exactClientHostPolicies,
   createExactMtlsProxyClient,
@@ -62,6 +63,18 @@ test("client identity마다 허용 origin을 별도 결합한다", () => {
   assert.throws(() => exactClientHostPolicies(`${runtime}=api.github.com;${runtime}=backoffice.vzyx.xyz`));
   assert.throws(() => exactClientHostPolicies(`${runtime}=127.0.0.1`));
   assert.throws(() => exactClientHostPolicies(`${runtime}=api.github.com;`));
+});
+
+test("CONNECT Host header must be the exact target authority, allowing only the default-port omission undici sends", () => {
+  assert.equal(connectHostHeaderMatches("api.github.com:443", "api.github.com:443"), true);
+  assert.equal(connectHostHeaderMatches("api.github.com", "api.github.com:443"), true);
+  assert.equal(connectHostHeaderMatches("api.github.com", "api.github.com:80"), false);
+  assert.equal(connectHostHeaderMatches("github.com", "api.github.com:443"), false);
+  assert.equal(connectHostHeaderMatches("API.github.com", "api.github.com:443"), false);
+  assert.equal(connectHostHeaderMatches("api.github.com:443", "api.github.com"), false);
+  assert.equal(connectHostHeaderMatches("", "api.github.com:443"), false);
+  assert.equal(connectHostHeaderMatches(undefined, "api.github.com:443"), false);
+  assert.equal(connectHostHeaderMatches(["api.github.com"], "api.github.com:443"), false);
 });
 
 test("CONNECT is exact host and port 443 only", () => {
