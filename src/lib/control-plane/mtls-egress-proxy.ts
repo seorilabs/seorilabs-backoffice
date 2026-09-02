@@ -67,6 +67,18 @@ export function exactClientHostPolicies(raw: string): ReadonlyMap<string, Readon
   return policies;
 }
 
+/**
+ * CONNECT 요청의 Host 헤더가 request target과 같은 authority인지 exact 비교한다.
+ * undici ProxyAgent는 기본 포트 443일 때 Host 헤더에서 포트를 생략하므로
+ * `host:443` target에 한해 포트 없는 동일 hostname을 허용한다. 정규화나 대소문자
+ * 완화는 하지 않으며, 대상 hostname·포트·허용 목록 검사는 parseConnectAuthority가 맡는다.
+ */
+export function connectHostHeaderMatches(hostHeader: unknown, authority: string): boolean {
+  if (typeof hostHeader !== "string" || hostHeader.length === 0 || authority.length === 0) return false;
+  if (hostHeader === authority) return true;
+  return authority.endsWith(":443") && hostHeader === authority.slice(0, -":443".length);
+}
+
 export function parseConnectAuthority(
   authority: string,
   allowedHosts: ReadonlySet<string>,
