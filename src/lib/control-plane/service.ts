@@ -431,6 +431,22 @@ export function assertExpectedLatestConfigRevision(input: {
   }
 }
 
+export function assertExpectedActiveConfigRevision(input: {
+  expectedActiveRevision: number;
+  actualActiveRevisions: number[];
+}): void {
+  if (
+    input.actualActiveRevisions.length !== 1
+    || input.actualActiveRevisions[0] !== input.expectedActiveRevision
+  ) {
+    throw new ControlPlaneError(
+      `ACTIVE Config revision 변경: expected=${input.expectedActiveRevision}, actual=${input.actualActiveRevisions.join(",") || "missing"}`,
+      409,
+      "ACTIVE_REVISION_CHANGED",
+    );
+  }
+}
+
 export function assertExpectedConfigSourceSha(input: {
   expectedSourceSha?: string;
   actualSourceSha: string;
@@ -1292,6 +1308,22 @@ async function assertNoCompetingComplianceDraft(
   }
 }
 
+async function assertLockedComplianceActiveRevision(
+  tx: Prisma.TransactionClient,
+  input: { appId: string; expectedActiveRevision: number },
+) {
+  const active = await tx.configRevision.findMany({
+    where: { appId: input.appId, status: "ACTIVE" },
+    orderBy: { revision: "desc" },
+    take: 2,
+    select: { revision: true },
+  });
+  assertExpectedActiveConfigRevision({
+    expectedActiveRevision: input.expectedActiveRevision,
+    actualActiveRevisions: active.map((revision) => revision.revision),
+  });
+}
+
 export async function createConfigRevision(input: {
   repoId: bigint;
   expectedLatestRevision: number;
@@ -1359,6 +1391,12 @@ export async function createConfigRevision(input: {
     draftIsolationAfterRevision: input.draftIsolationAfterRevision,
   }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
+    if (input.draftIsolationAfterRevision !== undefined) {
+      await assertLockedComplianceActiveRevision(tx, {
+        appId: source.app.id,
+        expectedActiveRevision: input.draftIsolationAfterRevision,
+      });
+    }
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
       const validatedReplay = input.draftIsolationAfterRevision === undefined

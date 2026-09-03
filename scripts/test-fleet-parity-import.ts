@@ -251,6 +251,21 @@ async function main() {
     });
     const nextRevision = latestRevision._max.revision ?? 0;
     const payload = { schemaVersion: 1, markets: [] };
+    const staleActiveKey = `ui-compliance-batch-create:${randomUUID()}`;
+    await assert.rejects(createConfigRevision({
+      repoId,
+      expectedLatestRevision: nextRevision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: staleActiveKey,
+      draftIsolationAfterRevision: firstConfig.revision,
+    }), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "ACTIVE_REVISION_CHANGED"
+    ));
+    assert.equal(await prisma.configRevision.count({
+      where: { idempotencyKey: staleActiveKey },
+    }), 0);
     const freshComplianceDraft = (await createConfigRevision({
       repoId,
       expectedLatestRevision: nextRevision,

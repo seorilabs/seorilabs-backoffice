@@ -13,6 +13,7 @@ import {
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
   assertManagedProductConfigSourceBinding,
+  assertExpectedActiveConfigRevision,
   assertExpectedConfigSourceSha,
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
@@ -254,6 +255,22 @@ test("create/rebase는 latest revision optimistic concurrency를 강제한다", 
     () => assertExpectedLatestConfigRevision({ expectedLatestRevision: 6, actualLatestRevision: 7 }),
     (error) => error instanceof ControlPlaneError && error.code === "REVISION_CONFLICT",
   );
+});
+
+test("Compliance DRAFT create는 잠금 시점 ACTIVE revision 하나를 exact 비교한다", () => {
+  assert.doesNotThrow(() => assertExpectedActiveConfigRevision({
+    expectedActiveRevision: 7,
+    actualActiveRevisions: [7],
+  }));
+  for (const actualActiveRevisions of [[], [6], [7, 6]]) {
+    assert.throws(
+      () => assertExpectedActiveConfigRevision({
+        expectedActiveRevision: 7,
+        actualActiveRevisions,
+      }),
+      (error) => error instanceof ControlPlaneError && error.code === "ACTIVE_REVISION_CHANGED",
+    );
+  }
 });
 
 test("사람 batch create는 current discovery의 exact source SHA를 강제한다", () => {
