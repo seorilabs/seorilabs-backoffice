@@ -1391,6 +1391,10 @@ export async function createConfigRevision(input: {
     draftIsolationAfterRevision: input.draftIsolationAfterRevision,
   }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
+    assertExpectedConfigSourceSha({
+      expectedSourceSha: input.expectedSourceSha,
+      actualSourceSha: source.observation.sourceSha,
+    });
     if (input.draftIsolationAfterRevision !== undefined) {
       await assertLockedComplianceActiveRevision(tx, {
         appId: source.app.id,
@@ -1432,10 +1436,6 @@ export async function createConfigRevision(input: {
         duplicate: true,
       };
     }
-    assertExpectedConfigSourceSha({
-      expectedSourceSha: input.expectedSourceSha,
-      actualSourceSha: source.observation.sourceSha,
-    });
     if (input.draftIsolationAfterRevision !== undefined) {
       await assertNoCompetingComplianceDraft(tx, {
         appId: source.app.id,

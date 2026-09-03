@@ -65,6 +65,24 @@ export function planLegacyConfigImportPersistence(input: {
   return { createDraft: false, status: "NEEDS_INPUT" };
 }
 
+export function legacyConfigResolutionObservationBinding(input: {
+  resolutionParityStatus: LegacyShadowParity["status"] | null;
+  applicableResolution: {
+    resolution: { id: string } | null;
+    centralStateDigest: string;
+  } | null;
+}): { legacyConfigResolutionId: string | null; centralStateDigest: string | null } {
+  const resolution = input.resolutionParityStatus === "MATCH"
+    ? input.applicableResolution?.resolution ?? null
+    : null;
+  return {
+    legacyConfigResolutionId: resolution?.id ?? null,
+    centralStateDigest: resolution && input.applicableResolution
+      ? input.applicableResolution.centralStateDigest
+      : null,
+  };
+}
+
 type PlatformSourceVector = {
   repoId: bigint;
   repoFullName: string;
@@ -785,6 +803,10 @@ export async function recordLegacyShadowImport(input: {
             resolution: applicableResolution.resolution,
           })
         : null;
+      const resolutionBinding = legacyConfigResolutionObservationBinding({
+        resolutionParityStatus: resolutionParity?.status ?? null,
+        applicableResolution,
+      });
       const parity = resolutionParity
         ?? compareLegacyShadow(transformed, active?.payload ?? null);
       const persistencePlan = planLegacyConfigImportPersistence({
@@ -861,21 +883,15 @@ export async function recordLegacyShadowImport(input: {
         scope: FULL_PARITY_SCOPE,
         centralConfigRevisionId: active?.id ?? null,
         centralPayloadHash: active?.payloadHash ?? null,
-        legacyConfigResolutionId: resolutionParity
-          ? applicableResolution?.resolution?.id ?? null
-          : null,
-        centralStateDigest: resolutionParity
-          ? applicableResolution?.centralStateDigest ?? null
-          : null,
+        legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId,
+        centralStateDigest: resolutionBinding.centralStateDigest,
       } as JsonValue);
       const parityObservation = await tx.shadowParityObservation.create({
         data: {
           appId: app.id,
           legacyImportId: legacyImport.id,
           configRevisionId: active?.id,
-          legacyConfigResolutionId: resolutionParity
-            ? applicableResolution?.resolution?.id
-            : undefined,
+          legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId ?? undefined,
           sourceSha,
           scope: FULL_PARITY_SCOPE,
           contractVersion: LEGACY_TRANSFORM_VERSION,
@@ -914,7 +930,7 @@ export async function recordLegacyShadowImport(input: {
               ? [...new Set(transformed.reasons.map((reason) => reason.code))].sort()
               : [],
             reasonCodesDigest,
-            legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
+            legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId,
           },
         },
       });

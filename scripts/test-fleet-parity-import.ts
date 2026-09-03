@@ -348,6 +348,77 @@ async function main() {
         entityId: complianceDraft.id,
       },
     }), 1);
+
+    const changedSourceSha = "d".repeat(40);
+    await prisma.repositoryRegistration.update({
+      where: { repoId },
+      data: {
+        lastDefaultPushSha: changedSourceSha,
+        lastReconciledSha: changedSourceSha,
+      },
+    });
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha: changedSourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime += 1_000),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}:changed-source`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha: changedSourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
+      },
+      buildTargets: [],
+    });
+    await assert.rejects(createConfigRevision({
+      repoId,
+      expectedLatestRevision: legacyDraft.revision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: complianceCreateKey,
+      draftIsolationAfterRevision: secondConfig.revision,
+    }), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_SHA_MISMATCH"
+    ));
+    await prisma.repositoryRegistration.update({
+      where: { repoId },
+      data: {
+        lastDefaultPushSha: sourceSha,
+        lastReconciledSha: sourceSha,
+      },
+    });
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime += 1_000),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}:restored-source`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
+      },
+      buildTargets: [],
+    });
     const humanDraft = await prisma.configRevision.create({
       data: {
         appId,

@@ -8,7 +8,10 @@ import {
   hashLegacyShadowIdempotencyKey,
   legacyShadowRequestHash,
 } from "@/lib/control-plane/legacy-shadow-request";
-import { planLegacyConfigImportPersistence } from "@/lib/control-plane/legacy-shadow-service";
+import {
+  legacyConfigResolutionObservationBinding,
+  planLegacyConfigImportPersistence,
+} from "@/lib/control-plane/legacy-shadow-service";
 
 test("shadow import 요청은 exact SHA와 server-owned source vector만 받는다", () => {
   const valid = {
@@ -95,4 +98,27 @@ test("exact resolution 재사용은 새 초안을 만들었다고 기록하지 �
     transformStatus: "DRAFTABLE_WITH_INPUT",
     resolutionParityStatus: "MISMATCH",
   }), { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" });
+});
+
+test("resolution 관계는 현재 중앙 상태와 실제 MATCH한 관측에만 연결한다", () => {
+  const applicableResolution = {
+    resolution: { id: "resolution-1" },
+    centralStateDigest: "a".repeat(64),
+  };
+  assert.deepEqual(legacyConfigResolutionObservationBinding({
+    resolutionParityStatus: "MATCH",
+    applicableResolution,
+  }), {
+    legacyConfigResolutionId: "resolution-1",
+    centralStateDigest: "a".repeat(64),
+  });
+  for (const resolutionParityStatus of ["MISMATCH", "NEEDS_INPUT", null] as const) {
+    assert.deepEqual(legacyConfigResolutionObservationBinding({
+      resolutionParityStatus,
+      applicableResolution,
+    }), {
+      legacyConfigResolutionId: null,
+      centralStateDigest: null,
+    });
+  }
 });
