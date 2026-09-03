@@ -105,7 +105,8 @@ function evidence(candidate: ReturnType<typeof candidateBundle>) {
     snapshotSignatureDigest: `sha256:${"8".repeat(64)}`,
     artifactSha256: `sha256:${"9".repeat(64)}`,
   });
-  const staticProfiles = ["react-native", "godot", "capacitor", "ait-web"] as const;
+  // 필수 증거는 번들이 선언한 promotionScope에서 파생된다. fixture도 같은 값을 쓴다.
+  const staticProfiles = candidate.promotionScope.staticProfiles;
   const staticRecords = staticProfiles.map((profile, index) => ({
     ...common(index + 1),
     target: "static",
@@ -261,6 +262,29 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
     },
   };
 }
+
+test("필수 증거 집합은 번들이 선언한 promotion scope에서 파생된다", () => {
+  const narrowed = candidateBundle();
+  narrowed.promotionScope = {
+    staticProfiles: ["react-native", "godot", "capacitor"],
+    buildProfiles: ["react-native-android", "godot-android"],
+  };
+  const records = evidence(narrowed);
+  assert.equal(records.length, 5);
+  assert.deepEqual(
+    records.map((record) => (record.target === "static"
+      ? `static:${(record as { profile: string }).profile}`
+      : `build:${(record as { buildProfile: string }).buildProfile}`)).sort(),
+    [
+      "build:godot-android",
+      "build:react-native-android",
+      "static:capacitor",
+      "static:godot",
+      "static:react-native",
+    ],
+  );
+  assert.ok(!records.some((record) => (record as { profile?: string }).profile === "ait-web"));
+});
 
 test("candidate import는 exact successful GitHub artifact와 bundle integrity를 durable record로 만든다", async () => {
   const candidate = candidateBundle();

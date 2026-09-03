@@ -97,7 +97,11 @@ const workflowBundleApprovalSchema = z.discriminatedUnion("state", [
   }).strict(),
   z.object({
     state: z.literal("APPROVED"),
-    evidence: z.array(z.discriminatedUnion("target", [staticEvidenceSchema, buildEvidenceSchema])).length(6),
+    // 필수 증거 수는 번들이 선언한 promotionScope에서 나온다. 여기서는 모양만 보고,
+    // 정확한 집합은 assertApprovedEvidence가 그 범위와 대조한다.
+    evidence: z.array(z.discriminatedUnion("target", [staticEvidenceSchema, buildEvidenceSchema]))
+      .min(2)
+      .max(16),
     signature: approvalSignatureSchema,
   }).strict(),
 ]);
@@ -334,14 +338,15 @@ function assertApprovedEvidence(
       ? `static:${record.profile}`
       : `build:${record.buildProfile}`
   )).sort();
+  // 승인 범위와 필수 증거를 두 곳에 적으면 한쪽만 바뀌어도 조용히 어긋난다. 번들이
+  // 선언한 범위에서 그대로 파생한다.
   const expectedIdentities = [
-    "static:react-native",
-    "static:godot",
-    "static:capacitor",
-    "static:ait-web",
-    "build:react-native-android",
-    "build:godot-android",
+    ...approved.promotionScope.staticProfiles.map((profile) => `static:${profile}`),
+    ...approved.promotionScope.buildProfiles.map((profile) => `build:${profile}`),
   ].sort();
+  if (expectedIdentities.length === 0) {
+    fail("WorkflowBundle promotion scope가 비어 있습니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
+  }
   if (canonicalJson(identities) !== canonicalJson(expectedIdentities)) {
     fail("WorkflowBundle approval evidence set이 완전하지 않습니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
   }
