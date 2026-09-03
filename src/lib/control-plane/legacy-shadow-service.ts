@@ -43,6 +43,28 @@ const PLATFORM_REPOSITORY = "platform";
 const FULL_PARITY_SCOPE = "FULL";
 const SHA_40 = /^[0-9a-f]{40}$/i;
 
+export type LegacyConfigImportStatus =
+  | "DRAFT_CREATED"
+  | "DRAFT_CREATED_WITH_INPUT"
+  | "NEEDS_INPUT"
+  | "RESOLUTION_REUSED";
+
+export function planLegacyConfigImportPersistence(input: {
+  transformStatus: LegacyTransformResult["status"];
+  resolutionReused: boolean;
+}): { createDraft: boolean; status: LegacyConfigImportStatus } {
+  if (input.resolutionReused && input.transformStatus !== "DRAFTABLE") {
+    return { createDraft: false, status: "RESOLUTION_REUSED" };
+  }
+  if (input.transformStatus === "DRAFTABLE") {
+    return { createDraft: true, status: "DRAFT_CREATED" };
+  }
+  if (input.transformStatus === "DRAFTABLE_WITH_INPUT") {
+    return { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" };
+  }
+  return { createDraft: false, status: "NEEDS_INPUT" };
+}
+
 type PlatformSourceVector = {
   repoId: bigint;
   repoFullName: string;
@@ -750,8 +772,12 @@ export async function recordLegacyShadowImport(input: {
             configRevisionId: active.id,
           })
         : null;
+      const persistencePlan = planLegacyConfigImportPersistence({
+        transformStatus: transformed.status,
+        resolutionReused: Boolean(applicableResolution?.resolution),
+      });
       let draft = null;
-      if (transformed.status !== "NEEDS_INPUT" && !applicableResolution?.resolution) {
+      if (persistencePlan.createDraft) {
         assertConfigRevisionPayload(transformed.payload);
         draft = await createDraftRevisionInTransaction(tx, {
           appId: app.id,
@@ -772,11 +798,7 @@ export async function recordLegacyShadowImport(input: {
           inputDigest,
           reasonCodes: jsonInput(reasonCodes),
           reasonCodesDigest,
-          status: transformed.status === "DRAFTABLE"
-            ? "DRAFT_CREATED"
-            : transformed.status === "DRAFTABLE_WITH_INPUT"
-              ? "DRAFT_CREATED_WITH_INPUT"
-              : "NEEDS_INPUT",
+          status: persistencePlan.status,
           idempotencyKey: storedIdempotencyKey,
           configRevisionId: draft?.id,
           observedBy: input.observedBy,

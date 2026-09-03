@@ -140,11 +140,12 @@ export function prepareFleetComplianceDraftBatch(input: {
     });
     const payloadHash = jsonDigest(payload as unknown as JsonValue);
     const createKey = `ui-compliance-batch-create:${selection.requestId}`;
-    const resumable = current.latestRevisionState?.revision === selection.expectedActiveConfigRevision + 1
+    const resumable = current.latestRevisionState !== null
+      && current.latestRevisionState.revision > selection.expectedActiveConfigRevision
       && current.latestRevisionState.status === "DRAFT"
       && current.latestRevisionState.idempotencyKey === createKey
       && current.latestRevisionState.payloadHash === payloadHash
-      && [selection.expectedActiveConfigRevision, current.latestRevisionState.revision]
+      && [current.latestRevisionState.revision - 1, current.latestRevisionState.revision]
         .includes(selection.expectedLatestConfigRevision)
       && current.blockers.every((blocker) => blocker === "LATEST_DRAFT_EXISTS");
 
@@ -174,7 +175,7 @@ export function prepareFleetComplianceDraftBatch(input: {
       sourceSha: current.sourceSha,
       expectedActiveConfigRevision: selection.expectedActiveConfigRevision,
       expectedLatestConfigRevision: resumable
-        ? selection.expectedActiveConfigRevision
+        ? current.latestRevisionState!.revision - 1
         : current.latestConfigRevision,
       requestId: selection.requestId,
       payload,

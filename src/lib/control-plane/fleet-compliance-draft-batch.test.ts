@@ -162,6 +162,24 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
   assert.equal(resumed[0]!.mode, "RESUME");
   assert.equal(resumed[0]!.expectedLatestConfigRevision, 7);
 
+  const resumedAfterLegacyBacklog = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 15,
+      eligible: false,
+      blockers: ["LATEST_DRAFT_EXISTS"],
+      latestRevisionState: {
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 15 })],
+  });
+
+  assert.equal(resumedAfterLegacyBacklog[0]!.mode, "RESUME");
+  assert.equal(resumedAfterLegacyBacklog[0]!.expectedLatestConfigRevision, 14);
+
   assert.throws(
     () => prepareFleetComplianceDraftBatch({
       queue: [queue({

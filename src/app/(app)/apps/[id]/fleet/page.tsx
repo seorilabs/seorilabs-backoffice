@@ -43,7 +43,7 @@ function jsonText(value: unknown): string {
 }
 
 function statusClass(status: string): string {
-  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT", "PR_MERGED", "ISSUE_OPEN", "GRANTED"].includes(status)) {
+  if (["ACTIVE", "SUCCEEDED", "COMPLETED", "MANAGED", "MATCH", "READY", "PASSED", "COMPLIANT", "PR_MERGED", "ISSUE_OPEN", "GRANTED", "RESOLUTION_REUSED"].includes(status)) {
     return "bg-emerald-50 text-emerald-700";
   }
   if (["FAILED", "DEAD_LETTER", "REVOKED", "MISMATCH", "BLOCKED", "MISSING_REQUIREMENT"].includes(status)) {

@@ -8,6 +8,7 @@ import {
   hashLegacyShadowIdempotencyKey,
   legacyShadowRequestHash,
 } from "@/lib/control-plane/legacy-shadow-request";
+import { planLegacyConfigImportPersistence } from "@/lib/control-plane/legacy-shadow-service";
 
 test("shadow import 요청은 exact SHA와 server-owned source vector만 받는다", () => {
   const valid = {
@@ -69,10 +70,25 @@ test("shadow import 저장 경계에는 raw content나 secret export interface�
   assert.doesNotMatch(sourceModel, /^\s*(content|rawContent|secret|password|credential)\s+/m);
   assert.match(service, /Import가 생성한 DRAFT 자체와 비교하면 tautological MATCH가 되므로 금지/);
   assert.match(service, /SOURCE_SHA_NOT_CURRENT/);
-  assert.match(service, /\? \"DRAFT_CREATED\"[\s\S]*\? \"DRAFT_CREATED_WITH_INPUT\"[\s\S]*: \"NEEDS_INPUT\"/);
+  assert.match(service, /planLegacyConfigImportPersistence\(\{/);
   assert.match(service, /scope: FULL_PARITY_SCOPE/);
   assert.equal(existsSync(join(
     process.cwd(),
     "src/app/api/control-plane/legacy-shadow-imports/route.ts",
   )), false);
+});
+
+test("exact resolution 재사용은 새 초안을 만들었다고 기록하지 않는다", () => {
+  assert.deepEqual(planLegacyConfigImportPersistence({
+    transformStatus: "DRAFTABLE_WITH_INPUT",
+    resolutionReused: true,
+  }), { createDraft: false, status: "RESOLUTION_REUSED" });
+  assert.deepEqual(planLegacyConfigImportPersistence({
+    transformStatus: "DRAFTABLE_WITH_INPUT",
+    resolutionReused: false,
+  }), { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" });
+  assert.deepEqual(planLegacyConfigImportPersistence({
+    transformStatus: "NEEDS_INPUT",
+    resolutionReused: true,
+  }), { createDraft: false, status: "RESOLUTION_REUSED" });
 });
