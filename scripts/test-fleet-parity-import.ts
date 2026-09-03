@@ -5,7 +5,13 @@ import { recordFleetParityImport } from "@/lib/control-plane/fleet-parity-import
 import { jsonDigest } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
 import { LEGACY_SOURCE_DEFINITIONS } from "@/lib/control-plane/legacy-sources";
-import { activateConfigRevision, ControlPlaneError, createConfigRevision } from "@/lib/control-plane/service";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
+import {
+  activateConfigRevision,
+  ControlPlaneError,
+  createConfigRevision,
+  recordDiscoveryObservation,
+} from "@/lib/control-plane/service";
 import type { Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
@@ -117,21 +123,32 @@ async function main() {
         status: "MANAGED",
         managementKind: "APP",
         classification: "PRODUCT_APP",
+        discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         lastDefaultPushSha: sourceSha,
         lastReconciledSha: sourceSha,
       },
     });
-    await prisma.discoveryObservation.create({
-      data: {
-        appId,
-        sourceSha,
-        sourceRef: "refs/heads/main",
-        payload: {},
-        payloadHash: jsonDigest({}),
-        idempotencyKey: `fleet-parity-discovery:${fixture}`,
-        observedBy: actor,
-        observedAt: new Date(observationTime),
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
       },
+      buildTargets: [],
     });
     await prisma.platformFleetBinding.create({
       data: { appId, state: "MANAGED", sourceSha: platformSha },
