@@ -5,7 +5,7 @@ import { recordFleetParityImport } from "@/lib/control-plane/fleet-parity-import
 import { jsonDigest } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
 import { LEGACY_SOURCE_DEFINITIONS } from "@/lib/control-plane/legacy-sources";
-import { ControlPlaneError } from "@/lib/control-plane/service";
+import { activateConfigRevision, ControlPlaneError } from "@/lib/control-plane/service";
 import type { Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
@@ -151,6 +151,7 @@ async function main() {
     assert.equal(resolutions[0].approvalKind, "AUTOMATION");
     assert.equal(resolutions[0].justification, "NO_LEGACY_DESIRED_STATE");
     assert.equal(first.parity?.legacyConfigResolutionId, resolutions[0].id);
+    const configRevisionCountAfterFirst = await prisma.configRevision.count({ where: { appId } });
     const initialObservation = await prisma.legacyConfigImport.findUniqueOrThrow({
       where: { id: resolutions[0].sourceImportId },
       include: { parityObservations: true },
@@ -171,6 +172,11 @@ async function main() {
     assert.notEqual(next.import.id, first.import.id);
     assert.equal(await prisma.legacyConfigImport.count({ where: { appId } }), 3);
     assert.equal(await prisma.legacyConfigResolution.count({ where: { appId } }), 1);
+    assert.equal(
+      await prisma.configRevision.count({ where: { appId } }),
+      configRevisionCountAfterFirst,
+      "exact resolution이 있으면 후속 shadow 관측이 legacy DRAFT를 추가하지 않아야 한다",
+    );
 
     // 실제 반복 작업 원인: source는 같아도 ACTIVE 설정 revision이 바뀌면 다시 exact 결합한다.
     const secondConfig = await activateFixture(2);
@@ -189,6 +195,77 @@ async function main() {
     assert.ok(inaccessible.import.sources.some((source) => source.status === "ACCESS_DENIED"));
     assert.equal(await prisma.legacyConfigResolution.count({ where: { appId } }), 2);
     denyGooglePlay = false;
+
+    const latestRevision = await prisma.configRevision.aggregate({
+      where: { appId },
+      _max: { revision: true },
+    });
+    const nextRevision = latestRevision._max.revision ?? 0;
+    const payload = { schemaVersion: 1, markets: [] };
+    const legacyDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: nextRevision + 1,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:${fixture}:cleanup-contract`,
+      },
+    });
+    const humanDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: nextRevision + 2,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `human-draft:${fixture}:preserve`,
+      },
+    });
+    const complianceDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: nextRevision + 3,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `ui-compliance-batch-create:${fixture}`,
+      },
+    });
+    const activatedCompliance = await activateConfigRevision({
+      repoId,
+      revision: complianceDraft.revision,
+      expectedActiveRevision: secondConfig.revision,
+      actor,
+      idempotencyKey: `ui-compliance-batch-activate:${fixture}`,
+      signingKey: "integration-signing-key",
+    });
+    assert.equal(activatedCompliance.revision.status, "ACTIVE");
+    const draftStates = await prisma.configRevision.findMany({
+      where: { id: { in: [legacyDraft.id, humanDraft.id, complianceDraft.id] } },
+      orderBy: { revision: "asc" },
+      select: { id: true, status: true },
+    });
+    assert.deepEqual(draftStates, [
+      { id: legacyDraft.id, status: "SUPERSEDED" },
+      { id: humanDraft.id, status: "DRAFT" },
+      { id: complianceDraft.id, status: "ACTIVE" },
+    ]);
+    const activationAudit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+        action: "control-plane.config.activate",
+      },
+      select: { payload: true },
+    });
+    assert.equal(
+      (activationAudit.payload as { supersededLegacyDraftCount?: number }).supersededLegacyDraftCount,
+      1,
+    );
 
     await activateFixture(3);
     await prisma.repositoryRegistration.update({
