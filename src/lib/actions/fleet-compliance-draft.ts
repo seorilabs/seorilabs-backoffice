@@ -42,7 +42,11 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
   try {
     const parsed = fleetComplianceDraftBatchSchema.parse(input);
     const prepared = prepareFleetComplianceDraftBatch({
-      queue: await getFleetComplianceDraftQueueState(),
+      queue: await getFleetComplianceDraftQueueState({
+        requestedCreateIdempotencyKeys: parsed.items.map(
+          (item) => `ui-compliance-batch-create:${item.requestId}`,
+        ),
+      }),
       selections: parsed.items,
     });
     const signingKey = process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "";

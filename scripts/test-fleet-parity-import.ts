@@ -235,6 +235,17 @@ async function main() {
         idempotencyKey: `ui-compliance-batch-create:${fixture}`,
       },
     });
+    const laterLegacyDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: nextRevision + 4,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:${fixture}:after-activation-failure`,
+      },
+    });
     const legacyDraftCountBeforeActivation = await prisma.configRevision.count({
       where: {
         appId,
@@ -252,7 +263,7 @@ async function main() {
     });
     assert.equal(activatedCompliance.revision.status, "ACTIVE");
     const draftStates = await prisma.configRevision.findMany({
-      where: { id: { in: [legacyDraft.id, humanDraft.id, complianceDraft.id] } },
+      where: { id: { in: [legacyDraft.id, humanDraft.id, complianceDraft.id, laterLegacyDraft.id] } },
       orderBy: { revision: "asc" },
       select: { id: true, status: true },
     });
@@ -260,12 +271,12 @@ async function main() {
       { id: legacyDraft.id, status: "SUPERSEDED" },
       { id: humanDraft.id, status: "DRAFT" },
       { id: complianceDraft.id, status: "ACTIVE" },
+      { id: laterLegacyDraft.id, status: "SUPERSEDED" },
     ]);
     assert.equal(await prisma.configRevision.count({
       where: {
         appId,
         status: "DRAFT",
-        revision: { lt: complianceDraft.revision },
         idempotencyKey: { startsWith: "legacy-shadow-draft:" },
       },
     }), 0);

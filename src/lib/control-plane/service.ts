@@ -1582,7 +1582,6 @@ async function activateConfigRevisionInTransaction(
       where: {
         appId: app.id,
         status: "DRAFT",
-        revision: { lt: target.revision },
         idempotencyKey: { startsWith: "legacy-shadow-draft:" },
       },
       data: {

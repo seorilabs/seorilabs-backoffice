@@ -34,6 +34,13 @@ export type FleetComplianceDraftQueueItem = {
 export type FleetComplianceDraftQueueState = FleetComplianceDraftQueueItem & {
   appSlug: string;
   activePayload: Record<string, unknown>;
+  pendingNonLegacyDraftRevisions: number[];
+  requestedRevisionStates: Array<{
+    revision: number;
+    status: string;
+    idempotencyKey: string;
+    payloadHash: string;
+  }>;
   latestRevisionState: {
     revision: number;
     status: string;
@@ -68,6 +75,7 @@ export function projectFleetComplianceDraftQueueItem(input: {
   app: ComplianceQueueAppRow | null;
   latestRevision: LatestRevisionRow | null;
   pendingNonLegacyDraftRevisions?: number[];
+  requestedRevisions?: LatestRevisionRow[];
 }): FleetComplianceDraftQueueState {
   const active = input.app?.configRevisions[0] ?? null;
   const parsedPayload = configRevisionPayloadSchema.safeParse(active?.payload);
@@ -79,6 +87,8 @@ export function projectFleetComplianceDraftQueueItem(input: {
         .sort()
     : [];
   const currentSourceSha = input.app?.discoveryObservations[0]?.sourceSha ?? null;
+  const pendingNonLegacyDraftRevisions = [...(input.pendingNonLegacyDraftRevisions ?? [])]
+    .sort((a, b) => a - b);
   const blockers: FleetComplianceDraftBlocker[] = [
     ...(
       input.app?.repoId?.toString() !== input.legacy.repoId
@@ -102,7 +112,7 @@ export function projectFleetComplianceDraftQueueItem(input: {
       ? ["SOURCE_SHA_CHANGED" as const]
       : []),
     ...(enabledMarkets.length === 0 ? ["ENABLED_MARKET_MISSING" as const] : []),
-    ...(active && (input.pendingNonLegacyDraftRevisions ?? []).some(
+    ...(active && pendingNonLegacyDraftRevisions.some(
       (revision) => revision > active.revision,
     )
       ? ["LATEST_DRAFT_EXISTS" as const]
@@ -123,17 +133,22 @@ export function projectFleetComplianceDraftQueueItem(input: {
     eligible: blockers.length === 0,
     blockers,
     activePayload,
+    pendingNonLegacyDraftRevisions,
+    requestedRevisionStates: input.requestedRevisions ?? [],
     latestRevisionState: input.latestRevision,
   };
 }
 
-export async function getFleetComplianceDraftQueueState(): Promise<FleetComplianceDraftQueueState[]> {
+export async function getFleetComplianceDraftQueueState(options: {
+  requestedCreateIdempotencyKeys?: readonly string[];
+} = {}): Promise<FleetComplianceDraftQueueState[]> {
   const legacyQueue = (await getFleetLegacyResolutionQueue()).filter((item) => (
     item.missingEvidenceKinds.includes("COMPLIANCE_PROFILE")
   ));
   if (legacyQueue.length === 0) return [];
   const appIds = legacyQueue.map((item) => item.appId);
-  const [apps, maxRevisions, pendingNonLegacyDrafts] = await Promise.all([
+  const requestedCreateIdempotencyKeys = [...new Set(options.requestedCreateIdempotencyKeys ?? [])];
+  const [apps, maxRevisions, pendingNonLegacyDrafts, requestedRevisions] = await Promise.all([
     prisma.app.findMany({
       where: { id: { in: appIds } },
       select: {
@@ -171,6 +186,21 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
       },
       select: { appId: true, revision: true },
     }),
+    requestedCreateIdempotencyKeys.length === 0
+      ? Promise.resolve([])
+      : prisma.configRevision.findMany({
+          where: {
+            appId: { in: appIds },
+            idempotencyKey: { in: requestedCreateIdempotencyKeys },
+          },
+          select: {
+            appId: true,
+            revision: true,
+            status: true,
+            idempotencyKey: true,
+            payloadHash: true,
+          },
+        }),
   ]);
   const latestKeys = maxRevisions.flatMap((row) => (
     row._max.revision === null ? [] : [{ appId: row.appId, revision: row._max.revision }]
@@ -193,6 +223,7 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
     pendingNonLegacyDrafts,
     (revision) => revision.appId,
   );
+  const requestedRevisionsByAppId = Map.groupBy(requestedRevisions, (revision) => revision.appId);
 
   return legacyQueue.map((legacy) => projectFleetComplianceDraftQueueItem({
     legacy,
@@ -200,6 +231,7 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
     latestRevision: latestByAppId.get(legacy.appId) ?? null,
     pendingNonLegacyDraftRevisions: (pendingNonLegacyDraftsByAppId.get(legacy.appId) ?? [])
       .map((revision) => revision.revision),
+    requestedRevisions: requestedRevisionsByAppId.get(legacy.appId) ?? [],
   }));
 }
 

@@ -31,6 +31,8 @@ function queue(overrides: Partial<FleetComplianceDraftQueueState> = {}): FleetCo
       ],
       support: { privacyPolicyUrl: "https://example.com/privacy" },
     },
+    pendingNonLegacyDraftRevisions: [],
+    requestedRevisionStates: [],
     latestRevisionState: {
       revision: 7,
       status: "ACTIVE",
@@ -149,6 +151,13 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
       latestConfigRevision: 8,
       eligible: false,
       blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [8],
+      requestedRevisionStates: [{
+        revision: 8,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
       latestRevisionState: {
         revision: 8,
         status: "DRAFT",
@@ -167,6 +176,13 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
       latestConfigRevision: 15,
       eligible: false,
       blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [15],
+      requestedRevisionStates: [{
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
       latestRevisionState: {
         revision: 15,
         status: "DRAFT",
@@ -180,12 +196,38 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
   assert.equal(resumedAfterLegacyBacklog[0]!.mode, "RESUME");
   assert.equal(resumedAfterLegacyBacklog[0]!.expectedLatestConfigRevision, 14);
 
+  const resumedBehindNewLegacyDraft = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 16,
+      eligible: false,
+      blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [15],
+      requestedRevisionStates: [{
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
+      latestRevisionState: {
+        revision: 16,
+        status: "DRAFT",
+        idempotencyKey: "legacy-shadow-draft:after-activation-failure",
+        payloadHash: "d".repeat(64),
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 16 })],
+  });
+
+  assert.equal(resumedBehindNewLegacyDraft[0]!.mode, "RESUME");
+  assert.equal(resumedBehindNewLegacyDraft[0]!.expectedLatestConfigRevision, 14);
+
   assert.throws(
     () => prepareFleetComplianceDraftBatch({
       queue: [queue({
         latestConfigRevision: 8,
         eligible: false,
         blockers: ["LATEST_DRAFT_EXISTS"],
+        pendingNonLegacyDraftRevisions: [8],
         latestRevisionState: {
           revision: 8,
           status: "DRAFT",
