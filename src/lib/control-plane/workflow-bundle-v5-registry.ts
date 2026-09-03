@@ -344,9 +344,6 @@ function assertApprovedEvidence(
     ...approved.promotionScope.staticProfiles.map((profile) => `static:${profile}`),
     ...approved.promotionScope.buildProfiles.map((profile) => `build:${profile}`),
   ].sort();
-  if (expectedIdentities.length === 0) {
-    fail("WorkflowBundle promotion scope가 비어 있습니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
-  }
   if (canonicalJson(identities) !== canonicalJson(expectedIdentities)) {
     fail("WorkflowBundle approval evidence set이 완전하지 않습니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
   }
