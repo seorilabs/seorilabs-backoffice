@@ -521,10 +521,23 @@ const dependencyAuditLockfileSha256 = z.string().regex(
   "sha256: 접두사가 있는 소문자 lockfile SHA-256이 필요합니다.",
 );
 
+/**
+ * 서명 감사 예외를 쓸 수 있는 저장소는 사람이 승인한 목록에서만 온다. 목록 밖 저장소는
+ * 이름이나 숫자 id가 아무리 그럴듯해도 fail-closed한다.
+ */
+const DEPENDENCY_AUDIT_EXCEPTION_REPOSITORIES = Object.freeze({
+  "1250442131": "seorilabs/happy-farm",
+  "1335099739": "seorilabs/saju-reader",
+} as const);
+
 export const dependencyAuditExceptionSchema = z.object({
   schemaVersion: z.literal(1),
-  repositoryId: z.literal("1250442131"),
-  fullName: z.literal("seorilabs/happy-farm"),
+  repositoryId: z.enum(
+    Object.keys(DEPENDENCY_AUDIT_EXCEPTION_REPOSITORIES) as [string, ...string[]],
+  ),
+  fullName: z.enum(
+    Object.values(DEPENDENCY_AUDIT_EXCEPTION_REPOSITORIES) as [string, ...string[]],
+  ),
   bindings: z.tuple([
     z.object({
       actionClass: z.literal("STATIC_CHECK"),
@@ -544,7 +557,7 @@ export const dependencyAuditExceptionSchema = z.object({
       && !containsCredentialCandidate(value),
     "공개 가능한 단일행 사유가 필요합니다.",
   ),
-  advisories: z.array(dependencyAuditAdvisorySchema).length(3).superRefine((advisories, context) => {
+  advisories: z.array(dependencyAuditAdvisorySchema).min(1).max(16).superRefine((advisories, context) => {
     const identities = advisories.map((advisory) => `${advisory.ghsa}:${advisory.module}`);
     if (new Set(identities).size !== identities.length) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 중복될 수 없습니다." });
@@ -553,7 +566,18 @@ export const dependencyAuditExceptionSchema = z.object({
       context.addIssue({ code: z.ZodIssueCode.custom, message: "advisory는 GHSA와 module 순으로 정렬해야 합니다." });
     }
   }),
-}).strict();
+}).strict().superRefine((exception, context) => {
+  const approved = DEPENDENCY_AUDIT_EXCEPTION_REPOSITORIES[
+    exception.repositoryId as keyof typeof DEPENDENCY_AUDIT_EXCEPTION_REPOSITORIES
+  ];
+  if (approved !== exception.fullName) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["fullName"],
+      message: "repository id와 full name이 승인된 조합이 아닙니다.",
+    });
+  }
+});
 
 export type DependencyAuditException = z.infer<typeof dependencyAuditExceptionSchema>;
 

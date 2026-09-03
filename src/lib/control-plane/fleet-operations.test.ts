@@ -74,7 +74,7 @@ test("비민감 Config payload는 UI와 API 공용 validator를 통과한다", (
   assert.doesNotThrow(() => assertConfigRevisionPayload(payload));
 });
 
-test("dependency audit 예외는 Happy Farm의 두 build-only source와 정렬된 high 3건만 허용한다", () => {
+test("dependency audit 예외는 승인된 저장소의 두 build-only source와 정렬된 advisory만 허용한다", () => {
   const payload = {
     schemaVersion: 1 as const,
     markets: [],
@@ -82,6 +82,19 @@ test("dependency audit 예외는 Happy Farm의 두 build-only source와 정렬�
   };
   assert.deepEqual(configRevisionPayloadSchema.parse(payload), payload);
   assert.doesNotThrow(() => assertConfigRevisionPayload(payload));
+
+  // 승인 목록의 다른 저장소도 같은 계약으로 예외를 가질 수 있다.
+  assert.equal(configRevisionPayloadSchema.safeParse({
+    schemaVersion: 1,
+    markets: [],
+    build: {
+      dependencyAuditException: {
+        ...dependencyAuditException,
+        repositoryId: "1335099739",
+        fullName: "seorilabs/saju-reader",
+      },
+    },
+  }).success, true);
 
   const invalidExceptions = [
     { ...dependencyAuditException, repositoryId: "7001" },
@@ -100,10 +113,8 @@ test("dependency audit 예외는 Happy Farm의 두 build-only source와 정렬�
         ? { ...advisory, versions: ["1.2.1", "0.6.3"] }
         : advisory),
     },
-    {
-      ...dependencyAuditException,
-      advisories: dependencyAuditException.advisories.slice(0, 2),
-    },
+    { ...dependencyAuditException, fullName: "seorilabs/saju-reader" },
+    { ...dependencyAuditException, advisories: [] },
   ];
   for (const exception of invalidExceptions) {
     assert.equal(configRevisionPayloadSchema.safeParse({
