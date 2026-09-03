@@ -51,9 +51,9 @@ export type LegacyConfigImportStatus =
 
 export function planLegacyConfigImportPersistence(input: {
   transformStatus: LegacyTransformResult["status"];
-  resolutionReused: boolean;
+  resolutionParityStatus: LegacyShadowParity["status"] | null;
 }): { createDraft: boolean; status: LegacyConfigImportStatus } {
-  if (input.resolutionReused && input.transformStatus !== "DRAFTABLE") {
+  if (input.resolutionParityStatus === "MATCH" && input.transformStatus !== "DRAFTABLE") {
     return { createDraft: false, status: "RESOLUTION_REUSED" };
   }
   if (input.transformStatus === "DRAFTABLE") {
@@ -772,9 +772,24 @@ export async function recordLegacyShadowImport(input: {
             configRevisionId: active.id,
           })
         : null;
+      // 기존 resolution row의 존재만으로 재사용을 선언하지 않는다. 현재 ACTIVE의
+      // representable subset까지 실제 MATCH한 경우에만 resolution을 재사용한다.
+      const resolutionParity = applicableResolution
+        ? applyLegacyConfigResolution({
+            transform: transformed,
+            persistedInputDigest: inputDigest,
+            sourceSha,
+            configRevisionId: active!.id,
+            centralPayload: active!.payload,
+            centralStateDigest: applicableResolution.centralStateDigest,
+            resolution: applicableResolution.resolution,
+          })
+        : null;
+      const parity = resolutionParity
+        ?? compareLegacyShadow(transformed, active?.payload ?? null);
       const persistencePlan = planLegacyConfigImportPersistence({
         transformStatus: transformed.status,
-        resolutionReused: Boolean(applicableResolution?.resolution),
+        resolutionParityStatus: resolutionParity?.status ?? null,
       });
       let draft = null;
       if (persistencePlan.createDraft) {
@@ -836,17 +851,6 @@ export async function recordLegacyShadowImport(input: {
       // Import가 생성한 DRAFT 자체와 비교하면 tautological MATCH가 되므로 금지한다.
       // 검토가 필요한 source는 exact source/input/reason/ACTIVE 중앙 상태에 묶인
       // append-only resolution이 있을 때만 MATCH로 승격한다.
-      const parity = applicableResolution
-        ? applyLegacyConfigResolution({
-            transform: transformed,
-            persistedInputDigest: inputDigest,
-            sourceSha,
-            configRevisionId: active!.id,
-            centralPayload: active!.payload,
-            centralStateDigest: applicableResolution.centralStateDigest,
-            resolution: applicableResolution.resolution,
-          }) ?? compareLegacyShadow(transformed, active?.payload ?? null)
-        : compareLegacyShadow(transformed, active?.payload ?? null);
       const diff = persistedDiff(transformed, parity);
       const dedupeKey = jsonDigest({
         appId: app.id,
@@ -857,15 +861,21 @@ export async function recordLegacyShadowImport(input: {
         scope: FULL_PARITY_SCOPE,
         centralConfigRevisionId: active?.id ?? null,
         centralPayloadHash: active?.payloadHash ?? null,
-        legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
-        centralStateDigest: applicableResolution?.centralStateDigest ?? null,
+        legacyConfigResolutionId: resolutionParity
+          ? applicableResolution?.resolution?.id ?? null
+          : null,
+        centralStateDigest: resolutionParity
+          ? applicableResolution?.centralStateDigest ?? null
+          : null,
       } as JsonValue);
       const parityObservation = await tx.shadowParityObservation.create({
         data: {
           appId: app.id,
           legacyImportId: legacyImport.id,
           configRevisionId: active?.id,
-          legacyConfigResolutionId: applicableResolution?.resolution?.id,
+          legacyConfigResolutionId: resolutionParity
+            ? applicableResolution?.resolution?.id
+            : undefined,
           sourceSha,
           scope: FULL_PARITY_SCOPE,
           contractVersion: LEGACY_TRANSFORM_VERSION,

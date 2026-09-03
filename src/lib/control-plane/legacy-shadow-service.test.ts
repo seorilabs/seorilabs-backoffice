@@ -81,14 +81,18 @@ test("shadow import 저장 경계에는 raw content나 secret export interface�
 test("exact resolution 재사용은 새 초안을 만들었다고 기록하지 않는다", () => {
   assert.deepEqual(planLegacyConfigImportPersistence({
     transformStatus: "DRAFTABLE_WITH_INPUT",
-    resolutionReused: true,
+    resolutionParityStatus: "MATCH",
   }), { createDraft: false, status: "RESOLUTION_REUSED" });
   assert.deepEqual(planLegacyConfigImportPersistence({
     transformStatus: "DRAFTABLE_WITH_INPUT",
-    resolutionReused: false,
+    resolutionParityStatus: null,
   }), { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" });
   assert.deepEqual(planLegacyConfigImportPersistence({
     transformStatus: "NEEDS_INPUT",
-    resolutionReused: true,
+    resolutionParityStatus: "MATCH",
   }), { createDraft: false, status: "RESOLUTION_REUSED" });
+  assert.deepEqual(planLegacyConfigImportPersistence({
+    transformStatus: "DRAFTABLE_WITH_INPUT",
+    resolutionParityStatus: "MISMATCH",
+  }), { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" });
 });

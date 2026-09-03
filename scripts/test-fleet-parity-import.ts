@@ -251,9 +251,67 @@ async function main() {
     });
     const nextRevision = latestRevision._max.revision ?? 0;
     const payload = { schemaVersion: 1, markets: [] };
-    const legacyDraft = await createLegacyDraft(nextRevision + 1, "cleanup-contract");
+    const freshComplianceDraft = (await createConfigRevision({
+      repoId,
+      expectedLatestRevision: nextRevision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: `ui-compliance-batch-create:${randomUUID()}`,
+      draftIsolationAfterRevision: secondConfig.revision,
+    })).revision;
+    assert.match(
+      freshComplianceDraft.backfillContractVersion ?? "",
+      /^config-revision-fleet-compliance\/v1:[0-9a-f]{28}$/,
+    );
+    await prisma.configRevision.update({
+      where: { id: freshComplianceDraft.id },
+      data: { status: "SUPERSEDED", supersededAt: new Date() },
+    });
+
+    const legacyDraft = await createLegacyDraft(
+      freshComplianceDraft.revision + 1,
+      "cleanup-contract",
+    );
     const complianceCreateKey = `ui-compliance-batch-create:${fixture}`;
-    const complianceDraft = (await createConfigRevision({
+    const sourceObservation = await prisma.discoveryObservation.findFirstOrThrow({
+      where: { appId },
+      orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
+    const complianceDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: legacyDraft.revision + 1,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: complianceCreateKey,
+        sourceObservationId: sourceObservation.id,
+      },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorLogin: actor,
+        action: "control-plane.config.create",
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+        payload: {
+          appId,
+          repoId: repoId.toString(),
+          revision: complianceDraft.revision,
+          expectedLatestRevision: legacyDraft.revision,
+          payloadHash: complianceDraft.payloadHash,
+          sourceObservationId: sourceObservation.id,
+          sourceSha,
+          expectedSourceSha: sourceSha,
+          observationPayloadHash: sourceObservation.payloadHash,
+          contractVersion: "config-revision-manual-source/v1",
+          activationAttempted: false,
+        },
+      },
+    });
+    const migratedCompliance = await createConfigRevision({
       repoId,
       expectedLatestRevision: legacyDraft.revision,
       expectedSourceSha: sourceSha,
@@ -261,11 +319,24 @@ async function main() {
       actor,
       idempotencyKey: complianceCreateKey,
       draftIsolationAfterRevision: secondConfig.revision,
-    })).revision;
+    });
+    assert.equal(migratedCompliance.duplicate, true);
+    assert.equal(migratedCompliance.revision.id, complianceDraft.id);
+    assert.match(
+      migratedCompliance.revision.backfillContractVersion ?? "",
+      /^config-revision-fleet-compliance\/v1:[0-9a-f]{28}$/,
+    );
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        action: "control-plane.config.compliance-contract-migrated",
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+      },
+    }), 1);
     const humanDraft = await prisma.configRevision.create({
       data: {
         appId,
-        revision: nextRevision + 3,
+        revision: complianceDraft.revision + 1,
         status: "DRAFT",
         payload,
         payloadHash: jsonDigest(payload),
@@ -274,7 +345,7 @@ async function main() {
       },
     });
     const laterLegacyDraft = await createLegacyDraft(
-      nextRevision + 4,
+      complianceDraft.revision + 2,
       "after-activation-failure",
     );
     const legacyDraftCountBeforeActivation = await prisma.configRevision.count({

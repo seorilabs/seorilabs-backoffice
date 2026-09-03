@@ -459,6 +459,9 @@ type ConfigRevisionReplay = {
   sourceObservation: ConfigSourceObservation | null;
 };
 
+type LegacyFleetComplianceDraftReplay = ConfigRevisionReplay
+  & Pick<ConfigRevision, "id" | "status" | "idempotencyKey">;
+
 /** 별도 requestHash column 없이도 모든 caller 입력을 immutable row identity로 검증한다. */
 export function assertConfigRevisionReplay(input: {
   stored: ConfigRevisionReplay;
@@ -1100,6 +1103,133 @@ function fleetComplianceDraftContractVersion(idempotencyKey: string): string {
   return `${CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX}${jsonDigest(idempotencyKey).slice(0, 28)}`;
 }
 
+function complianceDraftMigrationFailure(): never {
+  throw new ControlPlaneError(
+    "기존 Compliance DRAFT의 생성 근거가 현재 요청과 일치하지 않습니다.",
+    409,
+    "COMPLIANCE_DRAFT_MIGRATION_PROVENANCE_MISMATCH",
+  );
+}
+
+export function assertLegacyFleetComplianceDraftMigration(input: {
+  stored: LegacyFleetComplianceDraftReplay;
+  auditPayload: Prisma.JsonValue | null;
+  repoId: bigint;
+  actor: string;
+  expectedLatestRevision: number;
+  payloadHash: string;
+  expectedSourceSha: string;
+}): void {
+  if (
+    !FLEET_COMPLIANCE_CREATE_KEY.test(input.stored.idempotencyKey)
+    || input.stored.status !== "DRAFT"
+    || input.stored.backfillContractVersion !== null
+  ) {
+    complianceDraftMigrationFailure();
+  }
+  try {
+    assertConfigRevisionReplay({
+      stored: input.stored,
+      repoId: input.repoId,
+      actor: input.actor,
+      expectedLatestRevision: input.expectedLatestRevision,
+      contractVersion: null,
+      payloadHash: input.payloadHash,
+      expectedSourceSha: input.expectedSourceSha,
+    });
+  } catch {
+    complianceDraftMigrationFailure();
+  }
+  const sourceObservation = input.stored.sourceObservation!;
+  const expectedAuditPayload = {
+    appId: input.stored.appId,
+    repoId: input.repoId.toString(),
+    revision: input.stored.revision,
+    expectedLatestRevision: input.expectedLatestRevision,
+    payloadHash: input.payloadHash,
+    sourceObservationId: sourceObservation.id,
+    sourceSha: sourceObservation.sourceSha,
+    expectedSourceSha: input.expectedSourceSha,
+    observationPayloadHash: sourceObservation.payloadHash,
+    contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+    activationAttempted: false,
+  };
+  if (
+    input.auditPayload === null
+    || jsonDigest(input.auditPayload as JsonValue)
+      !== jsonDigest(expectedAuditPayload as JsonValue)
+  ) {
+    complianceDraftMigrationFailure();
+  }
+}
+
+async function migrateLegacyFleetComplianceDraft<T extends LegacyFleetComplianceDraftReplay>(
+  tx: Prisma.TransactionClient,
+  input: {
+    stored: T;
+    repoId: bigint;
+    actor: string;
+    expectedLatestRevision: number;
+    payloadHash: string;
+    expectedSourceSha: string;
+    contractVersion: string;
+  },
+): Promise<T> {
+  if (input.stored.backfillContractVersion !== null) return input.stored;
+  const createAudits = await tx.auditLog.findMany({
+    where: {
+      action: "control-plane.config.create",
+      entityType: "ConfigRevision",
+      entityId: input.stored.id,
+      actorLogin: input.actor,
+    },
+    orderBy: { createdAt: "asc" },
+    take: 2,
+    select: { payload: true },
+  });
+  if (createAudits.length !== 1) complianceDraftMigrationFailure();
+  assertLegacyFleetComplianceDraftMigration({
+    stored: input.stored,
+    auditPayload: createAudits[0]!.payload,
+    repoId: input.repoId,
+    actor: input.actor,
+    expectedLatestRevision: input.expectedLatestRevision,
+    payloadHash: input.payloadHash,
+    expectedSourceSha: input.expectedSourceSha,
+  });
+  const migrated = await tx.configRevision.updateMany({
+    where: {
+      id: input.stored.id,
+      appId: input.stored.appId,
+      status: "DRAFT",
+      idempotencyKey: input.stored.idempotencyKey,
+      sourceObservationId: input.stored.sourceObservationId,
+      payloadHash: input.stored.payloadHash,
+      createdBy: input.stored.createdBy,
+      backfillContractVersion: null,
+    },
+    data: { backfillContractVersion: input.contractVersion },
+  });
+  if (migrated.count !== 1) complianceDraftMigrationFailure();
+  await tx.auditLog.create({
+    data: {
+      actorLogin: input.actor,
+      action: "control-plane.config.compliance-contract-migrated",
+      entityType: "ConfigRevision",
+      entityId: input.stored.id,
+      payload: {
+        appId: input.stored.appId,
+        repoId: input.repoId.toString(),
+        revision: input.stored.revision,
+        sourceObservationId: input.stored.sourceObservationId,
+        payloadHash: input.stored.payloadHash,
+        contractVersion: input.contractVersion,
+      },
+    },
+  });
+  return { ...input.stored, backfillContractVersion: input.contractVersion };
+}
+
 async function runConfigRevisionMutation(
   identity: ConfigRevisionMutationIdentity,
   mutation: () => Promise<{
@@ -1171,6 +1301,7 @@ export async function createConfigRevision(input: {
   expectedSourceSha?: string;
   draftIsolationAfterRevision?: number;
 }) {
+  const complianceCreateKey = FLEET_COMPLIANCE_CREATE_KEY.test(input.idempotencyKey);
   if (
     input.draftIsolationAfterRevision !== undefined
     && (!Number.isSafeInteger(input.draftIsolationAfterRevision)
@@ -1183,8 +1314,12 @@ export async function createConfigRevision(input: {
     );
   }
   if (
-    input.draftIsolationAfterRevision !== undefined
-    && !FLEET_COMPLIANCE_CREATE_KEY.test(input.idempotencyKey)
+    (input.draftIsolationAfterRevision !== undefined && (
+      !complianceCreateKey
+      || input.expectedSourceSha === undefined
+      || !SHA_40.test(input.expectedSourceSha)
+    ))
+    || (input.draftIsolationAfterRevision === undefined && complianceCreateKey)
   ) {
     throw new ControlPlaneError(
       "Compliance DRAFT 요청 identity가 올바르지 않습니다.",
@@ -1226,8 +1361,19 @@ export async function createConfigRevision(input: {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
     const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
     if (afterLockReplay) {
+      const validatedReplay = input.draftIsolationAfterRevision === undefined
+        ? afterLockReplay
+        : await migrateLegacyFleetComplianceDraft(tx, {
+            stored: afterLockReplay,
+            repoId: input.repoId,
+            actor: input.actor,
+            expectedLatestRevision: input.expectedLatestRevision,
+            payloadHash,
+            expectedSourceSha: input.expectedSourceSha!,
+            contractVersion: contractVersion!,
+          });
       assertConfigRevisionReplay({
-        stored: afterLockReplay,
+        stored: validatedReplay,
         repoId: input.repoId,
         actor: input.actor,
         expectedLatestRevision: input.expectedLatestRevision,
@@ -1243,8 +1389,8 @@ export async function createConfigRevision(input: {
         });
       }
       return {
-        revision: afterLockReplay,
-        sourceObservation: afterLockReplay.sourceObservation!,
+        revision: validatedReplay,
+        sourceObservation: validatedReplay.sourceObservation!,
         duplicate: true,
       };
     }

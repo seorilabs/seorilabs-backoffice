@@ -9,6 +9,7 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assessConfigSourceAutoRebaseSafety,
   assertConfigRevisionReplay,
+  assertLegacyFleetComplianceDraftMigration,
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
   assertManagedProductConfigSourceBinding,
@@ -89,6 +90,31 @@ function replayFixture(contractVersion: string | null = CONFIG_REVISION_SOURCE_R
   };
 }
 
+function legacyComplianceReplayFixture() {
+  const stored = {
+    ...replayFixture(null),
+    id: "config-compliance-legacy",
+    status: "DRAFT" as const,
+    idempotencyKey: "ui-compliance-batch-create:11111111-1111-4111-8111-111111111111",
+  };
+  return {
+    stored,
+    auditPayload: {
+      appId: stored.appId,
+      repoId: REPO_ID.toString(),
+      revision: stored.revision,
+      expectedLatestRevision: 7,
+      payloadHash: stored.payloadHash,
+      sourceObservationId: stored.sourceObservationId,
+      sourceSha: SOURCE_SHA,
+      expectedSourceSha: SOURCE_SHA,
+      observationPayloadHash: stored.sourceObservation!.payloadHash,
+      contractVersion: "config-revision-manual-source/v1",
+      activationAttempted: false,
+    },
+  };
+}
+
 test("MANAGED PRODUCT_APP의 exact registered default branch discovery만 ConfigRevision source가 된다", () => {
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture()));
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture("ACTIVE", "develop")));
@@ -159,6 +185,31 @@ test("discovery projection 요청은 DRAFT_ONLY를 명시해야 한다", () => {
     expectedLatestRevision: 0,
     mode: "DRAFT_ONLY",
   }).success, true);
+});
+
+test("기존 Compliance DRAFT 이관은 exact 요청과 생성 감사 근거를 모두 요구한다", () => {
+  const fixture = legacyComplianceReplayFixture();
+  const exact = {
+    ...fixture,
+    repoId: REPO_ID,
+    actor: fixture.stored.createdBy,
+    expectedLatestRevision: 7,
+    payloadHash: fixture.stored.payloadHash,
+    expectedSourceSha: SOURCE_SHA,
+  };
+  assert.doesNotThrow(() => assertLegacyFleetComplianceDraftMigration(exact));
+  for (const changed of [
+    { ...exact, stored: { ...exact.stored, status: "ACTIVE" as const } },
+    { ...exact, stored: { ...exact.stored, idempotencyKey: "ui-config-create:spoof" } },
+    { ...exact, auditPayload: { ...exact.auditPayload, activationAttempted: true } },
+    { ...exact, auditPayload: { ...exact.auditPayload, payloadHash: "f".repeat(64) } },
+  ]) {
+    assert.throws(
+      () => assertLegacyFleetComplianceDraftMigration(changed),
+      (error) => error instanceof ControlPlaneError
+        && error.code === "COMPLIANCE_DRAFT_MIGRATION_PROVENANCE_MISMATCH",
+    );
+  }
 });
 
 test("source app identity와 ref drift를 fail-closed한다", () => {
