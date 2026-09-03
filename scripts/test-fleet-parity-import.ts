@@ -235,6 +235,13 @@ async function main() {
         idempotencyKey: `ui-compliance-batch-create:${fixture}`,
       },
     });
+    const legacyDraftCountBeforeActivation = await prisma.configRevision.count({
+      where: {
+        appId,
+        status: "DRAFT",
+        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+      },
+    });
     const activatedCompliance = await activateConfigRevision({
       repoId,
       revision: complianceDraft.revision,
@@ -254,6 +261,14 @@ async function main() {
       { id: humanDraft.id, status: "DRAFT" },
       { id: complianceDraft.id, status: "ACTIVE" },
     ]);
+    assert.equal(await prisma.configRevision.count({
+      where: {
+        appId,
+        status: "DRAFT",
+        revision: { lt: complianceDraft.revision },
+        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+      },
+    }), 0);
     const activationAudit = await prisma.auditLog.findFirstOrThrow({
       where: {
         entityType: "ConfigRevision",
@@ -264,7 +279,7 @@ async function main() {
     });
     assert.equal(
       (activationAudit.payload as { supersededLegacyDraftCount?: number }).supersededLegacyDraftCount,
-      1,
+      legacyDraftCountBeforeActivation,
     );
 
     await activateFixture(3);
