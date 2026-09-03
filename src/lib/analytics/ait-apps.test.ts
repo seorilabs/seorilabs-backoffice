@@ -70,6 +70,20 @@ test("신규 lizard-tycoon 리스팅은 61736을 primary로 사용한다", () =>
   assert.equal(AIT_MINIAPP_BY_SLUG["lizard-tycoon"], 61736);
 });
 
+test("공개된 babycare 리스팅은 54868을 primary로 사용한다", () => {
+  const list = listingsForSlug("babycare");
+  assert.deepEqual(list, [
+    {
+      appSlug: "babycare",
+      miniAppId: 54868,
+      label: "babycare",
+      primary: true,
+    },
+  ]);
+  assert.equal(primaryListingForSlug("babycare")?.miniAppId, 54868);
+  assert.equal(AIT_MINIAPP_BY_SLUG["babycare"], 54868);
+});
+
 test("운영 종료한 vocab-swipe 리스팅은 수집 대상에서 제외한다", () => {
   assert.deepEqual(listingsForSlug("vocab-swipe"), []);
   assert.equal(primaryListingForSlug("vocab-swipe"), undefined);

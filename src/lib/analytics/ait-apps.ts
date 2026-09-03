@@ -40,6 +40,7 @@ export const AIT_LISTINGS: AitListing[] = [
   { appSlug: "crossword-puzzle", miniAppId: 36555, label: "웹", primary: false },
   { appSlug: "lucid-reversi", miniAppId: 44056, label: "lucid-reversi", primary: true },
   { appSlug: "foam-party", miniAppId: 50736, label: "foam-party", primary: true },
+  { appSlug: "babycare", miniAppId: 54868, label: "babycare", primary: true },
   { appSlug: "trait-test-hub", miniAppId: 54985, label: "trait-test-hub", primary: true },
   { appSlug: "lizard-tycoon", miniAppId: 61736, label: "lizard-tycoon", primary: true },
 ];
