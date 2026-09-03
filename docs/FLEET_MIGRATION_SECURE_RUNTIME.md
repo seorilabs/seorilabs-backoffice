@@ -161,7 +161,7 @@ execution copy의 logical ID/fingerprint/SPIFFE 및 exact image/source를 truste
 - issuer DB: `shared/seori-auth/fleet-migration-inventory-issuer-db` →
   `data/fleet-migration-inventory-issuer-db-credential/{username,password}`와
   `platform/fleet-migration-inventory-issuer-db/DATABASE_URL`
-- issuer GitHub App: `shared/github/backoffice-app` →
+- issuer GitHub App: `shared/github/backoffice-app-private-key` →
   `platform/fleet-migration-inventory-issuer-github-app/private-key.pem`
 
 모든 execution copy에는 `seorilabs.dev/credential-id` annotation으로 위 logical ID를 exact하게

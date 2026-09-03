@@ -108,7 +108,7 @@ test("issuer runner centrally renders one exact suspended Job and never mutates 
   assert.equal(annotations["seorilabs.dev/provider-vector-digest"], PROVIDER_VECTOR_DIGEST);
   assert.equal(annotations["seorilabs.dev/database-credential-id"], "shared/seori-auth/fleet-migration-inventory-issuer-db");
   assert.equal(annotations["seorilabs.dev/client-mtls-credential-id"], "shared/platform/fleet-migration-inventory-issuer-client-mtls");
-  assert.equal(annotations["seorilabs.dev/github-app-credential-id"], "shared/github/backoffice-app");
+  assert.equal(annotations["seorilabs.dev/github-app-credential-id"], "shared/github/backoffice-app-private-key");
 
   const templateSpec = record(record(record(spec.template).spec));
   const issuer = record(list(templateSpec.containers)[0]);
@@ -148,7 +148,7 @@ test("issuer runner centrally renders one exact suspended Job and never mutates 
   assert.match(runner, /read_bound_key_markers configmap fleet-migration-inventory-public-identity shared\/platform\/fleet-release-approval-signing/u);
   for (const binding of [
     "secret fleet-migration-inventory-issuer-db shared/seori-auth/fleet-migration-inventory-issuer-db",
-    "secret fleet-migration-inventory-issuer-github-app shared/github/backoffice-app",
+    "secret fleet-migration-inventory-issuer-github-app shared/github/backoffice-app-private-key",
     "secret fleet-migration-inventory-signer-client shared/platform/fleet-migration-inventory-issuer-client-mtls",
     "secret fleet-migration-inventory-signer-server shared/platform/fleet-migration-inventory-signer-server-mtls",
     "secret fleet-release-approval-signing shared/platform/fleet-release-approval-signing",
