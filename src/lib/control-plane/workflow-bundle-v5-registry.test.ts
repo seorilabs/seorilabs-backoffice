@@ -105,7 +105,8 @@ function evidence(candidate: ReturnType<typeof candidateBundle>) {
     snapshotSignatureDigest: `sha256:${"8".repeat(64)}`,
     artifactSha256: `sha256:${"9".repeat(64)}`,
   });
-  const staticProfiles = ["react-native", "godot", "capacitor", "ait-web"] as const;
+  // 필수 증거는 번들이 선언한 promotionScope에서 파생된다. fixture도 같은 값을 쓴다.
+  const staticProfiles = candidate.promotionScope.staticProfiles;
   const staticRecords = staticProfiles.map((profile, index) => ({
     ...common(index + 1),
     target: "static",
@@ -154,9 +155,14 @@ function evidence(candidate: ReturnType<typeof candidateBundle>) {
   return [...staticRecords, ...buildRecords];
 }
 
-function approvedFixture() {
+function approvedFixture(
+  mutate?: (candidate: ReturnType<typeof candidateBundle>) => void,
+  // 증거를 서명 전에 바꿔야 서명은 유효하면서 집합만 어긋난 번들을 만들 수 있다.
+  mutateRecords?: (records: ReturnType<typeof evidence>) => ReturnType<typeof evidence>,
+) {
   const candidate = candidateBundle();
-  const records = evidence(candidate);
+  mutate?.(candidate);
+  const records = mutateRecords ? mutateRecords(evidence(candidate)) : evidence(candidate);
   const contractDigests = (candidate.quality as { contractDigests: JsonValue }).contractDigests;
   const runtimeAssetDigests = (candidate.quality as { runtimeAssetDigests: JsonValue }).runtimeAssetDigests;
   const candidateDigest = (candidate.integrity as { payloadDigest: string }).payloadDigest;
@@ -261,6 +267,29 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
     },
   };
 }
+
+test("필수 증거 집합은 번들이 선언한 promotion scope에서 파생된다", () => {
+  const narrowed = candidateBundle();
+  narrowed.promotionScope = {
+    staticProfiles: ["react-native", "godot", "capacitor"],
+    buildProfiles: ["react-native-android", "godot-android"],
+  };
+  const records = evidence(narrowed);
+  assert.equal(records.length, 5);
+  assert.deepEqual(
+    records.map((record) => (record.target === "static"
+      ? `static:${(record as { profile: string }).profile}`
+      : `build:${(record as { buildProfile: string }).buildProfile}`)).sort(),
+    [
+      "build:godot-android",
+      "build:react-native-android",
+      "static:capacitor",
+      "static:godot",
+      "static:react-native",
+    ],
+  );
+  assert.ok(!records.some((record) => (record as { profile?: string }).profile === "ait-web"));
+});
 
 test("candidate import는 exact successful GitHub artifact와 bundle integrity를 durable record로 만든다", async () => {
   const candidate = candidateBundle();
@@ -459,6 +488,64 @@ test("APPROVED import와 runtime readback은 candidate artifact, canonical Ed255
     (error) => error instanceof ControlPlaneError
       && error.code === "WORKFLOW_BUNDLE_REGISTRY_PROVENANCE_INVALID",
   );
+});
+
+const NARROWED_SCOPE = (candidate: ReturnType<typeof candidateBundle>) => {
+  candidate.promotionScope = {
+    staticProfiles: ["react-native", "godot", "capacitor"],
+    buildProfiles: ["react-native-android", "godot-android"],
+  };
+};
+
+async function rejectsApproval(
+  fixture: ReturnType<typeof approvedFixture>,
+  key: string,
+  code: string,
+) {
+  await assert.rejects(
+    importWorkflowBundleApproval({
+      bundle: fixture.approved,
+      idempotencyKey: key,
+      actor: "test",
+    }, memoryClient() as never, {
+      trustedApprovalKeysJson: fixture.trustedKeysJson,
+      async readCandidateArtifact() { throw new Error("not used"); },
+    }),
+    (error) => error instanceof ControlPlaneError && error.code === code,
+  );
+}
+
+test("승인 증거 집합이 번들의 promotion scope와 어긋나면 서명이 유효해도 거부된다", async () => {
+  // ait-web을 뺀 범위에서는 증거가 정확히 다섯이다.
+  const exact = approvedFixture(NARROWED_SCOPE);
+  assert.equal(
+    ((exact.approved as Record<string, unknown>).approval as { evidence: unknown[] }).evidence.length,
+    5,
+  );
+
+  const dropped = approvedFixture(NARROWED_SCOPE, (records) => records.slice(0, 4));
+  await rejectsApproval(dropped, "approved-import:missing-evidence", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
+
+  const extra = approvedFixture(NARROWED_SCOPE, (records) => [
+    ...records,
+    { ...structuredClone(records[0]!), profile: "ait-web" },
+  ]);
+  await rejectsApproval(extra, "approved-import:extra-evidence", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
+});
+
+test("promotion scope가 비면 스키마 단계에서 거부된다", async () => {
+  // buildProfiles는 두 literal의 tuple이라 빈 범위는 증거 검사에 닿기 전에 막힌다.
+  const empty = approvedFixture((candidate) => {
+    candidate.promotionScope = { staticProfiles: [], buildProfiles: [] } as never;
+  });
+  await assert.rejects(importWorkflowBundleApproval({
+    bundle: empty.approved,
+    idempotencyKey: "approved-import:empty-scope",
+    actor: "test",
+  }, memoryClient() as never, {
+    trustedApprovalKeysJson: empty.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  }));
 });
 
 test("서명자가 유효해도 build evidence의 candidate digest나 market gate가 다르면 승인되지 않는다", async () => {
