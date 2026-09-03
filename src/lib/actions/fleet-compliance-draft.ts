@@ -75,6 +75,7 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
           payload: item.payload,
           actor,
           idempotencyKey: `ui-compliance-batch-create:${item.requestId}`,
+          draftIsolationAfterRevision: item.expectedActiveConfigRevision,
         });
         revision = created.revision.revision;
       } catch (error) {

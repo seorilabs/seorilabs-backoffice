@@ -143,14 +143,17 @@ export function prepareFleetComplianceDraftBatch(input: {
     const requestedRevision = current.requestedRevisionStates.find(
       (revision) => revision.idempotencyKey === createKey,
     ) ?? null;
+    const pendingAfterActive = current.pendingNonLegacyDraftRevisions.filter(
+      (revision) => revision > selection.expectedActiveConfigRevision,
+    );
     const resumable = requestedRevision !== null
       && requestedRevision.revision > selection.expectedActiveConfigRevision
       && requestedRevision.status === "DRAFT"
       && requestedRevision.payloadHash === payloadHash
       && [requestedRevision.revision - 1, requestedRevision.revision, current.latestConfigRevision]
         .includes(selection.expectedLatestConfigRevision)
-      && current.pendingNonLegacyDraftRevisions.length === 1
-      && current.pendingNonLegacyDraftRevisions[0] === requestedRevision.revision
+      && pendingAfterActive.length === 1
+      && pendingAfterActive[0] === requestedRevision.revision
       && current.blockers.every((blocker) => blocker === "LATEST_DRAFT_EXISTS");
 
     if (!current.eligible && !resumable) {

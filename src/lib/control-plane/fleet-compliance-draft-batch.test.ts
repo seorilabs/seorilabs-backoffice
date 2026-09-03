@@ -151,7 +151,7 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
       latestConfigRevision: 8,
       eligible: false,
       blockers: ["LATEST_DRAFT_EXISTS"],
-      pendingNonLegacyDraftRevisions: [8],
+      pendingNonLegacyDraftRevisions: [3, 8],
       requestedRevisionStates: [{
         revision: 8,
         status: "DRAFT",
@@ -254,6 +254,7 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
 
   assert.ok(action.indexOf("prepareFleetComplianceDraftBatch({") < action.indexOf("createConfigRevision({"));
   assert.match(action, /expectedSourceSha: item\.sourceSha/);
+  assert.match(action, /draftIsolationAfterRevision: item\.expectedActiveConfigRevision/);
   assert.match(action, /activateConfigRevision\(\{/);
   assert.match(action, /CONTROL_PLANE_SNAPSHOT_SIGNING_KEY/);
   assert.match(action, /stage: "CREATE"/);
@@ -262,4 +263,24 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
   assert.doesNotMatch(component, /type="password"|secretValue|privateKey|accessToken/i);
   assert.match(component, /selected\.size >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
   assert.match(component, /selectedItems\.length >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
+});
+
+test("Compliance queue와 activation은 같은 snapshot과 앱 잠금에서 사람 DRAFT를 재검증한다", () => {
+  const queueSource = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/fleet-compliance-draft-queue.ts"),
+    "utf8",
+  );
+  const serviceSource = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/service.ts"),
+    "utf8",
+  );
+  const activation = serviceSource.slice(
+    serviceSource.indexOf("async function activateConfigRevisionInTransaction"),
+  );
+
+  assert.match(queueSource, /prisma\.\$transaction\(async \(tx\) =>/);
+  assert.match(queueSource, /Prisma\.TransactionIsolationLevel\.RepeatableRead/);
+  assert.ok(activation.indexOf("FOR UPDATE") < activation.indexOf("assertNoCompetingComplianceDraft"));
+  assert.match(serviceSource, /revision: \{ gt: input\.afterRevision \}/);
+  assert.match(serviceSource, /idempotencyKey: \{ startsWith: "legacy-shadow-draft:" \}/);
 });
