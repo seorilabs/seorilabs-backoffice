@@ -263,6 +263,10 @@ export const CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION =
   "config-revision-source-auto-rebase/v1";
 export const CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION =
   "config-revision-discovery-projection/v2";
+const CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX =
+  "config-revision-fleet-compliance/v1:";
+const FLEET_COMPLIANCE_CREATE_KEY =
+  /^ui-compliance-batch-create:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const SHA_40 = /^[0-9a-f]{40}$/;
 const DIGEST_64 = /^[0-9a-f]{64}$/;
@@ -1096,6 +1100,10 @@ type ConfigRevisionMutationIdentity = {
   draftIsolationAfterRevision?: number;
 };
 
+function fleetComplianceDraftContractVersion(idempotencyKey: string): string {
+  return `${CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX}${jsonDigest(idempotencyKey).slice(0, 28)}`;
+}
+
 async function runConfigRevisionMutation(
   identity: ConfigRevisionMutationIdentity,
   mutation: () => Promise<{
@@ -1178,8 +1186,21 @@ export async function createConfigRevision(input: {
       "INVALID_DRAFT_ISOLATION_REVISION",
     );
   }
+  if (
+    input.draftIsolationAfterRevision !== undefined
+    && !FLEET_COMPLIANCE_CREATE_KEY.test(input.idempotencyKey)
+  ) {
+    throw new ControlPlaneError(
+      "Compliance DRAFT 요청 identity가 올바르지 않습니다.",
+      400,
+      "INVALID_COMPLIANCE_DRAFT_IDENTITY",
+    );
+  }
   assertConfigRevisionPayload(input.payload);
   const payloadHash = jsonDigest(input.payload as JsonValue);
+  const contractVersion = input.draftIsolationAfterRevision === undefined
+    ? null
+    : fleetComplianceDraftContractVersion(input.idempotencyKey);
   const replay = input.draftIsolationAfterRevision === undefined
     ? await configRevisionReplayForKey(prisma, input.idempotencyKey)
     : null;
@@ -1189,7 +1210,7 @@ export async function createConfigRevision(input: {
       repoId: input.repoId,
       actor: input.actor,
       expectedLatestRevision: input.expectedLatestRevision,
-      contractVersion: null,
+      contractVersion,
       payloadHash,
       expectedSourceSha: input.expectedSourceSha,
     });
@@ -1201,7 +1222,7 @@ export async function createConfigRevision(input: {
     actor: input.actor,
     expectedLatestRevision: input.expectedLatestRevision,
     idempotencyKey: input.idempotencyKey,
-    contractVersion: null,
+    contractVersion,
     payloadHash,
     expectedSourceSha: input.expectedSourceSha,
     draftIsolationAfterRevision: input.draftIsolationAfterRevision,
@@ -1214,7 +1235,7 @@ export async function createConfigRevision(input: {
         repoId: input.repoId,
         actor: input.actor,
         expectedLatestRevision: input.expectedLatestRevision,
-        contractVersion: null,
+        contractVersion,
         payloadHash,
         expectedSourceSha: input.expectedSourceSha,
       });
@@ -1253,6 +1274,7 @@ export async function createConfigRevision(input: {
       createdBy: input.actor,
       idempotencyKey: input.idempotencyKey,
       sourceObservationId: source.observation.id,
+      ...(contractVersion ? { backfillContractVersion: contractVersion } : {}),
     });
     await tx.auditLog.create({
       data: {
@@ -1270,7 +1292,7 @@ export async function createConfigRevision(input: {
           sourceSha: source.observation.sourceSha,
           expectedSourceSha: input.expectedSourceSha ?? null,
           observationPayloadHash: source.observation.payloadHash,
-          contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+          contractVersion: contractVersion ?? CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
           activationAttempted: false,
         },
       },
@@ -1581,7 +1603,45 @@ type ConfigRevisionActivationInput = {
   actor: string;
   idempotencyKey: string;
   signingKey: string;
+  complianceDraftGuard?: {
+    createIdempotencyKey: string;
+    afterRevision: number;
+  };
 };
+
+function assertComplianceActivationBinding(
+  target: Pick<ConfigRevision, "backfillContractVersion" | "idempotencyKey">,
+  input: ConfigRevisionActivationInput,
+): boolean {
+  const marked = target.backfillContractVersion?.startsWith(
+    CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX,
+  ) ?? false;
+  const guard = input.complianceDraftGuard;
+  if (!guard) {
+    if (marked) {
+      throw new ControlPlaneError(
+        "Compliance DRAFT는 검증된 batch 활성화 경로만 사용할 수 있습니다.",
+        409,
+        "COMPLIANCE_ACTIVATION_CONTEXT_REQUIRED",
+      );
+    }
+    return false;
+  }
+  if (
+    guard.afterRevision !== input.expectedActiveRevision
+    || !FLEET_COMPLIANCE_CREATE_KEY.test(guard.createIdempotencyKey)
+    || target.idempotencyKey !== guard.createIdempotencyKey
+    || target.backfillContractVersion
+      !== fleetComplianceDraftContractVersion(guard.createIdempotencyKey)
+  ) {
+    throw new ControlPlaneError(
+      "Compliance DRAFT activation identity가 일치하지 않습니다.",
+      409,
+      "COMPLIANCE_ACTIVATION_IDENTITY_MISMATCH",
+    );
+  }
+  return true;
+}
 
 async function activateConfigRevisionInTransaction(
   tx: Prisma.TransactionClient,
@@ -1598,6 +1658,7 @@ async function activateConfigRevisionInTransaction(
     include: { legacyConfigImport: { select: { id: true } } },
   });
   if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
+  const complianceActivation = assertComplianceActivationBinding(target, input);
   // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
   assertConfigRevisionPayload(target.payload);
   if (jsonDigest(target.payload as JsonValue) !== target.payloadHash) {
@@ -1616,7 +1677,7 @@ async function activateConfigRevisionInTransaction(
     shadowImportId: target.legacyConfigImport?.id
       ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
   });
-  if (target.idempotencyKey.startsWith("ui-compliance-batch-create:")) {
+  if (complianceActivation) {
     await assertNoCompetingComplianceDraft(tx, {
       appId: app.id,
       afterRevision: input.expectedActiveRevision,
@@ -1655,7 +1716,7 @@ async function activateConfigRevisionInTransaction(
       throw new ControlPlaneError("ACTIVE Config revision CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
     }
   }
-  if (target.idempotencyKey.startsWith("ui-compliance-batch-create:")) {
+  if (complianceActivation) {
     const supersededLegacyDrafts = await tx.configRevision.updateMany({
       where: {
         appId: app.id,
@@ -1716,6 +1777,7 @@ export async function activateConfigRevision(input: ConfigRevisionActivationInpu
         "IDEMPOTENCY_CONFLICT",
       );
     }
+    assertComplianceActivationBinding(replay, input);
     return { revision: replay, duplicate: true };
   }
 

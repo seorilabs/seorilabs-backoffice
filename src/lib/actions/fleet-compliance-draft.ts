@@ -97,6 +97,10 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
           actor,
           idempotencyKey: `ui-compliance-batch-activate:${item.requestId}`,
           signingKey,
+          complianceDraftGuard: {
+            createIdempotencyKey: `ui-compliance-batch-create:${item.requestId}`,
+            afterRevision: item.expectedActiveConfigRevision,
+          },
         });
         results.push({
           appId: item.appId,

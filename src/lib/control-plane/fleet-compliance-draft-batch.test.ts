@@ -256,6 +256,8 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
   assert.match(action, /expectedSourceSha: item\.sourceSha/);
   assert.match(action, /draftIsolationAfterRevision: item\.expectedActiveConfigRevision/);
   assert.match(action, /activateConfigRevision\(\{/);
+  assert.match(action, /complianceDraftGuard: \{/);
+  assert.match(action, /createIdempotencyKey: `ui-compliance-batch-create:/);
   assert.match(action, /CONTROL_PLANE_SNAPSHOT_SIGNING_KEY/);
   assert.match(action, /stage: "CREATE"/);
   assert.match(action, /stage: "ACTIVATE"/);
@@ -281,6 +283,8 @@ test("Compliance queue와 activation은 같은 snapshot과 앱 잠금에서 사�
   assert.match(queueSource, /prisma\.\$transaction\(async \(tx\) =>/);
   assert.match(queueSource, /Prisma\.TransactionIsolationLevel\.RepeatableRead/);
   assert.ok(activation.indexOf("FOR UPDATE") < activation.indexOf("assertNoCompetingComplianceDraft"));
+  assert.match(serviceSource, /target\.backfillContractVersion/);
+  assert.doesNotMatch(activation, /target\.idempotencyKey\.startsWith\("ui-compliance-batch-create:/);
   assert.match(serviceSource, /revision: \{ gt: input\.afterRevision \}/);
   assert.match(serviceSource, /idempotencyKey: \{ startsWith: "legacy-shadow-draft:" \}/);
 });
