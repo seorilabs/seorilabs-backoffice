@@ -4,7 +4,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { recordFleetParityImport } from "@/lib/control-plane/fleet-parity-import";
 import { jsonDigest } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
-import { LEGACY_SOURCE_DEFINITIONS } from "@/lib/control-plane/legacy-sources";
+import { LEGACY_SOURCE_DEFINITIONS, LEGACY_TRANSFORM_VERSION } from "@/lib/control-plane/legacy-sources";
 import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
 import {
   activateConfigRevision,
@@ -100,6 +100,38 @@ async function main() {
         },
       });
     });
+  }
+  async function createLegacyDraft(revision: number, suffix: string) {
+    const payload = { schemaVersion: 1, markets: [] };
+    const draft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:${fixture}:${suffix}`,
+      },
+    });
+    await prisma.legacyConfigImport.create({
+      data: {
+        appId,
+        sourceSha,
+        sourceRef: "refs/heads/main",
+        transformVersion: LEGACY_TRANSFORM_VERSION,
+        requestHash: jsonDigest({ fixture, suffix, kind: "request" }),
+        inputDigest: jsonDigest({ fixture, suffix, kind: "input" }),
+        reasonCodes: [],
+        reasonCodesDigest: jsonDigest([]),
+        status: "DRAFT_CREATED",
+        idempotencyKey: jsonDigest({ fixture, suffix, kind: "import" }),
+        configRevisionId: draft.id,
+        observedBy: actor,
+        observedAt: new Date(observationTime += 1_000),
+      },
+    });
+    return draft;
   }
 
   try {
@@ -219,17 +251,7 @@ async function main() {
     });
     const nextRevision = latestRevision._max.revision ?? 0;
     const payload = { schemaVersion: 1, markets: [] };
-    const legacyDraft = await prisma.configRevision.create({
-      data: {
-        appId,
-        revision: nextRevision + 1,
-        status: "DRAFT",
-        payload,
-        payloadHash: jsonDigest(payload),
-        createdBy: actor,
-        idempotencyKey: `legacy-shadow-draft:${fixture}:cleanup-contract`,
-      },
-    });
+    const legacyDraft = await createLegacyDraft(nextRevision + 1, "cleanup-contract");
     const complianceCreateKey = `ui-compliance-batch-create:${fixture}`;
     const complianceDraft = (await createConfigRevision({
       repoId,
@@ -248,25 +270,18 @@ async function main() {
         payload,
         payloadHash: jsonDigest(payload),
         createdBy: actor,
-        idempotencyKey: `human-draft:${fixture}:preserve`,
+        idempotencyKey: `legacy-shadow-draft:spoof-${fixture}`,
       },
     });
-    const laterLegacyDraft = await prisma.configRevision.create({
-      data: {
-        appId,
-        revision: nextRevision + 4,
-        status: "DRAFT",
-        payload,
-        payloadHash: jsonDigest(payload),
-        createdBy: actor,
-        idempotencyKey: `legacy-shadow-draft:${fixture}:after-activation-failure`,
-      },
-    });
+    const laterLegacyDraft = await createLegacyDraft(
+      nextRevision + 4,
+      "after-activation-failure",
+    );
     const legacyDraftCountBeforeActivation = await prisma.configRevision.count({
       where: {
         appId,
         status: "DRAFT",
-        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+        legacyConfigImport: { isNot: null },
       },
     });
     const activationInput = {
@@ -309,7 +324,7 @@ async function main() {
       where: {
         appId,
         status: "DRAFT",
-        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+        legacyConfigImport: { isNot: null },
       },
     }), 0);
     const activationAudit = await prisma.auditLog.findFirstOrThrow({

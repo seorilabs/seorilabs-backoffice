@@ -190,7 +190,7 @@ export async function getFleetComplianceDraftQueueState(options: {
         where: {
           appId: { in: appIds },
           status: "DRAFT",
-          NOT: { idempotencyKey: { startsWith: "legacy-shadow-draft:" } },
+          legacyConfigImport: { is: null },
         },
         select: { appId: true, revision: true },
       }),

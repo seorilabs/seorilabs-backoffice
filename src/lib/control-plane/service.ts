@@ -514,13 +514,11 @@ export function assertConfigRevisionReplay(input: {
 
 export function assertConfigRevisionRebaseSource(input: {
   status: string;
-  idempotencyKey: string;
   legacyConfigImport: { id: string } | null;
 }): void {
   if (
     !["DRAFT", "ACTIVE"].includes(input.status)
     || input.legacyConfigImport
-    || input.idempotencyKey.startsWith("legacy-shadow-draft:")
   ) {
     throw new ControlPlaneError(
       "latest DRAFT 또는 ACTIVE revision만 source rebase할 수 있습니다.",
@@ -601,7 +599,6 @@ export function assessConfigSourceAutoRebaseSafety(input: {
 export function isLegacyDiscoveryProjectionSource(input: {
   revisionId: string;
   status: string;
-  idempotencyKey: string;
   legacyConfigImport: {
     id: string;
     configRevisionId: string | null;
@@ -612,7 +609,6 @@ export function isLegacyDiscoveryProjectionSource(input: {
 }): boolean {
   const legacyImport = input.legacyConfigImport;
   return input.status === "DRAFT"
-    && input.idempotencyKey.startsWith("legacy-shadow-draft:")
     && legacyImport !== null
     && legacyImport.configRevisionId === input.revisionId
     && ["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
@@ -1142,7 +1138,6 @@ async function assertNoCompetingComplianceDraft(
   },
 ) {
   const excluded: Prisma.ConfigRevisionWhereInput[] = [
-    { idempotencyKey: { startsWith: "legacy-shadow-draft:" } },
     ...(input.excludedId ? [{ id: input.excludedId }] : []),
     ...(input.excludedIdempotencyKey
       ? [{ idempotencyKey: input.excludedIdempotencyKey }]
@@ -1153,6 +1148,7 @@ async function assertNoCompetingComplianceDraft(
       appId: input.appId,
       revision: { gt: input.afterRevision },
       status: "DRAFT",
+      legacyConfigImport: { is: null },
       NOT: excluded,
     },
     select: { id: true },
@@ -1514,7 +1510,6 @@ export async function createDiscoveryProjectedConfigRevision(input: {
         ? {
             revisionId: fromRevision.id,
             status: fromRevision.status,
-            idempotencyKey: fromRevision.idempotencyKey,
             legacyConfigImport: fromRevision.legacyConfigImport,
           }
         : null,
@@ -1672,10 +1667,7 @@ async function activateConfigRevisionInTransaction(
     actualActiveRevision: active?.revision ?? 0,
     expectedActiveRevision: input.expectedActiveRevision,
     targetStatus: target.status,
-    // append-only import relation이 운영자 DB 조작으로 훼손돼도 파생 DRAFT key가
-    // 남아 있는 한 activation을 fail-closed한다.
-    shadowImportId: target.legacyConfigImport?.id
-      ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
+    shadowImportId: target.legacyConfigImport?.id ?? null,
   });
   if (complianceActivation) {
     await assertNoCompetingComplianceDraft(tx, {
@@ -1721,7 +1713,7 @@ async function activateConfigRevisionInTransaction(
       where: {
         appId: app.id,
         status: "DRAFT",
-        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+        legacyConfigImport: { isNot: null },
       },
       data: {
         status: "SUPERSEDED",
@@ -1913,10 +1905,7 @@ export async function autoRebaseCurrentActiveConfigSource(input: {
     }
     if (
       latest.status === "DRAFT"
-      && (
-        latest.legacyConfigImport
-        || latest.idempotencyKey.startsWith("legacy-shadow-draft:")
-      )
+      && latest.legacyConfigImport
     ) {
       return {
         outcome: "NEEDS_INPUT",

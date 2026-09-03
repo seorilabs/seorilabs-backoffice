@@ -312,11 +312,14 @@ test("일반 rebase는 legacy DRAFT를 거부하고 semantic source가 같으면
   assert.throws(
     () => assertConfigRevisionRebaseSource({
       status: "DRAFT",
-      idempotencyKey: "legacy-shadow-draft:example",
       legacyConfigImport: { id: "legacy-import-1" },
     }),
     (error) => error instanceof ControlPlaneError && error.code === "CONFIG_REVISION_NOT_REBASABLE",
   );
+  assert.doesNotThrow(() => assertConfigRevisionRebaseSource({
+    status: "DRAFT",
+    legacyConfigImport: null,
+  }));
   const left = sourceFixture().observation;
   const right = { ...sourceFixture().observation, id: "same-facts-new-row" };
   assert.equal(configSourceBindingsMatch(left, right), true);

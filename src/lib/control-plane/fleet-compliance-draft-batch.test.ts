@@ -286,5 +286,7 @@ test("Compliance queue와 activation은 같은 snapshot과 앱 잠금에서 사�
   assert.match(serviceSource, /target\.backfillContractVersion/);
   assert.doesNotMatch(activation, /target\.idempotencyKey\.startsWith\("ui-compliance-batch-create:/);
   assert.match(serviceSource, /revision: \{ gt: input\.afterRevision \}/);
-  assert.match(serviceSource, /idempotencyKey: \{ startsWith: "legacy-shadow-draft:" \}/);
+  assert.match(serviceSource, /legacyConfigImport: \{ isNot: null \}/);
+  assert.match(queueSource, /legacyConfigImport: \{ is: null \}/);
+  assert.doesNotMatch(activation, /legacy-shadow-draft:/);
 });
