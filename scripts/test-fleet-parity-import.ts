@@ -253,14 +253,26 @@ async function main() {
         idempotencyKey: { startsWith: "legacy-shadow-draft:" },
       },
     });
-    const activatedCompliance = await activateConfigRevision({
+    const activationInput = {
       repoId,
       revision: complianceDraft.revision,
       expectedActiveRevision: secondConfig.revision,
       actor,
       idempotencyKey: `ui-compliance-batch-activate:${fixture}`,
       signingKey: "integration-signing-key",
+    };
+    await assert.rejects(activateConfigRevision(activationInput), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "LATEST_DRAFT_EXISTS"
+    ));
+    assert.equal((await prisma.configRevision.findUniqueOrThrow({
+      where: { id: humanDraft.id },
+      select: { status: true },
+    })).status, "DRAFT");
+    await prisma.configRevision.update({
+      where: { id: humanDraft.id },
+      data: { status: "SUPERSEDED", supersededAt: new Date() },
     });
+    const activatedCompliance = await activateConfigRevision(activationInput);
     assert.equal(activatedCompliance.revision.status, "ACTIVE");
     const draftStates = await prisma.configRevision.findMany({
       where: { id: { in: [legacyDraft.id, humanDraft.id, complianceDraft.id, laterLegacyDraft.id] } },
@@ -269,7 +281,7 @@ async function main() {
     });
     assert.deepEqual(draftStates, [
       { id: legacyDraft.id, status: "SUPERSEDED" },
-      { id: humanDraft.id, status: "DRAFT" },
+      { id: humanDraft.id, status: "SUPERSEDED" },
       { id: complianceDraft.id, status: "ACTIVE" },
       { id: laterLegacyDraft.id, status: "SUPERSEDED" },
     ]);
