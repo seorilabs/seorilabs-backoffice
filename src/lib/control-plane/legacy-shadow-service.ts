@@ -740,8 +740,18 @@ export async function recordLegacyShadowImport(input: {
         orderBy: { revision: "desc" },
         select: { id: true, payload: true, payloadHash: true },
       });
+      const applicableResolution = active && transformed.status !== "DRAFTABLE"
+        ? await findApplicableLegacyConfigResolution(tx, {
+            appId: app.id,
+            sourceSha,
+            transformVersion: LEGACY_TRANSFORM_VERSION,
+            inputDigest,
+            reasonCodesDigest,
+            configRevisionId: active.id,
+          })
+        : null;
       let draft = null;
-      if (transformed.status !== "NEEDS_INPUT") {
+      if (transformed.status !== "NEEDS_INPUT" && !applicableResolution?.resolution) {
         assertConfigRevisionPayload(transformed.payload);
         draft = await createDraftRevisionInTransaction(tx, {
           appId: app.id,
@@ -804,16 +814,6 @@ export async function recordLegacyShadowImport(input: {
       // Import가 생성한 DRAFT 자체와 비교하면 tautological MATCH가 되므로 금지한다.
       // 검토가 필요한 source는 exact source/input/reason/ACTIVE 중앙 상태에 묶인
       // append-only resolution이 있을 때만 MATCH로 승격한다.
-      const applicableResolution = active && transformed.status !== "DRAFTABLE"
-        ? await findApplicableLegacyConfigResolution(tx, {
-            appId: app.id,
-            sourceSha,
-            transformVersion: LEGACY_TRANSFORM_VERSION,
-            inputDigest,
-            reasonCodesDigest,
-            configRevisionId: active.id,
-          })
-        : null;
       const parity = applicableResolution
         ? applyLegacyConfigResolution({
             transform: transformed,

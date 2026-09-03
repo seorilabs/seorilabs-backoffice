@@ -83,6 +83,25 @@ test("Compliance batch는 ACTIVE payload를 보존하고 enabled market 초안�
   );
 });
 
+test("legacy shadow DRAFT 뒤에는 실제 latest revision에서 새 Compliance revision을 만든다", () => {
+  const prepared = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 14,
+      latestRevisionState: {
+        revision: 14,
+        status: "DRAFT",
+        idempotencyKey: "legacy-shadow-draft:generated",
+        payloadHash: "c".repeat(64),
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 14 })],
+  });
+
+  assert.equal(prepared[0]!.mode, "CREATE");
+  assert.equal(prepared[0]!.expectedActiveConfigRevision, 7);
+  assert.equal(prepared[0]!.expectedLatestConfigRevision, 14);
+});
+
 test("enabled market 누락과 credential 후보가 있는 초안은 mutation 전에 거부한다", () => {
   assert.throws(
     () => prepareFleetComplianceDraftBatch({

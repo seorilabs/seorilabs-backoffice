@@ -1558,6 +1558,7 @@ async function activateConfigRevisionInTransaction(
     activatedAt: activatedAt.toISOString(),
   } as JsonValue;
   const signed = signSnapshot(snapshot, input.signingKey);
+  let supersededLegacyDraftCount = 0;
 
   if (active) {
     const superseded = await tx.configRevision.updateMany({
@@ -1575,6 +1576,21 @@ async function activateConfigRevisionInTransaction(
     if (superseded.count !== 1) {
       throw new ControlPlaneError("ACTIVE Config revision CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
     }
+  }
+  if (target.idempotencyKey.startsWith("ui-compliance-batch-create:")) {
+    const supersededLegacyDrafts = await tx.configRevision.updateMany({
+      where: {
+        appId: app.id,
+        status: "DRAFT",
+        revision: { lt: target.revision },
+        idempotencyKey: { startsWith: "legacy-shadow-draft:" },
+      },
+      data: {
+        status: "SUPERSEDED",
+        supersededAt: activatedAt,
+      },
+    });
+    supersededLegacyDraftCount = supersededLegacyDrafts.count;
   }
   const updated = await tx.configRevision.updateMany({
     where: { id: target.id, status: "DRAFT", activeSlot: null },
@@ -1603,6 +1619,7 @@ async function activateConfigRevisionInTransaction(
         revision: revision.revision,
         previousRevision: active?.revision ?? null,
         snapshotDigest: signed.digest,
+        supersededLegacyDraftCount,
       },
     },
   });

@@ -88,6 +88,7 @@ test("기존 DRAFT, source drift, projection drift는 중앙 activation을 fail-
       discoveryObservations: [{ sourceSha: "c".repeat(40) }],
     },
     latestRevision: latest(8),
+    pendingNonLegacyDraftRevisions: [8],
   });
 
   assert.equal(pending.eligible, false);
@@ -96,6 +97,22 @@ test("기존 DRAFT, source drift, projection drift는 중앙 activation을 fail-
     "SOURCE_SHA_CHANGED",
     "LATEST_DRAFT_EXISTS",
   ]);
+});
+
+test("legacy shadow가 만든 DRAFT만 최신이면 사람 Compliance 입력을 막지 않는다", () => {
+  const item = projectFleetComplianceDraftQueueItem({
+    legacy: legacy(),
+    app: app(),
+    latestRevision: {
+      ...latest(14),
+      idempotencyKey: "legacy-shadow-draft:generated",
+    },
+    pendingNonLegacyDraftRevisions: [],
+  });
+
+  assert.equal(item.eligible, true);
+  assert.equal(item.latestConfigRevision, 14);
+  assert.deepEqual(item.blockers, []);
 });
 
 test("ACTIVE가 없으면 missing만 보고 revision changed를 중복 표시하지 않는다", () => {

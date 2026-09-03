@@ -157,10 +157,7 @@ export function prepareFleetComplianceDraftBatch(input: {
     }
     if (
       current.eligible
-      && (
-        current.latestConfigRevision !== selection.expectedLatestConfigRevision
-        || selection.expectedLatestConfigRevision !== selection.expectedActiveConfigRevision
-      )
+      && current.latestConfigRevision !== selection.expectedLatestConfigRevision
     ) {
       throw new ControlPlaneError(
         "Compliance 입력 대상의 latest revision이 변경되었습니다. 화면을 새로고침하세요.",
@@ -178,7 +175,7 @@ export function prepareFleetComplianceDraftBatch(input: {
       expectedActiveConfigRevision: selection.expectedActiveConfigRevision,
       expectedLatestConfigRevision: resumable
         ? selection.expectedActiveConfigRevision
-        : selection.expectedLatestConfigRevision,
+        : current.latestConfigRevision,
       requestId: selection.requestId,
       payload,
       payloadHash,

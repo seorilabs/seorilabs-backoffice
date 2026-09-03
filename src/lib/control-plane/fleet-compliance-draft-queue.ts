@@ -67,6 +67,7 @@ export function projectFleetComplianceDraftQueueItem(input: {
   legacy: FleetLegacyResolutionQueueItem;
   app: ComplianceQueueAppRow | null;
   latestRevision: LatestRevisionRow | null;
+  pendingNonLegacyDraftRevisions?: number[];
 }): FleetComplianceDraftQueueState {
   const active = input.app?.configRevisions[0] ?? null;
   const parsedPayload = configRevisionPayloadSchema.safeParse(active?.payload);
@@ -101,7 +102,9 @@ export function projectFleetComplianceDraftQueueItem(input: {
       ? ["SOURCE_SHA_CHANGED" as const]
       : []),
     ...(enabledMarkets.length === 0 ? ["ENABLED_MARKET_MISSING" as const] : []),
-    ...(active && input.latestRevision?.revision !== active.revision
+    ...(active && (input.pendingNonLegacyDraftRevisions ?? []).some(
+      (revision) => revision > active.revision,
+    )
       ? ["LATEST_DRAFT_EXISTS" as const]
       : []),
   ];
@@ -130,7 +133,7 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
   ));
   if (legacyQueue.length === 0) return [];
   const appIds = legacyQueue.map((item) => item.appId);
-  const [apps, maxRevisions] = await Promise.all([
+  const [apps, maxRevisions, pendingNonLegacyDrafts] = await Promise.all([
     prisma.app.findMany({
       where: { id: { in: appIds } },
       select: {
@@ -160,6 +163,14 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
       where: { appId: { in: appIds } },
       _max: { revision: true },
     }),
+    prisma.configRevision.findMany({
+      where: {
+        appId: { in: appIds },
+        status: "DRAFT",
+        NOT: { idempotencyKey: { startsWith: "legacy-shadow-draft:" } },
+      },
+      select: { appId: true, revision: true },
+    }),
   ]);
   const latestKeys = maxRevisions.flatMap((row) => (
     row._max.revision === null ? [] : [{ appId: row.appId, revision: row._max.revision }]
@@ -178,11 +189,17 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
       });
   const appById = new Map(apps.map((app) => [app.id, app]));
   const latestByAppId = new Map(latestRevisions.map((revision) => [revision.appId, revision]));
+  const pendingNonLegacyDraftsByAppId = Map.groupBy(
+    pendingNonLegacyDrafts,
+    (revision) => revision.appId,
+  );
 
   return legacyQueue.map((legacy) => projectFleetComplianceDraftQueueItem({
     legacy,
     app: appById.get(legacy.appId) ?? null,
     latestRevision: latestByAppId.get(legacy.appId) ?? null,
+    pendingNonLegacyDraftRevisions: (pendingNonLegacyDraftsByAppId.get(legacy.appId) ?? [])
+      .map((revision) => revision.revision),
   }));
 }
 
