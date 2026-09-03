@@ -63,6 +63,17 @@ test("resolveGa4Target 는 lizard-tycoon export 매핑을 반환한다", () => {
   );
 });
 
+test("resolveGa4Target 는 출시 앱의 검증된 export 매핑을 반환한다", () => {
+  assert.deepEqual(
+    resolveGa4Target({ slug: "babycare", firebaseProject: null, ga4Dataset: null }),
+    { firebaseProject: "seorilabs-babycare", dataset: "analytics_549232169" },
+  );
+  assert.deepEqual(
+    resolveGa4Target({ slug: "spiritgate-defenders", firebaseProject: null, ga4Dataset: null }),
+    { firebaseProject: "spiritgate-defenders", dataset: "analytics_549931858" },
+  );
+});
+
 test("resolveGa4Target 는 매핑 없는 앱에 null 을 준다", () => {
   assert.equal(
     resolveGa4Target({ slug: "unknown-app", firebaseProject: null, ga4Dataset: null }),

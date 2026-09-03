@@ -18,6 +18,10 @@ export interface Ga4Target {
 }
 
 const FALLBACK: Record<string, Ga4Target> = {
+  "babycare": {
+    firebaseProject: "seorilabs-babycare",
+    dataset: "analytics_549232169",
+  },
   "lucid-chess": { firebaseProject: "lucid-chess-dbb9d", dataset: "analytics_539665867" },
   "crossword-puzzle": { firebaseProject: "crossword-puzzle-79ae0", dataset: "analytics_539639687" },
   "happy-farm": { firebaseProject: "happy-farm-tycoon", dataset: "analytics_539626577" },
@@ -30,6 +34,10 @@ const FALLBACK: Record<string, Ga4Target> = {
   "lizard-tycoon": {
     firebaseProject: "lizard-tycoon",
     dataset: "analytics_544016233",
+  },
+  "spiritgate-defenders": {
+    firebaseProject: "spiritgate-defenders",
+    dataset: "analytics_549931858",
   },
 };
 
