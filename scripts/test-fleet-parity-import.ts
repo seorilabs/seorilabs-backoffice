@@ -316,8 +316,8 @@ async function main() {
     });
     assert.deepEqual(draftStates, [
       { id: legacyDraft.id, status: "SUPERSEDED" },
-      { id: humanDraft.id, status: "SUPERSEDED" },
       { id: complianceDraft.id, status: "ACTIVE" },
+      { id: humanDraft.id, status: "SUPERSEDED" },
       { id: laterLegacyDraft.id, status: "SUPERSEDED" },
     ]);
     assert.equal(await prisma.configRevision.count({
