@@ -259,9 +259,10 @@ principal, 같은 principal의 다른 client certificate 또는 stale generation
 10. `trustedGithubStepLedgerImplemented()`는 `true`지만 `trustedGithubRuntimeCanaryApproved()`와
    `READY_PR_RUNTIME_OPERATIONAL`은 `false`, runtime replica는 0이다. 따라서 설정값만 바꿔 운영 mutation을 열 수 없다.
 
-모델이 호출하는 공개 경계는 `scripts-dist/seori-auth-agent-client.cjs`의 stdin JSON 하나다. K8s client는
-projected client certificate로 TLS 1.3 mTLS만 사용한다. native peer attestor 또는 worker별 전용 OS UID/launchd
-경계가 구현되기 전에는 local transport를 client와 runtime 양쪽에 두지 않는다. K8s runtime만
+모델이 호출하는 공개 경계는 `scripts-dist/seori-auth-agent-client.cjs`의 stdin JSON 하나다. client는
+전용 OS UID/GID 소유 `0600` Unix socket만 호출하고, root relay가 native peer attestation 뒤 worker별
+client certificate로 K8s runtime의 TLS 1.3 mTLS endpoint를 호출한다. worker는 certificate·private key·kubeconfig를
+읽지 않는다. root relay는 중앙 `.github`의 macOS agent relay 계약과 exact source SHA로 설치한다. K8s runtime만
 Backoffice worker bearer, adapter bearer, Ed25519 private key와 GitHub App private key 파일을 읽는다. 응답은
 공개 `sessionId`, 실행 상태, PR number/URL만 통과하며 credential 후보 key/value가 있으면 전체 응답을 폐기한다.
 
