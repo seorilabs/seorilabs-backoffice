@@ -58,6 +58,27 @@ test("BOOTSTRAP shadow renders as a one-shot, source-bound Job outside the web p
   assert.match(rendered, /defaultMode: 0440/u);
 });
 
+test("runtime image replaces traced pnpm links before copying the standalone contract closure", () => {
+  const dockerfile = readFileSync(join(process.cwd(), "Dockerfile"), "utf8");
+  const cleanup = dockerfile.indexOf("RUN rm -rf \\\n  ./node_modules/seorilabs-org-contracts");
+  const runtimeCopy = dockerfile.indexOf(
+    "COPY --from=build /app/runtime-contract-root/node_modules ./node_modules",
+  );
+  assert.ok(cleanup >= 0, "standalone trace의 충돌 symlink를 먼저 제거해야 한다");
+  assert.ok(runtimeCopy > cleanup, "symlink-free runtime closure는 충돌 제거 뒤 복사해야 한다");
+  for (const dependency of [
+    "seorilabs-org-contracts",
+    "ajv",
+    "yaml",
+    "fast-deep-equal",
+    "fast-uri",
+    "json-schema-traverse",
+    "require-from-string",
+  ]) {
+    assert.match(dockerfile.slice(cleanup, runtimeCopy), new RegExp(`node_modules/${dependency}`));
+  }
+});
+
 test("runner creates one Job, verifies immutable bindings, and never execs the web Deployment", () => {
   const runner = readFileSync(join(ROOT, "scripts/run-fleet-migration-bootstrap-shadow.sh"), "utf8");
   assert.match(runner, /kubectl_bin.*create -f - -o name/u);

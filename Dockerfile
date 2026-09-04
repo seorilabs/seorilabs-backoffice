@@ -70,6 +70,16 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 # worker와 Next serverExternalPackages가 공유하는 ESM repo-contract runtime.
+# standalone trace에는 pnpm symlink가 남을 수 있다. BuildKit은 symlink 위로 실제
+# directory를 복사하지 못하므로, 준비한 symlink-free closure와 겹치는 항목만 제거한다.
+RUN rm -rf \
+  ./node_modules/seorilabs-org-contracts \
+  ./node_modules/ajv \
+  ./node_modules/yaml \
+  ./node_modules/fast-deep-equal \
+  ./node_modules/fast-uri \
+  ./node_modules/json-schema-traverse \
+  ./node_modules/require-from-string
 COPY --from=build /app/runtime-contract-root/node_modules ./node_modules
 # data ns CronJob(인덱서/라이터) 엔트리. standalone node_modules 의 @prisma/client 를 재사용.
 COPY --from=build /app/scripts-dist ./scripts-dist
