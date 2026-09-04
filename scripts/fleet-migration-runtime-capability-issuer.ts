@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { isIPv4 } from "node:net";
 
 import { jsonDigest, type JsonValue, verifySnapshot } from "@/lib/control-plane/json";
 import { createFleetMigrationKubernetesCapabilitySink } from "@/lib/control-plane/fleet-migration-kubernetes-capability-sink";
@@ -47,6 +48,12 @@ function requiredPort(name: string): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) {
     throw new Error(`FLEET_MIGRATION_${name}_INVALID`);
   }
+  return value;
+}
+
+function requiredIpv4(name: string): string {
+  const value = process.env[name]?.trim() ?? "";
+  if (!isIPv4(value)) throw new Error(`FLEET_MIGRATION_${name}_INVALID`);
   return value;
 }
 
@@ -243,7 +250,7 @@ async function main(): Promise<void> {
       authRoot: required("FLEET_MIGRATION_KUBERNETES_AUTH_ROOT", ABSOLUTE_PATH),
       tokenFile: required("FLEET_MIGRATION_KUBERNETES_TOKEN_FILE", RELATIVE_PATH),
       caFile: required("FLEET_MIGRATION_KUBERNETES_CA_FILE", RELATIVE_PATH),
-      host: required("KUBERNETES_SERVICE_HOST", /^(?:[1-9][0-9]{0,2}\.){3}[1-9][0-9]{0,2}$/u),
+      host: requiredIpv4("KUBERNETES_SERVICE_HOST"),
       port: requiredPort("KUBERNETES_SERVICE_PORT_HTTPS"),
     });
     let attestationDigest = "";

@@ -138,5 +138,7 @@ test("runtime capability issuer renders only exact suspended one-run resources",
     "resolveFleetMigrationApprovedProofDigests",
   ]) assert.ok(issuerSource.includes(requiredBoundary));
   assert.match(issuerSource, /secretValuesReturned: false/u);
+  assert.match(issuerSource, /isIPv4\(value\)/u);
+  assert.match(issuerSource, /requiredIpv4\("KUBERNETES_SERVICE_HOST"\)/u);
   assert.doesNotMatch(issuerSource, /process\.stdout\.write\([^)]*token/su);
 });
