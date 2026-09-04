@@ -84,13 +84,15 @@ test("Firebase 로그인 공급자는 받고 계정 생성 경로와 함께 표�
   assert.match(message, /로그인: google\.com/);
 });
 
-test("공급자를 모르는 게스트 계정은 로그인 줄을 지어내지 않는다", () => {
+test("공급자·빌드를 모르는 구버전 클라이언트는 없는 줄을 지어내지 않는다", () => {
   const message = operationalEventMessage(
     { ...sample, attributes: { authType: "firebase_bridge", anonymous: false } },
     "우리 아기 기록",
   );
   assert.match(message, /인증: firebase_bridge/);
   assert.doesNotMatch(message, /로그인:/);
+  assert.doesNotMatch(message, /버전:/);
+  assert.doesNotMatch(message, /런타임:/);
 });
 
 test("새 버전 첫 유입 이벤트를 받고 버전·런타임·SDK를 표시한다", () => {
