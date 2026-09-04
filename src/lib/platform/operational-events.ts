@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
+  "app.version.first_seen",
   "iap.granted",
   "ad.reward.delivered",
   "iap.completion_failed",
@@ -18,7 +19,17 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
   // signInProvider는 Firebase ID token의 sign_in_provider다. authType은 계정이
   // 만들어진 경로(firebase_bridge 등)일 뿐이라 google.com인지 anonymous인지를
   // 가린다. platform이 uid를 새로 만드는 게스트 경로에는 없어서 선택 속성이다.
-  "identity.created": new Set(["authType", "signInProvider", "anonymous", "referrer"]),
+  "identity.created": new Set([
+    "authType",
+    "signInProvider",
+    "appVersion",
+    "runtime",
+    "anonymous",
+    "referrer",
+  ]),
+  // 앱·런타임·버전 조합이 Platform 세션에서 처음 관측된 순간이다. 마켓 업로드나
+  // 태그가 아니라 그 빌드로 실제 세션이 처음 열린 시각이라 실유입 개시를 가른다.
+  "app.version.first_seen": new Set(["appVersion", "runtime", "sdk"]),
   "iap.granted": new Set(["platform", "entitlementId"]),
   "ad.reward.delivered": new Set([
     "provider",
@@ -109,8 +120,16 @@ export function operationalEventMessage(
       if (attr(event, "signInProvider")) {
         lines.push(`로그인: ${String(attr(event, "signInProvider"))}`);
       }
+      if (attr(event, "appVersion")) lines.push(`버전: ${String(attr(event, "appVersion"))}`);
+      if (attr(event, "runtime")) lines.push(`런타임: ${String(attr(event, "runtime"))}`);
       if (attr(event, "anonymous") === true) lines.push("유형: 익명");
       if (attr(event, "referrer")) lines.push(`유입: ${String(attr(event, "referrer"))}`);
+      break;
+    case "app.version.first_seen":
+      lines.unshift("🚀 **새 버전 첫 유입**");
+      lines.push(`버전: ${String(attr(event, "appVersion") ?? "unknown")}`);
+      if (attr(event, "runtime")) lines.push(`런타임: ${String(attr(event, "runtime"))}`);
+      if (attr(event, "sdk")) lines.push(`SDK: ${String(attr(event, "sdk"))}`);
       break;
     case "iap.granted":
       lines.unshift("💳 **IAP 지급 확정**");

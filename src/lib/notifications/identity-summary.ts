@@ -15,6 +15,24 @@ export interface IdentityEventRow {
   attributes: Prisma.JsonValue;
 }
 
+// 카드에 분해로 보여 줄 속성과 라벨. 선언 순서가 그대로 카드 줄 순서다.
+//
+// authType은 계정이 만들어진 인증 경로라 firebase_bridge 하나로 뭉친다. 실제 로그인
+// 수단과 어느 빌드에서 들어왔는지는 다른 축이라 따로 센다.
+const BREAKDOWN_LABELS = {
+  authType: "인증",
+  signInProvider: "로그인",
+  appVersion: "버전",
+  runtime: "런타임",
+  referrer: "유입",
+} as const;
+
+export type BreakdownAttribute = keyof typeof BREAKDOWN_LABELS;
+
+const BREAKDOWN_ATTRIBUTES = Object.keys(BREAKDOWN_LABELS) as BreakdownAttribute[];
+
+export type IdentityBreakdowns = Record<BreakdownAttribute, Array<[string, number]>>;
+
 export interface IdentitySignupFacts {
   displayName: string;
   dateKey: string;
@@ -23,9 +41,7 @@ export interface IdentitySignupFacts {
   latestAt: Date;
   previousAt: Date | null;
   anonymous: number;
-  authTypes: Array<[string, number]>;
-  signInProviders: Array<[string, number]>;
-  referrers: Array<[string, number]>;
+  breakdowns: IdentityBreakdowns;
 }
 
 export function kstDateKey(date: Date): string {
@@ -68,27 +84,19 @@ export function summarizeIdentityEvents(input: {
   // 최신순으로 들어온 당일 이벤트다. 하나도 없으면 알릴 내용이 없다.
   const [latest, previous] = input.rows;
   if (!latest) return null;
-  const authTypes = new Map<string, number>();
-  const signInProviders = new Map<string, number>();
-  const referrers = new Map<string, number>();
+  const counts = Object.fromEntries(
+    BREAKDOWN_ATTRIBUTES.map((key) => [key, new Map<string, number>()]),
+  ) as Record<BreakdownAttribute, Map<string, number>>;
   let anonymous = 0;
   for (const row of input.rows) {
-    if (
-      row.attributes &&
-      typeof row.attributes === "object" &&
-      !Array.isArray(row.attributes) &&
-      (row.attributes as Prisma.JsonObject).anonymous === true
-    ) {
-      anonymous++;
+    if (attributeFlag(row.attributes, "anonymous")) anonymous++;
+    for (const key of BREAKDOWN_ATTRIBUTES) {
+      // 값이 없는 축은 세지 않는다. 분해 합이 신규 수보다 작은 게 정상이다.
+      const value = attributeText(row.attributes, key);
+      if (!value) continue;
+      const bucket = counts[key];
+      bucket.set(value, (bucket.get(value) ?? 0) + 1);
     }
-    const authType = attributeText(row.attributes, "authType");
-    if (authType) authTypes.set(authType, (authTypes.get(authType) ?? 0) + 1);
-    const signInProvider = attributeText(row.attributes, "signInProvider");
-    if (signInProvider) {
-      signInProviders.set(signInProvider, (signInProviders.get(signInProvider) ?? 0) + 1);
-    }
-    const referrer = attributeText(row.attributes, "referrer");
-    if (referrer) referrers.set(referrer, (referrers.get(referrer) ?? 0) + 1);
   }
   return {
     displayName: input.displayName,
@@ -98,9 +106,9 @@ export function summarizeIdentityEvents(input: {
     latestAt: latest.occurredAt,
     previousAt: previous?.occurredAt ?? null,
     anonymous,
-    authTypes: tally(authTypes),
-    signInProviders: tally(signInProviders),
-    referrers: tally(referrers),
+    breakdowns: Object.fromEntries(
+      BREAKDOWN_ATTRIBUTES.map((key) => [key, tally(counts[key])]),
+    ) as IdentityBreakdowns,
   };
 }
 
@@ -116,20 +124,13 @@ export function identitySummaryText(facts: IdentitySignupFacts): string {
     : "";
   lines.push(`최근 생성: ${time}${gap}`);
   if (facts.cumulative !== null) lines.push(`누적: ${facts.cumulative}번째 계정`);
-  if (facts.authTypes.length) {
-    lines.push(`인증: ${facts.authTypes.map(([key, count]) => `${key} ${count}`).join(" · ")}`);
-  }
-  // 인증 경로가 firebase_bridge 하나로 뭉쳐 보이는 구간을 가른다. 공급자를 모르는
-  // 게스트 계정은 세지 않으므로 합이 신규 수보다 작을 수 있다.
-  if (facts.signInProviders.length) {
-    lines.push(
-      `로그인: ${facts.signInProviders.map(([key, count]) => `${key} ${count}`).join(" · ")}`,
-    );
+  for (const key of BREAKDOWN_ATTRIBUTES) {
+    const entries = facts.breakdowns[key];
+    if (!entries.length) continue;
+    const body = entries.map(([value, count]) => `${value} ${count}`).join(" · ");
+    lines.push(`${BREAKDOWN_LABELS[key]}: ${body}`);
   }
   if (facts.anonymous) lines.push(`익명 계정: ${facts.anonymous}`);
-  if (facts.referrers.length) {
-    lines.push(`유입: ${facts.referrers.map(([key, count]) => `${key} ${count}`).join(" · ")}`);
-  }
   return lines.join("\n");
 }
 
@@ -165,6 +166,8 @@ export interface IdentityRowFacts {
   previousAt: Date | null;
   authType: string | null;
   signInProvider: string | null;
+  appVersion: string | null;
+  runtime: string | null;
   anonymous: boolean;
   referrer: string | null;
 }
@@ -185,6 +188,9 @@ export function identityRowText(facts: IdentityRowFacts): string {
   }
   if (facts.authType) parts.push(facts.authType);
   if (facts.signInProvider) parts.push(facts.signInProvider);
+  // 버전만 접두사를 붙인다. 숫자만 있으면 앞뒤 값과 구분되지 않는다.
+  if (facts.appVersion) parts.push(`v${facts.appVersion}`);
+  if (facts.runtime) parts.push(facts.runtime);
   if (facts.anonymous) parts.push("익명");
   if (facts.referrer) parts.push(`유입 ${facts.referrer}`);
   return parts.join(" · ");
@@ -259,6 +265,8 @@ export async function recordIdentitySignup(input: {
         previousAt: previous?.occurredAt ?? null,
         authType: attributeText(input.event.attributes, "authType"),
         signInProvider: attributeText(input.event.attributes, "signInProvider"),
+        appVersion: attributeText(input.event.attributes, "appVersion"),
+        runtime: attributeText(input.event.attributes, "runtime"),
         anonymous: attributeFlag(input.event.attributes, "anonymous"),
         referrer: attributeText(input.event.attributes, "referrer"),
       }),

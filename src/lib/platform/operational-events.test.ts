@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
 import {
+  isOpsAlert,
   operationalEventMessage,
   parseOperationalEvent,
   verifyOperationalEventSignature,
@@ -90,4 +91,43 @@ test("공급자를 모르는 게스트 계정은 로그인 줄을 지어내지 �
   );
   assert.match(message, /인증: firebase_bridge/);
   assert.doesNotMatch(message, /로그인:/);
+});
+
+test("새 버전 첫 유입 이벤트를 받고 버전·런타임·SDK를 표시한다", () => {
+  const firstSeen = {
+    ...sample,
+    eventId: "app_version_58542708455af9fd9f3d88aec5025cd8",
+    type: "app.version.first_seen" as const,
+    outcome: "observed",
+    attributes: { appVersion: "1.2.5", runtime: "godot-native-android", sdk: "gd/0.6.8" },
+  };
+  assert.deepEqual(parseOperationalEvent(firstSeen), firstSeen);
+  const message = operationalEventMessage(firstSeen, "도마뱀 테라리움");
+  assert.match(message, /새 버전 첫 유입/);
+  assert.match(message, /버전: 1\.2\.5/);
+  assert.match(message, /런타임: godot-native-android/);
+  assert.match(message, /SDK: gd\/0\.6\.8/);
+});
+
+test("새 버전 첫 유입은 장애 알림이 아니고 사용자 식별자를 계속 거부한다", () => {
+  assert.equal(isOpsAlert("app.version.first_seen"), false);
+  assert.equal(
+    parseOperationalEvent({
+      ...sample,
+      type: "app.version.first_seen" as const,
+      attributes: { appVersion: "1.2.5", platformUserId: "pu_secret" },
+    }),
+    null,
+  );
+});
+
+test("신규 계정 이벤트도 버전과 런타임을 받는다", () => {
+  const withBuild = {
+    ...sample,
+    attributes: { authType: "firebase", appVersion: "1.2.5", runtime: "godot-native-android", anonymous: false },
+  };
+  assert.deepEqual(parseOperationalEvent(withBuild), withBuild);
+  const message = operationalEventMessage(withBuild, "도마뱀 테라리움");
+  assert.match(message, /버전: 1\.2\.5/);
+  assert.match(message, /런타임: godot-native-android/);
 });
