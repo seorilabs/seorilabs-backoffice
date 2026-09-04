@@ -8,7 +8,7 @@ import { Prisma } from "@prisma/client";
 import { unzipSync } from "fflate";
 import { z } from "zod";
 
-import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { contractCanonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
 import { WORKFLOW_BUNDLE_CANDIDATE_SOURCE } from "@/lib/control-plane/workflow-bundle-candidate-source";
@@ -281,7 +281,7 @@ function withCandidateApproval(bundle: WorkflowBundleV5Registry): WorkflowBundle
     ...payload as Record<string, unknown>,
     integrity: {
       algorithm: "sha256",
-      payloadDigest: sha256(canonicalJson(payload)),
+      payloadDigest: sha256(contractCanonicalJson(payload)),
     },
   });
 }
@@ -290,7 +290,7 @@ function assertBundleIntegrity(input: unknown): WorkflowBundleV5Registry {
   const bundle = workflowBundleV5RegistrySchema.parse(input);
   if (
     bundle.source.sha !== bundle.source.workflowExecutionSha
-    || bundle.integrity.payloadDigest !== sha256(canonicalJson(bundlePayload(bundle)))
+    || bundle.integrity.payloadDigest !== sha256(contractCanonicalJson(bundlePayload(bundle)))
   ) {
     fail("WorkflowBundle v5 source 또는 payload integrity가 일치하지 않습니다.", "WORKFLOW_BUNDLE_INTEGRITY_INVALID");
   }
@@ -308,7 +308,7 @@ function assertBundleIntegrity(input: unknown): WorkflowBundleV5Registry {
 }
 
 function digestMap(value: Record<string, string>): string {
-  return sha256(canonicalJson(value as JsonValue));
+  return sha256(contractCanonicalJson(value as JsonValue));
 }
 
 function approvalEnvelope(
@@ -323,7 +323,7 @@ function approvalEnvelope(
     bundleVersion: approved.bundleVersion,
     source: approved.source,
     candidateDigest: candidate.integrity.payloadDigest,
-    evidenceDigest: sha256(canonicalJson(approved.approval.evidence as JsonValue)),
+    evidenceDigest: sha256(contractCanonicalJson(approved.approval.evidence as JsonValue)),
     contractDigestsDigest: digestMap(approved.quality.contractDigests),
     runtimeAssetDigestsDigest: digestMap(approved.quality.runtimeAssetDigests),
   } as const;
@@ -344,7 +344,7 @@ function assertApprovedEvidence(
     ...approved.promotionScope.staticProfiles.map((profile) => `static:${profile}`),
     ...approved.promotionScope.buildProfiles.map((profile) => `build:${profile}`),
   ].sort();
-  if (canonicalJson(identities) !== canonicalJson(expectedIdentities)) {
+  if (contractCanonicalJson(identities) !== contractCanonicalJson(expectedIdentities)) {
     fail("WorkflowBundle approval evidence set이 완전하지 않습니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");
   }
   for (const record of approved.approval.evidence) {
@@ -449,7 +449,7 @@ function verifyApprovedBundle(input: unknown, trustedKeysJson: string): {
   const candidate = withCandidateApproval(approved);
   assertApprovedEvidence(approved, candidate);
   const envelope = approvalEnvelope(candidate, approved);
-  const approvalPayload = Buffer.from(canonicalJson(envelope as unknown as JsonValue), "utf8");
+  const approvalPayload = Buffer.from(contractCanonicalJson(envelope as unknown as JsonValue), "utf8");
   const trusted = activeTrustedKeys(trustedKeysJson).get(approved.approval.signature.keyId);
   const signature = Buffer.from(approved.approval.signature.value, "base64url");
   if (
