@@ -72,9 +72,6 @@ export function compileBlueprintResources(input: ProjectBlueprint): BlueprintRes
     resource("firebase", "auth", projectId, {
       providers: [...blueprint.firebase.authProviders].sort(),
     }),
-    resource("firebase", "app-check", projectId, {
-      enforcement: blueprint.firebase.appCheckEnforcement,
-    }),
     resource("firebase", "firestore-rules", projectId, {
       checksum: blueprint.firebase.firestoreRulesChecksum,
     }),
@@ -84,11 +81,33 @@ export function compileBlueprintResources(input: ProjectBlueprint): BlueprintRes
     resource("firebase", "storage-rules", projectId, {
       checksum: blueprint.firebase.storageRulesChecksum,
     }),
-    resource("firebase", "functions", projectId, blueprint.firebase.functions),
     resource("bigquery", "dataset", `${blueprint.analytics.bigQueryProjectId}:${blueprint.analytics.datasetId}`, {
       location: blueprint.analytics.location,
     }),
   ];
+
+  if (blueprint.firebase.functions) {
+    resources.push(resource("firebase", "functions", projectId, blueprint.firebase.functions));
+  }
+  for (const registration of [...blueprint.firebase.appCheck.registrations]
+    .sort((left, right) => left.platform.localeCompare(right.platform))) {
+    resources.push(resource(
+      "firebase",
+      "app-check-registration",
+      `${projectId}/${registration.platform.toLowerCase()}`,
+      { managementMode: blueprint.firebase.appCheck.managementMode, ...registration },
+      registration.publicAppId,
+    ));
+  }
+  for (const enforcement of [...blueprint.firebase.appCheck.apiEnforcement]
+    .sort((left, right) => left.api.localeCompare(right.api))) {
+    resources.push(resource(
+      "firebase",
+      "app-check-api",
+      `${projectId}/${enforcement.api.toLowerCase()}`,
+      { managementMode: blueprint.firebase.appCheck.managementMode, ...enforcement },
+    ));
+  }
 
   if (blueprint.analytics.ga4PropertyId) {
     resources.push(resource(
@@ -120,10 +139,10 @@ export function compileBlueprintResources(input: ProjectBlueprint): BlueprintRes
       publicIdentity,
     ));
   }
-  for (const group of [...blueprint.workspace.groups].sort((left, right) => left.email.localeCompare(right.email))) {
+  for (const group of [...(blueprint.workspace?.groups ?? [])].sort((left, right) => left.email.localeCompare(right.email))) {
     resources.push(resource("google-workspace", "group", group.email.toLowerCase(), group, group.email.toLowerCase()));
   }
-  for (const delegation of [...blueprint.workspace.domainWideDelegation].sort((left, right) => (
+  for (const delegation of [...(blueprint.workspace?.domainWideDelegation ?? [])].sort((left, right) => (
     left.publicClientId.localeCompare(right.publicClientId)
   ))) {
     resources.push(resource(
@@ -188,7 +207,10 @@ export function evaluateProjectBlueprint(input: {
   credentialBindings: PublicCredentialBinding[];
 }) {
   const blueprint = projectBlueprintSchema.parse(input.blueprint);
-  const credentialChecks = Object.entries(REQUIRED_PROVISIONERS).map(([key, capability]) => {
+  const requiredProvisioners = Object.entries(REQUIRED_PROVISIONERS).filter(([key]) => (
+    key !== "workspace" || blueprint.workspace !== undefined
+  ));
+  const credentialChecks = requiredProvisioners.map(([key, capability]) => {
     const logicalCredentialId = blueprint.provisioners[key as keyof typeof REQUIRED_PROVISIONERS];
     const binding = input.credentialBindings.find((candidate) => (
       candidate.logicalCredentialId === logicalCredentialId

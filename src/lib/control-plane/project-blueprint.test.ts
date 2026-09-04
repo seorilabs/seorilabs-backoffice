@@ -22,7 +22,7 @@ const sourceSha = "b".repeat(40);
 
 function blueprint(): ProjectBlueprint {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organizationId: "123456789",
     folderId: "234567890",
     billingAccountId: "ABCDEF-123456-789ABC",
@@ -36,14 +36,26 @@ function blueprint(): ProjectBlueprint {
     budget: { currencyCode: "KRW", monthlyAmount: 100_000, alertThresholds: [0.5, 0.9, 1] },
     firebase: {
       authProviders: ["anonymous"],
-      appCheckEnforcement: "MONITOR",
+      appCheck: {
+        managementMode: "MONITOR",
+        registrations: [
+          { platform: "ANDROID", publicAppId: "1:1:android:sample", status: "REGISTERED", provider: "PLAY_INTEGRITY" },
+          { platform: "IOS", publicAppId: "1:1:ios:sample", status: "REGISTERED", provider: "APP_ATTEST" },
+        ],
+        apiEnforcement: [
+          { api: "AUTHENTICATION", state: "OFF" },
+          { api: "FIRESTORE", state: "OFF" },
+          { api: "STORAGE", state: "OFF" },
+          { api: "FUNCTIONS", state: "OFF" },
+        ],
+      },
       firestoreRulesChecksum: checksum,
       firestoreIndexesChecksum: checksum,
       storageRulesChecksum: checksum,
       functions: { region: "asia-northeast3", runtime: "nodejs24" },
       apps: [
-        { platform: "ANDROID", packageId: "com.seorilabs.sample" },
-        { platform: "IOS", bundleId: "com.seorilabs.sample" },
+        { platform: "ANDROID", publicAppId: "1:1:android:sample", packageId: "com.seorilabs.sample" },
+        { platform: "IOS", publicAppId: "1:1:ios:sample", bundleId: "com.seorilabs.sample" },
         { platform: "AIT", aitAppName: "sample" },
       ],
     },
@@ -94,8 +106,49 @@ test("ProjectBlueprint resource plan은 입력 배열 순서가 달라도 결정
   const shuffled = blueprint();
   shuffled.apis.reverse();
   shuffled.firebase.apps.reverse();
+  shuffled.firebase.appCheck.registrations.reverse();
+  shuffled.firebase.appCheck.apiEnforcement.reverse();
   assert.deepEqual(compileBlueprintResources(shuffled), left);
   assert.ok(left.some((item) => item.provider === "firebase" && item.resourceType === "app-registration"));
+});
+
+test("Functions와 Workspace 미사용 앱은 가짜 리소스나 provisioner를 요구하지 않는다", () => {
+  const minimal = blueprint();
+  delete minimal.firebase.functions;
+  delete minimal.workspace;
+  delete minimal.provisioners.workspace;
+  minimal.firebase.appCheck.apiEnforcement = minimal.firebase.appCheck.apiEnforcement.map((entry) => (
+    entry.api === "FUNCTIONS" ? { ...entry, state: "NOT_APPLICABLE" } : entry
+  ));
+  const resources = compileBlueprintResources(minimal);
+  assert.equal(resources.some((item) => item.resourceType === "functions"), false);
+  assert.equal(resources.some((item) => item.provider === "google-workspace"), false);
+  const plan = evaluateProjectBlueprint({
+    repoId: 1n,
+    sourceSha,
+    configRevision: 1,
+    blueprint: minimal,
+    observations: [],
+    credentialBindings: [
+      { logicalCredentialId: "shared/gcp/provisioner-session", capability: "gcp-project-provision", status: "ACTIVE" },
+      { logicalCredentialId: "shared/gcp/firebase-automation", capability: "firebase-provision", status: "ACTIVE" },
+    ],
+  });
+  assert.deepEqual(plan.credentialChecks.map((entry) => entry.provisioner), ["gcp", "firebase"]);
+});
+
+test("App Check는 Firebase 앱별 공개 ID와 등록 상태를 exact하게 요구한다", () => {
+  const missingProvider = blueprint();
+  missingProvider.firebase.appCheck.registrations[0] = {
+    platform: "ANDROID",
+    publicAppId: "1:1:android:sample",
+    status: "REGISTERED",
+  };
+  assert.equal(projectBlueprintSchema.safeParse(missingProvider).success, false);
+
+  const wrongApp = blueprint();
+  wrongApp.firebase.appCheck.registrations[0].publicAppId = "1:1:android:other";
+  assert.equal(projectBlueprintSchema.safeParse(wrongApp).success, false);
 });
 
 test("IAM visibility 부족은 ABSENT로 오판하지 않는다", () => {

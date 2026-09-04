@@ -214,7 +214,7 @@ function blueprint(input: {
   const projectId = input.projectId ?? "blueprint-prod";
   const packageId = input.packageId ?? PACKAGE_ID;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organizationId: "123456789",
     folderId: "234567890",
     billingAccountId: "ABCDEF-123456-789ABC",
@@ -224,12 +224,26 @@ function blueprint(input: {
     budget: { currencyCode: "KRW", monthlyAmount: 100_000, alertThresholds: [0.5, 1] },
     firebase: {
       authProviders: ["anonymous"],
-      appCheckEnforcement: "MONITOR",
+      appCheck: {
+        managementMode: "MONITOR",
+        registrations: [{
+          platform: "ANDROID",
+          publicAppId: "1:1:android:blueprint",
+          status: "REGISTERED",
+          provider: "PLAY_INTEGRITY",
+        }],
+        apiEnforcement: [
+          { api: "AUTHENTICATION", state: "OFF" },
+          { api: "FIRESTORE", state: "OFF" },
+          { api: "STORAGE", state: "OFF" },
+          { api: "FUNCTIONS", state: "OFF" },
+        ],
+      },
       firestoreRulesChecksum: RULES_SHA,
       firestoreIndexesChecksum: RULES_SHA,
       storageRulesChecksum: RULES_SHA,
       functions: { region: "asia-northeast3", runtime: "nodejs24" },
-      apps: [{ platform: "ANDROID", packageId }],
+      apps: [{ platform: "ANDROID", publicAppId: "1:1:android:blueprint", packageId }],
     },
     analytics: {
       bigQueryProjectId: projectId,

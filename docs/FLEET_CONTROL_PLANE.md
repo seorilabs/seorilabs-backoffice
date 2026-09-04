@@ -209,6 +209,17 @@ ConfigRevision을 만들 때 `ProjectBlueprint`, `MarketProfile`, `MarketLocaliz
 project, 조직/folder/billing/region, API, IAM 공개 identity, budget, Firebase Auth/App Check/Rules/Indexes/
 Functions/앱 등록, GA4·BigQuery, Workspace group·domain-wide delegation을 고정한다.
 
+`ProjectBlueprint` schema v2는 앱마다 실제 사용하는 provider만 선언한다. Cloud Functions와 Google
+Workspace를 사용하지 않는 제품은 해당 설정과 provisioner를 생략하며, plan에도 가짜 리소스를 만들지
+않는다. Workspace 설정과 `shared/*` Workspace provisioner는 둘 다 있거나 둘 다 없어야 한다.
+
+Firebase App Check는 하나의 전역 상태로 축약하지 않는다. Android, iOS, Web 앱별 공개 Firebase app ID와
+`REGISTERED|UNREGISTERED` 상태를 기록하고, 등록된 앱에만 provider를 요구한다. Authentication,
+Firestore, Storage, Functions API별 enforcement는 `OFF|ENFORCED|NOT_APPLICABLE`로 따로 고정한다.
+관리 의도는 `MONITOR|ENFORCE`로 보존하므로 현재 provider 상태가 `OFF`인 모니터링 단계와 실제 강제 적용을
+구분할 수 있다. 선언하지 않은 Firebase 앱의 App Check 상태, 중복 플랫폼/API, 앱 ID 불일치는
+validator가 거부한다.
+
 plan API는 provider에 쓰지 않는다. `ProviderObservation.payload`의 표준 readback envelope는
 `visibility=VISIBLE|FORBIDDEN|ERROR`와 `state=PRESENT|ABSENT|UNKNOWN`을 분리한다. 권한 부족과 provider
 오류는 반드시 `UNKNOWN`이며 `ABSENT`로 기록할 수 없다. 관측된 desired hash나 공개 identity가 다르면

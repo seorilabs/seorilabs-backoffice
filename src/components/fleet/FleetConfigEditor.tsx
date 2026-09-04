@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import { configOptionLabel, managementStatusLabel } from "@/lib/control-plane/presentation";
 
 import {
-  APP_CHECK_ENFORCEMENTS,
+  APP_CHECK_APIS,
+  APP_CHECK_API_STATES,
+  APP_CHECK_MANAGEMENT_MODES,
+  APP_CHECK_PROVIDERS,
+  APP_CHECK_REGISTRATION_STATES,
   ASSET_KINDS,
   BUDGET_CURRENCIES,
   COMPLIANCE_DECLARATIONS,
@@ -16,6 +20,8 @@ import {
   draftFromPayload,
   payloadFromDraft,
   type AssetDraft,
+  type AppCheckApiDraft,
+  type AppCheckRegistrationDraft,
   type BlueprintDraft,
   type ComplianceDraftRow,
   type ConfigDraft,
@@ -792,12 +798,74 @@ export function FleetConfigEditor({
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <TextField label="로그인 제공 서비스" value={draft.blueprint.authProviders} onChange={(value) => patchBlueprint({ authProviders: value })} />
-                  <SelectField label="앱 접근 검증" value={draft.blueprint.appCheckEnforcement} options={APP_CHECK_ENFORCEMENTS} onChange={(value) => patchBlueprint({ appCheckEnforcement: value })} />
+                  <SelectField label="앱 접근 검증 운영 방식" value={draft.blueprint.appCheckManagementMode} options={APP_CHECK_MANAGEMENT_MODES} onChange={(value) => patchBlueprint({ appCheckManagementMode: value })} />
                   <TextField label="데이터 접근 규칙 확인값" value={draft.blueprint.firestoreRulesChecksum} onChange={(value) => patchBlueprint({ firestoreRulesChecksum: value })} />
                   <TextField label="데이터 검색 설정 확인값" value={draft.blueprint.firestoreIndexesChecksum} onChange={(value) => patchBlueprint({ firestoreIndexesChecksum: value })} />
                   <TextField label="파일 접근 규칙 확인값" value={draft.blueprint.storageRulesChecksum} onChange={(value) => patchBlueprint({ storageRulesChecksum: value })} />
-                  <TextField label="서버 함수 지역" value={draft.blueprint.functionsRegion} onChange={(value) => patchBlueprint({ functionsRegion: value })} />
-                  <TextField label="서버 함수 실행 환경" value={draft.blueprint.functionsRuntime} hint="nodejsNN" onChange={(value) => patchBlueprint({ functionsRuntime: value })} />
+                  <label className="flex items-center gap-2 text-sm text-neutral-700">
+                    <input
+                      type="checkbox"
+                      checked={draft.blueprint.functionsEnabled}
+                      onChange={(event) => patchBlueprint({ functionsEnabled: event.target.checked })}
+                    />
+                    서버 함수 사용
+                  </label>
+                  {draft.blueprint.functionsEnabled && (
+                    <>
+                      <TextField label="서버 함수 지역" value={draft.blueprint.functionsRegion} onChange={(value) => patchBlueprint({ functionsRegion: value })} />
+                      <TextField label="서버 함수 실행 환경" value={draft.blueprint.functionsRuntime} hint="nodejsNN" onChange={(value) => patchBlueprint({ functionsRuntime: value })} />
+                    </>
+                  )}
+                </div>
+                <div>
+                  <div className={labelClass}>App Check 앱 등록 상태</div>
+                  <div className="mt-1">
+                    <RowList<AppCheckRegistrationDraft>
+                      rows={draft.blueprint.appCheckRegistrations}
+                      empty="확인된 App Check 앱 상태가 없습니다."
+                      addLabel="앱 상태 추가"
+                      onAdd={() => patchBlueprint({
+                        appCheckRegistrations: [...draft.blueprint.appCheckRegistrations, {
+                          platform: "ANDROID", publicAppId: "", status: "UNREGISTERED", provider: "",
+                        }],
+                      })}
+                      onRemove={(index) => patchBlueprint({
+                        appCheckRegistrations: draft.blueprint.appCheckRegistrations.filter((_, item) => item !== index),
+                      })}
+                      render={(row, index) => (
+                        <>
+                          <SelectField label="운영체제" value={row.platform} options={FIREBASE_PLATFORMS.filter((platform) => platform !== "AIT")} onChange={(value) => replaceBlueprintRow("appCheckRegistrations", index, { platform: value })} />
+                          <TextField label="Firebase 공개 앱 ID" value={row.publicAppId} onChange={(value) => replaceBlueprintRow("appCheckRegistrations", index, { publicAppId: value })} />
+                          <SelectField label="등록 상태" value={row.status} options={APP_CHECK_REGISTRATION_STATES} onChange={(value) => replaceBlueprintRow("appCheckRegistrations", index, { status: value, provider: value === "REGISTERED" ? (row.provider || APP_CHECK_PROVIDERS[0]) : "" })} />
+                          {row.status === "REGISTERED" && (
+                            <SelectField label="제공자" value={row.provider || APP_CHECK_PROVIDERS[0]} options={APP_CHECK_PROVIDERS} onChange={(value) => replaceBlueprintRow("appCheckRegistrations", index, { provider: value })} />
+                          )}
+                        </>
+                      )}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className={labelClass}>App Check API 적용 상태</div>
+                  <div className="mt-1">
+                    <RowList<AppCheckApiDraft>
+                      rows={draft.blueprint.appCheckApis}
+                      empty="확인된 API 적용 상태가 없습니다."
+                      addLabel="API 상태 추가"
+                      onAdd={() => patchBlueprint({
+                        appCheckApis: [...draft.blueprint.appCheckApis, { api: APP_CHECK_APIS[0], state: "OFF" }],
+                      })}
+                      onRemove={(index) => patchBlueprint({
+                        appCheckApis: draft.blueprint.appCheckApis.filter((_, item) => item !== index),
+                      })}
+                      render={(row, index) => (
+                        <>
+                          <SelectField label="API" value={row.api} options={APP_CHECK_APIS} onChange={(value) => replaceBlueprintRow("appCheckApis", index, { api: value })} />
+                          <SelectField label="적용 상태" value={row.state} options={APP_CHECK_API_STATES} onChange={(value) => replaceBlueprintRow("appCheckApis", index, { state: value })} />
+                        </>
+                      )}
+                    />
+                  </div>
                 </div>
                 <div>
                   <div className={labelClass}>Firebase 앱</div>
@@ -853,7 +921,15 @@ export function FleetConfigEditor({
                     />
                   </div>
                 </div>
-                <div>
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={draft.blueprint.workspaceEnabled}
+                    onChange={(event) => patchBlueprint({ workspaceEnabled: event.target.checked })}
+                  />
+                  Google Workspace 사용
+                </label>
+                {draft.blueprint.workspaceEnabled && <div>
                   <div className={labelClass}>Workspace 그룹</div>
                   <div className="mt-1">
                     <RowList<WorkspaceGroupDraft>
@@ -874,8 +950,8 @@ export function FleetConfigEditor({
                       )}
                     />
                   </div>
-                </div>
-                <div>
+                </div>}
+                {draft.blueprint.workspaceEnabled && <div>
                   <div className={labelClass}>Workspace 조직 권한 위임</div>
                   <div className="mt-1">
                     <RowList<DelegationDraft>
@@ -896,11 +972,11 @@ export function FleetConfigEditor({
                       )}
                     />
                   </div>
-                </div>
+                </div>}
                 <div className="grid gap-3 sm:grid-cols-3">
                   <TextField label="GCP 설정 계정" value={draft.blueprint.provisionerGcp} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerGcp: value })} />
                   <TextField label="Firebase 설정 계정" value={draft.blueprint.provisionerFirebase} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerFirebase: value })} />
-                  <TextField label="Workspace 설정 계정" value={draft.blueprint.provisionerWorkspace} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerWorkspace: value })} />
+                  {draft.blueprint.workspaceEnabled && <TextField label="Workspace 설정 계정" value={draft.blueprint.provisionerWorkspace} hint="shared/... 만 허용" onChange={(value) => patchBlueprint({ provisionerWorkspace: value })} />}
                 </div>
               </div>
             )}
