@@ -162,6 +162,13 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
   assert.match(nextConfig, /@img/);
   assert.match(nextConfig, /sharp/);
 
+  // repo-contract는 import.meta.url을 기준으로 packaged schema를 찾는다. CJS worker에
+  // 함께 번들하면 esbuild가 import.meta를 빈 객체로 바꿔 signer가 시작 전에 죽는다.
+  const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+    scripts?: Record<string, string>;
+  };
+  assert.match(packageJson.scripts?.["build:scripts"] ?? "", /--external:seorilabs-org-contracts(?:\s|$)/);
+
   // Prisma arm64 query engine 은 빌드 호스트가 아니라 이 선언으로 생성하고,
   // standalone을 runtime에 복사하기 전에 host-native engine을 제거한다.
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
@@ -169,6 +176,14 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
 
   // 무거운 JS 빌드는 BUILDPLATFORM(러너 네이티브)에서, 런타임 스테이지만 타깃에서.
   const dockerfile = readFileSync(join(process.cwd(), "Dockerfile"), "utf8");
+  assert.match(
+    dockerfile,
+    /RUN bash scripts\/prepare-runtime-org-contracts\.sh \/app\/runtime-contract-root\/node_modules/,
+  );
+  assert.match(
+    dockerfile,
+    /COPY --from=build \/app\/runtime-contract-root\/node_modules \.\/node_modules/,
+  );
   assert.match(
     dockerfile,
     /FROM --platform=\$BUILDPLATFORM node:[\d.]+-bookworm-slim AS build-base/,

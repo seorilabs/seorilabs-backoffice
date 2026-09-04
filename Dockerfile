@@ -45,6 +45,9 @@ RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
   && sh scripts/prune-standalone-prisma-engines.sh .next/standalone
 # data ns CronJob 용 인덱서/라이터 엔트리를 단일 CJS 로 번들(@prisma/client 는 external).
 RUN pnpm build:scripts
+# CJS worker가 ESM repo-contract를 실제 module URL로 읽도록 package와 정확한 runtime
+# dependency closure를 symlink 없는 별도 트리로 만든다.
+RUN bash scripts/prepare-runtime-org-contracts.sh /app/runtime-contract-root/node_modules
 
 # ── runtime: TARGETPLATFORM(arm64) 슬림 standalone + prisma migrate(deploy) 가능 ──
 FROM node:24.16.0-bookworm-slim AS runtime
@@ -66,6 +69,8 @@ RUN groupadd --system --gid 10001 app \
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
+# worker와 Next serverExternalPackages가 공유하는 ESM repo-contract runtime.
+COPY --from=build /app/runtime-contract-root/node_modules ./node_modules
 # data ns CronJob(인덱서/라이터) 엔트리. standalone node_modules 의 @prisma/client 를 재사용.
 COPY --from=build /app/scripts-dist ./scripts-dist
 # migrate deploy 용: schema/migrations + prisma CLI(글로벌, schema-engine 포함).
