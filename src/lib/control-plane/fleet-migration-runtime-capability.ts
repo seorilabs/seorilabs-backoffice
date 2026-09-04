@@ -91,6 +91,12 @@ const runtimePayloadSchema = z.object({
 
 export type FleetMigrationRuntimePayload = z.infer<typeof runtimePayloadSchema>;
 
+export function parseFleetMigrationRuntimePayload(value: unknown): FleetMigrationRuntimePayload {
+  const parsed = runtimePayloadSchema.safeParse(value);
+  if (!parsed.success) fail("FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
+  return parsed.data;
+}
+
 function fail(code: string): never {
   throw new Error(code);
 }
@@ -165,19 +171,23 @@ export async function loadFleetMigrationRuntimeCapability(input: {
       maxTtlMs: MAX_ATTESTATION_TTL_MS,
       now,
     });
-    const parsed = runtimePayloadSchema.safeParse(attestation.payload);
+    let parsed: FleetMigrationRuntimePayload;
+    try {
+      parsed = parseFleetMigrationRuntimePayload(attestation.payload);
+    } catch {
+      fail("FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
+    }
     const token = tokenBytes.toString("utf8").trim();
     if (
-      !parsed.success
-      || parsed.data.executionId !== input.expectedExecutionId
-      || parsed.data.backofficeSourceSha !== input.expectedBackofficeSourceSha
-      || parsed.data.detectorSourceSha !== input.expectedDetectorSourceSha
+      parsed.executionId !== input.expectedExecutionId
+      || parsed.backofficeSourceSha !== input.expectedBackofficeSourceSha
+      || parsed.detectorSourceSha !== input.expectedDetectorSourceSha
       || token.length < 20
       || token.length > 1024
       || /[\s\u0000-\u001f\u007f]/u.test(token)
-      || sha256(token) !== parsed.data.github.tokenSha256
+      || sha256(token) !== parsed.github.tokenSha256
     ) fail("FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
-    const tokenExpiresAt = Date.parse(parsed.data.github.tokenExpiresAt);
+    const tokenExpiresAt = Date.parse(parsed.github.tokenExpiresAt);
     const attestationExpiresAt = Date.parse(attestation.expiresAt);
     if (
       !Number.isFinite(tokenExpiresAt)
@@ -185,13 +195,13 @@ export async function loadFleetMigrationRuntimeCapability(input: {
       || tokenExpiresAt > Date.parse(attestation.issuedAt) + 60 * 60_000 + 5_000
       || tokenExpiresAt > attestationExpiresAt
     ) fail("FLEET_MIGRATION_RUNTIME_CAPABILITY_EXPIRED");
-    const repositoryIds = parsed.data.github.repositories.map(({ id }) => id);
+    const repositoryIds = parsed.github.repositories.map(({ id }) => id);
     if (
       new Set(repositoryIds).size !== repositoryIds.length
-      || new Set(parsed.data.github.repositories.map(({ fullName }) => fullName.toLowerCase())).size
-        !== parsed.data.github.repositories.length
+      || new Set(parsed.github.repositories.map(({ fullName }) => fullName.toLowerCase())).size
+        !== parsed.github.repositories.length
     ) fail("FLEET_MIGRATION_RUNTIME_COHORT_INVALID");
-    if (new Set(parsed.data.approvedProofDigests).size !== parsed.data.approvedProofDigests.length) {
+    if (new Set(parsed.approvedProofDigests).size !== parsed.approvedProofDigests.length) {
       fail("FLEET_MIGRATION_RUNTIME_PROOF_APPROVAL_INVALID");
     }
 
@@ -199,7 +209,7 @@ export async function loadFleetMigrationRuntimeCapability(input: {
       ? input.createClient(token)
       : new (await import("octokit")).Octokit({ auth: token });
     let consumed = false;
-    const payload = Object.freeze(structuredClone(parsed.data));
+    const payload = Object.freeze(structuredClone(parsed));
     const assertFresh = (freshNow: Date = input.now?.() ?? new Date()): void => {
       const current = freshNow.getTime();
       if (
