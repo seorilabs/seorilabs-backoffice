@@ -1,3 +1,5 @@
+import { NextRequest } from "next/server";
+
 import assert from "node:assert/strict";
 import {
   createHash,
@@ -11,6 +13,8 @@ import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json"
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   importWorkflowBundleApproval,
+  publicWorkflowBundleRegistryRecord,
+  readWorkflowBundleRegistryRecords,
   importWorkflowBundleCandidate,
   verifyWorkflowBundleRegistryReadback,
 } from "@/lib/control-plane/workflow-bundle-v5-registry";
@@ -567,6 +571,76 @@ test("번들에 canary Cloud Build 설정이 없으면 어떤 자산이 빠졌�
       && error.code === "WORKFLOW_BUNDLE_EVIDENCE_INVALID"
       && error.message.includes("rn-android-build-only-v2.yaml"),
   );
+});
+
+test("registry readback은 이 registry의 기록만 최신순으로 돌려준다", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const client = {
+    workflowBundleRegistryRecord: {
+      async findMany(args: Record<string, unknown>) {
+        calls.push(args);
+        return [{ id: "record-1" }];
+      },
+    },
+  };
+
+  await readWorkflowBundleRegistryRecords("a".repeat(40), client as never);
+  assert.deepEqual(calls[0], {
+    where: { registryId: "seorilabs-workflow-bundles-v5", sourceSha: "a".repeat(40) },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  await readWorkflowBundleRegistryRecords(null, client as never);
+  assert.deepEqual((calls[1] as { where: unknown }).where, {
+    registryId: "seorilabs-workflow-bundles-v5",
+  });
+});
+
+test("registry readback 응답은 공개 식별자와 digest만 담는다", () => {
+  const projected = publicWorkflowBundleRegistryRecord({
+    id: "record-1",
+    approvalState: "APPROVED",
+    sourceSha: "a".repeat(40),
+    workflowExecutionSha: "a".repeat(40),
+    payloadDigest: `sha256:${"1".repeat(64)}`,
+    candidateDigest: `sha256:${"2".repeat(64)}`,
+    approvalKeyId: "workflow-bundle-v5-test",
+    approvalPolicyRevision: "workflow-bundle-policy-v5",
+    artifactRunId: 1n,
+    artifactId: 2n,
+    artifactDigest: `sha256:${"3".repeat(64)}`,
+    createdAt: new Date("2026-09-04T00:00:00Z"),
+    // 아래 값은 저장 행에는 있지만 응답에 나가면 안 된다.
+    bundle: { approval: { evidence: ["secret"], signature: { value: "sig" } } },
+    requestHash: "4".repeat(64),
+    idempotencyKey: "must-not-leak",
+  } as never);
+  for (const forbidden of ["bundle", "requestHash", "idempotencyKey"]) {
+    assert.ok(!(forbidden in projected), forbidden);
+  }
+  assert.ok(!JSON.stringify(projected).includes("must-not-leak"));
+  assert.ok(!JSON.stringify(projected).includes("sig"));
+});
+
+test("registry readback은 인증 없는 요청을 401로 막는다", async () => {
+  const previous = process.env.INTERNAL_ADMIN_TOKEN;
+  process.env.INTERNAL_ADMIN_TOKEN = "test-internal-token";
+  try {
+    const { GET } = await import("@/app/api/control-plane/workflow-bundles/route");
+    const response = await GET(
+      new NextRequest("https://backoffice.vzyx.xyz/api/control-plane/workflow-bundles"),
+    );
+    assert.equal(response.status, 401);
+    // 인증이 없으면 sourceSha 형식 검사에 닿기 전에 막힌다.
+    const withBadSha = await GET(new NextRequest(
+      "https://backoffice.vzyx.xyz/api/control-plane/workflow-bundles?sourceSha=not-a-sha",
+    ));
+    assert.equal(withBadSha.status, 401);
+  } finally {
+    if (previous === undefined) delete process.env.INTERNAL_ADMIN_TOKEN;
+    else process.env.INTERNAL_ADMIN_TOKEN = previous;
+  }
 });
 
 test("서명자가 유효해도 build evidence의 candidate digest나 market gate가 다르면 승인되지 않는다", async () => {

@@ -926,6 +926,20 @@ export function verifyWorkflowBundleRegistryReadback(input: {
   return verified.approved;
 }
 
+export async function readWorkflowBundleRegistryRecords(
+  sourceSha: string | null,
+  client: WorkflowBundleRegistryClient = prisma,
+) {
+  return client.workflowBundleRegistryRecord.findMany({
+    where: {
+      registryId: REGISTRY_ID,
+      ...(sourceSha === null ? {} : { sourceSha }),
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+}
+
 export function publicWorkflowBundleRegistryRecord(record: {
   id: string;
   approvalState: "CANDIDATE" | "APPROVED";
