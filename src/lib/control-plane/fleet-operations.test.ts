@@ -19,7 +19,11 @@ import {
   providerObservationRequestHash,
   resolvedWorkflowCaller,
 } from "@/lib/control-plane/service";
-import { redactFleetError, redactFleetJson } from "@/lib/control-plane/fleet-view";
+import {
+  redactFleetError,
+  redactFleetJson,
+  visibleFleetConfigRevisions,
+} from "@/lib/control-plane/fleet-view";
 
 const dependencyAuditException = {
   schemaVersion: 1 as const,
@@ -55,6 +59,20 @@ const dependencyAuditException = {
     },
   ],
 };
+
+test("최근 DRAFT가 조회 상한을 채워도 ACTIVE 설정을 함께 표시한다", () => {
+  type Revision = { revision: number; status: "DRAFT" | "ACTIVE" };
+  const drafts: Revision[] = Array.from({ length: 12 }, (_, index) => ({
+    revision: 24 - index,
+    status: "DRAFT" as const,
+  }));
+  const active: Revision = { revision: 7, status: "ACTIVE" };
+
+  const visible = visibleFleetConfigRevisions(drafts, active);
+
+  assert.equal(visible[0]?.revision, 24);
+  assert.deepEqual(visible.filter((revision) => revision.status === "ACTIVE"), [active]);
+});
 
 test("비민감 Config payload는 UI와 API 공용 validator를 통과한다", () => {
   const payload = {
