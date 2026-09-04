@@ -168,6 +168,16 @@ test("ProjectBlueprint 선언을 끄면 payload에서 통째로 빠진다", () =
   assert.equal(configRevisionPayloadSchema.safeParse(without).success, true);
 });
 
+test("폴더가 없는 조직 직속 프로젝트는 folderId를 payload에 만들지 않는다", () => {
+  const draft = draftFromPayload(fullPayload);
+  const payload = payloadFromDraft({
+    ...draft,
+    blueprint: { ...draft.blueprint, folderId: "" },
+  }) as { projectBlueprint: Record<string, unknown> };
+  assert.equal("folderId" in payload.projectBlueprint, false);
+  assert.equal(configRevisionPayloadSchema.safeParse(payload).success, true);
+});
+
 test("편집기는 raw JSON escape hatch와 클라이언트 이중 validator를 두지 않는다", () => {
   const editor = readFileSync(join(process.cwd(), "src/components/fleet/FleetConfigEditor.tsx"), "utf8");
   // 서버 action에 넘길 직렬화 한 번을 빼면 사용자가 JSON을 직접 입력하는 경로가 없다.

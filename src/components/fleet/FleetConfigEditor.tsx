@@ -784,7 +784,7 @@ export function FleetConfigEditor({
               <div className="space-y-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <TextField label="조직 ID" value={draft.blueprint.organizationId} onChange={(value) => patchBlueprint({ organizationId: value })} />
-                  <TextField label="폴더 ID" value={draft.blueprint.folderId} onChange={(value) => patchBlueprint({ folderId: value })} />
+                  <TextField label="폴더 ID" value={draft.blueprint.folderId} hint="프로젝트가 조직에 직접 연결돼 있으면 비웁니다." onChange={(value) => patchBlueprint({ folderId: value })} />
                   <TextField label="결제 계정 ID" value={draft.blueprint.billingAccountId} hint="XXXXXX-XXXXXX-XXXXXX" onChange={(value) => patchBlueprint({ billingAccountId: value })} />
                   <TextField label="프로젝트 ID" value={draft.blueprint.projectId} onChange={(value) => patchBlueprint({ projectId: value })} />
                   <TextField label="프로젝트 번호" value={draft.blueprint.projectNumber} hint="외부 서비스에서 확인하기 전에는 비웁니다." onChange={(value) => patchBlueprint({ projectNumber: value })} />

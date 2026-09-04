@@ -64,7 +64,7 @@ export function compileBlueprintResources(input: ProjectBlueprint): BlueprintRes
   const resources: BlueprintResource[] = [
     resource("gcp", "project", projectId, {
       organizationId: blueprint.organizationId,
-      folderId: blueprint.folderId,
+      ...(blueprint.folderId ? { folderId: blueprint.folderId } : {}),
       billingAccountId: blueprint.billingAccountId,
       project: blueprint.project,
     }),

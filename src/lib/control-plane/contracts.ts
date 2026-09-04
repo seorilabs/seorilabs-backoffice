@@ -381,7 +381,8 @@ export function parseStoredPlatformReleaseManifest(value: unknown): PlatformRele
 export const projectBlueprintSchema = z.object({
   schemaVersion: z.literal(2),
   organizationId: numericId,
-  folderId: numericId,
+  // GCP project가 조직 루트 직속이면 생략하고, folder parent일 때만 numeric ID를 저장한다.
+  folderId: numericId.optional(),
   billingAccountId: z.string().regex(/^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$/),
   project: z.object({
     projectId: gcpProjectId,

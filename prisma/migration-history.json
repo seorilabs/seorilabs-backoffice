@@ -40,6 +40,10 @@
     "20260831010000_fleet_cleanup_exact_authority": {
       "sha256": "b00d8c90879b53058209136874e74ff4d5df1c66147950c440d8a84e549296d0",
       "reason": "P7 Ready PR capability, authority generation, execution/step ledger를 durable CAS와 exact repository-plan binding으로 보존한다"
+    },
+    "20260904070000_project_blueprint_optional_folder": {
+      "sha256": "f75be41541e4a29a09eed7c7adda2482dfbe587203214abe60d08cc93ce06cbb",
+      "reason": "실제 GCP 프로젝트가 폴더 없이 조직 루트에 직접 연결되는 구조를 보존하도록 folderId 제약을 완화하며 기존 데이터는 변경하지 않는다"
     }
   },
   "legacy": {
