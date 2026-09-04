@@ -11,6 +11,7 @@ import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json"
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   importWorkflowBundleApproval,
+  readWorkflowBundleRegistryRecords,
   importWorkflowBundleCandidate,
   verifyWorkflowBundleRegistryReadback,
 } from "@/lib/control-plane/workflow-bundle-v5-registry";
@@ -567,6 +568,30 @@ test("번들에 canary Cloud Build 설정이 없으면 어떤 자산이 빠졌�
       && error.code === "WORKFLOW_BUNDLE_EVIDENCE_INVALID"
       && error.message.includes("rn-android-build-only-v2.yaml"),
   );
+});
+
+test("registry readback은 이 registry의 기록만 최신순으로 돌려준다", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const client = {
+    workflowBundleRegistryRecord: {
+      async findMany(args: Record<string, unknown>) {
+        calls.push(args);
+        return [{ id: "record-1" }];
+      },
+    },
+  };
+
+  await readWorkflowBundleRegistryRecords("a".repeat(40), client as never);
+  assert.deepEqual(calls[0], {
+    where: { registryId: "seorilabs-workflow-bundles-v5", sourceSha: "a".repeat(40) },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  await readWorkflowBundleRegistryRecords(null, client as never);
+  assert.deepEqual((calls[1] as { where: unknown }).where, {
+    registryId: "seorilabs-workflow-bundles-v5",
+  });
 });
 
 test("서명자가 유효해도 build evidence의 candidate digest나 market gate가 다르면 승인되지 않는다", async () => {
