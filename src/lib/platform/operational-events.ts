@@ -14,7 +14,11 @@ export type OperationalEventType = (typeof OPERATIONAL_EVENT_TYPES)[number];
 const allowedAttributes: Record<OperationalEventType, Set<string>> = {
   // referrer는 AppsInToss 로그인의 DEFAULT/SANDBOX 구분이다. 실서비스 유입과
   // 샌드박스 테스트를 같은 카드로 읽지 않으려고 받는다.
-  "identity.created": new Set(["authType", "anonymous", "referrer"]),
+  //
+  // signInProvider는 Firebase ID token의 sign_in_provider다. authType은 계정이
+  // 만들어진 경로(firebase_bridge 등)일 뿐이라 google.com인지 anonymous인지를
+  // 가린다. platform이 uid를 새로 만드는 게스트 경로에는 없어서 선택 속성이다.
+  "identity.created": new Set(["authType", "signInProvider", "anonymous", "referrer"]),
   "iap.granted": new Set(["platform", "entitlementId"]),
   "ad.reward.delivered": new Set([
     "provider",
@@ -102,6 +106,9 @@ export function operationalEventMessage(
     case "identity.created":
       lines.unshift("👤 **신규 Platform 사용자 생성**");
       lines.push(`인증: ${String(attr(event, "authType") ?? "unknown")}`);
+      if (attr(event, "signInProvider")) {
+        lines.push(`로그인: ${String(attr(event, "signInProvider"))}`);
+      }
       if (attr(event, "anonymous") === true) lines.push("유형: 익명");
       if (attr(event, "referrer")) lines.push(`유입: ${String(attr(event, "referrer"))}`);
       break;
