@@ -1,0 +1,231 @@
+# Trusted operator가 exact source/cohort를 검증하고 일회성 read token을 signed runtime
+# capability로 보존하는 suspended Job. output Secret/ConfigMap은 빈 CAS 객체로 먼저 만들며,
+# 이 실행의 Role은 그 두 이름만 get/update/delete할 수 있다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_SERVICE_ACCOUNT__"
+  namespace: platform
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_ROLE__"
+  namespace: platform
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__"]
+    verbs: ["get", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__"]
+    verbs: ["get", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_ROLE__"
+  namespace: platform
+subjects:
+  - kind: ServiceAccount
+    name: "__FLEET_MIGRATION_RUNTIME_ISSUER_SERVICE_ACCOUNT__"
+    namespace: platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_ROLE__"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__"
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-runtime-capability
+    seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+type: Opaque
+data: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__"
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-runtime-capability
+    seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+data: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_JOB__"
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: fleet-migration-runtime-capability-issuer
+    seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+    seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+  annotations:
+    seorilabs.dev/runtime-signing-credential-id: shared/platform/fleet-migration-runtime-attestation-signing
+    seorilabs.dev/snapshot-signing-credential-id: shared/backoffice/control-plane-snapshot-signing
+    seorilabs.dev/database-credential-id: shared/seori-auth/fleet-migration-shadow-db
+    seorilabs.dev/github-app-credential-id: shared/github/backoffice-app-private-key
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: fleet-migration-runtime-capability-issuer
+        seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+        seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
+    spec:
+      serviceAccountName: "__FLEET_MIGRATION_RUNTIME_ISSUER_SERVICE_ACCOUNT__"
+      automountServiceAccountToken: false
+      enableServiceLinks: true
+      shareProcessNamespace: false
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets: [{ name: registry-pull-cred }]
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: runtime-capability-issuer
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command: ["/usr/bin/prlimit", "--core=0:0", "--", "node", "/app/scripts-dist/fleet-migration-runtime-capability-issuer.cjs"]
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HOME, value: /tmp }
+            - { name: CHECKPOINT_DISABLE, value: "1" }
+            - { name: NODE_OPTIONS, value: "--max-old-space-size=1024 --disable-sigusr1 --no-report-on-fatalerror --no-report-on-signal --no-report-uncaught-exception" }
+            - { name: GITHUB_ORG, value: seorilabs }
+            - { name: GITHUB_APP_ID, value: "4124446" }
+            - { name: GITHUB_PRIVATE_KEY_FILE, value: /run/fleet-runtime-issuer/github/private-key.pem }
+            - { name: BACKOFFICE_SOURCE_SHA, value: "__BACKOFFICE_IMAGE_TAG__" }
+            - { name: FLEET_MIGRATION_DETECTOR_SOURCE_SHA, value: "__FLEET_MIGRATION_DETECTOR_SOURCE_SHA__" }
+            - { name: FLEET_MIGRATION_EXECUTION_ID, value: "__FLEET_MIGRATION_EXECUTION_ID__" }
+            - { name: FLEET_MIGRATION_RUNTIME_ATTESTATION_KEY_ID, value: fleet-migration-runtime-v1 }
+            - { name: FLEET_MIGRATION_RUNTIME_ATTESTATION_KEY_FINGERPRINT, value: "__FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT__" }
+            - { name: FLEET_MIGRATION_RUNTIME_ATTESTATION_POLICY_REVISION, value: fleet-migration-runtime-policy-v1 }
+            - { name: FLEET_MIGRATION_RUNTIME_SIGNING_ROOT, value: /run/fleet-runtime-issuer/signing }
+            - { name: FLEET_MIGRATION_RUNTIME_SIGNING_PRIVATE_KEY_FILE, value: private-key.pem }
+            - { name: FLEET_MIGRATION_RUNTIME_SIGNING_PUBLIC_KEY_FILE, value: public-key.pem }
+            - { name: FLEET_MIGRATION_RUNTIME_NAMESPACE, value: platform }
+            - { name: FLEET_MIGRATION_RUNTIME_CONFIG_MAP, value: "__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__" }
+            - { name: FLEET_MIGRATION_GITHUB_TOKEN_SECRET, value: "__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__" }
+            - { name: FLEET_MIGRATION_KUBERNETES_AUTH_ROOT, value: /run/fleet-runtime-issuer/kubernetes }
+            - { name: FLEET_MIGRATION_KUBERNETES_TOKEN_FILE, value: token }
+            - { name: FLEET_MIGRATION_KUBERNETES_CA_FILE, value: ca.crt }
+            - { name: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID, value: control-plane-snapshot-v1 }
+            - { name: CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION, value: snapshot-policy-v1 }
+            - name: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-control-plane-snapshot-signing
+                  key: CONTROL_PLANE_SNAPSHOT_SIGNING_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-migration-shadow-db
+                  key: DATABASE_URL
+          resources:
+            requests: { cpu: 100m, memory: 384Mi }
+            limits: { cpu: "2", memory: 1536Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: github-app, mountPath: /run/fleet-runtime-issuer/github, readOnly: true }
+            - { name: runtime-signing, mountPath: /run/fleet-runtime-issuer/signing, readOnly: true }
+            - { name: kubernetes-auth, mountPath: /run/fleet-runtime-issuer/kubernetes, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: github-app
+          secret:
+            secretName: fleet-migration-inventory-issuer-github-app
+            defaultMode: 0440
+            items: [{ key: private-key.pem, path: private-key.pem }]
+        - name: runtime-signing
+          secret:
+            secretName: fleet-migration-runtime-attestation-signing
+            defaultMode: 0440
+            items:
+              - { key: private-key.pem, path: private-key.pem }
+              - { key: public-key.pem, path: public-key.pem }
+        - name: kubernetes-auth
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 600
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{ key: ca.crt, path: ca.crt }]
+        - name: tmp
+          emptyDir: { sizeLimit: 32Mi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: "__FLEET_MIGRATION_RUNTIME_ISSUER_ROLE__"
+  namespace: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backoffice
+      app.kubernetes.io/component: fleet-migration-runtime-capability-issuer
+      seorilabs.dev/execution-id: "__FLEET_MIGRATION_EXECUTION_ID__"
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: data }
+          podSelector:
+            matchLabels: { app: mysql }
+      ports: [{ protocol: TCP, port: 3306 }]
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock: { cidr: "__KUBERNETES_API_SERVICE_CIDR__" }
+      ports: [{ protocol: TCP, port: 443 }]
+    # CNI의 Service DNAT 적용 시점에 따라 policy가 backend endpoint를 볼 수 있으므로
+    # 현재 kubernetes.default EndpointSlice의 exact 단일 endpoint도 함께 고정한다.
+    - to:
+        - ipBlock: { cidr: "__KUBERNETES_API_ENDPOINT_CIDR__" }
+      ports: [{ protocol: TCP, port: __KUBERNETES_API_ENDPOINT_PORT__ }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports: [{ protocol: TCP, port: 443 }]

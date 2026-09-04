@@ -102,6 +102,33 @@ runtime 공개키의 SPKI SHA-256 지문도 canonical credential catalog에 미�
 operator는 ConfigMap과 독립된 이 값을 runner 입력으로 사용하며, attestation 또는 같은
 ConfigMap의 값으로 신뢰 루트를 구성하지 않는다.
 
+`shared/platform/fleet-migration-runtime-attestation-signing`은 이 용도의 전용 Ed25519
+credential이다. execution copy는
+`platform/fleet-migration-runtime-attestation-signing/{private-key.pem,public-key.pem}`이며
+logical ID annotation과 catalog의 공개 SPKI SHA-256 지문이 일치해야 한다. issuer runner는
+다음 입력으로 실행 ID 기반의 빈 Secret/ConfigMap, exact-name Role/RoleBinding, suspended Job,
+NetworkPolicy를 새로 만든다. 같은 실행 ID의 객체가 하나라도 있으면 덮어쓰거나 재시도하지 않고
+중단한다.
+
+```bash
+BACKOFFICE_IMAGE='registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:<digest>' \
+BACKOFFICE_SOURCE_SHA='<40자리 Backoffice source SHA>' \
+FLEET_MIGRATION_DETECTOR_SOURCE_SHA='<40자리 detector SHA>' \
+FLEET_MIGRATION_EXECUTION_ID='<새 signed execution ID>' \
+FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT='<catalog의 64자리 Ed25519 SPKI SHA-256>' \
+  scripts/run-fleet-migration-runtime-capability-issuer.sh
+```
+
+runner는 image OCI revision, 네 execution copy의 logical ID/key-name, Kubernetes API의 현재
+Service/EndpointSlice, 7개 객체의 exact binding을 readback한 뒤 UID/resourceVersion/suspend를
+JSON Patch test로 고정해 Job을 시작한다. issuer는 readiness, HMAC snapshot, exact cohort,
+proof digest, GitHub App 공개 identity와 webhook acceptance를 다시 검증하고 cohort 한정 read
+token을 sink로 직접 전달한다. sink는 미리 만든 빈 객체를 resourceVersion CAS로 immutable하게
+채운 뒤 내용을 hash/readback한다. 중간 실패 시 자신이 쓴 output 객체를 제거하며 token은 stdout에
+반환하지 않는다. terminal Pod의 owner/source/runtime image digest/exit code와 공개 receipt를
+검증한 뒤 runner는 임시 RoleBinding, Role, ServiceAccount, NetworkPolicy를 제거한다. output
+Secret/ConfigMap과 Job은 shadow 실행 및 감사 readback이 끝날 때까지 보존한다.
+
 shadow Job은 projected 0440 파일만 읽고 token hash, source, execution ID, permission,
 cohort, TTL을 검증한다. capability는 프로세스에서 한 번만 소비할 수 있고 terminal에서
 GitHub `DELETE /installation/token`으로 폐기한다. 폐기 실패도 Job 실패다. trusted
