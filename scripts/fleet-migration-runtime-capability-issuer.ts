@@ -8,6 +8,7 @@ import {
   verifyFleetMigrationPublicAttestation,
 } from "@/lib/control-plane/fleet-migration-public-attestation";
 import { parseFleetMigrationRuntimePayload } from "@/lib/control-plane/fleet-migration-runtime-capability";
+import { resolveFleetMigrationApprovedProofDigests } from "@/lib/control-plane/fleet-migration-runtime-proof-coverage";
 import {
   evaluateFleetMigrationShadowReadiness,
   readFleetMigrationBackoffice,
@@ -200,17 +201,19 @@ async function main(): Promise<void> {
       },
     });
     if (proofs.length > 500) throw new Error("FLEET_MIGRATION_RUNTIME_PROOF_LIMIT_EXCEEDED");
-    const cohort = new Map(readiness.repositories.map((repository) => [repository.repoId, repository]));
-    const approvedProofDigests = [...new Set(proofs.map((proof) => {
-      const repository = cohort.get(proof.repositoryId.toString());
-      if (
-        !repository
-        || repository.repoFullName !== proof.repositoryFullName
-        || repository.sourceSha !== proof.sourceSha
-        || !SHA256.test(proof.proofDigest)
-      ) throw new Error("FLEET_MIGRATION_RUNTIME_PROOF_BINDING_INVALID");
-      return proof.proofDigest;
-    }))].sort();
+    const approvedProofDigests = resolveFleetMigrationApprovedProofDigests({
+      repositories: readiness.repositories.map((repository) => ({
+        id: repository.repoId,
+        fullName: repository.repoFullName,
+        sourceSha: repository.sourceSha ?? "",
+      })),
+      proofs: proofs.map((proof) => ({
+        repositoryId: proof.repositoryId.toString(),
+        repositoryFullName: proof.repositoryFullName,
+        sourceSha: proof.sourceSha,
+        proofDigest: proof.proofDigest,
+      })),
+    });
     const [publicSource, webhookAcceptance, scoped] = await Promise.all([
       readFleetGitHubAppPublicSource(),
       prisma.webhookDelivery.findFirst({

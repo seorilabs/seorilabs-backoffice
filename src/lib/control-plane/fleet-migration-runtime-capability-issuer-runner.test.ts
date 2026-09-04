@@ -135,6 +135,7 @@ test("runtime capability issuer renders only exact suspended one-run resources",
     "issueFleetMigrationGithubCapabilityToSink",
     "signFleetMigrationPublicAttestation",
     "createFleetMigrationKubernetesCapabilitySink",
+    "resolveFleetMigrationApprovedProofDigests",
   ]) assert.ok(issuerSource.includes(requiredBoundary));
   assert.match(issuerSource, /secretValuesReturned: false/u);
   assert.doesNotMatch(issuerSource, /process\.stdout\.write\([^)]*token/su);
