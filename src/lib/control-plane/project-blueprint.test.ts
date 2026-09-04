@@ -112,6 +112,21 @@ test("ProjectBlueprint resource plan은 입력 배열 순서가 달라도 결정
   assert.ok(left.some((item) => item.provider === "firebase" && item.resourceType === "app-registration"));
 });
 
+test("조직 루트 직속 GCP 프로젝트는 존재하지 않는 folder ID를 요구하지 않는다", () => {
+  const organizationRoot = blueprint();
+  delete organizationRoot.folderId;
+  assert.equal(projectBlueprintSchema.safeParse(organizationRoot).success, true);
+  const project = compileBlueprintResources(organizationRoot).find((item) => (
+    item.provider === "gcp" && item.resourceType === "project"
+  ));
+  assert.deepEqual(project?.desired, {
+    organizationId: "123456789",
+    billingAccountId: "ABCDEF-123456-789ABC",
+    project: organizationRoot.project,
+  });
+  assert.equal(projectBlueprintSchema.safeParse({ ...organizationRoot, folderId: "" }).success, false);
+});
+
 test("Functions와 Workspace 미사용 앱은 가짜 리소스나 provisioner를 요구하지 않는다", () => {
   const minimal = blueprint();
   delete minimal.firebase.functions;

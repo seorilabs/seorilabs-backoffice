@@ -430,7 +430,7 @@ function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
   return {
     schemaVersion: 2,
     organizationId: draft.organizationId.trim(),
-    folderId: draft.folderId.trim(),
+    ...(trimmed(draft.folderId) ? { folderId: draft.folderId.trim() } : {}),
     billingAccountId: draft.billingAccountId.trim(),
     project: {
       projectId: draft.projectId.trim(),

@@ -194,7 +194,7 @@ export default async function FleetOperationsPage({
                 <Meta label="GCP 프로젝트" value={activeConfig.projectBlueprint.projectId} />
                 <Meta label="프로젝트 번호" value={activeConfig.projectBlueprint.projectNumber ?? "외부 결과 확인 대기"} />
                 <Meta label="조직" value={activeConfig.projectBlueprint.organizationId} />
-                <Meta label="폴더" value={activeConfig.projectBlueprint.folderId} />
+                <Meta label="폴더" value={activeConfig.projectBlueprint.folderId ?? "조직에 직접 연결"} />
                 <Meta label="결제 계정" value={activeConfig.projectBlueprint.billingAccountId} />
                 <Meta label="지역" value={activeConfig.projectBlueprint.region} />
                 <Meta label="설정 확인값" value={mono(activeConfig.projectBlueprint.payloadHash, 20)} />

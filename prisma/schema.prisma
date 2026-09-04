@@ -1070,7 +1070,7 @@ model ProjectBlueprint {
   configRevision   ConfigRevision @relation(fields: [configRevisionId, appId], references: [id, appId], onDelete: Restrict, onUpdate: Restrict, map: "cp_project_blueprint_config_app_fkey")
   schemaVersion    Int
   organizationId   String         @db.VarChar(30)
-  folderId         String         @db.VarChar(30)
+  folderId         String?        @db.VarChar(30)
   billingAccountId String         @db.VarChar(32)
   projectId        String         @db.VarChar(30)
   projectNumber    String?        @db.VarChar(30)
