@@ -363,15 +363,25 @@ function assertApprovedEvidence(
           repositoryId: 1250442131,
           fullName: "seorilabs/happy-farm",
           workflow: ".github/workflows/rn-build-android-cloud-v2.yml",
-          cloudBuildConfig: ".github/cloud-build/rn-android-build-only.yaml",
+          cloudBuildConfig: ".github/cloud-build/rn-android-build-only-v2.yaml",
         }
       : {
           repositoryId: 1265192029,
           fullName: "seorilabs/lizard-tycoon",
           workflow: ".github/workflows/godot-build-android-cloud-v2.yml",
-          cloudBuildConfig: ".github/cloud-build/godot-android-build-only.yaml",
+          cloudBuildConfig: ".github/cloud-build/godot-android-build-only-v2.yaml",
         };
     const profile = approved.buildProfiles[record.buildProfile];
+    // 번들이 그 Cloud Build 설정을 담고 있지 않으면 digest 비교가 undefined와의 대조로
+    // 조용히 실패한다. 어떤 자산이 빠졌는지 바로 드러나게 먼저 확인한다.
+    const expectedCloudBuildConfigDigest =
+      approved.quality.runtimeAssetDigests[expectedCanary.cloudBuildConfig];
+    if (expectedCloudBuildConfigDigest === undefined) {
+      fail(
+        `WorkflowBundle에 canary Cloud Build 설정이 없습니다: ${expectedCanary.cloudBuildConfig}`,
+        "WORKFLOW_BUNDLE_EVIDENCE_INVALID",
+      );
+    }
     if (
       record.repositoryId !== expectedCanary.repositoryId
       || record.fullName !== expectedCanary.fullName
@@ -379,8 +389,7 @@ function assertApprovedEvidence(
       || record.bundlePayloadDigest !== candidate.integrity.payloadDigest
       || record.workflowRef !== `seorilabs/.github/${expectedCanary.workflow}@${approved.source.workflowExecutionSha}`
       || record.builderImage !== profile.builderImage
-      || record.cloudBuildConfigSha256
-        !== approved.quality.runtimeAssetDigests[expectedCanary.cloudBuildConfig]
+      || record.cloudBuildConfigSha256 !== expectedCloudBuildConfigDigest
       || record.marketUpload !== false
     ) {
       fail("Build canary evidence가 exact source/bundle/runtime readback과 다릅니다.", "WORKFLOW_BUNDLE_EVIDENCE_INVALID");

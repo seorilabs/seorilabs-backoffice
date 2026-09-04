@@ -36,8 +36,8 @@ function candidateBundle() {
     quality: {
       contractDigests: { "contracts/workflow-bundle-v5.schema.json": `sha256:${"1".repeat(64)}` },
       runtimeAssetDigests: {
-        ".github/cloud-build/rn-android-build-only.yaml": `sha256:${"2".repeat(64)}`,
-        ".github/cloud-build/godot-android-build-only.yaml": `sha256:${"3".repeat(64)}`,
+        ".github/cloud-build/rn-android-build-only-v2.yaml": `sha256:${"2".repeat(64)}`,
+        ".github/cloud-build/godot-android-build-only-v2.yaml": `sha256:${"3".repeat(64)}`,
       },
     },
     promotionScope: {
@@ -546,6 +546,27 @@ test("promotion scope가 비면 스키마 단계에서 거부된다", async () =
     trustedApprovalKeysJson: empty.trustedKeysJson,
     async readCandidateArtifact() { throw new Error("not used"); },
   }));
+});
+
+test("번들에 canary Cloud Build 설정이 없으면 어떤 자산이 빠졌는지 밝히며 거부한다", async () => {
+  const fixture = approvedFixture((candidate) => {
+    const digests = (candidate.quality as { runtimeAssetDigests: Record<string, string> })
+      .runtimeAssetDigests;
+    delete digests[".github/cloud-build/rn-android-build-only-v2.yaml"];
+  });
+  await assert.rejects(
+    importWorkflowBundleApproval({
+      bundle: fixture.approved,
+      idempotencyKey: "approved-import:missing-cloud-build-config",
+      actor: "test",
+    }, memoryClient() as never, {
+      trustedApprovalKeysJson: fixture.trustedKeysJson,
+      async readCandidateArtifact() { throw new Error("not used"); },
+    }),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "WORKFLOW_BUNDLE_EVIDENCE_INVALID"
+      && error.message.includes("rn-android-build-only-v2.yaml"),
+  );
 });
 
 test("서명자가 유효해도 build evidence의 candidate digest나 market gate가 다르면 승인되지 않는다", async () => {
