@@ -33,20 +33,22 @@ test("경과 시간은 초·분·시간 단위로 읽히게 만든다", () => {
   assert.equal(formatElapsed(120 * 60_000), "2시간");
 });
 
-test("당일 이벤트에서 인증·익명·유입 분해와 직전 간격을 집계한다", () => {
+test("당일 이벤트에서 인증·로그인·익명·유입 분해와 직전 간격을 집계한다", () => {
   const facts = summarizeIdentityEvents({
     ...base,
     todayTotal: 3,
     rows: [
       { occurredAt: new Date("2026-08-19T07:44:00Z"), attributes: { authType: "apps_in_toss", referrer: "DEFAULT" } },
-      { occurredAt: new Date("2026-08-19T07:36:00Z"), attributes: { authType: "firebase", anonymous: true } },
-      { occurredAt: new Date("2026-08-19T02:10:00Z"), attributes: { authType: "firebase", anonymous: true } },
+      { occurredAt: new Date("2026-08-19T07:36:00Z"), attributes: { authType: "firebase", signInProvider: "anonymous", anonymous: true } },
+      { occurredAt: new Date("2026-08-19T02:10:00Z"), attributes: { authType: "firebase", signInProvider: "anonymous", anonymous: true } },
     ],
   });
   assert.ok(facts);
   assert.equal(facts.todayTotal, 3);
   assert.equal(facts.anonymous, 2);
   assert.deepEqual(facts.authTypes, [["firebase", 2], ["apps_in_toss", 1]]);
+  // 공급자를 모르는 계정은 세지 않는다. 합이 신규 수보다 작은 게 정상이다.
+  assert.deepEqual(facts.signInProviders, [["anonymous", 2]]);
   assert.deepEqual(facts.referrers, [["DEFAULT", 1]]);
   assert.deepEqual(facts.latestAt, new Date("2026-08-19T07:44:00Z"));
   assert.deepEqual(facts.previousAt, new Date("2026-08-19T07:36:00Z"));
@@ -66,12 +68,14 @@ test("카드에는 신규 수·최근 생성·직전 간격·누적·분해가 �
     previousAt: new Date("2026-08-19T07:36:00Z"),
     anonymous: 2,
     authTypes: [["firebase", 10], ["apps_in_toss", 2]],
+    signInProviders: [["google.com", 7], ["anonymous", 3]],
     referrers: [["DEFAULT", 11], ["SANDBOX", 1]],
   });
   assert.match(text, /오늘 신규 계정 12명/);
   assert.match(text, /직전 간격 8분/);
   assert.match(text, /누적: 639번째 계정/);
   assert.match(text, /인증: firebase 10 · apps_in_toss 2/);
+  assert.match(text, /로그인: google\.com 7 · anonymous 3/);
   assert.match(text, /익명 계정: 2/);
   assert.match(text, /유입: DEFAULT 11 · SANDBOX 1/);
 });
@@ -86,9 +90,12 @@ test("baseline이 없으면 누적 순번을 지어내지 않는다", () => {
     previousAt: null,
     anonymous: 0,
     authTypes: [["firebase_bridge", 1]],
+    signInProviders: [],
     referrers: [],
   });
   assert.doesNotMatch(text, /누적/);
+  // platform이 uid를 만든 게스트 계정이라 공급자가 없다. 줄을 지어내지 않는다.
+  assert.doesNotMatch(text, /로그인/);
   assert.doesNotMatch(text, /직전 간격/);
   assert.doesNotMatch(text, /익명 계정/);
   assert.doesNotMatch(text, /유입/);
@@ -138,19 +145,21 @@ test("등록된 앱의 신규 계정은 건별 카드를 만들지 않는다", (
   assert.match(routeSource, /if \(!milestone && !summarized\)/);
 });
 
-test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·유입이 담긴다", () => {
+test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·로그인·유입이 담긴다", () => {
   const text = identityRowText({
     ordinal: 17,
     occurredAt: new Date("2026-08-21T06:21:35Z"),
     previousAt: new Date("2026-08-21T06:17:23Z"),
-    authType: "apps_in_toss",
+    authType: "firebase_bridge",
+    signInProvider: "google.com",
     anonymous: false,
     referrer: "main_banner",
   });
   assert.match(text, /`#17`/);
   assert.match(text, /15:21:35/);
   assert.match(text, /직전 \+4분/);
-  assert.match(text, /apps_in_toss/);
+  assert.match(text, /firebase_bridge/);
+  assert.match(text, /google\.com/);
   assert.match(text, /유입 main_banner/);
   assert.doesNotMatch(text, /익명/);
 });
@@ -161,6 +170,7 @@ test("쓰레드 댓글은 없는 속성을 지어내지 않는다", () => {
     occurredAt: new Date("2026-08-20T15:02:59Z"),
     previousAt: null,
     authType: null,
+    signInProvider: null,
     anonymous: true,
     referrer: null,
   });
@@ -169,6 +179,7 @@ test("쓰레드 댓글은 없는 속성을 지어내지 않는다", () => {
   assert.match(text, /익명/);
   assert.doesNotMatch(text, /직전/);
   assert.doesNotMatch(text, /유입/);
+  assert.equal(text.split(" · ").length, 3);
 });
 
 test("쓰레드 댓글은 운영 이벤트당 하나만 남기고 쓰레드는 앱·KST 날짜로 이름 붙인다", () => {
@@ -223,6 +234,7 @@ test("재전송된 옛 이벤트는 그 뒤에 생긴 계정을 순번에 넣지
     occurredAt: redelivered,
     previousAt: previous,
     authType: null,
+    signInProvider: null,
     anonymous: false,
     referrer: null,
   }), /`#2` · 10:46:27 · 직전 \+4시간 19분/);

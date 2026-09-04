@@ -71,3 +71,23 @@ test("AppsInToss 로그인 referrer는 받고 사용자 식별자는 계속 거�
   );
   assert.match(operationalEventMessage(withReferrer, "도마뱀 테라리움"), /유입: SANDBOX/);
 });
+
+test("Firebase 로그인 공급자는 받고 계정 생성 경로와 함께 표시한다", () => {
+  const withProvider = {
+    ...sample,
+    attributes: { authType: "firebase_bridge", signInProvider: "google.com", anonymous: false },
+  };
+  assert.deepEqual(parseOperationalEvent(withProvider), withProvider);
+  const message = operationalEventMessage(withProvider, "우리 아기 기록");
+  assert.match(message, /인증: firebase_bridge/);
+  assert.match(message, /로그인: google\.com/);
+});
+
+test("공급자를 모르는 게스트 계정은 로그인 줄을 지어내지 않는다", () => {
+  const message = operationalEventMessage(
+    { ...sample, attributes: { authType: "firebase_bridge", anonymous: false } },
+    "우리 아기 기록",
+  );
+  assert.match(message, /인증: firebase_bridge/);
+  assert.doesNotMatch(message, /로그인:/);
+});
