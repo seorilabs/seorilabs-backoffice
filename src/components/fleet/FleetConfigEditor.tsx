@@ -412,6 +412,8 @@ export function FleetConfigEditor({
                   ? `기존 설정 가져오기 완료 · 초안 버전 ${result.revision} · 비교 결과 ${managementStatusLabel(result.parityStatus ?? "없음")}`
                   : result.status === "DRAFT_CREATED_WITH_INPUT"
                     ? `확인된 항목은 초안 버전 ${result.revision}에 채웠습니다. 남은 항목만 확인하면 됩니다.`
+                    : result.status === "RESOLUTION_REUSED"
+                      ? `기존 해소 근거를 재사용해 새 초안을 만들지 않았습니다. · 비교 결과 ${managementStatusLabel(result.parityStatus ?? "없음")}`
                     : `기존 설정 가져오기 ${managementStatusLabel(result.status ?? "완료")} · 소스 구조 확인이 필요합니다.`,
               )}
               className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"

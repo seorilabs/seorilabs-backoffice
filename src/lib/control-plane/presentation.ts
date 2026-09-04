@@ -76,6 +76,7 @@ const statusLabels = {
   NEEDS_INPUT: "입력 필요",
   DRAFT_CREATED: "초안 생성됨",
   DRAFT_CREATED_WITH_INPUT: "초안 생성됨 · 추가 입력 필요",
+  RESOLUTION_REUSED: "확인된 해소 근거 재사용",
   WAITING_HUMAN_APPROVAL: "승인 대기",
   HUMAN_REQUIRED: "사용자 확인 필요",
   QUEUED: "실행 대기",

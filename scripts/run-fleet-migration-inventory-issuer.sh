@@ -140,7 +140,7 @@ read_bound_key_markers() {
 }
 read_bound_key_markers configmap fleet-migration-inventory-public-identity shared/platform/fleet-release-approval-signing '{{if index .data "public-key.pem"}}p{{end}}{{if index .data "catalog.json"}}c{{end}}' pc
 read_bound_key_markers secret fleet-migration-inventory-issuer-db shared/seori-auth/fleet-migration-inventory-issuer-db '{{if index .data "DATABASE_URL"}}d{{end}}' d
-read_bound_key_markers secret fleet-migration-inventory-issuer-github-app shared/github/backoffice-app '{{if index .data "private-key.pem"}}g{{end}}' g
+read_bound_key_markers secret fleet-migration-inventory-issuer-github-app shared/github/backoffice-app-private-key '{{if index .data "private-key.pem"}}g{{end}}' g
 read_bound_key_markers secret fleet-migration-inventory-signer-client shared/platform/fleet-migration-inventory-issuer-client-mtls '{{if index .data "ca.pem"}}a{{end}}{{if index .data "tls.crt"}}c{{end}}{{if index .data "tls.key"}}k{{end}}' ack
 read_bound_key_markers secret fleet-migration-inventory-signer-server shared/platform/fleet-migration-inventory-signer-server-mtls '{{if index .data "client-ca.pem"}}a{{end}}{{if index .data "tls.crt"}}c{{end}}{{if index .data "tls.key"}}k{{end}}' ack
 read_bound_key_markers secret fleet-release-approval-signing shared/platform/fleet-release-approval-signing '{{if index .data "private-key.pem"}}s{{end}}' s

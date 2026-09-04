@@ -140,12 +140,20 @@ export function prepareFleetComplianceDraftBatch(input: {
     });
     const payloadHash = jsonDigest(payload as unknown as JsonValue);
     const createKey = `ui-compliance-batch-create:${selection.requestId}`;
-    const resumable = current.latestRevisionState?.revision === selection.expectedActiveConfigRevision + 1
-      && current.latestRevisionState.status === "DRAFT"
-      && current.latestRevisionState.idempotencyKey === createKey
-      && current.latestRevisionState.payloadHash === payloadHash
-      && [selection.expectedActiveConfigRevision, current.latestRevisionState.revision]
+    const requestedRevision = current.requestedRevisionStates.find(
+      (revision) => revision.idempotencyKey === createKey,
+    ) ?? null;
+    const pendingAfterActive = current.pendingNonLegacyDraftRevisions.filter(
+      (revision) => revision > selection.expectedActiveConfigRevision,
+    );
+    const resumable = requestedRevision !== null
+      && requestedRevision.revision > selection.expectedActiveConfigRevision
+      && requestedRevision.status === "DRAFT"
+      && requestedRevision.payloadHash === payloadHash
+      && [requestedRevision.revision - 1, requestedRevision.revision, current.latestConfigRevision]
         .includes(selection.expectedLatestConfigRevision)
+      && pendingAfterActive.length === 1
+      && pendingAfterActive[0] === requestedRevision.revision
       && current.blockers.every((blocker) => blocker === "LATEST_DRAFT_EXISTS");
 
     if (!current.eligible && !resumable) {
@@ -157,10 +165,7 @@ export function prepareFleetComplianceDraftBatch(input: {
     }
     if (
       current.eligible
-      && (
-        current.latestConfigRevision !== selection.expectedLatestConfigRevision
-        || selection.expectedLatestConfigRevision !== selection.expectedActiveConfigRevision
-      )
+      && current.latestConfigRevision !== selection.expectedLatestConfigRevision
     ) {
       throw new ControlPlaneError(
         "Compliance 입력 대상의 latest revision이 변경되었습니다. 화면을 새로고침하세요.",
@@ -177,8 +182,8 @@ export function prepareFleetComplianceDraftBatch(input: {
       sourceSha: current.sourceSha,
       expectedActiveConfigRevision: selection.expectedActiveConfigRevision,
       expectedLatestConfigRevision: resumable
-        ? selection.expectedActiveConfigRevision
-        : selection.expectedLatestConfigRevision,
+        ? requestedRevision!.revision - 1
+        : current.latestConfigRevision,
       requestId: selection.requestId,
       payload,
       payloadHash,

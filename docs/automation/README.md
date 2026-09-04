@@ -32,7 +32,9 @@ deterministic scheduler는 `k8s/scheduler-cronjobs.yaml`의 `backoffice-automati
    코드에서 `false`이므로 credential과 `AGENT_TRUSTED_ADAPTER_DEPLOYED=true`를 설정해도 생성과 claim은 fail-closed한다.
    `k8s/seori-auth-agent-runtime.yaml`은 기본 `replicas: 0`이다. K8s 실행은 exact Codex/Claude SPIFFE SAN의
    TLS 1.3 mTLS만 허용한다. client certificate는 generic service-account SAN을 공유하지 않고
-   `/instance/{unique-id}` SAN·fingerprint·serial digest를 session에 고정한다. 동일 UID를 구분할 peer attestor가 없는 동안 local transport는 client와 runtime 모두 제공하지 않는다.
+   `/instance/{unique-id}` SAN·fingerprint·serial digest를 session에 고정한다. Codex·Claude는 서로 다른
+   OS UID/GID와 launchd job을 사용하고, worker client는 자기 UID/GID 소유 `0600` Unix socket만 호출한다.
+   root relay가 native peer attestation 뒤 mTLS를 수행하며 worker는 certificate·private key·kubeconfig를 읽지 않는다.
    공개 요청은 `scripts-dist/seori-auth-agent-client.cjs` stdin으로 보내며 bearer, certificate, attestation을 argv나
    JSON에 넣지 않는다.
 7. `platform-fleet-reconcile-v1` claim은 `issueNumber=null`, strict `taskInput`, 현재 repo source SHA 일치를 검증한다. exact SDK/vendor와 PR marker 외의 변경, Project field 기반 claim, 계약 feature 활성화·upload·실기기 QA·공개 rollout을 거부한다.
@@ -55,6 +57,7 @@ Codex와 Claude worker는 앱별로 설치하지 않는다. 기존 generic worke
    프로세스 종료 fixture는 구현됐다. lease 만료 뒤 새 `READBACK_FIRST` session은 `GITHUB_READY_PR_READBACK`으로
    서버가 선택한 기존 execution을 write 없이 확인하고, current-session readback audit 뒤 같은 execution의 최초 미완료
    step만 새 TTL로 재개한다. 실제 private repository canary에서 같은 증거를 확인한다.
-5. native peer attestor 또는 worker별 전용 OS UID/launchd 경계가 없으면 local transport는 계속 비활성화한다.
+5. 중앙 `.github` macOS agent relay의 exact source, native helper SHA-256, root-owned config와 worker별
+   UID/GID·socket·certificate·고정 runtime 통신 경로가 일치하지 않으면 local transport를 활성화하지 않는다.
 6. 실제 canary 별도 검토에서 runtime gate를 열고 runtime Ready와 서명 readback을 확인한 다음에만 Backoffice
    `AGENT_TRUSTED_ADAPTER_DEPLOYED`를 `true`로 배포한다. 현재 revision에서는 이 단계로 갈 수 없다.

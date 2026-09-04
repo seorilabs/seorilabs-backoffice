@@ -1,17 +1,45 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 
 import {
+  assertPrivateAgentRelaySocket,
   assertPublicAgentResponse,
   parseExactHttpsOrigin,
   readBoundSecretFile,
   serializePublicAgentResponse,
   workerIdentityFromMtlsPeer,
 } from "@/lib/control-plane/seori-auth-agent-transport";
+
+test("worker client는 root relay가 만든 자기 UID/GID의 0600 Unix socket만 허용한다", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "seori-auth-relay-socket-")));
+  const socketPath = join(root, "relay.sock");
+  const server = createServer((_request, response) => response.end());
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    await chmod(socketPath, 0o600);
+    await chmod(root, 0o711);
+    await assertPrivateAgentRelaySocket(socketPath, { expectedDirectoryUid: process.getuid?.() });
+    await chmod(socketPath, 0o660);
+    await assert.rejects(
+      assertPrivateAgentRelaySocket(socketPath, { expectedDirectoryUid: process.getuid?.() }),
+      /SEORI_AUTH_RELAY_SOCKET_UNSAFE/u,
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("helper는 exact HTTPS origin과 exact mTLS SPIFFE principal만 허용한다", () => {
   assert.equal(parseExactHttpsOrigin("https://backoffice.example").origin, "https://backoffice.example");
@@ -139,6 +167,7 @@ test("K8s runtime과 client는 기본 scale 0, no service-account token, RPI5, �
   assert.match(runtime, /READY_PR_RUNTIME_OPERATIONAL = false/u);
   assert.doesNotMatch(runtime, /SEORI_AUTH_LOCAL_WORKER_PRINCIPAL|createHttpServer|SEORI_AUTH_AGENT_SOCKET/u);
   const client = readFileSync(join(process.cwd(), "scripts/seori-auth-agent-client.ts"), "utf8");
-  assert.match(client, /z\.literal\("mtls"\)/u);
-  assert.doesNotMatch(client, /from "node:http"|httpRequest|SEORI_AUTH_AGENT_SOCKET|assertPrivateUnixSocket|\["unix",\s*"mtls"\]/u);
+  assert.match(client, /z\.literal\("unix-relay"\)/u);
+  assert.match(client, /from "node:http"|httpRequest|SEORI_AUTH_AGENT_SOCKET|assertPrivateAgentRelaySocket/u);
+  assert.doesNotMatch(client, /from "node:https"|httpsRequest|SEORI_AUTH_AGENT_CLIENT_ROOT|SEORI_AUTH_AGENT_ORIGIN|tls\.key|privateKeyPath/u);
 });

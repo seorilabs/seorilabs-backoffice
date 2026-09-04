@@ -55,6 +55,39 @@ export const seoriAuthPublicRequestSchema = z.object({
 
 export type SeoriAuthPublicRequest = z.infer<typeof seoriAuthPublicRequestSchema>;
 
+/** root relay가 만든 worker 전용 active Unix socket만 허용한다. */
+export async function assertPrivateAgentRelaySocket(
+  socketPath: string,
+  options: { expectedDirectoryUid?: number } = {},
+): Promise<void> {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  const directoryUid = options.expectedDirectoryUid ?? 0;
+  if (
+    !Number.isSafeInteger(uid) || !Number.isSafeInteger(gid)
+    || !Number.isSafeInteger(directoryUid) || directoryUid < 0
+    || !isAbsolute(socketPath) || socketPath.includes("\0")
+  ) throw new Error("SEORI_AUTH_RELAY_SOCKET_IDENTITY_INVALID");
+  const parent = dirname(socketPath);
+  const [parentEntry, canonicalParent] = await Promise.all([lstat(parent), realpath(parent)]);
+  if (
+    !parentEntry.isDirectory()
+    || parentEntry.isSymbolicLink()
+    || canonicalParent !== parent
+    || parentEntry.uid !== directoryUid
+    || (parentEntry.mode & 0o777) !== 0o711
+  ) throw new Error("SEORI_AUTH_RELAY_SOCKET_DIRECTORY_UNSAFE");
+  const [entry, canonical] = await Promise.all([lstat(socketPath), realpath(socketPath)]);
+  if (
+    !entry.isSocket()
+    || entry.isSymbolicLink()
+    || canonical !== socketPath
+    || entry.uid !== uid
+    || entry.gid !== gid
+    || (entry.mode & 0o777) !== 0o600
+  ) throw new Error("SEORI_AUTH_RELAY_SOCKET_UNSAFE");
+}
+
 /** URL의 path나 userinfo를 허용하지 않아 look-alike endpoint로 credential이 나가지 않게 한다. */
 export function parseExactHttpsOrigin(value: string): URL {
   const origin = new URL(value);

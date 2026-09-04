@@ -9,9 +9,11 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assessConfigSourceAutoRebaseSafety,
   assertConfigRevisionReplay,
+  assertLegacyFleetComplianceDraftMigration,
   assertConfigRevisionRebaseSource,
   assertCurrentConfigSourceBinding,
   assertManagedProductConfigSourceBinding,
+  assertExpectedActiveConfigRevision,
   assertExpectedConfigSourceSha,
   assertExpectedLatestConfigRevision,
   configSourceBindingsMatch,
@@ -89,6 +91,31 @@ function replayFixture(contractVersion: string | null = CONFIG_REVISION_SOURCE_R
   };
 }
 
+function legacyComplianceReplayFixture() {
+  const stored = {
+    ...replayFixture(null),
+    id: "config-compliance-legacy",
+    status: "DRAFT" as const,
+    idempotencyKey: "ui-compliance-batch-create:11111111-1111-4111-8111-111111111111",
+  };
+  return {
+    stored,
+    auditPayload: {
+      appId: stored.appId,
+      repoId: REPO_ID.toString(),
+      revision: stored.revision,
+      expectedLatestRevision: 7,
+      payloadHash: stored.payloadHash,
+      sourceObservationId: stored.sourceObservationId,
+      sourceSha: SOURCE_SHA,
+      expectedSourceSha: SOURCE_SHA,
+      observationPayloadHash: stored.sourceObservation!.payloadHash,
+      contractVersion: "config-revision-manual-source/v1",
+      activationAttempted: false,
+    },
+  };
+}
+
 test("MANAGED PRODUCT_APP의 exact registered default branch discovery만 ConfigRevision source가 된다", () => {
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture()));
   assert.doesNotThrow(() => assertCurrentConfigSourceBinding(sourceFixture("ACTIVE", "develop")));
@@ -161,6 +188,31 @@ test("discovery projection 요청은 DRAFT_ONLY를 명시해야 한다", () => {
   }).success, true);
 });
 
+test("기존 Compliance DRAFT 이관은 exact 요청과 생성 감사 근거를 모두 요구한다", () => {
+  const fixture = legacyComplianceReplayFixture();
+  const exact = {
+    ...fixture,
+    repoId: REPO_ID,
+    actor: fixture.stored.createdBy,
+    expectedLatestRevision: 7,
+    payloadHash: fixture.stored.payloadHash,
+    expectedSourceSha: SOURCE_SHA,
+  };
+  assert.doesNotThrow(() => assertLegacyFleetComplianceDraftMigration(exact));
+  for (const changed of [
+    { ...exact, stored: { ...exact.stored, status: "ACTIVE" as const } },
+    { ...exact, stored: { ...exact.stored, idempotencyKey: "ui-config-create:spoof" } },
+    { ...exact, auditPayload: { ...exact.auditPayload, activationAttempted: true } },
+    { ...exact, auditPayload: { ...exact.auditPayload, payloadHash: "f".repeat(64) } },
+  ]) {
+    assert.throws(
+      () => assertLegacyFleetComplianceDraftMigration(changed),
+      (error) => error instanceof ControlPlaneError
+        && error.code === "COMPLIANCE_DRAFT_MIGRATION_PROVENANCE_MISMATCH",
+    );
+  }
+});
+
 test("source app identity와 ref drift를 fail-closed한다", () => {
   const wrongApp = sourceFixture();
   wrongApp.observation.appId = "app-other";
@@ -203,6 +255,22 @@ test("create/rebase는 latest revision optimistic concurrency를 강제한다", 
     () => assertExpectedLatestConfigRevision({ expectedLatestRevision: 6, actualLatestRevision: 7 }),
     (error) => error instanceof ControlPlaneError && error.code === "REVISION_CONFLICT",
   );
+});
+
+test("Compliance DRAFT create는 잠금 시점 ACTIVE revision 하나를 exact 비교한다", () => {
+  assert.doesNotThrow(() => assertExpectedActiveConfigRevision({
+    expectedActiveRevision: 7,
+    actualActiveRevisions: [7],
+  }));
+  for (const actualActiveRevisions of [[], [6], [7, 6]]) {
+    assert.throws(
+      () => assertExpectedActiveConfigRevision({
+        expectedActiveRevision: 7,
+        actualActiveRevisions,
+      }),
+      (error) => error instanceof ControlPlaneError && error.code === "ACTIVE_REVISION_CHANGED",
+    );
+  }
 });
 
 test("사람 batch create는 current discovery의 exact source SHA를 강제한다", () => {
@@ -312,11 +380,14 @@ test("일반 rebase는 legacy DRAFT를 거부하고 semantic source가 같으면
   assert.throws(
     () => assertConfigRevisionRebaseSource({
       status: "DRAFT",
-      idempotencyKey: "legacy-shadow-draft:example",
       legacyConfigImport: { id: "legacy-import-1" },
     }),
     (error) => error instanceof ControlPlaneError && error.code === "CONFIG_REVISION_NOT_REBASABLE",
   );
+  assert.doesNotThrow(() => assertConfigRevisionRebaseSource({
+    status: "DRAFT",
+    legacyConfigImport: null,
+  }));
   const left = sourceFixture().observation;
   const right = { ...sourceFixture().observation, id: "same-facts-new-row" };
   assert.equal(configSourceBindingsMatch(left, right), true);

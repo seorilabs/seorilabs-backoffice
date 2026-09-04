@@ -2,8 +2,8 @@
 
 이 템플릿은 Claude 예약 작업 하나가 모든 앱별 routine을 공통 큐에서 소진하도록 하는 공개 prompt 계약이다. 설치는 사용자 승인 뒤 Claude UI에서 한 번만 수행한다. 앱별 예약 작업을 추가하지 않는다.
 
-1. `seorilabs-worker-contract.v1.json`의 `claim`을 K8s mTLS `seori-auth` helper로 호출한다. helper가
-   per-instance client certificate binding, `agentKind=CLAUDE`, `claude:seorilabs-generic-worker` workload identity와
+1. `seorilabs-worker-contract.v1.json`의 `claim`을 worker 전용 Unix socket의 `seori-auth` helper로 호출한다. root relay가
+   native peer UID/GID/PID, per-instance client certificate binding, `agentKind=CLAUDE`, `claude:seorilabs-generic-worker` workload identity와
    idempotency key를 결합하며 모델에는 bearer, lease, grant 값을 반환하지 않는다.
 2. claim이 없으면 정상 종료하며, queue 밖의 Issue나 PR을 새로 만들지 않는다.
 3. `template=repo-task-autopilot-v1`과 지정된 repo/issue만 처리한다. 현재 GitHub state/label을 readback하고 승인 gate가 있으면 중단한다. `platform-fleet-reconcile-v1`은 CODEX 전용이므로 Claude에 반환되면 구성 오류로 mutation 없이 `fail`한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.

@@ -43,6 +43,46 @@ const PLATFORM_REPOSITORY = "platform";
 const FULL_PARITY_SCOPE = "FULL";
 const SHA_40 = /^[0-9a-f]{40}$/i;
 
+export type LegacyConfigImportStatus =
+  | "DRAFT_CREATED"
+  | "DRAFT_CREATED_WITH_INPUT"
+  | "NEEDS_INPUT"
+  | "RESOLUTION_REUSED";
+
+export function planLegacyConfigImportPersistence(input: {
+  transformStatus: LegacyTransformResult["status"];
+  resolutionParityStatus: LegacyShadowParity["status"] | null;
+}): { createDraft: boolean; status: LegacyConfigImportStatus } {
+  if (input.resolutionParityStatus === "MATCH" && input.transformStatus !== "DRAFTABLE") {
+    return { createDraft: false, status: "RESOLUTION_REUSED" };
+  }
+  if (input.transformStatus === "DRAFTABLE") {
+    return { createDraft: true, status: "DRAFT_CREATED" };
+  }
+  if (input.transformStatus === "DRAFTABLE_WITH_INPUT") {
+    return { createDraft: true, status: "DRAFT_CREATED_WITH_INPUT" };
+  }
+  return { createDraft: false, status: "NEEDS_INPUT" };
+}
+
+export function legacyConfigResolutionObservationBinding(input: {
+  resolutionParityStatus: LegacyShadowParity["status"] | null;
+  applicableResolution: {
+    resolution: { id: string } | null;
+    centralStateDigest: string;
+  } | null;
+}): { legacyConfigResolutionId: string | null; centralStateDigest: string | null } {
+  const resolution = input.resolutionParityStatus === "MATCH"
+    ? input.applicableResolution?.resolution ?? null
+    : null;
+  return {
+    legacyConfigResolutionId: resolution?.id ?? null,
+    centralStateDigest: resolution && input.applicableResolution
+      ? input.applicableResolution.centralStateDigest
+      : null,
+  };
+}
+
 type PlatformSourceVector = {
   repoId: bigint;
   repoFullName: string;
@@ -740,8 +780,41 @@ export async function recordLegacyShadowImport(input: {
         orderBy: { revision: "desc" },
         select: { id: true, payload: true, payloadHash: true },
       });
+      const applicableResolution = active && transformed.status !== "DRAFTABLE"
+        ? await findApplicableLegacyConfigResolution(tx, {
+            appId: app.id,
+            sourceSha,
+            transformVersion: LEGACY_TRANSFORM_VERSION,
+            inputDigest,
+            reasonCodesDigest,
+            configRevisionId: active.id,
+          })
+        : null;
+      // 기존 resolution row의 존재만으로 재사용을 선언하지 않는다. 현재 ACTIVE의
+      // representable subset까지 실제 MATCH한 경우에만 resolution을 재사용한다.
+      const resolutionParity = applicableResolution
+        ? applyLegacyConfigResolution({
+            transform: transformed,
+            persistedInputDigest: inputDigest,
+            sourceSha,
+            configRevisionId: active!.id,
+            centralPayload: active!.payload,
+            centralStateDigest: applicableResolution.centralStateDigest,
+            resolution: applicableResolution.resolution,
+          })
+        : null;
+      const resolutionBinding = legacyConfigResolutionObservationBinding({
+        resolutionParityStatus: resolutionParity?.status ?? null,
+        applicableResolution,
+      });
+      const parity = resolutionParity
+        ?? compareLegacyShadow(transformed, active?.payload ?? null);
+      const persistencePlan = planLegacyConfigImportPersistence({
+        transformStatus: transformed.status,
+        resolutionParityStatus: resolutionParity?.status ?? null,
+      });
       let draft = null;
-      if (transformed.status !== "NEEDS_INPUT") {
+      if (persistencePlan.createDraft) {
         assertConfigRevisionPayload(transformed.payload);
         draft = await createDraftRevisionInTransaction(tx, {
           appId: app.id,
@@ -762,11 +835,7 @@ export async function recordLegacyShadowImport(input: {
           inputDigest,
           reasonCodes: jsonInput(reasonCodes),
           reasonCodesDigest,
-          status: transformed.status === "DRAFTABLE"
-            ? "DRAFT_CREATED"
-            : transformed.status === "DRAFTABLE_WITH_INPUT"
-              ? "DRAFT_CREATED_WITH_INPUT"
-              : "NEEDS_INPUT",
+          status: persistencePlan.status,
           idempotencyKey: storedIdempotencyKey,
           configRevisionId: draft?.id,
           observedBy: input.observedBy,
@@ -804,27 +873,6 @@ export async function recordLegacyShadowImport(input: {
       // Import가 생성한 DRAFT 자체와 비교하면 tautological MATCH가 되므로 금지한다.
       // 검토가 필요한 source는 exact source/input/reason/ACTIVE 중앙 상태에 묶인
       // append-only resolution이 있을 때만 MATCH로 승격한다.
-      const applicableResolution = active && transformed.status !== "DRAFTABLE"
-        ? await findApplicableLegacyConfigResolution(tx, {
-            appId: app.id,
-            sourceSha,
-            transformVersion: LEGACY_TRANSFORM_VERSION,
-            inputDigest,
-            reasonCodesDigest,
-            configRevisionId: active.id,
-          })
-        : null;
-      const parity = applicableResolution
-        ? applyLegacyConfigResolution({
-            transform: transformed,
-            persistedInputDigest: inputDigest,
-            sourceSha,
-            configRevisionId: active!.id,
-            centralPayload: active!.payload,
-            centralStateDigest: applicableResolution.centralStateDigest,
-            resolution: applicableResolution.resolution,
-          }) ?? compareLegacyShadow(transformed, active?.payload ?? null)
-        : compareLegacyShadow(transformed, active?.payload ?? null);
       const diff = persistedDiff(transformed, parity);
       const dedupeKey = jsonDigest({
         appId: app.id,
@@ -835,15 +883,15 @@ export async function recordLegacyShadowImport(input: {
         scope: FULL_PARITY_SCOPE,
         centralConfigRevisionId: active?.id ?? null,
         centralPayloadHash: active?.payloadHash ?? null,
-        legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
-        centralStateDigest: applicableResolution?.centralStateDigest ?? null,
+        legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId,
+        centralStateDigest: resolutionBinding.centralStateDigest,
       } as JsonValue);
       const parityObservation = await tx.shadowParityObservation.create({
         data: {
           appId: app.id,
           legacyImportId: legacyImport.id,
           configRevisionId: active?.id,
-          legacyConfigResolutionId: applicableResolution?.resolution?.id,
+          legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId ?? undefined,
           sourceSha,
           scope: FULL_PARITY_SCOPE,
           contractVersion: LEGACY_TRANSFORM_VERSION,
@@ -882,7 +930,7 @@ export async function recordLegacyShadowImport(input: {
               ? [...new Set(transformed.reasons.map((reason) => reason.code))].sort()
               : [],
             reasonCodesDigest,
-            legacyConfigResolutionId: applicableResolution?.resolution?.id ?? null,
+            legacyConfigResolutionId: resolutionBinding.legacyConfigResolutionId,
           },
         },
       });

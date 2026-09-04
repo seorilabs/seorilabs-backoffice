@@ -263,6 +263,10 @@ export const CONFIG_REVISION_SOURCE_AUTO_REBASE_CONTRACT_VERSION =
   "config-revision-source-auto-rebase/v1";
 export const CONFIG_REVISION_DISCOVERY_PROJECTION_CONTRACT_VERSION =
   "config-revision-discovery-projection/v2";
+const CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX =
+  "config-revision-fleet-compliance/v1:";
+const FLEET_COMPLIANCE_CREATE_KEY =
+  /^ui-compliance-batch-create:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const SHA_40 = /^[0-9a-f]{40}$/;
 const DIGEST_64 = /^[0-9a-f]{64}$/;
@@ -427,6 +431,22 @@ export function assertExpectedLatestConfigRevision(input: {
   }
 }
 
+export function assertExpectedActiveConfigRevision(input: {
+  expectedActiveRevision: number;
+  actualActiveRevisions: number[];
+}): void {
+  if (
+    input.actualActiveRevisions.length !== 1
+    || input.actualActiveRevisions[0] !== input.expectedActiveRevision
+  ) {
+    throw new ControlPlaneError(
+      `ACTIVE Config revision 변경: expected=${input.expectedActiveRevision}, actual=${input.actualActiveRevisions.join(",") || "missing"}`,
+      409,
+      "ACTIVE_REVISION_CHANGED",
+    );
+  }
+}
+
 export function assertExpectedConfigSourceSha(input: {
   expectedSourceSha?: string;
   actualSourceSha: string;
@@ -454,6 +474,9 @@ type ConfigRevisionReplay = {
   app: { id: string; repoId: bigint | null };
   sourceObservation: ConfigSourceObservation | null;
 };
+
+type LegacyFleetComplianceDraftReplay = ConfigRevisionReplay
+  & Pick<ConfigRevision, "id" | "status" | "idempotencyKey">;
 
 /** 별도 requestHash column 없이도 모든 caller 입력을 immutable row identity로 검증한다. */
 export function assertConfigRevisionReplay(input: {
@@ -510,13 +533,11 @@ export function assertConfigRevisionReplay(input: {
 
 export function assertConfigRevisionRebaseSource(input: {
   status: string;
-  idempotencyKey: string;
   legacyConfigImport: { id: string } | null;
 }): void {
   if (
     !["DRAFT", "ACTIVE"].includes(input.status)
     || input.legacyConfigImport
-    || input.idempotencyKey.startsWith("legacy-shadow-draft:")
   ) {
     throw new ControlPlaneError(
       "latest DRAFT 또는 ACTIVE revision만 source rebase할 수 있습니다.",
@@ -597,7 +618,6 @@ export function assessConfigSourceAutoRebaseSafety(input: {
 export function isLegacyDiscoveryProjectionSource(input: {
   revisionId: string;
   status: string;
-  idempotencyKey: string;
   legacyConfigImport: {
     id: string;
     configRevisionId: string | null;
@@ -608,7 +628,6 @@ export function isLegacyDiscoveryProjectionSource(input: {
 }): boolean {
   const legacyImport = input.legacyConfigImport;
   return input.status === "DRAFT"
-    && input.idempotencyKey.startsWith("legacy-shadow-draft:")
     && legacyImport !== null
     && legacyImport.configRevisionId === input.revisionId
     && ["DRAFT_CREATED", "DRAFT_CREATED_WITH_INPUT"].includes(legacyImport.status)
@@ -1093,7 +1112,139 @@ type ConfigRevisionMutationIdentity = {
   contractVersion: string | null;
   payloadHash?: string;
   expectedSourceSha?: string;
+  draftIsolationAfterRevision?: number;
 };
+
+function fleetComplianceDraftContractVersion(idempotencyKey: string): string {
+  return `${CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX}${jsonDigest(idempotencyKey).slice(0, 28)}`;
+}
+
+function complianceDraftMigrationFailure(): never {
+  throw new ControlPlaneError(
+    "기존 Compliance DRAFT의 생성 근거가 현재 요청과 일치하지 않습니다.",
+    409,
+    "COMPLIANCE_DRAFT_MIGRATION_PROVENANCE_MISMATCH",
+  );
+}
+
+export function assertLegacyFleetComplianceDraftMigration(input: {
+  stored: LegacyFleetComplianceDraftReplay;
+  auditPayload: Prisma.JsonValue | null;
+  repoId: bigint;
+  actor: string;
+  expectedLatestRevision: number;
+  payloadHash: string;
+  expectedSourceSha: string;
+}): void {
+  if (
+    !FLEET_COMPLIANCE_CREATE_KEY.test(input.stored.idempotencyKey)
+    || input.stored.status !== "DRAFT"
+    || input.stored.backfillContractVersion !== null
+  ) {
+    complianceDraftMigrationFailure();
+  }
+  try {
+    assertConfigRevisionReplay({
+      stored: input.stored,
+      repoId: input.repoId,
+      actor: input.actor,
+      expectedLatestRevision: input.expectedLatestRevision,
+      contractVersion: null,
+      payloadHash: input.payloadHash,
+      expectedSourceSha: input.expectedSourceSha,
+    });
+  } catch {
+    complianceDraftMigrationFailure();
+  }
+  const sourceObservation = input.stored.sourceObservation!;
+  const expectedAuditPayload = {
+    appId: input.stored.appId,
+    repoId: input.repoId.toString(),
+    revision: input.stored.revision,
+    expectedLatestRevision: input.expectedLatestRevision,
+    payloadHash: input.payloadHash,
+    sourceObservationId: sourceObservation.id,
+    sourceSha: sourceObservation.sourceSha,
+    expectedSourceSha: input.expectedSourceSha,
+    observationPayloadHash: sourceObservation.payloadHash,
+    contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+    activationAttempted: false,
+  };
+  if (
+    input.auditPayload === null
+    || jsonDigest(input.auditPayload as JsonValue)
+      !== jsonDigest(expectedAuditPayload as JsonValue)
+  ) {
+    complianceDraftMigrationFailure();
+  }
+}
+
+async function migrateLegacyFleetComplianceDraft<T extends LegacyFleetComplianceDraftReplay>(
+  tx: Prisma.TransactionClient,
+  input: {
+    stored: T;
+    repoId: bigint;
+    actor: string;
+    expectedLatestRevision: number;
+    payloadHash: string;
+    expectedSourceSha: string;
+    contractVersion: string;
+  },
+): Promise<T> {
+  if (input.stored.backfillContractVersion !== null) return input.stored;
+  const createAudits = await tx.auditLog.findMany({
+    where: {
+      action: "control-plane.config.create",
+      entityType: "ConfigRevision",
+      entityId: input.stored.id,
+      actorLogin: input.actor,
+    },
+    orderBy: { createdAt: "asc" },
+    take: 2,
+    select: { payload: true },
+  });
+  if (createAudits.length !== 1) complianceDraftMigrationFailure();
+  assertLegacyFleetComplianceDraftMigration({
+    stored: input.stored,
+    auditPayload: createAudits[0]!.payload,
+    repoId: input.repoId,
+    actor: input.actor,
+    expectedLatestRevision: input.expectedLatestRevision,
+    payloadHash: input.payloadHash,
+    expectedSourceSha: input.expectedSourceSha,
+  });
+  const migrated = await tx.configRevision.updateMany({
+    where: {
+      id: input.stored.id,
+      appId: input.stored.appId,
+      status: "DRAFT",
+      idempotencyKey: input.stored.idempotencyKey,
+      sourceObservationId: input.stored.sourceObservationId,
+      payloadHash: input.stored.payloadHash,
+      createdBy: input.stored.createdBy,
+      backfillContractVersion: null,
+    },
+    data: { backfillContractVersion: input.contractVersion },
+  });
+  if (migrated.count !== 1) complianceDraftMigrationFailure();
+  await tx.auditLog.create({
+    data: {
+      actorLogin: input.actor,
+      action: "control-plane.config.compliance-contract-migrated",
+      entityType: "ConfigRevision",
+      entityId: input.stored.id,
+      payload: {
+        appId: input.stored.appId,
+        repoId: input.repoId.toString(),
+        revision: input.stored.revision,
+        sourceObservationId: input.stored.sourceObservationId,
+        payloadHash: input.stored.payloadHash,
+        contractVersion: input.contractVersion,
+      },
+    },
+  });
+  return { ...input.stored, backfillContractVersion: input.contractVersion };
+}
 
 async function runConfigRevisionMutation(
   identity: ConfigRevisionMutationIdentity,
@@ -1109,11 +1260,68 @@ async function runConfigRevisionMutation(
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
       throw error;
     }
+    if (identity.draftIsolationAfterRevision !== undefined) {
+      throw new ControlPlaneError(
+        "Compliance Config revision 동시 생성 결과를 잠금 밖에서 재사용하지 않습니다. 다시 시도하세요.",
+        409,
+        "REVISION_CONFLICT",
+      );
+    }
     const replay = await configRevisionReplayForKey(prisma, identity.idempotencyKey);
     if (!replay) throw error;
     assertConfigRevisionReplay({ stored: replay, ...identity });
     return { revision: replay, sourceObservation: replay.sourceObservation!, duplicate: true };
   }
+}
+
+async function assertNoCompetingComplianceDraft(
+  tx: Prisma.TransactionClient,
+  input: {
+    appId: string;
+    afterRevision: number;
+    excludedId?: string;
+    excludedIdempotencyKey?: string;
+  },
+) {
+  const excluded: Prisma.ConfigRevisionWhereInput[] = [
+    ...(input.excludedId ? [{ id: input.excludedId }] : []),
+    ...(input.excludedIdempotencyKey
+      ? [{ idempotencyKey: input.excludedIdempotencyKey }]
+      : []),
+  ];
+  const competing = await tx.configRevision.findFirst({
+    where: {
+      appId: input.appId,
+      revision: { gt: input.afterRevision },
+      status: "DRAFT",
+      legacyConfigImport: { is: null },
+      NOT: excluded,
+    },
+    select: { id: true },
+  });
+  if (competing) {
+    throw new ControlPlaneError(
+      "ACTIVE 이후 사람이 만든 다른 Config revision DRAFT가 있습니다.",
+      409,
+      "LATEST_DRAFT_EXISTS",
+    );
+  }
+}
+
+async function assertLockedComplianceActiveRevision(
+  tx: Prisma.TransactionClient,
+  input: { appId: string; expectedActiveRevision: number },
+) {
+  const active = await tx.configRevision.findMany({
+    where: { appId: input.appId, status: "ACTIVE" },
+    orderBy: { revision: "desc" },
+    take: 2,
+    select: { revision: true },
+  });
+  assertExpectedActiveConfigRevision({
+    expectedActiveRevision: input.expectedActiveRevision,
+    actualActiveRevisions: active.map((revision) => revision.revision),
+  });
 }
 
 export async function createConfigRevision(input: {
@@ -1123,17 +1331,49 @@ export async function createConfigRevision(input: {
   actor: string;
   idempotencyKey: string;
   expectedSourceSha?: string;
+  draftIsolationAfterRevision?: number;
 }) {
+  const complianceCreateKey = FLEET_COMPLIANCE_CREATE_KEY.test(input.idempotencyKey);
+  if (
+    input.draftIsolationAfterRevision !== undefined
+    && (!Number.isSafeInteger(input.draftIsolationAfterRevision)
+      || input.draftIsolationAfterRevision < 1)
+  ) {
+    throw new ControlPlaneError(
+      "Compliance DRAFT 격리 revision이 올바르지 않습니다.",
+      400,
+      "INVALID_DRAFT_ISOLATION_REVISION",
+    );
+  }
+  if (
+    (input.draftIsolationAfterRevision !== undefined && (
+      !complianceCreateKey
+      || input.expectedSourceSha === undefined
+      || !SHA_40.test(input.expectedSourceSha)
+    ))
+    || (input.draftIsolationAfterRevision === undefined && complianceCreateKey)
+  ) {
+    throw new ControlPlaneError(
+      "Compliance DRAFT 요청 identity가 올바르지 않습니다.",
+      400,
+      "INVALID_COMPLIANCE_DRAFT_IDENTITY",
+    );
+  }
   assertConfigRevisionPayload(input.payload);
   const payloadHash = jsonDigest(input.payload as JsonValue);
-  const replay = await configRevisionReplayForKey(prisma, input.idempotencyKey);
+  const contractVersion = input.draftIsolationAfterRevision === undefined
+    ? null
+    : fleetComplianceDraftContractVersion(input.idempotencyKey);
+  const replay = input.draftIsolationAfterRevision === undefined
+    ? await configRevisionReplayForKey(prisma, input.idempotencyKey)
+    : null;
   if (replay) {
     assertConfigRevisionReplay({
       stored: replay,
       repoId: input.repoId,
       actor: input.actor,
       expectedLatestRevision: input.expectedLatestRevision,
-      contractVersion: null,
+      contractVersion,
       payloadHash,
       expectedSourceSha: input.expectedSourceSha,
     });
@@ -1145,32 +1385,64 @@ export async function createConfigRevision(input: {
     actor: input.actor,
     expectedLatestRevision: input.expectedLatestRevision,
     idempotencyKey: input.idempotencyKey,
-    contractVersion: null,
+    contractVersion,
     payloadHash,
     expectedSourceSha: input.expectedSourceSha,
+    draftIsolationAfterRevision: input.draftIsolationAfterRevision,
   }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
-    const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
-    if (afterLockReplay) {
-      assertConfigRevisionReplay({
-        stored: afterLockReplay,
-        repoId: input.repoId,
-        actor: input.actor,
-        expectedLatestRevision: input.expectedLatestRevision,
-        contractVersion: null,
-        payloadHash,
-        expectedSourceSha: input.expectedSourceSha,
-      });
-      return {
-        revision: afterLockReplay,
-        sourceObservation: afterLockReplay.sourceObservation!,
-        duplicate: true,
-      };
-    }
     assertExpectedConfigSourceSha({
       expectedSourceSha: input.expectedSourceSha,
       actualSourceSha: source.observation.sourceSha,
     });
+    if (input.draftIsolationAfterRevision !== undefined) {
+      await assertLockedComplianceActiveRevision(tx, {
+        appId: source.app.id,
+        expectedActiveRevision: input.draftIsolationAfterRevision,
+      });
+    }
+    const afterLockReplay = await configRevisionReplayForKey(tx, input.idempotencyKey);
+    if (afterLockReplay) {
+      const validatedReplay = input.draftIsolationAfterRevision === undefined
+        ? afterLockReplay
+        : await migrateLegacyFleetComplianceDraft(tx, {
+            stored: afterLockReplay,
+            repoId: input.repoId,
+            actor: input.actor,
+            expectedLatestRevision: input.expectedLatestRevision,
+            payloadHash,
+            expectedSourceSha: input.expectedSourceSha!,
+            contractVersion: contractVersion!,
+          });
+      assertConfigRevisionReplay({
+        stored: validatedReplay,
+        repoId: input.repoId,
+        actor: input.actor,
+        expectedLatestRevision: input.expectedLatestRevision,
+        contractVersion,
+        payloadHash,
+        expectedSourceSha: input.expectedSourceSha,
+      });
+      if (input.draftIsolationAfterRevision !== undefined) {
+        await assertNoCompetingComplianceDraft(tx, {
+          appId: source.app.id,
+          afterRevision: input.draftIsolationAfterRevision,
+          excludedIdempotencyKey: input.idempotencyKey,
+        });
+      }
+      return {
+        revision: validatedReplay,
+        sourceObservation: validatedReplay.sourceObservation!,
+        duplicate: true,
+      };
+    }
+    if (input.draftIsolationAfterRevision !== undefined) {
+      await assertNoCompetingComplianceDraft(tx, {
+        appId: source.app.id,
+        afterRevision: input.draftIsolationAfterRevision,
+        excludedIdempotencyKey: input.idempotencyKey,
+      });
+    }
     assertExpectedLatestConfigRevision({
       expectedLatestRevision: input.expectedLatestRevision,
       actualLatestRevision: await latestConfigRevisionNumber(tx, source.app.id),
@@ -1182,6 +1454,7 @@ export async function createConfigRevision(input: {
       createdBy: input.actor,
       idempotencyKey: input.idempotencyKey,
       sourceObservationId: source.observation.id,
+      ...(contractVersion ? { backfillContractVersion: contractVersion } : {}),
     });
     await tx.auditLog.create({
       data: {
@@ -1199,7 +1472,7 @@ export async function createConfigRevision(input: {
           sourceSha: source.observation.sourceSha,
           expectedSourceSha: input.expectedSourceSha ?? null,
           observationPayloadHash: source.observation.payloadHash,
-          contractVersion: CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
+          contractVersion: contractVersion ?? CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
           activationAttempted: false,
         },
       },
@@ -1421,7 +1694,6 @@ export async function createDiscoveryProjectedConfigRevision(input: {
         ? {
             revisionId: fromRevision.id,
             status: fromRevision.status,
-            idempotencyKey: fromRevision.idempotencyKey,
             legacyConfigImport: fromRevision.legacyConfigImport,
           }
         : null,
@@ -1510,7 +1782,45 @@ type ConfigRevisionActivationInput = {
   actor: string;
   idempotencyKey: string;
   signingKey: string;
+  complianceDraftGuard?: {
+    createIdempotencyKey: string;
+    afterRevision: number;
+  };
 };
+
+function assertComplianceActivationBinding(
+  target: Pick<ConfigRevision, "backfillContractVersion" | "idempotencyKey">,
+  input: ConfigRevisionActivationInput,
+): boolean {
+  const marked = target.backfillContractVersion?.startsWith(
+    CONFIG_REVISION_FLEET_COMPLIANCE_CONTRACT_PREFIX,
+  ) ?? false;
+  const guard = input.complianceDraftGuard;
+  if (!guard) {
+    if (marked) {
+      throw new ControlPlaneError(
+        "Compliance DRAFT는 검증된 batch 활성화 경로만 사용할 수 있습니다.",
+        409,
+        "COMPLIANCE_ACTIVATION_CONTEXT_REQUIRED",
+      );
+    }
+    return false;
+  }
+  if (
+    guard.afterRevision !== input.expectedActiveRevision
+    || !FLEET_COMPLIANCE_CREATE_KEY.test(guard.createIdempotencyKey)
+    || target.idempotencyKey !== guard.createIdempotencyKey
+    || target.backfillContractVersion
+      !== fleetComplianceDraftContractVersion(guard.createIdempotencyKey)
+  ) {
+    throw new ControlPlaneError(
+      "Compliance DRAFT activation identity가 일치하지 않습니다.",
+      409,
+      "COMPLIANCE_ACTIVATION_IDENTITY_MISMATCH",
+    );
+  }
+  return true;
+}
 
 async function activateConfigRevisionInTransaction(
   tx: Prisma.TransactionClient,
@@ -1527,6 +1837,7 @@ async function activateConfigRevisionInTransaction(
     include: { legacyConfigImport: { select: { id: true } } },
   });
   if (!target) throw new ControlPlaneError("Config revision을 찾을 수 없습니다.", 404, "REVISION_NOT_FOUND");
+  const complianceActivation = assertComplianceActivationBinding(target, input);
   // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
   assertConfigRevisionPayload(target.payload);
   if (jsonDigest(target.payload as JsonValue) !== target.payloadHash) {
@@ -1540,11 +1851,15 @@ async function activateConfigRevisionInTransaction(
     actualActiveRevision: active?.revision ?? 0,
     expectedActiveRevision: input.expectedActiveRevision,
     targetStatus: target.status,
-    // append-only import relation이 운영자 DB 조작으로 훼손돼도 파생 DRAFT key가
-    // 남아 있는 한 activation을 fail-closed한다.
-    shadowImportId: target.legacyConfigImport?.id
-      ?? (target.idempotencyKey.startsWith("legacy-shadow-draft:") ? target.idempotencyKey : null),
+    shadowImportId: target.legacyConfigImport?.id ?? null,
   });
+  if (complianceActivation) {
+    await assertNoCompetingComplianceDraft(tx, {
+      appId: app.id,
+      afterRevision: input.expectedActiveRevision,
+      excludedId: target.id,
+    });
+  }
 
   const activatedAt = new Date();
   const snapshot = {
@@ -1558,6 +1873,7 @@ async function activateConfigRevisionInTransaction(
     activatedAt: activatedAt.toISOString(),
   } as JsonValue;
   const signed = signSnapshot(snapshot, input.signingKey);
+  let supersededLegacyDraftCount = 0;
 
   if (active) {
     const superseded = await tx.configRevision.updateMany({
@@ -1575,6 +1891,20 @@ async function activateConfigRevisionInTransaction(
     if (superseded.count !== 1) {
       throw new ControlPlaneError("ACTIVE Config revision CAS에 실패했습니다.", 409, "REVISION_CONFLICT");
     }
+  }
+  if (complianceActivation) {
+    const supersededLegacyDrafts = await tx.configRevision.updateMany({
+      where: {
+        appId: app.id,
+        status: "DRAFT",
+        legacyConfigImport: { isNot: null },
+      },
+      data: {
+        status: "SUPERSEDED",
+        supersededAt: activatedAt,
+      },
+    });
+    supersededLegacyDraftCount = supersededLegacyDrafts.count;
   }
   const updated = await tx.configRevision.updateMany({
     where: { id: target.id, status: "DRAFT", activeSlot: null },
@@ -1603,6 +1933,7 @@ async function activateConfigRevisionInTransaction(
         revision: revision.revision,
         previousRevision: active?.revision ?? null,
         snapshotDigest: signed.digest,
+        supersededLegacyDraftCount,
       },
     },
   });
@@ -1622,6 +1953,7 @@ export async function activateConfigRevision(input: ConfigRevisionActivationInpu
         "IDEMPOTENCY_CONFLICT",
       );
     }
+    assertComplianceActivationBinding(replay, input);
     return { revision: replay, duplicate: true };
   }
 
@@ -1757,10 +2089,7 @@ export async function autoRebaseCurrentActiveConfigSource(input: {
     }
     if (
       latest.status === "DRAFT"
-      && (
-        latest.legacyConfigImport
-        || latest.idempotencyKey.startsWith("legacy-shadow-draft:")
-      )
+      && latest.legacyConfigImport
     ) {
       return {
         outcome: "NEEDS_INPUT",

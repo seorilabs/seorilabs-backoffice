@@ -31,6 +31,8 @@ function queue(overrides: Partial<FleetComplianceDraftQueueState> = {}): FleetCo
       ],
       support: { privacyPolicyUrl: "https://example.com/privacy" },
     },
+    pendingNonLegacyDraftRevisions: [],
+    requestedRevisionStates: [],
     latestRevisionState: {
       revision: 7,
       status: "ACTIVE",
@@ -83,6 +85,25 @@ test("Compliance batch는 ACTIVE payload를 보존하고 enabled market 초안�
   );
 });
 
+test("legacy shadow DRAFT 뒤에는 실제 latest revision에서 새 Compliance revision을 만든다", () => {
+  const prepared = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 14,
+      latestRevisionState: {
+        revision: 14,
+        status: "DRAFT",
+        idempotencyKey: "legacy-shadow-draft:generated",
+        payloadHash: "c".repeat(64),
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 14 })],
+  });
+
+  assert.equal(prepared[0]!.mode, "CREATE");
+  assert.equal(prepared[0]!.expectedActiveConfigRevision, 7);
+  assert.equal(prepared[0]!.expectedLatestConfigRevision, 14);
+});
+
 test("enabled market 누락과 credential 후보가 있는 초안은 mutation 전에 거부한다", () => {
   assert.throws(
     () => prepareFleetComplianceDraftBatch({
@@ -130,6 +151,13 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
       latestConfigRevision: 8,
       eligible: false,
       blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [3, 8],
+      requestedRevisionStates: [{
+        revision: 8,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
       latestRevisionState: {
         revision: 8,
         status: "DRAFT",
@@ -143,12 +171,63 @@ test("같은 request의 생성 완료 DRAFT만 idempotent activation 재개를 �
   assert.equal(resumed[0]!.mode, "RESUME");
   assert.equal(resumed[0]!.expectedLatestConfigRevision, 7);
 
+  const resumedAfterLegacyBacklog = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 15,
+      eligible: false,
+      blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [15],
+      requestedRevisionStates: [{
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
+      latestRevisionState: {
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 15 })],
+  });
+
+  assert.equal(resumedAfterLegacyBacklog[0]!.mode, "RESUME");
+  assert.equal(resumedAfterLegacyBacklog[0]!.expectedLatestConfigRevision, 14);
+
+  const resumedBehindNewLegacyDraft = prepareFleetComplianceDraftBatch({
+    queue: [queue({
+      latestConfigRevision: 16,
+      eligible: false,
+      blockers: ["LATEST_DRAFT_EXISTS"],
+      pendingNonLegacyDraftRevisions: [15],
+      requestedRevisionStates: [{
+        revision: 15,
+        status: "DRAFT",
+        idempotencyKey: `ui-compliance-batch-create:${selection().requestId}`,
+        payloadHash: initial.payloadHash,
+      }],
+      latestRevisionState: {
+        revision: 16,
+        status: "DRAFT",
+        idempotencyKey: "legacy-shadow-draft:after-activation-failure",
+        payloadHash: "d".repeat(64),
+      },
+    })],
+    selections: [selection({ expectedLatestConfigRevision: 16 })],
+  });
+
+  assert.equal(resumedBehindNewLegacyDraft[0]!.mode, "RESUME");
+  assert.equal(resumedBehindNewLegacyDraft[0]!.expectedLatestConfigRevision, 14);
+
   assert.throws(
     () => prepareFleetComplianceDraftBatch({
       queue: [queue({
         latestConfigRevision: 8,
         eligible: false,
         blockers: ["LATEST_DRAFT_EXISTS"],
+        pendingNonLegacyDraftRevisions: [8],
         latestRevisionState: {
           revision: 8,
           status: "DRAFT",
@@ -175,7 +254,10 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
 
   assert.ok(action.indexOf("prepareFleetComplianceDraftBatch({") < action.indexOf("createConfigRevision({"));
   assert.match(action, /expectedSourceSha: item\.sourceSha/);
+  assert.match(action, /draftIsolationAfterRevision: item\.expectedActiveConfigRevision/);
   assert.match(action, /activateConfigRevision\(\{/);
+  assert.match(action, /complianceDraftGuard: \{/);
+  assert.match(action, /createIdempotencyKey: `ui-compliance-batch-create:/);
   assert.match(action, /CONTROL_PLANE_SNAPSHOT_SIGNING_KEY/);
   assert.match(action, /stage: "CREATE"/);
   assert.match(action, /stage: "ACTIVATE"/);
@@ -183,4 +265,28 @@ test("server action은 exact source 생성, signed activation, 단계별 결과�
   assert.doesNotMatch(component, /type="password"|secretValue|privateKey|accessToken/i);
   assert.match(component, /selected\.size >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
   assert.match(component, /selectedItems\.length >= FLEET_COMPLIANCE_DRAFT_BATCH_LIMIT/);
+});
+
+test("Compliance queue와 activation은 같은 snapshot과 앱 잠금에서 사람 DRAFT를 재검증한다", () => {
+  const queueSource = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/fleet-compliance-draft-queue.ts"),
+    "utf8",
+  );
+  const serviceSource = readFileSync(
+    join(process.cwd(), "src/lib/control-plane/service.ts"),
+    "utf8",
+  );
+  const activation = serviceSource.slice(
+    serviceSource.indexOf("async function activateConfigRevisionInTransaction"),
+  );
+
+  assert.match(queueSource, /prisma\.\$transaction\(async \(tx\) =>/);
+  assert.match(queueSource, /Prisma\.TransactionIsolationLevel\.RepeatableRead/);
+  assert.ok(activation.indexOf("FOR UPDATE") < activation.indexOf("assertNoCompetingComplianceDraft"));
+  assert.match(serviceSource, /target\.backfillContractVersion/);
+  assert.doesNotMatch(activation, /target\.idempotencyKey\.startsWith\("ui-compliance-batch-create:/);
+  assert.match(serviceSource, /revision: \{ gt: input\.afterRevision \}/);
+  assert.match(serviceSource, /legacyConfigImport: \{ isNot: null \}/);
+  assert.match(queueSource, /legacyConfigImport: \{ is: null \}/);
+  assert.doesNotMatch(activation, /legacy-shadow-draft:/);
 });

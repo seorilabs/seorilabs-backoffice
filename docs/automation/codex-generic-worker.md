@@ -2,8 +2,8 @@
 
 이 템플릿은 Codex 예약 작업 하나가 모든 앱별 routine을 공통 큐에서 소진하도록 하는 공개 prompt 계약이다. 설치는 사용자 승인 뒤 Codex UI에서 한 번만 수행한다. 앱별 예약 작업을 추가하지 않는다.
 
-1. `seorilabs-worker-contract.v1.json`의 `claim`을 K8s mTLS `seori-auth` helper로 호출한다. helper가
-   per-instance client certificate binding, `agentKind=CODEX`, `codex:seorilabs-generic-worker` workload identity와
+1. `seorilabs-worker-contract.v1.json`의 `claim`을 worker 전용 Unix socket의 `seori-auth` helper로 호출한다. root relay가
+   native peer UID/GID/PID, per-instance client certificate binding, `agentKind=CODEX`, `codex:seorilabs-generic-worker` workload identity와
    idempotency key를 결합하며 모델에는 bearer, lease, grant 값을 반환하지 않는다.
 2. claim이 `null`이면 정상 종료한다. 임의의 GitHub Issue를 고르거나 새 Issue를 만들지 않는다.
 3. claim의 `template`을 먼저 확인하고 알 수 없는 template은 mutation 없이 `fail`로 종료한다.

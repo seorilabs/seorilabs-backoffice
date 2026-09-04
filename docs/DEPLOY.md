@@ -439,10 +439,10 @@ Bot이 보낸 일반 알림과 완료된 명령 메시지는 `DISCORD_RETENTION_
 
 P6 agent runtime은 `k8s/seori-auth-agent-runtime.yaml`에 별도로 있고 기본 scale은 0이다. 이 manifest는
 Secret 값을 만들지 않으며 canonical catalog에서 공개 identity를 확인한 실행 복제본만 projected volume으로
-받는다. runtime은 exact SPIFFE client certificate를 사용하는 K8s mTLS만 지원한다. local transport 코드는
-포함하지 않으며 동일 UID Codex/Claude를 구분할 native peer attestor나 전용 OS UID 경계가 구현되기 전에는
-local client와 runtime을 모두 제공하지 않는다.
-client 요청 body는 stdin으로만 받고 bearer/private key 경로나 값을 argv와 stdout에 넣지 않는다.
+받는다. runtime은 exact SPIFFE client certificate를 사용하는 K8s mTLS만 지원한다. worker client는 전용
+OS UID/GID 소유 `0600` Unix socket으로 root relay만 호출한다. root relay가 중앙 `.github` native peer
+attestation 뒤 mTLS를 수행하므로 worker에는 bearer, certificate, private key, kubeconfig를 주지 않는다.
+client 요청 body는 stdin으로만 받고 socket path 외의 요청·인증 데이터를 argv와 stdout에 넣지 않는다.
 runtime과 WorkflowBundle candidate executor의 Internet 443 직접 egress는 금지한다. 두 workload는
 `k8s/seori-auth-egress-proxy.yaml`의 mTLS Service만 호출하며, proxy는 exact client SPIFFE ID별로 허용된 HTTPS hostname을
 따로 결합하고 public DNS answer를 확인한다. proxy Deployment도 기본 replicas 0이며 cert-manager certificate와 실제

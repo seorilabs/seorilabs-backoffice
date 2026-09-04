@@ -4,8 +4,14 @@ import { randomInt, randomUUID } from "node:crypto";
 import { recordFleetParityImport } from "@/lib/control-plane/fleet-parity-import";
 import { jsonDigest } from "@/lib/control-plane/json";
 import { recordLegacyShadowImport } from "@/lib/control-plane/legacy-shadow-service";
-import { LEGACY_SOURCE_DEFINITIONS } from "@/lib/control-plane/legacy-sources";
-import { ControlPlaneError } from "@/lib/control-plane/service";
+import { LEGACY_SOURCE_DEFINITIONS, LEGACY_TRANSFORM_VERSION } from "@/lib/control-plane/legacy-sources";
+import { REPOSITORY_DISCOVERY_CONTRACT_VERSION } from "@/lib/control-plane/repository-discovery";
+import {
+  activateConfigRevision,
+  ControlPlaneError,
+  createConfigRevision,
+  recordDiscoveryObservation,
+} from "@/lib/control-plane/service";
 import type { Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
@@ -95,6 +101,38 @@ async function main() {
       });
     });
   }
+  async function createLegacyDraft(revision: number, suffix: string) {
+    const payload = { schemaVersion: 1, markets: [] };
+    const draft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:${fixture}:${suffix}`,
+      },
+    });
+    await prisma.legacyConfigImport.create({
+      data: {
+        appId,
+        sourceSha,
+        sourceRef: "refs/heads/main",
+        transformVersion: LEGACY_TRANSFORM_VERSION,
+        requestHash: jsonDigest({ fixture, suffix, kind: "request" }),
+        inputDigest: jsonDigest({ fixture, suffix, kind: "input" }),
+        reasonCodes: [],
+        reasonCodesDigest: jsonDigest([]),
+        status: "DRAFT_CREATED",
+        idempotencyKey: jsonDigest({ fixture, suffix, kind: "import" }),
+        configRevisionId: draft.id,
+        observedBy: actor,
+        observedAt: new Date(observationTime += 1_000),
+      },
+    });
+    return draft;
+  }
 
   try {
     await prisma.app.create({
@@ -117,21 +155,32 @@ async function main() {
         status: "MANAGED",
         managementKind: "APP",
         classification: "PRODUCT_APP",
+        discoveryContractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
         lastDefaultPushSha: sourceSha,
         lastReconciledSha: sourceSha,
       },
     });
-    await prisma.discoveryObservation.create({
-      data: {
-        appId,
-        sourceSha,
-        sourceRef: "refs/heads/main",
-        payload: {},
-        payloadHash: jsonDigest({}),
-        idempotencyKey: `fleet-parity-discovery:${fixture}`,
-        observedBy: actor,
-        observedAt: new Date(observationTime),
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
       },
+      buildTargets: [],
     });
     await prisma.platformFleetBinding.create({
       data: { appId, state: "MANAGED", sourceSha: platformSha },
@@ -151,6 +200,7 @@ async function main() {
     assert.equal(resolutions[0].approvalKind, "AUTOMATION");
     assert.equal(resolutions[0].justification, "NO_LEGACY_DESIRED_STATE");
     assert.equal(first.parity?.legacyConfigResolutionId, resolutions[0].id);
+    const configRevisionCountAfterFirst = await prisma.configRevision.count({ where: { appId } });
     const initialObservation = await prisma.legacyConfigImport.findUniqueOrThrow({
       where: { id: resolutions[0].sourceImportId },
       include: { parityObservations: true },
@@ -171,6 +221,11 @@ async function main() {
     assert.notEqual(next.import.id, first.import.id);
     assert.equal(await prisma.legacyConfigImport.count({ where: { appId } }), 3);
     assert.equal(await prisma.legacyConfigResolution.count({ where: { appId } }), 1);
+    assert.equal(
+      await prisma.configRevision.count({ where: { appId } }),
+      configRevisionCountAfterFirst,
+      "exact resolution이 있으면 후속 shadow 관측이 legacy DRAFT를 추가하지 않아야 한다",
+    );
 
     // 실제 반복 작업 원인: source는 같아도 ACTIVE 설정 revision이 바뀌면 다시 exact 결합한다.
     const secondConfig = await activateFixture(2);
@@ -189,6 +244,297 @@ async function main() {
     assert.ok(inaccessible.import.sources.some((source) => source.status === "ACCESS_DENIED"));
     assert.equal(await prisma.legacyConfigResolution.count({ where: { appId } }), 2);
     denyGooglePlay = false;
+
+    const latestRevision = await prisma.configRevision.aggregate({
+      where: { appId },
+      _max: { revision: true },
+    });
+    const nextRevision = latestRevision._max.revision ?? 0;
+    const payload = { schemaVersion: 1, markets: [] };
+    const staleActiveKey = `ui-compliance-batch-create:${randomUUID()}`;
+    await assert.rejects(createConfigRevision({
+      repoId,
+      expectedLatestRevision: nextRevision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: staleActiveKey,
+      draftIsolationAfterRevision: firstConfig.revision,
+    }), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "ACTIVE_REVISION_CHANGED"
+    ));
+    assert.equal(await prisma.configRevision.count({
+      where: { idempotencyKey: staleActiveKey },
+    }), 0);
+    const freshComplianceDraft = (await createConfigRevision({
+      repoId,
+      expectedLatestRevision: nextRevision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: `ui-compliance-batch-create:${randomUUID()}`,
+      draftIsolationAfterRevision: secondConfig.revision,
+    })).revision;
+    assert.match(
+      freshComplianceDraft.backfillContractVersion ?? "",
+      /^config-revision-fleet-compliance\/v1:[0-9a-f]{28}$/,
+    );
+    await prisma.configRevision.update({
+      where: { id: freshComplianceDraft.id },
+      data: { status: "SUPERSEDED", supersededAt: new Date() },
+    });
+
+    const legacyDraft = await createLegacyDraft(
+      freshComplianceDraft.revision + 1,
+      "cleanup-contract",
+    );
+    const complianceCreateKey = `ui-compliance-batch-create:${fixture}`;
+    const sourceObservation = await prisma.discoveryObservation.findFirstOrThrow({
+      where: { appId },
+      orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
+    const complianceDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: legacyDraft.revision + 1,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: complianceCreateKey,
+        sourceObservationId: sourceObservation.id,
+      },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorLogin: actor,
+        action: "control-plane.config.create",
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+        payload: {
+          appId,
+          repoId: repoId.toString(),
+          revision: complianceDraft.revision,
+          expectedLatestRevision: legacyDraft.revision,
+          payloadHash: complianceDraft.payloadHash,
+          sourceObservationId: sourceObservation.id,
+          sourceSha,
+          expectedSourceSha: sourceSha,
+          observationPayloadHash: sourceObservation.payloadHash,
+          contractVersion: "config-revision-manual-source/v1",
+          activationAttempted: false,
+        },
+      },
+    });
+    const migratedCompliance = await createConfigRevision({
+      repoId,
+      expectedLatestRevision: legacyDraft.revision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: complianceCreateKey,
+      draftIsolationAfterRevision: secondConfig.revision,
+    });
+    assert.equal(migratedCompliance.duplicate, true);
+    assert.equal(migratedCompliance.revision.id, complianceDraft.id);
+    assert.match(
+      migratedCompliance.revision.backfillContractVersion ?? "",
+      /^config-revision-fleet-compliance\/v1:[0-9a-f]{28}$/,
+    );
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        action: "control-plane.config.compliance-contract-migrated",
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+      },
+    }), 1);
+
+    const changedSourceSha = "d".repeat(40);
+    await prisma.repositoryRegistration.update({
+      where: { repoId },
+      data: {
+        lastDefaultPushSha: changedSourceSha,
+        lastReconciledSha: changedSourceSha,
+      },
+    });
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha: changedSourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime += 1_000),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}:changed-source`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha: changedSourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
+      },
+      buildTargets: [],
+    });
+    await assert.rejects(createConfigRevision({
+      repoId,
+      expectedLatestRevision: legacyDraft.revision,
+      expectedSourceSha: sourceSha,
+      payload,
+      actor,
+      idempotencyKey: complianceCreateKey,
+      draftIsolationAfterRevision: secondConfig.revision,
+    }), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "CONFIG_SOURCE_SHA_MISMATCH"
+    ));
+    await prisma.repositoryRegistration.update({
+      where: { repoId },
+      data: {
+        lastDefaultPushSha: sourceSha,
+        lastReconciledSha: sourceSha,
+      },
+    });
+    await recordDiscoveryObservation({
+      repoId,
+      sourceSha,
+      sourceRef: "refs/heads/main",
+      observedAt: new Date(observationTime += 1_000),
+      observedBy: actor,
+      idempotencyKey: `fleet-parity-discovery:${fixture}:restored-source`,
+      workflowCaller: { profile: "react-native", packageManager: "pnpm", workingDirectory: "." },
+      payload: {
+        schemaVersion: 2,
+        contractVersion: REPOSITORY_DISCOVERY_CONTRACT_VERSION,
+        repository: {
+          id: Number(repoId),
+          fullName: repoFullName,
+          sourceSha,
+          sourceRef: "refs/heads/main",
+        },
+        status: "ACTIVE",
+        classification: "PRODUCT_APP",
+      },
+      buildTargets: [],
+    });
+    const humanDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: complianceDraft.revision + 1,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:spoof-${fixture}`,
+      },
+    });
+    const laterLegacyDraft = await createLegacyDraft(
+      complianceDraft.revision + 2,
+      "after-activation-failure",
+    );
+    const legacyDraftCountBeforeActivation = await prisma.configRevision.count({
+      where: {
+        appId,
+        status: "DRAFT",
+        legacyConfigImport: { isNot: null },
+      },
+    });
+    const activationInput = {
+      repoId,
+      revision: complianceDraft.revision,
+      expectedActiveRevision: secondConfig.revision,
+      actor,
+      idempotencyKey: `ui-compliance-batch-activate:${fixture}`,
+      signingKey: "integration-signing-key",
+      complianceDraftGuard: {
+        createIdempotencyKey: complianceCreateKey,
+        afterRevision: secondConfig.revision,
+      },
+    };
+    await assert.rejects(activateConfigRevision(activationInput), (error: unknown) => (
+      error instanceof ControlPlaneError && error.code === "LATEST_DRAFT_EXISTS"
+    ));
+    assert.equal((await prisma.configRevision.findUniqueOrThrow({
+      where: { id: humanDraft.id },
+      select: { status: true },
+    })).status, "DRAFT");
+    await prisma.configRevision.update({
+      where: { id: humanDraft.id },
+      data: { status: "SUPERSEDED", supersededAt: new Date() },
+    });
+    const activatedCompliance = await activateConfigRevision(activationInput);
+    assert.equal(activatedCompliance.revision.status, "ACTIVE");
+    const draftStates = await prisma.configRevision.findMany({
+      where: { id: { in: [legacyDraft.id, humanDraft.id, complianceDraft.id, laterLegacyDraft.id] } },
+      orderBy: { revision: "asc" },
+      select: { id: true, status: true },
+    });
+    assert.deepEqual(draftStates, [
+      { id: legacyDraft.id, status: "SUPERSEDED" },
+      { id: complianceDraft.id, status: "ACTIVE" },
+      { id: humanDraft.id, status: "SUPERSEDED" },
+      { id: laterLegacyDraft.id, status: "SUPERSEDED" },
+    ]);
+    assert.equal(await prisma.configRevision.count({
+      where: {
+        appId,
+        status: "DRAFT",
+        legacyConfigImport: { isNot: null },
+      },
+    }), 0);
+    const activationAudit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        entityType: "ConfigRevision",
+        entityId: complianceDraft.id,
+        action: "control-plane.config.activate",
+      },
+      select: { payload: true },
+    });
+    assert.equal(
+      (activationAudit.payload as { supersededLegacyDraftCount?: number }).supersededLegacyDraftCount,
+      legacyDraftCountBeforeActivation,
+    );
+
+    const spoofLegacyDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: laterLegacyDraft.revision + 1,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `legacy-shadow-draft:${fixture}:spoof-prefix-control`,
+      },
+    });
+    const spoofedPrefixDraft = await prisma.configRevision.create({
+      data: {
+        appId,
+        revision: laterLegacyDraft.revision + 2,
+        status: "DRAFT",
+        payload,
+        payloadHash: jsonDigest(payload),
+        createdBy: actor,
+        idempotencyKey: `ui-compliance-batch-create:spoof-${fixture}`,
+      },
+    });
+    await activateConfigRevision({
+      repoId,
+      revision: spoofedPrefixDraft.revision,
+      expectedActiveRevision: complianceDraft.revision,
+      actor,
+      idempotencyKey: `ordinary-prefix-activation:${fixture}`,
+      signingKey: "integration-signing-key",
+    });
+    assert.equal((await prisma.configRevision.findUniqueOrThrow({
+      where: { id: spoofLegacyDraft.id },
+      select: { status: true },
+    })).status, "DRAFT");
+    await prisma.configRevision.update({
+      where: { id: spoofLegacyDraft.id },
+      data: { status: "SUPERSEDED", supersededAt: new Date() },
+    });
 
     await activateFixture(3);
     await prisma.repositoryRegistration.update({

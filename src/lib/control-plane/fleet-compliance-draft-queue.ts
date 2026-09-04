@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import {
@@ -34,6 +36,13 @@ export type FleetComplianceDraftQueueItem = {
 export type FleetComplianceDraftQueueState = FleetComplianceDraftQueueItem & {
   appSlug: string;
   activePayload: Record<string, unknown>;
+  pendingNonLegacyDraftRevisions: number[];
+  requestedRevisionStates: Array<{
+    revision: number;
+    status: string;
+    idempotencyKey: string;
+    payloadHash: string;
+  }>;
   latestRevisionState: {
     revision: number;
     status: string;
@@ -67,6 +76,8 @@ export function projectFleetComplianceDraftQueueItem(input: {
   legacy: FleetLegacyResolutionQueueItem;
   app: ComplianceQueueAppRow | null;
   latestRevision: LatestRevisionRow | null;
+  pendingNonLegacyDraftRevisions?: number[];
+  requestedRevisions?: LatestRevisionRow[];
 }): FleetComplianceDraftQueueState {
   const active = input.app?.configRevisions[0] ?? null;
   const parsedPayload = configRevisionPayloadSchema.safeParse(active?.payload);
@@ -78,6 +89,8 @@ export function projectFleetComplianceDraftQueueItem(input: {
         .sort()
     : [];
   const currentSourceSha = input.app?.discoveryObservations[0]?.sourceSha ?? null;
+  const pendingNonLegacyDraftRevisions = [...(input.pendingNonLegacyDraftRevisions ?? [])]
+    .sort((a, b) => a - b);
   const blockers: FleetComplianceDraftBlocker[] = [
     ...(
       input.app?.repoId?.toString() !== input.legacy.repoId
@@ -101,7 +114,9 @@ export function projectFleetComplianceDraftQueueItem(input: {
       ? ["SOURCE_SHA_CHANGED" as const]
       : []),
     ...(enabledMarkets.length === 0 ? ["ENABLED_MARKET_MISSING" as const] : []),
-    ...(active && input.latestRevision?.revision !== active.revision
+    ...(active && pendingNonLegacyDraftRevisions.some(
+      (revision) => revision > active.revision,
+    )
       ? ["LATEST_DRAFT_EXISTS" as const]
       : []),
   ];
@@ -120,54 +135,70 @@ export function projectFleetComplianceDraftQueueItem(input: {
     eligible: blockers.length === 0,
     blockers,
     activePayload,
+    pendingNonLegacyDraftRevisions,
+    requestedRevisionStates: input.requestedRevisions ?? [],
     latestRevisionState: input.latestRevision,
   };
 }
 
-export async function getFleetComplianceDraftQueueState(): Promise<FleetComplianceDraftQueueState[]> {
+export async function getFleetComplianceDraftQueueState(options: {
+  requestedCreateIdempotencyKeys?: readonly string[];
+} = {}): Promise<FleetComplianceDraftQueueState[]> {
   const legacyQueue = (await getFleetLegacyResolutionQueue()).filter((item) => (
     item.missingEvidenceKinds.includes("COMPLIANCE_PROFILE")
   ));
   if (legacyQueue.length === 0) return [];
   const appIds = legacyQueue.map((item) => item.appId);
-  const [apps, maxRevisions] = await Promise.all([
-    prisma.app.findMany({
-      where: { id: { in: appIds } },
-      select: {
-        id: true,
-        slug: true,
-        repoId: true,
-        repoFullName: true,
-        configRevisions: {
-          where: { status: "ACTIVE" },
-          orderBy: { revision: "desc" },
-          take: 1,
-          select: {
-            revision: true,
-            payload: true,
-            complianceProfiles: { take: 1, select: { id: true } },
+  const requestedCreateIdempotencyKeys = [...new Set(options.requestedCreateIdempotencyKeys ?? [])];
+  const {
+    apps,
+    latestRevisions,
+    pendingNonLegacyDrafts,
+    requestedRevisions,
+  } = await prisma.$transaction(async (tx) => {
+    const [apps, maxRevisions, pendingNonLegacyDrafts, requestedRevisions] = await Promise.all([
+      tx.app.findMany({
+        where: { id: { in: appIds } },
+        select: {
+          id: true,
+          slug: true,
+          repoId: true,
+          repoFullName: true,
+          configRevisions: {
+            where: { status: "ACTIVE" },
+            orderBy: { revision: "desc" },
+            take: 1,
+            select: {
+              revision: true,
+              payload: true,
+              complianceProfiles: { take: 1, select: { id: true } },
+            },
+          },
+          discoveryObservations: {
+            orderBy: latestDiscoveryObservationOrder(),
+            take: 1,
+            select: { sourceSha: true },
           },
         },
-        discoveryObservations: {
-          orderBy: latestDiscoveryObservationOrder(),
-          take: 1,
-          select: { sourceSha: true },
+      }),
+      tx.configRevision.groupBy({
+        by: ["appId"],
+        where: { appId: { in: appIds } },
+        _max: { revision: true },
+      }),
+      tx.configRevision.findMany({
+        where: {
+          appId: { in: appIds },
+          status: "DRAFT",
+          legacyConfigImport: { is: null },
         },
-      },
-    }),
-    prisma.configRevision.groupBy({
-      by: ["appId"],
-      where: { appId: { in: appIds } },
-      _max: { revision: true },
-    }),
-  ]);
-  const latestKeys = maxRevisions.flatMap((row) => (
-    row._max.revision === null ? [] : [{ appId: row.appId, revision: row._max.revision }]
-  ));
-  const latestRevisions = latestKeys.length === 0
-    ? []
-    : await prisma.configRevision.findMany({
-        where: { OR: latestKeys },
+        select: { appId: true, revision: true },
+      }),
+      tx.configRevision.findMany({
+        where: {
+          appId: { in: appIds },
+          idempotencyKey: { in: requestedCreateIdempotencyKeys },
+        },
         select: {
           appId: true,
           revision: true,
@@ -175,14 +206,40 @@ export async function getFleetComplianceDraftQueueState(): Promise<FleetComplian
           idempotencyKey: true,
           payloadHash: true,
         },
-      });
+      }),
+    ]);
+    const latestKeys = maxRevisions.flatMap((row) => (
+      row._max.revision === null ? [] : [{ appId: row.appId, revision: row._max.revision }]
+    ));
+    const latestRevisions = latestKeys.length === 0
+      ? []
+      : await tx.configRevision.findMany({
+          where: { OR: latestKeys },
+          select: {
+            appId: true,
+            revision: true,
+            status: true,
+            idempotencyKey: true,
+            payloadHash: true,
+          },
+        });
+    return { apps, latestRevisions, pendingNonLegacyDrafts, requestedRevisions };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   const appById = new Map(apps.map((app) => [app.id, app]));
   const latestByAppId = new Map(latestRevisions.map((revision) => [revision.appId, revision]));
+  const pendingNonLegacyDraftsByAppId = Map.groupBy(
+    pendingNonLegacyDrafts,
+    (revision) => revision.appId,
+  );
+  const requestedRevisionsByAppId = Map.groupBy(requestedRevisions, (revision) => revision.appId);
 
   return legacyQueue.map((legacy) => projectFleetComplianceDraftQueueItem({
     legacy,
     app: appById.get(legacy.appId) ?? null,
     latestRevision: latestByAppId.get(legacy.appId) ?? null,
+    pendingNonLegacyDraftRevisions: (pendingNonLegacyDraftsByAppId.get(legacy.appId) ?? [])
+      .map((revision) => revision.revision),
+    requestedRevisions: requestedRevisionsByAppId.get(legacy.appId) ?? [],
   }));
 }
 

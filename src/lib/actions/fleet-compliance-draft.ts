@@ -42,7 +42,11 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
   try {
     const parsed = fleetComplianceDraftBatchSchema.parse(input);
     const prepared = prepareFleetComplianceDraftBatch({
-      queue: await getFleetComplianceDraftQueueState(),
+      queue: await getFleetComplianceDraftQueueState({
+        requestedCreateIdempotencyKeys: parsed.items.map(
+          (item) => `ui-compliance-batch-create:${item.requestId}`,
+        ),
+      }),
       selections: parsed.items,
     });
     const signingKey = process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "";
@@ -71,6 +75,7 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
           payload: item.payload,
           actor,
           idempotencyKey: `ui-compliance-batch-create:${item.requestId}`,
+          draftIsolationAfterRevision: item.expectedActiveConfigRevision,
         });
         revision = created.revision.revision;
       } catch (error) {
@@ -92,6 +97,10 @@ export async function createAndActivateFleetComplianceDraftBatchAction(input: {
           actor,
           idempotencyKey: `ui-compliance-batch-activate:${item.requestId}`,
           signingKey,
+          complianceDraftGuard: {
+            createIdempotencyKey: `ui-compliance-batch-create:${item.requestId}`,
+            afterRevision: item.expectedActiveConfigRevision,
+          },
         });
         results.push({
           appId: item.appId,
