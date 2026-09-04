@@ -178,6 +178,14 @@ test("production 이미지 빌드는 hosted 크로스빌드 계약을 유지한�
   const dockerfile = readFileSync(join(process.cwd(), "Dockerfile"), "utf8");
   assert.match(
     dockerfile,
+    /RUN bash scripts\/prepare-runtime-org-contracts\.sh \/app\/runtime-contract-root\/node_modules/,
+  );
+  assert.match(
+    dockerfile,
+    /COPY --from=build \/app\/runtime-contract-root\/node_modules \.\/node_modules/,
+  );
+  assert.match(
+    dockerfile,
     /FROM --platform=\$BUILDPLATFORM node:[\d.]+-bookworm-slim AS build-base/,
   );
   assert.match(dockerfile, /^FROM node:[\d.]+-bookworm-slim AS runtime$/m);
