@@ -379,7 +379,7 @@ export function parseStoredPlatformReleaseManifest(value: unknown): PlatformRele
  * credential은 logical ID로만 참조하며 API key, password, private key 필드는 strict schema가 거부한다.
  */
 export const projectBlueprintSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   organizationId: numericId,
   folderId: numericId,
   billingAccountId: z.string().regex(/^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$/),
@@ -401,14 +401,48 @@ export const projectBlueprintSchema = z.object({
   }).strict(),
   firebase: z.object({
     authProviders: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,64}$/)).max(30),
-    appCheckEnforcement: z.enum(["OFF", "MONITOR", "ENFORCED"]),
+    appCheck: z.object({
+      managementMode: z.enum(["MONITOR", "ENFORCE"]),
+      registrations: z.array(z.object({
+        platform: z.enum(["ANDROID", "IOS", "WEB"]),
+        publicAppId: z.string().min(1).max(255),
+        status: z.enum(["REGISTERED", "UNREGISTERED"]),
+        provider: z.enum([
+          "PLAY_INTEGRITY",
+          "APP_ATTEST",
+          "DEVICE_CHECK",
+          "RECAPTCHA_V3",
+          "RECAPTCHA_ENTERPRISE",
+          "CUSTOM",
+        ]).optional(),
+      }).strict().superRefine((registration, registrationContext) => {
+        if (registration.status === "REGISTERED" && !registration.provider) {
+          registrationContext.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "등록된 App Check 앱에는 provider가 필요합니다.",
+            path: ["provider"],
+          });
+        }
+        if (registration.status === "UNREGISTERED" && registration.provider) {
+          registrationContext.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "미등록 App Check 앱에는 provider를 지정할 수 없습니다.",
+            path: ["provider"],
+          });
+        }
+      })).max(3),
+      apiEnforcement: z.array(z.object({
+        api: z.enum(["AUTHENTICATION", "FIRESTORE", "STORAGE", "FUNCTIONS"]),
+        state: z.enum(["OFF", "ENFORCED", "NOT_APPLICABLE"]),
+      }).strict()).max(4),
+    }).strict(),
     firestoreRulesChecksum: sha256,
     firestoreIndexesChecksum: sha256,
     storageRulesChecksum: sha256,
     functions: z.object({
       region,
       runtime: z.string().regex(/^nodejs\d{2}$/),
-    }).strict(),
+    }).strict().optional(),
     apps: z.array(z.object({
       platform: z.enum(["ANDROID", "IOS", "WEB", "AIT"]),
       publicAppId: z.string().min(1).max(255).optional(),
@@ -432,11 +466,11 @@ export const projectBlueprintSchema = z.object({
       publicClientId: numericId,
       scopes: z.array(z.string().url().max(512)).min(1).max(100),
     }).strict()).max(20),
-  }).strict(),
+  }).strict().optional(),
   provisioners: z.object({
     gcp: logicalCredentialId,
     firebase: logicalCredentialId,
-    workspace: logicalCredentialId,
+    workspace: logicalCredentialId.optional(),
   }).strict(),
 }).strict().superRefine((blueprint, context) => {
   const unique = (values: string[], path: (string | number)[]) => {
@@ -447,7 +481,9 @@ export const projectBlueprintSchema = z.object({
   unique(blueprint.apis, ["apis"]);
   unique(blueprint.iam.map((binding) => `${binding.role}:${binding.publicIdentity}`), ["iam"]);
   unique(blueprint.firebase.apps.map((app) => app.platform), ["firebase", "apps"]);
-  unique(blueprint.workspace.groups.map((group) => group.email.toLowerCase()), ["workspace", "groups"]);
+  unique(blueprint.firebase.appCheck.registrations.map((registration) => registration.platform), ["firebase", "appCheck", "registrations"]);
+  unique(blueprint.firebase.appCheck.apiEnforcement.map((entry) => entry.api), ["firebase", "appCheck", "apiEnforcement"]);
+  unique(blueprint.workspace?.groups.map((group) => group.email.toLowerCase()) ?? [], ["workspace", "groups"]);
   unique(blueprint.budget.alertThresholds.map(String), ["budget", "alertThresholds"]);
   for (const [key, value] of Object.entries(blueprint.provisioners)) {
     if (!value.startsWith("shared/")) {
@@ -474,6 +510,36 @@ export const projectBlueprintSchema = z.object({
       });
     }
   });
+  const firebaseAppIds = new Map(
+    blueprint.firebase.apps
+      .filter((app) => app.platform !== "AIT")
+      .map((app) => [app.platform, app.publicAppId]),
+  );
+  for (const platform of ["ANDROID", "IOS", "WEB"] as const) {
+    const publicAppId = firebaseAppIds.get(platform);
+    const registration = blueprint.firebase.appCheck.registrations.find((entry) => entry.platform === platform);
+    if (publicAppId && (!registration || registration.publicAppId !== publicAppId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Firebase 앱과 App Check 등록 상태의 공개 앱 ID가 일치해야 합니다.",
+        path: ["firebase", "appCheck", "registrations"],
+      });
+    }
+    if (!publicAppId && registration) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Firebase 앱이 없는 플랫폼의 App Check 상태는 선언할 수 없습니다.",
+        path: ["firebase", "appCheck", "registrations"],
+      });
+    }
+  }
+  if (Boolean(blueprint.workspace) !== Boolean(blueprint.provisioners.workspace)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Workspace 설정과 Workspace provisioner는 함께 선언하거나 함께 생략해야 합니다.",
+      path: ["provisioners", "workspace"],
+    });
+  }
 });
 
 export type ProjectBlueprint = z.infer<typeof projectBlueprintSchema>;

@@ -5,7 +5,11 @@ import test from "node:test";
 import ts from "typescript";
 
 import {
-  APP_CHECK_ENFORCEMENTS,
+  APP_CHECK_APIS,
+  APP_CHECK_API_STATES,
+  APP_CHECK_MANAGEMENT_MODES,
+  APP_CHECK_PROVIDERS,
+  APP_CHECK_REGISTRATION_STATES,
   ASSET_KINDS,
   BUDGET_CURRENCIES,
   COMPLIANCE_DECLARATIONS,
@@ -49,7 +53,9 @@ test("업로드·심사·출시 승인·배포·공개 확인은 다른 이름�
 test("설정 선택지와 기존 설정 대체 항목은 코드 대신 표시 이름을 사용한다", () => {
   for (const option of [
     ...MARKETS, ...ASSET_KINDS, ...COMPLIANCE_DECLARATIONS,
-    ...APP_CHECK_ENFORCEMENTS, ...FIREBASE_PLATFORMS, ...WORKSPACE_ROLES, ...BUDGET_CURRENCIES,
+    ...APP_CHECK_MANAGEMENT_MODES, ...APP_CHECK_REGISTRATION_STATES, ...APP_CHECK_PROVIDERS,
+    ...APP_CHECK_APIS, ...APP_CHECK_API_STATES, ...FIREBASE_PLATFORMS, ...WORKSPACE_ROLES,
+    ...BUDGET_CURRENCIES,
   ]) {
     assert.notEqual(configOptionLabel(option), option, option);
   }

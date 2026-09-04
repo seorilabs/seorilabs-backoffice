@@ -73,7 +73,7 @@ const fullPayload = {
     privacyPolicyUrl: "https://seorilabs.dev/privacy",
   },
   projectBlueprint: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organizationId: "123456789012",
     folderId: "987654321098",
     billingAccountId: "0A1B2C-3D4E5F-607182",
@@ -89,7 +89,17 @@ const fullPayload = {
     budget: { currencyCode: "KRW", monthlyAmount: 50000, alertThresholds: [0.5, 0.9] },
     firebase: {
       authProviders: ["anonymous", "google.com"],
-      appCheckEnforcement: "ENFORCED",
+      appCheck: {
+        managementMode: "ENFORCE",
+        registrations: [
+          { platform: "ANDROID", publicAppId: "1:1:android:1", status: "REGISTERED", provider: "PLAY_INTEGRITY" },
+          { platform: "WEB", publicAppId: "1:1:web:1", status: "REGISTERED", provider: "RECAPTCHA_V3" },
+        ],
+        apiEnforcement: [
+          { api: "AUTHENTICATION", state: "ENFORCED" },
+          { api: "FIRESTORE", state: "ENFORCED" },
+        ],
+      },
       firestoreRulesChecksum: "d".repeat(64),
       firestoreIndexesChecksum: "e".repeat(64),
       storageRulesChecksum: "f".repeat(64),

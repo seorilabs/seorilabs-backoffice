@@ -52,6 +52,18 @@ export interface FirebaseAppDraft {
   aitAppName: string;
 }
 
+export interface AppCheckRegistrationDraft {
+  platform: string;
+  publicAppId: string;
+  status: string;
+  provider: string;
+}
+
+export interface AppCheckApiDraft {
+  api: string;
+  state: string;
+}
+
 export interface WorkspaceGroupDraft {
   email: string;
   role: string;
@@ -76,12 +88,15 @@ export interface BlueprintDraft {
   budgetMonthlyAmount: string;
   budgetAlertThresholds: string;
   authProviders: string;
-  appCheckEnforcement: string;
+  appCheckManagementMode: string;
+  appCheckRegistrations: AppCheckRegistrationDraft[];
+  appCheckApis: AppCheckApiDraft[];
   firestoreRulesChecksum: string;
   firestoreIndexesChecksum: string;
   storageRulesChecksum: string;
   functionsRegion: string;
   functionsRuntime: string;
+  functionsEnabled: boolean;
   firebaseApps: FirebaseAppDraft[];
   ga4PropertyId: string;
   bigQueryProjectId: string;
@@ -89,6 +104,7 @@ export interface BlueprintDraft {
   analyticsLocation: string;
   workspaceGroups: WorkspaceGroupDraft[];
   delegations: DelegationDraft[];
+  workspaceEnabled: boolean;
   provisionerGcp: string;
   provisionerFirebase: string;
   provisionerWorkspace: string;
@@ -124,7 +140,18 @@ export const COMPLIANCE_DECLARATIONS = [
   "export-compliance",
   "review-notes",
 ] as const;
-export const APP_CHECK_ENFORCEMENTS = ["OFF", "MONITOR", "ENFORCED"] as const;
+export const APP_CHECK_MANAGEMENT_MODES = ["MONITOR", "ENFORCE"] as const;
+export const APP_CHECK_REGISTRATION_STATES = ["REGISTERED", "UNREGISTERED"] as const;
+export const APP_CHECK_PROVIDERS = [
+  "PLAY_INTEGRITY",
+  "APP_ATTEST",
+  "DEVICE_CHECK",
+  "RECAPTCHA_V3",
+  "RECAPTCHA_ENTERPRISE",
+  "CUSTOM",
+] as const;
+export const APP_CHECK_APIS = ["AUTHENTICATION", "FIRESTORE", "STORAGE", "FUNCTIONS"] as const;
+export const APP_CHECK_API_STATES = ["OFF", "ENFORCED", "NOT_APPLICABLE"] as const;
 export const FIREBASE_PLATFORMS = ["ANDROID", "IOS", "WEB", "AIT"] as const;
 export const WORKSPACE_ROLES = ["VIEWER", "OPERATOR", "ADMIN"] as const;
 export const BUDGET_CURRENCIES = ["KRW", "USD"] as const;
@@ -210,12 +237,15 @@ export function emptyBlueprintDraft(): BlueprintDraft {
     budgetMonthlyAmount: "",
     budgetAlertThresholds: "",
     authProviders: "",
-    appCheckEnforcement: "MONITOR",
+    appCheckManagementMode: "MONITOR",
+    appCheckRegistrations: [],
+    appCheckApis: [],
     firestoreRulesChecksum: "",
     firestoreIndexesChecksum: "",
     storageRulesChecksum: "",
     functionsRegion: "",
     functionsRuntime: "",
+    functionsEnabled: false,
     firebaseApps: [],
     ga4PropertyId: "",
     bigQueryProjectId: "",
@@ -223,6 +253,7 @@ export function emptyBlueprintDraft(): BlueprintDraft {
     analyticsLocation: "",
     workspaceGroups: [],
     delegations: [],
+    workspaceEnabled: false,
     provisionerGcp: "",
     provisionerFirebase: "",
     provisionerWorkspace: "",
@@ -344,12 +375,26 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
         budgetMonthlyAmount: text(budget.monthlyAmount),
         budgetAlertThresholds: list(budget.alertThresholds),
         authProviders: list(firebase.authProviders),
-        appCheckEnforcement: text(firebase.appCheckEnforcement) || "MONITOR",
+        appCheckManagementMode: text(record(firebase.appCheck).managementMode) || "MONITOR",
+        appCheckRegistrations: array(record(firebase.appCheck).registrations).map((entry) => {
+          const item = record(entry);
+          return {
+            platform: text(item.platform),
+            publicAppId: text(item.publicAppId),
+            status: text(item.status) || "UNREGISTERED",
+            provider: text(item.provider),
+          };
+        }),
+        appCheckApis: array(record(firebase.appCheck).apiEnforcement).map((entry) => {
+          const item = record(entry);
+          return { api: text(item.api), state: text(item.state) || "OFF" };
+        }),
         firestoreRulesChecksum: text(firebase.firestoreRulesChecksum),
         firestoreIndexesChecksum: text(firebase.firestoreIndexesChecksum),
         storageRulesChecksum: text(firebase.storageRulesChecksum),
         functionsRegion: text(functions.region),
         functionsRuntime: text(functions.runtime),
+        functionsEnabled: firebase.functions !== undefined,
         firebaseApps: array(firebase.apps).map((entry) => {
           const item = record(entry);
           return {
@@ -372,6 +417,7 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
           const item = record(entry);
           return { publicClientId: text(item.publicClientId), scopes: list(item.scopes) };
         }),
+        workspaceEnabled: blueprintSource.workspace !== undefined,
         provisionerGcp: text(provisioners.gcp),
         provisionerFirebase: text(provisioners.firebase),
         provisionerWorkspace: text(provisioners.workspace),
@@ -382,7 +428,7 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
 
 function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organizationId: draft.organizationId.trim(),
     folderId: draft.folderId.trim(),
     billingAccountId: draft.billingAccountId.trim(),
@@ -404,14 +450,26 @@ function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
     },
     firebase: {
       authProviders: splitList(draft.authProviders),
-      appCheckEnforcement: draft.appCheckEnforcement,
+      appCheck: {
+        managementMode: draft.appCheckManagementMode,
+        registrations: draft.appCheckRegistrations.map((entry) => ({
+          platform: entry.platform,
+          publicAppId: entry.publicAppId.trim(),
+          status: entry.status,
+          ...(trimmed(entry.provider) ? { provider: entry.provider } : {}),
+        })),
+        apiEnforcement: draft.appCheckApis.map((entry) => ({
+          api: entry.api,
+          state: entry.state,
+        })),
+      },
       firestoreRulesChecksum: draft.firestoreRulesChecksum.trim(),
       firestoreIndexesChecksum: draft.firestoreIndexesChecksum.trim(),
       storageRulesChecksum: draft.storageRulesChecksum.trim(),
-      functions: {
+      ...(draft.functionsEnabled ? { functions: {
         region: draft.functionsRegion.trim(),
         runtime: draft.functionsRuntime.trim(),
-      },
+      } } : {}),
       apps: draft.firebaseApps.map((entry) => ({
         platform: entry.platform,
         ...(trimmed(entry.publicAppId) ? { publicAppId: entry.publicAppId.trim() } : {}),
@@ -426,7 +484,7 @@ function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
       datasetId: draft.datasetId.trim(),
       location: draft.analyticsLocation.trim(),
     },
-    workspace: {
+    ...(draft.workspaceEnabled ? { workspace: {
       groups: draft.workspaceGroups.map((entry) => ({
         email: entry.email.trim(),
         role: entry.role,
@@ -435,11 +493,11 @@ function blueprintFromDraft(draft: BlueprintDraft): Record<string, unknown> {
         publicClientId: entry.publicClientId.trim(),
         scopes: splitList(entry.scopes),
       })),
-    },
+    } } : {}),
     provisioners: {
       gcp: draft.provisionerGcp.trim(),
       firebase: draft.provisionerFirebase.trim(),
-      workspace: draft.provisionerWorkspace.trim(),
+      ...(draft.workspaceEnabled ? { workspace: draft.provisionerWorkspace.trim() } : {}),
     },
   };
 }
