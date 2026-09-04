@@ -7,7 +7,7 @@ import {
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
-import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
+import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
   importWorkflowBundleApproval,
@@ -20,7 +20,7 @@ const BUNDLE_SHA = "c".repeat(40);
 function digest(value: string | Buffer | JsonValue): string {
   const bytes = typeof value === "string" || Buffer.isBuffer(value)
     ? value
-    : canonicalJson(value);
+    : contractCanonicalJson(value);
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
@@ -179,7 +179,7 @@ function approvedFixture(
     runtimeAssetDigestsDigest: digest(runtimeAssetDigests),
   } as JsonValue;
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const signature = sign(null, Buffer.from(canonicalJson(envelope), "utf8"), privateKey).toString("base64url");
+  const signature = sign(null, Buffer.from(contractCanonicalJson(envelope), "utf8"), privateKey).toString("base64url");
   const candidatePayload = { ...candidate } as Record<string, JsonValue>;
   delete candidatePayload.integrity;
   const approvedPayload = {
