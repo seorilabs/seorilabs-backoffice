@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   reauthPublicReason,
@@ -6,6 +8,60 @@ import {
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
+
+const fleetConfigRevisionSelect = {
+  id: true,
+  revision: true,
+  status: true,
+  payload: true,
+  payloadHash: true,
+  createdBy: true,
+  createdAt: true,
+  activatedAt: true,
+  snapshotDigest: true,
+  legacyConfigImport: {
+    select: {
+      id: true,
+      status: true,
+    },
+  },
+  projectBlueprint: {
+    select: {
+      schemaVersion: true,
+      organizationId: true,
+      folderId: true,
+      billingAccountId: true,
+      projectId: true,
+      projectNumber: true,
+      region: true,
+      payloadHash: true,
+    },
+  },
+  marketProfiles: {
+    orderBy: { market: "asc" },
+    select: { market: true, enabled: true, releaseChannel: true, locales: true },
+  },
+  marketLocalizations: {
+    orderBy: [{ scopeKey: "asc" }, { locale: "asc" }],
+    select: { market: true, locale: true, payloadHash: true },
+  },
+  complianceProfiles: {
+    orderBy: [{ market: "asc" }, { declaration: "asc" }],
+    select: { market: true, declaration: true, state: true, payloadHash: true },
+  },
+  storeAssets: {
+    orderBy: [{ scopeKey: "asc" }, { kind: "asc" }, { objectKey: "asc" }],
+    select: { market: true, kind: true, locale: true, objectKey: true, checksum: true },
+  },
+} satisfies Prisma.ConfigRevisionSelect;
+
+export function visibleFleetConfigRevisions<T extends { revision: number }>(
+  drafts: T[],
+  active: T | null,
+): T[] {
+  return [...drafts, ...(active ? [active] : [])]
+    .sort((left, right) => right.revision - left.revision);
+}
 
 export function redactFleetError(value: string | null): string | null {
   if (!value) return value;
@@ -58,54 +114,10 @@ export async function getFleetOperationsView(appId: string) {
         },
       },
       configRevisions: {
-        where: { status: { in: ["ACTIVE", "DRAFT"] } },
+        where: { status: "DRAFT" },
         orderBy: { revision: "desc" },
         take: 12,
-        select: {
-          id: true,
-          revision: true,
-          status: true,
-          payload: true,
-          payloadHash: true,
-          createdBy: true,
-          createdAt: true,
-          activatedAt: true,
-          snapshotDigest: true,
-          legacyConfigImport: {
-            select: {
-              id: true,
-              status: true,
-            },
-          },
-          projectBlueprint: {
-            select: {
-              schemaVersion: true,
-              organizationId: true,
-              folderId: true,
-              billingAccountId: true,
-              projectId: true,
-              projectNumber: true,
-              region: true,
-              payloadHash: true,
-            },
-          },
-          marketProfiles: {
-            orderBy: { market: "asc" },
-            select: { market: true, enabled: true, releaseChannel: true, locales: true },
-          },
-          marketLocalizations: {
-            orderBy: [{ scopeKey: "asc" }, { locale: "asc" }],
-            select: { market: true, locale: true, payloadHash: true },
-          },
-          complianceProfiles: {
-            orderBy: [{ market: "asc" }, { declaration: "asc" }],
-            select: { market: true, declaration: true, state: true, payloadHash: true },
-          },
-          storeAssets: {
-            orderBy: [{ scopeKey: "asc" }, { kind: "asc" }, { objectKey: "asc" }],
-            select: { market: true, kind: true, locale: true, objectKey: true, checksum: true },
-          },
-        },
+        select: fleetConfigRevisionSelect,
       },
       legacyConfigImports: {
         orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
@@ -460,7 +472,7 @@ export async function getFleetOperationsView(appId: string) {
   });
   if (!app) return null;
 
-  const [recentRuns, deadLetters, repositoryRegistration] = await Promise.all([
+  const [recentRuns, deadLetters, repositoryRegistration, activeConfigRevision] = await Promise.all([
     prisma.agentRun.findMany({
       where: { appId: app.id },
       orderBy: { createdAt: "desc" },
@@ -552,6 +564,11 @@ export async function getFleetOperationsView(appId: string) {
             lastDiscoveryReason: true,
           },
         }),
+    prisma.configRevision.findFirst({
+      where: { appId: app.id, status: "ACTIVE" },
+      orderBy: { revision: "desc" },
+      select: fleetConfigRevisionSelect,
+    }),
   ]);
 
   const seenProviderResources = new Set<string>();
@@ -573,7 +590,7 @@ export async function getFleetOperationsView(appId: string) {
       ...observation,
       payload: redactFleetJson(observation.payload),
     })),
-    configRevisions: app.configRevisions.map((revision) => ({
+    configRevisions: visibleFleetConfigRevisions(app.configRevisions, activeConfigRevision).map((revision) => ({
       ...revision,
       payload: redactFleetJson(revision.payload),
     })),
