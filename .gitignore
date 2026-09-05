@@ -34,3 +34,6 @@ pnpm-debug.log*
 # editor
 .idea
 .vscode
+
+# 실행기 번들 test가 저장소 안에 만드는 임시 출력
+.acr-bundle-*
