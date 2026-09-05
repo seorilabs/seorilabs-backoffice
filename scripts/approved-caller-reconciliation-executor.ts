@@ -28,6 +28,7 @@ import {
   settleTrustedExecutorRun,
   startTrustedExecutorHeartbeat,
   trustedExecutorClaimSchema,
+  withExecutorStage,
   trustedExecutorControlPlane,
   type TrustedExecutorCall,
 } from "@/lib/control-plane/trusted-mutation-executor-client";
@@ -292,18 +293,21 @@ async function runMutation(input: {
   });
 }
 
+const stage = <Result>(name: string, run: () => Promise<Result>): Promise<Result> =>
+  withExecutorStage("APPROVED_CALLER", name, run);
+
 async function main() {
-  const ca = await readBoundSecretFile({
+  const ca = await stage("READ_BACKOFFICE_CA", () => readBoundSecretFile({
     root: FIXED_ROOT,
     relativePath: "backoffice/ca.pem",
     allowGroupRead: true,
-  });
-  const keyBytes = await readBoundSecretFile({
+  }));
+  const keyBytes = await stage("READ_ATTESTATION_KEY", () => readBoundSecretFile({
     root: FIXED_ROOT,
     relativePath: "adapter/attestation-private.pem",
     allowGroupRead: true,
-  });
-  const attestationKey = createPrivateKey(keyBytes);
+  }));
+  const attestationKey = await stage("PARSE_ATTESTATION_KEY", async () => createPrivateKey(keyBytes));
   keyBytes.fill(0);
   if (attestationKey.asymmetricKeyType !== "ed25519") {
     throw new Error("APPROVED_CALLER_ATTESTATION_KEY_INVALID");
@@ -313,23 +317,23 @@ async function main() {
     proxyOrigin: process.env.SEORI_EGRESS_PROXY_ORIGIN?.trim() || "",
     proxyServerName: process.env.SEORI_EGRESS_PROXY_SERVER_NAME?.trim() || "",
   };
-  const backofficeEgress = await createExactMtlsProxyClient({
+  const backofficeEgress = await stage("EGRESS_BACKOFFICE", () => createExactMtlsProxyClient({
     ...proxyBinding,
     allowedHosts: exactHostSet("backoffice.vzyx.xyz"),
     targetCa: ca,
-  });
+  }));
   let githubEgress: Awaited<ReturnType<typeof createExactMtlsProxyClient>>;
   try {
-    githubEgress = await createExactMtlsProxyClient({
+    githubEgress = await stage("EGRESS_GITHUB", () => createExactMtlsProxyClient({
       ...proxyBinding,
       allowedHosts: exactHostSet("api.github.com"),
-    });
+    }));
   } catch (error) {
     await backofficeEgress.close();
     throw error;
   }
   try {
-    await withBoundSecretText({
+    await stage("RUN", () => withBoundSecretText({
       root: FIXED_ROOT,
       relativePath: "backoffice/adapter.bearer",
       allowGroupRead: true,
@@ -339,7 +343,7 @@ async function main() {
       attestationKey,
       backofficeFetch: backofficeEgress.fetch,
       githubFetch: githubEgress.fetch,
-    }));
+    })));
   } finally {
     await Promise.all([backofficeEgress.close(), githubEgress.close()]);
     ca.fill(0);
