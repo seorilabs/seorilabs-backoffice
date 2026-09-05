@@ -2585,6 +2585,170 @@ export async function resolveManifest(input: {
   };
 }
 
+/**
+ * 서명된 static runtime manifest를 만드는 공통 경로다. GitHub OIDC 검증은 포함하지 않는다.
+ * 런타임(resolveStaticRuntimeManifest)은 OIDC로 실행 주체를 먼저 확인한 뒤 이 함수를 부르고,
+ * 서버 측 계획(caller 반증기)은 실행이 없으므로 OIDC 없이 같은 manifest를 만든다. manifest
+ * 내용은 app·registration·ACTIVE revision·discovery에서만 나오고 OIDC 값은 쓰이지 않는다.
+ */
+export async function resolveStaticRuntimeManifestForRepository(input: {
+  selector: {
+    repositoryId: string;
+    bindingSourceSha: string;
+    applicationSourceSha: string;
+    workflowBundleSha: string;
+    calledWorkflowPath?: GitHubActionsStaticWorkflowPath;
+  };
+  app: { id: string; repoFullName: string; status: "ACTIVE" | "PAUSED" | "DEPRECATED" };
+  expectedSourceRef: string;
+  signingKey: string;
+  snapshotSignatureKeyId: string;
+  snapshotSignaturePolicyRevision: string;
+  now?: Date;
+}, client: Pick<
+  typeof prisma,
+  "app" | "configRevision" | "discoveryObservation" | "repositoryRegistration"
+> = prisma) {
+  const app = input.app;
+  const expectedSourceRef = input.expectedSourceRef;
+  const revision = await client.configRevision.findFirst({
+    where: { appId: app.id, status: "ACTIVE" },
+  });
+  if (!revision) {
+    throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
+  }
+  const configPayload = configPayloadFromSignedSnapshot({
+    revision,
+    signingKey: input.signingKey,
+    appId: app.id,
+    repoId: input.selector.repositoryId,
+    repoFullName: app.repoFullName,
+  });
+  if (
+    !configPayload.build?.workflowBundleSha
+    || configPayload.build.workflowBundleSha.toLowerCase() !== input.selector.workflowBundleSha
+  ) {
+    throw new ControlPlaneError(
+      "ACTIVE revision이 요청한 WorkflowBundle SHA를 승인하지 않았습니다.",
+      409,
+      "WORKFLOW_BUNDLE_NOT_APPROVED",
+    );
+  }
+  // STATIC_CHECK 예외는 ACTIVE 설정·discovery가 결합된 기본 브랜치 exact source
+  // (bindingSourceSha)에 묶인다. main 실행은 application source와 같고, 후보 PR 실행은
+  // merge 커밋이 아니라 PR base다. lockfile digest 결합은 중앙 staging이 별도로 강제한다.
+  const dependencyAuditException = resolveDependencyAuditException({
+    exception: configPayload.build.dependencyAuditException,
+    actionClass: "STATIC_CHECK",
+    repositoryId: input.selector.repositoryId,
+    fullName: app.repoFullName,
+    applicationSourceSha: input.selector.bindingSourceSha,
+    now: input.now ?? new Date(),
+  });
+
+  const discovery = await client.discoveryObservation.findFirst({
+    where: {
+      appId: app.id,
+      sourceSha: input.selector.bindingSourceSha,
+    },
+    orderBy: latestDiscoveryObservationOrder(),
+  });
+  if (!discovery) {
+    throw new ControlPlaneError(
+      "binding source SHA의 discovery observation이 없습니다.",
+      409,
+      "NO_DISCOVERY_FOR_SHA",
+    );
+  }
+  if (discovery.sourceRef !== expectedSourceRef || !discovery.requestHash) {
+    throw new ControlPlaneError(
+      "default branch exact-SHA discovery provenance를 검증할 수 없습니다.",
+      409,
+      "DISCOVERY_PROVENANCE_INVALID",
+    );
+  }
+  const workflowCaller = resolvedWorkflowCaller({
+    profile: discovery.workflowProfile,
+    packageManager: discovery.workflowPackageManager,
+    workingDirectory: discovery.workflowWorkingDirectory,
+  });
+  const expectedCalledWorkflowPath: GitHubActionsStaticWorkflowPath =
+    workflowCaller.profile === "godot"
+      ? GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.godot
+      : GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.javascript;
+  // 런타임 경로만 실제로 호출된 중앙 workflow를 대조한다. 서버 측 계획에는 실행이 없으므로
+  // 이 값을 주지 않으며, 그때는 discovery profile이 그대로 caller 대상이 된다.
+  if (
+    input.selector.calledWorkflowPath !== undefined
+    && input.selector.calledWorkflowPath !== expectedCalledWorkflowPath
+  ) {
+    throw new ControlPlaneError(
+      "호출된 중앙 workflow와 exact-SHA discovery profile이 일치하지 않습니다.",
+      409,
+      "STATIC_WORKFLOW_PROFILE_MISMATCH",
+    );
+  }
+  const workflowDirectories = {
+    workspaceRoot: observedStaticWorkspaceRoot({
+      payload: discovery.payload,
+      caller: workflowCaller,
+      repositoryId: input.selector.repositoryId,
+      fullName: app.repoFullName,
+      sourceSha: input.selector.bindingSourceSha,
+      sourceRef: expectedSourceRef,
+    }),
+    commandDirectory: workflowCaller.workingDirectory,
+  };
+  const staticBinding: StaticRuntimeBinding = workflowCaller.profile === "godot"
+    ? {
+        ...workflowDirectories,
+        profile: workflowCaller.profile,
+        packageManager: workflowCaller.packageManager,
+      }
+    : {
+        ...workflowDirectories,
+        profile: workflowCaller.profile,
+        packageManager: workflowCaller.packageManager,
+      };
+  if (!revision.snapshotDigest || !revision.snapshotSignature) {
+    throw new ControlPlaneError(
+      "Config snapshot 서명 provenance를 확인할 수 없습니다.",
+      409,
+      "INVALID_CONFIG_SIGNATURE",
+    );
+  }
+  try {
+    return buildStaticRuntimeManifestReadback({
+      lifecycleState: app.status,
+      repositoryId: input.selector.repositoryId,
+      fullName: app.repoFullName,
+      bindingSourceSha: input.selector.bindingSourceSha,
+      sourceRef: expectedSourceRef,
+      applicationSourceSha: input.selector.applicationSourceSha,
+      observationId: discovery.id,
+      observationRequestHash: discovery.requestHash,
+      configRevisionId: revision.id,
+      configRevision: revision.revision,
+      configRevisionPayloadHash: revision.payloadHash,
+      signedSnapshotDigest: revision.snapshotDigest,
+      snapshotSignature: revision.snapshotSignature,
+      snapshotSignatureKeyId: input.snapshotSignatureKeyId,
+      snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+      staticBinding,
+      dependencyAuditException,
+    });
+  } catch (error) {
+    if (error instanceof StaticRuntimeManifestError) {
+      throw new ControlPlaneError(
+        "서명된 runtime manifest provenance를 생성할 수 없습니다.",
+        error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
+        error.code,
+      );
+    }
+    throw error;
+  }
+}
+
 export async function resolveStaticRuntimeManifest(input: {
   identity: GitHubActionsStaticManifestIdentity;
   signingKey: string;
@@ -2646,138 +2810,23 @@ export async function resolveStaticRuntimeManifest(input: {
     );
   }
 
-  const revision = await client.configRevision.findFirst({
-    where: { appId: app.id, status: "ACTIVE" },
-  });
-  if (!revision) {
-    throw new ControlPlaneError("활성화된 Config revision이 없습니다.", 409, "NO_ACTIVE_CONFIG");
-  }
-  const configPayload = configPayloadFromSignedSnapshot({
-    revision,
-    signingKey: input.signingKey,
-    appId: app.id,
-    repoId: input.identity.repositoryId,
-    repoFullName: app.repoFullName,
-  });
-  if (
-    !configPayload.build?.workflowBundleSha
-    || configPayload.build.workflowBundleSha.toLowerCase() !== input.identity.workflowBundleSha
-  ) {
-    throw new ControlPlaneError(
-      "ACTIVE revision이 요청한 WorkflowBundle SHA를 승인하지 않았습니다.",
-      409,
-      "WORKFLOW_BUNDLE_NOT_APPROVED",
-    );
-  }
-  // STATIC_CHECK 예외는 ACTIVE 설정·discovery가 결합된 기본 브랜치 exact source
-  // (bindingSourceSha)에 묶인다. main 실행은 application source와 같고, 후보 PR 실행은
-  // merge 커밋이 아니라 PR base다. lockfile digest 결합은 중앙 staging이 별도로 강제한다.
-  const dependencyAuditException = resolveDependencyAuditException({
-    exception: configPayload.build.dependencyAuditException,
-    actionClass: "STATIC_CHECK",
-    repositoryId: input.identity.repositoryId,
-    fullName: app.repoFullName,
-    applicationSourceSha: input.identity.bindingSourceSha,
-    now: input.now ?? new Date(),
-  });
-
-  const discovery = await client.discoveryObservation.findFirst({
-    where: {
-      appId: app.id,
-      sourceSha: input.identity.bindingSourceSha,
-    },
-    orderBy: latestDiscoveryObservationOrder(),
-  });
-  if (!discovery) {
-    throw new ControlPlaneError(
-      "binding source SHA의 discovery observation이 없습니다.",
-      409,
-      "NO_DISCOVERY_FOR_SHA",
-    );
-  }
-  if (discovery.sourceRef !== expectedSourceRef || !discovery.requestHash) {
-    throw new ControlPlaneError(
-      "default branch exact-SHA discovery provenance를 검증할 수 없습니다.",
-      409,
-      "DISCOVERY_PROVENANCE_INVALID",
-    );
-  }
-  const workflowCaller = resolvedWorkflowCaller({
-    profile: discovery.workflowProfile,
-    packageManager: discovery.workflowPackageManager,
-    workingDirectory: discovery.workflowWorkingDirectory,
-  });
-  const expectedCalledWorkflowPath: GitHubActionsStaticWorkflowPath =
-    workflowCaller.profile === "godot"
-      ? GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.godot
-      : GITHUB_ACTIONS_STATIC_WORKFLOW_PATHS.javascript;
-  if (input.identity.calledWorkflowPath !== expectedCalledWorkflowPath) {
-    throw new ControlPlaneError(
-      "호출된 중앙 workflow와 exact-SHA discovery profile이 일치하지 않습니다.",
-      409,
-      "STATIC_WORKFLOW_PROFILE_MISMATCH",
-    );
-  }
-  const workflowDirectories = {
-    workspaceRoot: observedStaticWorkspaceRoot({
-      payload: discovery.payload,
-      caller: workflowCaller,
+  return resolveStaticRuntimeManifestForRepository({
+    selector: {
       repositoryId: input.identity.repositoryId,
-      fullName: app.repoFullName,
-      sourceSha: input.identity.bindingSourceSha,
-      sourceRef: expectedSourceRef,
-    }),
-    commandDirectory: workflowCaller.workingDirectory,
-  };
-  const staticBinding: StaticRuntimeBinding = workflowCaller.profile === "godot"
-    ? {
-        ...workflowDirectories,
-        profile: workflowCaller.profile,
-        packageManager: workflowCaller.packageManager,
-      }
-    : {
-        ...workflowDirectories,
-        profile: workflowCaller.profile,
-        packageManager: workflowCaller.packageManager,
-      };
-  if (!revision.snapshotDigest || !revision.snapshotSignature) {
-    throw new ControlPlaneError(
-      "Config snapshot 서명 provenance를 확인할 수 없습니다.",
-      409,
-      "INVALID_CONFIG_SIGNATURE",
-    );
-  }
-  try {
-    return buildStaticRuntimeManifestReadback({
-      lifecycleState: app.status,
-      repositoryId: input.identity.repositoryId,
-      fullName: app.repoFullName,
       bindingSourceSha: input.identity.bindingSourceSha,
-      sourceRef: expectedSourceRef,
       applicationSourceSha: input.identity.applicationSourceSha,
-      observationId: discovery.id,
-      observationRequestHash: discovery.requestHash,
-      configRevisionId: revision.id,
-      configRevision: revision.revision,
-      configRevisionPayloadHash: revision.payloadHash,
-      signedSnapshotDigest: revision.snapshotDigest,
-      snapshotSignature: revision.snapshotSignature,
-      snapshotSignatureKeyId: input.snapshotSignatureKeyId,
-      snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
-      staticBinding,
-      dependencyAuditException,
-    });
-  } catch (error) {
-    if (error instanceof StaticRuntimeManifestError) {
-      throw new ControlPlaneError(
-        "서명된 runtime manifest provenance를 생성할 수 없습니다.",
-        error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
-        error.code,
-      );
-    }
-    throw error;
-  }
+      workflowBundleSha: input.identity.workflowBundleSha,
+      calledWorkflowPath: input.identity.calledWorkflowPath,
+    },
+    app: { id: app.id, repoFullName: app.repoFullName, status: app.status },
+    expectedSourceRef,
+    signingKey: input.signingKey,
+    snapshotSignatureKeyId: input.snapshotSignatureKeyId,
+    snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+    now: input.now,
+  }, client);
 }
+
 
 export async function resolveBuildRuntimeManifest(input: {
   identity: GitHubActionsBuildManifestIdentity;
