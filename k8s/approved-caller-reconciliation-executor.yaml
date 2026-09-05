@@ -18,7 +18,7 @@ metadata:
   namespace: auth-broker
 spec:
   schedule: "*/15 * * * *"
-  suspend: true
+  suspend: false
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3

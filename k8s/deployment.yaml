@@ -235,11 +235,11 @@ spec:
                   name: backoffice-secrets
                   key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
                   optional: true
-            # caller 반증기는 아직 활성화 승인 전이다. CronJob suspend를 풀고 auth-broker
-            # Secret과 egress 인증서를 확인한 뒤에만 DEPLOYED를 "true"로 바꾼다. 그 전에는
-            # 모든 실행기 요청이 401로 닫힌다.
+            # caller 반증기는 2026-09-05 활성화했다. auth-broker Secret 3종,
+            # approved-caller-reconciliation-egress-tls 인증서, egress 프록시 host/ingress
+            # 정책을 확인한 뒤 켰다. 후보 executor gate와 서로 승격시키지 않는다.
             - name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED
-              value: "false"
+              value: "true"
             - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PRINCIPAL
               value: "seori-auth:approved-caller-reconciliation-adapter"
             - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY
