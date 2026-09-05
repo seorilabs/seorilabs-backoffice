@@ -247,12 +247,3 @@ test("caller reconciliation 경로는 인증 없는 요청을 401로 막고 잘�
     else process.env.INTERNAL_ADMIN_TOKEN = previous;
   }
 });
-
-test("caller 읽기 권한은 대상 저장소의 contents 읽기 하나로 제한된다", async () => {
-  const { FLEET_GITHUB_CAPABILITY_PERMISSIONS } =
-    await import("@/lib/github/scoped-installation-client");
-  assert.deepEqual(
-    FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.caller-reconciliation.read"],
-    { contents: "read", metadata: "read" },
-  );
-});

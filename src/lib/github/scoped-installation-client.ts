@@ -17,11 +17,6 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
     contents: "read",
     metadata: "read",
   }),
-  // 승인 번들 caller 반증기는 대상 저장소의 caller 파일 하나만 읽는다.
-  "github.caller-reconciliation.read": Object.freeze({
-    contents: "read",
-    metadata: "read",
-  }),
   "github.standard-labels.read": Object.freeze({
     issues: "read",
     metadata: "read",
