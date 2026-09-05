@@ -301,6 +301,8 @@ export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
     labels: z.tuple([
       z.literal("P1"),
       z.literal("autopilot"),
+      // 자율 이슈 정책이 실행 라벨을 정확히 하나 요구한다.
+      z.literal("autopilot:local"),
       z.literal("platform"),
       z.literal("platform-contract"),
     ]),
@@ -324,6 +326,8 @@ export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
     labels: z.tuple([
       z.literal("P1"),
       z.literal("autopilot"),
+      // 자율 이슈 정책이 실행 라벨을 정확히 하나 요구한다.
+      z.literal("autopilot:local"),
       z.literal("platform"),
       z.literal("platform-remediation"),
     ]),

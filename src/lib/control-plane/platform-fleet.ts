@@ -29,9 +29,14 @@ const PLATFORM_PROVIDER = "platform";
 const PLATFORM_CONSUMER_RESOURCE = "platform-consumer";
 const PLATFORM_PLAN_BUDGET_MICROS = 2_000_000;
 const REQUIRED_CHECKS = ["test:core", "check:architecture", "check:release", "repo-contract"] as const;
+// 자율 이슈 정책은 실행 라벨을 정확히 하나 요구한다. Platform 계약·해소 이슈는
+// 앱별 빌드 검증과 로컬 자격증명이 필요할 수 있어 기본값인 autopilot:local을 쓴다.
+const AUTOPILOT_EXECUTION_LABEL = "autopilot:local" as const;
+
 const PLATFORM_ISSUE_LABELS = {
   P1: { color: "E99695", description: "최우선" },
   autopilot: { color: "0E8A16", description: "자율 스케줄러 처리 대상" },
+  [AUTOPILOT_EXECUTION_LABEL]: { color: "1D76DB", description: "로컬 실행 자율 작업" },
   platform: { color: "0052CC", description: "Seorilabs Platform 연동" },
   "platform-contract": { color: "FBCA04", description: "Platform 계약 변경 대응" },
   "platform-remediation": { color: "D4C5F9", description: "Platform SDK 비관리 상태 해소" },
@@ -272,7 +277,7 @@ function contractIssueTask(input: {
       "",
       "코드와 테스트 적응까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
     ].join("\n"),
-    labels: ["P1", "autopilot", "platform", "platform-contract"],
+    labels: ["P1", "autopilot", AUTOPILOT_EXECUTION_LABEL, "platform", "platform-contract"],
   });
 }
 
@@ -321,7 +326,7 @@ function integrationRemediationIssueTask(input: {
       "",
       "공식 SDK 탑재와 회귀 테스트까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
     ].join("\n"),
-    labels: ["P1", "autopilot", "platform", "platform-remediation"],
+    labels: ["P1", "autopilot", AUTOPILOT_EXECUTION_LABEL, "platform", "platform-remediation"],
   });
 }
 
