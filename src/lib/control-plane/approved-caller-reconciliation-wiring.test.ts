@@ -106,10 +106,14 @@ test("실행기는 계약을 정적 import하지 않는다", () => {
   );
   assert.match(generator, /await import\(\s*"seorilabs-org-contracts\/repo-contract\/workflow-bundle-v5"/u);
   // 실행기 번들만 ESM이어야 dynamic import가 CJS require로 접히지 않는다.
+  const build = source("package.json");
   assert.match(
-    source("package.json"),
+    build,
     /scripts\/approved-caller-reconciliation-executor\.ts --bundle --platform=node --format=esm/u,
   );
+  // ESM 번들에 들어오는 CJS 의존(yaml 등)은 require를 찾는다. banner가 없으면
+  // "Dynamic require of \"process\" is not supported"로 import 시점에 죽는다.
+  assert.match(build, /--banner:js='import\{createRequire as __nodeCreateRequire\}from/u);
 });
 
 test("attestation route는 실행기 목록에서만 나온다", () => {
