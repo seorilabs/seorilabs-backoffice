@@ -444,7 +444,7 @@ function activeTrustedKeys(json: string): Map<string, { key: KeyObject; policyRe
   return result;
 }
 
-function verifyApprovedBundle(input: unknown, trustedKeysJson: string): {
+export function verifyApprovedBundle(input: unknown, trustedKeysJson: string): {
   approved: ApprovedWorkflowBundleV5;
   candidate: WorkflowBundleV5Registry;
   envelope: ReturnType<typeof approvalEnvelope>;
