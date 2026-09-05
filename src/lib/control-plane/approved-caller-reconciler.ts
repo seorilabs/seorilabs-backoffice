@@ -1,7 +1,3 @@
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-
 import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import {
@@ -13,37 +9,43 @@ import {
   verifyApprovedBundle,
 } from "@/lib/control-plane/workflow-bundle-v5-registry";
 
-const CALLER_PATH = ".github/workflows/org-contract.yml";
+export const APPROVED_CALLER_PATH = ".github/workflows/org-contract.yml";
 
 /**
- * 승인 번들 caller는 중앙 계약 구현이 만든다. 여기서 같은 규칙을 다시 쓰면 계약과 조용히
- * 갈라진다. 계약 구현은 설치된 패키지 루트에서 자기 스키마를 읽으므로 그 경로를 넘긴다.
+ * caller 내용은 중앙 계약 구현이 만든다. 그 구현은 top-level await를 쓰는 ESM이라 Next
+ * 서버 번들에 들어가지 못하고, 여기서 규칙을 복제하면 계약과 조용히 갈라진다. 그래서 이
+ * 경로는 계약이 필요로 하는 입력만 만들고, caller 생성과 비교는 신뢰 실행기가 한다.
  */
-export function contractRepoRoot(): string {
-  const require = createRequire(import.meta.url);
-  // exports 맵이 package.json을 노출하지 않으므로 열린 모듈에서 위로 올라가며 계약 루트를
-  // 찾는다. 계약 루트는 스키마가 있는 디렉터리다.
-  let current = dirname(require.resolve("seorilabs-org-contracts/repo-contract/workflow-bundle-v5"));
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (existsSync(join(current, "contracts/workflow-bundle-v5.schema.json"))) return current;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new ControlPlaneError(
-    "설치된 org contracts에서 계약 루트를 찾지 못했습니다.",
-    500,
-    "CONTRACT_ROOT_NOT_FOUND",
-  );
-}
-
-export type CallerReconciliationVerdict = {
+export type CallerReconciliationTarget = {
   repositoryId: string;
   fullName: string;
-  state: "IN_SYNC" | "PULL_REQUEST_REQUIRED" | "SKIPPED";
-  reasonCode: string | null;
+  defaultBranch: string;
+  sourceRef: string;
+  sourceSha: string;
   callerPath: string;
-  desiredCaller: string | null;
+  resolvedManifest: unknown;
+};
+
+export type CallerReconciliationVerdict =
+  | ({ state: "ELIGIBLE"; reasonCode: null } & CallerReconciliationTarget)
+  | {
+      state: "SKIPPED";
+      reasonCode: string;
+      repositoryId: string;
+      fullName: string;
+      callerPath: string;
+    };
+
+export type ApprovedCallerReconciliationPlan = {
+  approvedBundle: {
+    registryRecordId: string;
+    sourceSha: string;
+    payloadDigest: string;
+    approvalKeyId: string;
+    bundle: unknown;
+  };
+  callerPath: string;
+  verdicts: CallerReconciliationVerdict[];
 };
 
 type ReconcilerClient = Pick<
@@ -52,84 +54,13 @@ type ReconcilerClient = Pick<
   | "workflowBundleRegistryRecord" | "$transaction"
 >;
 
-/**
- * 중앙 계약 구현. 기본값은 설치된 패키지를 늦게 불러온다. 이 모듈은 top-level await를 쓰는
- * ESM이라 CJS로 변환하는 테스트 러너가 읽지 못하므로, 주입 지점을 두어 계약 규칙을 복제하지
- * 않고도 계획 로직만 따로 검사할 수 있게 한다.
- */
-export type WorkflowBundleContract = {
-  loadApprovedWorkflowBundleV5: (
-    bundle: unknown,
-    options: { trustedApprovalVerifier: (request: unknown) => Promise<unknown> },
-  ) => Promise<object>;
-  loadResolvedWorkflowBindingV5: (
-    repositoryContext: { repositoryId: string; fullName: string; sourceSha: string },
-    options: {
-      trustedResolvedManifestReadback: (context: unknown) => Promise<unknown>;
-      repoRoot: string;
-    },
-  ) => Promise<object>;
-  generateStaticCallerV5: (options: {
-    approvedBundleBinding: object;
-    resolvedBinding: object;
-  }) => string;
-};
-
-export async function installedWorkflowBundleContract(): Promise<WorkflowBundleContract> {
-  return import("seorilabs-org-contracts/repo-contract/workflow-bundle-v5");
-}
-
 export type ApprovedCallerReconcilerDependencies = {
   trustedApprovalKeysJson: string;
-  contract?: WorkflowBundleContract;
   /** 기본값은 registry의 서명 검증이다. 테스트만 대체한다. */
   verifyApprovedBundle?: typeof verifyApprovedBundle;
-  /** 계약 스키마가 있는 설치 경로. 기본값은 설치된 org contracts에서 찾는다. */
-  contractRepoRoot?: string;
   /** 기본값은 서명된 runtime manifest 구성이다. 테스트만 대체한다. */
   resolveManifest?: typeof resolveStaticRuntimeManifestForRepository;
-  /** 저장소의 현재 caller 내용. 파일이 없으면 null. */
-  readRepositoryCaller: (input: {
-    fullName: string;
-    repositoryId: string;
-    ref: string;
-    path: string;
-  }) => Promise<string | null>;
 };
-
-async function approvedBundleBinding(
-  contract: WorkflowBundleContract,
-  verify: typeof verifyApprovedBundle,
-  bundle: unknown,
-  trustedKeysJson: string,
-) {
-  let verified: ReturnType<typeof verifyApprovedBundle>;
-  try {
-    verified = verify(bundle, trustedKeysJson);
-  } catch (error) {
-    if (error instanceof ControlPlaneError) throw error;
-    throw new ControlPlaneError(
-      "승인된 WorkflowBundle을 신뢰할 수 없습니다.",
-      409,
-      "APPROVED_WORKFLOW_BUNDLE_UNTRUSTED",
-    );
-  }
-  return contract.loadApprovedWorkflowBundleV5(bundle, {
-    trustedApprovalVerifier: async () => ({
-      state: "VERIFIED" as const,
-      candidateDigest: verified.envelope.candidateDigest,
-      payloadDigest: verified.approved.integrity.payloadDigest,
-      sourceSha: verified.approved.source.sha,
-      workflowExecutionSha: verified.approved.source.workflowExecutionSha,
-      keyId: verified.approved.approval.signature.keyId,
-      policyRevision: verified.approved.approval.signature.policyRevision,
-      contractDigestsDigest: verified.envelope.contractDigestsDigest,
-      runtimeAssetDigestsDigest: verified.envelope.runtimeAssetDigestsDigest,
-      evidenceDigest: verified.envelope.evidenceDigest,
-      approvalPayloadDigest: verified.approvalPayloadDigest,
-    }),
-  });
-}
 
 /**
  * Backoffice가 만든 readback을 중앙 계약이 받는 envelope으로 옮긴다. 계약은 서명 provenance를
@@ -173,12 +104,11 @@ function skipped(
   reasonCode: string,
 ): CallerReconciliationVerdict {
   return {
-    repositoryId,
-    fullName,
     state: "SKIPPED",
     reasonCode,
-    callerPath: CALLER_PATH,
-    desiredCaller: null,
+    repositoryId,
+    fullName,
+    callerPath: APPROVED_CALLER_PATH,
   };
 }
 
@@ -190,7 +120,7 @@ export async function planApprovedCallerReconciliation(input: {
   now?: Date;
 }, client: ReconcilerClient = prisma,
   dependencies: ApprovedCallerReconcilerDependencies,
-): Promise<CallerReconciliationVerdict[]> {
+): Promise<ApprovedCallerReconciliationPlan> {
   const approvedRecords = (await readWorkflowBundleRegistryRecords(null, client))
     .filter((record) => record.approvalState === "APPROVED");
   if (approvedRecords.length === 0) {
@@ -208,15 +138,19 @@ export async function planApprovedCallerReconciliation(input: {
     );
   }
   const record = approvedRecords[0]!;
-  const contract = dependencies.contract ?? await installedWorkflowBundleContract();
-  const bundleBinding = await approvedBundleBinding(
-    contract,
-    dependencies.verifyApprovedBundle ?? verifyApprovedBundle,
-    record.bundle,
-    dependencies.trustedApprovalKeysJson,
-  );
-  const repoRoot = dependencies.contractRepoRoot ?? contractRepoRoot();
-  const resolveManifest = dependencies.resolveManifest ?? resolveStaticRuntimeManifestForRepository;
+  const verify = dependencies.verifyApprovedBundle ?? verifyApprovedBundle;
+  try {
+    verify(record.bundle, dependencies.trustedApprovalKeysJson);
+  } catch (error) {
+    if (error instanceof ControlPlaneError) throw error;
+    throw new ControlPlaneError(
+      "승인된 WorkflowBundle을 신뢰할 수 없습니다.",
+      409,
+      "APPROVED_WORKFLOW_BUNDLE_UNTRUSTED",
+    );
+  }
+  const resolveManifest =
+    dependencies.resolveManifest ?? resolveStaticRuntimeManifestForRepository;
 
   const apps = await client.app.findMany({
     where: {
@@ -249,79 +183,67 @@ export async function planApprovedCallerReconciliation(input: {
       verdicts.push(skipped(repositoryId, app.repoFullName, "APP_NOT_ACTIVE"));
       continue;
     }
-    const expectedSourceRef = `refs/heads/${registration.defaultBranch}`;
+    const sourceRef = `refs/heads/${registration.defaultBranch}`;
     const discovery = await client.discoveryObservation.findFirst({
-      where: { appId: app.id, sourceRef: expectedSourceRef },
+      where: { appId: app.id, sourceRef },
       orderBy: { createdAt: "desc" },
       select: { sourceSha: true },
     });
-    if (!discovery?.sourceSha) {
+    const sourceSha = discovery?.sourceSha;
+    if (!sourceSha) {
       verdicts.push(skipped(repositoryId, app.repoFullName, "NO_DEFAULT_BRANCH_DISCOVERY"));
       continue;
     }
 
-    let desiredCaller: string;
     try {
       const readback = await resolveManifest({
         selector: {
           repositoryId,
-          bindingSourceSha: discovery.sourceSha,
-          applicationSourceSha: discovery.sourceSha,
+          bindingSourceSha: sourceSha,
+          applicationSourceSha: sourceSha,
           workflowBundleSha: record.sourceSha,
         },
-        app: {
-          id: app.id,
-          repoFullName: app.repoFullName,
-          status: app.status,
-        },
-        expectedSourceRef,
+        app: { id: app.id, repoFullName: app.repoFullName, status: app.status },
+        expectedSourceRef: sourceRef,
         signingKey: input.signingKey,
         snapshotSignatureKeyId: input.snapshotSignatureKeyId,
         snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
         now: input.now,
       }, client);
-      const envelope = resolvedManifestEnvelope(readback);
-      const resolvedBinding = await contract.loadResolvedWorkflowBindingV5({
+      verdicts.push({
+        state: "ELIGIBLE",
+        reasonCode: null,
         repositoryId,
         fullName: app.repoFullName,
-        sourceSha: discovery.sourceSha,
-      }, {
-        trustedResolvedManifestReadback: async () => envelope,
-        repoRoot,
-      });
-      desiredCaller = contract.generateStaticCallerV5({
-        approvedBundleBinding: bundleBinding,
-        resolvedBinding,
+        defaultBranch: registration.defaultBranch ?? "",
+        sourceRef,
+        sourceSha,
+        callerPath: APPROVED_CALLER_PATH,
+        resolvedManifest: resolvedManifestEnvelope(readback),
       });
     } catch (error) {
       verdicts.push(skipped(
         repositoryId,
         app.repoFullName,
-        error instanceof ControlPlaneError ? error.code : "CALLER_GENERATION_FAILED",
+        error instanceof ControlPlaneError ? error.code : "MANIFEST_RESOLUTION_FAILED",
       ));
-      continue;
     }
-
-    const current = await dependencies.readRepositoryCaller({
-      fullName: app.repoFullName,
-      repositoryId,
-      ref: expectedSourceRef,
-      path: CALLER_PATH,
-    });
-    verdicts.push({
-      repositoryId,
-      fullName: app.repoFullName,
-      state: current === desiredCaller ? "IN_SYNC" : "PULL_REQUEST_REQUIRED",
-      reasonCode: null,
-      callerPath: CALLER_PATH,
-      desiredCaller,
-    });
   }
-  return verdicts;
+  return {
+    approvedBundle: {
+      registryRecordId: record.id,
+      sourceSha: record.sourceSha,
+      payloadDigest: record.payloadDigest,
+      approvalKeyId: record.approvalKeyId ?? "",
+      bundle: record.bundle,
+    },
+    callerPath: APPROVED_CALLER_PATH,
+    verdicts,
+  };
 }
 
 export function callerReconciliationDigest(
-  verdicts: CallerReconciliationVerdict[],
+  plan: ApprovedCallerReconciliationPlan,
 ): string {
-  return contractCanonicalJson(verdicts as unknown as JsonValue);
+  return contractCanonicalJson(plan.verdicts as unknown as JsonValue);
 }

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import {
-  planApprovedCallerReconciliation,
-} from "@/lib/control-plane/approved-caller-reconciler";
+import { planApprovedCallerReconciliation } from "@/lib/control-plane/approved-caller-reconciler";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import { authenticateInternalRequest } from "@/lib/control-plane/security";
 
@@ -12,8 +10,8 @@ export const dynamic = "force-dynamic";
 const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
 
 /**
- * 승인 번들이 정한 caller와 저장소의 현재 caller가 맞는지 계획한다. 이 경로는 읽기 전용이며
- * 저장소를 바꾸지 않는다. PR 생성은 신뢰 실행기가 이 계획을 받아 수행한다.
+ * 승인 번들 caller를 만들기 위한 입력과 대상 적격 여부를 계획한다. 읽기 전용이며 저장소를
+ * 바꾸지 않는다. caller 생성과 PR은 이 계획을 받는 신뢰 실행기가 수행한다.
  */
 export async function GET(request: NextRequest) {
   const principal = authenticateInternalRequest(request, "control-plane");
@@ -23,10 +21,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "invalid repositoryId" }, { status: 400 });
   }
   try {
-    // GitHub client는 요청 처리 시점에만 불러온다. 모듈 로드만으로 octokit 전체를 끌어오지
-    // 않아 route를 인증·입력 검사 단위로 검사할 수 있다.
-    const { readRepositoryFile } = await import("@/lib/github/repository-file");
-    const verdicts = await planApprovedCallerReconciliation({
+    const plan = await planApprovedCallerReconciliation({
       ...(repositoryId === null ? {} : { repositoryId }),
       signingKey: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
       snapshotSignatureKeyId: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID ?? "",
@@ -35,16 +30,21 @@ export async function GET(request: NextRequest) {
     }, undefined, {
       trustedApprovalKeysJson:
         process.env.WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON ?? "",
-      readRepositoryCaller: readRepositoryFile,
     });
     return NextResponse.json({
-      summary: {
-        inSync: verdicts.filter((verdict) => verdict.state === "IN_SYNC").length,
-        pullRequestRequired:
-          verdicts.filter((verdict) => verdict.state === "PULL_REQUEST_REQUIRED").length,
-        skipped: verdicts.filter((verdict) => verdict.state === "SKIPPED").length,
+      approvedBundle: {
+        registryRecordId: plan.approvedBundle.registryRecordId,
+        sourceSha: plan.approvedBundle.sourceSha,
+        payloadDigest: plan.approvedBundle.payloadDigest,
+        approvalKeyId: plan.approvedBundle.approvalKeyId,
+        bundle: plan.approvedBundle.bundle,
       },
-      verdicts,
+      callerPath: plan.callerPath,
+      summary: {
+        eligible: plan.verdicts.filter((verdict) => verdict.state === "ELIGIBLE").length,
+        skipped: plan.verdicts.filter((verdict) => verdict.state === "SKIPPED").length,
+      },
+      verdicts: plan.verdicts,
     });
   } catch (error) {
     return controlPlaneErrorResponse(error);

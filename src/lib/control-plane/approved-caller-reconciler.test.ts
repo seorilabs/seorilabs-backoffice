@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   callerReconciliationDigest,
   planApprovedCallerReconciliation,
-  type CallerReconciliationVerdict,
 } from "@/lib/control-plane/approved-caller-reconciler";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 
@@ -58,17 +57,6 @@ function client(overrides: {
   };
 }
 
-// 계약 구현은 주입한다. 계획 로직(대상 선정과 비교)만 여기서 검사하고, caller 내용은
-// 중앙 계약이 만든다는 사실 자체를 호출로 확인한다.
-const CALLER = "name: Org Contract\n";
-function contract(calls: string[] = []) {
-  return {
-    async loadApprovedWorkflowBundleV5() { calls.push("loadApproved"); return {}; },
-    async loadResolvedWorkflowBindingV5() { calls.push("loadResolved"); return {}; },
-    generateStaticCallerV5() { calls.push("generateCaller"); return CALLER; },
-  };
-}
-
 function verifiedBundle() {
   return {
     approved: {
@@ -89,9 +77,7 @@ function verifiedBundle() {
 
 const dependencies = {
   trustedApprovalKeysJson: JSON.stringify({ schemaVersion: 1, keys: [] }),
-  contract: contract(),
   verifyApprovedBundle: (() => verifiedBundle()) as never,
-  contractRepoRoot: "/unit-test/contract-root",
   resolveManifest: (async () => ({
     state: "VERIFIED",
     repositoryId: "1250442131",
@@ -106,7 +92,6 @@ const dependencies = {
       snapshotSignature: { keyId: "k", policyRevision: "p", digest: `sha256:${"a".repeat(64)}` },
     },
   })) as never,
-  readRepositoryCaller: async () => null,
 };
 
 const options = {
@@ -154,92 +139,80 @@ test("등록·분류·앱 상태가 어긋난 저장소는 이유를 남기고 �
     [{ discovery: null }, "NO_DEFAULT_BRANCH_DISCOVERY"],
   ];
   for (const [overrides, reasonCode] of cases) {
-    const verdicts = await planApprovedCallerReconciliation(
+    const plan = await planApprovedCallerReconciliation(
       options,
       client(overrides) as never,
       dependencies,
     );
-    assert.equal(verdicts.length, 1, reasonCode);
-    assert.equal(verdicts[0]!.state, "SKIPPED", reasonCode);
-    assert.equal(verdicts[0]!.reasonCode, reasonCode);
-    assert.equal(verdicts[0]!.desiredCaller, null);
-  }
+    assert.equal(plan.verdicts.length, 1, reasonCode);
+    assert.equal(plan.verdicts[0]!.state, "SKIPPED", reasonCode);
+    assert.equal(plan.verdicts[0]!.reasonCode, reasonCode);
+      }
 });
 
 test("GitHub 저장소에 결합되지 않은 App은 대상에서 빠진다", async () => {
-  const verdicts = await planApprovedCallerReconciliation(
+  const plan = await planApprovedCallerReconciliation(
     options,
     client({ apps: [{ id: "app-1", repoId: null, repoFullName: FULL_NAME, status: "ACTIVE" }] }) as never,
     dependencies,
   );
-  assert.deepEqual(verdicts, []);
+  assert.deepEqual(plan.verdicts, []);
 });
 
-test("caller가 저장소에 없으면 PR이 필요하다고, 같으면 동기 상태로 판정한다", async () => {
-  const calls: string[] = [];
-  const missing = await planApprovedCallerReconciliation(options, client() as never, {
-    ...dependencies,
-    contract: contract(calls),
-    readRepositoryCaller: async () => null,
-  });
-  assert.equal(missing[0]!.state, "PULL_REQUEST_REQUIRED");
-  assert.equal(missing[0]!.desiredCaller, CALLER);
-  assert.equal(missing[0]!.callerPath, ".github/workflows/org-contract.yml");
-  // caller 내용은 중앙 계약이 만든다. 이 모듈은 규칙을 다시 쓰지 않는다.
-  assert.deepEqual(calls, ["loadApproved", "loadResolved", "generateCaller"]);
-
-  const inSync = await planApprovedCallerReconciliation(options, client() as never, {
-    ...dependencies,
-    contract: contract(),
-    readRepositoryCaller: async () => CALLER,
-  });
-  assert.equal(inSync[0]!.state, "IN_SYNC");
-
-  const drifted = await planApprovedCallerReconciliation(options, client() as never, {
-    ...dependencies,
-    contract: contract(),
-    readRepositoryCaller: async () => "name: Org Contract\n# 손으로 바꾼 흔적\n",
-  });
-  assert.equal(drifted[0]!.state, "PULL_REQUEST_REQUIRED");
+test("적격 저장소는 계약이 caller를 만들 수 있는 입력을 담아 돌려준다", async () => {
+  const plan = await planApprovedCallerReconciliation(options, client() as never, dependencies);
+  assert.equal(plan.verdicts.length, 1);
+  const verdict = plan.verdicts[0]!;
+  assert.equal(verdict.state, "ELIGIBLE");
+  if (verdict.state !== "ELIGIBLE") return;
+  assert.equal(verdict.fullName, FULL_NAME);
+  assert.equal(verdict.sourceRef, "refs/heads/main");
+  assert.equal(verdict.callerPath, ".github/workflows/org-contract.yml");
+  // 계약이 요구하는 provenance가 최상위로 올라와 있어야 한다.
+  const manifest = verdict.resolvedManifest as Record<string, unknown>;
+  for (const field of [
+    "state", "repositoryId", "fullName", "sourceSha", "manifestDigest",
+    "configRevisionId", "configRevision", "configRevisionDigest",
+    "signedSnapshotDigest", "snapshotSignatureKeyId",
+    "snapshotSignaturePolicyRevision", "snapshotSignatureDigest", "manifest",
+  ]) {
+    assert.ok(field in manifest, field);
+  }
+  assert.equal(plan.approvedBundle.sourceSha, "a".repeat(40));
+  assert.equal(plan.callerPath, ".github/workflows/org-contract.yml");
 });
 
 test("매니페스트 구성이 거부하면 그 코드를 이유로 남기고 건너뛴다", async () => {
-  const verdicts = await planApprovedCallerReconciliation(options, client() as never, {
+  const plan = await planApprovedCallerReconciliation(options, client() as never, {
     ...dependencies,
     resolveManifest: (async () => {
       throw new ControlPlaneError("활성 설정 없음", 409, "NO_ACTIVE_CONFIG");
     }) as never,
   });
-  assert.equal(verdicts[0]!.state, "SKIPPED");
-  assert.equal(verdicts[0]!.reasonCode, "NO_ACTIVE_CONFIG");
-});
-
-test("계약이 매니페스트를 신뢰하지 못하면 그 저장소만 건너뛴다", async () => {
-  const verdicts = await planApprovedCallerReconciliation(options, client() as never, {
-    ...dependencies,
-    contract: {
-      ...contract(),
-      async loadResolvedWorkflowBindingV5() {
-        throw new Error("RESOLVED_BINDING_READBACK_UNTRUSTED");
-      },
-    },
-  });
-  assert.equal(verdicts[0]!.state, "SKIPPED");
-  assert.equal(verdicts[0]!.reasonCode, "CALLER_GENERATION_FAILED");
+  assert.equal(plan.verdicts[0]!.state, "SKIPPED");
+  assert.equal(plan.verdicts[0]!.reasonCode, "NO_ACTIVE_CONFIG");
 });
 
 test("계획 digest는 계약 정규화를 쓴다", () => {
-  const verdicts: CallerReconciliationVerdict[] = [{
-    repositoryId: "1",
-    fullName: FULL_NAME,
-    state: "IN_SYNC",
-    reasonCode: null,
+  const digest = callerReconciliationDigest({
+    approvedBundle: {
+      registryRecordId: "r1",
+      sourceSha: "a".repeat(40),
+      payloadDigest: `sha256:${"1".repeat(64)}`,
+      approvalKeyId: "key-1",
+      bundle: {},
+    },
     callerPath: ".github/workflows/org-contract.yml",
-    desiredCaller: null,
-  }];
-  const digest = callerReconciliationDigest(verdicts);
+    verdicts: [{
+      state: "SKIPPED",
+      reasonCode: "APP_NOT_ACTIVE",
+      repositoryId: "1",
+      fullName: FULL_NAME,
+      callerPath: ".github/workflows/org-contract.yml",
+    }],
+  });
   assert.ok(digest.startsWith('[{"callerPath"'));
-  assert.ok(digest.includes('"state":"IN_SYNC"'));
+  assert.ok(digest.includes('"state":"SKIPPED"'));
 });
 
 test("기본 검증자는 서명되지 않은 번들을 거부한다", async () => {
@@ -247,10 +220,7 @@ test("기본 검증자는 서명되지 않은 번들을 거부한다", async () 
   await assert.rejects(
     planApprovedCallerReconciliation(options, client() as never, {
       trustedApprovalKeysJson: JSON.stringify({ schemaVersion: 1, keys: [] }),
-      contract: contract(),
-      contractRepoRoot: "/unit-test/contract-root",
-      readRepositoryCaller: async () => null,
-    }),
+                }),
     (error) => error instanceof ControlPlaneError
       && error.code === "APPROVED_WORKFLOW_BUNDLE_UNTRUSTED",
   );
