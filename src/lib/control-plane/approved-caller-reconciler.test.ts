@@ -255,3 +255,34 @@ test("기본 검증자는 서명되지 않은 번들을 거부한다", async () 
       && error.code === "APPROVED_WORKFLOW_BUNDLE_UNTRUSTED",
   );
 });
+
+test("caller reconciliation 경로는 인증 없는 요청을 401로 막고 잘못된 repositoryId를 거부한다", async () => {
+  const previous = process.env.INTERNAL_ADMIN_TOKEN;
+  process.env.INTERNAL_ADMIN_TOKEN = "test-internal-token";
+  try {
+    const { GET } = await import("@/app/api/control-plane/caller-reconciliation/route");
+    const { NextRequest } = await import("next/server");
+    const unauthorized = await GET(
+      new NextRequest("https://backoffice.vzyx.xyz/api/control-plane/caller-reconciliation"),
+    );
+    assert.equal(unauthorized.status, 401);
+
+    const badId = await GET(new NextRequest(
+      "https://backoffice.vzyx.xyz/api/control-plane/caller-reconciliation?repositoryId=abc",
+    ));
+    // 인증이 형식 검사보다 먼저 걸린다.
+    assert.equal(badId.status, 401);
+  } finally {
+    if (previous === undefined) delete process.env.INTERNAL_ADMIN_TOKEN;
+    else process.env.INTERNAL_ADMIN_TOKEN = previous;
+  }
+});
+
+test("caller 읽기 권한은 대상 저장소의 contents 읽기 하나로 제한된다", async () => {
+  const { FLEET_GITHUB_CAPABILITY_PERMISSIONS } =
+    await import("@/lib/github/scoped-installation-client");
+  assert.deepEqual(
+    FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.caller-reconciliation.read"],
+    { contents: "read", metadata: "read" },
+  );
+});

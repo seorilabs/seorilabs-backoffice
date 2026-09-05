@@ -91,6 +91,7 @@ export type ApprovedCallerReconcilerDependencies = {
   /** 저장소의 현재 caller 내용. 파일이 없으면 null. */
   readRepositoryCaller: (input: {
     fullName: string;
+    repositoryId: string;
     ref: string;
     path: string;
   }) => Promise<string | null>;
@@ -303,6 +304,7 @@ export async function planApprovedCallerReconciliation(input: {
 
     const current = await dependencies.readRepositoryCaller({
       fullName: app.repoFullName,
+      repositoryId,
       ref: expectedSourceRef,
       path: CALLER_PATH,
     });
