@@ -51,8 +51,10 @@ RUN bash scripts/prepare-runtime-org-contracts.sh /app/runtime-contract-root/nod
 
 # ── runtime: TARGETPLATFORM(arm64) 슬림 standalone + prisma migrate(deploy) 가능 ──
 FROM node:24.16.0-bookworm-slim AS runtime
+# git은 caller 반증기가 대상 저장소의 exact source를 체크아웃하는 데 쓴다. 중앙 계약이
+# repoRoot의 git HEAD와 선언 경로를 직접 검증하므로 API tarball로 대체할 수 없다.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates util-linux \
+  && apt-get install -y --no-install-recommends openssl ca-certificates util-linux git \
   && rm -rf /var/lib/apt/lists/*
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

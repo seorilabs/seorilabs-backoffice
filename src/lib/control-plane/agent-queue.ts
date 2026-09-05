@@ -7,8 +7,6 @@ import {
   MANAGED_WORKER_TEMPLATE_KEYS,
   parseManagedWorkerPolicy,
   SOURCE_REMEDIATION_TEMPLATE_KEY,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
   type AutomationPolicy,
   type SourceRemediationPolicy,
 } from "@/lib/control-plane/automation-catalog";
@@ -25,8 +23,9 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import {
   trustedMutationAdapterConfigured,
-  workflowBundleCandidateExecutorConfigured,
+  trustedExecutorConfigured,
 } from "@/lib/control-plane/security";
+import type { TrustedExecutorGate } from "@/lib/control-plane/trusted-executor-bindings";
 
 class RepoScopeBusyError extends Error {}
 
@@ -636,15 +635,21 @@ export async function claimAgentRun(input: {
  * 고정 candidate executor만 agentKind=null 전용 definition을 claim한다. 일반
  * Codex/Claude worker query에는 이 queue가 섞이지 않는다.
  */
-export async function claimWorkflowBundleCandidateRun(input: {
-  workerId: typeof WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL;
+/**
+ * 신뢰 실행기 run claim이다. 실행기마다 template과 배포 gate만 다르고 CAS/lease/replay
+ * 규칙은 같아서 한 구현을 공유한다.
+ */
+export async function claimTrustedExecutorRun(input: {
+  gate: TrustedExecutorGate;
+  template: string;
+  workerId: string;
   runtimeBindingDigest: string;
   leaseSeconds: number;
   idempotencyKey: string;
   runId?: string;
   now?: Date;
 }): Promise<ClaimedAgentRun | null> {
-  if (!workflowBundleCandidateExecutorConfigured()) return null;
+  if (!trustedExecutorConfigured(input.gate)) return null;
   const now = input.now ?? new Date();
   const replay = await replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
   if (replay) return replay;
@@ -659,7 +664,7 @@ export async function claimWorkflowBundleCandidateRun(input: {
       eligibleAt: { lte: now },
       occurrence: {
         definition: {
-          template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
+          template: input.template,
           agentKind: null,
           configuration: { not: Prisma.DbNull },
         },

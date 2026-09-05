@@ -43,14 +43,14 @@ export interface StaticRuntimeManifestInput {
   dependencyAuditException?: DependencyAuditException;
 }
 
-function sha256Prefix(value: string): string {
+export function sha256Prefix(value: string): string {
   if (!HEX_64.test(value)) {
     throw new StaticRuntimeManifestError("INVALID_RUNTIME_DIGEST");
   }
   return `sha256:${value}`;
 }
 
-function signatureDigest(value: string): string {
+export function signatureDigest(value: string): string {
   if (!HEX_64.test(value)) {
     throw new StaticRuntimeManifestError("INVALID_CONFIG_SIGNATURE");
   }

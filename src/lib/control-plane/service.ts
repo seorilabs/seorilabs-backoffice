@@ -25,6 +25,10 @@ import {
   type StaticRuntimeBinding,
 } from "@/lib/control-plane/static-runtime-manifest";
 import {
+  buildResolvedWorkflowBindingReadback,
+  ResolvedWorkflowBindingError,
+} from "@/lib/control-plane/resolved-workflow-binding";
+import {
   buildRuntimeManifestReadback,
   BuildRuntimeManifestError,
 } from "@/lib/control-plane/build-runtime-manifest";
@@ -2586,12 +2590,13 @@ export async function resolveManifest(input: {
 }
 
 /**
- * 서명된 static runtime manifest를 만드는 공통 경로다. GitHub OIDC 검증은 포함하지 않는다.
- * 런타임(resolveStaticRuntimeManifest)은 OIDC로 실행 주체를 먼저 확인한 뒤 이 함수를 부르고,
- * 서버 측 계획(caller 반증기)은 실행이 없으므로 OIDC 없이 같은 manifest를 만든다. manifest
- * 내용은 app·registration·ACTIVE revision·discovery에서만 나오고 OIDC 값은 쓰이지 않는다.
+ * ACTIVE 설정과 exact-SHA discovery에서 static 실행 사실을 한 번만 해석한다. GitHub OIDC
+ * 검증은 포함하지 않는다. 런타임(resolveStaticRuntimeManifest)은 OIDC로 실행 주체를 먼저
+ * 확인한 뒤 이 사실로 manifest를 만들고, 서버 측 계획(caller 반증기)은 실행이 없으므로 OIDC
+ * 없이 같은 사실에서 resolved binding을 만든다. 두 산출물이 같은 해석을 공유해야 한쪽만
+ * 조용히 어긋나지 않는다.
  */
-export async function resolveStaticRuntimeManifestForRepository(input: {
+async function resolveStaticRuntimeFacts(input: {
   selector: {
     repositoryId: string;
     bindingSourceSha: string;
@@ -2717,30 +2722,128 @@ export async function resolveStaticRuntimeManifestForRepository(input: {
       "INVALID_CONFIG_SIGNATURE",
     );
   }
+  // 계약 문서는 관측 build binding을 그대로 요구하므로 저장 JSON을 여기서 계약 fact로
+  // 되읽는다. 형태가 다르면 caller를 만들 수 없으므로 fail-closed다.
+  const observedBuildBindings = androidBuildBindingObservationSchema.array().max(1)
+    .safeParse(discovery.buildBindings ?? []);
+  if (!observedBuildBindings.success) {
+    throw new ControlPlaneError(
+      "exact-SHA discovery의 build binding fact를 읽을 수 없습니다.",
+      409,
+      "BUILD_BINDING_OBSERVATION_INVALID",
+    );
+  }
+  return {
+    app,
+    expectedSourceRef,
+    staticBinding,
+    dependencyAuditException,
+    workflowBundleBinding: {
+      sourceSha: configPayload.build.workflowBundleSha,
+      payloadDigest: configPayload.build.workflowBundleDigest ?? null,
+    },
+    buildBindings: observedBuildBindings.data,
+    observationId: discovery.id,
+    observationRequestHash: discovery.requestHash,
+    configRevisionId: revision.id,
+    configRevision: revision.revision,
+    configRevisionPayloadHash: revision.payloadHash,
+    signedSnapshotDigest: revision.snapshotDigest,
+    snapshotSignature: revision.snapshotSignature,
+  };
+}
+
+type StaticRuntimeFactsInput = Parameters<typeof resolveStaticRuntimeFacts>[0];
+type StaticRuntimeFactsClient = Parameters<typeof resolveStaticRuntimeFacts>[1];
+
+/** GitHub Actions runtime이 읽는 서명된 static runtime manifest다. */
+export async function resolveStaticRuntimeManifestForRepository(
+  input: StaticRuntimeFactsInput,
+  client?: StaticRuntimeFactsClient,
+) {
+  const facts = await resolveStaticRuntimeFacts(input, client);
   try {
     return buildStaticRuntimeManifestReadback({
-      lifecycleState: app.status,
+      lifecycleState: facts.app.status,
       repositoryId: input.selector.repositoryId,
-      fullName: app.repoFullName,
+      fullName: facts.app.repoFullName,
       bindingSourceSha: input.selector.bindingSourceSha,
-      sourceRef: expectedSourceRef,
+      sourceRef: facts.expectedSourceRef,
       applicationSourceSha: input.selector.applicationSourceSha,
-      observationId: discovery.id,
-      observationRequestHash: discovery.requestHash,
-      configRevisionId: revision.id,
-      configRevision: revision.revision,
-      configRevisionPayloadHash: revision.payloadHash,
-      signedSnapshotDigest: revision.snapshotDigest,
-      snapshotSignature: revision.snapshotSignature,
+      observationId: facts.observationId,
+      observationRequestHash: facts.observationRequestHash,
+      configRevisionId: facts.configRevisionId,
+      configRevision: facts.configRevision,
+      configRevisionPayloadHash: facts.configRevisionPayloadHash,
+      signedSnapshotDigest: facts.signedSnapshotDigest,
+      snapshotSignature: facts.snapshotSignature,
       snapshotSignatureKeyId: input.snapshotSignatureKeyId,
       snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
-      staticBinding,
-      dependencyAuditException,
+      staticBinding: facts.staticBinding,
+      dependencyAuditException: facts.dependencyAuditException,
     });
   } catch (error) {
     if (error instanceof StaticRuntimeManifestError) {
       throw new ControlPlaneError(
         "서명된 runtime manifest provenance를 생성할 수 없습니다.",
+        error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
+        error.code,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * 중앙 계약(`loadResolvedWorkflowBindingV5`)이 받는 resolved binding readback이다. static
+ * runtime manifest와 같은 사실에서 나오지만 계약 schema가 요구하는 문서 형태가 달라
+ * 별도 투영이 필요하다. 여기서 규칙을 새로 만들지 않고 사실을 옮기기만 한다.
+ */
+export async function resolveWorkflowBindingForRepository(
+  input: StaticRuntimeFactsInput,
+  client?: StaticRuntimeFactsClient,
+) {
+  const facts = await resolveStaticRuntimeFacts(input, client);
+  // static runtime manifest는 payload digest 없이도 성립하지만, 계약 문서의
+  // workflowBundleBinding은 sourceSha와 digest를 함께 요구한다.
+  if (!facts.workflowBundleBinding.payloadDigest) {
+    throw new ControlPlaneError(
+      "ACTIVE revision에 WorkflowBundle payload digest가 없습니다.",
+      409,
+      "WORKFLOW_BUNDLE_DIGEST_MISSING",
+    );
+  }
+  const workflowBundleBinding = {
+    sourceSha: facts.workflowBundleBinding.sourceSha,
+    payloadDigest: facts.workflowBundleBinding.payloadDigest,
+  };
+  try {
+    return buildResolvedWorkflowBindingReadback({
+      state: facts.app.status,
+      repositoryId: input.selector.repositoryId,
+      fullName: facts.app.repoFullName,
+      sourceSha: input.selector.bindingSourceSha,
+      sourceRef: facts.expectedSourceRef,
+      observationId: facts.observationId,
+      observationRequestHash: facts.observationRequestHash,
+      configRevisionId: facts.configRevisionId,
+      configRevision: facts.configRevision,
+      configRevisionPayloadHash: facts.configRevisionPayloadHash,
+      signedSnapshotDigest: facts.signedSnapshotDigest,
+      snapshotSignature: facts.snapshotSignature,
+      snapshotSignatureKeyId: input.snapshotSignatureKeyId,
+      snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+      staticBinding: facts.staticBinding,
+      buildBindings: facts.buildBindings,
+      workflowBundleBinding,
+    });
+  } catch (error) {
+    if (
+      error instanceof ResolvedWorkflowBindingError
+      || error instanceof StaticRuntimeManifestError
+    ) {
+      throw new ControlPlaneError(
+        "중앙 계약이 받는 resolved binding을 만들 수 없습니다.",
         error.code === "SNAPSHOT_SIGNATURE_IDENTITY_MISSING" ? 503 : 409,
         error.code,
       );

@@ -1,15 +1,15 @@
+import { APPROVED_CALLER_PATH } from "@/lib/control-plane/approved-caller-reconciliation-contract";
 import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import {
   ControlPlaneError,
-  resolveStaticRuntimeManifestForRepository,
+  resolveWorkflowBindingForRepository,
 } from "@/lib/control-plane/service";
 import {
   readWorkflowBundleRegistryRecords,
   verifyApprovedBundle,
 } from "@/lib/control-plane/workflow-bundle-v5-registry";
 
-export const APPROVED_CALLER_PATH = ".github/workflows/org-contract.yml";
 
 /**
  * caller 내용은 중앙 계약 구현이 만든다. 그 구현은 top-level await를 쓰는 ESM이라 Next
@@ -42,7 +42,7 @@ export type ApprovedCallerReconciliationPlan = {
     sourceSha: string;
     payloadDigest: string;
     approvalKeyId: string;
-    bundle: unknown;
+    bundle: Record<string, unknown>;
   };
   callerPath: string;
   verdicts: CallerReconciliationVerdict[];
@@ -58,44 +58,20 @@ export type ApprovedCallerReconcilerDependencies = {
   trustedApprovalKeysJson: string;
   /** 기본값은 registry의 서명 검증이다. 테스트만 대체한다. */
   verifyApprovedBundle?: typeof verifyApprovedBundle;
-  /** 기본값은 서명된 runtime manifest 구성이다. 테스트만 대체한다. */
-  resolveManifest?: typeof resolveStaticRuntimeManifestForRepository;
+  /** 기본값은 계약이 받는 resolved binding 구성이다. 테스트만 대체한다. */
+  resolveManifest?: typeof resolveWorkflowBindingForRepository;
 };
 
-/**
- * Backoffice가 만든 readback을 중앙 계약이 받는 envelope으로 옮긴다. 계약은 서명 provenance를
- * 최상위에서 다시 대조하므로 manifest 안의 값을 그대로 끌어올린다.
- */
-function resolvedManifestEnvelope(readback: {
-  state: string;
-  repositoryId: string;
-  fullName: string;
-  bindingSourceSha: string;
-  manifestDigest: string;
-  manifest: Record<string, unknown>;
-}) {
-  const manifest = readback.manifest as {
-    configRevisionId: string;
-    configRevision: number;
-    configRevisionDigest: string;
-    signedSnapshotDigest: string;
-    snapshotSignature: { keyId: string; policyRevision: string; digest: string };
-  };
-  return {
-    state: readback.state,
-    repositoryId: readback.repositoryId,
-    fullName: readback.fullName,
-    sourceSha: readback.bindingSourceSha,
-    manifestDigest: readback.manifestDigest,
-    configRevisionId: manifest.configRevisionId,
-    configRevision: manifest.configRevision,
-    configRevisionDigest: manifest.configRevisionDigest,
-    signedSnapshotDigest: manifest.signedSnapshotDigest,
-    snapshotSignatureKeyId: manifest.snapshotSignature.keyId,
-    snapshotSignaturePolicyRevision: manifest.snapshotSignature.policyRevision,
-    snapshotSignatureDigest: manifest.snapshotSignature.digest,
-    manifest: readback.manifest,
-  };
+/** registry의 번들은 JSON 객체다. 다른 형태면 caller 입력으로 쓸 수 없으므로 막는다. */
+function workflowBundleObject(bundle: unknown): Record<string, unknown> {
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+    throw new ControlPlaneError(
+      "승인된 WorkflowBundle 본문이 객체가 아닙니다.",
+      409,
+      "APPROVED_WORKFLOW_BUNDLE_SHAPE_INVALID",
+    );
+  }
+  return bundle as Record<string, unknown>;
 }
 
 function skipped(
@@ -150,7 +126,7 @@ export async function planApprovedCallerReconciliation(input: {
     );
   }
   const resolveManifest =
-    dependencies.resolveManifest ?? resolveStaticRuntimeManifestForRepository;
+    dependencies.resolveManifest ?? resolveWorkflowBindingForRepository;
 
   const apps = await client.app.findMany({
     where: {
@@ -219,7 +195,7 @@ export async function planApprovedCallerReconciliation(input: {
         sourceRef,
         sourceSha,
         callerPath: APPROVED_CALLER_PATH,
-        resolvedManifest: resolvedManifestEnvelope(readback),
+        resolvedManifest: readback,
       });
     } catch (error) {
       verdicts.push(skipped(
@@ -235,7 +211,7 @@ export async function planApprovedCallerReconciliation(input: {
       sourceSha: record.sourceSha,
       payloadDigest: record.payloadDigest,
       approvalKeyId: record.approvalKeyId ?? "",
-      bundle: record.bundle,
+      bundle: workflowBundleObject(record.bundle),
     },
     callerPath: APPROVED_CALLER_PATH,
     verdicts,

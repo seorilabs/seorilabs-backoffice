@@ -6,6 +6,10 @@ export const PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY = "platform-fleet-reconcile-
 export const SOURCE_REMEDIATION_TEMPLATE_KEY = "repo-source-remediation-v1" as const;
 export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY =
   "workflow-bundle-candidate-executor-v1" as const;
+// 승인된 WorkflowBundle의 caller를 대상 저장소 main에 반증하는 실행기다. 후보 canary와
+// 달리 승인 번들 하나만 대상으로 하고, caller 본문은 중앙 계약이 만든다.
+export const APPROVED_CALLER_RECONCILIATION_EXECUTOR_TEMPLATE_KEY =
+  "approved-caller-reconciliation-executor-v1" as const;
 export const MANAGED_WORKER_TEMPLATE_KEYS = [
   AUTOMATION_TEMPLATE_KEY,
   PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY,
@@ -24,10 +28,13 @@ export const GENERIC_WORKER_PRINCIPALS = {
 } as const;
 export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL =
   "seori-auth:workflow-bundle-candidate-executor" as const;
-export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL =
-  "seori-auth:workflow-bundle-candidate-adapter" as const;
-export const WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY =
-  "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor" as const;
+export const APPROVED_CALLER_RECONCILIATION_EXECUTOR_PRINCIPAL =
+  "seori-auth:approved-caller-reconciliation-executor" as const;
+/** admin token으로 승격될 수 없는 실행기 principal 전체다. security gate가 읽는다. */
+export const TRUSTED_EXECUTOR_PRINCIPALS = [
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  APPROVED_CALLER_RECONCILIATION_EXECUTOR_PRINCIPAL,
+] as const;
 
 export type AutomationCadence = typeof AUTOMATION_CADENCES[number];
 export type AutomationAgentKind = typeof AUTOMATION_AGENT_KINDS[number];
@@ -44,7 +51,8 @@ export interface AutomationPolicy {
     | "github-issue-mirror"
     | "platform-fleet-plan"
     | "source-remediation-issue"
-    | "workflow-bundle-candidate";
+    | "workflow-bundle-candidate"
+    | "approved-caller-reconciliation";
 }
 
 export const WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY = Object.freeze({
@@ -55,18 +63,30 @@ export const WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY = Object.freeze({
   claimSource: "workflow-bundle-candidate",
 } satisfies AutomationPolicy);
 
-function parseWorkflowBundleCandidatePolicy(value: unknown): AutomationPolicy | null {
+export const APPROVED_CALLER_RECONCILIATION_AUTOMATION_POLICY = Object.freeze({
+  schemaVersion: 1,
+  approvalPolicy: "READY_PR",
+  budgetCeilingMicros: 1,
+  createsPr: true,
+  claimSource: "approved-caller-reconciliation",
+} satisfies AutomationPolicy);
+
+/** 신뢰 실행기 정의는 정책을 한 글자도 바꿀 수 없다. exact key/value가 아니면 거부한다. */
+function parseExactTrustedExecutorPolicy(
+  value: unknown,
+  expected: AutomationPolicy,
+): AutomationPolicy | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  const expected = WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY as Record<string, unknown>;
+  const source = expected as Record<string, unknown>;
   const keys = Object.keys(candidate).sort();
-  const expectedKeys = Object.keys(expected).sort();
+  const expectedKeys = Object.keys(source).sort();
   if (
     keys.length !== expectedKeys.length
     || keys.some((key, index) => key !== expectedKeys[index])
-    || expectedKeys.some((key) => candidate[key] !== expected[key])
+    || expectedKeys.some((key) => candidate[key] !== source[key])
   ) return null;
-  return WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY;
+  return expected;
 }
 
 /**
@@ -310,7 +330,18 @@ export function parseManagedWorkerPolicy(input: {
   }
   if (input.template === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY) {
     return input.agentKind === null
-      ? parseWorkflowBundleCandidatePolicy(input.configuration)
+      ? parseExactTrustedExecutorPolicy(
+          input.configuration,
+          WORKFLOW_BUNDLE_CANDIDATE_AUTOMATION_POLICY,
+        )
+      : null;
+  }
+  if (input.template === APPROVED_CALLER_RECONCILIATION_EXECUTOR_TEMPLATE_KEY) {
+    return input.agentKind === null
+      ? parseExactTrustedExecutorPolicy(
+          input.configuration,
+          APPROVED_CALLER_RECONCILIATION_AUTOMATION_POLICY,
+        )
       : null;
   }
   return null;

@@ -355,7 +355,26 @@ export function prepareGithubReadyPrCommand(raw: unknown): {
     if (totalBytes > MAX_TOTAL_BYTES) throw new Error("GITHUB_READY_PR_TOTAL_SIZE_INVALID");
     return prepared;
   }).sort((left, right) => left.path.localeCompare(right.path));
-  const mutationIntentDigest = jsonDigest({
+  return { command, files, mutationIntentDigest: githubReadyPrMutationIntentDigest(command, files) };
+}
+
+/**
+ * authorize가 고정하는 mutation 의도의 정본 digest다. adapter와 task 계약이 각자 계산하면
+ * 한쪽만 바뀌어도 STEP_LEDGER binding이 조용히 어긋나므로 이 함수 하나만 쓴다.
+ */
+export function githubReadyPrMutationIntentDigest(
+  command: {
+    repoId: string;
+    repoFullName: string;
+    issueNumber: number | null;
+    sourceSha: string;
+    title: string;
+    body: string;
+    commitMessage: string;
+  },
+  files: readonly { path: string; mode: "100644" | "100755"; contentSha256: string }[],
+): string {
+  return jsonDigest({
     schemaVersion: 1,
     repoId: command.repoId,
     repoFullName: command.repoFullName.toLowerCase(),
@@ -364,9 +383,10 @@ export function prepareGithubReadyPrCommand(raw: unknown): {
     title: command.title,
     body: command.body,
     commitMessage: command.commitMessage,
-    files: files.map((file) => ({ path: file.path, mode: file.mode, contentSha256: file.contentSha256 })),
+    files: [...files]
+      .map((file) => ({ path: file.path, mode: file.mode, contentSha256: file.contentSha256 }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
   });
-  return { command, files, mutationIntentDigest };
 }
 
 function markerFromBody(body: string): string | null {
@@ -668,7 +688,7 @@ export async function executeGithubReadyPr(input: {
   return executePreparedGithubReadyPr({ ...input, prepared });
 }
 
-async function executePreparedGithubReadyPr(input: {
+export async function executePreparedGithubReadyPr(input: {
   operationId: string;
   workerPrincipalId: string;
   workerRuntimeBindingDigest: string;

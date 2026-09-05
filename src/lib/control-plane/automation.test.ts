@@ -54,7 +54,7 @@ import {
   trustedGithubStepLedgerImplemented,
   trustedGithubRuntimeCanaryApproved,
   trustedMutationAdapterConfigured,
-  workflowBundleCandidateExecutorConfigured,
+  trustedExecutorConfigured,
 } from "@/lib/control-plane/security";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
@@ -567,9 +567,9 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
     assert.equal(trustedGithubStepLedgerImplemented(), true);
     assert.equal(trustedGithubRuntimeCanaryApproved(), false);
     assert.equal(trustedMutationAdapterConfigured(), false, "실제 GitHub canary 승인 전에는 activation을 열지 않는다");
-    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "candidate executor는 별도 deploy gate 전에는 닫혀 있다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), false, "candidate executor는 별도 deploy gate 전에는 닫혀 있다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED = "true";
-    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic adapter credential로 candidate gate를 열 수 없다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), false, "generic adapter credential로 candidate gate를 열 수 없다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL = "seori-auth:workflow-bundle-candidate-adapter";
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor";
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "candidate-adapter-test-token";
@@ -578,15 +578,15 @@ test("READY_PR은 worker와 분리된 trusted adapter identity가 없으면 생�
       format: "pem",
     }).toString();
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = candidatePublicKey;
-    assert.equal(workflowBundleCandidateExecutorConfigured(), true, "candidate 전용 workload identity와 credential에서만 열린다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), true, "candidate 전용 workload identity와 credential에서만 열린다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "adapter-test-token";
-    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic adapter bearer 재사용을 거부한다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), false, "generic adapter bearer 재사용을 거부한다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN = "candidate-adapter-test-token";
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = genericPublicKey;
-    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic attestation key 재사용을 거부한다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), false, "generic attestation key 재사용을 거부한다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY = candidatePublicKey;
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-github-adapter";
-    assert.equal(workflowBundleCandidateExecutorConfigured(), false, "generic SPIFFE identity 재사용을 거부한다");
+    assert.equal(trustedExecutorConfigured("workflow-bundle-candidate"), false, "generic SPIFFE identity 재사용을 거부한다");
     process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY = "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor";
     process.env.AGENT_WORKER_CODEX_TOKEN = "adapter-test-token";
     assert.equal(trustedMutationAdapterConfigured(), false, "worker token 재사용을 거부한다");

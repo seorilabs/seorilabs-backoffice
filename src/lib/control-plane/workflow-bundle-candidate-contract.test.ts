@@ -8,7 +8,7 @@ import {
   parseManagedWorkerPolicy,
 } from "@/lib/control-plane/automation-catalog";
 import { resolveGithubMutationTarget } from "@/lib/control-plane/agent-mutation-service";
-import { workflowBundleCandidateHeartbeatGenerationError } from "@/lib/control-plane/workflow-bundle-candidate-executor-service";
+import { trustedExecutorHeartbeatGenerationError } from "@/lib/control-plane/trusted-mutation-executor-service";
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import {
@@ -283,23 +283,26 @@ test("candidate executor definition과 내부 operation은 strict exact 계약�
 });
 
 test("candidate heartbeat는 claim session의 동일 generation에만 결합된다", () => {
-  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+  assert.equal(trustedExecutorHeartbeatGenerationError({
     requestedGeneration: 3,
     sessionGeneration: 3,
     leaseGeneration: 3,
     runGeneration: 3,
+    code: "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH",
   }), null);
-  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+  assert.equal(trustedExecutorHeartbeatGenerationError({
     requestedGeneration: 2,
     sessionGeneration: 3,
     leaseGeneration: 3,
     runGeneration: 3,
+    code: "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH",
   }), "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH");
-  assert.equal(workflowBundleCandidateHeartbeatGenerationError({
+  assert.equal(trustedExecutorHeartbeatGenerationError({
     requestedGeneration: 3,
     sessionGeneration: 3,
     leaseGeneration: 2,
     runGeneration: 3,
+    code: "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH",
   }), "WORKFLOW_BUNDLE_CANDIDATE_HEARTBEAT_GENERATION_MISMATCH");
 });
 
@@ -362,6 +365,6 @@ test("candidate custom ref는 signed task와 전용 principal에만 결합된다
     generated: { headRef: "refs/heads/seori/run-generic", marker: "seori-run:generic:1" },
   }), (error: unknown) => (
     error instanceof ControlPlaneError
-    && error.code === "WORKFLOW_BUNDLE_CANDIDATE_TASK_BINDING_MISMATCH"
+    && error.code === "TRUSTED_EXECUTOR_TASK_BINDING_MISMATCH"
   ));
 });

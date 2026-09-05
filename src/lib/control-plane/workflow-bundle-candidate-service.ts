@@ -7,12 +7,15 @@ import {
   eligibleForAutopilot,
 } from "@/lib/control-plane/automation-catalog";
 import {
-  claimWorkflowBundleCandidateRun,
+  claimTrustedExecutorRun,
   settleAgentRun,
   type ClaimedAgentRun,
 } from "@/lib/control-plane/agent-queue";
 import { beginAutomationMutation, completeAutomationMutation } from "@/lib/control-plane/automation-mutation";
-import { githubInstallationProviderPayloadSchema } from "@/lib/control-plane/github-installation-observation";
+import {
+  readCallerBootstrapInstallationGate,
+  type CallerBootstrapGate,
+} from "@/lib/control-plane/github-installation-gate";
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { ControlPlaneError, resolveManifest } from "@/lib/control-plane/service";
@@ -29,11 +32,7 @@ const DEFINITION_KEY = "workflow-bundle-candidate-executor-v1:trusted";
 const MAX_ATTEMPTS = 3;
 const LEASE_SECONDS = 300;
 
-export type WorkflowBundleCandidateGate = {
-  state: "READY" | "BLOCKED";
-  code: "READY" | "GITHUB_APP_MUTATION_CAPABILITY_MISSING";
-  missing: string[];
-};
+export type WorkflowBundleCandidateGate = CallerBootstrapGate;
 
 export interface WorkflowBundleCandidatePlan {
   mode: "PLAN";
@@ -90,28 +89,6 @@ async function requireDefinition() {
   return definition;
 }
 
-function installationGate(payload: unknown): { installationId: string; gate: WorkflowBundleCandidateGate } {
-  const parsed = githubInstallationProviderPayloadSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new ControlPlaneError(
-      "GitHub App installation observation이 strict v2 계약과 다릅니다.",
-      409,
-      "GITHUB_INSTALLATION_OBSERVATION_INVALID",
-    );
-  }
-  const capability = parsed.data.attributes.capabilities.callerBootstrapPullRequest;
-  return {
-    installationId: parsed.data.attributes.installationId,
-    gate: capability.state === "GRANTED"
-      ? { state: "READY", code: "READY", missing: [] }
-      : {
-          state: "BLOCKED",
-          code: "GITHUB_APP_MUTATION_CAPABILITY_MISSING",
-          missing: [...capability.missing].sort(),
-        },
-  };
-}
-
 async function loadTask(input: {
   workflowBundleRecordId: string;
   repositoryId: string;
@@ -160,25 +137,7 @@ async function loadTask(input: {
     record,
     process.env.WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON ?? "",
   );
-  const providerObservation = await prisma.providerObservation.findFirst({
-    where: { appId: app.id, provider: "github", resourceType: "github-app-installation" },
-    orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
-  });
-  if (!providerObservation) {
-    throw new ControlPlaneError(
-      "GitHub App installation provider observation이 없습니다.",
-      409,
-      "GITHUB_INSTALLATION_OBSERVATION_MISSING",
-    );
-  }
-  const installation = installationGate(providerObservation.payload);
-  if (providerObservation.resourceId !== installation.installationId) {
-    throw new ControlPlaneError(
-      "GitHub App installation public identity가 observation resource와 다릅니다.",
-      409,
-      "GITHUB_INSTALLATION_BINDING_MISMATCH",
-    );
-  }
+  const installation = await readCallerBootstrapInstallationGate(app.id);
   if (input.issueNumber !== null) {
     const issue = await prisma.issueMirror.findUnique({
       where: { repoFullName_number: { repoFullName: app.repoFullName, number: input.issueNumber } },
@@ -493,7 +452,9 @@ export async function claimNextWorkflowBundleCandidate(input: {
     }
   }
   if (viable.length === 0) return null;
-  const claimed = await claimWorkflowBundleCandidateRun({
+  const claimed = await claimTrustedExecutorRun({
+    gate: "workflow-bundle-candidate",
+    template: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
     workerId: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
     runtimeBindingDigest: input.runtimeBindingDigest,
     leaseSeconds: LEASE_SECONDS,

@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY } from "@/lib/control-plane/automation-catalog";
+import {
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
+} from "@/lib/control-plane/trusted-executor-bindings";
 import {
   signAgentAdapterAttestation,
   verifyAgentAdapterAttestation,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
 } from "@/lib/control-plane/agent-adapter-attestation";
 
 function source(path: string): string {
@@ -42,10 +44,14 @@ test("candidate executor는 immutable worker와 별도 server gate로 배포된�
 test("candidate internal API는 bearer와 route-body attestation을 함께 소비한다", () => {
   const route = source("src/app/api/internal/workflow-bundle-candidate-executor/route.ts");
   const security = source("src/lib/control-plane/security.ts");
-  assert.match(route, /authenticateWorkflowBundleCandidateExecutorRequest/u);
+  assert.match(route, /authenticateTrustedExecutorRequest\(request, "workflow-bundle-candidate"\)/u);
   assert.match(route, /verifyAndConsumeAgentAdapterAttestation/u);
   assert.match(route, /deploymentGate: "workflow-bundle-candidate"/u);
-  assert.match(security, /WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED === "true"/u);
+  assert.match(
+    source("src/lib/control-plane/trusted-executor-bindings.ts"),
+    /deployed: "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED"/u,
+  );
+  assert.match(security, /trustedExecutorEnv\(binding\.env\.deployed\) !== "true"/u);
   assert.match(route, /heartbeatCandidateExecutor/u);
   assert.match(source("scripts/workflow-bundle-candidate-executor.ts"), /HEARTBEAT_INTERVAL_MS = 60_000/u);
   assert.doesNotMatch(route, /GITHUB_PRIVATE_KEY|createInstallationAccessToken/u);
@@ -132,10 +138,15 @@ test("후보 executor adapter 실행 복제본은 backoffice-secrets에 암호�
 });
 
 test("candidate GitHub transport는 installation token을 callback 밖으로 반환하지 않는다", () => {
-  const transport = source("src/lib/github/workflow-bundle-candidate-client.ts");
+  const transport = source("src/lib/github/ready-pr-installation-client.ts");
   const scoped = source("src/lib/github/scoped-installation-client.ts");
   assert.match(transport, /withFleetScopedGithubClient/u);
-  assert.match(transport, /github\.workflow-bundle-candidate\.ready-pr/u);
+  // capability는 실행기가 정하고 transport는 그대로 넘긴다. 후보 실행기 쪽 고정은
+  // 실행기 스크립트에서 확인한다.
+  assert.match(
+    source("scripts/workflow-bundle-candidate-executor.ts"),
+    /capability: "github\.workflow-bundle-candidate\.ready-pr"/u,
+  );
   assert.match(transport, /requestFetch/u);
   assert.match(scoped, /finally[\s\S]*revokeAccessToken/u);
   assert.doesNotMatch(transport, /process\.env\.(?:GITHUB_TOKEN|GH_TOKEN)|Authorization: token/u);

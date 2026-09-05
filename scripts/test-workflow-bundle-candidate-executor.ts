@@ -3,10 +3,12 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { strToU8, zipSync } from "fflate";
 
 import {
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
   WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
 } from "@/lib/control-plane/automation-catalog";
+import {
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
+} from "@/lib/control-plane/trusted-executor-bindings";
 import {
   authorizeCandidateMutation,
   claimCandidateExecutor,
