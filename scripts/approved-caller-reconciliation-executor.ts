@@ -28,6 +28,7 @@ import {
   settleTrustedExecutorRun,
   startTrustedExecutorHeartbeat,
   trustedExecutorClaimSchema,
+  withExecutorStage,
   trustedExecutorControlPlane,
   type TrustedExecutorCall,
 } from "@/lib/control-plane/trusted-mutation-executor-client";
@@ -292,18 +293,8 @@ async function runMutation(input: {
   });
 }
 
-/**
- * 실행기는 공개 코드가 아닌 오류를 밖으로 내보내지 않는다. 그래서 단계 정보가 없으면
- * 어느 경계에서 멈췄는지 알 수 없다. 원인 자체는 감추되 단계는 공개 코드로 남긴다.
- */
-async function stage<Result>(name: string, run: () => Promise<Result>): Promise<Result> {
-  try {
-    return await run();
-  } catch (error) {
-    const known = publicExecutorError(error, "");
-    throw new Error(known || `APPROVED_CALLER_STAGE_${name}_FAILED`);
-  }
-}
+const stage = <Result>(name: string, run: () => Promise<Result>): Promise<Result> =>
+  withExecutorStage("APPROVED_CALLER", name, run);
 
 async function main() {
   const ca = await stage("READ_BACKOFFICE_CA", () => readBoundSecretFile({

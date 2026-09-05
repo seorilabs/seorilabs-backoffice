@@ -345,3 +345,21 @@ export function publicExecutorError(error: unknown, fallback: string): string {
     ? message
     : fallback;
 }
+
+/**
+ * 실행기는 공개 코드가 아닌 오류를 밖으로 내보내지 않는다. 그래서 단계 정보가 없으면
+ * 어느 경계에서 멈췄는지 알 수 없다. 원문은 감추되 단계 이름만 공개 코드로 승격한다.
+ * 내부에서 이미 공개 코드가 나오면 그 코드를 그대로 보존한다.
+ */
+export async function withExecutorStage<Result>(
+  prefix: string,
+  name: string,
+  run: () => Promise<Result>,
+): Promise<Result> {
+  try {
+    return await run();
+  } catch (error) {
+    const known = publicExecutorError(error, "");
+    throw new Error(known || `${prefix}_STAGE_${name}_FAILED`);
+  }
+}
