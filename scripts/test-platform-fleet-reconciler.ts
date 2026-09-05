@@ -683,7 +683,10 @@ async function main() {
   ] as const) {
     assert.equal(task.kind, "PLATFORM_CONTRACT_ISSUE");
     if (task.kind !== "PLATFORM_CONTRACT_ISSUE") assert.fail("contract Issue task가 필요합니다.");
-    assert.deepEqual(task.labels, ["P1", "autopilot", "platform", "platform-contract"]);
+    assert.deepEqual(
+      task.labels,
+      ["P1", "autopilot", "autopilot:local", "platform", "platform-contract"],
+    );
     assert.ok(task.body.includes(`현재 탑재 상태: \`${integration}\``));
   }
 
