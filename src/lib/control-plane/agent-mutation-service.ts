@@ -4,8 +4,6 @@ import {
   agentExecutionPolicy,
   agentRepositorySingletonScope,
   parseManagedWorkerPolicy,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY,
 } from "@/lib/control-plane/automation-catalog";
 import type {
   AgentGithubMutationStepKind,
@@ -17,7 +15,7 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
-import { workflowBundleCandidateTaskSchema } from "@/lib/control-plane/workflow-bundle-candidate-contract";
+import { trustedMutationTargetBinding } from "@/lib/control-plane/trusted-mutation-targets";
 
 export const GITHUB_READY_PR_MUTATION_ACTION = "GITHUB_READY_PR_MUTATE" as const;
 const OBSERVATION_MAX_AGE_MS = 60_000;
@@ -182,8 +180,8 @@ export function resolveGithubMutationTarget(input: {
   requested?: { headRef: string; marker: string };
   generated: { headRef: string; marker: string };
 }): { headRef: string; marker: string } {
-  const candidateDefinition = input.definition.template === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_TEMPLATE_KEY;
-  if (!candidateDefinition) {
+  const binding = trustedMutationTargetBinding(input.definition.template);
+  if (!binding) {
     if (input.requested) {
       throw new ControlPlaneError(
         "일반 READY_PR definition은 custom mutation target을 사용할 수 없습니다.",
@@ -195,30 +193,25 @@ export function resolveGithubMutationTarget(input: {
   }
   if (
     input.definition.agentKind !== null
-    || input.workerPrincipalId !== WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL
+    || input.workerPrincipalId !== binding.principal
     || !input.requested
   ) {
     throw new ControlPlaneError(
-      "WorkflowBundle candidate executor identity 또는 target이 일치하지 않습니다.",
+      "신뢰 실행기 identity 또는 target이 일치하지 않습니다.",
       409,
-      "WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_BINDING_MISMATCH",
+      "TRUSTED_EXECUTOR_BINDING_MISMATCH",
     );
   }
-  const task = workflowBundleCandidateTaskSchema.safeParse(input.taskInput);
-  if (
-    !task.success
-    || task.data.repository.id !== input.session.repoId.toString()
-    || task.data.repository.fullName.toLowerCase() !== input.session.repoFullName.toLowerCase()
-    || task.data.repository.issueNumber !== input.session.issueNumber
-    || task.data.repository.sourceSha !== input.session.sourceSha.toLowerCase()
-    || task.data.mutation.intentDigest !== input.mutationIntentDigest.toLowerCase()
-    || task.data.github.expectedHeadRef !== input.requested.headRef
-    || task.data.github.expectedPullRequestMarker !== input.requested.marker
-  ) {
+  if (!binding.matches({
+    taskInput: input.taskInput,
+    session: input.session,
+    mutationIntentDigest: input.mutationIntentDigest,
+    requested: input.requested,
+  })) {
     throw new ControlPlaneError(
-      "WorkflowBundle candidate task와 JIT mutation target이 일치하지 않습니다.",
+      "신뢰 실행기 task와 JIT mutation target이 일치하지 않습니다.",
       409,
-      "WORKFLOW_BUNDLE_CANDIDATE_TASK_BINDING_MISMATCH",
+      "TRUSTED_EXECUTOR_TASK_BINDING_MISMATCH",
     );
   }
   return input.requested;

@@ -365,6 +365,6 @@ test("candidate custom ref는 signed task와 전용 principal에만 결합된다
     generated: { headRef: "refs/heads/seori/run-generic", marker: "seori-run:generic:1" },
   }), (error: unknown) => (
     error instanceof ControlPlaneError
-    && error.code === "WORKFLOW_BUNDLE_CANDIDATE_TASK_BINDING_MISMATCH"
+    && error.code === "TRUSTED_EXECUTOR_TASK_BINDING_MISMATCH"
   ));
 });

@@ -8,7 +8,10 @@ import {
   buildApprovedCallerReconciliationTask,
   publicApprovedCallerReconciliationTask,
 } from "@/lib/control-plane/approved-caller-reconciliation-contract";
+import { APPROVED_CALLER_RECONCILIATION_EXECUTOR_PRINCIPAL, APPROVED_CALLER_RECONCILIATION_EXECUTOR_TEMPLATE_KEY } from "@/lib/control-plane/automation-catalog";
 import { generateApprovedCallerMutation } from "@/lib/control-plane/approved-caller-generator";
+import { resolveGithubMutationTarget } from "@/lib/control-plane/agent-mutation-service";
+import { ControlPlaneError } from "@/lib/control-plane/service";
 import { githubReadyPrMutationIntentDigest } from "@/lib/control-plane/github-ready-pr-adapter";
 import { buildResolvedWorkflowBindingReadback } from "@/lib/control-plane/resolved-workflow-binding";
 import { jsonDigest } from "@/lib/control-plane/json";
@@ -147,4 +150,51 @@ test("실행기가 만든 mutation intent는 adapter 계산과 같다", async ()
     prepared.mutationIntentDigest,
     githubReadyPrMutationIntentDigest(command, prepared.files),
   );
+});
+
+
+/**
+ * 신뢰 실행기만 자기 task가 고정한 branch/marker를 요청할 수 있다. 이 실행기를 표에
+ * 넣지 않으면 custom target이 CUSTOM_MUTATION_TARGET_FORBIDDEN으로 막힌다.
+ */
+test("caller 반증 target은 task가 고정한 branch와 marker에만 결합된다", () => {
+  const built = task();
+  const requested = {
+    headRef: built.github.expectedHeadRef,
+    marker: built.github.expectedPullRequestMarker,
+  };
+  const session = {
+    repoId: BigInt(built.repository.id),
+    repoFullName: built.repository.fullName,
+    issueNumber: built.repository.issueNumber,
+    sourceSha: built.repository.sourceSha,
+  };
+  const base = {
+    definition: {
+      template: APPROVED_CALLER_RECONCILIATION_EXECUTOR_TEMPLATE_KEY,
+      agentKind: null,
+    },
+    taskInput: built as never,
+    session,
+    workerPrincipalId: APPROVED_CALLER_RECONCILIATION_EXECUTOR_PRINCIPAL,
+    // 실행기가 계약에서 만든 값이라 서버는 미리 알지 못한다.
+    mutationIntentDigest: "f".repeat(64),
+    generated: { headRef: "refs/heads/seori/run-generic", marker: "seori-run:generic:1" },
+  };
+  assert.deepEqual(resolveGithubMutationTarget({ ...base, requested }), requested);
+
+  assert.throws(() => resolveGithubMutationTarget({
+    ...base,
+    workerPrincipalId: "seori-auth:workflow-bundle-candidate-executor",
+    requested,
+  }), (error: unknown) => (
+    error instanceof ControlPlaneError && error.code === "TRUSTED_EXECUTOR_BINDING_MISMATCH"
+  ));
+
+  assert.throws(() => resolveGithubMutationTarget({
+    ...base,
+    requested: { ...requested, marker: "seori-run:wrong" },
+  }), (error: unknown) => (
+    error instanceof ControlPlaneError && error.code === "TRUSTED_EXECUTOR_TASK_BINDING_MISMATCH"
+  ));
 });
