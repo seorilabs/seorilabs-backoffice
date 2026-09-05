@@ -73,6 +73,26 @@ test("git egress는 이 실행기 client identity에만 열린다", () => {
     proxy,
     /sa\/workflow-bundle-candidate-executor=backoffice\.vzyx\.xyz,api\.github\.com;/u,
   );
+  // host 정책만 열고 proxy ingress를 빼면 실행기는 프록시에 접속조차 못 한다.
+  assert.match(proxy, /ingress:[\s\S]*?- approved-caller-reconciliation-executor/u);
+});
+
+test("Backoffice는 실행기 인증 env를 주입하고 배포 gate는 닫힌 값으로 시작한다", () => {
+  const deployment = source("k8s/deployment.yaml");
+  const binding = TRUSTED_EXECUTOR_BINDINGS["approved-caller-reconciliation"];
+  for (const name of Object.values(binding.env)) {
+    assert.match(deployment, new RegExp(`- name: ${name}\\n`, "u"), name);
+  }
+  // 다섯 값 중 하나라도 없으면 실행기의 첫 CLAIM이 401이 된다.
+  assert.match(deployment, /- name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED\n {14}value: "false"/u);
+  for (const name of [binding.env.token, binding.env.publicKey]) {
+    assert.match(
+      deployment,
+      new RegExp(`- name: ${name}\\n {14}valueFrom:\\n {16}secretKeyRef:\\n {18}name: backoffice-secrets\\n {18}key: ${name}\\n`, "u"),
+      name,
+    );
+  }
+  assert.doesNotMatch(deployment, /-----BEGIN|PRIVATE KEY/u);
 });
 
 test("실행기는 계약을 정적 import하지 않는다", () => {

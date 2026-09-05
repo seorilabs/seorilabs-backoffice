@@ -256,6 +256,7 @@ spec:
                   - seori-totp-signer
                   - seori-auth-agent-runtime
                   - workflow-bundle-candidate-executor
+                  - approved-caller-reconciliation-executor
                   - seori-auth-egress-canary
       ports:
         - { protocol: TCP, port: 8443 }

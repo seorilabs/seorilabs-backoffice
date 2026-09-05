@@ -235,6 +235,27 @@ spec:
                   name: backoffice-secrets
                   key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
                   optional: true
+            # caller 반증기는 아직 활성화 승인 전이다. CronJob suspend를 풀고 auth-broker
+            # Secret과 egress 인증서를 확인한 뒤에만 DEPLOYED를 "true"로 바꾼다. 그 전에는
+            # 모든 실행기 요청이 401로 닫힌다.
+            - name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED
+              value: "false"
+            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PRINCIPAL
+              value: "seori-auth:approved-caller-reconciliation-adapter"
+            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY
+              value: "spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor"
+            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APPROVED_CALLER_RECONCILIATION_ADAPTER_TOKEN
+                  optional: true
+            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-secrets
+                  key: APPROVED_CALLER_RECONCILIATION_ADAPTER_PUBLIC_KEY
+                  optional: true
             - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:
