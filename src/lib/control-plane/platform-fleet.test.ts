@@ -250,13 +250,31 @@ test("contract Issue task는 P1/autopilot/platform labels를 고정하고 secret
     issueMarker: `<!-- seorilabs-platform-fleet:${manifestDigest}:1234 -->`,
     title: "[P1] Platform 1.2.3 계약 변경 대응",
     body: `<!-- seorilabs-platform-fleet:${manifestDigest}:1234 -->\n계약 변경 대응`,
-    labels: ["P1", "autopilot", "platform", "platform-contract"] as const,
+    labels: ["P1", "autopilot", "autopilot:local", "platform", "platform-contract"] as const,
   };
   const parsed = platformFleetTaskInputSchema.parse(task);
   assert.equal(parsed.kind, "PLATFORM_CONTRACT_ISSUE");
   if (parsed.kind !== "PLATFORM_CONTRACT_ISSUE") assert.fail("contract Issue task가 필요합니다.");
   assert.deepEqual(parsed.labels, task.labels);
   assert.equal(platformFleetTaskInputSchema.safeParse({ ...task, apiKey: "forbidden" }).success, false);
+
+  // 자율 이슈 정책은 실행 라벨을 정확히 하나 요구하므로 빠지면 계약이 거부한다.
+  assert.equal(
+    platformFleetTaskInputSchema.safeParse({
+      ...task,
+      labels: ["P1", "autopilot", "platform", "platform-contract"],
+    }).success,
+    false,
+  );
+  assert.equal(
+    platformFleetTaskInputSchema.safeParse({
+      ...task,
+      labels: ["P1", "autopilot", "autopilot:cloud", "platform", "platform-contract"],
+    }).success,
+    false,
+  );
+  const execution = parsed.labels.filter((label) => label.startsWith("autopilot:"));
+  assert.deepEqual(execution, ["autopilot:local"]);
 });
 
 test("custom/missing remediation Issue는 contract와 다른 stable marker와 label을 사용한다", () => {
@@ -276,7 +294,7 @@ test("custom/missing remediation Issue는 contract와 다른 stable marker와 la
     issueMarker: "<!-- seorilabs-platform-remediation:v1:1234 -->",
     title: "[P1] Platform custom HTTP 연동을 공식 SDK로 전환",
     body: "<!-- seorilabs-platform-remediation:v1:1234 -->\n공식 SDK 전환",
-    labels: ["P1", "autopilot", "platform", "platform-remediation"] as const,
+    labels: ["P1", "autopilot", "autopilot:local", "platform", "platform-remediation"] as const,
   };
   const parsed = platformFleetTaskInputSchema.parse(task);
   assert.equal(parsed.kind, "PLATFORM_INTEGRATION_REMEDIATION_ISSUE");
