@@ -78,18 +78,51 @@ function verifiedBundle() {
 const dependencies = {
   trustedApprovalKeysJson: JSON.stringify({ schemaVersion: 1, keys: [] }),
   verifyApprovedBundle: (() => verifiedBundle()) as never,
+  // 계약(`loadResolvedWorkflowBindingV5`)이 받는 envelope 그대로다. 최상위 provenance와
+  // manifest 안의 값이 같아야 계약이 readback을 신뢰한다.
   resolveManifest: (async () => ({
+    schemaVersion: 1,
     state: "VERIFIED",
     repositoryId: "1250442131",
     fullName: FULL_NAME,
-    bindingSourceSha: "b".repeat(40),
+    sourceSha: "b".repeat(40),
     manifestDigest: `sha256:${"7".repeat(64)}`,
+    configRevisionId: "config-1",
+    configRevision: 4,
+    configRevisionDigest: `sha256:${"8".repeat(64)}`,
+    signedSnapshotDigest: `sha256:${"9".repeat(64)}`,
+    snapshotSignatureKeyId: "control-plane-snapshot-v1",
+    snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+    snapshotSignatureDigest: `sha256:${"a".repeat(64)}`,
     manifest: {
+      schemaVersion: 1,
+      state: "ACTIVE",
+      repositoryId: "1250442131",
+      fullName: FULL_NAME,
+      sourceSha: "b".repeat(40),
+      sourceRef: "refs/heads/main",
+      observationId: "observation-1",
+      observationDigest: `sha256:${"6".repeat(64)}`,
       configRevisionId: "config-1",
       configRevision: 4,
       configRevisionDigest: `sha256:${"8".repeat(64)}`,
       signedSnapshotDigest: `sha256:${"9".repeat(64)}`,
-      snapshotSignature: { keyId: "k", policyRevision: "p", digest: `sha256:${"a".repeat(64)}` },
+      snapshotSignature: {
+        keyId: "control-plane-snapshot-v1",
+        policyRevision: "snapshot-policy-v1",
+        digest: `sha256:${"a".repeat(64)}`,
+      },
+      staticBinding: {
+        profile: "react-native",
+        packageManager: "pnpm",
+        workspaceRoot: ".",
+        commandDirectory: ".",
+      },
+      workflowBundleBinding: {
+        sourceSha: "a".repeat(40),
+        payloadDigest: `sha256:${"1".repeat(64)}`,
+      },
+      buildBindings: [],
     },
   })) as never,
 };

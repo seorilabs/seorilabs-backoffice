@@ -7,14 +7,17 @@ import {
   type PreparedGithubFile,
 } from "@/lib/control-plane/github-ready-pr-adapter";
 import { getFleetScopedGithubTokenIssuer, type Octokit } from "@/lib/github/app";
-import { withFleetScopedGithubClient } from "@/lib/github/scoped-installation-client";
+import {
+  withFleetScopedGithubClient,
+  type FleetGitHubCapability,
+} from "@/lib/github/scoped-installation-client";
 
-class WorkflowBundleCandidateGithubPort implements GithubReadyPrPort {
+class GithubReadyPrInstallationPort implements GithubReadyPrPort {
   constructor(public readonly installationId: string, private readonly client: Octokit) {}
 
   private repository(fullName: string): { owner: string; repo: string } {
     const [owner, repo] = fullName.split("/");
-    if (!owner || !repo) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_REPOSITORY_INVALID");
+    if (!owner || !repo) throw new Error("GITHUB_READY_PR_REPOSITORY_INVALID");
     return { owner, repo };
   }
 
@@ -38,7 +41,7 @@ class WorkflowBundleCandidateGithubPort implements GithubReadyPrPort {
       ...this.repository(fullName),
       issue_number: issueNumber,
     });
-    if ("pull_request" in issue.data) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_ISSUE_IS_PR");
+    if ("pull_request" in issue.data) throw new Error("GITHUB_READY_PR_ISSUE_IS_PR");
     return {
       number: issue.data.number,
       nodeId: issue.data.node_id,
@@ -99,7 +102,7 @@ class WorkflowBundleCandidateGithubPort implements GithubReadyPrPort {
         ...this.repository(fullName),
         commit_sha: sha,
       });
-      if (result.data.parents.length !== 1) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_COMMIT_PARENT_INVALID");
+      if (result.data.parents.length !== 1) throw new Error("GITHUB_READY_PR_COMMIT_PARENT_INVALID");
       return {
         sha: result.data.sha,
         treeSha: result.data.tree.sha,
@@ -128,7 +131,7 @@ class WorkflowBundleCandidateGithubPort implements GithubReadyPrPort {
         content: file.content,
       })),
     });
-    if (tree.data.sha === base.data.tree.sha) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_NO_CHANGES");
+    if (tree.data.sha === base.data.tree.sha) throw new Error("GITHUB_READY_PR_NO_CHANGES");
     return { sha: tree.data.sha };
   }
 
@@ -181,25 +184,30 @@ class WorkflowBundleCandidateGithubPort implements GithubReadyPrPort {
   }
 }
 
-export async function withWorkflowBundleCandidateGithub<Result>(input: {
+/**
+ * caller를 만드는 신뢰 실행기들이 공유하는 GitHub 경계다. installation token은 콜백 밖으로
+ * 나가지 않고, capability만 실행기마다 다르다.
+ */
+export async function withGithubReadyPrInstallation<Result>(input: {
   installationId: string;
   repositoryId: string;
   repositoryFullName: string;
+  capability: FleetGitHubCapability;
   requestFetch?: typeof globalThis.fetch;
   execute: (github: GithubReadyPrPort) => Promise<Result>;
 }): Promise<Result> {
   const scoped = await getFleetScopedGithubTokenIssuer({ requestFetch: input.requestFetch });
   if (scoped.installationId !== input.installationId) {
-    throw new Error("WORKFLOW_BUNDLE_CANDIDATE_INSTALLATION_ID_MISMATCH");
+    throw new Error("GITHUB_READY_PR_INSTALLATION_ID_MISMATCH");
   }
   return withFleetScopedGithubClient({
     issuer: scoped.issuer,
     installationId: input.installationId,
-    capability: "github.workflow-bundle-candidate.ready-pr",
+    capability: input.capability,
     repositoryId: input.repositoryId,
     repositoryFullName: input.repositoryFullName,
     execute: (client) => input.execute(
-      new WorkflowBundleCandidateGithubPort(input.installationId, client),
+      new GithubReadyPrInstallationPort(input.installationId, client),
     ),
   });
 }

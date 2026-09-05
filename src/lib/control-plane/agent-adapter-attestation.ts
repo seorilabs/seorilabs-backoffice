@@ -8,17 +8,15 @@ import {
 } from "node:crypto";
 
 import { canonicalJson, jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { trustedExecutorAttestationRoutes } from "@/lib/control-plane/trusted-executor-bindings";
 
 const DOMAIN = "seori-agent-adapter-attestation-v1\n";
 const SHA256 = /^[0-9a-f]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9._:/-]{1,191}$/;
 
-export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE =
-  "/api/internal/workflow-bundle-candidate-executor";
-
 function isAgentAdapterAttestationRoute(route: string): boolean {
   return route.startsWith("/api/internal/agent-adapter/")
-    || route === WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE;
+    || trustedExecutorAttestationRoutes().includes(route);
 }
 
 export interface AgentAdapterAttestationPayload {

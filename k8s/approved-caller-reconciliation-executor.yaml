@@ -1,0 +1,169 @@
+# 승인된 WorkflowBundle caller 반증기다. 후보 canary와 달리 승인 번들 하나만 대상으로 하고,
+# caller 본문은 중앙 계약(generateStaticCallerV5)이 만든다. 계약이 대상 저장소의 exact
+# source 체크아웃을 요구하므로 이 파드만 github.com egress와 git이 열려 있다.
+# GitHub App write 공개 readback, egress client 정책, Backoffice의
+# APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED=true가 모두 검증되기 전에는
+# suspend를 해제하지 않는다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: approved-caller-reconciliation-executor
+  namespace: auth-broker
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: approved-caller-reconciliation-executor
+  namespace: auth-broker
+spec:
+  schedule: "*/15 * * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: approved-caller-reconciliation-executor
+            app.kubernetes.io/component: trusted-github-app-executor
+        spec:
+          restartPolicy: Never
+          serviceAccountName: approved-caller-reconciliation-executor
+          automountServiceAccountToken: false
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: executor
+              image: __BACKOFFICE_IMAGE_DIGEST__
+              imagePullPolicy: IfNotPresent
+              workingDir: /app
+              command: ["node", "/app/scripts-dist/approved-caller-reconciliation-executor.mjs"]
+              env:
+                - name: NODE_ENV
+                  value: production
+                - name: HOME
+                  value: /tmp
+                - name: CHECKPOINT_DISABLE
+                  value: "1"
+                - name: NODE_OPTIONS
+                  value: "--max-old-space-size=384 --dns-result-order=ipv4first --no-network-family-autoselection"
+                - name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_ROOT
+                  value: /var/run/approved-caller-reconciliation-executor
+                - name: APPROVED_CALLER_RECONCILIATION_EXECUTION_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.uid
+                - name: SEORI_BACKOFFICE_ORIGIN
+                  value: https://backoffice.vzyx.xyz
+                - name: SEORI_EGRESS_PROXY_ORIGIN
+                  value: https://seori-auth-egress-proxy.auth-broker.svc.cluster.local:8443
+                - name: SEORI_EGRESS_PROXY_SERVER_NAME
+                  value: seori-auth-egress-proxy.auth-broker.svc.cluster.local
+                - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PRINCIPAL
+                  value: seori-auth:approved-caller-reconciliation-adapter
+                - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY
+                  value: spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor
+                - name: GITHUB_ORG
+                  value: seorilabs
+                - name: GITHUB_APP_ID
+                  valueFrom:
+                    configMapKeyRef:
+                      name: seori-auth-agent-public-bindings
+                      key: GITHUB_APP_ID
+                - name: GITHUB_PRIVATE_KEY_FILE
+                  value: /var/run/approved-caller-reconciliation-executor/github/app-private.pem
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 192Mi
+                limits:
+                  cpu: "1"
+                  memory: 768Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: runtime
+                  mountPath: /var/run/approved-caller-reconciliation-executor
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: egress
+                  mountPath: /var/run/approved-caller-reconciliation-executor/egress
+                  readOnly: true
+          volumes:
+            - name: runtime
+              projected:
+                defaultMode: 0440
+                sources:
+                  - secret:
+                      name: approved-caller-reconciliation-backoffice
+                      items:
+                        - { key: ca.pem, path: backoffice/ca.pem }
+                        - { key: adapter.bearer, path: backoffice/adapter.bearer }
+                  - secret:
+                      name: approved-caller-reconciliation-attestation
+                      items:
+                        - { key: private.pem, path: adapter/attestation-private.pem }
+                  - secret:
+                      name: approved-caller-reconciliation-github
+                      items:
+                        - { key: app-private.pem, path: github/app-private.pem }
+            # 대상 저장소 얕은 체크아웃이 여기 들어간다. 파드가 끝나면 함께 사라진다.
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi
+            - name: egress
+              secret:
+                secretName: approved-caller-reconciliation-egress-tls
+                defaultMode: 0440
+                items:
+                  - { key: ca.crt, path: ca.pem }
+                  - { key: tls.crt, path: tls.crt }
+                  - { key: tls.key, path: tls.key }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: approved-caller-reconciliation-executor
+  namespace: auth-broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: approved-caller-reconciliation-executor
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seori-auth-egress-proxy
+      ports:
+        - { protocol: TCP, port: 8443 }

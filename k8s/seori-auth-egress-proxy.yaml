@@ -101,6 +101,26 @@ spec:
     name: auth-broker-egress-ca
     kind: Issuer
 ---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: approved-caller-reconciliation-egress-tls
+  namespace: auth-broker
+spec:
+  secretName: approved-caller-reconciliation-egress-tls
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: [client auth]
+  uris:
+    - spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor
+  issuerRef:
+    name: auth-broker-egress-ca
+    kind: Issuer
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -176,6 +196,7 @@ spec:
                 spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime=backoffice.vzyx.xyz,api.github.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor=backoffice.vzyx.xyz,api.github.com;
+                spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor=backoffice.vzyx.xyz,api.github.com,github.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary=api.github.com
           readinessProbe:
             tcpSocket:

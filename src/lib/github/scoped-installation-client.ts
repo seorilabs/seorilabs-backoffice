@@ -47,6 +47,13 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
     pull_requests: "write",
     workflows: "write",
   }),
+  // caller 반증은 Issue를 읽지도 닫지도 않는다. 후보 canary보다 issues 권한만큼 좁다.
+  "github.approved-caller-reconciliation.ready-pr": Object.freeze({
+    contents: "write",
+    metadata: "read",
+    pull_requests: "write",
+    workflows: "write",
+  }),
   "github.release.write": Object.freeze({
     contents: "write",
     metadata: "read",
@@ -225,15 +232,14 @@ export async function issueFleetMigrationGithubCapabilityToSink<Client>(input: {
  * GitHub App installation token은 이 callback 경계 밖으로 반환하지 않는다.
  * capability는 고정 permission map으로만 해석하고 대상 repository 하나로 제한한다.
  */
-export async function withFleetScopedGithubClient<Client, Result>(input: {
+async function withFleetScopedAccessToken<Client, Result>(input: {
   issuer: FleetScopedGithubTokenIssuer<Client>;
   installationId: string;
   capability: FleetGitHubCapability;
   repositoryId: string;
   repositoryFullName: string;
-  execute: (client: Client) => Promise<Result>;
   now?: () => Date;
-}): Promise<Result> {
+}, consume: (token: string, issuer: FleetScopedGithubTokenIssuer<Client>) => Promise<Result>): Promise<Result> {
   if (!REPOSITORY.test(input.repositoryFullName)) {
     throw new Error("FLEET_GITHUB_REPOSITORY_INVALID");
   }
@@ -255,8 +261,7 @@ export async function withFleetScopedGithubClient<Client, Result>(input: {
       expectedPermissions: permissions,
       now: input.now?.() ?? new Date(),
     });
-    const client = input.issuer.createClient(response.token);
-    result = await input.execute(client);
+    result = await consume(response.token, input.issuer);
   } catch (error) {
     operationError = error;
   } finally {
@@ -272,4 +277,39 @@ export async function withFleetScopedGithubClient<Client, Result>(input: {
   }
   if (operationError) throw operationError;
   return result as Result;
+}
+
+/**
+ * GitHub App installation token은 이 callback 경계 밖으로 반환하지 않는다.
+ * capability는 고정 permission map으로만 해석하고 대상 repository 하나로 제한한다.
+ */
+export async function withFleetScopedGithubClient<Client, Result>(input: {
+  issuer: FleetScopedGithubTokenIssuer<Client>;
+  installationId: string;
+  capability: FleetGitHubCapability;
+  repositoryId: string;
+  repositoryFullName: string;
+  execute: (client: Client) => Promise<Result>;
+  now?: () => Date;
+}): Promise<Result> {
+  return withFleetScopedAccessToken<Client, Result>(
+    input,
+    (token, issuer) => input.execute(issuer.createClient(token)),
+  );
+}
+
+/**
+ * git 같은 외부 프로세스는 Octokit client를 쓸 수 없어 raw token이 필요하다. 경계와
+ * revoke는 client 경로와 같고, token은 이 callback 밖으로 나가지 않는다.
+ */
+export async function withFleetScopedGithubToken<Client, Result>(input: {
+  issuer: FleetScopedGithubTokenIssuer<Client>;
+  installationId: string;
+  capability: FleetGitHubCapability;
+  repositoryId: string;
+  repositoryFullName: string;
+  execute: (token: string) => Promise<Result>;
+  now?: () => Date;
+}): Promise<Result> {
+  return withFleetScopedAccessToken<Client, Result>(input, (token) => input.execute(token));
 }

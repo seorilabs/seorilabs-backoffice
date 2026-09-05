@@ -2,14 +2,14 @@ import { createPrivateKey, randomUUID, type KeyObject } from "node:crypto";
 import { z } from "zod";
 
 import {
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
   WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
 } from "@/lib/control-plane/automation-catalog";
 import {
-  signAgentAdapterAttestation,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
+  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
   WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE,
-} from "@/lib/control-plane/agent-adapter-attestation";
+} from "@/lib/control-plane/trusted-executor-bindings";
+import { signAgentAdapterAttestation } from "@/lib/control-plane/agent-adapter-attestation";
 import {
   executeWorkflowBundleCandidateReadyPr,
   recoverGithubReadyPr,
@@ -30,7 +30,7 @@ import {
   readBoundSecretFile,
   withBoundSecretText,
 } from "@/lib/control-plane/seori-auth-agent-transport";
-import { withWorkflowBundleCandidateGithub } from "@/lib/github/workflow-bundle-candidate-client";
+import { withGithubReadyPrInstallation } from "@/lib/github/ready-pr-installation-client";
 
 const FIXED_ROOT = process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ROOT?.trim()
   || "/var/run/workflow-bundle-candidate-executor";
@@ -375,10 +375,11 @@ async function runWithSecrets(input: {
     captureExecutionId: (value) => { executionId = value; },
   });
   try {
-    const result = await withWorkflowBundleCandidateGithub({
+    const result = await withGithubReadyPrInstallation({
       installationId: claim.task.github.installationId,
       repositoryId: claim.task.repository.id,
       repositoryFullName: claim.task.repository.fullName,
+      capability: "github.workflow-bundle-candidate.ready-pr",
       requestFetch: input.githubFetch,
       execute: async (github) => claim.resumeMode === "START"
         ? executeWorkflowBundleCandidateReadyPr({

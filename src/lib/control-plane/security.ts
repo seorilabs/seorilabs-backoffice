@@ -3,9 +3,7 @@ import { createHash, createPublicKey } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
   GENERIC_WORKER_PRINCIPALS,
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL,
-  WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY,
-  WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+  TRUSTED_EXECUTOR_PRINCIPALS,
 } from "@/lib/control-plane/automation-catalog";
 import {
   agentAdapterNonceDigest,
@@ -13,6 +11,13 @@ import {
   type AgentAdapterAttestationPayload,
 } from "@/lib/control-plane/agent-adapter-attestation";
 import type { JsonValue } from "@/lib/control-plane/json";
+import {
+  TRUSTED_EXECUTOR_BINDINGS,
+  TRUSTED_EXECUTOR_GATES,
+  peerTrustedExecutorEnvNames,
+  type TrustedExecutorAdapterEnvNames,
+  type TrustedExecutorGate,
+} from "@/lib/control-plane/trusted-executor-bindings";
 import { prisma } from "@/lib/prisma";
 import { verifyStaticToken } from "@/lib/security";
 
@@ -44,89 +49,78 @@ function configuredAgentWorkerTokens(): ReadonlyMap<string, string> | null {
   const reservedTokens = [
     process.env.CONTROL_PLANE_ADMIN_TOKEN?.trim(),
     process.env.INTERNAL_ADMIN_TOKEN?.trim(),
-    process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim(),
-    process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
+    ...trustedExecutorEnvValues("token"),
   ].filter((value): value is string => Boolean(value));
   if (new Set(tokens).size !== tokens.length || tokens.some((token) => reservedTokens.includes(token))) return null;
   return new Map(entries);
 }
 
+function trustedExecutorEnv(name: string): string {
+  return process.env[name]?.trim() ?? "";
+}
+
+function trustedExecutorEnvValues(key: keyof TrustedExecutorAdapterEnvNames): string[] {
+  return TRUSTED_EXECUTOR_GATES
+    .map((gate) => trustedExecutorEnv(TRUSTED_EXECUTOR_BINDINGS[gate].env[key]))
+    .filter((value) => value.length > 0);
+}
+
+/** Ed25519 공개키의 SPKI fingerprint다. 다른 형식이거나 파싱되지 않으면 빈 문자열이다. */
+function ed25519Fingerprint(publicKey: string): string {
+  try {
+    const key = createPublicKey(publicKey);
+    if (key.asymmetricKeyType !== "ed25519") return "";
+    return createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function configuredTrustedAdapter(
-  deploymentGate: "generic" | "workflow-bundle-candidate" = "generic",
+  deploymentGate: TrustedExecutorGate = "generic",
 ): {
   principal: string;
   runtimeIdentity: string;
   token: string;
   publicKey: string;
 } | null {
-  const deployed = deploymentGate === "workflow-bundle-candidate"
-    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED === "true"
-    : process.env.AGENT_TRUSTED_ADAPTER_DEPLOYED === "true";
-  if (!deployed) return null;
-  const candidate = deploymentGate === "workflow-bundle-candidate";
-  const principal = candidate
-    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? ""
-    : process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "";
-  const runtimeIdentity = candidate
-    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY?.trim() ?? ""
-    : process.env.AGENT_TRUSTED_ADAPTER_RUNTIME_IDENTITY?.trim() ?? "";
-  const token = candidate
-    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim() ?? ""
-    : process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim() ?? "";
-  const publicKey = candidate
-    ? process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY?.trim() ?? ""
-    : process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY?.trim() ?? "";
+  const binding = TRUSTED_EXECUTOR_BINDINGS[deploymentGate];
+  if (trustedExecutorEnv(binding.env.deployed) !== "true") return null;
+  const principal = trustedExecutorEnv(binding.env.principal);
+  const runtimeIdentity = trustedExecutorEnv(binding.env.runtimeIdentity);
+  const token = trustedExecutorEnv(binding.env.token);
+  const publicKey = trustedExecutorEnv(binding.env.publicKey);
   const reservedPrincipals = new Set<string>([
     ...Object.values(GENERIC_WORKER_PRINCIPALS),
-    WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
+    ...TRUSTED_EXECUTOR_PRINCIPALS,
     process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim() ?? "",
-    candidate
-      ? process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? ""
-      : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? "",
+    ...peerTrustedExecutorEnvNames(deploymentGate, "principal").map(trustedExecutorEnv),
   ].filter(Boolean));
   const reservedTokens = [
     process.env.AGENT_WORKER_CODEX_TOKEN?.trim(),
     process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim(),
     process.env.CONTROL_PLANE_ADMIN_TOKEN?.trim(),
     process.env.INTERNAL_ADMIN_TOKEN?.trim(),
-    candidate
-      ? process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim()
-      : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
+    ...peerTrustedExecutorEnvNames(deploymentGate, "token").map(trustedExecutorEnv),
   ].filter((value): value is string => Boolean(value));
-  let validPublicKey = false;
-  let publicKeyFingerprint = "";
-  try {
-    const key = createPublicKey(publicKey);
-    validPublicKey = key.asymmetricKeyType === "ed25519";
-    publicKeyFingerprint = createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex");
-  } catch {
-    validPublicKey = false;
-  }
-  const peerPublicKey = candidate
-    ? process.env.AGENT_TRUSTED_ADAPTER_PUBLIC_KEY?.trim() ?? ""
-    : process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY?.trim() ?? "";
-  let peerPublicKeyFingerprint = "";
-  try {
-    const key = createPublicKey(peerPublicKey);
-    if (key.asymmetricKeyType === "ed25519") {
-      peerPublicKeyFingerprint = createHash("sha256")
-        .update(key.export({ type: "spki", format: "der" }))
-        .digest("hex");
-    }
-  } catch {
-    peerPublicKeyFingerprint = "";
-  }
+  const fingerprint = ed25519Fingerprint(publicKey);
+  // 실행기 하나가 다른 실행기의 서명 키를 그대로 쓰면 route 분리가 무의미해진다.
+  const peerFingerprints = new Set(
+    peerTrustedExecutorEnvNames(deploymentGate, "publicKey")
+      .map((name) => ed25519Fingerprint(trustedExecutorEnv(name)))
+      .filter((value) => value.length > 0),
+  );
   if (
     !/^[A-Za-z0-9._:/-]{1,128}$/.test(principal)
     || !/^[A-Za-z0-9._:/-]{1,191}$/.test(runtimeIdentity)
     || !token
-    || !validPublicKey
+    || !fingerprint
     || reservedPrincipals.has(principal)
     || reservedTokens.includes(token)
-    || (publicKeyFingerprint && publicKeyFingerprint === peerPublicKeyFingerprint)
-    || (candidate && (
-      principal !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
-      || runtimeIdentity !== WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
+    || peerFingerprints.has(fingerprint)
+    || (binding.expected !== null && (
+      principal !== binding.expected.adapterPrincipal
+      || runtimeIdentity !== binding.expected.adapterRuntimeIdentity
     ))
   ) return null;
   return { principal, runtimeIdentity, token, publicKey };
@@ -138,10 +132,9 @@ export function trustedMutationAdapterConfigured(): boolean {
     && configuredTrustedAdapter() !== null;
 }
 
-/** 후보 executor는 generic agent runtime canary와 별도 배포 gate를 가진다. */
-export function workflowBundleCandidateExecutorConfigured(): boolean {
-  return trustedGithubStepLedgerImplemented()
-    && configuredTrustedAdapter("workflow-bundle-candidate") !== null;
+/** 신뢰 실행기는 generic agent runtime canary와 별도 배포 gate를 가진다. */
+export function trustedExecutorConfigured(gate: TrustedExecutorGate): boolean {
+  return trustedGithubStepLedgerImplemented() && configuredTrustedAdapter(gate) !== null;
 }
 
 /** CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable CAS, idempotency, readback ledger 구현 여부다. */
@@ -177,15 +170,13 @@ export function authenticateInternalRequest(
     const expectedPrincipal = process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim();
     const lowerPrivilegePrincipals = new Set<string>([
       ...Object.values(GENERIC_WORKER_PRINCIPALS),
-      WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_PRINCIPAL,
-      process.env.AGENT_TRUSTED_ADAPTER_PRINCIPAL?.trim() ?? "",
-      process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL?.trim() ?? "",
+      ...TRUSTED_EXECUTOR_PRINCIPALS,
+      ...trustedExecutorEnvValues("principal"),
     ].filter(Boolean));
     const lowerPrivilegeTokens = [
       process.env.AGENT_WORKER_CODEX_TOKEN?.trim(),
       process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim(),
-      process.env.AGENT_TRUSTED_ADAPTER_TOKEN?.trim(),
-      process.env.WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN?.trim(),
+      ...trustedExecutorEnvValues("token"),
     ].filter((value): value is string => Boolean(value));
     if (
       !expectedPrincipal
@@ -200,11 +191,12 @@ export function authenticateInternalRequest(
 }
 
 /** 후보 executor 전용 workload gate. generic READY_PR runtime을 켜지 않는다. */
-export function authenticateWorkflowBundleCandidateExecutorRequest(
+export function authenticateTrustedExecutorRequest(
   request: NextRequest,
+  gate: TrustedExecutorGate,
 ): InternalPrincipal | null {
   const id = principalId(request);
-  const adapter = configuredTrustedAdapter("workflow-bundle-candidate");
+  const adapter = configuredTrustedAdapter(gate);
   if (
     !id
     || !adapter
@@ -231,7 +223,7 @@ export async function verifyAndConsumeAgentAdapterAttestation(input: {
   route: string;
   idempotencyKey: string;
   body: unknown;
-  deploymentGate?: "generic" | "workflow-bundle-candidate";
+  deploymentGate?: TrustedExecutorGate;
   now?: Date;
 }): Promise<AgentAdapterAttestationPayload | null> {
   const adapter = configuredTrustedAdapter(input.deploymentGate);

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE } from "@/lib/control-plane/agent-adapter-attestation";
+import { WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE } from "@/lib/control-plane/trusted-executor-bindings";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
 import {
-  authenticateWorkflowBundleCandidateExecutorRequest,
+  authenticateTrustedExecutorRequest,
   requireIdempotencyKey,
   verifyAndConsumeAgentAdapterAttestation,
 } from "@/lib/control-plane/security";
@@ -28,7 +28,7 @@ export const maxDuration = 300;
 const ROUTE = WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_ATTESTATION_ROUTE;
 
 export async function POST(request: NextRequest) {
-  const principal = authenticateWorkflowBundleCandidateExecutorRequest(request);
+  const principal = authenticateTrustedExecutorRequest(request, "workflow-bundle-candidate");
   if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const idempotencyKey = requireIdempotencyKey(request);
   if (!idempotencyKey) {

@@ -2,7 +2,9 @@ import { stringify } from "yaml";
 import { z } from "zod";
 
 import { containsCredentialCandidate } from "@/lib/control-plane/contracts";
+import { githubReadyPrMutationIntentDigest } from "@/lib/control-plane/github-ready-pr-adapter";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
+import { trustedMutationExecutorRequestSchema } from "@/lib/control-plane/trusted-mutation-executor-contract";
 import { workflowBundleV5RegistrySchema } from "@/lib/control-plane/workflow-bundle-v5-registry";
 
 export const WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_CONTRACT =
@@ -14,7 +16,6 @@ const PUBLIC_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,190}$/u;
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/u;
 const STATIC_CALLER_PATH = ".github/workflows/org-contract.yml" as const;
 const ANDROID_CALLER_PATH = ".github/workflows/android-build-only.yml" as const;
-const requiredUnknown = z.unknown().refine((value) => value !== undefined);
 
 export const WORKFLOW_BUNDLE_CANDIDATE_CALLER_PATHS = Object.freeze([
   STATIC_CALLER_PATH,
@@ -173,67 +174,8 @@ export const workflowBundleCandidateTaskSchema = z.object({
 
 export type WorkflowBundleCandidateTask = z.infer<typeof workflowBundleCandidateTaskSchema>;
 
-export const workflowBundleCandidateExecutorRequestSchema = z.discriminatedUnion("operation", [
-  z.object({ operation: z.literal("CLAIM") }).strict(),
-  z.object({
-    operation: z.literal("HEARTBEAT"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    generation: z.number().int().positive(),
-  }).strict(),
-  z.object({
-    operation: z.literal("AUTHORIZE"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    mutationIntentDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-    observation: requiredUnknown,
-  }).strict(),
-  z.object({
-    operation: z.literal("STEP_CLAIM"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    executionId: z.string().regex(PUBLIC_ID),
-    stepKind: z.enum(["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]),
-  }).strict(),
-  z.object({
-    operation: z.literal("STEP_PLAN"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    executionId: z.string().regex(PUBLIC_ID),
-    stepId: z.string().regex(PUBLIC_ID),
-    attemptId: z.string().regex(PUBLIC_ID),
-    generation: z.number().int().positive(),
-    expectedTreeSha: z.string().regex(SHA40),
-    expectedCommitSha: z.string().regex(SHA40),
-  }).strict(),
-  z.object({
-    operation: z.literal("STEP_COMPLETE"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    executionId: z.string().regex(PUBLIC_ID),
-    stepId: z.string().regex(PUBLIC_ID),
-    attemptId: z.string().regex(PUBLIC_ID),
-    generation: z.number().int().positive(),
-    stepKind: z.enum(["CREATE_COMMIT", "CREATE_REF", "CREATE_PR"]),
-    observation: requiredUnknown,
-  }).strict(),
-  z.object({
-    operation: z.literal("READBACK"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    executionId: z.string().regex(PUBLIC_ID),
-    observation: requiredUnknown,
-  }).strict(),
-  z.object({
-    operation: z.literal("RECOVERY"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-  }).strict(),
-  z.object({
-    operation: z.literal("SETTLE"),
-    sessionId: z.string().regex(/^agent-session:[0-9a-f-]{36}$/u),
-    mode: z.enum(["START", "READBACK_FIRST"]),
-    status: z.enum(["VERIFIED", "NOT_APPLIED", "PARTIAL_VERIFIED", "RESULT_UNKNOWN", "FAILED"]),
-    executionId: z.string().regex(PUBLIC_ID).nullable(),
-    pullRequestNumber: z.number().int().positive().nullable(),
-    pullRequestUrl: z.string().url().startsWith("https://github.com/").nullable(),
-    commitSha: z.string().regex(SHA40).nullable(),
-    errorCode: z.string().regex(/^[A-Z][A-Z0-9_]{7,190}$/u).nullable(),
-  }).strict(),
-]);
+export const workflowBundleCandidateExecutorRequestSchema =
+  trustedMutationExecutorRequestSchema;
 
 export type WorkflowBundleCandidateExecutorRequest = z.infer<
   typeof workflowBundleCandidateExecutorRequestSchema
@@ -316,23 +258,15 @@ function candidateTaskPlanDigest(task: Omit<WorkflowBundleCandidateTask, "planDi
 }
 
 function candidateMutationIntentDigest(task: Pick<WorkflowBundleCandidateTask, "repository" | "mutation">): string {
-  return jsonDigest({
-    schemaVersion: 1,
+  return githubReadyPrMutationIntentDigest({
     repoId: task.repository.id,
-    repoFullName: task.repository.fullName.toLowerCase(),
+    repoFullName: task.repository.fullName,
     issueNumber: task.repository.issueNumber,
-    sourceSha: task.repository.sourceSha.toLowerCase(),
+    sourceSha: task.repository.sourceSha,
     title: task.mutation.title,
     body: task.mutation.body,
     commitMessage: task.mutation.commitMessage,
-    files: [...task.mutation.files]
-      .map((file) => ({
-        path: file.path,
-        mode: file.mode,
-        contentSha256: file.contentSha256,
-      }))
-      .sort((left, right) => left.path.localeCompare(right.path)),
-  });
+  }, task.mutation.files);
 }
 
 export function buildWorkflowBundleCandidateTask(input: {
