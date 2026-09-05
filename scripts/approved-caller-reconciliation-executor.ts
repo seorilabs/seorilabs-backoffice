@@ -55,6 +55,11 @@ const adapterPrincipalId = process.env.APPROVED_CALLER_RECONCILIATION_ADAPTER_PR
 const adapterRuntimeIdentity =
   process.env.APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY?.trim() || "";
 const podUid = process.env.APPROVED_CALLER_RECONCILIATION_EXECUTION_ID?.trim() || "";
+// 파드는 egress proxy 밖으로 나가지 못한다. proxy origin이 없으면 git이 프록시 없이
+// 나가려다 조용히 막히므로 시작 시점에 닫는다.
+const egressProxyOrigin = parseExactHttpsOrigin(
+  process.env.SEORI_EGRESS_PROXY_ORIGIN?.trim() || "",
+).toString().replace(/\/$/u, "");
 if (adapterPrincipalId !== APPROVED_CALLER_RECONCILIATION_ADAPTER_PRINCIPAL) {
   throw new Error("APPROVED_CALLER_ADAPTER_PRINCIPAL_INVALID");
 }
@@ -250,7 +255,7 @@ async function runMutation(input: {
       sourceSha: task.repository.sourceSha,
       token,
       proxy: {
-        origin: process.env.SEORI_EGRESS_PROXY_ORIGIN?.trim() || "",
+        origin: egressProxyOrigin,
         caPath: `${FIXED_ROOT}/egress/ca.pem`,
         certPath: `${FIXED_ROOT}/egress/tls.crt`,
         keyPath: `${FIXED_ROOT}/egress/tls.key`,
