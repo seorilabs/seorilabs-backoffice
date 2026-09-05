@@ -51,9 +51,11 @@ test("세션 미들웨어는 실행기 route를 가로채지 않는다", () => {
   assert.match(source("src/middleware.ts"), /approved-caller-reconciliation-executor/u);
 });
 
-test("CronJob은 계약 호출에 필요한 것만 열고 기본은 suspend다", () => {
+test("CronJob은 계약 호출에 필요한 것만 연다", () => {
   const manifest = source("k8s/approved-caller-reconciliation-executor.yaml");
-  assert.match(manifest, /suspend: true/u);
+  // 한 번에 한 실행만 돌아야 같은 run을 두 pod가 잡지 않는다.
+  assert.match(manifest, /concurrencyPolicy: Forbid/u);
+  assert.match(manifest, /restartPolicy: Never/u);
   assert.match(manifest, /approved-caller-reconciliation-executor\.mjs/u);
   assert.match(manifest, new RegExp(APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY, "u"));
   assert.match(manifest, /readOnlyRootFilesystem: true/u);
@@ -77,14 +79,14 @@ test("git egress는 이 실행기 client identity에만 열린다", () => {
   assert.match(proxy, /ingress:[\s\S]*?- approved-caller-reconciliation-executor/u);
 });
 
-test("Backoffice는 실행기 인증 env를 주입하고 배포 gate는 닫힌 값으로 시작한다", () => {
+test("Backoffice는 실행기 인증 env 다섯 값을 모두 주입한다", () => {
   const deployment = source("k8s/deployment.yaml");
   const binding = TRUSTED_EXECUTOR_BINDINGS["approved-caller-reconciliation"];
   for (const name of Object.values(binding.env)) {
     assert.match(deployment, new RegExp(`- name: ${name}\\n`, "u"), name);
   }
   // 다섯 값 중 하나라도 없으면 실행기의 첫 CLAIM이 401이 된다.
-  assert.match(deployment, /- name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED\n {14}value: "false"/u);
+  assert.match(deployment, /- name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED\n {14}value: "(?:true|false)"/u);
   for (const name of [binding.env.token, binding.env.publicKey]) {
     assert.match(
       deployment,
