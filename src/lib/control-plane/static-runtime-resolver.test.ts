@@ -6,6 +6,7 @@ import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/js
 import {
   ControlPlaneError,
   resolveStaticRuntimeManifest,
+  resolveStaticRuntimeManifestForRepository,
 } from "@/lib/control-plane/service";
 
 const SIGNING_KEY = "unit-test-snapshot-signing-key";
@@ -310,4 +311,61 @@ test("bundle drift, runner boundary와 source provenance 누락은 fail-closed�
       (error) => error instanceof ControlPlaneError && error.code === value.code,
     );
   }
+});
+
+test("OIDC 없는 서버 측 계획도 런타임과 같은 manifest를 만든다", async () => {
+  // caller 반증기는 실행 주체가 없어 OIDC 신원을 만들 수 없다. manifest 내용은 app,
+  // registration, ACTIVE revision, discovery에서만 나오므로 두 경로의 결과가 같아야 한다.
+  const stub = client();
+  const runtime = await resolveStaticRuntimeManifest(input(), stub as never);
+  const planned = await resolveStaticRuntimeManifestForRepository({
+    selector: {
+      repositoryId: REPOSITORY_ID,
+      bindingSourceSha: BINDING_SHA,
+      applicationSourceSha: APPLICATION_SHA,
+      workflowBundleSha: BUNDLE_SHA,
+    },
+    app: { id: "app-runtime-1", repoFullName: FULL_NAME, status: "ACTIVE" },
+    expectedSourceRef: "refs/heads/main",
+    signingKey: SIGNING_KEY,
+    snapshotSignatureKeyId: "control-plane-snapshot-v1",
+    snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+    now: new Date("2026-08-30T00:00:00Z"),
+  }, stub as never);
+
+  assert.deepEqual(planned, runtime);
+  assert.equal(planned.manifestDigest, runtime.manifestDigest);
+});
+
+test("서버 측 계획도 ACTIVE 설정이 승인하지 않은 번들은 거부한다", async () => {
+  await assert.rejects(
+    resolveStaticRuntimeManifestForRepository({
+      selector: {
+        repositoryId: REPOSITORY_ID,
+        bindingSourceSha: BINDING_SHA,
+        applicationSourceSha: APPLICATION_SHA,
+        workflowBundleSha: "d".repeat(40),
+      },
+      app: { id: "app-runtime-1", repoFullName: FULL_NAME, status: "ACTIVE" },
+      expectedSourceRef: "refs/heads/main",
+      signingKey: SIGNING_KEY,
+      snapshotSignatureKeyId: "control-plane-snapshot-v1",
+      snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+      now: new Date("2026-08-30T00:00:00Z"),
+    }, client() as never),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "WORKFLOW_BUNDLE_NOT_APPROVED",
+  );
+});
+
+test("런타임 경로는 OIDC 검사를 그대로 유지한다", async () => {
+  // 분리 뒤에도 실행 주체 검증이 계획 경로로 새어 나가지 않는지 고정한다.
+  await assert.rejects(
+    resolveStaticRuntimeManifest(
+      input(identity({ repositoryVisibility: "public" })),
+      client() as never,
+    ),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "RUNNER_TRUST_BOUNDARY_MISMATCH",
+  );
 });
