@@ -13,12 +13,19 @@ export interface MetricBreakdowns {
   countries?: DimCount[];
   osVersions?: DimCount[];
   devices?: DimCount[];
+  /**
+   * 앱 버전별 DAU.
+   *
+   * 업데이트 유도가 실제로 먹혔는지를 이걸로 본다. presence 분포는 최근
+   * 150초 창이라 "지금 접속 중"만 답하고 과거는 복원할 수 없다.
+   */
+  appVersions?: DimCount[];
 }
 
 /** BigQuery 차원 분해 쿼리의 한 행(날짜×차원×값의 DAU). */
 export interface Ga4BreakdownRow {
   date: string; // "YYYY-MM-DD"
-  dim: string; // 'platform' | 'country' | 'os' | 'device'
+  dim: string; // 'platform' | 'country' | 'os' | 'device' | 'app_version'
   val: string;
   dau: number;
 }
@@ -71,6 +78,7 @@ export function buildDayBreakdown(
       countries: topN(dims?.["country"], topCount),
       osVersions: topN(dims?.["os"], topCount),
       devices: topN(dims?.["device"], topCount),
+      appVersions: topN(dims?.["app_version"], topCount),
     },
   };
 }
