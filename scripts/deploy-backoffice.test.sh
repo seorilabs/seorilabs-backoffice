@@ -247,7 +247,10 @@ if grep -q '^APPLY_STDIN vault-indexer' "$log"; then
   exit 1
 fi
 [ "$(grep -c '^READ_VAULT_IMAGE$' "$log")" -eq 4 ]
-[ "$(grep -c '^APPLY_FILE backup-cronjob.yaml$' "$log")" -eq 2 ]
+if grep -q '^APPLY_FILE backup-cronjob.yaml$' "$log"; then
+  echo "FAIL 일반 앱 배포가 미검증 백업 계정으로 CronJob을 교체했다" >&2
+  exit 1
+fi
 if grep -q '^APPLY_FILE backup-pvc.yaml$' "$log"; then
   echo "FAIL CI deployer가 stateful PVC를 변경했다" >&2
   exit 1

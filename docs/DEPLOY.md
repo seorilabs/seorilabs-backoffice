@@ -68,7 +68,7 @@ BACKOFFICE_IMAGE="$IMAGE" BACKOFFICE_SOURCE_SHA="$SOURCE_SHA" \
 # 첫 component=web Pod 전환이 끝난 뒤 Service selector를 좁힌다.
 kubectl apply -f k8s/backoffice-networking.yaml
 ```
-`backup-cronjob.yaml`은 CI가 갱신하지만 PVC는 갱신하지 않는다. 백업 Job은 비밀번호를
+`backup-cronjob.yaml`과 PVC는 일반 앱 CI가 갱신하지 않는다. 계정·복원 검증을 완료한 trusted operator가 별도로 전환한다. 백업 Job은 비밀번호를
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
@@ -944,4 +944,4 @@ App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확�
 5. `scripts/run-restore-rehearsal.sh`로 새 dump를 격리 MySQL 9.2에 복원한다. exact source로 트리거를 재구성하고 테이블 수·필수 데이터·checksum·서명 snapshot 복구 검증을 통과한다. 운영 DB에 복원하지 않는다.
 6. 위 증거와 배포 승인이 갖춰진 뒤 CronJob을 전환한다. logical binding·공개 DB 계정·실행 image digest·Job 성공·dump checksum·restore 결과를 함께 감사 기록으로 남긴다. 검증 전에는 이 이슈를 종결하지 않는다.
 
-현재 원본 미등록이나 grant·restore 실패가 있으면 배포를 진행하지 않는다. 실패한 dump는 완성본 이름으로 노출하지 않으며 마지막 검증 백업을 보존한다. 문제를 앱 계정 fallback이나 앱 비밀번호 회전으로 우회하지 않는다.
+일반 앱 배포에서는 백업 매니페스트를 적용하지 않아 기존 성공 중인 CronJob을 보존한다. 현재 원본 미등록이나 grant·restore 실패가 있으면 백업 전환을 진행하지 않는다. 실패한 dump는 완성본 이름으로 노출하지 않으며 마지막 검증 백업을 보존한다. 문제를 앱 계정 fallback이나 앱 비밀번호 회전으로 우회하지 않는다.

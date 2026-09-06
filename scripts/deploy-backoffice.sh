@@ -333,9 +333,11 @@ if [[ ! "$backfill_run_id" =~ ^[A-Za-z0-9_-]+$ ]] ||
   exit 1
 fi
 echo "desired_state_backfill_run_id=${backfill_run_id} contract=${backfill_contract} source_sha=${backfill_source_sha} status=${backfill_status} failed=${backfill_failed}"
+
+# DB backup는 웹 배포와 분리한다. 전용 계정·restore 검증 후 trusted operator만 전환한다.
+# 일반 배포는 현재 성공 중인 백업 CronJob과 PVC를 변경하지 않는다.
 echo "== endpoint CronJob manifests =="
 for manifest in \
-  backup-cronjob.yaml \
   proactive-cronjobs.yaml \
   app-content-analytics-cronjob.yaml \
   platform-metric-cronjob.yaml; do
