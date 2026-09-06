@@ -197,7 +197,7 @@ type ResolvedCandidateManifest = {
 
 type CandidateRegistryRecord = {
   id: string;
-  approvalState: "CANDIDATE" | "APPROVED" | "SUPERSEDED";
+  approvalState: "CANDIDATE" | "APPROVED";
   sourceSha: string;
   payloadDigest: string;
   artifactRunId: bigint | null;

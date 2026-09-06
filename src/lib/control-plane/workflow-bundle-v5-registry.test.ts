@@ -267,6 +267,8 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
         artifactName: null,
         artifactDigest: null,
         approvalSlot: null,
+        supersededAt: null,
+        supersededByRecordId: null,
         ...data,
       };
       rows.push(row);
@@ -534,6 +536,8 @@ function approvedSeedRow(overrides: Record<string, unknown>): Record<string, unk
     requestHash: "f".repeat(64),
     idempotencyKey: "approved-import:previous",
     createdAt: new Date(0),
+    supersededAt: null,
+    supersededByRecordId: null,
     ...overrides,
   };
 }
@@ -564,6 +568,8 @@ function candidateSeedRow(fixture: ReturnType<typeof approvedFixture>): Record<s
     requestHash: "e".repeat(64),
     idempotencyKey: "candidate:seed",
     createdAt: new Date(),
+    supersededAt: null,
+    supersededByRecordId: null,
   };
 }
 
@@ -580,9 +586,9 @@ test("새 승인은 직전 승인을 SUPERSEDED로 물러나게 하고 활성 �
     async readCandidateArtifact() { throw new Error("not used"); },
   });
   assert.equal(result.record.approvalState, "APPROVED");
-  assert.equal(previous.approvalState, "SUPERSEDED");
+  assert.notEqual(previous.supersededAt, null);
   assert.equal(
-    client.rows.filter((row) => row.approvalState === "APPROVED").length,
+    client.rows.filter((row) => row.approvalState === "APPROVED" && row.supersededAt === null).length,
     1,
     "활성 승인은 하나여야 한다",
   );
@@ -611,7 +617,8 @@ test("같은 승인을 다시 게시해도 남아 있던 직전 승인이 물러
     async readCandidateArtifact() { throw new Error("not used"); },
   });
   // 물러남이 replay 경로에서도 다시 수렴하는지 보기 위해 직전 승인을 되돌린다.
-  previous.approvalState = "APPROVED";
+  previous.supersededAt = null;
+  previous.supersededByRecordId = null;
   const replayed = await importWorkflowBundleApproval({
     bundle: fixture.approved,
     idempotencyKey: "approved-import:replay",
@@ -622,8 +629,11 @@ test("같은 승인을 다시 게시해도 남아 있던 직전 승인이 물러
   });
   assert.equal(replayed.duplicate, true);
   assert.equal(replayed.record.id, first.record.id);
-  assert.equal(previous.approvalState, "SUPERSEDED");
-  assert.equal(client.rows.filter((row) => row.approvalState === "APPROVED").length, 1);
+  assert.notEqual(previous.supersededAt, null);
+  assert.equal(
+    client.rows.filter((row) => row.approvalState === "APPROVED" && row.supersededAt === null).length,
+    1,
+  );
 });
 
 const NARROWED_SCOPE = (candidate: ReturnType<typeof candidateBundle>) => {

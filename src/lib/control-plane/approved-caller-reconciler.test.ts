@@ -13,6 +13,8 @@ const FULL_NAME = "seorilabs/happy-farm";
 function registryRecord(overrides: Record<string, unknown> = {}) {
   return {
     approvalState: "APPROVED",
+    supersededAt: null,
+    supersededByRecordId: null,
     sourceSha: "a".repeat(40),
     bundle: { source: { sha: "a".repeat(40) } },
     ...overrides,
@@ -152,6 +154,26 @@ test("승인된 번들이 둘 이상이면 어느 것을 고정할지 정할 수
     (error) => error instanceof ControlPlaneError
       && error.code === "AMBIGUOUS_APPROVED_WORKFLOW_BUNDLE",
   );
+});
+
+test("물러난 승인은 활성 승인으로 세지 않는다", async () => {
+  const plan = await planApprovedCallerReconciliation(
+    options,
+    client({
+      records: [
+        registryRecord(),
+        registryRecord({
+          sourceSha: "c".repeat(40),
+          bundle: { source: { sha: "c".repeat(40) } },
+          supersededAt: new Date("2026-09-06T00:00:00.000Z"),
+          supersededByRecordId: "registry-active",
+        }),
+      ],
+    }) as never,
+    dependencies,
+  );
+  // 물러난 기록이 registry에 남아 있어도 계획은 활성 승인 하나를 그대로 고정한다.
+  assert.equal(plan.approvedBundle.sourceSha, "a".repeat(40));
 });
 
 test("등록·분류·앱 상태가 어긋난 저장소는 이유를 남기고 건너뛴다", async () => {

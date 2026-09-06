@@ -999,16 +999,18 @@ model WorkflowBundleRegistryRecord {
   idempotencyKey            String                      @unique @db.VarChar(191)
   observedBy                String                      @db.VarChar(128)
   createdAt                 DateTime                    @default(now()) @db.DateTime(3)
+  supersededAt              DateTime?                   @db.DateTime(3)
+  supersededByRecordId      String?                     @db.VarChar(191)
 
   @@unique([registryId, subject, payloadDigest], map: "cp_workflow_bundle_registry_identity")
   @@index([sourceSha, approvalState, createdAt], map: "cp_workflow_bundle_registry_source_state")
+  @@index([registryId, approvalState, supersededAt], map: "cp_workflow_bundle_registry_active_approval")
   @@map("control_plane_workflow_bundle_registry")
 }
 
 enum WorkflowBundleApprovalState {
   CANDIDATE
   APPROVED
-  SUPERSEDED
 }
 
 model ConfigRevision {

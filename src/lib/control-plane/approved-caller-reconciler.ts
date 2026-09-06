@@ -97,8 +97,10 @@ export async function planApprovedCallerReconciliation(input: {
 }, client: ReconcilerClient = prisma,
   dependencies: ApprovedCallerReconcilerDependencies,
 ): Promise<ApprovedCallerReconciliationPlan> {
+  // 물러난 승인은 registry에 기록으로 남지만 활성 승인이 아니다. 상태만 보고 세면
+  // 승인 사이클을 돌 때마다 활성 승인이 늘어난 것처럼 보인다.
   const approvedRecords = (await readWorkflowBundleRegistryRecords(null, client))
-    .filter((record) => record.approvalState === "APPROVED");
+    .filter((record) => record.approvalState === "APPROVED" && record.supersededAt === null);
   if (approvedRecords.length === 0) {
     throw new ControlPlaneError(
       "승인된 WorkflowBundle이 없습니다.",
