@@ -266,7 +266,7 @@ test("static dependency audit 예외는 identity, source, expiry와 clock drift�
   ];
   for (const value of cases) {
     await assert.rejects(
-      () => resolveStaticRuntimeManifest(input(value.identity, value.now), value.client as never),
+      () => resolveStaticRuntimeManifest({ ...input(value.identity, value.now), readLockfileSha256: async () => null }, value.client as never),
       (error) => error instanceof ControlPlaneError && error.code === value.code,
     );
   }
@@ -368,4 +368,47 @@ test("런타임 경로는 OIDC 검사를 그대로 유지한다", async () => {
     (error) => error instanceof ControlPlaneError
       && error.code === "RUNNER_TRUST_BOUNDARY_MISMATCH",
   );
+});
+
+
+test("Static runtime은 source 이동 시 같은 lockfile만 결합하고 원본 감사 기록을 보존한다", async () => {
+  const exception = dependencyAuditException();
+  exception.bindings[0].sourceSha = "a".repeat(40);
+  const original = structuredClone(exception);
+  const requests: unknown[] = [];
+  const result = await resolveStaticRuntimeManifest({
+    ...input(),
+    async readLockfileSha256(request) {
+      requests.push(request);
+      return exception.bindings[0].lockfileSha256;
+    },
+  }, client({ dependencyAuditException: exception }) as never);
+  assert.deepEqual(requests, [{
+    repositoryId: REPOSITORY_ID,
+    fullName: FULL_NAME,
+    sourceSha: BINDING_SHA,
+    dependencyRoot: "app",
+    packageManager: "pnpm",
+  }]);
+  const expected = structuredClone(exception);
+  expected.bindings[0].sourceSha = BINDING_SHA;
+  assert.deepEqual(result.manifest.dependencyAuditException, expected);
+  assert.deepEqual(exception, original);
+});
+
+test("Static runtime은 달라진 lockfile과 provider 조회 실패를 거부한다", async () => {
+  const exception = dependencyAuditException();
+  exception.bindings[0].sourceSha = "a".repeat(40);
+  for (const failure of ["changed", "missing", "unavailable"] as const) {
+    await assert.rejects(resolveStaticRuntimeManifest({
+      ...input(),
+      async readLockfileSha256() {
+        if (failure === "unavailable") throw new Error("provider unavailable");
+        return failure === "missing" ? null : `sha256:${"0".repeat(64)}`;
+      },
+    }, client({ dependencyAuditException: exception }) as never), (error) => error instanceof ControlPlaneError
+      && error.code === (failure === "unavailable"
+        ? "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED"
+        : "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH"));
+  }
 });

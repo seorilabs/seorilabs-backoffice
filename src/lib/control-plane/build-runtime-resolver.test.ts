@@ -347,7 +347,7 @@ test("build-only dependency audit 예외는 source, expiry와 clock drift를 fai
   for (const value of cases) {
     await assert.rejects(
       () => resolveBuildRuntimeManifest(
-        input(value.identity, value.now),
+        { ...input(value.identity, value.now), readLockfileSha256: async () => null },
         client({ dependencyAuditException: exception }) as never,
       ),
       (error) => error instanceof ControlPlaneError && error.code === value.code,
@@ -430,4 +430,47 @@ test("manifest digest는 canonical JSON과 정확히 일치한다", async () => 
   const result = await resolveBuildRuntimeManifest(input(), client() as never);
   assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
   assert.equal(canonicalJson(result.manifest as unknown as JsonValue).includes(SIGNING_KEY), false);
+});
+
+
+test("Build runtime은 source 이동 시 같은 lockfile만 결합하고 원본 감사 기록을 보존한다", async () => {
+  const exception = dependencyAuditException();
+  exception.bindings[1].sourceSha = "a".repeat(40);
+  const original = structuredClone(exception);
+  const requests: unknown[] = [];
+  const result = await resolveBuildRuntimeManifest({
+    ...input(),
+    async readLockfileSha256(request) {
+      requests.push(request);
+      return exception.bindings[1].lockfileSha256;
+    },
+  }, client({ dependencyAuditException: exception }) as never);
+  assert.deepEqual(requests, [{
+    repositoryId: REPOSITORY_ID,
+    fullName: "seorilabs/happy-farm",
+    sourceSha: SOURCE_SHA,
+    dependencyRoot: ".",
+    packageManager: "pnpm",
+  }]);
+  const expected = structuredClone(exception);
+  expected.bindings[1].sourceSha = SOURCE_SHA;
+  assert.deepEqual(result.manifest.dependencyAuditException, expected);
+  assert.deepEqual(exception, original);
+});
+
+test("Build runtime은 달라진 lockfile과 provider 조회 실패를 거부한다", async () => {
+  const exception = dependencyAuditException();
+  exception.bindings[1].sourceSha = "a".repeat(40);
+  for (const failure of ["changed", "missing", "unavailable"] as const) {
+    await assert.rejects(resolveBuildRuntimeManifest({
+      ...input(),
+      async readLockfileSha256() {
+        if (failure === "unavailable") throw new Error("provider unavailable");
+        return failure === "missing" ? null : `sha256:${"0".repeat(64)}`;
+      },
+    }, client({ dependencyAuditException: exception }) as never), (error) => error instanceof ControlPlaneError
+      && error.code === (failure === "unavailable"
+        ? "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED"
+        : "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH"));
+  }
 });
