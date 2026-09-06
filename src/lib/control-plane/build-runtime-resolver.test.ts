@@ -140,6 +140,8 @@ function client(overrides: {
   appStatus?: "ACTIVE" | "PAUSED" | "DEPRECATED";
   configDigest?: string | null;
   registry?: boolean;
+  /** 물러난 승인 기록을 돌려주는 registry를 흉내낸다. */
+  registrySuperseded?: boolean;
   buildBindings?: unknown;
   unsignedConfigDigest?: string;
   defaultBranch?: string;
@@ -223,7 +225,11 @@ function client(overrides: {
           id: "bundle-candidate-1",
           registryId: "seorilabs-workflow-bundles-v5",
           subject: `workflow-bundle-v5:${BUNDLE_SHA}`,
-          approvalState: "CANDIDATE" as const,
+          approvalState: (overrides.registrySuperseded ? "APPROVED" : "CANDIDATE") as
+            "CANDIDATE" | "APPROVED",
+          activeApprovalSlot: null,
+          supersededAt: overrides.registrySuperseded ? new Date("2026-09-06T00:00:00.000Z") : null,
+          supersededByRecordId: overrides.registrySuperseded ? "bundle-approved-2" : null,
           sourceSha: BUNDLE_SHA,
           workflowExecutionSha: BUNDLE_SHA,
           bundleVersion: "5.0.0",
@@ -370,6 +376,23 @@ test("config SHA 단독 주장, registry 부재와 build observation 누락은 f
       (error) => error instanceof ControlPlaneError && error.code === value.code,
     );
   }
+});
+
+test("물러난 승인은 RELEASE build 권한을 더 이상 주지 않는다", async () => {
+  // 앱의 ACTIVE 설정이 이전 번들을 가리키는 동안 RELEASE를 요청해도 물러난 승인으로는
+  // 빌드가 열리지 않아야 한다.
+  await assert.rejects(
+    () => resolveBuildRuntimeManifest(
+      input(identity({
+        mode: "RELEASE",
+        releaseTag: "v0.6.7",
+        releaseRef: `refs/tags/v0.6.7`,
+      })),
+      client({ registrySuperseded: true }) as never,
+    ),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "WORKFLOW_BUNDLE_REGISTRY_READBACK_MISSING",
+  );
 });
 
 test("registry digest가 config binding과 다르면 self-asserted SHA로 build를 열 수 없다", async () => {

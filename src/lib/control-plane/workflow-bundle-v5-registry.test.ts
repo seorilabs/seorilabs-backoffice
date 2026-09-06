@@ -7,6 +7,7 @@ import {
   sign,
 } from "node:crypto";
 import test from "node:test";
+import { Prisma } from "@prisma/client";
 import { strToU8, zipSync } from "fflate";
 
 import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
@@ -249,9 +250,30 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
       for (const row of targets) Object.assign(row, data);
       return { count: targets.length };
     },
+    // 실제 스키마는 activeApprovalSlot에 유일 index를 건다. 그 판정이 없으면 동시 승인
+    // 회귀를 테스트에서 재현할 수 없다.
+    async update(
+      { where, data }: { where: { id: string }; data: Record<string, unknown> },
+    ) {
+      const row = rows.find((candidate) => candidate.id === where.id);
+      if (!row) throw new Error("record not found");
+      const slot = data.activeApprovalSlot;
+      if (
+        typeof slot === "string"
+        && rows.some((other) => other.id !== where.id && other.activeApprovalSlot === slot)
+      ) {
+        throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+          code: "P2002",
+          clientVersion: "test",
+        });
+      }
+      Object.assign(row, data);
+      return row;
+    },
     async create({ data }: { data: Record<string, unknown> }) {
       const row = {
         id: `registry-${rows.length + 1}`,
+        activeApprovalSlot: null,
         createdAt: new Date(),
         candidateDigest: null,
         evidenceDigest: null,
@@ -536,6 +558,7 @@ function approvedSeedRow(overrides: Record<string, unknown>): Record<string, unk
     requestHash: "f".repeat(64),
     idempotencyKey: "approved-import:previous",
     createdAt: new Date(0),
+    activeApprovalSlot: "active:seorilabs-workflow-bundles-v5",
     supersededAt: null,
     supersededByRecordId: null,
     ...overrides,
@@ -568,6 +591,7 @@ function candidateSeedRow(fixture: ReturnType<typeof approvedFixture>): Record<s
     requestHash: "e".repeat(64),
     idempotencyKey: "candidate:seed",
     createdAt: new Date(),
+    activeApprovalSlot: null,
     supersededAt: null,
     supersededByRecordId: null,
   };
@@ -587,10 +611,15 @@ test("새 승인은 직전 승인을 물러나게 하고 활성 승인을 하나
   });
   assert.equal(result.record.approvalState, "APPROVED");
   assert.notEqual(previous.supersededAt, null);
+  assert.equal(previous.activeApprovalSlot, null, "물러난 승인은 slot을 놓아야 한다");
   assert.equal(
-    client.rows.filter((row) => row.approvalState === "APPROVED" && row.supersededAt === null).length,
+    client.rows.filter((row) => row.activeApprovalSlot !== null).length,
     1,
-    "활성 승인은 하나여야 한다",
+    "활성 slot을 쥔 기록은 하나여야 한다",
+  );
+  assert.equal(
+    client.rows.find((row) => row.activeApprovalSlot !== null)?.id,
+    result.record.id,
   );
   const superseded = client.audits.filter((audit) => (
     (audit as { data: { action: string } }).data.action
@@ -631,9 +660,79 @@ test("같은 승인을 다시 게시해도 남아 있던 직전 승인이 물러
   assert.equal(replayed.record.id, first.record.id);
   assert.notEqual(previous.supersededAt, null);
   assert.equal(
-    client.rows.filter((row) => row.approvalState === "APPROVED" && row.supersededAt === null).length,
+    client.rows.filter((row) => row.activeApprovalSlot !== null).length,
     1,
   );
+});
+
+test("동시 승인은 활성 slot을 하나만 통과시키고 나머지는 공개 코드로 막힌다", async () => {
+  const fixture = approvedFixture();
+  // 아직 commit되지 않은 다른 transaction이 slot을 쥔 상황을 재현한다. 물러남 조회에는
+  // 걸리지 않지만 유일 index에는 그대로 잡힌다.
+  const invisibleHolder = approvedSeedRow({
+    id: "approved-concurrent",
+    idempotencyKey: "approved-import:concurrent",
+    activeApprovalSlot: "active:seorilabs-workflow-bundles-v5",
+    supersededAt: new Date(0),
+  });
+  const client = memoryClient([invisibleHolder, candidateSeedRow(fixture)]);
+  await assert.rejects(
+    importWorkflowBundleApproval({
+      bundle: fixture.approved,
+      idempotencyKey: "approved-import:loser",
+      actor: "test:registry-publisher",
+    }, client as never, {
+      trustedApprovalKeysJson: fixture.trustedKeysJson,
+      async readCandidateArtifact() { throw new Error("not used"); },
+    }),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "WORKFLOW_BUNDLE_ACTIVE_APPROVAL_CONFLICT",
+  );
+  assert.equal(client.rows.filter((row) => row.activeApprovalSlot !== null).length, 1);
+  assert.equal(
+    client.rows.find((row) => row.activeApprovalSlot !== null)?.id,
+    "approved-concurrent",
+  );
+});
+
+test("물러난 승인을 원래 key로 다시 게시하면 그 승인이 다시 활성이 된다", async () => {
+  const fixture = approvedFixture();
+  const client = memoryClient([candidateSeedRow(fixture)]);
+  const first = await importWorkflowBundleApproval({
+    bundle: fixture.approved,
+    idempotencyKey: "approved-import:rollback",
+    actor: "test:registry-publisher",
+  }, client as never, {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  });
+  // 이후 다른 번들이 승인돼 first가 물러난 상태를 만든다.
+  const successor = approvedSeedRow({
+    id: "approved-successor",
+    idempotencyKey: "approved-import:successor",
+    activeApprovalSlot: "active:seorilabs-workflow-bundles-v5",
+  });
+  client.rows.push(successor);
+  const retired = client.rows.find((row) => row.id === first.record.id)!;
+  retired.activeApprovalSlot = null;
+  retired.supersededAt = new Date();
+  retired.supersededByRecordId = "approved-successor";
+
+  const rolledBack = await importWorkflowBundleApproval({
+    bundle: fixture.approved,
+    idempotencyKey: "approved-import:rollback",
+    actor: "test:registry-publisher",
+  }, client as never, {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  });
+  assert.equal(rolledBack.duplicate, true);
+  assert.equal(rolledBack.record.id, first.record.id);
+  assert.equal(retired.supersededAt, null, "다시 활성이 된 승인은 물러남 표시가 지워진다");
+  assert.notEqual(retired.activeApprovalSlot, null);
+  assert.equal(successor.activeApprovalSlot, null);
+  assert.notEqual(successor.supersededAt, null);
+  assert.equal(client.rows.filter((row) => row.activeApprovalSlot !== null).length, 1);
 });
 
 const NARROWED_SCOPE = (candidate: ReturnType<typeof candidateBundle>) => {
