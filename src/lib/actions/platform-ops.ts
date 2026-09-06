@@ -32,6 +32,7 @@ import {
   type PlatformSandboxResetRemoteState,
 } from "@/lib/platform/runs";
 import type { PlatformBlockingReference } from "@/lib/platform/recovery";
+import { publicActionError } from "@/lib/platform/action-errors";
 import { prisma } from "@/lib/prisma";
 import { createPlatformReadClient } from "@/lib/platform/read-client";
 
@@ -147,16 +148,6 @@ export interface CloseNotStartedSandboxResetInput {
   appSlug: string;
   requestId: string;
   confirmation: string;
-}
-
-function publicActionError(error: unknown, fallback: string): string {
-  if (
-    error instanceof PlatformAccessError ||
-    error instanceof PlatformOperationInputError
-  ) {
-    return error.message;
-  }
-  return fallback;
 }
 
 /** 고정 플랫폼 write 계약을 검증하고 기존 AppOperationRun 큐에 적재한다. */

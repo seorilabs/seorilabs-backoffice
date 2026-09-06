@@ -25,6 +25,13 @@ export {
   platformOperationConfirmationText,
   type PlatformConfirmationInput,
 } from "@/lib/platform/confirmation";
+import {
+  MAX_BLOCKED_VERSIONS,
+  PLATFORM_UPDATE_POLICY_REASON_CODES,
+  UPDATE_POLICY_PLATFORMS,
+  splitVersions,
+  type PlatformUpdatePolicyReason,
+} from "@/lib/platform/update-policy";
 
 export const PLATFORM_REPO_FULL_NAME = "seorilabs/platform";
 export const PLATFORM_OUTCOME_UNKNOWN_CODE = "platform_outcome_unknown";
@@ -41,6 +48,7 @@ export const PLATFORM_OPERATION_KEYS = [
   "platform.iap.decide-refund-review",
   "platform.ads.grant-suppression",
   "platform.ads.revoke-suppression",
+  "platform.config.set-update-policy",
 ] as const;
 
 export type PlatformOperationKey = (typeof PLATFORM_OPERATION_KEYS)[number];
@@ -197,6 +205,54 @@ export const PLATFORM_OPERATION_DEFINITIONS = {
       key: "grantRequestId", label: "원 차단 Request ID", type: "text", required: true,
     }],
   },
+  "platform.config.set-update-policy": {
+    id: "set-update-policy",
+    label: "업데이트 유도 정책",
+    description:
+      "권장 안내 기준과 강제 대상 버전을 저장합니다. 요청이 정책 전체를 대체합니다.",
+    intent: "mutate",
+    risk: "high",
+    confirmation: "typed",
+    inputs: [
+      { key: "appSlug", label: "앱", type: "text", required: true },
+      {
+        key: "platforms",
+        label: "대상 플랫폼",
+        type: "text",
+        required: true,
+      },
+      {
+        key: "androidBlockedVersions",
+        label: "Android 강제 대상",
+        type: "text",
+        required: false,
+      },
+      {
+        key: "androidRecommendOverride",
+        label: "Android 권장 기준 고정",
+        type: "text",
+        required: false,
+      },
+      {
+        key: "iosBlockedVersions",
+        label: "iOS 강제 대상",
+        type: "text",
+        required: false,
+      },
+      {
+        key: "iosRecommendOverride",
+        label: "iOS 권장 기준 고정",
+        type: "text",
+        required: false,
+      },
+      {
+        key: "serverConfirmation",
+        label: "서버 확인 문구",
+        type: "text",
+        required: false,
+      },
+    ],
+  },
 } satisfies Record<PlatformOperationKey, AppOpsOperation>;
 
 const requestIdSchema = z.string().refine(isAppOpsRequestId, {
@@ -309,6 +365,47 @@ const adsRevokeInputSchema = z.object({
   serverConfirmation: serverConfirmationSchema,
 }).strict();
 
+/**
+ * 버전 목록은 쉼표 문자열이다. 큐 파라미터가 flat scalar만 담을 수 있다.
+ *
+ * 해석 불가한 값을 그대로 통과시키지 않는다. 서버가 어차피 거부하지만,
+ * 여기서 막으면 운영자가 큐를 한 바퀴 돌기 전에 안다.
+ */
+const blockedVersionsSchema = z
+  .string()
+  .max(400)
+  .regex(
+    /^$|^v?\d{1,4}(\.\d{1,4}){0,2}(,v?\d{1,4}(\.\d{1,4}){0,2})*$/,
+    "강제 대상은 쉼표로 구분한 안정 SemVer여야 합니다.",
+  );
+const recommendOverrideSchema = z
+  .string()
+  .max(32)
+  .regex(
+    /^$|^v?\d{1,4}(\.\d{1,4}){0,2}$/,
+    "권장 기준 고정 값은 안정 SemVer여야 합니다.",
+  );
+
+const updatePolicyInputSchema = z
+  .object({
+    operation: z.literal("platform.config.set-update-policy"),
+    requestId: requestIdSchema,
+    appSlug: appSlugSchema,
+    platforms: z
+      .string()
+      .regex(/^(android|ios)(,(android|ios))?$/, "대상 플랫폼이 올바르지 않습니다."),
+    androidBlockedVersions: blockedVersionsSchema,
+    androidRecommendOverride: recommendOverrideSchema,
+    iosBlockedVersions: blockedVersionsSchema,
+    iosRecommendOverride: recommendOverrideSchema,
+    reason: z.enum(PLATFORM_UPDATE_POLICY_REASON_CODES, {
+      errorMap: () => ({ message: "허용된 정책 변경 사유 코드를 선택해야 합니다." }),
+    }),
+    // 강제 대상을 새로 추가할 때만 필요하다. 해제와 권장 변경에는 없다.
+    serverConfirmation: z.string().max(300),
+  })
+  .strict();
+
 const sandboxResetResumeInputSchema = z
   .object({
     requestId: requestIdSchema,
@@ -339,8 +436,15 @@ export const platformOperationInputSchema = z
     refundReviewInputSchema,
     adsGrantInputSchema,
     adsRevokeInputSchema,
+    updatePolicyInputSchema,
   ])
   .superRefine((input, ctx) => {
+    // 정책 조작은 확인 문구 규칙이 다르다. 강제 대상을 새로 추가할 때만
+    // 필요하고, 그 판단에는 현재 정책이 있어야 해서 서버 액션이 계산한다.
+    if (input.operation === "platform.config.set-update-policy") {
+      validateUpdatePolicyInput(input, ctx);
+      return;
+    }
     if (
       input.operation === "platform.iap.revoke-entitlement" &&
       input.grantRequestId === input.requestId
@@ -364,6 +468,60 @@ export const platformOperationInputSchema = z
     }
   });
 
+/**
+ * 대상 플랫폼과 값의 짝을 검증한다.
+ *
+ * discriminatedUnion 멤버는 ZodObject여야 해서 여기서 검사한다.
+ */
+function validateUpdatePolicyInput(
+  input: {
+    platforms: string;
+    androidBlockedVersions: string;
+    androidRecommendOverride: string;
+    iosBlockedVersions: string;
+    iosRecommendOverride: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const invalid = (message: string) =>
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["platforms"], message });
+
+  const selected = input.platforms.split(",");
+  if (new Set(selected).size !== selected.length) {
+    invalid("대상 플랫폼이 중복됐습니다.");
+  }
+
+  for (const platform of UPDATE_POLICY_PLATFORMS) {
+    const blocked =
+      platform === "android"
+        ? input.androidBlockedVersions
+        : input.iosBlockedVersions;
+    const override =
+      platform === "android"
+        ? input.androidRecommendOverride
+        : input.iosRecommendOverride;
+
+    if (!selected.includes(platform)) {
+      // 대상에서 뺀 플랫폼의 값이 남아 있으면 운영자가 의도를 잘못 안 것이다.
+      if (blocked !== "" || override !== "") {
+        invalid(`${platform}을 대상에 넣지 않았는데 값이 있습니다.`);
+      }
+      continue;
+    }
+
+    const versions = splitVersions(blocked);
+    if (versions.length > MAX_BLOCKED_VERSIONS) {
+      invalid(`한 플랫폼에서 강제할 수 있는 버전은 최대 ${MAX_BLOCKED_VERSIONS}개입니다.`);
+    }
+    const seen = new Set<string>();
+    for (const version of versions) {
+      const key = version.replace(/^v/i, "");
+      if (seen.has(key)) invalid(`강제 대상 버전이 중복됐습니다: ${version}`);
+      seen.add(key);
+    }
+  }
+}
+
 export type PlatformOperationInput = z.infer<
   typeof platformOperationInputSchema
 >;
@@ -375,7 +533,10 @@ export interface PreparedPlatformOperation {
   operationKey: PlatformOperationKey;
   params: AppOperationValues;
   paramsJson: string;
-  reason: PlatformOperationReason | PlatformRefundReviewDecisionReason;
+  reason:
+    | PlatformOperationReason
+    | PlatformRefundReviewDecisionReason
+    | PlatformUpdatePolicyReason;
 }
 
 export interface PreparedSandboxResetResume {

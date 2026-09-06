@@ -12,6 +12,11 @@ import {
   PlatformVersionDistributionView,
   loadAvailablePresenceSnapshot,
 } from "./index";
+import {
+  BlastRadiusView,
+  candidateVersions,
+  draftsFromPolicy,
+} from "./PlatformUpdateConsole";
 
 describe("플랫폼 표현 컴포넌트", () => {
   const presenceSnapshot = {
@@ -412,5 +417,96 @@ describe("앱 버전 분포 화면", () => {
     );
 
     assert.match(html, /관측된 빌드가 없습니다/);
+  });
+});
+
+describe("업데이트 정책 콘솔", () => {
+  const policy = {
+    appId: "happy-farm",
+    platforms: {
+      android: {
+        blockedVersions: [{ version: "1.4.0", blockedAt: "2026-09-05T00:00:00Z" }],
+        recommendOverride: "",
+        autoRecommendedVersion: "1.5.0",
+        updateUrl: "https://play.google.com/store/apps/details?id=com.a.b",
+      },
+    },
+    observedVersions: [
+      { platform: "android", version: "1.4.0", firstSeenAt: "2026-09-01T00:00:00Z" },
+      { platform: "android", version: "v1.4.0", firstSeenAt: "2026-09-01T00:00:00Z" },
+      { platform: "android", version: "1.5.0", firstSeenAt: "2026-09-04T00:00:00Z" },
+      { platform: "ios", version: "2.0.0", firstSeenAt: "2026-09-02T00:00:00Z" },
+    ],
+  };
+
+  it("서버 정책을 편집 가능한 초안으로 옮긴다", () => {
+    const drafts = draftsFromPolicy(policy);
+    assert.equal(drafts.android.enabled, true);
+    assert.deepEqual(drafts.android.blockedVersions, ["1.4.0"]);
+    // 정책 항목이 없는 플랫폼은 꺼진 상태다. 켜지 않으면 아무 일도 안 일어난다.
+    assert.equal(drafts.ios.enabled, false);
+  });
+
+  // 자동 추종 정책은 blockedVersions가 비고 recommendOverride도 없다.
+  // 값으로만 판정하면 꺼진 것으로 보이고, 다른 플랫폼만 고쳐 저장할 때
+  // 전체 대체 요청이 그 정책을 지운다.
+  it("값이 없어도 configured면 켜진 상태로 본다", () => {
+    const drafts = draftsFromPolicy({
+      ...policy,
+      platforms: {
+        ios: {
+          configured: true,
+          blockedVersions: [],
+          autoRecommendedVersion: "2.1.0",
+        },
+      },
+    });
+    assert.equal(drafts.ios.enabled, true);
+    assert.deepEqual(drafts.ios.blockedVersions, []);
+  });
+
+  it("스토어 주소만 있고 정책이 없으면 꺼진 상태다", () => {
+    const drafts = draftsFromPolicy({
+      ...policy,
+      platforms: {
+        ios: {
+          configured: false,
+          blockedVersions: [],
+          updateUrl: "https://apps.apple.com/app/id1234567890",
+        },
+      },
+    });
+    assert.equal(drafts.ios.enabled, false);
+  });
+
+  it("정책이 없으면 두 플랫폼 모두 꺼진 초안을 준다", () => {
+    const drafts = draftsFromPolicy(null);
+    assert.equal(drafts.android.enabled, false);
+    assert.equal(drafts.ios.enabled, false);
+  });
+
+  // 자유 입력을 두면 운영자가 손으로 타이핑하고, 그게 사고를 만든다.
+  it("관측된 버전만 후보로 주고 중복을 접는다", () => {
+    assert.deepEqual(candidateVersions(policy, "android"), ["1.5.0", "1.4.0"]);
+    assert.deepEqual(candidateVersions(policy, "ios"), ["2.0.0"]);
+  });
+
+  it("영향 범위는 막히는 세션 수와 경고를 함께 보여준다", () => {
+    const html = renderToStaticMarkup(
+      createElement(BlastRadiusView, {
+        radius: {
+          totalSessions: 10,
+          unknownSessions: 0,
+          blockedSessions: 7,
+          blockedShare: 0.7,
+          byPlatform: [{ platform: "android", sessions: 7 }],
+          warnings: [{ code: "large_blast", message: "70%가 즉시 막힙니다." }],
+        },
+      }),
+    );
+
+    assert.match(html, /<strong>7명<\/strong>이 막힙니다/);
+    assert.match(html, /android 7/);
+    assert.match(html, /70%가 즉시 막힙니다/);
   });
 });

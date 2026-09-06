@@ -1,5 +1,8 @@
+import { PlatformUpdateConsole } from "@/components/platform/PlatformUpdateConsole";
 import { PlatformVersionDistributionView } from "@/components/platform/PlatformVersionDistribution";
+import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
+import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import { assertPresencePipelineReady } from "@/lib/platform/presence-pipeline";
 import {
   loadPlatformVersionDistributions,
@@ -31,11 +34,25 @@ export default async function PlatformUpdatesPage() {
         : "버전 분포를 읽지 못했습니다.";
   }
 
+  // 정책을 걸 수 있는 앱만 고르게 한다. 분포는 관측이 있는 앱 전부를 보여준다.
+  const consoleApps = apps.map((app) => ({
+    appId: resolvedPlatformAppId(app),
+    label: app.displayName,
+  }));
+
   return (
-    <PlatformVersionDistributionView
-      state={error ? "unavailable" : "available"}
-      distributions={distributions}
-      error={error}
-    />
+    <div className="space-y-4">
+      <PlatformVersionDistributionView
+        state={error ? "unavailable" : "available"}
+        distributions={distributions}
+        error={error}
+      />
+      {consoleApps.length > 0 && (
+        <PlatformUpdateConsole
+          apps={consoleApps}
+          writesEnabled={env.featurePlatformWrites()}
+        />
+      )}
+    </div>
   );
 }

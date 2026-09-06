@@ -322,3 +322,87 @@ test("미시작 reset 종료도 PII 없는 close envelope와 exact 문구만 허
     /Unrecognized key|인식되지 않은 키/i,
   );
 });
+
+function updatePolicyInput(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    operation: "platform.config.set-update-policy",
+    requestId,
+    appSlug: "happy-farm",
+    platforms: "android",
+    androidBlockedVersions: "",
+    androidRecommendOverride: "",
+    iosBlockedVersions: "",
+    iosRecommendOverride: "",
+    reason: "new_release_rollout",
+    serverConfirmation: "",
+    ...overrides,
+  };
+}
+
+test("업데이트 정책은 확인 문구 없이도 준비된다", () => {
+  // 권장 안내가 기본 모드다. 강제 대상을 새로 추가할 때만 확인 문구가 붙는다.
+  const prepared = preparePlatformOperation(updatePolicyInput());
+
+  assert.equal(prepared.operationKey, "platform.config.set-update-policy");
+  assert.equal(prepared.operation.risk, "high");
+  assert.equal(prepared.params.platforms, "android");
+  assert.equal(prepared.params.androidBlockedVersions, "");
+});
+
+test("업데이트 정책은 대상에 없는 플랫폼의 값을 거부한다", () => {
+  // 대상에서 뺀 플랫폼에 값이 남아 있으면 운영자가 의도를 잘못 안 것이다.
+  assert.throws(
+    () =>
+      preparePlatformOperation(
+        updatePolicyInput({ iosBlockedVersions: "2.0.0" }),
+      ),
+    /대상에 넣지 않았는데 값이 있습니다/,
+  );
+});
+
+test("업데이트 정책은 안정 SemVer가 아닌 버전을 거부한다", () => {
+  assert.throws(
+    () =>
+      preparePlatformOperation(
+        updatePolicyInput({ androidBlockedVersions: "nightly" }),
+      ),
+    /안정 SemVer/,
+  );
+  assert.throws(
+    () =>
+      preparePlatformOperation(
+        updatePolicyInput({ androidRecommendOverride: "latest" }),
+      ),
+    /안정 SemVer/,
+  );
+});
+
+test("업데이트 정책은 중복 버전을 거부한다", () => {
+  assert.throws(
+    () =>
+      preparePlatformOperation(
+        updatePolicyInput({ androidBlockedVersions: "1.4.0,v1.4.0" }),
+      ),
+    /중복/,
+  );
+});
+
+test("업데이트 정책은 알 수 없는 플랫폼을 거부한다", () => {
+  // ait와 web은 설치본이 없어 업데이트할 대상 자체가 없다.
+  assert.throws(
+    () => preparePlatformOperation(updatePolicyInput({ platforms: "ait" })),
+    /대상 플랫폼이 올바르지 않습니다/,
+  );
+});
+
+test("업데이트 정책은 IAP 사유 코드를 받지 않는다", () => {
+  assert.throws(
+    () =>
+      preparePlatformOperation(
+        updatePolicyInput({ reason: "customer_support_compensation" }),
+      ),
+    /정책 변경 사유/,
+  );
+});

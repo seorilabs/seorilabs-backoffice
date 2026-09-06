@@ -12,6 +12,11 @@ import type {
 } from "@/lib/platform/refund-review";
 
 import { createPlatformWriteOperationsClient } from "./executor-client";
+import { splitVersions } from "@/lib/platform/update-policy";
+import type {
+  SetUpdatePolicyRequest,
+  SetUpdatePolicyResult,
+} from "@/lib/platform/client";
 
 export interface PlatformOperatorRequest {
   requestId: string;
@@ -151,6 +156,11 @@ export interface PlatformOperationsClient {
   ): Promise<PlatformRefundReviewDecisionResult>;
   grantAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
   revokeAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
+  // optional이다. 롤링 배포 중 구버전 worker가 이 메서드 없이도 조립된다.
+  setUpdatePolicy?(
+    request: SetUpdatePolicyRequest,
+    actor: string,
+  ): Promise<SetUpdatePolicyResult>;
 }
 
 export type PlatformOperationsClientFactory =
@@ -387,6 +397,43 @@ export async function executePlatformOperation(
       if(typeof result?.applied!=="boolean"||result.requestId!==request.requestId){throw new PlatformOperationUnknownOutcomeError()}
       return{version:1,requestId:prepared.requestId,operation:prepared.operationKey,status:"success",summary:result.applied?(revoke?"운영자 광고 차단을 회수했습니다.":"운영자 광고 차단을 추가했습니다."):"이미 처리된 동일 상태입니다.",data:{applied:result.applied,activeGrantRequestId:result.activeGrantRequestId},completedAt:new Date().toISOString()};
     }
+    if (prepared.operationKey === "platform.config.set-update-policy") {
+      if (!client.setUpdatePolicy) {
+        throw new Error("업데이트 정책 write client가 준비되지 않았습니다.");
+      }
+      const platforms: SetUpdatePolicyRequest["platforms"] = {};
+      for (const platform of stringParam(params, "platforms").split(",")) {
+        const prefix = platform === "android" ? "android" : "ios";
+        platforms[platform] = {
+          blockedVersions: splitVersions(
+            stringParam(params, `${prefix}BlockedVersions`),
+          ),
+          recommendOverride: stringParam(params, `${prefix}RecommendOverride`),
+        };
+      }
+      const confirmation = stringParam(params, "serverConfirmation");
+      const result = await client.setUpdatePolicy(
+        {
+          appId: prepared.appSlug,
+          platforms,
+          ...(confirmation ? { confirmation } : {}),
+        },
+        actor,
+      );
+      // 대상 앱이 어긋난 응답은 적용 여부를 알 수 없는 것으로 본다.
+      if (result?.appId !== prepared.appSlug || typeof result.outcome !== "string") {
+        throw new PlatformOperationUnknownOutcomeError();
+      }
+      return {
+        version: 1,
+        requestId: prepared.requestId,
+        operation: prepared.operationKey,
+        status: "success",
+        summary: updatePolicySummary(result.outcome),
+        data: { outcome: result.outcome, platforms: Object.keys(platforms).sort() },
+        completedAt: new Date().toISOString(),
+      };
+    }
     if (prepared.operationKey === "platform.iap.decide-refund-review") {
       if (!client.decideRefundReview) {
         throw new Error("환불 검토 write client가 준비되지 않았습니다.");
@@ -495,3 +542,9 @@ export async function executePlatformOperation(
 }
 
 export const isPlatformUnknownOutcomeForTest = isUnknownOutcome;
+
+function updatePolicySummary(outcome: string): string {
+  if (outcome === "blocked") return "강제 대상 버전을 저장했습니다.";
+  if (outcome === "recommended") return "권장 기준 버전을 고정했습니다.";
+  return "업데이트 정책을 비웠습니다. 권장 안내는 관측된 최신 버전을 따릅니다.";
+}
