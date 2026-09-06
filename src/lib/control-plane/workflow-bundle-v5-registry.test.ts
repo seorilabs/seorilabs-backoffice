@@ -230,8 +230,14 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
   const rows = [...seed];
   const audits: unknown[] = [];
   const recordApi = {
-    async findUnique({ where }: { where: { idempotencyKey: string } }) {
-      return rows.find((row) => row.idempotencyKey === where.idempotencyKey) ?? null;
+    async findUnique({ where }: { where: {
+      idempotencyKey?: string;
+      registryId_subject_payloadDigest?: Record<string, string>;
+    } }) {
+      const identity = where.registryId_subject_payloadDigest;
+      return rows.find((row) => identity
+        ? Object.entries(identity).every(([key, value]) => row[key] === value)
+        : row.idempotencyKey === where.idempotencyKey) ?? null;
     },
     async findFirst({ where }: { where: Record<string, unknown> }) {
       return rows.find((row) => Object.entries(where).every(([key, value]) => row[key] === value)) ?? null;
@@ -271,6 +277,16 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
       return row;
     },
     async create({ data }: { data: Record<string, unknown> }) {
+      if (rows.some((row) => row.idempotencyKey === data.idempotencyKey || (
+        row.registryId === data.registryId
+        && row.subject === data.subject
+        && row.payloadDigest === data.payloadDigest
+      ))) {
+        throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+          code: "P2002",
+          clientVersion: "test",
+        });
+      }
       const row = {
         id: `registry-${rows.length + 1}`,
         activeApprovalSlot: null,
@@ -337,14 +353,15 @@ test("candidate import는 exact successful GitHub artifact와 bundle integrity�
   const candidate = candidateBundle();
   const bytes = archive(candidate);
   const client = memoryClient();
-  const result = await importWorkflowBundleCandidate({
+  const input = {
     sourceSha: BUNDLE_SHA,
     runId: 33240997396n,
     runAttempt: 1,
     artifactId: 9711367292n,
     idempotencyKey: "candidate-import:exact",
     actor: "test:registry-importer",
-  }, client as never, {
+  };
+  const dependencies = {
     trustedApprovalKeysJson: "",
     async readCandidateArtifact() {
       return {
@@ -368,10 +385,24 @@ test("candidate import는 exact successful GitHub artifact와 bundle integrity�
         archive: bytes,
       };
     },
-  });
+  };
+  const result = await importWorkflowBundleCandidate(input, client as never, dependencies);
   assert.equal(result.duplicate, false);
   assert.equal(result.record.approvalState, "CANDIDATE");
   assert.equal(result.record.payloadDigest, (candidate.integrity as { payloadDigest: string }).payloadDigest);
+  assert.equal(client.rows.length, 1);
+  const replayed = await importWorkflowBundleCandidate({
+    ...input, idempotencyKey: "candidate-import:new-key",
+  }, client as never, dependencies);
+  assert.equal(replayed.duplicate, true);
+  assert.equal(replayed.record.id, result.record.id);
+  assert.equal(client.rows.length, 1);
+  assert.equal(client.audits.length, 1);
+  client.rows[0]!.requestHash = "different-request";
+  await assert.rejects(importWorkflowBundleCandidate({
+    ...input, idempotencyKey: "candidate-import:conflict",
+  }, client as never, dependencies), (error) => error instanceof ControlPlaneError
+    && error.code === "IDEMPOTENCY_CONFLICT");
   assert.equal(client.rows.length, 1);
 });
 
@@ -695,7 +726,7 @@ test("동시 승인은 활성 slot을 하나만 통과시키고 나머지는 공
   );
 });
 
-test("물러난 승인을 원래 key로 다시 게시하면 그 승인이 다시 활성이 된다", async () => {
+test("물러난 승인을 새 key로 다시 게시해도 기록 추가 없이 그 승인이 다시 활성이 된다", async () => {
   const fixture = approvedFixture();
   const client = memoryClient([candidateSeedRow(fixture)]);
   const first = await importWorkflowBundleApproval({
@@ -720,7 +751,7 @@ test("물러난 승인을 원래 key로 다시 게시하면 그 승인이 다시
 
   const rolledBack = await importWorkflowBundleApproval({
     bundle: fixture.approved,
-    idempotencyKey: "approved-import:rollback",
+    idempotencyKey: "approved-import:rollback:new-key",
     actor: "test:registry-publisher",
   }, client as never, {
     trustedApprovalKeysJson: fixture.trustedKeysJson,
@@ -728,11 +759,34 @@ test("물러난 승인을 원래 key로 다시 게시하면 그 승인이 다시
   });
   assert.equal(rolledBack.duplicate, true);
   assert.equal(rolledBack.record.id, first.record.id);
+  assert.equal(client.rows.length, 3);
   assert.equal(retired.supersededAt, null, "다시 활성이 된 승인은 물러남 표시가 지워진다");
   assert.notEqual(retired.activeApprovalSlot, null);
   assert.equal(successor.activeApprovalSlot, null);
   assert.notEqual(successor.supersededAt, null);
   assert.equal(client.rows.filter((row) => row.activeApprovalSlot !== null).length, 1);
+});
+
+test("승인 identity가 같아도 요청 hash가 다르면 활성 승인을 바꾸지 않는다", async () => {
+  const fixture = approvedFixture();
+  const client = memoryClient([candidateSeedRow(fixture)]);
+  const dependencies = {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  };
+  const first = await importWorkflowBundleApproval({
+    bundle: fixture.approved, idempotencyKey: "approval:first", actor: "test",
+  }, client as never, dependencies);
+  const row = client.rows.find((entry) => entry.id === first.record.id)!;
+  row.requestHash = "different-request";
+  const auditsBefore = client.audits.length;
+  await assert.rejects(importWorkflowBundleApproval({
+    bundle: fixture.approved, idempotencyKey: "approval:conflict", actor: "test",
+  }, client as never, dependencies), (error) => error instanceof ControlPlaneError
+    && error.code === "IDEMPOTENCY_CONFLICT");
+  assert.equal(client.rows.length, 2);
+  assert.equal(client.audits.length, auditsBefore);
+  assert.equal(row.activeApprovalSlot, "active:seorilabs-workflow-bundles-v5");
 });
 
 const NARROWED_SCOPE = (candidate: ReturnType<typeof candidateBundle>) => {
