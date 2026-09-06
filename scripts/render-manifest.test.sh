@@ -397,6 +397,11 @@ if [ "$(grep -c '^kind: CronJob' "$backup_cronjob")" -eq 1 ] &&
    grep -q -- '--skip-triggers' "$backup_cronjob" &&
    grep -q 'activeDeadlineSeconds: 1800' "$backup_cronjob" &&
    grep -q 'path: db-password' "$backup_cronjob" &&
+   grep -q 'secretName: backoffice-db-backup-secrets' "$backup_cronjob" &&
+   ! grep -q 'secretName: backoffice-secrets' "$backup_cronjob" &&
+   grep -q -- '-u backoffice_backup backoffice' "$backup_cronjob" &&
+   grep -q -- '--set-gtid-purged=OFF' "$backup_cronjob" &&
+   grep -q 'seorilabs.dev/credential-logical-id: shared/backoffice/db-backup' "$backup_cronjob" &&
    ! grep -q 'name: MYSQL_PWD' "$backup_cronjob"; then
   ok "backup CronJob credential 경계와 PVC mutation 분리"
 else

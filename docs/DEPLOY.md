@@ -68,7 +68,7 @@ BACKOFFICE_IMAGE="$IMAGE" BACKOFFICE_SOURCE_SHA="$SOURCE_SHA" \
 # 첫 component=web Pod 전환이 끝난 뒤 Service selector를 좁힌다.
 kubectl apply -f k8s/backoffice-networking.yaml
 ```
-`backup-cronjob.yaml`은 CI가 갱신하지만 PVC는 갱신하지 않는다. 백업 Job은 비밀번호를
+`backup-cronjob.yaml`과 PVC는 일반 앱 CI가 갱신하지 않는다. 계정·복원 검증을 완료한 trusted operator가 별도로 전환한다. 백업 Job은 비밀번호를
 전용 Secret volume에서 `mysqldump` child에만 전달하고, gzip·SHA-256 검증 뒤 dump 파일을
 마지막에 완성본 이름으로 이동한다. production `backoffice` principal에는 의도적으로 `TRIGGER`
 권한이 없으므로 `--skip-triggers`를 명시한다. app user 권한을 넓히지 않고 restore rehearsal이 exact
@@ -929,3 +929,19 @@ migration Job, 웹 endpoint 연속성, 각 workload image, worker 로그, DB 요
 App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확인한다. 배포 후에는
 임시 Job으로 최초 실행해 `baselined > 0`, `enqueued = 0`, `errors = []`를 확인한 뒤
 새 테스트 리뷰 1건으로 enqueue·Discord 수신을 각각 검증한다.
+
+
+### 백업 전용 읽기 계정 전환 — #164
+
+`k8s/backup-cronjob.yaml`은 전용 `backoffice_backup` 계정과 `platform/backoffice-db-backup-secrets`의 `DB_PASSWORD`만 사용한다. `shared/backoffice/db-backup`은 이 전환에서 등록할 logical ID이며, 매니페스트의 표기만으로 현재 catalog 등록·실제 grant·백업 성공이 입증되지는 않는다. 기존 앱 Secret으로 fallback하지 않는다.
+
+운영 전환 전에 다음 조건을 모두 확인한다. 계정·권한·Secret 생성은 trusted operator의 실행별 승인 후 수행한다.
+
+1. catalog preflight로 같은 목적의 기존 활성 계정이 없는지 확인하고, DB에서도 공개 principal identity를 대조한다. 기존 계정이 있으면 임의 생성·덮어쓰기를 중단한다. 새 계정은 로컬 원본과 공개 identity를 먼저 등록하고 local 및 BeeStation backup·restore-check를 통과시킨다.
+2. 실제 `backoffice` schema의 table/view 목록을 조사한다. 테이블에 SELECT만, dump 대상 view가 있으면 SHOW VIEW를 추가한다. 계정의 global·schema·table grant와 활성 role을 모두 확인해 INSERT, UPDATE, DELETE, DDL, GRANT OPTION, FILE, PROCESS, RELOAD, FLUSH_TABLES, TRIGGER, 광역 권한이 없음을 검증한다. 비밀번호나 인증 hash를 grant 검증 출력에 포함하지 않는다.
+3. 비밀번호를 argv·stdout으로 전달하지 않고 등록된 파일 원본에서 전용 Kubernetes 실행 복제본을 만든다. logical ID·공개 DB principal을 Secret의 공개 annotation과 CronJob annotation에서 대조한다. 기존 application credential은 변경하지 않는다.
+4. 같은 계정과 `--single-transaction --no-tablespaces --skip-triggers --set-gtid-purged=OFF` 조합으로 atomic dump·gzip 검증·checksum을 완료한다. 이 옵션은 테이블스페이스·트리거·GTID 전역 상태용 추가 권한을 요구하지 않게 한다. 백업 중 DDL은 실행하지 않는다. [MySQL 공식 mysqldump 문서](https://dev.mysql.com/doc/refman/9.7/en/mysqldump.html)를 기준으로 실제 MySQL 9.2에서 검증한다.
+5. `scripts/run-restore-rehearsal.sh`로 새 dump를 격리 MySQL 9.2에 복원한다. exact source로 트리거를 재구성하고 테이블 수·필수 데이터·checksum·서명 snapshot 복구 검증을 통과한다. 운영 DB에 복원하지 않는다.
+6. 위 증거와 배포 승인이 갖춰진 뒤 CronJob을 전환한다. logical binding·공개 DB 계정·실행 image digest·Job 성공·dump checksum·restore 결과를 함께 감사 기록으로 남긴다. 검증 전에는 이 이슈를 종결하지 않는다.
+
+일반 앱 배포에서는 백업 매니페스트를 적용하지 않아 기존 성공 중인 CronJob을 보존한다. 현재 원본 미등록이나 grant·restore 실패가 있으면 백업 전환을 진행하지 않는다. 실패한 dump는 완성본 이름으로 노출하지 않으며 마지막 검증 백업을 보존한다. 문제를 앱 계정 fallback이나 앱 비밀번호 회전으로 우회하지 않는다.
