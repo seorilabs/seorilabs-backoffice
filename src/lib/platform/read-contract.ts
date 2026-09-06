@@ -68,6 +68,8 @@ export function publicPlatformOrder(order: PlatformOrder): PlatformOrder {
     purchasedAt: order.purchasedAt,
     observedAt: order.observedAt,
     tombstone: order.tombstone,
+    isTestPurchase: order.isTestPurchase ?? null,
+    providerOrderIdPresent: order.providerOrderIdPresent ?? null,
   };
 }
 

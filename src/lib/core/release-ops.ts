@@ -1,3 +1,4 @@
+import { recordReleaseAudit } from "@/lib/core/release-audit";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
@@ -178,24 +179,14 @@ export async function createReleaseTagWithNotes(opts: {
     },
   });
 
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action: "release.tag.create",
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${result.tag}`,
-        payload: {
-          tag: result.tag,
-          sha: result.sha,
-          targetRef,
-          authority: result.authority.kind,
-          created: result.created,
-          releaseUrl: result.releaseUrl,
-        } as object,
-      },
-    })
-    .catch(() => {});
+  await recordReleaseAudit({ ...opts, tag: result.tag }, "release.tag.create", {
+    tag: result.tag,
+    sha: result.sha,
+    targetRef,
+    authority: result.authority.kind,
+    created: result.created,
+    releaseUrl: result.releaseUrl,
+  });
 
   return {
     tag: result.tag,
@@ -318,6 +309,7 @@ export async function dispatchMarketDeploy(opts: {
   target: DeployTarget;
   tag: string;
   memo?: string;
+  inputs?: Record<string, string>;
   actorLabel?: string;
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
   const dispatcher: MarketDispatchPort = {
@@ -360,6 +352,7 @@ export async function dispatchMarketDeploy(opts: {
     target: opts.target,
     tag: opts.tag,
     memo: opts.memo,
+    inputs: opts.inputs,
     // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 ASC API 로 트리거한다.
     iosViaXcodeCloud: shouldUseXcodeCloudForTarget(opts.repoFullName, opts.target),
     source: releaseAuthorityPort(opts.repoFullName),
@@ -368,25 +361,15 @@ export async function dispatchMarketDeploy(opts: {
 
   const result = await executeMarketDeployPlan({ plan, dispatcher });
 
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action: "release.deploy.dispatch",
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${result.authority.tag}`,
-        payload: {
-          target: opts.target,
-          tag: result.authority.tag,
-          // 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
-          sha: result.sha,
-          authority: result.authority.kind,
-          workflowFile: result.workflowFile ?? null,
-          xcodeCloudBuild: result.xcodeCloudBuild ?? null,
-        } as object,
-      },
-    })
-    .catch(() => {});
+  await recordReleaseAudit({ ...opts, tag: result.authority.tag }, "release.deploy.dispatch", {
+    target: opts.target,
+    tag: result.authority.tag,
+    // 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
+    sha: result.sha,
+    authority: result.authority.kind,
+    workflowFile: result.workflowFile ?? null,
+    xcodeCloudBuild: result.xcodeCloudBuild ?? null,
+  });
 
   return {
     workflowFile: result.workflowFile,
@@ -458,23 +441,13 @@ export async function promoteGooglePlay(opts: {
     expectedTag: { tag: authority.tag, sha: authority.sha },
   });
 
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action: "release.promote.dispatch",
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${authority.tag}`,
-        payload: {
-          target: "PLAY",
-          to: "production",
-          tag: authority.tag,
-          sha: authority.sha,
-          authority: authority.kind,
-        } as object,
-      },
-    })
-    .catch(() => {});
+  await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.promote.dispatch", {
+    target: "PLAY",
+    to: "production",
+    tag: authority.tag,
+    sha: authority.sha,
+    authority: authority.kind,
+  });
 
   return { workflowFile: PROMOTE_WORKFLOW };
 }
@@ -512,25 +485,15 @@ export async function prepareAppStore(opts: {
     notes: notes ?? {},
   });
 
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action: "release.appstore.prepare",
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${authority.tag}`,
-        payload: {
-          tag: authority.tag,
-          sha: authority.sha,
-          authority: authority.kind,
-          ready: result.ready,
-          appStoreState: result.appStoreState,
-          localizationsUpdated: result.localizationsUpdated,
-          buildAttached: result.buildAttached,
-        } as object,
-      },
-    })
-    .catch(() => {});
+  await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.appstore.prepare", {
+    tag: authority.tag,
+    sha: authority.sha,
+    authority: authority.kind,
+    ready: result.ready,
+    appStoreState: result.appStoreState,
+    localizationsUpdated: result.localizationsUpdated,
+    buildAttached: result.buildAttached,
+  });
 
   return result;
 }
@@ -548,22 +511,12 @@ export async function submitAppStore(opts: {
     marketingVersion: marketingVersionFromTag(authority.tag),
   });
 
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action: "release.appstore.submit",
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${authority.tag}`,
-        payload: {
-          reviewSubmissionId: result.reviewSubmissionId,
-          tag: authority.tag,
-          sha: authority.sha,
-          authority: authority.kind,
-        } as object,
-      },
-    })
-    .catch(() => {});
+  await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.appstore.submit", {
+    reviewSubmissionId: result.reviewSubmissionId,
+    tag: authority.tag,
+    sha: authority.sha,
+    authority: authority.kind,
+  });
 
   return result;
 }
@@ -649,22 +602,4 @@ export async function cancelAppStoreReview(opts: {
     reviewSubmissionId: result.reviewSubmissionId,
   });
   return result;
-}
-
-async function recordReleaseAudit(
-  opts: { repoFullName: string; tag: string; actorLabel?: string },
-  action: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  await prisma.auditLog
-    .create({
-      data: {
-        actorLogin: opts.actorLabel ?? null,
-        action,
-        entityType: "release",
-        entityId: `${opts.repoFullName}@${opts.tag}`,
-        payload: payload as object,
-      },
-    })
-    .catch(() => {});
 }

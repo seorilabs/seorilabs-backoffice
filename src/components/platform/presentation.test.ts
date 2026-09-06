@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   connectionPresentation,
+  iapTransactionPresentation,
   deadLetterPresentation,
   environmentPresentation,
   overviewConnectionState,
@@ -187,4 +188,20 @@ describe("개요 요약 문구", () => {
 
     assert.match(message, /환경이 어긋나/);
   });
+});
+
+it("IAP는 실제 결제·테스트·운영·재무 주문 없음·미확인을 구분한다", () => {
+  const order = { market: "google_play", state: "active", purchasedAt: "2026-08-16T00:00:00Z", isTestPurchase: false, providerOrderIdPresent: true };
+  for (const [extra, label] of [
+    [{}, "실제 결제"],
+    [{ state: "revoked" }, "실제 결제 · 취소·환불"],
+    [{ isTestPurchase: true }, "테스트 거래"],
+    [{ isTestPurchase: true, state: "revoked" }, "테스트 거래"],
+    [{ market: "operator" }, "운영자 지급·회수"],
+    [{ providerOrderIdPresent: false, state: "revoked" }, "마켓 재무 주문 없음"],
+    [{ isTestPurchase: null }, "결제 여부 미확인"],
+    [{ providerOrderIdPresent: null }, "결제 여부 미확인"],
+    [{ purchasedAt: "0001-01-01T00:00:00Z" }, "결제 여부 미확인"],
+    [{ state: "pending" }, "결제 여부 미확인"],
+  ] as const) assert.equal(iapTransactionPresentation({ ...order, ...extra }).label, label);
 });

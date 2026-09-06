@@ -1169,3 +1169,18 @@ describe("플랫폼 관리 조회", () => {
     assert.equal(result.minutes, 30);
   });
 });
+
+
+it("최근 주문의 분류를 보존하고 구 API의 누락을 실거래로 추정하지 않는다", async () => {
+  const base = {
+    orderKey: "a".repeat(64), appId: "happy-farm", platformUserId: "pu_safe",
+    entitlementId: "premium", platform: "google_play", productId: "premium", state: "active",
+    purchasedAt: "2026-08-16T00:00:00Z", observedAt: "2026-09-06T00:00:00Z", tombstone: false,
+  };
+  for (const facts of [{}, { isTestPurchase: true, providerOrderIdPresent: true }, { isTestPurchase: false, providerOrderIdPresent: false }]) {
+    const result = await withClient({ status: 200, body: { ok: true, result: { orders: [{ ...base, ...facts }], hiddenOrderCount: 0 } } }, (client) => client.recentOrders());
+    assert.equal(result.orders[0]?.isTestPurchase, facts.isTestPurchase ?? null);
+    assert.equal(result.orders[0]?.providerOrderIdPresent, facts.providerOrderIdPresent ?? null);
+  }
+  await assert.rejects(withClient({ status: 200, body: { ok: true, result: { orders: [{ ...base, isTestPurchase: "false" }], hiddenOrderCount: 0 } } }, (client) => client.recentOrders()), PlatformApiError);
+});

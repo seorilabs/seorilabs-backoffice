@@ -47,11 +47,13 @@ describe("플랫폼 브라우저 응답 최소화", () => {
     assert.deepEqual(Object.keys(order).sort(), [
       "appId",
       "entitlementId",
+      "isTestPurchase",
       "observedAt",
       "orderKey",
       "platform",
       "platformUserId",
       "productId",
+      "providerOrderIdPresent",
       "purchasedAt",
       "state",
       "tombstone",

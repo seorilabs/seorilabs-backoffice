@@ -338,3 +338,23 @@ test("PLAY 배포는 tag 파생 version_name과 업로드 입력을 채운다", 
     version_name: "1.8.6",
   });
 });
+
+test("추가 caller 입력은 선언된 값만 전달하고 릴리스·마켓 정책을 덮어쓰지 않는다", async () => {
+  const h = harness({ declared: new Set([...ALL_INPUTS, "build_flavor"]) });
+  const plan = await planMarketDeploy({
+    repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+    source: h.source, dispatcher: h.dispatcher, inputs: { build_flavor: "standard" },
+  });
+  assert.equal(plan.github?.inputs.build_flavor, "standard");
+  assert.equal(plan.github?.inputs.release_tag, "v1.2.3");
+  for (const inputs of [
+    { unknown_input: "value" }, { release_tag: "v9.0.0" }, { track: "production" },
+    { upload: "false" }, { build_flavor: false } as unknown as Record<string, string>,
+  ]) {
+    await assert.rejects(planMarketDeploy({
+      repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+      source: h.source, dispatcher: h.dispatcher, inputs,
+    }), StableReleaseAuthorityError);
+  }
+  assert.equal(h.dispatched.length, 0, "preflight는 외부 workflow를 실행하지 않는다");
+});

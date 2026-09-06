@@ -292,9 +292,11 @@ describe("플랫폼 표현 컴포넌트", () => {
 
     assert.match(html, /Production 원장/);
     assert.match(html, /order-safe/);
-    assert.match(html, /구매 2026\. 8\. 17\. 오전 2:52/);
-    assert.match(html, /최근 확인 2026\. 9\. 2\. 오후 12:53/);
-    assert.match(html, /동일 주문 재확인은 새 IAP 지급 알림을 만들지 않습니다/);
+    assert.match(html, /구매 시각/);
+    assert.match(html, /2026\. 8\. 17\. 오전 2:52/);
+    assert.match(html, /마지막 관찰 시각/);
+    assert.match(html, /2026\. 9\. 2\. 오후 12:53/);
+    assert.match(html, /같은 주문의 재확인은 새 구매가 아닙니다/);
     assert.match(html, /원 지급 grant-request-safe/);
     assert.doesNotMatch(html, /must-not-render/);
   });
