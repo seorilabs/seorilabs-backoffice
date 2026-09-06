@@ -26,7 +26,7 @@ const SNAPSHOT_SIGNING_KEY = "fleet-migration-shadow-readiness-test-key";
 function registration(
   repoId: number,
   repoFullName: string,
-  classification: "PRODUCT_APP" | "INFRA_REPO",
+  classification: "PRODUCT_APP" | "INFRA_REPO" | "PLATFORM_PRODUCER",
 ): FleetMigrationRepositoryRegistrationReadback {
   return {
     repoId: String(repoId),
@@ -654,4 +654,50 @@ test("운영 이미지는 read-only readiness command를 번들한다", () => {
   assert.match(packageJson, /scripts\/fleet-migration-shadow-readiness\.ts/);
   assert.match(script, /evaluateFleetMigrationShadowReadiness/);
   assert.doesNotMatch(script, /create|update|delete|upsert|mutation/i);
+});
+
+test("PLATFORM_PRODUCER의 App row는 blocker가 아니고 INFRA_REPO는 그대로 blocker다", async () => {
+  // seorilabs/platform은 SDK를 발행하는 저장소라 제품 앱이 아니지만, Backoffice가
+  // 이 저장소의 PR·workflow run·provider observation을 추적하는 앵커로 App row를
+  // 쓴다. 존재 자체를 blocker로 보면 실제 운영 데이터를 지워야만 READY가 되는데,
+  // mirror 관계가 onDelete: Restrict라 그 삭제는 애초에 불가능하다.
+  const producerApp = productApp();
+  producerApp.id = "app-platform-producer-0001";
+  producerApp.repoId = "202";
+  producerApp.repoFullName = "seorilabs/infra";
+  producerApp.latestDiscovery = null;
+  producerApp.activeConfigs = [];
+  producerApp.platformFleetBinding = null;
+
+  const allowed = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "PLATFORM_PRODUCER"),
+    ],
+    apps: [productApp(), producerApp],
+  }));
+  assert.equal(allowed.state, "READY");
+  assert.deepEqual(allowed.reasonCounts, {});
+
+  // 같은 App row라도 분류가 INFRA_REPO면 기존대로 blocker다.
+  const blocked = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [productApp(), producerApp],
+  }));
+  assert.equal(blocked.state, "BLOCKED");
+  assert.deepEqual(blocked.reasonCounts, { NON_PRODUCT_APP_BINDING_PRESENT: 1 });
+
+  // PLATFORM_PRODUCER에 App row가 아예 없어도 READY다.
+  const none = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "PLATFORM_PRODUCER"),
+    ],
+    apps: [productApp()],
+  }));
+  assert.equal(none.state, "READY");
+  assert.deepEqual(none.reasonCounts, {});
 });

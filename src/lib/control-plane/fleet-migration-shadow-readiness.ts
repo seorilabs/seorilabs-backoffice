@@ -339,7 +339,14 @@ function repositoryReasons(
     reasons.push("FORK_CLASSIFICATION_INVALID");
   }
   if (registration.classification !== "PRODUCT_APP") {
-    if (app) reasons.push("NON_PRODUCT_APP_BINDING_PRESENT");
+    // PLATFORM_PRODUCER는 제품 앱이 아니지만 App row가 정상이다. Backoffice가 이
+    // 저장소의 PR, workflow run, provider observation을 추적하는 앵커로 쓴다.
+    // row를 지우면 그 이력이 함께 사라지고, mirror 관계가 onDelete: Restrict라
+    // 삭제 자체가 막힌다. 존재 자체를 blocker로 보던 규칙이 현실과 어긋났다.
+    // 아래 PRODUCT_APP 전용 계약은 여기서 return 하므로 계속 적용하지 않는다.
+    if (app && registration.classification !== "PLATFORM_PRODUCER") {
+      reasons.push("NON_PRODUCT_APP_BINDING_PRESENT");
+    }
     return reasons;
   }
   if (!app) {
