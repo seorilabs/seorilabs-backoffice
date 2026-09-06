@@ -1,20 +1,8 @@
-# Vault RAG — Obsidian 볼트(Syncthing) 인덱서/라이터 CronJob (data ns).
-# backoffice 이미지를 재사용해 번들된 scripts-dist 엔트리를 실행.
-# PVC(syncthing-pvc, hostPath /data/syncthing, RWO)는 data ns 소속이라 여기서만 마운트 가능.
-# 둘 다 rpi5 고정(Syncthing 과 동일 노드 → RWO 동시 마운트 가능).
-#
-# 사전 준비(런북, DEPLOY.md §11 참고):
-#   1) data ns 에 이미지 풀 시크릿 복제:
-#      kubectl -n platform get secret registry-pull-cred -o yaml \
-#        | sed 's/namespace: platform/namespace: data/' \
-#        | kubectl -n data apply -f -
-#   2) data ns 에 전용 시크릿 생성(평문 레포 금지 → kubectl 로 주입):
-#      kubectl -n data create secret generic backoffice-vault-secrets \
-#        --from-literal=DATABASE_URL='mysql://backoffice:***@mysql.data.svc.cluster.local:3306/backoffice?connection_limit=3' \
-#        --from-literal=GEMINI_API_KEY='***'  # 회사 Vault 인덱서 전용 키
----
-apiVersion: batch/v1
-kind: CronJob
+# Vault RAG — 고정 인덱싱 실행기와 일일 writer.
+# data namespace의 등록된 기존 실행 자격증명과 rpi5 Syncthing PVC를 재사용한다.
+# 적용 전 구 CronJob drain과 앱 SA 권한 제거 순서는 docs/DEPLOY.md #185를 따른다.
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: vault-indexer
   namespace: data
@@ -22,91 +10,91 @@ metadata:
     app.kubernetes.io/name: backoffice
     app.kubernetes.io/component: vault-indexer
 spec:
-  schedule: "0 5 * * *" # 매일 KST 05:00 증분 인덱싱.
-  timeZone: Asia/Seoul
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 2
-  failedJobsHistoryLimit: 3
-  jobTemplate:
+  replicas: 1
+  progressDeadlineSeconds: 3300
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: vault-indexer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: vault-indexer
     spec:
-      backoffLimit: 1
-      activeDeadlineSeconds: 3000 # 최초 전체 인덱싱(임베딩) 여유.
-      template:
-        metadata:
-          labels:
-            app.kubernetes.io/name: backoffice
-            app.kubernetes.io/component: vault-indexer
-        spec:
-          restartPolicy: Never
-          nodeSelector:
-            kubernetes.io/hostname: rpi5
-          imagePullSecrets:
-            - name: registry-pull-cred
+      nodeSelector:
+        kubernetes.io/hostname: rpi5
+      imagePullSecrets:
+        - name: registry-pull-cred
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: indexer
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          imagePullPolicy: Always
+          workingDir: /app
+          command:
+            - node
+            - /app/scripts-dist/index-vault.cjs
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: GEMINI_API_BASE_URL
+              value: https://generativelanguage.googleapis.com/v1beta
+            - name: GEMINI_EMBED_MODEL
+              value: gemini-embedding-001
+            - name: GEMINI_EMBED_DIM
+              value: "1536"
+            - name: VAULT_PATH
+              value: /vault
+            - name: VAULT_INCLUDE_DIRS
+              value: 받은함,지식,커리어,프로젝트
+            - name: VAULT_EXCLUDE_DIRS
+              value: .obsidian,.stfolder,.trash
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-vault-secrets
+                  key: DATABASE_URL
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backoffice-vault-secrets
+                  key: GEMINI_API_KEY
           securityContext:
-            # 볼트 파일은 uid 1000(syncthing) 소유. ro 라 1000 으로 읽기.
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
-          containers:
-            - name: indexer
-              image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
-              imagePullPolicy: Always
-              workingDir: /app
-              command: ["node", "/app/scripts-dist/index-vault.cjs"]
-              env:
-                - name: HOME
-                  value: /tmp
-                - name: CHECKPOINT_DISABLE
-                  value: "1"
-                # 임베딩 = Gemini(gemini-embedding-001).
-                - name: GEMINI_API_BASE_URL
-                  value: "https://generativelanguage.googleapis.com/v1beta"
-                - name: GEMINI_EMBED_MODEL
-                  value: "gemini-embedding-001"
-                - name: GEMINI_EMBED_DIM
-                  value: "1536"
-                - name: VAULT_PATH
-                  value: /vault
-                # 인덱싱할 최상위 폴더 allowlist(시크릿 흩어짐 → 화이트리스트).
-                - name: VAULT_INCLUDE_DIRS
-                  value: "받은함,지식,커리어,프로젝트"
-                - name: VAULT_EXCLUDE_DIRS
-                  value: ".obsidian,.stfolder,.trash"
-                - name: DATABASE_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-vault-secrets
-                      key: DATABASE_URL
-                - name: GEMINI_API_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: backoffice-vault-secrets
-                      key: GEMINI_API_KEY
-              securityContext:
-                allowPrivilegeEscalation: false
-                readOnlyRootFilesystem: true
-                capabilities:
-                  drop: ["ALL"]
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: "1"
-                  memory: 1Gi
-              volumeMounts:
-                - name: vault
-                  mountPath: /vault
-                  subPath: Sync/obsidian-main
-                  readOnly: true
-                - name: tmp
-                  mountPath: /tmp
-          volumes:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
             - name: vault
-              persistentVolumeClaim:
-                claimName: syncthing-pvc
+              mountPath: /vault
+              subPath: Sync/obsidian-main
+              readOnly: true
             - name: tmp
-              emptyDir: {}
+              mountPath: /tmp
+      volumes:
+        - name: vault
+          persistentVolumeClaim:
+            claimName: syncthing-pvc
+        - name: tmp
+          emptyDir: {}
+      serviceAccountName: vault-indexer
+      terminationGracePeriodSeconds: 3030
+---
 ---
 apiVersion: batch/v1
 kind: CronJob

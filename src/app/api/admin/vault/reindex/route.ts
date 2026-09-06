@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { triggerVaultIndex } from "@/lib/k8s/vault-trigger";
 
-// 볼트 재인덱싱 즉시 트리거(웹/크론/검증용). data ns 인덱서 Job 생성.
+// 볼트 재인덱싱 요청. 고정 ConfigMap에 요청 식별자만 남긴다.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;

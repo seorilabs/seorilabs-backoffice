@@ -356,9 +356,11 @@ fi
 # operator가 k8s/vault-rag.yaml로 직접 apply한다.
 echo "== optional data namespace image parity observation (read-only) =="
 vault_parity=MATCH
-for cronjob in vault-indexer vault-writer; do
-  if ! observed="$(k -n data get cronjob "$cronjob" \
-      -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>&1)"; then
+for resource in deployment/vault-indexer cronjob/vault-writer; do
+  image_path='.spec.jobTemplate.spec.template.spec.containers[0].image'
+  [ "$resource" != deployment/vault-indexer ] || image_path='.spec.template.spec.containers[0].image'
+  if ! observed="$(k -n data get "$resource" \
+      -o "jsonpath={$image_path}" 2>&1)"; then
     if [[ "$observed" == *NotFound* ]]; then
       [ "$vault_parity" = DRIFT ] || vault_parity=ABSENT
     else
@@ -372,7 +374,7 @@ for cronjob in vault-indexer vault-writer; do
 done
 echo "vault_image_parity=${vault_parity} expected=${image}"
 if [ "$vault_parity" != MATCH ] && [ "$vault_parity" != ABSENT ]; then
-  echo "Vault CronJob 이미지가 이번 배포와 다르거나 읽을 수 없다. CI는 이 workload를 바꾸지 않는다." >&2
+  echo "Vault 실행기 이미지가 이번 배포와 다르거나 읽을 수 없다. CI는 이 workload를 바꾸지 않는다." >&2
   echo "trusted operator 조치: kubectl apply -f <(scripts/render-manifest.sh k8s/vault-rag.yaml \"$image\" \"$source_sha\")" >&2
 fi
 

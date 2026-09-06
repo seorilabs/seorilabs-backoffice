@@ -14,10 +14,14 @@ metadata:
   name: backoffice-image-deployer
   namespace: data
 rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["vault-indexer"]
+    verbs: ["get"]
   # Vault CronJob 이미지 parity 관측. 쓰기는 없다.
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
-    resourceNames: ["vault-indexer", "vault-writer"]
+    resourceNames: ["vault-writer"]
     verbs: ["get"]
   # 고정 verifier가 남긴 공개 관측 결과 하나만 읽는다.
   - apiGroups: [""]
