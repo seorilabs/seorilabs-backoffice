@@ -122,6 +122,17 @@ if [[ "$args" == *" rollout status deployment/"* ]]; then
   exit
 fi
 
+if [[ "$args" == *"-n data get deployment/vault-indexer "* || "$args" == *"-n data get cronjob/vault-writer "* ]]; then
+  printf 'READ_VAULT_IMAGE\n' >> "$FAKE_KUBECTL_LOG"
+  case "${FAKE_VAULT_PARITY:-match}" in
+    match) printf '%s' "$BACKOFFICE_IMAGE" ;;
+    drift) printf 'registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:%s' "$(printf 'd%.0s' {1..64})" ;;
+    absent) printf 'Error from server (NotFound): cronjobs.batch "vault-indexer" not found\n' >&2; exit 1 ;;
+    unreadable) printf 'Error from server (Forbidden): cronjobs.batch is forbidden\n' >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+
 if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
   count=0
   [ ! -f "$FAKE_DEPLOYMENT_COUNTER" ] || count="$(cat "$FAKE_DEPLOYMENT_COUNTER")"
@@ -135,16 +146,7 @@ if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
   exit 0
 fi
 
-if [[ "$args" == *" get cronjob vault-"* && "$args" == *"jobTemplate"* ]]; then
-  printf 'READ_VAULT_IMAGE\n' >> "$FAKE_KUBECTL_LOG"
-  case "${FAKE_VAULT_PARITY:-match}" in
-    match) printf '%s' "$BACKOFFICE_IMAGE" ;;
-    drift) printf 'registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:%s' "$(printf 'd%.0s' {1..64})" ;;
-    absent) printf 'Error from server (NotFound): cronjobs.batch "vault-indexer" not found\n' >&2; exit 1 ;;
-    unreadable) printf 'Error from server (Forbidden): cronjobs.batch is forbidden\n' >&2; exit 1 ;;
-  esac
-  exit 0
-fi
+
 if [[ "$args" == *" get cronjob/backoffice-"* && "$args" == *"spec.suspend"* ]]; then
   printf 'false'
   exit 0
