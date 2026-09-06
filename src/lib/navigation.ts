@@ -25,6 +25,8 @@ export const NAVIGATION_SECTIONS: readonly NavigationSection[] = [
       { href: "/platform", label: "개요", match: "exact" },
       { href: "/platform/auth", label: "인증", match: "nested" },
       { href: "/platform/iap", label: "IAP", match: "nested" },
+      { href: "/platform/ads", label: "Ads", match: "nested" },
+      { href: "/platform/updates", label: "업데이트", match: "nested" },
     ],
   },
   {

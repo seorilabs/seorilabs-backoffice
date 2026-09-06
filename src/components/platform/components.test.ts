@@ -9,6 +9,7 @@ import {
   PlatformOverviewStatus,
   PlatformPresenceView,
   PlatformRefundReviewPanel,
+  PlatformVersionDistributionView,
   loadAvailablePresenceSnapshot,
 } from "./index";
 
@@ -309,5 +310,107 @@ describe("플랫폼 표현 컴포넌트", () => {
     assert.match(html, /1시간 이내 1/);
     assert.match(html, /실패 2/);
     assert.doesNotMatch(html, /pendingRefundToken|ciphertext/);
+  });
+});
+
+describe("앱 버전 분포 화면", () => {
+  const distribution = {
+    appId: "happy-farm",
+    displayName: "해피 팜",
+    measuredAt: "2026-09-06T12:00:00Z",
+    activeTtlSeconds: 150,
+    totalSessions: 10,
+    unknownSessions: 0,
+    versions: [
+      {
+        appVersion: "1.5.0",
+        sessions: 8,
+        share: 0.8,
+        byPlatform: [{ platform: "android", sessions: 8 }],
+        lastSeenAt: "2026-09-06T11:59:30Z",
+        firstSeenAt: "2026-09-05T00:00:00Z",
+        runtimes: ["godot-native-android"],
+      },
+      {
+        appVersion: "1.4.0",
+        sessions: 2,
+        share: 0.2,
+        byPlatform: [{ platform: "android", sessions: 2 }],
+        lastSeenAt: "2026-09-06T11:58:00Z",
+        firstSeenAt: "2026-09-01T00:00:00Z",
+        runtimes: ["godot-native-android"],
+      },
+    ],
+  };
+
+  it("버전별 세션과 비중, 첫 유입 시각을 함께 보여준다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformVersionDistributionView, {
+        state: "available",
+        distributions: [distribution],
+      }),
+    );
+
+    assert.match(html, /집계 정상/);
+    assert.match(html, /해피 팜/);
+    assert.match(html, /1\.5\.0/);
+    assert.match(html, /80%/);
+    assert.match(html, /첫 유입/);
+    assert.doesNotMatch(html, /버전 분포 알 수 없음/);
+  });
+
+  it("집계를 못 읽을 때 0%로 그리지 않는다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformVersionDistributionView, {
+        state: "unavailable",
+        distributions: [],
+        error: "RPI Edge가 응답하지 않습니다.",
+      }),
+    );
+
+    assert.match(html, /버전 분포 알 수 없음/);
+    assert.match(html, /RPI Edge가 응답하지 않습니다/);
+    assert.doesNotMatch(html, /해피 팜/);
+  });
+
+  it("버전 미보고 세션이 많으면 대상 규모를 믿지 말라고 경고한다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformVersionDistributionView, {
+        state: "available",
+        distributions: [
+          {
+            ...distribution,
+            totalSessions: 10,
+            unknownSessions: 4,
+            versions: [
+              { ...distribution.versions[0], sessions: 6, share: 0.6 },
+              {
+                appVersion: "",
+                sessions: 4,
+                share: 0.4,
+                byPlatform: [{ platform: "android", sessions: 4 }],
+                lastSeenAt: "2026-09-06T11:59:00Z",
+                firstSeenAt: null,
+                runtimes: [],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    assert.match(html, /미상/);
+    assert.match(html, /보고하지 않은 세션이 40%/);
+  });
+
+  it("관측이 없으면 빈 상태를 그린다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformVersionDistributionView, {
+        state: "available",
+        distributions: [],
+      }),
+    );
+
+    assert.match(html, /관측된 빌드가 없습니다/);
   });
 });

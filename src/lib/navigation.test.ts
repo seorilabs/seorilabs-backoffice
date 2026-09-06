@@ -38,6 +38,8 @@ describe("좌측 내비게이션 구조", () => {
         ["/platform", "개요"],
         ["/platform/auth", "인증"],
         ["/platform/iap", "IAP"],
+        ["/platform/ads", "Ads"],
+        ["/platform/updates", "업데이트"],
       ],
     );
     assert.deepEqual(
