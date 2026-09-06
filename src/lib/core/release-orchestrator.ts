@@ -218,6 +218,12 @@ export async function planMarketDeploy(opts: {
     if (opts.target === "ALL") {
       Object.assign(inputs, buildDeployAllGooglePlayInputs(declared.inputNames));
     }
+    // AIT 단독 배포: optional upload caller도 slash release의 "AppsInToss 배포"에서는
+    // build-only로 끝나지 않도록 비공개 번들 업로드를 명시한다. 최신 표준 caller처럼
+    // 항상 업로드하는 workflow는 이 입력을 선언하지 않으므로 그대로 호출한다.
+    if (opts.target === "AIT" && declared.inputNames.has("upload")) {
+      inputs.upload = "true";
+    }
     // PLAY 단독: 백오피스/Discord 에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
     // 배포까지 진행한다. ALL은 위에서 deploy-all이 선언한 prefixed input을 따로 채운다.
     if (opts.target === "PLAY") {

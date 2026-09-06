@@ -241,6 +241,30 @@ test("caller가 요구 입력을 선언하지 않으면 dispatch 전에 막힌�
   assert.deepEqual(h.writes(), []);
 });
 
+test("AIT 배포는 optional upload caller에도 비공개 업로드를 명시한다", async () => {
+  const h = harness({ declared: new Set(["release_tag", "upload", "memo"]) });
+  await dispatchMarketDeployAtTag({
+    repoFullName: REPO,
+    target: "AIT",
+    tag: "v1.0.22",
+    memo: "Discord slash release",
+    iosViaXcodeCloud: false,
+    source: h.source,
+    dispatcher: h.dispatcher,
+  });
+  assert.deepEqual(h.dispatched[0].inputs, {
+    release_tag: "v1.0.22",
+    memo: "Discord slash release",
+    upload: "true",
+  });
+});
+
+test("항상 업로드하는 AIT caller에는 미선언 upload 입력을 보내지 않는다", async () => {
+  const h = harness({ declared: new Set(["release_tag", "memo"]) });
+  await deploy(h, "AIT", "v1.2.2");
+  assert.deepEqual(h.dispatched[0].inputs, { release_tag: "v1.2.2" });
+});
+
 test("Xcode Cloud 계약 검증 실패는 GitHub dispatch도 만들지 않는다", async () => {
   const h = harness({ failXcodeValidateWith: new Error("Xcode Cloud workflow 선택 실패") });
   await assert.rejects(() => deploy(h, "ALL", "v1.2.2", true), /Xcode Cloud workflow 선택 실패/u);
