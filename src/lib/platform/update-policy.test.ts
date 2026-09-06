@@ -5,6 +5,7 @@ import {
   addedBlockedVersions,
   compareVersionsDesc,
   joinVersions,
+  needsBlockConfirmation,
   platformUpdatePolicyConfirmationText,
   sameVersion,
   splitVersions,
@@ -99,5 +100,23 @@ describe("확인 문구", () => {
       platformUpdatePolicyConfirmationText("happy-farm", { android: [], ios: [] }),
       "",
     );
+  });
+});
+
+describe("강제 추가 확인", () => {
+  // 강제가 한 번의 클릭으로 등록되면 안 된다.
+  it("새로 막는 버전이 있으면 문구를 그대로 입력해야 한다", () => {
+    const text = "BLOCK happy-farm android 1.4.0";
+    assert.equal(needsBlockConfirmation(text, undefined), true);
+    assert.equal(needsBlockConfirmation(text, ""), true);
+    assert.equal(needsBlockConfirmation(text, "BLOCK happy-farm android 1.4.1"), true);
+    assert.equal(needsBlockConfirmation(text, text), false);
+  });
+
+  // 해제와 권장 변경은 확인 없이 통과한다. 되돌리기가 막히면 사고 대응이
+  // 불가능해진다.
+  it("새로 막는 버전이 없으면 확인이 없다", () => {
+    assert.equal(needsBlockConfirmation("", undefined), false);
+    assert.equal(needsBlockConfirmation("", "아무거나"), false);
   });
 });

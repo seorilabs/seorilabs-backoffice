@@ -447,6 +447,38 @@ describe("업데이트 정책 콘솔", () => {
     assert.equal(drafts.ios.enabled, false);
   });
 
+  // 자동 추종 정책은 blockedVersions가 비고 recommendOverride도 없다.
+  // 값으로만 판정하면 꺼진 것으로 보이고, 다른 플랫폼만 고쳐 저장할 때
+  // 전체 대체 요청이 그 정책을 지운다.
+  it("값이 없어도 configured면 켜진 상태로 본다", () => {
+    const drafts = draftsFromPolicy({
+      ...policy,
+      platforms: {
+        ios: {
+          configured: true,
+          blockedVersions: [],
+          autoRecommendedVersion: "2.1.0",
+        },
+      },
+    });
+    assert.equal(drafts.ios.enabled, true);
+    assert.deepEqual(drafts.ios.blockedVersions, []);
+  });
+
+  it("스토어 주소만 있고 정책이 없으면 꺼진 상태다", () => {
+    const drafts = draftsFromPolicy({
+      ...policy,
+      platforms: {
+        ios: {
+          configured: false,
+          blockedVersions: [],
+          updateUrl: "https://apps.apple.com/app/id1234567890",
+        },
+      },
+    });
+    assert.equal(drafts.ios.enabled, false);
+  });
+
   it("정책이 없으면 두 플랫폼 모두 꺼진 초안을 준다", () => {
     const drafts = draftsFromPolicy(null);
     assert.equal(drafts.android.enabled, false);

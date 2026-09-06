@@ -20,6 +20,17 @@ export type UpdatePolicyPlatform = (typeof UPDATE_POLICY_PLATFORMS)[number];
 export const MAX_BLOCKED_VERSIONS = 20;
 
 export interface UpdatePolicyPlatformView {
+  /**
+   * 정책 항목이 실제로 저장돼 있는지.
+   *
+   * 정책이 없어도 자동 추종 값이나 스토어 주소가 있으면 플랫폼이 응답에
+   * 실린다. 둘을 구분하지 않으면 다른 플랫폼만 고치고 저장할 때 전체 대체
+   * 요청이 건드리지 않은 플랫폼의 정책을 지운다.
+   *
+   * 구버전 서버와의 순차 배포 동안 없을 수 있다. 그때는 값이 있는지로
+   * 추정한다 -- 틀려도 지우는 쪽이 아니라 남기는 쪽으로 틀린다.
+   */
+  configured?: boolean;
   blockedVersions: Array<{ version: string; blockedAt?: string }>;
   recommendOverride?: string;
   /** override가 없을 때 실제로 적용되는 값. */
@@ -144,6 +155,22 @@ function parseVersion(raw: string): [number, number, number] | null {
     out[index] = Number(part);
   }
   return out;
+}
+
+/**
+ * 강제 추가에 사람 확인이 필요한지.
+ *
+ * 필요하면 큐에 넣지 않고 영향 범위와 문구만 돌려준다. 문구를 서버가 만들어
+ * 자동으로 채우면 다른 고위험 조작이 다 갖고 있는 안전장치가 여기만 없어진다.
+ *
+ * 새로 막는 버전이 없으면(해제와 권장 변경) 확인이 없다. 되돌리기는 언제나
+ * 즉시 가능해야 한다.
+ */
+export function needsBlockConfirmation(
+  confirmation: string,
+  typed: string | undefined,
+): boolean {
+  return confirmation !== "" && typed !== confirmation;
 }
 
 /** 원문이 아니라 파싱 결과로 비교한다. `1.4` `1.4.0` `v1.4.0`은 같은 빌드다. */

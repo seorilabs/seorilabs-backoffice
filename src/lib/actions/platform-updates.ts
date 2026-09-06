@@ -27,6 +27,7 @@ import {
 import {
   addedBlockedVersions,
   joinVersions,
+  needsBlockConfirmation,
   platformUpdatePolicyConfirmationText,
   UPDATE_POLICY_PLATFORMS,
   type PlatformUpdatePolicyReason,
@@ -64,12 +65,25 @@ export interface SaveUpdatePolicyInput {
   appSlug: string;
   platforms: UpdatePolicyPlatformInput[];
   reason: PlatformUpdatePolicyReason;
+  /**
+   * 강제 대상을 새로 추가할 때 운영자가 그대로 입력해야 하는 문구.
+   *
+   * 없거나 다르면 큐에 넣지 않고 미리보기만 돌려준다.
+   */
+  typedConfirmation?: string;
 }
 
 export interface SaveUpdatePolicyResult {
   ok: boolean;
   requestId?: string;
   blastRadius?: UpdateBlastRadius;
+  /**
+   * 강제 추가에 확인이 필요할 때 돌려준다. **이 응답에서는 아무것도 쓰지 않는다.**
+   *
+   * 강제가 한 번의 클릭으로 등록되면 안 된다. 몇 명이 막히는지 보고 문구를
+   * 그대로 입력한 뒤에만 큐에 넣는다.
+   */
+  preview?: { confirmation: string };
   blockingReference?: PlatformBlockingReference;
   error?: string;
 }
@@ -124,6 +138,13 @@ export async function saveUpdatePolicyAction(
       distribution ?? null,
       input.platforms,
     );
+
+    // 강제 추가는 두 단계다. 영향 범위를 보여주고 문구를 그대로 입력받은
+    // 뒤에만 큐에 넣는다. 문구를 서버가 만들어 자동으로 채우면 다른 고위험
+    // 조작이 다 갖고 있는 안전장치가 여기만 없어진다.
+    if (needsBlockConfirmation(confirmation, input.typedConfirmation)) {
+      return { ok: false, blastRadius, preview: { confirmation } };
+    }
 
     const prepared = preparePlatformOperation({
       operation: "platform.config.set-update-policy",

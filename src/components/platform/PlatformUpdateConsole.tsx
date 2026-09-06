@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   loadUpdatePolicyAction,
@@ -63,7 +63,13 @@ export function draftsFromPolicy(policy: UpdatePolicyView | null): Drafts {
     out[platform] = {
       // 정책 항목이 있어야 서버가 판정한다. 없으면 그 플랫폼은 아무 일도
       // 일어나지 않는다.
-      enabled: view.blockedVersions.length > 0 || view.recommendOverride !== undefined,
+      //
+      // 자동 추종 정책은 blockedVersions가 비고 recommendOverride도 없다.
+      // 값으로만 판정하면 그런 플랫폼이 꺼진 것으로 보이고, 다른 플랫폼만
+      // 고쳐 저장할 때 전체 대체 요청이 그 정책을 지운다.
+      enabled:
+        view.configured ??
+        (view.blockedVersions.length > 0 || view.recommendOverride !== undefined),
       blockedVersions: view.blockedVersions.map((item) => item.version),
       recommendOverride: view.recommendOverride ?? "",
     };
@@ -118,10 +124,26 @@ export function PlatformUpdateConsole({
   const [notice, setNotice] = useState<string | null>(null);
   const [blastRadius, setBlastRadius] = useState<UpdateBlastRadius | null>(null);
   const [showBlocked, setShowBlocked] = useState(false);
+  // 강제 추가는 두 단계다. 첫 제출이 영향 범위와 확인 문구를 돌려주고,
+  // 그 문구를 그대로 입력해야 큐에 들어간다.
+  const [pending, setPending] = useState<{
+    requestId: string;
+    confirmation: string;
+  } | null>(null);
+  const [typed, setTyped] = useState("");
+
+  const loadToken = useRef(0);
 
   const refresh = useCallback(async (target: string) => {
     if (!target) return;
+    // 앱을 바꾼 뒤 도착한 이전 응답을 버린다. 그대로 두면 B 화면에 A의 정책이
+    // 실리고, 그 상태로 저장하면 B 정책이 A의 초안으로 전체 대체된다.
+    const token = loadToken.current + 1;
+    loadToken.current = token;
+
     const result = await loadUpdatePolicyAction(target);
+    if (token !== loadToken.current) return;
+
     if (!result.ok || !result.policy) {
       setPolicy(null);
       setDrafts(EMPTY_DRAFTS);
@@ -134,6 +156,12 @@ export function PlatformUpdateConsole({
   }, []);
 
   useEffect(() => {
+    // 앱이 바뀌면 이전 앱의 확인 절차를 버린다. 남겨 두면 다른 앱의 문구로
+    // 저장을 시도하게 된다.
+    setPending(null);
+    setTyped("");
+    setBlastRadius(null);
+    setNotice(null);
     void refresh(appId);
   }, [appId, refresh]);
 
@@ -150,7 +178,10 @@ export function PlatformUpdateConsole({
     try {
       // 브라우저가 먼저 ID를 만들고 저장한 뒤에만 요청을 보낸다. 응답이
       // 유실돼도 같은 ID로 상태를 확인할 수 있어야 한다.
-      const requestId = crypto.randomUUID();
+      //
+      // 미리보기 단계에서 만든 ID를 확인 단계에서도 그대로 쓴다. 새로
+      // 만들면 저장해 둔 복구 참조가 가리키는 요청이 사라진다.
+      const requestId = pending?.requestId ?? crypto.randomUUID();
       try {
         savePlatformRecoveryReference(window.localStorage, {
           requestId,
@@ -166,8 +197,19 @@ export function PlatformUpdateConsole({
         appSlug: appId,
         platforms: inputs,
         reason,
+        ...(pending ? { typedConfirmation: typed.trim() } : {}),
       });
       setBlastRadius(result.blastRadius ?? null);
+
+      if (result.preview) {
+        setPending({ requestId, confirmation: result.preview.confirmation });
+        setTyped("");
+        setNotice(null);
+        return;
+      }
+
+      setPending(null);
+      setTyped("");
       setNotice(
         result.ok
           ? `요청을 등록했습니다. request ID ${result.requestId}`
@@ -253,13 +295,45 @@ export function PlatformUpdateConsole({
               </label>
               <button
                 type="button"
-                disabled={!writesEnabled || submitting}
+                disabled={
+                  !writesEnabled ||
+                  submitting ||
+                  (pending !== null && typed.trim() !== pending.confirmation)
+                }
                 onClick={() => void submit()}
                 className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:bg-neutral-300"
               >
-                {submitting ? "등록 중" : "정책 저장"}
+                {submitting
+                  ? "등록 중"
+                  : pending
+                    ? "확인하고 저장"
+                    : blockedCount > 0
+                      ? "영향 범위 확인"
+                      : "정책 저장"}
               </button>
             </div>
+
+            {pending && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <div className="text-xs font-medium text-red-800">
+                  강제 대상을 새로 추가합니다
+                </div>
+                <p className="mt-1 text-[11px] leading-4 text-red-700">
+                  위 영향 범위를 확인한 뒤, 아래 문구를 그대로 입력해야 저장됩니다.
+                  이 화면에서는 아직 아무것도 저장되지 않았습니다.
+                </p>
+                <code className="mt-2 block break-all rounded bg-white px-2 py-1 font-mono text-[11px] text-neutral-800">
+                  {pending.confirmation}
+                </code>
+                <input
+                  type="text"
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                  placeholder="위 문구를 그대로 입력"
+                  className="mt-2 block w-full rounded-md border border-red-200 px-3 py-2 font-mono text-xs"
+                />
+              </div>
+            )}
 
             {notice && (
               <p className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
