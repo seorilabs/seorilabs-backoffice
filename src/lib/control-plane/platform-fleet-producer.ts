@@ -58,7 +58,10 @@ export const rawPlatformReleaseManifestSchema = z.object({
     typescript: z.object({
       package: z.literal("@seorilabs/platform-sdk"),
       version: z.string().regex(SEMVER),
-      registry: z.literal("https://npm.pkg.github.com"),
+      // Platform #113이 SDK 발행을 공개 npm으로 옮겼다. npm.pkg.github.com은
+      // v0.6.x 이하 릴리스 매니페스트가 실제로 가리키는 과거 레지스트리라 함께 받는다.
+      // Platform 저장소 platform-fleet-reconciler.mjs와 같은 허용 집합이다.
+      registry: z.enum(["https://registry.npmjs.org", "https://npm.pkg.github.com"]),
       artifact: rawArtifactSchema,
     }).strict(),
     gdscript: z.object({

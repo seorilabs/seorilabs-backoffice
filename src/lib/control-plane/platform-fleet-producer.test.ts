@@ -512,3 +512,34 @@ test("승인 release는 observation, append-only record, reconcile을 같은 exa
     (error as { code?: unknown }).code === "PLATFORM_RELEASE_ASSET_IDENTITY_INVALID"
   ));
 });
+
+test("공개 npm과 과거 GitHub Packages registry를 모두 받고 다른 registry는 거부한다", () => {
+  // Platform #113이 SDK 발행을 공개 npm으로 옮긴 뒤 v0.7.x 매니페스트는
+  // registry.npmjs.org를 싣는다. producer가 과거 값만 받으면 새 릴리스가
+  // INVALID_INPUT으로 막혀 원장에 수집되지 않는다.
+  const typescriptArtifact = Buffer.from("typescript", "utf8");
+  const gdscriptArtifact = Buffer.from("gdscript", "utf8");
+  const checksumArtifact = Buffer.from("checksum", "utf8");
+  const base = rawManifest({ typescriptArtifact, gdscriptArtifact, checksumArtifact });
+
+  for (const registry of ["https://registry.npmjs.org", "https://npm.pkg.github.com"]) {
+    const manifest = structuredClone(base) as unknown as Record<string, unknown>;
+    ((manifest.sdk as Record<string, unknown>).typescript as Record<string, unknown>).registry = registry;
+    const parsed = rawPlatformReleaseManifestSchema.safeParse(manifest);
+    assert.equal(parsed.success, true, `${registry}가 거부됐다`);
+  }
+
+  for (const registry of [
+    "https://registry.yarnpkg.com",
+    "http://registry.npmjs.org",
+    "https://registry.npmjs.org/",
+  ]) {
+    const manifest = structuredClone(base) as unknown as Record<string, unknown>;
+    ((manifest.sdk as Record<string, unknown>).typescript as Record<string, unknown>).registry = registry;
+    assert.equal(
+      rawPlatformReleaseManifestSchema.safeParse(manifest).success,
+      false,
+      `${registry}가 통과했다`,
+    );
+  }
+});
