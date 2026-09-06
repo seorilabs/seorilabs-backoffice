@@ -49,3 +49,11 @@ export {
   type PlatformVersionDistributionState,
   type PlatformVersionDistributionViewProps,
 } from "./PlatformVersionDistribution";
+export {
+  PlatformUpdateConsole,
+  BlastRadiusView,
+  candidateVersions,
+  draftsFromPolicy,
+  type PlatformUpdateConsoleApp,
+  type PlatformUpdateConsoleProps,
+} from "./PlatformUpdateConsole";

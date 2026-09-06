@@ -29,6 +29,17 @@ interface EnqueuePlatformOperationInput {
   appId: string;
   actorLogin: string;
   prepared: PreparedPlatformOperation;
+  /**
+   * 값 자체를 남겨야 하는 조작의 추가 감사 항목.
+   *
+   * 기본 감사는 키 이름만 남긴다. 값이 사용자 원장이라 그게 옳다. 하지만
+   * 업데이트 정책은 "어떤 버전을 무슨 근거로 언제 막았나"가 감사 대상이고,
+   * `AppOperationRun.params`는 24시간 뒤 redact된다.
+   *
+   * 같은 트랜잭션 안에서 쓴다. 밖에 쓰면 원장은 바뀌었는데 근거만 유실될
+   * 수 있다.
+   */
+  extraAudit?: { action: string; payload: Prisma.InputJsonObject };
 }
 
 interface PlatformBlockingRow {
@@ -230,6 +241,17 @@ export async function enqueuePlatformOperation(
         payload: platformAuditPayload(input.prepared),
       },
     });
+    if (input.extraAudit) {
+      await tx.auditLog.create({
+        data: {
+          actorLogin: input.actorLogin,
+          action: input.extraAudit.action,
+          entityType: "app",
+          entityId: input.appId,
+          payload: input.extraAudit.payload,
+        },
+      });
+    }
   });
 }
 

@@ -27,6 +27,7 @@ import {
   type PlatformRefundReviewPreference,
   type PlatformRefundReviewState,
 } from "@/lib/platform/refund-review";
+import type { UpdatePolicyView } from "@/lib/platform/update-policy";
 
 /** 플랫폼이 돌려주는 오류. */
 export class PlatformApiError extends Error {
@@ -448,6 +449,22 @@ export interface MaintenanceResult {
   appId: string;
   active: boolean;
   minutes: number;
+}
+
+export interface SetUpdatePolicyRequest {
+  appId: string;
+  /** 키는 android 또는 ios다. 보내지 않은 플랫폼은 서버에서 지워진다. */
+  platforms: Record<
+    string,
+    { blockedVersions: string[]; recommendOverride: string }
+  >;
+  /** 강제 목록에 새로 추가할 때만 필요하다. */
+  confirmation?: string;
+}
+
+export interface SetUpdatePolicyResult {
+  appId: string;
+  outcome: string;
 }
 
 function invalidPlatformResponse(message: string): never {
@@ -1514,6 +1531,56 @@ export class PlatformClient {
       ),
       req,
     );
+  }
+
+  /**
+   * 업데이트 유도 정책과 고를 수 있는 버전 후보를 읽는다.
+   *
+   * 후보 목록이 없으면 콘솔이 버전을 자유 입력으로 받게 되고, 그게
+   * 관측되지 않은 버전을 막는 사고를 만든다.
+   */
+  async updatePolicy(appId: string): Promise<UpdatePolicyView> {
+    const value = await this.request<unknown>(
+      "GET",
+      `/v1/admin/apps/${encodeURIComponent(appId)}/config/update-policy`,
+    );
+    if (!isRecord(value) || value.appId !== appId) {
+      return invalidPlatformResponse("업데이트 정책 응답 대상이 일치하지 않습니다.");
+    }
+    return {
+      appId,
+      platforms: isRecord(value.platforms)
+        ? (value.platforms as UpdatePolicyView["platforms"])
+        : {},
+      observedVersions: Array.isArray(value.observedVersions)
+        ? (value.observedVersions as UpdatePolicyView["observedVersions"])
+        : [],
+    };
+  }
+
+  /**
+   * 업데이트 유도 정책을 저장한다. write 계정으로만 호출할 수 있다.
+   *
+   * 요청이 정책 전체를 대체한다. 보내지 않은 플랫폼은 지워진다.
+   */
+  async setUpdatePolicy(
+    req: SetUpdatePolicyRequest,
+    actor: string,
+  ): Promise<SetUpdatePolicyResult> {
+    const value = await this.request<unknown>(
+      "POST",
+      "/v1/admin/config/update-policy",
+      {
+        appId: req.appId,
+        platforms: req.platforms,
+        ...(req.confirmation ? { confirmation: req.confirmation } : {}),
+      },
+      actor,
+    );
+    if (!isRecord(value) || value.appId !== req.appId) {
+      return invalidPlatformResponse("업데이트 정책 저장 응답 대상이 일치하지 않습니다.");
+    }
+    return { appId: req.appId, outcome: requiredString(value, "outcome") };
   }
 
   /** 앱 점검 모드를 켜거나 끈다. write 계정으로만 호출할 수 있다. */
