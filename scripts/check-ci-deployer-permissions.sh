@@ -13,7 +13,12 @@ set -euo pipefail
 
 kubectl_bin="${KUBECTL_BIN:-kubectl}"
 namespace="${BACKOFFICE_AUDIT_NAMESPACE:-data}"
-expected_identity="${CI_DEPLOYER_IDENTITY:-system:serviceaccount:platform:ci-deployer}"
+profile="${1:-ci-deployer}"
+case "$profile" in
+  ci-deployer) expected_identity="${CI_DEPLOYER_IDENTITY:-system:serviceaccount:platform:ci-deployer}" ;;
+  backoffice) expected_identity="system:serviceaccount:platform:backoffice" ;;
+  *) echo "알 수 없는 권한 검증 대상" >&2; exit 1 ;;
+esac
 
 fail() {
   echo "오류: $*" >&2
@@ -36,7 +41,7 @@ rules="$(printf '%s' \
   || fail "SelfSubjectRulesReview를 읽지 못했다: ${rules}"
 
 incomplete="$(printf '%s\n' "$rules" | head -n1)"
-if [ "$incomplete" = true ]; then
+if [ "$incomplete" != false ]; then
   fail "권한 목록이 불완전해 금지 조합 부재를 증명할 수 없다"
 fi
 
@@ -64,7 +69,7 @@ forbidden="$(printf '%s\n' "$rules" | tail -n +2 | awk -F'|' '
       }
     }
     # workload를 바꿀 수 있으면 pod template에 임의 Secret volume을 붙일 수 있다.
-    split("pods jobs cronjobs deployments", wl, " ")
+    split("pods pods/exec pods/attach pods/ephemeralcontainers jobs cronjobs deployments statefulsets daemonsets replicasets replicationcontrollers", wl, " ")
     split("create patch update delete deletecollection", mv, " ")
     for (i in wl) {
       if (!has(resources, wl[i])) continue
@@ -78,16 +83,19 @@ forbidden="$(printf '%s\n' "$rules" | tail -n +2 | awk -F'|' '
 if [ -n "$forbidden" ]; then
   echo "FAIL ${namespace}에 금지된 권한 조합이 있다:" >&2
   printf '  %s\n' $forbidden >&2
-  fail "CI deployer 권한 경계가 깨졌다"
+  fail "${profile} 권한 경계가 깨졌다"
 fi
 echo "rules_review=clean"
 
 # 배포에 필요한 read 권한은 정확한 리소스 이름으로 확인한다.
 allowed=(
   "get:configmap/backoffice-provider-audit-trigger-state"
-  "get:cronjob/vault-indexer"
+  "get:deployment/vault-indexer"
   "get:cronjob/vault-writer"
 )
+if [ "$profile" = backoffice ]; then
+  allowed=("patch:configmap/vault-index-request")
+fi
 # 아래 can-i는 exact 이름 경로의 회귀를 잡는 보조 검증이다. "0건" 증명은 위 rules review가 한다.
 denied=(
   "create:jobs" "patch:jobs" "update:jobs" "delete:jobs"
@@ -101,6 +109,8 @@ denied=(
   "create:configmaps" "delete:configmaps"
   "patch:configmap/backoffice-provider-audit-trigger-state"
   "update:configmap/backoffice-provider-audit-trigger-state"
+  "patch:configmap/vault-index-state"
+  "update:configmap/vault-index-state"
 )
 
 can_i() {
@@ -127,5 +137,5 @@ for pair in "${denied[@]}"; do
   fi
 done
 
-[ "$failed" -eq 0 ] || fail "CI deployer 권한 경계가 깨졌다"
-echo "CI deployer는 ${namespace}에서 관측만 하고 workload·secret을 만들거나 바꿀 수 없다"
+[ "$failed" -eq 0 ] || fail "${profile} 권한 경계가 깨졌다"
+echo "${profile}: ${namespace} workload·secret 권한 부재와 고정 허용 경로를 확인했다"

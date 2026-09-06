@@ -489,10 +489,10 @@ data_rbac="$root/k8s/ci-deployer-data-rbac.yaml"
 if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
-   grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
+   grep -q 'resourceNames: \["vault-writer"\]' "$data_rbac" &&
    grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$data_rbac" &&
-   grep -q 'resourceNames: \["vault-indexer", "vault-writer"\]' "$data_rbac" &&
-   [ "$(grep -c 'verbs: \["get"\]' "$data_rbac")" -eq 2 ] &&
+   grep -q 'resourceNames: \["vault-writer"\]' "$data_rbac" &&
+   [ "$(grep -c 'verbs: \["get"\]' "$data_rbac")" -eq 3 ] &&
    ! grep -q 'resources: \["jobs"\]' "$data_rbac" &&
    ! grep -q 'resources: \["pods"\]' "$data_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$data_rbac" &&
@@ -520,13 +520,14 @@ echo "== Vault 일일 스케줄 =="
 vault_manifest="$root/k8s/vault-rag.yaml"
 indexer_doc="$(awk 'BEGIN { RS="---" } /name: vault-indexer/ { print }' "$vault_manifest")"
 writer_doc="$(awk 'BEGIN { RS="---" } /name: vault-writer/ { print }' "$vault_manifest")"
-if printf '%s' "$indexer_doc" | grep -q 'schedule: "0 5 \* \* \*"' &&
-   printf '%s' "$indexer_doc" | grep -q 'timeZone: Asia/Seoul' &&
+if printf '%s' "$indexer_doc" | grep -q 'kind: Deployment' &&
+   printf '%s' "$indexer_doc" | grep -q 'type: Recreate' &&
+   printf '%s' "$indexer_doc" | grep -q 'replicas: 1' &&
    printf '%s' "$writer_doc" | grep -q 'schedule: "30 4 \* \* \*"' &&
    printf '%s' "$writer_doc" | grep -q 'timeZone: Asia/Seoul'; then
-  ok "indexer 05:00, writer 04:30 KST"
+  ok "indexer 고정 단일 실행기, writer 04:30 KST"
 else
-  ng "Vault CronJob 일일 스케줄 계약이 깨졌다"
+  ng "Vault 실행기와 일일 스케줄 계약이 깨졌다"
 fi
 
 echo "== Grafana alert 연동 제거 =="

@@ -39,7 +39,7 @@ fi
 if [[ "$args" == *"auth can-i"* ]]; then
   read -r _ _ verb resource _ <<< "$args"
   case "${verb}:${resource}" in
-    get:configmap/backoffice-provider-audit-trigger-state|get:cronjob/vault-indexer|get:cronjob/vault-writer)
+    get:configmap/backoffice-provider-audit-trigger-state|get:deployment/vault-indexer|get:cronjob/vault-writer)
       answer=yes ;;
     *) answer=no ;;
   esac
@@ -95,7 +95,7 @@ done
 echo "  ok   mutation·secret 허용은 fail-closed"
 
 echo "== 필요한 read 권한이 없으면 실패한다 =="
-for pair in get:configmap/backoffice-provider-audit-trigger-state get:cronjob/vault-indexer; do
+for pair in get:configmap/backoffice-provider-audit-trigger-state get:deployment/vault-indexer; do
   if run_check FAKE_DENY_PAIR="$pair" >/dev/null 2>&1; then
     echo "FAIL $pair 거부가 통과로 처리됐다" >&2
     exit 1
@@ -142,3 +142,22 @@ done
 echo "  ok   read-only 규칙은 허용"
 
 echo "check-ci-deployer-permissions 계약 통과"
+
+run_app_check() {
+  env KUBECTL_BIN="$fake" FAKE_IDENTITY=system:serviceaccount:platform:backoffice \
+    FAKE_ALLOW_PAIR=patch:configmap/vault-index-request "$@" \
+    bash "$here/check-ci-deployer-permissions.sh" backoffice
+}
+run_app_check >/dev/null
+for rule in '["create"]|["batch"]|["jobs"]' '["patch"]|["apps"]|["statefulsets"]' '["create"]|[""]|["pods/exec"]'; do
+  if run_app_check FAKE_EXTRA_RULE="$rule" >/dev/null 2>&1; then
+    echo "FAIL 앱 SA의 workload 권한을 놓쳤다" >&2; exit 1
+  fi
+done
+if run_app_check FAKE_DENY_PAIR=patch:configmap/vault-index-request >/dev/null 2>&1; then
+  echo "FAIL 고정 요청 권한 누락을 놓쳤다" >&2; exit 1
+fi
+if run_app_check FAKE_RULES_INCOMPLETE=true >/dev/null 2>&1; then
+  echo "FAIL 앱 SA의 불완전한 권한 목록을 통과시켰다" >&2; exit 1
+fi
+echo "backoffice 앱 SA 권한 계약 통과"

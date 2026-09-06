@@ -205,7 +205,7 @@ root secret export 경로다. `data` namespace의 CI 권한은 `vault-indexer`/`
 확인한다. deploy job이 `KUBECONFIG_B64`를 설치한 직후, 배포 전에 실행한다. checker는 먼저
 `kubectl auth whoami`로 identity가 정확히 `system:serviceaccount:platform:ci-deployer`인지 보고,
 `resourceNames` Role이므로 정확한 리소스 이름(`configmap/backoffice-provider-audit-trigger-state`,
-`cronjob/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한다.
+`deployment/vault-indexer`, `cronjob/vault-writer`)으로 read 허용을 확인한다.
 
 거부 쪽은 `can-i`만으로 증명할 수 없다. 이름 없는 질문은 다른 `resourceNames` 권한이 남아 있어도
 `no`를 돌려주기 때문이다. 그래서 현재 identity의 `data` namespace 전체 규칙을
@@ -704,7 +704,7 @@ Syncthing(`data` ns, hostPath `/data/syncthing`, rpi5)이 동기화하는 **Obsi
 
 ```
 data ns                                   platform ns
- vault-indexer CronJob (매일 KST 05:00)    search_knowledge 챗 도구(Gemini 자동 호출)
+ vault-indexer 고정 실행기 (매일 KST 05:00)    search_knowledge 챗 도구(Gemini 자동 호출)
    PVC ro → chunk → gemini-embed →         /api/admin/vault/probe  (임베딩 실측, 키 비노출)
    vault_chunk(embedding LONGBLOB)         /api/admin/vault/search (검색 점검)
  vault-writer CronJob (매일 KST 04:30)     enqueueVaultWrite → vault_write_request
@@ -729,10 +729,24 @@ data ns                                   platform ns
    backoffice(platform, 질의측)에도 `GEMINI_API_KEY` 필요 → `backoffice-secrets` 에 추가하고 `kubectl apply -f k8s/deployment.yaml`(env 변경은 CI set image 비대상).
 3. `kubectl apply -f k8s/vault-rag.yaml`.
 4. **임베딩 실측(키 비노출)**: `curl -fsS -XPOST -H "x-admin-token: $TOK" https://backoffice.vzyx.xyz/api/admin/vault/probe` → `{ok:true, provider:"gemini", dim:1536}`.
-5. 최초 인덱싱: `kubectl -n data create job --from=cronjob/vault-indexer vault-index-init` → 로그로 `result {scanned,changed,chunks}` 확인.
+5. 최초 인덱싱: 아래 전환 순서를 완료한 뒤 고정 실행기의 로그에서 `result {scanned,changed,chunks}`와 완료 checkpoint를 확인한다.
 6. 검색 점검: `curl -XPOST -H "x-admin-token: $TOK" -d '{"q":"게임 아이디어"}' .../api/admin/vault/search`. 텔레그램에서 `/save 테스트 메모` → 다음 KST 04:30 writer 실행 뒤 받은함에 파일. 즉시 처리해야 하면 `kubectl -n data create job --from=cronjob/vault-writer vault-writer-manual-$(date +%s)`를 사용한다.
 
-- **즉시 재인덱싱 트리거**: 텔레그램 `/index` 또는 `POST /api/admin/vault/reindex` → backoffice 가 K8s API 로 `data` ns 에 인덱서 Job 생성(`src/lib/k8s/vault-trigger.ts`, 파드 SA 토큰+CA, 의존성 0). 실행 중이면 중복 방지, 완료 후 ttl 자동 정리. 평소 2h 자동 증분과 별개로 "방금 쓴 문서 바로 검색" 용도. RBAC: `k8s/vault-trigger-rbac.yaml`(SA `backoffice` + data ns Role: cronjobs get, jobs create/list/get), deployment `serviceAccountName: backoffice`.
+- **재인덱싱 요청**: Discord `/index` 또는 `POST /api/admin/vault/reindex`는 `data/vault-index-request` ConfigMap의 요청 UUID만 patch한다. 앱 SA는 Job 생성이나 Pod template 변경 권한을 갖지 않는다. `vault-indexer` Deployment는 단일 replica와 Recreate 전략으로 요청과 매일 KST 05:00 작업을 순차 실행한다. 요청이 몰리면 최신 요청까지 한 번의 증분 인덱싱으로 합친다. 완료 시 별도 `vault-index-state`에 요청 ID와 정기 실행 날짜를 CAS로 기록한다. 진행 중 새 요청은 다음 차례에 처리하며, 실패·재시작 시 완료되지 않은 요청을 다시 시도한다. 앱은 완료 state를 바꿀 수 없다.
+
+### 볼트 Job 권한 제거 전환 — #185
+
+운영자의 실행별 승인 후 진행한다. CI는 `data` namespace의 권한·실행기를 적용하지 않는다.
+
+1. 기존 `cronjob/vault-indexer`를 suspend하고 실행 중인 모든 indexer Job이 완료됐는지 확인한다. 완료 전 새 실행기를 시작하지 않는다.
+2. `k8s/vault-trigger-rbac.yaml`의 고정 요청·완료 ConfigMap과 두 SA의 Role/RoleBinding을 적용한다. 기존 앱 Role의 jobs 권한이 같은 이름의 새 Role로 제거됐는지 확인한다. 완료 ConfigMap의 기존 data는 보존한다.
+3. 승인된 exact image digest로 `k8s/vault-rag.yaml`을 렌더링해 적용한다. 고정 실행기가 준비되고 요청·정기 인덱싱이 동작하면 구 CronJob을 삭제한다. 동시에 실행되는 indexer가 없어야 한다. 정기 writer는 유지한다.
+4. 웹 및 Discord command worker를 같은 코드의 승인된 image로 배포한다. `/index` 응답은 요청 접수이며 완료가 아니다. UUID와 완료 checkpoint, worker 로그를 대조한다. 새 요청 중첩·실패 후 재시도·05:00 경계를 검증한다.
+5. 앱 SA 자격으로 `scripts/check-ci-deployer-permissions.sh backoffice`를 실행한다. SelfSubjectRulesReview의 불완전 응답이나 workload/Secret 권한 발견은 실패다. 고정 요청 patch만 허용하고 완료 state patch는 거부돼야 한다. 운영자 impersonation을 사용할 경우 검증 대상 공개 identity도 일치해야 한다.
+6. CI의 선택적 image 관측을 유지하려면 `k8s/ci-deployer-data-rbac.yaml`의 `get deployment/vault-indexer`만 추가한다. 기존 CI 권한 검증도 통과해야 한다.
+
+구 버전 웹으로만 되돌리면 제거된 Job 권한 때문에 `/index`가 실패한다. 문제가 생기면 새 실행기를 중단한 뒤 정기 CronJob을 승인된 이전 digest로 복구할 수 있으나 앱의 Job 생성 권한은 다시 부여하지 않는다. 수동 요청은 복구가 끝날 때까지 실패 상태로 둔다.
+
 
 > **주의**: `vault-rag.yaml`·`deployment.yaml`·`vault-trigger-rbac.yaml` 변경은 CI(`set image`) 비대상 → `kubectl apply` 1회. `/index`와 `POST /api/admin/vault/reindex`의 즉시 인덱싱은 일일 스케줄과 무관하게 유지된다. 임베딩은 Gemini 결제 키(Tier 1)라 throttle 무관. 증분은 변경 파일만 임베딩(비용 거의 0).
 
