@@ -12,7 +12,11 @@ const FULL_NAME = "seorilabs/happy-farm";
 
 function registryRecord(overrides: Record<string, unknown> = {}) {
   return {
+    registryId: "seorilabs-workflow-bundles-v5",
     approvalState: "APPROVED",
+    activeApprovalSlot: "active:seorilabs-workflow-bundles-v5",
+    supersededAt: null,
+    supersededByRecordId: null,
     sourceSha: "a".repeat(40),
     bundle: { source: { sha: "a".repeat(40) } },
     ...overrides,
@@ -27,8 +31,12 @@ function client(overrides: {
 } = {}) {
   return {
     workflowBundleRegistryRecord: {
-      async findMany() {
-        return overrides.records ?? [registryRecord()];
+      // 활성 승인은 registry 유일 slot으로 찾는다. 스텁도 같은 조건으로 고른다.
+      async findFirst({ where }: { where: Record<string, unknown> }) {
+        const records = overrides.records ?? [registryRecord()];
+        return records.find((record) => Object.entries(where).every(
+          ([key, value]) => (record as Record<string, unknown>)[key] === value,
+        )) ?? null;
       },
     },
     app: {
@@ -142,16 +150,43 @@ test("승인된 번들이 없으면 계획 자체를 거부한다", async () => 
   );
 });
 
-test("승인된 번들이 둘 이상이면 어느 것을 고정할지 정할 수 없으므로 거부한다", async () => {
+test("활성 slot을 쥔 승인이 없으면 다른 승인 기록이 있어도 계획을 거부한다", async () => {
+  // 유일 index가 활성 승인을 하나로 강제하므로 모호한 상태 대신 없는 상태만 남는다.
   await assert.rejects(
     planApprovedCallerReconciliation(
       options,
-      client({ records: [registryRecord(), registryRecord({ sourceSha: "c".repeat(40) })] }) as never,
+      client({
+        records: [
+          registryRecord({ activeApprovalSlot: null, supersededAt: new Date() }),
+          registryRecord({ sourceSha: "c".repeat(40), activeApprovalSlot: null }),
+        ],
+      }) as never,
       dependencies,
     ),
     (error) => error instanceof ControlPlaneError
-      && error.code === "AMBIGUOUS_APPROVED_WORKFLOW_BUNDLE",
+      && error.code === "NO_APPROVED_WORKFLOW_BUNDLE",
   );
+});
+
+test("물러난 승인은 활성 승인으로 세지 않는다", async () => {
+  const plan = await planApprovedCallerReconciliation(
+    options,
+    client({
+      records: [
+        registryRecord(),
+        registryRecord({
+          sourceSha: "c".repeat(40),
+          bundle: { source: { sha: "c".repeat(40) } },
+          activeApprovalSlot: null,
+          supersededAt: new Date("2026-09-06T00:00:00.000Z"),
+          supersededByRecordId: "registry-active",
+        }),
+      ],
+    }) as never,
+    dependencies,
+  );
+  // 물러난 기록이 registry에 남아 있어도 계획은 활성 승인 하나를 그대로 고정한다.
+  assert.equal(plan.approvedBundle.sourceSha, "a".repeat(40));
 });
 
 test("등록·분류·앱 상태가 어긋난 저장소는 이유를 남기고 건너뛴다", async () => {

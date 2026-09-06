@@ -14,6 +14,8 @@ import { prisma } from "@/lib/prisma";
 import { WORKFLOW_BUNDLE_CANDIDATE_SOURCE } from "@/lib/control-plane/workflow-bundle-candidate-source";
 
 const REGISTRY_ID = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.registryId;
+// registry 전체에서 활성 승인 하나만 이 값을 쥔다. 유일 index가 강제한다.
+const ACTIVE_APPROVAL_SLOT = `active:${REGISTRY_ID}`;
 const REGISTRY_REPOSITORY = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.repository;
 const REGISTRY_REPOSITORY_ID = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.repositoryId;
 const CANDIDATE_WORKFLOW_PATH = WORKFLOW_BUNDLE_CANDIDATE_SOURCE.workflowPath;
@@ -711,6 +713,81 @@ export async function importWorkflowBundleCandidate(input: {
   return { record, duplicate: false };
 }
 
+/**
+ * 승인 registry의 활성 WorkflowBundle은 하나다. 그 하나를 DB가 강제하도록 registry 단위
+ * 유일 slot(`activeApprovalSlot`)을 쓴다. 활성 승인만 slot을 쥐고, 물러난 승인은 slot을
+ * 놓은 뒤 언제 무엇에 대체됐는지 남긴다.
+ *
+ * 생성과 물러남을 같은 transaction에 넣는 것만으로는 부족하다. 활성 승인이 없는 상태에서
+ * 두 승인이 동시에 들어오면 서로의 insert를 보지 못해 둘 다 활성으로 commit된다. 마지막
+ * 단계에서 유일 slot을 잡게 해 DB가 하나만 통과시키고 나머지는 P2002로 되돌린다.
+ *
+ * slot을 잡는 쪽을 활성으로 만들기 때문에 오래된 승인을 원래 idempotency key로 다시
+ * 게시하면 그 승인이 다시 활성이 된다. 명시적인 롤백 수단이다.
+ */
+async function claimActiveApproval(
+  tx: Prisma.TransactionClient,
+  recordId: string,
+  actor: string,
+): Promise<void> {
+  const supersededAt = new Date();
+  const stale = await tx.workflowBundleRegistryRecord.findMany({
+    where: {
+      registryId: REGISTRY_ID,
+      approvalState: "APPROVED",
+      supersededAt: null,
+      id: { not: recordId },
+    },
+    select: { id: true, subject: true, sourceSha: true, payloadDigest: true },
+  });
+  if (stale.length > 0) {
+    // slot을 먼저 놓아야 아래에서 새 승인이 같은 slot을 잡을 수 있다.
+    await tx.workflowBundleRegistryRecord.updateMany({
+      where: { id: { in: stale.map((record) => record.id) } },
+      data: { activeApprovalSlot: null, supersededAt, supersededByRecordId: recordId },
+    });
+    for (const record of stale) {
+      await tx.auditLog.create({
+        data: {
+          actorLogin: actor,
+          action: "control-plane.workflow-bundle.approval.superseded",
+          entityType: "WorkflowBundleRegistryRecord",
+          entityId: record.id,
+          payload: {
+            registryId: REGISTRY_ID,
+            subject: record.subject,
+            sourceSha: record.sourceSha,
+            payloadDigest: record.payloadDigest,
+            supersededByRecordId: recordId,
+          },
+        },
+      });
+    }
+  }
+  // 유일 index가 경쟁을 판정한다. 다른 transaction이 이미 slot을 쥐고 있으면 P2002로
+  // 전체 transaction이 되돌아가고 활성 승인은 그대로 하나로 남는다. 경쟁에서 밀린 쪽은
+  // 원인을 알 수 있는 공개 코드로 실패한다.
+  try {
+    await tx.workflowBundleRegistryRecord.update({
+      where: { id: recordId },
+      data: {
+        activeApprovalSlot: ACTIVE_APPROVAL_SLOT,
+        supersededAt: null,
+        supersededByRecordId: null,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      fail(
+        "다른 승인이 활성 slot을 먼저 잡았습니다.",
+        "WORKFLOW_BUNDLE_ACTIVE_APPROVAL_CONFLICT",
+        409,
+      );
+    }
+    throw error;
+  }
+}
+
 export async function importWorkflowBundleApproval(input: {
   bundle: Record<string, unknown>;
   idempotencyKey: string;
@@ -727,6 +804,9 @@ export async function importWorkflowBundleApproval(input: {
   });
   if (replay) {
     assertReplayHash(replay.requestHash, requestHash);
+    if (replay.approvalState === "APPROVED") {
+      await client.$transaction((tx) => claimActiveApproval(tx, replay.id, input.actor));
+    }
     return { record: replay, duplicate: true };
   }
   const candidateRecord = await client.workflowBundleRegistryRecord.findFirst({
@@ -798,6 +878,7 @@ export async function importWorkflowBundleApproval(input: {
           },
         },
       });
+      await claimActiveApproval(tx, created.id, input.actor);
       return created;
     });
   } catch (error) {
@@ -807,6 +888,9 @@ export async function importWorkflowBundleApproval(input: {
       });
       if (concurrent) {
         assertReplayHash(concurrent.requestHash, requestHash);
+        if (concurrent.approvalState === "APPROVED") {
+          await client.$transaction((tx) => claimActiveApproval(tx, concurrent.id, input.actor));
+        }
         return { record: concurrent, duplicate: true };
       }
     }
@@ -940,6 +1024,18 @@ export async function readWorkflowBundleRegistryRecords(
   });
 }
 
+/**
+ * 활성 승인은 registry 유일 slot을 쥔 기록 하나다. 목록을 받아 상태로 거르면 조회 상한
+ * 때문에 조용히 놓칠 수 있으므로 slot으로 바로 찾는다.
+ */
+export async function readActiveApprovedWorkflowBundleRecord(
+  client: WorkflowBundleRegistryClient = prisma,
+) {
+  return client.workflowBundleRegistryRecord.findFirst({
+    where: { registryId: REGISTRY_ID, activeApprovalSlot: ACTIVE_APPROVAL_SLOT },
+  });
+}
+
 export function publicWorkflowBundleRegistryRecord(record: {
   id: string;
   approvalState: "CANDIDATE" | "APPROVED";
@@ -953,6 +1049,9 @@ export function publicWorkflowBundleRegistryRecord(record: {
   artifactId: bigint | null;
   artifactDigest: string | null;
   createdAt: Date;
+  activeApprovalSlot: string | null;
+  supersededAt: Date | null;
+  supersededByRecordId: string | null;
 }) {
   return {
     id: record.id,
@@ -967,6 +1066,9 @@ export function publicWorkflowBundleRegistryRecord(record: {
     artifactId: record.artifactId?.toString() ?? null,
     artifactDigest: record.artifactDigest,
     createdAt: record.createdAt.toISOString(),
+    activeApproval: record.activeApprovalSlot !== null,
+    supersededAt: record.supersededAt?.toISOString() ?? null,
+    supersededByRecordId: record.supersededByRecordId,
   };
 }
 

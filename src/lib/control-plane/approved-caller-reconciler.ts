@@ -6,7 +6,7 @@ import {
   resolveWorkflowBindingForRepository,
 } from "@/lib/control-plane/service";
 import {
-  readWorkflowBundleRegistryRecords,
+  readActiveApprovedWorkflowBundleRecord,
   verifyApprovedBundle,
 } from "@/lib/control-plane/workflow-bundle-v5-registry";
 
@@ -97,23 +97,16 @@ export async function planApprovedCallerReconciliation(input: {
 }, client: ReconcilerClient = prisma,
   dependencies: ApprovedCallerReconcilerDependencies,
 ): Promise<ApprovedCallerReconciliationPlan> {
-  const approvedRecords = (await readWorkflowBundleRegistryRecords(null, client))
-    .filter((record) => record.approvalState === "APPROVED");
-  if (approvedRecords.length === 0) {
+  // 활성 승인은 registry 유일 slot을 쥔 기록 하나다. 물러난 승인도 기록으로는 남으므로
+  // 상태만 보고 고르면 승인 사이클을 돌 때마다 활성 승인이 늘어난 것처럼 보인다.
+  const record = await readActiveApprovedWorkflowBundleRecord(client);
+  if (!record) {
     throw new ControlPlaneError(
       "승인된 WorkflowBundle이 없습니다.",
       409,
       "NO_APPROVED_WORKFLOW_BUNDLE",
     );
   }
-  if (approvedRecords.length > 1) {
-    throw new ControlPlaneError(
-      "승인된 WorkflowBundle이 하나가 아닙니다.",
-      409,
-      "AMBIGUOUS_APPROVED_WORKFLOW_BUNDLE",
-    );
-  }
-  const record = approvedRecords[0]!;
   const verify = dependencies.verifyApprovedBundle ?? verifyApprovedBundle;
   try {
     verify(record.bundle, dependencies.trustedApprovalKeysJson);

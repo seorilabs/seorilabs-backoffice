@@ -3039,6 +3039,9 @@ export async function resolveBuildRuntimeManifest(input: {
       workflowExecutionSha: input.identity.workflowBundleSha,
       payloadDigest: workflowBundlePayloadDigest,
       approvalState: workflowBundleApprovalState,
+      // 물러난 승인은 registry에 기록으로 남지만 더 이상 build 권한을 주지 않는다.
+      // 상태만 보면 앱 설정이 이전 번들을 가리키는 동안 물러난 번들로 빌드된다.
+      ...(workflowBundleApprovalState === "APPROVED" ? { supersededAt: null } : {}),
     },
   });
   if (
@@ -3047,6 +3050,7 @@ export async function resolveBuildRuntimeManifest(input: {
     || registry.workflowExecutionSha !== input.identity.workflowBundleSha
     || registry.payloadDigest !== workflowBundlePayloadDigest
     || registry.approvalState !== workflowBundleApprovalState
+    || (workflowBundleApprovalState === "APPROVED" && registry.supersededAt !== null)
   ) {
     throw new ControlPlaneError(
       "Config와 분리된 immutable WorkflowBundle registry readback이 없습니다.",
