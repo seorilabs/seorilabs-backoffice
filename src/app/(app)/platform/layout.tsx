@@ -5,6 +5,7 @@ const links = [
   { href: "/platform/auth", label: "인증" },
   { href: "/platform/iap", label: "IAP" },
   { href: "/platform/ads", label: "Ads" },
+  { href: "/platform/updates", label: "업데이트" },
 ] as const;
 
 export default function PlatformLayout({

@@ -43,3 +43,9 @@ export {
   type PlatformPresenceViewProps,
 } from "./PlatformPresencePanel";
 export { PlatformAdsConsole, type PlatformAdsApp } from "./PlatformAdsConsole";
+export {
+  PlatformVersionDistributionView,
+  UNKNOWN_VERSION_WARN_SHARE,
+  type PlatformVersionDistributionState,
+  type PlatformVersionDistributionViewProps,
+} from "./PlatformVersionDistribution";
