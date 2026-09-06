@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildDeployAllAppStoreInputs,
   buildDeployAllGooglePlayInputs,
@@ -308,4 +309,14 @@ export async function dispatchMarketDeployAtTag(opts: {
 }): Promise<MarketDeployOutcome> {
   const plan = await planMarketDeploy(opts);
   return executeMarketDeployPlan({ plan, dispatcher: opts.dispatcher });
+}
+
+/** 자유 입력 원문은 감사에 복제하지 않고 확정된 입력 전체의 동일성을 기록한다. */
+export function workflowInputsAudit(inputs: Record<string, string> | undefined) {
+  if (!inputs) return { workflowInputKeys: [], workflowInputsDigest: null };
+  const entries = Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b, "en"));
+  return {
+    workflowInputKeys: entries.map(([key]) => key),
+    workflowInputsDigest: `sha256:${createHash("sha256").update(JSON.stringify(entries)).digest("hex")}`,
+  };
 }

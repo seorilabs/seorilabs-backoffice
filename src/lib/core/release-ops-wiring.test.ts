@@ -145,6 +145,7 @@ test("배포 audit payload 는 검증된 SHA 와 실제 실행 결과만 기록�
   const deploy = bodyOf(source(RELEASE_OPS), "dispatchMarketDeploy");
   const payload = deploy.slice(deploy.indexOf("await recordReleaseAudit("), deploy.indexOf("return {", deploy.indexOf("await recordReleaseAudit(")));
 
+  assert.match(payload, /workflowInputsAudit\(plan\.github\?\.inputs\)/);
   assert.match(payload, /tag: result\.authority\.tag/);
   assert.match(payload, /sha: result\.sha/);
   assert.match(payload, /authority: result\.authority\.kind/);

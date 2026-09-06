@@ -358,3 +358,14 @@ test("추가 caller 입력은 선언된 값만 전달하고 릴리스·마켓 �
   }
   assert.equal(h.dispatched.length, 0, "preflight는 외부 workflow를 실행하지 않는다");
 });
+
+
+test("확정 workflow 입력은 순서와 무관한 digest로 구분하고 원문을 감사에 복제하지 않는다", async () => {
+  const { workflowInputsAudit } = await import("./release-orchestrator");
+  const a = workflowInputsAudit({ release_tag: "v1.2.3", build_flavor: "private-input" });
+  assert.deepEqual(a, workflowInputsAudit({ build_flavor: "private-input", release_tag: "v1.2.3" }));
+  assert.notEqual(a.workflowInputsDigest, workflowInputsAudit({ release_tag: "v1.2.3", build_flavor: "changed" }).workflowInputsDigest);
+  assert.doesNotMatch(JSON.stringify(a), /private-input/);
+  assert.deepEqual(a.workflowInputKeys, ["build_flavor", "release_tag"]);
+  assert.equal(workflowInputsAudit(undefined).workflowInputsDigest, null);
+});

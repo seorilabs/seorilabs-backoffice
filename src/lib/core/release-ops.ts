@@ -61,6 +61,7 @@ import {
   createReleaseTagAtSource,
   executeMarketDeployPlan,
   planMarketDeploy,
+  workflowInputsAudit,
   previewStableRelease,
   type MarketDispatchPort,
   type ReleaseAuthorityPort,
@@ -362,6 +363,7 @@ export async function dispatchMarketDeploy(opts: {
   const result = await executeMarketDeployPlan({ plan, dispatcher });
 
   await recordReleaseAudit({ ...opts, tag: result.authority.tag }, "release.deploy.dispatch", {
+    ...workflowInputsAudit(plan.github?.inputs),
     target: opts.target,
     tag: result.authority.tag,
     // 검증된 태그 SHA 와 실제 dispatch 결과만 남긴다.
