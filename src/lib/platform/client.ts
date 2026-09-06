@@ -112,6 +112,8 @@ export interface PlatformOrder {
   purchasedAt: string;
   observedAt: string;
   tombstone: boolean;
+  isTestPurchase?: boolean | null;
+  providerOrderIdPresent?: boolean | null;
 }
 
 export interface PlatformEntitlementSource {
@@ -657,6 +659,11 @@ function validateOrder(value: unknown): PlatformOrder {
   if (!isRecord(value) || typeof value.tombstone !== "boolean") {
     return invalidPlatformResponse("플랫폼 주문 응답 형식이 올바르지 않습니다.");
   }
+  for (const key of ["isTestPurchase", "providerOrderIdPresent"] as const) {
+    if (value[key] !== undefined && value[key] !== null && typeof value[key] !== "boolean") {
+      return invalidPlatformResponse("플랫폼 주문의 결제 분류 형식이 올바르지 않습니다.");
+    }
+  }
   return {
     orderKey: requiredString(value, "orderKey"),
     appId: requiredString(value, "appId"),
@@ -668,6 +675,8 @@ function validateOrder(value: unknown): PlatformOrder {
     purchasedAt: requiredString(value, "purchasedAt"),
     observedAt: requiredString(value, "observedAt"),
     tombstone: value.tombstone,
+    isTestPurchase: typeof value.isTestPurchase === "boolean" ? value.isTestPurchase : null,
+    providerOrderIdPresent: typeof value.providerOrderIdPresent === "boolean" ? value.providerOrderIdPresent : null,
   };
 }
 

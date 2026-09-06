@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildDeployAllAppStoreInputs,
   buildDeployAllGooglePlayInputs,
@@ -180,6 +181,7 @@ export async function planMarketDeploy(opts: {
   target: DeployTarget;
   tag: string;
   memo?: string;
+  inputs?: Record<string, string>;
   iosViaXcodeCloud: boolean;
   source: ReleaseAuthorityPort;
   dispatcher: MarketDispatchPort;
@@ -193,6 +195,9 @@ export async function planMarketDeploy(opts: {
 
   // APPSTORE 단독이 Xcode Cloud 로 가면 GH 워크플로는 쓰지 않는다.
   const usesGithub = !(opts.iosViaXcodeCloud && opts.target === "APPSTORE");
+  if (!usesGithub && Object.keys(opts.inputs ?? {}).length > 0) {
+    authorityError("Xcode Cloud 직접 실행에는 GitHub workflow 입력을 전달할 수 없습니다.");
+  }
 
   let github: MarketDeployPlan["github"] = null;
   if (usesGithub) {
@@ -236,6 +241,15 @@ export async function planMarketDeploy(opts: {
       );
     }
 
+    for (const [name, value] of Object.entries(opts.inputs ?? {})) {
+      if (name === "__proto__" || typeof value !== "string" || !declared.inputNames.has(name)) {
+        authorityError(`workflow가 선언한 문자열 입력만 전달할 수 있습니다: ${name}`);
+      }
+      if (Object.hasOwn(inputs, name) && inputs[name] !== value) {
+        authorityError(`릴리스 권한과 마켓 정책으로 고정된 입력을 덮어쓸 수 없습니다: ${name}`);
+      }
+      inputs[name] = value;
+    }
     const undeclared = Object.keys(inputs).filter((name) => !declared.inputNames.has(name));
     if (undeclared.length > 0) {
       authorityError(
@@ -288,10 +302,21 @@ export async function dispatchMarketDeployAtTag(opts: {
   target: DeployTarget;
   tag: string;
   memo?: string;
+  inputs?: Record<string, string>;
   iosViaXcodeCloud: boolean;
   source: ReleaseAuthorityPort;
   dispatcher: MarketDispatchPort;
 }): Promise<MarketDeployOutcome> {
   const plan = await planMarketDeploy(opts);
   return executeMarketDeployPlan({ plan, dispatcher: opts.dispatcher });
+}
+
+/** 자유 입력 원문은 감사에 복제하지 않고 확정된 입력 전체의 동일성을 기록한다. */
+export function workflowInputsAudit(inputs: Record<string, string> | undefined) {
+  if (!inputs) return { workflowInputKeys: [], workflowInputsDigest: null };
+  const entries = Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b, "en"));
+  return {
+    workflowInputKeys: entries.map(([key]) => key),
+    workflowInputsDigest: `sha256:${createHash("sha256").update(JSON.stringify(entries)).digest("hex")}`,
+  };
 }

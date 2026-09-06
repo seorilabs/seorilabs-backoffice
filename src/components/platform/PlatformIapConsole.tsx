@@ -3,6 +3,7 @@ import React from "react";
 import {
   deadLetterPresentation,
   environmentPresentation,
+  iapTransactionPresentation,
   writeStatePresentation,
   type PlatformWriteState,
 } from "./presentation";
@@ -24,6 +25,8 @@ export interface PlatformIapOrderView {
   purchasedAt?: string | null;
   observedAt?: string | null;
   tombstone?: boolean;
+  isTestPurchase?: boolean | null;
+  providerOrderIdPresent?: boolean | null;
 }
 
 export interface PlatformEntitlementSourceView {
@@ -144,7 +147,7 @@ export function PlatformIapConsole({
 
       <PlatformPanel
         title="최근 확인된 주문"
-        description="구매 시각은 마켓 거래 시각이고, 최근 확인은 Platform이 같은 주문을 마지막으로 검증한 시각입니다. 동일 주문 재확인은 새 IAP 지급 알림을 만들지 않습니다."
+        description="구매 시각과 마지막 관찰 시각을 구분합니다. active는 이용 권한 상태이며 판매 건수가 아닙니다. 테스트·운영자 기록·마켓 주문 없음·미확인 기록은 판매로 집계하지 않습니다. 같은 주문의 재확인은 새 구매가 아닙니다."
         trailing={<span className="text-xs text-neutral-400">{orders.length}건</span>}
       >
         {orders.length === 0 ? (
@@ -160,8 +163,10 @@ export function PlatformIapConsole({
                   <th className="px-3 py-2 font-medium">앱·마켓</th>
                   <th className="px-3 py-2 font-medium">사용자</th>
                   <th className="px-3 py-2 font-medium">Entitlement</th>
-                  <th className="px-3 py-2 font-medium">상태</th>
-                  <th className="px-3 py-2 font-medium">구매·최근 확인</th>
+                  <th className="px-3 py-2 font-medium">이용 권한 상태</th>
+                  <th className="px-3 py-2 font-medium">거래 구분</th>
+                  <th className="px-3 py-2 font-medium">구매 시각</th>
+                  <th className="px-3 py-2 font-medium">마지막 관찰 시각</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
@@ -190,11 +195,16 @@ export function PlatformIapConsole({
                         {order.tombstone ? "초기화됨" : order.state}
                       </PlatformBadge>
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      <PlatformBadge tone={iapTransactionPresentation(order).tone}>
+                        {iapTransactionPresentation(order).label}
+                      </PlatformBadge>
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
-                      <div>구매 {formatPlatformTimestamp(order.purchasedAt)}</div>
-                      <div className="mt-0.5 text-[11px] text-neutral-400">
-                        최근 확인 {formatPlatformTimestamp(order.observedAt)}
-                      </div>
+                      {formatPlatformTimestamp(order.purchasedAt?.startsWith("0001-") ? null : order.purchasedAt)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
+                      {formatPlatformTimestamp(order.observedAt)}
                     </td>
                   </tr>
                 ))}

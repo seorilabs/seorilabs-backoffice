@@ -143,8 +143,9 @@ test("ReleaseRecord 는 preflight 통과 뒤 마지막 Xcode Cloud 실행에서�
 // 인수조건: audit payload 에는 검증된 tag SHA 와 실제 dispatch 결과만 남는다.
 test("배포 audit payload 는 검증된 SHA 와 실제 실행 결과만 기록한다", () => {
   const deploy = bodyOf(source(RELEASE_OPS), "dispatchMarketDeploy");
-  const payload = deploy.slice(deploy.indexOf("payload: {"), deploy.indexOf("} as object"));
+  const payload = deploy.slice(deploy.indexOf("await recordReleaseAudit("), deploy.indexOf("return {", deploy.indexOf("await recordReleaseAudit(")));
 
+  assert.match(payload, /workflowInputsAudit\(plan\.github\?\.inputs\)/);
   assert.match(payload, /tag: result\.authority\.tag/);
   assert.match(payload, /sha: result\.sha/);
   assert.match(payload, /authority: result\.authority\.kind/);

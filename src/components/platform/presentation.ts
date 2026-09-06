@@ -154,3 +154,23 @@ export function overviewMessage(input: {
   }
   return "조회 전용 연결과 플랫폼 운영 상태를 확인했습니다.";
 }
+
+/** 원장 환경이나 active만으로 유상 결제를 추정하지 않는다. */
+export function iapTransactionPresentation(order: {
+  market: string;
+  state: string;
+  purchasedAt?: string | null;
+  isTestPurchase?: boolean | null;
+  providerOrderIdPresent?: boolean | null;
+}): PlatformPresentation {
+  if (order.market === "operator") return { label: "운영자 지급·회수", tone: "blue" };
+  if (order.isTestPurchase === true) return { label: "테스트 거래", tone: "amber" };
+  if (order.providerOrderIdPresent === false) return { label: "마켓 재무 주문 없음", tone: "neutral" };
+  const purchasedAt = Date.parse(order.purchasedAt ?? "");
+  if (order.isTestPurchase === false && order.providerOrderIdPresent === true
+    && Number.isFinite(purchasedAt) && purchasedAt > 0
+    && (order.state === "active" || order.state === "revoked")) {
+    return { label: order.state === "revoked" ? "실제 결제 · 취소·환불" : "실제 결제", tone: "green" };
+  }
+  return { label: "결제 여부 미확인", tone: "neutral" };
+}

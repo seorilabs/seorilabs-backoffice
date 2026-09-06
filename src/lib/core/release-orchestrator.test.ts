@@ -338,3 +338,34 @@ test("PLAY 배포는 tag 파생 version_name과 업로드 입력을 채운다", 
     version_name: "1.8.6",
   });
 });
+
+test("추가 caller 입력은 선언된 값만 전달하고 릴리스·마켓 정책을 덮어쓰지 않는다", async () => {
+  const h = harness({ declared: new Set([...ALL_INPUTS, "build_flavor"]) });
+  const plan = await planMarketDeploy({
+    repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+    source: h.source, dispatcher: h.dispatcher, inputs: { build_flavor: "standard" },
+  });
+  assert.equal(plan.github?.inputs.build_flavor, "standard");
+  assert.equal(plan.github?.inputs.release_tag, "v1.2.3");
+  for (const inputs of [
+    { unknown_input: "value" }, { release_tag: "v9.0.0" }, { track: "production" },
+    { upload: "false" }, { build_flavor: false } as unknown as Record<string, string>,
+  ]) {
+    await assert.rejects(planMarketDeploy({
+      repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+      source: h.source, dispatcher: h.dispatcher, inputs,
+    }), StableReleaseAuthorityError);
+  }
+  assert.equal(h.dispatched.length, 0, "preflight는 외부 workflow를 실행하지 않는다");
+});
+
+
+test("확정 workflow 입력은 순서와 무관한 digest로 구분하고 원문을 감사에 복제하지 않는다", async () => {
+  const { workflowInputsAudit } = await import("./release-orchestrator");
+  const a = workflowInputsAudit({ release_tag: "v1.2.3", build_flavor: "private-input" });
+  assert.deepEqual(a, workflowInputsAudit({ build_flavor: "private-input", release_tag: "v1.2.3" }));
+  assert.notEqual(a.workflowInputsDigest, workflowInputsAudit({ release_tag: "v1.2.3", build_flavor: "changed" }).workflowInputsDigest);
+  assert.doesNotMatch(JSON.stringify(a), /private-input/);
+  assert.deepEqual(a.workflowInputKeys, ["build_flavor", "release_tag"]);
+  assert.equal(workflowInputsAudit(undefined).workflowInputsDigest, null);
+});
