@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dependencyAuditExceptionSchema } from "@/lib/control-plane/contracts";
+import { configRevisionPayloadSchema, dependencyAuditExceptionSchema } from "@/lib/control-plane/contracts";
 
 const SOURCE_SHA = "229ecf91a82c58f9ad03b6eb0fa7c6cf1621d678";
 const LOCKFILE = "sha256:cb5b76ffefde7230fc26709dee426979a79de2953649d235343a1b44742b32df";
@@ -85,4 +85,35 @@ test("중앙 검증기가 요구하는 두 actionClass binding을 그대로 요�
     bindings: [{ actionClass: "STATIC_CHECK", sourceSha: SOURCE_SHA, lockfileSha256: LOCKFILE }],
   });
   assert.equal(dependencyAuditExceptionSchema.safeParse(onlyStatic).success, false);
+});
+
+test("ConfigRevision은 감사 사유의 문자 치환 흔적을 저장 전에 거부한다", () => {
+  for (const reason of [
+    "상위 패치가 없는 \uFFFD advisory",
+    "AppsInToss/Granite/Metro ???? transitive ip?image-size advisory 3?? ?? ?? ???",
+    "AppsInToss/Granite transitive ??? 3?? ?? ??? ??",
+    "??", "상위 패치 ?? 확인", "상위 패치가 ???.", "상위 패치가 ???, 재검토", "상위 패치(???)",
+  ]) {
+    const result = configRevisionPayloadSchema.safeParse({
+      schemaVersion: 1, markets: [], build: { dependencyAuditException: exception({ reason }) },
+    });
+    assert.equal(result.success, false, reason);
+    if (!result.success) assert.ok(result.error.issues.some(
+      (issue) => issue.path.join(".") === "build.dependencyAuditException.reason",
+    ));
+  }
+});
+
+test("ConfigRevision은 물음표를 쓴 정상 한글 사유를 보존한다", () => {
+  for (const reason of [
+    "상위 패치가 공개됐나요? 공개 전까지 승인한 예외를 유지한다.",
+    "패치 미공개? 다음 주에 재검토한다.",
+    "정말 패치가 없나요?? 현재는 상위 패치를 기다린다.",
+    "AppsInToss/Granite transitive 의존성 3건은 상위 패치가 없다.",
+  ]) {
+    const result = configRevisionPayloadSchema.parse({
+      schemaVersion: 1, markets: [], build: { dependencyAuditException: exception({ reason }) },
+    });
+    assert.equal(result.build?.dependencyAuditException?.reason, reason);
+  }
 });

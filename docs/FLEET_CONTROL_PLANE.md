@@ -174,10 +174,18 @@ bundle integrity를 다시 검증한 뒤 원장 쓰기와 같은 transaction에�
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
 support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.
-Happy Farm dependency audit 예외는 `build.dependencyAuditException` 단일 객체로만 저장하며, repository
-identity, static merge source와 Android base source, 각 lockfile digest, 정렬된 high advisory 3건과 만료를
-signed snapshot에 함께 고정한다. 해당 객체는 static check와 Android build-only manifest에만 전달하고
-source 또는 만료가 다르면 fail-closed한다. release, upload, review, public action 권한으로 해석하지 않는다.
+Happy Farm과 Saju Reader의 dependency audit 예외는 `build.dependencyAuditException` 단일 객체로 저장하며,
+repository identity, 감사 시점의 action별 source SHA와 lockfile digest, advisory 목록과 만료를 signed snapshot에
+고정한다. source가 이동하면 exact-SHA discovery가 정한 dependency root의 lockfile을 GitHub에서 읽고 SHA-256이
+같을 때만 해당 action의 실행용 source binding을 투영한다. ConfigRevision의 감사 시점 SHA와 예외 범위는
+바꾸지 않는다. 중앙 staging도 실제 checkout의 lockfile 해시를 다시 대조한다. 해시 불일치·파일 부재는
+`DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH`, provider 조회 오류는
+`DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED`로 막으며 identity·만료 검사는 그대로 적용한다.
+release, upload, review, public action 권한으로 해석하지 않는다.
+
+감사 사유는 U+FFFD 또는 단어 대신 들어간 연속 물음표처럼 문자 치환 흔적이 있으면 생성·활성화 validator에서
+거부한다. 손상된 기존 사유는 정상 revision의 UTF-8 원문과 대조해 사유만 복원한 새 ConfigRevision으로
+활성화한다. 기존 revision을 덮어쓰지 않으며 만료·advisory·binding을 함께 변경하지 않는다.
 ProjectBlueprint의 provisioner는 등록된 `shared/*` logical credential만 참조할 수 있다. 법적 승인,
 계정 소유권, 결제·세금·은행·계약, 심사 제출, 공개 배포, credential 값 또는 변경 및 모든 미정의 필드는
 fail-closed한다. compliance는 이 계약에서 `DRAFT`만 만들 수 있다. 이전 validator로 만들어진 DRAFT도

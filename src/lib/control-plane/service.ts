@@ -1,5 +1,6 @@
 import { Prisma, type ConfigRevision } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { readDependencyAuditLockfile, type DependencyAuditLockfileReader } from "@/lib/github/dependency-audit-lockfile";
 import {
   androidBuildBindingObservationSchema,
   configRevisionPayloadSchema,
@@ -52,14 +53,17 @@ export class ControlPlaneError extends Error {
 
 type DependencyAuditActionClass = DependencyAuditException["bindings"][number]["actionClass"];
 
-function resolveDependencyAuditException(input: {
+async function resolveDependencyAuditException(input: {
   exception: DependencyAuditException | undefined;
   actionClass: DependencyAuditActionClass;
   repositoryId: string;
   fullName: string;
   applicationSourceSha: string;
+  dependencyRoot: string;
+  packageManager: "npm" | "pnpm" | null;
+  readLockfileSha256?: DependencyAuditLockfileReader;
   now: Date;
-}): DependencyAuditException | undefined {
+}): Promise<DependencyAuditException | undefined> {
   if (!input.exception) return undefined;
   if (!Number.isFinite(input.now.getTime())) {
     throw new ControlPlaneError(
@@ -81,7 +85,7 @@ function resolveDependencyAuditException(input: {
   const binding = input.exception.bindings.find(
     (candidate) => candidate.actionClass === input.actionClass,
   );
-  if (!binding || binding.sourceSha !== input.applicationSourceSha) {
+  if (!binding) {
     throw new ControlPlaneError(
       "dependency audit 예외의 exact source binding이 runtime 요청과 일치하지 않습니다.",
       409,
@@ -96,7 +100,36 @@ function resolveDependencyAuditException(input: {
       "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED",
     );
   }
-  return input.exception;
+  if (binding.sourceSha === input.applicationSourceSha) return input.exception;
+  let lockfileSha256: string | null;
+  try {
+    lockfileSha256 = await (input.readLockfileSha256 ?? readDependencyAuditLockfile)({
+      repositoryId: input.repositoryId,
+      fullName: input.fullName,
+      sourceSha: input.applicationSourceSha,
+      dependencyRoot: input.dependencyRoot,
+      packageManager: input.packageManager,
+    });
+  } catch {
+    throw new ControlPlaneError(
+      "감사 대상 lockfile의 실제 내용을 확인할 수 없습니다.",
+      503,
+      "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED",
+    );
+  }
+  if (lockfileSha256 !== binding.lockfileSha256) {
+    throw new ControlPlaneError(
+      "감사 예외의 lockfile digest가 실행 대상 source와 일치하지 않습니다.",
+      409,
+      "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+    );
+  }
+  // 원본 ConfigRevision의 감사 시점 SHA는 보존한다. 동일 lockfile을 확인한 실행용
+  // binding만 투영하며, 중앙 staging도 실제 checkout의 lockfile digest를 다시 검사한다.
+  const resolved = structuredClone(input.exception);
+  resolved.bindings.find((candidate) => candidate.actionClass === input.actionClass)!.sourceSha
+    = input.applicationSourceSha;
+  return resolved;
 }
 
 export const MAX_OBSERVATION_FUTURE_SKEW_MS = 5 * 60 * 1_000;
@@ -2609,6 +2642,7 @@ async function resolveStaticRuntimeFacts(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  readLockfileSha256?: DependencyAuditLockfileReader;
   now?: Date;
 }, client: Pick<
   typeof prisma,
@@ -2639,17 +2673,6 @@ async function resolveStaticRuntimeFacts(input: {
       "WORKFLOW_BUNDLE_NOT_APPROVED",
     );
   }
-  // STATIC_CHECK 예외는 ACTIVE 설정·discovery가 결합된 기본 브랜치 exact source
-  // (bindingSourceSha)에 묶인다. main 실행은 application source와 같고, 후보 PR 실행은
-  // merge 커밋이 아니라 PR base다. lockfile digest 결합은 중앙 staging이 별도로 강제한다.
-  const dependencyAuditException = resolveDependencyAuditException({
-    exception: configPayload.build.dependencyAuditException,
-    actionClass: "STATIC_CHECK",
-    repositoryId: input.selector.repositoryId,
-    fullName: app.repoFullName,
-    applicationSourceSha: input.selector.bindingSourceSha,
-    now: input.now ?? new Date(),
-  });
 
   const discovery = await client.discoveryObservation.findFirst({
     where: {
@@ -2704,6 +2727,17 @@ async function resolveStaticRuntimeFacts(input: {
     }),
     commandDirectory: workflowCaller.workingDirectory,
   };
+  const dependencyAuditException = await resolveDependencyAuditException({
+    exception: configPayload.build.dependencyAuditException,
+    actionClass: "STATIC_CHECK",
+    repositoryId: input.selector.repositoryId,
+    fullName: app.repoFullName,
+    applicationSourceSha: input.selector.bindingSourceSha,
+    dependencyRoot: workflowDirectories.workspaceRoot,
+    packageManager: workflowCaller.packageManager,
+    readLockfileSha256: input.readLockfileSha256,
+    now: input.now ?? new Date(),
+  });
   const staticBinding: StaticRuntimeBinding = workflowCaller.profile === "godot"
     ? {
         ...workflowDirectories,
@@ -2857,6 +2891,7 @@ export async function resolveStaticRuntimeManifest(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  readLockfileSha256?: DependencyAuditLockfileReader;
   now?: Date;
 }, client: Pick<
   typeof prisma,
@@ -2926,6 +2961,7 @@ export async function resolveStaticRuntimeManifest(input: {
     signingKey: input.signingKey,
     snapshotSignatureKeyId: input.snapshotSignatureKeyId,
     snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+    readLockfileSha256: input.readLockfileSha256,
     now: input.now,
   }, client);
 }
@@ -2936,6 +2972,7 @@ export async function resolveBuildRuntimeManifest(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  readLockfileSha256?: DependencyAuditLockfileReader;
   now?: Date;
 }, client: Pick<
   typeof prisma,
@@ -3023,14 +3060,7 @@ export async function resolveBuildRuntimeManifest(input: {
   const workflowBundleApprovalState = input.identity.mode === "RELEASE"
     ? "APPROVED"
     : input.identity.mode;
-  const dependencyAuditException = resolveDependencyAuditException({
-    exception: configPayload.build.dependencyAuditException,
-    actionClass: "ANDROID_BUILD_ONLY",
-    repositoryId: input.identity.repositoryId,
-    fullName: app.repoFullName,
-    applicationSourceSha: input.identity.applicationSourceSha,
-    now: input.now ?? new Date(),
-  });
+
   const registry = await client.workflowBundleRegistryRecord.findFirst({
     where: {
       registryId: "seorilabs-workflow-bundles-v5",
@@ -3116,6 +3146,17 @@ export async function resolveBuildRuntimeManifest(input: {
       "BUILD_WORKFLOW_PROFILE_MISMATCH",
     );
   }
+  const dependencyAuditException = await resolveDependencyAuditException({
+    exception: configPayload.build.dependencyAuditException,
+    actionClass: "ANDROID_BUILD_ONLY",
+    repositoryId: input.identity.repositoryId,
+    fullName: app.repoFullName,
+    applicationSourceSha: input.identity.applicationSourceSha,
+    dependencyRoot: buildBinding.dependencyRoot,
+    packageManager: buildBinding.packageManager,
+    readLockfileSha256: input.readLockfileSha256,
+    now: input.now ?? new Date(),
+  });
   if (!revision.snapshotDigest || !revision.snapshotSignature) {
     throw new ControlPlaneError(
       "Config snapshot 서명 provenance를 확인할 수 없습니다.",

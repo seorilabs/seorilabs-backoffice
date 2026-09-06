@@ -702,6 +702,14 @@ export async function importWorkflowBundleCandidate(input: {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const concurrent = await client.workflowBundleRegistryRecord.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
+      }) ?? await client.workflowBundleRegistryRecord.findUnique({
+        where: {
+          registryId_subject_payloadDigest: {
+            registryId: REGISTRY_ID,
+            subject,
+            payloadDigest: bundle.integrity.payloadDigest,
+          },
+        },
       });
       if (concurrent) {
         assertReplayHash(concurrent.requestHash, requestHash);
@@ -722,7 +730,7 @@ export async function importWorkflowBundleCandidate(input: {
  * 두 승인이 동시에 들어오면 서로의 insert를 보지 못해 둘 다 활성으로 commit된다. 마지막
  * 단계에서 유일 slot을 잡게 해 DB가 하나만 통과시키고 나머지는 P2002로 되돌린다.
  *
- * slot을 잡는 쪽을 활성으로 만들기 때문에 오래된 승인을 원래 idempotency key로 다시
+ * slot을 잡는 쪽을 활성으로 만들기 때문에 오래된 승인을 다른 idempotency key로 다시
  * 게시하면 그 승인이 다시 활성이 된다. 명시적인 롤백 수단이다.
  */
 async function claimActiveApproval(
@@ -885,6 +893,14 @@ export async function importWorkflowBundleApproval(input: {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const concurrent = await client.workflowBundleRegistryRecord.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
+      }) ?? await client.workflowBundleRegistryRecord.findUnique({
+        where: {
+          registryId_subject_payloadDigest: {
+            registryId: REGISTRY_ID,
+            subject: verified.envelope.subject,
+            payloadDigest: verified.approved.integrity.payloadDigest,
+          },
+        },
       });
       if (concurrent) {
         assertReplayHash(concurrent.requestHash, requestHash);
