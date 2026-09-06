@@ -123,6 +123,19 @@ test("PR 본문은 adapter 예약 지시를 담지 않는다", () => {
   assert.doesNotMatch(built.mutation.body, /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#\d+/iu);
 });
 
+test("caller PR에 네 인수조건과 검증 경로를 고정한다", () => {
+  const body = task().mutation.body;
+  assert.match(body, /## 인수조건/u);
+  assert.equal(body.match(/^- \[ \]/gmu)?.length, 4);
+  assert.ok(body.includes(BUNDLE_SHA));
+  assert.ok(body.includes(APPROVED_CALLER_PATH));
+  for (const requirement of [
+    "최소 권한", "full SHA 고정", "허용된 trigger",
+    "org-contract / Resolve Fleet Binding", "## 검증 근거",
+    "generateStaticCallerV5", "tests/fleet-static-scripts.test.mjs", "mutation 단계 원장",
+  ]) assert.ok(body.includes(requirement), requirement);
+});
+
 /**
  * 실행기가 계약에서 만든 caller로 계산한 intent digest는 adapter가 authorize에 쓰는 값과
  * 같아야 한다. 두 값이 갈리면 STEP_LEDGER binding이 열리지 않는다.

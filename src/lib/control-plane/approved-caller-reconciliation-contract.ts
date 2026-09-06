@@ -173,6 +173,20 @@ export function approvedCallerMutationTexts(input: {
       `승인된 WorkflowBundle \`${input.approvedBundleSourceSha}\`(registry \`${input.registryRecordId}\`)이 지정한 중앙 워크플로를 이 저장소의 \`${input.callerPath}\`에 반영합니다.`,
       `ACTIVE 설정 revision ${input.configRevision}이 결합한 resolved binding에서 중앙 계약이 caller 본문을 만들었고, 이 PR은 그 파일 하나만 바꿉니다.`,
       "마켓 업로드, 심사 제출, 공개 배포는 이 변경에 포함되지 않습니다.",
+      "## 인수조건",
+      [
+        `- [ ] caller가 승인 번들의 중앙 워크플로 SHA \`${input.approvedBundleSourceSha}\`를 정확히 가리킨다.`,
+        `- [ ] 변경 파일은 \`${input.callerPath}\` 하나다.`,
+        "- [ ] caller는 승인 번들의 static caller 계약을 따른다 — 최소 권한, full SHA 고정, 허용된 trigger만 사용한다.",
+        "- [ ] `org-contract / Resolve Fleet Binding` 체크가 제어 평면의 resolved binding 결합을 확인하고 통과한다.",
+      ].join("\n"),
+      "## 검증 근거",
+      [
+        "- caller 본문은 중앙 계약의 `generateStaticCallerV5`로 생성한다.",
+        "- caller 형태는 `seorilabs/.github`의 `tests/fleet-static-scripts.test.mjs`로 검증한다.",
+        "- 변경 파일 하나와 실제 반영 결과는 mutation 단계 원장과 GitHub readback으로 대조한다.",
+        "- 이 PR의 resolved binding 결합 결과는 `org-contract / Resolve Fleet Binding` 체크에서 확인한다.",
+      ].join("\n"),
     ].join("\n\n"),
     commitMessage: "ci: 승인된 중앙 워크플로 caller를 갱신한다",
   };
