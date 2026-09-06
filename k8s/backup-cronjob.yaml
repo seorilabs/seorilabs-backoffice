@@ -1,9 +1,13 @@
 # 백오피스 DB의 일 1회 논리 백업. PVC는 k8s/backup-pvc.yaml에서 별도로 관리한다.
+# 전용 catalog 원본·SELECT grant·restore rehearsal을 준비한 뒤에만 배포한다.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: backoffice-db-backup
   namespace: platform
+  annotations:
+    seorilabs.dev/credential-logical-id: shared/backoffice/db-backup
+    seorilabs.dev/db-principal: backoffice_backup
 spec:
   schedule: "0 3 * * *"
   timeZone: Asia/Seoul
@@ -43,12 +47,12 @@ spec:
                   CHECKSUM_PART="${CHECKSUM}.partial"
                   trap 'rm -f "${PART}" "${CHECKSUM_PART}"' EXIT
                   echo "dumping to an atomic temporary file"
-                  # app/backup principal에는 TRIGGER 권한을 주지 않는다. MySQL logical dump가
+                  # 전용 backup principal에는 TRIGGER 권한을 주지 않는다. MySQL logical dump가
                   # trigger를 조용히 누락하는 상태를 암묵적으로 두지 않고 제외를 명시한다.
                   # restore rehearsal은 exact source 계약을 ephemeral MySQL에만 재구성한다.
                   MYSQL_PWD="$(< /run/secrets/db-password)" \
-                    mysqldump --single-transaction --no-tablespaces --skip-triggers \
-                      -h mysql.data.svc.cluster.local -u backoffice backoffice \
+                    mysqldump --single-transaction --no-tablespaces --skip-triggers --set-gtid-purged=OFF \
+                      -h mysql.data.svc.cluster.local -u backoffice_backup backoffice \
                     | gzip > "${PART}"
                   gzip -t "${PART}"
                   sha256sum "${PART}" | awk '{print $1}' > "${CHECKSUM_PART}"
@@ -91,7 +95,7 @@ spec:
                 claimName: backoffice-backup
             - name: db-password
               secret:
-                secretName: backoffice-secrets
+                secretName: backoffice-db-backup-secrets
                 defaultMode: 0440
                 items:
                   - key: DB_PASSWORD
