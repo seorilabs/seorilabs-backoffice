@@ -63,7 +63,7 @@ test("buildDayBreakdown: 데이터 없는 날은 0/빈 배열", () => {
     dauAndroid: 0,
     dauIos: 0,
     dauWeb: 0,
-    raw: { countries: [], osVersions: [], devices: [] },
+    raw: { countries: [], osVersions: [], devices: [], appVersions: [] },
   });
 });
 
@@ -171,4 +171,21 @@ test("engagementRate: engaged/dau %, dau 0 이면 null", () => {
   assert.equal(engagementRate(50, 100), 50);
   assert.equal(engagementRate(1, 3), 33.3); // 반올림 소수 1자리
   assert.equal(engagementRate(5, 0), null);
+});
+
+// 업데이트 유도가 실제로 먹혔는지는 앱 버전별 DAU 추세로만 답할 수 있다.
+// presence 분포는 최근 150초 창이라 과거를 복원할 수 없다.
+test("buildDayBreakdown: 앱 버전 분해를 top-N 으로 담는다", () => {
+  const bd = buildDayBreakdown(
+    {
+      platform: { ANDROID: 10 },
+      app_version: { "1.5.0": 8, "1.4.0": 3, "(unknown)": 1 },
+    },
+    2,
+  );
+
+  assert.deepEqual(bd.raw.appVersions, [
+    { k: "1.5.0", dau: 8 },
+    { k: "1.4.0", dau: 3 },
+  ]);
 });

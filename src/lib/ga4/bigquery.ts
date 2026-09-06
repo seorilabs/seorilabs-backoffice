@@ -233,9 +233,13 @@ export function mapAdProbeRow(r: Record<string, unknown>): Ga4AdProbe {
 }
 
 /**
- * 날짜×차원별 DAU 분해(플랫폼/국가/기기카테고리/OS버전). start/end 는 "YYYYMMDD".
- * events 를 한 번 스캔(CTE)해 4개 차원을 UNION ALL 로 집계한다. DAU 는 차원별 고유
+ * 날짜×차원별 DAU 분해(플랫폼/국가/기기카테고리/OS버전/앱버전). start/end 는 "YYYYMMDD".
+ * events 를 한 번 스캔(CTE)해 5개 차원을 UNION ALL 로 집계한다. DAU 는 차원별 고유
  * user_pseudo_id 라 차원마다 GROUP BY 가 필요하다(단순 합산 불가).
+ *
+ * 앱버전은 "권장 안내를 켠 뒤 최신 버전 비중이 실제로 올랐나"를 답한다.
+ * presence 분포는 최근 150초 창이라 추세를 못 준다 -- 만료된 행이 삭제되고
+ * 과거 시점은 복원할 수 없다.
  */
 export function buildDailyBreakdownsSql(
   target: Ga4Target,
@@ -264,7 +268,8 @@ export function buildDailyBreakdownsSql(
             WHEN STARTS_WITH(IFNULL(device.operating_system_version, ''), device.operating_system) THEN device.operating_system_version
             ELSE CONCAT(device.operating_system, ' ', IFNULL(device.operating_system_version, ''))
           END
-        ), ''), '(unknown)') AS os_dim
+        ), ''), '(unknown)') AS os_dim,
+        IFNULL(NULLIF(app_info.version, ''), '(unknown)') AS app_version_dim
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     )
@@ -272,7 +277,8 @@ export function buildDailyBreakdownsSql(
     SELECT date, 'platform' AS dim, platform AS val, COUNT(DISTINCT uid) AS dau FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'country', country, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
-    UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+    UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'app_version', app_version_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
 }
 
 export async function queryDailyBreakdowns(

@@ -69,3 +69,18 @@ test("buildDailyBreakdownsSql: event platform을 GA4 stream platform보다 우�
   assert.match(sql, /slotmachine-game-495cc\.analytics_547294653\.events_\*/);
   assert.match(sql, /_TABLE_SUFFIX BETWEEN '20260801' AND '20260808'/);
 });
+
+// 앱 버전 분해가 빠지면 "권장 안내를 켠 뒤 최신 버전 비중이 올랐나"를
+// 답할 방법이 없다. presence 분포는 최근 150초 창이라 추세를 못 준다.
+test("buildDailyBreakdownsSql: 앱 버전 차원을 같은 스캔에서 집계한다", () => {
+  const sql = buildDailyBreakdownsSql(
+    { firebaseProject: "happy-farm-tycoon", dataset: "analytics_1" },
+    "20260801",
+    "20260808",
+  );
+
+  assert.match(sql, /IFNULL\(NULLIF\(app_info\.version, ''\), '\(unknown\)'\) AS app_version_dim/);
+  assert.match(sql, /UNION ALL SELECT date, 'app_version', app_version_dim/);
+  // base CTE를 한 번만 스캔한다. 차원이 늘어도 events_* 스캔은 하나다.
+  assert.equal((sql.match(/FROM `happy-farm-tycoon/g) ?? []).length, 1);
+});
