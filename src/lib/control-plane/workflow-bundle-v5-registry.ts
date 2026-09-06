@@ -711,6 +711,50 @@ export async function importWorkflowBundleCandidate(input: {
   return { record, duplicate: false };
 }
 
+/**
+ * 승인 registry의 활성 WorkflowBundle은 하나다. 새 승인이 자리를 잡으면 직전 승인을
+ * SUPERSEDED로 물러나게 한다. 물러남을 남기지 않으면 승인이 둘 이상 남아 caller 반증이
+ * 어느 번들을 따라야 하는지 결정하지 못하고 fail-closed한다.
+ *
+ * 같은 승인을 다시 게시해도 같은 결과가 되도록 이미 물러난 기록은 건드리지 않는다.
+ */
+async function supersedePriorApprovals(
+  tx: Prisma.TransactionClient,
+  keepRecordId: string,
+  actor: string,
+): Promise<void> {
+  const stale = await tx.workflowBundleRegistryRecord.findMany({
+    where: {
+      registryId: REGISTRY_ID,
+      approvalState: "APPROVED",
+      id: { not: keepRecordId },
+    },
+    select: { id: true, subject: true, sourceSha: true, payloadDigest: true },
+  });
+  if (stale.length === 0) return;
+  await tx.workflowBundleRegistryRecord.updateMany({
+    where: { id: { in: stale.map((record) => record.id) } },
+    data: { approvalState: "SUPERSEDED" },
+  });
+  for (const record of stale) {
+    await tx.auditLog.create({
+      data: {
+        actorLogin: actor,
+        action: "control-plane.workflow-bundle.approval.superseded",
+        entityType: "WorkflowBundleRegistryRecord",
+        entityId: record.id,
+        payload: {
+          registryId: REGISTRY_ID,
+          subject: record.subject,
+          sourceSha: record.sourceSha,
+          payloadDigest: record.payloadDigest,
+          supersededByRecordId: keepRecordId,
+        },
+      },
+    });
+  }
+}
+
 export async function importWorkflowBundleApproval(input: {
   bundle: Record<string, unknown>;
   idempotencyKey: string;
@@ -727,6 +771,9 @@ export async function importWorkflowBundleApproval(input: {
   });
   if (replay) {
     assertReplayHash(replay.requestHash, requestHash);
+    if (replay.approvalState === "APPROVED") {
+      await client.$transaction((tx) => supersedePriorApprovals(tx, replay.id, input.actor));
+    }
     return { record: replay, duplicate: true };
   }
   const candidateRecord = await client.workflowBundleRegistryRecord.findFirst({
@@ -798,6 +845,7 @@ export async function importWorkflowBundleApproval(input: {
           },
         },
       });
+      await supersedePriorApprovals(tx, created.id, input.actor);
       return created;
     });
   } catch (error) {
@@ -807,6 +855,9 @@ export async function importWorkflowBundleApproval(input: {
       });
       if (concurrent) {
         assertReplayHash(concurrent.requestHash, requestHash);
+        if (concurrent.approvalState === "APPROVED") {
+          await client.$transaction((tx) => supersedePriorApprovals(tx, concurrent.id, input.actor));
+        }
         return { record: concurrent, duplicate: true };
       }
     }
@@ -816,7 +867,7 @@ export async function importWorkflowBundleApproval(input: {
 }
 
 export function verifyWorkflowBundleRegistryReadback(input: {
-  approvalState: "CANDIDATE" | "APPROVED";
+  approvalState: "CANDIDATE" | "APPROVED" | "SUPERSEDED";
   registryId: string;
   subject: string;
   sourceSha: string;
@@ -942,7 +993,7 @@ export async function readWorkflowBundleRegistryRecords(
 
 export function publicWorkflowBundleRegistryRecord(record: {
   id: string;
-  approvalState: "CANDIDATE" | "APPROVED";
+  approvalState: "CANDIDATE" | "APPROVED" | "SUPERSEDED";
   sourceSha: string;
   workflowExecutionSha: string;
   payloadDigest: string;

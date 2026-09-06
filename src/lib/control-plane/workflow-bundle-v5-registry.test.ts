@@ -235,6 +235,20 @@ function memoryClient(seed: Array<Record<string, unknown>> = []) {
     async findFirst({ where }: { where: Record<string, unknown> }) {
       return rows.find((row) => Object.entries(where).every(([key, value]) => row[key] === value)) ?? null;
     },
+    async findMany({ where }: { where: Record<string, unknown> }) {
+      return rows.filter((row) => Object.entries(where).every(([key, value]) => (
+        value !== null && typeof value === "object" && "not" in (value as Record<string, unknown>)
+          ? row[key] !== (value as { not: unknown }).not
+          : row[key] === value
+      )));
+    },
+    async updateMany(
+      { where, data }: { where: { id: { in: string[] } }; data: Record<string, unknown> },
+    ) {
+      const targets = rows.filter((row) => where.id.in.includes(row.id as string));
+      for (const row of targets) Object.assign(row, data);
+      return { count: targets.length };
+    },
     async create({ data }: { data: Record<string, unknown> }) {
       const row = {
         id: `registry-${rows.length + 1}`,
@@ -492,6 +506,124 @@ test("APPROVED import와 runtime readback은 candidate artifact, canonical Ed255
     (error) => error instanceof ControlPlaneError
       && error.code === "WORKFLOW_BUNDLE_REGISTRY_PROVENANCE_INVALID",
   );
+});
+
+function approvedSeedRow(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: "approved-previous",
+    registryId: "seorilabs-workflow-bundles-v5",
+    subject: `workflow-bundle-v5:${"a".repeat(40)}`,
+    approvalState: "APPROVED",
+    sourceSha: "a".repeat(40),
+    workflowExecutionSha: "a".repeat(40),
+    bundleVersion: "5.0.0",
+    payloadDigest: `sha256:${"1".repeat(64)}`,
+    candidateDigest: `sha256:${"2".repeat(64)}`,
+    contractDigestsDigest: `sha256:${"3".repeat(64)}`,
+    runtimeAssetDigestsDigest: `sha256:${"4".repeat(64)}`,
+    evidenceDigest: `sha256:${"5".repeat(64)}`,
+    approvalPayloadDigest: `sha256:${"6".repeat(64)}`,
+    approvalKeyId: "workflow-bundle-v5-test",
+    approvalPolicyRevision: "workflow-bundle-policy-v5",
+    bundle: {},
+    artifactRepository: null,
+    artifactWorkflowPath: null,
+    artifactRunId: null,
+    artifactId: null,
+    artifactDigest: null,
+    requestHash: "f".repeat(64),
+    idempotencyKey: "approved-import:previous",
+    createdAt: new Date(0),
+    ...overrides,
+  };
+}
+
+function candidateSeedRow(fixture: ReturnType<typeof approvedFixture>): Record<string, unknown> {
+  return {
+    id: "candidate-1",
+    registryId: "seorilabs-workflow-bundles-v5",
+    subject: `workflow-bundle-v5:${BUNDLE_SHA}`,
+    approvalState: "CANDIDATE",
+    sourceSha: BUNDLE_SHA,
+    workflowExecutionSha: BUNDLE_SHA,
+    bundleVersion: "5.0.0",
+    payloadDigest: (fixture.candidate.integrity as { payloadDigest: string }).payloadDigest,
+    candidateDigest: null,
+    contractDigestsDigest: (fixture.envelope as Record<string, string>).contractDigestsDigest,
+    runtimeAssetDigestsDigest: (fixture.envelope as Record<string, string>).runtimeAssetDigestsDigest,
+    evidenceDigest: null,
+    approvalPayloadDigest: null,
+    approvalKeyId: null,
+    approvalPolicyRevision: null,
+    bundle: fixture.candidate,
+    artifactRepository: "seorilabs/.github",
+    artifactWorkflowPath: ".github/workflows/workflow-bundle-v5-candidate.yml",
+    artifactRunId: 1n,
+    artifactId: 2n,
+    artifactDigest: `sha256:${"d".repeat(64)}`,
+    requestHash: "e".repeat(64),
+    idempotencyKey: "candidate:seed",
+    createdAt: new Date(),
+  };
+}
+
+test("새 승인은 직전 승인을 SUPERSEDED로 물러나게 하고 활성 승인을 하나로 남긴다", async () => {
+  const fixture = approvedFixture();
+  const previous = approvedSeedRow({});
+  const client = memoryClient([previous, candidateSeedRow(fixture)]);
+  const result = await importWorkflowBundleApproval({
+    bundle: fixture.approved,
+    idempotencyKey: "approved-import:supersede",
+    actor: "test:registry-publisher",
+  }, client as never, {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  });
+  assert.equal(result.record.approvalState, "APPROVED");
+  assert.equal(previous.approvalState, "SUPERSEDED");
+  assert.equal(
+    client.rows.filter((row) => row.approvalState === "APPROVED").length,
+    1,
+    "활성 승인은 하나여야 한다",
+  );
+  const superseded = client.audits.filter((audit) => (
+    (audit as { data: { action: string } }).data.action
+      === "control-plane.workflow-bundle.approval.superseded"
+  ));
+  assert.equal(superseded.length, 1);
+  assert.equal(
+    (superseded[0] as { data: { entityId: string; payload: { supersededByRecordId: string } } })
+      .data.payload.supersededByRecordId,
+    result.record.id,
+  );
+});
+
+test("같은 승인을 다시 게시해도 남아 있던 직전 승인이 물러난다", async () => {
+  const fixture = approvedFixture();
+  const previous = approvedSeedRow({});
+  const client = memoryClient([previous, candidateSeedRow(fixture)]);
+  const first = await importWorkflowBundleApproval({
+    bundle: fixture.approved,
+    idempotencyKey: "approved-import:replay",
+    actor: "test:registry-publisher",
+  }, client as never, {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  });
+  // 물러남이 replay 경로에서도 다시 수렴하는지 보기 위해 직전 승인을 되돌린다.
+  previous.approvalState = "APPROVED";
+  const replayed = await importWorkflowBundleApproval({
+    bundle: fixture.approved,
+    idempotencyKey: "approved-import:replay",
+    actor: "test:registry-publisher",
+  }, client as never, {
+    trustedApprovalKeysJson: fixture.trustedKeysJson,
+    async readCandidateArtifact() { throw new Error("not used"); },
+  });
+  assert.equal(replayed.duplicate, true);
+  assert.equal(replayed.record.id, first.record.id);
+  assert.equal(previous.approvalState, "SUPERSEDED");
+  assert.equal(client.rows.filter((row) => row.approvalState === "APPROVED").length, 1);
 });
 
 const NARROWED_SCOPE = (candidate: ReturnType<typeof candidateBundle>) => {
