@@ -92,7 +92,7 @@ test("ConfigRevision은 감사 사유의 문자 치환 흔적을 저장 전에 �
     "상위 패치가 없는 \uFFFD advisory",
     "AppsInToss/Granite/Metro ???? transitive ip?image-size advisory 3?? ?? ?? ???",
     "AppsInToss/Granite transitive ??? 3?? ?? ??? ??",
-    "??", "상위 패치 ?? 확인",
+    "??", "상위 패치 ?? 확인", "상위 패치가 ???.", "상위 패치가 ???, 재검토", "상위 패치(???)",
   ]) {
     const result = configRevisionPayloadSchema.safeParse({
       schemaVersion: 1, markets: [], build: { dependencyAuditException: exception({ reason }) },

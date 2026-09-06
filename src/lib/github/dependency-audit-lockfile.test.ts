@@ -42,7 +42,23 @@ test("lockfile 조회는 경로 탈출과 다른 repository identity를 허용�
       async getContent() { throw new Error("must not read content"); },
     } },
   };
-  for (const dependencyRoot of ["app", "../app", "app/../other", "/app", "app/./other"]) {
+  await assert.rejects(readDependencyAuditLockfile(input, client as never), /DEPENDENCY_AUDIT_LOCKFILE_READ_FAILED/u);
+  for (const dependencyRoot of ["../app", "app/../other", "/app", "app/./other"]) {
     assert.equal(await readDependencyAuditLockfile({ ...input, dependencyRoot }, client as never), null);
   }
+});
+
+test("provider 접근 거절을 파일 부재와 구분한다", async () => {
+  for (const status of [401, 403, 429, 500]) {
+    const client = { rest: { repos: {
+      async get() { throw Object.assign(new Error("provider error"), { status }); },
+    } } };
+    await assert.rejects(readDependencyAuditLockfile(input, client as never));
+  }
+  const missing = { rest: { repos: {
+    async get() { return { data: { id: 1250442131, full_name: input.fullName } }; },
+    async getCommit() { return { data: { sha: SOURCE_SHA } }; },
+    async getContent() { throw Object.assign(new Error("missing"), { status: 404 }); },
+  } } };
+  assert.equal(await readDependencyAuditLockfile(input, missing as never), null);
 });

@@ -31,5 +31,7 @@ export async function readDependencyAuditLockfile(
     allowedPaths: [path],
     maxBytes: SOURCE_OBSERVATION_ABSOLUTE_MAX_BYTES,
   });
-  return observation.status === "PRESENT" ? `sha256:${observation.contentSha256}` : null;
+  if (observation.status === "PRESENT") return `sha256:${observation.contentSha256}`;
+  if (observation.status === "ABSENT") return null;
+  throw new Error("DEPENDENCY_AUDIT_LOCKFILE_READ_FAILED");
 }

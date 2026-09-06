@@ -625,7 +625,7 @@ export const dependencyAuditExceptionSchema = z.object({
   reason: z.string().min(1).max(240).refine(
     (value) => value === value.trim()
       && !/[\u0000-\u001f\u007f]/u.test(value)
-      && !/\uFFFD|(?:^|\s)\?{2,}(?=\s|$)/u.test(value)
+      && !/\uFFFD|(?:^|[\s\p{Ps}\p{Pi}"'])\?{2,}(?=$|[\s\p{Pe}\p{Pf}.,;:!"'])/u.test(value)
       && !containsCredentialCandidate(value),
     "문자 치환 흔적이 없는 공개 가능한 단일행 사유가 필요합니다.",
   ),
