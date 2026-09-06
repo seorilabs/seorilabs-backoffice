@@ -573,7 +573,7 @@ function candidateSeedRow(fixture: ReturnType<typeof approvedFixture>): Record<s
   };
 }
 
-test("새 승인은 직전 승인을 SUPERSEDED로 물러나게 하고 활성 승인을 하나로 남긴다", async () => {
+test("새 승인은 직전 승인을 물러나게 하고 활성 승인을 하나로 남긴다", async () => {
   const fixture = approvedFixture();
   const previous = approvedSeedRow({});
   const client = memoryClient([previous, candidateSeedRow(fixture)]);
