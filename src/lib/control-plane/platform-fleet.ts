@@ -20,6 +20,7 @@ import {
 } from "@/lib/control-plane/automation-catalog";
 import { canonicalJson, jsonDigest, verifySnapshot, type JsonValue } from "@/lib/control-plane/json";
 import { loadExactManagedPlatformConsumers } from "@/lib/control-plane/platform-fleet-cohort";
+import { resolvePlatformOccurrenceReuse } from "@/lib/control-plane/platform-fleet-occurrence-reuse";
 import { platformFleetDisposition } from "@/lib/control-plane/platform-fleet-policy";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { assertObservationTime, ControlPlaneError } from "@/lib/control-plane/service";
@@ -413,14 +414,36 @@ async function enqueueSdkUpdatePlan(input: {
     include: { runs: true },
   });
   if (existing) {
-    const run = existing.runs[0];
-    if (!run || run.workKey !== input.workKey || existing.definitionId !== definition.id) {
+    const reuse = resolvePlatformOccurrenceReuse({
+      occurrenceDefinitionId: existing.definitionId,
+      expectedDefinitionId: definition.id,
+      runs: existing.runs,
+      workKey: input.workKey,
+    });
+    if (reuse.kind === "CONFLICT") {
       throw new ControlPlaneError("Platform Fleet occurrence가 다른 run에 사용되었습니다.", 409, "PLATFORM_OCCURRENCE_CONFLICT");
     }
-    if (run.status === "PENDING") {
-      await input.tx.agentRun.update({ where: { id: run.id }, data: { taskInput: jsonInput(input.task) } });
+    if (reuse.kind === "REUSE_RUN") {
+      const run = existing.runs[reuse.index]!;
+      if (run.status === "PENDING") {
+        await input.tx.agentRun.update({ where: { id: run.id }, data: { taskInput: jsonInput(input.task) } });
+      }
+      return run;
     }
-    return run;
+    return input.tx.agentRun.create({
+      data: {
+        occurrenceId: existing.id,
+        appId: input.app.id,
+        repoFullName: input.app.repoFullName,
+        issueState: null,
+        labels: ["autopilot", "platform"],
+        taskInput: jsonInput(input.task),
+        createsPr: true,
+        workKey: input.workKey,
+        priority: 1,
+        maxAttempts: 3,
+      },
+    });
   }
   const occurrence = await input.tx.automationOccurrence.create({
     data: {
