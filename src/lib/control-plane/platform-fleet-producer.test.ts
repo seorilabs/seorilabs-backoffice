@@ -543,3 +543,91 @@ test("공개 npm과 과거 GitHub Packages registry를 모두 받고 다른 regi
     );
   }
 });
+
+test("같은 상태를 다시 관측하면 observedAt이 움직여도 provider observation key가 함께 움직인다", async () => {
+  // provider observation의 request hash에는 observedAt이 들어간다. producer의
+  // idempotency key가 그것을 빼면, discovery가 같은 커밋·같은 payload를 다시
+  // 관측했을 때 key는 그대로인데 요청만 달라져 IDEMPOTENCY_CONFLICT가 난다.
+  // 그 상태가 되면 fleet reconcile 전체가 영구히 막힌다.
+  const value = fixtures();
+  const bytesByName = new Map<string, Buffer>([
+    ["platform-release.json", value.manifestBytes],
+    ["fleet-approved.json", value.approvalBytes],
+    [value.manifest.sdk.typescript.artifact.name, value.typescriptArtifact],
+    [value.manifest.sdk.gdscript.artifact.name, value.gdscriptArtifact],
+    [value.manifest.sdk.gdscript.checksumArtifact.name, value.checksumArtifact],
+  ]);
+  const assets = [...bytesByName].map(([name, bytes], index) => ({
+    id: index + 1,
+    name,
+    size: bytes.length,
+    digest: `sha256:${digest(bytes)}`,
+    createdAt: "2026-08-28T00:00:00.000Z",
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  }));
+  const lockIntegrity = `sha512-${createHash("sha512").update(value.typescriptArtifact).digest("base64")}`;
+
+  // 같은 커밋, 같은 payload. discovery가 관측한 시각만 다르다.
+  async function runWith(discoveryObservedAt: Date, discoveryObservationId: string) {
+    let recorded: Parameters<typeof recordProviderObservation>[0] | undefined;
+    const dependencies: PlatformFleetProducerDependencies = {
+      latestRelease: async () => ({
+        id: 99,
+        tagName: "v1.2.3",
+        tagSourceSha: SOURCE_SHA,
+        publishedAt: "2026-08-28T00:00:00.000Z",
+        draft: false,
+        prerelease: false,
+        assets,
+      }),
+      readAsset: async (asset) => bytesByName.get(asset.name)!,
+      listConsumers: async () => [{
+        repoId: 42n,
+        repoFullName: "seorilabs/sample-app",
+        engine: "RN",
+        sourceSha: SOURCE_SHA,
+        discoveryObservationId,
+        discoveryObservedAt,
+        platformConsumer: {
+          schemaVersion: 1,
+          sourceSha: SOURCE_SHA,
+          integration: "SDK",
+          artifactKind: "TYPESCRIPT",
+          observedVersion: "0.9.0",
+          observedDigest: null,
+          contractRevision: null,
+          evidenceDigest: "d".repeat(64),
+          lockIntegrity,
+        },
+      }],
+      recordObservation: (async (input: Parameters<typeof recordProviderObservation>[0]) => {
+        recorded = input;
+        return { observation: { id: "provider-1" }, duplicate: false };
+      }) as unknown as typeof recordProviderObservation,
+      recordRelease: (async () => ({
+        release: { id: "release-1" }, duplicate: false,
+      })) as unknown as typeof recordPlatformRelease,
+      reconcile: (async () => ({ duplicate: false })) as unknown as typeof reconcilePlatformFleet,
+      signingKey: "internal-signing-key",
+      trustedReleaseKeysJson: value.trustedReleaseKeysJson,
+    };
+    await producePlatformFleetRelease(dependencies);
+    return recorded!;
+  }
+
+  // approval asset(2026-08-28)보다 나중이라 observedAt이 discovery 시각을 따라간다.
+  const first = await runWith(new Date("2026-09-06T23:48:05.840Z"), "discovery-1");
+  const second = await runWith(new Date("2026-09-07T00:01:45.271Z"), "discovery-2");
+
+  assert.notEqual(first.observedAt.toISOString(), second.observedAt.toISOString());
+  assert.notEqual(
+    first.idempotencyKey,
+    second.idempotencyKey,
+    "observedAt이 달라졌는데 key가 같으면 request hash 검사에서 409로 막힌다",
+  );
+
+  // 같은 관측을 그대로 다시 돌리면 key도 같아야 한다(진짜 멱등).
+  const replay = await runWith(new Date("2026-09-06T23:48:05.840Z"), "discovery-1");
+  assert.equal(first.idempotencyKey, replay.idempotencyKey);
+  assert.equal(first.observedAt.toISOString(), replay.observedAt.toISOString());
+});

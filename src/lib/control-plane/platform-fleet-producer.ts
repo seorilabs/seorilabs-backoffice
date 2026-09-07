@@ -604,6 +604,10 @@ export async function producePlatformFleetRelease(
         repoId: consumer.repoId.toString(),
         sourceSha: consumer.sourceSha,
         rawManifestSha256: verified.rawManifestSha256,
+        // observedAt은 provider observation의 request hash에 들어간다. key에서 빼면
+        // discovery가 같은 커밋·같은 payload를 다시 관측했을 때 key는 그대로인데
+        // 요청만 달라져 IDEMPOTENCY_CONFLICT로 영구히 막힌다. 실제로 그 상태가 됐다.
+        observedAt: observationTime.toISOString(),
         payload,
       }),
       payload,
