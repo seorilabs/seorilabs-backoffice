@@ -62,8 +62,11 @@ fi
 # trusted operator가 미리 설치한 고정 NetworkPolicy가 repo canonical spec과 정확히
 # 같은지 확인한다. 이 runner에는 NetworkPolicy mutation 권한이 필요 없다.
 policy_file="$root/k8s/fleet-migration-bootstrap-shadow-network-policy.yaml"
-expected_policy="$($kubectl_bin create --dry-run=client -f "$policy_file" -o json | "$jq_bin" -Sc '.spec')"
-actual_policy="$($kubectl_bin -n "$namespace" get networkpolicy/backoffice-fleet-migration-bootstrap-shadow -o json | "$jq_bin" -Sc '.spec')"
+# API server는 빈 목록 필드를 저장하지 않는다. canonical spec의 `ingress: []`는 readback에서
+# 키 자체가 사라지므로 양쪽에 같은 정규화를 적용한다. 비어 있지 않은 값의 차이는 그대로 검출한다.
+policy_normalize='.spec | with_entries(select(.value != []))'
+expected_policy="$($kubectl_bin create --dry-run=client -f "$policy_file" -o json | "$jq_bin" -Sc "$policy_normalize")"
+actual_policy="$($kubectl_bin -n "$namespace" get networkpolicy/backoffice-fleet-migration-bootstrap-shadow -o json | "$jq_bin" -Sc "$policy_normalize")"
 if [ "$actual_policy" != "$expected_policy" ]; then
   echo "오류: BOOTSTRAP shadow NetworkPolicy가 canonical spec과 다르다" >&2
   exit 1

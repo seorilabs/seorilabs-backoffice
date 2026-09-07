@@ -140,7 +140,11 @@ if ! printf '%s' "$documents" | "$jq_bin" -e '
   fail "runtime capability issuer resource set이 canonical contract와 다르다"
 fi
 expected_job="$(printf '%s' "$documents" | "$jq_bin" -c '[.[] | select(.kind == "Job")][0]')"
-expected_policy="$(printf '%s' "$documents" | "$jq_bin" -Sc '[.[] | select(.kind == "NetworkPolicy")][0].spec')"
+# API server는 빈 목록 필드를 저장하지 않는다. `ingress: []`처럼 canonical spec이 명시한
+# "규칙 없음"은 readback에서 키 자체가 사라진다. 양쪽에 같은 정규화를 적용해야 의미가
+# 같은 spec을 drift로 오판하지 않는다. 비어 있지 않은 값의 차이는 그대로 검출한다.
+policy_normalize='.spec | with_entries(select(.value != []))'
+expected_policy="$(printf '%s' "$documents" | "$jq_bin" -Sc "[.[] | select(.kind == \"NetworkPolicy\")][0] | $policy_normalize")"
 
 for ref in \
   "serviceaccount/$service_account" \
@@ -219,7 +223,7 @@ if ! "$kubectl_bin" -n "$namespace" get "rolebinding/$role_name" -o json | "$jq_
   fail "runtime capability issuer RoleBinding이 canonical contract와 다르다"
 fi
 
-actual_policy="$($kubectl_bin -n "$namespace" get "networkpolicy/$role_name" -o json | "$jq_bin" -Sc '.spec')"
+actual_policy="$($kubectl_bin -n "$namespace" get "networkpolicy/$role_name" -o json | "$jq_bin" -Sc "$policy_normalize")"
 [ "$actual_policy" = "$expected_policy" ] || fail "runtime capability issuer NetworkPolicy가 canonical spec과 다르다"
 if ! "$kubectl_bin" -n "$namespace" get "role/$role_name" -o json | "$jq_bin" -e \
   --arg secret "$github_token_secret" --arg configMap "$runtime_config_map" '
@@ -230,7 +234,10 @@ if ! "$kubectl_bin" -n "$namespace" get "role/$role_name" -o json | "$jq_bin" -e
   fail "runtime capability issuer Role이 exact output object 경계와 다르다"
 fi
 for ref in "secret/$github_token_secret" "configmap/$runtime_config_map"; do
-  if [ "$($kubectl_bin -n "$namespace" get "$ref" -o go-template='{{len .data}}|{{.immutable}}')" != "0|<no value>" ]; then
+  # 비어 있는 ConfigMap/Secret은 API server가 `data` 필드 자체를 저장하지 않는다.
+  # `len .data`를 그대로 부르면 nil에서 template이 죽으므로 부재를 0으로 읽는다.
+  # 값이 하나라도 있으면 여전히 실제 개수를 세어 비어 있지 않음을 검출한다.
+  if [ "$($kubectl_bin -n "$namespace" get "$ref" -o go-template='{{if .data}}{{len .data}}{{else}}0{{end}}|{{.immutable}}')" != "0|<no value>" ]; then
     fail "runtime capability output CAS 객체가 비어 있지 않거나 immutable 상태다"
   fi
 done
