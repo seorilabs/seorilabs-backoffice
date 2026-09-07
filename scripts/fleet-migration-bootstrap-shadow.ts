@@ -18,6 +18,7 @@ import {
   listInstallationRepositorySeeds,
   readInstalledRepositoryVector,
 } from "@/lib/control-plane/repository-discovery-backfill";
+import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-public-error";
 import { prisma } from "@/lib/prisma";
 
 const SHA = /^[0-9a-f]{40}$/u;
@@ -33,15 +34,7 @@ function environment(name: string, pattern: RegExp): string {
 }
 
 function publicError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  return /^FLEET_MIGRATION_[A-Z0-9_:,-]+$/u.test(message)
-    ? message
-    : /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/u.test(message)
-      ? message
-      // scoped GitHub capability 실패도 공개 code다. 위 issuer와 같은 이유로 노출한다.
-      : /^FLEET_GITHUB_[A-Z0-9_]+$/u.test(message)
-        ? message
-        : "FLEET_MIGRATION_BOOTSTRAP_SHADOW_FAILED";
+  return fleetMigrationPublicError(error, "FLEET_MIGRATION_BOOTSTRAP_SHADOW_FAILED");
 }
 
 async function main(): Promise<void> {
