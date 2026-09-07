@@ -26,6 +26,7 @@ import {
   readFleetGitHubAppPublicSource,
 } from "@/lib/github/app";
 import { issueFleetMigrationGithubCapabilityToSink } from "@/lib/github/scoped-installation-client";
+import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-public-error";
 import { prisma } from "@/lib/prisma";
 
 const SHA = /^[0-9a-f]{40}$/u;
@@ -63,14 +64,7 @@ function sha256(value: Buffer | string): string {
 }
 
 function publicError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  return /^FLEET_MIGRATION_[A-Z0-9_:,-]+$/u.test(message)
-    ? message
-    : /^GITHUB_APP_[A-Z0-9_]+$/u.test(message)
-      ? message
-      : /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/u.test(message)
-        ? message
-        : "FLEET_MIGRATION_RUNTIME_CAPABILITY_ISSUANCE_FAILED";
+  return fleetMigrationPublicError(error, "FLEET_MIGRATION_RUNTIME_CAPABILITY_ISSUANCE_FAILED");
 }
 
 async function main(): Promise<void> {
