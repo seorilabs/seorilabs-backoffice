@@ -127,6 +127,37 @@ test("기본 메시지는 그대로 embed로 나간다", async () => {
   );
 });
 
+test("쓰레드 메시지에 MiniMax 원문 파일을 첨부한다", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalToken = process.env.DISCORD_BOT_TOKEN;
+  process.env.DISCORD_BOT_TOKEN = "test-token";
+  let body: BodyInit | null | undefined;
+  globalThis.fetch = async (_url, init) => {
+    body = init?.body;
+    return new Response(JSON.stringify({ id: "333" }), { status: 201 });
+  };
+  try {
+    const result = await createDiscordChannelMessage("222", "MiniMax 응답", {
+      attachment: {
+        filename: "minimax-response.json",
+        contentType: "application/json",
+        base64: Buffer.from('{"ok":true}').toString("base64"),
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.ok(body instanceof FormData);
+    const form = body as FormData;
+    assert.match(String(form.get("payload_json")), /minimax-response\.json/u);
+    const file = form.get("files[0]");
+    assert.ok(file instanceof Blob);
+    assert.equal(await file.text(), '{"ok":true}');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+    else process.env.DISCORD_BOT_TOKEN = originalToken;
+  }
+});
+
 test("ID 형식이 아니면 Discord를 호출하지 않는다", async () => {
   await withDiscord(
     () => new Response("{}", { status: 200 }),

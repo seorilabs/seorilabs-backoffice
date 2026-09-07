@@ -35,3 +35,27 @@ test("외부 알림 payload를 엄격 검증한다", () => {
     },
   }));
 });
+
+test("외부 알림은 같은 producer의 부모 알림 아래 Discord 쓰레드를 지정할 수 있다", () => {
+  const payload = parseExternalNotification({
+    version: 1,
+    id: "review:entry:1",
+    source: "seori-pr-bot",
+    text: "MiniMax 응답 원문",
+    thread: {
+      parentId: "review:root:1",
+      name: "gemini-pr-bot #47 리뷰 로그",
+      plain: false,
+    },
+  });
+
+  assert.deepEqual(payload.thread, {
+    parentId: "review:root:1",
+    name: "gemini-pr-bot #47 리뷰 로그",
+    plain: false,
+  });
+  assert.throws(() => parseExternalNotification({
+    ...payload,
+    thread: { ...payload.thread, parentId: payload.id },
+  }));
+});
