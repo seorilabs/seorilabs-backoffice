@@ -43,6 +43,8 @@ export const AIT_LISTINGS: AitListing[] = [
   { appSlug: "babycare", miniAppId: 54868, label: "babycare", primary: true },
   { appSlug: "trait-test-hub", miniAppId: 54985, label: "trait-test-hub", primary: true },
   { appSlug: "lizard-tycoon", miniAppId: 61736, label: "lizard-tycoon", primary: true },
+  // 콘솔 appName 은 "ungeul" 이나 backoffice App.slug(=repo)는 "saju-reader".
+  { appSlug: "saju-reader", miniAppId: 67186, label: "ungeul", primary: true },
 ];
 
 /** App 당 primary 리스팅의 miniAppId 표(slug → miniAppId). seed/단일값 조회의 하위호환 경로. */

@@ -84,6 +84,20 @@ test("공개된 babycare 리스팅은 54868을 primary로 사용한다", () => {
   assert.equal(AIT_MINIAPP_BY_SLUG["babycare"], 54868);
 });
 
+test("공개된 운글 리스팅은 saju-reader의 67186 primary로 사용한다", () => {
+  const list = listingsForSlug("saju-reader");
+  assert.deepEqual(list, [
+    {
+      appSlug: "saju-reader",
+      miniAppId: 67186,
+      label: "ungeul",
+      primary: true,
+    },
+  ]);
+  assert.equal(primaryListingForSlug("saju-reader")?.miniAppId, 67186);
+  assert.equal(AIT_MINIAPP_BY_SLUG["saju-reader"], 67186);
+});
+
 test("운영 종료한 vocab-swipe 리스팅은 수집 대상에서 제외한다", () => {
   assert.deepEqual(listingsForSlug("vocab-swipe"), []);
   assert.equal(primaryListingForSlug("vocab-swipe"), undefined);
