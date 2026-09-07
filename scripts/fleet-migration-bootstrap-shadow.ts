@@ -38,7 +38,10 @@ function publicError(error: unknown): string {
     ? message
     : /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/u.test(message)
       ? message
-      : "FLEET_MIGRATION_BOOTSTRAP_SHADOW_FAILED";
+      // scoped GitHub capability 실패도 공개 code다. 위 issuer와 같은 이유로 노출한다.
+      : /^FLEET_GITHUB_[A-Z0-9_]+$/u.test(message)
+        ? message
+        : "FLEET_MIGRATION_BOOTSTRAP_SHADOW_FAILED";
 }
 
 async function main(): Promise<void> {

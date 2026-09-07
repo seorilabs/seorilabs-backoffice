@@ -70,7 +70,12 @@ function publicError(error: unknown): string {
       ? message
       : /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/u.test(message)
         ? message
-        : "FLEET_MIGRATION_RUNTIME_CAPABILITY_ISSUANCE_FAILED";
+        // scoped GitHub capability 실패도 공개 code다. FLEET_GITHUB_* 는 전부 리터럴
+        // 상수이고 저장소 ID·권한 이름 같은 공개 값만 가리킨다. 가려두면 발급이 어디서
+        // 멈췄는지 알 수 없어 진단이 이미지 재배포 한 번씩을 요구하게 된다.
+        : /^FLEET_GITHUB_[A-Z0-9_]+$/u.test(message)
+          ? message
+          : "FLEET_MIGRATION_RUNTIME_CAPABILITY_ISSUANCE_FAILED";
 }
 
 async function main(): Promise<void> {
