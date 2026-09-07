@@ -9,6 +9,7 @@ import {
   verifyFleetMigrationPublicAttestation,
 } from "@/lib/control-plane/fleet-migration-public-attestation";
 import { parseFleetMigrationRuntimePayload } from "@/lib/control-plane/fleet-migration-runtime-capability";
+import { buildFleetMigrationRuntimeConfigSnapshots } from "@/lib/control-plane/fleet-migration-runtime-config-snapshots";
 import { resolveFleetMigrationApprovedProofDigests } from "@/lib/control-plane/fleet-migration-runtime-proof-coverage";
 import {
   evaluateFleetMigrationShadowReadiness,
@@ -157,40 +158,15 @@ async function main(): Promise<void> {
     const backoffice = await readFleetMigrationBackoffice(
       repositories.map(({ id }) => BigInt(id)),
     );
-    const currentSources = new Map(readiness.repositories.map((repository) => [
-      repository.repoId,
-      repository.sourceSha,
-    ]));
-    const configSnapshots = backoffice.apps.map((app) => {
-      const config = app.activeConfigs[0];
-      const sourceSha = currentSources.get(app.repoId);
-      if (
-        app.activeConfigs.length !== 1
-        || !config
-        || typeof sourceSha !== "string"
-        || !SHA.test(sourceSha)
-        || !config.snapshotDigest
-        || !config.snapshotSignature
-        || config.activatedSnapshot === null
-        || !verifySnapshot(
-          config.activatedSnapshot,
-          snapshotSigningKey,
-          config.snapshotDigest,
-          config.snapshotSignature,
-        )
-      ) throw new Error("FLEET_MIGRATION_RUNTIME_SNAPSHOT_INVALID");
-      return {
-        repositoryId: app.repoId,
-        appId: app.id,
-        configRevisionId: config.id,
-        sourceSha,
-        snapshotDigest: config.snapshotDigest,
-        snapshotSignatureDigest: sha256(config.snapshotSignature),
-      };
-    }).sort((left, right) => {
-      const leftId = BigInt(left.repositoryId);
-      const rightId = BigInt(right.repositoryId);
-      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    const configSnapshots = buildFleetMigrationRuntimeConfigSnapshots({
+      repositories: readiness.repositories,
+      apps: backoffice.apps,
+      verifySnapshot: ({ snapshot, digest, signature }) => verifySnapshot(
+        snapshot,
+        snapshotSigningKey,
+        digest,
+        signature,
+      ),
     });
     const proofs = await prisma.fleetMigrationProofSnapshot.findMany({
       where: {
