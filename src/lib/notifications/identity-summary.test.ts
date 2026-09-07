@@ -157,13 +157,37 @@ test("신규 계정 알림은 앱·KST 날짜 dedupe 키 하나로 enqueue하고
   assert.match(summarySource, /await requeueNotification\(eventId\)/);
 });
 
+const routeSource = readFileSync(
+  join(process.cwd(), "src/app/api/internal/platform/operational-events/route.ts"),
+  "utf8",
+);
+
 test("등록된 앱의 신규 계정은 건별 카드를 만들지 않는다", () => {
-  const routeSource = readFileSync(
-    join(process.cwd(), "src/app/api/internal/platform/operational-events/route.ts"),
-    "utf8",
-  );
   assert.match(routeSource, /input\.type === "identity\.created"\s*\?\s*await recordIdentitySignup/);
   assert.match(routeSource, /if \(!milestone && !summarized\)/);
+});
+
+test("registry app_id가 slug와 다른 앱도 등록된 앱으로 찾는다", () => {
+  // 운글은 Platform app_id가 ungeul, 저장소 slug가 saju-reader다. slug 단독 조회로는
+  // 미등록으로 떨어져 요약 카드 대신 건별 카드가 나갔다.
+  assert.match(
+    routeSource,
+    /OR: \[\{ platformAppId: input\.appId \}, \{ platformAppId: null, slug: input\.appId \}\]/,
+  );
+  assert.doesNotMatch(routeSource, /prisma\.app\.findUnique\(\{\s*where: \{ slug: input\.appId \}/);
+  assert.match(routeSource, /platformAppId: true/);
+});
+
+test("신규 계정 집계는 이벤트 원장 키인 Platform app_id로 센다", () => {
+  // operational_event.appId는 registry app_id다. slug로 세면 이름이 다른 앱의
+  // 오늘 신규 수와 누적이 0이 된다.
+  assert.match(summarySource, /const eventAppId = resolvedPlatformAppId\(input\.app\)/);
+  assert.match(summarySource, /appId: eventAppId,\n\s*eventType: "identity\.created"/);
+  assert.match(
+    summarySource,
+    /where: \{ appId: eventAppId, eventType: "identity\.created" \}/,
+  );
+  assert.doesNotMatch(summarySource, /appId: input\.app\.slug/);
 });
 
 test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·로그인·버전·유입이 담긴다", () => {
