@@ -394,6 +394,36 @@ async function ensurePlatformDefinition(
   });
 }
 
+/**
+ * 새로 만든 run을 plan에 연결하고 큐 이벤트를 남긴다. 두 생성 경로가 공유한다.
+ * `refreshPlatformSdkUpdatePlans`가 `agentRunId: { not: null }`인 plan만 조회하므로,
+ * 연결을 빠뜨리면 run이 성공하든 실패하든 plan과 binding이 영구히 갱신되지 않는다.
+ */
+async function linkPlatformPlanRun(input: {
+  tx: Prisma.TransactionClient;
+  planId: string;
+  runId: string;
+  manifestDigest: string;
+  sourceSha: string;
+}) {
+  await input.tx.platformFleetPlan.update({
+    where: { id: input.planId },
+    data: { agentRunId: input.runId, status: "QUEUED" },
+  });
+  await input.tx.agentRunEvent.create({
+    data: {
+      runId: input.runId,
+      type: "platform_plan_queued",
+      actor: "system:platform-fleet",
+      payload: {
+        planId: input.planId,
+        manifestDigest: input.manifestDigest,
+        sourceSha: input.sourceSha,
+      },
+    },
+  });
+}
+
 async function enqueueSdkUpdatePlan(input: {
   tx: Prisma.TransactionClient;
   planId: string;
@@ -430,7 +460,14 @@ async function enqueueSdkUpdatePlan(input: {
       }
       return run;
     }
-    return input.tx.agentRun.create({
+    // occurrence는 supersede 처리에서 COMPLETED로 닫히고 결과에
+    // PLATFORM_PLAN_SUPERSEDED가 남아 있다. 새 run을 붙이면서 되열지 않으면 실행 대기
+    // 중인데도 완료로 보이고, 새 실행이 끝난 뒤에도 옛 결과가 그대로 남는다.
+    await input.tx.automationOccurrence.update({
+      where: { id: existing.id },
+      data: { status: "PENDING", completedAt: null, result: Prisma.DbNull },
+    });
+    const revived = await input.tx.agentRun.create({
       data: {
         occurrenceId: existing.id,
         appId: input.app.id,
@@ -444,6 +481,14 @@ async function enqueueSdkUpdatePlan(input: {
         maxAttempts: 3,
       },
     });
+    await linkPlatformPlanRun({
+      tx: input.tx,
+      planId: input.planId,
+      runId: revived.id,
+      manifestDigest: input.release.manifestDigest,
+      sourceSha: input.task.sourceSha,
+    });
+    return revived;
   }
   const occurrence = await input.tx.automationOccurrence.create({
     data: {
@@ -470,18 +515,12 @@ async function enqueueSdkUpdatePlan(input: {
   });
   const run = occurrence.runs[0];
   if (!run) throw new Error("Platform Fleet AgentRun creation failed");
-  await input.tx.platformFleetPlan.update({ where: { id: input.planId }, data: { agentRunId: run.id, status: "QUEUED" } });
-  await input.tx.agentRunEvent.create({
-    data: {
-      runId: run.id,
-      type: "platform_plan_queued",
-      actor: "system:platform-fleet",
-      payload: {
-        planId: input.planId,
-        manifestDigest: input.release.manifestDigest,
-        sourceSha: input.task.sourceSha,
-      },
-    },
+  await linkPlatformPlanRun({
+    tx: input.tx,
+    planId: input.planId,
+    runId: run.id,
+    manifestDigest: input.release.manifestDigest,
+    sourceSha: input.task.sourceSha,
   });
   return run;
 }
