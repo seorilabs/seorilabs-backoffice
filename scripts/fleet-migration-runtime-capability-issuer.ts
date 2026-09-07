@@ -9,6 +9,7 @@ import {
   verifyFleetMigrationPublicAttestation,
 } from "@/lib/control-plane/fleet-migration-public-attestation";
 import { parseFleetMigrationRuntimePayload } from "@/lib/control-plane/fleet-migration-runtime-capability";
+import { buildFleetMigrationRuntimeConfigSnapshots } from "@/lib/control-plane/fleet-migration-runtime-config-snapshots";
 import { resolveFleetMigrationApprovedProofDigests } from "@/lib/control-plane/fleet-migration-runtime-proof-coverage";
 import {
   evaluateFleetMigrationShadowReadiness,
@@ -157,52 +158,15 @@ async function main(): Promise<void> {
     const backoffice = await readFleetMigrationBackoffice(
       repositories.map(({ id }) => BigInt(id)),
     );
-    const currentSources = new Map(readiness.repositories.map((repository) => [
-      repository.repoId,
-      repository.sourceSha,
-    ]));
-    // readiness는 `classification !== "PRODUCT_APP"`이면 early return해서 ACTIVE config와
-    // signed snapshot을 요구하지 않는다. runtime capability도 같은 경계를 써야 한다.
-    // PLATFORM_PRODUCER처럼 제품 앱이 아닌 저장소의 App row는 config revision을 가질 이유가
-    // 없는데, 여기서 요구하면 readiness가 READY인데도 발급이 영구히 막힌다.
-    const productAppRepositoryIds = new Set(
-      readiness.repositories
-        .filter((repository) => repository.classification === "PRODUCT_APP")
-        .map((repository) => repository.repoId),
-    );
-    const configSnapshots = backoffice.apps
-      .filter((app) => productAppRepositoryIds.has(app.repoId))
-      .map((app) => {
-        const config = app.activeConfigs[0];
-        const sourceSha = currentSources.get(app.repoId);
-        if (
-          app.activeConfigs.length !== 1
-          || !config
-          || typeof sourceSha !== "string"
-          || !SHA.test(sourceSha)
-          || !config.snapshotDigest
-          || !config.snapshotSignature
-          || config.activatedSnapshot === null
-          || !verifySnapshot(
-            config.activatedSnapshot,
-            snapshotSigningKey,
-            config.snapshotDigest,
-            config.snapshotSignature,
-          )
-        ) throw new Error("FLEET_MIGRATION_RUNTIME_SNAPSHOT_INVALID");
-        return {
-          repositoryId: app.repoId,
-          appId: app.id,
-          configRevisionId: config.id,
-          sourceSha,
-          snapshotDigest: config.snapshotDigest,
-          snapshotSignatureDigest: sha256(config.snapshotSignature),
-        };
-      })
-      .sort((left, right) => {
-      const leftId = BigInt(left.repositoryId);
-      const rightId = BigInt(right.repositoryId);
-      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    const configSnapshots = buildFleetMigrationRuntimeConfigSnapshots({
+      repositories: readiness.repositories,
+      apps: backoffice.apps,
+      verifySnapshot: ({ snapshot, digest, signature }) => verifySnapshot(
+        snapshot,
+        snapshotSigningKey,
+        digest,
+        signature,
+      ),
     });
     const proofs = await prisma.fleetMigrationProofSnapshot.findMany({
       where: {
