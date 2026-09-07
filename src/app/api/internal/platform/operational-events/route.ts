@@ -61,9 +61,19 @@ export async function POST(request: NextRequest) {
   // 중복이어도 알림 경로를 다시 태운다. 이벤트 저장 뒤 enqueue가 실패하면 Platform
   // 재전송이 유일한 복구 경로인데, 여기서 조기 반환하면 그 경로가 막힌다. 아래 처리는
   // incident dedupe와 notification dedupeKey, 마일스톤 unique로 모두 멱등하다.
-  const app = await prisma.app.findUnique({
-    where: { slug: input.appId },
-    select: { id: true, slug: true, displayName: true, platformUserBaseline: true },
+  // Platform registry app_id 가 저장소 slug 와 다른 앱(운글=ungeul/saju-reader)이 있다.
+  // slug 로만 찾으면 그런 앱이 미등록으로 떨어져 요약 카드·마일스톤 경로를 통째로 놓친다.
+  const app = await prisma.app.findFirst({
+    where: {
+      OR: [{ platformAppId: input.appId }, { platformAppId: null, slug: input.appId }],
+    },
+    select: {
+      id: true,
+      slug: true,
+      platformAppId: true,
+      displayName: true,
+      platformUserBaseline: true,
+    },
   });
   const alert = isOpsAlert(input.type);
   const occurredAt = new Date(input.occurredAt);

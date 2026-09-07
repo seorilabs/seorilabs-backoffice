@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { kstDayStart } from "@/lib/core/operations-report";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
+import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
@@ -199,21 +200,29 @@ export function identityRowText(facts: IdentityRowFacts): string {
 // 신규 계정은 건별 카드 대신 앱·일 단위 카드 하나를 갱신한다. 같은 채널에서
 // 유입 속도와 누적을 한 장으로 읽을 수 있고, 계정마다 알림이 쌓이지 않는다.
 export async function recordIdentitySignup(input: {
-  app: { slug: string; displayName: string; platformUserBaseline: number | null };
+  app: {
+    slug: string;
+    platformAppId: string | null;
+    displayName: string;
+    platformUserBaseline: number | null;
+  };
   event: OperationalEventInput;
 }): Promise<boolean> {
   const occurredAt = new Date(input.event.occurredAt);
   const dayStart = kstDayStart(occurredAt);
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);
+  // 이벤트 원장은 Platform registry app_id 로 적재된다. slug 로 세면 이름이 다른 앱의
+  // 오늘 신규 수와 누적이 0으로 나온다. 카드 dedupe 키는 Backoffice 앱 정체성인 slug 로 둔다.
+  const eventAppId = resolvedPlatformAppId(input.app);
   const where = {
-    appId: input.app.slug,
+    appId: eventAppId,
     eventType: "identity.created",
     occurredAt: { gte: dayStart, lt: dayEnd },
   } as const;
   const [todayTotal, observedTotal, rows] = await Promise.all([
     prisma.operationalEvent.count({ where }),
     prisma.operationalEvent.count({
-      where: { appId: input.app.slug, eventType: "identity.created" },
+      where: { appId: eventAppId, eventType: "identity.created" },
     }),
     prisma.operationalEvent.findMany({
       where,
