@@ -53,6 +53,19 @@ test("requestHash를 writer와 같은 필드로 계산한다", () => {
   );
 });
 
+test("멱등성 키를 요청 전체에 결박한다", () => {
+  // repositoryId + sourceSha만 쓰면 sha가 그대로인 채 readiness digest나 stable
+  // Backoffice state가 바뀌어 새 proof가 필요할 때도 같은 키가 나온다. writer는
+  // IDEMPOTENCY_CONFLICT로 거부하므로 그 저장소는 commit을 움직이지 않는 한 proof를
+  // 얻을 수 없다. proofDigest는 그 값들을 모두 덮는다.
+  assert.match(source, /const idempotencyKey = `fleet-proof-\$\{proofDigest\.slice\(0, 40\)\}`/u);
+  assert.equal(
+    /idempotencyKey = `fleet-proof-\$\{target\.repositoryId\}/u.test(source),
+    false,
+    "멱등성 키가 저장소와 sha에만 결박돼 있다",
+  );
+});
+
 test("승인 payload가 writer의 exact key 집합과 같다", () => {
   const match = /payload: \{([\s\S]*?)\n {6}\},/u.exec(source);
   assert.ok(match, "승인 payload를 찾지 못했다");

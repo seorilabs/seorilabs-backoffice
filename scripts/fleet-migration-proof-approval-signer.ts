@@ -100,7 +100,16 @@ function main(): void {
       stableBackofficeStateDigest: target.stableBackofficeStateDigest,
       candidatesDigest,
     });
-    const idempotencyKey = `fleet-proof-${target.repositoryId}-${target.sourceSha.slice(0, 12)}`;
+    // 멱등성 키는 요청 전체에 결박해야 한다. repositoryId + sourceSha만 쓰면 sha가
+    // 그대로인 채 readiness digest·detector SHA·stable Backoffice state가 바뀌어 새
+    // proof가 필요할 때도 같은 키가 나오고, writer가 IDEMPOTENCY_CONFLICT로 거부해
+    // 그 저장소는 commit을 억지로 움직이지 않는 한 proof를 얻을 수 없다.
+    //
+    // proofDigest는 그 값들을 모두 덮으므로(`fleet-migration-backoffice-adapter.ts:233`)
+    // 상태가 바뀌면 키도 바뀐다. 반대로 같은 상태를 다시 서명하면 키는 같고 attestation
+    // nonce만 달라 conflict가 나는데, 그건 이미 그 상태의 proof가 있다는 뜻이라 안전한
+    // 실패다. 발급기는 기존 proof로 이미 충족된다.
+    const idempotencyKey = `fleet-proof-${proofDigest.slice(0, 40)}`;
     if (!ID.test(idempotencyKey)) throw new Error("FLEET_MIGRATION_PROOF_IDEMPOTENCY_KEY_INVALID");
     // writer가 같은 식으로 다시 계산해 승인문과 대조한다
     // (`fleet-migration-proof-writer.ts:205-211`).
