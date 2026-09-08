@@ -28,7 +28,20 @@ const payloadSchema = z.object({
     contentType: z.string().min(1).max(100),
     base64: z.string().min(1).max(MAX_DISCORD_ATTACHMENT_BASE64_CHARS),
   }).optional(),
-}).strict();
+  thread: z.object({
+    parentId: z.string().min(1).max(80).regex(/^[A-Za-z0-9._:-]+$/),
+    name: z.string().trim().min(1).max(100),
+    plain: z.boolean().optional(),
+  }).strict().optional(),
+}).strict().superRefine((payload, context) => {
+  if (payload.thread?.parentId === payload.id) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["thread", "parentId"],
+      message: "thread parentId는 자기 알림 id와 달라야 합니다",
+    });
+  }
+});
 
 export type ExternalNotification = z.infer<typeof payloadSchema>;
 

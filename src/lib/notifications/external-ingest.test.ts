@@ -59,3 +59,38 @@ test("전달 worker의 채널 설정이 있으면 논리 목적지를 enqueue한
   );
   assert.deepEqual(destinations, [{ provider: "DISCORD", key: "private-feed" }]);
 });
+
+test("외부 쓰레드 알림은 producer 범위의 부모 dedupe key로 변환한다", async () => {
+  let enqueuedPayload: unknown;
+  await ingestExternalNotification(
+    "ops.notification.v1.seori-review",
+    {
+      ...payload,
+      id: "review:entry:1",
+      source: "seori-pr-bot",
+      thread: {
+        parentId: "review:root:1",
+        name: "gemini-pr-bot #47 리뷰 로그",
+        plain: false,
+      },
+    },
+    {
+      destinationConfigured: () => true,
+      enqueue: async (input) => {
+        enqueuedPayload = input.payload;
+        return "event-thread";
+      },
+    },
+  );
+
+  assert.deepEqual(enqueuedPayload, {
+    text: "완료",
+    source: "seori-pr-bot",
+    externalId: "review:entry:1",
+    thread: {
+      parentDedupeKey: "external:seori-pr-bot:review:root:1",
+      threadName: "gemini-pr-bot #47 리뷰 로그",
+      plain: false,
+    },
+  });
+});

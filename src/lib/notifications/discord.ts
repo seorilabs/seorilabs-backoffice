@@ -226,6 +226,23 @@ export async function createDiscordChannelMessage(
   if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 오류" };
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
+  if (options.attachment) {
+    const bytes = Buffer.from(options.attachment.base64, "base64");
+    if (bytes.length === 0 || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) {
+      return { ok: false, error: "Discord 첨부 크기 제한 초과" };
+    }
+    const form = new FormData();
+    form.set("payload_json", JSON.stringify({
+      ...payload,
+      attachments: [{ id: 0, filename: options.attachment.filename }],
+    }));
+    form.set(
+      "files[0]",
+      new Blob([bytes], { type: options.attachment.contentType }),
+      options.attachment.filename,
+    );
+    return discordRequest(`/channels/${channelId}/messages`, { method: "POST", body: form });
+  }
   return discordRequest(`/channels/${channelId}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },

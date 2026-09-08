@@ -15,6 +15,12 @@ export interface IssueThreadPayload {
   text: string;
   parentDedupeKey: string;
   threadName: string;
+  plain: boolean;
+  attachment?: {
+    filename: string;
+    contentType: string;
+    base64: string;
+  };
 }
 
 export function issueThreadPayload(payload: Prisma.JsonValue): IssueThreadPayload | null {
@@ -22,7 +28,7 @@ export function issueThreadPayload(payload: Prisma.JsonValue): IssueThreadPayloa
   const object = payload as Prisma.JsonObject;
   const thread = object.thread;
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) return null;
-  const { parentDedupeKey, threadName } = thread as Prisma.JsonObject;
+  const { parentDedupeKey, threadName, plain } = thread as Prisma.JsonObject;
   const text = object.text;
   if (
     typeof text !== "string" ||
@@ -34,7 +40,27 @@ export function issueThreadPayload(payload: Prisma.JsonValue): IssueThreadPayloa
   ) {
     return null;
   }
-  return { text, parentDedupeKey, threadName };
+  const attachmentValue = object.attachment;
+  const attachment = attachmentValue && typeof attachmentValue === "object" && !Array.isArray(attachmentValue)
+    ? attachmentValue as Prisma.JsonObject
+    : null;
+  const parsedAttachment =
+    typeof attachment?.filename === "string" &&
+    typeof attachment.contentType === "string" &&
+    typeof attachment.base64 === "string"
+      ? {
+          filename: attachment.filename,
+          contentType: attachment.contentType,
+          base64: attachment.base64,
+        }
+      : undefined;
+  return {
+    text,
+    parentDedupeKey,
+    threadName,
+    plain: typeof plain === "boolean" ? plain : true,
+    ...(parsedAttachment ? { attachment: parsedAttachment } : {}),
+  };
 }
 
 /** Discord 쓰레드 이름은 100자 제한. 이슈 번호는 반드시 남긴다. */

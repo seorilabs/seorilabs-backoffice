@@ -39,6 +39,15 @@ export async function ingestExternalNotification(
       source: payload.source,
       externalId: payload.id,
       ...(payload.attachment ? { attachment: payload.attachment } : {}),
+      ...(payload.thread
+        ? {
+            thread: {
+              parentDedupeKey: `external:${payload.source}:${payload.thread.parentId}`,
+              threadName: payload.thread.name,
+              plain: payload.thread.plain ?? false,
+            },
+          }
+        : {}),
     },
     destinations,
   });

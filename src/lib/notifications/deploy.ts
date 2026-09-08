@@ -295,7 +295,8 @@ async function deliverIssueThread(
   );
   if (!started.ok) return threadStartFailure(started);
   const sent = await createDiscordChannelMessage(parent.providerMessageId, thread.text, {
-    plain: true,
+    plain: thread.plain,
+    attachment: thread.attachment,
   });
   return sent.ok ? { ok: true } : sent;
 }
