@@ -45,11 +45,31 @@ test("readiness verifier를 명시적으로 주입한다", () => {
   assert.match(source, /CONTROL_PLANE_SNAPSHOT_SIGNING_KEY/u);
 });
 
-test("cohort 전체를 덮지 못하면 중단한다", () => {
-  // runtime capability issuer가 `covered.size !== cohort.size`로 fail-closed하므로
-  // 부분 수집으로 승인을 만들면 나중에 전부 버려진다.
+test("cohort를 ID가 아니라 exact vector로 대조한다", () => {
+  // issuer의 resolveFleetMigrationApprovedProofDigests는 ID뿐 아니라 full name과
+  // source SHA도 현재 readiness cohort와 비교한다. readiness 평가 뒤 스캔 사이에
+  // HEAD가 움직이면 ID만 맞는 요청이 만들어지고 그 승인은 전부 버려진다.
   assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID/u);
-  assert.match(source, /readiness\.repositories\.map\(\(repository\) => repository\.repoId\)/u);
+  for (const field of [
+    "repository.repoFullName",
+    "repository.sourceSha",
+    "item.repositoryFullName",
+    "item.sourceSha",
+  ]) {
+    assert.ok(source.includes(field), `${field}를 대조 벡터에 넣지 않는다`);
+  }
+});
+
+test("HMAC 키를 issuer와 같은 바이트열로 읽는다", () => {
+  // trim하면 값에 개행이나 공백이 섞였을 때 issuer는 유효하다고 보는 snapshot을
+  // 여기서만 무효로 판정해 수집이 막힌다.
+  assert.match(source, /process\.env\.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY \?\? ""/u);
+  assert.equal(
+    /CONTROL_PLANE_SNAPSHOT_SIGNING_KEY\?\.trim\(\)/u.test(source),
+    false,
+    "키를 trim해 issuer와 다른 바이트열을 쓴다",
+  );
+  assert.match(source, /snapshotSigningKey\.length < 32 \|\| snapshotSigningKey\.length > 4096/u);
 });
 
 test("candidate의 proofs는 비운 채 기록한다", () => {
