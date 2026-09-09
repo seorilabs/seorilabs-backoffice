@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createFleetMigrationBackofficeAdapter,
+  fleetMigrationConfigSourceMatchesDiscovery,
   fleetMigrationPlatformFleetBindingEvidence,
   fleetMigrationProofDigest,
   publicFleetMigrationProviderObservations,
@@ -371,5 +372,79 @@ test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남
       binding: { id: "binding-0001", state: "COMPLIANT", sourceSha: null, platformRelease: null },
     }),
     null,
+  );
+});
+
+test("재탐지 관측은 같은 source로 보되 source가 다르면 잡는다", () => {
+  // 같은 커밋을 같은 payload로 다시 탐지하면 DiscoveryObservation row가 새로 생긴다.
+  // 실측 22곳 중 11곳이 이 상태였다. row id 일치를 요구하면 재탐지 한 번에 진단과 기록이
+  // 갈리므로 source 자체로 판정한다. readiness가 같은 함수를 쓴다.
+  const source = { sourceSha: "a".repeat(40), payloadHash: "b".repeat(64) };
+
+  // 다른 row지만 같은 source — 재탐지다.
+  assert.equal(
+    fleetMigrationConfigSourceMatchesDiscovery(source, { ...source }),
+    true,
+  );
+
+  // source가 다르면 잡는다. row id 지름길을 두면 이 경우가 새어 나간다.
+  assert.equal(
+    fleetMigrationConfigSourceMatchesDiscovery(source, { ...source, sourceSha: "c".repeat(40) }),
+    false,
+  );
+  assert.equal(
+    fleetMigrationConfigSourceMatchesDiscovery(source, { ...source, payloadHash: "d".repeat(64) }),
+    false,
+  );
+
+  // 한쪽이 없으면 비교할 대상이 없다.
+  assert.equal(fleetMigrationConfigSourceMatchesDiscovery(null, source), false);
+  assert.equal(fleetMigrationConfigSourceMatchesDiscovery(source, undefined), false);
+});
+
+test("readiness와 공개 증거는 config source 판정도 공유한다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readiness = readFileSync(
+    new URL("./fleet-migration-shadow-readiness.ts", import.meta.url),
+    "utf8",
+  );
+  const adapter = readFileSync(
+    new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(adapter, /export function fleetMigrationConfigSourceMatchesDiscovery/u);
+  assert.match(readiness, /fleetMigrationConfigSourceMatchesDiscovery\(/u);
+  assert.match(adapter, /fleetMigrationConfigSourceMatchesDiscovery\(\s*config\?\.sourceObservation/u);
+
+  // 반증: 어느 한쪽이 자체 비교로 되돌아가면 잡힌다.
+  assert.doesNotMatch(readiness, /sourceObservation\.payloadHash !== latestDiscovery\.payloadHash/u);
+  assert.doesNotMatch(adapter, /config\.sourceObservationId !== discovery\.id/u);
+});
+
+test("ProjectBlueprint가 없으면 provider 상태를 비운 채 기록한다", async () => {
+  // blueprint는 P5 산출물이라 실측 22곳 중 20곳에 없고, 그 20곳은 provider 실행 기록도
+  // 0건이다. 증명된 provider 상태가 없으므로 빈 목록이 유일하게 정직한 기록이다.
+  const { readFileSync } = await import("node:fs");
+  const adapter = readFileSync(
+    new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(adapter, /providerObservations = blueprint\.success\s*\?/u);
+  assert.match(adapter, /:\s*\[\];/u);
+  // 반증: blueprint 부재가 다시 전체 증거 실패 조건으로 돌아가면 잡힌다.
+  assert.doesNotMatch(adapter, /\|\| !blueprint\.success/u);
+
+  // 빈 desired set으로 투영을 부르면 계속 fail-closed다. 그래서 호출 자체를 건너뛴다.
+  assert.throws(
+    () => publicFleetMigrationProviderObservations({
+      rows: [],
+      executions: [],
+      desiredResources: [],
+      sourceSha: "a".repeat(40),
+      configRevisionId: "config-0001",
+    }),
+    /FLEET_MIGRATION_PROVIDER_DESIRED_RESOURCE_SET_INVALID/u,
   );
 });
