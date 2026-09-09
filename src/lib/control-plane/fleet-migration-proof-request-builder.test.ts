@@ -188,3 +188,23 @@ test("중단 지점을 message가 아니라 도달 플래그로 판정한다", (
   // claim에 도달하지 못했는데 예외도 없으면 수집이 끝나지 않은 것이다.
   assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE/u);
 });
+
+test("커버리지 불일치도 어느 저장소가 왜 어긋났는지 남긴다", () => {
+  // readiness는 스캔 시작 전에 평가되고 스캔은 저장소 31곳의 tree·blob을 읽는다. 그 사이
+  // 저장소가 움직이면 여기서 걸리는데, 코드만으로는 재시도할 상황인지 다른 원인인지
+  // 구분할 수 없다. 같은 계열의 불투명 실패를 네 번째 겪었다.
+  assert.match(source, /proof request 커버리지 불일치: 기대 \$\{/u);
+  assert.match(source, /어긋남 \$\{line\}/u);
+  assert.match(source, /기대 밖 repoId=/u);
+
+  // 공개 식별자만 남긴다. 저장소 이름과 SHA 앞 8자리다.
+  assert.match(source, /\.slice\(0, 8\)/u);
+
+  // 판정 자체는 그대로다. 로그를 남기고도 반드시 닫는다.
+  assert.match(source, /throw new Error\("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID"\)/u);
+  assert.match(source, /coveredVector\.size !== expectedVector\.size/u);
+  assert.match(source, /coveredVector\.size !== collected\.length/u);
+
+  // 로그 줄 수를 묶는다. 31곳이 전부 어긋나도 출력이 폭주하지 않는다.
+  assert.match(source, /\.slice\(0, 40\)/u);
+});

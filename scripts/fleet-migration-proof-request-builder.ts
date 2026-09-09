@@ -348,11 +348,25 @@ async function main(): Promise<void> {
     String(item.repositoryId),
     `${String(item.repositoryFullName)} ${String(item.sourceSha)}`,
   ]));
+  const mismatched = [...expectedVector]
+    .filter(([repoId, vector]) => coveredVector.get(repoId) !== vector)
+    .map(([repoId, vector]) => `${vector.split(" ")[0]} 기대=${
+      vector.split(" ")[1]?.slice(0, 8) ?? "?"} 수집=${
+      coveredVector.get(repoId)?.split(" ")[1]?.slice(0, 8) ?? "없음"}`);
+  const extra = [...coveredVector.keys()].filter((repoId) => !expectedVector.has(repoId));
   if (
     coveredVector.size !== collected.length
     || coveredVector.size !== expectedVector.size
-    || [...expectedVector].some(([repoId, vector]) => coveredVector.get(repoId) !== vector)
+    || mismatched.length > 0
   ) {
+    // readiness는 스캔 시작 전에 평가되고 스캔은 저장소 31곳의 tree와 blob을 읽는다. 그
+    // 사이 저장소가 움직이면 여기서 걸린다. 어느 저장소가 왜 어긋났는지 남겨야 조용한
+    // 창에서 재시도할지, 다른 원인인지 구분할 수 있다. 저장소 이름과 SHA 앞 8자리는
+    // 공개 식별자다.
+    console.error(`proof request 커버리지 불일치: 기대 ${expectedVector.size}곳 수집 ${
+      coveredVector.size}곳 중복제거전 ${collected.length}건`);
+    for (const line of mismatched.slice(0, 40)) console.error(`  어긋남 ${line}`);
+    for (const repoId of extra.slice(0, 40)) console.error(`  기대 밖 repoId=${repoId}`);
     throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID");
   }
 
