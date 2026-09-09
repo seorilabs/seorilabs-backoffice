@@ -217,6 +217,12 @@ test("커버리지 불일치도 어느 저장소가 왜 어긋났는지 남긴�
   // 로그도 같은 구분자로 나눈다.
   assert.match(source, /split\("\\u0000"\)/u);
 
+  // 이름만 바뀌고 SHA가 같은 경우도 벡터 비교는 실패한다. SHA만 찍으면 양쪽이 같아 보여
+  // 이름 변경이 원인이라는 것을 알 수 없다. 기대와 수집 양쪽의 이름을 모두 남긴다.
+  assert.match(source, /기대=\$\{expectedName\}@/u);
+  assert.match(source, /수집=\$\{[\s\S]{0,20}coveredName \?\? "없음"\}@/u);
+  assert.match(source, /const \[coveredName, coveredSha\]/u);
+
   // 판정 자체는 그대로다. 로그를 남기고도 반드시 닫는다.
   assert.match(source, /throw new Error\("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID"\)/u);
   assert.match(source, /coveredVector\.size !== expectedVector\.size/u);

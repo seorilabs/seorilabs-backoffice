@@ -362,10 +362,12 @@ async function main(): Promise<void> {
   const mismatched = [...expectedVector]
     .filter(([repoId, vector]) => coveredVector.get(repoId) !== vector)
     .map(([repoId, vector]) => {
-      const [fullName, expectedSha] = vector.split("\u0000");
-      const covered = coveredVector.get(repoId)?.split("\u0000")[1];
-      return `${fullName} 기대=${expectedSha?.slice(0, 8) ?? "?"} 수집=${
-        covered?.slice(0, 8) ?? "없음"}`;
+      const [expectedName, expectedSha] = vector.split("\u0000");
+      // 이름만 바뀌고 SHA가 같은 경우도 벡터 비교는 정상적으로 실패한다. SHA만 찍으면
+      // 양쪽이 같아 보여 이름 변경이 원인이라는 것을 알 수 없다. 수집된 이름도 남긴다.
+      const [coveredName, coveredSha] = coveredVector.get(repoId)?.split("\u0000") ?? [];
+      return `repoId=${repoId} 기대=${expectedName}@${expectedSha?.slice(0, 8) ?? "?"} 수집=${
+        coveredName ?? "없음"}@${coveredSha?.slice(0, 8) ?? "없음"}`;
     });
   const extra = [...coveredVector.keys()].filter((repoId) => !expectedVector.has(repoId));
   if (
