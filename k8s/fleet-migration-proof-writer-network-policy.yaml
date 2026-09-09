@@ -13,6 +13,19 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
+    # DB 호스트는 FQDN(mysql.data.svc.cluster.local)이라 이름 해석이 먼저 필요하다. DNS를
+    # 열지 않으면 3306을 허용해도 연결 자체가 성립하지 않는다. bootstrap shadow 정책과
+    # 같은 형태다.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
     - to:
         - namespaceSelector:
             matchLabels:
