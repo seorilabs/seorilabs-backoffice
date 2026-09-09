@@ -170,7 +170,19 @@ test("proof writer is a suspended INSERT-only principal Job with DB-only egress"
   assert.match(networkPolicy, /namespace: platform/u);
   assert.match(networkPolicy, /kubernetes\.io\/metadata\.name: data/u);
   assert.match(networkPolicy, /port: 3306/u);
-  assert.doesNotMatch(networkPolicy, /port: (?:53|80|443)\b/u);
+  // DB 호스트가 FQDN이라 이름 해석이 먼저 필요하다. DNS를 막으면 3306을 열어도 연결이
+  // 성립하지 않는다. 실제로 이 정책으로 writer Job 31건이 전부 연결 단계에서 실패했다.
+  // 다만 DNS는 kube-dns로만 연다. public egress(80/443)는 계속 막는다.
+  assert.match(networkPolicy, /k8s-app: kube-dns/u);
+  assert.match(networkPolicy, /\{ protocol: UDP, port: 53 \}/u);
+  assert.match(networkPolicy, /\{ protocol: TCP, port: 53 \}/u);
+  assert.doesNotMatch(networkPolicy, /port: (?:80|443)\b/u);
+  // 반증: DNS 규칙이 kube-dns 밖으로 넓어지면 잡는다.
+  assert.equal(
+    (networkPolicy.match(/port: 53/gu) ?? []).length,
+    2,
+    "DNS 포트 규칙은 kube-dns 한 곳에만 있어야 한다",
+  );
 });
 
 test("DB principal and trigger provisioning stays outside Prisma migration and rejects broad grants", () => {
