@@ -735,3 +735,71 @@ test("PLATFORM_PRODUCER의 App row는 blocker가 아니고 INFRA_REPO는 그대�
   assert.equal(none.state, "READY");
   assert.deepEqual(none.reasonCounts, {});
 });
+
+test("readiness cohort digest는 중앙 계약의 ratified 계산과 같은 값을 낸다", async () => {
+  // 이 digest 입력에는 contractVersion 문자열이 들어간다. 중앙 계약 패키지가 같은
+  // 문자열로 ratified baseline cohort digest를 만들고, 그 값이 inventory schema에
+  // const로 박혀 있다. 여기서 버전 문자열을 올리면 baseline ratification이 어긋나
+  // 이관 체인 전체가 조용히 막힌다. 두 계산이 같은 값을 내는지 고정한다.
+  const { computeFleetMigrationShadowCohortDigest } = await import(
+    "seorilabs-org-contracts/repo-contract/fleet-migration"
+  );
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(productApp())),
+  );
+
+  const central = computeFleetMigrationShadowCohortDigest({
+    installationId: "142120077",
+    repositories: [
+      {
+        id: "101",
+        fullName: "seorilabs/product",
+        defaultRef: "refs/heads/main",
+        sourceSha: PRODUCT_SHA,
+        archived: false,
+        private: true,
+        fork: false,
+      },
+      {
+        id: "202",
+        fullName: "seorilabs/infra",
+        defaultRef: "refs/heads/main",
+        sourceSha: INFRA_SHA,
+        archived: false,
+        private: true,
+        fork: false,
+      },
+    ],
+  });
+
+  assert.equal(result.cohortDigest, central);
+
+  // 반증: 저장소 하나만 달라져도 두 값이 함께 움직인다.
+  assert.notEqual(
+    central,
+    computeFleetMigrationShadowCohortDigest({
+      installationId: "142120077",
+      repositories: [
+        {
+          id: "101",
+          fullName: "seorilabs/product",
+          defaultRef: "refs/heads/main",
+          sourceSha: "c".repeat(40),
+          archived: false,
+          private: true,
+          fork: false,
+        },
+        {
+          id: "202",
+          fullName: "seorilabs/infra",
+          defaultRef: "refs/heads/main",
+          sourceSha: INFRA_SHA,
+          archived: false,
+          private: true,
+          fork: false,
+        },
+      ],
+    }),
+  );
+});

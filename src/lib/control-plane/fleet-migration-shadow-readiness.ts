@@ -11,8 +11,12 @@ import { prisma } from "@/lib/prisma";
 import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-source-ref";
 import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 
+// 이 문자열은 무엇을 차단하는지가 아니라 cohort/evidence digest의 wire 식별자다.
+// 중앙 계약 패키지의 computeFleetMigrationShadowCohortDigest가 같은 값을 쓰고, 그렇게
+// 계산된 ratified baseline cohort digest가 inventory schema에 const로 박혀 있다.
+// 여기서 올리면 baseline ratification이 어긋나 이관 체인 전체가 막힌다.
 export const FLEET_MIGRATION_SHADOW_READINESS_CONTRACT_VERSION =
-  "fleet-migration-shadow-readiness/v3" as const;
+  "fleet-migration-shadow-readiness/v2" as const;
 
 const ORGANIZATION = "seorilabs";
 const SHA_40 = /^[0-9a-f]{40}$/;
