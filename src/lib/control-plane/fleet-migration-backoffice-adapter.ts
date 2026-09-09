@@ -240,7 +240,7 @@ export interface FleetMigrationBindingEvidenceInput {
     platformRelease: { sourceSha: string; manifestDigest: string | null } | null;
   } | null;
   appId: string;
-  platformAppId: string;
+  platformAppId: string | null;
   platformRepositoryId: string;
   observedSourceSha: string;
 }
@@ -259,6 +259,10 @@ export interface FleetMigrationBindingEvidenceInput {
  *
  * appSourceCurrent는 그 상태를 지금 관측 중인 커밋에서 쟀는지를 뜻한다. 뒤처진 측정도
  * 기록하되, 뒤처졌다는 사실이 기록 안에서 드러나야 compliance를 오독할 수 없다.
+ *
+ * platformAppId는 Platform 원장에서의 앱 식별자다. 아직 등록되지 않은 저장소가 실재하므로
+ * null을 그대로 기록한다. 연결이 아예 없는 것(null binding)과 "연결은 있는데 원장 쪽
+ * 식별자가 없는 것"은 다른 사실이라 구분해 남긴다.
  */
 export function fleetMigrationPlatformFleetBindingEvidence(
   input: FleetMigrationBindingEvidenceInput,
@@ -512,7 +516,6 @@ export function createFleetMigrationBackofficeAdapter(input: {
           || !config.snapshotSignature
           || !config.activatedAt
           || !blueprint.success
-          || !app.platformAppId
           || !platformRegistration
         ) fail("FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE");
         appReadback = {

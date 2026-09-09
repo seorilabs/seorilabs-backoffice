@@ -62,6 +62,7 @@ export type FleetMigrationShadowReasonCode =
 // 전부-아니면-전무 게이트에 넣어두면 저장소 하나가 움직일 때마다 조직 전체 기록이
 // 막혀 실태 조사 자체가 영원히 성립하지 않는다.
 const OBSERVATION_ONLY_REASONS: ReadonlySet<FleetMigrationShadowReasonCode> = new Set([
+  "APP_PLATFORM_IDENTITY_MISSING",
   "PLATFORM_FLEET_BINDING_MISSING",
   "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
   "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
@@ -118,6 +119,7 @@ export interface FleetMigrationAppReadback {
     id: string;
     sourceSha: string | null;
     state: string;
+    hasPlatformRelease: boolean;
   } | null;
   activeCredentialBindingCount: number;
 }
@@ -236,7 +238,7 @@ export async function readFleetMigrationBackoffice(
           },
         },
         platformFleetBinding: {
-          select: { id: true, sourceSha: true, state: true },
+          select: { id: true, sourceSha: true, state: true, platformReleaseId: true },
         },
         _count: {
           select: {
@@ -274,7 +276,12 @@ export async function readFleetMigrationBackoffice(
         activatedAt: revision.activatedAt?.toISOString() ?? null,
       })),
       platformAppId: app.platformAppId,
-      platformFleetBinding: app.platformFleetBinding,
+      platformFleetBinding: app.platformFleetBinding === null ? null : {
+        id: app.platformFleetBinding.id,
+        sourceSha: app.platformFleetBinding.sourceSha,
+        state: app.platformFleetBinding.state,
+        hasPlatformRelease: app.platformFleetBinding.platformReleaseId !== null,
+      },
       activeCredentialBindingCount: app._count.credentialBindings,
     }]),
   };
@@ -443,14 +450,14 @@ function repositoryReasons(
       if (!valid) reasons.push("ACTIVE_SNAPSHOT_INVALID");
     }
   }
-  // Platform 원장 상의 App identity는 판본 수렴과 다른 축이다. 이것이 비어 있으면
-  // collector adapter가 FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE로 닫는데,
-  // readiness가 먼저 READY를 주면 조직 단위 capability를 발급한 뒤 저장소 하나 때문에
-  // shadow 전체가 중단된다. 두 경계를 같은 곳에 둔다.
+  // Platform 원장에서의 앱 식별자. 아직 등록되지 않은 저장소가 실재하므로 차단하지 않고
+  // 기록한다. 공개 증거도 연결 사실은 남기고 이 값만 null로 적는다.
   if (!app.platformAppId) {
     reasons.push("APP_PLATFORM_IDENTITY_MISSING");
   }
-  if (!app.platformFleetBinding) {
+  // 공개 증거는 릴리스 없이 binding을 기술할 수 없어 null로 남긴다. readiness가 행의
+  // 존재만 보면 진단은 "연결됨", 기록은 "미연결"로 갈린다. 같은 기준으로 맞춘다.
+  if (!app.platformFleetBinding || !app.platformFleetBinding.hasPlatformRelease) {
     reasons.push("PLATFORM_FLEET_BINDING_MISSING");
   } else {
     if (app.platformFleetBinding.sourceSha !== vector.headSha) {

@@ -337,6 +337,21 @@ test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남
     fleetMigrationPlatformFleetBindingEvidence({ ...common, binding: null }),
     null,
   );
+  // Platform 원장 미등록은 연결 부재와 다른 사실이다. 연결은 남기고 식별자만 null로 적는다.
+  const unregistered = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    platformAppId: null,
+    binding: {
+      id: "binding-0001",
+      state: "COMPLIANT",
+      sourceSha: "3".repeat(40),
+      platformRelease: release,
+    },
+  });
+  assert.notEqual(unregistered, null);
+  assert.equal(unregistered?.platformAppId, null);
+  assert.equal(unregistered?.compliance, "COMPLIANT");
+
   // 어느 커밋에서 잰 상태인지 알 수 없으면 기술할 대상이 없다.
   assert.equal(
     fleetMigrationPlatformFleetBindingEvidence({

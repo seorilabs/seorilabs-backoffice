@@ -79,6 +79,7 @@ function productApp(): FleetMigrationAppReadback {
       id: "platform-binding-product-0001",
       sourceSha: PRODUCT_SHA,
       state: "COMPLIANT",
+      hasPlatformRelease: true,
     },
     activeCredentialBindingCount: 2,
   };
@@ -546,6 +547,7 @@ test("PlatformFleetBinding 판본 불일치와 미연결은 차단이 아니라 
     id: "platform-binding-product-0001",
     sourceSha: "e".repeat(40),
     state: "PENDING",
+    hasPlatformRelease: true,
   };
 
   const divergentResult = await evaluateFleetMigrationShadowReadiness(dependencies({
@@ -805,32 +807,43 @@ test("readiness cohort digest는 중앙 계약의 ratified 계산과 같은 값�
   );
 });
 
-test("Platform App identity 누락은 판본 수렴과 별개로 계속 차단한다", async () => {
-  // collector adapter가 이 값을 필수로 요구한다. readiness가 먼저 READY를 주면 조직 단위
-  // capability를 발급한 뒤 저장소 하나 때문에 shadow 전체가 중단된다.
-  const app = productApp();
-  app.platformAppId = null;
+test("Platform 원장 미등록과 릴리스 없는 binding은 기록과 같은 기준으로 관측된다", async () => {
+  // Platform 원장 식별자는 실제로 미등록인 저장소가 있다. 차단하면 이관 기록이 다시
+  // 전부-아니면-전무가 된다. 공개 증거도 연결 사실은 남기고 이 값만 null로 적는다.
+  const unregistered = productApp();
+  unregistered.platformAppId = null;
 
-  const result = await evaluateFleetMigrationShadowReadiness(
-    dependencies(readyBackoffice(app)),
+  const unregisteredResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(unregistered)),
   );
+  assert.equal(unregisteredResult.state, "READY");
+  assert.deepEqual(unregisteredResult.observationCounts, {
+    APP_PLATFORM_IDENTITY_MISSING: 1,
+  });
 
-  assert.equal(result.state, "BLOCKED");
-  assert.equal(result.reasonCounts.APP_PLATFORM_IDENTITY_MISSING, 1);
-  assert.ok(
-    result.repositories
-      .find(({ repoId }) => repoId === "101")
-      ?.reasonCodes.includes("APP_PLATFORM_IDENTITY_MISSING"),
-  );
+  // binding 행은 있는데 릴리스 연결만 없으면 공개 증거는 이를 기술할 수 없어 null이 된다.
+  // readiness가 행의 존재만 보면 진단은 "연결됨", 기록은 "미연결"로 갈린다.
+  const releaseless = productApp();
+  releaseless.platformFleetBinding = {
+    id: "platform-binding-product-0001",
+    sourceSha: PRODUCT_SHA,
+    state: "COMPLIANT",
+    hasPlatformRelease: false,
+  };
 
-  // 연결이 없어도 identity가 있으면 관측으로만 남는다. 두 축이 분리돼 있다는 반증이다.
-  const unbound = productApp();
-  unbound.platformFleetBinding = null;
-  const unboundResult = await evaluateFleetMigrationShadowReadiness(
-    dependencies(readyBackoffice(unbound)),
+  const releaselessResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(releaseless)),
   );
-  assert.equal(unboundResult.state, "READY");
-  assert.deepEqual(unboundResult.observationCounts, {
+  assert.equal(releaselessResult.state, "READY");
+  assert.deepEqual(releaselessResult.observationCounts, {
     PLATFORM_FLEET_BINDING_MISSING: 1,
   });
+
+  // 반증: 릴리스가 연결돼 있으면 같은 binding이 관측 사유를 남기지 않는다.
+  const bound = productApp();
+  const boundResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(bound)),
+  );
+  assert.equal(boundResult.state, "READY");
+  assert.deepEqual(boundResult.observationCounts, {});
 });
