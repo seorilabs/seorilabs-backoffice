@@ -36,6 +36,7 @@ export type FleetMigrationShadowReasonCode =
   | "ACTIVE_SNAPSHOT_MISSING"
   | "APP_BINDING_MISMATCH"
   | "APP_BINDING_MISSING"
+  | "APP_PLATFORM_IDENTITY_MISSING"
   | "CLASSIFICATION_DECISION_DRIFT"
   | "CLASSIFICATION_DECISION_INVALID"
   | "CLASSIFICATION_DECISION_MISSING"
@@ -112,6 +113,7 @@ export interface FleetMigrationAppReadback {
     snapshotSignature: string | null;
     activatedAt: string | null;
   }>;
+  platformAppId: string | null;
   platformFleetBinding: {
     id: string;
     sourceSha: string | null;
@@ -199,6 +201,7 @@ export async function readFleetMigrationBackoffice(
         repoId: true,
         repoFullName: true,
         status: true,
+        platformAppId: true,
         discoveryObservations: {
           orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }],
           take: 1,
@@ -270,6 +273,7 @@ export async function readFleetMigrationBackoffice(
         snapshotSignature: revision.snapshotSignature,
         activatedAt: revision.activatedAt?.toISOString() ?? null,
       })),
+      platformAppId: app.platformAppId,
       platformFleetBinding: app.platformFleetBinding,
       activeCredentialBindingCount: app._count.credentialBindings,
     }]),
@@ -438,6 +442,13 @@ function repositoryReasons(
       }
       if (!valid) reasons.push("ACTIVE_SNAPSHOT_INVALID");
     }
+  }
+  // Platform 원장 상의 App identity는 판본 수렴과 다른 축이다. 이것이 비어 있으면
+  // collector adapter가 FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE로 닫는데,
+  // readiness가 먼저 READY를 주면 조직 단위 capability를 발급한 뒤 저장소 하나 때문에
+  // shadow 전체가 중단된다. 두 경계를 같은 곳에 둔다.
+  if (!app.platformAppId) {
+    reasons.push("APP_PLATFORM_IDENTITY_MISSING");
   }
   if (!app.platformFleetBinding) {
     reasons.push("PLATFORM_FLEET_BINDING_MISSING");

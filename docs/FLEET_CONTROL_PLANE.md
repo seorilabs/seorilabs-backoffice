@@ -955,6 +955,11 @@ repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 �
 `PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot을 요구한다.
 non-product repository에 App row가 결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다.
 
+Platform 원장 상의 App identity(`platformAppId`)는 판본 수렴과 다른 축이라 비어 있으면
+`APP_PLATFORM_IDENTITY_MISSING`으로 계속 차단한다. collector adapter가 이 값을 필수로
+요구하므로, readiness가 먼저 열어주면 조직 단위 capability를 발급한 뒤 저장소 하나 때문에
+shadow 전체가 중단된다.
+
 PlatformFleetBinding의 승인본 판본 수렴은 **차단 조건이 아니라 기록 대상이다.** inventory의
 목적이 이관 전 실태를 사실대로 남기는 것이고, 판본 수렴은 그 기록을 근거로 각 저장소가
 이어서 하는 별도 작업이다. binding 부재, 승인본 불일치, 측정 커밋 뒤처짐 세 가지는

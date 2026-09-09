@@ -52,6 +52,7 @@ function productApp(): FleetMigrationAppReadback {
     repoId: "101",
     repoFullName: "seorilabs/product",
     status: "ACTIVE",
+    platformAppId: "registry-app-product-0001",
     latestDiscovery: {
       id: "discovery-product-0001",
       appId: "app-product-0001",
@@ -802,4 +803,34 @@ test("readiness cohort digest는 중앙 계약의 ratified 계산과 같은 값�
       ],
     }),
   );
+});
+
+test("Platform App identity 누락은 판본 수렴과 별개로 계속 차단한다", async () => {
+  // collector adapter가 이 값을 필수로 요구한다. readiness가 먼저 READY를 주면 조직 단위
+  // capability를 발급한 뒤 저장소 하나 때문에 shadow 전체가 중단된다.
+  const app = productApp();
+  app.platformAppId = null;
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(app)),
+  );
+
+  assert.equal(result.state, "BLOCKED");
+  assert.equal(result.reasonCounts.APP_PLATFORM_IDENTITY_MISSING, 1);
+  assert.ok(
+    result.repositories
+      .find(({ repoId }) => repoId === "101")
+      ?.reasonCodes.includes("APP_PLATFORM_IDENTITY_MISSING"),
+  );
+
+  // 연결이 없어도 identity가 있으면 관측으로만 남는다. 두 축이 분리돼 있다는 반증이다.
+  const unbound = productApp();
+  unbound.platformFleetBinding = null;
+  const unboundResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(unbound)),
+  );
+  assert.equal(unboundResult.state, "READY");
+  assert.deepEqual(unboundResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
 });
