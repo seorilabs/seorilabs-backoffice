@@ -1,4 +1,7 @@
-import { fleetMigrationBindingIsDescribable } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
+import {
+  fleetMigrationBindingIsDescribable,
+  fleetMigrationConfigSourceMatchesDiscovery,
+} from "@/lib/control-plane/fleet-migration-backoffice-adapter";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertFullOrganizationInstallation,
@@ -418,11 +421,11 @@ function repositoryReasons(
       || latestDiscovery.sourceRef !== expectedSourceRef
       || !SHA_40.test(sourceObservation.sourceSha)
       || !SHA_40.test(latestDiscovery.sourceSha)
-      || sourceObservation.sourceSha !== latestDiscovery.sourceSha
       || sourceObservation.sourceSha !== vector.headSha
       || !DIGEST_64.test(sourceObservation.payloadHash)
       || !DIGEST_64.test(latestDiscovery.payloadHash)
-      || sourceObservation.payloadHash !== latestDiscovery.payloadHash
+      // 재탐지로 관측 row가 새로 생기는 경우를 공개 증거와 같은 판정으로 본다.
+      || !fleetMigrationConfigSourceMatchesDiscovery(sourceObservation, latestDiscovery)
     ) {
       reasons.push("ACTIVE_CONFIG_SOURCE_MISMATCH");
     }

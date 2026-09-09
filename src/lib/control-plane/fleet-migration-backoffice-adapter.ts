@@ -264,6 +264,25 @@ export interface FleetMigrationBindingEvidenceInput {
  * null을 그대로 기록한다. 연결이 아예 없는 것(null binding)과 "연결은 있는데 원장 쪽
  * 식별자가 없는 것"은 다른 사실이라 구분해 남긴다.
  */
+/**
+ * ACTIVE config가 현재 관측과 같은 source에 묶여 있는지 본다.
+ *
+ * 같은 커밋을 같은 payload로 다시 탐지하면 DiscoveryObservation row가 새로 생긴다.
+ * readiness는 이를 provenance 무효로 보지 않는다 — 재탐지는 사실 변화가 아니기 때문이다.
+ * 공개 증거가 row id 일치를 따로 요구하면 재탐지 한 번에 진단과 기록이 갈리므로 같은
+ * 판정을 공유한다.
+ */
+export function fleetMigrationConfigSourceMatchesDiscovery(
+  configSource: { sourceSha: string; payloadHash: string } | null | undefined,
+  discovery: { sourceSha: string; payloadHash: string } | null | undefined,
+): boolean {
+  // row id가 같으면 자명하게 만족하므로 따로 지름길을 두지 않는다. 지름길을 두면 두 row가
+  // 같은 id인데 source가 다른 경우를 통과시켜, source가 어긋난 것을 못 잡는다.
+  if (!configSource || !discovery) return false;
+  return configSource.sourceSha === discovery.sourceSha
+    && configSource.payloadHash === discovery.payloadHash;
+}
+
 export function fleetMigrationBindingIsDescribable(binding: {
   sourceSha: string | null;
   hasPlatformRelease: boolean;
@@ -419,6 +438,7 @@ export function createFleetMigrationBackofficeAdapter(input: {
                 snapshotDigest: true,
                 snapshotSignature: true,
                 sourceObservationId: true,
+                sourceObservation: { select: { id: true, sourceSha: true, payloadHash: true } },
                 activatedAt: true,
                 projectBlueprint: { select: { payload: true } },
               },
@@ -517,7 +537,14 @@ export function createFleetMigrationBackofficeAdapter(input: {
         const discovery = app.discoveryObservations[0];
         const config = app.configRevisions[0];
         const binding = app.platformFleetBinding;
-        const blueprint = projectBlueprintSchema.safeParse(config?.projectBlueprint?.payload);
+        // ACTIVE config가 어느 관측에 묶였는지는 row id가 아니라 그 관측이 가리키는
+        // source로 본다. 같은 커밋을 같은 payload로 다시 탐지하면 새 row가 생기는데
+        // readiness는 이를 provenance 무효로 보지 않는다. 여기서만 id 일치를 요구하면
+        // 재탐지 한 번에 진단과 기록이 갈린다. 실측 22곳 중 11곳이 이 상태였다.
+        const configSourceCurrent = fleetMigrationConfigSourceMatchesDiscovery(
+          config?.sourceObservation,
+          discovery,
+        );
         if (
           app.configRevisions.length !== 1
           || app.repoId !== repositoryId
@@ -526,13 +553,18 @@ export function createFleetMigrationBackofficeAdapter(input: {
           || discovery.sourceSha !== request.sourceSha
           || discovery.sourceRef !== request.sourceRef
           || !config
-          || config.sourceObservationId !== discovery.id
+          || !configSourceCurrent
           || !config.snapshotDigest
           || !config.snapshotSignature
           || !config.activatedAt
-          || !blueprint.success
           || !platformRegistration
         ) fail("FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE");
+
+        // ProjectBlueprint는 P5 산출물이라 아직 없는 저장소가 대부분이다(실측 22곳 중 20곳).
+        // 없으면 선언된 desired resource가 없다는 뜻이고, provider 실행 기록도 0건이라
+        // 증명된 provider 상태 자체가 없다. 요구하면 이관 기록이 P5 완료를 기다려야 해서
+        // 다시 전부-아니면-전무가 된다.
+        const blueprint = projectBlueprintSchema.safeParse(config.projectBlueprint?.payload);
         appReadback = {
           appId: app.id,
           revision: "1",
@@ -562,13 +594,15 @@ export function createFleetMigrationBackofficeAdapter(input: {
           platformRepositoryId: platformRegistration.repoId.toString(),
           observedSourceSha: request.sourceSha,
         });
-        providerObservations = publicFleetMigrationProviderObservations({
-          rows: app.providerObservations,
-          executions: app.providerExecutions,
-          desiredResources: compileBlueprintResources(blueprint.data),
-          sourceSha: request.sourceSha,
-          configRevisionId: config.id,
-        });
+        providerObservations = blueprint.success
+          ? publicFleetMigrationProviderObservations({
+            rows: app.providerObservations,
+            executions: app.providerExecutions,
+            desiredResources: compileBlueprintResources(blueprint.data),
+            sourceSha: request.sourceSha,
+            configRevisionId: config.id,
+          })
+          : [];
         credentialBindings = publicCredentialBindings(app.credentialBindings);
       }
       const now = input.now?.() ?? new Date();
