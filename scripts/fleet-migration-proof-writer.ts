@@ -1,5 +1,6 @@
 import { createFleetMigrationProofWriter } from "@/lib/control-plane/fleet-migration-proof-writer";
 import { readBoundSecretFile } from "@/lib/control-plane/seori-auth-agent-transport";
+import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-public-error";
 import { prisma } from "@/lib/prisma";
 
 function required(name: string, pattern: RegExp): string {
@@ -42,8 +43,13 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch(() => {
-    console.error("Fleet migration proof writer 실패: FLEET_MIGRATION_PROOF_WRITE_FAILED");
+  .catch((error) => {
+    // 종전에는 모든 실패를 code 하나로 삼켜 승인 만료인지, stable state 불일치인지,
+    // idempotency 충돌인지 구분할 수 없었다. 같은 실행기 두 곳이 쓰는 공통 함수로
+    // FLEET_MIGRATION_* 계열만 그대로 노출한다. 그 계열은 전수 조사에서 리터럴 상수와
+    // sha256 hex, HTTP status만 담는 것이 확인돼 있다.
+    console.error(`Fleet migration proof writer 실패: ${
+      fleetMigrationPublicError(error, "FLEET_MIGRATION_PROOF_WRITE_FAILED")}`);
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());

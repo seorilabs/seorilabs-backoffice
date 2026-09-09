@@ -43,3 +43,20 @@ test("실행기가 자체 공개 code 패턴을 다시 만들지 않는다", () 
     );
   }
 });
+
+test("proof writer도 실패 code를 삼키지 않는다", () => {
+  // 종전에는 모든 실패를 FLEET_MIGRATION_PROOF_WRITE_FAILED 하나로 삼켰다. 승인 만료인지,
+  // stable state 불일치인지, idempotency 충돌인지 구분할 수 없어 Job 로그만으로는 조사할
+  // 수 없었다. 이 실행기는 Job으로만 돌아 다른 관측 경로가 없다.
+  const source = read("fleet-migration-proof-writer.ts");
+  assert.match(
+    source,
+    /import \{ fleetMigrationPublicError \} from "@\/lib\/control-plane\/fleet-migration-public-error";/u,
+  );
+  assert.match(
+    source,
+    /fleetMigrationPublicError\(error, "FLEET_MIGRATION_PROOF_WRITE_FAILED"\)/u,
+  );
+  // 반증: 인자 없는 catch로 되돌아가면 잡힌다.
+  assert.doesNotMatch(source, /\.catch\(\(\) => \{/u);
+});
