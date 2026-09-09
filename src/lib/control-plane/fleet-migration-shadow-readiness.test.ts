@@ -52,6 +52,7 @@ function productApp(): FleetMigrationAppReadback {
     repoId: "101",
     repoFullName: "seorilabs/product",
     status: "ACTIVE",
+    platformAppId: "registry-app-product-0001",
     latestDiscovery: {
       id: "discovery-product-0001",
       appId: "app-product-0001",
@@ -78,6 +79,7 @@ function productApp(): FleetMigrationAppReadback {
       id: "platform-binding-product-0001",
       sourceSha: PRODUCT_SHA,
       state: "COMPLIANT",
+      hasPlatformRelease: true,
     },
     activeCredentialBindingCount: 2,
   };
@@ -264,6 +266,8 @@ test("PAUSED 또는 DEPRECATED PRODUCT_APP도 존재하는 repo binding으로 �
     assert.equal(result.state, "BLOCKED", status);
     assert.deepEqual(result.reasonCounts, {
       ACTIVE_CONFIG_MISSING: 1,
+    }, status);
+    assert.deepEqual(result.observationCounts, {
       PLATFORM_FLEET_BINDING_MISSING: 1,
     }, status);
     const repository = result.repositories.find(({ repoId }) => repoId === "101");
@@ -507,9 +511,15 @@ test("semantic source 비교는 snapshot, 단일 ACTIVE와 Platform gate를 완�
   const nonCompliantPlatformResult = await evaluateFleetMigrationShadowReadiness(
     dependencies(readyBackoffice(nonCompliantPlatform)),
   );
+  // 승인본 판본 불일치는 이관을 막지 않고 관측으로만 남는다.
+  assert.equal(nonCompliantPlatformResult.state, "READY");
+  assert.equal(
+    nonCompliantPlatformResult.observationCounts.PLATFORM_FLEET_BINDING_NOT_COMPLIANT,
+    1,
+  );
   assert.equal(
     nonCompliantPlatformResult.reasonCounts.PLATFORM_FLEET_BINDING_NOT_COMPLIANT,
-    1,
+    undefined,
   );
 });
 
@@ -529,30 +539,57 @@ test("classification decision은 양수 revision과 collector evidence ID를 모
   assert.equal(result.reasonCounts.CLASSIFICATION_DECISION_INVALID, 2);
 });
 
-test("PlatformFleetBinding은 exact source와 COMPLIANT 상태가 모두 맞아야 한다", async () => {
-  const app = productApp();
-  app.platformFleetBinding = {
+test("PlatformFleetBinding 판본 불일치와 미연결은 차단이 아니라 관측으로 남는다", async () => {
+  // inventory의 목적은 이관 전 실태를 사실대로 남기는 것이다. 승인본 수렴은 그
+  // 기록을 근거로 각 저장소가 이어서 하는 별도 작업이라 여기서 막지 않는다.
+  const divergent = productApp();
+  divergent.platformFleetBinding = {
     id: "platform-binding-product-0001",
     sourceSha: "e".repeat(40),
     state: "PENDING",
+    hasPlatformRelease: true,
   };
 
-  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+  const divergentResult = await evaluateFleetMigrationShadowReadiness(dependencies({
     registrations: [
       registration(101, "seorilabs/product", "PRODUCT_APP"),
       registration(202, "seorilabs/infra", "INFRA_REPO"),
     ],
-    apps: [app],
+    apps: [divergent],
   }));
 
-  assert.equal(result.state, "BLOCKED");
-  assert.deepEqual(
-    result.repositories.find(({ repoId }) => repoId === "101")?.reasonCodes,
-    [
-      "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
-      "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
-    ],
+  assert.equal(divergentResult.state, "READY");
+  const divergentRepository = divergentResult.repositories.find(
+    ({ repoId }) => repoId === "101",
   );
+  assert.deepEqual(divergentRepository?.reasonCodes, []);
+  assert.deepEqual(divergentRepository?.observationCodes, [
+    "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
+    "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
+  ]);
+  assert.deepEqual(divergentResult.reasonCounts, {});
+  assert.deepEqual(divergentResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_NOT_COMPLIANT: 1,
+    PLATFORM_FLEET_BINDING_SOURCE_MISMATCH: 1,
+  });
+
+  // 아직 어떤 릴리스에도 연결되지 않은 저장소도 같은 방식으로 기록한다.
+  const unbound = productApp();
+  unbound.platformFleetBinding = null;
+
+  const unboundResult = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [unbound],
+  }));
+
+  assert.equal(unboundResult.state, "READY");
+  assert.deepEqual(unboundResult.reasonCounts, {});
+  assert.deepEqual(unboundResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
 });
 
 test("ACTIVE snapshot 내용이나 서명이 바뀌면 readiness를 열지 않는다", async () => {
@@ -700,4 +737,151 @@ test("PLATFORM_PRODUCER의 App row는 blocker가 아니고 INFRA_REPO는 그대�
   }));
   assert.equal(none.state, "READY");
   assert.deepEqual(none.reasonCounts, {});
+});
+
+test("readiness cohort digest는 중앙 계약의 ratified 계산과 같은 값을 낸다", async () => {
+  // 이 digest 입력에는 contractVersion 문자열이 들어간다. 중앙 계약 패키지가 같은
+  // 문자열로 ratified baseline cohort digest를 만들고, 그 값이 inventory schema에
+  // const로 박혀 있다. 여기서 버전 문자열을 올리면 baseline ratification이 어긋나
+  // 이관 체인 전체가 조용히 막힌다. 두 계산이 같은 값을 내는지 고정한다.
+  const { computeFleetMigrationShadowCohortDigest } = await import(
+    "seorilabs-org-contracts/repo-contract/fleet-migration"
+  );
+
+  const result = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(productApp())),
+  );
+
+  const central = computeFleetMigrationShadowCohortDigest({
+    installationId: "142120077",
+    repositories: [
+      {
+        id: "101",
+        fullName: "seorilabs/product",
+        defaultRef: "refs/heads/main",
+        sourceSha: PRODUCT_SHA,
+        archived: false,
+        private: true,
+        fork: false,
+      },
+      {
+        id: "202",
+        fullName: "seorilabs/infra",
+        defaultRef: "refs/heads/main",
+        sourceSha: INFRA_SHA,
+        archived: false,
+        private: true,
+        fork: false,
+      },
+    ],
+  });
+
+  assert.equal(result.cohortDigest, central);
+
+  // 반증: 저장소 하나만 달라져도 두 값이 함께 움직인다.
+  assert.notEqual(
+    central,
+    computeFleetMigrationShadowCohortDigest({
+      installationId: "142120077",
+      repositories: [
+        {
+          id: "101",
+          fullName: "seorilabs/product",
+          defaultRef: "refs/heads/main",
+          sourceSha: "c".repeat(40),
+          archived: false,
+          private: true,
+          fork: false,
+        },
+        {
+          id: "202",
+          fullName: "seorilabs/infra",
+          defaultRef: "refs/heads/main",
+          sourceSha: INFRA_SHA,
+          archived: false,
+          private: true,
+          fork: false,
+        },
+      ],
+    }),
+  );
+});
+
+test("Platform 원장 미등록과 릴리스 없는 binding은 기록과 같은 기준으로 관측된다", async () => {
+  // Platform 원장 식별자는 실제로 미등록인 저장소가 있다. 차단하면 이관 기록이 다시
+  // 전부-아니면-전무가 된다. 공개 증거도 연결 사실은 남기고 이 값만 null로 적는다.
+  const unregistered = productApp();
+  unregistered.platformAppId = null;
+
+  const unregisteredResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(unregistered)),
+  );
+  assert.equal(unregisteredResult.state, "READY");
+  assert.deepEqual(unregisteredResult.observationCounts, {
+    APP_PLATFORM_IDENTITY_MISSING: 1,
+  });
+
+  // binding 행은 있는데 릴리스 연결만 없으면 공개 증거는 이를 기술할 수 없어 null이 된다.
+  // readiness가 행의 존재만 보면 진단은 "연결됨", 기록은 "미연결"로 갈린다.
+  const releaseless = productApp();
+  releaseless.platformFleetBinding = {
+    id: "platform-binding-product-0001",
+    sourceSha: PRODUCT_SHA,
+    state: "COMPLIANT",
+    hasPlatformRelease: false,
+  };
+
+  const releaselessResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(releaseless)),
+  );
+  assert.equal(releaselessResult.state, "READY");
+  assert.deepEqual(releaselessResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
+
+  // sourceSha가 비어 있어도 공개 증거는 기술할 수 없다. 같은 판정을 쓰므로 함께 움직인다.
+  const sourceless = productApp();
+  sourceless.platformFleetBinding = {
+    id: "platform-binding-product-0001",
+    sourceSha: null,
+    state: "COMPLIANT",
+    hasPlatformRelease: true,
+  };
+
+  const sourcelessResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(sourceless)),
+  );
+  assert.equal(sourcelessResult.state, "READY");
+  assert.deepEqual(sourcelessResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
+
+  // 반증: 릴리스가 연결돼 있으면 같은 binding이 관측 사유를 남기지 않는다.
+  const bound = productApp();
+  const boundResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(bound)),
+  );
+  assert.equal(boundResult.state, "READY");
+  assert.deepEqual(boundResult.observationCounts, {});
+});
+
+test("readiness와 공개 증거는 같은 판정 함수로 binding 기술 가능 여부를 본다", async () => {
+  // 조건을 각자 들고 있으면 필드가 하나 늘 때마다 진단과 기록이 갈린다. 실제로 릴리스
+  // 부재와 source SHA 부재에서 연달아 갈렸다. 같은 함수를 쓰는지 소스 계약으로 고정한다.
+  const { readFileSync } = await import("node:fs");
+  const readiness = readFileSync(
+    new URL("./fleet-migration-shadow-readiness.ts", import.meta.url),
+    "utf8",
+  );
+  const adapter = readFileSync(
+    new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(readiness, /fleetMigrationBindingIsDescribable\(binding\)/u);
+  assert.match(adapter, /export function fleetMigrationBindingIsDescribable/u);
+  assert.match(adapter, /if \(!fleetMigrationBindingIsDescribable\(/u);
+
+  // 반증: readiness가 자체 조건으로 되돌아가면 잡힌다.
+  assert.doesNotMatch(readiness, /binding\.hasPlatformRelease\s*(&&|\|\|)/u);
 });

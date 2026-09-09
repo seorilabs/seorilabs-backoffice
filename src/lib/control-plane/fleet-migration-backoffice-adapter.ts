@@ -7,7 +7,9 @@ import { decideBlueprintReadback } from "@/lib/control-plane/provider-execution"
 import { prisma } from "@/lib/prisma";
 
 const ORGANIZATION_ID = "283115031";
-const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v1";
+// 증거 형태가 바뀌면 식별자도 함께 올린다. collector가 같은 값을 요구하므로 옛 shape을
+// 돌려주는 producer는 필드 부재가 아니라 계약 불일치로 즉시 닫힌다.
+export const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v3";
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const PRIVATE_KEY = /^(?:authorization|bytes|cookie|credentialValue|password|payload|privateKey|privateKeyPem|rawSecret|secret|secretValue|token)$/iu;
@@ -228,6 +230,75 @@ export function stableFleetMigrationBackofficeStateDigest(
     providerObservations: providerObservations as unknown as JsonValue,
     credentialBindings: credentialBindings as unknown as JsonValue,
   });
+}
+
+export interface FleetMigrationBindingEvidenceInput {
+  binding: {
+    id: string;
+    state: string;
+    sourceSha: string | null;
+    platformRelease: { sourceSha: string; manifestDigest: string | null } | null;
+  } | null;
+  appId: string;
+  platformAppId: string | null;
+  platformRepositoryId: string;
+  observedSourceSha: string;
+}
+
+/**
+ * 승인된 Platform SDK 판본을 실제로 쓰고 있는지를 그대로 기록한다.
+ *
+ * inventory는 이관 전 실태를 남기는 것이 목적이라 판본이 어긋난 상태도 기록 대상이다.
+ * 여기서 COMPLIANT를 요구하면 조직 전체가 동시에 수렴하기 전까지 실태를 한 번도 남길
+ * 수 없고, 저장소 하나가 움직일 때마다 조직 전체 기록이 다시 막힌다. 판본 수렴은 이
+ * 기록을 근거로 각 저장소가 이어서 하는 별도 작업이다.
+ *
+ * 연결 자체가 없거나, 어떤 릴리스에도 묶이지 않았거나, 어느 커밋에서 잰 상태인지 알 수
+ * 없으면 기술할 대상이 없어 null로 남긴다. 이것도 "아직 아무 릴리스에도 연결되지 않았다"는
+ * 사실 기록이다.
+ *
+ * appSourceCurrent는 그 상태를 지금 관측 중인 커밋에서 쟀는지를 뜻한다. 뒤처진 측정도
+ * 기록하되, 뒤처졌다는 사실이 기록 안에서 드러나야 compliance를 오독할 수 없다.
+ *
+ * platformAppId는 Platform 원장에서의 앱 식별자다. 아직 등록되지 않은 저장소가 실재하므로
+ * null을 그대로 기록한다. 연결이 아예 없는 것(null binding)과 "연결은 있는데 원장 쪽
+ * 식별자가 없는 것"은 다른 사실이라 구분해 남긴다.
+ */
+export function fleetMigrationBindingIsDescribable(binding: {
+  sourceSha: string | null;
+  hasPlatformRelease: boolean;
+} | null): boolean {
+  return binding !== null && binding.hasPlatformRelease && binding.sourceSha !== null;
+}
+
+export function fleetMigrationPlatformFleetBindingEvidence(
+  input: FleetMigrationBindingEvidenceInput,
+): Record<string, unknown> | null {
+  const release = input.binding?.platformRelease ?? null;
+  const appSourceSha = input.binding?.sourceSha ?? null;
+  // readiness가 같은 판정을 쓰도록 하나로 모은다. 조건이 갈리면 진단은 "연결됨",
+  // 기록은 "미연결"이 되어 문서가 약속한 동일 기준이 깨진다.
+  if (!fleetMigrationBindingIsDescribable(
+    input.binding === null
+      ? null
+      : { sourceSha: appSourceSha, hasPlatformRelease: release !== null },
+  )) return null;
+  // 위 판정이 셋을 모두 보장하지만 타입 좁히기를 위해 다시 확인한다.
+  if (!input.binding || !release || !appSourceSha) return null;
+  const value = {
+    observationId: input.binding.id,
+    revision: "1",
+    appId: input.appId,
+    platformAppId: input.platformAppId,
+    platformRepositoryId: input.platformRepositoryId,
+    platformSourceSha: release.sourceSha,
+    appSourceSha,
+    appSourceCurrent: appSourceSha === input.observedSourceSha,
+    state: "ACTIVE",
+    compliance: input.binding.state === "COMPLIANT" ? "COMPLIANT" : "DIVERGENT",
+    complianceDetail: input.binding.state,
+  };
+  return { ...value, digest: digest({ ...value, manifestDigest: release.manifestDigest }) };
 }
 
 export function fleetMigrationProofDigest(input: {
@@ -460,11 +531,6 @@ export function createFleetMigrationBackofficeAdapter(input: {
           || !config.snapshotSignature
           || !config.activatedAt
           || !blueprint.success
-          || !binding
-          || binding.state !== "COMPLIANT"
-          || binding.sourceSha !== request.sourceSha
-          || !binding.platformRelease
-          || !app.platformAppId
           || !platformRegistration
         ) fail("FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE");
         appReadback = {
@@ -489,16 +555,13 @@ export function createFleetMigrationBackofficeAdapter(input: {
           policyRevision: input.snapshotPolicyRevision,
           state: "VERIFIED",
         };
-        const bindingValue = {
-          observationId: binding.id,
-          revision: "1",
+        platformFleetBinding = fleetMigrationPlatformFleetBindingEvidence({
+          binding,
           appId: app.id,
           platformAppId: app.platformAppId,
           platformRepositoryId: platformRegistration.repoId.toString(),
-          platformSourceSha: binding.platformRelease.sourceSha,
-          state: "ACTIVE",
-        };
-        platformFleetBinding = { ...bindingValue, digest: digest({ ...bindingValue, manifestDigest: binding.platformRelease.manifestDigest }) };
+          observedSourceSha: request.sourceSha,
+        });
         providerObservations = publicFleetMigrationProviderObservations({
           rows: app.providerObservations,
           executions: app.providerExecutions,

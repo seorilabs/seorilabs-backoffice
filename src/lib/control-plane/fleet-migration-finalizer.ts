@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import {
+  BACKOFFICE_CONTRACT,
   createFleetMigrationBackofficeAdapter,
   stableFleetMigrationBackofficeStateDigest,
 } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
@@ -221,7 +222,7 @@ export function createFleetMigrationFinalizer(input: {
         const finalBackoffice: Array<{ repositoryId: string; digest: string }> = [];
         for (const binding of bindings) {
           const readback = await backoffice.readBackofficePublicEvidence({
-            contract: "seorilabs-fleet-migration-backoffice-public-evidence-v1",
+            contract: BACKOFFICE_CONTRACT,
             organizationId: ORGANIZATION_ID,
             repositoryId: binding.id,
             fullName: binding.fullName,

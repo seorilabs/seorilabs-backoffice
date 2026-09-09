@@ -49,6 +49,18 @@ declare module "seorilabs-org-contracts/repo-contract/fleet-migration" {
   import type { KeyObject } from "node:crypto";
 
   export function computeFleetEvidenceDigest(value: unknown): string;
+  export function computeFleetMigrationShadowCohortDigest(input: {
+    installationId: string;
+    repositories: Array<{
+      id: string;
+      fullName: string;
+      defaultRef: string;
+      sourceSha: string;
+      archived: boolean;
+      private: boolean;
+      fork: boolean;
+    }>;
+  }): string;
   export function loadTrustedFleetMigrationInventoryBinding(input: {
     inventory: Record<string, unknown>;
     trustedInventoryKeys: Record<string, KeyObject>;
