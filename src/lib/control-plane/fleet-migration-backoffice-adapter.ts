@@ -602,7 +602,18 @@ export function createFleetMigrationBackofficeAdapter(input: {
           platformRepositoryId: platformRegistration.repoId.toString(),
           observedSourceSha: request.sourceSha,
         });
-        providerObservations = blueprint.success
+        // 기록할 provider 상태가 있는지는 blueprint 선언이 아니라 그것을 증명하는 실행
+        // 기록이 있는지로 갈린다. 현재 조직 전체 BLUEPRINT_RESOURCE 실행은 0건이라
+        // 증명된 provider 상태 자체가 없다. 선언만 보고 투영을 부르면
+        // PROVIDER_EXECUTION_COVERAGE_INCOMPLETE로 닫힌다.
+        //
+        // 일부만 덮인 경우는 계속 fail-closed다. 덮인 것만 기록하면 선언된 나머지가
+        // 없는 것처럼 읽혀 오독을 만든다.
+        const attestingExecutions = app.providerExecutions.filter((execution) => (
+          execution.sourceSha === request.sourceSha
+          && execution.configRevisionId === config.id
+        ));
+        providerObservations = blueprint.success && attestingExecutions.length > 0
           ? publicFleetMigrationProviderObservations({
             rows: app.providerObservations,
             executions: app.providerExecutions,
