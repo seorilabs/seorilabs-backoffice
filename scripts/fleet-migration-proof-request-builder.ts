@@ -132,6 +132,17 @@ function candidatesFromDetections(input: {
   });
 }
 
+/**
+ * cohort 커버리지 대조에 쓰는 저장소 vector.
+ *
+ * 기대값과 수집값을 각자 만들면 구분자 하나가 갈려도 전부 불일치가 된다. 실제로 기대값은
+ * NUL, 수집값은 공백을 써서 31곳이 항상 어긋났고 그 사실이 code 하나에 가려져 있었다.
+ * 구분자는 저장소 이름과 SHA 어디에도 나올 수 없는 NUL을 쓴다.
+ */
+function repositoryCoverageVector(fullName: string, sourceSha: string): string {
+  return `${fullName}\u0000${sourceSha}`;
+}
+
 /** candidate의 subject는 공개 증거에 이미 있는 사실만 옮긴다. */
 function subjectFromEvidence(
   publicEvidence: Record<string, unknown>,
@@ -223,7 +234,7 @@ async function main(): Promise<void> {
   // HEAD가 움직이면 ID만 맞는 요청이 만들어지고, 그 승인은 전부 버려진다.
   const expectedVector = new Map(readiness.repositories.map((repository) => [
     repository.repoId,
-    `${repository.repoFullName} ${repository.sourceSha ?? ""}`,
+    repositoryCoverageVector(repository.repoFullName, repository.sourceSha ?? ""),
   ]));
   const collected: Array<Record<string, unknown>> = [];
   const collector = createFleetMigrationReadOnlyCollector({
@@ -346,13 +357,16 @@ async function main(): Promise<void> {
   // 어긋난 상태로 승인을 만들지 않는다.
   const coveredVector = new Map(collected.map((item) => [
     String(item.repositoryId),
-    `${String(item.repositoryFullName)} ${String(item.sourceSha)}`,
+    repositoryCoverageVector(String(item.repositoryFullName), String(item.sourceSha)),
   ]));
   const mismatched = [...expectedVector]
     .filter(([repoId, vector]) => coveredVector.get(repoId) !== vector)
-    .map(([repoId, vector]) => `${vector.split(" ")[0]} 기대=${
-      vector.split(" ")[1]?.slice(0, 8) ?? "?"} 수집=${
-      coveredVector.get(repoId)?.split(" ")[1]?.slice(0, 8) ?? "없음"}`);
+    .map(([repoId, vector]) => {
+      const [fullName, expectedSha] = vector.split("\u0000");
+      const covered = coveredVector.get(repoId)?.split("\u0000")[1];
+      return `${fullName} 기대=${expectedSha?.slice(0, 8) ?? "?"} 수집=${
+        covered?.slice(0, 8) ?? "없음"}`;
+    });
   const extra = [...coveredVector.keys()].filter((repoId) => !expectedVector.has(repoId));
   if (
     coveredVector.size !== collected.length

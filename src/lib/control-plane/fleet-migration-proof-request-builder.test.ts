@@ -200,6 +200,23 @@ test("커버리지 불일치도 어느 저장소가 왜 어긋났는지 남긴�
   // 공개 식별자만 남긴다. 저장소 이름과 SHA 앞 8자리다.
   assert.match(source, /\.slice\(0, 8\)/u);
 
+  // 기대값과 수집값이 같은 함수로 만들어져야 한다. 각자 만들면 구분자 하나가 갈려도
+  // 전부 불일치가 되고, 그 사실이 code 하나에 가려진다. 실제로 기대값은 NUL, 수집값은
+  // 공백을 써서 31곳이 항상 어긋났다.
+  assert.match(source, /function repositoryCoverageVector\(/u);
+  assert.match(
+    source,
+    /expectedVector = new Map\(readiness\.repositories\.map[\s\S]{0,120}repositoryCoverageVector\(/u,
+  );
+  assert.match(
+    source,
+    /coveredVector = new Map\(collected\.map[\s\S]{0,120}repositoryCoverageVector\(/u,
+  );
+  // 반증: 어느 한쪽이 자체 템플릿으로 되돌아가면 잡힌다.
+  assert.doesNotMatch(source, /\$\{String\(item\.repositoryFullName\)\} \$\{/u);
+  // 로그도 같은 구분자로 나눈다.
+  assert.match(source, /split\("\\u0000"\)/u);
+
   // 판정 자체는 그대로다. 로그를 남기고도 반드시 닫는다.
   assert.match(source, /throw new Error\("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID"\)/u);
   assert.match(source, /coveredVector\.size !== expectedVector\.size/u);
