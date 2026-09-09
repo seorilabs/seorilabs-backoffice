@@ -9,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 const ORGANIZATION_ID = "283115031";
 // 증거 형태가 바뀌면 식별자도 함께 올린다. collector가 같은 값을 요구하므로 옛 shape을
 // 돌려주는 producer는 필드 부재가 아니라 계약 불일치로 즉시 닫힌다.
-export const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v2";
+export const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v3";
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const PRIVATE_KEY = /^(?:authorization|bytes|cookie|credentialValue|password|payload|privateKey|privateKeyPem|rawSecret|secret|secretValue|token)$/iu;

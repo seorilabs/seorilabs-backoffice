@@ -100,7 +100,7 @@ function adapter(proofPresent = true) {
 
 function request() {
   return {
-    contract: "seorilabs-fleet-migration-backoffice-public-evidence-v2",
+    contract: "seorilabs-fleet-migration-backoffice-public-evidence-v3",
     organizationId: "283115031",
     repositoryId: "101",
     fullName: "seorilabs/infra",
