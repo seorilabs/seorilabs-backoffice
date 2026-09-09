@@ -72,16 +72,60 @@ test("HMAC 키를 issuer와 같은 바이트열로 읽는다", () => {
   assert.match(source, /snapshotSigningKey\.length < 32 \|\| snapshotSigningKey\.length > 4096/u);
 });
 
-test("candidate의 proofs는 비운 채 기록한다", () => {
-  // sourceReadback은 읽기 시점에 Backoffice adapter가 채운다. 여기서 채우면 하지 않은
-  // 대조를 했다고 기록하는 것이 된다.
-  assert.match(source, /proofs: \{\},/u);
-  // 주석의 언급이 아니라 실제 생성만 막는다.
-  assert.equal(
-    /sourceReadback\s*[:=]/u.test(source),
-    false,
-    "builder가 sourceReadback을 직접 만든다",
-  );
+test("candidate의 sourceReadback은 스캔 값에서만 만들고 나머지 proof는 비운다", () => {
+  // collector의 bindCandidates가 스캔한 detection마다 candidate 하나를 요구하고, 그
+  // candidate의 sourceReadback을 자신이 방금 읽은 tree/blob과 대조한다. 그래서 이 단계에서
+  // 반드시 만들어야 하고, 동시에 스캔 값 밖에서 가져오면 대조에서 걸린다.
+  const readback = /const sourceReadback: Record<string, unknown> = \{([\s\S]*?)\n    \};/u
+    .exec(source);
+  assert.ok(readback, "sourceReadback 생성 블록이 있어야 한다");
+  for (const field of [
+    "path: scanned.path",
+    "gitEntry: structuredClone(scanned.gitEntry)",
+    "contentDigest: scanned.contentDigest",
+    "treeSha: input.treeSha",
+    "sourceSha: input.sourceSha",
+    "sourceRef: input.sourceRef",
+  ]) {
+    assert.ok(readback[1].includes(field), `sourceReadback이 ${field}를 스캔에서 가져와야 한다`);
+  }
+
+  // 나머지 슬롯은 이 단계에서 하지 않은 대조다. 채우면 하지 않은 확인을 기록하게 된다.
+  for (const slot of [
+    "activeConfigReadback",
+    "marketProfileReadback",
+    "workflowBundleReadback",
+    "platformFleetBindingReadback",
+    "parityStream",
+    "consumerReadback",
+    "controlPlaneReadback",
+  ]) {
+    assert.match(source, new RegExp(`${slot}: null,`, "u"), `${slot}은 null이어야 한다`);
+  }
+  assert.match(source, /buildOnly: \[\],/u);
+  assert.match(source, /credentialBindings: \[\],/u);
+  assert.match(source, /gitRestore: null,/u);
+  assert.match(source, /replacement: null,/u);
+});
+
+test("candidate subject는 공개 증거에 있는 사실만 옮긴다", () => {
+  // subject를 지어내면 그 저장소에 대해 하지 않은 귀속을 기록하게 된다. 공개 증거와
+  // 요청 값에서만 가져오는지 고정한다.
+  const subject = /function subjectFromEvidence\([\s\S]*?\n\}/u.exec(source);
+  assert.ok(subject, "subjectFromEvidence가 있어야 한다");
+  for (const field of [
+    "appId: app?.appId ?? null",
+    "repositoryId: request.repositoryId",
+    "fullName: request.fullName",
+    "sourceSha: request.sourceSha",
+    "platformAppId: binding?.platformAppId ?? null",
+    "classificationDecisionRevision: publicEvidence.classificationDecisionRevision",
+  ]) {
+    assert.ok(subject[0].includes(field), `subject가 ${field}를 그대로 옮겨야 한다`);
+  }
+  // Platform 원장 미등록과 App 부재는 null로 남긴다. 임의 기본값을 넣지 않는다.
+  assert.doesNotMatch(subject[0], /platformAppId: "/u);
+  assert.doesNotMatch(subject[0], /appId: "/u);
 });
 
 test("승인 서명을 하지 않는다", () => {
