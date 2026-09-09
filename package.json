@@ -38,7 +38,7 @@
     "prom-client": "^15.1.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "seorilabs-org-contracts": "github:seorilabs/.github#9b9cf91f1340d1a1abe836f118433d469123c2a4",
+    "seorilabs-org-contracts": "github:seorilabs/.github#0607744b2212371bd7873304068d845385d49f12",
     "undici": "8.9.0",
     "yaml": "^2.9.0",
     "zod": "^3.24.1"
