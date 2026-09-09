@@ -18,6 +18,7 @@ import {
 import { canonicalJson, jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
 import { recordPlatformRelease, reconcilePlatformFleet } from "@/lib/control-plane/platform-fleet";
 import { loadExactManagedPlatformConsumers } from "@/lib/control-plane/platform-fleet-cohort";
+import { platformFleetPolicyRevision } from "@/lib/control-plane/platform-fleet-policy";
 import { ControlPlaneError, recordProviderObservation } from "@/lib/control-plane/service";
 import type { Octokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
@@ -627,6 +628,9 @@ export async function producePlatformFleetRelease(
     idempotencyKey: producerIdempotencyKey("platform-fleet-producer-reconcile", {
       platformReleaseId: releaseResult.release.id,
       consumers: reconcileConsumers,
+      // 판정 규칙이 바뀌면 이미 reconcile된 조합도 한 번 다시 판정해야 한다.
+      // 이 값이 없으면 정책 변경이 기존 소비자에게 영원히 적용되지 않는다.
+      policyRevision: platformFleetPolicyRevision,
     }),
     signingKey: dependencies.signingKey,
   });

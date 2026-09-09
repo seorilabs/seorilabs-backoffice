@@ -888,7 +888,7 @@ export async function reconcilePlatformFleet(input: {
               : disposition.kind === "MISSING_UNMANAGED" && planStatus === "ISSUE_OPEN"
                 ? "MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN"
               : disposition.kind === "AHEAD_UNMANAGED" && planStatus === "ISSUE_OPEN"
-                ? "AHEAD_OF_APPROVED_RELEASE_ISSUE_OPEN"
+                ? "AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN"
             : disposition.bindingState;
       await tx.platformFleetBinding.upsert({
         where: { appId: app.id },

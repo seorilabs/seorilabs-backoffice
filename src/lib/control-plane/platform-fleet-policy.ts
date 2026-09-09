@@ -3,6 +3,17 @@ import type {
   PlatformReleaseManifest,
 } from "@/lib/control-plane/contracts";
 
+/**
+ * disposition 판정 규칙의 개정판.
+ *
+ * reconcile 멱등 키가 `{platformReleaseId, consumers}`뿐이면 이미 판정된 조합은 결과를
+ * 영원히 replay하므로 정책을 바꿔도 기존 소비자에는 적용되지 않는다. 실제로 이 개정을
+ * 만든 ahead 소비자가 옛 SDK_UPDATE_PR 계획에 그대로 남는다.
+ *
+ * 판정 의미를 바꿀 때마다 올린다. 그러면 다음 producer 실행이 한 번 다시 판정한다.
+ */
+export const platformFleetPolicyRevision = "platform-fleet-policy-v2-ahead-unmanaged";
+
 export type PlatformFleetDisposition = {
   kind:
     | "SDK_UPDATE_PR"
@@ -86,7 +97,7 @@ export function platformFleetDisposition(input: {
     return {
       kind: "AHEAD_UNMANAGED",
       status: "PENDING",
-      bindingState: "AHEAD_OF_APPROVED_RELEASE_PENDING",
+      bindingState: "AHEAD_UNMANAGED_REMEDIATION_PENDING",
     };
   }
   return { kind: "SDK_UPDATE_PR", status: "QUEUED", bindingState: "UPDATE_PR_QUEUED" };
