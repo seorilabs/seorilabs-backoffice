@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createFleetMigrationBackofficeAdapter,
+  fleetMigrationPlatformFleetBindingEvidence,
   fleetMigrationProofDigest,
   publicFleetMigrationProviderObservations,
   stableFleetMigrationBackofficeStateDigest,
@@ -254,4 +255,79 @@ test("provider execution은 ACTIVE blueprint의 전체 exact resource set을 덮
     sourceSha: SOURCE_SHA,
     configRevisionId: "config-revision-0001",
   }), /FLEET_MIGRATION_PROVIDER_OBSERVATION_PROVENANCE_INVALID/);
+});
+
+test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남긴다", () => {
+  // 이관 전 실태 기록이 목적이므로 수렴 여부로 기록을 막지 않는다. 대신 어떤 상태였고
+  // 어느 커밋 기준이었는지를 남겨야 나중에 각 저장소가 이 기록을 근거로 따라올 수 있다.
+  const release = { sourceSha: "1".repeat(40), manifestDigest: "2".repeat(64) };
+  const common = {
+    appId: "app-product-0001",
+    platformAppId: "registry-app-product-0001",
+    platformRepositoryId: "999",
+  };
+
+  const compliant = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    binding: {
+      id: "binding-0001",
+      state: "COMPLIANT",
+      sourceSha: "3".repeat(40),
+      platformRelease: release,
+    },
+  });
+  assert.equal(compliant?.compliance, "COMPLIANT");
+  assert.equal(compliant?.complianceDetail, "COMPLIANT");
+  assert.equal(compliant?.appSourceSha, "3".repeat(40));
+  assert.equal(compliant?.state, "ACTIVE");
+
+  const divergent = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    binding: {
+      id: "binding-0001",
+      state: "UPDATE_PR_QUEUED",
+      sourceSha: "3".repeat(40),
+      platformRelease: release,
+    },
+  });
+  assert.equal(divergent?.compliance, "DIVERGENT");
+  assert.equal(divergent?.complianceDetail, "UPDATE_PR_QUEUED");
+
+  // 계약이 모르는 새 내부 상태가 생겨도 DIVERGENT로 접히고 원문은 detail에 남는다.
+  const unknownState = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    binding: {
+      id: "binding-0001",
+      state: "AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN",
+      sourceSha: null,
+      platformRelease: release,
+    },
+  });
+  assert.equal(unknownState?.compliance, "DIVERGENT");
+  assert.equal(unknownState?.complianceDetail, "AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN");
+  assert.equal(unknownState?.appSourceSha, null);
+
+  // 같은 상태라도 판본이 다르면 digest가 갈린다. 기록이 실제 내용에 결박돼 있다는 뜻이다.
+  const otherRelease = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    binding: {
+      id: "binding-0001",
+      state: "COMPLIANT",
+      sourceSha: "3".repeat(40),
+      platformRelease: { sourceSha: "4".repeat(40), manifestDigest: release.manifestDigest },
+    },
+  });
+  assert.notEqual(compliant?.digest, otherRelease?.digest);
+
+  assert.equal(
+    fleetMigrationPlatformFleetBindingEvidence({ ...common, binding: null }),
+    null,
+  );
+  assert.equal(
+    fleetMigrationPlatformFleetBindingEvidence({
+      ...common,
+      binding: { id: "binding-0001", state: "COMPLIANT", sourceSha: null, platformRelease: null },
+    }),
+    null,
+  );
 });

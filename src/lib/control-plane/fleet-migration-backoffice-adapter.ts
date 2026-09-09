@@ -230,6 +230,49 @@ export function stableFleetMigrationBackofficeStateDigest(
   });
 }
 
+export interface FleetMigrationBindingEvidenceInput {
+  binding: {
+    id: string;
+    state: string;
+    sourceSha: string | null;
+    platformRelease: { sourceSha: string; manifestDigest: string | null } | null;
+  } | null;
+  appId: string;
+  platformAppId: string;
+  platformRepositoryId: string;
+}
+
+/**
+ * 승인된 Platform SDK 판본을 실제로 쓰고 있는지를 그대로 기록한다.
+ *
+ * inventory는 이관 전 실태를 남기는 것이 목적이라 판본이 어긋난 상태도 기록 대상이다.
+ * 여기서 COMPLIANT를 요구하면 조직 전체가 동시에 수렴하기 전까지 실태를 한 번도 남길
+ * 수 없고, 저장소 하나가 움직일 때마다 조직 전체 기록이 다시 막힌다. 판본 수렴은 이
+ * 기록을 근거로 각 저장소가 이어서 하는 별도 작업이다.
+ *
+ * 연결 자체가 없거나 어떤 릴리스에도 묶이지 않은 저장소는 기술할 대상이 없어 null로
+ * 남긴다. 이것도 "아직 아무 릴리스에도 연결되지 않았다"는 사실 기록이다.
+ */
+export function fleetMigrationPlatformFleetBindingEvidence(
+  input: FleetMigrationBindingEvidenceInput,
+): Record<string, unknown> | null {
+  const release = input.binding?.platformRelease ?? null;
+  if (!input.binding || !release) return null;
+  const value = {
+    observationId: input.binding.id,
+    revision: "1",
+    appId: input.appId,
+    platformAppId: input.platformAppId,
+    platformRepositoryId: input.platformRepositoryId,
+    platformSourceSha: release.sourceSha,
+    appSourceSha: input.binding.sourceSha,
+    state: "ACTIVE",
+    compliance: input.binding.state === "COMPLIANT" ? "COMPLIANT" : "DIVERGENT",
+    complianceDetail: input.binding.state,
+  };
+  return { ...value, digest: digest({ ...value, manifestDigest: release.manifestDigest }) };
+}
+
 export function fleetMigrationProofDigest(input: {
   repositoryId: string;
   repositoryFullName: string;
@@ -460,10 +503,6 @@ export function createFleetMigrationBackofficeAdapter(input: {
           || !config.snapshotSignature
           || !config.activatedAt
           || !blueprint.success
-          || !binding
-          || binding.state !== "COMPLIANT"
-          || binding.sourceSha !== request.sourceSha
-          || !binding.platformRelease
           || !app.platformAppId
           || !platformRegistration
         ) fail("FLEET_MIGRATION_BACKOFFICE_PRODUCT_EVIDENCE_INCOMPLETE");
@@ -489,16 +528,12 @@ export function createFleetMigrationBackofficeAdapter(input: {
           policyRevision: input.snapshotPolicyRevision,
           state: "VERIFIED",
         };
-        const bindingValue = {
-          observationId: binding.id,
-          revision: "1",
+        platformFleetBinding = fleetMigrationPlatformFleetBindingEvidence({
+          binding,
           appId: app.id,
           platformAppId: app.platformAppId,
           platformRepositoryId: platformRegistration.repoId.toString(),
-          platformSourceSha: binding.platformRelease.sourceSha,
-          state: "ACTIVE",
-        };
-        platformFleetBinding = { ...bindingValue, digest: digest({ ...bindingValue, manifestDigest: binding.platformRelease.manifestDigest }) };
+        });
         providerObservations = publicFleetMigrationProviderObservations({
           rows: app.providerObservations,
           executions: app.providerExecutions,

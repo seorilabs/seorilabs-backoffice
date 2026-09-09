@@ -264,6 +264,8 @@ test("PAUSED 또는 DEPRECATED PRODUCT_APP도 존재하는 repo binding으로 �
     assert.equal(result.state, "BLOCKED", status);
     assert.deepEqual(result.reasonCounts, {
       ACTIVE_CONFIG_MISSING: 1,
+    }, status);
+    assert.deepEqual(result.observationCounts, {
       PLATFORM_FLEET_BINDING_MISSING: 1,
     }, status);
     const repository = result.repositories.find(({ repoId }) => repoId === "101");
@@ -507,9 +509,15 @@ test("semantic source 비교는 snapshot, 단일 ACTIVE와 Platform gate를 완�
   const nonCompliantPlatformResult = await evaluateFleetMigrationShadowReadiness(
     dependencies(readyBackoffice(nonCompliantPlatform)),
   );
+  // 승인본 판본 불일치는 이관을 막지 않고 관측으로만 남는다.
+  assert.equal(nonCompliantPlatformResult.state, "READY");
+  assert.equal(
+    nonCompliantPlatformResult.observationCounts.PLATFORM_FLEET_BINDING_NOT_COMPLIANT,
+    1,
+  );
   assert.equal(
     nonCompliantPlatformResult.reasonCounts.PLATFORM_FLEET_BINDING_NOT_COMPLIANT,
-    1,
+    undefined,
   );
 });
 
@@ -529,30 +537,56 @@ test("classification decision은 양수 revision과 collector evidence ID를 모
   assert.equal(result.reasonCounts.CLASSIFICATION_DECISION_INVALID, 2);
 });
 
-test("PlatformFleetBinding은 exact source와 COMPLIANT 상태가 모두 맞아야 한다", async () => {
-  const app = productApp();
-  app.platformFleetBinding = {
+test("PlatformFleetBinding 판본 불일치와 미연결은 차단이 아니라 관측으로 남는다", async () => {
+  // inventory의 목적은 이관 전 실태를 사실대로 남기는 것이다. 승인본 수렴은 그
+  // 기록을 근거로 각 저장소가 이어서 하는 별도 작업이라 여기서 막지 않는다.
+  const divergent = productApp();
+  divergent.platformFleetBinding = {
     id: "platform-binding-product-0001",
     sourceSha: "e".repeat(40),
     state: "PENDING",
   };
 
-  const result = await evaluateFleetMigrationShadowReadiness(dependencies({
+  const divergentResult = await evaluateFleetMigrationShadowReadiness(dependencies({
     registrations: [
       registration(101, "seorilabs/product", "PRODUCT_APP"),
       registration(202, "seorilabs/infra", "INFRA_REPO"),
     ],
-    apps: [app],
+    apps: [divergent],
   }));
 
-  assert.equal(result.state, "BLOCKED");
-  assert.deepEqual(
-    result.repositories.find(({ repoId }) => repoId === "101")?.reasonCodes,
-    [
-      "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
-      "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
-    ],
+  assert.equal(divergentResult.state, "READY");
+  const divergentRepository = divergentResult.repositories.find(
+    ({ repoId }) => repoId === "101",
   );
+  assert.deepEqual(divergentRepository?.reasonCodes, []);
+  assert.deepEqual(divergentRepository?.observationCodes, [
+    "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
+    "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
+  ]);
+  assert.deepEqual(divergentResult.reasonCounts, {});
+  assert.deepEqual(divergentResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_NOT_COMPLIANT: 1,
+    PLATFORM_FLEET_BINDING_SOURCE_MISMATCH: 1,
+  });
+
+  // 아직 어떤 릴리스에도 연결되지 않은 저장소도 같은 방식으로 기록한다.
+  const unbound = productApp();
+  unbound.platformFleetBinding = null;
+
+  const unboundResult = await evaluateFleetMigrationShadowReadiness(dependencies({
+    registrations: [
+      registration(101, "seorilabs/product", "PRODUCT_APP"),
+      registration(202, "seorilabs/infra", "INFRA_REPO"),
+    ],
+    apps: [unbound],
+  }));
+
+  assert.equal(unboundResult.state, "READY");
+  assert.deepEqual(unboundResult.reasonCounts, {});
+  assert.deepEqual(unboundResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
 });
 
 test("ACTIVE snapshot 내용이나 서명이 바뀌면 readiness를 열지 않는다", async () => {

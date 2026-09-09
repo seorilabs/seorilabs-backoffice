@@ -12,7 +12,7 @@ import { repositoryDefaultBranchRef } from "@/lib/control-plane/repository-sourc
 import { repositoryProductPlanningReason } from "@/lib/control-plane/repository-product-readiness";
 
 export const FLEET_MIGRATION_SHADOW_READINESS_CONTRACT_VERSION =
-  "fleet-migration-shadow-readiness/v2" as const;
+  "fleet-migration-shadow-readiness/v3" as const;
 
 const ORGANIZATION = "seorilabs";
 const SHA_40 = /^[0-9a-f]{40}$/;
@@ -50,6 +50,23 @@ export type FleetMigrationShadowReasonCode =
   | "REPOSITORY_NOT_MANAGED"
   | "REPOSITORY_REGISTRATION_MISSING"
   | "SOURCE_HEAD_MISSING";
+
+// 승인된 Platform SDK 판본을 실제로 쓰고 있는지는 이관 전 실태의 일부이지 이관을
+// 막을 조건이 아니다. inventory는 저장소가 지금 무엇을 쓰는지 사실대로 적는 것이
+// 목적이고, 판본 수렴은 그 기록을 보고 각 저장소가 이어서 하는 별도 작업이다.
+// 전부-아니면-전무 게이트에 넣어두면 저장소 하나가 움직일 때마다 조직 전체 기록이
+// 막혀 실태 조사 자체가 영원히 성립하지 않는다.
+const OBSERVATION_ONLY_REASONS: ReadonlySet<FleetMigrationShadowReasonCode> = new Set([
+  "PLATFORM_FLEET_BINDING_MISSING",
+  "PLATFORM_FLEET_BINDING_NOT_COMPLIANT",
+  "PLATFORM_FLEET_BINDING_SOURCE_MISMATCH",
+]);
+
+export function isFleetMigrationShadowObservationOnlyReason(
+  reason: FleetMigrationShadowReasonCode,
+): boolean {
+  return OBSERVATION_ONLY_REASONS.has(reason);
+}
 
 export interface FleetMigrationClassificationDecisionReadback {
   id: string;
@@ -511,21 +528,19 @@ export async function evaluateFleetMigrationShadowReadiness(
         registration?.classificationDecisionVersion ?? 0,
       appLifecycleStatus: app?.status ?? null,
       activeCredentialBindingCount: app?.activeCredentialBindingCount ?? 0,
-      reasonCodes: repositoryReasons(
-        vector,
-        registration,
-        app,
-        dependencies.verifyConfigSnapshot,
-      ).sort(),
+      ...splitReasons(
+        repositoryReasons(
+          vector,
+          registration,
+          app,
+          dependencies.verifyConfigSnapshot,
+        ).sort(),
+      ),
     };
   });
-  const reasonCounts = Object.fromEntries(
-    [...new Set(repositories.flatMap(({ reasonCodes }) => reasonCodes))]
-      .sort()
-      .map((reason) => [
-        reason,
-        repositories.filter(({ reasonCodes }) => reasonCodes.includes(reason)).length,
-      ]),
+  const reasonCounts = countReasons(repositories.map(({ reasonCodes }) => reasonCodes));
+  const observationCounts = countReasons(
+    repositories.map(({ observationCodes }) => observationCodes),
   );
   const observedAt = dependencies.now();
   if (!Number.isFinite(observedAt.getTime())) {
@@ -564,6 +579,30 @@ export async function evaluateFleetMigrationShadowReadiness(
     cohortDigest,
     evidenceDigest,
     reasonCounts,
+    observationCounts,
     repositories,
   };
+}
+
+function splitReasons(codes: FleetMigrationShadowReasonCode[]): {
+  reasonCodes: FleetMigrationShadowReasonCode[];
+  observationCodes: FleetMigrationShadowReasonCode[];
+} {
+  return {
+    reasonCodes: codes.filter((code) => !OBSERVATION_ONLY_REASONS.has(code)),
+    observationCodes: codes.filter((code) => OBSERVATION_ONLY_REASONS.has(code)),
+  };
+}
+
+function countReasons(
+  perRepository: FleetMigrationShadowReasonCode[][],
+): Record<string, number> {
+  return Object.fromEntries(
+    [...new Set(perRepository.flat())]
+      .sort()
+      .map((reason) => [
+        reason,
+        perRepository.filter((codes) => codes.includes(reason)).length,
+      ]),
+  );
 }
