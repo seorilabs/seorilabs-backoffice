@@ -16,9 +16,12 @@ const source = readFileSync(
 
 test("collector의 쓰기 콜백 세 개가 모두 거부한다", () => {
   for (const callback of ["claimOccurrence", "completeOccurrence", "readOccurrence"]) {
-    const match = new RegExp(`${callback}: \\(\\) => \\{\\s*throw new Error\\(([^)]+)\\)`, "u")
-      .exec(source);
-    assert.ok(match, `${callback}가 즉시 throw하지 않는다`);
+    // 세 콜백 모두 예외 없이 throw로 끝나야 한다. claim만 중단 지점 플래그를 먼저 세우므로
+    // 본문에 다른 문장이 오는 것은 허용하되, 쓰기나 반환이 섞이면 잡는다.
+    const body = new RegExp(`${callback}: \\(\\) => \\{([\\s\\S]*?)\\n    \\},`, "u").exec(source);
+    assert.ok(body, `${callback} 본문을 찾지 못했다`);
+    assert.match(body[1], /throw new Error\(/u, `${callback}가 throw하지 않는다`);
+    assert.doesNotMatch(body[1], /return |await |prisma\./u, `${callback}가 throw 외의 일을 한다`);
   }
   assert.match(
     source,
@@ -171,4 +174,17 @@ test("수집 단계는 collection 권위를 주장하지 않는다", () => {
   assert.match(source, /FLEET_MIGRATION_DETECTOR_SOURCE_SHA/u);
   assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID/u);
   assert.match(source, /readiness\.state !== "READY"/u);
+});
+
+test("중단 지점을 message가 아니라 도달 플래그로 판정한다", () => {
+  // collector가 claim 콜백의 예외를 FLEET_MIGRATION_COLLECTION_OCCURRENCE_CLAIM_FAILED로
+  // 감싸므로 sentinel 문자열이 밖에서 보이지 않는다. message로 판정하면 정상 수집을
+  // 실패로 오인한다. 실제로 31곳 수집을 마치고 그렇게 멈췄다.
+  assert.match(source, /let stoppedAtClaim = false;/u);
+  assert.match(source, /stoppedAtClaim = true;/u);
+  assert.match(source, /if \(!stoppedAtClaim\) throw error;/u);
+  // 그 앞에서 난 실패는 그대로 던진다. 삼키면 빈 결과를 정상으로 낸다.
+  assert.doesNotMatch(source, /error\.message !== COLLECTED_ENOUGH/u);
+  // claim에 도달하지 못했는데 예외도 없으면 수집이 끝나지 않은 것이다.
+  assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE/u);
 });
