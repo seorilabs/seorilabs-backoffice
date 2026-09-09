@@ -155,3 +155,20 @@ test("backoffice 증거 읽기 실패도 저장소와 code를 남긴다", () => 
   // 삼키지 않고 다시 던진다. 삼키면 수집이 잘못된 증거로 계속된다.
   assert.match(block[0], /throw error;/u);
 });
+
+test("수집 단계는 collection 권위를 주장하지 않는다", () => {
+  // 이 실행은 inventory를 만들지 않는다. 저장소별 요청만 모으고 collection 자체는 버린다.
+  // READ_ONLY_SHADOW는 cohort가 비준 기준선과 exact로 같기를 요구하는데(활성 38곳), 지금은
+  // 승인 하에 7곳이 archive되어 31곳이다. 그 차이는 계약의 baselineSuccession으로 설명하며
+  // 승계는 inventory에 붙는 서명 산출물이라 authoritative 발급 단계의 몫이다. 수집 단계가
+  // 그것을 앞당겨 주장하지 않는다.
+  assert.match(source, /mode: "FIXTURE",/u);
+  assert.match(source, /baselineRatification: null,/u);
+  assert.doesNotMatch(source, /mode: "READ_ONLY_SHADOW"/u);
+
+  // 모드가 느슨해져도 저장소별 결박은 그대로다. detector는 detection마다 검증되고,
+  // cohort는 readiness exact vector로 따로 강제한다.
+  assert.match(source, /FLEET_MIGRATION_DETECTOR_SOURCE_SHA/u);
+  assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID/u);
+  assert.match(source, /readiness\.state !== "READY"/u);
+});
