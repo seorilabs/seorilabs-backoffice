@@ -44,6 +44,10 @@
     "20260904070000_project_blueprint_optional_folder": {
       "sha256": "f75be41541e4a29a09eed7c7adda2482dfbe587203214abe60d08cc93ce06cbb",
       "reason": "실제 GCP 프로젝트가 폴더 없이 조직 루트에 직접 연결되는 구조를 보존하도록 folderId 제약을 완화하며 기존 데이터는 변경하지 않는다"
+    },
+    "20260909060000_platform_fleet_ahead_unmanaged": {
+      "sha256": "8f914ba7f3176ac0b4239816644ecdb5ef23e3223a30051795186878c09b73db",
+      "reason": "PlatformFleetPlanKind에 AHEAD_UNMANAGED를 추가한다. MySQL enum은 값 추가에도 MODIFY가 불가피하지만 기존 값을 그대로 두고 뒤에 덧붙이므로 기존 행은 바뀌지 않는다. PR #357"
     }
   },
   "legacy": {

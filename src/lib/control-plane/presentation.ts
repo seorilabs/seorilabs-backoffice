@@ -87,6 +87,24 @@ const statusLabels = {
   READ_ONLY: "조회만",
   READY_PR: "변경 검토 요청까지",
   APPROVED: "승인됨",
+  // 공통 기능 적용 현황(PlatformFleetBinding)의 합성 상태와 계획 종류. 라벨이 없으면
+  // 운영 화면에 내부 영문 식별자가 그대로 노출된다.
+  UPDATE_PR_QUEUED: "SDK 갱신 대기",
+  UPDATE_PR_OPEN: "SDK 갱신 검토 중",
+  PLATFORM_OBSERVATION_PENDING: "적용 결과 확인 대기",
+  CONTRACT_ISSUE_PENDING: "계약 적응 필요",
+  CONTRACT_ISSUE_OPEN: "계약 적응 작업 등록됨",
+  CUSTOM_UNMANAGED_REMEDIATION_PENDING: "자체 연동 — 정리 필요",
+  CUSTOM_UNMANAGED_REMEDIATION_ISSUE_OPEN: "자체 연동 — 작업 등록됨",
+  MISSING_UNMANAGED_REMEDIATION_PENDING: "SDK 미탑재 — 정리 필요",
+  MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN: "SDK 미탑재 — 작업 등록됨",
+  AHEAD_UNMANAGED_REMEDIATION_PENDING: "승인본보다 앞선 SDK — 정리 필요",
+  AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN: "승인본보다 앞선 SDK — 작업 등록됨",
+  SDK_UPDATE_PR: "SDK 갱신",
+  CONTRACT_ISSUE: "계약 적응",
+  CUSTOM_UNMANAGED: "자체 연동 정리",
+  MISSING_UNMANAGED: "SDK 탑재",
+  AHEAD_UNMANAGED: "승인본보다 앞선 SDK 정리",
 } as const;
 
 const optionLabels = {

@@ -318,7 +318,7 @@ export const platformFleetTaskInputSchema = z.discriminatedUnion("kind", [
     releaseVersion: platformVersion,
     releaseSourceSha: sha40,
     contractRevision: sha256,
-    integration: z.enum(["CUSTOM_HTTP", "MISSING"]),
+    integration: z.enum(["CUSTOM_HTTP", "MISSING", "AHEAD_OF_APPROVED"]),
     artifact: platformArtifactSchema,
     issueMarker: z.string().regex(/^<!-- seorilabs-platform-remediation:v1:\d+ -->$/),
     title: z.string().min(1).max(180).refine((value) => !containsCredentialCandidate(value)),
