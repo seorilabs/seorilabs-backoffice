@@ -41,6 +41,8 @@ import { verifySnapshot } from "@/lib/control-plane/json";
 
 const SHA = /^[0-9a-f]{40}$/u;
 const COLLECTED_ENOUGH = "FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_COMPLETE";
+/** collector가 claim 콜백까지 도달했는지. 저장소 스캔이 전부 끝났다는 뜻이다. */
+let stoppedAtClaim = false;
 
 type CollectedRequest = {
   contract: string;
@@ -296,6 +298,10 @@ async function main(): Promise<void> {
     // 여기서 멈춘다. 계속 진행하면 shadow occurrence를 쓰게 되는데, 그건 proof가
     // 있어야 하는 별도 실행의 몫이다.
     claimOccurrence: () => {
+      // collector가 이 콜백의 예외를 FLEET_MIGRATION_COLLECTION_OCCURRENCE_CLAIM_FAILED로
+      // 감싸므로 sentinel 문자열이 밖에서 보이지 않는다. 중단 지점을 message가 아니라
+      // 이 플래그로 판정한다. 여기까지 왔다는 것은 저장소 스캔이 전부 끝났다는 뜻이다.
+      stoppedAtClaim = true;
       throw new Error(COLLECTED_ENOUGH);
     },
     completeOccurrence: () => {
@@ -328,7 +334,11 @@ async function main(): Promise<void> {
     });
     throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE");
   } catch (error) {
-    if (!(error instanceof Error) || error.message !== COLLECTED_ENOUGH) throw error;
+    // claim 직전까지 갔는지로 판정한다. 그 앞에서 난 실패는 그대로 던져야 한다.
+    if (!stoppedAtClaim) throw error;
+  }
+  if (!stoppedAtClaim) {
+    throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE");
   }
 
   // runtime capability issuer는 cohort 전체가 exact vector로 덮여야 통과한다
