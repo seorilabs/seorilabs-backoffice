@@ -959,10 +959,22 @@ ACTIVE config의 source 결박은 관측 row id가 아니라 그 관측이 가�
 커밋을 같은 payload로 다시 탐지하면 row가 새로 생기는데 그것은 사실 변화가 아니다.
 readiness와 공개 증거가 `fleetMigrationConfigSourceMatchesDiscovery` 하나를 공유한다.
 
-`ProjectBlueprint`는 P5 산출물이라 아직 없는 저장소가 대부분이고, 없는 저장소는 provider
-실행 기록도 없어 증명된 provider 상태 자체가 없다. 요구하지 않고 `providerObservations`를
-빈 목록으로 기록한다. blueprint가 있으면 종전대로 ACTIVE blueprint의 전체 resource set을
-실행 기록이 덮어야 하며 그 검증은 완화하지 않았다.
+`providerObservations`에 무엇을 남길지는 `ProjectBlueprint` 선언이 아니라 **그것을 증명하는
+실행 기록이 있는지**로 갈린다. blueprint는 P5 산출물이라 아직 없는 저장소가 대부분이고,
+선언이 있는 저장소도 현재 `BLUEPRINT_RESOURCE` 실행이 0건이다(조직 전체 0건). 증명된
+provider 상태가 없는 상태를 요구로 두면 이관 기록이 P5 완료를 기다려야 한다.
+
+세 경우가 갈린다.
+
+| ACTIVE blueprint | 같은 `sourceSha`/`configRevisionId`의 실행 | 기록 |
+|---|---|---|
+| 없음 | — | `[]` — 선언된 desired resource가 없다 |
+| 있음 | **0건** | `[]` — 증명된 provider 상태가 없다 |
+| 있음 | 1건 이상 | 전체 resource set을 덮어야 하며, 불완전하면 `PROVIDER_EXECUTION_COVERAGE_INCOMPLETE`로 닫는다 |
+
+세 번째 줄의 커버리지 검증은 완화하지 않았다. 덮인 것만 기록하면 선언된 나머지가 없는
+것처럼 읽혀 오독을 만든다. 실행 provenance(`desiredHash` 일치, `SUCCEEDED` 요구, 관측 시각
+순서, payload digest 재계산, blueprint readback 판정)도 그대로다.
 
 Platform 원장에서의 앱 식별자(`platformAppId`)와 binding의 릴리스 연결도 같은 성격이다.
 아직 등록되지 않았거나 릴리스에 묶이지 않은 저장소가 실재하므로 차단하지 않고
