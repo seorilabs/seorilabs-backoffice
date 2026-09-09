@@ -422,19 +422,45 @@ test("readiness와 공개 증거는 config source 판정도 공유한다", async
   assert.doesNotMatch(adapter, /config\.sourceObservationId !== discovery\.id/u);
 });
 
-test("ProjectBlueprint가 없으면 provider 상태를 비운 채 기록한다", async () => {
-  // blueprint는 P5 산출물이라 실측 22곳 중 20곳에 없고, 그 20곳은 provider 실행 기록도
-  // 0건이다. 증명된 provider 상태가 없으므로 빈 목록이 유일하게 정직한 기록이다.
+test("증명할 provider 실행 기록이 없으면 상태를 비운 채 기록한다", async () => {
+  // 기록할 provider 상태가 있는지는 blueprint 선언이 아니라 그것을 증명하는 실행 기록이
+  // 있는지로 갈린다. blueprint는 P5 산출물이라 실측 22곳 중 20곳에 없고, 선언이 있는
+  // 2곳도 BLUEPRINT_RESOURCE 실행이 0건이다(조직 전체 0건). 증명된 provider 상태가
+  // 없으므로 빈 목록이 유일하게 정직한 기록이다.
   const { readFileSync } = await import("node:fs");
   const adapter = readFileSync(
     new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
     "utf8",
   );
 
-  assert.match(adapter, /providerObservations = blueprint\.success\s*\?/u);
+  // 판별 기준이 선언이 아니라 실행 기록이다.
+  assert.match(adapter, /const attestingExecutions = app\.providerExecutions\.filter/u);
+  assert.match(adapter, /blueprint\.success && attestingExecutions\.length > 0/u);
   assert.match(adapter, /:\s*\[\];/u);
+  // 투영과 같은 기준으로 거른다. 다르면 걸러 놓고도 투영에서 다시 닫힌다.
+  assert.match(adapter, /execution\.sourceSha === request\.sourceSha/u);
+  assert.match(adapter, /execution\.configRevisionId === config\.id/u);
   // 반증: blueprint 부재가 다시 전체 증거 실패 조건으로 돌아가면 잡힌다.
   assert.doesNotMatch(adapter, /\|\| !blueprint\.success/u);
+
+  // 일부만 덮인 경우는 계속 fail-closed다. 덮인 것만 기록하면 선언된 나머지가 없는 것처럼
+  // 읽혀 오독을 만든다.
+  assert.throws(
+    () => publicFleetMigrationProviderObservations({
+      rows: [],
+      executions: [],
+      desiredResources: [{
+        provider: "gcp",
+        resourceType: "project",
+        resourceId: "p1",
+        desiredHash: "a".repeat(64),
+        publicIdentity: null,
+      }] as never,
+      sourceSha: "a".repeat(40),
+      configRevisionId: "config-0001",
+    }),
+    /FLEET_MIGRATION_PROVIDER_EXECUTION_COVERAGE_INCOMPLETE/u,
+  );
 
   // 빈 desired set으로 투영을 부르면 계속 fail-closed다. 그래서 호출 자체를 건너뛴다.
   assert.throws(
