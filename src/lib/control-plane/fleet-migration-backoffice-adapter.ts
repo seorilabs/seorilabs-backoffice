@@ -524,7 +524,12 @@ export function createFleetMigrationBackofficeAdapter(input: {
       ) fail("FLEET_MIGRATION_BACKOFFICE_IDENTITY_DRIFT");
 
       const isProduct = registration.classification === "PRODUCT_APP";
-      if ((isProduct && !app) || (!isProduct && app)) {
+      // PLATFORM_PRODUCER의 App row는 드리프트가 아니다. Backoffice가 그 저장소의 PR,
+      // workflow run, provider observation을 추적하는 앵커로 쓰고, mirror 관계가
+      // onDelete: Restrict라 삭제 자체가 막힌다. readiness는 #339에서 이미 이 row를
+      // blocker에서 뺐는데 여기만 남아 있어 진단과 기록이 갈렸다.
+      const anchorOnly = registration.classification === "PLATFORM_PRODUCER";
+      if ((isProduct && !app) || (!isProduct && !anchorOnly && app)) {
         fail("FLEET_MIGRATION_BACKOFFICE_APP_BINDING_DRIFT");
       }
       let appReadback: Record<string, unknown> | null = null;
@@ -533,7 +538,10 @@ export function createFleetMigrationBackofficeAdapter(input: {
       let platformFleetBinding: Record<string, unknown> | null = null;
       let providerObservations: Array<Record<string, unknown>> = [];
       let credentialBindings: Array<Record<string, unknown>> = [];
-      if (app) {
+      // 제품 앱 계약은 분류로 판정한다. App row 유무로 분기하면 앵커 row를 가진
+      // PLATFORM_PRODUCER가 제품 앱 계약에 걸려 config·스냅샷을 요구받는다. 그 저장소는
+      // 제품 설정을 가진 적이 없다. collector도 비제품 저장소에는 전부 null을 요구한다.
+      if (isProduct && app) {
         const discovery = app.discoveryObservations[0];
         const config = app.configRevisions[0];
         const binding = app.platformFleetBinding;

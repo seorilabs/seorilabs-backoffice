@@ -448,3 +448,26 @@ test("ProjectBlueprint가 없으면 provider 상태를 비운 채 기록한다",
     /FLEET_MIGRATION_PROVIDER_DESIRED_RESOURCE_SET_INVALID/u,
   );
 });
+
+test("PLATFORM_PRODUCER의 App row는 드리프트가 아니고 제품 앱 계약을 적용하지 않는다", async () => {
+  // seorilabs/platform은 SDK를 발행하는 저장소라 제품 앱이 아니지만, Backoffice가 그
+  // 저장소의 PR·workflow run·provider observation을 추적하는 앵커로 App row를 쓴다.
+  // mirror 관계가 onDelete: Restrict라 삭제도 막힌다. readiness는 #339에서 이미 이 row를
+  // blocker에서 뺐는데 adapter만 남아 있어 수집이 APP_BINDING_DRIFT로 닫혔다.
+  const { readFileSync } = await import("node:fs");
+  const adapter = readFileSync(
+    new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
+    "utf8",
+  );
+
+  // 앵커 예외가 분류로만 열린다.
+  assert.match(adapter, /const anchorOnly = registration\.classification === "PLATFORM_PRODUCER";/u);
+  assert.match(adapter, /\(isProduct && !app\) \|\| \(!isProduct && !anchorOnly && app\)/u);
+
+  // 제품 앱 계약은 분류로 판정한다. App row 유무로 분기하면 앵커 row가 계약에 걸린다.
+  assert.match(adapter, /if \(isProduct && app\) \{/u);
+  assert.doesNotMatch(adapter, /\n      if \(app\) \{/u);
+
+  // EXCLUDED·INFRA_REPO에 App row가 붙는 것은 계속 드리프트다. 앵커 예외를 넓히지 않았다.
+  assert.doesNotMatch(adapter, /classification !== "PRODUCT_APP"\s*\?\s*true/u);
+});

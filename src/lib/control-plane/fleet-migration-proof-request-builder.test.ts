@@ -135,3 +135,23 @@ test("승인 서명을 하지 않는다", () => {
     assert.equal(source.includes(forbidden), false, `${forbidden}를 참조한다`);
   }
 });
+
+test("backoffice 증거 읽기 실패도 저장소와 code를 남긴다", () => {
+  // collector가 이 콜백의 예외를 FLEET_MIGRATION_COLLECTOR_BACKOFFICE_READBACK_FAILED
+  // 하나로 감싸므로, 감싸지 않으면 어느 저장소에서 무엇이 닫혔는지 알 수 없다.
+  // legacy 검증과 같은 계열이다.
+  assert.match(source, /backoffice 증거 읽기 실패: repository=\$\{/u);
+  assert.match(source, /code=\$\{code\}/u);
+  // 공개 식별자만 남긴다. 증거 내용이나 payload를 로그에 싣지 않는다.
+  const block = /const read = async \(\) => \{[\s\S]*?\n      \};/u.exec(source);
+  assert.ok(block, "읽기 래퍼가 있어야 한다");
+  for (const forbidden of ["publicEvidence", "payload", "snapshot"]) {
+    assert.equal(
+      block[0].includes(`${forbidden}`),
+      false,
+      `실패 로그에 ${forbidden}를 싣지 않는다`,
+    );
+  }
+  // 삼키지 않고 다시 던진다. 삼키면 수집이 잘못된 증거로 계속된다.
+  assert.match(block[0], /throw error;/u);
+});

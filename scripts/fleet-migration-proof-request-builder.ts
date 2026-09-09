@@ -254,8 +254,21 @@ async function main(): Promise<void> {
     },
     readBackofficePublicEvidence: async (request: Record<string, unknown>) => {
       const value = request as unknown as CollectedRequest;
-      const { publicEvidence, stableBackofficeStateDigest } = await backoffice
-        .readStableBackofficeState(request) as {
+      // collector가 이 콜백의 예외를 단일 code로 감싸므로(`trustedReadback`) 어느 저장소에서
+      // 무엇이 닫혔는지 알 수 없다. 저장소 full name과 실패 code는 공개 식별자이니 그것만
+      // stderr에 남긴다. 증거 내용은 남기지 않는다. #355에서 legacy 검증에 쓴 것과 같다.
+      const read = async () => {
+        try {
+          return await backoffice.readStableBackofficeState(request);
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "UNKNOWN";
+          console.error(`backoffice 증거 읽기 실패: repository=${
+            String(request.fullName ?? "?")} sourceSha=${
+            String(request.sourceSha ?? "?")} code=${code}`);
+          throw error;
+        }
+      };
+      const { publicEvidence, stableBackofficeStateDigest } = await read() as {
           publicEvidence: Record<string, unknown>;
           stableBackofficeStateDigest: string;
         };
