@@ -1,3 +1,4 @@
+import { fleetMigrationBindingIsDescribable } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import {
   assertFullOrganizationInstallation,
@@ -455,15 +456,16 @@ function repositoryReasons(
   if (!app.platformAppId) {
     reasons.push("APP_PLATFORM_IDENTITY_MISSING");
   }
-  // 공개 증거는 릴리스 없이 binding을 기술할 수 없어 null로 남긴다. readiness가 행의
-  // 존재만 보면 진단은 "연결됨", 기록은 "미연결"로 갈린다. 같은 기준으로 맞춘다.
-  if (!app.platformFleetBinding || !app.platformFleetBinding.hasPlatformRelease) {
+  // 공개 증거가 기술할 수 있는 binding인지를 adapter와 같은 판정으로 본다. 조건이 갈리면
+  // 진단은 "연결됨", 기록은 "미연결"이 되어 문서가 약속한 동일 기준이 깨진다.
+  const binding = app.platformFleetBinding;
+  if (binding === null || !fleetMigrationBindingIsDescribable(binding)) {
     reasons.push("PLATFORM_FLEET_BINDING_MISSING");
   } else {
-    if (app.platformFleetBinding.sourceSha !== vector.headSha) {
+    if (binding.sourceSha !== vector.headSha) {
       reasons.push("PLATFORM_FLEET_BINDING_SOURCE_MISMATCH");
     }
-    if (app.platformFleetBinding.state !== "COMPLIANT") {
+    if (binding.state !== "COMPLIANT") {
       reasons.push("PLATFORM_FLEET_BINDING_NOT_COMPLIANT");
     }
   }

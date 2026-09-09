@@ -839,6 +839,23 @@ test("Platform 원장 미등록과 릴리스 없는 binding은 기록과 같은 
     PLATFORM_FLEET_BINDING_MISSING: 1,
   });
 
+  // sourceSha가 비어 있어도 공개 증거는 기술할 수 없다. 같은 판정을 쓰므로 함께 움직인다.
+  const sourceless = productApp();
+  sourceless.platformFleetBinding = {
+    id: "platform-binding-product-0001",
+    sourceSha: null,
+    state: "COMPLIANT",
+    hasPlatformRelease: true,
+  };
+
+  const sourcelessResult = await evaluateFleetMigrationShadowReadiness(
+    dependencies(readyBackoffice(sourceless)),
+  );
+  assert.equal(sourcelessResult.state, "READY");
+  assert.deepEqual(sourcelessResult.observationCounts, {
+    PLATFORM_FLEET_BINDING_MISSING: 1,
+  });
+
   // 반증: 릴리스가 연결돼 있으면 같은 binding이 관측 사유를 남기지 않는다.
   const bound = productApp();
   const boundResult = await evaluateFleetMigrationShadowReadiness(
@@ -846,4 +863,25 @@ test("Platform 원장 미등록과 릴리스 없는 binding은 기록과 같은 
   );
   assert.equal(boundResult.state, "READY");
   assert.deepEqual(boundResult.observationCounts, {});
+});
+
+test("readiness와 공개 증거는 같은 판정 함수로 binding 기술 가능 여부를 본다", async () => {
+  // 조건을 각자 들고 있으면 필드가 하나 늘 때마다 진단과 기록이 갈린다. 실제로 릴리스
+  // 부재와 source SHA 부재에서 연달아 갈렸다. 같은 함수를 쓰는지 소스 계약으로 고정한다.
+  const { readFileSync } = await import("node:fs");
+  const readiness = readFileSync(
+    new URL("./fleet-migration-shadow-readiness.ts", import.meta.url),
+    "utf8",
+  );
+  const adapter = readFileSync(
+    new URL("./fleet-migration-backoffice-adapter.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(readiness, /fleetMigrationBindingIsDescribable\(binding\)/u);
+  assert.match(adapter, /export function fleetMigrationBindingIsDescribable/u);
+  assert.match(adapter, /if \(!fleetMigrationBindingIsDescribable\(/u);
+
+  // 반증: readiness가 자체 조건으로 되돌아가면 잡힌다.
+  assert.doesNotMatch(readiness, /binding\.hasPlatformRelease\s*(&&|\|\|)/u);
 });

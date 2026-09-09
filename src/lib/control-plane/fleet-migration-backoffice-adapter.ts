@@ -264,11 +264,26 @@ export interface FleetMigrationBindingEvidenceInput {
  * null을 그대로 기록한다. 연결이 아예 없는 것(null binding)과 "연결은 있는데 원장 쪽
  * 식별자가 없는 것"은 다른 사실이라 구분해 남긴다.
  */
+export function fleetMigrationBindingIsDescribable(binding: {
+  sourceSha: string | null;
+  hasPlatformRelease: boolean;
+} | null): boolean {
+  return binding !== null && binding.hasPlatformRelease && binding.sourceSha !== null;
+}
+
 export function fleetMigrationPlatformFleetBindingEvidence(
   input: FleetMigrationBindingEvidenceInput,
 ): Record<string, unknown> | null {
   const release = input.binding?.platformRelease ?? null;
   const appSourceSha = input.binding?.sourceSha ?? null;
+  // readiness가 같은 판정을 쓰도록 하나로 모은다. 조건이 갈리면 진단은 "연결됨",
+  // 기록은 "미연결"이 되어 문서가 약속한 동일 기준이 깨진다.
+  if (!fleetMigrationBindingIsDescribable(
+    input.binding === null
+      ? null
+      : { sourceSha: appSourceSha, hasPlatformRelease: release !== null },
+  )) return null;
+  // 위 판정이 셋을 모두 보장하지만 타입 좁히기를 위해 다시 확인한다.
   if (!input.binding || !release || !appSourceSha) return null;
   const value = {
     observationId: input.binding.id,
