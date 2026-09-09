@@ -17,10 +17,7 @@ import {
   createFleetMigrationReadOnlyCollector,
   fleetMigrationCollectorContract,
 } from "seorilabs-org-contracts/repo-contract/fleet-migration-collector";
-import {
-  computeFleetEvidenceDigest,
-  fleetMigrationContract,
-} from "seorilabs-org-contracts/repo-contract/fleet-migration";
+import { computeFleetEvidenceDigest } from "seorilabs-org-contracts/repo-contract/fleet-migration";
 import { validateFleetMigrationLegacyDocument } from "seorilabs-org-contracts/repo-contract/fleet-migration-legacy-validator";
 
 import { createFleetMigrationBackofficeAdapter } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
@@ -310,12 +307,24 @@ async function main(): Promise<void> {
   });
 
   try {
+    // 이 실행은 inventory를 만들지 않는다. 저장소별 요청만 모으고 collection 자체는 버린다
+    // (마지막 저장소 뒤 sentinel로 중단). 그래서 collection 권위를 주장하지 않는 FIXTURE로
+    // 돈다.
+    //
+    // READ_ONLY_SHADOW는 cohort가 비준 기준선과 exact로 같기를 요구한다(활성 38곳). 지금은
+    // 승인 하에 7곳이 archive되어 31곳이고, 그 차이는 계약의 baselineSuccession으로 설명하는
+    // 것이 정본 절차다. 승계는 inventory에 붙는 서명 산출물이라 authoritative 발급 단계의
+    // 몫이고, 수집 단계가 그것을 앞당겨 주장할 수는 없다.
+    //
+    // 모드는 collection 권위 선언과 detector cohort pin에만 영향을 준다. 저장소별 스캔,
+    // tree/blob 무결성, backoffice 증거 대조, candidate 결박은 두 모드가 동일하다. detector
+    // 결박도 detection마다 detectorSha로 계속 검증된다.
     await collector.collect({
-      mode: "READ_ONLY_SHADOW",
+      mode: "FIXTURE",
       deliveryId: "fleet-proof-request-builder",
       requestedRunId: "fleet-proof-request-builder",
       inventoryId: "fleet-proof-request-builder",
-      baselineRatification: fleetMigrationContract.initialBaseline.ratification,
+      baselineRatification: null,
     });
     throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE");
   } catch (error) {
