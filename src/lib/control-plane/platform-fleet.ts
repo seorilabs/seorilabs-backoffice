@@ -290,10 +290,11 @@ function integrationRemediationIssueTask(input: {
   manifest: PlatformReleaseManifest;
   manifestDigest: string;
   artifact: PlatformReleaseManifest["artifacts"][number];
-  integration: "CUSTOM_HTTP" | "MISSING";
+  integration: "CUSTOM_HTTP" | "MISSING" | "AHEAD_OF_APPROVED";
 }): PlatformFleetTaskInput {
   const marker = platformRemediationMarker(input.repoId);
   const custom = input.integration === "CUSTOM_HTTP";
+  const ahead = input.integration === "AHEAD_OF_APPROVED";
   return platformFleetTaskInputSchema.parse({
     schemaVersion: 1,
     kind: "PLATFORM_INTEGRATION_REMEDIATION_ISSUE",
@@ -308,15 +309,28 @@ function integrationRemediationIssueTask(input: {
     integration: input.integration,
     artifact: input.artifact,
     issueMarker: marker,
-    title: custom
-      ? "[P1] Platform custom HTTP 연동을 공식 SDK로 전환"
-      : "[P1] Platform 공식 SDK 탑재",
+    title: ahead
+      ? "[P1] 승인되지 않은 Platform SDK 사용 정리"
+      : custom
+        ? "[P1] Platform custom HTTP 연동을 공식 SDK로 전환"
+        : "[P1] Platform 공식 SDK 탑재",
     body: [
       marker,
       "",
-      custom
-        ? "현재 custom HTTP 연동을 중앙 Platform SDK 계약으로 전환합니다."
-        : "현재 누락된 중앙 Platform SDK를 탑재합니다.",
+      ahead
+        ? [
+            "이 저장소가 Fleet 승인본보다 앞선 Platform SDK를 쓰고 있습니다. 미발행 draft 릴리스를 벤더링하면 이 상태가 됩니다.",
+            "",
+            "승인본보다 앞선 SDK는 Fleet 준수 판정을 통과할 수 없고, 그 릴리스는 아직 immutable하지 않아 자산이 바뀌거나 사라질 수 있습니다.",
+            "",
+            "둘 중 하나로 정리합니다.",
+            "",
+            "1. 해당 Platform 릴리스를 정식 발행하고 Fleet 승인을 받는다.",
+            "2. 이 저장소의 벤더링을 현재 승인본으로 되돌린다.",
+          ].join("\n")
+        : custom
+          ? "현재 custom HTTP 연동을 중앙 Platform SDK 계약으로 전환합니다."
+          : "현재 누락된 중앙 Platform SDK를 탑재합니다.",
       "",
       `- 기준 source SHA: \`${input.sourceSha}\``,
       `- 승인 Platform release: \`${input.manifest.version}\` / \`${input.manifest.sourceSha}\``,
@@ -325,7 +339,9 @@ function integrationRemediationIssueTask(input: {
       `- SDK: ${input.artifact.kind} ${input.artifact.version} / \`${input.artifact.digest}\``,
       `- 탐지 상태: \`${input.integration}\``,
       "",
-      "공식 SDK 탑재와 회귀 테스트까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
+      ahead
+        ? "릴리스 발행과 저장소 되돌리기 중 어느 쪽인지는 이 저장소 담당이 정합니다. 승인 릴리스를 임의로 발행하지 않습니다."
+        : "공식 SDK 탑재와 회귀 테스트까지만 이 이슈에서 처리합니다. feature 활성화, 업로드, 실기기 QA, 공개 rollout은 별도 gate입니다.",
     ].join("\n"),
     labels: ["P1", "autopilot", AUTOPILOT_EXECUTION_LABEL, "platform", "platform-remediation"],
   });
@@ -727,7 +743,9 @@ export async function reconcilePlatformFleet(input: {
               artifact,
               observation,
             })
-          : disposition.kind === "CUSTOM_UNMANAGED" || disposition.kind === "MISSING_UNMANAGED"
+          : disposition.kind === "CUSTOM_UNMANAGED"
+            || disposition.kind === "MISSING_UNMANAGED"
+            || disposition.kind === "AHEAD_UNMANAGED"
             ? integrationRemediationIssueTask({
                 planId,
                 repoId: consumerInput.repoId,
@@ -736,7 +754,11 @@ export async function reconcilePlatformFleet(input: {
                 manifest,
                 manifestDigest: release.manifestDigest,
                 artifact,
-                integration: disposition.kind === "CUSTOM_UNMANAGED" ? "CUSTOM_HTTP" : "MISSING",
+                integration: disposition.kind === "CUSTOM_UNMANAGED"
+                  ? "CUSTOM_HTTP"
+                  : disposition.kind === "MISSING_UNMANAGED"
+                    ? "MISSING"
+                    : "AHEAD_OF_APPROVED",
               })
             : {
                 schemaVersion: 1,
@@ -762,7 +784,9 @@ export async function reconcilePlatformFleet(input: {
           planStatus = existing.status;
         }
         if (
-          (disposition.kind === "CUSTOM_UNMANAGED" || disposition.kind === "MISSING_UNMANAGED")
+          (disposition.kind === "CUSTOM_UNMANAGED"
+            || disposition.kind === "MISSING_UNMANAGED"
+            || disposition.kind === "AHEAD_UNMANAGED")
           && ["PROCESSING", "ISSUE_OPEN", "READBACK_REQUIRED", "BLOCKED"].includes(existing.status)
         ) {
           planStatus = existing.status;
@@ -863,6 +887,8 @@ export async function reconcilePlatformFleet(input: {
               ? "CUSTOM_UNMANAGED_REMEDIATION_ISSUE_OPEN"
               : disposition.kind === "MISSING_UNMANAGED" && planStatus === "ISSUE_OPEN"
                 ? "MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN"
+              : disposition.kind === "AHEAD_UNMANAGED" && planStatus === "ISSUE_OPEN"
+                ? "AHEAD_OF_APPROVED_RELEASE_ISSUE_OPEN"
             : disposition.bindingState;
       await tx.platformFleetBinding.upsert({
         where: { appId: app.id },
@@ -1128,7 +1154,7 @@ async function applyPlatformIssuePlan(
 ) {
   const planKinds = mode === "contract"
     ? ["CONTRACT_ISSUE"] as const
-    : ["CUSTOM_UNMANAGED", "MISSING_UNMANAGED"] as const;
+    : ["CUSTOM_UNMANAGED", "MISSING_UNMANAGED", "AHEAD_UNMANAGED"] as const;
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const claimed = await prisma.platformFleetPlan.updateMany({
     where: {
@@ -1424,7 +1450,7 @@ export async function drainPlatformFleetPlans(limit = 20) {
   const staleBefore = new Date(Date.now() - 5 * 60_000);
   const issuePlans = await prisma.platformFleetPlan.findMany({
     where: {
-      kind: { in: ["CONTRACT_ISSUE", "CUSTOM_UNMANAGED", "MISSING_UNMANAGED"] },
+      kind: { in: ["CONTRACT_ISSUE", "CUSTOM_UNMANAGED", "MISSING_UNMANAGED", "AHEAD_UNMANAGED"] },
       OR: [
         { status: { in: ["PENDING", "READBACK_REQUIRED"] } },
         { status: "PROCESSING", updatedAt: { lte: staleBefore } },
