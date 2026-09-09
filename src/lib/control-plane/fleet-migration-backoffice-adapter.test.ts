@@ -100,7 +100,7 @@ function adapter(proofPresent = true) {
 
 function request() {
   return {
-    contract: "seorilabs-fleet-migration-backoffice-public-evidence-v1",
+    contract: "seorilabs-fleet-migration-backoffice-public-evidence-v2",
     organizationId: "283115031",
     repositoryId: "101",
     fullName: "seorilabs/infra",
@@ -265,6 +265,7 @@ test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남
     appId: "app-product-0001",
     platformAppId: "registry-app-product-0001",
     platformRepositoryId: "999",
+    observedSourceSha: "3".repeat(40),
   };
 
   const compliant = fleetMigrationPlatformFleetBindingEvidence({
@@ -299,13 +300,12 @@ test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남
     binding: {
       id: "binding-0001",
       state: "AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN",
-      sourceSha: null,
+      sourceSha: "3".repeat(40),
       platformRelease: release,
     },
   });
   assert.equal(unknownState?.compliance, "DIVERGENT");
   assert.equal(unknownState?.complianceDetail, "AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN");
-  assert.equal(unknownState?.appSourceSha, null);
 
   // 같은 상태라도 판본이 다르면 digest가 갈린다. 기록이 실제 내용에 결박돼 있다는 뜻이다.
   const otherRelease = fleetMigrationPlatformFleetBindingEvidence({
@@ -319,8 +319,35 @@ test("승인본 판본 상태를 그대로 기록하고 미연결은 null로 남
   });
   assert.notEqual(compliant?.digest, otherRelease?.digest);
 
+  // 지금 관측 중인 커밋에서 잰 상태면 current, 뒤처졌으면 그 사실이 기록에 드러난다.
+  assert.equal(compliant?.appSourceCurrent, true);
+  const staleMeasurement = fleetMigrationPlatformFleetBindingEvidence({
+    ...common,
+    binding: {
+      id: "binding-0001",
+      state: "COMPLIANT",
+      sourceSha: "5".repeat(40),
+      platformRelease: release,
+    },
+  });
+  assert.equal(staleMeasurement?.appSourceCurrent, false);
+  assert.equal(staleMeasurement?.appSourceSha, "5".repeat(40));
+
   assert.equal(
     fleetMigrationPlatformFleetBindingEvidence({ ...common, binding: null }),
+    null,
+  );
+  // 어느 커밋에서 잰 상태인지 알 수 없으면 기술할 대상이 없다.
+  assert.equal(
+    fleetMigrationPlatformFleetBindingEvidence({
+      ...common,
+      binding: {
+        id: "binding-0001",
+        state: "COMPLIANT",
+        sourceSha: null,
+        platformRelease: release,
+      },
+    }),
     null,
   );
   assert.equal(

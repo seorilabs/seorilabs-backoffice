@@ -7,7 +7,9 @@ import { decideBlueprintReadback } from "@/lib/control-plane/provider-execution"
 import { prisma } from "@/lib/prisma";
 
 const ORGANIZATION_ID = "283115031";
-const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v1";
+// 증거 형태가 바뀌면 식별자도 함께 올린다. collector가 같은 값을 요구하므로 옛 shape을
+// 돌려주는 producer는 필드 부재가 아니라 계약 불일치로 즉시 닫힌다.
+export const BACKOFFICE_CONTRACT = "seorilabs-fleet-migration-backoffice-public-evidence-v2";
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const PRIVATE_KEY = /^(?:authorization|bytes|cookie|credentialValue|password|payload|privateKey|privateKeyPem|rawSecret|secret|secretValue|token)$/iu;
@@ -240,6 +242,7 @@ export interface FleetMigrationBindingEvidenceInput {
   appId: string;
   platformAppId: string;
   platformRepositoryId: string;
+  observedSourceSha: string;
 }
 
 /**
@@ -250,14 +253,19 @@ export interface FleetMigrationBindingEvidenceInput {
  * 수 없고, 저장소 하나가 움직일 때마다 조직 전체 기록이 다시 막힌다. 판본 수렴은 이
  * 기록을 근거로 각 저장소가 이어서 하는 별도 작업이다.
  *
- * 연결 자체가 없거나 어떤 릴리스에도 묶이지 않은 저장소는 기술할 대상이 없어 null로
- * 남긴다. 이것도 "아직 아무 릴리스에도 연결되지 않았다"는 사실 기록이다.
+ * 연결 자체가 없거나, 어떤 릴리스에도 묶이지 않았거나, 어느 커밋에서 잰 상태인지 알 수
+ * 없으면 기술할 대상이 없어 null로 남긴다. 이것도 "아직 아무 릴리스에도 연결되지 않았다"는
+ * 사실 기록이다.
+ *
+ * appSourceCurrent는 그 상태를 지금 관측 중인 커밋에서 쟀는지를 뜻한다. 뒤처진 측정도
+ * 기록하되, 뒤처졌다는 사실이 기록 안에서 드러나야 compliance를 오독할 수 없다.
  */
 export function fleetMigrationPlatformFleetBindingEvidence(
   input: FleetMigrationBindingEvidenceInput,
 ): Record<string, unknown> | null {
   const release = input.binding?.platformRelease ?? null;
-  if (!input.binding || !release) return null;
+  const appSourceSha = input.binding?.sourceSha ?? null;
+  if (!input.binding || !release || !appSourceSha) return null;
   const value = {
     observationId: input.binding.id,
     revision: "1",
@@ -265,7 +273,8 @@ export function fleetMigrationPlatformFleetBindingEvidence(
     platformAppId: input.platformAppId,
     platformRepositoryId: input.platformRepositoryId,
     platformSourceSha: release.sourceSha,
-    appSourceSha: input.binding.sourceSha,
+    appSourceSha,
+    appSourceCurrent: appSourceSha === input.observedSourceSha,
     state: "ACTIVE",
     compliance: input.binding.state === "COMPLIANT" ? "COMPLIANT" : "DIVERGENT",
     complianceDetail: input.binding.state,
@@ -533,6 +542,7 @@ export function createFleetMigrationBackofficeAdapter(input: {
           appId: app.id,
           platformAppId: app.platformAppId,
           platformRepositoryId: platformRegistration.repoId.toString(),
+          observedSourceSha: request.sourceSha,
         });
         providerObservations = publicFleetMigrationProviderObservations({
           rows: app.providerObservations,

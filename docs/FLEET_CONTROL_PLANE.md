@@ -952,9 +952,20 @@ repository collector와 같은 실행이 아니며, 그 결과를 38-repository 
 배포 이미지의 readiness library는 GitHub App installation pagination을 두 번 읽고, 각 active
 repository의 numeric ID/default HEAD를 전후 재확인한 뒤 중앙 분류 결정과 App binding을 DB SELECT로만
 검사한다. `PAUSED` 또는 `DEPRECATED` App도 numeric repo ID가 맞으면 존재하는 binding으로 읽되,
-`PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot,
-PlatformFleetBinding의 exact source 및 `COMPLIANT` 상태를 요구한다. non-product repository에 App row가
-결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다. GitHub와 DB에 쓰지 않고 공개 repo ID,
+`PRODUCT_APP` repository에는 상태와 무관하게 ACTIVE config와 signed snapshot을 요구한다.
+non-product repository에 App row가 결합돼 있으면 lifecycle status와 무관하게 binding drift로 남긴다.
+
+PlatformFleetBinding의 승인본 판본 수렴은 **차단 조건이 아니라 기록 대상이다.** inventory의
+목적이 이관 전 실태를 사실대로 남기는 것이고, 판본 수렴은 그 기록을 근거로 각 저장소가
+이어서 하는 별도 작업이다. binding 부재, 승인본 불일치, 측정 커밋 뒤처짐 세 가지는
+`reasonCodes`가 아니라 `observationCodes`/`observationCounts`로 남으며 evidence digest에
+그대로 포함된다. 이 셋을 차단 조건으로 두면 저장소 하나가 움직일 때마다 조직 전체 기록이
+막혀, 수렴 속도가 변경 속도를 앞지르지 못하는 동안에는 실태를 한 번도 남길 수 없다.
+
+기록에는 실제 상태가 들어간다. `compliance`는 `COMPLIANT`/`DIVERGENT` 두 값이고 내부 상태
+원문은 `complianceDetail`에, 그 상태를 잰 커밋은 `appSourceSha`에, 그것이 지금 관측 중인
+커밋인지는 `appSourceCurrent`에 남는다. collector는 `appSourceCurrent` 주장이 실제와 다르면
+거부한다. 뒤처진 측정은 기록하되 현재 측정이라고 주장할 수는 없다. GitHub와 DB에 쓰지 않고 공개 repo ID,
 App lifecycle status, source SHA, digest, reason code만 출력한다.
 
 `state=READY`는 collector의 Backoffice 공개 증거 선행조건만 통과했다는 뜻이다. 실제 BOOTSTRAP
