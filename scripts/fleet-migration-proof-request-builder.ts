@@ -132,6 +132,17 @@ function candidatesFromDetections(input: {
   });
 }
 
+/**
+ * cohort 커버리지 대조에 쓰는 저장소 vector.
+ *
+ * 기대값과 수집값을 각자 만들면 구분자 하나가 갈려도 전부 불일치가 된다. 실제로 기대값은
+ * NUL, 수집값은 공백을 써서 31곳이 항상 어긋났고 그 사실이 code 하나에 가려져 있었다.
+ * 구분자는 저장소 이름과 SHA 어디에도 나올 수 없는 NUL을 쓴다.
+ */
+function repositoryCoverageVector(fullName: string, sourceSha: string): string {
+  return `${fullName}\u0000${sourceSha}`;
+}
+
 /** candidate의 subject는 공개 증거에 이미 있는 사실만 옮긴다. */
 function subjectFromEvidence(
   publicEvidence: Record<string, unknown>,
@@ -223,7 +234,7 @@ async function main(): Promise<void> {
   // HEAD가 움직이면 ID만 맞는 요청이 만들어지고, 그 승인은 전부 버려진다.
   const expectedVector = new Map(readiness.repositories.map((repository) => [
     repository.repoId,
-    `${repository.repoFullName} ${repository.sourceSha ?? ""}`,
+    repositoryCoverageVector(repository.repoFullName, repository.sourceSha ?? ""),
   ]));
   const collected: Array<Record<string, unknown>> = [];
   const collector = createFleetMigrationReadOnlyCollector({
@@ -346,13 +357,32 @@ async function main(): Promise<void> {
   // 어긋난 상태로 승인을 만들지 않는다.
   const coveredVector = new Map(collected.map((item) => [
     String(item.repositoryId),
-    `${String(item.repositoryFullName)} ${String(item.sourceSha)}`,
+    repositoryCoverageVector(String(item.repositoryFullName), String(item.sourceSha)),
   ]));
+  const mismatched = [...expectedVector]
+    .filter(([repoId, vector]) => coveredVector.get(repoId) !== vector)
+    .map(([repoId, vector]) => {
+      const [expectedName, expectedSha] = vector.split("\u0000");
+      // 이름만 바뀌고 SHA가 같은 경우도 벡터 비교는 정상적으로 실패한다. SHA만 찍으면
+      // 양쪽이 같아 보여 이름 변경이 원인이라는 것을 알 수 없다. 수집된 이름도 남긴다.
+      const [coveredName, coveredSha] = coveredVector.get(repoId)?.split("\u0000") ?? [];
+      return `repoId=${repoId} 기대=${expectedName}@${expectedSha?.slice(0, 8) ?? "?"} 수집=${
+        coveredName ?? "없음"}@${coveredSha?.slice(0, 8) ?? "없음"}`;
+    });
+  const extra = [...coveredVector.keys()].filter((repoId) => !expectedVector.has(repoId));
   if (
     coveredVector.size !== collected.length
     || coveredVector.size !== expectedVector.size
-    || [...expectedVector].some(([repoId, vector]) => coveredVector.get(repoId) !== vector)
+    || mismatched.length > 0
   ) {
+    // readiness는 스캔 시작 전에 평가되고 스캔은 저장소 31곳의 tree와 blob을 읽는다. 그
+    // 사이 저장소가 움직이면 여기서 걸린다. 어느 저장소가 왜 어긋났는지 남겨야 조용한
+    // 창에서 재시도할지, 다른 원인인지 구분할 수 있다. 저장소 이름과 SHA 앞 8자리는
+    // 공개 식별자다.
+    console.error(`proof request 커버리지 불일치: 기대 ${expectedVector.size}곳 수집 ${
+      coveredVector.size}곳 중복제거전 ${collected.length}건`);
+    for (const line of mismatched.slice(0, 40)) console.error(`  어긋남 ${line}`);
+    for (const repoId of extra.slice(0, 40)) console.error(`  기대 밖 repoId=${repoId}`);
     throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID");
   }
 

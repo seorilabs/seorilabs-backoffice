@@ -188,3 +188,46 @@ test("중단 지점을 message가 아니라 도달 플래그로 판정한다", (
   // claim에 도달하지 못했는데 예외도 없으면 수집이 끝나지 않은 것이다.
   assert.match(source, /FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE/u);
 });
+
+test("커버리지 불일치도 어느 저장소가 왜 어긋났는지 남긴다", () => {
+  // readiness는 스캔 시작 전에 평가되고 스캔은 저장소 31곳의 tree·blob을 읽는다. 그 사이
+  // 저장소가 움직이면 여기서 걸리는데, 코드만으로는 재시도할 상황인지 다른 원인인지
+  // 구분할 수 없다. 같은 계열의 불투명 실패를 네 번째 겪었다.
+  assert.match(source, /proof request 커버리지 불일치: 기대 \$\{/u);
+  assert.match(source, /어긋남 \$\{line\}/u);
+  assert.match(source, /기대 밖 repoId=/u);
+
+  // 공개 식별자만 남긴다. 저장소 이름과 SHA 앞 8자리다.
+  assert.match(source, /\.slice\(0, 8\)/u);
+
+  // 기대값과 수집값이 같은 함수로 만들어져야 한다. 각자 만들면 구분자 하나가 갈려도
+  // 전부 불일치가 되고, 그 사실이 code 하나에 가려진다. 실제로 기대값은 NUL, 수집값은
+  // 공백을 써서 31곳이 항상 어긋났다.
+  assert.match(source, /function repositoryCoverageVector\(/u);
+  assert.match(
+    source,
+    /expectedVector = new Map\(readiness\.repositories\.map[\s\S]{0,120}repositoryCoverageVector\(/u,
+  );
+  assert.match(
+    source,
+    /coveredVector = new Map\(collected\.map[\s\S]{0,120}repositoryCoverageVector\(/u,
+  );
+  // 반증: 어느 한쪽이 자체 템플릿으로 되돌아가면 잡힌다.
+  assert.doesNotMatch(source, /\$\{String\(item\.repositoryFullName\)\} \$\{/u);
+  // 로그도 같은 구분자로 나눈다.
+  assert.match(source, /split\("\\u0000"\)/u);
+
+  // 이름만 바뀌고 SHA가 같은 경우도 벡터 비교는 실패한다. SHA만 찍으면 양쪽이 같아 보여
+  // 이름 변경이 원인이라는 것을 알 수 없다. 기대와 수집 양쪽의 이름을 모두 남긴다.
+  assert.match(source, /기대=\$\{expectedName\}@/u);
+  assert.match(source, /수집=\$\{[\s\S]{0,20}coveredName \?\? "없음"\}@/u);
+  assert.match(source, /const \[coveredName, coveredSha\]/u);
+
+  // 판정 자체는 그대로다. 로그를 남기고도 반드시 닫는다.
+  assert.match(source, /throw new Error\("FLEET_MIGRATION_PROOF_REQUEST_COVERAGE_INVALID"\)/u);
+  assert.match(source, /coveredVector\.size !== expectedVector\.size/u);
+  assert.match(source, /coveredVector\.size !== collected\.length/u);
+
+  // 로그 줄 수를 묶는다. 31곳이 전부 어긋나도 출력이 폭주하지 않는다.
+  assert.match(source, /\.slice\(0, 40\)/u);
+});
