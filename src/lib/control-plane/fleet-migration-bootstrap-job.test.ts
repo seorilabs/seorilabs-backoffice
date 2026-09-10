@@ -201,6 +201,31 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
   assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_proof_snapshot/u);
   assert.match(provisioning, /GRANT INSERT ON backoffice\.control_plane_fleet_migration_authoritative_issuance/u);
   assert.match(provisioning, /exact_grants fleet_migration_inventory_issuer 4 1/u);
+  // 읽기 표 목록과 exact_grants의 SELECT 개수는 함께 움직여야 한다. 실제로 adapter가
+  // ProjectBlueprint를 읽기 시작했는데 목록이 따라가지 않아, proof writer가 제품 앱
+  // 저장소에서만 SELECT denied로 닫혔다. 개수만 맞추고 표를 빠뜨리는 것도 막는다.
+  const readonlyTables = /readonly_tables=\(\n([\s\S]*?)\n\s*\)/u.exec(provisioning);
+  assert.ok(readonlyTables, "readonly_tables 목록을 찾지 못했다");
+  const tableCount = readonlyTables[1].split(/\s+/u).filter(Boolean).length;
+  assert.match(
+    provisioning,
+    new RegExp(`exact_grants fleet_migration_proof_writer ${tableCount} 1`, "u"),
+    "proof writer의 SELECT 개수가 읽기 표 개수와 다르다",
+  );
+  assert.match(
+    provisioning,
+    new RegExp(`exact_grants fleet_migration_shadow ${tableCount} 2`, "u"),
+    "shadow의 SELECT 개수가 읽기 표 개수와 다르다",
+  );
+  // adapter가 실제로 읽는 표는 목록에 있어야 한다.
+  for (const table of [
+    "control_plane_project_blueprint",
+    "control_plane_config_revision",
+    "control_plane_discovery_observation",
+    "platform_fleet_binding",
+  ]) {
+    assert.ok(readonlyTables[1].includes(table), `${table}이 읽기 표 목록에 없다`);
+  }
   assert.match(provisioning, /secretName: fleet-migration-inventory-issuer-db-credential/u);
   assert.doesNotMatch(provisioning, /GRANT (?:UPDATE|DELETE|ALL|CREATE|DROP|ALTER)\b/u);
   assert.match(provisioning, /information_schema\.APPLICABLE_ROLES/u);

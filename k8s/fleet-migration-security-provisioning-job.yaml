@@ -125,6 +125,7 @@ spec:
               readonly_tables=(
                 app repository_registration repository_classification_decision
                 control_plane_discovery_observation control_plane_config_revision
+                control_plane_project_blueprint
                 platform_fleet_binding platform_release control_plane_provider_observation
                 control_plane_credential_binding control_plane_provider_execution
                 control_plane_fleet_migration_proof_snapshot
@@ -277,8 +278,8 @@ spec:
                 test "$principals:$roles:$global:$schema:$columns:$selected:$inserted:$total" = \
                   "1:0:0:0:0:${expected_select}:${expected_insert}:$((expected_select + expected_insert))"
               }
-              exact_grants fleet_migration_shadow 13 2
-              exact_grants fleet_migration_proof_writer 13 1
+              exact_grants fleet_migration_shadow 14 2
+              exact_grants fleet_migration_proof_writer 14 1
               exact_grants fleet_migration_inventory_issuer 4 1
 
               printf '[client]\nuser=%s\npassword=%s\nhost=%s\nport=%s\ndatabase=backoffice\n' \
