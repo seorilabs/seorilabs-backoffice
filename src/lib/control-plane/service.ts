@@ -61,6 +61,8 @@ async function resolveDependencyAuditException(input: {
   applicationSourceSha: string;
   dependencyRoot: string;
   packageManager: "npm" | "pnpm" | null;
+  pullRequest?: GitHubActionsStaticManifestIdentity["pullRequest"];
+  executionSourceSha?: string;
   readLockfileSha256?: DependencyAuditLockfileReader;
   now: Date;
 }): Promise<DependencyAuditException | undefined> {
@@ -100,23 +102,62 @@ async function resolveDependencyAuditException(input: {
       "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED",
     );
   }
-  if (binding.sourceSha === input.applicationSourceSha) return input.exception;
-  let lockfileSha256: string | null;
-  try {
-    lockfileSha256 = await (input.readLockfileSha256 ?? readDependencyAuditLockfile)({
-      repositoryId: input.repositoryId,
-      fullName: input.fullName,
-      sourceSha: input.applicationSourceSha,
-      dependencyRoot: input.dependencyRoot,
-      packageManager: input.packageManager,
-    });
-  } catch {
-    throw new ControlPlaneError(
-      "감사 대상 lockfile의 실제 내용을 확인할 수 없습니다.",
-      503,
-      "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED",
-    );
+  const readLockfile = async (sourceSha: string) => {
+    try {
+      return await (input.readLockfileSha256 ?? readDependencyAuditLockfile)({
+        repositoryId: input.repositoryId,
+        fullName: input.fullName,
+        sourceSha,
+        dependencyRoot: input.dependencyRoot,
+        packageManager: input.packageManager,
+      });
+    } catch {
+      throw new ControlPlaneError(
+        "감사 대상 lockfile의 실제 내용을 확인할 수 없습니다.",
+        503,
+        "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED",
+      );
+    }
+  };
+  const candidate = binding.actionClass === "STATIC_CHECK"
+    ? binding.pullRequestCandidate
+    : undefined;
+  if (candidate && input.pullRequest?.number === candidate.number) {
+    const pullRequest = input.pullRequest;
+    // 후보의 base는 감사 당시 원문에 고정된다. 아래 동일-lock source 투영으로
+    // 새 base나 head에 후보 승인을 재사용하지 않는다.
+    if (
+      binding.sourceSha !== input.applicationSourceSha
+      || binding.sourceSha !== pullRequest.baseSha
+      || candidate.headSha !== pullRequest.headSha
+      || candidate.mergeSha !== pullRequest.mergeSha
+      || candidate.mergeSha !== input.executionSourceSha
+    ) {
+      throw new ControlPlaneError(
+        "승인한 PR 후보의 base, head 또는 merge SHA가 현재 실행과 일치하지 않습니다.",
+        409,
+        "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+      );
+    }
+    const hashes = await Promise.all([
+      readLockfile(pullRequest.headSha),
+      readLockfile(pullRequest.mergeSha),
+    ]);
+    if (hashes.some((hash) => hash !== candidate.lockfileSha256)) {
+      throw new ControlPlaneError(
+        "승인한 PR 후보와 실제 merge의 lockfile digest가 일치하지 않습니다.",
+        409,
+        "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH",
+      );
+    }
+    return input.exception;
   }
+  // main, 다른 PR, 계획 및 Android에는 기존 승인만 투영한다. 원본 signed
+  // snapshot을 바꾸지 않고, 구 consumer에 사용하지 않는 후보 승인을 전달하지 않는다.
+  const resolved = structuredClone(input.exception);
+  delete resolved.bindings[0].pullRequestCandidate;
+  if (binding.sourceSha === input.applicationSourceSha) return resolved;
+  const lockfileSha256 = await readLockfile(input.applicationSourceSha);
   if (lockfileSha256 !== binding.lockfileSha256) {
     throw new ControlPlaneError(
       "감사 예외의 lockfile digest가 실행 대상 source와 일치하지 않습니다.",
@@ -126,7 +167,6 @@ async function resolveDependencyAuditException(input: {
   }
   // 원본 ConfigRevision의 감사 시점 SHA는 보존한다. 동일 lockfile을 확인한 실행용
   // binding만 투영하며, 중앙 staging도 실제 checkout의 lockfile digest를 다시 검사한다.
-  const resolved = structuredClone(input.exception);
   resolved.bindings.find((candidate) => candidate.actionClass === input.actionClass)!.sourceSha
     = input.applicationSourceSha;
   return resolved;
@@ -2642,6 +2682,7 @@ async function resolveStaticRuntimeFacts(input: {
   signingKey: string;
   snapshotSignatureKeyId: string;
   snapshotSignaturePolicyRevision: string;
+  pullRequest?: GitHubActionsStaticManifestIdentity["pullRequest"];
   readLockfileSha256?: DependencyAuditLockfileReader;
   now?: Date;
 }, client: Pick<
@@ -2735,6 +2776,8 @@ async function resolveStaticRuntimeFacts(input: {
     applicationSourceSha: input.selector.bindingSourceSha,
     dependencyRoot: workflowDirectories.workspaceRoot,
     packageManager: workflowCaller.packageManager,
+    pullRequest: input.pullRequest,
+    executionSourceSha: input.selector.applicationSourceSha,
     readLockfileSha256: input.readLockfileSha256,
     now: input.now ?? new Date(),
   });
@@ -2961,6 +3004,7 @@ export async function resolveStaticRuntimeManifest(input: {
     signingKey: input.signingKey,
     snapshotSignatureKeyId: input.snapshotSignatureKeyId,
     snapshotSignaturePolicyRevision: input.snapshotSignaturePolicyRevision,
+    pullRequest: input.identity.eventName === "pull_request" ? input.identity.pullRequest : undefined,
     readLockfileSha256: input.readLockfileSha256,
     now: input.now,
   }, client);

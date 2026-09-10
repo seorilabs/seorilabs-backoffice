@@ -87,6 +87,55 @@ test("중앙 검증기가 요구하는 두 actionClass binding을 그대로 요�
   assert.equal(dependencyAuditExceptionSchema.safeParse(onlyStatic).success, false);
 });
 
+test("STATIC_CHECK 후보 승인은 기존 base와 별도의 exact PR head, merge, lock을 보존한다", () => {
+  const original = dependencyAuditExceptionSchema.parse(exception());
+  const candidate = {
+    number: 147,
+    headSha: "a".repeat(40),
+    mergeSha: "b".repeat(40),
+    lockfileSha256: `sha256:${"c".repeat(64)}`,
+  };
+  original.bindings[0].pullRequestCandidate = candidate;
+  const parsed = dependencyAuditExceptionSchema.parse(original);
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.bindings[0].sourceSha, SOURCE_SHA);
+  assert.equal(parsed.bindings[0].lockfileSha256, LOCKFILE);
+  assert.deepEqual(parsed.bindings[0].pullRequestCandidate, candidate);
+  assert.equal(parsed.expiresAt, exception().expiresAt);
+  assert.deepEqual(parsed.advisories, exception().advisories);
+});
+
+test("PR 후보 승인은 누락, 다른 권한 필드와 Android binding에 들어가면 거부된다", () => {
+  const candidate = {
+    number: 147,
+    headSha: "a".repeat(40),
+    mergeSha: "b".repeat(40),
+    lockfileSha256: `sha256:${"c".repeat(64)}`,
+  };
+  const missingMerge: Partial<typeof candidate> = { ...candidate };
+  delete missingMerge.mergeSha;
+  for (const invalid of [
+    missingMerge,
+    { ...candidate, number: 0 },
+    { ...candidate, number: Number.MAX_SAFE_INTEGER + 1 },
+    { ...candidate, headSha: "main" },
+    { ...candidate, lockfileSha256: LOCKFILE.slice(7) },
+    { ...candidate, expiresAt: "2030-01-01T00:00:00Z" },
+    { ...candidate, advisories: [] },
+  ]) {
+    const value = dependencyAuditExceptionSchema.parse(exception());
+    assert.equal(dependencyAuditExceptionSchema.safeParse({
+      ...value,
+      bindings: [{ ...value.bindings[0], pullRequestCandidate: invalid }, value.bindings[1]],
+    }).success, false);
+  }
+  const value = dependencyAuditExceptionSchema.parse(exception());
+  assert.equal(dependencyAuditExceptionSchema.safeParse({
+    ...value,
+    bindings: [value.bindings[0], { ...value.bindings[1], pullRequestCandidate: candidate }],
+  }).success, false);
+});
+
 test("ConfigRevision은 감사 사유의 문자 치환 흔적을 저장 전에 거부한다", () => {
   for (const reason of [
     "상위 패치가 없는 \uFFFD advisory",

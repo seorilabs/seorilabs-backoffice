@@ -614,6 +614,12 @@ export const dependencyAuditExceptionSchema = z.object({
       actionClass: z.literal("STATIC_CHECK"),
       sourceSha: dependencyAuditSourceSha,
       lockfileSha256: dependencyAuditLockfileSha256,
+      pullRequestCandidate: z.object({
+        number: z.number().int().positive().safe(),
+        headSha: dependencyAuditSourceSha,
+        mergeSha: dependencyAuditSourceSha,
+        lockfileSha256: dependencyAuditLockfileSha256,
+      }).strict().optional(),
     }).strict(),
     z.object({
       actionClass: z.literal("ANDROID_BUILD_ONLY"),

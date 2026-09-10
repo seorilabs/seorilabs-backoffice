@@ -211,6 +211,7 @@ test("same-repo PR은 GitHub App의 exact base, merge, head repo readback 뒤에
     headRepositoryId: "7001",
     headRepositoryFullName: "seorilabs/runtime-canary",
     headRef: "feature/runtime",
+    headSha: "e".repeat(40),
     mergeCommitSha: APPLICATION_SHA,
   };
   const identity = await authenticateGitHubActionsStaticManifestRequest(
@@ -228,6 +229,12 @@ test("same-repo PR은 GitHub App의 exact base, merge, head repo readback 뒤에
   );
   assert.equal(identity?.bindingSourceSha, BINDING_SHA);
   assert.equal(identity?.applicationSourceSha, APPLICATION_SHA);
+  assert.deepEqual(identity?.pullRequest, {
+    number: 91,
+    baseSha: BINDING_SHA,
+    headSha: exactReadback.headSha,
+    mergeSha: APPLICATION_SHA,
+  });
 
   for (const readback of [
     { ...exactReadback, baseSha: "d".repeat(40) },
@@ -235,6 +242,9 @@ test("same-repo PR은 GitHub App의 exact base, merge, head repo readback 뒤에
     { ...exactReadback, headRepositoryId: "7002" },
     { ...exactReadback, headRepositoryFullName: "attacker/runtime-canary" },
     { ...exactReadback, headRef: "other-feature" },
+    { ...exactReadback, headSha: "" },
+    { ...exactReadback, headSha: "feature/runtime" },
+    { ...exactReadback, number: 92 },
     { ...exactReadback, state: "closed" },
   ]) {
     assert.equal(

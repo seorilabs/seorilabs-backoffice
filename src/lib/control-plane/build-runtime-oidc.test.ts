@@ -214,6 +214,7 @@ test("candidate identity는 GitHub App exact base/merge/head readback 뒤에만 
     headRepositoryId: REPOSITORY_ID,
     headRepositoryFullName: FULL_NAME,
     headRef: HEAD_REF,
+    headSha: "f".repeat(40),
     mergeCommitSha: EVENT_SHA,
   };
   assert.ok(await authenticateGitHubActionsBuildManifestRequest(

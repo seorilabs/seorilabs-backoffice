@@ -59,6 +59,12 @@ export interface GitHubActionsStaticManifestIdentity {
   defaultBranch: string;
   repositoryVisibility: "public" | "private" | "internal";
   runnerEnvironment: "github-hosted" | "self-hosted";
+  pullRequest?: {
+    number: number;
+    baseSha: string;
+    headSha: string;
+    mergeSha: string;
+  };
 }
 
 export interface GitHubActionsStaticManifestExpectation {
@@ -127,6 +133,7 @@ export interface GitHubActionsPullRequestReadback {
   headRepositoryId: string;
   headRepositoryFullName: string;
   headRef: string;
+  headSha: string;
   mergeCommitSha: string;
 }
 
@@ -421,6 +428,7 @@ async function readPullRequestFromGitHub(
     headRepositoryId: String(response.data.head.repo?.id ?? ""),
     headRepositoryFullName: response.data.head.repo?.full_name ?? "",
     headRef: response.data.head.ref,
+    headSha: response.data.head.sha.toLowerCase(),
     mergeCommitSha: response.data.merge_commit_sha?.toLowerCase() ?? "",
   };
 }
@@ -483,6 +491,7 @@ function pullRequestReadbackMatches(
     && readback.headRepositoryId === claims.repositoryId
     && readback.headRepositoryFullName === claims.fullName
     && readback.headRef === claims.headRef
+    && SHA.test(readback.headSha)
     && readback.mergeCommitSha === claims.applicationSourceSha;
 }
 
@@ -559,6 +568,7 @@ export async function authenticateGitHubActionsStaticManifestRequest(
     ) {
       return null;
     }
+    let pullRequest: GitHubActionsStaticManifestIdentity["pullRequest"];
     if (claims.eventName === "pull_request") {
       if (claims.pullRequestNumber === null) return null;
       const readback = await readPullRequest({
@@ -567,8 +577,14 @@ export async function authenticateGitHubActionsStaticManifestRequest(
         pullRequestNumber: claims.pullRequestNumber,
       });
       if (!pullRequestReadbackMatches(claims, readback)) return null;
+      pullRequest = {
+        number: readback.number,
+        baseSha: readback.baseSha,
+        headSha: readback.headSha,
+        mergeSha: readback.mergeCommitSha,
+      };
     }
-    return bindStaticManifestIdentity(claims);
+    return { ...bindStaticManifestIdentity(claims), ...(pullRequest ? { pullRequest } : {}) };
   } catch {
     return null;
   }

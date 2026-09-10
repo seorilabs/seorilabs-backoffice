@@ -15,6 +15,8 @@ const FULL_NAME = "seorilabs/happy-farm";
 const APPLICATION_SHA = "3d8c7f96eb6bb9ef47b3d5485cb5faf1408373a2";
 const BINDING_SHA = "376c31350558c3ac4ed88907c4a35b0e443b5cd7";
 const BUNDLE_SHA = "c".repeat(40);
+const HEAD_SHA = "e".repeat(40);
+const CANDIDATE_LOCK = `sha256:${"f".repeat(64)}`;
 
 function dependencyAuditException(): DependencyAuditException {
   return {
@@ -42,6 +44,24 @@ function dependencyAuditException(): DependencyAuditException {
     ],
   };
 }
+
+function candidateException(): DependencyAuditException {
+  const value = dependencyAuditException();
+  value.bindings[0].pullRequestCandidate = {
+    number: 91,
+    headSha: HEAD_SHA,
+    mergeSha: APPLICATION_SHA,
+    lockfileSha256: CANDIDATE_LOCK,
+  };
+  return value;
+}
+
+const approvedPullRequest = {
+  number: 91,
+  baseSha: BINDING_SHA,
+  headSha: HEAD_SHA,
+  mergeSha: APPLICATION_SHA,
+};
 
 function identity(
   overrides: Partial<GitHubActionsStaticManifestIdentity> = {},
@@ -230,6 +250,129 @@ test("static runtime은 signed snapshot의 exact base-source 예외를 digest에
   );
   assert.deepEqual(result.manifest.dependencyAuditException, exception);
   assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+});
+
+test("승인 PR은 원본 base를 보존하고 head와 실제 merge의 lock을 모두 확인한다", async () => {
+  const exception = candidateException();
+  const original = structuredClone(exception);
+  const stored = client({ dependencyAuditException: exception });
+  const before = structuredClone(await stored.configRevision.findFirst());
+  const requests: unknown[] = [];
+  const result = await resolveStaticRuntimeManifest({
+    ...input(identity({ pullRequest: approvedPullRequest })),
+    async readLockfileSha256(request) {
+      requests.push(request);
+      return CANDIDATE_LOCK;
+    },
+  }, stored as never);
+  assert.deepEqual(requests, [HEAD_SHA, APPLICATION_SHA].map((sourceSha) => ({
+    repositoryId: REPOSITORY_ID,
+    fullName: FULL_NAME,
+    sourceSha,
+    dependencyRoot: "app",
+    packageManager: "pnpm",
+  })));
+  assert.deepEqual(result.manifest.dependencyAuditException, original);
+  assert.equal(result.manifest.sourceSha, BINDING_SHA);
+  assert.equal(result.manifest.signedSnapshotDigest, `sha256:${before.snapshotDigest}`);
+  assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+  assert.deepEqual(await stored.configRevision.findFirst(), before);
+  assert.deepEqual(exception, original);
+});
+
+test("같은 PR의 base, head 또는 merge 이동은 동일 hash여도 후보 승인을 재사용하지 않는다", async () => {
+  const exception = candidateException();
+  for (const overrides of [
+    { pullRequest: { ...approvedPullRequest, headSha: "a".repeat(40) } },
+    {
+      bindingSourceSha: "a".repeat(40),
+      pullRequest: { ...approvedPullRequest, baseSha: "a".repeat(40) },
+    },
+    {
+      applicationSourceSha: "a".repeat(40),
+      pullRequest: { ...approvedPullRequest, mergeSha: "a".repeat(40) },
+    },
+    { applicationSourceSha: "a".repeat(40), pullRequest: approvedPullRequest },
+  ]) {
+    let reads = 0;
+    await assert.rejects(resolveStaticRuntimeManifest({
+      ...input(identity(overrides)),
+      async readLockfileSha256() { reads += 1; return CANDIDATE_LOCK; },
+    }, client({ dependencyAuditException: exception }) as never),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH");
+    assert.equal(reads, 0);
+  }
+});
+
+test("후보 head 또는 merge의 hash 불일치, 파일 부재와 provider 오류를 거부한다", async () => {
+  for (const sourceSha of [HEAD_SHA, APPLICATION_SHA]) {
+    for (const failure of ["changed", "missing", "unavailable"] as const) {
+      await assert.rejects(resolveStaticRuntimeManifest({
+        ...input(identity({ pullRequest: approvedPullRequest })),
+        async readLockfileSha256(request) {
+          if (request.sourceSha !== sourceSha) return CANDIDATE_LOCK;
+          if (failure === "unavailable") throw new Error("provider unavailable");
+          return failure === "missing" ? null : `sha256:${"0".repeat(64)}`;
+        },
+      }, client({ dependencyAuditException: candidateException() }) as never),
+      (error) => error instanceof ControlPlaneError
+        && error.code === (failure === "unavailable"
+          ? "DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED"
+          : "DEPENDENCY_AUDIT_EXCEPTION_BINDING_MISMATCH"));
+    }
+  }
+});
+
+test("다른 PR과 main은 후보를 제외한 기존 base 예외만 받으며 원본 snapshot을 보존한다", async () => {
+  const exception = candidateException();
+  const projected = structuredClone(exception);
+  delete projected.bindings[0].pullRequestCandidate;
+  for (const value of [
+    identity({ eventRef: "refs/pull/92/merge", pullRequest: { ...approvedPullRequest, number: 92 } }),
+    identity({ eventName: "push", eventRef: "refs/heads/main", applicationSourceSha: BINDING_SHA }),
+  ]) {
+    const stored = client({ dependencyAuditException: exception });
+    const before = structuredClone(await stored.configRevision.findFirst());
+    const result = await resolveStaticRuntimeManifest({
+      ...input(value),
+      async readLockfileSha256() { throw new Error("후보 lock을 읽으면 안 된다"); },
+    }, stored as never);
+    assert.deepEqual(result.manifest.dependencyAuditException, projected);
+    assert.equal(result.manifest.signedSnapshotDigest, `sha256:${before.snapshotDigest}`);
+    assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+    assert.deepEqual(await stored.configRevision.findFirst(), before);
+  }
+});
+
+test("후보가 승인돼도 기존 예외 만료를 연장하지 않는다", async () => {
+  await assert.rejects(resolveStaticRuntimeManifest({
+    ...input(identity({ pullRequest: approvedPullRequest }), new Date("2026-09-13T00:00:00Z")),
+    async readLockfileSha256() { throw new Error("만료 후 lock을 읽으면 안 된다"); },
+  }, client({ dependencyAuditException: candidateException() }) as never),
+  (error) => error instanceof ControlPlaneError && error.code === "DEPENDENCY_AUDIT_EXCEPTION_EXPIRED");
+});
+
+test("OIDC 없는 계획 조회는 PR 후보를 제외한 기존 base 승인만 투영한다", async () => {
+  const exception = candidateException();
+  const result = await resolveStaticRuntimeManifestForRepository({
+    selector: {
+      repositoryId: REPOSITORY_ID,
+      bindingSourceSha: BINDING_SHA,
+      applicationSourceSha: BINDING_SHA,
+      workflowBundleSha: BUNDLE_SHA,
+    },
+    app: { id: "app-runtime-1", repoFullName: FULL_NAME, status: "ACTIVE" },
+    expectedSourceRef: "refs/heads/main",
+    signingKey: SIGNING_KEY,
+    snapshotSignatureKeyId: "control-plane-snapshot-v1",
+    snapshotSignaturePolicyRevision: "snapshot-policy-v1",
+    now: new Date("2026-08-30T00:00:00Z"),
+    async readLockfileSha256() { throw new Error("계획 조회는 후보 lock을 읽으면 안 된다"); },
+  }, client({ dependencyAuditException: exception }) as never);
+  const expected = structuredClone(exception);
+  delete expected.bindings[0].pullRequestCandidate;
+  assert.deepEqual(result.manifest.dependencyAuditException, expected);
 });
 
 test("static dependency audit 예외는 identity, source, expiry와 clock drift를 fail-closed한다", async () => {
