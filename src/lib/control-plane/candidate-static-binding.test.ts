@@ -118,6 +118,7 @@ test("실제 registry integrity와 서명된 ACTIVE snapshot에서 중앙 loader
   assert.equal(result.mutationAttempted, false);
   assert.equal(result.callerPath, ".github/workflows/org-contract.yml");
   assert.equal(result.candidate.id, value.record.id);
+  assert.equal(result.candidate.artifactRunAttempt, value.record.artifactRunAttempt);
   assert.equal(result.binding.state, "VERIFIED");
   assert.equal(result.binding.sourceSha, SOURCE);
   assert.equal(result.binding.manifest.staticBinding.profile, "capacitor");

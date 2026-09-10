@@ -90,7 +90,10 @@ export async function readCandidateStaticBinding(
   return {
     scope: "STATIC_CHECK" as const,
     callerPath: ".github/workflows/org-contract.yml" as const,
-    candidate: publicWorkflowBundleRegistryRecord(record),
+    candidate: {
+      ...publicWorkflowBundleRegistryRecord(record),
+      artifactRunAttempt: record.artifactRunAttempt,
+    },
     binding,
     mutationAttempted: false as const,
   };
