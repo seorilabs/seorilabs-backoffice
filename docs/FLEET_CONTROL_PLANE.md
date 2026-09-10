@@ -183,6 +183,21 @@ repository identity, 감사 시점의 action별 source SHA와 lockfile digest, a
 `DEPENDENCY_AUDIT_EXCEPTION_LOCKFILE_READ_FAILED`로 막으며 identity·만료 검사는 그대로 적용한다.
 release, upload, review, public action 권한으로 해석하지 않는다.
 
+잠금 파일을 바꾸는 same-repo PR은 기존 `STATIC_CHECK` binding에 선택적
+`pullRequestCandidate: { number, headSha, mergeSha, lockfileSha256 }`를 명시 승인한다.
+binding의 `sourceSha`와 `lockfileSha256`는 기존 base 감사 기록으로 유지한다. 후보는 같은
+예외의 repository identity, advisory 집합과 만료를 상속하며 Android binding에는 넣을 수 없다.
+GitHub OIDC와 App의 현재 open PR readback에서 확인한 번호·base·head·merge가 승인 값과
+정확히 같고, 승인 head와 실제 merge의 잠금 파일 해시가 모두 후보 해시와 같을 때만 제공한다.
+같은 PR의 base/head/merge가 바뀌면 hash가 같아도 후보 승인을 재사용하지 않는다.
+
+후보를 쓰는 runtime manifest는 원본 예외의 후보 좌표까지 digest에 포함한다. main, 다른 PR,
+계획 조회 및 Android에는 후보 필드를 제외한 기존 예외만 투영한다. 이 투영은 저장된
+ConfigRevision, signed snapshot 및 그 digest를 바꾸지 않는다. 기존 consumer가 후보를
+무시하지 않도록, 후보 승인을 활성화하기 전에 이를 이해하는 WorkflowBundle의 정확한
+SHA/digest를 승인·결합해야 한다. PR 병합 후에는 실제 main source와 lock을 확인한 새
+ConfigRevision으로 정본 binding을 승격하고 후보 승인을 제거한다.
+
 감사 사유는 U+FFFD 또는 단어 대신 들어간 연속 물음표처럼 문자 치환 흔적이 있으면 생성·활성화 validator에서
 거부한다. 손상된 기존 사유는 정상 revision의 UTF-8 원문과 대조해 사유만 복원한 새 ConfigRevision으로
 활성화한다. 기존 revision을 덮어쓰지 않으며 만료·advisory·binding을 함께 변경하지 않는다.

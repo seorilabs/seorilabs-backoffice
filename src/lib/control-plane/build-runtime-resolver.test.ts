@@ -325,6 +325,27 @@ test("build-only runtime은 signed snapshot의 exact base-source 예외를 diges
   assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
 });
 
+test("Android runtime은 STATIC PR 후보를 제외하고 기존 예외와 원본 서명을 보존한다", async () => {
+  const exception = dependencyAuditException();
+  exception.bindings[0].pullRequestCandidate = {
+    number: 147,
+    headSha: "a".repeat(40),
+    mergeSha: "b".repeat(40),
+    lockfileSha256: `sha256:${"c".repeat(64)}`,
+  };
+  const original = structuredClone(exception);
+  const stored = client({ dependencyAuditException: exception });
+  const before = structuredClone(await stored.configRevision.findFirst());
+  const result = await resolveBuildRuntimeManifest(input(), stored as never);
+  const expected = structuredClone(exception);
+  delete expected.bindings[0].pullRequestCandidate;
+  assert.deepEqual(result.manifest.dependencyAuditException, expected);
+  assert.equal(result.manifest.signedSnapshotDigest, `sha256:${before.snapshotDigest}`);
+  assert.equal(result.manifestDigest, `sha256:${jsonDigest(result.manifest as unknown as JsonValue)}`);
+  assert.deepEqual(await stored.configRevision.findFirst(), before);
+  assert.deepEqual(exception, original);
+});
+
 test("build-only dependency audit 예외는 source, expiry와 clock drift를 fail-closed한다", async () => {
   const exception = dependencyAuditException();
   const cases = [
