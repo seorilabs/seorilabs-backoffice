@@ -162,8 +162,12 @@ test("candidate task는 exact registry/config/source와 두 caller만 고정한�
     "name: Org Contract",
     "on:",
     "  pull_request:",
-    "    paths:",
-    "      - .github/workflows/org-contract.yml",
+    "    branches:",
+    "      - main",
+    "  push:",
+    "    branches:",
+    "      - main",
+    "  workflow_dispatch: {}",
     "permissions:",
     "  contents: read",
     "  id-token: write",
@@ -177,6 +181,8 @@ test("candidate task는 exact registry/config/source와 두 caller만 고정한�
     "",
   ].join("\n"));
   assert.match(buildCaller, new RegExp(`rn-build-android-cloud-v2\\.yml@${BUNDLE_SHA}$`, "m"));
+  assert.match(buildCaller, /pull_request:\n    paths:\n      - \.github\/workflows\/android-build-only\.yml/u);
+  assert.doesNotMatch(buildCaller, /push:|workflow_dispatch:|tags:/u);
   assert.equal(workflowBundleCandidateTaskSchema.parse(candidate).planDigest, candidate.planDigest);
 });
 

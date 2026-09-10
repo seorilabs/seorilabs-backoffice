@@ -319,7 +319,11 @@ export function buildWorkflowBundleCandidateTask(input: {
 
   const staticCaller = workflowDocument({
     name: "Org Contract",
-    on: { pull_request: { paths: [STATIC_CALLER_PATH] } },
+    on: {
+      pull_request: { branches: ["main"] },
+      push: { branches: ["main"] },
+      workflow_dispatch: {},
+    },
     permissions: staticPermissions(allowed.staticProfile),
     concurrency: {
       group: "org-contract-${{ github.repository_id }}-${{ github.ref }}",

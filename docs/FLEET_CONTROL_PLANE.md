@@ -171,6 +171,26 @@ bundle integrity를 다시 검증한 뒤 원장 쓰기와 같은 transaction에�
 [workflow_run 이벤트](https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_run)와
 [실행별 artifact 조회](https://docs.github.com/en/rest/actions/artifacts#list-workflow-run-artifacts)를 따른다.
 
+`GET /api/control-plane/candidate-static-binding`은 정상 control-plane admin 인증으로
+`repositoryId`, `sourceSha`, `workflowBundleRecordId`, `workflowBundleSha`,
+`workflowBundleDigest`를 각각 하나씩 받는다. 운글 `1335099739`/`capacitor`, Happy Farm
+`1250442131`/`react-native`, Lizard Tycoon `1265192029`/`godot`의 정확한 저장소 이름과
+현재 등록·reconcile된 main만 허용한다. 후보 registry의 artifact provenance와 본문 integrity를
+재검증하고, 기존 `resolveWorkflowBindingForRepository`로 ACTIVE snapshot 서명, discovery,
+감사 예외와 만료를 검사한 뒤 중앙 loader용 `binding` envelope를 그대로 반환한다.
+raw HMAC·키는 반환하지 않으며 응답은 `private, no-store`다. 정상 응답은 static caller의
+입력일 뿐 후보 실행·설정 활성화·Android·마켓 권한이 아니다. 기록 부재는 404, source·후보·
+ACTIVE 불일치 및 감사 예외 만료는 409, 비인증은 401, 임의 ref·중복·누락 입력은 400이다.
+생성기는 실제 GitHub main과 내려받은 중앙 후보 artifact를 다시 대조해야 한다.
+
+고정된 세 앱의 후보 static caller는 main 대상 PR, main push, 수동 실행 트리거를 일반 static
+caller와 동일하게 생성한다. STATIC runtime은 이미 이 이벤트들의 GitHub OIDC, exact source와
+서명된 ACTIVE bundle SHA를 확인하며 registry의 CANDIDATE/APPROVED 상태를 매번 조회하지는
+않는다. 따라서 생성 시 후보 registry와 ACTIVE digest를 위 GET으로 검증해야 한다.
+PR 병합 후 lockfile이 바뀌면 실제 main source/hash로 ConfigRevision을 갱신해야 하며 PR 후보
+승인을 자동 승격하지 않는다. Android 후보는 기존 caller 경로 PR 트리거와 신뢰된 PR base
+빌드를 유지한다. 일반 fleet caller 반증은 계속 APPROVED 번들을 요구한다.
+
 Config payload는 UI와 internal API가 같은 strict allowlist validator와 service를 사용한다. 허용 범위는
 `schemaVersion`, 비공개 market channel, market별 localization, object-storage asset revision, build pin,
 support URL, 공개 cloud identity로만 구성된 `ProjectBlueprint`, 사람 승인 전 `complianceDrafts`다.
