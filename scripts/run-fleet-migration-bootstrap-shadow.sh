@@ -15,6 +15,7 @@ execution_id="${FLEET_MIGRATION_EXECUTION_ID:-}"
 runtime_key_fingerprint="${FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT:-}"
 runtime_config_map="${FLEET_MIGRATION_RUNTIME_CONFIG_MAP:-}"
 github_token_secret="${FLEET_MIGRATION_GITHUB_TOKEN_SECRET:-}"
+baseline_succession_config_map="${FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP:-}"
 timeout="${BACKOFFICE_FLEET_BOOTSTRAP_TIMEOUT_SECONDS:-3600}"
 
 if [[ ! "$image" =~ ^.+@sha256:[0-9a-f]{64}$ ]]; then
@@ -37,7 +38,7 @@ if [[ ! "$runtime_key_fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
   echo "오류: FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT는 등록된 Ed25519 SPKI SHA-256이어야 한다" >&2
   exit 2
 fi
-for ref in "$runtime_config_map" "$github_token_secret"; do
+for ref in "$runtime_config_map" "$github_token_secret" "$baseline_succession_config_map"; do
   if [[ ! "$ref" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]]; then
     echo "오류: runtime ConfigMap/Secret 이름이 DNS 계약과 다르다" >&2
     exit 2
@@ -81,12 +82,24 @@ if [ "$runtime_keys" != "ab" ] || [ "$token_key" != "present" ] || [ "$db_key" !
   exit 1
 fi
 
+# 승계 문서와 그 검증에 쓰는 공개 trust root가 모두 있어야 한다. 문서 내용은 읽지 않고
+# 키 이름 존재만 확인한다. 서명 검증은 collector가 수행한다.
+succession_key="$($kubectl_bin -n "$namespace" get "configmap/$baseline_succession_config_map" \
+  -o go-template='{{if index .data "baseline-succession.json"}}present{{end}}')"
+identity_keys="$($kubectl_bin -n "$namespace" get configmap/fleet-migration-inventory-public-identity \
+  -o go-template='{{if index .data "public-key.pem"}}k{{end}}{{if index .data "catalog.json"}}c{{end}}')"
+if [ "$succession_key" != "present" ] || [ "$identity_keys" != "kc" ]; then
+  echo "오류: baseline 승계 문서 또는 inventory public identity가 불완전하다" >&2
+  exit 1
+fi
+
 rendered="$($here/render-manifest.sh "$root/k8s/fleet-migration-bootstrap-shadow-job.yaml" "$image" "$source_sha" \
   | sed \
       -e "s|__FLEET_MIGRATION_DETECTOR_SOURCE_SHA__|$detector_sha|g" \
       -e "s|__FLEET_MIGRATION_EXECUTION_ID__|$execution_id|g" \
       -e "s|__FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT__|$runtime_key_fingerprint|g" \
       -e "s|__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__|$runtime_config_map|g" \
+      -e "s|__FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP__|$baseline_succession_config_map|g" \
       -e "s|__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__|$github_token_secret|g")"
 if grep -q '__[A-Z0-9_]*__\|:latest' <<<"$rendered"; then
   echo "오류: BOOTSTRAP Job placeholder 또는 mutable image가 남았다" >&2
@@ -105,7 +118,8 @@ if ! printf '%s' "$job_json" | "$jq_bin" -e \
   --arg execution "$execution_id" \
   --arg runtimeKeyFingerprint "$runtime_key_fingerprint" \
   --arg runtimeConfigMap "$runtime_config_map" \
-  --arg tokenSecret "$github_token_secret" '
+  --arg tokenSecret "$github_token_secret" \
+  --arg successionConfigMap "$baseline_succession_config_map" '
     .spec.suspend == true
     and .spec.backoffLimit == 0
     and .spec.activeDeadlineSeconds == 3600
@@ -140,6 +154,10 @@ if ! printf '%s' "$job_json" | "$jq_bin" -e \
     and (.spec.template.spec.volumes | map(select(.name == "runtime-public-attestation"))[0].projected.sources[0].configMap.name) == $runtimeConfigMap
     and (.spec.template.spec.volumes | map(select(.name == "github-read-token"))[0].secret.secretName) == $tokenSecret
     and (.spec.template.spec.volumes | map(select(.name == "github-read-token"))[0].secret.defaultMode) == 288
+    and (.spec.template.spec.volumes | map(select(.name == "inventory-public-identity"))[0].configMap.name) == "fleet-migration-inventory-public-identity"
+    and (.spec.template.spec.volumes | map(select(.name == "inventory-public-identity"))[0].configMap.defaultMode) == 288
+    and (.spec.template.spec.volumes | map(select(.name == "baseline-succession"))[0].configMap.name) == $successionConfigMap
+    and (.spec.template.spec.volumes | map(select(.name == "baseline-succession"))[0].configMap.defaultMode) == 288
   ' >/dev/null; then
   echo "오류: BOOTSTRAP Job runtime/source/capability/resource binding 불일치" >&2
   exit 1

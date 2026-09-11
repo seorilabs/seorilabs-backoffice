@@ -142,7 +142,34 @@ FLEET_MIGRATION_EXECUTION_ID='<signed execution ID>' \
 FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT='<등록된 64자리 Ed25519 SPKI SHA-256>' \
 FLEET_MIGRATION_RUNTIME_CONFIG_MAP='<signed public runtime ConfigMap>' \
 FLEET_MIGRATION_GITHUB_TOKEN_SECRET='<one-run token Secret>' \
+FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP='<서명된 승계 문서 ConfigMap>' \
   scripts/run-fleet-migration-bootstrap-shadow.sh
+```
+
+### 기준선 승계
+
+비준된 기준선은 저장소 38곳(`6b940f78…`)이다. 그 뒤 승인 하에 archive된 저장소가 있으면
+현재 active cohort는 더 작아지고, collector는 그 차이를 설명하는 **서명된 승계 문서** 없이는
+수집을 진행하지 않는다. 승계는 비준본을 대체하지 않고 그 위에 차이만 기록한다.
+
+문서는 다음을 모두 담아야 하며 하나라도 어긋나면 shadow 단계에서 막힌다.
+
+- `supersedes` — 비준본의 cohort digest와 수치
+- `priorCohort` — 비준 당시 38곳 전체. 이 목록이 `6b940f78…`을 재현해야 한다
+- `transitions` — 빠진 것, 들어온 것, rename, 기본 브랜치 변경을 numeric repository ID로
+  **전수** 설명한다. 설명되지 않은 drift가 하나라도 있으면 거부한다
+- `expectedCounts` — 현재 관측 수치. 비준본보다 커질 수 없다(단조 감소)
+- `attestation` — `FLEET_MIGRATION_BASELINE_SUCCESSION` 목적의 Ed25519 서명.
+  inventory attestation과 같은 trust root(`shared/platform/fleet-release-approval-signing`)를
+  쓰며, 개인키는 클러스터로 옮기지 않고 trusted operator가 로컬에서 fd로만 전달해 서명한다
+
+ConfigMap은 `baseline-succession.json` 키 하나만 갖는다. shadow Job은 이 문서와
+`fleet-migration-inventory-public-identity` ConfigMap의 공개키를 0440 projected 파일로 읽고,
+collector가 서명을 검증한다. 문서가 없거나 서명이 신뢰 루트와 다르면 수집이 시작되지 않는다.
+
+```bash
+kubectl -n platform create configmap fleet-migration-baseline-succession-<실행 구분자> \
+  --from-file=baseline-succession.json=<로컬 서명 산출물>
 ```
 
 runner는 OCI revision label, canonical NetworkPolicy, projected object key, suspended Job의
