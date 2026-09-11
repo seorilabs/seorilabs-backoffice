@@ -225,3 +225,31 @@ test("runtime capability rejects a token whose bytes are not covered by the publ
     createClient: () => ({ request: async () => ({}) }) as never,
   }), /FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID/);
 });
+
+test("runtime payload 검증 실패는 필드 경로를 전달한다", async () => {
+  const { FleetMigrationRuntimePayloadError, parseFleetMigrationRuntimePayload } = await import(
+    "@/lib/control-plane/fleet-migration-runtime-capability"
+  );
+  // 단일 code로 끝나면 payload 22개 필드 중 무엇이 틀렸는지 알 수 없다. 실제로 진단마다
+  // 배포를 한 번씩 왕복했다.
+  try {
+    parseFleetMigrationRuntimePayload({ schemaVersion: 2, contract: "wrong" });
+    assert.fail("검증이 통과해서는 안 된다");
+  } catch (error) {
+    assert.ok(error instanceof FleetMigrationRuntimePayloadError);
+    assert.equal(error.message, "FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
+    assert.ok(error.paths.includes("schemaVersion"));
+    assert.ok(error.paths.includes("contract"));
+    // 경로는 스키마 필드 이름이라 값이 실리지 않는다.
+    assert.doesNotMatch(error.paths.join(","), /wrong/u);
+  }
+
+  // 발급기가 그 경로를 실제로 로그에 남기는지 소스 계약으로 고정한다.
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(
+    `${process.cwd()}/scripts/fleet-migration-runtime-capability-issuer.ts`,
+    "utf8",
+  );
+  assert.match(source, /runtime payload 검증 실패 경로: \$\{error\.paths\.join\(", "\)\}/u);
+  assert.match(source, /const payload = parseRuntimePayload\(\{/u);
+});

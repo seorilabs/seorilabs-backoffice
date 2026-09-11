@@ -91,9 +91,30 @@ const runtimePayloadSchema = z.object({
 
 export type FleetMigrationRuntimePayload = z.infer<typeof runtimePayloadSchema>;
 
+/**
+ * runtime payload 검증 실패를 필드 경로와 함께 전달한다.
+ *
+ * 공개 code는 그대로 두고 경로만 따로 싣는다. 단일 code로 끝나면 payload 22개 필드 중
+ * 무엇이 틀렸는지 알 수 없어 진단할 때마다 배포를 한 번씩 왕복해야 한다. 경로는 스키마의
+ * 필드 이름이라 값이 실리지 않는다.
+ */
+export class FleetMigrationRuntimePayloadError extends Error {
+  readonly paths: readonly string[];
+
+  constructor(paths: readonly string[]) {
+    super("FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
+    this.name = "FleetMigrationRuntimePayloadError";
+    this.paths = Object.freeze([...paths]);
+  }
+}
+
 export function parseFleetMigrationRuntimePayload(value: unknown): FleetMigrationRuntimePayload {
   const parsed = runtimePayloadSchema.safeParse(value);
-  if (!parsed.success) fail("FLEET_MIGRATION_RUNTIME_CAPABILITY_BINDING_INVALID");
+  if (!parsed.success) {
+    throw new FleetMigrationRuntimePayloadError(
+      [...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "<root>"))].sort(),
+    );
+  }
   return parsed.data;
 }
 
