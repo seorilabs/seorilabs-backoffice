@@ -13,6 +13,7 @@ const RUNTIME_KEY_FINGERPRINT = "d".repeat(64);
 const PROOF_APPROVAL_KEY_FINGERPRINT = "e".repeat(64);
 const RUNTIME_CONFIG_MAP = "fleet-runtime-public-0001";
 const TOKEN_SECRET = "fleet-runtime-token-0001";
+const SUCCESSION_CONFIG_MAP = "fleet-baseline-succession-0001";
 
 function callObjectBody(source: string, call: string): string {
   const start = source.indexOf(`${call}({`);
@@ -38,7 +39,8 @@ test("BOOTSTRAP shadow renders as a one-shot, source-bound Job outside the web p
     .replaceAll("__FLEET_MIGRATION_EXECUTION_ID__", EXECUTION_ID)
     .replaceAll("__FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT__", RUNTIME_KEY_FINGERPRINT)
     .replaceAll("__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__", RUNTIME_CONFIG_MAP)
-    .replaceAll("__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__", TOKEN_SECRET);
+    .replaceAll("__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__", TOKEN_SECRET)
+    .replaceAll("__FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP__", SUCCESSION_CONFIG_MAP);
   assert.match(rendered, /^kind: Job$/mu);
   assert.match(rendered, /backoffLimit: 0/u);
   assert.match(rendered, /suspend: true/u);
@@ -99,6 +101,7 @@ test("AC-1: production shadow wires only read adapters plus occurrence audit wri
   const source = readFileSync(join(ROOT, "scripts/fleet-migration-bootstrap-shadow.ts"), "utf8");
   const collector = callObjectBody(source, "createFleetMigrationReadOnlyCollector");
   assert.deepEqual(topLevelKeys(collector), [
+    "trustedInventoryKeys",
     "organizationId",
     "installationId",
     "detectorRepositoryId",
@@ -146,6 +149,7 @@ test("AC-2: readiness is discarded before collection and cannot become authorita
     "requestedRunId",
     "inventoryId",
     "baselineRatification",
+    "baselineSuccession",
   ]);
   assert.doesNotMatch(collection, /readiness/u);
   assert.match(source, /authoritative: false,[\s\S]*readyForPlanning: false,/u);
@@ -268,4 +272,43 @@ test("finalizer는 GitHub와 BO 최종 vector 뒤 capability TTL을 다시 확�
     && backofficeRead < finalFreshness
     && finalFreshness < completion,
   );
+});
+
+test("기준선 승계는 서명 문서와 공개 trust root를 모두 mount로 받는다", () => {
+  const manifest = join(ROOT, "k8s/fleet-migration-bootstrap-shadow-job.yaml");
+  const rendered = execFileSync(join(ROOT, "scripts/render-manifest.sh"), [manifest, IMAGE, SOURCE_SHA], { encoding: "utf8" })
+    .replaceAll("__FLEET_MIGRATION_DETECTOR_SOURCE_SHA__", DETECTOR_SHA)
+    .replaceAll("__FLEET_MIGRATION_EXECUTION_ID__", EXECUTION_ID)
+    .replaceAll("__FLEET_MIGRATION_RUNTIME_KEY_FINGERPRINT__", RUNTIME_KEY_FINGERPRINT)
+    .replaceAll("__FLEET_MIGRATION_RUNTIME_CONFIG_MAP__", RUNTIME_CONFIG_MAP)
+    .replaceAll("__FLEET_MIGRATION_GITHUB_TOKEN_SECRET__", TOKEN_SECRET)
+    .replaceAll("__FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP__", SUCCESSION_CONFIG_MAP);
+  // 승계 문서와 그 서명을 검증할 공개키는 서로 다른 출처여야 한다. 같은 객체에서 오면
+  // 문서를 바꾼 주체가 trust root도 함께 바꿀 수 있다.
+  assert.match(rendered, /name: fleet-migration-inventory-public-identity/u);
+  assert.match(rendered, new RegExp(`name: "${SUCCESSION_CONFIG_MAP}"`, "u"));
+  assert.match(rendered, /key: baseline-succession\.json/u);
+  assert.match(rendered, /key: public-key\.pem/u);
+  assert.match(rendered, /key: catalog\.json/u);
+  // 공개 identity와 승계 문서만 온다. 개인키 경로는 없다.
+  assert.doesNotMatch(rendered, /private-key\.pem/u);
+
+  const runner = readFileSync(join(ROOT, "scripts/run-fleet-migration-bootstrap-shadow.sh"), "utf8");
+  assert.match(runner, /FLEET_MIGRATION_BASELINE_SUCCESSION_CONFIG_MAP/u);
+  assert.match(runner, /baseline-succession\.json/u);
+  assert.match(runner, /fleet-migration-inventory-public-identity/u);
+  // 문서 내용은 읽지 않고 키 이름 존재만 확인한다.
+  assert.doesNotMatch(runner, /get "configmap\/\$baseline_succession_config_map" -o jsonpath/u);
+});
+
+test("승계 문서 로더는 mount 경계 안에서만 읽고 서명 검증을 스스로 하지 않는다", () => {
+  const source = readFileSync(join(ROOT, "src/lib/control-plane/fleet-migration-baseline-succession.ts"), "utf8");
+  assert.match(source, /readBoundSecretFile/u);
+  // 서명 검증은 collector가 신뢰 공개키로 한다. 로더가 따로 통과시키는 경로를 만들지 않는다.
+  assert.doesNotMatch(source, /verify|createPublicKey|signature/u);
+
+  const shadow = readFileSync(join(ROOT, "scripts/fleet-migration-bootstrap-shadow.ts"), "utf8");
+  // trust root는 inventory issuer가 읽는 것과 같은 공개 identity에서만 온다.
+  assert.match(shadow, /loadFleetMigrationInventoryPublicIdentity/u);
+  assert.match(shadow, /trustedInventoryKeys: \{\s*\[inventoryIdentity\.catalog\.keyId\]: inventoryIdentity\.publicKey,/u);
 });

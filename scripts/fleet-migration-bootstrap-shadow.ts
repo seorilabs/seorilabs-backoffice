@@ -6,8 +6,10 @@ import { validateFleetMigrationLegacyDocument } from "seorilabs-org-contracts/re
 import { fleetMigrationContract } from "seorilabs-org-contracts/repo-contract/fleet-migration";
 
 import { createFleetMigrationBackofficeAdapter } from "@/lib/control-plane/fleet-migration-backoffice-adapter";
+import { loadFleetMigrationBaselineSuccession } from "@/lib/control-plane/fleet-migration-baseline-succession";
 import { createFleetMigrationFinalizer } from "@/lib/control-plane/fleet-migration-finalizer";
 import { createFleetMigrationGitHubAdapter } from "@/lib/control-plane/fleet-migration-github-adapter";
+import { loadFleetMigrationInventoryPublicIdentity } from "@/lib/control-plane/fleet-migration-inventory-issuer-adapter";
 import { createFleetMigrationOccurrenceStore } from "@/lib/control-plane/fleet-migration-occurrence";
 import { loadFleetMigrationRuntimeCapability } from "@/lib/control-plane/fleet-migration-runtime-capability";
 import {
@@ -113,7 +115,23 @@ async function main(): Promise<void> {
       expectedRepositories: runtime.payload.github.repositories,
       assertRuntimeFresh: runtime.assertFresh,
     });
+    // 승계 서명을 검증할 trust root다. inventory attestation과 같은 키를 쓰므로 issuer가
+    // 읽는 것과 같은 public identity를 읽는다.
+    const inventoryIdentity = await loadFleetMigrationInventoryPublicIdentity({
+      root: environment("FLEET_MIGRATION_INVENTORY_PUBLIC_ROOT", ABSOLUTE_PATH),
+      publicKeyFile: environment("FLEET_MIGRATION_INVENTORY_PUBLIC_KEY_FILE", RELATIVE_PATH),
+      publicCatalogFile: environment("FLEET_MIGRATION_INVENTORY_PUBLIC_CATALOG_FILE", RELATIVE_PATH),
+    });
+    // ratified 38곳 가운데 archive된 저장소를 설명하는 서명 문서다. 승인된 승계 없이는
+    // 현재 cohort가 어떤 shadow도 통과하지 못하므로 mount를 선택으로 두지 않는다.
+    const baselineSuccession = await loadFleetMigrationBaselineSuccession({
+      root: environment("FLEET_MIGRATION_BASELINE_SUCCESSION_ROOT", ABSOLUTE_PATH),
+      file: environment("FLEET_MIGRATION_BASELINE_SUCCESSION_FILE", RELATIVE_PATH),
+    });
     const collector = createFleetMigrationReadOnlyCollector({
+      trustedInventoryKeys: {
+        [inventoryIdentity.catalog.keyId]: inventoryIdentity.publicKey,
+      },
       organizationId: fleetMigrationCollectorContract.organizationId,
       installationId: fleetMigrationCollectorContract.githubApp.installationId,
       detectorRepositoryId: fleetMigrationCollectorContract.detectorSource.repositoryId,
@@ -137,6 +155,7 @@ async function main(): Promise<void> {
       requestedRunId: `fleet-pod-${podUid}`,
       inventoryId: `fleet-bootstrap-${jobUid}`,
       baselineRatification: fleetMigrationContract.initialBaseline.ratification,
+      baselineSuccession,
     });
     const inventory = collection.inventory as { coverage?: { observedRepositoryCount?: unknown } } | undefined;
     process.stdout.write(`${JSON.stringify({
@@ -157,6 +176,9 @@ async function main(): Promise<void> {
       readinessCohortDigest,
       runtimeAttestationDigest: runtime.publicAttestationDigest,
       readinessRepositoryCount,
+      baselineSuccessionTransitions: Array.isArray(baselineSuccession.transitions)
+        ? baselineSuccession.transitions.length
+        : null,
       collectedRepositoryCount: inventory?.coverage?.observedRepositoryCount ?? null,
       githubMutations: 0,
       domainMutations: 0,

@@ -238,6 +238,9 @@ async function main(): Promise<void> {
   ]));
   const collected: Array<Record<string, unknown>> = [];
   const collector = createFleetMigrationReadOnlyCollector({
+    // FIXTURE 수집은 승계를 허용하지 않는다. 신뢰하는 승계 키를 비워 두면 이 경로가
+    // 승계를 받아들일 수 있는 구성 자체를 갖지 못한다.
+    trustedInventoryKeys: {},
     organizationId: fleetMigrationCollectorContract.organizationId,
     installationId: fleetMigrationCollectorContract.githubApp.installationId,
     detectorRepositoryId: fleetMigrationCollectorContract.detectorSource.repositoryId,
@@ -342,6 +345,7 @@ async function main(): Promise<void> {
       requestedRunId: "fleet-proof-request-builder",
       inventoryId: "fleet-proof-request-builder",
       baselineRatification: null,
+      baselineSuccession: null,
     });
     throw new Error("FLEET_MIGRATION_PROOF_REQUEST_COLLECTION_INCOMPLETE");
   } catch (error) {
