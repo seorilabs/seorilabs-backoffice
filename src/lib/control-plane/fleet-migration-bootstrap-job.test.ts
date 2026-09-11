@@ -216,9 +216,15 @@ test("DB principal and trigger provisioning stays outside Prisma migration and r
     new RegExp(`exact_grants fleet_migration_proof_writer ${tableCount} 1`, "u"),
     "proof writer의 SELECT 개수가 읽기 표 개수와 다르다",
   );
+  // shadow는 runtime capability 발급기로도 쓰여 webhook 수락 사실을 추가로 읽는다.
+  // 비대칭을 주석이 아니라 별도 목록으로 드러내고, 개수도 그 목록에서 파생시킨다.
+  const shadowOnlyTables = /shadow_only_readonly_tables=\(\n([\s\S]*?)\n\s*\)/u.exec(provisioning);
+  assert.ok(shadowOnlyTables, "shadow_only_readonly_tables 목록을 찾지 못했다");
+  const shadowOnlyCount = shadowOnlyTables[1].split(/\s+/u).filter(Boolean).length;
+  assert.ok(shadowOnlyTables[1].includes("webhook_delivery"), "webhook_delivery가 shadow 전용 목록에 없다");
   assert.match(
     provisioning,
-    new RegExp(`exact_grants fleet_migration_shadow ${tableCount} 2`, "u"),
+    new RegExp(`exact_grants fleet_migration_shadow ${tableCount + shadowOnlyCount} 2`, "u"),
     "shadow의 SELECT 개수가 읽기 표 개수와 다르다",
   );
   // adapter가 실제로 읽는 표는 목록에 있어야 한다.
@@ -311,4 +317,35 @@ test("승계 문서 로더는 mount 경계 안에서만 읽고 서명 검증을 
   // trust root는 inventory issuer가 읽는 것과 같은 공개 identity에서만 온다.
   assert.match(shadow, /loadFleetMigrationInventoryPublicIdentity/u);
   assert.match(shadow, /trustedInventoryKeys: \{\s*\[inventoryIdentity\.catalog\.keyId\]: inventoryIdentity\.publicKey,/u);
+});
+
+test("shadow principal은 runtime capability 발급기가 실제로 읽는 표를 모두 갖는다", () => {
+  // 발급기는 proof coverage를 통과한 뒤 webhook 수락 사실을 읽는다. 이 grant가 없어서
+  // 증적 31건을 다 쓰고도 그 다음 줄에서 SELECT denied로 멈췄다. 코드가 읽는 표와
+  // 권한 목록이 갈리지 않도록 소스에서 직접 확인한다.
+  const issuer = readFileSync(join(ROOT, "scripts/fleet-migration-runtime-capability-issuer.ts"), "utf8");
+  const provisioning = readFileSync(join(ROOT, "k8s/fleet-migration-security-provisioning-job.yaml"), "utf8");
+  const manifest = readFileSync(join(ROOT, "k8s/fleet-migration-runtime-capability-issuer-job.yaml"), "utf8");
+
+  // 발급기 Job은 shadow principal의 DB credential을 쓴다.
+  assert.match(manifest, /name: fleet-migration-shadow-db/u);
+
+  const granted = new Set<string>();
+  for (const list of ["readonly_tables", "shadow_only_readonly_tables"]) {
+    const match = new RegExp(`${list}=\\(\\n([\\s\\S]*?)\\n\\s*\\)`, "u").exec(provisioning);
+    assert.ok(match, `${list} 목록을 찾지 못했다`);
+    for (const table of match[1].split(/\s+/u).filter(Boolean)) granted.add(table);
+  }
+
+  // prisma.<model> 호출을 표 이름으로 바꿔 대조한다.
+  const PRISMA_TO_TABLE: Record<string, string> = {
+    webhookDelivery: "webhook_delivery",
+    app: "app",
+    repositoryRegistration: "repository_registration",
+    platformFleetBinding: "platform_fleet_binding",
+  };
+  for (const [model, table] of Object.entries(PRISMA_TO_TABLE)) {
+    if (!new RegExp(`prisma\\.${model}\\.`, "u").test(issuer)) continue;
+    assert.ok(granted.has(table), `발급기가 읽는 ${table}에 shadow SELECT 권한이 없다`);
+  }
 });

@@ -139,6 +139,14 @@ spec:
               q "GRANT INSERT ON backoffice.control_plane_fleet_migration_collection_occurrence TO 'fleet_migration_shadow'@'%'"
               q "GRANT INSERT ON backoffice.control_plane_fleet_migration_collection_completion TO 'fleet_migration_shadow'@'%'"
               q "GRANT INSERT ON backoffice.control_plane_fleet_migration_proof_snapshot TO 'fleet_migration_proof_writer'@'%'"
+              # runtime capability 발급기는 shadow principal로 돌면서 GitHub App webhook
+              # 수락 사실을 확인한다. proof writer는 이 읽기가 필요 없어 shadow에만 준다.
+              shadow_only_readonly_tables=(
+                webhook_delivery
+              )
+              for table in "${shadow_only_readonly_tables[@]}"; do
+                q "GRANT SELECT ON backoffice.\`${table}\` TO 'fleet_migration_shadow'@'%'"
+              done
               issuer_readonly_tables=(
                 webhook_delivery
                 control_plane_fleet_migration_collection_occurrence
@@ -278,7 +286,7 @@ spec:
                 test "$principals:$roles:$global:$schema:$columns:$selected:$inserted:$total" = \
                   "1:0:0:0:0:${expected_select}:${expected_insert}:$((expected_select + expected_insert))"
               }
-              exact_grants fleet_migration_shadow 14 2
+              exact_grants fleet_migration_shadow 15 2
               exact_grants fleet_migration_proof_writer 14 1
               exact_grants fleet_migration_inventory_issuer 4 1
 
