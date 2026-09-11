@@ -8,7 +8,10 @@ import {
   signFleetMigrationPublicAttestation,
   verifyFleetMigrationPublicAttestation,
 } from "@/lib/control-plane/fleet-migration-public-attestation";
-import { parseFleetMigrationRuntimePayload } from "@/lib/control-plane/fleet-migration-runtime-capability";
+import {
+  FleetMigrationRuntimePayloadError,
+  parseFleetMigrationRuntimePayload,
+} from "@/lib/control-plane/fleet-migration-runtime-capability";
 import { buildFleetMigrationRuntimeConfigSnapshots } from "@/lib/control-plane/fleet-migration-runtime-config-snapshots";
 import { resolveFleetMigrationApprovedProofDigests } from "@/lib/control-plane/fleet-migration-runtime-proof-coverage";
 import {
@@ -65,6 +68,19 @@ function sha256(value: Buffer | string): string {
 
 function publicError(error: unknown): string {
   return fleetMigrationPublicError(error, "FLEET_MIGRATION_RUNTIME_CAPABILITY_ISSUANCE_FAILED");
+}
+
+// payload 검증이 실패한 필드 경로를 로그에 남긴다. 값은 싣지 않는다. 단일 code만 남으면
+// 어느 필드가 틀렸는지 알 수 없어 진단마다 배포를 왕복해야 한다.
+function parseRuntimePayload(value: unknown): ReturnType<typeof parseFleetMigrationRuntimePayload> {
+  try {
+    return parseFleetMigrationRuntimePayload(value);
+  } catch (error) {
+    if (error instanceof FleetMigrationRuntimePayloadError) {
+      console.error(`runtime payload 검증 실패 경로: ${error.paths.join(", ")}`);
+    }
+    throw error;
+  }
 }
 
 async function main(): Promise<void> {
@@ -232,7 +248,7 @@ async function main(): Promise<void> {
       repositories: repositories as [typeof repositories[number], ...Array<typeof repositories[number]>],
       deliver: async ({ token, receipt: github }) => {
         const issuedAt = new Date().toISOString();
-        const payload = parseFleetMigrationRuntimePayload({
+        const payload = parseRuntimePayload({
           schemaVersion: 1,
           contract: "seorilabs-fleet-migration-shadow-runtime-capability-v1",
           executionId,
