@@ -193,3 +193,30 @@ test("NetworkPolicy를 비교하는 실행기는 모두 빈 목록을 정규화�
     );
   }
 });
+
+test("살아 있는 signer 객체 비교는 server defaulting을 거친 기대값을 쓴다", () => {
+  // API server는 Deployment/Service에 기본값을 채워 저장한다(protocol: TCP,
+  // successThreshold: 1, timeoutSeconds: 1 ...). client dry-run 렌더링본에는 그 값이 없어
+  // 전체 객체 비교가 원리적으로 통과할 수 없다. NetworkPolicy의 `ingress: []`와 같은 계열이며,
+  // 실제로 원장 발급의 signer 관문이 한 번도 통과한 적이 없었다.
+  const source = readFileSync(
+    join(process.cwd(), "scripts/run-fleet-migration-inventory-issuer.sh"),
+    "utf8",
+  );
+  assert.match(source, /apply --dry-run=server/u, "signer 기대값을 server dry-run으로 얻지 않는다");
+  const signerExpectation = /expected_signer=.*signer_server_documents/u;
+  const serviceExpectation = /expected_service=.*signer_server_documents/u;
+  assert.match(source, signerExpectation, "Deployment 기대값이 server dry-run 결과에서 오지 않는다");
+  assert.match(source, serviceExpectation, "Service 기대값이 server dry-run 결과에서 오지 않는다");
+
+  // 반증: client 렌더링본으로 되돌아가면 잡는다.
+  assert.doesNotMatch(
+    source,
+    /expected_signer="\$\(printf '%s' "\$signer_documents"/u,
+    "Deployment 기대값이 client 렌더링본으로 되돌아갔다",
+  );
+
+  // Job은 아직 존재하지 않는 객체를 스스로 create한 뒤 readback하므로 client 렌더링본이 맞다.
+  // server apply dry-run은 last-applied 주석을 붙여 create 결과와 달라진다.
+  assert.match(source, /expected_job="\$\(printf '%s' "\$issuer_documents"/u);
+});

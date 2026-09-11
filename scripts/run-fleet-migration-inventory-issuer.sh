@@ -103,8 +103,15 @@ expected_job="$(printf '%s' "$issuer_documents" | "$jq_bin" -c '[.[] | select(.k
 # 키 자체가 사라지므로 양쪽에 같은 정규화를 적용한다. 비어 있지 않은 값의 차이는 그대로 검출한다.
 policy_normalize='.spec | with_entries(select(.value != []))'
 expected_issuer_policy="$(printf '%s' "$issuer_documents" | "$jq_bin" -Sc "[.[] | select(.kind == \"NetworkPolicy\")][0] | $policy_normalize")"
-expected_signer="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Deployment")][0]')"
-expected_service="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Service")][0]')"
+# 이미 살아 있는 Deployment/Service는 API server가 기본값을 채워 저장한다(protocol: TCP,
+# successThreshold: 1, timeoutSeconds: 1 ...). client dry-run 렌더링본에는 그 값이 없어
+# 전체 객체 비교가 항상 어긋난다. server dry-run으로 같은 defaulting을 거친 기대값을 얻는다.
+# 상태는 바꾸지 않으며, manifest가 선언한 필드의 drift는 그대로 검출된다.
+signer_server_documents="$(printf '%s\n' "$rendered_signer" \
+  | "$kubectl_bin" -n "$namespace" apply --dry-run=server -f - -o json \
+  | "$jq_bin" -c '[.items[]? // .]')"
+expected_signer="$(printf '%s' "$signer_server_documents" | "$jq_bin" -c '[.[] | select(.kind == "Deployment")][0]')"
+expected_service="$(printf '%s' "$signer_server_documents" | "$jq_bin" -c '[.[] | select(.kind == "Service")][0]')"
 expected_signer_policy="$(printf '%s' "$signer_documents" | "$jq_bin" -Sc "[.[] | select(.kind == \"NetworkPolicy\")][0] | $policy_normalize")"
 if [ "$(printf '%s' "$expected_job" | "$jq_bin" -er '.metadata.name')" != "$job_name" ] \
   || printf '%s' "$expected_job" | "$jq_bin" -e '.metadata | has("generateName")' >/dev/null; then
