@@ -183,7 +183,13 @@ test("issuer runner centrally renders one exact suspended Job and never mutates 
   assert.match(runner, /seorilabs\.dev\/signing-credential-id/u);
   assert.match(runner, /seorilabs\.dev\/server-mtls-credential-id/u);
   assert.doesNotMatch(runner, /get secret\/[^\n]+ -o (?:json|yaml)/u);
-  assert.doesNotMatch(runner, /kubectl_bin[^\n]*(?:apply|delete|replace|rollout|scale)/u);
+  // 이 실행기의 mutation은 Job create와 suspend patch 두 번뿐이다. 그 보증은 유지하되,
+  // 살아 있는 signer 객체 비교에 필요한 `apply --dry-run=server`만 정확히 허용한다.
+  // dry-run은 API server가 영속화하지 않으므로 무변경 성질이 깨지지 않는다.
+  assert.doesNotMatch(runner, /kubectl_bin[^\n]*(?:delete|replace|rollout|scale)/u);
+  for (const line of runner.split("\n").filter((entry) => /kubectl_bin[^\n]*apply/u.test(entry))) {
+    assert.match(line, /apply --dry-run=server/u, `mutating apply가 남아 있다: ${line.trim()}`);
+  }
   assert.doesNotMatch(runner, /(?:create|patch) (?:secret|configmap|deployment|service|networkpolicy)/u);
   assert.match(runner, /동일 occurrence를 반복하지 않고 named Job을 별도 readback한다/u);
   assert.match(runner, /secret-free authoritative terminal readback/u);
