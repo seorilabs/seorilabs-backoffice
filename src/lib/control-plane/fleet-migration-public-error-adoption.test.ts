@@ -13,6 +13,13 @@ const SCRIPTS = [
   "fleet-migration-bootstrap-shadow.ts",
 ] as const;
 
+// 체인의 마지막 두 단계다. 둘 다 Job 로그 말고는 관측 경로가 없어, 실패 code를 삼키면
+// 원인을 볼 때마다 배포를 한 번씩 왕복해야 한다.
+const TERMINAL_SCRIPTS = Object.freeze([
+  ["fleet-migration-inventory-issuer.ts", "FLEET_MIGRATION_INVENTORY_ISSUANCE_FAILED"],
+  ["fleet-p7-trusted-readback.ts", "FLEET_P7_TRUSTED_READBACK_FAILED"],
+] as const);
+
 function read(script: string): string {
   return readFileSync(join(process.cwd(), "scripts", script), "utf8");
 }
@@ -59,4 +66,42 @@ test("proof writer도 실패 code를 삼키지 않는다", () => {
   );
   // 반증: 인자 없는 catch로 되돌아가면 잡힌다.
   assert.doesNotMatch(source, /\.catch\(\(\) => \{/u);
+});
+
+test("권위 발급과 trusted readback도 실패 code를 삼키지 않는다", () => {
+  for (const [script, fallback] of TERMINAL_SCRIPTS) {
+    const source = read(script);
+    assert.match(
+      source,
+      /import \{ fleetMigrationPublicError \} from "@\/lib\/control-plane\/fleet-migration-public-error";/u,
+      `${script}가 공통 함수를 import하지 않는다`,
+    );
+    assert.match(
+      source,
+      new RegExp(`fleetMigrationPublicError\\(error, "${fallback}"\\)`, "u"),
+      `${script}가 공통 함수에 위임하지 않는다`,
+    );
+    // 반증: 인자 없는 catch로 되돌아가면 잡힌다.
+    assert.doesNotMatch(source, /\.catch\(\(\) => \{/u, `${script}에 인자 없는 catch가 남아 있다`);
+  }
+});
+
+test("FLEET_P7 계열을 공개 code로 받는다", async () => {
+  const { fleetMigrationPublicError } = await import(
+    "@/lib/control-plane/fleet-migration-public-error"
+  );
+  // trusted readback의 실패는 전부 이 계열이라, 허용하지 않으면 위 위임이 무의미하다.
+  assert.equal(
+    fleetMigrationPublicError(new Error("FLEET_P7_TRUSTED_INVENTORY_INVALID"), "FALLBACK"),
+    "FLEET_P7_TRUSTED_INVENTORY_INVALID",
+  );
+  assert.equal(
+    fleetMigrationPublicError(new Error("FLEET_P7_OCCURRENCE_ID_REQUIRED"), "FALLBACK"),
+    "FLEET_P7_OCCURRENCE_ID_REQUIRED",
+  );
+  // 계열 이름만 흉내 낸 자유 문구는 계속 막는다.
+  assert.equal(
+    fleetMigrationPublicError(new Error("FLEET_P7 실패: /run/secret/token"), "FALLBACK"),
+    "FALLBACK",
+  );
 });

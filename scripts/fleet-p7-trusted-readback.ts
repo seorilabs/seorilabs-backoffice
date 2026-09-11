@@ -4,6 +4,7 @@ import { createFleetP7TrustedAggregateReadback } from "@/lib/control-plane/fleet
 import { loadFleetMigrationInventoryPublicIdentity } from "@/lib/control-plane/fleet-migration-inventory-issuer-adapter";
 import { createFleetP7RequestFetch, createFleetP7ScopedReadClient } from "@/lib/control-plane/fleet-p7-scoped-read-client";
 import { getFleetScopedGithubTokenIssuer, readFleetGitHubAppPublicSource } from "@/lib/github/app";
+import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-public-error";
 import { prisma } from "@/lib/prisma";
 
 function required(name: string): string {
@@ -47,8 +48,10 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch(() => {
-    console.error("Fleet P7 trusted readback 실패: FLEET_P7_TRUSTED_READBACK_FAILED");
+  .catch((error: unknown) => {
+    console.error(`Fleet P7 trusted readback 실패: ${
+      fleetMigrationPublicError(error, "FLEET_P7_TRUSTED_READBACK_FAILED")
+    }`);
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());

@@ -15,6 +15,7 @@
 const PUBLIC_CODE_PATTERNS = Object.freeze([
   /^FLEET_MIGRATION_[A-Z0-9_,-]+(?::[0-9a-f]{1,64})?$/u,
   /^FLEET_GITHUB_[A-Z0-9_]+$/u,
+  /^FLEET_P7_[A-Z0-9_]+$/u,
   /^GITHUB_APP_[A-Z0-9_]+$/u,
   /^REPOSITORY_BACKFILL_[A-Z0-9_]+$/u,
 ]);

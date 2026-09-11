@@ -8,6 +8,7 @@ import {
   loadFleetMigrationInventoryPublicIdentity,
 } from "@/lib/control-plane/fleet-migration-inventory-issuer-adapter";
 import { createFleetMigrationOccurrenceStore } from "@/lib/control-plane/fleet-migration-occurrence";
+import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-public-error";
 import { getInstallationContext, readFleetGitHubAppPublicSource } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
@@ -95,8 +96,10 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch(() => {
-    console.error("Fleet migration authoritative inventory 발급 실패: FLEET_MIGRATION_INVENTORY_ISSUANCE_FAILED");
+  .catch((error: unknown) => {
+    console.error(`Fleet migration authoritative inventory 발급 실패: ${
+      fleetMigrationPublicError(error, "FLEET_MIGRATION_INVENTORY_ISSUANCE_FAILED")
+    }`);
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());
