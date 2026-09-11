@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
@@ -141,4 +143,27 @@ test("runtime capability issuer renders only exact suspended one-run resources",
   assert.match(issuerSource, /isIPv4\(value\)/u);
   assert.match(issuerSource, /requiredIpv4\("KUBERNETES_SERVICE_HOST"\)/u);
   assert.doesNotMatch(issuerSource, /process\.stdout\.write\([^)]*token/su);
+});
+
+test("빈 Pod 목록에서도 jsonpath가 죽지 않는다", () => {
+  // kubectl jsonpath의 인덱스 접근은 빈 배열에서 오류로 끝난다. suspended Job에는 Pod가
+  // 없는 것이 정상이므로, 그 상태를 확인하는 가드가 오히려 스크립트를 죽였다. set -e와
+  // 겹쳐 발급이 시작도 못 했다. `[*]`는 빈 목록에서 빈 문자열을 돌려주고 원소가 하나면
+  // 같은 이름을 준다. #346의 `{{len .data}}` nil 문제와 같은 계열이다.
+  for (const script of [
+    "run-fleet-migration-runtime-capability-issuer.sh",
+    "run-fleet-migration-bootstrap-shadow.sh",
+  ]) {
+    const source = readFileSync(join(process.cwd(), "scripts", script), "utf8");
+    assert.doesNotMatch(
+      source,
+      /jsonpath=\{\.items\[0\]/u,
+      `${script}가 빈 목록에서 죽는 인덱스 jsonpath를 쓴다`,
+    );
+    assert.match(
+      source,
+      /jsonpath=\{\.items\[\*\]\.metadata\.name\}/u,
+      `${script}가 안전한 jsonpath를 쓰지 않는다`,
+    );
+  }
 });
