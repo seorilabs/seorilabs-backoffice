@@ -144,7 +144,7 @@ if ! printf '%s' "$job_json" | "$jq_bin" -e \
   echo "오류: BOOTSTRAP Job runtime/source/capability/resource binding 불일치" >&2
   exit 1
 fi
-if [ -n "$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')" ]; then
+if [ -n "$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[*].metadata.name}')" ]; then
   echo "오류: binding 검증 전 suspended BOOTSTRAP Job에 Pod가 생겼다" >&2
   exit 1
 fi
@@ -168,7 +168,7 @@ if [ -z "$terminal" ]; then
   exit 1
 fi
 if [ "$terminal" = "failed" ]; then
-  pod_name="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')"
+  pod_name="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[*].metadata.name}')"
   reason="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.reason}')"
   exit_code="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.exitCode}')"
   echo "오류: BOOTSTRAP shadow failed reason=$reason exit_code=$exit_code. 동일 Job을 반복하지 않는다." >&2

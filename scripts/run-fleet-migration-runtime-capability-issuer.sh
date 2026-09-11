@@ -241,7 +241,7 @@ for ref in "secret/$github_token_secret" "configmap/$runtime_config_map"; do
     fail "runtime capability output CAS 객체가 비어 있지 않거나 immutable 상태다"
   fi
 done
-if [ -n "$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')" ]; then
+if [ -n "$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[*].metadata.name}')" ]; then
   fail "binding 검증 전 suspended runtime capability issuer에 Pod가 생겼다"
 fi
 
@@ -280,7 +280,7 @@ if [ -z "$terminal" ]; then
   fail "runtime capability issuer terminal 상태 timeout. 자동 재실행하지 않는다"
 fi
 if [ "$terminal" = "failed" ]; then
-  pod_name="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[0].metadata.name}')"
+  pod_name="$($kubectl_bin -n "$namespace" get pods -l "job-name=$job_name" -o 'jsonpath={.items[*].metadata.name}')"
   reason="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.reason}')"
   exit_code="$($kubectl_bin -n "$namespace" get "pod/$pod_name" -o 'jsonpath={.status.containerStatuses[0].state.terminated.exitCode}')"
   fail "runtime capability issuer failed reason=$reason exit_code=$exit_code. 동일 execution ID를 반복하지 않는다"
