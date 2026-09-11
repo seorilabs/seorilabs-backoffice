@@ -351,7 +351,14 @@ config_markers="$($kubectl_bin -n "$namespace" get "configmap/$runtime_config_ma
 [ "$config_markers" = "iap2" ] || fail "runtime public ConfigMap readback이 exact immutable key 계약과 다르다"
 
 # terminal Pod 뒤에는 Kubernetes API write 권한이 남지 않게 exact 임시 RBAC와 SA를 제거한다.
-"$kubectl_bin" -n "$namespace" delete rolebinding "$role_name" role "$role_name" serviceaccount "$service_account" networkpolicy "$role_name" --wait=true >/dev/null
+# kubectl은 `delete TYPE name1 name2`를 전부 TYPE의 이름으로 읽는다. 종전 형태는 Role,
+# ServiceAccount, NetworkPolicy를 삭제 대상으로 만들지 못했고 NotFound 오류로 set -e가
+# 실행기를 중단시켜 최종 evidence 출력이 잘렸다. TYPE/NAME 쌍으로 지정한다.
+# 이미 없는 객체는 목표 상태를 이미 만족하므로 중단시키지 않는다. 실제 제거 단언은
+# 바로 아래 readback loop이다.
+"$kubectl_bin" -n "$namespace" delete --wait=true --ignore-not-found \
+  "rolebinding/$role_name" "role/$role_name" \
+  "serviceaccount/$service_account" "networkpolicy/$role_name" >/dev/null
 for ref in "rolebinding/$role_name" "role/$role_name" "serviceaccount/$service_account" "networkpolicy/$role_name"; do
   if "$kubectl_bin" -n "$namespace" get "$ref" >/dev/null 2>&1; then
     fail "terminal runtime capability issuer support 권한 제거 readback에 실패했다: $ref"

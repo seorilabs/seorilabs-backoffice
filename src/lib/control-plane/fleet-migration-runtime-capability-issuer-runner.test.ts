@@ -128,7 +128,13 @@ test("runtime capability issuer renders only exact suspended one-run resources",
   assert.match(runner, /containerStatuses\[0\]\.imageID/u);
   assert.match(runner, /logs "pod\/\$pod_name"/u);
   assert.doesNotMatch(runner, /get secret\/[^\n]+ -o (?:json|yaml)/u);
-  assert.match(runner, /delete rolebinding "\$role_name" role "\$role_name" serviceaccount "\$service_account" networkpolicy "\$role_name"/u);
+  // kubectl은 `delete TYPE name1 name2`를 전부 TYPE의 이름으로 읽는다. 종전 단언이 그
+  // 형태를 그대로 고정하고 있어 Role/ServiceAccount/NetworkPolicy가 삭제되지 않는 상태가
+  // 테스트로 얼어 있었다. TYPE/NAME 쌍을 요구한다.
+  assert.match(runner, /"rolebinding\/\$role_name"/u);
+  assert.match(runner, /"role\/\$role_name"/u);
+  assert.match(runner, /"serviceaccount\/\$service_account"/u);
+  assert.match(runner, /"networkpolicy\/\$role_name"/u);
 
   for (const requiredBoundary of [
     "evaluateFleetMigrationShadowReadiness",
@@ -219,4 +225,27 @@ test("살아 있는 signer 객체 비교는 server defaulting을 거친 기대�
   // Job은 아직 존재하지 않는 객체를 스스로 create한 뒤 readback하므로 client 렌더링본이 맞다.
   // server apply dry-run은 last-applied 주석을 붙여 create 결과와 달라진다.
   assert.match(source, /expected_job="\$\(printf '%s' "\$issuer_documents"/u);
+});
+
+test("임시 RBAC 정리는 TYPE/NAME 쌍으로 지정한다", () => {
+  // kubectl은 `delete TYPE name1 name2`를 전부 TYPE의 이름으로 읽는다. 종전 형태
+  // `delete rolebinding $n role $n serviceaccount $sa networkpolicy $n`는 Role,
+  // ServiceAccount, NetworkPolicy를 삭제 대상으로 만들지 못했고, NotFound 오류로 set -e가
+  // 실행기를 중단시켜 발급 성공 뒤 최종 evidence 출력이 잘렸다.
+  const source = readFileSync(
+    join(process.cwd(), "scripts/run-fleet-migration-runtime-capability-issuer.sh"),
+    "utf8",
+  );
+  assert.match(source, /"rolebinding\/\$role_name"/u);
+  assert.match(source, /"role\/\$role_name"/u);
+  assert.match(source, /"serviceaccount\/\$service_account"/u);
+  assert.match(source, /"networkpolicy\/\$role_name"/u);
+  // 반증: 공백으로 나열하는 옛 형태가 남아 있으면 잡는다.
+  assert.doesNotMatch(
+    source,
+    /delete rolebinding "\$role_name" role /u,
+    "TYPE을 공백으로 나열하는 형태가 남아 있다",
+  );
+  // 제거 단언은 명령이 아니라 readback loop이 한다. 그 loop은 그대로 있어야 한다.
+  assert.match(source, /terminal runtime capability issuer support 권한 제거 readback에 실패했다/u);
 });
