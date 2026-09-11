@@ -167,3 +167,29 @@ test("빈 Pod 목록에서도 jsonpath가 죽지 않는다", () => {
     );
   }
 });
+
+test("NetworkPolicy를 비교하는 실행기는 모두 빈 목록을 정규화한다", () => {
+  // API server는 빈 목록 필드를 저장하지 않는다. canonical spec의 `ingress: []`가 readback에서
+  // 사라지므로 raw `.spec` 비교는 항상 어긋난다. #346이 두 실행기에 정규화를 넣었는데
+  // inventory issuer에는 빠져 있어, 원장 발급이 첫 실행에서 그대로 막혔다.
+  const RUNNERS = [
+    "run-fleet-migration-runtime-capability-issuer.sh",
+    "run-fleet-migration-bootstrap-shadow.sh",
+    "run-fleet-migration-inventory-issuer.sh",
+  ] as const;
+  for (const runner of RUNNERS) {
+    const source = readFileSync(join(process.cwd(), "scripts", runner), "utf8");
+    if (!/networkpolicy/iu.test(source)) continue;
+    assert.match(
+      source,
+      /with_entries\(select\(\.value != \[\]\)\)/u,
+      `${runner}가 NetworkPolicy 비교에서 빈 목록을 정규화하지 않는다`,
+    );
+    // 반증: 정규화 없는 raw spec 비교가 남아 있으면 잡는다.
+    assert.doesNotMatch(
+      source,
+      /-Sc '\.spec'/u,
+      `${runner}에 정규화 없는 raw spec 비교가 남아 있다`,
+    );
+  }
+});

@@ -99,10 +99,13 @@ if ! printf '%s' "$signer_documents" | "$jq_bin" -e '
   fail "signer manifest resource set이 canonical contract와 다르다"
 fi
 expected_job="$(printf '%s' "$issuer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Job")][0]')"
-expected_issuer_policy="$(printf '%s' "$issuer_documents" | "$jq_bin" -Sc '[.[] | select(.kind == "NetworkPolicy")][0].spec')"
+# API server는 빈 목록 필드를 저장하지 않는다. canonical spec의 `ingress: []`는 readback에서
+# 키 자체가 사라지므로 양쪽에 같은 정규화를 적용한다. 비어 있지 않은 값의 차이는 그대로 검출한다.
+policy_normalize='.spec | with_entries(select(.value != []))'
+expected_issuer_policy="$(printf '%s' "$issuer_documents" | "$jq_bin" -Sc "[.[] | select(.kind == \"NetworkPolicy\")][0] | $policy_normalize")"
 expected_signer="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Deployment")][0]')"
 expected_service="$(printf '%s' "$signer_documents" | "$jq_bin" -c '[.[] | select(.kind == "Service")][0]')"
-expected_signer_policy="$(printf '%s' "$signer_documents" | "$jq_bin" -Sc '[.[] | select(.kind == "NetworkPolicy")][0].spec')"
+expected_signer_policy="$(printf '%s' "$signer_documents" | "$jq_bin" -Sc "[.[] | select(.kind == \"NetworkPolicy\")][0] | $policy_normalize")"
 if [ "$(printf '%s' "$expected_job" | "$jq_bin" -er '.metadata.name')" != "$job_name" ] \
   || printf '%s' "$expected_job" | "$jq_bin" -e '.metadata | has("generateName")' >/dev/null; then
   fail "issuer Job이 occurrence 기반 fixed-name CAS와 다르다"
@@ -118,9 +121,9 @@ if ! "$kubectl_bin" -n "$namespace" get role/fleet-migration-inventory-issuer -o
   | "$jq_bin" -e '(.rules | length) == 0' >/dev/null; then
   fail "issuer Role이 no-permission contract와 다르다"
 fi
-actual_issuer_policy="$($kubectl_bin -n "$namespace" get networkpolicy/fleet-migration-inventory-issuer -o json | "$jq_bin" -Sc '.spec')"
+actual_issuer_policy="$($kubectl_bin -n "$namespace" get networkpolicy/fleet-migration-inventory-issuer -o json | "$jq_bin" -Sc "$policy_normalize")"
 [ "$actual_issuer_policy" = "$expected_issuer_policy" ] || fail "issuer NetworkPolicy가 canonical spec과 다르다"
-actual_signer_policy="$($kubectl_bin -n "$namespace" get networkpolicy/fleet-migration-inventory-signer -o json | "$jq_bin" -Sc '.spec')"
+actual_signer_policy="$($kubectl_bin -n "$namespace" get networkpolicy/fleet-migration-inventory-signer -o json | "$jq_bin" -Sc "$policy_normalize")"
 [ "$actual_signer_policy" = "$expected_signer_policy" ] || fail "signer NetworkPolicy가 canonical spec과 다르다"
 
 # Secret/ConfigMap은 exact credential-id annotation과 key-name 존재만 marker로 읽는다.
