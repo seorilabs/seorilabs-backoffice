@@ -64,6 +64,13 @@ const EXACT_POLICIES = new Map<string, RepositoryClassificationPolicy>([
     reasonCode: "NON_PRODUCT_REPOSITORY",
     allowPublicDiscovery: false,
   }],
+  // 앱 저장소가 아니다. 분류 결정만 EXCLUDED로 기록하면 discovery가 중앙 정책을 보고
+  // 여전히 후보로 판단해 App row를 다시 만들고, 그 row가 readiness를 막는다.
+  ["seorilabs/seoritales", {
+    classification: "EXCLUDED",
+    reasonCode: "NON_PRODUCT_REPOSITORY",
+    allowPublicDiscovery: false,
+  }],
   ["seorilabs/seorilabs-official", {
     classification: "EXCLUDED",
     reasonCode: "NON_PRODUCT_REPOSITORY",
