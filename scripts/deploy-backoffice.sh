@@ -352,6 +352,34 @@ if [ "$store_review_image" != "$image" ]; then
   exit 1
 fi
 
+echo "== inventory signer image rollout =="
+# 서명기는 원장 서명을 맡은 별도 Deployment이고, 발급기가 살아 있는 서명기의 image와
+# source가 자기 것과 같을 때만 서명을 요청한다. 그런데 이 manifest는 replicas: 0을
+# 선언한다 - 활성화는 credential readback을 거친 trusted operator 결정이라 CI가 정하지
+# 않는다. 그래서 종전에는 배포 대상에서 통째로 빠져 있었고, 배포마다 서명기만 옛 image에
+# 남아 다음 원장 발급이 binding 불일치로 조용히 막혔다.
+#
+# image와 source 라벨은 따라 올리되 replica 수는 살아 있는 값을 그대로 쓴다. CI는
+# 서명기를 켜지도 끄지도 않고, 아직 없는 클러스터에서는 선언대로 꺼진 상태로 만든다.
+signer_deployment=backoffice-fleet-migration-inventory-signer
+signer_replicas="$(k -n "$namespace" get "deployment/$signer_deployment" \
+  -o 'jsonpath={.spec.replicas}' 2>/dev/null || true)"
+if [[ "$signer_replicas" =~ ^[0-9]+$ ]]; then
+  render fleet-migration-inventory-signer.yaml \
+    | sed "s/^\( *\)replicas: 0$/\1replicas: ${signer_replicas}/" \
+    | k apply -f -
+else
+  signer_replicas=0
+  apply_image_manifest fleet-migration-inventory-signer.yaml
+fi
+signer_image="$(k -n "$namespace" get "deployment/$signer_deployment" \
+  -o 'jsonpath={.spec.template.spec.containers[0].image}')"
+if [ "$signer_image" != "$image" ]; then
+  echo "오류: inventory signer 이미지 digest가 일치하지 않는다" >&2
+  exit 1
+fi
+echo "inventory_signer_replicas=${signer_replicas} image=${signer_image##*@}"
+
 # CI는 data namespace workload를 만들거나 바꾸지 않는다. CronJob patch/update는 field
 # 제한이 없어 Pod template에 임의 Secret volume을 붙일 수 있고, 그 자체가 root secret
 # export 경로다. 여기서는 이미지 parity를 관측해 보고만 하며 실제 갱신은 trusted
