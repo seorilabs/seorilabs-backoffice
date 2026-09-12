@@ -12,6 +12,33 @@ import { fleetMigrationPublicError } from "@/lib/control-plane/fleet-migration-p
 import { getInstallationContext, readFleetGitHubAppPublicSource } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
 
+/**
+ * 수집 완료 기록과 맞출 값은 발급본이 아니라 수집본 쪽 digest다. 발급기가 inventory에
+ * issuance capability를 더해 digest를 다시 계산하므로 두 값은 원래 다르다.
+ *
+ * `occurrence.read`가 이미 완료 기록과 수집본의 두 digest 일치를 확인하고 돌려주므로,
+ * 여기서 읽는 값은 그 기록에서 나온 것이다.
+ */
+function collectionBinding(collectionInput: unknown): {
+  inventoryDigest: string;
+  collectionDigest: string;
+  capabilityEvidenceDigest: string;
+} {
+  const collection = (collectionInput ?? {}) as Record<string, unknown>;
+  const inventory = collection.inventory as Record<string, unknown> | undefined;
+  const evidence = inventory?.collectionEvidence as Record<string, unknown> | undefined;
+  const capability = evidence?.githubAppCapability as Record<string, unknown> | undefined;
+  const binding = {
+    inventoryDigest: String(collection.inventoryDigest ?? ""),
+    collectionDigest: String(collection.collectionDigest ?? ""),
+    capabilityEvidenceDigest: String(capability?.evidenceDigest ?? ""),
+  };
+  if (Object.values(binding).some((value) => !/^sha256:[0-9a-f]{64}$/u.test(value))) {
+    throw new Error("FLEET_MIGRATION_COLLECTION_BINDING_INVALID");
+  }
+  return binding;
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`FLEET_MIGRATION_${name}_REQUIRED`);
@@ -74,6 +101,7 @@ async function main(): Promise<void> {
       occurrenceId,
       runId,
       providerVectorDigest,
+      collection: collectionBinding(collection),
       issuance: await issuer.issueAuthoritative(collection),
       publicKey: publicIdentity.publicKey,
       now: new Date(),

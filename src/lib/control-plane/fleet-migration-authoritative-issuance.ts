@@ -33,6 +33,19 @@ export interface FleetMigrationIssuanceReadRequest extends FleetMigrationIssuanc
 }
 
 export interface FleetMigrationIssuancePreserveRequest extends FleetMigrationIssuanceIdentity {
+  /**
+   * 발급의 근거가 된 occurrence 수집본의 신원이다.
+   *
+   * 발급기는 수집본 inventory에 `issuanceGitHubAppCapability`를 더한 뒤 digest를 다시
+   * 계산하므로(`trusted-inventory-issuer.mjs`의 issueAuthoritative), 발급본의
+   * `inventoryDigest`는 수집 완료 기록의 것과 **원래 다르다**. 완료 기록과 맞춰야 하는
+   * 것은 수집본 쪽 digest다.
+   */
+  collection: {
+    inventoryDigest: string;
+    collectionDigest: string;
+    capabilityEvidenceDigest: string;
+  };
   issuance: Record<string, unknown>;
   publicKey: KeyObject;
   now: Date;
@@ -226,6 +239,17 @@ export function createFleetMigrationAuthoritativeIssuanceStore(
         request.now,
         validateAuthoritative,
       );
+      // 발급본이 이 수집본에서 나왔는지 먼저 묶는다. 수집 capability 증거 digest는
+      // 수집 시점 관측에 결박되므로 다른 수집본의 발급이 끼어들 수 없다.
+      const binding = request.collection;
+      if (
+        !DIGEST.test(binding.inventoryDigest ?? "")
+        || !DIGEST.test(binding.collectionDigest ?? "")
+        || !DIGEST.test(binding.capabilityEvidenceDigest ?? "")
+        || record(validated.issuance).collectionCapabilityEvidenceDigest
+          !== binding.capabilityEvidenceDigest
+      ) invalid("FLEET_MIGRATION_AUTHORITATIVE_ISSUANCE_COLLECTION_MISMATCH");
+
       const completion = await client.fleetMigrationCollectionCompletion.findUnique({
         where: { occurrenceId: request.occurrenceId },
         select: {
@@ -233,6 +257,7 @@ export function createFleetMigrationAuthoritativeIssuanceStore(
           runId: true,
           providerVectorDigest: true,
           inventoryDigest: true,
+          collectionDigest: true,
         },
       });
       if (
@@ -240,7 +265,8 @@ export function createFleetMigrationAuthoritativeIssuanceStore(
         || completion.occurrenceId !== request.occurrenceId
         || completion.runId !== request.runId
         || completion.providerVectorDigest !== request.providerVectorDigest
-        || completion.inventoryDigest !== validated.inventoryDigest
+        || completion.inventoryDigest !== binding.inventoryDigest
+        || completion.collectionDigest !== binding.collectionDigest
       ) invalid("FLEET_MIGRATION_AUTHORITATIVE_ISSUANCE_COMPLETION_MISMATCH");
 
       const existing = await readByOccurrence(request);
