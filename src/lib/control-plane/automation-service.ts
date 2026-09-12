@@ -34,7 +34,6 @@ import {
   parseDurableIssueObservation,
   parseDurableRepositoryDiscovery,
   parseDurableStableTagPush,
-  parseDurableWorkflowBundleCandidate,
   type DurableIssueObservation,
   type DurableRepositoryDiscovery,
   type DurableStableTagPush,
@@ -57,7 +56,6 @@ import {
 import { prisma } from "@/lib/prisma";
 import { trustedMutationAdapterConfigured } from "@/lib/control-plane/security";
 import type { GhIssueInput } from "@/lib/sync/mirror";
-import type { DurableWorkflowBundleCandidate } from "@/lib/control-plane/workflow-bundle-candidate-source";
 
 const ISSUE_TRIGGER_ACTIONS = new Set(["opened", "reopened", "labeled", "unlabeled", "edited"]);
 const CANCELLABLE_RUN_STATUSES = ["PENDING", "RUNNING"] as const;
@@ -222,10 +220,6 @@ type AutomationIngressDependencies = {
   repositoryDiscoveryReadback: RepositoryDiscoveryReadback;
   issueReadback?: (repoFullName: string, issueNumber: number) => Promise<GhIssueInput>;
   issueMirrorWrite?: (repoFullName: string, issue: GhIssueInput) => Promise<void>;
-  workflowBundleCandidateImport?: (
-    observation: DurableWorkflowBundleCandidate,
-    assertClaim: AutomationIngressClaimCheck,
-  ) => Promise<unknown>;
 };
 
 const defaultIssueReadback = async (
@@ -268,12 +262,11 @@ export async function recordWebhookDelivery(input: {
   issue?: DurableIssueObservation | null;
   stableTagPush?: DurableStableTagPush | null;
   repositoryDiscovery?: DurableRepositoryDiscovery | null;
-  workflowBundleCandidate?: DurableWorkflowBundleCandidate | null;
 }): Promise<{ duplicate: boolean }> {
   const sourceKey = `github:${input.deliveryId}`;
   const action = input.action ?? null;
-  const payloads = [input.issue, input.stableTagPush, input.repositoryDiscovery, input.workflowBundleCandidate]
-    .filter((payload): payload is DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery | DurableWorkflowBundleCandidate => Boolean(payload));
+  const payloads = [input.issue, input.stableTagPush, input.repositoryDiscovery]
+    .filter((payload): payload is DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery => Boolean(payload));
   if (payloads.length > 1) throw new Error("webhook delivery has multiple durable payloads");
   const durablePayload = payloads[0] ?? null;
   const shouldEnqueue = Boolean(
@@ -282,7 +275,6 @@ export async function recordWebhookDelivery(input: {
       (input.event === "issues" && input.issueNumber && input.issueNodeId && input.issue)
       || (input.event === "push" && input.stableTagPush)
       || ((input.event === "push" || input.event === "repository") && input.repositoryDiscovery)
-      || (input.event === "workflow_run" && input.action === "completed" && input.workflowBundleCandidate)
     ),
   );
   const payloadHash = shouldEnqueue && input.repoFullName && durablePayload
@@ -1181,14 +1173,6 @@ async function processIngressEvent(event: {
   occurredAt: Date;
   attempts: number;
 }, now: Date, assertClaim: AutomationIngressClaimCheck, dependencies: AutomationIngressDependencies): Promise<void> {
-  if (event.event === "workflow_run") {
-    const observation = parseDurableWorkflowBundleCandidate(event);
-    const importCandidate = dependencies.workflowBundleCandidateImport
-      ?? (await import("@/lib/control-plane/workflow-bundle-candidate-sync")).syncWorkflowBundleCandidate;
-    await assertClaim();
-    await importCandidate(observation, assertClaim);
-    return;
-  }
   if ((event.payload as { kind?: unknown } | null)?.kind === "REPOSITORY_DISCOVERY") {
     const discovery = parseDurableRepositoryDiscovery({
       payload: event.payload,

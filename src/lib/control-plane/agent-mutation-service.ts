@@ -15,7 +15,6 @@ import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { repositoryAutomationEligible } from "@/lib/control-plane/repository-registration";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { prisma } from "@/lib/prisma";
-import { trustedMutationTargetBinding } from "@/lib/control-plane/trusted-mutation-targets";
 
 export const GITHUB_READY_PR_MUTATION_ACTION = "GITHUB_READY_PR_MUTATE" as const;
 const OBSERVATION_MAX_AGE_MS = 60_000;
@@ -171,50 +170,22 @@ function mutationRequestDigest(input: {
   });
 }
 
+/**
+ * READY_PR mutation target은 서버가 만든 branch/marker만 쓴다. 신뢰 실행기가 자기 task에
+ * 고정한 custom target을 요청하던 경로는 그 실행기들과 함께 사라졌다.
+ */
 export function resolveGithubMutationTarget(input: {
-  definition: { template: string; agentKind: string | null };
-  taskInput: Prisma.JsonValue | null;
-  session: { repoId: bigint; repoFullName: string; issueNumber: number | null; sourceSha: string };
-  workerPrincipalId: string;
-  mutationIntentDigest: string;
   requested?: { headRef: string; marker: string };
   generated: { headRef: string; marker: string };
 }): { headRef: string; marker: string } {
-  const binding = trustedMutationTargetBinding(input.definition.template);
-  if (!binding) {
-    if (input.requested) {
-      throw new ControlPlaneError(
-        "일반 READY_PR definition은 custom mutation target을 사용할 수 없습니다.",
-        409,
-        "CUSTOM_MUTATION_TARGET_FORBIDDEN",
-      );
-    }
-    return input.generated;
-  }
-  if (
-    input.definition.agentKind !== null
-    || input.workerPrincipalId !== binding.principal
-    || !input.requested
-  ) {
+  if (input.requested) {
     throw new ControlPlaneError(
-      "신뢰 실행기 identity 또는 target이 일치하지 않습니다.",
+      "READY_PR definition은 custom mutation target을 사용할 수 없습니다.",
       409,
-      "TRUSTED_EXECUTOR_BINDING_MISMATCH",
+      "CUSTOM_MUTATION_TARGET_FORBIDDEN",
     );
   }
-  if (!binding.matches({
-    taskInput: input.taskInput,
-    session: input.session,
-    mutationIntentDigest: input.mutationIntentDigest,
-    requested: input.requested,
-  })) {
-    throw new ControlPlaneError(
-      "신뢰 실행기 task와 JIT mutation target이 일치하지 않습니다.",
-      409,
-      "TRUSTED_EXECUTOR_TASK_BINDING_MISMATCH",
-    );
-  }
-  return input.requested;
+  return input.generated;
 }
 
 function readbackRequestDigest(input: {
@@ -518,11 +489,6 @@ export async function authorizeGithubReadyPrMutation(input: {
         throw new ControlPlaneError("repo READY_PR singleton을 현재 run이 보유하지 않습니다.", 409, "REPO_SINGLETON_NOT_OWNED");
       }
       const target = resolveGithubMutationTarget({
-        definition: run.occurrence.definition,
-        taskInput: run.taskInput,
-        session,
-        workerPrincipalId: input.workerPrincipalId,
-        mutationIntentDigest: input.mutationIntentDigest,
         requested: input.expectedTarget,
         generated: {
           headRef: `refs/heads/seori/run-${run.id.slice(0, 20)}-${session.generation}`,

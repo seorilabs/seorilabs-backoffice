@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
 
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/u;
 const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
-const EXECUTION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
   "github.workflow-bundle-candidate.read": Object.freeze({ actions: "read", metadata: "read" }),
@@ -142,10 +140,6 @@ function assertExactScope(input: {
   ) {
     throw new Error("FLEET_GITHUB_TOKEN_PERMISSION_MISMATCH");
   }
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 /**

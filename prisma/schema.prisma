@@ -969,50 +969,6 @@ model DiscoveryObservation {
 // WorkflowBundle v5 candidate/approval의 공개 불변 registry다. ConfigRevision이
 // 주장하는 SHA/digest만으로 build 권한을 만들 수 없도록 exact GitHub artifact
 // readback 또는 Ed25519 approval 검증을 통과한 full bundle만 저장한다.
-model WorkflowBundleRegistryRecord {
-  id                        String                      @id @default(cuid())
-  registryId                String                      @db.VarChar(64)
-  subject                   String                      @db.VarChar(191)
-  approvalState             WorkflowBundleApprovalState
-  sourceSha                 String                      @db.Char(40)
-  workflowExecutionSha      String                      @db.Char(40)
-  bundleVersion             String                      @db.VarChar(64)
-  payloadDigest             String                      @db.VarChar(71)
-  candidateDigest           String?                     @db.VarChar(71)
-  contractDigestsDigest     String                      @db.VarChar(71)
-  runtimeAssetDigestsDigest String                      @db.VarChar(71)
-  evidenceDigest            String?                     @db.VarChar(71)
-  approvalPayloadDigest     String?                     @db.VarChar(71)
-  approvalKeyId             String?                     @db.VarChar(128)
-  approvalPolicyRevision    String?                     @db.VarChar(128)
-  bundle                    Json
-  artifactRepository        String?                     @db.VarChar(191)
-  artifactRepositoryId      BigInt?
-  artifactWorkflowPath      String?                     @db.VarChar(191)
-  artifactRunId             BigInt?
-  artifactRunAttempt        Int?
-  artifactId                BigInt?                     @unique
-  artifactName              String?                     @db.VarChar(191)
-  artifactDigest            String?                     @db.VarChar(71)
-  approvalSlot              String?                     @unique @db.Char(64)
-  requestHash               String                      @db.Char(64)
-  idempotencyKey            String                      @unique @db.VarChar(191)
-  observedBy                String                      @db.VarChar(128)
-  createdAt                 DateTime                    @default(now()) @db.DateTime(3)
-  activeApprovalSlot        String?                     @unique(map: "cp_workflow_bundle_registry_active_slot") @db.VarChar(64)
-  supersededAt              DateTime?                   @db.DateTime(3)
-  supersededByRecordId      String?                     @db.VarChar(191)
-
-  @@unique([registryId, subject, payloadDigest], map: "cp_workflow_bundle_registry_identity")
-  @@index([sourceSha, approvalState, createdAt], map: "cp_workflow_bundle_registry_source_state")
-  @@map("control_plane_workflow_bundle_registry")
-}
-
-enum WorkflowBundleApprovalState {
-  CANDIDATE
-  APPROVED
-}
-
 model ConfigRevision {
   id                       String                    @id @default(cuid())
   appId                    String

@@ -205,48 +205,6 @@ spec:
             # signed readback canary 확인 전에는 code gate까지 READY_PR을 fail-closed한다.
             - name: AGENT_TRUSTED_ADAPTER_DEPLOYED
               value: "false"
-            # 후보 executor는 2026-09-02 활성화 승인으로 켰다. auth-broker CronJob
-            # workflow-bundle-candidate-executor(suspend=false)와 같은 변경이며,
-            # generic READY_PR runtime gate와 서로 승격시키지 않는다.
-            - name: WORKFLOW_BUNDLE_CANDIDATE_EXECUTOR_DEPLOYED
-              value: "true"
-            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PRINCIPAL
-              value: "seori-auth:workflow-bundle-candidate-adapter"
-            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_RUNTIME_IDENTITY
-              value: "spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor"
-            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_TOKEN
-                  optional: true
-            - name: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: WORKFLOW_BUNDLE_CANDIDATE_ADAPTER_PUBLIC_KEY
-                  optional: true
-            # caller 반증기는 2026-09-05 활성화했다. auth-broker Secret 3종,
-            # approved-caller-reconciliation-egress-tls 인증서, egress 프록시 host/ingress
-            # 정책을 확인한 뒤 켰다. 후보 executor gate와 서로 승격시키지 않는다.
-            - name: APPROVED_CALLER_RECONCILIATION_EXECUTOR_DEPLOYED
-              value: "true"
-            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PRINCIPAL
-              value: "seori-auth:approved-caller-reconciliation-adapter"
-            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_RUNTIME_IDENTITY
-              value: "spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor"
-            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: APPROVED_CALLER_RECONCILIATION_ADAPTER_TOKEN
-                  optional: true
-            - name: APPROVED_CALLER_RECONCILIATION_ADAPTER_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backoffice-secrets
-                  key: APPROVED_CALLER_RECONCILIATION_ADAPTER_PUBLIC_KEY
-                  optional: true
             - name: AGENT_TRUSTED_ADAPTER_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -276,14 +234,6 @@ spec:
                 configMapKeyRef:
                   name: backoffice-platform-fleet-trust
                   key: trusted-release-keys.json
-                  optional: true
-            # WorkflowBundle v5 승인 signer의 공개 metadata다. private key는
-            # Auth Broker signer 경계에만 있고 Backoffice에는 주입하지 않는다.
-            - name: WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON
-              valueFrom:
-                configMapKeyRef:
-                  name: backoffice-workflow-bundle-v5-trust
-                  key: trusted-approval-keys.json
                   optional: true
             # 챗/초안 + 볼트 검색 질의 임베딩. 인덱서는 data ns 별도 키를 사용.
             - name: GEMINI_API_KEY

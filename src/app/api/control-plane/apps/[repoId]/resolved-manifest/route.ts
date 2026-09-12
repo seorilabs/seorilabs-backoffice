@@ -1,20 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sourceShaSchema } from "@/lib/control-plane/contracts";
 import { controlPlaneErrorResponse } from "@/lib/control-plane/http";
-import {
-  authenticateGitHubActionsBuildManifestRequest,
-  authenticateGitHubActionsStaticManifestRequest,
-  type GitHubActionsBuildManifestMode,
-  type GitHubActionsBuildProfile,
-} from "@/lib/control-plane/github-actions-oidc";
 import { authenticateInternalRequest } from "@/lib/control-plane/security";
-import {
-  resolveBuildRuntimeManifest,
-  resolveManifest,
-  resolveStaticRuntimeManifest,
-  readRepositoryDefaultBranch,
-} from "@/lib/control-plane/service";
-import { readWorkflowBundleCandidateOidcBinding } from "@/lib/control-plane/workflow-bundle-candidate-service";
+import { resolveManifest } from "@/lib/control-plane/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,133 +18,6 @@ export async function GET(
     }
     const repoId = BigInt(rawRepoId);
     const sourceSha = sourceShaSchema.parse(request.nextUrl.searchParams.get("ref"));
-    const requestedSchema = request.nextUrl.searchParams.get("schema");
-    if (
-      requestedSchema === "workflow-bundle-v5-build"
-      || requestedSchema === "workflow-bundle-v5-build-canary"
-      || requestedSchema === "workflow-bundle-v5-build-release"
-    ) {
-      const mode: GitHubActionsBuildManifestMode = requestedSchema.endsWith("-canary")
-        ? "CANDIDATE"
-        : requestedSchema.endsWith("-release")
-          ? "RELEASE"
-          : "APPROVED";
-      const requiredKeys = [
-        "ref",
-        "event_ref",
-        "workflow_sha",
-        "build_target",
-        "build_profile",
-        "schema",
-        ...(mode === "CANDIDATE" ? ["plan_identity"] : []),
-        ...(mode === "RELEASE" ? ["release_ref", "release_tag"] : []),
-      ];
-      const allowedKeys = new Set(requiredKeys);
-      if (
-        [...request.nextUrl.searchParams.keys()].some((key) => !allowedKeys.has(key))
-        || requiredKeys.some((key) => request.nextUrl.searchParams.getAll(key).length !== 1)
-      ) {
-        return NextResponse.json({ error: "invalid query" }, { status: 400 });
-      }
-      const eventSourceSha = sourceShaSchema.parse(request.nextUrl.searchParams.get("event_ref"));
-      const workflowBundleSha = sourceShaSchema.parse(request.nextUrl.searchParams.get("workflow_sha"));
-      if (request.nextUrl.searchParams.get("build_target") !== "android") {
-        return NextResponse.json({ error: "invalid build_target" }, { status: 400 });
-      }
-      const rawBuildProfile = request.nextUrl.searchParams.get("build_profile");
-      if (!(["react-native-android", "godot-android"] as const).includes(
-        rawBuildProfile as GitHubActionsBuildProfile,
-      )) {
-        return NextResponse.json({ error: "invalid build_profile" }, { status: 400 });
-      }
-      const buildProfile = rawBuildProfile as GitHubActionsBuildProfile;
-      const candidatePlanIdentity = mode === "CANDIDATE"
-        ? request.nextUrl.searchParams.get("plan_identity")
-        : null;
-      if (
-        candidatePlanIdentity !== null
-        && !/^[0-9a-f]{64}$/.test(candidatePlanIdentity)
-      ) {
-        return NextResponse.json({ error: "invalid plan_identity" }, { status: 400 });
-      }
-      const releaseRef = mode === "RELEASE"
-        ? request.nextUrl.searchParams.get("release_ref")
-        : null;
-      const releaseTag = mode === "RELEASE"
-        ? request.nextUrl.searchParams.get("release_tag")
-        : null;
-      if (
-        releaseTag !== null
-        && (
-          !/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(releaseTag)
-          || releaseRef !== `refs/tags/${releaseTag}`
-        )
-      ) {
-        return NextResponse.json({ error: "invalid release ref" }, { status: 400 });
-      }
-      const defaultBranch = await readRepositoryDefaultBranch(repoId);
-      const candidateBinding = mode === "CANDIDATE"
-        ? await readWorkflowBundleCandidateOidcBinding({
-            repositoryId: repoId.toString(),
-            sourceSha: sourceSha.toLowerCase(),
-            workflowBundleSha: workflowBundleSha.toLowerCase(),
-          })
-        : null;
-      const identity = await authenticateGitHubActionsBuildManifestRequest(request, {
-        mode,
-        repositoryId: repoId.toString(),
-        applicationSourceSha: sourceSha.toLowerCase(),
-        eventSourceSha: eventSourceSha.toLowerCase(),
-        workflowBundleSha: workflowBundleSha.toLowerCase(),
-        buildProfile,
-        defaultBranch,
-        candidateHeadRef: candidateBinding?.expectedHeadRef ?? null,
-        candidatePlanIdentity,
-        releaseRef,
-        releaseTag,
-      });
-      if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-      const response = await resolveBuildRuntimeManifest({
-        identity,
-        signingKey: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
-        snapshotSignatureKeyId: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID ?? "",
-        snapshotSignaturePolicyRevision:
-          process.env.CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION ?? "",
-      });
-      return NextResponse.json(response, {
-        headers: { "Cache-Control": "private, no-store, max-age=0" },
-      });
-    }
-    if (requestedSchema === "workflow-bundle-v5-static") {
-      const allowedKeys = new Set(["ref", "application_ref", "schema"]);
-      if (
-        [...request.nextUrl.searchParams.keys()].some((key) => !allowedKeys.has(key))
-        || [...allowedKeys].some((key) => request.nextUrl.searchParams.getAll(key).length !== 1)
-      ) {
-        return NextResponse.json({ error: "invalid query" }, { status: 400 });
-      }
-      const applicationSourceSha = sourceShaSchema.parse(
-        request.nextUrl.searchParams.get("application_ref"),
-      );
-      const defaultBranch = await readRepositoryDefaultBranch(repoId);
-      const identity = await authenticateGitHubActionsStaticManifestRequest(request, {
-        repositoryId: repoId.toString(),
-        applicationSourceSha,
-        bindingSourceSha: sourceSha,
-        defaultBranch,
-      });
-      if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-      const response = await resolveStaticRuntimeManifest({
-        identity,
-        signingKey: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY ?? "",
-        snapshotSignatureKeyId: process.env.CONTROL_PLANE_SNAPSHOT_SIGNING_KEY_ID ?? "",
-        snapshotSignaturePolicyRevision:
-          process.env.CONTROL_PLANE_SNAPSHOT_SIGNATURE_POLICY_REVISION ?? "",
-      });
-      return NextResponse.json(response, {
-        headers: { "Cache-Control": "private, no-store, max-age=0" },
-      });
-    }
     const principal = authenticateInternalRequest(request, "control-plane");
     if (!principal) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const market = request.nextUrl.searchParams.get("market")?.trim() || undefined;

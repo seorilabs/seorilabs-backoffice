@@ -12,12 +12,6 @@ import {
 } from "@/lib/control-plane/contracts";
 import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import type { WorkerPrincipal } from "@/lib/control-plane/seori-auth-agent-transport";
-import {
-  prepareWorkflowBundleCandidateFiles,
-  workflowBundleCandidateCommand,
-  workflowBundleCandidateTaskSchema,
-  type WorkflowBundleCandidateTask,
-} from "@/lib/control-plane/workflow-bundle-candidate-contract";
 
 const SHA40 = /^[0-9a-f]{40}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -990,28 +984,6 @@ export async function executePreparedGithubReadyPr(input: {
       pullRequestUrl: target.url,
     } : {}),
   };
-}
-
-export async function executeWorkflowBundleCandidateReadyPr(input: {
-  operationId: string;
-  workerPrincipalId: string;
-  workerRuntimeBindingDigest: string;
-  task: WorkflowBundleCandidateTask;
-  sessionId: string;
-  github: GithubReadyPrPort;
-  controlPlane: GithubMutationControlPlane;
-  clock?: () => Date;
-}) {
-  const task = workflowBundleCandidateTaskSchema.parse(input.task);
-  const command = workflowBundleCandidateCommand(task, input.sessionId) as GithubReadyPrCommand;
-  return executePreparedGithubReadyPr({
-    ...input,
-    prepared: {
-      command,
-      files: prepareWorkflowBundleCandidateFiles(task),
-      mutationIntentDigest: task.mutation.intentDigest,
-    },
-  });
 }
 
 export async function recoverGithubReadyPr(input: {

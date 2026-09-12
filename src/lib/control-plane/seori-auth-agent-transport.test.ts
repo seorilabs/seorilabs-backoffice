@@ -130,10 +130,6 @@ test("K8s runtime과 client는 기본 scale 0, no service-account token, RPI5, �
   assert.match(manifest, /app\.kubernetes\.io\/name: seori-auth-egress-proxy[\s\S]*?port: 8443/u);
   assert.doesNotMatch(manifest, /cidr: 0\.0\.0\.0\/0|port: 443/u);
   assert.doesNotMatch(manifest, /kind: Secret/u);
-  const candidate = readFileSync(join(process.cwd(), "k8s/workflow-bundle-candidate-executor.yaml"), "utf8");
-  assert.match(candidate, /workflow-bundle-candidate-egress-tls/u);
-  assert.match(candidate, /app\.kubernetes\.io\/name: seori-auth-egress-proxy[\s\S]*?port: 8443/u);
-  assert.doesNotMatch(candidate, /cidr: 0\.0\.0\.0\/0|port: 443/u);
   const proxy = readFileSync(join(process.cwd(), "k8s/seori-auth-egress-proxy.yaml"), "utf8");
   assert.match(proxy, /name: seori-auth-egress-proxy[\s\S]*?replicas: 0/u);
   assert.match(proxy, /SEORI_EGRESS_CLIENT_HOST_POLICIES/u);

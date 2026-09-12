@@ -96,7 +96,6 @@ spec:
     rotationPolicy: Always
   usages: [client auth]
   uris:
-    - spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor
   issuerRef:
     name: auth-broker-egress-ca
     kind: Issuer
@@ -116,7 +115,6 @@ spec:
     rotationPolicy: Always
   usages: [client auth]
   uris:
-    - spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor
   issuerRef:
     name: auth-broker-egress-ca
     kind: Issuer
@@ -195,8 +193,6 @@ spec:
                 spiffe://seorilabs.local/ns/auth-broker/sa/password-loader=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/totp-signer=sts.googleapis.com,iamcredentials.googleapis.com,secretmanager.googleapis.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-agent-runtime=backoffice.vzyx.xyz,api.github.com;
-                spiffe://seorilabs.local/ns/auth-broker/sa/workflow-bundle-candidate-executor=backoffice.vzyx.xyz,api.github.com;
-                spiffe://seorilabs.local/ns/auth-broker/sa/approved-caller-reconciliation-executor=backoffice.vzyx.xyz,api.github.com,github.com;
                 spiffe://seorilabs.local/ns/auth-broker/sa/seori-auth-egress-canary=api.github.com
           readinessProbe:
             tcpSocket:

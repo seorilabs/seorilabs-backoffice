@@ -33,7 +33,6 @@ MANIFESTS=(
   k8s/store-review-cronjob.yaml
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml
-  k8s/workflow-bundle-candidate-executor.yaml
   k8s/seori-auth-egress-proxy.yaml
   k8s/seori-auth-egress-canary-job.yaml
 )
@@ -119,22 +118,6 @@ if printf '%s' "$platform_trust_env" | grep -q 'configMapKeyRef:' &&
   ok "Platform Fleet는 공개 trust root로 fail-closed하고 drain/readback을 producer보다 먼저 격리 실행"
 else
   ng "Platform Fleet trust root 또는 producer scheduler 연결이 깨졌다"
-fi
-
-echo "== WorkflowBundle v5 공개 trust root 연결 =="
-workflow_bundle_trust_env="$(awk '
-  $0 ~ "- name: WORKFLOW_BUNDLE_V5_APPROVAL_PUBLIC_KEYS_JSON" { capture=1 }
-  capture { print }
-  capture && /optional:/ { exit }
-' "$root/k8s/deployment.yaml")"
-if printf '%s' "$workflow_bundle_trust_env" | grep -q 'configMapKeyRef:' &&
-   printf '%s' "$workflow_bundle_trust_env" | grep -q 'name: backoffice-workflow-bundle-v5-trust' &&
-   printf '%s' "$workflow_bundle_trust_env" | grep -q 'key: trusted-approval-keys.json' &&
-   printf '%s' "$workflow_bundle_trust_env" | grep -q 'optional: true' &&
-   ! printf '%s' "$workflow_bundle_trust_env" | grep -q 'secretKeyRef:'; then
-  ok "WorkflowBundle v5는 private signer 없이 공개 trust root만 주입"
-else
-  ng "WorkflowBundle v5 공개 trust root 경계가 깨졌다"
 fi
 
 provider_worker="$root/k8s/provider-execution-worker.yaml"

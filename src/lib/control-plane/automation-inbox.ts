@@ -10,10 +10,6 @@ import {
   type RepositoryWebhookInput,
 } from "@/lib/control-plane/repository-registration";
 import type { GhIssueInput } from "@/lib/sync/mirror";
-import {
-  durableWorkflowBundleCandidateSchema,
-  type DurableWorkflowBundleCandidate,
-} from "@/lib/control-plane/workflow-bundle-candidate-source";
 
 const CLIENT_REQUEST_MARKER = /<!--\s*bo:req=([0-9a-fA-F-]+)\s*-->/;
 
@@ -187,7 +183,7 @@ export function durableRepositoryDiscovery(input: {
 }
 
 export function durableIngressEnvelopeHash(input: DurableIngressBinding & {
-  payload: DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery | DurableWorkflowBundleCandidate;
+  payload: DurableIssueObservation | DurableStableTagPush | DurableRepositoryDiscovery;
 }): string {
   return crypto.createHash("sha256")
     .update(canonicalJson({
@@ -237,21 +233,6 @@ export function parseDurableRepositoryDiscovery(input: {
   ) {
     throw new Error("automation inbox repository discovery binding mismatch");
   }
-  return observation;
-}
-
-export function parseDurableWorkflowBundleCandidate(input: {
-  payload: unknown;
-  payloadHash: string | null;
-} & DurableIngressBinding): DurableWorkflowBundleCandidate {
-  const observation = durableWorkflowBundleCandidateSchema.parse(input.payload);
-  if (
-    input.event !== "workflow_run"
-    || input.action !== "completed"
-    || input.repoFullName !== observation.repository
-    || !input.payloadHash
-    || durableIngressEnvelopeHash({ ...input, payload: observation }) !== input.payloadHash
-  ) throw new Error("WORKFLOW_BUNDLE_CANDIDATE_INGRESS_BINDING_MISMATCH");
   return observation;
 }
 

@@ -14,7 +14,6 @@ import type { JsonValue } from "@/lib/control-plane/json";
 import {
   TRUSTED_EXECUTOR_BINDINGS,
   TRUSTED_EXECUTOR_GATES,
-  peerTrustedExecutorEnvNames,
   type TrustedExecutorAdapterEnvNames,
   type TrustedExecutorGate,
 } from "@/lib/control-plane/trusted-executor-bindings";
@@ -94,22 +93,15 @@ function configuredTrustedAdapter(
     ...Object.values(GENERIC_WORKER_PRINCIPALS),
     ...TRUSTED_EXECUTOR_PRINCIPALS,
     process.env.CONTROL_PLANE_ADMIN_PRINCIPAL?.trim() ?? "",
-    ...peerTrustedExecutorEnvNames(deploymentGate, "principal").map(trustedExecutorEnv),
   ].filter(Boolean));
   const reservedTokens = [
     process.env.AGENT_WORKER_CODEX_TOKEN?.trim(),
     process.env.AGENT_WORKER_CLAUDE_TOKEN?.trim(),
     process.env.CONTROL_PLANE_ADMIN_TOKEN?.trim(),
     process.env.INTERNAL_ADMIN_TOKEN?.trim(),
-    ...peerTrustedExecutorEnvNames(deploymentGate, "token").map(trustedExecutorEnv),
   ].filter((value): value is string => Boolean(value));
   const fingerprint = ed25519Fingerprint(publicKey);
-  // 실행기 하나가 다른 실행기의 서명 키를 그대로 쓰면 route 분리가 무의미해진다.
-  const peerFingerprints = new Set(
-    peerTrustedExecutorEnvNames(deploymentGate, "publicKey")
-      .map((name) => ed25519Fingerprint(trustedExecutorEnv(name)))
-      .filter((value) => value.length > 0),
-  );
+  const peerFingerprints = new Set<string>();
   if (
     !/^[A-Za-z0-9._:/-]{1,128}$/.test(principal)
     || !/^[A-Za-z0-9._:/-]{1,191}$/.test(runtimeIdentity)
@@ -132,10 +124,6 @@ export function trustedMutationAdapterConfigured(): boolean {
     && configuredTrustedAdapter() !== null;
 }
 
-/** 신뢰 실행기는 generic agent runtime canary와 별도 배포 gate를 가진다. */
-export function trustedExecutorConfigured(gate: TrustedExecutorGate): boolean {
-  return trustedGithubStepLedgerImplemented() && configuredTrustedAdapter(gate) !== null;
-}
 
 /** CREATE_COMMIT/CREATE_REF/CREATE_PR별 durable CAS, idempotency, readback ledger 구현 여부다. */
 export function trustedGithubStepLedgerImplemented(): boolean {
@@ -190,21 +178,6 @@ export function authenticateInternalRequest(
   return { id, audience, runtimeBindingDigest: null };
 }
 
-/** 후보 executor 전용 workload gate. generic READY_PR runtime을 켜지 않는다. */
-export function authenticateTrustedExecutorRequest(
-  request: NextRequest,
-  gate: TrustedExecutorGate,
-): InternalPrincipal | null {
-  const id = principalId(request);
-  const adapter = configuredTrustedAdapter(gate);
-  if (
-    !id
-    || !adapter
-    || id !== adapter.principal
-    || !verifyStaticToken(authorizationBearerToken(request), adapter.token)
-  ) return null;
-  return { id, audience: "agent-adapter", runtimeBindingDigest: null };
-}
 
 function publicJson(value: unknown): JsonValue | null {
   try {

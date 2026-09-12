@@ -68,8 +68,6 @@ MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-migration-lineage-loss.ts
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
   pnpm tsx scripts/test-desired-state-backfill-source-binding.ts
-MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
-  pnpm tsx scripts/test-workflow-bundle-candidate-executor.ts
 pnpm tsx scripts/test-config-source-auto-rebase.ts
 pnpm tsx scripts/test-repository-discovery.ts
 pnpm tsx scripts/test-auth-broker-journal-checkpoint.ts

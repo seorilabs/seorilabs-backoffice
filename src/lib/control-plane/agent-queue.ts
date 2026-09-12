@@ -23,9 +23,7 @@ import { ControlPlaneError } from "@/lib/control-plane/service";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import {
   trustedMutationAdapterConfigured,
-  trustedExecutorConfigured,
 } from "@/lib/control-plane/security";
-import type { TrustedExecutorGate } from "@/lib/control-plane/trusted-executor-bindings";
 
 class RepoScopeBusyError extends Error {}
 
@@ -629,61 +627,6 @@ export async function claimAgentRun(input: {
     (runId) => tryClaimRun({ ...input, runId, now }),
   );
   return claimed ?? replayClaim({ ...input, requestId: input.idempotencyKey, now });
-}
-
-/**
- * 고정 candidate executor만 agentKind=null 전용 definition을 claim한다. 일반
- * Codex/Claude worker query에는 이 queue가 섞이지 않는다.
- */
-/**
- * 신뢰 실행기 run claim이다. 실행기마다 template과 배포 gate만 다르고 CAS/lease/replay
- * 규칙은 같아서 한 구현을 공유한다.
- */
-export async function claimTrustedExecutorRun(input: {
-  gate: TrustedExecutorGate;
-  template: string;
-  workerId: string;
-  runtimeBindingDigest: string;
-  leaseSeconds: number;
-  idempotencyKey: string;
-  runId?: string;
-  now?: Date;
-}): Promise<ClaimedAgentRun | null> {
-  if (!trustedExecutorConfigured(input.gate)) return null;
-  const now = input.now ?? new Date();
-  const replay = await replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
-  if (replay) return replay;
-  await requeueExpiredLeases(now);
-  const candidates = await prisma.agentRun.findMany({
-    where: {
-      ...(input.runId ? { id: input.runId } : {}),
-      OR: [
-        { status: "PENDING" },
-        { status: "FAILED", readbackRequestedAt: { not: null } },
-      ],
-      eligibleAt: { lte: now },
-      occurrence: {
-        definition: {
-          template: input.template,
-          agentKind: null,
-          configuration: { not: Prisma.DbNull },
-        },
-      },
-    },
-    select: { id: true },
-    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
-    take: 10,
-  });
-  const claimed = await firstSuccessfulClaim(
-    candidates.map(({ id }) => id),
-    (runId) => tryClaimRun({
-      ...input,
-      runId,
-      now,
-      trustedMutationRuntimeAvailable: true,
-    }),
-  );
-  return claimed ?? replayClaim({ ...input, agentKind: null, requestId: input.idempotencyKey, now });
 }
 
 export async function heartbeatAgentRun(input: {
