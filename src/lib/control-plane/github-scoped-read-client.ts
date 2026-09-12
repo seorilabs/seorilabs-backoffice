@@ -1,8 +1,8 @@
-import type { FleetP7ReadClient } from "@/lib/control-plane/fleet-p7-github-readback";
+import type { GithubScopedReadClient } from "@/lib/control-plane/github-bootstrap-readback";
 import { withFleetScopedGithubClient, type FleetScopedGithubTokenIssuer, type FleetGitHubCapability } from "@/lib/github/scoped-installation-client";
 
 /** Also binds JWT exchange and token revocation, before any authorization header is sent. */
-export function createFleetP7RequestFetch(transport: typeof globalThis.fetch = globalThis.fetch): typeof globalThis.fetch {
+export function createGithubScopedRequestFetch(transport: typeof globalThis.fetch = globalThis.fetch): typeof globalThis.fetch {
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin !== "https://api.github.com" || url.username || url.password || url.hash) {
@@ -15,21 +15,21 @@ export function createFleetP7RequestFetch(transport: typeof globalThis.fetch = g
 }
 
 const routes: Readonly<Record<string, FleetGitHubCapability>> = {
-  "GET /repositories/{repository_id}": "github.fleet-migration.shadow-read",
-  "GET /repos/{owner}/{repo}/git/ref/{ref}": "github.fleet-migration.shadow-read",
-  "GET /repos/{owner}/{repo}/contents/{path}": "github.fleet-migration.shadow-read",
-  "GET /orgs/{org}": "github.fleet-p7.organization-read",
-  "GET /orgs/{org}/properties/schema": "github.fleet-p7.properties-read",
-  "GET /repos/{owner}/{repo}/branches/{branch}/protection": "github.fleet-p7.protection-read",
-  "GET /repos/{owner}/{repo}/rules/branches/{branch}": "github.fleet-p7.protection-read",
+  "GET /repositories/{repository_id}": "github.repository.content-read",
+  "GET /repos/{owner}/{repo}/git/ref/{ref}": "github.repository.content-read",
+  "GET /repos/{owner}/{repo}/contents/{path}": "github.repository.content-read",
+  "GET /orgs/{org}": "github.organization.read",
+  "GET /orgs/{org}/properties/schema": "github.organization.properties-read",
+  "GET /repos/{owner}/{repo}/branches/{branch}/protection": "github.repository.protection-read",
+  "GET /repos/{owner}/{repo}/rules/branches/{branch}": "github.repository.protection-read",
 };
 
 /** Each GET gets one repository-bound read-only token, revoked before returning. */
-export function createFleetP7ScopedReadClient<Client extends FleetP7ReadClient>(input: {
+export function createGithubScopedReadClient<Client extends GithubScopedReadClient>(input: {
   installationId: string;
   issuer: FleetScopedGithubTokenIssuer<Client>;
   now?: () => Date;
-}): FleetP7ReadClient {
+}): GithubScopedReadClient {
   if (input.installationId !== "142120077") throw new Error("FLEET_P7_INSTALLATION_MISMATCH");
   return {
     async request(route, parameters = {}, scope) {

@@ -6,12 +6,13 @@ import test from "node:test";
 
 import {
   AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
-  FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
   REQUIRED_APPEND_ONLY_TRIGGERS,
   appendOnlyActionStatement,
   appendOnlyContractDigest,
   appendOnlyCreateTriggerStatement,
   parseAppendOnlyTriggers,
+  parseDroppedAppendOnlyTriggerNames,
+  type AppendOnlyTriggerRequirement,
   evaluateAppendOnlyTriggers,
   triggerVisibilityFromGrants,
   verifyAppendOnlyTriggers,
@@ -77,40 +78,26 @@ function compliantObservation(): ObservedTrigger[] {
 }
 
 test("required trigger 계약은 migration 또는 trusted-operator 선언과 정확히 같다", () => {
-  const migrationDeclared = readdirSync(migrationsRoot)
-    .sort()
-    .flatMap((name) => {
-      const sqlPath = join(migrationsRoot, name, "migration.sql");
-      let sql: string;
-      try {
-        sql = readFileSync(sqlPath, "utf8");
-      } catch {
-        return [];
-      }
-      return parseAppendOnlyTriggers(sql);
-    })
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const operatorDeclared = parseAppendOnlyTriggers(readFileSync(
-    join(process.cwd(), "k8s/fleet-migration-security-provisioning-job.yaml"),
-    "utf8",
-  ));
-  const declared = [...migrationDeclared, ...operatorDeclared]
+  // migration 이력의 CREATE를 전부 더하고 뒤이은 DROP을 뺀다. 옛 migration SQL은 이력이라
+  // 수정하지 않으므로, 제거된 trigger는 DROP으로만 표현된다.
+  const live = new Map<string, AppendOnlyTriggerRequirement>();
+  for (const name of readdirSync(migrationsRoot).sort()) {
+    let sql: string;
+    try {
+      sql = readFileSync(join(migrationsRoot, name, "migration.sql"), "utf8");
+    } catch {
+      continue;
+    }
+    for (const requirement of parseAppendOnlyTriggers(sql)) live.set(requirement.name, requirement);
+    for (const dropped of parseDroppedAppendOnlyTriggerNames(sql)) live.delete(dropped);
+  }
+  const declared = [...live.values()]
     .sort((left, right) => left.name.localeCompare(right.name));
 
   assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);
   assert.ok(declared.length > 0);
 });
 
-test("Fleet migration proof, claim, completion, authoritative issuance는 각각 UPDATE와 DELETE를 거부한다", () => {
-  assert.equal(FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.length, 8);
-  assert.equal(
-    verifyAppendOnlyTriggers(
-      FLEET_MIGRATION_APPEND_ONLY_TRIGGERS.map((requirement) => observed({ name: requirement.name })),
-      FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
-    ),
-    8,
-  );
-});
 
 test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () => {
   for (const requirement of REQUIRED_APPEND_ONLY_TRIGGERS) {
@@ -126,17 +113,6 @@ test("canonical trigger DDL은 계약 identifier와 본문만 사용한다", () 
   );
 });
 
-test("MySQL contract fixture만 trusted-operator Fleet trigger 설치를 재현한다", () => {
-  const fixture = readFileSync(join(
-    process.cwd(),
-    "scripts/test-install-fleet-migration-triggers.ts",
-  ), "utf8");
-  assert.match(fixture, /127\.0\.0\.1.*localhost|localhost.*127\.0\.0\.1/su);
-  assert.match(fixture, /_contract_test/u);
-  assert.match(fixture, /appendOnlyCreateTriggerStatement/u);
-  assert.match(fixture, /verifyAppendOnlyTriggers/u);
-  assert.doesNotMatch(fixture, /DROP TRIGGER|CREATE USER|GRANT |REVOKE /u);
-});
 
 test("auth broker journal checkpoint trigger는 provider execution 계약과 독립적으로 검증된다", () => {
   assert.equal(AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS.length, 2);

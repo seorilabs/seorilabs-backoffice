@@ -13,7 +13,7 @@ test("운영 App 공개 조회도 전달받은 제한 fetch만 사용하고 기�
       .privateKey.export({ type: "pkcs8", format: "pem" });
     (async () => {
       const { readFleetGitHubAppPublicSource } = await import("./src/lib/github/app.ts");
-      const { createFleetP7RequestFetch } = await import("./src/lib/control-plane/fleet-p7-scoped-read-client.ts");
+      const { createGithubScopedRequestFetch } = await import("./src/lib/control-plane/github-scoped-read-client.ts");
       const observed = [];
       const updated = new Date(Date.now() - 60000).toISOString();
       const owner = { id: 283115031, login: "seorilabs" };
@@ -33,7 +33,7 @@ test("운영 App 공개 조회도 전달받은 제한 fetch만 사용하고 기�
         observed.push(url.pathname);
         return new Response(JSON.stringify(responses[url.pathname]), { headers: { "content-type": "application/json" } });
       };
-      const source = await readFleetGitHubAppPublicSource({ requestFetch: createFleetP7RequestFetch(transport) });
+      const source = await readFleetGitHubAppPublicSource({ requestFetch: createGithubScopedRequestFetch(transport) });
       process.stdout.write(JSON.stringify({ appId: source.app.id, routes: observed.sort() }));
     })().catch(() => { process.stderr.write("FIXTURE_PUBLIC_READ_FAILED\n"); process.exitCode = 1; });
   `;

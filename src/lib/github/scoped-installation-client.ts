@@ -10,30 +10,19 @@ export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
   "github.bootstrap.owner-read": Object.freeze({ metadata: "read", members: "read" }),
   "github.bootstrap.properties-write": Object.freeze({ metadata: "read", repository_custom_properties: "write" }),
   "github.bootstrap.schema-write": Object.freeze({ metadata: "read", organization_custom_properties: "admin" }),
-  "github.fleet-p7.organization-read": Object.freeze({ metadata: "read", organization_administration: "read" }),
-  "github.fleet-p7.properties-read": Object.freeze({ metadata: "read", organization_custom_properties: "read" }),
-  "github.fleet-p7.protection-read": Object.freeze({ metadata: "read", administration: "read" }),
+  "github.organization.read": Object.freeze({ metadata: "read", organization_administration: "read" }),
+  "github.organization.properties-read": Object.freeze({ metadata: "read", organization_custom_properties: "read" }),
+  "github.repository.protection-read": Object.freeze({ metadata: "read", administration: "read" }),
+  "github.repository.content-read": Object.freeze({
+    contents: "read",
+    metadata: "read",
+  }),
   "github.standard-labels.contract.read": Object.freeze({
     contents: "read",
     metadata: "read",
   }),
   "github.standard-labels.read": Object.freeze({
     issues: "read",
-    metadata: "read",
-  }),
-  "github.fleet-migration.shadow-read": Object.freeze({
-    contents: "read",
-    metadata: "read",
-  }),
-  "github.fleet-cleanup.ready-pr": Object.freeze({
-    contents: "write",
-    issues: "read",
-    metadata: "read",
-    pull_requests: "write",
-    workflows: "write",
-  }),
-  "github.fleet-cleanup.executor-identity.read": Object.freeze({
-    contents: "read",
     metadata: "read",
   }),
   "github.standard-labels.ensure": Object.freeze({
@@ -157,75 +146,6 @@ function assertExactScope(input: {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-export interface FleetMigrationGithubCapabilityReceipt {
-  executionId: string;
-  tokenSha256: string;
-  tokenExpiresAt: string;
-  permissions: typeof FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.fleet-migration.shadow-read"];
-  repositories: ReadonlyArray<{ id: string; fullName: string }>;
-}
-
-/**
- * trusted runtime issuer가 exact cohort read token을 broker sink에 직접 넘기는 경계다.
- * raw token은 반환하지 않는다. sink 수락 전 오류에서는 즉시 revoke하고, 수락 뒤에는
- * SHADOW_RUNTIME attestation에 receipt를 결합한 worker가 terminal에서 revoke한다.
- */
-export async function issueFleetMigrationGithubCapabilityToSink<Client>(input: {
-  issuer: FleetScopedGithubTokenIssuer<Client>;
-  installationId: string;
-  executionId: string;
-  repositories: readonly [{ id: string; fullName: string }, ...Array<{ id: string; fullName: string }>];
-  deliver: (delivery: {
-    token: string;
-    receipt: FleetMigrationGithubCapabilityReceipt;
-  }) => Promise<void>;
-  now?: () => Date;
-}): Promise<FleetMigrationGithubCapabilityReceipt> {
-  if (!EXECUTION_ID.test(input.executionId)) {
-    throw new Error("FLEET_GITHUB_EXECUTION_ID_INVALID");
-  }
-  const installationId = numericId(input.installationId, "FLEET_GITHUB_INSTALLATION_ID_INVALID");
-  const repositories = exactRepositories(input.repositories.map((repository) => ({
-    id: numericId(repository.id, "FLEET_GITHUB_REPOSITORY_ID_INVALID"),
-    fullName: repository.fullName,
-  })));
-  const permissions = FLEET_GITHUB_CAPABILITY_PERMISSIONS["github.fleet-migration.shadow-read"];
-  const response = await input.issuer.createAccessToken({
-    installationId,
-    repositoryIds: repositories.map(({ id }) => id) as [number, ...number[]],
-    permissions,
-  });
-  try {
-    assertExactScope({
-      response,
-      repositories,
-      expectedPermissions: permissions,
-      now: input.now?.() ?? new Date(),
-    });
-    const receipt = Object.freeze({
-      executionId: input.executionId,
-      tokenSha256: sha256(response.token),
-      tokenExpiresAt: new Date(Date.parse(response.expiresAt)).toISOString(),
-      permissions,
-      repositories: Object.freeze(repositories.map((repository) => Object.freeze({
-        id: String(repository.id),
-        fullName: repository.fullName,
-      }))),
-    });
-    await input.deliver({ token: response.token, receipt });
-    return receipt;
-  } catch (error) {
-    try {
-      await input.issuer.revokeAccessToken(response.token);
-    } catch (revokeError) {
-      throw new Error("FLEET_GITHUB_TOKEN_REVOKE_FAILED", {
-        cause: new AggregateError([error, revokeError]),
-      });
-    }
-    throw error;
-  }
 }
 
 /**

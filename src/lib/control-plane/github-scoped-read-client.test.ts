@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFleetP7RequestFetch, createFleetP7ScopedReadClient } from "@/lib/control-plane/fleet-p7-scoped-read-client";
+import { createGithubScopedRequestFetch, createGithubScopedReadClient } from "@/lib/control-plane/github-scoped-read-client";
 import type { FleetScopedGithubTokenIssuer } from "@/lib/github/scoped-installation-client";
-import type { FleetP7ReadClient } from "@/lib/control-plane/fleet-p7-github-readback";
+import type { GithubScopedReadClient } from "@/lib/control-plane/github-bootstrap-readback";
 
 const central = { repositoryId: "1241442018", fullName: "seorilabs/.github" };
 const target = { repositoryId: "1250442131", fullName: "seorilabs/happy-farm" };
 function fixture(input: { broader?: boolean; failure?: boolean; revokeFailure?: boolean } = {}) {
   const requests: Array<Record<string, unknown>> = [];
   let revoked = 0;
-  const issuer: FleetScopedGithubTokenIssuer<FleetP7ReadClient> = {
+  const issuer: FleetScopedGithubTokenIssuer<GithubScopedReadClient> = {
     async createAccessToken(request) {
       requests.push({ ...request });
       const repository = request.repositoryIds[0] === Number(central.repositoryId) ? central : target;
@@ -24,7 +24,7 @@ function fixture(input: { broader?: boolean; failure?: boolean; revokeFailure?: 
     } }),
     revokeAccessToken: async () => { revoked += 1; if (input.revokeFailure) throw new Error("revoke failed"); },
   };
-  return { requests, revoked: () => revoked, client: createFleetP7ScopedReadClient({
+  return { requests, revoked: () => revoked, client: createGithubScopedReadClient({
     issuer, installationId: "142120077", now: () => new Date("2026-09-02T02:30:00.000Z"),
   }) };
 }
@@ -78,7 +78,7 @@ test("과도한 token 권한·provider 실패에서도 폐기하고 폐기 실�
 test("App JWT/token 교환도 exact API origin에 묶고 redirect와 무기한 요청을 금지한다", async () => {
   const calls: RequestInit[] = [];
   const transport: typeof globalThis.fetch = async (_input, init) => { calls.push(init ?? {}); return new Response("{}"); };
-  const request = createFleetP7RequestFetch(transport);
+  const request = createGithubScopedRequestFetch(transport);
   for (const url of ["https://api.github.com.attacker.invalid/app", "http://api.github.com/app", "https://user:password@api.github.com/app"]) {
     await assert.rejects(request(url), /FLEET_P7_API_ORIGIN_REJECTED/u);
   }

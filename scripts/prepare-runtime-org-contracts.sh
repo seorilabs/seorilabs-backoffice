@@ -58,9 +58,6 @@ import { resolve } from "node:path";
 
 const root = resolve(process.argv[2]);
 await Promise.all([
-  "fleet-migration.mjs",
-  "fleet-migration-collector.mjs",
-  "fleet-migration-legacy-validator.mjs",
   "trusted-cleanup-executor.mjs",
   "trusted-inventory-issuer.mjs",
 ].map((name) => import(pathToFileURL(resolve(

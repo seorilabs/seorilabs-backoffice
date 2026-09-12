@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { createFleetP7GitHubReadbackAdapter } from "@/lib/control-plane/fleet-p7-github-readback";
+import { createGithubBootstrapReadbackAdapter } from "@/lib/control-plane/github-bootstrap-readback";
 import type { FleetGitHubAppPublicSource } from "@/lib/github/app";
 
 const CENTRAL_SHA = "a".repeat(40);
@@ -78,7 +78,7 @@ function fixture(options: {
     }
     throw new Error("unexpected route");
   };
-  return { calls, adapter: createFleetP7GitHubReadbackAdapter({
+  return { calls, adapter: createGithubBootstrapReadbackAdapter({
     client: { request } as never, readAppSource: options.app ?? (async () => appSource()), now: () => NOW,
   }) };
 }

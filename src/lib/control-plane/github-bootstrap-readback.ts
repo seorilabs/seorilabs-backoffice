@@ -19,24 +19,24 @@ const NUMERIC_ID = /^[1-9][0-9]{0,15}$/u;
 const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/u;
 const MAX_CONTRACT_BYTES = 1024 * 1024;
 
-export interface FleetP7ReadClient {
-  request(route: string, parameters?: Record<string, unknown>, scope?: FleetP7RepositoryTarget): Promise<{ data: unknown }>;
+export interface GithubScopedReadClient {
+  request(route: string, parameters?: Record<string, unknown>, scope?: GithubScopedRepositoryTarget): Promise<{ data: unknown }>;
 }
-type ReadClient = FleetP7ReadClient;
+type ReadClient = GithubScopedReadClient;
 
 interface InventoryRepository {
   repository: { id: string; fullName: string; sourceSha: string; private: boolean; classification: string };
 }
 
-export interface FleetP7RepositoryTarget { repositoryId: string; fullName: string }
-type Target = FleetP7RepositoryTarget;
+export interface GithubScopedRepositoryTarget { repositoryId: string; fullName: string }
+type Target = GithubScopedRepositoryTarget;
 const CENTRAL_TARGET = { repositoryId: CENTRAL_REPOSITORY_ID, fullName: CENTRAL_FULL_NAME };
 interface CentralConfiguration {
   targets: Target[];
   protection: { branch: "main"; requiredStatusCheck: string };
 }
 
-export interface FleetP7GitHubPublicReadback {
+export interface GithubBootstrapPublicReadback {
   currentCentralSourceSha: string;
   centralContract: { sourceSha: string; schemaVersion: 4; contentDigest: string };
   installation: Record<string, unknown> | null;
@@ -175,7 +175,7 @@ async function readCustomProperties(client: ReadClient): Promise<Array<Record<st
 
 async function readProtection(client: ReadClient, configuration: CentralConfiguration,
   repositories: Array<Target & { sourceSha: string; actual: Record<string, unknown> }>,
-  now: () => Date): Promise<NonNullable<FleetP7GitHubPublicReadback["protection"]>> {
+  now: () => Date): Promise<NonNullable<GithubBootstrapPublicReadback["protection"]>> {
   const org = (await client.request("GET /orgs/{org}", { org: ORGANIZATION }, CENTRAL_TARGET)).data;
   if (githubProtectionPlanReadback(org, { organization: ORGANIZATION, organizationId: ORGANIZATION_ID }).protection !== "SUPPORTED") {
     fail("FLEET_P7_PROTECTION_CAPABILITY_UNVERIFIED");
@@ -213,8 +213,8 @@ async function readOrgContractCallers(client: ReadClient, repositories: Array<Ta
   return callers;
 }
 
-export function createFleetP7GitHubReadbackAdapter(input: {
-  client: FleetP7ReadClient;
+export function createGithubBootstrapReadbackAdapter(input: {
+  client: GithubScopedReadClient;
   readAppSource: () => Promise<FleetGitHubAppPublicSource>;
   now?: () => Date;
 }) {
@@ -228,7 +228,7 @@ export function createFleetP7GitHubReadbackAdapter(input: {
       }, scope);
     },
   };
-  async function observe(inventory?: InventoryRepository[]): Promise<FleetP7GitHubPublicReadback> {
+  async function observe(inventory?: InventoryRepository[]): Promise<GithubBootstrapPublicReadback> {
     try {
       await readRepository(client, CENTRAL_TARGET);
       const currentCentralSourceSha = await readHead(client, CENTRAL_TARGET);

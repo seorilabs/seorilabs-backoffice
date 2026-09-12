@@ -72,62 +72,10 @@ async function main(): Promise<void> {
   });
   assert.equal(reconstructedTriggerEvidence.mode, "RECONSTRUCTED_FROM_SOURCE_CONTRACT");
   assert.equal(reconstructedTriggerEvidence.verified, REQUIRED_APPEND_ONLY_TRIGGERS.length);
-  const tamperSuffix = randomUUID();
-  const occurrenceId = `fleet-occurrence-${tamperSuffix}`;
-  const deliveryId = `fleet-delivery-${tamperSuffix}`;
-  const runId = `fleet-run-${tamperSuffix}`;
-  const digest = `sha256:${"a".repeat(64)}`;
-  const proofId = `fleet-proof-${tamperSuffix}`;
-  await client.fleetMigrationProofSnapshot.create({
-    data: {
-      id: proofId,
-      repositoryId: REPO_ID,
-      repositoryFullName: "seorilabs/restore-rehearsal-integration",
-      sourceSha: SOURCE_SHA,
-      treeSha: "7".repeat(40),
-      blobInventoryDigest: digest,
-      detectorSourceSha: "8".repeat(40),
-      readinessEvidenceDigest: "9".repeat(64),
-      readinessCohortDigest: "a".repeat(64),
-      stableBackofficeStateDigest: "b".repeat(64),
-      candidates: [],
-      candidatesDigest: digest,
-      proofDigest: jsonDigest({ proofId }),
-      approvalId: `approval-${tamperSuffix}`,
-      approvalAttestation: { state: "APPROVED" },
-      approvalAttestationDigest: jsonDigest({ state: "APPROVED" }),
-      idempotencyKey: `proof-idempotency-${tamperSuffix}`,
-      requestHash: jsonDigest({ proofId, request: true }),
-      createdBy: "restore-rehearsal-trigger-test",
-      observedAt: new Date(),
-    },
-  });
-  await client.fleetMigrationCollectionOccurrence.create({
-    data: { id: occurrenceId, deliveryId, runId, providerVectorDigest: digest, inventoryDigest: digest },
-  });
-  await client.fleetMigrationCollectionCompletion.create({
-    data: {
-      id: `fleet-completion-${tamperSuffix}`,
-      occurrenceId,
-      deliveryId,
-      runId,
-      providerVectorDigest: digest,
-      inventoryDigest: digest,
-      collectionDigest: digest,
-      finalGithubDigest: digest,
-      finalBackofficeDigest: digest,
-      finalizationDigest: digest,
-      collection: {},
-    },
-  });
-  for (const [table, id] of [
-    ["control_plane_fleet_migration_proof_snapshot", proofId],
-    ["control_plane_fleet_migration_collection_occurrence", occurrenceId],
-    ["control_plane_fleet_migration_collection_completion", `fleet-completion-${tamperSuffix}`],
-  ] as const) {
-    await assert.rejects(client.$executeRawUnsafe(`UPDATE \`${table}\` SET id=id WHERE id=?`, id));
-    await assert.rejects(client.$executeRawUnsafe(`DELETE FROM \`${table}\` WHERE id=?`, id));
-  }
+  // 복원된 trigger의 이름·timing·event·table·본문은 verifyAppendOnlyTriggers가 exact로
+  // 대조한다. 종전에는 그 위에 행 단위 변조 시험을 얹었는데, 그 fixture로 쓰던 fleet_migration
+  // 표가 P7 제거로 사라졌다. 남은 보호 표는 App·ConfigRevision 등 부모가 필요해 fixture
+  // 비용이 크고, 얻는 것은 "MySQL이 trigger를 실제로 이행한다"는 DB 동작 확인뿐이라 뺀다.
   await client.app.deleteMany({ where: { id: APP_ID } });
   try {
     const payload = { schemaVersion: 1, markets: [] };

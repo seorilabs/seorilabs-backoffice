@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { parse } from "yaml";
 import { z } from "zod";
 
-import { createFleetP7RequestFetch, createFleetP7ScopedReadClient } from "./fleet-p7-scoped-read-client";
+import { createGithubScopedRequestFetch, createGithubScopedReadClient } from "./github-scoped-read-client";
 import { canonicalJson, jsonDigest, type JsonValue } from "./json";
 import type { FleetGitHubAppPublicSource } from "@/lib/github/app";
 import { withFleetScopedGithubClient, type FleetScopedGithubTokenIssuer } from "@/lib/github/scoped-installation-client";
-import type { FleetP7ReadClient, FleetP7RepositoryTarget } from "./fleet-p7-github-readback";
+import type { GithubScopedReadClient, GithubScopedRepositoryTarget } from "./github-bootstrap-readback";
 
 const CENTRAL = { repositoryId: "1241442018", fullName: "seorilabs/.github" };
 const ORGANIZATION_ID = "283115031";
@@ -119,7 +119,7 @@ export interface GitHubBootstrapAdapter {
 /** SDK queues/retries must not turn an expired approval into a later write. */
 export function createGitHubBootstrapWriteFetch(assertWriteLease: () => Promise<void>, transport: typeof globalThis.fetch = globalThis.fetch): typeof globalThis.fetch {
   let dispatched = false;
-  return createFleetP7RequestFetch(async (input, init) => {
+  return createGithubScopedRequestFetch(async (input, init) => {
     if (dispatched) fail("GITHUB_BOOTSTRAP_READBACK_REQUIRED");
     await assertWriteLease();
     if (dispatched) fail("GITHUB_BOOTSTRAP_READBACK_REQUIRED");
@@ -129,17 +129,17 @@ export function createGitHubBootstrapWriteFetch(assertWriteLease: () => Promise<
 }
 
 export function createGitHubBootstrapAdapter(input: {
-  issuer: FleetScopedGithubTokenIssuer<FleetP7ReadClient>;
+  issuer: FleetScopedGithubTokenIssuer<GithubScopedReadClient>;
   installationId: string;
   readApp: () => Promise<FleetGitHubAppPublicSource>;
   now?: () => Date;
 }): GitHubBootstrapAdapter {
   if (input.installationId !== INSTALLATION_ID) fail("GITHUB_BOOTSTRAP_INSTALLATION_MISMATCH");
   const now = input.now ?? (() => new Date());
-  const readClient = createFleetP7ScopedReadClient(input);
+  const readClient = createGithubScopedReadClient(input);
   let verifiedOperations = new Set<string>();
-  const parameters = (target: FleetP7RepositoryTarget) => ({ owner: "seorilabs", repo: target.fullName.split("/")[1] });
-  async function identity(target: FleetP7RepositoryTarget): Promise<void> {
+  const parameters = (target: GithubScopedRepositoryTarget) => ({ owner: "seorilabs", repo: target.fullName.split("/")[1] });
+  async function identity(target: GithubScopedRepositoryTarget): Promise<void> {
     const actual = object((await readClient.request("GET /repositories/{repository_id}", { repository_id: Number(target.repositoryId) }, target)).data);
     if (String(actual.id) !== target.repositoryId || actual.full_name !== target.fullName || actual.default_branch !== "main"
       || actual.archived !== false || String(object(actual.owner).id) !== ORGANIZATION_ID
@@ -248,7 +248,7 @@ export function createGitHubBootstrapAdapter(input: {
 
 export async function productionGitHubBootstrapAdapter(): Promise<GitHubBootstrapAdapter> {
   const { getFleetScopedGithubTokenIssuer, readFleetGitHubAppPublicSource } = await import("@/lib/github/app");
-  const requestFetch = createFleetP7RequestFetch();
+  const requestFetch = createGithubScopedRequestFetch();
   return createGitHubBootstrapAdapter({ ...await getFleetScopedGithubTokenIssuer({ requestFetch }),
     readApp: () => readFleetGitHubAppPublicSource({ requestFetch }) });
 }

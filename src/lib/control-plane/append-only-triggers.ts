@@ -39,10 +39,6 @@ export interface ObservedTrigger {
 
 const PROVIDER_EXECUTION_AUDIT_MESSAGE = "provider execution audit is append-only";
 const AUTH_BROKER_JOURNAL_CHECKPOINT_AUDIT_MESSAGE = "auth broker journal checkpoint audit is append-only";
-const FLEET_MIGRATION_PROOF_AUDIT_MESSAGE = "fleet migration proof audit is append-only";
-const FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE = "fleet migration occurrence audit is append-only";
-const FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE = "fleet migration completion audit is append-only";
-const FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE = "fleet migration authoritative issuance audit is append-only";
 const LEGACY_CONFIG_RESOLUTION_AUDIT_MESSAGE = "legacy config resolution audit is append-only";
 
 const PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
@@ -77,56 +73,6 @@ export const AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS: readonly Appen
 ];
 
 /** P7 proof, claim, completion, authoritative issuance 원장을 UPDATE/DELETE 없이 고정한다. */
-export const FLEET_MIGRATION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
-  {
-    name: "control_plane_fleet_migration_proof_snapshot_no_delete",
-    table: "control_plane_fleet_migration_proof_snapshot",
-    event: "DELETE",
-    message: FLEET_MIGRATION_PROOF_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_proof_snapshot_no_update",
-    table: "control_plane_fleet_migration_proof_snapshot",
-    event: "UPDATE",
-    message: FLEET_MIGRATION_PROOF_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_collection_occurrence_no_delete",
-    table: "control_plane_fleet_migration_collection_occurrence",
-    event: "DELETE",
-    message: FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_collection_occurrence_no_update",
-    table: "control_plane_fleet_migration_collection_occurrence",
-    event: "UPDATE",
-    message: FLEET_MIGRATION_OCCURRENCE_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_collection_completion_no_delete",
-    table: "control_plane_fleet_migration_collection_completion",
-    event: "DELETE",
-    message: FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_collection_completion_no_update",
-    table: "control_plane_fleet_migration_collection_completion",
-    event: "UPDATE",
-    message: FLEET_MIGRATION_COMPLETION_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_authoritative_issuance_no_delete",
-    table: "control_plane_fleet_migration_authoritative_issuance",
-    event: "DELETE",
-    message: FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE,
-  },
-  {
-    name: "control_plane_fleet_migration_authoritative_issuance_no_update",
-    table: "control_plane_fleet_migration_authoritative_issuance",
-    event: "UPDATE",
-    message: FLEET_MIGRATION_ISSUANCE_AUDIT_MESSAGE,
-  },
-];
 
 /** 중앙 상태 대체에 대한 사람/자동화 승인은 새 revision만 추가할 수 있다. */
 export const LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
@@ -146,7 +92,6 @@ export const LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS: readonly AppendOnlyT
 
 /** 일반 migration principal 대신 trusted operator가 설치하는 trigger 계약이다. */
 export const TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
-  ...FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
   ...LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS,
 ].sort((left, right) => left.name.localeCompare(right.name));
 
@@ -157,12 +102,11 @@ export const TRUSTED_OPERATOR_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRe
 export const REQUIRED_APPEND_ONLY_TRIGGERS: readonly AppendOnlyTriggerRequirement[] = [
   ...PROVIDER_EXECUTION_APPEND_ONLY_TRIGGERS,
   ...AUTH_BROKER_JOURNAL_CHECKPOINT_APPEND_ONLY_TRIGGERS,
-  ...FLEET_MIGRATION_APPEND_ONLY_TRIGGERS,
   ...LEGACY_CONFIG_RESOLUTION_APPEND_ONLY_TRIGGERS,
 ].sort((left, right) => left.name.localeCompare(right.name));
 
 const CREATE_TRIGGER_PATTERN =
-  /\bCREATE\s+TRIGGER\s+`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
+  /\bCREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-z0-9_]+)`?\s+BEFORE\s+(UPDATE|DELETE)\s+ON\s+`?([a-z0-9_]+)`?\s+FOR\s+EACH\s+ROW\s+SIGNAL\s+SQLSTATE\s+'45000'\s+SET\s+MESSAGE_TEXT\s*=\s*'([^']+)'\s*;/gi;
 
 /** MySQL이 information_schema.TRIGGERS에 저장하는 본문. */
 export function appendOnlyActionStatement(message: string): string {
@@ -202,6 +146,18 @@ export function normalizeActionStatement(statement: string): string {
 }
 
 /** migration SQL에서 선언된 append-only trigger를 이름 순으로 추출한다. */
+/**
+ * migration이 없앤 trigger 이름을 읽는다.
+ *
+ * 지난 migration의 CREATE 문은 이력이라 지우지 않는다. 그래서 "지금 계약이 요구하는 집합"은
+ * CREATE 전부가 아니라 CREATE에서 DROP을 뺀 것이다. 이걸 반영하지 않으면 제거한 trigger가
+ * 영원히 계약에 남아 있는 것으로 읽힌다.
+ */
+export function parseDroppedAppendOnlyTriggerNames(sql: string): string[] {
+  return [...sql.matchAll(/DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?`?([A-Za-z0-9_]+)`?/gu)]
+    .map((match) => match[1] as string);
+}
+
 export function parseAppendOnlyTriggers(sql: string): AppendOnlyTriggerRequirement[] {
   const found: AppendOnlyTriggerRequirement[] = [];
   for (const match of sql.matchAll(CREATE_TRIGGER_PATTERN)) {

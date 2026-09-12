@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { createGitHubBootstrapAdapter, createGitHubBootstrapWriteFetch, githubBootstrapDesiredOperations, githubBootstrapPlanDigest, githubSettingsDigest } from "./github-bootstrap-settings";
 import type { FleetGitHubAppPublicSource } from "@/lib/github/app";
-import type { FleetP7ReadClient } from "./fleet-p7-github-readback";
+import type { GithubScopedReadClient } from "./github-bootstrap-readback";
 import type { FleetScopedGithubTokenIssuer } from "@/lib/github/scoped-installation-client";
 
 const NOW = new Date("2026-09-02T04:00:00.000Z");
@@ -49,7 +49,7 @@ function fixture() {
   let wrongRepository = false;
   let owner = true;
   let beforeWriteToken: () => void = () => {};
-  const issuer: FleetScopedGithubTokenIssuer<FleetP7ReadClient> = {
+  const issuer: FleetScopedGithubTokenIssuer<GithubScopedReadClient> = {
     async createAccessToken(input) {
       tokens.push(input);
       if (Object.values(input.permissions).some((level) => level !== "read")) beforeWriteToken();
