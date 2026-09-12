@@ -93,11 +93,19 @@ test("required trigger 계약은 migration 또는 trusted-operator 선언과 정
   }
   // migration 사용자는 SUPER가 없어 CREATE TRIGGER를 할 수 없다. 살아 있는 legacy config
   // resolution trigger는 trusted operator Job이 선언·설치한다.
-  const operatorDeclared = parseAppendOnlyTriggers(readFileSync(
+  for (const requirement of parseAppendOnlyTriggers(readFileSync(
     join(process.cwd(), "k8s/operator-append-only-triggers-job.yaml"),
     "utf8",
-  ));
-  const declared = [...live.values(), ...operatorDeclared]
+  ))) {
+    // 같은 trigger가 두 곳에 선언될 수 있다. migration이 중간에 멈춰 operator가 대신
+    // 설치하는 경우다. 이름으로 합치되 선언 내용이 갈리면 그건 drift라 거부한다.
+    const existing = live.get(requirement.name);
+    if (existing) {
+      assert.deepEqual(existing, requirement, `${requirement.name} 선언이 두 곳에서 다르다`);
+    }
+    live.set(requirement.name, requirement);
+  }
+  const declared = [...live.values()]
     .sort((left, right) => left.name.localeCompare(right.name));
 
   assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);
