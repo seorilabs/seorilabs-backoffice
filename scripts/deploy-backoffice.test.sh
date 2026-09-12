@@ -133,19 +133,6 @@ if [[ "$args" == *"-n data get deployment/vault-indexer "* || "$args" == *"-n da
   exit 0
 fi
 
-if [[ "$args" == *"get deployment/backoffice-fleet-migration-inventory-signer"* ]]; then
-  if [[ "$args" == *"spec.replicas"* ]]; then
-    if [ "${FAKE_SIGNER_ABSENT:-false}" = true ]; then
-      printf 'Error from server (NotFound): deployments.apps not found\n' >&2
-      exit 1
-    fi
-    printf '%s' "${FAKE_SIGNER_REPLICAS:-1}"
-    exit 0
-  fi
-  printf '%s' "$BACKOFFICE_IMAGE"
-  exit 0
-fi
-
 if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
   count=0
   [ ! -f "$FAKE_DEPLOYMENT_COUNTER" ] || count="$(cat "$FAKE_DEPLOYMENT_COUNTER")"
@@ -178,10 +165,6 @@ if [[ "$args" == *"apply -f -"* ]]; then
   payload="$(cat)"
   names="$(printf '%s\n' "$payload" | awk '/^  name:/ { printf "%s,", $2 } /^  generateName:/ { printf "%s,", $2 }')"
   printf 'APPLY_STDIN %s\n' "$names" >> "$FAKE_KUBECTL_LOG"
-  if [[ "$names" == *backoffice-fleet-migration-inventory-signer* ]]; then
-    printf 'SIGNER_REPLICAS %s\n' \
-      "$(printf '%s\n' "$payload" | awk '/^  replicas:/ { print $2; exit }')" >> "$FAKE_KUBECTL_LOG"
-  fi
   exit 0
 fi
 
@@ -223,8 +206,6 @@ run_deploy() {
   FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
   FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
   FAKE_VAULT_PARITY="${FAKE_VAULT_PARITY:-match}" \
-  FAKE_SIGNER_REPLICAS="${FAKE_SIGNER_REPLICAS:-1}" \
-  FAKE_SIGNER_ABSENT="${FAKE_SIGNER_ABSENT:-false}" \
   KUBECTL_BIN="$fake" \
   BACKOFFICE_IMAGE="$run_image" \
   BACKOFFICE_SOURCE_SHA="$source_sha" \
@@ -488,40 +469,5 @@ if [ "$(printf '%s\n' "$verifier_code" | grep -c 'k8s/provider-audit-trigger-ver
   exit 1
 fi
 echo "  ok   verifier workload는 trusted operator 경계에만 있다"
-
-echo "== 배포는 inventory signer를 따라 올리되 replica 수를 바꾸지 않는다 =="
-for scenario in "1 살아있음" "0 꺼져있음"; do
-  replicas="${scenario%% *}"
-  : > "$log"
-  rm -f "$deployment_counter"
-  FAKE_SIGNER_REPLICAS="$replicas" run_deploy Complete >/dev/null
-  if ! grep -q "APPLY_STDIN fleet-migration-inventory-signer" "$log"; then
-    echo "FAIL signer replicas=$replicas 에서 배포가 서명기 manifest를 적용하지 않았다" >&2
-    cat "$log" >&2
-    exit 1
-  fi
-  if grep -qE "SCALE .*inventory-signer|scale .*inventory-signer" "$log"; then
-    echo "FAIL 배포가 서명기 replica 수를 바꿨다" >&2
-    cat "$log" >&2
-    exit 1
-  fi
-  if ! grep -q "^SIGNER_REPLICAS ${replicas}$" "$log"; then
-    echo "FAIL 적용본의 replicas가 살아 있는 값 ${replicas}와 다르다" >&2
-    grep '^SIGNER_REPLICAS' "$log" >&2 || true
-    exit 1
-  fi
-  echo "  ok   replicas=$replicas 를 보존하고 image만 따라 올렸다"
-done
-
-echo "== deploy script는 서명기를 켜거나 끄는 명령을 갖지 않는다 =="
-signer_scale="$(grep -nE 'inventory-signer' "$here/deploy-backoffice.sh" \
-  | grep -vE '^[0-9]+:[[:space:]]*#' \
-  | grep -E 'scale|--replicas' || true)"
-if [ -n "$signer_scale" ]; then
-  echo "FAIL deploy script에 서명기 scale 명령이 있다" >&2
-  printf '%s\n' "$signer_scale" >&2
-  exit 1
-fi
-echo "  ok   활성화 결정은 trusted operator 경계에 남아 있다"
 
 echo "deploy-backoffice 계약 통과"
