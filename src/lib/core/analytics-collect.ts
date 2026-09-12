@@ -22,8 +22,13 @@ import type { Prisma } from "@prisma/client";
 // 멱등 upsert 한다. GA4 export 지연 대비로 매일 최근 N일을 재집계한다(지연 도착분 + 코호트
 // D7 확정 반영). 게임별 컨텐츠 세부 지표는 별도 경로(app-content-metrics-collect, 스펙 구동)가
 // 담당한다 — 여기서는 공통 지표만.
+//
+// 7일: GA4 export 가 보통 1~3일 안에 안정화되므로 7일이면 정상 케이스 데이터를
+// 누락 없이 덮는다. 14일 대비 BigQuery 스캔량 약 절반. 8일 이상 늦게 도착하는
+// export 는 다음 사이클에 재집계되지 않으므로 영구 누락 — 운영상 드문 케이스이며,
+// 종합 보고서·하이라이트 발행(11:00 KST) 후 23:00 KST recollect 가 이를 보완한다.
 
-const WINDOW_DAYS = 14;
+const WINDOW_DAYS = 7;
 
 export interface CollectResult {
   endDate: string; // 최신 확정일(D-1)
