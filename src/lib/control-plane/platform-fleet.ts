@@ -1113,13 +1113,18 @@ async function trustedGithubAdapter(): Promise<TrustedPlatformGithubAdapter> {
   };
 }
 
-function assertContractIssueReadback(issue: PlatformGithubIssue, task: Extract<PlatformFleetTaskInput, { kind: "PLATFORM_CONTRACT_ISSUE" }>) {
+function contractIssueMatches(
+  issue: PlatformGithubIssue,
+  task: Extract<PlatformFleetTaskInput, { kind: "PLATFORM_CONTRACT_ISSUE" }>,
+): boolean {
   const labels = new Set(issue.labels.map((label) => label.toLowerCase()));
-  if (
-    issue.title !== task.title
-    || issue.body.trim() !== task.body.trim()
-    || task.labels.some((label) => !labels.has(label.toLowerCase()))
-  ) {
+  return issue.title === task.title
+    && issue.body.trim() === task.body.trim()
+    && task.labels.every((label) => labels.has(label.toLowerCase()));
+}
+
+function assertContractIssueReadback(issue: PlatformGithubIssue, task: Extract<PlatformFleetTaskInput, { kind: "PLATFORM_CONTRACT_ISSUE" }>) {
+  if (!contractIssueMatches(issue, task)) {
     throw new ControlPlaneError("GitHub Issue readback이 exact contract plan과 다릅니다.", 409, "PLATFORM_ISSUE_READBACK_MISMATCH");
   }
 }
@@ -1222,11 +1227,17 @@ async function applyPlatformIssuePlan(
       }
     }
     if (!issueNumber) throw new Error("Platform issue readback missing");
+    // 사람이 제목이나 본문을 고치면 계약 이슈는 exact 비교에서 영원히 막혔다. remediation
+    // 이슈는 같은 상황에서 계획 내용으로 되돌린 뒤 진행한다. 계약 이슈만 fail-closed로 남을
+    // 이유가 없어 같은 자가 치유 경로를 쓴다. 불변식("이슈는 계획을 그대로 말한다")은 그대로다.
     if (
-      mode === "remediation"
-      && issueTask.kind === "PLATFORM_INTEGRATION_REMEDIATION_ISSUE"
-      && issue
-      && !remediationIssueMatches(issue, issueTask)
+      issue
+      && (
+        (mode === "remediation"
+          && issueTask.kind === "PLATFORM_INTEGRATION_REMEDIATION_ISSUE"
+          && !remediationIssueMatches(issue, issueTask))
+        || (issueTask.kind === "PLATFORM_CONTRACT_ISSUE" && !contractIssueMatches(issue, issueTask))
+      )
     ) {
       await client.updateIssue({
         repoFullName: plan.app.repoFullName,

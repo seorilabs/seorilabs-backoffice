@@ -56,15 +56,9 @@ node --input-type=module - "$output" <<'NODE'
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
+// 런타임이 실제로 쓰는 계약 모듈이 복사본에서 import되는지 확인한다. P7 계약을 걷어낸 뒤로
+// 이 경로가 쓰는 것은 github-settings-readback 하나뿐이다.
 const root = resolve(process.argv[2]);
-await Promise.all([
-  "trusted-cleanup-executor.mjs",
-  "trusted-inventory-issuer.mjs",
-].map((name) => import(pathToFileURL(resolve(
-  root,
-  "seorilabs-org-contracts/packages/repo-contract/src",
-  name,
-)).href)));
 await import(pathToFileURL(resolve(
   root,
   "seorilabs-org-contracts/scripts/fleet/github-settings-readback.mjs",

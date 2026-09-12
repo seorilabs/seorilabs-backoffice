@@ -66,3 +66,24 @@ test("occurrence를 재사용할 때 완료 상태와 옛 결과를 되돌린다
     );
   }
 });
+
+/**
+ * 계약 이슈와 remediation 이슈는 둘 다 "이슈가 계획을 그대로 말한다"를 불변식으로 둔다.
+ * 종전에는 remediation만 drift를 계획 내용으로 되돌리고 계약 이슈는 exact 비교에서 바로
+ * 실패했다. 사람이 제목이나 본문을 한 번 고치면 그 저장소의 계약 이슈는 영원히 막혔고,
+ * 실행 로그에는 409만 남아 원인이 드러나지 않았다.
+ */
+test("계약 이슈와 remediation 이슈가 같은 자가 치유 경로를 쓴다", () => {
+  const source = readFileSync(join(process.cwd(), "src/lib/control-plane/platform-fleet.ts"), "utf8");
+
+  const guard = /if \(\n\s*issue\n\s*&& \(\n([\s\S]*?)\n\s*\)\n\s*\) \{\n\s*await client\.updateIssue\(/u.exec(source);
+  assert.ok(guard, "이슈 drift 복구 분기를 찾지 못했다");
+  assert.match(guard[1]!, /!remediationIssueMatches\(issue, issueTask\)/u);
+  assert.match(guard[1]!, /!contractIssueMatches\(issue, issueTask\)/u);
+
+  // 단언은 같은 비교 함수에서 파생해야 한다. 둘이 갈리면 복구한 뒤에도 단언이 실패한다.
+  const assertion = /function assertContractIssueReadback\([\s\S]*?\n\}/u.exec(source);
+  assert.ok(assertion, "계약 이슈 단언을 찾지 못했다");
+  assert.match(assertion[0]!, /!contractIssueMatches\(issue, task\)/u);
+  assert.doesNotMatch(assertion[0]!, /issue\.title !== task\.title/u);
+});
