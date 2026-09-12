@@ -23,6 +23,11 @@
       "sha256": "fb2ac7ec3486f4e58b5fa4729aa4a30bf409aea310da5f47818e141c42fe1547",
       "maxRolledBackAttempts": 1,
       "reason": "production MySQL 9.2 append-only trigger privilege recovery. migration 사용자에게 SUPER가 없어 CREATE TRIGGER가 1419로 막혔다. 표 제거는 후속 migration이 맡고 trigger 설치는 trusted operator Job이 맡는다."
+    },
+    "20260912140000_drop_fleet_migration_p7_tables": {
+      "sha256": "8625b34e0a0d26bb95692319764f3636a694950f820f39bc3d3805fe2690dcad",
+      "maxRolledBackAttempts": 1,
+      "reason": "production MySQL 9.2 trigger privilege recovery. migration 사용자에게 TRIGGER 권한이 없어 DROP TRIGGER가 1142로 막혔다. 표 제거는 DROP TABLE만 쓰는 후속 migration이 맡는다."
     }
   },
   "approvedContractMigrations": {
@@ -61,6 +66,10 @@
     "20260912140000_drop_fleet_migration_p7_tables": {
       "sha256": "8625b34e0a0d26bb95692319764f3636a694950f820f39bc3d3805fe2690dcad",
       "reason": "P7 인벤토리 장치 코드 제거(af709fa) 뒤의 contract 단계. 증적·원장·occurrence 4표와 fleet cleanup 4표를 없앤다. 앞선 20260912120000은 trigger 권한으로 멈춰 activeRecovery로 정리한다."
+    },
+    "20260912150000_drop_fleet_migration_p7_tables_only": {
+      "sha256": "d485061001ce66da63ba073272033a7ae66f5a140df698a51e1dfa43005eaca6",
+      "reason": "P7 인벤토리 장치 코드 제거(af709fa) 뒤의 contract 단계. DROP TABLE만 사용한다. trigger는 표와 함께 사라지고 TRIGGER 권한을 요구하지 않는다(MySQL 9.2 실측)."
     }
   },
   "legacy": {
