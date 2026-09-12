@@ -45,6 +45,7 @@ fi
 
 pnpm prisma migrate deploy
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-install-operator-triggers.ts
 pnpm prisma migrate deploy
 pnpm prisma migrate status >/dev/null
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \

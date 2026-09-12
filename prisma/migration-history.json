@@ -50,7 +50,7 @@
       "reason": "PlatformFleetPlanKind에 AHEAD_UNMANAGED를 추가한다. MySQL enum은 값 추가에도 MODIFY가 불가피하지만 기존 값을 그대로 두고 뒤에 덧붙이므로 기존 행은 바뀌지 않는다. PR #357"
     },
     "20260912120000_drop_fleet_migration_p7": {
-      "sha256": "fb2ac7ec3486f4e58b5fa4729aa4a30bf409aea310da5f47818e141c42fe1547",
+      "sha256": "8c305d77130b49a69ef38db75a054b8a0ce736afa7adfe5b3157ae5e6aa69ca9",
       "reason": "P7 이관 전 인벤토리 장치를 코드에서 제거한 뒤의 contract 단계. 증적·원장·occurrence 4표와 fleet cleanup 4표를 없앤다. 코드 제거(af709fa)가 먼저 배포돼 이 표를 읽는 경로가 남아 있지 않다."
     }
   },

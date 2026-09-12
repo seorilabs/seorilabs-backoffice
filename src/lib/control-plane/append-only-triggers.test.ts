@@ -91,7 +91,13 @@ test("required trigger 계약은 migration 또는 trusted-operator 선언과 정
     for (const requirement of parseAppendOnlyTriggers(sql)) live.set(requirement.name, requirement);
     for (const dropped of parseDroppedAppendOnlyTriggerNames(sql)) live.delete(dropped);
   }
-  const declared = [...live.values()]
+  // migration 사용자는 SUPER가 없어 CREATE TRIGGER를 할 수 없다. 살아 있는 legacy config
+  // resolution trigger는 trusted operator Job이 선언·설치한다.
+  const operatorDeclared = parseAppendOnlyTriggers(readFileSync(
+    join(process.cwd(), "k8s/operator-append-only-triggers-job.yaml"),
+    "utf8",
+  ));
+  const declared = [...live.values(), ...operatorDeclared]
     .sort((left, right) => left.name.localeCompare(right.name));
 
   assert.deepEqual(declared, [...REQUIRED_APPEND_ONLY_TRIGGERS]);

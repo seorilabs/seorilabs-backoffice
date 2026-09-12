@@ -19,6 +19,8 @@ pnpm prisma migrate diff \
 
 pnpm prisma migrate deploy
 MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
+  pnpm tsx scripts/test-install-operator-triggers.ts
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY \
 
 if [ "$(pnpm tsx scripts/verify-migration-state.ts --history=predeploy)" != "fresh" ]; then
   echo "오류: baseline 적용 뒤 predeploy가 fresh 계보를 인식하지 못했다" >&2

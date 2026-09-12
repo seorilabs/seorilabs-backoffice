@@ -3,13 +3,10 @@
 -- 인벤토리는 2026-09-12에 발급까지 끝났고 그 결과물은 얻었다. 남은 것은 장치뿐이라 걷는다.
 -- fleet_cleanup 계열은 P7 발급본을 유일한 입력으로 받는 실행 팔이고 실행 이력이 없다.
 --
--- legacy config resolution trigger 2개는 제거한 trusted-operator 매니페스트에만 선언돼
--- 있었다. P7이 아니라 살아 있는 표라서 선언을 여기로 옮긴다. 운영에는 이미 설치돼 있어
--- IF NOT EXISTS로 멱등하게 둔다.
-CREATE TRIGGER IF NOT EXISTS `control_plane_legacy_config_resolution_no_delete` BEFORE DELETE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
-CREATE TRIGGER IF NOT EXISTS `control_plane_legacy_config_resolution_no_update` BEFORE UPDATE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
-
 -- append-only trigger를 먼저 없앤다. 남겨 두면 테이블 제거가 막힌다.
+-- DROP은 SUPER 없이도 되지만 CREATE는 binary logging 때문에 1419로 막힌다. 그래서 살아 있는
+-- legacy config resolution trigger 선언은 trusted operator Job이 맡는다
+-- (k8s/operator-append-only-triggers-job.yaml).
 DROP TRIGGER IF EXISTS `control_plane_fleet_migration_proof_snapshot_no_delete`;
 DROP TRIGGER IF EXISTS `control_plane_fleet_migration_proof_snapshot_no_update`;
 DROP TRIGGER IF EXISTS `control_plane_fleet_migration_collection_occurrence_no_delete`;

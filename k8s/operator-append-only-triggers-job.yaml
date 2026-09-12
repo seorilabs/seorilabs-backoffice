@@ -1,0 +1,109 @@
+# legacy config resolution 표의 append-only trigger를 trusted operator 경계에서 설치한다.
+#
+# 배포의 migration 사용자에게는 SUPER가 없고 binary logging이 켜져 있어 CREATE TRIGGER가
+# 오류 1419로 막힌다(실측: 2026-09-12 배포). 그래서 이 두 trigger는 prisma migration이
+# 아니라 root credential을 mount하는 이 Job이 설치한다. CI는 같은 DDL을 fixture로 재현한다
+# (scripts/test-install-operator-triggers.ts).
+#
+# 이 Job은 표를 만들지 않고 trigger만 다룬다. 이미 있으면 다시 만들지 않고 drift가 있으면
+# 고치지 않고 중단한다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backoffice-operator-append-only-triggers
+  namespace: data
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: operator-append-only-triggers
+  annotations:
+    seorilabs.dev/legacy-config-resolution-migration: "20260901010000_legacy_config_resolution_ledger"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backoffice
+        app.kubernetes.io/component: operator-append-only-triggers
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: install
+          image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - name: MYSQL_HOST
+              value: mysql.data.svc.cluster.local
+            - name: MYSQL_DATABASE
+              value: backoffice
+          volumeMounts:
+            - name: root-cred
+              mountPath: /run/mysql-root
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              cnf=/tmp/root.cnf
+              trap 'rm -f "$cnf" /tmp/legacy-triggers.sql' EXIT INT TERM
+              umask 077
+              {
+                echo "[client]"
+                echo "host=${MYSQL_HOST}"
+                echo "user=root"
+                echo "password=$(cat /run/mysql-root/password)"
+              } > "$cnf"
+              q() { mysql --defaults-extra-file="$cnf" -N -B -D "$MYSQL_DATABASE" -e "$1"; }
+
+              # 이미 계약대로 설치돼 있으면 아무것도 하지 않는다.
+              exact="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
+                WHERE TRIGGER_SCHEMA='${MYSQL_DATABASE}' \
+                  AND ACTION_TIMING='BEFORE' \
+                  AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution' \
+                  AND TRIM(TRAILING ';' FROM TRIM(ACTION_STATEMENT)) = \
+                    \"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only'\" \
+                  AND ( \
+                    (TRIGGER_NAME='control_plane_legacy_config_resolution_no_update' AND EVENT_MANIPULATION='UPDATE') \
+                    OR (TRIGGER_NAME='control_plane_legacy_config_resolution_no_delete' AND EVENT_MANIPULATION='DELETE') \
+                  )")"
+              total="$(q "SELECT COUNT(*) FROM information_schema.TRIGGERS \
+                WHERE TRIGGER_SCHEMA='${MYSQL_DATABASE}' \
+                  AND EVENT_OBJECT_TABLE='control_plane_legacy_config_resolution'")"
+              if [ "$exact" = "2" ] && [ "$total" = "2" ]; then
+                echo "legacy config resolution append-only trigger 계약 충족"
+                exit 0
+              fi
+              if [ "$total" != "0" ]; then
+                echo "기존 trigger가 계약과 다르다. 자동으로 고치지 않는다." >&2
+                exit 1
+              fi
+              sql=/tmp/legacy-triggers.sql
+              cat > "$sql" <<'SQL'
+              CREATE TRIGGER `control_plane_legacy_config_resolution_no_update` BEFORE UPDATE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
+              CREATE TRIGGER `control_plane_legacy_config_resolution_no_delete` BEFORE DELETE ON `control_plane_legacy_config_resolution` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'legacy config resolution audit is append-only';
+              SQL
+              mysql --defaults-extra-file="$cnf" -D "$MYSQL_DATABASE" < "$sql"
+              rm -f "$sql"
+              echo "legacy config resolution append-only trigger 설치 완료"
+      volumes:
+        - name: root-cred
+          secret:
+            secretName: mysql-root-cred
+            defaultMode: 0400
+            items:
+              - { key: password, path: password }
+        - name: tmp
+          emptyDir: {}
