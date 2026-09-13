@@ -3,7 +3,7 @@
   "mysqlVersionPrefix": "9.2.",
   "tables": {
     "count": 84,
-    "sha256": "923d6e7061e5b234d6e1c8d16c0e29a16a5e77d45b6b5503da4f4870f32629de"
+    "sha256": "c213f72ac360b16a7565840873264d981c079f7d113eae955bef4272864cf81b"
   },
   "columns": {
     "count": 1195,
@@ -15,6 +15,6 @@
   },
   "foreignKeys": {
     "count": 110,
-    "sha256": "a399a0af0af7dade2910a51efb091a35c16468b0628a232fc5a457ad42d5791d"
+    "sha256": "0342ca534de7e45f754c2874e7128d0f916a1ff473328643e36c057caa859aac"
   }
 }
