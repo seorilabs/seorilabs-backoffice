@@ -263,6 +263,34 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
 }
 
 /**
+ * 스냅샷만 다시 저장한다(23:30 재실행용). 발행(runDailyOrgReport)과 달리 Discord
+ * enqueue 를 하지 않는다 — 같은 dedupeKey 로 다시 넣으면 아직 보내지 못한 전송이
+ * 나중에 이 시점 내용으로 나간다. LLM 해설과 비용도 다시 부르지 않는다. 11:00 발행분과
+ * 같은 해설을 유지해야 Discord 메시지와 보고서가 어긋나지 않고, 재실행 비용도 없다.
+ *
+ * 늦게 도착한 GA4·콘솔 스냅샷을 반영하는 것이 목적이므로 수치는 다시 계산한다.
+ */
+export async function refreshOrgReportSnapshot(
+  now = new Date(),
+): Promise<{ refDate: string; version: number; consoleLagDays: number | null }> {
+  const data = await collectHighlightData(now);
+  const snapshot = await prisma.orgReportDaily.findUnique({
+    where: { date: parseIsoDate(data.refDate) },
+  });
+  const published = snapshot ? parseOrgReportDocument(snapshot.report) : null;
+  const doc = assembleOrgReportDocument({
+    data,
+    // 발행분의 해설과 비용을 그대로 잇는다. 없으면(발행 실패·파싱 실패) 수치만 갱신한다.
+    narrative: published?.narrative ?? null,
+    costs: published?.costs ?? null,
+    origin: "published",
+    generatedAt: now,
+  });
+  const { version } = await saveOrgReport(doc);
+  return { refDate: data.refDate, version, consoleLagDays: doc.consoleMeta.lagDays };
+}
+
+/**
  * 특정 날짜의 보고서를 원본에서 재계산한다. persist=true 면 스냅샷으로 저장(수동
  * 재발행/백필)하고, 아니면 조회 전용이다. 그 날짜에 GA4·콘솔 데이터가 전혀 없으면 null.
  */

@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
-import { runDailyOrgReport } from "@/lib/core/org-report";
+import { refreshOrgReportSnapshot } from "@/lib/core/org-report";
 
 // Org 종합 보고서 스냅샷 재계산 트리거(CronJob 23:30 KST 이 호출).
 // 11:00 KST 발행 후 늦게 도착한 GA4 export / 콘솔 푸시를 반영해 OrgReportDaily 만
-// version+1 로 갱신한다. Discord 발송은 dedupeKey(`metric-highlight:<refDate>`)가
-// 하루 1건이라 두 번째 enqueue 는 notification_event 의 payload 만 덮어쓰고
-// 실제 발송은 무시된다 — 사용자에게는 11:00 KST 메시지 한 번만 도달.
+// version+1 로 갱신한다.
 //
-// 목적: 다음 날 아침 /report 페이지가 최신 raw 데이터를 본 스냅샷을 보여주도록
-// 보장. Discord 메시지를 다시 보내는 게 아니므로 metric-highlights 메시지 본문
-// 변경도 일어나지 않는다.
+// 발행 경로(runDailyOrgReport)를 쓰지 않는다. 그쪽은 Discord enqueue 까지 하는데,
+// 같은 dedupeKey 로 다시 넣으면 아직 보내지 못한 전송이 나중에 이 시점 내용으로 나간다.
+// LLM 해설과 비용도 다시 부르게 돼 11:00 발행분과 해설이 갈리고 비용만 든다.
+// refreshOrgReportSnapshot 은 수치만 다시 계산하고 발행분의 해설·비용을 그대로 잇는다.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -20,7 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
-    return NextResponse.json({ ok: true, ...(await runDailyOrgReport(new Date())) });
+    return NextResponse.json({ ok: true, ...(await refreshOrgReportSnapshot(new Date())) });
   } catch (error) {
     console.error("[admin/metric-highlights/redaily] 실패:", error);
     return NextResponse.json({ error: "org report redaily failed" }, { status: 500 });
