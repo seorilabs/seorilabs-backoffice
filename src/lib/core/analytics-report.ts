@@ -171,11 +171,15 @@ export function ga4TotalLine(
   const engaged = sum((row) => row.engagedUsers);
   const parts = [`DAU ${dau}`, `활성 ${engaged}(${pct(engagementRate(engaged, dau))})`];
   // 광고 지표는 대부분 0 이라 값이 있을 때만 붙인다(콘솔 결제 줄과 같은 규칙).
-  const cta = sum((row) => row.adCtaImpressions);
-  const done = sum((row) => row.adCompletions);
-  const shown = sum((row) => row.networkAdImpressions);
-  if (cta > 0 || done > 0 || shown > 0) {
-    parts.push(`CTA ${cta}`, `완료 ${done}`, `실제노출 ${shown}`);
+  const ctaImpressions = sum((row) => row.adCtaImpressions);
+  const completions = sum((row) => row.adCompletions);
+  const networkAdImpressions = sum((row) => row.networkAdImpressions);
+  if (ctaImpressions > 0 || completions > 0 || networkAdImpressions > 0) {
+    parts.push(
+      `CTA ${ctaImpressions}`,
+      `완료 ${completions}`,
+      `실제노출 ${networkAdImpressions}`,
+    );
   }
   const plat = platformSegments(
     sum((row) => row.dauAndroid),
