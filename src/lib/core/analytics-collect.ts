@@ -23,12 +23,16 @@ import type { Prisma } from "@prisma/client";
 // D7 확정 반영). 게임별 컨텐츠 세부 지표는 별도 경로(app-content-metrics-collect, 스펙 구동)가
 // 담당한다 — 여기서는 공통 지표만.
 //
-// 7일: GA4 export 가 보통 1~3일 안에 안정화되므로 7일이면 정상 케이스 데이터를
-// 누락 없이 덮는다. 14일 대비 BigQuery 스캔량 약 절반. 8일 이상 늦게 도착하는
-// export 는 다음 사이클에 재집계되지 않으므로 영구 누락 — 운영상 드문 케이스이며,
-// 종합 보고서·하이라이트 발행(11:00 KST) 후 23:00 KST recollect 가 이를 보완한다.
-
-const WINDOW_DAYS = 7;
+// 창 길이는 D7 이 정한다. dateWindow(end, N) 은 end-(N-1) 부터 end 까지라 코호트의
+// 최대 age 가 N-1 이고, clampRetention 은 age>=7 일 때만 d7Pct 를 남긴다. 그래서
+// N<=7 이면 d7Pct 가 어느 행에도 기록되지 않는다. 더 나쁘게, 이 수집은 upsert 라
+// 창 안의 기존 행에 들어 있던 d7Pct 까지 null 로 덮는다.
+//
+// 14일이면 age 7~13 인 7일치 코호트가 매 실행마다 d7 을 확정할 기회를 갖는다.
+// 수집이 하루 실패해도 다음 날 회수된다. 이 여유를 줄이면 BigQuery 스캔량은 줄지만
+// D7 은 한 번 놓치면 영구 결손이므로 줄이지 않는다.
+export const MIN_D7_AGE_DAYS = 7;
+export const WINDOW_DAYS = 14;
 
 export interface CollectResult {
   endDate: string; // 최신 확정일(D-1)
@@ -52,7 +56,7 @@ export function clampRetention(
   return {
     d1Pct: ageDays >= 1 ? cohort.d1Pct : null,
     d3Pct: ageDays >= 3 ? cohort.d3Pct : null,
-    d7Pct: ageDays >= 7 ? cohort.d7Pct : null,
+    d7Pct: ageDays >= MIN_D7_AGE_DAYS ? cohort.d7Pct : null,
   };
 }
 
