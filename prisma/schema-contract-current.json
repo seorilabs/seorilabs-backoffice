@@ -6,11 +6,11 @@
     "sha256": "923d6e7061e5b234d6e1c8d16c0e29a16a5e77d45b6b5503da4f4870f32629de"
   },
   "columns": {
-    "count": 1203,
+    "count": 1195,
     "sha256": "fccdc9e142eb4ca2d1a6dd68e4f91ef302227b420ff179d01625cb480a57a97e"
   },
   "indexes": {
-    "count": 545,
+    "count": 544,
     "sha256": "788688e5ee5f6f5062b42c29fb110f314c774d2e2dbd60d5f15f8fa7287aee2e"
   },
   "foreignKeys": {
