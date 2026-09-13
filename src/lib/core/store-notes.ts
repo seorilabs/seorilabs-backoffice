@@ -70,8 +70,9 @@ function buildMarketSection(translations: ReleaseNoteTranslationsInput): Record<
  *     },
  *   }
  *
- * 입력은 마켓별 row 3건. 한 row 라도 누락이면 그 마켓 섹션은 빈 객체로 들어간다.
- * 비어있지 않은 마켓 섹션이 하나도 없고 레거시 합집합도 비어있으면 null 반환(에셋 스킵).
+ * 입력은 마켓별 row 3건. 마켓 row 가 비어있으면 그 마켓 키는 `markets` 섹션에서 생략
+ * (consumer 가 키 부재로 누락 마켓을 감지). 비어있지 않은 마켓 섹션이 하나도 없고
+ * 레거시 합집합도 비어있으면 null 반환(에셋 스킵).
  */
 export interface BuildReleaseNotesAssetInput {
   tag: string;

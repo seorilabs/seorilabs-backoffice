@@ -433,7 +433,9 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
   };
 }
 
-/** LLM 응답을 안전하게 파싱 — 코드펜스, 본문 혼재, trailing comma 등 관대하게 허용. */
+/** LLM 응답을 안전하게 파싱 — 코드펜스·본문 혼재·중괄호 포함 문자열을 견디게 한다.
+ *  strict JSON 만 받는다 (trailing comma 등은 JSON.parse 가 거부). 본문에 `{`/`}` 가
+ *  섞여도 첫 `{` ~ 마지막 `}` 슬라이스로 견딜 수 있게 한다. */
 export function parseReleaseNotesI18nOutput(raw: string): ReleaseNotesI18nOutput | null {
   if (!raw) return null;
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);

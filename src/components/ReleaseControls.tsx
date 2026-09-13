@@ -142,7 +142,7 @@ export function ReleaseControls({
           `ℹ️ ${tag} 출시노트가 이미 있습니다${marketSummary} — 아래 출시노트 섹션에서 확인`,
         );
       } else if (!r.ok && r.status === "llm-not-configured") {
-        setNoteMsg(`⚠️ LLM 미구성 — ${r.error}`);
+        setNoteMsg(`⚠️ ${r.error}`);
       } else {
         setNoteMsg(`실패: ${(r as { error?: string }).error ?? "알 수 없음"}`);
       }

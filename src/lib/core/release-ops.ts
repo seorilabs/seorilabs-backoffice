@@ -415,16 +415,19 @@ async function loadReleaseNoteTranslations(
     esES: true,
   } as const;
   // 마켓 row 우선, 없으면 legacy NULL row 로 폴백 — contract 단계 이전 호환을 위함.
-  // Prisma 의 enum 필드는 OR 안에서 null 을 직접 받지 못해 두 번 호출한다.
+  // Prisma enum 필드의 where 에 null 을 직접 못 넣으므로 raw SQL 로 보조한다.
+  const fallbackRows = (await prisma.$queryRawUnsafe(
+    `SELECT koKR, enUS, jaJP, zhCN, zhTW, deDE, frFR, esES FROM release_note
+     WHERE repoFullName = ? AND version = ? AND market IS NULL
+     LIMIT 1`,
+    repoFullName,
+    version,
+  )) as Array<ReleaseNoteTranslations | null>;
   const row =
     (await prisma.releaseNote.findFirst({
       where: { repoFullName, version, market },
       select: localeSelect,
-    })) ??
-    (await prisma.releaseNote.findFirst({
-      where: { repoFullName, version, market: null as unknown as ReleaseMarket },
-      select: localeSelect,
-    }));
+    })) ?? fallbackRows[0] ?? null;
   return row ? releaseNoteTranslations(row) : null;
 }
 

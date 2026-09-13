@@ -556,7 +556,9 @@ enum AppOperationRunStatus {
 // 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 다국어 유저용 공지.
 // 마켓별 1건. (repoFullName, version, market) 단위로 마켓 필터링된 본문을 따로 저장한다.
 // AIT 한정/Play 한정 변경이 다른 마켓에 노출되지 않도록 3 row를 한 번에 생성·갱신한다.
-// webhook(tag push) 또는 수동 백필로 생성. 기존 단일 row는 본 마이그레이션에서 drop.
+// webhook(tag push) 또는 수동 백필로 생성. expand 단계에서 legacy NULL-market row 와
+// 옛 (repoFullName, version) unique 는 보존 없이 본 마이그레이션에서 함께 정리한다 —
+// 3 row 가 같은 (repo, version) 으로 공존하려면 옛 unique 가 drop 돼야 하기 때문.
 model ReleaseNote {
   id              String            @id @default(cuid())
   appId           String
@@ -581,9 +583,6 @@ model ReleaseNote {
   model           String? // 생성 모델
   createdAt       DateTime          @default(now())
 
-  // expand 단계: 옛 unique 를 잠시 유지해 writer 호환을 지킨다. contract 단계(별도 PR,
-  // approvedContractMigrations 등록)에서 이 unique 와 기존 NULL-market row 를 함께 drop 한다.
-  @@unique([repoFullName, version])
   @@unique([repoFullName, version, market])
   @@index([appId, createdAt])
   @@map("release_note")
