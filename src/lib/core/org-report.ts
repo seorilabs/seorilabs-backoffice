@@ -37,7 +37,8 @@ import {
 // 없어 재계산 문서에서는 null 이다.
 //
 // 추이 그래프(orgTrendSeries)는 스냅샷이 아니라 항상 원본 시계열을 읽는다 — GA4 는
-// 매일 14일 창을 재집계하므로 스냅샷을 이어 붙이면 낡은 값이 남는다.
+// 매일 최근 N일(analytics-collect WINDOW_DAYS) 창을 재집계하므로 스냅샷을 이어 붙이면
+// 낡은 값이 남는다.
 
 type Ga4Summary = OrgReportDocument["summary"]["ga4"];
 type PlatformSplit = OrgReportDocument["platform"];
