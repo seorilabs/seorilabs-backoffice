@@ -283,7 +283,9 @@ export async function refreshOrgReportSnapshot(
     // 발행분의 해설과 비용을 그대로 잇는다. 없으면(발행 실패·파싱 실패) 수치만 갱신한다.
     narrative: published?.narrative ?? null,
     costs: published?.costs ?? null,
-    origin: "published",
+    // origin 은 앞선 문서의 것을 잇는다. 11:00 발행이 실패해 스냅샷이 없으면 이 저장은
+    // 발행이 아니라 소급 계산이다 — published 로 적으면 해설 없는 문서가 발행분인 척한다.
+    origin: published?.origin ?? "recomputed",
     generatedAt: now,
   });
   const { version } = await saveOrgReport(doc);

@@ -295,3 +295,15 @@ test("23:30 재실행 라우트는 발행 경로를 부르지 않는다", () => 
   assert.match(route, /refreshOrgReportSnapshot/u);
   assert.doesNotMatch(route, /runDailyOrgReport\(/u);
 });
+
+test("스냅샷 재계산은 앞선 문서의 origin 을 잇는다", () => {
+  const source = readSource("src/lib/core/org-report.ts");
+  const start = source.indexOf("export async function refreshOrgReportSnapshot");
+  const end = source.indexOf("\nexport ", start + 1);
+  const body = source.slice(start, end === -1 ? undefined : end);
+
+  // 11:00 발행이 실패해 스냅샷이 없으면 이 저장은 발행이 아니다. published 로 굳히면
+  // 해설 없는 문서가 발행분으로 보인다.
+  assert.match(body, /origin: published\?\.origin \?\? "recomputed"/u);
+  assert.doesNotMatch(body, /origin: "published"/u);
+});
