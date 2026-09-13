@@ -2,6 +2,7 @@ import { llmChat, llmChatConfigured } from "@/lib/ai/llm";
 import { daysBetween, isoDate, parseIsoDate } from "@/lib/ga4/datasets";
 import type {
   ConsoleListingSeries,
+  Ga4AppGap,
   Ga4AppSeries,
   Movement,
   PortfolioTotals,
@@ -24,25 +25,19 @@ const MAX_NAMED_GAPS = 6;
  */
 function ga4CoverageLines(
   refDate: string,
-  series: readonly Ga4AppSeries[],
+  onRefDateApps: number,
+  gaps: readonly Ga4AppGap[],
 ): string[] {
   const ref = parseIsoDate(refDate);
-  const gaps: { name: string; type: string; lag: number | null }[] = [];
-  for (const { app, rowsDesc } of series) {
-    const latest = rowsDesc[0];
-    if (!latest) {
-      gaps.push({ name: app.displayName, type: app.type, lag: null });
-      continue;
-    }
-    if (isoDate(latest.date) === refDate) continue;
-    gaps.push({ name: app.displayName, type: app.type, lag: daysBetween(ref, latest.date) });
-  }
-  const onRef = series.length - gaps.length;
-  const lines = [`GA4 기준일 스냅샷: ${series.length}개 앱 중 ${onRef}개 보유`];
+  const total = onRefDateApps + gaps.length;
+  const lines = [`GA4 기준일 스냅샷: ${total}개 앱 중 ${onRefDateApps}개 보유`];
   if (gaps.length === 0) return lines;
-  const named = gaps
-    .slice(0, MAX_NAMED_GAPS)
-    .map((gap) => `${gap.name}(${gap.type}, ${gap.lag == null ? "수집 없음" : `${gap.lag}일 지연`})`);
+  const named = gaps.slice(0, MAX_NAMED_GAPS).map(({ app, latestDate }) => {
+    const state = latestDate === null
+      ? "수집 없음"
+      : `${daysBetween(ref, latestDate)}일 지연`;
+    return `${app.displayName}(${app.type}, ${state})`;
+  });
   lines.push(
     `기준일 스냅샷이 없는 앱 ${gaps.length}개: ${named.join(", ")}` +
       (gaps.length > named.length ? ` 외 ${gaps.length - named.length}개` : ""),
@@ -85,6 +80,7 @@ export function narrativeFacts(input: {
   movements: readonly Movement[];
   /** 주면 수집 공백(지연·미수집)을 사실에 함께 넘긴다. */
   ga4Series?: readonly Ga4AppSeries[];
+  ga4Gaps?: readonly Ga4AppGap[];
   consoleSeries?: readonly ConsoleListingSeries[];
   consoleMissing?: readonly string[];
 }): string {
@@ -94,7 +90,11 @@ export function narrativeFacts(input: {
     `콘솔 광고 수익 ${Math.round(input.totals.console.iaaKrw)}원 · 결제 ${Math.round(input.totals.console.iapKrw)}원 · 대상 ${input.totals.console.listings}개 리스팅`,
   ];
   if (input.ga4Series) {
-    lines.push("", "수집 상태:", ...ga4CoverageLines(input.refDate, input.ga4Series));
+    lines.push(
+      "",
+      "수집 상태:",
+      ...ga4CoverageLines(input.refDate, input.ga4Series.length, input.ga4Gaps ?? []),
+    );
     if (input.consoleSeries) {
       lines.push(
         ...consoleCoverageLines(input.refDate, input.consoleSeries, input.consoleMissing ?? []),

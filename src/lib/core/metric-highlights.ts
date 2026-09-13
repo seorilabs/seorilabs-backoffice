@@ -363,6 +363,16 @@ export interface MetricHighlightResult {
 }
 
 /** GA4 수집 대상 앱 하나의 시계열(최신순, BASELINE_DAYS+1 창). 최신 행은 기준일 값이다. */
+/**
+ * 기준일 스냅샷이 없어 판정에서 빠진 앱. 합계에 넣을 수는 없지만 "왜 빠졌는지"는
+ * 남겨야 한다. 합계가 낮은 것이 지표 하락인지 수집 공백인지 여기서 갈린다.
+ */
+export interface Ga4AppGap {
+  app: { id: string; slug: string; displayName: string; type: AppType };
+  /** 가장 최근 스냅샷 날짜. 수집이 한 번도 없으면 null. */
+  latestDate: Date | null;
+}
+
 export interface Ga4AppSeries {
   app: { id: string; slug: string; displayName: string; type: AppType };
   rowsDesc: Ga4Row[];
@@ -388,6 +398,8 @@ export interface HighlightData {
   totals: PortfolioTotals;
   movements: Movement[];
   ga4Series: Ga4AppSeries[];
+  /** 기준일 스냅샷이 없어 ga4Series 에 들어가지 못한 앱. */
+  ga4Gaps: Ga4AppGap[];
   consoleSeries: ConsoleListingSeries[];
   /** 콘솔 대상이지만 push 수집이 한 번도 없는 리스팅 라벨. */
   consoleMissing: string[];
@@ -425,6 +437,7 @@ export async function collectHighlightData(
   };
   const consoleRaws: unknown[] = [];
   const ga4Series: Ga4AppSeries[] = [];
+  const ga4Gaps: Ga4AppGap[] = [];
   const consoleSeries: ConsoleListingSeries[] = [];
   const consoleMissing: string[] = [];
 
@@ -446,7 +459,14 @@ export async function collectHighlightData(
       },
     })) as Ga4Row[];
     // 기준일 스냅샷이 아직 없는 앱은 어제를 말할 수 없다. 합계도 오염시키지 않는다.
-    if (rows.length === 0 || isoDate(rows[0].date) !== refDate) continue;
+    // 다만 빠졌다는 사실은 남긴다 — 합계가 낮은 이유가 될 수 있다.
+    if (rows.length === 0 || isoDate(rows[0].date) !== refDate) {
+      ga4Gaps.push({
+        app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+        latestDate: rows[0]?.date ?? null,
+      });
+      continue;
+    }
     movements.push(...movementsFromSeries(app.displayName, rows, GA4_METRIC_PICKERS));
     totals.ga4Dau.latest += rows[0].dau;
     totals.ga4Dau.previous = (totals.ga4Dau.previous ?? 0) + (rows[1]?.dau ?? 0);
@@ -508,7 +528,7 @@ export async function collectHighlightData(
 
   totals.referrers = foldReferrers(consoleRaws);
 
-  return { refDate, totals, movements, ga4Series, consoleSeries, consoleMissing };
+  return { refDate, totals, movements, ga4Series, ga4Gaps, consoleSeries, consoleMissing };
 }
 
 export interface MetricHighlightOptions {

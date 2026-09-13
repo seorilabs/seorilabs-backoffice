@@ -48,6 +48,7 @@ function sampleData(): HighlightData {
       console: { iaaKrw: 2_500, iapKrw: 1_000, previousIaaKrw: 2_000, listings: 2 },
       referrers: [{ dimension: "전체탭", rate: 0.8 }],
     },
+    ga4Gaps: [],
     movements: [
       evaluateMovement({
         label: "행복 농장 타이쿤",
