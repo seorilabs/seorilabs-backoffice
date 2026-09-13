@@ -547,6 +547,10 @@ async function verifyLiveAppendOnlyTriggers(
 function verifyContract(actual: SchemaContract): void {
   const expected = JSON.parse(readFileSync(contractPath, "utf8")) as SchemaContract;
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    // 일시적 diagnostic: SHA 불일치 실제 값을 stderr 로 흘려 schema-contract-current.json 갱신에 활용한다.
+    process.stderr.write(
+      `\n[verify-migration-state contract diag] actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)}\n`,
+    );
     throw new Error(
       `schema contract 불일치: tables=${actual.tables.count} columns=${actual.columns.count} indexes=${actual.indexes.count} foreignKeys=${actual.foreignKeys.count}`,
     );
