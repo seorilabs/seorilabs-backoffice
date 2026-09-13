@@ -130,14 +130,26 @@ export function buildAppReportMd(
 }
 
 /** Discord 변환 전 요약 한 줄(제한된 HTML). 활성사용자·참여율·플랫폼 반영. */
-export function summaryLine(displayName: string, latest: MetricRow): string {
+/**
+ * GA4 한 줄(HTML). 앱마다 최신 행을 쓰는데 export 도착이 앱마다 달라 refDate 보다 오래된
+ * 행이 섞인다. 메시지 머리말은 refDate 하나를 내걸므로, 다른 날짜 값이 같은 날인 것처럼
+ * 읽히지 않도록 그 행의 기준일을 함께 표기한다. 콘솔 리스팅 줄과 같은 규칙이다.
+ */
+export function summaryLine(
+  displayName: string,
+  latest: MetricRow,
+  refDate?: string,
+): string {
   const rate = engagementRate(latest.engagedUsers, latest.dau);
   const plat = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
     .segs.map((s) => `${s.label} ${s.value}`)
     .join("/");
+  const day = isoDate(latest.date);
+  const stale = refDate !== undefined && day !== refDate ? ` · ⏳${esc(day)}` : "";
   return (
     `<b>${esc(displayName)}</b> DAU ${latest.dau} · 활성 ${latest.engagedUsers}(${pct(rate)}) · D7 ${pct(latest.d7Pct)} · CTA ${latest.adCtaImpressions} · 완료 ${latest.adCompletions} · 실제노출 ${latest.networkAdImpressions}` +
-    (plat ? ` · ${plat}` : "")
+    (plat ? ` · ${plat}` : "") +
+    stale
   );
 }
 
@@ -343,7 +355,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     });
     result.enqueued++;
     result.apps++;
-    summary.push(summaryLine(app.displayName, rows[0]));
+    summary.push(summaryLine(app.displayName, rows[0], result.refDate));
     await reconcileMetricAnomalies({
       appId: app.id,
       appSlug: app.slug,

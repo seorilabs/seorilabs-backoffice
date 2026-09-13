@@ -69,6 +69,21 @@ test("summaryLine: 앱명 볼드 + 핵심 수치, null D7 은 대시, 활성/플
   assert.match(s, /Android 70/); // 플랫폼 반영
 });
 
+// 앱마다 GA4 export 도착이 달라 최신 행 날짜가 제각각인데, 메시지 머리말은 refDate 하나를
+// 내건다. 오래된 행을 그대로 실으면 그 값이 기준일 수치로 읽혀 콘솔 합계와 어긋난다.
+test("summaryLine: 기준일과 다른 날짜의 행은 그 날짜를 함께 표기한다", () => {
+  const refDate = "2026-09-12";
+  const onRef = summaryLine("Lucid Chess", row(refDate, { dau: 11 }), refDate);
+  assert.doesNotMatch(onRef, /⏳/, "기준일과 같은 날은 표기하지 않는다");
+
+  const stale = summaryLine("Slotmachine", row("2026-09-05", { dau: 3 }), refDate);
+  assert.match(stale, /⏳2026-09-05/, "오래된 행은 그 행의 기준일을 드러낸다");
+  assert.match(stale, /DAU 3/);
+
+  // refDate 를 주지 않는 호출부는 기존 동작을 유지한다.
+  assert.doesNotMatch(summaryLine("Slotmachine", row("2026-09-05", { dau: 3 })), /⏳/);
+});
+
 // ── AppsInToss 콘솔 섹션 ────────────────────────────────────────────────
 function consoleRow(date: string, over: Partial<ConsoleMetricRow> = {}): ConsoleMetricRow {
   return {

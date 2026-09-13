@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { evaluateMovement, type ConsoleRow, type Ga4Row, type HighlightData } from "@/lib/core/metric-highlights";
 import { alignTrendGrid, assembleOrgReportDocument } from "@/lib/core/org-report";
@@ -260,4 +262,48 @@ test("판정 전량이 직렬화되어 문서에 남는다", () => {
   assert.equal(doc.movements[0].metricKey, "ga4_dau");
   assert.equal(doc.movements[0].verdict, "highlight");
   assert.ok(!("spec" in doc.movements[0]));
+});
+
+// ── 23:30 스냅샷 재계산 경계 ─────────────────────────────────────────────
+// 발행 경로를 재사용하면 같은 dedupeKey 로 Discord enqueue 가 다시 일어난다. 아직
+// 보내지 못한 전송이 있으면 그 전송이 23:30 시점 내용으로 나가고, LLM 해설과 비용도
+// 매일 두 번 불린다. 경계가 무너지면 조용히 그렇게 되므로 소스로 고정한다.
+const readSource = (relative: string) =>
+  readFileSync(join(process.cwd(), relative), "utf8");
+
+test("스냅샷 재계산은 발송·해설·비용을 다시 부르지 않는다", () => {
+  const source = readSource("src/lib/core/org-report.ts");
+  const start = source.indexOf("export async function refreshOrgReportSnapshot");
+  assert.ok(start > 0, "refreshOrgReportSnapshot 이 있어야 한다");
+  const end = source.indexOf("\nexport ", start + 1);
+  const body = source.slice(start, end === -1 ? undefined : end);
+
+  for (const forbidden of [
+    "sendMetricHighlightReport",
+    "metricNarrative",
+    "collectFinanceCosts",
+  ]) {
+    assert.doesNotMatch(body, new RegExp(forbidden), forbidden);
+  }
+  // 늦게 도착한 스냅샷을 반영하는 것이 목적이므로 수치는 다시 계산한다.
+  assert.match(body, /collectHighlightData/u);
+  assert.match(body, /saveOrgReport/u);
+});
+
+test("23:30 재실행 라우트는 발행 경로를 부르지 않는다", () => {
+  const route = readSource("src/app/api/admin/metric-highlights/redaily/route.ts");
+  assert.match(route, /refreshOrgReportSnapshot/u);
+  assert.doesNotMatch(route, /runDailyOrgReport\(/u);
+});
+
+test("스냅샷 재계산은 앞선 문서의 origin 을 잇는다", () => {
+  const source = readSource("src/lib/core/org-report.ts");
+  const start = source.indexOf("export async function refreshOrgReportSnapshot");
+  const end = source.indexOf("\nexport ", start + 1);
+  const body = source.slice(start, end === -1 ? undefined : end);
+
+  // 11:00 발행이 실패해 스냅샷이 없으면 이 저장은 발행이 아니다. published 로 굳히면
+  // 해설 없는 문서가 발행분으로 보인다.
+  assert.match(body, /origin: published\?\.origin \?\? "recomputed"/u);
+  assert.doesNotMatch(body, /origin: "published"/u);
 });
