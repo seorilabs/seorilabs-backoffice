@@ -563,7 +563,8 @@ model ReleaseNote {
   app             App               @relation(fields: [appId], references: [id], onDelete: Cascade)
   repoFullName    String
   version         String // 태그, e.g. "v1.3.0"
-  market          ReleaseMarket     // 이 row가 어느 마켓에 업로드되는 본문인지
+  // expand 단계: legacy NULL row 호환을 위해 nullable. contract 단계(별도 PR)에서 NOT NULL 로 강화한다.
+  market          ReleaseMarket?
   previousVersion String? // 직전 릴리즈 태그
   headSha         String?
   compareUrl      String? // GitHub compare 링크
@@ -580,6 +581,9 @@ model ReleaseNote {
   model           String? // 생성 모델
   createdAt       DateTime          @default(now())
 
+  // expand 단계: 옛 unique 를 잠시 유지해 writer 호환을 지킨다. contract 단계(별도 PR,
+  // approvedContractMigrations 등록)에서 이 unique 와 기존 NULL-market row 를 함께 drop 한다.
+  @@unique([repoFullName, version])
   @@unique([repoFullName, version, market])
   @@index([appId, createdAt])
   @@map("release_note")

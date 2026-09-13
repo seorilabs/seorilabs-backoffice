@@ -229,7 +229,11 @@ export async function generateReleaseNoteAction(
     select: { market: true },
   });
   if (existingRows.length >= 3) {
-    return { ok: true, status: "exists", markets: existingRows.map((r) => r.market) };
+    return {
+      ok: true,
+      status: "exists",
+      markets: existingRows.flatMap((r) => (r.market ? [r.market] : [])),
+    };
   }
 
   // LLM 미구성은 사용자에게 명시적으로 보여줘야 하는 케이스라 사전에 가드한다.
@@ -260,7 +264,7 @@ export async function generateReleaseNoteAction(
       ok: true,
       status: "created",
       previousVersion: r.previousVersion,
-      markets: r.marketIds.map((m) => m.market),
+      markets: r.marketIds.flatMap((m) => (m.market ? [m.market] : [])),
     };
   } catch (e) {
     return { ok: false, status: "failed", error: (e as Error).message };
