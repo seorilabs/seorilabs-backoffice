@@ -159,7 +159,7 @@ test("웹 릴리스와 build mutation은 현재 DB role과 AppOwner write gate�
   const releaseActions = source("src/lib/actions/release.ts");
   assert.equal(
     (releaseActions.match(/requireReleaseWriteAccess\(appId\)/g) ?? []).length,
-    6,
+    7,
   );
 
   const builds = bodyOf(source("src/lib/actions/builds.ts"), "dispatchBuildAction");

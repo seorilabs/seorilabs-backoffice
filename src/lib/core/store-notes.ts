@@ -37,22 +37,82 @@ export function normalizeStoreNotes(raw: string): string {
 
 export const RELEASE_NOTES_ASSET_NAME = "release-notes.json";
 export const RELEASE_NOTES_ASSET_SCHEMA = "seorilabs.release-notes/v1";
+export const RELEASE_NOTES_ASSET_SCHEMA_V2 = "seorilabs.release-notes/v2";
+
+/** asset 의 markets 섹션 키 — Prisma enum 과 분리해 워크플로/문서용 안정 문자열. */
+export const RELEASE_NOTES_ASSET_MARKETS = ["googlePlay", "appStore", "appsInToss"] as const;
+export type ReleaseNotesAssetMarket = (typeof RELEASE_NOTES_ASSET_MARKETS)[number];
 
 /**
- * 배포 워크플로우가 다운로드할 release-notes.json 본문 생성.
- * 비어있지 않은 언어만 포함. 노트가 하나도 없으면 null(에셋 업로드 스킵).
+ * 단일 마켓 row 의 koKR/enUS/... → 스토어 locale 코드 → 본문 map. 비어있지 않은 locale 만.
  */
-export function buildReleaseNotesAsset(
-  n: { tag: string } & ReleaseNoteTranslationsInput,
-): string | null {
-  const notes: Record<string, string> = {};
+function buildMarketSection(translations: ReleaseNoteTranslationsInput): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const { field, storeLocale } of RELEASE_NOTE_LOCALES) {
-    const body = n[field]?.trim();
-    if (body) notes[storeLocale] = body;
+    const body = translations[field]?.trim();
+    if (body) out[storeLocale] = body;
   }
-  if (Object.keys(notes).length === 0) return null;
+  return out;
+}
+
+/**
+ * 배포 워크플로우가 다운로드할 release-notes.json 본문 생성. v2 포맷.
+ *
+ * 구조:
+ *   {
+ *     schema: "seorilabs.release-notes/v2",
+ *     version: "v1.0.29",
+ *     notes: { "ko-KR": "...", ... },        // 레거시 fallback (3 마켓 row 의 합집합)
+ *     markets: {
+ *       googlePlay:  { "ko-KR": "...", ... },
+ *       appStore:    { "ko-KR": "...", ... },
+ *       appsInToss:  { "ko-KR": "...", ... },
+ *     },
+ *   }
+ *
+ * 입력은 마켓별 row 3건. 마켓 row 가 비어있으면 그 마켓 키는 `markets` 섹션에서 생략
+ * (consumer 가 키 부재로 누락 마켓을 감지). 비어있지 않은 마켓 섹션이 하나도 없고
+ * 레거시 합집합도 비어있으면 null 반환(에셋 스킵).
+ */
+export interface BuildReleaseNotesAssetInput {
+  tag: string;
+  /** 마켓별 row 가 없으면 undefined. 정의된 마켓만 채운다. */
+  markets: Partial<Record<ReleaseNotesAssetMarket, ReleaseNoteTranslationsInput>>;
+}
+
+export function buildReleaseNotesAsset(input: BuildReleaseNotesAssetInput): string | null {
+  const marketsSection: Record<string, Record<string, string>> = {};
+  for (const market of RELEASE_NOTES_ASSET_MARKETS) {
+    const tr = input.markets[market];
+    if (!tr) continue;
+    const section = buildMarketSection(tr);
+    if (Object.keys(section).length > 0) marketsSection[market] = section;
+  }
+
+  // 레거시 `notes` = 마켓 row 합집합 (마켓과 무관한 항목 fallback). 비어있지 않은 locale 만.
+  const notesSection: Record<string, string> = {};
+  for (const { field, storeLocale } of RELEASE_NOTE_LOCALES) {
+    const seen = new Set<string>();
+    for (const market of RELEASE_NOTES_ASSET_MARKETS) {
+      const tr = input.markets[market];
+      if (!tr) continue;
+      const body = tr[field]?.trim();
+      if (!body || seen.has(body)) continue;
+      if (!notesSection[storeLocale]) notesSection[storeLocale] = body;
+      seen.add(body);
+    }
+  }
+
+  if (Object.keys(marketsSection).length === 0 && Object.keys(notesSection).length === 0) {
+    return null;
+  }
   return JSON.stringify(
-    { schema: RELEASE_NOTES_ASSET_SCHEMA, version: n.tag, notes },
+    {
+      schema: RELEASE_NOTES_ASSET_SCHEMA_V2,
+      version: input.tag,
+      notes: notesSection,
+      markets: marketsSection,
+    },
     null,
     2,
   );

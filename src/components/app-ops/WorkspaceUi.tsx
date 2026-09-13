@@ -13,14 +13,17 @@ import type {
 export function WorkspaceSection({
   title,
   description,
+  id,
   children,
 }: {
   title: string;
   description?: string;
+  /** 앵커 링크용. 예: 출시노트 섹션으로 스크롤. */
+  id?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section>
+    <section id={id}>
       <div className="mb-3">
         <h2 className="text-base font-semibold text-neutral-900">{title}</h2>
         {description && <p className="mt-0.5 text-sm text-neutral-500">{description}</p>}

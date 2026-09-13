@@ -74,6 +74,10 @@
     "20260912160000_drop_workflow_bundle_registry": {
       "sha256": "2fbd9622a6078983d931ac6796a6b530594284df8b7c69a95b1837b88ae3fae8",
       "reason": "WorkflowBundle v5 승인 레지스트리 제거. 코드에서 registry를 읽고 쓰는 경로(후보 실행기, caller 반증기, v5 워크플로)를 모두 걷어낸 뒤의 contract 단계다. 다른 표에서 이 표를 참조하는 외래키가 없고 DROP TABLE만 사용한다."
+    },
+    "20260913020000_release_note_per_market": {
+      "sha256": "b07a9d26acbecc980df66b9a5df0dcd3e40474483cfbd01fffd47a0d12241790",
+      "reason": "ReleaseNote에 market 컬럼 + (repoFullName, version, market) unique 추가, 옛 (repoFullName, version) unique drop. release_note 를 마켓별 분리 row 로 전환하기 위해 같은 (repo, version) 에 마켓 3개 row 가 공존해야 하므로 옛 unique 가 drop 돼야 한다. 코드 변경(generateReleaseNoteCore 가 마켓 3개 row upsert) 이 같은 PR 에 들어가 있다."
     }
   },
   "legacy": {

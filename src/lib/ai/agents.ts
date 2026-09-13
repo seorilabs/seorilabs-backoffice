@@ -354,6 +354,19 @@ export function buildImprovementPrompt(ctx: ImprovementContext): {
 }
 
 // ── 출시노트(i18n) — 릴리즈 태그 diff 기반 다국어 유저 공지. JSON 출력. ──
+//
+// 마켓 3종(Google Play / App Store / AppsInToss)에 동시 게시되지만, 변경 중 일부는
+// 특정 마켓 한정이다. LLM 이 각 PR/커밋을 마켓별로 분류해 마켓별 본문을 따로 만든다.
+// 분류가 애매하면 양쪽(혹은 세 마켓 모두)에 포함해 노출 누락을 피한다.
+export const RELEASE_NOTE_MARKET_KEYS = ["googlePlay", "appStore", "ait"] as const;
+export type ReleaseNoteMarketKey = (typeof RELEASE_NOTE_MARKET_KEYS)[number];
+
+export const RELEASE_NOTE_MARKET_LABEL: Record<ReleaseNoteMarketKey, string> = {
+  googlePlay: "Google Play (Android)",
+  appStore: "App Store (iOS)",
+  ait: "AppsInToss (Android 패키지, 토스 미니앱)",
+};
+
 export interface ReleaseNotesI18nContext {
   displayName: string;
   type: AppType;
@@ -361,6 +374,11 @@ export interface ReleaseNotesI18nContext {
   previousVersion: string | null;
   prs: Array<{ number: number; title: string }>;
   commitCount: number;
+}
+
+export interface ReleaseNotesI18nOutput {
+  /** 각 마켓의 다국어 본문. 키는 RELEASE_NOTE_MARKET_KEYS, 값은 locale → 불릿 본문. */
+  byMarket: Record<ReleaseNoteMarketKey, Record<string, string>>;
 }
 
 export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
@@ -373,35 +391,80 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
   const languageKeys = RELEASE_NOTE_LOCALES.map(
     ({ label, promptKey }) => `${label}(${promptKey})`,
   ).join(", ");
-  const jsonExample = JSON.stringify(
-    Object.fromEntries(
-      RELEASE_NOTE_LOCALES.map(({ promptKey }) => [promptKey, "- item1\\n- item2"]),
-    ),
-  );
+  const marketLabels = RELEASE_NOTE_MARKET_KEYS.map((m) => RELEASE_NOTE_MARKET_LABEL[m]).join(", ");
+
+  // 예시 JSON: 마켓 3개 × 언어 8개 = 24 슬롯
+  const examplePayload: Record<string, Record<string, string>> = {};
+  for (const m of RELEASE_NOTE_MARKET_KEYS) {
+    const inner: Record<string, string> = {};
+    for (const { promptKey } of RELEASE_NOTE_LOCALES) {
+      inner[promptKey] = "- item1\n- item2";
+    }
+    examplePayload[m] = inner;
+  }
+  const jsonExample = JSON.stringify(examplePayload);
+
   return {
     system: [
       "당신은 Seorilabs 의 릴리스 매니저다.",
       "변경 내역(머지 PR/커밋)을 바탕으로 '사용자에게 공지할' 출시노트를 작성한다.",
-      "이 출시노트는 Google Play·App Store 등 앱 마켓에 그대로 게시된다.",
+      `이 출시노트는 ${marketLabels} 등 앱 마켓에 그대로 게시된다 — 마켓과 무관한 변경만 모든 마켓 본문에 넣고, 특정 마켓 한정 변경은 해당 마켓에만 넣는다.`,
       "내부 리팩터링·빌드·CI·테스트 등 사용자가 체감 못하는 변경은 제외하고, 새 기능·개선·버그수정만 쉬운 말로 쓴다.",
-      `마케팅 과장 없이 간결한 불릿(- )으로 다음 8개 언어 버전을 만든다: ${languageKeys}.`,
+      `각 마켓별로 8개 언어(${languageKeys}) 버전을 만든다.`,
       "각 번역은 해당 지역의 앱 마켓에서 자연스럽게 읽히도록 현지화하고, 다른 언어의 문장을 섞지 않는다.",
       // 스토어 정형 규칙. 번역 원문을 코드에서 자르지 않으므로 여기서 반드시 지킨다.
-      "형식 규칙(반드시 준수): 각 언어는 최대 4개 불릿, 각 불릿은 한 줄이며 100자 이내, 언어당 전체 480자 이내.",
+      "형식 규칙(반드시 준수): 각 마켓·각 언어당 최대 4개 불릿, 각 불릿은 한 줄이며 100자 이내, 마켓·언어당 전체 480자 이내.",
       "각 줄은 '- ' 로 시작하는 순수 텍스트만. 마크다운 헤더(#)·링크·볼드(**)·이모지·코드블록 금지.",
-      `반드시 8개 키를 모두 가진 JSON 객체 하나만 출력: ${jsonExample}. 머리말/코드블록 금지.`,
-      "사용자 체감 변경이 전혀 없으면 안정성·내부 개선 위주로 1~2줄 간단히.",
+      `반드시 마켓 3개 키(${RELEASE_NOTE_MARKET_KEYS.join("/")}) × 8개 언어 키 = 24 슬롯을 모두 가진 JSON 객체 하나만 출력: ${jsonExample}. 머리말/코드블록 금지.`,
+      "분류 규칙: 'AppsInToss', '토스', 'AIT', 'Granite', 'toss login' 등은 ait 전용. 'Google Play', 'Android', 'AdMob', 'Play Billing', 'AAB', '상태바' 등은 googlePlay 전용. 'App Store', 'iOS', 'TestFlight', 'App Store Connect' 등은 appStore 전용. '사주 해설', '버그 수정', '내부 로직', 'API 공통' 등 분류 애매한 항목은 안전하게 세 마켓 모두에 포함한다(노출 누락이 오분류보다 낫다).",
+      "사용자 체감 변경이 전혀 없는 마켓은 '변경 사항 없음' 1줄로 채워도 된다.",
     ].join(" "),
     prompt: [
       `앱: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"})`,
-      `버전: ${ctx.version}${ctx.previousVersion ? ` (이전: ${ctx.previousVersion})` : " (첫 릴리스)"}`,
+      `버전: ${ctx.version}${ctx.previousVersion ? ` (이전: ${ctx.previousVersion})` : " (첫 릴리즈)"}`,
       `커밋 ${ctx.commitCount}개`,
       "",
       "## 변경 내역",
       prLines,
       "",
-      `위에서 사용자 체감 항목만 골라 ${RELEASE_NOTE_LOCALES.map(({ promptKey }) => promptKey).join("/")} 출시노트를 JSON 으로 작성하라.`,
-      "각 언어 최대 4개 불릿, 언어당 480자 이내, 순수 텍스트 '- ' 불릿만.",
+      `위에서 사용자 체감 항목을 마켓별로 분류해 ${RELEASE_NOTE_MARKET_KEYS.join("/")} 마켓 × ${RELEASE_NOTE_LOCALES.map(({ promptKey }) => promptKey).join("/")} 언어의 출시노트를 JSON 으로 작성하라.`,
+      "각 마켓·각 언어당 최대 4개 불릿, 마켓·언어당 480자 이내, 순수 텍스트 '- ' 불릿만.",
     ].join("\n"),
   };
+}
+
+/** LLM 응답을 안전하게 파싱 — 코드펜스·본문 혼재·중괄호 포함 문자열을 견디게 한다.
+ *  strict JSON 만 받는다 (trailing comma 등은 JSON.parse 가 거부). 본문에 `{`/`}` 가
+ *  섞여도 첫 `{` ~ 마지막 `}` 슬라이스로 견딜 수 있게 한다. */
+export function parseReleaseNotesI18nOutput(raw: string): ReleaseNotesI18nOutput | null {
+  if (!raw) return null;
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const text = (fence ? fence[1] : raw).trim();
+  const objStart = text.indexOf("{");
+  const objEnd = text.lastIndexOf("}");
+  if (objStart === -1 || objEnd === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(objStart, objEnd + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const out: Partial<Record<ReleaseNoteMarketKey, Record<string, string>>> = {};
+  for (const market of RELEASE_NOTE_MARKET_KEYS) {
+    const section = (parsed as Record<string, unknown>)[market];
+    if (!section || typeof section !== "object") return null;
+    const localeMap: Record<string, string> = {};
+    let hasAny = false;
+    for (const { promptKey } of RELEASE_NOTE_LOCALES) {
+      const v = (section as Record<string, unknown>)[promptKey];
+      if (typeof v === "string" && v.trim().length > 0) {
+        localeMap[promptKey] = v;
+        hasAny = true;
+      }
+    }
+    if (!hasAny) return null;
+    out[market] = localeMap;
+  }
+  return { byMarket: out as Record<ReleaseNoteMarketKey, Record<string, string>> };
 }

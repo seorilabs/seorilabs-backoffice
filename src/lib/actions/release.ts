@@ -13,9 +13,11 @@ import {
   promoteGooglePlay,
   prepareAppStore,
   submitAppStore,
+  generateAndPublishReleaseNotes,
   type Bump,
   type DeployTarget,
 } from "@/lib/core/release-ops";
+import { llmChatConfigured } from "@/lib/ai/llm";
 
 // 릴리즈/배포 서버 액션 — 앱 상세 UI 에서 호출. 인증 + 입력 검증 후 GitHub write.
 // (GitHub App 권한 필요: contents:write, actions:write. 미부여 시 런타임 오류를 error 로 반환.)
@@ -190,5 +192,81 @@ export async function submitAppStoreAction(
     return { ok: true };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * 출시노트 수동 생성/재생성. webhook(tag push) 후처리가 누락됐을 때 운영자가 백오피스에서
+ * 직접 트리거하는 용도. 이미 노트가 있으면 'exists'로 응답하고 덮어쓰지 않는다.
+ * (재생성은 별도 force 플래그가 필요하면 추후 확장.)
+ */
+export async function generateReleaseNoteAction(
+  appId: string,
+  tag: string,
+): Promise<
+  | { ok: true; status: "created"; previousVersion: string | null; markets: string[] }
+  | { ok: true; status: "exists"; markets: string[] }
+  | { ok: false; status: "llm-not-configured"; error: string }
+  | { ok: false; status: "failed"; error: string }
+> {
+  if (!TAG_RE.test(tag)) {
+    return { ok: false, status: "failed", error: "잘못된 태그(vX.Y.Z)" };
+  }
+  let actor: Awaited<ReturnType<typeof requireReleaseWriteAccess>>;
+  try {
+    actor = await requireReleaseWriteAccess(appId);
+  } catch (e) {
+    return { ok: false, status: "failed", error: (e as Error).message };
+  }
+
+  // 3 마켓 row 가 모두 존재하면 안내만 — 무조건 재생성하면 webhook 자동생성과 경쟁해 사용자 입력을 덮을 수 있다.
+  const existingRows = await prisma.releaseNote.findMany({
+    where: {
+      repoFullName: actor.repoFullName,
+      version: tag,
+      market: { in: ["PLAY", "APPSTORE", "AIT"] },
+    },
+    select: { market: true },
+  });
+  if (existingRows.length >= 3) {
+    return {
+      ok: true,
+      status: "exists",
+      markets: existingRows.flatMap((r) => (r.market ? [r.market] : [])),
+    };
+  }
+
+  // LLM 미구성은 사용자에게 명시적으로 보여줘야 하는 케이스라 사전에 가드한다.
+  if (!llmChatConfigured()) {
+    return {
+      ok: false,
+      status: "llm-not-configured",
+      error: "LLM 미구성 — 관리자에게 문의 또는 환경 설정 확인",
+    };
+  }
+
+  try {
+    const r = await generateAndPublishReleaseNotes({
+      repoFullName: actor.repoFullName,
+      version: tag,
+    });
+    if (!r) {
+      return {
+        ok: false,
+        status: "failed",
+        error: "출시노트 생성에 실패했습니다(미등록 repo 또는 정책 차단).",
+      };
+    }
+    revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}/releases`);
+    revalidatePath("/release-notes");
+    return {
+      ok: true,
+      status: "created",
+      previousVersion: r.previousVersion,
+      markets: r.marketIds.flatMap((m) => (m.market ? [m.market] : [])),
+    };
+  } catch (e) {
+    return { ok: false, status: "failed", error: (e as Error).message };
   }
 }

@@ -56,7 +56,11 @@ export default async function AppReleasesPage({
         description="명시적 태그를 만들고 후보 빌드·내부 업로드를 시작합니다. 심사·승인·공개는 별도 gate입니다."
       >
         <Panel>
-          <ReleaseControls appId={app.id} targets={targets} />
+          <ReleaseControls
+            appId={app.id}
+            targets={targets}
+            notesByTag={app.releaseNotes.map((note) => note.version)}
+          />
         </Panel>
       </WorkspaceSection>
 
@@ -96,7 +100,7 @@ export default async function AppReleasesPage({
         )}
       </WorkspaceSection>
 
-      <WorkspaceSection title="출시노트">
+      <WorkspaceSection title="출시노트" id="release-notes-section">
         {app.releaseNotes.length > 0 ? (
           <div className="space-y-3">
             {app.releaseNotes.map((note) => (
@@ -105,6 +109,7 @@ export default async function AppReleasesPage({
                 appName={app.displayName}
                 appId={app.id}
                 version={note.version}
+                market={note.market}
                 previousVersion={note.previousVersion}
                 createdAt={fmtDate(note.createdAt)}
                 compareUrl={note.compareUrl}
