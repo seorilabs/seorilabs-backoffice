@@ -525,13 +525,14 @@ export async function sendMetricHighlightReport(
   now = new Date(),
   options: MetricHighlightOptions = {},
 ): Promise<MetricHighlightResult> {
-  const { refDate, totals, movements } = options.data ?? (await collectHighlightData(now));
+  const data = options.data ?? (await collectHighlightData(now));
+  const { refDate, totals, movements } = data;
 
   const dedupeKey = metricHighlightDedupeKey(refDate);
   const narrative =
     options.narrative !== undefined
       ? options.narrative
-      : await metricNarrative(narrativeFacts({ refDate, totals, movements }));
+      : await metricNarrative(narrativeFacts(data));
   await enqueueNotification({
     dedupeKey,
     kind: "OPS_ALERT",
