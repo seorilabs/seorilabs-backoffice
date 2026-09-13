@@ -8,11 +8,21 @@ import {
   type ReleaseNoteTranslationsInput,
 } from "@/lib/core/release-note-locales";
 import { buildGooglePlayReleaseNotesText } from "@/lib/core/store-notes";
+import type { ReleaseMarket } from "@prisma/client";
+
+const MARKET_LABEL: Record<ReleaseMarket, string> = {
+  PLAY: "Google Play",
+  APPSTORE: "App Store",
+  AIT: "AppsInToss",
+  WEB: "Web",
+};
 
 export type ReleaseNoteCardProps = {
   appName: string;
   appId: string;
   version: string;
+  /** 마켓 row — 레거시(NULL) row 는 "공통"으로 표기. */
+  market: ReleaseMarket | null;
   previousVersion: string | null;
   createdAt: string;
   compareUrl: string | null;
@@ -37,12 +47,30 @@ export function ReleaseNoteCard(props: ReleaseNoteCardProps) {
     }
   }
 
+  const marketLabel = props.market ? MARKET_LABEL[props.market] : "공통(legacy)";
+  const marketStyle =
+    props.market === "PLAY"
+      ? "bg-emerald-100 text-emerald-800"
+      : props.market === "APPSTORE"
+        ? "bg-sky-100 text-sky-800"
+        : props.market === "AIT"
+          ? "bg-amber-100 text-amber-800"
+          : props.market === "WEB"
+            ? "bg-violet-100 text-violet-800"
+            : "bg-neutral-200 text-neutral-700";
+
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold">{props.appName}</span>
         <span className="rounded bg-neutral-900 px-1.5 py-0.5 text-xs font-medium text-white">
           {props.version}
+        </span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-xs font-medium ${marketStyle}`}
+          title={props.market ? `${props.market} 마켓 본문` : "레거시 공통 본문"}
+        >
+          {marketLabel}
         </span>
         {props.previousVersion && (
           <span className="text-xs text-neutral-400">← {props.previousVersion}</span>

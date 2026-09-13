@@ -204,8 +204,8 @@ export async function generateReleaseNoteAction(
   appId: string,
   tag: string,
 ): Promise<
-  | { ok: true; status: "created"; previousVersion: string | null }
-  | { ok: true; status: "exists" }
+  | { ok: true; status: "created"; previousVersion: string | null; markets: string[] }
+  | { ok: true; status: "exists"; markets: string[] }
   | { ok: false; status: "llm-not-configured"; error: string }
   | { ok: false; status: "failed"; error: string }
 > {
@@ -219,14 +219,18 @@ export async function generateReleaseNoteAction(
     return { ok: false, status: "failed", error: (e as Error).message };
   }
 
-  // 이미 존재하면 안내만 — 무조건 재생성하면 webhook 자동생성과 경쟁해 사용자 입력을 덮을 수 있다.
-  const existing = await prisma.releaseNote.findUnique({
+  // 3 마켓 row 가 모두 존재하면 안내만 — 무조건 재생성하면 webhook 자동생성과 경쟁해 사용자 입력을 덮을 수 있다.
+  const existingRows = await prisma.releaseNote.findMany({
     where: {
-      repoFullName_version: { repoFullName: actor.repoFullName, version: tag },
+      repoFullName: actor.repoFullName,
+      version: tag,
+      market: { in: ["PLAY", "APPSTORE", "AIT"] },
     },
-    select: { id: true },
+    select: { market: true },
   });
-  if (existing) return { ok: true, status: "exists" };
+  if (existingRows.length >= 3) {
+    return { ok: true, status: "exists", markets: existingRows.map((r) => r.market) };
+  }
 
   // LLM 미구성은 사용자에게 명시적으로 보여줘야 하는 케이스라 사전에 가드한다.
   if (!llmChatConfigured()) {
@@ -252,7 +256,12 @@ export async function generateReleaseNoteAction(
     revalidatePath(`/apps/${appId}`);
     revalidatePath(`/apps/${appId}/releases`);
     revalidatePath("/release-notes");
-    return { ok: true, status: "created", previousVersion: r.previousVersion };
+    return {
+      ok: true,
+      status: "created",
+      previousVersion: r.previousVersion,
+      markets: r.marketIds.map((m) => m.market),
+    };
   } catch (e) {
     return { ok: false, status: "failed", error: (e as Error).message };
   }

@@ -125,15 +125,21 @@ export function ReleaseControls({
         const baseInfo = prev
           ? ` — 비교 기준 ${prev} → ${tag}`
           : " — 첫 출시노트(비교 기준 없음)";
+        const marketSummary = r.markets.length
+          ? ` (마켓 ${r.markets.length}개: ${r.markets.join("/")})`
+          : "";
         setNotesByTagLocal((prevTags) =>
           prevTags.includes(tag) ? prevTags : [...prevTags, tag],
         );
         setNoteMsg(
-          `✅ ${tag} 출시노트 생성됨${baseInfo} — 아래 출시노트 섹션에서 확인`,
+          `✅ ${tag} 출시노트 생성됨${marketSummary}${baseInfo} — 아래 출시노트 섹션에서 마켓별 카드 확인`,
         );
       } else if (r.ok && r.status === "exists") {
+        const marketSummary = r.markets.length
+          ? ` (${r.markets.join("/")})`
+          : "";
         setNoteMsg(
-          `ℹ️ ${tag} 출시노트가 이미 있습니다 — 아래 출시노트 섹션에서 확인`,
+          `ℹ️ ${tag} 출시노트가 이미 있습니다${marketSummary} — 아래 출시노트 섹션에서 확인`,
         );
       } else if (!r.ok && r.status === "llm-not-configured") {
         setNoteMsg(`⚠️ LLM 미구성 — ${r.error}`);

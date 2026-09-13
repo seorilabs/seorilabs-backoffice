@@ -4,7 +4,6 @@ import {
   normalizeStoreNotes,
   buildReleaseNotesAsset,
   buildGooglePlayReleaseNotesText,
-  RELEASE_NOTES_ASSET_SCHEMA,
 } from "./store-notes";
 
 test("불릿 마커/마크다운을 순수 텍스트 '- ' 불릿으로 정규화", () => {
@@ -39,23 +38,42 @@ test("빈/공백 입력은 빈 문자열", () => {
   assert.equal(normalizeStoreNotes("\n  \n---\n## 헤더만"), "");
 });
 
-test("buildReleaseNotesAsset: 비어있지 않은 언어만 포함", () => {
+test("buildReleaseNotesAsset v2: 마켓별로 분리하고 비어있지 않은 언어만 포함", () => {
   const json = buildReleaseNotesAsset({
     tag: "v1.2.3",
-    koKR: "- 개선",
-    enUS: "",
-    jaJP: "- 改善",
-    zhCN: "- 改进",
-    zhTW: "- 改善",
-    deDE: "- Verbessert",
-    frFR: "- Améliorations",
-    esES: "- Mejoras",
+    markets: {
+      googlePlay: {
+        koKR: "- 개선",
+        enUS: "",
+        jaJP: "- 改善",
+        zhCN: "- 改进",
+        zhTW: "- 改善",
+        deDE: "- Verbessert",
+        frFR: "- Améliorations",
+        esES: "- Mejoras",
+      },
+      appStore: {
+        koKR: "- iOS 개선",
+        enUS: "- iOS improvements",
+        jaJP: "",
+        zhCN: "",
+        zhTW: "",
+        deDE: "",
+        frFR: "",
+        esES: "",
+      },
+      appsInToss: {
+        koKR: "- 토스 로그인 안내 제거",
+        enUS: "- Removed toss login prompt",
+      },
+    },
   });
   assert.ok(json);
   const parsed = JSON.parse(json!);
-  assert.equal(parsed.schema, RELEASE_NOTES_ASSET_SCHEMA);
+  assert.equal(parsed.schema, "seorilabs.release-notes/v2");
   assert.equal(parsed.version, "v1.2.3");
-  assert.deepEqual(Object.keys(parsed.notes), [
+  // 마켓별 본문
+  assert.deepEqual(Object.keys(parsed.markets.googlePlay), [
     "ko-KR",
     "ja-JP",
     "zh-CN",
@@ -64,12 +82,25 @@ test("buildReleaseNotesAsset: 비어있지 않은 언어만 포함", () => {
     "fr-FR",
     "es-ES",
   ]);
+  assert.equal(parsed.markets.googlePlay["ko-KR"], "- 개선");
+  assert.equal(parsed.markets.googlePlay["ja-JP"], "- 改善");
+  assert.deepEqual(Object.keys(parsed.markets.appStore), ["ko-KR", "en-US"]);
+  assert.equal(parsed.markets.appStore["ko-KR"], "- iOS 개선");
+  assert.deepEqual(Object.keys(parsed.markets.appsInToss), ["ko-KR", "en-US"]);
+  // 레거시 notes 는 3 마켓 합집합 (중복 제거)
   assert.equal(parsed.notes["ko-KR"], "- 개선");
   assert.equal(parsed.notes["ja-JP"], "- 改善");
+  assert.equal(parsed.notes["en-US"], "- iOS improvements");
 });
 
-test("buildReleaseNotesAsset: 노트 없으면 null", () => {
-  assert.equal(buildReleaseNotesAsset({ tag: "v1.0.0", koKR: "", enUS: "  " }), null);
+test("buildReleaseNotesAsset: 마켓/언어 모두 비어있으면 null", () => {
+  assert.equal(
+    buildReleaseNotesAsset({
+      tag: "v1.0.0",
+      markets: { googlePlay: {}, appStore: {}, appsInToss: {} },
+    }),
+    null,
+  );
 });
 
 test("Android용 출시노트를 Google Play 로케일 태그 형식으로 만든다", () => {

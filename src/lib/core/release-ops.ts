@@ -2,6 +2,7 @@ import { recordReleaseAudit } from "@/lib/core/release-audit";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
+import type { ReleaseMarket } from "@prisma/client";
 import {
   createTag,
   createOrUpdateRelease,
@@ -218,14 +219,16 @@ export async function generateAndPublishReleaseNotes(
   const note = await generateReleaseNoteCore(input);
   if (!note) return null;
 
-  const row = await prisma.releaseNote.findUnique({
+  // 3 마켓 row 를 다시 읽어 asset 의 markets 섹션과 GitHub Release 본문을 만든다.
+  // 첫 row 의 compareUrl 을 본문에 쓴다(마켓 모두 같은 baseline).
+  const rows = await prisma.releaseNote.findMany({
     where: {
-      repoFullName_version: {
-        repoFullName: input.repoFullName,
-        version: input.version,
-      },
+      repoFullName: input.repoFullName,
+      version: input.version,
+      market: { in: ["PLAY", "APPSTORE", "AIT"] },
     },
     select: {
+      market: true,
       koKR: true,
       enUS: true,
       jaJP: true,
@@ -237,9 +240,15 @@ export async function generateAndPublishReleaseNotes(
       compareUrl: true,
     },
   });
-  if (!row) return note;
+  if (rows.length === 0) return note;
 
-  const translations = releaseNoteTranslations(row);
+  // GitHub Release 본문은 마켓 공통(레거시 호환) 본문으로 — PLAY row 우선, 없으면 APPSTORE, 없으면 AIT.
+  const primaryRow =
+    rows.find((r) => r.market === "PLAY") ??
+    rows.find((r) => r.market === "APPSTORE") ??
+    rows.find((r) => r.market === "AIT");
+  const translations = releaseNoteTranslations(primaryRow!);
+
   await execution.assertOwnership?.();
   const releaseSha = await resolveStableTagSha(input.repoFullName, input.version);
   const rel = await createOrUpdateRelease({
@@ -250,13 +259,19 @@ export async function generateAndPublishReleaseNotes(
     body: formatReleaseBody({
       tag: input.version,
       ...translations,
-      compareUrl: row.compareUrl,
+      compareUrl: primaryRow!.compareUrl,
     }),
   });
 
-  // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json).
+  // 마켓 배포 워크플로우가 다운로드할 정형 출시노트 에셋(release-notes.json, v2).
   // 실패해도 번역과 GitHub Release 본문은 유지한다.
-  const asset = buildReleaseNotesAsset({ tag: input.version, ...translations });
+  const assetMarkets: Parameters<typeof buildReleaseNotesAsset>[0]["markets"] = {};
+  for (const r of rows) {
+    if (r.market === "PLAY") assetMarkets.googlePlay = r;
+    else if (r.market === "APPSTORE") assetMarkets.appStore = r;
+    else if (r.market === "AIT") assetMarkets.appsInToss = r;
+  }
+  const asset = buildReleaseNotesAsset({ tag: input.version, markets: assetMarkets });
   if (asset) await execution.assertOwnership?.();
   try {
     if (asset) {
@@ -381,24 +396,35 @@ export async function dispatchMarketDeploy(opts: {
 
 // ── Google Play: 내부 빌드 → 프로덕션 승격(재빌드 없이 심사 제출) ──
 
-/** repo+version 의 저장된 다국어 출시노트. 없으면 null. */
+/** repo+version 의 저장된 다국어 출시노트. 없으면 null.
+ *  market 가 주어지면 (repo, version, market) row 를 우선 보고, 없으면 (repo, version) row
+ *  (legacy 한 row) 로 폴백한다 — contract 단계 이전 호환을 위함. */
 async function loadReleaseNoteTranslations(
   repoFullName: string,
   version: string,
+  market: ReleaseMarket,
 ): Promise<ReleaseNoteTranslations | null> {
-  const row = await prisma.releaseNote.findUnique({
-    where: { repoFullName_version: { repoFullName, version } },
-    select: {
-      koKR: true,
-      enUS: true,
-      jaJP: true,
-      zhCN: true,
-      zhTW: true,
-      deDE: true,
-      frFR: true,
-      esES: true,
-    },
-  });
+  const localeSelect = {
+    koKR: true,
+    enUS: true,
+    jaJP: true,
+    zhCN: true,
+    zhTW: true,
+    deDE: true,
+    frFR: true,
+    esES: true,
+  } as const;
+  // 마켓 row 우선, 없으면 legacy NULL row 로 폴백 — contract 단계 이전 호환을 위함.
+  // Prisma 의 enum 필드는 OR 안에서 null 을 직접 받지 못해 두 번 호출한다.
+  const row =
+    (await prisma.releaseNote.findFirst({
+      where: { repoFullName, version, market },
+      select: localeSelect,
+    })) ??
+    (await prisma.releaseNote.findFirst({
+      where: { repoFullName, version, market: null as unknown as ReleaseMarket },
+      select: localeSelect,
+    }));
   return row ? releaseNoteTranslations(row) : null;
 }
 
@@ -414,7 +440,7 @@ export async function promoteGooglePlay(opts: {
   actorLabel?: string;
 }): Promise<{ workflowFile: string }> {
   const tag = normalizeTag(opts.tag);
-  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag, "PLAY");
   if (!notes) {
     throw new Error(
       `출시노트가 아직 생성되지 않았습니다(${tag}). 잠시 후 다시 시도하세요.`,
@@ -479,7 +505,7 @@ export async function prepareAppStore(opts: {
 }): Promise<PrepareResult> {
   const bundleId = await iosBundleOf(opts.repoFullName);
   const tag = normalizeTag(opts.tag);
-  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag, "APPSTORE");
   const authority = await resolveStableAuthority(opts.repoFullName, tag);
   const result = await prepareAppStoreSubmission({
     bundleId,
@@ -544,7 +570,7 @@ export async function createAppStoreReview(opts: {
 }): Promise<{ prepare: PrepareResult; reviewSubmissionId?: string }> {
   const bundleId = await iosBundleOf(opts.repoFullName);
   const tag = normalizeTag(opts.tag);
-  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag);
+  const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag, "APPSTORE");
   const authority = await resolveStableAuthority(opts.repoFullName, tag);
   const result = await createAppStoreReviewSubmission({
     bundleId,

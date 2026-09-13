@@ -11,6 +11,7 @@ test("8개 언어 선택지를 렌더링하고 긴 출시노트를 줄이지 않
       appName: "테스트 앱",
       appId: "app-1",
       version: "v1.2.3",
+      market: "PLAY",
       previousVersion: "v1.2.2",
       createdAt: "2026-07-14",
       compareUrl: null,

@@ -554,13 +554,16 @@ enum AppOperationRunStatus {
 }
 
 // 출시노트 — 릴리즈 태그(이전 태그~새 태그 diff) 기반 다국어 유저용 공지.
-// 마켓 무관, 버전(태그)당 1건. webhook(tag push) 또는 수동 백필로 생성.
+// 마켓별 1건. (repoFullName, version, market) 단위로 마켓 필터링된 본문을 따로 저장한다.
+// AIT 한정/Play 한정 변경이 다른 마켓에 노출되지 않도록 3 row를 한 번에 생성·갱신한다.
+// webhook(tag push) 또는 수동 백필로 생성. 기존 단일 row는 본 마이그레이션에서 drop.
 model ReleaseNote {
   id              String            @id @default(cuid())
   appId           String
   app             App               @relation(fields: [appId], references: [id], onDelete: Cascade)
   repoFullName    String
   version         String // 태그, e.g. "v1.3.0"
+  market          ReleaseMarket     // 이 row가 어느 마켓에 업로드되는 본문인지
   previousVersion String? // 직전 릴리즈 태그
   headSha         String?
   compareUrl      String? // GitHub compare 링크
@@ -572,12 +575,12 @@ model ReleaseNote {
   deDE            String?           @db.Text // 독일어 유저용 출시노트
   frFR            String?           @db.Text // 프랑스어 유저용 출시노트
   esES            String?           @db.Text // 스페인어 유저용 출시노트
-  sourceJson      Json? // 생성 근거(커밋/PR 요약)
+  sourceJson      Json? // 생성 근거(커밋/PR 요약 + 마켓 분류 근거)
   status          ReleaseNoteStatus @default(GENERATED)
   model           String? // 생성 모델
   createdAt       DateTime          @default(now())
 
-  @@unique([repoFullName, version])
+  @@unique([repoFullName, version, market])
   @@index([appId, createdAt])
   @@map("release_note")
 }

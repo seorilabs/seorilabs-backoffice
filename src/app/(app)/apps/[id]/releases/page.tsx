@@ -109,6 +109,7 @@ export default async function AppReleasesPage({
                 appName={app.displayName}
                 appId={app.id}
                 version={note.version}
+                market={note.market}
                 previousVersion={note.previousVersion}
                 createdAt={fmtDate(note.createdAt)}
                 compareUrl={note.compareUrl}
