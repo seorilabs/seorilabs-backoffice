@@ -17,6 +17,26 @@ import {
   type CompareResult,
 } from "@/lib/github/release";
 
+/**
+ * 이 repo에서 "가장 최근에 출시노트가 생성된" 버전. v1.0.29 같은 snapshot/preview 태그가
+ * 사이에 끼어도 v1.0.30의 diff는 v1.0.28을 baseline으로 잡힌다. 출시노트가 한 건도 없으면
+ * 기존 semver 직전 태그로 폴백한다.
+ */
+async function lastReleasedTagWithNote(
+  repoFullName: string,
+  currentVersion: string,
+): Promise<string | null> {
+  const note = await prisma.releaseNote.findFirst({
+    where: {
+      repoFullName,
+      NOT: { version: currentVersion },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { version: true },
+  });
+  return note?.version ?? null;
+}
+
 // 출시노트 생성 코어 — 릴리즈 태그 push(webhook) 또는 수동 백필 공용.
 // 이전 릴리즈 태그~새 태그 diff → Gemini로 다국어 유저 공지 생성 → ReleaseNote 저장.
 
@@ -56,9 +76,12 @@ export async function generateReleaseNoteCore(
     return null;
   }
 
-  // 이전 릴리즈 태그 + diff.
-  const tags = await listVersionTags(input.repoFullName);
-  const prev = previousTag(tags, input.version);
+  // 직전 출시노트가 있는 릴리즈 태그 + diff. snapshot/preview 등 사이에 끼는 태그는 건너뛴다.
+  const [tags, lastNoteTag] = await Promise.all([
+    listVersionTags(input.repoFullName),
+    lastReleasedTagWithNote(input.repoFullName, input.version),
+  ]);
+  const prev = lastNoteTag ?? previousTag(tags, input.version);
   let cmp: CompareResult | null = null;
   if (prev) {
     try {

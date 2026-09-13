@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   createReleaseAction,
   listAppTagsAction,
@@ -8,6 +8,7 @@ import {
   promoteToProductionAction,
   prepareAppStoreAction,
   submitAppStoreAction,
+  generateReleaseNoteAction,
 } from "@/lib/actions/release";
 
 const TARGET_LABEL: Record<string, string> = {
@@ -27,7 +28,16 @@ function targetsFrom(marketTargets: string[]): string[] {
   return out;
 }
 
-export function ReleaseControls({ appId, targets }: { appId: string; targets: string[] }) {
+export function ReleaseControls({
+  appId,
+  targets,
+  notesByTag,
+}: {
+  appId: string;
+  targets: string[];
+  /** 서버에서 미리 가져온 출시노트가 있는 태그 버전 목록. 출시노트 생성 버튼 노출 여부를 결정한다. */
+  notesByTag: string[];
+}) {
   const markets = targetsFrom(targets);
   const [pending, start] = useTransition();
   const [bump, setBump] = useState("patch");
@@ -37,6 +47,10 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
   const [tag, setTag] = useState("");
   const [target, setTarget] = useState(markets[0] ?? "");
   const [depMsg, setDepMsg] = useState<string | null>(null);
+  // 서버에서 받은 초기값을 그대로 쓰되, 방금 생성된 태그를 즉시 추가해서 승격 버튼으로 전환되게 한다.
+  const [notesByTagLocal, setNotesByTagLocal] = useState<string[]>(notesByTag);
+  const noteSet = useMemo(() => new Set(notesByTagLocal), [notesByTagLocal]);
+  const hasNotesForTag = !!tag && noteSet.has(tag);
 
   useEffect(() => {
     let alive = true;
@@ -86,6 +100,7 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
   }
 
   const [subMsg, setSubMsg] = useState<string | null>(null);
+  const [noteMsg, setNoteMsg] = useState<string | null>(null);
 
   function doPromote() {
     if (!tag) return;
@@ -97,6 +112,34 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
       setSubMsg(
         r.ok ? `⬆️ 프로덕션 승격 트리거됨 — 완료 시 알림` : `실패: ${r.error}`,
       );
+    });
+  }
+
+  function doGenerateNote() {
+    if (!tag) return;
+    setNoteMsg(null);
+    start(async () => {
+      const r = await generateReleaseNoteAction(appId, tag);
+      if (r.ok && r.status === "created") {
+        const prev = r.previousVersion;
+        const baseInfo = prev
+          ? ` — 비교 기준 ${prev} → ${tag}`
+          : " — 첫 출시노트(비교 기준 없음)";
+        setNotesByTagLocal((prevTags) =>
+          prevTags.includes(tag) ? prevTags : [...prevTags, tag],
+        );
+        setNoteMsg(
+          `✅ ${tag} 출시노트 생성됨${baseInfo} — 아래 출시노트 섹션에서 확인`,
+        );
+      } else if (r.ok && r.status === "exists") {
+        setNoteMsg(
+          `ℹ️ ${tag} 출시노트가 이미 있습니다 — 아래 출시노트 섹션에서 확인`,
+        );
+      } else if (!r.ok && r.status === "llm-not-configured") {
+        setNoteMsg(`⚠️ LLM 미구성 — ${r.error}`);
+      } else {
+        setNoteMsg(`실패: ${(r as { error?: string }).error ?? "알 수 없음"}`);
+      }
     });
   }
 
@@ -206,11 +249,16 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
       {tags.length > 0 && (markets.includes("PLAY") || markets.includes("APPSTORE")) && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-20 text-xs font-medium text-neutral-500">심사</span>
-          {markets.includes("PLAY") && (
-            <button onClick={doPromote} disabled={pending} className={btn} title="내부 빌드를 재빌드 없이 프로덕션 트랙으로 승격 + 심사 제출">
-              ⬆️ Play 프로덕션 승격
-            </button>
-          )}
+          {markets.includes("PLAY") &&
+            (hasNotesForTag ? (
+              <button onClick={doPromote} disabled={pending} className={btn} title="내부 빌드를 재빌드 없이 프로덕션 트랙으로 승격 + 심사 제출">
+                ⬆️ Play 프로덕션 승격
+              </button>
+            ) : (
+              <button onClick={doGenerateNote} disabled={pending} className={btn} title={`${tag} 의 다국어 출시노트가 아직 없습니다. LLM으로 생성합니다.`}>
+                📝 출시노트 생성
+              </button>
+            ))}
           {markets.includes("APPSTORE") && (
             <>
               <button onClick={doPrepareAppStore} disabled={pending} className={btn} title="App Store 버전 생성 + 언어별 what's new + 빌드 연결">
@@ -219,9 +267,25 @@ export function ReleaseControls({ appId, targets }: { appId: string; targets: st
               <button onClick={doSubmitAppStore} disabled={pending} className={btn} title="App Store 심사에 제출(되돌리기 어려움)">
                 🚀 심사 제출
               </button>
+              {!hasNotesForTag && (
+                <button onClick={doGenerateNote} disabled={pending} className={btn} title={`${tag} 의 다국어 출시노트가 아직 없습니다. 심사 제출 전에 생성하면 what's new가 채워집니다.`}>
+                  📝 출시노트 생성
+                </button>
+              )}
             </>
           )}
           {subMsg && <span className="text-xs text-neutral-600">{subMsg}</span>}
+          {noteMsg && (
+            <span className="text-xs text-neutral-600">
+              {noteMsg}{" "}
+              <a
+                href="#release-notes-section"
+                className="text-blue-600 hover:underline"
+              >
+                출시노트 섹션으로 ↓
+              </a>
+            </span>
+          )}
         </div>
       )}
 
