@@ -273,12 +273,23 @@ test("GA4 합계는 기준일 행이 하나도 없으면 0 과 0/N 을 정직하
   assert.match(line, /활성 0\(—\)/);
 });
 
-test("GA4 섹션은 앱 줄 뒤에 합계를 붙인다", () => {
+// 수집이 한 번도 없는 앱을 분모에서 빼면 "완전 수집"처럼 보인다. 콘솔 섹션이 미수집
+// 리스팅까지 분모에 넣고 따로 드러내는 것과 같은 규칙이어야 한다.
+test("GA4 합계 분모는 대상 전체이고 미수집 앱은 따로 드러난다", () => {
   const source = readFileSync(
     join(process.cwd(), "src/lib/core/analytics-report.ts"),
     "utf8",
   );
-  // 합계를 push 하기 전의 summary.length 가 곧 표시된 앱 수다.
-  assert.match(source, /summary\.push\(ga4TotalLine\(latestRows, result\.refDate, summary\.length\)\)/u);
+  assert.match(source, /ga4TotalLine\(latestRows, result\.refDate, targets\.length\)/u);
+  assert.doesNotMatch(source, /ga4TotalLine\([^)]*summary\.length\)/u);
+  assert.match(source, /수집 없음: \$\{result\.skipped/u);
   assert.match(source, /latestRows\.push\(rows\[0\]\)/u);
+});
+
+test("GA4 합계는 수집 이력이 없는 앱도 분모에 센다", () => {
+  const REF = "2026-09-12";
+  // 대상 3개 중 행이 있는 앱은 2개, 그중 기준일 행은 1개.
+  const line = ga4TotalLine([row(REF, { dau: 5 }), row("2026-09-01", { dau: 40 })], REF, 3);
+  assert.match(line, /DAU 5/);
+  assert.match(line, /\(기준일 1\/3 앱\)/, "수집 이력 없는 앱이 분모에서 빠지면 안 된다");
 });

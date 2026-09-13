@@ -157,11 +157,12 @@ export function summaryLine(
  * GA4 섹션 합계. 콘솔 섹션과 같은 규칙으로 **기준일 스냅샷이 있는 앱만** 센다.
  * 앱마다 export 도착이 달라 최신 행 날짜가 제각각인데 그 값을 모두 더하면 합계가 부풀고
  * 종합 보고서(기준일 일치 행만 합산)와 어긋난다. 몇 개를 셌는지 함께 적어 차이를 설명한다.
+ * 분모(targetApps)는 GA4 대상 전체다 — 수집이 한 번도 없는 앱을 분모에서 빼면 누락이 숨는다.
  */
 export function ga4TotalLine(
   latestRows: readonly MetricRow[],
   refDate: string,
-  shownApps: number,
+  targetApps: number,
 ): string {
   const onRef = latestRows.filter((row) => isoDate(row.date) === refDate);
   const sum = (pick: (row: MetricRow) => number): number =>
@@ -182,7 +183,7 @@ export function ga4TotalLine(
     sum((row) => row.dauWeb),
   ).segs.map((seg) => `${seg.label} ${seg.value}`).join("/");
   if (plat) parts.push(plat);
-  return `<b>합계</b> ${parts.join(" · ")} (기준일 ${onRef.length}/${shownApps} 앱)`;
+  return `<b>합계</b> ${parts.join(" · ")} (기준일 ${onRef.length}/${targetApps} 앱)`;
 }
 
 /**
@@ -400,7 +401,12 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   }
 
   if (summary.length > 0) {
-    summary.push(ga4TotalLine(latestRows, result.refDate, summary.length));
+    // 분모는 GA4 대상 전체다. 줄이 실린 앱만 세면 한 번도 수집되지 않은 앱이 사라져
+    // "완전 수집"처럼 보인다. 콘솔 섹션이 미수집 리스팅까지 분모에 넣는 것과 같은 규칙.
+    summary.push(ga4TotalLine(latestRows, result.refDate, targets.length));
+    if (result.skipped.length > 0) {
+      summary.push(`⚠️ 수집 없음: ${result.skipped.map((slug) => esc(slug)).join(", ")}`);
+    }
   }
 
   const consoleSection = buildConsoleSection(await loadConsoleReportItems(consoleApps), end);
