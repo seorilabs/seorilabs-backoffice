@@ -17,7 +17,7 @@ export type Octo = Octokit;
 
 // 파서가 같은 원본 config에서 다른 시드 값을 산출하게 되면 반드시 올린다.
 // configHash가 바뀌어 운영 레지스트리의 기존 레코드도 재시드된다.
-const SEED_VERSION = 5;
+const SEED_VERSION = 6;
 
 interface PlayConfig {
   packageName?: string;
@@ -257,6 +257,19 @@ export async function computeRepoSeed(
     ".github/workflows/deploy-app-store.yml",
     ref,
   );
+  // App Store 는 GitHub 워크플로가 dispatch 대상이 아니다. Xcode Cloud 가 archive·upload 하고
+  // 트리거는 Backoffice 가 ASC ciBuildRuns 로 직접 한다. 워크플로 파일 존재로 판정하면
+  // Xcode Cloud 로 이관해 그 파일을 지운 저장소에서 App Store 대상이 통째로 사라진다.
+  const hasAppStoreConfig = await pathExists(
+    octokit,
+    org,
+    name,
+    "app-store/app-store.config.json",
+    ref,
+  );
+  const hasXcodeCloudScripts =
+    (await pathExists(octokit, org, name, "xcode-cloud/ci_scripts", ref)) ||
+    (await pathExists(octokit, org, name, "apps/mobile/ios/ci_scripts", ref));
   const hasAitWorkflow = await pathExists(
     octokit,
     org,
@@ -269,6 +282,8 @@ export async function computeRepoSeed(
   // marketTargets 는 아래 워크플로우 존재 신호(+hasWeb)의 결정적 파생이다.
   const marketTargets = deriveMarketTargets({
     hasPlayWorkflow,
+    hasAppStoreConfig,
+    hasXcodeCloudScripts,
     hasAppStoreWorkflow,
     hasAitWorkflow,
     hasWeb,
@@ -319,6 +334,8 @@ export async function computeRepoSeed(
         firebaserc,
         aitAppName,
         hasPlayWorkflow,
+        hasAppStoreConfig,
+        hasXcodeCloudScripts,
         hasAppStoreWorkflow,
         hasAitWorkflow,
         hasWeb,

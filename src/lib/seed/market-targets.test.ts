@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deriveMarketTargets } from "./market-targets";
 
-// marketTargets 는 표준 배포 워크플로우(deploy-google-play.yml / deploy-app-store.yml /
-// deploy-apps-in-toss.yml) 존재로만 play/appstore/ait 를 판정하고, web 은 web/ 디렉터리로 판정한다.
+// marketTargets 는 표준 배포 워크플로우(deploy-google-play.yml / deploy-apps-in-toss.yml)
+// 존재로 play/ait 를 판정한다. appstore 는 GitHub 워크플로가 dispatch 대상이 아니라
+// Backoffice 가 ASC ciBuildRuns 로 직접 트리거하므로, App Store 설정과 실제 빌드 경로
+// (Xcode Cloud 훅 또는 dispatch 가능한 워크플로)로 판정한다. web 은 web/ 디렉터리로 판정한다.
 // 순서는 play → appstore → ait → web 로 결정적이어야 한다.
 
 test("AIT + Play 워크플로우 존재 → [play, ait] (config 아닌 워크플로우 기반)", () => {
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: true,
+      hasAppStoreConfig: false,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: false,
       hasAitWorkflow: true,
       hasWeb: false,
@@ -22,6 +26,8 @@ test("모든 배포 워크플로우 + web 존재 → [play, appstore, ait, web] 
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: true,
+      hasAppStoreConfig: true,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: true,
       hasAitWorkflow: true,
       hasWeb: true,
@@ -36,6 +42,8 @@ test("표준 배포 워크플로우 없음(Godot: config 만 있고 deploy-godot
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: false,
+      hasAppStoreConfig: false,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: false,
       hasAitWorkflow: false,
       hasWeb: false,
@@ -48,6 +56,8 @@ test("web/ 디렉터리만 존재(마켓 워크플로우 없음) → [web]", () 
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: false,
+      hasAppStoreConfig: false,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: false,
       hasAitWorkflow: false,
       hasWeb: true,
@@ -60,6 +70,8 @@ test("Play 워크플로우만 존재 → [play]", () => {
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: true,
+      hasAppStoreConfig: false,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: false,
       hasAitWorkflow: false,
       hasWeb: false,
@@ -72,10 +84,43 @@ test("App Store 워크플로우만 존재 → [appstore]", () => {
   assert.deepEqual(
     deriveMarketTargets({
       hasPlayWorkflow: false,
+      hasAppStoreConfig: true,
+      hasXcodeCloudScripts: false,
       hasAppStoreWorkflow: true,
       hasAitWorkflow: false,
       hasWeb: false,
     }),
     ["appstore"],
+  );
+});
+
+// Xcode Cloud 로 이관해 deploy-app-store.yml 을 지운 저장소도 App Store 대상이어야 한다.
+// 파일 존재로 판정하던 시절에는 이 경우 appstore 가 통째로 빠졌다.
+test("App Store 설정 + Xcode Cloud 훅 존재(워크플로 없음) → [appstore]", () => {
+  assert.deepEqual(
+    deriveMarketTargets({
+      hasPlayWorkflow: false,
+      hasAppStoreConfig: true,
+      hasXcodeCloudScripts: true,
+      hasAppStoreWorkflow: false,
+      hasAitWorkflow: false,
+      hasWeb: false,
+    }),
+    ["appstore"],
+  );
+});
+
+// 설정만 있고 빌드를 만들 수단이 없으면 노출하지 않는다. /deploy 404 의 근본 원인이었다.
+test("App Store 설정만 있고 빌드 경로 없음 → []", () => {
+  assert.deepEqual(
+    deriveMarketTargets({
+      hasPlayWorkflow: false,
+      hasAppStoreConfig: true,
+      hasXcodeCloudScripts: false,
+      hasAppStoreWorkflow: false,
+      hasAitWorkflow: false,
+      hasWeb: false,
+    }),
+    [],
   );
 });
