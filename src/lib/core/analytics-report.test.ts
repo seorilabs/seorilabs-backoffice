@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import {
   buildAppReportMd,
   buildConsoleSection,
   buildReportMessage,
   consoleSummaryLine,
+  ga4TotalLine,
   summaryLine,
   type ConsoleMetricRow,
   type ConsoleReportItem,
@@ -232,4 +235,50 @@ test("buildConsoleSection: GA4 기준일 대비 지연·미수집 리스팅·DAU
   assert.match(total, /결제 ₩5,000/);
   assert.match(total, /\(기준일 1\/2 리스팅\)/);
   assert.match(section.lines[3], /⚠️ 수집 없음: Vocab Swipe/);
+});
+
+// ── GA4 섹션 합계 ───────────────────────────────────────────────────────
+// 앱마다 export 도착이 달라 최신 행 날짜가 제각각이다. 그 값을 모두 더하면 합계가 부풀고
+// 종합 보고서(기준일 일치 행만 합산)와 어긋난다. 실측으로 metric-daily 124 vs 보고서 30.
+test("GA4 합계는 기준일 스냅샷이 있는 앱만 센다", () => {
+  const REF = "2026-09-12";
+  const line = ga4TotalLine(
+    [
+      row(REF, { dau: 14, engagedUsers: 11, dauAndroid: 6, dauIos: 4, dauWeb: 4 }),
+      row(REF, { dau: 11, engagedUsers: 5, dauAndroid: 0, dauIos: 3, dauWeb: 8 }),
+      // 하루 늦게 도착한 최대 앱. 줄에는 실리지만 합계에는 들어가지 않는다.
+      row("2026-09-11", { dau: 86, engagedUsers: 69, dauAndroid: 30, dauIos: 51, dauWeb: 5 }),
+    ],
+    REF,
+    3,
+  );
+  assert.match(line, /DAU 25/, "86 을 더하면 안 된다");
+  assert.match(line, /활성 16\(64%\)/);
+  assert.match(line, /\(기준일 2\/3 앱\)/);
+  assert.doesNotMatch(line, /111|DAU 86/);
+});
+
+test("GA4 합계는 광고 지표가 전부 0 이면 그 항목을 적지 않는다", () => {
+  const REF = "2026-09-12";
+  const zeroAds = { adCtaImpressions: 0, adCompletions: 0, networkAdImpressions: 0 };
+  assert.doesNotMatch(ga4TotalLine([row(REF, zeroAds)], REF, 1), /CTA/);
+  assert.match(ga4TotalLine([row(REF)], REF, 1), /CTA 30 · 완료 5 · 실제노출 4/);
+});
+
+test("GA4 합계는 기준일 행이 하나도 없으면 0 과 0/N 을 정직하게 적는다", () => {
+  const line = ga4TotalLine([row("2026-09-01"), row("2026-09-05")], "2026-09-12", 2);
+  assert.match(line, /DAU 0/);
+  assert.match(line, /\(기준일 0\/2 앱\)/);
+  // dau 0 이면 비율은 계산할 수 없다.
+  assert.match(line, /활성 0\(—\)/);
+});
+
+test("GA4 섹션은 앱 줄 뒤에 합계를 붙인다", () => {
+  const source = readFileSync(
+    join(process.cwd(), "src/lib/core/analytics-report.ts"),
+    "utf8",
+  );
+  // 합계를 push 하기 전의 summary.length 가 곧 표시된 앱 수다.
+  assert.match(source, /summary\.push\(ga4TotalLine\(latestRows, result\.refDate, summary\.length\)\)/u);
+  assert.match(source, /latestRows\.push\(rows\[0\]\)/u);
 });

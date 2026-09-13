@@ -154,6 +154,38 @@ export function summaryLine(
 }
 
 /**
+ * GA4 섹션 합계. 콘솔 섹션과 같은 규칙으로 **기준일 스냅샷이 있는 앱만** 센다.
+ * 앱마다 export 도착이 달라 최신 행 날짜가 제각각인데 그 값을 모두 더하면 합계가 부풀고
+ * 종합 보고서(기준일 일치 행만 합산)와 어긋난다. 몇 개를 셌는지 함께 적어 차이를 설명한다.
+ */
+export function ga4TotalLine(
+  latestRows: readonly MetricRow[],
+  refDate: string,
+  shownApps: number,
+): string {
+  const onRef = latestRows.filter((row) => isoDate(row.date) === refDate);
+  const sum = (pick: (row: MetricRow) => number): number =>
+    onRef.reduce((total, row) => total + pick(row), 0);
+  const dau = sum((row) => row.dau);
+  const engaged = sum((row) => row.engagedUsers);
+  const parts = [`DAU ${dau}`, `활성 ${engaged}(${pct(engagementRate(engaged, dau))})`];
+  // 광고 지표는 대부분 0 이라 값이 있을 때만 붙인다(콘솔 결제 줄과 같은 규칙).
+  const cta = sum((row) => row.adCtaImpressions);
+  const done = sum((row) => row.adCompletions);
+  const shown = sum((row) => row.networkAdImpressions);
+  if (cta > 0 || done > 0 || shown > 0) {
+    parts.push(`CTA ${cta}`, `완료 ${done}`, `실제노출 ${shown}`);
+  }
+  const plat = platformSegments(
+    sum((row) => row.dauAndroid),
+    sum((row) => row.dauIos),
+    sum((row) => row.dauWeb),
+  ).segs.map((seg) => `${seg.label} ${seg.value}`).join("/");
+  if (plat) parts.push(plat);
+  return `<b>합계</b> ${parts.join(" · ")} (기준일 ${onRef.length}/${shownApps} 앱)`;
+}
+
+/**
  * 콘솔 리스팅 한 줄(HTML). refDate 보다 오래된 스냅샷은 그 리스팅의 기준일을 함께 표기해
  * 다른 날짜의 값이 같은 날인 것처럼 읽히지 않게 한다.
  */
@@ -335,6 +367,8 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     consoleLagDays: null,
   };
   const summary: string[] = [];
+  // 합계는 기준일 행만 센다. 그 판정을 위해 앱별 최신 행을 모아 둔다.
+  const latestRows: MetricRow[] = [];
 
   for (const app of targets) {
     const rows = (await prisma.appMetricDaily.findMany({
@@ -355,6 +389,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     });
     result.enqueued++;
     result.apps++;
+    latestRows.push(rows[0]);
     summary.push(summaryLine(app.displayName, rows[0], result.refDate));
     await reconcileMetricAnomalies({
       appId: app.id,
@@ -362,6 +397,10 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       displayName: app.displayName,
       rowsDesc: rows,
     });
+  }
+
+  if (summary.length > 0) {
+    summary.push(ga4TotalLine(latestRows, result.refDate, summary.length));
   }
 
   const consoleSection = buildConsoleSection(await loadConsoleReportItems(consoleApps), end);
