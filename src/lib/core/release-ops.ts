@@ -27,6 +27,7 @@ import {
 } from "@/lib/core/release-notes";
 import {
   buildReleaseNotesAsset,
+  formatMarketReleaseBody,
   RELEASE_NOTES_ASSET_NAME,
 } from "@/lib/core/store-notes";
 import {
@@ -219,8 +220,7 @@ export async function generateAndPublishReleaseNotes(
   const note = await generateReleaseNoteCore(input);
   if (!note) return null;
 
-  // 3 마켓 row 를 다시 읽어 asset 의 markets 섹션과 GitHub Release 본문을 만든다.
-  // 첫 row 의 compareUrl 을 본문에 쓴다(마켓 모두 같은 baseline).
+  // 3 마켓 row 를 다시 읽어 asset 과 GitHub Release 본문을 각각의 baseline으로 만든다.
   const rows = await prisma.releaseNote.findMany({
     where: {
       repoFullName: input.repoFullName,
@@ -237,17 +237,11 @@ export async function generateAndPublishReleaseNotes(
       deDE: true,
       frFR: true,
       esES: true,
+      previousVersion: true,
       compareUrl: true,
     },
   });
   if (rows.length === 0) return note;
-
-  // GitHub Release 본문은 마켓 공통(레거시 호환) 본문으로 — PLAY row 우선, 없으면 APPSTORE, 없으면 AIT.
-  const primaryRow =
-    rows.find((r) => r.market === "PLAY") ??
-    rows.find((r) => r.market === "APPSTORE") ??
-    rows.find((r) => r.market === "AIT");
-  const translations = releaseNoteTranslations(primaryRow!);
 
   await execution.assertOwnership?.();
   const releaseSha = await resolveStableTagSha(input.repoFullName, input.version);
@@ -256,10 +250,13 @@ export async function generateAndPublishReleaseNotes(
     tag: input.version,
     expectedSha: releaseSha,
     name: input.version,
-    body: formatReleaseBody({
+    body: formatMarketReleaseBody({
       tag: input.version,
-      ...translations,
-      compareUrl: primaryRow!.compareUrl,
+      markets: rows.flatMap((row) =>
+        row.market === "PLAY" || row.market === "APPSTORE" || row.market === "AIT"
+          ? [{ ...releaseNoteTranslations(row), ...row, market: row.market }]
+          : [],
+      ),
     }),
   });
 

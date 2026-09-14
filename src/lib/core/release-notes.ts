@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
 import { llmComplete, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import {
   buildReleaseNotesI18nPrompt,
@@ -14,11 +13,14 @@ import {
 } from "@/lib/core/release-note-locales";
 import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
-  listVersionTags,
-  previousTag,
   compareTags,
   type CompareResult,
 } from "@/lib/github/release";
+import {
+  RELEASE_NOTE_MARKETS,
+  selectPreviousReleaseVersions,
+  type ReleaseNoteMarket,
+} from "@/lib/core/release-note-baseline";
 import type { ReleaseMarket } from "@prisma/client";
 
 /**
@@ -30,24 +32,31 @@ const MARKET_KEY_TO_ENUM: Record<ReleaseNoteMarketKey, ReleaseMarket> = {
   ait: "AIT",
 };
 
-/**
- * 이 repo에서 "가장 최근에 출시노트가 생성된" 버전. v1.0.29 같은 snapshot/preview 태그가
- * 사이에 끼어도 v1.0.30의 diff는 v1.0.28을 baseline으로 잡힌다. 출시노트가 한 건도 없으면
- * 기존 semver 직전 태그로 폴백한다.
- */
-async function lastReleasedTagWithNote(
-  repoFullName: string,
+const MARKET_ENUM_TO_KEY: Record<ReleaseNoteMarket, ReleaseNoteMarketKey> = {
+  PLAY: "googlePlay",
+  APPSTORE: "appStore",
+  AIT: "ait",
+};
+
+async function lastSuccessfulReleaseByMarket(
+  appId: string,
   currentVersion: string,
-): Promise<string | null> {
-  const note = await prisma.releaseNote.findFirst({
+): Promise<Record<ReleaseNoteMarket, string | null>> {
+  const releases = await prisma.releaseRecord.findMany({
     where: {
-      repoFullName,
-      NOT: { version: currentVersion },
+      appId,
+      market: { in: [...RELEASE_NOTE_MARKETS] },
     },
-    orderBy: { createdAt: "desc" },
-    select: { version: true },
+    select: { market: true, version: true, status: true, deployedAt: true },
   });
-  return note?.version ?? null;
+  return selectPreviousReleaseVersions(
+    releases.flatMap((release) =>
+      release.market === "PLAY" || release.market === "APPSTORE" || release.market === "AIT"
+        ? [{ ...release, market: release.market }]
+        : [],
+    ),
+    currentVersion,
+  );
 }
 
 // 출시노트 생성 코어 — 릴리즈 태그 push(webhook) 또는 수동 백필 공용.
@@ -92,28 +101,48 @@ export async function generateReleaseNoteCore(
     return null;
   }
 
-  // 직전 출시노트가 있는 릴리즈 태그 + diff. snapshot/preview 등 사이에 끼는 태그는 건너뛴다.
-  const [tags, lastNoteTag] = await Promise.all([
-    listVersionTags(input.repoFullName),
-    lastReleasedTagWithNote(input.repoFullName, input.version),
-  ]);
-  const prev = lastNoteTag ?? previousTag(tags, input.version);
-  let cmp: CompareResult | null = null;
-  if (prev) {
-    try {
-      cmp = await compareTags(input.repoFullName, prev, input.version);
-    } catch (e) {
-      console.warn(`[release-notes] compare 실패: ${(e as Error).message}`);
-    }
-  }
+  // 출시노트 생성 이력이 아니라 마켓별 마지막 성공 배포를 기준으로 각각 비교한다.
+  const previousVersions = await lastSuccessfulReleaseByMarket(app.id, input.version);
+  const marketChanges = Object.fromEntries(
+    await Promise.all(
+      RELEASE_NOTE_MARKETS.map(async (market) => {
+        const marketKey = MARKET_ENUM_TO_KEY[market];
+        const previousVersion = previousVersions[market];
+        let compare: CompareResult | null = null;
+        if (previousVersion) {
+          try {
+            compare = await compareTags(input.repoFullName, previousVersion, input.version);
+          } catch (e) {
+            console.warn(
+              `[release-notes] ${market} compare 실패: ${(e as Error).message}`,
+            );
+          }
+        }
+        return [marketKey, { previousVersion, compare }] as const;
+      }),
+    ),
+  ) as Record<
+    ReleaseNoteMarketKey,
+    { previousVersion: string | null; compare: CompareResult | null }
+  >;
 
   const { system, prompt } = buildReleaseNotesI18nPrompt({
     displayName: app.displayName,
     type: app.type,
     version: input.version,
-    previousVersion: prev,
-    prs: cmp?.prs ?? [],
-    commitCount: cmp?.commitCount ?? 0,
+    byMarket: Object.fromEntries(
+      RELEASE_NOTE_MARKET_KEYS.map((marketKey) => {
+        const change = marketChanges[marketKey];
+        return [
+          marketKey,
+          {
+            previousVersion: change.previousVersion,
+            prs: change.compare?.prs ?? [],
+            commitCount: change.compare?.commitCount ?? 0,
+          },
+        ];
+      }),
+    ) as Parameters<typeof buildReleaseNotesI18nPrompt>[0]["byMarket"],
   });
 
   const raw = await llmComplete({
@@ -136,21 +165,16 @@ export async function generateReleaseNoteCore(
   const baseMeta = {
     appId: app.id,
     repoFullName: input.repoFullName,
-    previousVersion: prev,
     headSha: input.headSha ?? null,
-    compareUrl: cmp?.url ?? null,
     status: "GENERATED" as const,
     model: llmChatModel(),
-  };
-  const sourceJsonBase = {
-    prs: cmp?.prs ?? [],
-    commitCount: cmp?.commitCount ?? 0,
   };
 
   const marketIds: Array<{ market: ReleaseMarket; id: string }> = [];
   let lastId = "";
   for (const marketKey of RELEASE_NOTE_MARKET_KEYS) {
     const enumMarket = MARKET_KEY_TO_ENUM[marketKey];
+    const change = marketChanges[marketKey];
     const section = parsed.byMarket[marketKey];
     const translations = Object.fromEntries(
       RELEASE_NOTE_LOCALES.map(({ field, promptKey, fallback }) => [
@@ -171,18 +195,33 @@ export async function generateReleaseNoteCore(
         version: input.version,
         market: enumMarket,
         ...baseMeta,
+        previousVersion: change.previousVersion,
+        compareUrl: change.compare?.url ?? null,
         ...translations,
-        sourceJson: sourceJsonBase as object,
+        sourceJson: {
+          prs: change.compare?.prs ?? [],
+          commitCount: change.compare?.commitCount ?? 0,
+        },
       },
       update: {
         ...baseMeta,
+        previousVersion: change.previousVersion,
+        compareUrl: change.compare?.url ?? null,
         ...translations,
-        sourceJson: sourceJsonBase as object,
+        sourceJson: {
+          prs: change.compare?.prs ?? [],
+          commitCount: change.compare?.commitCount ?? 0,
+        },
       },
     });
     lastId = row.id;
     marketIds.push({ market: enumMarket, id: row.id });
   }
 
-  return { id: lastId, version: input.version, previousVersion: prev, marketIds };
+  return {
+    id: lastId,
+    version: input.version,
+    previousVersion: previousVersions.PLAY,
+    marketIds,
+  };
 }
