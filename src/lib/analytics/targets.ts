@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { resolveGa4Target, type Ga4Target } from "@/lib/ga4/datasets";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
-import type { MetricSource } from "@/lib/analytics/coverage";
+import type { MetricSource } from "@/lib/analytics/observation";
 
 // 지표 수집·합산 대상의 단일 해석기.
 //

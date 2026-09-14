@@ -1,7 +1,15 @@
 import type { AppType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
-import { dbDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
+import {
+  dbDay,
+  lastElapsedMetricDay,
+  metricDaysBetween,
+  shiftMetricDay,
+  toDbDay,
+} from "@/lib/analytics/metric-day";
+import { metricAsOf } from "@/lib/analytics/coverage";
+import type { AsOfResolution } from "@/lib/analytics/as-of";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -21,6 +29,13 @@ const BASELINE_DAYS = 7;
 /** 기준선을 세우는 데 필요한 최소 관측일. 이보다 적으면 판정하지 않는다. */
 const MIN_BASELINE_POINTS = 4;
 const TOP_N = 5;
+/**
+ * 콘솔 합계에 넣을 수 있는 스냅샷의 최대 나이(일). 콘솔은 cron 이 아니라 사람·에이전트
+ * push 라 리스팅마다 최신일이 다르고, 지금 실측으로 1~21일까지 벌어져 있다. 나이를
+ * 따지지 않고 각 리스팅의 최신 행을 더하면 21일 지난 수익이 매일 "오늘 합계"에 다시
+ * 계상된다. 평평하다가 push 가 오면 튀는 선이 그렇게 만들어졌다.
+ */
+export const CONSOLE_STALE_DAYS = 3;
 const SENDER_KO = "서리";
 
 export type MovementSource = "GA4" | "콘솔";
@@ -194,9 +209,13 @@ export function foldReferrers(raws: ReadonlyArray<unknown>): ReferrerShare[] {
 }
 
 export interface PortfolioTotals {
-  /** 기준일 GA4 DAU 합과 그 전날 합. 전날 값이 없으면 null. */
+  /**
+   * 기준일 GA4 DAU 합과 그 전날 합. 전날은 "직전 행"이 아니라 정확히 하루 전이며,
+   * 합계에 든 앱 중 하나라도 그 날 행이 없으면 null 이다 — 일부만 센 전날과
+   * 비교하면 변화율이 실제보다 부풀고, 그것이 헤드라인에 그대로 나간다.
+   */
   ga4Dau: { latest: number; previous: number | null; apps: number };
-  /** 콘솔 광고 수익·결제 거래액 합(기준일 스냅샷이 있는 리스팅만). */
+  /** 콘솔 광고 수익·결제 거래액 합(CONSOLE_STALE_DAYS 안의 스냅샷을 가진 리스팅만). */
   console: { iaaKrw: number; iapKrw: number; previousIaaKrw: number | null; listings: number };
   /** 콘솔 유입경로 비중(합산). 수집 값이 없으면 빈 배열이라 줄 자체가 빠진다. */
   referrers?: ReferrerShare[];
@@ -216,21 +235,46 @@ export function renderHighlightReport(input: {
   refDate: string;
   totals: PortfolioTotals;
   movements: readonly Movement[];
+  /** 기준일 커버리지. 주면 확정/잠정과 분모를 함께 싣는다. */
+  asOf?: AsOfResolution | null;
+  /** 기준일 스냅샷이 없는 앱 이름(표시용). */
+  gapNames?: readonly string[];
+  /** 스냅샷이 오래돼 합계에서 뺀 콘솔 리스팅("라벨(날짜)"). */
+  consoleStale?: readonly string[];
   /** LLM 해설(선택). 생성 실패 시 없이 나간다 — 리포트를 LLM 가용성에 묶지 않는다. */
   narrative?: string | null;
   /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
   reportUrl?: string | null;
 }): string {
-  const { totals } = input;
-  const lines = [`📈 **${SENDER_KO} 지표 하이라이트 · ${input.refDate} (D-1)**`];
+  const { totals, asOf } = input;
+  // "(D-1)" 을 머리말에 박아 두면 소급 재계산이나 기준일이 밀린 날에도 어제라고 적힌다.
+  // 날짜와 확정 여부만 적고, 판단 재료는 아래 커버리지 줄이 든다.
+  const stamp = asOf == null ? "" : asOf.verdict === "final" ? " · 확정" : " · 잠정";
+  const lines = [`📈 **${SENDER_KO} 지표 하이라이트 · ${input.refDate}${stamp}**`];
+  // 분자는 실제로 합계에 들어간 앱 수다. 원장 관측 수를 쓰면 지표 표와 원장이
+  // 어긋난 순간 수치와 설명이 따로 논다.
+  const appScope = asOf == null
+    ? ` · 대상 ${totals.ga4Dau.apps}개 앱`
+    : ` · 대상 ${totals.ga4Dau.apps}/${asOf.expected}개 앱`;
   lines.push(
     totalLine(
       "GA4 DAU 합계",
       `${totals.ga4Dau.latest.toLocaleString("ko-KR")}명`,
       totals.ga4Dau.previous == null ? null : `${totals.ga4Dau.previous.toLocaleString("ko-KR")}명`,
       pctChange(totals.ga4Dau.latest, totals.ga4Dau.previous),
-    ) + ` · 대상 ${totals.ga4Dau.apps}개 앱`,
+    ) + appScope,
   );
+  // 낮은 합계를 실제 감소로 읽지 않으려면 무엇이 빠졌는지가 같은 화면에 있어야 한다.
+  const gaps = input.gapNames ?? [];
+  if (gaps.length > 0) {
+    lines.push(`⚠️ 기준일 미관측 ${gaps.length}개: ${gaps.slice(0, 6).join(", ")}` +
+      (gaps.length > 6 ? ` 외 ${gaps.length - 6}개` : ""));
+  }
+  const stale = input.consoleStale ?? [];
+  if (stale.length > 0) {
+    lines.push(`⏳ 콘솔 합계 제외(${CONSOLE_STALE_DAYS}일 초과) ${stale.length}개: ${stale.slice(0, 6).join(", ")}` +
+      (stale.length > 6 ? ` 외 ${stale.length - 6}개` : ""));
+  }
   lines.push(
     totalLine(
       "콘솔 광고 수익",
@@ -396,6 +440,11 @@ export interface ConsoleListingSeries {
  */
 export interface HighlightData {
   refDate: string;
+  /**
+   * 기준일 커버리지 판정. 수치 옆에 "무엇을 못 셌는가"가 함께 있어야 낮은 합계를
+   * 실제 감소로 읽지 않는다. 원장이 없으면(아직 백필 전) null.
+   */
+  asOf: AsOfResolution | null;
   totals: PortfolioTotals;
   movements: Movement[];
   ga4Series: Ga4AppSeries[];
@@ -404,6 +453,8 @@ export interface HighlightData {
   consoleSeries: ConsoleListingSeries[];
   /** 콘솔 대상이지만 push 수집이 한 번도 없는 리스팅 라벨. */
   consoleMissing: string[];
+  /** 스냅샷이 CONSOLE_STALE_DAYS 를 넘겨 합계에서 뺀 리스팅("라벨(날짜)"). */
+  consoleStale: string[];
 }
 
 /**
@@ -415,7 +466,14 @@ export async function collectHighlightData(
   refDateOverride?: string,
 ): Promise<HighlightData> {
   const refDate = refDateOverride ?? lastElapsedMetricDay(now);
+  const previousDay = shiftMetricDay(refDate, -1);
   const upTo = toDbDay(refDate);
+  const { ga4: resolved } = await metricAsOf({ now, requested: refDate });
+  // 원장이 그 날을 아직 하나도 모르면(백필 전·신규 배포 직후) 커버리지를 주장하지
+  // 않는다. 0/9 로 적으면 실제로 센 앱이 있는데도 아무것도 못 센 것처럼 보인다.
+  const ledgerKnowsDay = resolved != null
+    && resolved.missing.some((one) => one.state !== "unobserved");
+  const asOf = resolved != null && (resolved.observed > 0 || ledgerKnowsDay) ? resolved : null;
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
@@ -432,6 +490,12 @@ export async function collectHighlightData(
   });
 
   const movements: Movement[] = [];
+  // 전일 합은 "합계에 든 앱 전부가 그 날 행을 가졌을 때"만 낸다. 하나라도 빠지면
+  // 비교 자체가 성립하지 않으므로 null 로 두고 렌더러가 전일 문구를 생략한다.
+  let previousComplete = true;
+  let previousSum = 0;
+  let consolePreviousComplete = true;
+  let consolePreviousSum = 0;
   const totals: PortfolioTotals = {
     ga4Dau: { latest: 0, previous: 0, apps: 0 },
     console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: 0, listings: 0 },
@@ -441,6 +505,8 @@ export async function collectHighlightData(
   const ga4Gaps: Ga4AppGap[] = [];
   const consoleSeries: ConsoleListingSeries[] = [];
   const consoleMissing: string[] = [];
+  /** 스냅샷이 너무 오래돼 합계에서 뺀 리스팅. 줄에는 남지만 합계에는 없다. */
+  const consoleStale: string[] = [];
 
   for (const app of apps.filter((app) => resolveGa4Target(app))) {
     const rows = (await prisma.appMetricDaily.findMany({
@@ -470,8 +536,12 @@ export async function collectHighlightData(
     }
     movements.push(...movementsFromSeries(app.displayName, rows, GA4_METRIC_PICKERS));
     totals.ga4Dau.latest += rows[0].dau;
-    totals.ga4Dau.previous = (totals.ga4Dau.previous ?? 0) + (rows[1]?.dau ?? 0);
     totals.ga4Dau.apps += 1;
+    // rows[1] 은 "직전 행"이지 "전날"이 아니다. D-2 가 비면 D-3 과 비교하면서
+    // 화면에는 "전일"이라고 적히던 것을 날짜로 맞춘다.
+    const yesterday = rows.find((row) => dbDay(row.date) === previousDay);
+    if (yesterday) previousSum += yesterday.dau;
+    else previousComplete = false;
     ga4Series.push({
       app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
       rowsDesc: rows,
@@ -510,13 +580,23 @@ export async function collectHighlightData(
         continue;
       }
       movements.push(...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS));
-      // 콘솔은 온디맨드 push 라 리스팅마다 최신일이 다르다. 합계는 각 리스팅의
-      // 최신 스냅샷을 쓰되, 오래된 값은 각 항목 줄에 기준일이 함께 찍힌다.
-      totals.console.iaaKrw += rows[0].iaaEarningKrw;
-      totals.console.iapKrw += rows[0].iapTrxAmountKrw;
-      totals.console.previousIaaKrw = (totals.console.previousIaaKrw ?? 0) + (rows[1]?.iaaEarningKrw ?? 0);
-      totals.console.listings += 1;
-      consoleRaws.push(rows[0].raw);
+      // 콘솔은 온디맨드 push 라 리스팅마다 최신일이 다르다. 오래된 스냅샷은 합계에서
+      // 빼고 줄에만 남긴다 — 21일 지난 수익을 매일 다시 더하면 선이 평평하다가
+      // push 가 온 날 튄다.
+      const staleDays = metricDaysBetween(refDate, dbDay(rows[0].date));
+      if (staleDays <= CONSOLE_STALE_DAYS) {
+        totals.console.iaaKrw += rows[0].iaaEarningKrw;
+        totals.console.iapKrw += rows[0].iapTrxAmountKrw;
+        totals.console.listings += 1;
+        consoleRaws.push(rows[0].raw);
+        const yesterday = rows.find(
+          (row) => metricDaysBetween(dbDay(rows[0].date), dbDay(row.date)) === 1,
+        );
+        if (yesterday) consolePreviousSum += yesterday.iaaEarningKrw;
+        else consolePreviousComplete = false;
+      } else {
+        consoleStale.push(`${target.label}(${dbDay(rows[0].date)})`);
+      }
       consoleSeries.push({
         app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
         miniAppId: target.miniAppId,
@@ -528,8 +608,21 @@ export async function collectHighlightData(
   }
 
   totals.referrers = foldReferrers(consoleRaws);
+  totals.ga4Dau.previous = previousComplete && totals.ga4Dau.apps > 0 ? previousSum : null;
+  totals.console.previousIaaKrw =
+    consolePreviousComplete && totals.console.listings > 0 ? consolePreviousSum : null;
 
-  return { refDate, totals, movements, ga4Series, ga4Gaps, consoleSeries, consoleMissing };
+  return {
+    refDate,
+    asOf,
+    totals,
+    movements,
+    ga4Series,
+    ga4Gaps,
+    consoleSeries,
+    consoleMissing,
+    consoleStale,
+  };
 }
 
 export interface MetricHighlightOptions {
@@ -563,6 +656,9 @@ export async function sendMetricHighlightReport(
         refDate,
         totals,
         movements,
+        asOf: data.asOf,
+        gapNames: data.ga4Gaps.map((gap) => gap.app.displayName),
+        consoleStale: data.consoleStale,
         narrative,
         reportUrl: options.reportUrl,
       }),
