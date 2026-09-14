@@ -293,3 +293,17 @@ test("GA4 합계는 수집 이력이 없는 앱도 분모에 센다", () => {
   assert.match(line, /DAU 5/);
   assert.match(line, /\(기준일 1\/3 앱\)/, "수집 이력 없는 앱이 분모에서 빠지면 안 된다");
 });
+
+// ── 두 채널이 같은 기준일을 내걸면 같은 범위를 봐야 한다 ────────────────────
+// 하이라이트는 date <= refDate 로 읽는데 metric-daily 는 상한이 없었다. 기준일 이후
+// 행(백필·재집계·늦은 콘솔 push)이 "최신"이 되면 같은 날짜에 다른 수치가 나간다.
+test("소스 계약: metric-daily 조회는 기준일 상한을 건다", () => {
+  const source = readFileSync(
+    join(process.cwd(), "src/lib/core/analytics-report.ts"),
+    "utf8",
+  );
+  assert.match(source, /where: \{ appId: app\.id, date: \{ lte: toDbDay\(end\) \} \}/u);
+  assert.match(source, /where: \{ appId: app\.id, miniAppId, date: \{ lte: toDbDay\(upTo\) \} \}/u);
+  // 상한 없는 조회가 남아 있으면 같은 결함이 되살아난다.
+  assert.doesNotMatch(source, /where: \{ appId: app\.id \},/u);
+});
