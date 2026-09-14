@@ -403,3 +403,41 @@ test("정정 문구는 무엇이 얼마나 바뀌었는지 적는다", () => {
     "♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 100 → 104명).",
   );
 });
+
+// ── 소급 재계산 경계 ──────────────────────────────────────────────────────
+// 과거 발행분을 현재 원본으로 덮되, 무엇이 발행됐었는지는 남아야 한다. 그리고
+// 메시지가 아직 살아 있는 날(발행 기록 보유)은 정정 경로가 담당한다.
+
+const recomputeBody = () => {
+  const source = readSource("src/lib/core/org-report.ts");
+  const start = source.indexOf("export async function recomputeOrgReports");
+  assert.ok(start > 0, "recomputeOrgReports 가 있어야 한다");
+  const end = source.indexOf("\nexport ", start + 1);
+  return source.slice(start, end === -1 ? undefined : end);
+};
+
+test("재계산은 발행 기록이 있는 날을 건드리지 않는다", () => {
+  // 그 날들은 Discord 메시지가 살아 있어 수치만 바꾸면 메시지와 문서가 갈린다.
+  assert.match(recomputeBody(), /previous\?\.published[\s\S]{0,200}?skippedPublished\.push\(day\)/u);
+});
+
+test("재계산은 덮기 전 발행 수치를 남긴다", () => {
+  const body = recomputeBody();
+  assert.match(body, /superseded: existing/u);
+  assert.match(body, /ga4Dau: existing\.ga4Dau/u);
+});
+
+test("재계산 문서는 해설·비용을 이어 붙이지 않는다", () => {
+  // 수치가 바뀐 문서에 옛 해설을 잇는 것이 애초의 결함이었다(09-12: dau 138 옆에
+  // "32→30 으로 2명 감소").
+  const body = recomputeBody();
+  assert.match(body, /narrative: null/u);
+  assert.match(body, /costs: null/u);
+  assert.match(body, /origin: "recomputed"/u);
+});
+
+test("재계산 라우트는 범위를 검증하고 기본 종료일을 어제로 둔다", () => {
+  const route = readSource("src/app/api/admin/report/recompute/route.ts");
+  assert.match(route, /parseMetricDay\(req\.nextUrl\.searchParams\.get\("from"\)\)/u);
+  assert.match(route, /lastElapsedMetricDay\(new Date\(\)\)/u);
+});

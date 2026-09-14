@@ -108,6 +108,20 @@ export const orgReportDocumentSchema = z
      */
     origin: z.enum(["published", "recomputed"]),
     /**
+     * 이 문서로 덮이기 전에 발행됐던 수치. 무엇이 발행됐고 무엇이 사실이었는지 둘 다
+     * 남아야 사고가 기록으로 남는다. 소급 재계산(recomputed)에서만 채운다.
+     */
+    superseded: z
+      .object({
+        ga4Dau: z.number(),
+        consoleIaaKrw: z.number(),
+        generatedAt: z.string(),
+        version: z.number(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    /**
      * 해설이 어떻게 만들어졌는지. 어느 모델이 어떤 지시로 썼는지 남지 않으면
      * CHAT_LLM_PROVIDER 가 바뀌어도 흔적이 없다. 골격으로 대체됐으면 fallback=true.
      */
