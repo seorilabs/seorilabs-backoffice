@@ -6,6 +6,7 @@ import type {
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
 import { AIT_LISTINGS } from "@/lib/analytics/ait-apps";
+import { toDbDay } from "@/lib/analytics/metric-day";
 
 // AppsInToss 콘솔 지표 ingest(push 수집). 인증된 로컬 Claude 세션이 MCP dashboard_* 를 조회해
 // 정규화한 push 페이로드를 받아 AppConsoleMetricDaily(리스팅×날짜)로 멱등 upsert 한다.
@@ -50,11 +51,6 @@ export function emptyRawSections(raw: unknown): string[] {
     if (values.length > 0 && values.every((item) => item == null)) empty.push(section);
   }
   return empty;
-}
-
-/** "YYYY-MM-DD"(UTC 자정) Date 로 파싱. @db.Date 저장/비교용. */
-function parseIsoDate(s: string): Date {
-  return new Date(`${s}T00:00:00.000Z`);
 }
 
 function num(v: unknown, fallback = 0): number {
@@ -137,7 +133,7 @@ export async function ingestConsoleMetrics(
         result.errors.push({ key, error: `잘못된 date: ${day?.date}` });
         continue;
       }
-      const date = parseIsoDate(day.date);
+      const date = toDbDay(day.date);
       const data = {
         // dau/newUsers 는 null 허용(콘솔 미집계). 0 강제하지 않는다.
         dau: intOrNull(day.dau),

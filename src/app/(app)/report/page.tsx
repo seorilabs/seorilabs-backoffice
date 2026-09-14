@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { getOrgReport, orgTrendSeries, type OrgTrendPoint } from "@/lib/core/org-report";
-import { parseReportDate, resolveReportRange } from "@/lib/report/params";
+import { resolveReportRange } from "@/lib/report/params";
+import { parseMetricDay } from "@/lib/analytics/metric-day";
 import { ReportDatePicker } from "@/components/report/ReportDatePicker";
 import { ReportLineChart } from "@/components/report/ReportLineChart";
 import {
@@ -97,7 +98,7 @@ export default async function OrgReportPage({
       _max: { date: true },
     }),
   ]);
-  const requested = parseReportDate(sp.date);
+  const requested = parseMetricDay(sp.date);
   const range = resolveReportRange({
     requested,
     bounds: [

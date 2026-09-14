@@ -1,13 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
 import {
-  resolveGa4Target,
-  latestClosedDay,
-  dateWindow,
-  toTableSuffix,
-  isoDate,
-  parseIsoDate,
-} from "@/lib/ga4/datasets";
+  lastElapsedMetricDay,
+  metricDayWindow,
+  toDbDay,
+  toGa4TableSuffix,
+} from "@/lib/analytics/metric-day";
 import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { ga4ContentSource } from "@/lib/analytics/ga4-content-source";
 import { foldByContentMarket } from "@/lib/analytics/content-market";
@@ -91,9 +90,9 @@ export async function collectAppContentMetrics(
   }
   const source = opts.source ?? ga4ContentSource;
   const windowDays = opts.windowDays ?? WINDOW_DAYS;
-  const end = latestClosedDay(now); // D-1 UTC 자정
-  const endSuffix = toTableSuffix(end);
-  const startSuffix = toTableSuffix(dateWindow(end, windowDays)[0]);
+  const end = lastElapsedMetricDay(now); // D-1(KST 달력일)
+  const endSuffix = toGa4TableSuffix(end);
+  const startSuffix = toGa4TableSuffix(metricDayWindow(end, windowDays)[0]);
 
   const apps = await prisma.app.findMany({
     select: {
@@ -107,7 +106,7 @@ export async function collectAppContentMetrics(
   const { targets, skipped } = classifyContentTargets(apps);
 
   const result: ContentCollectResult = {
-    endDate: isoDate(end),
+    endDate: end,
     windowDays,
     targetApps: targets.length,
     upserts: 0,
@@ -133,7 +132,7 @@ export async function collectAppContentMetrics(
       }
       for (const [market, byDate] of folded) {
         for (const [dateStr, snapshot] of Object.entries(byDate)) {
-          const date = parseIsoDate(dateStr);
+          const date = toDbDay(dateStr);
           const data = buildContentUpsert(snapshot, now);
           await prisma.appContentMetricDaily.upsert({
             where: { appId_date_market: { appId: app.id, date, market } },

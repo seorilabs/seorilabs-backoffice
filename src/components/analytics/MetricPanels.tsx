@@ -1,4 +1,4 @@
-import { isoDate } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import {
   buildMetricCards,
   platformSegments,
@@ -119,14 +119,14 @@ export function DauTrend({ rowsAsc }: { rowsAsc: MetricDaily[] }) {
             key={i}
             className="flex-1 rounded-t bg-emerald-400/80 hover:bg-emerald-500"
             style={{ height: `${Math.max(2, (r.dau / max) * 100)}%` }}
-            title={`${isoDate(r.date)} · DAU ${r.dau} · 신규 ${r.newUsers}`}
+            title={`${dbDay(r.date)} · DAU ${r.dau} · 신규 ${r.newUsers}`}
           />
         ))}
       </div>
       <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
-        <span>{rowsAsc.length > 0 ? isoDate(rowsAsc[0].date) : ""}</span>
+        <span>{rowsAsc.length > 0 ? dbDay(rowsAsc[0].date) : ""}</span>
         <span>최대 DAU {max}</span>
-        <span>{rowsAsc.length > 0 ? isoDate(rowsAsc[rowsAsc.length - 1].date) : ""}</span>
+        <span>{rowsAsc.length > 0 ? dbDay(rowsAsc[rowsAsc.length - 1].date) : ""}</span>
       </div>
     </div>
   );
@@ -152,8 +152,8 @@ export function MetricTrendTable({ rowsDesc }: { rowsDesc: MetricDaily[] }) {
         </thead>
         <tbody>
           {rowsDesc.map((r) => (
-            <tr key={isoDate(r.date)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-              <td className="px-3 py-1.5 text-neutral-700">{isoDate(r.date)}</td>
+            <tr key={dbDay(r.date)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+              <td className="px-3 py-1.5 text-neutral-700">{dbDay(r.date)}</td>
               <td className="px-3 py-1.5 text-right">{r.dau}</td>
               <td className="px-3 py-1.5 text-right">{r.newUsers}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{pct(r.d1Pct)}</td>

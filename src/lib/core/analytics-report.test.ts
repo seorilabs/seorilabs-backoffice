@@ -139,7 +139,7 @@ test("consoleSummaryLine: 다중 리스팅 라벨 + 오래된 스냅샷 날짜 �
 });
 
 test("buildConsoleSection: 수집 데이터 없으면 빈 섹션", () => {
-  const section = buildConsoleSection([item("Happy Farm", null)], new Date("2026-07-04T00:00:00Z"));
+  const section = buildConsoleSection([item("Happy Farm", null)], "2026-07-04");
   assert.deepEqual(section.lines, []);
   assert.equal(section.refDate, null);
   assert.equal(section.lagDays, null);
@@ -155,7 +155,7 @@ test("buildConsoleSection: 최신 기준일·수익 내림차순 정렬, 합계�
       // 기준일보다 오래된 스냅샷 → 줄에는 남기되 합계에서 제외.
       item("Foam Party", consoleRow("2026-07-01", { dau: 99, iaaImpressions: 900, iaaEarningKrw: 9000 })),
     ],
-    new Date("2026-07-04T00:00:00.000Z"),
+    "2026-07-04",
   );
 
   assert.equal(section.refDate, "2026-07-04");
@@ -177,7 +177,7 @@ test("buildReportMessage: 한 메시지에 GA4 섹션과 콘솔 섹션이 함께
   const ga4Line = summaryLine("Lucid Chess", row("2026-08-15", { dau: 512 }));
   const consoleLines = buildConsoleSection(
     [item("Lucid Chess", consoleRow("2026-08-14", { dau: 210 }))],
-    new Date("2026-08-15T00:00:00.000Z"),
+    "2026-08-15",
   ).lines;
 
   const msg = buildReportMessage({
@@ -224,7 +224,7 @@ test("buildConsoleSection: GA4 기준일 대비 지연·미수집 리스팅·DAU
       item("Happy Farm", consoleRow("2026-07-02", { dau: null, iapTrxAmountKrw: 5000, payingUsers: 2 })),
       item("Vocab Swipe", null),
     ],
-    new Date("2026-07-04T00:00:00.000Z"),
+    "2026-07-04",
   );
 
   assert.equal(section.refDate, "2026-07-02");

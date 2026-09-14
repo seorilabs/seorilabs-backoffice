@@ -3,7 +3,8 @@ import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
 import { STAGE_KO, STAGES } from "@/lib/domain/lifecycle";
 import { approvalIssueWhere, visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
-import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 
@@ -149,7 +150,7 @@ export async function metricsQuery(slug?: string): Promise<DiscordQueryResult> {
     })));
     return {
       content: clip(`**앱 지표 · 기준 D-1**\n${rows.map(({ app, latest }) => latest
-        ? `• **${app.displayName}** \`${app.slug}\` · DAU ${latest.dau} · 신규 ${latest.newUsers} · D1 ${pct(latest.d1Pct)} · D7 ${pct(latest.d7Pct)} · ${isoDate(latest.date)}`
+        ? `• **${app.displayName}** \`${app.slug}\` · DAU ${latest.dau} · 신규 ${latest.newUsers} · D1 ${pct(latest.d1Pct)} · D7 ${pct(latest.d7Pct)} · ${dbDay(latest.date)}`
         : `• **${app.displayName}** \`${app.slug}\` · 수집 데이터 없음`).join("\n")}`),
     };
   }
@@ -168,14 +169,14 @@ export async function metricsQuery(slug?: string): Promise<DiscordQueryResult> {
     return { content: `**${app.displayName}**\n수집된 지표가 없습니다.${resolveGa4Target(app) ? "" : " GA4 매핑이 필요합니다."}` };
   }
   const latest = rows[0];
-  const trend = rows.slice(0, 7).reverse().map((row) => `${isoDate(row.date).slice(5)} ${row.dau}`).join(" · ");
+  const trend = rows.slice(0, 7).reverse().map((row) => `${dbDay(row.date).slice(5)} ${row.dau}`).join(" · ");
   const platform = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
     .segs.map((segment) => `${segment.label} ${segment.value}`).join(" · ");
   const raw = (latest.raw ?? {}) as MetricBreakdowns;
   const countries = (raw.countries ?? []).slice(0, 3).map((country) => `${country.k} ${country.dau}`).join(" · ");
   return {
     content: [
-      `**${app.displayName}** · ${isoDate(latest.date)}`,
+      `**${app.displayName}** · ${dbDay(latest.date)}`,
       `DAU **${latest.dau}** · 신규 ${latest.newUsers}`,
       `잔존 D1 ${pct(latest.d1Pct)} · D3 ${pct(latest.d3Pct)} · D7 ${pct(latest.d7Pct)}`,
       `활성 ${latest.engagedUsers} · 참여율 ${pct(engagementRate(latest.engagedUsers, latest.dau))}${latest.avgEngageSec == null ? "" : ` · 평균 ${latest.avgEngageSec}s`}`,

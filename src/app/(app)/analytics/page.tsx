@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { resolveGa4Target, isoDate } from "@/lib/ga4/datasets";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import {
   MetricCards,
   DauTrend,
@@ -142,7 +143,7 @@ async function SelectedApp({
     <div className="space-y-6">
       <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">
-          핵심 지표 <span className="text-neutral-400">(기준일 {isoDate(latest.date)})</span>
+          핵심 지표 <span className="text-neutral-400">(기준일 {dbDay(latest.date)})</span>
         </div>
         <MetricCards latest={latest} />
       </div>
@@ -203,7 +204,7 @@ async function ConsoleMetricsSection({ appId, slug }: { appId: string; slug: str
       <div className="mb-3 text-sm font-semibold text-neutral-800">
         AppsInToss 콘솔 지표
         {!multi && rowsDesc.length > 0 && (
-          <span className="font-normal text-neutral-400"> (기준일 {isoDate(rowsDesc[0].date)})</span>
+          <span className="font-normal text-neutral-400"> (기준일 {dbDay(rowsDesc[0].date)})</span>
         )}
       </div>
       <div className="space-y-8">
@@ -240,7 +241,7 @@ async function ContentMetrics({
     <div className="border-t border-neutral-200 pt-6">
       <div className="mb-3 text-sm font-semibold text-neutral-800">
         컨텐츠 세부 지표{" "}
-        {row && <span className="font-normal text-neutral-400">(기준일 {isoDate(row.date)})</span>}
+        {row && <span className="font-normal text-neutral-400">(기준일 {dbDay(row.date)})</span>}
       </div>
       <ContentMarketTabs spec={spec} appSlug={slug} selected={selectedMarket} />
       {row ? (
@@ -507,7 +508,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                         {app.displayName}
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{latest ? dbDay(latest.date) : "—"}</td>
                     <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
                     <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
                     <td className="px-3 py-2 text-right text-neutral-600">{latest ? pct(latest.d1Pct) : "—"}</td>
@@ -554,7 +555,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                 </thead>
                 <tbody>
                   {windowRanked.map(({ app, agg }) => {
-                    const d = formatConsoleWindowRow(agg, isoDate);
+                    const d = formatConsoleWindowRow(agg, dbDay);
                     return (
                       <tr key={app.id} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
                         <td className="px-3 py-2">
@@ -603,7 +604,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                           {app.displayName}
                         </Link>
                       </td>
-                      <td className="px-3 py-2 text-xs text-neutral-500">{latest ? isoDate(latest.date) : "—"}</td>
+                      <td className="px-3 py-2 text-xs text-neutral-500">{latest ? dbDay(latest.date) : "—"}</td>
                       <td className="px-3 py-2 text-right">{latest ? latest.dau : "—"}</td>
                       <td className="px-3 py-2 text-right">{latest ? latest.newUsers : "—"}</td>
                       <td className="px-3 py-2 text-right text-neutral-600">
@@ -660,7 +661,7 @@ function ConsoleMonthlyRevenue({ report }: { report: ConsoleMonthlyRevenueReport
             AppsInToss 콘솔 · 월 누적 예상 광고수익
           </div>
           <div className="mt-0.5 text-xs text-neutral-400">
-            기준일 {isoDate(report.reportDate)} · AppsInToss estimatedEarning · 정산 확정액 아님
+            기준일 {dbDay(report.reportDate)} · AppsInToss estimatedEarning · 정산 확정액 아님
           </div>
         </div>
         <div className="text-xs text-neutral-400">

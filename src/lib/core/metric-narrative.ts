@@ -1,5 +1,5 @@
 import { llmChat, llmChatConfigured } from "@/lib/ai/llm";
-import { daysBetween, isoDate, parseIsoDate } from "@/lib/ga4/datasets";
+import { dbDay, metricDaysBetween } from "@/lib/analytics/metric-day";
 import type {
   ConsoleListingSeries,
   Ga4AppGap,
@@ -28,14 +28,13 @@ function ga4CoverageLines(
   onRefDateApps: number,
   gaps: readonly Ga4AppGap[],
 ): string[] {
-  const ref = parseIsoDate(refDate);
   const total = onRefDateApps + gaps.length;
   const lines = [`GA4 기준일 스냅샷: ${total}개 앱 중 ${onRefDateApps}개 보유`];
   if (gaps.length === 0) return lines;
   const named = gaps.slice(0, MAX_NAMED_GAPS).map(({ app, latestDate }) => {
     const state = latestDate === null
       ? "수집 없음"
-      : `${daysBetween(ref, latestDate)}일 지연`;
+      : `${metricDaysBetween(refDate, dbDay(latestDate))}일 지연`;
     return `${app.displayName}(${app.type}, ${state})`;
   });
   lines.push(
@@ -56,11 +55,11 @@ function consoleCoverageLines(
     return [`콘솔 스냅샷: ${listings}개 리스팅 모두 수집 없음`];
   }
   const latestMs = Math.max(...series.map((one) => one.rowsDesc[0].date.getTime()));
-  const consoleRefDate = isoDate(new Date(latestMs));
-  const onRef = series.filter((one) => isoDate(one.rowsDesc[0].date) === consoleRefDate).length;
+  const consoleRefDate = dbDay(new Date(latestMs));
+  const onRef = series.filter((one) => dbDay(one.rowsDesc[0].date) === consoleRefDate).length;
   const lines = [
     `콘솔 최신 스냅샷 기준일 ${consoleRefDate}` +
-      ` · 보고서 기준일과 ${daysBetween(parseIsoDate(refDate), new Date(latestMs))}일 차이` +
+      ` · 보고서 기준일과 ${metricDaysBetween(refDate, dbDay(new Date(latestMs)))}일 차이` +
       ` · 그 기준일 스냅샷 보유 ${onRef}/${listings}개 리스팅`,
   ];
   if (missing.length > 0) {

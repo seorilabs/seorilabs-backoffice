@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { kstDayStart } from "@/lib/core/operations-report";
+import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
 import { resolvedPlatformAppId } from "@/lib/platform/app-id";
@@ -209,7 +209,7 @@ export async function recordIdentitySignup(input: {
   event: OperationalEventInput;
 }): Promise<boolean> {
   const occurredAt = new Date(input.event.occurredAt);
-  const dayStart = kstDayStart(occurredAt);
+  const dayStart = metricDayStart(metricDayOf(occurredAt));
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);
   // 이벤트 원장은 Platform registry app_id 로 적재된다. slug 로 세면 이름이 다른 앱의
   // 오늘 신규 수와 누적이 0으로 나온다. 카드 dedupe 키는 Backoffice 앱 정체성인 slug 로 둔다.

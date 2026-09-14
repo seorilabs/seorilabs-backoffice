@@ -11,7 +11,8 @@ import {
 } from "@/components/analytics/MetricPanels";
 import { EmptyState, Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { isoDate, resolveGa4Target } from "@/lib/ga4/datasets";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import { resolveAitTarget, listingsForSlug } from "@/lib/analytics/ait-apps";
 import { prisma } from "@/lib/prisma";
 
@@ -78,7 +79,7 @@ export default async function AppMetricsPage({
               <div className="mb-2 text-sm font-semibold text-neutral-700">
                 핵심 지표{" "}
                 <span className="font-normal text-neutral-400">
-                  기준일 {isoDate(ga4Rows[0].date)}
+                  기준일 {dbDay(ga4Rows[0].date)}
                 </span>
               </div>
               <MetricCards latest={ga4Rows[0]} />

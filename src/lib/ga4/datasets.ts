@@ -55,46 +55,6 @@ export function resolveGa4Target(app: AppGa4Fields): Ga4Target | null {
   return FALLBACK[app.slug] ?? null;
 }
 
-// ── 날짜 유틸 ────────────────────────────────────────────────────────────
-// GA4 일별 export(events_YYYYMMDD)는 보통 다음 날 적재되고 당일 events_intraday_*
-// 는 불완전하다. 따라서 "최신 확정일"은 어제(D-1)로 본다. UTC 기준으로 계산한다.
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** UTC 날짜를 GA4 테이블 접미사 "YYYYMMDD" 로. */
-export function toTableSuffix(d: Date): string {
-  return isoDate(d).replace(/-/g, "");
-}
-
-/** UTC 날짜를 "YYYY-MM-DD" 로. */
-export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** "YYYY-MM-DD"(UTC 자정) Date 로 파싱. @db.Date 저장/비교용. */
-export function parseIsoDate(s: string): Date {
-  return new Date(`${s}T00:00:00.000Z`);
-}
-
-/** 최신 확정일(D-1). now 기준 어제 UTC 자정. */
-export function latestClosedDay(now: Date): Date {
-  return parseIsoDate(isoDate(new Date(now.getTime() - DAY_MS)));
-}
-
-/** end(포함)부터 과거로 days 개의 날짜(오래된→최신 순). */
-export function dateWindow(end: Date, days: number): Date[] {
-  const out: Date[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    out.push(parseIsoDate(isoDate(new Date(end.getTime() - i * DAY_MS))));
-  }
-  return out;
-}
-
-/** a 가 b 보다 며칠 뒤인지(정수 일). */
-export function daysBetween(a: Date, b: Date): number {
-  return Math.round((a.getTime() - b.getTime()) / DAY_MS);
-}
-
 /** 내부 백필 API의 조회 일수. 평상시에는 undefined로 기본 14일을 유지한다. */
 export function parseWindowDays(value: string | null, maxDays = 366): number | undefined {
   if (value === null) return undefined;

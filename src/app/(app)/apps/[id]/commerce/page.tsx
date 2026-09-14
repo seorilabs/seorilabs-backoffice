@@ -4,7 +4,7 @@ import { LizardTycoonIapConsole } from "@/components/app-ops/LizardTycoonIapCons
 import { ToolCatalog, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
 import { toolsForSection } from "@/lib/app-ops/manifest";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { isoDate } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import { primaryListingForSlug } from "@/lib/analytics/ait-apps";
 import { prisma } from "@/lib/prisma";
 
@@ -147,7 +147,7 @@ function CommerceCard({
       <div className="text-xs text-neutral-500">{label}</div>
       <div className="mt-1 text-2xl font-semibold text-neutral-900">{value ?? "—"}</div>
       <div className="mt-1 text-[11px] text-neutral-400">
-        {date ? `기준일 ${isoDate(date)}` : "데이터 없음"}
+        {date ? `기준일 ${dbDay(date)}` : "데이터 없음"}
       </div>
     </div>
   );

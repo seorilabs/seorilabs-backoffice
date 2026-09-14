@@ -2,7 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
 import { escapeHtml as esc } from "@/lib/format/html";
-import { resolveGa4Target, latestClosedDay, isoDate } from "@/lib/ga4/datasets";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
+import {
+  dbDay,
+  lastElapsedMetricDay,
+  metricDayOf,
+  metricDaysBetween,
+} from "@/lib/analytics/metric-day";
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
@@ -19,7 +25,6 @@ import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
 
 const REPORT_FOLDER = "프로젝트/지표";
 const RECENT_DAYS = 14;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface MetricRow {
   date: Date;
@@ -101,7 +106,7 @@ export function buildAppReportMd(
   generatedOn: string,
 ): string {
   const latest = rowsDesc[0];
-  const day = (d: Date): string => isoDate(d);
+  const day = (d: Date): string => dbDay(d);
   const lines = [
     `# ${displayName} 지표`,
     "",
@@ -144,7 +149,7 @@ export function summaryLine(
   const plat = platformSegments(latest.dauAndroid, latest.dauIos, latest.dauWeb)
     .segs.map((s) => `${s.label} ${s.value}`)
     .join("/");
-  const day = isoDate(latest.date);
+  const day = dbDay(latest.date);
   const stale = refDate !== undefined && day !== refDate ? ` · ⏳${esc(day)}` : "";
   return (
     `<b>${esc(displayName)}</b> DAU ${latest.dau} · 활성 ${latest.engagedUsers}(${pct(rate)}) · D7 ${pct(latest.d7Pct)} · CTA ${latest.adCtaImpressions} · 완료 ${latest.adCompletions} · 실제노출 ${latest.networkAdImpressions}` +
@@ -164,7 +169,7 @@ export function ga4TotalLine(
   refDate: string,
   targetApps: number,
 ): string {
-  const onRef = latestRows.filter((row) => isoDate(row.date) === refDate);
+  const onRef = latestRows.filter((row) => dbDay(row.date) === refDate);
   const sum = (pick: (row: MetricRow) => number): number =>
     onRef.reduce((total, row) => total + pick(row), 0);
   const dau = sum((row) => row.dau);
@@ -211,7 +216,7 @@ export function consoleSummaryLine(item: ConsoleReportItem, refDate: string): st
   if (r.payingUsers > 0 || r.iapTrxAmountKrw > 0) {
     parts.push(`결제 ${count(r.payingUsers)}명 ${won(r.iapTrxAmountKrw)}`);
   }
-  const day = isoDate(r.date);
+  const day = dbDay(r.date);
   return `<b>${name}</b> ${parts.join(" · ")}${day === refDate ? "" : ` · ⏳${esc(day)}`}`;
 }
 
@@ -223,7 +228,7 @@ export function consoleSummaryLine(item: ConsoleReportItem, refDate: string): st
  */
 export function buildConsoleSection(
   items: ConsoleReportItem[],
-  ga4RefDate: Date,
+  ga4RefDate: string,
 ): ConsoleReportSection {
   const withData = items.filter((i) => i.latest != null);
   if (withData.length === 0) {
@@ -231,8 +236,8 @@ export function buildConsoleSection(
   }
 
   const refMs = Math.max(...withData.map((i) => i.latest!.date.getTime()));
-  const refDate = isoDate(new Date(refMs));
-  const lagDays = Math.round((ga4RefDate.getTime() - refMs) / DAY_MS);
+  const refDate = dbDay(new Date(refMs));
+  const lagDays = metricDaysBetween(ga4RefDate, refDate);
 
   // 매일 같은 규칙으로 정렬해 일자 간 비교가 쉽도록 한다(수익 → DAU → 이름).
   const ranked = [...withData].sort(
@@ -241,7 +246,7 @@ export function buildConsoleSection(
       (b.latest!.dau ?? 0) - (a.latest!.dau ?? 0) ||
       a.displayName.localeCompare(b.displayName),
   );
-  const onRef = ranked.filter((i) => isoDate(i.latest!.date) === refDate);
+  const onRef = ranked.filter((i) => dbDay(i.latest!.date) === refDate);
   const sum = (f: (r: ConsoleMetricRow) => number): number =>
     onRef.reduce((s, i) => s + f(i.latest!), 0);
   // DAU 는 null(콘솔 미집계)과 0(방문 0명)을 구분한다 — 전부 null 이면 합계도 "—".
@@ -342,8 +347,8 @@ async function loadConsoleReportItems(apps: ConsoleAppRef[]): Promise<ConsoleRep
 }
 
 export async function sendMetricsReport(now: Date): Promise<ReportResult> {
-  const end = latestClosedDay(now);
-  const generatedOn = isoDate(now);
+  const end = lastElapsedMetricDay(now);
+  const generatedOn = metricDayOf(now);
 
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
@@ -362,7 +367,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   const consoleApps = apps.filter((a) => resolveAitTarget(a));
 
   const result: ReportResult = {
-    refDate: isoDate(end),
+    refDate: end,
     apps: 0,
     enqueued: 0,
     notificationsQueued: 0,
