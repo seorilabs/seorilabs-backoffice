@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
@@ -6,18 +7,21 @@ import {
   metricDayWindow,
   metricDaysBetween,
   toDbDay,
+  shiftMetricDay,
 } from "@/lib/analytics/metric-day";
 import { ga4CoverageByDay } from "@/lib/analytics/coverage";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   baselineOf,
   collectHighlightData,
+  metricHighlightDedupeKey,
   sendMetricHighlightReport,
   type HighlightData,
 } from "@/lib/core/metric-highlights";
-import { metricNarrative, narrativeFacts } from "@/lib/core/metric-narrative";
+import { metricNarrative, type MetricNarrative } from "@/lib/core/metric-narrative";
 import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
+import { requeueNotification } from "@/lib/notifications/outbox";
 import {
   ORG_REPORT_SCHEMA_VERSION,
   parseOrgReportDocument,
@@ -93,6 +97,12 @@ export function assembleOrgReportDocument(input: {
   costs: OrgReportDocument["costs"];
   origin: OrgReportDocument["origin"];
   generatedAt: Date;
+  /** 해설 생성 출처(선택). 어느 모델이 어떤 지시로 썼는지. */
+  narrativeMeta?: OrgReportDocument["narrativeMeta"];
+  /** 덮이기 전 발행 수치(선택). 소급 재계산에서만 채운다. */
+  superseded?: OrgReportDocument["superseded"];
+  /** 발행 기록. 정정 판단의 근거이자 "그때 무엇을 보고 그 숫자를 냈는가"의 기록이다. */
+  published?: OrgReportDocument["published"];
 }): OrgReportDocument {
   const { data } = input;
   const latestGa4 = data.ga4Series.map((series) => series.rowsDesc[0]);
@@ -204,6 +214,9 @@ export function assembleOrgReportDocument(input: {
     narrative: input.narrative,
     costs: input.costs,
     consoleMeta: buildConsoleMeta(data),
+    narrativeMeta: input.narrativeMeta ?? null,
+    superseded: input.superseded ?? null,
+    published: input.published ?? null,
   };
 }
 
@@ -240,11 +253,12 @@ export interface OrgReportRunResult {
  */
 export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunResult> {
   const data = await collectHighlightData(now);
-  const narrative = await metricNarrative(narrativeFacts(data));
+  const made = await metricNarrative(data);
   const financeCosts = await collectFinanceCosts(now);
   const doc = assembleOrgReportDocument({
     data,
-    narrative,
+    narrative: made.text,
+    narrativeMeta: meta(made),
     costs: {
       month: financeMonth(now).month,
       summaryLines: financeCosts.summaryLines,
@@ -254,43 +268,152 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
     origin: "published",
     generatedAt: now,
   });
-  const { version } = await saveOrgReport(doc);
+  // 스냅샷을 먼저 저장한다(저장 실패는 그대로 던져 발송을 막는다). 발행 기록도 여기서
+  // 남긴다 — 이것이 없으면 다음 밤 정정이 "아직 발행 안 됨"으로 오판해 정정이 아니라
+  // 최초 발행으로 처리한다. dedupeKey 는 순수 함수라 발송 전에 알 수 있다.
+  const { version } = await saveOrgReport({
+    ...doc,
+    published: {
+      factsHash: factsFingerprint(data),
+      dedupeKey: metricHighlightDedupeKey(data.refDate),
+      publishedAt: now.toISOString(),
+      observed: data.asOf?.observed ?? data.totals.ga4Dau.apps,
+      expected: data.asOf?.expected ?? data.totals.ga4Dau.apps,
+      corrections: 0,
+    },
+  });
   const sent = await sendMetricHighlightReport(now, {
     data,
-    narrative,
+    narrative: made.text,
     reportUrl: orgReportUrl(data.refDate),
   });
-  return { ...sent, version, consoleLagDays: doc.consoleMeta.lagDays };
+  return { ...sent, narrated: !made.fallback, version, consoleLagDays: doc.consoleMeta.lagDays };
 }
 
 /**
- * 스냅샷만 다시 저장한다(23:30 재실행용). 발행(runDailyOrgReport)과 달리 Discord
- * enqueue 를 하지 않는다 — 같은 dedupeKey 로 다시 넣으면 아직 보내지 못한 전송이
- * 나중에 이 시점 내용으로 나간다. LLM 해설과 비용도 다시 부르지 않는다. 11:00 발행분과
- * 같은 해설을 유지해야 Discord 메시지와 보고서가 어긋나지 않고, 재실행 비용도 없다.
- *
- * 늦게 도착한 GA4·콘솔 스냅샷을 반영하는 것이 목적이므로 수치는 다시 계산한다.
+ * 발행 시점 "사실"의 지문. 수치·판정·커버리지만 넣고 LLM 해설은 뺀다 — 해설은 실행마다
+ * 달라져서 본문을 해싱하면 수치가 그대로인 날에도 매번 정정으로 판정된다.
  */
-export async function refreshOrgReportSnapshot(
-  now = new Date(),
-): Promise<{ refDate: string; version: number; consoleLagDays: number | null }> {
-  const data = await collectHighlightData(now);
-  const snapshot = await prisma.orgReportDaily.findUnique({
-    where: { date: toDbDay(data.refDate) },
+export function factsFingerprint(data: HighlightData): string {
+  const canonical = JSON.stringify({
+    refDate: data.refDate,
+    ga4: data.totals.ga4Dau,
+    console: {
+      iaaKrw: data.totals.console.iaaKrw,
+      iapKrw: data.totals.console.iapKrw,
+      previousIaaKrw: data.totals.console.previousIaaKrw,
+      listings: data.totals.console.listings,
+    },
+    observed: data.asOf?.observed ?? null,
+    expected: data.asOf?.expected ?? null,
+    movements: data.movements
+      .map((movement) =>
+        [movement.label, movement.metricKey, movement.verdict, movement.latest, movement.baseline]
+          .join("|"))
+      .sort(),
   });
-  const published = snapshot ? parseOrgReportDocument(snapshot.report) : null;
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+}
+
+/** 정정 안내 한 줄. 무엇이 얼마나 바뀌었는지를 옛 발췌 컬럼에서 바로 만든다. */
+export function correctionLine(input: {
+  previousDau: number;
+  previousApps: number | null;
+  currentDau: number;
+  currentApps: number;
+}): string {
+  const apps = input.previousApps != null && input.previousApps !== input.currentApps
+    ? `, 대상 ${input.previousApps} → ${input.currentApps}개 앱`
+    : "";
+  return `♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 ${input.previousDau.toLocaleString("ko-KR")} → ${input.currentDau.toLocaleString("ko-KR")}명${apps}).`;
+}
+
+/** MetricNarrative → 문서에 남길 출처. 텍스트는 따로 싣는다. */
+const meta = (made: MetricNarrative): OrgReportDocument["narrativeMeta"] => ({
+  fallback: made.fallback,
+  provider: made.provider,
+  model: made.model,
+  promptVersion: made.promptVersion,
+});
+
+/** 해설을 다시 부르지 않는 정정 횟수 상한. 수치가 계속 흔들리는 날에 LLM 을 반복 호출하지 않는다. */
+const MAX_NARRATED_CORRECTIONS = 2;
+
+export interface ReconcileResult {
+  day: string;
+  action: "none" | "published" | "corrected";
+  version: number | null;
+  requeued: number;
+}
+
+/**
+ * 하루 전 발행분을 지금 원본과 대조해 필요할 때만 정정한다(야간 발행과 같은 실행).
+ *
+ * 발행은 D-1 을 내보내지만 그 시점에 늦게 도착한 export 가 있을 수 있다. 다음 날 밤
+ * 같은 날짜를 다시 계산해, 사실이 달라졌으면 **같은 Discord 메시지를 고친다**.
+ * 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모르고, 아무것도 안 하면 발행분이
+ * 영원히 틀린 채 남는다(08-30~09-11 이 실제로 그랬다).
+ *
+ * 사실이 같으면 아무것도 하지 않는다 — 변화 없는 version+1 은 감사 기록을 흐린다.
+ */
+export async function reconcileOrgReport(
+  now = new Date(),
+  opts: { day?: string } = {},
+): Promise<ReconcileResult> {
+  const day = opts.day ?? shiftMetricDay(lastElapsedMetricDay(now), -1);
+  const data = await collectHighlightData(now, day);
+  const snapshot = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(day) } });
+  const previous = snapshot ? parseOrgReportDocument(snapshot.report) : null;
+  const published = previous?.published ?? null;
+  const facts = factsFingerprint(data);
+
+  if (published && published.factsHash === facts) {
+    return { day, action: "none", version: snapshot?.version ?? null, requeued: 0 };
+  }
+
+  const corrections = published ? published.corrections + 1 : 0;
+  const correction = published
+    ? correctionLine({
+      previousDau: snapshot?.ga4Dau ?? 0,
+      previousApps: previous?.summary.ga4.apps ?? null,
+      currentDau: data.totals.ga4Dau.latest,
+      currentApps: data.totals.ga4Dau.apps,
+    })
+    : null;
+  // 수치가 바뀌었으면 앞선 해설은 정의상 틀렸다. 다만 같은 날짜가 계속 흔들리면
+  // 해설을 반복 생성하지 않고 수치만 정정한다.
+  const made = corrections > MAX_NARRATED_CORRECTIONS
+    ? null
+    : await metricNarrative(data);
+  const narrative = made ? made.text : previous?.narrative ?? null;
+
+  const sent = await sendMetricHighlightReport(now, {
+    data,
+    narrative,
+    reportUrl: orgReportUrl(day),
+    correction,
+  });
   const doc = assembleOrgReportDocument({
     data,
-    // 발행분의 해설과 비용을 그대로 잇는다. 없으면(발행 실패·파싱 실패) 수치만 갱신한다.
-    narrative: published?.narrative ?? null,
-    costs: published?.costs ?? null,
-    // origin 은 앞선 문서의 것을 잇는다. 11:00 발행이 실패해 스냅샷이 없으면 이 저장은
-    // 발행이 아니라 소급 계산이다 — published 로 적으면 해설 없는 문서가 발행분인 척한다.
-    origin: published?.origin ?? "recomputed",
+    narrative,
+    narrativeMeta: made ? meta(made) : previous?.narrativeMeta ?? null,
+    // 비용은 과거 시점을 복원할 수 없다. 발행분의 값을 그대로 잇는다.
+    costs: previous?.costs ?? null,
+    origin: "published",
     generatedAt: now,
+    published: {
+      factsHash: facts,
+      dedupeKey: sent.dedupeKey,
+      publishedAt: published?.publishedAt ?? now.toISOString(),
+      observed: data.asOf?.observed ?? data.totals.ga4Dau.apps,
+      expected: data.asOf?.expected ?? data.totals.ga4Dau.apps,
+      corrections,
+    },
   });
   const { version } = await saveOrgReport(doc);
-  return { refDate: data.refDate, version, consoleLagDays: doc.consoleMeta.lagDays };
+  // SENT 를 PENDING 으로 되돌리면 providerMessageId 가 남아 워커가 같은 메시지를 고친다.
+  const requeued = await requeueNotification(sent.eventId);
+  return { day, action: published ? "corrected" : "published", version, requeued };
 }
 
 /**
@@ -482,4 +605,79 @@ export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTre
     new Map(consoleRows.map((row) => [dbDay(row.date), row._sum])),
     await ga4CoverageByDay(metricDayWindow(endDate, days)),
   );
+}
+
+// ── 소급 재계산 ──────────────────────────────────────────────────────────
+
+export interface RecomputeResult {
+  from: string;
+  to: string;
+  recomputed: string[];
+  /** 발행 기록이 있어 건너뛴 날. 그 날들은 정정(reconcileOrgReport)이 담당한다. */
+  skippedPublished: string[];
+  /** 원본 데이터가 전혀 없어 만들 문서가 없는 날. */
+  skippedEmpty: string[];
+}
+
+/**
+ * 과거 스냅샷을 현재 원본으로 다시 계산한다.
+ *
+ * 2026-08-30~09-11 발행분은 수집이 절반도 오기 전에 찍혀 실제의 1/3.6~1/6 로 남아
+ * 있다. 그대로 두면 /report 추이선이 영원히 그 값을 그리고, 시계열을 보는 모든 판단이
+ * 거기서 출발한다.
+ *
+ * 덮기 전에 발행됐던 수치를 superseded 에 남긴다 — 무엇이 발행됐고 무엇이 사실이었는지
+ * 둘 다 남아야 이번 사고가 기록으로 남는다. 해설과 비용은 null 로 둔다. 과거 시점을
+ * 복원할 수 없고, 수치가 바뀐 문서에 옛 해설을 이어 붙이는 것이 애초의 결함이었다.
+ *
+ * 발행 기록(published)이 있는 날은 건드리지 않는다. 그 날들은 Discord 메시지가 아직
+ * 살아 있으므로 정정 경로가 메시지까지 함께 고쳐야 한다.
+ */
+export async function recomputeOrgReports(
+  now: Date,
+  range: { from: string; to: string },
+): Promise<RecomputeResult> {
+  const span = metricDaysBetween(range.to, range.from);
+  if (span < 0) throw new Error("from 이 to 보다 뒤일 수 없습니다.");
+  const days = metricDayWindow(range.to, span + 1);
+
+  const result: RecomputeResult = {
+    from: range.from,
+    to: range.to,
+    recomputed: [],
+    skippedPublished: [],
+    skippedEmpty: [],
+  };
+
+  for (const day of days) {
+    const existing = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(day) } });
+    const previous = existing ? parseOrgReportDocument(existing.report) : null;
+    if (previous?.published) {
+      result.skippedPublished.push(day);
+      continue;
+    }
+    const data = await collectHighlightData(now, day);
+    if (data.ga4Series.length === 0 && data.consoleSeries.length === 0) {
+      result.skippedEmpty.push(day);
+      continue;
+    }
+    const doc = assembleOrgReportDocument({
+      data,
+      narrative: null,
+      costs: null,
+      origin: "recomputed",
+      generatedAt: now,
+      superseded: existing
+        ? {
+          ga4Dau: existing.ga4Dau,
+          consoleIaaKrw: existing.consoleIaaKrw,
+          generatedAt: existing.generatedAt.toISOString(),
+          version: existing.version,
+        }
+        : null,
+    });
+    await saveOrgReport(doc);
+    result.recomputed.push(day);
+  }
+  return result;
 }

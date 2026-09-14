@@ -187,12 +187,14 @@ export async function editDiscord(
   }
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
+  // 메시지는 그것을 게시한 봇만 고칠 수 있다. botToken 을 흘리면 서리가 보낸
+  // 카드를 메인 봇이 고치려다 403 이 나고, 실패 원인이 권한 문제로 보이지 않는다.
   return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     // Discord PATCH는 누락 필드를 보존하므로 이전 mention과 버튼을 명시적으로 비운다.
     body: JSON.stringify({ content: "", components: [], ...payload }),
-  });
+  }, options.botToken);
 }
 
 export async function deleteDiscordMessage(

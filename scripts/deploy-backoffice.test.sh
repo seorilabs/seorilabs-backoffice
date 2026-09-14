@@ -161,6 +161,12 @@ if [[ "$args" == *" logs job/"* ]]; then
   exit 0
 fi
 
+if [[ "$args" == *" delete cronjob "* ]]; then
+  retired="${args##* delete cronjob }"
+  printf 'DELETE_CRONJOB %s\n' "${retired%% *}" >> "$FAKE_KUBECTL_LOG"
+  exit 0
+fi
+
 if [[ "$args" == *"apply -f -"* ]]; then
   payload="$(cat)"
   names="$(printf '%s\n' "$payload" | awk '/^  name:/ { printf "%s,", $2 } /^  generateName:/ { printf "%s,", $2 }')"
@@ -434,6 +440,26 @@ for scenario in drift absent unreadable; do
   fi
   echo "  ok   $scenario 에서 mutation 없음"
 done
+
+echo "== 퇴역한 CronJob은 매니페스트에서 빠지고 클러스터에서도 지워진다 =="
+# apply 는 사라진 리소스를 지우지 않는다. 이름만 바꾸면 옛 job 이 그대로 남아
+# 없어진 엔드포인트를 계속 때린다. 두 쪽이 함께 있어야 정리가 성립한다.
+retired_list="$(sed -n 's/^for retired in \(.*\); do$/\1/p' "$here/deploy-backoffice.sh")"
+if [ -z "$retired_list" ]; then
+  echo "FAIL deploy script에 퇴역 CronJob 정리 루프가 없다" >&2
+  exit 1
+fi
+for retired in $retired_list; do
+  if grep -q "name: $retired\$" "$here/../k8s/proactive-cronjobs.yaml"; then
+    echo "FAIL 퇴역 대상이 아직 매니페스트에 있다: $retired" >&2
+    exit 1
+  fi
+  if ! grep -q "DELETE_CRONJOB $retired" "$log"; then
+    echo "FAIL 배포가 퇴역 CronJob을 지우지 않았다: $retired" >&2
+    exit 1
+  fi
+done
+echo "  ok   퇴역 CronJob 정리"
 
 echo "== deploy script는 data namespace mutation 명령을 갖지 않는다 =="
 data_mutation="$(grep -nE '\-n data|k -n data|k8s/vault-rag.yaml' "$here/deploy-backoffice.sh" \
