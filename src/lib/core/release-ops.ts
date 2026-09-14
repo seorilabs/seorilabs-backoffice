@@ -328,6 +328,7 @@ export async function dispatchMarketDeploy(opts: {
   inputs?: Record<string, string>;
   actorLabel?: string;
 }): Promise<{ workflowFile?: string; xcodeCloudBuild?: number | null }> {
+  const workflowRef = await getRepoDefaultBranch(opts.repoFullName);
   const dispatcher: MarketDispatchPort = {
     getWorkflowDispatchContract: (workflowFile, ref) =>
       getWorkflowDispatchContract(opts.repoFullName, workflowFile, ref),
@@ -337,7 +338,10 @@ export async function dispatchMarketDeploy(opts: {
         workflowFile: input.workflowFile,
         ref: input.ref,
         inputs: input.inputs,
-        expectedTag: { tag: input.ref, sha: input.expectedTagSha },
+        expectedTag: {
+          tag: input.inputs.release_tag ?? input.ref,
+          sha: input.expectedTagSha,
+        },
       }),
     validateXcodeCloudRelease: async (input) => {
       const bundleId = await iosBundleOf(opts.repoFullName);
@@ -367,6 +371,7 @@ export async function dispatchMarketDeploy(opts: {
     repoFullName: opts.repoFullName,
     target: opts.target,
     tag: opts.tag,
+    workflowRef,
     memo: opts.memo,
     inputs: opts.inputs,
     // iOS(App Store)를 Xcode Cloud 로 이관한 앱은 App Store 부분을 ASC API 로 트리거한다.

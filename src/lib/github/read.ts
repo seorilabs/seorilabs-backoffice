@@ -146,10 +146,10 @@ export async function getAvailableBuildTargets(
 /**
  * 워크플로 파일에 선언된 workflow_dispatch 입력 이름 집합.
  *
- * GitHub 은 workflow_dispatch 로 넘긴 입력을 "dispatch 한 ref(브랜치/태그)의 워크플로 정의"
- * 기준으로 검증하고, 선언되지 않은 입력을 넘기면 422 로 거부한다. 따라서 검사도 실제 dispatch 할
- * ref 로 조회해야 검증 대상이 일치한다(예: 구버전 태그로 배포하면 그 태그의 정의로 검증되므로,
- * 기본 브랜치에만 있는 입력은 통과해도 dispatch 에서 422 가 난다). ref 미지정 시 기본 브랜치 조회.
+ * GitHub 은 workflow_dispatch 로 넘긴 입력을 실제 dispatch ref의 워크플로 정의로 검증하고,
+ * 선언되지 않은 입력을 넘기면 422 로 거부한다. stable 배포는 최신 기본 브랜치의 제어 파일을
+ * dispatch하고 release_tag 입력으로 불변 빌드 소스를 고정하므로, 검사도 그 기본 브랜치를 읽는다.
+ * ref 미지정 시 GitHub 기본 브랜치 조회.
  *
  * yaml 파서는 YAML 1.2 라 `on:` 을 문자열 키 "on" 으로 파싱한다(js-yaml 의 on→true 함정 회피).
  */
