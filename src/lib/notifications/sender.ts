@@ -19,3 +19,14 @@ export function senderKey(payload: Prisma.JsonValue): string | null {
 export function senderBotToken(payload: Prisma.JsonValue): string | undefined {
   return senderKey(payload) === SEORI_SENDER ? env.discordSeoriBotToken() || undefined : undefined;
 }
+
+/**
+ * 같은 메시지를 고쳐서 갱신하는 알림인가.
+ *
+ * NotificationKind 는 MySQL ENUM 이라 값 추가에 ALTER MODIFY 가 필요하고 expand-only
+ * 게이트가 막는다. 그래서 쓰레드 게시와 마찬가지로 payload 로 구분한다.
+ */
+export function editablePayload(payload: Prisma.JsonValue): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return (payload as Prisma.JsonObject).editable === true;
+}

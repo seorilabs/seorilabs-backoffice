@@ -245,6 +245,8 @@ export function renderHighlightReport(input: {
   narrative?: string | null;
   /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
   reportUrl?: string | null;
+  /** 정정 안내 한 줄(선택). 수치가 갱신됐을 때만 붙는다. */
+  correction?: string | null;
 }): string {
   const { totals, asOf } = input;
   // "(D-1)" 을 머리말에 박아 두면 소급 재계산이나 기준일이 밀린 날에도 어제라고 적힌다.
@@ -320,6 +322,9 @@ export function renderHighlightReport(input: {
     "",
     `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 미집계 ${absent}건`,
   );
+  // 정정은 맨 끝에 둔다. 무엇이 바뀌었는지가 수치 바로 아래가 아니라 읽고 난 뒤에
+  // 와야 "원래 이랬는데 이렇게 바뀌었다"로 읽힌다.
+  if (input.correction) lines.push("", input.correction);
   if (input.reportUrl) lines.push("", `🔗 ${input.reportUrl}`);
   return lines.join("\n");
 }
@@ -405,6 +410,10 @@ export interface MetricHighlightResult {
   lowlights: number;
   observations: number;
   dedupeKey: string;
+  /** 실제로 나간 본문. 사람이 읽는 결과물이다. */
+  body: string;
+  /** outbox event id. 정정이 같은 전송을 되돌려 메시지를 고치는 데 쓴다. */
+  eventId: string;
 }
 
 /** GA4 수집 대상 앱 하나의 시계열(최신순, BASELINE_DAYS+1 창). 최신 행은 기준일 값이다. */
@@ -632,9 +641,16 @@ export interface MetricHighlightOptions {
   narrative?: string | null;
   /** 백오피스 Org 종합 보고서 링크. 없으면 푸터를 생략한다. */
   reportUrl?: string | null;
+  /** 정정 안내 한 줄. 조용히 달라지면 읽는 사람이 자기 기억을 의심한다. */
+  correction?: string | null;
 }
 
-/** 저장된 스냅샷 → 하이라이트·로우라이트 리포트 → 알림 outbox. */
+/**
+ * 저장된 스냅샷 → 하이라이트·로우라이트 리포트 → 알림 outbox.
+ *
+ * payload 에 editable 을 실어 워커가 같은 메시지를 고치게 한다. 늦게 도착한 수집을
+ * 반영해 수치가 바뀌었을 때 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
+ */
 export async function sendMetricHighlightReport(
   now = new Date(),
   options: MetricHighlightOptions = {},
@@ -647,23 +663,22 @@ export async function sendMetricHighlightReport(
     options.narrative !== undefined
       ? options.narrative
       : await metricNarrative(narrativeFacts(data));
-  await enqueueNotification({
+  const body = renderHighlightReport({
+    refDate,
+    totals,
+    movements,
+    asOf: data.asOf,
+    gapNames: data.ga4Gaps.map((gap) => gap.app.displayName),
+    consoleStale: data.consoleStale,
+    narrative,
+    reportUrl: options.reportUrl,
+    correction: options.correction,
+  });
+  const eventId = await enqueueNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
-    payload: {
-      text: renderHighlightReport({
-        refDate,
-        totals,
-        movements,
-        asOf: data.asOf,
-        gapNames: data.ga4Gaps.map((gap) => gap.app.displayName),
-        consoleStale: data.consoleStale,
-        narrative,
-        reportUrl: options.reportUrl,
-      }),
-      sender: SEORI_SENDER,
-    },
+    payload: { text: body, sender: SEORI_SENDER, editable: true },
     destinations: discordDestinations(["app-ops"]),
   });
 
@@ -674,5 +689,7 @@ export async function sendMetricHighlightReport(
     lowlights: rankMovements(movements, "lowlight").length,
     observations: movements.length,
     dedupeKey,
+    body,
+    eventId,
   };
 }

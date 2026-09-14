@@ -7,9 +7,11 @@ import {
   sendDiscord,
   startDiscordThread,
   type DiscordActionRow,
+  type DiscordDeliveryResult,
+  type DiscordMessageOptions,
 } from "@/lib/notifications/discord";
 import { plainTextPayload } from "@/lib/notifications/format";
-import { senderBotToken } from "@/lib/notifications/sender";
+import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import { issueThreadPayload, threadStartFailure } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
 import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
@@ -333,6 +335,25 @@ async function deliverIdentityRow(
   return sent.ok ? { ok: true } : sent;
 }
 
+/**
+ * providerMessageId 가 있으면 그 메시지를 고치고, 사람이 지웠으면(10008) 새로 만든다.
+ *
+ * 이 판단을 호출부마다 복사하면 한 곳만 고쳐지고 나머지가 같은 카드를 새로 만든다.
+ * 10008 외의 실패는 그대로 돌려준다 — 일시적 오류에 새 메시지를 만들면 중복이 남는다.
+ */
+async function editOrSend(
+  destinationKey: string,
+  providerMessageId: string | null,
+  text: string,
+  options: DiscordMessageOptions = {},
+): Promise<DiscordDeliveryResult> {
+  if (providerMessageId) {
+    const edited = await editDiscord(destinationKey, providerMessageId, text, options);
+    if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
+  }
+  return sendDiscord(destinationKey, text, options);
+}
+
 export async function drainAllNotifications(limit = 30) {
   return drainNotifications(limit, async ({ kind, destinationKey, payload, providerMessageId }) => {
     if (kind === "DEPLOY_COMPLETION") {
@@ -372,18 +393,19 @@ export async function drainAllNotifications(limit = 30) {
     if (issueThreadPayload(payload)) return deliverIssueThread(payload, destinationKey);
     const text = plainTextPayload(kind, payload);
     if (!text) return { ok: false, error: "알림 payload 형식 오류" };
-    // 신규 계정 요약은 같은 카드를 계속 갱신한다. 사람이 지웠으면 새로 만든다.
-    if (kind === "IDENTITY_SUMMARY" && providerMessageId) {
-      const edited = await editDiscord(destinationKey, providerMessageId, text);
-      if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008) return edited;
-    }
-    return sendDiscord(destinationKey, text, {
+    const options = {
       alertRoleId:
         destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
       attachment: attachmentFromPayload(payload),
       components: componentsFromPayload(payload),
       // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
       botToken: senderBotToken(payload),
-    });
+    };
+    // 신규 계정 요약과 정정 가능한 일일 보고서는 같은 카드를 계속 갱신한다.
+    // 수치가 늦게 바뀌었는데 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
+    if (kind === "IDENTITY_SUMMARY" || editablePayload(payload)) {
+      return editOrSend(destinationKey, providerMessageId, text, options);
+    }
+    return sendDiscord(destinationKey, text, options);
   });
 }
