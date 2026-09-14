@@ -69,6 +69,7 @@ export async function minimaxChat(
         ...(system ? { system } : {}),
         messages: contents,
         max_tokens: opts.maxTokens ?? 4096,
+        ...(opts.temperature === undefined ? {} : { temperature: opts.temperature }),
         stream: false,
       }),
       signal: controller.signal,

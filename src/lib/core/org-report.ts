@@ -18,7 +18,7 @@ import {
   sendMetricHighlightReport,
   type HighlightData,
 } from "@/lib/core/metric-highlights";
-import { metricNarrative, narrativeFacts } from "@/lib/core/metric-narrative";
+import { metricNarrative, type MetricNarrative } from "@/lib/core/metric-narrative";
 import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { requeueNotification } from "@/lib/notifications/outbox";
@@ -97,6 +97,8 @@ export function assembleOrgReportDocument(input: {
   costs: OrgReportDocument["costs"];
   origin: OrgReportDocument["origin"];
   generatedAt: Date;
+  /** 해설 생성 출처(선택). 어느 모델이 어떤 지시로 썼는지. */
+  narrativeMeta?: OrgReportDocument["narrativeMeta"];
   /** 발행 기록. 정정 판단의 근거이자 "그때 무엇을 보고 그 숫자를 냈는가"의 기록이다. */
   published?: OrgReportDocument["published"];
 }): OrgReportDocument {
@@ -210,6 +212,7 @@ export function assembleOrgReportDocument(input: {
     narrative: input.narrative,
     costs: input.costs,
     consoleMeta: buildConsoleMeta(data),
+    narrativeMeta: input.narrativeMeta ?? null,
     published: input.published ?? null,
   };
 }
@@ -247,11 +250,12 @@ export interface OrgReportRunResult {
  */
 export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunResult> {
   const data = await collectHighlightData(now);
-  const narrative = await metricNarrative(narrativeFacts(data));
+  const made = await metricNarrative(data);
   const financeCosts = await collectFinanceCosts(now);
   const doc = assembleOrgReportDocument({
     data,
-    narrative,
+    narrative: made.text,
+    narrativeMeta: meta(made),
     costs: {
       month: financeMonth(now).month,
       summaryLines: financeCosts.summaryLines,
@@ -277,10 +281,10 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
   });
   const sent = await sendMetricHighlightReport(now, {
     data,
-    narrative,
+    narrative: made.text,
     reportUrl: orgReportUrl(data.refDate),
   });
-  return { ...sent, version, consoleLagDays: doc.consoleMeta.lagDays };
+  return { ...sent, narrated: !made.fallback, version, consoleLagDays: doc.consoleMeta.lagDays };
 }
 
 /**
@@ -320,6 +324,14 @@ export function correctionLine(input: {
     : "";
   return `♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 ${input.previousDau.toLocaleString("ko-KR")} → ${input.currentDau.toLocaleString("ko-KR")}명${apps}).`;
 }
+
+/** MetricNarrative → 문서에 남길 출처. 텍스트는 따로 싣는다. */
+const meta = (made: MetricNarrative): OrgReportDocument["narrativeMeta"] => ({
+  fallback: made.fallback,
+  provider: made.provider,
+  model: made.model,
+  promptVersion: made.promptVersion,
+});
 
 /** 해설을 다시 부르지 않는 정정 횟수 상한. 수치가 계속 흔들리는 날에 LLM 을 반복 호출하지 않는다. */
 const MAX_NARRATED_CORRECTIONS = 2;
@@ -367,9 +379,10 @@ export async function reconcileOrgReport(
     : null;
   // 수치가 바뀌었으면 앞선 해설은 정의상 틀렸다. 다만 같은 날짜가 계속 흔들리면
   // 해설을 반복 생성하지 않고 수치만 정정한다.
-  const narrative = corrections > MAX_NARRATED_CORRECTIONS
-    ? previous?.narrative ?? null
-    : await metricNarrative(narrativeFacts(data));
+  const made = corrections > MAX_NARRATED_CORRECTIONS
+    ? null
+    : await metricNarrative(data);
+  const narrative = made ? made.text : previous?.narrative ?? null;
 
   const sent = await sendMetricHighlightReport(now, {
     data,
@@ -380,6 +393,7 @@ export async function reconcileOrgReport(
   const doc = assembleOrgReportDocument({
     data,
     narrative,
+    narrativeMeta: made ? meta(made) : previous?.narrativeMeta ?? null,
     // 비용은 과거 시점을 복원할 수 없다. 발행분의 값을 그대로 잇는다.
     costs: previous?.costs ?? null,
     origin: "published",

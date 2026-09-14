@@ -15,7 +15,7 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
-import { metricNarrative, narrativeFacts } from "@/lib/core/metric-narrative";
+import { metricNarrative } from "@/lib/core/metric-narrative";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
@@ -659,10 +659,18 @@ export async function sendMetricHighlightReport(
   const { refDate, totals, movements } = data;
 
   const dedupeKey = metricHighlightDedupeKey(refDate);
-  const narrative =
-    options.narrative !== undefined
-      ? options.narrative
-      : await metricNarrative(narrativeFacts(data));
+  // 해설은 항상 문자열이다(LLM 실패 시 결정적 골격). narrated 는 "LLM 문장이었는가"라
+  // 골격으로 대체됐으면 false 다 — 보고서는 나가되 그 사실은 기록에 남아야 한다.
+  let narrative: string | null;
+  let narrated: boolean;
+  if (options.narrative !== undefined) {
+    narrative = options.narrative;
+    narrated = options.narrative != null;
+  } else {
+    const made = await metricNarrative(data);
+    narrative = made.text;
+    narrated = !made.fallback;
+  }
   const body = renderHighlightReport({
     refDate,
     totals,
@@ -684,7 +692,7 @@ export async function sendMetricHighlightReport(
 
   return {
     refDate,
-    narrated: narrative != null,
+    narrated,
     highlights: rankMovements(movements, "highlight").length,
     lowlights: rankMovements(movements, "lowlight").length,
     observations: movements.length,
