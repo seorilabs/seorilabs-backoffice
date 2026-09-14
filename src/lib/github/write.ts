@@ -192,7 +192,7 @@ export async function upsertReleaseAsset(opts: {
 export async function dispatchWorkflow(opts: {
   repoFullName: string;
   workflowFile: string;
-  ref: string; // 태그 또는 브랜치
+  ref: string; // workflow 제어 ref. stable 배포는 기본 브랜치, snapshot은 태그일 수 있다.
   inputs?: Record<string, string>;
   expectedTag?: { tag: string; sha: string };
 }): Promise<void> {

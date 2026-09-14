@@ -243,9 +243,9 @@ sequenceDiagram
 - **릴리즈 태그는 승인된 소스 SHA 를 직접 가리킨다.** 백오피스는 대상 ref 의 SHA 를 한 번 확정하고 그 SHA 에 태그를 단다. 브랜치 ref 를 갱신하거나 커밋을 만들지 않는다. **릴리즈 마커 커밋 정책은 폐기됐다** — 파일 변경이 없는 `chore(release): vX.Y.Z` 커밋을 릴리즈 소스로 만들고 브랜치 HEAD 까지 움직였기 때문이다. 폐기 이전에 쌓인 마커 커밋은 히스토리에 남아 있으므로 출시노트 집계에서만 계속 제외한다(읽기 호환).
 - **preview 는 default branch 의 exact SHA 를 고정한다.** 후보 stable tag와 SHA를 확인 카드에 담고 confirm 단계에서 같은 값을 다시 검증한다. 그 사이 브랜치가 움직였으면 write 없이 중단한다. default branch 이름은 repo에서 조회하며 `main`으로 하드코딩하지 않는다.
 - **bump 는 GitHub stable tag 계보만 사용한다.** 명시 태그가 없으면 최신 `vX.Y.Z`에서 증가시키며 `project.godot`, Play/App Store JSON, repo-local 검사 스크립트의 stale 값은 후보 생성이나 배포 허가에 관여하지 않는다.
-- **fail-closed GitHub tag 권한**: 태그 생성은 확인한 branch commit에 exact ref를 만든 뒤 다시 peel해 같은 commit인지 검증한다. 배포는 exact `refs/tags/vX.Y.Z`를 읽어 얻은 peeled commit SHA를 권한으로 사용한다. 같은 이름의 branch, 일반 422 응답, repo-local 버전 파일은 태그 존재·일치 증거가 아니다.
+- **fail-closed GitHub tag 권한**: 태그 생성은 확인한 branch commit에 exact ref를 만든 뒤 다시 peel해 같은 commit인지 검증한다. 배포 소스 권한은 exact `refs/tags/vX.Y.Z`를 읽어 얻은 peeled commit SHA로 고정하되, `workflow_dispatch` 제어 파일은 최신 기본 브랜치에서 읽고 실행한다. caller가 태그 뒤에 추가·수정돼도 불변 태그의 제품 소스를 바꾸지 않고 운영 경로만 복구할 수 있다. 같은 이름의 branch, 일반 422 응답, repo-local 버전 파일은 태그 존재·일치 증거가 아니다.
 - **배포는 preflight 전부 → GitHub dispatch → Xcode Cloud 순서다.** 되돌릴 수 없는 외부 실행을 마지막에 둔다.
-  - preflight(외부 write 0): exact stable tag의 peeled commit SHA, caller의 `workflow_dispatch` 선언 존재, 실제로 보낼 입력이 모두 선언돼 있는지, Xcode Cloud 제품·repository·수동 태그 시작 조건까지 확인해 실행 계획을 확정한다.
+  - preflight(외부 write 0): exact stable tag의 peeled commit SHA, 최신 기본 브랜치 caller의 `workflow_dispatch` 선언 존재, 실제로 보낼 입력이 모두 선언돼 있는지, Xcode Cloud 제품·repository·수동 태그 시작 조건까지 확인해 실행 계획을 확정한다.
   - 실행: GitHub `workflow_dispatch` 를 먼저 보낸다. GitHub 이 422(선언되지 않은 입력·정의 불일치) 등으로 거부하면 거기서 중단되므로 `ciBuildRuns` POST 는 0회로 남는다. Xcode Cloud 는 GitHub 이 성공한 뒤에만 실행한다.
   - `APPSTORE` 단독(Xcode Cloud 경로)은 GitHub dispatch 가 없지만 같은 preflight 를 전부 통과한 뒤에만 `ciBuildRuns` 를 만든다.
   - 배포 audit 에는 **검증된 태그 SHA 와 실제 dispatch 결과만** 남긴다. 요청값을 그대로 신뢰해 기록하지 않는다.

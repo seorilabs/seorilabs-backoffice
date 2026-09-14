@@ -180,6 +180,8 @@ export async function planMarketDeploy(opts: {
   repoFullName: string;
   target: DeployTarget;
   tag: string;
+  /** 최신 실행 제어 파일을 읽고 dispatch할 기본 브랜치. 빌드 소스는 release_tag로 별도 고정한다. */
+  workflowRef: string;
   memo?: string;
   inputs?: Record<string, string>;
   iosViaXcodeCloud: boolean;
@@ -201,11 +203,11 @@ export async function planMarketDeploy(opts: {
 
   let github: MarketDeployPlan["github"] = null;
   if (usesGithub) {
-    const declared = await opts.dispatcher.getWorkflowDispatchContract(workflowFile, tag);
+    const declared = await opts.dispatcher.getWorkflowDispatchContract(workflowFile, opts.workflowRef);
     if (!declared.dispatchable) {
       authorityError(
-        `${opts.repoFullName} 의 ${workflowFile}(태그 ${tag})에 workflow_dispatch 선언이 없습니다. ` +
-          "해당 태그로는 배포를 트리거할 수 없습니다.",
+        `${opts.repoFullName} 의 ${workflowFile}(실행 ref ${opts.workflowRef})에 workflow_dispatch 선언이 없습니다. ` +
+          "최신 기본 브랜치에서 배포 진입점을 확인하세요.",
       );
     }
 
@@ -258,7 +260,7 @@ export async function planMarketDeploy(opts: {
       );
     }
 
-    github = { workflowFile, ref: tag, inputs, expectedTagSha: sha };
+    github = { workflowFile, ref: opts.workflowRef, inputs, expectedTagSha: sha };
   }
 
   // Xcode Cloud 는 읽기 전용 계약 검증까지 preflight 에서 끝낸다(제품·repo·수동 태그 조건).
@@ -301,6 +303,7 @@ export async function dispatchMarketDeployAtTag(opts: {
   repoFullName: string;
   target: DeployTarget;
   tag: string;
+  workflowRef: string;
   memo?: string;
   inputs?: Record<string, string>;
   iosViaXcodeCloud: boolean;

@@ -223,7 +223,7 @@ export async function dispatchWorkflowWithExactTagBinding(
   const releaseTag = input.inputs.release_tag;
   if (
     (releaseTag !== undefined && releaseTag !== input.expectedTag)
-    || input.ref !== input.expectedTag
+    || (releaseTag === undefined && input.ref !== input.expectedTag)
   ) {
     throw new Error("GITHUB_WORKFLOW_RELEASE_TAG_BINDING_MISMATCH");
   }

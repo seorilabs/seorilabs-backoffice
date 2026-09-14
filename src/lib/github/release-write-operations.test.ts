@@ -31,7 +31,7 @@ function client(input: {
   getReleaseByTag?: () => Promise<unknown>;
   updateRelease?: () => Promise<unknown>;
   createRelease?: () => Promise<unknown>;
-  createWorkflowDispatch?: () => Promise<unknown>;
+  createWorkflowDispatch?: (...args: unknown[]) => Promise<unknown>;
   getRelease?: () => Promise<unknown>;
   uploadReleaseAsset?: () => Promise<unknown>;
   listReleaseAssets?: () => Promise<unknown>;
@@ -277,7 +277,27 @@ test("workflow dispatch는 scoped client에서 exact tag SHA를 읽은 뒤 한 �
   assert.equal(dispatches, 1);
 });
 
-test("workflow dispatch는 tag SHA 또는 stable ref binding이 다르면 write 전에 차단한다", async () => {
+test("stable workflow는 기본 브랜치에서 실행하고 release_tag의 exact SHA를 결합한다", async () => {
+  let dispatchedRef = "";
+  await dispatchWorkflowWithExactTagBinding(client({
+    getRef: async () => ref(SHA),
+    createWorkflowDispatch: async (...args: unknown[]) => {
+      dispatchedRef = (args[0] as { ref: string }).ref;
+      return { data: {} };
+    },
+  }), {
+    owner: OWNER,
+    repo: REPO,
+    workflowFile: "deploy-apps-in-toss.yml",
+    ref: "main",
+    inputs: { release_tag: TAG },
+    expectedTag: TAG,
+    expectedSha: SHA,
+  });
+  assert.equal(dispatchedRef, "main");
+});
+
+test("workflow dispatch는 tag SHA 또는 release_tag binding이 다르면 write 전에 차단한다", async () => {
   let dispatches = 0;
   const octokit = client({
     getRef: async (...args: unknown[]) => {
@@ -307,8 +327,8 @@ test("workflow dispatch는 tag SHA 또는 stable ref binding이 다르면 write 
       owner: OWNER,
       repo: REPO,
       workflowFile: "deploy-google-play.yml",
-      ref: "v9.9.9",
-      inputs: { release_tag: TAG },
+      ref: "main",
+      inputs: { release_tag: "v9.9.9" },
       expectedTag: TAG,
       expectedSha: SHA,
     }),

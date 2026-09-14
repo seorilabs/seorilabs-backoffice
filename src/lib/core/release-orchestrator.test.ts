@@ -129,6 +129,7 @@ function deploy(h: Harness, target: DeployTarget, tag: string, iosViaXcodeCloud 
     repoFullName: REPO,
     target,
     tag,
+    workflowRef: "main",
     iosViaXcodeCloud,
     source: h.source,
     dispatcher: h.dispatcher,
@@ -213,18 +214,20 @@ test("stable이 아닌 태그는 GitHub read·write 전에 거부한다", async 
   assert.deepEqual(h.calls, []);
 });
 
-test("배포는 이름이 같은 branch가 아니라 exact tag ref의 peeled commit을 권한으로 쓴다", async () => {
+test("배포 소스는 exact tag SHA, 실행 제어는 최신 기본 브랜치로 분리한다", async () => {
   const h = harness({ branchSha: BRANCH_HEAD, tagSha: TAG_HEAD });
   const plan = await planMarketDeploy({
     repoFullName: REPO,
     target: "ALL",
     tag: "v1.2.2",
+    workflowRef: "main",
     iosViaXcodeCloud: false,
     source: h.source,
     dispatcher: h.dispatcher,
   });
   assert.equal(plan.sha, TAG_HEAD);
   assert.equal(plan.authority.sha, TAG_HEAD);
+  assert.equal(plan.github?.ref, "main");
   assert.deepEqual(h.calls, ["resolveTagSha:v1.2.2", "getWorkflowDispatchContract"]);
   assert.deepEqual(h.writes(), []);
 });
@@ -247,6 +250,7 @@ test("AIT 배포는 optional upload caller에도 비공개 업로드를 명시�
     repoFullName: REPO,
     target: "AIT",
     tag: "v1.0.22",
+    workflowRef: "main",
     memo: "Discord slash release",
     iosViaXcodeCloud: false,
     source: h.source,
@@ -342,7 +346,7 @@ test("PLAY 배포는 tag 파생 version_name과 업로드 입력을 채운다", 
 test("추가 caller 입력은 선언된 값만 전달하고 릴리스·마켓 정책을 덮어쓰지 않는다", async () => {
   const h = harness({ declared: new Set([...ALL_INPUTS, "build_flavor"]) });
   const plan = await planMarketDeploy({
-    repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+    repoFullName: REPO, target: "PLAY", tag: "v1.2.3", workflowRef: "main", iosViaXcodeCloud: false,
     source: h.source, dispatcher: h.dispatcher, inputs: { build_flavor: "standard" },
   });
   assert.equal(plan.github?.inputs.build_flavor, "standard");
@@ -352,7 +356,7 @@ test("추가 caller 입력은 선언된 값만 전달하고 릴리스·마켓 �
     { upload: "false" }, { build_flavor: false } as unknown as Record<string, string>,
   ]) {
     await assert.rejects(planMarketDeploy({
-      repoFullName: REPO, target: "PLAY", tag: "v1.2.3", iosViaXcodeCloud: false,
+      repoFullName: REPO, target: "PLAY", tag: "v1.2.3", workflowRef: "main", iosViaXcodeCloud: false,
       source: h.source, dispatcher: h.dispatcher, inputs,
     }), StableReleaseAuthorityError);
   }
