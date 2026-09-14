@@ -99,6 +99,8 @@ export function assembleOrgReportDocument(input: {
   generatedAt: Date;
   /** 해설 생성 출처(선택). 어느 모델이 어떤 지시로 썼는지. */
   narrativeMeta?: OrgReportDocument["narrativeMeta"];
+  /** 덮이기 전 발행 수치(선택). 소급 재계산에서만 채운다. */
+  superseded?: OrgReportDocument["superseded"];
   /** 발행 기록. 정정 판단의 근거이자 "그때 무엇을 보고 그 숫자를 냈는가"의 기록이다. */
   published?: OrgReportDocument["published"];
 }): OrgReportDocument {
@@ -213,6 +215,7 @@ export function assembleOrgReportDocument(input: {
     costs: input.costs,
     consoleMeta: buildConsoleMeta(data),
     narrativeMeta: input.narrativeMeta ?? null,
+    superseded: input.superseded ?? null,
     published: input.published ?? null,
   };
 }
@@ -602,4 +605,79 @@ export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTre
     new Map(consoleRows.map((row) => [dbDay(row.date), row._sum])),
     await ga4CoverageByDay(metricDayWindow(endDate, days)),
   );
+}
+
+// ── 소급 재계산 ──────────────────────────────────────────────────────────
+
+export interface RecomputeResult {
+  from: string;
+  to: string;
+  recomputed: string[];
+  /** 발행 기록이 있어 건너뛴 날. 그 날들은 정정(reconcileOrgReport)이 담당한다. */
+  skippedPublished: string[];
+  /** 원본 데이터가 전혀 없어 만들 문서가 없는 날. */
+  skippedEmpty: string[];
+}
+
+/**
+ * 과거 스냅샷을 현재 원본으로 다시 계산한다.
+ *
+ * 2026-08-30~09-11 발행분은 수집이 절반도 오기 전에 찍혀 실제의 1/3.6~1/6 로 남아
+ * 있다. 그대로 두면 /report 추이선이 영원히 그 값을 그리고, 시계열을 보는 모든 판단이
+ * 거기서 출발한다.
+ *
+ * 덮기 전에 발행됐던 수치를 superseded 에 남긴다 — 무엇이 발행됐고 무엇이 사실이었는지
+ * 둘 다 남아야 이번 사고가 기록으로 남는다. 해설과 비용은 null 로 둔다. 과거 시점을
+ * 복원할 수 없고, 수치가 바뀐 문서에 옛 해설을 이어 붙이는 것이 애초의 결함이었다.
+ *
+ * 발행 기록(published)이 있는 날은 건드리지 않는다. 그 날들은 Discord 메시지가 아직
+ * 살아 있으므로 정정 경로가 메시지까지 함께 고쳐야 한다.
+ */
+export async function recomputeOrgReports(
+  now: Date,
+  range: { from: string; to: string },
+): Promise<RecomputeResult> {
+  const span = metricDaysBetween(range.to, range.from);
+  if (span < 0) throw new Error("from 이 to 보다 뒤일 수 없습니다.");
+  const days = metricDayWindow(range.to, span + 1);
+
+  const result: RecomputeResult = {
+    from: range.from,
+    to: range.to,
+    recomputed: [],
+    skippedPublished: [],
+    skippedEmpty: [],
+  };
+
+  for (const day of days) {
+    const existing = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(day) } });
+    const previous = existing ? parseOrgReportDocument(existing.report) : null;
+    if (previous?.published) {
+      result.skippedPublished.push(day);
+      continue;
+    }
+    const data = await collectHighlightData(now, day);
+    if (data.ga4Series.length === 0 && data.consoleSeries.length === 0) {
+      result.skippedEmpty.push(day);
+      continue;
+    }
+    const doc = assembleOrgReportDocument({
+      data,
+      narrative: null,
+      costs: null,
+      origin: "recomputed",
+      generatedAt: now,
+      superseded: existing
+        ? {
+          ga4Dau: existing.ga4Dau,
+          consoleIaaKrw: existing.consoleIaaKrw,
+          generatedAt: existing.generatedAt.toISOString(),
+          version: existing.version,
+        }
+        : null,
+    });
+    await saveOrgReport(doc);
+    result.recomputed.push(day);
+  }
+  return result;
 }
