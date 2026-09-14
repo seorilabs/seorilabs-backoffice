@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
-import { collectMetrics } from "@/lib/core/analytics-collect";
+import { collectMetrics, collectionFailedEntirely } from "@/lib/core/analytics-collect";
 import { parseWindowDays } from "@/lib/ga4/datasets";
 
 // 일별 GA4 지표 재집계 트리거(CronJob 23:00 KST 이 호출). Discord 발송이나
@@ -25,6 +25,11 @@ export async function POST(req: NextRequest) {
       new Date(),
       windowDays === undefined ? {} : { windowDays },
     );
+    // 전 대상 실패는 성공이 아니다. cron 의 curl -fsS 가 잡게 500 으로 낸다.
+    if (collectionFailedEntirely(result)) {
+      console.error("[admin/analytics/recollect] 전 대상 수집 실패:", result.errors);
+      return NextResponse.json({ ok: false, ...result }, { status: 500 });
+    }
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     console.error("[admin/analytics/recollect] 실패:", e);

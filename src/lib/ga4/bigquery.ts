@@ -334,6 +334,29 @@ export async function queryCohortRetention(
   }));
 }
 
+// ── export 착지 확인 ──────────────────────────────────────────────────────
+// "그 앱의 그 날 행이 없다"가 활동 0 인지 export 미착지인지 가르는 유일한 근거다.
+// 일별 테이블이 있는데 행이 없으면 진짜 0 이고, 테이블이 아직 없으면 모르는 것이다.
+// 그 둘을 구분하지 못해 미착지가 실적 0 으로 둔갑했고, 합계 분모가 날마다 흔들렸다.
+//
+// 데이터 스캔이 아니라 메타데이터 조회라 정상 수집 비용에 영향이 없다(쿼리당 최소
+// 과금 10MB). events_intraday_* 는 불완전하므로 정규식으로 명시 배제한다 — 접미사
+// 범위로도 걸러지지만, 그 사실이 문자열 비교에 숨어 있으면 다음 사람이 못 읽는다.
+
+export async function queryLandedEventTables(
+  target: Ga4Target,
+  start: string,
+  end: string,
+): Promise<Set<string>> {
+  const sql = `
+    SELECT table_name
+    FROM \`${target.firebaseProject}.${target.dataset}.INFORMATION_SCHEMA.TABLES\`
+    WHERE REGEXP_CONTAINS(table_name, r'^events_\\d{8}$')
+      AND table_name BETWEEN 'events_${start}' AND 'events_${end}'`;
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+  return new Set(rows.map((r) => String(r.table_name).slice("events_".length)));
+}
+
 // ── property 보고 타임존 확인 ─────────────────────────────────────────────
 // GA4 export 의 event_date 는 UTC 가 아니라 property 보고 타임존의 달력일이다.
 // 백오피스는 모든 일별 지표를 METRIC_DAY_TZ(Asia/Seoul) 축 하나에서 합산하므로,

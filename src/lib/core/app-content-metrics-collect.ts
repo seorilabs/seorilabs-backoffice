@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   lastElapsedMetricDay,
   metricDayWindow,
@@ -95,6 +96,9 @@ export async function collectAppContentMetrics(
   const startSuffix = toGa4TableSuffix(metricDayWindow(end, windowDays)[0]);
 
   const apps = await prisma.app.findMany({
+    // 보고 경로는 전부 visibleAppWhere 로 거른다. 수집만 전체 앱을 돌면 아무도 읽지
+    // 않는 행이 비활성 앱에 계속 쌓이고, 수집한 집합과 보고한 집합이 달라진다.
+    where: visibleAppWhere,
     select: {
       id: true,
       slug: true,

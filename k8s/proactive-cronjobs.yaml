@@ -454,3 +454,53 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+---
+# GA4 export 착지 시각 실측. 지표는 수집하지 않고, 아직 착지하지 않은 칸이 남은 앱에만
+# INFORMATION_SCHEMA 를 물어 landedAt 을 남긴다. 착지한 뒤에는 그 앱에 쿼리가 발생하지
+# 않으므로 하루 지나면 비용이 스스로 0 에 수렴한다.
+#
+# 발행 시각을 근거로 정하기 위한 장치다. 지금은 D-1 이 언제쯤 다 오는지 아무도 모른다 —
+# 실측상 전체 DAU 의 66% 를 차지하는 앱이 29일 중 26일 아침 수집을 놓쳤는데, 그중 저녁에
+# 관측된 날은 이틀뿐이었다. 분포가 쌓이면 이 cron 의 간격도 다시 정한다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-metric-landing-probe
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "10 */2 * * *" # 2시간 간격. 정각은 다른 수집 cron 과 겹치므로 10분 비켜 둔다.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 330
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 300 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/analytics/landing-probe
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
-import { collectMetrics } from "@/lib/core/analytics-collect";
+import { collectMetrics, collectionFailedEntirely } from "@/lib/core/analytics-collect";
 import { parseWindowDays } from "@/lib/ga4/datasets";
 
-// GA4 지표 수집 트리거(CronJob 21:00 KST 이 호출). x-admin-token 보호.
+// GA4 지표 수집 트리거(CronJob 10:00 KST 이 호출). x-admin-token 보호.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -20,6 +20,11 @@ export async function POST(req: NextRequest) {
   }
   try {
     const result = await collectMetrics(new Date(), { windowDays });
+    // 전 대상 실패는 성공이 아니다. cron 의 curl -fsS 가 잡게 500 으로 낸다.
+    if (collectionFailedEntirely(result)) {
+      console.error("[admin/analytics/collect] 전 대상 수집 실패:", result.errors);
+      return NextResponse.json({ ok: false, ...result }, { status: 500 });
+    }
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     console.error("[admin/analytics/collect] 실패:", e);

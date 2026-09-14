@@ -111,6 +111,29 @@ export interface RetentionCore {
 }
 
 /**
+ * 활동이 진짜 0 인 날의 활동 코어(순수). 일별 테이블은 착지했는데 그 앱의 그 날
+ * 행이 없을 때 쓴다. 행을 아예 안 쓰면 "관측된 0"과 "미착지"가 같아지고, 기준선
+ * 계산이 그 날을 건너뛰어 조회 구간이 조용히 길어진다.
+ */
+export function zeroDailyActivity(date: string): DailyActivityCore & { date: string } {
+  return {
+    date,
+    dau: 0,
+    newUsers: 0,
+    engagedUsers: 0,
+    avgEngageSec: null,
+    adEventUsers: 0,
+    adImpressions: 0,
+    adCtaUsers: 0,
+    adCtaImpressions: 0,
+    adCompletedUsers: 0,
+    adCompletions: 0,
+    networkAdUsers: 0,
+    networkAdImpressions: 0,
+  };
+}
+
+/**
  * 활동+잔존+차원분해 → AppMetricDaily upsert 데이터(순수, collectedAt 제외).
  * 플랫폼 DAU 전용 컬럼과 국가/기기/OS top-N raw JSON 배치를 잠근다.
  */
