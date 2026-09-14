@@ -54,3 +54,33 @@ export function sealRule(input: {
   const rule = SEAL_RULES[input.source];
   return input.ageDays >= rule.minAgeDays && input.observations >= rule.minObservations;
 }
+
+/**
+ * GA4 export 가 아직 안 온 것인가, 그 날 활동이 진짜 0 이었나.
+ *
+ * 앱마다 GA4 데이터셋이 따로다. 그래서 events_YYYYMMDD 는 그 앱이 그 날 이벤트를
+ * 하나라도 냈을 때만 생긴다 — 테이블이 없다는 사실만으로는 "아직 안 왔다"와 "활동이
+ * 0 이었다"를 가를 수 없다. 처음 구현은 전부 not_landed 로 봤고, 그러면 조용한 앱이
+ * 매일 미관측으로 잡혀 분모가 영영 차지 않는다(실측: 30일 중 108칸).
+ *
+ * 두 가지로 가른다.
+ *
+ * 1. 그 앱의 더 뒤 날짜 테이블이 이미 착지했다면, export 는 그 날을 지나간 것이다.
+ *    테이블이 없는 것은 활동이 0 이었기 때문이다.
+ * 2. 그렇지 않아도 정착 기간이 지나면 0 으로 확정한다. 실측 착지 지연은 최대 34시간이고
+ *    예외 1건이 58시간이었다. GA4 가 일별 테이블을 보정하는 72시간에 맞춰 3일로 둔다.
+ */
+export const LANDING_SETTLE_DAYS = 3;
+
+export function missingDayState(input: {
+  /** 이 날의 나이(기준일 기준 며칠 전인가). 0 = 기준일. */
+  ageDays: number;
+  /** 같은 앱에서 착지가 확인된 가장 최신 달력일. 하나도 없으면 null. */
+  latestLandedDay: string | null;
+  day: string;
+  settleDays?: number;
+}): Extract<MetricObservationState, "empty" | "not_landed"> {
+  const settledByLater = input.latestLandedDay != null && input.day < input.latestLandedDay;
+  const settledByAge = input.ageDays >= (input.settleDays ?? LANDING_SETTLE_DAYS);
+  return settledByLater || settledByAge ? "empty" : "not_landed";
+}
