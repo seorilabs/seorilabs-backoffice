@@ -4,6 +4,7 @@ import {
   normalizeStoreNotes,
   buildReleaseNotesAsset,
   buildGooglePlayReleaseNotesText,
+  formatMarketReleaseBody,
 } from "./store-notes";
 
 test("불릿 마커/마크다운을 순수 텍스트 '- ' 불릿으로 정규화", () => {
@@ -121,4 +122,35 @@ test("Android용 출시노트를 Google Play 로케일 태그 형식으로 만�
 
 test("Android용 출시노트는 번역이 없으면 빈 문자열이다", () => {
   assert.equal(buildGooglePlayReleaseNotesText({}), "");
+});
+
+test("GitHub Release 본문은 마켓별 기준과 번역을 분리한다", () => {
+  const body = formatMarketReleaseBody({
+    tag: "v1.0.15",
+    markets: [
+      {
+        market: "PLAY",
+        previousVersion: "v1.0.14",
+        compareUrl: "https://example.com/play",
+        koKR: "- 공통 힌트 수정",
+      },
+      {
+        market: "APPSTORE",
+        previousVersion: "v1.0.10",
+        compareUrl: "https://example.com/appstore",
+        koKR: "- iOS 전용 수정",
+      },
+      {
+        market: "AIT",
+        previousVersion: null,
+        compareUrl: null,
+        koKR: "- 첫 출시",
+      },
+    ],
+  });
+
+  assert.match(body, /## Google Play\n\n기준: `v1\.0\.14` → `v1\.0\.15`/);
+  assert.match(body, /## App Store\n\n기준: `v1\.0\.10` → `v1\.0\.15`/);
+  assert.match(body, /## AppsInToss\n\n기준: `v1\.0\.15` 첫 출시/);
+  assert.match(body, /\[변경 내역 비교\]\(https:\/\/example\.com\/play\)/);
 });

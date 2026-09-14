@@ -42,13 +42,32 @@ test("출시노트 프롬프트는 8개 언어 키를 모두 요구한다", () =
     displayName: "해피팜",
     type: "GAME",
     version: "v1.2.3",
-    previousVersion: "v1.2.2",
-    prs: [{ number: 12, title: "언어 지원 확대" }],
-    commitCount: 3,
+    byMarket: {
+      googlePlay: {
+        previousVersion: "v1.2.2",
+        prs: [{ number: 12, title: "언어 지원 확대" }],
+        commitCount: 3,
+      },
+      appStore: {
+        previousVersion: "v1.2.1",
+        prs: [{ number: 11, title: "힌트 화면 수정" }],
+        commitCount: 4,
+      },
+      ait: {
+        previousVersion: null,
+        prs: [{ number: 10, title: "AIT 첫 출시" }],
+        commitCount: 8,
+      },
+    },
   });
 
   for (const key of ["ko_KR", "en_US", "ja_JP", "zh_CN", "zh_TW", "de_DE", "fr_FR", "es_ES"]) {
     assert.match(system + prompt, new RegExp(key));
   }
   assert.match(system, /8개 언어/);
+  assert.match(prompt, /googlePlay — v1\.2\.2 이후/);
+  assert.match(prompt, /appStore — v1\.2\.1 이후/);
+  assert.match(prompt, /ait — 첫 릴리즈/);
+  assert.match(system, /다른 마켓 이름이나 다른 마켓 전용 변경을 절대 언급하지 않는다/);
+  assert.match(system, /AdMob과 리워드 광고.*한 마켓 전용으로 추정하지 않는다/);
 });

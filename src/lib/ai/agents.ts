@@ -371,9 +371,14 @@ export interface ReleaseNotesI18nContext {
   displayName: string;
   type: AppType;
   version: string;
-  previousVersion: string | null;
-  prs: Array<{ number: number; title: string }>;
-  commitCount: number;
+  byMarket: Record<
+    ReleaseNoteMarketKey,
+    {
+      previousVersion: string | null;
+      prs: Array<{ number: number; title: string }>;
+      commitCount: number;
+    }
+  >;
 }
 
 export interface ReleaseNotesI18nOutput {
@@ -385,9 +390,6 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
   system: string;
   prompt: string;
 } {
-  const prLines = ctx.prs.length
-    ? ctx.prs.map((p) => `- #${p.number} ${p.title}`).join("\n")
-    : "(머지 PR 식별 못함 — 커밋 기준으로만 작성)";
   const languageKeys = RELEASE_NOTE_LOCALES.map(
     ({ label, promptKey }) => `${label}(${promptKey})`,
   ).join(", ");
@@ -408,7 +410,8 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
     system: [
       "당신은 Seorilabs 의 릴리스 매니저다.",
       "변경 내역(머지 PR/커밋)을 바탕으로 '사용자에게 공지할' 출시노트를 작성한다.",
-      `이 출시노트는 ${marketLabels} 등 앱 마켓에 그대로 게시된다 — 마켓과 무관한 변경만 모든 마켓 본문에 넣고, 특정 마켓 한정 변경은 해당 마켓에만 넣는다.`,
+      `이 출시노트는 ${marketLabels}에 그대로 게시된다. 각 마켓은 제공된 자기 변경 범위만 사용하고 다른 마켓 이름이나 다른 마켓 전용 변경을 절대 언급하지 않는다.`,
+      "마켓명이 없는 게임 화면·조작·콘텐츠·공통 광고 흐름 변경은 공통 변경이므로 모든 마켓에 넣는다. 주변에 특정 마켓 PR이 있다는 이유로 공통 변경을 그 마켓 전용으로 오분류하지 않는다.",
       "내부 리팩터링·빌드·CI·테스트 등 사용자가 체감 못하는 변경은 제외하고, 새 기능·개선·버그수정만 쉬운 말로 쓴다.",
       `각 마켓별로 8개 언어(${languageKeys}) 버전을 만든다.`,
       "각 번역은 해당 지역의 앱 마켓에서 자연스럽게 읽히도록 현지화하고, 다른 언어의 문장을 섞지 않는다.",
@@ -416,16 +419,26 @@ export function buildReleaseNotesI18nPrompt(ctx: ReleaseNotesI18nContext): {
       "형식 규칙(반드시 준수): 각 마켓·각 언어당 최대 4개 불릿, 각 불릿은 한 줄이며 100자 이내, 마켓·언어당 전체 480자 이내.",
       "각 줄은 '- ' 로 시작하는 순수 텍스트만. 마크다운 헤더(#)·링크·볼드(**)·이모지·코드블록 금지.",
       `반드시 마켓 3개 키(${RELEASE_NOTE_MARKET_KEYS.join("/")}) × 8개 언어 키 = 24 슬롯을 모두 가진 JSON 객체 하나만 출력: ${jsonExample}. 머리말/코드블록 금지.`,
-      "분류 규칙: 'AppsInToss', '토스', 'AIT', 'Granite', 'toss login' 등은 ait 전용. 'Google Play', 'Android', 'AdMob', 'Play Billing', 'AAB', '상태바' 등은 googlePlay 전용. 'App Store', 'iOS', 'TestFlight', 'App Store Connect' 등은 appStore 전용. '사주 해설', '버그 수정', '내부 로직', 'API 공통' 등 분류 애매한 항목은 안전하게 세 마켓 모두에 포함한다(노출 누락이 오분류보다 낫다).",
+      "분류 규칙: 'AppsInToss', '토스', 'AIT', 'Granite', 'toss login' 등은 ait 전용. 'Google Play', 'Android 전용', 'Play Billing', 'AAB' 등은 googlePlay 전용. 'App Store', 'iOS 전용', 'TestFlight', 'App Store Connect' 등은 appStore 전용. AdMob과 리워드 광고는 Android와 iOS에서 모두 쓸 수 있으므로 마켓명이 없으면 한 마켓 전용으로 추정하지 않는다. 특정 마켓 표시가 없는 '힌트', '버그 수정', '화면', '조작', '내부 로직', 'API 공통'은 세 마켓 공통으로 분류한다.",
       "사용자 체감 변경이 전혀 없는 마켓은 '변경 사항 없음' 1줄로 채워도 된다.",
     ].join(" "),
     prompt: [
       `앱: ${ctx.displayName} (${ctx.type === "GAME" ? "게임" : "앱"})`,
-      `버전: ${ctx.version}${ctx.previousVersion ? ` (이전: ${ctx.previousVersion})` : " (첫 릴리즈)"}`,
-      `커밋 ${ctx.commitCount}개`,
+      `버전: ${ctx.version}`,
       "",
-      "## 변경 내역",
-      prLines,
+      "## 마켓별 변경 범위",
+      ...RELEASE_NOTE_MARKET_KEYS.flatMap((market) => {
+        const change = ctx.byMarket[market];
+        const prLines = change.prs.length
+          ? change.prs.map((p) => `- #${p.number} ${p.title}`)
+          : ["- 사용자 체감 변경을 식별할 PR 없음"];
+        return [
+          `### ${market} — ${change.previousVersion ? `${change.previousVersion} 이후` : "첫 릴리즈"}`,
+          `커밋 ${change.commitCount}개`,
+          ...prLines,
+          "",
+        ];
+      }),
       "",
       `위에서 사용자 체감 항목을 마켓별로 분류해 ${RELEASE_NOTE_MARKET_KEYS.join("/")} 마켓 × ${RELEASE_NOTE_LOCALES.map(({ promptKey }) => promptKey).join("/")} 언어의 출시노트를 JSON 으로 작성하라.`,
       "각 마켓·각 언어당 최대 4개 불릿, 마켓·언어당 480자 이내, 순수 텍스트 '- ' 불릿만.",

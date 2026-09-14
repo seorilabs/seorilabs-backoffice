@@ -43,6 +43,52 @@ export const RELEASE_NOTES_ASSET_SCHEMA_V2 = "seorilabs.release-notes/v2";
 export const RELEASE_NOTES_ASSET_MARKETS = ["googlePlay", "appStore", "appsInToss"] as const;
 export type ReleaseNotesAssetMarket = (typeof RELEASE_NOTES_ASSET_MARKETS)[number];
 
+export const RELEASE_BODY_MARKETS = ["PLAY", "APPSTORE", "AIT"] as const;
+export type ReleaseBodyMarket = (typeof RELEASE_BODY_MARKETS)[number];
+
+const RELEASE_BODY_MARKET_LABEL: Record<ReleaseBodyMarket, string> = {
+  PLAY: "Google Play",
+  APPSTORE: "App Store",
+  AIT: "AppsInToss",
+};
+
+export type MarketReleaseBodyEntry = ReleaseNoteTranslationsInput & {
+  market: ReleaseBodyMarket;
+  previousVersion: string | null;
+  compareUrl: string | null;
+};
+
+/** GitHub Release에서도 마켓별 본문과 비교 기준을 섞지 않고 보여 준다. */
+export function formatMarketReleaseBody(input: {
+  tag: string;
+  markets: MarketReleaseBodyEntry[];
+}): string {
+  const byMarket = new Map(input.markets.map((entry) => [entry.market, entry]));
+  const sections = RELEASE_BODY_MARKETS.flatMap((market) => {
+    const entry = byMarket.get(market);
+    if (!entry) return [];
+    const baseline = entry.previousVersion
+      ? `기준: \`${entry.previousVersion}\` → \`${input.tag}\``
+      : `기준: \`${input.tag}\` 첫 출시`;
+    const translations = RELEASE_NOTE_LOCALES.flatMap(({ field, heading }) => {
+      const body = entry[field]?.trim();
+      return body ? [`### ${heading}\n\n${body}`] : [];
+    });
+    const compare = entry.compareUrl ? `[변경 내역 비교](${entry.compareUrl})` : "";
+    return [
+      [
+        `## ${RELEASE_BODY_MARKET_LABEL[market]}`,
+        baseline,
+        ...translations,
+        compare,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    ];
+  });
+  return sections.length > 0 ? sections.join("\n\n") : `Release ${input.tag}`;
+}
+
 /**
  * 단일 마켓 row 의 koKR/enUS/... → 스토어 locale 코드 → 본문 map. 비어있지 않은 locale 만.
  */
