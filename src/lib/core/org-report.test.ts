@@ -50,6 +50,7 @@ function sampleData(): HighlightData {
     refDate: REF,
     asOf: null,
     consoleStale: [],
+    consoleRefDate: REF,
     totals: {
       ga4Dau: { latest: 60, previous: 50, apps: 1 },
       console: { iaaKrw: 2_500, iapKrw: 1_000, previousIaaKrw: 2_000, listings: 2 },

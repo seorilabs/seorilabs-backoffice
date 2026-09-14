@@ -242,8 +242,10 @@ export function renderHighlightReport(input: {
   asOf?: AsOfResolution | null;
   /** 기준일 스냅샷이 없는 앱 이름(표시용). */
   gapNames?: readonly string[];
-  /** 스냅샷이 오래돼 합계에서 뺀 콘솔 리스팅("라벨(날짜)"). */
+  /** 스냅샷이 합계 기준에서 벗어나 뺀 콘솔 리스팅("라벨(날짜)"). */
   consoleStale?: readonly string[];
+  /** 콘솔이 세운 자기 확정일. GA4 기준일과 다르면 그 사실을 콘솔 줄에 적는다. */
+  consoleRefDate?: string | null;
   /** LLM 해설(선택). 생성 실패 시 없이 나간다 — 리포트를 LLM 가용성에 묶지 않는다. */
   narrative?: string | null;
   /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
@@ -286,7 +288,11 @@ export function renderHighlightReport(input: {
       won(totals.console.iaaKrw),
       totals.console.previousIaaKrw == null ? null : won(totals.console.previousIaaKrw),
       pctChange(totals.console.iaaKrw, totals.console.previousIaaKrw),
-    ) + ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅`,
+    ) + ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅` +
+      // 콘솔은 자기 확정일을 따로 내건다. GA4 기준일과 같으면 중복이라 적지 않는다.
+      (input.consoleRefDate && input.consoleRefDate !== input.refDate
+        ? ` · 콘솔 기준 ${input.consoleRefDate}`
+        : ""),
   );
 
   const referrers = totals.referrers ?? [];
@@ -465,8 +471,72 @@ export interface HighlightData {
   consoleSeries: ConsoleListingSeries[];
   /** 콘솔 대상이지만 push 수집이 한 번도 없는 리스팅 라벨. */
   consoleMissing: string[];
-  /** 스냅샷이 CONSOLE_STALE_DAYS 를 넘겨 합계에서 뺀 리스팅("라벨(날짜)"). */
+  /** 스냅샷이 합계 기준에서 벗어나 뺀 리스팅("라벨(날짜)"). */
   consoleStale: string[];
+  /**
+   * 콘솔이 세운 자기 확정일. GA4 기준일과 다를 수 있다 — 콘솔은 push 라 며칠 늦고,
+   * 억지로 같은 날짜에 맞추면 며칠 지난 값이 "어제 수치"로 둔갑한다.
+   */
+  consoleRefDate: string | null;
+}
+
+/**
+ * 콘솔 합계(순수). GA4 기준일에 억지로 맞추지 않고 **콘솔 자기 확정일**을 세운다.
+ *
+ * 콘솔은 cron 이 아니라 사람·에이전트 push 라 리스팅마다 최신일이 다르다(실측 1~21일).
+ * 리스팅마다 자기 최신 행을 더하면 서로 다른 날짜가 한 합계에 섞이고, 오래된 값이
+ * 매일 다시 계상돼 선이 평평하다가 push 가 온 날 튄다.
+ *
+ * 확정일은 "CONSOLE_STALE_DAYS 안에서 가장 최신인 스냅샷 날짜"다. 그 날짜 행을 가진
+ * 리스팅만 센다. 나머지는 줄에는 남되 합계에서 빠지고 stale 로 드러난다.
+ */
+export function foldConsoleTotals(
+  series: readonly ConsoleListingSeries[],
+  refDate: string,
+): {
+  totals: PortfolioTotals["console"];
+  raws: unknown[];
+  stale: string[];
+  /** 콘솔이 세운 자기 확정일. 셀 수 있는 스냅샷이 없으면 null. */
+  consoleRefDate: string | null;
+} {
+  const fresh = series.filter(
+    (one) => metricDaysBetween(refDate, dbDay(one.rowsDesc[0].date)) <= CONSOLE_STALE_DAYS,
+  );
+  const totals = { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null as number | null, listings: 0 };
+  if (fresh.length === 0) {
+    return {
+      totals,
+      raws: [],
+      stale: series.map((one) => `${one.label}(${dbDay(one.rowsDesc[0].date)})`),
+      consoleRefDate: null,
+    };
+  }
+  const consoleRefDate = fresh
+    .map((one) => dbDay(one.rowsDesc[0].date))
+    .reduce((latest, day) => (day > latest ? day : latest));
+  const previousDay = shiftMetricDay(consoleRefDate, -1);
+
+  const raws: unknown[] = [];
+  const stale: string[] = [];
+  let previousSum = 0;
+  let previousComplete = true;
+  for (const one of series) {
+    const latest = one.rowsDesc[0];
+    if (dbDay(latest.date) !== consoleRefDate) {
+      stale.push(`${one.label}(${dbDay(latest.date)})`);
+      continue;
+    }
+    totals.iaaKrw += latest.iaaEarningKrw;
+    totals.iapKrw += latest.iapTrxAmountKrw;
+    totals.listings += 1;
+    raws.push(latest.raw);
+    const yesterday = one.rowsDesc.find((row) => dbDay(row.date) === previousDay);
+    if (yesterday) previousSum += yesterday.iaaEarningKrw;
+    else previousComplete = false;
+  }
+  totals.previousIaaKrw = previousComplete && totals.listings > 0 ? previousSum : null;
+  return { totals, raws, stale, consoleRefDate };
 }
 
 /**
@@ -506,13 +576,10 @@ export async function collectHighlightData(
   // 비교 자체가 성립하지 않으므로 null 로 두고 렌더러가 전일 문구를 생략한다.
   let previousComplete = true;
   let previousSum = 0;
-  let consolePreviousComplete = true;
-  let consolePreviousSum = 0;
   const totals: PortfolioTotals = {
     ga4Dau: { latest: 0, previous: 0, apps: 0 },
     console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: 0, listings: 0 },
   };
-  const consoleRaws: unknown[] = [];
   const ga4Series: Ga4AppSeries[] = [];
   const ga4Gaps: Ga4AppGap[] = [];
   const consoleSeries: ConsoleListingSeries[] = [];
@@ -592,23 +659,6 @@ export async function collectHighlightData(
         continue;
       }
       movements.push(...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS));
-      // 콘솔은 온디맨드 push 라 리스팅마다 최신일이 다르다. 오래된 스냅샷은 합계에서
-      // 빼고 줄에만 남긴다 — 21일 지난 수익을 매일 다시 더하면 선이 평평하다가
-      // push 가 온 날 튄다.
-      const staleDays = metricDaysBetween(refDate, dbDay(rows[0].date));
-      if (staleDays <= CONSOLE_STALE_DAYS) {
-        totals.console.iaaKrw += rows[0].iaaEarningKrw;
-        totals.console.iapKrw += rows[0].iapTrxAmountKrw;
-        totals.console.listings += 1;
-        consoleRaws.push(rows[0].raw);
-        const yesterday = rows.find(
-          (row) => metricDaysBetween(dbDay(rows[0].date), dbDay(row.date)) === 1,
-        );
-        if (yesterday) consolePreviousSum += yesterday.iaaEarningKrw;
-        else consolePreviousComplete = false;
-      } else {
-        consoleStale.push(`${target.label}(${dbDay(rows[0].date)})`);
-      }
       consoleSeries.push({
         app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
         miniAppId: target.miniAppId,
@@ -619,10 +669,11 @@ export async function collectHighlightData(
     }
   }
 
-  totals.referrers = foldReferrers(consoleRaws);
   totals.ga4Dau.previous = previousComplete && totals.ga4Dau.apps > 0 ? previousSum : null;
-  totals.console.previousIaaKrw =
-    consolePreviousComplete && totals.console.listings > 0 ? consolePreviousSum : null;
+  const consoleTotals = foldConsoleTotals(consoleSeries, refDate);
+  totals.console = consoleTotals.totals;
+  totals.referrers = foldReferrers(consoleTotals.raws);
+  consoleStale.push(...consoleTotals.stale);
 
   return {
     refDate,
@@ -634,6 +685,7 @@ export async function collectHighlightData(
     consoleSeries,
     consoleMissing,
     consoleStale,
+    consoleRefDate: consoleTotals.consoleRefDate,
   };
 }
 

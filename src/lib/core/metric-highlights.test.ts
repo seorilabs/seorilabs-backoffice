@@ -7,6 +7,7 @@ import {
   metricHighlightDedupeKey,
   movementsFromSeries,
   rankMovements,
+  foldConsoleTotals,
   renderHighlightReport,
   type Movement,
   foldReferrers,
@@ -328,4 +329,81 @@ test("asOf 가 없으면 기존 표기를 유지한다(원장 백필 전)", () =
   const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] });
   assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF}**`);
   assert.ok(text.includes("· 대상 12개 앱"), text);
+});
+
+// ── 콘솔 축 분리 ──────────────────────────────────────────────────────────
+// 콘솔은 cron 이 아니라 push 라 리스팅마다 최신일이 다르다(실측 1~21일). GA4 기준일에
+// 억지로 맞추면 며칠 지난 값이 "어제 수치"로 둔갑하고, 리스팅마다 자기 최신 행을
+// 더하면 서로 다른 날짜가 한 합계에 섞인다.
+
+const listing = (label: string, rows: Array<{ date: string; iaa: number }>) => ({
+  app: { id: label, slug: label, displayName: label, type: "APP" as const },
+  miniAppId: 1,
+  label,
+  listingLabel: null,
+  rowsDesc: rows.map((row) => ({
+    date: new Date(`${row.date}T00:00:00.000Z`),
+    dau: null,
+    newUsers: null,
+    iaaEarningKrw: row.iaa,
+    iapTrxAmountKrw: 0,
+    iapSettlementKrw: 0,
+    payingUsers: 0,
+    raw: null,
+  })),
+});
+
+test("콘솔 합계는 자기 확정일 하나로 모인다", () => {
+  const out = foldConsoleTotals(
+    [
+      listing("A", [{ date: "2026-09-12", iaa: 100 }, { date: "2026-09-11", iaa: 90 }]),
+      listing("B", [{ date: "2026-09-12", iaa: 40 }, { date: "2026-09-11", iaa: 30 }]),
+      // 하루 늦은 리스팅은 합계에서 빠진다. 다른 날짜를 같은 합계에 섞지 않는다.
+      listing("C", [{ date: "2026-09-11", iaa: 500 }]),
+    ],
+    "2026-09-13",
+  );
+  assert.equal(out.consoleRefDate, "2026-09-12");
+  assert.equal(out.totals.iaaKrw, 140);
+  assert.equal(out.totals.listings, 2);
+  assert.equal(out.totals.previousIaaKrw, 120);
+  assert.deepEqual(out.stale, ["C(2026-09-11)"]);
+});
+
+test("확정일 전날 행이 하나라도 없으면 전일 합을 내지 않는다", () => {
+  const out = foldConsoleTotals(
+    [
+      listing("A", [{ date: "2026-09-12", iaa: 100 }, { date: "2026-09-11", iaa: 90 }]),
+      listing("B", [{ date: "2026-09-12", iaa: 40 }]),
+    ],
+    "2026-09-13",
+  );
+  assert.equal(out.totals.previousIaaKrw, null);
+});
+
+test("전부 오래됐으면 합계를 내지 않고 전량을 드러낸다", () => {
+  // 21일 지난 수익을 매일 다시 더하면 선이 평평하다가 push 가 온 날 튄다.
+  const out = foldConsoleTotals([listing("A", [{ date: "2026-08-24", iaa: 900 }])], "2026-09-13");
+  assert.equal(out.consoleRefDate, null);
+  assert.equal(out.totals.listings, 0);
+  assert.equal(out.totals.iaaKrw, 0);
+  assert.deepEqual(out.stale, ["A(2026-08-24)"]);
+});
+
+test("콘솔 확정일이 GA4 기준일과 다르면 그 사실을 적는다", () => {
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+    consoleRefDate: "2026-08-26",
+  });
+  assert.ok(text.includes("· 콘솔 기준 2026-08-26"), text);
+  // 같으면 중복이라 적지 않는다.
+  const same = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+    consoleRefDate: REF,
+  });
+  assert.ok(!same.includes("콘솔 기준"), same);
 });
