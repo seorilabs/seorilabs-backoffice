@@ -94,7 +94,10 @@ export interface MovementInput {
   date: string;
 }
 
-/** absent = 관측 창 전체가 0 이라 애초에 말할 것이 없는 지표(광고 없는 앱의 광고 수익 등). */
+/**
+ * absent = 관측 창 전체가 0 이라 애초에 말할 것이 없는 지표(광고 없는 앱의 광고 수익 등).
+ * "수집이 안 됐다"가 아니다 — 수집 여부는 원장이 따로 말한다. 표기도 "무활동"이다.
+ */
 export type MovementVerdict = "highlight" | "lowlight" | "flat" | "insufficient" | "absent";
 
 export interface Movement extends MovementInput {
@@ -320,7 +323,7 @@ export function renderHighlightReport(input: {
   const judged = input.movements.length - absent;
   lines.push(
     "",
-    `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 미집계 ${absent}건`,
+    `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 무활동 ${absent}건`,
   );
   // 정정은 맨 끝에 둔다. 무엇이 바뀌었는지가 수치 바로 아래가 아니라 읽고 난 뒤에
   // 와야 "원래 이랬는데 이렇게 바뀌었다"로 읽힌다.

@@ -5,6 +5,7 @@ import {
   dbDay,
   lastElapsedMetricDay,
   metricDayWindow,
+  metricDaysBetween,
   toDbDay,
   toGa4TableSuffix,
 } from "@/lib/analytics/metric-day";
@@ -13,6 +14,7 @@ import {
   type MetricObservationState,
   type ObservationInput,
 } from "@/lib/analytics/coverage";
+import { missingDayState } from "@/lib/analytics/observation";
 import { consoleCoverageTargets, ga4CoverageTargets } from "@/lib/analytics/targets";
 
 // 원장이 생기기 전 기간을 채운다.
@@ -65,12 +67,17 @@ export async function backfillMetricLedger(
         }),
       ]);
       const stored = new Set(rows.map((row) => dbDay(row.date)));
+      const latestLandedDay = days.filter((day) => landed.has(toGa4TableSuffix(day))).at(-1) ?? null;
       const observations: ObservationInput[] = days.map((day) => {
         const state: MetricObservationState = stored.has(day)
           ? "observed"
           : landed.has(toGa4TableSuffix(day))
             ? "empty"
-            : "not_landed";
+            : missingDayState({
+              ageDays: metricDaysBetween(end, day),
+              latestLandedDay,
+              day,
+            });
         if (state === "observed") result.ga4.observed += 1;
         else if (state === "empty") result.ga4.empty += 1;
         else result.ga4.notLanded += 1;

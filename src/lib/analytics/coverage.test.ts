@@ -6,6 +6,8 @@ import {
   isObserved,
   impliesLanded,
   sealRule,
+  missingDayState,
+  LANDING_SETTLE_DAYS,
 } from "@/lib/analytics/observation";
 
 test("관측됨은 값을 본 것과 0 임을 본 것 둘뿐", () => {
@@ -74,7 +76,10 @@ test("미착지·실패는 아무리 오래돼도 봉인되지 않는다", () =>
 test("소스 계약: 수집기는 창 전체를 돌고 착지 여부로 갈린다", () => {
   const source = readFileSync("src/lib/core/analytics-collect.ts", "utf8");
   assert.match(source, /for \(const day of days\) \{/u);
-  assert.match(source, /if \(!landed\.has\(toGa4TableSuffix\(day\)\)\) \{[\s\S]{0,300}?state: "not_landed"/u);
+  // 테이블 부재는 "아직 안 왔다"와 "활동이 0 이었다" 둘 다일 수 있다. 그 판단은
+  // missingDayState 한 곳에 있고, not_landed 일 때만 행을 쓰지 않는다.
+  assert.match(source, /missingDayState\(\{ ageDays: age, latestLandedDay, day \}\)/u);
+  assert.match(source, /if \(state === "not_landed"\) \{[\s\S]{0,300}?result\.notLanded\+\+/u);
   assert.match(source, /state: row \? "observed" : "empty"/u);
   // 실패가 관측된 칸을 덮으면 멀쩡한 과거가 "미수집"으로 보고된다.
   assert.match(source, /recordCollectionFailure\(/u);
@@ -87,5 +92,42 @@ test("소스 계약: 실패 기록은 observed·empty 칸을 건너뛴다", () =
   assert.match(
     source,
     /recordCollectionFailure[\s\S]{0,900}?state: \{ in: \["observed", "empty"\] \}/u,
+  );
+});
+
+// ── 테이블 부재의 두 가지 뜻 ───────────────────────────────────────────────
+// 앱마다 GA4 데이터셋이 따로라 events_YYYYMMDD 는 그 앱이 그 날 이벤트를 냈을 때만
+// 생긴다. 전부 not_landed 로 보면 조용한 앱이 매일 미관측으로 잡혀 분모가 영영
+// 차지 않는다(실측: 30일 중 108칸).
+
+test("더 뒤 날짜가 착지했으면 그 앞의 부재는 활동 0이다", () => {
+  assert.equal(
+    missingDayState({ ageDays: 0, latestLandedDay: "2026-09-13", day: "2026-09-10" }),
+    "empty",
+  );
+});
+
+test("정착 기간이 지나면 뒤 날짜가 없어도 활동 0으로 확정한다", () => {
+  // 실측 착지 지연 최대 34시간, 예외 1건 58시간. GA4 보정 창 72시간에 맞춘다.
+  assert.equal(
+    missingDayState({ ageDays: LANDING_SETTLE_DAYS, latestLandedDay: null, day: "2026-09-10" }),
+    "empty",
+  );
+  assert.equal(
+    missingDayState({ ageDays: LANDING_SETTLE_DAYS - 1, latestLandedDay: null, day: "2026-09-12" }),
+    "not_landed",
+  );
+});
+
+test("기준일 당일은 아직 모른다", () => {
+  // 야간 발행 시점의 D-1. 여기서 성급히 0 으로 확정하면 늦게 온 수집이 0 에 묻힌다.
+  assert.equal(
+    missingDayState({ ageDays: 0, latestLandedDay: null, day: "2026-09-13" }),
+    "not_landed",
+  );
+  // 같은 날이라도 그 앱의 더 뒤 날짜가 있으면(백필 구간) 0 이다.
+  assert.equal(
+    missingDayState({ ageDays: 0, latestLandedDay: "2026-09-13", day: "2026-09-13" }),
+    "not_landed",
   );
 });

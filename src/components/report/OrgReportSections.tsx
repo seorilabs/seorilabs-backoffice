@@ -222,7 +222,7 @@ export function HighlightSection({ doc }: { doc: OrgReportDocument }) {
       </Panel>
       <div className="text-xs text-neutral-400 lg:col-span-2">
         판정 {doc.movements.length - absent}건 (변동 없음 {tally("flat")} · 표본 부족 {tally("insufficient")}) ·
-        미집계 {absent}건 — 판정 기준: 직전 7일 중앙값 대비 절대·상대 임계 동시 초과
+        무활동 {absent}건 — 판정 기준: 직전 7일 중앙값 대비 절대·상대 임계 동시 초과
       </div>
     </div>
   );

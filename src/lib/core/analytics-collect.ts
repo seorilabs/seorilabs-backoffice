@@ -13,6 +13,7 @@ import {
   recordObservations,
   type ObservationInput,
 } from "@/lib/analytics/coverage";
+import { missingDayState } from "@/lib/analytics/observation";
 import {
   queryDailyActivity,
   queryCohortRetention,
@@ -121,6 +122,9 @@ export async function collectMetrics(
         queryCohortRetention(target.ga4, startSuffix, endSuffix),
         queryDailyBreakdowns(target.ga4, startSuffix, endSuffix),
       ]);
+      // 착지가 확인된 가장 최신 날. 이보다 앞선 날에 테이블이 없으면 export 가 그 날을
+      // 이미 지나갔다는 뜻이라 활동이 0 이었던 것이다.
+      const latestLandedDay = days.filter((day) => landed.has(toGa4TableSuffix(day))).at(-1) ?? null;
       const activityByDate = new Map(activity.map((a) => [a.date, a]));
       const cohortByDate = new Map(cohort.map((c) => [c.date, c]));
       const dimsByDate = pivotBreakdownRows(breakdowns);
@@ -129,14 +133,19 @@ export async function collectMetrics(
       // 응답한 날짜만 도는 것이 아니라 창 전체를 돈다. 응답에 없는 날이 활동 0 인지
       // export 미착지인지는 일별 테이블 존재 여부로만 갈린다.
       for (const day of days) {
-        if (!landed.has(toGa4TableSuffix(day))) {
-          // 지표 행을 쓰지 않는다. 0 으로 채우면 미착지가 실적 0 으로 둔갑한다.
-          observations.push({ source: "ga4", appId: target.appId, day, state: "not_landed" });
-          result.notLanded++;
-          continue;
+        const age = metricDaysBetween(end, day);
+        const landedDay = landed.has(toGa4TableSuffix(day));
+        if (!landedDay) {
+          const state = missingDayState({ ageDays: age, latestLandedDay, day });
+          if (state === "not_landed") {
+            // 지표 행을 쓰지 않는다. 0 으로 채우면 미착지가 실적 0 으로 둔갑한다.
+            observations.push({ source: "ga4", appId: target.appId, day, state });
+            result.notLanded++;
+            continue;
+          }
+          // 활동 0 으로 확정됐다. 0 행을 남겨야 기준선이 그 날을 건너뛰지 않는다.
         }
         const row = activityByDate.get(day);
-        const age = metricDaysBetween(end, day);
         const ret = clampRetention(cohortByDate.get(day), age);
         const assembled = assembleDailyMetric(
           row ?? zeroDailyActivity(day),
