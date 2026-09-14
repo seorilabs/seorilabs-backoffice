@@ -16,6 +16,7 @@ import { marketFromWorkflowName } from "@/lib/domain/lifecycle";
 import {
   releaseStatusOf,
   releaseTrackForWorkflow,
+  stableReleaseTagFromArtifactNames,
   shouldAdvanceLifecycleForRelease,
 } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
@@ -34,7 +35,11 @@ import {
   type DeployAllReleaseDeps,
   type MarketReleaseInput,
 } from "@/lib/sync/deploy-all-release";
-import { getWorkflowFileText, listWorkflowRunJobs } from "@/lib/github/read";
+import {
+  getWorkflowFileText,
+  listWorkflowRunArtifactNames,
+  listWorkflowRunJobs,
+} from "@/lib/github/read";
 
 // ── 공통 입력 타입 (webhook payload 와 REST list 응답의 교집합) ─────────────
 export interface GhIssueInput {
@@ -193,11 +198,21 @@ export async function upsertPr(
   });
 }
 
-// 버전: head_branch 가 태그면 그대로, 아니면(main 등) head_sha 를 가리키는
-// v* 태그를 GitHub 에서 조회해 보정. 태그가 없으면 "untagged".
+// 버전: head_branch가 태그면 그대로, 아니면 head_sha를 가리키는 태그를 먼저 찾는다.
+// 최신 기본 브랜치의 workflow를 제어 ref로 쓰는 완료 실행은 head 정보가 빌드 소스 태그와
+// 다르므로, exact 태그 검증 뒤 업로드된 표준 artifact 이름으로 한 번 더 복원한다.
 async function resolveRunVersion(repoFullName: string, gh: GhRunInput): Promise<string> {
   if (gh.head_branch && /^v\d/.test(gh.head_branch)) return gh.head_branch;
-  if (gh.head_sha) return (await findTagForSha(repoFullName, gh.head_sha)) ?? "untagged";
+  if (gh.head_sha) {
+    const tag = await findTagForSha(repoFullName, gh.head_sha);
+    if (tag) return tag;
+  }
+  if (gh.status === "completed") {
+    const artifactTag = stableReleaseTagFromArtifactNames(
+      await listWorkflowRunArtifactNames(repoFullName, BigInt(gh.id)),
+    );
+    if (artifactTag) return artifactTag;
+  }
   return "untagged";
 }
 

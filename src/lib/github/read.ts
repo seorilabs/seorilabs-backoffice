@@ -214,6 +214,28 @@ export async function listWorkflowRunJobs(
   return jobs.map((job) => ({ name: job.name, conclusion: job.conclusion ?? null }));
 }
 
+/**
+ * 완료된 실행이 실제로 남긴 artifact 이름 목록.
+ *
+ * workflow_dispatch 제어 ref가 기본 브랜치이고 빌드 소스가 release_tag로 분리된 실행은
+ * workflow_run의 head_branch/head_sha만으로 릴리스 버전을 복원할 수 없다. 표준 배포
+ * workflow가 exact 태그 검증 뒤 만든 artifact 이름을 성공 실행의 보조 readback으로 쓴다.
+ */
+export async function listWorkflowRunArtifactNames(
+  repoFullName: string,
+  runId: bigint,
+): Promise<string[]> {
+  const octokit = await getInstallationOctokit();
+  const { owner, repo } = splitRepo(repoFullName);
+  const artifacts = await octokit.paginate(
+    octokit.rest.actions.listWorkflowRunArtifacts,
+    { owner, repo, run_id: Number(runId), per_page: 100 },
+  );
+  return artifacts
+    .filter((artifact) => !artifact.expired)
+    .map((artifact) => artifact.name);
+}
+
 // 분해 에이전트용: 이슈 본문을 GitHub 에서 직접 읽는다(미러에 body 컬럼 없음).
 export async function getIssue(
   repoFullName: string,
