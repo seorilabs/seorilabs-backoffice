@@ -2,7 +2,9 @@ import { env } from "@/lib/env";
 
 // 서버 전용 Gemini GenerateContent 클라이언트.
 // Gemini 3.1 Flash-Lite는 minimal thinking이 기본이며, 낮은 지연·비용을 위해
-// 이를 명시한다. Gemini 3 계열 권장값에 따라 temperature는 보내지 않는다.
+// 이를 명시한다. Gemini 3 계열 권장값에 따라 temperature는 기본적으로 보내지 않는다 —
+// 다만 같은 입력이 같은 문장을 내야 하는 호출(보고서 해설)은 opts.temperature 로
+// 명시한다. 권장값을 지키는 것과 결정성이 필요한 곳에서 그것을 포기하는 것은 다르다.
 
 export interface CompleteOptions {
   prompt: string;
@@ -24,6 +26,11 @@ export interface ChatOptions {
   model?: string;
   /** 사용량 원장(ai_usage) 귀속 컨텍스트. 미전달 시 path "unknown" 으로 기록된다. */
   usage?: { path: string };
+  /**
+   * 샘플링 온도. 같은 입력이 같은 문장을 내야 하는 호출(보고서 해설 등)은 0 을 준다.
+   * 지금까지 아무 값도 보내지 않아 provider 기본값으로 매번 달라졌다.
+   */
+  temperature?: number;
 }
 
 export class GeminiNotConfiguredError extends Error {
@@ -96,6 +103,7 @@ export async function geminiChat(
         contents,
         generationConfig: {
           maxOutputTokens: opts.maxTokens ?? 4096,
+          ...(opts.temperature === undefined ? {} : { temperature: opts.temperature }),
           // flash-lite 만 minimal 을 지원하고 상위 flash(3.7 등)는 거부한다
           // (2026-08-26 실호출 검증) — 페르소나 오버라이드 모델은 low 로.
           thinkingConfig: { thinkingLevel: model.includes("flash-lite") ? "minimal" : "low" },

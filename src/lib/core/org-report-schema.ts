@@ -108,6 +108,20 @@ export const orgReportDocumentSchema = z
      */
     origin: z.enum(["published", "recomputed"]),
     /**
+     * 해설이 어떻게 만들어졌는지. 어느 모델이 어떤 지시로 썼는지 남지 않으면
+     * CHAT_LLM_PROVIDER 가 바뀌어도 흔적이 없다. 골격으로 대체됐으면 fallback=true.
+     */
+    narrativeMeta: z
+      .object({
+        fallback: z.boolean(),
+        provider: z.string().nullable(),
+        model: z.string().nullable(),
+        promptVersion: z.number(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    /**
      * Discord 에 실제로 나간 내용의 지문. 늦게 도착한 수집을 반영해 이 날짜를 다시
      * 계산했을 때 "정정이 필요한가"를 판단하는 유일한 근거다. 발행분이 아니면 null.
      *

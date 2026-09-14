@@ -309,7 +309,7 @@ test("정정은 비용을 다시 부르지 않는다", () => {
 test("수치가 바뀌면 해설도 다시 만든다", () => {
   // 09-12 스냅샷은 dau=138 인데 해설은 "32→30 으로 2명 감소"였다. 수치만 갱신하고
   // 해설을 이어 붙이면 문서가 자기 자신과 모순된다.
-  assert.match(reconcileBody(), /metricNarrative\(narrativeFacts\(data\)\)/u);
+  assert.match(reconcileBody(), /metricNarrative\(data\)/u);
 });
 
 test("발행 기록이 없으면 그 실행이 최초 발행이 된다", () => {

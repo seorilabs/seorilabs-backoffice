@@ -1,4 +1,5 @@
-import { llmChat, llmChatConfigured } from "@/lib/ai/llm";
+import { env } from "@/lib/env";
+import { llmChat, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import { dbDay, metricDaysBetween } from "@/lib/analytics/metric-day";
 import type {
   ConsoleListingSeries,
@@ -15,7 +16,6 @@ import type {
 // 환각이 리포트의 숫자를 오염시킬 수 없고, 실패하면 해설만 빠진다.
 
 const MAX_MOVEMENTS = 8;
-const MAX_CHARS = 1_200;
 /** 수집 상태 줄에 이름을 적는 앱·리스팅 최대 수. 나머지는 건수로만 넘긴다. */
 const MAX_NAMED_GAPS = 6;
 
@@ -72,8 +72,7 @@ function consoleCoverageLines(
   return lines;
 }
 
-/** 해설이 참고할 수 있는 사실만 담은 요약. 원본 스냅샷은 넘기지 않는다. */
-export function narrativeFacts(input: {
+export interface NarrativeInput {
   refDate: string;
   totals: PortfolioTotals;
   movements: readonly Movement[];
@@ -82,7 +81,10 @@ export function narrativeFacts(input: {
   ga4Gaps?: readonly Ga4AppGap[];
   consoleSeries?: readonly ConsoleListingSeries[];
   consoleMissing?: readonly string[];
-}): string {
+}
+
+/** 해설이 참고할 수 있는 사실만 담은 요약. 원본 스냅샷은 넘기지 않는다. */
+export function narrativeFacts(input: NarrativeInput): string {
   const lines = [
     `기준일: ${input.refDate} (D-1)`,
     `GA4 DAU 합계 ${input.totals.ga4Dau.latest}명 (전일 ${input.totals.ga4Dau.previous ?? "미상"}) · 대상 ${input.totals.ga4Dau.apps}개 앱`,
@@ -150,28 +152,133 @@ const SYSTEM_PROMPT = [
   "(무엇을 먼저 확인할지. 확인 대상과 방법을 구체적으로.)",
 ].join("\n");
 
+/** 해설이 반드시 갖춰야 하는 세 절. 하나라도 없으면 형식이 깨진 것이다. */
+export const NARRATIVE_SECTIONS = ["핵심 변동:", "GA4·콘솔 짚을 점:", "다음 액션:"] as const;
+
 /**
- * 해설 한 문단. Gemini 미설정·실패·빈 응답이면 null 을 돌려 호출부가 해설 없이 진행한다.
- * 리포트 발송이 LLM 가용성에 묶이면 안 된다.
+ * 프롬프트 개정 번호. 문서에 기록해 "이 해설이 어떤 지시로 쓰였는지"를 나중에 안다.
+ * 지시를 바꿀 때마다 올린다.
  */
-export async function metricNarrative(facts: string): Promise<string | null> {
-  if (!llmChatConfigured()) return null;
-  try {
+export const NARRATIVE_PROMPT_VERSION = 1;
+
+/**
+ * 결정적 골격. LLM 없이도 보고서가 성립해야 한다.
+ *
+ * 지금까지는 LLM 미설정·실패·형식 이탈이면 해설이 통째로 빠졌다. 읽는 사람에게는
+ * "어떤 날은 분석이 있고 어떤 날은 없다"로 보였고, 그것 자체가 보고서를 못 믿게 만든다.
+ * 수치와 판정과 수집 상태는 전부 코드가 이미 알고 있으므로 문장으로 옮기면 된다.
+ */
+export function narrativeSkeleton(input: NarrativeInput): string {
+  const judged = input.movements.filter(
+    (one) => one.verdict === "highlight" || one.verdict === "lowlight",
+  );
+  const movementText = judged.length === 0
+    ? "임계를 넘은 변동이 없다."
+    : judged
+      .slice(0, MAX_MOVEMENTS)
+      .map((one) => {
+        const delta = one.change == null
+          ? "신규"
+          : one.spec.pointScale
+            ? `${one.change >= 0 ? "+" : ""}${one.change.toFixed(1)}%p`
+            : `${one.change >= 0 ? "+" : ""}${Math.round(one.change)}%`;
+        return `${one.label} ${one.spec.ko} ${one.spec.format(one.latest)}(${delta})`;
+      })
+      .join(", ") + " 가 임계를 넘었다.";
+
+  const gaps = input.ga4Gaps ?? [];
+  const coverageText = gaps.length === 0
+    ? `기준일 스냅샷이 대상 ${input.totals.ga4Dau.apps}개 앱에 모두 있다.`
+    : `기준일 스냅샷이 없는 앱이 ${gaps.length}개 있다(${gaps
+      .slice(0, MAX_NAMED_GAPS)
+      .map((gap) => gap.app.displayName)
+      .join(", ")}). 합계가 낮은 것이 실제 감소인지 이 앱들이 빠져서인지 먼저 가려야 한다.`;
+
+  const action = gaps.length > 0
+    ? "빠진 앱의 수집 상태를 먼저 확인한다. 지연이면 다음 정정에서 채워지고, 수집이 한 번도 없으면 배선을 봐야 한다."
+    : judged.length > 0
+      ? "위 변동의 앱별 지표를 열어 같은 방향의 움직임이 다른 소스에도 있는지 확인한다."
+      : "확인할 변동이 없다. 다음 발행에서 같은 항목을 다시 본다.";
+
+  return [
+    `${NARRATIVE_SECTIONS[0]}`,
+    movementText,
+    "",
+    `${NARRATIVE_SECTIONS[1]}`,
+    coverageText,
+    "",
+    `${NARRATIVE_SECTIONS[2]}`,
+    action,
+  ].join("\n");
+}
+
+/** 세 절 머리말이 모두 있는가. 프롬프트가 요청만 하고 확인하지 않으면 형식이 흔들린다. */
+export function hasNarrativeSections(text: string): boolean {
+  return NARRATIVE_SECTIONS.every((section) => text.includes(section));
+}
+
+export interface MetricNarrative {
+  text: string;
+  /** LLM 문장이 아니라 골격으로 대체됐는가. */
+  fallback: boolean;
+  /** 문서에 남길 생성 출처. 골격이면 null. */
+  provider: string | null;
+  model: string | null;
+  promptVersion: number;
+}
+
+/**
+ * 해설. **항상 문자열을 돌려준다** — LLM 미설정·실패·형식 이탈이면 결정적 골격으로
+ * 대체한다. 보고서가 LLM 가용성에 묶이면 안 되고, 있다 없다 하는 해설은 없느니만 못하다.
+ *
+ * temperature 0 으로 부르고 세 절 머리말을 검증한다. 형식이 어긋나면 한 번만 다시
+ * 요청하고, 그래도 어긋나면 골격을 쓴다. 길이는 자르지 않는다 — 잘라내면 마지막 절이
+ * 문장 중간에서 끊겨 "오늘은 형식이 다르다"로 읽힌다.
+ */
+export async function metricNarrative(input: NarrativeInput): Promise<MetricNarrative> {
+  const skeleton = narrativeSkeleton(input);
+  const asFallback = (): MetricNarrative => ({
+    text: skeleton,
+    fallback: true,
+    provider: null,
+    model: null,
+    promptVersion: NARRATIVE_PROMPT_VERSION,
+  });
+  if (!llmChatConfigured()) return asFallback();
+
+  const facts = narrativeFacts(input);
+  const ask = async (extra?: string): Promise<string> => {
     const reply = await llmChat(
       [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: extra ? `${SYSTEM_PROMPT}\n\n${extra}` : SYSTEM_PROMPT },
         { role: "user", content: facts },
       ],
-      { maxTokens: 1_400, usage: { path: "metric-narrative" } },
+      { maxTokens: 1_400, temperature: 0, usage: { path: "metric-narrative" } },
     );
     // 세 절 머리말을 쓰게 했으므로 줄바꿈을 보존한다. 줄 안쪽 공백만 정리한다.
-    const text = reply.trim().replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n");
-    return text ? text.slice(0, MAX_CHARS) : null;
+    return reply.trim().replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n");
+  };
+
+  try {
+    let text = await ask();
+    if (!hasNarrativeSections(text)) {
+      text = await ask(
+        `형식 위반이 있었다. 다음 세 머리말을 각각 한 줄로 그대로 포함해 다시 쓴다: ${NARRATIVE_SECTIONS.join(" / ")}`,
+      );
+    }
+    if (!text || !hasNarrativeSections(text)) return asFallback();
+    return {
+      text,
+      fallback: false,
+      provider: env.chatLlmProvider(),
+      model: llmChatModel(),
+      promptVersion: NARRATIVE_PROMPT_VERSION,
+    };
   } catch (error) {
     console.error(
       "[metric-highlights] 해설 생성 실패:",
       error instanceof Error ? error.message : error,
     );
-    return null;
+    return asFallback();
   }
 }
