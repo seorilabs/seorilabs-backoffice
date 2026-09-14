@@ -1,4 +1,4 @@
-import { isoDate } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 
 // AppsInToss 콘솔 일별 스냅샷 프레젠테이션 컴포넌트(순수, 서버 렌더). GA4 패널(MetricPanels)과
 // 구분되게 sky 계열. 토스 표면 지표 — DAU/신규/세션/광고(IAA)/결제(IAP)/유입경로/데모.
@@ -70,14 +70,14 @@ export function ConsoleDauTrend({ rowsAsc }: { rowsAsc: ConsoleMetricDaily[] }) 
             key={i}
             className="flex-1 rounded-t bg-sky-400/80 hover:bg-sky-500"
             style={{ height: `${Math.max(2, ((r.dau ?? 0) / max) * 100)}%` }}
-            title={`${isoDate(r.date)} · DAU ${intFmt(r.dau)} · 신규 ${intFmt(r.newUsers)} · 광고 ${won(r.iaaEarningKrw)}`}
+            title={`${dbDay(r.date)} · DAU ${intFmt(r.dau)} · 신규 ${intFmt(r.newUsers)} · 광고 ${won(r.iaaEarningKrw)}`}
           />
         ))}
       </div>
       <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
-        <span>{rowsAsc.length > 0 ? isoDate(rowsAsc[0].date) : ""}</span>
+        <span>{rowsAsc.length > 0 ? dbDay(rowsAsc[0].date) : ""}</span>
         <span>최대 DAU {max}</span>
-        <span>{rowsAsc.length > 0 ? isoDate(rowsAsc[rowsAsc.length - 1].date) : ""}</span>
+        <span>{rowsAsc.length > 0 ? dbDay(rowsAsc[rowsAsc.length - 1].date) : ""}</span>
       </div>
     </div>
   );
@@ -131,8 +131,8 @@ export function ConsoleTrendTable({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[]
         </thead>
         <tbody>
           {rowsDesc.map((r) => (
-            <tr key={isoDate(r.date)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-              <td className="px-3 py-1.5 text-neutral-700">{isoDate(r.date)}</td>
+            <tr key={dbDay(r.date)} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
+              <td className="px-3 py-1.5 text-neutral-700">{dbDay(r.date)}</td>
               <td className="px-3 py-1.5 text-right">{intFmt(r.dau)}</td>
               <td className="px-3 py-1.5 text-right">{intFmt(r.newUsers)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{sec(r.avgSessionSec)}</td>
@@ -177,7 +177,7 @@ export function ConsoleSection({
       {title && (
         <div className="text-sm font-semibold text-neutral-800">
           {title}
-          <span className="ml-2 font-normal text-neutral-400">기준일 {isoDate(latest.date)}</span>
+          <span className="ml-2 font-normal text-neutral-400">기준일 {dbDay(latest.date)}</span>
         </div>
       )}
       <ConsoleMetricCards latest={latest} />

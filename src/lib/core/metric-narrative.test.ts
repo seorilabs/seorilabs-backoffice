@@ -168,7 +168,7 @@ test("collectHighlightData 는 기준일 스냅샷이 없는 앱을 ga4Gaps 로 
   // 건너뛰는 자리에서 기록한다. 기록 없이 continue 하면 공백이 사라진다.
   assert.match(
     source,
-    /isoDate\(rows\[0\]\.date\) !== refDate\) \{[\s\S]{0,400}?ga4Gaps\.push\(/u,
+    /dbDay\(rows\[0\]\.date\) !== refDate\) \{[\s\S]{0,400}?ga4Gaps\.push\(/u,
   );
   assert.match(source, /latestDate: rows\[0\]\?\.date \?\? null/u);
   assert.match(source, /return \{ refDate, totals, movements, ga4Series, ga4Gaps,/u);

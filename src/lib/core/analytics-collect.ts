@@ -1,14 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
 import {
-  resolveGa4Target,
-  latestClosedDay,
-  dateWindow,
-  toTableSuffix,
-  isoDate,
-  parseIsoDate,
-  daysBetween,
-} from "@/lib/ga4/datasets";
+  lastElapsedMetricDay,
+  metricDayWindow,
+  metricDaysBetween,
+  toDbDay,
+  toGa4TableSuffix,
+} from "@/lib/analytics/metric-day";
 import {
   queryDailyActivity,
   queryCohortRetention,
@@ -23,7 +22,7 @@ import type { Prisma } from "@prisma/client";
 // D7 확정 반영). 게임별 컨텐츠 세부 지표는 별도 경로(app-content-metrics-collect, 스펙 구동)가
 // 담당한다 — 여기서는 공통 지표만.
 //
-// 창 길이는 D7 이 정한다. dateWindow(end, N) 은 end-(N-1) 부터 end 까지라 코호트의
+// 창 길이는 D7 이 정한다. metricDayWindow(end, N) 은 end-(N-1) 부터 end 까지라 코호트의
 // 최대 age 가 N-1 이고, clampRetention 은 age>=7 일 때만 d7Pct 를 남긴다. 그래서
 // N<=7 이면 d7Pct 가 어느 행에도 기록되지 않는다. 더 나쁘게, 이 수집은 upsert 라
 // 창 안의 기존 행에 들어 있던 d7Pct 까지 null 로 덮는다.
@@ -68,16 +67,16 @@ export async function collectMetrics(
     throw new Error("GA4 미설정 — FEATURE_GA4_ANALYTICS + GA4_SA_KEY_JSON 필요");
   }
   const windowDays = opts.windowDays ?? WINDOW_DAYS;
-  const end = latestClosedDay(now); // D-1 UTC 자정
-  const endSuffix = toTableSuffix(end);
-  const startSuffix = toTableSuffix(dateWindow(end, windowDays)[0]);
+  const end = lastElapsedMetricDay(now); // D-1(KST 달력일)
+  const endSuffix = toGa4TableSuffix(end);
+  const startSuffix = toGa4TableSuffix(metricDayWindow(end, windowDays)[0]);
 
   const apps = await prisma.app.findMany({
     select: { id: true, slug: true, firebaseProject: true, ga4Dataset: true },
   });
 
   const result: CollectResult = {
-    endDate: isoDate(end),
+    endDate: end,
     windowDays,
     targetApps: 0,
     upserts: 0,
@@ -102,8 +101,8 @@ export async function collectMetrics(
       const dimsByDate = pivotBreakdownRows(breakdowns);
 
       for (const a of activity) {
-        const date = parseIsoDate(a.date);
-        const age = daysBetween(end, date);
+        const date = toDbDay(a.date);
+        const age = metricDaysBetween(end, a.date);
         const ret = clampRetention(cohortByDate.get(a.date), age);
         const assembled = assembleDailyMetric(a, ret, dimsByDate[a.date]);
         const data = {

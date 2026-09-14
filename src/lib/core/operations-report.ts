@@ -1,25 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-
-const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
-
-export function kstDayStart(now: Date): Date {
-  const shifted = new Date(now.getTime() + KST_OFFSET_MS);
-  const utcMidnight = Date.UTC(
-    shifted.getUTCFullYear(),
-    shifted.getUTCMonth(),
-    shifted.getUTCDate(),
-  );
-  return new Date(utcMidnight - KST_OFFSET_MS);
-}
+import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 
 export async function sendOperationsSummary(now: Date): Promise<{
   refDate: string;
   events: number;
   notificationsQueued: number;
 }> {
-  const start = kstDayStart(now);
+  const refDate = metricDayOf(now);
+  const start = metricDayStart(refDate);
   const rows = await prisma.operationalEvent.groupBy({
     by: ["appId", "eventType"],
     where: { occurredAt: { gte: start, lte: now } },
@@ -35,12 +25,6 @@ export async function sendOperationsSummary(now: Date): Promise<{
   const latest = await prisma.platformUserMetricSample.findFirst({
     orderBy: { capturedAt: "desc" },
   });
-  const refDate = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
   const labels: Record<string, string> = {
     "identity.created": "신규 사용자",
     "iap.granted": "IAP 지급",

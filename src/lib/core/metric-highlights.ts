@@ -1,6 +1,7 @@
 import type { AppType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { isoDate, latestClosedDay, parseIsoDate, resolveGa4Target } from "@/lib/ga4/datasets";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
+import { dbDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -335,7 +336,7 @@ export function movementsFromSeries<T extends { date: Date }>(
 ): Movement[] {
   const latest = rowsDesc[0];
   if (!latest) return [];
-  const date = isoDate(latest.date);
+  const date = dbDay(latest.date);
   return pickers.flatMap(({ key, pick, sample }) => {
     const value = pick(latest);
     if (value == null) return [];
@@ -413,8 +414,8 @@ export async function collectHighlightData(
   now: Date,
   refDateOverride?: string,
 ): Promise<HighlightData> {
-  const refDate = refDateOverride ?? isoDate(latestClosedDay(now));
-  const upTo = parseIsoDate(refDate);
+  const refDate = refDateOverride ?? lastElapsedMetricDay(now);
+  const upTo = toDbDay(refDate);
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
@@ -460,7 +461,7 @@ export async function collectHighlightData(
     })) as Ga4Row[];
     // 기준일 스냅샷이 아직 없는 앱은 어제를 말할 수 없다. 합계도 오염시키지 않는다.
     // 다만 빠졌다는 사실은 남긴다 — 합계가 낮은 이유가 될 수 있다.
-    if (rows.length === 0 || isoDate(rows[0].date) !== refDate) {
+    if (rows.length === 0 || dbDay(rows[0].date) !== refDate) {
       ga4Gaps.push({
         app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
         latestDate: rows[0]?.date ?? null,

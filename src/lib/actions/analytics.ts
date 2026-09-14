@@ -3,13 +3,12 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { requireSession } from "@/lib/auth-helpers";
+import { resolveGa4Target } from "@/lib/ga4/datasets";
 import {
-  resolveGa4Target,
-  latestClosedDay,
-  dateWindow,
-  toTableSuffix,
-  isoDate,
-} from "@/lib/ga4/datasets";
+  lastElapsedMetricDay,
+  metricDayWindow,
+  toGa4TableSuffix,
+} from "@/lib/analytics/metric-day";
 import { queryAdProbe } from "@/lib/ga4/bigquery";
 
 // /settings 의 "광고/수익 지표 진단" 버튼. 각 GA4 대상 앱에서 ad_impression 이벤트와
@@ -65,9 +64,9 @@ function unconfiguredApp(
 export async function adRevenueProbe(): Promise<AdProbeResult> {
   await requireSession();
 
-  const end = latestClosedDay(new Date());
-  const endSuffix = toTableSuffix(end);
-  const startSuffix = toTableSuffix(dateWindow(end, PROBE_WINDOW_DAYS)[0]);
+  const end = lastElapsedMetricDay(new Date());
+  const endSuffix = toGa4TableSuffix(end);
+  const startSuffix = toGa4TableSuffix(metricDayWindow(end, PROBE_WINDOW_DAYS)[0]);
   const configured = env.ga4Configured();
 
   const apps = await prisma.app.findMany({
@@ -76,7 +75,7 @@ export async function adRevenueProbe(): Promise<AdProbeResult> {
   });
 
   const result: AdProbeResult = {
-    endDate: isoDate(end),
+    endDate: end,
     windowDays: PROBE_WINDOW_DAYS,
     ga4Configured: configured,
     apps: [],

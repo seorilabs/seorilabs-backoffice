@@ -14,7 +14,7 @@ import { parseMarket } from "@/lib/analytics/market";
 import { resolveAppContentSpec } from "@/lib/app-ops/content-spec";
 import { toolsForSection } from "@/lib/app-ops/manifest";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { isoDate } from "@/lib/ga4/datasets";
+import { dbDay } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
 
 export default async function AppContentPage({
@@ -62,7 +62,7 @@ export default async function AppContentPage({
             {row ? (
               <div className="space-y-3">
                 <div className="text-right text-xs text-neutral-400">
-                  기준일 {isoDate(row.date)}
+                  기준일 {dbDay(row.date)}
                 </div>
                 <ContentSection
                   spec={spec}

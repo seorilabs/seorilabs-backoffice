@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { parseReportDate, shiftDay } from "@/lib/report/params";
+import { parseMetricDay, shiftMetricDay } from "@/lib/analytics/metric-day";
 
 // /report 날짜 이동. 상호작용(라우터 push)만 담당하는 소형 클라이언트 컴포넌트 —
 // 데이터 로딩·검증은 서버 페이지가 한다. props 는 전부 "YYYY-MM-DD" 문자열이다.
@@ -28,7 +28,7 @@ export function ReportDatePicker({ selected, min, max }: ReportDatePickerProps) 
         type="button"
         className={buttonCls}
         disabled={selected <= min}
-        onClick={() => go(shiftDay(selected, -1))}
+        onClick={() => go(shiftMetricDay(selected, -1))}
         aria-label="전일"
       >
         ◀ 전일
@@ -39,7 +39,7 @@ export function ReportDatePicker({ selected, min, max }: ReportDatePickerProps) 
         min={min}
         max={max}
         onChange={(event) => {
-          const next = parseReportDate(event.target.value);
+          const next = parseMetricDay(event.target.value);
           if (next) go(next);
         }}
         className="rounded border border-neutral-200 bg-white px-2 py-1 text-sm text-neutral-800"
@@ -49,7 +49,7 @@ export function ReportDatePicker({ selected, min, max }: ReportDatePickerProps) 
         type="button"
         className={buttonCls}
         disabled={selected >= max}
-        onClick={() => go(shiftDay(selected, 1))}
+        onClick={() => go(shiftMetricDay(selected, 1))}
         aria-label="익일"
       >
         익일 ▶

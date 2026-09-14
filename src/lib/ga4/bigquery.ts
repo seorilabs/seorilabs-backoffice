@@ -333,3 +333,43 @@ export async function queryCohortRetention(
     d7Pct: numOrNull(r.d7_pct),
   }));
 }
+
+// ── property 보고 타임존 확인 ─────────────────────────────────────────────
+// GA4 export 의 event_date 는 UTC 가 아니라 property 보고 타임존의 달력일이다.
+// 백오피스는 모든 일별 지표를 METRIC_DAY_TZ(Asia/Seoul) 축 하나에서 합산하므로,
+// 축이 다른 property 가 섞이면 합계 자체가 틀린다. 추정하지 않고 실측한다.
+//
+// 스캔량이 작도록 event_timestamp 한 컬럼만 읽고 며칠치만 본다.
+
+export interface Ga4EventDateBoundary {
+  date: string;
+  firstUtc: Date;
+  lastUtc: Date;
+}
+
+function toDate(v: unknown): Date {
+  const raw = typeof v === "object" && v !== null ? (v as { value: unknown }).value : v;
+  return new Date(String(raw));
+}
+
+export async function queryEventDateBoundaries(
+  target: Ga4Target,
+  start: string,
+  end: string,
+): Promise<Ga4EventDateBoundary[]> {
+  const sql = `
+    SELECT
+      FORMAT_DATE('%Y-%m-%d', PARSE_DATE('%Y%m%d', event_date)) AS date,
+      TIMESTAMP_MICROS(MIN(event_timestamp)) AS first_utc,
+      TIMESTAMP_MICROS(MAX(event_timestamp)) AS last_utc
+    FROM \`${target.firebaseProject}.${target.dataset}.events_*\`
+    WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
+    GROUP BY date
+    ORDER BY date`;
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+  return rows.map((r) => ({
+    date: String(r.date),
+    firstUtc: toDate(r.first_utc),
+    lastUtc: toDate(r.last_utc),
+  }));
+}

@@ -1,12 +1,12 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
-  dateWindow,
-  daysBetween,
-  isoDate,
-  latestClosedDay,
-  parseIsoDate,
-} from "@/lib/ga4/datasets";
+  dbDay,
+  lastElapsedMetricDay,
+  metricDayWindow,
+  metricDaysBetween,
+  toDbDay,
+} from "@/lib/analytics/metric-day";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   baselineOf,
@@ -69,13 +69,13 @@ function buildConsoleMeta(data: HighlightData): ConsoleMeta {
   const latestMs = Math.max(
     ...data.consoleSeries.map((series) => series.rowsDesc[0].date.getTime()),
   );
-  const consoleRefDate = isoDate(new Date(latestMs));
+  const consoleRefDate = dbDay(new Date(latestMs));
   return {
     refDate: consoleRefDate,
-    lagDays: daysBetween(parseIsoDate(data.refDate), new Date(latestMs)),
+    lagDays: metricDaysBetween(data.refDate, dbDay(new Date(latestMs))),
     listings,
     onRefDate: data.consoleSeries.filter(
-      (series) => isoDate(series.rowsDesc[0].date) === consoleRefDate,
+      (series) => dbDay(series.rowsDesc[0].date) === consoleRefDate,
     ).length,
     missing: data.consoleMissing,
   };
@@ -151,7 +151,7 @@ export function assembleOrgReportDocument(input: {
   for (const series of data.ga4Series) {
     const latest = series.rowsDesc[0];
     entryOf(series.app).ga4 = {
-      date: isoDate(latest.date),
+      date: dbDay(latest.date),
       dau: latest.dau,
       dauPrev: series.rowsDesc[1]?.dau ?? null,
       dau7dMedian: baselineOf(series.rowsDesc.slice(1).map((row) => row.dau)),
@@ -169,8 +169,8 @@ export function assembleOrgReportDocument(input: {
     entryOf(series.app).listings.push({
       miniAppId: series.miniAppId,
       label: series.listingLabel,
-      date: isoDate(latest.date),
-      lagDays: daysBetween(parseIsoDate(data.refDate), latest.date),
+      date: dbDay(latest.date),
+      lagDays: metricDaysBetween(data.refDate, dbDay(latest.date)),
       dau: latest.dau,
       newUsers: latest.newUsers,
       iaaKrw: latest.iaaEarningKrw,
@@ -215,8 +215,8 @@ async function saveOrgReport(doc: OrgReportDocument): Promise<{ version: number 
     ...excerpt,
   };
   return prisma.orgReportDaily.upsert({
-    where: { date: parseIsoDate(doc.refDate) },
-    create: { date: parseIsoDate(doc.refDate), ...common },
+    where: { date: toDbDay(doc.refDate) },
+    create: { date: toDbDay(doc.refDate), ...common },
     update: { version: { increment: 1 }, ...common },
     select: { version: true },
   });
@@ -275,7 +275,7 @@ export async function refreshOrgReportSnapshot(
 ): Promise<{ refDate: string; version: number; consoleLagDays: number | null }> {
   const data = await collectHighlightData(now);
   const snapshot = await prisma.orgReportDaily.findUnique({
-    where: { date: parseIsoDate(data.refDate) },
+    where: { date: toDbDay(data.refDate) },
   });
   const published = snapshot ? parseOrgReportDocument(snapshot.report) : null;
   const doc = assembleOrgReportDocument({
@@ -329,9 +329,9 @@ export interface OrgReportView {
  * 실패면 재계산 fallback. 그 날짜에 데이터가 전혀 없으면(미래 포함) null.
  */
 export async function getOrgReport(date?: string, now = new Date()): Promise<OrgReportView | null> {
-  const refDate = date ?? isoDate(latestClosedDay(now));
+  const refDate = date ?? lastElapsedMetricDay(now);
   const snapshot = await prisma.orgReportDaily.findUnique({
-    where: { date: parseIsoDate(refDate) },
+    where: { date: toDbDay(refDate) },
   });
   if (snapshot) {
     const doc = parseOrgReportDocument(snapshot.report);
@@ -375,7 +375,7 @@ export async function listOrgReportDays(limit = 60): Promise<OrgReportDayExcerpt
       generatedAt: true,
     },
   });
-  return rows.map((row) => ({ ...row, date: isoDate(row.date) }));
+  return rows.map((row) => ({ ...row, date: dbDay(row.date) }));
 }
 
 export interface OrgTrendPoint {
@@ -418,8 +418,7 @@ export function alignTrendGrid(
   ga4ByDate: ReadonlyMap<string, TrendGa4Sums>,
   consoleByDate: ReadonlyMap<string, TrendConsoleSums>,
 ): OrgTrendPoint[] {
-  return dateWindow(parseIsoDate(endDate), days).map((date) => {
-    const key = isoDate(date);
+  return metricDayWindow(endDate, days).map((key) => {
     const ga4 = ga4ByDate.get(key);
     const console_ = consoleByDate.get(key);
     return {
@@ -443,8 +442,8 @@ export function alignTrendGrid(
  * 재집계·콘솔 늦은 push 가 반영된 최신 확정치다.
  */
 export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTrendPoint[]> {
-  const end = parseIsoDate(endDate);
-  const range = { gte: dateWindow(end, days)[0], lte: end };
+  const end = toDbDay(endDate);
+  const range = { gte: toDbDay(metricDayWindow(endDate, days)[0]), lte: end };
   const [ga4Rows, consoleRows] = await Promise.all([
     prisma.appMetricDaily.groupBy({
       by: ["date"],
@@ -467,7 +466,7 @@ export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTre
   return alignTrendGrid(
     endDate,
     days,
-    new Map(ga4Rows.map((row) => [isoDate(row.date), row._sum])),
-    new Map(consoleRows.map((row) => [isoDate(row.date), row._sum])),
+    new Map(ga4Rows.map((row) => [dbDay(row.date), row._sum])),
+    new Map(consoleRows.map((row) => [dbDay(row.date), row._sum])),
   );
 }
