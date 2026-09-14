@@ -7,6 +7,7 @@ import {
   metricDaysBetween,
   toDbDay,
 } from "@/lib/analytics/metric-day";
+import { ga4CoverageByDay } from "@/lib/analytics/coverage";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   baselineOf,
@@ -417,9 +418,17 @@ export function alignTrendGrid(
   days: number,
   ga4ByDate: ReadonlyMap<string, TrendGa4Sums>,
   consoleByDate: ReadonlyMap<string, TrendConsoleSums>,
+  /**
+   * 날짜별 GA4 관측/기대 수. 일부 앱만 수집된 날의 합계는 낮은 값이 아니라 "모르는
+   * 값"이다. 그 날을 그대로 그리면 한 앱이 빠진 날이 포트폴리오 급감으로 보인다 —
+   * 화면에서 보이던 들쭉날쭉함의 정체가 이것이다. 주지 않으면 기존 동작 그대로.
+   */
+  ga4CoverageByDate?: ReadonlyMap<string, { observed: number; expected: number }>,
 ): OrgTrendPoint[] {
   return metricDayWindow(endDate, days).map((key) => {
-    const ga4 = ga4ByDate.get(key);
+    const coverage = ga4CoverageByDate?.get(key);
+    const partial = coverage != null && coverage.observed < coverage.expected;
+    const ga4 = partial ? undefined : ga4ByDate.get(key);
     const console_ = consoleByDate.get(key);
     return {
       date: key,
@@ -440,6 +449,9 @@ export function alignTrendGrid(
  * 추이 그래프용 Org 합산 시계열. endDate(포함)부터 과거 days 일을 날짜 격자로 정렬해
  * 수집이 없는 날은 null 로 남긴다(차트가 선을 끊는다). 원본 테이블을 읽으므로 GA4
  * 재집계·콘솔 늦은 push 가 반영된 최신 확정치다.
+ *
+ * 일부 앱만 수집된 날도 null 이다. 그 날의 합계는 낮은 값이 아니라 모르는 값이고,
+ * 그대로 그리면 한 앱이 빠진 날이 포트폴리오 급감으로 보인다.
  */
 export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTrendPoint[]> {
   const end = toDbDay(endDate);
@@ -468,5 +480,6 @@ export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTre
     days,
     new Map(ga4Rows.map((row) => [dbDay(row.date), row._sum])),
     new Map(consoleRows.map((row) => [dbDay(row.date), row._sum])),
+    await ga4CoverageByDay(metricDayWindow(endDate, days)),
   );
 }

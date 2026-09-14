@@ -151,7 +151,8 @@ test("리포트는 포트폴리오 합계와 양쪽 목록, 처리 건수를 함
       movement({ label: "광고 없는 앱", metricKey: "console_iap", latest: 0, baseline: 0 }),
     ],
   });
-  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} (D-1)**`);
+  // "(D-1)" 을 박아 두면 소급 재계산이나 기준일이 밀린 날에도 어제라고 적힌다.
+  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF}**`);
   assert.ok(text.includes("GA4 DAU 합계 1,234명 (전일 1,180명 · +4.6%) · 대상 12개 앱"));
   assert.ok(text.includes("콘솔 광고 수익 ₩45,300 (전일 ₩41,000 · +10.5%) · 결제 ₩0 · 대상 11개 리스팅"));
   assert.ok(text.includes("🟢 **하이라이트**"));
@@ -261,4 +262,68 @@ test("보고서 링크가 있으면 푸터로 붙고 없으면 리포트가 그�
   for (const reportUrl of [undefined, null, ""]) {
     assert.ok(!renderHighlightReport({ ...base, reportUrl }).includes("🔗"), String(reportUrl));
   }
+});
+
+// ── 커버리지 표기: 낮은 합계를 실제 감소로 읽지 않게 하는 재료 ──────────────
+
+const ASOF_FINAL = {
+  day: REF,
+  verdict: "final" as const,
+  observed: 12,
+  expected: 12,
+  missing: [],
+  missingWeightShare: 0,
+  sealed: true,
+};
+
+test("확정이면 머리말에 확정을 달고 분모를 함께 싣는다", () => {
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+    asOf: ASOF_FINAL,
+  });
+  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} · 확정**`);
+  assert.ok(text.includes("· 대상 12/12개 앱"), text);
+  assert.ok(!text.includes("미관측"), text);
+});
+
+test("잠정이면 무엇이 빠졌는지를 같은 화면에 적는다 — 09-13 실측 형태", () => {
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: { ...TOTALS, ga4Dau: { latest: 15, previous: null, apps: 2 } },
+    movements: [],
+    asOf: {
+      day: REF,
+      verdict: "provisional",
+      observed: 2,
+      expected: 9,
+      missing: [{ targetKey: "lizard-tycoon", state: "not_landed", weight: 107 }],
+      missingWeightShare: 0.88,
+      sealed: false,
+    },
+    gapNames: ["도마뱀 테라리움"],
+  });
+  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} · 잠정**`);
+  assert.ok(text.includes("· 대상 2/9개 앱"), text);
+  assert.ok(text.includes("⚠️ 기준일 미관측 1개: 도마뱀 테라리움"), text);
+  // 전일 합이 없으면 GA4 줄에서 변화율 문구 자체가 빠진다(일부만 센 전날과 비교하지 않는다).
+  const ga4Line = text.split("\n").find((line) => line.startsWith("GA4 DAU 합계"))!;
+  assert.equal(ga4Line, "GA4 DAU 합계 15명 · 대상 2/9개 앱");
+});
+
+test("합계에서 뺀 오래된 콘솔 리스팅을 드러낸다", () => {
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+    consoleStale: ["가로세로 낱말 퍼즐(웹)(2026-08-24)"],
+  });
+  assert.ok(text.includes("⏳ 콘솔 합계 제외(3일 초과) 1개: 가로세로 낱말 퍼즐(웹)(2026-08-24)"), text);
+});
+
+test("asOf 가 없으면 기존 표기를 유지한다(원장 백필 전)", () => {
+  const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] });
+  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF}**`);
+  assert.ok(text.includes("· 대상 12개 앱"), text);
 });

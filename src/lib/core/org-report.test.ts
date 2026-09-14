@@ -43,6 +43,8 @@ function sampleData(): HighlightData {
   const trait = { id: "a2", slug: "trait-test-hub", displayName: "성향 테스트 허브", type: "APP" as const };
   return {
     refDate: REF,
+    asOf: null,
+    consoleStale: [],
     totals: {
       ga4Dau: { latest: 60, previous: 50, apps: 1 },
       console: { iaaKrw: 2_500, iapKrw: 1_000, previousIaaKrw: 2_000, listings: 2 },
@@ -307,4 +309,38 @@ test("스냅샷 재계산은 앞선 문서의 origin 을 잇는다", () => {
   // 해설 없는 문서가 발행분으로 보인다.
   assert.match(body, /origin: published\?\.origin \?\? "recomputed"/u);
   assert.doesNotMatch(body, /origin: "published"/u);
+});
+
+// ── 추이 격자: 부분 관측일은 낮은 합계가 아니라 모르는 값이다 ────────────────
+
+test("일부 앱만 수집된 날은 합계 대신 null 로 끊는다", () => {
+  const ga4 = new Map([
+    ["2026-09-11", { dau: 122, newUsers: 5, adCompletions: 0, dauAndroid: 40, dauIos: 50, dauWeb: 32 }],
+    // 이 날 도마뱀이 빠져 15 로 집계됐다. 그대로 그리면 포트폴리오 급감으로 보인다.
+    ["2026-09-12", { dau: 15, newUsers: 1, adCompletions: 0, dauAndroid: 6, dauIos: 3, dauWeb: 6 }],
+  ]);
+  const coverage = new Map([
+    ["2026-09-11", { observed: 9, expected: 9 }],
+    ["2026-09-12", { observed: 2, expected: 9 }],
+  ]);
+  const points = alignTrendGrid("2026-09-12", 2, ga4, new Map(), coverage);
+  assert.equal(points[0].ga4Dau, 122);
+  assert.equal(points[1].ga4Dau, null);
+  assert.equal(points[1].dauAndroid, null);
+});
+
+test("커버리지를 주지 않으면 기존 동작 그대로", () => {
+  const ga4 = new Map([
+    ["2026-09-12", { dau: 15, newUsers: 1, adCompletions: 0, dauAndroid: 6, dauIos: 3, dauWeb: 6 }],
+  ]);
+  const points = alignTrendGrid("2026-09-12", 1, ga4, new Map());
+  assert.equal(points[0].ga4Dau, 15);
+});
+
+test("콘솔 축은 GA4 커버리지에 묶이지 않는다", () => {
+  const console_ = new Map([["2026-09-12", { dau: 27, iaaEarningKrw: 140, iapTrxAmountKrw: 0 }]]);
+  const coverage = new Map([["2026-09-12", { observed: 2, expected: 9 }]]);
+  const points = alignTrendGrid("2026-09-12", 1, new Map(), console_, coverage);
+  assert.equal(points[0].ga4Dau, null);
+  assert.equal(points[0].consoleIaaKrw, 140);
 });

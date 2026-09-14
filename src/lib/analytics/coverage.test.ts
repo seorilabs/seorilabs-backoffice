@@ -6,7 +6,7 @@ import {
   isObserved,
   impliesLanded,
   sealRule,
-} from "@/lib/analytics/coverage";
+} from "@/lib/analytics/observation";
 
 test("관측됨은 값을 본 것과 0 임을 본 것 둘뿐", () => {
   assert.deepEqual(

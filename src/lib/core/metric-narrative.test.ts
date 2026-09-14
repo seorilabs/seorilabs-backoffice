@@ -171,7 +171,10 @@ test("collectHighlightData 는 기준일 스냅샷이 없는 앱을 ga4Gaps 로 
     /dbDay\(rows\[0\]\.date\) !== refDate\) \{[\s\S]{0,400}?ga4Gaps\.push\(/u,
   );
   assert.match(source, /latestDate: rows\[0\]\?\.date \?\? null/u);
-  assert.match(source, /return \{ refDate, totals, movements, ga4Series, ga4Gaps,/u);
+  // 반환 형태는 여러 줄로 바뀔 수 있다. 고정할 것은 필드가 실제로 실린다는 사실이다.
+  for (const field of ["refDate", "asOf", "totals", "movements", "ga4Series", "ga4Gaps"]) {
+    assert.match(source, new RegExp(`return \\{[\\s\\S]{0,400}?\\b${field},`, "u"), field);
+  }
 });
 
 test("두 호출부는 HighlightData 를 그대로 넘겨 ga4Gaps 가 사실에 실린다", () => {
