@@ -8,6 +8,7 @@ import {
   lastElapsedMetricDay,
   metricDayOf,
   metricDaysBetween,
+  toDbDay,
 } from "@/lib/analytics/metric-day";
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
@@ -309,7 +310,14 @@ type ConsoleAppRef = {
 };
 
 /** 콘솔 대상 앱들의 리스팅별 최신 스냅샷을 읽는다(App 당 리스팅 1:N). */
-async function loadConsoleReportItems(apps: ConsoleAppRef[]): Promise<ConsoleReportItem[]> {
+/**
+ * 기준일까지의 콘솔 스냅샷만 읽는다. 상한이 없으면 기준일 이후 push 가 "최신"이 되어
+ * 지연 일수가 음수가 되고, 같은 날짜를 보는 하이라이트 리포트와 다른 수치가 나온다.
+ */
+async function loadConsoleReportItems(
+  apps: ConsoleAppRef[],
+  upTo: string,
+): Promise<ConsoleReportItem[]> {
   const targets = apps.flatMap((app) => {
     const listings = listingsForSlug(app.slug);
     if (listings.length > 0) {
@@ -329,7 +337,7 @@ async function loadConsoleReportItems(apps: ConsoleAppRef[]): Promise<ConsoleRep
       displayName: app.displayName,
       listingLabel,
       latest: (await prisma.appConsoleMetricDaily.findFirst({
-        where: { appId: app.id, miniAppId },
+        where: { appId: app.id, miniAppId, date: { lte: toDbDay(upTo) } },
         orderBy: { date: "desc" },
         select: {
           date: true,
@@ -381,8 +389,11 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
   const latestRows: MetricRow[] = [];
 
   for (const app of targets) {
+    // 기준일까지만 본다. 상한이 없으면 기준일 이후 행(백필·재집계)이 "최신"이 되어
+    // 같은 날짜를 보는 하이라이트 리포트와 다른 수치가 나간다 — 두 채널이 같은 기준일을
+    // 내걸고 다른 숫자를 적는 것이 "metric-daily 131 vs 종합 보고서 34"의 한 갈래였다.
     const rows = (await prisma.appMetricDaily.findMany({
-      where: { appId: app.id },
+      where: { appId: app.id, date: { lte: toDbDay(end) } },
       orderBy: { date: "desc" },
       take: RECENT_DAYS,
     })) as MetricRow[];
@@ -418,7 +429,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     }
   }
 
-  const consoleSection = buildConsoleSection(await loadConsoleReportItems(consoleApps), end);
+  const consoleSection = buildConsoleSection(await loadConsoleReportItems(consoleApps, end), end);
   result.consoleListings = consoleSection.listings;
   result.consoleRefDate = consoleSection.refDate;
   result.consoleLagDays = consoleSection.lagDays;
