@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { evaluateMovement, type ConsoleRow, type Ga4Row, type HighlightData } from "@/lib/core/metric-highlights";
-import { alignTrendGrid, assembleOrgReportDocument } from "@/lib/core/org-report";
+import {
+  alignTrendGrid,
+  assembleOrgReportDocument,
+  correctionLine,
+  factsFingerprint,
+} from "@/lib/core/org-report";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
 const REF = "2026-08-31";
@@ -267,48 +272,55 @@ test("판정 전량이 직렬화되어 문서에 남는다", () => {
   assert.ok(!("spec" in doc.movements[0]));
 });
 
-// ── 23:30 스냅샷 재계산 경계 ─────────────────────────────────────────────
-// 발행 경로를 재사용하면 같은 dedupeKey 로 Discord enqueue 가 다시 일어난다. 아직
-// 보내지 못한 전송이 있으면 그 전송이 23:30 시점 내용으로 나가고, LLM 해설과 비용도
-// 매일 두 번 불린다. 경계가 무너지면 조용히 그렇게 되므로 소스로 고정한다.
+// ── 정정 경계 ────────────────────────────────────────────────────────────
+// 발행분을 하루 뒤에 다시 계산해 사실이 달라졌으면 같은 메시지를 고친다. 경계가
+// 무너지면 (1) 바뀐 것이 없는데 version 이 오르거나 (2) 정정이 새 메시지로 나가
+// 어느 쪽이 맞는지 읽는 사람이 모르게 된다. 소스로 고정한다.
 const readSource = (relative: string) =>
   readFileSync(join(process.cwd(), relative), "utf8");
 
-test("스냅샷 재계산은 발송·해설·비용을 다시 부르지 않는다", () => {
+const reconcileBody = () => {
   const source = readSource("src/lib/core/org-report.ts");
-  const start = source.indexOf("export async function refreshOrgReportSnapshot");
-  assert.ok(start > 0, "refreshOrgReportSnapshot 이 있어야 한다");
+  const start = source.indexOf("export async function reconcileOrgReport");
+  assert.ok(start > 0, "reconcileOrgReport 이 있어야 한다");
   const end = source.indexOf("\nexport ", start + 1);
-  const body = source.slice(start, end === -1 ? undefined : end);
+  return source.slice(start, end === -1 ? undefined : end);
+};
 
-  for (const forbidden of [
-    "sendMetricHighlightReport",
-    "metricNarrative",
-    "collectFinanceCosts",
-  ]) {
-    assert.doesNotMatch(body, new RegExp(forbidden), forbidden);
-  }
-  // 늦게 도착한 스냅샷을 반영하는 것이 목적이므로 수치는 다시 계산한다.
-  assert.match(body, /collectHighlightData/u);
-  assert.match(body, /saveOrgReport/u);
+test("사실이 같으면 아무것도 쓰지 않는다", () => {
+  const body = reconcileBody();
+  assert.match(body, /published\.factsHash === facts[\s\S]{0,200}?action: "none"/u);
 });
 
-test("23:30 재실행 라우트는 발행 경로를 부르지 않는다", () => {
-  const route = readSource("src/app/api/admin/metric-highlights/redaily/route.ts");
-  assert.match(route, /refreshOrgReportSnapshot/u);
-  assert.doesNotMatch(route, /runDailyOrgReport\(/u);
+test("정정은 새 메시지가 아니라 같은 메시지를 고친다", () => {
+  const body = reconcileBody();
+  // requeueNotification 이 SENT 를 PENDING 으로 되돌려야 providerMessageId 가 남고
+  // 워커가 editOrSend 로 같은 카드를 고친다.
+  assert.match(body, /requeueNotification\(sent\.eventId\)/u);
+  const highlights = readSource("src/lib/core/metric-highlights.ts");
+  assert.match(highlights, /payload: \{ text: body, sender: SEORI_SENDER, editable: true \}/u);
 });
 
-test("스냅샷 재계산은 앞선 문서의 origin 을 잇는다", () => {
-  const source = readSource("src/lib/core/org-report.ts");
-  const start = source.indexOf("export async function refreshOrgReportSnapshot");
-  const end = source.indexOf("\nexport ", start + 1);
-  const body = source.slice(start, end === -1 ? undefined : end);
+test("정정은 비용을 다시 부르지 않는다", () => {
+  // 과거 시점의 비용은 복원할 수 없다. 다시 부르면 오늘 값이 그 날 문서에 들어간다.
+  assert.doesNotMatch(reconcileBody(), /collectFinanceCosts/u);
+});
 
-  // 11:00 발행이 실패해 스냅샷이 없으면 이 저장은 발행이 아니다. published 로 굳히면
-  // 해설 없는 문서가 발행분으로 보인다.
-  assert.match(body, /origin: published\?\.origin \?\? "recomputed"/u);
-  assert.doesNotMatch(body, /origin: "published"/u);
+test("수치가 바뀌면 해설도 다시 만든다", () => {
+  // 09-12 스냅샷은 dau=138 인데 해설은 "32→30 으로 2명 감소"였다. 수치만 갱신하고
+  // 해설을 이어 붙이면 문서가 자기 자신과 모순된다.
+  assert.match(reconcileBody(), /metricNarrative\(narrativeFacts\(data\)\)/u);
+});
+
+test("발행 기록이 없으면 그 실행이 최초 발행이 된다", () => {
+  const body = reconcileBody();
+  assert.match(body, /action: published \? "corrected" : "published"/u);
+});
+
+test("정정 라우트는 날짜 형식을 검증한다", () => {
+  const route = readSource("src/app/api/admin/metric-highlights/reconcile/route.ts");
+  assert.match(route, /parseMetricDay\(raw\) === null/u);
+  assert.match(route, /reconcileOrgReport\(/u);
 });
 
 // ── 추이 격자: 부분 관측일은 낮은 합계가 아니라 모르는 값이다 ────────────────
@@ -343,4 +355,51 @@ test("콘솔 축은 GA4 커버리지에 묶이지 않는다", () => {
   const points = alignTrendGrid("2026-09-12", 1, new Map(), console_, coverage);
   assert.equal(points[0].ga4Dau, null);
   assert.equal(points[0].consoleIaaKrw, 140);
+});
+
+// ── 사실 지문: 정정 판단의 근거 ────────────────────────────────────────────
+
+test("해설이 달라져도 사실이 같으면 지문이 같다", () => {
+  // 본문을 해싱하면 LLM 해설이 실행마다 달라져 매일 정정으로 판정된다.
+  const base = sampleData();
+  assert.equal(factsFingerprint(base), factsFingerprint({ ...base }));
+});
+
+test("합계가 달라지면 지문이 달라진다", () => {
+  const base = sampleData();
+  const moved = {
+    ...base,
+    totals: { ...base.totals, ga4Dau: { ...base.totals.ga4Dau, latest: 142 } },
+  };
+  assert.notEqual(factsFingerprint(base), factsFingerprint(moved));
+});
+
+test("커버리지가 달라지면 지문이 달라진다", () => {
+  // 같은 합계라도 "몇 개를 세고 나온 값인가"가 바뀌면 다른 사실이다.
+  const base = sampleData();
+  const covered = {
+    ...base,
+    asOf: {
+      day: REF,
+      verdict: "final" as const,
+      observed: 9,
+      expected: 9,
+      missing: [],
+      missingWeightShare: 0,
+      sealed: true,
+    },
+  };
+  assert.notEqual(factsFingerprint(base), factsFingerprint(covered));
+});
+
+test("정정 문구는 무엇이 얼마나 바뀌었는지 적는다", () => {
+  assert.equal(
+    correctionLine({ previousDau: 15, previousApps: 2, currentDau: 142, currentApps: 6 }),
+    "♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 15 → 142명, 대상 2 → 6개 앱).",
+  );
+  // 대상 수가 그대로면 앱 수를 적지 않는다.
+  assert.equal(
+    correctionLine({ previousDau: 100, previousApps: 6, currentDau: 104, currentApps: 6 }),
+    "♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 100 → 104명).",
+  );
 });

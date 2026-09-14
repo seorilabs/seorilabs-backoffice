@@ -336,6 +336,14 @@ echo "desired_state_backfill_run_id=${backfill_run_id} contract=${backfill_contr
 
 # DB backup는 웹 배포와 분리한다. 전용 계정·restore 검증 후 trusted operator만 전환한다.
 # 일반 배포는 현재 성공 중인 백업 CronJob과 PVC를 변경하지 않는다.
+# apply 는 매니페스트에서 사라진 리소스를 지우지 않는다. 퇴역한 CronJob 을 남겨 두면
+# 없어진 엔드포인트를 계속 때리거나 옛 스케줄로 중복 발행한다. 이름을 바꾼 job 도
+# 옛 이름이 그대로 살아 있으므로 여기서 명시적으로 지운다.
+echo "== retired CronJob cleanup =="
+for retired in backoffice-metric-highlights-redaily; do
+  k -n "$namespace" delete cronjob "$retired" --ignore-not-found
+done
+
 echo "== endpoint CronJob manifests =="
 for manifest in \
   proactive-cronjobs.yaml \

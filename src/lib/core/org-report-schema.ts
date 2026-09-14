@@ -103,10 +103,36 @@ export const orgReportDocumentSchema = z
     /** 문서를 만든 시각(ISO datetime). */
     generatedAt: z.string(),
     /**
-     * 수치가 만들어진 방식. published=당일 11:00 발행, recomputed=원본에서 소급 계산
+     * 수치가 만들어진 방식. published=야간 발행, recomputed=원본에서 소급 계산
      * (비용·LLM 해설은 과거 시점을 복원할 수 없어 null 이다).
      */
     origin: z.enum(["published", "recomputed"]),
+    /**
+     * Discord 에 실제로 나간 내용의 지문. 늦게 도착한 수집을 반영해 이 날짜를 다시
+     * 계산했을 때 "정정이 필요한가"를 판단하는 유일한 근거다. 발행분이 아니면 null.
+     *
+     * optional 이라 구 문서도 그대로 파싱된다. version 리터럴을 올리면 기존 스냅샷이
+     * 전부 파싱 실패로 강등돼 발행 이력(해설·비용)이 조용히 사라진다.
+     */
+    published: z
+      .object({
+        /**
+         * 발행 시점 "사실"의 지문(수치·판정·커버리지). 본문이 아니라 사실에 거는
+         * 이유는 LLM 해설이 실행마다 달라져, 본문을 해싱하면 수치가 그대로인 날에도
+         * 매번 정정으로 판정되기 때문이다.
+         */
+        factsHash: z.string(),
+        dedupeKey: z.string(),
+        publishedAt: z.string(),
+        /** 발행 시점의 커버리지. 나중에 "왜 그때 그 숫자였는지"를 설명한다. */
+        observed: z.number(),
+        expected: z.number(),
+        /** 정정 발송 횟수. 0 = 최초 발행분 그대로. */
+        corrections: z.number(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     summary: z
       .object({
         ga4: z
