@@ -7,6 +7,7 @@ import type {
 } from "@/lib/analytics/console-source";
 import { AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { toDbDay } from "@/lib/analytics/metric-day";
+import { recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
 
 // AppsInToss 콘솔 지표 ingest(push 수집). 인증된 로컬 Claude 세션이 MCP dashboard_* 를 조회해
 // 정규화한 push 페이로드를 받아 AppConsoleMetricDaily(리스팅×날짜)로 멱등 upsert 한다.
@@ -128,6 +129,10 @@ export async function ingestConsoleMetrics(
     }
 
     result.targetApps++;
+    // 콘솔 원장은 기록적이다. cron 이 없고 사람·에이전트가 push 하므로 "모든 칸에
+    // 행을 쓴다"는 보장이 없고, 행이 없다는 사실은 활동 0 이 아니라 푸시가 아직
+    // 안 왔다는 뜻이다(GA4 원장은 반대로 권위적이다).
+    const observations: ObservationInput[] = [];
     for (const day of push.days as ConsoleDailyMetric[]) {
       if (!day || typeof day.date !== "string" || !ISO_DATE.test(day.date)) {
         result.errors.push({ key, error: `잘못된 date: ${day?.date}` });
@@ -158,10 +163,27 @@ export async function ingestConsoleMetrics(
           update: data,
         });
         result.upserts++;
+        observations.push({
+          source: "ait_console",
+          appId: app.id,
+          listingId: miniAppId,
+          day: day.date,
+          state: "observed",
+        });
       } catch (e) {
-        result.errors.push({ key: `${key}@${day.date}`, error: (e as Error).message.slice(0, 300) });
+        const error = (e as Error).message.slice(0, 300);
+        result.errors.push({ key: `${key}@${day.date}`, error });
+        observations.push({
+          source: "ait_console",
+          appId: app.id,
+          listingId: miniAppId,
+          day: day.date,
+          state: "failed",
+          detail: error,
+        });
       }
     }
+    await recordObservations(observations, now);
   }
 
   return result;

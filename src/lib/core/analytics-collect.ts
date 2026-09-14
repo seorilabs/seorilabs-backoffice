@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { resolveGa4Target } from "@/lib/ga4/datasets";
 import {
   lastElapsedMetricDay,
   metricDayWindow,
@@ -8,13 +7,24 @@ import {
   toDbDay,
   toGa4TableSuffix,
 } from "@/lib/analytics/metric-day";
+import { ga4CoverageTargets } from "@/lib/analytics/targets";
+import {
+  recordCollectionFailure,
+  recordObservations,
+  type ObservationInput,
+} from "@/lib/analytics/coverage";
 import {
   queryDailyActivity,
   queryCohortRetention,
   queryDailyBreakdowns,
+  queryLandedEventTables,
   type Ga4CohortRow,
 } from "@/lib/ga4/bigquery";
-import { pivotBreakdownRows, assembleDailyMetric } from "@/lib/ga4/metric-shapes";
+import {
+  assembleDailyMetric,
+  pivotBreakdownRows,
+  zeroDailyActivity,
+} from "@/lib/ga4/metric-shapes";
 import type { Prisma } from "@prisma/client";
 
 // GA4→BigQuery 일별 지표 수집. 대상 앱마다 최근 N일을 쿼리해 AppMetricDaily(공통 지표)로
@@ -38,6 +48,9 @@ export interface CollectResult {
   windowDays: number;
   targetApps: number; // GA4 대상 앱 수
   upserts: number; // 저장된 (앱×날짜) row 수
+  observed: number; // 값이 있는 칸
+  empty: number; // 테이블은 있는데 활동이 0 인 칸
+  notLanded: number; // export 가 아직 오지 않은 칸
   skipped: string[]; // 매핑 없어 제외된 앱 slug
   errors: { slug: string; error: string }[];
 }
@@ -59,6 +72,20 @@ export function clampRetention(
   };
 }
 
+/**
+ * 이 실행이 아무것도 수집하지 못했는가(순수).
+ *
+ * 지금까지 수집 라우트는 전 대상이 실패해도 HTTP 200 {ok:true} 를 돌려줬다.
+ * cron 은 `curl -fsS` 로 호출하고 본문을 버리므로 전면 실패가 조용히 지나갔다.
+ * 대상이 하나도 없는 경우(설정 미완)도 성공으로 볼 수 없다.
+ */
+export function collectionFailedEntirely(result: {
+  targetApps: number;
+  errors: readonly unknown[];
+}): boolean {
+  return result.targetApps === 0 || result.errors.length === result.targetApps;
+}
+
 export async function collectMetrics(
   now: Date,
   opts: { windowDays?: number } = {},
@@ -68,60 +95,86 @@ export async function collectMetrics(
   }
   const windowDays = opts.windowDays ?? WINDOW_DAYS;
   const end = lastElapsedMetricDay(now); // D-1(KST 달력일)
+  const days = metricDayWindow(end, windowDays);
+  const startSuffix = toGa4TableSuffix(days[0]);
   const endSuffix = toGa4TableSuffix(end);
-  const startSuffix = toGa4TableSuffix(metricDayWindow(end, windowDays)[0]);
 
-  const apps = await prisma.app.findMany({
-    select: { id: true, slug: true, firebaseProject: true, ga4Dataset: true },
-  });
+  const { targets, skipped } = await ga4CoverageTargets();
 
   const result: CollectResult = {
     endDate: end,
     windowDays,
-    targetApps: 0,
+    targetApps: targets.length,
     upserts: 0,
-    skipped: [],
+    observed: 0,
+    empty: 0,
+    notLanded: 0,
+    skipped,
     errors: [],
   };
 
-  for (const app of apps) {
-    const target = resolveGa4Target(app);
-    if (!target) {
-      result.skipped.push(app.slug);
-      continue;
-    }
-    result.targetApps++;
+  for (const target of targets) {
     try {
-      const [activity, cohort, breakdowns] = await Promise.all([
-        queryDailyActivity(target, startSuffix, endSuffix),
-        queryCohortRetention(target, startSuffix, endSuffix),
-        queryDailyBreakdowns(target, startSuffix, endSuffix),
+      const [landed, activity, cohort, breakdowns] = await Promise.all([
+        queryLandedEventTables(target.ga4, startSuffix, endSuffix),
+        queryDailyActivity(target.ga4, startSuffix, endSuffix),
+        queryCohortRetention(target.ga4, startSuffix, endSuffix),
+        queryDailyBreakdowns(target.ga4, startSuffix, endSuffix),
       ]);
+      const activityByDate = new Map(activity.map((a) => [a.date, a]));
       const cohortByDate = new Map(cohort.map((c) => [c.date, c]));
       const dimsByDate = pivotBreakdownRows(breakdowns);
+      const observations: ObservationInput[] = [];
 
-      for (const a of activity) {
-        const date = toDbDay(a.date);
-        const age = metricDaysBetween(end, a.date);
-        const ret = clampRetention(cohortByDate.get(a.date), age);
-        const assembled = assembleDailyMetric(a, ret, dimsByDate[a.date]);
+      // 응답한 날짜만 도는 것이 아니라 창 전체를 돈다. 응답에 없는 날이 활동 0 인지
+      // export 미착지인지는 일별 테이블 존재 여부로만 갈린다.
+      for (const day of days) {
+        if (!landed.has(toGa4TableSuffix(day))) {
+          // 지표 행을 쓰지 않는다. 0 으로 채우면 미착지가 실적 0 으로 둔갑한다.
+          observations.push({ source: "ga4", appId: target.appId, day, state: "not_landed" });
+          result.notLanded++;
+          continue;
+        }
+        const row = activityByDate.get(day);
+        const age = metricDaysBetween(end, day);
+        const ret = clampRetention(cohortByDate.get(day), age);
+        const assembled = assembleDailyMetric(
+          row ?? zeroDailyActivity(day),
+          ret,
+          dimsByDate[day],
+        );
         const data = {
           ...assembled,
           raw: assembled.raw as unknown as Prisma.InputJsonValue,
           collectedAt: now,
         };
+        const date = toDbDay(day);
         await prisma.appMetricDaily.upsert({
-          where: { appId_date: { appId: app.id, date } },
-          create: { appId: app.id, date, ...data },
+          where: { appId_date: { appId: target.appId, date } },
+          create: { appId: target.appId, date, ...data },
           update: data,
         });
         result.upserts++;
+        // 테이블은 있는데 그 앱의 그 날 행이 없다 = 진짜 활동 0. 0 행을 남겨야
+        // 기준선이 그 날을 건너뛰지 않는다.
+        observations.push({
+          source: "ga4",
+          appId: target.appId,
+          day,
+          state: row ? "observed" : "empty",
+        });
+        if (row) result.observed++;
+        else result.empty++;
       }
+      await recordObservations(observations, now);
     } catch (e) {
-      result.errors.push({
-        slug: app.slug,
-        error: (e as Error).message.slice(0, 300),
-      });
+      const error = (e as Error).message.slice(0, 300);
+      result.errors.push({ slug: target.slug, error });
+      // 실패는 이미 관측된 칸을 덮지 않는다(recordCollectionFailure 가 거른다).
+      await recordCollectionFailure(
+        days.map((day) => ({ source: "ga4" as const, appId: target.appId, day, detail: error })),
+        now,
+      );
     }
   }
 
