@@ -31,7 +31,9 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
   // 앱·런타임·버전 조합이 Platform 세션에서 처음 관측된 순간이다. 마켓 업로드나
   // 태그가 아니라 그 빌드로 실제 세션이 처음 열린 시각이라 실유입 개시를 가른다.
   "app.version.first_seen": new Set(["appVersion", "runtime", "sdk"]),
-  "iap.granted": new Set(["platform", "entitlementId"]),
+  // isTestPurchase 는 마켓 검증의 관측 사실이다. 키가 없으면 "미확인" 이고
+  // 실거래로 추정하지 않는다 — AppsInToss 는 provider 가 이 값을 만들지 않는다.
+  "iap.granted": new Set(["platform", "entitlementId", "isTestPurchase"]),
   "ad.reward.delivered": new Set([
     "provider",
     "placementId",

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
+import { iapDestinations, recordIapGrant } from "@/lib/notifications/iap-summary";
 import { prisma } from "@/lib/prisma";
 import {
   isOpsAlert,
@@ -109,9 +110,14 @@ export async function POST(request: NextRequest) {
     const milestone = app
       ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
       : false;
-    // 등록된 앱의 신규 계정은 건별 카드 대신 앱·일 요약 카드 하나를 갱신한다.
-    const summarized = app && input.type === "identity.created"
-      ? await recordIdentitySignup({ app, event: input })
+    // 등록된 앱의 신규 계정·결제는 건별 카드 대신 앱·일 요약 카드 하나를 갱신한다.
+    // 마일스톤과 배타가 아니다 — 앱 최초 1건은 마일스톤 카드와 요약 카드가 둘 다 난다.
+    const summarized = app
+      ? input.type === "identity.created"
+        ? await recordIdentitySignup({ app, event: input })
+        : input.type === "iap.granted"
+          ? await recordIapGrant({ app, event: input })
+          : false
       : false;
     if (!milestone && !summarized) {
       await enqueueNotification({
@@ -123,7 +129,10 @@ export async function POST(request: NextRequest) {
           // 줄줄이 쌓이는 기록이라 건마다 상자를 그리지 않는다.
           plain: true,
         },
-        destinations: discordDestinations(["action-events"]),
+        // 미등록 앱의 결제도 전용 채널로 보낸다. 피드가 갈리면 결제를 두 곳에서 읽어야 한다.
+        destinations: input.type === "iap.granted"
+          ? iapDestinations()
+          : discordDestinations(["action-events"]),
       });
     }
   }

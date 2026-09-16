@@ -152,3 +152,29 @@ test("장애 요약은 표시가 아니라 사실에서 나온다", () => {
   assert.equal(/[*]|❌/.test(headline), false);
   assert.equal(icon, "❌");
 });
+
+// 수용 계약은 발행보다 먼저 넓혀야 한다. platform 이 먼저 배포되면 backoffice 가
+// 허용 목록 밖 키로 보고 400 을 내고, 400 은 재시도해도 풀리지 않아 outbox 가
+// dead_letter 로 확정된다 — 그 사이 결제 알림이 영구 유실된다.
+test("IAP 결제는 테스트 주문 여부를 받되 키가 없어도 통과한다", () => {
+  const granted = {
+    ...sample,
+    eventId: "iap_58542708455af9fd9f3d88aec5025cd8",
+    type: "iap.granted" as const,
+    outcome: "granted",
+    attributes: { platform: "app_store", entitlementId: "sp_aurora_skink", isTestPurchase: true },
+  };
+  assert.deepEqual(parseOperationalEvent(granted), granted);
+  assert.deepEqual(
+    parseOperationalEvent({ ...granted, attributes: { ...granted.attributes, isTestPurchase: false } }),
+    { ...granted, attributes: { ...granted.attributes, isTestPurchase: false } },
+  );
+  // 앱인토스는 provider 가 값을 만들지 않아 키가 아예 오지 않는다.
+  const unknown = { ...granted, attributes: { platform: "apps_in_toss", entitlementId: "ft_rack_pack_1" } };
+  assert.deepEqual(parseOperationalEvent(unknown), unknown);
+  // 계약 밖 키는 계속 거부한다.
+  assert.equal(
+    parseOperationalEvent({ ...granted, attributes: { ...granted.attributes, productId: "sku_1" } }),
+    null,
+  );
+});
