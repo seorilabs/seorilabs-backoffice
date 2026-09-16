@@ -47,6 +47,24 @@ function embedMetaOf(payload: JsonObject | null): DiscordEmbedMeta | undefined {
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
+/**
+ * 렌더 결과를 notification_event.payload 에 담을 수 있는 JSON 으로.
+ *
+ * DiscordEmbedMeta 는 index signature 가 없어 Prisma 의 InputJsonObject 에 그대로
+ * 들어가지 않는다. 빌더마다 손으로 펼치면 키 이름이 갈리므로 여기서 한 번만 한다.
+ */
+export function renderPayload(
+  render: DiscordRender,
+  extra: Prisma.InputJsonObject = {},
+): Prisma.InputJsonObject {
+  return {
+    ...extra,
+    text: render.text,
+    ...(render.plain ? { plain: true } : {}),
+    ...(render.embed ? { embed: { ...render.embed } as Prisma.InputJsonObject } : {}),
+  };
+}
+
 export function discordRender(
   kind: NotificationKind,
   payload: Prisma.JsonValue,

@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
-import { kstClock, kstDateTime } from "@/lib/format/kst";
+import { kstClock } from "@/lib/format/kst";
+import { EMBED_COLOR } from "@/lib/notifications/style";
+import { renderPayload, type DiscordRender } from "@/lib/notifications/format";
 import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
 
@@ -109,22 +111,44 @@ export function summarizeIdentityEvents(input: {
   };
 }
 
-export function identitySummaryText(facts: IdentitySignupFacts): string {
-  const time = kstDateTime(facts.latestAt);
-  const lines = [`👤 **${facts.displayName} · 오늘 신규 계정 ${facts.todayTotal}명**`];
-  const gap = facts.previousAt
-    ? ` · 직전 간격 ${formatElapsed(facts.latestAt.getTime() - facts.previousAt.getTime())}`
-    : "";
-  lines.push(`최근 생성: ${time}${gap}`);
-  if (facts.cumulative !== null) lines.push(`누적: ${facts.cumulative}번째 계정`);
-  for (const key of BREAKDOWN_ATTRIBUTES) {
-    const entries = facts.breakdowns[key];
-    if (!entries.length) continue;
-    const body = entries.map(([value, count]) => `${value} ${count}`).join(" · ");
-    lines.push(`${BREAKDOWN_LABELS[key]}: ${body}`);
+/**
+ * 앱·일 요약 카드.
+ *
+ * 이 카드만 상자로 남긴다. 같은 채널을 흐르는 단건 기록은 상자 없는 한 줄이라,
+ * 상자 자체가 "이건 하루치 집계" 라는 표시가 된다. 최근 시각은 본문에 적지 않고
+ * embed timestamp 로 넘겨 Discord 가 상자 하단에 렌더하게 한다 — 줄이 하나 줄고
+ * 상대 시각("오늘 오후 2:53")이 함께 보인다. 날짜는 footer 로 남겨, 카드가 편집만
+ * 되고 스크롤 위로 밀려도 어느 날 카드인지 읽히게 한다.
+ */
+export function identitySummaryRender(facts: IdentitySignupFacts): DiscordRender {
+  const head: string[] = [];
+  if (facts.cumulative !== null) head.push(`누적 ${facts.cumulative}번째`);
+  if (facts.previousAt) {
+    head.push(`직전 간격 ${formatElapsed(facts.latestAt.getTime() - facts.previousAt.getTime())}`);
   }
-  if (facts.anonymous) lines.push(`익명 계정: ${facts.anonymous}`);
-  return lines.join("\n");
+  if (facts.anonymous) head.push(`익명 ${facts.anonymous}`);
+
+  // 분해 축을 줄마다 쌓으면 카드가 길어져 로그 사이에서 덩어리로 보인다.
+  // 라벨 뒤 콜론은 상자 안에서 잡음이라 뺀다.
+  const breakdowns = BREAKDOWN_ATTRIBUTES.flatMap((key) => {
+    const entries = facts.breakdowns[key];
+    if (!entries.length) return [];
+    return [`${BREAKDOWN_LABELS[key]} ${entries.map(([value, n]) => `${value} ${n}`).join(" · ")}`];
+  });
+
+  const lines = [head.join(" · ")];
+  for (let index = 0; index < breakdowns.length; index += 3) {
+    lines.push(breakdowns.slice(index, index + 3).join(" · "));
+  }
+  return {
+    text: lines.filter(Boolean).join("\n"),
+    embed: {
+      title: `👤 ${facts.displayName} · 신규 계정 ${facts.todayTotal}명`,
+      color: EMBED_COLOR.NEUTRAL,
+      footer: `${facts.dateKey} KST`,
+      timestamp: facts.latestAt.toISOString(),
+    },
+  };
 }
 
 export function identitySummaryDedupeKey(appSlug: string, dateKey: string): string {
@@ -232,7 +256,7 @@ export async function recordIdentitySignup(input: {
     dedupeKey: identitySummaryDedupeKey(input.app.slug, facts.dateKey),
     kind: "IDENTITY_SUMMARY",
     occurredAt: facts.latestAt,
-    payload: { text: identitySummaryText(facts) },
+    payload: renderPayload(identitySummaryRender(facts)),
     destinations: discordDestinations(["action-events"]),
   });
   await requeueNotification(eventId);
@@ -267,8 +291,6 @@ export async function recordIdentitySignup(input: {
       }),
       cardDedupeKey: identitySummaryDedupeKey(input.app.slug, facts.dateKey),
       threadName: identityThreadName(input.app.displayName, facts.dateKey),
-      // 하루 첫 댓글만 멘션한다. 멘션되면 쓰레드 멤버로 추가돼 이후 댓글도 알림이 간다.
-      first: ordinal === 1,
     },
     destinations: discordDestinations(["action-events"]),
   });
