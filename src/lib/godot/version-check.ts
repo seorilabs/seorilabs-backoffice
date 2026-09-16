@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Discord로 알린다.
 // 실제 bump(코드 수정)는 하지 않는다 — 감지+알림 전용. CronJob 이 주기 호출.
@@ -97,7 +98,7 @@ export async function checkGodotVersion(): Promise<GodotCheckResult> {
   await enqueueNotification({
     dedupeKey: `godot-stable:${latest}`,
     kind: "OPS_ALERT",
-    payload: { text },
+    payload: { text, embed: { color: EMBED_COLOR.INFO } },
     destinations: discordDestinations(["backoffice"]),
   });
 

@@ -7,6 +7,7 @@ import {
   type MarketReleaseInput,
 } from "@/lib/sync/deploy-all-release";
 import type { DeployAllRunJob } from "@/lib/core/deploy-all-jobs";
+import type { DiscordRender } from "@/lib/notifications/format";
 
 const DEPLOY_ALL = `
 jobs:
@@ -44,7 +45,7 @@ function context(overrides: Partial<DeployAllRunContext> = {}): DeployAllRunCont
 
 interface Recorded {
   releases: MarketReleaseInput[];
-  runCards: Array<{ text: string; eventKey: string; occurredAt: Date }>;
+  runCards: Array<{ render: DiscordRender; eventKey: string; occurredAt: Date }>;
 }
 
 function deps(
@@ -120,7 +121,7 @@ test("마켓 잡이 하나도 돌지 않았으면 실행 단위 카드로 물러
   assert.equal(recorded.runCards.length, 1);
   assert.equal(recorded.runCards[0].eventKey, "33028376820:1");
   assert.equal(recorded.runCards[0].occurredAt, UPDATED_AT);
-  assert.match(recorded.runCards[0].text, /행복 농장 타이쿤 v1\.10\.3 · 전체 마켓 배포/);
+  assert.equal(recorded.runCards[0].render.embed?.title, "🚀 행복 농장 타이쿤 v1.10.3 · 전체 마켓 배포");
 });
 
 test("워크플로 정의를 읽지 못하면 실행 단위 카드로 물러선다", async () => {
@@ -137,7 +138,7 @@ test("워크플로 정의를 읽지 못하면 실행 단위 카드로 물러선�
   assert.deepEqual(results, []);
   assert.deepEqual(recorded.releases, []);
   assert.equal(recorded.runCards.length, 1);
-  assert.match(recorded.runCards[0].text, /전체 마켓 배포/);
+  assert.match(recorded.runCards[0].render.embed?.title ?? "", /전체 마켓 배포/);
 });
 
 test("잡 목록을 읽지 못해도 ALL 배포가 무음으로 끝나지 않는다", async () => {
@@ -156,7 +157,7 @@ test("잡 목록을 읽지 못해도 ALL 배포가 무음으로 끝나지 않는
 test("폴백 카드는 앱 표시 이름을 못 읽으면 repo 이름으로 남긴다", async () => {
   const { deps: d, recorded } = deps({ appDisplayName: async () => null });
   await recordDeployAllRun(context(), d);
-  assert.match(recorded.runCards[0].text, /seorilabs\/happy-farm v1\.10\.3/);
+  assert.match(recorded.runCards[0].render.embed?.title ?? "", /seorilabs\/happy-farm v1\.10\.3/);
 });
 
 test("snapshot 후보 배포는 Play 내부 트랙으로 기록한다", async () => {

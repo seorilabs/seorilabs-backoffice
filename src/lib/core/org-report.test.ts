@@ -299,7 +299,10 @@ test("정정은 새 메시지가 아니라 같은 메시지를 고친다", () =>
   // 워커가 editOrSend 로 같은 카드를 고친다.
   assert.match(body, /requeueNotification\(sent\.eventId\)/u);
   const highlights = readSource("src/lib/core/metric-highlights.ts");
-  assert.match(highlights, /payload: \{ text: body, sender: SEORI_SENDER, editable: true \}/u);
+  // editable 이 빠지면 정정이 새 카드로 나가 어느 쪽이 맞는지 읽는 사람이 모른다.
+  assert.match(highlights, /text: body,/u);
+  assert.match(highlights, /sender: SEORI_SENDER,/u);
+  assert.match(highlights, /editable: true,/u);
 });
 
 test("정정은 비용을 다시 부르지 않는다", () => {

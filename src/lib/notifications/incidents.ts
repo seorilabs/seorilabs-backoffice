@@ -1,6 +1,8 @@
 import { Prisma, type OperationalIncident } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { kstDateTime } from "@/lib/format/kst";
+import { EMBED_COLOR } from "@/lib/notifications/style";
+import type { DiscordRender } from "@/lib/notifications/format";
 import { discordDestinations, isDiscordDestinationKey } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
@@ -16,17 +18,35 @@ export function incidentComponents(incident: Pick<OperationalIncident, "id" | "s
   }];
 }
 
-export function incidentMessage(incident: OperationalIncident): string {
+/**
+ * 장애 카드.
+ *
+ * 이 카드는 같은 메시지를 편집해 수명주기를 표현한다. 그래서 상태별 색을 따로 만들지
+ * 않고 결과 색을 그대로 태운다 — 발생(빨강)에서 확인됨(주황)을 거쳐 복구(초록)로
+ * 흘러가는 편이, 고정된 "장애색" 하나보다 지금 상태를 정확히 전달한다.
+ */
+export function incidentRender(incident: OperationalIncident): DiscordRender {
   const icon = incident.status === "RECOVERED" ? "✅" : incident.severity === "critical" ? "🚨" : "⚠️";
   const state = incident.status === "OPEN" ? "발생" : incident.status === "ACKNOWLEDGED" ? "확인됨" : "복구";
-  const lines = [
-    `${icon} **${incident.summary}**`,
-    `상태: **${state}** · 최초 ${kstDateTime(incident.firstDetectedAt)} · 최근 ${kstDateTime(incident.lastDetectedAt)}`,
-  ];
+  const color = incident.status === "RECOVERED"
+    ? EMBED_COLOR.SUCCESS
+    : incident.status === "ACKNOWLEDGED" || incident.severity !== "critical"
+      ? EMBED_COLOR.WARNING
+      : EMBED_COLOR.FAILURE;
+  const lines = [`상태: **${state}** · 최초 ${kstDateTime(incident.firstDetectedAt)}`];
   if (incident.acknowledgedBy) lines.push(`확인: <@${incident.acknowledgedBy}>`);
   if (incident.assignedDiscordUserId) lines.push(`담당: <@${incident.assignedDiscordUserId}>`);
   if (incident.recoveredAt) lines.push(`복구 시각: ${kstDateTime(incident.recoveredAt)}`);
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    embed: {
+      title: `${icon} ${incident.summary}`,
+      color,
+      // 최근 관측은 상자 하단에 맡긴다. 이 카드는 신호가 올 때마다 편집되므로
+      // "마지막으로 언제 관측됐나" 가 늘 필요하다.
+      timestamp: incident.lastDetectedAt.toISOString(),
+    },
+  };
 }
 
 export function incidentDeliveryMode(providerMessageId: string | null):

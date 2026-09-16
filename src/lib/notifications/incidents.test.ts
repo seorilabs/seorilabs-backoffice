@@ -4,8 +4,9 @@ import type { OperationalIncident } from "@prisma/client";
 import {
   incidentComponents,
   incidentDeliveryMode,
-  incidentMessage,
+  incidentRender,
 } from "@/lib/notifications/incidents";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 function incident(overrides: Partial<OperationalIncident> = {}): OperationalIncident {
   const detectedAt = new Date("2026-08-18T00:00:00Z");
@@ -35,7 +36,8 @@ function incident(overrides: Partial<OperationalIncident> = {}): OperationalInci
 
 test("장애 발생·확인·복구 상태를 같은 카드 수명주기로 표시한다", () => {
   const open = incident();
-  assert.match(incidentMessage(open), /🚨.*CPU 임계치 초과/);
+  assert.equal(incidentRender(open).embed?.title, "🚨 CPU 임계치 초과");
+  assert.equal(incidentRender(open).embed?.color, EMBED_COLOR.FAILURE);
   assert.equal(incidentComponents(open)[0]?.components[0]?.label, "확인");
   assert.deepEqual(incidentDeliveryMode(open.providerMessageId), { kind: "create" });
 
@@ -45,14 +47,17 @@ test("장애 발생·확인·복구 상태를 같은 카드 수명주기로 표�
     acknowledgedBy: "operator-1",
     assignedDiscordUserId: "operator-1",
   });
-  assert.match(incidentMessage(acknowledged), /상태: \*\*확인됨\*\*/);
-  assert.match(incidentMessage(acknowledged), /<@operator-1>/);
+  assert.match(incidentRender(acknowledged).text, /상태: \*\*확인됨\*\*/);
+  assert.match(incidentRender(acknowledged).text, /<@operator-1>/);
+  // 같은 메시지를 편집해 수명주기를 표현하므로 색이 상태를 따라 흐른다.
+  assert.equal(incidentRender(acknowledged).embed?.color, EMBED_COLOR.WARNING);
   assert.deepEqual(incidentDeliveryMode(acknowledged.providerMessageId), {
     kind: "edit",
     messageId: "message-1",
   });
 
   const recovered = incident({ status: "RECOVERED", recoveredAt: new Date("2026-08-18T00:10:00Z") });
-  assert.match(incidentMessage(recovered), /✅.*CPU 임계치 초과/);
+  assert.equal(incidentRender(recovered).embed?.title, "✅ CPU 임계치 초과");
+  assert.equal(incidentRender(recovered).embed?.color, EMBED_COLOR.SUCCESS);
   assert.deepEqual(incidentComponents(recovered), []);
 });

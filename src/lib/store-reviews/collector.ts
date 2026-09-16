@@ -17,12 +17,14 @@ import {
   classifyReviewChange,
   reviewContentHash,
   reviewNotificationDedupeKey,
+  reviewRatingColor,
   storeReviewDiscordText,
 } from "@/lib/store-reviews/shape";
 import type {
   ReviewObservationState,
   StoreReview,
 } from "@/lib/store-reviews/types";
+
 
 export interface ReviewAppTarget {
   id: string;
@@ -212,6 +214,8 @@ async function processReviews(input: {
         appId: input.app.id,
         store: review.store,
         externalReviewId: review.externalReviewId,
+        // 별점이 상자 색으로 먼저 읽히게 한다. 낮은 별점은 대응이 필요한 신호다.
+        embed: { color: reviewRatingColor(review.rating) },
       },
       occurredAt: change === "updated"
         ? review.sourceModifiedAt ?? observedAt

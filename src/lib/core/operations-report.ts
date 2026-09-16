@@ -3,6 +3,7 @@ import { kstDateTime } from "@/lib/format/kst";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 export async function sendOperationsSummary(now: Date): Promise<{
   refDate: string;
@@ -66,7 +67,10 @@ export async function sendOperationsSummary(now: Date): Promise<{
   await enqueueNotification({
     dedupeKey: `metrics:operations:${refDate}`,
     kind: "OPERATIONS_SUMMARY",
-    payload: { text: lines.join("\n") },
+    payload: {
+      text: lines.join("\n"),
+      embed: { color: EMBED_COLOR.NEUTRAL },
+    },
     destinations,
   });
   return {

@@ -6,6 +6,7 @@ import type {
   StoreReview,
 } from "@/lib/store-reviews/types";
 import { kstDateTime } from "@/lib/format/kst";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const BODY_PREVIEW_CHARS = 1_600;
 
@@ -114,4 +115,12 @@ export function storeReviewDiscordText(input: {
   if (review.title) lines.push(`제목: **${escapeDiscordMarkdown(preview(review.title))}**`);
   lines.push(quote(review.body));
   return lines.join("\n");
+}
+
+/** 별점 → 상자 색. 3점은 판정하지 않는다. */
+export function reviewRatingColor(rating: number | null | undefined): number {
+  if (rating == null) return EMBED_COLOR.NEUTRAL;
+  if (rating >= 4) return EMBED_COLOR.SUCCESS;
+  if (rating <= 2) return EMBED_COLOR.FAILURE;
+  return EMBED_COLOR.NEUTRAL;
 }
