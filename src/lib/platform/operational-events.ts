@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import { kstDateTime } from "@/lib/format/kst";
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
@@ -107,11 +108,7 @@ export function operationalEventMessage(
   event: OperationalEventInput,
   displayName: string,
 ): string {
-  const time = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date(event.occurredAt));
+  const time = kstDateTime(new Date(event.occurredAt));
   const lines = [`앱: **${displayName}**`, `시각: ${time}`];
   switch (event.type) {
     case "identity.created":

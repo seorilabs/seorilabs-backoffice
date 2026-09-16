@@ -2,6 +2,7 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { collectFinanceCosts, financeMonth, type CostWarning } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
+import { metricDayOf } from "@/lib/analytics/metric-day";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 
 // 서리 일일 재무 리포트. 종량제 4소스(GitHub Actions·GCP·LLM·Stability)의 이번 달
@@ -11,8 +12,7 @@ const SENDER_KO = "서리";
 
 /** KST 날짜 기준 하루 1건. CronJob 중복 발화가 리포트를 두 번 올리지 않는다. */
 export function financeReportDedupeKey(now = new Date()): string {
-  const kst = new Date(now.getTime() + 9 * 3_600_000);
-  return `finance:${kst.toISOString().slice(0, 10)}`;
+  return `finance:${metricDayOf(now)}`;
 }
 
 export function renderFinanceReport(input: {

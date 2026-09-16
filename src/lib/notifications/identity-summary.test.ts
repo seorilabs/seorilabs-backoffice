@@ -10,7 +10,6 @@ import {
   identitySummaryDedupeKey,
   identitySummaryText,
   identityThreadName,
-  kstDateKey,
   summarizeIdentityEvents,
 } from "@/lib/notifications/identity-summary";
 
@@ -20,11 +19,6 @@ const base = {
   todayTotal: 12,
   cumulative: 639,
 };
-
-test("KST 날짜 키는 UTC 15시에 다음 날로 넘어간다", () => {
-  assert.equal(kstDateKey(new Date("2026-08-19T14:59:59Z")), "2026-08-19");
-  assert.equal(kstDateKey(new Date("2026-08-19T15:00:00Z")), "2026-08-20");
-});
 
 test("경과 시간은 초·분·시간 단위로 읽히게 만든다", () => {
   assert.equal(formatElapsed(45_000), "45초");

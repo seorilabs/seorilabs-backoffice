@@ -16,6 +16,7 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { metricNarrative } from "@/lib/core/metric-narrative";
+import { count, pct, won } from "@/lib/format/units";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
@@ -63,18 +64,15 @@ export interface MetricSpec {
   format: (value: number) => string;
 }
 
-const count = (unit: string) => (value: number) => `${Math.round(value).toLocaleString("ko-KR")}${unit}`;
-const won = (value: number) => `₩${Math.round(value).toLocaleString("ko-KR")}`;
-const percent = (value: number) => `${value.toFixed(1)}%`;
 
 // 임계는 2026-08-29 실측 분포에 맞춘 값이다(전체 GA4 DAU 75명, 콘솔 일 광고수익 ₩38).
 // 포트폴리오가 커지면 minBaseline·minAbsDelta 를 함께 올린다.
 export const METRIC_SPECS: MetricSpec[] = [
-  { key: "ga4_dau", ko: "DAU", source: "GA4", minBaseline: 5, minChange: 30, minAbsDelta: 3, format: count("명") },
+  { key: "ga4_dau", ko: "DAU", source: "GA4", minBaseline: 5, minChange: 30, minAbsDelta: 3, format: (value: number) => count(value, "명") },
   // 신규 20명 미만 코호트의 D1 은 한두 명에 수십 %p 가 움직여 판정하지 않는다.
-  { key: "ga4_d1", ko: "D1 잔존율", source: "GA4", minBaseline: 5, minChange: 15, minSample: 20, pointScale: true, format: percent },
-  { key: "ga4_ad_completions", ko: "보상형 광고 완료", source: "GA4", minBaseline: 10, minChange: 40, minAbsDelta: 5, format: count("회") },
-  { key: "console_dau", ko: "토스 DAU", source: "콘솔", minBaseline: 5, minChange: 40, minAbsDelta: 3, format: count("명") },
+  { key: "ga4_d1", ko: "D1 잔존율", source: "GA4", minBaseline: 5, minChange: 15, minSample: 20, pointScale: true, format: (value: number) => pct(value) },
+  { key: "ga4_ad_completions", ko: "보상형 광고 완료", source: "GA4", minBaseline: 10, minChange: 40, minAbsDelta: 5, format: (value: number) => count(value, "회") },
+  { key: "console_dau", ko: "토스 DAU", source: "콘솔", minBaseline: 5, minChange: 40, minAbsDelta: 3, format: (value: number) => count(value, "명") },
   { key: "console_iaa", ko: "광고 수익", source: "콘솔", minBaseline: 50, minChange: 50, minAbsDelta: 50, format: won },
   { key: "console_iap", ko: "결제 거래액", source: "콘솔", minBaseline: 1_000, minChange: 40, minAbsDelta: 1_000, format: won },
 ];

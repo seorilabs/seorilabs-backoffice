@@ -3,10 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
+import { kstClock, kstDateTime } from "@/lib/format/kst";
 import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
 
-const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 // 분해 표시용 표본 상한. 총계는 count로 따로 세므로 상한을 넘겨도 숫자는 정확하다.
 const BREAKDOWN_SAMPLE = 1_000;
@@ -45,10 +45,6 @@ export interface IdentitySignupFacts {
   breakdowns: IdentityBreakdowns;
 }
 
-export function kstDateKey(date: Date): string {
-  const shifted = new Date(date.getTime() + KST_OFFSET_MS);
-  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
-}
 
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1_000));
@@ -114,11 +110,7 @@ export function summarizeIdentityEvents(input: {
 }
 
 export function identitySummaryText(facts: IdentitySignupFacts): string {
-  const time = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(facts.latestAt);
+  const time = kstDateTime(facts.latestAt);
   const lines = [`👤 **${facts.displayName} · 오늘 신규 계정 ${facts.todayTotal}명**`];
   const gap = facts.previousAt
     ? ` · 직전 간격 ${formatElapsed(facts.latestAt.getTime() - facts.previousAt.getTime())}`
@@ -176,13 +168,7 @@ export interface IdentityRowFacts {
 // 요약 카드가 가리는 건별 사실만 담는다. 가입이 몰리는 시간대와 간격이 읽히도록
 // 시각과 직전 간격을 앞에 두고, 인증·유입은 있을 때만 붙인다.
 export function identityRowText(facts: IdentityRowFacts): string {
-  const time = new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).format(facts.occurredAt);
+  const time = kstClock(facts.occurredAt);
   const parts = [`\`#${facts.ordinal}\``, time];
   if (facts.previousAt) {
     parts.push(`직전 +${formatElapsed(facts.occurredAt.getTime() - facts.previousAt.getTime())}`);
@@ -233,7 +219,7 @@ export async function recordIdentitySignup(input: {
   ]);
   const facts = summarizeIdentityEvents({
     displayName: input.app.displayName,
-    dateKey: kstDateKey(occurredAt),
+    dateKey: metricDayOf(occurredAt),
     todayTotal,
     cumulative:
       input.app.platformUserBaseline === null

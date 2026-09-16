@@ -253,7 +253,8 @@ test("GA4 합계는 기준일 스냅샷이 있는 앱만 센다", () => {
     3,
   );
   assert.match(line, /DAU 25/, "86 을 더하면 안 된다");
-  assert.match(line, /활성 16\(64%\)/);
+  // 퍼센트는 소수 1자리로 통일한다. 정수로 접으면 64.4 와 63.6 이 같은 값으로 보인다.
+  assert.match(line, /활성 16\(64\.0%\)/);
   assert.match(line, /\(기준일 2\/3 앱\)/);
   assert.doesNotMatch(line, /111|DAU 86/);
 });
