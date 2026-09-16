@@ -2,12 +2,8 @@ import type {
   NotificationKind,
   Prisma,
 } from "@prisma/client";
-import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
-import { sendDiscord, type DiscordActionRow } from "@/lib/notifications/discord";
 import type { NotificationDestination } from "@/lib/notifications/destinations";
-import { DISCORD_OPS_ALERTS } from "@/lib/notifications/destinations";
-import { plainTextPayload } from "@/lib/notifications/format";
 
 const MAX_ATTEMPTS = 10;
 let draining = false;
@@ -104,9 +100,15 @@ export function isTerminalFailure(
   return result.terminal === true || attempts >= maxAttempts;
 }
 
+/**
+ * 전달 방식은 호출부가 정한다.
+ *
+ * kind 별 렌더 분기(쓰레드·편집·배포 카드 재렌더)가 deploy.ts 에만 있고, 여기서
+ * 두 번째 전송 경로를 들고 있으면 옵션 조립이 두 벌로 갈린다.
+ */
 export async function drainNotifications(
-  limit = 30,
-  deliverOverride?: (input: {
+  limit: number,
+  deliver: (input: {
     kind: NotificationKind;
     destinationKey: string;
     payload: Prisma.JsonValue;
@@ -139,18 +141,12 @@ export async function drainNotifications(
       });
       if (claimed.count !== 1) continue;
 
-      const result = deliverOverride
-        ? await deliverOverride({
-            kind: row.event.kind,
-            destinationKey: row.destinationKey,
-            payload: row.event.payload,
-            providerMessageId: row.providerMessageId,
-          })
-        : await deliverPlain(
-            row.event.kind,
-            row.destinationKey,
-            row.event.payload,
-          );
+      const result = await deliver({
+        kind: row.event.kind,
+        destinationKey: row.destinationKey,
+        payload: row.event.payload,
+        providerMessageId: row.providerMessageId,
+      });
       if (result.ok) {
         sent++;
         await prisma.notificationDelivery.update({
@@ -201,41 +197,4 @@ export async function drainNotifications(
   } finally {
     draining = false;
   }
-}
-
-async function deliverPlain(
-  kind: NotificationKind,
-  destinationKey: string,
-  payload: Prisma.JsonValue,
-): Promise<DeliveryOverrideResult> {
-  const text = plainTextPayload(kind, payload);
-  if (!text) return { ok: false, error: "알림 payload 형식 오류" };
-  const object = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload as Prisma.JsonObject
-    : null;
-  const attachmentValue = object?.attachment;
-  const attachment = attachmentValue && typeof attachmentValue === "object" && !Array.isArray(attachmentValue)
-    ? attachmentValue as Prisma.JsonObject
-    : null;
-  const attachmentOption =
-    typeof attachment?.filename === "string" &&
-    typeof attachment?.contentType === "string" &&
-    typeof attachment?.base64 === "string"
-      ? {
-          filename: attachment.filename,
-          contentType: attachment.contentType,
-          base64: attachment.base64,
-        }
-      : undefined;
-  const components = Array.isArray(object?.components)
-    ? (object.components as unknown as DiscordActionRow[]).slice(0, 5)
-    : undefined;
-  return sendDiscord(destinationKey, text, {
-    alertRoleId:
-      destinationKey === DISCORD_OPS_ALERTS
-        ? env.discordRoleId("release_ops")
-        : undefined,
-    attachment: attachmentOption,
-    components,
-  });
 }
