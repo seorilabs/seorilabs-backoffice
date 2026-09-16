@@ -19,6 +19,7 @@ import { advanceFleetLifecycleStageFromHumanUi } from "@/lib/control-plane/lifec
 import { fleetLifecycleHumanTransitionSchema } from "@/lib/control-plane/lifecycle-policy";
 import { approveProviderExecution } from "@/lib/control-plane/provider-execution-service";
 import {
+  assertAdMobCatalogScope,
   activateConfigRevision,
   createConfigRevision,
   markReauthTrustedLocalPendingFromHumanUi,
@@ -68,11 +69,11 @@ function errorMessage(error: unknown): string {
 async function fleetApp(appId: string) {
   const app = await prisma.app.findFirst({
     where: { id: appId, ...visibleAppWhere },
-    select: { id: true, slug: true, repoId: true },
+    select: { id: true, slug: true, repoId: true, repoFullName: true },
   });
   if (!app) throw new Error("앱을 찾을 수 없습니다.");
   if (!app.repoId) throw new Error("GitHub 저장소 ID가 없어 앱 설정을 변경할 수 없습니다.");
-  return { id: app.id, slug: app.slug, repoId: app.repoId };
+  return { id: app.id, slug: app.slug, repoId: app.repoId, repoFullName: app.repoFullName };
 }
 
 async function fleetWriteContext(appId: string) {
@@ -99,11 +100,12 @@ export async function validateFleetConfigDraftAction(input: {
   try {
     await requirePlatformReadAccess();
     const app = await fleetApp(input.appId);
-    configRevisionSchema.parse({
+    const body = configRevisionSchema.parse({
       repoId: app.repoId,
       expectedLatestRevision: input.expectedLatestRevision,
       payload: parsePayloadText(input.payloadText),
     });
+    assertAdMobCatalogScope(body.payload, app.repoFullName);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
