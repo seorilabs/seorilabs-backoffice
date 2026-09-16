@@ -10,13 +10,13 @@ import {
   type DiscordDeliveryResult,
   type DiscordMessageOptions,
 } from "@/lib/notifications/discord";
-import { discordRender } from "@/lib/notifications/format";
+import { discordRender, type DiscordRender } from "@/lib/notifications/format";
 import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import { issueThreadPayload, threadStartFailure } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
 import { drainNotifications, type DeliveryOverrideResult } from "@/lib/notifications/outbox";
 import {
-  buildDeployStatusCardText,
+  renderDeployStatusCard,
   deployCardComponents,
   deployCompletionPayload,
   isReleaseTag,
@@ -24,7 +24,7 @@ import {
   type DeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
 import { marketingVersionFromTag, readAppStoreReviewStatus } from "@/lib/app-store/submit";
-import { incidentComponents, incidentDeliveryMode, incidentMessage } from "@/lib/notifications/incidents";
+import { incidentComponents, incidentDeliveryMode, incidentRender } from "@/lib/notifications/incidents";
 
 /**
  * 이 배포가 이어 써야 할 카드 메시지.
@@ -95,7 +95,7 @@ async function appStoreReviewCardState(
  * null = ReleaseRecord 없음.
  */
 export interface DeployCardRender {
-  text: string;
+  render: DiscordRender;
   components: DiscordActionRow[];
   /** 카드 메시지를 공유하는 단위. 같은 앱·마켓·버전이면 같은 카드다. */
   release: { appId: string; market: ReleaseMarket; version: string };
@@ -161,7 +161,7 @@ export async function renderDeployCard(
 
   return {
     release: { appId: release.appId, market: release.market, version: release.version },
-    text: buildDeployStatusCardText({
+    render: renderDeployStatusCard({
       displayName: release.app.displayName,
       version: release.version,
       market: release.market,
@@ -209,13 +209,13 @@ async function deliverDeployCompletion(
 ): Promise<DeliveryOverrideResult> {
   const card = await renderDeployCard(payload.releaseRecordId, payload.runUrl);
   if (!card) return { ok: false, error: "release record not found" };
-  const options = { components: card.components };
+  const options = { components: card.components, embed: card.render.embed };
   const messageId = await previousReleaseMessage(card.release, destinationKey);
   if (messageId) {
-    const edited = await editDiscord(destinationKey, messageId, card.text, options);
+    const edited = await editDiscord(destinationKey, messageId, card.render.text, options);
     if (edited.ok || !isUnreusableCard(edited)) return edited;
   }
-  return sendDiscord(destinationKey, card.text, options);
+  return sendDiscord(destinationKey, card.render.text, options);
 }
 
 function attachmentFromPayload(payload: Prisma.JsonValue) {
@@ -367,16 +367,18 @@ export async function drainAllNotifications(limit = 30) {
       if (typeof incidentId !== "string") return { ok: false, error: "invalid incident payload" };
       const incident = await prisma.operationalIncident.findUnique({ where: { id: incidentId } });
       if (!incident) return { ok: false, error: "incident not found" };
+      const card = incidentRender(incident);
       const options = {
         alertRoleId: incident.status === "OPEN" ? env.discordRoleId("release_ops") : undefined,
         components: incidentComponents(incident),
+        embed: card.embed,
       };
       const deliveryMode = incidentDeliveryMode(incident.providerMessageId);
       let result = deliveryMode.kind === "edit"
-        ? await editDiscord(destinationKey, deliveryMode.messageId, incidentMessage(incident), options)
+        ? await editDiscord(destinationKey, deliveryMode.messageId, card.text, options)
         : null;
       if (!result || (!result.ok && result.statusCode === 404 && result.errorCode === 10_008)) {
-        result = await sendDiscord(destinationKey, incidentMessage(incident), options);
+        result = await sendDiscord(destinationKey, card.text, options);
       }
       if (result.ok && result.messageId && result.messageId !== incident.providerMessageId) {
         await prisma.operationalIncident.update({ where: { id: incident.id }, data: { providerMessageId: result.messageId } });

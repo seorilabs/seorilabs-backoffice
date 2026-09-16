@@ -1,7 +1,8 @@
 import type { ReleaseMarket, ReleaseStatus } from "@prisma/client";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 import { playInternalTestLink } from "@/lib/domain/play-internal-test";
-import { kstDateTime } from "@/lib/format/kst";
+import { EMBED_COLOR } from "@/lib/notifications/style";
+import type { DiscordRender } from "@/lib/notifications/format";
 
 const MARKET_LABEL: Record<ReleaseMarket, string> = {
   AIT: "AppsInToss",
@@ -41,6 +42,15 @@ export function deployCompletionPayload(value: unknown): DeployCompletionPayload
   return { releaseRecordId, status, runUrl };
 }
 
+/** 워크플로 결과 → 상자 색. 발생·진행·결과가 색으로 먼저 읽히게 한다. */
+const STATUS_COLOR: Record<ReleaseStatus, number> = {
+  PENDING: EMBED_COLOR.PROGRESS,
+  IN_PROGRESS: EMBED_COLOR.PROGRESS,
+  SUCCEEDED: EMBED_COLOR.SUCCESS,
+  FAILED: EMBED_COLOR.FAILURE,
+  ROLLED_BACK: EMBED_COLOR.FAILURE,
+};
+
 const WORKFLOW_STATUS_LABEL: Record<ReleaseStatus, string> = {
   PENDING: "☑️ 요청됨",
   IN_PROGRESS: "⏳ 진행 중",
@@ -60,24 +70,31 @@ const REMAINING_GATES: Record<ReleaseMarket, string[]> = {
  * deploy-all 실행 결과 카드. 마켓별 잡은 재사용 워크플로라 자체 workflow_run 이 없어
  * ReleaseRecord 가 파생되지 않으므로, 마켓 게이트 대신 실행 단위 결과만 남긴다.
  */
-export function buildDeployAllStatusCardText(input: {
+export function renderDeployAllStatusCard(input: {
   displayName: string;
   version: string;
   status: Extract<ReleaseStatus, "SUCCEEDED" | "FAILED">;
   runUrl?: string;
   updatedAt: Date;
-}): string {
+}): DiscordRender {
   const lines = [
-    `🚀 **${input.displayName} ${input.version} · 전체 마켓 배포**`,
-    "",
     `배포 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
     input.status === "SUCCEEDED"
       ? "마켓별 업로드 결과는 실행의 잡 결과에서 확인한다."
       : "마켓 업로드가 진행되지 않았을 수 있다. 실행 로그를 확인한다.",
   ];
   if (input.runUrl) lines.push(`[실행 결과 보기](${input.runUrl})`);
-  lines.push(`마지막 갱신: ${kstDateTime(input.updatedAt)}`);
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    embed: {
+      title: `🚀 ${input.displayName} ${input.version} · 전체 마켓 배포`,
+      color: STATUS_COLOR[input.status],
+      ...(input.runUrl ? { url: input.runUrl } : {}),
+      // 갱신 시각은 본문에 적지 않고 Discord 가 상자 하단에 렌더하게 한다.
+      // 이 카드는 같은 메시지를 계속 편집하므로 "언제 갱신됐나" 가 늘 필요하다.
+      timestamp: input.updatedAt.toISOString(),
+    },
+  };
 }
 
 /**
@@ -97,7 +114,7 @@ function marketGates(
   );
 }
 
-export function buildDeployStatusCardText(input: {
+export function renderDeployStatusCard(input: {
   displayName: string;
   version: string;
   market: ReleaseMarket;
@@ -108,18 +125,23 @@ export function buildDeployStatusCardText(input: {
   externalBuildNumber?: number | null;
   runUrl?: string;
   updatedAt: Date;
-}): string {
+}): DiscordRender {
   const lines = [
-    `🚀 **${input.displayName} ${input.version} · ${MARKET_LABEL[input.market]}**`,
-    "",
     `빌드·업로드 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
     ...marketGates(input.market, input.status, input.track),
   ];
   if (input.workflowName) lines.push(`실행: ${input.workflowName}`);
   if (input.externalBuildNumber != null) lines.push(`Xcode Cloud 빌드: #${input.externalBuildNumber}`);
   if (input.runUrl) lines.push(`[실행 결과 보기](${input.runUrl})`);
-  lines.push(`마지막 갱신: ${kstDateTime(input.updatedAt)}`);
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    embed: {
+      title: `🚀 ${input.displayName} ${input.version} · ${MARKET_LABEL[input.market]}`,
+      color: STATUS_COLOR[input.status],
+      ...(input.runUrl ? { url: input.runUrl } : {}),
+      timestamp: input.updatedAt.toISOString(),
+    },
+  };
 }
 
 // ── 배포 카드 액션 버튼 ────────────────────────────────────────────────────────

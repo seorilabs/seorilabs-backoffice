@@ -21,6 +21,7 @@ import {
   previousKstDayWindow,
   shouldUseDailyDigestGemini,
 } from "@/lib/notifications/daily-digest";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const STAGE_NUDGE: Partial<Record<Lifecycle, { kind: AiDraftKind; emoji: string; suggest: string }>> = {
   QA: { kind: "QA_CHECKLIST", emoji: "🧪", suggest: "최근 이슈로 QA 테스트 체크리스트를 만들까요?" },
@@ -45,6 +46,7 @@ export async function notifyStageNudge(appId: string, stage: Lifecycle): Promise
       payload: {
         text: `${mapping.emoji} **${app.displayName}** · ${STAGE_KO[stage]} 단계 진입\n${mapping.suggest}`,
         components: button("초안 생성", `generate:${mapping.kind}:${appId}`),
+        embed: { color: EMBED_COLOR.INFO },
       },
       destinations: discordDestinations(["backoffice"]),
     });
@@ -124,7 +126,11 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   await enqueueNotification({
     dedupeKey: `daily-digest:${window.label}`,
     kind: "OPERATIONS_SUMMARY",
-    payload: { text: lines.join("\n"), ...(components.length ? { components } : {}) },
+    payload: {
+      text: lines.join("\n"),
+      ...(components.length ? { components } : {}),
+      embed: { color: EMBED_COLOR.INFO },
+    },
     destinations: discordDestinations(["backoffice"]),
   });
   return { date: window.label, mergedPrCount: mergedPrs.length, releaseCount: releases, unresolvedDefaultBranchCount: unresolvedCount, geminiUsed, queued: true };
@@ -147,6 +153,7 @@ export async function sendWeeklyLiveopsReview(now = new Date()): Promise<void> {
     payload: {
       text: apps.length ? `**📈 주간 LiveOps 리뷰**\n운영 앱 ${apps.length}개. 버튼을 누르면 개선 가설 초안을 만듭니다.` : "**📈 주간 LiveOps 리뷰**\n운영 단계 앱이 없습니다.",
       ...(components.length ? { components } : {}),
+      embed: { color: EMBED_COLOR.INFO },
     },
     destinations: discordDestinations(["backoffice"]),
   });

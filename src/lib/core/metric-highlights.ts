@@ -17,6 +17,7 @@ import { enqueueNotification } from "@/lib/notifications/outbox";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { metricNarrative } from "@/lib/core/metric-narrative";
 import { count, pct, won } from "@/lib/format/units";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
@@ -739,7 +740,12 @@ export async function sendMetricHighlightReport(
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
-    payload: { text: body, sender: SEORI_SENDER, editable: true },
+    payload: {
+      text: body,
+      sender: SEORI_SENDER,
+      editable: true,
+      embed: { color: EMBED_COLOR.INFO, timestamp: now.toISOString() },
+    },
     destinations: discordDestinations(["app-ops"]),
   });
 

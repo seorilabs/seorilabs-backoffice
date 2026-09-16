@@ -4,6 +4,7 @@ import { collectFinanceCosts, financeMonth, type CostWarning } from "@/lib/core/
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { metricDayOf } from "@/lib/analytics/metric-day";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 서리 일일 재무 리포트. 종량제 4소스(GitHub Actions·GCP·LLM·Stability)의 이번 달
 // 현황과 임계 경고를 통합 운영 채널에 남긴다. 전부 결정적 수치라 LLM 을 쓰지 않는다.
@@ -56,6 +57,11 @@ export async function sendFinanceReport(now = new Date()): Promise<FinanceReport
       text: renderFinanceReport({ month, summaryLines, warnings, link: orgReportUrl() }),
       // 메인 봇이 아니라 서리 정체로 게시한다. 토큰 값은 payload 에 담지 않는다.
       sender: SEORI_SENDER,
+      // 임계 경고가 하나라도 있으면 상자 색으로 먼저 드러낸다.
+      embed: {
+        color: warnings.length ? EMBED_COLOR.WARNING : EMBED_COLOR.INFO,
+        timestamp: now.toISOString(),
+      },
     },
     destinations: discordDestinations(["app-ops"]),
   });

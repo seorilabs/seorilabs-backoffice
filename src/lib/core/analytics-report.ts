@@ -18,6 +18,7 @@ import { htmlToDiscord } from "@/lib/notifications/format";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
 import { count, countOrDash, pct, won } from "@/lib/format/units";
+import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을
 // Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
@@ -441,7 +442,10 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",
-      payload: { text: htmlToDiscord(reportHtml) },
+      payload: {
+        text: htmlToDiscord(reportHtml),
+        embed: { color: EMBED_COLOR.INFO },
+      },
       destinations,
     });
     result.notificationsQueued = destinations.length;

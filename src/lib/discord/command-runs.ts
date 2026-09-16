@@ -29,7 +29,8 @@ import {
   editDiscordChannelMessage,
   type DiscordActionRow,
 } from "@/lib/notifications/discord";
-import { acknowledgeIncident, incidentComponents, incidentMessage } from "@/lib/notifications/incidents";
+import { acknowledgeIncident, incidentComponents, incidentRender } from "@/lib/notifications/incidents";
+import type { DiscordRender } from "@/lib/notifications/format";
 import {
   confirmationClaimWhere,
   requiresOperatorConfirmation,
@@ -161,16 +162,24 @@ const STAGE_DRAFT_KINDS = new Set([
   "IMPROVEMENT_HYPOTHESIS",
 ]);
 
+/**
+ * 명령 결과를 같은 메시지에 남긴다.
+ *
+ * 대부분의 결과는 한 줄짜리 문자열이라 그대로 받는다. 색·제목이 필요한 결과(장애
+ * 카드처럼 다른 경로와 모양을 맞춰야 하는 것)는 DiscordRender 로 넘긴다.
+ */
 async function showRun(
   run: Pick<OperatorCommandRun, "id" | "channelId" | "messageId">,
-  text: string,
+  result: string | DiscordRender,
   components: DiscordActionRow[] = [],
 ): Promise<string | null> {
+  const render: DiscordRender = typeof result === "string" ? { text: result } : result;
+  const options = { components, ...(render.plain ? { plain: true } : { embed: render.embed }) };
   if (run.messageId) {
-    const edited = await editDiscordChannelMessage(run.channelId, run.messageId, text, { components });
+    const edited = await editDiscordChannelMessage(run.channelId, run.messageId, render.text, options);
     if (edited.ok) return run.messageId;
   }
-  const created = await createDiscordChannelMessage(run.channelId, text, { components });
+  const created = await createDiscordChannelMessage(run.channelId, render.text, options);
   return created.ok ? created.messageId ?? null : null;
 }
 
@@ -190,7 +199,7 @@ async function showDeployCard(
 ): Promise<string | null> {
   const card = await renderDeployCard(releaseRecordId);
   if (!card) return showRun(run, resultLine);
-  return showRun(run, `${resultLine}\n\n${card.text}`, card.components);
+  return showRun(run, `${resultLine}\n\n${card.render.text}`, card.components);
 }
 
 async function appForRun(run: OperatorCommandRun) {
@@ -297,7 +306,7 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         run.actorDiscordUserId,
         run.operation === "incident_assign",
       );
-      const messageId = await showRun(run, incidentMessage(incident), incidentComponents(incident));
+      const messageId = await showRun(run, incidentRender(incident), incidentComponents(incident));
       return { summary: run.operation === "incident_assign" ? "장애 담당 지정" : "장애 확인", messageId };
     }
     case "release_preview": {
