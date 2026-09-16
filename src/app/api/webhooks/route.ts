@@ -85,6 +85,9 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
           payload: {
             text: `${gate === "release" ? "🚀" : "📝"} **승인 필요** ${repo} #${p.issue.number}\n${p.issue.title}`,
             components: [{ type: 1, components: [{ type: 2, style: 3, label: `승인 (${gate})`, custom_id: `approval:${gate}:${mir.id}` }] }],
+            // 버튼은 상자 없이도 그대로 실린다. 승인 대기는 하루에 여러 건 쌓이므로
+            // 두 줄마다 상자를 그리면 채널이 카드 더미가 된다.
+            plain: true,
           },
           destinations: discordDestinations(["backoffice"]),
         });
@@ -107,6 +110,9 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
             priority: priorityFromLabels(labels),
             stateReason: p.issue.state_reason,
           }),
+          // 하루 60건대가 줄줄이 쌓이는 채널이다. 두 줄짜리 알림마다 상자를 그리면
+          // 로그로 읽히지 않는다.
+          plain: true,
         },
         // 전체 이슈가 흐르는 알림이라 버튼 카드가 놓이는 #backoffice 와 분리한다.
         // 전용 채널을 아직 설정하지 않았으면 기존 채널로 계속 보낸다.

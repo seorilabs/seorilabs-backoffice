@@ -8,7 +8,7 @@ import {
   identityRowRanges,
   identityRowText,
   identitySummaryDedupeKey,
-  identitySummaryText,
+  identitySummaryRender,
   identityThreadName,
   summarizeIdentityEvents,
 } from "@/lib/notifications/identity-summary";
@@ -61,7 +61,7 @@ test("당일 이벤트가 없으면 알릴 요약이 없다", () => {
 });
 
 test("카드에는 신규 수·최근 생성·직전 간격·누적·분해가 담긴다", () => {
-  const text = identitySummaryText({
+  const render = identitySummaryRender({
     displayName: "도마뱀 테라리움",
     dateKey: "2026-08-19",
     todayTotal: 12,
@@ -77,19 +77,28 @@ test("카드에는 신규 수·최근 생성·직전 간격·누적·분해가 �
       referrer: [["DEFAULT", 11], ["SANDBOX", 1]],
     },
   });
-  assert.match(text, /오늘 신규 계정 12명/);
+  // 앱 이름과 건수는 상자 제목으로 올려 로그 줄 사이에서 앵커가 되게 한다.
+  assert.equal(render.embed?.title, "👤 도마뱀 테라리움 · 신규 계정 12명");
+  assert.equal(render.embed?.footer, "2026-08-19 KST");
+  // 최근 시각은 본문에 적지 않고 Discord 가 상자 하단에 렌더하게 넘긴다.
+  assert.equal(render.embed?.timestamp, "2026-08-19T07:44:00.000Z");
+  assert.equal(render.plain, undefined);
+
+  const text = render.text;
   assert.match(text, /직전 간격 8분/);
-  assert.match(text, /누적: 639번째 계정/);
-  assert.match(text, /인증: firebase 10 · apps_in_toss 2/);
-  assert.match(text, /로그인: google\.com 7 · anonymous 3/);
-  assert.match(text, /버전: 1\.2\.4 9 · 1\.2\.3 3/);
-  assert.match(text, /런타임: godot-native-android 12/);
-  assert.match(text, /익명 계정: 2/);
-  assert.match(text, /유입: DEFAULT 11 · SANDBOX 1/);
+  assert.match(text, /누적 639번째/);
+  assert.match(text, /인증 firebase 10 · apps_in_toss 2/);
+  assert.match(text, /로그인 google\.com 7 · anonymous 3/);
+  assert.match(text, /버전 1\.2\.4 9 · 1\.2\.3 3/);
+  assert.match(text, /런타임 godot-native-android 12/);
+  assert.match(text, /익명 2/);
+  assert.match(text, /유입 DEFAULT 11 · SANDBOX 1/);
+  // 분해 축을 줄마다 쌓으면 카드가 로그 사이에서 덩어리로 보인다. 3개씩 접는다.
+  assert.equal(text.split("\n").length, 3);
 });
 
 test("baseline이 없으면 누적 순번을 지어내지 않는다", () => {
-  const text = identitySummaryText({
+  const { text } = identitySummaryRender({
     displayName: "조물조물 만물 합치기",
     dateKey: "2026-08-19",
     todayTotal: 1,
@@ -112,7 +121,7 @@ test("baseline이 없으면 누적 순번을 지어내지 않는다", () => {
   assert.doesNotMatch(text, /버전/);
   assert.doesNotMatch(text, /런타임/);
   assert.doesNotMatch(text, /직전 간격/);
-  assert.doesNotMatch(text, /익명 계정/);
+  assert.doesNotMatch(text, /익명/);
   assert.doesNotMatch(text, /유입/);
 });
 
@@ -251,8 +260,11 @@ test("건별 행은 카드 뒤에 enqueue돼 카드가 먼저 발송되게 한�
   assert.match(summarySource, /dedupeKey: identityRowDedupeKey\(input\.event\.eventId\)/);
 });
 
-test("하루 첫 계정만 멘션 대상으로 표시한다", () => {
-  assert.match(summarySource, /first: ordinal === 1/);
+// #action-events 는 알림을 받는 곳이 아니라 생각날 때 들어가 훑는 기록이다.
+// 멘션이 돌아오면 앱마다 매일 한 번씩 역할 핑이 다시 울린다.
+test("신규 계정 기록은 역할을 멘션하지 않는다", () => {
+  assert.equal(/first:/.test(summarySource), false);
+  assert.equal(/alertRoleId/.test(summarySource), false);
 });
 
 test("행 순번은 자기 자신을 포함하고 직전 간격은 자기 자신을 뺀다", () => {
@@ -297,12 +309,10 @@ test("행 범위는 당일 끝이 아니라 이 이벤트 시각을 상한으로
   assert.doesNotMatch(summarySource, /ranges\.\w+[\s\S]{0,80}dayEnd/);
 });
 
-test("행 배달은 카드 메시지에 쓰레드를 걸고 첫 댓글만 멘션한다", () => {
+test("행 배달은 카드 메시지에 쓰레드를 걸고 멘션 없이 남긴다", () => {
   assert.match(deploySource, /kind === "IDENTITY_ROW"\) return deliverIdentityRow/);
   assert.match(deploySource, /startDiscordThread\(\s*discordChannelId\(destinationKey\),\s*card\.providerMessageId/);
-  assert.match(deploySource, /row\.first \? \{ alertRoleId: env\.discordRoleId\("release_ops"\) \} : \{\}/);
-  // 한 건씩 쌓이는 기록이라 embed 상자 없이 본문 한 줄로 보낸다.
-  assert.match(deploySource, /plain: true,/);
+  assert.match(deploySource, /createDiscordChannelMessage\(card\.providerMessageId, row\.text, \{ plain: true \}\)/);
 });
 
 test("카드가 아직 안 나갔으면 댓글을 붙이지 않고 재시도로 넘긴다", () => {

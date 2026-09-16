@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { kstDateTime } from "@/lib/format/kst";
+import { kstLogStamp } from "@/lib/format/kst";
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
@@ -104,56 +104,90 @@ function attr(
   return event.attributes[key];
 }
 
-export function operationalEventMessage(
+/**
+ * 이벤트 한 건의 사실. 표시 조립과 분리한다.
+ *
+ * headline 은 이모지·마크업이 없는 문장이라 그대로 장애 요약(OperationalIncident.
+ * summary, DB 영구 저장)으로 쓸 수 있다. 예전에는 표시 문자열의 첫 줄을 잘라
+ * 요약을 만들었는데, 표시를 한 줄로 바꾸면 요약이 통째로 망가지는 결합이었다.
+ */
+export interface OperationalEventFacts {
+  icon: string;
+  headline: string;
+  facts: string[];
+}
+
+function text(event: OperationalEventInput, key: string, fallback = "unknown"): string {
+  const value = attr(event, key);
+  return value == null || value === "" ? fallback : String(value);
+}
+
+export function operationalEventFacts(event: OperationalEventInput): OperationalEventFacts {
+  switch (event.type) {
+    case "identity.created": {
+      const facts = [text(event, "authType")];
+      if (attr(event, "signInProvider")) facts.push(text(event, "signInProvider"));
+      if (attr(event, "appVersion")) facts.push(`v${text(event, "appVersion")}`);
+      if (attr(event, "runtime")) facts.push(text(event, "runtime"));
+      if (attr(event, "anonymous") === true) facts.push("익명");
+      if (attr(event, "referrer")) facts.push(`유입 ${text(event, "referrer")}`);
+      return { icon: "👤", headline: "신규 계정", facts };
+    }
+    case "app.version.first_seen": {
+      const facts = [`v${text(event, "appVersion")}`];
+      if (attr(event, "runtime")) facts.push(text(event, "runtime"));
+      if (attr(event, "sdk")) facts.push(text(event, "sdk"));
+      return { icon: "🚀", headline: "새 버전 첫 유입", facts };
+    }
+    case "iap.granted":
+      return {
+        icon: "💳",
+        headline: "IAP 지급",
+        facts: [text(event, "platform"), text(event, "entitlementId")],
+      };
+    case "ad.reward.delivered":
+      return {
+        icon: "🎬",
+        headline: "광고 보상",
+        facts: [
+          `${text(event, "provider")} / ${text(event, "placementId")}`,
+          `${text(event, "rewardKey")} ×${text(event, "rewardAmount")}`,
+        ],
+      };
+    case "iap.completion_failed":
+      return {
+        icon: "❌",
+        headline: "IAP 마켓 완료 처리 실패",
+        facts: [text(event, "platform"), `오류 ${text(event, "errorCode", event.outcome)}`],
+      };
+    case "ad.reward.delivery_failed":
+      return {
+        icon: "❌",
+        headline: "광고 보상 지급 실패",
+        facts: [
+          `${text(event, "provider")} / ${text(event, "placementId")}`,
+          `오류 ${text(event, "errorCode", event.outcome)}`,
+        ],
+      };
+  }
+}
+
+/**
+ * #action-events 로그 한 줄.
+ *
+ * 이 채널은 훑어 보는 기록이라 건마다 상자를 그리면 로그로 읽히지 않는다. Discord 는
+ * 비고정폭 폰트라 열 정렬이 불가능하므로, 정렬 대신 이모지와 굵은 앱 이름으로 스캔을
+ * 만든다. 시각을 맨 뒤에 두는 이유는 Discord 가 메시지 왼쪽에 게시 시각을 이미 붙이기
+ * 때문이다 — 줄 안의 시각은 이벤트 발생 시각으로만 의미가 있다.
+ */
+export function operationalEventLine(
   event: OperationalEventInput,
   displayName: string,
+  now?: Date,
 ): string {
-  const time = kstDateTime(new Date(event.occurredAt));
-  const lines = [`앱: **${displayName}**`, `시각: ${time}`];
-  switch (event.type) {
-    case "identity.created":
-      lines.unshift("👤 **신규 Platform 사용자 생성**");
-      lines.push(`인증: ${String(attr(event, "authType") ?? "unknown")}`);
-      if (attr(event, "signInProvider")) {
-        lines.push(`로그인: ${String(attr(event, "signInProvider"))}`);
-      }
-      if (attr(event, "appVersion")) lines.push(`버전: ${String(attr(event, "appVersion"))}`);
-      if (attr(event, "runtime")) lines.push(`런타임: ${String(attr(event, "runtime"))}`);
-      if (attr(event, "anonymous") === true) lines.push("유형: 익명");
-      if (attr(event, "referrer")) lines.push(`유입: ${String(attr(event, "referrer"))}`);
-      break;
-    case "app.version.first_seen":
-      lines.unshift("🚀 **새 버전 첫 유입**");
-      lines.push(`버전: ${String(attr(event, "appVersion") ?? "unknown")}`);
-      if (attr(event, "runtime")) lines.push(`런타임: ${String(attr(event, "runtime"))}`);
-      if (attr(event, "sdk")) lines.push(`SDK: ${String(attr(event, "sdk"))}`);
-      break;
-    case "iap.granted":
-      lines.unshift("💳 **IAP 지급 확정**");
-      lines.push(`마켓: ${String(attr(event, "platform") ?? "unknown")}`);
-      lines.push(`상품 권리: ${String(attr(event, "entitlementId") ?? "unknown")}`);
-      break;
-    case "ad.reward.delivered":
-      lines.unshift("🎬 **광고 보상 지급 확정**");
-      lines.push(`공급자: ${String(attr(event, "provider") ?? "unknown")}`);
-      lines.push(`지면: ${String(attr(event, "placementId") ?? "unknown")}`);
-      lines.push(
-        `보상: ${String(attr(event, "rewardKey") ?? "unknown")} × ${String(attr(event, "rewardAmount") ?? "unknown")}`,
-      );
-      break;
-    case "iap.completion_failed":
-      lines.unshift("❌ **IAP 마켓 완료 처리 실패**");
-      lines.push(`마켓: ${String(attr(event, "platform") ?? "unknown")}`);
-      lines.push(`오류: ${String(attr(event, "errorCode") ?? event.outcome)}`);
-      break;
-    case "ad.reward.delivery_failed":
-      lines.unshift("❌ **광고 보상 지급 실패**");
-      lines.push(`공급자: ${String(attr(event, "provider") ?? "unknown")}`);
-      lines.push(`지면: ${String(attr(event, "placementId") ?? "unknown")}`);
-      lines.push(`오류: ${String(attr(event, "errorCode") ?? event.outcome)}`);
-      break;
-  }
-  return lines.join("\n");
+  const { icon, headline, facts } = operationalEventFacts(event);
+  const stamp = kstLogStamp(new Date(event.occurredAt), now);
+  return `${icon} **${displayName}** ${[headline, ...facts, stamp].join(" · ")}`;
 }
 
 export function isOpsAlert(type: OperationalEventType): boolean {

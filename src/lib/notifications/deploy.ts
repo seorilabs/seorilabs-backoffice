@@ -240,7 +240,6 @@ interface IdentityRowPayload {
   text: string;
   cardDedupeKey: string;
   threadName: string;
-  first: boolean;
 }
 
 function identityRowPayload(payload: Prisma.JsonValue): IdentityRowPayload | null {
@@ -252,15 +251,15 @@ function identityRowPayload(payload: Prisma.JsonValue): IdentityRowPayload | nul
   if (typeof text !== "string" || typeof cardDedupeKey !== "string" || typeof threadName !== "string") {
     return null;
   }
-  return { text, cardDedupeKey, threadName, first: object.first === true };
+  return { text, cardDedupeKey, threadName };
 }
 
 /**
  * 신규 계정 한 건을 요약 카드의 쓰레드에 댓글로 남긴다.
  *
  * 카드 메시지에서 시작한 public thread는 ID가 카드 메시지 ID와 같아서 따로 저장하지
- * 않는다. 하루 첫 댓글만 역할을 멘션한다. 멘션된 사람은 쓰레드 멤버로 추가되므로
- * 그날의 나머지 댓글은 멘션 없이도 알림이 간다.
+ * 않는다. 멘션은 하지 않는다 — #action-events 는 알림을 받는 곳이 아니라 생각날 때
+ * 들어가 훑는 기록이고, 총계·간격·분해는 요약 카드가 이미 담고 있다.
  *
  * 댓글은 편집하지 않으므로 message ID를 남기지 않는다. 보존기한 정리는 채널 기준으로
  * 지우는데 댓글은 쓰레드 안에 있어 대상이 아니고, 카드가 지워질 때 쓰레드와 함께 사라진다.
@@ -328,10 +327,7 @@ async function deliverIdentityRow(
     row.threadName,
   );
   if (!thread.ok) return thread;
-  const sent = await createDiscordChannelMessage(card.providerMessageId, row.text, {
-    plain: true,
-    ...(row.first ? { alertRoleId: env.discordRoleId("release_ops") } : {}),
-  });
+  const sent = await createDiscordChannelMessage(card.providerMessageId, row.text, { plain: true });
   return sent.ok ? { ok: true } : sent;
 }
 

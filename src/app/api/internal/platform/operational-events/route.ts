@@ -6,7 +6,8 @@ import { enqueueNotification } from "@/lib/notifications/outbox";
 import { prisma } from "@/lib/prisma";
 import {
   isOpsAlert,
-  operationalEventMessage,
+  operationalEventFacts,
+  operationalEventLine,
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
@@ -83,7 +84,8 @@ export async function POST(request: NextRequest) {
       source: "platform",
       kind: incidentKind,
       severity: "critical",
-      summary: operationalEventMessage(input, app?.displayName ?? input.appId).split("\n")[0].replace(/[*]/g, ""),
+      // 표시 문자열을 잘라 쓰지 않는다. 표시가 한 줄로 바뀌면 요약이 통째로 망가진다.
+      summary: operationalEventFacts(input).headline,
       signalId: input.eventId,
       detectedAt: occurredAt,
       appId: app?.id,
@@ -116,7 +118,11 @@ export async function POST(request: NextRequest) {
         dedupeKey: `operational:${input.eventId}`,
         kind: "OPERATIONAL_EVENT",
         occurredAt,
-        payload: { text: operationalEventMessage(input, app?.displayName ?? input.appId) },
+        payload: {
+          text: operationalEventLine(input, app?.displayName ?? input.appId),
+          // 줄줄이 쌓이는 기록이라 건마다 상자를 그리지 않는다.
+          plain: true,
+        },
         destinations: discordDestinations(["action-events"]),
       });
     }
