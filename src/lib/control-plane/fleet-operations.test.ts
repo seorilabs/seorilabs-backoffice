@@ -11,6 +11,8 @@ import {
   reauthRequestSchema,
 } from "@/lib/control-plane/contracts";
 import {
+  adMobConfigAuditSummary,
+  assertAdMobCatalogScope,
   assertConfigRevisionPayload,
   assertObservationTime,
   assertIdempotentRequestHash,
@@ -90,6 +92,85 @@ test("비민감 Config payload는 UI와 API 공용 validator를 통과한다", (
   };
   assert.deepEqual(configRevisionPayloadSchema.parse(payload), payload);
   assert.doesNotThrow(() => assertConfigRevisionPayload(payload));
+});
+
+const ads = {
+  provider: "admob" as const,
+  publisherId: "pub-1234567890123456",
+  catalogLogicalId: "app/happy-farm/admob/public-identifiers",
+  platforms: [
+    {
+      platform: "android" as const,
+      applicationId: "dev.seorilabs.happyfarm",
+      admobAppId: "ca-app-pub-1234567890123456~1234567890",
+      placements: [
+        { key: "rewarded_hint", format: "rewarded" as const, adUnitId: "ca-app-pub-1234567890123456/1234567890" },
+      ],
+    },
+    {
+      platform: "ios" as const,
+      applicationId: "dev.seorilabs.happyfarm.ios",
+      admobAppId: "ca-app-pub-1234567890123456~0987654321",
+      placements: [
+        { key: "interstitial_break", format: "interstitial" as const, adUnitId: "ca-app-pub-1234567890123456/0987654321" },
+      ],
+    },
+  ],
+};
+
+test("AdMob 공개 식별자는 strict 계약과 앱 범위 catalog 참조를 통과한다", () => {
+  const payload = { schemaVersion: 1 as const, markets: [], ads };
+  assert.deepEqual(configRevisionPayloadSchema.parse(payload), payload);
+  assert.doesNotThrow(() => assertAdMobCatalogScope(payload, "seorilabs/happy-farm"));
+  assert.throws(
+    () => assertAdMobCatalogScope(payload, "seorilabs/other-app"),
+    (error) => error instanceof ControlPlaneError
+      && error.code === "ADMOB_CATALOG_SCOPE_MISMATCH",
+  );
+  const summary = adMobConfigAuditSummary(payload) as Record<string, unknown>;
+  assert.deepEqual({ ...summary, configDigest: undefined }, {
+    configured: true,
+    provider: "admob",
+    catalogLogicalId: "app/happy-farm/admob/public-identifiers",
+    platformCount: 2,
+    placementCount: 2,
+    configDigest: undefined,
+  });
+  assert.match(String(summary.configDigest), /^[0-9a-f]{64}$/);
+});
+
+test("AdMob 계약은 publisher 불일치, 형식 오류, 중복과 비밀 필드를 거부한다", () => {
+  const payload = (candidate: unknown) => ({ schemaVersion: 1, markets: [], ads: candidate });
+  const invalid = [
+    { ...ads, publisherId: "pub-3940256099942544" },
+    { ...ads, publisherId: "pub-0000" },
+    { ...ads, catalogLogicalId: "shared/admob/public-identifiers" },
+    { ...ads, accessToken: "not-allowed" },
+    { ...ads, platforms: [ads.platforms[0], ads.platforms[0]] },
+    {
+      ...ads,
+      platforms: [{ ...ads.platforms[0], admobAppId: "ca-app-pub-9999999999999999~1234567890" }],
+    },
+    {
+      ...ads,
+      platforms: [{
+        ...ads.platforms[0],
+        placements: [
+          ...ads.platforms[0].placements,
+          { ...ads.platforms[0].placements[0], adUnitId: "ca-app-pub-1234567890123456/0987654321" },
+        ],
+      }],
+    },
+    {
+      ...ads,
+      platforms: [{
+        ...ads.platforms[0],
+        placements: [{ ...ads.platforms[0].placements[0], adUnitId: "ca-app-pub-9999999999999999/1234567890" }],
+      }],
+    },
+    { ...ads, platforms: [{ ...ads.platforms[0], applicationId: "Not A Package" }] },
+  ];
+  invalid.forEach((candidate) => assert.equal(configRevisionPayloadSchema.safeParse(payload(candidate)).success, false));
 });
 
 test("dependency audit 예외는 승인된 저장소의 두 build-only source와 정렬된 advisory만 허용한다", () => {
@@ -407,9 +488,11 @@ test("Fleet run 오류를 화면에 내보내기 전에 credential 후보를 제
   assert.deepEqual(redactFleetJson({
     publicAccountId: "team-1",
     nested: { apiKey: "never", note: "Bearer token-value" },
+    ads,
   }), {
     publicAccountId: "team-1",
     nested: { apiKey: "[REDACTED]", note: "Bearer [REDACTED]" },
+    ads,
   });
 });
 

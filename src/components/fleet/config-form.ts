@@ -28,6 +28,26 @@ export interface AssetDraft {
   checksum: string;
 }
 
+export interface AdPlacementDraft {
+  key: string;
+  format: string;
+  adUnitId: string;
+}
+
+export interface AdPlatformDraft {
+  platform: string;
+  applicationId: string;
+  admobAppId: string;
+  placements: AdPlacementDraft[];
+}
+
+export interface AdsDraft {
+  declared: boolean;
+  publisherId: string;
+  catalogLogicalId: string;
+  platforms: AdPlatformDraft[];
+}
+
 export interface ComplianceDraftRow {
   market: string;
   declaration: string;
@@ -122,6 +142,7 @@ export interface ConfigDraft {
   buildTargetSdk: string;
   supportUrl: string;
   privacyPolicyUrl: string;
+  ads: AdsDraft;
   complianceDrafts: ComplianceDraftRow[];
   blueprint: BlueprintDraft;
 }
@@ -133,6 +154,15 @@ export const RELEASE_CHANNEL_BY_MARKET: Record<string, string> = {
   "apps-in-toss": "private",
 };
 export const ASSET_KINDS = ["icon", "feature-graphic", "thumbnail", "screenshot"] as const;
+export const ADMOB_PLATFORMS = ["android", "ios"] as const;
+export const ADMOB_FORMATS = [
+  "app_open",
+  "banner",
+  "interstitial",
+  "native",
+  "rewarded",
+  "rewarded_interstitial",
+] as const;
 export const COMPLIANCE_DECLARATIONS = [
   "data-safety",
   "privacy",
@@ -260,6 +290,15 @@ export function emptyBlueprintDraft(): BlueprintDraft {
   };
 }
 
+export function emptyAdsDraft(): AdsDraft {
+  return {
+    declared: false,
+    publisherId: "",
+    catalogLogicalId: "",
+    platforms: [],
+  };
+}
+
 export function emptyConfigDraft(): ConfigDraft {
   return {
     markets: [],
@@ -273,6 +312,7 @@ export function emptyConfigDraft(): ConfigDraft {
     buildTargetSdk: "",
     supportUrl: "",
     privacyPolicyUrl: "",
+    ads: emptyAdsDraft(),
     complianceDrafts: [],
     blueprint: emptyBlueprintDraft(),
   };
@@ -282,6 +322,8 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
   const source = record(payload);
   const build = record(source.build);
   const support = record(source.support);
+  const adsSource = record(source.ads);
+  const hasAds = Object.keys(adsSource).length > 0;
   const blueprintSource = record(source.projectBlueprint);
   const hasBlueprint = Object.keys(blueprintSource).length > 0;
   const project = record(blueprintSource.project);
@@ -334,6 +376,29 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
     buildTargetSdk: text(build.targetSdk),
     supportUrl: text(support.supportUrl),
     privacyPolicyUrl: text(support.privacyPolicyUrl),
+    ads: hasAds
+      ? {
+        declared: true,
+        publisherId: text(adsSource.publisherId),
+        catalogLogicalId: text(adsSource.catalogLogicalId),
+        platforms: array(adsSource.platforms).map((entry) => {
+          const platform = record(entry);
+          return {
+            platform: text(platform.platform),
+            applicationId: text(platform.applicationId),
+            admobAppId: text(platform.admobAppId),
+            placements: array(platform.placements).map((placementEntry) => {
+              const placement = record(placementEntry);
+              return {
+                key: text(placement.key),
+                format: text(placement.format),
+                adUnitId: text(placement.adUnitId),
+              };
+            }),
+          };
+        }),
+      }
+      : emptyAdsDraft(),
     complianceDrafts: array(source.complianceDrafts).map((entry) => {
       const item = record(entry);
       const value = item.draft;
@@ -553,6 +618,25 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
       : {}),
     ...(Object.keys(build).length > 0 ? { build } : {}),
     ...(Object.keys(support).length > 0 ? { support } : {}),
+    ...(draft.ads.declared
+      ? {
+        ads: {
+          provider: "admob",
+          publisherId: draft.ads.publisherId.trim(),
+          catalogLogicalId: draft.ads.catalogLogicalId.trim(),
+          platforms: draft.ads.platforms.map((platform) => ({
+            platform: platform.platform,
+            applicationId: platform.applicationId.trim(),
+            admobAppId: platform.admobAppId.trim(),
+            placements: platform.placements.map((placement) => ({
+              key: placement.key.trim(),
+              format: placement.format,
+              adUnitId: placement.adUnitId.trim(),
+            })),
+          })),
+        },
+      }
+      : {}),
     ...(draft.blueprint.declared ? { projectBlueprint: blueprintFromDraft(draft.blueprint) } : {}),
     ...(draft.complianceDrafts.length > 0
       ? {

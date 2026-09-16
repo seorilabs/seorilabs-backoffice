@@ -245,6 +245,20 @@ object metadata의 request digest로 결정된다. 다만 ConfigRevision drift �
 권한을 주지 않으며, mutation ledger와 ConfigRevision reference를 대조하는 별도 GC가 검증되기 전에는 해당
 object가 남을 수 있다.
 
+## AdMob 공개 식별자
+
+ConfigRevision의 선택형 `ads`는 `provider=admob`, Publisher ID, Android package 또는 iOS bundle ID,
+플랫폼별 App ID, placement key·format·광고 단위 ID와 앱 범위
+`app/<repository>/admob/public-identifiers` logical ID만 보관한다. Publisher ID가 App ID·광고 단위 ID와
+다르거나 platform·placement·광고 단위가 중복되거나 Google 테스트 Publisher ID가 들어오면 DRAFT 생성과
+activation에서 모두 거부한다. 기존 `ads` 없는 revision은 같은 schema version에서 그대로 읽힌다.
+
+토큰, OAuth credential, 서비스 계정 키, 결제·세금·신원 정보는 strict schema 밖이며 저장할 수 없다.
+UI와 internal API는 같은 validator와 앱 repository 범위 검사를 사용한다. 감사 로그에는 catalog logical ID,
+플랫폼·placement 수와 공개 설정 digest만 남긴다. catalog entry의 실제 존재·ACTIVE 상태와 snapshot digest는
+별도 catalog import/readback 경계가 확인해야 하며, 확인 전에는 logical ID 모양만으로 활성 상태를 만들거나
+ConfigRevision을 자동 생성·활성화하지 않는다.
+
 ## ProjectBlueprint와 provider readback
 
 ConfigRevision을 만들 때 `ProjectBlueprint`, `MarketProfile`, `MarketLocalization`, `ComplianceProfile`,

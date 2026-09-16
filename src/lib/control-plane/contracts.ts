@@ -659,6 +659,118 @@ export const dependencyAuditExceptionSchema = z.object({
 
 export type DependencyAuditException = z.infer<typeof dependencyAuditExceptionSchema>;
 
+const admobPublisherIdSchema = z.string()
+  .regex(/^pub-\d{16}$/, "AdMob Publisher ID는 pub- 뒤 16자리 숫자여야 합니다.")
+  .refine(
+    (value) => value !== "pub-3940256099942544",
+    "Google AdMob 테스트 Publisher ID는 운영 설정에 사용할 수 없습니다.",
+  );
+const admobAppIdSchema = z.string().regex(
+  /^ca-app-pub-\d{16}~\d{10}$/,
+  "AdMob App ID 형식이 올바르지 않습니다.",
+);
+const admobAdUnitIdSchema = z.string().regex(
+  /^ca-app-pub-\d{16}\/\d{10}$/,
+  "AdMob 광고 단위 ID 형식이 올바르지 않습니다.",
+);
+const androidApplicationIdSchema = z.string().regex(
+  /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/,
+  "Android package name 형식이 올바르지 않습니다.",
+);
+const iosBundleIdSchema = z.string().regex(
+  /^(?=.{3,255}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/,
+  "iOS bundle ID 형식이 올바르지 않습니다.",
+);
+const admobPlacementSchema = z.object({
+  key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, "placement key는 소문자 snake_case여야 합니다."),
+  format: z.enum(["app_open", "banner", "interstitial", "native", "rewarded", "rewarded_interstitial"]),
+  adUnitId: admobAdUnitIdSchema,
+}).strict();
+const admobPlatformBaseSchema = {
+  admobAppId: admobAppIdSchema,
+  placements: z.array(admobPlacementSchema).min(1).max(50),
+};
+const admobPlatformSchema = z.discriminatedUnion("platform", [
+  z.object({
+    platform: z.literal("android"),
+    applicationId: androidApplicationIdSchema,
+    ...admobPlatformBaseSchema,
+  }).strict(),
+  z.object({
+    platform: z.literal("ios"),
+    applicationId: iosBundleIdSchema,
+    ...admobPlatformBaseSchema,
+  }).strict(),
+]);
+
+export const admobConfigSchema = z.object({
+  provider: z.literal("admob"),
+  publisherId: admobPublisherIdSchema,
+  catalogLogicalId: z.string().regex(
+    /^app\/[a-z0-9][a-z0-9._-]{0,99}\/admob\/public-identifiers$/,
+    "앱 범위 AdMob 공개 식별자 catalog logical ID가 필요합니다.",
+  ),
+  platforms: z.array(admobPlatformSchema).min(1).max(2),
+}).strict().superRefine((ads, context) => {
+  const publisher = ads.publisherId.slice("pub-".length);
+  const seenPlatforms = new Set<string>();
+  const seenApplicationIds = new Set<string>();
+  const seenAdUnitIds = new Set<string>();
+  ads.platforms.forEach((platform, platformIndex) => {
+    if (seenPlatforms.has(platform.platform)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["platforms", platformIndex, "platform"],
+        message: "동일 AdMob platform은 한 번만 선언할 수 있습니다.",
+      });
+    }
+    seenPlatforms.add(platform.platform);
+    if (seenApplicationIds.has(platform.applicationId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["platforms", platformIndex, "applicationId"],
+        message: "동일 package 또는 bundle ID를 중복 선언할 수 없습니다.",
+      });
+    }
+    seenApplicationIds.add(platform.applicationId);
+    if (!platform.admobAppId.startsWith(`ca-app-pub-${publisher}~`)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["platforms", platformIndex, "admobAppId"],
+        message: "AdMob App ID의 Publisher ID가 선언값과 일치해야 합니다.",
+      });
+    }
+    const placementKeys = new Set<string>();
+    platform.placements.forEach((placement, placementIndex) => {
+      if (placementKeys.has(placement.key)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["platforms", platformIndex, "placements", placementIndex, "key"],
+          message: "동일 platform의 placement key는 중복될 수 없습니다.",
+        });
+      }
+      placementKeys.add(placement.key);
+      if (seenAdUnitIds.has(placement.adUnitId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["platforms", platformIndex, "placements", placementIndex, "adUnitId"],
+          message: "동일 광고 단위 ID를 중복 선언할 수 없습니다.",
+        });
+      }
+      seenAdUnitIds.add(placement.adUnitId);
+      if (!placement.adUnitId.startsWith(`ca-app-pub-${publisher}/`)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["platforms", platformIndex, "placements", placementIndex, "adUnitId"],
+          message: "광고 단위 ID의 Publisher ID가 선언값과 일치해야 합니다.",
+        });
+      }
+    });
+  });
+});
+
+export type AdMobConfig = z.infer<typeof admobConfigSchema>;
+
 /**
  * 첫 Fleet vertical slice가 자동 활성화할 수 있는 비민감 desired state의 완전한 목록이다.
  * strict object 밖의 값은 이름이나 중첩 위치와 무관하게 fail-closed한다.
@@ -698,6 +810,7 @@ export const configRevisionPayloadSchema = z.object({
     supportUrl: httpsUrl.optional(),
     privacyPolicyUrl: httpsUrl.optional(),
   }).strict().optional(),
+  ads: admobConfigSchema.optional(),
   projectBlueprint: projectBlueprintSchema.optional(),
   complianceDrafts: z.array(complianceDraftSchema).max(100).optional(),
 }).strict().superRefine((payload, context) => {

@@ -10,6 +10,8 @@ import {
   APP_CHECK_MANAGEMENT_MODES,
   APP_CHECK_PROVIDERS,
   APP_CHECK_REGISTRATION_STATES,
+  ADMOB_FORMATS,
+  ADMOB_PLATFORMS,
   ASSET_KINDS,
   BUDGET_CURRENCIES,
   COMPLIANCE_DECLARATIONS,
@@ -20,6 +22,8 @@ import {
   draftFromPayload,
   payloadFromDraft,
   type AssetDraft,
+  type AdPlacementDraft,
+  type AdPlatformDraft,
   type AppCheckApiDraft,
   type AppCheckRegistrationDraft,
   type BlueprintDraft,
@@ -346,6 +350,30 @@ export function FleetConfigEditor({
   function patchBlueprint(update: Partial<BlueprintDraft>) {
     setDraft((current) => ({ ...current, blueprint: { ...current.blueprint, ...update } }));
   }
+  function patchAds(update: Partial<ConfigDraft["ads"]>) {
+    setDraft((current) => ({ ...current, ads: { ...current.ads, ...update } }));
+  }
+  function replaceAdPlatform(index: number, update: Partial<AdPlatformDraft>) {
+    setDraft((current) => {
+      const platforms = [...current.ads.platforms];
+      platforms[index] = { ...platforms[index], ...update };
+      return { ...current, ads: { ...current.ads, platforms } };
+    });
+  }
+  function replaceAdPlacement(
+    platformIndex: number,
+    placementIndex: number,
+    update: Partial<AdPlacementDraft>,
+  ) {
+    setDraft((current) => {
+      const platforms = [...current.ads.platforms];
+      const platform = platforms[platformIndex];
+      const placements = [...platform.placements];
+      placements[placementIndex] = { ...placements[placementIndex], ...update };
+      platforms[platformIndex] = { ...platform, placements };
+      return { ...current, ads: { ...current.ads, platforms } };
+    });
+  }
   function replaceRow<K extends keyof ConfigDraft>(
     key: K,
     index: number,
@@ -499,6 +527,133 @@ export function FleetConfigEditor({
                 </>
               )}
             />
+          </Section>
+
+          <Section
+            title="광고 설정"
+            description="AdMob의 공개 App ID와 광고 단위 ID를 앱 범위 catalog 참조와 함께 저장합니다. 토큰·키·결제 정보는 입력할 수 없습니다."
+          >
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input
+                type="checkbox"
+                checked={draft.ads.declared}
+                onChange={(event) => patchAds({ declared: event.target.checked })}
+              />
+              이 설정 버전에 AdMob 공개 식별자 포함
+            </label>
+            {draft.ads.declared && (
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField
+                    label="Publisher ID"
+                    value={draft.ads.publisherId}
+                    placeholder="pub-0000000000000000"
+                    onChange={(value) => patchAds({ publisherId: value })}
+                  />
+                  <TextField
+                    label="Catalog logical ID"
+                    value={draft.ads.catalogLogicalId}
+                    hint="현재 앱과 정확히 같은 app/<저장소>/admob/public-identifiers만 허용합니다."
+                    onChange={(value) => patchAds({ catalogLogicalId: value })}
+                  />
+                </div>
+                <RowList<AdPlatformDraft>
+                  rows={draft.ads.platforms}
+                  empty="등록된 AdMob 플랫폼이 없습니다."
+                  addLabel="광고 플랫폼 추가"
+                  onAdd={() => patchAds({
+                    platforms: [...draft.ads.platforms, {
+                      platform: ADMOB_PLATFORMS[0],
+                      applicationId: "",
+                      admobAppId: "",
+                      placements: [],
+                    }],
+                  })}
+                  onRemove={(index) => patchAds({
+                    platforms: draft.ads.platforms.filter((_, item) => item !== index),
+                  })}
+                  render={(platform, platformIndex) => (
+                    <>
+                      <SelectField
+                        label="플랫폼"
+                        value={platform.platform}
+                        options={ADMOB_PLATFORMS}
+                        onChange={(value) => replaceAdPlatform(platformIndex, { platform: value })}
+                      />
+                      <TextField
+                        label={platform.platform === "ios" ? "Bundle ID" : "Package name"}
+                        value={platform.applicationId}
+                        onChange={(value) => replaceAdPlatform(platformIndex, { applicationId: value })}
+                      />
+                      <div className="sm:col-span-2">
+                        <TextField
+                          label="AdMob App ID"
+                          value={platform.admobAppId}
+                          placeholder="ca-app-pub-0000000000000000~0000000000"
+                          onChange={(value) => replaceAdPlatform(platformIndex, { admobAppId: value })}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <div className={labelClass}>광고 placement</div>
+                        <div className="mt-1">
+                          <RowList<AdPlacementDraft>
+                            rows={platform.placements}
+                            empty="등록된 광고 placement가 없습니다."
+                            addLabel="광고 placement 추가"
+                            onAdd={() => replaceAdPlatform(platformIndex, {
+                              placements: [...platform.placements, {
+                                key: "",
+                                format: ADMOB_FORMATS[0],
+                                adUnitId: "",
+                              }],
+                            })}
+                            onRemove={(placementIndex) => replaceAdPlatform(platformIndex, {
+                              placements: platform.placements.filter((_, item) => item !== placementIndex),
+                            })}
+                            render={(placement, placementIndex) => (
+                              <>
+                                <TextField
+                                  label="Placement key"
+                                  value={placement.key}
+                                  hint="예: rewarded_hint"
+                                  onChange={(value) => replaceAdPlacement(
+                                    platformIndex,
+                                    placementIndex,
+                                    { key: value },
+                                  )}
+                                />
+                                <SelectField
+                                  label="광고 형식"
+                                  value={placement.format}
+                                  options={ADMOB_FORMATS}
+                                  onChange={(value) => replaceAdPlacement(
+                                    platformIndex,
+                                    placementIndex,
+                                    { format: value },
+                                  )}
+                                />
+                                <div className="sm:col-span-2">
+                                  <TextField
+                                    label="광고 단위 ID"
+                                    value={placement.adUnitId}
+                                    placeholder="ca-app-pub-0000000000000000/0000000000"
+                                    onChange={(value) => replaceAdPlacement(
+                                      platformIndex,
+                                      placementIndex,
+                                      { adUnitId: value },
+                                    )}
+                                  />
+                                </div>
+                              </>
+                            )}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                />
+              </div>
+            )}
           </Section>
 
           <Section

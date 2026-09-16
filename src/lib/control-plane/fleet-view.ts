@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
+  admobConfigSchema,
   reauthPublicReason,
   redactCredentialCandidates,
 } from "@/lib/control-plane/contracts";
@@ -74,6 +75,10 @@ export function redactFleetJson(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (normalized === "ads") {
+      const publicAds = admobConfigSchema.safeParse(child);
+      if (publicAds.success) return [key, publicAds.data];
+    }
     if (/^(?:password|passwd|pwd|totp|totpseed|otp|otpseed|cookie|secret|credential|privatekey|apikey|recoverycode|accesstoken|refreshtoken|sessiontoken|leasetoken|idtoken|authorization|clientsecret)$/.test(normalized)) {
       return [key, "[REDACTED]"];
     }

@@ -173,6 +173,42 @@ export function assertConfigRevisionPayload(payload: unknown): asserts payload i
   );
 }
 
+function expectedAdMobCatalogLogicalId(repoFullName: string): string | null {
+  const parts = repoFullName.split("/");
+  if (parts.length !== 2 || !parts[1]) return null;
+  return `app/${parts[1].toLowerCase()}/admob/public-identifiers`;
+}
+
+/**
+ * catalog entry 자체의 활성 상태와 digest는 catalog import/readback 경계가 확인한다.
+ * ConfigRevision은 최소한 다른 앱 logical ID를 참조하지 못하게 repository identity에 묶는다.
+ */
+export function assertAdMobCatalogScope(payload: unknown, repoFullName: string): void {
+  const parsed = configRevisionPayloadSchema.parse(payload);
+  if (!parsed.ads) return;
+  const expected = expectedAdMobCatalogLogicalId(repoFullName);
+  if (!expected || parsed.ads.catalogLogicalId !== expected) {
+    throw new ControlPlaneError(
+      "AdMob catalog logical ID가 현재 app repository 범위와 일치하지 않습니다.",
+      409,
+      "ADMOB_CATALOG_SCOPE_MISMATCH",
+    );
+  }
+}
+
+export function adMobConfigAuditSummary(payload: unknown): JsonValue {
+  const ads = configRevisionPayloadSchema.parse(payload).ads;
+  if (!ads) return { configured: false };
+  return {
+    configured: true,
+    provider: ads.provider,
+    catalogLogicalId: ads.catalogLogicalId,
+    platformCount: ads.platforms.length,
+    placementCount: ads.platforms.reduce((count, platform) => count + platform.placements.length, 0),
+    configDigest: jsonDigest(ads as JsonValue),
+  };
+}
+
 export const CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION =
   "config-revision-manual-source/v1";
 export const CONFIG_REVISION_SOURCE_REBASE_CONTRACT_VERSION =
@@ -1262,6 +1298,7 @@ export async function createConfigRevision(input: {
     draftIsolationAfterRevision: input.draftIsolationAfterRevision,
   }, () => prisma.$transaction(async (tx) => {
     const source = await lockedCurrentConfigSource(tx, input.repoId);
+    assertAdMobCatalogScope(input.payload, source.app.repoFullName);
     assertExpectedConfigSourceSha({
       expectedSourceSha: input.expectedSourceSha,
       actualSourceSha: source.observation.sourceSha,
@@ -1345,6 +1382,7 @@ export async function createConfigRevision(input: {
           observationPayloadHash: source.observation.payloadHash,
           contractVersion: contractVersion ?? CONFIG_REVISION_MANUAL_SOURCE_CONTRACT_VERSION,
           activationAttempted: false,
+          ads: adMobConfigAuditSummary(input.payload),
         },
       },
     });
@@ -1711,6 +1749,7 @@ async function activateConfigRevisionInTransaction(
   const complianceActivation = assertComplianceActivationBinding(target, input);
   // 새 validator 도입 전에 생성된 DRAFT도 activation 시 다시 검사해 우회를 막는다.
   assertConfigRevisionPayload(target.payload);
+  assertAdMobCatalogScope(target.payload, app.repoFullName);
   if (jsonDigest(target.payload as JsonValue) !== target.payloadHash) {
     throw new ControlPlaneError(
       "Config revision payload가 저장 digest와 일치하지 않습니다.",
@@ -1805,6 +1844,7 @@ async function activateConfigRevisionInTransaction(
         previousRevision: active?.revision ?? null,
         snapshotDigest: signed.digest,
         supersededLegacyDraftCount,
+        ads: adMobConfigAuditSummary(target.payload),
       },
     },
   });

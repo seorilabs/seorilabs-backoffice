@@ -72,6 +72,29 @@ const fullPayload = {
     supportUrl: "https://seorilabs.dev/support",
     privacyPolicyUrl: "https://seorilabs.dev/privacy",
   },
+  ads: {
+    provider: "admob",
+    publisherId: "pub-1234567890123456",
+    catalogLogicalId: "app/happy-farm/admob/public-identifiers",
+    platforms: [
+      {
+        platform: "android",
+        applicationId: "dev.seorilabs.happyfarm",
+        admobAppId: "ca-app-pub-1234567890123456~1234567890",
+        placements: [
+          { key: "rewarded_hint", format: "rewarded", adUnitId: "ca-app-pub-1234567890123456/1234567890" },
+        ],
+      },
+      {
+        platform: "ios",
+        applicationId: "dev.seorilabs.happyfarm.ios",
+        admobAppId: "ca-app-pub-1234567890123456~0987654321",
+        placements: [
+          { key: "interstitial_break", format: "interstitial", adUnitId: "ca-app-pub-1234567890123456/0987654321" },
+        ],
+      },
+    ],
+  },
   projectBlueprint: {
     schemaVersion: 2,
     organizationId: "123456789012",
@@ -168,6 +191,14 @@ test("ProjectBlueprint 선언을 끄면 payload에서 통째로 빠진다", () =
   assert.equal(configRevisionPayloadSchema.safeParse(without).success, true);
 });
 
+test("AdMob 공개 식별자 선언을 끄면 payload에서 통째로 빠진다", () => {
+  const draft = draftFromPayload(fullPayload);
+  assert.equal(draft.ads.declared, true);
+  const without = payloadFromDraft({ ...draft, ads: { ...draft.ads, declared: false } });
+  assert.equal("ads" in without, false);
+  assert.equal(configRevisionPayloadSchema.safeParse(without).success, true);
+});
+
 test("폴더가 없는 조직 직속 프로젝트는 folderId를 payload에 만들지 않는다", () => {
   const draft = draftFromPayload(fullPayload);
   const payload = payloadFromDraft({
@@ -203,4 +234,14 @@ test("StoreAsset UI는 수동 object key 입력 대신 중앙 upload와 readback
   assert.match(editor, /저장된 파일을 다시 읽어 확인한 SHA-256/);
   assert.doesNotMatch(editor, /<TextField\s+label="objectKey"/);
   assert.doesNotMatch(editor, /<TextField\s+label="checksum"/);
+});
+
+test("AdMob UI는 공개 식별자만 구조화 입력하고 서버 공용 validator로 보낸다", () => {
+  const editor = readFileSync(join(process.cwd(), "src/components/fleet/FleetConfigEditor.tsx"), "utf8");
+  assert.match(editor, /title="광고 설정"/);
+  assert.match(editor, /label="Publisher ID"/);
+  assert.match(editor, /label="AdMob App ID"/);
+  assert.match(editor, /label="광고 단위 ID"/);
+  assert.match(editor, /Catalog logical ID/);
+  assert.doesNotMatch(editor, /AdMob.*(?:token|secret|OAuth)|type="password"/i);
 });
