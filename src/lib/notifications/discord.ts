@@ -252,24 +252,6 @@ export async function createDiscordChannelMessage(
   });
 }
 
-// AI 팀원 봇이 자기 토큰·자기 정체로 채널에 발화한다.
-export async function createDiscordChannelMessageAs(
-  botToken: string,
-  channelId: string,
-  text: string,
-  options: DiscordMessageOptions = {},
-): Promise<DiscordDeliveryResult> {
-  if (!botToken) return { ok: false, error: "Discord Bot token 미설정" };
-  if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 오류" };
-  const payload = messagePayload(text, options);
-  if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  return discordRequest(`/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  }, botToken);
-}
-
 // 메시지에서 시작한 public thread는 ID가 원본 메시지 ID와 같다. 그래서 thread ID를 따로
 // 저장하지 않고 카드의 providerMessageId를 그대로 쓴다. 메시지당 thread는 하나뿐이라
 // 재시도로 다시 요청하면 Discord가 160004로 거절하는데, 이미 있다는 뜻이지 실패가 아니다.

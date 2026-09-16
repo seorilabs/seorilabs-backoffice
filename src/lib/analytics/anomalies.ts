@@ -65,7 +65,6 @@ export async function reconcileMetricAnomalies(input: {
       detectedAt: latest.date,
       appId: input.appId,
       evidence: anomaly.evidence,
-      destinationKey: "ops-alerts",
     });
   }
   let recovered = 0;

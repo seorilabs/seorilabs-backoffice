@@ -11,10 +11,10 @@ import {
 } from "@/lib/discord/roles";
 
 test("역할 capability accessor 는 사람 역할 경계를 그대로 노출한다", () => {
-  // AI 팀원이 이 목록을 상속한다. data 팀원이 배포하거나 qa 팀원이 기획 승인을
-  // 하게 되면 사람 역할 경계가 깨진 것이다.
+  // 역할마다 실제 Discord 역할 ID env 가 있어야 의미가 있다. env 없는 역할 키는
+  // hasDiscordCapability 에서 영원히 false 라 목록에 두지 않는다.
   assert.deepEqual(capabilitiesForRole("data"), ["read", "metric_incident"]);
-  assert.deepEqual(capabilitiesForRole("finance"), ["read", "metric_incident"]);
+  assert.deepEqual(capabilitiesForRole("finance"), []);
   assert.ok(!capabilitiesForRole("qa").includes("release"));
   assert.ok(capabilitiesForRole("qa").includes("release_approval"));
   assert.ok(!capabilitiesForRole("product").includes("release"));

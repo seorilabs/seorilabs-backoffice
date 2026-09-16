@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { MAX_DISCORD_ATTACHMENT_BYTES } from "@/lib/notifications/discord";
 import {
-  DISCORD_FINANCE_ALERTS,
   DISCORD_PRIVATE_FEED,
   DISCORD_SEORI_REVIEW,
   type DiscordDestinationKey,
@@ -13,7 +12,6 @@ export const MAX_DISCORD_ATTACHMENT_BASE64_CHARS =
 
 const ROUTES = new Set<DiscordDestinationKey>([
   DISCORD_PRIVATE_FEED,
-  DISCORD_FINANCE_ALERTS,
   DISCORD_SEORI_REVIEW,
 ]);
 

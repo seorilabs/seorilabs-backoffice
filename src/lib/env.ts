@@ -143,12 +143,7 @@ export const env = {
   discordPublicKey: () => optional("DISCORD_PUBLIC_KEY").trim(),
   discordBotToken: () => optional("DISCORD_BOT_TOKEN").trim(),
   discordGuildId: () => optional("DISCORD_GUILD_ID").trim(),
-  discordConfigured: () =>
-    Boolean(optional("DISCORD_APPLICATION_ID").trim()) &&
-    Boolean(optional("DISCORD_PUBLIC_KEY").trim()) &&
-    Boolean(optional("DISCORD_BOT_TOKEN").trim()) &&
-    Boolean(optional("DISCORD_GUILD_ID").trim()),
-  // 서리 재무 비용 순찰 소스. 전부 선택적 — 미설정 소스는 리포트에 "미설정" 으로 표기.
+  // 재무 리포트 비용 소스. 전부 선택적 — 미설정 소스는 리포트에 "미설정" 으로 표기.
   githubBillingToken: () => optional("GITHUB_BILLING_TOKEN").trim(),
   // GitHub 플랜 포함 hosted 분량(macOS 10x·Windows 2x 환산 기준). Team 플랜 3,000분.
   githubIncludedQuotaMinutes: () => Number(optional("GITHUB_INCLUDED_QUOTA_MINUTES", "3000")),

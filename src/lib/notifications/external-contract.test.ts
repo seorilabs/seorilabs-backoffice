@@ -8,7 +8,9 @@ import {
 } from "@/lib/notifications/external-contract";
 
 test("허용된 운영 알림 route만 NATS subject로 변환한다", () => {
-  assert.equal(notificationSubject("finance-alerts"), "ops.notification.v1.finance-alerts");
+  assert.equal(notificationSubject("seori-review"), "ops.notification.v1.seori-review");
+  // 폐기된 채널 route 는 subject 로도 되돌릴 수 없다.
+  assert.equal(routeFromNotificationSubject("ops.notification.v1.finance-alerts"), null);
   assert.equal(routeFromNotificationSubject("ops.notification.v1.private-feed"), "private-feed");
   assert.equal(routeFromNotificationSubject("ops.notification.v1.unknown"), null);
   assert.throws(() => notificationSubject("ops-alerts"));

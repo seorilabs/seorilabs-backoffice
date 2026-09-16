@@ -436,6 +436,34 @@ kubectl -n platform delete deploy backoffice-teammate-worker
 
 - 오너 봇 5개(`DISCORD_TEAMMATE_{NOEUL,ISEUL,BARAM,SAEBYEOK,MARU}_*` 10키)는 SealedSecret에
   그대로 두었다. 폐기하려면 Developer Portal에서 앱을 지우고 재봉인한다. 서리 2키는 유지한다.
+
+##### 실제 애플리케이션은 6개다 (2026-09-16 실측)
+
+SealedSecret의 `DISCORD_TEAMMATE_*` 이름은 11벌(22키)이지만 **Discord 애플리케이션은
+6개뿐**이다. 직군제→담당제 전환(#138)에서 앱을 개명하면서 옛 이름과 새 이름을 둘 다
+봉인했기 때문이다. 길드 managed role의 `tags.bot_id`와 각 토큰의 `/users/@me` 응답을
+대조해 확정했다.
+
+| SealedSecret 키 이름 | 실제 표시명 | 길드 역할 이름 | 상태 |
+| --- | --- | --- | --- |
+| `SEORI` = `FINANCE` | 서리 | `서리 재무` | **현역** — `#app-ops` 재무·지표 |
+| `NOEUL` = `PRODUCT` | 노을 | `노을` | 폐기 대상 |
+| `ISEUL` = `DATA` | 이슬 | `서리 데이터` | 폐기 대상 |
+| `BARAM` = `DEVELOPMENT` | 바람 | `서리 개발` | 폐기 대상 |
+| `SAEBYEOK` = `QA` | 새벽 | `서리 QA` | 폐기 대상 |
+| `MARU` | 마루 | `마루` | 폐기 대상 |
+
+즉 `DISCORD_TEAMMATE_SEORI_BOT_TOKEN`이 가리키는 앱은 사실 `teammate-finance`다.
+22키 중 코드가 읽는 것은 이 1개뿐이고 나머지 21키는 참조가 없다.
+
+폐기 절차(사람이 1회):
+
+1. Discord 서버에서 봇 5개를 추방한다.
+2. Developer Portal에서 애플리케이션 5개를 삭제한다(되돌릴 수 없다).
+3. 남은 managed role `노을`·`서리 데이터`·`서리 개발`·`서리 QA`·`마루`를 지우고,
+   `서리 재무` 역할 이름을 `서리`로 고친다.
+4. `~/.config/seorilabs/catalog/shared.yaml`의 해당 항목을 `status: revoked`로 내린다.
+5. SealedSecret을 재봉인해 21키와 `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`(멀티 LLM 잔재)를 뺀다.
 - `app.ownerTeammate`, `teammate_run`, `discord_turn.teammate`, `ai_usage.teammate`는 읽는
   코드가 없지만 컬럼·테이블은 남아 있다. expand-only 게이트가 `DROP`을 막으므로 제거는
   별도 contract 단계와 승인으로 한다.
@@ -603,6 +631,34 @@ flowchart LR
 - 마이그레이션 `6_release_note`, `14_release_note_i18n`. webhook 은 생성이 느려도 200 을 막지 않도록 durable inbox 기록 뒤 Next.js `after`에서 후처리한다.
 
 ## 13. Discord 배포 완료 알림
+
+### 알림 목적지 인벤토리
+
+`src/lib/notifications/destinations.ts`가 정본이다. 목적지 키 `x`는
+`DISCORD_CHANNEL_X_ID` env로 해석된다(`src/lib/env.ts`의 동적 조립).
+
+| 목적지 키 | 무엇이 나가는가 | 생산자 |
+| --- | --- | --- |
+| `backoffice` | 승인 카드, 단계 넛지, 일일 다이제스트, 주간 LiveOps, Godot 버전 | `proactive.ts`, `webhooks/route.ts`, `godot/version-check.ts` |
+| `metrics-daily` | 일일 지표 리포트, 당일 운영 요약 | `analytics-report.ts`, `operations-report.ts` |
+| `action-events` | 운영 이벤트, 마일스톤, 신규 계정 일 요약·건별 | `platform/operational-events`, `milestones.ts`, `identity-summary.ts` |
+| `release-ops` | 배포 상태 카드, deploy-all 결과 | `deploy-enqueue.ts` |
+| `ops-alerts` | 장애 카드(`@release_ops` 멘션이 붙는 유일한 목적지) | `incidents.ts`, `analytics/anomalies.ts` |
+| `app-ops` | 재무 리포트, 지표 하이라이트(서리 봇 정체) | `finance-report.ts`, `metric-highlights.ts` |
+| `github-issues` | 이슈 생성·종료 전량(미설정이면 `backoffice`로 폴백) | `webhooks/route.ts` |
+| `user-reviews` | Google Play·App Store 신규 리뷰 | `store-reviews/collector.ts` |
+| `private-feed`·`seori-review` | 외부 NATS ingest 전용(`ops.notification.v1.*`) | 저장소 내 생산자 없음 |
+
+**폐기(2026-09-16)**: `finance-alerts`. 재무 리포트가 `#app-ops`로 이관된 뒤 생산자가 0이었고
+외부 ingest publisher도 없었다. 목적지 키와 env 주입을 제거했다.
+
+사람이 1회 해야 하는 후속(봇에 `MANAGE_CHANNELS`가 없어 자동화 불가):
+
+- Discord 채널 `#finance-alerts`·`#general`·`#game-factory-builds` 삭제. 셋 다 마지막
+  메시지가 2026-08 중순이고 백오피스 생산자가 0이다. **삭제하면 메시지 이력도 사라진다.**
+- SealedSecret 재봉인으로 `DISCORD_CHANNEL_FINANCE_ALERTS_ID`와 사장된 웹훅 URL 4종
+  (`DISCORD_{ACTION_EVENTS,METRICS,OPS_ALERTS,RELEASE_OPS}_WEBHOOK_URL`) 제거.
+  웹훅 URL은 Bot API 전환 이후 코드·매니페스트 어디에서도 읽지 않는다.
 
 - `/release` 앱 목록은 GitHub 레지스트리를 서버 부팅 30초 후와 6시간마다 자동 재스캔한다. 명령 첫 줄의 `앱 목록 새로고침`으로 즉시 재스캔할 수도 있다. `game/project.godot` 레이아웃을 포함하며 한국어 마켓명·Godot명·짧은 한국어 저장소 설명을 우선 표시한다.
 - GitHub 마켓 배포는 `workflow_run.completed`를 `ReleaseRecord`에 반영한 뒤 `notification_event`/`notification_delivery` outbox에 `release-ops` 목적지로 성공·실패 알림을 멱등 큐잉한다.

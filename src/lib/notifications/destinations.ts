@@ -8,9 +8,8 @@ export const DISCORD_RELEASE_OPS = "release-ops";
 export const DISCORD_OPS_ALERTS = "ops-alerts";
 export const DISCORD_SEORI_REVIEW = "seori-review";
 export const DISCORD_PRIVATE_FEED = "private-feed";
-export const DISCORD_FINANCE_ALERTS = "finance-alerts";
 export const DISCORD_USER_REVIEWS = "user-reviews";
-// AI 팀원 통합 운영 채널 — 담당자 순찰 보고, 이슈 초안 confirm 카드, 스탠드업.
+// 서리 봇 정체로 나가는 일일 재무 리포트와 지표 하이라이트.
 export const DISCORD_APP_OPS = "app-ops";
 // GitHub 이슈 생성·종료 알림 전용. 등급과 무관하게 전체 이슈가 흐르는 곳이라
 // 버튼이 실리는 #backoffice 와 분리한다.
@@ -24,7 +23,6 @@ export const DISCORD_DESTINATIONS = [
   DISCORD_OPS_ALERTS,
   DISCORD_SEORI_REVIEW,
   DISCORD_PRIVATE_FEED,
-  DISCORD_FINANCE_ALERTS,
   DISCORD_USER_REVIEWS,
   DISCORD_APP_OPS,
   DISCORD_GITHUB_ISSUES,

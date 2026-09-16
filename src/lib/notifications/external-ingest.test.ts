@@ -15,7 +15,7 @@ test("DB enqueue가 완료된 뒤에만 accepted ack를 반환한다", async () 
   const durableEnqueue = new Promise<string>((resolve) => { finish = resolve; });
   let settled = false;
   const pending = ingestExternalNotification(
-    "ops.notification.v1.finance-alerts",
+    "ops.notification.v1.private-feed",
     payload,
     {
       destinationConfigured: () => true,
