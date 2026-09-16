@@ -72,7 +72,7 @@ export function discordRender(
   // 배포 카드는 본문이 payload 에 없다. ReleaseRecord 로 매번 다시 그린다.
   if (kind === "DEPLOY_COMPLETION") return null;
   const object = objectPayload(payload);
-  const text = stringField(object, "discordMarkdown") || stringField(object, "text");
+  const text = stringField(object, "text");
   if (!text) return null;
   if (object?.plain === true) return { text, plain: true };
   const embed = embedMetaOf(object);
