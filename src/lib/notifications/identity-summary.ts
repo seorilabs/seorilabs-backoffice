@@ -4,6 +4,7 @@ import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
 import { kstClock } from "@/lib/format/kst";
+import { dailyRowRanges, formatElapsed } from "@/lib/notifications/daily-rows";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import { renderPayload, type DiscordRender } from "@/lib/notifications/format";
 import { resolvedPlatformAppId } from "@/lib/platform/app-id";
@@ -47,16 +48,6 @@ export interface IdentitySignupFacts {
   breakdowns: IdentityBreakdowns;
 }
 
-
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1_000));
-  if (seconds < 60) return `${seconds}초`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}분`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest ? `${hours}시간 ${rest}분` : `${hours}시간`;
-}
 
 function attributeText(attributes: Prisma.JsonValue, key: string): string | null {
   if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return null;
@@ -163,20 +154,6 @@ export function identityThreadName(displayName: string, dateKey: string): string
   return `${displayName} 신규 계정 ${dateKey}`;
 }
 
-/**
- * 건별 행이 볼 당일 범위. 순번은 이 이벤트까지 포함해 세고(`lte`), 직전 계정은 이
- * 이벤트를 빼고 찾는다(`lt`).
- *
- * 당일 전체(`lt: dayEnd`)로 세면 안 된다. Platform 재전송으로 옛 이벤트가 다시
- * 들어왔을 때 그 뒤에 생긴 계정까지 세어 순번과 간격이 그 이벤트의 사실이 아니게 된다.
- */
-export function identityRowRanges(dayStart: Date, occurredAt: Date) {
-  return {
-    upTo: { gte: dayStart, lte: occurredAt },
-    before: { gte: dayStart, lt: occurredAt },
-  };
-}
-
 export interface IdentityRowFacts {
   ordinal: number;
   occurredAt: Date;
@@ -264,7 +241,7 @@ export async function recordIdentitySignup(input: {
   // 카드가 가린 건별 사실은 카드 쓰레드에 댓글로 남긴다. 카드 delivery가 먼저
   // 만들어졌으므로 createdAt 순으로 도는 outbox가 카드를 먼저 보내고, 댓글은 그때
   // 확정된 카드 메시지에 쓰레드를 건다.
-  const ranges = identityRowRanges(dayStart, occurredAt);
+  const ranges = dailyRowRanges(dayStart, occurredAt);
   const [ordinal, previous] = await Promise.all([
     prisma.operationalEvent.count({ where: { ...where, occurredAt: ranges.upTo } }),
     prisma.operationalEvent.findFirst({

@@ -3,15 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  formatElapsed,
   identityRowDedupeKey,
-  identityRowRanges,
   identityRowText,
   identitySummaryDedupeKey,
   identitySummaryRender,
   identityThreadName,
   summarizeIdentityEvents,
 } from "@/lib/notifications/identity-summary";
+import { dailyRowRanges, formatElapsed } from "@/lib/notifications/daily-rows";
 
 const base = {
   displayName: "도마뱀 테라리움",
@@ -270,7 +269,7 @@ test("신규 계정 기록은 역할을 멘션하지 않는다", () => {
 test("행 순번은 자기 자신을 포함하고 직전 간격은 자기 자신을 뺀다", () => {
   const dayStart = new Date("2026-08-20T15:00:00Z");
   const occurredAt = new Date("2026-08-21T01:46:27Z");
-  const { upTo, before } = identityRowRanges(dayStart, occurredAt);
+  const { upTo, before } = dailyRowRanges(dayStart, occurredAt);
   assert.deepEqual(upTo, { gte: dayStart, lte: occurredAt });
   assert.deepEqual(before, { gte: dayStart, lt: occurredAt });
 });
@@ -285,7 +284,7 @@ test("재전송된 옛 이벤트는 그 뒤에 생긴 계정을 순번에 넣지
     new Date("2026-08-21T06:37:49Z"),
   ];
   const redelivered = day[1];
-  const { upTo, before } = identityRowRanges(dayStart, redelivered);
+  const { upTo, before } = dailyRowRanges(dayStart, redelivered);
   const ordinal = day.filter((at) => at >= upTo.gte && at <= upTo.lte).length;
   const previous = day.filter((at) => at >= before.gte && at < before.lt).at(-1) ?? null;
   assert.equal(ordinal, 2);

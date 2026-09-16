@@ -11,6 +11,9 @@ export const DISCORD_PRIVATE_FEED = "private-feed";
 export const DISCORD_USER_REVIEWS = "user-reviews";
 // 서리 봇 정체로 나가는 일일 재무 리포트와 지표 하이라이트.
 export const DISCORD_APP_OPS = "app-ops";
+// IAP 결제 확정 전용. 앱·일 요약 카드와 그 쓰레드의 건별 행만 흐른다.
+// 결제는 다른 운영 이벤트와 읽는 목적이 달라 #action-events 에서 떼어낸다.
+export const DISCORD_IAP = "iap";
 // GitHub 이슈 생성·종료 알림 전용. 등급과 무관하게 전체 이슈가 흐르는 곳이라
 // 버튼이 실리는 #backoffice 와 분리한다.
 export const DISCORD_GITHUB_ISSUES = "github-issues";
@@ -25,6 +28,7 @@ export const DISCORD_DESTINATIONS = [
   DISCORD_PRIVATE_FEED,
   DISCORD_USER_REVIEWS,
   DISCORD_APP_OPS,
+  DISCORD_IAP,
   DISCORD_GITHUB_ISSUES,
 ] as const;
 

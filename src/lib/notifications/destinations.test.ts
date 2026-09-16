@@ -61,3 +61,31 @@ test("github-issues 는 버튼 카드 채널이 아니다", () => {
   // 인터랙션 허용 범위가 불필요하게 넓어진다.
   assert.equal(DISCORD_CARD_CHANNEL_KEYS.includes("github-issues" as never), false);
 });
+
+test("IAP 전용 채널은 미설정이면 action-events 로 폴백한다", () => {
+  const previous = process.env.DISCORD_CHANNEL_IAP_ID;
+  try {
+    process.env.DISCORD_CHANNEL_IAP_ID = "1549708776758575115";
+    assert.deepEqual(discordDestinationOrFallback("iap", "action-events"), [
+      { provider: "DISCORD", key: "iap" },
+    ]);
+    for (const empty of ["", "   "]) {
+      process.env.DISCORD_CHANNEL_IAP_ID = empty;
+      assert.deepEqual(discordDestinationOrFallback("iap", "action-events"), [
+        { provider: "DISCORD", key: "action-events" },
+      ]);
+    }
+    delete process.env.DISCORD_CHANNEL_IAP_ID;
+    assert.deepEqual(discordDestinationOrFallback("iap", "action-events"), [
+      { provider: "DISCORD", key: "action-events" },
+    ]);
+  } finally {
+    if (previous == null) delete process.env.DISCORD_CHANNEL_IAP_ID;
+    else process.env.DISCORD_CHANNEL_IAP_ID = previous;
+  }
+});
+
+// 버튼 카드가 없는 채널이라 인터랙션 허용 범위를 넓히지 않는다.
+test("IAP 채널은 버튼 인터랙션 허용 목록에 들어가지 않는다", () => {
+  assert.equal(DISCORD_CARD_CHANNEL_KEYS.includes("iap" as never), false);
+});
