@@ -7,7 +7,8 @@ import { PlayInternalTestControl } from "@/components/PlayInternalTestControl";
 import { hasEvidence } from "@/lib/domain/labels";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { STATUS_KO } from "@/lib/domain/lifecycle";
-import { asStringArray, fmtDate } from "@/lib/format";
+import { asStringArray } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
 import { parseAppOpsManifest } from "@/lib/app-ops/manifest";
 import { buildAppWorkspaceTabs } from "@/lib/app-ops/workspace";
@@ -79,7 +80,7 @@ export default async function AppOverview({
               k="관리툴 계약"
               v={manifest ? `v${manifest.version} · ${manifest.tools.length}개 도구` : null}
             />
-            <Meta k="구성 동기화" v={fmtDate(app.configSyncedAt)} />
+            <Meta k="구성 동기화" v={kstDateShort(app.configSyncedAt)} />
           </div>
           {targets.includes("play") && (
             <div className="mt-4 border-t border-neutral-100 pt-3">

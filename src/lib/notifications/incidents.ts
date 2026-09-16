@@ -1,5 +1,6 @@
 import { Prisma, type OperationalIncident } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { kstDateTime } from "@/lib/format/kst";
 import { discordDestinations, isDiscordDestinationKey } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
@@ -20,11 +21,11 @@ export function incidentMessage(incident: OperationalIncident): string {
   const state = incident.status === "OPEN" ? "발생" : incident.status === "ACKNOWLEDGED" ? "확인됨" : "복구";
   const lines = [
     `${icon} **${incident.summary}**`,
-    `상태: **${state}** · 최초 ${incident.firstDetectedAt.toISOString()} · 최근 ${incident.lastDetectedAt.toISOString()}`,
+    `상태: **${state}** · 최초 ${kstDateTime(incident.firstDetectedAt)} · 최근 ${kstDateTime(incident.lastDetectedAt)}`,
   ];
   if (incident.acknowledgedBy) lines.push(`확인: <@${incident.acknowledgedBy}>`);
   if (incident.assignedDiscordUserId) lines.push(`담당: <@${incident.assignedDiscordUserId}>`);
-  if (incident.recoveredAt) lines.push(`복구 시각: ${incident.recoveredAt.toISOString()}`);
+  if (incident.recoveredAt) lines.push(`복구 시각: ${kstDateTime(incident.recoveredAt)}`);
   return lines.join("\n");
 }
 

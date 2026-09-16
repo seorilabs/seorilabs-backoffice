@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { asStringArray, fmtDate } from "@/lib/format";
+import { asStringArray } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { TypeBadge } from "@/components/badges";
 
@@ -82,7 +83,7 @@ export default async function ReleasesPage() {
                           </span>
                         </div>
                         {rel?.deployedAt && (
-                          <div className="text-[11px] text-neutral-400">{fmtDate(rel.deployedAt)}</div>
+                          <div className="text-[11px] text-neutral-400">{kstDateShort(rel.deployedAt)}</div>
                         )}
                       </td>
                     );

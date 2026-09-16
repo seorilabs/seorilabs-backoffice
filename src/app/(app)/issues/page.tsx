@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { PriorityTag, Pill } from "@/components/badges";
-import { asStringArray, fmtDate } from "@/lib/format";
+import { asStringArray } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 import { visibleAppWhere, visibleIssueWhere } from "@/lib/domain/app-visibility";
 
 export const dynamic = "force-dynamic";
@@ -93,7 +94,7 @@ export default async function IssuesPage({
                 </td>
                 <td className="px-3 py-2 text-right text-xs text-neutral-500">
                   {i.repoFullName.replace("seorilabs/", "")}
-                  <div>{i.state === "CLOSED" ? "closed" : "open"} · {fmtDate(i.ghUpdatedAt)}</div>
+                  <div>{i.state === "CLOSED" ? "closed" : "open"} · {kstDateShort(i.ghUpdatedAt)}</div>
                 </td>
               </tr>
             ))}

@@ -7,14 +7,11 @@ import { resolveGa4Target } from "@/lib/ga4/datasets";
 import { dbDay } from "@/lib/analytics/metric-day";
 import { engagementRate, platformSegments, type MetricBreakdowns } from "@/lib/ga4/metric-shapes";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
+import { pct } from "@/lib/format/units";
 
 export interface DiscordQueryResult {
   content: string;
   components?: DiscordActionRow[];
-}
-
-function pct(value: number | null): string {
-  return value == null ? "—" : `${value}%`;
 }
 
 function clip(value: string, max = 1_900): string {

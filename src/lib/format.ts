@@ -1,23 +1,4 @@
-export function fmtDateTime(d: Date | null | undefined): string {
-  if (!d) return "—";
-  return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(d);
-}
-
-export function fmtDate(d: Date | null | undefined): string {
-  if (!d) return "—";
-  return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
+// 시각 표기는 @/lib/format/kst 가 정본이다. 여기에는 시각이 아닌 유틸만 둔다.
 
 export function daysSince(d: Date | null | undefined): number | null {
   if (!d) return null;

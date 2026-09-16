@@ -5,6 +5,7 @@ import type {
   ReviewObservationState,
   StoreReview,
 } from "@/lib/store-reviews/types";
+import { kstDateTime } from "@/lib/format/kst";
 
 const BODY_PREVIEW_CHARS = 1_600;
 
@@ -106,7 +107,7 @@ export function storeReviewDiscordText(input: {
   const metadata = [
     review.locale ? `지역/언어: ${escapeDiscordMarkdown(review.locale)}` : "",
     displayedAt
-      ? `${timeLabel}: ${displayedAt.toISOString()}`
+      ? `${timeLabel}: ${kstDateTime(displayedAt)}`
       : "",
   ].filter(Boolean);
   if (metadata.length) lines.push(metadata.join(" · "));

@@ -7,7 +7,8 @@ import { ReleaseControls } from "@/components/ReleaseControls";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
 import { releaseNoteTranslations } from "@/lib/core/release-note-locales";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { asStringArray, fmtDate } from "@/lib/format";
+import { asStringArray } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 import { getAvailableBuildTargets } from "@/lib/github/read";
 import { prisma } from "@/lib/prisma";
 
@@ -89,7 +90,7 @@ export default async function AppReleasesPage({
                     </Pill>
                   </span>
                   <span className="shrink-0 text-xs text-neutral-400">
-                    {fmtDate(release.deployedAt)}
+                    {kstDateShort(release.deployedAt)}
                   </span>
                 </div>
               ))}
@@ -111,7 +112,7 @@ export default async function AppReleasesPage({
                 version={note.version}
                 market={note.market}
                 previousVersion={note.previousVersion}
-                createdAt={fmtDate(note.createdAt)}
+                createdAt={kstDateShort(note.createdAt)}
                 compareUrl={note.compareUrl}
                 {...releaseNoteTranslations(note)}
               />

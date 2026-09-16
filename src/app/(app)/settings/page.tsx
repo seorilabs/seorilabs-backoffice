@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { fmtDateTime } from "@/lib/format";
+import { kstDateTimeShort } from "@/lib/format/kst";
 import { SettingsActions } from "@/components/SettingsActions";
 import { AdRevenueProbe } from "@/components/AdRevenueProbe";
 import {
@@ -42,7 +42,7 @@ export default async function SettingsPage() {
 
       <section className="mt-6 max-w-xl space-y-4">
         <Card title="동기화 상태">
-          <Row k="마지막 webhook 수신" v={lastDelivery ? `${fmtDateTime(lastDelivery.receivedAt)} (${lastDelivery.event})` : "없음"} />
+          <Row k="마지막 webhook 수신" v={lastDelivery ? `${kstDateTimeShort(lastDelivery.receivedAt)} (${lastDelivery.event})` : "없음"} />
           <Row k="앱/게임" v={`${appCount}개`} />
           <Row k="미러된 이슈 / PR" v={`${issueCount} / ${prCount}`} />
           <Row k="릴리스 레코드" v={`${releaseCount}`} />

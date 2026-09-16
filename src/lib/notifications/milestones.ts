@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
+import { kstDateTime } from "@/lib/format/kst";
 
 const MILESTONE_LABELS: Partial<Record<OperationalEventInput["type"], string>> = {
   "identity.created": "첫 Platform 계정 생성",
@@ -62,7 +63,7 @@ export async function recordOperationalMilestone(input: {
     kind: "MILESTONE",
     occurredAt: new Date(input.event.occurredAt),
     payload: {
-      text: `🎉 **${input.displayName} · ${label}**\n최초 관측: ${new Date(input.event.occurredAt).toISOString()}`,
+      text: `🎉 **${input.displayName} · ${label}**\n최초 관측: ${kstDateTime(new Date(input.event.occurredAt))}`,
     },
     destinations: discordDestinations(["action-events"]),
   });

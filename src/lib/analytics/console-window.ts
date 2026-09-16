@@ -1,6 +1,8 @@
 // AppsInToss 콘솔 지표의 기간(윈도우) 집계. /analytics Overview 의 "최근 N일 집계" 표가 쓴다.
 // 순수 함수 — DB/뷰와 독립적으로 테스트한다. rows 는 최신→과거(orderBy date desc) 가정.
 
+import { won } from "@/lib/format/units";
+
 export interface ConsoleWindowRow {
   date: Date;
   // null=콘솔 미집계(세션/광고는 있으나 DAU 배열에 부재). 합계에선 0 취급, 평균 분모에선 제외.
@@ -185,6 +187,6 @@ export function formatConsoleWindowRow(
     newSum: String(agg.newSum),
     sessAvg: agg.sessAvg != null ? `${Math.round(agg.sessAvg)}초` : DASH,
     iaaImpSum: String(agg.iaaImpSum),
-    iaaEarnKrw: `₩${Math.round(agg.iaaEarnSum).toLocaleString("ko-KR")}`,
+    iaaEarnKrw: won(agg.iaaEarnSum),
   };
 }

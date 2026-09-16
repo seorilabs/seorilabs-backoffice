@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getBoardApps } from "@/lib/queries";
 import { STAGES, STAGE_KO } from "@/lib/domain/lifecycle";
 import { StageBadge, TypeBadge, MarketDots, Pill, StatusBadge } from "@/components/badges";
-import { fmtDate } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +76,7 @@ export default async function Dashboard() {
               </span>
               <span>
                 {a.latestRelease
-                  ? `rel ${a.latestRelease.version} ${fmtDate(a.latestRelease.deployedAt)}`
+                  ? `rel ${a.latestRelease.version} ${kstDateShort(a.latestRelease.deployedAt)}`
                   : "—"}
               </span>
             </div>

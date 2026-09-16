@@ -17,6 +17,7 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { htmlToDiscord } from "@/lib/notifications/format";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
+import { count, countOrDash, pct, won } from "@/lib/format/units";
 
 // 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을
 // Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
@@ -93,12 +94,7 @@ export interface ReportResult {
   consoleLagDays: number | null; // GA4 기준일 대비 콘솔 지연 일수
 }
 
-const pct = (v: number | null): string => (v == null ? "—" : `${v}%`);
 const numOrDash = (v: number | null): string => (v == null ? "—" : String(v));
-const won = (v: number): string => `₩${Math.round(v).toLocaleString("ko-KR")}`;
-// 콘솔 섹션은 금액과 함께 읽히므로 건수도 천 단위 구분자를 쓴다.
-const count = (v: number): string => v.toLocaleString("ko-KR");
-const countOrDash = (v: number | null): string => (v == null ? "—" : count(v));
 
 /** 앱별 상세 보고서 마크다운. rowsDesc 는 최신순(내림차순). */
 export function buildAppReportMd(
@@ -445,7 +441,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",
-      payload: { discordMarkdown: htmlToDiscord(reportHtml) },
+      payload: { text: htmlToDiscord(reportHtml) },
       destinations,
     });
     result.notificationsQueued = destinations.length;

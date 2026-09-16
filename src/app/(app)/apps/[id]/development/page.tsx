@@ -6,7 +6,7 @@ import { Pill, PriorityTag } from "@/components/badges";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
 import { env } from "@/lib/env";
-import { fmtDateTime } from "@/lib/format";
+import { kstDateTimeShort } from "@/lib/format/kst";
 import { prisma } from "@/lib/prisma";
 
 export default async function AppDevelopmentPage({
@@ -135,7 +135,7 @@ export default async function AppDevelopmentPage({
                   </span>
                 </span>
                 <span className="shrink-0 text-xs text-neutral-400">
-                  {fmtDateTime(transition.createdAt)}
+                  {kstDateTimeShort(transition.createdAt)}
                 </span>
               </div>
             ))}

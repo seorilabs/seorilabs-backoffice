@@ -1,3 +1,4 @@
+import { metricDayOf } from "@/lib/analytics/metric-day";
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_MERGED_PRS = 15;
@@ -16,15 +17,11 @@ export interface MergedPrDigestItem {
   mergedAt: Date | null;
 }
 
-function dateLabel(date: Date): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
 export function previousKstDayWindow(now: Date): DailyDigestWindow {
   const kstNow = new Date(now.getTime() + KST_OFFSET_MS);
   const endMs = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate()) - KST_OFFSET_MS;
   const start = new Date(endMs - DAY_MS);
-  return { label: dateLabel(new Date(start.getTime() + KST_OFFSET_MS)), start, end: new Date(endMs) };
+  return { label: metricDayOf(start), start, end: new Date(endMs) };
 }
 
 export function normalizeRolloutPercent(raw: string | number): number {

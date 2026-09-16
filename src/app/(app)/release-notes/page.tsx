@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { fmtDate } from "@/lib/format";
+import { kstDateShort } from "@/lib/format/kst";
 import { visibleReleaseNoteWhere } from "@/lib/domain/app-visibility";
 import { releaseNoteTranslations } from "@/lib/core/release-note-locales";
 import { ReleaseNoteCard } from "@/components/ReleaseNoteCard";
@@ -35,7 +35,7 @@ export default async function ReleaseNotesPage() {
               version={n.version}
               market={n.market}
               previousVersion={n.previousVersion}
-              createdAt={fmtDate(n.createdAt)}
+              createdAt={kstDateShort(n.createdAt)}
               compareUrl={n.compareUrl}
               {...releaseNoteTranslations(n)}
             />
