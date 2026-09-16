@@ -64,8 +64,6 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_SEORI_REVIEW_ID } }
             - name: DISCORD_CHANNEL_PRIVATE_FEED_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_PRIVATE_FEED_ID } }
-            - name: DISCORD_CHANNEL_FINANCE_ALERTS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_FINANCE_ALERTS_ID } }
             - name: DISCORD_CHANNEL_USER_REVIEWS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true } }
             - name: DISCORD_ROLE_RELEASE_OPS_ID

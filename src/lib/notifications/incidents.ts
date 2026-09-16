@@ -1,6 +1,6 @@
 import { Prisma, type OperationalIncident } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { discordDestinations, isDiscordDestinationKey } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 
@@ -42,7 +42,11 @@ async function enqueueIncident(incident: OperationalIncident, signalId: string):
     kind: "INCIDENT",
     payload: { incidentId: incident.id },
     occurredAt: incident.lastDetectedAt,
-    destinations: discordDestinations([incident.destinationKey === "ops-alerts" ? "ops-alerts" : "metrics-daily"]),
+    // 목적지는 장애가 만들어질 때 고정된 값을 그대로 쓴다. 살아 있는 카드를
+    // 중간에 다른 채널로 옮기면 그 카드의 수명주기 편집이 끊긴다.
+    destinations: discordDestinations([
+      isDiscordDestinationKey(incident.destinationKey) ? incident.destinationKey : "ops-alerts",
+    ]),
   });
 }
 
@@ -55,7 +59,6 @@ export async function recordIncident(input: {
   detectedAt: Date;
   appId?: string;
   evidence?: Prisma.InputJsonObject;
-  destinationKey?: "ops-alerts" | "metrics-daily";
 }): Promise<OperationalIncident> {
   const existing = await prisma.operationalIncident.findFirst({
     where: {
@@ -85,7 +88,6 @@ export async function recordIncident(input: {
           severity: input.severity,
           summary: input.summary,
           evidence: input.evidence,
-          destinationKey: input.destinationKey ?? "ops-alerts",
           firstDetectedAt: input.detectedAt,
           lastDetectedAt: input.detectedAt,
         },
