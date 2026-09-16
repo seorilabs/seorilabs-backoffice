@@ -10,7 +10,7 @@ import {
   type DiscordDeliveryResult,
   type DiscordMessageOptions,
 } from "@/lib/notifications/discord";
-import { plainTextPayload } from "@/lib/notifications/format";
+import { discordRender } from "@/lib/notifications/format";
 import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import { issueThreadPayload, threadStartFailure } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
@@ -391,8 +391,8 @@ export async function drainAllNotifications(limit = 30) {
     // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
     // 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
     if (issueThreadPayload(payload)) return deliverIssueThread(payload, destinationKey);
-    const text = plainTextPayload(kind, payload);
-    if (!text) return { ok: false, error: "알림 payload 형식 오류" };
+    const render = discordRender(kind, payload);
+    if (!render) return { ok: false, error: "알림 payload 형식 오류" };
     const options = {
       alertRoleId:
         destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
@@ -400,12 +400,13 @@ export async function drainAllNotifications(limit = 30) {
       components: componentsFromPayload(payload),
       // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
       botToken: senderBotToken(payload),
+      ...(render.plain ? { plain: true } : { embed: render.embed }),
     };
     // 신규 계정 요약과 정정 가능한 일일 보고서는 같은 카드를 계속 갱신한다.
     // 수치가 늦게 바뀌었는데 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
     if (kind === "IDENTITY_SUMMARY" || editablePayload(payload)) {
-      return editOrSend(destinationKey, providerMessageId, text, options);
+      return editOrSend(destinationKey, providerMessageId, render.text, options);
     }
-    return sendDiscord(destinationKey, text, options);
+    return sendDiscord(destinationKey, render.text, options);
   });
 }

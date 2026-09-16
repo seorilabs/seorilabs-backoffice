@@ -147,7 +147,7 @@ test("요약 카드는 기존 메시지를 편집하고 삭제됐을 때만 새�
   // 편집/재생성 판단은 editOrSend 한 곳에 모았다. 호출부마다 복사하면 한 곳만
   // 고쳐지고 나머지가 같은 카드를 새로 만든다.
   assert.match(deploySource, /kind === "IDENTITY_SUMMARY" \|\| editablePayload\(payload\)/);
-  assert.match(deploySource, /return editOrSend\(destinationKey, providerMessageId, text, options\)/);
+  assert.match(deploySource, /return editOrSend\(destinationKey, providerMessageId, render\.text, options\)/);
   // 사람이 지운 메시지(10008)만 새로 만든다. 다른 실패는 재시도 대상이다.
   assert.match(deploySource, /errorCode !== 10_008\) return edited/);
 });

@@ -5,6 +5,17 @@ const API_BASE = "https://discord.com/api/v10";
 const EMBED_DESCRIPTION_LIMIT = 4_000;
 const CONTENT_LIMIT = 2_000;
 const MAX_EMBEDS = 10;
+/**
+ * 한 메시지의 모든 embed 를 합친 문자 상한.
+ *
+ * Discord 는 title·description·field.name·field.value·footer.text·author.name 의
+ * 합이 6,000 자를 넘으면 400 으로 거절한다. description 4,000 × embed 10 개라는
+ * 계산은 이 상한을 모르는 값이라 넘기면 전송이 통째로 실패한다.
+ */
+const EMBED_TOTAL_LIMIT = 6_000;
+const EMBED_TITLE_LIMIT = 256;
+const EMBED_FOOTER_LIMIT = 2_048;
+const TRUNCATION_MARK = "\n…(길이 제한으로 이하 생략)";
 export const MAX_DISCORD_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 export interface DiscordDeliveryResult {
@@ -36,6 +47,22 @@ export interface DiscordAttachment {
   base64: string;
 }
 
+/**
+ * 구조화 embed 의 상자 메타. 본문(description)은 sendDiscord 의 text 인자가 맡는다.
+ *
+ * 색·제목이 없으면 모든 알림이 같은 무게의 회색 상자로 보인다. 여기 값을 넣는 쪽은
+ * 알림을 만드는 빌더이고, worker 는 payload 로 받은 것을 그대로 통과시킨다.
+ */
+export interface DiscordEmbedMeta {
+  /** Discord 가 굵게 렌더하므로 ** 를 넣지 않는다. */
+  title?: string;
+  color?: number;
+  url?: string;
+  footer?: string;
+  /** ISO8601. Discord 가 상자 하단에 뷰어 로컬 시각으로 렌더한다. */
+  timestamp?: string;
+}
+
 export interface DiscordMessageOptions {
   alertRoleId?: string;
   components?: DiscordActionRow[];
@@ -43,6 +70,8 @@ export interface DiscordMessageOptions {
   // 한 줄짜리 기록은 embed 박스 없이 본문으로 보낸다. 여러 건이 쌓이는 곳에서
   // embed는 한 건마다 상자를 그려 로그로 읽히지 않는다.
   plain?: boolean;
+  // plain 이 아닐 때의 상자 메타. plain 이면 상자가 없어 그릴 곳이 없다.
+  embed?: DiscordEmbedMeta;
   // 원본 메시지에 대한 네이티브 답글로 보낸다. 답글이어도 allowed_mentions 는
   // 그대로 비워 두므로 핑은 발생하지 않는다.
   replyToMessageId?: string;
@@ -50,11 +79,25 @@ export interface DiscordMessageOptions {
   botToken?: string;
 }
 
-export function splitDiscordText(text: string): string[] {
+/**
+ * 본문을 embed description 여러 개로 쪼갠다.
+ *
+ * budget 은 이 메시지의 embed 전체에 남은 문자 예산이다. 제목·footer 를 함께
+ * 보내면 그 길이가 같은 예산에서 나가므로 호출부가 빼서 넘긴다. 예산을 넘는
+ * 꼬리는 잘라내되, 잘렸다는 사실을 본문에 남긴다 — 조용히 사라지면 읽는 쪽이
+ * 리포트가 원래 그만큼인 줄 안다.
+ */
+export function splitDiscordText(text: string, budget = EMBED_TOTAL_LIMIT): string[] {
   const normalized = text.trim();
   if (!normalized) return [];
-  const chunks: string[] = [];
+  const cap = Math.min(Math.max(0, budget), MAX_EMBEDS * EMBED_DESCRIPTION_LIMIT);
+  if (cap <= 0) return [];
   let rest = normalized;
+  if (rest.length > cap) {
+    const keep = Math.max(0, cap - TRUNCATION_MARK.length);
+    rest = rest.slice(0, keep).trimEnd() + TRUNCATION_MARK;
+  }
+  const chunks: string[] = [];
   while (rest.length > EMBED_DESCRIPTION_LIMIT && chunks.length < MAX_EMBEDS - 1) {
     let cut = rest.lastIndexOf("\n", EMBED_DESCRIPTION_LIMIT);
     if (cut < EMBED_DESCRIPTION_LIMIT / 2) cut = EMBED_DESCRIPTION_LIMIT;
@@ -77,18 +120,37 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
     const body = text.trim();
     // 본문이 비면 embed 경로와 같이 보내지 않는다. 멘션만 남은 알림은 내용 없이 울린다.
     if (!body) return null;
-    return {
-      content: [mention, body].filter(Boolean).join(" ").slice(0, CONTENT_LIMIT),
-      ...components,
-      ...reference,
-      allowed_mentions: allowedMentions,
-    };
+    const content = [mention, body].filter(Boolean).join(" ");
+    // 2,000 자를 넘으면 잘라내지 않고 embed 로 떨어뜨린다. 로그 한 줄로 만든 알림이
+    // 예외적으로 길어졌을 때 끝부분이 말없이 사라지는 편보다, 상자에 담겨 전부
+    // 도착하는 편이 낫다.
+    if (content.length <= CONTENT_LIMIT) {
+      return { content, ...components, ...reference, allowed_mentions: allowedMentions };
+    }
   }
-  const descriptions = splitDiscordText(text);
+  const meta = options.embed;
+  const title = meta?.title?.trim().slice(0, EMBED_TITLE_LIMIT);
+  const footer = meta?.footer?.trim().slice(0, EMBED_FOOTER_LIMIT);
+  // 제목·footer 도 같은 6,000 자 예산에서 나간다.
+  const reserved = (title?.length ?? 0) + (footer?.length ?? 0);
+  const descriptions = splitDiscordText(text, EMBED_TOTAL_LIMIT - reserved);
   if (descriptions.length === 0) return null;
   return {
     ...(mention ? { content: mention } : {}),
-    embeds: descriptions.map((description) => ({ description })),
+    // 메타는 첫 상자에만 얹는다. 길어서 10 개로 쪼갠 리포트에 제목이 10 번 반복되면
+    // 상자가 이어지지 않고 끊어져 읽힌다. 색은 전부에 걸어 한 기둥으로 보이게 한다.
+    embeds: descriptions.map((description, index) => ({
+      description,
+      ...(meta?.color != null ? { color: meta.color } : {}),
+      ...(index === 0
+        ? {
+            ...(title ? { title } : {}),
+            ...(meta?.url ? { url: meta.url } : {}),
+            ...(footer ? { footer: { text: footer } } : {}),
+            ...(meta?.timestamp ? { timestamp: meta.timestamp } : {}),
+          }
+        : {}),
+    })),
     ...components,
     ...reference,
     allowed_mentions: allowedMentions,
@@ -192,8 +254,9 @@ export async function editDiscord(
   return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    // Discord PATCH는 누락 필드를 보존하므로 이전 mention과 버튼을 명시적으로 비운다.
-    body: JSON.stringify({ content: "", components: [], ...payload }),
+    // Discord PATCH는 누락 필드를 보존하므로 이전 mention·버튼·상자를 명시적으로 비운다.
+    // embeds 를 비우지 않으면 plain 으로 바뀐 알림에 이전 상자가 그대로 남는다.
+    body: JSON.stringify({ content: "", components: [], embeds: [], ...payload }),
   }, options.botToken);
 }
 
@@ -297,8 +360,8 @@ export async function editDiscordChannelMessage(
     headers: { "content-type": "application/json" },
     // Discord PATCH는 누락 필드를 보존한다. 확인 버튼 응답(UPDATE_MESSAGE)이 남긴
     // "실행 중" content 와 버튼을 비우지 않으면 결과 embed 를 붙여도 메시지가 계속
-    // 진행 중으로 읽힌다.
-    body: JSON.stringify({ content: "", components: [], ...payload }),
+    // 진행 중으로 읽힌다. embeds 도 같은 이유로 비운다.
+    body: JSON.stringify({ content: "", components: [], embeds: [], ...payload }),
   });
 }
 
