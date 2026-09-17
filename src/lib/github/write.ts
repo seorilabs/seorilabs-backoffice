@@ -13,6 +13,18 @@ import {
   withFleetScopedGithubClient,
   type FleetGitHubCapability,
 } from "@/lib/github/scoped-installation-client";
+import {
+  createStableReleaseTag,
+  RELEASE_VERSION_LEDGER_BRANCH,
+  RELEASE_VERSION_LEDGER_FILE,
+  type ReleaseTagResult,
+} from "@/lib/github/release-tag-ledger";
+import {
+  getRepoDefaultBranch,
+  getRepoTextFile,
+  getWorkflowDispatchContract,
+} from "@/lib/github/read";
+import { resolveStableTagSha } from "@/lib/github/release";
 
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const STABLE_TAG = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
@@ -136,6 +148,50 @@ export async function createTag(opts: {
     capability: "github.release.write",
     execute: (client, identity) => createTagWithExactReadback(client, { ...identity, ...opts }),
   });
+}
+
+/**
+ * stable 릴리스 태그 생성. 원장이 있는 저장소는 중앙 release-tag.yml 만 태그를 만들 수 있다.
+ * Backoffice 가 직접 만든 태그에는 원장 할당도 receipt 도 없어 배포 경로가 거부한다.
+ */
+export async function createStableReleaseTagWithLedgerAuthority(opts: {
+  repoFullName: string;
+  tag: string;
+  sha: string;
+}): Promise<ReleaseTagResult> {
+  const { repoFullName } = opts;
+  return createStableReleaseTag(
+    {
+      readTagCommitSha: async (tag) => {
+        try {
+          return await resolveStableTagSha(repoFullName, tag);
+        } catch (error) {
+          if ((error as { status?: number }).status === 404) return null;
+          throw error;
+        }
+      },
+      readLedgerFile: () =>
+        getRepoTextFile(
+          repoFullName,
+          RELEASE_VERSION_LEDGER_FILE,
+          RELEASE_VERSION_LEDGER_BRANCH,
+        ),
+      readDefaultBranch: () => getRepoDefaultBranch(repoFullName),
+      readDispatchContract: async (workflowFile, ref) => {
+        try {
+          return await getWorkflowDispatchContract(repoFullName, workflowFile, ref);
+        } catch (error) {
+          if ((error as { status?: number }).status === 404) {
+            return { dispatchable: false, inputNames: new Set<string>() };
+          }
+          throw error;
+        }
+      },
+      dispatch: (input) => dispatchWorkflow({ repoFullName, ...input }),
+      createTagDirect: (input) => createTag({ repoFullName, ...input }),
+    },
+    { tag: opts.tag, sha: opts.sha },
+  );
 }
 
 /** 태그에 GitHub Release 생성 또는 갱신(본문=출시노트). */

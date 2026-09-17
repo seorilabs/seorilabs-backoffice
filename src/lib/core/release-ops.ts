@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { shouldBackofficeAutoPublishReleaseNotes } from "@/lib/core/release-ownership";
 import type { ReleaseMarket } from "@prisma/client";
 import {
-  createTag,
+  createStableReleaseTagWithLedgerAuthority,
   createOrUpdateRelease,
   upsertReleaseAsset,
   dispatchWorkflow,
@@ -176,7 +176,8 @@ export async function createReleaseTagWithNotes(opts: {
     releaseBody: (created) => formatReleaseBody({ tag: created }),
     source: releaseAuthorityPort(opts.repoFullName),
     writer: {
-      createTag: (input) => createTag({ repoFullName: opts.repoFullName, ...input }),
+      createTag: (input) =>
+        createStableReleaseTagWithLedgerAuthority({ repoFullName: opts.repoFullName, ...input }),
       createOrUpdateRelease: (input) =>
         createOrUpdateRelease({ repoFullName: opts.repoFullName, ...input }),
     },
