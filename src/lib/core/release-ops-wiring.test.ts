@@ -89,7 +89,13 @@ test("createReleaseTagWithNotes 는 stable tag 권한 코어를 경유해서만 
   assert.match(body, /expectedSha: opts\.expectedSha \?\? candidate\.sha/);
   // SHA 확정은 코어가 한다. 여기서 따로 잡으면 검증 대상과 태그 대상이 갈라진다.
   assert.equal(body.includes("await resolveRefSha("), false);
-  assert.match(body, /createTag: \(input\) => createTag\(\{ repoFullName: opts\.repoFullName, \.\.\.input \}\)/);
+  // 원장 저장소의 태그는 중앙 release-tag.yml 만 만든다. git ref 를 직접 만들면 receipt 가
+  // 없어 배포 경로가 거부한다(contracts/release-version-authority.yaml).
+  assert.match(
+    body,
+    /createStableReleaseTagWithLedgerAuthority\(\{ repoFullName: opts\.repoFullName, \.\.\.input \}\)/,
+  );
+  assert.equal(body.includes("createTag({ repoFullName: opts.repoFullName"), false);
 
   const core = bodyOf(source(ORCHESTRATOR), "createReleaseTagAtSource");
   const resolve = core.indexOf("opts.source.resolveRefSha(");
