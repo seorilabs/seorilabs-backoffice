@@ -95,6 +95,21 @@ test("운영 Xcode Cloud allowlist 에 운글 저장소가 등록됨", () => {
   assert.equal(isXcodeCloudRepo("seorilabs/saju-reader"), true);
 });
 
+test("운영 Xcode Cloud allowlist 에 Lord Ledger 저장소가 등록됨", () => {
+  const deployment = readFileSync(
+    new URL("../../../k8s/deployment.yaml", import.meta.url),
+    "utf8",
+  );
+  const allowlist = deployment.match(
+    /- name: XCODE_CLOUD_APP_STORE_REPOS\s*\n\s*value: "([^"]+)"/,
+  )?.[1];
+  assert.ok(allowlist);
+  assert.equal(allowlist.split(",").includes("seorilabs/lord-ledger"), true);
+  process.env[KEY] = allowlist;
+  assert.equal(shouldUseXcodeCloudForTarget("seorilabs/lord-ledger", "APPSTORE"), true);
+  assert.equal(shouldUseXcodeCloudForTarget("seorilabs/lord-ledger", "ALL"), true);
+});
+
 test("운영 Xcode Cloud allowlist 에 Reascend 저장소가 등록됨", () => {
   const deployment = readFileSync(
     new URL("../../../k8s/deployment.yaml", import.meta.url),
