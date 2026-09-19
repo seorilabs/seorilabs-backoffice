@@ -24,7 +24,7 @@ export default async function PlatformOverviewPage() {
     // 한다 — 장애 중에 "언제부터 이랬나"를 볼 창구가 이것뿐이다.
     loadPlatformMetricSamplesAction().catch(() => []),
     // Edge·ingest·DB를 함께 확인한다. DB 값만 읽혔다고 현재 값으로 표시하면
-    // heartbeat 발급이나 수집 장애 중 만료된 행을 0건으로 오인한다.
+    // heartbeat 발급이나 수집 장애 중 만료된 행을 0으로 오인한다.
     loadPlatformPresencePipelineSnapshot().catch(() => null),
   ]);
   const data = snapshot?.ok ? snapshot.data : null;

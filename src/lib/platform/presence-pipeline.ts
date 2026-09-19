@@ -31,7 +31,7 @@ async function assertReady(url: string, label: string): Promise<void> {
  * presence 집계를 신뢰할 수 있는 상태인지 확인한다.
  *
  * Edge가 죽으면 heartbeat가 끊겨 활성 행이 만료되므로, 확인 없이 읽으면
- * 장애를 "사용자가 줄었다"로 읽게 된다. 최근 실행 수와 버전 분포가 같은 테이블을
+ * 장애를 "사용자가 줄었다"로 읽게 된다. 활성 세션 수와 버전 분포가 같은 테이블을
  * 보므로 같은 확인을 공유한다.
  */
 export async function assertPresencePipelineReady(): Promise<void> {
@@ -41,7 +41,7 @@ export async function assertPresencePipelineReady(): Promise<void> {
   ]);
 }
 
-/** Edge·token issuer·DB가 모두 정상일 때만 현재 최근 실행 snapshot을 반환한다. */
+/** Edge·token issuer·DB가 모두 정상일 때만 현재 활성 세션 snapshot을 반환한다. */
 export async function loadPlatformPresencePipelineSnapshot(
   dependencies: PresencePipelineDependencies = {
     checkEdge: () => assertReady(PRESENCE_EDGE_READY_URL, "RPI Edge"),

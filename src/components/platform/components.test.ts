@@ -26,7 +26,7 @@ describe("플랫폼 표현 컴포넌트", () => {
     apps: [],
   };
 
-  it("Edge 정상일 때 실제 0건을 유효한 현재값으로 그린다", () => {
+  it("Edge 정상일 때 실제 0세션을 유효한 현재값으로 그린다", () => {
     const html = renderToStaticMarkup(
       createElement(PlatformPresenceView, {
         state: "available",
@@ -36,12 +36,12 @@ describe("플랫폼 표현 컴포넌트", () => {
     );
 
     assert.match(html, /Edge 정상/);
-    assert.match(html, /전체 최근 실행/);
-    assert.match(html, />0<span[^>]*>건/);
-    assert.doesNotMatch(html, /최근 실행 알 수 없음/);
+    assert.match(html, /전체 활성 세션/);
+    assert.match(html, />0<span[^>]*>세션/);
+    assert.doesNotMatch(html, /활성 세션 알 수 없음/);
   });
 
-  it("Edge 장애 중에는 만료 결과를 0건으로 오인하지 않는다", () => {
+  it("Edge 장애 중에는 만료 결과를 0세션으로 오인하지 않는다", () => {
     const html = renderToStaticMarkup(
       createElement(PlatformPresenceView, {
         state: "unavailable",
@@ -51,10 +51,10 @@ describe("플랫폼 표현 컴포넌트", () => {
       }),
     );
 
-    assert.match(html, /최근 실행 알 수 없음/);
-    assert.match(html, /마지막 정상값 7건/);
-    assert.doesNotMatch(html, /전체 최근 실행/);
-    assert.doesNotMatch(html, /마지막 정상값 0건/);
+    assert.match(html, /활성 세션 알 수 없음/);
+    assert.match(html, /마지막 정상값 7 세션/);
+    assert.doesNotMatch(html, /전체 활성 세션/);
+    assert.doesNotMatch(html, /마지막 정상값 0 세션/);
   });
 
   it("Edge만 실패하면 DB 숫자를 현재값으로 채택하지 않는다", async () => {
