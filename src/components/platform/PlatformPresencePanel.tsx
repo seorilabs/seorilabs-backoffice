@@ -71,7 +71,7 @@ export function PlatformPresencePanel({
         setCurrent(null);
         setState("unavailable");
         setError(
-          caught instanceof Error ? caught.message : "동접 상태를 확인하지 못했습니다.",
+          caught instanceof Error ? caught.message : "최근 실행 집계를 확인하지 못했습니다.",
         );
       }
     }
@@ -110,8 +110,8 @@ export function PlatformPresenceView({
 }: PlatformPresenceViewProps) {
   return (
     <PlatformPanel
-      title="실시간 동접"
-      description="RPI Edge가 받은 최근 heartbeat를 150초 활성 창으로 집계합니다."
+      title="최근 150초 실행"
+      description="최근 150초 안에 heartbeat가 도착한 앱 실행 수입니다. 동시 접속자 수가 아닙니다."
       trailing={<PresenceStatusBadge state={state} />}
     >
       {state === "available" && current ? (
@@ -122,22 +122,24 @@ export function PlatformPresenceView({
         </PlatformEmptyState>
       ) : (
         <div>
-          <PlatformEmptyState title="동접 알 수 없음">
+          <PlatformEmptyState title="최근 실행 알 수 없음">
             {error ?? "RPI Edge 또는 집계 DB가 응답하지 않습니다."} 장애 중 만료된
-            세션을 0명으로 표시하지 않습니다.
+            세션을 0건으로 표시하지 않습니다.
           </PlatformEmptyState>
           {lastHealthy && (
             <div className="border-t border-neutral-100 px-4 py-3 text-xs text-neutral-600">
-              마지막 정상값 {formatPlatformCount(lastHealthy.totalActiveSessions)}명 · {" "}
+              마지막 정상값 {formatPlatformCount(lastHealthy.totalActiveSessions)}건 · {" "}
               {formatPlatformTimestamp(lastHealthy.measuredAt)}
             </div>
           )}
         </div>
       )}
       <div className="border-t border-neutral-100 px-4 py-3 text-[11px] leading-4 text-neutral-500">
-        이 수치는 연결 소켓 수가 아니라 최근 {current?.activeTtlSeconds ?? 150}초 안에
-        heartbeat가 도착한 익명 세션 수입니다. Edge 장애 시 클라이언트는 최대 2초
-        뒤 관측만 포기하며 게임·인증·결제 동작을 차단하지 않습니다.
+        실행할 때마다 익명 키가 새로 만들어지고 종료를 알리는 신호가 없어, 잠깐
+        열었다 닫아도 최근 {current?.activeTtlSeconds ?? 150}초 동안 1건으로 남습니다.
+        같은 사람이 짧게 여러 번 열면 그만큼 중복으로 세어지므로 동시 접속자 수로
+        읽으면 안 됩니다. Edge 장애 시 클라이언트는 최대 2초 뒤 관측만 포기하며
+        게임·인증·결제 동작을 차단하지 않습니다.
       </div>
     </PlatformPanel>
   );
@@ -148,10 +150,10 @@ function PresenceNumbers({ snapshot }: { snapshot: PlatformPresenceSnapshot }) {
     <div>
       <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-4">
-          <div className="text-xs font-medium text-emerald-800">전체 최근 활성</div>
+          <div className="text-xs font-medium text-emerald-800">전체 최근 실행</div>
           <div className="mt-1 text-3xl font-semibold tabular-nums text-emerald-950">
             {formatPlatformCount(snapshot.totalActiveSessions)}
-            <span className="ml-1 text-sm font-medium">명</span>
+            <span className="ml-1 text-sm font-medium">건</span>
           </div>
           <div className="mt-2 text-[11px] text-emerald-700">
             집계 {formatPlatformTimestamp(snapshot.measuredAt)}
@@ -160,7 +162,7 @@ function PresenceNumbers({ snapshot }: { snapshot: PlatformPresenceSnapshot }) {
         <div className="divide-y divide-neutral-100 rounded-lg border border-neutral-200">
           {snapshot.apps.length === 0 ? (
             <div className="px-4 py-6 text-center text-xs text-neutral-500">
-              현재 활성 세션이 없습니다.
+              최근 150초 안에 실행이 없습니다.
             </div>
           ) : (
             snapshot.apps.map((app) => (
@@ -177,7 +179,7 @@ function PresenceNumbers({ snapshot }: { snapshot: PlatformPresenceSnapshot }) {
                   </div>
                 </div>
                 <div className="shrink-0 text-sm font-semibold tabular-nums text-neutral-900">
-                  {formatPlatformCount(app.activeSessions)}명
+                  {formatPlatformCount(app.activeSessions)}건
                 </div>
               </div>
             ))
