@@ -7,15 +7,13 @@ import {
   type ReleaseNoteField,
   type ReleaseNoteTranslationsInput,
 } from "@/lib/core/release-note-locales";
+import {
+  RELEASE_MARKET_BADGE,
+  RELEASE_MARKET_LABEL,
+  releaseMarketKey,
+} from "@/lib/core/release-markets";
 import { buildGooglePlayReleaseNotesText } from "@/lib/core/store-notes";
 import type { ReleaseMarket } from "@prisma/client";
-
-const MARKET_LABEL: Record<ReleaseMarket, string> = {
-  PLAY: "Google Play",
-  APPSTORE: "App Store",
-  AIT: "AppsInToss",
-  WEB: "Web",
-};
 
 export type ReleaseNoteCardProps = {
   appName: string;
@@ -47,17 +45,9 @@ export function ReleaseNoteCard(props: ReleaseNoteCardProps) {
     }
   }
 
-  const marketLabel = props.market ? MARKET_LABEL[props.market] : "공통(legacy)";
-  const marketStyle =
-    props.market === "PLAY"
-      ? "bg-emerald-100 text-emerald-800"
-      : props.market === "APPSTORE"
-        ? "bg-sky-100 text-sky-800"
-        : props.market === "AIT"
-          ? "bg-amber-100 text-amber-800"
-          : props.market === "WEB"
-            ? "bg-violet-100 text-violet-800"
-            : "bg-neutral-200 text-neutral-700";
+  const marketKey = releaseMarketKey(props.market);
+  const marketLabel = RELEASE_MARKET_LABEL[marketKey];
+  const marketStyle = RELEASE_MARKET_BADGE[marketKey];
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
