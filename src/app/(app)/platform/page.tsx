@@ -2,6 +2,7 @@ import {
   PlatformMetricChart,
   PlatformOverviewStatus,
   PlatformPresencePanel,
+  PlatformRealtimePanel,
   type PlatformCapabilityView,
 } from "@/components/platform";
 import { loadPlatformMetricSamplesAction } from "@/lib/actions/platform-metrics";
@@ -11,6 +12,7 @@ import {
 } from "@/components/platform/presentation";
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
+import { loadGa4RealtimeSnapshot } from "@/lib/ga4/realtime";
 import { platformReadConfiguration } from "@/lib/platform/read-client";
 import { loadPlatformPresencePipelineSnapshot } from "@/lib/platform/presence-pipeline";
 
@@ -18,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 export default async function PlatformOverviewPage() {
   const configuration = platformReadConfiguration();
-  const [snapshot, samples, presenceSnapshot] = await Promise.all([
+  const [snapshot, samples, presenceSnapshot, realtimeSnapshot] = await Promise.all([
     configuration.configured ? loadPlatformIapSnapshotAction() : null,
     // 시계열은 우리 DB만 읽는다. platform이 죽어도 과거 추이는 보여야
     // 한다 — 장애 중에 "언제부터 이랬나"를 볼 창구가 이것뿐이다.
@@ -26,6 +28,8 @@ export default async function PlatformOverviewPage() {
     // Edge·ingest·DB를 함께 확인한다. DB 값만 읽혔다고 현재 값으로 표시하면
     // heartbeat 발급이나 수집 장애 중 만료된 행을 0으로 오인한다.
     loadPlatformPresencePipelineSnapshot().catch(() => null),
+    // Presence 종료 전 병행 비교용(ADR 0028). 실패는 패널이 알 수 없음으로 표시한다.
+    loadGa4RealtimeSnapshot().catch(() => null),
   ]);
   const data = snapshot?.ok ? snapshot.data : null;
   const health = data?.health ?? null;
@@ -107,6 +111,7 @@ export default async function PlatformOverviewPage() {
         message={message}
       />
       <PlatformPresencePanel initialSnapshot={presenceSnapshot} />
+      <PlatformRealtimePanel initialSnapshot={realtimeSnapshot} />
       <PlatformMetricChart
         samples={samples}
         collecting={configuration.configured}

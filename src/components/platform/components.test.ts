@@ -8,8 +8,10 @@ import {
   PlatformIapConsole,
   PlatformOverviewStatus,
   PlatformPresenceView,
+  PlatformRealtimeView,
   PlatformRefundReviewPanel,
   PlatformVersionDistributionView,
+  isRealtimeSnapshot,
   loadAvailablePresenceSnapshot,
 } from "./index";
 import {
@@ -84,6 +86,69 @@ describe("플랫폼 표현 컴포넌트", () => {
       }),
       /DB unavailable/,
     );
+  });
+
+  const realtimeSnapshot = {
+    measuredAt: "2026-09-24T03:00:00Z",
+    recentMinutes: 5,
+    windowMinutes: 30,
+    totalRecentActiveUsers: 0,
+    totalWindowActiveUsers: 0,
+    apps: [
+      {
+        ok: true as const,
+        slug: "lizard-tycoon",
+        displayName: "도마뱀 타이쿤",
+        recentActiveUsers: 0,
+        windowActiveUsers: 0,
+        versions: [],
+      },
+      {
+        ok: false as const,
+        slug: "jomul",
+        displayName: "조물조물",
+        error: "GA4 실시간 조회 실패: PERMISSION_DENIED",
+      },
+    ],
+  };
+
+  it("GA4 실시간 0명은 현재값으로, 앱별 실패는 해당 행만 알 수 없음으로 그린다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformRealtimeView, {
+        state: "available",
+        current: realtimeSnapshot,
+        lastHealthy: realtimeSnapshot,
+      }),
+    );
+
+    assert.match(html, /GA4 정상/);
+    assert.match(html, />0<span[^>]*>명/);
+    assert.match(html, /1개 앱 알 수 없음/);
+    assert.match(html, /PERMISSION_DENIED/);
+    assert.doesNotMatch(html, /활성 사용자 알 수 없음/);
+  });
+
+  it("GA4 조회 실패 중에는 0명 대신 마지막 정상값을 보여준다", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlatformRealtimeView, {
+        state: "unavailable",
+        current: null,
+        lastHealthy: { ...realtimeSnapshot, totalWindowActiveUsers: 12 },
+      }),
+    );
+
+    assert.match(html, /활성 사용자 알 수 없음/);
+    assert.match(html, /마지막 정상값 30분 12명/);
+    assert.doesNotMatch(html, /GA4 정상/);
+  });
+
+  it("GA4 실시간 응답 검증은 앱별 성공·실패 형태를 모두 받아들인다", () => {
+    assert.equal(isRealtimeSnapshot(realtimeSnapshot), true);
+    assert.equal(
+      isRealtimeSnapshot({ ...realtimeSnapshot, apps: [{ ok: false, slug: "x", displayName: "x" }] }),
+      false,
+    );
+    assert.equal(isRealtimeSnapshot({ ...realtimeSnapshot, totalWindowActiveUsers: "3" }), false);
   });
 
   it("Edge와 DB가 정상일 때 0명 snapshot을 현재값으로 유지한다", async () => {
