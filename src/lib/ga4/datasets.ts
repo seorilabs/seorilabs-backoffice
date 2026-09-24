@@ -3,9 +3,10 @@
 // 코드 내 fallback 표를 둔다(DB 값이 있으면 항상 DB 우선). 신규 게임은 DB 또는 이 표에
 // 추가하면 수집 대상에 자동 편입된다.
 //
-// 표에는 (1) GA4→BigQuery export 가 실제 활성(dataset + events_* 적재)이고 (2) 수집 SA
-// ga4-routine-ro@crossword-puzzle-79ae0 에 각 프로젝트 bigquery.dataViewer+jobUser 가
-// 부여된 게임만 넣는다. 둘 중 하나라도 빠지면 매 수집마다 "Dataset not found"/권한 에러가
+// 표에는 (1) GA4→BigQuery export 가 실제 활성(dataset + events_* 적재)이고 (2) 조직 공용
+// 수집 SA seori-ga4-reader@seorilabs-ci(카탈로그 shared/gcp/ga4-fleet-reader)에 각 프로젝트
+// bigquery.dataViewer+jobUser 가 부여된 게임만 넣는다. 같은 SA 가 GA4 계정 뷰어로 실시간
+// 보고서도 읽는다. 둘 중 하나라도 빠지면 매 수집마다 "Dataset not found"/권한 에러가
 // 쌓인다(백오피스는 errors 로 잡고 다른 앱 수집은 계속한다).
 //
 // dataset 이 아직 없는 앱은 raw events 적재와 수집 SA 권한을 확인한 뒤 편입한다.
