@@ -1,5 +1,6 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { env } from "@/lib/env";
+import { ga4ServiceAccountCredentials } from "@/lib/ga4/credentials";
 import type { Ga4Target } from "@/lib/ga4/datasets";
 import type { Ga4BreakdownRow } from "@/lib/ga4/metric-shapes";
 
@@ -12,15 +13,7 @@ const clients = new Map<string, BigQuery>();
 function clientFor(project: string): BigQuery {
   const cached = clients.get(project);
   if (cached) return cached;
-  const raw = env.ga4SaKeyJson();
-  if (!raw) throw new Error("GA4_SA_KEY_JSON 미설정 — BigQuery 조회 불가");
-  let credentials: Record<string, unknown>;
-  try {
-    credentials = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error("GA4_SA_KEY_JSON 파싱 실패(JSON 형식 아님)");
-  }
-  const bq = new BigQuery({ projectId: project, credentials });
+  const bq = new BigQuery({ projectId: project, credentials: ga4ServiceAccountCredentials() });
   clients.set(project, bq);
   return bq;
 }
