@@ -39,7 +39,7 @@ export async function applyGooglePlayTrackRelease(input: {
     skipNoChange: true,
     card: (previousState) => ({
       kind: "store_submission_state_changed",
-      text: `${normalized.emoji} ${normalized.stateLabel}\n앱: ${input.appDisplayName}\n트랙: ${input.release.trackName}\n버전: ${input.release.releaseName}\n이전 단계: ${previousState ?? "첫 관측"}`,
+      text: `${normalized.emoji} ${normalized.stateLabel}\n앱: ${input.appDisplayName}\n트랙: ${input.release.trackName}\n버전: ${input.release.releaseName}${typeof input.release.userFraction === "number" ? `\n출시 비율: ${Math.round(input.release.userFraction * 100)}%` : ""}\n이전 단계: ${previousState ? normalizeSubmissionState({ store: "GOOGLE_PLAY", state: previousState }).stateLabel : "첫 관측"}`,
       embed: {
         title: `Google Play · ${input.appDisplayName}`,
         color: normalized.storeColorHex,

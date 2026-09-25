@@ -33,7 +33,7 @@ export async function receiveAppStoreSubmissionEvent(
     sourceEventAt: event.sourceEventAt,
     card: (previousState) => ({
       kind: "store_submission_state_changed",
-      text: `${normalized.emoji} ${normalized.stateLabel}\n앱: ${app.displayName ?? app.id}\n버전: ${event.externalVersionLabel ?? "확인 중"}\n이전 단계: ${previousState ?? "첫 관측"}`,
+      text: `${normalized.emoji} ${normalized.stateLabel}\n앱: ${app.displayName ?? app.id}\n버전: ${event.externalVersionLabel ?? "확인 중"}\n이전 단계: ${previousState ? normalizeSubmissionState({ store: "APP_STORE", state: previousState }).stateLabel : "첫 관측"}`,
       embed: {
         title: `App Store · ${app.displayName ?? app.id}`,
         color: normalized.storeColorHex,
