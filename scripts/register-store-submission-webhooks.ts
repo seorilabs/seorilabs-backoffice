@@ -31,10 +31,15 @@ async function main(): Promise<void> {
       console.log("[appstore-webhook] 대상", app.id, existing ? "existing" : "create");
       continue;
     }
-    const attributes = {
-      enabled: true, eventTypes: [TYPE], name: "Seorilabs Backoffice review state",
-      secret, url: URL,
-    };
+    const existingTypes = Array.isArray(existing?.attributes?.eventTypes)
+      ? existing.attributes.eventTypes.filter((item): item is string => typeof item === "string")
+      : [];
+    const attributes = existing
+      ? { enabled: true, eventTypes: [...new Set([...existingTypes, TYPE])], secret }
+      : {
+          enabled: true, eventTypes: [TYPE], name: "Seorilabs Backoffice review state",
+          secret, url: URL,
+        };
     const doc = existing
       ? await asc(`/v1/webhooks/${encodeURIComponent(existing.id)}`, {
           method: "PATCH",
