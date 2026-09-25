@@ -376,7 +376,7 @@ ingest는 `day.raw`를 그대로 저장하므로 producer(`console-sync` 스킬)
 GA4·AppsInToss 콘솔 스냅샷에서 크게 움직인 항목만 추려 `#app-ops`로 나간다. 서리 봇 정체로
 게시하며 판정은 전부 결정적이라 LLM을 쓰지 않는다.
 
-- 전량 나열은 `#metrics-daily`의 지표 리포트(10:30 KST)가 이미 한다. 이 리포트는 판단만 남긴다.
+- 전량 나열은 같은 `#app-ops`의 지표 리포트(10:30 KST)가 맡는다. 이 리포트는 판단만 남긴다.
 - 스케줄은 `analytics-collect`(10:00 KST) → 지표 리포트(10:30 KST) 뒤라 D-1 스냅샷이 이미 있다.
   BigQuery·콘솔을 직접 치지 않고 저장된 `app_metric_daily`·`app_console_metric_daily`만 읽는다.
 - 판정: 최신값 vs 직전 7일 **중앙값**. 관측 4일 미만이면 판정하지 않고, 기준선이 지표별
@@ -640,11 +640,11 @@ flowchart LR
 | 목적지 키 | 무엇이 나가는가 | 생산자 |
 | --- | --- | --- |
 | `backoffice` | 승인 카드, 단계 넛지, 일일 다이제스트, 주간 LiveOps, Godot 버전 | `proactive.ts`, `webhooks/route.ts`, `godot/version-check.ts` |
-| `metrics-daily` | 일일 지표 리포트, 당일 운영 요약 | `analytics-report.ts`, `operations-report.ts` |
+| `metrics-daily` | 과거 지표 메시지 보관용. 새 발송 없음 | 기존 대기열의 목적지 키는 유지 |
 | `action-events` | 운영 이벤트, 마일스톤, 신규 계정 일 요약·건별 | `platform/operational-events`, `milestones.ts`, `identity-summary.ts` |
 | `release-ops` | 배포 상태 카드, deploy-all 결과 | `deploy-enqueue.ts` |
 | `ops-alerts` | 장애 카드(`@release_ops` 멘션이 붙는 유일한 목적지) | `incidents.ts`, `analytics/anomalies.ts` |
-| `app-ops` | 재무 리포트, 지표 하이라이트(서리 봇 정체) | `finance-report.ts`, `metric-highlights.ts` |
+| `app-ops` | 앱별 전체 지표(10:30), 지표 하이라이트(11:00), 재무 리포트, 당일 운영 요약 | `analytics-report.ts`, `metric-highlights.ts`, `finance-report.ts`, `operations-report.ts` |
 | `github-issues` | 이슈 생성·종료 전량(미설정이면 `backoffice`로 폴백) | `webhooks/route.ts` |
 | `user-reviews` | Google Play·App Store 신규 리뷰 | `store-reviews/collector.ts` |
 | `private-feed`·`seori-review` | 외부 NATS ingest 전용(`ops.notification.v1.*`) | 저장소 내 생산자 없음 |

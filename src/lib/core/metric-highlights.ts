@@ -21,7 +21,7 @@ import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
-// 전량 나열은 #metrics-daily 의 지표 리포트가 이미 한다. 여기서는 판단만 남긴다.
+// 전량 나열은 같은 #app-ops 에 먼저 게시되는 지표 리포트가 맡는다. 여기서는 판단만 남긴다.
 //
 // 판정은 전부 결정적이다. 최신값을 직전 7일 중앙값과 비교하고, 표본이 작은 앱을
 // 먼저 걸러 낸 뒤 변화율×규모로 정렬한다. 중앙값을 쓰는 이유는 하루짜리 튐이

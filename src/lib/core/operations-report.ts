@@ -63,7 +63,7 @@ export async function sendOperationsSummary(now: Date): Promise<{
     lines.push("", "⚠️ Platform 활성 사용자 스냅샷 없음");
   }
 
-  const destinations = discordDestinations(["metrics-daily"]);
+  const destinations = discordDestinations(["app-ops"]);
   await enqueueNotification({
     dedupeKey: `metrics:operations:${refDate}`,
     kind: "OPERATIONS_SUMMARY",

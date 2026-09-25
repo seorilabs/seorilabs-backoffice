@@ -438,7 +438,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       consoleLines: consoleSection.lines,
       link: env.optional("AUTH_URL").trim(),
     });
-    const destinations = discordDestinations(["metrics-daily"]);
+    const destinations = discordDestinations(["app-ops"]);
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",
