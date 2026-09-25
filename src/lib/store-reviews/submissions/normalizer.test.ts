@@ -50,6 +50,13 @@ test("GOOGLE_PLAY 상태가 한글 라벨과 이모지로 정규화된다", () =
   }
 });
 
+test("단계별 출시 비율은 같은 한국어 단계로 표시한다", () => {
+  assert.equal(
+    normalizeSubmissionState({ store: "GOOGLE_PLAY", state: "inProgress:0.5" }).stateLabel,
+    "단계별 출시 중",
+  );
+});
+
 test("알 수 없는 state는 throw 한다", () => {
   assert.throws(
     () =>

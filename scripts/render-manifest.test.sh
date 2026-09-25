@@ -31,6 +31,7 @@ MANIFESTS=(
   k8s/repository-discovery-worker.yaml
   k8s/provider-execution-worker.yaml
   k8s/store-review-cronjob.yaml
+  k8s/store-submissions-cronjob.yaml
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml
   k8s/seori-auth-egress-proxy.yaml

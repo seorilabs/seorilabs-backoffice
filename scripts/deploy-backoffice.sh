@@ -353,6 +353,12 @@ for manifest in \
 done
 
 echo "== image CronJob rollout =="
+apply_image_manifest store-submissions-cronjob.yaml
+store_submission_image="$(k -n "$namespace" get cronjob backoffice-store-submissions -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+if [ "$store_submission_image" != "$image" ]; then
+  echo "오류: store-submissions CronJob 이미지 digest가 일치하지 않는다" >&2
+  exit 1
+fi
 apply_image_manifest store-review-cronjob.yaml
 store_review_image="$(k -n "$namespace" get cronjob backoffice-store-reviews -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
 if [ "$store_review_image" != "$image" ]; then

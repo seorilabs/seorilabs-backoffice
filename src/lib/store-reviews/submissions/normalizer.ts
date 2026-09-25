@@ -18,6 +18,21 @@ interface StateEntry {
 }
 
 const APPLE_STATE_TABLE: Readonly<Record<string, StateEntry>> = {
+  ACCEPTED: { label: "접수 완료", emoji: "✓" },
+  PENDING_CONTRACT: { label: "계약 대기", emoji: "…" },
+  PREORDER_READY_FOR_SALE: { label: "사전 주문 출시 준비", emoji: "✓" },
+  WAITING_FOR_EXPORT_COMPLIANCE: { label: "수출 규정 확인 대기", emoji: "…" },
+  NOT_APPLICABLE: { label: "해당 없음", emoji: "⏹" },
+  PREPARE_FOR_SUBMISSION: { label: "제출 준비", emoji: "…" },
+  READY_FOR_REVIEW: { label: "심사 제출 준비", emoji: "…" },
+  WAITING_FOR_REVIEW: { label: "심사 대기", emoji: "…" },
+  PENDING_APPLE_RELEASE: { label: "Apple 출시 대기", emoji: "⟳" },
+  PENDING_DEVELOPER_RELEASE: { label: "개발자 출시 대기", emoji: "⟳" },
+  PROCESSING_FOR_APP_STORE: { label: "스토어 처리 중", emoji: "⟳" },
+  METADATA_REJECTED: { label: "메타데이터 거절", emoji: "✗" },
+  INVALID_BINARY: { label: "빌드 무효", emoji: "✗" },
+  REMOVED_FROM_SALE: { label: "판매 중단", emoji: "⏹" },
+  REPLACED_WITH_NEW_VERSION: { label: "새 버전으로 교체", emoji: "⏹" },
   PREPROCESSING: { label: "사전 검토", emoji: "…" },
   IN_REVIEW: { label: "심사 중", emoji: "⟳" },
   REJECTED: { label: "심사 거절", emoji: "✗" },
@@ -48,7 +63,7 @@ export function normalizeSubmissionState(input: {
 }): NormalizedState {
   const table =
     input.store === "APP_STORE" ? APPLE_STATE_TABLE : GOOGLE_PLAY_STATE_TABLE;
-  const entry = table[input.state];
+  const entry = table[input.store === "GOOGLE_PLAY" ? input.state.split(":")[0]! : input.state];
   if (!entry) {
     throw new Error(
       `알 수 없는 ${input.store} state: ${input.state}`,
