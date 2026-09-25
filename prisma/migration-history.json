@@ -78,6 +78,10 @@
     "20260913020000_release_note_per_market": {
       "sha256": "b07a9d26acbecc980df66b9a5df0dcd3e40474483cfbd01fffd47a0d12241790",
       "reason": "ReleaseNote에 market 컬럼 + (repoFullName, version, market) unique 추가, 옛 (repoFullName, version) unique drop. release_note 를 마켓별 분리 row 로 전환하기 위해 같은 (repo, version) 에 마켓 3개 row 가 공존해야 하므로 옛 unique 가 drop 돼야 한다. 코드 변경(generateReleaseNoteCore 가 마켓 3개 row upsert) 이 같은 PR 에 들어가 있다."
+    },
+    "20260925000000_store_review_submission_observations": {
+      "sha256": "bdcb9f516fcbbc8d483a07d00523c586da74ae26327ba0c24fd30f75c758117f",
+      "reason": "스토어 중립 심사/출시 단계 관측 모델 추가. Apple App Store Connect webhook과 Google Play tracks 폴링이 같은 store_review_submission_observation/sync 테이블을 store 컬럼으로 분기해 사용한다. baseline expand-only 마이그레이션이며 새 두 표의 externalEventId 기반 idempotency와 7일 rawPayload 보관 expiresAt 인덱스만 추가한다. 코드 변경(collector·builder·webhook·cron 라우트)은 후속 PR #2~#5에서 다룬다."
     }
   },
   "legacy": {
