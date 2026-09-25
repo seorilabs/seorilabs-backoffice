@@ -365,6 +365,12 @@ if [ "$store_review_image" != "$image" ]; then
   echo "오류: store-review CronJob 이미지 digest가 일치하지 않는다" >&2
   exit 1
 fi
+apply_image_manifest realtime-spike-cronjob.yaml
+realtime_spike_image="$(k -n "$namespace" get cronjob backoffice-realtime-spike -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+if [ "$realtime_spike_image" != "$image" ]; then
+  echo "오류: realtime-spike CronJob 이미지 digest가 일치하지 않는다" >&2
+  exit 1
+fi
 
 # CI는 data namespace workload를 만들거나 바꾸지 않는다. CronJob patch/update는 field
 # 제한이 없어 Pod template에 임의 Secret volume을 붙일 수 있고, 그 자체가 root secret

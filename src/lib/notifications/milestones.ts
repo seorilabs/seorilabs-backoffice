@@ -36,6 +36,7 @@ export async function recordOperationalMilestone(input: {
 }): Promise<boolean> {
   const label = milestoneLabelForEvent(input.event.type);
   if (!label) return false;
+  const sendMilestone = input.event.type === "identity.created";
   let milestoneId: string;
   try {
     const milestone = await prisma.operationalMilestone.create({
@@ -55,8 +56,12 @@ export async function recordOperationalMilestone(input: {
     });
     const action = milestoneRetryAction(existing, input.event.eventId);
     if (!existing || action === "not-milestone") return false;
-    if (action === "skip") return true;
+    if (action === "skip" || !sendMilestone) return true;
     milestoneId = existing.id;
+  }
+  if (!sendMilestone) {
+    await prisma.operationalMilestone.update({ where: { id: milestoneId }, data: { notifiedAt: new Date() } });
+    return true;
   }
   await enqueueNotification({
     dedupeKey: `milestone:${input.appId}:${input.event.type}`,

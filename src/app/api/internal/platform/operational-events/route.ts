@@ -1,13 +1,15 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { discordDestinationOrFallback, discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
+import { renderPayload } from "@/lib/notifications/format";
 import { iapDestinations, recordIapGrant } from "@/lib/notifications/iap-summary";
 import { prisma } from "@/lib/prisma";
 import {
   isOpsAlert,
   operationalEventFacts,
+  operationalInterestCard,
   operationalEventLine,
   parseOperationalEvent,
   verifyOperationalEventSignature,
@@ -92,6 +94,16 @@ export async function POST(request: NextRequest) {
       appId: app?.id,
       evidence: { outcome: input.outcome, eventType: input.type },
     });
+    const destination = input.type === "ad.reward.delivery_failed"
+      ? discordDestinationOrFallback("ad-rewards", "action-events")
+      : iapDestinations();
+    await enqueueNotification({
+      dedupeKey: `operational:${input.eventId}`,
+      kind: "OPERATIONAL_EVENT",
+      occurredAt,
+      payload: renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId)),
+      destinations: destination,
+    });
   } else {
     const recoveryKind = input.type === "iap.granted"
       ? "iap.completion_failed"
@@ -110,8 +122,7 @@ export async function POST(request: NextRequest) {
     const milestone = app
       ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
       : false;
-    // 등록된 앱의 신규 계정·결제는 건별 카드 대신 앱·일 요약 카드 하나를 갱신한다.
-    // 마일스톤과 배타가 아니다 — 앱 최초 1건은 마일스톤 카드와 요약 카드가 둘 다 난다.
+    // 등록된 앱의 신규 계정·결제는 앱·일 요약을 갱신한다. 결제는 건별 카드도 남긴다.
     const summarized = app
       ? input.type === "identity.created"
         ? await recordIdentitySignup({ app, event: input })
@@ -119,19 +130,20 @@ export async function POST(request: NextRequest) {
           ? await recordIapGrant({ app, event: input })
           : false
       : false;
-    if (!milestone && !summarized) {
+    if (input.type === "ad.reward.delivered" || (!milestone && !summarized)) {
+      const interest = input.type === "ad.reward.delivered" || input.type === "iap.granted";
       await enqueueNotification({
         dedupeKey: `operational:${input.eventId}`,
         kind: "OPERATIONAL_EVENT",
         occurredAt,
-        payload: {
-          text: operationalEventLine(input, app?.displayName ?? input.appId),
-          // 줄줄이 쌓이는 기록이라 건마다 상자를 그리지 않는다.
-          plain: true,
-        },
+        payload: interest
+          ? renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId))
+          : { text: operationalEventLine(input, app?.displayName ?? input.appId), plain: true },
         // 미등록 앱의 결제도 전용 채널로 보낸다. 피드가 갈리면 결제를 두 곳에서 읽어야 한다.
         destinations: input.type === "iap.granted"
           ? iapDestinations()
+          : input.type === "ad.reward.delivered"
+            ? discordDestinationOrFallback("ad-rewards", "action-events")
           : discordDestinations(["action-events"]),
       });
     }

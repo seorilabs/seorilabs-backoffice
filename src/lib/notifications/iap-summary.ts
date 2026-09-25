@@ -189,11 +189,7 @@ export function iapRowDedupeKey(eventId: string): string {
   return `iap-row:${eventId}`;
 }
 
-export function iapThreadName(displayName: string, dateKey: string): string {
-  return `${displayName} 결제 ${dateKey}`;
-}
-
-/** 결제 확정 한 건을 앱·일 요약 카드와 그 쓰레드 행으로 기록한다. */
+/** 결제 확정 한 건을 앱·일 요약 카드와 독립 건별 카드로 기록한다. */
 export async function recordIapGrant(input: {
   app: { slug: string; platformAppId: string | null; displayName: string };
   event: OperationalEventInput;
@@ -237,8 +233,7 @@ export async function recordIapGrant(input: {
   });
   await requeueNotification(eventId);
 
-  // 카드가 가린 건별 사실은 카드 쓰레드에 남긴다. 카드 delivery 가 먼저 만들어졌으므로
-  // createdAt 순으로 도는 outbox 가 카드를 먼저 보내고, 행은 그때 확정된 메시지에 붙는다.
+  // 일별 요약과 각 결제를 같은 채널의 독립 카드로 보여 준다.
   const eventAttributes = input.event.attributes as Prisma.JsonValue;
   const ranges = dailyRowRanges(dayStart, occurredAt);
   const [ordinal, previous] = await Promise.all([
@@ -253,7 +248,7 @@ export async function recordIapGrant(input: {
     dedupeKey: iapRowDedupeKey(input.event.eventId),
     kind: "OPERATIONAL_EVENT",
     occurredAt,
-    payload: {
+    payload: renderPayload({
       text: iapRowText({
         ordinal,
         occurredAt,
@@ -262,14 +257,13 @@ export async function recordIapGrant(input: {
         entitlementId: attributeText(eventAttributes, "entitlementId"),
         test: testPurchaseState(eventAttributes),
       }),
-      // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL
-      // ENUM 이라 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
-      thread: {
-        parentDedupeKey: cardDedupeKey,
-        threadName: iapThreadName(input.app.displayName, facts.dateKey),
-        plain: true,
+      embed: {
+        title: `💳 ${input.app.displayName} · IAP 지급 확정`,
+        color: testPurchaseState(eventAttributes) === "real"
+          ? EMBED_COLOR.SUCCESS : EMBED_COLOR.WARNING,
+        timestamp: occurredAt.toISOString(),
       },
-    },
+    }),
     destinations: [destination],
   });
   return true;

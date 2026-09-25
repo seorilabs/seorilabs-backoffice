@@ -7,7 +7,6 @@ import {
   identityRowText,
   identitySummaryDedupeKey,
   identitySummaryRender,
-  identityThreadName,
   summarizeIdentityEvents,
 } from "@/lib/notifications/identity-summary";
 import { dailyRowRanges, formatElapsed } from "@/lib/notifications/daily-rows";
@@ -170,7 +169,7 @@ const routeSource = readFileSync(
 
 test("등록된 앱의 신규 계정은 건별 카드를 만들지 않는다", () => {
   assert.match(routeSource, /input\.type === "identity\.created"\s*\?\s*await recordIdentitySignup/);
-  assert.match(routeSource, /if \(!milestone && !summarized\)/);
+  assert.match(routeSource, /!milestone && !summarized/);
 });
 
 test("registry app_id가 slug와 다른 앱도 등록된 앱으로 찾는다", () => {
@@ -239,24 +238,19 @@ test("쓰레드 댓글은 없는 속성을 지어내지 않는다", () => {
   assert.equal(text.split(" · ").length, 3);
 });
 
-test("쓰레드 댓글은 운영 이벤트당 하나만 남기고 쓰레드는 앱·KST 날짜로 이름 붙인다", () => {
+test("가입 행은 운영 이벤트당 하나만 남긴다", () => {
   assert.equal(
     identityRowDedupeKey("identity_58542708455af9fd9f3d88aec5025cd8"),
     "identity-row:identity_58542708455af9fd9f3d88aec5025cd8",
   );
-  assert.equal(
-    identityThreadName("도마뱀 테라리움", "2026-08-21"),
-    "도마뱀 테라리움 신규 계정 2026-08-21",
-  );
 });
 
-test("건별 행은 카드 뒤에 enqueue돼 카드가 먼저 발송되게 한다", () => {
-  // outbox는 createdAt 오름차순으로 돈다. 카드 delivery가 먼저 만들어져야
-  // 댓글 차례에 쓰레드를 걸 카드 메시지가 확정돼 있다.
+test("가입 요약 뒤에 건별 일반 메시지를 enqueue한다", () => {
   const cardIndex = summarySource.indexOf('kind: "IDENTITY_SUMMARY"');
   const rowIndex = summarySource.indexOf('kind: "IDENTITY_ROW"');
   assert.ok(cardIndex >= 0 && rowIndex > cardIndex);
   assert.match(summarySource, /dedupeKey: identityRowDedupeKey\(input\.event\.eventId\)/);
+  assert.match(summarySource, /plain: true/);
 });
 
 // #action-events 는 알림을 받는 곳이 아니라 생각날 때 들어가 훑는 기록이다.
@@ -308,17 +302,8 @@ test("행 범위는 당일 끝이 아니라 이 이벤트 시각을 상한으로
   assert.doesNotMatch(summarySource, /ranges\.\w+[\s\S]{0,80}dayEnd/);
 });
 
-test("행 배달은 카드 메시지에 쓰레드를 걸고 멘션 없이 남긴다", () => {
-  assert.match(deploySource, /kind === "IDENTITY_ROW"\) return deliverIdentityRow/);
-  assert.match(deploySource, /startDiscordThread\(\s*discordChannelId\(destinationKey\),\s*card\.providerMessageId/);
-  assert.match(deploySource, /createDiscordChannelMessage\(card\.providerMessageId, row\.text, \{ plain: true \}\)/);
-});
-
-test("카드가 아직 안 나갔으면 댓글을 붙이지 않고 재시도로 넘긴다", () => {
-  assert.match(deploySource, /if \(!card\?\.providerMessageId\) return \{ ok: false/);
-});
-
-test("댓글은 message ID를 남기지 않아 보존기한 정리가 쓰레드 밖에서 지우려 하지 않는다", () => {
-  // 카드가 지워질 때 쓰레드와 댓글이 함께 사라진다. 채널 기준 삭제 대상이 되면 안 된다.
-  assert.match(deploySource, /return sent\.ok \? \{ ok: true \} : sent;/);
+test("가입 행은 독립 일반 메시지이며 쓰레드 부모를 찾지 않는다", () => {
+  assert.doesNotMatch(deploySource, /deliverIdentityRow/);
+  assert.match(summarySource, /kind: "IDENTITY_ROW"/);
+  assert.match(summarySource, /plain: true/);
 });

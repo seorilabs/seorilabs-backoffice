@@ -827,3 +827,16 @@ ASC 등록 상태를 확인한 뒤 도구를 다시 실행한다.
 웹훅 실패는 `store_submission_webhook_event`의 상태·오류를, Play 실패는
 `store_review_submission_sync`의 마지막 실패를 확인한다. 빌드 제출과
 실제 디스코드 카드 수신은 별도 운영 검증이다.
+
+### 제품 알림 채널과 활성 사용자 급증
+
+| 채널 | 알림 |
+| --- | --- |
+| `#user-reviews` | 스토어 사용자 리뷰 건별 카드 |
+| `#iap` | 지급 확정 건별 카드, 앱·일 결제 요약 카드, 지급 실패 카드 |
+| `#ad-rewards` | 광고 보상 지급 성공·실패 건별 카드. `DISCORD_CHANNEL_AD_REWARDS_ID`가 없으면 `#action-events`로 보낸다. |
+| `#app-ops` | GA4 최근 5분 활성 사용자 급증 카드. 이 수치는 동시 접속자 수가 아니다. |
+| `#release-ops` | 심사·출시 단계 카드 |
+| `#action-events` | 신규 가입 앱·일 요약 카드와 건별 한 줄, 첫 새 버전 유입 등 |
+
+`backoffice-realtime-spike` CronJob은 5분마다 앱별 GA4 최근 5분 활성 사용자를 수집한다. 직전 24시간의 성공 표본이 12개 이상일 때 중앙값을 평소 수준으로 삼는다. 10명 이상이면서 평소의 3배 이상인 관측이 두 번 연속되면 `#app-ops`에 한 번 알린다. 이후 세 번 연속 기준 이하이면 다음 급증을 알릴 수 있다. 조회 실패와 대상 매핑 실패는 0명으로 기록하지 않으며, CronJob 실패 기록과 `realtime_activity_sample` 표본 수를 함께 확인한다. 표본은 25시간 뒤 삭제한다. 새 배포 후 첫 12개 성공 표본이 쌓일 때까지 급증 알림은 발생하지 않는다. 알림은 notification worker의 기존 outbox가 전송하며 CronJob에는 Discord Bot token을 주입하지 않는다.

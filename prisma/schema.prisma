@@ -79,6 +79,8 @@ model App {
   storeReviewObservations  StoreReviewObservation[]
   storeReviewSubmissionSyncs        StoreReviewSubmissionSync[]
   storeReviewSubmissionObservations StoreReviewSubmissionObservation[]
+  realtimeActivitySamples          RealtimeActivitySample[]
+  realtimeActivitySpikeState       RealtimeActivitySpikeState?
   aiDrafts                 AiDraft[]
   metrics                  AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
@@ -582,6 +584,34 @@ model StoreSubmissionWebhookEvent {
 
   @@index([status, eligibleAt], map: "ix_sswe_status_eligible")
   @@map("store_submission_webhook_event")
+}
+
+// GA4 최근 5분 활성 사용자 성공 표본. 오류·미조회는 0으로 저장하지 않는다.
+model RealtimeActivitySample {
+  appId       String
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  bucketAt    DateTime @db.DateTime(3)
+  activeUsers Int
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+
+  @@id([appId, bucketAt])
+  @@index([bucketAt])
+  @@map("realtime_activity_sample")
+}
+
+// 앱별 급증 에피소드의 연속 관측·재무장 상태.
+model RealtimeActivitySpikeState {
+  appId            String   @id
+  app              App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  active           Boolean  @default(false)
+  highStreak       Int      @default(0)
+  lowStreak        Int      @default(0)
+  highStartedAt    DateTime? @db.DateTime(3)
+  lastAlertAt      DateTime? @db.DateTime(3)
+  lastSampleAt     DateTime? @db.DateTime(3)
+  updatedAt        DateTime @updatedAt
+
+  @@map("realtime_activity_spike_state")
 }
 
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가

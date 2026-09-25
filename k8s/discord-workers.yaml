@@ -76,6 +76,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
             - name: DISCORD_CHANNEL_IAP_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_IAP_ID, optional: true } }
+            - name: DISCORD_CHANNEL_AD_REWARDS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_AD_REWARDS_ID, optional: true } }
             - name: DISCORD_TEAMMATE_SEORI_BOT_TOKEN
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SEORI_BOT_TOKEN, optional: true } }
             # 배포 카드의 App Store 액션 버튼은 심사 단계에 따라 달라진다. 카드를 그리는

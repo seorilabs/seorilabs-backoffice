@@ -215,7 +215,11 @@ async function processReviews(input: {
         store: review.store,
         externalReviewId: review.externalReviewId,
         // 별점이 상자 색으로 먼저 읽히게 한다. 낮은 별점은 대응이 필요한 신호다.
-        embed: { color: reviewRatingColor(review.rating) },
+        embed: {
+          title: `${input.app.displayName} · ${review.store === "GOOGLE_PLAY" ? "Google Play" : "App Store"} 리뷰 ${review.rating}/5`,
+          color: reviewRatingColor(review.rating),
+          timestamp: (review.sourceModifiedAt ?? review.sourceCreatedAt ?? observedAt).toISOString(),
+        },
       },
       occurredAt: change === "updated"
         ? review.sourceModifiedAt ?? observedAt
