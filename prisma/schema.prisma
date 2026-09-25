@@ -568,6 +568,22 @@ model StoreReviewSubmissionSync {
   @@map("store_review_submission_sync")
 }
 
+// 서명 검증을 마친 Apple 웹훅의 durable inbox. 응답 전에 저장하고 worker가 재시도한다.
+model StoreSubmissionWebhookEvent {
+  id          String    @id
+  payload     Json
+  status      String    @default("PENDING") @db.VarChar(16)
+  attempts    Int       @default(0)
+  eligibleAt  DateTime  @default(now()) @db.DateTime(3)
+  processedAt DateTime? @db.DateTime(3)
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now()) @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, eligibleAt], map: "ix_sswe_status_eligible")
+  @@map("store_submission_webhook_event")
+}
+
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가
 // 게임별 최소권한 identity로 처리한다. params/result는 단기 보관 후 worker가 제거한다.
 model AppOperationRun {

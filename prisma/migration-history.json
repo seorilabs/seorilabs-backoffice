@@ -82,6 +82,10 @@
     "20260925000000_store_review_submission_observations": {
       "sha256": "bdcb9f516fcbbc8d483a07d00523c586da74ae26327ba0c24fd30f75c758117f",
       "reason": "스토어 중립 심사/출시 단계 관측 모델 추가. Apple App Store Connect webhook과 Google Play tracks 폴링이 같은 store_review_submission_observation/sync 테이블을 store 컬럼으로 분기해 사용한다. baseline expand-only 마이그레이션이며 새 두 표의 externalEventId 기반 idempotency와 7일 rawPayload 보관 expiresAt 인덱스만 추가한다. 코드 변경(collector·builder·webhook·cron 라우트)은 후속 PR #2~#5에서 다룬다."
+    },
+    "20260925010000_store_submission_webhook_inbox": {
+      "sha256": "d60e88a93517a051d66c4d62034e1bf928d5861effa937eb984e457c3a1c0f14",
+      "reason": "Apple 웹훅 서명 검증 뒤 응답 전에 durable inbox에 저장하고 notification worker가 재시도한다. 신규 빈 표만 추가한다."
     }
   },
   "legacy": {

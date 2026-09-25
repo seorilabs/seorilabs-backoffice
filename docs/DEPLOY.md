@@ -802,3 +802,24 @@ App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확�
 6. 위 증거와 배포 승인이 갖춰진 뒤 CronJob을 전환한다. logical binding·공개 DB 계정·실행 image digest·Job 성공·dump checksum·restore 결과를 함께 감사 기록으로 남긴다. 검증 전에는 이 이슈를 종결하지 않는다.
 
 일반 앱 배포에서는 백업 매니페스트를 적용하지 않아 기존 성공 중인 CronJob을 보존한다. 현재 원본 미등록이나 grant·restore 실패가 있으면 백업 전환을 진행하지 않는다. 실패한 dump는 완성본 이름으로 노출하지 않으며 마지막 검증 백업을 보존한다. 문제를 앱 계정 fallback이나 앱 비밀번호 회전으로 우회하지 않는다.
+
+## 16. 스토어 심사·출시 단계 알림
+
+App Store Connect 웹훅은 `APP_STORE_WEBHOOK_SECRET`으로 본문 HMAC 서명을
+검증한 뒤 DB inbox에 저장한다. 알림 worker가 앱 버전 정보를 조회하고
+`#release-ops` outbox에 등록한다. 이 서명 secret은 App Store Connect API
+키와 별개이며 카탈로그 `shared/apple/app-store-connect-webhook-signing`을
+원본으로 사용한다.
+
+`backoffice-store-submissions` CronJob은 15분마다 등록된 Play 앱의 트랙을
+읽는다. `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`은 이 CronJob에만 주입하고
+공개 웹 Pod에는 넣지 않는다. 첫 관측은 기준선이라 카드를 보내지 않는다.
+
+배포 후 웹·worker의 source SHA, CronJob image digest와 Secret 키 이름만
+확인한다. 웹 Pod에서
+`node /app/scripts-dist/register-store-submission-webhooks.cjs`로 대상 목록을
+읽고, 확인한 뒤 `--apply`로 누락된 웹훅을 등록한다. 등록 결과는 Apple
+API readback과 `store_review_submission_sync.webhookId`로 확인한다.
+웹훅 실패는 `store_submission_webhook_event`의 상태·오류를, Play 실패는
+`store_review_submission_sync`의 마지막 실패를 확인한다. 빌드 제출과
+실제 디스코드 카드 수신은 별도 운영 검증이다.

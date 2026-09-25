@@ -8,6 +8,7 @@ import {
 import { ingestExternalNotification } from "@/lib/notifications/external-ingest";
 import { drainAllNotifications } from "@/lib/notifications/deploy";
 import { maintainDiscordRetention } from "@/lib/notifications/retention";
+import { drainAppleSubmissionInbox, purgeSubmissionPayloads } from "@/lib/app-store/submission-inbox";
 
 const encoder = new TextEncoder();
 const pollIntervalMs = Math.max(250, Number(process.env.NOTIFICATION_POLL_INTERVAL_MS ?? "1000"));
@@ -56,11 +57,13 @@ async function deliver(): Promise<void> {
   while (!stopping) {
     if (Date.now() - lastRetention >= 24 * 60 * 60_000) {
       const retained = await maintainDiscordRetention();
+      await purgeSubmissionPayloads();
       if (retained.deletedNotifications || retained.deletedCommands || retained.deletedTurns || retained.deletedReviewEvents) {
         console.log(`[notification-worker] 보존기한 정리 알림 ${retained.deletedNotifications} · 명령 ${retained.deletedCommands} · 대화 ${retained.deletedTurns} · 리뷰 payload ${retained.deletedReviewEvents}`);
       }
       lastRetention = Date.now();
     }
+    await drainAppleSubmissionInbox();
     const result = await drainAllNotifications();
     if (result.deadLetter > 0) console.error(`[notification-worker] dead letter ${result.deadLetter}건`);
     if (result.processed === 0) await sleep(pollIntervalMs);

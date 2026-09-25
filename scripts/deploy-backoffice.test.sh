@@ -250,6 +250,7 @@ run_deploy Complete >/dev/null
 [ "$(grep -c '^CREATE_JOB ' "$log")" -eq 4 ]
 [ "$(grep -c '^READ_TRIGGER_STATE$' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN backoffice,' "$log")" -eq 2 ]
+[ "$(grep -c '^APPLY_STDIN backoffice-store-submissions,' "$log")" -eq 2 ]
 if grep -q '^APPLY_STDIN vault-indexer' "$log"; then
   echo "FAIL CI가 data namespace workload를 변경했다" >&2
   exit 1
