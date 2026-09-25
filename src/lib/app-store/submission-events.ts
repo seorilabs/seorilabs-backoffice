@@ -6,6 +6,7 @@ export interface AppleSubmissionEvent {
   externalVersionId: string;
   externalVersionLabel: string | null;
   state: string;
+  previousState: string | null;
   bundleId: string | null;
   actor: string | null;
   sourceEventAt: Date;
@@ -20,7 +21,7 @@ export function extractAppleSubmissionEvent(payload: unknown): AppleSubmissionEv
   const event = data as {
     id?: unknown;
     type?: unknown;
-    attributes?: { newValue?: unknown; timestamp?: unknown };
+    attributes?: { newValue?: unknown; oldValue?: unknown; timestamp?: unknown };
     relationships?: { instance?: { data?: { id?: unknown; type?: unknown } } };
   };
   if (event.type !== "appStoreVersionAppVersionStateUpdated") return null;
@@ -38,6 +39,8 @@ export function extractAppleSubmissionEvent(payload: unknown): AppleSubmissionEv
     externalVersionId: version.id,
     externalVersionLabel: null,
     state: event.attributes.newValue,
+    previousState: typeof event.attributes.oldValue === "string"
+      ? event.attributes.oldValue : null,
     bundleId: null,
     actor: null,
     sourceEventAt,

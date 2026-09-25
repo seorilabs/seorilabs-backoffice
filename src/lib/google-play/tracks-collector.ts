@@ -16,6 +16,7 @@ export async function applyGooglePlayTrackRelease(input: {
   packageName: string;
   release: GooglePlayTracksRelease;
   sourceEventAt: Date;
+  baselineComplete: boolean;
 }): Promise<ApplyGooglePlayTrackResult> {
   const state = ["inProgress", "halted"].includes(input.release.status) &&
     typeof input.release.userFraction === "number"
@@ -36,6 +37,7 @@ export async function applyGooglePlayTrackRelease(input: {
     state,
     rawPayload: input.release as object,
     sourceEventAt: input.sourceEventAt,
+    notifyOnFirstObservation: input.baselineComplete,
     skipNoChange: true,
     card: (previousState) => ({
       kind: "store_submission_state_changed",

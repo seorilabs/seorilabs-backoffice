@@ -20,6 +20,10 @@ async function main(): Promise<void> {
         !app.marketTargets.includes("play")) continue;
     targets++;
     try {
+      const sync = await prisma.storeReviewSubmissionSync.findUnique({
+        where: { appId_store: { appId: app.id, store: "GOOGLE_PLAY" } },
+        select: { lastSuccessAt: true },
+      });
       const releases = await listGooglePlayTrackReleases({
         packageName: app.playPackage, claims,
       });
@@ -31,6 +35,7 @@ async function main(): Promise<void> {
           packageName: app.playPackage,
           release,
           sourceEventAt: now,
+          baselineComplete: Boolean(sync?.lastSuccessAt),
         });
       }
       await prisma.storeReviewSubmissionSync.upsert({

@@ -813,7 +813,8 @@ App Store Connect 웹훅은 `APP_STORE_WEBHOOK_SECRET`으로 본문 HMAC 서명�
 
 `backoffice-store-submissions` CronJob은 15분마다 등록된 Play 앱의 트랙을
 읽는다. `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`은 이 CronJob에만 주입하고
-공개 웹 Pod에는 넣지 않는다. 첫 관측은 기준선이라 카드를 보내지 않는다.
+공개 웹 Pod에는 넣지 않는다. 앱의 첫 성공 폴링만 기준선으로 기록하고,
+그 이후 새 릴리스나 단계 변경은 카드를 보낸다.
 
 배포 후 웹·worker의 source SHA, CronJob image digest와 Secret 키 이름만
 확인한다. 웹 Pod에서

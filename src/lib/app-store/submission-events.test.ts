@@ -31,6 +31,7 @@ test("Apple 공식 이벤트를 검증하고 버전 ID와 새 단계를 읽는�
   assert.equal(event?.externalEventId, "apple-event-1");
   assert.equal(event?.externalVersionId, "version-1");
   assert.equal(event?.state, "READY_FOR_REVIEW");
+  assert.equal(event?.previousState, "PREPARE_FOR_SUBMISSION");
 });
 
 test("알림 payload는 기존 Discord 렌더러 계약을 충족한다", () => {
