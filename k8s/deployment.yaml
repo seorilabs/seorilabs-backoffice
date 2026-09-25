@@ -311,6 +311,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
             - name: DISCORD_CHANNEL_IAP_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_IAP_ID, optional: true } }
+            - name: DISCORD_CHANNEL_AD_REWARDS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_AD_REWARDS_ID, optional: true } }
             - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
             - name: DISCORD_ROLE_OPERATOR_ID

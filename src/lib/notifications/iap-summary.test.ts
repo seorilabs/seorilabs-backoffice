@@ -7,7 +7,6 @@ import {
   iapRowText,
   iapSummaryDedupeKey,
   iapSummaryRender,
-  iapThreadName,
   marketLabel,
   summarizeIapGrants,
   testPurchaseState,
@@ -107,15 +106,14 @@ test("카드 dedupe 키에는 목적지가 들어간다", () => {
     iapSummaryDedupeKey("action-events", "lizard-tycoon", "2026-09-16"),
   );
   assert.equal(iapRowDedupeKey("iap_abc"), "iap-row:iap_abc");
-  assert.equal(iapThreadName("도마뱀 테라리움", "2026-09-16"), "도마뱀 테라리움 결제 2026-09-16");
 });
 
-// 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
+// 건별 카드는 기존 kind 로 전송한다. NotificationKind 는 MySQL ENUM 이라
 // 값 추가에 ALTER MODIFY 가 필요하고 expand-only 게이트가 막는다.
 test("소스 계약: IAP 는 새 kind 없이 기존 전달 경로를 탄다", () => {
   const src = readFileSync("src/lib/notifications/iap-summary.ts", "utf8");
   assert.match(src, /kind: "OPERATIONAL_EVENT"/);
   assert.match(src, /editable: true/);
-  assert.match(src, /thread: \{/);
+  assert.match(src, /title: `💳 .*IAP 지급 확정`/);
   assert.equal(/kind: "IAP/.test(src), false);
 });

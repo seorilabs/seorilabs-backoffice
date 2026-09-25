@@ -150,10 +150,6 @@ export function identityRowDedupeKey(eventId: string): string {
   return `identity-row:${eventId}`;
 }
 
-export function identityThreadName(displayName: string, dateKey: string): string {
-  return `${displayName} 신규 계정 ${dateKey}`;
-}
-
 export interface IdentityRowFacts {
   ordinal: number;
   occurredAt: Date;
@@ -238,9 +234,7 @@ export async function recordIdentitySignup(input: {
   });
   await requeueNotification(eventId);
 
-  // 카드가 가린 건별 사실은 카드 쓰레드에 댓글로 남긴다. 카드 delivery가 먼저
-  // 만들어졌으므로 createdAt 순으로 도는 outbox가 카드를 먼저 보내고, 댓글은 그때
-  // 확정된 카드 메시지에 쓰레드를 건다.
+  // 건별 사실은 #action-events 본문에 한 줄로 펼친다.
   const ranges = dailyRowRanges(dayStart, occurredAt);
   const [ordinal, previous] = await Promise.all([
     prisma.operationalEvent.count({ where: { ...where, occurredAt: ranges.upTo } }),
@@ -266,8 +260,7 @@ export async function recordIdentitySignup(input: {
         anonymous: attributeFlag(input.event.attributes, "anonymous"),
         referrer: attributeText(input.event.attributes, "referrer"),
       }),
-      cardDedupeKey: identitySummaryDedupeKey(input.app.slug, facts.dateKey),
-      threadName: identityThreadName(input.app.displayName, facts.dateKey),
+      plain: true,
     },
     destinations: discordDestinations(["action-events"]),
   });

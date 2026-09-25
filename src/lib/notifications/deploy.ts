@@ -236,34 +236,6 @@ function componentsFromPayload(payload: Prisma.JsonValue): DiscordActionRow[] | 
   return Array.isArray(value) ? (value as unknown as DiscordActionRow[]).slice(0, 5) : undefined;
 }
 
-interface IdentityRowPayload {
-  text: string;
-  cardDedupeKey: string;
-  threadName: string;
-}
-
-function identityRowPayload(payload: Prisma.JsonValue): IdentityRowPayload | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const object = payload as Prisma.JsonObject;
-  const text = object.text;
-  const cardDedupeKey = object.cardDedupeKey;
-  const threadName = object.threadName;
-  if (typeof text !== "string" || typeof cardDedupeKey !== "string" || typeof threadName !== "string") {
-    return null;
-  }
-  return { text, cardDedupeKey, threadName };
-}
-
-/**
- * 신규 계정 한 건을 요약 카드의 쓰레드에 댓글로 남긴다.
- *
- * 카드 메시지에서 시작한 public thread는 ID가 카드 메시지 ID와 같아서 따로 저장하지
- * 않는다. 멘션은 하지 않는다 — #action-events 는 알림을 받는 곳이 아니라 생각날 때
- * 들어가 훑는 기록이고, 총계·간격·분해는 요약 카드가 이미 담고 있다.
- *
- * 댓글은 편집하지 않으므로 message ID를 남기지 않는다. 보존기한 정리는 채널 기준으로
- * 지우는데 댓글은 쓰레드 안에 있어 대상이 아니고, 카드가 지워질 때 쓰레드와 함께 사라진다.
- */
 /**
  * 이슈 알림 메시지의 쓰레드에 맥락(본문·댓글·PR)을 남긴다.
  *
@@ -299,35 +271,6 @@ async function deliverIssueThread(
     plain: thread.plain,
     attachment: thread.attachment,
   });
-  return sent.ok ? { ok: true } : sent;
-}
-
-async function deliverIdentityRow(
-  payload: Prisma.JsonValue,
-  destinationKey: string,
-): Promise<DeliveryOverrideResult> {
-  const row = identityRowPayload(payload);
-  if (!row) return { ok: false, error: "invalid identity row payload" };
-  const card = await prisma.notificationDelivery.findFirst({
-    where: {
-      provider: "DISCORD",
-      destinationKey,
-      status: "SENT",
-      deletedAt: null,
-      providerMessageId: { not: null },
-      event: { dedupeKey: row.cardDedupeKey },
-    },
-    select: { providerMessageId: true },
-  });
-  // 카드가 아직 안 나갔으면 쓰레드를 걸 곳이 없다. 실패로 돌려 재시도에 맡긴다.
-  if (!card?.providerMessageId) return { ok: false, error: "요약 카드 발송 대기 중" };
-  const thread = await startDiscordThread(
-    discordChannelId(destinationKey),
-    card.providerMessageId,
-    row.threadName,
-  );
-  if (!thread.ok) return thread;
-  const sent = await createDiscordChannelMessage(card.providerMessageId, row.text, { plain: true });
   return sent.ok ? { ok: true } : sent;
 }
 
@@ -385,7 +328,6 @@ export async function drainAllNotifications(limit = 30) {
       }
       return result;
     }
-    if (kind === "IDENTITY_ROW") return deliverIdentityRow(payload, destinationKey);
     // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
     // 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
     if (issueThreadPayload(payload)) return deliverIssueThread(payload, destinationKey);

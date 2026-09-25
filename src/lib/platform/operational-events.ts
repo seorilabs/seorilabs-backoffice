@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { kstLogStamp } from "@/lib/format/kst";
+import { EMBED_COLOR } from "@/lib/notifications/style";
+import type { DiscordRender } from "@/lib/notifications/format";
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
@@ -194,4 +196,20 @@ export function operationalEventLine(
 
 export function isOpsAlert(type: OperationalEventType): boolean {
   return type.endsWith("_failed");
+}
+
+export function operationalInterestCard(
+  event: OperationalEventInput,
+  displayName: string,
+): DiscordRender {
+  const facts = operationalEventFacts(event);
+  const failure = isOpsAlert(event.type);
+  return {
+    text: facts.facts.join("\n"),
+    embed: {
+      title: `${facts.icon} ${displayName} · ${facts.headline}`,
+      color: failure ? EMBED_COLOR.FAILURE : EMBED_COLOR.SUCCESS,
+      timestamp: event.occurredAt,
+    },
+  };
 }
