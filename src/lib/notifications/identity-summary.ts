@@ -151,6 +151,7 @@ export function identityRowDedupeKey(eventId: string): string {
 }
 
 export interface IdentityRowFacts {
+  displayName: string;
   ordinal: number;
   occurredAt: Date;
   previousAt: Date | null;
@@ -162,11 +163,11 @@ export interface IdentityRowFacts {
   referrer: string | null;
 }
 
-// 요약 카드가 가리는 건별 사실만 담는다. 가입이 몰리는 시간대와 간격이 읽히도록
-// 시각과 직전 간격을 앞에 두고, 인증·유입은 있을 때만 붙인다.
+// 채널 본문에서는 요약 카드가 떨어져 보여도 앱을 구분할 수 있게 이름을 앞에 둔다.
+// 가입 시각·직전 간격을 이어 쓰고 인증·유입은 있을 때만 붙인다.
 export function identityRowText(facts: IdentityRowFacts): string {
   const time = kstClock(facts.occurredAt);
-  const parts = [`\`#${facts.ordinal}\``, time];
+  const parts = [`**${facts.displayName}** 신규 가입`, `\`#${facts.ordinal}\``, time];
   if (facts.previousAt) {
     parts.push(`직전 +${formatElapsed(facts.occurredAt.getTime() - facts.previousAt.getTime())}`);
   }
@@ -250,6 +251,7 @@ export async function recordIdentitySignup(input: {
     occurredAt,
     payload: {
       text: identityRowText({
+        displayName: input.app.displayName,
         ordinal,
         occurredAt,
         previousAt: previous?.occurredAt ?? null,

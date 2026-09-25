@@ -195,8 +195,9 @@ test("신규 계정 집계는 이벤트 원장 키인 Platform app_id로 센다"
   assert.doesNotMatch(summarySource, /appId: input\.app\.slug/);
 });
 
-test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·로그인·버전·유입이 담긴다", () => {
+test("가입 한 줄에는 앱 이름·KST 시각·순번·직전 간격·인증·버전·유입이 담긴다", () => {
   const text = identityRowText({
+    displayName: "도마뱀 테라리움",
     ordinal: 17,
     occurredAt: new Date("2026-08-21T06:21:35Z"),
     previousAt: new Date("2026-08-21T06:17:23Z"),
@@ -207,6 +208,7 @@ test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·로그�
     anonymous: false,
     referrer: "main_banner",
   });
+  assert.match(text, /^\*\*도마뱀 테라리움\*\* 신규 가입 · `#17` · 15:21:35/);
   assert.match(text, /`#17`/);
   assert.match(text, /15:21:35/);
   assert.match(text, /직전 \+4분/);
@@ -218,8 +220,9 @@ test("쓰레드 댓글에는 KST 시각·순번·직전 간격·인증·로그�
   assert.doesNotMatch(text, /익명/);
 });
 
-test("쓰레드 댓글은 없는 속성을 지어내지 않는다", () => {
+test("가입 한 줄은 없는 속성을 지어내지 않는다", () => {
   const text = identityRowText({
+    displayName: "도마뱀 테라리움",
     ordinal: 1,
     occurredAt: new Date("2026-08-20T15:02:59Z"),
     previousAt: null,
@@ -235,7 +238,7 @@ test("쓰레드 댓글은 없는 속성을 지어내지 않는다", () => {
   assert.match(text, /익명/);
   assert.doesNotMatch(text, /직전/);
   assert.doesNotMatch(text, /유입/);
-  assert.equal(text.split(" · ").length, 3);
+  assert.equal(text.split(" · ").length, 4);
 });
 
 test("가입 행은 운영 이벤트당 하나만 남긴다", () => {
@@ -284,6 +287,7 @@ test("재전송된 옛 이벤트는 그 뒤에 생긴 계정을 순번에 넣지
   assert.equal(ordinal, 2);
   assert.deepEqual(previous, day[0]);
   assert.match(identityRowText({
+    displayName: "도마뱀 테라리움",
     ordinal,
     occurredAt: redelivered,
     previousAt: previous,
