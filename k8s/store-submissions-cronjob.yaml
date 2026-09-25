@@ -1,0 +1,67 @@
+# 스토어 중립 심사/출시 단계 CronJob. 백오피스 안의
+# POST /api/cron/play-tracks-sync 라우트를 15분 단위로 트리거한다.
+# Bearer 토큰은 backoffice-secrets 의 GOOGLE_PLAY_TRACKS_SYNC_TOKEN 키.
+# 결과 카드는 DISCORD_RELEASE_OPS 채널로 발송 (#3 와 동일 채널 재사용).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-store-submissions
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: store-submissions-cron
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 240
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: store-submissions-cron
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: store-submissions-sync
+              image: curlimages/curl:8.10.1
+              imagePullPolicy: IfNotPresent
+              command: ["curl"]
+              args:
+                - -fsS
+                - -X
+                - POST
+                - -H
+                - Authorization: Bearer $(GOOGLE_PLAY_TRACKS_SYNC_TOKEN)
+                - -H
+                - Content-Type: application/json
+                - --data
+                - '{}'
+                - https://backoffice.vzyx.xyz/api/cron/play-tracks-sync
+              env:
+                - name: GOOGLE_PLAY_TRACKS_SYNC_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: GOOGLE_PLAY_TRACKS_SYNC_TOKEN
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { cpu: 100m, memory: 192Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
