@@ -821,6 +821,9 @@ App Store Connect 웹훅은 `APP_STORE_WEBHOOK_SECRET`으로 본문 HMAC 서명�
 `node /app/scripts-dist/register-store-submission-webhooks.cjs`로 대상 목록을
 읽고, 확인한 뒤 `--apply`로 누락된 웹훅을 등록한다. 등록 결과는 Apple
 API readback과 `store_review_submission_sync.webhookId`로 확인한다.
+중앙 앱 목록에 있지만 App Store Connect에서 아직 조회되지 않는 앱은
+`ASC 앱 없음`으로 집계하고 나머지 앱의 등록을 계속한다. 해당 앱은
+ASC 등록 상태를 확인한 뒤 도구를 다시 실행한다.
 웹훅 실패는 `store_submission_webhook_event`의 상태·오류를, Play 실패는
 `store_review_submission_sync`의 마지막 실패를 확인한다. 빌드 제출과
 실제 디스코드 카드 수신은 별도 운영 검증이다.

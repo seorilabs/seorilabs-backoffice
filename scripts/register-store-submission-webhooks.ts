@@ -15,6 +15,7 @@ async function main(): Promise<void> {
   });
   let targets = 0;
   let configured = 0;
+  let missing = 0;
   for (const app of apps) {
     if (!app.iosBundle || !Array.isArray(app.marketTargets) ||
         !app.marketTargets.includes("appstore")) continue;
@@ -22,7 +23,11 @@ async function main(): Promise<void> {
     const found = asArray((await asc(
       `/v1/apps?filter[bundleId]=${encodeURIComponent(app.iosBundle)}&limit=1`
     )).data)[0];
-    if (!found) throw new Error(`ASC 앱 없음: ${app.id}`);
+    if (!found) {
+      missing++;
+      console.log("[appstore-webhook] ASC 앱 없음", app.id, app.iosBundle);
+      continue;
+    }
     const hooks = asArray((await asc(
       `/v1/apps/${encodeURIComponent(found.id)}/webhooks?limit=200`
     )).data);
@@ -70,7 +75,7 @@ async function main(): Promise<void> {
     configured++;
     console.log("[appstore-webhook] 확인", app.id, hook.id);
   }
-  console.log("[appstore-webhook] result", JSON.stringify({ targets, configured, apply }));
+  console.log("[appstore-webhook] result", JSON.stringify({ targets, configured, missing, apply }));
 }
 
 main()
