@@ -77,6 +77,8 @@ model App {
   milestones               OperationalMilestone[]
   storeReviewSyncs         StoreReviewSync[]
   storeReviewObservations  StoreReviewObservation[]
+  storeReviewSubmissionSyncs        StoreReviewSubmissionSync[]
+  storeReviewSubmissionObservations StoreReviewSubmissionObservation[]
   aiDrafts                 AiDraft[]
   metrics                  AppMetricDaily[]
   // 범용(스펙 구동) 컨텐츠 세부 지표 — 모든 게임 공용(lucid-chess/happy-farm/foam/crossword).
@@ -514,6 +516,56 @@ model StoreReviewObservation {
 enum StoreReviewStore {
   GOOGLE_PLAY
   APP_STORE
+}
+
+// 스토어별 심사/출시 단계 관측. Apple webhook과 Google Play tracks 폴링이 같은
+// 테이블을 공유하며 store 컬럼으로 분기한다. 외부 이벤트 ID로 idempotency 보장.
+// rawPayload는 7일 후 배치 작업으로 purge(expiresAt 인덱스 사용).
+model StoreReviewSubmissionObservation {
+  id                   String           @id @default(cuid())
+  appId                String
+  app                  App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store                StoreReviewStore
+  externalEventId      String
+  externalSubmissionId String?
+  externalVersionId    String?
+  state                String
+  stateLabel           String
+  previousState        String?
+  rawPayload           Json
+  contentHash          String
+  notifiedHash         String?
+  trackName            String?
+  sourceEventAt        DateTime         @db.DateTime(3)
+  firstObservedAt      DateTime         @default(now()) @db.DateTime(3)
+  lastObservedAt       DateTime         @default(now()) @db.DateTime(3)
+  expiresAt            DateTime?        @db.DateTime(3)
+  createdAt            DateTime         @default(now()) @db.DateTime(3)
+  updatedAt            DateTime         @updatedAt
+
+  @@unique([store, externalEventId])
+  @@index([appId, store, sourceEventAt], map: "ix_sro_app_store_event")
+  @@index([store, externalVersionId], map: "ix_sro_store_ver")
+  @@index([store, expiresAt])
+  @@map("store_review_submission_observation")
+}
+
+// 스토어별 sync 상태. Apple은 webhookId, Google Play는 마지막 tracks 폴링 시각.
+model StoreReviewSubmissionSync {
+  id                String           @id @default(cuid())
+  appId             String
+  app               App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  store             StoreReviewStore
+  webhookId         String?
+  lastSuccessAt     DateTime?        @db.DateTime(3)
+  lastFailureAt     DateTime?        @db.DateTime(3)
+  lastFailureReason String?          @db.Text
+  createdAt         DateTime         @default(now()) @db.DateTime(3)
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([appId, store])
+  @@index([store, lastSuccessAt])
+  @@map("store_review_submission_sync")
 }
 
 // 앱 운영 요청 큐. 백오피스 API는 검증된 요청만 적재하고, 별도 Kubernetes worker가

@@ -2,19 +2,19 @@
   "version": 1,
   "mysqlVersionPrefix": "9.2.",
   "tables": {
-    "count": 85,
-    "sha256": "1e9b238959866134fb4e0e874aa48816bb1838e77f1aaf8b4e38d336dd48372a"
+    "count": 87,
+    "sha256": "0f48d667c4489e6c7b3bebe608990568e5bb85c57dc560077de5ae202317bacc"
   },
   "columns": {
-    "count": 1208,
-    "sha256": "c19e21d9f6c34d1c3ebdedf0b9a789c4ac78cf7676fd0e83bc4730962fabcd66"
+    "count": 1236,
+    "sha256": "ec12c0340abe9d44eaa8c124906c437bc324daf46a44016c88980722a37100ac"
   },
   "indexes": {
-    "count": 551,
-    "sha256": "46a8fdbd8132eeeb20dbeeea40d05ec963dca4b9806fbe6b1f93e2b5964b176a"
+    "count": 566,
+    "sha256": "1776d2ee455c53a666d60f1380172388f7680e293189ce5e93498e1fb663c04b"
   },
   "foreignKeys": {
-    "count": 111,
-    "sha256": "1634f015521cdde3fe98c83306925afd2232de94fd2b36100aa83e0e1254d7a6"
+    "count": 113,
+    "sha256": "70ccd94c2390f49d978d956f38335526c738312be0738bf89b72cb1b85e859dc"
   }
 }
