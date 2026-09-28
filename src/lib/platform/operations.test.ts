@@ -46,6 +46,20 @@ test("중앙 플랫폼 write operation은 manifest 없이 고정 allowlist에서
   assert.equal("requestId" in prepared.params, false);
 });
 
+test("크리스털 시험 계정 요청은 앱·계정·확인 문구를 worker 재검증까지 고정한다", () => {
+  const input = {
+    operation: "platform.iap.set-economy-tester", requestId,
+    appSlug: "lizard-tycoon", platformUserId, enabled: true,
+    reason: "internal_validation",
+    serverConfirmation: `TEST ECONOMY lizard-tycoon ${platformUserId} ENABLE`,
+  };
+  const prepared = preparePlatformOperation(input);
+  assert.equal(prepareQueuedPlatformOperation({requestId, operation: input.operation, params: prepared.params, reason: input.reason}).params.enabled, true);
+  assert.throws(() => preparePlatformOperation({...input, appSlug: "another-app"}));
+  assert.throws(() => preparePlatformOperation({...input, enabled: false}), /정확히 일치/);
+  assert.throws(() => preparePlatformOperation({...input, reason: "customer_support_compensation"}));
+});
+
 test("조회와 선언되지 않은 operation 및 미지 필드를 거부한다", () => {
   assert.throws(
     () =>

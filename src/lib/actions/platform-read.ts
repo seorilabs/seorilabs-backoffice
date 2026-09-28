@@ -2,6 +2,7 @@
 
 import type {
   PlatformAppIapCatalog,
+  PlatformEconomyTesterEnrollment,
   PlatformRefundReview,
   PlatformUser,
 } from "@/lib/platform/client";
@@ -42,6 +43,20 @@ export type PlatformActionResult<T> =
   | PlatformActionFailure;
 
 export type PlatformIapCatalog = PlatformAppIapCatalog;
+
+export async function loadLizardEconomyTesterAction(
+  platformUserId: string,
+): Promise<PlatformActionResult<PlatformEconomyTesterEnrollment>> {
+  try {
+    const actor = await requirePlatformWriteAccess("lizard-tycoon");
+    if (!isPlatformUserId(platformUserId)) {
+      throw new PlatformReadInputError("연결된 게임 계정 ID를 확인해 주세요.");
+    }
+    return {ok: true, data: await createPlatformReadClient().economyTester(actor.appSlug, platformUserId)};
+  } catch (error) {
+    return failure(error);
+  }
+}
 
 export interface PlatformRefundReviewQueue {
   appId: string;

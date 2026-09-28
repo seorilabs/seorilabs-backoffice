@@ -84,6 +84,16 @@ export interface DecidePlatformRefundReviewInput {
   serverConfirmation: string;
 }
 
+export interface SetPlatformEconomyTesterInput {
+  operation: "platform.iap.set-economy-tester";
+  requestId: string;
+  appSlug: "lizard-tycoon";
+  platformUserId: string;
+  enabled: boolean;
+  reason: "internal_validation";
+  serverConfirmation: string;
+}
+
 export interface GrantPlatformAdsSuppressionInput {
   operation: "platform.ads.grant-suppression";
   requestId: string;
@@ -103,6 +113,7 @@ export type EnqueuePlatformOperationInput =
   | RevokePlatformEntitlementInput
   | ResetPlatformAppStoreSandboxInput
   | DecidePlatformRefundReviewInput
+  | SetPlatformEconomyTesterInput
   | GrantPlatformAdsSuppressionInput
   | RevokePlatformAdsSuppressionInput;
 

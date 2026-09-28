@@ -6,6 +6,7 @@ export interface PlatformConfirmationInput {
   platformUserId: string;
   entitlementId?: string;
   grantRequestId?: string;
+  enabled?: boolean;
 }
 
 export type PlatformUnknownReconciliationResolution =
@@ -47,6 +48,9 @@ export function platformOperationConfirmationText(
   }
   if (input.operation === "platform.iap.revoke-entitlement") {
     return `REVOKE ${input.appSlug} ${input.platformUserId} ${input.entitlementId} ${input.grantRequestId ?? ""}`;
+  }
+  if (input.operation === "platform.iap.set-economy-tester") {
+    return `TEST ECONOMY ${input.appSlug} ${input.platformUserId} ${input.enabled ? "ENABLE" : "DISABLE"}`;
   }
   if (input.operation === "platform.ads.grant-suppression") {
     return `DISABLE ADS ${input.appSlug} ${input.platformUserId}`;
