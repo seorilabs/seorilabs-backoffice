@@ -15,6 +15,7 @@ import {
   getRepoDefaultBranch,
   getWorkflowDispatchContract,
 } from "@/lib/github/read";
+import { loadAppStoreMarketingUrls } from "@/lib/app-store/marketing-config";
 import {
   shouldUseXcodeCloudForTarget,
   validateXcodeCloudDeploy,
@@ -513,10 +514,12 @@ export async function prepareAppStore(opts: {
   const tag = normalizeTag(opts.tag);
   const notes = await loadReleaseNoteTranslations(opts.repoFullName, tag, "APPSTORE");
   const authority = await resolveStableAuthority(opts.repoFullName, tag);
+  const marketingUrls = await loadAppStoreMarketingUrls(opts.repoFullName, authority.sha);
   const result = await prepareAppStoreSubmission({
     bundleId,
     marketingVersion: marketingVersionFromTag(authority.tag),
     notes: notes ?? {},
+    marketingUrls,
   });
 
   await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.appstore.prepare", {
@@ -540,9 +543,11 @@ export async function submitAppStore(opts: {
 }): Promise<SubmitResult> {
   const bundleId = await iosBundleOf(opts.repoFullName);
   const authority = await resolveStableAuthority(opts.repoFullName, opts.tag);
+  const marketingUrls = await loadAppStoreMarketingUrls(opts.repoFullName, authority.sha);
   const result = await submitAppStoreForReview({
     bundleId,
     marketingVersion: marketingVersionFromTag(authority.tag),
+    marketingUrls,
   });
 
   await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.appstore.submit", {
