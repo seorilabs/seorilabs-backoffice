@@ -76,35 +76,56 @@ async function findOrCreateVersion(
 async function applyLocalizations(
   versionId: string,
   notes: ReleaseNoteTranslationsInput,
+  marketingUrls: Record<string, string> = {},
 ): Promise<string[]> {
   const whatsNewByAscLocale = new Map<string, string>();
   for (const { field, ascLocale } of RELEASE_NOTE_LOCALES) {
     const body = notes[field]?.trim();
     if (body) whatsNewByAscLocale.set(ascLocale, body);
   }
-  if (whatsNewByAscLocale.size === 0) return [];
+  if (whatsNewByAscLocale.size === 0 && Object.keys(marketingUrls).length === 0) return [];
 
   const locs = await asc(
     `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations?limit=200`,
   );
+  const available = new Set(asArray(locs.data).map((loc) => String(loc.attributes?.locale ?? "")));
+  for (const locale of Object.keys(marketingUrls)) {
+    if (!available.has(locale)) throw new Error(`App Store ${locale} 언어가 없어 마케팅 URL을 넣지 못했습니다.`);
+  }
   const updated: string[] = [];
   for (const loc of asArray(locs.data)) {
     const locale = String(loc.attributes?.locale ?? "");
     const whatsNew = whatsNewByAscLocale.get(locale);
-    if (!whatsNew) continue;
+    const marketingUrl = marketingUrls[locale];
+    if (!whatsNew && !marketingUrl) continue;
     await asc(`/v1/appStoreVersionLocalizations/${loc.id}`, {
       method: "PATCH",
       body: JSON.stringify({
         data: {
           type: "appStoreVersionLocalizations",
           id: loc.id,
-          attributes: { whatsNew },
+          attributes: { ...(whatsNew ? { whatsNew } : {}), ...(marketingUrl ? { marketingUrl } : {}) },
         },
       }),
     });
+    if (marketingUrl) {
+      const readback = await asc(`/v1/appStoreVersionLocalizations/${loc.id}`);
+      if (asArray(readback.data)[0]?.attributes?.marketingUrl !== marketingUrl) {
+        throw new Error(`App Store ${locale} 마케팅 URL 저장 확인 실패`);
+      }
+    }
     updated.push(locale);
   }
   return updated;
+}
+
+async function assertMarketingUrls(versionId: string, marketingUrls: Record<string, string>): Promise<void> {
+  if (Object.keys(marketingUrls).length === 0) return;
+  const locs = await asc(`/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations?limit=200`);
+  const current = new Map(asArray(locs.data).map((loc) => [String(loc.attributes?.locale ?? ""), loc.attributes?.marketingUrl]));
+  for (const [locale, url] of Object.entries(marketingUrls)) {
+    if (current.get(locale) !== url) throw new Error(`App Store ${locale} 마케팅 URL이 심사 원장과 다릅니다. 심사 준비를 다시 실행하세요.`);
+  }
 }
 
 /** 마케팅 버전의 최신 VALID 빌드를 버전에 연결. 없으면 연결 안 함. */
@@ -151,6 +172,7 @@ export async function prepareAppStoreSubmission(opts: {
   bundleId: string;
   marketingVersion: string;
   notes: ReleaseNoteTranslationsInput;
+  marketingUrls?: Record<string, string>;
 }): Promise<PrepareResult> {
   const appId = await findAppId(opts.bundleId);
   const version = await findOrCreateVersion(appId, opts.marketingVersion);
@@ -158,7 +180,7 @@ export async function prepareAppStoreSubmission(opts: {
 
   // 편집 불가 상태(이미 심사 대기/진행 중)면 노트/빌드 수정은 건너뛴다.
   const localizationsUpdated = editable
-    ? await applyLocalizations(version.id, opts.notes)
+    ? await applyLocalizations(version.id, opts.notes, opts.marketingUrls)
     : [];
   const build = editable
     ? await attachLatestValidBuild(appId, version.id, opts.marketingVersion)
@@ -301,6 +323,7 @@ export interface SubmitResult {
 export async function submitAppStoreForReview(opts: {
   bundleId: string;
   marketingVersion: string;
+  marketingUrls?: Record<string, string>;
 }): Promise<SubmitResult> {
   const appId = await findAppId(opts.bundleId);
   const version = await findOrCreateVersion(appId, opts.marketingVersion);
@@ -309,6 +332,8 @@ export async function submitAppStoreForReview(opts: {
       `현재 상태(${version.appStoreState})에서는 심사 제출할 수 없습니다.`,
     );
   }
+
+  await assertMarketingUrls(version.id, opts.marketingUrls ?? {});
 
   const reviewSubmissionId = await findOrCreateReviewSubmission(appId);
   await addSubmissionItem(reviewSubmissionId, version.id);

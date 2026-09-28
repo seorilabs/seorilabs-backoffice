@@ -3,6 +3,7 @@ import test from "node:test";
 import crypto from "node:crypto";
 import {
   cancelAppStoreReviewSubmission,
+  prepareAppStoreSubmission,
   removeAppStoreReviewSubmissionItem,
   submitAppStoreForReview,
 } from "@/lib/app-store/submit";
@@ -44,6 +45,7 @@ async function withAsc(
     versionState?: string;
     submissions: Array<{ id: string; state: string }>;
     itemsBySubmission?: Record<string, Array<{ id: string; versionId: string }>>;
+    localizations?: Array<{ id: string; locale: string; marketingUrl?: string }>;
   },
   run: (calls: AscCall[]) => Promise<void>,
 ): Promise<void> {
@@ -52,6 +54,7 @@ async function withAsc(
   Object.assign(process.env, env);
   const previousFetch = globalThis.fetch;
   const calls: AscCall[] = [];
+  const localizations = fixture.localizations?.map((loc) => ({ ...loc })) ?? [];
 
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
@@ -73,6 +76,16 @@ async function withAsc(
           attributes: { appStoreState: fixture.versionState ?? "PREPARE_FOR_SUBMISSION" },
         },
       ]);
+    }
+    if (url.pathname === "/v1/appStoreVersions/version-1/appStoreVersionLocalizations") {
+      return json(localizations.map((loc) => ({ id: loc.id, type: "appStoreVersionLocalizations", attributes: { locale: loc.locale, marketingUrl: loc.marketingUrl } })));
+    }
+    const localization = url.pathname.match(/^\/v1\/appStoreVersionLocalizations\/([^/]+)$/);
+    if (localization) {
+      const loc = localizations.find((item) => item.id === localization[1]);
+      if (!loc) return new Response("{}", { status: 404 });
+      if (init?.method === "PATCH") loc.marketingUrl = JSON.parse(String(init.body)).data.attributes.marketingUrl;
+      return json({ id: loc.id, type: "appStoreVersionLocalizations", attributes: { locale: loc.locale, marketingUrl: loc.marketingUrl } });
     }
     if (url.pathname === "/v1/reviewSubmissions") {
       return json(
@@ -132,6 +145,36 @@ test("심사 생성 후 READY_FOR_REVIEW 버전을 실제 심사에 제출한다
         !calls.some((call) => call.method === "POST" && call.path === "/v1/reviewSubmissionItems"),
         "이미 연결된 심사 항목을 중복 생성하지 않는다",
       );
+    },
+  );
+});
+
+test("심사 준비에서 마케팅 URL을 저장·재조회하고 제출 전 원장과 대조한다", async () => {
+  const marketingUrls = { ko: "https://www.seorilabs.com/", "en-US": "https://www.seorilabs.com/" };
+  await withAsc(
+    { submissions: [], localizations: [{ id: "ko-1", locale: "ko" }, { id: "en-1", locale: "en-US" }] },
+    async (calls) => {
+      await assert.rejects(
+        submitAppStoreForReview({ ...opts, marketingUrls }),
+        /마케팅 URL이 심사 원장과 다릅니다/,
+      );
+      assert.ok(!calls.some((call) => call.path.startsWith("/v1/reviewSubmissions")), "URL 불일치 시 제출 단계로 가지 않는다");
+      const prepared = await prepareAppStoreSubmission({ ...opts, notes: {}, marketingUrls });
+      assert.deepEqual(prepared.localizationsUpdated.sort(), ["en-US", "ko"]);
+      assert.equal(calls.filter((call) => call.method === "PATCH" && call.path.startsWith("/v1/appStoreVersionLocalizations/")).length, 2);
+    },
+  );
+});
+
+test("설정된 언어가 빠졌으면 어떤 마케팅 URL도 부분 저장하지 않는다", async () => {
+  await withAsc(
+    { submissions: [], localizations: [{ id: "ko-1", locale: "ko" }] },
+    async (calls) => {
+      await assert.rejects(
+        prepareAppStoreSubmission({ ...opts, notes: {}, marketingUrls: { ko: "https://www.seorilabs.com/", "en-US": "https://www.seorilabs.com/" } }),
+        /en-US 언어가 없어/,
+      );
+      assert.ok(!calls.some((call) => call.method === "PATCH"), "언어 확인 전에 쓰지 않는다");
     },
   );
 });
