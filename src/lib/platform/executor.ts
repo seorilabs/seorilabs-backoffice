@@ -154,6 +154,9 @@ export interface PlatformOperationsClient {
     request: PlatformRefundReviewDecisionRequest,
     actor: string,
   ): Promise<PlatformRefundReviewDecisionResult>;
+  setEconomyTester?(
+    appId: string, platformUserId: string, enabled: boolean, actor: string,
+  ): Promise<{enabled: boolean; actor: string; updatedAt: string}>;
   grantAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
   revokeAdsSuppression?(request:PlatformAdsSuppressionRequest,actor:string):Promise<PlatformAdsSuppressionResult>;
   // optional이다. 롤링 배포 중 구버전 worker가 이 메서드 없이도 조립된다.
@@ -389,6 +392,27 @@ export async function executePlatformOperation(
     // preparedResume와 상호 배타적인 parser 결과다.
     if (!prepared) throw new Error("플랫폼 오퍼레이션을 준비하지 못했습니다.");
     const params = prepared.params;
+    if (prepared.operationKey === "platform.iap.set-economy-tester") {
+      if (!client.setEconomyTester) {
+        throw new Error("시험 계정 write client가 준비되지 않았습니다.");
+      }
+      const enabled = booleanParam(params, "enabled");
+      const result = await client.setEconomyTester(
+        prepared.appSlug, stringParam(params, "platformUserId"), enabled, actor,
+      );
+      if (result?.enabled !== enabled || result.actor !== actor) {
+        throw new PlatformOperationUnknownOutcomeError();
+      }
+      return {
+        version: 1,
+        requestId: prepared.requestId,
+        operation: prepared.operationKey,
+        status: "success",
+        summary: enabled ? "크리스털 시험 계정을 등록했습니다." : "크리스털 시험 계정을 해제했습니다.",
+        data: { enabled },
+        completedAt: new Date().toISOString(),
+      };
+    }
     if (prepared.operationKey === "platform.ads.grant-suppression" || prepared.operationKey === "platform.ads.revoke-suppression") {
       const revoke = prepared.operationKey === "platform.ads.revoke-suppression";
       if(!client.grantAdsSuppression||!client.revokeAdsSuppression){throw new Error("광고 정책 write client가 준비되지 않았습니다.")}

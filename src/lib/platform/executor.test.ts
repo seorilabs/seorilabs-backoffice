@@ -23,6 +23,26 @@ const baseInput = {
   reason: "customer_support_compensation",
 };
 
+test("크리스털 시험 계정 요청은 write client와 계정 없는 결과 요약으로 처리한다", async () => {
+  const calls: unknown[] = [];
+  const client = {
+    async setEconomyTester(appId: string, puid: string, enabled: boolean, actor: string) {
+      calls.push({appId, puid, enabled, actor});
+      return {enabled, actor, updatedAt: new Date().toISOString()};
+    },
+  } as PlatformOperationsClient;
+  const result = await executePlatformOperation({
+    requestId: baseInput.requestId,
+    operation: "platform.iap.set-economy-tester",
+    params: {appSlug: "lizard-tycoon", platformUserId: baseInput.params.platformUserId, enabled: true,
+      serverConfirmation: `TEST ECONOMY lizard-tycoon ${baseInput.params.platformUserId} ENABLE`},
+    actorLogin: "syous", reason: "internal_validation",
+  }, () => client);
+  assert.deepEqual(calls, [{appId: "lizard-tycoon", puid: baseInput.params.platformUserId, enabled: true, actor: "syous"}]);
+  assert.deepEqual(result.data, {enabled: true});
+  assert.doesNotMatch(JSON.stringify(result), /pu_01J/);
+});
+
 test("지급 요청을 write client에 전달하고 결과에서 식별자를 제거한다", async () => {
   let called: unknown;
   const client: PlatformOperationsClient = {

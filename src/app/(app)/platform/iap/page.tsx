@@ -2,6 +2,7 @@ import {
   PlatformIapManagement,
   type PlatformWritableApp,
 } from "@/components/platform";
+import Link from "next/link";
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
@@ -71,6 +72,7 @@ export default async function PlatformIapPage() {
           주문·권한·환불 검토·운영자 이력을 조회하고, 별도 worker를 통해 지급·회수·Sandbox 초기화·Google 환불 의견 제출을 실행합니다.
         </p>
       </div>
+      <Link href="/platform/iap/crystal-testers" className="text-sm underline">크리스털 시험 계정 관리</Link>
       <PlatformIapManagement
         initialSnapshot={snapshot?.ok ? snapshot.data : null}
         initialError={

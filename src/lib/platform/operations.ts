@@ -46,6 +46,7 @@ export const PLATFORM_OPERATION_KEYS = [
   "platform.iap.revoke-entitlement",
   "platform.iap.reset-app-store-sandbox",
   "platform.iap.decide-refund-review",
+  "platform.iap.set-economy-tester",
   "platform.ads.grant-suppression",
   "platform.ads.revoke-suppression",
   "platform.config.set-update-policy",
@@ -184,6 +185,17 @@ export const PLATFORM_OPERATION_DEFINITIONS = {
       },
       commonInputs[4],
     ],
+  },
+  "platform.iap.set-economy-tester": {
+    id: "set-economy-tester",
+    label: "크리스털 시험 계정 등록",
+    description: "연결된 게임 계정의 크리스털 시험 사용 권한을 바꿉니다.",
+    intent: "mutate",
+    risk: "high",
+    confirmation: "typed",
+    inputs: [commonInputs[0], commonInputs[1], {
+      key: "enabled", label: "시험 계정 사용", type: "boolean", required: true,
+    }, commonInputs[4]],
   },
   "platform.ads.grant-suppression": {
     id: "grant-ads-suppression",
@@ -346,6 +358,16 @@ const refundReviewInputSchema = z
   })
   .strict();
 
+const economyTesterInputSchema = z.object({
+  operation: z.literal("platform.iap.set-economy-tester"),
+  requestId: requestIdSchema,
+  appSlug: z.literal("lizard-tycoon"),
+  platformUserId: platformUserIdSchema,
+  enabled: z.boolean(),
+  reason: z.literal("internal_validation"),
+  serverConfirmation: serverConfirmationSchema,
+}).strict();
+
 const adsGrantInputSchema = z.object({
   operation: z.literal("platform.ads.grant-suppression"),
   requestId: requestIdSchema,
@@ -434,6 +456,7 @@ export const platformOperationInputSchema = z
     revokeInputSchema,
     resetInputSchema,
     refundReviewInputSchema,
+    economyTesterInputSchema,
     adsGrantInputSchema,
     adsRevokeInputSchema,
     updatePolicyInputSchema,

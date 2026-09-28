@@ -1038,6 +1038,20 @@ function validateSandboxResetResumeResult(
   };
 }
 
+export interface PlatformEconomyTesterEnrollment {
+  enabled: boolean;
+  actor: string;
+  updatedAt: string;
+}
+
+function validateEconomyTester(value: unknown): PlatformEconomyTesterEnrollment {
+  if (!isRecord(value) || typeof value.enabled !== "boolean" ||
+      typeof value.actor !== "string" || typeof value.updatedAt !== "string") {
+    return invalidPlatformResponse("시험 계정 상태 응답 형식이 올바르지 않습니다.");
+  }
+  return { enabled: value.enabled, actor: value.actor, updatedAt: value.updatedAt };
+}
+
 export class PlatformClient {
   private readonly baseUrl: string;
   private readonly auth: GoogleAuth;
@@ -1379,6 +1393,22 @@ export class PlatformClient {
     return { appId, entitlements: entitlements as string[] };
   }
 
+  /** 연결된 게임 계정의 시험 상태. read identity에서 호출할 수 있다. */
+  async economyTester(appId: string, platformUserId: string): Promise<PlatformEconomyTesterEnrollment> {
+    const path = `/v1/admin/apps/${encodeURIComponent(appId)}/iap/economy/${encodeURIComponent(platformUserId)}/tester`;
+    return validateEconomyTester(await this.request<unknown>("GET", path, undefined, undefined, appId));
+  }
+
+  /** AppOps worker의 write identity에서만 실행한다. */
+  async setEconomyTester(appId: string, platformUserId: string, enabled: boolean, actor: string): Promise<PlatformEconomyTesterEnrollment> {
+    const path = `/v1/admin/apps/${encodeURIComponent(appId)}/iap/economy/${encodeURIComponent(platformUserId)}/tester`;
+    const result = validateEconomyTester(await this.request<unknown>("POST", path, {enabled}, actor, appId));
+    if (result.enabled !== enabled || result.actor !== actor) {
+      return invalidPlatformResponse("시험 계정 등록 결과가 요청과 일치하지 않습니다.");
+    }
+    return result;
+  }
+
   /** 앱별 Google Play 환불 검토 queue. 민감 필드가 섞이면 응답 전체를 거부한다. */
   async refundReviews(
     appId: string,
@@ -1607,6 +1637,7 @@ export class PlatformClient {
     path: string,
     body?: unknown,
     actor?: string,
+    appId?: string,
   ): Promise<T> {
     // 인증 client·토큰 획득·remote fetch·body 해석을 하나의 절대 deadline에
     // 묶는다. token promise 자체는 취소할 수 없지만 timeout 뒤 fetch는 금지한다.
@@ -1636,6 +1667,9 @@ export class PlatformClient {
       // 누가 눌렀는지. 서비스 계정만으로는 알 수 없다.
       if (actor) {
         headers["X-Seori-Actor"] = actor;
+      }
+      if (appId) {
+        headers["X-Seori-App"] = appId;
       }
 
       const response = await fetch(this.baseUrl + path, {
