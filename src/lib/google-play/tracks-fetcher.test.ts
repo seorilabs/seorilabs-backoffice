@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
-import { listGooglePlayTrackReleases } from "@/lib/google-play/tracks-fetcher";
+import { collapseSameVersionReleases, listGooglePlayTrackReleases } from "@/lib/google-play/tracks-fetcher";
 import { resetGoogleTokenCache } from "@/lib/google-play/service-account";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -32,4 +32,16 @@ test("Google edit 생성, 트랙 조회, edit 삭제 순서를 지킨다", async
   assert.equal(releases[0]?.status, "completed");
   assert.deepEqual(calls.map((item) => item.split(" ")[0]), ["POST", "POST", "GET", "DELETE"]);
   assert.ok(calls[2]?.includes("/edits/real-edit-1/tracks"));
+});
+
+test("같은 트랙·버전 코드의 초안과 출시본은 출시본 하나로 합친다", () => {
+  const releases = collapseSameVersionReleases([
+    { trackName: "alpha", releaseName: "0.3.0 (8)", versionCodes: ["8"], status: "draft" },
+    { trackName: "alpha", releaseName: "v0.3.0", versionCodes: ["8"], status: "completed" },
+    { trackName: "internal", releaseName: "0.3.0 (8)", versionCodes: ["8"], status: "completed" },
+    { trackName: "alpha", releaseName: "0.4.0 (9)", versionCodes: ["9"], status: "draft" },
+  ]);
+  assert.deepEqual(releases.map((item) => `${item.trackName}:${item.versionCodes[0]}:${item.status}`), [
+    "alpha:8:completed", "internal:8:completed", "alpha:9:draft",
+  ]);
 });

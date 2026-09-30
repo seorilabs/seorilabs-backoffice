@@ -34,7 +34,7 @@ export async function listGooglePlayTrackReleases(input: {
     const response = await impl(`${edit}/tracks`, { headers });
     if (!response.ok) throw new Error(`Google Play tracks 조회 실패: ${response.status}`);
     const json = await response.json() as TracksResponse;
-    return (json.tracks ?? []).flatMap((track) =>
+    return collapseSameVersionReleases((json.tracks ?? []).flatMap((track) =>
       (track.releases ?? []).flatMap((release) => {
         if (!track.track || !release.versionCodes?.length ||
             !["completed", "inProgress", "halted", "draft"].includes(release.status ?? "")) return [];
@@ -45,11 +45,23 @@ export async function listGooglePlayTrackReleases(input: {
           status: release.status as GooglePlayTracksRelease["status"],
           ...(typeof release.userFraction === "number" ? { userFraction: release.userFraction } : {}),
         }];
-      }));
+      })));
   } finally {
     const deleted = await impl(edit, { method: "DELETE", headers });
     if (!deleted.ok && deleted.status !== 404) {
       throw new Error(`Google Play edit 정리 실패: ${deleted.status}`);
     }
   }
+}
+
+// 한 트랙에 같은 버전 코드의 출시본과 초안이 함께 있으면 출시본 하나만 남긴다.
+// 둘을 모두 넘기면 같은 릴리스 식별자에서 상태가 매 폴링마다 번갈아 보여 알림이 반복된다.
+export function collapseSameVersionReleases(releases: GooglePlayTracksRelease[]): GooglePlayTracksRelease[] {
+  const byKey = new Map<string, GooglePlayTracksRelease>();
+  for (const release of releases) {
+    const key = JSON.stringify([release.trackName, [...release.versionCodes].sort()]);
+    const kept = byKey.get(key);
+    if (!kept || (kept.status === "draft" && release.status !== "draft")) byKey.set(key, release);
+  }
+  return [...byKey.values()];
 }
