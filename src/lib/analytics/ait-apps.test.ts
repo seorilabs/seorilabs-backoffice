@@ -98,6 +98,20 @@ test("공개된 운글 리스팅은 saju-reader의 67186 primary로 사용한다
   assert.equal(AIT_MINIAPP_BY_SLUG["saju-reader"], 67186);
 });
 
+test("공개된 조물조물 리스팅은 jomul의 75479 primary로 사용한다", () => {
+  const list = listingsForSlug("jomul");
+  assert.deepEqual(list, [
+    {
+      appSlug: "jomul",
+      miniAppId: 75479,
+      label: "jomul-game",
+      primary: true,
+    },
+  ]);
+  assert.equal(primaryListingForSlug("jomul")?.miniAppId, 75479);
+  assert.equal(AIT_MINIAPP_BY_SLUG["jomul"], 75479);
+});
+
 test("운영 종료한 vocab-swipe 리스팅은 수집 대상에서 제외한다", () => {
   assert.deepEqual(listingsForSlug("vocab-swipe"), []);
   assert.equal(primaryListingForSlug("vocab-swipe"), undefined);
