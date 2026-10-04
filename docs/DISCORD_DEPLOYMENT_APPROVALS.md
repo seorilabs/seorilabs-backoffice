@@ -5,7 +5,7 @@
 ## 초기 상태와 운영 적용
 
 - 조회·알림은 기본 활성, `PLATFORM_APPROVAL_MONITOR_ENABLED=false`로 중단한다.
-- 직접 처리는 기본 비활성이다. `PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS`가 비어 있으면 GitHub 링크만 사용할 수 있다. 운영 승인 후 web·알림 worker·operator worker에 동일한 값 `staging`을 설정하고, staging 검증 뒤에만 `staging,production`으로 넓힌다.
+- 코드 기본값은 직접 처리 비활성이며, 현재 운영 매니페스트는 사용자 요청으로 staging/production을 활성화한다. `PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS`가 비어 있으면 GitHub 링크만 사용할 수 있다. 운영 승인 후 web·알림 worker·operator worker에 동일한 값 `staging`을 설정하고, staging 검증 뒤에만 `staging,production`으로 넓힌다.
 - 현재 Backoffice main push는 운영 배포를 자동 실행한다. 코드 병합만 하고 배포를 보류하려면 기존 배포 정책을 먼저 명시적으로 결정해야 한다. 이 변경은 배포 workflow를 바꾸지 않는다.
 - Prisma 확장 migration을 먼저 적용해야 한다. 기존 중앙 설정/ConfigRevision payload를 직접 변경하거나 환경 보호 규칙을 수정하지 않는다.
 - 플랫폼 workflow의 `approval-target` job은 비밀값 없이 실행 ID·재실행 번호·소스 SHA·이미지 SHA·환경·이미지·배포 대상을 artifact로 발행한다. staging은 소스 SHA와 `inputs.image_sha`가 다를 수 있다. 누락·만료·불일치 artifact는 직접 처리 차단이며 GitHub 수동 처리는 가능하다.
@@ -31,7 +31,7 @@
 
 ## 운영 인수 검증 — 코드 검증과 별도
 
-staging에서 실제 Discord 역할/PAT 권한 차단, 계정 연결·해제, 자기 승인 차단, 정상 승인·거절, 10분 만료, 재실행/대상 변경, timeout/worker 재시작, 외부 GitHub 처리, 야간 재알림과 09시 복구를 확인한다. 대기 발생에서 최초 Discord 발송까지 2분 이내, 요청당 GitHub 처리 1회, 처리 후 재알림 중단을 계측한다. 실제 Discord·GitHub 검증 전 production 직접 처리를 활성화하지 않는다.
+staging에서 실제 Discord 역할/PAT 권한 차단, 계정 연결·해제, 자기 승인 차단, 정상 승인·거절, 10분 만료, 재실행/대상 변경, timeout/worker 재시작, 외부 GitHub 처리, 야간 재알림과 09시 복구를 확인한다. 대기 발생에서 최초 Discord 발송까지 2분 이내, 요청당 GitHub 처리 1회, 처리 후 재알림 중단을 계측한다. 초기 적용은 staging 검증 후 production 활성화를 권장한다. 현재 운영 staging/production 설정은 사용자의 명시적 활성화 요청으로 반영했으며, 실제 PAT 승인·거절 및 재실행 경쟁 인수 검증은 아직 수행하지 않았다. 운영 활성화와 인수 검증 완료를 구분한다.
 
 ## 화면
 
@@ -45,3 +45,5 @@ staging에서 실제 Discord 역할/PAT 권한 차단, 계정 연결·해제, �
 - 추가 단위 테스트: `pnpm exec tsx --test src/lib/deployment-approvals/*.test.ts`
 
 주기적 GitHub 조회는 GitHub App 인증이 있는 operator command worker의 독립 반복문에서 60초마다 실행한다. 알림 worker에는 GitHub 자격증명을 제공하지 않으며, 발송 대기열과 카드 전송만 맡긴다. 명령 처리 중에도 조회 반복문은 계속 실행된다.
+
+승인자 토큰 실행 복제본은 `k8s/platform-deployment-approvers-sealedsecret.yaml`에 암호화하여 보관하고 `platform-deployment-approvers` Secret으로 적용한다. local catalog logical ID는 `shared/github/platform-approver-magicsih`, 공개 GitHub ID는 `2772002`다. 토큰 원문은 저장소와 웹·알림 worker에 제공하지 않는다. 암호화 Secret은 등록된 운영 계정으로 먼저 적용해야 하며, CI deployer에 Secret 쓰기 권한을 추가하지 않는다.
