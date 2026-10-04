@@ -30,8 +30,8 @@ test("state 전이면 notify 가 이전 state 를 담아 반환된다", () => {
   assert.notEqual(result.notify, false);
   if (result.notify === false) return;
   assert.equal(result.notify.previousState, "inProgress");
-  assert.equal(result.normalized.stateLabel, "출시 완료");
-  assert.equal(result.normalized.emoji, "✓");
+  assert.equal(result.normalized.stateLabel, "트랙 상태 completed · 실제 공개 확인 불가");
+  assert.equal(result.normalized.emoji, "…");
   assert.equal(result.decision.kind, "transition");
 });
 

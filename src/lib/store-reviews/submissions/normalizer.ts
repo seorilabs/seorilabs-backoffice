@@ -1,4 +1,5 @@
 import type { StoreReviewStore } from "@prisma/client";
+import { describePlayState, PLAY_STATE_PREFIX } from "@/lib/google-play/release-state";
 
 export type SubmissionEmoji = "…" | "⟳" | "✓" | "✗" | "⏹";
 
@@ -43,9 +44,9 @@ const APPLE_STATE_TABLE: Readonly<Record<string, StateEntry>> = {
 };
 
 const GOOGLE_PLAY_STATE_TABLE: Readonly<Record<string, StateEntry>> = {
-  completed: { label: "출시 완료", emoji: "✓" },
-  inProgress: { label: "단계별 출시 중", emoji: "⟳" },
-  halted: { label: "출시 보류", emoji: "✗" },
+  completed: { label: "트랙 상태 completed · 실제 공개 확인 불가", emoji: "…" },
+  inProgress: { label: "트랙 상태 inProgress · 실제 공개 확인 불가", emoji: "…" },
+  halted: { label: "트랙 상태 halted · 실제 공개 확인 불가", emoji: "⏹" },
   draft: { label: "작성 중", emoji: "…" },
 };
 
@@ -60,10 +61,13 @@ export interface NormalizedState {
 export function normalizeSubmissionState(input: {
   store: StoreReviewStore;
   state: string;
+  trackName?: string | null;
 }): NormalizedState {
   const table =
     input.store === "APP_STORE" ? APPLE_STATE_TABLE : GOOGLE_PLAY_STATE_TABLE;
-  const entry = table[input.store === "GOOGLE_PLAY" ? input.state.split(":")[0]! : input.state];
+  const entry = input.store === "GOOGLE_PLAY" && input.state.startsWith(PLAY_STATE_PREFIX)
+    ? describePlayState(input.state, input.trackName)
+    : table[input.store === "GOOGLE_PLAY" ? input.state.split(":")[0]! : input.state];
   if (!entry) {
     throw new Error(
       `알 수 없는 ${input.store} state: ${input.state}`,

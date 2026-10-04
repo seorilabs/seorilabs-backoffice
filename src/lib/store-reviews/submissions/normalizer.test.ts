@@ -33,9 +33,9 @@ test("APP_STORE 상태가 한글 라벨과 이모지로 정규화된다", () => 
 test("GOOGLE_PLAY 상태가 한글 라벨과 이모지로 정규화된다", () => {
   const table: ReadonlyArray<readonly [string, string, "…" | "⟳" | "✓" | "✗" | "⏹"]> =
     [
-      ["completed", "출시 완료", "✓"],
-      ["inProgress", "단계별 출시 중", "⟳"],
-      ["halted", "출시 보류", "✗"],
+      ["completed", "트랙 상태 completed · 실제 공개 확인 불가", "…"],
+      ["inProgress", "트랙 상태 inProgress · 실제 공개 확인 불가", "…"],
+      ["halted", "트랙 상태 halted · 실제 공개 확인 불가", "⏹"],
       ["draft", "작성 중", "…"],
     ];
   for (const [state, label, emoji] of table) {
@@ -53,7 +53,7 @@ test("GOOGLE_PLAY 상태가 한글 라벨과 이모지로 정규화된다", () =
 test("단계별 출시 비율은 같은 한국어 단계로 표시한다", () => {
   assert.equal(
     normalizeSubmissionState({ store: "GOOGLE_PLAY", state: "inProgress:0.5" }).stateLabel,
-    "단계별 출시 중",
+    "트랙 상태 inProgress · 실제 공개 확인 불가",
   );
 });
 

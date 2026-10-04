@@ -38,6 +38,7 @@ export function dispatchSubmissionObservation(
   const normalized = normalizeSubmissionState({
     store: input.store,
     state: input.state,
+    trackName: input.trackName,
   });
   const decision = decideSubmissionDedupe({
     store: input.store,
