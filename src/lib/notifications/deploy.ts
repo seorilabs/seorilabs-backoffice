@@ -1,3 +1,4 @@
+import { deliverApproval } from "@/lib/deployment-approvals/delivery";
 import type { Prisma, ReleaseMarket } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { DISCORD_OPS_ALERTS, discordChannelId } from "@/lib/notifications/destinations";
@@ -295,6 +296,9 @@ async function editOrSend(
 
 export async function drainAllNotifications(limit = 30) {
   return drainNotifications(limit, async ({ kind, destinationKey, payload, providerMessageId }) => {
+    if (payload && typeof payload === "object" && !Array.isArray(payload) && typeof payload.deploymentApprovalId === "string") {
+      return deliverApproval(payload, destinationKey, providerMessageId).catch(() => ({ ok: false, error: "플랫폼 승인 카드 전송 실패" }));
+    }
     if (kind === "DEPLOY_COMPLETION") {
       const deploy = deployCompletionPayload(payload);
       if (!deploy) return { ok: false, error: "invalid deploy notification payload" };

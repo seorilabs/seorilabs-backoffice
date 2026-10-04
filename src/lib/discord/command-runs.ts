@@ -1,3 +1,4 @@
+import { executeDeploymentApproval } from "@/lib/deployment-approvals/execute";
 import { Prisma, type OperatorCommandRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createBugDraftCore, createPlanningDraftCore, commitDraftCore } from "@/lib/core/ai-drafts";
@@ -225,6 +226,7 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
   }
   const params = jsonRecord(run.params);
   switch (run.operation) {
+    case "platform_deployment_review": return executeDeploymentApproval(run);
     case "plan_generate": {
       const app = await appForRun(run);
       const draft = await createPlanningDraftCore({
@@ -567,7 +569,12 @@ export async function processNextOperatorCommand(): Promise<boolean> {
       });
     }
   } catch (error) {
-    const message = safeError(error);
+    let message = safeError(error);
+    if (run.operation === "platform_deployment_review") {
+      const approvalId = stringValue(jsonRecord(run.params), "approvalId");
+      const approval = approvalId ? await prisma.deploymentApproval.findUnique({ where: { id: approvalId }, select: { repository: true, runId: true } }) : null;
+      if (approval) message += `\n[GitHub에서 확인](https://github.com/${approval.repository}/actions/runs/${approval.runId})`;
+    }
     // 카드 소유 run 은 실패로 카드를 지우지 않는다. 실패 사유를 얹고 현재 상태를 다시 그린다.
     const releaseRecordId = releaseRecordIdOf(run);
     // 표시가 실패해도 run 이 PROCESSING 에 갇히면 안 된다. 렌더 예외는 여기서 삼킨다.

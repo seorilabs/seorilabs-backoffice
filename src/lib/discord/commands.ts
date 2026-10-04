@@ -18,6 +18,7 @@ const deployTargetOption = {
 };
 
 export const DISCORD_COMMANDS = [
+  { name: "connect", description: "Backoffice GitHub 계정 연결", type: 1, options: [{ type: 3, name: "code", description: "10분짜리 일회용 연결 코드", required: true }] },
   { name: "help", description: "백오피스 명령 도움말", type: 1 },
   { name: "approvals", description: "승인 대기 항목", type: 1 },
   { name: "p1", description: "열린 P1 이슈", type: 1 },

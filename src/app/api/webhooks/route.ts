@@ -1,3 +1,4 @@
+import { observeApprovalRun } from "@/lib/deployment-approvals/monitor";
 import { after, NextRequest, NextResponse } from "next/server";
 import { verifyWebhookSignature } from "@/lib/github/webhook";
 import { prisma } from "@/lib/prisma";
@@ -218,6 +219,7 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       }
       break;
     case "workflow_run":
+      if (repo === "seorilabs/platform" && p.workflow_run) await observeApprovalRun(p.workflow_run.id);
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
     case "push": {

@@ -57,7 +57,9 @@ export async function approvalsQuery(): Promise<DiscordQueryResult> {
       take: 5,
     }),
   ]);
-  if (pendingCount === 0) return { content: "✅ 승인 대기 없음" };
+  const deployments = await prisma.deploymentApproval.findMany({ where: { OR: [{ providerState: "WAITING" }, { actionState: { in: ["SENDING", "UNKNOWN"] } }] }, take: 5, orderBy: { waitingSince: "asc" } });
+  const deploymentLines = ["**플랫폼 배포 승인**", ...deployments.map(row => `• ${row.environment} · ${row.workflow} #${row.runNumber} · 재실행 ${row.runAttempt}\n  https://github.com/${row.repository}/actions/runs/${row.runId}${row.observationError ? "\n  조회·대상 확인 필요" : ""}`), "전체 목록과 조회 시각: https://backoffice.vzyx.xyz/approvals"].join("\n");
+  if (pendingCount === 0) return { content: `${deploymentLines}\n\n이슈 승인 대기 없음` };
 
   const components: DiscordActionRow[] = visible.map((issue) => {
     const gate = hasApproval(asStringArray(issue.labels), "release") ? "release" : "planning";
@@ -76,7 +78,7 @@ export async function approvalsQuery(): Promise<DiscordQueryResult> {
     return `• **${issue.repoFullName.replace("seorilabs/", "")} #${issue.number}** · ${gate}\n  ${issue.title}`;
   });
   if (pendingCount > visible.length) lines.push(`…외 ${pendingCount - visible.length}건은 웹 백오피스에서 확인`);
-  return { content: clip(`**승인 대기 ${pendingCount}건**\n${lines.join("\n")}`), components };
+  return { content: clip(`${deploymentLines}\n\n**이슈 승인 대기 ${pendingCount}건**\n${lines.join("\n")}`), components };
 }
 
 export async function p1Query(): Promise<DiscordQueryResult> {
