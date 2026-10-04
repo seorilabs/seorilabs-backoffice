@@ -5,7 +5,7 @@
 ## 초기 상태와 운영 적용
 
 - 조회·알림은 기본 활성, `PLATFORM_APPROVAL_MONITOR_ENABLED=false`로 중단한다.
-- 직접 처리는 기본 비활성이다. `PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS`가 비어 있으면 GitHub 링크만 사용할 수 있다. 운영 승인 후 web·notification worker·operator worker에 동일한 값 `staging`을 설정하고, staging 검증 뒤에만 `staging,production`으로 넓힌다.
+- 직접 처리는 기본 비활성이다. `PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS`가 비어 있으면 GitHub 링크만 사용할 수 있다. 운영 승인 후 web·알림 worker·operator worker에 동일한 값 `staging`을 설정하고, staging 검증 뒤에만 `staging,production`으로 넓힌다.
 - 현재 Backoffice main push는 운영 배포를 자동 실행한다. 코드 병합만 하고 배포를 보류하려면 기존 배포 정책을 먼저 명시적으로 결정해야 한다. 이 변경은 배포 workflow를 바꾸지 않는다.
 - Prisma 확장 migration을 먼저 적용해야 한다. 기존 중앙 설정/ConfigRevision payload를 직접 변경하거나 환경 보호 규칙을 수정하지 않는다.
 - 플랫폼 workflow의 `approval-target` job은 비밀값 없이 실행 ID·재실행 번호·소스 SHA·이미지 SHA·환경·이미지·배포 대상을 artifact로 발행한다. staging은 소스 SHA와 `inputs.image_sha`가 다를 수 있다. 누락·만료·불일치 artifact는 직접 처리 차단이며 GitHub 수동 처리는 가능하다.
@@ -14,7 +14,7 @@
 
 1. `seorilabs-credentials` 절차로 local catalog를 먼저 확인한다. 이미 등록된 인증이 동일 사용자·저장소·목적에 맞으면 재사용한다. 새 토큰 생성·조직 승인은 사람이 수행한다.
 2. fine-grained PAT의 repository selection은 `seorilabs/platform` 하나, 권한은 Actions read, Contents read, Deployments write다. 토큰 소유자 `/user` ID를 반드시 확인한다. classic PAT와 GitHub App installation token으로 승인을 대체하지 않는다.
-3. 등록된 catalog logical ID와 공개 GitHub ID를 운영 기록에 연결한다. 토큰 실행 복제본은 **operator-command-worker만** 읽는 디렉터리에 `<GitHub 숫자 ID>.token` 파일로 읽기 전용 mount하고 `PLATFORM_APPROVER_TOKEN_DIRECTORY`를 지정한다. web/notification worker에는 개인 토큰을 제공하지 않는다. DB·Discord·브라우저 저장소·로그에 토큰을 넣지 않는다.
+3. 등록된 catalog logical ID와 공개 GitHub ID를 운영 기록에 연결한다. 토큰 실행 복제본은 **operator-command-worker만** 읽는 디렉터리에 `<GitHub 숫자 ID>.token` 파일로 읽기 전용 mount하고 `PLATFORM_APPROVER_TOKEN_DIRECTORY`를 지정한다. web/알림 worker에는 개인 토큰을 제공하지 않는다. DB·Discord·브라우저 저장소·로그에 토큰을 넣지 않는다.
 4. 로그인한 승인자는 `/approvals`에서 일회용 코드를 발급받고 10분 안에 Discord `#backoffice`에서 `/connect code:…`를 실행한다. 코드는 SHA-256 해시만 저장한다. GitHub ID와 Discord ID는 각각 유일하며, 다른 계정으로 변경하려면 기존 연결을 먼저 해제한다.
 5. 연결·해제와 실행 요청·거절 사유는 audit log에 남는다. Discord 역할과 Backoffice 접근 허용, 개인 PAT identity 및 GitHub `current_user_can_approve`를 실행 직전 다시 확인한다. 원 실행자와 재실행자는 자기 승인할 수 없다.
 
@@ -43,3 +43,5 @@ staging에서 실제 Discord 역할/PAT 권한 차단, 계정 연결·해제, �
 - `bash scripts/check-migration-safety.sh`
 - 폐기용 `127.0.0.1` MySQL의 `approval_test` DB에 `prisma migrate deploy` 후 `DATABASE_URL=... pnpm exec tsx scripts/test-deployment-approvals.ts`. 이 스크립트는 다른 호스트/DB 이름을 거부한다.
 - 추가 단위 테스트: `pnpm exec tsx --test src/lib/deployment-approvals/*.test.ts`
+
+주기적 GitHub 조회는 GitHub App 인증이 있는 operator command worker의 독립 반복문에서 60초마다 실행한다. 알림 worker에는 GitHub 자격증명을 제공하지 않으며, 발송 대기열과 카드 전송만 맡긴다. 명령 처리 중에도 조회 반복문은 계속 실행된다.

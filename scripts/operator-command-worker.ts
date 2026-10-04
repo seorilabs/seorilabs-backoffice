@@ -1,3 +1,4 @@
+import { reconcileDeploymentApprovals } from "@/lib/deployment-approvals/monitor";
 import { recoverUncertainApprovals } from "@/lib/deployment-approvals/execute";
 import { prisma } from "@/lib/prisma";
 import { maintainOperatorCommands, processNextOperatorCommand } from "@/lib/discord/command-runs";
@@ -17,6 +18,13 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function monitorApprovals(): Promise<void> {
+  while (!stopping) {
+    await reconcileDeploymentApprovals();
+    for (let elapsed = 0; elapsed < 60_000 && !stopping; elapsed += 1000) await sleep(1000);
+  }
+}
+
 async function main(): Promise<void> {
   const registered = await registerDiscordGuildCommands();
   console.log(`[operator-command-worker] Discord 명령 ${registered.commands}개 등록`);
@@ -33,7 +41,7 @@ async function main(): Promise<void> {
   }
 }
 
-main()
+Promise.all([main(), monitorApprovals()])
   .then(() => prisma.$disconnect())
   .then(() => process.exit(0))
   .catch(async (error) => {
