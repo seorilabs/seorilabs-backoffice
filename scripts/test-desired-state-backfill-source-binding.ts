@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 
 import { Prisma, PrismaClient } from "@prisma/client";
+import {
+  claimPartialDesiredStateBackfill,
+  desiredStateBackfillAdminInvocation,
+  type DesiredStateBackfillSummary,
+} from "../src/lib/control-plane/desired-state-backfill";
 
 if (process.env.MIGRATION_FIXTURE_ACK !== "LOCAL_SCHEMA_ONLY") {
   throw new Error("MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY가 필요하다");
@@ -113,7 +118,37 @@ async function main(): Promise<void> {
       new Set(runs.filter((run) => run.trigger === "DEPLOY_CATCH_UP").map((run) => run.sourceSha)),
       new Set([SHA_A, SHA_B]),
     );
+    const invocation = desiredStateBackfillAdminInvocation({
+      trigger: "deploy-catch-up", sourceSha: SHA_A, now: new Date(),
+    });
+    const summary: DesiredStateBackfillSummary = {
+      contractVersion: "desired-state-safe-source-rebase/v3", mode: "DRAFT_AND_SAFE_SOURCE_REBASE",
+      activeApps: 0, draftCreated: 0, sourceRebasedAndActivated: 0, alreadyConfigured: 0,
+      needsInput: 0, failed: 1, activationAttempted: false, providerMutationAttempted: false,
+      deferredHumanOrProviderFields: ["PROJECT_BLUEPRINT_INCOMPLETE", "LOCALIZATION_UNOBSERVED", "COMPLIANCE_HUMAN_DRAFT_REQUIRED", "STORE_ASSET_CHECKSUM_UNOBSERVED"],
+      items: [],
+    };
+    const completedAt = new Date("2026-10-04T12:00:00.000Z");
+    await prisma.desiredStateBackfillRun.update({
+      where: { id: IDS[0] }, data: { status: "PARTIAL", summary: summary as unknown as Prisma.InputJsonValue, completedAt },
+    });
+    const input = { id: IDS[0], completedAt, summary, invocation };
+    const claims = await Promise.all(Array.from({ length: 8 }, () => claimPartialDesiredStateBackfill(input, prisma)));
+    assert.equal(claims.filter(Boolean).length, 1, "동시 재시도 중 하나만 claim해야 한다");
+    const claimed = await prisma.desiredStateBackfillRun.findUniqueOrThrow({ where: { id: IDS[0] } });
+    assert.equal(claimed.status, "RUNNING");
+    assert.equal(claimed.completedAt, null);
+    assert.deepEqual(claimed.summary, summary);
+    const audit = await prisma.auditLog.findMany({ where: { entityId: IDS[0], action: "control-plane.desired-state-backfill.retry-started" } });
+    assert.equal(audit.length, 1);
+    assert.deepEqual((audit[0].payload as Record<string, unknown>).previousSummary, summary);
+    // 더 최근에 종료된 PARTIAL을 오래된 요청이 가져갈 수 없다.
+    await prisma.desiredStateBackfillRun.update({ where: { id: IDS[0] }, data: { status: "PARTIAL", completedAt: new Date(completedAt.getTime() + 1000) } });
+    assert.equal(await claimPartialDesiredStateBackfill(input, prisma), false);
+    await prisma.desiredStateBackfillRun.update({ where: { id: IDS[0] }, data: { status: "COMPLETED", completedAt } });
+    assert.equal(await claimPartialDesiredStateBackfill(input, prisma), false);
   } finally {
+    await prisma.auditLog.deleteMany({ where: { entityId: { in: [...IDS] } } });
     await prisma.desiredStateBackfillRun.deleteMany({
       where: { id: { in: [...IDS, "test-backfill-source-a-retry"] } },
     });

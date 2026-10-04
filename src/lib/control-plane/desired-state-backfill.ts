@@ -510,6 +510,41 @@ function storedSummary(value: unknown): DesiredStateBackfillSummary | null {
     : null;
 }
 
+export async function claimPartialDesiredStateBackfill(input: {
+  id: string;
+  completedAt: Date | null;
+  summary: DesiredStateBackfillSummary;
+  invocation: DesiredStateBackfillInvocation;
+}, db: Pick<typeof prisma, "$transaction"> = prisma): Promise<boolean> {
+  if (!input.completedAt) return false;
+  return db.$transaction(async (tx) => {
+    const claimed = await tx.desiredStateBackfillRun.updateMany({
+      where: { id: input.id, status: "PARTIAL", completedAt: input.completedAt },
+      data: { status: "RUNNING", completedAt: null },
+    });
+    if (claimed.count !== 1) return false;
+    await tx.auditLog.create({
+      data: {
+        actorLogin: input.invocation.actor,
+        action: "control-plane.desired-state-backfill.retry-started",
+        entityType: "DesiredStateBackfillRun",
+        entityId: input.id,
+        payload: {
+          trigger: input.invocation.trigger,
+          sourceSha: input.invocation.sourceSha,
+          previousSummary: input.summary as unknown as Prisma.InputJsonValue,
+        },
+      },
+    });
+    return true;
+  });
+}
+
+export function desiredStateBackfillFailureCode(error: unknown): string | null {
+  return error instanceof ControlPlaneError || error instanceof Prisma.PrismaClientKnownRequestError
+    ? error.code : null;
+}
+
 export function assertDesiredStateBackfillReplay(input: {
   stored: {
     actor: string;
@@ -752,127 +787,164 @@ export async function runDesiredStateDraftBackfill(
   }
   const hashed = desiredStateBackfillRequestHash(input);
   const created = await createRun({ ...input, requestHash: hashed });
+  let retrySummary: DesiredStateBackfillSummary | null = null;
   if (created.duplicate) {
     const summary = storedSummary(created.run.summary);
-    if (summary) {
+    if (summary && created.run.status === "PARTIAL" && await claimPartialDesiredStateBackfill({
+      id: created.run.id,
+      completedAt: created.run.completedAt,
+      summary,
+      invocation: input,
+    })) {
+      retrySummary = summary;
+    } else if (summary && created.run.status === "COMPLETED") {
       return {
         ...summary,
         runId: created.run.id,
         duplicate: true,
-        state: created.run.status === "COMPLETED" ? "completed" : "partial",
-        runStatus: created.run.status,
+        state: "completed",
+        runStatus: "COMPLETED",
         trigger: input.trigger,
         sourceSha: input.sourceSha,
-        ok: created.run.status === "COMPLETED" && summary.failed === 0,
+        ok: summary.failed === 0,
       };
     }
-    const empty = summarize([]);
-    return {
-      ...empty,
-      runId: created.run.id,
-      duplicate: true,
-      state: "busy",
-      runStatus: "RUNNING",
-      trigger: input.trigger,
-      sourceSha: input.sourceSha,
-      ok: false,
-    };
+    if (!retrySummary) {
+      const empty = summarize([]);
+      return {
+        ...empty,
+        runId: created.run.id,
+        duplicate: true,
+        state: "busy",
+        runStatus: "RUNNING",
+        trigger: input.trigger,
+        sourceSha: input.sourceSha,
+        ok: false,
+      };
+    }
   }
 
-  const candidates = await prisma.$transaction((tx) => loadCandidates(tx));
-  const items: DesiredStateBackfillItem[] = [];
-  for (const candidate of candidates) {
-    const assessment = assessDesiredStateCandidate(candidate);
-    if (assessment.outcome === "SOURCE_RECONCILE") {
+  try {
+    const candidates = await prisma.$transaction((tx) => loadCandidates(tx));
+    const items: DesiredStateBackfillItem[] = [];
+    for (const candidate of candidates) {
+      const assessment = assessDesiredStateCandidate(candidate);
+      if (assessment.outcome === "SOURCE_RECONCILE") {
+        try {
+          items.push(await reconcileConfigSourceForCandidate(
+            candidate,
+            input.actor,
+            options.signingKey,
+          ));
+        } catch (error) {
+          items.push({
+            ...baseItem(candidate),
+            outcome: "FAILED",
+            reason: "INTERNAL_ERROR",
+            detail: desiredStateBackfillFailureCode(error),
+            sourceObservationId: candidate.observation?.id ?? null,
+            configRevisionId: assessment.revisionId,
+            revision: assessment.revision,
+          });
+        }
+        continue;
+      }
+      if (assessment.outcome !== "READY") {
+        items.push(assessmentItem(candidate, assessment));
+        continue;
+      }
       try {
-        items.push(await reconcileConfigSourceForCandidate(
-          candidate,
-          input.actor,
-          options.signingKey,
-        ));
-      } catch {
+        items.push(await createDraftForCandidate(candidate, input.actor));
+      } catch (error) {
         items.push({
           ...baseItem(candidate),
           outcome: "FAILED",
           reason: "INTERNAL_ERROR",
-          detail: null,
-          sourceObservationId: candidate.observation?.id ?? null,
-          configRevisionId: assessment.revisionId,
-          revision: assessment.revision,
+          detail: desiredStateBackfillFailureCode(error),
+          sourceObservationId: assessment.sourceObservationId,
+          configRevisionId: null,
+          revision: null,
         });
       }
-      continue;
     }
-    if (assessment.outcome !== "READY") {
-      items.push(assessmentItem(candidate, assessment));
-      continue;
-    }
-    try {
-      items.push(await createDraftForCandidate(candidate, input.actor));
-    } catch {
-      items.push({
-        ...baseItem(candidate),
-        outcome: "FAILED",
-        reason: "INTERNAL_ERROR",
-        detail: null,
-        sourceObservationId: assessment.sourceObservationId,
-        configRevisionId: null,
-        revision: null,
-      });
-    }
-  }
-  const summary = summarize(items);
-  const status = summary.failed === 0 ? "COMPLETED" as const : "PARTIAL" as const;
-  const completedAt = new Date();
-  await prisma.$transaction(async (tx) => {
-    await tx.desiredStateBackfillRun.update({
-      where: { id: created.run.id },
-      data: {
-        status,
-        summary: summary as unknown as Prisma.InputJsonValue,
-        completedAt,
-      },
-    });
-    const needsInputByReason = Object.fromEntries(
-      [...new Set(items
-        .filter((item) => item.outcome === "NEEDS_INPUT")
-        .map((item) => item.reason)
-        .filter((reason): reason is DesiredStateNeedsInputReason => reason !== null))]
-        .sort()
-        .map((reason) => [reason, items.filter((item) => item.reason === reason).length]),
-    );
-    await tx.auditLog.create({
-      data: {
-        actorLogin: input.actor,
-        action: "control-plane.desired-state-backfill.completed",
-        entityType: "DesiredStateBackfillRun",
-        entityId: created.run.id,
-        payload: {
-          activeApps: summary.activeApps,
-          draftCreated: summary.draftCreated,
-          sourceRebasedAndActivated: summary.sourceRebasedAndActivated,
-          alreadyConfigured: summary.alreadyConfigured,
-          needsInput: summary.needsInput,
-          failed: summary.failed,
-          needsInputByReason,
-          activationAttempted: summary.activationAttempted,
-          providerMutationAttempted: false,
-          trigger: input.trigger,
-          sourceSha: input.sourceSha,
+    const summary = summarize(items);
+    const status = summary.failed === 0 ? "COMPLETED" as const : "PARTIAL" as const;
+    const completedAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.desiredStateBackfillRun.update({
+        where: { id: created.run.id },
+        data: {
+          status,
+          summary: summary as unknown as Prisma.InputJsonValue,
+          completedAt,
         },
-      },
+      });
+      const needsInputByReason = Object.fromEntries(
+        [...new Set(items
+          .filter((item) => item.outcome === "NEEDS_INPUT")
+          .map((item) => item.reason)
+          .filter((reason): reason is DesiredStateNeedsInputReason => reason !== null))]
+          .sort()
+          .map((reason) => [reason, items.filter((item) => item.reason === reason).length]),
+      );
+      await tx.auditLog.create({
+        data: {
+          actorLogin: input.actor,
+          action: "control-plane.desired-state-backfill.completed",
+          entityType: "DesiredStateBackfillRun",
+          entityId: created.run.id,
+          payload: {
+            activeApps: summary.activeApps,
+            draftCreated: summary.draftCreated,
+            sourceRebasedAndActivated: summary.sourceRebasedAndActivated,
+            alreadyConfigured: summary.alreadyConfigured,
+            needsInput: summary.needsInput,
+            failed: summary.failed,
+            needsInputByReason,
+            activationAttempted: summary.activationAttempted,
+            providerMutationAttempted: false,
+            trigger: input.trigger,
+            sourceSha: input.sourceSha,
+          },
+        },
+      });
     });
-  });
-  return {
-    ...summary,
-    runId: created.run.id,
-    duplicate: false,
-    state: status === "COMPLETED" ? "completed" : "partial",
-    runStatus: status,
-    trigger: input.trigger,
-    sourceSha: input.sourceSha,
-    ok: status === "COMPLETED",
-  };
+    return {
+      ...summary,
+      runId: created.run.id,
+      duplicate: false,
+      state: status === "COMPLETED" ? "completed" : "partial",
+      runStatus: status,
+      trigger: input.trigger,
+      sourceSha: input.sourceSha,
+      ok: status === "COMPLETED",
+    };
+  } catch (error) {
+    if (retrySummary) await prisma.$transaction(async (tx) => {
+      await tx.desiredStateBackfillRun.update({
+        where: { id: created.run.id },
+        data: {
+          status: "PARTIAL",
+          summary: retrySummary as unknown as Prisma.InputJsonValue,
+          completedAt: new Date(),
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorLogin: input.actor,
+          action: "control-plane.desired-state-backfill.retry-failed",
+          entityType: "DesiredStateBackfillRun",
+          entityId: created.run.id,
+          payload: {
+            trigger: input.trigger,
+            sourceSha: input.sourceSha,
+            errorCode: desiredStateBackfillFailureCode(error),
+          },
+        },
+      });
+    });
+    throw error;
+  }
 }
 
 export async function getDesiredStateBackfillSummary() {

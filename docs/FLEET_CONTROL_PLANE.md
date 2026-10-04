@@ -867,7 +867,13 @@ null로 되돌리지 않는다. 대신 `PRODUCT_SOURCE_CANDIDATE_MISSING`,
 배포가 실패한다. `desired-state-safe-source-rebase/v3`부터 배포 Job은 렌더된 소문자 40자리 source SHA를
 `x-seorilabs-source-sha`로 전달한다. 배포 occurrence key와 request hash는 이 SHA, 고정 actor,
 `DEPLOY_CATCH_UP` trigger에 결합되므로 동일 SHA 재시도만 기존 run을 replay하고 같은 UTC hour의 다른 SHA는
-새 run을 만든다. hourly Cron은 source SHA가 없는 별도 `HOURLY_CRON` occurrence key를 사용한다.
+새 run을 만든다. `COMPLETED` 재요청은 저장된 결과를 반환한다. `PARTIAL` 재요청은
+기존 완료 시각과 상태를 조건으로 한 transaction에서 한 요청만 `RUNNING`으로 전환한다.
+이전 전체 결과는 `retry-started` 감사 기록에 보존하고 현재 후보를 기존 validator와
+안전한 source 보정 서비스로 다시 평가한다. 동시 요청은 `busy`이며, 입력 필요 상태나
+마켓 변경을 자동 승인하지 않는다. 재평가 자체가 실패하면 이전 결과와 `PARTIAL`을 복원하고
+`retry-failed` 감사 기록을 남겨 다시 시도할 수 있게 한다. 오류 detail에는 알려진 오류 코드만
+저장하며 예외 메시지나 자격증명은 저장하지 않는다. hourly Cron은 source SHA가 없는 별도 `HOURLY_CRON` occurrence key를 사용한다.
 run은 공개 `trigger`, `sourceSha`, request hash를 보존하며 응답 header와 Pod termination message의
 run ID, contract, source SHA, `COMPLETED`, `failed=0` readback이 모두 맞아야 배포가 성공한다. 응답 body와
 admin token은 Job 또는 배포 로그에 남기지 않는다. 정기 scheduler 자체는 삭제하거나 suspend하지 않는다.
