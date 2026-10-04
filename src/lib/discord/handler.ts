@@ -1,3 +1,5 @@
+import { connectAccount } from "@/lib/deployment-approvals/links";
+import { prepareDeploymentReview } from "@/lib/deployment-approvals/interactions";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { resetDiscordChat } from "@/lib/discord/chat";
@@ -94,6 +96,7 @@ function authorized(interaction: DiscordInteraction, capability: DiscordCapabili
 }
 
 function commandCapability(operation: string): DiscordCapability {
+  if (operation === "platform_deployment_review") return "release_approval";
   if (operation === "approval") return "planning_approval";
   if (operation === "incident_ack" || operation === "incident_assign") return "ops_incident";
   if (operation.startsWith("release_") || operation === "deploy") return "release";
@@ -128,6 +131,10 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
   const channelId = interaction.channel_id ?? "";
   const userId = actor(interaction);
 
+  if (name === "connect") {
+    try { await connectAccount(option(interaction.data?.options, "code"), userId); return ephemeral("GitHub 계정을 연결했습니다."); }
+    catch { return ephemeral("연결 실패: 만료·사용된 코드 또는 이미 연결된 계정입니다. Backoffice에서 연결 상태를 확인하세요."); }
+  }
   if (name === "help") return ephemeral(helpText());
   if (name === "approvals") {
     const result = await approvalsQuery();
@@ -226,6 +233,11 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 async function handleModal(interaction: DiscordInteraction) {
   const [prefix, action, appId] = (interaction.data?.custom_id ?? "").split(":");
   const text = modalText(interaction);
+  if (prefix === "papproval") {
+    if (!authorized(interaction, "release_approval")) return ephemeral("배포 승인 권한 없음");
+    if (!text) return ephemeral("거절 사유 필요");
+    return prepareDeploymentReview(interaction, action, appId, text);
+  }
   if (prefix !== "modal" || !text || text.length > 4_000) return ephemeral("입력값이 올바르지 않습니다.");
   const capability = action === "plan" ? "planning" : action === "bug" ? "bug" : action === "save" ? "vault_write" : "read";
   if (!authorized(interaction, capability)) return ephemeral("이 작업을 실행할 역할 권한이 없습니다.");
@@ -249,6 +261,10 @@ async function handleComponent(interaction: DiscordInteraction) {
   const channelId = interaction.channel_id ?? "";
   const messageId = interaction.message?.id;
 
+  if (kind === "papproval") {
+    if (!authorized(interaction, "release_approval")) return ephemeral("배포 승인 권한 없음");
+    return prepareDeploymentReview(interaction, action, id);
+  }
   if (kind === "command") {
     const run = await prisma.operatorCommandRun.findUnique({ where: { id }, select: { operation: true, actorDiscordUserId: true } });
     if (!run || run.actorDiscordUserId !== userId) return ephemeral("이 확인은 명령을 요청한 사용자만 처리할 수 있습니다.");
@@ -412,7 +428,7 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
   // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #backoffice 로 묶은 채로 버튼까지 묶으면
   // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
   const isComponent = interaction.type === InteractionType.MESSAGE_COMPONENT;
-  const allowedChannelIds = interactionChannelKeys(isComponent).map((key) =>
+  const allowedChannelIds = interactionChannelKeys(isComponent || (interaction.type === InteractionType.MODAL_SUBMIT && interaction.data?.custom_id?.startsWith("papproval:") === true)).map((key) =>
     env.discordChannelId(key),
   );
   if (!isDiscordInteractionScope({

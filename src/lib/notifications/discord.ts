@@ -372,3 +372,12 @@ export async function putDiscordApi(path: string, body: unknown): Promise<Discor
     body: JSON.stringify(body),
   });
 }
+
+/** 실행 직전 역할을 다시 읽는다. interaction에 담겼던 과거 역할을 신뢰하지 않는다. */
+export async function currentDiscordMemberRoles(userId: string): Promise<string[]> {
+  if (!/^\d+$/.test(userId)) throw new Error("Discord 사용자 ID 오류");
+  const result = await discordRequest(`/guilds/${env.discordGuildId()}/members/${userId}`, { method: "GET" });
+  const body = result.json as { roles?: unknown } | undefined;
+  if (!result.ok || !Array.isArray(body?.roles)) throw new Error("Discord 역할 조회 실패");
+  return body.roles.filter((role): role is string => typeof role === "string");
+}

@@ -1,3 +1,4 @@
+import { reconcileDeploymentApprovals } from "@/lib/deployment-approvals/monitor";
 import { connect, type NatsConnection, type Subscription } from "@nats-io/transport-node";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -54,7 +55,12 @@ async function consume(): Promise<void> {
 
 async function deliver(): Promise<void> {
   let lastRetention = 0;
+  let lastApprovals = 0;
   while (!stopping) {
+    if (Date.now() - lastApprovals >= 60_000) {
+      await reconcileDeploymentApprovals();
+      lastApprovals = Date.now();
+    }
     if (Date.now() - lastRetention >= 24 * 60 * 60_000) {
       const retained = await maintainDiscordRetention();
       await purgeSubmissionPayloads();

@@ -1,3 +1,4 @@
+import { recoverUncertainApprovals } from "@/lib/deployment-approvals/execute";
 import { prisma } from "@/lib/prisma";
 import { maintainOperatorCommands, processNextOperatorCommand } from "@/lib/discord/command-runs";
 import { registerDiscordGuildCommands } from "@/lib/discord/commands";
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   console.log("[operator-command-worker] 시작");
   while (!stopping) {
     if (Date.now() - lastMaintenance >= 60_000) {
+      await recoverUncertainApprovals();
       await maintainOperatorCommands();
       lastMaintenance = Date.now();
     }

@@ -2754,3 +2754,53 @@ model PlatformPresenceSession {
   @@index([appId, expiresAt])
   @@map("platform_presence_session")
 }
+
+// GitHub 관측과 Discord 요청 처리는 독립 상태다. 외부 결과 미확정은 재전송하지 않는다.
+model DeploymentApproval {
+  id String @id @default(cuid())
+  repository String
+  runId BigInt
+  runAttempt Int
+  environmentId BigInt
+  environment String
+  sourceSha String
+  workflow String
+  runNumber Int
+  target Json?
+  targetHash String?
+  waitingSince DateTime @db.DateTime(3)
+  observedAt DateTime @db.DateTime(3)
+  providerState String @default("WAITING")
+  observationError String?
+  actionState String @default("IDLE")
+  actionCommandId String? @unique
+  actorGithubId BigInt?
+  actorLogin String?
+  decision String?
+  decidedAt DateTime? @db.DateTime(3)
+  actionStartedAt DateTime? @db.DateTime(3)
+  initialNotifiedAt DateTime? @db.DateTime(3)
+  nextReminderAt DateTime? @db.DateTime(3)
+  reminderSequence Int @default(0)
+  createdAt DateTime @default(now())
+  @@unique([repository, runId, runAttempt, environmentId])
+  @@index([providerState, nextReminderAt])
+  @@map("deployment_approval")
+}
+
+model DiscordAccountLink {
+  githubId BigInt @id
+  discordUserId String @unique
+  createdAt DateTime @default(now())
+  @@map("discord_account_link")
+}
+
+model DiscordLinkCode {
+  codeHash String @id
+  githubId BigInt
+  expiresAt DateTime @db.DateTime(3)
+  consumedAt DateTime? @db.DateTime(3)
+  createdAt DateTime @default(now())
+  @@index([githubId, expiresAt])
+  @@map("discord_link_code")
+}
