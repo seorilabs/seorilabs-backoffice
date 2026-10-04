@@ -36,6 +36,7 @@ spec:
           workingDir: /app
           command: ["node", "/app/scripts-dist/notification-worker.cjs"]
           env:
+            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
             - name: NODE_ENV
               value: production
             - name: HOME
@@ -139,6 +140,8 @@ spec:
           workingDir: /app
           command: ["node", "/app/scripts-dist/operator-command-worker.cjs"]
           env:
+            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
+            - { name: PLATFORM_APPROVER_TOKEN_DIRECTORY, value: /var/run/secrets/platform-approvers }
             - { name: NODE_ENV, value: production }
             - { name: HOME, value: /tmp }
             - { name: CHECKPOINT_DISABLE, value: "1" }
@@ -182,7 +185,12 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
           volumeMounts:
+            - { name: platform-approvers, mountPath: /var/run/secrets/platform-approvers, readOnly: true }
             - { name: tmp, mountPath: /tmp }
       volumes:
+        - name: platform-approvers
+          secret:
+            secretName: platform-deployment-approvers
+            defaultMode: 0440
         - name: tmp
           emptyDir: {}

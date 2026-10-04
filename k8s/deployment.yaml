@@ -52,6 +52,7 @@ spec:
             - name: http
               containerPort: 3000
           env:
+            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
             - name: NODE_ENV
               value: production
             - name: PORT
