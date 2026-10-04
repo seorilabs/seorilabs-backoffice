@@ -496,6 +496,15 @@ else
   ng "Discord worker 최소권한 경계가 깨졌다"
 fi
 
+if grep -q 'reconcileDeploymentApprovals' "$root/scripts/operator-command-worker.ts" &&
+   ! grep -q 'reconcileDeploymentApprovals' "$root/scripts/notification-worker.ts" &&
+   printf '%s' "$operator_doc" | grep -q 'key: GITHUB_APP_ID' &&
+   printf '%s' "$operator_doc" | grep -q 'key: GITHUB_PRIVATE_KEY'; then
+  ok "플랫폼 승인 주기 조회는 GitHub 인증이 있는 command worker에서 실행"
+else
+  ng "플랫폼 승인 조회 실행기와 GitHub 인증이 분리됐다"
+fi
+
 echo "== Vault 일일 스케줄 =="
 vault_manifest="$root/k8s/vault-rag.yaml"
 indexer_doc="$(awk 'BEGIN { RS="---" } /name: vault-indexer/ { print }' "$vault_manifest")"
