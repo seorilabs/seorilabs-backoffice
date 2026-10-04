@@ -74,7 +74,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
       });
     }
     await prisma.notificationDelivery.updateMany({ where: { status: "DEAD_LETTER", nextAttemptAt: { lte: now }, event: { OR: [{ dedupeKey: { startsWith: "platform-approval:" } }, { dedupeKey: { startsWith: "platform-approval-reminder:" } }] } }, data: { status: "PENDING", attempts: 0 } });
-    const failed = await prisma.notificationDelivery.findMany({ where: { lastError: { not: null }, event: { OR: [{ dedupeKey: { startsWith: "platform-approval:" } }, { dedupeKey: { startsWith: "platform-approval-reminder:" } }] } }, select: { id: true } });
+    const failed = await prisma.notificationDelivery.findMany({ where: { lastError: { not: null }, NOT: { lastError: "야간 재알림 보류" }, event: { OR: [{ dedupeKey: { startsWith: "platform-approval:" } }, { dedupeKey: { startsWith: "platform-approval-reminder:" } }] } }, select: { id: true } });
     for (const item of failed) await approvalAlert(`delivery:${item.id}`, "플랫폼 승인 카드 전송 실패 — 알림 대기열과 Discord 채널 설정을 확인하세요.");
   } catch (error) { await approvalAlert(`scan:${now.toISOString().slice(0, 13)}`, providerError(error)); }
 }
