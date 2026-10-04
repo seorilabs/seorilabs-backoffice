@@ -4,7 +4,7 @@ import { shouldNotifySubmission } from "@/lib/store-reviews/submissions/persist"
 
 const at = new Date("2026-09-25T06:00:00Z");
 
-test("첫 Play 폴링은 기준선, 완료 뒤 처음 나타난 릴리스는 알림", () => {
+test("공통 최초 관측 정책은 알림 허용 플래그를 따른다 · Play는 별도 버전별 기준 정책 사용", () => {
   assert.equal(shouldNotifySubmission({
     decision: "baseline", notifyOnFirstObservation: false,
     previousObservedAt: null, sourceEventAt: at,

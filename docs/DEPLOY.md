@@ -813,8 +813,86 @@ App Store Connect 웹훅은 `APP_STORE_WEBHOOK_SECRET`으로 본문 HMAC 서명�
 
 `backoffice-store-submissions` CronJob은 15분마다 등록된 Play 앱의 트랙을
 읽는다. `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`은 이 CronJob에만 주입하고
-공개 웹 Pod에는 넣지 않는다. 앱의 첫 성공 폴링만 기준선으로 기록하고,
-그 이후 새 릴리스나 단계 변경은 카드를 보낸다.
+공개 웹 Pod에는 넣지 않는다. 같은 OAuth 토큰으로 edit의 `tracks`와
+`GET applications/{packageName}/tracks/{track}/releases`를 읽는다.
+조회용 edit은 반드시 삭제하고 commit하지 않는다.
+
+Play 상태는 packageName·track·versionCode로 결합한다. 릴리스 이름이나
+최신 버전 추정으로 결합하지 않는다. 여러 versionCode는 각각 두 응답에서
+유일하게 매칭되고 출시 단계가 모두 같아야 한다. 중복·불일치·알 수 없는
+단계·잘못된 출시율은 확인 불가다. 같은 코드의 초안과 완료가 함께 있어도
+임의로 완료를 선택하지 않는다.
+
+| 확인된 출시 단계와 트랙 상태 | 카드 표시 |
+| --- | --- |
+| `DRAFT` + `draft` | 작성 중 |
+| `NOT_SENT_FOR_REVIEW` | 심사 제출 대기 |
+| `IN_REVIEW` + `completed` 포함 | 심사 중 |
+| `APPROVED_NOT_PUBLISHED` | 승인 완료 · 게시 대기 |
+| `NOT_APPROVED` | 심사 거절 |
+| production `PUBLISHED` + `completed` | 프로덕션 공개 확인 · 전체 출시 |
+| production `PUBLISHED` + `inProgress`, `userFraction=0.1` | 프로덕션 공개 확인 · 10% 단계적 출시 |
+| production `PUBLISHED` + `halted` | 프로덕션 출시 중지 · 출시율이 있으면 함께 표시 |
+| 테스트 `PUBLISHED` + `completed` | 내부·비공개·공개 테스트 제공 확인 · 전체 출시 |
+| 테스트 `PUBLISHED` + `inProgress` 또는 `halted` | 해당 테스트 제공 확인과 출시율 또는 출시 중지 |
+| 기존 `completed` 등 트랙 상태만 저장된 관측 | 트랙 상태 completed · 실제 공개 확인 불가 |
+
+`PUBLISHED`는 해당 트랙에서 사용자에게 제공됨을 뜻하며 부분 출시와
+재개 가능한 중지도 포함한다. 따라서 `halted`를 `inProgress`로 바꾸지
+않는다. `inProgress`는 `0 < userFraction < 1`이 필요하고, `halted`는
+출시율 없이도 중지로 표시한다. `completed`·`draft`에 출시율이 있거나
+출시 단계와 초안 상태가 모순되면 전체 출시로 추정하지 않는다.
+`beta`는 공개 테스트, `internal`·`qa`는 내부 테스트, 나머지 사용자 지정
+트랙은 비공개 테스트로 표시한다. `wear:production` 같은 기기별 트랙도
+접미사의 트랙 종류를 사용하며 실제 트랙 이름을 카드에 함께 적는다.
+정의와 경로는 [공식 출시 단계 정의](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases),
+[GET 문서](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list),
+[트랙 종류 문서](https://developers.google.com/android-publisher/tracks)를 따른다.
+
+**버전·트랙별 첫 정상 결합 관측은 항상 알림 없는 기준 상태다.**
+기존 tracks 관측만 있는 릴리스와 이후 처음 나타나는 새 버전에도 적용한다.
+처음부터 `PUBLISHED`였으면 공개 전환 알림을 보내지 않는다. 이후 출시
+단계·트랙 상태·출시율 변경과 중지·재개만 `#release-ops` outbox에 등록한다.
+다중 artifact도 코드별 기준 상태를 유지하며 카드에는 해당 코드를 적는다.
+출시 이름이나 조회 시각의 변경은 전환이 아니다.
+
+관측의 `state`는 `play:v2:<출시 단계>:<트랙 상태>:<출시율>`로 저장한다.
+기존 관측은 수정하지 않고 수정된 문구로 읽는다. API 실패·권한 부족은
+sync 행에 기록하고, 버전 결합에 실패한 응답은 해당 버전의
+`play:v2:unavailable` 관측도 남긴다. 마지막 정상 관측은 덮어쓰지 않는다.
+복구 시 마지막 정상 상태와 비교하며 실패나 동일 상태 복구 자체는 알리지
+않는다. 동일 정상 상태 재조회는 그 행의 `lastObservedAt`만 갱신한다.
+역순·동일 시각 관측은 더 최근 상태를 되돌리지 않는다.
+
+앱·스토어 sync 행의 쓰기 잠금을 먼저 잡는 `READ COMMITTED` 트랜잭션에서
+관측 저장과 outbox 등록을 함께 처리한다. 최초 sync 생성 경합과 deadlock은
+전체 트랜잭션을 최대 3회 시도하고, 나머지 오류는 실패로 남긴다. 부분 처리
+후 재시도와 동시 조회에서도 같은 상태 전환을 중복 등록하지 않는다.
+
+카드의 **공개 확인 시각**은 해당 버전·트랙에서 `PUBLISHED`를 처음 관측한
+`sourceEventAt`이다. 테스트에는 제공 확인 시각으로 표시한다. API가 실제
+공개 시각을 반환하는 것은 아니며 실제 공개 시각 필드는 만들지 않는다.
+7일 보존기한 뒤 `rawPayload`만 비우고 관측 행·상태·hash·최초 확인 시각은
+남긴다. 원본이 만료돼도 기준 상태, 중복 방지와 최초 확인 시각이 유지된다.
+Apple 수집의 상태 판정과 웹훅 처리는 유지한다.
+
+2026-10-04 12:07 UTC에 기존 `shared/google-play/publisher`로
+`com.seorilabs.lizardtycoon`의 production·internal releases GET을 재확인했다.
+두 트랙 모두 HTTP 200이고 `activeArtifacts.versionCode=1001004028`,
+`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`였다. 이 재확인은
+GET만 실행했으며 수집 작업, 운영 DB 쓰기와 Discord 전송은 실행하지 않았다.
+트랙 status와 출시율은 이 GET 응답에 없으므로 이 결과만으로 전체 출시라고
+기록하지 않는다.
+
+저장·동시 처리 테스트는 기본적으로 메모리 저장 경계에서 실행한다.
+실제 DB 잠금·rollback 검증에는 임시 로컬 MySQL DB만 허용한다. 스키마를
+적용한 `play_release_test`에 아래 명령을 실행한다. 환경 변수가 없으면
+MySQL 시나리오는 건너뛰고 기본 회귀 테스트는 계속 실행한다.
+
+```bash
+PLAY_SUBMISSION_TEST_DATABASE_URL=mysql://root@127.0.0.1:43316/play_release_test \
+  pnpm exec tsx --test src/lib/google-play/tracks-persistence.test.ts
+```
 
 배포 후 웹·worker의 source SHA, CronJob image digest와 Secret 키 이름만
 확인한다. 웹 Pod에서
