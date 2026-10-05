@@ -129,17 +129,17 @@ export function mapDailyActivityRow(r: Record<string, unknown>): Ga4DailyRow {
 }
 
 /** 날짜별 활동 지표(DAU/신규/engagement/광고). start/end 는 "YYYYMMDD". */
-export async function queryDailyActivity(
+export function buildDailyActivitySql(
   target: Ga4Target,
   start: string,
   end: string,
-): Promise<Ga4DailyRow[]> {
+): string {
   const from = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
-  const sql = `
+  return `
     SELECT
       FORMAT_DATE('%Y-%m-%d', PARSE_DATE('%Y%m%d', event_date)) AS date,
       COUNT(DISTINCT user_pseudo_id) AS dau,
-      COUNTIF(event_name = 'first_visit') AS new_users,
+      COUNT(DISTINCT IF(event_name IN ('first_open', 'first_visit'), user_pseudo_id, NULL)) AS new_users,
       COUNT(DISTINCT IF(event_name = 'user_engagement', user_pseudo_id, NULL)) AS engaged_users,
       ROUND(AVG(IF(event_name = 'user_engagement',
         (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'engagement_time_msec'),
@@ -156,7 +156,11 @@ export async function queryDailyActivity(
     WHERE _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     GROUP BY date
     ORDER BY date`;
-  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+}
+
+export async function queryDailyActivity(target: Ga4Target, start: string, end: string): Promise<Ga4DailyRow[]> {
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset,
+    buildDailyActivitySql(target, start, end));
   return rows.map(mapDailyActivityRow);
 }
 
@@ -262,7 +266,8 @@ export function buildDailyBreakdownsSql(
             ELSE CONCAT(device.operating_system, ' ', IFNULL(device.operating_system_version, ''))
           END
         ), ''), '(unknown)') AS os_dim,
-        IFNULL(NULLIF(app_info.version, ''), '(unknown)') AS app_version_dim
+        IFNULL(NULLIF(app_info.version, ''), '(unknown)') AS app_version_dim,
+        CONCAT(IFNULL(NULLIF(platform, ''), '(unknown)'), ' · ', stream_id) AS stream_dim
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     )
@@ -271,7 +276,8 @@ export function buildDailyBreakdownsSql(
     UNION ALL SELECT date, 'country', country, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
-    UNION ALL SELECT date, 'app_version', app_version_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+    UNION ALL SELECT date, 'app_version', app_version_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'stream', stream_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
 }
 
 export async function queryDailyBreakdowns(
@@ -289,35 +295,47 @@ export async function queryDailyBreakdowns(
   }));
 }
 
-/** 신규 코호트 잔존율(D1/D3/D7). 윈도우 내 첫 활동일을 코호트일로 근사. */
-export async function queryCohortRetention(
+/** first_open/first_visit이 관측된 신규 사용자만 잔존율 모수에 넣는다. MP 활동을 신규 설치로 추정하지 않는다. */
+export function buildCohortRetentionSql(
   target: Ga4Target,
   start: string,
   end: string,
-): Promise<Ga4CohortRow[]> {
+): string {
   const from = `\`${target.firebaseProject}.${target.dataset}.events_*\``;
-  const sql = `
+  return `
     WITH activity AS (
-      SELECT user_pseudo_id, PARSE_DATE('%Y%m%d', event_date) AS d
+      SELECT stream_id, user_pseudo_id, PARSE_DATE('%Y%m%d', event_date) AS d
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
+      GROUP BY 1, 2, 3
+    ),
+    cohort AS (
+      SELECT stream_id, user_pseudo_id, MIN(PARSE_DATE('%Y%m%d', event_date)) AS cohort_day
+      FROM ${from}
+      WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
+        AND event_name IN ('first_open', 'first_visit')
       GROUP BY 1, 2
     ),
-    cohort AS (SELECT user_pseudo_id, MIN(d) AS cohort_day FROM activity GROUP BY 1),
     j AS (
-      SELECT c.cohort_day, DATE_DIFF(a.d, c.cohort_day, DAY) AS n, a.user_pseudo_id
-      FROM activity a JOIN cohort c USING (user_pseudo_id)
+      SELECT c.cohort_day, DATE_DIFF(a.d, c.cohort_day, DAY) AS n, CONCAT(a.stream_id, ":", a.user_pseudo_id) AS user_pseudo_id
+      FROM activity a JOIN cohort c USING (stream_id, user_pseudo_id)
     )
     SELECT
       FORMAT_DATE('%Y-%m-%d', cohort_day) AS date,
       COUNT(DISTINCT IF(n = 0, user_pseudo_id, NULL)) AS new_users,
-      ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1) AS d1_pct,
-      ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=3,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1) AS d3_pct,
-      ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=7,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1) AS d7_pct
+      IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
+        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d1_pct,
+      IF(DATE_ADD(cohort_day, INTERVAL 3 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
+        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=3,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d3_pct,
+      IF(DATE_ADD(cohort_day, INTERVAL 7 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
+        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=7,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d7_pct
     FROM j
-    GROUP BY date
+    GROUP BY cohort_day
     ORDER BY date`;
-  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, sql);
+}
+
+export async function queryCohortRetention(target: Ga4Target, start: string, end: string): Promise<Ga4CohortRow[]> {
+  const rows = await runQuery<Record<string, unknown>>(target.firebaseProject, target.dataset, buildCohortRetentionSql(target, start, end));
   return rows.map((r) => ({
     date: String(r.date),
     newUsers: num(r.new_users),

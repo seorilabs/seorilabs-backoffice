@@ -20,12 +20,14 @@ export interface MetricBreakdowns {
    * 150초 창이라 "지금 접속 중"만 답하고 과거는 복원할 수 없다.
    */
   appVersions?: DimCount[];
+  /** SDK 앱 스트림과 기존 MP 웹 스트림을 구분하는 수집 경로. */
+  streams?: DimCount[];
 }
 
 /** BigQuery 차원 분해 쿼리의 한 행(날짜×차원×값의 DAU). */
 export interface Ga4BreakdownRow {
   date: string; // "YYYY-MM-DD"
-  dim: string; // 'platform' | 'country' | 'os' | 'device' | 'app_version'
+  dim: string; // 'platform' | 'country' | 'os' | 'device' | 'app_version' | 'stream'
   val: string;
   dau: number;
 }
@@ -79,6 +81,7 @@ export function buildDayBreakdown(
       osVersions: topN(dims?.["os"], topCount),
       devices: topN(dims?.["device"], topCount),
       appVersions: topN(dims?.["app_version"], topCount),
+      streams: topN(dims?.["stream"], topCount),
     },
   };
 }

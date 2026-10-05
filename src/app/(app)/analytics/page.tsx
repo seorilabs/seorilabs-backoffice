@@ -163,6 +163,9 @@ async function SelectedApp({
         <Panel title="OS 버전 (DAU)">
           <TopDimList items={bd.osVersions} empty="OS 데이터 없음" />
         </Panel>
+        <Panel title="수집 경로 (DAU)">
+          <TopDimList items={bd.streams} />
+        </Panel>
       </div>
       <div>
         <div className="mb-2 text-sm font-semibold text-neutral-700">DAU 추이 (최근 {rowsAsc.length}일)</div>

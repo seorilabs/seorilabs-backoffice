@@ -97,6 +97,9 @@ export default async function AppMetricsPage({
               <Panel title="OS 버전">
                 <TopDimList items={ga4Rows[0].raw?.osVersions} />
               </Panel>
+              <Panel title="수집 경로 (DAU)">
+                <TopDimList items={ga4Rows[0].raw?.streams} />
+              </Panel>
             </div>
             <div>
               <div className="mb-2 text-sm font-semibold text-neutral-700">DAU 추이</div>
