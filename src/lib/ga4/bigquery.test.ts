@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDailyBreakdownsSql,
+  buildDailyActivitySql,
+  buildCohortRetentionSql,
   decideLocation,
   mapDailyActivityRow,
 } from "@/lib/ga4/bigquery";
@@ -83,4 +85,32 @@ test("buildDailyBreakdownsSql: 앱 버전 차원을 같은 스캔에서 집계�
   assert.match(sql, /UNION ALL SELECT date, 'app_version', app_version_dim/);
   // base CTE를 한 번만 스캔한다. 차원이 늘어도 events_* 스캔은 하나다.
   assert.equal((sql.match(/FROM `happy-farm-tycoon/g) ?? []).length, 1);
+});
+
+
+test("신규 사용자: 앱 first_open과 웹 first_visit을 사용자 단위로 집계한다", () => {
+  const sql = buildDailyActivitySql({ firebaseProject: "alley-market-match", dataset: "analytics_551185839" }, "20261001", "20261005");
+  assert.match(sql, /COUNT\(DISTINCT IF\(event_name IN \('first_open', 'first_visit'\), user_pseudo_id, NULL\)\) AS new_users/);
+});
+
+test("신규 코호트: 첫 활동을 설치로 추정하지 않고 수집 경로별 첫 실행으로 연결한다", () => {
+  const sql = buildCohortRetentionSql({ firebaseProject: "alley-market-match", dataset: "analytics_551185839" }, "20261001", "20261005");
+  assert.match(sql, /AND event_name IN \('first_open', 'first_visit'\)/);
+  assert.match(sql, /JOIN cohort c USING \(stream_id, user_pseudo_id\)/);
+  assert.doesNotMatch(sql, /MIN\(d\) AS cohort_day FROM activity/);
+});
+
+test("수집 경로: 기존 MP 플랫폼 값과 별개로 실제 GA4 스트림을 표시한다", () => {
+  const sql = buildDailyBreakdownsSql({ firebaseProject: "alley-market-match", dataset: "analytics_551185839" }, "20261001", "20261005");
+  assert.match(sql, /CONCAT\(IFNULL\(NULLIF\(platform, ''\), '\(unknown\)'\), ' · ', stream_id\) AS stream_dim/);
+  assert.match(sql, /UNION ALL SELECT date, 'stream', stream_dim/);
+});
+
+
+test("잔존율: 관찰 기간이 아직 끝나지 않은 D1/D3/D7을 0%로 만들지 않는다", () => {
+  const sql = buildCohortRetentionSql({ firebaseProject: "alley-market-match", dataset: "analytics_551185839" }, "20261001", "20261003");
+  for (const n of [1, 3, 7]) {
+    assert.ok(sql.includes(`IF(DATE_ADD(cohort_day, INTERVAL ${n} DAY) <= PARSE_DATE('%Y%m%d', '20261003')`));
+  }
+  assert.match(sql, /NULL\) AS d7_pct/);
 });

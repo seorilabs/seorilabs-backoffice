@@ -63,7 +63,7 @@ test("buildDayBreakdown: 데이터 없는 날은 0/빈 배열", () => {
     dauAndroid: 0,
     dauIos: 0,
     dauWeb: 0,
-    raw: { countries: [], osVersions: [], devices: [], appVersions: [] },
+    raw: { countries: [], osVersions: [], devices: [], appVersions: [], streams: [] },
   });
 });
 
@@ -187,5 +187,14 @@ test("buildDayBreakdown: 앱 버전 분해를 top-N 으로 담는다", () => {
   assert.deepEqual(bd.raw.appVersions, [
     { k: "1.5.0", dau: 8 },
     { k: "1.4.0", dau: 3 },
+  ]);
+});
+
+
+test("buildDayBreakdown: 네이티브 SDK와 MP 웹 경로를 합치지 않는다", () => {
+  const bd = buildDayBreakdown({ stream: { "IOS · 15859087779": 4, "WEB · 15484218926": 13 } });
+  assert.deepEqual(bd.raw.streams, [
+    { k: "WEB · 15484218926", dau: 13 },
+    { k: "IOS · 15859087779", dau: 4 },
   ]);
 });
