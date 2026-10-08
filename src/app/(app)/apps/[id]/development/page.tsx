@@ -9,11 +9,7 @@ import { llmChatConfigured } from "@/lib/ai/llm";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { prisma } from "@/lib/prisma";
 
-export default async function AppDevelopmentPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function AppDevelopmentPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const app = await prisma.app.findFirst({
     where: { id, ...visibleAppWhere },
@@ -27,20 +23,19 @@ export default async function AppDevelopmentPage({
   const openIssues = app.issues.filter((issue) => issue.state === "OPEN");
   const aiEnabled = llmChatConfigured();
   const drafts = await prisma.aiDraft.findMany({
-        where: { appId: app.id, status: "DRAFT" },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        select: {
-          id: true,
-          kind: true,
-          title: true,
-          issueNumber: true,
-          outputText: true,
-          model: true,
-          claimedAt: true,
-        },
-      })
-;
+    where: { appId: app.id, status: "DRAFT" },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: {
+      id: true,
+      kind: true,
+      title: true,
+      issueNumber: true,
+      outputText: true,
+      model: true,
+      claimedAt: true,
+    },
+  });
 
   return (
     <div className="space-y-8">
@@ -56,7 +51,10 @@ export default async function AppDevelopmentPage({
               number: issue.number,
               title: issue.title,
             }))}
-            initialDrafts={drafts.map(({claimedAt,...draft})=>({...draft,registrationPending:Boolean(claimedAt)}))}
+            initialDrafts={drafts.map(({ claimedAt, ...draft }) => ({
+              ...draft,
+              registrationPending: Boolean(claimedAt),
+            }))}
           />
         </Panel>
       </WorkspaceSection>
@@ -106,7 +104,9 @@ export default async function AppDevelopmentPage({
                   >
                     #{pr.number} {pr.title}
                   </a>
-                  <Pill tone={pr.state === "MERGED" ? "green" : pr.state === "OPEN" ? "blue" : "amber"}>
+                  <Pill
+                    tone={pr.state === "MERGED" ? "green" : pr.state === "OPEN" ? "blue" : "amber"}
+                  >
                     {pr.state}
                   </Pill>
                 </div>
@@ -118,7 +118,7 @@ export default async function AppDevelopmentPage({
         )}
       </WorkspaceSection>
 
-      <WorkspaceSection title="라이프사이클 전이 이력">
+      <WorkspaceSection title="개발·출시 단계 변경 이력">
         <Panel>
           <div className="divide-y divide-neutral-100">
             {app.transitions.map((transition) => (

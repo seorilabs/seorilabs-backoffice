@@ -39,7 +39,16 @@
 - 기대: 2026-10-01 미수집은 0 사용자/0원으로 단정하지 않고 빈 상태로 표시, 추이는 선을 끊음. 2026-10-07의 D1 30%·분모 20명/복귀 6명, 보고서 v1/v999, Vitals 0.03%/100명·테스터 미상은 유지.
 - 범위: 주요 8개 메뉴·앱 7개 탭·과거 URL·설정/수집 실패/빈 상태, 인사이트 → 같은 로컬 초안, 모바일 메뉴 초점·Escape·복귀, desktop 및 모바일 화면·콘솔·서버 오류. 외부 Issue 등록·Discord 전송 없음.
 - 검수자: independent_review agent. 제품 코드 변경 없이 첫 실패 증거를 보존하며 회차 안 반복 수정은 하지 않음.
-- 결과: 시작 전. 3회차가 실패하면 추가 회차를 승인받기 전 다음 UI 검수를 시작하지 않음.
+- 결과: PASS. 제품 후보 `4f98b0123b29ca0f4bd09a40251522cd9b7570de`의 8개 메뉴·앱 7개 탭·13개 URL·보고서 버전·빈 날짜·성숙 D1·인사이트와 같은 초안·모바일 입력/메뉴/200% 글자·Vitals 표 스크롤 통과. DB 초안 1→1, 동일 DRAFT·claimedAt null. 독립 검수자가 코드 변경 없이 확인하고 세션을 반납함.
+- pageerror·페이지 HTTP500 없음. 격리 환경 GA4 미설정에 따른 realtime API503 및 GitHub App 미설정 안내는 원문 보존. hidden input style hydration 경고는 Playwright screenshot 기본 caret 숨김이 DOM style을 변경하는 설치 코드에서 원인 확인; 이후 촬영은 `caret=initial` 사용함. 공급자가 정상 동작했다는 증거로 집계하지 않음.
+- 기존 개발 화면의 용어 한 곳은 검수 종료 후 “개발·출시 단계 변경 이력”으로 바꿈. 동작·상태·데이터 변경 없음. 빌드 직전 E2E에서 해당 표시와 기존 흐름을 함께 확인함.
+- [독립 검수 요약](evidence/round3-summary.json), [첫 키보드 입력](evidence/round3-keyboard-first.json), [200% 입력](evidence/round3-large-text.json), [종합 현황](evidence/home.png), [Vitals](evidence/vitals.png). 전체 41개 화면과 회차별 첫 실패는 로컬 `Workspace/artifacts/backoffice/operations-insights-20261009`에 보존함.
+
+## 빌드 직전 E2E 계획 — 시작 전 기록
+
+- 최종 commit의 제품 코드와 문서 후보를 고정한 뒤 localhost:3108에서 작성자가 별도 소유 탭으로 실행함. 앞의 3회 UI 검수 뒤 코드 동작을 수정하거나 추가 디버깅 회차를 만들지 않음.
+- 주요 8개 경로·앱 7개 탭·수집 상태/자동 실행, 지표 152명·D1 30%·미수집, 빈 날짜·없는 버전, 인사이트→기존 초안, 쉬운 한국어 표시, 모바일 실제 키보드 입력 유지·메뉴 Escape/초점 복귀·가로 넘침을 확인함.
+- 같은 source에서 격리 DB 서비스 acceptance를 실행하고 dev 서버를 종료한 다음 더미 DATABASE_URL로 production build함. 정확한 candidate SHA·명령·결과는 PR에 기록함. 실제 운영/마켓 외부 write 없음.
 
 
 ## 서비스 검증
@@ -48,3 +57,6 @@
 - 격리 DB: 신호 중복 occurrence 방지, API lease generic 회수 제외/전용 만료 처리, 입력 근거 fallback, Discord 최초 전송과 분석 완료 경합, 동시 호출 2개, 하루 상한, 공식 공개 근거 상태 구분 통과.
 - 최종 schema로 최초 빈 DB 및 legacy cutover 전체 39개 migration·데이터 보존·99개 테이블 계약·운영 acceptance 통과. 실제 운영 migration은 실행하지 않음.
 - 단위 테스트 1,754개, typecheck, lint, worker bundle 통과. lint에는 기존 release-tag-ledger 테스트의 미사용 변수 경고 1개가 남음.
+- ARM64 Linux Node 24.16의 target-native sharp PNG 생성 통과. 일간·주간 차트는 실제 QA 관측으로 렌더해 확인: [주간 PNG](evidence/weekly-operations.png). Discord 실제 업로드는 운영 적용 gate로 남음.
+- 신규 실행기 YAML·동일 digest 렌더링·replicas 0/suspend true 검증, 명령 등록 dry-run 20개 통과. 프로덕션 명령 등록·worker 활성화 없음.
+- GitHub Wiki 기능은 enabled지만 wiki.git 조회가 Repository not found로 실패해 초기화되지 않은 것으로 관측함. 설계 목록은 [저장소 목록](../README.md)을 정본으로 제공하고 Obsidian inbox에는 정본 링크만 기록함.

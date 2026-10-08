@@ -1,0 +1,97 @@
+{
+  "home": {
+    "screenshot": "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-home.png",
+    "dom": "Seorilabs\n제작 공장 백오피스\nSeorilabs\n제작 공장 백오피스\n운영\n종합 현황\n앱\n지표 분석\n해야 할 일\n출시\n피드백·시장\n플랫폼\n설정\n@qa-operator\n로그아웃\n종합 현황\n\n앱별 활성 합계는 중복 사용자와 개발·테스트 트래픽을 포함할 수 있습니다 · 선택한 기준일의 수집 상태와 운영 과제를 함께 확인합니다\n\n◀ 전일\n익일 ▶\n최신\n최신 자료\n발행 v2\n발행 v1\n2026-10-07\n소급 발행\n10. 8. 23:18\nv2\nGA4 기준 2026-10-07 · 콘솔 기준 수집 없음\n앱별 활성 합계\n152명+2.7%\n대상 2개 앱 · 사용자 중복 포함\n앱별 신규 합계\n20명\nfirst_open·first_visit 합계\n신규 코호트 D1 유지율\n30.0%\n2026-10-06 코호트 20명 · 2/2개 앱\n월 누적 운영 비용\n미집계\n수익과 기간·통화 다름\n콘솔 광고 추정 수익\n미수집\n대상 0개 리스팅\n결제 거래액\n미수집\nGA4 활성 추이 (28일)\n\n전 앱 합산 · 원본 일별 스냅샷 기준(수집 없는 날은 선을 끊음)\n\nDAU\n신규\n0\n100\n200\n2026-09-10\n2026-10-07\nDAU 152\n신규 20\n표로 보기\n콘솔 수익 추이 (28일)\n표시할 시계열이 없습니다.\n다음 행동\n해야 할 일 →\n배포 승인 0\n수집 확인 10\n실행 실패 1\n\n긴급 이슈·장애 없음\n\n새 인사이트\n피드백·시장 →\nQA 신규 리뷰 관측\n\n사실 요약 · 2026. 10. 08. 오후 11:18\n\n격리 QA 변화\n\n사실 요약 · 2026. 10. 08. 오후 11:16\n\n격리 QA 변화\n\n확인 필요 · 2026. 10. 08. 오후 11:16\n\n🟢 하이라이트\n임계를 넘은 상승 없음\n🔴 로우라이트\n임계를 넘은 하락 없음\n판정 2건 (변동 없음 2 · 표본 부족 0) · 무활동 2건 — 판정 기준: 직전 7일 중앙값 대비 절대·상대 임계 동시 초과\n앱별 분해\n앱\t유형\tDAU\t전일比\t7일比\t신규\tD1\t광고 완료\t토스 DAU\t광고 수익\t결제\nQA 메모 앱\t앱\t76\t+2.7%\t+11.8%\t10\t—\t0\t—\t—\t—\nQA 퍼즐 게임\t게임\t76\t+2.7%\t+11.8%\t10\t—\t0\t—\t—\t—\n플랫폼 분해 (GA4 DAU)\nAndroid\n80\n(80%)\niOS\n20\n(20%)\nWeb\n0\n(0%)\n게임 / 비게임 (GA4 DAU)\n게임\n76\n(50%)\n앱\n76\n(50%)\n\n광고 수익 — 미수집\n\n콘솔 유입경로\n유입경로 데이터 없음\n수익과 비용 - 기간·통화별 확인\n광고 수익 (기준일)\n미수집\n결제 거래액 (기준일)\n미수집\n\n비용은 발행 시점에만 수집됩니다 — 이 문서는 재계산이라 발행 당시 비용이 보존되지 않았습니다.",
+    "size": {
+      "width": 390,
+      "documentWidth": 390,
+      "font": "32px"
+    }
+  },
+  "form": {
+    "viewport": {
+      "width": 390,
+      "height": 500
+    },
+    "actualKeyboard": true,
+    "bodyRetained": true,
+    "titleRetained": true,
+    "before": "- 평점 2점 관측됨\n- 가설: 현재 자료만으로 원인 확정할 수 QA 200% 입력 유지 없음\n- 원본 출처와 수집 범위 확인 필요\n\n근거: /feedback/insights/cmuzmgd1s003uwcxb9w84lzpy\n\n검토 항목\n- 재현 및 원본 범위 확인\n- 원인 가설 검증\n- 수용 조건과 검증 방법 명시",
+    "after": "- 평점 2점 관측됨\n- 가설: 현재 자료만으로 원인 확정할 수 QA 200% 입력 유지 없음\n- 원본 출처와 수집 범위 확인 필요\n\n근거: /feedback/insights/cmuzmgd1s003uwcxb9w84lzpy\n\n검토 항목\n- 재현 및 원본 범위 확인\n- 원인 가설 검증\n- 수용 조건과 검증 방법 명시",
+    "titleBefore": "QA 신규 QA 큰 글자 제목 리뷰 관측",
+    "titleAfter": "QA 신규 QA 큰 글자 제목 리뷰 관측",
+    "bodyScreenshot": "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-body-before-tab.png",
+    "afterScreenshot": "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-body-after-tab.png",
+    "formScreenshot": "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-title-after-tab.png",
+    "activeAfterBodyTab": {
+      "tag": "BUTTON",
+      "text": "GitHub 에 이슈 등록",
+      "bounds": {
+        "x": 90,
+        "y": 356,
+        "width": 136.296875,
+        "height": 144,
+        "top": 356,
+        "right": 226.296875,
+        "bottom": 500,
+        "left": 90
+      }
+    },
+    "dimensions": {
+      "width": 390,
+      "documentWidth": 390,
+      "font": "32px"
+    },
+    "controls": [
+      {
+        "tag": "SELECT",
+        "label": "대상 이슈",
+        "disabled": true,
+        "bounds": {
+          "x": 65,
+          "y": -2126,
+          "width": 212,
+          "height": 61,
+          "top": -2126,
+          "right": 277,
+          "bottom": -2065,
+          "left": 65
+        }
+      },
+      {
+        "tag": "INPUT",
+        "label": "이슈 제목",
+        "disabled": false,
+        "bounds": {
+          "x": 90,
+          "y": -1502,
+          "width": 210,
+          "height": 66,
+          "top": -1502,
+          "right": 300,
+          "bottom": -1436,
+          "left": 90
+        }
+      },
+      {
+        "tag": "TEXTAREA",
+        "label": "이슈 초안 본문",
+        "disabled": false,
+        "bounds": {
+          "x": 90,
+          "y": -1420,
+          "width": 210,
+          "height": 384,
+          "top": -1420,
+          "right": 300,
+          "bottom": -1036,
+          "left": 90
+        }
+      }
+    ],
+    "dom": "Seorilabs\n제작 공장 백오피스\nSeorilabs\n제작 공장 백오피스\n운영\n종합 현황\n앱\n지표 분석\n해야 할 일\n출시\n피드백·시장\n플랫폼\n설정\n@qa-operator\n로그아웃\n앱/관리 워크스페이스\nQA 메모 앱\n앱 · RN\n운영\n운영\nseorilabs/qa-native\n연결\n일부\n미설정\n개요\n지표\n운영\n피드백\n개발\n출시\n설정\nAI 에이전트\n\n현재 앱과 이슈를 기준으로 검토 가능한 초안을 생성합니다.\n\n대상 이슈 (분해·QA)\n열린 이슈 없음\n🧩 작업 분해\n🧪 QA 체크리스트\n📝 릴리스 노트\n🏬 스토어 문안\n💡 개선 가설\n개선 에이전트\nfacts\nGitHub 에 이슈 등록\n폐기\n이슈 · 0 open\n\nGitHub 이슈 미러입니다. 변경은 GitHub에서 수행하고 webhook으로 동기화됩니다.\n\n이슈가 없습니다\nGitHub 동기화 상태를 확인하세요.\nPull Requests\nPull Request가 없습니다\nGitHub 동기화 상태를 확인하세요.\n라이프사이클 전이 이력\n데이터 없음"
+  },
+  "pageerrors": [],
+  "consoleerrors": [],
+  "failedHttp": []
+}
