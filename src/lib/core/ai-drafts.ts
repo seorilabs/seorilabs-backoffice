@@ -1,6 +1,6 @@
 import type { AiDraftKind, Prisma } from "@prisma/client";
+import { getInstallationOctokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
 import { llmComplete, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import {
@@ -14,9 +14,13 @@ import {
   buildImprovementPrompt,
 } from "@/lib/ai/agents";
 import { createIssue, addIssueComment } from "@/lib/github/write";
-import { getRepoContext, getIssue } from "@/lib/github/read";
+import { getRepoContext, getIssue, findDraftRegistration } from "@/lib/github/read";
 import { upsertIssue } from "@/lib/sync/mirror";
-import { HIDDEN_APP_ERROR, isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
+import {
+  HIDDEN_APP_ERROR,
+  isDisabledAppStatus,
+  visibleAppWhere,
+} from "@/lib/domain/app-visibility";
 
 // 세션 비의존 코어(텔레그램·웹 공용). actorLabel 로 행위자 추적.
 
@@ -251,7 +255,12 @@ export async function generateStageDraftCore(input: {
     throw new Error("지원하지 않는 에이전트입니다.");
   }
 
-  const outputText = await llmComplete({ system, prompt, maxTokens: 2048, usage: { path: "draft" } });
+  const outputText = await llmComplete({
+    system,
+    prompt,
+    maxTokens: 2048,
+    usage: { path: "draft" },
+  });
 
   const draft = await prisma.aiDraft.create({
     data: {
@@ -299,52 +308,87 @@ export async function commitDraftCore(input: {
   });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
   if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  if (draft.status === "COMMITTED" && draft.committedIssueNumber && draft.committedUrl)
+    return {
+      issueNumber: draft.committedIssueNumber,
+      url: draft.committedUrl,
+      repoFullName: draft.repoFullName,
+      appId: draft.appId,
+    };
   if (draft.status !== "DRAFT") throw new Error("이미 처리된 초안입니다.");
 
   const meta = AGENTS[draft.kind];
   const body = (input.editedText ?? draft.outputText).trim();
   if (!body) throw new Error("본문이 비어 있습니다.");
-  const footer = `\n\n_🤖 ${meta.ko}(${draft.model}) · ${input.actorLabel}_`;
 
+  const title = (input.editedTitle ?? draft.title ?? "").trim();
+  if (meta.commitTarget !== "ISSUE_COMMENT" && !title) throw new Error("이슈 제목이 필요합니다.");
+  if (meta.commitTarget === "ISSUE_COMMENT" && !draft.issueNumber)
+    throw new Error("코멘트 대상 이슈가 없습니다.");
+  await getInstallationOctokit(); // 인증 설정 오류는 외부 쓰기 claim 전에 확정한다.
+  const claimed = await prisma.aiDraft.updateMany({
+    where: { id: draft.id, status: "DRAFT", claimedAt: null },
+    data: { claimedAt: new Date() },
+  });
+  if (claimed.count !== 1)
+    throw new Error(
+      "등록 진행 중이거나 결과 확인이 필요합니다. GitHub 등록 기록을 먼저 확인하세요.",
+    );
+  const tracedBody = body + "\n\n<!-- backoffice-draft:" + draft.id + " -->";
   let committedIssueNumber: number;
   let url: string;
+  let externalSucceeded = false;
 
-  if (meta.commitTarget === "ISSUE_COMMENT") {
-    if (!draft.issueNumber) throw new Error("코멘트 대상 이슈가 없습니다.");
-    await addIssueComment({
-      repoFullName: draft.repoFullName,
-      issueNumber: draft.issueNumber,
-      body: body + footer,
-    });
-    committedIssueNumber = draft.issueNumber;
-    url = `https://github.com/${draft.repoFullName}/issues/${draft.issueNumber}`;
-  } else {
-    const title = (input.editedTitle ?? draft.title ?? "").trim();
-    if (!title) throw new Error("이슈 제목이 필요합니다.");
-    const created = await createIssue({
-      repoFullName: draft.repoFullName,
-      title,
-      body: body + footer,
-      labels: meta.commitLabels,
-    });
-    await upsertIssue(draft.repoFullName, {
-      number: created.number,
-      node_id: created.node_id,
-      title: created.title,
-      state: created.state,
-      state_reason: created.state_reason ?? null,
-      body: created.body ?? null,
-      user: created.user ? { login: created.user.login } : null,
-      assignees: (created.assignees ?? []).map((a) => ({ login: a.login })),
-      labels: created.labels,
-      milestone: created.milestone ? { title: created.milestone.title } : null,
-      created_at: created.created_at,
-      updated_at: created.updated_at,
-    });
-    committedIssueNumber = created.number;
-    url = created.html_url;
+  try {
+    if (meta.commitTarget === "ISSUE_COMMENT") {
+      if (!draft.issueNumber) throw new Error("코멘트 대상 이슈가 없습니다.");
+      await addIssueComment({
+        repoFullName: draft.repoFullName,
+        issueNumber: draft.issueNumber,
+        body: tracedBody,
+      });
+      externalSucceeded = true;
+      committedIssueNumber = draft.issueNumber;
+      url = `https://github.com/${draft.repoFullName}/issues/${draft.issueNumber}`;
+    } else {
+      const title = (input.editedTitle ?? draft.title ?? "").trim();
+      if (!title) throw new Error("이슈 제목이 필요합니다.");
+      const created = await createIssue({
+        repoFullName: draft.repoFullName,
+        title,
+        body: tracedBody,
+        labels: meta.commitLabels,
+      });
+      externalSucceeded = true;
+      await upsertIssue(draft.repoFullName, {
+        number: created.number,
+        node_id: created.node_id,
+        title: created.title,
+        state: created.state,
+        state_reason: created.state_reason ?? null,
+        body: created.body ?? null,
+        user: created.user ? { login: created.user.login } : null,
+        assignees: (created.assignees ?? []).map((a) => ({ login: a.login })),
+        labels: created.labels,
+        milestone: created.milestone ? { title: created.milestone.title } : null,
+        created_at: created.created_at,
+        updated_at: created.updated_at,
+      });
+      committedIssueNumber = created.number;
+      url = created.html_url;
+    }
+  } catch (error) {
+    // 명시적으로 거절된 HTTP 요청만 재시도를 허용한다. timeout/network/5xx 결과는 readback한다.
+    if (
+      !externalSucceeded &&
+      [401, 403, 404, 422].includes((error as { status?: number }).status ?? 0)
+    )
+      await prisma.aiDraft.updateMany({
+        where: { id: draft.id, status: "DRAFT" },
+        data: { claimedAt: null },
+      });
+    throw error;
   }
-
   await prisma.aiDraft.update({
     where: { id: draft.id },
     data: {
@@ -357,5 +401,40 @@ export async function commitDraftCore(input: {
     },
   });
 
-  return { issueNumber: committedIssueNumber, url, repoFullName: draft.repoFullName, appId: draft.appId };
+  return {
+    issueNumber: committedIssueNumber,
+    url,
+    repoFullName: draft.repoFullName,
+    appId: draft.appId,
+  };
+}
+
+export async function confirmDraftRegistrationCore(draftId: string) {
+  const draft = await prisma.aiDraft.findUniqueOrThrow({
+    where: { id: draftId },
+    include: { app: { select: { status: true } } },
+  });
+  if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  if (draft.status === "COMMITTED")
+    return { confirmed: true, url: draft.committedUrl!, pending: false };
+  if (draft.status !== "DRAFT" || !draft.claimedAt)
+    return { confirmed: false, url: null, pending: false };
+  const comment = AGENTS[draft.kind].commitTarget === "ISSUE_COMMENT";
+  const found = await findDraftRegistration({
+    repoFullName: draft.repoFullName,
+    draftId: draft.id,
+    issueNumber: comment ? draft.issueNumber : null,
+    since: new Date(draft.claimedAt.getTime() - 120000),
+  });
+  if (!found) return { confirmed: false, url: null, pending: true }; // 읽기 결과 없음은 전송 실패의 증거가 아니다.
+  await prisma.aiDraft.updateMany({
+    where: { id: draft.id, status: "DRAFT", claimedAt: draft.claimedAt },
+    data: {
+      status: "COMMITTED",
+      committedIssueNumber: found.issueNumber,
+      committedUrl: found.url,
+      committedAt: new Date(),
+    },
+  });
+  return { confirmed: true, url: found.url, pending: false };
 }

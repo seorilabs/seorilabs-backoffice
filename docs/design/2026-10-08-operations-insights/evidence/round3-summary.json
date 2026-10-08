@@ -1,0 +1,255 @@
+{
+  "round": 3,
+  "result": "PASS",
+  "scope": "계획된 격리 개발환경 핵심 기능/UX 회귀. 운영 배포/공급자 실제 실행/외부 전송 증명 아님.",
+  "candidateSHA": "4f98b0123b29ca0f4bd09a40251522cd9b7570de",
+  "worktree": "/Users/syous/Repositories/seorilabs/seorilabs-backoffice.worktrees/operations-insights",
+  "completedAt": "2026-10-08T15:48:20.643623+00:00",
+  "browserSession": "9e4513683046425ab7f90d040c7cd2c6",
+  "browserReleased": true,
+  "environment": {
+    "baseURL": "http://localhost:3108",
+    "isolatedDB": "backoffice_qa localhost33316",
+    "apps": [
+      "qa-native",
+      "qa-game"
+    ],
+    "metricDay": "2026-10-07",
+    "emptyDay": "2026-10-01",
+    "viewports": [
+      "1440x1000",
+      "390x844",
+      "390x500"
+    ],
+    "rootFont200pct": "32px",
+    "providerCredentials": "not injected"
+  },
+  "checks": [
+    {
+      "name": "주 메뉴 8개 및 자동 실행/수집 상태",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-main-routes.json"
+    },
+    {
+      "name": "앱 7개 탭",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json"
+    },
+    {
+      "name": "과거 URL 13개 및 종합 현황 앱 클릭",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-redirects.json"
+    },
+    {
+      "name": "Oct1 실제 빈 날짜/차트 공백 및 Oct7 성숙 D1 20/6 30%",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-reports.json"
+    },
+    {
+      "name": "리포트 v1 및 없는 v999",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-reports.json"
+    },
+    {
+      "name": "새 SSR disabled/이름 있는 enabled textbox actual keyboard.type Tab 유지",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-keyboard-first.json"
+    },
+    {
+      "name": "390x500/200% 실제 키보드 및 입력 유지/버튼 사용 가능",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-large-text.json"
+    },
+    {
+      "name": "390x844 모바일 메뉴 inert/focus trap/Escape/초점 복귀",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-mobile-menu.json"
+    },
+    {
+      "name": "인사이트 근거 및 같은 로컬 초안 재사용 DB1->1/DRAFT/claimedAt null",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-db-after.json"
+    },
+    {
+      "name": "Android Vitals 공식 기간/0.03%/100명/공개 OS/테스터 미상/모바일 표 스크롤",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-vitals.json"
+    },
+    {
+      "name": "플랫폼 공급자 미설정 503을 알 수 없음으로 표시",
+      "result": "PASS",
+      "artifact": "/tmp/bo-ops-review-round3-provider-unavailable.json"
+    }
+  ],
+  "firstProductFailure": null,
+  "observedConsoleAndHTTP": {
+    "pageerrors": [],
+    "consoleerrors": [
+      {
+        "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json",
+        "message": "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json",
+        "message": "%c%s%c [build-targets] seorilabs/qa-native: background: #e6e6e6;background: light-dark(rgba(0,0,0,0.1), rgba(255,255,255,0.25));color: #000000;color: light-dark(#000000, #ffffff);border-radius: 2px  Server   Error: GITHUB_APP_ID / GITHUB_PRIVATE_KEY 가 설정되지 않았습니다.\n    at createApp (about://React/Server/webpack-internal:///(rsc)/./src/lib/github/app.ts?8:30:15)\n    at getApp (about://React/Server/webpack-internal:///(rsc)/./src/lib/github/app.ts?9:45:19)\n    at getInstallationContext (about://React/Server/webpack-internal:///(rsc)/./src/lib/github/app.ts?10:67:17)\n    at getInstallationOctokit (about://React/Server/webpack-internal:///(rsc)/./src/lib/github/app.ts?11:92:19)\n    at getAvailableBuildTargets (about://React/Server/webpack-internal:///(rsc)/./src/lib/github/read.ts?12:114:98)\n    at AppReleasesPage (about://React/Server/webpack-internal:///(rsc)/./src/app/(app)/apps/%5Bid%5D/releases/page.tsx?13:56:109)\n    at resolveErrorDev (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:2396:46)\n    at getOutlinedModel (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:1747:22)\n    at parseModelString (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:1949:15)\n    at Object.eval (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:3056:20)\n    at JSON.parse (<anonymous>)\n    at initializeModelChunk (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:1273:26)\n    at getOutlinedModel (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:1682:11)\n    at parseModelString (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:2043:15)\n    at Array.eval (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:3056:20)\n    at JSON.parse (<anonymous>)\n    at initializeModelChunk (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:1273:26)\n    at resolveConsoleEntry (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:2683:13)\n    at processFullStringRow (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:2923:11)\n    at processFullBinaryRow (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:2825:7)\n    at processBinaryChunk (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:3028:15)\n    at progress (webpack-internal:///(app-pages-browser)/./node_modules/.pnpm/next@15.5.19_@opentelemetry+api@1.9.1_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/next/dist/compiled/react-server-dom-webpack/cjs/react-server-dom-webpack-client.browser.development.js:3294:13)"
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json",
+        "message": "A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\n%s%s https://react.dev/link/hydration-mismatch \n\n  ...\n    <RenderFromTemplateContext>\n      <ScrollAndFocusHandler segmentPath={[...]}>\n        <InnerScrollAndFocusHandler segmentPath={[...]} focusAndScrollRef={{apply:false, ...}}>\n          <ErrorBoundary errorComponent={undefined} errorStyles={undefined} errorScripts={undefined}>\n            <LoadingBoundary loading={null}>\n              <HTTPAccessFallbackBoundary notFound={undefined} forbidden={undefined} unauthorized={undefined}>\n                <RedirectBoundary>\n                  <RedirectErrorBoundary router={{...}}>\n                    <InnerLayoutRouter url=\"/feedback/...\" tree={[...]} cacheNode={{lazyData:null, ...}} ...>\n                      <SegmentViewNode type=\"page\" pagePath=\"(app)/feed...\">\n                        <SegmentTrieNode>\n                        <Page>\n                          <div className=\"mx-auto ma...\">\n                            <LinkComponent>\n                            <h1>\n                            <p>\n                            <section>\n                            <section>\n                            <form action={function createInsightDraft} className=\"rounded-lg...\">\n                              <input\n                                type=\"hidden\"\n                                name=\"id\"\n                                value=\"cmuzmgd1s003uwcxb9w84lzpy\"\n-                               style={{}}\n                              >\n                              ...\n                            ...\n                      ...\n                    ...\n          ...\n"
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-main-routes.json",
+        "message": "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-provider-unavailable.json",
+        "message": "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+      }
+    ],
+    "failedHttp": [
+      {
+        "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json",
+        "url": "http://localhost:3108/api/platform/realtime",
+        "status": 503
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-main-routes.json",
+        "url": "http://localhost:3108/api/platform/realtime",
+        "status": 503
+      },
+      {
+        "artifact": "/tmp/bo-ops-review-round3-provider-unavailable.json",
+        "url": "http://localhost:3108/api/platform/realtime",
+        "status": 503
+      }
+    ]
+  },
+  "observations": [
+    {
+      "type": "expected-provider-unconfigured",
+      "message": "기존 GA4 realtime API 503은 격리 QA 자격증명 미설정. UI 알 수 없음/조회 실패를 0으로 표시하지 않습니다.",
+      "artifact": "/tmp/bo-ops-review-round3-provider-unavailable.json"
+    },
+    {
+      "type": "expected-provider-unconfigured",
+      "message": "GITHUB_APP_ID/GITHUB_PRIVATE_KEY 미설정 build-target readback 오류는 QA 서버의 예상 상태. 실제 권한을 주입하지 않음.",
+      "artifact": "/tmp/bo-ops-review-round3-app-tabs-insight.json"
+    },
+    {
+      "type": "automation-artifact-preserved",
+      "message": "인사이트 hidden input style mismatch console 원문 보존. 공용 Playwright screenshot hideCaret가 모든 input style을 바꾸고 cleanup에서 빈 style을 남기는 근거 확인. 이후 caret=initial 촬영; 제품 코드/동작 재시도 없음.",
+      "artifact": "/tmp/bo-ops-review-round3-screenshot-hydration-cause.json"
+    },
+    {
+      "type": "automation-errors-preserved",
+      "message": "초기 enabled wait quoting 오류는 입력 전 발생; redirect main strict locator 오류는 앱의 main2개 선택. 읽기 전용 상태 근거 보존 후 도구 선택자만 보정. 제품 코드 변경 없음.",
+      "artifacts": [
+        "/tmp/bo-ops-review-round3-initial-tool-error-readback.json",
+        "/tmp/bo-ops-review-round3-redirect-tool-error-readback.json",
+        "/tmp/bo-ops-review-round3-redirect-tool-error-readback-2.json"
+      ]
+    },
+    {
+      "type": "existing-wording-followup",
+      "message": "기존 앱 개발 화면 라이프사이클 전이 이력은 쉬운 한국어 지침의 개발·출시 단계 전이 이력으로 정리할 잔여 문구. 기능·흐름 실패와 구분하며 이번 회차 제품 수정 없음."
+    }
+  ],
+  "limitations": [
+    "실제 기기 소프트웨어 키보드 대신 Chrome 실제 keyboard.type 및 높이500px로 가용 화면을 검수함.",
+    "GitHub Issue 등록/Discord 전송/실제 수집/공급자 write/운영 데이터 변경 미실행.",
+    "MiniMax 공급자 비활성에 따라 fixture fallback 상세 및 기존 로컬 초안을 검수함.",
+    "source health 현재 D-1 Oct8 누락은 fixture 기준 Oct7과 분리함.",
+    "촬영은 실제 검수자가 view_image로 확인함. Tab 후 초점 따라 스크롤된 화면은 DOM readback과 before-Tab 화면을 함께 유지함."
+  ],
+  "dbComparison": {
+    "before": "/tmp/bo-ops-review-round3-db-before.json",
+    "after": "/tmp/bo-ops-review-round3-db-after.json",
+    "draftCountBefore": 1,
+    "draftCountAfter": 1,
+    "sameDraft": true,
+    "status": "DRAFT",
+    "claimedAt": null,
+    "gap": {
+      "dailyMetrics": 0,
+      "ledger": 0,
+      "report": 0,
+      "revisions": 0
+    },
+    "d1": [
+      {
+        "appId": "qa-native",
+        "cohortUsers": 10,
+        "d1Users": 3
+      },
+      {
+        "appId": "qa-game",
+        "cohortUsers": 10,
+        "d1Users": 3
+      }
+    ]
+  },
+  "artifacts": [
+    "/tmp/bo-ops-review-round3-app-tabs-insight.json",
+    "/tmp/bo-ops-review-round3-db-after.json",
+    "/tmp/bo-ops-review-round3-db-before.json",
+    "/tmp/bo-ops-review-round3-initial-tool-error-readback.json",
+    "/tmp/bo-ops-review-round3-keyboard-first.json",
+    "/tmp/bo-ops-review-round3-large-text.json",
+    "/tmp/bo-ops-review-round3-main-routes.json",
+    "/tmp/bo-ops-review-round3-mobile-menu.json",
+    "/tmp/bo-ops-review-round3-provider-unavailable.json",
+    "/tmp/bo-ops-review-round3-redirect-tool-error-readback-2.json",
+    "/tmp/bo-ops-review-round3-redirect-tool-error-readback.json",
+    "/tmp/bo-ops-review-round3-redirects.json",
+    "/tmp/bo-ops-review-round3-reports.json",
+    "/tmp/bo-ops-review-round3-screenshot-hydration-cause.json",
+    "/tmp/bo-ops-review-round3-vitals.json"
+  ],
+  "screenshotDirectory": "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots",
+  "screenshotCount": 41,
+  "screenshots": [
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-analytics.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-development.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-feedback.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-metrics.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-operations.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-overview.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-releases.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-app-settings.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-apps.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-automations-click.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-automations.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-chart-gap-table.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-empty-day.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-existing-draft-reused.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-feedback.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-health.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-home-app-click.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-home.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-insight-existing.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-platform-fallback.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-platform-realtime-unavailable.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-platform.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-releases.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-report-v1.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-report-v999.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-settings.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-vitals-data-visible.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-vitals-final.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-desktop-work.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-first-tool-error-readback.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-body-after-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-body-before-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-home.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-200pct-title-after-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-body-after-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-body-before-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-drawer-closed.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-drawer-open.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-title-after-tab.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-vitals-left.png",
+    "/tmp/bo-ops-browser/profiles/seorilabs-admin/sessions/9e4513683046425ab7f90d040c7cd2c6/screenshots/round3-mobile-vitals-right.png"
+  ],
+  "codeUnchanged": true,
+  "gitStatusAtEnd": "only author untracked docs/design/2026-10-08-operations-insights/activation.md"
+}

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { AiDraftKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { requireAppWriteAccess } from "@/lib/platform/access";
 import { requireSession } from "@/lib/auth-helpers";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
@@ -11,6 +12,7 @@ import { buildPlanningPrompt } from "@/lib/ai/agents";
 import { getRepoContext } from "@/lib/github/read";
 import {
   commitDraftCore,
+  confirmDraftRegistrationCore,
   generateStageDraftCore,
 } from "@/lib/core/ai-drafts";
 import { HIDDEN_APP_ERROR, isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
@@ -22,6 +24,7 @@ export interface DraftView {
   issueNumber: number | null;
   outputText: string;
   model: string;
+  registrationPending?: boolean;
 }
 
 function notConfiguredMessage(e: unknown): string {
@@ -44,6 +47,7 @@ export async function generatePlanningDraft(input: {
   });
   if (!app) throw new Error(HIDDEN_APP_ERROR);
 
+  await requireAppWriteAccess(app.id);
   const codebaseContext = await getRepoContext(app.repoFullName).catch(() => "");
   const { system, prompt } = buildPlanningPrompt({
     displayName: app.displayName,
@@ -83,6 +87,7 @@ export async function generateStageDraft(input: {
   const session = await requireSession();
   const login = session.user.login ?? "unknown";
 
+  await requireAppWriteAccess(input.appId);
   let draft;
   try {
     draft = await generateStageDraftCore({
@@ -126,6 +131,9 @@ export async function commitDraft(input: {
   const session = await requireSession();
   const login = session.user.login ?? "unknown";
 
+  const draft = await prisma.aiDraft.findUnique({ where: { id: input.draftId }, include: { app: { select: { slug: true, platformAppId: true } } } });
+  if (!draft) throw new Error("초안을 찾을 수 없습니다.");
+  await requireAppWriteAccess(draft.appId);
   const r = await commitDraftCore({
     draftId: input.draftId,
     actorLabel: `@${login}`,
@@ -145,7 +153,7 @@ export async function commitDraft(input: {
 
   revalidatePath(`/apps/${r.appId}`);
   revalidatePath(`/apps/${r.appId}/development`);
-  revalidatePath("/issues");
+  revalidatePath("/work/issues");
   return { ok: true, url: r.url };
 }
 
@@ -154,16 +162,27 @@ export async function discardDraft(draftId: string): Promise<{ ok: boolean }> {
   await requireSession();
   const draft = await prisma.aiDraft.findUnique({
     where: { id: draftId },
-    include: { app: { select: { status: true } } },
+    include: { app: { select: { status: true, slug: true, platformAppId: true } } },
   });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
   if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  await requireAppWriteAccess(draft.appId);
+  if (draft.claimedAt) throw new Error("등록 결과를 먼저 확인하세요.");
   if (draft.status === "COMMITTED") throw new Error("이미 커밋된 초안입니다.");
-  await prisma.aiDraft.update({
-    where: { id: draftId },
+  await prisma.aiDraft.updateMany({
+    where: { id: draftId, status: "DRAFT", claimedAt: null },
     data: { status: "DISCARDED" },
   });
   revalidatePath(`/apps/${draft.appId}`);
   revalidatePath(`/apps/${draft.appId}/development`);
   return { ok: true };
+}
+
+export async function confirmDraftRegistration(draftId:string) {
+ const draft=await prisma.aiDraft.findUniqueOrThrow({where:{id:draftId}});
+ const actor=await requireAppWriteAccess(draft.appId);
+ const result=await confirmDraftRegistrationCore(draftId);
+ await prisma.auditLog.create({data:{actorLogin:actor.login,action:"ai.draft_readback",entityType:"AiDraft",entityId:draftId,payload:{confirmed:result.confirmed,pending:result.pending}}});
+ revalidatePath(`/apps/${draft.appId}/development`);
+ return result;
 }

@@ -3,7 +3,7 @@ name: CI
 # public repo 의 PR 은 fork 에서 온다. fork PR 코드를 self-hosted(ARC) 러너에서
 # 실행하면 클러스터 내부 네트워크(privileged buildkitd, mysql, nats)에 그대로
 # 닿으므로, PR 경로의 모든 잡은 GitHub-hosted 러너에서만 돈다.
-# self-hosted 는 push/workflow_dispatch 로만 트리거되는 deploy.yml 에 한정한다.
+# verify·migration·image·deploy 모두 GitHub-hosted runner를 사용한다.
 
 on:
   pull_request:

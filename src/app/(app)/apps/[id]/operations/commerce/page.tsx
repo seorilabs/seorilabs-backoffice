@@ -1,0 +1,142 @@
+import { notFound } from "next/navigation";
+
+import { LizardTycoonIapConsole } from "@/components/app-ops/LizardTycoonIapConsole";
+import { ToolCatalog, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
+import { toolsForSection } from "@/lib/app-ops/manifest";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
+import { dbDay } from "@/lib/analytics/metric-day";
+import { primaryListingForSlug } from "@/lib/analytics/ait-apps";
+import { prisma } from "@/lib/prisma";
+
+export default async function CommercePage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const app = await prisma.app.findFirst({
+    where: { id, ...visibleAppWhere },
+    select: {
+      id: true,
+      slug: true,
+      repoFullName: true,
+      opsManifest: true,
+    },
+  });
+  if (!app) notFound();
+  const latest = await prisma.appConsoleMetricDaily.findFirst({
+    // 콘솔 리스팅이 여럿인 App(예: crossword-puzzle)은 primary 리스팅만.
+    where: { appId: app.id, miniAppId: primaryListingForSlug(app.slug)?.miniAppId },
+    orderBy: { date: "desc" },
+    select: {
+      date: true,
+      iapTrxAmountKrw: true,
+      iapSettlementKrw: true,
+      payingUsers: true,
+    },
+  });
+  const tools = toolsForSection(app.opsManifest, "commerce");
+  const lizardIapTool =
+    app.repoFullName === "seorilabs/lizard-tycoon"
+      ? tools.find((tool) => {
+          if (tool.id !== "iap-ledger") return false;
+          const operationIds = new Set(tool.operations.map((operation) => operation.id));
+          return [
+            "recent-purchases",
+            "sandbox-testers",
+            "reset-app-store-sandbox",
+            "production-grants",
+            "grant-production-entitlement",
+            "revoke-production-entitlement",
+          ].every((operationId) => operationIds.has(operationId));
+        })
+      : undefined;
+  const genericTools = lizardIapTool ? tools.filter((tool) => tool.id !== lizardIapTool.id) : tools;
+
+  return (
+    <div className="space-y-8">
+      <WorkspaceSection
+        title="IAP 현황"
+        description="AppsInToss 콘솔의 결제 거래액, 정산액과 결제 사용자 최신 스냅샷입니다."
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          <CommerceCard
+            label="거래액"
+            value={
+              latest ? `₩${Math.round(latest.iapTrxAmountKrw).toLocaleString("ko-KR")}` : undefined
+            }
+            date={latest?.date}
+          />
+          <CommerceCard
+            label="정산액"
+            value={
+              latest ? `₩${Math.round(latest.iapSettlementKrw).toLocaleString("ko-KR")}` : undefined
+            }
+            date={latest?.date}
+          />
+          <CommerceCard label="결제 사용자" value={latest?.payingUsers} date={latest?.date} />
+        </div>
+      </WorkspaceSection>
+
+      <WorkspaceSection
+        title="테스트 계정과 Entitlement"
+        description="상품, 테스트 계정 참조, 무료 지급, 회수와 구매 검증 오퍼레이션을 관리합니다."
+      >
+        <div className="mb-4 grid gap-2 md:grid-cols-3">
+          {[
+            "계정 비밀번호와 스토어 토큰은 저장하거나 입력받지 않음",
+            "테스트 계정은 비밀값이 아닌 내부 참조 ID로 식별",
+            "지급·회수는 문구 재확인과 멱등 키를 적용",
+          ].map((principle) => (
+            <div
+              key={principle}
+              className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+            >
+              {principle}
+            </div>
+          ))}
+        </div>
+        {lizardIapTool ? (
+          <>
+            <LizardTycoonIapConsole appId={app.id} tool={lizardIapTool} />
+            {genericTools.length > 0 && (
+              <div className="mt-6">
+                <ToolCatalog
+                  appId={app.id}
+                  tools={genericTools}
+                  repoFullName={app.repoFullName}
+                  emptyTitle="추가 IAP 관리 계약이 없습니다"
+                  emptyDescription="추가 관리 도구가 연결되면 표시됩니다."
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <ToolCatalog
+            appId={app.id}
+            tools={genericTools}
+            repoFullName={app.repoFullName}
+            emptyTitle="IAP 관리 계약이 아직 없습니다"
+            emptyDescription="결제 조회·구매 검증 도구가 연결되면 표시됩니다."
+          />
+        )}
+      </WorkspaceSection>
+    </div>
+  );
+}
+
+function CommerceCard({
+  label,
+  value,
+  date,
+}: {
+  label: string;
+  value?: string | number | null;
+  date?: Date | null;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold text-neutral-900">{value ?? "—"}</div>
+      <div className="mt-1 text-[11px] text-neutral-400">
+        {date ? `기준일 ${dbDay(date)}` : "데이터 없음"}
+      </div>
+    </div>
+  );
+}

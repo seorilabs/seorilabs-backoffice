@@ -286,3 +286,16 @@ async function revalidateQueuedPlatformAccess(input: {
     };
   });
 }
+
+/** 앱 개선 초안은 운영 서비스 write와 달리 PAUSED에서도 허용한다. 동일 DB role·owner 검증을 사용한다. */
+export async function requireAppWriteAccess(appId: string): Promise<PlatformActor & { appId: string }> {
+  const user = await currentPlatformUser();
+  const { prisma } = await import("@/lib/prisma");
+  const app = await prisma.app.findFirst({
+    where: { id: appId, status: { in: ["ACTIVE", "PAUSED"] } },
+    select: { id: true, owners: { where: { userId: user.userId, role: "OWNER" }, take: 1 } },
+  });
+  if (!app) throw new PlatformAccessError("앱을 찾을 수 없습니다.");
+  assertPlatformWriteAccess({ role: user.role, allowlisted: user.allowlisted, isAppOwner: app.owners.length > 0 });
+  return { userId: user.userId, login: user.login, role: user.role, appId: app.id };
+}

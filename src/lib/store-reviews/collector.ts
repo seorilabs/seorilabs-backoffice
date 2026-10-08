@@ -3,6 +3,7 @@ import type {
   Prisma,
   StoreReviewStore,
 } from "@prisma/client";
+import { beginCollection, completeCollection, collectionErrorCode } from "@/lib/insights/collection";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
@@ -50,10 +51,14 @@ export interface ReviewRepository {
     observedAt: Date;
   }): Promise<string>;
   markNotified(id: string, contentHash: string): Promise<void>;
+  beginCollection?(appId: string, store: StoreReviewStore): Promise<string>;
+  completeCollection?(id: string, count: number | null, error?: unknown): Promise<void>;
   markSuccessful(appId: string, store: StoreReviewStore, at: Date): Promise<void>;
 }
 
 const prismaReviewRepository: ReviewRepository = {
+  async beginCollection(appId, store) { return (await beginCollection(`reviews:${store}`, appId, appId)).id; },
+  async completeCollection(id, count, error) { const code = error ? collectionErrorCode(error) : undefined; await completeCollection(id, { status: code === "SOURCE_PERMISSION_REQUIRED" ? "needs_input" : code ? "failed" : count ? "observed" : "empty", dataThrough: error ? undefined : new Date(), coverage: { observations: count }, errorCode: code }); },
   async initialized(appId, store) {
     return Boolean(await prisma.storeReviewSync.findUnique({
       where: { appId_store: { appId, store } },
@@ -215,6 +220,8 @@ async function processReviews(input: {
         store: review.store,
         externalReviewId: review.externalReviewId,
         // 별점이 상자 색으로 먼저 읽히게 한다. 낮은 별점은 대응이 필요한 신호다.
+        rating: review.rating,
+        change,
         embed: {
           title: `${input.app.displayName} · ${review.store === "GOOGLE_PLAY" ? "Google Play" : "App Store"} 리뷰 ${review.rating}/5`,
           color: reviewRatingColor(review.rating),
@@ -284,6 +291,8 @@ export async function collectStoreReviews(
   let googleFetcher = dependencies.fetchGooglePlay;
   let appStoreFetcher = dependencies.fetchAppStore;
   for (const target of targets) {
+    const repository = dependencies.repository ?? prismaReviewRepository;
+    const collectionId = await repository.beginCollection?.(target.app.id, target.store);
     try {
       if (target.store === "GOOGLE_PLAY" && !googleFetcher) {
         googleFetcher = createGooglePlayReviewFetcher();
@@ -308,8 +317,10 @@ export async function collectStoreReviews(
         now: dependencies.now ?? (() => new Date()),
         result,
       });
+      if (collectionId) await repository.completeCollection?.(collectionId, reviews.length);
       result.storeCoverage[target.store].succeeded++;
     } catch (error) {
+      if (collectionId) await repository.completeCollection?.(collectionId, null, error);
       result.errors.push({
         app: target.app.displayName,
         store: target.store,

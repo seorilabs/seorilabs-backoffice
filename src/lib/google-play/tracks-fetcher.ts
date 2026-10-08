@@ -62,24 +62,26 @@ export async function listGooglePlayTrackReleases(input: {
     method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: "{}",
   });
   if (!created.ok) throw new Error(`Google Play edit 생성 실패: ${created.status}`);
-  const { id } = await created.json() as { id?: string };
+  const { id } = await readPlayJson<{ id?: string }>(created, "edit");
   if (!id) throw new Error("Google Play edit 응답에 id 없음");
   const edit = `${base}/${encodeURIComponent(id)}`;
   try {
     const response = await impl(`${edit}/tracks`, { headers });
     if (!response.ok) throw new Error(`Google Play tracks 조회 실패: ${response.status}`);
-    const json = await response.json() as { tracks?: Array<{ track?: string; releases?: TrackRelease[] }> };
+    const json = await readPlayJson<{ tracks?: Array<{ track?: string; releases?: TrackRelease[] }> }>(response, "tracks");
     const result: GooglePlayTracksRelease[] = [];
     const seen = new Set<string>();
     for (const track of json.tracks ?? []) {
       if (!track.track || seen.has(track.track)) throw new Error("Google Play 트랙 이름 없음 또는 중복");
       seen.add(track.track);
+      // 빈 트랙은 출시 관측이 없으며 lifecycle API를 조회할 대상도 없다.
+      if (!track.releases?.length) continue;
       let summaries: ReleaseSummary[] = [];
       let unavailableReason: string | undefined;
       try {
         const summaryResponse = await impl(`${application}/tracks/${encodeURIComponent(track.track)}/releases`, { method: "GET", headers });
         if (!summaryResponse.ok) throw new Error(`Google Play releases 조회 실패: ${summaryResponse.status}`);
-        summaries = ((await summaryResponse.json()) as { releases?: ReleaseSummary[] }).releases ?? [];
+        summaries = (await readPlayJson<{ releases?: ReleaseSummary[] }>(summaryResponse, "releases")).releases ?? [];
       } catch (error) {
         unavailableReason = error instanceof Error ? error.message : "Google Play releases 조회 실패";
       }
@@ -92,4 +94,10 @@ export async function listGooglePlayTrackReleases(input: {
     const deleted = await impl(edit, { method: "DELETE", headers });
     if (!deleted.ok && deleted.status !== 404) throw new Error(`Google Play edit 정리 실패: ${deleted.status}`);
   }
+}
+
+async function readPlayJson<T>(response: Response, resource: string): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) throw new Error(`Google Play ${resource} 응답 본문 없음`);
+  try { return JSON.parse(text) as T; } catch { throw new Error(`Google Play ${resource} JSON 응답 형식 오류`); }
 }

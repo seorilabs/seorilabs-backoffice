@@ -103,6 +103,7 @@ export interface Ga4DailyRow {
 }
 
 export interface Ga4CohortRow {
+  d1Users?: number | null;
   date: string; // cohort_day "YYYY-MM-DD"
   newUsers: number;
   d1Pct: number | null;
@@ -267,7 +268,9 @@ export function buildDailyBreakdownsSql(
           END
         ), ''), '(unknown)') AS os_dim,
         IFNULL(NULLIF(app_info.version, ''), '(unknown)') AS app_version_dim,
-        CONCAT(IFNULL(NULLIF(platform, ''), '(unknown)'), ' · ', stream_id) AS stream_dim
+        CONCAT(IFNULL(NULLIF(platform, ''), '(unknown)'), ' · ', stream_id) AS stream_dim,
+        CONCAT(IFNULL(NULLIF(traffic_source.source, ''), '(unknown)'), ' / ', IFNULL(NULLIF(traffic_source.medium, ''), '(unknown)')) AS acquisition_dim,
+        CASE WHEN EXISTS(SELECT 1 FROM UNNEST(event_params) ep WHERE ep.key IN ('debug_mode', 'is_test') AND (ep.value.int_value = 1 OR ep.value.string_value IN ('true', '1'))) THEN '표시된 테스트·개발 이벤트' ELSE '테스트 표시 없음 - 운영 확정 아님' END AS traffic_class_dim
       FROM ${from}
       WHERE user_pseudo_id IS NOT NULL AND _TABLE_SUFFIX BETWEEN '${start}' AND '${end}'
     )
@@ -277,7 +280,9 @@ export function buildDailyBreakdownsSql(
     UNION ALL SELECT date, 'device', device_cat, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'os', os_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
     UNION ALL SELECT date, 'app_version', app_version_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
-    UNION ALL SELECT date, 'stream', stream_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
+    UNION ALL SELECT date, 'stream', stream_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'acquisition', acquisition_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3
+    UNION ALL SELECT date, 'traffic_class', traffic_class_dim, COUNT(DISTINCT uid) FROM base GROUP BY 1, 3`;
 }
 
 export async function queryDailyBreakdowns(
@@ -322,6 +327,7 @@ export function buildCohortRetentionSql(
     )
     SELECT
       FORMAT_DATE('%Y-%m-%d', cohort_day) AS date,
+      IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) <= PARSE_DATE('%Y%m%d', '${end}'), COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), NULL) AS d1_users,
       COUNT(DISTINCT IF(n = 0, user_pseudo_id, NULL)) AS new_users,
       IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
         ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d1_pct,
@@ -339,6 +345,7 @@ export async function queryCohortRetention(target: Ga4Target, start: string, end
   return rows.map((r) => ({
     date: String(r.date),
     newUsers: num(r.new_users),
+    d1Users: numOrNull(r.d1_users),
     d1Pct: numOrNull(r.d1_pct),
     d3Pct: numOrNull(r.d3_pct),
     d7Pct: numOrNull(r.d7_pct),

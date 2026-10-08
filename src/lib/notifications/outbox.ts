@@ -56,13 +56,14 @@ export async function enqueueNotification(input: {
 }
 
 // 이미 보낸 카드를 갱신 발송 대상으로 되돌린다. providerMessageId를 남겨야 워커가
-// 새 메시지를 만들지 않고 같은 메시지를 편집한다. PROCESSING 중인 전송은 건드리지
-// 않는다. 그 전송은 곧 최신 payload로 나가고, 아니면 다음 갱신이 따라잡는다.
+// 새 메시지를 만들지 않고 같은 메시지를 편집한다. PROCESSING 중 갱신은
+// refreshRequested에 기록해 진행 중인 전송 완료 뒤 최신 payload를 다시 보낸다.
 //
 // deletedAt은 함께 비운다. 보존기한 정리로 지워진 메시지를 다시 보내면 새 메시지가
 // 생기는데, 표시가 남아 있으면 그 메시지가 다음 정리 대상에서 영구히 빠진다.
-export async function requeueNotification(eventId: string): Promise<number> {
-  const result = await prisma.notificationDelivery.updateMany({
+export async function requeueNotification(eventId: string, db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma): Promise<number> {
+  await db.notificationDelivery.updateMany({ where: { eventId, status: { in: ["PENDING", "PROCESSING"] } }, data: { refreshRequested: true } });
+  const result = await db.notificationDelivery.updateMany({
     where: { eventId, status: { in: ["SENT", "DEAD_LETTER"] } },
     data: {
       status: "PENDING",
@@ -146,19 +147,12 @@ export async function drainNotifications(
         destinationKey: row.destinationKey,
         payload: row.event.payload,
         providerMessageId: row.providerMessageId,
-      });
+      }).catch(() => ({ ok: false, error: "NOTIFICATION_DELIVERY_EXCEPTION" } as DeliveryOverrideResult));
       if (result.ok) {
         sent++;
-        await prisma.notificationDelivery.update({
-          where: { id: row.id },
-          data: {
-            status: "SENT",
-            attempts: { increment: 1 },
-            sentAt: new Date(),
-            providerMessageId: result.messageId ?? row.providerMessageId,
-            lastError: null,
-          },
-        });
+        const data = { attempts: { increment: 1 }, sentAt: new Date(), providerMessageId: result.messageId ?? row.providerMessageId, lastError: null };
+        const completed = await prisma.notificationDelivery.updateMany({ where: { id: row.id, status: "PROCESSING", OR: [{refreshRequested:false},{refreshRequested:null}] }, data: { ...data, status: "SENT" } });
+        if (!completed.count) await prisma.notificationDelivery.updateMany({ where: { id: row.id, status: "PROCESSING", refreshRequested: true }, data: { ...data, status: "PENDING", refreshRequested: false, nextAttemptAt: new Date() } });
       } else {
         const attempts = row.attempts + 1;
         const terminal = isTerminalFailure(result, attempts);
@@ -197,4 +191,14 @@ export async function drainNotifications(
   } finally {
     draining = false;
   }
+}
+
+/** 이미 발송된 보고서 payload 갱신과 재배달을 하나의 DB commit으로 묶는다. */
+export async function enqueueEditableNotification(input: Parameters<typeof enqueueNotification>[0]) {
+  return prisma.$transaction(async tx => {
+    const previous = await tx.notificationEvent.findUnique({ where: { dedupeKey: input.dedupeKey }, select: { id: true } });
+    const id = await enqueueNotification(input, tx);
+    if (previous) await requeueNotification(id, tx);
+    return id;
+  });
 }

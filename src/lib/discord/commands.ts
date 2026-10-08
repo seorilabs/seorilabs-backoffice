@@ -19,6 +19,8 @@ const deployTargetOption = {
 
 export const DISCORD_COMMANDS = [
   { name: "connect", description: "Backoffice GitHub 계정 연결", type: 1, options: [{ type: 3, name: "code", description: "10분짜리 일회용 연결 코드", required: true }] },
+  { name: "report", description: "근거와 수집 상태를 포함한 종합 보고서", type: 1, options: [{ type: 3, name: "date", description: "기준일 YYYY-MM-DD", required: false }] },
+  ...[ { name: "reviews", description: "최근 앱 리뷰 평점" }, { name: "keywords", description: "검색어 노출 관측" }, { name: "health", description: "수집 상태와 확인할 항목" }, { name: "insights", description: "최근 근거 기반 인사이트" } ].map((command) => ({ ...command, type: 1, options: [{ ...appOption, required: false }] })),
   { name: "help", description: "백오피스 명령 도움말", type: 1 },
   { name: "approvals", description: "승인 대기 항목", type: 1 },
   { name: "p1", description: "열린 P1 이슈", type: 1 },

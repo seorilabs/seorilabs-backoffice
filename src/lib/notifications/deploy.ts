@@ -337,10 +337,18 @@ export async function drainAllNotifications(limit = 30) {
     if (issueThreadPayload(payload)) return deliverIssueThread(payload, destinationKey);
     const render = discordRender(kind, payload);
     if (!render) return { ok: false, error: "알림 payload 형식 오류" };
+    let generatedAttachment;
+    const object = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Prisma.JsonObject : null;
+    if (object?.chart === "org-trend" && typeof object.refDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(object.refDate)) {
+      try {
+        const { operationsChart } = await import("@/lib/report/operations-chart");
+        generatedAttachment = await operationsChart(object.refDate, object.weekly === true);
+      } catch { console.error("[notification] PNG 생성 실패 - 본문 발송 유지"); }
+    }
     const options = {
       alertRoleId:
         destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
-      attachment: attachmentFromPayload(payload),
+      attachment: generatedAttachment ?? attachmentFromPayload(payload),
       components: componentsFromPayload(payload),
       // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
       botToken: senderBotToken(payload),

@@ -322,3 +322,18 @@ export async function getRepoContext(repoFullName: string): Promise<string> {
   if (treeText) parts.push("### 파일 트리(일부)\n" + treeText.slice(0, 3000));
   return parts.join("\n\n");
 }
+
+/** 결과 불명 등록의 readback. 완전한 페이지 조회가 실패하면 미등록으로 판단하지 않는다. */
+export async function findDraftRegistration(input: {repoFullName:string;draftId:string;issueNumber?:number|null;since:Date}) {
+ const octokit=await getInstallationOctokit(), identity=splitRepo(input.repoFullName);
+ const { exactDraftRegistration }=await import("./draft-registration");
+ const rows: Array<{body:string|null;html_url:string;number?:number;pull_request?:unknown}>=[];
+ for(let page=1;page<=10;page++) {
+  const data=input.issueNumber
+   ? (await octokit.rest.issues.listComments({...identity,issue_number:input.issueNumber,since:input.since.toISOString(),per_page:100,page})).data
+   : (await octokit.rest.issues.listForRepo({...identity,state:"all",since:input.since.toISOString(),sort:"updated",direction:"desc",per_page:100,page})).data;
+  rows.push(...data.map(row=>({body:row.body??null,html_url:row.html_url,...("number" in row?{number:row.number,pull_request:row.pull_request}:{})})));
+  if(data.length<100) return exactDraftRegistration(rows,input);
+ }
+ throw new Error("등록 기록 페이지가 너무 많습니다. GitHub에서 확인하세요.");
+}

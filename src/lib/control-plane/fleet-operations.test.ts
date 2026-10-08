@@ -510,7 +510,7 @@ test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () 
     "utf8",
   );
   const fleetPage = readFileSync(
-    join(process.cwd(), "src/app/(app)/apps/[id]/fleet/page.tsx"),
+    join(process.cwd(), "src/app/(app)/apps/[id]/settings/page.tsx"),
     "utf8",
   );
   const actions = readFileSync(

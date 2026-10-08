@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
-import { llmChat, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
+import { generateInsight } from "@/lib/insights/generate";
+import { renderInsight, type Evidence } from "@/lib/insights/contract";
 import { dbDay, metricDaysBetween } from "@/lib/analytics/metric-day";
 import type {
   ConsoleListingSeries,
@@ -128,157 +129,28 @@ export function narrativeFacts(input: NarrativeInput): string {
   return lines.join("\n");
 }
 
-const SYSTEM_PROMPT = [
-  "당신은 Seorilabs 앱 제작 공장의 지표 분석가다.",
-  "아래는 이미 계산이 끝난 어제 지표 변동과 수집 상태다. 이 사실만으로 해설을 쓴다.",
-  "",
-  "규칙:",
-  "- 주어진 사실에 없는 수치를 새로 만들거나 계산하지 않는다. 숫자를 인용할 때는 그대로 옮긴다.",
-  "- 원인을 단정하지 않는다. 가능성은 '~일 수 있다'로 쓰고, 확인 방법을 함께 적는다.",
-  "- 같은 앱이 여러 소스에서 같은 방향으로 움직였으면 그 일치를 짚는다. 표면 이동이 아니라 실제 변화라는 신호다.",
-  "- 표본 부족·변동 없음 건수가 많다고 해서 문제라고 말하지 않는다. 규모가 작으면 정상이다.",
-  "- 수집 공백은 지표 하락과 구분한다. 기준일 스냅샷이 없는 앱의 수치는 '떨어진 것'이 아니라",
-  "  '아직 모르는 것'이다. 합계가 전일보다 낮을 때 그 앱들이 빠져서인지 먼저 따진다.",
-  "- '지연'과 '수집 없음'을 섞지 않는다. 지연은 기다리면 채워지고, 수집 없음은 배선을 봐야 한다.",
-  "",
-  "형식: 한국어로 아래 세 줄 머리말을 그대로 쓰고 각 항목 아래에 문장을 붙인다.",
-  "전체 800~1200자. 목록 기호·인사말·마무리 인사는 쓰지 않는다.",
-  "",
-  "핵심 변동:",
-  "(임계를 넘은 변동 중 규모가 큰 것부터. 없으면 없다고 한 문장.)",
-  "GA4·콘솔 짚을 점:",
-  "(수집 상태에서 읽히는 것. 지연·미수집이 합계를 어떻게 왜곡하는지.)",
-  "다음 액션:",
-  "(무엇을 먼저 확인할지. 확인 대상과 방법을 구체적으로.)",
-].join("\n");
+export const NARRATIVE_PROMPT_VERSION = 2;
 
-/** 해설이 반드시 갖춰야 하는 세 절. 하나라도 없으면 형식이 깨진 것이다. */
-export const NARRATIVE_SECTIONS = ["핵심 변동:", "GA4·콘솔 짚을 점:", "다음 액션:"] as const;
-
-/**
- * 프롬프트 개정 번호. 문서에 기록해 "이 해설이 어떤 지시로 쓰였는지"를 나중에 안다.
- * 지시를 바꿀 때마다 올린다.
- */
-export const NARRATIVE_PROMPT_VERSION = 1;
-
-/**
- * 결정적 골격. LLM 없이도 보고서가 성립해야 한다.
- *
- * 지금까지는 LLM 미설정·실패·형식 이탈이면 해설이 통째로 빠졌다. 읽는 사람에게는
- * "어떤 날은 분석이 있고 어떤 날은 없다"로 보였고, 그것 자체가 보고서를 못 믿게 만든다.
- * 수치와 판정과 수집 상태는 전부 코드가 이미 알고 있으므로 문장으로 옮기면 된다.
- */
-export function narrativeSkeleton(input: NarrativeInput): string {
-  const judged = input.movements.filter(
-    (one) => one.verdict === "highlight" || one.verdict === "lowlight",
-  );
-  const movementText = judged.length === 0
-    ? "임계를 넘은 변동이 없다."
-    : judged
-      .slice(0, MAX_MOVEMENTS)
-      .map((one) => {
-        const delta = one.change == null
-          ? "신규"
-          : one.spec.pointScale
-            ? `${one.change >= 0 ? "+" : ""}${one.change.toFixed(1)}%p`
-            : `${one.change >= 0 ? "+" : ""}${Math.round(one.change)}%`;
-        return `${one.label} ${one.spec.ko} ${one.spec.format(one.latest)}(${delta})`;
-      })
-      .join(", ") + " 가 임계를 넘었다.";
-
-  const gaps = input.ga4Gaps ?? [];
-  const coverageText = gaps.length === 0
-    ? `기준일 스냅샷이 대상 ${input.totals.ga4Dau.apps}개 앱에 모두 있다.`
-    : `기준일 스냅샷이 없는 앱이 ${gaps.length}개 있다(${gaps
-      .slice(0, MAX_NAMED_GAPS)
-      .map((gap) => gap.app.displayName)
-      .join(", ")}). 합계가 낮은 것이 실제 감소인지 이 앱들이 빠져서인지 먼저 가려야 한다.`;
-
-  const action = gaps.length > 0
-    ? "빠진 앱의 수집 상태를 먼저 확인한다. 지연이면 다음 정정에서 채워지고, 수집이 한 번도 없으면 배선을 봐야 한다."
-    : judged.length > 0
-      ? "위 변동의 앱별 지표를 열어 같은 방향의 움직임이 다른 소스에도 있는지 확인한다."
-      : "확인할 변동이 없다. 다음 발행에서 같은 항목을 다시 본다.";
-
-  return [
-    `${NARRATIVE_SECTIONS[0]}`,
-    movementText,
-    "",
-    `${NARRATIVE_SECTIONS[1]}`,
-    coverageText,
-    "",
-    `${NARRATIVE_SECTIONS[2]}`,
-    action,
-  ].join("\n");
-}
-
-/** 세 절 머리말이 모두 있는가. 프롬프트가 요청만 하고 확인하지 않으면 형식이 흔들린다. */
-export function hasNarrativeSections(text: string): boolean {
-  return NARRATIVE_SECTIONS.every((section) => text.includes(section));
-}
-
-export interface MetricNarrative {
-  text: string;
-  /** LLM 문장이 아니라 골격으로 대체됐는가. */
-  fallback: boolean;
-  /** 문서에 남길 생성 출처. 골격이면 null. */
-  provider: string | null;
-  model: string | null;
-  promptVersion: number;
-}
-
-/**
- * 해설. **항상 문자열을 돌려준다** — LLM 미설정·실패·형식 이탈이면 결정적 골격으로
- * 대체한다. 보고서가 LLM 가용성에 묶이면 안 되고, 있다 없다 하는 해설은 없느니만 못하다.
- *
- * temperature 0 으로 부르고 세 절 머리말을 검증한다. 형식이 어긋나면 한 번만 다시
- * 요청하고, 그래도 어긋나면 골격을 쓴다. 길이는 자르지 않는다 — 잘라내면 마지막 절이
- * 문장 중간에서 끊겨 "오늘은 형식이 다르다"로 읽힌다.
- */
-export async function metricNarrative(input: NarrativeInput): Promise<MetricNarrative> {
-  const skeleton = narrativeSkeleton(input);
-  const asFallback = (): MetricNarrative => ({
-    text: skeleton,
-    fallback: true,
-    provider: null,
-    model: null,
-    promptVersion: NARRATIVE_PROMPT_VERSION,
+export function narrativeEvidence(input: NarrativeInput): Evidence[] {
+  const facts: Evidence[] = [
+    { id: "active", label: "앱별 활성 합계", value: `${input.totals.ga4Dau.latest}명 - 중복 사용자 포함`, source: `GA4 ${input.refDate}` },
+    { id: "coverage", label: "기준일 자료", value: `${input.totals.ga4Dau.apps}개 앱 수집 · ${(input.ga4Gaps ?? []).length}개 미도착`, source: `MetricCollectionLedger ${input.refDate}` },
+  ];
+  for (const [index, m] of input.movements.filter((m) => m.verdict === "highlight" || m.verdict === "lowlight").slice(0, 5).entries()) facts.push({
+    id: `movement_${index}`, label: `${m.label} ${m.spec.ko}`.slice(0, 100), value: `${m.spec.format(m.latest)} · 기준 ${m.baseline == null ? "표본 부족" : m.spec.format(m.baseline)}`, source: `${m.spec.source} ${input.refDate}`,
   });
-  if (!llmChatConfigured()) return asFallback();
-
-  const facts = narrativeFacts(input);
-  const ask = async (extra?: string): Promise<string> => {
-    const reply = await llmChat(
-      [
-        { role: "system", content: extra ? `${SYSTEM_PROMPT}\n\n${extra}` : SYSTEM_PROMPT },
-        { role: "user", content: facts },
-      ],
-      { maxTokens: 1_400, temperature: 0, usage: { path: "metric-narrative" } },
-    );
-    // 세 절 머리말을 쓰게 했으므로 줄바꿈을 보존한다. 줄 안쪽 공백만 정리한다.
-    return reply.trim().replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n");
-  };
-
-  try {
-    let text = await ask();
-    if (!hasNarrativeSections(text)) {
-      text = await ask(
-        `형식 위반이 있었다. 다음 세 머리말을 각각 한 줄로 그대로 포함해 다시 쓴다: ${NARRATIVE_SECTIONS.join(" / ")}`,
-      );
-    }
-    if (!text || !hasNarrativeSections(text)) return asFallback();
-    return {
-      text,
-      fallback: false,
-      provider: env.chatLlmProvider(),
-      model: llmChatModel(),
-      promptVersion: NARRATIVE_PROMPT_VERSION,
-    };
-  } catch (error) {
-    console.error(
-      "[metric-highlights] 해설 생성 실패:",
-      error instanceof Error ? error.message : error,
-    );
-    return asFallback();
-  }
+  return facts;
+}
+export function narrativeSkeleton(input: NarrativeInput): string {
+  const facts = narrativeEvidence(input);
+  return renderInsight({ bullets: [
+    { kind: "fact", text: "{active} 관측됨", evidenceIds: ["active"] },
+    { kind: "fact", text: "{coverage} 확인됨", evidenceIds: ["coverage"] },
+    { kind: "action", text: (input.ga4Gaps?.length ?? 0) > 0 ? "수집 상태를 먼저 확인 필요" : "앱별 변동과 획득 경로 비교 필요", evidenceIds: ["coverage"] },
+  ] }, facts);
+}
+export interface MetricNarrative { text: string; fallback: boolean; provider: string | null; model: string | null; promptVersion: number; }
+export async function metricNarrative(input: NarrativeInput): Promise<MetricNarrative> {
+  const made = await generateInsight(narrativeEvidence(input), "growth");
+  return { text: made.fallback ? narrativeSkeleton(input) : renderInsight(made.content, narrativeEvidence(input)), fallback: made.fallback, provider: made.fallback ? null : "minimax", model: made.fallback ? null : env.minimaxChatModel(), promptVersion: NARRATIVE_PROMPT_VERSION };
 }

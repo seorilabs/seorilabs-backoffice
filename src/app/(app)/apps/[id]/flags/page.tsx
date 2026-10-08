@@ -1,10 +1,2 @@
-import { AppToolPage } from "@/components/app-ops/AppToolPage";
-
-export default async function FlagsPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  return <AppToolPage appId={id} section="flags" />;
-}
+import { redirect } from "next/navigation";
+export default async function Redirect({ params }: { params: Promise<{ id: string }> }) { redirect(`/apps/${(await params).id}/operations/flags`); }

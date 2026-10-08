@@ -126,12 +126,15 @@ test("시계열에서 지표별 움직임을 뽑고 미수집 값은 건너뛴�
   ];
   const movements = movementsFromSeries("행복 농장 타이쿤", rows, [
     { key: "ga4_dau", pick: (row) => row.dau },
-    // 최신 행의 값이 null 이면 그 지표는 관측 자체가 없다.
+    // 최신 코호트는 미성숙이므로 가장 최근의 실제 유지율 관측일을 사용한다.
     { key: "ga4_d1", pick: (row) => row.d1Pct, sample: (row) => row.newUsers },
   ]);
-  assert.deepEqual(movements.map((m) => m.metricKey), ["ga4_dau"]);
+  assert.deepEqual(movements.map((m) => m.metricKey), ["ga4_dau", "ga4_d1"]);
   assert.equal(movements[0].verdict, "highlight");
   assert.equal(movements[0].date, "2026-08-28");
+  assert.equal(movements[1].date, "2026-08-27");
+  assert.equal(movements[1].verdict, "insufficient", "성숙 코호트 기준선이 네 날짜 미만이면 판정하지 않는다");
+  assert.deepEqual(movementsFromSeries("미수집", rows.map(row => ({ ...row, d1Pct: null })), [{ key: "ga4_d1", pick: row => row.d1Pct }]), []);
   assert.deepEqual(movementsFromSeries("빈 앱", [], []), []);
 });
 

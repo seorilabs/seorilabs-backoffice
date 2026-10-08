@@ -1,0 +1,43 @@
+# 배포·운영 활성화 승인 전 replicas=0을 유지한다. GitHub mutation credential을 주입하지 않는다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice-operations-insights
+  namespace: platform
+  labels: {app.kubernetes.io/name: backoffice, app.kubernetes.io/component: operations-insights}
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app.kubernetes.io/component: operations-insights}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: backoffice, app.kubernetes.io/component: operations-insights}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: rpi5}
+      imagePullSecrets: [{name: registry-pull-cred}]
+      securityContext: {runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}
+      containers:
+        - name: operations-insights
+          image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+          command: ["node", "/app/scripts-dist/operations-insights-worker.cjs"]
+          env:
+            - name: INSIGHTS_WORKER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: HOME, value: "/tmp"}
+            - {name: AUTH_URL, value: "https://backoffice.vzyx.xyz"}
+            - {name: FEATURE_MINIMAX_ENABLED, value: "true"}
+            - {name: MINIMAX_CHAT_MODEL, value: "MiniMax-M3"}
+            - {name: MINIMAX_CHAT_TIMEOUT_MS, value: "180000"}
+            - {name: INSIGHTS_DAILY_LIMIT, value: "200"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DATABASE_URL}}
+            - name: MINIMAX_API_KEY
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: MINIMAX_API_KEY}}
+          volumeMounts: [{name: tmp, mountPath: "/tmp"}]
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+
+      volumes: [{name: tmp, emptyDir: {}}]

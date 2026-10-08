@@ -91,7 +91,7 @@ function literalText(expression: ts.Expression): string[] {
 test("관리 화면의 고정 문구에는 내부 개발 용어를 직접 노출하지 않는다", () => {
   const components = "src/components/fleet";
   const files = [
-    "src/app/(app)/apps/[id]/fleet/page.tsx",
+    "src/app/(app)/apps/[id]/settings/page.tsx",
     "src/app/(app)/settings/page.tsx",
     ...readdirSync(join(process.cwd(), components)).filter((file) => file.endsWith(".tsx")).map((file) => `${components}/${file}`),
   ];

@@ -10,17 +10,18 @@ import {
   visibleIssueWhere,
   visibleReleaseWhere,
 } from "@/lib/domain/app-visibility";
-import { llmComplete, llmChatConfigured } from "@/lib/ai/llm";
+import { llmChatConfigured } from "@/lib/ai/llm";
 import { getOrgDefaultBranches } from "@/lib/github/read";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import {
   filterDefaultBranchMerges,
   formatMergedPrLines,
-  mergedPrPromptLines,
   previousKstDayWindow,
   shouldUseDailyDigestGemini,
 } from "@/lib/notifications/daily-digest";
+import { generateInsight } from "@/lib/insights/generate";
+import { renderInsight } from "@/lib/insights/contract";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const STAGE_NUDGE: Partial<Record<Lifecycle, { kind: AiDraftKind; emoji: string; suggest: string }>> = {
@@ -107,13 +108,13 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   let geminiUsed = false;
   if (mergedPrs.length && llmChatConfigured() && shouldUseDailyDigestGemini(window.label, env.dailyDigestGeminiRolloutPercent())) {
     try {
-      const summary = await llmComplete({
-        system: "제공된 PR 제목만 근거로 전일 변경의 핵심과 오늘 먼저 볼 운영 항목을 한국어 한 문장으로 요약하라. 추정하지 않는다.",
-        prompt: [`승인대기 ${approvalCount}건`, `P1 ${p1.length}건`, ...mergedPrPromptLines(mergedPrs)].join("\n"),
-        maxTokens: 240,
-        usage: { path: "proactive" },
-      });
-      lines.push("", `💬 **AI 요약** ${summary.trim()}`);
+      const facts = [
+        { id: "approvals", label: "승인 대기", value: approvalCount + "건", source: window.label + " 운영 원장" },
+        { id: "priority", label: "열린 P1", value: p1.length + "건", source: "GitHub 미러" },
+        { id: "merges", label: "기본 브랜치 병합", value: mergedPrs.length + "건", source: window.label + " GitHub" },
+      ];
+      const summary = await generateInsight(facts, "operations");
+      lines.push("", renderInsight(summary.content, facts));
       geminiUsed = true;
     } catch {
       // 확정 목록은 AI 실패와 무관하게 큐에 넣는다.

@@ -1,0 +1,161 @@
+# 운영 활성화 승인이 필요한 신규 read-only 수집·주간 분석 일정. suspend=true 유지.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app.kubernetes.io/component: operations-insights-collector
+    app.kubernetes.io/name: backoffice
+  name: backoffice-market-feedback
+  namespace: platform
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: operations-insights-collector
+            app.kubernetes.io/name: backoffice
+        spec:
+          automountServiceAccountToken: false
+          containers:
+          - command:
+            - node
+            - /app/scripts-dist/operations-insights-worker.cjs
+            - market
+            env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: '1'
+            - name: NODE_OPTIONS
+              value: --dns-result-order=ipv4first --no-network-family-autoselection
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: DATABASE_URL
+                  name: backoffice-secrets
+            - name: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+              valueFrom:
+                secretKeyRef:
+                  key: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+                  name: backoffice-secrets
+            image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+            imagePullPolicy: Always
+            name: market
+            resources:
+              limits:
+                cpu: 500m
+                memory: 384Mi
+              requests:
+                cpu: 25m
+                memory: 128Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+            volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+            workingDir: /app
+          imagePullSecrets:
+          - name: registry-pull-cred
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsUser: 10001
+          volumes:
+          - emptyDir: {}
+            name: tmp
+  schedule: 20 3 * * *
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 2
+  suspend: true
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app.kubernetes.io/component: operations-insights-collector
+    app.kubernetes.io/name: backoffice
+  name: backoffice-weekly-insights
+  namespace: platform
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: operations-insights-collector
+            app.kubernetes.io/name: backoffice
+        spec:
+          automountServiceAccountToken: false
+          containers:
+          - command:
+            - node
+            - /app/scripts-dist/operations-insights-worker.cjs
+            - weekly
+            env:
+            - name: NODE_ENV
+              value: production
+            - name: HOME
+              value: /tmp
+            - name: CHECKPOINT_DISABLE
+              value: '1'
+            - name: NODE_OPTIONS
+              value: --dns-result-order=ipv4first --no-network-family-autoselection
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: DATABASE_URL
+                  name: backoffice-secrets
+            image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+            imagePullPolicy: Always
+            name: weekly
+            resources:
+              limits:
+                cpu: 500m
+                memory: 384Mi
+              requests:
+                cpu: 25m
+                memory: 128Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+            volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+            workingDir: /app
+          imagePullSecrets:
+          - name: registry-pull-cred
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsUser: 10001
+          volumes:
+          - emptyDir: {}
+            name: tmp
+  schedule: 30 1 * * 1
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 2
+  suspend: true

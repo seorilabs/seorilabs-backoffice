@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { kstDateTimeShort } from "@/lib/format/kst";
@@ -38,7 +39,7 @@ export default async function SettingsPage() {
 
   return (
     <div className="px-4 py-6 sm:p-8">
-      <h1 className="text-xl font-semibold">설정</h1>
+      <h1 className="text-xl font-semibold">설정</h1><nav className="mt-4 flex gap-4 text-sm"><Link href="/settings/health" className="text-blue-700">자료 수집 상태 →</Link><Link href="/settings/automations" className="text-blue-700">자동 실행 관리 →</Link></nav>
 
       <section className="mt-6 max-w-xl space-y-4">
         <Card title="동기화 상태">

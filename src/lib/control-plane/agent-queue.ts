@@ -188,7 +188,7 @@ export function expiredLeaseDisposition(input: {
 
 export async function requeueExpiredLeases(now: Date): Promise<void> {
   const expired = await prisma.agentLease.findMany({
-    where: { revokedAt: null, expiresAt: { lte: now }, run: { status: "RUNNING" } },
+    where: { revokedAt: null, expiresAt: { lte: now }, run: { status: "RUNNING", occurrence: { definition: { agentKind: { not: "API" } } } } },
     select: {
       id: true,
       runId: true,

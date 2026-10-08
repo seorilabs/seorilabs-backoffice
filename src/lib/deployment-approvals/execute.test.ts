@@ -55,7 +55,7 @@ test("중복 클릭과 동시 worker는 같은 승인 요청을 한 번만 실�
   assert.equal(f.sends(), 1); assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
 });
 test("권한·계정·토큰·외부 처리·재실행·SHA·확인 만료는 쓰기 이전 차단", async () => {
-  const changes: Array<(f: ReturnType<typeof fixture>) => void> = [f => f.denyRole(), f => f.unlink(), f => f.denyUser(), f => f.denyGitHub(), f => f.expireToken(), f => f.external(), f => { f.live.actor.id = 1; }, f => { f.live.triggering_actor.id = 1; }, f => { f.live.run_attempt = 2; }, f => { f.live.head_sha = "b".repeat(40); }, f => { f.command.confirmedAt = new Date(0); }, f => { f.command.params = { ...(f.command.params as object), targetHash: "changed" }; }];
+  const changes: Array<(f: ReturnType<typeof fixture>) => void> = [f => f.denyRole(), f => f.unlink(), f => f.denyUser(), f => f.denyGitHub(), f => f.expireToken(), f => f.external(), f => { f.live.run_attempt = 2; }, f => { f.live.head_sha = "b".repeat(40); }, f => { f.command.confirmedAt = new Date(0); }, f => { f.command.params = { ...(f.command.params as object), targetHash: "changed" }; }];
   for (const change of changes) { const f = fixture(); change(f); await assert.rejects(executeDeploymentApproval(f.command, f.deps)); assert.equal(f.sends(), 0); }
 });
 test("timeout 뒤 미확정과 worker 재시작은 자동 재전송하지 않는다", async () => {
@@ -69,4 +69,10 @@ test("timeout 뒤 GitHub 이력으로 처리 확인되면 완료로 복구", asy
   const f = fixture(); f.timeout(); f.recover();
   await executeDeploymentApproval(f.command, f.deps);
   assert.equal(f.row.actionState, "CONFIRMED"); assert.equal(f.sends(), 1);
+});
+
+test("환경 정책이 허용하면 실행자와 같은 승인자도 provider에 한 번 전달", async () => {
+  const f = fixture(); f.live.actor.id = 1; f.live.triggering_actor.id = 1;
+  await executeDeploymentApproval(f.command, f.deps);
+  assert.equal(f.sends(), 1);
 });

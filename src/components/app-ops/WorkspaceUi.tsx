@@ -127,9 +127,7 @@ export function ToolCatalog({
     return (
       <EmptyState title={emptyTitle}>
         {emptyDescription}
-        <div className="mt-2 font-mono text-xs text-neutral-600">
-          .seorilabs/backoffice.json
-        </div>
+        <Link href={`/apps/${appId}/settings`} className="mt-2 inline-block text-sm text-blue-700">앱 설정에서 연결 상태 확인 →</Link>
       </EmptyState>
     );
   }

@@ -212,29 +212,7 @@ export async function sendDiscord(
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
 
-  if (options.attachment) {
-    const bytes = Buffer.from(options.attachment.base64, "base64");
-    if (bytes.length === 0 || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) {
-      return { ok: false, error: "Discord 첨부 크기 제한 초과" };
-    }
-    const form = new FormData();
-    form.set("payload_json", JSON.stringify({
-      ...payload,
-      attachments: [{ id: 0, filename: options.attachment.filename }],
-    }));
-    form.set(
-      "files[0]",
-      new Blob([bytes], { type: options.attachment.contentType }),
-      options.attachment.filename,
-    );
-    return discordRequest(`/channels/${channelId}/messages`, { method: "POST", body: form });
-  }
-
-  return discordRequest(`/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  }, options.botToken);
+  return sendMessageRequest(`/channels/${channelId}/messages`, "POST", payload, options);
 }
 
 export async function editDiscord(
@@ -249,15 +227,7 @@ export async function editDiscord(
   }
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  // 메시지는 그것을 게시한 봇만 고칠 수 있다. botToken 을 흘리면 서리가 보낸
-  // 카드를 메인 봇이 고치려다 403 이 나고, 실패 원인이 권한 문제로 보이지 않는다.
-  return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    // Discord PATCH는 누락 필드를 보존하므로 이전 mention·버튼·상자를 명시적으로 비운다.
-    // embeds 를 비우지 않으면 plain 으로 바뀐 알림에 이전 상자가 그대로 남는다.
-    body: JSON.stringify({ content: "", components: [], embeds: [], ...payload }),
-  }, options.botToken);
+  return sendMessageRequest(`/channels/${channelId}/messages/${messageId}`, "PATCH", payload, options);
 }
 
 export async function deleteDiscordMessage(
@@ -291,28 +261,7 @@ export async function createDiscordChannelMessage(
   if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 오류" };
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  if (options.attachment) {
-    const bytes = Buffer.from(options.attachment.base64, "base64");
-    if (bytes.length === 0 || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) {
-      return { ok: false, error: "Discord 첨부 크기 제한 초과" };
-    }
-    const form = new FormData();
-    form.set("payload_json", JSON.stringify({
-      ...payload,
-      attachments: [{ id: 0, filename: options.attachment.filename }],
-    }));
-    form.set(
-      "files[0]",
-      new Blob([bytes], { type: options.attachment.contentType }),
-      options.attachment.filename,
-    );
-    return discordRequest(`/channels/${channelId}/messages`, { method: "POST", body: form });
-  }
-  return discordRequest(`/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  return sendMessageRequest(`/channels/${channelId}/messages`, "POST", payload, options);
 }
 
 // 메시지에서 시작한 public thread는 ID가 원본 메시지 ID와 같다. 그래서 thread ID를 따로
@@ -355,14 +304,7 @@ export async function editDiscordChannelMessage(
   }
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    // Discord PATCH는 누락 필드를 보존한다. 확인 버튼 응답(UPDATE_MESSAGE)이 남긴
-    // "실행 중" content 와 버튼을 비우지 않으면 결과 embed 를 붙여도 메시지가 계속
-    // 진행 중으로 읽힌다. embeds 도 같은 이유로 비운다.
-    body: JSON.stringify({ content: "", components: [], embeds: [], ...payload }),
-  });
+  return sendMessageRequest(`/channels/${channelId}/messages/${messageId}`, "PATCH", payload, options);
 }
 
 export async function putDiscordApi(path: string, body: unknown): Promise<DiscordDeliveryResult> {
@@ -380,4 +322,16 @@ export async function currentDiscordMemberRoles(userId: string): Promise<string[
   const body = result.json as { roles?: unknown } | undefined;
   if (!result.ok || !Array.isArray(body?.roles)) throw new Error("Discord 역할 조회 실패");
   return body.roles.filter((role): role is string => typeof role === "string");
+}
+
+// 생성·수정의 모든 경로에서 같은 발신자와 첨부 제한을 사용한다.
+async function sendMessageRequest(path: string, method: "POST" | "PATCH", payload: NonNullable<ReturnType<typeof messagePayload>>, options: DiscordMessageOptions) {
+  const body = method === "PATCH" ? { content: "", components: [], embeds: [], ...payload } : payload;
+  if (!options.attachment) return discordRequest(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, options.botToken);
+  const bytes = Buffer.from(options.attachment.base64, "base64");
+  if (!bytes.length || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) return { ok: false, error: "Discord 첨부 크기 제한 초과" };
+  const form = new FormData();
+  form.set("payload_json", JSON.stringify({ ...body, attachments: [{ id: 0, filename: options.attachment.filename }] }));
+  form.set("files[0]", new Blob([bytes], { type: options.attachment.contentType }), options.attachment.filename);
+  return discordRequest(path, { method, body: form }, options.botToken);
 }
