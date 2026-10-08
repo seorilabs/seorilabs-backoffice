@@ -1,3 +1,4 @@
+import Link from "next/link";
 import React from "react";
 import { METRIC_SPECS, type MetricSpec } from "@/lib/core/metric-highlights";
 import type { MovementSnapshot, OrgReportDocument } from "@/lib/core/org-report-schema";
@@ -52,12 +53,12 @@ export function SourceBadge({ view }: { view: OrgReportView }) {
         title={
           retro
             ? "발행 당시가 아니라 나중에 원본에서 소급 계산해 저장한 스냅샷입니다."
-            : "매일 11:00 KST 발행 시점의 문서를 그대로 보여줍니다."
+            : "발행 시점의 문서를 그대로 보여줍니다."
         }
       >
         {retro ? "소급 발행" : "발행 스냅샷"}
         {time && <span className="font-normal opacity-80">{time}</span>}
-        {view.version != null && view.version > 1 && (
+        {view.version != null && view.version >= 1 && (
           <span className="font-normal opacity-80">v{view.version}</span>
         )}
       </span>
@@ -113,26 +114,28 @@ function SummaryCard({
 
 export function SummaryCards({ doc }: { doc: OrgReportDocument }) {
   const { ga4, console: consoleSummary } = doc.summary;
+  const retention = doc.retention;
+  const gcp = doc.costs?.figures.gcp;
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <SummaryCard
-        label="GA4 DAU"
+        label="앱별 활성 합계"
         value={`${count(ga4.dau)}명`}
-        sub={`대상 ${ga4.apps}개 앱`}
+        sub={`대상 ${ga4.apps}개 앱 · 사용자 중복 포함`}
         delta={<DeltaTag current={ga4.dau} previous={ga4.dauPrev} />}
       />
-      <SummaryCard label="신규 사용자" value={`${count(ga4.newUsers)}명`} sub="first_visit" />
-      <SummaryCard label="활성 사용자" value={`${count(ga4.engagedUsers)}명`} sub="engaged" />
-      <SummaryCard label="보상형 광고 완료" value={`${count(ga4.adCompletions)}회`} />
+      <SummaryCard label="앱별 신규 합계" value={`${count(ga4.newUsers)}명`} sub="first_open·first_visit 합계" />
+      <SummaryCard label="신규 코호트 D1 유지율" value={retention?.d1Pct == null ? "집계 대기" : `${retention.d1Pct.toFixed(1)}%`} sub={retention ? `${retention.cohortDate} 코호트 ${count(retention.users)}명 · ${retention.observedApps}/${retention.expectedApps}개 앱` : "코호트 분모 미수집"} />
+      <SummaryCard label="월 누적 운영 비용" value={gcp ? `${gcp.currency} ${gcp.total.toLocaleString("ko-KR")}` : "미집계"} sub={doc.costs ? `${doc.costs.month} · AI USD ${doc.costs.figures.llm?.totalUsd.toFixed(2) ?? "미집계"}` : "수익과 기간·통화 다름"} />
       <SummaryCard
-        label="콘솔 광고 수익"
-        value={won(consoleSummary.iaaKrw)}
+        label="콘솔 광고 추정 수익"
+        value={consoleSummary.listings ? won(consoleSummary.iaaKrw) : "미수집"}
         sub={`대상 ${consoleSummary.listings}개 리스팅`}
         delta={<DeltaTag current={consoleSummary.iaaKrw} previous={consoleSummary.iaaPrevKrw} />}
       />
       <SummaryCard
         label="결제 거래액"
-        value={won(consoleSummary.iapTrxKrw)}
+        value={consoleSummary.listings ? won(consoleSummary.iapTrxKrw) : "미수집"}
         sub={
           consoleSummary.payingUsers > 0
             ? `결제자 ${count(consoleSummary.payingUsers)}명 · 정산 ${won(consoleSummary.iapSettlementKrw)}`
@@ -284,7 +287,7 @@ export function AppBreakdownTable({ doc }: { doc: OrgReportDocument }) {
               .join(" · ");
             return (
               <tr key={app.slug} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50">
-                <td className="px-3 py-1.5 text-neutral-800">{app.displayName}</td>
+                <td className="px-3 py-1.5 text-neutral-800"><Link className="text-blue-700 hover:underline" href={`/analytics?app=${encodeURIComponent(app.slug)}`}>{app.displayName}</Link></td>
                 <td className="px-3 py-1.5">
                   <span
                     className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
@@ -420,8 +423,8 @@ export function RevenueCostSection({ doc }: { doc: OrgReportDocument }) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-        <SummaryCard label="광고 수익 (기준일)" value={won(revenue.iaaKrw)} />
-        <SummaryCard label="결제 거래액 (기준일)" value={won(revenue.iapTrxKrw)} />
+        <SummaryCard label="광고 수익 (기준일)" value={doc.summary.console.listings ? won(revenue.iaaKrw) : "미수집"} />
+        <SummaryCard label="결제 거래액 (기준일)" value={doc.summary.console.listings ? won(revenue.iapTrxKrw) : "미수집"} />
         {costs?.figures.github && (
           <SummaryCard
             label="GitHub Actions (월누적)"

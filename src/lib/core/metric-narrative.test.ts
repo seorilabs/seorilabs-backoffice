@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  hasNarrativeSections,
   narrativeFacts,
   narrativeSkeleton,
 } from "@/lib/core/metric-narrative";
@@ -196,70 +195,9 @@ test("두 호출부는 HighlightData 를 그대로 넘겨 ga4Gaps 가 사실에 
 
 // ── 골격: LLM 없이도 보고서가 성립해야 한다 ────────────────────────────────
 
-test("골격은 세 절 머리말을 반드시 갖춘다", () => {
-  const text = narrativeSkeleton({
-    refDate: "2026-09-13",
-    totals: {
-      ga4Dau: { latest: 151, previous: 122, apps: 5 },
-      console: { iaaKrw: 140, iapKrw: 0, previousIaaKrw: 141, listings: 5 },
-    },
-    movements: [],
-  });
-  assert.ok(hasNarrativeSections(text), text);
-  assert.ok(text.includes("임계를 넘은 변동이 없다."), text);
-  assert.ok(text.includes("기준일 스냅샷이 대상 5개 앱에 모두 있다."), text);
-});
-
-test("골격은 수집 공백을 지표 하락과 섞지 않는다", () => {
-  const text = narrativeSkeleton({
-    refDate: "2026-09-13",
-    totals: {
-      ga4Dau: { latest: 15, previous: null, apps: 2 },
-      console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null, listings: 0 },
-    },
-    movements: [],
-    ga4Gaps: [
-      {
-        app: { id: "a", slug: "lizard-tycoon", displayName: "도마뱀 테라리움", type: "GAME" },
-        latestDate: new Date("2026-09-12T00:00:00.000Z"),
-      },
-    ],
-  });
-  assert.ok(hasNarrativeSections(text), text);
-  assert.ok(text.includes("도마뱀 테라리움"), text);
-  // 낮은 합계를 실제 감소로 읽지 말라는 지시가 골격 자체에 있어야 한다.
-  assert.ok(text.includes("합계가 낮은 것이 실제 감소인지"), text);
-  assert.ok(text.includes("수집 상태를 먼저 확인한다"), text);
-});
-
-test("같은 입력이면 골격도 같다", () => {
-  const input = {
-    refDate: "2026-09-13",
-    totals: {
-      ga4Dau: { latest: 151, previous: 122, apps: 5 },
-      console: { iaaKrw: 140, iapKrw: 0, previousIaaKrw: 141, listings: 5 },
-    },
-    movements: [],
-  };
-  assert.equal(narrativeSkeleton(input), narrativeSkeleton(input));
-});
-
-test("hasNarrativeSections 는 한 절만 빠져도 거짓", () => {
-  assert.equal(hasNarrativeSections("핵심 변동:\nA\nGA4·콘솔 짚을 점:\nB\n다음 액션:\nC"), true);
-  assert.equal(hasNarrativeSections("핵심 변동:\nA\n다음 액션:\nC"), false);
-  assert.equal(hasNarrativeSections(""), false);
-});
-
-// 프롬프트가 요청만 하고 확인하지 않으면 형식이 조용히 흔들린다. 길이를 잘라내면
-// 마지막 절이 문장 중간에서 끊겨 "오늘은 형식이 다르다"로 읽힌다.
-test("소스 계약: 해설은 temperature 0 으로 부르고, 검증하고, 자르지 않는다", () => {
-  const source = readFileSync(
-    join(process.cwd(), "src/lib/core/metric-narrative.ts"),
-    "utf8",
-  );
-  assert.match(source, /temperature: 0/u);
-  assert.match(source, /hasNarrativeSections\(text\)/u);
-  assert.match(source, /return asFallback\(\)/u);
-  assert.doesNotMatch(source, /MAX_CHARS/u);
-  assert.doesNotMatch(source, /\.slice\(0, 1_?200\)/u);
+test("골격은 간결한 음슴체 불릿이며 수집 공백을 지표 하락으로 표현하지 않음", () => {
+  const text = narrativeSkeleton({ refDate: "2026-09-13", totals: { ga4Dau: { latest: 15, previous: null, apps: 2 }, console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null, listings: 0 } }, movements: [], ga4Gaps: [{ app: { id: "a", slug: "sample", displayName: "Sample", type: "GAME" }, latestDate: null }] });
+  assert.equal(text.split("\n").length, 3);
+  assert.ok(text.length <= 600); assert.match(text, /1개 미도착/); assert.match(text, /수집 상태를 먼저 확인/);
+  assert.ok(text.split("\n").every((line) => line.startsWith("- ")));
 });

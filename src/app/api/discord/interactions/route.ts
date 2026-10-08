@@ -1,3 +1,4 @@
+import { shouldDeferRead, completeDeferredRead } from "@/lib/discord/deferred-read";
 import { after, NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { handleDiscordInteraction } from "@/lib/discord/handler";
@@ -26,6 +27,12 @@ export async function POST(request: NextRequest) {
     interaction = JSON.parse(body) as DiscordInteraction;
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+  if (shouldDeferRead(interaction)) {
+    after(async () => {
+      try { await completeDeferredRead(interaction, handleDiscordInteraction); } catch { console.error("[discord/interactions] 예약 조회 응답 실패"); }
+    });
+    return NextResponse.json({ type: 5, data: { flags: 64 } });
   }
   try {
     const response = await handleDiscordInteraction(interaction);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { remindersAllowed, providerError, validateTarget } from "./policy";
+import { assertCanReview, remindersAllowed, providerError, validateTarget } from "./policy";
 const sha = "a".repeat(40), imageSha = "b".repeat(40);
 const run = { id: 10, run_attempt: 2, head_sha: sha, path: ".github/workflows/deploy-staging.yml" };
 const target = { version: 1, repository: "seorilabs/platform", runId: "10", runAttempt: 2, sourceSha: sha, imageSha, environment: "staging", workflow: "deploy-staging.yml", image: `asia-northeast3-docker.pkg.dev/seorilabs-platform/platform/platform:${imageSha}`, targets: ["cloud-run:seorilabs-platform:asia-northeast3:platform-api-stg"] };
@@ -37,4 +37,11 @@ test("worker 복구는 명령 ID·승인자·환경·결정이 일치하는 GitH
   const review = { comment: "backoffice:command1\n승인합니다", state: "approved", user: { id: 1 }, environments: [{ id: 20 }] };
   assert.equal(reviewMatches(review, expected), true);
   for (const patch of [{ comment: "backoffice:old-command" }, { state: "rejected" }, { user: { id: 2 } }, { environments: [{ id: 21 }] }]) assert.equal(reviewMatches({ ...review, ...patch }, expected), false);
+});
+
+const approvalInput = { currentUserCanApprove: true, githubId: "1", triggeringActorId: "1", actorId: "1", expectedAttempt: 2, actualAttempt: 2, expectedSha: sha, actualSha: sha, expectedTargetHash: "target", actualTargetHash: "target" };
+test("GitHub가 허용한 자기 승인은 로컬 실행자 비교로 차단하지 않음", () => {
+  assert.doesNotThrow(() => assertCanReview(approvalInput));
+  assert.throws(() => assertCanReview({ ...approvalInput, currentUserCanApprove: false }), /GitHub 승인 권한/);
+  assert.throws(() => assertCanReview({ ...approvalInput, actualAttempt: 3 }), /배포 대상 변경/);
 });

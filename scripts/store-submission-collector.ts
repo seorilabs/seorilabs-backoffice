@@ -1,3 +1,4 @@
+import { beginCollection, completeCollection, collectionErrorCode } from "@/lib/insights/collection";
 import { prisma } from "@/lib/prisma";
 import { listGooglePlayTrackReleases } from "@/lib/google-play/tracks-fetcher";
 import { applyGooglePlayTrackRelease } from "@/lib/google-play/tracks-collector";
@@ -9,7 +10,7 @@ async function main(): Promise<void> {
   const claims = JSON.parse(raw) as GoogleServiceAccountClaims;
   if (!claims.client_email || !claims.private_key) throw new Error("Google Play Publisher 자격증명 형식 오류");
   const apps = await prisma.app.findMany({
-    where: { playPackage: { not: null } },
+    where: { status: { not: "DEPRECATED" }, playPackage: { not: null } },
     select: { id: true, displayName: true, playPackage: true, marketTargets: true },
   });
   let targets = 0;
@@ -19,6 +20,8 @@ async function main(): Promise<void> {
     if (!app.playPackage || !Array.isArray(app.marketTargets) ||
         !app.marketTargets.includes("play")) continue;
     targets++;
+    const collection = await beginCollection("play-submissions", app.playPackage, app.id);
+    let observed = 0;
     try {
       const releases = await listGooglePlayTrackReleases({
         packageName: app.playPackage, claims,
@@ -33,6 +36,7 @@ async function main(): Promise<void> {
           sourceEventAt: now,
         });
       }
+      observed = releases.filter(release => !release.unavailableReason).length;
       const unavailable = releases.filter((release) => release.unavailableReason);
       if (unavailable.length) throw new Error(`출시 상태 확인 불가: ${unavailable.map((release) => `${release.trackName}: ${release.unavailableReason}`).join("; ")}`);
       await prisma.storeReviewSubmissionSync.upsert({
@@ -40,9 +44,12 @@ async function main(): Promise<void> {
         create: { appId: app.id, store: "GOOGLE_PLAY", lastSuccessAt: now },
         update: { lastSuccessAt: now, lastFailureReason: null },
       });
+      await completeCollection(collection.id, { status: releases.length ? "observed" : "empty", dataThrough: now, coverage: { releases: releases.length } });
       succeeded++;
     } catch (error) {
       failed++;
+      const errorCode = collectionErrorCode(error);
+      await completeCollection(collection.id, { status: observed ? "partial" : errorCode === "SOURCE_PERMISSION_REQUIRED" ? "needs_input" : "failed", coverage: { observedReleases: observed }, errorCode });
       const message = error instanceof Error ? error.message.slice(0, 200) : "unknown";
       console.error("[play-tracks] 앱 조회 실패", app.id, message);
       await prisma.storeReviewSubmissionSync.upsert({

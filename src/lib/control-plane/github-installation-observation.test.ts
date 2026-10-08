@@ -161,11 +161,11 @@ test("scheduler route와 Fleet UI는 read-only installation observation을 연�
   ), "utf8");
   const page = readFileSync(join(
     process.cwd(),
-    "src/app/(app)/apps/[id]/fleet/page.tsx",
+    "src/app/(app)/apps/[id]/settings/page.tsx",
   ), "utf8");
   assert.match(route, /recordGitHubInstallationObservations/);
   assert.match(page, /GitHub 연동 권한/);
   assert.match(page, /권한 있음은 GitHub 연동 권한만 뜻합니다/);
-  assert.match(page, /개별 작업의 실행 승인이나 변경 완료를 뜻하지 않습니다/);
+  assert.match(page, /개별 작업의 실행 승인이나 변경 완료를\s+뜻하지 않습니다/);
   assert.doesNotMatch(route, /pulls\.create|repos\.update|createWorkflowDispatch|createOrUpdateOrgSecret/);
 });

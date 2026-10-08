@@ -21,6 +21,7 @@ import {
 import { metricNarrative, type MetricNarrative } from "@/lib/core/metric-narrative";
 import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
+import { reportD1Retention } from "@/lib/report/retention";
 import { requeueNotification } from "@/lib/notifications/outbox";
 import {
   ORG_REPORT_SCHEMA_VERSION,
@@ -211,6 +212,7 @@ export function assembleOrgReportDocument(input: {
     apps: [...entries.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, "ko")),
     movements: data.movements.map(serializeMovement),
     referrers: data.totals.referrers ?? [],
+    retention: reportD1Retention(data.refDate, data.ga4Series, data.ga4Series.length + data.ga4Gaps.length),
     narrative: input.narrative,
     costs: input.costs,
     consoleMeta: buildConsoleMeta(data),
@@ -228,11 +230,15 @@ async function saveOrgReport(doc: OrgReportDocument): Promise<{ version: number 
     generatedAt: new Date(doc.generatedAt),
     ...excerpt,
   };
-  return prisma.orgReportDaily.upsert({
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.orgReportDaily.upsert({
     where: { date: toDbDay(doc.refDate) },
     create: { date: toDbDay(doc.refDate), ...common },
     update: { version: { increment: 1 }, ...common },
     select: { version: true },
+  });
+    await tx.orgReportRevision.create({ data: { date: toDbDay(doc.refDate), version: result.version, schemaVersion: common.schemaVersion, report: common.report, generatedAt: common.generatedAt } });
+    return result;
   });
 }
 
@@ -297,6 +303,7 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
 export function factsFingerprint(data: HighlightData): string {
   const canonical = JSON.stringify({
     refDate: data.refDate,
+    retention: reportD1Retention(data.refDate, data.ga4Series, data.ga4Series.length + data.ga4Gaps.length),
     ga4: data.totals.ga4Dau,
     console: {
       iaaKrw: data.totals.console.iaaKrw,
@@ -452,16 +459,17 @@ export interface OrgReportView {
  * 날짜별 보고서 조회. date 미지정이면 최신 확정일(D-1). 스냅샷 우선, 없거나 파싱
  * 실패면 재계산 fallback. 그 날짜에 데이터가 전혀 없으면(미래 포함) null.
  */
-export async function getOrgReport(date?: string, now = new Date()): Promise<OrgReportView | null> {
+export async function getOrgReport(date?: string, now = new Date(), version?: number): Promise<OrgReportView | null> {
   const refDate = date ?? lastElapsedMetricDay(now);
-  const snapshot = await prisma.orgReportDaily.findUnique({
-    where: { date: toDbDay(refDate) },
-  });
+  if (version !== undefined && (!Number.isSafeInteger(version) || version < 1)) return null;
+  const snapshot = version === undefined ? await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(refDate) } }) : await prisma.orgReportRevision.findUnique({ where: { date_version: { date: toDbDay(refDate), version } } });
+  if (version !== undefined && !snapshot) return null;
   if (snapshot) {
     const doc = parseOrgReportDocument(snapshot.report);
     if (doc) {
       return { doc, source: "snapshot", version: snapshot.version, generatedAt: snapshot.generatedAt };
     }
+    if (version !== undefined) return null;
     console.error(`[org-report] 스냅샷 파싱 실패(${refDate}, v${snapshot.version}) — 재계산으로 강등`);
   }
   const built = await buildOrgReportForDate(refDate, { now });

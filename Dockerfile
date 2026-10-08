@@ -54,7 +54,7 @@ FROM node:24.16.0-bookworm-slim AS runtime
 # git은 caller 반증기가 대상 저장소의 exact source를 체크아웃하는 데 쓴다. 중앙 계약이
 # repoRoot의 git HEAD와 선언 경로를 직접 검증하므로 API tarball로 대체할 수 없다.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates util-linux git \
+  && apt-get install -y --no-install-recommends openssl ca-certificates util-linux git fonts-noto-cjk \
   && rm -rf /var/lib/apt/lists/*
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -64,6 +64,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# PNG 보고서는 target 아키텍처 native sharp를 사용한다. build-host 전이 바이너리는 trace 제외.
+ENV NODE_PATH=/opt/chart-renderer/node_modules
+RUN npm install --prefix /opt/chart-renderer --omit=dev --no-audit --no-fund sharp@0.35.5
 RUN groupadd --system --gid 10001 app \
   && useradd --system --uid 10001 --gid 10001 app
 

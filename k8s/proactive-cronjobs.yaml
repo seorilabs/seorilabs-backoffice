@@ -326,7 +326,7 @@ metadata:
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "40 14 * * *" # 14:40 UTC = 23:40 KST
+  schedule: "50 14 * * *" # 14:50 UTC = 23:50 KST
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3
@@ -420,7 +420,7 @@ metadata:
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "50 14 * * *" # 매일 14:50 UTC = 23:50 KST
+  schedule: "45 14 * * *" # 매일 14:45 UTC = 23:45 KST - 이전 발행분 정정
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3

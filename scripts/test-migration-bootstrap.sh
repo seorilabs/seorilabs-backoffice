@@ -66,3 +66,5 @@ pnpm tsx scripts/test-project-blueprint-release-ledger.ts
 pnpm tsx scripts/test-config-source-auto-rebase.ts
 pnpm tsx scripts/test-auth-broker-journal-checkpoint.ts
 pnpm tsx scripts/verify-migration-state.ts --history=fresh
+
+MIGRATION_FIXTURE_ACK=LOCAL_SCHEMA_ONLY pnpm test:operations-acceptance

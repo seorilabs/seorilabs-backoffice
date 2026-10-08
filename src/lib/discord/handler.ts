@@ -1,3 +1,4 @@
+import { insightCommandQuery } from "./insight-queries";
 import { connectAccount } from "@/lib/deployment-approvals/links";
 import { prepareDeploymentReview } from "@/lib/deployment-approvals/interactions";
 import { prisma } from "@/lib/prisma";
@@ -113,6 +114,7 @@ function helpText(): string {
   return [
     "**Seorilabs Backoffice Bot**",
     "조회: `/approvals` `/p1` `/status [app]` `/metrics [app]`",
+    "보고·피드백: `/report [date]` `/reviews [app]` `/keywords [app]` `/health [app]` `/insights [app]`",
     "초안: `/plan app` `/bug app` — AI 초안 확인 후 버튼으로 GitHub 이슈 생성",
     "릴리즈: `/release app bump` `/deploy app tag target` — 실행 전 확인 버튼 필요",
     "후보 배포: `/snapshot app target` — main HEAD를 후보 태그로 선택한 내부 테스트 채널에 빌드·배포",
@@ -136,6 +138,7 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
     catch { return ephemeral("연결 실패: 만료·사용된 코드 또는 이미 연결된 계정입니다. Backoffice에서 연결 상태를 확인하세요."); }
   }
   if (name === "help") return ephemeral(helpText());
+  if (["report", "reviews", "keywords", "health", "insights"].includes(name)) return response((await insightCommandQuery(name, appSlug || undefined, option(interaction.data?.options, "date") || undefined)).content);
   if (name === "approvals") {
     const result = await approvalsQuery();
     return response(result.content, result.components);

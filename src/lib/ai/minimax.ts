@@ -78,7 +78,7 @@ export async function minimaxChat(
     const rawText = await response.text();
     if (!response.ok) {
       throw new Error(
-        `MiniMax API 요청 실패 (${response.status}): ${truncate(rawText, 600)}`,
+        `MiniMax API 요청 실패 (${response.status})`,
       );
     }
 
@@ -86,13 +86,13 @@ export async function minimaxChat(
     try {
       parsed = JSON.parse(rawText) as MinimaxMessagesResponse;
     } catch {
-      throw new Error(`MiniMax API 비 JSON 응답: ${truncate(rawText, 600)}`);
+      throw new Error("MiniMax API 비 JSON 응답");
     }
 
     const statusCode = parsed.base_resp?.status_code;
     if (statusCode !== undefined && statusCode !== 0 && statusCode !== "0") {
       throw new Error(
-        `MiniMax API 오류 ${String(statusCode)}: ${parsed.base_resp?.status_msg ?? "unknown"}`,
+        `MiniMax API 오류 ${String(statusCode)}`,
       );
     }
 
@@ -114,7 +114,7 @@ export async function minimaxChat(
         totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
       };
       console.info("[minimax] usage", { model, ...tokens });
-      void import("@/lib/ai/usage")
+      await import("@/lib/ai/usage")
         .then((m) =>
           m.recordAiUsage({
             provider: "minimax",

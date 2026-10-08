@@ -811,6 +811,19 @@ export function FleetConfigEditor({
                 value={draft.buildTargetSdk}
                 onChange={(value) => patch({ buildTargetSdk: value })}
               />
+              <fieldset className="col-span-full space-y-3 rounded-lg border border-neutral-200 p-4">
+                <legend className="px-1 text-sm font-semibold">외부 피드백 모니터링</legend>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.monitoring.declared} onChange={(event) => patch({ monitoring: { ...draft.monitoring, declared: event.target.checked } })} />모니터링 설정 포함</label>
+                {draft.monitoring.declared && <>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.monitoring.enabled} onChange={(event) => patch({ monitoring: { ...draft.monitoring, enabled: event.target.checked } })} />수집 사용</label>
+                  <TextField label="추적 검색어" hint="쉼표 또는 줄바꿈 구분 · 최대 30개" value={draft.monitoring.keywords} onChange={(keywords) => patch({ monitoring: { ...draft.monitoring, keywords } })} />
+                  <TextField label="스토어 국가" hint="kr, us 등 소문자 국가 코드 · 최대 5개" value={draft.monitoring.countries} onChange={(countries) => patch({ monitoring: { ...draft.monitoring, countries } })} />
+                  <TextField label="경쟁 앱 ID" hint="App Store 숫자 ID · 최대 20개" value={draft.monitoring.competitorAppIds} onChange={(competitorAppIds) => patch({ monitoring: { ...draft.monitoring, competitorAppIds } })} />
+                  <div className="flex flex-wrap gap-3 text-sm">{[["apple-news", "Apple 개발자 소식"], ["android-developers", "Android 개발자 소식"], ["toss-developers", "앱인토스 개발 공지"]].map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={draft.monitoring.officialFeeds.includes(key)} onChange={(event) => patch({ monitoring: { ...draft.monitoring, officialFeeds: event.target.checked ? [...draft.monitoring.officialFeeds, key] : draft.monitoring.officialFeeds.filter((item) => item !== key) } })} />{label}</label>)}</div>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.monitoring.checkSupportLinks} onChange={(event) => patch({ monitoring: { ...draft.monitoring, checkSupportLinks: event.target.checked } })} />지원·개인정보·광고 판매자 파일 도달 확인</label>
+                  <p className="text-xs text-neutral-500">중앙 설정 버전을 저장·활성화한 뒤 수집합니다. 공개 검색 관측은 실제 기기 검색 순위와 다를 수 있습니다.</p>
+                </>}
+              </fieldset>
               <TextField
                 label="고객 지원 주소"
                 value={draft.supportUrl}

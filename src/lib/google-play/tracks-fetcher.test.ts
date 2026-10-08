@@ -13,7 +13,7 @@ const claims = {
 const release = { name: "1.0.1", versionCodes: ["101"], status: "completed" };
 const summary = { track: "production", activeArtifacts: [{ versionCode: 101 }], releaseLifecycleState: "RELEASE_LIFECYCLE_STATE_PUBLISHED" };
 
-function fixture(input: { summaryStatus?: number; summaries?: object[]; tracksStatus?: number; tracks?: object[]; deleteStatus?: number } = {}) {
+function fixture(input: { summaryStatus?: number; summaries?: object[]; tracksStatus?: number; tracks?: object[]; deleteStatus?: number; emptySummaries?: boolean } = {}) {
   resetGoogleTokenCache();
   const calls: Array<{ path: string; method: string; authorization: string | null }> = [];
   const fetchImpl: typeof fetch = async (url, init) => {
@@ -22,7 +22,7 @@ function fixture(input: { summaryStatus?: number; summaries?: object[]; tracksSt
     if (path === "/token") return Response.json({ access_token: "test", expires_in: 3600, token_type: "Bearer" });
     if (path.endsWith("/edits") && init?.method === "POST") return Response.json({ id: "real-edit-1" });
     if (path.endsWith("/edits/real-edit-1/tracks")) return Response.json({ tracks: input.tracks ?? [{ track: "production", releases: [release] }] }, { status: input.tracksStatus ?? 200 });
-    if (path.endsWith("/tracks/production/releases")) return Response.json({ releases: input.summaries ?? [summary] }, { status: input.summaryStatus ?? 200 });
+    if (path.endsWith("/tracks/production/releases")) return input.emptySummaries ? new Response(null, { status: 200 }) : Response.json({ releases: input.summaries ?? [summary] }, { status: input.summaryStatus ?? 200 });
     if (path.endsWith("/edits/real-edit-1") && init?.method === "DELETE") return new Response(null, { status: input.deleteStatus ?? 204 });
     throw new Error("unexpected request");
   };
@@ -89,4 +89,14 @@ test("여러 versionCode는 각 매칭이 유일하고 모든 출시 단계가 �
   assert.equal(joinTrackReleases("production", [multiple], [summary, second])[0]?.lifecycle, "PUBLISHED");
   assert.ok(joinTrackReleases("production", [multiple], [summary])[0]?.unavailableReason);
   assert.ok(joinTrackReleases("production", [multiple], [summary, { ...second, releaseLifecycleState: "RELEASE_LIFECYCLE_STATE_IN_REVIEW" }])[0]?.unavailableReason);
+});
+
+test("성공이지만 본문 없는 releases는 확인 불가로 구분하고 JSON 파싱 오류를 노출하지 않음", async () => {
+  const releases = await fixture({ emptySummaries: true }).run();
+  assert.match(releases[0]!.unavailableReason!, /응답 본문 없음/);
+  assert.equal(releases[0]!.lifecycle, undefined);
+});
+test("사용하지 않는 빈 트랙 때문에 정상 트랙 수집을 실패시키지 않음", async () => {
+  const result = await fixture({ tracks: [{ track: "production", releases: [release] }, { track: "internal", releases: [] }] }).run();
+  assert.equal(result[0]?.lifecycle, "PUBLISHED");
 });

@@ -161,6 +161,7 @@ export const orgReportDocumentSchema = z
       .strict()
       .nullable()
       .optional(),
+    retention: z.object({ cohortDate: isoDay, users: z.number(), returned: z.number(), d1Pct: z.number().nullable(), observedApps: z.number(), expectedApps: z.number() }).strict().optional(),
     summary: z
       .object({
         ga4: z

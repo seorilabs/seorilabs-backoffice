@@ -698,7 +698,7 @@ test("GitHub delivery와 automation inbox는 handler보다 먼저 같은 durable
 });
 
 test("Fleet UI 상단 parity gate는 현재 source와 ACTIVE config vector만 신뢰한다", () => {
-  const page = readFileSync(join(process.cwd(), "src/app/(app)/apps/[id]/fleet/page.tsx"), "utf8");
+  const page = readFileSync(join(process.cwd(), "src/app/(app)/apps/[id]/settings/page.tsx"), "utf8");
   assert.match(page, /latestObservedParity\?\.sourceSha === latestDiscovery\.sourceSha/);
   assert.match(page, /latestObservedParity\.configRevisionId === activeConfig\.id/);
   assert.match(page, /현재 소스·설정 미확인/);

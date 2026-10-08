@@ -337,6 +337,7 @@ model NotificationDelivery {
   nextAttemptAt     DateTime                   @default(now()) @db.DateTime(3)
   lastError         String?                    @db.Text
   providerMessageId String?
+  refreshRequested  Boolean? @default(false)
   sentAt            DateTime?                  @db.DateTime(3)
   deletedAt         DateTime?                  @db.DateTime(3)
   createdAt         DateTime                   @default(now())
@@ -766,6 +767,7 @@ model AiDraft {
   status               AiDraftStatus @default(DRAFT)
   committedIssueNumber Int? // 커밋 결과 이슈 번호
   committedUrl         String?
+  claimedAt            DateTime? @db.DateTime(3)
   committedAt          DateTime?     @db.DateTime(3)
   createdBy            String? // github login
   createdAt            DateTime      @default(now())
@@ -808,6 +810,8 @@ model AppMetricDaily {
   dau                  Int    @default(0)
   newUsers             Int    @default(0) // first_visit
   returnRatePct        Float? // 전체 재방문율(코호트 n>=1)
+  cohortUsers          Int? // 실제 신규 코호트 분모 - 활동 newUsers와 구분
+  d1Users              Int? // 성숙 D1 코호트의 실제 복귀 수
   d1Pct                Float? // 그 날 신규 코호트의 D1 잔존율
   d3Pct                Float?
   d7Pct                Float?
@@ -2803,4 +2807,99 @@ model DiscordLinkCode {
   createdAt DateTime @default(now())
   @@index([githubId, expiresAt])
   @@map("discord_link_code")
+}
+
+// 기타 소스의 시도 이력. GA4/AppsInToss는 기존 MetricCollectionLedger를 유지한다.
+model SourceCollectionRun {
+  id          String   @id @default(cuid())
+  source      String   @db.VarChar(64)
+  target      String   @db.VarChar(191)
+  appId       String?
+  status      String   @db.VarChar(32)
+  startedAt   DateTime @default(now()) @db.DateTime(3)
+  completedAt DateTime? @db.DateTime(3)
+  dataThrough DateTime? @db.DateTime(3)
+  coverage    Json?
+  errorCode   String?  @db.VarChar(64)
+  @@index([source, target, startedAt])
+  @@index([appId, startedAt])
+  @@map("source_collection_run")
+}
+
+// 사실과 출처는 생성 후 수정하지 않는다. 재관측은 새 dedupeKey로 저장한다.
+model OperationalSignal {
+  id         String   @id @default(cuid())
+  dedupeKey  String   @unique @db.VarChar(191)
+  appId      String?
+  kind       String   @db.VarChar(64)
+  severity   String   @db.VarChar(16)
+  title      String   @db.VarChar(191)
+  facts      Json
+  sourceRefs Json
+  observedAt DateTime @db.DateTime(3)
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+  insights   InsightDocument[]
+  @@index([appId, observedAt])
+  @@index([kind, observedAt])
+  @@map("operational_signal")
+}
+
+model InsightDocument {
+  id            String @id @default(cuid())
+  signalId      String
+  signal        OperationalSignal @relation(fields: [signalId], references: [id], onDelete: Restrict)
+  inputHash     String @db.Char(64)
+  status        String @db.VarChar(32)
+  persona       String @db.VarChar(64)
+  promptVersion Int
+  model         String? @db.VarChar(100)
+  content       Json?
+  errorCode     String? @db.VarChar(64)
+  issueDraftId  String? @unique
+  issueUrl      String? @db.VarChar(500)
+  notificationKey String @unique @db.VarChar(191)
+  runId         String? @unique
+  createdAt     DateTime @default(now()) @db.DateTime(3)
+  completedAt   DateTime? @db.DateTime(3)
+  @@unique([signalId, inputHash])
+  @@index([status, createdAt])
+  @@map("insight_document")
+}
+
+model OrgReportRevision {
+  id            String @id @default(cuid())
+  date          DateTime @db.Date
+  version       Int
+  schemaVersion Int
+  report        Json
+  generatedAt   DateTime @db.DateTime(3)
+  @@unique([date, version])
+  @@map("org_report_revision")
+}
+
+model MarketObservation {
+  id         String @id @default(cuid())
+  appId      String
+  kind       String @db.VarChar(32)
+  target     String @db.VarChar(191)
+  country    String @db.VarChar(16)
+  day        DateTime @db.Date
+  value      Json
+  sourceUrl  String @db.VarChar(2048)
+  observedAt DateTime @default(now()) @db.DateTime(3)
+  @@unique([appId, kind, target, country, day])
+  @@index([appId, day])
+  @@map("market_observation")
+}
+
+// API 호출 예산과 동시 실행 슬롯. 완료 시 slot만 해제하고 시도 원장은 보존한다.
+model InsightApiRequest {
+  id          String @id @default(cuid())
+  day         DateTime @db.Date
+  slot        String? @unique @db.VarChar(32)
+  expiresAt   DateTime @db.DateTime(3)
+  completedAt DateTime? @db.DateTime(3)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  @@index([day, createdAt])
+  @@map("insight_api_request")
 }

@@ -4,6 +4,7 @@ import {
   lastElapsedMetricDay,
   metricDayWindow,
   metricDaysBetween,
+  shiftMetricDay,
   toDbDay,
   toGa4TableSuffix,
 } from "@/lib/analytics/metric-day";
@@ -147,6 +148,10 @@ export async function collectMetrics(
         }
         const row = activityByDate.get(day);
         const ret = clampRetention(cohortByDate.get(day), age);
+        const d1Landed = age >= 1 && landed.has(toGa4TableSuffix(shiftMetricDay(day, 1)));
+        if (!d1Landed) ret.d1Pct = null;
+        if (age < 3 || !landed.has(toGa4TableSuffix(shiftMetricDay(day, 3)))) ret.d3Pct = null;
+        if (age < 7 || !landed.has(toGa4TableSuffix(shiftMetricDay(day, 7)))) ret.d7Pct = null;
         const assembled = assembleDailyMetric(
           row ?? zeroDailyActivity(day),
           ret,
@@ -154,6 +159,8 @@ export async function collectMetrics(
         );
         const data = {
           ...assembled,
+          cohortUsers: cohortByDate.get(day)?.newUsers ?? null,
+          d1Users: d1Landed ? cohortByDate.get(day)?.d1Users ?? null : null,
           raw: assembled.raw as unknown as Prisma.InputJsonValue,
           collectedAt: now,
         };

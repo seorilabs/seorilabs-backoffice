@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Nav } from "@/components/Nav";
 
@@ -15,6 +15,31 @@ export function AppShell({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const drawer = useRef<HTMLElement>(null);
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const sync = () => setMobile(query.matches);
+    sync(); query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+  useEffect(() => {
+    if (!open || !mobile) return;
+    const controls = () => Array.from(drawer.current?.querySelectorAll<HTMLElement>("a[href],button:not([disabled])") ?? []).filter(el => el.getClientRects().length > 0);
+    const opener = menuButton.current;
+    controls()[0]?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); }
+      if (event.key === "Tab") {
+        const items = controls(), first = items[0], last = items.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); opener?.focus(); };
+  }, [open, mobile]);
 
   // 라우트 변경 시 모바일 드로어 닫기
   useEffect(() => {
@@ -37,6 +62,7 @@ export function AppShell({
       {/* 모바일 상단바 */}
       <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur md:hidden">
         <button
+          ref={menuButton}
           type="button"
           onClick={() => setOpen(true)}
           aria-label="메뉴 열기"
@@ -66,6 +92,11 @@ export function AppShell({
 
       {/* 사이드바 — 모바일: 슬라이드 드로어 / 데스크톱: 고정 */}
       <aside
+        ref={drawer}
+        inert={mobile && !open}
+        role={mobile && open ? "dialog" : undefined}
+        aria-modal={mobile && open ? true : undefined}
+        aria-label="주 메뉴"
         className={`fixed inset-y-0 left-0 z-50 flex w-64 max-w-[80vw] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-neutral-200 bg-white p-4 transition-transform duration-200 ease-out md:static md:z-auto md:w-60 md:max-w-none md:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}

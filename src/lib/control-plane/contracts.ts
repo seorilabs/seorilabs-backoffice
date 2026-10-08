@@ -775,6 +775,19 @@ export type AdMobConfig = z.infer<typeof admobConfigSchema>;
  * 첫 Fleet vertical slice가 자동 활성화할 수 있는 비민감 desired state의 완전한 목록이다.
  * strict object 밖의 값은 이름이나 중첩 위치와 무관하게 fail-closed한다.
  */
+export const monitoringConfigSchema = z.object({
+  enabled: z.boolean(),
+  keywords: z.array(z.string().trim().min(1).max(100)).max(30),
+  countries: z.array(z.string().regex(/^[a-z]{2}$/)).min(1).max(5),
+  competitorAppIds: z.array(z.string().regex(/^[1-9]\d{0,19}$/)).max(20),
+  officialFeeds: z.array(z.enum(["apple-news", "android-developers", "toss-developers"])).max(3),
+  checkSupportLinks: z.boolean(),
+}).strict().superRefine((value, ctx) => {
+  for (const key of ["keywords", "countries", "competitorAppIds", "officialFeeds"] as const) {
+    if (new Set(value[key]).size !== value[key].length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: "중복 항목을 제거하세요." });
+  }
+});
+
 export const configRevisionPayloadSchema = z.object({
   schemaVersion: z.literal(1),
   markets: z.array(z.object({
@@ -811,6 +824,7 @@ export const configRevisionPayloadSchema = z.object({
     privacyPolicyUrl: httpsUrl.optional(),
   }).strict().optional(),
   ads: admobConfigSchema.optional(),
+  monitoring: monitoringConfigSchema.optional(),
   projectBlueprint: projectBlueprintSchema.optional(),
   complianceDrafts: z.array(complianceDraftSchema).max(100).optional(),
 }).strict().superRefine((payload, context) => {

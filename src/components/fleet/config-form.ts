@@ -130,6 +130,8 @@ export interface BlueprintDraft {
   provisionerWorkspace: string;
 }
 
+export interface MonitoringDraft { declared: boolean; enabled: boolean; keywords: string; countries: string; competitorAppIds: string; officialFeeds: string[]; checkSupportLinks: boolean; }
+
 export interface ConfigDraft {
   markets: MarketDraft[];
   localizations: LocalizationDraft[];
@@ -143,6 +145,7 @@ export interface ConfigDraft {
   supportUrl: string;
   privacyPolicyUrl: string;
   ads: AdsDraft;
+  monitoring: MonitoringDraft;
   complianceDrafts: ComplianceDraftRow[];
   blueprint: BlueprintDraft;
 }
@@ -313,6 +316,7 @@ export function emptyConfigDraft(): ConfigDraft {
     supportUrl: "",
     privacyPolicyUrl: "",
     ads: emptyAdsDraft(),
+    monitoring: { declared: false, enabled: false, keywords: "", countries: "kr, us", competitorAppIds: "", officialFeeds: [], checkSupportLinks: false },
     complianceDrafts: [],
     blueprint: emptyBlueprintDraft(),
   };
@@ -374,6 +378,7 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
     buildPlatformVersion: text(build.platformVersion),
     buildMinSdk: text(build.minSdk),
     buildTargetSdk: text(build.targetSdk),
+    monitoring: { declared: Boolean(source.monitoring), enabled: record(source.monitoring).enabled === true, keywords: list(record(source.monitoring).keywords), countries: list(record(source.monitoring).countries) || "kr, us", competitorAppIds: list(record(source.monitoring).competitorAppIds), officialFeeds: array(record(source.monitoring).officialFeeds).filter((item): item is string => typeof item === "string"), checkSupportLinks: record(source.monitoring).checkSupportLinks === true },
     supportUrl: text(support.supportUrl),
     privacyPolicyUrl: text(support.privacyPolicyUrl),
     ads: hasAds
@@ -587,6 +592,7 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
 
   return {
     schemaVersion: 1,
+    ...(draft.monitoring.declared ? { monitoring: { enabled: draft.monitoring.enabled, keywords: splitList(draft.monitoring.keywords), countries: splitList(draft.monitoring.countries), competitorAppIds: splitList(draft.monitoring.competitorAppIds), officialFeeds: draft.monitoring.officialFeeds, checkSupportLinks: draft.monitoring.checkSupportLinks } } : {}),
     markets: draft.markets.map((entry) => ({
       market: entry.market,
       enabled: entry.enabled,

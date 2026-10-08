@@ -13,7 +13,7 @@ import type { AsOfResolution } from "@/lib/analytics/as-of";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
+import { enqueueEditableNotification } from "@/lib/notifications/outbox";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { metricNarrative } from "@/lib/core/metric-narrative";
 import { count, pct, won } from "@/lib/format/units";
@@ -347,7 +347,7 @@ export function metricHighlightDedupeKey(refDate: string): string {
 const GA4_METRIC_PICKERS = [
   { key: "ga4_dau", pick: (row: Ga4Row) => row.dau },
   // D1 은 신규 사용자 코호트가 모수다. 코호트가 작으면 판정하지 않는다.
-  { key: "ga4_d1", pick: (row: Ga4Row) => row.d1Pct, sample: (row: Ga4Row) => row.newUsers },
+  { key: "ga4_d1", pick: (row: Ga4Row) => row.d1Pct, sample: (row: Ga4Row) => row.cohortUsers ?? null },
   { key: "ga4_ad_completions", pick: (row: Ga4Row) => row.adCompletions },
 ];
 
@@ -358,6 +358,8 @@ const CONSOLE_METRIC_PICKERS = [
 ];
 
 export interface Ga4Row {
+  cohortUsers?: number | null;
+  d1Users?: number | null;
   date: Date;
   dau: number;
   newUsers: number;
@@ -393,18 +395,20 @@ export function movementsFromSeries<T extends { date: Date }>(
 ): Movement[] {
   const latest = rowsDesc[0];
   if (!latest) return [];
-  const date = dbDay(latest.date);
   return pickers.flatMap(({ key, pick, sample }) => {
-    const value = pick(latest);
+    const series = key === "ga4_d1" ? rowsDesc.filter(row => pick(row) != null && (!sample || sample(row) != null)) : rowsDesc;
+    const current = series[0];
+    if (!current) return [];
+    const value = pick(current);
     if (value == null) return [];
     return [
       evaluateMovement({
         label,
         metricKey: key,
         latest: value,
-        baseline: baselineOf(rowsDesc.slice(1).map(pick)),
-        ...(sample ? { sample: baselineOf(rowsDesc.map(sample)) } : {}),
-        date,
+        baseline: baselineOf(series.slice(1).map(pick)),
+        ...(sample ? { sample: Math.min(sample(current) ?? 0, baselineOf(series.slice(1).map(sample)) ?? 0) } : {}),
+        date: dbDay(current.date),
       }),
     ];
   });
@@ -596,6 +600,8 @@ export async function collectHighlightData(
         dau: true,
         newUsers: true,
         d1Pct: true,
+        cohortUsers: true,
+        d1Users: true,
         adCompletions: true,
         engagedUsers: true,
         dauAndroid: true,
@@ -736,12 +742,14 @@ export async function sendMetricHighlightReport(
     reportUrl: options.reportUrl,
     correction: options.correction,
   });
-  const eventId = await enqueueNotification({
+  const eventId = await enqueueEditableNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
     payload: {
       text: body,
+      chart: "org-trend",
+      refDate,
       sender: SEORI_SENDER,
       editable: true,
       embed: { color: EMBED_COLOR.INFO, timestamp: now.toISOString() },

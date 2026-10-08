@@ -22,6 +22,8 @@ export interface MetricBreakdowns {
   appVersions?: DimCount[];
   /** SDK 앱 스트림과 기존 MP 웹 스트림을 구분하는 수집 경로. */
   streams?: DimCount[];
+  acquisition?: DimCount[];
+  trafficClass?: DimCount[];
 }
 
 /** BigQuery 차원 분해 쿼리의 한 행(날짜×차원×값의 DAU). */
@@ -82,6 +84,8 @@ export function buildDayBreakdown(
       devices: topN(dims?.["device"], topCount),
       appVersions: topN(dims?.["app_version"], topCount),
       streams: topN(dims?.["stream"], topCount),
+      ...(dims?.["acquisition"] ? { acquisition: topN(dims["acquisition"], topCount) } : {}),
+      ...(dims?.["traffic_class"] ? { trafficClass: topN(dims["traffic_class"], topCount) } : {}),
     },
   };
 }

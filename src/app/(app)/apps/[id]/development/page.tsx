@@ -5,7 +5,7 @@ import { EmptyState, Panel, WorkspaceSection } from "@/components/app-ops/Worksp
 import { Pill, PriorityTag } from "@/components/badges";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { STAGE_KO } from "@/lib/domain/lifecycle";
-import { env } from "@/lib/env";
+import { llmChatConfigured } from "@/lib/ai/llm";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { prisma } from "@/lib/prisma";
 
@@ -25,9 +25,8 @@ export default async function AppDevelopmentPage({
   });
   if (!app) notFound();
   const openIssues = app.issues.filter((issue) => issue.state === "OPEN");
-  const aiEnabled = env.geminiChatConfigured();
-  const drafts = aiEnabled
-    ? await prisma.aiDraft.findMany({
+  const aiEnabled = llmChatConfigured();
+  const drafts = await prisma.aiDraft.findMany({
         where: { appId: app.id, status: "DRAFT" },
         orderBy: { createdAt: "desc" },
         take: 10,
@@ -38,9 +37,10 @@ export default async function AppDevelopmentPage({
           issueNumber: true,
           outputText: true,
           model: true,
+          claimedAt: true,
         },
       })
-    : [];
+;
 
   return (
     <div className="space-y-8">
@@ -56,7 +56,7 @@ export default async function AppDevelopmentPage({
               number: issue.number,
               title: issue.title,
             }))}
-            initialDrafts={drafts}
+            initialDrafts={drafts.map(({claimedAt,...draft})=>({...draft,registrationPending:Boolean(claimedAt)}))}
           />
         </Panel>
       </WorkspaceSection>

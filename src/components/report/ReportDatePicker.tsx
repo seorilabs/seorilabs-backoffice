@@ -12,7 +12,7 @@ export interface ReportDatePickerProps {
   max: string;
 }
 
-const BASE_PATH = "/report";
+const BASE_PATH = "/";
 
 export function ReportDatePicker({ selected, min, max }: ReportDatePickerProps) {
   const router = useRouter();

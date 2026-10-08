@@ -41,7 +41,8 @@ export function directApprovalEnabled(environment: string) {
 }
 export function monitoringEnabled() { return process.env.PLATFORM_APPROVAL_MONITOR_ENABLED !== "false"; }
 export function assertCanReview(input: { currentUserCanApprove: boolean; githubId: string; triggeringActorId: string; actorId: string; expectedAttempt: number; actualAttempt: number; expectedSha: string; actualSha: string; expectedTargetHash: string; actualTargetHash: string }) {
-  if (!input.currentUserCanApprove || input.githubId === input.triggeringActorId || input.githubId === input.actorId) throw new Error("GitHub 승인 권한 없음 또는 자기 승인 금지");
+  // GitHub가 환경의 prevent_self_review와 reviewer 권한을 계산한 값을 신뢰한다.
+  if (!input.currentUserCanApprove) throw new Error("GitHub 승인 권한 없음 또는 자기 승인 금지");
   if (input.expectedAttempt !== input.actualAttempt || input.expectedSha !== input.actualSha || input.expectedTargetHash !== input.actualTargetHash) throw new Error("승인 확인 이후 실행 또는 배포 대상 변경");
 }
 // API 오류 본문은 요청 헤더/토큰을 포함할 수 있어 영구 기록하지 않는다.

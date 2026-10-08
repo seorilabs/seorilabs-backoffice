@@ -1,6 +1,6 @@
 name: Deploy
 
-# main push 시 검증→이미지 빌드→배포. 사전: REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64 secret
+# main push는 검증·이미지 빌드만 수행하고, 배포는 명시적인 workflow_dispatch로 실행한다. 사전: REGISTRY_USERNAME/PASSWORD, KUBECONFIG_B64 secret
 # (DEPLOY.md §7). 전 잡이 GitHub-hosted 이며 self-hosted 러너 그룹 등록은 필요 없다.
 # KUBECONFIG_B64 의 server 는 hosted 러너에서 닿는 공개 엔드포인트여야 한다.
 on:
@@ -103,7 +103,7 @@ jobs:
         run: echo "image=${IMAGE}@${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: github.event_name != 'workflow_dispatch' || inputs.deploy
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
     needs: build
     # k8s API(k8s.vzyx.xyz:16443)는 공개 도달 가능하고 kubeconfig 에 CA 가 들어 있다.
     # 첫 kubectl 동작이 auth whoami 라 접속·신원이 어긋나면 아무것도 바꾸기 전에
