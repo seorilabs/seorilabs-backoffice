@@ -30,6 +30,19 @@ spec:
             - {name: MINIMAX_CHAT_MODEL, value: "MiniMax-M3"}
             - {name: MINIMAX_CHAT_TIMEOUT_MS, value: "180000"}
             - {name: INSIGHTS_DAILY_LIMIT, value: "200"}
+            # 알림 생산자는 공개 채널 설정만 읽고 전송 토큰은 받지 않는다.
+            - name: DISCORD_CHANNEL_APP_OPS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true}}
+            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID}}
+            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID}}
+            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID}}
+            - name: DISCORD_CHANNEL_USER_REVIEWS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true}}
+            - name: DISCORD_CHANNEL_BACKOFFICE_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID}}
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DATABASE_URL}}
             - name: MINIMAX_API_KEY
