@@ -27,12 +27,12 @@ export default function PlatformLayout({
             앱별 화면과 분리된 인증·앱 내 결제·광고 공통 기능을 관리합니다.
           </p>
         </div>
-        <nav aria-label="플랫폼 관리" className="flex gap-1 rounded-lg bg-neutral-100 p-1">
+        <nav aria-label="플랫폼 관리" className="flex max-w-full flex-wrap gap-1 rounded-lg bg-neutral-100 p-1">
           {links.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className="rounded-md px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-white hover:text-neutral-900"
+              className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-white hover:text-neutral-900"
             >
               {link.label}
             </Link>
