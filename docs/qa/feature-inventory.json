@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "features": [
+    {
+      "id": "navigation-and-redirects",
+      "core": true
+    },
+    {
+      "id": "portfolio-and-app-workspace",
+      "core": true
+    },
+    {
+      "id": "organization-reporting",
+      "core": true
+    },
+    {
+      "id": "app-and-market-metrics",
+      "core": true
+    },
+    {
+      "id": "work-overview",
+      "core": true
+    },
+    {
+      "id": "feedback-and-market-observations",
+      "core": true
+    },
+    {
+      "id": "collection-health",
+      "core": true
+    },
+    {
+      "id": "insight-evidence-and-drafts",
+      "core": true
+    },
+    {
+      "id": "local-draft-editor",
+      "core": true
+    },
+    {
+      "id": "automation-monitoring",
+      "core": true
+    },
+    {
+      "id": "auth-and-app-rbac",
+      "core": false
+    },
+    {
+      "id": "issues-planning-and-stage-transitions",
+      "core": false
+    },
+    {
+      "id": "ai-draft-generation-and-github-registration",
+      "core": false
+    },
+    {
+      "id": "release-build-and-dispatch",
+      "core": false
+    },
+    {
+      "id": "release-note-generation-and-translations",
+      "core": false
+    },
+    {
+      "id": "app-operation-tools-and-history",
+      "core": false
+    },
+    {
+      "id": "fleet-configuration-revisions",
+      "core": false
+    },
+    {
+      "id": "fleet-discovery-and-classification",
+      "core": false
+    },
+    {
+      "id": "fleet-legacy-import-parity-and-compliance",
+      "core": false
+    },
+    {
+      "id": "fleet-bindings-assets-and-github-bootstrap",
+      "core": false
+    },
+    {
+      "id": "fleet-release-candidates-and-gates",
+      "core": false
+    },
+    {
+      "id": "fleet-automation-project-and-agent-queue",
+      "core": false
+    },
+    {
+      "id": "github-mutation-adapter-and-recovery",
+      "core": false
+    },
+    {
+      "id": "provider-execution-and-reauthorization",
+      "core": false
+    },
+    {
+      "id": "platform-overview-and-presence",
+      "core": false
+    },
+    {
+      "id": "platform-user-lookup",
+      "core": false
+    },
+    {
+      "id": "platform-iap-ledger-and-operations",
+      "core": false
+    },
+    {
+      "id": "platform-iap-recovery-and-crystal-testers",
+      "core": false
+    },
+    {
+      "id": "platform-ads-readback",
+      "core": false
+    },
+    {
+      "id": "platform-update-policy",
+      "core": false
+    },
+    {
+      "id": "github-webhook-reconcile-and-registry-sync",
+      "core": false
+    },
+    {
+      "id": "store-submission-review-collection",
+      "core": false
+    },
+    {
+      "id": "metric-collection-ledger-and-backfill",
+      "core": false
+    },
+    {
+      "id": "metric-report-highlights-finance-liveops",
+      "core": false
+    },
+    {
+      "id": "market-public-collection-and-android-vitals",
+      "core": false
+    },
+    {
+      "id": "insight-signals-budget-and-worker",
+      "core": false
+    },
+    {
+      "id": "discord-command-registration-and-deferred-reads",
+      "core": false
+    },
+    {
+      "id": "discord-operator-confirmation-and-deployment-approval",
+      "core": false
+    },
+    {
+      "id": "notification-outbox-report-visuals-and-retention",
+      "core": false
+    },
+    {
+      "id": "vault-search-ai-and-writer",
+      "core": false
+    },
+    {
+      "id": "runtime-health-metrics-and-operational-events",
+      "core": false
+    },
+    {
+      "id": "settings-diagnostics-and-admin-controls",
+      "core": false
+    }
+  ]
+}
