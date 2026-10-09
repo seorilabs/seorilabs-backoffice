@@ -60,3 +60,11 @@
 - ARM64 Linux Node 24.16의 target-native sharp PNG 생성 통과. 일간·주간 차트는 실제 QA 관측으로 렌더해 확인: [주간 PNG](evidence/weekly-operations.png). Discord 실제 업로드는 운영 적용 gate로 남음.
 - 신규 실행기 YAML·동일 digest 렌더링·replicas 0/suspend true 검증, 명령 등록 dry-run 20개 통과. 프로덕션 명령 등록·worker 활성화 없음.
 - GitHub Wiki 기능은 enabled지만 wiki.git 조회가 Repository not found로 실패해 초기화되지 않은 것으로 관측함. 설계 목록은 [저장소 목록](../README.md)을 정본으로 제공하고 Obsidian inbox에는 정본 링크만 기록함.
+
+## 운영 키워드 수집 응답 상한 수정 — 2026-10-09
+
+- 사용자 배포·마이그레이션·활성화 요청과 일괄 승인에 따라 운영 readback 중 발견한 기존 범위의 결함을 수정함. 검색 순위 200위 범위·국가·데이터 모델·화면은 그대로 유지함.
+- 한국 검색 `farm tycoon`, `3매치`, `매치3 퍼즐`, `match 3`은 HTTP 200과 유효한 196–199개 결과를 반환했으나, 응답 2,119,177–2,130,980바이트가 공통 2MiB 상한을 넘어서 모두 실패함. 공식 [Apple Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/Searching.html)는 검색 결과 최대 200개를 지원함.
+- 검색 응답만 8MiB까지 허용함. lookup·공식 피드의 기존 제한, 검색 결과 200개 제한, timeout·재시도·요청 간격은 유지함. 검색 범위를 줄여 정상 순위를 누락하거나 무제한 응답을 허용하지 않음.
+- TDD: 설명을 포함한 200개·2MiB 초과 응답을 끝 순위까지 수집하는 테스트가 `SOURCE_RESPONSE_TOO_LARGE`로 실패한 뒤 통과함. 8MiB 초과·201개 검색 결과·2MiB 초과 lookup 거부도 확인함. 근거는 `Workspace/artifacts/backoffice/production-activation-20261009/apple-search-size-{red,green}.log`와 `apple-keyword-failure-diagnostic.json`에 보존함.
+- UI·스키마·운영 설정 변경 없음. 기존 독립 UI 검수 범위를 재사용하고 새 후보 SHA에서 전체 개발 환경 E2E를 빌드 직전·배포 직전에 각각 다시 실행함. 정확한 SHA·CI·이미지·운영 재수집 결과는 PR과 같은 증거 폴더에 추가함.

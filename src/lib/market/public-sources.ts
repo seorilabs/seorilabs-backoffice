@@ -68,7 +68,7 @@ export function createApplePublicClient(
   const impl = input.fetchImpl ?? fetch;
   const sleep = input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let lastRequest = 0;
-  const request = async (url: URL): Promise<PublicApp[]> => {
+  const request = async (url: URL, maxBytes = 2 * 1024 * 1024): Promise<PublicApp[]> => {
     for (let attempt = 0; ; attempt++) {
       await sleep(Math.max(0, 3500 - (Date.now() - lastRequest)));
       lastRequest = Date.now();
@@ -88,7 +88,7 @@ export function createApplePublicClient(
         }
         throw new Error(`Apple Search HTTP ${response.status}`);
       }
-      return parseAppleApps(JSON.parse(await boundedText(response)));
+      return parseAppleApps(JSON.parse(await boundedText(response, maxBytes)));
     }
   };
   return {
@@ -108,7 +108,8 @@ export function createApplePublicClient(
         limit: "200",
       }))
         url.searchParams.set(key, value);
-      return request(url);
+      // 검색 200개에는 앱 설명·이미지 URL도 포함되어 정상 응답이 2MiB를 넘는다.
+      return request(url, 8 * 1024 * 1024);
     },
   };
 }
