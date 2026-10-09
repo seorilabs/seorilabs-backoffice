@@ -14,3 +14,9 @@
 - 검수 기록은 source 밖의 실행 산출물이며 SHA·설정 지문·실행 시간·기능별 실제 증거를 고정해 중앙 `development-evidence` draft release에 보관한다. 실제 수행 전 계획이며 완료 결과가 아니다.
 
 기존 계획과 실제 증거는 [승인 설계](../design/2026-10-08-operations-insights/design.md), [독립 검수 이력](../design/2026-10-08-operations-insights/validation.md), [적용·복구](../design/2026-10-08-operations-insights/activation.md)를 따른다.
+
+## 추가 검수 제안 — 광고 비활성 상태
+
+정확한 main 후보 개발 E2E에서 `/platform/ads`가 연결 비활성 시 `createPlatformReadClient` 예외를 화면 밖으로 던져 HTTP 500이 되는 기존 결함을 관측했다. 기존 `platformReadConfiguration` 검사와 동일 안내를 재사용해 연결을 사용할 수 없으면 광고 관리 제목·상태 안내를 표시하고 DB/공급자 조회는 수행하지 않는 것으로 수정한다. 계정·권한 검사와 활성 연결의 동작은 유지한다. 새 메뉴·데이터·외부 write는 없다.
+
+품의 범위는 독립 UI 추가 4회차 1회, 이후 별도 before-build/before-deploy E2E다. 동일 격리 dev3108·MySQL9.2·소유 Playwright 탭, desktop/mobile·큰 글자·비활성 안내 및 기존 종합 현황/입력 회귀를 확인한다. 예상 10~15분, 기존 로컬/CI 자원만 사용하며 유료 공급자 호출은 없다. 거부 시 실제 E2E 실패가 남아 운영 배포는 중단된다. 승인 전 추가 UI 회차를 시작하지 않는다.
