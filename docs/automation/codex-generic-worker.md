@@ -8,7 +8,6 @@
 2. claim이 `null`이면 정상 종료한다. 임의의 GitHub Issue를 고르거나 새 Issue를 만들지 않는다.
 3. claim의 `template`을 먼저 확인하고 알 수 없는 template은 mutation 없이 `fail`로 종료한다.
    - `repo-task-autopilot-v1`: claim의 repo와 issue만 작업한다. GitHub에서 issue state와 `blocked`, `approval:*`, `no-autopilot`, `autopilot` label을 다시 읽고 eligibility가 달라졌으면 `fail`로 종료한다.
-   - `platform-fleet-reconcile-v1`: `issueNumber=null`이고 `taskInput.kind=PLATFORM_SDK_UPDATE`인 CODEX claim만 처리한다. task의 repo ID/full name과 현재 default source SHA가 `taskInput.repoId`, `repoFullName`, `sourceSha`와 하나라도 다르면 중단한다. Project field를 claim 근거로 사용하지 않는다.
    `approvalPolicy=READ_ONLY`이면 어느 template에서도 변경·commit·PR을 만들지 않는다.
 4. `resumeMode=READBACK_FIRST`이면 일반 `GITHUB_READY_PR`을 호출하지 않고 `GITHUB_READY_PR_READBACK`만 호출한다.
    adapter가 worker 입력이 아닌 서버의 기존 immutable ledger에서 exact commit/ref/marker를 불러와 branch, PR을 조회한다.

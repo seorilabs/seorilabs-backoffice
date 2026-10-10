@@ -24,6 +24,7 @@ import {
   legacyEvidenceLabel,
   lifecycleStageLabel,
   managementStatusLabel,
+  platformSdkLabel,
   releaseGateLabel,
 } from "@/lib/control-plane/presentation";
 
@@ -63,12 +64,16 @@ test("설정 선택지와 기존 설정 대체 항목은 코드 대신 표시 �
     assert.match(legacyEvidenceLabel(target), /[가-힣]/, target);
   }
   assert.match(legacyEvidenceLabel("IGNORED_NON_OPERATIONAL"), /이관 제외/);
+  for (const value of ["SDK", "CUSTOM_HTTP", "MISSING", "TYPESCRIPT", "GDSCRIPT"]) {
+    assert.notEqual(platformSdkLabel(value), value, value);
+    assert.doesNotMatch(platformSdkLabel(value), /승인/, value);
+  }
   const editor = readFileSync(join(process.cwd(), "src/components/fleet/FleetConfigEditor.tsx"), "utf8");
   assert.ok(editor.includes("value={option}>{configOptionLabel(option)}</option>"));
 });
 
 test("알 수 없는 상태는 숨기거나 성공으로 바꾸지 않고 그대로 표시한다", () => {
-  for (const display of [configOptionLabel, legacyEvidenceLabel, lifecycleStageLabel, managementStatusLabel, releaseGateLabel]) {
+  for (const display of [configOptionLabel, legacyEvidenceLabel, lifecycleStageLabel, managementStatusLabel, platformSdkLabel, releaseGateLabel]) {
     for (const value of ["FUTURE_UNKNOWN", "__proto__", "constructor", "toString", ""]) {
       assert.equal(display(value), value);
     }
@@ -79,7 +84,7 @@ test("알 수 없는 상태는 숨기거나 성공으로 바꾸지 않고 그대
 });
 
 const visibleAttributes = new Set(["title", "label", "k", "description", "hint", "empty", "placeholder", "addLabel", "allowEmpty"]);
-const internalTerms = /\b(Fleet|ConfigRevision|ProjectBlueprint|DiscoveryObservation|ProviderObservation|PlatformFleetBinding|CredentialBinding|Dead-letter|lifecycle|desired state|shadow import|parity wave|readback|append-only|cohort|validator|trusted-local)\b/i;
+const internalTerms = /\b(Fleet|ConfigRevision|ProjectBlueprint|DiscoveryObservation|ProviderObservation|CredentialBinding|Dead-letter|lifecycle|desired state|shadow import|parity wave|readback|append-only|cohort|validator|trusted-local)\b/i;
 
 function literalText(expression: ts.Expression): string[] {
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return [expression.text];

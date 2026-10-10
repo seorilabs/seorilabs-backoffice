@@ -770,5 +770,4 @@ test("generic worker contract은 Codex와 Claude 설치를 각각 하나로 제�
   assert.equal(contract.authentication.forbidden.includes("leaseToken"), true);
   assert.equal(contract.claimPolicy.fields.includes("template"), true);
   assert.equal(contract.claimPolicy.fields.includes("taskInput"), true);
-  assert.match(contract.claimPolicy.templatePolicies["platform-fleet-reconcile-v1"], /CODEX/);
 });

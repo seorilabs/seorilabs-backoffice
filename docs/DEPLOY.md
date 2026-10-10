@@ -254,7 +254,7 @@ gate를 열지 않는다.
 
 `k8s/workflow-bundle-candidate-executor.yaml`은 `suspend: false`이지만 `deploy-backoffice.sh`가 적용하지 않는다. trusted operator가 새 immutable image가 배포된 뒤 아래 순서로만 활성화한다. secret 값은 `--from-file`/stdin으로만 전달하고 argv·stdout·로그에 남기지 않는다.
 
-1. `kubectl apply -f k8s/backoffice-sealedsecret.yaml`(후보 adapter bearer/공개키 포함), `kubectl apply -f k8s/workflow-bundle-v5-trust-configmap.yaml`, `kubectl apply -f k8s/platform-fleet-trust-configmap.yaml`을 web Deployment rollout 전에 적용하고 `describe secret`의 key 이름·바이트 수만 확인한다. 두 trust ConfigMap은 공개키만 담으며 env로 주입되므로 rollout 이후에만 반영된다.
+1. `kubectl apply -f k8s/backoffice-sealedsecret.yaml`(후보 adapter bearer/공개키 포함), `kubectl apply -f k8s/workflow-bundle-v5-trust-configmap.yaml`을 web Deployment rollout 전에 적용하고 `describe secret`의 key 이름·바이트 수만 확인한다. trust ConfigMap은 공개키만 담으며 env로 주입되므로 rollout 이후에만 반영된다.
 2. `auth-broker`에 `registry-pull-cred`를 `platform`에서 복제하고 `seori-auth-agent-public-bindings` ConfigMap(`GITHUB_APP_ID`)을 만든다.
 3. `workflow-bundle-candidate-backoffice`(`ca.pem`=backoffice.vzyx.xyz 체인의 공개 root CA, `adapter.bearer`), `workflow-bundle-candidate-attestation`(`private.pem`), `workflow-bundle-candidate-github`(`app-private.pem`, macOS Keychain의 App 개인키를 stdin으로) Secret을 `--from-file`로 만든다. `ca.pem`은 `openssl s_client -CAfile`로 `Verify return code: 0`을 먼저 확인한다. 카탈로그에 `k8s:auth-broker/<secret>:<key>` consumer를 등록한다.
 4. `scripts/run-seori-auth-egress-canary.sh`로 proxy를 1로 올리고 `CANARY_OK` exact 로그를 확인한다.

@@ -23,7 +23,6 @@ function sourceRow() {
     buildTargets: [{ id: "target-1" }],
     externalBindings: [],
     providerObservations: [{ id: "provider-1" }],
-    platformFleetBinding: null,
     credentialBindings: [] as Array<{ id: string }>,
     automationDefinitions: [],
     legacyConfigImports: [{

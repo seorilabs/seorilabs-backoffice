@@ -1,5 +1,6 @@
 import type { LegacyConfigResolutionRequest, ReleaseGateName } from "@/lib/control-plane/contracts";
 import type { FleetLifecycleStageName } from "@/lib/control-plane/lifecycle-policy";
+import type { PlatformSdkObservation } from "@/lib/control-plane/platform-sdk-observation";
 
 // 화면 표시만 바꾼다. 저장값, API 값, 권한 판정에는 사용하지 않는다.
 const lifecycleLabels = {
@@ -66,8 +67,6 @@ const statusLabels = {
   EXCLUDED: "관리 제외",
   ARCHIVED: "보관됨",
   UNCLASSIFIED: "미분류",
-  PR_MERGED: "변경 병합됨",
-  ISSUE_OPEN: "작업 등록됨",
   GRANTED: "권한 있음",
   MISSING_REQUIREMENT: "필수 권한 부족",
   HUMAN_REAUTH_REQUIRED: "직접 로그인 필요",
@@ -81,30 +80,11 @@ const statusLabels = {
   HUMAN_REQUIRED: "사용자 확인 필요",
   QUEUED: "실행 대기",
   STALE: "최신 상태 확인 필요",
-  PLATFORM_SOURCE_STALE: "공통 기능 소스 갱신 필요",
   READBACK_REQUIRED: "외부 결과 확인 필요",
   READBACK_FIRST: "외부 결과 먼저 확인",
   READ_ONLY: "조회만",
   READY_PR: "변경 검토 요청까지",
   APPROVED: "승인됨",
-  // 공통 기능 적용 현황(PlatformFleetBinding)의 합성 상태와 계획 종류. 라벨이 없으면
-  // 운영 화면에 내부 영문 식별자가 그대로 노출된다.
-  UPDATE_PR_QUEUED: "SDK 갱신 대기",
-  UPDATE_PR_OPEN: "SDK 갱신 검토 중",
-  PLATFORM_OBSERVATION_PENDING: "적용 결과 확인 대기",
-  CONTRACT_ISSUE_PENDING: "계약 적응 필요",
-  CONTRACT_ISSUE_OPEN: "계약 적응 작업 등록됨",
-  CUSTOM_UNMANAGED_REMEDIATION_PENDING: "자체 연동 — 정리 필요",
-  CUSTOM_UNMANAGED_REMEDIATION_ISSUE_OPEN: "자체 연동 — 작업 등록됨",
-  MISSING_UNMANAGED_REMEDIATION_PENDING: "SDK 미탑재 — 정리 필요",
-  MISSING_UNMANAGED_REMEDIATION_ISSUE_OPEN: "SDK 미탑재 — 작업 등록됨",
-  AHEAD_UNMANAGED_REMEDIATION_PENDING: "승인본보다 앞선 SDK — 정리 필요",
-  AHEAD_UNMANAGED_REMEDIATION_ISSUE_OPEN: "승인본보다 앞선 SDK — 작업 등록됨",
-  SDK_UPDATE_PR: "SDK 갱신",
-  CONTRACT_ISSUE: "계약 적응",
-  CUSTOM_UNMANAGED: "자체 연동 정리",
-  MISSING_UNMANAGED: "SDK 탑재",
-  AHEAD_UNMANAGED: "승인본보다 앞선 SDK 정리",
 } as const;
 
 const optionLabels = {
@@ -166,11 +146,22 @@ const evidenceLabels = {
   PROVIDER_OBSERVATION: "마켓·서비스 확인 기록",
   STORE_ASSET: "스토어 이미지·파일",
   EXTERNAL_BINDING: "외부 서비스 연결",
-  PLATFORM_FLEET_BINDING: "공통 기능 적용 현황",
   CREDENTIAL_BINDING: "계정·키 연결",
   AUTOMATION_DEFINITION: "자동 작업",
   IGNORED_NON_OPERATIONAL: "운영에 쓰지 않는 값 — 이관 제외",
 } satisfies Record<LegacyConfigResolutionRequest["dispositions"][number]["targets"][number], string>;
+
+// 소스에서 관측한 공통 기능 SDK 연동 방식과 종류. 버전의 적절성은 판단하지 않는다.
+const platformSdkLabels = {
+  SDK: "SDK 사용",
+  CUSTOM_HTTP: "버전 확인 불가",
+  MISSING: "SDK 없음",
+  TYPESCRIPT: "TypeScript 패키지",
+  GDSCRIPT: "Godot 애드온",
+} satisfies Record<
+  PlatformSdkObservation["integration"] | Extract<PlatformSdkObservation, { integration: "SDK" }>["artifactKind"],
+  string
+>;
 
 function label(labels: Readonly<Record<string, string>>, value: string): string {
   // 새 상태나 알 수 없는 값은 숨기거나 정상 상태로 오인시키지 않는다.
@@ -195,4 +186,8 @@ export function configOptionLabel(value: string): string {
 
 export function legacyEvidenceLabel(value: string): string {
   return label(evidenceLabels, value);
+}
+
+export function platformSdkLabel(value: string): string {
+  return label(platformSdkLabels, value);
 }

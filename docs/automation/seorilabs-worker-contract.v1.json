@@ -99,8 +99,7 @@
       "READ_ONLY": "GitHub와 provider readback만 허용하고 PR을 만들지 않음"
     },
     "templatePolicies": {
-      "repo-task-autopilot-v1": "issueNumber의 현재 eligibility를 readback한 뒤 해당 Issue만 처리",
-      "platform-fleet-reconcile-v1": "CODEX 전용이며 issueNumber 없이 엄격한 PLATFORM_SDK_UPDATE taskInput만 처리"
+      "repo-task-autopilot-v1": "issueNumber의 현재 eligibility를 readback한 뒤 해당 Issue만 처리"
     },
     "routing": {
       "deterministic": "MicroK8S scheduler",

@@ -156,7 +156,6 @@ scheduler_cronjobs=(
   backoffice-xcode-cloud-sync
   backoffice-registry-seed
   backoffice-automation-scheduler
-  backoffice-platform-fleet
   backoffice-fleet-project-projection
 )
 
@@ -340,7 +339,7 @@ echo "desired_state_backfill_run_id=${backfill_run_id} contract=${backfill_contr
 # 없어진 엔드포인트를 계속 때리거나 옛 스케줄로 중복 발행한다. 이름을 바꾼 job 도
 # 옛 이름이 그대로 살아 있으므로 여기서 명시적으로 지운다.
 echo "== retired CronJob cleanup =="
-for retired in backoffice-metric-highlights-redaily; do
+for retired in backoffice-metric-highlights-redaily backoffice-platform-fleet; do
   k -n "$namespace" delete cronjob "$retired" --ignore-not-found
 done
 

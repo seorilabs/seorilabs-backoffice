@@ -22,6 +22,7 @@ import {
   configOptionLabel,
   lifecycleStageLabel,
   managementStatusLabel,
+  platformSdkLabel,
   releaseGateLabel,
 } from "@/lib/control-plane/presentation";
 import { githubInstallationProviderPayloadSchema } from "@/lib/control-plane/github-installation-observation";
@@ -58,8 +59,6 @@ function statusClass(status: string): string {
       "READY",
       "PASSED",
       "COMPLIANT",
-      "PR_MERGED",
-      "ISSUE_OPEN",
       "GRANTED",
       "RESOLUTION_REUSED",
     ].includes(status)
@@ -163,6 +162,8 @@ export default async function FleetOperationsPage({ params }: { params: Promise<
       parsed: githubInstallationProviderPayloadSchema.safeParse(observation.payload),
     }))
     .find((item) => item.parsed.success);
+  const platformSdk = fleet.platformSdk;
+  const sdkObservation = platformSdk?.observation ?? null;
   type LegacyEvidenceKind =
     LegacyConfigResolutionRequest["dispositions"][number]["targets"][number];
   const availableLegacyEvidenceKinds: LegacyEvidenceKind[] = [
@@ -175,7 +176,6 @@ export default async function FleetOperationsPage({ params }: { params: Promise<
     ...((activeConfig?.complianceProfiles.length ?? 0) > 0 ? ["COMPLIANCE_PROFILE" as const] : []),
     ...((activeConfig?.storeAssets.length ?? 0) > 0 ? ["STORE_ASSET" as const] : []),
     ...(fleet.providerObservations.length > 0 ? ["PROVIDER_OBSERVATION" as const] : []),
-    ...(fleet.platformFleetBinding ? ["PLATFORM_FLEET_BINDING" as const] : []),
     ...(fleet.credentialBindings.length > 0 ? ["CREDENTIAL_BINDING" as const] : []),
     ...(fleet.automationDefinitions.length > 0 ? ["AUTOMATION_DEFINITION" as const] : []),
   ];
@@ -244,9 +244,23 @@ export default async function FleetOperationsPage({ params }: { params: Promise<
             }
           />
           <Summary
-            label="공통 기능 버전"
-            value={managementStatusLabel(fleet.platformFleetBinding?.state ?? "미연결")}
-            detail={fleet.platformFleetBinding?.observedVersion ?? "적용 버전 미확인"}
+            label="공통 기능 SDK 버전"
+            value={
+              sdkObservation?.integration === "SDK"
+                ? sdkObservation.version
+                : sdkObservation
+                  ? platformSdkLabel(sdkObservation.integration)
+                  : "미확인"
+            }
+            detail={
+              sdkObservation?.integration === "SDK"
+                ? `${platformSdkLabel(sdkObservation.artifactKind)} · 소스 ${mono(platformSdk?.sourceSha, 12)}`
+                : sdkObservation?.integration === "CUSTOM_HTTP"
+                  ? "버전 범위 지정 또는 직접 연동"
+                  : platformSdk
+                    ? `소스 ${mono(platformSdk.sourceSha, 12)}`
+                    : "현재 소스 확인 기록 없음"
+            }
           />
           <Summary
             label="연결 계정·키"
@@ -878,116 +892,34 @@ export default async function FleetOperationsPage({ params }: { params: Promise<
               <Empty>GitHub 연동 권한을 확인한 기록이 없습니다.</Empty>
             )}
           </Panel>
-          <Panel title="공통 기능 적용 현황">
-            {fleet.platformFleetBinding ? (
-              <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <Meta
-                  label="상태"
-                  value={managementStatusLabel(fleet.platformFleetBinding.state)}
-                />
-                <Meta label="적용 버전" value={fleet.platformFleetBinding.observedVersion} />
-                <Meta
-                  label="적용 파일 확인값"
-                  value={mono(fleet.platformFleetBinding.observedDigest, 18)}
-                />
-                <Meta label="승인 버전" value={fleet.platformFleetBinding.approvedVersion} />
-                <Meta
-                  label="승인 파일 확인값"
-                  value={mono(fleet.platformFleetBinding.approvedDigest, 18)}
-                />
-                <Meta
-                  label="구성 확인값"
-                  value={mono(fleet.platformFleetBinding.manifestDigest, 18)}
-                />
-                <Meta label="연동 규격" value={fleet.platformFleetBinding.contractRevision} />
-                <Meta label="소스 버전" value={mono(fleet.platformFleetBinding.sourceSha, 12)} />
-                <Meta label="예정 작업" value={fleet.platformFleetBinding.latestPlanKind} />
-                <Meta
-                  label="PR"
-                  value={
-                    fleet.platformFleetBinding.pullRequestUrl ? (
-                      <a
-                        className="text-blue-700 underline"
-                        href={fleet.platformFleetBinding.pullRequestUrl}
-                      >
-                        #{fleet.platformFleetBinding.pullRequestNumber}
-                      </a>
-                    ) : (
-                      "—"
-                    )
-                  }
-                />
-                <Meta
-                  label="우선 처리 작업"
-                  value={
-                    fleet.platformFleetBinding.issueUrl ? (
-                      <a
-                        className="text-blue-700 underline"
-                        href={fleet.platformFleetBinding.issueUrl}
-                      >
-                        #{fleet.platformFleetBinding.issueNumber}
-                      </a>
-                    ) : (
-                      "—"
-                    )
-                  }
-                />
-                <Meta
-                  label="예외 만료"
-                  value={dateTime(fleet.platformFleetBinding.exceptionExpiresAt)}
-                />
-              </dl>
-            ) : (
-              <Empty>공통 기능 연결 정보가 없습니다.</Empty>
-            )}
-          </Panel>
-          <Panel title="공통 기능 업데이트 이력">
-            <div className="space-y-2">
-              {fleet.platformFleetPlans.map((plan) => (
-                <details key={plan.id} className="rounded border border-neutral-200 px-3 py-2">
-                  <summary className="cursor-pointer text-sm text-neutral-800">
-                    <span className="mr-2 font-medium">
-                      {plan.platformRelease.version} · {plan.kind}
-                    </span>
-                    <Status value={plan.status} />
-                  </summary>
-                  <dl className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
-                    <Meta label="승인" value={plan.platformRelease.approval} />
-                    <Meta label="변경 분류" value={plan.platformRelease.classification} />
-                    <Meta label="소스 버전" value={mono(plan.sourceSha, 16)} />
-                    <Meta
-                      label="구성 확인값"
-                      value={mono(plan.platformRelease.manifestDigest, 18)}
-                    />
-                    <Meta label="목표 설정 확인값" value={mono(plan.desiredHash, 18)} />
-                    <Meta
-                      label="연동 규격"
-                      value={mono(plan.platformRelease.contractRevision, 18)}
-                    />
-                    <Meta label="소스 확인" value={mono(plan.discoveryObservationId, 16)} />
-                    <Meta label="서비스 확인 기록" value={mono(plan.providerObservationId, 16)} />
-                    <Meta
-                      label="예외 만료"
-                      value={dateTime(fleet.platformFleetBinding?.exceptionExpiresAt)}
-                    />
-                    <Meta label="시도" value={String(plan.attempts)} />
-                    <Meta label="갱신" value={dateTime(plan.updatedAt)} />
-                  </dl>
-                  {plan.githubUrl && (
-                    <a
-                      className="mt-2 inline-block text-xs text-blue-700 underline"
-                      href={plan.githubUrl}
-                    >
-                      GitHub #{plan.githubNumber}
-                    </a>
+          <Panel title="공통 기능 SDK">
+            {platformSdk ? (
+              <div className="space-y-3">
+                <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                  <Meta
+                    label="연동 방식"
+                    value={
+                      sdkObservation ? platformSdkLabel(sdkObservation.integration) : "확인 불가"
+                    }
+                  />
+                  {sdkObservation?.integration === "SDK" && (
+                    <>
+                      <Meta label="SDK 버전" value={sdkObservation.version} />
+                      <Meta label="종류" value={platformSdkLabel(sdkObservation.artifactKind)} />
+                      <Meta label="파일 확인값" value={mono(sdkObservation.checksum, 18)} />
+                    </>
                   )}
-                  {plan.lastError && <p className="mt-2 text-xs text-red-700">{plan.lastError}</p>}
-                </details>
-              ))}
-              {fleet.platformFleetPlans.length === 0 && (
-                <Empty>공통 기능 업데이트 계획이 없습니다.</Empty>
-              )}
-            </div>
+                  <Meta label="확인한 소스" value={mono(platformSdk.sourceSha, 12)} />
+                  <Meta label="확인 시각" value={dateTime(platformSdk.observedAt)} />
+                </dl>
+                <p className="text-[11px] leading-relaxed text-neutral-500">
+                  기본 브랜치 소스에 고정된 버전입니다. 새 SDK는 각 앱 저장소의 일반 PR로
+                  반영합니다.
+                </p>
+              </div>
+            ) : (
+              <Empty>현재 소스에서 공통 기능 SDK를 확인한 기록이 없습니다.</Empty>
+            )}
           </Panel>
           <Panel title="연결 계정·키 정보 — 조회 전용">
             <div className="space-y-2">

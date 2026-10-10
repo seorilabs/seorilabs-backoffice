@@ -7,6 +7,7 @@ import {
   redactCredentialCandidates,
 } from "@/lib/control-plane/contracts";
 import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-order";
+import { platformSdkObservationFromDiscovery } from "@/lib/control-plane/platform-sdk-observation";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
 
@@ -308,58 +309,6 @@ export async function getFleetOperationsView(appId: string) {
           updatedAt: true,
         },
       },
-      platformFleetBinding: {
-        select: {
-          platformReleaseId: true,
-          observedVersion: true,
-          observedDigest: true,
-          approvedVersion: true,
-          approvedDigest: true,
-          manifestDigest: true,
-          contractRevision: true,
-          state: true,
-          sourceSha: true,
-          latestPlanKind: true,
-          pullRequestNumber: true,
-          pullRequestUrl: true,
-          issueNumber: true,
-          issueUrl: true,
-          exceptionExpiresAt: true,
-          updatedAt: true,
-        },
-      },
-      platformFleetPlans: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 20,
-        select: {
-          id: true,
-          sourceSha: true,
-          kind: true,
-          status: true,
-          desiredHash: true,
-          discoveryObservationId: true,
-          providerObservationId: true,
-          agentRunId: true,
-          githubNumber: true,
-          githubUrl: true,
-          attempts: true,
-          lastError: true,
-          readbackRequestedAt: true,
-          appliedAt: true,
-          createdAt: true,
-          updatedAt: true,
-          platformRelease: {
-            select: {
-              version: true,
-              classification: true,
-              approval: true,
-              contractRevision: true,
-              manifestDigest: true,
-              publishedAt: true,
-            },
-          },
-        },
-      },
       credentialBindings: {
         orderBy: [{ provider: "asc" }, { capability: "asc" }],
         select: {
@@ -584,13 +533,23 @@ export async function getFleetOperationsView(appId: string) {
     return true;
   }).slice(0, 30);
 
+  const currentDiscovery = repositoryRegistration
+    && repositorySourceIsCurrent(repositoryRegistration, app.discoveryObservations[0]?.sourceSha ?? null)
+    ? app.discoveryObservations[0]
+    : undefined;
+
   return {
     ...app,
     repositoryRegistration,
-    discoveryCurrent: Boolean(
-      repositoryRegistration
-      && repositorySourceIsCurrent(repositoryRegistration, app.discoveryObservations[0]?.sourceSha ?? null),
-    ),
+    discoveryCurrent: Boolean(currentDiscovery),
+    // 현재 기본 브랜치 소스에서 관측한 공통 기능 SDK. 승인이나 적용 계획은 없다.
+    platformSdk: currentDiscovery
+      ? {
+          sourceSha: currentDiscovery.sourceSha,
+          observedAt: currentDiscovery.observedAt,
+          observation: platformSdkObservationFromDiscovery(currentDiscovery.payload),
+        }
+      : null,
     discoveryObservations: app.discoveryObservations.map((observation) => ({
       ...observation,
       payload: redactFleetJson(observation.payload),
@@ -621,10 +580,6 @@ export async function getFleetOperationsView(appId: string) {
     providerExecutions: app.providerExecutions.map((execution) => ({
       ...execution,
       repoId: execution.repoId.toString(),
-    })),
-    platformFleetPlans: app.platformFleetPlans.map((plan) => ({
-      ...plan,
-      lastError: redactFleetError(plan.lastError),
     })),
     releaseCandidates: app.releaseCandidates.map((candidate) => ({
       ...candidate,

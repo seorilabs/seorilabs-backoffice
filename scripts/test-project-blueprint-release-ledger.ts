@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
-import { Prisma } from "@prisma/client";
 import {
-  PLATFORM_AFFECTED_CONSUMERS,
   RELEASE_CANDIDATE_REQUIRED_GATES,
-  type PlatformReleaseManifest,
   type ProjectBlueprint,
 } from "@/lib/control-plane/contracts";
-import { jsonDigest, signSnapshot, type JsonValue } from "@/lib/control-plane/json";
+import { jsonDigest, type JsonValue } from "@/lib/control-plane/json";
 import { getProjectBlueprintPlan } from "@/lib/control-plane/project-blueprint-service";
 import { buildAuthBrokerPolicyGrant } from "@/lib/control-plane/provider-adapter-client";
 import {
@@ -40,10 +37,6 @@ const WORKFLOW_SHA = "c".repeat(40);
 const WORKFLOW_DIGEST = "2".repeat(64);
 const ARTIFACT_SHA = "d".repeat(64);
 const RULES_SHA = "e".repeat(64);
-const PLATFORM_ARTIFACT_SHA = "f".repeat(64);
-const PLATFORM_GDSCRIPT_SHA = "6".repeat(64);
-const PLATFORM_GDSCRIPT_TREE_SHA = "7".repeat(64);
-const PLATFORM_CONTRACT_REVISION = "1".repeat(64);
 const PUBLISHER_ACCOUNT = "1234567890123456789";
 const PACKAGE_ID = "com.seorilabs.blueprint";
 const SIGNING_KEY = "integration-provider-lease-signing-key-0123456789";
@@ -318,8 +311,6 @@ async function recordCompliantBlueprintReadbacks(input: {
 }
 
 async function runGodotReleaseCandidateFixture(input: {
-  platformReleaseId: string;
-  manifestDigest: string;
   observedAt: Date;
 }) {
   await prisma.app.create({
@@ -390,20 +381,6 @@ async function runGodotReleaseCandidateFixture(input: {
       consumer: "project-blueprint-godot-integration",
       observedAt: input.observedAt,
     })),
-  });
-  await prisma.platformFleetBinding.create({
-    data: {
-      appId: GODOT_APP_ID,
-      platformReleaseId: input.platformReleaseId,
-      observedVersion: "0.6.5",
-      observedDigest: PLATFORM_GDSCRIPT_SHA,
-      approvedVersion: "0.6.5",
-      approvedDigest: PLATFORM_GDSCRIPT_SHA,
-      manifestDigest: input.manifestDigest,
-      contractRevision: PLATFORM_CONTRACT_REVISION,
-      state: "COMPLIANT",
-      sourceSha: GODOT_SOURCE_SHA,
-    },
   });
   const missingBlueprintCandidate = await createReleaseCandidate({
     repoId: GODOT_REPO_ID,
@@ -611,98 +588,6 @@ async function main() {
   const plan = await getProjectBlueprintPlan({ repoId: REPO_ID, sourceSha: SOURCE_SHA, configRevision: 1 });
   assert.equal(plan.status, "READY_TO_APPLY");
   assert.equal(plan.credentialChecks.every((check) => check.state === "READY"), true);
-
-  const platformManifest: PlatformReleaseManifest = {
-    schemaVersion: 1,
-    approval: "FLEET_APPROVED",
-    version: "0.6.5",
-    sourceSha: "a".repeat(40),
-    contractRevision: PLATFORM_CONTRACT_REVISION,
-    classification: "IMPLEMENTATION_ONLY",
-    affectedConsumers: PLATFORM_AFFECTED_CONSUMERS,
-    publishedAt: observedAt.toISOString(),
-    artifacts: [{
-      kind: "TYPESCRIPT",
-      version: "0.6.5",
-      digest: PLATFORM_ARTIFACT_SHA,
-      packageName: "@seorilabs/platform",
-    }, {
-      kind: "GDSCRIPT",
-      version: "0.6.5",
-      digest: PLATFORM_GDSCRIPT_SHA,
-      releaseAssetUrl: "https://github.com/seorilabs/platform/releases/download/v0.6.5/platform-gdscript.zip",
-      treeChecksum: PLATFORM_GDSCRIPT_TREE_SHA,
-    }],
-    canaryEvidence: {
-      attestationSha256: `sha256:${"3".repeat(64)}`,
-      readbackKeyId: "integration-readback-key",
-      workflowBundle: {
-        repository: "seorilabs/.github",
-        sourceSha: WORKFLOW_SHA,
-        digest: `sha256:${WORKFLOW_DIGEST}`,
-      },
-      canaries: ["godot", "react-native"].map((profile, index) => ({
-        profile: profile as "godot" | "react-native",
-        repositoryId: String(9_200 + index),
-        repositoryFullName: `seorilabs/${profile}-release-canary`,
-        sourceSha: index === 0 ? "4".repeat(40) : "5".repeat(40),
-        staticRun: {
-          runId: String(300 + index * 2), conclusion: "success" as const,
-          headSha: index === 0 ? "4".repeat(40) : "5".repeat(40), workflowSourceSha: WORKFLOW_SHA,
-        },
-        buildOnlyRun: {
-          runId: String(301 + index * 2), conclusion: "success" as const,
-          headSha: index === 0 ? "4".repeat(40) : "5".repeat(40), workflowSourceSha: WORKFLOW_SHA,
-          cloudBuildId: `release-build-${index}`,
-          builderImageDigest: `sha256:${"6".repeat(64)}`,
-          buildConfigDigest: `sha256:${"7".repeat(64)}`,
-          artifact: { name: `${profile}.aab`, sha256: `sha256:${"8".repeat(64)}`, size: 1 },
-        },
-      })) as PlatformReleaseManifest["canaryEvidence"]["canaries"],
-    },
-    provenance: {
-      repository: "seorilabs/platform",
-      releaseId: "9200",
-      releaseTag: "v0.6.5",
-      rawManifestSha256: "9".repeat(64),
-      approvalSha256: "a".repeat(64),
-      approvalKeyId: "integration-approval-key",
-    },
-  };
-  const signedPlatformManifest = signSnapshot(
-    platformManifest as unknown as Parameters<typeof signSnapshot>[0],
-    "integration-signing-key",
-  );
-  const platformRelease = await prisma.platformRelease.create({
-    data: {
-      version: platformManifest.version,
-      sourceSha: platformManifest.sourceSha,
-      classification: platformManifest.classification,
-      approval: platformManifest.approval,
-      contractRevision: platformManifest.contractRevision,
-      manifest: platformManifest as unknown as Prisma.InputJsonValue,
-      manifestDigest: signedPlatformManifest.digest,
-      signature: signedPlatformManifest.signature,
-      publishedAt: observedAt,
-      observedBy: "integration-worker",
-      requestHash: signedPlatformManifest.digest,
-      idempotencyKey: "project-blueprint-integration-platform-release",
-    },
-  });
-  await prisma.platformFleetBinding.create({
-    data: {
-      appId: APP_ID,
-      platformReleaseId: platformRelease.id,
-      observedVersion: "0.6.5",
-      observedDigest: PLATFORM_ARTIFACT_SHA,
-      approvedVersion: "0.6.5",
-      approvedDigest: PLATFORM_ARTIFACT_SHA,
-      manifestDigest: signedPlatformManifest.digest,
-      contractRevision: PLATFORM_CONTRACT_REVISION,
-      state: "COMPLIANT",
-      sourceSha: SOURCE_SHA,
-    },
-  });
 
   await assert.rejects(createReleaseCandidate({
     repoId: REPO_ID,
@@ -913,8 +798,6 @@ async function main() {
   assert.equal(await prisma.fleetLifecycleEvent.count({ where: { appId: APP_ID } }), 1);
 
   const godotResult = await runGodotReleaseCandidateFixture({
-    platformReleaseId: platformRelease.id,
-    manifestDigest: signedPlatformManifest.digest,
     observedAt: new Date(observedAt.getTime() + 120_000),
   });
 

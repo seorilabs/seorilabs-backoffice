@@ -30,7 +30,6 @@ type QueueSourceRow = {
   buildTargets: Array<{ id: string }>;
   externalBindings: Array<{ id: string }>;
   providerObservations: Array<{ id: string }>;
-  platformFleetBinding: { id: string } | null;
   credentialBindings: Array<{ id: string }>;
   automationDefinitions: Array<{ id: string }>;
   legacyConfigImports: Array<{
@@ -98,7 +97,6 @@ function evidenceKinds(row: QueueSourceRow): EvidenceKind[] {
     ...(active?.complianceProfiles.length ? ["COMPLIANCE_PROFILE" as const] : []),
     ...(active?.storeAssets.length ? ["STORE_ASSET" as const] : []),
     ...(row.providerObservations.length > 0 ? ["PROVIDER_OBSERVATION" as const] : []),
-    ...(row.platformFleetBinding ? ["PLATFORM_FLEET_BINDING" as const] : []),
     ...(row.credentialBindings.length > 0 ? ["CREDENTIAL_BINDING" as const] : []),
     ...(row.automationDefinitions.length > 0 ? ["AUTOMATION_DEFINITION" as const] : []),
   ];
@@ -203,7 +201,6 @@ export async function getFleetLegacyResolutionQueue(): Promise<FleetLegacyResolu
       buildTargets: { take: 1, select: { id: true } },
       externalBindings: { take: 1, select: { id: true } },
       providerObservations: { take: 1, select: { id: true } },
-      platformFleetBinding: { select: { id: true } },
       credentialBindings: {
         where: { status: "ACTIVE" },
         take: 1,

@@ -110,6 +110,7 @@ async function main(): Promise<void> {
   let appDefaultBranch = "main";
   let contentHook: (() => Promise<void>) | null = null;
   let githubCalls = 0;
+  let platformRepoIdOnGitHub = PLATFORM_REPO_ID;
   const fakeOctokit = {
     rest: {
       repos: {
@@ -119,7 +120,7 @@ async function main(): Promise<void> {
             return { data: { id: Number(APP_REPO_ID), full_name: APP_FULL_NAME, default_branch: appDefaultBranch } };
           }
           if (`${args.owner}/${args.repo}` === PLATFORM_FULL_NAME) {
-            return { data: { id: PLATFORM_REPO_ID, full_name: PLATFORM_FULL_NAME, default_branch: "main" } };
+            return { data: { id: platformRepoIdOnGitHub, full_name: PLATFORM_FULL_NAME, default_branch: "main" } };
           }
           throw httpError(404);
         },
@@ -215,9 +216,6 @@ async function main(): Promise<void> {
         lastReconciledSha: PLATFORM_SHA,
       },
     });
-    await prisma.platformFleetBinding.create({
-      data: { appId: APP_ID, state: "MANAGED", sourceSha: PLATFORM_SHA },
-    });
     await prisma.configRevision.create({
       data: {
         id: "legacy-shadow-integration-active",
@@ -270,25 +268,14 @@ async function main(): Promise<void> {
     assert.equal(first.import.sources.every((source) => typeof source.repoId === "string"), true);
     assert.doesNotThrow(() => JSON.stringify(first));
     assert.equal("requestHash" in first.import, false);
-
-    await prisma.platformFleetBinding.delete({ where: { appId: APP_ID } });
-    const registrationFallback = await recordLegacyShadowImport({
-      repoId: APP_REPO_ID,
-      sourceSha: APP_SHA,
-      observedBy: "integration-worker",
-      idempotencyKey: "legacy-shadow-integration-platform-registration-fallback",
-    }, dependencies);
-    assert.equal(registrationFallback.import.status, "DRAFT_CREATED");
-    assert.ok(registrationFallback.import.sources.some((source) => (
+    // platform registry source SHA는 PLATFORM_PRODUCER registration의 현재 reconciled HEAD에서만 온다.
+    assert.ok(first.import.sources.some((source) => (
       source.sourceKind === "PLATFORM_APP_REGISTRY"
       && source.repoId?.toString() === String(PLATFORM_REPO_ID)
       && source.sourceSha === PLATFORM_SHA
       && source.status === "ABSENT"
       && source.errorCode === "PATH_NOT_FOUND"
     )));
-    await prisma.platformFleetBinding.create({
-      data: { appId: APP_ID, state: "MANAGED", sourceSha: PLATFORM_SHA },
-    });
 
     await assert.rejects(
       prisma.app.delete({ where: { id: APP_ID } }),
@@ -369,7 +356,7 @@ async function main(): Promise<void> {
       (error) => error instanceof ControlPlaneError && error.code === "IDEMPOTENCY_CONFLICT",
     );
 
-    process.env.PLATFORM_GITHUB_REPOSITORY_ID = "123";
+    platformRepoIdOnGitHub = 123;
     const wrongPlatformIdentity = await recordLegacyShadowImport({
       repoId: APP_REPO_ID,
       sourceSha: APP_SHA,
@@ -380,6 +367,21 @@ async function main(): Promise<void> {
     assert.ok(wrongPlatformIdentity.import.sources.some((source) => (
       source.sourceKind === "PLATFORM_APP_REGISTRY"
       && source.errorCode === "PLATFORM_REPOSITORY_IDENTITY_INVALID"
+    )));
+    platformRepoIdOnGitHub = PLATFORM_REPO_ID;
+
+    // 설정된 platform repo ID에 PLATFORM_PRODUCER registration이 없으면 source SHA를 추측하지 않는다.
+    process.env.PLATFORM_GITHUB_REPOSITORY_ID = "123";
+    const unregisteredPlatform = await recordLegacyShadowImport({
+      repoId: APP_REPO_ID,
+      sourceSha: APP_SHA,
+      observedBy: "integration-worker",
+      idempotencyKey: "legacy-shadow-integration-platform-unregistered",
+    }, dependencies);
+    assert.equal(unregisteredPlatform.import.status, "NEEDS_INPUT");
+    assert.ok(unregisteredPlatform.import.sources.some((source) => (
+      source.sourceKind === "PLATFORM_APP_REGISTRY"
+      && source.errorCode === "PLATFORM_SOURCE_SHA_MISSING"
     )));
     process.env.PLATFORM_GITHUB_REPOSITORY_ID = String(PLATFORM_REPO_ID);
 
@@ -483,9 +485,9 @@ async function main(): Promise<void> {
 
     googlePayload = safeGooglePayload;
     contentHook = async () => {
-      await prisma.platformFleetBinding.update({
-        where: { appId: APP_ID },
-        data: { sourceSha: "f".repeat(40) },
+      await prisma.repositoryRegistration.update({
+        where: { repoId: BigInt(PLATFORM_REPO_ID) },
+        data: { lastDefaultPushSha: "f".repeat(40), lastReconciledSha: "f".repeat(40) },
       });
     };
     await assert.rejects(
