@@ -61,7 +61,6 @@ pnpm tsx scripts/test-fleet-parity-import.ts
 pnpm tsx scripts/test-fleet-parity-wave.ts
 pnpm tsx scripts/test-restore-rehearsal.ts
 pnpm tsx scripts/test-repository-discovery.ts
-pnpm tsx scripts/test-platform-fleet-reconciler.ts
 pnpm tsx scripts/test-project-blueprint-release-ledger.ts
 pnpm tsx scripts/test-config-source-auto-rebase.ts
 pnpm tsx scripts/test-auth-broker-journal-checkpoint.ts

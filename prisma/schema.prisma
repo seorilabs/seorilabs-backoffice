@@ -1791,6 +1791,9 @@ enum ReleaseGateStatus {
   HUMAN_REQUIRED
 }
 
+// 폐기(2026-10-10): Platform SDK 승인 체계의 표 4개(PlatformFleetBinding, PlatformRelease,
+// PlatformFleetReconcileRun, PlatformFleetPlan)와 enum 4개. 읽고 쓰는 코드는 없으며 배포 뒤
+// 별도 contract migration에서 지운다. 새 코드에서 참조하지 않는다.
 model PlatformFleetBinding {
   id                 String           @id @default(cuid())
   appId              String           @unique
@@ -1819,8 +1822,6 @@ model PlatformFleetBinding {
   @@map("platform_fleet_binding")
 }
 
-// Platform producer가 발행한 서명 manifest 중 FLEET_APPROVED 상태만 수용한다.
-// manifest와 digest/signature는 append-only이며 consumer plan의 exact input이 된다.
 model PlatformRelease {
   id               String                        @id @default(cuid())
   version          String                        @unique @db.VarChar(64)
@@ -1870,8 +1871,6 @@ model PlatformFleetReconcileRun {
   @@map("platform_fleet_reconcile_run")
 }
 
-// release/app당 정확히 하나의 durable plan만 존재한다. 구현-only plan은 기존
-// AgentRun/lease/repo guard를 사용하고 contract plan은 trusted GitHub App adapter가 처리한다.
 model PlatformFleetPlan {
   id                     String                  @id @default(cuid())
   platformReleaseId      String

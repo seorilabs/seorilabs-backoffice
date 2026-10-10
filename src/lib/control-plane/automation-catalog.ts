@@ -1,12 +1,10 @@
 export const AUTOMATION_TEMPLATE_KEY = "repo-task-autopilot-v1" as const;
-export const PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY = "platform-fleet-reconcile-v1" as const;
 // P7 catch-22 전용: classification=PRODUCT_APP이지만 discovery가 NEEDS_INPUT인 repository의
 // discovery 결손(NO_CANDIDATE/BUILD_TARGET_MISSING)만 고치는 단발성 routine이다. 일반
 // repositoryAutomationEligible MANAGED guard는 그대로 두고, 이 template 전용 좁은 gate만 우회한다.
 export const SOURCE_REMEDIATION_TEMPLATE_KEY = "repo-source-remediation-v1" as const;
 export const MANAGED_WORKER_TEMPLATE_KEYS = [
   AUTOMATION_TEMPLATE_KEY,
-  PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY,
   SOURCE_REMEDIATION_TEMPLATE_KEY,
 ] as const;
 export const AUTOMATION_CADENCES = ["MANUAL", "HOURLY", "DAILY"] as const;
@@ -36,7 +34,6 @@ export interface AutomationPolicy {
   createsPr: boolean;
   claimSource:
     | "github-issue-mirror"
-    | "platform-fleet-plan"
     | "source-remediation-issue";
 }
 
@@ -104,18 +101,6 @@ export function agentRepositorySingletonScope(
     : null;
 }
 
-export function platformFleetAutomationPolicy(input: {
-  budgetCeilingMicros: number;
-}): AutomationPolicy {
-  return {
-    schemaVersion: 1,
-    approvalPolicy: "READY_PR",
-    budgetCeilingMicros: input.budgetCeilingMicros,
-    createsPr: true,
-    claimSource: "platform-fleet-plan",
-  };
-}
-
 export function automationPolicy(input: {
   approvalPolicy: AutomationApprovalPolicy;
   budgetCeilingMicros: number;
@@ -166,29 +151,6 @@ export function parseManagedAutomationPolicy(value: unknown): AutomationPolicy |
     budgetCeilingMicros: Number(candidate.budgetCeilingMicros),
   });
   return candidate.createsPr === policy.createsPr ? policy : null;
-}
-
-export function parseManagedPlatformFleetPolicy(value: unknown): AutomationPolicy | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const candidate = value as Record<string, unknown>;
-  const keys = Object.keys(candidate).sort();
-  const expectedKeys = [
-    "approvalPolicy",
-    "budgetCeilingMicros",
-    "claimSource",
-    "createsPr",
-    "schemaVersion",
-  ].sort();
-  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) return null;
-  if (
-    candidate.schemaVersion !== 1
-    || candidate.claimSource !== "platform-fleet-plan"
-    || candidate.approvalPolicy !== "READY_PR"
-    || candidate.createsPr !== true
-    || !Number.isSafeInteger(candidate.budgetCeilingMicros)
-    || Number(candidate.budgetCeilingMicros) <= 0
-  ) return null;
-  return platformFleetAutomationPolicy({ budgetCeilingMicros: Number(candidate.budgetCeilingMicros) });
 }
 
 export function sourceRemediationAutomationPolicy(input: {
@@ -258,7 +220,7 @@ export function parseSourceRemediationPolicy(value: unknown): SourceRemediationP
   });
 }
 
-/** worker claim 경계는 UI에서 만드는 이슈 routine과 내부 Platform plan, source-remediation 단발 대상을 함께 수용한다. */
+/** worker claim 경계는 UI에서 만드는 이슈 routine과 source-remediation 단발 대상을 함께 수용한다. */
 export function parseManagedWorkerPolicy(input: {
   template: string;
   agentKind: string | null;
@@ -267,11 +229,6 @@ export function parseManagedWorkerPolicy(input: {
   if (input.template === AUTOMATION_TEMPLATE_KEY) {
     return AUTOMATION_AGENT_KINDS.includes(input.agentKind as AutomationAgentKind)
       ? parseManagedAutomationPolicy(input.configuration)
-      : null;
-  }
-  if (input.template === PLATFORM_FLEET_AUTOMATION_TEMPLATE_KEY) {
-    return input.agentKind === "CODEX"
-      ? parseManagedPlatformFleetPolicy(input.configuration)
       : null;
   }
   if (input.template === SOURCE_REMEDIATION_TEMPLATE_KEY) {

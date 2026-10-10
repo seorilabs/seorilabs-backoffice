@@ -6,7 +6,7 @@
    native peer UID/GID/PID, per-instance client certificate binding, `agentKind=CLAUDE`, `claude:seorilabs-generic-worker` workload identity와
    idempotency key를 결합하며 모델에는 bearer, lease, grant 값을 반환하지 않는다.
 2. claim이 없으면 정상 종료하며, queue 밖의 Issue나 PR을 새로 만들지 않는다.
-3. `template=repo-task-autopilot-v1`과 지정된 repo/issue만 처리한다. 현재 GitHub state/label을 readback하고 승인 gate가 있으면 중단한다. `platform-fleet-reconcile-v1`은 CODEX 전용이므로 Claude에 반환되면 구성 오류로 mutation 없이 `fail`한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.
+3. `template=repo-task-autopilot-v1`과 지정된 repo/issue만 처리한다. 현재 GitHub state/label을 readback하고 승인 gate가 있으면 중단한다. `approvalPolicy=READ_ONLY`이면 변경·commit·PR을 만들지 않는다.
 4. `READBACK_FIRST` claim은 일반 `GITHUB_READY_PR`이 아니라 read-only `GITHUB_READY_PR_READBACK`만 호출한다.
    adapter가 서버의 기존 immutable ledger에서 exact commit/ref/marker를 불러와 branch와 PR을 확인하며 외부 write를 하지 않는다.
 5. 공개 `sessionId`로 60초 이내 heartbeat를 유지한다. `sessionId`는 권한이 아니며 bearer 대신 쓸 수 없다.

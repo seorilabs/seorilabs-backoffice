@@ -451,7 +451,7 @@ if [ -z "$retired_list" ]; then
   exit 1
 fi
 for retired in $retired_list; do
-  if grep -q "name: $retired\$" "$here/../k8s/proactive-cronjobs.yaml"; then
+  if grep -q "name: $retired\$" "$here"/../k8s/*.yaml; then
     echo "FAIL 퇴역 대상이 아직 매니페스트에 있다: $retired" >&2
     exit 1
   fi

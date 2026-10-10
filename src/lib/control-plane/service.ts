@@ -2415,7 +2415,7 @@ export async function resolveManifest(input: {
   if (market && !enabledMarkets.includes(market)) {
     throw new ControlPlaneError("ACTIVE revision에서 활성화된 market이 아닙니다.", 409, "MARKET_NOT_ENABLED");
   }
-  const [buildTargets, externalBindings, providerRows, platformFleet] = await Promise.all([
+  const [buildTargets, externalBindings, providerRows] = await Promise.all([
     prisma.buildTarget.findMany({
       where: {
         appId: app.id,
@@ -2432,7 +2432,6 @@ export async function resolveManifest(input: {
       where: { appId: app.id, ...(market ? { provider: market } : {}) },
       orderBy: [{ observedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     }),
-    prisma.platformFleetBinding.findUnique({ where: { appId: app.id } }),
   ]);
   const latestProvider = new Map<string, (typeof providerRows)[number]>();
   for (const row of providerRows) {
@@ -2492,7 +2491,6 @@ export async function resolveManifest(input: {
     buildTargets,
     externalBindings,
     providerObservations: [...latestProvider.values()],
-    platformFleet,
   };
 }
 

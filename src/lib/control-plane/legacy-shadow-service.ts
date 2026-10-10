@@ -123,17 +123,9 @@ function configuredPlatformRepository(input: {
 
 export function resolveLegacyPlatformSourceVector(input: {
   configured: { repoId: bigint; repoFullName: string } | null;
-  bindingSourceSha: string | null;
   registration: PlatformRegistrationVector | null;
 }): PlatformSourceVector | null {
   if (!input.configured) return null;
-  if (input.bindingSourceSha !== null) {
-    if (!SHA_40.test(input.bindingSourceSha)) return null;
-    return {
-      ...input.configured,
-      sourceSha: input.bindingSourceSha.toLowerCase(),
-    };
-  }
   const registration = input.registration;
   if (
     !registration
@@ -627,7 +619,6 @@ export async function recordLegacyShadowImport(input: {
         slug: true,
         repoId: true,
         repoFullName: true,
-        platformFleetBinding: { select: { sourceSha: true } },
         discoveryObservations: {
           orderBy: latestDiscoveryObservationOrder(),
           take: 1,
@@ -656,7 +647,6 @@ export async function recordLegacyShadowImport(input: {
   }
   const platformSource = resolveLegacyPlatformSourceVector({
     configured: configuredPlatform,
-    bindingSourceSha: app.platformFleetBinding?.sourceSha ?? null,
     registration: platformRegistration,
   });
   const importTarget: AppImportTarget = {
@@ -720,7 +710,6 @@ export async function recordLegacyShadowImport(input: {
           slug: true,
           repoId: true,
           repoFullName: true,
-          platformFleetBinding: { select: { sourceSha: true } },
           discoveryObservations: {
             orderBy: latestDiscoveryObservationOrder(),
             take: 1,
@@ -747,7 +736,6 @@ export async function recordLegacyShadowImport(input: {
       }
       const lockedPlatformSource = resolveLegacyPlatformSourceVector({
         configured: configuredPlatform,
-        bindingSourceSha: lockedApp.platformFleetBinding?.sourceSha ?? null,
         registration: lockedPlatformRegistration,
       });
       if (
@@ -761,7 +749,7 @@ export async function recordLegacyShadowImport(input: {
         || lockedApp.discoveryObservations[0]?.sourceSha.toLowerCase() !== sourceSha
       ) {
         throw new ControlPlaneError(
-          "source vector를 읽는 동안 앱 identity 또는 Platform binding이 변경되었습니다.",
+          "source vector를 읽는 동안 앱 identity 또는 Platform source가 변경되었습니다.",
           409,
           "SOURCE_VECTOR_CHANGED",
         );

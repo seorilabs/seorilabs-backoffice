@@ -1,7 +1,6 @@
 import { Prisma, type ReleaseGateStatus } from "@prisma/client";
 import {
   configRevisionPayloadSchema,
-  parseStoredPlatformReleaseManifest,
   RELEASE_CANDIDATE_REQUIRED_GATES,
   type ReleaseGateName,
 } from "@/lib/control-plane/contracts";
@@ -78,7 +77,7 @@ export async function createReleaseCandidate(input: {
   return prisma.$transaction(async (tx) => {
     const app = await tx.app.findUnique({
       where: { repoId: input.repoId },
-      select: { id: true, repoId: true, engine: true },
+      select: { id: true, repoId: true },
     });
     if (!app) throw new ControlPlaneError("관리 대상 앱을 찾을 수 없습니다.", 404, "APP_NOT_FOUND");
     await tx.$queryRaw`SELECT id FROM app WHERE id = ${app.id} FOR UPDATE`;
@@ -132,7 +131,7 @@ export async function createReleaseCandidate(input: {
     if (payload.build?.platformVersion !== input.platformVersion) {
       throw new ControlPlaneError("ACTIVE revision의 Platform version과 일치하지 않습니다.", 409, "PLATFORM_VERSION_MISMATCH");
     }
-    const [discovery, target, externalBindings, platformBinding, approvedPlatformReleases] = await Promise.all([
+    const [discovery, target, externalBindings] = await Promise.all([
       tx.discoveryObservation.findFirst({
         where: { appId: app.id, sourceSha: input.sourceSha.toLowerCase() },
         select: { id: true },
@@ -156,15 +155,6 @@ export async function createReleaseCandidate(input: {
           publicIdentity: true,
         },
       }),
-      tx.platformFleetBinding.findUnique({
-        where: { appId: app.id },
-        include: { platformRelease: { select: { id: true, approval: true, manifestDigest: true } } },
-      }),
-      tx.platformRelease.findMany({
-        where: { approval: "FLEET_APPROVED" },
-        orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
-        select: { id: true, manifest: true },
-      }),
     ]);
     if (!discovery) {
       throw new ControlPlaneError("정확한 source SHA의 DiscoveryObservation이 없습니다.", 409, "SOURCE_NOT_OBSERVED");
@@ -187,51 +177,6 @@ export async function createReleaseCandidate(input: {
         "source SHA와 provider application binding의 공개 build identity를 확정할 수 없습니다.",
         409,
         code,
-      );
-    }
-    const latestApprovedRelease = approvedPlatformReleases[0];
-    const latestApplicablePlatformRelease = latestApprovedRelease
-      ? { ...latestApprovedRelease, parsedManifest: parseStoredPlatformReleaseManifest(latestApprovedRelease.manifest) }
-      : null;
-    const latestArtifact = latestApplicablePlatformRelease?.parsedManifest.artifacts.find(
-      (artifact) => artifact.kind === (app.engine === "GODOT" ? "GDSCRIPT" : "TYPESCRIPT"),
-    );
-    if (
-      latestApplicablePlatformRelease
-      && (
-        latestApplicablePlatformRelease.parsedManifest.canaryEvidence.workflowBundle.sourceSha.toLowerCase()
-          !== input.workflowBundleSha.toLowerCase()
-        || latestApplicablePlatformRelease.parsedManifest.canaryEvidence.workflowBundle.digest.toLowerCase()
-          !== `sha256:${input.workflowBundleDigest.toLowerCase()}`
-      )
-    ) {
-      throw new ControlPlaneError(
-        "FLEET_APPROVED canary의 exact WorkflowBundle SHA/digest와 일치하지 않습니다.",
-        409,
-        "WORKFLOW_BUNDLE_APPROVAL_MISMATCH",
-      );
-    }
-    if (
-      !latestApplicablePlatformRelease
-      || !platformBinding
-      || platformBinding.platformReleaseId !== latestApplicablePlatformRelease.id
-      || platformBinding.platformRelease?.approval !== "FLEET_APPROVED"
-      || platformBinding.platformRelease.manifestDigest !== platformBinding.manifestDigest
-      || platformBinding.state !== "COMPLIANT"
-      || platformBinding.sourceSha?.toLowerCase() !== input.sourceSha.toLowerCase()
-      || platformBinding.observedVersion !== input.platformVersion
-      || platformBinding.approvedVersion !== input.platformVersion
-      || platformBinding.approvedVersion !== latestArtifact?.version
-      || !platformBinding.observedDigest
-      || platformBinding.observedDigest !== platformBinding.approvedDigest
-      || platformBinding.approvedDigest !== latestArtifact?.digest.toLowerCase()
-      || platformBinding.contractRevision?.toLowerCase()
-        !== latestApplicablePlatformRelease.parsedManifest.contractRevision.toLowerCase()
-    ) {
-      throw new ControlPlaneError(
-        "최신 FLEET_APPROVED Platform SDK의 exact version/digest 관측 전에는 release candidate를 만들 수 없습니다.",
-        409,
-        "PLATFORM_FLEET_STALE",
       );
     }
     const candidate = await tx.releaseCandidate.create({

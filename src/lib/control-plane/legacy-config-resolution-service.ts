@@ -58,7 +58,6 @@ export async function legacyCentralStateSnapshot(
     complianceProfiles,
     storeAssets,
     providerObservations,
-    platformFleetBinding,
     credentialBindings,
     automationDefinitions,
   ] = await Promise.all([
@@ -139,21 +138,6 @@ export async function legacyCentralStateSnapshot(
         observedAt: true,
       },
     }),
-    tx.platformFleetBinding.findUnique({
-      where: { appId: input.appId },
-      select: {
-        id: true,
-        platformReleaseId: true,
-        observedVersion: true,
-        observedDigest: true,
-        approvedVersion: true,
-        approvedDigest: true,
-        manifestDigest: true,
-        contractRevision: true,
-        state: true,
-        sourceSha: true,
-      },
-    }),
     tx.credentialBinding.findMany({
       where: { appId: input.appId, status: "ACTIVE" },
       orderBy: [{ logicalCredentialId: "asc" }, { capability: "asc" }, { id: "asc" }],
@@ -202,7 +186,6 @@ export async function legacyCentralStateSnapshot(
   if (complianceProfiles.length > 0) evidenceKinds.add("COMPLIANCE_PROFILE");
   if (storeAssets.length > 0) evidenceKinds.add("STORE_ASSET");
   if (providerObservations.length > 0) evidenceKinds.add("PROVIDER_OBSERVATION");
-  if (platformFleetBinding) evidenceKinds.add("PLATFORM_FLEET_BINDING");
   if (credentialBindings.length > 0) evidenceKinds.add("CREDENTIAL_BINDING");
   if (automationDefinitions.length > 0) evidenceKinds.add("AUTOMATION_DEFINITION");
 
@@ -243,7 +226,6 @@ export async function legacyCentralStateSnapshot(
     // 동일 공개 resource의 같은 payload를 다시 읽은 시간/row ID는 승인 의미를
     // 바꾸지 않는다. 최신 semantic readback만 digest에 포함한다.
     ...(includedKinds.has("PROVIDER_OBSERVATION") ? { providerObservations: providerReadbacks } : {}),
-    ...(includedKinds.has("PLATFORM_FLEET_BINDING") ? { platformFleetBinding } : {}),
     ...(includedKinds.has("CREDENTIAL_BINDING") ? { credentialBindings } : {}),
     ...(includedKinds.has("AUTOMATION_DEFINITION") ? {
       automationDefinitions: automationDefinitions.map(({ configuration, ...row }) => ({

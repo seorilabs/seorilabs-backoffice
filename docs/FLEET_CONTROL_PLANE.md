@@ -58,8 +58,6 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/provider-executions` | exact repo/source/ACTIVE config/desired/public identity/credential generation에 결합된 readback, deterministic apply 또는 internal upload 실행을 durable queue에 등록 |
 | `POST` | `/api/control-plane/release-candidates` | source SHA, ACTIVE config, market target, artifact checksum, WorkflowBundle SHA·digest, Platform version을 하나의 candidate로 고정 |
 | `POST` | `/api/control-plane/release-gate-observations` | candidate에 결합된 독립 gate observation append |
-| `GET` | `/api/control-plane/platform-releases` | 내부 producer가 검증·기록한 `FLEET_APPROVED` release 불변 원장을 조회 |
-| `POST` | `/api/control-plane/platform-fleet/reconcile` | 현재 ACTIVE app 전체 cohort와 exact discovery/provider observation으로 repo별 plan을 한 번만 생성 |
 | `GET` | `/api/control-plane/reauth-requests?repoId=` | 앱 범위의 공개 reauth gate와 대기 상태 조회 |
 | `POST` | `/api/control-plane/reauth-requests` | 비밀값 없이 `HUMAN_REAUTH_REQUIRED` append |
 | `POST` | `/api/internal/agents/claim` | 최대 5분 내부 lease에 결합된 공개 `sessionId` 발급. raw lease/grant 없음 |
@@ -79,7 +77,6 @@ payload·result에는 비밀번호, TOTP seed, cookie, API key, receipt 또는 �
 | `POST` | `/api/control-plane/source-remediation-definitions` | P6/P7 discovery catch-22 전용 단발 routine 생성. exact repo/issue/discovery generation/source SHA/reason을 잠그고 같은 transaction에서 occurrence·AgentRun까지 만든다 |
 | `POST` | `/api/admin/automation/schedule` | webhook inbox, 누락 schedule, 만료 lease, terminal PR guard 조정 |
 | `POST` | `/api/admin/automation/project-projections` | Fleet Project desired를 적용하고 실제 field를 readback |
-| `POST` | `/api/admin/automation/platform-fleet` | latest Platform Release/approval을 검증·record/reconcile한 뒤 기존 contract Issue/SDK PR plan을 readback-first로 drain |
 
 Config payload는 생성 API 이후 수정 경로가 없다. activation snapshot은 canonical JSON의 SHA-256과
 HMAC을 저장하며 resolved manifest가 이를 다시 검증한다. 서명 키가 없거나 값이 맞지 않으면
@@ -547,79 +544,28 @@ JS profile은 packageManager를 `npm | pnpm`으로 확정해야 하며, 자체 p
 resolved manifest는 요청한 exact source SHA의 세 값 중 하나라도 없거나 계약 밖이면
 `NO_WORKFLOW_CALLER_FOR_SHA`로 중단하고 추측하지 않는다.
 
-## Platform Fleet
+## 공통 기능 SDK 관측
 
-매분 RPI5 `backoffice-platform-fleet` CronJob과 배포 직후 catch-up Job은 같은 admin endpoint를 호출한다.
-producer는 GitHub App의 read-only API로 `seorilabs/platform` latest Release의 정확한 tag commit,
-`platform-release.json`, `fleet-approved.json`, TypeScript `.tgz`, GDScript artifact와 checksum asset을 읽는다.
-raw byte SHA-256, release asset size/digest, release tag/source SHA가 하나라도 다르면 아무 release나 plan을 만들지
-않는다. TypeScript `.tgz`가 Release asset에 없으면 fail-closed하며, 실제 내려받은 동일 bytes의 SHA-256·size와
-consumer lock의 exact version·integrity를 결합해 관측한다.
-
-`fleet-approved.json`은 P3 RN/Godot static·build-only canary와 exact WorkflowBundle SHA·digest를 포함하고,
-ConfigMap `backoffice-platform-fleet-trust`의 `trusted-release-keys.json`에 등록된 ACTIVE Ed25519 공개키로
-서명이 검증되어야 한다. 승인 asset이 아직 없으면 endpoint는 `WAITING_APPROVAL`을 반환하고 DB write와
-reconcile을 모두 생략한다. 승인 asset은 있는데 trust root가 없거나 서명이 틀리면 fail-closed한다.
-공개키 ConfigMap은 canonical SPKI `BEGIN PUBLIC KEY` PEM만 허용한다. secret이 아니며 PKCS8 private signing
-key나 임시 대체키를 Backoffice에 두지 않는다.
-
-검증된 producer는 source SHA, contract revision, TypeScript/GDScript exact artifact version·SHA-256,
-GDScript tree checksum, 변경 분류, 승인 canary attestation, WorkflowBundle SHA·digest와 raw/approval provenance를
-중앙 snapshot signature에 고정한다. Backoffice는 이 정규화 입력을 append-only `PlatformRelease`로 기록한다.
-raw·정규화 manifest에는 영향 consumer 선택 계약
-`cohort=backoffice-managed-product-apps`, `resolution=reconcile-time`을 포함한다. 구체 repo ID 목록은 release 뒤에도
-바뀌므로 immutable asset에 복사하지 않고 reconcile 시점의 current snapshot에서 확정한다. 따라서 앱
-lifecycle 변경이 release identity를 바꾸지 않으며, 매 reconcile은 `ACTIVE` App과 비보관 `PRODUCT_APP`
-registration의 교집합을 분모로 고정한다. `MANAGED` registration, App binding, current default HEAD discovery를
-모두 만족한 consumer만 fanout하되 `NEEDS_INPUT`과 discovery 누락은 서로 다른 blocker로 관측하고 하나라도
-있으면 부분 fanout을 금지한다. `PAUSED`·`DEPRECATED` App, `INFRA_REPO`·`PLATFORM_PRODUCER`·`EXCLUDED`와 분류
-정본이 없는 legacy App row는 cohort에서 제외한다. 기존 공개
-`v0.6.7` raw·normalized manifest에 선택 필드가 없을 때만 같은 단일 계약을 read-time에 투영한다. 저장된
-manifest, digest, signature, idempotency identity는 바꾸지 않으며 `v0.6.6`, `v0.6.8+` 누락은 거부한다.
-GDScript는 고정 HTTPS release asset URL이 필수이며 floating branch는 계약에 들어올 수 없다.
+Platform SDK 승인 체계(서명 manifest와 `PlatformRelease` 원장, 앱별 plan·binding, `backoffice-platform-fleet`
+CronJob과 SDK 갱신 PR·계약 Issue 자동 발행)는 2026-10-10에 폐기했다. SDK는 발행된 릴리스를 그대로 쓰고 각 앱은
+일반 PR로 버전을 올린다. Backoffice는 SDK 버전을 승인하거나 갱신 작업을 만들지 않는다.
 
 Repository discovery는 exact source SHA에서 RN의 고정 `@seorilabs/platform-sdk` version과 lock integrity,
-Godot의 vendored `SOURCE`/`VERSION`/`CHECKSUM`과 실제 tree checksum을 자동 관측한다. 범위·branch·git URL,
-lock 불일치, floating `main`, tree checksum 불일치, addon subtree gitlink는 `CUSTOM_HTTP`, SDK 자체가 없으면 `MISSING`으로
-분류한다. 현재 release의 exact package version·lock integrity 또는 fixed asset URL·검증된 tree가 일치할 때만
-approved digest와 contract revision을 얻고, 이전 exact SDK는 digest를 추측하지 않은 채 update 대상으로 남는다.
+Godot의 vendored `SOURCE`/`VERSION`/`CHECKSUM`과 실제 tree checksum을 관측해
+`DiscoveryObservation.payload.platformConsumer`에 남긴다. 범위·branch·git URL, lock 불일치, floating `main`,
+tree checksum 불일치, addon subtree gitlink는 `CUSTOM_HTTP`, SDK 자체가 없으면 `MISSING`으로 분류한다.
 lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 기존 256KiB 한도를 유지한다.
-ACTIVE PRODUCT_APP 분모에서 registration이 `NEEDS_INPUT`이거나 current default HEAD Platform evidence가 없는
-repo가 하나라도 있으면 producer는 consumer를 누락하지 않고 전체 cohort를 중단한다. 오류에는 denominator,
-ready, blocked와 공개 reason별 건수를 남기며 secret이나 discovery payload는 포함하지 않는다.
+앱 통합 관리 화면은 현재 기본 브랜치 관측의 버전과 확인값만 보여 주며 버전의 적절성은 판단하지 않는다.
 
-Reconcile input은 producer와 같은 selector로 DB에서 다시 읽은 전체 cohort와 각 repo의 current default HEAD
-`DiscoveryObservation`, `provider=platform/resourceType=platform-consumer` observation ID를 정확히
-지정해야 한다. subset, stale source, 다른 app/provider identity, digest 또는 signature 불일치는 전부
-fail-closed한다.
-
-- `IMPLEMENTATION_ONLY` drift는 release/repo당 `SDK_UPDATE_PR` plan과 `AgentRun.taskInput` 하나만 만든다.
-  기존 agent lease·`repo-pr:{owner/repo}` unique guard를 그대로 사용하며 task는 exact version/digest,
-  source SHA, manifest marker와 필수 check를 포함한다.
-- `CONTRACT_CHANGE` 또는 `CONTRACT_ADDITION` drift는 영향 repo마다 P1 Issue plan 하나를 만든다.
-  label은 `P1`, `autopilot`, `platform`, `platform-contract`로 고정된다.
-- `CUSTOM_HTTP`와 `MISSING` 관측은 각각 `CUSTOM_UNMANAGED`, `MISSING_UNMANAGED`로 표시하되 terminal
-  `UNMANAGED`로 끝내지 않는다. repo ID에 고정된 `seorilabs-platform-remediation:v1` marker와
-  `P1`, `autopilot`, `platform`, `platform-remediation` label을 가진 remediation Issue를 하나만 만들고,
-  새 release/source 또는 두 관측 상태 사이 전이는 같은 Issue를 갱신·재개한 뒤 exact readback한다.
-
-Issue mutation은 installation GitHub App adapter에서 required label idempotent 보장, marker 조회, create/update,
-exact readback 순서로만 수행한다. create 결과가 불명이면 marker를 먼저 다시 읽고 새 Issue를 만들지 않는다. SDK PR은 generic
-worker가 capability broker를 통과해 처리하며 `RESULT_UNKNOWN`이면 같은 run이 `READBACK_FIRST`로
-재claim될 때까지 repo guard를 유지한다. Project field는 이 queue의 claim source가 아니다.
-
-ReleaseCandidate 생성은 해당 repo에 적용되는 최신 `FLEET_APPROVED` release와
-`PlatformFleetBinding`의 release ID, manifest digest, source SHA, version, artifact digest,
-contract revision 및 `COMPLIANT` 상태가 모두 일치하고 candidate의 WorkflowBundle SHA·digest가 승인 canary와
-exact match할 때만 열린다. PR merge만으로 compliant로 승격하지
-않고 새 exact provider observation과 reconcile을 요구한다. Fleet UI에는 observed/approved
-version·digest, contract revision, PR/P1 Issue, 예외 만료와 plan 원장을 표시한다.
+ReleaseCandidate는 ACTIVE config의 `build.platformVersion`과 요청한 Platform version이 같은지만 확인한다
+(`PLATFORM_VERSION_MISMATCH`). 폐기한 표(`platform_release`, `platform_fleet_binding`, `platform_fleet_plan`,
+`platform_fleet_reconcile_run`)는 읽고 쓰는 코드를 걷어낸 배포 뒤 별도 contract migration에서 지운다.
 
 ## 운영 UI와 재인증 경계
 
 앱 워크스페이스의 `Fleet` 탭은 DiscoveryObservation, ACTIVE/DRAFT ConfigRevision,
 ProjectBlueprint와 market projection, ReleaseCandidate와 독립 gate, ProviderObservation,
-PlatformFleetBinding, CredentialBinding, ProviderExecution, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
+현재 소스의 공통 기능 SDK 관측, CredentialBinding, ProviderExecution, AgentRun/dead-letter와 ReauthRequest를 한 화면에서 조회한다.
 CredentialBinding에는 logical ID, 공개 account identity, fingerprint와 scope만 있다. 검증된 catalog
 projection import endpoint는 catalog entry/snapshot digest, `expectedRevision`, credential/policy generation을
 모두 확인하고 같은 transaction에서 mutation receipt와 audit를 봉인한다. 실행 metadata가 바뀌는데 generation이
@@ -717,10 +663,6 @@ GitHub App installation에 organization Projects `write` 이상이 없으면 Pro
 중앙 binding readback과 기존 ACTIVE PRODUCT_APP Issue source reconciliation을 먼저 수행하므로 앱별
 `projectV2Id` 입력은 필요하지 않다. `k8s/scheduler-cronjobs.yaml`의 CronJob은 배포 스크립트가 직접 apply한다.
 `Seorilabs Fleet` Project 생성과 GitHub App organization Projects 권한 승인은 사람 전용 gate다.
-
-Platform Fleet scheduler는 기존 plan의 drain/readback을 producer보다 먼저 별도 오류 경계에서 실행한다.
-새 Release 조회나 asset 검증이 실패해도 기존 mutation readback은 이미 독립적으로 소진되며, drain 실패 또한
-producer 실행 자체를 생략시키지 않는다.
 
 ## GitHub repository webhook
 

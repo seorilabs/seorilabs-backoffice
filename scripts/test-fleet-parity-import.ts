@@ -182,8 +182,16 @@ async function main() {
       },
       buildTargets: [],
     });
-    await prisma.platformFleetBinding.create({
-      data: { appId, state: "MANAGED", sourceSha: platformSha },
+    await prisma.repositoryRegistration.create({
+      data: {
+        repoId: platformRepoId,
+        repoFullName: "seorilabs/platform",
+        defaultBranch: "main",
+        status: "MANAGED",
+        managementKind: "PLATFORM_PRODUCER",
+        lastDefaultPushSha: platformSha,
+        lastReconciledSha: platformSha,
+      },
     });
     const firstConfig = await activateFixture(1);
     const first = await recordFleetParityImport(input("first"), dependencies);
@@ -560,6 +568,8 @@ async function main() {
       where: { repoId },
       data: { status: "ARCHIVED", archived: true },
     });
+    // repoFullName이 고정 "seorilabs/platform"이라 다음 fixture와 충돌하지 않게 지운다.
+    await prisma.repositoryRegistration.deleteMany({ where: { repoId: platformRepoId } });
     if (previousPlatformRepoId === undefined) delete process.env.PLATFORM_GITHUB_REPOSITORY_ID;
     else process.env.PLATFORM_GITHUB_REPOSITORY_ID = previousPlatformRepoId;
     await prisma.$disconnect();

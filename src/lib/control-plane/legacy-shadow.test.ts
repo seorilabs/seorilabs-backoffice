@@ -58,7 +58,7 @@ test("legacy source allowlist는 exact path와 platform registry 한 항목만 �
   assert.equal(matchesLegacySourcePath("SEORILABS_APP_YAML", "../.seorilabs/app.yaml"), false);
 });
 
-test("legacy platform source는 app binding을 우선하고 없을 때 current producer registration만 사용한다", () => {
+test("legacy platform source는 current producer registration만 사용한다", () => {
   const configured = { repoId: 123n, repoFullName: "seorilabs/platform" };
   const registration = {
     ...configured,
@@ -71,17 +71,10 @@ test("legacy platform source는 app binding을 우선하고 없을 때 current p
   };
   assert.deepEqual(resolveLegacyPlatformSourceVector({
     configured,
-    bindingSourceSha: "c".repeat(40),
-    registration,
-  }), { ...configured, sourceSha: "c".repeat(40) });
-  assert.deepEqual(resolveLegacyPlatformSourceVector({
-    configured,
-    bindingSourceSha: null,
     registration,
   }), { ...configured, sourceSha: PLATFORM_SHA });
   assert.deepEqual(resolveLegacyPlatformSourceVector({
     configured,
-    bindingSourceSha: null,
     registration: {
       ...registration,
       managementKind: "UNCLASSIFIED",
@@ -90,12 +83,10 @@ test("legacy platform source는 app binding을 우선하고 없을 때 current p
   }), { ...configured, sourceSha: PLATFORM_SHA });
   assert.equal(resolveLegacyPlatformSourceVector({
     configured,
-    bindingSourceSha: null,
     registration: { ...registration, lastDefaultPushSha: "d".repeat(40) },
   }), null);
   assert.equal(resolveLegacyPlatformSourceVector({
     configured,
-    bindingSourceSha: null,
     registration: { ...registration, managementKind: "APP" },
   }), null);
 });
