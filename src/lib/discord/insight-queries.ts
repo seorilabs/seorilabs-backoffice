@@ -53,7 +53,7 @@ export async function insightCommandQuery(
     };
   if (name === "keywords")
     return {
-      content: `**검색 노출 관측**\n${
+      content: `**App Store 검색 순위 관측**\n${
         data.market
           .filter((row) => row.kind === "keyword")
           .slice(0, 8)

@@ -11,6 +11,7 @@ import {
   createApplePublicClient,
   keywordRank,
   significantRankChange,
+  describeRankChange,
   OFFICIAL_FEEDS,
   parseOfficialFeed,
   boundedText,
@@ -218,23 +219,28 @@ export async function collectMarketFeedback(now = new Date()) {
                 sourceUrl,
               });
               const before = previous?.value as { rank?: number | null } | undefined;
-              if (before && significantRankChange(before.rank ?? null, rank))
+              if (before && significantRankChange(before.rank ?? null, rank)) {
+                const change = describeRankChange(before.rank ?? null, rank);
                 await publishSignal({
                   dedupeKey: `keyword:${app.id}:${metricDayOf(now)}:${digest(`${country}:${term}`).slice(0, 24)}`,
                   appId: app.id,
                   kind: "keyword-change",
-                  title: `${app.displayName} 검색 노출 변화`,
+                  title: `${app.displayName} App Store 검색 순위 ${change.direction}`,
                   observedAt: now,
                   facts: [
                     {
                       id: "rank",
-                      label: boundedEvidenceLabel(`${country.toUpperCase()} ${term}`),
-                      value: `${before.rank ?? "200위 밖"} → ${rank ?? "200위 밖"}`,
-                      source: "Apple Search API 관측 순서 - 기기 순위와 다를 수 있음",
+                      label: boundedEvidenceLabel(
+                        `${country.toUpperCase()} 스토어에서 "${term}" 검색 시 순위`,
+                      ),
+                      value: change.text,
+                      source:
+                        "Apple 검색 API 결과 200개 중 순서 · 실제 기기 화면 순위와 다를 수 있음",
                     },
                   ],
                   sourceRefs: [{ label: "검색 관측", url: sourceUrl }],
                 });
+              }
               return { value: null, count: results.length };
             },
           );

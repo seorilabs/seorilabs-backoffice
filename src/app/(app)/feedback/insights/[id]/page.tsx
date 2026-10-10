@@ -6,6 +6,7 @@ import {
   readInsight,
   renderInsight,
   PERSONAS,
+  fallbackReasonLabel,
   type Persona,
 } from "@/lib/insights/contract";
 import { createInsightDraft } from "@/lib/actions/insights";
@@ -94,7 +95,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <p className="text-xs text-neutral-500">
         분석 역할 {PERSONAS[item.persona as Persona] ?? "서비스 운영 담당"} · 작성 규칙{" "}
         {item.promptVersion} · {item.model ?? "사실 요약"}
-        {item.errorCode ? " · " + item.errorCode : ""}
+        {item.errorCode ? ` · ${fallbackReasonLabel(item.errorCode)} (${item.errorCode})` : ""}
       </p>
     </div>
   );
