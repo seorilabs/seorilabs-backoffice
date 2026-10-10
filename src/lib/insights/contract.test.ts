@@ -3,14 +3,16 @@ import test from "node:test";
 import {
   boundedEvidenceLabel,
   renderInsight,
+  renderInsightCard,
   readInsight,
   validatedEvidence,
   fallbackInsight,
   insightInputHash,
   validateInsight,
+  type Insight,
 } from "./contract";
 const facts = [{ id: "dau", label: "활성 합계", value: "42명", source: "GA4 2026-10-07" }];
-const valid = {
+const valid: Insight = {
   bullets: [
     { kind: "fact", text: "{dau} 관측됨", evidenceIds: ["dau"] },
     { kind: "hypothesis", text: "유입 변화 가능성 있음", evidenceIds: ["dau"] },
@@ -75,4 +77,17 @@ test("최대 검색어와 Unicode 라벨을 근거 제한 내에서 안전하게
     assert.equal(label.includes("\uFFFD"), false);
     assert.doesNotThrow(() => validatedEvidence([{ ...facts[0], label }]));
   }
+});
+
+test("카드는 사실을 라벨·값으로, 기준을 한 줄로 쓰고 실패 시 고정 가설을 싣지 않음", () => {
+  const ready = renderInsightCard(facts, { content: valid, fallback: false });
+  assert.match(ready, /^- 활성 합계: 42명\n기준: GA4 2026-10-07\n- 가설: 유입 변화 가능성 있음\n- 획득 경로 비교 필요$/);
+  const failed = renderInsightCard(facts, {
+    content: fallbackInsight(facts),
+    fallback: true,
+    errorCode: "MINIMAX_NOT_CONFIGURED",
+  });
+  assert.doesNotMatch(failed, /원인 확정할 수 없음|관측됨/);
+  assert.match(failed, /해설 없음 · 분석 모델 미설정/);
+  assert.match(renderInsightCard(facts), /해설 준비 중/);
 });

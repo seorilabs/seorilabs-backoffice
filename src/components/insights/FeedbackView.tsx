@@ -61,7 +61,7 @@ export async function FeedbackView({ appId }: { appId?: string }) {
         )}
       </section>
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="mb-3 font-semibold">검색 노출·평점·경쟁 앱</h2>
+        <h2 className="mb-3 font-semibold">검색 순위·평점·경쟁 앱</h2>
         <p className="mb-3 text-xs text-neutral-500">
           Apple 공개 검색 API의 상위 200개 관측 순서입니다. 기기·개인화·광고에 따라 실제 검색 순위와
           다를 수 있습니다.

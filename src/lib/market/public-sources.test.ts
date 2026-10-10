@@ -4,6 +4,7 @@ import {
   createApplePublicClient,
   keywordRank,
   significantRankChange,
+  describeRankChange,
   parseOfficialFeed,
 } from "./public-sources";
 test("검색 순서는 1부터 세고 권외·5위 변화·첫 관측을 구분함", () => {
@@ -12,6 +13,12 @@ test("검색 순서는 1부터 세고 권외·5위 변화·첫 관측을 구분�
   assert.equal(significantRankChange(10, 14), false);
   assert.equal(significantRankChange(10, 15), true);
   assert.equal(significantRankChange(null, 200), true);
+});
+test("순서 변화를 방향과 계단 수로 설명하고 작은 숫자를 상승으로 읽음", () => {
+  assert.deepEqual(describeRankChange(77, 70), { direction: "상승", text: "77위 → 70위 (7계단 상승)" });
+  assert.deepEqual(describeRankChange(23, 47), { direction: "하락", text: "23위 → 47위 (24계단 하락)" });
+  assert.equal(describeRankChange(null, 120).direction, "진입");
+  assert.equal(describeRankChange(120, null).text, "120위 → 200위 밖 (검색 결과에서 사라짐)");
 });
 test("Apple 제한 응답을 재시도하고 검색 결과 상한과 country를 고정함", async () => {
   let calls = 0;

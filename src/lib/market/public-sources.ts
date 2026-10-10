@@ -44,6 +44,20 @@ export function significantRankChange(previous: number | null, current: number |
     (previous === null || current === null || Math.abs(previous - current) >= 5)
   );
 }
+/** 검색 결과 순서 변화를 사람 말로. null 은 200개 결과 안에 없음(권외)이다. */
+export function describeRankChange(
+  previous: number | null,
+  current: number | null,
+): { direction: "상승" | "하락" | "진입" | "이탈" | "변동 없음"; text: string } {
+  const show = (rank: number | null) => (rank === null ? "200위 밖" : `${rank}위`);
+  const range = `${show(previous)} → ${show(current)}`;
+  if (previous === current) return { direction: "변동 없음", text: range };
+  if (previous === null) return { direction: "진입", text: `${range} (검색 결과에 새로 들어옴)` };
+  if (current === null) return { direction: "이탈", text: `${range} (검색 결과에서 사라짐)` };
+  const steps = Math.abs(previous - current);
+  const direction = current < previous ? "상승" : "하락";
+  return { direction, text: `${range} (${steps}계단 ${direction})` };
+}
 export async function boundedText(response: Response, maxBytes = 2 * 1024 * 1024): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return "";

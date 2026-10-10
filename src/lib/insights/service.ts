@@ -15,8 +15,9 @@ import {
   insightInputHash,
   INSIGHT_PROMPT_VERSION,
   personaForKind,
-  renderInsight,
+  renderInsightCard,
   type Evidence,
+  type Insight,
 } from "./contract";
 import { generateInsight } from "./generate";
 
@@ -54,17 +55,17 @@ function safeText(value: string) {
 function notificationPayload(
   signal: { title: string; kind: string; severity: string; facts: unknown; observedAt: Date },
   insightId: string,
-  content?: string,
+  analysis?: { content: Insight; fallback: boolean; errorCode: string | null },
 ) {
-  const facts = evidenceListSchema.parse(signal.facts);
+  const facts = evidenceListSchema.parse(signal.facts).map((fact) => ({
+    ...fact,
+    label: safeText(fact.label),
+    value: safeText(fact.value),
+    source: safeText(fact.source),
+  }));
+  const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
   return {
-    text: `**${safeText(signal.title)}**\n${
-      content ??
-      facts
-        .slice(0, 5)
-        .map((fact) => `- ${safeText(fact.label)} ${safeText(fact.value)} 관측됨`)
-        .join("\n")
-    }\n[근거·다음 행동](${env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz"}/feedback/insights/${insightId})`,
+    text: `**${safeText(signal.title)}**\n${renderInsightCard(facts, analysis)}\n[상세·다음 행동](${base}/feedback/insights/${insightId})`,
     editable: true,
     sender: "seori",
     insightId,
@@ -402,11 +403,7 @@ export async function processNextInsight(
       {
         dedupeKey: document.notificationKey,
         kind: "OPS_ALERT",
-        payload: notificationPayload(
-          document.signal,
-          document.id,
-          renderInsight(made.content, facts),
-        ),
+        payload: notificationPayload(document.signal, document.id, made),
         destinations: [],
       },
       tx,

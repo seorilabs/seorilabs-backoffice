@@ -122,6 +122,41 @@ export function renderInsight(doc: Insight, facts: Evidence[]): string {
     )
     .join("\n");
 }
+/** 해설이 비어 있는 이유를 카드에 쓰는 짧은 한국어. 코드는 상세 화면에서만 보인다. */
+export const FALLBACK_REASONS: Record<string, string> = {
+  MINIMAX_NOT_CONFIGURED: "분석 모델 미설정",
+  DAILY_ANALYSIS_LIMIT: "오늘 분석 한도 소진",
+  ANALYSIS_LIMIT_OR_BUSY: "분석 동시 실행 한도",
+  ANALYSIS_ADMISSION_FAILED: "분석 예산 확인 실패",
+  ANALYSIS_PROVIDER_FAILED: "분석 서비스 오류",
+  ANALYSIS_FORMAT_INVALID: "분석 결과 형식 불량",
+  ANALYSIS_LEASE_EXPIRED: "분석 시간 초과",
+};
+export function fallbackReasonLabel(code: string | null | undefined) {
+  return (code && FALLBACK_REASONS[code]) || "분석 미실행";
+}
+/**
+ * 알림 카드 본문. 사실은 "라벨: 값"으로, 기준은 한 줄로, 해설은 가설·행동만 싣는다.
+ * 분석이 실패했을 때 고정 가설·행동 문장은 정보가 없으므로 이유 한 줄로 대신한다.
+ */
+export function renderInsightCard(
+  facts: Evidence[],
+  analysis?: { content: Insight; fallback: boolean; errorCode?: string | null } | null,
+): string {
+  const shown = facts.slice(0, 5);
+  const lines = shown.map((fact) => `- ${fact.label}: ${fact.value}`);
+  for (const source of new Set(shown.map((fact) => fact.source))) lines.push(`기준: ${source}`);
+  if (!analysis) lines.push("해설 준비 중");
+  else if (analysis.fallback) lines.push(`해설 없음 · ${fallbackReasonLabel(analysis.errorCode)}`);
+  else
+    lines.push(
+      ...renderInsight(
+        { bullets: analysis.content.bullets.filter((bullet) => bullet.kind !== "fact") },
+        facts,
+      ).split("\n"),
+    );
+  return lines.join("\n");
+}
 export function fallbackInsight(facts: Evidence[]): Insight {
   const id = evidenceListSchema.parse(facts)[0].id;
   return {

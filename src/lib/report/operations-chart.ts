@@ -103,7 +103,7 @@ export async function operationsChart(end: string, weekly = false): Promise<Disc
     ].slice(0, 4);
     if (targets.length)
       charts.push({
-        title: "검색 노출 관측 · 최대 네 검색어",
+        title: "검색 순위 관측 · 최대 네 검색어",
         days,
         unit: "관측 순서",
         reverse: true,
