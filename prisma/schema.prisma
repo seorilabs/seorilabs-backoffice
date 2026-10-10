@@ -106,8 +106,6 @@ model App {
   storeAssets              StoreAsset[]
   fleetLifecycleState      FleetLifecycleState?
   fleetLifecycleEvents     FleetLifecycleEvent[]
-  platformFleetBinding     PlatformFleetBinding?
-  platformFleetPlans       PlatformFleetPlan[]
   credentialBindings       CredentialBinding[]
   reauthRequests           ReauthRequest[]
   automationDefinitions    AutomationDefinition[]
@@ -1121,7 +1119,6 @@ model DiscoveryObservation {
   createdAt                DateTime                 @default(now()) @db.DateTime(3)
   repositoryDiscoveryRuns  RepositoryDiscoveryRun[]
   configRevisions          ConfigRevision[]
-  platformFleetPlans       PlatformFleetPlan[]
 
   @@index([appId, sourceSha, payloadHash])
   @@index([appId, observedAt])
@@ -1561,7 +1558,6 @@ model ProviderObservation {
   observedBy         String
   observedAt         DateTime            @db.DateTime(3)
   createdAt          DateTime            @default(now()) @db.DateTime(3)
-  platformFleetPlans PlatformFleetPlan[]
 
   @@index([appId, provider, observedAt])
   @@map("control_plane_provider_observation")
@@ -1789,143 +1785,6 @@ enum ReleaseGateStatus {
   PASSED
   FAILED
   HUMAN_REQUIRED
-}
-
-// 폐기(2026-10-10): Platform SDK 승인 체계의 표 4개(PlatformFleetBinding, PlatformRelease,
-// PlatformFleetReconcileRun, PlatformFleetPlan)와 enum 4개. 읽고 쓰는 코드는 없으며 배포 뒤
-// 별도 contract migration에서 지운다. 새 코드에서 참조하지 않는다.
-model PlatformFleetBinding {
-  id                 String           @id @default(cuid())
-  appId              String           @unique
-  app                App              @relation(fields: [appId], references: [id], onDelete: Cascade)
-  platformReleaseId  String?
-  platformRelease    PlatformRelease? @relation(fields: [platformReleaseId], references: [id], onDelete: SetNull)
-  observedVersion    String?
-  observedDigest     String?          @db.Char(64)
-  approvedVersion    String?
-  approvedDigest     String?          @db.Char(64)
-  manifestDigest     String?          @db.Char(64)
-  contractRevision   String?
-  state              String
-  sourceSha          String?          @db.Char(40)
-  latestPlanKind     String?          @db.VarChar(32)
-  pullRequestNumber  Int?
-  pullRequestUrl     String?          @db.VarChar(512)
-  issueNumber        Int?
-  issueUrl           String?          @db.VarChar(512)
-  exceptionExpiresAt DateTime?        @db.DateTime(3)
-  updatedAt          DateTime         @updatedAt
-  createdAt          DateTime         @default(now()) @db.DateTime(3)
-
-  @@index([state, exceptionExpiresAt])
-  @@index([platformReleaseId, state])
-  @@map("platform_fleet_binding")
-}
-
-model PlatformRelease {
-  id               String                        @id @default(cuid())
-  version          String                        @unique @db.VarChar(64)
-  sourceSha        String                        @db.Char(40)
-  classification   PlatformReleaseClassification
-  approval         PlatformReleaseApproval
-  contractRevision String                        @db.Char(64)
-  manifest         Json
-  manifestDigest   String                        @unique @db.Char(64)
-  signature        String                        @db.Char(64)
-  publishedAt      DateTime                      @db.DateTime(3)
-  observedBy       String
-  requestHash      String                        @db.Char(64)
-  idempotencyKey   String                        @unique @db.VarChar(191)
-  createdAt        DateTime                      @default(now()) @db.DateTime(3)
-  plans            PlatformFleetPlan[]
-  bindings         PlatformFleetBinding[]
-  reconcileRuns    PlatformFleetReconcileRun[]
-
-  @@index([approval, publishedAt])
-  @@map("platform_release")
-}
-
-enum PlatformReleaseClassification {
-  IMPLEMENTATION_ONLY
-  CONTRACT_CHANGE
-  CONTRACT_ADDITION
-}
-
-enum PlatformReleaseApproval {
-  FLEET_APPROVED
-}
-
-model PlatformFleetReconcileRun {
-  id                String          @id @default(cuid())
-  platformReleaseId String
-  platformRelease   PlatformRelease @relation(fields: [platformReleaseId], references: [id], onDelete: Restrict)
-  requestHash       String          @db.Char(64)
-  idempotencyKey    String          @unique @db.VarChar(191)
-  status            String          @default("RUNNING") @db.VarChar(32)
-  result            Json?
-  actor             String
-  completedAt       DateTime?       @db.DateTime(3)
-  createdAt         DateTime        @default(now()) @db.DateTime(3)
-
-  @@index([platformReleaseId, createdAt])
-  @@map("platform_fleet_reconcile_run")
-}
-
-model PlatformFleetPlan {
-  id                     String                  @id @default(cuid())
-  platformReleaseId      String
-  platformRelease        PlatformRelease         @relation(fields: [platformReleaseId], references: [id], onDelete: Restrict)
-  appId                  String
-  app                    App                     @relation(fields: [appId], references: [id], onDelete: Cascade)
-  discoveryObservationId String
-  discoveryObservation   DiscoveryObservation    @relation(fields: [discoveryObservationId], references: [id], onDelete: Restrict)
-  providerObservationId  String
-  providerObservation    ProviderObservation     @relation(fields: [providerObservationId], references: [id], onDelete: Restrict)
-  agentRunId             String?                 @unique
-  agentRun               AgentRun?               @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
-  sourceSha              String                  @db.Char(40)
-  kind                   PlatformFleetPlanKind
-  status                 PlatformFleetPlanStatus @default(PENDING)
-  desired                Json
-  desiredHash            String                  @db.Char(64)
-  workKey                String                  @unique @db.VarChar(191)
-  mutationMarker         String                  @unique @db.VarChar(191)
-  githubNumber           Int?
-  githubUrl              String?                 @db.VarChar(512)
-  attempts               Int                     @default(0)
-  lastError              String?                 @db.Text
-  readbackRequestedAt    DateTime?               @db.DateTime(3)
-  appliedAt              DateTime?               @db.DateTime(3)
-  createdAt              DateTime                @default(now()) @db.DateTime(3)
-  updatedAt              DateTime                @updatedAt
-
-  @@unique([platformReleaseId, appId])
-  @@index([status, updatedAt])
-  @@index([appId, createdAt])
-  @@map("platform_fleet_plan")
-}
-
-enum PlatformFleetPlanKind {
-  SDK_UPDATE_PR
-  CONTRACT_ISSUE
-  CUSTOM_UNMANAGED
-  MISSING_UNMANAGED
-  AHEAD_UNMANAGED
-  COMPLIANT
-}
-
-enum PlatformFleetPlanStatus {
-  PENDING
-  QUEUED
-  PROCESSING
-  PR_OPEN
-  PR_MERGED
-  ISSUE_OPEN
-  COMPLIANT
-  UNMANAGED
-  READBACK_REQUIRED
-  BLOCKED
-  SUPERSEDED
 }
 
 // secret 값이 아닌 logical credential과 공개 identity만 저장한다.
@@ -2252,7 +2111,6 @@ model AgentRun {
   events              AgentRunEvent[]
   reauthRequests      ReauthRequest[]
   repoGuard           AgentRepoGuard?
-  platformFleetPlan   PlatformFleetPlan?
 
   @@index([status, eligibleAt, priority])
   @@index([repoFullName, status])

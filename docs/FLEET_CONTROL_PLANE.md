@@ -558,8 +558,9 @@ lockfile만 1MiB bounded read를 허용하고 다른 discovery 설정 파일은 
 앱 통합 관리 화면은 현재 기본 브랜치 관측의 버전과 확인값만 보여 주며 버전의 적절성은 판단하지 않는다.
 
 ReleaseCandidate는 ACTIVE config의 `build.platformVersion`과 요청한 Platform version이 같은지만 확인한다
-(`PLATFORM_VERSION_MISMATCH`). 폐기한 표(`platform_release`, `platform_fleet_binding`, `platform_fleet_plan`,
-`platform_fleet_reconcile_run`)는 읽고 쓰는 코드를 걷어낸 배포 뒤 별도 contract migration에서 지운다.
+(`PLATFORM_VERSION_MISMATCH`). SDK 승인 체계의 표(`platform_release`, `platform_fleet_binding`,
+`platform_fleet_plan`, `platform_fleet_reconcile_run`)는 코드를 걷어낸 배포(#450) 뒤 contract migration
+`20261010120000_drop_platform_sdk_approval`로 지웠다.
 
 ## 운영 UI와 재인증 경계
 

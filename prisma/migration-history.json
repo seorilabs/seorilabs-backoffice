@@ -86,6 +86,10 @@
     "20260925010000_store_submission_webhook_inbox": {
       "sha256": "d60e88a93517a051d66c4d62034e1bf928d5861effa937eb984e457c3a1c0f14",
       "reason": "Apple 웹훅 서명 검증 뒤 응답 전에 durable inbox에 저장하고 notification worker가 재시도한다. 신규 빈 표만 추가한다."
+    },
+    "20261010120000_drop_platform_sdk_approval": {
+      "sha256": "e2c155d21e3d0aefb7f6ad98523dc93b1c05017df274b8530326411a8daf0682",
+      "reason": "Platform SDK 승인 체계 폐기(2026-10-10) 뒤의 contract 단계. platform_release, platform_fleet_binding, platform_fleet_plan, platform_fleet_reconcile_run을 DROP TABLE로 지운다. 읽고 쓰는 코드는 PR #450에서 먼저 배포로 걷어냈고, 다른 표에서 이 표들을 가리키는 외래키와 trigger가 없다."
     }
   },
   "legacy": {
