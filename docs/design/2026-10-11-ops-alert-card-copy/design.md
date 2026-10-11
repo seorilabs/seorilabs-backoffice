@@ -2,7 +2,7 @@
 
 - 설계 ID: BO-ALERT-COPY-20261011-v1
 - 기준 소스: `9dbb159bbcbd31cb612309bfd4e3f2d45df7d1b6` — 최신 `origin/main` 조회 후 격리 worktree에서 작성.
-- 상태: **사람 검토 대기**. 이번 커밋은 설계와 시안만 포함하며 제품 코드는 변경하지 않는다.
+- 상태: 카드 시안 방향은 사용자의 “시안은 좋다” 답변으로 확인. 추가 범위·알림 정책은 [v2 보완 설계](scope-and-notifications.md)에서 검토 대기. 제품 코드는 아직 변경하지 않았다.
 - 요청: `#ops-alerts`의 수집 실패·회복, `#metrics-daily`의 검색 순위 변화 카드를 직관적으로 설명하고 개선한다.
 - 승인 범위: 아래 문구·표시 변경의 구현·검증·Ready PR·CI 통과 후 병합. 운영 적용은 별도 선택 사항이다.
 - 원본 시안: [cards.html](cards.html), [기본 크기](cards.png), [작은 화면·큰 글자](cards-mobile.png). 시안은 실제 Discord 전송 화면이 아니다.
