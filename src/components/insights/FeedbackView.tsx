@@ -3,12 +3,54 @@ import Link from "next/link";
 import { feedbackOverview } from "@/lib/insights/queries";
 import { dbDay } from "@/lib/analytics/metric-day";
 import { kstDateTimeShort } from "@/lib/format/kst";
-export async function FeedbackView({ appId }: { appId?: string }) {
-  const data = await feedbackOverview(appId);
+import { keywordMonitoring } from "@/lib/market/keyword-monitoring";
+export async function FeedbackView({ appId, date }: { appId?: string; date?: string }) {
+  const [data, monitoring] = await Promise.all([feedbackOverview(appId), keywordMonitoring(appId, new Date(), date)]);
   const names = new Map(data.apps.map((app) => [app.id, app.displayName]));
   const vitals = data.market.filter((row) => row.kind === "android-vitals");
   return (
     <div className="space-y-6">
+      <section className="rounded-lg border border-neutral-200 bg-white p-4">
+        <h2 className="mb-2 font-semibold">검색 순위 모니터링</h2>
+        <p className="mb-2 text-sm">
+          추적 {new Set(monitoring.rows.map((row) => row.appId)).size}개 앱 · {monitoring.rows.length}조합
+          {" / "}{monitoring.day} 수집 {monitoring.collected} · 미수집·실패 {monitoring.rows.length - monitoring.collected}
+        </p>
+        <p className="mb-3 text-xs text-neutral-500">App Store · 한국 KR / 미국 US · 매일 12:20 KST 수집 · Apple 검색 API 최대 200개 결과 순서이며 기기 화면과 다를 수 있습니다.</p>
+        <ul className="divide-y divide-neutral-100">
+          {monitoring.apps.filter((app) => app.keywords.length).map((app) => {
+            const rows = monitoring.rows.filter((row) => row.appId === app.id);
+            const collected = rows.filter((row) => row.state === "수집됨").length;
+            const latest = rows.map((row) => row.observedAt).filter((at): at is Date => Boolean(at)).sort((a, b) => b.getTime() - a.getTime())[0];
+            return <li key={app.id} className="py-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="min-w-0 break-words">{app.displayName}</strong>
+                <Link className="text-blue-700" href={`/apps/${app.id}/fleet`}>설정 보기</Link>
+              </div>
+              <p className="mt-1 break-words">{app.countries.map((country) => country.toUpperCase()).join(" · ")} · {app.keywords.join(", ")}</p>
+              <p className="mt-1 text-xs text-neutral-500">{app.status !== "ACTIVE" ? "일시중지" : !app.iosBundle ? "iOS 앱 식별자 미설정" : `기준일 수집 ${collected}/${rows.length}조합`} · 최근 시도 {kstDateTimeShort(latest)} KST · 현재 설정 버전 {app.revision}</p>
+              {rows.some((row) => row.state !== "수집됨") && <p className="mt-1 text-xs text-amber-700">{[...new Set(rows.filter((row) => row.state !== "수집됨").map((row) => row.state))].join(" · ")}</p>}
+            </li>;
+          })}
+        </ul>
+        {!monitoring.rows.length && <p className="text-sm text-neutral-500">추적 중인 검색어 없음 · 앱 통합 관리에서 국가와 검색어를 설정하세요.</p>}
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer text-neutral-600">검색어 미설정 앱 {monitoring.apps.filter((app) => !app.keywords.length).length}개</summary>
+          <ul className="mt-2 space-y-1">{monitoring.apps.filter((app) => !app.keywords.length).map((app) => <li key={app.id}><Link className="text-blue-700" href={`/apps/${app.id}/fleet`}>{app.displayName}</Link> · {app.status !== "ACTIVE" ? "일시중지" : "검색어 미설정"}</li>)}</ul>
+        </details>
+      </section>
+      <section id="daily-search-ranks" className="scroll-mt-32 rounded-lg border border-neutral-200 bg-white p-4 md:scroll-mt-4">
+        <h2 className="mb-2 font-semibold">{monitoring.day} 전체 검색 순위표</h2>
+        <p className="mb-3 text-xs text-neutral-500">현재 추적 설정의 기준일 관측과 이전의 마지막 성공 수집을 비교합니다. 결과 목록 없음·수집 실패·미수집·국가별 공개 리스팅 미확인을 구분합니다. 일일 알림의 CSV는 발행 시점 기록입니다.</p>
+        {monitoring.rows.length ? <div className="overflow-x-auto" role="region" aria-label="전체 검색 순위표" tabIndex={0}>
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead><tr className="border-b"><th className="p-2">앱</th><th className="p-2">국가</th><th className="p-2">검색어</th><th className="p-2">기준일 순위</th><th className="p-2">이전 수집</th><th className="p-2">변화</th><th className="p-2">수집 시각 KST</th></tr></thead>
+            <tbody>{monitoring.rows.map((row) => <tr className="border-b border-neutral-100" key={`${row.appId}:${row.country}:${row.term}`}>
+              <td className="p-2">{row.appName}</td><td className="p-2">{row.country.toUpperCase()}</td><td className="p-2">{row.term}</td><td className="p-2">{row.rankLabel}</td><td className="p-2">{row.previousDay ? `${row.previousRank === null ? "결과 목록에 없음" : `${row.previousRank}위`} · ${row.previousDay}` : "비교 자료 없음"}</td><td className="p-2">{row.change}</td><td className="p-2">{kstDateTimeShort(row.observedAt)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div> : <p className="text-sm text-neutral-500">순위 추적 설정 없음</p>}
+      </section>
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
         <h2 className="mb-3 font-semibold">인사이트와 다음 행동</h2>
         {data.insights.length ? (
@@ -91,7 +133,7 @@ export async function FeedbackView({ appId }: { appId?: string }) {
                       <td>
                         {row.kind === "keyword"
                           ? value.rank == null
-                            ? "200위 밖"
+                            ? "결과 목록에 없음"
                             : `${value.rank}위`
                           : row.kind === "support-link"
                             ? "HTTP " + value.status

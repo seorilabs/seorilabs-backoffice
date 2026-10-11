@@ -185,3 +185,115 @@ spec:
   startingDeadlineSeconds: 900
   successfulJobsHistoryLimit: 2
   suspend: true
+
+---
+# 일일 App Store 전체 검색 순위표 · 12:40 KST · 승인된 배포 후 활성화
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app.kubernetes.io/component: operations-insights-collector
+    app.kubernetes.io/name: backoffice
+  name: backoffice-keyword-daily
+  namespace: platform
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: operations-insights-collector
+            app.kubernetes.io/name: backoffice
+        spec:
+          automountServiceAccountToken: false
+          containers:
+            - command:
+                - node
+                - /app/scripts-dist/operations-insights-worker.cjs
+                - keyword-daily
+              env:
+                - name: NODE_ENV
+                  value: production
+                - name: HOME
+                  value: /tmp
+                - name: CHECKPOINT_DISABLE
+                  value: "1"
+                - name: NODE_OPTIONS
+                  value: --dns-result-order=ipv4first --no-network-family-autoselection
+                - name: DISCORD_CHANNEL_APP_OPS_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_APP_OPS_ID
+                      optional: true
+                - name: DISCORD_CHANNEL_METRICS_DAILY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_METRICS_DAILY_ID
+                - name: DISCORD_CHANNEL_RELEASE_OPS_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_RELEASE_OPS_ID
+                - name: DISCORD_CHANNEL_OPS_ALERTS_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_OPS_ALERTS_ID
+                - name: DISCORD_CHANNEL_USER_REVIEWS_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_USER_REVIEWS_ID
+                      optional: true
+                - name: DISCORD_CHANNEL_BACKOFFICE_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: DISCORD_CHANNEL_BACKOFFICE_ID
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      key: DATABASE_URL
+                      name: backoffice-secrets
+              image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
+              imagePullPolicy: Always
+              name: keyword-daily
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 384Mi
+                requests:
+                  cpu: 25m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+              volumeMounts:
+                - mountPath: /tmp
+                  name: tmp
+              workingDir: /app
+          imagePullSecrets:
+            - name: registry-pull-cred
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsUser: 10001
+          volumes:
+            - emptyDir: {}
+              name: tmp
+  schedule: 40 3 * * *
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 2
+  suspend: true

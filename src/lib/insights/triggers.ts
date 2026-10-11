@@ -15,6 +15,7 @@ import {
 } from "@/lib/analytics/metric-day";
 import { env } from "@/lib/env";
 import type { Evidence } from "./contract";
+import { collectionEpisodes, collectionSourceName, shouldWarnCollection } from "./collection-alerts";
 const base = () => env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
 export function submissionSignal(state: string, track: string | null) {
   const play = decodePlayState(state);
@@ -80,7 +81,7 @@ export async function discoverOperationalSignals(now = new Date()) {
     });
   }
   const collected = await prisma.sourceCollectionRun.findMany({
-    where: { completedAt: { gte: since }, status: { in: ["observed", "empty"] } },
+    where: { source: { not: "play-submissions" }, completedAt: { gte: since }, status: { in: ["observed", "empty"] } },
     orderBy: { startedAt: "desc" },
     take: 500,
   });
@@ -99,18 +100,57 @@ export async function discoverOperationalSignals(now = new Date()) {
       dedupeKey: "source-recovery:" + row.id,
       appId: row.appId,
       kind: "source-recovery",
-      title: "외부 자료 수집 회복",
+      title: `${apps.find((app) => app.id === row.appId)?.displayName ?? "조직"} · ${collectionSourceName(row.source)} 회복`,
       observedAt: row.completedAt!,
       facts: [
         {
           id: "source",
-          label: row.source,
+          label: collectionSourceName(row.source),
           value: "정상 응답 회복",
           source: row.target.slice(0, 200),
         },
       ],
       sourceRefs: [{ label: "수집 이력", url: base() + "/settings/health" }],
     });
+  }
+  // Play 상태 수집은 실제 실패 구간을 사용한다. 날짜·partial 전환으로 재경고하지 않는다.
+  for (const target of health.rows.filter((row) => row.source === "play-submissions" && row.attemptedAt)) {
+    const key = { source: target.source, target: target.target, appId: target.appId };
+    const boundary = await prisma.sourceCollectionRun.findFirst({
+      where: { ...key, status: { in: ["observed", "empty"] }, completedAt: { not: null }, startedAt: { lt: since } },
+      orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+    });
+    const attempts = await prisma.sourceCollectionRun.findMany({
+      where: { ...key, startedAt: { ...(boundary ? { gte: boundary.startedAt } : {}), lte: now } },
+      orderBy: [{ startedAt: "asc" }, { id: "asc" }],
+    });
+    const name = apps.find((app) => app.id === target.appId)?.displayName ?? "조직";
+    for (const episode of collectionEpisodes(attempts)) {
+      const warningKey = `play-collection:${target.appId ?? "global"}:${episode.id}`;
+      if (shouldWarnCollection(episode, now)) {
+        await emit({
+          dedupeKey: warningKey, appId: target.appId, kind: "source-stale", severity: "warning",
+          title: `${name} · Google Play 출시 현황 수집 지연`, observedAt: now,
+          facts: [
+            { id: "source", label: "Google Play 출시 현황 가져오기", value: "60분 이상 정상 수집되지 않음", source: target.target.slice(0, 200) },
+            { id: "impact", label: "영향", value: "Backoffice 출시 현황이 최신이 아닐 수 있음 · 앱 장애나 심사 거절을 뜻하지 않음", source: "수집 원장" },
+            { id: "action", label: "다음 행동", value: "수집 상태에서 마지막 성공 시각·오류와 실행기를 확인", source: "수집 이력" },
+          ],
+          sourceRefs: [{ label: "수집 상태", url: base() + "/settings/health" }],
+        });
+      } else if (episode.recovery?.completedAt && episode.recovery.completedAt >= since) {
+        const warning = await prisma.operationalSignal.findUnique({ where: { dedupeKey: warningKey }, select: { id: true } });
+        if (!warning) continue;
+        await emit({
+          dedupeKey: warningKey + ":recovery", appId: target.appId, kind: "source-recovery",
+          title: `${name} · Google Play 출시 현황 수집 회복`, observedAt: episode.recovery.completedAt,
+          facts: [
+            { id: "source", label: "Google Play 출시 현황 가져오기", value: "정상 응답 회복 · 최신 관측을 다시 가져옴", source: target.target.slice(0, 200) },
+            { id: "impact", label: "의미", value: "수집 작업 회복이며 앱 심사 승인·공개 출시와는 별도", source: "수집 원장" },
+          ], sourceRefs: [{ label: "출시 현황", url: base() + "/apps/" + target.appId + "/releases" }],
+        });
+      }
+    }
   }
   for (const row of submissions) {
     const kind = submissionSignal(row.state, row.trackName);
@@ -138,8 +178,8 @@ export async function discoverOperationalSignals(now = new Date()) {
       dedupeKey: "incident:" + row.id + ":" + row.status,
       appId: row.appId,
       kind: row.status === "RECOVERED" ? "service-recovery" : "service-failure",
-      severity: row.status === "RECOVERED" ? "info" : "critical",
-      title: "서비스 운영 상태 변경",
+      severity: row.status === "RECOVERED" ? "info" : row.severity,
+      title: `${apps.find((app) => app.id === row.appId)?.displayName ?? "조직"} · ${row.summary}`.slice(0, 180),
       observedAt: row.lastDetectedAt,
       facts: [
         { id: "state", label: row.source + " 상태", value: row.status, source: "운영 장애 원장" },
@@ -147,16 +187,17 @@ export async function discoverOperationalSignals(now = new Date()) {
       sourceRefs: [{ label: "운영 기록", url: base() + "/work" }],
     });
   for (const row of health.rows.filter((row) =>
-    ["failed", "stale", "needs_input"].includes(row.state),
+    row.source !== "play-submissions" && row.attemptedAt && ["failed", "stale", "needs_input"].includes(row.state),
   ))
     await emit({
       dedupeKey: "source:" + row.key + ":" + row.state + ":" + metricDayOf(now),
       appId: row.appId,
       kind: "source-stale",
-      title: "수집 상태 확인 필요",
+      title: `${apps.find((app) => app.id === row.appId)?.displayName ?? "조직"} · ${collectionSourceName(row.source)} ${row.state === "stale" ? "지연" : row.state === "needs_input" ? "접근 확인 필요" : "실패"}`,
       observedAt: now,
       facts: [
-        { id: "source", label: row.source, value: row.label, source: row.target.slice(0, 200) },
+        { id: "source", label: collectionSourceName(row.source), value: row.state === "needs_input" ? "설정·접근 오류로 분류됨 · 실제 원인은 수집 이력에서 확인" : row.label, source: row.target.slice(0, 200) },
+        { id: "action", label: "다음 행동", value: "수집 상태에서 마지막 성공 시각과 오류를 확인", source: "수집 이력" },
       ],
       sourceRefs: [{ label: "수집 상태", url: base() + "/settings/health" }],
     });

@@ -1,7 +1,8 @@
 import { FeedbackView } from "@/components/insights/FeedbackView";
 import Link from "next/link";
 export const dynamic = "force-dynamic";
-export default function FeedbackPage() {
+export default async function FeedbackPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
+  const date = (await searchParams).date;
   return (
     <div className="px-4 py-6 sm:p-8">
       <div className="mb-5 flex items-center justify-between">
@@ -10,7 +11,7 @@ export default function FeedbackPage() {
           수집 상태 →
         </Link>
       </div>
-      <FeedbackView />
+      <FeedbackView date={date} />
     </div>
   );
 }

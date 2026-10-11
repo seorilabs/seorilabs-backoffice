@@ -1,7 +1,8 @@
 import { deliverApproval } from "@/lib/deployment-approvals/delivery";
 import type { Prisma, ReleaseMarket } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { DISCORD_OPS_ALERTS, discordChannelId } from "@/lib/notifications/destinations";
+import { discordChannelId } from "@/lib/notifications/destinations";
+import { incidentShouldMention } from "@/lib/notifications/mention-policy";
 import {
   createDiscordChannelMessage,
   editDiscord,
@@ -316,7 +317,7 @@ export async function drainAllNotifications(limit = 30) {
       if (!incident) return { ok: false, error: "incident not found" };
       const card = incidentRender(incident);
       const options = {
-        alertRoleId: incident.status === "OPEN" ? env.discordRoleId("release_ops") : undefined,
+        alertRoleId: incidentShouldMention(incident) ? env.discordRoleId("release_ops") : undefined,
         components: incidentComponents(incident),
         embed: card.embed,
       };
@@ -346,8 +347,6 @@ export async function drainAllNotifications(limit = 30) {
       } catch { console.error("[notification] PNG 생성 실패 - 본문 발송 유지"); }
     }
     const options = {
-      alertRoleId:
-        destinationKey === DISCORD_OPS_ALERTS ? env.discordRoleId("release_ops") : undefined,
       attachment: generatedAttachment ?? attachmentFromPayload(payload),
       components: componentsFromPayload(payload),
       // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
