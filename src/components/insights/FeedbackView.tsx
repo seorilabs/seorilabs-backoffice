@@ -39,7 +39,7 @@ export async function FeedbackView({ appId, date }: { appId?: string; date?: str
           <ul className="mt-2 space-y-1">{monitoring.apps.filter((app) => !app.keywords.length).map((app) => <li key={app.id}><Link className="text-blue-700" href={`/apps/${app.id}/fleet`}>{app.displayName}</Link> · {app.status !== "ACTIVE" ? "일시중지" : "검색어 미설정"}</li>)}</ul>
         </details>
       </section>
-      <section id="daily-search-ranks" className="rounded-lg border border-neutral-200 bg-white p-4">
+      <section id="daily-search-ranks" className="scroll-mt-32 rounded-lg border border-neutral-200 bg-white p-4 md:scroll-mt-4">
         <h2 className="mb-2 font-semibold">{monitoring.day} 전체 검색 순위표</h2>
         <p className="mb-3 text-xs text-neutral-500">현재 추적 설정의 기준일 관측과 이전의 마지막 성공 수집을 비교합니다. 결과 목록 없음·수집 실패·미수집·국가별 공개 리스팅 미확인을 구분합니다. 일일 알림의 CSV는 발행 시점 기록입니다.</p>
         {monitoring.rows.length ? <div className="overflow-x-auto" role="region" aria-label="전체 검색 순위표" tabIndex={0}>
