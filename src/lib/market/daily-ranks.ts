@@ -31,7 +31,7 @@ export function dailyRankPayload(rows: KeywordRow[], day: string, now: Date, bas
   text.push("", `[전체 앱·검색어 순위표](${base}/feedback?date=${day}#daily-search-ranks) · 발행 시점 전체 ${rows.length}조합 CSV 첨부`, "Apple 검색 API 최대 200개 결과 순서 · 실제 기기 화면과 다를 수 있음");
   return {
     text: text.join("\n"), editable: true, sender: "seori", refDate: day,
-    embed: { title: "App Store 일일 검색 순위표", color: 0x2563eb, footer: `발행 ${kstDateTimeShort(now)} KST · 매일 12:40 KST` },
+    embed: { title: "App Store 일일 검색 순위표", color: 0x2563eb, footer: `발행 ${kstDateTimeShort(now)} KST · 매일 21:40 KST` },
     attachment: { filename: `app-store-ranks-${day}.csv`, contentType: "text/csv; charset=utf-8", base64: Buffer.from(rankCsv(rows, day)).toString("base64") },
   };
 }

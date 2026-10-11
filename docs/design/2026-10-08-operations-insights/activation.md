@@ -20,7 +20,7 @@ scripts/render-manifest.sh k8s/market-feedback-cronjobs.yaml "$approved_image" "
 운영 적용 승인 후 trusted operator가 두 파일을 적용한다. 신규 실행기에는 GitHub mutation credential을 주입하지 않는다. 별도 Secret/서비스 계정/유료 공급자를 만들지 않고 등록된 공용 identity를 재사용한다.
 
 - 분석 worker: 기존 DB와 MiniMax credential만 사용한다. `INSIGHTS_WORKER_ID`는 pod 이름으로 구분한다. 동시 분석 2개·기본 KST 하루 200건 입장 제한, 8분 작업 lease, 4분 API permit이다. `INSIGHTS_DAILY_LIMIT=0`은 새 공급자 호출을 막는다. MiniMax 비활성/형식 실패 시 근거 기반 음슴체 요약을 남긴다.
-- 시장 수집: 매일 KST 12:20. 앱별 활성 중앙 설정의 키워드·국가·경쟁 앱·공식 피드·지원/개인정보 링크만 조회한다. Apple 공개 검색은 API 관측 순서이며 실제 기기 검색 순위를 보장하지 않는다. 키워드 최대 30개×국가 5개는 API 간격·재시도에 따라 실행 시간이 늘므로 활성 앱 수와 1시간 Job 제한을 함께 검토한다. incomplete/failed/needs_input은 기존 좋은 관측을 지우지 않는다.
+- 시장 수집: 매일 KST 21:20. 사용자 확인 시간대에 맞춘 [v4 시간 변경](../2026-10-11-ops-alert-card-copy/nightly-schedule.md)을 적용한다. 앱별 활성 중앙 설정의 키워드·국가·경쟁 앱·공식 피드·지원/개인정보 링크만 조회한다. Apple 공개 검색은 API 관측 순서이며 실제 기기 검색 순위를 보장하지 않는다. 키워드 최대 30개×국가 5개는 API 간격·재시도에 따라 실행 시간이 늘므로 활성 앱 수와 1시간 Job 제한을 함께 검토한다. incomplete/failed/needs_input은 기존 좋은 관측을 지우지 않는다.
 - Android 안정성: 기존 Play identity의 Android Developer Reporting 접근 권한과 package 연결을 확인한다. 접근 불가 시 `needs_input`으로 남긴다. 공개 OS/테스터·버전·국가·LA 기준일·백분율과 공급자 분모를 유지한다. 0.03은 0.03%로 표시하며 빈 비율을 0%로 만들지 않는다.
 - 주간 보고: 월요일 KST 10:30, 전주 월~일. 신규 리뷰는 작성일이 아닌 최초 관측일 기준이며 수집 성공 범위를 표시한다. 누락된 날은 부분 보고다. 기존 09:00 운영 알림 및 23:50 일간 보고는 유지한다.
 - notification worker가 동일 source SHA/digest로 올라왔는지 확인한다. 새 신호의 최초 사실 카드 → 분석 후 같은 Seori Bot 메시지 편집 → PNG attachment를 하나의 provider message ID로 추적한다. 초기화한 별도 notification worker를 추가로 만들지 않는다.
