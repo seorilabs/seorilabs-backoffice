@@ -23,7 +23,7 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 export async function collectMarketFeedback(now = new Date()) {
   const day = toDbDay(metricDayOf(now));
   const apps = await prisma.app.findMany({
-    where: { status: { not: "DEPRECATED" } },
+    where: { status: "ACTIVE" },
     select: {
       id: true,
       displayName: true,
@@ -231,7 +231,7 @@ export async function collectMarketFeedback(now = new Date()) {
                     {
                       id: "rank",
                       label: boundedEvidenceLabel(
-                        `${country.toUpperCase()} 스토어에서 "${term}" 검색 시 순위`,
+                        `${country === "kr" ? "한국" : country === "us" ? "미국" : country.toUpperCase()} App Store에서 "${term}" 검색 시 순위`,
                       ),
                       value: change.text,
                       source:

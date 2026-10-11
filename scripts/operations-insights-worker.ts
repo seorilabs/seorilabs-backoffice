@@ -3,6 +3,7 @@ import { processNextInsight } from "@/lib/insights/service";
 import { discoverOperationalSignals, publishWeeklySignals } from "@/lib/insights/triggers";
 import { collectMarketFeedback } from "@/lib/market/collector";
 import { collectAndroidVitals } from "@/lib/market/android-vitals";
+import { sendDailyKeywordRanks } from "@/lib/market/daily-ranks";
 let stopping = false;
 process.on("SIGTERM", () => {
   stopping = true;
@@ -12,6 +13,10 @@ process.on("SIGINT", () => {
 });
 async function main() {
   const mode = process.argv[2] ?? "worker";
+  if (mode === "keyword-daily") {
+    await sendDailyKeywordRanks();
+    return;
+  }
   if (mode === "market") {
     await collectMarketFeedback();
     await collectAndroidVitals();

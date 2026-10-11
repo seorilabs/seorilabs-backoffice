@@ -20,6 +20,7 @@ import {
   type Insight,
 } from "./contract";
 import { generateInsight } from "./generate";
+import { kstDateTimeShort } from "@/lib/format/kst";
 
 export const ANALYSIS_TEMPLATE = "operations-insights-api-v1";
 const policy = {
@@ -64,8 +65,12 @@ function notificationPayload(
     source: safeText(fact.source),
   }));
   const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
+  const observationCard = /^(source-stale|source-recovery|keyword-change)$/.test(signal.kind);
+  const body = observationCard
+    ? facts.map((fact) => `- ${fact.label}: ${fact.value}`).join("\n") + "\n기준: " + [...new Set(facts.map((fact) => fact.source))].join(" · ")
+    : renderInsightCard(facts, analysis);
   return {
-    text: `**${safeText(signal.title)}**\n${renderInsightCard(facts, analysis)}\n[상세·다음 행동](${base}/feedback/insights/${insightId})`,
+    text: `**${safeText(signal.title)}**\n${body}\n[근거·상세](${base}/feedback/insights/${insightId})`,
     editable: true,
     sender: "seori",
     insightId,
@@ -77,9 +82,11 @@ function notificationPayload(
         }
       : {}),
     embed: {
-      title: "운영 인사이트",
-      color: signal.severity === "critical" ? 0xdc2626 : 0x2563eb,
-      footer: `관측 ${signal.observedAt.toISOString()} · ${signal.kind}`,
+      title: signal.kind === "keyword-change" ? "App Store 검색 순위 변화" : signal.kind === "source-recovery" ? "수집 작업 회복" : signal.kind === "source-stale" ? "수집 상태 확인" : "운영 인사이트",
+      color: signal.severity === "critical" ? 0xdc2626
+        : signal.kind === "source-recovery" || (signal.kind === "keyword-change" && /상승|진입/.test(signal.title)) ? 0x059669
+        : signal.severity === "warning" || signal.kind === "source-stale" || (signal.kind === "keyword-change" && /하락|이탈/.test(signal.title)) ? 0xd97706 : 0x2563eb,
+      footer: `관측 ${kstDateTimeShort(signal.observedAt)} KST`,
     },
   };
 }

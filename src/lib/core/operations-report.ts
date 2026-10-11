@@ -4,6 +4,7 @@ import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { EMBED_COLOR } from "@/lib/notifications/style";
+import { collectionEpisodes } from "@/lib/insights/collection-alerts";
 
 export async function sendOperationsSummary(now: Date): Promise<{
   refDate: string;
@@ -62,6 +63,37 @@ export async function sendOperationsSummary(now: Date): Promise<{
   } else {
     lines.push("", "⚠️ Platform 활성 사용자 스냅샷 없음");
   }
+
+  const collections = await prisma.sourceCollectionRun.findMany({
+    where: { source: "play-submissions", startedAt: { gte: start, lte: now } },
+    orderBy: [{ startedAt: "asc" }, { id: "asc" }],
+  });
+  const collectionApps = await prisma.app.findMany({
+    where: { id: { in: collections.flatMap((run) => run.appId ? [run.appId] : []) } },
+    select: { id: true, displayName: true },
+  });
+  const collectionNames = new Map(collectionApps.map((app) => [app.id, app.displayName]));
+  const groups = new Map<string, typeof collections>();
+  for (const run of collections) {
+    const key = `${run.appId ?? "global"}:${run.target}`;
+    groups.set(key, [...(groups.get(key) ?? []), run]);
+  }
+  const collectionLines: string[] = [];
+  for (const runs of groups.values()) {
+    const first = runs[0];
+    const before = await prisma.sourceCollectionRun.findFirst({
+      where: { source: "play-submissions", appId: first.appId, target: first.target, startedAt: { lt: start }, completedAt: { not: null } },
+      orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+    });
+    const failures = runs.filter((run) => ["failed", "needs_input"].includes(run.status)).length;
+    const partial = runs.filter((run) => run.status === "partial").length;
+    const recoveries = collectionEpisodes([...(before ? [before] : []), ...runs]).filter((episode) => episode.recovery).length;
+    const latest = [...runs].reverse().find((run) => run.completedAt);
+    if (!failures && !partial && !recoveries && latest && ["observed", "empty"].includes(latest.status)) continue;
+    collectionLines.push(`- ${collectionNames.get(first.appId ?? "") ?? "조직"}: 실패·접근 확인 ${failures} / 부분 수집 ${partial} / 회복 ${recoveries} · ${latest && ["observed", "empty"].includes(latest.status) ? "현재 정상 수집" : "현재 수집 상태 확인 필요"}`);
+  }
+  if (collectionLines.length) lines.push("", "**Google Play 출시 현황 가져오기** · 앱 장애·심사 상태와 별도", ...collectionLines);
+  else if (!collections.length) lines.push("", "Google Play 출시 현황 가져오기: 오늘 수집 이력 없음");
 
   const destinations = discordDestinations(["app-ops"]);
   await enqueueNotification({
