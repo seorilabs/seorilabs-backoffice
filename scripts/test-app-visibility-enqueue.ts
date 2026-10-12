@@ -176,4 +176,36 @@ test("숨김 후 분석 작업을 등록하지 않고 공급자 관측의 별도
   assert.deepEqual(await prisma.sourceCollectionRun.findUniqueOrThrow({where: {id: observation.id}}), observation);
 });
 
+async function readbackRunFixture(readbackPending: boolean) {
+  const fixtureData = await fixture();
+  const {app} = fixtureData;
+  const definition = await prisma.automationDefinition.create({data: {
+    key: app.id, appId: app.id, template: "repo-task-autopilot-v1", agentKind: "CODEX", configuration: {},
+  }});
+  const occurrence = await prisma.automationOccurrence.create({data: {
+    definitionId: definition.id, scheduledFor: new Date(), idempotencyKey: app.id,
+    status: readbackPending ? "RUNNING" : "COMPLETED",
+  }});
+  const run = await prisma.agentRun.create({data: {
+    appId: app.id, occurrenceId: occurrence.id, repoFullName: app.repoFullName, labels: [], createsPr: false,
+    status: readbackPending ? "FAILED" : "SUCCEEDED", readbackRequestedAt: readbackPending ? new Date() : null,
+  }});
+  return {...fixtureData, run};
+}
+
+test("외부 변경 없이 결과만 미확인인 실행은 저장소 잠금이 없어도 앱 숨김을 차단한다", async () => {
+  const {app, run, hide} = await readbackRunFixture(true);
+  assert.equal(await prisma.agentRepoGuard.count({where: {runId: run.id, activeScopeKey: {not: null}}}), 0);
+  await assert.rejects(hide(), /진행 중/);
+  assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, "ACTIVE");
+  assert.equal(await prisma.auditLog.count({where: {entityId: app.id, action: "app.visibility"}}), 0);
+});
+
+test("결과 확인을 마친 실행은 앱 숨김을 허용하고 실행 이력을 보존한다", async () => {
+  const {app, run, hide} = await readbackRunFixture(false);
+  await hide();
+  assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, "DEPRECATED");
+  assert.equal(await prisma.agentRun.count({where: {id: run.id}}), 1);
+});
+
 after(() => prisma.$disconnect());

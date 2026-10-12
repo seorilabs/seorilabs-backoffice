@@ -80,7 +80,11 @@ export async function setAppVisibility(input: z.infer<typeof appVisibilitySchema
           tx.appOperationRun.count({where: {appId: app.id, OR: [
             {status: {in: ["PENDING", "PROCESSING"]}}, {error: PLATFORM_OUTCOME_UNKNOWN_CODE},
           ]}}),
-          tx.agentRun.count({where: {appId: app.id, OR: [{status: {in: ["PENDING", "RUNNING"]}}, {repoGuard: {activeScopeKey: {not: null}}}]}}),
+          tx.agentRun.count({where: {appId: app.id, OR: [
+            {status: {in: ["PENDING", "RUNNING"]}},
+            {readbackRequestedAt: {not: null}},
+            {repoGuard: {activeScopeKey: {not: null}}},
+          ]}}),
           tx.providerExecution.count({where: {appId: app.id, OR: [
             {status: {in: ["QUEUED", "WAITING_HUMAN_APPROVAL", "RUNNING", "READBACK_REQUIRED"]}},
             {activeScopeKey: {not: null}},
