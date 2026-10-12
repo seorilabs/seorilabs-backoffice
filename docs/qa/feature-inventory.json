@@ -168,6 +168,10 @@
     {
       "id": "settings-diagnostics-and-admin-controls",
       "core": false
+    },
+    {
+      "id": "ait-console-pod-collection",
+      "core": false
     }
   ]
 }

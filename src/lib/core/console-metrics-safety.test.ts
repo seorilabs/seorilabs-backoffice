@@ -3,8 +3,8 @@ import test, { before } from "node:test";
 import type { PrismaClient } from "@prisma/client";
 const db = {
   app: { findMany: async () => [{ id: "app1", slug: "lizard-tycoon", status: "ACTIVE", aitMiniAppId: 61736, aitWorkspaceId: 38345 }] },
-  appConsoleMetricDaily: { upsert: async (_input: unknown) => ({}) },
-  metricCollectionLedger: { findMany: async () => [], upsert: async (_input: unknown) => ({}) },
+  appConsoleMetricDaily: { upsert: async (input: unknown) => { void input; return {}; } },
+  metricCollectionLedger: { findMany: async () => [], upsert: async (input: unknown) => { void input; return {}; } },
 };
 (globalThis as typeof globalThis & { prisma: PrismaClient }).prisma = db as unknown as PrismaClient;
 let ingest: typeof import("./console-metrics-collect").ingestConsoleMetrics;
