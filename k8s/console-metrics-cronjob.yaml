@@ -63,5 +63,5 @@ spec:
             - name: oauth
               secret:
                 secretName: backoffice-ait-console-oauth
-                defaultMode: 0440
+                defaultMode: 288 # 0440
                 items: [{ key: credential.json, path: credential.json }]
