@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type App } from "@prisma/client";
 import { AIT_LISTINGS } from "../src/lib/analytics/ait-apps";
 import { prisma } from "../src/lib/prisma";
 import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
@@ -10,7 +10,7 @@ import { startConsoleFixture } from "./console-metrics/fixture-server";
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
-  const apps = [];
+  const apps: App[] = [];
   for (const listing of AIT_LISTINGS) {
     if (apps.some((app) => app.slug === listing.appSlug)) continue;
     apps.push(await prisma.app.create({ data: { slug: listing.appSlug, displayName: "격리 지표 QA", repoFullName: `qa/${listing.appSlug}`, type: "GAME", engine: "GODOT", marketTargets: ["ait"], aitWorkspaceId: 38345, aitMiniAppId: listing.miniAppId } }));
