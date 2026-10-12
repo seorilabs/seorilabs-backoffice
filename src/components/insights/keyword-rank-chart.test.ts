@@ -1,0 +1,23 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AppRouterContext, type AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { KeywordRankChart } from "./KeywordRankChart";
+import { buildKeywordHistory, normalizeKeywordSelection } from "@/lib/market/keyword-history";
+
+test("AC-2: 초기 HTML에서는 필터 변경을 막아 준비 전 선택이 사라지지 않는다", () => {
+  const app = { id: "app", displayName: "앱", iosBundle: "com.example.app", status: "ACTIVE", revision: 3, countries: ["kr", "us"], keywords: ["sea", "brand"] };
+  const now = new Date("2026-10-12T14:00:00Z");
+  const selection = normalizeKeywordSelection([app], {}, now);
+  const history = buildKeywordHistory(app, selection, [], [], now);
+  const noop = () => {};
+  const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop };
+  const html = renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: router },
+    createElement(KeywordRankChart, { apps: [app], app, selection, history, today: selection.day })));
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /화면 준비 중/);
+  const controls = html.match(/<(?:select|input|button)\b[^>]*>/g) ?? [];
+  assert.ok(controls.length >= 10);
+  assert.ok(controls.every(control => /\bdisabled=""/.test(control)), "필터·비교·상세 조작은 이벤트 처리 준비 뒤 활성화한다");
+});
