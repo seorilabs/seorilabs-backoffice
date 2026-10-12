@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { AppOperationRunStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -178,7 +179,7 @@ export async function enqueuePlatformOperation(
     // 아니므로 서버가 직렬화하지 않으면 두 탭이 서로 다른 requestId로 동시에
     // grant source를 만들 수 있다. MySQL의 기존 app PK row를 쓰므로 새 lock
     // 테이블이나 만료 정리 작업은 필요 없다.
-    await lockPlatformApp(tx, input.appId);
+    await lockAppForNewWork(tx, input.appId, {activeOnly: true});
 
     // 처리 중이거나 결과 불명인 중앙 요청이 하나라도 있으면 새 ID를 열지 않는다.
     // app row lock 안에서 검사·생성을 이어가므로 동시 탭도 이 검사를 순서대로 탄다.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 
 import { AppOperationHistory } from "@/components/app-ops/AppOperationControls";
 import {
@@ -30,9 +31,11 @@ type RowAction =
 export function LizardTycoonIapConsole({
   appId,
   tool,
+  centralAppSlug,
 }: {
   appId: string;
   tool: AppOpsTool;
+  centralAppSlug?: string;
 }) {
   const [purchases, setPurchases] = useState<LizardPurchase[]>([]);
   const [testers, setTesters] = useState<LizardSandboxTester[]>([]);
@@ -117,7 +120,9 @@ export function LizardTycoonIapConsole({
     try {
       const [purchaseResult, testerResult, grantResult] = await Promise.all([
         execute("recent-purchases", { environment: "sandbox", limit: 20 }),
-        execute("sandbox-testers", {}),
+        centralAppSlug
+          ? Promise.resolve({ data: { testers: [] } } as AppOpsResult)
+          : execute("sandbox-testers", {}),
         execute("production-grants", { limit: 20 }),
       ]);
       const nextPurchases = parseLizardPurchases(purchaseResult.data);
@@ -142,7 +147,7 @@ export function LizardTycoonIapConsole({
     } finally {
       setLoading(false);
     }
-  }, [execute]);
+  }, [centralAppSlug, execute]);
 
   useEffect(() => {
     void refresh(true);
@@ -234,12 +239,12 @@ export function LizardTycoonIapConsole({
                 Sandbox 최근 구매
               </h3>
               <p className="mt-1 text-xs text-neutral-500">
-                Apple 행에서 구매내역 초기화와 Firebase 지급 회수를 한 번에
-                실행합니다.
+                {centralAppSlug ? "테스트 구매를 조회합니다. 지급 변경과 초기화는 공통 관리 화면에서 실행합니다."
+                  : "Apple 행에서 구매내역 초기화와 Firebase 지급 회수를 한 번에 실행합니다."}
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-2">
-              <label className="text-xs text-neutral-600">
+              {!centralAppSlug && <label className="text-xs text-neutral-600">
                 <span className="mb-1 block font-medium">
                   현재 iPhone의 Sandbox Apple 계정
                 </span>
@@ -261,7 +266,7 @@ export function LizardTycoonIapConsole({
                     </option>
                   ))}
                 </select>
-              </label>
+              </label>}
               <button
                 type="button"
                 onClick={() => void refresh(true)}
@@ -317,7 +322,7 @@ export function LizardTycoonIapConsole({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {resettable ? (
+                        {resettable && !centralAppSlug ? (
                           <button
                             type="button"
                             disabled={!sandboxTesterId || busy}
@@ -335,7 +340,7 @@ export function LizardTycoonIapConsole({
                           <span className="text-neutral-400">
                             {purchase.platform === "google_play"
                               ? "Play Console에서 처리"
-                              : "작업 없음"}
+                              : centralAppSlug ? "공통 화면에서 관리" : "작업 없음"}
                           </span>
                         )}
                       </td>
@@ -355,11 +360,11 @@ export function LizardTycoonIapConsole({
               </tbody>
             </table>
           </div>
-          <div className="border-t border-amber-100 bg-amber-50 px-4 py-2 text-[11px] text-amber-800">
+          {!centralAppSlug && <div className="border-t border-amber-100 bg-amber-50 px-4 py-2 text-[11px] text-amber-800">
             Apple 초기화는 선택한 Sandbox Apple 계정의 모든 테스트 구매·구독
             내역을 지웁니다. 실제 고객 구매와 Production 원장은 건드리지
             않습니다.
-          </div>
+          </div>}
         </section>
 
         <section className="rounded-lg border border-neutral-200 bg-white p-4">
@@ -368,11 +373,16 @@ export function LizardTycoonIapConsole({
               Production 운영자 지급
             </h3>
             <p className="mt-1 text-xs text-neutral-500">
-              Firebase UID에 도마뱀을 직접 지급합니다. 운영자, 사유, 지급·회수
-              시각은 Production 감사 원장에 남습니다.
+              {centralAppSlug ? "지급 이력을 조회합니다. 지급·회수는 공통 관리 화면에서 실행합니다."
+                : "Firebase UID에 도마뱀을 직접 지급합니다. 운영자, 사유, 지급·회수 시각은 Production 감사 원장에 남습니다."}
             </p>
           </div>
-          <form
+          {centralAppSlug ? (
+            <Link href={`/platform/iap?app=${encodeURIComponent(centralAppSlug)}`}
+              className="mt-4 inline-flex rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700">
+              지급·회수 관리
+            </Link>
+          ) : <form
             onSubmit={submitGrant}
             className="mt-4 grid gap-3 rounded-lg bg-neutral-50 p-3 lg:grid-cols-2"
           >
@@ -435,7 +445,7 @@ export function LizardTycoonIapConsole({
                 {busy ? "처리 중…" : "Production 지급"}
               </button>
             </div>
-          </form>
+          </form>}
 
           <div className="mt-4 overflow-x-auto rounded border border-neutral-200">
             <table className="min-w-full divide-y divide-neutral-200 text-left text-xs">
@@ -471,7 +481,7 @@ export function LizardTycoonIapConsole({
                       {formatDate(grant.updatedAt)}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {grant.state === "active" ? (
+                      {grant.state === "active" && !centralAppSlug ? (
                         <button
                           type="button"
                           disabled={busy}
@@ -483,7 +493,7 @@ export function LizardTycoonIapConsole({
                           지급 회수
                         </button>
                       ) : (
-                        <span className="text-neutral-400">회수 완료</span>
+                        <span className="text-neutral-400">{centralAppSlug && grant.state === "active" ? "공통 화면에서 관리" : "회수 완료"}</span>
                       )}
                     </td>
                   </tr>
@@ -518,7 +528,7 @@ export function LizardTycoonIapConsole({
 
       <AppOperationHistory appId={appId} />
 
-      {rowAction && (
+      {rowAction && !centralAppSlug && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <form
             onSubmit={submitRowAction}

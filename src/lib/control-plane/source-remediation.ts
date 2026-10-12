@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "./app-work-lock";
 import { Prisma } from "@prisma/client";
 
 import {
@@ -296,6 +297,9 @@ export async function createSourceRemediationDefinition(input: CreateSourceRemed
   let created: { definition: { id: string; key: string; template: string }; runId: string | null };
   try {
     created = await prisma.$transaction(async (tx) => {
+      for (const appId of [...new Set([app.id, issue.appId ?? app.id])].sort()) {
+        await lockAppForNewWork(tx, appId);
+      }
       const definition = await tx.automationDefinition.create({
         data: {
           key,

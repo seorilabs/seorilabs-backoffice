@@ -7,6 +7,8 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { dbDay } from "@/lib/analytics/metric-day";
 import { primaryListingForSlug } from "@/lib/analytics/ait-apps";
 import { prisma } from "@/lib/prisma";
+import { env } from "@/lib/env";
+import { resolvedPlatformAppId } from "@/lib/platform/app-id";
 
 export default async function CommercePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -15,6 +17,7 @@ export default async function CommercePage({ params }: { params: Promise<{ id: s
     select: {
       id: true,
       slug: true,
+      platformAppId: true,
       repoFullName: true,
       opsManifest: true,
     },
@@ -94,7 +97,8 @@ export default async function CommercePage({ params }: { params: Promise<{ id: s
         </div>
         {lizardIapTool ? (
           <>
-            <LizardTycoonIapConsole appId={app.id} tool={lizardIapTool} />
+            <LizardTycoonIapConsole appId={app.id} tool={lizardIapTool}
+              centralAppSlug={env.featurePlatformWrites() ? resolvedPlatformAppId(app) : undefined} />
             {genericTools.length > 0 && (
               <div className="mt-6">
                 <ToolCatalog

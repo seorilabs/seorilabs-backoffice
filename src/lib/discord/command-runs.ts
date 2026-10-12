@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { executeDeploymentApproval } from "@/lib/deployment-approvals/execute";
 import { Prisma, type OperatorCommandRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -81,22 +82,27 @@ export async function createOperatorCommand(input: {
   needsConfirmation?: boolean;
 }) {
   const actorLabel = `discord:${input.actorDiscordUserId}`;
-  return prisma.operatorCommandRun.upsert({
-    where: { sourceInteractionId: input.sourceInteractionId },
-    create: {
-      sourceInteractionId: input.sourceInteractionId,
-      appId: input.appId,
-      operation: input.operation,
-      params: input.params,
-      actorDiscordUserId: input.actorDiscordUserId,
-      actorLabel,
-      channelId: input.channelId,
-      messageId: input.messageId,
-      status: input.needsConfirmation ? "AWAITING_CONFIRMATION" : "PENDING",
-      ...(input.needsConfirmation ? {} : { confirmedAt: new Date() }),
-      expiresAt: new Date(Date.now() + (input.needsConfirmation ? CONFIRM_TTL_MS : RESULT_TTL_MS)),
-    },
-    update: {},
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.operatorCommandRun.findUnique({where: {sourceInteractionId: input.sourceInteractionId}});
+    if (existing) return existing;
+    if (input.appId) await lockAppForNewWork(tx, input.appId);
+    return tx.operatorCommandRun.upsert({
+      where: { sourceInteractionId: input.sourceInteractionId },
+      create: {
+        sourceInteractionId: input.sourceInteractionId,
+        appId: input.appId,
+        operation: input.operation,
+        params: input.params,
+        actorDiscordUserId: input.actorDiscordUserId,
+        actorLabel,
+        channelId: input.channelId,
+        messageId: input.messageId,
+        status: input.needsConfirmation ? "AWAITING_CONFIRMATION" : "PENDING",
+        ...(input.needsConfirmation ? {} : { confirmedAt: new Date() }),
+        expiresAt: new Date(Date.now() + (input.needsConfirmation ? CONFIRM_TTL_MS : RESULT_TTL_MS)),
+      },
+      update: {},
+    });
   });
 }
 
@@ -107,17 +113,23 @@ export async function confirmOperatorCommand(input: {
   messageId?: string;
 }): Promise<boolean> {
   const now = new Date();
-  const changed = await prisma.operatorCommandRun.updateMany({
-    where: confirmationClaimWhere({ id: input.id, actorDiscordUserId: input.actorDiscordUserId, now }),
-    data: {
-      status: "PENDING",
-      confirmedAt: now,
-      channelId: input.channelId,
-      ...(input.messageId ? { messageId: input.messageId } : {}),
-      expiresAt: new Date(now.getTime() + RESULT_TTL_MS),
-    },
+  return prisma.$transaction(async (tx) => {
+    const where = confirmationClaimWhere({id: input.id, actorDiscordUserId: input.actorDiscordUserId, now});
+    const pending = await tx.operatorCommandRun.findFirst({where, select: {appId: true}});
+    if (!pending) return false;
+    if (pending.appId) await lockAppForNewWork(tx, pending.appId);
+    const changed = await tx.operatorCommandRun.updateMany({
+      where,
+      data: {
+        status: "PENDING",
+        confirmedAt: now,
+        channelId: input.channelId,
+        ...(input.messageId ? { messageId: input.messageId } : {}),
+        expiresAt: new Date(now.getTime() + RESULT_TTL_MS),
+      },
+    });
+    return changed.count === 1;
   });
-  return changed.count === 1;
 }
 
 export async function cancelOperatorCommand(input: {

@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
@@ -104,6 +105,7 @@ export async function publishSignal(input: {
 }) {
   const facts = validatedEvidence(input.facts);
   return serializable(async (tx) => {
+    if (input.appId) await lockAppForNewWork(tx, input.appId);
     const signal = await tx.operationalSignal.upsert({
       where: { dedupeKey: input.dedupeKey },
       create: {
