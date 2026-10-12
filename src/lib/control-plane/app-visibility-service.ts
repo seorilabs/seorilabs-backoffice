@@ -79,13 +79,16 @@ export async function setAppVisibility(input: z.infer<typeof appVisibilitySchema
           tx.appOperationRun.count({where: {appId: app.id, OR: [
             {status: {in: ["PENDING", "PROCESSING"]}}, {error: PLATFORM_OUTCOME_UNKNOWN_CODE},
           ]}}),
-          tx.agentRun.count({where: {appId: app.id, OR: [{status: "RUNNING"}, {repoGuard: {activeScopeKey: {not: null}}}]}}),
-          tx.providerExecution.count({where: {appId: app.id, status: {in: ["RUNNING", "READBACK_REQUIRED"]}}}),
+          tx.agentRun.count({where: {appId: app.id, OR: [{status: {in: ["PENDING", "RUNNING"]}}, {repoGuard: {activeScopeKey: {not: null}}}]}}),
+          tx.providerExecution.count({where: {appId: app.id, OR: [
+            {status: {in: ["QUEUED", "WAITING_HUMAN_APPROVAL", "RUNNING", "READBACK_REQUIRED"]}},
+            {activeScopeKey: {not: null}},
+          ]}}),
           tx.releaseRecord.count({where: {appId: app.id, status: {in: ["PENDING", "IN_PROGRESS"]}}}),
-          tx.operatorCommandRun.count({where: {appId: app.id, status: "PROCESSING"}}),
+          tx.operatorCommandRun.count({where: {appId: app.id, status: {in: ["PENDING", "PROCESSING"]}}}),
         ]);
         if (blockers.some((count) => count > 0)) {
-          throw new ControlPlaneError("진행 중이거나 결과 확인이 필요한 작업이 있어 앱을 숨길 수 없습니다.", 409, "APP_HAS_ACTIVE_OPERATIONS");
+          throw new ControlPlaneError("실행을 기다리거나 진행 중인 작업, 결과 확인이 필요한 작업이 있어 앱을 숨길 수 없습니다.", 409, "APP_HAS_ACTIVE_OPERATIONS");
         }
       }
       const updated = await tx.app.updateMany({

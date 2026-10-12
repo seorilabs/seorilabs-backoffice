@@ -4,7 +4,7 @@ export const DISABLED_APP_STATUS = "DEPRECATED" satisfies AppStatus;
 export const WRITABLE_APP_STATUSES = ["ACTIVE", "PAUSED"] as const satisfies readonly AppStatus[];
 
 export const HIDDEN_APP_ERROR =
-  "비활성 앱은 백오피스에서 사용할 수 없습니다. 복구는 DB에서 status를 ACTIVE로 변경해야 합니다.";
+  "비활성 앱은 백오피스에서 사용할 수 없습니다. 복구가 필요하면 관리자에게 요청해 주세요.";
 
 export const visibleAppWhere = {
   status: { not: DISABLED_APP_STATUS },

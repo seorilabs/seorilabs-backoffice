@@ -1128,10 +1128,10 @@ export function PlatformIapManagement({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <form
           onSubmit={lookupEntitlements}
-          className="rounded-lg border border-neutral-200 bg-white p-4"
+          className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4"
         >
           <h3 className="text-sm font-semibold text-neutral-800">
             사용자 Entitlement 조회
@@ -1147,7 +1147,7 @@ export function PlatformIapManagement({
               required
               maxLength={29}
               spellCheck={false}
-              className="min-w-0 flex-1 rounded border border-neutral-300 px-3 py-2 font-mono text-sm outline-none focus:border-neutral-600"
+              className="w-full min-w-0 flex-1 rounded border border-neutral-300 px-3 py-2 font-mono text-sm outline-none focus:border-neutral-600"
             />
             <button
               type="submit"

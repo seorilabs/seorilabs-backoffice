@@ -39,6 +39,43 @@ async function main() {
   await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'FAILED', error: PLATFORM_OUTCOME_UNKNOWN_CODE}});
   await assert.rejects(setAppVisibility(request), /진행 중/);
   await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'SUCCEEDED', error: null}});
+  const pendingCommand = await prisma.operatorCommandRun.create({data: {
+    appId: app.id, sourceInteractionId: `${prefix}-command`, operation: 'qa.no-external-execution',
+    actorDiscordUserId: 'qa', actorLabel: 'QA', channelId: 'qa', status: 'PENDING',
+    expiresAt: new Date(Date.now() + 60000),
+  }});
+  for (const status of ['PENDING', 'PROCESSING'] as const) {
+    await prisma.operatorCommandRun.update({where: {id: pendingCommand.id}, data: {status}});
+    await assert.rejects(setAppVisibility(request), /진행 중/);
+  }
+  await prisma.operatorCommandRun.update({where: {id: pendingCommand.id}, data: {status: 'CANCELLED'}});
+  const definition = await prisma.automationDefinition.create({data: {key: `${prefix}-agent`, appId: app.id, template: 'qa', enabled: false}});
+  const occurrence = await prisma.automationOccurrence.create({data: {definitionId: definition.id, scheduledFor: new Date(), idempotencyKey: `${prefix}-occurrence`}});
+  const pendingAgent = await prisma.agentRun.create({data: {appId: app.id, occurrenceId: occurrence.id, repoFullName: app.repoFullName, labels: [], status: 'PENDING'}});
+  for (const status of ['PENDING', 'RUNNING'] as const) {
+    await prisma.agentRun.update({where: {id: pendingAgent.id}, data: {status}});
+    await assert.rejects(setAppVisibility(request), /진행 중/);
+  }
+  await prisma.agentRun.update({where: {id: pendingAgent.id}, data: {status: 'CANCELLED'}});
+  const provider = await prisma.providerExecution.create({data: {
+    appId: app.id, repoId: 999000001n, repoFullName: app.repoFullName, sourceSha: 'a'.repeat(40),
+    configRevisionId: revision.id, configRevisionNumber: 1, kind: 'BLUEPRINT_RESOURCE', operation: 'APPLY',
+    actionClass: 'DETERMINISTIC_MUTATION', provider: 'QA', resourceType: 'qa', resourceId: prefix,
+    desiredHash: 'a'.repeat(64), desiredPayload: {}, publicAccountId: 'qa', credentialPublicIdentity: 'qa',
+    logicalCredentialId: 'qa-only', credentialGeneration: 1, policyGeneration: 1, capability: 'qa',
+    adapterId: 'qa', origin: 'http://127.0.0.1', environment: 'qa', authFactors: {},
+    readbackPublicAccountId: 'qa', readbackCredentialPublicIdentity: 'qa', readbackLogicalCredentialId: 'qa-only',
+    readbackCredentialGeneration: 1, readbackPolicyGeneration: 1, readbackCapability: 'qa', readbackAdapterId: 'qa',
+    readbackOrigin: 'http://127.0.0.1', readbackEnvironment: 'qa', readbackAuthFactors: {},
+    bindingHash: 'a'.repeat(64), requestHash: 'a'.repeat(64), idempotencyKey: `${prefix}-provider`,
+  }});
+  for (const status of ['QUEUED', 'WAITING_HUMAN_APPROVAL', 'RUNNING', 'READBACK_REQUIRED'] as const) {
+    await prisma.providerExecution.update({where: {id: provider.id}, data: {status}});
+    await assert.rejects(setAppVisibility(request), /진행 중/);
+  }
+  await prisma.providerExecution.update({where: {id: provider.id}, data: {status: 'CANCELLED', activeScopeKey: null}});
+  assert.equal(await prisma.auditLog.count({where: {action: 'app.visibility', entityId: app.id}}), 0);
+  assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, 'ACTIVE');
   const repeated = await Promise.all([setAppVisibility(request), setAppVisibility(request)]);
   assert.deepEqual(repeated.map((result) => result.duplicate).sort(), [false, true]);
   assert.deepEqual(repeated[0].response, repeated[1].response);
