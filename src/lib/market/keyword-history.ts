@@ -63,10 +63,11 @@ export function buildKeywordHistory(app: KeywordApp, selection: KeywordSelection
     // 국가·검색어는 중앙 validator가 각각 두 글자·100자로 제한하므로 target은 191자 이내다.
     const keyword = attemptMap.get("apple-keyword\0" + selection.country + ":" + term + "\0" + day);
     const listing = attemptMap.get("apple-public-lookup\0" + listingTarget + "\0" + day);
-    const attempt = keyword ?? listing;
+    const attempt = keyword && listing ? keyword.startedAt >= listing.startedAt ? keyword : listing : keyword ?? listing;
+    const isListing = attempt !== undefined && attempt === listing;
     const decoded = observation ? decodeRank(observation.value) : { state: "missing" as const, rank: null };
-    const attemptState = attempt ? !keyword && attempt.status === "empty" ? "공개 리스팅 미확인" : attemptLabels[attempt.status] ?? "확인 필요" : null;
-    const label = decoded.state === "ranked" ? decoded.rank + "위" : decoded.state === "outside" ? "결과 목록에 없음" : decoded.state === "invalid" ? "관측 형식 확인 필요" : attempt && !["observed", "empty"].includes(attempt.status) ? attemptState! : !keyword && listing?.status === "empty" ? "공개 리스팅 미확인" : "미수집";
+    const attemptState = attempt ? isListing && attempt.status === "empty" ? "공개 리스팅 미확인" : attemptLabels[attempt.status] ?? "확인 필요" : null;
+    const label = decoded.state === "ranked" ? decoded.rank + "위" : decoded.state === "outside" ? "결과 목록에 없음" : decoded.state === "invalid" ? "관측 형식 확인 필요" : attempt && !["observed", "empty"].includes(attempt.status) ? attemptState! : isListing && attempt?.status === "empty" ? "공개 리스팅 미확인" : "미수집";
     const fallbackUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=${selection.country}&entity=software&limit=200`;
     let sourceUrl = fallbackUrl;
     if (observation) {

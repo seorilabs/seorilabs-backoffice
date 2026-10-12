@@ -73,7 +73,7 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="keyword-trend-title" className="font-semibold">검색어별 순위 추이</h2><span className="text-xs text-neutral-600">1위가 위쪽 · 최대 4개 비교</span></div>
       <div className="my-3 flex flex-wrap gap-x-4 gap-y-1">{app.keywords.map(term => {
         const index = selection.terms.indexOf(term);
-        return <label key={term} className="inline-flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" aria-label={term + " 추이 비교"} checked={index >= 0} disabled={pending} onChange={() => toggle(term)} />{index >= 0 && <span aria-hidden className="inline-block w-5 border-t-2" style={{ borderColor: colors[index], borderTopStyle: index ? "dashed" : "solid" }} />}{term}</label>;
+        return <label key={term} className="inline-flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" aria-label={term + " 추이 비교"} checked={index >= 0} disabled={pending} onChange={() => toggle(term)} />{index >= 0 && <svg aria-hidden width="24" height="12" className="shrink-0"><line x1="0" x2="24" y1="6" y2="6" stroke={colors[index]} strokeWidth="2" strokeDasharray={dashes[index]} /></svg>}{term}</label>;
       })}</div>
       {warning && <p role="alert" className="mb-2 text-sm text-amber-800">{warning}</p>}
       <div ref={plot} className="min-w-0">

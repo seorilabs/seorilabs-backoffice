@@ -71,3 +71,13 @@ test("AC-10: 90일·30개 검색어를 읽어도 그래프는 네 개·360점 �
   assert.equal(h.rows.length, 30);
   assert.equal(h.series.flatMap(series => series.points).length, 360);
 });
+
+test("AC-5: 더 최신 리스팅 조회 실패도 이전 검색 성공과 함께 표시", () => {
+  const h = history([observation("2026-10-12", { rank: 36 })], [
+    attempt("observed", "2026-10-12T12:00:00Z"),
+    attempt("failed", "2026-10-12T13:00:00Z", "com.example.app:kr", "apple-public-lookup"),
+  ]);
+  assert.equal(h.rows[0].rank, 36);
+  assert.equal(h.rows[0].attemptState, "수집 실패");
+  assert.equal(h.rows[0].attemptedAt, "2026-10-12T13:00:00.000Z");
+});
