@@ -78,14 +78,14 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
       {warning && <p role="alert" className="mb-2 text-sm text-amber-800">{warning}</p>}
       <div ref={plot} className="min-w-0">
         {history.series.length ? <svg data-testid="keyword-rank-chart" viewBox={`0 0 ${width} 274`} className="block h-[274px] w-full" role="img" aria-label={`${app.displayName} ${countryLabel(selection.country)} 검색 순위 추이`}>
-          <title>검색어별 순위 추이 · {history.dates[0]}~{selection.day}</title><desc>1위는 위쪽, 200위는 아래쪽입니다. 없는 날짜와 결과 목록에 없는 관측은 선을 끊습니다. 날짜별 수치와 상태는 아래 표에서 확인할 수 있습니다.</desc>
+          <title>{`검색어별 순위 추이 · ${history.dates[0]}~${selection.day}`}</title><desc>1위는 위쪽, 200위는 아래쪽입니다. 없는 날짜와 결과 목록에 없는 관측은 선을 끊습니다. 날짜별 수치와 상태는 아래 표에서 확인할 수 있습니다.</desc>
           <text x={left} y={13} fontSize={12} fill="#525252">순위</text>
           {[1, 50, 100, 150, 200].map(rank => <g key={rank}><line x1={left} x2={right} y1={y(rank)} y2={y(rank)} stroke="#e5e5e5" /><text x={left - 8} y={y(rank) + 4} textAnchor="end" fontSize={12} fill="#525252">{rank}위</text></g>)}
           {ticks.map((index, slot) => <text key={index} x={x(index)} y={248} textAnchor={slot === 0 ? "start" : slot === ticks.length - 1 ? "end" : "middle"} fontSize={12} fill="#525252">{shortDay(history.dates[index])}</text>)}
           <text x={right} y={268} textAnchor="end" fontSize={12} fill="#525252">날짜 · KST</text>
           {history.series.map((series, index) => {
             const segments = splitSegmentsOnNull(series.points.map(point => point.rank), x, y);
-            return <g key={series.term} data-series={series.term}>{segments.paths.map((path, slot) => <path key={slot} d={path} fill="none" stroke={colors[index]} strokeWidth={2.4} strokeDasharray={dashes[index]} />)}{series.points.map((point, slot) => point.rank !== null && <circle key={point.day} cx={x(slot)} cy={y(point.rank)} r={3} fill={colors[index]}><title>{point.day} · {series.term} {point.label}</title></circle>)}</g>;
+            return <g key={series.term} data-series={series.term}>{segments.paths.map((path, slot) => <path key={slot} d={path} fill="none" stroke={colors[index]} strokeWidth={2.4} strokeDasharray={dashes[index]} />)}{series.points.map((point, slot) => point.rank !== null && <circle key={point.day} cx={x(slot)} cy={y(point.rank)} r={3} fill={colors[index]}><title>{`${point.day} · ${series.term} ${point.label}`}</title></circle>)}</g>;
           })}
           <line x1={x(detailIndex)} x2={x(detailIndex)} y1={top} y2={bottom} stroke="#737373" opacity={0.35} />
           <rect x={left} y={top} width={right - left} height={bottom - top} fill="transparent" onPointerMove={event => {
