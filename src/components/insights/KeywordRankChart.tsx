@@ -13,6 +13,7 @@ const colors = ["#1d4ed8", "#c2410c", "#7e22ce", "#15803d"];
 const dashes = [undefined, "6 3", "2 3", "8 3 2 3"];
 const control = "min-h-11 rounded border border-neutral-300 px-3 py-2 text-sm";
 const lightControl = control + " bg-white";
+const filterControl = lightControl + " min-w-0 w-full";
 const shortDay = (day: string) => day.slice(5).replace("-", "/");
 const countryLabel = (country: string) => `${country === "kr" ? "한국" : country === "us" ? "미국" : country.toUpperCase()} ${country.toUpperCase()}`;
 const timeLabel = (at: string | null) => at ? kstDateTimeShort(new Date(at)) + " KST" : "—";
@@ -59,12 +60,12 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
     <p className="text-xs text-neutral-600">App Store · 매일 21:20 KST 수집 · Apple 검색 API 최대 200개 결과의 순서로, 실제 기기 검색 화면과 다를 수 있습니다.</p>
     {selection.notice && <p role="status" className="text-sm text-amber-800">입력값을 확인해 조회 가능한 앱·국가·기간으로 바꿨습니다.</p>}
     <div className="flex flex-wrap items-end gap-3">
-      <label className="grid min-w-0 flex-[2_1_220px] gap-1 text-sm">앱<select aria-label="앱" className={lightControl} value={app.id} disabled={busy} onChange={event => {
+      <label className="grid min-w-0 flex-[2_1_13.75rem] gap-1 text-sm">앱<select aria-label="앱" className={filterControl} value={app.id} disabled={busy} onChange={event => {
         const next = apps.find(item => item.id === event.target.value)!;
         navigate({ appId: next.id, country: next.countries[0], terms: next.keywords.slice(0, 2) });
       }}>{apps.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
-      <label className="grid min-w-0 flex-[1_1_120px] gap-1 text-sm">국가<select aria-label="국가" className={lightControl} value={selection.country} disabled={busy} onChange={event => navigate({ country: event.target.value })}>{app.countries.map(country => <option key={country} value={country}>{countryLabel(country)}</option>)}</select></label>
-      <label className="grid min-w-0 flex-[1_1_150px] gap-1 text-sm">기준일<input aria-label="기준일" type="date" max={today} value={selection.day} className={lightControl + " min-w-0"} disabled={busy} onChange={event => { if (event.target.value) navigate({ day: event.target.value }); }} /></label>
+      <label className="grid min-w-0 flex-[1_1_7.5rem] gap-1 text-sm">국가<select aria-label="국가" className={filterControl} value={selection.country} disabled={busy} onChange={event => navigate({ country: event.target.value })}>{app.countries.map(country => <option key={country} value={country}>{countryLabel(country)}</option>)}</select></label>
+      <label className="grid min-w-0 flex-[1_1_9.375rem] gap-1 text-sm">기준일<input aria-label="기준일" type="date" max={today} value={selection.day} className={filterControl} disabled={busy} onChange={event => { if (event.target.value) navigate({ day: event.target.value }); }} /></label>
       <div className="min-w-0 max-w-full"><p className="mb-1 text-sm">기간</p><div className="flex flex-wrap gap-1">{[7, 30, 90].map(days => <button type="button" key={days} disabled={busy} aria-pressed={selection.days === days} className={control + (selection.days === days ? " border-neutral-900 bg-neutral-900 text-white" : " bg-white")} onClick={() => navigate({ days })}>{days}일</button>)}</div></div>
       <div className="flex flex-wrap gap-1">
         <button type="button" className={lightControl} disabled={busy} onClick={() => navigate({ day: shiftMetricDay(selection.day, -1) })}>전일</button>
