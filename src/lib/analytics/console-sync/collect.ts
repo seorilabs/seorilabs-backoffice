@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { getConsoleSyncStatus, ingestConsoleMetrics } from "@/lib/core/console-metrics-collect";
 import { recordCollectionFailure } from "../coverage";
 import { consoleCollectionPlan } from "./plan";
-import { ConsoleSyncError } from "./oauth";
+import { ConsoleSyncError, consoleErrorCode } from "./oauth";
 import type { McpConsoleMetricsSource } from "./source";
 
 // 갱신 전에 잠금을 잡는다. 여러 수집 Job이 같은 refresh token을 동시에 쓰지 않는다.
@@ -20,7 +20,13 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
   const appIds = new Map(registry.map((app) => [app.slug, app.id]));
   const results = [];
   for (const window of plan.windows) {
-    const response = await source.queryListing(window, window.start, window.end);
+    let response: Awaited<ReturnType<McpConsoleMetricsSource["queryListing"]>>;
+    try { response = await source.queryListing(window, window.start, window.end); }
+    catch (error) {
+      if (consoleErrorCode(error) !== "RATE_LIMITED") throw error;
+      for (const remaining of plan.windows.slice(results.length)) plan.blocked.push({ key: `${remaining.slug}#${remaining.miniAppId}`, reason: "공급자 요청 제한으로 실행 보류" });
+      break;
+    }
     const appId = appIds.get(window.slug);
     if (appId) await recordCollectionFailure(response.missing.map((missing) => ({ source: "ait_console" as const, appId, listingId: window.miniAppId, day: missing.date, detail: `미확인 지표: ${missing.metrics.join(",")}` })), now);
     const stored = response.days.length ? await ingestConsoleMetrics({ apps: [{ ...window, days: response.days }] }, now) : null;

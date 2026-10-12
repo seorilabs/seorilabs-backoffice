@@ -4,7 +4,7 @@ import { containsConsoleSecret, type ConsoleMetricsSource, type ConsoleSourceTar
 import type { ConsoleReader, ConsoleReadTool } from "./client";
 import { normalizeConsoleResponses } from "./mapper";
 import { ConsoleSyncError, consoleErrorCode } from "./oauth";
-const fatal = new Set(["REAUTHENTICATION_REQUIRED", "OAUTH_ROTATION_REQUIRES_REVIEW"]);
+const fatal = new Set(["REAUTHENTICATION_REQUIRED", "OAUTH_ROTATION_REQUIRES_REVIEW", "OAUTH_CLIENT_CONFIGURATION_INVALID", "OAUTH_RESOURCE_CONFIGURATION_INVALID", "OAUTH_REFRESH_NOT_SUPPORTED", "OAUTH_REQUEST_REJECTED", "RATE_LIMITED"]);
 export class McpConsoleMetricsSource implements ConsoleMetricsSource {
   constructor(private readonly reader: ConsoleReader) {}
   async verifyWorkspace() {

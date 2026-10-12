@@ -88,13 +88,17 @@ bash scripts/console-metrics/push.sh /tmp/console-metrics-payload.json
 
 `src/lib/analytics/console-sync/`는 고정 MCP 주소와 5개 조회 도구만 호출한다. SDK는 수치 생성에
 모델을 사용하지 않는다. MiniMax는 저장된 값의 기존 분석에만 사용한다. DB advisory lock을
-OAuth 갱신 전에 잡고 동시 조회 최대 2, HTTP 최대 3시도, 30초 요청 제한을 적용한다.
+OAuth 갱신 전에 잡고 동시 조회 최대 2, HTTP 최대 3시도를 전체 25초 예산 안에서 수행하며 SDK 도구 timeout은 30초다. 대기와 OAuth 갱신에도 같은 취소 signal을 전달한다. 429 대기 시각은 공유하고, 긴 Retry-After·시도 소진이면 후속 조회를 멈춰 부분 완료로 남긴다.
 `invalid_grant`·401 재시도 실패·403이면 재인증 필요로 중단하며, refresh token 회전이면
 `OAUTH_ROTATION_REQUIRES_REVIEW`로 중단한다. 토큰은 메모리에서만 갱신하고 원본 파일을 쓰지 않는다.
 
 선행 조건은 `seorilabs-credentials` 절차에 따른 사람의 최초 OAuth 인가, catalog 등록,
 백업·복원 확인, identity/scope 확인이다. 업로드 API 키를 콘솔 OAuth로 대체하지 않는다.
 Claude/Codex/connector 인증 캐시를 추출하지 않는다. 비회전 여부를 확인하기 전 운영 Secret을 만들지 않는다.
+회전 감지 시 공급자가 기존 refresh token을 이미 무효화했을 수 있다. 원본 파일의 바이트를
+보존해도 grant가 복구되는 것은 아니다. 최초 감독 검증은 운영에 연결되지 않은 인가로 수행하고,
+회전·불완전한 갱신 결과가 발생하면 같은 옛 토큰을 반복 사용하지 말고 중단해 사람의 재인증과
+보존 설계를 다시 검토한다. 기존 활성 공용 identity를 앱별 키로 대체하지 않는다.
 
 - `AIT_CONSOLE_OAUTH_FILE`: 등록된 credential JSON 파일의 절대 경로. 로컬 0600 또는 파드의 전용 그룹 0440.
 - `AIT_CONSOLE_CREDENTIAL_ID`: catalog의 승인된 논리 ID와 파일 `credentialId`가 정확히 같아야 한다.

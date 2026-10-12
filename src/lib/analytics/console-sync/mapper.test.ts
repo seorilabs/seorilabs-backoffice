@@ -25,3 +25,10 @@ test("실패·빈 필수값·음수 횟수·중복 날짜를 0으로 저장하�
     assert.equal(result.days.length, 0); assert.equal(result.missing.length, 1);
   }
 });
+test("실제 조회와 같은 배열 날짜의 DAU·신규 값을 매핑하고 비정상 키는 보류한다", () => {
+  const dau = { au: [{ dateKey: [2026, 10, 11], value: 7 }], newAu: [{ dateKey: [2026, 10, 11], value: 3 }] };
+  const result = normalizeConsoleResponses({ ...fixture(), dau }, "2026-10-11", "2026-10-11");
+  assert.equal(result.days[0].dau, 7); assert.equal(result.days[0].newUsers, 3);
+  const malformed = normalizeConsoleResponses({ ...fixture(), dau: { ...dau, au: [{ dateKey: "2026/10/11", value: 7 }] } }, "2026-10-11", "2026-10-11");
+  assert.equal(malformed.days.length, 0); assert.deepEqual(malformed.missing[0].metrics, ["dau"]);
+});

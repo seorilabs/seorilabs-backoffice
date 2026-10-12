@@ -49,6 +49,10 @@ async function main() {
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
     await reader!.close(); reader = await createConsoleReader(new ConsoleOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);
+    fixture.state.failIos = false; fixture.state.rateLimits = 10; fixture.state.retryAfter = "60";
+    const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
+    assert.equal(limited.state, "partial"); assert.ok("blocked" in limited && limited.blocked.some((b) => b.reason.includes("공급자 요청 제한")));
+    assert.ok(fixture.state.rateLimits >= 8); // 진행 중인 최대 두 요청 외의 새 조회는 보내지 않는다.
     fixture.state.revoked = true;
     await assert.rejects(new ConsoleOAuth(credential, fixture.fetcher).refresh(), /REAUTHENTICATION_REQUIRED/);
     assert.ok(!JSON.stringify({ result, failed, after }).includes("fixture-access"));

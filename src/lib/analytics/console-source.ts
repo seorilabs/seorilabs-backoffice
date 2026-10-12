@@ -20,15 +20,15 @@ export interface ConsoleDailyMetric {
   /** 평균 세션 길이 초(dashboard_session.metric). 없으면 null. */
   avgSessionSec?: number | null;
   /** 광고 노출 수(dashboard_revenue_iaa, OS 합). */
-  iaaImpressions?: number;
+  iaaImpressions: number;
   /** 광고 추정 수익 원(dashboard_revenue_iaa.estimatedEarning, OS 합). */
-  iaaEarningKrw?: number;
+  iaaEarningKrw: number;
   /** 인앱결제 거래액 원(dashboard_revenue_iap.trxAmount). */
-  iapTrxAmountKrw?: number;
+  iapTrxAmountKrw: number;
   /** 인앱결제 정산액 원(dashboard_revenue_iap.settlementAmount). */
-  iapSettlementKrw?: number;
+  iapSettlementKrw: number;
   /** 결제 사용자 수(dashboard_revenue_iap.pu). */
-  payingUsers?: number;
+  payingUsers: number;
   /**
    * 부가 원본. 승격 컬럼으로 담기 애매한 값들:
    * 유입경로(전체탭/미니앱홈)·연령/성별/OS 분포·OS별 IAA(ecpm 등)·잔존 코호트·앱버전 등.
@@ -85,9 +85,9 @@ const daySchema = z.object({
   iaaImpressions: count, iaaEarningKrw: amount, iapTrxAmountKrw: amount, iapSettlementKrw: amount, payingUsers: count,
   raw: z.record(z.unknown()).nullish(),
 });
-const SECRET_KEY = /^(?:access[_-]?token|refresh[_-]?token|authorization|password|client[_-]?secret|cookie|api[_-]?key)$/i;
+const SECRET_KEY = /^(?:token|idtoken|bearertoken|accesstoken|refreshtoken|authorization|password|secret|clientsecret|cookie|apikey|privatekey|accesskey|credentials?)$/i;
 export function containsConsoleSecret(value: unknown): boolean {
-  return !!value && typeof value === "object" && Object.entries(value).some(([key, child]) => SECRET_KEY.test(key) || containsConsoleSecret(child));
+  return !!value && typeof value === "object" && Object.entries(value).some(([key, child]) => SECRET_KEY.test(key.replace(/[_\s-]/g, "")) || containsConsoleSecret(child));
 }
 export function validateConsoleDay(value: unknown) {
   const result = daySchema.safeParse(value);

@@ -9,14 +9,14 @@ import { MCP_URL, TOKEN_URL } from "../../src/lib/analytics/console-sync/oauth";
 
 // 실제 공급자를 호출하지 않는 loopback 전용 프로토콜 시험 서버.
 export async function startConsoleFixture() {
-  const state = { failIos: false, revoked: false, rateLimits: 0, refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
+  const state = { failIos: false, revoked: false, rateLimits: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
   const server = createServer(async (req, res) => {
     try {
       if (req.url === "/token") { state.refreshes++; res.setHeader("Content-Type", "application/json"); res.statusCode = state.revoked ? 400 : 200; res.end(JSON.stringify(state.revoked ? { error: "invalid_grant" } : { access_token: "fixture-access", token_type: "bearer", expires_in: 3600 })); return; }
       if (req.headers.authorization !== "Bearer fixture-access") { res.writeHead(401).end(); return; }
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
-      if (body?.method === "tools/call" && state.rateLimits > 0) { state.rateLimits--; res.writeHead(429, { "Retry-After": "0" }).end(); return; }
+      if (body?.method === "tools/call" && state.rateLimits > 0) { state.rateLimits--; res.writeHead(429, { "Retry-After": state.retryAfter }).end(); return; }
       const mcp = new McpServer({ name: "isolated-console", version: "1" });
       for (const name of CONSOLE_READ_TOOLS) mcp.registerTool(name, { inputSchema: z.object({}).passthrough() }, async (args) => {
         state.tools.push(name); state.active++; state.maxActive = Math.max(state.active, state.maxActive);

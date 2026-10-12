@@ -4,7 +4,7 @@
 - 승인 커밋: `0b929ccb1d9a6272fb0d4004056791d31e5eb35c`
 - 사람 승인: 사용자, 2026-10-12 KST(정확한 시각 미확인). OAuth 검증·구현·검증·PR 승인, 운영 배포·스케줄 활성화 제외.
 - 실행 Issue: [#461](https://github.com/seorilabs/seorilabs-backoffice/issues/461). 코드 동작과 공개 인수조건만 기록한다. 상세 승인·검수는 이 파일과 설계 정본을 따른다.
-- PR: 생성 후 연결.
+- Ready PR: [#462](https://github.com/seorilabs/seorilabs-backoffice/pull/462). 운영 gate가 남아 있어 병합·배포하지 않는다.
 
 ## 문제·범위
 

@@ -29,3 +29,19 @@ test("slug와 다른 리스팅의 ID를 섞으면 저장하지 않는다", async
   const spy = t.mock.method(db.appConsoleMetricDaily, "upsert");
   const result = await ingest(push(day, 31877), new Date()); assert.equal(result.upserts, 0); assert.equal(spy.mock.callCount(), 0);
 });
+test("일반 토큰·비밀 키의 중첩 원본도 저장하지 않는다", async (t) => {
+  const spy = t.mock.method(db.appConsoleMetricDaily, "upsert");
+  for (const key of ["token", "id_token", "bearer-token", "secret", "clientSecret", "Authorization"]) {
+    const result = await ingest(push({ ...day, raw: { nested: [{ [key]: "synthetic-secret" }] } }), new Date());
+    assert.equal(result.upserts, 0); assert.ok(result.skipped.length > 0);
+  }
+  assert.equal(spy.mock.callCount(), 0);
+});
+test("같은 날짜의 상충하는 행은 입력 순서와 무관하게 전체 제외한다", async (t) => {
+  const spy = t.mock.method(db.appConsoleMetricDaily, "upsert");
+  for (const days of [[day, { ...day, iaaEarningKrw: 123 }], [{ ...day, iaaEarningKrw: 123 }, day]]) {
+    const payload = { apps: [{ slug: "lizard-tycoon", miniAppId: 61736, workspaceId: 38345, days }] };
+    const result = await ingest(payload, new Date()); assert.equal(result.upserts, 0); assert.ok(result.skipped.length > 0);
+  }
+  assert.equal(spy.mock.callCount(), 0);
+});

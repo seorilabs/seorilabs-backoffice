@@ -7,7 +7,7 @@ import type {
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
-import { toDbDay } from "@/lib/analytics/metric-day";
+import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { recordCollectionFailure, recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
 
 // AppsInToss 콘솔 지표 ingest(push 수집). 인증된 로컬 Claude 세션이 MCP dashboard_* 를 조회해
@@ -92,7 +92,7 @@ export async function ingestConsoleMetrics(
 
   for (const push of apps) {
     if (!push || typeof push !== "object") { result.skipped.push({ key: "unknown", reason: "리스팅 객체 필요" }); continue; }
-    if ((push.slug != null && typeof push.slug !== "string") || !Number.isInteger(push.miniAppId) || (push.miniAppId ?? 0) <= 0) {
+    if ((push.slug != null && typeof push.slug !== "string") || typeof push.miniAppId !== "number" || !Number.isInteger(push.miniAppId) || (push.miniAppId ?? 0) <= 0) {
       result.skipped.push({ key: "unknown", reason: "리스팅 식별자 형식 오류" }); continue;
     }
     const key = pushKey(push);
@@ -107,10 +107,6 @@ export async function ingestConsoleMetrics(
     }
     if (!isConsoleMetricCollectionActive(app.status)) {
       result.skipped.push({ key, reason: `App 운영 중지(status=${app.status})` });
-      continue;
-    }
-    if (push.miniAppId == null) {
-      result.skipped.push({ key, reason: "miniAppId 누락(리스팅 키 필수)" });
       continue;
     }
     const miniAppId = push.miniAppId;
@@ -135,8 +131,17 @@ export async function ingestConsoleMetrics(
     // 안 왔다는 뜻이다(GA4 원장은 반대로 권위적이다).
     const observations: ObservationInput[] = [];
     const failures: Omit<ObservationInput, "state">[] = [];
-    const dates = new Set<string>();
+    const dateCounts = new Map<string, number>();
+    for (const day of push.days) if (day && typeof day.date === "string") dateCounts.set(day.date, (dateCounts.get(day.date) ?? 0) + 1);
+    const duplicates = new Set<string>();
     for (const input of push.days as ConsoleDailyMetric[]) {
+      if (input && typeof input.date === "string" && (dateCounts.get(input.date) ?? 0) > 1) {
+        if (!duplicates.has(input.date)) {
+          duplicates.add(input.date); result.skipped.push({ key, reason: "중복 날짜의 행 전체 제외" });
+          if (parseMetricDay(input.date)) failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: input.date, detail: "중복 날짜로 저장 보류" });
+        }
+        continue;
+      }
       const checked = validateConsoleDay(input);
       if (!checked.ok) {
         result.skipped.push({ key, reason: `미확인·비정상 지표: ${checked.fields.join(",")}` });
@@ -146,8 +151,6 @@ export async function ingestConsoleMetrics(
         continue;
       }
       const day = checked.day;
-      if (dates.has(day.date)) { result.skipped.push({ key, reason: "중복 날짜" }); continue; }
-      dates.add(day.date);
       const date = toDbDay(day.date);
       const data = {
         // dau/newUsers 는 null 허용(콘솔 미집계). 0 강제하지 않는다.

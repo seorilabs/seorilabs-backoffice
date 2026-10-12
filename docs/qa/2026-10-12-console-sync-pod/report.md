@@ -46,3 +46,21 @@ OAuth·HTTP 검사는 실제 공급자 실패를 재현한 합성 응답 시험�
 
 로컬 `console-sync` 스킬은 승인된 조회 전용 경로에 한해 개정했다. 최초 동의·등록 identity·실제
 갱신·회전·재시작 검증·별도 운영 승인·만료 우회 금지 조건을 유지한다.
+
+## 교차 리뷰 반영
+
+[PR #462](https://github.com/seorilabs/seorilabs-backoffice/pull/462)에 읽기 전용 Claude 원문을 게시했다.
+Copilot 자동 리뷰의 일반 token 키와 중복 날짜 지적을 수용해 먼저 실패하는 assertion을 추가했다.
+Claude의 불완전한 회전 응답·OAuth 설정 오류·HTTP 전체 시간 예산·429 중단·저장소 명령 계약·
+비어 있지 않은 DAU 경로·죽은 분기·필수 필드 타입·무관한 auth lockfile 변경을 보완한다.
+
+행 전체 보류와 공통 minLastDate overlap은 승인 설계·기존 런북의 의도된 정책이다. 빈 배열을 0으로
+확정하거나 nullable 스키마/부분 필드 갱신을 도입하지 않는다. DB 전용 리스팅은 현재 상태 응답에
+workspace가 없으므로 자동 수집에서 확인 필요로 차단하고 기존 상태·push API는 보존한다.
+
+기존 PR CI는 Next 빌드까지 통과했다. 전체 제품 E2E 중앙 gate는 여전히 차단이다.
+리뷰 반영 후보의 최신 테스트·CI와 2회차 수정분 리뷰는 PR 코멘트에서 확인한다.
+
+리뷰 반영 후 typecheck·lint 및 전체 1,754개 테스트(실패·skip 0), 격리 DB 14개 리스팅의
+저장·readback·기존 행 보존·요청 제한 시 후속 조회 중단이 통과했다. HTTP 전체 예산 검사는
+대기 중인 재시도가 취소된 뒤 추가 요청이 없음을 확인한다.
