@@ -37,7 +37,7 @@ async function main() {
   assert.equal(await prisma.auditLog.count({where: {action: 'app.visibility', entityId: app.id}}), 0);
   assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, 'ACTIVE');
   await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'FAILED', error: PLATFORM_OUTCOME_UNKNOWN_CODE}});
-  await assert.rejects(setAppVisibility(request), /結果|진행 중/);
+  await assert.rejects(setAppVisibility(request), /진행 중/);
   await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'SUCCEEDED', error: null}});
   const repeated = await Promise.all([setAppVisibility(request), setAppVisibility(request)]);
   assert.deepEqual(repeated.map((result) => result.duplicate).sort(), [false, true]);

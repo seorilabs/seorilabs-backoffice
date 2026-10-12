@@ -71,7 +71,7 @@ export default async function PlatformIapPage({ searchParams }: { searchParams: 
   ]);
   const requested = Array.isArray(requestedApp) ? "" : requestedApp;
   const initialAppSlug = initialIapAppSlug(writeAccess.apps, requested);
-  const invalidAppLink = requested !== undefined && initialAppSlug === "";
+  const invalidAppLink = requested !== undefined && initialAppSlug === "" && writeAccess.apps.length > 0;
 
   return (
     <section className="space-y-4">
@@ -98,9 +98,12 @@ export default async function PlatformIapPage({ searchParams }: { searchParams: 
         writableApps={writeAccess.apps}
         initialAppSlug={initialAppSlug}
         initialBlockingReferences={writeAccess.blockingReferences}
-        writeAccessError={invalidAppLink
-          ? "요청한 게임은 지급할 수 없습니다. IAP 지원 게임을 직접 선택해 주세요."
-          : writeAccess.error}
+        writeAccessError={[
+          writeAccess.error,
+          invalidAppLink
+            ? "요청한 게임은 지급할 수 없습니다. IAP 지원 게임을 직접 선택해 주세요."
+            : null,
+        ].filter(Boolean).join(" ") || null}
       />
     </section>
   );

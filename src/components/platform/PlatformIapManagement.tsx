@@ -1397,6 +1397,8 @@ export function PlatformIapManagement({
           </div>
         )}
 
+        {writableApps.length > 0 && (
+          <>
         <label className="mt-4 flex items-start gap-2 text-sm text-neutral-700">
           <input
             type="checkbox"
@@ -1421,6 +1423,8 @@ export function PlatformIapManagement({
                 ? "보존된 동일 Request ID로 재요청"
                 : `${operationLabel(operation)} 요청`}
         </button>
+          </>
+        )}
         {retryRequest && (
           <button
             type="button"
