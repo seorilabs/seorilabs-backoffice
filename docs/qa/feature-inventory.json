@@ -168,6 +168,10 @@
     {
       "id": "settings-diagnostics-and-admin-controls",
       "core": false
+    },
+    {
+      "id": "keyword-rank-history-and-charts",
+      "core": true
     }
   ]
 }
