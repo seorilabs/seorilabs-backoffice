@@ -8,6 +8,18 @@ import { metricDaysBetween, metricDayWindow } from "../../src/lib/analytics/metr
 import { MCP_URL, TOKEN_URL } from "../../src/lib/analytics/console-sync/oauth";
 
 // 실제 공급자를 호출하지 않는 loopback 전용 프로토콜 시험 서버.
+// 2026-10-13 실제 tools/list 계약: 날짜·집계·OS 입력은 request 안에 있어야 한다.
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const period = { startDate: date, endDate: date };
+const unit = z.enum(["DAY", "WEEK", "MONTH"]);
+function inputSchema(name: string) {
+  if (name === "workspace_overview") return z.object({}).strict();
+  const request = name === "dashboard_revenue_iaa" ? z.object({ ...period, osType: z.enum(["IOS", "ANDROID"]).optional() }).strict()
+    : name === "dashboard_revenue_iap" ? z.object({ ...period, timeUnitType: unit }).strict()
+    : name === "dashboard_session" ? z.object({ ...period, timeUnit: unit.optional() }).strict()
+    : z.object({ ...period, timeUnit: unit }).strict();
+  return z.object({ workspaceId: z.number().int(), miniAppId: z.number().int(), request }).strict();
+}
 export async function startConsoleFixture() {
   const state = { failIos: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
   const server = createServer(async (req, res) => {
@@ -19,18 +31,19 @@ export async function startConsoleFixture() {
       if (body?.method === "tools/call" && state.rateLimits > 0) { state.rateLimits--; res.writeHead(429, { "Retry-After": state.retryAfter }).end(); return; }
       if (body?.method === "tools/call" && state.unavailable > 0) { state.unavailable--; res.writeHead(503, { "Retry-After": state.retryAfter }).end(); return; }
       const mcp = new McpServer({ name: "isolated-console", version: "1" });
-      for (const name of CONSOLE_READ_TOOLS) mcp.registerTool(name, { inputSchema: z.object({}).passthrough() }, async (args) => {
+      for (const name of CONSOLE_READ_TOOLS) mcp.registerTool(name, { inputSchema: inputSchema(name) }, async (args) => {
         state.tools.push(name); state.active++; state.maxActive = Math.max(state.active, state.maxActive);
         try {
           await new Promise((resolve) => setTimeout(resolve, 10));
           if (name === "workspace_overview") return { content: [{ type: "text", text: JSON.stringify({ workspaces: [{ id: 38345 }] }) }] };
-          const start = args.startDate as string; const end = args.endDate as string;
+          const request = (args as Record<string, unknown>).request as { startDate: string; endDate: string; osType?: string };
+          const start = request.startDate; const end = request.endDate;
           const dates = metricDayWindow(end, metricDaysBetween(end, start) + 1);
           let result: unknown;
           if (name === "dashboard_dau") result = { au: [], newAu: [], age: [], gender: [], referrer: [] };
           if (name === "dashboard_session") result = { metric: dates.map((dateKey) => ({ dateKey, value: 30 })) };
           if (name === "dashboard_revenue_iap") result = { metric: dates.map((trxDate) => ({ trxDate, trxAmount: 0, settlementAmount: 0, pu: 0 })) };
-          if (name === "dashboard_revenue_iaa") result = { dailyReports: dates.flatMap((date) => state.failIos && args.osType === "IOS" ? [] : [{ date, impression: args.osType === "IOS" ? 0 : 6, estimatedEarning: args.osType === "IOS" ? 0 : 34, ecpm: 5 }]) };
+          if (name === "dashboard_revenue_iaa") result = { dailyReports: dates.flatMap((date) => state.failIos && request.osType === "IOS" ? [] : [{ date, impression: request.osType === "IOS" ? 0 : 6, estimatedEarning: request.osType === "IOS" ? 0 : 34, ecpm: 5 }]) };
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         } finally { state.active--; }
       });

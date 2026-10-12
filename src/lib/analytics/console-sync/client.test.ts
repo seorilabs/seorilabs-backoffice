@@ -13,7 +13,7 @@ test("실제 HTTP MCP에서 갱신·429·병렬 상한·allowlist·부분 결측
     const target = { slug: "lizard-tycoon", workspaceId: 38345, miniAppId: 61736 };
     const result = await source.queryListing(target, "2026-10-10", "2026-10-11"); assert.equal(result.days.length, 2); assert.equal(result.errors.length, 0);
     assert.equal(fixture.state.refreshes, 1);
-    await Promise.all(Array.from({ length: 6 }, () => reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, startDate: "2026-10-11", endDate: "2026-10-11" })));
+    await Promise.all(Array.from({ length: 6 }, () => reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, request: { startDate: "2026-10-11", endDate: "2026-10-11", timeUnit: "DAY" } })));
     assert.ok(fixture.state.maxActive <= 2);
     const before = fixture.state.tools.length; await assert.rejects(reader.call("deploy" as ConsoleReadTool, {}), /MCP_TOOL_NOT_ALLOWED/); assert.equal(fixture.state.tools.length, before);
     fixture.state.failIos = true;
@@ -27,13 +27,27 @@ test("긴 Retry-After와 비정상 값은 자동 재시도하지 않는다", () 
   assert.equal(retryDelay(new Response(null, { status: 503 })), 1000); assert.equal(retryDelay(new Response(null, { status: 400 })), null);
 });
 
+test("공급자 입력 계약은 request 없는 조회를 거부하고 정상 외피만 받는다", async () => {
+  const fixture = await startConsoleFixture();
+  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const reader = await createConsoleReader(oauth);
+  try {
+    const period = { startDate: "2026-10-11", endDate: "2026-10-11", timeUnit: "DAY" };
+    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, ...period }), /MCP_TOOL_FAILED/);
+    assert.equal(fixture.state.tools.length, 0);
+    const result = await reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, request: period });
+    assert.deepEqual(result, { au: [], newAu: [], age: [], gender: [], referrer: [] });
+    assert.deepEqual(fixture.state.tools, ["dashboard_dau"]);
+  } finally { await reader.close(); await fixture.close(); }
+});
+
 test("요청 전체 예산이 끝나면 대기 중인 재시도를 취소하고 다음 슬롯을 넘긴다", async () => {
   const fixture = await startConsoleFixture();
   const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth, { requestBudgetMs: 1_000 });
   try {
     fixture.state.unavailable = 10; fixture.state.retryAfter = "2";
-    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, startDate: "2026-10-11", endDate: "2026-10-11" }), /MCP_REQUEST_TIMEOUT/);
+    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, request: { startDate: "2026-10-11", endDate: "2026-10-11", timeUnit: "DAY" } }), /MCP_REQUEST_TIMEOUT/);
     const remaining = fixture.state.unavailable;
     await new Promise((resolve) => setTimeout(resolve, 150)); assert.equal(fixture.state.unavailable, remaining);
   } finally { await reader.close(); await fixture.close(); }
@@ -44,7 +58,7 @@ test("Retry-After 20초 연속 응답에서 남은 예산을 넘기면 전체 �
   const reader = await createConsoleReader(oauth);
   try {
     fixture.state.rateLimits = 10; fixture.state.retryAfter = "20";
-    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, startDate: "2026-10-11", endDate: "2026-10-11" }), /RATE_LIMITED/);
+    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, request: { startDate: "2026-10-11", endDate: "2026-10-11", timeUnit: "DAY" } }), /RATE_LIMITED/);
     const left = fixture.state.rateLimits; assert.equal(left, 8);
     await assert.rejects(reader.call("dashboard_session", {}), /RATE_LIMITED/); assert.equal(fixture.state.rateLimits, left);
   } finally { await reader.close(); await fixture.close(); }

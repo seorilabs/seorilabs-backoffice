@@ -13,11 +13,12 @@ export class McpConsoleMetricsSource implements ConsoleMetricsSource {
   }
   async queryListing(target: ConsoleSourceTarget, start: string, end: string) {
     if (target.workspaceId !== AIT_WORKSPACE_ID || !AIT_LISTINGS.some((l) => l.appSlug === target.slug && l.miniAppId === target.miniAppId)) throw new ConsoleSyncError("CONSOLE_LISTING_MISMATCH");
-    const common = { workspaceId: target.workspaceId, miniAppId: target.miniAppId, startDate: start, endDate: end };
+    const common = { workspaceId: target.workspaceId, miniAppId: target.miniAppId };
+    const period = { startDate: start, endDate: end };
     const requests: Array<[string, ConsoleReadTool, Record<string, unknown>]> = [
-      ["dau", "dashboard_dau", { ...common, timeUnit: "DAY" }], ["session", "dashboard_session", { ...common, timeUnit: "DAY" }],
-      ["android", "dashboard_revenue_iaa", { ...common, osType: "ANDROID" }], ["ios", "dashboard_revenue_iaa", { ...common, osType: "IOS" }],
-      ["iap", "dashboard_revenue_iap", { ...common, timeUnitType: "DAY" }],
+      ["dau", "dashboard_dau", { ...common, request: { ...period, timeUnit: "DAY" } }], ["session", "dashboard_session", { ...common, request: { ...period, timeUnit: "DAY" } }],
+      ["android", "dashboard_revenue_iaa", { ...common, request: { ...period, osType: "ANDROID" } }], ["ios", "dashboard_revenue_iaa", { ...common, request: { ...period, osType: "IOS" } }],
+      ["iap", "dashboard_revenue_iap", { ...common, request: { ...period, timeUnitType: "DAY" } }],
     ];
     const responses: Record<string, unknown> = {}; const errors: { metric: string; code: string }[] = [];
     for (let offset = 0; offset < requests.length; offset += 2) {

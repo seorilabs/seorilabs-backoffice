@@ -1,0 +1,83 @@
+{
+  "sourceBlob": "bca3831fcc9e509a041ded90814c1158b3e3b7e9",
+  "scope": "read-only actual provider OAuth; no production writes",
+  "initialProviderRead": {
+    "state": "authenticated",
+    "mode": "initial",
+    "startedAt": "2026-10-12T23:10:28.977Z",
+    "completedAt": "2026-10-12T23:10:33.860Z",
+    "workspaceId": 38345,
+    "listing": "happy-farm#31877",
+    "day": "2026-10-12",
+    "refreshRequests": 0,
+    "mcpRequests": 9,
+    "metricDays": 0,
+    "missing": [
+      {
+        "date": "2026-10-12",
+        "metrics": [
+          "iaa.IOS"
+        ]
+      }
+    ],
+    "errors": [],
+    "tokenInitiallyExpired": false,
+    "writes": 0
+  },
+  "workerVerifyAuth": {
+    "state": "authenticated",
+    "mode": "verify-auth",
+    "metricDays": 0,
+    "missing": [
+      {
+        "date": "2026-10-12",
+        "metrics": [
+          "iaa.IOS"
+        ]
+      }
+    ],
+    "errors": []
+  },
+  "forcedRefresh": {
+    "state": "blocked",
+    "code": "OAUTH_ROTATION_REQUIRES_REVIEW",
+    "credentialId": "shared/apps-in-toss/console-oauth",
+    "catalogStatus": "unresolved",
+    "canonicalFileUnchanged": true,
+    "expiredRefresh": "not-run",
+    "podRestart": "not-run",
+    "productionWrites": 0,
+    "recordedAt": "2026-10-12T23:27:31.436539+00:00"
+  },
+  "backupRestore": {
+    "local": "passed",
+    "beestation": "passed",
+    "finalFileCount": 6349,
+    "archiveSha256": "2bed3a9749491009a124ae006696fee24d069ddaf4d25dfe0d79112d36c60b57"
+  },
+  "localKind": {
+    "version": "v1.37.0",
+    "created": true,
+    "authPodCreated": false,
+    "credentialExecutionCopyCreated": false,
+    "deleted": true
+  },
+  "isolatedMySql": {
+    "version": "9.2",
+    "listingsVerified": 14,
+    "deleted": true
+  },
+  "regression": {
+    "tests": 1758,
+    "fail": 0,
+    "skip": 0
+  },
+  "remaining": {
+    "expiredRefresh": "blocked by rotation",
+    "actualPodRestart": "blocked by rotation",
+    "revoke": "not-run",
+    "fullProductE2e": "not-run",
+    "productionDeployment": "not-approved",
+    "scheduleActivation": "not-approved"
+  }
+}
