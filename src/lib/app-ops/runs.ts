@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import {
   AppOperationRunStatus,
   Prisma,
@@ -94,8 +95,9 @@ export async function enqueueAppOperation(input: {
     throw new Error("백오피스 request_id가 올바르지 않습니다.");
   }
   const expiresAt = new Date(Date.now() + RESULT_TTL_MS);
-  await prisma.$transaction([
-    prisma.appOperationRun.create({
+  await prisma.$transaction(async (tx) => {
+    await lockAppForNewWork(tx, input.appId);
+    await tx.appOperationRun.create({
       data: {
         requestId: input.requestId,
         appId: input.appId,
@@ -109,8 +111,8 @@ export async function enqueueAppOperation(input: {
         actorLogin: input.actorLogin,
         expiresAt,
       },
-    }),
-    prisma.auditLog.create({
+    });
+    await tx.auditLog.create({
       data: {
         actorLogin: input.actorLogin,
         action: "app.operation.enqueue",
@@ -126,8 +128,8 @@ export async function enqueueAppOperation(input: {
           executor: "kubernetes",
         },
       },
-    }),
-  ]);
+    });
+  });
 }
 
 export async function getAppOperationRunStatus(

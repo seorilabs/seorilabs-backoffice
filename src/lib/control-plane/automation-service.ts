@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "./app-work-lock";
 import crypto from "node:crypto";
 import { Prisma, type FleetProjectProjection } from "@prisma/client";
 
@@ -427,7 +428,7 @@ async function dispatchDefinition(input: {
   issueNumber?: number;
 }) {
   const { definition } = input;
-  if (!definition.enabled || definition.cancelledAt || !definition.app || definition.app.status !== "ACTIVE") {
+  if (!definition.enabled || definition.cancelledAt || !definition.appId || !definition.app || definition.app.status !== "ACTIVE") {
     throw new ControlPlaneError("활성 routine이 아닙니다.", 409, "DEFINITION_INACTIVE");
   }
   if (!isManagedAutomationDefinition(definition)) {
@@ -468,28 +469,36 @@ async function dispatchDefinition(input: {
       ? issue.labels.filter((label): label is string => typeof label === "string")
       : [];
     const policy = parseManagedAutomationPolicy(definition.configuration)!;
-    const occurrence = await prisma.automationOccurrence.create({
-      data: {
-        definitionId: definition.id,
-        scheduledFor: input.scheduledFor,
-        idempotencyKey,
-        triggerKind: input.triggerKind,
-        triggerKey: `${definition.id}:${input.triggerKey}`.slice(0, 191),
-        runs: {
-          create: {
-            appId: issue.appId ?? definition.appId,
-            repoFullName: definition.app.repoFullName,
-            issueNumber: issue.number,
-            workKey: issueWorkKey(definition.app.repoFullName, issue.number),
-            issueState: issue.state,
-            labels,
-            createsPr: policy.createsPr,
-            priority: issue.priority ? Number(issue.priority.slice(1)) : 100,
-            maxAttempts: definition.maxAttempts,
+    const definitionApp = definition.app;
+    const definitionAppId = definition.appId;
+    const runAppId = issue.appId ?? definitionAppId;
+    const occurrence = await prisma.$transaction(async (tx) => {
+      for (const appId of [...new Set([definitionAppId, runAppId])].sort()) {
+        await lockAppForNewWork(tx, appId, {activeOnly: true});
+      }
+      return tx.automationOccurrence.create({
+        data: {
+          definitionId: definition.id,
+          scheduledFor: input.scheduledFor,
+          idempotencyKey,
+          triggerKind: input.triggerKind,
+          triggerKey: `${definition.id}:${input.triggerKey}`.slice(0, 191),
+          runs: {
+            create: {
+              appId: runAppId,
+              repoFullName: definitionApp.repoFullName,
+              issueNumber: issue.number,
+              workKey: issueWorkKey(definitionApp.repoFullName, issue.number),
+              issueState: issue.state,
+              labels,
+              createsPr: policy.createsPr,
+              priority: issue.priority ? Number(issue.priority.slice(1)) : 100,
+              maxAttempts: definition.maxAttempts,
+            },
           },
         },
-      },
-      include: { runs: true },
+        include: { runs: true },
+      });
     });
     return { occurrence, duplicate: false };
   } catch (error) {
@@ -850,6 +859,11 @@ export async function retryAgentRun(input: {
         },
       });
       if (!run) throw new ControlPlaneError("run을 찾을 수 없습니다.", 404, "RUN_NOT_FOUND");
+      if (run.appId) {
+        await lockAppForNewWork(tx, run.appId, {
+          activeOnly: run.occurrence.definition.template === SOURCE_REMEDIATION_TEMPLATE_KEY,
+        });
+      }
       if (run.readbackRequestedAt || run.repoGuard?.activeScopeKey) {
         throw new ControlPlaneError("결과 불명 run은 worker readback으로 먼저 판정해야 합니다.", 409, "READBACK_REQUIRED");
       }

@@ -6,8 +6,8 @@ import Link from "next/link";
 import { loadPlatformIapSnapshotAction } from "@/lib/actions/platform-read";
 import { env } from "@/lib/env";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
-import { resolvedPlatformAppId } from "@/lib/platform/app-id";
-import { platformReadConfiguration } from "@/lib/platform/read-client";
+import { createPlatformReadClient, platformReadConfiguration } from "@/lib/platform/read-client";
+import { initialIapAppSlug, selectWritableIapApps } from "@/lib/platform/iap-apps";
 import { platformSnapshotErrorMessage } from "@/lib/platform/snapshot";
 import { listBlockingPlatformOperations } from "@/lib/platform/runs";
 import type { PlatformBlockingReference } from "@/lib/platform/recovery";
@@ -37,16 +37,21 @@ async function writableApps(): Promise<{
           ? {}
           : { owners: { some: { userId: actor.userId, role: "OWNER" } } }),
       },
-      select: { id: true, slug: true, platformAppId: true, displayName: true },
+      select: { id: true, slug: true, platformAppId: true, displayName: true, type: true, status: true },
       orderBy: { displayName: "asc" },
     });
+    const client = createPlatformReadClient();
+    const selection = await selectWritableIapApps(apps, (appId) => client.catalogEntitlements(appId));
     return {
-      apps: apps.map((app) => ({
-        slug: resolvedPlatformAppId(app),
-        displayName: app.displayName,
-      })),
+      apps: selection.apps,
       blockingReferences: await listBlockingPlatformOperations(apps),
-      error: null,
+      error: selection.unavailableCount
+        ? `${selection.unavailableCount}개 게임의 지급 준비 상태를 확인하지 못해 선택 목록에서 제외했습니다. 잠시 후 새로고침해 주세요.`
+        : selection.emptyCount && !selection.apps.length
+          ? "등록된 지급 상품이 없어 변경할 수 없습니다."
+          : !selection.apps.length
+            ? "현재 권한으로 지급할 수 있는 IAP 지원 게임이 없습니다."
+            : null,
     };
   } catch {
     return {
@@ -57,12 +62,16 @@ async function writableApps(): Promise<{
   }
 }
 
-export default async function PlatformIapPage() {
+export default async function PlatformIapPage({ searchParams }: { searchParams: Promise<{ app?: string | string[] }> }) {
+  const { app: requestedApp } = await searchParams;
   const configuration = platformReadConfiguration();
   const [snapshot, writeAccess] = await Promise.all([
     configuration.configured ? loadPlatformIapSnapshotAction() : null,
     writableApps(),
   ]);
+  const requested = Array.isArray(requestedApp) ? "" : requestedApp;
+  const initialAppSlug = initialIapAppSlug(writeAccess.apps, requested);
+  const invalidAppLink = requested !== undefined && initialAppSlug === "" && writeAccess.apps.length > 0;
 
   return (
     <section className="space-y-4">
@@ -87,8 +96,14 @@ export default async function PlatformIapPage() {
                 : null
         }
         writableApps={writeAccess.apps}
+        initialAppSlug={initialAppSlug}
         initialBlockingReferences={writeAccess.blockingReferences}
-        writeAccessError={writeAccess.error}
+        writeAccessError={[
+          writeAccess.error,
+          invalidAppLink
+            ? "요청한 게임은 지급할 수 없습니다. IAP 지원 게임을 직접 선택해 주세요."
+            : null,
+        ].filter(Boolean).join(" ") || null}
       />
     </section>
   );

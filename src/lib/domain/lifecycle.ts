@@ -5,7 +5,7 @@ import type { Lifecycle, ReleaseMarket, AppStatus } from "@prisma/client";
 // 앱 운영 상태. DEPRECATED 는 DB 전용 비활성 플래그이며 사용자 노출/앱 액션에서 제외한다.
 export const STATUS_KO: Record<AppStatus, string> = {
   ACTIVE: "운영",
-  PAUSED: "일시중지",
+  PAUSED: "자동 운영 중지",
   DEPRECATED: "비활성",
 };
 

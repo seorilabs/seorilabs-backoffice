@@ -62,6 +62,7 @@ export interface PlatformWritableApp {
 }
 
 interface PlatformIapManagementProps {
+  initialAppSlug?: string;
   initialSnapshot?: PlatformIapSnapshot | null;
   initialError?: string | null;
   initialBlockingReferences?: readonly PlatformBlockingReference[];
@@ -93,6 +94,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export function PlatformIapManagement({
+  initialAppSlug,
   initialSnapshot = null,
   initialError = null,
   initialBlockingReferences = EMPTY_BLOCKING_REFERENCES,
@@ -108,7 +110,7 @@ export function PlatformIapManagement({
   const [operation, setOperation] = useState<PlatformManualOperationKey>(
     "platform.iap.grant-entitlement",
   );
-  const [appSlug, setAppSlug] = useState(writableApps[0]?.slug ?? "");
+  const [appSlug, setAppSlug] = useState(initialAppSlug ?? writableApps[0]?.slug ?? "");
   const [catalog, setCatalog] = useState<PlatformIapCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogPending, setCatalogPending] = useState(false);
@@ -820,6 +822,10 @@ export function PlatformIapManagement({
 
   function submitWrite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!writableApps.some((app) => app.slug === appSlug) || catalogPending) {
+      setWriteOperation({ state: "error", summary: "지급 가능한 게임과 상품을 확인한 뒤 실행하세요." });
+      return;
+    }
     if (retryRequest?.operation === "platform.iap.decide-refund-review") {
       setWriteOperation({
         state: "error",
@@ -1093,9 +1099,11 @@ export function PlatformIapManagement({
 
   const writeDisabled =
     !recoveryLoaded ||
+    catalogPending ||
     writePending ||
     refundReviewBusy ||
     writableApps.length === 0 ||
+    !writableApps.some((app) => app.slug === appSlug) ||
     expectedConfirmation === "" ||
     confirmation.trim() !== expectedConfirmation ||
     reason.trim() === "" ||
@@ -1120,10 +1128,10 @@ export function PlatformIapManagement({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <form
           onSubmit={lookupEntitlements}
-          className="rounded-lg border border-neutral-200 bg-white p-4"
+          className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4"
         >
           <h3 className="text-sm font-semibold text-neutral-800">
             사용자 Entitlement 조회
@@ -1139,7 +1147,7 @@ export function PlatformIapManagement({
               required
               maxLength={29}
               spellCheck={false}
-              className="min-w-0 flex-1 rounded border border-neutral-300 px-3 py-2 font-mono text-sm outline-none focus:border-neutral-600"
+              className="w-full min-w-0 flex-1 rounded border border-neutral-300 px-3 py-2 font-mono text-sm outline-none focus:border-neutral-600"
             />
             <button
               type="submit"
@@ -1205,6 +1213,11 @@ export function PlatformIapManagement({
           </span>
         </div>
 
+        {writeAccessError && writableApps.length > 0 && (
+          <p role="status" className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {writeAccessError}
+          </p>
+        )}
         {writableApps.length === 0 ? (
           <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {writeAccessError ??
@@ -1217,6 +1230,11 @@ export function PlatformIapManagement({
                 value={operation}
                 onChange={(event) => {
                   setOperation(event.target.value as PlatformManualOperationKey);
+                  setPlatformUserId("");
+                  setGrantRequestId("");
+                  setEntitlementId("");
+                  setReason("");
+                  setEnvironmentConfirmed(false);
                   setConfirmation("");
                   setAppleClearedConfirmed(false);
                 }}
@@ -1229,15 +1247,20 @@ export function PlatformIapManagement({
                 </option>
               </select>
             </Field>
-            <Field label="앱">
+            <Field label="게임">
               <select
                 value={appSlug}
                 onChange={(event) => {
                   setAppSlug(event.target.value);
+                  setPlatformUserId("");
+                  setGrantRequestId("");
+                  setReason("");
+                  setEnvironmentConfirmed(false);
                   setConfirmation("");
                 }}
                 className="w-full rounded border border-neutral-300 px-3 py-2 text-sm"
               >
+                <option value="">IAP 지원 게임 선택</option>
                 {writableApps.map((app) => (
                   <option key={app.slug} value={app.slug}>
                     {app.displayName} · {app.slug}
@@ -1374,6 +1397,8 @@ export function PlatformIapManagement({
           </div>
         )}
 
+        {writableApps.length > 0 && (
+          <>
         <label className="mt-4 flex items-start gap-2 text-sm text-neutral-700">
           <input
             type="checkbox"
@@ -1398,6 +1423,8 @@ export function PlatformIapManagement({
                 ? "보존된 동일 Request ID로 재요청"
                 : `${operationLabel(operation)} 요청`}
         </button>
+          </>
+        )}
         {retryRequest && (
           <button
             type="button"
