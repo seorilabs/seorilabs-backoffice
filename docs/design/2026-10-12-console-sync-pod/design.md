@@ -4,7 +4,7 @@
 - 상태: v1 사람 승인, 구현·검증 진행
 - 조사 기준: Backoffice `f7682393443e3a6d0436af7ad3d4dafb4b30341e`, 2026-10-12 KST
 - 승인자·시각·근거: 사용자, 2026-10-12 KST(정확한 시각 미확인). “설계 v1 승인해. OAuth 갱신 검증부터 구현·검증·PR까지 진행해. 운영 배포와 스케줄 활성화는 별도로 승인할게.” 승인 커밋: `0b929ccb1d9a6272fb0d4004056791d31e5eb35c`.
-- 관련 실행 티켓: [execution.md](execution.md). 검수: [검수 기록](../../qa/2026-10-12-console-sync-pod/report.md). Ready PR은 실행 티켓에 연결한다.
+- 관련 실행 티켓: [execution.md](execution.md). 검수: [검수 기록](../../qa/2026-10-12-console-sync-pod/report.md). Issue [#461](https://github.com/seorilabs/seorilabs-backoffice/issues/461). Ready PR은 실행 티켓에 연결한다.
 
 ## 목적·범위·근거
 
