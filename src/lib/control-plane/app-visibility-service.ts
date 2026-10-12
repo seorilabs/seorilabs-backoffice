@@ -1,3 +1,4 @@
+import { lockAppRow } from "./app-work-lock";
 import { Prisma, type PrismaClient, type UserRole } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -48,7 +49,7 @@ export async function setAppVisibility(input: z.infer<typeof appVisibilitySchema
   try {
     return await client.$transaction(async (tx) => {
       // 앱 변경 및 동일 앱의 재요청을 직렬화한다. 재처리에도 현재 권한을 확인한다.
-      await tx.$queryRaw(Prisma.sql`SELECT id FROM app WHERE id = ${request.appId} FOR UPDATE`);
+      await lockAppRow(tx, request.appId);
       const app = await tx.app.findUnique({
         where: {id: request.appId}, select: {id: true, slug: true, repoFullName: true, status: true, updatedAt: true},
       });
