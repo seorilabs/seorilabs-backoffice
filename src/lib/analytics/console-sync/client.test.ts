@@ -32,9 +32,20 @@ test("요청 전체 예산이 끝나면 대기 중인 재시도를 취소하고 
   const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth, { requestBudgetMs: 1_000 });
   try {
-    fixture.state.rateLimits = 10; fixture.state.retryAfter = "2";
+    fixture.state.unavailable = 10; fixture.state.retryAfter = "2";
     await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, startDate: "2026-10-11", endDate: "2026-10-11" }), /MCP_REQUEST_TIMEOUT/);
-    const remaining = fixture.state.rateLimits;
-    await new Promise((resolve) => setTimeout(resolve, 150)); assert.equal(fixture.state.rateLimits, remaining);
+    const remaining = fixture.state.unavailable;
+    await new Promise((resolve) => setTimeout(resolve, 150)); assert.equal(fixture.state.unavailable, remaining);
+  } finally { await reader.close(); await fixture.close(); }
+});
+test("Retry-After 20초 연속 응답에서 남은 예산을 넘기면 전체 조회를 멈춘다", async () => {
+  const fixture = await startConsoleFixture();
+  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const reader = await createConsoleReader(oauth);
+  try {
+    fixture.state.rateLimits = 10; fixture.state.retryAfter = "20";
+    await assert.rejects(reader.call("dashboard_dau", { workspaceId: 38345, miniAppId: 61736, startDate: "2026-10-11", endDate: "2026-10-11" }), /RATE_LIMITED/);
+    const left = fixture.state.rateLimits; assert.equal(left, 8);
+    await assert.rejects(reader.call("dashboard_session", {}), /RATE_LIMITED/); assert.equal(fixture.state.rateLimits, left);
   } finally { await reader.close(); await fixture.close(); }
 });

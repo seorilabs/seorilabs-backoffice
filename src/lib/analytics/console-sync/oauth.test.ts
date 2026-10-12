@@ -34,7 +34,7 @@ test("refresh rotation은 저장하지 않고 즉시 멈춘다", async () => {
 test("고정 주소 밖으로 인증을 보내지 않고 오류 원문을 보고하지 않는다", async () => {
   let calls = 0; const oauth = new ConsoleOAuth(credential, async () => { calls++; throw new Error("synthetic-secret"); });
   await assert.rejects(oauth.fetch("https://example.com"), /MCP_HOST_NOT_ALLOWED/); assert.equal(calls, 0);
-  try { await oauth.refresh(); } catch (e) { assert.equal(consoleErrorCode(e), "OAUTH_REFRESH_NETWORK_ERROR"); assert.ok(!JSON.stringify(e).includes("synthetic-secret")); }
+  try { await oauth.refresh(); } catch (e) { assert.equal(consoleErrorCode(e), "OAUTH_REFRESH_OUTCOME_UNKNOWN"); assert.ok(!JSON.stringify(e).includes("synthetic-secret")); }
 });
 test("자격증명 논리 ID·파일 권한을 검증하고 원본은 변경하지 않는다", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ait-credential-test-")); const file = join(dir, "credential.json"); const raw = JSON.stringify(credential);
@@ -52,8 +52,27 @@ test("불완전한 갱신 응답의 회전도 먼저 감지해 옛 토큰 재사
   await assert.rejects(oauth.refresh(), /OAUTH_ROTATION_REQUIRES_REVIEW/); assert.equal(calls, 1);
 });
 test("인가 설정 오류는 재로그인과 구분하고 응답 원문을 남기지 않는다", async () => {
-  for (const [error, code] of [["invalid_client", "OAUTH_CLIENT_CONFIGURATION_INVALID"], ["invalid_target", "OAUTH_RESOURCE_CONFIGURATION_INVALID"], ["unsupported_grant_type", "OAUTH_REFRESH_NOT_SUPPORTED"]]) {
+  for (const [error, code] of [["invalid_client", "OAUTH_CLIENT_CONFIGURATION_INVALID"], ["invalid_target", "OAUTH_RESOURCE_CONFIGURATION_INVALID"], ["unsupported_grant_type", "OAUTH_REFRESH_NOT_SUPPORTED"], ["constructor", "OAUTH_REQUEST_REJECTED"], ["__proto__", "OAUTH_REQUEST_REJECTED"]]) {
     const oauth = new ConsoleOAuth(credential, async () => Response.json({ error, description: "synthetic-secret" }, { status: 400 }));
     await assert.rejects(oauth.refresh(), new RegExp(code)); assert.equal(oauth.failureCode, code);
   }
+});
+test("공유 갱신의 전송 취소는 결과 불명으로 중단하고 옛 refresh를 재사용하지 않는다", async () => {
+  let calls = 0; const controller = new AbortController();
+  const oauth = new ConsoleOAuth(credential, async (_input, init) => {
+    calls++; return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+  });
+  const first = oauth.refresh(controller.signal); const second = oauth.refresh(); controller.abort();
+  const results = await Promise.allSettled([first, second]);
+  assert.ok(results.every((r) => r.status === "rejected" && consoleErrorCode(r.reason) === "OAUTH_REFRESH_OUTCOME_UNKNOWN"));
+  await assert.rejects(oauth.refresh(), /OAUTH_REFRESH_OUTCOME_UNKNOWN/); assert.equal(calls, 1);
+});
+test("비JSON 오류 응답의 HTTP 상태를 지키고 불완전한 2xx는 재사용을 멈춘다", async () => {
+  for (const [status, code] of [[401, "REAUTHENTICATION_REQUIRED"], [403, "REAUTHENTICATION_REQUIRED"], [400, "OAUTH_REQUEST_REJECTED"], [503, "OAUTH_REFRESH_UNAVAILABLE"]] as const) {
+    const oauth = new ConsoleOAuth(credential, async () => new Response("<html>gateway</html>", { status }));
+    await assert.rejects(oauth.refresh(), new RegExp(code));
+    if (status < 500) assert.equal(oauth.failureCode, code);
+  }
+  const oauth = new ConsoleOAuth(credential, async () => new Response("", { status: 200 }));
+  await assert.rejects(oauth.refresh(), /OAUTH_REFRESH_OUTCOME_UNKNOWN/); await assert.rejects(oauth.refresh(), /OAUTH_REFRESH_OUTCOME_UNKNOWN/);
 });

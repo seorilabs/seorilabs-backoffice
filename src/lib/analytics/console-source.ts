@@ -85,7 +85,7 @@ const daySchema = z.object({
   iaaImpressions: count, iaaEarningKrw: amount, iapTrxAmountKrw: amount, iapSettlementKrw: amount, payingUsers: count,
   raw: z.record(z.unknown()).nullish(),
 });
-const SECRET_KEY = /^(?:token|idtoken|bearertoken|accesstoken|refreshtoken|authorization|password|secret|clientsecret|cookie|apikey|privatekey|accesskey|credentials?)$/i;
+const SECRET_KEY = /^(?:token|authtoken|sessiontoken|oauthtoken|idtoken|bearertoken|accesstoken|refreshtoken|authorization|password|secret|clientsecret|cookie|apikey|xapikey|privatekey|accesskey|accesskeyid|credentials?)$/i;
 export function containsConsoleSecret(value: unknown): boolean {
   return !!value && typeof value === "object" && Object.entries(value).some(([key, child]) => SECRET_KEY.test(key.replace(/[_\s-]/g, "")) || containsConsoleSecret(child));
 }

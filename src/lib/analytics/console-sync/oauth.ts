@@ -44,13 +44,16 @@ export class ConsoleOAuth {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "refresh_token", client_id: this.credential.clientId, refresh_token: this.credential.refreshToken, resource: "https://mcp.toss.im" }),
       });
-    } catch { throw new ConsoleSyncError("OAUTH_REFRESH_NETWORK_ERROR"); }
+    } catch { this.stopped = "OAUTH_REFRESH_OUTCOME_UNKNOWN"; throw new ConsoleSyncError(this.stopped); }
     let body: unknown;
-    try { body = await response.json(); } catch { throw new ConsoleSyncError("OAUTH_RESPONSE_INVALID"); }
+    try { body = await response.json(); } catch {
+      if (response.ok) { this.stopped = "OAUTH_REFRESH_OUTCOME_UNKNOWN"; throw new ConsoleSyncError(this.stopped); }
+      // 오류 응답의 HTML·빈 본문은 상태 코드로 처리한다.
+    }
     if (!response.ok) {
       const error = z.object({ error: z.string() }).safeParse(body);
       const codes: Record<string, string> = { invalid_grant: "REAUTHENTICATION_REQUIRED", invalid_client: "OAUTH_CLIENT_CONFIGURATION_INVALID", invalid_target: "OAUTH_RESOURCE_CONFIGURATION_INVALID", invalid_scope: "OAUTH_RESOURCE_CONFIGURATION_INVALID", unsupported_grant_type: "OAUTH_REFRESH_NOT_SUPPORTED" };
-      if (error.success && codes[error.data.error]) this.stopped = codes[error.data.error];
+      if (error.success && Object.hasOwn(codes, error.data.error)) this.stopped = codes[error.data.error];
       else if ([401, 403].includes(response.status)) this.stopped = "REAUTHENTICATION_REQUIRED";
       else if (response.status === 400) this.stopped = "OAUTH_REQUEST_REJECTED";
       throw new ConsoleSyncError(this.stopped ?? "OAUTH_REFRESH_UNAVAILABLE");
@@ -59,7 +62,7 @@ export class ConsoleOAuth {
     const rotation = z.object({ refresh_token: z.string().min(1) }).safeParse(body);
     if (rotation.success && rotation.data.refresh_token !== this.credential.refreshToken) { this.stopped = "OAUTH_ROTATION_REQUIRES_REVIEW"; throw new ConsoleSyncError(this.stopped); }
     const parsed = tokenSchema.safeParse(body);
-    if (!parsed.success) throw new ConsoleSyncError("OAUTH_RESPONSE_INVALID");
+    if (!parsed.success) { this.stopped = "OAUTH_REFRESH_OUTCOME_UNKNOWN"; throw new ConsoleSyncError(this.stopped); }
     this.accessToken = parsed.data.access_token; this.expiresAt = Date.now() + parsed.data.expires_in * 1000;
   }
   async fetch(input: string | URL | Request, init?: RequestInit) {

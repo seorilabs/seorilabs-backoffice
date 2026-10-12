@@ -16,17 +16,20 @@ export async function createConsoleReader(oauth: ConsoleOAuth, { requestBudgetMs
   let cooldownUntil = 0; let rateLimited = false;
   const client = new Client({ name: "backoffice-console-metrics", version: "1" }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { reconnectionOptions: { maxRetries: 0, maxReconnectionDelay: 1_000, initialReconnectionDelay: 1_000, reconnectionDelayGrowFactor: 1 }, fetch: async (input, init) => {
+    const deadline = Date.now() + requestBudgetMs;
     const signal = AbortSignal.any([...(init?.signal ? [init.signal] : []), AbortSignal.timeout(requestBudgetMs)]);
     try {
       for (let attempt = 0; ; attempt++) {
         signal.throwIfAborted();
         if (rateLimited) throw new ConsoleSyncError("RATE_LIMITED");
         const cooldown = cooldownUntil - Date.now();
+        if (cooldownUntil >= deadline && cooldown > 0) { rateLimited = true; throw new ConsoleSyncError("RATE_LIMITED"); }
         if (cooldown > 0) await delayFor(cooldown, undefined, { signal });
         const response = await oauth.fetch(input, { ...init, signal }); const delay = retryDelay(response);
         if (response.status === 429) {
           if (delay == null || attempt >= 2) { await response.body?.cancel(); rateLimited = true; throw new ConsoleSyncError("RATE_LIMITED"); }
           cooldownUntil = Math.max(cooldownUntil, Date.now() + delay);
+          if (cooldownUntil >= deadline) { await response.body?.cancel(); rateLimited = true; throw new ConsoleSyncError("RATE_LIMITED"); }
         }
         if (delay == null || attempt >= 2) return response;
         await response.body?.cancel();

@@ -130,3 +130,20 @@ Secret 이름과 논리 ID는 준비 계약이며 실제 생성 완료를 뜻하
 `state`, `results`의 누락·오류·경고·업서트 수 및 `readback`을 확인한다. 최신 날짜만으로 완료를
 판정하지 않는다. `partial`은 종료 코드 2, 인증·실행 실패는 1이다. 문제 시 suspend하고 기존
 대화형 수집을 사용하며 과거 지표를 지우거나 0으로 보정하지 않는다.
+
+## 7. 인증·요청 오류 대응
+
+| 코드 | 대응 |
+| --- | --- |
+| REAUTHENTICATION_REQUIRED | 현재 실행 중단, 운영 시 스케줄 중지 후 사람의 재인증 |
+| OAUTH_ROTATION_REQUIRES_REVIEW | 기존 grant가 소진됐을 수 있음. 스케줄 중지·인가 상태 확인·보존 설계 검토 |
+| OAUTH_REFRESH_OUTCOME_UNKNOWN | 전송 취소/네트워크/불완전한 성공 응답의 결과 불명. 현재 연결에서 옛 refresh 재사용 금지. 운영자는 다음 실행 전 스케줄 중지·grant 상태 확인 |
+| OAUTH_CLIENT_CONFIGURATION_INVALID / OAUTH_RESOURCE_CONFIGURATION_INVALID | 재로그인 반복 대신 등록 client/resource/scope 확인 |
+| OAUTH_REFRESH_NOT_SUPPORTED / OAUTH_REQUEST_REJECTED | 설정·공급자 갱신 지원 확인, 반복 인가 금지 |
+| OAUTH_REFRESH_UNAVAILABLE | 알려진 오류 응답. 공급자 가용성 확인 후 영향 범위 재검증 |
+| RATE_LIMITED | 전체 실행 부분 완료. Retry-After가 남은 25초 예산을 넘으면 다음 조회를 보내지 않음 |
+| MCP_REQUEST_TIMEOUT | fetch/대기 취소·지표 오류. 429 예산 부족은 이 코드로 바꾸지 않음 |
+
+중단 상태는 현재 프로세스에만 적용된다. 영속 인증 상태·자동 Secret 갱신은 승인 범위 밖이며,
+운영 중 인증 오류 시 운영자가 다음 일일 실행 전 CronJob을 중지해야 한다.
+[2회차 뒤 사람 재검토 항목](../../docs/design/2026-10-12-console-sync-pod/review-followup.md)을 확인한다.
