@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient, type UserRole } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { PLATFORM_OUTCOME_UNKNOWN_CODE } from "@/lib/platform/operations";
 import { jsonDigest } from "./json";
 import { ControlPlaneError } from "./service";
 import type { InternalPrincipal } from "./security";
@@ -75,7 +76,9 @@ export async function setAppVisibility(input: z.infer<typeof appVisibilitySchema
       assertAppVisibilityVersion(app.updatedAt, request.expectedUpdatedAt);
       if (request.status === "DEPRECATED") {
         const blockers = await Promise.all([
-          tx.appOperationRun.count({where: {appId: app.id, status: {in: ["PENDING", "PROCESSING"]}}}),
+          tx.appOperationRun.count({where: {appId: app.id, OR: [
+            {status: {in: ["PENDING", "PROCESSING"]}}, {error: PLATFORM_OUTCOME_UNKNOWN_CODE},
+          ]}}),
           tx.agentRun.count({where: {appId: app.id, OR: [{status: "RUNNING"}, {repoGuard: {activeScopeKey: {not: null}}}]}}),
           tx.providerExecution.count({where: {appId: app.id, status: {in: ["RUNNING", "READBACK_REQUIRED"]}}}),
           tx.releaseRecord.count({where: {appId: app.id, status: {in: ["PENDING", "IN_PROGRESS"]}}}),

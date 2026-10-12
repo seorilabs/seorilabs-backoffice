@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { prisma } from "@/lib/prisma";
 import { setAppVisibility } from "@/lib/control-plane/app-visibility-service";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
+import { PLATFORM_OUTCOME_UNKNOWN_CODE } from "@/lib/platform/operations";
 
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (!['127.0.0.1', 'localhost'].includes(url.hostname) || url.pathname !== '/backoffice_iap_qa') {
@@ -35,7 +36,9 @@ async function main() {
   await assert.rejects(setAppVisibility(request), /진행 중/);
   assert.equal(await prisma.auditLog.count({where: {action: 'app.visibility', entityId: app.id}}), 0);
   assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, 'ACTIVE');
-  await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'SUCCEEDED'}});
+  await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'FAILED', error: PLATFORM_OUTCOME_UNKNOWN_CODE}});
+  await assert.rejects(setAppVisibility(request), /結果|진행 중/);
+  await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'SUCCEEDED', error: null}});
   const repeated = await Promise.all([setAppVisibility(request), setAppVisibility(request)]);
   assert.deepEqual(repeated.map((result) => result.duplicate).sort(), [false, true]);
   assert.deepEqual(repeated[0].response, repeated[1].response);
