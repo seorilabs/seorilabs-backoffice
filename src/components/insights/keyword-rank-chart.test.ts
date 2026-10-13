@@ -17,6 +17,7 @@ test("AC-2: 초기 HTML에서는 필터 변경을 막아 준비 전 선택이 �
     createElement(KeywordRankChart, { apps: [app], app, selection, history, today: selection.day })));
   assert.match(html, /aria-busy="true"/);
   assert.match(html, /화면 준비 중/);
+  assert.match(html, /aria-label="기준일 조회"/);
   const controls = html.match(/<(?:select|input|button)\b[^>]*>/g) ?? [];
   assert.ok(controls.length >= 10);
   assert.ok(controls.every(control => /\bdisabled=""/.test(control)), "필터·비교·상세 조작은 이벤트 처리 준비 뒤 활성화한다");
@@ -32,5 +33,5 @@ test("AC-5: 관측 저장 뒤 수집 실패는 재시도 여부를 추정하지 
   const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop };
   const html = renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: router }, createElement(KeywordRankChart, { apps: [app], app, selection, history, today: selection.day })));
   assert.match(html, /sea · 결과 목록에 없음 · 최근 수집 실패/);
-  assert.doesNotMatch(html, /최근 재시도 실패/);
+  assert.doesNotMatch(html, /재시도/);
 });

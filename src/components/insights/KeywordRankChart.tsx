@@ -27,9 +27,11 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
   const [warning, setWarning] = useState("");
   const [detailDay, setDetailDay] = useState(selection.day);
   const [dayDraft, setDayDraft] = useState(selection.day);
-  useEffect(() => setDayDraft(selection.day), [selection.day]);
-  const plot = useRef<HTMLDivElement>(null), [width, setWidth] = useState(320);
+  const [dateError, setDateError] = useState("");
+  const dateField = useRef<HTMLInputElement>(null);
   const url = keywordHistoryUrl(selection);
+  useEffect(() => setDayDraft(selection.day), [selection.day, url]);
+  const plot = useRef<HTMLDivElement>(null), [width, setWidth] = useState(320);
   useEffect(() => {
     if (window.location.pathname + window.location.search !== url) window.history.replaceState(null, "", url);
     setReady(true);
@@ -42,9 +44,25 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
     setWidth(element.clientWidth);
     return () => observer.disconnect();
   }, []);
+  const validDraftDay = () => dayDraft && dateField.current?.validity.valid ? dayDraft : selection.day;
+  const restoreInvalidDate = () => {
+    const field = dateField.current;
+    if (!field?.value) setDayDraft(selection.day);
+    else if (!field.validity.valid) {
+      setDayDraft(selection.day);
+      setDateError(field.validity.rangeOverflow ? "오늘 이후 날짜는 조회할 수 없습니다." : "날짜를 확인해 다시 입력하세요.");
+    }
+  };
   const navigate = (patch: Partial<KeywordSelection>) => {
+    const day = patch.day ?? validDraftDay();
+    setDayDraft(day);
     setWarning("");
-    transition(() => router.push(keywordHistoryUrl({ ...selection, ...patch, notice: false }), { scroll: false }));
+    if (patch.day || day !== selection.day) setDateError("");
+    transition(() => router.push(keywordHistoryUrl({ ...selection, day, ...patch, notice: false }), { scroll: false }));
+  };
+  const applyDay = () => {
+    if (!dateField.current?.value || !dateField.current.validity.valid) { restoreInvalidDate(); return; }
+    if (dayDraft !== selection.day) navigate({ day: dayDraft });
   };
   const toggle = (term: string) => {
     if (!selection.terms.includes(term) && selection.terms.length >= 4) { setWarning("검색어는 최대 4개까지 비교할 수 있습니다."); return; }
@@ -67,21 +85,18 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
         navigate({ appId: next.id, country: next.countries[0], terms: next.keywords.slice(0, 2) });
       }}>{apps.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
       <label className="grid min-w-0 flex-[1_1_7.5rem] gap-1 text-sm">국가<select aria-label="국가" className={filterControl} value={selection.country} disabled={busy} onChange={event => navigate({ country: event.target.value })}>{app.countries.map(country => <option key={country} value={country}>{countryLabel(country)}</option>)}</select></label>
-      <label className="grid min-w-0 flex-[1_1_9.375rem] gap-1 text-sm">기준일<input aria-label="기준일" aria-describedby="keyword-date-help" type="date" max={today} value={dayDraft} className={filterControl} disabled={busy} onChange={event => setDayDraft(event.target.value)} onBlur={event => {
-        const day = event.currentTarget.value;
-        if (!day) setDayDraft(selection.day);
-        else if (event.currentTarget.validity.valid && day !== selection.day) navigate({ day });
-      }} onKeyDown={event => {
-        if (event.key === "Enter") { event.preventDefault(); if (event.currentTarget.reportValidity()) event.currentTarget.blur(); }
-      }} /></label>
+      <div className="grid min-w-0 flex-[1_1_13.75rem] gap-1 text-sm"><label htmlFor="keyword-day">기준일</label><div className="flex flex-wrap gap-1"><input id="keyword-day" ref={dateField} aria-label="기준일" aria-describedby="keyword-date-help keyword-date-message" type="date" max={today} value={dayDraft} className={filterControl + " flex-[1_1_9.375rem]"} disabled={busy} onChange={event => { setDayDraft(event.target.value); setDateError(""); }} onBlur={restoreInvalidDate} onKeyDown={event => {
+        if (event.key === "Enter") { event.preventDefault(); applyDay(); }
+      }} /><button type="button" aria-label="기준일 조회" className={lightControl} disabled={busy || dayDraft === selection.day} onClick={applyDay}>조회</button></div></div>
       <div className="min-w-0 max-w-full"><p className="mb-1 text-sm">기간</p><div className="flex flex-wrap gap-1">{[7, 30, 90].map(days => <button type="button" key={days} disabled={busy} aria-pressed={selection.days === days} className={control + (selection.days === days ? " border-neutral-900 bg-neutral-900 text-white" : " bg-white")} onClick={() => navigate({ days })}>{days}일</button>)}</div></div>
       <div className="flex flex-wrap gap-1">
-        <button type="button" className={lightControl} disabled={busy} onClick={() => navigate({ day: shiftMetricDay(selection.day, -1) })}>전일</button>
-        <button type="button" className={lightControl} disabled={busy || selection.day >= today} onClick={() => navigate({ day: shiftMetricDay(selection.day, 1) })}>익일</button>
-        <button type="button" className={lightControl} disabled={busy || selection.day === today} onClick={() => navigate({ day: today })}>오늘</button>
+        <button type="button" className={lightControl} disabled={busy} onClick={() => navigate({ day: shiftMetricDay(validDraftDay(), -1) })}>전일</button>
+        <button type="button" className={lightControl} disabled={busy || validDraftDay() >= today} onClick={() => navigate({ day: shiftMetricDay(validDraftDay(), 1) })}>익일</button>
+        <button type="button" className={lightControl} disabled={busy || (selection.day === today && dayDraft === today)} onClick={() => navigate({ day: today })}>오늘</button>
       </div>
     </div>
-    <p id="keyword-date-help" className="text-xs text-neutral-600">기준일을 입력한 뒤 Enter 또는 다른 곳을 누르면 조회합니다.</p>
+    <p id="keyword-date-help" className="text-xs text-neutral-600">기준일을 입력한 뒤 Enter·조회로 반영합니다. 다른 조회 필터를 선택하면 날짜도 함께 적용합니다.</p>
+    <div id="keyword-date-message">{dateError ? <p role="alert" className="text-sm text-amber-800">{dateError}</p> : dayDraft !== selection.day && <p role="status" className="text-xs text-neutral-600">입력한 기준일은 아직 조회에 반영되지 않았습니다.</p>}</div>
     <p role="status" className="text-xs text-neutral-600">{!ready ? "화면 준비 중…" : pending ? "DB 기록 조회 중…" : `${app.displayName} · ${countryLabel(selection.country)} · ${history.dates[0]}~${selection.day} · 현재 설정 버전 ${app.revision ?? "미상"}`}</p>
     <section className="rounded-lg border border-neutral-200 bg-white p-4" aria-labelledby="keyword-trend-title">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="keyword-trend-title" className="font-semibold">검색어별 순위 추이</h2><span className="text-xs text-neutral-600">1위가 위쪽 · 최대 4개 비교</span></div>
@@ -111,7 +126,7 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
         </svg> : <p className="py-8 text-sm text-neutral-600">비교할 검색어를 선택하세요.</p>}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-3 text-sm"><label>그래프 상세 날짜 <select aria-label="그래프 상세 날짜" disabled={busy} value={history.dates[detailIndex]} className={lightControl} onChange={event => setDetailDay(event.target.value)}>{[...history.dates].reverse().map(day => <option key={day}>{day}</option>)}</select></label>{history.series.map(series => <span key={series.term}>{series.term} · {series.points[detailIndex].label}{series.points[detailIndex].attemptState === "수집 실패" && series.points[detailIndex].observedAt ? " · 최근 수집 실패" : ""}</span>)}</div>
-      <p className="mt-2 text-xs text-neutral-600">미수집·실패·결과 목록에 없는 날은 선을 끊습니다. 성공 관측 이후 재시도가 실패한 날은 저장된 관측과 시각을 함께 표시합니다.</p>
+      <p className="mt-2 text-xs text-neutral-600">미수집·실패·결과 목록에 없는 날은 선을 끊습니다. 관측을 저장한 뒤 수집이 실패한 날은 저장된 관측과 시각을 함께 표시합니다.</p>
       {history.series.length > 0 && history.series.every(series => series.points.every(point => point.observationState === "missing")) && <p className="mt-2 text-sm text-neutral-600">기간 내 저장된 관측이 없습니다. 수집 상태를 확인하세요.</p>}
       {history.series.length > 0 && history.series.every(series => series.points.every(point => point.observationState === "outside")) && <p className="mt-2 text-sm text-neutral-600">기간 내 모든 관측이 결과 목록에 없습니다.</p>}
       <details className="mt-3 text-sm"><summary>날짜별 자료 표로 보기</summary><div className="mt-2 overflow-x-auto" role="region" aria-label="날짜별 순위 자료" tabIndex={0}><table className="w-full text-left text-sm"><thead><tr><th className="p-2">날짜 KST</th>{history.series.map(series => <th key={series.term} className="p-2">{series.term}</th>)}</tr></thead><tbody>{history.dates.map((day, index) => <tr key={day} className="border-t border-neutral-100"><td className="p-2 whitespace-nowrap">{day}</td>{history.series.map(series => <td className="p-2" key={series.term}>{series.points[index].label}{series.points[index].attemptState === "수집 실패" && series.points[index].observedAt ? " · 최근 수집 실패" : ""}</td>)}</tr>)}</tbody></table></div></details>
