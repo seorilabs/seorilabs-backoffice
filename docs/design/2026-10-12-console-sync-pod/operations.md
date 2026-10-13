@@ -40,4 +40,12 @@ JWKS 키 변경 시 운영자가 live JWKS를 다시 읽어 provider를 갱신�
 
 변경 전 백업 `20261013T201825+0900`: 로컬·BeeStation 모두 6,360개 파일 전체 복원 통과, SHA-256 `9f7b609905f4dd8a43b168cd959d9b9b5ab3543ff09078878968188e3ac5df2b`.
 
-등록된 provisioner 계정의 `roles/iam.workloadIdentityPoolAdmin`이 2026-09-07 14:00 UTC에 만료되어 WIF pool 생성은 실제 권한 거부로 실패했다. 새 풀·provider가 만들어졌다고 표시하지 않는다. 기존 identity에 한시적인 해당 역할 복구가 필요하며 별도 프로젝트 IAM 관리자 역할·정적 키는 요청하지 않는다. Secret의 빈 리소스는 생성했으나 grant를 넣거나 정본을 전환하지 않았다. 나머지 실제 검증 결과는 완료 후 [검수 기록](../../qa/2026-10-12-console-sync-pod/report.md)에 추가한다.
+최초 WIF pool 생성은 provisioner의 `roles/iam.workloadIdentityPoolAdmin`이 2026-09-07 14:00 UTC에 만료되어 거부됐다. 사용자가 기존 identity의 해당 역할만 2026-10-14 08:00 KST까지 복구한 뒤 실제 IAM readback을 확인했다. 프로젝트 IAM 관리자 역할·정적 키는 추가하지 않았다.
+
+풀·provider·정확한 Secret IAM·KSA·공개 WIF ConfigMap을 적용하고 실제 Google 호출을 검증했다. worker는 버전 읽기·추가만 허용되고 삭제·중지·Secret 변경·IAM 변경은 거부된다. 다른 KSA subject와 잘못된 JWT audience는 각각 STS HTTP 400으로 거부됐다.
+
+최신 generation 3을 Secret 버전 1에 보존한 뒤, 운영 클러스터의 격리 DB 시험 파드에서 2026-10-13 20:49:03 KST 실제 자연 만료 갱신을 수행했다. HTTP 200 한 번으로 generation 4가 Secret 버전 2에 회전 보존됐다. 새 UID의 파드가 20:51:19 KST에 같은 버전을 읽고 refresh 0회로 조회했다. IOS 광고 결측은 0으로 채우지 않았으며 운영 DB 쓰기는 없다.
+
+카탈로그의 정본은 Secret Manager로 전환했다. generation 4의 로컬 암호화 복구 사본과 소비된 과거 버전은 보존한다. 전환 후 백업 `20261013T205437+0900`은 로컬·BeeStation 모두 6,377개 파일 전체 복원에 통과했다. SHA-256 `333a042c6d4f579bb1fce70b0f3bf6e08bd156efa9dd3abfeea688c474ac4be1`.
+
+[공개 실측 근거](../../qa/2026-10-12-console-sync-pod/provider-wif-secret-manager.json)에는 실제 소스 SHA·파드 UID·세대·정확한 Secret 버전과 실패 경계를 기록했다. 제품 전체 E2E·PR 머지·운영 migration/배포·CronJob 적용/활성화·첫 운영 수집은 아직 완료되지 않았다.
