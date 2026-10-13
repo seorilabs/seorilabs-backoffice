@@ -1,6 +1,6 @@
 # Backoffice 개발 검수 범위
 
-`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 43개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 BO-OPS-20261008-v1의 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다.
+`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 44개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다. 기존 BO-OPS-20261008-v1과 검색 순위 웹 화면의 [BO-KEYWORD-WEB-20261012-v1](../design/2026-10-12-keyword-rank-web/validation.md) 근거를 각각 보존한다.
 
 ## 배포 직전 실행 계획
 
@@ -33,6 +33,6 @@
 
 ## 콘솔 수집 파드 준비
 
-`ait-console-pod-collection`을 기능 목록에 추가했다. 기존 42개와 합쳐 43개다.
+`ait-console-pod-collection`을 기능 목록에 추가했다. 최신 main의 검색 순위 기능까지 합쳐 44개다.
 새 서비스의 격리 실행·실제 OAuth 차단은 [검수 기록](2026-10-12-console-sync-pod/report.md)을 따른다.
 이 기록은 전체 Backoffice 제품 E2E 통과를 대신하지 않는다.
