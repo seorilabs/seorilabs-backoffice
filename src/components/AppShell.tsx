@@ -18,10 +18,12 @@ export function AppShell({
   const menuButton = useRef<HTMLButtonElement>(null);
   const drawer = useRef<HTMLElement>(null);
   const [mobile, setMobile] = useState(false);
+  const [viewportReady, setViewportReady] = useState(false);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 767px)");
     const sync = () => setMobile(query.matches);
     sync(); query.addEventListener("change", sync);
+    setViewportReady(true);
     return () => query.removeEventListener("change", sync);
   }, []);
   useEffect(() => {
@@ -64,10 +66,11 @@ export function AppShell({
         <button
           ref={menuButton}
           type="button"
+          disabled={!viewportReady}
           onClick={() => setOpen(true)}
           aria-label="메뉴 열기"
           aria-expanded={open}
-          className="-ml-1 flex h-9 w-9 items-center justify-center rounded-md text-neutral-700 hover:bg-neutral-100"
+          className="-ml-1 flex h-9 w-9 items-center justify-center rounded-md text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <line x1="3" y1="6" x2="21" y2="6" />

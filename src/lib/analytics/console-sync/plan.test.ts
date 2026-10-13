@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ConsoleSyncStatus } from "@/lib/core/console-metrics-collect";
+import { consoleCollectionPlan } from "./plan";
+const status = (apps: ConsoleSyncStatus["apps"]): ConsoleSyncStatus => ({ apps, minLastDate: null, maxLastDate: null, appsWithNoData: [] });
+const app = (miniAppId: number, lastDate: string | null, rows = 1) => ({ slug: "crossword-puzzle", miniAppId, lastDate, rows, lastCollectedAt: null });
+test("KST 어제와 두 리스팅의 overlap을 독립 계산한다", () => {
+  const plan = consoleCollectionPlan(status([app(36555, "2026-10-10"), app(56407, "2026-10-11")]), new Date("2026-10-11T15:01:00Z"));
+  assert.equal(plan.end, "2026-10-11"); assert.equal(plan.windows.length, 2); assert.equal(plan.windows[0].start, "2026-10-08"); assert.notEqual(plan.windows[0].miniAppId, plan.windows[1].miniAppId);
+});
+test("출시일부터 120일씩 나누고 미확인 출시·리스팅·미래 날짜는 차단한다", () => {
+  const now = new Date("2026-10-12T01:00:00Z"); const noData = app(36555, null, 0);
+  assert.equal(consoleCollectionPlan(status([noData]), now).blocked.length, 1);
+  const plan = consoleCollectionPlan(status([noData]), now, { "crossword-puzzle#36555": "2026-01-01" });
+  assert.equal(plan.windows[0].end, "2026-04-30"); assert.equal(plan.windows[1].start, "2026-05-01"); assert.equal(plan.windows.at(-1)?.end, "2026-10-11");
+  assert.equal(consoleCollectionPlan(status([app(999, null, 0), app(56407, "2026-10-13")]), now).blocked.length, 2);
+});

@@ -1,0 +1,79 @@
+# 운영 리소스 적용은 2026-10-13 승인됐다. 실제 WIF·제품 E2E 통과 전 활성화 금지.
+# deploy-backoffice.sh의 적용 목록에 포함하지 않는다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-ait-console-metrics
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: console-metrics-collector
+spec:
+  suspend: true
+  schedule: "30 21 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backoffice
+            app.kubernetes.io/component: console-metrics-collector
+        spec:
+          serviceAccountName: backoffice-console-metrics
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/hostname: rpi5
+          imagePullSecrets:
+            - name: registry-pull-cred
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: collector
+              image: __BACKOFFICE_IMAGE_DIGEST__
+              workingDir: /app
+              command: ["node", "/app/scripts-dist/console-metrics-collector.cjs", "collect"]
+              env:
+                - { name: NODE_ENV, value: production }
+                - { name: NODE_OPTIONS, value: "--dns-result-order=ipv4first --no-network-family-autoselection" }
+                - { name: AIT_CONSOLE_SECRET_RESOURCE, value: projects/321365398093/secrets/backoffice-ait-console-oauth }
+                - { name: AIT_CONSOLE_RUNTIME_PRINCIPAL, value: "k8s:platform:backoffice-console-metrics" }
+                - { name: AIT_CONSOLE_WIF_AUDIENCE, value: //iam.googleapis.com/projects/321365398093/locations/global/workloadIdentityPools/backoffice-console/providers/vzyx-cluster }
+                - { name: AIT_CONSOLE_WIF_CONFIG, value: /run/ait-console-wif/credential.json }
+                - { name: AIT_CONSOLE_CREDENTIAL_ID, value: shared/apps-in-toss/console-oauth }
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL }
+              resources:
+                requests: { cpu: 25m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 384Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              volumeMounts:
+                - { name: wif-config, mountPath: /run/ait-console-wif, readOnly: true }
+                - { name: wif-subject, mountPath: /run/secrets/ait-console-wif, readOnly: true }
+          volumes:
+            - name: wif-config
+              configMap:
+                name: backoffice-console-oauth-wif
+                defaultMode: 292 # 0444: 공개 external_account 설정, 비밀값 없음
+            - name: wif-subject
+              projected:
+                defaultMode: 288 # 0440
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      audience: //iam.googleapis.com/projects/321365398093/locations/global/workloadIdentityPools/backoffice-console/providers/vzyx-cluster
+                      expirationSeconds: 3600

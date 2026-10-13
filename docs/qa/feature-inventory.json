@@ -170,6 +170,10 @@
       "core": false
     },
     {
+      "id": "ait-console-pod-collection",
+      "core": false
+    },
+    {
       "id": "keyword-rank-history-and-charts",
       "core": true
     }

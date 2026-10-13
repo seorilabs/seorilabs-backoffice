@@ -918,3 +918,10 @@ ASC 등록 상태를 확인한 뒤 도구를 다시 실행한다.
 | `#action-events` | 신규 가입 앱·일 요약 카드와 건별 한 줄, 첫 새 버전 유입 등 |
 
 `backoffice-realtime-spike` CronJob은 5분마다 앱별 GA4 최근 5분 활성 사용자를 수집한다. 직전 24시간의 성공 표본이 12개 이상일 때 중앙값을 평소 수준으로 삼는다. 10명 이상이면서 평소의 3배 이상인 관측이 두 번 연속되면 `#app-ops`에 한 번 알린다. 이후 세 번 연속 기준 이하이면 다음 급증을 알릴 수 있다. 조회 실패와 대상 매핑 실패는 0명으로 기록하지 않으며, CronJob 실패 기록과 `realtime_activity_sample` 표본 수를 함께 확인한다. 표본은 25시간 뒤 삭제한다. 새 배포 후 첫 12개 성공 표본이 쌓일 때까지 급증 알림은 발생하지 않는다. 알림은 notification worker의 기존 outbox가 전송하며 CronJob에는 Discord Bot token을 주입하지 않는다.
+
+## AppsInToss 콘솔 수집 파드 준비
+
+[콘솔 수집 런북](../scripts/console-metrics/runbook.md#5-전용-파드-준비인증-검증)을 따른다.
+`k8s/console-metrics-cronjob.yaml`은 중지 상태의 준비 정의이며 기본 배포 적용 목록 밖이다.
+OAuth 실제 갱신·회전·재시작, 전체 기능 E2E와 별도 운영 배포·스케줄 승인을 통과한 후 적용한다.
+[이번 검수의 통과·차단 구분](qa/2026-10-12-console-sync-pod/report.md)을 확인한다.

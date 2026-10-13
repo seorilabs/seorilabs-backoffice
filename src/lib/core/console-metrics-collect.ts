@@ -5,9 +5,10 @@ import type {
   ConsoleAppPush,
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
-import { AIT_LISTINGS } from "@/lib/analytics/ait-apps";
-import { toDbDay } from "@/lib/analytics/metric-day";
-import { recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
+import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
+import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
+import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
+import { recordCollectionFailure, recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
 
 // AppsInToss 콘솔 지표 ingest(push 수집). 인증된 로컬 Claude 세션이 MCP dashboard_* 를 조회해
 // 정규화한 push 페이로드를 받아 AppConsoleMetricDaily(리스팅×날짜)로 멱등 upsert 한다.
@@ -17,7 +18,6 @@ import { recordObservations, type ObservationInput } from "@/lib/analytics/cover
 // 누락/유효하지 않은 날짜는 개별 skip/error 로 담고 나머지 수집은 계속한다(부분 실패 격리).
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_DAYS_PER_APP = 120; // 한 리스팅 push 당 날짜 상한(폭주 방지)
 
 // miniAppId → App.slug (코드 표 기반 역해석). slug 미제공 push 를 App 으로 잇는 보조 경로.
 const SLUG_BY_MINIAPP = new Map(AIT_LISTINGS.map((l) => [l.miniAppId, l.appSlug]));
@@ -54,15 +54,6 @@ export function emptyRawSections(raw: unknown): string[] {
   return empty;
 }
 
-function num(v: unknown, fallback = 0): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-
-/** dau/newUsers 전용: 유한 수면 그 값(0 포함), 아니면 null(=콘솔 미집계). 0 으로 채우지 않는다. */
-function intOrNull(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
-}
-
 function pushKey(p: ConsoleAppPush): string {
   const base = p.slug ?? (p.miniAppId != null ? `miniApp:${p.miniAppId}` : "unknown");
   return p.miniAppId != null ? `${base}#${p.miniAppId}` : base;
@@ -92,7 +83,7 @@ export async function ingestConsoleMetrics(
 
   // App 해석 인덱스(slug / aitMiniAppId). 한 번만 로드.
   const registry = await prisma.app.findMany({
-    select: { id: true, slug: true, status: true, aitMiniAppId: true },
+    select: { id: true, slug: true, status: true, aitMiniAppId: true, aitWorkspaceId: true },
   });
   const bySlug = new Map(registry.map((a) => [a.slug, a]));
   const byMiniApp = new Map(
@@ -100,13 +91,17 @@ export async function ingestConsoleMetrics(
   );
 
   for (const push of apps) {
+    if (!push || typeof push !== "object") { result.skipped.push({ key: "unknown", reason: "리스팅 객체 필요" }); continue; }
+    if ((push.slug != null && typeof push.slug !== "string") || typeof push.miniAppId !== "number" || !Number.isInteger(push.miniAppId) || (push.miniAppId ?? 0) <= 0) {
+      result.skipped.push({ key: "unknown", reason: "리스팅 식별자 형식 오류" }); continue;
+    }
     const key = pushKey(push);
     // miniAppId 는 리스팅 키(필수). slug 미제공 시 miniAppId→slug 코드표로 App 을 잇는다.
     const resolvedSlug = push.slug ?? (push.miniAppId != null ? SLUG_BY_MINIAPP.get(push.miniAppId) : undefined);
     const app =
       (resolvedSlug ? bySlug.get(resolvedSlug) : undefined) ??
       (push.miniAppId != null ? byMiniApp.get(push.miniAppId) : undefined);
-    if (!app) {
+    if (!app || (push.slug != null && push.slug !== app.slug)) {
       result.skipped.push({ key, reason: "App 매핑 없음(slug/miniAppId 불일치)" });
       continue;
     }
@@ -114,11 +109,13 @@ export async function ingestConsoleMetrics(
       result.skipped.push({ key, reason: `App 운영 중지(status=${app.status})` });
       continue;
     }
-    if (push.miniAppId == null) {
-      result.skipped.push({ key, reason: "miniAppId 누락(리스팅 키 필수)" });
-      continue;
-    }
     const miniAppId = push.miniAppId;
+    const listed = AIT_LISTINGS.some((listing) => listing.appSlug === app.slug && listing.miniAppId === miniAppId);
+    const dbListed = app.aitMiniAppId === miniAppId && app.aitWorkspaceId != null;
+    const workspaceId = listed ? AIT_WORKSPACE_ID : app.aitWorkspaceId;
+    if ((!listed && !dbListed) || (push.workspaceId != null && push.workspaceId !== workspaceId)) {
+      result.skipped.push({ key, reason: "등록된 리스팅 식별자 불일치" }); continue;
+    }
     if (!Array.isArray(push.days) || push.days.length === 0) {
       result.skipped.push({ key, reason: "days 비어있음" });
       continue;
@@ -129,27 +126,43 @@ export async function ingestConsoleMetrics(
     }
 
     result.targetApps++;
-    // 콘솔 원장은 기록적이다. cron 이 없고 사람·에이전트가 push 하므로 "모든 칸에
+    // 콘솔 원장은 기록적이다. 대화형·파드 수집 모두 확인한 행만 저장하므로 "모든 칸에
     // 행을 쓴다"는 보장이 없고, 행이 없다는 사실은 활동 0 이 아니라 푸시가 아직
     // 안 왔다는 뜻이다(GA4 원장은 반대로 권위적이다).
     const observations: ObservationInput[] = [];
-    for (const day of push.days as ConsoleDailyMetric[]) {
-      if (!day || typeof day.date !== "string" || !ISO_DATE.test(day.date)) {
-        result.errors.push({ key, error: `잘못된 date: ${day?.date}` });
+    const failures: Omit<ObservationInput, "state">[] = [];
+    const dateCounts = new Map<string, number>();
+    for (const day of push.days) if (day && typeof day.date === "string") dateCounts.set(day.date, (dateCounts.get(day.date) ?? 0) + 1);
+    const duplicates = new Set<string>();
+    for (const input of push.days as ConsoleDailyMetric[]) {
+      if (input && typeof input.date === "string" && (dateCounts.get(input.date) ?? 0) > 1) {
+        if (!duplicates.has(input.date)) {
+          duplicates.add(input.date); result.skipped.push({ key, reason: "중복 날짜의 행 전체 제외" });
+          if (parseMetricDay(input.date)) failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: input.date, detail: "중복 날짜로 저장 보류" });
+        }
         continue;
       }
+      const checked = validateConsoleDay(input);
+      if (!checked.ok) {
+        result.skipped.push({ key, reason: `미확인·비정상 지표: ${checked.fields.join(",")}` });
+        if (input && typeof input.date === "string" && ISO_DATE.test(input.date) && !checked.fields.includes("date")) {
+          failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: input.date, detail: "불완전한 지표로 저장 보류" });
+        }
+        continue;
+      }
+      const day = checked.day;
       const date = toDbDay(day.date);
       const data = {
         // dau/newUsers 는 null 허용(콘솔 미집계). 0 강제하지 않는다.
-        dau: intOrNull(day.dau),
-        newUsers: intOrNull(day.newUsers),
+        dau: day.dau ?? null,
+        newUsers: day.newUsers ?? null,
         avgSessionSec:
-          day.avgSessionSec == null ? null : num(day.avgSessionSec, 0),
-        iaaImpressions: num(day.iaaImpressions),
-        iaaEarningKrw: num(day.iaaEarningKrw),
-        iapTrxAmountKrw: num(day.iapTrxAmountKrw),
-        iapSettlementKrw: num(day.iapSettlementKrw),
-        payingUsers: num(day.payingUsers),
+          day.avgSessionSec ?? null,
+        iaaImpressions: day.iaaImpressions,
+        iaaEarningKrw: day.iaaEarningKrw,
+        iapTrxAmountKrw: day.iapTrxAmountKrw,
+        iapSettlementKrw: day.iapSettlementKrw,
+        payingUsers: day.payingUsers,
         raw: (day.raw ?? Prisma.JsonNull) as Prisma.InputJsonValue | typeof Prisma.JsonNull,
         collectedAt: now,
       };
@@ -170,20 +183,14 @@ export async function ingestConsoleMetrics(
           day: day.date,
           state: "observed",
         });
-      } catch (e) {
-        const error = (e as Error).message.slice(0, 300);
+      } catch {
+        const error = "CONSOLE_STORAGE_FAILED";
         result.errors.push({ key: `${key}@${day.date}`, error });
-        observations.push({
-          source: "ait_console",
-          appId: app.id,
-          listingId: miniAppId,
-          day: day.date,
-          state: "failed",
-          detail: error,
-        });
+        failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, detail: error });
       }
     }
     await recordObservations(observations, now);
+    await recordCollectionFailure(failures, now);
   }
 
   return result;
@@ -238,7 +245,7 @@ export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
     _count: { _all: true },
   });
   const registry = await prisma.app.findMany({
-    select: { id: true, slug: true, status: true, aitMiniAppId: true },
+    select: { id: true, slug: true, status: true, aitMiniAppId: true, aitWorkspaceId: true },
   });
 
   const bySlug = new Map(registry.map((a) => [a.slug, a]));

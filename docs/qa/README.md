@@ -1,6 +1,6 @@
 # Backoffice 개발 검수 범위
 
-`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 43개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다. 검색 순위 웹 화면의 계획과 증거는 [BO-KEYWORD-WEB-20261012-v1](../design/2026-10-12-keyword-rank-web/validation.md)에 연결한다.
+`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 44개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다. 기존 BO-OPS-20261008-v1과 검색 순위 웹 화면의 [BO-KEYWORD-WEB-20261012-v1](../design/2026-10-12-keyword-rank-web/validation.md) 근거를 각각 보존한다.
 
 ## 배포 직전 실행 계획
 
@@ -30,3 +30,9 @@
 ## 전용 알림 채널 구성 확인
 
 5회차 기능·UX 검수는 후보 `c336b2d`에서 통과했다. 이후 UI 변경 없이 분석 실행기와 market/weekly Job의 공개 채널 ID 6개 참조를 추가한다. 생산 단계에서 기본 채널로만 고정되던 구성 결함을 해결하며 봇 전송 토큰·GitHub mutation credential은 주입하지 않는다. 요구사항 계약 3개가 먼저 실패한 근거와 수정 후 결과를 보존한다. 사용자 2026-10-09 01:07:54 UTC의 일괄 승인에 따라 최종 후보 E2E·CI·배포·활성화를 계속한다.
+
+## 콘솔 수집 파드 준비
+
+`ait-console-pod-collection`을 기능 목록에 추가했다. 최신 main의 검색 순위 기능까지 합쳐 44개다.
+새 서비스의 격리 실행·실제 OAuth 차단은 [검수 기록](2026-10-12-console-sync-pod/report.md)을 따른다.
+이 기록은 전체 Backoffice 제품 E2E 통과를 대신하지 않는다.

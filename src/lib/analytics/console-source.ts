@@ -1,11 +1,10 @@
+import { z } from "zod";
+import { parseMetricDay } from "./metric-day";
+
 // AppsInToss 콘솔 지표 소스 경계(포트) + push 수집 계약.
 //
-// 콘솔 MCP(mcp.toss.im)는 사용자 OAuth 세션으로 인증돼 backoffice pod 가 직접 pull 할 수 없다.
-// 따라서 v1 수집은 "인증된 로컬 Claude 세션이 MCP 로 조회 → 정규화 → ingest route 로 push" 한다.
-// 아래 ConsoleDailyMetric/ConsoleMetricsPush 가 그 push 계약이다(푸셔·ingest 공용 타입).
-//
-// 향후 토스가 서비스 자격증명(서버-투-서버 리포팅 API 등)을 제공하면, 같은 스냅샷 형태를 반환하는
-// ConsoleMetricsSource 의 HTTP pull 구현을 붙여 pod-side 수집으로 무중단 교체한다 — 스키마 불변.
+// 대화형 push와 승인된 파드 조회가 같은 검증·저장 계약을 사용한다.
+// 파드 인증·운영 활성화 조건은 scripts/console-metrics/runbook.md를 따른다.
 
 /** 하루치 콘솔 지표(리스팅×날짜). 승격 스칼라 + 부가 원본(raw). AppConsoleMetricDaily 로 upsert 된다. */
 export interface ConsoleDailyMetric {
@@ -21,15 +20,15 @@ export interface ConsoleDailyMetric {
   /** 평균 세션 길이 초(dashboard_session.metric). 없으면 null. */
   avgSessionSec?: number | null;
   /** 광고 노출 수(dashboard_revenue_iaa, OS 합). */
-  iaaImpressions?: number;
+  iaaImpressions: number;
   /** 광고 추정 수익 원(dashboard_revenue_iaa.estimatedEarning, OS 합). */
-  iaaEarningKrw?: number;
+  iaaEarningKrw: number;
   /** 인앱결제 거래액 원(dashboard_revenue_iap.trxAmount). */
-  iapTrxAmountKrw?: number;
+  iapTrxAmountKrw: number;
   /** 인앱결제 정산액 원(dashboard_revenue_iap.settlementAmount). */
-  iapSettlementKrw?: number;
+  iapSettlementKrw: number;
   /** 결제 사용자 수(dashboard_revenue_iap.pu). */
-  payingUsers?: number;
+  payingUsers: number;
   /**
    * 부가 원본. 승격 컬럼으로 담기 애매한 값들:
    * 유입경로(전체탭/미니앱홈)·연령/성별/OS 분포·OS별 IAA(ecpm 등)·잔존 코호트·앱버전 등.
@@ -50,7 +49,7 @@ export interface ConsoleAppPush {
    * slug 미제공 시 App 해석에도 쓰인다. 누락되면 그 묶음은 skip 된다.
    */
   miniAppId?: number;
-  /** 콘솔 workspaceId(참고용, 저장/검증에 사용하지 않음). */
+  /** 콘솔 workspaceId(제공 시 등록된 리스팅과 일치해야 함). */
   workspaceId?: number;
   /** 최근 N일(멱등 재집계). 순서 무관. */
   days: ConsoleDailyMetric[];
@@ -61,7 +60,7 @@ export interface ConsoleMetricsPush {
   apps: ConsoleAppPush[];
 }
 
-// ── 향후 pod-side pull 을 위한 소스 포트(현재 미구현) ──────────────────────
+// ── 승인된 pod-side pull 소스 포트 ──────────────────────
 export interface ConsoleSourceTarget {
   slug: string;
   workspaceId: number;
@@ -75,4 +74,24 @@ export interface ConsoleMetricsSource {
     start: string,
     end: string,
   ): Promise<ConsoleDailyMetric[]>;
+}
+
+export const MAX_DAYS_PER_APP = 120;
+const count = z.number().finite().int().nonnegative();
+const amount = z.number().finite();
+const daySchema = z.object({
+  date: z.string().refine((value) => parseMetricDay(value) !== null),
+  dau: count.nullish(), newUsers: count.nullish(), avgSessionSec: amount.nonnegative().nullish(),
+  iaaImpressions: count, iaaEarningKrw: amount, iapTrxAmountKrw: amount, iapSettlementKrw: amount, payingUsers: count,
+  raw: z.record(z.unknown()).nullish(),
+});
+const SECRET_KEY = /^(?:token|authtoken|sessiontoken|oauthtoken|idtoken|bearertoken|accesstoken|refreshtoken|authorization|password|secret|clientsecret|cookie|apikey|xapikey|privatekey|accesskey|accesskeyid|credentials?)$/i;
+export function containsConsoleSecret(value: unknown): boolean {
+  return !!value && typeof value === "object" && Object.entries(value).some(([key, child]) => SECRET_KEY.test(key.replace(/[_\s-]/g, "")) || containsConsoleSecret(child));
+}
+export function validateConsoleDay(value: unknown) {
+  const result = daySchema.safeParse(value);
+  if (!result.success) return { ok: false as const, fields: [...new Set(result.error.issues.map((issue) => String(issue.path[0] ?? "day")))] };
+  if (containsConsoleSecret(result.data.raw)) return { ok: false as const, fields: ["raw.credentials"] };
+  return { ok: true as const, day: result.data };
 }
