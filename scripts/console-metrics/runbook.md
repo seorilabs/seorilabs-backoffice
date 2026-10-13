@@ -143,7 +143,7 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 | RATE_LIMITED | 전체 실행 부분 완료. Retry-After가 남은 25초 예산을 넘으면 다음 조회를 보내지 않음 |
 | MCP_REQUEST_TIMEOUT | fetch/대기 취소·지표 오류. 429 예산 부족은 이 코드로 바꾸지 않음 |
 
-갱신 중 상태는 영속 DB에 남는다. 운영 중 오류 시 스케줄을 중지하고 runtime·정확한 불변 버전·provider 상태를 확인한다. 소비된 provider grant는 옛 백업으로 활성화하지 않는다. 수집기 worker는 REGISTER 복구 권한이 없다. allowlisted ADMIN이 검증된 새 grant로 expected generation CAS를 수행해야 하며 generation을 되돌리지 않는다.
+갱신 중 상태는 영속 DB에 남는다. 운영 중 오류 시 스케줄을 중지하고 runtime·정확한 불변 버전·provider 상태를 확인한다. 소비된 provider grant는 옛 백업으로 활성화하지 않는다. 수집기 worker는 REGISTER 복구 권한이 없다. allowlisted ADMIN이 검증된 새 grant로 expected generation CAS를 수행한다. REGISTER의 `registeredGeneration`은 정확한 버전 readback으로 확인한 payload generation이어야 하며, 초기 운영 정본 전환도 그 값을 보존한다. 복구 등록은 기존 상태보다 큰 generation만 허용하고 worker가 해당 필드를 입력하는 갱신 전이는 거부한다.
 [2회차 뒤 사람 재검토 항목](../../docs/design/2026-10-12-console-sync-pod/review-followup.md)을 확인한다.
 
 ## 8. 격리 실제 검증

@@ -6,7 +6,7 @@ import { ConsoleSyncError } from '@/lib/analytics/console-sync/oauth';
 import { CONSOLE_CREDENTIAL_ID, type ConsoleRuntimeState, type ConsoleRuntimeLedger } from '@/lib/analytics/console-sync/runtime';
 const version = z.string().regex(/^(?:local\/versions\/[a-f0-9-]{36}|projects\/[1-9]\d*\/secrets\/[A-Za-z0-9_-]{1,255}\/versions\/[1-9]\d*)$/);
 export const consoleRuntimeSnapshotSchema = z.object({ credentialId: z.literal(CONSOLE_CREDENTIAL_ID), generation: z.number().int().min(1), phase: z.enum(['ACTIVE', 'REFRESH_IN_FLIGHT']), secretVersion: version, attemptId: z.string().uuid().nullable() }).strict().refine(s => (s.phase === 'ACTIVE') === (s.attemptId === null));
-export const consoleRuntimeMutationSchema = z.object({ operation: z.enum(['REGISTER', 'BEGIN', 'COMPLETE']), workspaceId: z.literal(38345), expected: consoleRuntimeSnapshotSchema.nullable(), secretVersion: version.optional(), attemptId: z.string().uuid().optional() }).strict();
+export const consoleRuntimeMutationSchema = z.object({ operation: z.enum(['REGISTER', 'BEGIN', 'COMPLETE']), workspaceId: z.literal(38345), expected: consoleRuntimeSnapshotSchema.nullable(), secretVersion: version.optional(), attemptId: z.string().uuid().optional(), registeredGeneration: z.number().int().min(1).optional() }).strict();
 export type ConsoleRuntimeActor = {
     kind: 'user';
     login: string;
@@ -24,10 +24,11 @@ export function assertConsoleRuntimeWorker(actor: Extract<ConsoleRuntimeActor, {
 export function nextConsoleRuntimeState(input: z.infer<typeof consoleRuntimeMutationSchema>): ConsoleRuntimeState {
     const { expected, operation } = input;
     if (operation === 'REGISTER') {
-        if (!input.secretVersion || input.attemptId || (expected && expected.secretVersion === input.secretVersion))
+        if (!input.secretVersion || !input.registeredGeneration || input.registeredGeneration <= (expected?.generation ?? 0) || input.attemptId || (expected && expected.secretVersion === input.secretVersion))
             throw new ConsoleSyncError('OAUTH_STATE_TRANSITION_INVALID');
-        return { credentialId: CONSOLE_CREDENTIAL_ID, generation: (expected?.generation ?? 0) + 1, phase: 'ACTIVE', secretVersion: input.secretVersion, attemptId: null };
+        return { credentialId: CONSOLE_CREDENTIAL_ID, generation: input.registeredGeneration, phase: 'ACTIVE', secretVersion: input.secretVersion, attemptId: null };
     }
+    if (input.registeredGeneration !== undefined) throw new ConsoleSyncError('OAUTH_STATE_TRANSITION_INVALID');
     if (!expected)
         throw new ConsoleSyncError('OAUTH_STATE_TRANSITION_INVALID');
     if (operation === 'BEGIN') {

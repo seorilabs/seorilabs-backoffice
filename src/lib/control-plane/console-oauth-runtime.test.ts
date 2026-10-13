@@ -30,3 +30,7 @@ finally {
     else
         process.env.AIT_CONSOLE_RUNTIME_PRINCIPAL = previous;
 } });
+test('정본 전환·DB 복구 초기 등록은 확인한 grant generation을 보존하고 되돌리지 않는다',()=>{
+ const first=nextConsoleRuntimeState({operation:'REGISTER',workspaceId:38345,expected:null,secretVersion:'projects/123456/secrets/oauth/versions/9',registeredGeneration:7} as never);assert.equal(first.generation,7);
+ assert.throws(()=>nextConsoleRuntimeState({operation:'REGISTER',workspaceId:38345,expected:state,secretVersion:'projects/123456/secrets/oauth/versions/9',registeredGeneration:3} as never));
+});

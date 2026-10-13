@@ -93,3 +93,7 @@ callback 서버는 종료했다. 운영 Secret/DB/배포/스케줄은 변경하�
 - UI 변경 없음. 전체 제품 E2E 43개와 운영 승인은 별도 gate다. 기존 PR당 교차 리뷰 2회 상한을 넘겨 요청하지 않는다.
 
 - 발급 뒤 잠금 손실은 immutable 버전을 먼저 보존해 orphan으로 남기고 활성화 CAS는 차단한다. 관련 장애 테스트에 보존된 버전 수를 확인했다.
+
+- CI `38376084074`: verify(타입·lint·1,774개 테스트·정적 Next 빌드) 통과. empty/cutover는 새 runtime table 추가 후 schema-contract-current 기준이 갱신되지 않아 실패했다. 격리 MySQL 실측(테이블 +1, 컬럼 +7, 인덱스 +1, FK 동일)으로 기준을 갱신하고 cutover의 새 빈 table 목록에 해당 table만 추가한다. 검증을 비활성화하지 않는다.
+
+- 정본 전환·복구에서 초기 runtime 등록이 무조건 generation 1로 시작하는 실패를 TDD로 확인했다. REGISTER는 확인된 grant의 registeredGeneration을 보존하고 현재 generation보다 작거나 같은 복구를 거부하도록 보완했다. 자동 BEGIN/COMPLETE는 이 필드를 받을 수 없다.

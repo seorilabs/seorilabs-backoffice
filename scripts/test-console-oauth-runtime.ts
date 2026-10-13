@@ -14,7 +14,7 @@ async function main() {
     const admin = { kind: 'user' as const, login: 'qa-console-admin' }, viewer = { kind: 'user' as const, login: 'qa-console-viewer' };
     const worker = { kind: 'worker' as const, principal: 'qa:console-metrics-collector', workspaceId: 38345 as const };
     await prisma.user.createMany({ data: [{ githubId: 99999101n, login: admin.login, role: 'ADMIN', allowlisted: true }, { githubId: 99999102n, login: viewer.login, role: 'VIEWER', allowlisted: true }] });
-    const register = { operation: 'REGISTER' as const, workspaceId: 38345 as const, expected: null, secretVersion: version(1) };
+    const register = { operation: 'REGISTER' as const, workspaceId: 38345 as const, expected: null, secretVersion: version(1), registeredGeneration: 1 };
     await assert.rejects(mutateConsoleRuntime(register, viewer, randomUUID()), /OAUTH_RUNTIME_ACCESS_FORBIDDEN/);
     await assert.rejects(mutateConsoleRuntime(register, worker, randomUUID()), /OAUTH_RUNTIME_ACCESS_FORBIDDEN/);
     await assert.rejects(mutateConsoleRuntime({ ...register, refreshToken: 'synthetic-secret' } as never, admin, randomUUID()), /OAUTH_RUNTIME_REQUEST_INVALID/);
@@ -39,8 +39,8 @@ async function main() {
     assert.equal(concurrent.filter(r => r.status === 'fulfilled').length, 1);
     const stuck = await readConsoleRuntimeState();
     assert.equal(stuck.phase, 'REFRESH_IN_FLIGHT');
-    await assert.rejects(mutateConsoleRuntime({ operation: 'REGISTER', workspaceId: 38345, expected: stuck, secretVersion: version(3) }, worker, randomUUID()), /OAUTH_RUNTIME_ACCESS_FORBIDDEN/);
-    const recovered = (await mutateConsoleRuntime({ operation: 'REGISTER', workspaceId: 38345, expected: stuck, secretVersion: version(3) }, admin, randomUUID())).state;
+    await assert.rejects(mutateConsoleRuntime({ operation: 'REGISTER', workspaceId: 38345, expected: stuck, secretVersion: version(3), registeredGeneration: 3 }, worker, randomUUID()), /OAUTH_RUNTIME_ACCESS_FORBIDDEN/);
+    const recovered = (await mutateConsoleRuntime({ operation: 'REGISTER', workspaceId: 38345, expected: stuck, secretVersion: version(3), registeredGeneration: 3 }, admin, randomUUID())).state;
     assert.equal(recovered.generation, 3);
     const audits = await prisma.auditLog.findMany({ where: { entityType: 'ConsoleOAuthRuntimeState' } });
     assert.equal(audits.length, 5);
