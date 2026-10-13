@@ -120,18 +120,18 @@ export function SummaryCards({ doc }: { doc: OrgReportDocument }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <SummaryCard
         label="앱별 활성 합계"
-        value={`${count(ga4.dau)}명`}
+        value={ga4.apps > 0 ? `${count(ga4.dau)}명` : "미수집"}
         sub={`대상 ${ga4.apps}개 앱 · 사용자 중복 포함`}
-        delta={<DeltaTag current={ga4.dau} previous={ga4.dauPrev} />}
+        delta={ga4.apps > 0 ? <DeltaTag current={ga4.dau} previous={ga4.dauPrev} /> : undefined}
       />
-      <SummaryCard label="앱별 신규 합계" value={`${count(ga4.newUsers)}명`} sub="first_open·first_visit 합계" />
+      <SummaryCard label="앱별 신규 합계" value={ga4.apps > 0 ? `${count(ga4.newUsers)}명` : "미수집"} sub="first_open·first_visit 합계" />
       <SummaryCard label="신규 코호트 D1 유지율" value={retention?.d1Pct == null ? "집계 대기" : `${retention.d1Pct.toFixed(1)}%`} sub={retention ? `${retention.cohortDate} 코호트 ${count(retention.users)}명 · ${retention.observedApps}/${retention.expectedApps}개 앱` : "코호트 분모 미수집"} />
       <SummaryCard label="월 누적 운영 비용" value={gcp ? `${gcp.currency} ${gcp.total.toLocaleString("ko-KR")}` : "미집계"} sub={doc.costs ? `${doc.costs.month} · AI USD ${doc.costs.figures.llm?.totalUsd.toFixed(2) ?? "미집계"}` : "수익과 기간·통화 다름"} />
       <SummaryCard
         label="콘솔 광고 추정 수익"
         value={consoleSummary.listings ? won(consoleSummary.iaaKrw) : "미수집"}
         sub={`대상 ${consoleSummary.listings}개 리스팅`}
-        delta={<DeltaTag current={consoleSummary.iaaKrw} previous={consoleSummary.iaaPrevKrw} />}
+        delta={consoleSummary.listings > 0 ? <DeltaTag current={consoleSummary.iaaKrw} previous={consoleSummary.iaaPrevKrw} /> : undefined}
       />
       <SummaryCard
         label="결제 거래액"
