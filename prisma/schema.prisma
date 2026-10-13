@@ -2760,3 +2760,21 @@ model InsightApiRequest {
   @@index([day, createdAt])
   @@map("insight_api_request")
 }
+
+// OAuth 비밀값 없이 확인된 불변 버전과 갱신 중 상태만 보존한다.
+model ConsoleOAuthRuntimeState {
+  credentialId String @id @db.VarChar(191)
+  generation Int
+  phase ConsoleOAuthPhase @default(ACTIVE)
+  secretVersion String @db.VarChar(512)
+  attemptId String? @db.VarChar(36)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  updatedAt DateTime @updatedAt @db.DateTime(3)
+
+  @@map("console_oauth_runtime_state")
+}
+
+enum ConsoleOAuthPhase {
+  ACTIVE
+  REFRESH_IN_FLIGHT
+}

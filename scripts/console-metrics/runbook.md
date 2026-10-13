@@ -89,20 +89,18 @@ bash scripts/console-metrics/push.sh /tmp/console-metrics-payload.json
 `src/lib/analytics/console-sync/`는 고정 MCP 주소와 5개 조회 도구만 호출한다. SDK는 수치 생성에
 모델을 사용하지 않는다. MiniMax는 저장된 값의 기존 분석에만 사용한다. DB advisory lock을
 OAuth 갱신 전에 잡고 동시 조회 최대 2, HTTP 최대 3시도를 전체 25초 예산 안에서 수행하며 SDK 도구 timeout은 30초다. 대기와 OAuth 갱신에도 같은 취소 signal을 전달한다. 429 대기 시각은 공유하고, 긴 Retry-After·시도 소진이면 후속 조회를 멈춰 부분 완료로 남긴다.
-`invalid_grant`·401 재시도 실패·403이면 재인증 필요로 중단하며, refresh token 회전이면
-`OAUTH_ROTATION_REQUIRES_REVIEW`로 중단한다. 토큰은 메모리에서만 갱신하고 원본 파일을 쓰지 않는다.
+`invalid_grant`·401 재시도 실패·403이면 재인증 필요로 중단한다. [승인된 v2](../../docs/design/2026-10-12-console-sync-pod/rotation-v2.md)는 `shared/apps-in-toss/console-oauth`에 한해 Secret Manager를 운영 정본으로 사용하고 정상 자동 회전의 불변 버전 보존 정책을 승인했다. 운영 전환·IAM/리소스 적용은 별도 승인이다.
 
-선행 조건은 `seorilabs-credentials` 절차에 따른 사람의 최초 OAuth 인가, catalog 등록,
-백업·복원 확인, identity/scope 확인이다. 업로드 API 키를 콘솔 OAuth로 대체하지 않는다.
-Claude/Codex/connector 인증 캐시를 추출하지 않는다. 비회전 여부를 확인하기 전 운영 Secret을 만들지 않는다.
-회전 감지 시 공급자가 기존 refresh token을 이미 무효화했을 수 있다. 원본 파일의 바이트를
-보존해도 grant가 복구되는 것은 아니다. 최초 감독 검증은 운영에 연결되지 않은 인가로 수행하고,
-회전·불완전한 갱신 결과가 발생하면 같은 옛 토큰을 반복 사용하지 말고 중단해 사람의 재인증과
-보존 설계를 다시 검토한다. 기존 활성 공용 identity를 앱별 키로 대체하지 않는다.
+수집 잠금 안에서 DB의 공개 runtime generation·phase·정확한 버전 ID를 읽는다. provider 갱신 전에 `REFRESH_IN_FLIGHT`를 CAS·재조회하고, 발급한 새 grant를 불변 버전으로 추가·정확한 ID로 재조회한 다음 `ACTIVE`·generation+1을 CAS·재조회한다. 모두 확인한 뒤에만 MCP를 계속 조회한다. `latest`/alias fallback과 옛 refresh 재전송은 없다. 저장 또는 결과 불명은 다음 프로세스에서도 IN_FLIGHT로 차단한다. provider 발급 직후 저장 전 프로세스 종료는 새 인가가 필요할 수 있다.
 
-- `AIT_CONSOLE_OAUTH_FILE`: 등록된 credential JSON 파일의 절대 경로. 로컬 0600 또는 파드의 전용 그룹 0440.
-- `AIT_CONSOLE_CREDENTIAL_ID`: catalog의 승인된 논리 ID와 파일 `credentialId`가 정확히 같아야 한다.
-- 파일 필드: `credentialId`, `clientId`(`mcp-gateway`), `refreshToken`; 선택 `accessToken`, `expiresAt`(Unix ms).
+초기 등록·계획된 복구는 로컬/BeeStation 전체 백업·복원 gate를 유지한다. 정상 자동 회전만 해당 논리 ID의 암호화 불변 버전·readback·CAS로 보존한다. 다른 credential의 정본·회전 정책은 변경하지 않는다. Backoffice DB와 감사에는 토큰 원문 없이 공개 버전·generation·상태만 저장한다. ConfigRevision이나 기존 CredentialBinding provenance를 매 refresh마다 변경하지 않는다.
+
+- `AIT_CONSOLE_CREDENTIAL_ID`: 반드시 `shared/apps-in-toss/console-oauth`.
+- `AIT_CONSOLE_SECRET_RESOURCE`: 승인된 secret의 **프로젝트 번호** 형식 `projects/123456789/secrets/approved-name`. 프로젝트 ID/alias로 자동 변환하지 않는다.
+- `AIT_CONSOLE_RUNTIME_PRINCIPAL`: 등록된 전용 worker purpose의 공개 principal.
+- `AIT_CONSOLE_WIF_CONFIG`: 공개 `external_account` 설정 파일. 정적 서비스 계정 키·user ADC fallback을 허용하지 않는다.
+- `AIT_CONSOLE_WIF_AUDIENCE`: 승인된 WIF provider audience. projected subject JWT는 `/run/secrets/ait-console-wif/token`에서만 읽는다.
+- grant payload: 고정 `credentialId`, `clientId`(`mcp-gateway`), `generation`, `refreshToken`, `accessToken`, `expiresAt`(Unix ms). runtime generation과 정확히 같아야 한다.
 - `DATABASE_URL`: 검증·수집 환경 DB. 검사 모드도 수집과 같은 잠금을 사용하며 지표는 쓰지 않는다.
 - `AIT_CONSOLE_CONFIRMED_LAUNCHES`: 신규 리스팅 백필의 확인된 출시일을 이번 실행에만 전달하는
   `{"slug#miniAppId":"YYYY-MM-DD"}` 입력. provider 근거를 먼저 확인하고 새로운 설정 정본으로 저장하지 않는다.
@@ -113,7 +111,7 @@ Claude/Codex/connector 인증 캐시를 추출하지 않는다. 비회전 여부
 ```bash
 node scripts-dist/console-metrics-collector.cjs verify-auth
 node scripts-dist/console-metrics-collector.cjs verify-refresh
-# 승인된 검사 환경에서 새 프로세스로 verify-refresh를 다시 실행해 재시작 갱신을 확인한다.
+# 새 실행의 verify-auth로 저장된 정확한 버전·generation의 재사용을 확인한다.
 ```
 
 `authenticated`는 인증 상태다. `metricDays`, `missing`, `errors`도 확인한다. 격리 fixture의 재시작
@@ -122,9 +120,9 @@ node scripts-dist/console-metrics-collector.cjs verify-refresh
 ## 6. 운영 적용 gate
 
 `k8s/console-metrics-cronjob.yaml`은 `suspend: true`, 자동 재시작·Job 재시도 없음,
-서비스 계정 토큰 미주입, 전용 credential read-only mount로 준비돼 있다. 기존 배포 스크립트의
+기본 서비스 계정 토큰 자동 주입 없음, 승인된 WIF audience의 짧은 JWT만 명시적으로 mount하도록 준비돼 있다. 기존 배포 스크립트의
 적용 목록에 포함되지 않는다. image는 `render-manifest.sh`로 승인된 immutable digest를 치환한다.
-Secret 이름과 논리 ID는 준비 계약이며 실제 생성 완료를 뜻하지 않는다.
+ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest의 placeholder는 운영 승인·등록 이후에만 확정한다. 실제 생성 완료를 뜻하지 않는다.
 
 운영 배포와 스케줄 활성화 승인을 별도로 받은 뒤에만 적용한다. 첫 자연 실행은 종료 코드와
 `state`, `results`의 누락·오류·경고·업서트 수 및 `readback`을 확인한다. 최신 날짜만으로 완료를
@@ -136,7 +134,8 @@ Secret 이름과 논리 ID는 준비 계약이며 실제 생성 완료를 뜻하
 | 코드 | 대응 |
 | --- | --- |
 | REAUTHENTICATION_REQUIRED | 현재 실행 중단, 운영 시 스케줄 중지 후 사람의 재인증 |
-| OAUTH_ROTATION_REQUIRES_REVIEW | 기존 grant가 소진됐을 수 있음. 스케줄 중지·인가 상태 확인·보존 설계 검토 |
+| OAUTH_REFRESH_IN_FLIGHT / OAUTH_STATE_CONFLICT | 이전 갱신 결과 또는 generation 경합을 확인해야 함. 옛 grant 재전송 없이 중단 |
+| OAUTH_STATE_PRESERVATION_FAILED / OAUTH_GRANT_PRESERVATION_FAILED | 저장·재조회·CAS 불명. IN_FLIGHT와 정확한 버전을 보존하고 새 인가/복구 검토 |
 | OAUTH_REFRESH_OUTCOME_UNKNOWN | 전송 취소/네트워크/불완전한 성공 응답의 결과 불명. 현재 연결에서 옛 refresh 재사용 금지. 운영자는 다음 실행 전 스케줄 중지·grant 상태 확인 |
 | OAUTH_CLIENT_CONFIGURATION_INVALID / OAUTH_RESOURCE_CONFIGURATION_INVALID | 재로그인 반복 대신 등록 client/resource/scope 확인 |
 | OAUTH_REFRESH_NOT_SUPPORTED / OAUTH_REQUEST_REJECTED | 설정·공급자 갱신 지원 확인, 반복 인가 금지 |
@@ -144,6 +143,9 @@ Secret 이름과 논리 ID는 준비 계약이며 실제 생성 완료를 뜻하
 | RATE_LIMITED | 전체 실행 부분 완료. Retry-After가 남은 25초 예산을 넘으면 다음 조회를 보내지 않음 |
 | MCP_REQUEST_TIMEOUT | fetch/대기 취소·지표 오류. 429 예산 부족은 이 코드로 바꾸지 않음 |
 
-중단 상태는 현재 프로세스에만 적용된다. 영속 인증 상태·자동 Secret 갱신은 승인 범위 밖이며,
-운영 중 인증 오류 시 운영자가 다음 일일 실행 전 CronJob을 중지해야 한다.
+갱신 중 상태는 영속 DB에 남는다. 운영 중 오류 시 스케줄을 중지하고 runtime·정확한 불변 버전·provider 상태를 확인한다. 소비된 provider grant는 옛 백업으로 활성화하지 않는다. 수집기 worker는 REGISTER 복구 권한이 없다. allowlisted ADMIN이 검증된 새 grant로 expected generation CAS를 수행해야 하며 generation을 되돌리지 않는다.
 [2회차 뒤 사람 재검토 항목](../../docs/design/2026-10-12-console-sync-pod/review-followup.md)을 확인한다.
+
+## 8. 격리 실제 검증
+
+`local-version-gateway.ts`와 `verify-local-pod.ts`는 격리 Docker/kind 전용이다. 실제 OAuth를 모델로 가공하지 않고 같은 수집 잠금·control-plane runtime 서비스를 호출한다. 게이트웨이의 로컬 정본은 0700 디렉터리, 0600 AES-GCM 암호화 불변 버전과 별도 보호 키다. 새 검증용 접근값만 전용 노드 tmpfs의 0400 파일에 복제한다. 기존 MCP 캐시·운영 Secret은 사용하지 않는다. 이 검증은 운영 Secret Manager/WIF/IAM 성공의 근거가 아니다.

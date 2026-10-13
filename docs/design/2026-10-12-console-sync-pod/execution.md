@@ -9,7 +9,7 @@
 
 ## 문제·범위
 
-대화형 수집을 전용 파드에서 실행할 수 있는 조회 경로를 만들고, 광고·결제 누락이 기존 값을 0으로 덮어쓰는 동작을 고친다. MiniMax는 기존 분석 경로를 사용한다. 보완 승인으로 새 콘솔 OAuth 최초 인가와 로컬 등록을 포함한다. 새 스키마·운영 Secret 적용·배포는 범위 밖이다.
+대화형 수집을 전용 파드에서 실행할 수 있는 조회 경로를 만들고, 광고·결제 누락이 기존 값을 0으로 덮어쓰는 동작을 고친다. MiniMax는 기존 분석 경로를 사용한다. 보완 승인으로 새 콘솔 OAuth 최초 인가와 로컬 등록을 포함한다. v2 승인은 공개 runtime schema·migration을 포함한다. 운영 리소스/IAM 적용·배포는 범위 밖이다.
 
 ## 인수조건·검증
 
@@ -81,3 +81,15 @@ callback 서버는 종료했다. 운영 Secret/DB/배포/스케줄은 변경하�
 [회전 보존 설계 v2](rotation-v2.md)의 `17c5f6cf1513d6e9d0d0e725af0deb34effeff3c`를 사용자가 승인했다. 새 runtime 상태 schema/migration, Secret Manager 어댑터, 새 최초 인가, 불변 버전 보존·실제 만료 갱신·격리 파드 재시작 및 PR 갱신을 포함한다. 이 OAuth의 운영 정본과 정상 자동 갱신 보존 정책 예외를 승인했다. 운영 리소스/IAM 적용·배포·스케줄 활성화는 승인 대기이며 기존 회전 중단 기록은 과거 v1 결과로 보존한다.
 
 기존 임시 checkout 소실 뒤 보존된 merge 커밋 `9530fb225ae69fb08024fdc0131db36bf2ee9a3d`에서 managed worktree를 복구했다. 사용자 main의 `.serena/`와 다른 작업은 변경하지 않았다. 초기 자격증명 변경 전 로컬/BeeStation 전체 복원 검사: SHA `1d3ffadf5016b6975c2fe733f69720ee6c7d3bd5c191df5f92192170a897b822`, 6,349개 파일, 양쪽 통과.
+
+## v2 구현·만료 전 확인
+
+- 첫 TDD 실패: 회전 보존 인수조건이 기존 `OAUTH_ROTATION_REQUIRES_REVIEW` 때문에 실패했다. v2 구현 뒤 보존·readback·CAS 순서와 장애 시 영속 중단을 확인했다.
+- 추가 TDD 실패: 유효 access token으로 조회하는 동안 강제 refresh가 진행되면 IN_FLIGHT 중 MCP를 보낼 수 있었다. 진행 중 갱신을 기다리고 ACTIVE만 전송하도록 수정했다.
+- 격리 MySQL의 14개 리스팅 저장·결측 보존·readback, 별도 runtime 스키마의 RBAC·고정 workspace·CAS 경합·멱등·append-only 감사·새 DB 연결 IN_FLIGHT 차단 통과.
+- 새 최초 인가: 2026-10-13 17:50:12 KST. 실제 만료: 18:50:11 KST. 최초 조회와 비루트·읽기 전용 kind 파드에서 generation 1·refresh 전송 0회 확인. IOS 광고 결측은 그대로 제외한다.
+- 격리 파드의 최초 Node slim/OpenSSL 부족 실패는 인증 전 발생했으며 runtime ACTIVE를 확인했다. OpenSSL을 포함한 비밀 없는 QA 이미지로 실제 조회 통과.
+- Secret Manager REST/CRC32C/WIF 설정 어댑터는 합성 응답 검증이다. 운영 리소스·IAM·Secret Manager live proof를 만들지 않았다.
+- UI 변경 없음. 전체 제품 E2E 43개와 운영 승인은 별도 gate다. 기존 PR당 교차 리뷰 2회 상한을 넘겨 요청하지 않는다.
+
+- 발급 뒤 잠금 손실은 immutable 버전을 먼저 보존해 orphan으로 남기고 활성화 CAS는 차단한다. 관련 장애 테스트에 보존된 버전 수를 확인했다.

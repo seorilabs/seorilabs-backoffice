@@ -4,18 +4,23 @@ import { AIT_LISTINGS, AIT_WORKSPACE_ID } from "../src/lib/analytics/ait-apps";
 import { lastElapsedMetricDay, parseMetricDay } from "../src/lib/analytics/metric-day";
 import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
 import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/analytics/console-sync/collect";
-import { ConsoleOAuth, ConsoleSyncError, consoleErrorCode, loadConsoleCredential } from "../src/lib/analytics/console-sync/oauth";
+import { ConsoleOAuth, ConsoleSyncError, consoleErrorCode } from "../src/lib/analytics/console-sync/oauth";
+import { SecretManagerConsoleGrantVersions } from "../src/lib/analytics/console-sync/versions";
+import { consoleRuntimeLedger } from "../src/lib/control-plane/console-oauth-runtime";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 
 async function main() {
   const mode = process.argv[2] ?? "collect";
   if (!["collect", "verify-auth", "verify-refresh"].includes(mode)) throw new ConsoleSyncError("CONSOLE_MODE_INVALID");
-  const credential = await loadConsoleCredential(process.env.AIT_CONSOLE_OAUTH_FILE, process.env.AIT_CONSOLE_CREDENTIAL_ID);
+
   let launches: Record<string, string>;
   try { launches = z.record(z.string().refine((v) => parseMetricDay(v) !== null)).parse(JSON.parse(process.env.AIT_CONSOLE_CONFIRMED_LAUNCHES ?? "{}")); }
   catch { throw new ConsoleSyncError("CONSOLE_LAUNCH_DATES_INVALID"); }
-  const run = async () => {
-    const oauth = new ConsoleOAuth(credential);
+  const run = async (assertHeld: () => Promise<void>) => {
+    if (process.env.AIT_CONSOLE_CREDENTIAL_ID !== "shared/apps-in-toss/console-oauth") throw new ConsoleSyncError("OAUTH_IDENTITY_MISMATCH");
+    const runtime = consoleRuntimeLedger({ kind: "worker", principal: process.env.AIT_CONSOLE_RUNTIME_PRINCIPAL ?? "", workspaceId: 38345 }, assertHeld);
+    const versions = await SecretManagerConsoleGrantVersions.fromWif(process.env.AIT_CONSOLE_SECRET_RESOURCE ?? "", process.env.AIT_CONSOLE_WIF_CONFIG ?? "", process.env.AIT_CONSOLE_WIF_AUDIENCE ?? "");
+    const oauth = await ConsoleOAuth.open(versions, runtime);
     if (mode === "verify-refresh") await oauth.refresh();
     const reader = await createConsoleReader(oauth);
     try {

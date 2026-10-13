@@ -24,7 +24,7 @@ export async function startConsoleFixture() {
   const state = { failIos: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
   const server = createServer(async (req, res) => {
     try {
-      if (req.url === "/token") { state.refreshes++; res.setHeader("Content-Type", "application/json"); res.statusCode = state.revoked ? 400 : 200; res.end(JSON.stringify(state.revoked ? { error: "invalid_grant" } : { access_token: "fixture-access", token_type: "bearer", expires_in: 3600 })); return; }
+      if (req.url === "/token") { state.refreshes++; res.setHeader("Content-Type", "application/json"); res.statusCode = state.revoked ? 400 : 200; res.end(JSON.stringify(state.revoked ? { error: "invalid_grant" } : { access_token: "fixture-access", token_type: "bearer", expires_in: 3600, refresh_token: "fixture-refresh" })); return; }
       if (req.headers.authorization !== "Bearer fixture-access") { res.writeHead(401).end(); return; }
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;

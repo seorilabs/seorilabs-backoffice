@@ -26,6 +26,7 @@ spec:
             app.kubernetes.io/name: backoffice
             app.kubernetes.io/component: console-metrics-collector
         spec:
+          serviceAccountName: backoffice-console-metrics
           automountServiceAccountToken: false
           restartPolicy: Never
           nodeSelector:
@@ -45,7 +46,10 @@ spec:
               env:
                 - { name: NODE_ENV, value: production }
                 - { name: NODE_OPTIONS, value: "--dns-result-order=ipv4first --no-network-family-autoselection" }
-                - { name: AIT_CONSOLE_OAUTH_FILE, value: /run/ait-console/credential.json }
+                - { name: AIT_CONSOLE_SECRET_RESOURCE, value: __APPROVED_SECRET_RESOURCE__ }
+                - { name: AIT_CONSOLE_RUNTIME_PRINCIPAL, value: __REGISTERED_CONSOLE_RUNTIME_PRINCIPAL__ }
+                - { name: AIT_CONSOLE_WIF_AUDIENCE, value: __WIF_AUDIENCE__ }
+                - { name: AIT_CONSOLE_WIF_CONFIG, value: /run/ait-console-wif/credential.json }
                 - { name: AIT_CONSOLE_CREDENTIAL_ID, value: shared/apps-in-toss/console-oauth }
                 - name: DATABASE_URL
                   valueFrom:
@@ -58,10 +62,18 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities: { drop: ["ALL"] }
               volumeMounts:
-                - { name: oauth, mountPath: /run/ait-console, readOnly: true }
+                - { name: wif-config, mountPath: /run/ait-console-wif, readOnly: true }
+                - { name: wif-subject, mountPath: /run/secrets/ait-console-wif, readOnly: true }
           volumes:
-            - name: oauth
-              secret:
-                secretName: backoffice-ait-console-oauth
+            - name: wif-config
+              configMap:
+                name: backoffice-console-oauth-wif
+                defaultMode: 292 # 0444: 공개 external_account 설정, 비밀값 없음
+            - name: wif-subject
+              projected:
                 defaultMode: 288 # 0440
-                items: [{ key: credential.json, path: credential.json }]
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      audience: __WIF_AUDIENCE__
+                      expirationSeconds: 3600

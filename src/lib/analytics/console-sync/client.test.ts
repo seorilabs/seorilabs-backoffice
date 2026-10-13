@@ -1,12 +1,12 @@
+import { createFixtureOAuth } from "../../../../scripts/console-metrics/oauth-fixture";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { startConsoleFixture } from "../../../../scripts/console-metrics/fixture-server";
 import { createConsoleReader, retryDelay, type ConsoleReadTool } from "./client";
-import { ConsoleOAuth } from "./oauth";
 import { McpConsoleMetricsSource } from "./source";
 test("실제 HTTP MCP에서 갱신·429·병렬 상한·allowlist·부분 결측을 검증한다", async () => {
   const fixture = await startConsoleFixture();
-  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const oauth = await createFixtureOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth);
   try {
     const source = new McpConsoleMetricsSource(reader); await source.verifyWorkspace(); fixture.state.rateLimits = 1;
@@ -29,7 +29,7 @@ test("긴 Retry-After와 비정상 값은 자동 재시도하지 않는다", () 
 
 test("공급자 입력 계약은 request 없는 조회를 거부하고 정상 외피만 받는다", async () => {
   const fixture = await startConsoleFixture();
-  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const oauth = await createFixtureOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth);
   try {
     const period = { startDate: "2026-10-11", endDate: "2026-10-11", timeUnit: "DAY" };
@@ -43,7 +43,7 @@ test("공급자 입력 계약은 request 없는 조회를 거부하고 정상 �
 
 test("요청 전체 예산이 끝나면 대기 중인 재시도를 취소하고 다음 슬롯을 넘긴다", async () => {
   const fixture = await startConsoleFixture();
-  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const oauth = await createFixtureOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth, { requestBudgetMs: 1_000 });
   try {
     fixture.state.unavailable = 10; fixture.state.retryAfter = "2";
@@ -54,7 +54,7 @@ test("요청 전체 예산이 끝나면 대기 중인 재시도를 취소하고 
 });
 test("Retry-After 20초 연속 응답에서 남은 예산을 넘기면 전체 조회를 멈춘다", async () => {
   const fixture = await startConsoleFixture();
-  const oauth = new ConsoleOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
+  const oauth = await createFixtureOAuth({ credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway", refreshToken: "fixture-refresh" }, fixture.fetcher);
   const reader = await createConsoleReader(oauth);
   try {
     fixture.state.rateLimits = 10; fixture.state.retryAfter = "20";

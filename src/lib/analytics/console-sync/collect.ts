@@ -6,11 +6,15 @@ import { ConsoleSyncError, consoleErrorCode } from "./oauth";
 import type { McpConsoleMetricsSource } from "./source";
 
 // 갱신 전에 잠금을 잡는다. 여러 수집 Job이 같은 refresh token을 동시에 쓰지 않는다.
-export async function withConsoleCollectionLock<T>(run: () => Promise<T>): Promise<T | { state: "already_running" }> {
+export async function withConsoleCollectionLock<T>(run: (assertHeld: () => Promise<void>) => Promise<T>): Promise<T | { state: "already_running" }> {
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ acquired: number | bigint | null }>>`SELECT GET_LOCK('backoffice:ait-console-collect', 0) AS acquired`;
     if (Number(rows[0]?.acquired) !== 1) return { state: "already_running" as const };
-    try { return await run(); }
+    const assertHeld = async () => {
+      const held = await tx.$queryRaw<Array<{ held: number | bigint | null }>>`SELECT IS_USED_LOCK('backoffice:ait-console-collect') = CONNECTION_ID() AS held`;
+      if (Number(held[0]?.held) !== 1) throw new ConsoleSyncError("OAUTH_COLLECTION_LOCK_LOST");
+    };
+    try { return await run(assertHeld); }
     finally { await tx.$queryRaw`SELECT RELEASE_LOCK('backoffice:ait-console-collect')`; }
   }, { timeout: 840_000, maxWait: 5_000 });
 }

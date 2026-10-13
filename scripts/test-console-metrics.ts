@@ -1,9 +1,10 @@
+import { createFixtureOAuth } from "./console-metrics/oauth-fixture";
 import assert from "node:assert/strict";
 import { PrismaClient, type App } from "@prisma/client";
 import { AIT_LISTINGS } from "../src/lib/analytics/ait-apps";
 import { prisma } from "../src/lib/prisma";
 import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
-import { ConsoleOAuth } from "../src/lib/analytics/console-sync/oauth";
+
 import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/analytics/console-sync/collect";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { startConsoleFixture } from "./console-metrics/fixture-server";
@@ -18,7 +19,7 @@ async function main() {
   const app = apps.find((app) => app.slug === "lizard-tycoon")!;
   const launches = Object.fromEntries(AIT_LISTINGS.map((listing) => [`${listing.appSlug}#${listing.miniAppId}`, "2026-10-10"]));
   const fixture = await startConsoleFixture(); const now = new Date("2026-10-12T01:00:00Z");
-  const credential = { credentialId: "shared/apps-in-toss/console-oauth", clientId: "mcp-gateway" as const, refreshToken: "fixture-refresh" };
+  const credential = { credentialId: "shared/apps-in-toss/console-oauth" as const, clientId: "mcp-gateway" as const, refreshToken: "fixture-refresh" };
   const other = new PrismaClient();
   let reader: Awaited<ReturnType<typeof createConsoleReader>> | undefined;
   try {
@@ -26,7 +27,7 @@ async function main() {
       // 다른 DB 연결의 동일 잠금은 OAuth 호출 전에 실패해야 한다.
       const rows = await other.$queryRaw<Array<{ acquired: number | bigint }>>`SELECT GET_LOCK('backoffice:ait-console-collect', 0) AS acquired`;
       assert.equal(Number(rows[0].acquired), 0);
-      reader = await createConsoleReader(new ConsoleOAuth(credential, fixture.fetcher));
+      reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
       const source = new McpConsoleMetricsSource(reader); await source.verifyWorkspace(); fixture.state.rateLimits = 1;
       const blocked = await collectConsoleMetrics(source, now);
       assert.equal(blocked.state, "partial"); assert.equal(blocked.results.length, 0); assert.equal(blocked.blocked.length, AIT_LISTINGS.length);
@@ -47,14 +48,14 @@ async function main() {
     const ledger = await prisma.metricCollectionLedger.findMany({ where: { appId: app.id, day: { gte: new Date("2026-10-10") } } });
     assert.equal(ledger.length, 2); assert.ok(ledger.every((cell) => cell.state === "observed"));
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
-    await reader!.close(); reader = await createConsoleReader(new ConsoleOAuth(credential, fixture.fetcher));
+    await reader!.close(); reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);
     fixture.state.failIos = false; fixture.state.rateLimits = 10; fixture.state.retryAfter = "60";
     const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
     assert.equal(limited.state, "partial"); assert.ok("blocked" in limited && limited.blocked.some((b) => b.reason.includes("공급자 요청 제한")));
     assert.ok(fixture.state.rateLimits >= 8); // 진행 중인 최대 두 요청 외의 새 조회는 보내지 않는다.
     fixture.state.revoked = true;
-    await assert.rejects(new ConsoleOAuth(credential, fixture.fetcher).refresh(), /REAUTHENTICATION_REQUIRED/);
+    await assert.rejects((await createFixtureOAuth(credential, fixture.fetcher)).refresh(), /REAUTHENTICATION_REQUIRED/);
     assert.ok(!JSON.stringify({ result, failed, after }).includes("fixture-access"));
     await assert.rejects(withConsoleCollectionLock(async () => { throw new Error("fixture-failure"); }), /fixture-failure/);
     const unlocked = await other.$queryRaw<Array<{ acquired: number | bigint }>>`SELECT GET_LOCK('backoffice:ait-console-collect', 0) AS acquired`;

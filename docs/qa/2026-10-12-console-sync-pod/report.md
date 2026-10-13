@@ -2,13 +2,13 @@
 
 설계 ID: `2026-10-12-console-sync-pod`. [승인·실행 티켓](../../design/2026-10-12-console-sync-pod/execution.md).
 
-## 환경·실행 계획
+## v1 환경·실행 계획
 
 새 콘솔 OAuth 최초 인가·실제 조회와 로컬 카탈로그 등록을 통과했다. 첫 실제 refresh가 회전 중단되어 만료 갱신·재시작은 보류다. 로컬 HTTP MCP 시험 서버는 공식 SDK와 합성 응답만 사용한다. MySQL 9.2 격리 DB는 `127.0.0.1:33319/backoffice_console_qa`이며 운영 키·데이터를 사용하지 않는다.
 
 테스트 순서: 실패 조건 확인 → 매핑·ingest 수정 → OAuth·HTTP MCP 경계 → 격리 DB 수집·보존·잠금·readback → 타입·린트·전체 회귀 → 중앙 개발 근거 검증 → PR CI·교차 리뷰.
 
-## 진행 결과
+## v1 진행 결과
 
 - ingest 원본에서 불완전한 행·다른 리스팅 ID가 저장되어 회귀 assertion 2개 실패(예상 결과).
 - mapper 미구현 상태에서 정상 행·누락 사유 assertion 2개 실패(예상 결과).
@@ -23,7 +23,7 @@
 - `pnpm build`: 전체 기능 E2E 차단으로 미실행. worker 묶음은 개발용 실행 검증이며 제품 빌드 gate 통과가 아니다.
 - PR CI·교차 리뷰: PR에서 최신 결과를 확인한다. 이번 단계는 운영 배포·병합을 수행하지 않는다.
 
-## 남은 gate
+## v1 당시 남은 gate
 
 - AC-1 최초 인가·워크스페이스와 첫 리스팅 조회: 통과. 토큰 만료 후 refresh·격리 파드 재시작: 회전 보존 설계 승인 대기.
 - AC-2 실제 revoke 및 AC-6 전체 실제 리스팅/운영 DB readback: 미실행. 첫 리스팅 조회는 통과했지만 IOS 광고 결측으로 완료 행은 없다.
@@ -140,3 +140,9 @@ callback 서버는 종료했다. 운영 Secret/DB/배포/스케줄은 변경하�
 복원·체크섬 통과다(SHA-256 `2bed3a9749491009a124ae006696fee24d069ddaf4d25dfe0d79112d36c60b57`).
 실제 조회·중단·검증 환경·남은 gate의 비밀값 없는 요약은
 [provider 검증 근거](../../qa/2026-10-12-console-sync-pod/provider-verification.json)에 기록했다.
+
+## v2 현재 검증 (2026-10-13 KST)
+
+사용자 승인으로 v2 구현과 새 인가를 진행했다. 만료 전 실제 비루트·읽기 전용 kind 파드 조회 통과(generation 1, refresh 0회). 원본 만료 18:50:11 KST 이후 자동 갱신·회전 보존·파드 재생성 검증은 대기 중이다. v1 회전 중단 기록을 과거 근거로 보존하며 새 승인으로 소급 PASS 처리하지 않는다.
+
+전체 회귀 1,773개 통과 뒤 추가 동시 갱신 TDD에서 유효 access token 조회가 IN_FLIGHT 중 전송될 수 있는 결함을 재현·수정했다. 수정 후 관련 OAuth·버전·runtime 검사 12개 통과. 최신 전체 회귀·타입·린트·CI는 최종 후보에서 확인한다. 별도 격리 MySQL runtime schema에서 권한·CAS·멱등·append-only 감사·새 DB 연결의 IN_FLIGHT 차단도 통과했다. 운영 데이터·Secret Manager/IAM은 적용하지 않았다.
