@@ -30,7 +30,7 @@ async function main() {
         const result = await source.queryListing({ slug: listing.appSlug, workspaceId: AIT_WORKSPACE_ID, miniAppId: listing.miniAppId }, date, date);
         return { state: "authenticated", mode, metricDays: result.days.length, missing: result.missing, errors: result.errors };
       }
-      return collectConsoleMetrics(source, new Date(), launches);
+      return await collectConsoleMetrics(source, new Date(), launches);
     } finally { await reader.close().catch(() => {}); }
   };
   // 검사 모드도 수집과 같은 잠금 범위를 사용한다. DB에는 지표를 저장하지 않는다.
