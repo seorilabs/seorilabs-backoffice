@@ -11,7 +11,7 @@ export async function FeedbackView({ appId, date }: { appId?: string; date?: str
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">검색 순위 모니터링</h2><Link className="text-sm text-blue-700" href={`/feedback/keywords?date=${monitoring.day}${appId ? `&app=${encodeURIComponent(appId)}` : ""}`}>순위 그래프 보기 →</Link></div>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">검색 순위 모니터링</h2>{(!appId || monitoring.rows.some(row => row.appId === appId)) && <Link className="text-sm text-blue-700" href={`/feedback/keywords?date=${monitoring.day}${appId ? `&app=${encodeURIComponent(appId)}` : ""}`}>순위 그래프 보기 →</Link>}</div>
         <p className="mb-2 text-sm">
           추적 {new Set(monitoring.rows.map((row) => row.appId)).size}개 앱 · {monitoring.rows.length}조합
           {" / "}{monitoring.day} 수집 {monitoring.collected} · 미수집·실패 {monitoring.rows.length - monitoring.collected}
