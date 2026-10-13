@@ -75,3 +75,9 @@ callback 서버는 종료했다. 운영 Secret/DB/배포/스케줄은 변경하�
 복원·체크섬 통과다(SHA-256 `2bed3a9749491009a124ae006696fee24d069ddaf4d25dfe0d79112d36c60b57`).
 실제 조회·중단·검증 환경·남은 gate의 비밀값 없는 요약은
 [provider 검증 근거](../../qa/2026-10-12-console-sync-pod/provider-verification.json)에 기록했다.
+
+## v2 실행 승인 (2026-10-13 KST)
+
+[회전 보존 설계 v2](rotation-v2.md)의 `17c5f6cf1513d6e9d0d0e725af0deb34effeff3c`를 사용자가 승인했다. 새 runtime 상태 schema/migration, Secret Manager 어댑터, 새 최초 인가, 불변 버전 보존·실제 만료 갱신·격리 파드 재시작 및 PR 갱신을 포함한다. 이 OAuth의 운영 정본과 정상 자동 갱신 보존 정책 예외를 승인했다. 운영 리소스/IAM 적용·배포·스케줄 활성화는 승인 대기이며 기존 회전 중단 기록은 과거 v1 결과로 보존한다.
+
+기존 임시 checkout 소실 뒤 보존된 merge 커밋 `9530fb225ae69fb08024fdc0131db36bf2ee9a3d`에서 managed worktree를 복구했다. 사용자 main의 `.serena/`와 다른 작업은 변경하지 않았다. 초기 자격증명 변경 전 로컬/BeeStation 전체 복원 검사: SHA `1d3ffadf5016b6975c2fe733f69720ee6c7d3bd5c191df5f92192170a897b822`, 6,349개 파일, 양쪽 통과.
