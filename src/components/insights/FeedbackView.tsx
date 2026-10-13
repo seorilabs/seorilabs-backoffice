@@ -11,12 +11,12 @@ export async function FeedbackView({ appId, date }: { appId?: string; date?: str
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="mb-2 font-semibold">검색 순위 모니터링</h2>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">검색 순위 모니터링</h2>{(!appId || monitoring.rows.some(row => row.appId === appId)) && <Link className="text-sm text-blue-700" href={`/feedback/keywords?date=${monitoring.day}${appId ? `&app=${encodeURIComponent(appId)}` : ""}`}>순위 그래프 보기 →</Link>}</div>
         <p className="mb-2 text-sm">
           추적 {new Set(monitoring.rows.map((row) => row.appId)).size}개 앱 · {monitoring.rows.length}조합
           {" / "}{monitoring.day} 수집 {monitoring.collected} · 미수집·실패 {monitoring.rows.length - monitoring.collected}
         </p>
-        <p className="mb-3 text-xs text-neutral-500">App Store · 한국 KR / 미국 US · 매일 12:20 KST 수집 · Apple 검색 API 최대 200개 결과 순서이며 기기 화면과 다를 수 있습니다.</p>
+        <p className="mb-3 text-xs text-neutral-500">App Store · 한국 KR / 미국 US · 매일 21:20 KST 수집 · Apple 검색 API 최대 200개 결과 순서이며 기기 화면과 다를 수 있습니다.</p>
         <ul className="divide-y divide-neutral-100">
           {monitoring.apps.filter((app) => app.keywords.length).map((app) => {
             const rows = monitoring.rows.filter((row) => row.appId === app.id);
@@ -44,9 +44,9 @@ export async function FeedbackView({ appId, date }: { appId?: string; date?: str
         <p className="mb-3 text-xs text-neutral-500">현재 추적 설정의 기준일 관측과 이전의 마지막 성공 수집을 비교합니다. 결과 목록 없음·수집 실패·미수집·국가별 공개 리스팅 미확인을 구분합니다. 일일 알림의 CSV는 발행 시점 기록입니다.</p>
         {monitoring.rows.length ? <div className="overflow-x-auto" role="region" aria-label="전체 검색 순위표" tabIndex={0}>
           <table className="w-full min-w-[760px] text-left text-sm">
-            <thead><tr className="border-b"><th className="p-2">앱</th><th className="p-2">국가</th><th className="p-2">검색어</th><th className="p-2">기준일 순위</th><th className="p-2">이전 수집</th><th className="p-2">변화</th><th className="p-2">수집 시각 KST</th></tr></thead>
+            <thead><tr className="border-b"><th className="p-2">앱</th><th className="p-2">국가</th><th className="p-2">검색어</th><th className="p-2">기준일 순위</th><th className="p-2">이전 수집</th><th className="p-2">변화</th><th className="p-2">수집 시각 KST</th><th className="p-2">추이</th></tr></thead>
             <tbody>{monitoring.rows.map((row) => <tr className="border-b border-neutral-100" key={`${row.appId}:${row.country}:${row.term}`}>
-              <td className="p-2">{row.appName}</td><td className="p-2">{row.country.toUpperCase()}</td><td className="p-2">{row.term}</td><td className="p-2">{row.rankLabel}</td><td className="p-2">{row.previousDay ? `${row.previousRank === null ? "결과 목록에 없음" : `${row.previousRank}위`} · ${row.previousDay}` : "비교 자료 없음"}</td><td className="p-2">{row.change}</td><td className="p-2">{kstDateTimeShort(row.observedAt)}</td>
+              <td className="p-2">{row.appName}</td><td className="p-2">{row.country.toUpperCase()}</td><td className="p-2">{row.term}</td><td className="p-2">{row.rankLabel}</td><td className="p-2">{row.previousDay ? `${row.previousRank === null ? "결과 목록에 없음" : `${row.previousRank}위`} · ${row.previousDay}` : "비교 자료 없음"}</td><td className="p-2">{row.change}</td><td className="p-2">{kstDateTimeShort(row.observedAt)}</td><td className="p-2"><Link className="text-blue-700 whitespace-nowrap" href={`/feedback/keywords?app=${encodeURIComponent(row.appId)}&country=${encodeURIComponent(row.country)}&date=${monitoring.day}&term=${encodeURIComponent(row.term)}`}>추이 보기</Link></td>
             </tr>)}</tbody>
           </table>
         </div> : <p className="text-sm text-neutral-500">순위 추적 설정 없음</p>}

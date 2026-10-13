@@ -1,6 +1,6 @@
 # Backoffice 개발 검수 범위
 
-`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 42개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 BO-OPS-20261008-v1의 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다.
+`feature-inventory.json`은 현재 구현된 사용자 흐름과 서비스 책임 43개를 관리한다. URL별 복제 메뉴와 비활성 공급자도 범위에서 숨기지 않는다. `core`는 독립 UI 검수 대상이며 나머지도 배포 전 E2E 연결 대상이다. 검색 순위 웹 화면의 계획과 증거는 [BO-KEYWORD-WEB-20261012-v1](../design/2026-10-12-keyword-rank-web/validation.md)에 연결한다.
 
 ## 배포 직전 실행 계획
 
