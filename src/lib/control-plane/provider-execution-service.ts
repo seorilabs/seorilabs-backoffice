@@ -1,3 +1,4 @@
+import { lockAppForNewWork } from "./app-work-lock";
 import { Prisma } from "@prisma/client";
 
 import {
@@ -250,6 +251,7 @@ async function enqueueBlueprintExecution(input: Extract<ProviderExecutionCreate,
     ? "WAITING_HUMAN_APPROVAL"
     : "QUEUED";
   return prisma.$transaction(async (tx) => {
+    await lockAppForNewWork(tx, app.id);
     const execution = await tx.providerExecution.create({
       data: {
         appId: app.id,
@@ -443,6 +445,7 @@ async function enqueueMarketExecution(input: Extract<ProviderExecutionCreate, { 
     artifactChecksum: candidate.artifactChecksum,
   });
   return prisma.$transaction(async (tx) => {
+    await lockAppForNewWork(tx, candidate.appId);
     const execution = await tx.providerExecution.create({
       data: {
         appId: candidate.appId,
