@@ -139,7 +139,7 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 | OAUTH_REFRESH_OUTCOME_UNKNOWN | 전송 취소/네트워크/불완전한 성공 응답의 결과 불명. 현재 연결에서 옛 refresh 재사용 금지. 운영자는 다음 실행 전 스케줄 중지·grant 상태 확인 |
 | OAUTH_CLIENT_CONFIGURATION_INVALID / OAUTH_RESOURCE_CONFIGURATION_INVALID | 재로그인 반복 대신 등록 client/resource/scope 확인 |
 | OAUTH_REFRESH_NOT_SUPPORTED / OAUTH_REQUEST_REJECTED | 설정·공급자 갱신 지원 확인, 반복 인가 금지 |
-| OAUTH_REFRESH_UNAVAILABLE | 알려진 오류 응답. 공급자 가용성 확인 후 영향 범위 재검증 |
+| OAUTH_REFRESH_UNAVAILABLE | 갱신 오류 응답. 영속 IN_FLIGHT를 유지하며 자동 재전송하지 않음. 공급자 상태·정확한 버전 확인 뒤 승인된 새 인가/복구 검토 |
 | RATE_LIMITED | 전체 실행 부분 완료. Retry-After가 남은 25초 예산을 넘으면 다음 조회를 보내지 않음 |
 | MCP_REQUEST_TIMEOUT | fetch/대기 취소·지표 오류. 429 예산 부족은 이 코드로 바꾸지 않음 |
 

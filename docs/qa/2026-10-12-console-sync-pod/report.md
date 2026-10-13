@@ -146,3 +146,19 @@ callback 서버는 종료했다. 운영 Secret/DB/배포/스케줄은 변경하�
 사용자 승인으로 v2 구현과 새 인가를 진행했다. 만료 전 실제 비루트·읽기 전용 kind 파드 조회 통과(generation 1, refresh 0회). 원본 만료 18:50:11 KST 이후 자동 갱신·회전 보존·파드 재생성 검증은 대기 중이다. v1 회전 중단 기록을 과거 근거로 보존하며 새 승인으로 소급 PASS 처리하지 않는다.
 
 전체 회귀 1,773개 통과 뒤 추가 동시 갱신 TDD에서 유효 access token 조회가 IN_FLIGHT 중 전송될 수 있는 결함을 재현·수정했다. 수정 후 관련 OAuth·버전·runtime 검사 12개 통과. 최신 전체 회귀·타입·린트·CI는 최종 후보에서 확인한다. 별도 격리 MySQL runtime schema에서 권한·CAS·멱등·append-only 감사·새 DB 연결의 IN_FLIGHT 차단도 통과했다. 운영 데이터·Secret Manager/IAM은 적용하지 않았다.
+
+## v2 실제 만료·회전 보존·파드 재생성 완료
+
+2026-10-13 18:51:11 KST 실측에서 원래 만료(18:50:11 KST) 이후 자동 refresh 1회·HTTP 200·refresh 회전을 확인했다. 암호화 불변 버전 보존·정확한 버전 readback·ACTIVE CAS 이후 generation 1→2와 실제 워크스페이스/지표 조회가 통과했다. 만료 시각을 수정하지 않았다.
+
+18:51:18 KST 새 UID의 같은 이름 파드는 generation 2를 추가 refresh 0회로 재사용했다. 18:51:24 KST 강제 refresh 1회·HTTP 200·회전 보존으로 generation 3을 만들고, 18:51:29 KST 또 다른 UID의 파드가 추가 refresh 0회로 재조회했다. 실행 UID·원래/현재 만료·정확한 버전·소스 해시는 `provider-rotation-v2.json`에 기록했다. 해당 파일은 인증 수명 검증이며 제품 전체 E2E 기록이 아니다.
+
+격리 DB 공개 상태는 ACTIVE·generation 3·attemptId null, 감사 5행이다. 암호화된 grant와 대조한 최신 상태를 로컬 정본에 0600·fsync·readback으로 내보내고 카탈로그를 갱신했다. 초기/이전 버전과 암호화 키는 보존하며 소비된 토큰을 fallback으로 사용하지 않는다. Happy Farm 31877의 2026-10-12 IOS 광고 결측은 모든 조회에서 그대로 남았고 완료 행 0개·운영 DB 쓰기 0회다.
+
+CI [38377735363](https://github.com/seorilabs/seorilabs-backoffice/actions/runs/38377735363)은 1,775개 테스트·타입·lint·정적 Next 빌드·MySQL empty/cutover를 모두 통과했다. 사용자 정의 이름의 로컬 이관 DB는 schema 계약 뒤 operations fixture의 격리 이름 조건으로 실패했으며, 이를 통과로 바꾸지 않았다. 정상 이름의 전체 검증은 CI에서 확인했다.
+
+최신 main `0a4e588`을 병합하며 목록과 검수 문서 충돌은 양쪽 기록을 보존했다. 전체 기능 수는 44개이며 OAuth 구현 해시는 실측 소스 `e0a5c1e`와 동일하다. 최종 후보 CI와 중앙 검증 결과는 별도로 기록한다. Secret Manager/WIF/IAM live 검증·전체 제품 E2E·실제 revoke·모든 리스팅 운영 저장은 미실행이다. 운영 리소스·배포·스케줄은 별도 승인 대기다.
+
+최신 generation 3 포함 백업 `20261013T185312+0900`은 로컬·BeeStation 모두 6,386개 파일의 전체 복원·체크섬을 통과했다. archive SHA-256: `fc4414564983fe168d5b54d51c58de7ad0e7bb55a5691e2de14430b796b3f098`. 갱신마다 전체 백업을 수행하는 정책으로 바꾸지 않았으며 정상 회전의 불변 암호화 버전·readback·CAS 예외를 사용했다.
+
+최신 상태 내보내기와 양쪽 복원 gate 후 내 kind 클러스터·MySQL/gateway 컨테이너·전용 QA 이미지·임시 gateway key를 정리했다. 암호화 버전 3개와 encryption.key, 초기/과거 grant 아카이브는 보존한다. 사용자 QA 컨테이너·공용 브라우저·main의 untracked 작업은 변경하지 않았다.

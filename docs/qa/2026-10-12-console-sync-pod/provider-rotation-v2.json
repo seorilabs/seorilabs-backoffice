@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "scope": "real OAuth lifecycle in isolated kind; product-wide and production verification separate",
+  "approval": {
+    "designCommit": "17c5f6cf1513d6e9d0d0e725af0deb34effeff3c",
+    "dateKst": "2026-10-13",
+    "credentialId": "shared/apps-in-toss/console-oauth",
+    "productionApplicationApproved": false
+  },
+  "sourceSha": "e0a5c1e18b66ed8b6acf96eb02af306c49cb900a",
+  "sourceFilesSha256": {
+    "src/lib/analytics/console-sync/oauth.ts": "af5c18d2d2b29b029688d3e7527744ae1a8731a9c8b39b069b39c1a7850b9777",
+    "src/lib/analytics/console-sync/versions.ts": "9cce19d048d4d57da3def87ea824e10bbe3375513da38d4a2f3e6b56062517e9",
+    "src/lib/analytics/console-sync/runtime.ts": "72161bc57cf8f45625829dfa9780f0cb9261ece440e8b3f1a49eba961230369f",
+    "src/lib/analytics/console-sync/collect.ts": "ad27332ec8819681301b47c968a8ad7f183bae40e944ad9ed2dfc8dcbb399abf",
+    "src/lib/control-plane/console-oauth-runtime.ts": "0dd56a3c9419f7be60b2a12ed42df140033d68c854d27912b89413c104c45780",
+    "scripts/console-metrics/verify-local-pod.ts": "9034e751b47bddb02a68e1fd503eed93a1805985a7ec9381d3e24b0ac09234b8",
+    "scripts/console-metrics/local-version-gateway.ts": "5bf7b0c5425c16ba5ad0a2279abb551fb5ff3df18fc540c1f5afcafb98ff7262",
+    "prisma/schema.prisma": "9a3f528eef6e0b51ab264b9bc1badaa4a306e29fc61d622e7c537e8e27d61f3b"
+  },
+  "initialGrantIssuedAtKst": "2026-10-13T17:50:12.714+09:00",
+  "originalExpiresAt": 1791885011714,
+  "expiryModified": false,
+  "workspaceId": 38345,
+  "listing": {
+    "slug": "happy-farm",
+    "miniAppId": 31877,
+    "date": "2026-10-12"
+  },
+  "environment": {
+    "kindVersion": "0.33.0",
+    "kubernetesVersion": "1.37.0",
+    "database": "isolated MySQL 9.2",
+    "image": "console-oauth-v2-qa:e0a5c1e",
+    "imageIndexDigest": "sha256:d29537f213c2c3c8332a629f87a4ae48728f3503b2c137e4aebf240b049ed5c9",
+    "runAsUser": 10001,
+    "readOnlyRootFilesystem": true,
+    "automountServiceAccountToken": false,
+    "storage": "AES-256-GCM immutable local canonical versions via isolated authenticated gateway; file/directory fsync and exact readback",
+    "podIdentityComparison": "same pod name, distinct real pod UIDs"
+  },
+  "records": [
+    {
+      "step": "before-natural-expiry",
+      "recordedAt": "2026-10-13T09:42:48.964091+00:00",
+      "podUid": "529a6978-3d07-4cec-a672-b0a0c4ca83ca",
+      "imageId": "docker.io/library/import-2026-10-13@sha256:3d90af18af47fbe405b1eabbac29da08269ecbdd81fb2e7f0e55b86d51666b05",
+      "result": {
+        "state": "authenticated",
+        "mode": "verify",
+        "podName": "console-oauth-v2-check",
+        "generationBefore": 1,
+        "generationAfter": 1,
+        "phase": "ACTIVE",
+        "previousExpiresAt": 1791885011714,
+        "currentExpiresAt": 1791885011714,
+        "expiredBeforeQuery": false,
+        "refreshes": 0,
+        "providerStatuses": [],
+        "rotated": false,
+        "secretVersion": "local/versions/a7d3f1c3-c627-4a83-b9c7-5d9623d57972",
+        "metricDays": 0,
+        "missing": [
+          {
+            "date": "2026-10-12",
+            "metrics": [
+              "iaa.IOS"
+            ]
+          }
+        ],
+        "errors": []
+      },
+      "snapshotObservedAt": "2026-10-13T09:50:52.699575+00:00",
+      "recordedAtSource": "mtime of captured initial final-source pod log; this log result was generated before expiry"
+    },
+    {
+      "step": "natural-expiry-refresh",
+      "recordedAt": "2026-10-13T09:51:11.183943+00:00",
+      "podUid": "1d684a11-82b6-43d4-8986-3bf0dae110e4",
+      "previousPodUid": "529a6978-3d07-4cec-a672-b0a0c4ca83ca",
+      "imageId": "docker.io/library/import-2026-10-13@sha256:3d90af18af47fbe405b1eabbac29da08269ecbdd81fb2e7f0e55b86d51666b05",
+      "result": {
+        "state": "authenticated",
+        "mode": "verify",
+        "podName": "console-oauth-v2-check",
+        "generationBefore": 1,
+        "generationAfter": 2,
+        "phase": "ACTIVE",
+        "previousExpiresAt": 1791885011714,
+        "currentExpiresAt": 1791888665855,
+        "expiredBeforeQuery": true,
+        "refreshes": 1,
+        "providerStatuses": [
+          200
+        ],
+        "rotated": true,
+        "secretVersion": "local/versions/4e021860-885b-4225-85b5-0b61c28ca772",
+        "metricDays": 0,
+        "missing": [
+          {
+            "date": "2026-10-12",
+            "metrics": [
+              "iaa.IOS"
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "step": "restart-after-natural-refresh",
+      "recordedAt": "2026-10-13T09:51:18.044854+00:00",
+      "podUid": "bb83158f-cf29-40b6-817a-905d64dbecb0",
+      "previousPodUid": "1d684a11-82b6-43d4-8986-3bf0dae110e4",
+      "imageId": "docker.io/library/import-2026-10-13@sha256:3d90af18af47fbe405b1eabbac29da08269ecbdd81fb2e7f0e55b86d51666b05",
+      "result": {
+        "state": "authenticated",
+        "mode": "verify",
+        "podName": "console-oauth-v2-check",
+        "generationBefore": 2,
+        "generationAfter": 2,
+        "phase": "ACTIVE",
+        "previousExpiresAt": 1791888665855,
+        "currentExpiresAt": 1791888665855,
+        "expiredBeforeQuery": false,
+        "refreshes": 0,
+        "providerStatuses": [],
+        "rotated": false,
+        "secretVersion": "local/versions/4e021860-885b-4225-85b5-0b61c28ca772",
+        "metricDays": 0,
+        "missing": [
+          {
+            "date": "2026-10-12",
+            "metrics": [
+              "iaa.IOS"
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "step": "explicit-refresh",
+      "recordedAt": "2026-10-13T09:51:24.416643+00:00",
+      "podUid": "b6c24312-dddc-46cb-97bd-b7f419553841",
+      "previousPodUid": "bb83158f-cf29-40b6-817a-905d64dbecb0",
+      "imageId": "docker.io/library/import-2026-10-13@sha256:3d90af18af47fbe405b1eabbac29da08269ecbdd81fb2e7f0e55b86d51666b05",
+      "result": {
+        "state": "authenticated",
+        "mode": "verify-refresh",
+        "podName": "console-oauth-v2-check",
+        "generationBefore": 2,
+        "generationAfter": 3,
+        "phase": "ACTIVE",
+        "previousExpiresAt": 1791888665855,
+        "currentExpiresAt": 1791888678952,
+        "expiredBeforeQuery": false,
+        "refreshes": 1,
+        "providerStatuses": [
+          200
+        ],
+        "rotated": true,
+        "secretVersion": "local/versions/b36133ce-ab67-4d56-b327-92980b64cccc",
+        "metricDays": 0,
+        "missing": [
+          {
+            "date": "2026-10-12",
+            "metrics": [
+              "iaa.IOS"
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "step": "restart-after-explicit-refresh",
+      "recordedAt": "2026-10-13T09:51:29.257023+00:00",
+      "podUid": "6ee5e2f1-3e61-4f2a-ac8d-0bcc558b900a",
+      "previousPodUid": "b6c24312-dddc-46cb-97bd-b7f419553841",
+      "imageId": "docker.io/library/import-2026-10-13@sha256:3d90af18af47fbe405b1eabbac29da08269ecbdd81fb2e7f0e55b86d51666b05",
+      "result": {
+        "state": "authenticated",
+        "mode": "verify",
+        "podName": "console-oauth-v2-check",
+        "generationBefore": 3,
+        "generationAfter": 3,
+        "phase": "ACTIVE",
+        "previousExpiresAt": 1791888678952,
+        "currentExpiresAt": 1791888678952,
+        "expiredBeforeQuery": false,
+        "refreshes": 0,
+        "providerStatuses": [],
+        "rotated": false,
+        "secretVersion": "local/versions/b36133ce-ab67-4d56-b327-92980b64cccc",
+        "metricDays": 0,
+        "missing": [
+          {
+            "date": "2026-10-12",
+            "metrics": [
+              "iaa.IOS"
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "finalRuntime": {
+    "generation": 3,
+    "phase": "ACTIVE",
+    "secretVersion": "local/versions/b36133ce-ab67-4d56-b327-92980b64cccc",
+    "attemptId": null,
+    "publicAuditRows": 5,
+    "exportedToProtectedLocalCanonicalState": true,
+    "exactGrantReadback": true,
+    "catalogStatus": "active"
+  },
+  "ci": {
+    "runId": 38377735363,
+    "sourceSha": "e0a5c1e18b66ed8b6acf96eb02af306c49cb900a",
+    "result": "success",
+    "testsPassed": 1775,
+    "typecheck": "passed",
+    "lint": "passed with one existing unrelated warning",
+    "staticNextBuild": "passed",
+    "mysqlEmptyMigration": "passed",
+    "mysqlCutoverMigration": "passed"
+  },
+  "notVerified": [
+    "production Secret Manager and WIF/IAM",
+    "whole-product 44-feature E2E",
+    "actual revoke",
+    "all-listing production ingest/readback"
+  ],
+  "production": {
+    "resourcesApplied": false,
+    "migrationApplied": false,
+    "deployed": false,
+    "scheduleActivated": false,
+    "metricsWritten": false
+  },
+  "historicalFailures": [
+    "v1 rotation stopped and is preserved separately",
+    "initial QA image lacked OpenSSL; failed before authentication, resolved in final QA image",
+    "local control script TLS timeout before provider call; no refresh retransmission",
+    "custom-named local migration DB passed schema contract then failed the operations fixture isolation-name guard; full canonical empty/cutover checks passed in CI"
+  ],
+  "finalBackup": {
+    "timestampKst": "20261013T185312+0900",
+    "archiveSha256": "fc4414564983fe168d5b54d51c58de7ad0e7bb55a5691e2de14430b796b3f098",
+    "fileCount": 6386,
+    "localFullRestore": "passed",
+    "beeStationFullRestore": "passed",
+    "generationIncluded": 3
+  },
+  "cleanup": {
+    "ownKindCluster": "removed",
+    "ownMysqlAndGatewayContainers": "removed after latest runtime export and both restore gates",
+    "ownQaImages": "removed",
+    "ephemeralGatewayKey": "removed after consumer shutdown",
+    "canonicalVersionsAndEncryptionKey": "retained",
+    "userContainersAndSharedBrowser": "preserved"
+  }
+}
