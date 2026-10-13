@@ -1,0 +1,28 @@
+# 토큰은 저장하지 않는다. Google STS에 제출하는 projected JWT의 공개 연결 설정이다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backoffice-console-metrics
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: console-metrics-collector
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backoffice-console-oauth-wif
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+    app.kubernetes.io/component: console-metrics-collector
+data:
+  credential.json: |
+    {
+      "type": "external_account",
+      "audience": "//iam.googleapis.com/projects/321365398093/locations/global/workloadIdentityPools/backoffice-console/providers/vzyx-cluster",
+      "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+      "token_url": "https://sts.googleapis.com/v1/token",
+      "credential_source": { "file": "/run/secrets/ait-console-wif/token" }
+    }
