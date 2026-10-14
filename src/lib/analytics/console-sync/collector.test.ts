@@ -32,6 +32,11 @@ async function executeCollector(storageFailure: boolean) {
         return globalThis.__collectorFixture = await startConsoleFixture();
       } }`,
     runtime: `export function consoleRuntimeLedger() { return {}; }`,
+    notification: `${event}
+      export async function enqueueNotification(input) {
+        events.push('notification:' + input.kind + ':' + input.destinations[0].key);
+        return 'notification-1';
+      }`,
     client: `${event}
       import { createConsoleReader as connect } from ${JSON.stringify(path.resolve("src/lib/analytics/console-sync/client.ts"))};
       export async function createConsoleReader(oauth) { const reader = await connect(oauth); return {
@@ -49,7 +54,9 @@ async function executeCollector(storageFailure: boolean) {
         events.push('query-finished');
         if (${storageFailure}) { events.push('storage-failed'); throw new ConsoleSyncError('STORAGE_FAILED'); }
         const state = response.days.length === 1 && response.errors.length === 0 ? 'complete' : 'partial';
-        events.push('collection-finished'); return {state, upserts:response.days.length, errors:response.errors};
+        events.push('collection-finished'); return {state, end:'2026-10-11', blocked:[],
+          results:[{window:{slug:'lizard-tycoon',miniAppId:61736,start:'2026-10-11'},upserts:response.days.length,missing:[],errors:response.errors,skipped:[],storageErrors:[],warnings:[]}],
+          readback:{apps:[{slug:'lizard-tycoon',miniAppId:61736,lastDate:'2026-10-11'}]}};
       }`,
   };
   try {
@@ -64,6 +71,7 @@ async function executeCollector(storageFailure: boolean) {
           if (modulePath.endsWith("/console-sync/oauth") || modulePath === "./oauth") key = "oauth";
           if (modulePath.endsWith("/console-sync/versions")) key = "versions";
           if (modulePath.endsWith("/control-plane/console-oauth-runtime")) key = "runtime";
+          if (modulePath.endsWith("/notifications/outbox")) key = "notification";
           if (modulePath.endsWith("/console-sync/collect")) key = "collect";
           if (args.importer === entry && modulePath.endsWith("/console-sync/client")) key = "client";
           return key ? { path: key, namespace: "collector-test" } : undefined;
@@ -89,13 +97,13 @@ async function executeCollector(storageFailure: boolean) {
 test("수집 CLI가 지연 조회와 저장 완료 뒤 MCP 연결을 닫는다", async () => {
   const result = await executeCollector(false);
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { state: "complete", upserts: 1, errors: [] });
-  assert.deepEqual(result.events, ["collection-start", "query-finished", "collection-finished", "close", "disconnect"]);
+  assert.equal(JSON.parse(result.stdout).state, "complete");
+  assert.deepEqual(result.events, ["collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:metrics-daily", "disconnect"]);
 });
 
 test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를 해제한다", async () => {
   const result = await executeCollector(true);
   assert.equal(result.exitCode, 1);
-  assert.deepEqual(JSON.parse(result.stderr), { state: "failed", code: "STORAGE_FAILED" });
-  assert.deepEqual(result.events, ["collection-start", "query-finished", "storage-failed", "close", "disconnect"]);
+  assert.equal(JSON.parse(result.stderr).code, "STORAGE_FAILED");
+  assert.deepEqual(result.events, ["collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:metrics-daily", "disconnect"]);
 });

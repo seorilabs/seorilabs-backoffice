@@ -129,6 +129,19 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 판정하지 않는다. `partial`은 종료 코드 2, 인증·실행 실패는 1이다. 문제 시 suspend하고 기존
 대화형 수집을 사용하며 과거 지표를 지우거나 0으로 보정하지 않는다.
 
+### 수집 직후 디스코드 결과
+
+`collect` 실행은 MCP 연결과 수집 잠금을 정리한 뒤 기존 알림 대기열에 실행당 한 건을 넣는다.
+기존 notification worker가 `metrics-daily` 목적지로 전송하고 전송 실패 시 기존 재시도 정책을 적용한다.
+정상·부분 완료·실패를 구분하며 수집 구간, 반영 건수, 결측 리스팅·날짜 조합 수, 조회/저장 오류,
+리스팅별 최신 저장 날짜를 알린다. 실패 전 저장 건수를 확인하지 못한 경우 0으로 표시하지 않는다.
+토큰·원본 응답·오류 본문은 보내지 않는다. `verify-auth`, `verify-refresh`, 동시 실행 보류는 알림을 만들지 않는다.
+
+실행 JSON의 `notification.state=queued`는 대기열 등록이며 디스코드 도착 증거가 아니다.
+`notification_delivery`의 `SENT`·`providerMessageId`와 실제 메시지를 다시 읽어 전송을 확인한다.
+등록 자체가 실패하면 수집 결과를 보존하고 `CONSOLE_NOTIFICATION_ENQUEUE_FAILED`, 종료 코드 1을 남긴다.
+수집 성공을 다시 실행해 알림 재시도를 대신하지 않는다.
+
 ## 7. 인증·요청 오류 대응
 
 | 코드 | 대응 |

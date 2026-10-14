@@ -8,9 +8,9 @@ import { ConsoleOAuth, ConsoleSyncError, consoleErrorCode } from "../src/lib/ana
 import { SecretManagerConsoleGrantVersions } from "../src/lib/analytics/console-sync/versions";
 import { consoleRuntimeLedger } from "../src/lib/control-plane/console-oauth-runtime";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
+import { collectAndNotify } from "../src/lib/analytics/console-sync/notification";
 
-async function main() {
-  const mode = process.argv[2] ?? "collect";
+async function execute(mode: string) {
   if (!["collect", "verify-auth", "verify-refresh"].includes(mode)) throw new ConsoleSyncError("CONSOLE_MODE_INVALID");
 
   let launches: Record<string, string>;
@@ -28,15 +28,20 @@ async function main() {
       if (mode !== "collect") {
         const date = lastElapsedMetricDay(new Date()); const listing = AIT_LISTINGS[0];
         const result = await source.queryListing({ slug: listing.appSlug, workspaceId: AIT_WORKSPACE_ID, miniAppId: listing.miniAppId }, date, date);
-        return { state: "authenticated", mode, metricDays: result.days.length, missing: result.missing, errors: result.errors };
+        return { state: "authenticated" as const, mode, metricDays: result.days.length, missing: result.missing, errors: result.errors };
       }
       return await collectConsoleMetrics(source, new Date(), launches);
     } finally { await reader.close().catch(() => {}); }
   };
   // 검사 모드도 수집과 같은 잠금 범위를 사용한다. DB에는 지표를 저장하지 않는다.
-  const result = await withConsoleCollectionLock(run);
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-  if (result.state === "partial") process.exitCode = 2;
+  return await withConsoleCollectionLock(run);
+}
+async function main() {
+  const mode = process.argv[2] ?? "collect";
+  const result = mode === "collect" ? await collectAndNotify(() => execute(mode)) : { ...await execute(mode), notification: undefined };
+  (result.state === "failed" ? process.stderr : process.stdout).write(`${JSON.stringify(result)}\n`);
+  if (result.state === "failed" || result.notification?.state === "failed") process.exitCode = 1;
+  else if (result.state === "partial") process.exitCode = 2;
 }
 main().catch((error) => { process.stderr.write(`${JSON.stringify({ state: "failed", code: consoleErrorCode(error) })}\n`); process.exitCode = 1; })
   .finally(() => prisma.$disconnect().catch(() => {}));
