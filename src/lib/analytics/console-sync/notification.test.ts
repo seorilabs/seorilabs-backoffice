@@ -64,3 +64,20 @@ test("동시 실행 보류와 인증 검사에는 알림을 생성하지 않는�
     assert.deepEqual(result, { state, notification: undefined });
   }
 });
+
+test("120일씩 나눈 구간은 같은 리스팅 한 건으로 합산하고 보류된 리스팅도 표시한다", () => {
+  const result = consoleCollectionNotification({ ...sample,
+    results: [sample.results[0], { ...sample.results[0], upserts: 4 }],
+    readback: { ...sample.readback, apps: [...sample.readback.apps, { slug: "waiting", miniAppId: 2, lastDate: "2026-10-09", rows: 2, lastCollectedAt: null }] },
+  }, "run-7");
+  assert.match(result.payload.text, /조회 1개 리스팅/);
+  assert.equal(result.payload.text.split("\n").filter((line) => line.startsWith("- example#1:")).length, 1);
+  assert.match(result.payload.text, /example#1: 반영 7건 · 최신 2026-10-11/);
+  assert.match(result.payload.text, /waiting#2: 조회 보류.*최신 2026-10-09/);
+});
+
+test("전부 보류되어도 리스팅별 최신 날짜와 보류 사유를 남긴다", () => {
+  const result = consoleCollectionNotification({ ...sample, results: [], blocked: [{ key: "example#1", reason: "공급자 요청 제한으로 실행 보류" }] }, "run-8");
+  assert.match(result.payload.text, /조회 0개 리스팅/);
+  assert.match(result.payload.text, /example#1: 조회 보류.*공급자 요청 제한.*최신 2026-10-11/);
+});

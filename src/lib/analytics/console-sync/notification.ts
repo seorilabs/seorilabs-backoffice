@@ -19,15 +19,25 @@ export function consoleCollectionNotification(result: Outcome, runId: string, no
   } else {
     const count = (key: "missing" | "errors" | "skipped" | "storageErrors" | "warnings") =>
       result.results.reduce((sum, row) => sum + row[key].length, 0);
+    const upsertsByListing = new Map<string, number>();
+    for (const row of result.results) {
+      const key = `${row.window.slug}#${row.window.miniAppId}`;
+      upsertsByListing.set(key, (upsertsByListing.get(key) ?? 0) + row.upserts);
+    }
+    const readbackByListing = new Map(result.readback.apps.map((app) => [`${app.slug}#${app.miniAppId}`, app]));
+    const blockedByListing = new Map(result.blocked.map((row) => [row.key, row.reason]));
+    const listings = new Set([...upsertsByListing.keys(), ...readbackByListing.keys(), ...blockedByListing.keys()]);
     const starts = result.results.map((row) => row.window.start).sort();
     lines.push(`수집 구간: ${starts[0] ?? "조회 보류"} ~ ${result.end} (KST)`,
-      `조회 ${result.results.length}개 리스팅 · 반영 ${result.results.reduce((sum, row) => sum + row.upserts, 0)}건`,
+      `조회 ${upsertsByListing.size}개 리스팅 · 반영 ${result.results.reduce((sum, row) => sum + row.upserts, 0)}건`,
       `결측 ${count("missing")}개 리스팅·날짜 조합 · 조회 오류 ${count("errors")}건 · 저장 오류 ${count("storageErrors")}건`,
-      `조회 보류 ${result.blocked.length}개 · 저장 제외 ${count("skipped")}건 · 경고 ${count("warnings")}건`);
+      `조회 보류 ${blockedByListing.size}개 · 저장 제외 ${count("skipped")}건 · 경고 ${count("warnings")}건`);
     if (result.state === "partial") lines.push("결측값은 0으로 채우지 않았으며 전체 수집 완료가 아닙니다.");
-    for (const row of result.results) {
-      const last = result.readback.apps.find((app) => app.slug === row.window.slug && app.miniAppId === row.window.miniAppId)?.lastDate;
-      lines.push(`- ${row.window.slug}#${row.window.miniAppId}: 반영 ${row.upserts}건 · 최신 ${last ?? "미확인"}`);
+    for (const key of listings) {
+      const reason = blockedByListing.get(key);
+      const action = upsertsByListing.has(key) ? `반영 ${upsertsByListing.get(key)}건${reason ? ` · 일부 조회 보류(${reason})` : ""}`
+        : `조회 보류${reason ? `(${reason})` : ""}`;
+      lines.push(`- ${key === "all" ? "전체 대상" : key}: ${action} · 최신 ${readbackByListing.get(key)?.lastDate ?? "미확인"}`);
     }
   }
   return {
