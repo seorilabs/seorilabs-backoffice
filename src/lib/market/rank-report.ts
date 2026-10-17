@@ -200,7 +200,7 @@ export function rankDiscordSvg(report: RankReport) {
     .map((r, i) => {
       const top = 118 + i * 210,
         points = r.points.slice(-7),
-        x = (j: number) => 60 + (j * 880) / 6,
+        x = (j: number) => 560 + (j * 380) / 6,
         y = (rank: number) => top + 118 + ((rank - 1) / 199) * 46;
       let graph = "";
       points.forEach((p, j) => {
@@ -216,7 +216,7 @@ export function rankDiscordSvg(report: RankReport) {
         r.rank !== null && (r.previousRank === null || r.rank < r.previousRank)
           ? "#047857"
           : "#b45309";
-      return `<g><rect x="20" y="${top - 22}" width="960" height="200" rx="16" fill="#f8fafc"/><text x="44" y="${top + 20}" font-size="40" font-weight="700">${esc(trim(r.appName, 20))}</text><text x="44" y="${top + 61}" font-size="32">${esc(trim(r.country.toUpperCase() + " · " + r.term, 36))}</text><text x="44" y="${top + 107}" font-size="40" fill="${color}">${esc(rankValue(r.previousRank) + " → " + rankValue(r.rank))}</text><text x="950" y="${top + 107}" text-anchor="end" font-size="32" fill="${color}">${esc(r.reason)}</text>${graph}</g>`;
+      return `<g><rect x="20" y="${top - 22}" width="960" height="200" rx="16" fill="#f8fafc"/><text x="44" y="${top + 20}" font-size="40" font-weight="700">${esc(trim(r.appName, 20))}</text><text x="44" y="${top + 61}" font-size="32">${esc(trim(r.country.toUpperCase() + " · " + r.term, 36))}</text><text x="44" y="${top + 107}" font-size="40" fill="${color}">${esc(rankValue(r.previousRank) + " → " + rankValue(r.rank))}</text><text x="950" y="${top + 107}" text-anchor="end" font-size="32" fill="${color}">${esc(r.reason)}</text><text x="44" y="${top + 160}" font-size="24" fill="#475569">비교 ${r.previousDay} → ${report.day}</text>${graph}</g>`;
     })
     .join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="36" font-weight="700">${report.day} 검색 위치의 중요한 변화</text><text x="40" y="81" font-size="26" fill="#475569">이전 관측 → 기준일 · 그래프 최근 7일 · 작은 숫자가 높은 순위</text>${rows}</g></svg>`;
