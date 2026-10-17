@@ -120,3 +120,44 @@ test("같은 결론의 지문은 전송 시각을 제외하고 thread·그림·�
     fp({ text: "a", embed: { color: 2 } }),
   );
 });
+
+test("확인된 외부 리뷰 봇 자동 감사만 내부로 돌리고 승인·명시 응답·다른 생산자는 유지", () => {
+  const decide = (payload: unknown) =>
+    reportDecision({ kind: "EXTERNAL_FEED", payload }).send;
+  assert.equal(
+    decide({
+      source: "seori-pr-bot",
+      text: "🔎 **Seori PR 리뷰 로그**\nPR #47",
+    }),
+    false,
+  );
+  assert.equal(
+    decide({ source: "seori-pr-bot", text: "⚠️ **Seori AI 쿼타 요약**" }),
+    false,
+  );
+  assert.equal(
+    decide({
+      source: "seori-pr-bot",
+      text: "원문",
+      thread: { parentDedupeKey: "x" },
+    }),
+    false,
+  );
+  assert.equal(
+    decide({ source: "seori-pr-bot", text: "✅ **Seori PR 승인**" }),
+    true,
+  );
+  assert.equal(
+    decide({
+      source: "seori-pr-bot",
+      text: "원문",
+      thread: { parentDedupeKey: "x" },
+      report: { category: "response" },
+    }),
+    true,
+  );
+  assert.equal(
+    decide({ source: "different-producer", text: "🔎 **Seori PR 리뷰 로그**" }),
+    true,
+  );
+});

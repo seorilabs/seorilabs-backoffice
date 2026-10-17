@@ -65,6 +65,18 @@ export function reportDecision(
       reason:
         typeof report.reason === "string" ? report.reason : "INTERNAL_RECORD",
     };
+  // 실제 생산자 notifications.ts에서 확인한 자동 감사 로그 형식만 제외한다.
+  // 다른 생산자·사용자 요청 결과에는 본문 휴리스틱을 적용하지 않는다.
+  if (
+    p.source === "seori-pr-bot" &&
+    !report.category &&
+    (p.thread ||
+      (typeof p.text === "string" &&
+        /^(🔎 \*\*Seori PR 리뷰 로그\*\*|⚠️ \*\*Seori AI 쿼타 요약\*\*)/.test(
+          p.text,
+        )))
+  )
+    return { send: false, reason: "EXTERNAL_AUTOMATIC_REVIEW_AUDIT" };
   if (typeof p.signalKind === "string") {
     const decision = signalDecision(p.signalKind);
     if (!decision.send) return decision;

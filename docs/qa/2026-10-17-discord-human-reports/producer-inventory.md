@@ -115,3 +115,9 @@ GA4 수집·재수집·landing probe, Android Vitals, Platform 지표 수집은 
 - 과거 대기 메시지: 새 기준으로 `SUPPRESSED`와 사유가 남고 `SENT`로 세지 않음.
 
 위 항목은 소스 조사에서 도출한 실행 인수조건이다. 구현 후보의 실제 격리 서비스 런타임 실행 결과는 별도 검수 기록에 적는다.
+
+## 외부 경계 후속 확인
+
+`/Users/syous/Repositories/seorilabs/gemini-pr-bot/src/notifications.ts`의 실제 송신 구현을 읽었다. `source=seori-pr-bot`, `startReviewAudit`의 고정 제목, `notifyReviewAuditEntry`·`notifyMiniMaxResponse`의 thread, `notifyQuotaEvent`의 고정 제목은 자동 감사·처리 원문이다. 이 알려진 출처·형식만 내부로 보낸다. `notifyApproval`의 실제 승인 결과와 구조화 `report.category=response/urgent`는 보존한다. 다른 출처의 문구는 이 규칙으로 분류하지 않는다. 외부 저장소를 수정하거나 배포하지 않았다.
+
+운영 readback에서 12개 채널 최근 최대100건의 발신자를 대조했다. Backoffice·서리 bot이 대부분이고 출시관리에는 별도 Release Ops webhook도 있었다. 이 샘플은 과거 모든 발신 경로나 외부 webhook의 현재 실행 설정을 증명하지 않는다. 운영 적용 전 별도 webhook은 현재 담당 실행과 대조해야 한다.
