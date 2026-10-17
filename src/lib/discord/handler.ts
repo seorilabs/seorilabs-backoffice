@@ -711,7 +711,7 @@ async function handleComponent(interaction: DiscordInteraction) {
       return ephemeral("지원하지 않는 장애 작업입니다.");
     const incident = await prisma.operationalIncident.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, lastDetectedAt: true },
     });
     if (!incident) return ephemeral("장애를 찾을 수 없습니다.");
     await createOperatorCommand({
@@ -722,7 +722,10 @@ async function handleComponent(interaction: DiscordInteraction) {
           : action === "assign"
             ? "incident_assign"
             : "incident_ack",
-      params: { incidentId: id },
+      params: {
+        incidentId: id,
+        expectedLastDetectedAt: incident.lastDetectedAt.toISOString(),
+      },
       actorDiscordUserId: userId,
       channelId,
       messageId,
@@ -748,6 +751,7 @@ async function handleDiscordInteractionCore(interaction: DiscordInteraction) {
     isComponent ||
       (interaction.type === InteractionType.MODAL_SUBMIT &&
         interaction.data?.custom_id?.startsWith("papproval:") === true),
+    interaction.data?.custom_id,
   ).map((key) => env.discordChannelId(key));
   if (
     !isDiscordInteractionScope({

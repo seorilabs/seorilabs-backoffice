@@ -148,7 +148,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
         },
         {
           id: "priority",
-          label: "열린 P1",
+          label: "어제 갱신된 P1",
           value: p1.length + "건",
           source: "GitHub 미러",
         },

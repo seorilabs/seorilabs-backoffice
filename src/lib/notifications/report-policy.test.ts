@@ -161,3 +161,27 @@ test("확인된 외부 리뷰 봇 자동 감사만 내부로 돌리고 승인·�
     true,
   );
 });
+
+test("과거 개별 리뷰 대기는 묶음으로 전환하되 같은 종류의 심사 전환과 요청 결과는 유지", () => {
+  assert.equal(
+    reportDecision({
+      kind: "STORE_REVIEW",
+      payload: { externalReviewId: "review-id", rating: 2, change: "new" },
+    }).send,
+    false,
+  );
+  assert.equal(
+    reportDecision({
+      kind: "STORE_REVIEW",
+      payload: { state: "APPROVED", store: "APP_STORE" },
+    }).send,
+    true,
+  );
+  assert.equal(
+    reportDecision({
+      kind: "STORE_REVIEW",
+      payload: { rating: 2, change: "new", report: { category: "response" } },
+    }).send,
+    true,
+  );
+});

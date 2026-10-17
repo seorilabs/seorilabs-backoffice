@@ -19,6 +19,7 @@ export function closedReviewGroups(
       store: string;
       observedAt: Date;
       count: number;
+      eventIds: string[];
       updated: number;
       lowRating: number;
       locale: string;
@@ -52,6 +53,7 @@ export function closedReviewGroups(
       store: row.store,
       observedAt: event.createdAt,
       count: 0,
+      eventIds: [],
       updated: 0,
       lowRating: 0,
       locale: row.review?.locale ?? "제공 안됨",
@@ -65,6 +67,7 @@ export function closedReviewGroups(
         rating: row.rating,
         change: row.change,
       });
+    group.eventIds.push(event.id);
     group.count++;
     group.updated += row.change === "updated" ? 1 : 0;
     group.lowRating += row.rating <= 2 ? 1 : 0;

@@ -71,7 +71,7 @@ test("링크가 있으면 푸터로 붙고 없으면 리포트가 그대로다",
   }
 });
 
-test("경고 카드는 KST 월별로 하나다", () => {
+test("비용 경고 판정 기간은 KST 월로 구분한다", () => {
   // 00:00 UTC 발화는 KST 로 같은 날 09:00 이다. UTC 날짜로 잡으면 자정 근처 재시도가
   // 다른 키를 만들어 같은 날 리포트가 두 번 올라간다.
   assert.equal(
@@ -89,5 +89,45 @@ test("경고 카드는 KST 월별로 하나다", () => {
   assert.equal(
     financeReportDedupeKey(new Date("2026-08-31T15:30:00Z")),
     "finance-warning:2026-09",
+  );
+});
+
+test("비용 조회 실패는 경고 해소가 아니고, 새 초과 단계는 새 판단이다", async () => {
+  const { costWarningTransition } = await import("./finance-report");
+  const previous = warning({
+    key: "gcp-budget-70:202610",
+    title: "GCP 월 예산 70% 도달",
+  });
+  const over = warning({
+    key: "gcp-budget-over:202610",
+    title: "GCP 월 예산 초과 110%",
+  });
+  const unknown = { github: null, gcp: null, llm: null, stability: null };
+  assert.deepEqual(costWarningTransition([previous], [], unknown), {
+    warnings: [previous],
+    changed: [],
+    resolved: [],
+  });
+  assert.deepEqual(
+    costWarningTransition([previous], [over], {
+      ...unknown,
+      gcp: { total: 110, currency: "KRW" },
+    }),
+    { warnings: [over], changed: [over], resolved: [previous] },
+  );
+  assert.deepEqual(
+    costWarningTransition([previous], [], {
+      ...unknown,
+      gcp: { total: 60, currency: "KRW" },
+    }),
+    { warnings: [], changed: [], resolved: [previous] },
+  );
+  assert.deepEqual(
+    costWarningTransition(
+      [previous],
+      [{ ...previous, detail: "같은 단계에서 비용만 갱신" }],
+      { ...unknown, gcp: { total: 75, currency: "KRW" } },
+    ).changed,
+    [],
   );
 });

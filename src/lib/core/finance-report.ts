@@ -1,10 +1,15 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueEditableNotification } from "@/lib/notifications/outbox";
+import {
+  enqueueNotification,
+  retryDeadLetterNotification,
+} from "@/lib/notifications/outbox";
 import {
   collectFinanceCosts,
   financeMonth,
   type CostWarning,
+  type FinanceCostFigures,
 } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
@@ -15,7 +20,7 @@ import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const SENDER_KO = "서리";
 
-/** KST 월별 카드 한 개에서 경고 단계가 달라질 때만 갱신한다. */
+/** KST 월별 판정 키. 중요한 단계 변화마다 별도 보고를 만든다. */
 export function financeReportDedupeKey(now = new Date()): string {
   return `finance-warning:${financeMonth(now).month}`;
 }
@@ -50,48 +55,173 @@ export interface FinanceReportResult {
   dedupeKey: string;
 }
 
-/** 비용 수집 → 리포트 렌더 → 알림 outbox. 전달은 notification worker 가 한다. */
+export function costWarningSource(
+  key: string,
+): keyof FinanceCostFigures | null {
+  if (key.startsWith("gh-")) return "github";
+  if (key.startsWith("gcp-")) return "gcp";
+  if (key.startsWith("llm-")) return "llm";
+  if (key.startsWith("stability-")) return "stability";
+  return null;
+}
+/** 조회 불가를 해소로 해석하지 않고, 실제로 확인한 단계 변화만 고른다. */
+export function costWarningTransition(
+  previous: CostWarning[],
+  current: CostWarning[],
+  figures: FinanceCostFigures,
+) {
+  const retained = previous.filter((w) => {
+    const source = costWarningSource(w.key);
+    return source !== null && figures[source] === null;
+  });
+  const warnings = [
+    ...current,
+    ...retained.filter((w) => !current.some((c) => c.key === w.key)),
+  ];
+  return {
+    warnings,
+    changed: warnings.filter((w) => !previous.some((p) => p.key === w.key)),
+    resolved: previous.filter((w) => !warnings.some((c) => c.key === w.key)),
+  };
+}
+function storedWarnings(value: unknown): CostWarning[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (w): w is CostWarning =>
+      w &&
+      typeof w === "object" &&
+      typeof w.key === "string" &&
+      typeof w.title === "string" &&
+      typeof w.detail === "string" &&
+      Array.isArray(w.evidence) &&
+      w.evidence.every((v: unknown) => typeof v === "string"),
+  );
+}
+/** 새 경고 단계는 새 보고로, 같은 단계는 내부 원장에만 남긴다. */
 export async function sendFinanceReport(
   now = new Date(),
 ): Promise<FinanceReportResult> {
   const { month } = financeMonth(now);
-  const { warnings, summaryLines } = await collectFinanceCosts(now);
-  const dedupeKey = financeReportDedupeKey(now);
-  const stages = warnings.map((w) => w.key).sort();
-  const previous = await prisma.notificationEvent.findUnique({
-    where: { dedupeKey },
-    select: { payload: true },
-  });
-  const before = previous?.payload as { costStages?: string[] } | undefined;
-  if (previous && JSON.stringify(before?.costStages) === JSON.stringify(stages))
-    return { month, warnings: warnings.length, dedupeKey };
-  await enqueueEditableNotification({
-    dedupeKey,
-    kind: "OPS_ALERT",
-    occurredAt: now,
-    payload: {
-      // 09:00 시점엔 그날 보고서가 아직 발행 전이라 날짜 없이 최신 보고서로 링크한다.
-      text: renderFinanceReport({
-        month,
-        summaryLines,
-        warnings,
-        link: orgReportUrl(),
-      }),
-      // 메인 봇이 아니라 서리 정체로 게시한다. 토큰 값은 payload 에 담지 않는다.
-      sender: SEORI_SENDER,
-      editable: true,
-      costStages: stages,
-      report: {
-        category: warnings.length ? "change" : "internal",
-        reason: warnings.length ? "COST_THRESHOLD" : "NO_MATERIAL_COST_CHANGE",
-      },
-      // 임계 경고가 하나라도 있으면 상자 색으로 먼저 드러낸다.
-      embed: {
-        color: warnings.length ? EMBED_COLOR.WARNING : EMBED_COLOR.INFO,
-        timestamp: now.toISOString(),
-      },
-    },
-    destinations: discordDestinations(["app-ops"]),
-  });
-  return { month, warnings: warnings.length, dedupeKey };
+  const { warnings, figures } = await collectFinanceCosts(now);
+  const baseKey = financeReportDedupeKey(now);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const state = await tx.notificationEvent.findUnique({
+            where: { dedupeKey: `finance-state:${month}` },
+            select: { payload: true },
+          });
+          const before = state?.payload as
+            | {
+                warningItems?: unknown;
+                sequence?: number;
+                lastEventId?: string;
+                lastDedupeKey?: string;
+              }
+            | undefined;
+          const change = costWarningTransition(
+            storedWarnings(before?.warningItems),
+            warnings,
+            figures,
+          );
+          if (!change.changed.length && !change.resolved.length) {
+            if (before?.lastEventId)
+              await retryDeadLetterNotification(before.lastEventId, tx);
+            return {
+              month,
+              warnings: change.warnings.length,
+              dedupeKey: before?.lastDedupeKey ?? baseKey,
+            };
+          }
+          const sequence =
+            (Number.isSafeInteger(before?.sequence) ? before!.sequence! : 0) +
+            1;
+          const dedupeKey = `${baseKey}:${sequence}`;
+          const headline =
+            change.changed[0]?.title ?? "확인된 비용 경고가 해소됐습니다";
+          const resolvedLines = change.resolved
+            .filter(
+              (old) =>
+                !change.changed.some(
+                  (w) =>
+                    costWarningSource(w.key) === costWarningSource(old.key),
+                ),
+            )
+            .map((w) => `- 해소: ${w.title}`);
+          const eventId = await enqueueNotification(
+            {
+              dedupeKey,
+              kind: "OPS_ALERT",
+              occurredAt: now,
+              payload: {
+                text: renderFinanceReport({
+                  month,
+                  summaryLines: [
+                    `**${headline}**`,
+                    ...change.changed.flatMap((w) => {
+                      const old = storedWarnings(before?.warningItems).find(
+                        (p) =>
+                          costWarningSource(p.key) === costWarningSource(w.key),
+                      );
+                      return old
+                        ? [`이전 보고 ${old.title} → 현재 ${w.title}`]
+                        : [];
+                    }),
+                    ...resolvedLines,
+                  ],
+                  warnings: change.changed,
+                  link: orgReportUrl(),
+                }),
+                sender: SEORI_SENDER,
+                report: {
+                  category: "change",
+                  reason: change.changed.length
+                    ? "COST_WARNING_STAGE_CHANGED"
+                    : "COST_WARNING_RESOLVED",
+                },
+                embed: {
+                  color: change.changed.length
+                    ? EMBED_COLOR.WARNING
+                    : EMBED_COLOR.SUCCESS,
+                  timestamp: now.toISOString(),
+                },
+              },
+              destinations: discordDestinations(["app-ops"]),
+            },
+            tx,
+          );
+          await enqueueNotification(
+            {
+              dedupeKey: `finance-state:${month}`,
+              kind: "OPS_ALERT",
+              occurredAt: now,
+              payload: {
+                report: { category: "internal", reason: "COST_WARNING_STATE" },
+                warningItems: change.warnings.map((w) => ({
+                  key: w.key,
+                  title: w.title,
+                  detail: w.detail,
+                  evidence: w.evidence,
+                })),
+                sequence,
+                lastEventId: eventId,
+                lastDedupeKey: dedupeKey,
+              },
+              destinations: [],
+            },
+            tx,
+          );
+          return { month, warnings: change.warnings.length, dedupeKey };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        attempt >= 3 ||
+        !["P2034", "P2002"].includes((error as { code?: string }).code ?? "")
+      )
+        throw error;
+    }
+  }
 }

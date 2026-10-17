@@ -459,7 +459,15 @@ export async function reconcileOrgReport(
   }
 
   const corrections = published ? published.corrections + 1 : 0;
-  const correction = published
+  const hadDiscordMessage =
+    published &&
+    (await prisma.notificationDelivery.count({
+      where: {
+        event: { dedupeKey: metricHighlightDedupeKey(day) },
+        providerMessageId: { not: null },
+      },
+    }));
+  const correction = hadDiscordMessage
     ? correctionLine({
         previousDau: snapshot?.ga4Dau ?? 0,
         previousApps: previous?.summary.ga4.apps ?? null,

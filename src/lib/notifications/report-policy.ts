@@ -77,6 +77,13 @@ export function reportDecision(
         )))
   )
     return { send: false, reason: "EXTERNAL_AUTOMATIC_REVIEW_AUDIT" };
+  if (
+    input.kind === "STORE_REVIEW" &&
+    (typeof p.externalReviewId === "string" ||
+      (typeof p.rating === "number" &&
+        ["new", "updated"].includes(String(p.change))))
+  )
+    return { send: false, reason: "GROUPED_REVIEW_CONTENT" };
   if (typeof p.signalKind === "string") {
     const decision = signalDecision(p.signalKind);
     if (!decision.send) return decision;

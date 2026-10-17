@@ -433,7 +433,10 @@ export async function drainAllNotifications(limit = 30) {
         payload && typeof payload === "object" && !Array.isArray(payload)
           ? (payload as Prisma.JsonObject)
           : null;
-      if (object?.rankReport) {
+      if (
+        object?.rankReport &&
+        ((object.rankReport as { items?: unknown[] }).items?.length ?? 0) > 0
+      ) {
         try {
           const { rankDiscordSvg } = await import("@/lib/market/rank-report");
           const sharp = (await import("sharp")).default;

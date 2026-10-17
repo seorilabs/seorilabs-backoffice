@@ -113,7 +113,10 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
     lines.push(
       "근거: " +
         facts
-          .map(([key, value]) => `${labels[key] ?? key} ${String(value)}`)
+          .map(
+            ([key, value]) =>
+              `${labels[key] ?? key} ${key === "resolvedBy" ? `<@${String(value)}>` : String(value)}`,
+          )
           .join(" · "),
     );
   if (incident.acknowledgedBy)
@@ -145,20 +148,24 @@ export function incidentDeliveryMode(
 async function enqueueIncident(
   incident: OperationalIncident,
   signalId: string,
+  db: Pick<Prisma.TransactionClient, "notificationEvent"> = prisma,
 ): Promise<void> {
-  await enqueueNotification({
-    dedupeKey: `incident:${incident.id}:${signalId}`,
-    kind: "INCIDENT",
-    payload: { incidentId: incident.id },
-    occurredAt: incident.lastDetectedAt,
-    // 목적지는 장애가 만들어질 때 고정된 값을 그대로 쓴다. 살아 있는 카드를
-    // 중간에 다른 채널로 옮기면 그 카드의 수명주기 편집이 끊긴다.
-    destinations: discordDestinations([
-      isDiscordDestinationKey(incident.destinationKey)
-        ? incident.destinationKey
-        : "ops-alerts",
-    ]),
-  });
+  await enqueueNotification(
+    {
+      dedupeKey: `incident:${incident.id}:${signalId}`,
+      kind: "INCIDENT",
+      payload: { incidentId: incident.id },
+      occurredAt: incident.lastDetectedAt,
+      // 목적지는 장애가 만들어질 때 고정된 값을 그대로 쓴다. 살아 있는 카드를
+      // 중간에 다른 채널로 옮기면 그 카드의 수명주기 편집이 끊긴다.
+      destinations: discordDestinations([
+        isDiscordDestinationKey(incident.destinationKey)
+          ? incident.destinationKey
+          : "ops-alerts",
+      ]),
+    },
+    db,
+  );
 }
 
 export async function recordIncident(input: {
@@ -171,41 +178,108 @@ export async function recordIncident(input: {
   appId?: string;
   evidence?: Prisma.InputJsonObject;
 }): Promise<OperationalIncident> {
-  const existing = await prisma.operationalIncident.findFirst({
-    where: {
-      source: input.source,
-      kind: input.kind,
-      appId: input.appId ?? null,
-      status: { in: ["OPEN", "ACKNOWLEDGED"] },
-    },
-    orderBy: { firstDetectedAt: "desc" },
-  });
-  const incident = existing
-    ? await prisma.operationalIncident.update({
-        where: { id: existing.id },
-        data: {
-          severity: input.severity,
-          summary: input.summary,
-          evidence: input.evidence,
-          lastDetectedAt: input.detectedAt,
+  const dedupeKey = `${input.source}:${input.kind}:${input.appId ?? "global"}:${input.signalId}`;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const signalKey = `incident-observation:${input.source}:${input.kind}:${input.appId ?? "global"}:${input.signalId}`;
+          const recorded = await tx.notificationEvent.findUnique({
+            where: { dedupeKey: signalKey },
+            select: { payload: true },
+          });
+          const recordedId = (
+            recorded?.payload as { incidentId?: string } | undefined
+          )?.incidentId;
+          if (recordedId) {
+            const prior = await tx.operationalIncident.findUniqueOrThrow({
+              where: { id: recordedId },
+            });
+            if (prior.status !== "RECOVERED")
+              await enqueueIncident(prior, input.signalId, tx);
+            return prior;
+          }
+          const seen = await tx.operationalIncident.findUnique({
+            where: { dedupeKey },
+          });
+          // 이미 해결한 같은 신호의 재전송은 새 사건으로 만들지 않는다.
+          if (seen?.status === "RECOVERED") return seen;
+          const active =
+            seen ??
+            (await tx.operationalIncident.findFirst({
+              where: {
+                source: input.source,
+                kind: input.kind,
+                appId: input.appId ?? null,
+                status: { in: ["OPEN", "ACKNOWLEDGED"] },
+              },
+              orderBy: { firstDetectedAt: "desc" },
+            }));
+          let incident: OperationalIncident;
+          if (active) {
+            const changed = await tx.operationalIncident.updateMany({
+              where: {
+                id: active.id,
+                status: { in: ["OPEN", "ACKNOWLEDGED"] },
+              },
+              data: {
+                severity: input.severity,
+                summary: input.summary,
+                evidence: input.evidence,
+                lastDetectedAt: input.detectedAt,
+              },
+            });
+            if (!changed.count) throw Error("INCIDENT_STATE_CHANGED");
+            incident = await tx.operationalIncident.findUniqueOrThrow({
+              where: { id: active.id },
+            });
+          } else
+            incident = await tx.operationalIncident.create({
+              data: {
+                dedupeKey,
+                appId: input.appId,
+                source: input.source,
+                kind: input.kind,
+                severity: input.severity,
+                summary: input.summary,
+                evidence: input.evidence,
+                destinationKey:
+                  input.source === "metrics" ? "app-ops" : "ops-alerts",
+                firstDetectedAt: input.detectedAt,
+                lastDetectedAt: input.detectedAt,
+              },
+            });
+          await enqueueNotification(
+            {
+              dedupeKey: signalKey,
+              kind: "OPS_ALERT",
+              payload: {
+                incidentId: incident.id,
+                report: {
+                  category: "internal",
+                  reason: "INCIDENT_SIGNAL_LEDGER",
+                },
+              },
+              destinations: [],
+            },
+            tx,
+          );
+          await enqueueIncident(incident, input.signalId, tx);
+          return incident;
         },
-      })
-    : await prisma.operationalIncident.create({
-        data: {
-          dedupeKey: `${input.source}:${input.kind}:${input.appId ?? "global"}:${input.signalId}`,
-          appId: input.appId,
-          source: input.source,
-          kind: input.kind,
-          severity: input.severity,
-          summary: input.summary,
-          evidence: input.evidence,
-          destinationKey: input.source === "metrics" ? "app-ops" : "ops-alerts",
-          firstDetectedAt: input.detectedAt,
-          lastDetectedAt: input.detectedAt,
-        },
-      });
-  await enqueueIncident(incident, input.signalId);
-  return incident;
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        attempt >= 3 ||
+        (!["P2034", "P2002"].includes(
+          (error as { code?: string }).code ?? "",
+        ) &&
+          (error as Error).message !== "INCIDENT_STATE_CHANGED")
+      )
+        throw error;
+    }
+  }
 }
 
 export async function recoverIncident(input: {
@@ -247,8 +321,8 @@ export async function acknowledgeIncident(
   });
   if (!incident) throw new Error("장애를 찾을 수 없습니다.");
   if (incident.status === "RECOVERED") return incident;
-  return prisma.operationalIncident.update({
-    where: { id },
+  await prisma.operationalIncident.updateMany({
+    where: { id, status: { in: ["OPEN", "ACKNOWLEDGED"] } },
     data: {
       status: "ACKNOWLEDGED",
       acknowledgedBy: incident.acknowledgedBy ?? actorDiscordUserId,
@@ -256,10 +330,15 @@ export async function acknowledgeIncident(
       ...(assignSelf ? { assignedDiscordUserId: actorDiscordUserId } : {}),
     },
   });
+  return prisma.operationalIncident.findUniqueOrThrow({ where: { id } });
 }
 
 /** 다른 주문의 성공을 복구로 추정하지 않고 권한 있는 운영자가 해결을 기록한다. */
-export async function resolveIncident(id: string, actorDiscordUserId: string) {
+export async function resolveIncident(
+  id: string,
+  actorDiscordUserId: string,
+  expectedLastDetectedAt?: Date,
+) {
   return prisma.$transaction(async (tx) => {
     const incident = await tx.operationalIncident.findUniqueOrThrow({
       where: { id },
@@ -271,8 +350,12 @@ export async function resolveIncident(id: string, actorDiscordUserId: string) {
       !Array.isArray(incident.evidence)
         ? incident.evidence
         : {};
-    const updated = await tx.operationalIncident.update({
-      where: { id },
+    const changed = await tx.operationalIncident.updateMany({
+      where: {
+        id,
+        status: { in: ["OPEN", "ACKNOWLEDGED"] },
+        lastDetectedAt: expectedLastDetectedAt ?? incident.lastDetectedAt,
+      },
       data: {
         status: "RECOVERED",
         recoveredAt: new Date(),
@@ -282,6 +365,13 @@ export async function resolveIncident(id: string, actorDiscordUserId: string) {
           resolvedBy: actorDiscordUserId,
         },
       },
+    });
+    if (!changed.count)
+      throw Error(
+        "장애에 새 관측이 추가됐습니다. 최신 내용을 확인한 뒤 다시 해결 처리하세요.",
+      );
+    const updated = await tx.operationalIncident.findUniqueOrThrow({
+      where: { id },
     });
     await tx.auditLog.create({
       data: {

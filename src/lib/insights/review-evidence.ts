@@ -1,3 +1,4 @@
+import { redactCredentialCandidates } from "@/lib/control-plane/contracts";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -25,7 +26,7 @@ export async function resolveReportEvidence(
       | undefined;
     const review = p?.review as Prisma.JsonObject | undefined;
     return typeof review?.body === "string" && review.body.trim()
-      ? [{ ...f, value: review.body.slice(0, 160) }]
+      ? [{ ...f, value: redactCredentialCandidates(review.body).slice(0, 160) }]
       : [];
   });
 }

@@ -15,9 +15,36 @@ export type DiscordCapability =
   | "vault_index";
 
 const ROLE_CAPABILITIES: Record<string, DiscordCapability[]> = {
-  operations_admin: ["read", "planning", "bug", "planning_approval", "release_approval", "metric_incident", "ops_incident", "release", "vault_write", "vault_index"],
-  operator: ["read", "planning", "bug", "planning_approval", "release_approval", "metric_incident", "ops_incident", "release", "vault_write"],
-  product: ["read", "planning", "planning_approval", "metric_incident", "vault_write"],
+  operations_admin: [
+    "read",
+    "planning",
+    "bug",
+    "planning_approval",
+    "release_approval",
+    "metric_incident",
+    "ops_incident",
+    "release",
+    "vault_write",
+    "vault_index",
+  ],
+  operator: [
+    "read",
+    "planning",
+    "bug",
+    "planning_approval",
+    "release_approval",
+    "metric_incident",
+    "ops_incident",
+    "release",
+    "vault_write",
+  ],
+  product: [
+    "read",
+    "planning",
+    "planning_approval",
+    "metric_incident",
+    "vault_write",
+  ],
   design: ["read", "planning"],
   development: ["read", "bug", "ops_incident"],
   qa: ["read", "bug", "release_approval", "ops_incident"],
@@ -28,15 +55,29 @@ const ROLE_CAPABILITIES: Record<string, DiscordCapability[]> = {
 };
 
 /** 역할 키의 capability 목록. */
-export function capabilitiesForRole(roleKey: string): readonly DiscordCapability[] {
+export function capabilitiesForRole(
+  roleKey: string,
+): readonly DiscordCapability[] {
   return ROLE_CAPABILITIES[roleKey] ?? [];
 }
 
-export function hasDiscordCapability(roleIds: readonly string[], capability: DiscordCapability): boolean {
-  if (capability === "issue_write") return hasDiscordCapability(roleIds, "planning") || hasDiscordCapability(roleIds, "bug");
+export function hasDiscordCapability(
+  roleIds: readonly string[],
+  capability: DiscordCapability,
+): boolean {
+  if (capability === "issue_write")
+    return (
+      hasDiscordCapability(roleIds, "planning") ||
+      hasDiscordCapability(roleIds, "bug")
+    );
   for (const [roleKey, capabilities] of Object.entries(ROLE_CAPABILITIES)) {
     const configuredId = env.discordRoleId(roleKey);
-    if (configuredId && roleIds.includes(configuredId) && capabilities.includes(capability)) return true;
+    if (
+      configuredId &&
+      roleIds.includes(configuredId) &&
+      capabilities.includes(capability)
+    )
+      return true;
   }
   return false;
 }
@@ -60,7 +101,10 @@ export const DISCORD_CARD_CHANNEL_KEYS = [
  */
 export function interactionChannelKeys(
   isMessageComponent: boolean,
+  componentId?: string,
 ): readonly string[] {
+  if (isMessageComponent && componentId?.startsWith("incident:"))
+    return [...DISCORD_CARD_CHANNEL_KEYS, "app-ops"];
   return isMessageComponent ? DISCORD_CARD_CHANNEL_KEYS : ["backoffice"];
 }
 
@@ -74,9 +118,15 @@ export function isDiscordInteractionScope(input: {
   if (input.guildId !== input.expectedGuildId) return false;
   // 미설정 채널은 빈 문자열로 허용 목록에 섞여 들어오는 것이 정상 경로다(env 미설정).
   // channelId 가 비면 위에서 이미 거부되지만, 매칭 대상에서도 빈 값을 명시적으로 뺀다.
-  return input.allowedChannelIds.some((id) => id !== "" && id === input.channelId);
+  return input.allowedChannelIds.some(
+    (id) => id !== "" && id === input.channelId,
+  );
 }
 
-export function capabilityForCommand(command: string): DiscordCapability | null {
-  return COMMAND_DEFINITIONS.find(c => c.operation === command)?.capability ?? null;
+export function capabilityForCommand(
+  command: string,
+): DiscordCapability | null {
+  return (
+    COMMAND_DEFINITIONS.find((c) => c.operation === command)?.capability ?? null
+  );
 }

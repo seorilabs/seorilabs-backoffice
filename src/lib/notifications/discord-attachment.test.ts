@@ -51,3 +51,25 @@ test("PNG 생성·수정에 원래 발신자 토큰과 multipart 첨부를 유�
     globalThis.fetch = original;
   }
 });
+
+test("그림 없는 정정은 Discord의 이전 첨부와 이미지도 제거함", async () => {
+  const original = globalThis.fetch;
+  let body: Record<string, unknown> = {};
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return Response.json({ id: "222" });
+  };
+  try {
+    assert.equal(
+      (await editDiscordChannelMessage("111", "222", "이전 결론을 철회합니다.", {
+        botToken: "isolated-test-bot",
+      })).ok,
+      true,
+    );
+    assert.deepEqual(body.attachments, []);
+    assert.ok(Array.isArray(body.embeds));
+    assert.ok(body.embeds.every((embed) => !embed.image));
+  } finally {
+    globalThis.fetch = original;
+  }
+});

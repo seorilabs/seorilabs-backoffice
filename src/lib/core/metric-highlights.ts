@@ -881,9 +881,9 @@ export async function dailyReportContext(refDate: string) {
     prisma.operationalIncident.findMany({
       where: {
         source: { not: "metrics" },
-        lastDetectedAt: { gte: dayStart, lt: dayEnd },
+        firstDetectedAt: { gte: dayStart, lt: dayEnd },
       },
-      orderBy: { lastDetectedAt: "desc" },
+      orderBy: { firstDetectedAt: "desc" },
       take: 5,
     }),
     prisma.storeReviewSubmissionObservation.findMany({
@@ -901,12 +901,14 @@ export async function dailyReportContext(refDate: string) {
   const context = [
     ...incidents.map(
       (r) =>
-        `- ${r.summary} · ${r.status === "RECOVERED" ? "복구 확인" : "처리 필요"}`,
+        `- ${r.summary} · ${r.recoveredAt && r.recoveredAt < dayEnd ? (r.evidence && typeof r.evidence === "object" && !Array.isArray(r.evidence) && r.evidence.resolutionSource === "operator" ? "운영자 해결 처리" : "복구 확인") : "처리 필요"}`,
     ),
-    ...submissions.map(
-      (r) =>
-        `- ${r.app.displayName} · ${r.store} · ${r.externalVersionId ?? "버전 미제공"} · ${r.stateLabel}`,
-    ),
+    ...submissions
+      .filter((r) => r.notifiedHash === r.contentHash)
+      .map(
+        (r) =>
+          `- ${r.app.displayName} · ${r.store} · ${r.externalVersionId ?? "버전 미제공"} · ${r.stateLabel}`,
+      ),
   ];
   const contextFacts = context.map((line, i) => ({
     id: `context_${i}`,

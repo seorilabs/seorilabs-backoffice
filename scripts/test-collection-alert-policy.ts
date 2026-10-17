@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { shiftMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
 import { discoverOperationalSignals } from "@/lib/insights/triggers";
 import { sendDailyKeywordRanks } from "@/lib/market/daily-ranks";
@@ -12,8 +13,18 @@ if (
   url.pathname !== "/backoffice_cutover_contract_test"
 )
   throw new Error("ISOLATED_POLICY_DATABASE_REQUIRED");
-const at = (minute: number) => new Date(Date.UTC(2026, 9, 11, 0, minute));
+let policyDay = "2200-01-01";
+const at = (minute: number) =>
+  new Date(toDbDay(policyDay).getTime() + minute * 60000);
 async function main() {
+  // 이전 앱·설정·감사를 지우지 않고 실행마다 빈 기준일을 쓴다.
+  policyDay = shiftMetricDay(
+    policyDay,
+    await prisma.notificationEvent.count({
+      where: { dedupeKey: { startsWith: "keyword-report-day:" } },
+    }),
+  );
+  const fixtureSuffix=Date.now();
   const app = await prisma.app.create({
     data: {
       slug: "qa-policy-" + Date.now(),
@@ -23,8 +34,8 @@ async function main() {
       engine: "GODOT",
       status: "ACTIVE",
       marketTargets: [],
-      iosBundle: "com.example.policy",
-      playPackage: "com.example.policy",
+      iosBundle: `com.example.policy.p${fixtureSuffix}`,
+      playPackage: `com.example.policy.p${fixtureSuffix}`,
     },
   });
   const run = (minute: number, status: string) =>
@@ -64,7 +75,7 @@ async function main() {
   await sendOperationsSummary(at(150));
   assert.equal(
     await prisma.notificationEvent.count({
-      where: { dedupeKey: "metrics:operations:2026-10-11" },
+      where: { dedupeKey: `metrics:operations:${policyDay}` },
     }),
     0,
     "회복 횟수 요약을 발행하지 않는다",
@@ -202,14 +213,14 @@ async function main() {
       },
     });
     await prisma.marketObservation.createMany({
-      data: [10, 11].map((date) => ({
+      data: [shiftMetricDay(policyDay, -1), policyDay].map((date) => ({
         appId: app.id,
         kind: "keyword",
         target: "해전",
         country: "kr",
-        day: new Date(`2026-10-${date}T00:00:00Z`),
+        day: toDbDay(date),
         observedAt: at(160),
-        value: { rank: date === 10 ? 50 : 36 },
+        value: { rank: date === policyDay ? 36 : 51 },
         sourceUrl: "https://itunes.apple.com/search",
       })),
     });
@@ -256,8 +267,8 @@ async function main() {
     };
     assert.match(payload.text, /격리 정책 앱/);
     assert.match(payload.text, /상위 50/);
-    assert.equal(payload.rankReport.items.length, 2);
-    assert.doesNotMatch(payload.text, /CSV|6조합/);
+    assert.equal(payload.rankReport.items.length, 1);
+    assert.doesNotMatch(payload.text, /CSV 파일 첨부|6조합/);
     assert.ok(
       outgoing.every((request) =>
         JSON.stringify(request.body).includes("attachment://"),

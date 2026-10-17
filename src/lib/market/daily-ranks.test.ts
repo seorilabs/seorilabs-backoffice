@@ -58,3 +58,13 @@ test("중요한 비교 최대 3개와 이미지 생성용 고정 자료·전체 
   assert.equal(payload.components[0].components[0].style, 5);
   assert.match(payload.components[0].components[0].url, /rank-reports/);
 });
+
+test("명시적 발행 기준일은 유효한 과거·당일만 허용한다", async () => {
+  const { sendDailyKeywordRanks } = await import("./daily-ranks");
+  const now = new Date("2026-10-18T01:00:00Z");
+  for (const day of ["2026-02-30", "2026-10-19", "not-a-date"])
+    await assert.rejects(
+      () => sendDailyKeywordRanks(now, day),
+      /INVALID_REPORT_DAY/,
+    );
+});

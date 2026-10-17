@@ -36,6 +36,11 @@ export async function enqueueNotification(
     ...input,
     payload: {
       ...input.payload,
+      ...(input.kind === "STORE_REVIEW" &&
+      input.payload.review &&
+      input.payload.reviewGrouped === undefined
+        ? { reviewGrouped: false }
+        : {}),
       reportFingerprint: reportFingerprint(input.kind, input.payload),
     },
   };
@@ -92,6 +97,23 @@ export async function requeueNotification(
     },
   });
   return result.count;
+}
+
+/** 같은 결론의 수동 재실행은 영구 실패만 다시 대기시킨다. */
+export async function retryDeadLetterNotification(
+  eventId: string,
+  db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
+) {
+  return db.notificationDelivery.updateMany({
+    where: { eventId, status: "DEAD_LETTER" },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      deletedAt: null,
+    },
+  });
 }
 
 export interface DeliveryOverrideResult {
@@ -215,6 +237,30 @@ export async function drainNotifications(
           ...object,
           text: `**정정 · 이전 결론을 철회합니다.**\n${object.text}`,
         };
+        const corrected = payload as Prisma.JsonObject;
+        payload = {
+          ...corrected,
+          report: { category: "change", reason: "REPORT_CORRECTION" },
+          reportCorrection: true,
+        };
+        const recorded = await prisma.notificationEvent.updateMany({
+          where: {
+            id: row.event.id,
+            payload: { equals: row.event.payload as Prisma.InputJsonValue },
+          },
+          data: { payload: payload as Prisma.InputJsonObject },
+        });
+        if (!recorded.count) {
+          await prisma.notificationDelivery.updateMany({
+            where: { id: row.id, status: "PROCESSING" },
+            data: {
+              status: "PENDING",
+              refreshRequested: false,
+              nextAttemptAt: new Date(),
+            },
+          });
+          continue;
+        }
         decision = { send: true, reason: "REPORT_CORRECTION" };
       }
       if (!decision.send) {
@@ -328,6 +374,7 @@ export async function drainNotifications(
             kind: row.event.kind,
             provider: row.provider,
             destinationKey: row.destinationKey,
+            reportFingerprint: reportFingerprint(row.event.kind, payload),
             terminal: !result.ok && isTerminalFailure(result, row.attempts + 1),
             error: result.error ?? null,
           },

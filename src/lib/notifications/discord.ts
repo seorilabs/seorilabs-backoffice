@@ -415,7 +415,7 @@ async function sendMessageRequest(
 ) {
   const body =
     method === "PATCH"
-      ? { content: "", components: [], embeds: [], ...payload }
+      ? { content: "", components: [], embeds: [], attachments: [], ...payload }
       : payload;
   if (!options.attachment)
     return discordRequest(

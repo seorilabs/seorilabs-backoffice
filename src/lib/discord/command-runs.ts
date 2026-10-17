@@ -270,6 +270,20 @@ async function showRun(
   return created.ok ? (created.messageId ?? null) : null;
 }
 
+async function showIncidentCard(run: OperatorCommandRun, line: string) {
+  const id = stringValue(jsonRecord(run.params), "incidentId");
+  const incident = await prisma.operationalIncident.findUnique({
+    where: { id },
+  });
+  if (!incident) return showRun(run, line);
+  const render = incidentRender(incident);
+  return showRun(
+    run,
+    { ...render, text: `${line}\n\n${render.text}` },
+    incidentComponents(incident),
+  );
+}
+
 /** 배포 카드 소유 run 의 releaseRecordId. 카드 액션이 아니면 빈 문자열. */
 function releaseRecordIdOf(run: OperatorCommandRun): string {
   return stringValue(jsonRecord(run.params), "releaseRecordId");
@@ -451,6 +465,9 @@ async function execute(
       const incident = await resolveIncident(
         stringValue(params, "incidentId"),
         run.actorDiscordUserId,
+        stringValue(params, "expectedLastDetectedAt")
+          ? new Date(stringValue(params, "expectedLastDetectedAt"))
+          : undefined,
       );
       const messageId = await showRun(
         run,
@@ -838,13 +855,15 @@ export async function processNextOperatorCommand(): Promise<boolean> {
             `❌ ${message}\n\n${generalCard.text}`,
             generalCard.components,
           )
-        : releaseRecordId
-          ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
-          : showRun(
-              run,
-              `❌ 작업 실패: ${message}${run.operation === "general_generate" ? "\n요청을 24시간 보존합니다. 아래 버튼으로 다시 생성할 수 있습니다." : ""}`,
-              retryRows,
-            )
+        : run.operation.startsWith("incident_")
+          ? showIncidentCard(run, `❌ 작업 실패: ${message}`)
+          : releaseRecordId
+            ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
+            : showRun(
+                run,
+                `❌ 작업 실패: ${message}${run.operation === "general_generate" ? "\n요청을 24시간 보존합니다. 아래 버튼으로 다시 생성할 수 있습니다." : ""}`,
+                retryRows,
+              )
     ).catch((renderError) => {
       console.error(
         `[operator-command-worker] 실패 표시 실패 ${run.id}:`,

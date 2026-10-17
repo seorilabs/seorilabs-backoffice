@@ -10,12 +10,18 @@ import {
   rankReportText,
   type RankRecord,
 } from "./rank-report";
-import { shiftMetricDay, toDbDay } from "@/lib/analytics/metric-day";
+import {
+  shiftMetricDay,
+  toDbDay,
+  parseMetricDay,
+  metricDayOf,
+} from "@/lib/analytics/metric-day";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import {
   enqueueNotification,
   requeueNotification,
+  retryDeadLetterNotification,
 } from "@/lib/notifications/outbox";
 import { keywordMonitoring, type KeywordRow } from "./keyword-monitoring";
 function csvCell(value: unknown) {
@@ -100,8 +106,16 @@ export function dailyRankPayload(
   };
 }
 /** 발행 자료를 저장하고 같은 결론의 재실행은 보내지 않는다. */
-export async function sendDailyKeywordRanks(now = new Date()) {
-  const monitoring = await keywordMonitoring(undefined, now);
+export async function sendDailyKeywordRanks(
+  now = new Date(),
+  requestedDay?: string,
+) {
+  if (
+    requestedDay !== undefined &&
+    (!parseMetricDay(requestedDay) || requestedDay > metricDayOf(now))
+  )
+    throw Error("INVALID_REPORT_DAY");
+  const monitoring = await keywordMonitoring(undefined, now, requestedDay);
   const history = await prisma.marketObservation.findMany({
     where: {
       kind: "keyword",
@@ -154,32 +168,34 @@ export async function sendDailyKeywordRanks(now = new Date()) {
         previousReport &&
         rankReportConclusionKey(previousReport) ===
           rankReportConclusionKey(payload.rankReport)
-      )
+      ) {
+        await retryDeadLetterNotification(previous!.id, tx);
         return {
           day: monitoring.day,
           rows: monitoring.rows.length,
           eventId: previous!.id,
           snapshotId,
         };
-      const uncertain =
-        !payload.rankReport.items.length &&
-        before.some(
-          (item) =>
-            !monitoring.rows.some(
-              (row) =>
-                row.appId === item.appId &&
-                row.country === item.country &&
-                row.term === item.term &&
-                row.state === "수집됨",
-            ),
-        );
-      if (previous && uncertain)
+      }
+      const uncertain = before.some(
+        (item) =>
+          !monitoring.rows.some(
+            (row) =>
+              row.appId === item.appId &&
+              row.country === item.country &&
+              row.term === item.term &&
+              row.state === "수집됨",
+          ),
+      );
+      if (previous && uncertain) {
+        await retryDeadLetterNotification(previous.id, tx);
         return {
           day: monitoring.day,
           rows: monitoring.rows.length,
           eventId: previous.id,
           snapshotId,
         };
+      }
       const id = await enqueueNotification(
         {
           dedupeKey,

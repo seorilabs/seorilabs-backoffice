@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { closedReviewGroups } from "./review-groups";
 import { prisma } from "@/lib/prisma";
 import { publishSignal } from "./service";
@@ -32,7 +33,14 @@ export async function discoverOperationalSignals(now = new Date()) {
   const since = new Date(now.getTime() - env.discordRetentionDays() * 86400000);
   const [reviewEvents, apps] = await Promise.all([
     prisma.notificationEvent.findMany({
-      where: { kind: "STORE_REVIEW", createdAt: { gte: since } },
+      where: {
+        kind: "STORE_REVIEW",
+        createdAt: {
+          gte: since,
+          lt: new Date(Math.floor(now.getTime() / 900000) * 900000),
+        },
+        payload: { path: "$.reviewGrouped", equals: false },
+      },
       orderBy: { createdAt: "asc" },
       select: { id: true, createdAt: true, payload: true },
     }),
@@ -48,26 +56,39 @@ export async function discoverOperationalSignals(now = new Date()) {
   }
   for (const [key, group] of closedReviewGroups(reviewEvents, now)) {
     const app = apps.find((app) => app.id === group.appId);
-    if (!app || !group.reviews.length) continue;
-    await emit({
-      dedupeKey: "review-themes:" + key,
-      appId: app.id,
-      kind: "review-themes",
-      title: `${app.displayName} · 사용자 리뷰의 불편·요청·칭찬`,
-      observedAt: group.observedAt,
-      facts: group.reviews.slice(0, 12).map((review, i) => ({
-        id: `review_${i}`,
-        label: `${review.rating}점 리뷰`.slice(0, 100),
-        value: review.eventId,
-        source: `${group.store} · ${group.locale} · 버전 ${group.version} · ${review.change === "updated" ? "수정 리뷰" : "새 리뷰"}`,
-      })),
-      sourceRefs: [
-        {
-          label: "리뷰 원문과 근거",
-          url: base() + "/apps/" + app.id + "/feedback",
+    if (app && group.reviews.length)
+      await emit({
+        dedupeKey: "review-themes:" + key,
+        appId: app.id,
+        kind: "review-themes",
+        title: `${app.displayName} · 사용자 리뷰의 불편·요청·칭찬`,
+        observedAt: group.observedAt,
+        facts: group.reviews.slice(0, 12).map((review, i) => ({
+          id: `review_${i}`,
+          label: `${review.rating}점 리뷰`.slice(0, 100),
+          value: review.eventId,
+          source: `${group.store} · ${group.locale} · 버전 ${group.version} · ${review.change === "updated" ? "수정 리뷰" : "새 리뷰"}`,
+        })),
+        sourceRefs: [
+          {
+            label: "리뷰 원문과 근거",
+            url: base() + "/apps/" + app.id + "/feedback",
+          },
+        ],
+      });
+    // 같은 묶음의 원문과 앱 잠금을 매분 다시 읽지 않는다. 원문 내용은 유지한다.
+    for (const id of group.eventIds) {
+      const event = reviewEvents.find((e) => e.id === id)!;
+      await prisma.notificationEvent.update({
+        where: { id },
+        data: {
+          payload: {
+            ...(event.payload as Prisma.JsonObject),
+            reviewGrouped: true,
+          },
         },
-      ],
-    });
+      });
+    }
   }
   return { count };
 }
