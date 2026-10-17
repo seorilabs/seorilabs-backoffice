@@ -43,14 +43,6 @@ export async function POST(request: NextRequest) {
       data: {
         eventId: input.eventId,
         eventType: input.type,
-        ...(input.type === "iap.completion_failed"
-          ? {
-              purchaseEnvironment:
-                input.attributes.isTestPurchase === false
-                  ? "실제 주문"
-                  : "실제·테스트 여부 제공 안됨",
-            }
-          : {}),
         appId: input.appId,
         occurredAt: new Date(input.occurredAt),
         outcome: input.outcome,
