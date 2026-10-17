@@ -5,6 +5,7 @@ import { asStringArray } from "@/lib/format";
 import { llmComplete, llmChatConfigured, llmChatModel } from "@/lib/ai/llm";
 import {
   AGENTS,
+  AI_DRAFT_MAX_TOKENS,
   buildPlanningPrompt,
   buildBugReportPrompt,
   buildDecomposePrompt,
@@ -54,11 +55,11 @@ export async function createPlanningDraftCore(input: {
     idea: input.idea,
     codebaseContext: codebaseContext || undefined,
   });
-  // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
+  // 완성 문서를 생성하되 Claude 출력이 잘리면 저장하지 않는다.
   const outputText = await llmComplete({
     system,
     prompt,
-    maxTokens: 2048,
+    maxTokens: AI_DRAFT_MAX_TOKENS,
     usage: { path: "draft" },
   });
 
@@ -108,11 +109,11 @@ export async function createBugDraftCore(input: {
     symptom: input.symptom,
     codebaseContext: codebaseContext || undefined,
   });
-  // 텔레그램 등 지연 민감 경로 — 토큰 상한을 낮춰 생성 지연을 억제.
+  // 웹과 Discord에서 같은 문서 생성 한도를 사용한다.
   const outputText = await llmComplete({
     system,
     prompt,
-    maxTokens: 2048,
+    maxTokens: AI_DRAFT_MAX_TOKENS,
     usage: { path: "draft" },
   });
 
@@ -258,7 +259,7 @@ export async function generateStageDraftCore(input: {
   const outputText = await llmComplete({
     system,
     prompt,
-    maxTokens: 2048,
+    maxTokens: AI_DRAFT_MAX_TOKENS,
     usage: { path: "draft" },
   });
 

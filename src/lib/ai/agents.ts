@@ -1,6 +1,10 @@
 import type { AppType, AppEngine, Lifecycle, AiDraftKind } from "@prisma/client";
 import { RELEASE_NOTE_LOCALES } from "@/lib/core/release-note-locales";
 
+// 기획서·검수표·마켓 문안은 한국어 문서 전체를 생성한다. 잘린 초안을 저장하지 않도록
+// 짧은 대화용 한도와 분리한다. 일일 호출 수·예산·분석 한도는 바꾸지 않는다.
+export const AI_DRAFT_MAX_TOKENS = 8192;
+
 // 단계별 Stage Agent — 각 에이전트는 컨텍스트로부터 Gemini 프롬프트(system+user)를 만든다.
 // 산출물은 한국어 마크다운. LLM 은 GitHub 에 직접 쓰지 않는다(초안만 생성).
 // 커밋 동작은 commitDraft(actions/ai.ts) 가 kind 별로 결정한다.

@@ -8,7 +8,7 @@ import { requireSession } from "@/lib/auth-helpers";
 import { env } from "@/lib/env";
 import { asStringArray } from "@/lib/format";
 import { llmComplete, llmChatConfigured, llmChatModel, LlmNotConfiguredError } from "@/lib/ai/llm";
-import { buildPlanningPrompt } from "@/lib/ai/agents";
+import { AI_DRAFT_MAX_TOKENS, buildPlanningPrompt } from "@/lib/ai/agents";
 import { getRepoContext } from "@/lib/github/read";
 import {
   commitDraftCore,
@@ -61,7 +61,7 @@ export async function generatePlanningDraft(input: {
 
   let text: string;
   try {
-    text = await llmComplete({ system, prompt, usage: { path: "action" } });
+    text = await llmComplete({ system, prompt, maxTokens: AI_DRAFT_MAX_TOKENS, usage: { path: "action" } });
   } catch (e) {
     throw new Error(notConfiguredMessage(e));
   }
