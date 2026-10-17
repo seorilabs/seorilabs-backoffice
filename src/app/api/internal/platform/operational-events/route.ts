@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { recordIapGrant } from "@/lib/notifications/iap-summary";
 import { prisma } from "@/lib/prisma";
 import {
-  isOpsAlert,
+  shouldReportOperationalFailure,
   operationalEventFacts,
   parseOperationalEvent,
   verifyOperationalEventSignature,
@@ -43,6 +43,14 @@ export async function POST(request: NextRequest) {
       data: {
         eventId: input.eventId,
         eventType: input.type,
+        ...(input.type === "iap.completion_failed"
+          ? {
+              purchaseEnvironment:
+                input.attributes.isTestPurchase === false
+                  ? "실제 주문"
+                  : "실제·테스트 여부 제공 안됨",
+            }
+          : {}),
         appId: input.appId,
         occurredAt: new Date(input.occurredAt),
         outcome: input.outcome,
@@ -80,7 +88,7 @@ export async function POST(request: NextRequest) {
       platformUserBaseline: true,
     },
   });
-  const alert = isOpsAlert(input.type);
+  const alert = shouldReportOperationalFailure(input);
   const occurredAt = new Date(input.occurredAt);
   const incidentKind = app ? input.type : `${input.type}:${input.appId}`;
   if (alert) {
@@ -96,6 +104,14 @@ export async function POST(request: NextRequest) {
       evidence: {
         outcome: input.outcome,
         eventType: input.type,
+        ...(input.type === "iap.completion_failed"
+          ? {
+              purchaseEnvironment:
+                input.attributes.isTestPurchase === false
+                  ? "실제 주문"
+                  : "실제·테스트 여부 제공 안됨",
+            }
+          : {}),
         impact:
           input.type === "ad.reward.delivery_failed"
             ? "광고 시청 후 보상이 지급되지 않았습니다."

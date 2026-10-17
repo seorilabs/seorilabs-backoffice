@@ -98,6 +98,7 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
     adCompletions: "광고 완료",
     networkAdImpressions: "광고 노출",
     platform: "마켓·광고 서비스",
+    purchaseEnvironment: "주문 환경",
     outcome: "처리 결과",
     resolvedBy: "해결 처리자",
   };
