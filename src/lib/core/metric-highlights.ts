@@ -7,6 +7,7 @@ import {
   metricDaysBetween,
   shiftMetricDay,
   toDbDay,
+  metricDayStart,
 } from "@/lib/analytics/metric-day";
 import { metricAsOf } from "@/lib/analytics/coverage";
 import type { AsOfResolution } from "@/lib/analytics/as-of";
@@ -351,7 +352,9 @@ export function renderHighlightReport(input: {
   ][0];
   const conclusion = priority
     ? `${priority.label} · ${priority.spec.ko}가 기준선보다 ${priority.verdict === "lowlight" ? "감소" : "증가"}했습니다.`
-    : "중요 기준을 넘은 지표 변화가 없습니다.";
+    : input.asOf && input.asOf.verdict !== "final"
+      ? "현재 확보한 자료로 중요한 지표 변화를 판단하기 어렵습니다."
+      : "비교 가능한 자료에서 중요 기준을 넘은 지표 변화가 없습니다.";
   const lines = [
     `**${conclusion}**`,
     `${input.refDate}${stamp} · 직전 7일 중앙값과 비교`,
@@ -871,14 +874,9 @@ export interface MetricHighlightOptions {
  * payload 에 editable 을 실어 워커가 같은 메시지를 고치게 한다. 늦게 도착한 수집을
  * 반영해 수치가 바뀌었을 때 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
  */
-export async function sendMetricHighlightReport(
-  now = new Date(),
-  options: MetricHighlightOptions = {},
-): Promise<MetricHighlightResult> {
-  const data = options.data ?? (await collectHighlightData(now));
-  const { refDate, totals, movements } = data;
-  const dayStart = toDbDay(refDate),
-    dayEnd = toDbDay(shiftMetricDay(refDate, 1));
+export async function dailyReportContext(refDate: string) {
+  const dayStart = metricDayStart(refDate),
+    dayEnd = metricDayStart(shiftMetricDay(refDate, 1));
   const [incidents, submissions] = await Promise.all([
     prisma.operationalIncident.findMany({
       where: {
@@ -892,6 +890,8 @@ export async function sendMetricHighlightReport(
       where: {
         sourceEventAt: { gte: dayStart, lt: dayEnd },
         app: { status: "ACTIVE" },
+        notifiedHash: { not: null },
+        previousState: { not: null },
       },
       include: { app: { select: { displayName: true } } },
       orderBy: { sourceEventAt: "desc" },
@@ -914,6 +914,16 @@ export async function sendMetricHighlightReport(
     value: line.slice(0, 160),
     source: `운영·provider 관측 원장 ${refDate}`,
   }));
+  return { context, contextFacts };
+}
+
+export async function sendMetricHighlightReport(
+  now = new Date(),
+  options: MetricHighlightOptions = {},
+): Promise<MetricHighlightResult> {
+  const data = options.data ?? (await collectHighlightData(now));
+  const { refDate, totals, movements } = data;
+  const { context, contextFacts } = await dailyReportContext(refDate);
   Object.assign(data, { contextFacts });
 
   const dedupeKey = metricHighlightDedupeKey(refDate);

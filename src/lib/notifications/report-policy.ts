@@ -81,15 +81,6 @@ export function reportDecision(
       send: false,
       reason: "SUCCESS_EVENT_LEDGER_OR_DUPLICATE_INCIDENT",
     };
-  if (
-    input.kind === "EXTERNAL_FEED" &&
-    typeof p.text === "string" &&
-    /^(?:수집|조회|분석|연결|작업).{0,40}(?:완료|진행 중|회복)(?:[.!\s]|$)/u.test(
-      p.text.trim(),
-    ) &&
-    !report.category
-  )
-    return { send: false, reason: "EXTERNAL_PROGRESS_RECORD" };
   if (paused) return { send: false, reason: "REPORTS_PAUSED" };
   return { send: true, reason: "REPORT_OR_REQUESTED_RESULT" };
 }
@@ -104,6 +95,10 @@ export function reportFingerprint(kind: string, payload: unknown): string {
     releaseRecordId: p.releaseRecordId ?? null,
     text: p.text ?? null,
     source: p.source ?? null,
+    thread: p.thread ?? null,
+    chart: p.chart ?? null,
+    embed: p.embed ? { ...object(p.embed), timestamp: null } : null,
+    rankReport: p.rankReport ?? null,
     components: p.components ?? null,
     attachment: p.attachment ?? null,
   };

@@ -29,7 +29,7 @@ export function submissionSignal(state: string, track: string | null) {
   return null;
 }
 export async function discoverOperationalSignals(now = new Date()) {
-  const since = new Date(now.getTime() - 24 * 60 * 60_000);
+  const since = new Date(now.getTime() - env.discordRetentionDays() * 86400000);
   const [reviewEvents, apps] = await Promise.all([
     prisma.notificationEvent.findMany({
       where: { kind: "STORE_REVIEW", createdAt: { gte: since } },
@@ -58,7 +58,7 @@ export async function discoverOperationalSignals(now = new Date()) {
       facts: group.reviews.slice(0, 12).map((review, i) => ({
         id: `review_${i}`,
         label: `${review.rating}점 리뷰`.slice(0, 100),
-        value: review.body.slice(0, 160),
+        value: review.eventId,
         source: `${group.store} · ${group.locale} · 버전 ${group.version} · ${review.change === "updated" ? "수정 리뷰" : "새 리뷰"}`,
       })),
       sourceRefs: [

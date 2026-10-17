@@ -13,7 +13,7 @@ test("보존 정리는 DB가 추적한 30일 초과 Discord Bot 메시지만 선
     notificationRetentionWhere(cutoff, ["active-incident-message"]),
     {
       provider: "DISCORD",
-      status: "SENT",
+      status: { in: ["SENT", "SUPPRESSED"] },
       deletedAt: null,
       sentAt: { lt: cutoff },
       providerMessageId: { not: null, notIn: ["active-incident-message"] },

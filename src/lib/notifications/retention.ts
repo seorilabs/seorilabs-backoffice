@@ -23,7 +23,7 @@ export function notificationRetentionWhere(
 ): Prisma.NotificationDeliveryWhereInput {
   return {
     provider: "DISCORD",
-    status: "SENT",
+    status: { in: ["SENT", "SUPPRESSED"] },
     deletedAt: null,
     sentAt: { lt: cutoff },
     providerMessageId: {
@@ -138,6 +138,25 @@ export async function maintainDiscordRetention(now = new Date()) {
         })
       ).count
     : 0;
+  // 요약 보고에 포함된 짧은 원문 인용도 원본 리뷰와 같은 기한으로 비운다.
+  await prisma.notificationEvent.updateMany({
+    where: {
+      createdAt: { lt: cutoff },
+      payload: { path: "$.reviewReport", equals: true },
+    },
+    data: {
+      payload: {
+        sender: "seori",
+        text: "리뷰 본문 보존기한 만료",
+        reviewReportExpired: true,
+        report: { category: "internal", reason: "REVIEW_CONTENT_EXPIRED" },
+      },
+    },
+  });
+  await prisma.insightDocument.updateMany({
+    where: { signal: { kind: "review-themes", observedAt: { lt: cutoff } } },
+    data: { content: Prisma.DbNull },
+  });
   return {
     deletedNotifications,
     deletedCommands,

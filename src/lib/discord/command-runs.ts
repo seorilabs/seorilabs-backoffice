@@ -1,12 +1,23 @@
-import { createGeneralIssueDraftCore, requireOwnedGeneralIssue } from "@/lib/core/general-issues";
-import { requireGeneralIssueAccess, requireGeneralIssuesEnabled } from "@/lib/core/general-issue-access";
+import { hasDiscordCapability } from "./roles";
+import {
+  createGeneralIssueDraftCore,
+  requireOwnedGeneralIssue,
+} from "@/lib/core/general-issues";
+import {
+  requireGeneralIssueAccess,
+  requireGeneralIssuesEnabled,
+} from "@/lib/core/general-issue-access";
 import { confirmDraftRegistrationCore } from "@/lib/core/ai-drafts";
 import { generalIssueCard } from "./general-issue-card";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { executeDeploymentApproval } from "@/lib/deployment-approvals/execute";
 import { Prisma, type OperatorCommandRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { createBugDraftCore, createPlanningDraftCore, commitDraftCore } from "@/lib/core/ai-drafts";
+import {
+  createBugDraftCore,
+  createPlanningDraftCore,
+  commitDraftCore,
+} from "@/lib/core/ai-drafts";
 import { generateStageDraftCore } from "@/lib/core/ai-drafts";
 import { toggleApprovalCore } from "@/lib/core/approvals";
 import {
@@ -31,11 +42,17 @@ import {
   previewSnapshotDeploy,
 } from "@/lib/core/snapshot-deploy";
 import {
+  currentDiscordMemberRoles,
   createDiscordChannelMessage,
   editDiscordChannelMessage,
   type DiscordActionRow,
 } from "@/lib/notifications/discord";
-import { acknowledgeIncident, incidentComponents, incidentRender } from "@/lib/notifications/incidents";
+import {
+  resolveIncident,
+  acknowledgeIncident,
+  incidentComponents,
+  incidentRender,
+} from "@/lib/notifications/incidents";
 import type { DiscordRender } from "@/lib/notifications/format";
 import {
   confirmationClaimWhere,
@@ -50,7 +67,7 @@ type JsonRecord = Record<string, unknown>;
 
 function jsonRecord(value: Prisma.JsonValue | null): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
+    ? (value as JsonRecord)
     : {};
 }
 
@@ -87,7 +104,9 @@ export async function createOperatorCommand(input: {
 }) {
   const actorLabel = `discord:${input.actorDiscordUserId}`;
   return prisma.$transaction(async (tx) => {
-    const existing = await tx.operatorCommandRun.findUnique({where: {sourceInteractionId: input.sourceInteractionId}});
+    const existing = await tx.operatorCommandRun.findUnique({
+      where: { sourceInteractionId: input.sourceInteractionId },
+    });
     if (existing) return existing;
     if (input.appId) await lockAppForNewWork(tx, input.appId);
     return tx.operatorCommandRun.upsert({
@@ -103,7 +122,10 @@ export async function createOperatorCommand(input: {
         messageId: input.messageId,
         status: input.needsConfirmation ? "AWAITING_CONFIRMATION" : "PENDING",
         ...(input.needsConfirmation ? {} : { confirmedAt: new Date() }),
-        expiresAt: new Date(Date.now() + (input.needsConfirmation ? CONFIRM_TTL_MS : RESULT_TTL_MS)),
+        expiresAt: new Date(
+          Date.now() +
+            (input.needsConfirmation ? CONFIRM_TTL_MS : RESULT_TTL_MS),
+        ),
       },
       update: {},
     });
@@ -118,8 +140,15 @@ export async function confirmOperatorCommand(input: {
 }): Promise<boolean> {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
-    const where = confirmationClaimWhere({id: input.id, actorDiscordUserId: input.actorDiscordUserId, now});
-    const pending = await tx.operatorCommandRun.findFirst({where, select: {appId: true}});
+    const where = confirmationClaimWhere({
+      id: input.id,
+      actorDiscordUserId: input.actorDiscordUserId,
+      now,
+    });
+    const pending = await tx.operatorCommandRun.findFirst({
+      where,
+      select: { appId: true },
+    });
     if (!pending) return false;
     if (pending.appId) await lockAppForNewWork(tx, pending.appId);
     const changed = await tx.operatorCommandRun.updateMany({
@@ -146,29 +175,57 @@ export async function cancelOperatorCommand(input: {
       actorDiscordUserId: input.actorDiscordUserId,
       status: "AWAITING_CONFIRMATION",
     },
-    data: { status: "CANCELLED", completedAt: new Date(), params: Prisma.DbNull },
+    data: {
+      status: "CANCELLED",
+      completedAt: new Date(),
+      params: Prisma.DbNull,
+    },
   });
   return changed.count === 1;
 }
 
 function confirmationRows(runId: string): DiscordActionRow[] {
-  return [{
-    type: 1,
-    components: [
-      { type: 2, style: 4, label: "실행", custom_id: `command:confirm:${runId}` },
-      { type: 2, style: 2, label: "취소", custom_id: `command:cancel:${runId}` },
-    ],
-  }];
+  return [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 4,
+          label: "실행",
+          custom_id: `command:confirm:${runId}`,
+        },
+        {
+          type: 2,
+          style: 2,
+          label: "취소",
+          custom_id: `command:cancel:${runId}`,
+        },
+      ],
+    },
+  ];
 }
 
 function draftRows(draftId: string): DiscordActionRow[] {
-  return [{
-    type: 1,
-    components: [
-      { type: 2, style: 3, label: "이슈 생성", custom_id: `draft:commit:${draftId}` },
-      { type: 2, style: 2, label: "취소", custom_id: `draft:cancel:${draftId}` },
-    ],
-  }];
+  return [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          label: "이슈 생성",
+          custom_id: `draft:commit:${draftId}`,
+        },
+        {
+          type: 2,
+          style: 2,
+          label: "취소",
+          custom_id: `draft:cancel:${draftId}`,
+        },
+      ],
+    },
+  ];
 }
 
 const STAGE_DRAFT_KINDS = new Set([
@@ -190,14 +247,27 @@ async function showRun(
   result: string | DiscordRender,
   components: DiscordActionRow[] = [],
 ): Promise<string | null> {
-  const render: DiscordRender = typeof result === "string" ? { text: result } : result;
-  const options = { components, ...(render.plain ? { plain: true } : { embed: render.embed }) };
+  const render: DiscordRender =
+    typeof result === "string" ? { text: result } : result;
+  const options = {
+    components,
+    ...(render.plain ? { plain: true } : { embed: render.embed }),
+  };
   if (run.messageId) {
-    const edited = await editDiscordChannelMessage(run.channelId, run.messageId, render.text, options);
+    const edited = await editDiscordChannelMessage(
+      run.channelId,
+      run.messageId,
+      render.text,
+      options,
+    );
     if (edited.ok) return run.messageId;
   }
-  const created = await createDiscordChannelMessage(run.channelId, render.text, options);
-  return created.ok ? created.messageId ?? null : null;
+  const created = await createDiscordChannelMessage(
+    run.channelId,
+    render.text,
+    options,
+  );
+  return created.ok ? (created.messageId ?? null) : null;
 }
 
 /** 배포 카드 소유 run 의 releaseRecordId. 카드 액션이 아니면 빈 문자열. */
@@ -236,30 +306,47 @@ async function appForRun(run: OperatorCommandRun) {
   return app;
 }
 
-async function execute(run: OperatorCommandRun): Promise<{ summary: string; awaiting?: boolean; messageId?: string | null }> {
+async function execute(
+  run: OperatorCommandRun,
+): Promise<{ summary: string; awaiting?: boolean; messageId?: string | null }> {
   if (requiresOperatorConfirmation(run.operation) && !run.confirmedAt) {
     throw new Error("확인되지 않은 고위험 작업입니다.");
   }
   const params = jsonRecord(run.params);
   switch (run.operation) {
-    case "platform_deployment_review": return executeDeploymentApproval(run);
+    case "platform_deployment_review":
+      return executeDeploymentApproval(run);
     case "general_generate": {
       requireGeneralIssuesEnabled();
       const app = await appForRun(run);
-      const currentActor = { actorLabel: run.actorLabel, expectedGithubId: stringValue(params, "githubId") };
-      if (!currentActor.expectedGithubId) throw new Error("요청 계정을 확인할 수 없습니다.");
+      const currentActor = {
+        actorLabel: run.actorLabel,
+        expectedGithubId: stringValue(params, "githubId"),
+      };
+      if (!currentActor.expectedGithubId)
+        throw new Error("요청 계정을 확인할 수 없습니다.");
       await requireGeneralIssueAccess(app.id, currentActor);
-      const draft = await createGeneralIssueDraftCore({ ...currentActor, appId: app.id, request: stringValue(params, "text") });
+      const draft = await createGeneralIssueDraftCore({
+        ...currentActor,
+        appId: app.id,
+        request: stringValue(params, "text"),
+      });
       const card = generalIssueCard(draft, app.displayName);
       const messageId = await showRun(run, card.text, card.components);
       return { summary: `일반 초안 생성: ${draft.title}`, messageId };
     }
     case "general_readback": {
       const draftId = stringValue(params, "draftId");
-      const draft = await requireOwnedGeneralIssue(draftId, { actorLabel: run.actorLabel });
+      const draft = await requireOwnedGeneralIssue(draftId, {
+        actorLabel: run.actorLabel,
+      });
       await confirmDraftRegistrationCore(draftId, run.actorLabel);
-      const current = await prisma.aiDraft.findUniqueOrThrow({ where: { id: draft.id } });
-      const app = await prisma.app.findUniqueOrThrow({ where: { id: draft.appId } });
+      const current = await prisma.aiDraft.findUniqueOrThrow({
+        where: { id: draft.id },
+      });
+      const app = await prisma.app.findUniqueOrThrow({
+        where: { id: draft.appId },
+      });
       const card = generalIssueCard(current, app.displayName);
       const messageId = await showRun(run, card.text, card.components);
       return { summary: "일반 이슈 등록 결과 확인", messageId };
@@ -295,7 +382,8 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     case "stage_generate": {
       const app = await appForRun(run);
       const kind = stringValue(params, "kind");
-      if (!STAGE_DRAFT_KINDS.has(kind)) throw new Error("지원하지 않는 초안 종류입니다.");
+      if (!STAGE_DRAFT_KINDS.has(kind))
+        throw new Error("지원하지 않는 초안 종류입니다.");
       let issueNumber: number | undefined;
       if (kind === "TASK_BREAKDOWN" || kind === "QA_CHECKLIST") {
         const issue = await prisma.issueMirror.findFirst({
@@ -303,7 +391,8 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           orderBy: { ghUpdatedAt: "desc" },
           select: { number: true },
         });
-        if (!issue) throw new Error("열린 이슈가 없어 초안을 만들 수 없습니다.");
+        if (!issue)
+          throw new Error("열린 이슈가 없어 초안을 만들 수 없습니다.");
         issueNumber = issue.number;
       }
       const draft = await generateStageDraftCore({
@@ -321,10 +410,20 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     }
     case "draft_commit": {
       const draftId = stringValue(params, "draftId");
-      const draft = await prisma.aiDraft.findUnique({ where: { id: draftId }, select: { createdBy: true } });
-      if (!draft || draft.createdBy !== run.actorLabel) throw new Error("본인이 만든 초안만 반영할 수 있습니다.");
-      const result = await commitDraftCore({ draftId, actorLabel: run.actorLabel });
-      await showRun(run, `✅ 이슈 생성 완료: [${result.repoFullName} #${result.issueNumber}](${result.url})`);
+      const draft = await prisma.aiDraft.findUnique({
+        where: { id: draftId },
+        select: { createdBy: true },
+      });
+      if (!draft || draft.createdBy !== run.actorLabel)
+        throw new Error("본인이 만든 초안만 반영할 수 있습니다.");
+      const result = await commitDraftCore({
+        draftId,
+        actorLabel: run.actorLabel,
+      });
+      await showRun(
+        run,
+        `✅ 이슈 생성 완료: [${result.repoFullName} #${result.issueNumber}](${result.url})`,
+      );
       return { summary: `이슈 #${result.issueNumber} 생성` };
     }
     case "approval": {
@@ -335,8 +434,30 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         reason: "Discord에서 승인",
         actorLabel: run.actorLabel,
       });
-      await showRun(run, `✅ ${result.repoFullName} #${result.number} 승인 처리${result.changed ? "" : " (이미 승인됨)"}`);
+      await showRun(
+        run,
+        `✅ ${result.repoFullName} #${result.number} 승인 처리${result.changed ? "" : " (이미 승인됨)"}`,
+      );
       return { summary: `승인 #${result.number}` };
+    }
+    case "incident_resolve": {
+      if (
+        !hasDiscordCapability(
+          await currentDiscordMemberRoles(run.actorDiscordUserId),
+          "ops_incident",
+        )
+      )
+        throw new Error("장애 대응 권한이 없습니다.");
+      const incident = await resolveIncident(
+        stringValue(params, "incidentId"),
+        run.actorDiscordUserId,
+      );
+      const messageId = await showRun(
+        run,
+        incidentRender(incident),
+        incidentComponents(incident),
+      );
+      return { summary: "운영자 장애 해결 처리", messageId };
     }
     case "incident_ack":
     case "incident_assign": {
@@ -345,8 +466,16 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         run.actorDiscordUserId,
         run.operation === "incident_assign",
       );
-      const messageId = await showRun(run, incidentRender(incident), incidentComponents(incident));
-      return { summary: run.operation === "incident_assign" ? "장애 담당 지정" : "장애 확인", messageId };
+      const messageId = await showRun(
+        run,
+        incidentRender(incident),
+        incidentComponents(incident),
+      );
+      return {
+        summary:
+          run.operation === "incident_assign" ? "장애 담당 지정" : "장애 확인",
+        messageId,
+      };
     }
     case "release_preview": {
       const app = await appForRun(run);
@@ -379,7 +508,11 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
         },
       });
-      return { summary: `릴리즈 ${preview.tag} 확인 대기`, awaiting: true, messageId };
+      return {
+        summary: `릴리즈 ${preview.tag} 확인 대기`,
+        awaiting: true,
+        messageId,
+      };
     }
     case "release_create": {
       const app = await appForRun(run);
@@ -408,7 +541,9 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         marketTargets: app.marketTargets,
         iosBundle: app.iosBundle,
       });
-      const targetLabels = preview.destinations.map((item) => item.label).join(", ");
+      const targetLabels = preview.destinations
+        .map((item) => item.label)
+        .join(", ");
       const messageId = await showRun(
         run,
         `⚠️ **${app.displayName}** main snapshot을 내부 테스트 채널에 빌드·배포합니다.\n` +
@@ -437,7 +572,11 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
           expiresAt: new Date(Date.now() + CONFIRM_TTL_MS),
         },
       });
-      return { summary: `snapshot 후보 ${preview.tag} 확인 대기`, awaiting: true, messageId };
+      return {
+        summary: `snapshot 후보 ${preview.tag} 확인 대기`,
+        awaiting: true,
+        messageId,
+      };
     }
     case "snapshot_deploy": {
       const app = await appForRun(run);
@@ -480,7 +619,9 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
       await showRun(
         run,
         `🚀 **${app.displayName} ${tag} → ${target}** 배포 트리거 완료` +
-          (result.xcodeCloudBuild != null ? `\nXcode Cloud #${result.xcodeCloudBuild}` : ""),
+          (result.xcodeCloudBuild != null
+            ? `\nXcode Cloud #${result.xcodeCloudBuild}`
+            : ""),
       );
       return { summary: `${target} 배포 트리거` };
     }
@@ -514,35 +655,68 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
         ? `📝 **${tag}** 심사를 생성했습니다. 제출 전 마지막 확인을 하세요.`
         : `⏳ 심사를 아직 생성할 수 없습니다: ${result.prepare.reason ?? "빌드 준비 대기"}`;
       const messageId = await showDeployCard(run, releaseRecordId, line);
-      return { summary: result.reviewSubmissionId ? `심사 생성 ${tag}` : `심사 생성 대기 ${tag}`, messageId };
+      return {
+        summary: result.reviewSubmissionId
+          ? `심사 생성 ${tag}`
+          : `심사 생성 대기 ${tag}`,
+        messageId,
+      };
     }
     case "appstore_review_submit": {
       const app = await appForRun(run);
       const releaseRecordId = stringValue(params, "releaseRecordId");
       const tag = stringValue(params, "tag");
-      await submitAppStore({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
-      const messageId = await showDeployCard(run, releaseRecordId, `📮 **${tag}** 심사 제출 완료.`);
+      await submitAppStore({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: run.actorLabel,
+      });
+      const messageId = await showDeployCard(
+        run,
+        releaseRecordId,
+        `📮 **${tag}** 심사 제출 완료.`,
+      );
       return { summary: `심사 제출 ${tag}`, messageId };
     }
     case "appstore_review_remove": {
       const app = await appForRun(run);
       const releaseRecordId = stringValue(params, "releaseRecordId");
       const tag = stringValue(params, "tag");
-      await removeAppStoreReview({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
-      const messageId = await showDeployCard(run, releaseRecordId, `🗑️ **${tag}** 심사 생성을 삭제했습니다.`);
+      await removeAppStoreReview({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: run.actorLabel,
+      });
+      const messageId = await showDeployCard(
+        run,
+        releaseRecordId,
+        `🗑️ **${tag}** 심사 생성을 삭제했습니다.`,
+      );
       return { summary: `심사 생성 삭제 ${tag}`, messageId };
     }
     case "appstore_review_cancel": {
       const app = await appForRun(run);
       const releaseRecordId = stringValue(params, "releaseRecordId");
       const tag = stringValue(params, "tag");
-      await cancelAppStoreReview({ repoFullName: app.repoFullName, tag, actorLabel: run.actorLabel });
-      const messageId = await showDeployCard(run, releaseRecordId, `↩️ **${tag}** 심사 제출을 취소했습니다.`);
+      await cancelAppStoreReview({
+        repoFullName: app.repoFullName,
+        tag,
+        actorLabel: run.actorLabel,
+      });
+      const messageId = await showDeployCard(
+        run,
+        releaseRecordId,
+        `↩️ **${tag}** 심사 제출을 취소했습니다.`,
+      );
       return { summary: `심사 제출 취소 ${tag}`, messageId };
     }
     case "appstore_refresh": {
       const releaseRecordId = stringValue(params, "releaseRecordId");
-      const messageId = await showDeployCard(run, releaseRecordId, "🔄 App Store 심사 상태를 새로 읽었습니다.");
+      const messageId = await showDeployCard(
+        run,
+        releaseRecordId,
+        "🔄 App Store 심사 상태를 새로 읽었습니다.",
+      );
       return { summary: "심사 상태 새로고침", messageId };
     }
     case "save": {
@@ -560,7 +734,10 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
     }
     case "index": {
       const result = await triggerVaultIndex();
-      await showRun(run, `${result.triggered ? "🔄" : "⏳"} ${result.message} (${result.name})`);
+      await showRun(
+        run,
+        `${result.triggered ? "🔄" : "⏳"} ${result.message} (${result.name})`,
+      );
       return { summary: result.message };
     }
     case "ask": {
@@ -586,10 +763,16 @@ export async function processNextOperatorCommand(): Promise<boolean> {
   if (!candidate) return false;
   const claimed = await prisma.operatorCommandRun.updateMany({
     where: { id: candidate.id, status: "PENDING" },
-    data: { status: "PROCESSING", attempts: { increment: 1 }, startedAt: new Date() },
+    data: {
+      status: "PROCESSING",
+      attempts: { increment: 1 },
+      startedAt: new Date(),
+    },
   });
   if (claimed.count !== 1) return true;
-  const run = await prisma.operatorCommandRun.findUniqueOrThrow({ where: { id: candidate.id } });
+  const run = await prisma.operatorCommandRun.findUniqueOrThrow({
+    where: { id: candidate.id },
+  });
   try {
     const result = await execute(run);
     if (!result.awaiting) {
@@ -609,19 +792,59 @@ export async function processNextOperatorCommand(): Promise<boolean> {
     let message = safeError(error);
     if (run.operation === "platform_deployment_review") {
       const approvalId = stringValue(jsonRecord(run.params), "approvalId");
-      const approval = approvalId ? await prisma.deploymentApproval.findUnique({ where: { id: approvalId }, select: { repository: true, runId: true } }) : null;
-      if (approval) message += `\n[GitHub에서 확인](https://github.com/${approval.repository}/actions/runs/${approval.runId})`;
+      const approval = approvalId
+        ? await prisma.deploymentApproval.findUnique({
+            where: { id: approvalId },
+            select: { repository: true, runId: true },
+          })
+        : null;
+      if (approval)
+        message += `\n[GitHub에서 확인](https://github.com/${approval.repository}/actions/runs/${approval.runId})`;
     }
     // 카드 소유 run 은 실패로 카드를 지우지 않는다. 실패 사유를 얹고 현재 상태를 다시 그린다.
     const releaseRecordId = releaseRecordIdOf(run);
     // 표시가 실패해도 run 이 PROCESSING 에 갇히면 안 된다. 렌더 예외는 여기서 삼킨다.
     const failedDraftId = stringValue(jsonRecord(run.params), "draftId");
-    const failedDraft = failedDraftId ? await prisma.aiDraft.findUnique({ where: { id: failedDraftId }, include: { app: true } }) : null;
-    const generalCard = failedDraft?.kind === "GENERAL_ISSUE" ? generalIssueCard(failedDraft, failedDraft.app.displayName) : null;
-    const retryRows: DiscordActionRow[] = run.operation === "general_generate" ? [{ type: 1, components: [{ type: 2, style: 2, label: "보존한 요청으로 다시 생성", custom_id: `general:retry:${run.id}` }] }] : [];
-    await (generalCard ? showRun(run, `❌ ${message}\n\n${generalCard.text}`, generalCard.components) : releaseRecordId
-      ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
-      : showRun(run, `❌ 작업 실패: ${message}${run.operation === "general_generate" ? "\n요청을 24시간 보존합니다. 아래 버튼으로 다시 생성할 수 있습니다." : ""}`, retryRows)
+    const failedDraft = failedDraftId
+      ? await prisma.aiDraft.findUnique({
+          where: { id: failedDraftId },
+          include: { app: true },
+        })
+      : null;
+    const generalCard =
+      failedDraft?.kind === "GENERAL_ISSUE"
+        ? generalIssueCard(failedDraft, failedDraft.app.displayName)
+        : null;
+    const retryRows: DiscordActionRow[] =
+      run.operation === "general_generate"
+        ? [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "보존한 요청으로 다시 생성",
+                  custom_id: `general:retry:${run.id}`,
+                },
+              ],
+            },
+          ]
+        : [];
+    await (
+      generalCard
+        ? showRun(
+            run,
+            `❌ ${message}\n\n${generalCard.text}`,
+            generalCard.components,
+          )
+        : releaseRecordId
+          ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
+          : showRun(
+              run,
+              `❌ 작업 실패: ${message}${run.operation === "general_generate" ? "\n요청을 24시간 보존합니다. 아래 버튼으로 다시 생성할 수 있습니다." : ""}`,
+              retryRows,
+            )
     ).catch((renderError) => {
       console.error(
         `[operator-command-worker] 실패 표시 실패 ${run.id}:`,
@@ -633,7 +856,9 @@ export async function processNextOperatorCommand(): Promise<boolean> {
       data: {
         status: "FAILED",
         error: message,
-        ...(run.operation === "general_generate" ? {} : { params: Prisma.DbNull }),
+        ...(run.operation === "general_generate"
+          ? {}
+          : { params: Prisma.DbNull }),
         completedAt: new Date(),
         expiresAt: new Date(Date.now() + RESULT_TTL_MS),
       },
@@ -649,7 +874,10 @@ export async function maintainOperatorCommands(now = new Date()) {
       data: { status: "EXPIRED", params: Prisma.DbNull, completedAt: now },
     }),
     prisma.operatorCommandRun.updateMany({
-      where: { status: "PROCESSING", startedAt: { lt: new Date(now.getTime() - STALE_MS) } },
+      where: {
+        status: "PROCESSING",
+        startedAt: { lt: new Date(now.getTime() - STALE_MS) },
+      },
       data: {
         status: "FAILED",
         error: "worker 중단으로 외부 적용 결과를 확인할 수 없습니다.",
@@ -658,11 +886,24 @@ export async function maintainOperatorCommands(now = new Date()) {
       },
     }),
     prisma.operatorCommandRun.updateMany({
-      where: { redactedAt: null, expiresAt: { lte: now }, status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] } },
-      data: { params: Prisma.DbNull, summary: null, error: null, redactedAt: now },
+      where: {
+        redactedAt: null,
+        expiresAt: { lte: now },
+        status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
+      },
+      data: {
+        params: Prisma.DbNull,
+        summary: null,
+        error: null,
+        redactedAt: now,
+      },
     }),
   ]);
-  return { expired: expired.count, stale: stale.count, redacted: redacted.count };
+  return {
+    expired: expired.count,
+    stale: stale.count,
+    redacted: redacted.count,
+  };
 }
 
 const OPERATION_KO: Record<string, string> = {

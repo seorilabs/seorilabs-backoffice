@@ -95,7 +95,11 @@ export function validateInsight(value: unknown, facts: Evidence[]): Insight {
       bullet.evidenceIds.some((id) => !ids.has(id)) ||
       placeholders.some((id) => !bullet.evidenceIds.includes(id)) ||
       /[\d@<>`{}]|https?:|[\r\n]/u.test(prose) ||
-      containsCredentialCandidate(prose)
+      containsCredentialCandidate(prose) ||
+      (bullet.kind !== "fact" &&
+        /원인.*확정.*(?:불가|없)|추가 확인 필요|원본 출처.*확인 필요|해설 준비 중/.test(
+          prose,
+        ))
     )
       throw new Error("INSIGHT_GROUNDING_INVALID");
     if (

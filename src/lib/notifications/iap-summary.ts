@@ -57,6 +57,15 @@ export async function recordIapGrant(input: {
   if (testPurchaseState(input.event.attributes as Prisma.JsonValue) !== "real")
     return false;
   return prisma.$transaction(async (tx) => {
+    const earlier = await tx.operationalEvent.findFirst({
+      where: {
+        appId: input.app.platformAppId ?? input.app.slug,
+        eventType: "iap.granted",
+        eventId: { not: input.event.eventId },
+        attributes: { path: "$.isTestPurchase", equals: false },
+      },
+      orderBy: [{ occurredAt: "asc" }, { eventId: "asc" }],
+    });
     const milestone = await tx.operationalMilestone.upsert({
       where: {
         appId_eventType: { appId: input.app.id, eventType: "iap.real.granted" },
@@ -64,8 +73,10 @@ export async function recordIapGrant(input: {
       create: {
         appId: input.app.id,
         eventType: "iap.real.granted",
-        firstEventId: input.event.eventId,
-        firstObservedAt: new Date(input.event.occurredAt),
+        firstEventId: earlier?.eventId ?? input.event.eventId,
+        firstObservedAt:
+          earlier?.occurredAt ?? new Date(input.event.occurredAt),
+        ...(earlier ? { notifiedAt: new Date() } : {}),
       },
       update: {},
     });
@@ -77,7 +88,7 @@ export async function recordIapGrant(input: {
         kind: "OPERATIONAL_EVENT",
         occurredAt: new Date(input.event.occurredAt),
         payload: {
-          text: `**${input.app.displayName} · 수신 원장에서 첫 실제 주문 지급을 확인했습니다.**\n${marketLabel(input.event.attributes.platform)} · 상품 ${String(input.event.attributes.entitlementId ?? "제공 안됨")}\n테스트 주문을 제외한 provider 확인 결과입니다. 수신을 시작하기 전의 결제 이력과 금액은 포함하지 않습니다.`,
+          text: `**${input.app.displayName} · 수신 원장에서 첫 실제 주문 지급을 확인했습니다.**\n${marketLabel(input.event.attributes.platform)} · 상품 ${String(input.event.attributes.entitlementId ?? "제공 안됨")}\n테스트 주문을 제외한 마켓 확인 결과입니다. 수신을 시작하기 전의 결제 이력과 금액은 포함하지 않습니다.`,
           report: {
             category: "change",
             reason: "FIRST_CONFIRMED_REAL_PURCHASE",

@@ -446,7 +446,7 @@ test("확정이면 머리말에 확정을 달고 분모를 함께 싣는다", ()
   });
   assert.equal(
     text.split("\n")[0],
-    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+    "**비교 가능한 자료에서 중요 기준을 넘은 지표 변화가 없습니다.**",
   );
   assert.ok(text.includes("· 대상 12/12개 앱"), text);
   assert.ok(!text.includes("미관측"), text);
@@ -472,7 +472,7 @@ test("잠정이면 무엇이 빠졌는지를 같은 화면에 적는다 — 09-1
   });
   assert.equal(
     text.split("\n")[0],
-    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+    "**현재 확보한 자료로 중요한 지표 변화를 판단하기 어렵습니다.**",
   );
   assert.ok(text.includes("· 대상 2/9개 앱"), text);
   assert.doesNotMatch(text, /미관측 1개|수집 실패/);
@@ -501,7 +501,7 @@ test("asOf 가 없으면 기존 표기를 유지한다(원장 백필 전)", () =
   });
   assert.equal(
     text.split("\n")[0],
-    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+    "**비교 가능한 자료에서 중요 기준을 넘은 지표 변화가 없습니다.**",
   );
   assert.ok(text.includes("· 대상 12개 앱"), text);
 });

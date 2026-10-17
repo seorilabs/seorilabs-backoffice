@@ -35,6 +35,12 @@ export function incidentComponents(
           custom_id: `incident:assign:${incident.id}`,
           disabled: Boolean(incident.assignedDiscordUserId),
         },
+        {
+          type: 2,
+          style: 3,
+          label: "해결 처리",
+          custom_id: `incident:resolve:${incident.id}`,
+        },
       ],
     },
   ];
@@ -59,7 +65,12 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
       ? "발생"
       : incident.status === "ACKNOWLEDGED"
         ? "확인됨"
-        : "복구";
+        : incident.evidence &&
+            typeof incident.evidence === "object" &&
+            !Array.isArray(incident.evidence) &&
+            incident.evidence.resolutionSource === "operator"
+          ? "운영자 해결 처리"
+          : "복구";
   const color =
     incident.status === "RECOVERED"
       ? EMBED_COLOR.SUCCESS
@@ -80,17 +91,29 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
   if (evidence.impact) lines.push(`영향: ${String(evidence.impact)}`);
   if (evidence.action && incident.status !== "RECOVERED")
     lines.push(`조치: ${String(evidence.action)}`);
+  const labels: Record<string, string> = {
+    latestDau: "최근 활성 사용자",
+    baselineMedianDau: "기준 활성 사용자",
+    dropPct: "감소율",
+    adCompletions: "광고 완료",
+    networkAdImpressions: "광고 노출",
+    platform: "마켓·광고 서비스",
+    outcome: "처리 결과",
+    resolvedBy: "해결 처리자",
+  };
   const facts = Object.entries(evidence)
     .filter(
       ([key, value]) =>
-        !["impact", "action"].includes(key) &&
+        !["impact", "action", "eventType", "resolutionSource"].includes(key) &&
         ["string", "number", "boolean"].includes(typeof value),
     )
     .slice(0, 6);
   if (facts.length)
     lines.push(
       "근거: " +
-        facts.map(([key, value]) => `${key} ${String(value)}`).join(" · "),
+        facts
+          .map(([key, value]) => `${labels[key] ?? key} ${String(value)}`)
+          .join(" · "),
     );
   if (incident.acknowledgedBy)
     lines.push(`확인: <@${incident.acknowledgedBy}>`);
@@ -231,5 +254,43 @@ export async function acknowledgeIncident(
       acknowledgedAt: incident.acknowledgedAt ?? new Date(),
       ...(assignSelf ? { assignedDiscordUserId: actorDiscordUserId } : {}),
     },
+  });
+}
+
+/** 다른 주문의 성공을 복구로 추정하지 않고 권한 있는 운영자가 해결을 기록한다. */
+export async function resolveIncident(id: string, actorDiscordUserId: string) {
+  return prisma.$transaction(async (tx) => {
+    const incident = await tx.operationalIncident.findUniqueOrThrow({
+      where: { id },
+    });
+    if (incident.status === "RECOVERED") return incident;
+    const evidence =
+      incident.evidence &&
+      typeof incident.evidence === "object" &&
+      !Array.isArray(incident.evidence)
+        ? incident.evidence
+        : {};
+    const updated = await tx.operationalIncident.update({
+      where: { id },
+      data: {
+        status: "RECOVERED",
+        recoveredAt: new Date(),
+        evidence: {
+          ...evidence,
+          resolutionSource: "operator",
+          resolvedBy: actorDiscordUserId,
+        },
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorLogin: `discord:${actorDiscordUserId}`,
+        action: "incident.resolved",
+        entityType: "operational_incident",
+        entityId: id,
+        payload: { source: "operator" },
+      },
+    });
+    return updated;
   });
 }

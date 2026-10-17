@@ -52,6 +52,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
         repoFullName: true,
         priority: true,
         labels: true,
+        ghUpdatedAt: true,
       },
     }),
     prisma.issueMirror.count({
@@ -101,7 +102,12 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     mergedCandidates,
     defaultBranches,
   );
-  const p1 = openIssues.filter((issue) => issue.priority === "P1");
+  const p1 = openIssues.filter(
+    (issue) =>
+      issue.priority === "P1" &&
+      issue.ghUpdatedAt >= window.start &&
+      issue.ghUpdatedAt < window.end,
+  );
   const lines = [
     `**${window.label} 개발 변경과 필요한 결정**`,
     ...(approvalCount
@@ -119,6 +125,10 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
       ? ["", "**앱별 반영한 변경**", ...formatMergedPrLines(mergedPrs)]
       : []),
   ];
+  if (unresolvedCount)
+    lines.push(
+      "기본 브랜치를 확인한 저장소의 변경만 표시합니다. 전체 개발 변경은 상세 화면에서 확인하세요.",
+    );
   let geminiUsed = false;
   if (
     mergedPrs.length &&
@@ -142,18 +152,25 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
           value: p1.length + "건",
           source: "GitHub 미러",
         },
-        ...mergedPrs
-          .slice(0, 10)
-          .map((pr, i) => ({
-            id: `merge_${i}`,
-            label: pr.repoFullName.replace("seorilabs/", "").slice(0, 100),
-            value: pr.title.slice(0, 160),
-            source: window.label + " GitHub 기본 브랜치 병합",
-          })),
+        ...mergedPrs.slice(0, 10).map((pr, i) => ({
+          id: `merge_${i}`,
+          label: pr.repoFullName.replace("seorilabs/", "").slice(0, 100),
+          value: pr.title.slice(0, 160),
+          source: window.label + " GitHub 기본 브랜치 병합",
+        })),
       ];
       const summary = await generateInsight(facts, "operations");
       if (!summary.fallback) {
-        lines.push("", renderInsight(summary.content, facts));
+        lines.push(
+          "",
+          renderInsight(
+            {
+              ...summary.content,
+              bullets: summary.content.bullets.filter((b) => b.kind !== "fact"),
+            },
+            facts,
+          ),
+        );
         geminiUsed = true;
       }
     } catch {

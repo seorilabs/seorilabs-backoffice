@@ -66,6 +66,7 @@ export function rankReportItems(
           recent.every((p, i) => i === 0 || p.rank! >= recent[i - 1].rank!));
       const persistent =
         monotonic &&
+        row.rank !== row.previousRank &&
         valid.length === 7 &&
         Math.abs(valid[0].rank! - valid[6].rank!) >= 10 &&
         Math.min(valid[0].rank!, valid[6].rank!) <= 100;
@@ -114,16 +115,29 @@ export function makeRankReport(
   };
 }
 export function rankReportKey(report: RankReport) {
-  const conclusion = report.items.map((r) => [
-    r.appId,
-    r.country,
-    r.term,
-    r.rank,
-    r.previousRank,
-    r.previousDay,
-    r.reason,
-  ]);
-  return `${report.day}-${createHash("sha256").update(JSON.stringify(conclusion)).digest("hex").slice(0, 24)}`;
+  return `${report.day}-${createHash("sha256")
+    .update(
+      JSON.stringify({
+        day: report.day,
+        items: report.items,
+        rows: report.rows,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 24)}`;
+}
+export function rankReportConclusionKey(report: RankReport) {
+  return JSON.stringify(
+    report.items.map((r) => [
+      r.appId,
+      r.country,
+      r.term,
+      r.rank,
+      r.previousRank,
+      r.previousDay,
+      r.reason,
+    ]),
+  );
 }
 export const rankValue = (rank: number | null) =>
   rank === null ? "결과 목록 밖" : `${rank}위`;
@@ -192,13 +206,17 @@ export function rankReportSvg(report: RankReport, days = 7, maxItems = 3) {
 
 /** Discord inline은 세로 제한으로 축소되므로 큰 글자와 짧은 3개 행을 사용한다. */
 export function rankDiscordSvg(report: RankReport) {
-  const items = report.items.slice(0, 3),
-    height = 100 + items.length * 210;
+  const items = report.items.slice(0, 3);
+  const hasGaps = items.some((item) =>
+    item.points.slice(-7).some((point) => point.state !== "ranked"),
+  );
+  const offset = hasGaps ? 32 : 0,
+    height = 100 + offset + items.length * 210;
   const trim = (value: string, max: number) =>
     value.length > max ? value.slice(0, max - 1) + "…" : value;
   const rows = items
     .map((r, i) => {
-      const top = 118 + i * 210,
+      const top = 118 + offset + i * 210,
         points = r.points.slice(-7),
         x = (j: number) => 560 + (j * 380) / 6,
         y = (rank: number) => top + 118 + ((rank - 1) / 199) * 46;
@@ -210,7 +228,7 @@ export function rankDiscordSvg(report: RankReport) {
             graph += `<line x1="${x(j - 1)}" y1="${y(before.rank)}" x2="${x(j)}" y2="${y(p.rank)}" stroke="#2563eb" stroke-width="4"/>`;
           graph += `<circle cx="${x(j)}" cy="${y(p.rank)}" r="5" fill="#2563eb"/>`;
         } else
-          graph += `<text x="${x(j)}" y="${top + 148}" text-anchor="middle" fill="#64748b" font-size="23">${p.state === "outside" ? "목록 밖" : p.state === "invalid" ? "비교 불가" : "미수집"}</text>`;
+          graph += `<text x="${x(j)}" y="${top + 148}" text-anchor="middle" fill="#64748b" font-size="23">${p.state === "outside" ? "○" : p.state === "invalid" ? "!" : "×"}</text>`;
       });
       const color =
         r.rank !== null && (r.previousRank === null || r.rank < r.previousRank)
@@ -219,5 +237,5 @@ export function rankDiscordSvg(report: RankReport) {
       return `<g><rect x="20" y="${top - 22}" width="960" height="200" rx="16" fill="#f8fafc"/><text x="44" y="${top + 20}" font-size="40" font-weight="700">${esc(trim(r.appName, 20))}</text><text x="44" y="${top + 61}" font-size="32">${esc(trim(r.country.toUpperCase() + " · " + r.term, 36))}</text><text x="44" y="${top + 107}" font-size="40" fill="${color}">${esc(rankValue(r.previousRank) + " → " + rankValue(r.rank))}</text><text x="950" y="${top + 107}" text-anchor="end" font-size="32" fill="${color}">${esc(r.reason)}</text><text x="44" y="${top + 160}" font-size="24" fill="#475569">비교 ${r.previousDay} → ${report.day}</text>${graph}</g>`;
     })
     .join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="36" font-weight="700">${report.day} 검색 위치의 중요한 변화</text><text x="40" y="81" font-size="26" fill="#475569">이전 관측 → 기준일 · 그래프 최근 7일 · 작은 숫자가 높은 순위</text>${rows}</g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="36" font-weight="700">${report.day} 검색 위치의 중요한 변화</text><text x="40" y="81" font-size="26" fill="#475569">이전 관측 → 기준일 · 그래프 최근 7일 · 작은 숫자가 높은 순위</text>${hasGaps ? '<text x="40" y="112" font-size="24" fill="#475569">○ 결과 목록 밖 · × 미수집 · ! 자료 오류</text>' : ""}${rows}</g></svg>`;
 }

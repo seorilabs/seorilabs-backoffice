@@ -56,3 +56,49 @@ test("없는 날과 결과 목록 밖을 201위로 그리지 않고 국가·검�
   assert.doesNotMatch(svg, />201</);
   assert.match(svg, /KR · three kingdoms/);
 });
+
+test("압축 그래프는 인접한 목록 밖·미수집을 단일 기호와 범례로 구분한다", async () => {
+  const { rankDiscordSvg } = await import("./rank-report");
+  const report = makeRankReport([row], [], "2026-10-17", new Date());
+  report.items[0].points.at(-1)!.state = "outside";
+  const svg = rankDiscordSvg(report);
+  assert.match(svg, /○ 결과 목록 밖 · × 미수집 · ! 자료 오류/);
+  assert.match(svg, />○<\/text>/);
+  assert.match(svg, />×<\/text>/);
+  assert.doesNotMatch(svg, />목록 밖<\/text>/);
+});
+
+test("지난 추세가 남아 있어도 오늘 순위가 그대로면 지속 변화로 재발송하지 않는다", () => {
+  const ranks = [99, 95, 90, 85, 83, 80, 80];
+  const history = ranks.map((rank, i) => ({
+    appId: "a",
+    country: "kr",
+    target: row.term,
+    day: new Date(`2026-10-${11 + i}`),
+    value: { rank },
+  }));
+  assert.equal(
+    makeRankReport(
+      [{ ...row, rank: 80, previousRank: 80 }],
+      history,
+      "2026-10-17",
+      new Date(),
+    ).items.length,
+    0,
+  );
+});
+test("불변 보고서 주소는 전체 snapshot을 구분하고 발행시각만의 차이는 제외한다", async () => {
+  const { rankReportKey } = await import("./rank-report");
+  const report = makeRankReport([row], [], "2026-10-17", new Date());
+  assert.equal(
+    rankReportKey(report),
+    rankReportKey({ ...report, capturedAt: "other" }),
+  );
+  assert.notEqual(
+    rankReportKey(report),
+    rankReportKey({
+      ...report,
+      rows: [{ ...report.rows[0], state: "미수집" }],
+    }),
+  );
+});

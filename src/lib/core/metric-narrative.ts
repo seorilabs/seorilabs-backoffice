@@ -182,15 +182,9 @@ export function narrativeEvidence(input: NarrativeInput): Evidence[] {
   facts.push(...(input.contextFacts ?? []));
   return facts.slice(0, 20);
 }
-export function narrativeSkeleton(input: NarrativeInput): string {
-  return input.movements
-    .filter((m) => m.verdict === "highlight" || m.verdict === "lowlight")
-    .slice(0, 3)
-    .map(
-      (m) =>
-        `${m.label} ${m.spec.ko}: ${m.spec.format(m.latest)} · 기준 ${m.baseline === null ? "표본 부족" : m.spec.format(m.baseline)}`,
-    )
-    .join("\n");
+export function narrativeSkeleton(..._args: [NarrativeInput]): string {
+  void _args;
+  return "";
 }
 export interface MetricNarrative {
   text: string;
@@ -206,7 +200,13 @@ export async function metricNarrative(
   return {
     text: made.fallback
       ? narrativeSkeleton(input)
-      : renderInsight(made.content, narrativeEvidence(input)),
+      : renderInsight(
+          {
+            ...made.content,
+            bullets: made.content.bullets.filter((b) => b.kind !== "fact"),
+          },
+          narrativeEvidence(input),
+        ),
     fallback: made.fallback,
     provider: made.fallback ? null : env.chatLlmProvider(),
     model: made.fallback ? null : llmChatModel(),

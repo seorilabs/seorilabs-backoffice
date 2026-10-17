@@ -1,13 +1,12 @@
-import { createHash } from "node:crypto";
+import { prisma } from "@/lib/prisma";
 import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
+import { enqueueEditableNotification } from "@/lib/notifications/outbox";
 import {
   collectFinanceCosts,
   financeMonth,
   type CostWarning,
 } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
-import { metricDayOf } from "@/lib/analytics/metric-day";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
@@ -16,9 +15,9 @@ import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const SENDER_KO = "서리";
 
-/** KST 날짜 기준 하루 1건. CronJob 중복 발화가 리포트를 두 번 올리지 않는다. */
+/** KST 월별 카드 한 개에서 경고 단계가 달라질 때만 갱신한다. */
 export function financeReportDedupeKey(now = new Date()): string {
-  return `finance:${metricDayOf(now)}`;
+  return `finance-warning:${financeMonth(now).month}`;
 }
 
 export function renderFinanceReport(input: {
@@ -57,11 +56,16 @@ export async function sendFinanceReport(
 ): Promise<FinanceReportResult> {
   const { month } = financeMonth(now);
   const { warnings, summaryLines } = await collectFinanceCosts(now);
-  const dedupeKey = `finance-warning:${month}:${createHash("sha256")
-    .update(JSON.stringify(warnings.map((w) => w.key).sort()))
-    .digest("hex")
-    .slice(0, 24)}`;
-  await enqueueNotification({
+  const dedupeKey = financeReportDedupeKey(now);
+  const stages = warnings.map((w) => w.key).sort();
+  const previous = await prisma.notificationEvent.findUnique({
+    where: { dedupeKey },
+    select: { payload: true },
+  });
+  const before = previous?.payload as { costStages?: string[] } | undefined;
+  if (previous && JSON.stringify(before?.costStages) === JSON.stringify(stages))
+    return { month, warnings: warnings.length, dedupeKey };
+  await enqueueEditableNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
@@ -75,6 +79,8 @@ export async function sendFinanceReport(
       }),
       // 메인 봇이 아니라 서리 정체로 게시한다. 토큰 값은 payload 에 담지 않는다.
       sender: SEORI_SENDER,
+      editable: true,
+      costStages: stages,
       report: {
         category: warnings.length ? "change" : "internal",
         reason: warnings.length ? "COST_THRESHOLD" : "NO_MATERIAL_COST_CHANGE",

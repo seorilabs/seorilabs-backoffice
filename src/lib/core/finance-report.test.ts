@@ -25,7 +25,11 @@ function warning(overrides: Partial<CostWarning> = {}): CostWarning {
 }
 
 test("경고가 없어도 이번 달 현황은 항상 싣는다", () => {
-  const text = renderFinanceReport({ month: "2026-08", summaryLines: SUMMARY, warnings: [] });
+  const text = renderFinanceReport({
+    month: "2026-08",
+    summaryLines: SUMMARY,
+    warnings: [],
+  });
   assert.equal(text.split("\n")[0], "💰 **서리 재무 리포트 · 2026-08**");
   for (const line of SUMMARY) assert.ok(text.includes(line), line);
   assert.ok(text.endsWith("경고 없음"));
@@ -35,7 +39,14 @@ test("경고는 건수와 함께 번호·근거까지 펼친다", () => {
   const text = renderFinanceReport({
     month: "2026-08",
     summaryLines: SUMMARY,
-    warnings: [warning(), warning({ key: "gcp-budget:202608", title: "GCP 예산 초과", evidence: ["₩22,000 / 예산 ₩20,000"] })],
+    warnings: [
+      warning(),
+      warning({
+        key: "gcp-budget:202608",
+        title: "GCP 예산 초과",
+        evidence: ["₩22,000 / 예산 ₩20,000"],
+      }),
+    ],
   });
   assert.ok(text.includes("⚠️ 경고 2건"));
   assert.ok(text.includes("**1. GitHub Actions 포함분량 70% 소진**"));
@@ -47,17 +58,36 @@ test("경고는 건수와 함께 번호·근거까지 펼친다", () => {
 
 test("링크가 있으면 푸터로 붙고 없으면 리포트가 그대로다", () => {
   const base = { month: "2026-08", summaryLines: SUMMARY, warnings: [] };
-  const withLink = renderFinanceReport({ ...base, link: "https://backoffice.example.com/report" });
+  const withLink = renderFinanceReport({
+    ...base,
+    link: "https://backoffice.example.com/report",
+  });
   assert.ok(withLink.endsWith("🔗 https://backoffice.example.com/report"));
   for (const link of [undefined, null, ""]) {
-    assert.ok(!renderFinanceReport({ ...base, link }).includes("🔗"), String(link));
+    assert.ok(
+      !renderFinanceReport({ ...base, link }).includes("🔗"),
+      String(link),
+    );
   }
 });
 
-test("리포트는 KST 날짜로 하루 1건이다", () => {
+test("경고 카드는 KST 월별로 하나다", () => {
   // 00:00 UTC 발화는 KST 로 같은 날 09:00 이다. UTC 날짜로 잡으면 자정 근처 재시도가
   // 다른 키를 만들어 같은 날 리포트가 두 번 올라간다.
-  assert.equal(financeReportDedupeKey(new Date("2026-08-27T00:00:00Z")), "finance:2026-08-27");
-  assert.equal(financeReportDedupeKey(new Date("2026-08-26T15:30:00Z")), "finance:2026-08-27");
-  assert.equal(financeReportDedupeKey(new Date("2026-08-26T14:30:00Z")), "finance:2026-08-26");
+  assert.equal(
+    financeReportDedupeKey(new Date("2026-08-27T00:00:00Z")),
+    "finance-warning:2026-08",
+  );
+  assert.equal(
+    financeReportDedupeKey(new Date("2026-08-26T15:30:00Z")),
+    "finance-warning:2026-08",
+  );
+  assert.equal(
+    financeReportDedupeKey(new Date("2026-08-26T14:30:00Z")),
+    "finance-warning:2026-08",
+  );
+  assert.equal(
+    financeReportDedupeKey(new Date("2026-08-31T15:30:00Z")),
+    "finance-warning:2026-09",
+  );
 });

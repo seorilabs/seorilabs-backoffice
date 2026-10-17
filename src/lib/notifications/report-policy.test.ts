@@ -93,3 +93,29 @@ test("개발 승인 버튼은 보고 중지 중에도 응답 가능해야 한다
     true,
   );
 });
+
+test("외부 요청 응답의 문장만으로 보고를 제외하지 않는다", () => {
+  assert.equal(
+    reportDecision({
+      kind: "EXTERNAL_FEED",
+      payload: { source: "review-bot", text: "리뷰 완료 · 요청한 수정 결과" },
+    }).send,
+    true,
+  );
+});
+test("같은 결론의 지문은 전송 시각을 제외하고 thread·그림·상자 변경을 구분한다", async () => {
+  const { reportFingerprint } = await import("./report-policy");
+  const fp = (payload: unknown) => reportFingerprint("OPS_ALERT", payload);
+  assert.equal(
+    fp({ text: "a", embed: { color: 1, timestamp: "old" } }),
+    fp({ text: "a", embed: { color: 1, timestamp: "new" } }),
+  );
+  assert.notEqual(
+    fp({ text: "a", thread: { parentDedupeKey: "x" } }),
+    fp({ text: "a", thread: { parentDedupeKey: "y" } }),
+  );
+  assert.notEqual(
+    fp({ text: "a", embed: { color: 1 } }),
+    fp({ text: "a", embed: { color: 2 } }),
+  );
+});

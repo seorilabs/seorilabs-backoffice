@@ -23,7 +23,12 @@ export function closedReviewGroups(
       lowRating: number;
       locale: string;
       version: string;
-      reviews: Array<{ body: string; rating: number; change: string }>;
+      reviews: Array<{
+        eventId: string;
+        body: string;
+        rating: number;
+        change: string;
+      }>;
     }
   >();
   for (const event of events) {
@@ -55,6 +60,7 @@ export function closedReviewGroups(
     };
     if (row.review?.body.trim())
       group.reviews.push({
+        eventId: event.id,
         body: row.review.body,
         rating: row.rating,
         change: row.change,

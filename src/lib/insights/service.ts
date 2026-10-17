@@ -1,3 +1,4 @@
+import { resolveReportEvidence } from "./review-evidence";
 import { signalDecision } from "@/lib/notifications/report-policy";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { createHash, randomUUID } from "node:crypto";
@@ -105,6 +106,7 @@ function notificationPayload(
     editable: true,
     sender: "seori",
     insightId,
+    ...(signal.kind === "review-themes" ? { reviewReport: true } : {}),
     ...(/metric-weekly/.test(signal.kind)
       ? {
           chart: "org-trend",
@@ -274,7 +276,7 @@ async function claim(workerId: string) {
       const run = await tx.agentRun.findUniqueOrThrow({
         where: { id: lease.runId },
       });
-      await tx.agentRun.updateMany({
+      const reclaimed = await tx.agentRun.updateMany({
         where: {
           id: run.id,
           status: "RUNNING",
@@ -285,11 +287,55 @@ async function claim(workerId: string) {
           error: "ANALYSIS_LEASE_EXPIRED",
         },
       });
-      if (run.attempts >= run.maxAttempts) {
-        await tx.insightDocument.updateMany({
+      if (reclaimed.count && run.attempts >= run.maxAttempts) {
+        const document = await tx.insightDocument.findFirst({
           where: { runId: run.id, status: "PENDING" },
-          data: { status: "FAILED", errorCode: "ANALYSIS_LEASE_EXPIRED" },
+          include: { signal: true },
         });
+        if (document) {
+          const facts = await resolveReportEvidence(
+            document.signal.kind,
+            evidenceListSchema.parse(document.signal.facts),
+            tx,
+          );
+          const made = {
+            content: fallbackInsight(
+              facts.length
+                ? facts
+                : evidenceListSchema.parse(document.signal.facts),
+            ),
+            fallback: true,
+            errorCode: "ANALYSIS_LEASE_EXPIRED",
+          };
+          await tx.insightDocument.update({
+            where: { id: document.id },
+            data: {
+              status: "FALLBACK",
+              content: json(made.content),
+              errorCode: made.errorCode,
+              completedAt: now,
+            },
+          });
+          if (facts.length && signalDecision(document.signal.kind).send) {
+            const eventId = await enqueueNotification(
+              {
+                dedupeKey: document.notificationKey,
+                kind: "OPS_ALERT",
+                payload: notificationPayload(
+                  { ...document.signal, facts },
+                  document.id,
+                  made,
+                ),
+                destinations: discordDestinationOrFallback(
+                  destination(document.signal.kind, document.signal.severity),
+                  "backoffice",
+                ),
+              },
+              tx,
+            );
+            await requeueNotification(eventId, tx);
+          }
+        }
         await tx.automationOccurrence.update({
           where: { id: run.occurrenceId },
           data: { status: "DEAD_LETTER", completedAt: now },
@@ -430,16 +476,24 @@ export async function processNextInsight(
     include: { signal: true },
   });
   const facts = evidenceListSchema.parse(document.signal.facts);
+  const displayFacts = await resolveReportEvidence(document.signal.kind, facts);
+
   const made = !signalDecision(document.signal.kind).send
     ? {
         content: fallbackInsight(facts),
         fallback: true,
         errorCode: "INTERNAL_OBSERVATION",
       }
-    : await generate(facts, personaForKind(document.signal.kind), {
-        reserve: () =>
-          reserveRequest(claimed.run.id, claimed.lease.generation, workerId),
-      });
+    : displayFacts.length === 0
+      ? {
+          content: fallbackInsight(facts),
+          fallback: true,
+          errorCode: "REVIEW_CONTENT_EXPIRED",
+        }
+      : await generate(displayFacts, personaForKind(document.signal.kind), {
+          reserve: () =>
+            reserveRequest(claimed.run.id, claimed.lease.generation, workerId),
+        });
   await serializable(async (tx) => {
     const now = new Date();
     const owned = await tx.agentLease.count({
@@ -502,12 +556,16 @@ export async function processNextInsight(
         },
       },
     });
-    if (signalDecision(document.signal.kind).send) {
+    if (signalDecision(document.signal.kind).send && displayFacts.length) {
       const eventId = await enqueueNotification(
         {
           dedupeKey: document.notificationKey,
           kind: "OPS_ALERT",
-          payload: notificationPayload(document.signal, document.id, made),
+          payload: notificationPayload(
+            { ...document.signal, facts: displayFacts },
+            document.id,
+            made,
+          ),
           destinations: discordDestinationOrFallback(
             destination(document.signal.kind, document.signal.severity),
             "backoffice",

@@ -1,16 +1,22 @@
+import { reportFingerprint } from "@/lib/notifications/report-policy";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import {
   makeRankReport,
   rankReportKey,
+  rankReportConclusionKey,
+  type RankReport,
   rankReportText,
   type RankRecord,
 } from "./rank-report";
 import { shiftMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
+import {
+  enqueueNotification,
+  requeueNotification,
+} from "@/lib/notifications/outbox";
 import { keywordMonitoring, type KeywordRow } from "./keyword-monitoring";
 function csvCell(value: unknown) {
   let text = String(value ?? "");
@@ -68,6 +74,7 @@ export function dailyRankPayload(
     url = `${base}/feedback/rank-reports/${key}`;
   return {
     text: rankReportText(snapshot, url),
+    editable: true,
     sender: "seori",
     refDate: day,
     report: {
@@ -115,16 +122,63 @@ export async function sendDailyKeywordRanks(now = new Date()) {
   );
   return prisma.$transaction(
     async (tx) => {
-      const dedupeKey = `keyword-report:${rankReportKey(payload.rankReport)}`;
-      const existing = await tx.notificationEvent.findUnique({
-        where: { dedupeKey },
+      const snapshotKey = `keyword-report:${rankReportKey(payload.rankReport)}`;
+      const snapshot = await tx.notificationEvent.findUnique({
+        where: { dedupeKey: snapshotKey },
         select: { id: true },
       });
-      if (existing)
+      const snapshotId =
+        snapshot?.id ??
+        (await enqueueNotification(
+          {
+            dedupeKey: snapshotKey,
+            kind: "OPS_ALERT",
+            payload: JSON.parse(
+              JSON.stringify(payload),
+            ) as Prisma.InputJsonObject,
+            occurredAt: now,
+            destinations: [],
+          },
+          tx,
+        ));
+      const dedupeKey = `keyword-report-day:${monitoring.day}`;
+      const previous = await tx.notificationEvent.findUnique({
+        where: { dedupeKey },
+        select: { id: true, payload: true },
+      });
+      const previousReport = (
+        previous?.payload as { rankReport?: RankReport } | undefined
+      )?.rankReport;
+      const before = previousReport?.items ?? [];
+      if (
+        previousReport &&
+        rankReportConclusionKey(previousReport) ===
+          rankReportConclusionKey(payload.rankReport)
+      )
         return {
           day: monitoring.day,
           rows: monitoring.rows.length,
-          eventId: existing.id,
+          eventId: previous!.id,
+          snapshotId,
+        };
+      const uncertain =
+        !payload.rankReport.items.length &&
+        before.some(
+          (item) =>
+            !monitoring.rows.some(
+              (row) =>
+                row.appId === item.appId &&
+                row.country === item.country &&
+                row.term === item.term &&
+                row.state === "수집됨",
+            ),
+        );
+      if (previous && uncertain)
+        return {
+          day: monitoring.day,
+          rows: monitoring.rows.length,
+          eventId: previous.id,
+          snapshotId,
         };
       const id = await enqueueNotification(
         {
@@ -138,7 +192,18 @@ export async function sendDailyKeywordRanks(now = new Date()) {
         },
         tx,
       );
-      return { day: monitoring.day, rows: monitoring.rows.length, eventId: id };
+      if (
+        previous &&
+        reportFingerprint("OPS_ALERT", previous.payload) !==
+          reportFingerprint("OPS_ALERT", payload)
+      )
+        await requeueNotification(id, tx);
+      return {
+        day: monitoring.day,
+        rows: monitoring.rows.length,
+        eventId: id,
+        snapshotId,
+      };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );

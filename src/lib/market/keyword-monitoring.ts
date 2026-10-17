@@ -202,14 +202,14 @@ export async function keywordMonitoring(
     };
   });
   const ids = apps.map((app) => app.id);
-  const [today, previousDays, attempts] = await Promise.all([
+  const [history, attempts] = await Promise.all([
     prisma.marketObservation.findMany({
-      where: { kind: "keyword", appId: { in: ids }, day: toDbDay(day) },
-    }),
-    prisma.marketObservation.groupBy({
-      by: ["appId", "country", "target"],
-      where: { kind: "keyword", appId: { in: ids }, day: { lt: toDbDay(day) } },
-      _max: { day: true },
+      where: {
+        kind: "keyword",
+        appId: { in: ids },
+        day: { gte: toDbDay(shiftMetricDay(day, -90)), lte: toDbDay(day) },
+        observedAt: { lte: now },
+      },
     }),
     prisma.sourceCollectionRun.findMany({
       where: {
@@ -223,20 +223,7 @@ export async function keywordMonitoring(
       },
     }),
   ]);
-  const previous = previousDays.length
-    ? await prisma.marketObservation.findMany({
-        where: {
-          kind: "keyword",
-          OR: previousDays.map((row) => ({
-            appId: row.appId,
-            country: row.country,
-            target: row.target,
-            day: row._max.day!,
-          })),
-        },
-      })
-    : [];
-  const rows = buildKeywordRows(apps, [...today, ...previous], attempts, day);
+  const rows = buildKeywordRows(apps, history, attempts, day);
   return {
     day,
     apps,
