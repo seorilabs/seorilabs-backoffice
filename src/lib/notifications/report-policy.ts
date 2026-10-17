@@ -84,6 +84,17 @@ export function reportDecision(
         ["new", "updated"].includes(String(p.change))))
   )
     return { send: false, reason: "GROUPED_REVIEW_CONTENT" };
+  if (
+    !report.category &&
+    (/^finance:/.test(key) ||
+      /^daily-digest:/.test(key) ||
+      /^godot-stable:/.test(key) ||
+      (/^github:.*:issue-(opened|closed)(:thread)?$/.test(key) &&
+        (key.endsWith(":thread") ||
+          typeof p.text !== "string" ||
+          !/ · P1\n/.test(p.text))))
+  )
+    return { send: false, reason: "REPLACED_LEGACY_OBSERVATION" };
   if (typeof p.signalKind === "string") {
     const decision = signalDecision(p.signalKind);
     if (!decision.send) return decision;

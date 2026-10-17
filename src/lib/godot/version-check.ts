@@ -1,5 +1,4 @@
 import { env } from "@/lib/env";
-import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
@@ -98,8 +97,12 @@ export async function checkGodotVersion(): Promise<GodotCheckResult> {
   await enqueueNotification({
     dedupeKey: `godot-stable:${latest}`,
     kind: "OPS_ALERT",
-    payload: { text, embed: { color: EMBED_COLOR.INFO } },
-    destinations: discordDestinations(["backoffice"]),
+    payload: {
+      text,
+      report: { category: "internal", reason: "ENGINE_RELEASE_OBSERVATION" },
+      embed: { color: EMBED_COLOR.INFO },
+    },
+    destinations: [],
   });
 
   return { status: "outdated", pinned, latest, url };

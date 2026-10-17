@@ -1,7 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { asStringArray } from "@/lib/format";
-import { hasApproval } from "@/lib/domain/labels";
 import {
   approvalIssueWhere,
   visibleAppWhere,
@@ -36,7 +34,6 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
   const [
     openIssues,
     approvalCount,
-    approvalIssues,
     mergedCandidates,
     releases,
     defaultBranches,
@@ -57,18 +54,6 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     }),
     prisma.issueMirror.count({
       where: { ...approvalIssueWhere, state: "OPEN" },
-    }),
-    prisma.issueMirror.findMany({
-      where: { ...approvalIssueWhere, state: "OPEN" },
-      orderBy: [{ priority: "asc" }, { ghUpdatedAt: "desc" }],
-      take: 5,
-      select: {
-        id: true,
-        number: true,
-        title: true,
-        repoFullName: true,
-        labels: true,
-      },
     }),
     prisma.pullRequestMirror.findMany({
       where: {
@@ -112,7 +97,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
     `**${window.label} 개발 변경과 필요한 결정**`,
     ...(approvalCount
       ? [
-          `승인 대기 ${approvalCount}건 · 아래 버튼에서 대상과 실행 범위를 확인하세요.`,
+          `승인 대기 ${approvalCount}건 · 대상은 운영명령의 기존 승인 카드에서 확인할 수 있습니다.`,
         ]
       : []),
     ...p1
@@ -177,40 +162,15 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
       // 확정 목록은 AI 실패와 무관하게 큐에 넣는다.
     }
   }
-  const components = approvalIssues.map((issue) => {
-    const gate = hasApproval(asStringArray(issue.labels), "release")
-      ? "release"
-      : "planning";
-    return {
-      type: 1,
-      components: [
-        {
-          type: 2,
-          style: 3,
-          label:
-            `${issue.repoFullName.replace("seorilabs/", "")} #${issue.number} 승인`.slice(
-              0,
-              80,
-            ),
-          custom_id: `approval:${gate}:${issue.id}`,
-        },
-      ],
-    };
-  });
   await enqueueNotification({
     dedupeKey: `daily-digest:${window.label}`,
     kind: "OPERATIONS_SUMMARY",
     payload: {
       text: lines.join("\n"),
       report: {
-        category: approvalCount
-          ? "response"
-          : p1.length || mergedPrs.length
-            ? "change"
-            : "internal",
+        category: p1.length || mergedPrs.length ? "change" : "internal",
         reason: "DEVELOPMENT_CHANGE_OR_DECISION",
       },
-      ...(components.length ? { components } : {}),
       embed: { color: EMBED_COLOR.INFO },
     },
     destinations: discordDestinations(["backoffice"]),

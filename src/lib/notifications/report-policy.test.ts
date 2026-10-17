@@ -185,3 +185,54 @@ test("과거 개별 리뷰 대기는 묶음으로 전환하되 같은 종류의 
     true,
   );
 });
+
+test("구형 재무·정적 개발 요약·원문 스레드는 대기에서 제외하고 새 보고와 승인·중요 P1은 유지", () => {
+  for (const dedupeKey of [
+    "finance:2026-10-17",
+    "daily-digest:2026-10-17",
+    "godot-stable:4.7",
+    "github:delivery:issue-opened",
+    "github:delivery:issue-opened:thread",
+  ]) {
+    assert.equal(
+      reportDecision({
+        kind: "OPS_ALERT",
+        dedupeKey,
+        payload: { text: "과거 관측" },
+      }).send,
+      false,
+      dedupeKey,
+    );
+  }
+  assert.equal(
+    reportDecision({
+      kind: "OPS_ALERT",
+      dedupeKey: "github:d:issue-opened",
+      payload: {
+        text: "🔥 **새 P1** · P1\n[앱 문제](https://github.com/seorilabs/app/issues/1)",
+      },
+    }).send,
+    true,
+  );
+  for (const dedupeKey of [
+    "finance-warning:2026-10:1",
+    "daily-digest:2026-10-17",
+  ]) {
+    assert.equal(
+      reportDecision({
+        kind: "OPS_ALERT",
+        dedupeKey,
+        payload: { text: "새 중요한 변화", report: { category: "change" } },
+      }).send,
+      true,
+    );
+  }
+  assert.equal(
+    reportDecision({
+      kind: "OPS_ALERT",
+      dedupeKey: "finance:2026-10-17",
+      payload: { report: { category: "response" }, text: "요청 결과" },
+    }).send,
+    true,
+  );
+});
