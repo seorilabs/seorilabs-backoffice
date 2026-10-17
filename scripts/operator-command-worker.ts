@@ -2,7 +2,6 @@ import { reconcileDeploymentApprovals } from "@/lib/deployment-approvals/monitor
 import { recoverUncertainApprovals } from "@/lib/deployment-approvals/execute";
 import { prisma } from "@/lib/prisma";
 import { maintainOperatorCommands, processNextOperatorCommand } from "@/lib/discord/command-runs";
-import { registerDiscordGuildCommands } from "@/lib/discord/commands";
 
 const pollIntervalMs = Math.max(250, Number(process.env.OPERATOR_COMMAND_POLL_INTERVAL_MS ?? "1000"));
 let stopping = false;
@@ -26,8 +25,6 @@ async function monitorApprovals(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const registered = await registerDiscordGuildCommands();
-  console.log(`[operator-command-worker] Discord 명령 ${registered.commands}개 등록`);
   let lastMaintenance = 0;
   console.log("[operator-command-worker] 시작");
   while (!stopping) {

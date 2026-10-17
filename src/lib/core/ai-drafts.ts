@@ -1,3 +1,6 @@
+import { requireOwnedGeneralIssue, generalIssueAudit } from "./general-issues";
+import { requireGeneralIssuesEnabled } from "./general-issue-access";
+import { validateGeneralIssueText } from "./general-issue-contract";
 import type { AiDraftKind, Prisma } from "@prisma/client";
 import { getInstallationOctokit } from "@/lib/github/app";
 import { prisma } from "@/lib/prisma";
@@ -309,6 +312,10 @@ export async function commitDraftCore(input: {
   });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
   if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  if (draft.kind === "GENERAL_ISSUE") {
+    requireGeneralIssuesEnabled();
+    await requireOwnedGeneralIssue(draft.id, input);
+  }
   if (draft.status === "COMMITTED" && draft.committedIssueNumber && draft.committedUrl)
     return {
       issueNumber: draft.committedIssueNumber,
@@ -326,10 +333,11 @@ export async function commitDraftCore(input: {
   if (meta.commitTarget !== "ISSUE_COMMENT" && !title) throw new Error("이슈 제목이 필요합니다.");
   if (meta.commitTarget === "ISSUE_COMMENT" && !draft.issueNumber)
     throw new Error("코멘트 대상 이슈가 없습니다.");
+  if (draft.kind === "GENERAL_ISSUE") validateGeneralIssueText(title, body);
   await getInstallationOctokit(); // 인증 설정 오류는 외부 쓰기 claim 전에 확정한다.
   const claimed = await prisma.aiDraft.updateMany({
-    where: { id: draft.id, status: "DRAFT", claimedAt: null },
-    data: { claimedAt: new Date() },
+    where: { id: draft.id, status: "DRAFT", claimedAt: null, updatedAt: draft.updatedAt },
+    data: { claimedAt: new Date(), title, outputText: body },
   });
   if (claimed.count !== 1)
     throw new Error(
@@ -402,6 +410,8 @@ export async function commitDraftCore(input: {
     },
   });
 
+  if (draft.kind === "GENERAL_ISSUE") await generalIssueAudit(input.actorLabel, "ai.general_issue_committed", draft.id);
+
   return {
     issueNumber: committedIssueNumber,
     url,
@@ -410,12 +420,16 @@ export async function commitDraftCore(input: {
   };
 }
 
-export async function confirmDraftRegistrationCore(draftId: string) {
+export async function confirmDraftRegistrationCore(draftId: string, actorLabel?: string) {
   const draft = await prisma.aiDraft.findUniqueOrThrow({
     where: { id: draftId },
     include: { app: { select: { status: true } } },
   });
   if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
+  if (draft.kind === "GENERAL_ISSUE") {
+    if (!actorLabel) throw new Error("작성자를 확인할 수 없습니다.");
+    await requireOwnedGeneralIssue(draft.id, { actorLabel });
+  }
   if (draft.status === "COMMITTED")
     return { confirmed: true, url: draft.committedUrl!, pending: false };
   if (draft.status !== "DRAFT" || !draft.claimedAt)
@@ -428,6 +442,12 @@ export async function confirmDraftRegistrationCore(draftId: string) {
     since: new Date(draft.claimedAt.getTime() - 120000),
   });
   if (!found) return { confirmed: false, url: null, pending: true }; // 읽기 결과 없음은 전송 실패의 증거가 아니다.
+  if (!comment) {
+    const octokit = await getInstallationOctokit();
+    const [owner, repo] = draft.repoFullName.split("/");
+    const issue = (await octokit.rest.issues.get({ owner, repo, issue_number: found.issueNumber })).data;
+    await upsertIssue(draft.repoFullName, issue);
+  }
   await prisma.aiDraft.updateMany({
     where: { id: draft.id, status: "DRAFT", claimedAt: draft.claimedAt },
     data: {

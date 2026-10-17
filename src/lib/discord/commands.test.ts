@@ -16,18 +16,15 @@ function targetOption(command: unknown) {
 
 test("Discord 후보 배포 명령은 main 기반 snapshot만 등록한다", () => {
   const names: readonly string[] = DISCORD_COMMANDS.map(({ name }) => name);
-  const commands = DISCORD_COMMANDS.map(({ name, description }) => ({
-    name,
-    description,
-  }));
-  const snapshot = commands.find((command) => command.name === "snapshot");
-  const deploy = DISCORD_COMMANDS.find((command) => command.name === "deploy");
+  const commands = DISCORD_COMMANDS.find(command => command.name === "release")!.options!;
+  const snapshot = commands.find(command => command.name === "snapshot");
+  const deploy = commands.find(command => command.name === "deploy");
 
   assert.ok(snapshot);
   assert.ok(deploy);
   assert.match(snapshot.description, /main snapshot/);
   const snapshotTarget = targetOption(
-    DISCORD_COMMANDS.find((command) => command.name === "snapshot"),
+    snapshot,
   );
   const deployTarget = targetOption(deploy);
   assert.equal(snapshotTarget?.required, true);

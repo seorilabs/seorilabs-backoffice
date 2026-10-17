@@ -784,6 +784,7 @@ enum AiDraftKind {
   IMPROVEMENT_HYPOTHESIS
   RELEASE_NOTES
   BUG_REPORT
+  GENERAL_ISSUE
 }
 
 enum AiDraftStatus {

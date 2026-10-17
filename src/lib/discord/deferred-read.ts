@@ -1,21 +1,9 @@
 import { InteractionType, type DiscordInteraction } from "./types";
-export const DEFERRED_READ_COMMANDS = [
-  "approvals",
-  "p1",
-  "status",
-  "metrics",
-  "report",
-  "reviews",
-  "keywords",
-  "health",
-  "insights",
-] as const;
+import { COMMAND_DEFINITIONS, resolveDiscordCommand } from "./command-definitions";
+export const DEFERRED_READ_COMMANDS = COMMAND_DEFINITIONS.filter(c => c.deferred).map(c => c.operation);
 export function shouldDeferRead(interaction: DiscordInteraction) {
-  return (
-    interaction.type === InteractionType.APPLICATION_COMMAND &&
-    !!interaction.token &&
-    DEFERRED_READ_COMMANDS.some((name) => name === interaction.data?.name)
-  );
+  return interaction.type === InteractionType.APPLICATION_COMMAND && !!interaction.token &&
+    resolveDiscordCommand(interaction.data)?.definition.deferred === true;
 }
 export async function completeDeferredRead(
   interaction: DiscordInteraction,

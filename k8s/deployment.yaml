@@ -91,6 +91,8 @@ spec:
             # 대화·초안·운영 분석은 Claude 공식 API. 임베딩은 Gemini 유지.
             - name: CHAT_LLM_PROVIDER
               value: "anthropic"
+            - name: FEATURE_GENERAL_ISSUES_ENABLED
+              valueFrom: { configMapKeyRef: { name: backoffice-runtime-flags, key: FEATURE_GENERAL_ISSUES_ENABLED, optional: true } }
             - name: FEATURE_CLAUDE_ENABLED
               value: "true"
             - name: CLAUDE_CHAT_MODEL

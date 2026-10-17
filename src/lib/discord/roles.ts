@@ -1,6 +1,8 @@
+import { COMMAND_DEFINITIONS } from "./command-definitions";
 import { env } from "@/lib/env";
 
 export type DiscordCapability =
+  | "issue_write"
   | "read"
   | "planning"
   | "bug"
@@ -31,6 +33,7 @@ export function capabilitiesForRole(roleKey: string): readonly DiscordCapability
 }
 
 export function hasDiscordCapability(roleIds: readonly string[], capability: DiscordCapability): boolean {
+  if (capability === "issue_write") return hasDiscordCapability(roleIds, "planning") || hasDiscordCapability(roleIds, "bug");
   for (const [roleKey, capabilities] of Object.entries(ROLE_CAPABILITIES)) {
     const configuredId = env.discordRoleId(roleKey);
     if (configuredId && roleIds.includes(configuredId) && capabilities.includes(capability)) return true;
@@ -40,7 +43,7 @@ export function hasDiscordCapability(roleIds: readonly string[], capability: Dis
 
 /**
  * 버튼이 실려 나가는 알림 채널. 카드는 이 채널들에 놓이므로 버튼을 누르는 인터랙션도
- * 여기서 온다. 슬래시 명령은 #backoffice 로만 제한하고, 버튼은 카드가 있는 곳에서
+ * 여기서 온다. 슬래시 명령은 #운영명령 로만 제한하고, 버튼은 카드가 있는 곳에서
  * 눌러야 의미가 있다. 실제 실행 권한은 채널이 아니라 Discord 역할로 건다.
  */
 export const DISCORD_CARD_CHANNEL_KEYS = [
@@ -52,7 +55,7 @@ export const DISCORD_CARD_CHANNEL_KEYS = [
 
 /**
  * 인터랙션 종류별 허용 채널 키.
- * 슬래시 명령·모달은 #backoffice 로 묶고, 버튼만 카드가 놓인 채널까지 넓힌다.
+ * 슬래시 명령·모달은 #운영명령 로 묶고, 버튼만 카드가 놓인 채널까지 넓힌다.
  * 명령까지 넓히면 운영 알림 채널 어디서나 배포를 시작할 수 있게 된다.
  */
 export function interactionChannelKeys(
@@ -74,21 +77,6 @@ export function isDiscordInteractionScope(input: {
   return input.allowedChannelIds.some((id) => id !== "" && id === input.channelId);
 }
 
-export function capabilityForCommand(command: string): DiscordCapability {
-  switch (command) {
-    case "plan":
-      return "planning";
-    case "bug":
-      return "bug";
-    case "release":
-    case "deploy":
-    case "snapshot":
-      return "release";
-    case "index":
-      return "vault_index";
-    case "save":
-      return "vault_write";
-    default:
-      return "read";
-  }
+export function capabilityForCommand(command: string): DiscordCapability | null {
+  return COMMAND_DEFINITIONS.find(c => c.operation === command)?.capability ?? null;
 }

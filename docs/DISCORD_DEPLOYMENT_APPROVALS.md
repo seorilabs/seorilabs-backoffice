@@ -15,7 +15,7 @@
 1. `seorilabs-credentials` 절차로 local catalog를 먼저 확인한다. 이미 등록된 인증이 동일 사용자·저장소·목적에 맞으면 재사용한다. 새 토큰 생성·조직 승인은 사람이 수행한다.
 2. fine-grained PAT의 repository selection은 `seorilabs/platform` 하나, 권한은 Actions read, Contents read, Deployments write다. 토큰 소유자 `/user` ID를 반드시 확인한다. classic PAT와 GitHub App installation token으로 승인을 대체하지 않는다.
 3. 등록된 catalog logical ID와 공개 GitHub ID를 운영 기록에 연결한다. 토큰 실행 복제본은 **operator-command-worker만** 읽는 디렉터리에 `<GitHub 숫자 ID>.token` 파일로 읽기 전용 mount하고 `PLATFORM_APPROVER_TOKEN_DIRECTORY`를 지정한다. web/알림 worker에는 개인 토큰을 제공하지 않는다. DB·Discord·브라우저 저장소·로그에 토큰을 넣지 않는다.
-4. 로그인한 승인자는 `/approvals`에서 일회용 코드를 발급받고 10분 안에 Discord `#backoffice`에서 `/connect code:…`를 실행한다. 코드는 SHA-256 해시만 저장한다. GitHub ID와 Discord ID는 각각 유일하며, 다른 계정으로 변경하려면 기존 연결을 먼저 해제한다.
+4. 로그인한 승인자는 `/approvals`에서 일회용 코드를 발급받고 10분 안에 Discord `#운영명령`에서 `/account connect code:…`를 실행한다. 코드는 SHA-256 해시만 저장한다. GitHub ID와 Discord ID는 각각 유일하며, 다른 계정으로 변경하려면 기존 연결을 먼저 해제한다.
 5. 연결·해제와 실행 요청·거절 사유는 audit log에 남는다. Discord 역할과 Backoffice 접근 허용, 개인 PAT identity 및 GitHub `current_user_can_approve`를 실행 직전 다시 확인한다. 원 실행자와 재실행자는 자기 승인할 수 없다.
 
 ## 처리와 복구

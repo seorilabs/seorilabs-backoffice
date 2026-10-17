@@ -10,7 +10,7 @@ export async function prepareDeploymentReview(interaction: DiscordInteraction, d
   if (!directApprovalEnabled(row.environment)) return ephemeral("Discord 직접 처리는 아직 비활성 상태입니다.");
   const actorDiscordUserId = interaction.member?.user?.id ?? "";
   const link = await prisma.discordAccountLink.findUnique({ where: { discordUserId: actorDiscordUserId } });
-  if (!link) return ephemeral("Backoffice 승인 페이지에서 연결 코드를 발급받아 /connect로 연결하세요.");
+  if (!link) return ephemeral("Backoffice 승인 페이지에서 연결 코드를 발급받아 /account connect로 연결하세요.");
   if (decision === "rejected" && !reason) return modal(`papproval:rejected:${id}`, "플랫폼 배포 거절", "거절 사유");
   if (reason.length > 1000) return ephemeral("거절 사유는 1000자 이내로 입력하세요.");
   const run = await createOperatorCommand({ sourceInteractionId: interaction.id, operation: "platform_deployment_review", actorDiscordUserId, channelId: interaction.channel_id!, needsConfirmation: true, params: { approvalId: id, targetHash: row.targetHash, githubId: String(link.githubId), decision, reason } });

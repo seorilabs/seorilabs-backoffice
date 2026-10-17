@@ -19,6 +19,12 @@ export interface AgentMeta {
 }
 
 export const AGENTS: Record<AiDraftKind, AgentMeta> = {
+  GENERAL_ISSUE: {
+    kind: "GENERAL_ISSUE",
+    stage: "DEVELOPMENT",
+    ko: "일반 이슈",
+    commitTarget: "NEW_ISSUE",
+  },
   PLANNING_SPEC: {
     kind: "PLANNING_SPEC",
     stage: "PLANNING",

@@ -3,6 +3,7 @@ export interface DiscordInteractionOption {
   type: number;
   value?: string | number | boolean;
   focused?: boolean;
+  options?: DiscordInteractionOption[];
 }
 
 export interface DiscordInteraction {

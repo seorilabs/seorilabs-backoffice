@@ -1,3 +1,9 @@
+import { generalIssueErrorMessage } from "@/lib/core/general-issue-contract";
+import { resolveDiscordCommand, commandHelpText } from "./command-definitions";
+import { requireGeneralIssueAccess, requireGeneralIssuesEnabled } from "@/lib/core/general-issue-access";
+import { requireOwnedGeneralIssue, editGeneralIssueDraftCore, discardGeneralIssueDraftCore } from "@/lib/core/general-issues";
+import { generalIssueCard, generalIssueEditModal } from "./general-issue-card";
+import { splitDiscordText } from "@/lib/notifications/discord";
 import { insightCommandQuery } from "./insight-queries";
 import { connectAccount } from "@/lib/deployment-approvals/links";
 import { prepareDeploymentReview } from "@/lib/deployment-approvals/interactions";
@@ -20,7 +26,6 @@ import {
   statusQuery,
 } from "@/lib/discord/queries";
 import {
-  capabilityForCommand,
   hasDiscordCapability,
   isDiscordInteractionScope,
   interactionChannelKeys,
@@ -110,35 +115,22 @@ function commandCapability(operation: string): DiscordCapability {
   return "read";
 }
 
-function helpText(): string {
-  return [
-    "**Seorilabs Backoffice Bot**",
-    "조회: `/approvals` `/p1` `/status [app]` `/metrics [app]`",
-    "보고·피드백: `/report [date]` `/reviews [app]` `/keywords [app]` `/health [app]` `/insights [app]`",
-    "초안: `/plan app` `/bug app` — AI 초안 확인 후 버튼으로 GitHub 이슈 생성",
-    "릴리즈: `/release app bump` `/deploy app tag target` — 실행 전 확인 버튼 필요",
-    "후보 배포: `/snapshot app target` — main HEAD를 후보 태그로 선택한 내부 테스트 채널에 빌드·배포",
-    "태그 카드에서 배포할 마켓을 버튼으로 고를 수 있습니다.",
-    "배포 카드에서 Play 프로덕션 승격, App Store 심사 생성·제출·삭제·제출 취소를 버튼으로 실행합니다.",
-    "볼트/대화: `/save` `/index` `/ask` `/reset`",
-    "쓰기 권한은 Discord 업무 역할로 제한되며 실행자는 감사 로그에 남습니다.",
-    "https://backoffice.vzyx.xyz",
-  ].join("\n");
-}
-
 async function handleApplicationCommand(interaction: DiscordInteraction) {
-  const name = interaction.data?.name ?? "";
-  if (!authorized(interaction, capabilityForCommand(name))) return ephemeral("이 명령을 실행할 역할 권한이 없습니다.");
-  const appSlug = option(interaction.data?.options, "app");
+  const resolved = resolveDiscordCommand(interaction.data);
+  if (!resolved) return ephemeral("지원하지 않는 명령 또는 입력입니다. /help를 확인하세요.");
+  const name = resolved.definition.operation;
+  if (!authorized(interaction, resolved.definition.capability)) return ephemeral("이 명령을 실행할 역할 권한이 없습니다.");
+  const options = resolved.options;
+  const appSlug = option(options, "app");
   const channelId = interaction.channel_id ?? "";
   const userId = actor(interaction);
 
   if (name === "connect") {
-    try { await connectAccount(option(interaction.data?.options, "code"), userId); return ephemeral("GitHub 계정을 연결했습니다."); }
+    try { await connectAccount(option(options, "code"), userId); return ephemeral("GitHub 계정을 연결했습니다."); }
     catch { return ephemeral("연결 실패: 만료·사용된 코드 또는 이미 연결된 계정입니다. Backoffice에서 연결 상태를 확인하세요."); }
   }
-  if (name === "help") return ephemeral(helpText());
-  if (["report", "reviews", "keywords", "health", "insights"].includes(name)) return response((await insightCommandQuery(name, appSlug || undefined, option(interaction.data?.options, "date") || undefined)).content);
+  if (name === "help") return ephemeral(commandHelpText());
+  if (["report", "reviews", "keywords", "health", "insights"].includes(name)) return response((await insightCommandQuery(name, appSlug || undefined, option(options, "date") || undefined)).content);
   if (name === "approvals") {
     const result = await approvalsQuery();
     return response(result.content, result.components);
@@ -151,6 +143,13 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
     return ephemeral("🧹 내 대화 문맥을 초기화했습니다.");
   }
 
+  if (name === "general_generate") {
+    requireGeneralIssuesEnabled();
+    const app = await findVisibleApp(appSlug);
+    if (!app) return ephemeral("앱을 찾을 수 없습니다.");
+    const access = await requireGeneralIssueAccess(app.id, { actorLabel: `discord:${userId}`, discordRoles: roles(interaction) });
+    return modal(`modal:general:${app.id}:${access.githubId}`, `${app.displayName} 일반 이슈`, "등록할 요청");
+  }
   if (name === "plan" || name === "bug") {
     const app = await findVisibleApp(appSlug);
     if (!app) return ephemeral("앱을 찾을 수 없습니다.");
@@ -165,7 +164,7 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 
   if (name === "release") {
     const app = await findVisibleApp(appSlug);
-    const bump = option(interaction.data?.options, "bump");
+    const bump = option(options, "bump");
     if (!app || !BUMPS.has(bump)) return ephemeral("앱 또는 버전 증가 값이 올바르지 않습니다.");
     await createOperatorCommand({
       sourceInteractionId: interaction.id,
@@ -180,8 +179,8 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 
   if (name === "deploy") {
     const app = await findVisibleApp(appSlug);
-    const tag = option(interaction.data?.options, "tag");
-    const target = option(interaction.data?.options, "target");
+    const tag = option(options, "tag");
+    const target = option(options, "target");
     if (!app || !TAG_RE.test(tag) || !TARGETS.has(target)) return ephemeral("앱, 태그 또는 배포 대상이 올바르지 않습니다.");
     const run = await createOperatorCommand({
       sourceInteractionId: interaction.id,
@@ -200,7 +199,7 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 
   if (name === "snapshot") {
     const app = await findVisibleApp(appSlug);
-    const target = option(interaction.data?.options, "target");
+    const target = option(options, "target");
     if (!app || !TARGETS.has(target)) {
       return ephemeral("앱 또는 배포 대상이 올바르지 않습니다.");
     }
@@ -234,8 +233,24 @@ async function handleApplicationCommand(interaction: DiscordInteraction) {
 }
 
 async function handleModal(interaction: DiscordInteraction) {
-  const [prefix, action, appId] = (interaction.data?.custom_id ?? "").split(":");
+  const [prefix, action, appId, githubId] = (interaction.data?.custom_id ?? "").split(":");
   const text = modalText(interaction);
+  if (prefix === "gedit") {
+    requireGeneralIssuesEnabled();
+    if (!/^\d+$/.test(appId ?? "")) return ephemeral("수정 버전이 올바르지 않습니다.");
+    const fields = interaction.data?.components?.flatMap(r => r.components ?? []) ?? [];
+    const draft = await editGeneralIssueDraftCore({ draftId: action, title: fields.find(f => f.custom_id === "title")?.value ?? "", body: fields.find(f => f.custom_id === "body")?.value ?? "", version: new Date(Number(appId)).toISOString(), actorLabel: `discord:${actor(interaction)}`, discordRoles: roles(interaction) });
+    const app = await prisma.app.findUniqueOrThrow({ where: { id: draft.appId } });
+    const card = generalIssueCard(draft, app.displayName);
+    return { type: 7, data: { content: "", embeds: splitDiscordText(card.text).map(description => ({ description })), components: card.components, allowed_mentions: { parse: [] } } };
+  }
+  if (prefix === "modal" && action === "general") {
+    requireGeneralIssuesEnabled();
+    if (!text || text.length > 4000 || !githubId) return ephemeral("요청은 1~4,000자로 입력하세요.");
+    await requireGeneralIssueAccess(appId, { actorLabel: `discord:${actor(interaction)}`, expectedGithubId: githubId, discordRoles: roles(interaction) });
+    await createOperatorCommand({ sourceInteractionId: interaction.id, appId, operation: "general_generate", params: { text, githubId }, actorDiscordUserId: actor(interaction), channelId: interaction.channel_id! });
+    return ephemeral("⏳ 요청을 정리합니다. 이 채널에 검토할 초안을 표시합니다.");
+  }
   if (prefix === "papproval") {
     if (!authorized(interaction, "release_approval")) return ephemeral("배포 승인 권한 없음");
     if (!text) return ephemeral("거절 사유 필요");
@@ -353,7 +368,38 @@ async function handleComponent(interaction: DiscordInteraction) {
       : deferredUpdate();
   }
 
+  if (kind === "general" && action === "retry") {
+    requireGeneralIssuesEnabled();
+    const previous = await prisma.operatorCommandRun.findUnique({ where: { id } });
+    if (!previous || previous.operation !== "general_generate" || previous.status !== "FAILED" || previous.actorDiscordUserId !== userId || previous.expiresAt <= new Date() || !previous.appId) return ephemeral("본인의 유효한 실패 요청만 재시도할 수 있습니다.");
+    const params = previous.params as { text: string; githubId: string };
+    await requireGeneralIssueAccess(previous.appId, { actorLabel: `discord:${userId}`, expectedGithubId: params.githubId, discordRoles: roles(interaction) });
+    await createOperatorCommand({ sourceInteractionId: interaction.id, appId: previous.appId, operation: "general_generate", params, actorDiscordUserId: userId, channelId });
+    return updateMessage("⏳ 보존한 요청으로 초안을 다시 정리합니다.");
+  }
+
   if (kind === "draft") {
+    const row = await prisma.aiDraft.findUnique({ where: { id } });
+    if (row?.kind === "GENERAL_ISSUE") {
+      const currentActor = { actorLabel: `discord:${userId}`, discordRoles: roles(interaction) };
+      const draft = await requireOwnedGeneralIssue(id, currentActor);
+      if (action === "edit") {
+        requireGeneralIssuesEnabled();
+        if (draft.status !== "DRAFT" || draft.claimedAt) return ephemeral("등록 중이거나 처리된 초안은 수정할 수 없습니다.");
+        return generalIssueEditModal(draft);
+      }
+      if (action === "cancel") {
+        await discardGeneralIssueDraftCore(id, currentActor);
+        return updateMessage("✖️ 초안을 취소했습니다.");
+      }
+      if (action === "commit" || action === "readback") {
+        if (action === "commit") requireGeneralIssuesEnabled();
+        await createOperatorCommand({ sourceInteractionId: interaction.id, appId: draft.appId, operation: action === "commit" ? "draft_commit" : "general_readback", params: { draftId: id }, actorDiscordUserId: userId, channelId, messageId });
+        return deferredUpdate();
+      }
+      return ephemeral("지원하지 않는 초안 작업입니다.");
+    }
+
     if (action === "commit") {
       if (!authorized(interaction, "planning") && !authorized(interaction, "bug")) return ephemeral("이슈 생성 권한이 없습니다.");
       await createOperatorCommand({
@@ -426,9 +472,9 @@ async function handleComponent(interaction: DiscordInteraction) {
   return ephemeral("지원하지 않는 버튼입니다.");
 }
 
-export async function handleDiscordInteraction(interaction: DiscordInteraction) {
+async function handleDiscordInteractionCore(interaction: DiscordInteraction) {
   if (interaction.type === InteractionType.PING) return { type: InteractionResponseType.PONG };
-  // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #backoffice 로 묶은 채로 버튼까지 묶으면
+  // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #운영명령 로 묶은 채로 버튼까지 묶으면
   // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
   const isComponent = interaction.type === InteractionType.MESSAGE_COMPONENT;
   const allowedChannelIds = interactionChannelKeys(isComponent || (interaction.type === InteractionType.MODAL_SUBMIT && interaction.data?.custom_id?.startsWith("papproval:") === true)).map((key) =>
@@ -443,13 +489,15 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
     return ephemeral(
       isComponent
         ? "이 버튼은 허용된 Discord 서버의 운영 채널에서만 사용할 수 있습니다."
-        : "백오피스 명령은 허용된 Discord 서버의 #backoffice 채널에서만 사용할 수 있습니다.",
+        : "백오피스 명령은 허용된 Discord 서버의 #운영명령 채널에서만 사용할 수 있습니다.",
     );
   }
 
   if (interaction.type === InteractionType.AUTOCOMPLETE) {
     if (!authorized(interaction, "read")) return { type: InteractionResponseType.AUTOCOMPLETE_RESULT, data: { choices: [] } };
-    const focused = interaction.data?.options?.find((item) => item.focused);
+    const resolved = resolveDiscordCommand(interaction.data, true);
+    if (!resolved || !authorized(interaction, resolved.definition.capability)) return { type: InteractionResponseType.AUTOCOMPLETE_RESULT, data: { choices: [] } };
+    const focused = resolved.options.find((item) => item.focused);
     return {
       type: InteractionResponseType.AUTOCOMPLETE_RESULT,
       data: { choices: await autocompleteApps(typeof focused?.value === "string" ? focused.value : "") },
@@ -459,4 +507,27 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
   if (interaction.type === InteractionType.MODAL_SUBMIT) return handleModal(interaction);
   if (interaction.type === InteractionType.MESSAGE_COMPONENT) return handleComponent(interaction);
   return ephemeral("지원하지 않는 Discord 요청입니다.");
+}
+
+export async function handleDiscordInteraction(interaction: DiscordInteraction) {
+  try { return await handleDiscordInteractionCore(interaction); }
+  catch (error) {
+    const id = interaction.data?.custom_id ?? "";
+    let general = resolveDiscordCommand(interaction.data)?.definition.operation === "general_generate" ||
+      /^(modal:general:|gedit:|general:)/.test(id);
+    if (id.startsWith("draft:")) {
+      const draft = await prisma.aiDraft.findUnique({ where: { id: id.split(":")[2] }, select: { kind: true } });
+      general = draft?.kind === "GENERAL_ISSUE";
+    }
+    if (!general) throw error;
+    console.error("[discord/general-issue] 처리 실패", { interactionId: interaction.id, errorType: error instanceof Error ? error.name : "unknown" });
+    const inputs = (interaction.data?.components ?? []).flatMap(row => row.components ?? [])
+      .filter(item => typeof item.value === "string" && item.value.length <= 4000 && item.value.trim());
+    const text = inputs.map(item => `${item.custom_id === "title" ? "이슈 제목" : "보존한 입력"}\n${item.value}`).join("\n\n");
+    return { type: InteractionResponseType.CHANNEL_MESSAGE, data: {
+      content: generalIssueErrorMessage(error) + (text ? "\n입력은 아래에 보존했습니다. 복사한 뒤 권한·최신 초안을 확인하고 다시 입력하세요." : ""),
+      flags: EPHEMERAL_FLAG, allowed_mentions: { parse: [] },
+      ...(text ? { embeds: splitDiscordText(text).map(description => ({ description })) } : {}),
+    } };
+  }
 }

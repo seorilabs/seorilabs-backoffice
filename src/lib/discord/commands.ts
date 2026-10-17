@@ -1,69 +1,9 @@
 import { env } from "@/lib/env";
 import { putDiscordApi } from "@/lib/notifications/discord";
 
-const appOption = {
-  type: 3,
-  name: "app",
-  description: "앱 slug",
-  required: true,
-  autocomplete: true,
-};
+import { discordCommandManifest } from "./command-definitions";
 
-const deployTargetOption = {
-  type: 3,
-  name: "target",
-  description: "배포 대상",
-  required: true,
-  choices: ["AIT", "PLAY", "APPSTORE", "ALL"].map((name) => ({ name, value: name })),
-};
-
-export const DISCORD_COMMANDS = [
-  { name: "connect", description: "Backoffice GitHub 계정 연결", type: 1, options: [{ type: 3, name: "code", description: "10분짜리 일회용 연결 코드", required: true }] },
-  { name: "report", description: "근거와 수집 상태를 포함한 종합 보고서", type: 1, options: [{ type: 3, name: "date", description: "기준일 YYYY-MM-DD", required: false }] },
-  ...[ { name: "reviews", description: "최근 앱 리뷰 평점" }, { name: "keywords", description: "검색어 노출 관측" }, { name: "health", description: "수집 상태와 확인할 항목" }, { name: "insights", description: "최근 근거 기반 인사이트" } ].map((command) => ({ ...command, type: 1, options: [{ ...appOption, required: false }] })),
-  { name: "help", description: "백오피스 명령 도움말", type: 1 },
-  { name: "approvals", description: "승인 대기 항목", type: 1 },
-  { name: "p1", description: "열린 P1 이슈", type: 1 },
-  { name: "status", description: "앱 현황", type: 1, options: [{ ...appOption, required: false }] },
-  { name: "metrics", description: "앱 지표", type: 1, options: [{ ...appOption, required: false }] },
-  { name: "plan", description: "기획 초안 만들기", type: 1, options: [appOption] },
-  { name: "bug", description: "버그 리포트 만들기", type: 1, options: [appOption] },
-  {
-    name: "release",
-    description: "릴리즈 태그와 출시노트 생성",
-    type: 1,
-    options: [
-      appOption,
-      {
-        type: 3,
-        name: "bump",
-        description: "SemVer 증가",
-        required: true,
-        choices: ["patch", "minor", "major"].map((name) => ({ name, value: name })),
-      },
-    ],
-  },
-  {
-    name: "deploy",
-    description: "릴리즈 태그를 마켓에 배포",
-    type: 1,
-    options: [
-      appOption,
-      { type: 3, name: "tag", description: "v1.2.3 형식", required: true },
-      deployTargetOption,
-    ],
-  },
-  {
-    name: "snapshot",
-    description: "main snapshot을 선택한 내부 테스트 채널에 빌드·배포",
-    type: 1,
-    options: [appOption, deployTargetOption],
-  },
-  { name: "save", description: "Obsidian 받은함에 메모 저장", type: 1 },
-  { name: "index", description: "Obsidian 볼트 즉시 재인덱싱", type: 1 },
-  { name: "ask", description: "백오피스 AI에게 질문", type: 1 },
-  { name: "reset", description: "내 Discord 대화 문맥 초기화", type: 1 },
-] as const;
+export const DISCORD_COMMANDS = discordCommandManifest();
 
 export async function registerDiscordGuildCommands() {
   const appId = env.discordApplicationId();
