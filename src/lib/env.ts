@@ -34,6 +34,7 @@ export const env = {
   // Godot 버전 감지 알림: global-versions.yaml 의 tools.godot.version 을 미러링.
   // kubectl 워크스페이스가 git 이 아니라 fetch 불가 → env 로 pin 값 주입.
   godotPinnedVersion: () => optional("GODOT_PINNED_VERSION", "4.6.3"),
+  featureGeneralIssues: () => bool("FEATURE_GENERAL_ISSUES_ENABLED", false),
   featureGemini: () => bool("FEATURE_GEMINI_ENABLED", false),
   // Gemini API: Flash-Lite 챗/초안 + gemini-embedding-001 볼트 질의 임베딩.
   geminiApiKey: () => optional("GEMINI_API_KEY"),

@@ -4,10 +4,11 @@
 
 | 기능 | 사용 위치·진입점 | Claude가 하는 일 | 코드 정본 |
 | --- | --- | --- | --- |
-| 운영 비서 대화 | Discord `/ask` | 대화 이력과 운영 현황을 바탕으로 답변. 필요한 조회 도구를 선택하고 결과를 정리 | `src/lib/discord/chat.ts`, `src/lib/ai/chat-agent.ts` |
+| 운영 비서 대화 | Discord `/chat ask` | 대화 이력과 운영 현황을 바탕으로 답변. 필요한 조회 도구를 선택하고 결과를 정리 | `src/lib/discord/chat.ts`, `src/lib/ai/chat-agent.ts` |
 | 지식 볼트 질의응답 | 대화의 지식 검색·탐색·본문 읽기, 관리자 `/api/admin/vault/ask` | Obsidian 문서를 읽어 답변. 검색 질의 임베딩은 Gemini | `src/lib/ai/tools.ts`, `src/lib/vault/retrieve.ts` |
-| 기획서 초안 | 웹 `/work/plan`, Discord `/plan` | 아이디어·저장소 문맥으로 기획 초안 작성 | `src/lib/actions/ai.ts`, `src/lib/core/ai-drafts.ts` |
-| 버그 보고서 초안 | Discord `/bug` | 증상을 구조화한 보고서 작성 | `src/lib/core/ai-drafts.ts` |
+| 기획서 초안 | 웹 `/work/plan`, Discord `/issue plan` | 아이디어·저장소 문맥으로 기획 초안 작성 | `src/lib/actions/ai.ts`, `src/lib/core/ai-drafts.ts` |
+| 일반 이슈 초안 | 웹 `/work/issues/new`, Discord `/issue create` | 요청을 제목·Markdown 본문으로 정리하고 작성자가 검토·수정 후 이슈 등록 | `src/lib/core/general-issues.ts` |
+| 버그 보고서 초안 | Discord `/issue bug` | 증상을 구조화한 보고서 작성 | `src/lib/core/ai-drafts.ts` |
 | 작업 분해 초안 | 앱 개발 화면·단계 초안 버튼 | 기존 이슈를 작업 단위로 분해 | `src/lib/core/ai-drafts.ts` |
 | 검수 체크리스트 초안 | 앱 개발 화면·단계 초안 버튼 | 기존 이슈의 확인 항목 작성 | `src/lib/core/ai-drafts.ts` |
 | 출시노트 초안 | 앱 개발 화면·출시 단계 초안 버튼 | 최근 병합 PR 기반 초안 작성 | `src/lib/core/ai-drafts.ts` |

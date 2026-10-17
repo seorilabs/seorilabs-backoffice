@@ -90,6 +90,10 @@
     "20261010120000_drop_platform_sdk_approval": {
       "sha256": "e2c155d21e3d0aefb7f6ad98523dc93b1c05017df274b8530326411a8daf0682",
       "reason": "Platform SDK 승인 체계 폐기(2026-10-10) 뒤의 contract 단계. platform_release, platform_fleet_binding, platform_fleet_plan, platform_fleet_reconcile_run을 DROP TABLE로 지운다. 읽고 쓰는 코드는 PR #450에서 먼저 배포로 걷어냈고, 다른 표에서 이 표들을 가리키는 외래키와 trigger가 없다."
+    },
+    "20261017093000_general_issue_kind": {
+      "sha256": "f6771001b4c279dd71fc6138e69701e74fd7bc5da2613acb8f3f09486774b48f",
+      "reason": "승인된 일반 이슈: AiDraftKind 끝에 GENERAL_ISSUE만 추가한다. 기존 enum 값과 순서·행은 보존한다. MySQL enum 확장은 MODIFY가 필요하다. #478 승인 설계 01ac71a 및 실제 MySQL 보존 검증에 결속한다."
     }
   },
   "legacy": {

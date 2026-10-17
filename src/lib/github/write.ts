@@ -78,6 +78,8 @@ export async function createIssue(opts: {
     title: opts.title,
     body: opts.body,
     labels: opts.labels,
+    // 응답 유실은 추적 표식으로 재조회한다. 외부 생성 요청을 자동 재전송하지 않는다.
+    request: { retries: 0 },
   });
   return res.data;
 }
@@ -123,6 +125,8 @@ export async function addIssueComment(opts: {
     repo,
     issue_number: opts.issueNumber,
     body: opts.body,
+    // 응답 유실은 추적 표식으로 재조회한다. 외부 생성 요청을 자동 재전송하지 않는다.
+    request: { retries: 0 },
   });
 }
 

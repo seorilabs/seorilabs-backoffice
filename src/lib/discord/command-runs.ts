@@ -1,3 +1,7 @@
+import { createGeneralIssueDraftCore, requireOwnedGeneralIssue } from "@/lib/core/general-issues";
+import { requireGeneralIssueAccess, requireGeneralIssuesEnabled } from "@/lib/core/general-issue-access";
+import { confirmDraftRegistrationCore } from "@/lib/core/ai-drafts";
+import { generalIssueCard } from "./general-issue-card";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { executeDeploymentApproval } from "@/lib/deployment-approvals/execute";
 import { Prisma, type OperatorCommandRun } from "@prisma/client";
@@ -239,6 +243,27 @@ async function execute(run: OperatorCommandRun): Promise<{ summary: string; awai
   const params = jsonRecord(run.params);
   switch (run.operation) {
     case "platform_deployment_review": return executeDeploymentApproval(run);
+    case "general_generate": {
+      requireGeneralIssuesEnabled();
+      const app = await appForRun(run);
+      const currentActor = { actorLabel: run.actorLabel, expectedGithubId: stringValue(params, "githubId") };
+      if (!currentActor.expectedGithubId) throw new Error("요청 계정을 확인할 수 없습니다.");
+      await requireGeneralIssueAccess(app.id, currentActor);
+      const draft = await createGeneralIssueDraftCore({ ...currentActor, appId: app.id, request: stringValue(params, "text") });
+      const card = generalIssueCard(draft, app.displayName);
+      const messageId = await showRun(run, card.text, card.components);
+      return { summary: `일반 초안 생성: ${draft.title}`, messageId };
+    }
+    case "general_readback": {
+      const draftId = stringValue(params, "draftId");
+      const draft = await requireOwnedGeneralIssue(draftId, { actorLabel: run.actorLabel });
+      await confirmDraftRegistrationCore(draftId, run.actorLabel);
+      const current = await prisma.aiDraft.findUniqueOrThrow({ where: { id: draft.id } });
+      const app = await prisma.app.findUniqueOrThrow({ where: { id: draft.appId } });
+      const card = generalIssueCard(current, app.displayName);
+      const messageId = await showRun(run, card.text, card.components);
+      return { summary: "일반 이슈 등록 결과 확인", messageId };
+    }
     case "plan_generate": {
       const app = await appForRun(run);
       const draft = await createPlanningDraftCore({
@@ -590,9 +615,13 @@ export async function processNextOperatorCommand(): Promise<boolean> {
     // 카드 소유 run 은 실패로 카드를 지우지 않는다. 실패 사유를 얹고 현재 상태를 다시 그린다.
     const releaseRecordId = releaseRecordIdOf(run);
     // 표시가 실패해도 run 이 PROCESSING 에 갇히면 안 된다. 렌더 예외는 여기서 삼킨다.
-    await (releaseRecordId
+    const failedDraftId = stringValue(jsonRecord(run.params), "draftId");
+    const failedDraft = failedDraftId ? await prisma.aiDraft.findUnique({ where: { id: failedDraftId }, include: { app: true } }) : null;
+    const generalCard = failedDraft?.kind === "GENERAL_ISSUE" ? generalIssueCard(failedDraft, failedDraft.app.displayName) : null;
+    const retryRows: DiscordActionRow[] = run.operation === "general_generate" ? [{ type: 1, components: [{ type: 2, style: 2, label: "보존한 요청으로 다시 생성", custom_id: `general:retry:${run.id}` }] }] : [];
+    await (generalCard ? showRun(run, `❌ ${message}\n\n${generalCard.text}`, generalCard.components) : releaseRecordId
       ? showDeployCard(run, releaseRecordId, `❌ 작업 실패: ${message}`)
-      : showRun(run, `❌ 작업 실패: ${message}`)
+      : showRun(run, `❌ 작업 실패: ${message}${run.operation === "general_generate" ? "\n요청을 24시간 보존합니다. 아래 버튼으로 다시 생성할 수 있습니다." : ""}`, retryRows)
     ).catch((renderError) => {
       console.error(
         `[operator-command-worker] 실패 표시 실패 ${run.id}:`,
@@ -604,7 +633,7 @@ export async function processNextOperatorCommand(): Promise<boolean> {
       data: {
         status: "FAILED",
         error: message,
-        params: Prisma.DbNull,
+        ...(run.operation === "general_generate" ? {} : { params: Prisma.DbNull }),
         completedAt: new Date(),
         expiresAt: new Date(Date.now() + RESULT_TTL_MS),
       },

@@ -6,7 +6,7 @@ const interaction = {
   application_id: "22",
   token: "isolated-test",
   type: 2,
-  data: { name: "report" },
+  data: { name: "app", options: [{ type: 1, name: "report" }] },
 };
 test("느린 조회는 DB 접근 전에 예약하고 modal·버튼·자동완성은 원래 응답 방식 유지", () => {
   assert.equal(shouldDeferRead(interaction), true);

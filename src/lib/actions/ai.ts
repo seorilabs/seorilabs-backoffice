@@ -15,6 +15,7 @@ import {
   confirmDraftRegistrationCore,
   generateStageDraftCore,
 } from "@/lib/core/ai-drafts";
+import { discardGeneralIssueDraftCore } from "@/lib/core/general-issues";
 import { HIDDEN_APP_ERROR, isDisabledAppStatus, visibleAppWhere } from "@/lib/domain/app-visibility";
 
 export interface DraftView {
@@ -159,12 +160,16 @@ export async function commitDraft(input: {
 
 // ── 초안 폐기. ──
 export async function discardDraft(draftId: string): Promise<{ ok: boolean }> {
-  await requireSession();
+  const session = await requireSession();
   const draft = await prisma.aiDraft.findUnique({
     where: { id: draftId },
     include: { app: { select: { status: true, slug: true, platformAppId: true } } },
   });
   if (!draft) throw new Error("초안을 찾을 수 없습니다.");
+  if (draft.kind === "GENERAL_ISSUE") {
+    await discardGeneralIssueDraftCore(draftId, { actorLabel: `@${session.user.login}` });
+    return { ok: true };
+  }
   if (isDisabledAppStatus(draft.app.status)) throw new Error(HIDDEN_APP_ERROR);
   await requireAppWriteAccess(draft.appId);
   if (draft.claimedAt) throw new Error("등록 결과를 먼저 확인하세요.");
@@ -181,7 +186,7 @@ export async function discardDraft(draftId: string): Promise<{ ok: boolean }> {
 export async function confirmDraftRegistration(draftId:string) {
  const draft=await prisma.aiDraft.findUniqueOrThrow({where:{id:draftId}});
  const actor=await requireAppWriteAccess(draft.appId);
- const result=await confirmDraftRegistrationCore(draftId);
+ const result=await confirmDraftRegistrationCore(draftId, `@${actor.login}`);
  await prisma.auditLog.create({data:{actorLogin:actor.login,action:"ai.draft_readback",entityType:"AiDraft",entityId:draftId,payload:{confirmed:result.confirmed,pending:result.pending}}});
  revalidatePath(`/apps/${draft.appId}/development`);
  return result;

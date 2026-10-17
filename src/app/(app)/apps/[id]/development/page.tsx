@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { env } from "@/lib/env";
 import { notFound } from "next/navigation";
 
 import { AiAgentPanel } from "@/components/AiAgentPanel";
@@ -23,7 +25,7 @@ export default async function AppDevelopmentPage({ params }: { params: Promise<{
   const openIssues = app.issues.filter((issue) => issue.state === "OPEN");
   const aiEnabled = llmChatConfigured();
   const drafts = await prisma.aiDraft.findMany({
-    where: { appId: app.id, status: "DRAFT" },
+    where: { appId: app.id, status: "DRAFT", kind: { not: "GENERAL_ISSUE" } },
     orderBy: { createdAt: "desc" },
     take: 10,
     select: {
@@ -39,6 +41,7 @@ export default async function AppDevelopmentPage({ params }: { params: Promise<{
 
   return (
     <div className="space-y-8">
+      {env.featureGeneralIssues() && <Link href={`/work/issues/new?app=${app.id}`} className="inline-block rounded bg-neutral-900 px-4 py-2 text-sm text-white">일반 이슈 등록</Link>}
       <WorkspaceSection
         title="AI 에이전트"
         description="현재 앱과 이슈를 기준으로 검토 가능한 초안을 생성합니다."
