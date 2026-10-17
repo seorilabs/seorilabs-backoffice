@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "0df8051011a9e1e81db7822f34e0ae5beb02ed6b",
+  "changedFeatures": ["ai-draft-generation-and-github-registration", "issues-planning-and-stage-transitions", "auth-and-app-rbac", "discord-command-registration-and-deferred-reads", "discord-operator-confirmation-and-deployment-approval", "notification-outbox-report-visuals-and-retention", "portfolio-and-app-workspace"],
+  "environments": ["dev"],
+  "redesign": true,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": { "markets": ["web", "service"], "until": "public" }
+}
