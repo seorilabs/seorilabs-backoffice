@@ -103,7 +103,7 @@ async function main() {
     data: {
       eventId: event.id,
       provider: "DISCORD",
-      destinationKey: "qa",
+      destinationKey: `qa-edit:${next.id}`,
       status: "PENDING",
       refreshRequested: null,
       providerMessageId: "qa-edit",
@@ -116,12 +116,19 @@ async function main() {
     gate = new Promise<void>((r) => {
       finish = r;
     });
-  const draining = drainNotifications(100, async () => {
+  const draining = drainNotifications(100, async (row) => {
+    if (row.destinationKey !== delivery.destinationKey)
+      return { ok: true, messageId: row.providerMessageId ?? "qa-other" };
     start();
     await gate;
     return { ok: true, messageId: "qa-edit" };
   });
-  await entered;
+  await Promise.race([
+    entered,
+    draining.then(() => {
+      throw new Error("대상 알림이 처리되기 전에 대기열 검사가 끝났습니다.");
+    }),
+  ]);
   await prisma.$transaction(async (tx) => {
     await tx.notificationEvent.update({
       where: { id: event.id },
@@ -147,10 +154,12 @@ async function main() {
     ).status,
     "PENDING",
   );
-  await drainNotifications(100, async ({ payload, providerMessageId }) => {
-    assert.equal((payload as { text: string }).text, "최신 분석");
-    assert.equal(providerMessageId, "qa-edit");
-    return { ok: true, messageId: providerMessageId! };
+  await drainNotifications(100, async ({ destinationKey, payload, providerMessageId }) => {
+    if (destinationKey === delivery.destinationKey) {
+      assert.equal((payload as { text: string }).text, "최신 분석");
+      assert.equal(providerMessageId, "qa-edit");
+    }
+    return { ok: true, messageId: providerMessageId ?? "qa-other" };
   });
   assert.equal(
     (
