@@ -17,6 +17,8 @@ export const LLM_PRICES: Record<string, ModelPrice> = {
   "gemini-3.7-flash": { inputUsdPerMTok: 0.75, outputUsdPerMTok: 3.75 },
   "claude-haiku-4-5": { inputUsdPerMTok: 1, outputUsdPerMTok: 5 },
   "claude-sonnet-5": { inputUsdPerMTok: 2, outputUsdPerMTok: 10 },
+  // 2026-10-17 platform.claude.com/docs/en/models/sonnet-5-5/overview 확인.
+  "claude-sonnet-5-5": { inputUsdPerMTok: 2, outputUsdPerMTok: 10 },
   "claude-opus-5": { inputUsdPerMTok: 5, outputUsdPerMTok: 25 },
   "gpt-5.6-terra": { inputUsdPerMTok: 2, outputUsdPerMTok: 12 },
   "gpt-5.6-luna": { inputUsdPerMTok: 0.2, outputUsdPerMTok: 1.2 },

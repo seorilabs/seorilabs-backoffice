@@ -46,11 +46,22 @@ kubectl -n platform create secret generic backoffice-secrets \
   --from-literal=GITHUB_WEBHOOK_SECRET='<webhook secret>' \
   --from-literal=INTERNAL_ADMIN_TOKEN="$(openssl rand -hex 24)" \
   --from-literal=GEMINI_API_KEY='' \
-  --from-literal=MINIMAX_API_KEY=''
+  --from-literal=CLAUDE_API_KEY_IH=''
 ```
 
+대화·초안·운영 분석·지표 요약은 `CHAT_LLM_PROVIDER=anthropic`과
+`FEATURE_CLAUDE_ENABLED=true`로 Claude를 사용한다. 기본 모델은 `claude-sonnet-5-5`다.
+키 원본은 `~/.config/seorilabs/claude-api-key.env`의 정확한 `CLAUDE_API_KEY_IH`이며,
+다른 Claude 키나 공급자로 자동 전환하지 않는다. Gemini는 Vault 임베딩을 계속 담당한다.
+
+Claude 전환 후보를 운영에 적용하기 전에 자격증명 정책의 원본·백업·복원 확인을 거쳐
+`platform/backoffice-secrets`의 `CLAUDE_API_KEY_IH`를 준비하고 SealedSecret에도 반영한다.
+현재 MiniMax 암호문은 전환 완료 전 보존한다. 비밀값을 명령 인자·파일 출력·실행 로그에 넣지 않는다.
+키가 없는 상태의 배포는 Secret 참조 단계에서 차단된다. 코드 PR·로컬 API 연결 성공은 운영 전환 완료가 아니다.
+
 ## 4. 이미지 빌드 & 배포
-CI(`.github/workflows/deploy.yml`)가 push main 시 빌드/푸시/롤아웃. 필요 GitHub secrets:
+CI(`.github/workflows/deploy.yml`)는 push main 시 검증·이미지 빌드/푸시만 수행한다.
+운영 롤아웃은 명시적 `workflow_dispatch`의 `deploy=true`로 실행한다. 필요 GitHub secrets:
 - `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (registry.vzyx.xyz push)
 - `KUBECONFIG_B64` (platform ns deployment patch 권한 SA kubeconfig, base64)
 

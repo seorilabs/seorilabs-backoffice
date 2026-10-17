@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { llmChatModel } from "@/lib/ai/llm";
 import { generateInsight } from "@/lib/insights/generate";
 import { renderInsight, type Evidence } from "@/lib/insights/contract";
 import { dbDay, metricDaysBetween } from "@/lib/analytics/metric-day";
@@ -152,5 +153,5 @@ export function narrativeSkeleton(input: NarrativeInput): string {
 export interface MetricNarrative { text: string; fallback: boolean; provider: string | null; model: string | null; promptVersion: number; }
 export async function metricNarrative(input: NarrativeInput): Promise<MetricNarrative> {
   const made = await generateInsight(narrativeEvidence(input), "growth");
-  return { text: made.fallback ? narrativeSkeleton(input) : renderInsight(made.content, narrativeEvidence(input)), fallback: made.fallback, provider: made.fallback ? null : "minimax", model: made.fallback ? null : env.minimaxChatModel(), promptVersion: NARRATIVE_PROMPT_VERSION };
+  return { text: made.fallback ? narrativeSkeleton(input) : renderInsight(made.content, narrativeEvidence(input)), fallback: made.fallback, provider: made.fallback ? null : env.chatLlmProvider(), model: made.fallback ? null : llmChatModel(), promptVersion: NARRATIVE_PROMPT_VERSION };
 }

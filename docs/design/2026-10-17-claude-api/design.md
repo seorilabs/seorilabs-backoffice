@@ -1,9 +1,11 @@
 # 설계: Backoffice 분석·대화를 Claude API로 전환
 
 - 설계 ID·버전: BO-CLAUDE-20261017-v1
-- 상태: 사람 검토 대기. 구현·배포 승인으로 기록하지 않음.
+- 상태: 사용자의 연결 변경 직접 수행 지시에 따라 구현 진행. 운영 배포는 요청되지 않음.
 - 조사 기준: Backoffice `b0b391d1e3eb9d03309d8b56e52ea973a149faff`, 중앙 개발 계약 `a2da27879d58da7f6e018be530162cb20e6273a1`.
-- 승인 대상: 이 설계와 같은 폴더의 `test-plan.json`. 승인 근거·커밋·실행 티켓은 실제 승인 뒤 연결.
+- 구현 범위: 이 설계와 같은 폴더의 `test-plan.json`, 원본 커밋 `dbd38d8eb460f4a1d8da1699085b565cec0aa885`.
+- 착수 근거: 사용자가 중앙 파일의 `CLAUDE_API_KEY_IH` 사용을 확인하고 연결 변경 작업을 직접 수행하라고 지시함. Sonnet 5.5는 작업 수행자가 아니라 Backoffice가 호출할 모델임을 설명함.
+- 실행 티켓: [#468](https://github.com/seorilabs/seorilabs-backoffice/issues/468).
 
 ## 목적·범위·근거
 
@@ -62,7 +64,7 @@ PR 병합이 자동 배포를 유발하면 공개 적용 지시 전에는 병합
 키 원본은 이동·덮어쓰기·회전하지 않는다. 기존 MiniMax Secret은 현재 사용처 확인과 전환 검증 전 삭제하지 않는다.
 오류 시 승인된 이전 후보와 실행 설정을 복구하며 다른 키로 자동 우회하지 않는다.
 
-지정한 저장소 내 `claude-api-key.env`는 조사 시 존재하지 않았다. `~/.config/seorilabs/claude-api-key.env` 파일의 존재만 확인했으며, 사용자가 경로를 확인하기 전 대체 키로 사용하지 않는다.
+지정한 저장소 내 `claude-api-key.env`는 조사 시 존재하지 않았다. 사용자가 `~/.config/seorilabs/claude-api-key.env`와 그 안의 정확한 `CLAUDE_API_KEY_IH` 사용을 확인했다. 이 키로 공식 모델 목록 조회 HTTP 200과 `claude-sonnet-5-5` 제공을 확인했다. 키 값은 저장소에 넣지 않는다.
 
 ## 공식 자료
 

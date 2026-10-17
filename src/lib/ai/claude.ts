@@ -1,16 +1,15 @@
 import { env } from "@/lib/env";
 import type { ChatMessage, ChatOptions, CompleteOptions } from "@/lib/ai/gemini";
 
-// 서버 전용 MiniMax 챗 클라이언트. Anthropic 호환 Messages API 를 사용하고
-// 임베딩은 지원하지 않는다(임베딩은 Gemini 유지). JSON 출력 모드가 없어
-// jsonOutput 은 시스템 지시로 강제하고 파싱 방어는 호출부(json.ts)가 맡는다.
+// 서버 전용 Claude Messages API. JSON 출력은 시스템 지시와 호출부 검증을 함께 사용한다.
+// 임베딩은 Gemini를 유지하고, 사용자 지정 IH 키 외의 키로 자동 전환하지 않는다.
 
-export class MinimaxNotConfiguredError extends Error {
+export class ClaudeNotConfiguredError extends Error {
   constructor() {
     super(
-      "MiniMax가 비활성 상태입니다 (FEATURE_MINIMAX_ENABLED + MINIMAX_API_KEY 필요).",
+      "Claude가 비활성 상태입니다 (FEATURE_CLAUDE_ENABLED + CLAUDE_API_KEY_IH 필요).",
     );
-    this.name = "MinimaxNotConfiguredError";
+    this.name = "ClaudeNotConfiguredError";
   }
 }
 
@@ -22,18 +21,19 @@ const MAX_MSG_CHARS = 12_000;
 const JSON_OUTPUT_INSTRUCTION =
   "응답은 항상 JSON 객체 하나만 출력한다. 머리말·설명·코드블록을 금지한다.";
 
-type MinimaxMessagesResponse = {
+type ClaudeMessagesResponse = {
+  type?: string;
+  model?: string;
   content?: Array<{ type?: string; text?: string }>;
   stop_reason?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
-  base_resp?: { status_code?: number | string; status_msg?: string };
 };
 
-export async function minimaxChat(
+export async function claudeChat(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): Promise<string> {
-  if (!env.minimaxChatConfigured()) throw new MinimaxNotConfiguredError();
+  if (!env.claudeChatConfigured()) throw new ClaudeNotConfiguredError();
 
   const systemParts = messages
     .filter((message) => message.role === "system")
@@ -48,13 +48,12 @@ export async function minimaxChat(
       content: [{ type: "text", text: truncate(message.content, MAX_MSG_CHARS) }],
     }))
     .filter((message) => message.content[0].text.trim().length > 0);
-  if (contents.length === 0) throw new Error("MiniMax API에 보낼 사용자 메시지가 없습니다.");
+  if (contents.length === 0) throw new Error("Claude API에 보낼 사용자 메시지가 없습니다.");
 
-  const baseUrl = env.minimaxBaseUrl().replace(/\/+$/, "");
-  const model = opts.model ?? env.minimaxChatModel();
-  const url = `${baseUrl}/anthropic/v1/messages`;
+  const model = opts.model ?? env.claudeChatModel();
+  const url = "https://api.anthropic.com/v1/messages";
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), env.minimaxChatTimeoutMs());
+  const timer = setTimeout(() => controller.abort(), env.claudeChatTimeoutMs());
 
   try {
     const response = await fetch(url, {
@@ -62,14 +61,16 @@ export async function minimaxChat(
       headers: {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
-        Authorization: `Bearer ${env.minimaxApiKey()}`,
+        "x-api-key": env.claudeApiKey(),
       },
       body: JSON.stringify({
         model,
         ...(system ? { system } : {}),
         messages: contents,
         max_tokens: opts.maxTokens ?? 4096,
-        ...(opts.temperature === undefined ? {} : { temperature: opts.temperature }),
+        // Sonnet 5.5는 temperature: 0과 thinking: disabled를 거절한다.
+        // 도구 없는 짧은 대화·요약에서 출력 한도를 추론에 소진하지 않는다.
+        ...(model === "claude-sonnet-5-5" ? { thinking: { type: "between_tools" } } : {}),
         stream: false,
       }),
       signal: controller.signal,
@@ -78,31 +79,19 @@ export async function minimaxChat(
     const rawText = await response.text();
     if (!response.ok) {
       throw new Error(
-        `MiniMax API 요청 실패 (${response.status})`,
+        `Claude API 요청 실패 (${response.status})`,
       );
     }
 
-    let parsed: MinimaxMessagesResponse;
+    let parsed: ClaudeMessagesResponse;
     try {
-      parsed = JSON.parse(rawText) as MinimaxMessagesResponse;
+      parsed = JSON.parse(rawText) as ClaudeMessagesResponse;
     } catch {
-      throw new Error("MiniMax API 비 JSON 응답");
+      throw new Error("Claude API 비 JSON 응답");
     }
 
-    const statusCode = parsed.base_resp?.status_code;
-    if (statusCode !== undefined && statusCode !== 0 && statusCode !== "0") {
-      throw new Error(
-        `MiniMax API 오류 ${String(statusCode)}`,
-      );
-    }
-
-    const text = (parsed.content ?? [])
-      .filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("")
-      .trim();
-    if (!text) {
-      throw new Error(`MiniMax API 빈 응답 (${parsed.stop_reason ?? "unknown"})`);
+    if (!parsed || parsed.type !== "message") {
+      throw new Error("Claude API 응답 형식 오류");
     }
 
     const usage = parsed.usage;
@@ -113,31 +102,41 @@ export async function minimaxChat(
         thinkingTokens: 0,
         totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
       };
-      console.info("[minimax] usage", { model, ...tokens });
+      const responseModel = parsed.model ?? model;
+      console.info("[claude] usage", { model: responseModel, ...tokens });
       await import("@/lib/ai/usage")
         .then((m) =>
           m.recordAiUsage({
-            provider: "minimax",
-            model,
+            provider: "anthropic",
+            model: responseModel,
             path: opts.usage?.path ?? "unknown",
             ...tokens,
           }),
         )
-        .catch((error) =>
-          console.error("[minimax] usage 기록 실패", error instanceof Error ? error.message : error),
-        );
+        .catch(() => console.error("[claude] usage 기록 실패"));
     }
+    // 과금된 실패 응답도 위에서 사용량을 기록한 뒤 호출부의 기본 요약으로 전환한다.
+    if (parsed.stop_reason === "max_tokens") throw new Error("Claude API 출력 한도 초과");
+    if (parsed.stop_reason !== "end_turn" && parsed.stop_reason !== "stop_sequence") {
+      throw new Error("Claude API 응답 미완료");
+    }
+    const text = (parsed.content ?? [])
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("")
+      .trim();
+    if (!text) throw new Error("Claude API 빈 응답");
     return text;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function minimaxComplete(opts: CompleteOptions): Promise<string> {
+export async function claudeComplete(opts: CompleteOptions): Promise<string> {
   const messages: ChatMessage[] = [];
   if (opts.system) messages.push({ role: "system", content: opts.system });
   messages.push({ role: "user", content: opts.prompt });
-  return minimaxChat(messages, {
+  return claudeChat(messages, {
     maxTokens: opts.maxTokens,
     jsonOutput: opts.jsonOutput,
     usage: opts.usage,

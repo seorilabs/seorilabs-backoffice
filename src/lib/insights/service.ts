@@ -8,6 +8,7 @@ import {
   discordDestinationOrFallback,
   type DiscordDestinationKey,
 } from "@/lib/notifications/destinations";
+import { llmChatModel } from "@/lib/ai/llm";
 import { env } from "@/lib/env";
 import { metricDayOf, metricDayStart, shiftMetricDay } from "@/lib/analytics/metric-day";
 import {
@@ -137,10 +138,10 @@ export async function publishSignal(input: {
         key: ANALYSIS_TEMPLATE,
         template: ANALYSIS_TEMPLATE,
         agentKind: "API",
-        model: env.minimaxChatModel(),
+        model: llmChatModel(),
         configuration: policy,
       },
-      update: {},
+      update: { model: llmChatModel() },
     });
     const latest = await tx.automationOccurrence.findFirst({
       where: { definitionId: definition.id },
@@ -377,7 +378,7 @@ export async function processNextInsight(
       where: { id: document.id },
       data: {
         status: made.fallback ? "FALLBACK" : "READY",
-        model: made.fallback ? null : env.minimaxChatModel(),
+        model: made.fallback ? null : llmChatModel(),
         content: json(made.content),
         errorCode: made.errorCode,
         completedAt: now,

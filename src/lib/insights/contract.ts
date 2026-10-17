@@ -124,6 +124,8 @@ export function renderInsight(doc: Insight, facts: Evidence[]): string {
 }
 /** 해설이 비어 있는 이유를 카드에 쓰는 짧은 한국어. 코드는 상세 화면에서만 보인다. */
 export const FALLBACK_REASONS: Record<string, string> = {
+  LLM_NOT_CONFIGURED: "분석 모델 미설정",
+  // 기존 분석 문서의 오류 코드는 그대로 읽을 수 있어야 한다.
   MINIMAX_NOT_CONFIGURED: "분석 모델 미설정",
   DAILY_ANALYSIS_LIMIT: "오늘 분석 한도 소진",
   ANALYSIS_LIMIT_OR_BUSY: "분석 동시 실행 한도",

@@ -6,7 +6,7 @@ import {
   type ChatOptions,
   type CompleteOptions,
 } from "@/lib/ai/gemini";
-import { minimaxChat, minimaxComplete } from "@/lib/ai/minimax";
+import { claudeChat, claudeComplete } from "@/lib/ai/claude";
 
 // 챗 LLM 라우터. CHAT_LLM_PROVIDER 로 provider 를 고르고 호출부는 provider 를
 // 모른 채 이 모듈만 사용한다. 임베딩(embeddings.ts)은 라우팅 대상이 아니다.
@@ -14,10 +14,10 @@ import { minimaxChat, minimaxComplete } from "@/lib/ai/minimax";
 export type { ChatMessage, ChatOptions, CompleteOptions };
 
 export class LlmNotConfiguredError extends Error {
-  constructor(provider: "minimax" | "gemini") {
+  constructor(provider: "anthropic" | "gemini") {
     super(
-      provider === "minimax"
-        ? "챗 LLM이 비활성 상태입니다 (FEATURE_MINIMAX_ENABLED + MINIMAX_API_KEY 필요)."
+      provider === "anthropic"
+        ? "챗 LLM이 비활성 상태입니다 (FEATURE_CLAUDE_ENABLED + CLAUDE_API_KEY_IH 필요)."
         : "챗 LLM이 비활성 상태입니다 (FEATURE_GEMINI_ENABLED + GEMINI_API_KEY 필요).",
     );
     this.name = "LlmNotConfiguredError";
@@ -25,15 +25,15 @@ export class LlmNotConfiguredError extends Error {
 }
 
 export function llmChatConfigured(): boolean {
-  return env.chatLlmProvider() === "minimax"
-    ? env.minimaxChatConfigured()
+  return env.chatLlmProvider() === "anthropic"
+    ? env.claudeChatConfigured()
     : env.geminiChatConfigured();
 }
 
 /** ai_usage 원장·이벤트 메타데이터에 기록할 현재 provider 의 기본 챗 모델. */
 export function llmChatModel(): string {
-  return env.chatLlmProvider() === "minimax"
-    ? env.minimaxChatModel()
+  return env.chatLlmProvider() === "anthropic"
+    ? env.claudeChatModel()
     : env.geminiChatModel();
 }
 
@@ -43,11 +43,11 @@ export async function llmChat(
 ): Promise<string> {
   const provider = env.chatLlmProvider();
   if (!llmChatConfigured()) throw new LlmNotConfiguredError(provider);
-  return provider === "minimax" ? minimaxChat(messages, opts) : geminiChat(messages, opts);
+  return provider === "anthropic" ? claudeChat(messages, opts) : geminiChat(messages, opts);
 }
 
 export async function llmComplete(opts: CompleteOptions): Promise<string> {
   const provider = env.chatLlmProvider();
   if (!llmChatConfigured()) throw new LlmNotConfiguredError(provider);
-  return provider === "minimax" ? minimaxComplete(opts) : geminiComplete(opts);
+  return provider === "anthropic" ? claudeComplete(opts) : geminiComplete(opts);
 }

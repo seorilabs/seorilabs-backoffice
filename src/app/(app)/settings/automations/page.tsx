@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { env } from "@/lib/env";
+import { llmChatConfigured } from "@/lib/ai/llm";
 export const dynamic = "force-dynamic";
 const labels: Record<string, string> = {
   PENDING: "대기",
@@ -42,8 +43,8 @@ export default async function Page() {
       <div className="grid gap-3 sm:grid-cols-3">
         {[
           ["등록된 실행 규칙", definitions.length + "개"],
-          ["현재 MiniMax 분석 호출", permits + "/2개"],
-          ["분석 공급자", env.minimaxChatConfigured() ? "설정됨" : "설정·권한 필요"],
+          ["현재 분석 호출", permits + "/2개"],
+          ["분석 공급자", llmChatConfigured() ? (env.chatLlmProvider() === "anthropic" ? "Claude" : "Gemini") : "설정·권한 필요"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-lg border bg-white p-4">
             <p className="text-xs text-neutral-500">{label}</p>

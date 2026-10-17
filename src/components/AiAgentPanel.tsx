@@ -51,7 +51,7 @@ export function AiAgentPanel({
   if (!aiEnabled && initialDrafts.length === 0) {
     return (
       <p className="text-sm text-neutral-400">
-        분석 공급자가 설정되지 않았습니다. MiniMax 또는 Gemini 설정을 확인하세요.
+        분석 공급자가 설정되지 않았습니다. Claude 또는 Gemini 설정을 확인하세요.
       </p>
     );
   }

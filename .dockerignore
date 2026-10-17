@@ -3,6 +3,7 @@ node_modules
 .git
 .env
 .env*.local
+claude-api-key.env
 *.pem
 Dockerfile
 .dockerignore

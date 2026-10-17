@@ -1,6 +1,5 @@
 import { acquireAnalysisPermit, releaseAnalysisPermit } from "./budget";
-import { minimaxChat } from "@/lib/ai/minimax";
-import { env } from "@/lib/env";
+import { llmChat, llmChatConfigured } from "@/lib/ai/llm";
 import {
   validatedEvidence,
   fallbackInsight,
@@ -15,7 +14,7 @@ export async function generateInsight(
   facts: Evidence[],
   persona: Persona,
   input: {
-    chat?: typeof minimaxChat;
+    chat?: typeof llmChat;
     configured?: boolean;
     reserve?: () => Promise<boolean>;
     acquire?: () => Promise<string | null>;
@@ -28,7 +27,7 @@ export async function generateInsight(
     fallback: true,
     errorCode: code,
   });
-  if (!(input.configured ?? env.minimaxChatConfigured())) return fallback("MINIMAX_NOT_CONFIGURED");
+  if (!(input.configured ?? llmChatConfigured())) return fallback("LLM_NOT_CONFIGURED");
   for (let attempt = 0; attempt < 2; attempt++) {
     if (input.reserve && !(await input.reserve())) return fallback("DAILY_ANALYSIS_LIMIT");
     let permit: string | null;
@@ -39,7 +38,7 @@ export async function generateInsight(
     }
     if (!permit) return fallback("ANALYSIS_LIMIT_OR_BUSY");
     try {
-      const text = await (input.chat ?? minimaxChat)(
+      const text = await (input.chat ?? llmChat)(
         [
           {
             role: "system",
