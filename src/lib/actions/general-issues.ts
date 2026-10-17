@@ -1,5 +1,6 @@
 "use server";
 
+import { generalIssueErrorMessage } from "@/lib/core/general-issue-contract";
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth-helpers";
 import { createGeneralIssueDraftCore, editGeneralIssueDraftCore, discardGeneralIssueDraftCore, requireOwnedGeneralIssue } from "@/lib/core/general-issues";
@@ -17,9 +18,7 @@ function view(draft: Awaited<ReturnType<typeof createGeneralIssueDraftCore>>) {
 async function respond<T>(task: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   try { return { ok: true, value: await task() }; }
   catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    const expected = /^(요청은|제목은|본문은|초안|일반 이슈|본인이|현재 GitHub|GitHub 계정|기획 또는|해당 앱|플랫폼 관리|앱을 찾을|대상 저장소|등록 진행|등록 중|이미 처리|로그인|Claude)/.test(message);
-    return { ok: false, error: expected ? message : "처리에 실패했습니다. 입력은 유지됩니다. 등록 요청을 보냈다면 결과 확인을 눌러 주세요." };
+    return { ok: false, error: generalIssueErrorMessage(error) };
   }
 }
 

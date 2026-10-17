@@ -5,6 +5,7 @@ type CommandOption = { type: number; name: string; description: string; required
 interface CommandDefinition {
   path: readonly string[];
   operation: string;
+  legacyName?: string;
   description: string;
   capability: CommandCapability;
   deferred: boolean;
@@ -14,7 +15,7 @@ const app: CommandOption = { type: 3, name: "app", description: "대상 앱 선�
 const optionalApp = { ...app, required: false };
 const target: CommandOption = { type: 3, name: "target", description: "배포 대상", required: true, choices: [{ name: "앱인토스", value: "AIT" }, { name: "Google Play", value: "PLAY" }, { name: "App Store", value: "APPSTORE" }, { name: "전체 마켓", value: "ALL" }] };
 function command(path: string, operation: string, description: string, capability: CommandCapability = "read", options: CommandOption[] = [], deferred = false): CommandDefinition {
-  return { path: path.split(" "), operation, description, capability, options, deferred };
+  return { path: path.split(" "), operation, ...(operation === "general_generate" ? {} : { legacyName: operation }), description, capability, options, deferred };
 }
 
 export const COMMAND_DEFINITIONS: readonly CommandDefinition[] = [
@@ -56,7 +57,7 @@ export function resolveDiscordCommand(data: DiscordInteraction["data"], autocomp
     path += ` ${options[0].name}`;
     options = options[0].options ?? [];
   }
-  const definition = COMMAND_DEFINITIONS.find(c => c.path.join(" ") === path);
+  const definition = COMMAND_DEFINITIONS.find(c => c.path.join(" ") === path || c.legacyName === path);
   if (!definition || new Set(options.map(o => o.name)).size !== options.length) return null;
   for (const option of options) {
     const spec = definition.options.find(s => s.name === option.name);
@@ -71,4 +72,11 @@ export function resolveDiscordCommand(data: DiscordInteraction["data"], autocomp
 
 export function commandHelpText() {
   return ["**Seorilabs 운영 안내**", "명령 시작: **운영명령** 채널. 운영 카드 버튼은 카드가 있는 채널에서 사용합니다.", ...COMMAND_DEFINITIONS.map(c => `\`/${c.path.join(" ")}${c.options.map(o => ` ${o.required ? o.name : `[${o.name}]`}`).join("")}\` — ${c.description}`), "예: `/issue create app:happy-farm`, `/app status app:happy-farm`", "장애알림: 장애 · 일일보고: 보고서 · 수집시장정보: 수집·시장 정보", "개발이슈: 이슈 · 출시관리: 출시·배포 · 결제알림: 결제 · 사용자리뷰: 스토어 리뷰", "쓰기 작업에는 업무 역할이 필요합니다. 일반 이슈는 연결된 GitHub 계정의 앱 쓰기 권한도 확인합니다.", "https://backoffice.vzyx.xyz"].join("\n");
+}
+
+/** 기존 operation도 등록 명세의 같은 경로를 사용한다. */
+export function canonicalCommandPath(operation: string): string {
+  const definition = COMMAND_DEFINITIONS.find(c => c.operation === operation);
+  if (!definition) throw new Error("지원하지 않는 명령입니다.");
+  return `/${definition.path.join(" ")}`;
 }

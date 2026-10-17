@@ -25,3 +25,11 @@ test("중첩 자동완성은 선택한 하위 명령의 앱 입력만 해석한�
   assert.equal(result?.options.find(o => o.focused)?.value, "ha");
   assert.equal(resolveDiscordCommand({ name: "app", options: [{ type: 1, name: "unknown" }] }, true), null);
 });
+
+test("복구용 기존 명령도 같은 권한·입력 정의로 해석하고 등록은 새 트리만 사용한다", () => {
+  const result = resolveDiscordCommand({ name: "status", options: [{ type: 3, name: "app", value: "app" }] });
+  assert.equal(result?.definition.operation, "status");
+  assert.equal(result?.definition.deferred, true);
+  assert.equal(resolveDiscordCommand({ name: "general_generate", options: [{ type: 3, name: "app", value: "app" }] }), null);
+  assert.equal(DISCORD_COMMANDS.some(c => c.name === "status"), false);
+});

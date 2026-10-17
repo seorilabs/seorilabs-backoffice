@@ -30,3 +30,10 @@ export function generalIssuePrompt(displayName: string, repoFullName: string, re
     prompt: JSON.stringify({ app: displayName, repository: repoFullName, request }),
   };
 }
+
+/** 알려진 업무 오류만 노출하고 네트워크·DB·공급자 원문은 한국어 안내로 바꾼다. */
+export function generalIssueErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const expected = /^(요청은|제목은|본문은|초안|일반 이슈|본인이|현재 GitHub|GitHub 계정|기획 또는|해당 앱|플랫폼 관리|앱을 찾을|대상 저장소|등록 진행|등록 중|이미 처리|로그인|Claude)/.test(message);
+  return expected ? message : "통신 또는 처리에 실패했습니다. 입력은 유지됩니다. 등록 요청을 보냈다면 등록 결과 확인을 눌러 주세요.";
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import { generalIssueErrorMessage } from "@/lib/core/general-issue-contract";
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { createGeneralIssueDraft, editGeneralIssueDraft, registerGeneralIssue, confirmGeneralIssue, discardGeneralIssueDraft, loadGeneralIssueDraft } from "@/lib/actions/general-issues";
@@ -9,7 +10,7 @@ function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: string }
   if (!result.ok) throw new Error(result.error);
   return result.value;
 }
-export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null }: { apps: { id: string; displayName: string; repoFullName: string }[]; selectedAppId: string; initialDraft?: Draft | null }) {
+export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null, enabled = true }: { apps: { id: string; displayName: string; repoFullName: string }[]; selectedAppId: string; initialDraft?: Draft | null; enabled?: boolean }) {
   const [appId, setAppId] = useState(selectedAppId);
   const [request, setRequest] = useState("");
   const [draft, setDraft] = useState<Draft | null>(initialDraft);
@@ -23,7 +24,7 @@ export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null }: {
   const buttonClass = "min-h-11 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50";
   function perform(task: () => Promise<void>) {
     setError("");
-    startTransition(async () => { try { await task(); } catch (e) { setError(e instanceof Error ? e.message : "처리에 실패했습니다. 입력은 유지됩니다."); } });
+    startTransition(async () => { try { await task(); } catch (e) { setError(generalIssueErrorMessage(e)); } });
   }
   function showDraft(value: Draft) { setDraft(value); setTitle(value.title); setBody(value.body); }
   return <div className="max-w-3xl space-y-5">
@@ -45,10 +46,10 @@ export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null }: {
       setUrl(result.url);
     }); }}>
       <div className="rounded-lg border bg-neutral-50 p-3"><strong>{app?.displayName}</strong><p className="break-all text-sm text-neutral-600">{draft.repoFullName}</p></div>
-      <label className="block space-y-1"><span className="text-sm font-medium">이슈 제목</span><input required maxLength={120} value={title} disabled={pending || draft.pending} onChange={e => setTitle(e.target.value)} className={inputClass} /><span className="text-xs text-neutral-500">{title.length}/120자</span></label>
-      <label className="block space-y-1"><span className="text-sm font-medium">이슈 본문 · Markdown</span><textarea required maxLength={4000} rows={12} value={body} disabled={pending || draft.pending} onChange={e => setBody(e.target.value)} className={inputClass} /><span className="text-xs text-neutral-500">{body.length}/4,000자</span></label>
+      <label className="block space-y-1"><span className="text-sm font-medium">이슈 제목</span><input required maxLength={120} value={title} disabled={pending || draft.pending || !enabled} onChange={e => setTitle(e.target.value)} className={inputClass} /><span className="text-xs text-neutral-500">{title.length}/120자</span></label>
+      <label className="block space-y-1"><span className="text-sm font-medium">이슈 본문 · Markdown</span><textarea required maxLength={4000} rows={12} value={body} disabled={pending || draft.pending || !enabled} onChange={e => setBody(e.target.value)} className={inputClass} /><span className="text-xs text-neutral-500">{body.length}/4,000자</span></label>
       {draft.pending ? <div className="space-y-2"><p className="text-sm">등록 진행 중이거나 결과 확인이 필요합니다.</p><button type="button" className={buttonClass} disabled={pending} onClick={() => perform(async () => { const result = unwrap(await confirmGeneralIssue(draft.id)); if (result.confirmed && result.url) setUrl(result.url); else { showDraft(await loadGeneralIssueDraft(draft.id)); setError(result.pending ? "아직 등록 결과를 확인하지 못했습니다. 잠시 후 다시 확인하세요." : "등록 요청이 거절되었습니다. 내용을 확인한 뒤 다시 등록할 수 있습니다."); } })}>등록 결과 확인</button></div> : <div className="flex flex-wrap gap-3">
-        <button className={buttonClass} disabled={pending} type="submit">{pending ? "처리 중…" : "이슈 등록"}</button>
+        <button className={buttonClass} disabled={pending || !enabled} type="submit">{pending ? "처리 중…" : "이슈 등록"}</button>
         <button className="min-h-11 rounded-md border px-4 py-2 text-sm" disabled={pending} type="button" onClick={() => perform(async () => { unwrap(await discardGeneralIssueDraft(draft.id)); setDraft(null); window.history.replaceState(null, "", "/work/issues/new"); })}>취소</button>
       </div>}
     </form> : <form className="space-y-4" onSubmit={e => { e.preventDefault(); perform(async () => {

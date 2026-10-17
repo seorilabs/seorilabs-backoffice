@@ -1,3 +1,4 @@
+import { generalIssueErrorMessage } from "@/lib/core/general-issue-contract";
 import { resolveDiscordCommand, commandHelpText } from "./command-definitions";
 import { requireGeneralIssueAccess, requireGeneralIssuesEnabled } from "@/lib/core/general-issue-access";
 import { requireOwnedGeneralIssue, editGeneralIssueDraftCore, discardGeneralIssueDraftCore } from "@/lib/core/general-issues";
@@ -471,7 +472,7 @@ async function handleComponent(interaction: DiscordInteraction) {
   return ephemeral("지원하지 않는 버튼입니다.");
 }
 
-export async function handleDiscordInteraction(interaction: DiscordInteraction) {
+async function handleDiscordInteractionCore(interaction: DiscordInteraction) {
   if (interaction.type === InteractionType.PING) return { type: InteractionResponseType.PONG };
   // 버튼은 카드가 놓인 채널에서 눌린다. 명령을 #운영명령 로 묶은 채로 버튼까지 묶으면
   // release-ops 의 배포 카드나 ops-alerts 의 장애 카드가 눌리지 않는다.
@@ -506,4 +507,22 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
   if (interaction.type === InteractionType.MODAL_SUBMIT) return handleModal(interaction);
   if (interaction.type === InteractionType.MESSAGE_COMPONENT) return handleComponent(interaction);
   return ephemeral("지원하지 않는 Discord 요청입니다.");
+}
+
+export async function handleDiscordInteraction(interaction: DiscordInteraction) {
+  try { return await handleDiscordInteractionCore(interaction); }
+  catch (error) {
+    const id = interaction.data?.custom_id ?? "";
+    const general = resolveDiscordCommand(interaction.data)?.definition.operation === "general_generate" ||
+      /^(modal:general:|gedit:|general:|draft:)/.test(id);
+    if (!general) throw error;
+    const inputs = (interaction.data?.components ?? []).flatMap(row => row.components ?? [])
+      .filter(item => typeof item.value === "string" && item.value.length <= 4000 && item.value.trim());
+    const text = inputs.map(item => `${item.custom_id === "title" ? "이슈 제목" : "보존한 입력"}\n${item.value}`).join("\n\n");
+    return { type: InteractionResponseType.CHANNEL_MESSAGE, data: {
+      content: generalIssueErrorMessage(error) + (text ? "\n입력은 아래에 보존했습니다. 복사한 뒤 권한·최신 초안을 확인하고 다시 입력하세요." : ""),
+      flags: EPHEMERAL_FLAG, allowed_mentions: { parse: [] },
+      ...(text ? { embeds: splitDiscordText(text).map(description => ({ description })) } : {}),
+    } };
+  }
 }
