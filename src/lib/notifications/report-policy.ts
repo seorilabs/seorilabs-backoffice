@@ -70,7 +70,7 @@ export function reportDecision(
     if (!decision.send) return decision;
   }
   if (
-    /^(ait-console-collection:|console-collection:|console-sync:|metrics:operations:|metrics:daily:|keyword-daily:|iap-row:|iap-daily:|identity-row:|identity-daily:|identity-summary:|stage-nudge:|weekly-liveops:)/.test(
+    /^(platform-approval-alert:|ait-console-collection:|console-collection:|console-sync:|metrics:operations:|metrics:daily:|keyword-daily:|iap-row:|iap-daily:|identity-row:|identity-daily:|identity-summary:|stage-nudge:|weekly-liveops:)/.test(
       key,
     ) ||
     ["DAILY_METRICS", "IDENTITY_ROW", "IDENTITY_SUMMARY"].includes(input.kind)

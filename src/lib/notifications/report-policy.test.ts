@@ -18,6 +18,7 @@ test("평점 작은 모수·수집 상태·출시 후 단순 관측은 내부 �
 test("전송 대기 중인 구형 잡음도 제외하고 실제 피해·승인·요청은 보존", () => {
   for (const dedupeKey of [
     "console-collection:run1",
+    "platform-approval-alert:scan:hour",
     "metrics:operations:2026-10-17",
     "metrics:daily:2026-10-16",
     "iap-row:x",
