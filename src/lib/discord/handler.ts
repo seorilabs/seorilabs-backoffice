@@ -513,9 +513,14 @@ export async function handleDiscordInteraction(interaction: DiscordInteraction) 
   try { return await handleDiscordInteractionCore(interaction); }
   catch (error) {
     const id = interaction.data?.custom_id ?? "";
-    const general = resolveDiscordCommand(interaction.data)?.definition.operation === "general_generate" ||
-      /^(modal:general:|gedit:|general:|draft:)/.test(id);
+    let general = resolveDiscordCommand(interaction.data)?.definition.operation === "general_generate" ||
+      /^(modal:general:|gedit:|general:)/.test(id);
+    if (id.startsWith("draft:")) {
+      const draft = await prisma.aiDraft.findUnique({ where: { id: id.split(":")[2] }, select: { kind: true } });
+      general = draft?.kind === "GENERAL_ISSUE";
+    }
     if (!general) throw error;
+    console.error("[discord/general-issue] 처리 실패", { interactionId: interaction.id, errorType: error instanceof Error ? error.name : "unknown" });
     const inputs = (interaction.data?.components ?? []).flatMap(row => row.components ?? [])
       .filter(item => typeof item.value === "string" && item.value.length <= 4000 && item.value.trim());
     const text = inputs.map(item => `${item.custom_id === "title" ? "이슈 제목" : "보존한 입력"}\n${item.value}`).join("\n\n");

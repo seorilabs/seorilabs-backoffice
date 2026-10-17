@@ -48,7 +48,7 @@ export default async function IssuesPage({
 
   return (
     <div className="px-4 py-6 sm:p-8">
-<div className="flex flex-wrap items-center justify-between gap-3">      <h1 className="text-xl font-semibold">크로스레포 이슈</h1>{env.featureGeneralIssues() && <Link href="/work/issues/new" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white">일반 이슈 등록</Link>}</div>
+<div className="flex flex-wrap items-center justify-between gap-3">      <h1 className="text-xl font-semibold">크로스레포 이슈</h1>{<Link href="/work/issues/new" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white">{env.featureGeneralIssues() ? "일반 이슈 등록" : "내 이슈 초안"}</Link>}</div>
       <p className="mt-1 mb-4 text-sm text-neutral-500">
         전 레포 이슈 집계 ({issues.length}건 표시)
       </p>

@@ -71,7 +71,7 @@ export function resolveDiscordCommand(data: DiscordInteraction["data"], autocomp
 }
 
 export function commandHelpText() {
-  return ["**Seorilabs 운영 안내**", "명령 시작: **운영명령** 채널. 운영 카드 버튼은 카드가 있는 채널에서 사용합니다.", ...COMMAND_DEFINITIONS.map(c => `\`/${c.path.join(" ")}${c.options.map(o => ` ${o.required ? o.name : `[${o.name}]`}`).join("")}\` — ${c.description}`), "예: `/issue create app:happy-farm`, `/app status app:happy-farm`", "장애알림: 장애 · 일일보고: 보고서 · 수집시장정보: 수집·시장 정보", "개발이슈: 이슈 · 출시관리: 출시·배포 · 결제알림: 결제 · 사용자리뷰: 스토어 리뷰", "쓰기 작업에는 업무 역할이 필요합니다. 일반 이슈는 연결된 GitHub 계정의 앱 쓰기 권한도 확인합니다.", "https://backoffice.vzyx.xyz"].join("\n");
+  return ["**Seorilabs 운영 안내**", "명령 시작: **운영명령** 채널. 운영 카드 버튼은 카드가 있는 채널에서 사용합니다.", ...COMMAND_DEFINITIONS.map(c => `\`/${c.path.join(" ")}${c.options.map(o => ` ${o.required ? o.name : `[${o.name}]`}`).join("")}\` — ${c.description}`), "예: `/issue create app:happy-farm`, `/app status app:happy-farm`", "이전 명령 목록을 복원한 동안에는 기존 이름을 사용합니다. 예: `/connect` → `/account connect`, `/p1` → `/issue urgent`. 채널 이름 변경 전에는 #backoffice가 운영명령 채널입니다.", "장애알림: 장애 · 일일보고: 보고서 · 수집시장정보: 수집·시장 정보", "개발이슈: 이슈 · 출시관리: 출시·배포 · 결제알림: 결제 · 사용자리뷰: 스토어 리뷰", "쓰기 작업에는 업무 역할이 필요합니다. 일반 이슈는 연결된 GitHub 계정의 앱 쓰기 권한도 확인합니다.", "https://backoffice.vzyx.xyz"].join("\n");
 }
 
 /** 기존 operation도 등록 명세의 같은 경로를 사용한다. */

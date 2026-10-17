@@ -41,7 +41,7 @@ export default async function AppDevelopmentPage({ params }: { params: Promise<{
 
   return (
     <div className="space-y-8">
-      {env.featureGeneralIssues() && <Link href={`/work/issues/new?app=${app.id}`} className="inline-block rounded bg-neutral-900 px-4 py-2 text-sm text-white">일반 이슈 등록</Link>}
+      {<Link href={`/work/issues/new?app=${app.id}`} className="inline-block rounded bg-neutral-900 px-4 py-2 text-sm text-white">{env.featureGeneralIssues() ? "일반 이슈 등록" : "내 이슈 초안"}</Link>}
       <WorkspaceSection
         title="AI 에이전트"
         description="현재 앱과 이슈를 기준으로 검토 가능한 초안을 생성합니다."

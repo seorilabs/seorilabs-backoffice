@@ -8,7 +8,7 @@ export function DiscordAccountConnection() {
   return <div className="my-4 rounded-lg border border-neutral-200 bg-white p-3 text-sm">
     <p className="mb-2 font-semibold">Discord 계정 연결</p>
     <button disabled={busy} className="mr-4 underline" onClick={() => start(async () => {
-      try { setMessage(`10분 안에 #운영명령에서 ${canonicalCommandPath("connect")} code:${await createDiscordLinkCode()} 를 입력하세요.`); } catch { setMessage("연결 코드 발급 실패. 로그인과 접근 권한을 확인하세요."); }
+      try { setMessage(`10분 안에 #운영명령(이전 #backoffice)에서 ${canonicalCommandPath("connect")} code:${await createDiscordLinkCode()} 를 입력하세요. 기존 명령 목록이면 /connect를 사용하세요.`); } catch { setMessage("연결 코드 발급 실패. 로그인과 접근 권한을 확인하세요."); }
     })}>연결 코드 발급</button>
     <button disabled={busy} className="underline" onClick={() => start(async () => {
       try { await removeDiscordLink(); setMessage("계정 연결을 해제했습니다."); } catch { setMessage("연결 해제 실패"); }
