@@ -52,7 +52,7 @@ export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null, ena
         <button className={buttonClass} disabled={pending || !enabled} type="submit">{pending ? "처리 중…" : "이슈 등록"}</button>
         <button className="min-h-11 rounded-md border px-4 py-2 text-sm" disabled={pending} type="button" onClick={() => perform(async () => { unwrap(await discardGeneralIssueDraft(draft.id)); setDraft(null); window.history.replaceState(null, "", "/work/issues/new"); })}>취소</button>
       </div>}
-    </form> : <form className="space-y-4" onSubmit={e => { e.preventDefault(); perform(async () => {
+    </form> : !enabled ? <p role="status">일반 이슈 등록은 현재 비활성 상태입니다. <Link href="/work/issues" className="underline">이슈 목록</Link></p> : <form className="space-y-4" onSubmit={e => { e.preventDefault(); perform(async () => {
       const created = unwrap(await createGeneralIssueDraft({ appId, request }));
       showDraft(created);
       window.history.replaceState(null, "", `/work/issues/new?draft=${encodeURIComponent(created.id)}`);
