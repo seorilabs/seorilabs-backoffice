@@ -17,14 +17,14 @@
 | 근거 기반 운영 분석 | 운영 분석 작업기, 피드백·인사이트 화면, Discord `/insights`에서 결과 조회 | 운영·리뷰·지표·검색어 신호에 대해 근거·해석·제안 생성 | `src/lib/insights/generate.ts`, `src/lib/insights/service.ts` |
 | 지표 보고서 해설 | 일일 조직 보고서·지표 하이라이트·수치 정정 재발행 | 수집된 수치를 설명하는 문장 생성. 실제 수치 집계는 기존 코드 | `src/lib/core/metric-narrative.ts`, `src/lib/core/org-report.ts`, `src/lib/core/metric-highlights.ts` |
 | 일일 운영 다이제스트 해설 | 일일 다이제스트의 AI 해설 적용 조건 충족 시 | 확정 집계에 짧은 운영 해설 추가. 내부 설정 이름 일부는 기존 Gemini 명칭 유지 | `src/lib/notifications/proactive.ts` |
-| 사용량·비용·모델 표시 | AI 사용량 원장, 설정 화면, 초안·분석·보고서 메타데이터 | 실제 Anthropic 모델·입출력 토큰과 비용 기록 | `src/lib/ai/claude.ts`, `src/lib/ai/usage.ts`, `src/lib/ai/pricing.ts` |
+| 사용량·비용·모델 표시 | AI 사용량 원장, 월간 AI 비용·재무 보고, 설정 화면, 초안·분석·보고서 메타데이터 | 실제 Anthropic 모델·입출력 토큰과 비용 기록 | `src/lib/ai/claude.ts`, `src/lib/ai/usage.ts`, `src/lib/ai/pricing.ts` |
 
 대화에서 사용할 수 있는 조회 도구는 앱 목록·상세, 이슈 검색, 승인 대기, P1, 지식 검색·탐색·읽기, 앱 지표, 콘솔 지표, 출시 목록, 장애 목록, workflow 실패, 리뷰 요약, 비용 요약이다. 도구의 조회 구현과 권한은 유지되며 Claude가 호출 선택과 설명을 담당한다.
 
 ## 실행 경계
 
 - Claude는 초안과 설명을 생성한다. GitHub 등록은 기존 확인·등록 절차, 출시 실행은 기존 승인·권한 절차가 수행한다.
-- `/save`의 볼트 문서 저장, `/index`의 문서 인덱싱, Gemini 임베딩, 지표·리뷰·검색어 수집, 수치 계산, 재무 보고서의 확정 수치·비용 계산, 알림 전송기는 이번 모델 교체의 직접 대상이 아니다.
+- `/save`의 볼트 문서 저장, `/index`의 문서 인덱싱, Gemini 임베딩, 지표·리뷰·검색어 수집, 수치 계산, 재무 보고서의 매출·클라우드 비용 집계, 알림 전송기는 이번 모델 교체의 직접 대상이 아니다. 재무 보고서에 합산되는 AI 사용료는 Claude 사용량·단가의 영향을 받는다.
 - 기존 저장 초안·과거 분석·보고서·MiniMax 사용량 이력은 다시 생성하지 않는다. 다음 생성부터 적용한다.
 - 다른 Claude 키나 다른 공급자로 자동 전환하지 않는다. 분석 형식 검증 실패 시 근거 기반 기본 요약을 사용하며 공급자·모델을 성공으로 기록하지 않는다.
 - 지표 요약의 형식 검증 후 기본 요약 전환이 실제 API 시험에서 관측되어 [#471](https://github.com/seorilabs/seorilabs-backoffice/issues/471)에 남아 있다. 기본 요약 반환과 Claude 생성 성공을 구분한다.
