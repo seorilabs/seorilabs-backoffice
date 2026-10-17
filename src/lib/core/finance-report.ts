@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { collectFinanceCosts, financeMonth, type CostWarning } from "@/lib/core/finance-costs";
+import {
+  collectFinanceCosts,
+  financeMonth,
+  type CostWarning,
+} from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { metricDayOf } from "@/lib/analytics/metric-day";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
@@ -23,7 +28,10 @@ export function renderFinanceReport(input: {
   /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
   link?: string | null;
 }): string {
-  const lines = [`💰 **${SENDER_KO} 재무 리포트 · ${input.month}**`, ...input.summaryLines];
+  const lines = [
+    `💰 **${SENDER_KO} 재무 리포트 · ${input.month}**`,
+    ...input.summaryLines,
+  ];
   if (input.warnings.length === 0) {
     lines.push("", "경고 없음");
   } else {
@@ -44,19 +52,33 @@ export interface FinanceReportResult {
 }
 
 /** 비용 수집 → 리포트 렌더 → 알림 outbox. 전달은 notification worker 가 한다. */
-export async function sendFinanceReport(now = new Date()): Promise<FinanceReportResult> {
+export async function sendFinanceReport(
+  now = new Date(),
+): Promise<FinanceReportResult> {
   const { month } = financeMonth(now);
   const { warnings, summaryLines } = await collectFinanceCosts(now);
-  const dedupeKey = financeReportDedupeKey(now);
+  const dedupeKey = `finance-warning:${month}:${createHash("sha256")
+    .update(JSON.stringify(warnings.map((w) => w.key).sort()))
+    .digest("hex")
+    .slice(0, 24)}`;
   await enqueueNotification({
     dedupeKey,
     kind: "OPS_ALERT",
     occurredAt: now,
     payload: {
       // 09:00 시점엔 그날 보고서가 아직 발행 전이라 날짜 없이 최신 보고서로 링크한다.
-      text: renderFinanceReport({ month, summaryLines, warnings, link: orgReportUrl() }),
+      text: renderFinanceReport({
+        month,
+        summaryLines,
+        warnings,
+        link: orgReportUrl(),
+      }),
       // 메인 봇이 아니라 서리 정체로 게시한다. 토큰 값은 payload 에 담지 않는다.
       sender: SEORI_SENDER,
+      report: {
+        category: warnings.length ? "change" : "internal",
+        reason: warnings.length ? "COST_THRESHOLD" : "NO_MATERIAL_COST_CHANGE",
+      },
       // 임계 경고가 하나라도 있으면 상자 색으로 먼저 드러낸다.
       embed: {
         color: warnings.length ? EMBED_COLOR.WARNING : EMBED_COLOR.INFO,

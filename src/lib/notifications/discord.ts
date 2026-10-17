@@ -67,6 +67,7 @@ export interface DiscordMessageOptions {
   alertRoleId?: string;
   components?: DiscordActionRow[];
   attachment?: DiscordAttachment;
+  inlineImage?: boolean;
   // 한 줄짜리 기록은 embed 박스 없이 본문으로 보낸다. 여러 건이 쌓이는 곳에서
   // embed는 한 건마다 상자를 그려 로그로 읽히지 않는다.
   plain?: boolean;
@@ -87,10 +88,16 @@ export interface DiscordMessageOptions {
  * 꼬리는 잘라내되, 잘렸다는 사실을 본문에 남긴다 — 조용히 사라지면 읽는 쪽이
  * 리포트가 원래 그만큼인 줄 안다.
  */
-export function splitDiscordText(text: string, budget = EMBED_TOTAL_LIMIT): string[] {
+export function splitDiscordText(
+  text: string,
+  budget = EMBED_TOTAL_LIMIT,
+): string[] {
   const normalized = text.trim();
   if (!normalized) return [];
-  const cap = Math.min(Math.max(0, budget), MAX_EMBEDS * EMBED_DESCRIPTION_LIMIT);
+  const cap = Math.min(
+    Math.max(0, budget),
+    MAX_EMBEDS * EMBED_DESCRIPTION_LIMIT,
+  );
   if (cap <= 0) return [];
   let rest = normalized;
   if (rest.length > cap) {
@@ -98,7 +105,10 @@ export function splitDiscordText(text: string, budget = EMBED_TOTAL_LIMIT): stri
     rest = rest.slice(0, keep).trimEnd() + TRUNCATION_MARK;
   }
   const chunks: string[] = [];
-  while (rest.length > EMBED_DESCRIPTION_LIMIT && chunks.length < MAX_EMBEDS - 1) {
+  while (
+    rest.length > EMBED_DESCRIPTION_LIMIT &&
+    chunks.length < MAX_EMBEDS - 1
+  ) {
     let cut = rest.lastIndexOf("\n", EMBED_DESCRIPTION_LIMIT);
     if (cut < EMBED_DESCRIPTION_LIMIT / 2) cut = EMBED_DESCRIPTION_LIMIT;
     chunks.push(rest.slice(0, cut).trim());
@@ -111,11 +121,22 @@ export function splitDiscordText(text: string, budget = EMBED_TOTAL_LIMIT): stri
 function messagePayload(text: string, options: DiscordMessageOptions) {
   const roleId = options.alertRoleId?.trim();
   const mention = roleId && /^\d+$/.test(roleId) ? `<@&${roleId}>` : undefined;
-  const allowedMentions = { parse: [] as string[], roles: mention ? [roleId] : [] };
-  const components = options.components?.length ? { components: options.components } : {};
-  const reference = options.replyToMessageId && /^\d+$/.test(options.replyToMessageId)
-    ? { message_reference: { message_id: options.replyToMessageId, fail_if_not_exists: false } }
+  const allowedMentions = {
+    parse: [] as string[],
+    roles: mention ? [roleId] : [],
+  };
+  const components = options.components?.length
+    ? { components: options.components }
     : {};
+  const reference =
+    options.replyToMessageId && /^\d+$/.test(options.replyToMessageId)
+      ? {
+          message_reference: {
+            message_id: options.replyToMessageId,
+            fail_if_not_exists: false,
+          },
+        }
+      : {};
   if (options.plain) {
     const body = text.trim();
     // 본문이 비면 embed 경로와 같이 보내지 않는다. 멘션만 남은 알림은 내용 없이 울린다.
@@ -125,7 +146,12 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
     // 예외적으로 길어졌을 때 끝부분이 말없이 사라지는 편보다, 상자에 담겨 전부
     // 도착하는 편이 낫다.
     if (content.length <= CONTENT_LIMIT) {
-      return { content, ...components, ...reference, allowed_mentions: allowedMentions };
+      return {
+        content,
+        ...components,
+        ...reference,
+        allowed_mentions: allowedMentions,
+      };
     }
   }
   const meta = options.embed;
@@ -145,6 +171,11 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
       ...(index === 0
         ? {
             ...(title ? { title } : {}),
+            ...(options.inlineImage && options.attachment
+              ? {
+                  image: { url: `attachment://${options.attachment.filename}` },
+                }
+              : {}),
             ...(meta?.url ? { url: meta.url } : {}),
             ...(footer ? { footer: { text: footer } } : {}),
             ...(meta?.timestamp ? { timestamp: meta.timestamp } : {}),
@@ -157,8 +188,12 @@ function messagePayload(text: string, options: DiscordMessageOptions) {
   };
 }
 
-function safeDiscordError(status: number, body: unknown): DiscordDeliveryResult {
-  const parsed = body && typeof body === "object" ? body as Record<string, unknown> : {};
+function safeDiscordError(
+  status: number,
+  body: unknown,
+): DiscordDeliveryResult {
+  const parsed =
+    body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const retryAfter = Number(parsed.retry_after);
   const errorCode = typeof parsed.code === "number" ? parsed.code : undefined;
   return {
@@ -190,14 +225,20 @@ async function discordRequest(
     });
     const json = await response.json().catch(() => null);
     if (!response.ok) return safeDiscordError(response.status, json);
-    const id = json && typeof json === "object" && typeof (json as { id?: unknown }).id === "string"
-      ? (json as { id: string }).id
-      : undefined;
+    const id =
+      json &&
+      typeof json === "object" &&
+      typeof (json as { id?: unknown }).id === "string"
+        ? (json as { id: string }).id
+        : undefined;
     return { ok: true, ...(id ? { messageId: id } : {}), json };
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message.slice(0, 300) : "Discord network error",
+      error:
+        error instanceof Error
+          ? error.message.slice(0, 300)
+          : "Discord network error",
     };
   }
 }
@@ -208,11 +249,17 @@ export async function sendDiscord(
   options: DiscordMessageOptions = {},
 ): Promise<DiscordDeliveryResult> {
   const channelId = discordChannelId(destinationKey);
-  if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 미설정" };
+  if (!/^\d+$/.test(channelId))
+    return { ok: false, error: "Discord channel ID 미설정" };
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
 
-  return sendMessageRequest(`/channels/${channelId}/messages`, "POST", payload, options);
+  return sendMessageRequest(
+    `/channels/${channelId}/messages`,
+    "POST",
+    payload,
+    options,
+  );
 }
 
 export async function editDiscord(
@@ -227,7 +274,12 @@ export async function editDiscord(
   }
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  return sendMessageRequest(`/channels/${channelId}/messages/${messageId}`, "PATCH", payload, options);
+  return sendMessageRequest(
+    `/channels/${channelId}/messages/${messageId}`,
+    "PATCH",
+    payload,
+    options,
+  );
 }
 
 export async function deleteDiscordMessage(
@@ -240,7 +292,11 @@ export async function deleteDiscordMessage(
   if (!/^\d+$/.test(channelId) || !/^\d+$/.test(messageId)) {
     return { ok: false, error: "Discord channel/message ID 오류" };
   }
-  return discordRequest(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" }, botToken);
+  return discordRequest(
+    `/channels/${channelId}/messages/${messageId}`,
+    { method: "DELETE" },
+    botToken,
+  );
 }
 
 export async function deleteDiscordChannelMessage(
@@ -250,7 +306,9 @@ export async function deleteDiscordChannelMessage(
   if (!/^\d+$/.test(channelId) || !/^\d+$/.test(messageId)) {
     return { ok: false, error: "Discord channel/message ID 오류" };
   }
-  return discordRequest(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" });
+  return discordRequest(`/channels/${channelId}/messages/${messageId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function createDiscordChannelMessage(
@@ -258,10 +316,16 @@ export async function createDiscordChannelMessage(
   text: string,
   options: DiscordMessageOptions = {},
 ): Promise<DiscordDeliveryResult> {
-  if (!/^\d+$/.test(channelId)) return { ok: false, error: "Discord channel ID 오류" };
+  if (!/^\d+$/.test(channelId))
+    return { ok: false, error: "Discord channel ID 오류" };
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  return sendMessageRequest(`/channels/${channelId}/messages`, "POST", payload, options);
+  return sendMessageRequest(
+    `/channels/${channelId}/messages`,
+    "POST",
+    payload,
+    options,
+  );
 }
 
 // 메시지에서 시작한 public thread는 ID가 원본 메시지 ID와 같다. 그래서 thread ID를 따로
@@ -281,15 +345,19 @@ export async function startDiscordThread(
   }
   const threadName = name.trim().slice(0, THREAD_NAME_LIMIT);
   if (!threadName) return { ok: false, error: "Discord thread 이름 비어 있음" };
-  const result = await discordRequest(`/channels/${channelId}/messages/${messageId}/threads`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      name: threadName,
-      auto_archive_duration: THREAD_AUTO_ARCHIVE_MINUTES,
-    }),
-  });
-  if (result.errorCode === MESSAGE_ALREADY_HAS_THREAD) return { ok: true, messageId };
+  const result = await discordRequest(
+    `/channels/${channelId}/messages/${messageId}/threads`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: threadName,
+        auto_archive_duration: THREAD_AUTO_ARCHIVE_MINUTES,
+      }),
+    },
+  );
+  if (result.errorCode === MESSAGE_ALREADY_HAS_THREAD)
+    return { ok: true, messageId };
   return result;
 }
 
@@ -304,10 +372,18 @@ export async function editDiscordChannelMessage(
   }
   const payload = messagePayload(text, options);
   if (!payload) return { ok: false, error: "Discord 메시지 비어 있음" };
-  return sendMessageRequest(`/channels/${channelId}/messages/${messageId}`, "PATCH", payload, options);
+  return sendMessageRequest(
+    `/channels/${channelId}/messages/${messageId}`,
+    "PATCH",
+    payload,
+    options,
+  );
 }
 
-export async function putDiscordApi(path: string, body: unknown): Promise<DiscordDeliveryResult> {
+export async function putDiscordApi(
+  path: string,
+  body: unknown,
+): Promise<DiscordDeliveryResult> {
   return discordRequest(path, {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -316,22 +392,56 @@ export async function putDiscordApi(path: string, body: unknown): Promise<Discor
 }
 
 /** 실행 직전 역할을 다시 읽는다. interaction에 담겼던 과거 역할을 신뢰하지 않는다. */
-export async function currentDiscordMemberRoles(userId: string): Promise<string[]> {
+export async function currentDiscordMemberRoles(
+  userId: string,
+): Promise<string[]> {
   if (!/^\d+$/.test(userId)) throw new Error("Discord 사용자 ID 오류");
-  const result = await discordRequest(`/guilds/${env.discordGuildId()}/members/${userId}`, { method: "GET" });
+  const result = await discordRequest(
+    `/guilds/${env.discordGuildId()}/members/${userId}`,
+    { method: "GET" },
+  );
   const body = result.json as { roles?: unknown } | undefined;
-  if (!result.ok || !Array.isArray(body?.roles)) throw new Error("Discord 역할 조회 실패");
+  if (!result.ok || !Array.isArray(body?.roles))
+    throw new Error("Discord 역할 조회 실패");
   return body.roles.filter((role): role is string => typeof role === "string");
 }
 
 // 생성·수정의 모든 경로에서 같은 발신자와 첨부 제한을 사용한다.
-async function sendMessageRequest(path: string, method: "POST" | "PATCH", payload: NonNullable<ReturnType<typeof messagePayload>>, options: DiscordMessageOptions) {
-  const body = method === "PATCH" ? { content: "", components: [], embeds: [], ...payload } : payload;
-  if (!options.attachment) return discordRequest(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, options.botToken);
+async function sendMessageRequest(
+  path: string,
+  method: "POST" | "PATCH",
+  payload: NonNullable<ReturnType<typeof messagePayload>>,
+  options: DiscordMessageOptions,
+) {
+  const body =
+    method === "PATCH"
+      ? { content: "", components: [], embeds: [], ...payload }
+      : payload;
+  if (!options.attachment)
+    return discordRequest(
+      path,
+      {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      options.botToken,
+    );
   const bytes = Buffer.from(options.attachment.base64, "base64");
-  if (!bytes.length || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) return { ok: false, error: "Discord 첨부 크기 제한 초과" };
+  if (!bytes.length || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES)
+    return { ok: false, error: "Discord 첨부 크기 제한 초과" };
   const form = new FormData();
-  form.set("payload_json", JSON.stringify({ ...body, attachments: [{ id: 0, filename: options.attachment.filename }] }));
-  form.set("files[0]", new Blob([bytes], { type: options.attachment.contentType }), options.attachment.filename);
+  form.set(
+    "payload_json",
+    JSON.stringify({
+      ...body,
+      attachments: [{ id: 0, filename: options.attachment.filename }],
+    }),
+  );
+  form.set(
+    "files[0]",
+    new Blob([bytes], { type: options.attachment.contentType }),
+    options.attachment.filename,
+  );
   return discordRequest(path, { method, body: form }, options.botToken);
 }

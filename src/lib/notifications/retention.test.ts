@@ -9,13 +9,16 @@ import {
 
 test("보존 정리는 DB가 추적한 30일 초과 Discord Bot 메시지만 선택한다", () => {
   const cutoff = new Date("2026-07-19T00:00:00Z");
-  assert.deepEqual(notificationRetentionWhere(cutoff, ["active-incident-message"]), {
-    provider: "DISCORD",
-    status: "SENT",
-    deletedAt: null,
-    sentAt: { lt: cutoff },
-    providerMessageId: { not: null, notIn: ["active-incident-message"] },
-  });
+  assert.deepEqual(
+    notificationRetentionWhere(cutoff, ["active-incident-message"]),
+    {
+      provider: "DISCORD",
+      status: "SENT",
+      deletedAt: null,
+      sentAt: { lt: cutoff },
+      providerMessageId: { not: null, notIn: ["active-incident-message"] },
+    },
+  );
 });
 
 test("30일 지난 리뷰 payload는 Discord 삭제 완료 또는 dead-letter일 때만 제거한다", () => {
@@ -28,6 +31,7 @@ test("30일 지난 리뷰 payload는 Discord 삭제 완료 또는 dead-letter일
       every: {
         OR: [
           { status: "DEAD_LETTER" },
+          { status: "SUPPRESSED" },
           { deletedAt: { not: null } },
         ],
       },
@@ -42,6 +46,9 @@ test("종료된 명령만 정리하며 활성 장애 카드와 game-factory 채�
     completedAt: { lt: cutoff },
     messageId: { not: null, notIn: ["active-incident-message"] },
   });
-  assert.equal(DISCORD_DESTINATIONS.includes("game-factory-builds" as never), false);
+  assert.equal(
+    DISCORD_DESTINATIONS.includes("game-factory-builds" as never),
+    false,
+  );
   assert.equal(DISCORD_DESTINATIONS.includes("user-reviews"), true);
 });

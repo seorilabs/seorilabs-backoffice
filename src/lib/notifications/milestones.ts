@@ -5,18 +5,24 @@ import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { OperationalEventInput } from "@/lib/platform/operational-events";
 import { kstLogStamp } from "@/lib/format/kst";
 
-const MILESTONE_LABELS: Partial<Record<OperationalEventInput["type"], string>> = {
-  "identity.created": "첫 Platform 계정 생성",
-  "iap.granted": "첫 IAP 지급 확정",
-  "ad.reward.delivered": "첫 광고 보상 지급",
-};
+const MILESTONE_LABELS: Partial<Record<OperationalEventInput["type"], string>> =
+  {
+    "identity.created": "첫 Platform 계정 생성",
+    "iap.granted": "첫 IAP 지급 확정",
+    "ad.reward.delivered": "첫 광고 보상 지급",
+  };
 
-export function milestoneLabelForEvent(type: OperationalEventInput["type"]): string | undefined {
+export function milestoneLabelForEvent(
+  type: OperationalEventInput["type"],
+): string | undefined {
   return MILESTONE_LABELS[type];
 }
 
 export function isDuplicateMilestoneError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
 }
 
 // 이미 마일스톤이 있는데 같은 이벤트가 다시 들어오는 경우다. Platform 재전송이
@@ -36,7 +42,9 @@ export async function recordOperationalMilestone(input: {
 }): Promise<boolean> {
   const label = milestoneLabelForEvent(input.event.type);
   if (!label) return false;
-  const sendMilestone = input.event.type === "identity.created";
+  const sendMilestone =
+    input.event.type === "identity.created" ||
+    input.event.type === "ad.reward.delivered";
   let milestoneId: string;
   try {
     const milestone = await prisma.operationalMilestone.create({
@@ -51,7 +59,9 @@ export async function recordOperationalMilestone(input: {
   } catch (error) {
     if (!isDuplicateMilestoneError(error)) throw error;
     const existing = await prisma.operationalMilestone.findUnique({
-      where: { appId_eventType: { appId: input.appId, eventType: input.event.type } },
+      where: {
+        appId_eventType: { appId: input.appId, eventType: input.event.type },
+      },
       select: { id: true, firstEventId: true, notifiedAt: true },
     });
     const action = milestoneRetryAction(existing, input.event.eventId);
@@ -60,7 +70,10 @@ export async function recordOperationalMilestone(input: {
     milestoneId = existing.id;
   }
   if (!sendMilestone) {
-    await prisma.operationalMilestone.update({ where: { id: milestoneId }, data: { notifiedAt: new Date() } });
+    await prisma.operationalMilestone.update({
+      where: { id: milestoneId },
+      data: { notifiedAt: new Date() },
+    });
     return true;
   }
   await enqueueNotification({
@@ -75,6 +88,9 @@ export async function recordOperationalMilestone(input: {
     },
     destinations: discordDestinations(["action-events"]),
   });
-  await prisma.operationalMilestone.update({ where: { id: milestoneId }, data: { notifiedAt: new Date() } });
+  await prisma.operationalMilestone.update({
+    where: { id: milestoneId },
+    data: { notifiedAt: new Date() },
+  });
   return true;
 }

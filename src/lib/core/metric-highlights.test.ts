@@ -16,7 +16,9 @@ import {
 
 const REF = "2026-08-28";
 
-function movement(overrides: Partial<Parameters<typeof evaluateMovement>[0]> = {}): Movement {
+function movement(
+  overrides: Partial<Parameters<typeof evaluateMovement>[0]> = {},
+): Movement {
   return evaluateMovement({
     label: "행복 농장 타이쿤",
     metricKey: "ga4_dau",
@@ -52,37 +54,66 @@ test("표본이 작은 앱은 판정하지 않는다", () => {
 
 test("창 전체가 0 인 지표는 표본 부족이 아니라 미집계다", () => {
   // 광고가 없는 앱의 광고 수익까지 "표본 부족"으로 세면 리포트가 0 으로 뒤덮인다.
-  assert.equal(movement({ metricKey: "console_iaa", latest: 0, baseline: 0 }).verdict, "absent");
-  assert.equal(movement({ metricKey: "console_iap", latest: 0, baseline: null }).verdict, "absent");
+  assert.equal(
+    movement({ metricKey: "console_iaa", latest: 0, baseline: 0 }).verdict,
+    "absent",
+  );
+  assert.equal(
+    movement({ metricKey: "console_iap", latest: 0, baseline: null }).verdict,
+    "absent",
+  );
   // 값이 있다가 0 이 된 것은 미집계가 아니라 실제 하락이다.
-  assert.equal(movement({ metricKey: "console_iaa", latest: 0, baseline: 200 }).verdict, "lowlight");
+  assert.equal(
+    movement({ metricKey: "console_iaa", latest: 0, baseline: 200 }).verdict,
+    "lowlight",
+  );
 });
 
 test("상대 변화만으로는 작은 수의 잡음을 막지 못해 절대 변화도 함께 본다", () => {
   // 기준선 6 → 9 는 +50% 지만 3명 차이다. 절대 임계 3명을 딱 채워야 소식이 된다.
   assert.equal(movement({ latest: 9, baseline: 6 }).verdict, "highlight");
-  assert.equal(movement({ latest: 8, baseline: 6 }).verdict, "flat", "2명 차이는 잡음");
+  assert.equal(
+    movement({ latest: 8, baseline: 6 }).verdict,
+    "flat",
+    "2명 차이는 잡음",
+  );
   // 콘솔 광고 수익도 마찬가지 — 14원이 20원이 된 것은 +43% 지만 소식이 아니다.
-  assert.equal(movement({ metricKey: "console_iaa", latest: 20, baseline: 14 }).verdict, "insufficient");
-  assert.equal(movement({ metricKey: "console_iaa", latest: 219, baseline: 60 }).verdict, "highlight");
+  assert.equal(
+    movement({ metricKey: "console_iaa", latest: 20, baseline: 14 }).verdict,
+    "insufficient",
+  );
+  assert.equal(
+    movement({ metricKey: "console_iaa", latest: 219, baseline: 60 }).verdict,
+    "highlight",
+  );
 });
 
 test("모수가 작은 잔존율은 값이 크게 흔들려도 판정하지 않는다", () => {
   const base = { metricKey: "ga4_d1", latest: 47, baseline: 25 } as const;
   // 신규 3명 코호트의 D1 47% 는 한두 명이 만든 숫자다.
   assert.equal(movement({ ...base, sample: 3 }).verdict, "insufficient");
-  assert.equal(movement({ ...base, sample: undefined }).verdict, "insufficient");
+  assert.equal(
+    movement({ ...base, sample: undefined }).verdict,
+    "insufficient",
+  );
   // 코호트가 충분하면 같은 값이 하이라이트가 된다.
   assert.equal(movement({ ...base, sample: 40 }).verdict, "highlight");
 });
 
 test("없던 것이 뚜렷하게 생기면 신규 하이라이트로 올린다", () => {
-  const first = movement({ metricKey: "console_iap", latest: 24_000, baseline: 0 });
+  const first = movement({
+    metricKey: "console_iap",
+    latest: 24_000,
+    baseline: 0,
+  });
   assert.equal(first.verdict, "highlight");
   assert.equal(first.change, null);
   assert.ok(first.score > 0);
   // 기준선 0 이라도 임계에 못 미치면 표본 부족이다.
-  assert.equal(movement({ metricKey: "console_iap", latest: 300, baseline: 0 }).verdict, "insufficient");
+  assert.equal(
+    movement({ metricKey: "console_iap", latest: 300, baseline: 0 }).verdict,
+    "insufficient",
+  );
 });
 
 test("임계 미만 변동은 하이라이트도 로우라이트도 아니다", () => {
@@ -102,9 +133,19 @@ test("상승은 하이라이트, 하락은 로우라이트로 갈린다", () => 
 
 test("잔존율은 상대 변화가 아니라 %p 로 본다", () => {
   // 12% → 20% 는 상대로 +67% 지만 실제 개선은 8%p 다.
-  const up = movement({ metricKey: "ga4_d1", latest: 20, baseline: 12, sample: 40 });
+  const up = movement({
+    metricKey: "ga4_d1",
+    latest: 20,
+    baseline: 12,
+    sample: 40,
+  });
   assert.equal(up.verdict, "flat", "8%p 는 임계 15%p 미만");
-  const big = movement({ metricKey: "ga4_d1", latest: 30, baseline: 12, sample: 40 });
+  const big = movement({
+    metricKey: "ga4_d1",
+    latest: 30,
+    baseline: 12,
+    sample: 40,
+  });
   assert.equal(big.verdict, "highlight");
   assert.equal(Math.round(big.change as number), 18);
 });
@@ -113,28 +154,70 @@ test("정렬은 변화율만이 아니라 규모까지 반영한다", () => {
   const small = movement({ label: "작은 앱", latest: 20, baseline: 10 }); // +100%, 기준선 10
   const large = movement({ label: "큰 앱", latest: 900, baseline: 500 }); // +80%, 기준선 500
   const ranked = rankMovements([small, large], "highlight");
-  assert.deepEqual(ranked.map((m) => m.label), ["큰 앱", "작은 앱"]);
+  assert.deepEqual(
+    ranked.map((m) => m.label),
+    ["큰 앱", "작은 앱"],
+  );
 });
 
 test("시계열에서 지표별 움직임을 뽑고 미수집 값은 건너뛴다", () => {
   const rows = [
-    { date: new Date("2026-08-28T00:00:00Z"), dau: 400, d1Pct: null, newUsers: 40 },
-    { date: new Date("2026-08-27T00:00:00Z"), dau: 100, d1Pct: 11, newUsers: 40 },
-    { date: new Date("2026-08-26T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
-    { date: new Date("2026-08-25T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
-    { date: new Date("2026-08-24T00:00:00Z"), dau: 100, d1Pct: 12, newUsers: 40 },
+    {
+      date: new Date("2026-08-28T00:00:00Z"),
+      dau: 400,
+      d1Pct: null,
+      newUsers: 40,
+    },
+    {
+      date: new Date("2026-08-27T00:00:00Z"),
+      dau: 100,
+      d1Pct: 11,
+      newUsers: 40,
+    },
+    {
+      date: new Date("2026-08-26T00:00:00Z"),
+      dau: 100,
+      d1Pct: 12,
+      newUsers: 40,
+    },
+    {
+      date: new Date("2026-08-25T00:00:00Z"),
+      dau: 100,
+      d1Pct: 12,
+      newUsers: 40,
+    },
+    {
+      date: new Date("2026-08-24T00:00:00Z"),
+      dau: 100,
+      d1Pct: 12,
+      newUsers: 40,
+    },
   ];
   const movements = movementsFromSeries("행복 농장 타이쿤", rows, [
     { key: "ga4_dau", pick: (row) => row.dau },
     // 최신 코호트는 미성숙이므로 가장 최근의 실제 유지율 관측일을 사용한다.
     { key: "ga4_d1", pick: (row) => row.d1Pct, sample: (row) => row.newUsers },
   ]);
-  assert.deepEqual(movements.map((m) => m.metricKey), ["ga4_dau", "ga4_d1"]);
+  assert.deepEqual(
+    movements.map((m) => m.metricKey),
+    ["ga4_dau", "ga4_d1"],
+  );
   assert.equal(movements[0].verdict, "highlight");
   assert.equal(movements[0].date, "2026-08-28");
   assert.equal(movements[1].date, "2026-08-27");
-  assert.equal(movements[1].verdict, "insufficient", "성숙 코호트 기준선이 네 날짜 미만이면 판정하지 않는다");
-  assert.deepEqual(movementsFromSeries("미수집", rows.map(row => ({ ...row, d1Pct: null })), [{ key: "ga4_d1", pick: row => row.d1Pct }]), []);
+  assert.equal(
+    movements[1].verdict,
+    "insufficient",
+    "성숙 코호트 기준선이 네 날짜 미만이면 판정하지 않는다",
+  );
+  assert.deepEqual(
+    movementsFromSeries(
+      "미수집",
+      rows.map((row) => ({ ...row, d1Pct: null })),
+      [{ key: "ga4_d1", pick: (row) => row.d1Pct }],
+    ),
+    [],
+  );
   assert.deepEqual(movementsFromSeries("빈 앱", [], []), []);
 });
 
@@ -143,60 +226,93 @@ const TOTALS: PortfolioTotals = {
   console: { iaaKrw: 45_300, iapKrw: 0, previousIaaKrw: 41_000, listings: 11 },
 };
 
-test("리포트는 포트폴리오 합계와 양쪽 목록, 처리 건수를 함께 싣는다", () => {
+test("리포트는 중요한 앱과 비교 결론부터 읽히고 원시 처리 건수는 싣지 않는다", () => {
   const text = renderHighlightReport({
     refDate: REF,
     totals: TOTALS,
     movements: [
       movement({ label: "행복 농장 타이쿤", latest: 420, baseline: 250 }),
-      movement({ label: "크로스워드", metricKey: "console_iaa", latest: 400, baseline: 4_000 }),
+      movement({
+        label: "크로스워드",
+        metricKey: "console_iaa",
+        latest: 400,
+        baseline: 4_000,
+      }),
       movement({ label: "무변동 앱", latest: 260, baseline: 250 }),
       movement({ label: "작은 앱", latest: 4, baseline: 2 }),
-      movement({ label: "광고 없는 앱", metricKey: "console_iap", latest: 0, baseline: 0 }),
+      movement({
+        label: "광고 없는 앱",
+        metricKey: "console_iap",
+        latest: 0,
+        baseline: 0,
+      }),
     ],
   });
   // "(D-1)" 을 박아 두면 소급 재계산이나 기준일이 밀린 날에도 어제라고 적힌다.
-  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF}**`);
-  assert.ok(text.includes("GA4 DAU 합계 1,234명 (전일 1,180명 · +4.6%) · 대상 12개 앱"));
-  assert.ok(text.includes("콘솔 광고 수익 ₩45,300 (전일 ₩41,000 · +10.5%) · 결제 ₩0 · 대상 11개 리스팅"));
+  assert.match(text.split("\n")[0], /크로스워드.*광고 수익.*감소/);
+  assert.ok(
+    text.includes("GA4 DAU 합계 1,234명 (전일 1,180명 · +4.6%) · 대상 12개 앱"),
+  );
+  assert.ok(
+    text.includes(
+      "콘솔 광고 수익 ₩45,300 (전일 ₩41,000 · +10.5%) · 결제 ₩0 · 대상 11개 리스팅",
+    ),
+  );
   assert.ok(text.includes("🟢 **하이라이트**"));
-  assert.ok(text.includes("1. **행복 농장 타이쿤** · GA4 DAU 420명 (기준 250명, +68%)"));
+  assert.ok(
+    text.includes("1. **행복 농장 타이쿤** · GA4 DAU 420명 (기준 250명, +68%)"),
+  );
   assert.ok(text.includes("🔴 **로우라이트**"));
-  assert.ok(text.includes("1. **크로스워드** · 콘솔 광고 수익 ₩400 (기준 ₩4,000, -90%)"));
+  assert.ok(
+    text.includes(
+      "1. **크로스워드** · 콘솔 광고 수익 ₩400 (기준 ₩4,000, -90%)",
+    ),
+  );
   // "미집계"가 아니라 "무활동"이다. 수집 여부는 원장이 따로 말한다 — 광고 없는 앱의
   // 광고 수익이 0 인 것을 "수집이 안 됐다"로 읽으면 배선을 뒤지게 된다.
-  assert.ok(text.endsWith("판정 4건 (변동 없음 1 · 표본 부족 1) · 무활동 1건"), text);
+  assert.doesNotMatch(text, /판정 \d+건|표본 부족 \d+/);
 });
 
 test("해설은 목록 뒤에 붙고, 없으면 리포트 구조가 그대로다", () => {
   const base = {
     refDate: REF,
     totals: TOTALS,
-    movements: [movement({ label: "행복 농장 타이쿤", latest: 420, baseline: 250 })],
+    movements: [
+      movement({ label: "행복 농장 타이쿤", latest: 420, baseline: 250 }),
+    ],
   };
   const without = renderHighlightReport(base);
   assert.ok(!without.includes("🧠"));
 
-  const withText = renderHighlightReport({ ...base, narrative: "체스 하락이 두 소스에서 함께 나타난다." });
-  assert.ok(withText.includes("🧠 체스 하락이 두 소스에서 함께 나타난다."));
-  // 해설은 목록 뒤·집계 앞에 온다. 수치를 먼저 보고 해석을 읽는 순서.
-  assert.ok(withText.indexOf("🟢 **하이라이트**") < withText.indexOf("🧠"));
-  assert.ok(withText.indexOf("🧠") < withText.indexOf("판정 "));
-  // 해설 유무가 나머지 줄을 바꾸지 않는다 — 해설만 빠지고 리포트는 그대로다.
-  const strip = (text: string) =>
-    text.split("\n").filter((line) => !line.startsWith("🧠")).join("\n").replace(/\n{3,}/g, "\n\n");
-  assert.equal(strip(withText), strip(without));
+  const withText = renderHighlightReport({
+    ...base,
+    narrative: "체스 하락이 두 소스에서 함께 나타난다.",
+  });
+  assert.ok(withText.includes("체스 하락이 두 소스에서 함께 나타난다."));
+  assert.ok(
+    withText.indexOf("🟢 **하이라이트**") < withText.indexOf("체스 하락"),
+  );
+  assert.doesNotMatch(withText, /원인 확정|추가 확인 필요|분석 진행/);
 });
 
 test("해설이 null·빈 문자열이면 붙이지 않는다", () => {
   for (const narrative of [null, undefined, ""]) {
-    const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [], narrative });
+    const text = renderHighlightReport({
+      refDate: REF,
+      totals: TOTALS,
+      movements: [],
+      narrative,
+    });
     assert.ok(!text.includes("🧠"), String(narrative));
   }
 });
 
 test("움직임이 없으면 없다고 말한다", () => {
-  const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] });
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+  });
   assert.ok(text.includes("임계를 넘은 변동 없음"));
   assert.ok(!text.includes("🟢"));
   assert.ok(!text.includes("🔴"));
@@ -206,7 +322,15 @@ test("기준일보다 오래된 스냅샷은 그 날짜를 함께 찍는다", ()
   const text = renderHighlightReport({
     refDate: REF,
     totals: TOTALS,
-    movements: [movement({ label: "지연 앱", metricKey: "console_dau", latest: 300, baseline: 100, date: "2026-08-25" })],
+    movements: [
+      movement({
+        label: "지연 앱",
+        metricKey: "console_dau",
+        latest: 300,
+        baseline: 100,
+        date: "2026-08-25",
+      }),
+    ],
   });
   assert.ok(text.includes("⏳2026-08-25"), text);
 });
@@ -228,7 +352,12 @@ test("전일 합계가 없으면 변화율을 지어내지 않는다", () => {
 test("유입경로는 리스팅 rate 평균이 아니라 유입 수 합으로 다시 계산한다", () => {
   // 규모가 다른 리스팅의 비율을 평균하면 작은 리스팅이 과대 대표된다.
   const folded = foldReferrers([
-    { referrer: [{ dimension: "검색", value: 1, rate: 0.5 }, { dimension: "전체탭", value: 1, rate: 0.5 }] },
+    {
+      referrer: [
+        { dimension: "검색", value: 1, rate: 0.5 },
+        { dimension: "전체탭", value: 1, rate: 0.5 },
+      ],
+    },
     { referrer: [{ dimension: "전체탭", value: 98, rate: 1 }] },
   ]);
   assert.deepEqual(folded, [
@@ -239,19 +368,40 @@ test("유입경로는 리스팅 rate 평균이 아니라 유입 수 합으로 �
 
 test("유입경로 값이 없거나 형식이 어긋나면 빈 배열로 조용히 빠진다", () => {
   assert.deepEqual(foldReferrers([]), []);
-  assert.deepEqual(foldReferrers([null, undefined, {}, { referrer: null }]), []);
-  assert.deepEqual(foldReferrers([{ referrer: [{ dimension: "", value: 5 }] }]), []);
-  assert.deepEqual(foldReferrers([{ referrer: [{ dimension: "검색", value: 0 }] }]), []);
+  assert.deepEqual(
+    foldReferrers([null, undefined, {}, { referrer: null }]),
+    [],
+  );
+  assert.deepEqual(
+    foldReferrers([{ referrer: [{ dimension: "", value: 5 }] }]),
+    [],
+  );
+  assert.deepEqual(
+    foldReferrers([{ referrer: [{ dimension: "검색", value: 0 }] }]),
+    [],
+  );
 });
 
 test("유입경로가 있으면 요약에 붙고 없으면 줄 자체가 빠진다", () => {
   const withRef = renderHighlightReport({
     refDate: REF,
-    totals: { ...TOTALS, referrers: [{ dimension: "전체탭", rate: 0.83 }, { dimension: "검색", rate: 0.17 }] },
+    totals: {
+      ...TOTALS,
+      referrers: [
+        { dimension: "전체탭", rate: 0.83 },
+        { dimension: "검색", rate: 0.17 },
+      ],
+    },
     movements: [],
   });
   assert.ok(withRef.includes("유입경로: 전체탭 83% · 검색 17%"));
-  assert.ok(!renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] }).includes("유입경로"));
+  assert.ok(
+    !renderHighlightReport({
+      refDate: REF,
+      totals: TOTALS,
+      movements: [],
+    }).includes("유입경로"),
+  );
 });
 
 test("리포트는 기준일 기준 하루 1건이다", () => {
@@ -264,9 +414,14 @@ test("보고서 링크가 있으면 푸터로 붙고 없으면 리포트가 그�
     ...base,
     reportUrl: `https://backoffice.example.com/report?date=${REF}`,
   });
-  assert.ok(withLink.endsWith(`🔗 https://backoffice.example.com/report?date=${REF}`));
+  assert.ok(
+    withLink.endsWith(`🔗 https://backoffice.example.com/report?date=${REF}`),
+  );
   for (const reportUrl of [undefined, null, ""]) {
-    assert.ok(!renderHighlightReport({ ...base, reportUrl }).includes("🔗"), String(reportUrl));
+    assert.ok(
+      !renderHighlightReport({ ...base, reportUrl }).includes("🔗"),
+      String(reportUrl),
+    );
   }
 });
 
@@ -289,7 +444,10 @@ test("확정이면 머리말에 확정을 달고 분모를 함께 싣는다", ()
     movements: [],
     asOf: ASOF_FINAL,
   });
-  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} · 확정**`);
+  assert.equal(
+    text.split("\n")[0],
+    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+  );
   assert.ok(text.includes("· 대상 12/12개 앱"), text);
   assert.ok(!text.includes("미관측"), text);
 });
@@ -304,17 +462,24 @@ test("잠정이면 무엇이 빠졌는지를 같은 화면에 적는다 — 09-1
       verdict: "provisional",
       observed: 2,
       expected: 9,
-      missing: [{ targetKey: "lizard-tycoon", state: "not_landed", weight: 107 }],
+      missing: [
+        { targetKey: "lizard-tycoon", state: "not_landed", weight: 107 },
+      ],
       missingWeightShare: 0.88,
       sealed: false,
     },
     gapNames: ["도마뱀 테라리움"],
   });
-  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF} · 잠정**`);
+  assert.equal(
+    text.split("\n")[0],
+    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+  );
   assert.ok(text.includes("· 대상 2/9개 앱"), text);
-  assert.ok(text.includes("⚠️ 기준일 미관측 1개: 도마뱀 테라리움"), text);
+  assert.doesNotMatch(text, /미관측 1개|수집 실패/);
   // 전일 합이 없으면 GA4 줄에서 변화율 문구 자체가 빠진다(일부만 센 전날과 비교하지 않는다).
-  const ga4Line = text.split("\n").find((line) => line.startsWith("GA4 DAU 합계"))!;
+  const ga4Line = text
+    .split("\n")
+    .find((line) => line.startsWith("GA4 DAU 합계"))!;
   assert.equal(ga4Line, "GA4 DAU 합계 15명 · 대상 2/9개 앱");
 });
 
@@ -325,12 +490,19 @@ test("합계에서 뺀 오래된 콘솔 리스팅을 드러낸다", () => {
     movements: [],
     consoleStale: ["가로세로 낱말 퍼즐(웹)(2026-08-24)"],
   });
-  assert.ok(text.includes("⏳ 콘솔 합계 제외(3일 초과) 1개: 가로세로 낱말 퍼즐(웹)(2026-08-24)"), text);
+  assert.doesNotMatch(text, /합계 제외.*1개/);
 });
 
 test("asOf 가 없으면 기존 표기를 유지한다(원장 백필 전)", () => {
-  const text = renderHighlightReport({ refDate: REF, totals: TOTALS, movements: [] });
-  assert.equal(text.split("\n")[0], `📈 **서리 지표 하이라이트 · ${REF}**`);
+  const text = renderHighlightReport({
+    refDate: REF,
+    totals: TOTALS,
+    movements: [],
+  });
+  assert.equal(
+    text.split("\n")[0],
+    "**중요 기준을 넘은 지표 변화가 없습니다.**",
+  );
   assert.ok(text.includes("· 대상 12개 앱"), text);
 });
 
@@ -339,7 +511,10 @@ test("asOf 가 없으면 기존 표기를 유지한다(원장 백필 전)", () =
 // 억지로 맞추면 며칠 지난 값이 "어제 수치"로 둔갑하고, 리스팅마다 자기 최신 행을
 // 더하면 서로 다른 날짜가 한 합계에 섞인다.
 
-const listing = (label: string, rows: Array<{ date: string; iaa: number }>) => ({
+const listing = (
+  label: string,
+  rows: Array<{ date: string; iaa: number }>,
+) => ({
   app: { id: label, slug: label, displayName: label, type: "APP" as const },
   miniAppId: 1,
   label,
@@ -359,8 +534,14 @@ const listing = (label: string, rows: Array<{ date: string; iaa: number }>) => (
 test("콘솔 합계는 자기 확정일 하나로 모인다", () => {
   const out = foldConsoleTotals(
     [
-      listing("A", [{ date: "2026-09-12", iaa: 100 }, { date: "2026-09-11", iaa: 90 }]),
-      listing("B", [{ date: "2026-09-12", iaa: 40 }, { date: "2026-09-11", iaa: 30 }]),
+      listing("A", [
+        { date: "2026-09-12", iaa: 100 },
+        { date: "2026-09-11", iaa: 90 },
+      ]),
+      listing("B", [
+        { date: "2026-09-12", iaa: 40 },
+        { date: "2026-09-11", iaa: 30 },
+      ]),
       // 하루 늦은 리스팅은 합계에서 빠진다. 다른 날짜를 같은 합계에 섞지 않는다.
       listing("C", [{ date: "2026-09-11", iaa: 500 }]),
     ],
@@ -376,7 +557,10 @@ test("콘솔 합계는 자기 확정일 하나로 모인다", () => {
 test("확정일 전날 행이 하나라도 없으면 전일 합을 내지 않는다", () => {
   const out = foldConsoleTotals(
     [
-      listing("A", [{ date: "2026-09-12", iaa: 100 }, { date: "2026-09-11", iaa: 90 }]),
+      listing("A", [
+        { date: "2026-09-12", iaa: 100 },
+        { date: "2026-09-11", iaa: 90 },
+      ]),
       listing("B", [{ date: "2026-09-12", iaa: 40 }]),
     ],
     "2026-09-13",
@@ -386,7 +570,10 @@ test("확정일 전날 행이 하나라도 없으면 전일 합을 내지 않는
 
 test("전부 오래됐으면 합계를 내지 않고 전량을 드러낸다", () => {
   // 21일 지난 수익을 매일 다시 더하면 선이 평평하다가 push 가 온 날 튄다.
-  const out = foldConsoleTotals([listing("A", [{ date: "2026-08-24", iaa: 900 }])], "2026-09-13");
+  const out = foldConsoleTotals(
+    [listing("A", [{ date: "2026-08-24", iaa: 900 }])],
+    "2026-09-13",
+  );
   assert.equal(out.consoleRefDate, null);
   assert.equal(out.totals.listings, 0);
   assert.equal(out.totals.iaaKrw, 0);

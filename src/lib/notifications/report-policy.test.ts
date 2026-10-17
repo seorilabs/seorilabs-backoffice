@@ -1,0 +1,95 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { reportDecision, signalDecision } from "./report-policy";
+
+test("평점 작은 모수·수집 상태·출시 후 단순 관측은 내부 기록", () => {
+  for (const kind of [
+    "review-rating-change",
+    "source-stale",
+    "source-recovery",
+    "release-impact",
+    "keyword-change",
+    "review-change",
+    "service-failure",
+    "submission-approved",
+  ])
+    assert.equal(signalDecision(kind).send, false, kind);
+});
+test("전송 대기 중인 구형 잡음도 제외하고 실제 피해·승인·요청은 보존", () => {
+  for (const dedupeKey of [
+    "console-collection:run1",
+    "metrics:operations:2026-10-17",
+    "metrics:daily:2026-10-16",
+    "iap-row:x",
+    "iap-daily:iap:a:day",
+    "identity-row:x",
+    "identity-daily:a:day",
+    "stage-nudge:a:QA:day",
+  ])
+    assert.equal(
+      reportDecision({
+        kind: "OPERATIONAL_EVENT",
+        dedupeKey,
+        payload: { text: "old" },
+      }).send,
+      false,
+      dedupeKey,
+    );
+  for (const input of [
+    { kind: "INCIDENT", payload: { incidentId: "x" } },
+    { kind: "OPS_ALERT", payload: { deploymentApprovalId: "x" } },
+    { kind: "DEPLOY_COMPLETION", payload: { releaseRecordId: "x" } },
+  ])
+    assert.equal(reportDecision(input).send, true);
+});
+test("보고 중지는 실제 피해와 승인 응답을 유지", () => {
+  assert.equal(
+    reportDecision({ kind: "INCIDENT", payload: {} }, true).send,
+    true,
+  );
+  assert.equal(
+    reportDecision(
+      { kind: "OPS_ALERT", payload: { deploymentApprovalId: "x" } },
+      true,
+    ).send,
+    true,
+  );
+  assert.equal(
+    reportDecision(
+      {
+        kind: "OPS_ALERT",
+        payload: { report: { category: "change", reason: "유의한 변화" } },
+      },
+      true,
+    ).send,
+    false,
+  );
+});
+test("확실한 결론이 없으면 분석 문장을 채우지 않음", () => {
+  assert.equal(
+    reportDecision({
+      kind: "OPS_ALERT",
+      payload: { report: { category: "internal", reason: "비교 표본 부족" } },
+    }).send,
+    false,
+  );
+  assert.equal(signalDecision("metric-change").send, true);
+  assert.equal(signalDecision("support-failure").send, true);
+});
+
+test("개발 승인 버튼은 보고 중지 중에도 응답 가능해야 한다", () => {
+  assert.equal(
+    reportDecision(
+      {
+        kind: "OPS_ALERT",
+        payload: {
+          components: [
+            { components: [{ custom_id: "approval:planning:issue1" }] },
+          ],
+        },
+      },
+      true,
+    ).send,
+    true,
+  );
+});

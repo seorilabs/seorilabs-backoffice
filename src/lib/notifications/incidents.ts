@@ -3,19 +3,41 @@ import { prisma } from "@/lib/prisma";
 import { kstDateTime } from "@/lib/format/kst";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import type { DiscordRender } from "@/lib/notifications/format";
-import { discordDestinations, isDiscordDestinationKey } from "@/lib/notifications/destinations";
+import {
+  discordDestinations,
+  isDiscordDestinationKey,
+} from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { DiscordActionRow } from "@/lib/notifications/discord";
 
-export function incidentComponents(incident: Pick<OperationalIncident, "id" | "status" | "assignedDiscordUserId">): DiscordActionRow[] {
+export function incidentComponents(
+  incident: Pick<
+    OperationalIncident,
+    "id" | "status" | "assignedDiscordUserId"
+  >,
+): DiscordActionRow[] {
   if (incident.status === "RECOVERED") return [];
-  return [{
-    type: 1,
-    components: [
-      { type: 2, style: 2, label: incident.status === "OPEN" ? "확인" : "확인됨", custom_id: `incident:ack:${incident.id}`, disabled: incident.status !== "OPEN" },
-      { type: 2, style: 1, label: incident.assignedDiscordUserId ? "담당 지정됨" : "내가 담당", custom_id: `incident:assign:${incident.id}`, disabled: Boolean(incident.assignedDiscordUserId) },
-    ],
-  }];
+  return [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 2,
+          label: incident.status === "OPEN" ? "확인" : "확인됨",
+          custom_id: `incident:ack:${incident.id}`,
+          disabled: incident.status !== "OPEN",
+        },
+        {
+          type: 2,
+          style: 1,
+          label: incident.assignedDiscordUserId ? "담당 지정됨" : "내가 담당",
+          custom_id: `incident:assign:${incident.id}`,
+          disabled: Boolean(incident.assignedDiscordUserId),
+        },
+      ],
+    },
+  ];
 }
 
 /**
@@ -26,17 +48,56 @@ export function incidentComponents(incident: Pick<OperationalIncident, "id" | "s
  * 흘러가는 편이, 고정된 "장애색" 하나보다 지금 상태를 정확히 전달한다.
  */
 export function incidentRender(incident: OperationalIncident): DiscordRender {
-  const icon = incident.status === "RECOVERED" ? "✅" : incident.severity === "critical" ? "🚨" : "⚠️";
-  const state = incident.status === "OPEN" ? "발생" : incident.status === "ACKNOWLEDGED" ? "확인됨" : "복구";
-  const color = incident.status === "RECOVERED"
-    ? EMBED_COLOR.SUCCESS
-    : incident.status === "ACKNOWLEDGED" || incident.severity !== "critical"
-      ? EMBED_COLOR.WARNING
-      : EMBED_COLOR.FAILURE;
-  const lines = [`상태: **${state}** · 최초 ${kstDateTime(incident.firstDetectedAt)}`];
-  if (incident.acknowledgedBy) lines.push(`확인: <@${incident.acknowledgedBy}>`);
-  if (incident.assignedDiscordUserId) lines.push(`담당: <@${incident.assignedDiscordUserId}>`);
-  if (incident.recoveredAt) lines.push(`복구 시각: ${kstDateTime(incident.recoveredAt)}`);
+  const icon =
+    incident.status === "RECOVERED"
+      ? "✅"
+      : incident.severity === "critical"
+        ? "🚨"
+        : "⚠️";
+  const state =
+    incident.status === "OPEN"
+      ? "발생"
+      : incident.status === "ACKNOWLEDGED"
+        ? "확인됨"
+        : "복구";
+  const color =
+    incident.status === "RECOVERED"
+      ? EMBED_COLOR.SUCCESS
+      : incident.status === "ACKNOWLEDGED" || incident.severity !== "critical"
+        ? EMBED_COLOR.WARNING
+        : EMBED_COLOR.FAILURE;
+  const evidence =
+    incident.evidence &&
+    typeof incident.evidence === "object" &&
+    !Array.isArray(incident.evidence)
+      ? (incident.evidence as Prisma.JsonObject)
+      : {};
+  const lines = [
+    `상태: **${state}** · 최초 ${kstDateTime(incident.firstDetectedAt)}`,
+  ];
+  if (incident.source === "metrics")
+    lines.push("지표 이상입니다. 서비스 이용 불가가 확인된 것은 아닙니다.");
+  if (evidence.impact) lines.push(`영향: ${String(evidence.impact)}`);
+  if (evidence.action && incident.status !== "RECOVERED")
+    lines.push(`조치: ${String(evidence.action)}`);
+  const facts = Object.entries(evidence)
+    .filter(
+      ([key, value]) =>
+        !["impact", "action"].includes(key) &&
+        ["string", "number", "boolean"].includes(typeof value),
+    )
+    .slice(0, 6);
+  if (facts.length)
+    lines.push(
+      "근거: " +
+        facts.map(([key, value]) => `${key} ${String(value)}`).join(" · "),
+    );
+  if (incident.acknowledgedBy)
+    lines.push(`확인: <@${incident.acknowledgedBy}>`);
+  if (incident.assignedDiscordUserId)
+    lines.push(`담당: <@${incident.assignedDiscordUserId}>`);
+  if (incident.recoveredAt)
+    lines.push(`복구 시각: ${kstDateTime(incident.recoveredAt)}`);
   return {
     text: lines.join("\n"),
     embed: {
@@ -49,15 +110,18 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
   };
 }
 
-export function incidentDeliveryMode(providerMessageId: string | null):
-  | { kind: "edit"; messageId: string }
-  | { kind: "create" } {
+export function incidentDeliveryMode(
+  providerMessageId: string | null,
+): { kind: "edit"; messageId: string } | { kind: "create" } {
   return providerMessageId
     ? { kind: "edit", messageId: providerMessageId }
     : { kind: "create" };
 }
 
-async function enqueueIncident(incident: OperationalIncident, signalId: string): Promise<void> {
+async function enqueueIncident(
+  incident: OperationalIncident,
+  signalId: string,
+): Promise<void> {
   await enqueueNotification({
     dedupeKey: `incident:${incident.id}:${signalId}`,
     kind: "INCIDENT",
@@ -66,7 +130,9 @@ async function enqueueIncident(incident: OperationalIncident, signalId: string):
     // 목적지는 장애가 만들어질 때 고정된 값을 그대로 쓴다. 살아 있는 카드를
     // 중간에 다른 채널로 옮기면 그 카드의 수명주기 편집이 끊긴다.
     destinations: discordDestinations([
-      isDiscordDestinationKey(incident.destinationKey) ? incident.destinationKey : "ops-alerts",
+      isDiscordDestinationKey(incident.destinationKey)
+        ? incident.destinationKey
+        : "ops-alerts",
     ]),
   });
 }
@@ -109,6 +175,7 @@ export async function recordIncident(input: {
           severity: input.severity,
           summary: input.summary,
           evidence: input.evidence,
+          destinationKey: input.source === "metrics" ? "app-ops" : "ops-alerts",
           firstDetectedAt: input.detectedAt,
           lastDetectedAt: input.detectedAt,
         },
@@ -125,20 +192,35 @@ export async function recoverIncident(input: {
   recoveredAt: Date;
 }): Promise<OperationalIncident | null> {
   const active = await prisma.operationalIncident.findFirst({
-    where: { source: input.source, kind: input.kind, appId: input.appId ?? null, status: { in: ["OPEN", "ACKNOWLEDGED"] } },
+    where: {
+      source: input.source,
+      kind: input.kind,
+      appId: input.appId ?? null,
+      status: { in: ["OPEN", "ACKNOWLEDGED"] },
+    },
     orderBy: { firstDetectedAt: "desc" },
   });
   if (!active) return null;
   const incident = await prisma.operationalIncident.update({
     where: { id: active.id },
-    data: { status: "RECOVERED", recoveredAt: input.recoveredAt, lastDetectedAt: input.recoveredAt },
+    data: {
+      status: "RECOVERED",
+      recoveredAt: input.recoveredAt,
+      lastDetectedAt: input.recoveredAt,
+    },
   });
   await enqueueIncident(incident, input.signalId);
   return incident;
 }
 
-export async function acknowledgeIncident(id: string, actorDiscordUserId: string, assignSelf: boolean) {
-  const incident = await prisma.operationalIncident.findUnique({ where: { id } });
+export async function acknowledgeIncident(
+  id: string,
+  actorDiscordUserId: string,
+  assignSelf: boolean,
+) {
+  const incident = await prisma.operationalIncident.findUnique({
+    where: { id },
+  });
   if (!incident) throw new Error("장애를 찾을 수 없습니다.");
   if (incident.status === "RECOVERED") return incident;
   return prisma.operationalIncident.update({

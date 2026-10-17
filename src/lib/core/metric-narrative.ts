@@ -34,9 +34,10 @@ function ga4CoverageLines(
   const lines = [`GA4 기준일 스냅샷: ${total}개 앱 중 ${onRefDateApps}개 보유`];
   if (gaps.length === 0) return lines;
   const named = gaps.slice(0, MAX_NAMED_GAPS).map(({ app, latestDate }) => {
-    const state = latestDate === null
-      ? "수집 없음"
-      : `${metricDaysBetween(refDate, dbDay(latestDate))}일 지연`;
+    const state =
+      latestDate === null
+        ? "수집 없음"
+        : `${metricDaysBetween(refDate, dbDay(latestDate))}일 지연`;
     return `${app.displayName}(${app.type}, ${state})`;
   });
   lines.push(
@@ -56,9 +57,13 @@ function consoleCoverageLines(
   if (series.length === 0) {
     return [`콘솔 스냅샷: ${listings}개 리스팅 모두 수집 없음`];
   }
-  const latestMs = Math.max(...series.map((one) => one.rowsDesc[0].date.getTime()));
+  const latestMs = Math.max(
+    ...series.map((one) => one.rowsDesc[0].date.getTime()),
+  );
   const consoleRefDate = dbDay(new Date(latestMs));
-  const onRef = series.filter((one) => dbDay(one.rowsDesc[0].date) === consoleRefDate).length;
+  const onRef = series.filter(
+    (one) => dbDay(one.rowsDesc[0].date) === consoleRefDate,
+  ).length;
   const lines = [
     `콘솔 최신 스냅샷 기준일 ${consoleRefDate}` +
       ` · 보고서 기준일과 ${metricDaysBetween(refDate, dbDay(new Date(latestMs)))}일 차이` +
@@ -68,13 +73,16 @@ function consoleCoverageLines(
     const named = missing.slice(0, MAX_NAMED_GAPS);
     lines.push(
       `콘솔 수집이 한 번도 없는 리스팅 ${missing.length}개: ${named.join(", ")}` +
-        (missing.length > named.length ? ` 외 ${missing.length - named.length}개` : ""),
+        (missing.length > named.length
+          ? ` 외 ${missing.length - named.length}개`
+          : ""),
     );
   }
   return lines;
 }
 
 export interface NarrativeInput {
+  contextFacts?: Evidence[];
   refDate: string;
   totals: PortfolioTotals;
   movements: readonly Movement[];
@@ -96,11 +104,19 @@ export function narrativeFacts(input: NarrativeInput): string {
     lines.push(
       "",
       "수집 상태:",
-      ...ga4CoverageLines(input.refDate, input.ga4Series.length, input.ga4Gaps ?? []),
+      ...ga4CoverageLines(
+        input.refDate,
+        input.ga4Series.length,
+        input.ga4Gaps ?? [],
+      ),
     );
     if (input.consoleSeries) {
       lines.push(
-        ...consoleCoverageLines(input.refDate, input.consoleSeries, input.consoleMissing ?? []),
+        ...consoleCoverageLines(
+          input.refDate,
+          input.consoleSeries,
+          input.consoleMissing ?? [],
+        ),
       );
     }
   }
@@ -113,11 +129,12 @@ export function narrativeFacts(input: NarrativeInput): string {
   }
   lines.push("", "임계를 넘은 변동:");
   for (const m of judged.slice(0, MAX_MOVEMENTS)) {
-    const delta = m.change == null
-      ? "신규"
-      : m.spec.pointScale
-        ? `${m.change >= 0 ? "+" : ""}${m.change.toFixed(1)}%p`
-        : `${m.change >= 0 ? "+" : ""}${Math.round(m.change)}%`;
+    const delta =
+      m.change == null
+        ? "신규"
+        : m.spec.pointScale
+          ? `${m.change >= 0 ? "+" : ""}${m.change.toFixed(1)}%p`
+          : `${m.change >= 0 ? "+" : ""}${Math.round(m.change)}%`;
     lines.push(
       `- ${m.label} · ${m.spec.source} ${m.spec.ko}: ${m.spec.format(m.latest)}` +
         (m.baseline == null ? "" : ` (기준 ${m.spec.format(m.baseline)})`) +
@@ -125,33 +142,74 @@ export function narrativeFacts(input: NarrativeInput): string {
     );
   }
   const flat = input.movements.filter((m) => m.verdict === "flat").length;
-  const insufficient = input.movements.filter((m) => m.verdict === "insufficient").length;
-  lines.push("", `판정에서 제외: 변동 없음 ${flat}건 · 표본 부족 ${insufficient}건`);
+  const insufficient = input.movements.filter(
+    (m) => m.verdict === "insufficient",
+  ).length;
+  lines.push(
+    "",
+    `판정에서 제외: 변동 없음 ${flat}건 · 표본 부족 ${insufficient}건`,
+  );
   return lines.join("\n");
 }
 
-export const NARRATIVE_PROMPT_VERSION = 2;
+export const NARRATIVE_PROMPT_VERSION = 3;
 
 export function narrativeEvidence(input: NarrativeInput): Evidence[] {
   const facts: Evidence[] = [
-    { id: "active", label: "앱별 활성 합계", value: `${input.totals.ga4Dau.latest}명 - 중복 사용자 포함`, source: `GA4 ${input.refDate}` },
-    { id: "coverage", label: "기준일 자료", value: `${input.totals.ga4Dau.apps}개 앱 수집 · ${(input.ga4Gaps ?? []).length}개 미도착`, source: `MetricCollectionLedger ${input.refDate}` },
+    {
+      id: "active",
+      label: "앱별 활성 합계",
+      value: `${input.totals.ga4Dau.latest}명 - 중복 사용자 포함`,
+      source: `GA4 ${input.refDate}`,
+    },
+    {
+      id: "coverage",
+      label: "기준일 자료",
+      value: `${input.totals.ga4Dau.apps}개 앱 수집 · ${(input.ga4Gaps ?? []).length}개 미도착`,
+      source: `MetricCollectionLedger ${input.refDate}`,
+    },
   ];
-  for (const [index, m] of input.movements.filter((m) => m.verdict === "highlight" || m.verdict === "lowlight").slice(0, 5).entries()) facts.push({
-    id: `movement_${index}`, label: `${m.label} ${m.spec.ko}`.slice(0, 100), value: `${m.spec.format(m.latest)} · 기준 ${m.baseline == null ? "표본 부족" : m.spec.format(m.baseline)}`, source: `${m.spec.source} ${input.refDate}`,
-  });
-  return facts;
+  for (const [index, m] of input.movements
+    .filter((m) => m.verdict === "highlight" || m.verdict === "lowlight")
+    .slice(0, 5)
+    .entries())
+    facts.push({
+      id: `movement_${index}`,
+      label: `${m.label} ${m.spec.ko}`.slice(0, 100),
+      value: `${m.spec.format(m.latest)} · 기준 ${m.baseline == null ? "표본 부족" : m.spec.format(m.baseline)}`,
+      source: `${m.spec.source} ${input.refDate} · 직전 7일 중앙값 · 최소 4일 관측`,
+    });
+  facts.push(...(input.contextFacts ?? []));
+  return facts.slice(0, 20);
 }
 export function narrativeSkeleton(input: NarrativeInput): string {
-  const facts = narrativeEvidence(input);
-  return renderInsight({ bullets: [
-    { kind: "fact", text: "{active} 관측됨", evidenceIds: ["active"] },
-    { kind: "fact", text: "{coverage} 확인됨", evidenceIds: ["coverage"] },
-    { kind: "action", text: (input.ga4Gaps?.length ?? 0) > 0 ? "수집 상태를 먼저 확인 필요" : "앱별 변동과 획득 경로 비교 필요", evidenceIds: ["coverage"] },
-  ] }, facts);
+  return input.movements
+    .filter((m) => m.verdict === "highlight" || m.verdict === "lowlight")
+    .slice(0, 3)
+    .map(
+      (m) =>
+        `${m.label} ${m.spec.ko}: ${m.spec.format(m.latest)} · 기준 ${m.baseline === null ? "표본 부족" : m.spec.format(m.baseline)}`,
+    )
+    .join("\n");
 }
-export interface MetricNarrative { text: string; fallback: boolean; provider: string | null; model: string | null; promptVersion: number; }
-export async function metricNarrative(input: NarrativeInput): Promise<MetricNarrative> {
+export interface MetricNarrative {
+  text: string;
+  fallback: boolean;
+  provider: string | null;
+  model: string | null;
+  promptVersion: number;
+}
+export async function metricNarrative(
+  input: NarrativeInput,
+): Promise<MetricNarrative> {
   const made = await generateInsight(narrativeEvidence(input), "growth");
-  return { text: made.fallback ? narrativeSkeleton(input) : renderInsight(made.content, narrativeEvidence(input)), fallback: made.fallback, provider: made.fallback ? null : env.chatLlmProvider(), model: made.fallback ? null : llmChatModel(), promptVersion: NARRATIVE_PROMPT_VERSION };
+  return {
+    text: made.fallback
+      ? narrativeSkeleton(input)
+      : renderInsight(made.content, narrativeEvidence(input)),
+    fallback: made.fallback,
+    provider: made.fallback ? null : env.chatLlmProvider(),
+    model: made.fallback ? null : llmChatModel(),
+    promptVersion: NARRATIVE_PROMPT_VERSION,
+  };
 }
