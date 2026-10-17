@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "b0b391d1e3eb9d03309d8b56e52ea973a149faff",
+  "changedFeatures": [
+    "ai-draft-generation-and-github-registration",
+    "insight-signals-budget-and-worker",
+    "metric-report-highlights-finance-liveops",
+    "discord-command-registration-and-deferred-reads",
+    "vault-search-ai-and-writer",
+    "settings-diagnostics-and-admin-controls"
+  ],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["service"],
+    "until": "test-track"
+  }
+}

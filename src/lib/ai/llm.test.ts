@@ -4,8 +4,12 @@ import { llmChat, llmChatConfigured, llmChatModel, LlmNotConfiguredError } from 
 
 const ENV_KEYS = [
   "CHAT_LLM_PROVIDER",
-  "FEATURE_MINIMAX_ENABLED",
-  "MINIMAX_API_KEY",
+  "FEATURE_CLAUDE_ENABLED",
+  "CLAUDE_API_KEY_IH",
+  "CLAUDE_CHAT_MODEL",
+  "CLAUDE_API_KEY_IH_BACKUP",
+  "CLAUDE_API_KEY_SYOUS",
+  "ANTHROPIC_API_KEY",
   "FEATURE_GEMINI_ENABLED",
   "GEMINI_API_KEY",
 ] as const;
@@ -28,10 +32,24 @@ function withEnv(values: Partial<Record<(typeof ENV_KEYS)[number], string>>, run
   return result;
 }
 
-test("기본 provider는 minimax이고 구성·모델 판정이 provider를 따른다", () => {
-  return withEnv({ FEATURE_MINIMAX_ENABLED: "true", MINIMAX_API_KEY: "k" }, () => {
+test("기본 provider는 anthropic이고 정확한 IH 키로 구성한다", () => {
+  return withEnv({ FEATURE_CLAUDE_ENABLED: "true", CLAUDE_API_KEY_IH: "k" }, () => {
     assert.equal(llmChatConfigured(), true);
-    assert.equal(llmChatModel(), "MiniMax-M3");
+    assert.equal(llmChatModel(), "claude-sonnet-5-5");
+  });
+});
+
+test("IH 키가 없으면 다른 Claude 키나 Gemini로 자동 전환하지 않는다", async () => {
+  await withEnv({
+    FEATURE_CLAUDE_ENABLED: "true",
+    CLAUDE_API_KEY_IH_BACKUP: "backup-key",
+    CLAUDE_API_KEY_SYOUS: "other-key",
+    ANTHROPIC_API_KEY: "default-key",
+    FEATURE_GEMINI_ENABLED: "true",
+    GEMINI_API_KEY: "gemini-key",
+  }, async () => {
+    assert.equal(llmChatConfigured(), false);
+    await assert.rejects(llmChat([{ role: "user", content: "질문" }]), LlmNotConfiguredError);
   });
 });
 
@@ -51,5 +69,11 @@ test("선택된 provider가 미구성이면 LlmNotConfiguredError를 던진다",
       llmChat([{ role: "user", content: "질문" }]),
       LlmNotConfiguredError,
     );
+  });
+});
+
+test("제거된 MiniMax 설정은 다른 공급자로 조용히 대체하지 않는다", () => {
+  return withEnv({ CHAT_LLM_PROVIDER: "minimax" }, () => {
+    assert.throws(() => llmChatConfigured(), /anthropic 또는 gemini/u);
   });
 });

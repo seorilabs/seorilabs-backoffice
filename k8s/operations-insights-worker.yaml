@@ -26,9 +26,10 @@ spec:
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: HOME, value: "/tmp"}
             - {name: AUTH_URL, value: "https://backoffice.vzyx.xyz"}
-            - {name: FEATURE_MINIMAX_ENABLED, value: "true"}
-            - {name: MINIMAX_CHAT_MODEL, value: "MiniMax-M3"}
-            - {name: MINIMAX_CHAT_TIMEOUT_MS, value: "180000"}
+            - {name: CHAT_LLM_PROVIDER, value: "anthropic"}
+            - {name: FEATURE_CLAUDE_ENABLED, value: "true"}
+            - {name: CLAUDE_CHAT_MODEL, value: "claude-sonnet-5-5"}
+            - {name: CLAUDE_CHAT_TIMEOUT_MS, value: "180000"}
             - {name: INSIGHTS_DAILY_LIMIT, value: "200"}
             # 알림 생산자는 공개 채널 설정만 읽고 전송 토큰은 받지 않는다.
             - name: DISCORD_CHANNEL_APP_OPS_ID
@@ -45,8 +46,8 @@ spec:
               valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID}}
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DATABASE_URL}}
-            - name: MINIMAX_API_KEY
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: MINIMAX_API_KEY}}
+            - name: CLAUDE_API_KEY_IH
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: CLAUDE_API_KEY_IH}}
           volumeMounts: [{name: tmp, mountPath: "/tmp"}]
           resources:
             requests: {cpu: 50m, memory: 192Mi}

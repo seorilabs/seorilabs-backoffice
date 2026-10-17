@@ -27,8 +27,7 @@ export interface ChatOptions {
   /** 사용량 원장(ai_usage) 귀속 컨텍스트. 미전달 시 path "unknown" 으로 기록된다. */
   usage?: { path: string };
   /**
-   * 샘플링 온도. 같은 입력이 같은 문장을 내야 하는 호출(보고서 해설 등)은 0 을 준다.
-   * 지금까지 아무 값도 보내지 않아 provider 기본값으로 매번 달라졌다.
+   * Gemini에 전달할 샘플링 온도. 최신 Claude 모델은 이 값을 지원하지 않아 생략한다.
    */
   temperature?: number;
 }

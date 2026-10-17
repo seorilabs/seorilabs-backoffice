@@ -22,6 +22,10 @@ test("사용량 0 은 비용 0", () => {
   assert.equal(usageCostUsd("claude-sonnet-5", 0, 0), 0);
 });
 
+test("Claude Sonnet 5.5 사용량은 현재 공식 단가로 환산한다", () => {
+  assert.equal(usageCostUsd("claude-sonnet-5-5", 1_000_000, 1_000_000), 12);
+});
+
 test("단가표는 양수 단가만 갖는다", () => {
   for (const [model, price] of Object.entries(LLM_PRICES)) {
     assert.ok(price.inputUsdPerMTok > 0, `${model} input`);

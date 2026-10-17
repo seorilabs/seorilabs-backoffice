@@ -19,6 +19,7 @@ export async function acquireAnalysisPermit(): Promise<string | null> {
             where: { slot: { not: null } },
             select: { slot: true },
           });
+          // 공급자 교체 중에도 기존 실행과 같은 동시 실행 제한을 공유한다.
           const slot = ["minimax-insight:0", "minimax-insight:1"].find(
             (key) => !busy.some((row) => row.slot === key),
           );
