@@ -37,12 +37,16 @@ global.fetch = async (input, init = {}) => {
     }
     if (url.pathname.endsWith('/issues')) return Response.json(state.issues);
     if (/\/issues\/\d+$/.test(url.pathname)) return Response.json(state.issues.find(i => i.number === Number(url.pathname.split('/').pop())) || {});
+    if (url.pathname.endsWith('/tags') || url.pathname.endsWith('/releases')) return Response.json([]);
+    if (url.pathname.endsWith('/actions/runs')) return Response.json({ total_count: 0, workflow_runs: [] });
+    if (url.pathname.endsWith('/actions/workflows')) return Response.json({ total_count: 0, workflows: [] });
     if (url.pathname.endsWith('/readme')) return Response.json({ message: 'qa missing' }, { status: 404 });
     if (/^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) return Response.json({ id: 1000, full_name: url.pathname.slice(7), default_branch: 'main' });
     if (url.pathname.includes('/git/ref/')) return Response.json({ object: { sha: 'a'.repeat(40) } });
     if (url.pathname.includes('/git/trees/')) return Response.json({ tree: [] });
     if (url.pathname.includes('/contents/')) return Response.json({ message: 'qa no code context' }, { status: 404 });
     if (url.pathname.endsWith('/git/trees/HEAD')) return Response.json({ tree: [] });
+    if (method === 'GET') return Response.json({ message: 'qa not configured' }, { status: 404 });
     throw new Error(`UNEXPECTED_QA_GITHUB_REQUEST ${method} ${url.pathname}`);
   }
   throw new Error(`EXTERNAL_QA_NETWORK_BLOCKED ${url.hostname}`);

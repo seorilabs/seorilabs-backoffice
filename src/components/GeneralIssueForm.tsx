@@ -25,7 +25,7 @@ export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null }: {
     setError("");
     startTransition(async () => { try { await task(); } catch (e) { setError(e instanceof Error ? e.message : "처리에 실패했습니다. 입력은 유지됩니다."); } });
   }
-  function showDraft(value: Draft) { setDraft(value); setTitle(value.title); setBody(value.body); window.history.replaceState(null, "", `/work/issues/new?draft=${encodeURIComponent(value.id)}`); }
+  function showDraft(value: Draft) { setDraft(value); setTitle(value.title); setBody(value.body); }
   return <div className="max-w-3xl space-y-5">
     <ol aria-label="등록 단계" className="flex flex-wrap gap-3 text-sm text-neutral-600">
       {["앱·요청 입력", "제목·본문 검토", "등록 결과"].map((step, i) => <li key={step} aria-current={(url ? 2 : draft ? 1 : 0) === i ? "step" : undefined} className={(url ? 2 : draft ? 1 : 0) === i ? "font-semibold text-neutral-950" : ""}>{i + 1}. {step}</li>)}
@@ -51,7 +51,11 @@ export function GeneralIssueForm({ apps, selectedAppId, initialDraft = null }: {
         <button className={buttonClass} disabled={pending} type="submit">{pending ? "처리 중…" : "이슈 등록"}</button>
         <button className="min-h-11 rounded-md border px-4 py-2 text-sm" disabled={pending} type="button" onClick={() => perform(async () => { unwrap(await discardGeneralIssueDraft(draft.id)); setDraft(null); window.history.replaceState(null, "", "/work/issues/new"); })}>취소</button>
       </div>}
-    </form> : <form className="space-y-4" onSubmit={e => { e.preventDefault(); perform(async () => showDraft(unwrap(await createGeneralIssueDraft({ appId, request })))); }}>
+    </form> : <form className="space-y-4" onSubmit={e => { e.preventDefault(); perform(async () => {
+      const created = unwrap(await createGeneralIssueDraft({ appId, request }));
+      showDraft(created);
+      window.history.replaceState(null, "", `/work/issues/new?draft=${encodeURIComponent(created.id)}`);
+    }); }}>
       <label className="block space-y-1"><span className="text-sm font-medium">대상 앱</span><select required className={inputClass} disabled={pending} value={appId} onChange={e => setAppId(e.target.value)}><option value="">앱 선택</option>{apps.map(a => <option key={a.id} value={a.id}>{a.displayName}</option>)}</select></label>
       {app && <p className="break-all text-sm text-neutral-600">저장소: {app.repoFullName}</p>}
       <label className="block space-y-1"><span className="text-sm font-medium">등록할 요청</span><textarea required maxLength={4000} rows={7} value={request} disabled={pending} onChange={e => setRequest(e.target.value)} placeholder="예: 설정 화면에서 알림을 끄는 방법을 조사해 주세요." className={inputClass} /><span className="text-xs text-neutral-500">{request.length}/4,000자</span></label>
