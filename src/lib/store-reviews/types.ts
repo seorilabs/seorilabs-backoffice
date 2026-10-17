@@ -7,6 +7,7 @@ export interface StoreReview {
   title?: string;
   body: string;
   locale?: string;
+  appVersion?: string;
   sourceCreatedAt?: Date;
   sourceModifiedAt?: Date;
 }

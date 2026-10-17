@@ -435,11 +435,11 @@ export async function drainAllNotifications(limit = 30) {
           : null;
       if (object?.rankReport) {
         try {
-          const { rankReportSvg } = await import("@/lib/market/rank-report");
+          const { rankDiscordSvg } = await import("@/lib/market/rank-report");
           const sharp = (await import("sharp")).default;
           const bytes = await sharp(
             Buffer.from(
-              rankReportSvg(
+              rankDiscordSvg(
                 object.rankReport as unknown as import("@/lib/market/rank-report").RankReport,
               ),
             ),

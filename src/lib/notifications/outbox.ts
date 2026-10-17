@@ -76,7 +76,7 @@ export async function requeueNotification(
   db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
 ): Promise<number> {
   await db.notificationDelivery.updateMany({
-    where: { eventId, status: { in: ["PENDING", "PROCESSING"] } },
+    where: { eventId, status: "PROCESSING" },
     data: { refreshRequested: true },
   });
   const result = await db.notificationDelivery.updateMany({
@@ -157,12 +157,17 @@ export async function drainNotifications(
     let sent = 0;
     let deadLetter = 0;
     let suppressed = 0;
-    for (const row of rows) {
+    for (const queued of rows) {
       const claimed = await prisma.notificationDelivery.updateMany({
-        where: { id: row.id, status: "PENDING" },
+        where: { id: queued.id, status: "PENDING" },
         data: { status: "PROCESSING" },
       });
       if (claimed.count !== 1) continue;
+      // PENDING 갱신은 추가 전송 없이 claim 뒤의 최신 payload로 처리한다.
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id: queued.id },
+        include: { event: true },
+      });
 
       // 과거 payload도 발송 직전에 동일한 기준으로 검사한다. 이미 SENT인 이력은 건드리지 않는다.
       let payload = row.event.payload;

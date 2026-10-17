@@ -189,3 +189,35 @@ export function rankReportSvg(report: RankReport, days = 7, maxItems = 3) {
     .join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="white"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="48" font-size="32" font-weight="700">${report.day} 검색 위치의 중요한 변화</text><text x="40" y="85" font-size="22" fill="#475569">App Store 검색 API · 최근 ${days}일 · 국가·검색어별 비교</text>${cards}</g></svg>`;
 }
+
+/** Discord inline은 세로 제한으로 축소되므로 큰 글자와 짧은 3개 행을 사용한다. */
+export function rankDiscordSvg(report: RankReport) {
+  const items = report.items.slice(0, 3),
+    height = 100 + items.length * 210;
+  const trim = (value: string, max: number) =>
+    value.length > max ? value.slice(0, max - 1) + "…" : value;
+  const rows = items
+    .map((r, i) => {
+      const top = 118 + i * 210,
+        points = r.points.slice(-7),
+        x = (j: number) => 60 + (j * 880) / 6,
+        y = (rank: number) => top + 118 + ((rank - 1) / 199) * 46;
+      let graph = "";
+      points.forEach((p, j) => {
+        if (p.state === "ranked" && p.rank !== null) {
+          const before = points[j - 1];
+          if (before?.state === "ranked" && before.rank !== null)
+            graph += `<line x1="${x(j - 1)}" y1="${y(before.rank)}" x2="${x(j)}" y2="${y(p.rank)}" stroke="#2563eb" stroke-width="4"/>`;
+          graph += `<circle cx="${x(j)}" cy="${y(p.rank)}" r="5" fill="#2563eb"/>`;
+        } else
+          graph += `<text x="${x(j)}" y="${top + 148}" text-anchor="middle" fill="#64748b" font-size="23">${p.state === "outside" ? "목록 밖" : p.state === "invalid" ? "비교 불가" : "미수집"}</text>`;
+      });
+      const color =
+        r.rank !== null && (r.previousRank === null || r.rank < r.previousRank)
+          ? "#047857"
+          : "#b45309";
+      return `<g><rect x="20" y="${top - 22}" width="960" height="200" rx="16" fill="#f8fafc"/><text x="44" y="${top + 20}" font-size="40" font-weight="700">${esc(trim(r.appName, 20))}</text><text x="44" y="${top + 61}" font-size="32">${esc(trim(r.country.toUpperCase() + " · " + r.term, 36))}</text><text x="44" y="${top + 107}" font-size="40" fill="${color}">${esc(rankValue(r.previousRank) + " → " + rankValue(r.rank))}</text><text x="950" y="${top + 107}" text-anchor="end" font-size="32" fill="${color}">${esc(r.reason)}</text>${graph}</g>`;
+    })
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="36" font-weight="700">${report.day} 검색 위치의 중요한 변화</text><text x="40" y="81" font-size="26" fill="#475569">이전 관측 → 기준일 · 그래프 최근 7일 · 작은 숫자가 높은 순위</text>${rows}</g></svg>`;
+}
