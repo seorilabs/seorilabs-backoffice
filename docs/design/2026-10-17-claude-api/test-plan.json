@@ -4,10 +4,12 @@
   "baseline": "b0b391d1e3eb9d03309d8b56e52ea973a149faff",
   "changedFeatures": [
     "ai-draft-generation-and-github-registration",
+    "release-note-generation-and-translations",
     "insight-signals-budget-and-worker",
     "metric-report-highlights-finance-liveops",
     "discord-command-registration-and-deferred-reads",
     "vault-search-ai-and-writer",
+    "notification-outbox-report-visuals-and-retention",
     "settings-diagnostics-and-admin-controls"
   ],
   "environments": ["dev"],
@@ -16,6 +18,6 @@
   "floorOverrides": [],
   "release": {
     "markets": ["service"],
-    "until": "test-track"
+    "until": "public"
   }
 }
