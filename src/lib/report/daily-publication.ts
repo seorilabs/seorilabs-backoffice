@@ -87,11 +87,11 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
 }
 
 export async function dailyReportImage(doc: OrgReportDocument) {
-  const { reportChartSvg } = await import("./discord-chart");
+  const { reportChartSvg, ga4ChartContext } = await import("./discord-chart");
   const sharp = (await import("sharp")).default;
   const points = doc.edition?.trend ?? [];
   const charts = [
-    { title: `활성·신규 사용자 · ${doc.refDate}`, unit: "명", source: "GA4 · 앱 사이 사용자 중복 포함 · 발행 입력 고정", series: [
+    { title: `활성·신규 사용자 · ${doc.refDate}`, ...ga4ChartContext(doc), unit: "명", source: "GA4 · 앱 사이 사용자 중복 포함 · 발행 입력 고정", series: [
       { label: "활성 합계", color: "#2563eb", values: points.map((point) => point.ga4Dau) },
       { label: "신규 합계", color: "#059669", values: points.map((point) => point.ga4NewUsers) },
     ] },
