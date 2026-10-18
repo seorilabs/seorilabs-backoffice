@@ -369,6 +369,14 @@ test("유입경로의 같은 비율을 순서만 바꾸면 정정하지 않는�
   assert.deepEqual(reportCorrectionDiff(before, after), []);
 });
 
+test("DB JSON에서 객체 키 순서가 바뀌어도 같은 사실로 비교한다", () => {
+  const before = assemble();
+  const stored = JSON.parse(JSON.stringify(before), (_key, value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).reverse()) : value);
+  assert.equal(reportFactsHash(before), reportFactsHash(stored));
+});
+
 
 // ── 소급 재계산 경계 ──────────────────────────────────────────────────────
 // 과거 발행분을 현재 원본으로 덮되, 무엇이 발행됐었는지는 남아야 한다. 그리고

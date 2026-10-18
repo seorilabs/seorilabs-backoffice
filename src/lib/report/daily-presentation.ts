@@ -5,6 +5,14 @@ import { coverageSummary } from "./daily-contract";
 import { sourceStateLabel } from "@/lib/insights/collection";
 import { discordActionLines } from "./action-presentation";
 
+function canonicalFact(_key: string, value: unknown): unknown {
+  if (typeof value === "number" && !Number.isInteger(value)) return Number(value.toPrecision(15));
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  }
+  return value;
+}
+
 export function reportConclusions(doc: OrgReportDocument): string[] {
   const conclusions = [...doc.movements]
     .filter((row) => row.verdict === "lowlight" || row.verdict === "highlight")
@@ -28,8 +36,8 @@ export function reportFactsHash(doc: OrgReportDocument): string {
     sources: doc.edition?.sources.map(({ slug, source, reportType, account, state, dataThrough }) => ({ slug, source, reportType, account, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
-  // MySQL JSON을 왕복한 실수의 마지막 자릿수 차이로 같은 사실을 정정하지 않는다.
-  }, (_key, value: unknown) => typeof value === "number" && !Number.isInteger(value) ? Number(value.toPrecision(15)) : value)).digest("hex");
+  // MySQL JSON의 키 순서와 실수 직렬화 차이로 같은 사실을 정정하지 않는다.
+  }, canonicalFact)).digest("hex");
 }
 
 export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReportDocument) {
