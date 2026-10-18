@@ -30,6 +30,8 @@ export async function maintainMetricIssueRegistration() {
       reason = await recover(claim) ? "repository-pass-completed" : "global-safety-blocked";
       return;
     }
+    const reportApps = await prisma.app.findMany({ where: { status: { in: ["ACTIVE", "PAUSED"] } }, select: { id: true, repoFullName: true } });
+    for (const app of reportApps) if (!policy.data.repositories.some((row) => row.repository === app.repoFullName && row.registration === "ENABLED")) await registrationResult(claim, { appId: app.id, repository: app.repoFullName, status: "excluded", title: "중앙 정책에 따라 자동 이슈 등록에서 제외합니다.", reason: "보고 대상에는 포함하며 추가 지표·코드 분석은 하지 않습니다.", policySha: policy.sha });
     const configured = policy.data.repositories.filter((row) => row.registration === "ENABLED").map((row) => row.repository);
     const today = metricDayOf(new Date()), dayIndex = Math.floor((toDbDay(today).getTime() - Date.UTC(Number(today.slice(0, 4)), 0, 1)) / 86400_000);
     const offset = configured.length ? dayIndex % configured.length : 0, repositories = [...configured.slice(offset), ...configured.slice(0, offset)];
