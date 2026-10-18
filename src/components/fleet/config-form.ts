@@ -204,6 +204,10 @@ function splitList(value: string): string[] {
   return value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
+function splitKeywords(value: string): string[] {
+  return value.split(/[,\r\n]+/).map((item) => item.trim()).filter(Boolean);
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -596,7 +600,7 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
   return {
     schemaVersion: 1,
     ...(draft.analyticsSources.length ? { analyticsSources: draft.analyticsSources } : {}),
-    ...(draft.monitoring.declared ? { monitoring: { enabled: draft.monitoring.enabled, keywords: splitList(draft.monitoring.keywords), countries: splitList(draft.monitoring.countries), competitorAppIds: splitList(draft.monitoring.competitorAppIds), officialFeeds: draft.monitoring.officialFeeds, checkSupportLinks: draft.monitoring.checkSupportLinks } } : {}),
+    ...(draft.monitoring.declared ? { monitoring: { enabled: draft.monitoring.enabled, keywords: splitKeywords(draft.monitoring.keywords), countries: splitList(draft.monitoring.countries), competitorAppIds: splitList(draft.monitoring.competitorAppIds), officialFeeds: draft.monitoring.officialFeeds, checkSupportLinks: draft.monitoring.checkSupportLinks } } : {}),
     markets: draft.markets.map((entry) => ({
       market: entry.market,
       enabled: entry.enabled,
@@ -611,7 +615,7 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
           ...(trimmed(entry.displayName) ? { displayName: entry.displayName.trim() } : {}),
           ...(trimmed(entry.subtitle) ? { subtitle: entry.subtitle.trim() } : {}),
           ...(trimmed(entry.description) ? { description: entry.description.trim() } : {}),
-          ...(splitList(entry.keywords).length > 0 ? { keywords: splitList(entry.keywords) } : {}),
+          ...(splitKeywords(entry.keywords).length > 0 ? { keywords: splitKeywords(entry.keywords) } : {}),
         })),
       }
       : {}),
