@@ -102,7 +102,11 @@ export async function sendFinanceReport(
   now = new Date(),
 ): Promise<FinanceReportResult> {
   const { month } = financeMonth(now);
-  const { warnings, figures } = await collectFinanceCosts(now);
+  const collection = await import("@/lib/insights/collection");
+  const run = await collection.beginCollection("finance-costs", month);
+  const snapshot = await collectFinanceCosts(now);
+  const { warnings, figures } = snapshot;
+  await collection.completeCollection(run.id, { status: Object.values(figures).some((value) => value !== null) ? "partial" : "needs_input", dataThrough: now, coverage: JSON.parse(JSON.stringify({ month, ...snapshot })) });
   const baseKey = financeReportDedupeKey(now);
   for (let attempt = 0; ; attempt++) {
     try {

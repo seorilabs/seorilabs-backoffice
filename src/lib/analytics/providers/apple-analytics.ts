@@ -78,8 +78,7 @@ export async function readAppleInstance(input: {
 }
 
 export async function appleReportCatalog(appId: string, bundleId: string, request: AppleRequest = defaultRequest) {
-  const app = asArray((await request(`/v1/apps/${encodeURIComponent(appId)}?fields[apps]=bundleId`)).data)[0];
-  if (!app || app.attributes?.bundleId !== bundleId) throw new Error("APPLE_APP_IDENTITY_MISMATCH");
+  await verifyAppleAppIdentity(appId, bundleId, request);
   const requests = await applePages(`/v1/apps/${encodeURIComponent(appId)}/analyticsReportRequests?limit=200`, request);
   if (!requests.length) throw new Error("APPLE_INITIAL_REPORT_REQUEST_REQUIRED");
   const reports: Array<JsonApiResource & { requestId: string }> = [];
@@ -96,4 +95,9 @@ export async function appleInstances(reportId: string, request: AppleRequest = d
   return (await applePages(`/v1/analyticsReports/${encodeURIComponent(reportId)}/instances?filter[granularity]=DAILY&limit=200`, request))
     .filter((instance) => typeof instance.attributes?.processingDate === "string" && parseMetricDay(instance.attributes.processingDate))
     .sort((a, b) => String(b.attributes!.processingDate).localeCompare(String(a.attributes!.processingDate)));
+}
+
+export async function verifyAppleAppIdentity(appId: string, bundleId: string, request: AppleRequest = defaultRequest) {
+  const app = asArray((await request(`/v1/apps/${encodeURIComponent(appId)}?fields[apps]=bundleId`)).data)[0];
+  if (!app || app.attributes?.bundleId !== bundleId) throw new Error("APPLE_APP_IDENTITY_MISMATCH");
 }

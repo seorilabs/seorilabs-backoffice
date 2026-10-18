@@ -45,19 +45,32 @@ export function parseAdmobReport(raw: unknown, input: { appId: string; start: st
       if (rawValue === undefined || !/^\d+$/.test(String(rawValue)) || !Number.isSafeInteger(Number(rawValue))) throw new Error("ADMOB_METRIC_INVALID");
       return [key, Number(rawValue) / (key === "ESTIMATED_EARNINGS" ? 1e6 : 1)];
     }));
-    const cells = Object.entries(metrics).map(([key, metric]) => ({ day, row: unifiedMetricRowSchema.parse({ metric, value: values[key], dimensions, currency: key === "ESTIMATED_EARNINGS" ? input.currency : null, state: values[key] === 0 ? "empty" : "observed", valueStatus: key === "ESTIMATED_EARNINGS" ? "estimated" : metricDaysBetween(input.processingDate, day) >= 2 ? "analyzable" : "provisional" }) }));
+    const cells = Object.entries(metrics).map(([key, metric]) => ({ day, row: unifiedMetricRowSchema.parse({ metric, value: values[key], dimensions, currency: key === "ESTIMATED_EARNINGS" ? input.currency : null, state: values[key] === 0 ? "empty" : "observed", valueStatus: metricDaysBetween(input.processingDate, day) < 2 ? "provisional" : key === "ESTIMATED_EARNINGS" ? "estimated" : "analyzable" }) }));
     for (const [metric, numerator, denominator] of [["match_rate", values.MATCHED_REQUESTS, values.AD_REQUESTS], ["show_rate", values.IMPRESSIONS, values.MATCHED_REQUESTS]] as const) {
       const value = denominator > 0 ? 100 * numerator / denominator : null;
-      cells.push({ day, row: unifiedMetricRowSchema.parse({ metric, value, numerator, denominator, dimensions, currency: null, state: value === null ? "not_landed" : value === 0 ? "empty" : "observed", valueStatus: metricDaysBetween(input.processingDate, day) >= 2 ? "analyzable" : "provisional" }) });
+      cells.push({ day, row: unifiedMetricRowSchema.parse({ metric, value, numerator, denominator, dimensions, currency: null, state: value === null ? "not_applicable" : value === 0 ? "empty" : "observed", valueStatus: metricDaysBetween(input.processingDate, day) >= 2 ? "analyzable" : "provisional" }) });
     }
     const ecpm = values.IMPRESSIONS > 0 ? 1000 * values.ESTIMATED_EARNINGS / values.IMPRESSIONS : null;
-    cells.push({ day, row: unifiedMetricRowSchema.parse({ metric: "ad_ecpm", value: ecpm, numerator: values.ESTIMATED_EARNINGS, denominator: values.IMPRESSIONS, dimensions, currency: input.currency, state: ecpm === null ? "not_landed" : ecpm === 0 ? "empty" : "observed", valueStatus: "estimated" }) });
+    cells.push({ day, row: unifiedMetricRowSchema.parse({ metric: "ad_ecpm", value: ecpm, numerator: values.ESTIMATED_EARNINGS, denominator: values.IMPRESSIONS, dimensions, currency: input.currency, state: ecpm === null ? "not_applicable" : ecpm === 0 ? "empty" : "observed", valueStatus: metricDaysBetween(input.processingDate, day) < 2 ? "provisional" : "estimated" }) });
     return cells;
   });
 }
-export async function readAdmob(input: { accountId: string; appId: string; timeZone: string; start: string; end: string; processingDate: string }, request: AdmobRequest = admobRequest) {
+export async function readAdmob(input: { accountId: string; appId: string; timeZone: string; start: string; end: string; processingDate: string; applicationId?: string }, request: AdmobRequest = admobRequest) {
   const account = z.object({ publisherId: z.string(), reportingTimeZone: z.string(), currencyCode: z.string() }).parse(await request(`/accounts/${input.accountId}`));
   if (account.publisherId !== input.accountId || account.reportingTimeZone !== input.timeZone) throw new Error("ADMOB_ACCOUNT_MISMATCH");
+  if (!input.applicationId) throw new Error("ADMOB_APP_IDENTITY_MISSING");
+  const appSchema = z.object({ appId: z.string(), platform: z.enum(["ANDROID", "IOS"]), linkedAppInfo: z.object({ appStoreId: z.string() }).optional() });
+  let app: z.infer<typeof appSchema> | undefined, token: string | undefined;
+  const seen = new Set<string>();
+  do {
+    if (token && seen.has(token)) throw new Error("ADMOB_PAGINATION_INVALID");
+    if (token) seen.add(token);
+    const page = z.object({ apps: z.array(appSchema).default([]), nextPageToken: z.string().optional() }).parse(await request(`/accounts/${input.accountId}/apps?pageSize=100${token ? `&pageToken=${encodeURIComponent(token)}` : ""}`));
+    for (const one of page.apps) if (one.appId === input.appId) { if (app) throw new Error("ADMOB_APP_DUPLICATE"); app = one; }
+    token = page.nextPageToken;
+  } while (token);
+  if (!app) throw new Error("ADMOB_APP_IDENTITY_MISSING");
+  if (app.appId !== input.appId || app.linkedAppInfo?.appStoreId !== input.applicationId) throw new Error("ADMOB_APP_IDENTITY_MISMATCH");
   const raw = await request(`/accounts/${input.accountId}/networkReport:generate`, { reportSpec: {
     dateRange: { startDate: date(input.start), endDate: date(input.end) },
     dimensions: ["DATE", "APP", "COUNTRY", "FORMAT", "AD_UNIT"], metrics: ["AD_REQUESTS", "MATCHED_REQUESTS", "IMPRESSIONS", "CLICKS", "ESTIMATED_EARNINGS"],

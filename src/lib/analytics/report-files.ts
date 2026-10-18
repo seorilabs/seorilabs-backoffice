@@ -70,7 +70,7 @@ export function appleReportRows(reportType: string, records: Record<string, stri
       if (!("Users Opting-In" in record) || !("Downloading Users" in record)) throw new Error("REPORT_OPT_IN_FIELDS_MISSING");
       const numerator = reportNumber(record["Users Opting-In"]), denominator = reportNumber(record["Downloading Users"]);
       cells.push({ day, row: unifiedMetricRowSchema.parse({ metric: "opt_in", value: numerator !== null && denominator !== null && denominator > 0 ? 100 * numerator / denominator : null, numerator, denominator, dimensions, currency: null,
-        state: numerator !== null && denominator !== null && denominator > 0 ? numerator === 0 ? "empty" : "observed" : "not_landed", valueStatus: metricDaysBetween(processingDate, day) >= 2 ? "analyzable" : "provisional" }) });
+        state: numerator !== null && denominator !== null ? denominator > 0 ? numerator === 0 ? "empty" : "observed" : "not_applicable" : "not_landed", valueStatus: metricDaysBetween(processingDate, day) >= 2 ? "analyzable" : "provisional" }) });
     }
     return cells;
   });
