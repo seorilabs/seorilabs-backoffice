@@ -12,6 +12,11 @@ import type {
 
 class MemoryReviewRepository implements ReviewRepository {
   readonly sync = new Set<string>();
+  readonly notifications = new Set<string>();
+
+  async notificationExists(dedupeKey: string) {
+    return this.notifications.has(dedupeKey);
+  }
   readonly observations = new Map<string, ReviewObservationState>();
 
   private key(appId: string, store: StoreReviewStore, reviewId = "") {
@@ -55,6 +60,8 @@ class MemoryReviewRepository implements ReviewRepository {
 
 const app = {
   id: "app-1",
+  slug: "test-game",
+  status: "ACTIVE" as const,
   displayName: "테스트 게임",
   currentStage: "LIVEOPS" as const,
   playPackage: "com.seorilabs.test",
@@ -198,13 +205,13 @@ test("수집 대상과 다른 store의 리뷰는 기준선으로 저장하지 �
   assert.equal(await repository.initialized(app.id, "GOOGLE_PLAY"), false);
 });
 
-test("공개 전 단계는 제외하고 RELEASE와 LIVEOPS만 리뷰를 수집한다", async () => {
+test("개발 단계와 무관하게 선언한 마켓의 리뷰를 수집한다", async () => {
   const fetched: string[] = [];
   const result = await collectStoreReviews({
     repository: new MemoryReviewRepository(),
     listApps: async () => [
-      { ...app, id: "planning", currentStage: "PLANNING" },
-      { ...app, id: "qa", currentStage: "QA" },
+      { ...app, id: "planning", currentStage: "PLANNING", iosBundle: null, marketTargets: ["play"] },
+      { ...app, id: "qa", currentStage: "QA", iosBundle: null, marketTargets: ["play"] },
       { ...app, id: "release", currentStage: "RELEASE", iosBundle: null, marketTargets: ["play"] },
       { ...app, id: "liveops", currentStage: "LIVEOPS", iosBundle: null, marketTargets: ["play"] },
     ],
@@ -215,10 +222,10 @@ test("공개 전 단계는 제외하고 RELEASE와 LIVEOPS만 리뷰를 수집�
     },
     enqueue: async (input) => input.dedupeKey,
   });
-  assert.equal(result.targets, 2);
-  assert.equal(result.storeCoverage.GOOGLE_PLAY.targets, 2);
-  assert.equal(result.storeCoverage.GOOGLE_PLAY.succeeded, 2);
-  assert.deepEqual(fetched, [app.playPackage, app.playPackage]);
+  assert.equal(result.targets, 4);
+  assert.equal(result.storeCoverage.GOOGLE_PLAY.targets, 4);
+  assert.equal(result.storeCoverage.GOOGLE_PLAY.succeeded, 4);
+  assert.deepEqual(fetched, Array(4).fill(app.playPackage));
 });
 
 test("같은 store의 일부 앱 실패는 성공 범위와 오류를 함께 남긴다", async () => {
@@ -238,4 +245,115 @@ test("같은 store의 일부 앱 실패는 성공 범위와 오류를 함께 남
   assert.deepEqual(result.storeCoverage.GOOGLE_PLAY, { targets: 2, succeeded: 1 });
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0]?.app, "테스트 게임");
+});
+
+
+test("비활성 앱과 미선언 마켓과 식별자 없는 마켓은 제외한다", async () => {
+  const fetched: string[] = [];
+  const result = await collectStoreReviews({
+    repository: new MemoryReviewRepository(),
+    listApps: async () => [
+      { ...app, status: "PAUSED" as const },
+      { ...app, id: "undeclared", marketTargets: ["web"] },
+      { ...app, id: "missing", playPackage: null, iosBundle: null },
+      { ...app, id: "allowed", marketTargets: ["play"] },
+    ],
+    destinations: () => destination,
+    fetchGooglePlay: async (id) => { fetched.push(id); return []; },
+    fetchAppStore: async () => { throw Error("호출하면 안 됨"); },
+  });
+  assert.equal(result.targets, 1);
+  assert.deepEqual(fetched, [app.playPackage]);
+});
+
+test("명시한 앱과 마켓과 리뷰 ID만 기존 기준선에서도 복구하고 재실행은 중복 처리하지 않는다", async () => {
+  const repository = new MemoryReviewRepository();
+  const events: string[] = [];
+  const other = { ...google, externalReviewId: "g-other" };
+  const deps = {
+    repository,
+    listApps: async () => [app, { ...app, id: "other", slug: "other" }],
+    destinations: () => destination,
+    fetchGooglePlay: async () => [google, other],
+    fetchAppStore: async () => [apple],
+    enqueue: async (input: { dedupeKey: string }) => {
+      repository.notifications.add(input.dedupeKey);
+      events.push(input.dedupeKey);
+      return input.dedupeKey;
+    },
+  };
+  await collectStoreReviews(deps);
+  const options = { appSlug: app.slug, store: "GOOGLE_PLAY" as const, notifyReviewIds: [google.externalReviewId] };
+  const restored = await collectStoreReviews(deps, options);
+  assert.equal(restored.targets, 1);
+  assert.equal(restored.enqueued, 1);
+  assert.equal(restored.unchanged, 0);
+  assert.equal(events.length, 1);
+  const repeated = await collectStoreReviews(deps, options);
+  assert.equal(repeated.enqueued, 0);
+  assert.equal(events.length, 1);
+});
+
+test("첫 복구의 enqueue 실패 뒤 일반 실행과 복구 재실행은 누락 리뷰를 재시도한다", async () => {
+  const repository = new MemoryReviewRepository();
+  const deps = {
+    repository, listApps: async () => [app], destinations: () => destination,
+    fetchGooglePlay: async () => [google], fetchAppStore: async () => [],
+    enqueue: async () => { throw Error("enqueue 실패"); },
+  };
+  const options = { appSlug: app.slug, store: "GOOGLE_PLAY" as const, notifyReviewIds: [google.externalReviewId] };
+  const failed = await collectStoreReviews(deps, options);
+  assert.equal(failed.errors.length, 1);
+  assert.equal(await repository.initialized(app.id, "GOOGLE_PLAY"), false);
+  const events: string[] = [];
+  const retried = await collectStoreReviews({ ...deps, enqueue: async (input) => {
+    events.push(input.dedupeKey); repository.notifications.add(input.dedupeKey); return input.dedupeKey;
+  } });
+  assert.equal(retried.enqueued, 1);
+  assert.equal(events.length, 1);
+  assert.equal((await collectStoreReviews({ ...deps, enqueue: async () => { throw Error("중복"); } }, options)).enqueued, 0);
+});
+
+test("범위 없는 복구와 대상 없는 지정 실행은 API를 부르기 전에 거부한다", async () => {
+  const deps = { repository: new MemoryReviewRepository(), listApps: async () => [app], destinations: () => destination,
+    fetchGooglePlay: async () => { throw Error("호출하면 안 됨"); } };
+  await assert.rejects(collectStoreReviews(deps, { notifyReviewIds: ["g-1"] }), /앱과 마켓/);
+  await assert.rejects(collectStoreReviews(deps, { appSlug: "missing" }), /수집 대상 없음/);
+});
+
+test("공식 API에 없는 복구 ID는 관측이나 기준선을 남기지 않는다", async () => {
+  const repository = new MemoryReviewRepository();
+  const result = await collectStoreReviews({ repository, listApps: async () => [app],
+    destinations: () => destination, fetchGooglePlay: async () => [google],
+    enqueue: async () => { throw Error("호출하면 안 됨"); },
+  }, { appSlug: app.slug, store: "GOOGLE_PLAY", notifyReviewIds: ["missing"] });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0]!.error, /복구 리뷰 ID/);
+  assert.equal(repository.observations.size, 0);
+  assert.equal(repository.sync.size, 0);
+});
+
+
+test("첫 복구는 지정하지 않은 과거 리뷰의 기준선을 앞당기지 않는다", async () => {
+  const repository = new MemoryReviewRepository();
+  const events: string[] = [];
+  const deps = {
+    repository, listApps: async () => [app], destinations: () => destination,
+    fetchGooglePlay: async () => [google, { ...google, externalReviewId: "old" }],
+    fetchAppStore: async () => [],
+    enqueue: async (input: { dedupeKey: string }) => {
+      events.push(input.dedupeKey); repository.notifications.add(input.dedupeKey); return input.dedupeKey;
+    },
+  };
+  const restored = await collectStoreReviews(deps, {
+    appSlug: app.slug, store: "GOOGLE_PLAY", notifyReviewIds: [google.externalReviewId],
+  });
+  assert.equal(restored.enqueued, 1);
+  assert.equal(repository.observations.size, 1);
+  assert.equal(await repository.initialized(app.id, "GOOGLE_PLAY"), false);
+  const normal = await collectStoreReviews(deps);
+  assert.equal(normal.baselined, 2);
+  assert.equal(normal.enqueued, 0);
+  assert.equal(events.length, 1);
+  assert.equal(await repository.initialized(app.id, "GOOGLE_PLAY"), true);
 });

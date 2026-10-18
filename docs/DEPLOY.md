@@ -776,7 +776,7 @@ migration Job, 웹 endpoint 연속성, 각 workload image, worker 로그, DB 요
 ## 15. Discord 마켓 리뷰 알림
 
 `backoffice-store-reviews` CronJob은 30분마다 `ACTIVE` 앱 중 실제
-`marketTargets`와 `playPackage`/`iosBundle`이 모두 있는 대상을 수집한다.
+`marketTargets`와 `playPackage`/`iosBundle`이 모두 있는 대상을 수집한다. 개발 단계는 수집 조건으로 사용하지 않는다. 미등록 앱이나 권한 오류는 앱별 실패로 기록하고 다른 앱 수집을 계속한다.
 
 - Google Play: Android Publisher API `reviews.list`, 공용 카탈로그 자격증명
   `shared/google-play/publisher`의 실행 복제본 `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` 사용.
@@ -796,6 +796,16 @@ App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확�
 임시 Job으로 최초 실행해 `baselined > 0`, `enqueued = 0`, `errors = []`를 확인한 뒤
 운영 적용 확인에는 실제 자료의 유용한 보고를 사용한다. 가짜 리뷰·장애·연결 확인 메시지를 운영 채널에 보내지 않는다.
 
+
+누락 리뷰를 복구할 때는 동일한 수집 CLI에 앱, 마켓과 공식 API로 확인한 리뷰 ID를 모두 지정한다.
+
+```bash
+node /app/scripts-dist/store-review-collector.cjs --app bloomhand --store GOOGLE_PLAY \
+  --notify-review 7b7f502e-5102-454f-ab13-bec76e3c8847 \
+  --notify-review 8f355a74-896d-4e32-84ba-db811df30dd8
+```
+
+복구는 지정한 리뷰만 처리하며 이미 존재하는 동일 알림은 재작성하지 않는다. 전체 마켓 기준선은 다음 일반 수집에서 생성한다. 기준선에 기록됐지만 알림이 없는 리뷰도 복구할 수 있다. 누락 ID나 잘못된 인자는 실패한다. 개별 리뷰 outbox는 기존 정책대로 내부 원문 기록이며, 닫힌 15분 묶음을 operations-insights가 분석해 Discord에 보낸다. 수집 성공과 분석, 전송 성공은 각각 재조회한다.
 
 ### 백업 전용 읽기 계정 전환 — #164
 
