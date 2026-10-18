@@ -241,13 +241,18 @@ async function processReviews(input: {
     );
     const dedupeKey = reviewNotificationDedupeKey({ appId: input.app.id, review, contentHash });
     const recovering = input.notifyReviewIds.has(review.externalReviewId);
-    const change = recovering
-      ? (await input.repository.notificationExists(dedupeKey) ? "unchanged" : "new")
-      : classifyReviewChange({
-          initialized: initialized || existing?.notifiedHash === null,
-          existing,
-          contentHash,
-        });
+    const pendingNotification = existing?.notifiedHash === null;
+    const alreadyQueued = (recovering || pendingNotification) &&
+      await input.repository.notificationExists(dedupeKey);
+    const change = alreadyQueued
+      ? "unchanged"
+      : recovering
+        ? (existing?.notifiedHash && existing.notifiedHash !== contentHash ? "updated" : "new")
+        : classifyReviewChange({
+            initialized: initialized || pendingNotification,
+            existing,
+            contentHash,
+          });
     const observationId = await input.repository.saveObservation({
       appId: input.app.id,
       review,
@@ -260,7 +265,7 @@ async function processReviews(input: {
       continue;
     }
     if (change === "unchanged") {
-      if (recovering) await input.repository.markNotified(observationId, contentHash);
+      if (alreadyQueued) await input.repository.markNotified(observationId, contentHash);
       input.result.unchanged++;
       continue;
     }
