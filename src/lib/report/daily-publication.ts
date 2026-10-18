@@ -35,7 +35,7 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, schedule.dueAt), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
