@@ -1,3 +1,4 @@
+import { sumConsoleValues } from "@/lib/analytics/console-values";
 import type { AppType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
@@ -295,8 +296,8 @@ export interface PortfolioTotals {
   ga4Dau: { latest: number; previous: number | null; apps: number };
   /** 콘솔 광고 수익·결제 거래액 합(CONSOLE_STALE_DAYS 안의 스냅샷을 가진 리스팅만). */
   console: {
-    iaaKrw: number;
-    iapKrw: number;
+    iaaKrw: number | null;
+    iapKrw: number | null;
     previousIaaKrw: number | null;
     listings: number;
   };
@@ -382,7 +383,7 @@ export function renderHighlightReport(input: {
       totals.console.previousIaaKrw == null
         ? null
         : won(totals.console.previousIaaKrw),
-      pctChange(totals.console.iaaKrw, totals.console.previousIaaKrw),
+      totals.console.iaaKrw == null ? null : pctChange(totals.console.iaaKrw, totals.console.previousIaaKrw),
     ) +
       ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅` +
       // 콘솔은 자기 확정일을 따로 내건다. GA4 기준일과 같으면 중복이라 적지 않는다.
@@ -477,10 +478,10 @@ export interface ConsoleRow {
   date: Date;
   dau: number | null;
   newUsers: number | null;
-  iaaEarningKrw: number;
-  iapTrxAmountKrw: number;
-  iapSettlementKrw: number;
-  payingUsers: number;
+  iaaEarningKrw: number | null;
+  iapTrxAmountKrw: number | null;
+  iapSettlementKrw: number | null;
+  payingUsers: number | null;
   raw?: unknown;
 }
 
@@ -622,7 +623,7 @@ export function foldConsoleTotals(
       metricDaysBetween(refDate, dbDay(one.rowsDesc[0].date)) <=
       CONSOLE_STALE_DAYS,
   );
-  const totals = {
+  const totals: PortfolioTotals["console"] = {
     iaaKrw: 0,
     iapKrw: 0,
     previousIaaKrw: null as number | null,
@@ -645,6 +646,8 @@ export function foldConsoleTotals(
 
   const raws: unknown[] = [];
   const stale: string[] = [];
+  const iaaValues: (number | null)[] = [];
+  const iapValues: (number | null)[] = [];
   let previousSum = 0;
   let previousComplete = true;
   for (const one of series) {
@@ -653,16 +656,18 @@ export function foldConsoleTotals(
       stale.push(`${one.label}(${dbDay(latest.date)})`);
       continue;
     }
-    totals.iaaKrw += latest.iaaEarningKrw;
-    totals.iapKrw += latest.iapTrxAmountKrw;
+    iaaValues.push(latest.iaaEarningKrw);
+    iapValues.push(latest.iapTrxAmountKrw);
     totals.listings += 1;
     raws.push(latest.raw);
     const yesterday = one.rowsDesc.find(
       (row) => dbDay(row.date) === previousDay,
     );
-    if (yesterday) previousSum += yesterday.iaaEarningKrw;
+    if (yesterday?.iaaEarningKrw != null) previousSum += yesterday.iaaEarningKrw;
     else previousComplete = false;
   }
+  totals.iaaKrw = sumConsoleValues(iaaValues);
+  totals.iapKrw = sumConsoleValues(iapValues);
   totals.previousIaaKrw =
     previousComplete && totals.listings > 0 ? previousSum : null;
   return { totals, raws, stale, consoleRefDate };

@@ -1,3 +1,4 @@
+import { sumConsoleValues } from "./console-values";
 // AppsInToss 콘솔 지표의 기간(윈도우) 집계. /analytics Overview 의 "최근 N일 집계" 표가 쓴다.
 // 순수 함수 — DB/뷰와 독립적으로 테스트한다. rows 는 최신→과거(orderBy date desc) 가정.
 
@@ -9,8 +10,8 @@ export interface ConsoleWindowRow {
   dau: number | null;
   newUsers: number | null;
   avgSessionSec: number | null;
-  iaaImpressions: number;
-  iaaEarningKrw: number;
+  iaaImpressions: number | null;
+  iaaEarningKrw: number | null;
 }
 
 export interface ConsoleWindowAgg {
@@ -27,8 +28,8 @@ export interface ConsoleWindowAgg {
   /** 평균 세션 길이(초). avgSessionSec 이 있는 날만 평균, 없으면 null. */
   sessAvg: number | null;
   /** 광고 노출 합, 광고 추정 수익 합(원). */
-  iaaImpSum: number;
-  iaaEarnSum: number;
+  iaaImpSum: number | null;
+  iaaEarnSum: number | null;
 }
 
 /**
@@ -133,8 +134,8 @@ export function aggConsoleWindow(rows: ConsoleWindowRow[]): ConsoleWindowAgg | n
     sessAvg: sessRows.length
       ? sessRows.reduce((s, r) => s + (r.avgSessionSec ?? 0), 0) / sessRows.length
       : null,
-    iaaImpSum: sum((r) => r.iaaImpressions),
-    iaaEarnSum: sum((r) => r.iaaEarningKrw),
+    iaaImpSum: sumConsoleValues(rows.map((r) => r.iaaImpressions)),
+    iaaEarnSum: sumConsoleValues(rows.map((r) => r.iaaEarningKrw)),
   };
 }
 
@@ -186,7 +187,7 @@ export function formatConsoleWindowRow(
     dauAvg: agg.dauAvg.toFixed(1),
     newSum: String(agg.newSum),
     sessAvg: agg.sessAvg != null ? `${Math.round(agg.sessAvg)}초` : DASH,
-    iaaImpSum: String(agg.iaaImpSum),
+    iaaImpSum: agg.iaaImpSum == null ? DASH : String(agg.iaaImpSum),
     iaaEarnKrw: won(agg.iaaEarnSum),
   };
 }

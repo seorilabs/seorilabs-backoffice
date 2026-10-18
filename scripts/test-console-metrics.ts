@@ -8,6 +8,8 @@ import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
 import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/analytics/console-sync/collect";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { startConsoleFixture } from "./console-metrics/fixture-server";
+import { ingestConsoleMetrics, getConsoleSyncStatus } from "../src/lib/core/console-metrics-collect";
+import { recordObservations } from "../src/lib/analytics/coverage";
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
@@ -44,14 +46,79 @@ async function main() {
     const failed = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
     assert.ok("results" in failed); assert.ok(failed.results.some((r) => r.missing.some((m) => m.metrics.includes("iaa.IOS"))));
     const after = await prisma.appConsoleMetricDaily.findMany({ where: { appId: app.id }, orderBy: { date: "asc" } });
-    assert.deepEqual(after, before);
+    const numeric = (row: typeof before[number]) => Object.fromEntries(Object.entries(row).filter(([key]) => key !== "raw"));
+    const existingAfter = after.filter((row) => row.date >= before[0].date);
+    assert.deepEqual(existingAfter.map(numeric), before.map(numeric));
+    assert.deepEqual((existingAfter[0].raw as Record<string, unknown>).iaaByOs, (before[0].raw as Record<string, unknown>).iaaByOs);
     const ledger = await prisma.metricCollectionLedger.findMany({ where: { appId: app.id, day: { gte: new Date("2026-10-10") } } });
     assert.equal(ledger.length, 2); assert.ok(ledger.every((cell) => cell.state === "observed"));
+    // 새 날짜의 일부 지표만 있어도 저장하며, 빈 지표는 실제 NULL이다.
+    const nextNow = new Date("2026-10-13T01:00:00Z");
+    fixture.state.failIap = true;
+    const partial = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    assert.equal(partial.state, "partial");
+    const where = { appId_miniAppId_date: { appId: app.id, miniAppId: 61736, date: new Date("2026-10-12") } };
+    const partialRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(partialRow.avgSessionSec, 30); assert.equal(partialRow.iaaEarningKrw, null); assert.equal(partialRow.iapTrxAmountKrw, null);
+    assert.ok((partialRow.raw as Record<string, unknown>).iaaByOs);
+    const partialLedger = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date("2026-10-12") } });
+    assert.equal(partialLedger.state, "failed"); assert.equal(partialLedger.sealed, false);
+    const partialStatus = (await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)!;
+    assert.ok(partialStatus.firstIncompleteDate && partialStatus.firstIncompleteDate <= "2026-10-12");
+    // 나중에 확인된 OS를 더해 광고를 복원하고 결제 미확인은 계속 NULL로 둔다.
+    fixture.state.failIos = false;
+    await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    const adRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(adRow.iaaEarningKrw, 34); assert.equal(adRow.iapTrxAmountKrw, null);
+    fixture.state.failIap = false;
+    const complete = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    assert.equal(complete.state, "complete");
+    const fullRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(fullRow.iapTrxAmountKrw, 0); assert.equal(fullRow.iaaEarningKrw, 34);
+    assert.deepEqual((fullRow.raw as Record<string, unknown>).missingMetrics, []);
+    assert.equal((await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)?.firstIncompleteDate, null);
+    // 직접 push도 내부 결측 목록을 몰라도 명시한 완전 지표로 복구할 수 있다.
+    await prisma.appConsoleMetricDaily.update({ where, data: { raw: { missingMetrics: ["iap"] } } });
+    await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, workspaceId: 38345, days: [{ date: "2026-10-12", iaaImpressions: 6, iaaEarningKrw: 34, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 }] }] }, nextNow);
+    const pushed = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.deepEqual((pushed.raw as Record<string, unknown>).missingMetrics, []);
+    // 합계 필드 없이 OS 원본만 복구한 직접 push도 결측 표시와 완료 상태를 함께 복구한다.
+    const recoveredDate = "2026-10-17";
+    await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, days: [{ date: recoveredDate,
+      iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0,
+      raw: { iaaByOs: { ANDROID: { date: recoveredDate, impression: 6, estimatedEarning: 34 } }, missingMetrics: ["iaa.IOS"] },
+    }] }] }, nextNow);
+    const recovered = await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, days: [{ date: recoveredDate,
+      raw: { iaaByOs: { IOS: { date: recoveredDate, impression: 2, estimatedEarning: 12 } } },
+    }] }] }, nextNow);
+    assert.equal(recovered.warnings.length, 0);
+    const recoveredRow = await prisma.appConsoleMetricDaily.findFirstOrThrow({ where: { appId: app.id, miniAppId: 61736, date: new Date(recoveredDate) } });
+    assert.equal(recoveredRow.iaaEarningKrw, 46);
+    assert.deepEqual((recoveredRow.raw as Record<string, unknown>).missingMetrics, []);
+    assert.equal((await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date(recoveredDate) } })).state, "observed");
+    // 행이 없다는 백필 추정으로 실제 수집 실패 기록을 덮거나 재조회 대상에서 빼지 않는다.
+    const absent = { source: "ait_console" as const, appId: app.id, listingId: 61736, day: "2026-10-07" };
+    await recordObservations([{ ...absent, state: "failed", detail: "CONSOLE_STORAGE_FAILED" }], nextNow);
+    await recordObservations([{ ...absent, state: "not_landed" }], nextNow);
+    const preserved = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { ...absent, day: new Date(absent.day) } });
+    assert.equal(preserved.state, "failed"); assert.equal(preserved.detail, "CONSOLE_STORAGE_FAILED");
+    assert.equal((await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)?.firstIncompleteDate, absent.day);
+    // 신규 unique 키를 동시에 만드는 서로 다른 OS 패치도 모두 보존한다.
+    for (let i = 0; i < 4; i++) {
+      const day = `2026-10-${13 + i}`;
+      const patch = (os: string, impression: number, estimatedEarning: number) => ({ apps: [{ slug: app.slug, miniAppId: 61736, workspaceId: 38345,
+        days: [{ date: day, raw: { iaaByOs: { [os]: { date: day, impression, estimatedEarning } } } }] }] });
+      const results = await Promise.all([ingestConsoleMetrics(patch("ANDROID", 6, 34), nextNow), ingestConsoleMetrics(patch("IOS", 2, 12), nextNow)]);
+      assert.ok(results.every((result) => result.upserts === 1 && result.errors.length === 0));
+      const merged = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where: { appId_miniAppId_date: { appId: app.id, miniAppId: 61736, date: new Date(day) } } });
+      assert.equal(merged.iaaImpressions, 8); assert.equal(merged.iaaEarningKrw, 46);
+      assert.deepEqual(Object.keys((merged.raw as { iaaByOs: object }).iaaByOs).sort(), ["ANDROID", "IOS"]);
+    }
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
     await reader!.close(); reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);
     fixture.state.failIos = false; fixture.state.rateLimits = 10; fixture.state.retryAfter = "60";
-    const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
+    const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
     assert.equal(limited.state, "partial"); assert.ok("blocked" in limited && limited.blocked.some((b) => b.reason.includes("공급자 요청 제한")));
     assert.ok(fixture.state.rateLimits >= 8); // 진행 중인 최대 두 요청 외의 새 조회는 보내지 않는다.
     fixture.state.revoked = true;

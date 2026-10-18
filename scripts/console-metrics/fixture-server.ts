@@ -21,7 +21,7 @@ function inputSchema(name: string) {
   return z.object({ workspaceId: z.number().int(), miniAppId: z.number().int(), request }).strict();
 }
 export async function startConsoleFixture() {
-  const state = { failIos: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
+  const state = { failIos: false, failIap: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
   const server = createServer(async (req, res) => {
     try {
       if (req.url === "/token") { state.refreshes++; res.setHeader("Content-Type", "application/json"); res.statusCode = state.revoked ? 400 : 200; res.end(JSON.stringify(state.revoked ? { error: "invalid_grant" } : { access_token: "fixture-access", token_type: "bearer", expires_in: 3600, refresh_token: "fixture-refresh" })); return; }
@@ -42,7 +42,7 @@ export async function startConsoleFixture() {
           let result: unknown;
           if (name === "dashboard_dau") result = { au: [], newAu: [], age: [], gender: [], referrer: [] };
           if (name === "dashboard_session") result = { metric: dates.map((dateKey) => ({ dateKey, value: 30 })) };
-          if (name === "dashboard_revenue_iap") result = { metric: dates.map((trxDate) => ({ trxDate, trxAmount: 0, settlementAmount: 0, pu: 0 })) };
+          if (name === "dashboard_revenue_iap") result = { metric: state.failIap ? [] : dates.map((trxDate) => ({ trxDate, trxAmount: 0, settlementAmount: 0, pu: 0 })) };
           if (name === "dashboard_revenue_iaa") result = { dailyReports: dates.flatMap((date) => state.failIos && request.osType === "IOS" ? [] : [{ date, impression: request.osType === "IOS" ? 0 : 6, estimatedEarning: request.osType === "IOS" ? 0 : 34, ecpm: 5 }]) };
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         } finally { state.active--; }

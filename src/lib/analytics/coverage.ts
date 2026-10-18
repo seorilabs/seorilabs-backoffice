@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
+import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import {
   dbDay,
   metricDayOf,
@@ -130,17 +132,28 @@ export async function recordObservations(
       observedAt: now,
       observations,
     };
-    await prisma.metricCollectionLedger.upsert({
-      where: ledgerKey(part),
-      create: {
-        source: part.source,
-        appId: part.appId,
-        listingId: part.listingId,
-        day: toDbDay(part.day),
-        ...data,
-      },
-      update: data,
-    });
+    const identity = { source: part.source, appId: part.appId, listingId: part.listingId, day: toDbDay(part.day) };
+    if (part.source === "ait_console" && part.state === "not_landed") {
+      // 콘솔의 행 부재는 백필 추정이다. 동시 수집을 포함해 기존 관측·실패 기록을 덮지 않는다.
+      try { await prisma.metricCollectionLedger.create({ data: { ...identity, ...data } }); }
+      catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+        continue;
+      }
+    } else if (part.state === "failed") {
+      // 선행 조회 뒤 다른 수집이 observed로 바꿔도 원자적 조건으로 보존한다.
+      const updated = await prisma.metricCollectionLedger.updateMany({ where: { ...identity, state: { notIn: ["observed", "empty"] } }, data });
+      if (updated.count === 0) {
+        try { await prisma.metricCollectionLedger.create({ data: { ...identity, ...data } }); }
+        catch (error) {
+          if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+          // 같은 키가 먼저 생겼다. 확인된 관측 또는 다른 실패 기록을 덮지 않는다.
+          continue;
+        }
+      }
+    } else {
+      await retryPrismaConflict(() => prisma.metricCollectionLedger.upsert({ where: ledgerKey(part), create: { ...identity, ...data }, update: data }));
+    }
     written += 1;
   }
   return written;
@@ -279,7 +292,7 @@ async function consoleWeights(
   for (const row of rows) {
     const key = `${row.appId}${SEP}${row.miniAppId}`;
     const list = byListing.get(key) ?? [];
-    list.push(row.iaaEarningKrw);
+    if (row.iaaEarningKrw != null) list.push(row.iaaEarningKrw);
     byListing.set(key, list);
   }
   return targets.map((target) => ({

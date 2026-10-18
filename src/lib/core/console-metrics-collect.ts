@@ -6,6 +6,8 @@ import type {
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
+import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, hasConsoleAdObservation, isCompleteConsoleMetric } from "@/lib/analytics/console-values";
+import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { recordCollectionFailure, recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
@@ -152,37 +154,42 @@ export async function ingestConsoleMetrics(
       }
       const day = checked.day;
       const date = toDbDay(day.date);
-      const data = {
-        // dau/newUsers 는 null 허용(콘솔 미집계). 0 강제하지 않는다.
-        dau: day.dau ?? null,
-        newUsers: day.newUsers ?? null,
-        avgSessionSec:
-          day.avgSessionSec ?? null,
-        iaaImpressions: day.iaaImpressions,
-        iaaEarningKrw: day.iaaEarningKrw,
-        iapTrxAmountKrw: day.iapTrxAmountKrw,
-        iapSettlementKrw: day.iapSettlementKrw,
-        payingUsers: day.payingUsers,
-        raw: (day.raw ?? Prisma.JsonNull) as Prisma.InputJsonValue | typeof Prisma.JsonNull,
-        collectedAt: now,
-      };
+      const patch = Object.fromEntries(consoleMetricFields.flatMap((field) => day[field] == null ? [] : [[field, day[field]]])) as Partial<Record<typeof consoleMetricFields[number], number>>;
+      if (!Object.keys(patch).length && !hasConsoleAdObservation(day.raw, day.date)) {
+        result.skipped.push({ key, reason: `확인된 지표 없음 (${day.date})` });
+        continue;
+      }
       for (const section of emptyRawSections(day.raw)) {
         result.warnings.push({ key, warning: `raw.${section} 값이 전부 비어 있음 (${day.date})` });
       }
       try {
-        await prisma.appConsoleMetricDaily.upsert({
-          where: { appId_miniAppId_date: { appId: app.id, miniAppId, date } },
-          create: { appId: app.id, miniAppId, date, ...data },
-          update: data,
-        });
+        const saved = await retryPrismaConflict(() => prisma.$transaction(async (tx) => {
+          // upsert가 행 잠금을 잡은 뒤 원본을 합쳐 동시 수집의 다른 OS를 잃지 않는다.
+          const where = { appId_miniAppId_date: { appId: app.id, miniAppId, date } };
+          const stored = await tx.appConsoleMetricDaily.upsert({ where,
+            create: { appId: app.id, miniAppId, date, ...Object.fromEntries(consoleMetricFields.map((field) => [field, null])), ...patch, collectedAt: now },
+            update: { ...patch, collectedAt: now },
+          });
+          const raw = mergeConsoleRaw(stored.raw, day.raw);
+          const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
+          if (day.raw?.missingMetrics == null && Array.isArray(raw.missingMetrics)) {
+            const covered = [
+              ...(total != null || (day.iaaImpressions != null && day.iaaEarningKrw != null) ? ["iaa.ANDROID", "iaa.IOS"] : []),
+              ...(day.iapTrxAmountKrw != null && day.iapSettlementKrw != null && day.payingUsers != null ? ["iap"] : []),
+              ...(day.dau != null && day.newUsers != null ? ["dau"] : []),
+              ...(day.avgSessionSec != null ? ["session"] : []),
+            ];
+            raw.missingMetrics = raw.missingMetrics.filter((metric) => !covered.includes(String(metric)));
+          }
+          return tx.appConsoleMetricDaily.update({ where, data: { ...total, raw: Object.keys(raw).length ? raw as Prisma.InputJsonObject : Prisma.JsonNull } });
+        }));
         result.upserts++;
-        observations.push({
-          source: "ait_console",
-          appId: app.id,
-          listingId: miniAppId,
-          day: day.date,
-          state: "observed",
-        });
+        if (isCompleteConsoleMetric(saved)) {
+          observations.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, state: "observed" });
+        } else {
+          result.warnings.push({ key, warning: `확인된 지표만 부분 저장 (${day.date})` });
+          failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, detail: "확인된 지표만 부분 저장" });
+        }
       } catch {
         const error = "CONSOLE_STORAGE_FAILED";
         result.errors.push({ key: `${key}@${day.date}`, error });
@@ -211,6 +218,8 @@ export interface ConsoleSyncStatusApp {
   label?: string;
   /** 저장된 마지막 지표 기준일 "YYYY-MM-DD"(없으면 null → 백필 필요). */
   lastDate: string | null;
+  /** 미확인 관측이 남은 가장 이른 날짜. 최신 부분 행이 과거 결측 재조회를 끊지 않는다. */
+  firstIncompleteDate?: string | null;
   /** 마지막 수집 시각 ISO(없으면 null). */
   lastCollectedAt: string | null;
   /** 저장된 (리스팅×날짜) row 수. */
@@ -247,6 +256,10 @@ export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
   const registry = await prisma.app.findMany({
     select: { id: true, slug: true, status: true, aitMiniAppId: true, aitWorkspaceId: true },
   });
+  const incomplete = await prisma.metricCollectionLedger.groupBy({
+    by: ["appId", "listingId"], where: { source: "ait_console", state: "failed" }, _min: { day: true },
+  });
+  const incompleteByListing = new Map(incomplete.map((row) => [`${row.appId}:${row.listingId}`, row._min.day]));
 
   const bySlug = new Map(registry.map((a) => [a.slug, a]));
   const groupByListing = new Map(grouped.map((g) => [`${g.appId}:${g.miniAppId}`, g]));
@@ -284,6 +297,7 @@ export async function getConsoleSyncStatus(): Promise<ConsoleSyncStatus> {
         miniAppId: t.miniAppId,
         label: t.label,
         lastDate: toIsoDate(g?._max.date ?? null),
+        firstIncompleteDate: toIsoDate(app ? incompleteByListing.get(`${app.id}:${t.miniAppId}`) ?? null : null),
         lastCollectedAt: g?._max.collectedAt ? g._max.collectedAt.toISOString() : null,
         rows: g?._count._all ?? 0,
       };
