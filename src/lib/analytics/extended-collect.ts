@@ -5,7 +5,7 @@ import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { beginCollection, completeCollection, collectionErrorCode } from "@/lib/insights/collection";
 import { metricDayOf, shiftMetricDay, toDbDay } from "./metric-day";
 import { importMetricReport } from "./report-batches";
-import { appleReportCatalog, appleInstances, applePages, appleSegmentVersion, readAppleInstance } from "./providers/apple-analytics";
+import { appleReportCatalog, appleInstances, applePages, appleSegmentVersion, readAppleInstance, verifyAppleAppIdentity } from "./providers/apple-analytics";
 import { readAdmob } from "./providers/admob";
 import { readPlayInstallReport } from "./providers/play-reports";
 import type { DatedMetricRow } from "./report-files";
@@ -26,10 +26,15 @@ export async function collectExtendedMetrics(now = new Date(), appId?: string) {
     const config = revision && configRevisionPayloadSchema.safeParse(revision.payload);
     if (!config?.success) continue;
     for (const connection of config.data.analyticsSources ?? []) {
+      const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: connection.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+      const end = shiftMetricDay(localDay, -1), start = shiftMetricDay(end, -89);
       if (!connection.enabled) continue;
       const run = await beginCollection(connection.source, connection.id, app.id);
       let batches = 0, latest: string | undefined;
+      const versions = new Map<string, string>();
+      const failures: Array<{ reportType: string; instanceId: string; errorCode: string }> = [];
       const save = async (rows: DatedMetricRow[], reportType: string, sourceVersion: string, sourceHash: string, sourceUri: string, processingDate: string) => {
+        versions.set(sourceUri, sourceVersion);
         for (const [day, metrics] of groupDays(rows, start, end)) {
           const result = await importMetricReport({ appId: app.id, configRevisionId: revision.id, connectionId: connection.id, source: connection.source,
             accountId: connection.accountId, resourceId: connection.resourceId, timeZone: connection.timeZone,
@@ -45,6 +50,7 @@ export async function collectExtendedMetrics(now = new Date(), appId?: string) {
           const catalog = await appleReportCatalog(connection.resourceId, app.iosBundle);
           for (const report of catalog) {
             for (const instance of await appleInstances(report.id)) {
+              try {
               const processingDate = String(instance.attributes!.processingDate);
               if (processingDate < start) continue;
               const sourceUri = `https://api.appstoreconnect.apple.com/v1/analyticsReportInstances/${encodeURIComponent(instance.id)}`;
@@ -58,37 +64,51 @@ export async function collectExtendedMetrics(now = new Date(), appId?: string) {
               if (cached && completeCachedRun?.status === "observed" && completeCachedRun.completedAt) { const through = cached.periodEnd.toISOString().slice(0, 10); if (!latest || through > latest) latest = through; continue; }
               const parsed = await readAppleInstance({ appId: connection.resourceId, reportType: String(report.attributes!.name), processingDate, segments });
               await save(parsed.rows, String(report.attributes!.name), sourceVersion, parsed.sourceHash, sourceUri, processingDate);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "";
+                if (/401|403|PERMISSION|IDENTITY/.test(message)) throw error;
+                failures.push({ reportType: String(report.attributes!.name), instanceId: instance.id, errorCode: /^(APPLE|REPORT)_[A-Z0-9_]+$/.test(message) ? message : collectionErrorCode(error) });
+              }
             }
           }
         } else if (connection.source === "play-reports") {
           if (!app.playPackage || connection.resourceId !== app.playPackage) throw new Error("PLAY_APP_IDENTITY_MISMATCH");
           const months = new Set([start.slice(0, 7), end.slice(0, 7)]);
           for (let date = start; date <= end; date = shiftMetricDay(date, 1)) months.add(date.slice(0, 7));
-          for (const month of months) {
+          for (const month of [...months].sort()) {
             try {
               const report = await readPlayInstallReport(connection.accountId, app.playPackage, month.replace("-", ""));
               await save(report.rows, "installs_country", report.sourceVersion, report.sourceHash, report.sourceUri, metricDayOf(now));
             } catch (error) { if ((error as { code?: number }).code !== 404) throw error; }
           }
         } else {
-          const report = await readAdmob({ accountId: connection.accountId, appId: connection.resourceId, timeZone: connection.timeZone, start, end, processingDate: metricDayOf(now) });
+          const ads = config.data.ads, platform = ads?.platforms.find((one) => one.admobAppId === connection.resourceId);
+          if (!ads || ads.publisherId !== connection.accountId || !platform || platform.applicationId !== (platform.platform === "android" ? app.playPackage : app.iosBundle)) throw new Error("ADMOB_APP_IDENTITY_MISMATCH");
+          const active = await prisma.configRevision.findMany({ where: { status: "ACTIVE", appId: { not: app.id } }, select: { payload: true } });
+          if (active.some((row) => { const other = configRevisionPayloadSchema.safeParse(row.payload); return other.success && other.data.analyticsSources?.some((one) => one.enabled && one.source === "admob" && one.resourceId === connection.resourceId); })) throw new Error("ADMOB_RESOURCE_DUPLICATE");
+          const apple = config.data.analyticsSources?.find((one) => one.source === "apple-analytics");
+          if (platform.platform === "ios") {
+            if (!apple || !app.iosBundle || process.env.APP_STORE_CONNECT_ISSUER_ID !== apple.accountId) throw new Error("ADMOB_APP_IDENTITY_MISSING");
+            await verifyAppleAppIdentity(apple.resourceId, app.iosBundle);
+          }
+          const report = await readAdmob({ applicationId: platform.platform === "android" ? platform.applicationId : config.data.analyticsSources?.find((one) => one.source === "apple-analytics")?.resourceId, accountId: connection.accountId, appId: connection.resourceId, timeZone: connection.timeZone, start, end, processingDate: localDay });
           const hash = createHash("sha256").update(JSON.stringify(report.raw)).digest("hex");
           await save(report.rows, "network_country_format_ad_unit", hash, hash, `https://admob.googleapis.com/v1/accounts/${connection.accountId}/networkReport`, metricDayOf(now));
         }
-        const status = latest ? "observed" : "not_landed";
-        await completeCollection(run.id, { status, ...(latest ? { dataThrough: toDbDay(latest) } : {}), coverage: collectionScope(connection, revision.id, start, end, batches) });
+        const status = failures.length ? latest ? "partial" : failures.every((one) => one.errorCode === "APPLE_SEGMENTS_NOT_LANDED") ? "not_landed" : "failed" : latest ? "observed" : "not_landed";
+        await completeCollection(run.id, { status, ...(latest ? { dataThrough: toDbDay(latest) } : {}), coverage: { ...collectionScope(connection, revision.id, start, end, batches, versions), reportFailures: failures.slice(0, 200), reportFailureCount: failures.length } });
         results.push({ appId: app.id, connectionId: connection.id, runId: run.id, status, batches });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
         const code = /^(APPLE|ADMOB|PLAY|REPORT)_[A-Z0-9_]+$/.test(message) ? message : collectionErrorCode(error);
         const status = latest ? "partial" : /PERMISSION|INITIAL_REPORT|IDENTITY|Missing required env|OAUTH|_HTTP_40[13]/.test(message) || collectionErrorCode(error) === "SOURCE_PERMISSION_REQUIRED" ? "needs_input" : "failed";
-        await completeCollection(run.id, { status, errorCode: code, ...(latest ? { dataThrough: toDbDay(latest) } : {}), coverage: collectionScope(connection, revision.id, start, end, batches) });
+        await completeCollection(run.id, { status, errorCode: code, ...(latest ? { dataThrough: toDbDay(latest) } : {}), coverage: { ...collectionScope(connection, revision.id, start, end, batches, versions), reportFailures: failures.slice(0, 200), reportFailureCount: failures.length } });
         results.push({ appId: app.id, connectionId: connection.id, runId: run.id, status, batches });
       }
     }
   }
   return { periodStart: start, periodEnd: end, results };
 }
-function collectionScope(connection: AnalyticsConnection, configRevisionId: string, start: string, end: string, batches: number) {
-  return { connectionId: connection.id, accountId: connection.accountId, resourceId: connection.resourceId, credentialId: connection.credentialId, configRevisionId, start, end, batches };
+function collectionScope(connection: AnalyticsConnection, configRevisionId: string, start: string, end: string, batches: number, versions: Map<string, string>) {
+  return { versions: [...versions].map(([uri, version]) => ({ uri, version })), connectionId: connection.id, accountId: connection.accountId, resourceId: connection.resourceId, credentialId: connection.credentialId, configRevisionId, start, end, batches };
 }

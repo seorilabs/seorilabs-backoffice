@@ -3,13 +3,13 @@ import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { prisma } from "@/lib/prisma";
 import { collectHighlightData, dailyReportContext, metricHighlightDedupeKey } from "@/lib/core/metric-highlights";
 import { assembleOrgReportDocument, orgTrendSeries, saveOrgReport } from "@/lib/core/org-report";
-import { parseOrgReportDocument, type OrgReportDocument } from "@/lib/core/org-report-schema";
+import { parseOrgReportDocument, orgReportDocumentSchema, type OrgReportDocument } from "@/lib/core/org-report-schema";
 import { metricSourceInventory } from "@/lib/analytics/source-inventory";
 import { metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { dailyReportSchedule } from "./daily-contract";
 import { reportConclusions, reportFactsHash, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
 import { metricNarrative } from "@/lib/core/metric-narrative";
-import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
+import { financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
 import { discordDestinations } from "@/lib/notifications/destinations";
@@ -27,7 +27,10 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const cohorts = await reportCohorts(refDate, db);
     const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
-    const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: now });
+    const finance = await db.sourceCollectionRun.findFirst({ where: { source: "finance-costs", target: financeMonth(now).month, completedAt: { lte: now < schedule.cutoffAt ? now : schedule.cutoffAt } }, orderBy: { completedAt: "desc" } });
+    const parsedCost = orgReportDocumentSchema.shape.costs.safeParse(finance?.coverage ?? null);
+    const costSnapshot = parsedCost.success ? parsedCost.data : null;
+    const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
       inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
@@ -65,15 +68,14 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 120_000 }));
   if (!prepared.doc || !prepared.data) return { preparationId: prepared.row.id, refDate: schedule.refDate, reused: true };
   // 11시에는 이 작업을 기다리지 않는다. 실패하면 저장된 수치·고정 문장으로 발행한다.
-  const [narrative, costs, attachment] = await Promise.allSettled([
-    metricNarrative(prepared.data), collectFinanceCosts(now), dailyReportImage(prepared.doc),
+  const [narrative, attachment] = await Promise.allSettled([
+    metricNarrative(prepared.data), dailyReportImage(prepared.doc),
   ]);
   const doc = prepared.doc;
   if (narrative.status === "fulfilled") {
     doc.narrative = narrative.value.text;
     doc.narrativeMeta = { fallback: narrative.value.fallback, provider: narrative.value.provider, model: narrative.value.model, promptVersion: narrative.value.promptVersion };
   }
-  if (costs.status === "fulfilled") doc.costs = { month: financeMonth(now).month, ...costs.value };
   await prisma.orgReportPreparation.updateMany({ where: { id: prepared.row.id, publishedVersion: null }, data: {
     enrichment: { narrative: doc.narrative, narrativeMeta: doc.narrativeMeta ?? null, costs: doc.costs } as unknown as Prisma.InputJsonObject,
     ...(attachment.status === "fulfilled" ? { attachment: attachment.value as unknown as Prisma.InputJsonObject } : {}),
@@ -101,7 +103,7 @@ export async function dailyReportImage(doc: OrgReportDocument) {
     const days = metricDayWindow(provider.points.at(-1)!.day, 28);
     charts.push({ title: `${provider.appName} · ${METRIC_DICTIONARY[provider.metric].label}`, unit: provider.currency ?? provider.unit,
       source: `${provider.source} · ${provider.timeZone} · ${provider.reportType} · 발행 입력 고정`,
-      series: [{ label: METRIC_DICTIONARY[provider.metric].label, color: "#0891b2", values: days.map((day) => provider.points.find((point) => point.day === day)?.value ?? null) }],
+      series: [{ label: `${METRIC_DICTIONARY[provider.metric].label}${provider.segment ? ` · ${provider.segment}` : ""}`, color: "#0891b2", values: days.map((day) => provider.points.find((point) => point.day === day)?.value ?? null) }],
       // 이 패널은 공급자 시간대의 달력일을 사용한다.
       days,
     } as typeof charts[number] & { days: string[] });

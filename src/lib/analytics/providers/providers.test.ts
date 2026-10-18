@@ -39,3 +39,20 @@ test("비공개 셀은 전체 합계를 숨기고 고유값은 차원 간 더하
   assert.equal(aggregateReportRows([row, { ...row, value: null, state: "not_landed" }]).value, null);
   assert.equal(aggregateReportRows([{ ...row, metric: "unique_devices" }, { ...row, metric: "unique_devices" }]).value, null);
 });
+
+test("AdMob no-fill 행의 분모 0은 다른 행의 표시율·eCPM을 숨기지 않는다", () => {
+  const input = report();
+  const noFill = structuredClone(input[1]);
+  noFill.row!.dimensionValues.COUNTRY.value = "KR";
+  for (const [key, value] of Object.entries(noFill.row!.metricValues)) {
+    if ("microsValue" in value) value.microsValue = "0";
+    else if ("integerValue" in value) value.integerValue = key === "AD_REQUESTS" ? "20" : "0";
+  }
+  const rows = parseAdmobReport([input[0], input[1], noFill, { footer: { matchingRowCount: "2" } }], admobInput);
+  assert.equal(aggregateReportRows(rows.filter((row) => row.row.metric === "show_rate").map((row) => row.row)).value, 50);
+  assert.equal(aggregateReportRows(rows.filter((row) => row.row.metric === "ad_ecpm").map((row) => row.row)).value, 162.5);
+  assert.equal(aggregateReportRows(rows.filter((row) => row.row.metric === "match_rate").map((row) => row.row)).value, 100 * 80 / 120);
+});
+test("AdMob 최근 수익도 경과일이 부족하면 잠정으로 표시한다", () => {
+  assert.equal(parseAdmobReport(report(), { ...admobInput, processingDate: "2026-10-16" }).find((cell) => cell.row.metric === "ad_estimated_revenue")!.row.valueStatus, "provisional");
+});

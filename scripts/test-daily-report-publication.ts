@@ -20,6 +20,11 @@ async function main() {
   }
   await assert.rejects(prepareDailyReport(new Date("2026-09-01T01:44:59.999Z")), /REPORT_BEFORE_CUTOFF/);
   await assert.rejects(publishDailyReport(new Date("2026-09-01T01:59:59.999Z")), /REPORT_BEFORE_PUBLICATION/);
+  const cost = (total: number) => ({ month: "2026-09", summaryLines: ["격리 비용 근거"], warnings: [], figures: { github: null, gcp: { total, currency: "USD" }, llm: null, stability: null } });
+  await prisma.sourceCollectionRun.createMany({ data: [
+    { source: "finance-costs", target: "2026-09", status: "partial", completedAt: new Date("2026-09-01T01:40:00Z"), coverage: cost(1) },
+    { source: "finance-costs", target: "2026-09", status: "partial", completedAt: new Date("2026-09-01T01:46:00Z"), coverage: cost(999) },
+  ] });
   const prepared = await prepareDailyReport(new Date("2026-09-01T01:45:00Z"));
   assert.equal(prepared.reused, false);
   await prisma.appMetricDaily.update({ where: { appId_date: { appId: app.id, date: toDbDay(date) } }, data: { dau: 999, dauWeb: 999 } });
@@ -29,6 +34,7 @@ async function main() {
   assert.deepEqual(published.map((result) => result.version), [1, 1]);
   const original = await getOrgReport(date, new Date(), 1);
   assert.equal(original?.doc.summary.ga4.dau, 17);
+  assert.equal(original?.doc.costs?.figures.gcp?.total, 1, "컷오프 뒤의 비용은 발행본에 들어가지 않는다");
   assert.equal(original?.doc.edition?.trend.at(-1)?.ga4Dau, 17);
   assert.equal(original?.doc.edition?.frozenAt, "2026-09-01T01:45:00.000Z");
   const initialEvent = await prisma.notificationEvent.findUniqueOrThrow({ where: { dedupeKey: original!.doc.published!.dedupeKey } });

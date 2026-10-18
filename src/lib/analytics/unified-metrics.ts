@@ -13,7 +13,7 @@ export const METRIC_DICTIONARY = {
   device_uninstalls: count("기기 삭제", "실제 삭제 보고", "lower"),
   user_installs: count("사용자 설치", "Google Play 사용자 기준 설치"),
   user_uninstalls: count("사용자 삭제", "Google Play 사용자 기준 삭제", "lower"),
-  store_engagement: count("스토어 발견·참여", "Event·Engagement Type별 원천 횟수. 서로 다른 행동을 전환으로 잇지 않음"),
+  store_engagement: count("스토어 발견·참여", "Event·Engagement Type별 원천 횟수. 서로 다른 행동을 전환으로 잇지 않음", "neutral"),
   install_delete_events: count("설치·삭제 행동", "Event별 횟수. 설치와 삭제를 분리해 표시", "neutral"),
   sessions: count("세션", "소스의 세션 정의·동의 범위에 한정"),
   session_seconds: { ...count("세션 시간 합계", "소스 보고서의 총 세션 시간"), unit: "초", direction: "neutral" as const },

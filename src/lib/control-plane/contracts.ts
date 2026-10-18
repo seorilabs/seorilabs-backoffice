@@ -556,6 +556,7 @@ export const configRevisionPayloadSchema = z.object({
   projectBlueprint: projectBlueprintSchema.optional(),
   complianceDrafts: z.array(complianceDraftSchema).max(100).optional(),
 }).strict().superRefine((payload, context) => {
+  for (const connection of payload.analyticsSources ?? []) if (connection.source === "admob" && (!payload.ads || payload.ads.publisherId !== connection.accountId || !payload.ads.platforms.some((platform) => platform.admobAppId === connection.resourceId))) context.addIssue({ code: "custom", path: ["analyticsSources"], message: "AdMob 보고 연결은 같은 설정의 게시자·플랫폼 앱 ID와 일치해야 합니다." });
   if (new Set(payload.analyticsSources?.map((source) => source.id)).size !== (payload.analyticsSources?.length ?? 0)) context.addIssue({ code: "custom", path: ["analyticsSources"], message: "소스 연결 ID는 중복할 수 없습니다." });
   if (new Set(payload.analyticsSources?.map((source) => `${source.source}:${source.accountId}:${source.resourceId}`)).size !== (payload.analyticsSources?.length ?? 0)) context.addIssue({ code: "custom", path: ["analyticsSources"], message: "같은 공급자 계정·앱을 두 번 연결할 수 없습니다." });
   const seenMarkets = new Set<string>();

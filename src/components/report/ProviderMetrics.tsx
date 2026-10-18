@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import type { ProviderSeries } from "@/lib/analytics/report-query";
 import { METRIC_DICTIONARY } from "@/lib/analytics/unified-metrics";
 import { metricDayWindow } from "@/lib/analytics/metric-day";
+import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { splitSegmentsOnNull } from "@/lib/report/chart-geometry";
 
 const statusLabel = { provisional: "잠정", analyzable: "분석 가능", estimated: "추정 수익", settled: "정산 확인" };
@@ -20,7 +21,7 @@ export function ProviderMetrics({ series }: { series: ProviderSeries[] }) {
         <label>앱 <select aria-label="분석 앱" className="ml-2 max-w-60 rounded border p-2" value={appId} onChange={(event) => setAppId(event.target.value)}><option value="">전체 앱</option>{apps.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
         <label>지표 <select aria-label="분석 지표" className="ml-2 max-w-60 rounded border p-2" value={metric} onChange={(event) => setMetric(event.target.value)}><option value="">전체 지표</option>{metrics.map((key) => <option key={key} value={key}>{METRIC_DICTIONARY[key].label}</option>)}</select></label>
       </div>
-      <div className="space-y-3">{choices.map((row) => <Series key={[row.appId, row.source, row.account, row.resource, row.reportType, row.metric, row.currency, row.timeZone].join(":")} series={row} />)}</div>
+      <div className="space-y-3">{choices.map((row) => <Series key={[row.appId, row.source, row.account, row.resource, row.reportType, row.metric, row.segment, row.currency, row.timeZone].join(":")} series={row} />)}</div>
     </>}
   </section>;
 }
@@ -32,7 +33,7 @@ function Series({ series }: { series: ProviderSeries }) {
   const present = values.filter((value): value is number => value !== null), min = Math.min(0, ...present), max = Math.max(1, ...present);
   const x = (index: number) => 52 + index * 600 / 27, y = (value: number) => 160 - (value - min) * 130 / (max - min);
   return <details className="rounded-lg border border-neutral-200">
-    <summary className="cursor-pointer px-3 py-3 text-sm"><b>{series.appName} · {definition.label}</b><span className="ml-2">{number(latest.value)} {unit}</span><span className="ml-2 text-xs text-neutral-600">{latest.day} · {series.timeZone} · {statusLabel[latest.valueStatus]}</span></summary>
+    <summary className="cursor-pointer px-3 py-3 text-sm"><b>{series.appName} · {definition.label}{series.segment ? ` · ${series.segment}` : ""}</b><span className="ml-2">{number(latest.value)} {unit}</span><span className="ml-2 text-xs text-neutral-600">{latest.day} · {series.timeZone} · {statusLabel[latest.valueStatus]}</span></summary>
     <div className="space-y-3 border-t p-3 text-xs text-neutral-600">
       <p>{series.definition} · {series.source} · {series.reportType} · 계정 {series.account}</p>
       <p>판단: {({ insufficient: "비교 근거 부족", flat: "기준을 넘는 변화 없음", observing: "연속 관측 대기", highlight: "좋아진 점", lowlight: "나빠진 점" })[series.verdict]} · {latest.numerator !== null ? `분자 ${number(latest.numerator)} / 분모 ${number(latest.denominator)}` : "비율 분모 해당 없음"}</p>
@@ -44,9 +45,9 @@ function Series({ series }: { series: ProviderSeries }) {
         {values.map((value, index) => value === null ? null : <circle key={index} cx={x(index)} cy={y(value)} r="2" fill="#2563eb"><title>{days[index]}: {number(value)} {unit}</title></circle>)}
         <text x="52" y="194" fontSize="11">{days[0]}</text><text x="570" y="194" fontSize="11">{latest.day}</text>
       </svg>
-      <details><summary className="cursor-pointer underline">날짜별 수치·원천·표본</summary><div className="overflow-x-auto"><table className="w-full min-w-[600px] text-left"><caption className="sr-only">날짜별 원천 근거</caption><thead><tr><th>기준일</th><th>값({unit})</th><th>분자/분모</th><th>상태</th><th>원천</th></tr></thead><tbody>{series.points.map((point) => <tr className="border-b" key={point.day}><td className="py-2">{point.day}</td><td>{number(point.value)}</td><td>{number(point.numerator)} / {number(point.denominator)}</td><td>{point.state} · {statusLabel[point.valueStatus]}</td><td><a className="underline" href={point.sourceUri} target="_blank" rel="noreferrer">공식 출처</a><p className="break-all">SHA256 {point.sourceHash}</p><p className="break-all">실행 {point.runId}</p></td></tr>)}</tbody></table></div></details>
+      <details><summary className="cursor-pointer underline">날짜별 수치·원천·표본</summary><div className="overflow-x-auto"><table className="w-full min-w-[600px] text-left"><caption className="sr-only">날짜별 원천 근거</caption><thead><tr><th>기준일</th><th>값({unit})</th><th>분자/분모</th><th>상태</th><th>원천</th></tr></thead><tbody>{series.points.map((point) => <tr className="border-b" key={point.day}><td className="py-2">{point.day}</td><td>{number(point.value)}</td><td>{number(point.numerator)} / {number(point.denominator)}</td><td>{point.state === "empty" ? "확인된 0" : sourceStateLabel(point.state)} · {statusLabel[point.valueStatus]}</td><td><a className="underline" href={point.sourceUri} target="_blank" rel="noreferrer">공식 출처</a><p className="break-all">SHA256 {point.sourceHash}</p><p className="break-all">실행 {point.runId}</p></td></tr>)}</tbody></table></div></details>
       <label>차원 <select className="ml-2 rounded border p-2" value={dimension} onChange={(event) => setDimension(event.target.value)}><option value="">원천 행 전체</option>{dimensions.map((name) => <option key={name}>{name}</option>)}</select></label>
-      <details><summary className="cursor-pointer underline">최신 기준일의 국가·버전·유입·광고 형식 원천 행 ({series.dimensions.length}개)</summary><div className="max-h-80 overflow-auto"><table className="w-full text-left"><caption className="sr-only">최신 기준일의 원천 차원</caption><thead><tr><th>차원</th><th>값({unit})</th><th>수집 상태</th></tr></thead><tbody>{series.dimensions.map((row, index) => <tr className="border-b" key={index}><td className="py-2">{Object.entries(row.labels).filter(([key]) => !dimension || key === dimension).map(([key, value]) => `${key}: ${value}`).join(" · ") || "전체"}</td><td>{number(row.value)}</td><td>{row.state}</td></tr>)}</tbody></table></div></details>
+      <details><summary className="cursor-pointer underline">최신 기준일의 국가·버전·유입·광고 형식 원천 행 ({series.dimensions.length}개 · 최대 200행 표시, 전체는 수집 원본 보존)</summary><div className="max-h-80 overflow-auto"><table className="w-full text-left"><caption className="sr-only">최신 기준일의 원천 차원</caption><thead><tr><th>차원</th><th>값({unit})</th><th>수집 상태</th></tr></thead><tbody>{series.dimensions.map((row, index) => <tr className="border-b" key={index}><td className="py-2">{Object.entries(row.labels).filter(([key]) => !dimension || key === dimension).map(([key, value]) => `${key}: ${value}`).join(" · ") || "전체"}</td><td>{number(row.value)}</td><td>{row.state === "empty" ? "확인된 0" : sourceStateLabel(row.state)}</td></tr>)}</tbody></table></div></details>
     </div>
   </details>;
 }

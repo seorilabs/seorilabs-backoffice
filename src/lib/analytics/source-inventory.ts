@@ -62,8 +62,13 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     if (batches.length) {
       const latestDay = batches.reduce((a, b) => a > b.periodEnd ? a : b.periodEnd, "");
       const rows = batches.filter((batch) => batch.periodEnd === latestDay).flatMap((batch) => batch.rows);
-      state = rows.every((row) => row.state === "empty") ? "empty" : rows.every((row) => ["empty", "observed"].includes(row.state)) ? "observed" : "partial";
+      state = rows.every((row) => row.state === "empty") ? "empty" : rows.every((row) => ["empty", "observed"].includes(row.state) || row.state === "not_applicable" && row.denominator === 0 && row.numerator === 0) ? "observed" : "partial";
       reason = `${latestDay} · ${batches.length}개 날짜·출처 partition · ${connection?.timeZone ?? "원천 시간대"}. 비공개 셀은 0으로 계산하지 않습니다.`;
+      const failures = (run?.coverage as { reportFailures?: Array<{ reportType: string }> } | null)?.reportFailures;
+      if (latestDay < day || failures?.some((failure) => failure.reportType === reportType)) {
+        state = "partial";
+        reason += ` 요청 기준 ${day} 중 최신 확보일과 인스턴스 누락 범위를 함께 확인하세요.`;
+      }
       remedy = state === "partial" ? "원천의 비공개·누락 셀과 분모를 확인하세요." : "";
     } else if (connection && !connection.enabled) {
       state = "needs_input"; reason = "운영자가 이 소스의 수집을 중지했습니다."; remedy = "기존 설정 서비스를 통해 연결을 활성화하세요.";
