@@ -7,6 +7,7 @@ import {
   metricDaysBetween,
   shiftMetricDay,
   toDbDay,
+  metricDayStart,
 } from "@/lib/analytics/metric-day";
 import { metricAsOf } from "@/lib/analytics/coverage";
 import type { AsOfResolution } from "@/lib/analytics/as-of";
@@ -38,7 +39,6 @@ const TOP_N = 5;
  * 계상된다. 평평하다가 push 가 오면 튀는 선이 그렇게 만들어졌다.
  */
 export const CONSOLE_STALE_DAYS = 3;
-const SENDER_KO = "서리";
 
 export type MovementSource = "GA4" | "콘솔";
 
@@ -65,17 +65,65 @@ export interface MetricSpec {
   format: (value: number) => string;
 }
 
-
 // 임계는 2026-08-29 실측 분포에 맞춘 값이다(전체 GA4 DAU 75명, 콘솔 일 광고수익 ₩38).
 // 포트폴리오가 커지면 minBaseline·minAbsDelta 를 함께 올린다.
 export const METRIC_SPECS: MetricSpec[] = [
-  { key: "ga4_dau", ko: "DAU", source: "GA4", minBaseline: 5, minChange: 30, minAbsDelta: 3, format: (value: number) => count(value, "명") },
+  {
+    key: "ga4_dau",
+    ko: "DAU",
+    source: "GA4",
+    minBaseline: 5,
+    minChange: 30,
+    minAbsDelta: 3,
+    format: (value: number) => count(value, "명"),
+  },
   // 신규 20명 미만 코호트의 D1 은 한두 명에 수십 %p 가 움직여 판정하지 않는다.
-  { key: "ga4_d1", ko: "D1 잔존율", source: "GA4", minBaseline: 5, minChange: 15, minSample: 20, pointScale: true, format: (value: number) => pct(value) },
-  { key: "ga4_ad_completions", ko: "보상형 광고 완료", source: "GA4", minBaseline: 10, minChange: 40, minAbsDelta: 5, format: (value: number) => count(value, "회") },
-  { key: "console_dau", ko: "토스 DAU", source: "콘솔", minBaseline: 5, minChange: 40, minAbsDelta: 3, format: (value: number) => count(value, "명") },
-  { key: "console_iaa", ko: "광고 수익", source: "콘솔", minBaseline: 50, minChange: 50, minAbsDelta: 50, format: won },
-  { key: "console_iap", ko: "결제 거래액", source: "콘솔", minBaseline: 1_000, minChange: 40, minAbsDelta: 1_000, format: won },
+  {
+    key: "ga4_d1",
+    ko: "D1 잔존율",
+    source: "GA4",
+    minBaseline: 5,
+    minChange: 15,
+    minSample: 20,
+    pointScale: true,
+    format: (value: number) => pct(value),
+  },
+  {
+    key: "ga4_ad_completions",
+    ko: "보상형 광고 완료",
+    source: "GA4",
+    minBaseline: 10,
+    minChange: 40,
+    minAbsDelta: 5,
+    format: (value: number) => count(value, "회"),
+  },
+  {
+    key: "console_dau",
+    ko: "토스 DAU",
+    source: "콘솔",
+    minBaseline: 5,
+    minChange: 40,
+    minAbsDelta: 3,
+    format: (value: number) => count(value, "명"),
+  },
+  {
+    key: "console_iaa",
+    ko: "광고 수익",
+    source: "콘솔",
+    minBaseline: 50,
+    minChange: 50,
+    minAbsDelta: 50,
+    format: won,
+  },
+  {
+    key: "console_iap",
+    ko: "결제 거래액",
+    source: "콘솔",
+    minBaseline: 1_000,
+    minChange: 40,
+    minAbsDelta: 1_000,
+    format: won,
+  },
 ];
 
 const SPEC_BY_KEY = new Map(METRIC_SPECS.map((spec) => [spec.key, spec]));
@@ -97,7 +145,12 @@ export interface MovementInput {
  * absent = 관측 창 전체가 0 이라 애초에 말할 것이 없는 지표(광고 없는 앱의 광고 수익 등).
  * "수집이 안 됐다"가 아니다 — 수집 여부는 원장이 따로 말한다. 표기도 "무활동"이다.
  */
-export type MovementVerdict = "highlight" | "lowlight" | "flat" | "insufficient" | "absent";
+export type MovementVerdict =
+  | "highlight"
+  | "lowlight"
+  | "flat"
+  | "insufficient"
+  | "absent";
 
 export interface Movement extends MovementInput {
   spec: MetricSpec;
@@ -111,11 +164,15 @@ export interface Movement extends MovementInput {
 export function median(values: readonly number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 /** 관측일이 모자라면 null. 기준선은 최신값을 뺀 직전 구간의 중앙값이다. */
-export function baselineOf(previousValues: readonly (number | null)[]): number | null {
+export function baselineOf(
+  previousValues: readonly (number | null)[],
+): number | null {
   const usable = previousValues
     .slice(0, BASELINE_DAYS)
     .filter((value): value is number => value != null);
@@ -131,7 +188,8 @@ export function evaluateMovement(input: MovementInput): Movement {
   if (input.latest === 0 && (input.baseline === 0 || input.baseline == null)) {
     return { ...base, verdict: "absent", change: null, score: 0 };
   }
-  if (input.baseline == null) return { ...base, verdict: "insufficient", change: null, score: 0 };
+  if (input.baseline == null)
+    return { ...base, verdict: "insufficient", change: null, score: 0 };
 
   // 모수가 작으면 값 자체가 흔들려 변화를 신호로 읽을 수 없다.
   if (spec.minSample != null && (input.sample ?? 0) < spec.minSample) {
@@ -142,7 +200,12 @@ export function evaluateMovement(input: MovementInput): Movement {
   // 그 자체가 소식이라 "신규"로 올린다.
   if (input.baseline < spec.minBaseline) {
     if (input.baseline === 0 && input.latest >= spec.minBaseline) {
-      return { ...base, verdict: "highlight", change: null, score: 100 * Math.log10(input.latest + 10) };
+      return {
+        ...base,
+        verdict: "highlight",
+        change: null,
+        score: 100 * Math.log10(input.latest + 10),
+      };
     }
     return { ...base, verdict: "insufficient", change: null, score: 0 };
   }
@@ -162,13 +225,20 @@ export function evaluateMovement(input: MovementInput): Movement {
   };
 }
 
-export function rankMovements(movements: readonly Movement[], verdict: "highlight" | "lowlight"): Movement[] {
+export function rankMovements(
+  movements: readonly Movement[],
+  verdict: "highlight" | "lowlight",
+): Movement[] {
   return movements
     .filter((movement) => movement.verdict === verdict)
     .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label, "ko"));
 }
 
-function movementLine(movement: Movement, refDate: string, index: number): string {
+function movementLine(
+  movement: Movement,
+  refDate: string,
+  index: number,
+): string {
   const spec = movement.spec;
   const value = spec.format(movement.latest);
   const stamp = movement.date === refDate ? "" : ` · ⏳${movement.date}`;
@@ -197,7 +267,13 @@ export function foldReferrers(raws: ReadonlyArray<unknown>): ReferrerShare[] {
     for (const row of rows) {
       const dimension = (row as { dimension?: unknown })?.dimension;
       const value = (row as { value?: unknown })?.value;
-      if (typeof dimension !== "string" || !dimension || typeof value !== "number" || value <= 0) continue;
+      if (
+        typeof dimension !== "string" ||
+        !dimension ||
+        typeof value !== "number" ||
+        value <= 0
+      )
+        continue;
       weight.set(dimension, (weight.get(dimension) ?? 0) + value);
     }
   }
@@ -218,19 +294,31 @@ export interface PortfolioTotals {
    */
   ga4Dau: { latest: number; previous: number | null; apps: number };
   /** 콘솔 광고 수익·결제 거래액 합(CONSOLE_STALE_DAYS 안의 스냅샷을 가진 리스팅만). */
-  console: { iaaKrw: number; iapKrw: number; previousIaaKrw: number | null; listings: number };
+  console: {
+    iaaKrw: number;
+    iapKrw: number;
+    previousIaaKrw: number | null;
+    listings: number;
+  };
   /** 콘솔 유입경로 비중(합산). 수집 값이 없으면 빈 배열이라 줄 자체가 빠진다. */
   referrers?: ReferrerShare[];
 }
 
-function totalLine(label: string, latest: string, previous: string | null, changePct: number | null): string {
+function totalLine(
+  label: string,
+  latest: string,
+  previous: string | null,
+  changePct: number | null,
+): string {
   if (previous == null || changePct == null) return `${label} ${latest}`;
   const sign = changePct >= 0 ? "+" : "";
   return `${label} ${latest} (전일 ${previous} · ${sign}${changePct.toFixed(1)}%)`;
 }
 
 function pctChange(latest: number, previous: number | null): number | null {
-  return previous == null || previous === 0 ? null : ((latest - previous) / previous) * 100;
+  return previous == null || previous === 0
+    ? null
+    : ((latest - previous) / previous) * 100;
 }
 
 export function renderHighlightReport(input: {
@@ -245,6 +333,7 @@ export function renderHighlightReport(input: {
   consoleStale?: readonly string[];
   /** 콘솔이 세운 자기 확정일. GA4 기준일과 다르면 그 사실을 콘솔 줄에 적는다. */
   consoleRefDate?: string | null;
+  context?: readonly string[];
   /** LLM 해설(선택). 생성 실패 시 없이 나간다 — 리포트를 LLM 가용성에 묶지 않는다. */
   narrative?: string | null;
   /** 백오피스 Org 종합 보고서 링크(선택). 없으면 푸터를 생략한다. */
@@ -255,39 +344,47 @@ export function renderHighlightReport(input: {
   const { totals, asOf } = input;
   // "(D-1)" 을 머리말에 박아 두면 소급 재계산이나 기준일이 밀린 날에도 어제라고 적힌다.
   // 날짜와 확정 여부만 적고, 판단 재료는 아래 커버리지 줄이 든다.
-  const stamp = asOf == null ? "" : asOf.verdict === "final" ? " · 확정" : " · 잠정";
-  const lines = [`📈 **${SENDER_KO} 지표 하이라이트 · ${input.refDate}${stamp}**`];
+  const stamp =
+    asOf == null ? "" : asOf.verdict === "final" ? " · 확정" : " · 잠정";
+  const priority = [
+    ...rankMovements(input.movements, "lowlight"),
+    ...rankMovements(input.movements, "highlight"),
+  ][0];
+  const conclusion = priority
+    ? `${priority.label} · ${priority.spec.ko}가 기준선보다 ${priority.verdict === "lowlight" ? "감소" : "증가"}했습니다.`
+    : input.asOf && input.asOf.verdict !== "final"
+      ? "현재 확보한 자료로 중요한 지표 변화를 판단하기 어렵습니다."
+      : "비교 가능한 자료에서 중요 기준을 넘은 지표 변화가 없습니다.";
+  const lines = [
+    `**${conclusion}**`,
+    `${input.refDate}${stamp} · 직전 7일 중앙값과 비교`,
+  ];
   // 분자는 실제로 합계에 들어간 앱 수다. 원장 관측 수를 쓰면 지표 표와 원장이
   // 어긋난 순간 수치와 설명이 따로 논다.
-  const appScope = asOf == null
-    ? ` · 대상 ${totals.ga4Dau.apps}개 앱`
-    : ` · 대상 ${totals.ga4Dau.apps}/${asOf.expected}개 앱`;
+  const appScope =
+    asOf == null
+      ? ` · 대상 ${totals.ga4Dau.apps}개 앱`
+      : ` · 대상 ${totals.ga4Dau.apps}/${asOf.expected}개 앱`;
   lines.push(
     totalLine(
       "GA4 DAU 합계",
       `${totals.ga4Dau.latest.toLocaleString("ko-KR")}명`,
-      totals.ga4Dau.previous == null ? null : `${totals.ga4Dau.previous.toLocaleString("ko-KR")}명`,
+      totals.ga4Dau.previous == null
+        ? null
+        : `${totals.ga4Dau.previous.toLocaleString("ko-KR")}명`,
       pctChange(totals.ga4Dau.latest, totals.ga4Dau.previous),
     ) + appScope,
   );
-  // 낮은 합계를 실제 감소로 읽지 않으려면 무엇이 빠졌는지가 같은 화면에 있어야 한다.
-  const gaps = input.gapNames ?? [];
-  if (gaps.length > 0) {
-    lines.push(`⚠️ 기준일 미관측 ${gaps.length}개: ${gaps.slice(0, 6).join(", ")}` +
-      (gaps.length > 6 ? ` 외 ${gaps.length - 6}개` : ""));
-  }
-  const stale = input.consoleStale ?? [];
-  if (stale.length > 0) {
-    lines.push(`⏳ 콘솔 합계 제외(${CONSOLE_STALE_DAYS}일 초과) ${stale.length}개: ${stale.slice(0, 6).join(", ")}` +
-      (stale.length > 6 ? ` 외 ${stale.length - 6}개` : ""));
-  }
   lines.push(
     totalLine(
       "콘솔 광고 수익",
       won(totals.console.iaaKrw),
-      totals.console.previousIaaKrw == null ? null : won(totals.console.previousIaaKrw),
+      totals.console.previousIaaKrw == null
+        ? null
+        : won(totals.console.previousIaaKrw),
       pctChange(totals.console.iaaKrw, totals.console.previousIaaKrw),
-    ) + ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅` +
+    ) +
+      ` · 결제 ${won(totals.console.iapKrw)} · 대상 ${totals.console.listings}개 리스팅` +
       // 콘솔은 자기 확정일을 따로 내건다. GA4 기준일과 같으면 중복이라 적지 않는다.
       (input.consoleRefDate && input.consoleRefDate !== input.refDate
         ? ` · 콘솔 기준 ${input.consoleRefDate}`
@@ -304,15 +401,22 @@ export function renderHighlightReport(input: {
     );
   }
 
-  const highlights = rankMovements(input.movements, "highlight").slice(0, TOP_N);
+  const highlights = rankMovements(input.movements, "highlight").slice(
+    0,
+    TOP_N,
+  );
   const lowlights = rankMovements(input.movements, "lowlight").slice(0, TOP_N);
   if (highlights.length > 0) {
     lines.push("", "🟢 **하이라이트**");
-    highlights.forEach((movement, index) => lines.push(movementLine(movement, input.refDate, index)));
+    highlights.forEach((movement, index) =>
+      lines.push(movementLine(movement, input.refDate, index)),
+    );
   }
   if (lowlights.length > 0) {
     lines.push("", "🔴 **로우라이트**");
-    lowlights.forEach((movement, index) => lines.push(movementLine(movement, input.refDate, index)));
+    lowlights.forEach((movement, index) =>
+      lines.push(movementLine(movement, input.refDate, index)),
+    );
   }
   if (highlights.length === 0 && lowlights.length === 0) {
     lines.push("", "임계를 넘은 변동 없음");
@@ -320,16 +424,10 @@ export function renderHighlightReport(input: {
 
   // 해설은 목록 뒤에 둔다. 수치를 먼저 보고 해석을 읽는 순서가 맞고, 해설이 빠져도
   // 리포트 구조가 흔들리지 않는다.
-  if (input.narrative) lines.push("", `🧠 ${input.narrative}`);
+  if (input.context?.length)
+    lines.push("", "**제품 문제·출시 변화**", ...input.context);
+  if (input.narrative) lines.push("", input.narrative);
 
-  const tally = (verdict: MovementVerdict) =>
-    input.movements.filter((movement) => movement.verdict === verdict).length;
-  const absent = tally("absent");
-  const judged = input.movements.length - absent;
-  lines.push(
-    "",
-    `판정 ${judged}건 (변동 없음 ${tally("flat")} · 표본 부족 ${tally("insufficient")}) · 무활동 ${absent}건`,
-  );
   // 정정은 맨 끝에 둔다. 무엇이 바뀌었는지가 수치 바로 아래가 아니라 읽고 난 뒤에
   // 와야 "원래 이랬는데 이렇게 바뀌었다"로 읽힌다.
   if (input.correction) lines.push("", input.correction);
@@ -347,7 +445,11 @@ export function metricHighlightDedupeKey(refDate: string): string {
 const GA4_METRIC_PICKERS = [
   { key: "ga4_dau", pick: (row: Ga4Row) => row.dau },
   // D1 은 신규 사용자 코호트가 모수다. 코호트가 작으면 판정하지 않는다.
-  { key: "ga4_d1", pick: (row: Ga4Row) => row.d1Pct, sample: (row: Ga4Row) => row.cohortUsers ?? null },
+  {
+    key: "ga4_d1",
+    pick: (row: Ga4Row) => row.d1Pct,
+    sample: (row: Ga4Row) => row.cohortUsers ?? null,
+  },
   { key: "ga4_ad_completions", pick: (row: Ga4Row) => row.adCompletions },
 ];
 
@@ -396,7 +498,12 @@ export function movementsFromSeries<T extends { date: Date }>(
   const latest = rowsDesc[0];
   if (!latest) return [];
   return pickers.flatMap(({ key, pick, sample }) => {
-    const series = key === "ga4_d1" ? rowsDesc.filter(row => pick(row) != null && (!sample || sample(row) != null)) : rowsDesc;
+    const series =
+      key === "ga4_d1"
+        ? rowsDesc.filter(
+            (row) => pick(row) != null && (!sample || sample(row) != null),
+          )
+        : rowsDesc;
     const current = series[0];
     if (!current) return [];
     const value = pick(current);
@@ -407,7 +514,14 @@ export function movementsFromSeries<T extends { date: Date }>(
         metricKey: key,
         latest: value,
         baseline: baselineOf(series.slice(1).map(pick)),
-        ...(sample ? { sample: Math.min(sample(current) ?? 0, baselineOf(series.slice(1).map(sample)) ?? 0) } : {}),
+        ...(sample
+          ? {
+              sample: Math.min(
+                sample(current) ?? 0,
+                baselineOf(series.slice(1).map(sample)) ?? 0,
+              ),
+            }
+          : {}),
         date: dbDay(current.date),
       }),
     ];
@@ -504,14 +618,23 @@ export function foldConsoleTotals(
   consoleRefDate: string | null;
 } {
   const fresh = series.filter(
-    (one) => metricDaysBetween(refDate, dbDay(one.rowsDesc[0].date)) <= CONSOLE_STALE_DAYS,
+    (one) =>
+      metricDaysBetween(refDate, dbDay(one.rowsDesc[0].date)) <=
+      CONSOLE_STALE_DAYS,
   );
-  const totals = { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null as number | null, listings: 0 };
+  const totals = {
+    iaaKrw: 0,
+    iapKrw: 0,
+    previousIaaKrw: null as number | null,
+    listings: 0,
+  };
   if (fresh.length === 0) {
     return {
       totals,
       raws: [],
-      stale: series.map((one) => `${one.label}(${dbDay(one.rowsDesc[0].date)})`),
+      stale: series.map(
+        (one) => `${one.label}(${dbDay(one.rowsDesc[0].date)})`,
+      ),
       consoleRefDate: null,
     };
   }
@@ -534,11 +657,14 @@ export function foldConsoleTotals(
     totals.iapKrw += latest.iapTrxAmountKrw;
     totals.listings += 1;
     raws.push(latest.raw);
-    const yesterday = one.rowsDesc.find((row) => dbDay(row.date) === previousDay);
+    const yesterday = one.rowsDesc.find(
+      (row) => dbDay(row.date) === previousDay,
+    );
     if (yesterday) previousSum += yesterday.iaaEarningKrw;
     else previousComplete = false;
   }
-  totals.previousIaaKrw = previousComplete && totals.listings > 0 ? previousSum : null;
+  totals.previousIaaKrw =
+    previousComplete && totals.listings > 0 ? previousSum : null;
   return { totals, raws, stale, consoleRefDate };
 }
 
@@ -556,9 +682,13 @@ export async function collectHighlightData(
   const { ga4: resolved } = await metricAsOf({ now, requested: refDate });
   // 원장이 그 날을 아직 하나도 모르면(백필 전·신규 배포 직후) 커버리지를 주장하지
   // 않는다. 0/9 로 적으면 실제로 센 앱이 있는데도 아무것도 못 센 것처럼 보인다.
-  const ledgerKnowsDay = resolved != null
-    && resolved.missing.some((one) => one.state !== "unobserved");
-  const asOf = resolved != null && (resolved.observed > 0 || ledgerKnowsDay) ? resolved : null;
+  const ledgerKnowsDay =
+    resolved != null &&
+    resolved.missing.some((one) => one.state !== "unobserved");
+  const asOf =
+    resolved != null && (resolved.observed > 0 || ledgerKnowsDay)
+      ? resolved
+      : null;
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
@@ -613,12 +743,19 @@ export async function collectHighlightData(
     // 다만 빠졌다는 사실은 남긴다 — 합계가 낮은 이유가 될 수 있다.
     if (rows.length === 0 || dbDay(rows[0].date) !== refDate) {
       ga4Gaps.push({
-        app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+        app: {
+          id: app.id,
+          slug: app.slug,
+          displayName: app.displayName,
+          type: app.type,
+        },
         latestDate: rows[0]?.date ?? null,
       });
       continue;
     }
-    movements.push(...movementsFromSeries(app.displayName, rows, GA4_METRIC_PICKERS));
+    movements.push(
+      ...movementsFromSeries(app.displayName, rows, GA4_METRIC_PICKERS),
+    );
     totals.ga4Dau.latest += rows[0].dau;
     totals.ga4Dau.apps += 1;
     // rows[1] 은 "직전 행"이지 "전날"이 아니다. D-2 가 비면 D-3 과 비교하면서
@@ -627,7 +764,12 @@ export async function collectHighlightData(
     if (yesterday) previousSum += yesterday.dau;
     else previousComplete = false;
     ga4Series.push({
-      app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+      app: {
+        id: app.id,
+        slug: app.slug,
+        displayName: app.displayName,
+        type: app.type,
+      },
       rowsDesc: rows,
     });
   }
@@ -638,14 +780,27 @@ export async function collectHighlightData(
       ? listings.map((listing) => ({
           miniAppId: listing.miniAppId,
           // 리스팅이 하나면 라벨이 앱명과 중복이라 생략한다.
-          label: listings.length > 1 ? `${app.displayName}(${listing.label})` : app.displayName,
+          label:
+            listings.length > 1
+              ? `${app.displayName}(${listing.label})`
+              : app.displayName,
           listingLabel: listings.length > 1 ? listing.label : null,
         }))
-      : [{ miniAppId: resolveAitTarget(app)!.miniAppId, label: app.displayName, listingLabel: null }];
+      : [
+          {
+            miniAppId: resolveAitTarget(app)!.miniAppId,
+            label: app.displayName,
+            listingLabel: null,
+          },
+        ];
 
     for (const target of targets) {
       const rows = (await prisma.appConsoleMetricDaily.findMany({
-        where: { appId: app.id, miniAppId: target.miniAppId, date: { lte: upTo } },
+        where: {
+          appId: app.id,
+          miniAppId: target.miniAppId,
+          date: { lte: upTo },
+        },
         orderBy: { date: "desc" },
         take: BASELINE_DAYS + 1,
         select: {
@@ -663,9 +818,16 @@ export async function collectHighlightData(
         consoleMissing.push(target.label);
         continue;
       }
-      movements.push(...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS));
+      movements.push(
+        ...movementsFromSeries(target.label, rows, CONSOLE_METRIC_PICKERS),
+      );
       consoleSeries.push({
-        app: { id: app.id, slug: app.slug, displayName: app.displayName, type: app.type },
+        app: {
+          id: app.id,
+          slug: app.slug,
+          displayName: app.displayName,
+          type: app.type,
+        },
         miniAppId: target.miniAppId,
         label: target.label,
         listingLabel: target.listingLabel,
@@ -674,7 +836,8 @@ export async function collectHighlightData(
     }
   }
 
-  totals.ga4Dau.previous = previousComplete && totals.ga4Dau.apps > 0 ? previousSum : null;
+  totals.ga4Dau.previous =
+    previousComplete && totals.ga4Dau.apps > 0 ? previousSum : null;
   const consoleTotals = foldConsoleTotals(consoleSeries, refDate);
   totals.console = consoleTotals.totals;
   totals.referrers = foldReferrers(consoleTotals.raws);
@@ -711,12 +874,59 @@ export interface MetricHighlightOptions {
  * payload 에 editable 을 실어 워커가 같은 메시지를 고치게 한다. 늦게 도착한 수집을
  * 반영해 수치가 바뀌었을 때 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
  */
+export async function dailyReportContext(refDate: string) {
+  const dayStart = metricDayStart(refDate),
+    dayEnd = metricDayStart(shiftMetricDay(refDate, 1));
+  const [incidents, submissions] = await Promise.all([
+    prisma.operationalIncident.findMany({
+      where: {
+        source: { not: "metrics" },
+        firstDetectedAt: { gte: dayStart, lt: dayEnd },
+      },
+      orderBy: { firstDetectedAt: "desc" },
+      take: 5,
+    }),
+    prisma.storeReviewSubmissionObservation.findMany({
+      where: {
+        sourceEventAt: { gte: dayStart, lt: dayEnd },
+        app: { status: "ACTIVE" },
+        notifiedHash: { not: null },
+        previousState: { not: null },
+      },
+      include: { app: { select: { displayName: true } } },
+      orderBy: { sourceEventAt: "desc" },
+      take: 5,
+    }),
+  ]);
+  const context = [
+    ...incidents.map(
+      (r) =>
+        `- ${r.summary} · ${r.recoveredAt && r.recoveredAt < dayEnd ? (r.evidence && typeof r.evidence === "object" && !Array.isArray(r.evidence) && r.evidence.resolutionSource === "operator" ? "운영자 해결 처리" : "복구 확인") : "처리 필요"}`,
+    ),
+    ...submissions
+      .filter((r) => r.notifiedHash === r.contentHash)
+      .map(
+        (r) =>
+          `- ${r.app.displayName} · ${r.store} · ${r.externalVersionId ?? "버전 미제공"} · ${r.stateLabel}`,
+      ),
+  ];
+  const contextFacts = context.map((line, i) => ({
+    id: `context_${i}`,
+    label: "제품·출시 기록",
+    value: line.slice(0, 160),
+    source: `운영·provider 관측 원장 ${refDate}`,
+  }));
+  return { context, contextFacts };
+}
+
 export async function sendMetricHighlightReport(
   now = new Date(),
   options: MetricHighlightOptions = {},
 ): Promise<MetricHighlightResult> {
   const data = options.data ?? (await collectHighlightData(now));
   const { refDate, totals, movements } = data;
+  const { context, contextFacts } = await dailyReportContext(refDate);
+  Object.assign(data, { contextFacts });
 
   const dedupeKey = metricHighlightDedupeKey(refDate);
   // 해설은 항상 문자열이다(LLM 실패 시 결정적 골격). narrated 는 "LLM 문장이었는가"라
@@ -735,6 +945,7 @@ export async function sendMetricHighlightReport(
     refDate,
     totals,
     movements,
+    context,
     asOf: data.asOf,
     gapNames: data.ga4Gaps.map((gap) => gap.app.displayName),
     consoleStale: data.consoleStale,
@@ -748,7 +959,16 @@ export async function sendMetricHighlightReport(
     occurredAt: now,
     payload: {
       text: body,
-      chart: "org-trend",
+      report: {
+        category:
+          context.length ||
+          movements.some(
+            (m) => m.verdict === "highlight" || m.verdict === "lowlight",
+          )
+            ? "change"
+            : "internal",
+        reason: "DAILY_PRODUCT_DECISIONS",
+      },
       refDate,
       sender: SEORI_SENDER,
       editable: true,

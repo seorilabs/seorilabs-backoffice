@@ -293,7 +293,7 @@ gate를 열지 않는다.
 ### 서리 재무 리포트
 
 종량제 비용은 매일 09:00 KST(`backoffice-finance-report` CronJob → `/api/admin/finance-report`)에
-`#app-ops`로 나간다. 리포트는 결정적 수치라 LLM을 쓰지 않는다.
+중요한 경고 단계 변화·확인된 해소가 있을 때 `#app-ops`로 나간다. 같은 단계의 금액 변화는 반복하지 않고, 조회 실패는 이전 경고를 유지한다. 수치 판단은 서버가 계산한다.
 
 - 소스 4종: GitHub Actions 분량·과금, GCP billing export, `ai_usage` 원장의 LLM 비용,
   Stability 크레딧. 임계(GitHub 70/90% + 실청구, GCP·LLM 예산 70/100%, Stability 경고선)를
@@ -302,7 +302,7 @@ gate를 열지 않는다.
   싣고 같은 금액을 discount로 상계하므로 분(minute)만 보면 분량을 쓴 것처럼 보인다. 리포트는
   조직 공개 저장소 목록을 조회해 그 분을 빼고, 뺀 양을 "공개 저장소 N분은 무료라 분량에서 제외"로
   드러낸다. 목록 조회가 실패하면 전부 분량 소비로 세어(보수적) 과소 보고하지 않는다.
-- 관련 key는 전부 optional이며 미설정 소스는 리포트에 "미설정"으로 드러난다.
+- 관련 key는 전부 optional이며 미설정·조회 실패는 내부 조회 상태에 남긴다.
   `GITHUB_BILLING_TOKEN`(조직 billing 읽기 전용 fine-grained PAT, 키체인
   `com.seorilabs.github.billing-pat`), `GCP_BILLING_EXPORT_TABLE`, `STABILITY_API_KEY`.
   GCP billing 조회는 GA4 수집과 같은 read 전용 SA(`GA4_SA_KEY_JSON`)를 쓴다.
@@ -650,14 +650,14 @@ flowchart LR
 
 | 목적지 키 | 무엇이 나가는가 | 생산자 |
 | --- | --- | --- |
-| `backoffice` | 승인 카드, 단계 넛지, 일일 다이제스트, 주간 LiveOps, Godot 버전 | `proactive.ts`, `webhooks/route.ts`, `godot/version-check.ts` |
-| `metrics-daily` | 과거 지표 메시지 보관용. 새 발송 없음 | 기존 대기열의 목적지 키는 유지 |
-| `action-events` | 운영 이벤트, 마일스톤, 신규 계정 일 요약·건별 | `platform/operational-events`, `milestones.ts`, `identity-summary.ts` |
+| `backoffice` | 승인·명령 응답, 중요한 개발 변경·필요한 결정 | `proactive.ts`, `webhooks/route.ts`, `godot/version-check.ts` |
+| `metrics-daily` | 21:40 KST 중요한 검색 위치 변화·추세, PNG·같은 기준일 전체 보고서 | `market/daily-ranks.ts` |
+| `action-events` | 실제 첫 계정·광고 보상 성과, 반복 성공은 원장 전용 | `platform/operational-events`, `milestones.ts` |
 | `release-ops` | 배포 상태 카드, deploy-all 결과 | `deploy-enqueue.ts` |
 | `ops-alerts` | 장애 카드(`@release_ops` 멘션이 붙는 유일한 목적지) | `incidents.ts`, `analytics/anomalies.ts` |
-| `app-ops` | 앱별 전체 지표(10:30), 지표 하이라이트(11:00), 재무 리포트, 당일 운영 요약 | `analytics-report.ts`, `metric-highlights.ts`, `finance-report.ts`, `operations-report.ts` |
-| `github-issues` | 이슈 생성·종료 전량(미설정이면 `backoffice`로 폴백) | `webhooks/route.ts` |
-| `user-reviews` | Google Play·App Store 신규 리뷰 | `store-reviews/collector.ts` |
+| `app-ops` | 비교 근거 있는 종합 변화·우선순위와 비용 경고 단계·해소 | `analytics-report.ts`, `metric-highlights.ts`, `finance-report.ts`, `operations-report.ts` |
+| `github-issues` | 중요한 P1 개발 사건, 상세는 GitHub 원문 링크(미설정이면 `backoffice`로 폴백) | `webhooks/route.ts` |
+| `user-reviews` | 실제 리뷰 내용을 앱·마켓·국가/제공 언어·버전별로 묶은 보고 | `store-reviews/collector.ts` |
 | `private-feed`·`seori-review` | 외부 NATS ingest 전용(`ops.notification.v1.*`) | 저장소 내 생산자 없음 |
 
 **폐기(2026-09-16)**: `finance-alerts`. 재무 리포트가 `#app-ops`로 이관된 뒤 생산자가 0이었고
@@ -785,18 +785,16 @@ migration Job, 웹 endpoint 연속성, 각 workload image, worker 로그, DB 요
 - 범위는 두 공식 API가 반환하는 개별 리뷰 resource와 그 1~5점 평점이다.
   스토어 전체 평균 평점의 집계값 변동은 이 collector 대상이 아니다.
 - 첫 성공 수집은 기존 리뷰를 `store_review_sync` 기준선으로만 기록하며 Discord에
-  보내지 않는다. 이후 새 리뷰와 동일 리뷰 ID의 별점·제목·본문 수정만
-  `#user-reviews` outbox에 멱등 enqueue한다.
+  보내지 않는다. 이후 관측은 내부 원장에 멱등 저장하고 15분 창이 닫히면 실제 본문을 앱·마켓·국가/제공 언어·버전별로 묶어 보고한다. 별점만 있는 관측은 개별 발송하지 않는다.
 - 작성자명과 리뷰 원문은 `store_review_observation`에 저장하지 않는다. 리뷰 ID,
-  표시 내용 hash, 별점, 원본 시각만 보존한다. Discord 메시지와 전송용 리뷰
-  outbox payload는 일반 알림과 같은 보존기한 뒤 제거한다.
+  표시 내용 hash, 별점, 원본 시각만 보존한다. 영구 분석 근거에는 이벤트 ID를 참조하고, 원문·요약은 보존기한 뒤 지운다. 원문 조회 경계에서 비밀값 후보를 가린다. 이슈 초안에는 해설·근거 화면 링크만 넣는다.
 - `DISCORD_CHANNEL_USER_REVIEWS_ID`가 없으면 API 호출이나 최초 기준선 생성을 하지
   않고 실패한다. 채널 누락 상태에서 과거 리뷰를 조용히 소비하지 않기 위한 gate다.
 
 배포 전에 평문을 출력하지 않는 파일 입력 방식으로 Google JSON을 Secret에 추가하고,
 App Store 키 3종과 `DISCORD_CHANNEL_USER_REVIEWS_ID`가 존재하는지 확인한다. 배포 후에는
 임시 Job으로 최초 실행해 `baselined > 0`, `enqueued = 0`, `errors = []`를 확인한 뒤
-새 테스트 리뷰 1건으로 enqueue·Discord 수신을 각각 검증한다.
+운영 적용 확인에는 실제 자료의 유용한 보고를 사용한다. 가짜 리뷰·장애·연결 확인 메시지를 운영 채널에 보내지 않는다.
 
 
 ### 백업 전용 읽기 계정 전환 — #164
@@ -936,3 +934,8 @@ ASC 등록 상태를 확인한 뒤 도구를 다시 실행한다.
 `k8s/console-metrics-cronjob.yaml`은 중지 상태의 준비 정의이며 기본 배포 적용 목록 밖이다.
 OAuth 실제 갱신·회전·재시작, 전체 기능 E2E와 별도 운영 배포·스케줄 승인을 통과한 후 적용한다.
 [이번 검수의 통과·차단 구분](qa/2026-10-12-console-sync-pod/report.md)을 확인한다.
+
+
+## Discord 근거 중심 보고 전환
+
+[채널 역할·선정 기준·외부 경로·배포 및 중지 절차](qa/2026-10-17-discord-human-reports/operations-handoff.md)를 따른다. SUPPRESSED는 발송 제외이며 전송 성공이 아니다. 이미 발송한 과거 메시지를 일괄 수정·삭제하지 않는다.

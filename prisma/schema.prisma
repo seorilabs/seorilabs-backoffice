@@ -335,6 +335,8 @@ model NotificationDelivery {
   nextAttemptAt     DateTime                   @default(now()) @db.DateTime(3)
   lastError         String?                    @db.Text
   providerMessageId String?
+  suppressedAt      DateTime?                  @db.DateTime(3)
+  suppressionReason String?                    @db.VarChar(240)
   refreshRequested  Boolean? @default(false)
   sentAt            DateTime?                  @db.DateTime(3)
   deletedAt         DateTime?                  @db.DateTime(3)
@@ -369,6 +371,7 @@ enum NotificationDeliveryStatus {
   PROCESSING
   SENT
   DEAD_LETTER
+  SUPPRESSED
 }
 
 // Platform의 확정 도메인 이벤트 수신 원장. 사용자 식별자·토큰·영수증은 저장하지 않고

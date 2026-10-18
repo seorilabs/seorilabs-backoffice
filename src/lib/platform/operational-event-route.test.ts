@@ -10,7 +10,7 @@ const source = readFileSync(
 
 test("중복 이벤트가 알림 경로를 건너뛰지 못한다", () => {
   // 성공 응답 지점이 하나뿐이면 저장 뒤 알림 경로를 우회하는 조기 반환이 존재할 수 없다.
-  const successReturns = source.match(/NextResponse\.json\(\{ ok: true/g) ?? [];
+  const successReturns = source.match(/NextResponse\.json\(\s*\{\s*ok:\s*true/g) ?? [];
   assert.equal(successReturns.length, 1);
   assert.match(source, /\{ ok: true, duplicate \}/);
   assert.doesNotMatch(source, /if \(duplicate\) return/);

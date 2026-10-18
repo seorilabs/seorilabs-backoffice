@@ -1,9 +1,9 @@
-import type {
-  Lifecycle,
-  Prisma,
-  StoreReviewStore,
-} from "@prisma/client";
-import { beginCollection, completeCollection, collectionErrorCode } from "@/lib/insights/collection";
+import type { Lifecycle, Prisma, StoreReviewStore } from "@prisma/client";
+import {
+  beginCollection,
+  completeCollection,
+  collectionErrorCode,
+} from "@/lib/insights/collection";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
@@ -25,7 +25,6 @@ import type {
   ReviewObservationState,
   StoreReview,
 } from "@/lib/store-reviews/types";
-
 
 export interface ReviewAppTarget {
   id: string;
@@ -52,22 +51,51 @@ export interface ReviewRepository {
   }): Promise<string>;
   markNotified(id: string, contentHash: string): Promise<void>;
   beginCollection?(appId: string, store: StoreReviewStore): Promise<string>;
-  completeCollection?(id: string, count: number | null, error?: unknown): Promise<void>;
-  markSuccessful(appId: string, store: StoreReviewStore, at: Date): Promise<void>;
+  completeCollection?(
+    id: string,
+    count: number | null,
+    error?: unknown,
+  ): Promise<void>;
+  markSuccessful(
+    appId: string,
+    store: StoreReviewStore,
+    at: Date,
+  ): Promise<void>;
 }
 
 const prismaReviewRepository: ReviewRepository = {
-  async beginCollection(appId, store) { return (await beginCollection(`reviews:${store}`, appId, appId)).id; },
-  async completeCollection(id, count, error) { const code = error ? collectionErrorCode(error) : undefined; await completeCollection(id, { status: code === "SOURCE_PERMISSION_REQUIRED" ? "needs_input" : code ? "failed" : count ? "observed" : "empty", dataThrough: error ? undefined : new Date(), coverage: { observations: count }, errorCode: code }); },
+  async beginCollection(appId, store) {
+    return (await beginCollection(`reviews:${store}`, appId, appId)).id;
+  },
+  async completeCollection(id, count, error) {
+    const code = error ? collectionErrorCode(error) : undefined;
+    await completeCollection(id, {
+      status:
+        code === "SOURCE_PERMISSION_REQUIRED"
+          ? "needs_input"
+          : code
+            ? "failed"
+            : count
+              ? "observed"
+              : "empty",
+      dataThrough: error ? undefined : new Date(),
+      coverage: { observations: count },
+      errorCode: code,
+    });
+  },
   async initialized(appId, store) {
-    return Boolean(await prisma.storeReviewSync.findUnique({
-      where: { appId_store: { appId, store } },
-      select: { id: true },
-    }));
+    return Boolean(
+      await prisma.storeReviewSync.findUnique({
+        where: { appId_store: { appId, store } },
+        select: { id: true },
+      }),
+    );
   },
   async findObservation(appId, store, externalReviewId) {
     return prisma.storeReviewObservation.findUnique({
-      where: { appId_store_externalReviewId: { appId, store, externalReviewId } },
+      where: {
+        appId_store_externalReviewId: { appId, store, externalReviewId },
+      },
       select: { id: true, rating: true, contentHash: true, notifiedHash: true },
     });
   },
@@ -140,7 +168,10 @@ export interface StoreReviewCollectorDependencies {
 
 export interface StoreReviewCollectResult {
   targets: number;
-  storeCoverage: Record<StoreReviewStore, { targets: number; succeeded: number }>;
+  storeCoverage: Record<
+    StoreReviewStore,
+    { targets: number; succeeded: number }
+  >;
   fetched: number;
   baselined: number;
   enqueued: number;
@@ -153,14 +184,18 @@ const REVIEWABLE_STAGES = new Set<Lifecycle>(["RELEASE", "LIVEOPS"]);
 function marketTargets(value: Prisma.JsonValue): Set<string> {
   return new Set(
     Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === "string")
-        .map((item) => item.toLowerCase())
+      ? value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.toLowerCase())
       : [],
   );
 }
 
 function safeError(error: unknown): string {
-  return (error instanceof Error ? error.message : "알 수 없는 오류").slice(0, 300);
+  return (error instanceof Error ? error.message : "알 수 없는 오류").slice(
+    0,
+    300,
+  );
 }
 
 async function processReviews(input: {
@@ -173,7 +208,10 @@ async function processReviews(input: {
   now: () => Date;
   result: StoreReviewCollectResult;
 }): Promise<void> {
-  const initialized = await input.repository.initialized(input.app.id, input.store);
+  const initialized = await input.repository.initialized(
+    input.app.id,
+    input.store,
+  );
   for (const review of input.reviews) {
     if (review.store !== input.store) {
       throw new Error(`리뷰 store 불일치: expected=${input.store}`);
@@ -219,18 +257,35 @@ async function processReviews(input: {
         appId: input.app.id,
         store: review.store,
         externalReviewId: review.externalReviewId,
+        review: {
+          body: [review.title, review.body]
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, 2000),
+          locale:
+            review.store === "APP_STORE"
+              ? `국가 ${review.locale ?? "제공 안됨"}`
+              : `언어 ${review.locale ?? "제공 안됨"} · 국가 제공 안됨`,
+          version: review.appVersion ?? "제공 안됨",
+        },
+        report: { category: "internal", reason: "GROUPED_REVIEW_CONTENT" },
         // 별점이 상자 색으로 먼저 읽히게 한다. 낮은 별점은 대응이 필요한 신호다.
         rating: review.rating,
         change,
         embed: {
           title: `${input.app.displayName} · ${review.store === "GOOGLE_PLAY" ? "Google Play" : "App Store"} 리뷰 ${review.rating}/5`,
           color: reviewRatingColor(review.rating),
-          timestamp: (review.sourceModifiedAt ?? review.sourceCreatedAt ?? observedAt).toISOString(),
+          timestamp: (
+            review.sourceModifiedAt ??
+            review.sourceCreatedAt ??
+            observedAt
+          ).toISOString(),
         },
       },
-      occurredAt: change === "updated"
-        ? review.sourceModifiedAt ?? observedAt
-        : review.sourceCreatedAt ?? review.sourceModifiedAt ?? observedAt,
+      occurredAt:
+        change === "updated"
+          ? (review.sourceModifiedAt ?? observedAt)
+          : (review.sourceCreatedAt ?? review.sourceModifiedAt ?? observedAt),
       destinations: input.destinations,
     });
     await input.repository.markNotified(observationId, contentHash);
@@ -242,24 +297,30 @@ async function processReviews(input: {
 export async function collectStoreReviews(
   dependencies: StoreReviewCollectorDependencies = {},
 ): Promise<StoreReviewCollectResult> {
-  const destinations = (dependencies.destinations ?? (() => {
-    if (!/^\d+$/.test(discordChannelId("user-reviews"))) return [];
-    return discordDestinations(["user-reviews"]);
-  }))();
+  const destinations = (
+    dependencies.destinations ??
+    (() => {
+      if (!/^\d+$/.test(discordChannelId("user-reviews"))) return [];
+      return discordDestinations(["user-reviews"]);
+    })
+  )();
   if (destinations.length !== 1) {
     throw new Error("Discord 목적지 미설정: user-reviews");
   }
-  const listApps = dependencies.listApps ?? (() => prisma.app.findMany({
-    where: { status: "ACTIVE" },
-    select: {
-      id: true,
-      displayName: true,
-      currentStage: true,
-      playPackage: true,
-      iosBundle: true,
-      marketTargets: true,
-    },
-  }));
+  const listApps =
+    dependencies.listApps ??
+    (() =>
+      prisma.app.findMany({
+        where: { status: "ACTIVE" },
+        select: {
+          id: true,
+          displayName: true,
+          currentStage: true,
+          playPackage: true,
+          iosBundle: true,
+          marketTargets: true,
+        },
+      }));
   const apps = await listApps();
   const targets = apps.flatMap((app) => {
     if (!REVIEWABLE_STAGES.has(app.currentStage)) return [];
@@ -292,7 +353,10 @@ export async function collectStoreReviews(
   let appStoreFetcher = dependencies.fetchAppStore;
   for (const target of targets) {
     const repository = dependencies.repository ?? prismaReviewRepository;
-    const collectionId = await repository.beginCollection?.(target.app.id, target.store);
+    const collectionId = await repository.beginCollection?.(
+      target.app.id,
+      target.store,
+    );
     try {
       if (target.store === "GOOGLE_PLAY" && !googleFetcher) {
         googleFetcher = createGooglePlayReviewFetcher();
@@ -303,9 +367,10 @@ export async function collectStoreReviews(
         }
         appStoreFetcher = listAppStoreReviews;
       }
-      const reviews = target.store === "GOOGLE_PLAY"
-        ? await googleFetcher!(target.externalId)
-        : await appStoreFetcher!(target.externalId);
+      const reviews =
+        target.store === "GOOGLE_PLAY"
+          ? await googleFetcher!(target.externalId)
+          : await appStoreFetcher!(target.externalId);
       result.fetched += reviews.length;
       await processReviews({
         app: target.app,
@@ -317,10 +382,12 @@ export async function collectStoreReviews(
         now: dependencies.now ?? (() => new Date()),
         result,
       });
-      if (collectionId) await repository.completeCollection?.(collectionId, reviews.length);
+      if (collectionId)
+        await repository.completeCollection?.(collectionId, reviews.length);
       result.storeCoverage[target.store].succeeded++;
     } catch (error) {
-      if (collectionId) await repository.completeCollection?.(collectionId, null, error);
+      if (collectionId)
+        await repository.completeCollection?.(collectionId, null, error);
       result.errors.push({
         app: target.app.displayName,
         store: target.store,

@@ -17,10 +17,15 @@ export interface MetricAnomaly {
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-export function detectMetricAnomalies(displayName: string, rowsDesc: AnomalyMetricRow[]): MetricAnomaly[] {
+export function detectMetricAnomalies(
+  displayName: string,
+  rowsDesc: AnomalyMetricRow[],
+): MetricAnomaly[] {
   if (rowsDesc.length < 6) return [];
   const latest = rowsDesc[0];
   const baselineRows = rowsDesc.slice(1, 8);
@@ -31,7 +36,11 @@ export function detectMetricAnomalies(displayName: string, rowsDesc: AnomalyMetr
       kind: "dau_drop",
       severity: "critical",
       summary: `${displayName} DAU 급락`,
-      evidence: { latestDau: latest.dau, baselineMedianDau: baselineDau, dropPct: Math.round((1 - latest.dau / baselineDau) * 100) },
+      evidence: {
+        latestDau: latest.dau,
+        baselineMedianDau: baselineDau,
+        dropPct: Math.round((1 - latest.dau / baselineDau) * 100),
+      },
     });
   }
   if (latest.adCompletions >= 20 && latest.networkAdImpressions === 0) {
@@ -39,7 +48,10 @@ export function detectMetricAnomalies(displayName: string, rowsDesc: AnomalyMetr
       kind: "ad_delivery_gap",
       severity: "warning",
       summary: `${displayName} 광고 완료 대비 네트워크 노출 0건`,
-      evidence: { adCompletions: latest.adCompletions, networkAdImpressions: latest.networkAdImpressions },
+      evidence: {
+        adCompletions: latest.adCompletions,
+        networkAdImpressions: latest.networkAdImpressions,
+      },
     });
   }
   return result;
@@ -59,12 +71,17 @@ export async function reconcileMetricAnomalies(input: {
     await recordIncident({
       source: "metrics",
       kind: anomaly.kind,
-      severity: anomaly.severity,
+      severity: "warning",
       summary: anomaly.summary,
       signalId: `${input.appSlug}:${latest.date.toISOString().slice(0, 10)}:${anomaly.kind}`,
       detectedAt: latest.date,
       appId: input.appId,
-      evidence: anomaly.evidence,
+      evidence: {
+        ...anomaly.evidence,
+        impact: "지표의 기준선 대비 이상이며 서비스 장애 확인과는 별도입니다.",
+        action:
+          "앱 지표에서 같은 기간 사용자·광고 지표와 실제 사용자 신고를 비교하세요.",
+      },
     });
   }
   let recovered = 0;

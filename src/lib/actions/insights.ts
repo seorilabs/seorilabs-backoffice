@@ -2,7 +2,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAppWriteAccess } from "@/lib/platform/access";
-import { evidenceListSchema, readInsight, renderInsight } from "@/lib/insights/contract";
+import {
+  evidenceListSchema,
+  readInsight,
+  renderInsight,
+} from "@/lib/insights/contract";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 export async function createInsightDraft(form: FormData) {
@@ -13,15 +17,29 @@ export async function createInsightDraft(form: FormData) {
   });
   if (!item?.signal.appId)
     throw new Error("앱이 연결된 인사이트만 이슈 초안으로 만들 수 있습니다.");
-  const app = await prisma.app.findUniqueOrThrow({ where: { id: item.signal.appId } });
+  const app = await prisma.app.findUniqueOrThrow({
+    where: { id: item.signal.appId },
+  });
   const actor = await requireAppWriteAccess(app.id);
   const facts = evidenceListSchema.parse(item.signal.facts);
   const content = readInsight(item.content, facts);
+  const draftText =
+    item.signal.kind === "review-themes"
+      ? [
+          item.signal.title,
+          ...content.bullets
+            .filter((b) => b.kind !== "fact")
+            .map((b) => b.text.replace(/\{[a-z][a-z0-9_-]*\}/g, "해당 리뷰")),
+          "리뷰 내용과 보존기한은 근거 화면에서 확인하세요.",
+        ].join("\n")
+      : renderInsight(content, facts);
   for (let attempt = 0; ; attempt++) {
     try {
       await prisma.$transaction(
         async (tx) => {
-          const current = await tx.insightDocument.findUniqueOrThrow({ where: { id } });
+          const current = await tx.insightDocument.findUniqueOrThrow({
+            where: { id },
+          });
           if (current.issueDraftId) return;
           const draft = await tx.aiDraft.create({
             data: {
@@ -31,7 +49,7 @@ export async function createInsightDraft(form: FormData) {
               kind: "IMPROVEMENT_HYPOTHESIS",
               title: item.signal.title,
               outputText:
-                renderInsight(content, facts) +
+                draftText +
                 "\n\n근거: /feedback/insights/" +
                 id +
                 "\n\n검토 항목\n- 재현 및 원본 범위 확인\n- 원인 가설 검증\n- 수용 조건과 검증 방법 명시",
@@ -40,7 +58,10 @@ export async function createInsightDraft(form: FormData) {
               createdBy: actor.login,
             },
           });
-          await tx.insightDocument.update({ where: { id }, data: { issueDraftId: draft.id } });
+          await tx.insightDocument.update({
+            where: { id },
+            data: { issueDraftId: draft.id },
+          });
           await tx.auditLog.create({
             data: {
               actorLogin: actor.login,
@@ -55,7 +76,10 @@ export async function createInsightDraft(form: FormData) {
       );
       break;
     } catch (error) {
-      if (attempt >= 3 || !["P2034", "P2002"].includes((error as { code?: string }).code ?? ""))
+      if (
+        attempt >= 3 ||
+        !["P2034", "P2002"].includes((error as { code?: string }).code ?? "")
+      )
         throw error;
     }
   }

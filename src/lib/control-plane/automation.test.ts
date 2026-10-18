@@ -478,7 +478,7 @@ test("release-note 자동 발행은 조직의 exact platform repo만 제외하�
   const service = readFileSync(join(process.cwd(), "src/lib/control-plane/automation-service.ts"), "utf8");
   const releaseOps = readFileSync(join(process.cwd(), "src/lib/core/release-ops.ts"), "utf8");
   assert.match(webhook, /stableTagPush: stableTagObservation/);
-  assert.match(webhook, /drainAutomationIngress\(\{ sourceKey: `github:\$\{deliveryId\}`/);
+  assert.match(webhook, /drainAutomationIngress\(\{\s*sourceKey: `github:\$\{deliveryId\}`/);
   assert.doesNotMatch(webhook, /import \{ generateAndPublishReleaseNotes \}/);
   assert.match(
     service,

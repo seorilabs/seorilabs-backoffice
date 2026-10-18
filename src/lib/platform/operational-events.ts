@@ -42,11 +42,20 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
     "rewardKey",
     "rewardAmount",
   ]),
-  "iap.completion_failed": new Set(["platform", "errorCode"]),
-  "ad.reward.delivery_failed": new Set(["provider", "placementId", "errorCode"]),
+  "iap.completion_failed": new Set(["platform", "errorCode", "isTestPurchase"]),
+  "ad.reward.delivery_failed": new Set([
+    "provider",
+    "placementId",
+    "errorCode",
+  ]),
 };
 
-const scalar = z.union([z.string().max(120), z.number().finite(), z.boolean(), z.null()]);
+const scalar = z.union([
+  z.string().max(120),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
 
 const schema = z
   .object({
@@ -70,11 +79,16 @@ export interface OperationalEventInput {
   attributes: Record<string, string | number | boolean | null>;
 }
 
-export function parseOperationalEvent(value: unknown): OperationalEventInput | null {
+export function parseOperationalEvent(
+  value: unknown,
+): OperationalEventInput | null {
   const result = schema.safeParse(value);
   if (!result.success) return null;
   const keys = Object.keys(result.data.attributes);
-  if (keys.length > 20 || keys.some((key) => !allowedAttributes[result.data.type].has(key))) {
+  if (
+    keys.length > 20 ||
+    keys.some((key) => !allowedAttributes[result.data.type].has(key))
+  ) {
     return null;
   }
   return result.data;
@@ -87,7 +101,8 @@ export function verifyOperationalEventSignature(input: {
   secret: string;
   now?: Date;
 }): boolean {
-  if (!input.secret || !input.timestampHeader || !input.signatureHeader) return false;
+  if (!input.secret || !input.timestampHeader || !input.signatureHeader)
+    return false;
   const timestamp = Number(input.timestampHeader);
   if (!Number.isSafeInteger(timestamp)) return false;
   const nowSeconds = Math.floor((input.now ?? new Date()).getTime() / 1_000);
@@ -98,7 +113,10 @@ export function verifyOperationalEventSignature(input: {
     .digest("hex");
   const actual = input.signatureHeader.replace(/^v1=/, "");
   if (!/^[a-f0-9]{64}$/i.test(actual)) return false;
-  return crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(actual, "hex"));
+  return crypto.timingSafeEqual(
+    Buffer.from(expected, "hex"),
+    Buffer.from(actual, "hex"),
+  );
 }
 
 function attr(
@@ -121,20 +139,29 @@ export interface OperationalEventFacts {
   facts: string[];
 }
 
-function text(event: OperationalEventInput, key: string, fallback = "unknown"): string {
+function text(
+  event: OperationalEventInput,
+  key: string,
+  fallback = "unknown",
+): string {
   const value = attr(event, key);
   return value == null || value === "" ? fallback : String(value);
 }
 
-export function operationalEventFacts(event: OperationalEventInput): OperationalEventFacts {
+export function operationalEventFacts(
+  event: OperationalEventInput,
+): OperationalEventFacts {
   switch (event.type) {
     case "identity.created": {
       const facts = [text(event, "authType")];
-      if (attr(event, "signInProvider")) facts.push(text(event, "signInProvider"));
-      if (attr(event, "appVersion")) facts.push(`v${text(event, "appVersion")}`);
+      if (attr(event, "signInProvider"))
+        facts.push(text(event, "signInProvider"));
+      if (attr(event, "appVersion"))
+        facts.push(`v${text(event, "appVersion")}`);
       if (attr(event, "runtime")) facts.push(text(event, "runtime"));
       if (attr(event, "anonymous") === true) facts.push("익명");
-      if (attr(event, "referrer")) facts.push(`유입 ${text(event, "referrer")}`);
+      if (attr(event, "referrer"))
+        facts.push(`유입 ${text(event, "referrer")}`);
       return { icon: "👤", headline: "신규 계정", facts };
     }
     case "app.version.first_seen": {
@@ -162,7 +189,10 @@ export function operationalEventFacts(event: OperationalEventInput): Operational
       return {
         icon: "❌",
         headline: "IAP 마켓 완료 처리 실패",
-        facts: [text(event, "platform"), `오류 ${text(event, "errorCode", event.outcome)}`],
+        facts: [
+          text(event, "platform"),
+          `오류 ${text(event, "errorCode", event.outcome)}`,
+        ],
       };
     case "ad.reward.delivery_failed":
       return {
@@ -192,6 +222,19 @@ export function operationalEventLine(
   const { icon, headline, facts } = operationalEventFacts(event);
   const stamp = kstLogStamp(new Date(event.occurredAt), now);
   return `${icon} **${displayName}** ${[headline, ...facts, stamp].join(" · ")}`;
+}
+
+/** 알려진 테스트 결제 실패는 실제 이용자 피해 알림과 분리한다. */
+export function shouldReportOperationalFailure(
+  event: OperationalEventInput,
+): boolean {
+  return (
+    isOpsAlert(event.type) &&
+    !(
+      event.type === "iap.completion_failed" &&
+      event.attributes.isTestPurchase === true
+    )
+  );
 }
 
 export function isOpsAlert(type: OperationalEventType): boolean {

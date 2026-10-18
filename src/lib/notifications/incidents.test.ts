@@ -8,7 +8,9 @@ import {
 } from "@/lib/notifications/incidents";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
-function incident(overrides: Partial<OperationalIncident> = {}): OperationalIncident {
+function incident(
+  overrides: Partial<OperationalIncident> = {},
+): OperationalIncident {
   const detectedAt = new Date("2026-08-18T00:00:00Z");
   return {
     id: "incident-1",
@@ -39,7 +41,9 @@ test("장애 발생·확인·복구 상태를 같은 카드 수명주기로 표�
   assert.equal(incidentRender(open).embed?.title, "🚨 CPU 임계치 초과");
   assert.equal(incidentRender(open).embed?.color, EMBED_COLOR.FAILURE);
   assert.equal(incidentComponents(open)[0]?.components[0]?.label, "확인");
-  assert.deepEqual(incidentDeliveryMode(open.providerMessageId), { kind: "create" });
+  assert.deepEqual(incidentDeliveryMode(open.providerMessageId), {
+    kind: "create",
+  });
 
   const acknowledged = incident({
     status: "ACKNOWLEDGED",
@@ -56,8 +60,27 @@ test("장애 발생·확인·복구 상태를 같은 카드 수명주기로 표�
     messageId: "message-1",
   });
 
-  const recovered = incident({ status: "RECOVERED", recoveredAt: new Date("2026-08-18T00:10:00Z") });
+  const recovered = incident({
+    status: "RECOVERED",
+    recoveredAt: new Date("2026-08-18T00:10:00Z"),
+  });
   assert.equal(incidentRender(recovered).embed?.title, "✅ CPU 임계치 초과");
   assert.equal(incidentRender(recovered).embed?.color, EMBED_COLOR.SUCCESS);
   assert.deepEqual(incidentComponents(recovered), []);
+});
+
+test("실제 복구 신호가 없는 장애도 운영자가 해결 처리하고 출처를 구분한다", () => {
+  assert.equal(
+    incidentComponents(incident())[0].components.at(-1)?.custom_id,
+    "incident:resolve:incident-1",
+  );
+  assert.match(
+    incidentRender(
+      incident({
+        status: "RECOVERED",
+        evidence: { resolutionSource: "operator", resolvedBy: "operator-1" },
+      }),
+    ).text,
+    /운영자 해결 처리/,
+  );
 });

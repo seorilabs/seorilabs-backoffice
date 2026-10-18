@@ -27,9 +27,11 @@ export async function generateInsight(
     fallback: true,
     errorCode: code,
   });
-  if (!(input.configured ?? llmChatConfigured())) return fallback("LLM_NOT_CONFIGURED");
+  if (!(input.configured ?? llmChatConfigured()))
+    return fallback("LLM_NOT_CONFIGURED");
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (input.reserve && !(await input.reserve())) return fallback("DAILY_ANALYSIS_LIMIT");
+    if (input.reserve && !(await input.reserve()))
+      return fallback("DAILY_ANALYSIS_LIMIT");
     let permit: string | null;
     try {
       permit = await (input.acquire ?? acquireAnalysisPermit)();
@@ -45,7 +47,7 @@ export async function generateInsight(
             content:
               insightPrompt(persona) +
               (attempt
-                ? "\n이전 형식이 잘못됐음. 근거 ID·자리표시자·음슴체 규약을 반드시 준수함."
+                ? "\n이전 형식이 잘못됐음. 근거 ID·자리표시자 규약을 반드시 준수함."
                 : ""),
           },
           { role: "user", content: JSON.stringify({ facts }) },

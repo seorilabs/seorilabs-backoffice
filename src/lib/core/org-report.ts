@@ -14,11 +14,15 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import {
   baselineOf,
   collectHighlightData,
+  dailyReportContext,
   metricHighlightDedupeKey,
   sendMetricHighlightReport,
   type HighlightData,
 } from "@/lib/core/metric-highlights";
-import { metricNarrative, type MetricNarrative } from "@/lib/core/metric-narrative";
+import {
+  metricNarrative,
+  type MetricNarrative,
+} from "@/lib/core/metric-narrative";
 import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { reportD1Retention } from "@/lib/report/retention";
@@ -70,7 +74,13 @@ function excerptOf(doc: OrgReportDocument) {
 function buildConsoleMeta(data: HighlightData): ConsoleMeta {
   const listings = data.consoleSeries.length + data.consoleMissing.length;
   if (data.consoleSeries.length === 0) {
-    return { refDate: null, lagDays: null, listings, onRefDate: 0, missing: data.consoleMissing };
+    return {
+      refDate: null,
+      lagDays: null,
+      listings,
+      onRefDate: 0,
+      missing: data.consoleMissing,
+    };
   }
   const latestMs = Math.max(
     ...data.consoleSeries.map((series) => series.rowsDesc[0].date.getTime()),
@@ -121,30 +131,43 @@ export function assembleOrgReportDocument(input: {
   };
 
   // 전일 합은 기준일 합과 같은 앱 집합에서 나온다(기존 totals 규칙). 앱이 없으면 null.
-  const prevOrNull = (total: number): number | null => (data.ga4Series.length ? total : null);
+  const prevOrNull = (total: number): number | null =>
+    data.ga4Series.length ? total : null;
   const platform: PlatformSplit = {
     android: {
       dau: sum(latestGa4, (row) => row.dauAndroid),
-      dauPrev: prevOrNull(sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauAndroid ?? 0)),
+      dauPrev: prevOrNull(
+        sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauAndroid ?? 0),
+      ),
     },
     ios: {
       dau: sum(latestGa4, (row) => row.dauIos),
-      dauPrev: prevOrNull(sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauIos ?? 0)),
+      dauPrev: prevOrNull(
+        sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauIos ?? 0),
+      ),
     },
     web: {
       dau: sum(latestGa4, (row) => row.dauWeb),
-      dauPrev: prevOrNull(sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauWeb ?? 0)),
+      dauPrev: prevOrNull(
+        sum(data.ga4Series, (s) => s.rowsDesc[1]?.dauWeb ?? 0),
+      ),
     },
   };
 
   const segment = (type: "GAME" | "APP"): SegmentCell => {
     const ga4 = data.ga4Series.filter((series) => series.app.type === type);
-    const consoles = data.consoleSeries.filter((series) => series.app.type === type);
-    const slugs = new Set([...ga4, ...consoles].map((series) => series.app.slug));
+    const consoles = data.consoleSeries.filter(
+      (series) => series.app.type === type,
+    );
+    const slugs = new Set(
+      [...ga4, ...consoles].map((series) => series.app.slug),
+    );
     return {
       apps: slugs.size,
       dau: sum(ga4, (series) => series.rowsDesc[0].dau),
-      dauPrev: ga4.length ? sum(ga4, (series) => series.rowsDesc[1]?.dau ?? 0) : null,
+      dauPrev: ga4.length
+        ? sum(ga4, (series) => series.rowsDesc[1]?.dau ?? 0)
+        : null,
       iaaKrw: sum(consoles, (series) => series.rowsDesc[0].iaaEarningKrw),
       iapTrxKrw: sum(consoles, (series) => series.rowsDesc[0].iapTrxAmountKrw),
     };
@@ -152,10 +175,20 @@ export function assembleOrgReportDocument(input: {
 
   // 앱별 분해: GA4·콘솔 어느 한쪽이라도 있는 앱을 displayName 순으로 합친다.
   const entries = new Map<string, AppEntry>();
-  const entryOf = (app: { slug: string; displayName: string; type: "APP" | "GAME" }): AppEntry => {
+  const entryOf = (app: {
+    slug: string;
+    displayName: string;
+    type: "APP" | "GAME";
+  }): AppEntry => {
     let entry = entries.get(app.slug);
     if (!entry) {
-      entry = { slug: app.slug, displayName: app.displayName, type: app.type, ga4: null, listings: [] };
+      entry = {
+        slug: app.slug,
+        displayName: app.displayName,
+        type: app.type,
+        ga4: null,
+        listings: [],
+      };
       entries.set(app.slug, entry);
     }
     return entry;
@@ -209,10 +242,16 @@ export function assembleOrgReportDocument(input: {
     },
     platform,
     segments: { game: segment("GAME"), app: segment("APP") },
-    apps: [...entries.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, "ko")),
+    apps: [...entries.values()].sort((a, b) =>
+      a.displayName.localeCompare(b.displayName, "ko"),
+    ),
     movements: data.movements.map(serializeMovement),
     referrers: data.totals.referrers ?? [],
-    retention: reportD1Retention(data.refDate, data.ga4Series, data.ga4Series.length + data.ga4Gaps.length),
+    retention: reportD1Retention(
+      data.refDate,
+      data.ga4Series,
+      data.ga4Series.length + data.ga4Gaps.length,
+    ),
     narrative: input.narrative,
     costs: input.costs,
     consoleMeta: buildConsoleMeta(data),
@@ -222,7 +261,9 @@ export function assembleOrgReportDocument(input: {
   };
 }
 
-async function saveOrgReport(doc: OrgReportDocument): Promise<{ version: number }> {
+async function saveOrgReport(
+  doc: OrgReportDocument,
+): Promise<{ version: number }> {
   const excerpt = excerptOf(doc);
   const common = {
     schemaVersion: ORG_REPORT_SCHEMA_VERSION,
@@ -232,12 +273,20 @@ async function saveOrgReport(doc: OrgReportDocument): Promise<{ version: number 
   };
   return prisma.$transaction(async (tx) => {
     const result = await tx.orgReportDaily.upsert({
-    where: { date: toDbDay(doc.refDate) },
-    create: { date: toDbDay(doc.refDate), ...common },
-    update: { version: { increment: 1 }, ...common },
-    select: { version: true },
-  });
-    await tx.orgReportRevision.create({ data: { date: toDbDay(doc.refDate), version: result.version, schemaVersion: common.schemaVersion, report: common.report, generatedAt: common.generatedAt } });
+      where: { date: toDbDay(doc.refDate) },
+      create: { date: toDbDay(doc.refDate), ...common },
+      update: { version: { increment: 1 }, ...common },
+      select: { version: true },
+    });
+    await tx.orgReportRevision.create({
+      data: {
+        date: toDbDay(doc.refDate),
+        version: result.version,
+        schemaVersion: common.schemaVersion,
+        report: common.report,
+        generatedAt: common.generatedAt,
+      },
+    });
     return result;
   });
 }
@@ -257,8 +306,13 @@ export interface OrgReportRunResult {
  * 일일 발행 본체(11:00 cron): 적재·판정 1회 → 해설 → 비용 → 스냅샷 upsert →
  * Discord 하이라이트(보고서 링크 포함). 스냅샷 저장 실패는 그대로 던져 발송을 막는다.
  */
-export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunResult> {
+export async function runDailyOrgReport(
+  now = new Date(),
+): Promise<OrgReportRunResult> {
   const data = await collectHighlightData(now);
+  Object.assign(data, {
+    contextFacts: (await dailyReportContext(data.refDate)).contextFacts,
+  });
   const made = await metricNarrative(data);
   const financeCosts = await collectFinanceCosts(now);
   const doc = assembleOrgReportDocument({
@@ -293,7 +347,12 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
     narrative: made.text,
     reportUrl: orgReportUrl(data.refDate),
   });
-  return { ...sent, narrated: !made.fallback, version, consoleLagDays: doc.consoleMeta.lagDays };
+  return {
+    ...sent,
+    narrated: !made.fallback,
+    version,
+    consoleLagDays: doc.consoleMeta.lagDays,
+  };
 }
 
 /**
@@ -303,7 +362,11 @@ export async function runDailyOrgReport(now = new Date()): Promise<OrgReportRunR
 export function factsFingerprint(data: HighlightData): string {
   const canonical = JSON.stringify({
     refDate: data.refDate,
-    retention: reportD1Retention(data.refDate, data.ga4Series, data.ga4Series.length + data.ga4Gaps.length),
+    retention: reportD1Retention(
+      data.refDate,
+      data.ga4Series,
+      data.ga4Series.length + data.ga4Gaps.length,
+    ),
     ga4: data.totals.ga4Dau,
     console: {
       iaaKrw: data.totals.console.iaaKrw,
@@ -315,8 +378,14 @@ export function factsFingerprint(data: HighlightData): string {
     expected: data.asOf?.expected ?? null,
     movements: data.movements
       .map((movement) =>
-        [movement.label, movement.metricKey, movement.verdict, movement.latest, movement.baseline]
-          .join("|"))
+        [
+          movement.label,
+          movement.metricKey,
+          movement.verdict,
+          movement.latest,
+          movement.baseline,
+        ].join("|"),
+      )
       .sort(),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
@@ -329,9 +398,10 @@ export function correctionLine(input: {
   currentDau: number;
   currentApps: number;
 }): string {
-  const apps = input.previousApps != null && input.previousApps !== input.currentApps
-    ? `, 대상 ${input.previousApps} → ${input.currentApps}개 앱`
-    : "";
+  const apps =
+    input.previousApps != null && input.previousApps !== input.currentApps
+      ? `, 대상 ${input.previousApps} → ${input.currentApps}개 앱`
+      : "";
   return `♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 ${input.previousDau.toLocaleString("ko-KR")} → ${input.currentDau.toLocaleString("ko-KR")}명${apps}).`;
 }
 
@@ -369,30 +439,47 @@ export async function reconcileOrgReport(
 ): Promise<ReconcileResult> {
   const day = opts.day ?? shiftMetricDay(lastElapsedMetricDay(now), -1);
   const data = await collectHighlightData(now, day);
-  const snapshot = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(day) } });
+  Object.assign(data, {
+    contextFacts: (await dailyReportContext(data.refDate)).contextFacts,
+  });
+  const snapshot = await prisma.orgReportDaily.findUnique({
+    where: { date: toDbDay(day) },
+  });
   const previous = snapshot ? parseOrgReportDocument(snapshot.report) : null;
   const published = previous?.published ?? null;
   const facts = factsFingerprint(data);
 
   if (published && published.factsHash === facts) {
-    return { day, action: "none", version: snapshot?.version ?? null, requeued: 0 };
+    return {
+      day,
+      action: "none",
+      version: snapshot?.version ?? null,
+      requeued: 0,
+    };
   }
 
   const corrections = published ? published.corrections + 1 : 0;
-  const correction = published
+  const hadDiscordMessage =
+    published &&
+    (await prisma.notificationDelivery.count({
+      where: {
+        event: { dedupeKey: metricHighlightDedupeKey(day) },
+        providerMessageId: { not: null },
+      },
+    }));
+  const correction = hadDiscordMessage
     ? correctionLine({
-      previousDau: snapshot?.ga4Dau ?? 0,
-      previousApps: previous?.summary.ga4.apps ?? null,
-      currentDau: data.totals.ga4Dau.latest,
-      currentApps: data.totals.ga4Dau.apps,
-    })
+        previousDau: snapshot?.ga4Dau ?? 0,
+        previousApps: previous?.summary.ga4.apps ?? null,
+        currentDau: data.totals.ga4Dau.latest,
+        currentApps: data.totals.ga4Dau.apps,
+      })
     : null;
   // 수치가 바뀌었으면 앞선 해설은 정의상 틀렸다. 다만 같은 날짜가 계속 흔들리면
   // 해설을 반복 생성하지 않고 수치만 정정한다.
-  const made = corrections > MAX_NARRATED_CORRECTIONS
-    ? null
-    : await metricNarrative(data);
-  const narrative = made ? made.text : previous?.narrative ?? null;
+  const made =
+    corrections > MAX_NARRATED_CORRECTIONS ? null : await metricNarrative(data);
+  const narrative = made ? made.text : (previous?.narrative ?? null);
 
   const sent = await sendMetricHighlightReport(now, {
     data,
@@ -403,7 +490,7 @@ export async function reconcileOrgReport(
   const doc = assembleOrgReportDocument({
     data,
     narrative,
-    narrativeMeta: made ? meta(made) : previous?.narrativeMeta ?? null,
+    narrativeMeta: made ? meta(made) : (previous?.narrativeMeta ?? null),
     // 비용은 과거 시점을 복원할 수 없다. 발행분의 값을 그대로 잇는다.
     costs: previous?.costs ?? null,
     origin: "published",
@@ -420,7 +507,12 @@ export async function reconcileOrgReport(
   const { version } = await saveOrgReport(doc);
   // SENT 를 PENDING 으로 되돌리면 providerMessageId 가 남아 워커가 같은 메시지를 고친다.
   const requeued = await requeueNotification(sent.eventId);
-  return { day, action: published ? "corrected" : "published", version, requeued };
+  return {
+    day,
+    action: published ? "corrected" : "published",
+    version,
+    requeued,
+  };
 }
 
 /**
@@ -433,7 +525,8 @@ export async function buildOrgReportForDate(
 ): Promise<{ doc: OrgReportDocument; version: number | null } | null> {
   const now = options.now ?? new Date();
   const data = await collectHighlightData(now, refDate);
-  if (data.ga4Series.length === 0 && data.consoleSeries.length === 0) return null;
+  if (data.ga4Series.length === 0 && data.consoleSeries.length === 0)
+    return null;
   const doc = assembleOrgReportDocument({
     data,
     // 재계산은 결정적 수치만 — LLM 해설과 비용(월누적 실시간 조회)은 과거 복원이 불가하다.
@@ -459,21 +552,42 @@ export interface OrgReportView {
  * 날짜별 보고서 조회. date 미지정이면 최신 확정일(D-1). 스냅샷 우선, 없거나 파싱
  * 실패면 재계산 fallback. 그 날짜에 데이터가 전혀 없으면(미래 포함) null.
  */
-export async function getOrgReport(date?: string, now = new Date(), version?: number): Promise<OrgReportView | null> {
+export async function getOrgReport(
+  date?: string,
+  now = new Date(),
+  version?: number,
+): Promise<OrgReportView | null> {
   const refDate = date ?? lastElapsedMetricDay(now);
-  if (version !== undefined && (!Number.isSafeInteger(version) || version < 1)) return null;
-  const snapshot = version === undefined ? await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(refDate) } }) : await prisma.orgReportRevision.findUnique({ where: { date_version: { date: toDbDay(refDate), version } } });
+  if (version !== undefined && (!Number.isSafeInteger(version) || version < 1))
+    return null;
+  const snapshot =
+    version === undefined
+      ? await prisma.orgReportDaily.findUnique({
+          where: { date: toDbDay(refDate) },
+        })
+      : await prisma.orgReportRevision.findUnique({
+          where: { date_version: { date: toDbDay(refDate), version } },
+        });
   if (version !== undefined && !snapshot) return null;
   if (snapshot) {
     const doc = parseOrgReportDocument(snapshot.report);
     if (doc) {
-      return { doc, source: "snapshot", version: snapshot.version, generatedAt: snapshot.generatedAt };
+      return {
+        doc,
+        source: "snapshot",
+        version: snapshot.version,
+        generatedAt: snapshot.generatedAt,
+      };
     }
     if (version !== undefined) return null;
-    console.error(`[org-report] 스냅샷 파싱 실패(${refDate}, v${snapshot.version}) — 재계산으로 강등`);
+    console.error(
+      `[org-report] 스냅샷 파싱 실패(${refDate}, v${snapshot.version}) — 재계산으로 강등`,
+    );
   }
   const built = await buildOrgReportForDate(refDate, { now });
-  return built ? { doc: built.doc, source: "recomputed", version: null, generatedAt: null } : null;
+  return built
+    ? { doc: built.doc, source: "recomputed", version: null, generatedAt: null }
+    : null;
 }
 
 export interface OrgReportDayExcerpt {
@@ -490,7 +604,9 @@ export interface OrgReportDayExcerpt {
 }
 
 /** 발행된 날짜 목록(최신순, 발췌값만). 날짜 피커·목록 UI 용. */
-export async function listOrgReportDays(limit = 60): Promise<OrgReportDayExcerpt[]> {
+export async function listOrgReportDays(
+  limit = 60,
+): Promise<OrgReportDayExcerpt[]> {
   const rows = await prisma.orgReportDaily.findMany({
     orderBy: { date: "desc" },
     take: limit,
@@ -554,7 +670,10 @@ export function alignTrendGrid(
    * 값"이다. 그 날을 그대로 그리면 한 앱이 빠진 날이 포트폴리오 급감으로 보인다 —
    * 화면에서 보이던 들쭉날쭉함의 정체가 이것이다. 주지 않으면 기존 동작 그대로.
    */
-  ga4CoverageByDate?: ReadonlyMap<string, { observed: number; expected: number }>,
+  ga4CoverageByDate?: ReadonlyMap<
+    string,
+    { observed: number; expected: number }
+  >,
 ): OrgTrendPoint[] {
   return metricDayWindow(endDate, days).map((key) => {
     const coverage = ga4CoverageByDate?.get(key);
@@ -584,7 +703,10 @@ export function alignTrendGrid(
  * 일부 앱만 수집된 날도 null 이다. 그 날의 합계는 낮은 값이 아니라 모르는 값이고,
  * 그대로 그리면 한 앱이 빠진 날이 포트폴리오 급감으로 보인다.
  */
-export async function orgTrendSeries(endDate: string, days = 28): Promise<OrgTrendPoint[]> {
+export async function orgTrendSeries(
+  endDate: string,
+  days = 28,
+): Promise<OrgTrendPoint[]> {
   const end = toDbDay(endDate);
   const range = { gte: toDbDay(metricDayWindow(endDate, days)[0]), lte: end };
   const [ga4Rows, consoleRows] = await Promise.all([
@@ -658,13 +780,18 @@ export async function recomputeOrgReports(
   };
 
   for (const day of days) {
-    const existing = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(day) } });
+    const existing = await prisma.orgReportDaily.findUnique({
+      where: { date: toDbDay(day) },
+    });
     const previous = existing ? parseOrgReportDocument(existing.report) : null;
     if (previous?.published) {
       result.skippedPublished.push(day);
       continue;
     }
     const data = await collectHighlightData(now, day);
+    Object.assign(data, {
+      contextFacts: (await dailyReportContext(data.refDate)).contextFacts,
+    });
     if (data.ga4Series.length === 0 && data.consoleSeries.length === 0) {
       result.skippedEmpty.push(day);
       continue;
@@ -677,11 +804,11 @@ export async function recomputeOrgReports(
       generatedAt: now,
       superseded: existing
         ? {
-          ga4Dau: existing.ga4Dau,
-          consoleIaaKrw: existing.consoleIaaKrw,
-          generatedAt: existing.generatedAt.toISOString(),
-          version: existing.version,
-        }
+            ga4Dau: existing.ga4Dau,
+            consoleIaaKrw: existing.consoleIaaKrw,
+            generatedAt: existing.generatedAt.toISOString(),
+            version: existing.version,
+          }
         : null,
     });
     await saveOrgReport(doc);

@@ -94,6 +94,10 @@
     "20261017093000_general_issue_kind": {
       "sha256": "f6771001b4c279dd71fc6138e69701e74fd7bc5da2613acb8f3f09486774b48f",
       "reason": "승인된 일반 이슈: AiDraftKind 끝에 GENERAL_ISSUE만 추가한다. 기존 enum 값과 순서·행은 보존한다. MySQL enum 확장은 MODIFY가 필요하다. #478 승인 설계 01ac71a 및 실제 MySQL 보존 검증에 결속한다."
+    },
+    "20261017130000_notification_report_suppression": {
+      "sha256": "79659130c1dd587ac5dfd821205f5c0fdbfa2e2e27f15ec632a2e68657e2c597",
+      "reason": "2026-10-17 승인 설계 #482: 기존 값과 순서를 유지한 MySQL ENUM 끝 SUPPRESSED 확장 및 nullable 사유·시각 추가. 기존 데이터와 writer를 보존한다."
     }
   },
   "legacy": {

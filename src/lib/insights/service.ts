@@ -1,16 +1,25 @@
+import { resolveReportEvidence } from "./review-evidence";
+import { signalDecision } from "@/lib/notifications/report-policy";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
-import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
+import {
+  enqueueNotification,
+  requeueNotification,
+} from "@/lib/notifications/outbox";
 import {
   discordDestinationOrFallback,
   type DiscordDestinationKey,
 } from "@/lib/notifications/destinations";
 import { llmChatModel } from "@/lib/ai/llm";
 import { env } from "@/lib/env";
-import { metricDayOf, metricDayStart, shiftMetricDay } from "@/lib/analytics/metric-day";
+import {
+  metricDayOf,
+  metricDayStart,
+  shiftMetricDay,
+} from "@/lib/analytics/metric-day";
 import {
   evidenceListSchema,
   validatedEvidence,
@@ -20,6 +29,7 @@ import {
   renderInsightCard,
   type Evidence,
   type Insight,
+  fallbackInsight,
 } from "./contract";
 import { generateInsight } from "./generate";
 import { kstDateTimeShort } from "@/lib/format/kst";
@@ -33,22 +43,28 @@ const policy = {
   budgetCeilingMicros: 1_000_000,
 };
 const json = (value: unknown) => value as Prisma.InputJsonValue;
-async function serializable<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+async function serializable<T>(
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await prisma.$transaction(fn, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       });
     } catch (error) {
-      if (attempt >= 3 || !["P2034", "P2002"].includes((error as { code?: string }).code ?? ""))
+      if (
+        attempt >= 3 ||
+        !["P2034", "P2002"].includes((error as { code?: string }).code ?? "")
+      )
         throw error;
     }
   }
 }
 function destination(kind: string, severity: string): DiscordDestinationKey {
-  if (severity === "critical" || /failure|recovery|stale/.test(kind)) return "ops-alerts";
+  if (severity === "critical" && /service-/.test(kind)) return "ops-alerts";
   if (/review/.test(kind)) return "user-reviews";
-  if (/release|submission|published|public-listing/.test(kind)) return "release-ops";
+  if (/release|submission|published|public-listing/.test(kind))
+    return "release-ops";
   if (/keyword|competitor|policy/.test(kind)) return "metrics-daily";
   return "app-ops";
 }
@@ -56,7 +72,13 @@ function safeText(value: string) {
   return value.replace(/[@<>`]/g, "").slice(0, 160);
 }
 function notificationPayload(
-  signal: { title: string; kind: string; severity: string; facts: unknown; observedAt: Date },
+  signal: {
+    title: string;
+    kind: string;
+    severity: string;
+    facts: unknown;
+    observedAt: Date;
+  },
   insightId: string,
   analysis?: { content: Insight; fallback: boolean; errorCode: string | null },
 ) {
@@ -67,15 +89,24 @@ function notificationPayload(
     source: safeText(fact.source),
   }));
   const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
-  const observationCard = /^(source-stale|source-recovery|keyword-change)$/.test(signal.kind);
+  const observationCard =
+    /^(source-stale|source-recovery|keyword-change)$/.test(signal.kind);
   const body = observationCard
-    ? facts.map((fact) => `- ${fact.label}: ${fact.value}`).join("\n") + "\n기준: " + [...new Set(facts.map((fact) => fact.source))].join(" · ")
+    ? facts.map((fact) => `- ${fact.label}: ${fact.value}`).join("\n") +
+      "\n기준: " +
+      [...new Set(facts.map((fact) => fact.source))].join(" · ")
     : renderInsightCard(facts, analysis);
   return {
     text: `**${safeText(signal.title)}**\n${body}\n[근거·상세](${base}/feedback/insights/${insightId})`,
+    signalKind: signal.kind,
+    report: {
+      category: signalDecision(signal.kind).send ? "change" : "internal",
+      reason: signalDecision(signal.kind).reason,
+    },
     editable: true,
     sender: "seori",
     insightId,
+    ...(signal.kind === "review-themes" ? { reviewReport: true } : {}),
     ...(/metric-weekly/.test(signal.kind)
       ? {
           chart: "org-trend",
@@ -84,10 +115,27 @@ function notificationPayload(
         }
       : {}),
     embed: {
-      title: signal.kind === "keyword-change" ? "App Store 검색 순위 변화" : signal.kind === "source-recovery" ? "수집 작업 회복" : signal.kind === "source-stale" ? "수집 상태 확인" : "운영 인사이트",
-      color: signal.severity === "critical" ? 0xdc2626
-        : signal.kind === "source-recovery" || (signal.kind === "keyword-change" && /상승|진입/.test(signal.title)) ? 0x059669
-        : signal.severity === "warning" || signal.kind === "source-stale" || (signal.kind === "keyword-change" && /하락|이탈/.test(signal.title)) ? 0xd97706 : 0x2563eb,
+      title:
+        signal.kind === "keyword-change"
+          ? "App Store 검색 순위 변화"
+          : signal.kind === "source-recovery"
+            ? "수집 작업 회복"
+            : signal.kind === "source-stale"
+              ? "수집 상태 확인"
+              : "운영 인사이트",
+      color:
+        signal.severity === "critical"
+          ? 0xdc2626
+          : signal.kind === "source-recovery" ||
+              (signal.kind === "keyword-change" &&
+                /상승|진입/.test(signal.title))
+            ? 0x059669
+            : signal.severity === "warning" ||
+                signal.kind === "source-stale" ||
+                (signal.kind === "keyword-change" &&
+                  /하락|이탈/.test(signal.title))
+              ? 0xd97706
+              : 0x2563eb,
       footer: `관측 ${kstDateTimeShort(signal.observedAt)} KST`,
     },
   };
@@ -132,6 +180,16 @@ export async function publishSignal(input: {
         notificationKey: `insight:${signal.id}`,
       },
     });
+    if (!signalDecision(signal.kind).send) {
+      return tx.insightDocument.update({
+        where: { id: document.id },
+        data: {
+          status: "FALLBACK",
+          errorCode: "INTERNAL_OBSERVATION",
+          completedAt: new Date(),
+        },
+      });
+    }
     const definition = await tx.automationDefinition.upsert({
       where: { key: ANALYSIS_TEMPLATE },
       create: {
@@ -151,14 +209,19 @@ export async function publishSignal(input: {
     const occurrence = await tx.automationOccurrence.create({
       data: {
         definitionId: definition.id,
-        scheduledFor: new Date(Math.max(Date.now(), (latest?.scheduledFor.getTime() ?? 0) + 1)),
+        scheduledFor: new Date(
+          Math.max(Date.now(), (latest?.scheduledFor.getTime() ?? 0) + 1),
+        ),
         idempotencyKey: `insight:${document.id}`,
         triggerKind: "OPERATIONAL_SIGNAL",
         triggerKey: `insight:${document.id}`,
       },
     });
     const app = input.appId
-      ? await tx.app.findUnique({ where: { id: input.appId }, select: { repoFullName: true } })
+      ? await tx.app.findUnique({
+          where: { id: input.appId },
+          select: { repoFullName: true },
+        })
       : null;
     const run = await tx.agentRun.create({
       data: {
@@ -173,27 +236,22 @@ export async function publishSignal(input: {
         maxAttempts: 3,
       },
     });
-    await tx.insightDocument.update({ where: { id: document.id }, data: { runId: run.id } });
+    await tx.insightDocument.update({
+      where: { id: document.id },
+      data: { runId: run.id },
+    });
     await tx.agentRunEvent.create({
       data: {
         runId: run.id,
         type: "INSIGHT_QUEUED",
         actor: "internal:operations-insights",
-        payload: { insightId: document.id, inputHash, approvalPolicy: "READ_ONLY" },
+        payload: {
+          insightId: document.id,
+          inputHash,
+          approvalPolicy: "READ_ONLY",
+        },
       },
     });
-    await enqueueNotification(
-      {
-        dedupeKey: document.notificationKey,
-        kind: "OPS_ALERT",
-        payload: notificationPayload(signal, document.id),
-        destinations: discordDestinationOrFallback(
-          destination(signal.kind, signal.severity),
-          "backoffice",
-        ),
-      },
-      tx,
-    );
     return document;
   });
 }
@@ -203,7 +261,11 @@ async function claim(workerId: string) {
     const now = new Date();
     // API worker의 lease만 회수한다. 다른 Codex/Claude run·repo guard를 건드리지 않는다.
     const expired = await tx.agentLease.findMany({
-      where: { workerId: { startsWith: "insights:" }, revokedAt: null, expiresAt: { lte: now } },
+      where: {
+        workerId: { startsWith: "insights:" },
+        revokedAt: null,
+        expiresAt: { lte: now },
+      },
       select: { id: true, runId: true, generation: true },
     });
     for (const lease of expired) {
@@ -211,19 +273,69 @@ async function claim(workerId: string) {
         where: { id: lease.id },
         data: { revokedAt: now, scopeKey: null },
       });
-      const run = await tx.agentRun.findUniqueOrThrow({ where: { id: lease.runId } });
-      await tx.agentRun.updateMany({
-        where: { id: run.id, status: "RUNNING", leaseGeneration: lease.generation },
+      const run = await tx.agentRun.findUniqueOrThrow({
+        where: { id: lease.runId },
+      });
+      const reclaimed = await tx.agentRun.updateMany({
+        where: {
+          id: run.id,
+          status: "RUNNING",
+          leaseGeneration: lease.generation,
+        },
         data: {
           status: run.attempts < run.maxAttempts ? "PENDING" : "DEAD_LETTER",
           error: "ANALYSIS_LEASE_EXPIRED",
         },
       });
-      if (run.attempts >= run.maxAttempts) {
-        await tx.insightDocument.updateMany({
+      if (reclaimed.count && run.attempts >= run.maxAttempts) {
+        const document = await tx.insightDocument.findFirst({
           where: { runId: run.id, status: "PENDING" },
-          data: { status: "FAILED", errorCode: "ANALYSIS_LEASE_EXPIRED" },
+          include: { signal: true },
         });
+        if (document) {
+          const facts = await resolveReportEvidence(
+            document.signal.kind,
+            evidenceListSchema.parse(document.signal.facts),
+            tx,
+          );
+          const made = {
+            content: fallbackInsight(
+              facts.length
+                ? facts
+                : evidenceListSchema.parse(document.signal.facts),
+            ),
+            fallback: true,
+            errorCode: "ANALYSIS_LEASE_EXPIRED",
+          };
+          await tx.insightDocument.update({
+            where: { id: document.id },
+            data: {
+              status: "FALLBACK",
+              content: json(made.content),
+              errorCode: made.errorCode,
+              completedAt: now,
+            },
+          });
+          if (facts.length && signalDecision(document.signal.kind).send) {
+            const eventId = await enqueueNotification(
+              {
+                dedupeKey: document.notificationKey,
+                kind: "OPS_ALERT",
+                payload: notificationPayload(
+                  { ...document.signal, facts },
+                  document.id,
+                  made,
+                ),
+                destinations: discordDestinationOrFallback(
+                  destination(document.signal.kind, document.signal.severity),
+                  "backoffice",
+                ),
+              },
+              tx,
+            );
+            await requeueNotification(eventId, tx);
+          }
+        }
         await tx.automationOccurrence.update({
           where: { id: run.occurrenceId },
           data: { status: "DEAD_LETTER", completedAt: now },
@@ -263,14 +375,19 @@ async function claim(workerId: string) {
     if (
       !run ||
       run.createsPr ||
-      canonicalJson(run.occurrence.definition.configuration as JsonValue) !== canonicalJson(policy)
+      canonicalJson(run.occurrence.definition.configuration as JsonValue) !==
+        canonicalJson(policy)
     )
       return null;
     const generation = run.leaseGeneration + 1;
     if (
       (
         await tx.agentRun.updateMany({
-          where: { id: run.id, status: "PENDING", leaseGeneration: run.leaseGeneration },
+          where: {
+            id: run.id,
+            status: "PENDING",
+            leaseGeneration: run.leaseGeneration,
+          },
           data: {
             status: "RUNNING",
             leaseGeneration: generation,
@@ -311,19 +428,33 @@ async function claim(workerId: string) {
     return { run, lease };
   });
 }
-async function reserveRequest(runId: string, generation: number, workerId: string) {
+async function reserveRequest(
+  runId: string,
+  generation: number,
+  workerId: string,
+) {
   return serializable(async (tx) => {
     const day = metricDayOf(new Date());
     const limit = Number(process.env.INSIGHTS_DAILY_LIMIT ?? 200);
     const count = await tx.agentRunEvent.count({
       where: {
         type: "INSIGHT_API_REQUEST",
-        createdAt: { gte: metricDayStart(day), lt: metricDayStart(shiftMetricDay(day, 1)) },
+        createdAt: {
+          gte: metricDayStart(day),
+          lt: metricDayStart(shiftMetricDay(day, 1)),
+        },
       },
     });
-    if (count >= (Number.isSafeInteger(limit) && limit >= 0 ? limit : 200)) return false;
+    if (count >= (Number.isSafeInteger(limit) && limit >= 0 ? limit : 200))
+      return false;
     const owned = await tx.agentLease.count({
-      where: { runId, generation, workerId, revokedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        runId,
+        generation,
+        workerId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
     });
     if (!owned) return false;
     await tx.agentRunEvent.create({
@@ -336,7 +467,8 @@ export async function processNextInsight(
   workerId = `insights:${process.env.INSIGHTS_WORKER_ID ?? "local"}:${process.pid}`,
   generate = generateInsight,
 ): Promise<boolean> {
-  if (!workerId.startsWith("insights:")) throw new Error("INVALID_INSIGHT_WORKER_ID");
+  if (!workerId.startsWith("insights:"))
+    throw new Error("INVALID_INSIGHT_WORKER_ID");
   const claimed = await claim(workerId);
   if (!claimed) return false;
   const document = await prisma.insightDocument.findUniqueOrThrow({
@@ -344,9 +476,24 @@ export async function processNextInsight(
     include: { signal: true },
   });
   const facts = evidenceListSchema.parse(document.signal.facts);
-  const made = await generate(facts, personaForKind(document.signal.kind), {
-    reserve: () => reserveRequest(claimed.run.id, claimed.lease.generation, workerId),
-  });
+  const displayFacts = await resolveReportEvidence(document.signal.kind, facts);
+
+  const made = !signalDecision(document.signal.kind).send
+    ? {
+        content: fallbackInsight(facts),
+        fallback: true,
+        errorCode: "INTERNAL_OBSERVATION",
+      }
+    : displayFacts.length === 0
+      ? {
+          content: fallbackInsight(facts),
+          fallback: true,
+          errorCode: "REVIEW_CONTENT_EXPIRED",
+        }
+      : await generate(displayFacts, personaForKind(document.signal.kind), {
+          reserve: () =>
+            reserveRequest(claimed.run.id, claimed.lease.generation, workerId),
+        });
   await serializable(async (tx) => {
     const now = new Date();
     const owned = await tx.agentLease.count({
@@ -409,16 +556,25 @@ export async function processNextInsight(
         },
       },
     });
-    const eventId = await enqueueNotification(
-      {
-        dedupeKey: document.notificationKey,
-        kind: "OPS_ALERT",
-        payload: notificationPayload(document.signal, document.id, made),
-        destinations: [],
-      },
-      tx,
-    );
-    await requeueNotification(eventId, tx);
+    if (signalDecision(document.signal.kind).send && displayFacts.length) {
+      const eventId = await enqueueNotification(
+        {
+          dedupeKey: document.notificationKey,
+          kind: "OPS_ALERT",
+          payload: notificationPayload(
+            { ...document.signal, facts: displayFacts },
+            document.id,
+            made,
+          ),
+          destinations: discordDestinationOrFallback(
+            destination(document.signal.kind, document.signal.severity),
+            "backoffice",
+          ),
+        },
+        tx,
+      );
+      await requeueNotification(eventId, tx);
+    }
   });
   return true;
 }

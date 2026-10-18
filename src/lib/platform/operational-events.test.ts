@@ -24,7 +24,10 @@ const sample = {
 test("허용된 확정 이벤트만 파싱하고 사용자 식별자 키를 거부한다", () => {
   assert.deepEqual(parseOperationalEvent(sample), sample);
   assert.equal(
-    parseOperationalEvent({ ...sample, attributes: { platformUserId: "pu_secret" } }),
+    parseOperationalEvent({
+      ...sample,
+      attributes: { platformUserId: "pu_secret" },
+    }),
     null,
   );
 });
@@ -69,19 +72,32 @@ test("이벤트 메시지에 사용자 ID 없이 운영 정보만 표시한다",
 });
 
 test("AppsInToss 로그인 referrer는 받고 사용자 식별자는 계속 거부한다", () => {
-  const withReferrer = { ...sample, attributes: { authType: "apps_in_toss", referrer: "SANDBOX" } };
+  const withReferrer = {
+    ...sample,
+    attributes: { authType: "apps_in_toss", referrer: "SANDBOX" },
+  };
   assert.deepEqual(parseOperationalEvent(withReferrer), withReferrer);
   assert.equal(
-    parseOperationalEvent({ ...sample, attributes: { authType: "apps_in_toss", supportCode: "LT-1234" } }),
+    parseOperationalEvent({
+      ...sample,
+      attributes: { authType: "apps_in_toss", supportCode: "LT-1234" },
+    }),
     null,
   );
-  assert.match(operationalEventLine(withReferrer, "도마뱀 테라리움", NOW), /유입 SANDBOX/);
+  assert.match(
+    operationalEventLine(withReferrer, "도마뱀 테라리움", NOW),
+    /유입 SANDBOX/,
+  );
 });
 
 test("Firebase 로그인 공급자는 받고 계정 생성 경로와 함께 표시한다", () => {
   const withProvider = {
     ...sample,
-    attributes: { authType: "firebase_bridge", signInProvider: "google.com", anonymous: false },
+    attributes: {
+      authType: "firebase_bridge",
+      signInProvider: "google.com",
+      anonymous: false,
+    },
   };
   assert.deepEqual(parseOperationalEvent(withProvider), withProvider);
   const line = operationalEventLine(withProvider, "우리 아기 기록", NOW);
@@ -104,7 +120,11 @@ test("새 버전 첫 유입 이벤트를 받고 버전·런타임·SDK를 표시
     eventId: "app_version_58542708455af9fd9f3d88aec5025cd8",
     type: "app.version.first_seen" as const,
     outcome: "observed",
-    attributes: { appVersion: "1.2.5", runtime: "godot-native-android", sdk: "gd/0.6.8" },
+    attributes: {
+      appVersion: "1.2.5",
+      runtime: "godot-native-android",
+      sdk: "gd/0.6.8",
+    },
   };
   assert.deepEqual(parseOperationalEvent(firstSeen), firstSeen);
   assert.equal(
@@ -128,7 +148,12 @@ test("새 버전 첫 유입은 장애 알림이 아니고 사용자 식별자를
 test("신규 계정 이벤트도 버전과 런타임을 받는다", () => {
   const withBuild = {
     ...sample,
-    attributes: { authType: "firebase", appVersion: "1.2.5", runtime: "godot-native-android", anonymous: false },
+    attributes: {
+      authType: "firebase",
+      appVersion: "1.2.5",
+      runtime: "godot-native-android",
+      anonymous: false,
+    },
   };
   assert.deepEqual(parseOperationalEvent(withBuild), withBuild);
   const line = operationalEventLine(withBuild, "도마뱀 테라리움", NOW);
@@ -162,19 +187,67 @@ test("IAP 결제는 테스트 주문 여부를 받되 키가 없어도 통과한
     eventId: "iap_58542708455af9fd9f3d88aec5025cd8",
     type: "iap.granted" as const,
     outcome: "granted",
-    attributes: { platform: "app_store", entitlementId: "sp_aurora_skink", isTestPurchase: true },
+    attributes: {
+      platform: "app_store",
+      entitlementId: "sp_aurora_skink",
+      isTestPurchase: true,
+    },
   };
   assert.deepEqual(parseOperationalEvent(granted), granted);
   assert.deepEqual(
-    parseOperationalEvent({ ...granted, attributes: { ...granted.attributes, isTestPurchase: false } }),
-    { ...granted, attributes: { ...granted.attributes, isTestPurchase: false } },
+    parseOperationalEvent({
+      ...granted,
+      attributes: { ...granted.attributes, isTestPurchase: false },
+    }),
+    {
+      ...granted,
+      attributes: { ...granted.attributes, isTestPurchase: false },
+    },
   );
   // 앱인토스는 provider 가 값을 만들지 않아 키가 아예 오지 않는다.
-  const unknown = { ...granted, attributes: { platform: "apps_in_toss", entitlementId: "ft_rack_pack_1" } };
+  const unknown = {
+    ...granted,
+    attributes: { platform: "apps_in_toss", entitlementId: "ft_rack_pack_1" },
+  };
   assert.deepEqual(parseOperationalEvent(unknown), unknown);
   // 계약 밖 키는 계속 거부한다.
   assert.equal(
-    parseOperationalEvent({ ...granted, attributes: { ...granted.attributes, productId: "sku_1" } }),
+    parseOperationalEvent({
+      ...granted,
+      attributes: { ...granted.attributes, productId: "sku_1" },
+    }),
     null,
+  );
+});
+
+test("테스트 결제 실패를 실제 피해와 분리하고 미확인 환경은 실제로 추정하지 않는다", async () => {
+  const { shouldReportOperationalFailure } = await import(
+    "./operational-events"
+  );
+  const failure = {
+    ...sample,
+    type: "iap.completion_failed" as const,
+    outcome: "failed",
+    attributes: {
+      platform: "app_store",
+      errorCode: "E_NETWORK",
+      isTestPurchase: true,
+    },
+  };
+  assert.deepEqual(parseOperationalEvent(failure), failure);
+  assert.equal(shouldReportOperationalFailure(failure), false);
+  assert.equal(
+    shouldReportOperationalFailure({
+      ...failure,
+      attributes: { ...failure.attributes, isTestPurchase: false },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldReportOperationalFailure({
+      ...failure,
+      attributes: { platform: "app_store", errorCode: "E_NETWORK" },
+    }),
+    true,
   );
 });

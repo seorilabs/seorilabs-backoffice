@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  narrativeFacts,
-  narrativeSkeleton,
-} from "@/lib/core/metric-narrative";
+import { narrativeFacts, narrativeSkeleton } from "@/lib/core/metric-narrative";
 import {
   evaluateMovement,
   type ConsoleListingSeries,
@@ -37,13 +34,27 @@ test("해설에 넘기는 사실은 이미 계산이 끝난 결과뿐이다", ()
     refDate: REF,
     totals: TOTALS,
     movements: [
-      move({ label: "루시드 체스", metricKey: "ga4_dau", latest: 4, baseline: 8, date: REF }),
-      move({ label: "무변동", metricKey: "ga4_dau", latest: 21, baseline: 20, date: REF }),
+      move({
+        label: "루시드 체스",
+        metricKey: "ga4_dau",
+        latest: 4,
+        baseline: 8,
+        date: REF,
+      }),
+      move({
+        label: "무변동",
+        metricKey: "ga4_dau",
+        latest: 21,
+        baseline: 20,
+        date: REF,
+      }),
     ],
   });
   assert.ok(facts.includes(`기준일: ${REF} (D-1)`));
   assert.ok(facts.includes("GA4 DAU 합계 75명 (전일 86)"));
-  assert.ok(facts.includes("루시드 체스 · GA4 DAU: 4명 (기준 8명) -50% · 하락"));
+  assert.ok(
+    facts.includes("루시드 체스 · GA4 DAU: 4명 (기준 8명) -50% · 하락"),
+  );
   // 판정에서 빠진 항목은 건수만 넘긴다 — 개별 앱 이름을 주면 LLM 이 없는 이야기를 만든다.
   assert.ok(facts.includes("변동 없음 1건"));
   assert.ok(!facts.includes("무변동"));
@@ -59,7 +70,15 @@ test("신규 등장은 변화율 대신 신규로 넘긴다", () => {
   const facts = narrativeFacts({
     refDate: REF,
     totals: TOTALS,
-    movements: [move({ label: "첫 매출", metricKey: "console_iap", latest: 24_000, baseline: 0, date: REF })],
+    movements: [
+      move({
+        label: "첫 매출",
+        metricKey: "console_iap",
+        latest: 24_000,
+        baseline: 0,
+        date: REF,
+      }),
+    ],
   });
   assert.ok(facts.includes("신규"), facts);
   assert.ok(!facts.includes("Infinity") && !facts.includes("NaN"), facts);
@@ -70,8 +89,21 @@ test("잔존율은 %p 로, 나머지는 % 로 넘겨 단위가 섞이지 않는�
     refDate: REF,
     totals: TOTALS,
     movements: [
-      move({ label: "A", metricKey: "ga4_d1", latest: 30, baseline: 12, sample: 40, date: REF }),
-      move({ label: "B", metricKey: "ga4_dau", latest: 40, baseline: 20, date: REF }),
+      move({
+        label: "A",
+        metricKey: "ga4_d1",
+        latest: 30,
+        baseline: 12,
+        sample: 40,
+        date: REF,
+      }),
+      move({
+        label: "B",
+        metricKey: "ga4_dau",
+        latest: 40,
+        baseline: 20,
+        date: REF,
+      }),
     ],
   });
   assert.ok(facts.includes("+18.0%p"), facts);
@@ -82,7 +114,15 @@ test("지연 스냅샷도 사실 목록에 그대로 실린다", () => {
   const facts = narrativeFacts({
     refDate: REF,
     totals: TOTALS,
-    movements: [move({ label: "지연 앱", metricKey: "console_dau", latest: 30, baseline: 10, date: "2026-08-25" })],
+    movements: [
+      move({
+        label: "지연 앱",
+        metricKey: "console_dau",
+        latest: 30,
+        baseline: 10,
+        date: "2026-08-25",
+      }),
+    ],
   });
   assert.ok(facts.includes("지연 앱"));
 });
@@ -133,7 +173,10 @@ test("수집 상태: 시계열을 주지 않으면 기존 사실만 넘긴다", 
 });
 
 test("수집 상태: 콘솔은 자기 최신 기준일과 보고서 기준일의 차이를 밝힌다", () => {
-  const consoleListing = (label: string, date: string): ConsoleListingSeries => ({
+  const consoleListing = (
+    label: string,
+    date: string,
+  ): ConsoleListingSeries => ({
     app: { id: label, slug: label, displayName: label, type: "GAME" },
     miniAppId: 1,
     label,
@@ -175,8 +218,19 @@ test("collectHighlightData 는 기준일 스냅샷이 없는 앱을 ga4Gaps 로 
   );
   assert.match(source, /latestDate: rows\[0\]\?\.date \?\? null/u);
   // 반환 형태는 여러 줄로 바뀔 수 있다. 고정할 것은 필드가 실제로 실린다는 사실이다.
-  for (const field of ["refDate", "asOf", "totals", "movements", "ga4Series", "ga4Gaps"]) {
-    assert.match(source, new RegExp(`return \\{[\\s\\S]{0,400}?\\b${field},`, "u"), field);
+  for (const field of [
+    "refDate",
+    "asOf",
+    "totals",
+    "movements",
+    "ga4Series",
+    "ga4Gaps",
+  ]) {
+    assert.match(
+      source,
+      new RegExp(`return \\{[\\s\\S]{0,400}?\\b${field},`, "u"),
+      field,
+    );
   }
 });
 
@@ -187,7 +241,10 @@ test("두 호출부는 HighlightData 를 그대로 넘겨 ga4Gaps 가 사실에 
     join(process.cwd(), "src/lib/core/metric-highlights.ts"),
     "utf8",
   );
-  const report = readFileSync(join(process.cwd(), "src/lib/core/org-report.ts"), "utf8");
+  const report = readFileSync(
+    join(process.cwd(), "src/lib/core/org-report.ts"),
+    "utf8",
+  );
   // 부분 객체를 새로 만들어 넘기면 ga4Gaps 가 조용히 빠진다.
   assert.match(highlights, /metricNarrative\(data\)/u);
   assert.match(report, /metricNarrative\(data\)/u);
@@ -195,9 +252,14 @@ test("두 호출부는 HighlightData 를 그대로 넘겨 ga4Gaps 가 사실에 
 
 // ── 골격: LLM 없이도 보고서가 성립해야 한다 ────────────────────────────────
 
-test("골격은 간결한 음슴체 불릿이며 수집 공백을 지표 하락으로 표현하지 않음", () => {
-  const text = narrativeSkeleton({ refDate: "2026-09-13", totals: { ga4Dau: { latest: 15, previous: null, apps: 2 }, console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null, listings: 0 } }, movements: [], ga4Gaps: [{ app: { id: "a", slug: "sample", displayName: "Sample", type: "GAME" }, latestDate: null }] });
-  assert.equal(text.split("\n").length, 3);
-  assert.ok(text.length <= 600); assert.match(text, /1개 미도착/); assert.match(text, /수집 상태를 먼저 확인/);
-  assert.ok(text.split("\n").every((line) => line.startsWith("- ")));
+test("분석 실패와 비교 근거 부족은 범용 가설·과제로 채우지 않는다", () => {
+  const text = narrativeSkeleton({
+    refDate: "2026-09-13",
+    totals: {
+      ga4Dau: { latest: 15, previous: null, apps: 2 },
+      console: { iaaKrw: 0, iapKrw: 0, previousIaaKrw: null, listings: 0 },
+    },
+    movements: [],
+  });
+  assert.equal(text, "");
 });

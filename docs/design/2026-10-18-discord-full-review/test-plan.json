@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "2a83f7e7c898e07909393d2e11dd6e5afc6348f2",
+  "changedFeatures": [
+    "notification-outbox-report-visuals-and-retention",
+    "insight-signals-budget-and-worker",
+    "keyword-rank-history-and-charts",
+    "feedback-and-market-observations",
+    "metric-report-highlights-finance-liveops",
+    "runtime-health-metrics-and-operational-events",
+    "store-submission-review-collection",
+    "discord-command-registration-and-deferred-reads",
+    "discord-operator-confirmation-and-deployment-approval"
+  ],
+  "environments": ["dev"],
+  "redesign": true,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["web", "service"],
+    "until": "public"
+  }
+}

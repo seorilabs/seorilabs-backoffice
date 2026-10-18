@@ -15,9 +15,7 @@ import {
   discordDestinations,
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { issueEventMessage } from "@/lib/notifications/issue-events";
-import { planIssueThread } from "@/lib/notifications/issue-thread";
-import { listIssueComments } from "@/lib/github/read";
+import { issueEventReport } from "@/lib/notifications/issue-events";
 import { normalizeLabels, priorityFromLabels } from "@/lib/domain/labels";
 import { isDisabledAppStatus } from "@/lib/domain/app-visibility";
 import { env } from "@/lib/env";
@@ -55,18 +53,16 @@ interface WebhookPayload {
 }
 
 // 실시간 webhook 에서만(미러 backfill 아님) Discord 알림. 실패해도 webhook 200 유지.
-async function shouldNotifyRepo(repoFullName: string): Promise<boolean> {
-  const app = await prisma.app.findUnique({
-    where: { repoFullName },
-    select: { status: true },
-  });
-  return !app || !isDisabledAppStatus(app.status);
-}
-
-async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string): Promise<void> {
+async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
   try {
     const repoFullName = p.repository?.full_name ?? "";
-    if (repoFullName && !(await shouldNotifyRepo(repoFullName))) return;
+    const app = repoFullName
+      ? await prisma.app.findUnique({
+          where: { repoFullName },
+          select: { status: true, displayName: true },
+        })
+      : null;
+    if (app && isDisabledAppStatus(app.status)) return;
     const repo = repoFullName.replace("seorilabs/", "");
     if (
       event === "issues" &&
@@ -81,11 +77,23 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
       });
       if (mir) {
         await enqueueNotification({
-          dedupeKey: `github:${deliveryId}:approval`,
+          dedupeKey: `github-approval:${repoFullName}:${p.issue.number}:${gate}:${p.issue.updated_at}`,
           kind: "OPS_ALERT",
           payload: {
             text: `${gate === "release" ? "🚀" : "📝"} **승인 필요** ${repo} #${p.issue.number}\n${p.issue.title}`,
-            components: [{ type: 1, components: [{ type: 2, style: 3, label: `승인 (${gate})`, custom_id: `approval:${gate}:${mir.id}` }] }],
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    style: 3,
+                    label: `승인 (${gate})`,
+                    custom_id: `approval:${gate}:${mir.id}`,
+                  },
+                ],
+              },
+            ],
             // 버튼은 상자 없이도 그대로 실린다. 승인 대기는 하루에 여러 건 쌓이므로
             // 두 줄마다 상자를 그리면 채널이 카드 더미가 된다.
             plain: true,
@@ -94,108 +102,37 @@ async function notifyHooks(event: string, p: WebhookPayload, deliveryId: string)
         });
       }
     }
-    // 이슈 생성·종료 → 즉시 알림. 등급과 무관하게 전체 이슈를 알린다.
-    if (event === "issues" && (p.action === "opened" || p.action === "closed") && p.issue) {
-      const labels = normalizeLabels(p.issue.labels as unknown as Array<string | { name?: string }>);
-      const parentDedupeKey = `github:${deliveryId}:issue-${p.action}`;
-      const destinations = discordDestinationOrFallback("github-issues", "backoffice");
-      await enqueueNotification({
-        dedupeKey: parentDedupeKey,
-        kind: "OPS_ALERT",
-        payload: {
-          text: issueEventMessage({
-            action: p.action,
-            repoFullName,
-            number: p.issue.number,
-            title: p.issue.title,
-            priority: priorityFromLabels(labels),
-            stateReason: p.issue.state_reason,
-          }),
-          // 하루 60건대가 줄줄이 쌓이는 채널이다. 두 줄짜리 알림마다 상자를 그리면
-          // 로그로 읽히지 않는다.
-          plain: true,
-        },
-        // 전체 이슈가 흐르는 알림이라 버튼 카드가 놓이는 #backoffice 와 분리한다.
-        // 전용 채널을 아직 설정하지 않았으면 기존 채널로 계속 보낸다.
-        destinations,
-      });
-      await enqueueIssueThread({
-        parentDedupeKey,
-        destinations,
-        repo,
-        issue: p.issue,
+    // 관측은 미러·내부 이벤트에 보존하고 중요한 개발 사건만 보고한다.
+    if (
+      event === "issues" &&
+      (p.action === "opened" || p.action === "closed") &&
+      p.issue
+    ) {
+      const labels = normalizeLabels(
+        p.issue.labels as unknown as Array<string | { name?: string }>,
+      );
+      const report = issueEventReport({
         action: p.action,
+        repoFullName,
+        appName: app?.displayName ?? repo,
+        number: p.issue.number,
+        title: p.issue.title,
+        priority: priorityFromLabels(labels),
+        stateReason: p.issue.state_reason,
+        updatedAt: p.issue.updated_at,
+      });
+      await enqueueNotification({
+        ...report,
+        kind: "OPS_ALERT",
+        destinations:
+          report.payload.report.category === "change"
+            ? discordDestinationOrFallback("github-issues", "backoffice")
+            : [],
       });
     }
   } catch (e) {
     console.error("[discord] notifyHooks error:", e);
   }
-}
-
-/** 이슈 알림에 딸릴 쓰레드를 예약한다. 판단은 planIssueThread 가 하고 여기선 배선만 한다. */
-async function enqueueIssueThread(input: {
-  parentDedupeKey: string;
-  destinations: ReturnType<typeof discordDestinations>;
-  repo: string;
-  issue: GhIssueInput;
-  action: "opened" | "closed";
-}): Promise<void> {
-  const repoFullName = `seorilabs/${input.repo}`;
-  const plan = await planIssueThread(
-    {
-      action: input.action,
-      parentDedupeKey: input.parentDedupeKey,
-      repo: input.repo,
-      number: input.issue.number,
-      title: input.issue.title,
-      body: input.issue.body,
-      stateReason: input.issue.state_reason,
-    },
-    {
-      findOpenedThreadKey: async (threadName) =>
-        (
-          await prisma.notificationDelivery.findFirst({
-            where: {
-              provider: "DISCORD",
-              status: "SENT",
-              deletedAt: null,
-              providerMessageId: { not: null },
-              event: { payload: { path: "$.thread.threadName", equals: threadName } },
-            },
-            select: { event: { select: { dedupeKey: true } } },
-          })
-        )?.event.dedupeKey ?? null,
-      listComments: () =>
-        listIssueComments(repoFullName, input.issue.number).catch((error) => {
-          // 댓글을 못 읽어도 PR 링크만으로 쓰레드를 남긴다.
-          console.error("[discord] 이슈 댓글 조회 실패:", error instanceof Error ? error.message : error);
-          return [];
-        }),
-      listLinkedPulls: async () =>
-        (
-          await prisma.pullRequestMirror.findMany({
-            where: { repoFullName, linkedIssue: input.issue.number },
-            orderBy: { number: "asc" },
-            select: { number: true, title: true, state: true },
-          })
-        ).map((pull) => ({
-          number: pull.number,
-          title: pull.title,
-          url: `https://github.com/${repoFullName}/pull/${pull.number}`,
-          merged: pull.state === "MERGED",
-        })),
-    },
-  );
-  if (!plan) return;
-  await enqueueNotification({
-    dedupeKey: plan.dedupeKey,
-    kind: "OPS_ALERT",
-    payload: {
-      text: plan.text,
-      thread: { parentDedupeKey: plan.parentDedupeKey, threadName: plan.threadName },
-    },
-    destinations: input.destinations,
-  });
 }
 
 function repoName(p: WebhookPayload): string | null {
@@ -219,7 +156,8 @@ async function handleEvent(event: string, p: WebhookPayload): Promise<void> {
       }
       break;
     case "workflow_run":
-      if (repo === "seorilabs/platform" && p.workflow_run) await observeApprovalRun(p.workflow_run.id);
+      if (repo === "seorilabs/platform" && p.workflow_run)
+        await observeApprovalRun(p.workflow_run.id);
       if (p.workflow_run) await upsertWorkflowRun(repo, p.workflow_run);
       break;
     case "push": {
@@ -267,11 +205,14 @@ export async function POST(req: NextRequest) {
 
   // delivery와 automation inbox를 같은 transaction에 기록한다. handler가 실패해도
   // scheduler가 inbox를 재처리하며 동일 delivery 재전송은 한 번만 enqueue된다.
-  const stableTagObservation = event === "push" ? durableStableTagPush(payload) : null;
+  const stableTagObservation =
+    event === "push" ? durableStableTagPush(payload) : null;
   const discoveryObservation = durableRepositoryDiscovery({
     event,
     action: payload.action,
-    repository: payload.repository as Partial<RepositoryWebhookInput> | undefined,
+    repository: payload.repository as
+      | Partial<RepositoryWebhookInput>
+      | undefined,
     ref: payload.ref,
     after: payload.after,
     organization: env.githubOrg(),
@@ -283,7 +224,9 @@ export async function POST(req: NextRequest) {
     repoFullName: payload.repository?.full_name,
     issueNumber: payload.issue?.number,
     issueNodeId: payload.issue?.node_id,
-    occurredAt: payload.issue?.updated_at ? new Date(payload.issue.updated_at) : undefined,
+    occurredAt: payload.issue?.updated_at
+      ? new Date(payload.issue.updated_at)
+      : undefined,
     issue: payload.issue ? durableIssueObservation(payload.issue) : undefined,
     stableTagPush: stableTagObservation,
     repositoryDiscovery: discoveryObservation,
@@ -293,7 +236,10 @@ export async function POST(req: NextRequest) {
     // durable inbox의 FAILED/PENDING row를 scheduler 또는 GitHub 재전송이 재생한다.
     after(async () => {
       try {
-        await drainAutomationIngress({ sourceKey: `github:${deliveryId}`, limit: 1 });
+        await drainAutomationIngress({
+          sourceKey: `github:${deliveryId}`,
+          limit: 1,
+        });
       } catch (e) {
         console.error(
           "[webhook] automation inbox 처리 실패:",
@@ -310,10 +256,12 @@ export async function POST(req: NextRequest) {
     await handleEvent(event, payload);
   } catch {
     // 기존 mirror upsert는 provider 재동기화 경계가 있으므로 webhook 응답을 유지한다.
-    console.error(`[webhook] ${event} handler error code=MIRROR_HANDLER_FAILED`);
+    console.error(
+      `[webhook] ${event} handler error code=MIRROR_HANDLER_FAILED`,
+    );
   }
 
-  await notifyHooks(event, payload, deliveryId);
+  await notifyHooks(event, payload);
 
   return NextResponse.json({ status: "ok" });
 }

@@ -5,7 +5,6 @@ import type { Lifecycle, AppStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recordTransition } from "@/lib/sync/transition";
 import { requireSession } from "@/lib/auth-helpers";
-import { notifyStageNudge } from "@/lib/notifications/proactive";
 import { setAppStatusCore } from "@/lib/core/app-status";
 import { HIDDEN_APP_ERROR, visibleAppWhere } from "@/lib/domain/app-visibility";
 
@@ -42,7 +41,6 @@ export async function transitionApp(
       },
     });
     // 다음 단계 에이전트 제안(넛지). 응답 블로킹 안 하도록 fire-and-forget.
-    void notifyStageNudge(appId, to);
   }
 
   revalidatePath("/board");

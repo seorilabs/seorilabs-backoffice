@@ -1,22 +1,16 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { discordDestinationOrFallback, discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
-import { renderPayload } from "@/lib/notifications/format";
-import { iapDestinations, recordIapGrant } from "@/lib/notifications/iap-summary";
+import { recordIapGrant } from "@/lib/notifications/iap-summary";
 import { prisma } from "@/lib/prisma";
 import {
-  isOpsAlert,
+  shouldReportOperationalFailure,
   operationalEventFacts,
-  operationalInterestCard,
-  operationalEventLine,
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
-import { recordIdentitySignup } from "@/lib/notifications/identity-summary";
 import { recordOperationalMilestone } from "@/lib/notifications/milestones";
-import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
+import { recordIncident } from "@/lib/notifications/incidents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +34,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
   const input = parseOperationalEvent(parsedBody);
-  if (!input) return NextResponse.json({ error: "invalid event" }, { status: 400 });
+  if (!input)
+    return NextResponse.json({ error: "invalid event" }, { status: 400 });
 
   let duplicate = false;
   try {
@@ -55,7 +50,10 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
       duplicate = true;
     } else {
       throw error;
@@ -69,7 +67,10 @@ export async function POST(request: NextRequest) {
   // slug 로만 찾으면 그런 앱이 미등록으로 떨어져 요약 카드·마일스톤 경로를 통째로 놓친다.
   const app = await prisma.app.findFirst({
     where: {
-      OR: [{ platformAppId: input.appId }, { platformAppId: null, slug: input.appId }],
+      OR: [
+        { platformAppId: input.appId },
+        { platformAppId: null, slug: input.appId },
+      ],
     },
     select: {
       id: true,
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest) {
       platformUserBaseline: true,
     },
   });
-  const alert = isOpsAlert(input.type);
+  const alert = shouldReportOperationalFailure(input);
   const occurredAt = new Date(input.occurredAt);
   const incidentKind = app ? input.type : `${input.type}:${input.appId}`;
   if (alert) {
@@ -88,65 +89,47 @@ export async function POST(request: NextRequest) {
       kind: incidentKind,
       severity: "critical",
       // 표시 문자열을 잘라 쓰지 않는다. 표시가 한 줄로 바뀌면 요약이 통째로 망가진다.
-      summary: operationalEventFacts(input).headline,
+      summary: `${app?.displayName ?? input.appId} · ${operationalEventFacts(input).headline}`,
       signalId: input.eventId,
       detectedAt: occurredAt,
       appId: app?.id,
-      evidence: { outcome: input.outcome, eventType: input.type },
-    });
-    const destination = input.type === "ad.reward.delivery_failed"
-      ? discordDestinationOrFallback("ad-rewards", "action-events")
-      : iapDestinations();
-    await enqueueNotification({
-      dedupeKey: `operational:${input.eventId}`,
-      kind: "OPERATIONAL_EVENT",
-      occurredAt,
-      payload: renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId)),
-      destinations: destination,
+      evidence: {
+        outcome: input.outcome,
+        eventType: input.type,
+        ...(input.type === "iap.completion_failed"
+          ? {
+              purchaseEnvironment:
+                input.attributes.isTestPurchase === false
+                  ? "실제 주문"
+                  : "실제·테스트 여부 제공 안됨",
+            }
+          : {}),
+        impact:
+          input.type === "ad.reward.delivery_failed"
+            ? "광고 시청 후 보상이 지급되지 않았습니다."
+            : "마켓의 결제 완료 처리가 실패했습니다. 권리 지급 상태와 마켓 완료 상태를 구분해 확인해야 합니다.",
+        action: "해당 앱의 지급 원장에서 실패 주문·재시도 결과를 확인하세요.",
+        platform: String(
+          input.attributes.platform ?? input.attributes.provider ?? "제공 안됨",
+        ),
+      },
     });
   } else {
-    const recoveryKind = input.type === "iap.granted"
-      ? "iap.completion_failed"
-      : input.type === "ad.reward.delivered"
-        ? "ad.reward.delivery_failed"
-        : null;
-    if (recoveryKind) {
-      await recoverIncident({
-        source: "platform",
-        kind: app ? recoveryKind : `${recoveryKind}:${input.appId}`,
-        appId: app?.id,
-        signalId: input.eventId,
-        recoveredAt: occurredAt,
-      });
+    // 다른 주문의 성공은 기존 지급 실패가 해결됐다는 근거가 아니다.
+    if (app) {
+      if (input.type === "iap.granted")
+        await recordIapGrant({ app, event: input });
+      else
+        await recordOperationalMilestone({
+          appId: app.id,
+          displayName: app.displayName,
+          event: input,
+        });
     }
-    const milestone = app
-      ? await recordOperationalMilestone({ appId: app.id, displayName: app.displayName, event: input })
-      : false;
-    // 등록된 앱의 신규 계정·결제는 앱·일 요약을 갱신한다. 결제는 건별 카드도 남긴다.
-    const summarized = app
-      ? input.type === "identity.created"
-        ? await recordIdentitySignup({ app, event: input })
-        : input.type === "iap.granted"
-          ? await recordIapGrant({ app, event: input })
-          : false
-      : false;
-    if (input.type === "ad.reward.delivered" || (!milestone && !summarized)) {
-      const interest = input.type === "ad.reward.delivered" || input.type === "iap.granted";
-      await enqueueNotification({
-        dedupeKey: `operational:${input.eventId}`,
-        kind: "OPERATIONAL_EVENT",
-        occurredAt,
-        payload: interest
-          ? renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId))
-          : { text: operationalEventLine(input, app?.displayName ?? input.appId), plain: true },
-        // 미등록 앱의 결제도 전용 채널로 보낸다. 피드가 갈리면 결제를 두 곳에서 읽어야 한다.
-        destinations: input.type === "iap.granted"
-          ? iapDestinations()
-          : input.type === "ad.reward.delivered"
-            ? discordDestinationOrFallback("ad-rewards", "action-events")
-          : discordDestinations(["action-events"]),
-      });
-    }
+    // 반복 성공은 operational_event 원장에서 조회한다. 동일 실패의 두 번째 카드도 만들지 않는다.
   }
-  return NextResponse.json({ ok: true, duplicate }, { status: duplicate ? 200 : 202 });
+  return NextResponse.json(
+    { ok: true, duplicate },
+    { status: duplicate ? 200 : 202 },
+  );
 }

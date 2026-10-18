@@ -15,31 +15,67 @@ const ROUTES = new Set<DiscordDestinationKey>([
   DISCORD_SEORI_REVIEW,
 ]);
 
-const payloadSchema = z.object({
-  version: z.literal(1),
-  id: z.string().min(1).max(80).regex(/^[A-Za-z0-9._:-]+$/),
-  source: z.string().min(1).max(80).regex(/^[A-Za-z0-9._-]+$/),
-  text: z.string().trim().min(1).max(16_000),
-  occurredAt: z.string().datetime({ offset: true }).optional(),
-  attachment: z.object({
-    filename: z.string().min(1).max(120).regex(/^[^/\\]+$/),
-    contentType: z.string().min(1).max(100),
-    base64: z.string().min(1).max(MAX_DISCORD_ATTACHMENT_BASE64_CHARS),
-  }).optional(),
-  thread: z.object({
-    parentId: z.string().min(1).max(80).regex(/^[A-Za-z0-9._:-]+$/),
-    name: z.string().trim().min(1).max(100),
-    plain: z.boolean().optional(),
-  }).strict().optional(),
-}).strict().superRefine((payload, context) => {
-  if (payload.thread?.parentId === payload.id) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["thread", "parentId"],
-      message: "thread parentId는 자기 알림 id와 달라야 합니다",
-    });
-  }
-});
+const payloadSchema = z
+  .object({
+    version: z.literal(1),
+    id: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[A-Za-z0-9._:-]+$/),
+    source: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[A-Za-z0-9._-]+$/),
+    text: z.string().trim().min(1).max(16_000),
+    occurredAt: z.string().datetime({ offset: true }).optional(),
+    report: z
+      .object({
+        category: z.enum(["internal", "change", "urgent", "response"]),
+        subject: z.string().trim().min(1).max(160),
+        conclusion: z.string().trim().min(1).max(300),
+        evidence: z.array(z.string().trim().min(1).max(500)).min(1).max(8),
+        meaning: z.string().trim().max(500).optional(),
+        action: z.string().trim().max(500).optional(),
+        topicKey: z.string().regex(/^[A-Za-z0-9._:-]{1,160}$/),
+      })
+      .strict()
+      .optional(),
+    attachment: z
+      .object({
+        filename: z
+          .string()
+          .min(1)
+          .max(120)
+          .regex(/^[^/\\]+$/),
+        contentType: z.string().min(1).max(100),
+        base64: z.string().min(1).max(MAX_DISCORD_ATTACHMENT_BASE64_CHARS),
+      })
+      .optional(),
+    thread: z
+      .object({
+        parentId: z
+          .string()
+          .min(1)
+          .max(80)
+          .regex(/^[A-Za-z0-9._:-]+$/),
+        name: z.string().trim().min(1).max(100),
+        plain: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((payload, context) => {
+    if (payload.thread?.parentId === payload.id) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["thread", "parentId"],
+        message: "thread parentId는 자기 알림 id와 달라야 합니다",
+      });
+    }
+  });
 
 export type ExternalNotification = z.infer<typeof payloadSchema>;
 
@@ -48,14 +84,18 @@ export function notificationSubject(route: DiscordDestinationKey): string {
   return `${OPS_NOTIFICATION_SUBJECT_PREFIX}.${route}`;
 }
 
-export function routeFromNotificationSubject(subject: string): DiscordDestinationKey | null {
+export function routeFromNotificationSubject(
+  subject: string,
+): DiscordDestinationKey | null {
   const prefix = `${OPS_NOTIFICATION_SUBJECT_PREFIX}.`;
   if (!subject.startsWith(prefix)) return null;
   const route = subject.slice(prefix.length) as DiscordDestinationKey;
   return ROUTES.has(route) ? route : null;
 }
 
-export function parseExternalNotification(value: unknown): ExternalNotification {
+export function parseExternalNotification(
+  value: unknown,
+): ExternalNotification {
   const parsed = payloadSchema.parse(value);
   if (parsed.attachment) {
     const bytes = Buffer.from(parsed.attachment.base64, "base64");

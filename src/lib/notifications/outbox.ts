@@ -1,9 +1,8 @@
-import type {
-  NotificationKind,
-  Prisma,
-} from "@prisma/client";
+import type { NotificationKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { NotificationDestination } from "@/lib/notifications/destinations";
+
+import { reportDecision, reportFingerprint } from "./report-policy";
 
 const MAX_ATTEMPTS = 10;
 let draining = false;
@@ -18,17 +17,33 @@ export function nextNotificationAttemptAt(
   now = new Date(),
   retryAfterMs?: number,
 ): Date {
-  const delayMs = retryAfterMs ?? Math.min(30_000 * 2 ** Math.max(0, attempts), 30 * 60_000);
+  const delayMs =
+    retryAfterMs ?? Math.min(30_000 * 2 ** Math.max(0, attempts), 30 * 60_000);
   return new Date(now.getTime() + Math.max(1_000, delayMs));
 }
 
-export async function enqueueNotification(input: {
-  dedupeKey: string;
-  kind: NotificationKind;
-  payload: Prisma.InputJsonObject;
-  occurredAt?: Date;
-  destinations: NotificationDestination[];
-}, db: NotificationOutboxClient = prisma): Promise<string> {
+export async function enqueueNotification(
+  input: {
+    dedupeKey: string;
+    kind: NotificationKind;
+    payload: Prisma.InputJsonObject;
+    occurredAt?: Date;
+    destinations: NotificationDestination[];
+  },
+  db: NotificationOutboxClient = prisma,
+): Promise<string> {
+  input = {
+    ...input,
+    payload: {
+      ...input.payload,
+      ...(input.kind === "STORE_REVIEW" &&
+      input.payload.review &&
+      input.payload.reviewGrouped === undefined
+        ? { reviewGrouped: false }
+        : {}),
+      reportFingerprint: reportFingerprint(input.kind, input.payload),
+    },
+  };
   const event = await db.notificationEvent.upsert({
     where: { dedupeKey: input.dedupeKey },
     create: {
@@ -61,10 +76,36 @@ export async function enqueueNotification(input: {
 //
 // deletedAt은 함께 비운다. 보존기한 정리로 지워진 메시지를 다시 보내면 새 메시지가
 // 생기는데, 표시가 남아 있으면 그 메시지가 다음 정리 대상에서 영구히 빠진다.
-export async function requeueNotification(eventId: string, db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma): Promise<number> {
-  await db.notificationDelivery.updateMany({ where: { eventId, status: { in: ["PENDING", "PROCESSING"] } }, data: { refreshRequested: true } });
+export async function requeueNotification(
+  eventId: string,
+  db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
+): Promise<number> {
+  await db.notificationDelivery.updateMany({
+    where: { eventId, status: "PROCESSING" },
+    data: { refreshRequested: true },
+  });
   const result = await db.notificationDelivery.updateMany({
-    where: { eventId, status: { in: ["SENT", "DEAD_LETTER"] } },
+    where: { eventId, status: { in: ["SENT", "DEAD_LETTER", "SUPPRESSED"] } },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      suppressedAt: null,
+      suppressionReason: null,
+      deletedAt: null,
+    },
+  });
+  return result.count;
+}
+
+/** 같은 결론의 수동 재실행은 영구 실패만 다시 대기시킨다. */
+export async function retryDeadLetterNotification(
+  eventId: string,
+  db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
+) {
+  return db.notificationDelivery.updateMany({
+    where: { eventId, status: "DEAD_LETTER" },
     data: {
       status: "PENDING",
       attempts: 0,
@@ -73,7 +114,6 @@ export async function requeueNotification(eventId: string, db: Pick<Prisma.Trans
       deletedAt: null,
     },
   });
-  return result.count;
 }
 
 export interface DeliveryOverrideResult {
@@ -115,7 +155,12 @@ export async function drainNotifications(
     payload: Prisma.JsonValue;
     providerMessageId: string | null;
   }) => Promise<DeliveryOverrideResult>,
-): Promise<{ processed: number; sent: number; deadLetter: number }> {
+): Promise<{
+  processed: number;
+  sent: number;
+  deadLetter: number;
+  suppressed?: number;
+}> {
   if (draining) return { processed: 0, sent: 0, deadLetter: 0 };
   draining = true;
   try {
@@ -135,24 +180,172 @@ export async function drainNotifications(
     });
     let sent = 0;
     let deadLetter = 0;
-    for (const row of rows) {
+    let suppressed = 0;
+    for (const queued of rows) {
       const claimed = await prisma.notificationDelivery.updateMany({
-        where: { id: row.id, status: "PENDING" },
+        where: { id: queued.id, status: "PENDING" },
         data: { status: "PROCESSING" },
       });
       if (claimed.count !== 1) continue;
+      // PENDING 갱신은 추가 전송 없이 claim 뒤의 최신 payload로 처리한다.
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id: queued.id },
+        include: { event: true },
+      });
 
+      // 과거 payload도 발송 직전에 동일한 기준으로 검사한다. 이미 SENT인 이력은 건드리지 않는다.
+      let payload = row.event.payload;
+      if (
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        typeof payload.insightId === "string"
+      ) {
+        const insight = await prisma.insightDocument.findUnique({
+          where: { id: payload.insightId },
+          select: { signal: { select: { kind: true } } },
+        });
+        if (insight) payload = { ...payload, signalKind: insight.signal.kind };
+      }
+      let decision = reportDecision(
+        { kind: row.event.kind, dedupeKey: row.event.dedupeKey, payload },
+        process.env.NOTIFICATION_REPORTS_PAUSED === "true",
+      );
+      const object =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload
+          : null;
+      if (!decision.send && decision.reason === "REPORTS_PAUSED") {
+        await prisma.notificationDelivery.updateMany({
+          where: { id: row.id, status: "PROCESSING" },
+          data: {
+            status: "PENDING",
+            nextAttemptAt: new Date(Date.now() + 60000),
+            refreshRequested: false,
+          },
+        });
+        continue;
+      }
+      // 이미 전달한 편집 가능 보고는 결론 철회도 정정으로 전달한다.
+      if (
+        !decision.send &&
+        row.providerMessageId &&
+        object?.editable === true &&
+        typeof object.text === "string"
+      ) {
+        payload = {
+          ...object,
+          text: `**정정 · 이전 결론을 철회합니다.**\n${object.text}`,
+        };
+        const corrected = payload as Prisma.JsonObject;
+        payload = {
+          ...corrected,
+          report: { category: "change", reason: "REPORT_CORRECTION" },
+          reportCorrection: true,
+        };
+        const recorded = await prisma.notificationEvent.updateMany({
+          where: {
+            id: row.event.id,
+            payload: { equals: row.event.payload as Prisma.InputJsonValue },
+          },
+          data: { payload: payload as Prisma.InputJsonObject },
+        });
+        if (!recorded.count) {
+          await prisma.notificationDelivery.updateMany({
+            where: { id: row.id, status: "PROCESSING" },
+            data: {
+              status: "PENDING",
+              refreshRequested: false,
+              nextAttemptAt: new Date(),
+            },
+          });
+          continue;
+        }
+        decision = { send: true, reason: "REPORT_CORRECTION" };
+      }
+      if (!decision.send) {
+        const suppressedCount = await prisma.$transaction(async (tx) => {
+          const changed = await tx.notificationDelivery.updateMany({
+            where: {
+              id: row.id,
+              status: "PROCESSING",
+              OR: [{ refreshRequested: false }, { refreshRequested: null }],
+            },
+            data: {
+              status: "SUPPRESSED",
+              suppressedAt: new Date(),
+              suppressionReason: decision.reason.slice(0, 240),
+            },
+          });
+          if (changed.count)
+            await tx.auditLog.create({
+              data: {
+                action: "notification.suppressed",
+                entityType: "notification_delivery",
+                entityId: row.id,
+                payload: {
+                  kind: row.event.kind,
+                  reason: decision.reason,
+                  destinationKey: row.destinationKey,
+                },
+              },
+            });
+          else
+            await tx.notificationDelivery.updateMany({
+              where: {
+                id: row.id,
+                status: "PROCESSING",
+                refreshRequested: true,
+              },
+              data: {
+                status: "PENDING",
+                refreshRequested: false,
+                nextAttemptAt: new Date(),
+              },
+            });
+          return changed.count;
+        });
+        suppressed += suppressedCount;
+        continue;
+      }
       const result = await deliver({
         kind: row.event.kind,
         destinationKey: row.destinationKey,
-        payload: row.event.payload,
+        payload,
         providerMessageId: row.providerMessageId,
-      }).catch(() => ({ ok: false, error: "NOTIFICATION_DELIVERY_EXCEPTION" } as DeliveryOverrideResult));
+      }).catch(
+        () =>
+          ({
+            ok: false,
+            error: "NOTIFICATION_DELIVERY_EXCEPTION",
+          }) as DeliveryOverrideResult,
+      );
       if (result.ok) {
         sent++;
-        const data = { attempts: { increment: 1 }, sentAt: new Date(), providerMessageId: result.messageId ?? row.providerMessageId, lastError: null };
-        const completed = await prisma.notificationDelivery.updateMany({ where: { id: row.id, status: "PROCESSING", OR: [{refreshRequested:false},{refreshRequested:null}] }, data: { ...data, status: "SENT" } });
-        if (!completed.count) await prisma.notificationDelivery.updateMany({ where: { id: row.id, status: "PROCESSING", refreshRequested: true }, data: { ...data, status: "PENDING", refreshRequested: false, nextAttemptAt: new Date() } });
+        const data = {
+          attempts: { increment: 1 },
+          sentAt: new Date(),
+          providerMessageId: result.messageId ?? row.providerMessageId,
+          lastError: null,
+        };
+        const completed = await prisma.notificationDelivery.updateMany({
+          where: {
+            id: row.id,
+            status: "PROCESSING",
+            OR: [{ refreshRequested: false }, { refreshRequested: null }],
+          },
+          data: { ...data, status: "SENT" },
+        });
+        if (!completed.count)
+          await prisma.notificationDelivery.updateMany({
+            where: { id: row.id, status: "PROCESSING", refreshRequested: true },
+            data: {
+              ...data,
+              status: "PENDING",
+              refreshRequested: false,
+              nextAttemptAt: new Date(),
+            },
+          });
       } else {
         const attempts = row.attempts + 1;
         const terminal = isTerminalFailure(result, attempts);
@@ -181,24 +374,40 @@ export async function drainNotifications(
             kind: row.event.kind,
             provider: row.provider,
             destinationKey: row.destinationKey,
+            reportFingerprint: reportFingerprint(row.event.kind, payload),
             terminal: !result.ok && isTerminalFailure(result, row.attempts + 1),
             error: result.error ?? null,
           },
         },
       });
     }
-    return { processed: rows.length, sent, deadLetter };
+    return { processed: rows.length, sent, deadLetter, suppressed };
   } finally {
     draining = false;
   }
 }
 
 /** 이미 발송된 보고서 payload 갱신과 재배달을 하나의 DB commit으로 묶는다. */
-export async function enqueueEditableNotification(input: Parameters<typeof enqueueNotification>[0]) {
-  return prisma.$transaction(async tx => {
-    const previous = await tx.notificationEvent.findUnique({ where: { dedupeKey: input.dedupeKey }, select: { id: true } });
+export async function enqueueEditableNotification(
+  input: Parameters<typeof enqueueNotification>[0],
+) {
+  return prisma.$transaction(async (tx) => {
+    const previous = await tx.notificationEvent.findUnique({
+      where: { dedupeKey: input.dedupeKey },
+      select: {
+        id: true,
+        payload: true,
+        deliveries: { select: { status: true } },
+      },
+    });
     const id = await enqueueNotification(input, tx);
-    if (previous) await requeueNotification(id, tx);
+    if (
+      (previous &&
+        reportFingerprint(input.kind, previous.payload) !==
+          reportFingerprint(input.kind, input.payload)) ||
+      previous?.deliveries.some((d) => d.status === "DEAD_LETTER")
+    )
+      await requeueNotification(id, tx);
     return id;
   });
 }
