@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "4a0add938b347dff58a3bd812254645978d91260",
+  "changedFeatures": [
+    "ait-console-pod-collection",
+    "app-and-market-metrics",
+    "metric-collection-ledger-and-backfill",
+    "metric-report-highlights-finance-liveops"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}

@@ -62,14 +62,14 @@ export default async function CommercePage({ params }: { params: Promise<{ id: s
           <CommerceCard
             label="거래액"
             value={
-              latest ? `₩${Math.round(latest.iapTrxAmountKrw).toLocaleString("ko-KR")}` : undefined
+              latest?.iapTrxAmountKrw != null ? `₩${Math.round(latest.iapTrxAmountKrw).toLocaleString("ko-KR")}` : undefined
             }
             date={latest?.date}
           />
           <CommerceCard
             label="정산액"
             value={
-              latest ? `₩${Math.round(latest.iapSettlementKrw).toLocaleString("ko-KR")}` : undefined
+              latest?.iapSettlementKrw != null ? `₩${Math.round(latest.iapSettlementKrw).toLocaleString("ko-KR")}` : undefined
             }
             date={latest?.date}
           />

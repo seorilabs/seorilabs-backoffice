@@ -1,3 +1,4 @@
+import { won } from "@/lib/format/units";
 import { feedbackOverview, sourceHealth } from "@/lib/insights/queries";
 import { getOrgReport } from "@/lib/core/org-report";
 import { parseMetricDay } from "@/lib/analytics/metric-day";
@@ -18,7 +19,7 @@ export async function insightCommandQuery(
     if (!view) return { content: "해당 날짜의 수집된 보고서가 없습니다." };
     const doc = view.doc;
     return {
-      content: `**종합 지표 ${doc.refDate} · ${view.version ? `발행 v${view.version}` : "현재 원본 재계산"}**\n- 앱별 활성 합계 ${doc.summary.ga4.dau}명 · ${doc.summary.ga4.apps}개 앱 · 중복 사용자 포함\n- ${doc.summary.console.listings ? `광고 추정 ${Math.round(doc.summary.console.iaaKrw)}원 · 결제 거래액 ${Math.round(doc.summary.console.iapTrxKrw)}원` : "콘솔 수익 미수집"}\n- 콘솔 기준 ${doc.consoleMeta.refDate ?? "수집 없음"} · 지연 ${doc.consoleMeta.lagDays ?? "미상"}일\n${doc.narrative ?? "- 분석 자료 없음"}\n${base()}/?date=${doc.refDate}`,
+      content: `**종합 지표 ${doc.refDate} · ${view.version ? `발행 v${view.version}` : "현재 원본 재계산"}**\n- 앱별 활성 합계 ${doc.summary.ga4.dau}명 · ${doc.summary.ga4.apps}개 앱 · 중복 사용자 포함\n- ${doc.summary.console.listings ? `광고 추정 ${won(doc.summary.console.iaaKrw)} · 결제 거래액 ${won(doc.summary.console.iapTrxKrw)}` : "콘솔 수익 미수집"}\n- 콘솔 기준 ${doc.consoleMeta.refDate ?? "수집 없음"} · 지연 ${doc.consoleMeta.lagDays ?? "미상"}일\n${doc.narrative ?? "- 분석 자료 없음"}\n${base()}/?date=${doc.refDate}`,
     };
   }
   if (name === "health") {

@@ -1,9 +1,10 @@
-# 콘솔 지표 수집 런북 (온디맨드)
+# 콘솔 지표 수집 런북
 
 대화형 MCP 조회·push와 승인된 전용 파드 조회가 같은 저장 서비스를 사용한다.
 파드 구현은 [승인 설계](../../docs/design/2026-10-12-console-sync-pod/design.md)를 따른다.
-**운영 파드는 아직 활성화되지 않았다.** 실제 OAuth 갱신·회전·재시작 확인과 별도 운영 승인 전에는
-기존 대화형 수집을 사용한다. 대화형 인증이 만료되면 현재 MCP 설정에서 재인증한다.
+2026-10-18 운영 readback에서 전용 CronJob은 매일 21:30 KST, `suspend: false`다.
+이 변경의 목표 주기는 03:30·09:30·15:30·21:30 KST(6시간 간격)이며, 저장소 매니페스트 변경만으로
+운영 적용이 완료되지는 않는다. 대화형 인증이 만료되면 현재 MCP 설정에서 재인증한다.
 
 ## 0. 대상 리스팅
 
@@ -23,7 +24,7 @@ bash scripts/console-metrics/status.sh          # 앱별 lastDate/rows 요약
 ```
 
 - `endDate` = 어제(D-1, KST).
-- `startDate` = `minLastDate` − 2일(재집계 overlap). `minLastDate` 는 데이터가 있는 앱들의
+- `startDate` = `minLastDate` − 2일(재집계 overlap). 리스팅의 `firstIncompleteDate`가 더 이르면 그 날짜부터 다시 조회하되, 데이터가 있는 리스팅의 자동 조회는 `endDate`에서 13일 전까지(최근 14일)로 제한한다. 더 오래된 실패 기록은 보존하며 명시적 백필 대상으로 남긴다. `minLastDate` 는 데이터가 있는 앱들의
   마지막 저장일 중 가장 이른 값(status 응답). 데이터가 하나도 없으면 `endDate` − 13일.
 - `appsWithNoData`(rows=0, 신규 등록 등)는 별도 백필: 그 앱만 출시일부터 당긴다.
 - 안전 상한: 한 앱 당 최대 120일(`MAX_DAYS_PER_APP`). 그보다 큰 gap 은 120일씩 나눠 반복.
@@ -45,9 +46,7 @@ bash scripts/console-metrics/status.sh          # 앱별 lastDate/rows 요약
 - (선택) `dashboard_retention` { ..., dimension:"REFERRER" } → 구간 코호트라 endDate 의 raw.retention 에만.
 
 호출 실패·비정상 응답은 성공 응답의 미집계 날짜와 구분한다. **0으로 채우지 않는다.**
-DAU·신규·세션은 정상 응답의 날짜 부재일 때만 null로 둔다. 광고 양 OS의 일별 행,
-결제 거래액·정산액·결제 사용자 중 하나라도 확인할 수 없으면 **그 날짜의 행 전체를 제외**한다.
-필수 필드를 생략한 행은 ingest가 skip하고 기존 행·관측은 보존한다. 명시적으로 응답한 0은 저장한다.
+DAU·신규·세션·광고·결제에서 확인된 값만 저장한다. 광고 OS나 결제 날짜가 없으면 그 지표만 건너뛰고 다른 지표는 저장한다. 두 OS를 확인하기 전 광고 합계는 만들지 않는다. 새 행의 미확인 값은 null, 기존 행의 빠진 값·다른 OS 원본은 보존한다. 값이 전부 없으면 날짜를 건너뛴다. 명시적인 0은 저장하며 부분 행을 전체 관측 완료로 표시하지 않는다.
 날짜 중복·비정상 수치·등록된 slug/miniAppId/workspace 불일치도 제외한다.
 
 ## 3. 페이로드 (`ConsoleMetricsPush`, console-source.ts)
@@ -123,6 +122,11 @@ node scripts-dist/console-metrics-collector.cjs verify-refresh
 기본 서비스 계정 토큰 자동 주입 없음, 승인된 WIF audience의 짧은 JWT만 명시적으로 mount하도록 준비돼 있다. 기존 배포 스크립트의
 적용 목록에 포함되지 않는다. image는 `render-manifest.sh`로 승인된 immutable digest를 치환한다.
 ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest의 placeholder는 운영 승인·등록 이후에만 확정한다. 실제 생성 완료를 뜻하지 않는다.
+
+목표 주기는 `30 3,9,15,21 * * *` / `Asia/Seoul`이다. 어제까지의 일별 값과 최근 14일 이내의
+미확인 값을 더 자주 보완하며 당일 실시간 지표를 새로 수집하는 변경은 아니다. 리스팅당
+대시보드 조회는 5회이고, 동시에 최대 2개 요청·DB 잠금·`concurrencyPolicy: Forbid`·요청 제한 시
+잔여 조회 중단을 유지한다. 적용 시 기존 활성 상태와 승인된 이미지 digest를 먼저 확인한다.
 
 운영 배포와 스케줄 활성화 승인을 별도로 받은 뒤에만 적용한다. 첫 자연 실행은 종료 코드와
 `state`, `results`의 누락·오류·경고·업서트 수 및 `readback`을 확인한다. 최신 날짜만으로 완료를

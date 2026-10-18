@@ -147,6 +147,16 @@ test("buildConsoleSection: 수집 데이터 없으면 빈 섹션", () => {
   assert.equal(section.onRefDate, 0);
 });
 
+test("buildConsoleSection: 일부 결제 미확인은 확인된 0이나 완전 합계로 표시하지 않는다", () => {
+  const section = buildConsoleSection([
+    item("A", consoleRow("2026-07-04", { iapTrxAmountKrw: 12000, payingUsers: 1 })),
+    item("B", consoleRow("2026-07-04", { iapTrxAmountKrw: null, payingUsers: null })),
+  ], "2026-07-04");
+  const total = section.lines.find((line) => line.startsWith("<b>합계</b>"))!;
+  assert.match(total, /결제 미확인/);
+  assert.doesNotMatch(total, /₩12,000|결제 ₩0/);
+});
+
 test("buildConsoleSection: 최신 기준일·수익 내림차순 정렬, 합계는 기준일 리스팅만", () => {
   const section = buildConsoleSection(
     [

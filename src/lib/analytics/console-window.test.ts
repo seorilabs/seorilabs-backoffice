@@ -27,6 +27,13 @@ const ROWS: ConsoleWindowRow[] = [
   row("2026-07-19", { dau: 10, newUsers: 3, avgSessionSec: 125, iaaImpressions: 4, iaaEarningKrw: 74 }),
 ];
 
+test("광고 미확인 날짜는 수익 0으로 집계하지 않는다", () => {
+  const agg = aggConsoleWindow([row("2026-10-11", { dau: 7, iaaImpressions: null, iaaEarningKrw: null })])!;
+  assert.equal(agg.dauSum, 7); assert.equal(agg.iaaEarnSum, null);
+  const display = formatConsoleWindowRow(agg, (date) => date.toISOString().slice(0, 10));
+  assert.equal(display.iaaImpSum, "—"); assert.equal(display.iaaEarnKrw, "—");
+});
+
 test("aggConsoleWindow: 빈 배열은 null", () => {
   assert.equal(aggConsoleWindow([]), null);
 });

@@ -149,6 +149,7 @@ async function loadConsoleMonthlyRevenue(apps: AppRef[]): Promise<ConsoleMonthly
       by: ["appId", "miniAppId"],
       where: {
         OR: listingScope,
+        iaaImpressions: { not: null }, iaaEarningKrw: { not: null },
         date: { gte: window.currentStart, lt: window.currentEndExclusive },
       },
       _count: { _all: true },
@@ -158,6 +159,7 @@ async function loadConsoleMonthlyRevenue(apps: AppRef[]): Promise<ConsoleMonthly
       by: ["appId", "miniAppId"],
       where: {
         OR: listingScope,
+        iaaImpressions: { not: null }, iaaEarningKrw: { not: null },
         date: { gte: window.previousStart, lt: window.previousComparableEndExclusive },
       },
       _count: { _all: true },
@@ -167,6 +169,7 @@ async function loadConsoleMonthlyRevenue(apps: AppRef[]): Promise<ConsoleMonthly
       by: ["appId", "miniAppId"],
       where: {
         OR: listingScope,
+        iaaImpressions: { not: null }, iaaEarningKrw: { not: null },
         date: { gte: window.previousStart, lt: window.previousEndExclusive },
       },
       _count: { _all: true },
@@ -397,9 +400,9 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                       <td className="px-3 py-2 text-right text-neutral-600">
                         {latest?.avgSessionSec != null ? `${Math.round(latest.avgSessionSec)}초` : "—"}
                       </td>
-                      <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.iaaImpressions : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">{latest?.iaaImpressions ?? "—"}</td>
                       <td className="px-3 py-2 text-right text-neutral-600">
-                        {latest ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
+                        {latest?.iaaEarningKrw != null ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
                       </td>
                     </tr>
                   ))}

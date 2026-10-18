@@ -1,3 +1,4 @@
+import { sumConsoleValues } from "@/lib/analytics/console-values";
 import Link from "next/link";
 import React from "react";
 import { METRIC_SPECS, type MetricSpec } from "@/lib/core/metric-highlights";
@@ -10,8 +11,8 @@ import type { OrgReportView } from "@/lib/core/org-report";
 
 const SPEC_BY_KEY = new Map<string, MetricSpec>(METRIC_SPECS.map((spec) => [spec.key, spec]));
 
-const count = (value: number): string => Math.round(value).toLocaleString("ko-KR");
-const won = (value: number): string => `₩${count(value)}`;
+const count = (value: number | null): string => value == null ? "—" : Math.round(value).toLocaleString("ko-KR");
+const won = (value: number | null): string => value == null ? "—" : `₩${count(value)}`;
 const usd = (value: number): string => `$${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)}`;
 
 export function Panel({ title, children }: { title: string; children: React.ReactNode }) {
@@ -131,13 +132,13 @@ export function SummaryCards({ doc }: { doc: OrgReportDocument }) {
         label="콘솔 광고 추정 수익"
         value={consoleSummary.listings ? won(consoleSummary.iaaKrw) : "미수집"}
         sub={`대상 ${consoleSummary.listings}개 리스팅`}
-        delta={consoleSummary.listings > 0 ? <DeltaTag current={consoleSummary.iaaKrw} previous={consoleSummary.iaaPrevKrw} /> : undefined}
+        delta={consoleSummary.listings > 0 && consoleSummary.iaaKrw != null ? <DeltaTag current={consoleSummary.iaaKrw} previous={consoleSummary.iaaPrevKrw} /> : undefined}
       />
       <SummaryCard
         label="결제 거래액"
         value={consoleSummary.listings ? won(consoleSummary.iapTrxKrw) : "미수집"}
         sub={
-          consoleSummary.payingUsers > 0
+          (consoleSummary.payingUsers ?? 0) > 0
             ? `결제자 ${count(consoleSummary.payingUsers)}명 · 정산 ${won(consoleSummary.iapSettlementKrw)}`
             : undefined
         }
@@ -278,8 +279,8 @@ export function AppBreakdownTable({ doc }: { doc: OrgReportDocument }) {
         </thead>
         <tbody>
           {doc.apps.map((app) => {
-            const listingSum = (pick: (l: (typeof app.listings)[number]) => number) =>
-              app.listings.reduce((sum, listing) => sum + pick(listing), 0);
+            const listingSum = (pick: (l: (typeof app.listings)[number]) => number | null) =>
+              sumConsoleValues(app.listings.map(pick));
             const consoleDauRows = app.listings.filter((listing) => listing.dau != null);
             const maxLag = Math.max(0, ...app.listings.map((listing) => listing.lagDays));
             const lagTitle = app.listings

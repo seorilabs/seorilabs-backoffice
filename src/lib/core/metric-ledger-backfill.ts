@@ -16,6 +16,7 @@ import {
 } from "@/lib/analytics/coverage";
 import { missingDayState } from "@/lib/analytics/observation";
 import { consoleCoverageTargets, ga4CoverageTargets } from "@/lib/analytics/targets";
+import { isCompleteConsoleMetric } from "@/lib/analytics/console-values";
 
 // 원장이 생기기 전 기간을 채운다.
 //
@@ -26,13 +27,13 @@ import { consoleCoverageTargets, ga4CoverageTargets } from "@/lib/analytics/targ
 // landedAt 은 채우지 않는다. 언제 착지했는지는 소급할 수 없고, 지어낸 시각으로
 // 발행 시각을 정하면 그 결정의 근거가 거짓이 된다.
 //
-// 콘솔에는 "테이블"이 없다. push 가 들어온 날만 행이 있으므로 행 유무로만 가른다.
+// 콘솔은 행이 있어도 부분 저장일 수 있다. 수집 서비스와 같은 완료 기준으로 가른다.
 
 export interface LedgerBackfillResult {
   endDate: string;
   windowDays: number;
   ga4: { targets: number; cells: number; observed: number; empty: number; notLanded: number };
-  console: { targets: number; cells: number; observed: number; notLanded: number };
+  console: { targets: number; cells: number; observed: number; notLanded: number; failed: number };
   errors: { slug: string; error: string }[];
 }
 
@@ -51,7 +52,7 @@ export async function backfillMetricLedger(
     endDate: end,
     windowDays: opts.windowDays,
     ga4: { targets: 0, cells: 0, observed: 0, empty: 0, notLanded: 0 },
-    console: { targets: 0, cells: 0, observed: 0, notLanded: 0 },
+    console: { targets: 0, cells: 0, observed: 0, notLanded: 0, failed: 0 },
     errors: [],
   };
 
@@ -94,12 +95,14 @@ export async function backfillMetricLedger(
   for (const target of console_.targets) {
     const rows = await prisma.appConsoleMetricDaily.findMany({
       where: { appId: target.appId, miniAppId: target.listingId, date: range },
-      select: { date: true },
+      select: { date: true, iaaImpressions: true, iaaEarningKrw: true, iapTrxAmountKrw: true, iapSettlementKrw: true, payingUsers: true, raw: true },
     });
-    const stored = new Set(rows.map((row) => dbDay(row.date)));
+    const stored = new Map(rows.map((row) => [dbDay(row.date), row]));
     const observations: ObservationInput[] = days.map((day) => {
-      const state: MetricObservationState = stored.has(day) ? "observed" : "not_landed";
+      const row = stored.get(day);
+      const state: MetricObservationState = row ? isCompleteConsoleMetric(row) ? "observed" : "failed" : "not_landed";
       if (state === "observed") result.console.observed += 1;
+      else if (state === "failed") result.console.failed += 1;
       else result.console.notLanded += 1;
       return {
         source: "ait_console" as const,

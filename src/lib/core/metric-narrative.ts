@@ -98,7 +98,7 @@ export function narrativeFacts(input: NarrativeInput): string {
   const lines = [
     `기준일: ${input.refDate} (D-1)`,
     `GA4 DAU 합계 ${input.totals.ga4Dau.latest}명 (전일 ${input.totals.ga4Dau.previous ?? "미상"}) · 대상 ${input.totals.ga4Dau.apps}개 앱`,
-    `콘솔 광고 수익 ${Math.round(input.totals.console.iaaKrw)}원 · 결제 ${Math.round(input.totals.console.iapKrw)}원 · 대상 ${input.totals.console.listings}개 리스팅`,
+    `콘솔 광고 수익 ${input.totals.console.iaaKrw == null ? "미확인" : `${Math.round(input.totals.console.iaaKrw)}원`} · 결제 ${input.totals.console.iapKrw == null ? "미확인" : `${Math.round(input.totals.console.iapKrw)}원`} · 대상 ${input.totals.console.listings}개 리스팅`,
   ];
   if (input.ga4Series) {
     lines.push(

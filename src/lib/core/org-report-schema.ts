@@ -38,8 +38,8 @@ const segmentCellSchema = z
     apps: z.number(),
     dau: z.number(),
     dauPrev: z.number().nullable(),
-    iaaKrw: z.number(),
-    iapTrxKrw: z.number(),
+    iaaKrw: z.number().nullable(),
+    iapTrxKrw: z.number().nullable(),
   })
   .strict();
 
@@ -70,9 +70,9 @@ const appListingSchema = z
     lagDays: z.number(),
     dau: z.number().nullable(),
     newUsers: z.number().nullable(),
-    iaaKrw: z.number(),
-    iapTrxKrw: z.number(),
-    payingUsers: z.number(),
+    iaaKrw: z.number().nullable(),
+    iapTrxKrw: z.number().nullable(),
+    payingUsers: z.number().nullable(),
   })
   .strict();
 
@@ -114,7 +114,7 @@ export const orgReportDocumentSchema = z
     superseded: z
       .object({
         ga4Dau: z.number(),
-        consoleIaaKrw: z.number(),
+        consoleIaaKrw: z.number().nullable(),
         generatedAt: z.string(),
         version: z.number(),
       })
@@ -176,11 +176,11 @@ export const orgReportDocumentSchema = z
           .strict(),
         console: z
           .object({
-            iaaKrw: z.number(),
+            iaaKrw: z.number().nullable(),
             iaaPrevKrw: z.number().nullable(),
-            iapTrxKrw: z.number(),
-            iapSettlementKrw: z.number(),
-            payingUsers: z.number(),
+            iapTrxKrw: z.number().nullable(),
+            iapSettlementKrw: z.number().nullable(),
+            payingUsers: z.number().nullable(),
             listings: z.number(),
           })
           .strict(),

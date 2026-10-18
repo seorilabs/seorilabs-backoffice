@@ -892,11 +892,11 @@ model AppConsoleMetricDaily {
   dau              Int? // 콘솔 활성 사용자(au). null=콘솔 미집계
   newUsers         Int? // 신규 활성(newAu). null=콘솔 미집계
   avgSessionSec    Float? // 평균 세션 길이(초)
-  iaaImpressions   Int    @default(0) // 광고 노출(OS 합)
-  iaaEarningKrw    Float  @default(0) // 광고 추정 수익(원, OS 합)
-  iapTrxAmountKrw  Float  @default(0) // 인앱결제 거래액(원)
-  iapSettlementKrw Float  @default(0) // 인앱결제 정산액(원)
-  payingUsers      Int    @default(0) // 결제 사용자(pu)
+  iaaImpressions   Int? // 광고 노출(OS 합)
+  iaaEarningKrw    Float? // 광고 추정 수익(원, OS 합)
+  iapTrxAmountKrw  Float? // 인앱결제 거래액(원)
+  iapSettlementKrw Float? // 인앱결제 정산액(원)
+  payingUsers      Int? // 결제 사용자(pu)
   raw              Json? // 부가 원본: 유입경로/데모그래픽/OS별 IAA/잔존 코호트/앱버전 등
 
   collectedAt DateTime @default(now()) @db.DateTime(3)
@@ -977,8 +977,8 @@ model OrgReportDaily {
 
   // 날짜 목록/피커용 발췌값. 정본은 report JSON — 이 값으로 재계산하지 않는다.
   ga4Dau         Int     @default(0)
-  consoleIaaKrw  Float   @default(0)
-  consoleIapKrw  Float   @default(0)
+  consoleIaaKrw  Float?
+  consoleIapKrw  Float?
   highlightCount Int     @default(0)
   lowlightCount  Int     @default(0)
   consoleLagDays Int? // 발행 시점 콘솔 지연 일수(null=콘솔 수집 없음)

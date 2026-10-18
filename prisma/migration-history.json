@@ -98,6 +98,10 @@
     "20261017130000_notification_report_suppression": {
       "sha256": "79659130c1dd587ac5dfd821205f5c0fdbfa2e2e27f15ec632a2e68657e2c597",
       "reason": "2026-10-17 승인 설계 #482: 기존 값과 순서를 유지한 MySQL ENUM 끝 SUPPRESSED 확장 및 nullable 사유·시각 추가. 기존 데이터와 writer를 보존한다."
+    },
+    "20261018010000_console_partial_metrics": {
+      "sha256": "bbbc818199c09d16b5d05638e2ba5e3ac0ff3104c311eb9adbc826717e1c0f8f",
+      "reason": "#485 사용자 결측 지표 건너뛰기 수정 지시: 숫자 7개 열의 NULL 허용 확대와 기본값 제거만 수행한다. 행·키·기존 숫자·과거 0은 보존한다. MODIFY를 쓰는 MySQL nullable 확대이며 축소·삭제·backfill은 없다. 격리 MySQL에서 기존 값 보존과 기존 writer 호환성을 검증한다."
     }
   },
   "legacy": {
