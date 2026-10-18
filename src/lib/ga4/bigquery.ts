@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { ga4ServiceAccountCredentials } from "@/lib/ga4/credentials";
 import type { Ga4Target } from "@/lib/ga4/datasets";
 import type { Ga4BreakdownRow } from "@/lib/ga4/metric-shapes";
+import { readQueryResult } from "@/lib/ga4/query-result";
 
 // GA4 export → BigQuery 조회. SA 키 JSON(env)으로 인증하고, 대상 게임 프로젝트에서
 // job 을 실행한다(SA 는 각 프로젝트에 bigquery.dataViewer + jobUser 보유).
@@ -64,12 +65,14 @@ export async function runQuery<T>(project: string, dataset: string, sql: string)
   const sqlHash = createHash("sha256").update(sql).digest("hex");
   const run = await beginCollection("ga4-query", `${project}.${dataset}:${sqlHash.slice(0, 16)}`);
   try {
-    const [rows, job] = await clientFor(project).query({ query: sql, location, maximumBytesBilled: MAX_BYTES_BILLED });
-    await completeCollection(run.id, { status: "observed", coverage: {
-      sqlHash, project, dataset, location, jobId: job?.jobReference?.jobId ?? null,
-      rows: rows.length, bytesProcessed: String(job?.statistics?.query?.totalBytesProcessed ?? "unknown"),
-      bytesBilled: String(job?.statistics?.query?.totalBytesBilled ?? "unknown"),
-      cacheHit: job?.statistics?.query?.cacheHit ?? null,
+    const response = await clientFor(project).query({ query: sql, location, maximumBytesBilled: MAX_BYTES_BILLED });
+    const { rows, usage, complete } = await readQueryResult(response, async (jobId, jobLocation) => {
+      const [metadata] = await clientFor(project).job(jobId, { location: jobLocation ?? location }).getMetadata();
+      return metadata;
+    });
+    await completeCollection(run.id, { status: complete ? "observed" : "partial",
+      ...(!complete ? { errorCode: "SOURCE_QUERY_USAGE_UNAVAILABLE" } : {}), coverage: {
+      sqlHash, project, dataset, location, ...usage, rows: rows.length,
     } });
     return rows as T[];
   } catch (error) {
