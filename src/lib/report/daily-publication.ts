@@ -8,7 +8,7 @@ import { parseOrgReportDocument, orgReportDocumentSchema, type OrgReportDocument
 import { metricSourceInventory } from "@/lib/analytics/source-inventory";
 import { metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { dailyReportSchedule } from "./daily-contract";
-import { reportConclusions, reportFactsHash, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
+import { reportConclusions, reportFactsHash, sameReportFacts, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
 import { metricNarrative } from "@/lib/core/metric-narrative";
 import { financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
@@ -181,7 +181,7 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     if (!previous?.published || !previous.edition) return { day: refDate, action: "none", version: null, requeued: 0 };
     const doc = frozen.doc;
     if (previous.edition && previous.edition.frozenAt >= doc.edition!.frozenAt) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
-    if (reportFactsHash(previous) === doc.edition!.inputHash) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
+    if (sameReportFacts(previous, doc)) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
     doc.edition!.replacesVersion = latest!.version;
     doc.edition!.changes = reportCorrectionDiff(previous, doc);
     // 앞선 수치에서 만든 해설은 새 수치의 원인 설명으로 재사용하지 않는다.

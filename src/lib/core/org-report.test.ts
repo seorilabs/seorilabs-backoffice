@@ -10,7 +10,7 @@ import {
 import { dailyEditionSchema } from "@/lib/report/daily-contract";
 import { providerSeriesSchema } from "@/lib/analytics/report-query";
 import { dailyReportCsv } from "@/lib/report/daily-csv";
-import { reportFactsHash, reportCorrectionDiff } from "@/lib/report/daily-presentation";
+import { reportFactsHash, sameReportFacts, reportCorrectionDiff } from "@/lib/report/daily-presentation";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
 const REF = "2026-08-31";
@@ -354,9 +354,10 @@ test("DB JSON의 부동소수점 직렬화 차이는 정정으로 만들지 않�
   before.referrers = [{ dimension: "검색", rate: 0.16783216783216784 }];
   const stored = structuredClone(before);
   stored.referrers = [{ dimension: "검색", rate: 0.1678321678321678 }];
-  assert.equal(reportFactsHash(before), reportFactsHash(stored));
+  assert.equal(sameReportFacts(before, stored), true);
   assert.deepEqual(reportCorrectionDiff(before, stored), []);
   stored.referrers[0].rate = 0.17;
+  assert.equal(sameReportFacts(before, stored), false);
   assert.notEqual(reportFactsHash(before), reportFactsHash(stored));
 });
 
@@ -375,6 +376,20 @@ test("DB JSON에서 객체 키 순서가 바뀌어도 같은 사실로 비교한
     value && typeof value === "object" && !Array.isArray(value)
       ? Object.fromEntries(Object.entries(value).reverse()) : value);
   assert.equal(reportFactsHash(before), reportFactsHash(stored));
+});
+
+test("내부 점수의 JSON 왕복 오차를 정정 내역으로 만들지 않는다", () => {
+  const before = assemble();
+  before.movements[0].score = 10328.18189471805;
+  const after = structuredClone(before);
+  after.movements[0].score = 10328.181894718049;
+  assert.equal(sameReportFacts(before, after), true);
+  assert.deepEqual(reportCorrectionDiff(before, after), []);
+  after.movements[0].score += 0.01;
+  assert.equal(sameReportFacts(before, after), false);
+  after.movements[0].score = before.movements[0].score;
+  after.summary.ga4.dau += 1;
+  assert.equal(sameReportFacts(before, after), false);
 });
 
 
