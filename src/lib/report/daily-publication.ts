@@ -37,7 +37,14 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
   const schedule = dailyReportSchedule(refDate ? metricDayStart(shiftMetricDay(refDate, 1)) : now), date = toDbDay(schedule.refDate);
   if (now < schedule.cutoffAt) throw new Error("REPORT_BEFORE_CUTOFF");
   const existing = await prisma.orgReportPreparation.findUnique({ where: { date } });
-  if (existing) return { preparationId: existing.id, refDate: schedule.refDate, reused: true };
+  if (existing) {
+    if (!existing.enrichedAt && existing.publishedVersion === null) {
+      const doc = parseOrgReportDocument(existing.document);
+      const attachment = doc ? await dailyReportImage(doc).catch(() => null) : null;
+      if (attachment) await prisma.orgReportPreparation.updateMany({ where: { id: existing.id, enrichedAt: null, publishedVersion: null }, data: { attachment: attachment as unknown as Prisma.InputJsonObject } });
+    }
+    return { preparationId: existing.id, refDate: schedule.refDate, reused: true };
+  }
   const prepared = await retryPrismaConflict(() => prisma.$transaction(async (db) => {
     const raced = await db.orgReportPreparation.findUnique({ where: { date } });
     if (raced) return { row: raced, doc: null, data: null };
@@ -88,19 +95,24 @@ export async function dailyReportImage(doc: OrgReportDocument) {
 export async function publishDailyReport(now = new Date(), refDate?: string) {
   const schedule = dailyReportSchedule(refDate ? metricDayStart(shiftMetricDay(refDate, 1)) : now);
   if (now < schedule.dueAt) throw new Error("REPORT_BEFORE_PUBLICATION");
+  // 대체 고정은 별도 일관된 snapshot에서 수행한다. 발행 transaction은 준비본만 읽는다.
+  await retryPrismaConflict(() => prisma.$transaction(async (db) => {
+    const prepared = await db.orgReportPreparation.findUnique({ where: { date: toDbDay(schedule.refDate) } });
+    const previous = await db.orgReportDaily.findUnique({ where: { date: toDbDay(schedule.refDate) } });
+    if (parseOrgReportDocument(previous?.report)?.published && prepared?.publishedVersion == null) throw new Error("REPORT_ALREADY_PUBLISHED");
+    if (prepared) return;
+    const { doc } = await freezeDailyReport(now, schedule.refDate, db);
+    await db.orgReportPreparation.create({ data: { date: toDbDay(schedule.refDate), document: doc as unknown as Prisma.InputJsonObject, preparedAt: now } });
+  }, { timeout: 120_000, isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }));
   return retryPrismaConflict(() => prisma.$transaction(async (db) => {
-    let preparation = await db.orgReportPreparation.findUnique({ where: { date: toDbDay(schedule.refDate) } });
-    if (!preparation) {
-      // 준비 작업 실패 시에도 외부 API·해설을 호출하지 않는다. 실제 고정 시각의 지연을 문서에 남긴다.
-      const { doc } = await freezeDailyReport(now, schedule.refDate, db);
-      preparation = await db.orgReportPreparation.create({ data: { date: toDbDay(schedule.refDate), document: doc as unknown as Prisma.InputJsonObject, preparedAt: now } });
-    }
+    let preparation = await db.orgReportPreparation.findUniqueOrThrow({ where: { date: toDbDay(schedule.refDate) } });
     if (preparation.publishedVersion !== null) return { preparationId: preparation.id, refDate: schedule.refDate, version: preparation.publishedVersion, reused: true };
     const claim = await db.orgReportPreparation.updateMany({ where: { id: preparation.id, publishedVersion: null }, data: { publishedVersion: 0 } });
     if (!claim.count) {
       const current = await db.orgReportPreparation.findUniqueOrThrow({ where: { id: preparation.id } });
       return { preparationId: current.id, refDate: schedule.refDate, version: current.publishedVersion, reused: true };
     }
+    preparation = await db.orgReportPreparation.findUniqueOrThrow({ where: { id: preparation.id } });
     const doc = parseOrgReportDocument(preparation.document);
     if (!doc?.edition) throw new Error("REPORT_PREPARATION_INVALID");
     const enriched = preparation.enrichment as { narrative?: string; narrativeMeta?: OrgReportDocument["narrativeMeta"]; costs?: OrgReportDocument["costs"] } | null;
@@ -134,7 +146,7 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     await db.$queryRaw`SELECT id FROM org_report_daily WHERE date = ${toDbDay(refDate)} FOR UPDATE`;
     const latest = await db.orgReportDaily.findUnique({ where: { date: toDbDay(refDate) } });
     const previous = latest ? parseOrgReportDocument(latest.report) : null;
-    if (!previous?.published) return { day: refDate, action: "none", version: null, requeued: 0 };
+    if (!previous?.published || !previous.edition) return { day: refDate, action: "none", version: null, requeued: 0 };
     const doc = frozen.doc;
     if (previous.edition && previous.edition.frozenAt >= doc.edition!.frozenAt) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
     if (previous.published.factsHash === doc.edition!.inputHash) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };

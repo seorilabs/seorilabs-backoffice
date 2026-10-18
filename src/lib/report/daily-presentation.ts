@@ -20,7 +20,7 @@ export function reportFactsHash(doc: OrgReportDocument): string {
     refDate: doc.refDate, summary: doc.summary, apps: doc.apps, movements: doc.movements,
     retention: doc.retention, trend: doc.edition?.trend,
     cohorts: doc.edition?.cohorts,
-    sources: doc.edition?.sources.map(({ slug, source, state, dataThrough, configRevision }) => ({ slug, source, state, dataThrough, configRevision })),
+    sources: doc.edition?.sources.map(({ slug, source, state, dataThrough }) => ({ slug, source, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
   })).digest("hex");
@@ -36,6 +36,16 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   compare("토스 광고 추정 수익(KRW)", before.summary.console.iaaKrw, after.summary.console.iaaKrw);
   compare("토스 결제 거래액(KRW)", before.summary.console.iapTrxKrw, after.summary.console.iapTrxKrw);
   for (const app of after.apps) compare(`${app.displayName} 활성(명)`, before.apps.find((row) => row.slug === app.slug)?.ga4?.dau ?? null, app.ga4?.dau ?? null);
+  const known = (doc: OrgReportDocument) => doc.edition?.cohorts.reduce((sum, cohort) => sum + cohort.values.filter((cell) => cell.returned !== null).length, 0) ?? 0;
+  compare("잔존 코호트 복귀 수 확보 칸", known(before), known(after));
+  for (const cohort of after.edition?.cohorts ?? []) for (const cell of cohort.values) {
+    const prior = before.edition?.cohorts.find((row) => row.appId === cohort.appId && row.cohortDate === cohort.cohortDate)?.values.find((row) => row.day === cell.day);
+    if (prior && prior.returned !== cell.returned) compare(`${cohort.appName} ${cohort.cohortDate} D${cell.day} 복귀(명)`, prior.returned, cell.returned);
+  }
+  for (const source of after.edition?.sources ?? []) {
+    const prior = before.edition?.sources.find((row) => row.appId === source.appId && row.source === source.source && row.reportType === source.reportType);
+    if (prior && prior.state !== source.state) compare(`${source.appName} ${source.reportType} 수집 상태`, prior.state, source.state);
+  }
   return changes;
 }
 

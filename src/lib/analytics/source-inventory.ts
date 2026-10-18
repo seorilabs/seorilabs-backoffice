@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
-import { dbDay, toDbDay } from "@/lib/analytics/metric-day";
+import { dbDay, toDbDay, metricDayStart, shiftMetricDay } from "@/lib/analytics/metric-day";
 import type { SourceCoverage } from "@/lib/report/daily-contract";
 
 /** 보고서 종류를 합치지 않는다. SDK·게시 권한은 분석 보고 권한의 증거가 아니다. */
@@ -24,6 +24,7 @@ const reports = [
 ] as const;
 
 export async function metricSourceInventory(day: string, db: Prisma.TransactionClient = prisma): Promise<SourceCoverage[]> {
+  const cutoffAt = new Date(metricDayStart(shiftMetricDay(day, 1)).getTime() + (10 * 60 + 45) * 60_000);
   const apps = await db.app.findMany({
     where: visibleAppWhere, orderBy: { displayName: "asc" },
     select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true,
@@ -34,7 +35,7 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
   const [ledger, runs] = await Promise.all([
     db.metricCollectionLedger.findMany({ where: { appId: { in: ids }, day: toDbDay(day) } }),
     // GROUP BY 뒤 개별 최신 실행을 읽어 전역 take로 오래된 앱을 숨기지 않는다.
-    db.sourceCollectionRun.groupBy({ by: ["appId", "source"], where: { appId: { in: ids } }, _max: { startedAt: true } }),
+    db.sourceCollectionRun.groupBy({ by: ["appId", "source"], where: { appId: { in: ids }, startedAt: { lte: cutoffAt } }, _max: { startedAt: true } }),
   ]);
   const latest = runs.length ? await db.sourceCollectionRun.findMany({
     where: { OR: runs.map((run) => ({ appId: run.appId, source: run.source, startedAt: run._max.startedAt! })) },
