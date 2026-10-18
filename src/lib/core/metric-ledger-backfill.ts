@@ -5,7 +5,6 @@ import {
   dbDay,
   lastElapsedMetricDay,
   metricDayWindow,
-  metricDaysBetween,
   toDbDay,
   toGa4TableSuffix,
 } from "@/lib/analytics/metric-day";
@@ -14,7 +13,6 @@ import {
   type MetricObservationState,
   type ObservationInput,
 } from "@/lib/analytics/coverage";
-import { missingDayState } from "@/lib/analytics/observation";
 import { consoleCoverageTargets, ga4CoverageTargets } from "@/lib/analytics/targets";
 import { isCompleteConsoleMetric } from "@/lib/analytics/console-values";
 
@@ -68,19 +66,11 @@ export async function backfillMetricLedger(
         }),
       ]);
       const stored = new Set(rows.map((row) => dbDay(row.date)));
-      const latestLandedDay = days.filter((day) => landed.has(toGa4TableSuffix(day))).at(-1) ?? null;
       const observations: ObservationInput[] = days.map((day) => {
-        const state: MetricObservationState = stored.has(day)
-          ? "observed"
-          : landed.has(toGa4TableSuffix(day))
-            ? "empty"
-            : missingDayState({
-              ageDays: metricDaysBetween(end, day),
-              latestLandedDay,
-              day,
-            });
+        // 저장 행 부재는 미수집일 수 있다. 테이블이 있어도 다시 조회하기 전 0을 만들지 않는다.
+        const state: MetricObservationState = landed.has(toGa4TableSuffix(day)) && stored.has(day)
+          ? "observed" : "not_landed";
         if (state === "observed") result.ga4.observed += 1;
-        else if (state === "empty") result.ga4.empty += 1;
         else result.ga4.notLanded += 1;
         return { source: "ga4", appId: target.appId, day, state };
       });

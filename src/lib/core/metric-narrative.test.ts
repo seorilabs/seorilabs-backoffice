@@ -234,20 +234,10 @@ test("collectHighlightData 는 기준일 스냅샷이 없는 앱을 ga4Gaps 로 
   }
 });
 
-test("두 호출부는 HighlightData 를 그대로 넘겨 ga4Gaps 가 사실에 실린다", () => {
-  // metricNarrative 가 데이터 객체를 직접 받는다. 부분 객체를 새로 만들어 넘기면
-  // ga4Gaps 가 조용히 빠져 "수집 공백"이 사실에서 사라진다.
-  const highlights = readFileSync(
-    join(process.cwd(), "src/lib/core/metric-highlights.ts"),
-    "utf8",
-  );
-  const report = readFileSync(
-    join(process.cwd(), "src/lib/core/org-report.ts"),
-    "utf8",
-  );
-  // 부분 객체를 새로 만들어 넘기면 ga4Gaps 가 조용히 빠진다.
-  assert.match(highlights, /metricNarrative\(data\)/u);
-  assert.match(report, /metricNarrative\(data\)/u);
+test("준비 단계는 수집 범위를 포함한 전체 HighlightData로 해설을 만든다", () => {
+  const report = readFileSync(join(process.cwd(), "src/lib/report/daily-publication.ts"), "utf8");
+  assert.match(report, /collectHighlightData\(now, refDate, db\)/u);
+  assert.match(report, /metricNarrative\(prepared\.data\)/u);
 });
 
 // ── 골격: LLM 없이도 보고서가 성립해야 한다 ────────────────────────────────

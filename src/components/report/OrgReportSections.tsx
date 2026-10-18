@@ -280,8 +280,8 @@ export function AppBreakdownTable({ doc }: { doc: OrgReportDocument }) {
         <tbody>
           {doc.apps.map((app) => {
             const listingSum = (pick: (l: (typeof app.listings)[number]) => number | null) =>
-              sumConsoleValues(app.listings.map(pick));
-            const consoleDauRows = app.listings.filter((listing) => listing.dau != null);
+              sumConsoleValues(app.listings.filter((listing) => listing.date === doc.consoleMeta.refDate).map(pick));
+            const consoleDauRows = app.listings.filter((listing) => listing.dau != null && listing.date === doc.consoleMeta.refDate);
             const maxLag = Math.max(0, ...app.listings.map((listing) => listing.lagDays));
             const lagTitle = app.listings
               .map((listing) => `${listing.label ?? "기본"} ${listing.date}`)

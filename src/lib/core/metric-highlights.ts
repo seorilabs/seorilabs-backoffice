@@ -1,5 +1,5 @@
 import { sumConsoleValues } from "@/lib/analytics/console-values";
-import type { AppType } from "@prisma/client";
+import type { AppType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
 import {
@@ -14,12 +14,7 @@ import { metricAsOf } from "@/lib/analytics/coverage";
 import type { AsOfResolution } from "@/lib/analytics/as-of";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { discordDestinations } from "@/lib/notifications/destinations";
-import { enqueueEditableNotification } from "@/lib/notifications/outbox";
-import { SEORI_SENDER } from "@/lib/notifications/sender";
-import { metricNarrative } from "@/lib/core/metric-narrative";
 import { count, pct, won } from "@/lib/format/units";
-import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 서리 일일 지표 하이라이트·로우라이트. GA4(AppMetricDaily)와 AppsInToss 콘솔
 // (AppConsoleMetricDaily)의 저장된 스냅샷만 읽어 "어제 무엇이 크게 움직였는가"를 추린다.
@@ -507,6 +502,10 @@ export function movementsFromSeries<T extends { date: Date }>(
         : rowsDesc;
     const current = series[0];
     if (!current) return [];
+    const baselineRows = series.slice(1).filter((row) => {
+      const age = metricDaysBetween(dbDay(current.date), dbDay(row.date));
+      return age >= 1 && age <= BASELINE_DAYS;
+    });
     const value = pick(current);
     if (value == null) return [];
     return [
@@ -514,12 +513,12 @@ export function movementsFromSeries<T extends { date: Date }>(
         label,
         metricKey: key,
         latest: value,
-        baseline: baselineOf(series.slice(1).map(pick)),
+        baseline: baselineOf(baselineRows.map(pick)),
         ...(sample
           ? {
               sample: Math.min(
                 sample(current) ?? 0,
-                baselineOf(series.slice(1).map(sample)) ?? 0,
+                baselineOf(baselineRows.map(sample)) ?? 0,
               ),
             }
           : {}),
@@ -575,6 +574,7 @@ export interface ConsoleListingSeries {
  * 같은 계산 결과를 공유하기 위해 원시 시계열까지 함께 담는다(재질의 없이 분해 생성).
  */
 export interface HighlightData {
+  scopeApps?: Array<{ id: string; slug: string; displayName: string; type: AppType }>;
   refDate: string;
   /**
    * 기준일 커버리지 판정. 수치 옆에 "무엇을 못 셌는가"가 함께 있어야 낮은 합계를
@@ -680,11 +680,12 @@ export function foldConsoleTotals(
 export async function collectHighlightData(
   now: Date,
   refDateOverride?: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<HighlightData> {
   const refDate = refDateOverride ?? lastElapsedMetricDay(now);
   const previousDay = shiftMetricDay(refDate, -1);
   const upTo = toDbDay(refDate);
-  const { ga4: resolved } = await metricAsOf({ now, requested: refDate });
+  const { ga4: resolved } = await metricAsOf({ now, requested: refDate }, db);
   // 원장이 그 날을 아직 하나도 모르면(백필 전·신규 배포 직후) 커버리지를 주장하지
   // 않는다. 0/9 로 적으면 실제로 센 앱이 있는데도 아무것도 못 센 것처럼 보인다.
   const ledgerKnowsDay =
@@ -694,7 +695,7 @@ export async function collectHighlightData(
     resolved != null && (resolved.observed > 0 || ledgerKnowsDay)
       ? resolved
       : null;
-  const apps = await prisma.app.findMany({
+  const apps = await db.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: {
@@ -709,6 +710,11 @@ export async function collectHighlightData(
     },
   });
 
+  const ledger = await db.metricCollectionLedger.findMany({
+    where: { source: "ga4", appId: { in: apps.map((app) => app.id) }, day: { gte: toDbDay(shiftMetricDay(refDate, -28)), lte: upTo } },
+    select: { appId: true, day: true, state: true },
+  });
+  const verified = new Set(ledger.filter((cell) => ["observed", "empty"].includes(cell.state)).map((cell) => `${cell.appId}:${dbDay(cell.day)}`));
   const movements: Movement[] = [];
   // 전일 합은 "합계에 든 앱 전부가 그 날 행을 가졌을 때"만 낸다. 하나라도 빠지면
   // 비교 자체가 성립하지 않으므로 null 로 두고 렌더러가 전일 문구를 생략한다.
@@ -726,8 +732,8 @@ export async function collectHighlightData(
   const consoleStale: string[] = [];
 
   for (const app of apps.filter((app) => resolveGa4Target(app))) {
-    const rows = (await prisma.appMetricDaily.findMany({
-      where: { appId: app.id, date: { lte: upTo } },
+    const rows = (await db.appMetricDaily.findMany({
+      where: { appId: app.id, date: { gte: toDbDay(shiftMetricDay(refDate, -28)), lte: upTo } },
       orderBy: { date: "desc" },
       take: BASELINE_DAYS + 1,
       select: {
@@ -743,7 +749,7 @@ export async function collectHighlightData(
         dauIos: true,
         dauWeb: true,
       },
-    })) as Ga4Row[];
+    })).filter((row) => verified.has(`${app.id}:${dbDay(row.date)}`)) as Ga4Row[];
     // 기준일 스냅샷이 아직 없는 앱은 어제를 말할 수 없다. 합계도 오염시키지 않는다.
     // 다만 빠졌다는 사실은 남긴다 — 합계가 낮은 이유가 될 수 있다.
     if (rows.length === 0 || dbDay(rows[0].date) !== refDate) {
@@ -800,7 +806,7 @@ export async function collectHighlightData(
         ];
 
     for (const target of targets) {
-      const rows = (await prisma.appConsoleMetricDaily.findMany({
+      const rows = (await db.appConsoleMetricDaily.findMany({
         where: {
           appId: app.id,
           miniAppId: target.miniAppId,
@@ -849,6 +855,7 @@ export async function collectHighlightData(
   consoleStale.push(...consoleTotals.stale);
 
   return {
+    scopeApps: apps.map(({ id, slug, displayName, type }) => ({ id, slug, displayName, type })),
     refDate,
     asOf,
     totals,
@@ -862,28 +869,11 @@ export async function collectHighlightData(
   };
 }
 
-export interface MetricHighlightOptions {
-  /** 이미 적재·판정을 마친 데이터. 주면 재계산 없이 그대로 발송한다(Org 보고서와 공유). */
-  data?: HighlightData;
-  /** LLM 해설. undefined 면 여기서 생성하고, null 이면 해설 없이 발송한다. */
-  narrative?: string | null;
-  /** 백오피스 Org 종합 보고서 링크. 없으면 푸터를 생략한다. */
-  reportUrl?: string | null;
-  /** 정정 안내 한 줄. 조용히 달라지면 읽는 사람이 자기 기억을 의심한다. */
-  correction?: string | null;
-}
-
-/**
- * 저장된 스냅샷 → 하이라이트·로우라이트 리포트 → 알림 outbox.
- *
- * payload 에 editable 을 실어 워커가 같은 메시지를 고치게 한다. 늦게 도착한 수집을
- * 반영해 수치가 바뀌었을 때 새 메시지를 보내면 어느 쪽이 맞는지 읽는 사람이 모른다.
- */
-export async function dailyReportContext(refDate: string) {
+export async function dailyReportContext(refDate: string, db: Prisma.TransactionClient = prisma) {
   const dayStart = metricDayStart(refDate),
     dayEnd = metricDayStart(shiftMetricDay(refDate, 1));
   const [incidents, submissions] = await Promise.all([
-    prisma.operationalIncident.findMany({
+    db.operationalIncident.findMany({
       where: {
         source: { not: "metrics" },
         firstDetectedAt: { gte: dayStart, lt: dayEnd },
@@ -891,7 +881,7 @@ export async function dailyReportContext(refDate: string) {
       orderBy: { firstDetectedAt: "desc" },
       take: 5,
     }),
-    prisma.storeReviewSubmissionObservation.findMany({
+    db.storeReviewSubmissionObservation.findMany({
       where: {
         sourceEventAt: { gte: dayStart, lt: dayEnd },
         app: { status: "ACTIVE" },
@@ -924,72 +914,3 @@ export async function dailyReportContext(refDate: string) {
   return { context, contextFacts };
 }
 
-export async function sendMetricHighlightReport(
-  now = new Date(),
-  options: MetricHighlightOptions = {},
-): Promise<MetricHighlightResult> {
-  const data = options.data ?? (await collectHighlightData(now));
-  const { refDate, totals, movements } = data;
-  const { context, contextFacts } = await dailyReportContext(refDate);
-  Object.assign(data, { contextFacts });
-
-  const dedupeKey = metricHighlightDedupeKey(refDate);
-  // 해설은 항상 문자열이다(LLM 실패 시 결정적 골격). narrated 는 "LLM 문장이었는가"라
-  // 골격으로 대체됐으면 false 다 — 보고서는 나가되 그 사실은 기록에 남아야 한다.
-  let narrative: string | null;
-  let narrated: boolean;
-  if (options.narrative !== undefined) {
-    narrative = options.narrative;
-    narrated = options.narrative != null;
-  } else {
-    const made = await metricNarrative(data);
-    narrative = made.text;
-    narrated = !made.fallback;
-  }
-  const body = renderHighlightReport({
-    refDate,
-    totals,
-    movements,
-    context,
-    asOf: data.asOf,
-    gapNames: data.ga4Gaps.map((gap) => gap.app.displayName),
-    consoleStale: data.consoleStale,
-    narrative,
-    reportUrl: options.reportUrl,
-    correction: options.correction,
-  });
-  const eventId = await enqueueEditableNotification({
-    dedupeKey,
-    kind: "OPS_ALERT",
-    occurredAt: now,
-    payload: {
-      text: body,
-      report: {
-        category:
-          context.length ||
-          movements.some(
-            (m) => m.verdict === "highlight" || m.verdict === "lowlight",
-          )
-            ? "change"
-            : "internal",
-        reason: "DAILY_PRODUCT_DECISIONS",
-      },
-      refDate,
-      sender: SEORI_SENDER,
-      editable: true,
-      embed: { color: EMBED_COLOR.INFO, timestamp: now.toISOString() },
-    },
-    destinations: discordDestinations(["app-ops"]),
-  });
-
-  return {
-    refDate,
-    narrated,
-    highlights: rankMovements(movements, "highlight").length,
-    lowlights: rankMovements(movements, "lowlight").length,
-    observations: movements.length,
-    dedupeKey,
-    body,
-    eventId,
-  };
-}

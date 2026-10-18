@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runDailyOrgReport } from "@/lib/core/org-report";
+import { publishDailyReport } from "@/lib/report/daily-publication";
+import { parseMetricDay } from "@/lib/analytics/metric-day";
 import { verifyStaticToken } from "@/lib/security";
 
 // 서리 일일 지표 하이라이트 + Org 종합 보고서 발행 트리거(CronJob 이 호출).
@@ -15,10 +16,14 @@ export async function POST(request: NextRequest) {
   if (!verifyStaticToken(request.headers.get("x-admin-token"), process.env.INTERNAL_ADMIN_TOKEN)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const raw = request.nextUrl.searchParams.get("day");
+  const day = parseMetricDay(raw);
+  if (raw !== null && !day) return NextResponse.json({ error: "valid day required" }, { status: 400 });
   try {
-    return NextResponse.json({ ok: true, ...(await runDailyOrgReport(new Date())) });
+    return NextResponse.json({ ok: true, ...(await publishDailyReport(new Date(), day ?? undefined)) });
   } catch (error) {
-    console.error("[admin/metric-highlights] 실패:", error);
+    if (error instanceof Error && error.message.startsWith("REPORT_BEFORE")) return NextResponse.json({ error: error.message }, { status: 409 });
+    console.error("[admin/metric-highlights] 실패:", error instanceof Error ? error.name : "unknown");
     return NextResponse.json({ error: "metric highlight report failed" }, { status: 500 });
   }
 }

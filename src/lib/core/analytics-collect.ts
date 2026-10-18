@@ -1,3 +1,4 @@
+import { beginCollection, completeCollection } from "@/lib/insights/collection";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import {
@@ -14,7 +15,7 @@ import {
   recordObservations,
   type ObservationInput,
 } from "@/lib/analytics/coverage";
-import { missingDayState } from "@/lib/analytics/observation";
+import { ga4ObservationState } from "@/lib/analytics/observation";
 import {
   queryDailyActivity,
   queryCohortRetention,
@@ -39,13 +40,12 @@ import type { Prisma } from "@prisma/client";
 // N<=7 이면 d7Pct 가 어느 행에도 기록되지 않는다. 더 나쁘게, 이 수집은 upsert 라
 // 창 안의 기존 행에 들어 있던 d7Pct 까지 null 로 덮는다.
 //
-// 14일이면 age 7~13 인 7일치 코호트가 매 실행마다 d7 을 확정할 기회를 갖는다.
-// 수집이 하루 실패해도 다음 날 회수된다. 이 여유를 줄이면 BigQuery 스캔량은 줄지만
-// D7 은 한 번 놓치면 영구 결손이므로 줄이지 않는다.
+// 37일 창은 D30 코호트도 7일간 재계산한다. 기존 쿼리 비용 상한은 유지한다.
 export const MIN_D7_AGE_DAYS = 7;
-export const WINDOW_DAYS = 14;
+export const WINDOW_DAYS = 37;
 
 export interface CollectResult {
+  runId: string;
   endDate: string; // 최신 확정일(D-1)
   windowDays: number;
   targetApps: number; // GA4 대상 앱 수
@@ -103,7 +103,9 @@ export async function collectMetrics(
 
   const { targets, skipped } = await ga4CoverageTargets();
 
+  const run = await beginCollection("ga4", `window:${days[0]}:${end}`);
   const result: CollectResult = {
+    runId: run.id,
     endDate: end,
     windowDays,
     targetApps: targets.length,
@@ -116,6 +118,7 @@ export async function collectMetrics(
   };
 
   for (const target of targets) {
+    const attempt = await beginCollection("ga4", `${target.ga4.firebaseProject}.${target.ga4.dataset}`, target.appId);
     try {
       const [landed, activity, cohort, breakdowns] = await Promise.all([
         queryLandedEventTables(target.ga4, startSuffix, endSuffix),
@@ -123,9 +126,6 @@ export async function collectMetrics(
         queryCohortRetention(target.ga4, startSuffix, endSuffix),
         queryDailyBreakdowns(target.ga4, startSuffix, endSuffix),
       ]);
-      // 착지가 확인된 가장 최신 날. 이보다 앞선 날에 테이블이 없으면 export 가 그 날을
-      // 이미 지나갔다는 뜻이라 활동이 0 이었던 것이다.
-      const latestLandedDay = days.filter((day) => landed.has(toGa4TableSuffix(day))).at(-1) ?? null;
       const activityByDate = new Map(activity.map((a) => [a.date, a]));
       const cohortByDate = new Map(cohort.map((c) => [c.date, c]));
       const dimsByDate = pivotBreakdownRows(breakdowns);
@@ -136,17 +136,13 @@ export async function collectMetrics(
       for (const day of days) {
         const age = metricDaysBetween(end, day);
         const landedDay = landed.has(toGa4TableSuffix(day));
-        if (!landedDay) {
-          const state = missingDayState({ ageDays: age, latestLandedDay, day });
-          if (state === "not_landed") {
-            // 지표 행을 쓰지 않는다. 0 으로 채우면 미착지가 실적 0 으로 둔갑한다.
-            observations.push({ source: "ga4", appId: target.appId, day, state });
-            result.notLanded++;
-            continue;
-          }
-          // 활동 0 으로 확정됐다. 0 행을 남겨야 기준선이 그 날을 건너뛰지 않는다.
-        }
         const row = activityByDate.get(day);
+        const state = ga4ObservationState({ tableLanded: landedDay, activityPresent: row !== undefined });
+        if (state === "not_landed") {
+          observations.push({ source: "ga4", appId: target.appId, day, state });
+          result.notLanded++;
+          continue;
+        }
         const ret = clampRetention(cohortByDate.get(day), age);
         const d1Landed = age >= 1 && landed.has(toGa4TableSuffix(shiftMetricDay(day, 1)));
         if (!d1Landed) ret.d1Pct = null;
@@ -161,7 +157,14 @@ export async function collectMetrics(
           ...assembled,
           cohortUsers: cohortByDate.get(day)?.newUsers ?? null,
           d1Users: d1Landed ? cohortByDate.get(day)?.d1Users ?? null : null,
-          raw: assembled.raw as unknown as Prisma.InputJsonValue,
+          ...Object.fromEntries(([3, 7, 14, 30] as const).flatMap((n) => {
+            const verified = age >= n && landed.has(toGa4TableSuffix(shiftMetricDay(day, n)));
+            const cohortRow = cohortByDate.get(day);
+            const returned = verified ? cohortRow?.[`d${n}Users`] ?? null : null;
+            const users = cohortRow?.newUsers ?? 0;
+            return [[`d${n}Users`, returned], [`d${n}Pct`, returned !== null && users > 0 ? 100 * returned / users : null]];
+          })),
+          raw: { ...assembled.raw, collection: { runId: attempt.id, periodStart: days[0], periodEnd: end, timeZone: "Asia/Seoul", account: `${target.ga4.firebaseProject}.${target.ga4.dataset}` } } as unknown as Prisma.InputJsonValue,
           collectedAt: now,
         };
         const date = toDbDay(day);
@@ -177,15 +180,22 @@ export async function collectMetrics(
           source: "ga4",
           appId: target.appId,
           day,
-          state: row ? "observed" : "empty",
+          state,
         });
         if (row) result.observed++;
         else result.empty++;
       }
       await recordObservations(observations, now);
+      const valid = observations.filter((row) => ["observed", "empty"].includes(row.state));
+      await completeCollection(attempt.id, {
+        status: valid.length === observations.length ? "observed" : valid.length ? "partial" : "not_landed",
+        ...(valid.length ? { dataThrough: toDbDay(valid.at(-1)!.day) } : {}),
+        coverage: { from: days[0], to: end, observed: valid.length, expected: observations.length, account: `${target.ga4.firebaseProject}.${target.ga4.dataset}`, credentialId: "shared/gcp/ga4-fleet-reader" },
+      });
     } catch (e) {
       const error = (e as Error).message.slice(0, 300);
       result.errors.push({ slug: target.slug, error });
+      await completeCollection(attempt.id, { status: /403|401/.test(error) ? "needs_input" : "failed", errorCode: /403|401/.test(error) ? "SOURCE_PERMISSION_REQUIRED" : "SOURCE_COLLECTION_FAILED" });
       // 실패는 이미 관측된 칸을 덮지 않는다(recordCollectionFailure 가 거른다).
       await recordCollectionFailure(
         days.map((day) => ({ source: "ga4" as const, appId: target.appId, day, detail: error })),
@@ -194,5 +204,6 @@ export async function collectMetrics(
     }
   }
 
+  await completeCollection(run.id, { status: result.errors.length === result.targetApps ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", coverage: { from: days[0], to: end, targetApps: targets.length, upserts: result.upserts, notLanded: result.notLanded, errors: result.errors.length } });
   return result;
 }

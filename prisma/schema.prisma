@@ -814,9 +814,15 @@ model AppMetricDaily {
   returnRatePct        Float? // 전체 재방문율(코호트 n>=1)
   cohortUsers          Int? // 실제 신규 코호트 분모 - 활동 newUsers와 구분
   d1Users              Int? // 성숙 D1 코호트의 실제 복귀 수
+  d3Users              Int?
+  d7Users              Int?
+  d14Users             Int?
+  d30Users             Int?
   d1Pct                Float? // 그 날 신규 코호트의 D1 잔존율
   d3Pct                Float?
   d7Pct                Float?
+  d14Pct               Float?
+  d30Pct               Float?
   engagedUsers         Int    @default(0)
   avgEngageSec         Float? // user_engagement 평균 초
   adEventUsers         Int    @default(0) // legacy 광의 광고 이벤트 고유 사용자
@@ -2725,6 +2731,20 @@ model InsightDocument {
   @@unique([signalId, inputHash])
   @@index([status, createdAt])
   @@map("insight_document")
+}
+
+// 10:45에 입력을 동결한다. 원본 문서는 생성 후 수정하지 않는다.
+// 해설·그림은 별도 선택 필드이며 준비 실패 시에도 원본으로 발행한다.
+model OrgReportPreparation {
+  id               String @id @default(cuid())
+  date             DateTime @unique @db.Date
+  document         Json
+  enrichment       Json?
+  attachment       Json?
+  preparedAt       DateTime @default(now()) @db.DateTime(3)
+  enrichedAt       DateTime? @db.DateTime(3)
+  publishedVersion Int?
+  @@map("org_report_preparation")
 }
 
 model OrgReportRevision {

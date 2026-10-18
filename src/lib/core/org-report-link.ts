@@ -7,8 +7,8 @@ import { env } from "@/lib/env";
 export const ORG_REPORT_PATH = "/";
 
 /** 백오피스 보고서 절대 URL. AUTH_URL 미설정이면 null(푸터 생략). */
-export function orgReportUrl(refDate?: string): string | null {
+export function orgReportUrl(refDate?: string, version?: number): string | null {
   const base = env.optional("AUTH_URL").trim();
   if (!base) return null;
-  return `${base}${ORG_REPORT_PATH}${refDate ? `?date=${refDate}` : ""}`;
+  return `${base}${ORG_REPORT_PATH}${refDate ? `?date=${refDate}${version ? `&version=${version}` : ""}` : ""}`;
 }

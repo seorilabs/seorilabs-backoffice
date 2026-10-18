@@ -263,8 +263,9 @@ function medianOf(values: readonly number[]): number {
 async function ga4Weights(
   targets: readonly { appId: string; targetKey: string }[],
   from: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<AsOfTarget[]> {
-  const rows = await prisma.appMetricDaily.findMany({
+  const rows = await db.appMetricDaily.findMany({
     where: { appId: { in: targets.map((t) => t.appId) }, date: { gte: toDbDay(from) } },
     select: { appId: true, dau: true },
   });
@@ -283,8 +284,9 @@ async function ga4Weights(
 async function consoleWeights(
   targets: readonly { appId: string; listingId: number; targetKey: string }[],
   from: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<AsOfTarget[]> {
-  const rows = await prisma.appConsoleMetricDaily.findMany({
+  const rows = await db.appConsoleMetricDaily.findMany({
     where: { appId: { in: targets.map((t) => t.appId) }, date: { gte: toDbDay(from) } },
     select: { appId: true, miniAppId: true, iaaEarningKrw: true },
   });
@@ -308,12 +310,13 @@ async function cellsFor(
   source: MetricSource,
   targets: readonly { appId: string; listingId: number; targetKey: string }[],
   days: readonly string[],
+  db: Prisma.TransactionClient = prisma,
 ): Promise<CoverageCell[]> {
   if (targets.length === 0 || days.length === 0) return [];
   const keyOf = new Map(
     targets.map((target) => [`${target.appId}${SEP}${target.listingId}`, target.targetKey]),
   );
-  const rows = await prisma.metricCollectionLedger.findMany({
+  const rows = await db.metricCollectionLedger.findMany({
     where: {
       source,
       appId: { in: [...new Set(targets.map((t) => t.appId))] },
@@ -346,21 +349,21 @@ export async function metricAsOf(input: {
   now: Date;
   requested?: string | null;
   maxLookbackDays?: number;
-}): Promise<MetricAsOf> {
+}, db: Prisma.TransactionClient = prisma): Promise<MetricAsOf> {
   const today = metricDayOf(input.now);
   const lookback = Math.max(1, input.maxLookbackDays ?? 1);
   const days = metricDayWindow(shiftMetricDay(today, -1), lookback);
   const weightFrom = shiftMetricDay(today, -(lookback + WEIGHT_DAYS));
 
   const [ga4Targets, consoleTargets] = await Promise.all([
-    ga4CoverageTargets(),
-    consoleCoverageTargets(),
+    ga4CoverageTargets(db),
+    consoleCoverageTargets(db),
   ]);
   const [ga4Weighted, consoleWeighted, ga4Cells, consoleCells] = await Promise.all([
-    ga4Weights(ga4Targets.targets, weightFrom),
-    consoleWeights(consoleTargets.targets, weightFrom),
-    cellsFor("ga4", ga4Targets.targets, days),
-    cellsFor("ait_console", consoleTargets.targets, days),
+    ga4Weights(ga4Targets.targets, weightFrom, db),
+    consoleWeights(consoleTargets.targets, weightFrom, db),
+    cellsFor("ga4", ga4Targets.targets, days, db),
+    cellsFor("ait_console", consoleTargets.targets, days, db),
   ]);
 
   const common = { today, requested: input.requested, maxLookbackDays: lookback };
@@ -382,9 +385,10 @@ export interface DayCoverage {
  */
 export async function ga4CoverageByDay(
   days: readonly string[],
+  db: Prisma.TransactionClient = prisma,
 ): Promise<Map<string, DayCoverage>> {
-  const { targets } = await ga4CoverageTargets();
-  const cells = await cellsFor("ga4", targets, days);
+  const { targets } = await ga4CoverageTargets(db);
+  const cells = await cellsFor("ga4", targets, days, db);
   const byDay = new Map<string, DayCoverage>();
   for (const day of days) byDay.set(day, { observed: 0, expected: targets.length });
   for (const cell of cells) {

@@ -313,6 +313,50 @@ spec:
                 capabilities:
                   drop: ["ALL"]
 ---
+# 10:45 KST 입력 고정. 외부 조회는 이 단계에서 끝내며 11시 발행은 저장본만 사용한다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-metric-report-prepare
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: backoffice
+spec:
+  schedule: "45 1 * * *" # 매일 10:45 KST · 입력 고정과 해설·그림 준비
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.11.1
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS --max-time 280 -XPOST
+                  -H "x-admin-token: $ADMIN_TOKEN"
+                  http://backoffice.platform.svc.cluster.local/api/admin/metric-highlights/prepare
+              env:
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backoffice-secrets
+                      key: INTERNAL_ADMIN_TOKEN
+              securityContext:
+                runAsUser: 10001
+                runAsGroup: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
 # 서리 일일 지표 하이라이트·로우라이트 + Org 종합 보고서 발행 — GA4·AppsInToss 콘솔
 # 스냅샷에서 크게 움직인 항목만 추려 #app-ops 에 남기고, 같은 계산 결과를 OrgReportDaily
 # 스냅샷(백오피스 /report)으로 저장한다. analytics-collect(10:00 KST)와 지표 리포트
@@ -326,7 +370,7 @@ metadata:
   labels:
     app.kubernetes.io/name: backoffice
 spec:
-  schedule: "50 14 * * *" # 14:50 UTC = 23:50 KST
+  schedule: "0 2 * * *" # 매일 11:00 KST · 저장된 준비본 발행
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 3

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { beginCollection, completeCollection, collectionErrorCode } from "@/lib/insights/collection";
 import { BigQuery } from "@google-cloud/bigquery";
 import { env } from "@/lib/env";
 import { ga4ServiceAccountCredentials } from "@/lib/ga4/credentials";
@@ -59,12 +61,22 @@ const MAX_BYTES_BILLED = env.optional("GA4_MAX_BYTES_BILLED", String(2 * 1024 **
 
 export async function runQuery<T>(project: string, dataset: string, sql: string): Promise<T[]> {
   const location = await resolveLocation(project, dataset);
-  const [rows] = await clientFor(project).query({
-    query: sql,
-    location,
-    maximumBytesBilled: MAX_BYTES_BILLED,
-  });
-  return rows as T[];
+  const sqlHash = createHash("sha256").update(sql).digest("hex");
+  const run = await beginCollection("ga4-query", `${project}.${dataset}:${sqlHash.slice(0, 16)}`);
+  try {
+    const [rows, job] = await clientFor(project).query({ query: sql, location, maximumBytesBilled: MAX_BYTES_BILLED });
+    await completeCollection(run.id, { status: "observed", coverage: {
+      sqlHash, project, dataset, location, jobId: job?.jobReference?.jobId ?? null,
+      rows: rows.length, bytesProcessed: String(job?.statistics?.query?.totalBytesProcessed ?? "unknown"),
+      bytesBilled: String(job?.statistics?.query?.totalBytesBilled ?? "unknown"),
+      cacheHit: job?.statistics?.query?.cacheHit ?? null,
+    } });
+    return rows as T[];
+  } catch (error) {
+    const errorCode = collectionErrorCode(error);
+    await completeCollection(run.id, { status: errorCode === "SOURCE_PERMISSION_REQUIRED" ? "needs_input" : "failed", errorCode });
+    throw error;
+  }
 }
 
 // 콘텐츠 지표 소스 어댑터(ga4/content-source.ts)가 재사용하는 공개 러너. 인증 클라이언트
@@ -103,6 +115,12 @@ export interface Ga4DailyRow {
 }
 
 export interface Ga4CohortRow {
+  d3Users?: number | null;
+  d7Users?: number | null;
+  d14Users?: number | null;
+  d30Users?: number | null;
+  d14Pct?: number | null;
+  d30Pct?: number | null;
   d1Users?: number | null;
   date: string; // cohort_day "YYYY-MM-DD"
   newUsers: number;
@@ -327,14 +345,11 @@ export function buildCohortRetentionSql(
     )
     SELECT
       FORMAT_DATE('%Y-%m-%d', cohort_day) AS date,
-      IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) <= PARSE_DATE('%Y%m%d', '${end}'), COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), NULL) AS d1_users,
       COUNT(DISTINCT IF(n = 0, user_pseudo_id, NULL)) AS new_users,
-      IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
-        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=1,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d1_pct,
-      IF(DATE_ADD(cohort_day, INTERVAL 3 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
-        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=3,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d3_pct,
-      IF(DATE_ADD(cohort_day, INTERVAL 7 DAY) <= PARSE_DATE('%Y%m%d', '${end}'),
-        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=7,user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d7_pct
+      ${[1, 3, 7, 14, 30].flatMap((day) => [
+        `IF(DATE_ADD(cohort_day, INTERVAL ${day} DAY) <= PARSE_DATE('%Y%m%d', '${end}'), COUNT(DISTINCT IF(n=${day},user_pseudo_id,NULL)), NULL) AS d${day}_users`,
+        `IF(DATE_ADD(cohort_day, INTERVAL ${day} DAY) <= PARSE_DATE('%Y%m%d', '${end}'), ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(n=${day},user_pseudo_id,NULL)), COUNT(DISTINCT IF(n=0,user_pseudo_id,NULL))), 1), NULL) AS d${day}_pct`,
+      ]).join(",\n      ")}
     FROM j
     GROUP BY cohort_day
     ORDER BY date`;
@@ -346,6 +361,12 @@ export async function queryCohortRetention(target: Ga4Target, start: string, end
     date: String(r.date),
     newUsers: num(r.new_users),
     d1Users: numOrNull(r.d1_users),
+    d3Users: numOrNull(r.d3_users),
+    d7Users: numOrNull(r.d7_users),
+    d14Users: numOrNull(r.d14_users),
+    d30Users: numOrNull(r.d30_users),
+    d14Pct: numOrNull(r.d14_pct),
+    d30Pct: numOrNull(r.d30_pct),
     d1Pct: numOrNull(r.d1_pct),
     d3Pct: numOrNull(r.d3_pct),
     d7Pct: numOrNull(r.d7_pct),

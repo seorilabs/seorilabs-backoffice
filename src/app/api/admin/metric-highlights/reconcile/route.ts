@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { parseMetricDay } from "@/lib/analytics/metric-day";
-import { reconcileOrgReport } from "@/lib/core/org-report";
+import { correctDailyReport } from "@/lib/report/daily-publication";
 
 // 발행분 정정 트리거(야간 발행 cron 이 D-1 발행 직후 이어서 호출).
 //
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const day = parseMetricDay(raw);
-    const result = await reconcileOrgReport(new Date(), day ? { day } : {});
+    const result = await correctDailyReport(new Date(), day ?? undefined);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     console.error("[admin/metric-highlights/reconcile] 실패:", error);

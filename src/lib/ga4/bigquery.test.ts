@@ -114,3 +114,11 @@ test("잔존율: 관찰 기간이 아직 끝나지 않은 D1/D3/D7을 0%로 만�
   }
   assert.match(sql, /NULL\) AS d7_pct/);
 });
+
+test("D14·D30 잔존에는 비율과 실제 복귀 수가 함께 있어야 한다", () => {
+  const sql = buildCohortRetentionSql({ firebaseProject: "lizard-tycoon", dataset: "analytics_544016233" }, "20260701", "20260930");
+  for (const day of [1, 3, 7, 14, 30]) {
+    assert.match(sql, new RegExp(`AS d${day}_users`));
+    assert.match(sql, new RegExp(`AS d${day}_pct`));
+  }
+});

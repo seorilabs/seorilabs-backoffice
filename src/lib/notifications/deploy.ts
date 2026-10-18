@@ -480,7 +480,7 @@ export async function drainAllNotifications(limit = 30) {
       const options = {
         attachment: generatedAttachment ?? attachmentFromPayload(payload),
         components: componentsFromPayload(payload),
-        inlineImage: generatedAttachment?.contentType === "image/png",
+        inlineImage: (generatedAttachment ?? attachmentFromPayload(payload))?.contentType === "image/png",
         // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
         botToken: senderBotToken(payload),
         ...(render.plain ? { plain: true } : { embed: render.embed }),
