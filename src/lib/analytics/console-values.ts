@@ -9,7 +9,8 @@ const object = (value: unknown): Record<string, unknown> => value != null && typ
 export function mergeConsoleRaw(previous: unknown, incoming: unknown): Record<string, unknown> {
   const merged = new Map(Object.entries(object(previous)));
   const next = object(incoming);
-  if (next.window != null && JSON.stringify(next.window) !== JSON.stringify(merged.get("window"))) {
+  const oldWindow = object(merged.get("window")); const nextWindow = object(next.window);
+  if (next.window != null && (nextWindow.start !== oldWindow.start || nextWindow.end !== oldWindow.end)) {
     for (const key of ["referrer", "age", "gender", "os", "appVersion", "retention"]) merged.delete(key);
   }
   for (const [key, value] of Object.entries(next)) {

@@ -30,6 +30,12 @@ test("조회 구간이 바뀌면 이전 구간의 분포·잔존 집계를 섞�
   assert.deepEqual(raw.gender, [4]); assert.deepEqual(raw.iaaByOs, { IOS: ios });
 });
 
+test("같은 조회 구간의 키 순서만 달라지면 확인된 분포를 보존한다", () => {
+  const raw = mergeConsoleRaw({ window: { start: "2026-10-01", end: "2026-10-11" }, age: [2] },
+    { window: { end: "2026-10-11", start: "2026-10-01" } });
+  assert.deepEqual(raw.age, [2]);
+});
+
 test("원장 백필과 수집은 부분 행을 완료로 승격하지 않는다", () => {
   const row = { iaaImpressions: 0, iaaEarningKrw: 0, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 };
   assert.equal(isCompleteConsoleMetric(row), true);
