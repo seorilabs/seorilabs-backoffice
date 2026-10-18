@@ -111,8 +111,15 @@ export async function dailyReportImage(doc: OrgReportDocument) {
     } as typeof charts[number] & { days: string[] });
   }
   const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer()));
-  const bytes = await sharp({ create: { width: 960, height: charts.length * 510, channels: 4, background: "#fff" } })
-    .composite(buffers.map((input, index) => ({ input, left: 0, top: index * 510 }))).png().toBuffer();
+  const heights = await Promise.all(buffers.map(async (input) => (await sharp(input).metadata()).height!));
+  let top = 0;
+  const panels = buffers.map((input, index) => {
+    const panel = { input, left: 0, top };
+    top += heights[index];
+    return panel;
+  });
+  const bytes = await sharp({ create: { width: 960, height: top, channels: 4, background: "#ffffff" } })
+    .composite(panels).png().toBuffer();
   return { filename: "daily-report.png", contentType: "image/png", base64: bytes.toString("base64") };
 }
 
