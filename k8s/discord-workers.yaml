@@ -140,6 +140,8 @@ spec:
           workingDir: /app
           command: ["node", "/app/scripts-dist/operator-command-worker.cjs"]
           env:
+            - name: FEATURE_METRIC_ISSUE_REGISTRATION
+              valueFrom: { configMapKeyRef: { name: backoffice-runtime-flags, key: FEATURE_METRIC_ISSUE_REGISTRATION, optional: true } }
             - name: FEATURE_GENERAL_ISSUES_ENABLED
               valueFrom: { configMapKeyRef: { name: backoffice-runtime-flags, key: FEATURE_GENERAL_ISSUES_ENABLED, optional: true } }
             - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID

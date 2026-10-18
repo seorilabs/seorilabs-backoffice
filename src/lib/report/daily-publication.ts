@@ -1,3 +1,4 @@
+import { metricIssueReportActions } from "@/lib/metric-issues/report-actions";
 import { Prisma } from "@prisma/client";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +26,7 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const sources = await metricSourceInventory(refDate, db, now);
     const trend = await orgTrendSeries(refDate, 28, db);
     const cohorts = await reportCohorts(refDate, db);
+    const actions = await metricIssueReportActions(now, db);
     const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
     const finance = await db.sourceCollectionRun.findFirst({ where: { source: "finance-costs", target: financeMonth(schedule.dueAt).month, completedAt: { lte: now } }, orderBy: { completedAt: "desc" } });
@@ -33,7 +35,7 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
@@ -85,11 +87,11 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
 }
 
 export async function dailyReportImage(doc: OrgReportDocument) {
-  const { reportChartSvg } = await import("./discord-chart");
+  const { reportChartSvg, ga4ChartContext } = await import("./discord-chart");
   const sharp = (await import("sharp")).default;
   const points = doc.edition?.trend ?? [];
   const charts = [
-    { title: `활성·신규 사용자 · ${doc.refDate}`, unit: "명", source: "GA4 · 앱 사이 사용자 중복 포함 · 발행 입력 고정", series: [
+    { title: `활성·신규 사용자 · ${doc.refDate}`, ...ga4ChartContext(doc), unit: "명", source: "GA4 · 앱 사이 사용자 중복 포함 · 발행 입력 고정", series: [
       { label: "활성 합계", color: "#2563eb", values: points.map((point) => point.ga4Dau) },
       { label: "신규 합계", color: "#059669", values: points.map((point) => point.ga4NewUsers) },
     ] },

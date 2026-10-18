@@ -6,6 +6,19 @@ export interface ReportChartSeries {
   color: string;
   values: Array<number | null>;
 }
+/** 발행본에 고정된 확보 범위만 사용한다. 부분 합계를 전체 추이에 채우지 않는다. */
+export function ga4ChartContext(doc: {
+  refDate: string; summary: { ga4: { apps: number; dau: number } }; apps: unknown[];
+  edition?: { sources: Array<{ source: string; state: string; dataThrough: string | null }> };
+}) {
+  const sources = doc.edition?.sources.filter((row) => row.source === "ga4" && row.state !== "not_applicable") ?? [];
+  const observed = doc.summary.ga4.apps, expected = Math.max(observed, sources.length || doc.apps.length);
+  const hasPartial = observed > 0 || sources.some((row) => row.dataThrough !== null);
+  return {
+    scope: `기준 ${doc.refDate} · 자료 확보 ${observed}/${expected}개 앱${observed ? ` · 확보분 활성 ${doc.summary.ga4.dau.toLocaleString("ko-KR")}명` : ""}`,
+    emptyLabel: hasPartial ? "전체 합계 미확정 · 앱별 확보 자료는 본문에서 확인" : "수집된 값 없음",
+  };
+}
 const escape = (text: string) =>
   text.replace(
     /[<>&"']/g,
@@ -19,6 +32,7 @@ export function reportChartSvg(input: {
   source: string;
   reverse?: boolean;
   scope?: string;
+  emptyLabel?: string;
 }): string {
   if (
     !input.days.length ||
@@ -76,9 +90,9 @@ export function reportChartSvg(input: {
     )
     .join("");
   const empty = input.series.every((series) => series.values.every((value) => value === null))
-    ? '<text x="490" y="270" text-anchor="middle" font-size="22" fill="#64748b">수집된 값 없음</text>'
+    ? `<text x="490" y="270" text-anchor="middle" font-size="22" fill="#64748b">${escape(input.emptyLabel ?? "수집된 값 없음")}</text>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="510"><rect width="960" height="510" fill="#ffffff"/><g font-family="Noto Sans CJK KR, sans-serif" fill="#0f172a"><text x="45" y="42" font-size="24" font-weight="700">${escape(input.title)}</text><text x="45" y="68" font-size="14">단위: ${escape(input.unit)} · ${input.reverse ? "낮을수록 상위 노출" : escape(input.scope ?? "범위·표본은 출처 확인")}</text>${legends}${lines.join("")}${empty}${labels}<text x="45" y="470" font-size="13" fill="#475569">${escape(input.source).slice(0, 180)}</text><text x="45" y="493" font-size="13" fill="#475569">빈 구간은 미수집 - 0으로 채우지 않음</text></g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="510"><rect width="960" height="510" fill="#ffffff"/><g font-family="Noto Sans CJK KR, sans-serif" fill="#0f172a"><text x="45" y="42" font-size="24" font-weight="700">${escape(input.title)}</text><text x="45" y="68" font-size="14">단위: ${escape(input.unit)} · ${input.reverse ? "낮을수록 상위 노출" : escape(input.scope ?? "범위·표본은 출처 확인")}</text>${legends}${lines.join("")}${empty}${labels}<text x="45" y="470" font-size="13" fill="#475569">${escape(input.source).slice(0, 180)}</text><text x="45" y="493" font-size="13" fill="#475569">빈 구간은 미수집·일부 수집·해당 없음 - 0으로 채우지 않음</text></g></svg>`;
 }
 export async function reportChartPng(
   input: Parameters<typeof reportChartSvg>[0],

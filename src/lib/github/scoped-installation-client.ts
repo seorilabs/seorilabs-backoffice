@@ -3,6 +3,7 @@ const REPOSITORY = /^seorilabs\/[A-Za-z0-9._-]+$/u;
 const REPOSITORY_ID = /^[1-9][0-9]{0,31}$/u;
 
 export const FLEET_GITHUB_CAPABILITY_PERMISSIONS = Object.freeze({
+  "github.metric-issue-registration": Object.freeze({ contents: "read", issues: "write", pull_requests: "read", metadata: "read" }),
   "github.workflow-bundle-candidate.read": Object.freeze({ actions: "read", metadata: "read" }),
   "github.bootstrap.properties-read": Object.freeze({ metadata: "read" }),
   "github.bootstrap.owner-read": Object.freeze({ metadata: "read", members: "read" }),

@@ -186,3 +186,11 @@ test("operation 실패와 revoke 실패가 겹쳐도 token 폐기 실패를 fail
   }), /FLEET_GITHUB_TOKEN_REVOKE_FAILED/u);
   assert.equal(fixture.calls.revoke, 1);
 });
+
+test("지표 이슈 등록 토큰은 대상 저장소와 contents read·issues write·PR read만 허용한다", async () => {
+  const fixture = fixtureIssuer({});
+  await withFleetScopedGithubClient({ issuer: fixture.issuer, installationId: "99", capability: "github.metric-issue-registration", repositoryId: "123", repositoryFullName: "seorilabs/example", now: () => new Date("2026-08-30T01:00:00.000Z"), execute: async () => undefined });
+  const request = fixture.calls.create[0] as { permissions: Record<string, string> };
+  assert.deepEqual(request.permissions, { contents: "read", issues: "write", pull_requests: "read", metadata: "read" });
+  assert.equal(fixture.calls.revoke, 1);
+});

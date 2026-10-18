@@ -112,6 +112,7 @@ export async function readFleetGitHubAppPublicSource(options: {
  */
 export async function getFleetScopedGithubTokenIssuer(options: {
   requestFetch?: typeof globalThis.fetch;
+  disableAutomaticRetries?: boolean;
 } = {}): Promise<{
   installationId: string;
   issuer: FleetScopedGithubTokenIssuer<Octokit>;
@@ -155,7 +156,7 @@ export async function getFleetScopedGithubTokenIssuer(options: {
         };
       },
       createClient(token) {
-        return new BoundOctokit({ auth: token });
+        return new BoundOctokit({ auth: token, ...(options.disableAutomaticRetries ? { retry: { enabled: false }, throttle: { enabled: false } } : {}) });
       },
       async revokeAccessToken(token) {
         const client = new BoundOctokit({ auth: token });
