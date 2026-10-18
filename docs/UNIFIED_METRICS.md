@@ -54,3 +54,5 @@ AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 
 운영 적용은 최종 before-deploy 검사 뒤 수행한다. SealedSecret 동기화와 실제 Secret의 공개 key ID를 먼저 확인하고 웹·worker를 같은 승인 이미지로 교체한다. 이후 실행 환경에서 앱·분석 요청을 다시 읽는다. 결과 불명이면 변경을 반복하지 않고 상태부터 확인한다. 장애 시 보호된 이전 세 필드의 실행 복사본으로 복원하며 다른 Secret 필드를 덮지 않는다. 이 변경은 새 자격증명 생성·키 회전·폐기가 아니다.
 
 Android vitals는 오류·응답 없음의 일별 공급자 비율과 반올림 표본을 별개 지표로 보존한다. 빈 응답은 미도착이며 0을 생성하지 않는다. 공식 비율은 정확한 분자·분모가 없어 합산·자동 변화 판정·개선 이슈 근거로 사용하지 않는다. [공식 품질 보고 정의](https://developers.google.com/play/developer/reporting/reference/rest/v1beta1/vitals.crashrate/query)의 LA 달력과 최신 종료일(끝 미포함)을 지킨다.
+
+GA4 조회 비용은 Node SDK가 반환한 세 번째 공식 응답의 job ID·처리/과금 바이트·cacheHit를 기록한다. 폴링 응답에 비용이 없으면 같은 job의 공식 metadata를 읽는다. 비용 조회 실패는 이미 관측한 행을 잃게 하지 않으며 쿼리 원장에 일부 수집과 미확인을 남긴다.
