@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-10-18 | [Play 승격 제어 ref](2026-10-18-play-promotion-control-ref/design.md) — 사용자 “둘다 진행”, L1/dev | [#489](https://github.com/seorilabs/seorilabs-backoffice/issues/489) |
 | 2026-10-18 | [앱인토스 결측 지표 부분 저장](2026-10-18-ait-partial-metrics/design.md) — 사용자 직접 수정 지시, L3 개발 환경 검증·PR·병합 범위 | [#485](https://github.com/seorilabs/seorilabs-backoffice/issues/485) |
 | 2026-10-17 | [Claude API 전환 v1](2026-10-17-claude-api/design.md) — 연결 변경 직접 수행 지시, L1 개발 검증·Ready PR 범위 | BO-CLAUDE-20261017-v1 · [#468](https://github.com/seorilabs/seorilabs-backoffice/issues/468) |
 | 2026-10-08 | [운영·지표·외부 피드백 통합 v1](2026-10-08-operations-insights/design.md) — 최종 계획에 대한 구현 지시 | BO-OPS-20261008-v1 |

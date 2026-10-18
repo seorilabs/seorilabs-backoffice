@@ -454,10 +454,11 @@ export async function promoteGooglePlay(opts: {
     );
   }
 
+  const workflowRef = await getRepoDefaultBranch(opts.repoFullName);
   const { inputNames: declared } = await getWorkflowDispatchContract(
     opts.repoFullName,
     PROMOTE_WORKFLOW,
-    tag,
+    workflowRef,
   );
   const inputs: Record<string, string> = { release_tag: tag };
   if (declared.has("from_track")) inputs.from_track = "internal";
@@ -471,7 +472,7 @@ export async function promoteGooglePlay(opts: {
   await dispatchWorkflow({
     repoFullName: opts.repoFullName,
     workflowFile: PROMOTE_WORKFLOW,
-    ref: authority.tag,
+    ref: workflowRef,
     inputs,
     expectedTag: { tag: authority.tag, sha: authority.sha },
   });
