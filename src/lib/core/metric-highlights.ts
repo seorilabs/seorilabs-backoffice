@@ -1,3 +1,4 @@
+import { storeLabel } from "@/lib/store-reviews/shape";
 import { sumConsoleValues } from "@/lib/analytics/console-values";
 import type { AppType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -902,7 +903,7 @@ export async function dailyReportContext(refDate: string, db: Prisma.Transaction
       .filter((r) => r.notifiedHash === r.contentHash)
       .map(
         (r) =>
-          `- ${r.app.displayName} · ${r.store} · ${r.externalVersionId ?? "버전 미제공"} · ${r.stateLabel}`,
+          `- ${r.app.displayName}, ${storeLabel(r.store)}, ${r.stateLabel}`,
       ),
   ];
   const contextFacts = context.map((line, i) => ({

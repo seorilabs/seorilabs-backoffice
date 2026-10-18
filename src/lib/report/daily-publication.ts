@@ -6,7 +6,7 @@ import { collectHighlightData, dailyReportContext, metricHighlightDedupeKey } fr
 import { assembleOrgReportDocument, orgTrendSeries, saveOrgReport } from "@/lib/core/org-report";
 import { parseOrgReportDocument, orgReportDocumentSchema, type OrgReportDocument } from "@/lib/core/org-report-schema";
 import { metricSourceInventory } from "@/lib/analytics/source-inventory";
-import { metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
+import { dbDay, metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { dailyReportSchedule } from "./daily-contract";
 import { reportConclusions, reportFactsHash, sameReportFacts, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
 import { metricNarrative } from "@/lib/core/metric-narrative";
@@ -35,7 +35,7 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, schedule.dueAt), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
@@ -165,6 +165,23 @@ export async function publishDailyReport(now = new Date(), refDate?: string) {
     await db.orgReportPreparation.update({ where: { id: preparation.id }, data: { publishedVersion: version } });
     return { preparationId: preparation.id, refDate: doc.refDate, version, eventId, reused: false };
   }, { timeout: 30_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }));
+}
+
+/** 공급자 지연을 포괄하는 최근 8일의 발행본만 기존 정정 경로로 확인한다. */
+export async function correctRecentDailyReports(now = new Date()) {
+  const days = metricDayWindow(lastElapsedMetricDay(now), 8);
+  const from = days[0], to = days.at(-1)!;
+  const reports = await prisma.orgReportDaily.findMany({
+    where: { date: { gte: toDbDay(from), lte: toDbDay(to) } },
+    select: { date: true, report: true }, orderBy: { date: "desc" },
+  });
+  const results: Array<Awaited<ReturnType<typeof correctDailyReport>>> = [];
+  for (const report of reports) {
+    const previous = parseOrgReportDocument(report.report);
+    if (!previous?.published || !previous.edition) continue;
+    results.push(await correctDailyReport(now, dbDay(report.date)));
+  }
+  return { from, to, processed: results.length, corrected: results.filter((result) => result.action === "corrected").length, results };
 }
 
 /** 늦은 자료는 새 버전에 보존하고 같은 outbox 메시지의 숫자·그림·링크를 함께 고친다. */
