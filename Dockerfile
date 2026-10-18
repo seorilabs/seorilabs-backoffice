@@ -86,6 +86,10 @@ RUN rm -rf \
   ./node_modules/json-schema-traverse \
   ./node_modules/require-from-string
 COPY --from=build /app/runtime-contract-root/node_modules ./node_modules
+# ESM import()는 NODE_PATH를 검색하지 않는다. worker의 동적 sharp 로딩도
+# target 아키텍처 패키지에 도달하게 하고 실제 SVG→PNG 변환까지 빌드에서 확인한다.
+RUN ln -s /opt/chart-renderer/node_modules/sharp ./node_modules/sharp \
+  && node --input-type=module -e 'const {default: sharp} = await import("sharp"); const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100"><text x="10" y="40" font-family="Noto Sans CJK KR" font-size="24">검색 순위 20 → 28</text></svg>`; const png = await sharp(Buffer.from(svg)).png().toBuffer(); if (png.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw new Error("PNG_RUNTIME_INVALID");'
 # data ns CronJob(인덱서/라이터) 엔트리. standalone node_modules 의 @prisma/client 를 재사용.
 COPY --from=build /app/scripts-dist ./scripts-dist
 # migrate deploy 용: schema/migrations + prisma CLI(글로벌, schema-engine 포함).
