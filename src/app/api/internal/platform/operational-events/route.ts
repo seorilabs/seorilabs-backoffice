@@ -1,18 +1,20 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { recordIapGrant } from "@/lib/notifications/iap-summary";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { iapDestinations } from "@/lib/notifications/iap-summary";
+import { discordDestinationOrFallback, discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
+import { renderPayload } from "@/lib/notifications/format";
+import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
 import {
   shouldReportOperationalFailure,
   operationalEventFacts,
   operationalEventLine,
+  operationalInterestCard,
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
-import { recordOperationalMilestone } from "@/lib/notifications/milestones";
 import { recordIncident } from "@/lib/notifications/incidents";
 
 export const runtime = "nodejs";
@@ -117,38 +119,37 @@ export async function POST(request: NextRequest) {
         ),
       },
     });
-  } else {
-    // 다른 주문의 성공은 기존 지급 실패가 해결됐다는 근거가 아니다.
-    let milestone = false;
-    if (app) {
-      if (input.type === "iap.granted")
-        await recordIapGrant({ app, event: input });
-      else
-        milestone = await recordOperationalMilestone({
-          appId: app.id,
-          displayName: app.displayName,
-          event: input,
-        });
-    }
-    // 최초 계정은 기존 최초 카드 한 건으로 알리고, 이후 계정과 새 버전은 건별로 남긴다.
-    // 중복 재전송도 같은 키로 enqueue하여 원장 저장 뒤 전송 대기 실패를 복구한다.
-    if (
-      (input.type === "identity.created" && !milestone) ||
-      input.type === "app.version.first_seen"
-    ) {
-      await enqueueNotification({
-        dedupeKey: `operational:${input.eventId}`,
-        kind: "OPERATIONAL_EVENT",
-        occurredAt,
-        payload: {
-          text: operationalEventLine(input, app?.displayName ?? input.appId),
-          plain: true,
-          report: { category: "change", reason: "REQUESTED_APP_EVENT_ROW" },
-        },
-        destinations: discordDestinations(["action-events"]),
-      });
+  }
+  // 다른 주문의 성공을 장애 해결로 보지 않고 각 확정 이벤트를 별도 키로 알린다.
+  const dedupeKey = `operational:${input.eventId}`;
+  let signupOrdinal: number | undefined;
+  if (input.type === "identity.created") {
+    const prior = await prisma.notificationEvent.findUnique({ where: { dedupeKey }, select: { payload: true } });
+    const stored = prior?.payload as Prisma.JsonObject | undefined;
+    if (typeof stored?.signupOrdinal === "number") signupOrdinal = stored.signupOrdinal;
+    else {
+      const start = metricDayStart(metricDayOf(occurredAt));
+      signupOrdinal = await prisma.operationalEvent.count({ where: {
+        appId: input.appId, eventType: input.type,
+        occurredAt: { gte: start, lt: new Date(start.getTime() + 86400000) },
+        OR: [{ occurredAt: { lt: occurredAt } }, { occurredAt, eventId: { lte: input.eventId } }],
+      } });
     }
   }
+  const appEvent = input.type === "identity.created" || input.type === "app.version.first_seen";
+  await enqueueNotification({
+    dedupeKey, kind: "OPERATIONAL_EVENT", occurredAt,
+    payload: {
+      ...(appEvent
+        ? { text: operationalEventLine(input, app?.displayName ?? input.appId, undefined, signupOrdinal), plain: true,
+            ...(signupOrdinal === undefined ? {} : { signupOrdinal }) }
+        : renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId))),
+      report: { category: "change", reason: "REQUESTED_INDIVIDUAL_EVENT" },
+    },
+    destinations: input.type.startsWith("iap.") ? iapDestinations()
+      : input.type.startsWith("ad.") ? discordDestinationOrFallback("ad-rewards", "action-events")
+      : discordDestinations(["action-events"]),
+  });
   return NextResponse.json(
     { ok: true, duplicate },
     { status: duplicate ? 200 : 202 },

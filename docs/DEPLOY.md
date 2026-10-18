@@ -655,12 +655,13 @@ flowchart LR
 | --- | --- | --- |
 | `backoffice` | 승인·명령 응답, 중요한 개발 변경·필요한 결정 | `proactive.ts`, `webhooks/route.ts`, `godot/version-check.ts` |
 | `metrics-daily` | 21:40 KST 중요한 검색 위치 변화·추세, PNG·같은 기준일 전체 보고서 | `market/daily-ranks.ts` |
-| `action-events` | 실제 첫 계정·광고 보상 성과, 반복 성공은 원장 전용 | `platform/operational-events`, `milestones.ts` |
+| `action-events` | 신규 계정과 새 버전 첫 유입의 건별 기록. 계정은 앱과 버전, 일별 번호와 제공된 운영 UID 표시 | `platform/operational-events` |
+| `iap`·`ad-rewards` | 결제와 광고 보상 확정의 건별 기록, 결제는 실제·테스트·미확인을 구분 | `platform/operational-events` |
 | `release-ops` | 배포 상태 카드, deploy-all 결과 | `deploy-enqueue.ts` |
 | `ops-alerts` | 장애 카드(`@release_ops` 멘션이 붙는 유일한 목적지) | `incidents.ts`, `analytics/anomalies.ts` |
 | `app-ops` | 비교 근거 있는 종합 변화·우선순위와 비용 경고 단계·해소 | `analytics-report.ts`, `metric-highlights.ts`, `finance-report.ts`, `operations-report.ts` |
 | `github-issues` | 중요한 P1 개발 사건, 상세는 GitHub 원문 링크(미설정이면 `backoffice`로 폴백) | `webhooks/route.ts` |
-| `user-reviews` | 실제 리뷰 내용을 앱·마켓·국가/제공 언어·버전별로 묶은 보고 | `store-reviews/collector.ts` |
+| `user-reviews` | 신규·수정 리뷰의 건별 원문과 매일 11시 KST 전날 수집분 통계 | `store-reviews/collector.ts`, `daily-statistics.ts` |
 | `private-feed`·`seori-review` | 외부 NATS ingest 전용(`ops.notification.v1.*`) | 저장소 내 생산자 없음 |
 
 **폐기(2026-09-16)**: `finance-alerts`. 재무 리포트가 `#app-ops`로 이관된 뒤 생산자가 0이었고
@@ -788,7 +789,7 @@ migration Job, 웹 endpoint 연속성, 각 workload image, worker 로그, DB 요
 - 범위는 두 공식 API가 반환하는 개별 리뷰 resource와 그 1~5점 평점이다.
   스토어 전체 평균 평점의 집계값 변동은 이 collector 대상이 아니다.
 - 첫 성공 수집은 기존 리뷰를 `store_review_sync` 기준선으로만 기록하며 Discord에
-  보내지 않는다. 이후 관측은 내부 원장에 멱등 저장하고 15분 창이 닫히면 실제 본문을 앱·마켓·국가/제공 언어·버전별로 묶어 보고한다. 별점만 있는 관측은 개별 발송하지 않는다.
+  보내지 않는다. 이후 신규·수정 리뷰는 수집 즉시 건별 발송한다. 수집 자체는 30분 주기다. 별점만 있는 리뷰도 본문 없음으로 표시한다. 매일 11시 KST에는 전날 수집분을 앱과 마켓별로 집계하여 새 리뷰, 수정 리뷰, 평균 별점과 1~5점 분포를 보낸다. 같은 리뷰는 마지막 별점으로 한 번 집계하며 스토어 전체 누적 평점과 구분한다. 같은 날짜의 재실행은 같은 카드만 갱신한다.
 - 작성자명과 리뷰 원문은 `store_review_observation`에 저장하지 않는다. 리뷰 ID,
   표시 내용 hash, 별점, 원본 시각만 보존한다. 영구 분석 근거에는 이벤트 ID를 참조하고, 원문·요약은 보존기한 뒤 지운다. 원문 조회 경계에서 비밀값 후보를 가린다. 이슈 초안에는 해설·근거 화면 링크만 넣는다.
 - `DISCORD_CHANNEL_USER_REVIEWS_ID`가 없으면 API 호출이나 최초 기준선 생성을 하지
@@ -808,7 +809,7 @@ node /app/scripts-dist/store-review-collector.cjs --app bloomhand --store GOOGLE
   --notify-review 8f355a74-896d-4e32-84ba-db811df30dd8
 ```
 
-복구는 지정한 리뷰만 처리하며 보존 중인 동일 알림 key는 재작성하지 않는다. Google Play에서 내용과 별점은 그대로인데 수정 시각만 바뀐 리뷰는 과거 key와 달라진다. 이 경우 이미 보낸 리뷰 ID를 복구 대상으로 지정하지 않는다. 복구 전에 해당 ID의 알림 누락을 확인한다. Google Play 목록 API는 최근 1주 안에 작성되거나 수정된 리뷰만 반환하므로 그 안에 복구한다. App Store 복구도 알림 보존기한(기본 30일) 안의 누락에 한정한다. 보존 정리로 없어진 과거 알림은 이력만으로 전송 여부를 검증할 수 없으므로 재복구하지 않는다. 전체 마켓 기준선은 다음 일반 수집에서 생성한다. 기준선에 기록됐지만 알림이 없는 리뷰도 복구할 수 있다. 누락 ID나 잘못된 인자는 실패한다. 개별 리뷰 outbox는 기존 정책대로 내부 원문 기록이며, 닫힌 15분 묶음을 operations-insights가 분석해 Discord에 보낸다. 수집 성공과 분석, 전송 성공은 각각 재조회한다.
+복구는 지정한 리뷰만 처리하며 보존 중인 동일 알림 key는 재작성하지 않는다. Google Play에서 내용과 별점은 그대로인데 수정 시각만 바뀐 리뷰는 과거 key와 달라진다. 이 경우 이미 보낸 리뷰 ID를 복구 대상으로 지정하지 않는다. 복구 전에 해당 ID의 알림 누락을 확인한다. Google Play 목록 API는 최근 1주 안에 작성되거나 수정된 리뷰만 반환하므로 그 안에 복구한다. App Store 복구도 알림 보존기한(기본 30일) 안의 누락에 한정한다. 보존 정리로 없어진 과거 알림은 이력만으로 전송 여부를 검증할 수 없으므로 재복구하지 않는다. 전체 마켓 기준선은 다음 일반 수집에서 생성한다. 기준선에 기록됐지만 알림이 없는 리뷰도 복구할 수 있다. 누락 ID나 잘못된 인자는 실패한다. 개별 리뷰 outbox는 건별 발송하고 일간 통계와 독립적으로 전송 상태를 기록한다. 수집 성공과 건별 전송, 통계 발행은 각각 재조회한다. 수동 통계는 `node scripts-dist/operations-insights-worker.cjs review-daily 2026-10-18 bloomhand`처럼 과거 날짜와 앱 slug를 명시하며 자동 보고와 같은 키를 사용한다.
 
 ### 백업 전용 읽기 계정 전환 — #164
 

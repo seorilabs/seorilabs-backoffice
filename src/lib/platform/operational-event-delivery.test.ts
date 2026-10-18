@@ -21,10 +21,9 @@ const secret = "isolated-operational-test";
 // 라우트와 서비스는 그대로 실행하고, DB singleton만 파일별 격리 대역으로 연결한다.
 const unexpected = async () => { throw new Error("unexpected database call"); };
 const db = {
-  operationalEvent: { create: unexpected },
+  operationalEvent: { create: unexpected, count: unexpected },
   app: { findFirst: unexpected },
-  operationalMilestone: { create: unexpected, findUnique: unexpected, update: unexpected },
-  notificationEvent: { upsert: unexpected },
+  notificationEvent: { upsert: unexpected, findUnique: unexpected },
 };
 (globalThis as typeof globalThis & { prisma: unknown }).prisma = db;
 async function POST(input: NextRequest) {
@@ -50,11 +49,9 @@ function request(event = sample, signature?: string) {
   });
 }
 
-function isolated(t: TestContext, options: { first?: boolean; registered?: boolean; failEnqueue?: boolean } = {}) {
+function isolated(t: TestContext, options: { registered?: boolean; failEnqueue?: boolean } = {}) {
   const stored = new Set<string>();
   const notifications = new Map<string, Prisma.NotificationEventCreateInput>();
-  let firstEventId = options.first ? null : "identity_earlier_account";
-  let notifiedAt: Date | null = options.first ? null : new Date();
   let failEnqueue = options.failEnqueue;
   t.mock.method(env, "platformEventSharedSecret", () => secret);
   t.mock.method(db.operationalEvent, "create", async ({ data }: Prisma.OperationalEventCreateArgs) => {
@@ -66,16 +63,9 @@ function isolated(t: TestContext, options: { first?: boolean; registered?: boole
     id: "app_bloomhand", slug: "bloomhand", platformAppId: null,
     displayName: "블룸핸드", platformUserBaseline: 0,
   }));
-  t.mock.method(db.operationalMilestone, "create", async ({ data }: Prisma.OperationalMilestoneCreateArgs) => {
-    if (firstEventId) throw duplicate();
-    firstEventId = data.firstEventId;
-    return { id: "milestone_1", ...data };
-  });
-  t.mock.method(db.operationalMilestone, "findUnique", async () => ({ id: "milestone_1", firstEventId, notifiedAt }));
-  t.mock.method(db.operationalMilestone, "update", async () => {
-    notifiedAt = new Date();
-    return { id: "milestone_1" };
-  });
+  t.mock.method(db.operationalEvent, "count", async () => 1);
+  t.mock.method(db.notificationEvent, "findUnique", async ({ where }: Prisma.NotificationEventFindUniqueArgs) => notifications.get(where.dedupeKey ?? "") ?? null);
+  t.mock.method(env, "discordChannelId", () => "1234567890");
   t.mock.method(db.notificationEvent, "upsert", async ({ create }: Prisma.NotificationEventUpsertArgs) => {
     if (failEnqueue) { failEnqueue = false; throw new Error("outbox temporarily unavailable"); }
     if (!notifications.has(create.dedupeKey)) notifications.set(create.dedupeKey, create);
@@ -111,13 +101,13 @@ test("미등록 앱도 원본 appId로 건별 알림을 보낸다", async (t) =>
   assert.match(String((notification.payload as Prisma.InputJsonObject).text), /bloomhand/);
 });
 
-test("최초 계정과 같은 이벤트 재전송은 기존 최초 카드 한 건으로 수렴한다", async (t) => {
-  const { stored, notifications } = isolated(t, { first: true });
+test("최초 계정과 같은 이벤트 재전송은 건별 한 줄 한 건으로 수렴한다", async (t) => {
+  const { stored, notifications } = isolated(t);
   assert.equal((await POST(request())).status, 202);
   assert.equal((await POST(request())).status, 200);
   assert.equal(stored.size, 1);
   assert.equal(notifications.size, 1);
-  assert.ok(notifications.has("milestone:app_bloomhand:identity.created"));
+  assert.ok(notifications.has(`operational:${sample.eventId}`));
 });
 
 test("원장 저장 뒤 enqueue 실패도 재전송으로 복구하고 추가 알림을 만들지 않는다", async (t) => {
@@ -130,14 +120,15 @@ test("원장 저장 뒤 enqueue 실패도 재전송으로 복구하고 추가 �
   assert.equal(notifications.size, 1);
 });
 
-test("광고 반복 성공과 테스트 결제 실패를 이 채널에 추가하지 않는다", async (t) => {
+test("광고 보상과 테스트 결제 실패도 전용 채널에 건별로 보낸다", async (t) => {
   const { notifications } = isolated(t);
   const events: OperationalEventInput[] = [
     { ...sample, eventId: "ad_reward_delivery_12345", type: "ad.reward.delivered" as const, attributes: { provider: "admob" } },
     { ...sample, eventId: "iap_failure_delivery_12345", type: "iap.completion_failed" as const, attributes: { platform: "appstore", isTestPurchase: true } },
   ];
   for (const event of events) assert.equal((await POST(request(event))).status, 202);
-  assert.equal(notifications.size, 0);
+  assert.equal(notifications.size, 2);
+  assert.deepEqual([...notifications.values()].map(n => (n.deliveries as {create:Array<{destinationKey:string}>}).create[0].destinationKey), ["ad-rewards", "iap"]);
 });
 
 test("잘못된 서명과 금지 속성은 원장이나 알림을 만들기 전에 거부한다", async (t) => {

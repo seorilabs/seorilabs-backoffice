@@ -374,7 +374,7 @@ enum NotificationDeliveryStatus {
   SUPPRESSED
 }
 
-// Platform의 확정 도메인 이벤트 수신 원장. 사용자 식별자·토큰·영수증은 저장하지 않고
+// Platform 확정 이벤트 수신 원장. 승인된 서버 운영 ID만 선택 저장하며 로그인 UID·토큰·영수증은 제외하고
 // eventId로 멱등 처리한 뒤 Discord 표시와 야간 집계에 사용한다.
 model OperationalEvent {
   eventId    String   @id

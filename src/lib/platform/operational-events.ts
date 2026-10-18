@@ -3,6 +3,7 @@ import { z } from "zod";
 import { kstLogStamp } from "@/lib/format/kst";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import type { DiscordRender } from "@/lib/notifications/format";
+import { marketLabel, testPurchaseState } from "@/lib/notifications/iap-summary";
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
@@ -29,6 +30,7 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
     "runtime",
     "anonymous",
     "referrer",
+    "platformUserId",
   ]),
   // 앱·런타임·버전 조합이 Platform 세션에서 처음 관측된 순간이다. 마켓 업로드나
   // 태그가 아니라 그 빌드로 실제 세션이 처음 열린 시각이라 실유입 개시를 가른다.
@@ -87,7 +89,10 @@ export function parseOperationalEvent(
   const keys = Object.keys(result.data.attributes);
   if (
     keys.length > 20 ||
-    keys.some((key) => !allowedAttributes[result.data.type].has(key))
+    keys.some((key) => !allowedAttributes[result.data.type].has(key)) ||
+    (result.data.attributes.platformUserId !== undefined &&
+      (typeof result.data.attributes.platformUserId !== "string" ||
+        !/^pu_[0-9A-HJKMNP-TV-Z]{26}$/.test(result.data.attributes.platformUserId)))
   ) {
     return null;
   }
@@ -174,7 +179,7 @@ export function operationalEventFacts(
       return {
         icon: "💳",
         headline: "IAP 지급",
-        facts: [text(event, "platform"), text(event, "entitlementId")],
+        facts: [marketLabel(attr(event, "platform")), text(event, "entitlementId"), purchaseEnvironment(event)],
       };
     case "ad.reward.delivered":
       return {
@@ -190,7 +195,8 @@ export function operationalEventFacts(
         icon: "❌",
         headline: "IAP 마켓 완료 처리 실패",
         facts: [
-          text(event, "platform"),
+          marketLabel(attr(event, "platform")),
+          purchaseEnvironment(event),
           `오류 ${text(event, "errorCode", event.outcome)}`,
         ],
       };
@@ -218,10 +224,25 @@ export function operationalEventLine(
   event: OperationalEventInput,
   displayName: string,
   now?: Date,
+  signupOrdinal?: number,
 ): string {
-  const { icon, headline, facts } = operationalEventFacts(event);
+  const { headline, facts } = operationalEventFacts(event);
   const stamp = kstLogStamp(new Date(event.occurredAt), now);
-  return `${icon} **${displayName}** ${[headline, ...facts, stamp].join(" · ")}`;
+  const inline = (value: string) => value.replace(/[\r\n@<>]/g, "").replace(/([\\`*_~|\[\]])/g, "\\$1");
+  const version = String(attr(event, "appVersion") ?? "제공 안됨");
+  const title = event.type === "identity.created"
+    ? `신규계정${signupOrdinal === undefined ? "" : `#${signupOrdinal}`}`
+    : headline;
+  const rest = facts.filter(fact => fact !== `v${version}`).map(inline);
+  const uid = attr(event, "platformUserId");
+  if (event.type === "identity.created" && typeof uid === "string") rest.push(`UID: \`${uid}\``);
+  rest.push(stamp);
+  return `**[${inline(displayName)}:${inline(version)}]** ${title} - ${rest.join(" / ")}`;
+}
+
+function purchaseEnvironment(event: OperationalEventInput): string {
+  const state = testPurchaseState(event.attributes);
+  return state === "test" ? "테스트 주문" : state === "real" ? "실제 주문" : "실제·테스트 여부 제공 안됨";
 }
 
 /** 알려진 테스트 결제 실패는 실제 이용자 피해 알림과 분리한다. */

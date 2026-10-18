@@ -64,8 +64,8 @@ test("서명과 5분 replay window를 검증한다", () => {
 
 test("이벤트 메시지에 사용자 ID 없이 운영 정보만 표시한다", () => {
   const line = operationalEventLine(sample, "해피팜", NOW);
-  assert.match(line, /신규 계정/);
-  assert.match(line, /\*\*해피팜\*\*/);
+  assert.match(line, /신규계정/);
+  assert.match(line, /\[해피팜:제공 안됨\]/);
   assert.doesNotMatch(line, /eventId|platformUserId/);
   // 훑어 읽는 로그라 한 줄이어야 한다.
   assert.equal(line.includes("\n"), false);
@@ -101,7 +101,7 @@ test("Firebase 로그인 공급자는 받고 계정 생성 경로와 함께 표�
   };
   assert.deepEqual(parseOperationalEvent(withProvider), withProvider);
   const line = operationalEventLine(withProvider, "우리 아기 기록", NOW);
-  assert.match(line, /firebase_bridge/);
+  assert.match(line, /firebase\\_bridge/);
   assert.match(line, /google\.com/);
 });
 
@@ -129,7 +129,7 @@ test("새 버전 첫 유입 이벤트를 받고 버전·런타임·SDK를 표시
   assert.deepEqual(parseOperationalEvent(firstSeen), firstSeen);
   assert.equal(
     operationalEventLine(firstSeen, "도마뱀 테라리움", NOW),
-    "🚀 **도마뱀 테라리움** 새 버전 첫 유입 · v1.2.5 · godot-native-android · gd/0.6.8 · 19:00",
+    "**[도마뱀 테라리움:1.2.5]** 새 버전 첫 유입 - godot-native-android / gd/0.6.8 / 19:00",
   );
 });
 
@@ -157,7 +157,7 @@ test("신규 계정 이벤트도 버전과 런타임을 받는다", () => {
   };
   assert.deepEqual(parseOperationalEvent(withBuild), withBuild);
   const line = operationalEventLine(withBuild, "도마뱀 테라리움", NOW);
-  assert.match(line, /v1\.2\.5/);
+  assert.match(line, /:1\.2\.5\]/);
   assert.match(line, /godot-native-android/);
 });
 
