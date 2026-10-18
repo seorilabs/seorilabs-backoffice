@@ -12,7 +12,7 @@ test("AC-2: 초기 HTML에서는 필터 변경을 막아 준비 전 선택이 �
   const selection = normalizeKeywordSelection([app], {}, now);
   const history = buildKeywordHistory(app, selection, [], [], now);
   const noop = () => {};
-  const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop };
+  const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop, bfcacheId: "qa-document" };
   const html = renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: router },
     createElement(KeywordRankChart, { apps: [app], app, selection, history, today: selection.day })));
   assert.match(html, /aria-busy="true"/);
@@ -30,7 +30,7 @@ test("AC-5: 관측 저장 뒤 수집 실패는 재시도 여부를 추정하지 
   const selection = normalizeKeywordSelection([app], {}, now);
   const history = buildKeywordHistory(app, selection, [{ appId: app.id, target: "sea", country: "kr", day: new Date("2026-10-12"), observedAt: new Date("2026-10-12T12:00:00Z"), value: { rank: null }, sourceUrl: "https://itunes.apple.com/search" }], [{ appId: app.id, source: "apple-keyword", target: "kr:sea", status: "failed", startedAt: new Date("2026-10-12T13:00:00Z"), completedAt: new Date("2026-10-12T13:01:00Z") }], now);
   const noop = () => {};
-  const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop };
+  const router: AppRouterInstance = { back: noop, forward: noop, refresh: noop, push: noop, replace: noop, prefetch: noop, bfcacheId: "qa-document" };
   const html = renderToStaticMarkup(createElement(AppRouterContext.Provider, { value: router }, createElement(KeywordRankChart, { apps: [app], app, selection, history, today: selection.day })));
   assert.match(html, /sea · 결과 목록에 없음 · 최근 수집 실패/);
   assert.doesNotMatch(html, /재시도/);

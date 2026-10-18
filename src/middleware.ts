@@ -2,7 +2,7 @@ import NextAuth from "next-auth";
 import authConfig from "@/auth.config";
 
 // Edge 미들웨어: 세션 보호. Prisma 미포함 config 사용.
-export const { auth: middleware } = NextAuth(authConfig);
+export const middleware = NextAuth(authConfig).auth;
 
 export const config = {
   // webhook / Discord interaction / auth / admin·control-plane(자체 토큰) /
