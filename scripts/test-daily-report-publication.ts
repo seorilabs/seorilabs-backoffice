@@ -51,6 +51,10 @@ async function main() {
   const csv = dailyReportCsv(corrected!.doc, 2);
   assert.ok(csv.includes("999"));
   assert.ok(csv.includes("'=QA 고정 입력"), "CSV의 앱 이름을 수식으로 실행하면 안 됩니다.");
+  await prisma.appMetricDaily.update({ where: { appId_date: { appId: app.id, date: toDbDay("2026-08-30") } }, data: { cohortUsers: 10, d1Users: 2, d1Pct: 20 } });
+  const maturity = await correctDailyReport(new Date("2026-09-01T02:16:30Z"), date);
+  assert.equal(maturity.action, "corrected", "성숙한 코호트의 새 관측도 새 버전에 보존합니다.");
+  assert.ok((await getOrgReport(date))?.doc.edition?.changes.some((row) => row.label.includes("코호트")));
   await prisma.metricCollectionLedger.updateMany({ where: { appId: app.id, day: toDbDay(date), source: "ga4" }, data: { state: "not_landed", sealed: false } });
   await correctDailyReport(new Date("2026-09-01T02:17:00Z"), date);
   const missing = await getOrgReport(date);
@@ -61,6 +65,12 @@ async function main() {
   assert.equal(fallback.version, 1);
   const fallbackDoc = await getOrgReport("2026-09-01", new Date(), 1);
   assert.equal(fallbackDoc?.doc.summary.ga4.apps, 0);
+  const legacyDate = "2026-08-29";
+  const legacyDoc = { ...original!.doc, refDate: legacyDate };
+  delete legacyDoc.edition;
+  await prisma.orgReportDaily.create({ data: { date: toDbDay(legacyDate), version: 1, schemaVersion: 1, report: JSON.parse(JSON.stringify(legacyDoc)) } });
+  await assert.rejects(publishDailyReport(new Date("2026-09-02T02:00:00Z"), legacyDate), /REPORT_ALREADY_PUBLISHED/);
+  assert.equal((await correctDailyReport(new Date("2026-09-02T02:00:00Z"), legacyDate)).action, "none");
   console.log(JSON.stringify({ ok: true, preparationId: prepared.preparationId, cutoff: "passed", duplicate: "passed", lateInput: "passed", immutableVersion: "passed", correctionAndMessageReuse: "passed", missingIsNotZero: "passed", csv: "passed", preparationFallback: "passed" }));
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

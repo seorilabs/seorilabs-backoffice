@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   try {
     return NextResponse.json({ ok: true, ...(await publishDailyReport(new Date(), day ?? undefined)) });
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("REPORT_BEFORE")) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof Error && (error.message.startsWith("REPORT_BEFORE") || error.message === "REPORT_ALREADY_PUBLISHED")) return NextResponse.json({ error: error.message }, { status: 409 });
     console.error("[admin/metric-highlights] 실패:", error instanceof Error ? error.name : "unknown");
     return NextResponse.json({ error: "metric highlight report failed" }, { status: 500 });
   }

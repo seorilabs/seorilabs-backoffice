@@ -63,3 +63,8 @@ export function ga4ObservationState(input: {
   if (!input.tableLanded) return "not_landed";
   return input.activityPresent ? "observed" : "empty";
 }
+
+export function backfillGa4State(input: { tableLanded: boolean; stored: boolean; previousState?: string }): MetricObservationState {
+  if (input.stored && input.previousState === "observed") return "observed";
+  return input.tableLanded && input.stored ? "observed" : "not_landed";
+}
