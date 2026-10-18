@@ -20,7 +20,8 @@ import {
   shouldAdvanceLifecycleForRelease,
 } from "@/lib/sync/release-status";
 import { recordTransition } from "@/lib/sync/transition";
-import { findTagForSha } from "@/lib/github/release";
+import { findTagForSha, resolveStableTagSha } from "@/lib/github/release";
+import { resolvePromotionRunBinding } from "@/lib/sync/promotion-run-binding";
 import {
   enqueueDeployAllResultNotification,
   enqueueDeployCompletionNotification,
@@ -283,7 +284,20 @@ export async function upsertWorkflowRun(
     return;
   }
 
-  const version = await resolveRunVersion(repoFullName, gh);
+  const promoted = isPromoteGooglePlayWorkflow(gh.path);
+  const promotionBinding = promoted ? await resolvePromotionRunBinding(repoFullName, gh, {
+    readAudit: (repo, id) => prisma.auditLog.findMany({
+      where: {
+        entityType: "release", action: "release.promote.dispatch",
+        entityId: { startsWith: `${repo}@` },
+        payload: { path: "$.workflowRunId", equals: String(id) },
+      },
+      select: { entityId: true, payload: true },
+    }),
+    resolveTag: resolveStableTagSha,
+  }) : null;
+  if (promoted && !promotionBinding) return;
+  const version = promotionBinding?.version ?? await resolveRunVersion(repoFullName, gh);
   await recordMarketRelease({
     appId,
     market,
@@ -291,12 +305,12 @@ export async function upsertWorkflowRun(
     // 승격 실행은 production 트랙 배포다. 카드가 승격 여부를 표시 이름 없이 판별하는 근거.
     track: releaseTrackForWorkflow({
       market,
-      promoted: isPromoteGooglePlayWorkflow(gh.path),
+      promoted,
       version,
     }),
     status,
     workflowName: gh.name ?? null,
-    commitSha: gh.head_sha ?? null,
+    commitSha: promotionBinding?.commitSha ?? gh.head_sha ?? null,
     runId,
     runAttempt,
     runUrl,

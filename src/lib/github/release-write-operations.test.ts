@@ -496,3 +496,38 @@ test("release와 dispatch mutation은 numeric repo scoped capability만 사용�
   assert.match(source, /capability: "github\.release\.write"/u);
   assert.match(source, /capability: "github\.workflow-dispatch\.write"/u);
 });
+
+// GitHub가 응답한 정확한 실행 ID로만 승격 결과를 결합한다.
+test("승격 dispatch는 실행 상세를 요청하고 실제 run ID를 한 번 전달한다", async () => {
+  let dispatches = 0;
+  const ids: number[] = [];
+  await dispatchWorkflowWithExactTagBinding(client({
+    getRef: async () => ref(SHA),
+    createWorkflowDispatch: async (...args: unknown[]) => {
+      dispatches += 1;
+      assert.equal((args[0] as { return_run_details?: boolean }).return_run_details, true);
+      return { data: { workflow_run_id: 1234 } };
+    },
+  }), {
+    owner: OWNER, repo: REPO, workflowFile: "promote-google-play.yml", ref: "main",
+    inputs: { release_tag: TAG }, expectedTag: TAG, expectedSha: SHA,
+    onDispatched: async (runId: number) => { ids.push(runId); },
+  });
+  assert.equal(dispatches, 1);
+  assert.deepEqual(ids, [1234]);
+});
+
+test("dispatch 성공 뒤 실행 ID가 없으면 자동 재요청 없이 결과 미확인으로 남긴다", async () => {
+  let dispatches = 0;
+  let callbacks = 0;
+  await assert.rejects(() => dispatchWorkflowWithExactTagBinding(client({
+    getRef: async () => ref(SHA),
+    createWorkflowDispatch: async () => { dispatches += 1; return { data: {} }; },
+  }), {
+    owner: OWNER, repo: REPO, workflowFile: "promote-google-play.yml", ref: "main",
+    inputs: { release_tag: TAG }, expectedTag: TAG, expectedSha: SHA,
+    onDispatched: async () => { callbacks += 1; },
+  }), /GITHUB_WORKFLOW_DISPATCH_RUN_UNKNOWN/);
+  assert.equal(dispatches, 1);
+  assert.equal(callbacks, 0);
+});

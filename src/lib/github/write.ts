@@ -255,6 +255,7 @@ export async function dispatchWorkflow(opts: {
   ref: string; // workflow 제어 ref. stable 배포는 기본 브랜치, snapshot은 태그일 수 있다.
   inputs?: Record<string, string>;
   expectedTag?: { tag: string; sha: string };
+  onDispatched?: (runId: number) => Promise<void>;
 }): Promise<void> {
   const releaseTag = opts.inputs?.release_tag;
   if (
@@ -285,6 +286,7 @@ export async function dispatchWorkflow(opts: {
           inputs: opts.inputs ?? {},
           expectedTag: opts.expectedTag.tag,
           expectedSha: opts.expectedTag.sha,
+          onDispatched: opts.onDispatched,
         });
         return;
       }
