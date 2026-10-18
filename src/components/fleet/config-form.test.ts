@@ -162,6 +162,24 @@ const fullPayload = {
   ],
 };
 
+test("설정을 다시 저장해도 스토어·모니터링 검색어의 내부 공백은 그대로다", () => {
+  const payload = { schemaVersion: 1, markets: [],
+    localizations: [{ market: "app-store", locale: "en-US", keywords: ["idle  game", "daily puzzle"] }],
+    monitoring: { enabled: true, keywords: ["baseline keyword", "매일 게임"], countries: ["kr", "us"], competitorAppIds: [], officialFeeds: [], checkSupportLinks: false } };
+  const saved = payloadFromDraft(draftFromPayload(payload)) as typeof payload;
+  assert.deepEqual(saved.monitoring.keywords, payload.monitoring.keywords);
+  assert.deepEqual(saved.localizations[0].keywords, payload.localizations[0].keywords);
+  assert.equal(configRevisionPayloadSchema.safeParse(saved).success, true);
+});
+
+test("검색어는 쉼표·줄바꿈으로 나누고 국가 등 기존 목록의 공백 구분은 유지한다", () => {
+  const draft = emptyConfigDraft();
+  draft.monitoring = { ...draft.monitoring, declared: true, enabled: true, keywords: " updated keyword, 매일 게임\r\n new  keyword \n\n", countries: "kr us, jp" };
+  const saved = payloadFromDraft(draft) as { monitoring: { keywords: string[]; countries: string[] } };
+  assert.deepEqual(saved.monitoring.keywords, ["updated keyword", "매일 게임", "new  keyword"]);
+  assert.deepEqual(saved.monitoring.countries, ["kr", "us", "jp"]);
+});
+
 test("구조화 폼 draft는 strict 계약 payload를 손실 없이 왕복한다", () => {
   const parsed = configRevisionPayloadSchema.parse(fullPayload);
   const roundTripped = payloadFromDraft(draftFromPayload(parsed));
