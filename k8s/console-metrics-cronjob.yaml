@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: console-metrics-collector
 spec:
   suspend: true
-  schedule: "30 21 * * *"
+  schedule: "30 3,9,15,21 * * *" # 6시간마다: 지연 집계 보완, 기존 21:30 수집 유지
   timeZone: Asia/Seoul
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600

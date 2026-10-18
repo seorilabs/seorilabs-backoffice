@@ -133,7 +133,14 @@ export async function recordObservations(
       observations,
     };
     const identity = { source: part.source, appId: part.appId, listingId: part.listingId, day: toDbDay(part.day) };
-    if (part.state === "failed") {
+    if (part.source === "ait_console" && part.state === "not_landed") {
+      // 콘솔의 행 부재는 백필 추정이다. 동시 수집을 포함해 기존 관측·실패 기록을 덮지 않는다.
+      try { await prisma.metricCollectionLedger.create({ data: { ...identity, ...data } }); }
+      catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+        continue;
+      }
+    } else if (part.state === "failed") {
       // 선행 조회 뒤 다른 수집이 observed로 바꿔도 원자적 조건으로 보존한다.
       const updated = await prisma.metricCollectionLedger.updateMany({ where: { ...identity, state: { notIn: ["observed", "empty"] } }, data });
       if (updated.count === 0) {

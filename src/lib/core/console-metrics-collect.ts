@@ -171,16 +171,16 @@ export async function ingestConsoleMetrics(
             update: { ...patch, collectedAt: now },
           });
           const raw = mergeConsoleRaw(stored.raw, day.raw);
+          const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
           if (day.raw?.missingMetrics == null && Array.isArray(raw.missingMetrics)) {
             const covered = [
-              ...(day.iaaImpressions != null && day.iaaEarningKrw != null ? ["iaa.ANDROID", "iaa.IOS"] : []),
+              ...(total != null || (day.iaaImpressions != null && day.iaaEarningKrw != null) ? ["iaa.ANDROID", "iaa.IOS"] : []),
               ...(day.iapTrxAmountKrw != null && day.iapSettlementKrw != null && day.payingUsers != null ? ["iap"] : []),
               ...(day.dau != null && day.newUsers != null ? ["dau"] : []),
               ...(day.avgSessionSec != null ? ["session"] : []),
             ];
             raw.missingMetrics = raw.missingMetrics.filter((metric) => !covered.includes(String(metric)));
           }
-          const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
           return tx.appConsoleMetricDaily.update({ where, data: { ...total, raw: Object.keys(raw).length ? raw as Prisma.InputJsonObject : Prisma.JsonNull } });
         }));
         result.upserts++;

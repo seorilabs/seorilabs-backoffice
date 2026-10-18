@@ -5,6 +5,7 @@ import type { ConsoleSyncStatus } from "@/lib/core/console-metrics-collect";
 export interface ConsoleWindow extends ConsoleSourceTarget { start: string; end: string; }
 export function consoleCollectionPlan(status: ConsoleSyncStatus, now: Date, launches: Record<string, string> = {}) {
   const end = lastElapsedMetricDay(now);
+  const retryFloor = shiftMetricDay(end, -13);
   const observed = status.apps.flatMap((a) => a.lastDate && parseMetricDay(a.lastDate) && a.lastDate <= end ? [a.lastDate] : []);
   const regularStart = observed.length ? shiftMetricDay(observed.sort()[0], -2) : shiftMetricDay(end, -13);
   const windows: ConsoleWindow[] = []; const blocked: { key: string; reason: string }[] = [];
@@ -17,6 +18,8 @@ export function consoleCollectionPlan(status: ConsoleSyncStatus, now: Date, laun
       if (!parseMetricDay(app.firstIncompleteDate) || app.firstIncompleteDate > end) { blocked.push({ key, reason: "미확인 관측 날짜 확인 필요" }); continue; }
       if (start && app.firstIncompleteDate < start) start = app.firstIncompleteDate;
     }
+    // 확인된 출시일부터 시작하는 최초 백필과 달리 자동 재조회는 최근 14일만 다룬다.
+    if (app.rows > 0 && start && start < retryFloor) start = retryFloor;
     if (!start || !parseMetricDay(start) || start > end) { blocked.push({ key, reason: "확인된 출시일 필요" }); continue; }
     for (let cursor = start; cursor <= end;) {
       const chunkEnd = [shiftMetricDay(cursor, MAX_DAYS_PER_APP - 1), end].sort()[0];

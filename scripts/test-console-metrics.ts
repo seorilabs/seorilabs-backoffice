@@ -9,6 +9,7 @@ import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/ana
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { startConsoleFixture } from "./console-metrics/fixture-server";
 import { ingestConsoleMetrics, getConsoleSyncStatus } from "../src/lib/core/console-metrics-collect";
+import { recordObservations } from "../src/lib/analytics/coverage";
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
@@ -81,6 +82,27 @@ async function main() {
     await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, workspaceId: 38345, days: [{ date: "2026-10-12", iaaImpressions: 6, iaaEarningKrw: 34, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 }] }] }, nextNow);
     const pushed = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
     assert.deepEqual((pushed.raw as Record<string, unknown>).missingMetrics, []);
+    // 합계 필드 없이 OS 원본만 복구한 직접 push도 결측 표시와 완료 상태를 함께 복구한다.
+    const recoveredDate = "2026-10-17";
+    await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, days: [{ date: recoveredDate,
+      iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0,
+      raw: { iaaByOs: { ANDROID: { date: recoveredDate, impression: 6, estimatedEarning: 34 } }, missingMetrics: ["iaa.IOS"] },
+    }] }] }, nextNow);
+    const recovered = await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, days: [{ date: recoveredDate,
+      raw: { iaaByOs: { IOS: { date: recoveredDate, impression: 2, estimatedEarning: 12 } } },
+    }] }] }, nextNow);
+    assert.equal(recovered.warnings.length, 0);
+    const recoveredRow = await prisma.appConsoleMetricDaily.findFirstOrThrow({ where: { appId: app.id, miniAppId: 61736, date: new Date(recoveredDate) } });
+    assert.equal(recoveredRow.iaaEarningKrw, 46);
+    assert.deepEqual((recoveredRow.raw as Record<string, unknown>).missingMetrics, []);
+    assert.equal((await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date(recoveredDate) } })).state, "observed");
+    // 행이 없다는 백필 추정으로 실제 수집 실패 기록을 덮거나 재조회 대상에서 빼지 않는다.
+    const absent = { source: "ait_console" as const, appId: app.id, listingId: 61736, day: "2026-10-07" };
+    await recordObservations([{ ...absent, state: "failed", detail: "CONSOLE_STORAGE_FAILED" }], nextNow);
+    await recordObservations([{ ...absent, state: "not_landed" }], nextNow);
+    const preserved = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { ...absent, day: new Date(absent.day) } });
+    assert.equal(preserved.state, "failed"); assert.equal(preserved.detail, "CONSOLE_STORAGE_FAILED");
+    assert.equal((await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)?.firstIncompleteDate, absent.day);
     // 신규 unique 키를 동시에 만드는 서로 다른 OS 패치도 모두 보존한다.
     for (let i = 0; i < 4; i++) {
       const day = `2026-10-${13 + i}`;

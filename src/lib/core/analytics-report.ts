@@ -257,7 +257,8 @@ export function buildConsoleSection(
     `광고 ${count(sum((r) => r.iaaImpressions))}회 ${won(sum((r) => r.iaaEarningKrw))}`,
   ];
   const iapTotal = sum((r) => r.iapTrxAmountKrw);
-  if ((iapTotal ?? 0) > 0) totalParts.push(`결제 ${won(iapTotal)}`);
+  if (iapTotal == null) totalParts.push("결제 미확인");
+  else if (iapTotal > 0) totalParts.push(`결제 ${won(iapTotal)}`);
 
   const lines = [
     `🧩 <b>AppsInToss 콘솔</b> (기준 ${esc(refDate)}` +
