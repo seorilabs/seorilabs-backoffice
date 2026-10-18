@@ -10,7 +10,7 @@ import {
 import { dailyEditionSchema } from "@/lib/report/daily-contract";
 import { providerSeriesSchema } from "@/lib/analytics/report-query";
 import { dailyReportCsv } from "@/lib/report/daily-csv";
-import { reportFactsHash, reportCorrectionDiff } from "@/lib/report/daily-presentation";
+import { reportFactsHash, sameReportFacts, reportCorrectionDiff } from "@/lib/report/daily-presentation";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
 const REF = "2026-08-31";
@@ -329,6 +329,67 @@ test("해설·생성 시각은 정정 지문을 바꾸지 않고 수치는 바�
   after.summary.ga4.dau = 142;
   assert.notEqual(reportFactsHash(before), reportFactsHash(after));
   assert.ok(reportCorrectionDiff(before, after).some((row) => row.before === "60" && row.after === "142"));
+});
+
+test("유입경로 비율만 바뀌어도 정정 대상이다", () => {
+  const before = assemble();
+  const after = structuredClone(before);
+  after.referrers = [{ dimension: "전체탭", rate: 0.7 }];
+  assert.notEqual(reportFactsHash(before), reportFactsHash(after));
+});
+
+test("유입경로 비율과 추가, 삭제를 정정 내역에 남긴다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.8 }, { dimension: "푸시알림", rate: 0.2 }];
+  const after = structuredClone(before);
+  after.referrers = [{ dimension: "검색", rate: 0.7 }, { dimension: "전체탭", rate: 0.3 }];
+  const changes = reportCorrectionDiff(before, after);
+  assert.ok(changes.some((row) => row.label === "검색 유입 비율(%)" && row.before === "80" && row.after === "70"));
+  assert.ok(changes.some((row) => row.label === "푸시알림 유입 비율(%)" && row.before === "20" && row.after === "미수집"));
+  assert.ok(changes.some((row) => row.label === "전체탭 유입 비율(%)" && row.before === "미수집" && row.after === "30"));
+});
+
+test("DB JSON의 부동소수점 직렬화 차이는 정정으로 만들지 않는다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.16783216783216784 }];
+  const stored = structuredClone(before);
+  stored.referrers = [{ dimension: "검색", rate: 0.1678321678321678 }];
+  assert.equal(sameReportFacts(before, stored), true);
+  assert.deepEqual(reportCorrectionDiff(before, stored), []);
+  stored.referrers[0].rate = 0.17;
+  assert.equal(sameReportFacts(before, stored), false);
+  assert.notEqual(reportFactsHash(before), reportFactsHash(stored));
+});
+
+test("유입경로의 같은 비율을 순서만 바꾸면 정정하지 않는다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.5 }, { dimension: "전체탭", rate: 0.5 }];
+  const after = structuredClone(before);
+  after.referrers.reverse();
+  assert.equal(reportFactsHash(before), reportFactsHash(after));
+  assert.deepEqual(reportCorrectionDiff(before, after), []);
+});
+
+test("DB JSON에서 객체 키 순서가 바뀌어도 같은 사실로 비교한다", () => {
+  const before = assemble();
+  const stored = JSON.parse(JSON.stringify(before), (_key, value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).reverse()) : value);
+  assert.equal(reportFactsHash(before), reportFactsHash(stored));
+});
+
+test("내부 점수의 JSON 왕복 오차를 정정 내역으로 만들지 않는다", () => {
+  const before = assemble();
+  before.movements[0].score = 10328.18189471805;
+  const after = structuredClone(before);
+  after.movements[0].score = 10328.181894718049;
+  assert.equal(sameReportFacts(before, after), true);
+  assert.deepEqual(reportCorrectionDiff(before, after), []);
+  after.movements[0].score += 0.01;
+  assert.equal(sameReportFacts(before, after), false);
+  after.movements[0].score = before.movements[0].score;
+  after.summary.ga4.dau += 1;
+  assert.equal(sameReportFacts(before, after), false);
 });
 
 

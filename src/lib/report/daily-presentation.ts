@@ -5,6 +5,32 @@ import { coverageSummary } from "./daily-contract";
 import { sourceStateLabel } from "@/lib/insights/collection";
 import { discordActionLines } from "./action-presentation";
 
+function canonicalFact(_key: string, value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  }
+  return value;
+}
+
+function sameFact(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a === "number" && typeof b === "number") {
+    if (Number.isInteger(a) && Number.isInteger(b)) return false;
+    return Number.isFinite(a) && Number.isFinite(b)
+      && Math.abs(a - b) <= 8 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b));
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, index) => sameFact(value, b[index]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+    const keys = Object.keys(left).filter((key) => left[key] !== undefined);
+    return keys.length === Object.keys(right).filter((key) => right[key] !== undefined).length
+      && keys.every((key) => Object.hasOwn(right, key) && sameFact(left[key], right[key]));
+  }
+  return false;
+}
+
 export function reportConclusions(doc: OrgReportDocument): string[] {
   const conclusions = [...doc.movements]
     .filter((row) => row.verdict === "lowlight" || row.verdict === "highlight")
@@ -17,28 +43,44 @@ export function reportConclusions(doc: OrgReportDocument): string[] {
 }
 
 /** 해설·실행 시각·run ID가 달라졌다는 이유로 숫자가 같은 보고서를 정정하지 않는다. */
-export function reportFactsHash(doc: OrgReportDocument): string {
-  return createHash("sha256").update(JSON.stringify({
+function reportFacts(doc: OrgReportDocument) {
+  return {
     refDate: doc.refDate, summary: doc.summary, apps: doc.apps, movements: doc.movements,
     retention: doc.retention, trend: doc.edition?.trend,
+    referrers: [...doc.referrers].sort((a, b) => a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0),
     cohorts: doc.edition?.cohorts,
     costs: doc.costs ? { month: doc.costs.month, figures: doc.costs.figures, summaryLines: doc.costs.summaryLines, warnings: doc.costs.warnings } : null,
     providerMetrics: doc.edition?.providerMetrics.map((series) => ({ ...series, points: series.points.map((point) => ({ ...point, runId: undefined, sourceHash: undefined, sourceUri: undefined, configRevisionId: undefined })) })),
     sources: doc.edition?.sources.map(({ slug, source, reportType, account, state, dataThrough }) => ({ slug, source, reportType, account, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
-  })).digest("hex");
+  };
+}
+
+export function reportFactsHash(doc: OrgReportDocument): string {
+  return createHash("sha256").update(JSON.stringify(reportFacts(doc), canonicalFact)).digest("hex");
+}
+
+/** 저장된 지문은 보존하고, 정정 판단은 DB JSON 왕복 오차를 구분해 현재 사실끼리 비교한다. */
+export function sameReportFacts(before: OrgReportDocument, after: OrgReportDocument): boolean {
+  return sameFact(reportFacts(before), reportFacts(after));
 }
 
 export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReportDocument) {
   const changes: Array<{ label: string; before: string; after: string }> = [];
   const compare = (label: string, a: string | number | null, b: string | number | null) => {
-    if (a !== b) changes.push({ label, before: a === null ? "미수집" : String(a), after: b === null ? "미수집" : String(b) });
+    if (!sameFact(a, b)) changes.push({ label, before: a === null ? "미수집" : String(a), after: b === null ? "미수집" : String(b) });
   };
   compare("GA4 활성 합계(명)", before.summary.ga4.apps ? before.summary.ga4.dau : null, after.summary.ga4.apps ? after.summary.ga4.dau : null);
   compare("GA4 관측 앱", before.summary.ga4.apps, after.summary.ga4.apps);
   compare("토스 광고 추정 수익(KRW)", before.summary.console.iaaKrw, after.summary.console.iaaKrw);
   compare("토스 결제 거래액(KRW)", before.summary.console.iapTrxKrw, after.summary.console.iapTrxKrw);
+  const referrers = new Set([...before.referrers, ...after.referrers].map((row) => row.dimension));
+  const share = (doc: OrgReportDocument, dimension: string) => {
+    const row = doc.referrers.find((item) => item.dimension === dimension);
+    return row ? Number((row.rate * 100).toFixed(10)) : null;
+  };
+  for (const dimension of referrers) compare(`${dimension} 유입 비율(%)`, share(before, dimension), share(after, dimension));
   for (const app of after.apps) compare(`${app.displayName} 활성(명)`, before.apps.find((row) => row.slug === app.slug)?.ga4?.dau ?? null, app.ga4?.dau ?? null);
   for (const series of after.edition?.providerMetrics ?? []) {
     const match = before.edition?.providerMetrics.find((row) => row.appId === series.appId && row.source === series.source && row.account === series.account && row.resource === series.resource && row.reportType === series.reportType && row.metric === series.metric && row.segment === series.segment && row.currency === series.currency && row.timeZone === series.timeZone);
@@ -64,7 +106,7 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   }
   if (JSON.stringify(before.costs?.figures ?? null) !== JSON.stringify(after.costs?.figures ?? null)) changes.push({ label: "월 누적 비용·잔액", before: before.costs?.summaryLines.join(" · ") ?? "미수집", after: after.costs?.summaryLines.join(" · ") ?? "미수집" });
   // 이전 버전 링크와 함께 비교표·판정·근거의 갱신을 누락 없이 알린다.
-  if (!changes.length && reportFactsHash(before) !== reportFactsHash(after)) changes.push({ label: "비교표·판정·근거 갱신", before: "이전 발행본의 값·판정·수집 범위", after: "새 발행본의 값·판정·수집 범위 · 정정 전후 링크에서 대조" });
+  if (!changes.length && !sameReportFacts(before, after)) changes.push({ label: "비교표·판정·근거 갱신", before: "이전 발행본의 값·판정·수집 범위", after: "새 발행본의 값·판정·수집 범위 · 정정 전후 링크에서 대조" });
   return changes;
 }
 
