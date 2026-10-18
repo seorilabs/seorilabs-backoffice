@@ -56,3 +56,5 @@ AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 
 Android vitals는 오류·응답 없음의 일별 공급자 비율과 반올림 표본을 별개 지표로 보존한다. 빈 응답은 미도착이며 0을 생성하지 않는다. 공식 비율은 정확한 분자·분모가 없어 합산·자동 변화 판정·개선 이슈 근거로 사용하지 않는다. [공식 품질 보고 정의](https://developers.google.com/play/developer/reporting/reference/rest/v1beta1/vitals.crashrate/query)의 LA 달력과 최신 종료일(끝 미포함)을 지킨다.
 
 GA4 조회 비용은 Node SDK가 반환한 세 번째 공식 응답의 job ID·처리/과금 바이트·cacheHit를 기록한다. 폴링 응답에 비용이 없으면 같은 job의 공식 metadata를 읽는다. 비용 조회 실패는 이미 관측한 행을 잃게 하지 않으며 쿼리 원장에 일부 수집과 미확인을 남긴다.
+
+앱인토스의 기존 원장은 확인한 필드만 저장했을 때도 `failed`와 `확인된 지표만 부분 저장`을 기록한다. 통합 수집 현황은 이 저장 완료 근거가 있는 경우 `partial`과 해당 기준일을 표시하고 일부 지표 확보 대상과 완전 관측 대상을 따로 센다. 실제 저장 실패, 저장 보류, 미도착과 GA4 실패는 이 해석으로 바꾸지 않는다. 원래 원장과 저장 수치, 완전 관측의 합산 분모는 유지한다.
