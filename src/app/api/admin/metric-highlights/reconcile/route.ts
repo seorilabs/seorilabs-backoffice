@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { parseMetricDay } from "@/lib/analytics/metric-day";
-import { correctDailyReport } from "@/lib/report/daily-publication";
+import { correctDailyReport, correctRecentDailyReports } from "@/lib/report/daily-publication";
 
-// 발행분 정정 트리거(야간 발행 cron 이 D-1 발행 직후 이어서 호출).
-//
-// 발행은 D-1 을 내보내지만 그 시점에 늦게 도착한 export 가 있을 수 있다. 하루 뒤
-// 같은 날짜를 다시 계산해 사실이 달라졌으면 같은 Discord 메시지를 고친다. 사실이
-// 같으면 아무것도 하지 않는다 — 변화 없는 version+1 은 감사 기록을 흐린다.
-//
-// day query 로 특정 날짜를 지정할 수 있다(과거 발행분 소급 정정).
+// 공급자의 3~7일 지연을 포함해 최근 8일의 실제 발행본을 정정한다.
+// day를 지정하면 해당 날짜만 기존 응답 계약으로 재처리한다.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -24,7 +19,8 @@ export async function POST(req: NextRequest) {
   }
   try {
     const day = parseMetricDay(raw);
-    const result = await correctDailyReport(new Date(), day ?? undefined);
+    const now = new Date();
+    const result = day ? await correctDailyReport(now, day) : await correctRecentDailyReports(now);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     console.error("[admin/metric-highlights/reconcile] 실패:", error);
