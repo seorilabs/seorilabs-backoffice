@@ -55,6 +55,9 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     const ga4 = source.startsWith("ga4") ? resolveGa4Target(app) : null;
     const ait = source === "ait_console" ? resolveAitTarget(app) : null;
     const cells = ledger.filter((cell) => cell.appId === app.id && cell.source === source);
+    // 기존 콘솔 원장은 부분 저장도 failed로 기록한다. 저장 완료 근거가 있는
+    // 이 사유만 수집 현황에서 구분하며 완전 관측이나 합산 분모로 올리지 않는다.
+    const partialSaved = source === "ait_console" ? cells.filter((cell) => cell.state === "failed" && cell.detail === "확인된 지표만 부분 저장").length : 0;
     const run = latest.find((one) => one.appId === app.id && one.source === sourceKey && (!connection || one.target === connection.id));
     let state: SourceCoverage["state"] = "needs_input";
     let reason = "이 보고서의 계정·권한·내보내기 연결을 아직 확인하지 못했습니다.";
@@ -76,9 +79,12 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     } else if (cells.length) {
       state = cells.every((cell) => cell.state === "empty") ? "empty"
         : cells.every((cell) => ["observed", "empty"].includes(cell.state)) ? "observed"
-        : cells.some((cell) => ["observed", "empty"].includes(cell.state)) ? "partial"
+        : partialSaved > 0 || cells.some((cell) => ["observed", "empty"].includes(cell.state)) ? "partial"
         : cells.some((cell) => cell.state === "failed") ? "failed" : "not_landed";
-      reason = `${day} 원장 ${cells.filter((cell) => ["observed", "empty"].includes(cell.state)).length}/${cells.length}개 대상 관측`;
+      const observed = cells.filter((cell) => ["observed", "empty"].includes(cell.state)).length;
+      reason = partialSaved > 0
+        ? `${day} 일부 지표 확보 ${partialSaved}/${cells.length}개 대상, 완전 관측 ${observed}/${cells.length}개 대상`
+        : `${day} 원장 ${observed}/${cells.length}개 대상 관측`;
       remedy = ["observed", "empty"].includes(state) ? "" : "누락 원천의 내보내기와 수집 실행을 확인하세요.";
     } else if (run) {
       state = ["observed", "empty", "not_landed", "partial", "needs_input", "failed", "not_applicable"].includes(run.status)
@@ -99,7 +105,7 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     return { appId: app.id, slug: app.slug, appName: app.displayName, source, reportType,
       account: connection?.accountId ?? (ga4 ? `${ga4.firebaseProject}.${ga4.dataset}` : ait ? `workspace:${ait.workspaceId}` : null),
       credentialId: connection?.credentialId ?? (ga4 ? "shared/gcp/ga4-fleet-reader" : null), state, reason, remedy,
-      dataThrough: batches.length ? batches.reduce((a, b) => a > b.periodEnd ? a : b.periodEnd, "") : cells.some((cell) => ["observed", "empty"].includes(cell.state)) ? day
+      dataThrough: batches.length ? batches.reduce((a, b) => a > b.periodEnd ? a : b.periodEnd, "") : partialSaved > 0 || cells.some((cell) => ["observed", "empty"].includes(cell.state)) ? day
         : run?.dataThrough ? dbDay(run.dataThrough) : null,
       runId: run?.id ?? null, configRevision: app.configRevisions[0]?.revision ?? null };
     });
