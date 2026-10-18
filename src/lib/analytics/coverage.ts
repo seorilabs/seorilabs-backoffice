@@ -279,7 +279,7 @@ async function consoleWeights(
   for (const row of rows) {
     const key = `${row.appId}${SEP}${row.miniAppId}`;
     const list = byListing.get(key) ?? [];
-    list.push(row.iaaEarningKrw);
+    if (row.iaaEarningKrw != null) list.push(row.iaaEarningKrw);
     byListing.set(key, list);
   }
   return targets.map((target) => ({

@@ -40,18 +40,23 @@ export function normalizeConsoleResponses(input: Record<string, unknown>, start:
   for (const date of metricDayWindow(end, length)) {
     const metrics = [!au || !newAu ? "dau" : null, !session ? "session" : null,
       !android?.has(date) ? "iaa.ANDROID" : null, !ios?.has(date) ? "iaa.IOS" : null, !iap?.has(date) ? "iap" : null].filter((v): v is string => v !== null);
-    if (metrics.length) { missing.push({ date, metrics }); continue; }
-    const a = android!.get(date)!; const i = ios!.get(date)!; const p = iap!.get(date)!;
-    const raw: Row = { iaaByOs: { ANDROID: a, IOS: i }, iap: p };
+    if (metrics.length) missing.push({ date, metrics });
+    const a = android?.get(date); const i = ios?.get(date); const p = iap?.get(date);
+    const active = au?.get(date); const fresh = newAu?.get(date); const duration = session?.get(date);
+    if (!a && !i && !p && !active && !fresh && !duration) continue;
+    const raw: Row = {};
+    if (a || i) raw.iaaByOs = { ...(a ? { ANDROID: a } : {}), ...(i ? { IOS: i } : {}) };
+    if (p) raw.iap = p;
+    if (metrics.length) raw.missingMetrics = metrics;
     if (date === end) {
       raw.window = { start, end };
-      const dau = input.dau as Row;
+      const dau = (input.dau ?? {}) as Row;
       for (const key of ["referrer", "age", "gender", "os", "appVersion"]) if (Array.isArray(dau[key])) raw[key] = dau[key];
     }
-    const checked = validateConsoleDay({ date, dau: au!.get(date)?.value ?? null, newUsers: newAu!.get(date)?.value ?? null,
-      avgSessionSec: session!.get(date)?.value ?? null, iaaImpressions: (a.impression as number) + (i.impression as number),
-      iaaEarningKrw: (a.estimatedEarning as number) + (i.estimatedEarning as number), iapTrxAmountKrw: p.trxAmount,
-      iapSettlementKrw: p.settlementAmount, payingUsers: p.pu, raw });
+    const checked = validateConsoleDay({ date, dau: active?.value, newUsers: fresh?.value,
+      avgSessionSec: duration?.value, iaaImpressions: a && i ? (a.impression as number) + (i.impression as number) : undefined,
+      iaaEarningKrw: a && i ? (a.estimatedEarning as number) + (i.estimatedEarning as number) : undefined,
+      iapTrxAmountKrw: p?.trxAmount, iapSettlementKrw: p?.settlementAmount, payingUsers: p?.pu, raw });
     if (checked.ok) days.push(checked.day); else missing.push({ date, metrics: checked.fields });
   }
   return { days, missing };

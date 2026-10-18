@@ -1,3 +1,4 @@
+import React from "react";
 import { dbDay } from "@/lib/analytics/metric-day";
 
 // AppsInToss 콘솔 일별 스냅샷 프레젠테이션 컴포넌트(순수, 서버 렌더). GA4 패널(MetricPanels)과
@@ -24,15 +25,15 @@ export interface ConsoleMetricDaily {
   dau: number | null;
   newUsers: number | null;
   avgSessionSec: number | null;
-  iaaImpressions: number;
-  iaaEarningKrw: number;
-  iapTrxAmountKrw: number;
-  iapSettlementKrw: number;
-  payingUsers: number;
+  iaaImpressions: number | null;
+  iaaEarningKrw: number | null;
+  iapTrxAmountKrw: number | null;
+  iapSettlementKrw: number | null;
+  payingUsers: number | null;
   raw: unknown;
 }
 
-const won = (v: number): string => `₩${Math.round(v).toLocaleString("ko-KR")}`;
+const won = (v: number | null): string => v == null ? "—" : `₩${Math.round(v).toLocaleString("ko-KR")}`;
 const sec = (v: number | null): string => (v == null ? "—" : `${Math.round(v)}초`);
 /** nullable 정수 표시: null=콘솔 미집계 "—". */
 const intFmt = (v: number | null): string => (v == null ? "—" : String(v));
@@ -42,9 +43,9 @@ export function ConsoleMetricCards({ latest }: { latest: ConsoleMetricDaily }) {
     { label: "DAU", value: intFmt(latest.dau) },
     { label: "신규", value: intFmt(latest.newUsers) },
     { label: "평균 세션", value: sec(latest.avgSessionSec) },
-    { label: "광고 노출", value: String(latest.iaaImpressions) },
+    { label: "광고 노출", value: intFmt(latest.iaaImpressions) },
     { label: "광고 수익", value: won(latest.iaaEarningKrw) },
-    { label: "결제자", value: String(latest.payingUsers) },
+    { label: "결제자", value: intFmt(latest.payingUsers) },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -136,9 +137,9 @@ export function ConsoleTrendTable({ rowsDesc }: { rowsDesc: ConsoleMetricDaily[]
               <td className="px-3 py-1.5 text-right">{intFmt(r.dau)}</td>
               <td className="px-3 py-1.5 text-right">{intFmt(r.newUsers)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{sec(r.avgSessionSec)}</td>
-              <td className="px-3 py-1.5 text-right text-neutral-600">{r.iaaImpressions}</td>
+              <td className="px-3 py-1.5 text-right text-neutral-600">{intFmt(r.iaaImpressions)}</td>
               <td className="px-3 py-1.5 text-right text-neutral-600">{won(r.iaaEarningKrw)}</td>
-              <td className="px-3 py-1.5 text-right text-neutral-600">{r.payingUsers}</td>
+              <td className="px-3 py-1.5 text-right text-neutral-600">{intFmt(r.payingUsers)}</td>
             </tr>
           ))}
         </tbody>

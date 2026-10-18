@@ -67,7 +67,7 @@ export default async function AppAdsPage({ params }: { params: Promise<{ id: str
           <AdCard
             label="AIT 광고 수익"
             value={
-              consoleMetric
+              consoleMetric?.iaaEarningKrw != null
                 ? `₩${Math.round(consoleMetric.iaaEarningKrw).toLocaleString("ko-KR")}`
                 : undefined
             }

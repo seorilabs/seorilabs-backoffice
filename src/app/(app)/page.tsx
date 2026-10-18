@@ -1,3 +1,4 @@
+import { won } from "@/lib/format/units";
 import Link from "next/link";
 import { OperationsOverview } from "@/components/insights/OperationsOverview";
 import { toDbDay } from "@/lib/analytics/metric-day";
@@ -209,7 +210,7 @@ export default async function OrgReportPage({
                   empty="분해할 데이터 없음"
                 />
                 <p className="mt-2 text-xs text-neutral-400">
-                  광고 수익 — {view.doc.summary.console.listings ? `게임 ₩${Math.round(view.doc.segments.game.iaaKrw).toLocaleString("ko-KR")} · 앱 ₩${Math.round(view.doc.segments.app.iaaKrw).toLocaleString("ko-KR")}` : "미수집"}
+                  광고 수익 — {view.doc.summary.console.listings ? `게임 ${won(view.doc.segments.game.iaaKrw)} · 앱 ${won(view.doc.segments.app.iaaKrw)}` : "미수집"}
                 </p>
               </Panel>
               <Panel title="콘솔 유입경로">

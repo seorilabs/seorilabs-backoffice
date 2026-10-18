@@ -5,7 +5,8 @@
 // 리포트마다 다르게 읽힌다.
 
 /** `₩45,300` */
-export function won(value: number): string {
+export function won(value: number | null | undefined): string {
+  if (value == null) return "—";
   return `₩${Math.round(value).toLocaleString("ko-KR")}`;
 }
 
@@ -20,7 +21,8 @@ export function pct(value: number | null | undefined, digits = 1): string {
 }
 
 /** `1,234명` */
-export function count(value: number, unit = ""): string {
+export function count(value: number | null | undefined, unit = ""): string {
+  if (value == null) return "—";
   return `${Math.round(value).toLocaleString("ko-KR")}${unit}`;
 }
 

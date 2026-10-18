@@ -597,3 +597,12 @@ test("콘솔 확정일이 GA4 기준일과 다르면 그 사실을 적는다", (
   });
   assert.ok(!same.includes("콘솔 기준"), same);
 });
+
+
+test("새 부분 행의 미확인 매출로 0원이나 감소율을 만들지 않는다", () => {
+  const one = listing("partial", [{ date: REF, iaa: 9 }]);
+  const row = { ...one.rowsDesc[0], iaaEarningKrw: null, iapTrxAmountKrw: null };
+  const out = foldConsoleTotals([{ ...one, rowsDesc: [row] }], REF);
+  assert.equal(out.totals.iaaKrw, null); assert.equal(out.totals.iapKrw, null);
+  assert.equal(out.totals.previousIaaKrw, null);
+});

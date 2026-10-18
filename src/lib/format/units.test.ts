@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { count, countOrDash, pct, won } from "@/lib/format/units";
 
+test("미확인 금액과 횟수는 확인된 0과 다르게 표시한다", () => {
+  assert.equal(won(null), "—"); assert.equal(count(null), "—");
+  assert.equal(won(0), "₩0"); assert.equal(count(0), "0");
+});
+
 test("금액은 원 기호와 천 단위 구분자로 통일한다", () => {
   assert.equal(won(45_300), "₩45,300");
   assert.equal(won(0), "₩0");

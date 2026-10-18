@@ -44,14 +44,38 @@ async function main() {
     const failed = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
     assert.ok("results" in failed); assert.ok(failed.results.some((r) => r.missing.some((m) => m.metrics.includes("iaa.IOS"))));
     const after = await prisma.appConsoleMetricDaily.findMany({ where: { appId: app.id }, orderBy: { date: "asc" } });
-    assert.deepEqual(after, before);
+    const numeric = (row: typeof before[number]) => Object.fromEntries(Object.entries(row).filter(([key]) => key !== "raw"));
+    const existingAfter = after.filter((row) => row.date >= before[0].date);
+    assert.deepEqual(existingAfter.map(numeric), before.map(numeric));
+    assert.deepEqual((existingAfter[0].raw as Record<string, unknown>).iaaByOs, (before[0].raw as Record<string, unknown>).iaaByOs);
     const ledger = await prisma.metricCollectionLedger.findMany({ where: { appId: app.id, day: { gte: new Date("2026-10-10") } } });
     assert.equal(ledger.length, 2); assert.ok(ledger.every((cell) => cell.state === "observed"));
+    // 새 날짜의 일부 지표만 있어도 저장하며, 빈 지표는 실제 NULL이다.
+    const nextNow = new Date("2026-10-13T01:00:00Z");
+    fixture.state.failIap = true;
+    const partial = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    assert.equal(partial.state, "partial");
+    const where = { appId_miniAppId_date: { appId: app.id, miniAppId: 61736, date: new Date("2026-10-12") } };
+    const partialRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(partialRow.avgSessionSec, 30); assert.equal(partialRow.iaaEarningKrw, null); assert.equal(partialRow.iapTrxAmountKrw, null);
+    assert.ok((partialRow.raw as Record<string, unknown>).iaaByOs);
+    const partialLedger = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date("2026-10-12") } });
+    assert.equal(partialLedger.state, "failed"); assert.equal(partialLedger.sealed, false);
+    // 나중에 확인된 OS를 더해 광고를 복원하고 결제 미확인은 계속 NULL로 둔다.
+    fixture.state.failIos = false;
+    await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    const adRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(adRow.iaaEarningKrw, 34); assert.equal(adRow.iapTrxAmountKrw, null);
+    fixture.state.failIap = false;
+    const complete = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
+    assert.equal(complete.state, "complete");
+    const fullRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.equal(fullRow.iapTrxAmountKrw, 0); assert.equal(fullRow.iaaEarningKrw, 34);
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
     await reader!.close(); reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);
     fixture.state.failIos = false; fixture.state.rateLimits = 10; fixture.state.retryAfter = "60";
-    const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), now));
+    const limited = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
     assert.equal(limited.state, "partial"); assert.ok("blocked" in limited && limited.blocked.some((b) => b.reason.includes("공급자 요청 제한")));
     assert.ok(fixture.state.rateLimits >= 8); // 진행 중인 최대 두 요청 외의 새 조회는 보내지 않는다.
     fixture.state.revoked = true;

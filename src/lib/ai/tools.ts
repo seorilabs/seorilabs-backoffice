@@ -290,9 +290,9 @@ export async function runTool(name: string, args: Args = {}): Promise<string> {
           const dau = r.dau == null ? "미집계" : String(r.dau);
           const parts = [
             `DAU ${dau}`,
-            `IAA ${Math.round(r.iaaEarningKrw).toLocaleString()}원(${r.iaaImpressions}회)`,
+            `IAA ${r.iaaEarningKrw == null ? "미확인" : `${Math.round(r.iaaEarningKrw).toLocaleString()}원`}(${r.iaaImpressions == null ? "노출 미확인" : `${r.iaaImpressions}회`})`,
           ];
-          if (r.iapTrxAmountKrw > 0)
+          if (r.iapTrxAmountKrw != null && r.iapTrxAmountKrw > 0)
             parts.push(`IAP ${Math.round(r.iapTrxAmountKrw).toLocaleString()}원`);
           if (r.avgSessionSec != null) parts.push(`세션 ${Math.round(r.avgSessionSec)}초`);
           return `- ${dateStr(r.date)} [${r.miniAppId}]: ${parts.join(" · ")}`;

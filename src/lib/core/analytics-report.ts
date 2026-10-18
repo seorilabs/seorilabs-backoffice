@@ -1,3 +1,4 @@
+import { sumConsoleValues } from "@/lib/analytics/console-values";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { enqueueVaultWrite } from "@/lib/vault/write-core";
@@ -57,10 +58,10 @@ export interface ConsoleMetricRow {
   dau: number | null;
   newUsers: number | null;
   avgSessionSec: number | null;
-  iaaImpressions: number;
-  iaaEarningKrw: number;
-  iapTrxAmountKrw: number;
-  payingUsers: number;
+  iaaImpressions: number | null;
+  iaaEarningKrw: number | null;
+  iapTrxAmountKrw: number | null;
+  payingUsers: number | null;
 }
 
 /** 콘솔 리스팅(App×miniApp) 한 건의 보고 항목. latest=null 이면 아직 push 수집이 없는 리스팅. */
@@ -211,7 +212,7 @@ export function consoleSummaryLine(item: ConsoleReportItem, refDate: string): st
     `광고 ${count(r.iaaImpressions)}회 ${won(r.iaaEarningKrw)}`,
   ];
   // 결제는 대부분 0 이라 값이 있을 때만 붙인다.
-  if (r.payingUsers > 0 || r.iapTrxAmountKrw > 0) {
+  if ((r.payingUsers ?? 0) > 0 || (r.iapTrxAmountKrw ?? 0) > 0) {
     parts.push(`결제 ${count(r.payingUsers)}명 ${won(r.iapTrxAmountKrw)}`);
   }
   const day = dbDay(r.date);
@@ -240,13 +241,13 @@ export function buildConsoleSection(
   // 매일 같은 규칙으로 정렬해 일자 간 비교가 쉽도록 한다(수익 → DAU → 이름).
   const ranked = [...withData].sort(
     (a, b) =>
-      b.latest!.iaaEarningKrw - a.latest!.iaaEarningKrw ||
+      (b.latest!.iaaEarningKrw ?? -Infinity) - (a.latest!.iaaEarningKrw ?? -Infinity) ||
       (b.latest!.dau ?? 0) - (a.latest!.dau ?? 0) ||
       a.displayName.localeCompare(b.displayName),
   );
   const onRef = ranked.filter((i) => dbDay(i.latest!.date) === refDate);
-  const sum = (f: (r: ConsoleMetricRow) => number): number =>
-    onRef.reduce((s, i) => s + f(i.latest!), 0);
+  const sum = (f: (r: ConsoleMetricRow) => number | null): number | null =>
+    sumConsoleValues(onRef.map((i) => f(i.latest!)));
   // DAU 는 null(콘솔 미집계)과 0(방문 0명)을 구분한다 — 전부 null 이면 합계도 "—".
   const dauRows = onRef.filter((i) => i.latest!.dau != null);
 
@@ -256,7 +257,7 @@ export function buildConsoleSection(
     `광고 ${count(sum((r) => r.iaaImpressions))}회 ${won(sum((r) => r.iaaEarningKrw))}`,
   ];
   const iapTotal = sum((r) => r.iapTrxAmountKrw);
-  if (iapTotal > 0) totalParts.push(`결제 ${won(iapTotal)}`);
+  if ((iapTotal ?? 0) > 0) totalParts.push(`결제 ${won(iapTotal)}`);
 
   const lines = [
     `🧩 <b>AppsInToss 콘솔</b> (기준 ${esc(refDate)}` +

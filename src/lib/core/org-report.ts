@@ -1,3 +1,4 @@
+import { sumConsoleValues } from "@/lib/analytics/console-values";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -168,8 +169,8 @@ export function assembleOrgReportDocument(input: {
       dauPrev: ga4.length
         ? sum(ga4, (series) => series.rowsDesc[1]?.dau ?? 0)
         : null,
-      iaaKrw: sum(consoles, (series) => series.rowsDesc[0].iaaEarningKrw),
-      iapTrxKrw: sum(consoles, (series) => series.rowsDesc[0].iapTrxAmountKrw),
+      iaaKrw: sumConsoleValues(consoles.map((series) => series.rowsDesc[0].iaaEarningKrw)),
+      iapTrxKrw: sumConsoleValues(consoles.map((series) => series.rowsDesc[0].iapTrxAmountKrw)),
     };
   };
 
@@ -235,8 +236,8 @@ export function assembleOrgReportDocument(input: {
         iaaKrw: data.totals.console.iaaKrw,
         iaaPrevKrw: data.totals.console.previousIaaKrw,
         iapTrxKrw: data.totals.console.iapKrw,
-        iapSettlementKrw: sum(latestConsole, (row) => row.iapSettlementKrw),
-        payingUsers: sum(latestConsole, (row) => row.payingUsers),
+        iapSettlementKrw: sumConsoleValues(latestConsole.map((row) => row.iapSettlementKrw)),
+        payingUsers: sumConsoleValues(latestConsole.map((row) => row.payingUsers)),
         listings: data.totals.console.listings,
       },
     },
@@ -594,8 +595,8 @@ export interface OrgReportDayExcerpt {
   date: string;
   version: number;
   ga4Dau: number;
-  consoleIaaKrw: number;
-  consoleIapKrw: number;
+  consoleIaaKrw: number | null;
+  consoleIapKrw: number | null;
   highlightCount: number;
   lowlightCount: number;
   consoleLagDays: number | null;

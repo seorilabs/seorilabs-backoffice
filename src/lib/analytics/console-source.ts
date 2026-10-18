@@ -20,15 +20,15 @@ export interface ConsoleDailyMetric {
   /** 평균 세션 길이 초(dashboard_session.metric). 없으면 null. */
   avgSessionSec?: number | null;
   /** 광고 노출 수(dashboard_revenue_iaa, OS 합). */
-  iaaImpressions: number;
+  iaaImpressions?: number | null;
   /** 광고 추정 수익 원(dashboard_revenue_iaa.estimatedEarning, OS 합). */
-  iaaEarningKrw: number;
+  iaaEarningKrw?: number | null;
   /** 인앱결제 거래액 원(dashboard_revenue_iap.trxAmount). */
-  iapTrxAmountKrw: number;
+  iapTrxAmountKrw?: number | null;
   /** 인앱결제 정산액 원(dashboard_revenue_iap.settlementAmount). */
-  iapSettlementKrw: number;
+  iapSettlementKrw?: number | null;
   /** 결제 사용자 수(dashboard_revenue_iap.pu). */
-  payingUsers: number;
+  payingUsers?: number | null;
   /**
    * 부가 원본. 승격 컬럼으로 담기 애매한 값들:
    * 유입경로(전체탭/미니앱홈)·연령/성별/OS 분포·OS별 IAA(ecpm 등)·잔존 코호트·앱버전 등.
@@ -82,7 +82,7 @@ const amount = z.number().finite();
 const daySchema = z.object({
   date: z.string().refine((value) => parseMetricDay(value) !== null),
   dau: count.nullish(), newUsers: count.nullish(), avgSessionSec: amount.nonnegative().nullish(),
-  iaaImpressions: count, iaaEarningKrw: amount, iapTrxAmountKrw: amount, iapSettlementKrw: amount, payingUsers: count,
+  iaaImpressions: count.nullish(), iaaEarningKrw: amount.nullish(), iapTrxAmountKrw: amount.nullish(), iapSettlementKrw: amount.nullish(), payingUsers: count.nullish(),
   raw: z.record(z.unknown()).nullish(),
 });
 const SECRET_KEY = /^(?:token|authtoken|sessiontoken|oauthtoken|idtoken|bearertoken|accesstoken|refreshtoken|authorization|password|secret|clientsecret|cookie|apikey|xapikey|privatekey|accesskey|accesskeyid|credentials?)$/i;
