@@ -3,7 +3,7 @@ import { withFleetScopedGithubClient } from "@/lib/github/scoped-installation-cl
 import type { Candidate } from "./contracts";
 import { IssuePostRejected, isRejectedStatus } from "./post-outcome";
 
-export interface IssueReadback { number: number; title: string; body: string; state: string; url: string; labels: string[] }
+export interface IssueReadback { number: number; title: string; body: string; state: string; stateReason?: string | null; url: string; labels: string[] }
 export interface PullReadback { number: number; title: string; body: string; mergedAt: string | null; closing: number[] }
 export interface RepositoryReadback { sha: string; private: boolean; archived?: boolean; issues: IssueReadback[]; pulls: PullReadback[]; openAutopilot: number }
 /** 등록 대상 하나의 최소 권한 토큰. POST는 Octokit의 retry/throttle 재전송도 끈다. */
@@ -31,7 +31,7 @@ export class RegistrationGithub {
       this.client.paginate(this.client.rest.pulls.list, { ...args, state: "open", per_page: 100 }),
       this.recentPulls(since),
     ]);
-    const issues = [...new Map([...open, ...closed].filter((row) => !row.pull_request).map((row) => [row.number, row])).values()].map((row) => ({ number: row.number, title: row.title, body: row.body ?? "", state: row.state, url: row.html_url, labels: row.labels.map((label) => typeof label === "string" ? label : label.name ?? "") }));
+    const issues: IssueReadback[] = [...new Map([...open, ...closed].filter((row) => !row.pull_request).map((row) => [row.number, row])).values()].map((row) => ({ number: row.number, title: row.title, body: row.body ?? "", state: row.state, stateReason: row.state_reason, url: row.html_url, labels: row.labels.map((label) => typeof label === "string" ? label : label.name ?? "") }));
     const pulls: PullReadback[] = [];
     for (const row of [...new Map([...openPulls, ...recentPulls].map((row) => [row.number, row])).values()]) {
       const result = await this.client.graphql<{ repository: { pullRequest: { closingIssuesReferences: { nodes: Array<{ number: number; repository: { nameWithOwner: string } }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } } }>(`query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}pageInfo{hasNextPage endCursor}}}}}`, { owner: this.owner, repo: this.repo, number: row.number });
@@ -91,6 +91,6 @@ export class RegistrationGithub {
   }
   async issue(number: number): Promise<IssueReadback> {
     const row = (await this.client.rest.issues.get({ owner: this.owner, repo: this.repo, issue_number: number })).data;
-    return { number, title: row.title, body: row.body ?? "", state: row.state, url: row.html_url, labels: row.labels.map((label) => typeof label === "string" ? label : label.name ?? "") };
+    return { number, title: row.title, body: row.body ?? "", state: row.state, stateReason: row.state_reason, url: row.html_url, labels: row.labels.map((label) => typeof label === "string" ? label : label.name ?? "") };
   }
 }

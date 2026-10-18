@@ -35,10 +35,12 @@ export async function issueMetricFacts(appId: string, now: Date): Promise<Metric
   }
   for (const series of await providerMetricSeries(end, prisma, appId)) {
     if (series.verdict !== "lowlight") continue;
-    const current = series.points.at(-1)!, baseline = series.points.filter((point) => point.value !== null && point.valueStatus !== "provisional" && metricDaysBetween(current.day, point.day) >= 1 && metricDaysBetween(current.day, point.day) <= 7);
+    const current = series.points.find((point) => point.day === series.assessmentDay);
+    if (!current) continue;
+    const baseline = series.points.filter((point) => point.value !== null && point.valueStatus !== "provisional" && ["observed", "empty"].includes(point.state) && metricDaysBetween(current.day, point.day) >= 1 && metricDaysBetween(current.day, point.day) <= 7);
     const sorted = baseline.map((point) => point.value!).sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
     if (!sorted.length || current.value === null) continue;
-    facts.push({ metric: series.metric, day: current.day, periodStart: shiftMetricDay(current.day, -7), baseline: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2, latest: current.value, baselineDays: baseline.length, sample: current.denominator ?? Math.max(current.value, ...sorted), complete: ["observed", "empty"].includes(current.state), mature: current.valueStatus !== "provisional", source: series.source, scope: `${appId}:${series.account}:${series.resource}:${series.timeZone}:${series.currency ?? "count"}:${series.reportType}`, runId: current.runId, direction: "lowlight" });
+    facts.push({ metric: series.metric, day: current.day, periodStart: shiftMetricDay(current.day, -7), baseline: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2, latest: current.value, baselineDays: baseline.length, sample: current.denominator ?? Math.max(current.value, ...sorted), complete: ["observed", "empty"].includes(current.state), mature: current.valueStatus !== "provisional", source: series.source, scope: `${appId}:${series.account}:${series.resource}:${series.timeZone}:${series.currency ?? "count"}:${series.reportType}:${series.segment}`, runId: current.runId, direction: "lowlight" });
   }
   return facts;
 }

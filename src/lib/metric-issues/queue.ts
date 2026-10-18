@@ -8,6 +8,7 @@ import type { JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { registrationSlot, type RegistrationPolicy } from "./contracts";
 import type { RegistrationResult } from "./engine";
+import { isRejectedStatus } from "./post-outcome";
 import { unresolvedRegistrationAttempts } from "./recovery";
 export const REGISTRATION_KEY = "central-metric-issue-registration";
 export const REGISTRATION_TEMPLATE = "metric-issue-registration-v1";
@@ -68,6 +69,7 @@ export async function registrationEvent(claim: RegistrationClaim, type: string, 
   if (requestId) return prisma.agentRunEvent.createMany({ data: [data], skipDuplicates: true });
   return prisma.agentRunEvent.create({ data });
 }
+export function registrationAttemptId(runId: string, marker: string) { return `${runId}:attempt:${marker}`; }
 export async function registrationAttempt(claim: RegistrationClaim, marker: string, intent: unknown) {
   return retryPrismaConflict(() => prisma.$transaction(async (db) => {
     // POST 직전 durable capability와 운영 중지 상태를 잠그고 재확인한다.
@@ -77,11 +79,19 @@ export async function registrationAttempt(claim: RegistrationClaim, marker: stri
     const target = z.object({ appId: z.string(), repository: z.string() }).parse(intent);
     const app = await db.app.findUnique({ where: { id: target.appId }, select: { status: true, repoFullName: true } });
     if (!app || app.status !== "ACTIVE" || app.repoFullName !== target.repository) return false;
-    const created = await db.agentRunEvent.createMany({ data: [{ runId: claim.runId, generation: claim.generation, actor, type: "METRIC_ISSUE_ATTEMPT", requestId: `${claim.runId}:${marker}`, payload: JSON.parse(JSON.stringify({ marker, ...intent as object })) }], skipDuplicates: true });
+    const created = await db.agentRunEvent.createMany({ data: [{ runId: claim.runId, generation: claim.generation, actor, type: "METRIC_ISSUE_ATTEMPT", requestId: registrationAttemptId(claim.runId, marker), payload: JSON.parse(JSON.stringify({ marker, ...intent as object, attemptId: registrationAttemptId(claim.runId, marker) })) }], skipDuplicates: true });
     return created.count === 1;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
-export async function registrationResult(claim: RegistrationClaim, row: RegistrationResult) { await registrationEvent(claim, "METRIC_ISSUE_RESULT", row, row.marker ? `${claim.runId}:result:${row.marker}` : undefined); }
+export async function registrationResult(claim: RegistrationClaim, row: RegistrationResult) {
+  const attempted = row.attempted || row.status === "registered" || isRejectedStatus(row.rejectedStatus);
+  const attemptId = attempted && row.marker ? row.attemptId ?? registrationAttemptId(claim.runId, row.marker) : undefined;
+  const settled = row.status === "registered" || row.status === "needs_input" && isRejectedStatus(row.rejectedStatus);
+  // 후보의 사전 판단과 실제 POST의 결과는 서로의 idempotency key를 사용하지 않는다.
+  const requestId = attemptId ? `${attemptId}:${settled ? "settled" : "pending"}`
+    : row.marker ? `${claim.runId}:candidate:${row.marker}:${row.status}` : undefined;
+  await registrationEvent(claim, "METRIC_ISSUE_RESULT", { ...row, ...(attemptId ? { attemptId } : {}) }, requestId);
+}
 export async function finishMetricRegistration(claim: RegistrationClaim, reason: string, summary: unknown) {
   const now = new Date();
   await retryPrismaConflict(() => prisma.$transaction(async (db) => {

@@ -50,7 +50,7 @@ test("발췌·제목이 달라도 같은 파일과 선언 계약은 같은 문�
   p.port.files = async () => ({ "events.ts": 'send("action", {})\n', "contract.ts": 'required: ["id"]' });
   assert.equal(candidateMarker("seorilabs/example", changed), candidateMarker("seorilabs/example", candidate));
   await registerFixedCandidates("app", "seorilabs/example", "source", [candidate, changed], p.port);
-  assert.equal(p.counts().creates, 1); assert.deepEqual(p.results, ["registered", "linked"]);
+  assert.equal(p.counts().creates, 1); assert.deepEqual(p.results, ["registered"]);
 });
 test("라벨 조회 중 예산이 끝나면 POST 권한을 발급하지 않는다", async () => {
   const p = ports(); let active = true;
@@ -64,4 +64,33 @@ test("생성 POST의 명확한 거절은 기록하고 종료하며 일반 GET �
   assert.deepEqual(p.results, ["needs_input"]);
   const ambiguous = ports(); ambiguous.port.create = async () => { throw Object.assign(new Error("후속 GET 권한 오류"), { status: 403 }); };
   assert.equal(await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], ambiguous.port), "global-safety-blocked");
+});
+
+test("같은 파일의 다른 실행 경로는 별개의 문제이고 문구·줄 번호만 바뀌면 같은 문제다", () => {
+  const other = { ...candidate, problemKey: "other-action", proof: { ...candidate.proof, excerpt: 'send("reward", {})' } };
+  assert.notEqual(candidateMarker("seorilabs/example", candidate), candidateMarker("seorilabs/example", other));
+  assert.equal(candidateMarker("seorilabs/example", candidate), candidateMarker("seorilabs/example", { ...candidate, problemKey: "renamed-slug", title: "같은 고객 문제", proof: { ...candidate.proof, line: 50, excerpt: candidate.proof.excerpt + "\n" } }));
+});
+test("수정 완료로 닫힌 이전 문제는 다른 새 실행 경로의 등록을 막지 않는다", async () => {
+  const p = ports(), other = { ...candidate, problemKey: "other-action", title: "광고 기록 인자를 전달한다", proof: { ...candidate.proof, excerpt: 'send("reward", {})' } };
+  p.port.files = async () => ({ "events.ts": other.proof.excerpt, "contract.ts": candidate.proof.contractExcerpt });
+  p.port.readback = async () => ({ sha: "source", private: true, issues: [{ number: 2, title: candidate.title, body: `<!-- ${candidateMarker("seorilabs/example", candidate)} -->`, state: "closed", url: "https://github.com/seorilabs/example/issues/2", labels: [] }], pulls: [], openAutopilot: 0 });
+  await registerFixedCandidates("app", "seorilabs/example", "source", [other], p.port);
+  assert.equal(p.counts().creates, 1);
+});
+test("사람 이슈에 연결한 같은 문제는 같은 실행에서 다시 후보로 처리하지 않는다", async () => {
+  const p = ports(); let reads = 0;
+  p.port.readback = async () => { reads++; return { sha: "source", private: true, issues: [{ number: 2, title: "사람이 확인한 문제", body: `${candidate.proof.path}\n${candidate.proof.excerpt}`, state: "open", url: "https://github.com/seorilabs/example/issues/2", labels: [] }], pulls: [], openAutopilot: 0 }; };
+  await registerFixedCandidates("app", "seorilabs/example", "source", [candidate, { ...candidate, title: "문구만 바꾼 같은 문제" }], p.port);
+  assert.equal(reads, 1); assert.equal(p.counts().creates, 0); assert.deepEqual(p.results, ["linked"]);
+});
+
+test("사람이 기각한 같은 문제는 연결하고 수정 완료 후 현재 재현되는 문제는 다시 검증한다", async () => {
+  for (const stateReason of ["completed", "not_planned"]) {
+    const p = ports();
+    p.port.readback = async () => ({ sha: "source", private: true, issues: [{ number: 2, title: candidate.title, body: `<!-- ${candidateMarker("seorilabs/example", candidate)} -->`, state: "closed", stateReason, url: "https://github.com/seorilabs/example/issues/2", labels: [] }], pulls: [], openAutopilot: 0 });
+    await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], p.port);
+    assert.equal(p.counts().creates, stateReason === "completed" ? 1 : 0);
+    assert.deepEqual(p.results, [stateReason === "completed" ? "registered" : "linked"]);
+  }
 });

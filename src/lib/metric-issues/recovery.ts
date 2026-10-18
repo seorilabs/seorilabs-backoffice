@@ -1,12 +1,13 @@
 import type { IssueReadback } from "./github";
 import { isRejectedStatus } from "./post-outcome";
-export interface RegistrationIntent { repository: string; marker: string; title: string; body: string; labels: string[]; appId: string }
+export interface RegistrationIntent { repository: string; marker: string; title: string; body: string; labels: string[]; appId: string; attemptId?: string }
 export function unresolvedRegistrationAttempts(events: Array<{ type: string; payload: unknown }>) {
-  const settled = new Set(events.filter((event) => {
+  const settled = events.filter((event) => {
     const result = event.payload as { status?: string; rejectedStatus?: unknown };
     return event.type === "METRIC_ISSUE_RESULT" && (result.status === "registered" || result.status === "needs_input" && isRejectedStatus(result.rejectedStatus));
-  }).map((event) => (event.payload as { marker?: string }).marker));
-  return events.filter((event) => event.type === "METRIC_ISSUE_ATTEMPT").map((event) => event.payload as RegistrationIntent).filter((intent) => !settled.has(intent.marker));
+  }).map((event) => event.payload as { attemptId?: string; marker?: string });
+  return events.filter((event) => event.type === "METRIC_ISSUE_ATTEMPT").map((event) => event.payload as RegistrationIntent)
+    .filter((intent) => !settled.some((result) => intent.attemptId ? result.attemptId === intent.attemptId : result.marker === intent.marker));
 }
 export async function recoverRegistrationAttempts(events: Array<{ type: string; payload: unknown }>, port: {
   find(intent: RegistrationIntent): Promise<IssueReadback | undefined>;

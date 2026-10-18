@@ -16,3 +16,12 @@ test("미확인 시도는 본문·라벨이 확인될 때만 복구하며 새 PO
   assert.equal(await recoverRegistrationAttempts(events, { find: async () => ({ ...intent, number: 1, state: "open", url: "https://github.com/seorilabs/example/issues/1" }), confirm: async () => { confirmed++; } }), true);
   assert.equal(confirmed, 1);
 });
+
+test("다른 시도의 등록 결과나 사전 연결 결과가 현재 POST의 확정을 대신하지 못한다", async () => {
+  let reads = 0;
+  const events = [{ type: "METRIC_ISSUE_ATTEMPT", payload: { ...intent, attemptId: "run:attempt:new" } },
+    { type: "METRIC_ISSUE_RESULT", payload: { marker: intent.marker, status: "linked" } },
+    { type: "METRIC_ISSUE_RESULT", payload: { marker: intent.marker, attemptId: "other:attempt", status: "registered" } }];
+  assert.equal(await recoverRegistrationAttempts(events, { find: async () => { reads++; return undefined; }, confirm: async () => {} }), false);
+  assert.equal(reads, 1);
+});

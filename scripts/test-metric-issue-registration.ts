@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { prisma } from "@/lib/prisma";
 import { claimMetricRegistration, configureMetricRegistration, finishMetricRegistration, registrationAttempt, registrationActive, registrationResult, REGISTRATION_KEY } from "@/lib/metric-issues/queue";
-import type { RegistrationPolicy } from "@/lib/metric-issues/contracts";
+import { registerFixedCandidates, type RegistrationPorts } from "@/lib/metric-issues/engine";
+import { IssuePostRejected } from "@/lib/metric-issues/post-outcome";
+import { metricIssueReportActions } from "@/lib/metric-issues/report-actions";
+import type { Candidate, MetricFact, RegistrationPolicy } from "@/lib/metric-issues/contracts";
 const actor = "qa:metric-registration", prefix = `qa-registration-${Date.now()}`;
 const policy: RegistrationPolicy = { sha: "a".repeat(40), documentHash: "b".repeat(64), data: { schedules: { timezone: "Asia/Seoul", registration: { localTimes: ["02:00", "14:00"], openAutopilotIssueLimit: 10, mode: "evidence-batch" } }, repositories: [], titlePolicy: { forbiddenPrefixPatterns: [], forbiddenAgentOrderPattern: "[UN][0-9]+" } } };
 async function main() {
@@ -28,6 +31,7 @@ async function main() {
   await prisma.agentRun.update({ where: { id: claim.runId }, data: { startedAt } });
   assert.equal(await registrationAttempt(claim, "metric-issue:one", intent), true);
   assert.equal(await registrationAttempt(claim, "metric-issue:one", intent), false, "같은 후보 POST 권한은 한 번만 발급한다");
+  await registrationResult(claim, { appId: app.id, repository: intent.repository, marker: "metric-issue:one", attempted: true, title: intent.title, status: "needs_input", reason: "격리 응답 불명" });
   await finishMetricRegistration(claim, "global-safety-blocked", { ambiguity: true });
   assert.equal(await claimMetricRegistration(policy, new Date()), null, "불명확한 실행의 guard는 새 작업을 막는다");
   await prisma.agentLease.update({ where: { id: claim.leaseId }, data: { expiresAt: new Date(Date.now() - 1) } });
@@ -49,8 +53,43 @@ async function main() {
   await registrationResult(rejected, { appId: app.id, repository: intent.repository, marker: "metric-issue:rejected", title: intent.title, status: "needs_input", rejectedStatus: 403, reason: "격리 POST 거절" });
   await finishMetricRegistration(rejected, "global-safety-blocked", { rejected: true });
   assert.equal(await prisma.agentRepoGuard.count({ where: { activeScopeKey: "metric-issue-registration" } }), 0, "명확한 미생성은 입력 과제로 남기고 guard를 해제한다");
+  const secondReview = (await claimMetricRegistration(policy, new Date(now.getTime() + 24 * 3600_000)))!;
+  const allowed = { ...policy, data: { ...policy.data, repositories: [{ repository: "seorilabs/example", registration: "ENABLED" }] } };
+  const candidate: Candidate = { title: "첫 이벤트 계약을 맞춘다", kind: "instrumentation", problemKey: "level-start", customerProblem: "핵심 행동 인자 누락", outcome: "계약 일치", scope: ["events.ts"], acceptanceCriteria: ["인자 전달", "중복 없음"], validation: ["개발 검증"], proof: { path: "events.ts", line: 1, excerpt: 'logEvent("level_start")', contractPath: "contract.ts", contractExcerpt: "requires id", expected: "id 필요", actual: "id 없음", reproduction: "이벤트 호출" } };
+  const other = { ...candidate, title: "광고 이벤트 계약을 맞춘다", problemKey: "ad-reward", proof: { ...candidate.proof, line: 2, excerpt: 'logEvent("ad_reward", {})' } };
+  const fact: MetricFact = { metric: "ga4_dau", day: "2026-10-17", periodStart: "2026-10-10", baseline: 100, latest: 40, baselineDays: 7, sample: 100, complete: true, mature: true, source: "ga4", scope: app.id, runId: "fixture", direction: "lowlight" };
+  let fixturePosts = 0;
+  const ports: RegistrationPorts = { now: () => new Date("2026-10-18T05:00:00Z"), active: async () => true, policy: async () => allowed,
+    readback: async () => ({ sha: "source", private: true, issues: [{ number: 10, title: "사람이 등록한 문제", body: 'events.ts logEvent("level_start")', labels: [], state: "open", url: "https://github.com/seorilabs/example/issues/10" }], pulls: [], openAutopilot: 0 }),
+    files: async () => ({ "events.ts": 'logEvent("level_start")\nlogEvent("ad_reward", {})', "contract.ts": "requires id" }), relatedFix: async () => null, facts: async () => [fact], labelsExist: async () => true,
+    attempt: (marker, intent) => registrationAttempt(secondReview, marker, intent), result: (row) => registrationResult(secondReview, row), create: async () => { fixturePosts++; throw new IssuePostRejected(403); } };
+  assert.equal(await registerFixedCandidates(app.id, intent.repository, "source", [candidate, other], ports), "provider-rejected");
+  await registrationResult(secondReview, { appId: app.id, repository: intent.repository, status: "needs_input", title: "이전 실행의 해소된 라벨 입력", reason: "이전 라벨 없음" });
+  await registrationResult(secondReview, { appId: app.id, repository: intent.repository, status: "excluded", title: "이전 실행의 정책 제외", reason: "이전 정책" });
+  await finishMetricRegistration(secondReview, "global-safety-blocked", { fixturePosts });
+  assert.equal(fixturePosts, 1);
+  assert.equal(await prisma.agentRepoGuard.count({ where: { activeScopeKey: "metric-issue-registration" } }), 0, "사전 linked와 생성 POST 거절 결과가 충돌하지 않고 guard를 해제한다");
+  const outcomes = await prisma.agentRunEvent.findMany({ where: { runId: secondReview.runId, type: "METRIC_ISSUE_RESULT" }, select: { payload: true, requestId: true } });
+  assert.equal(outcomes.length, 4);
+  assert.ok(outcomes.some((one) => one.requestId?.includes(":candidate:") && (one.payload as { status: string }).status === "linked"));
+  assert.ok(outcomes.some((one) => one.requestId?.endsWith(":settled") && (one.payload as { rejectedStatus?: number }).rejectedStatus === 403));
+  const newest = (await claimMetricRegistration(policy, new Date(now.getTime() + 36 * 3600_000)))!;
+  for (const row of [{ status: "observing", title: "현재 재고를 관찰", reason: "중앙 재고 상한" }, { status: "needs_input", title: "현재 권한 입력", reason: "권한" }, { status: "needs_input", title: "현재 별도 계정 입력", reason: "별도 계정" }] as const) await registrationResult(newest, { appId: app.id, repository: intent.repository, ...row });
+  const actions = await metricIssueReportActions(new Date(now.getTime() + 36 * 3600_000 + 1000), prisma);
+  assert.ok(!actions.some((row) => row.title.includes("이전 실행") || row.title === other.title));
+  assert.equal(actions.filter((row) => ["현재 권한 입력", "현재 별도 계정 입력", "현재 재고를 관찰"].includes(row.title)).length, 3, "앱별 최신 실행의 서로 다른 상태·사유를 모두 보존한다");
+  await finishMetricRegistration(newest, "repository-pass-completed", { fixturePosts: 0 });
+  const successful = (await claimMetricRegistration(policy, new Date(now.getTime() + 48 * 3600_000)))!;
+  let successPosts = 0;
+  await registerFixedCandidates(app.id, intent.repository, "source", [candidate, other, { ...other, title: "같은 문제의 다른 문구" }], { ...ports,
+    attempt: (marker, intent) => registrationAttempt(successful, marker, intent), result: (row) => registrationResult(successful, row),
+    create: async (title, body, labels) => { successPosts++; return { title, body, labels, number: 20, state: "open", url: "https://github.com/seorilabs/example/issues/20" }; } });
+  await finishMetricRegistration(successful, "repository-pass-completed", { successPosts });
+  assert.equal(successPosts, 1);
+  assert.equal(await prisma.agentRunEvent.count({ where: { runId: successful.runId, type: "METRIC_ISSUE_RESULT", payload: { path: "$.status", equals: "registered" } } }), 1, "사전 연결 뒤 생성 성공도 결과를 잃거나 신규 이슈 수를 0으로 만들지 않는다");
+  assert.equal(await prisma.agentRepoGuard.count({ where: { activeScopeKey: "metric-issue-registration" } }), 0);
   const audit = await prisma.auditLog.count({ where: { actorLogin: actor, action: "analytics.issue-registration.configure" } });
   assert.equal(audit, 3, "설정·일시 중지·재개 각각 audit 하나");
-  console.log(JSON.stringify({ result: "PASS", concurrency: 5, durableRun: claim.runId, generation: recovery.generation, noGithubMutation: true, audit }));
+  console.log(JSON.stringify({ result: "PASS", concurrency: 5, durableRun: claim.runId, generation: recovery.generation, noGithubMutation: true, audit, fixturePosts, successPosts, secondReviewResultKeys: outcomes.map((one) => one.requestId), latestAppActions: actions.length }));
 }
 main().finally(() => prisma.$disconnect()).catch(() => { console.error("격리 이슈 등록 대기열 검증 실패"); process.exitCode = 1; });
