@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { prisma } from "@/lib/prisma";
+import { beginCollection } from "@/lib/insights/collection";
+import { importMetricReport, metricReportPartitions } from "@/lib/analytics/report-batches";
+import { providerMetricSeries } from "@/lib/analytics/report-query";
+import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
+import { unifiedMetricRowSchema } from "@/lib/analytics/unified-metrics";
+
+async function main() {
+  const database = new URL(process.env.DATABASE_URL ?? "");
+  assert.ok(["127.0.0.1", "localhost"].includes(database.hostname) && /qa|test/.test(database.pathname), "격리 QA DB에서만 실행합니다.");
+  const id = "qa-provider-report";
+  assert.equal(await prisma.app.count({ where: { id } }), 0, "기존 자료를 지우지 않습니다. 새 격리 DB가 필요합니다.");
+  await prisma.app.create({ data: { id, slug: id, displayName: "QA 보고 원천", repoFullName: `qa/${id}`, type: "APP", engine: "RN", marketTargets: ["ios"], iosBundle: "com.example.qa" } });
+  const connection = { id: "apple", source: "apple-analytics" as const, enabled: true, accountId: "11111111-1111-1111-1111-111111111111", resourceId: "123456789", credentialId: "shared/apple/app-store-connect-uploader", timeZone: "UTC" };
+  const payload = configRevisionPayloadSchema.parse({ schemaVersion: 1, markets: [], analyticsSources: [connection] });
+  const revision = await prisma.configRevision.create({ data: { appId: id, revision: 1, status: "ACTIVE", payload, payloadHash: "a".repeat(64), createdBy: "qa", idempotencyKey: id } });
+  const run = await beginCollection(connection.source, connection.id, id);
+  const row = (value: number | null, country: string) => unifiedMetricRowSchema.parse({ metric: "store_downloads", value, state: value === null ? "not_landed" : value ? "observed" : "empty", valueStatus: "analyzable", currency: null, dimensions: { Territory: country } });
+  const batch = { appId: id, configRevisionId: revision.id, connectionId: connection.id, source: connection.source, accountId: connection.accountId, resourceId: connection.resourceId, timeZone: "UTC", reportType: "App Downloads Standard", periodStart: "2026-10-10", periodEnd: "2026-10-10", grain: "daily" as const, processingDate: "2026-10-12", sourceVersion: "instance:one", sourceHash: "a".repeat(64), sourceUri: "https://api.appstoreconnect.apple.com/v1/analyticsReportInstances/one", rows: [row(5, "US"), row(5, "JP")] };
+  const parallel = await Promise.all([importMetricReport(batch, run.id), importMetricReport(batch, run.id)]);
+  assert.equal(parallel[0].id, parallel[1].id);
+  assert.equal(await prisma.metricReportBatch.count({ where: { appId: id } }), 1);
+  await assert.rejects(importMetricReport({ ...batch, accountId: "22222222-2222-2222-2222-222222222222" }, run.id), /CONNECTION_MISMATCH/);
+  await assert.rejects(importMetricReport({ ...batch, sourceUri: "https://evil.example/source" }, run.id), /URI_MISMATCH/);
+  await importMetricReport({ ...batch, sourceVersion: "instance:two", processingDate: "2026-10-13", sourceHash: "b".repeat(64), rows: [row(8, "US")] }, run.id);
+  const partitions = await metricReportPartitions("2026-10-17", prisma, id);
+  assert.equal(partitions.length, 1); assert.equal(partitions[0].rows.length, 1);
+  const series = await providerMetricSeries("2026-10-17", prisma, id);
+  assert.equal(series[0].points[0].value, 8, "이전 JP 5건을 최신 partition에 더하면 안 됩니다.");
+  assert.equal(series[0].dimensions[0].labels.Territory, "US");
+  await importMetricReport({ ...batch, sourceVersion: "instance:three", processingDate: "2026-10-14", sourceHash: "c".repeat(64), rows: [row(8, "US"), row(null, "JP")] }, run.id);
+  assert.equal((await providerMetricSeries("2026-10-17", prisma, id))[0].points[0].value, null);
+  await prisma.configRevision.update({ where: { id: revision.id }, data: { status: "SUPERSEDED" } });
+  await assert.rejects(importMetricReport(batch, run.id), /CONFIG_STALE/);
+  assert.equal((await metricReportPartitions("2026-10-17", prisma, id)).length, 0, "현재 활성 연결 없는 자료를 최신 분석에 노출하지 않습니다.");
+  assert.equal(await prisma.metricReportBatch.count({ where: { appId: id } }), 3, "원천 이력은 보존합니다.");
+  console.log(JSON.stringify({ ok: true, duplicate: "passed", partitionReplacement: "passed", missing: "passed", connectionScope: "passed", history: "passed", appId: id, runId: run.id }));
+}
+main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

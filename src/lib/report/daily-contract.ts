@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { metricDayOf, metricDayStart, shiftMetricDay } from "@/lib/analytics/metric-day";
+import { providerSeriesSchema } from "@/lib/analytics/report-query";
 
 export const sourceCoverageSchema = z.object({
   appId: z.string(), slug: z.string(), appName: z.string(),
@@ -25,6 +26,8 @@ export const dailyEditionSchema = z.object({
   frozenAt: z.string().datetime(), inputHash: z.string(),
   sources: z.array(sourceCoverageSchema), trend: z.array(frozenTrendSchema),
   conclusions: z.array(z.string()).max(3),
+  providerMetrics: z.array(providerSeriesSchema).default([]),
+  weekly: z.array(z.string()).default([]),
   context: z.array(z.string()).default([]),
   replacesVersion: z.number().int().positive().optional(),
   changes: z.array(z.object({ label: z.string(), before: z.string(), after: z.string() }).strict()).default([]),

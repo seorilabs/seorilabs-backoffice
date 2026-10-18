@@ -20,7 +20,8 @@ export function reportFactsHash(doc: OrgReportDocument): string {
     refDate: doc.refDate, summary: doc.summary, apps: doc.apps, movements: doc.movements,
     retention: doc.retention, trend: doc.edition?.trend,
     cohorts: doc.edition?.cohorts,
-    sources: doc.edition?.sources.map(({ slug, source, state, dataThrough, configRevision }) => ({ slug, source, state, dataThrough, configRevision })),
+    providerMetrics: doc.edition?.providerMetrics.map((series) => ({ ...series, points: series.points.map((point) => ({ ...point, runId: undefined })) })),
+    sources: doc.edition?.sources.map(({ slug, source, reportType, account, state, dataThrough, configRevision }) => ({ slug, source, reportType, account, state, dataThrough, configRevision })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
   })).digest("hex");
@@ -36,6 +37,11 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   compare("토스 광고 추정 수익(KRW)", before.summary.console.iaaKrw, after.summary.console.iaaKrw);
   compare("토스 결제 거래액(KRW)", before.summary.console.iapTrxKrw, after.summary.console.iapTrxKrw);
   for (const app of after.apps) compare(`${app.displayName} 활성(명)`, before.apps.find((row) => row.slug === app.slug)?.ga4?.dau ?? null, app.ga4?.dau ?? null);
+  for (const series of after.edition?.providerMetrics ?? []) {
+    const match = before.edition?.providerMetrics.find((row) => row.appId === series.appId && row.source === series.source && row.account === series.account && row.resource === series.resource && row.reportType === series.reportType && row.metric === series.metric && row.currency === series.currency && row.timeZone === series.timeZone);
+    const latest = series.points.at(-1);
+    if (latest) compare(`${series.appName} ${series.metric} ${latest.day} ${series.currency ?? series.unit}`, match?.points.find((row) => row.day === latest.day)?.value ?? null, latest.value);
+  }
   return changes;
 }
 
@@ -52,6 +58,8 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
     `**일간 보고 · ${doc.refDate} · v${version}${doc.published?.corrections ? " · 정정" : ""}**`,
     ...(edition?.changes.slice(0, 3).map((change) => `- 정정 ${change.label}: ${change.before} → ${change.after}`) ?? []),
     ...(edition?.conclusions ?? reportConclusions(doc)).map((line) => `- ${line}`),
+    ...(edition?.weekly ?? []).map((line) => `- ${line}`),
+    ...(edition?.providerMetrics.filter((series) => series.verdict === "highlight" || series.verdict === "lowlight").slice(0, 3).map((series) => { const point = series.points.at(-1)!; return `- ${series.verdict === "highlight" ? "좋아진 점" : "나빠진 점"} · ${series.appName} · ${series.metric}: ${point.value?.toLocaleString("ko-KR") ?? "미확인"} ${series.currency ?? series.unit} · ${point.day} ${series.timeZone}`; }) ?? []),
     "", "**좋아진 점**", ...(!movementLines("highlight").length ? ["- 기준선을 넘는 변화 없음"] : movementLines("highlight")),
     "**나빠진 점**", ...(!movementLines("lowlight").length ? ["- 기준선을 넘는 변화 없음"] : movementLines("lowlight")),
     "", `GA4 활성 합계 ${doc.summary.ga4.apps ? `${doc.summary.ga4.dau.toLocaleString("ko-KR")}명` : "미수집"} · 관측 ${doc.summary.ga4.apps}개 앱 · ${doc.refDate}`,

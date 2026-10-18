@@ -133,6 +133,7 @@ export interface BlueprintDraft {
 export interface MonitoringDraft { declared: boolean; enabled: boolean; keywords: string; countries: string; competitorAppIds: string; officialFeeds: string[]; checkSupportLinks: boolean; }
 
 export interface ConfigDraft {
+  analyticsSources: import("@/lib/analytics/source-contract").AnalyticsConnection[];
   markets: MarketDraft[];
   localizations: LocalizationDraft[];
   assets: AssetDraft[];
@@ -304,6 +305,7 @@ export function emptyAdsDraft(): AdsDraft {
 
 export function emptyConfigDraft(): ConfigDraft {
   return {
+    analyticsSources: [],
     markets: [],
     localizations: [],
     assets: [],
@@ -340,6 +342,7 @@ export function draftFromPayload(payload: unknown): ConfigDraft {
   const blueprint = emptyBlueprintDraft();
 
   return {
+    analyticsSources: array(source.analyticsSources).map((entry) => { const row = record(entry); return { id: text(row.id), source: text(row.source) as import("@/lib/analytics/source-contract").AnalyticsConnection["source"], enabled: row.enabled === true, accountId: text(row.accountId), resourceId: text(row.resourceId), credentialId: text(row.credentialId), timeZone: text(row.timeZone) }; }),
     markets: array(source.markets).map((entry) => {
       const item = record(entry);
       return {
@@ -592,6 +595,7 @@ export function payloadFromDraft(draft: ConfigDraft): Record<string, unknown> {
 
   return {
     schemaVersion: 1,
+    ...(draft.analyticsSources.length ? { analyticsSources: draft.analyticsSources } : {}),
     ...(draft.monitoring.declared ? { monitoring: { enabled: draft.monitoring.enabled, keywords: splitList(draft.monitoring.keywords), countries: splitList(draft.monitoring.countries), competitorAppIds: splitList(draft.monitoring.competitorAppIds), officialFeeds: draft.monitoring.officialFeeds, checkSupportLinks: draft.monitoring.checkSupportLinks } } : {}),
     markets: draft.markets.map((entry) => ({
       market: entry.market,

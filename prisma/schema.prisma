@@ -2735,6 +2735,31 @@ model InsightDocument {
 
 // 10:45에 입력을 동결한다. 원본 문서는 생성 후 수정하지 않는다.
 // 해설·그림은 별도 선택 필드이며 준비 실패 시에도 원본으로 발행한다.
+model MetricReportBatch {
+  id               String @id @default(cuid())
+  appId            String
+  configRevisionId String
+  connectionId     String @db.VarChar(64)
+  source           String @db.VarChar(32)
+  accountId        String @db.VarChar(191)
+  resourceId       String @db.VarChar(191)
+  reportType       String @db.VarChar(191)
+  periodStart      DateTime @db.Date
+  periodEnd        DateTime @db.Date
+  grain            String @db.VarChar(16)
+  timeZone         String @db.VarChar(80)
+  processingDate   DateTime @db.Date
+  sourceVersion    String @db.VarChar(191)
+  sourceHash       String @db.Char(64)
+  sourceUri        String @db.VarChar(2048)
+  dedupeKey        String @unique @db.Char(64)
+  runId            String
+  rows             Json
+  createdAt        DateTime @default(now()) @db.DateTime(3)
+  @@index([appId, source, periodStart, processingDate])
+  @@map("metric_report_batch")
+}
+
 model OrgReportPreparation {
   id               String @id @default(cuid())
   date             DateTime @unique @db.Date

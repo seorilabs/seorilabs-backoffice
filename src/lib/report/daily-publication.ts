@@ -15,6 +15,9 @@ import { enqueueNotification, requeueNotification } from "@/lib/notifications/ou
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { reportCohorts } from "./cohorts";
+import { providerMetricSeries } from "@/lib/analytics/report-query";
+import { METRIC_DICTIONARY } from "@/lib/analytics/unified-metrics";
+import { metricDayWindow } from "@/lib/analytics/metric-day";
 
 async function freezeDailyReport(now: Date, refDate: string, db: Prisma.TransactionClient) {
   const schedule = dailyReportSchedule(metricDayStart(shiftMetricDay(refDate, 1)));
@@ -22,14 +25,22 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const sources = await metricSourceInventory(refDate, db);
     const trend = await orgTrendSeries(refDate, 28, db);
     const cohorts = await reportCohorts(refDate, db);
+    const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
+}
+
+function weeklyReportSummary(trend: Awaited<ReturnType<typeof orgTrendSeries>>, now: Date) {
+  if (new Intl.DateTimeFormat("en", { timeZone: "Asia/Seoul", weekday: "short" }).format(now) !== "Mon") return [];
+  const latest = trend.slice(-7), previous = trend.slice(-14, -7);
+  // 대상별 획득 범위가 다른 일간 합계를 주간 성장률로 오인하지 않는다.
+  return [`주간 관측: 최근 7일 중 GA4 ${latest.filter((point) => point.ga4Dau !== null).length}일, 직전 주 ${previous.filter((point) => point.ga4Dau !== null).length}일 자료 확보.`, "수정 후 효과는 같은 앱·대상·버전의 관찰 기간과 표본을 확보한 뒤 판단합니다. 아래 28일 추이와 코호트를 함께 확인하세요."];
 }
 
 /** 외부 호출 전에 일관된 DB snapshot을 저장한다. 재시도는 같은 준비본을 유지한다. */
@@ -78,8 +89,18 @@ export async function dailyReportImage(doc: OrgReportDocument) {
       { label: "결제 거래액", color: "#7c3aed", values: points.map((point) => point.consoleIapTrxKrw) },
     ] },
   ];
-  const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: points.map((point) => point.date) }))).png().toBuffer()));
-  const bytes = await sharp({ create: { width: 960, height: 1020, channels: 4, background: "#fff" } })
+  const provider = doc.edition?.providerMetrics.find((series) => series.points.some((point) => point.value !== null) && series.points.every((point) => point.value === null || point.value >= 0));
+  if (provider) {
+    const days = metricDayWindow(provider.points.at(-1)!.day, 28);
+    charts.push({ title: `${provider.appName} · ${METRIC_DICTIONARY[provider.metric].label}`, unit: provider.currency ?? provider.unit,
+      source: `${provider.source} · ${provider.timeZone} · ${provider.reportType} · 발행 입력 고정`,
+      series: [{ label: METRIC_DICTIONARY[provider.metric].label, color: "#0891b2", values: days.map((day) => provider.points.find((point) => point.day === day)?.value ?? null) }],
+      // 이 패널은 공급자 시간대의 달력일을 사용한다.
+      days,
+    } as typeof charts[number] & { days: string[] });
+  }
+  const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer()));
+  const bytes = await sharp({ create: { width: 960, height: charts.length * 510, channels: 4, background: "#fff" } })
     .composite(buffers.map((input, index) => ({ input, left: 0, top: index * 510 }))).png().toBuffer();
   return { filename: "daily-report.png", contentType: "image/png", base64: bytes.toString("base64") };
 }

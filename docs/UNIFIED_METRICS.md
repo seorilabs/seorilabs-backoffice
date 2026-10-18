@@ -1,0 +1,31 @@
+# 통합 지표 연결과 일간 보고 운영
+
+설계·승인과 L3 테스트 계획은 [승인 설계](design/2026-10-18-unified-daily-metrics/design.md)에 있다. 자료가 없는 소스는 성과 0으로 표시하지 않는다.
+
+## 연결
+
+앱 통합 관리의 **지표 보고 소스**에서 계정·앱 공개 식별자·원천 시간대와 기존 credential logical ID를 입력한다. 기존 중앙 설정의 초안→검증→활성화 서비스, 앱 권한, revision 동시성 검사를 그대로 사용한다. 다른 설정을 편집해도 이 연결을 보존한다. 각 연결의 수집 사용 여부를 개별 중지할 수 있다. 비밀값은 이 화면과 DB에 저장하지 않는다.
+
+| 소스 | 기존 자격증명 | 필요한 입력·확인 |
+|---|---|---|
+| App Store 분석 | `shared/apple/app-store-connect-uploader` | issuer ID, 숫자 app ID, UTC. bundle ID를 공급자에서 다시 확인한다. 최초 ONGOING·ONE_TIME_SNAPSHOT 생성에는 계정의 보고서 관리 권한이 필요하다. |
+| Google Play 설치 보고 | `shared/google-play/publisher` | `pubsite_prod_rev_*` bucket, package, 원천 보고 시간대. 게시 권한과 보고서 bucket 읽기 권한은 별개다. |
+| AdMob 네트워크 보고 | `shared/admob/reporting` | publisher·AdMob app ID, 별도 보고 OAuth 동의와 계정 시간대. Play/Firebase 인증으로 대체하지 않는다. 현재 미등록이면 기존 연결을 제공받기 전까지 입력 필요다. |
+
+Apple은 Standard 보고서만 사용하여 Detailed와 중복 합산하지 않는다. 다운로드·발견/참여·설치/삭제·세션·오류·동의·구매·구독 이벤트/상태를 지원한다. 모든 페이지와 segment를 확인하고 MD5·크기 검증을 마친 뒤 날짜 partition을 저장한다. 같은 날짜의 더 최신 processingDate는 이전 차원 행을 통째로 대체한다. 최초 자료 생성 대기와 개인정보 보호에 따른 빈 셀은 확인된 0이 아니다.
+
+Play는 국가별 월간 설치 파일의 generation을 고정하고 CRC32C를 검증한다. 전체 합계 파일을 함께 합산하지 않는다. API 연결이 없는 공식 파일은 `POST /api/admin/analytics/import-play-report`로 원본 base64·SHA256·공식 gs 경로·generation·processingDate를 제공한다. 관리자 토큰이 필요하며 앱/계정/패키지/월/설정/해시가 다르면 거절한다. 응답은 runId와 처리 날짜 범위다.
+
+AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 금액은 실제 통화 단위로 변환하며 응답률·표시율·eCPM은 원천 분자·분모로 계산한다. GA4 광고 수익과 더하지 않는다. 광고 소스별 mediation 보고는 네트워크 보고와 서로 다른 범위이며 네트워크 자료로 광고 소스별 수치를 만들어내지 않는다.
+
+판매·환불·정산 파일, 광고 집행 계정, Firebase 품질·실험·메시지 내보내기는 실제 계정/자료와 필수 입력을 확인하기 전까지 연결로 표시하지 않는다. Apple 판매·정산에는 Vendor Number와 보고서 역할, Play 판매·정산에는 실제 보고 bucket·유형이 필요하다. GA4 export만으로 Crashlytics·Performance 내보내기 존재를 판단하지 않는다.
+
+## 수집과 발행
+
+`backoffice-extended-metrics`는 10:00 KST에 같은 배포 이미지의 전용 worker로 실행한다. 조회에 필요한 자격증명만 전달하며 Discord·GitHub mutation 토큰은 주입하지 않는다. 활성 연결의 제공되는 최근 90일 자료를 가져오고 원천 버전·해시로 재처리를 구분한다. Apple 다운로드 캐시는 모든 checksum과 완료된 이전 실행이 있을 때만 재사용한다. 조회 API는 `/api/admin/analytics/extended-collect`이며 실행별 ID·범위·상태를 반환한다. `failed`/`partial` worker 실행은 실패 exit로 남고 `not_landed`는 원장에 기록한다.
+
+10:45 준비와 11:00 발행은 별도 작업이다. 발행은 저장된 문서·PNG만 읽고 외부 수집·AI 응답을 기다리지 않는다. 부족한 입력은 수집 현황에 표시하며 변화가 없어도 발행한다. 늦은 자료는 버전과 근거를 함께 보존하고 구형 보고서는 자동 변환하지 않는다. 월요일에는 같은 발행본에 주간 관측 범위와 추이를 포함한다. 월간 비용은 기존 비용 수집의 실제 기준월과 상태로 표시하고 앱별 배분을 추정하지 않는다.
+
+종합 보고서·Discord·CSV는 같은 발행 버전의 자료를 사용한다. 앱별 지표 화면은 최신 자료 탐색이며 발행 당시 고정 수치와 구분한다. 원천 기간·시간대·통화·대상·분모를 유지하고 고유 기기 수를 차원 사이에 합산하지 않는다. 국가·버전·유입·광고 형식은 최신 원천 차원 행으로 탐색하며 순서가 없는 행동 집계를 사용자 전환 퍼널로 만들지 않는다.
+
+배포·전송 응답만으로 완료를 판정하지 않는다. exact SHA/digest·migration·웹 표시·CronJob·worker·Discord 메시지/첨부/고정 버전 링크와 숫자를 각각 다시 읽는다.

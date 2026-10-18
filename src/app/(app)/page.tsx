@@ -1,5 +1,6 @@
 import { won } from "@/lib/format/units";
 import { DailyEditionSummary, DailyEditionActions, DailyEditionSources, DailyEditionCohorts } from "@/components/report/DailyEditionSections";
+import { ProviderMetrics } from "@/components/report/ProviderMetrics";
 import { requirePlatformReadAccess } from "@/lib/platform/access";
 import Link from "next/link";
 import { OperationsOverview } from "@/components/insights/OperationsOverview";
@@ -193,6 +194,7 @@ export default async function OrgReportPage({
             {sp.mode === "analysis" && <OperationsOverview />}
             <NarrativeBlock narrative={view.doc.narrative} />
             <DailyEditionCohorts doc={view.doc} />
+            {view.doc.edition && <ProviderMetrics series={view.doc.edition.providerMetrics} />}
             <DailyEditionActions doc={view.doc} />
 
             <Panel title="앱별 비교">

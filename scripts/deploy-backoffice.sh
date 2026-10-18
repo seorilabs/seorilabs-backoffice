@@ -359,6 +359,12 @@ if [ "$store_submission_image" != "$image" ]; then
   exit 1
 fi
 apply_image_manifest store-review-cronjob.yaml
+apply_image_manifest extended-metrics-cronjob.yaml
+extended_metrics_image="$(k -n "$namespace" get cronjob backoffice-extended-metrics -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+if [[ "$extended_metrics_image" != "$image" ]]; then
+  echo "공식 지표 collector 이미지가 배포 후보와 다릅니다." >&2
+  exit 1
+fi
 store_review_image="$(k -n "$namespace" get cronjob backoffice-store-reviews -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
 if [ "$store_review_image" != "$image" ]; then
   echo "오류: store-review CronJob 이미지 digest가 일치하지 않는다" >&2
