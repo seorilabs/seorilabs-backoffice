@@ -60,6 +60,9 @@ Claude 전환 후보를 운영에 적용하기 전에 자격증명 정책의 원
 키가 없는 상태의 배포는 Secret 참조 단계에서 차단된다. 코드 PR·로컬 API 연결 성공은 운영 전환 완료가 아니다.
 
 ## 4. 이미지 빌드 & 배포
+
+앱운영이벤트 채널은 신규 계정과 새 버전 첫 유입을 건별로 알린다. 최초 계정은 기존 최초 카드 한 건을 유지한다. 수신 API의 원장 저장과 알림 대기 생성은 별도 단계이며, 같은 eventId 재전송은 알림을 중복 생성하지 않고 저장 뒤 실패를 복구한다. 결제와 광고의 반복 성공 제외 기준은 그대로다.
+
 CI(`.github/workflows/deploy.yml`)는 push main 시 검증·이미지 빌드/푸시만 수행한다.
 운영 롤아웃은 명시적 `workflow_dispatch`의 `deploy=true`로 실행한다. 필요 GitHub secrets:
 - `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` (registry.vzyx.xyz push)

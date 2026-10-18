@@ -2,10 +2,13 @@ import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { recordIapGrant } from "@/lib/notifications/iap-summary";
+import { discordDestinations } from "@/lib/notifications/destinations";
+import { enqueueNotification } from "@/lib/notifications/outbox";
 import { prisma } from "@/lib/prisma";
 import {
   shouldReportOperationalFailure,
   operationalEventFacts,
+  operationalEventLine,
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
@@ -116,17 +119,35 @@ export async function POST(request: NextRequest) {
     });
   } else {
     // 다른 주문의 성공은 기존 지급 실패가 해결됐다는 근거가 아니다.
+    let milestone = false;
     if (app) {
       if (input.type === "iap.granted")
         await recordIapGrant({ app, event: input });
       else
-        await recordOperationalMilestone({
+        milestone = await recordOperationalMilestone({
           appId: app.id,
           displayName: app.displayName,
           event: input,
         });
     }
-    // 반복 성공은 operational_event 원장에서 조회한다. 동일 실패의 두 번째 카드도 만들지 않는다.
+    // 최초 계정은 기존 최초 카드 한 건으로 알리고, 이후 계정과 새 버전은 건별로 남긴다.
+    // 중복 재전송도 같은 키로 enqueue하여 원장 저장 뒤 전송 대기 실패를 복구한다.
+    if (
+      (input.type === "identity.created" && !milestone) ||
+      input.type === "app.version.first_seen"
+    ) {
+      await enqueueNotification({
+        dedupeKey: `operational:${input.eventId}`,
+        kind: "OPERATIONAL_EVENT",
+        occurredAt,
+        payload: {
+          text: operationalEventLine(input, app?.displayName ?? input.appId),
+          plain: true,
+          report: { category: "change", reason: "REQUESTED_APP_EVENT_ROW" },
+        },
+        destinations: discordDestinations(["action-events"]),
+      });
+    }
   }
   return NextResponse.json(
     { ok: true, duplicate },

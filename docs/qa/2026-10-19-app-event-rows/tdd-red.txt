@@ -1,0 +1,61 @@
+✖ 신규 계정과 새 버전 첫 유입은 실제 라우트에서 한 줄 알림을 대기시킨다 (41.747666ms)
+✖ 미등록 앱도 원본 appId로 건별 알림을 보낸다 (1.06825ms)
+✔ 최초 계정과 같은 이벤트 재전송은 기존 최초 카드 한 건으로 수렴한다 (2.650375ms)
+✖ 원장 저장 뒤 enqueue 실패도 재전송으로 복구하고 추가 알림을 만들지 않는다 (0.67225ms)
+✔ 광고 반복 성공과 테스트 결제 실패를 이 채널에 추가하지 않는다 (0.89475ms)
+✔ 잘못된 서명과 금지 속성은 원장이나 알림을 만들기 전에 거부한다 (0.49525ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 3
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 348.742209
+
+✖ failing tests:
+
+test at src/lib/platform/operational-event-delivery.test.ts:2:3986
+✖ 신규 계정과 새 버전 첫 유입은 실제 라우트에서 한 줄 알림을 대기시킨다 (41.747666ms)
+  AssertionError [ERR_ASSERTION]: identity.created
+      at TestContext.<anonymous> (/Users/syous/Repositories/seorilabs/seorilabs-backoffice.worktrees/restore-app-event-rows/src/lib/platform/operational-event-delivery.test.ts:95:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at src/lib/platform/operational-event-delivery.test.ts:2:5183
+✖ 미등록 앱도 원본 appId로 건별 알림을 보낸다 (1.06825ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /bloomhand/. Input:
+  
+  'undefined'
+  
+      at TestContext.<anonymous> (/Users/syous/Repositories/seorilabs/seorilabs-backoffice.worktrees/restore-app-event-rows/src/lib/platform/operational-event-delivery.test.ts:109:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: /bloomhand/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at src/lib/platform/operational-event-delivery.test.ts:2:6174
+✖ 원장 저장 뒤 enqueue 실패도 재전송으로 복구하고 추가 알림을 만들지 않는다 (0.67225ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (/Users/syous/Repositories/seorilabs/seorilabs-backoffice.worktrees/restore-app-event-rows/src/lib/platform/operational-event-delivery.test.ts:123:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /outbox temporarily unavailable/,
+    operator: 'rejects',
+    diff: 'simple'
+  }

@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-10-19 | [앱 운영 이벤트 건별 알림 복원](2026-10-19-app-event-rows/design.md) — 사용자 건별 복원 선택, L1 서비스 검증과 웹 운영 반영 | [#518](https://github.com/seorilabs/seorilabs-backoffice/issues/518) |
 | 2026-10-18 | [Play 승격 제어 ref](2026-10-18-play-promotion-control-ref/design.md) — 사용자 “둘다 진행”, L1/dev | [#489](https://github.com/seorilabs/seorilabs-backoffice/issues/489) |
 | 2026-10-18 | [앱인토스 결측 지표 부분 저장](2026-10-18-ait-partial-metrics/design.md) — 사용자 직접 수정 지시, L3 개발 환경 검증·PR·병합 범위 | [#485](https://github.com/seorilabs/seorilabs-backoffice/issues/485) |
 | 2026-10-17 | [Claude API 전환 v1](2026-10-17-claude-api/design.md) — 연결 변경 직접 수행 지시, L1 개발 검증·Ready PR 범위 | BO-CLAUDE-20261017-v1 · [#468](https://github.com/seorilabs/seorilabs-backoffice/issues/468) |
