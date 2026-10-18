@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { transpileModule, ModuleKind, ScriptTarget } from "typescript";
 
 import {
   excludeHistoricalReleaseMarkers,
@@ -179,6 +180,43 @@ test("웹 릴리스와 build mutation은 현재 DB role과 AppOwner write gate�
   assert.match(builds, /ref: releaseTag/);
   assert.match(builds, /expectedTag: \{ tag: releaseTag, sha: releaseSha \}/);
   assert.doesNotMatch(builds, /resolveRefSha\(/);
+});
+
+test("Play 승격은 main이 아닌 기본 브랜치의 계약·실행 ref와 불변 빌드를 결합한다", async () => {
+  // DB·GitHub import를 실행하지 않고 실제 운영 함수 본문을 경계 대체로 실행한다.
+  const body = `${bodyOf(source(RELEASE_OPS), "promoteGooglePlay")}\n}`;
+  const compiled = transpileModule(body.replace("export async", "async"), {
+    compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+  }).outputText;
+  const tag = "v1.0.2";
+  const sha = "1".repeat(40);
+  const requests: Array<Record<string, unknown>> = [];
+  const ports = {
+    normalizeTag: (input: string) => input,
+    loadReleaseNoteTranslations: async () => ({ koKR: "개선" }),
+    getRepoDefaultBranch: async (repo: string) => {
+      assert.equal(repo, "seorilabs/bloomhand");
+      return "stable-control";
+    },
+    getWorkflowDispatchContract: async (repo: string, file: string, ref: string) => {
+      requests.push({ kind: "contract", repo, file, ref });
+      return { inputNames: new Set(["from_track", "to_track", "release_status", "rollout"]) };
+    },
+    PROMOTE_WORKFLOW: "promote-google-play.yml",
+    resolveStableAuthority: async () => ({ tag, sha, kind: "ledger" }),
+    dispatchWorkflow: async (request: Record<string, unknown>) => { requests.push(request); },
+    recordReleaseAudit: async () => undefined,
+  };
+  const promote = new Function(...Object.keys(ports), `${compiled}; return promoteGooglePlay;`)(...Object.values(ports));
+  await promote({ repoFullName: "seorilabs/bloomhand", tag, rollout: 0.5 });
+  assert.deepEqual(requests, [
+    { kind: "contract", repo: "seorilabs/bloomhand", file: "promote-google-play.yml", ref: "stable-control" },
+    {
+      repoFullName: "seorilabs/bloomhand", workflowFile: "promote-google-play.yml", ref: "stable-control",
+      inputs: { release_tag: tag, from_track: "internal", to_track: "production", release_status: "completed", rollout: "0.5" },
+      expectedTag: { tag, sha },
+    },
+  ]);
 });
 
 test("Play 승격과 App Store provider write는 exact stable tag SHA 뒤에만 실행된다", () => {
