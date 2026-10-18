@@ -21,13 +21,15 @@ export function reportFactsHash(doc: OrgReportDocument): string {
   return createHash("sha256").update(JSON.stringify({
     refDate: doc.refDate, summary: doc.summary, apps: doc.apps, movements: doc.movements,
     retention: doc.retention, trend: doc.edition?.trend,
+    referrers: [...doc.referrers].sort((a, b) => a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0),
     cohorts: doc.edition?.cohorts,
     costs: doc.costs ? { month: doc.costs.month, figures: doc.costs.figures, summaryLines: doc.costs.summaryLines, warnings: doc.costs.warnings } : null,
     providerMetrics: doc.edition?.providerMetrics.map((series) => ({ ...series, points: series.points.map((point) => ({ ...point, runId: undefined, sourceHash: undefined, sourceUri: undefined, configRevisionId: undefined })) })),
     sources: doc.edition?.sources.map(({ slug, source, reportType, account, state, dataThrough }) => ({ slug, source, reportType, account, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
-  })).digest("hex");
+  // MySQL JSON을 왕복한 실수의 마지막 자릿수 차이로 같은 사실을 정정하지 않는다.
+  }, (_key, value: unknown) => typeof value === "number" && !Number.isInteger(value) ? Number(value.toPrecision(15)) : value)).digest("hex");
 }
 
 export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReportDocument) {
@@ -39,6 +41,12 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   compare("GA4 관측 앱", before.summary.ga4.apps, after.summary.ga4.apps);
   compare("토스 광고 추정 수익(KRW)", before.summary.console.iaaKrw, after.summary.console.iaaKrw);
   compare("토스 결제 거래액(KRW)", before.summary.console.iapTrxKrw, after.summary.console.iapTrxKrw);
+  const referrers = new Set([...before.referrers, ...after.referrers].map((row) => row.dimension));
+  const share = (doc: OrgReportDocument, dimension: string) => {
+    const row = doc.referrers.find((item) => item.dimension === dimension);
+    return row ? Number((row.rate * 100).toFixed(10)) : null;
+  };
+  for (const dimension of referrers) compare(`${dimension} 유입 비율(%)`, share(before, dimension), share(after, dimension));
   for (const app of after.apps) compare(`${app.displayName} 활성(명)`, before.apps.find((row) => row.slug === app.slug)?.ga4?.dau ?? null, app.ga4?.dau ?? null);
   for (const series of after.edition?.providerMetrics ?? []) {
     const match = before.edition?.providerMetrics.find((row) => row.appId === series.appId && row.source === series.source && row.account === series.account && row.resource === series.resource && row.reportType === series.reportType && row.metric === series.metric && row.segment === series.segment && row.currency === series.currency && row.timeZone === series.timeZone);

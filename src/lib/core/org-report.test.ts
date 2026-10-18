@@ -331,6 +331,44 @@ test("해설·생성 시각은 정정 지문을 바꾸지 않고 수치는 바�
   assert.ok(reportCorrectionDiff(before, after).some((row) => row.before === "60" && row.after === "142"));
 });
 
+test("유입경로 비율만 바뀌어도 정정 대상이다", () => {
+  const before = assemble();
+  const after = structuredClone(before);
+  after.referrers = [{ dimension: "전체탭", rate: 0.7 }];
+  assert.notEqual(reportFactsHash(before), reportFactsHash(after));
+});
+
+test("유입경로 비율과 추가, 삭제를 정정 내역에 남긴다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.8 }, { dimension: "푸시알림", rate: 0.2 }];
+  const after = structuredClone(before);
+  after.referrers = [{ dimension: "검색", rate: 0.7 }, { dimension: "전체탭", rate: 0.3 }];
+  const changes = reportCorrectionDiff(before, after);
+  assert.ok(changes.some((row) => row.label === "검색 유입 비율(%)" && row.before === "80" && row.after === "70"));
+  assert.ok(changes.some((row) => row.label === "푸시알림 유입 비율(%)" && row.before === "20" && row.after === "미수집"));
+  assert.ok(changes.some((row) => row.label === "전체탭 유입 비율(%)" && row.before === "미수집" && row.after === "30"));
+});
+
+test("DB JSON의 부동소수점 직렬화 차이는 정정으로 만들지 않는다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.16783216783216784 }];
+  const stored = structuredClone(before);
+  stored.referrers = [{ dimension: "검색", rate: 0.1678321678321678 }];
+  assert.equal(reportFactsHash(before), reportFactsHash(stored));
+  assert.deepEqual(reportCorrectionDiff(before, stored), []);
+  stored.referrers[0].rate = 0.17;
+  assert.notEqual(reportFactsHash(before), reportFactsHash(stored));
+});
+
+test("유입경로의 같은 비율을 순서만 바꾸면 정정하지 않는다", () => {
+  const before = assemble();
+  before.referrers = [{ dimension: "검색", rate: 0.5 }, { dimension: "전체탭", rate: 0.5 }];
+  const after = structuredClone(before);
+  after.referrers.reverse();
+  assert.equal(reportFactsHash(before), reportFactsHash(after));
+  assert.deepEqual(reportCorrectionDiff(before, after), []);
+});
+
 
 // ── 소급 재계산 경계 ──────────────────────────────────────────────────────
 // 과거 발행분을 현재 원본으로 덮되, 무엇이 발행됐었는지는 남아야 한다. 그리고
