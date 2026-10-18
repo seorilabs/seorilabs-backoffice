@@ -1,3 +1,4 @@
+import { metricIssueReportActions } from "@/lib/metric-issues/report-actions";
 import { Prisma } from "@prisma/client";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { prisma } from "@/lib/prisma";
@@ -25,12 +26,13 @@ async function freezeDailyReport(now: Date, refDate: string, db: Prisma.Transact
     const sources = await metricSourceInventory(refDate, db);
     const trend = await orgTrendSeries(refDate, 28, db);
     const cohorts = await reportCohorts(refDate, db);
+    const actions = await metricIssueReportActions(now, db);
     const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions,
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
