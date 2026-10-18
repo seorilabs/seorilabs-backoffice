@@ -8,6 +8,7 @@ export const SOURCE_STATE_LABELS: Record<string, string> = {
   not_landed: "아직 도착하지 않음",
   failed: "수집 실패",
   needs_input: "설정·권한 필요",
+  needs_instrumentation: "계측 필요",
   not_applicable: "대상 아님",
   running: "수집 중",
   partial: "일부 수집됨",

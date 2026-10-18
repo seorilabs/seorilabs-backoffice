@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { resolveGa4Target, type Ga4Target } from "@/lib/ga4/datasets";
@@ -33,10 +34,10 @@ export interface CoverageTargets<T> {
 }
 
 /** GA4 수집·합산 대상. 비활성 앱은 빼고, 데이터셋이 해석되는 앱만 센다. */
-export async function ga4CoverageTargets(): Promise<
+export async function ga4CoverageTargets(db: Prisma.TransactionClient = prisma): Promise<
   CoverageTargets<CoverageTarget & { ga4: Ga4Target }>
 > {
-  const apps = await prisma.app.findMany({
+  const apps = await db.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: {
@@ -72,8 +73,8 @@ export async function ga4CoverageTargets(): Promise<
  * 콘솔 수집·합산 대상. 앱 하나가 리스팅 여럿일 수 있어(crossword-puzzle 웹+네이티브)
  * 리스팅 단위로 편다. 리스팅 표에 없으면 primary 하나로 대체한다.
  */
-export async function consoleCoverageTargets(): Promise<CoverageTargets<CoverageTarget>> {
-  const apps = await prisma.app.findMany({
+export async function consoleCoverageTargets(db: Prisma.TransactionClient = prisma): Promise<CoverageTargets<CoverageTarget>> {
+  const apps = await db.app.findMany({
     where: visibleAppWhere,
     orderBy: { displayName: "asc" },
     select: {

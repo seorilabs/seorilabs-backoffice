@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "a02a643274a086b1aa35dc357e3ba150bdb36579",
+  "changedFeatures": ["organization-reporting", "app-and-market-metrics", "collection-health", "insight-evidence-and-drafts", "metric-collection-ledger-and-backfill", "metric-report-highlights-finance-liveops", "notification-outbox-report-visuals-and-retention", "fleet-automation-project-and-agent-queue"],
+  "environments": ["dev"],
+  "redesign": true,
+  "foundationRerun": true,
+  "floorOverrides": [],
+  "release": {"markets": ["web", "service"], "until": "public"}
+}

@@ -6,9 +6,8 @@ import { evaluateMovement, type ConsoleRow, type Ga4Row, type HighlightData } fr
 import {
   alignTrendGrid,
   assembleOrgReportDocument,
-  correctionLine,
-  factsFingerprint,
 } from "@/lib/core/org-report";
+import { reportFactsHash, reportCorrectionDiff } from "@/lib/report/daily-presentation";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
 const REF = "2026-08-31";
@@ -155,8 +154,8 @@ test("요약·플랫폼 분해는 기준일 스냅샷이 있는 앱들의 합이
 test("게임/비게임 분해는 App.type 으로 가르고 양쪽 소스의 앱을 모두 센다", () => {
   const doc = assemble();
   assert.deepEqual(doc.segments.game, { apps: 1, dau: 60, dauPrev: 50, iaaKrw: 2_000, iapTrxKrw: 1_000 });
-  // 비게임은 GA4 시계열이 없어 dau 0·dauPrev null, 수익은 콘솔에서 온다.
-  assert.deepEqual(doc.segments.app, { apps: 1, dau: 0, dauPrev: null, iaaKrw: 500, iapTrxKrw: 0 });
+  // 비게임은 GA4 시계열이 없고 콘솔 날짜도 달라 합산과 전일 비교에서 빠진다.
+  assert.deepEqual(doc.segments.app, { apps: 1, dau: 0, dauPrev: null, iaaKrw: null, iapTrxKrw: null });
 });
 
 test("앱별 분해는 전일·7일 중앙값 대비와 리스팅 지연을 함께 싣는다", () => {
@@ -280,51 +279,10 @@ test("판정 전량이 직렬화되어 문서에 남는다", () => {
 const readSource = (relative: string) =>
   readFileSync(join(process.cwd(), relative), "utf8");
 
-const reconcileBody = () => {
-  const source = readSource("src/lib/core/org-report.ts");
-  const start = source.indexOf("export async function reconcileOrgReport");
-  assert.ok(start > 0, "reconcileOrgReport 이 있어야 한다");
-  const end = source.indexOf("\nexport ", start + 1);
-  return source.slice(start, end === -1 ? undefined : end);
-};
-
-test("사실이 같으면 아무것도 쓰지 않는다", () => {
-  const body = reconcileBody();
-  assert.match(body, /published\.factsHash === facts[\s\S]{0,200}?action: "none"/u);
-});
-
-test("정정은 새 메시지가 아니라 같은 메시지를 고친다", () => {
-  const body = reconcileBody();
-  // requeueNotification 이 SENT 를 PENDING 으로 되돌려야 providerMessageId 가 남고
-  // 워커가 editOrSend 로 같은 카드를 고친다.
-  assert.match(body, /requeueNotification\(sent\.eventId\)/u);
-  const highlights = readSource("src/lib/core/metric-highlights.ts");
-  // editable 이 빠지면 정정이 새 카드로 나가 어느 쪽이 맞는지 읽는 사람이 모른다.
-  assert.match(highlights, /text: body,/u);
-  assert.match(highlights, /sender: SEORI_SENDER,/u);
-  assert.match(highlights, /editable: true,/u);
-});
-
-test("정정은 비용을 다시 부르지 않는다", () => {
-  // 과거 시점의 비용은 복원할 수 없다. 다시 부르면 오늘 값이 그 날 문서에 들어간다.
-  assert.doesNotMatch(reconcileBody(), /collectFinanceCosts/u);
-});
-
-test("수치가 바뀌면 해설도 다시 만든다", () => {
-  // 09-12 스냅샷은 dau=138 인데 해설은 "32→30 으로 2명 감소"였다. 수치만 갱신하고
-  // 해설을 이어 붙이면 문서가 자기 자신과 모순된다.
-  assert.match(reconcileBody(), /metricNarrative\(data\)/u);
-});
-
-test("발행 기록이 없으면 그 실행이 최초 발행이 된다", () => {
-  const body = reconcileBody();
-  assert.match(body, /action: published \? "corrected" : "published"/u);
-});
-
 test("정정 라우트는 날짜 형식을 검증한다", () => {
   const route = readSource("src/app/api/admin/metric-highlights/reconcile/route.ts");
   assert.match(route, /parseMetricDay\(raw\) === null/u);
-  assert.match(route, /reconcileOrgReport\(/u);
+  assert.match(route, /correctDailyReport\(/u);
 });
 
 // ── 추이 격자: 부분 관측일은 낮은 합계가 아니라 모르는 값이다 ────────────────
@@ -361,52 +319,15 @@ test("콘솔 축은 GA4 커버리지에 묶이지 않는다", () => {
   assert.equal(points[0].consoleIaaKrw, 140);
 });
 
-// ── 사실 지문: 정정 판단의 근거 ────────────────────────────────────────────
-
-test("해설이 달라져도 사실이 같으면 지문이 같다", () => {
-  // 본문을 해싱하면 LLM 해설이 실행마다 달라져 매일 정정으로 판정된다.
-  const base = sampleData();
-  assert.equal(factsFingerprint(base), factsFingerprint({ ...base }));
+test("해설·생성 시각은 정정 지문을 바꾸지 않고 수치는 바꾼다", () => {
+  const before = assemble();
+  assert.equal(reportFactsHash(before), reportFactsHash({ ...before, narrative: "새 해설", generatedAt: "2026-09-02T02:00:00Z" }));
+  const after = structuredClone(before);
+  after.summary.ga4.dau = 142;
+  assert.notEqual(reportFactsHash(before), reportFactsHash(after));
+  assert.ok(reportCorrectionDiff(before, after).some((row) => row.before === "60" && row.after === "142"));
 });
 
-test("합계가 달라지면 지문이 달라진다", () => {
-  const base = sampleData();
-  const moved = {
-    ...base,
-    totals: { ...base.totals, ga4Dau: { ...base.totals.ga4Dau, latest: 142 } },
-  };
-  assert.notEqual(factsFingerprint(base), factsFingerprint(moved));
-});
-
-test("커버리지가 달라지면 지문이 달라진다", () => {
-  // 같은 합계라도 "몇 개를 세고 나온 값인가"가 바뀌면 다른 사실이다.
-  const base = sampleData();
-  const covered = {
-    ...base,
-    asOf: {
-      day: REF,
-      verdict: "final" as const,
-      observed: 9,
-      expected: 9,
-      missing: [],
-      missingWeightShare: 0,
-      sealed: true,
-    },
-  };
-  assert.notEqual(factsFingerprint(base), factsFingerprint(covered));
-});
-
-test("정정 문구는 무엇이 얼마나 바뀌었는지 적는다", () => {
-  assert.equal(
-    correctionLine({ previousDau: 15, previousApps: 2, currentDau: 142, currentApps: 6 }),
-    "♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 15 → 142명, 대상 2 → 6개 앱).",
-  );
-  // 대상 수가 그대로면 앱 수를 적지 않는다.
-  assert.equal(
-    correctionLine({ previousDau: 100, previousApps: 6, currentDau: 104, currentApps: 6 }),
-    "♻️ 정정 — 늦게 도착한 수집을 반영했습니다 (GA4 DAU 합계 100 → 104명).",
-  );
-});
 
 // ── 소급 재계산 경계 ──────────────────────────────────────────────────────
 // 과거 발행분을 현재 원본으로 덮되, 무엇이 발행됐었는지는 남아야 한다. 그리고
@@ -444,4 +365,21 @@ test("재계산 라우트는 범위를 검증하고 기본 종료일을 어제�
   const route = readSource("src/app/api/admin/report/recompute/route.ts");
   assert.match(route, /parseMetricDay\(req\.nextUrl\.searchParams\.get\("from"\)\)/u);
   assert.match(route, /lastElapsedMetricDay\(new Date\(\)\)/u);
+});
+
+test("전날이 비면 앱·플랫폼·분류별 전일 비교도 보류한다", () => {
+  const data = sampleData();
+  data.ga4Series[0].rowsDesc.splice(1, 1);
+  data.totals.ga4Dau.previous = null;
+  const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: GENERATED });
+  assert.equal(doc.apps.find((app) => app.slug === "happy-farm")?.ga4?.dauPrev, null);
+  assert.equal(doc.platform.android.dauPrev, null);
+  assert.equal(doc.segments.game.dauPrev, null);
+});
+
+test("앱 분류별 수익도 같은 콘솔 기준일의 관측만 합산한다", () => {
+  const data = sampleData();
+  data.consoleSeries[0].rowsDesc[0].date = new Date("2026-08-29T00:00:00Z");
+  const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: GENERATED });
+  assert.equal(doc.segments.game.iaaKrw, null);
 });

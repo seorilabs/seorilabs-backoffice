@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { dailyEditionSchema } from "@/lib/report/daily-contract";
 import type { Movement, MovementVerdict } from "@/lib/core/metric-highlights";
 
 // Org 종합 지표 보고서 문서(OrgReportDocument)의 정본 스키마.
@@ -107,6 +108,8 @@ export const orgReportDocumentSchema = z
      * (비용·LLM 해설은 과거 시점을 복원할 수 없어 null 이다).
      */
     origin: z.enum(["published", "recomputed"]),
+    /** 새 발행본은 입력·그림을 함께 고정한다. 구 문서는 필드 없이 계속 읽는다. */
+    edition: dailyEditionSchema.optional(),
     /**
      * 이 문서로 덮이기 전에 발행됐던 수치. 무엇이 발행됐고 무엇이 사실이었는지 둘 다
      * 남아야 사고가 기록으로 남는다. 소급 재계산(recomputed)에서만 채운다.

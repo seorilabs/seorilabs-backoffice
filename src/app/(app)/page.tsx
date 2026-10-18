@@ -1,10 +1,12 @@
 import { won } from "@/lib/format/units";
+import { DailyEditionSummary, DailyEditionActions, DailyEditionSources, DailyEditionCohorts } from "@/components/report/DailyEditionSections";
+import { requirePlatformReadAccess } from "@/lib/platform/access";
 import Link from "next/link";
 import { OperationsOverview } from "@/components/insights/OperationsOverview";
 import { toDbDay } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { getOrgReport, orgTrendSeries, type OrgTrendPoint } from "@/lib/core/org-report";
+import { getOrgReport, buildOrgReportForDate, orgTrendSeries, type OrgTrendPoint } from "@/lib/core/org-report";
 import { resolveReportRange } from "@/lib/report/params";
 import { parseMetricDay } from "@/lib/analytics/metric-day";
 import { ReportDatePicker } from "@/components/report/ReportDatePicker";
@@ -45,7 +47,7 @@ function TrendCharts({ trend }: { trend: OrgTrendPoint[] }) {
         <>
           <ReportLineChart
             title={`GA4 DAU 추이 (${TREND_DAYS}일)`}
-            note="전 앱 합산 · 원본 일별 스냅샷 기준(수집 없는 날은 선을 끊음)"
+            note="전 앱 합산 · 선택한 자료 기준 · 미수집 구간은 선을 끊음"
             dates={dates}
             series={[{ label: "DAU", varName: "--series-1", values: dau }]}
           />
@@ -59,7 +61,7 @@ function TrendCharts({ trend }: { trend: OrgTrendPoint[] }) {
       ) : (
         <ReportLineChart
           title={`GA4 활성 추이 (${TREND_DAYS}일)`}
-          note="전 앱 합산 · 원본 일별 스냅샷 기준(수집 없는 날은 선을 끊음)"
+          note="전 앱 합산 · 선택한 자료 기준 · 미수집 구간은 선을 끊음"
           dates={dates}
           series={[
             { label: "DAU", varName: "--series-1", values: dau },
@@ -84,13 +86,14 @@ function TrendCharts({ trend }: { trend: OrgTrendPoint[] }) {
 export default async function OrgReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; version?: string }>;
+  searchParams: Promise<{ date?: string; version?: string; mode?: string }>;
 }) {
+  try { await requirePlatformReadAccess(); } catch { return <div className="p-6 text-sm">종합 지표를 조회할 권한이 없습니다. 앱 담당자에게 문의하세요.</div>; }
   const sp = await searchParams;
   const now = new Date();
 
   // 날짜 피커의 min/max 는 원본 데이터가 실제 존재하는 범위다(D-1 상한).
-  const [ga4Range, consoleRange] = await Promise.all([
+  const [ga4Range, consoleRange, reportRange] = await Promise.all([
     prisma.appMetricDaily.aggregate({
       where: { app: visibleAppWhere },
       _min: { date: true },
@@ -101,6 +104,7 @@ export default async function OrgReportPage({
       _min: { date: true },
       _max: { date: true },
     }),
+    prisma.orgReportDaily.aggregate({ _min: { date: true }, _max: { date: true } }),
   ]);
   const requested = parseMetricDay(sp.date);
   const range = resolveReportRange({
@@ -108,6 +112,7 @@ export default async function OrgReportPage({
     bounds: [
       { min: ga4Range._min.date, max: ga4Range._max.date },
       { min: consoleRange._min.date, max: consoleRange._max.date },
+      { min: reportRange._min.date, max: reportRange._max.date },
     ],
     now,
   });
@@ -134,10 +139,10 @@ export default async function OrgReportPage({
   }
   const { min: minDate, max: maxDate, selected, clamped } = range;
 
-  const [view, trend] = await Promise.all([
-    getOrgReport(selected, now, sp.version ? Number(sp.version) : undefined),
-    orgTrendSeries(selected, TREND_DAYS),
-  ]);
+  const latest = sp.mode === "analysis" ? await buildOrgReportForDate(selected, { now }) : null;
+  const view = sp.mode === "analysis" ? (latest ? { ...latest, source: "recomputed" as const, generatedAt: null } : null) : await getOrgReport(selected, now, sp.version ? Number(sp.version) : undefined);
+  // 과거 발행본의 그림을 최신 원본으로 바꾸지 않는다. 구 발행본은 고정 그림 부재를 표시한다.
+  const trend = view?.doc.edition?.trend ?? (view?.source === "recomputed" ? await orgTrendSeries(selected, TREND_DAYS) : null);
 
   const revisions = await prisma.orgReportRevision.findMany({ where: { date: toDbDay(selected) }, select: { version: true }, orderBy: { version: "desc" } });
   return (
@@ -147,7 +152,7 @@ export default async function OrgReportPage({
         <ReportDatePicker selected={selected} min={minDate} max={maxDate} />
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2 text-xs" aria-label="보고서 수정 이력"><Link href={`/?date=${selected}`} aria-current={!sp.version ? "page" : undefined} className="text-blue-700">최신 자료</Link>{revisions.map((revision) => <Link key={revision.version} href={`/?date=${selected}&version=${revision.version}`} aria-current={sp.version === String(revision.version) ? "page" : undefined} className={`rounded border px-2 py-1 ${sp.version === String(revision.version) ? "bg-blue-50 border-blue-500 text-blue-800" : ""}`}>발행 v{revision.version}</Link>)}</div>
+      <div className="mt-3 flex flex-wrap gap-2 text-xs" aria-label="보고서 수정 이력"><Link href={`/?date=${selected}`} aria-current={!sp.version ? "page" : undefined} className="text-blue-700">최신 발행본</Link><Link href={`/?date=${selected}&mode=analysis`} className="text-blue-700">최신 자료 분석</Link>{revisions.map((revision) => <Link key={revision.version} href={`/?date=${selected}&version=${revision.version}`} aria-current={sp.version === String(revision.version) ? "page" : undefined} className={`rounded border px-2 py-1 ${sp.version === String(revision.version) ? "bg-blue-50 border-blue-500 text-blue-800" : ""}`}>발행 v{revision.version}</Link>)}</div>
       <div className="mt-4 space-y-4">
         {requested != null && clamped && (
           <Notice>
@@ -180,15 +185,20 @@ export default async function OrgReportPage({
               </p>
             )}
 
-            <SummaryCards doc={view.doc} />
-            <TrendCharts trend={trend} />
-            <OperationsOverview />
+            <DailyEditionSummary doc={view.doc} version={view.version} />
+            {view.version !== null && <a className="inline-block text-xs text-blue-700 underline" href={`/api/reports/daily?date=${selected}&version=${view.version}`}>이 발행 버전의 CSV 내려받기</a>}
             <HighlightSection doc={view.doc} />
+            <SummaryCards doc={view.doc} />
+            {trend ? <TrendCharts trend={trend} /> : <Notice>이 과거 발행본에는 고정된 그래프가 없습니다. 최신 자료 분석에서 현재 추이를 확인하세요.</Notice>}
+            {sp.mode === "analysis" && <OperationsOverview />}
             <NarrativeBlock narrative={view.doc.narrative} />
+            <DailyEditionCohorts doc={view.doc} />
+            <DailyEditionActions doc={view.doc} />
 
-            <Panel title="앱별 분해">
+            <Panel title="앱별 비교">
               <AppBreakdownTable doc={view.doc} />
             </Panel>
+            <DailyEditionSources doc={view.doc} />
 
             <div className="grid gap-3 lg:grid-cols-3">
               <Panel title="플랫폼 분해 (GA4 DAU)">
