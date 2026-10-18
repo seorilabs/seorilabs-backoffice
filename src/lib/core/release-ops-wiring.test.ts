@@ -191,6 +191,7 @@ test("Play 승격은 main이 아닌 기본 브랜치의 계약·실행 ref와 �
   const tag = "v1.0.2";
   const sha = "1".repeat(40);
   const requests: Array<Record<string, unknown>> = [];
+  const audits: Array<Record<string, unknown>> = [];
   const ports = {
     normalizeTag: (input: string) => input,
     loadReleaseNoteTranslations: async () => ({ koKR: "개선" }),
@@ -204,8 +205,12 @@ test("Play 승격은 main이 아닌 기본 브랜치의 계약·실행 ref와 �
     },
     PROMOTE_WORKFLOW: "promote-google-play.yml",
     resolveStableAuthority: async () => ({ tag, sha, kind: "ledger" }),
-    dispatchWorkflow: async (request: Record<string, unknown>) => { requests.push(request); },
-    recordReleaseAudit: async () => undefined,
+    dispatchWorkflow: async (request: Record<string, unknown>) => {
+      const { onDispatched, ...wire } = request;
+      requests.push(wire);
+      await (onDispatched as (runId: number) => Promise<void>)(1234);
+    },
+    recordReleaseAudit: async (_opts: unknown, _action: unknown, payload: Record<string, unknown>) => { audits.push(payload); },
   };
   const promote = new Function(...Object.keys(ports), `${compiled}; return promoteGooglePlay;`)(...Object.values(ports));
   await promote({ repoFullName: "seorilabs/bloomhand", tag, rollout: 0.5 });
@@ -217,6 +222,7 @@ test("Play 승격은 main이 아닌 기본 브랜치의 계약·실행 ref와 �
       expectedTag: { tag, sha },
     },
   ]);
+  assert.deepEqual(audits, [{ target: "PLAY", to: "production", tag, sha, authority: "ledger", workflowRunId: "1234" }]);
 });
 
 test("Play 승격과 App Store provider write는 exact stable tag SHA 뒤에만 실행된다", () => {

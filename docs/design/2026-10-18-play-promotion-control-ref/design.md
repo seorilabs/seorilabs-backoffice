@@ -21,3 +21,11 @@ L1/dev. 기존 배선 회귀 검사에 AC1의 실패를 먼저 추가하고 최�
 ## 의존성과 운영
 
 별도 Ready PR에서 검증·리뷰·병합한다. 중앙 seorilabs/.github#271은 13개 caller 권한과 이 경로의 운영 반영을 확인한 뒤 병합한다. Backoffice 운영 배포는 기존 명시적 배포 절차와 승인 범위를 별도로 확인하며 소스 병합을 배포로 표시하지 않는다. 다른 13개 앱의 마켓 배포는 하지 않는다. 장애 시 이 커밋의 제어 ref 변경만 되돌리는 PR로 복구하며 릴리스 태그는 이동하지 않는다.
+
+## 1차 교차 리뷰의 결과 기록 보완
+
+리뷰에서 기본 브랜치 HEAD의 태그를 승격 대상 버전으로 잘못 기록하는 재현 경로를 확인했다. AC3의 기존 기록 보존을 충족하도록 같은 수정 범위에서 보완한다. GitHub 공식 [workflow dispatch 응답](https://docs.github.com/en/rest/actions/workflows?apiVersion=2022-11-28#create-a-workflow-dispatch-event)의 `return_run_details:true`를 사용해 실제 workflow_run_id를 받는다. 정확한 태그/SHA와 실행 ID를 기존 append-only 릴리스 감사에 저장하고, workflow_run 미러가 그 결합으로 version/commitSha를 결정한다. 요청 함수에서 ReleaseRecord를 직접 만들지 않는다.
+
+승격의 제어 브랜치 HEAD나 그 HEAD의 다른 태그로 결과를 추정하지 않는다. 결합이 아직 없으면 raw workflow 미러만 남기고 기존 정기 reconcile에서 다시 확인한다. GitHub 실행 뒤 응답/감사 저장이 실패하면 결과 미확인으로 명시하고 자동 재실행하지 않는다. 기존 태그에서 시작한 승격은 그 실제 태그/SHA로 처리한다. DB 스키마·중앙 workflow·14개 caller 변경은 없다. 일반 배포의 기존 HEAD 추정 문제는 별도 후속으로 분리한다.
+
+추가 회귀: 다른 태그가 달린/태그 없는 제어 HEAD, queued/in_progress/completed, 정확한 실행ID·repo·tag·SHA 결합, 응답 누락·감사 저장 실패·미확인 실행, 기존 태그 실행. 보완 후 새 분기만 2차 교차 리뷰로 확인한다.

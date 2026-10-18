@@ -475,14 +475,12 @@ export async function promoteGooglePlay(opts: {
     ref: workflowRef,
     inputs,
     expectedTag: { tag: authority.tag, sha: authority.sha },
-  });
-
-  await recordReleaseAudit({ ...opts, tag: authority.tag }, "release.promote.dispatch", {
-    target: "PLAY",
-    to: "production",
-    tag: authority.tag,
-    sha: authority.sha,
-    authority: authority.kind,
+    onDispatched: async (runId) => {
+      await recordReleaseAudit({ ...opts, tag: authority.tag, required: true }, "release.promote.dispatch", {
+        target: "PLAY", to: "production", tag: authority.tag, sha: authority.sha,
+        authority: authority.kind, workflowRunId: String(runId),
+      });
+    },
   });
 
   return { workflowFile: PROMOTE_WORKFLOW };

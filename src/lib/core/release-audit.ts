@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export async function recordReleaseAudit(
-  opts: { repoFullName: string; tag: string; actorLabel?: string },
+  opts: { repoFullName: string; tag: string; actorLabel?: string; required?: boolean },
   action: string,
   payload: Prisma.InputJsonObject,
   write: (data: Prisma.AuditLogCreateInput) => Promise<unknown> =
@@ -18,5 +18,6 @@ export async function recordReleaseAudit(
     .catch(() => {
       // 외부 동작을 재실행하지 않도록 결과는 보존하고 감사 누락만 공개 action으로 알린다.
       console.error("[release-ops] 감사 기록 저장 실패", { action });
+      if (opts.required) throw new Error("RELEASE_DISPATCH_AUDIT_UNKNOWN: 실행은 요청됐으나 결합 저장을 확인하지 못했습니다. 자동 재요청하지 마세요.");
     });
 }

@@ -26,3 +26,16 @@ test("릴리스 감사는 JSON payload를 그대로 저장하고 실패 시 비�
     errorLog.mock.restore();
   }
 });
+
+
+test("실행 ID 결합의 필수 감사 실패는 재요청 금지의 결과 미확인으로 전파한다", async () => {
+  const log = mock.method(console, "error", () => {});
+  let writes = 0;
+  try {
+    await assert.rejects(() => recordReleaseAudit({ repoFullName: "seorilabs/bloomhand", tag: "v1.0.2", required: true },
+      "release.promote.dispatch", { workflowRunId: "1234" }, async () => { writes += 1; throw new Error("private-db-value"); }),
+      /RELEASE_DISPATCH_AUDIT_UNKNOWN/);
+    assert.equal(writes, 1);
+    assert.doesNotMatch(JSON.stringify(log.mock.calls), /private-db-value/);
+  } finally { log.mock.restore(); }
+});

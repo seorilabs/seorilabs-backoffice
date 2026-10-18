@@ -216,6 +216,7 @@ export async function dispatchWorkflowWithExactTagBinding(
     inputs: Record<string, string>;
     expectedTag: string;
     expectedSha: string;
+    onDispatched?: (runId: number) => Promise<void>;
   },
 ): Promise<void> {
   assertTagName(input.expectedTag);
@@ -247,13 +248,22 @@ export async function dispatchWorkflowWithExactTagBinding(
   if (observed !== expectedSha) {
     throw new Error("GITHUB_WORKFLOW_RELEASE_TAG_SHA_MISMATCH");
   }
-  await client.rest.actions.createWorkflowDispatch({
+  const response = await client.rest.actions.createWorkflowDispatch({
     owner: input.owner,
     repo: input.repo,
     workflow_id: input.workflowFile,
     ref: input.ref,
     inputs: input.inputs,
+    ...(input.onDispatched ? { return_run_details: true } : {}),
   });
+  if (input.onDispatched) {
+    const details = response.data as unknown as { workflow_run_id?: number } | undefined;
+    const runId = details?.workflow_run_id;
+    if (!Number.isSafeInteger(runId) || !runId || runId <= 0) {
+      throw new Error("GITHUB_WORKFLOW_DISPATCH_RUN_UNKNOWN: 실행 요청 후 결과 미확인. 자동 재요청하지 마세요.");
+    }
+    await input.onDispatched(runId);
+  }
 }
 
 /** Release asset write는 release ID의 tag와 exact peeled commit을 매 mutation 직전에 확인한다. */
