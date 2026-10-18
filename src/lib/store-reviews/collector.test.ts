@@ -390,3 +390,26 @@ test("기준선 뒤 내용이 바뀐 리뷰를 복구하면 수정 리뷰로 분
   }, { appSlug: app.slug, store: "GOOGLE_PLAY", notifyReviewIds: [google.externalReviewId] });
   assert.deepEqual(changes, ["updated"]);
 });
+
+
+test("수정 리뷰 복구 뒤 markNotified 실패도 기존 알림을 다시 쓰지 않는다", async () => {
+  const repository = new MemoryReviewRepository();
+  const deps = { repository, listApps: async () => [app], destinations: () => destination,
+    fetchGooglePlay: async () => [google], fetchAppStore: async () => [],
+  };
+  await collectStoreReviews(deps);
+  const original = repository.markNotified.bind(repository);
+  repository.markNotified = async () => { throw Error("mark 실패"); };
+  const events: string[] = [];
+  const updated = { ...deps, fetchGooglePlay: async () => [{ ...google, rating: 5 }],
+    enqueue: async (input: { dedupeKey: string }) => {
+      events.push(input.dedupeKey); repository.notifications.add(input.dedupeKey); return input.dedupeKey;
+    },
+  };
+  await collectStoreReviews(updated, { appSlug: app.slug, store: "GOOGLE_PLAY", notifyReviewIds: [google.externalReviewId] });
+  repository.markNotified = original;
+  const retried = await collectStoreReviews(updated);
+  assert.equal(retried.enqueued, 0);
+  assert.equal(retried.unchanged, 1);
+  assert.equal(events.length, 1);
+});

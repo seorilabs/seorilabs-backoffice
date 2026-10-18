@@ -241,7 +241,7 @@ async function processReviews(input: {
     );
     const dedupeKey = reviewNotificationDedupeKey({ appId: input.app.id, review, contentHash });
     const recovering = input.notifyReviewIds.has(review.externalReviewId);
-    const pendingNotification = existing?.notifiedHash === null;
+    const pendingNotification = existing != null && existing.notifiedHash !== contentHash;
     const alreadyQueued = (recovering || pendingNotification) &&
       await input.repository.notificationExists(dedupeKey);
     const change = alreadyQueued
