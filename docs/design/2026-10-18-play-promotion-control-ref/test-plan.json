@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "level": "L1",
-  "baseline": "0cb7bbec546209506a6bc9a17368da94de3cc2c2",
+  "baseline": "1ab7274a38d95dcb63e1b94cfe173413d639317a",
   "changedFeatures": [
-    "release-promotion"
+    "release-build-and-dispatch"
   ],
   "environments": [
     "dev"
