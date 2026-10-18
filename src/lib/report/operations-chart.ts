@@ -148,12 +148,15 @@ export async function operationsChart(end: string, weekly = false): Promise<Disc
         .toBuffer(),
     ),
   );
-  const bytes = await sharp({
-    create: { width: 960, height: charts.length * 510, channels: 4, background: "#ffffff" },
-  })
-    .composite(buffers.map((input, index) => ({ input, left: 0, top: index * 510 })))
-    .png()
-    .toBuffer();
+  const heights = await Promise.all(buffers.map(async (input) => (await sharp(input).metadata()).height!));
+  let top = 0;
+  const panels = buffers.map((input, index) => {
+    const panel = { input, left: 0, top };
+    top += heights[index];
+    return panel;
+  });
+  const bytes = await sharp({ create: { width: 960, height: top, channels: 4, background: "#ffffff" } })
+    .composite(panels).png().toBuffer();
   return {
     filename: weekly ? "weekly-operations.png" : "daily-operations.png",
     contentType: "image/png",

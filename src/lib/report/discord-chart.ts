@@ -24,6 +24,23 @@ const escape = (text: string) =>
     /[<>&"']/g,
     (value) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[value]!,
   );
+// 한글과 영문이 섞인 범례도 보수적인 글자 폭으로 줄바꿈한다. 생략하면
+// 다운로드 종류처럼 서로 다른 계열을 PNG에서 구분할 수 없어진다.
+function legendLines(label: string): string[] {
+  const lines: string[] = [];
+  let line = "", width = 0;
+  for (const token of label.split(/(\s+)/)) {
+    const tokenWidth = [...token].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
+    if (line && width + tokenWidth > 48) { lines.push(line); line = ""; width = 0; }
+    for (const char of token) {
+      const charWidth = char.charCodeAt(0) > 255 ? 2 : 1;
+      if (width + charWidth > 48) { lines.push(line); line = ""; width = 0; }
+      line += char; width += charWidth;
+    }
+  }
+  if (line || !lines.length) lines.push(line);
+  return lines;
+}
 export function reportChartSvg(input: {
   title: string;
   days: string[];
@@ -46,6 +63,11 @@ export function reportChartSvg(input: {
     )
   )
     throw new Error("INVALID_CHART_DATA");
+  const legendRows = input.series.map((series) => legendLines(series.label));
+  const rowHeights = [0, 2].filter((offset) => offset < legendRows.length)
+    .map((offset) => Math.max(...legendRows.slice(offset, offset + 2).map((row) => row.length)) * 18 + 6);
+  const extraHeight = Math.max(0, rowHeights.reduce((sum, height) => sum + height, 0) - 36);
+  const height = 510 + extraHeight;
   const max = niceMax(
     Math.max(
       0,
@@ -56,7 +78,7 @@ export function reportChartSvg(input: {
   );
   const x = (index: number) => 85 + (index * 810) / Math.max(1, input.days.length - 1);
   const y = (value: number) =>
-    input.reverse ? 130 + (value / max) * 275 : 405 - (value / max) * 275;
+    extraHeight + (input.reverse ? 130 + (value / max) * 275 : 405 - (value / max) * 275);
   const lines: string[] = [];
   for (let tick = 0; tick <= 4; tick++) {
     const value = (max * tick) / 4;
@@ -80,19 +102,22 @@ export function reportChartSvg(input: {
     .filter((value, index, array) => array.indexOf(value) === index)
     .map(
       (index) =>
-        `<text x="${x(index)}" y="434" text-anchor="middle" font-size="14">${escape(input.days[index])}</text>`,
+        `<text x="${x(index)}" y="${434 + extraHeight}" text-anchor="middle" font-size="14">${escape(input.days[index])}</text>`,
     )
     .join("");
   const legends = input.series
     .map(
-      (series, index) =>
-        `<circle cx="${90 + (index % 2) * 405}" cy="${94 + Math.floor(index / 2) * 22}" r="5" fill="${series.color}"/><text x="${103 + (index % 2) * 405}" y="${99 + Math.floor(index / 2) * 22}" font-size="14"><title>${escape(series.label)}</title>${escape(series.label.slice(0, 28))}</text>`,
+      (series, index) => {
+        const top = 99 + (index < 2 ? 0 : rowHeights[0]);
+        const left = 103 + (index % 2) * 405;
+        return `<circle cx="${left - 13}" cy="${top - 5}" r="5" fill="${series.color}"/><text font-size="14"><title>${escape(series.label)}</title>${legendRows[index].map((line, row) => `<tspan x="${left}" y="${top + row * 18}">${escape(line)}</tspan>`).join("")}</text>`;
+      },
     )
     .join("");
   const empty = input.series.every((series) => series.values.every((value) => value === null))
-    ? `<text x="490" y="270" text-anchor="middle" font-size="22" fill="#64748b">${escape(input.emptyLabel ?? "수집된 값 없음")}</text>`
+    ? `<text x="490" y="${270 + extraHeight}" text-anchor="middle" font-size="22" fill="#64748b">${escape(input.emptyLabel ?? "수집된 값 없음")}</text>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="510"><rect width="960" height="510" fill="#ffffff"/><g font-family="Noto Sans CJK KR, sans-serif" fill="#0f172a"><text x="45" y="42" font-size="24" font-weight="700">${escape(input.title)}</text><text x="45" y="68" font-size="14">단위: ${escape(input.unit)} · ${input.reverse ? "낮을수록 상위 노출" : escape(input.scope ?? "범위·표본은 출처 확인")}</text>${legends}${lines.join("")}${empty}${labels}<text x="45" y="470" font-size="13" fill="#475569">${escape(input.source).slice(0, 180)}</text><text x="45" y="493" font-size="13" fill="#475569">빈 구간은 미수집·일부 수집·해당 없음 - 0으로 채우지 않음</text></g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="${height}"><rect width="960" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, sans-serif" fill="#0f172a"><text x="45" y="42" font-size="24" font-weight="700">${escape(input.title)}</text><text x="45" y="68" font-size="14">단위: ${escape(input.unit)} · ${input.reverse ? "낮을수록 상위 노출" : escape(input.scope ?? "범위·표본은 출처 확인")}</text>${legends}${lines.join("")}${empty}${labels}<text x="45" y="${470 + extraHeight}" font-size="13" fill="#475569">${escape(input.source).slice(0, 180)}</text><text x="45" y="${493 + extraHeight}" font-size="13" fill="#475569">빈 구간은 미수집·일부 수집·해당 없음 - 0으로 채우지 않음</text></g></svg>`;
 }
 export async function reportChartPng(
   input: Parameters<typeof reportChartSvg>[0],
