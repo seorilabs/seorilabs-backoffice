@@ -6,7 +6,7 @@ const safeText = z.string().trim().min(1).max(1500).refine((value) => !containsC
 const path = z.string().regex(/^[A-Za-z0-9_./-]{1,200}$/).refine((value) => !value.startsWith("/") && !value.split("/").includes(".."));
 export const candidateSchema = z.object({
   title: safeText.refine((value) => value.length <= 110 && !/^\s*(\[|P[1-4]\s*[:\-]|seorilabs\/)/.test(value) && !/(^|[^A-Za-z0-9])[UN][0-9]+([^A-Za-z0-9]|$)/.test(value)),
-  kind: z.enum(["defect", "instrumentation"]), priority: z.enum(["P1", "P2", "P3", "P4"]),
+  kind: z.enum(["defect", "instrumentation"]),
   problemKey: z.string().regex(/^[a-z0-9][a-z0-9._-]{3,100}$/),
   customerProblem: safeText, outcome: safeText, scope: z.array(path).min(1).max(5),
   acceptanceCriteria: z.array(safeText).min(2).max(5), validation: z.array(safeText).min(1).max(4),

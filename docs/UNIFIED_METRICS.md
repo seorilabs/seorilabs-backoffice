@@ -45,3 +45,9 @@ AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 
 전체 기능의 긴급 중지는 `FEATURE_METRIC_ISSUE_REGISTRATION=false`이다. 중앙 운영 중지는 `/api/control-plane/metric-issue-registration` GET의 `updatedAt`을 읽고 POST에 `enabled`, `expectedUpdatedAt`, `maxElapsedMs`(최대 600000), `maxTokens`(최대 40000)를 넣는다. 기존 control-plane 관리자 principal·토큰·Idempotency-Key가 필요하다. 상태·설정 버전·감사는 같은 transaction이며 재전송은 동일 결과를 반환한다. 활성화는 수집 활성화와 별개다. 초기 정의가 없으면 실행하지 않는다.
 
 공개 저장소에는 운영 숫자나 모델의 자유 서술을 넣지 않고 현재 공개 코드의 검증한 발췌와 고정 안내만 기재한다. 라이브 인과·피해 규모가 미확정이므로 등록 중요도는 P3로 제한한다. 공개 코드·CI만으로 인수조건을 확인하는 이슈는 cloud, 비공개 근거를 재조회해야 하는 이슈는 local로 구분한다. 비공개 측정 기간·기준선·표본·수집 범위는 실행 원장에 보존한다. 보고서에는 같은 snapshot 시점의 등록·기존 이슈 연결·근거 부족·관찰·정책 제외·입력 필요 결과가 포함된다. 정오 이후 결과는 기존 보고서의 새 버전으로 반영한다.
+
+## Apple 공용 실행 키 정합성
+
+2026-10-18 조사에서 기존 실행 키 `6ZPC58D7NF`는 앱 조회는 가능했으나 분석 보고서 조회가 403이었고, 등록된 활성 공용 키 `UHVPXA39JA`는 같은 계정의 24개 앱 및 42개 분석 요청을 200으로 조회했다. 새 키를 만들거나 기존 키를 폐기하지 않는다. `shared/apple/app-store-connect-uploader`의 기존 활성 원본을 사용하도록 SealedSecret의 Apple 세 필드만 갱신한다. 원본·이전 실행 복사본의 로컬/BeeStation 암호화 백업과 양쪽 복원 검증을 마쳤다.
+
+운영 적용은 최종 before-deploy 검사 뒤 수행한다. SealedSecret 동기화와 실제 Secret의 공개 key ID를 먼저 확인하고 웹·worker를 같은 승인 이미지로 교체한다. 이후 실행 환경에서 앱·분석 요청을 다시 읽는다. 결과 불명이면 변경을 반복하지 않고 상태부터 확인한다. 장애 시 보호된 이전 세 필드의 실행 복사본으로 복원하며 다른 Secret 필드를 덮지 않는다. 이 변경은 새 자격증명 생성·키 회전·폐기가 아니다.
