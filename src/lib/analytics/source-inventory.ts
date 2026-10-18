@@ -5,6 +5,7 @@ import { resolveGa4Target } from "@/lib/ga4/datasets";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { dbDay, toDbDay, metricDayStart, shiftMetricDay } from "@/lib/analytics/metric-day";
 import type { SourceCoverage } from "@/lib/report/daily-contract";
+import { dailyReportSchedule } from "@/lib/report/daily-contract";
 
 /** 보고서 종류를 합치지 않는다. SDK·게시 권한은 분석 보고 권한의 증거가 아니다. */
 const reports = [
@@ -24,7 +25,7 @@ const reports = [
 ] as const;
 
 export async function metricSourceInventory(day: string, db: Prisma.TransactionClient = prisma): Promise<SourceCoverage[]> {
-  const cutoffAt = new Date(metricDayStart(shiftMetricDay(day, 1)).getTime() + (10 * 60 + 45) * 60_000);
+  const cutoffAt = dailyReportSchedule(metricDayStart(shiftMetricDay(day, 1))).cutoffAt;
   const apps = await db.app.findMany({
     where: visibleAppWhere, orderBy: { displayName: "asc" },
     select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true,

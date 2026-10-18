@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { METRIC_SPECS } from "@/lib/core/metric-highlights";
 import type { OrgReportDocument } from "@/lib/core/org-report-schema";
 import { coverageSummary } from "./daily-contract";
+import { sourceStateLabel } from "@/lib/insights/collection";
 
 export function reportConclusions(doc: OrgReportDocument): string[] {
   const conclusions = [...doc.movements]
@@ -40,12 +41,21 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   compare("잔존 코호트 복귀 수 확보 칸", known(before), known(after));
   for (const cohort of after.edition?.cohorts ?? []) for (const cell of cohort.values) {
     const prior = before.edition?.cohorts.find((row) => row.appId === cohort.appId && row.cohortDate === cohort.cohortDate)?.values.find((row) => row.day === cell.day);
-    if (prior && prior.returned !== cell.returned) compare(`${cohort.appName} ${cohort.cohortDate} D${cell.day} 복귀(명)`, prior.returned, cell.returned);
+    if (prior && prior.returned !== cell.returned) compare(`${cohort.appName} ${cohort.cohortDate} D${cell.day} 복귀(명)`, prior.returned ?? "아직 확인 전", cell.returned ?? "아직 확인 전");
   }
   for (const source of after.edition?.sources ?? []) {
     const prior = before.edition?.sources.find((row) => row.appId === source.appId && row.source === source.source && row.reportType === source.reportType);
-    if (prior && prior.state !== source.state) compare(`${source.appName} ${source.reportType} 수집 상태`, prior.state, source.state);
+    if (prior && prior.state !== source.state) compare(`${source.appName} ${source.source} ${source.reportType} 수집 상태`, sourceStateLabel(prior.state), sourceStateLabel(source.state));
   }
+  for (const point of after.edition?.trend ?? []) {
+    const prior = before.edition?.trend.find((row) => row.date === point.date);
+    if (!prior) continue;
+    for (const [key, label] of Object.entries({ ga4Dau: "활성(명)", ga4NewUsers: "신규(명)", adCompletions: "광고 완료(건)", consoleDau: "토스 이용자(명)", consoleIaaKrw: "광고 추정 수익(KRW)", consoleIapTrxKrw: "구매 거래액(KRW)" })) {
+      compare(`${point.date} 추이 ${label}`, prior[key as keyof typeof prior], point[key as keyof typeof point]);
+    }
+  }
+  // 이전 버전 링크와 함께 비교표·판정·근거의 갱신을 누락 없이 알린다.
+  if (!changes.length && reportFactsHash(before) !== reportFactsHash(after)) changes.push({ label: "비교표·판정·근거 갱신", before: "이전 발행본의 값·판정·수집 범위", after: "새 발행본의 값·판정·수집 범위 · 정정 전후 링크에서 대조" });
   return changes;
 }
 
