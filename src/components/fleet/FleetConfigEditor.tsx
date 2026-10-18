@@ -341,6 +341,7 @@ export function FleetConfigEditor({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
+  const missingEditSource = legacyActiveBlocked && initialPayloadSource === "EMPTY";
 
   const payloadText = useMemo(() => JSON.stringify(payloadFromDraft(draft)), [draft]);
 
@@ -474,6 +475,7 @@ export function FleetConfigEditor({
             기존에 적용된 설정은 현재 규격에 맞지 않아 편집 원본으로 복사하지 않았습니다. 서명된 기존 설정 조회는 유지되지만 다시 적용할 수 없습니다.
           </p>
         )}
+        {missingEditSource && <p role="alert" className="mt-2 text-sm text-amber-800">기존 설정을 안전하게 불러오지 못해 새 초안 저장을 중지했습니다. 기존 설정 가져오기·비교에서 원본을 확인하고 복구한 뒤 다시 여세요.</p>}
 
         <div className="mt-4 space-y-4">
           <Section title="지표 보고 소스" description="기존 공급자 계정·앱 공개 ID·credential logical ID만 연결합니다. 비밀값은 입력하지 않습니다. 연결별 수집을 중지할 수 있으며 저장·검증·적용은 다른 중앙 설정과 같은 절차를 사용합니다.">
@@ -1168,7 +1170,7 @@ export function FleetConfigEditor({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || missingEditSource}
             onClick={() => run(
               () => validateFleetConfigDraftAction({
                 appId,
@@ -1183,7 +1185,7 @@ export function FleetConfigEditor({
           </button>
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || missingEditSource}
             onClick={() => run(
               () => createFleetConfigDraftAction({
                 appId,
