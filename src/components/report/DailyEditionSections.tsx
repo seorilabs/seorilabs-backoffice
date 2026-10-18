@@ -2,9 +2,9 @@ import React from "react";
 import Link from "next/link";
 import type { OrgReportDocument } from "@/lib/core/org-report-schema";
 import { coverageSummary, publicationState } from "@/lib/report/daily-contract";
+import { sourceStateLabel } from "@/lib/insights/collection";
 import { Panel } from "./OrgReportSections";
 import { actionStatusLabels } from "@/lib/report/action-presentation";
-import { SourceCoverageDetails } from "./SourceCoverageDetails";
 
 const time = (value: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 
@@ -66,7 +66,19 @@ export function DailyEditionSources({ doc }: { doc: OrgReportDocument }) {
     <p className="mb-3 text-xs text-neutral-500">발행 입력에 고정된 상태입니다. 빈 응답과 미도착은 0이 아닙니다. 앱을 펼치면 보고서별 기준일·출처·해결 방법을 볼 수 있습니다.</p>
     <div className="space-y-2">{apps.map((slug) => {
       const rows = sources.filter((source) => source.slug === slug), coverage = coverageSummary(rows);
-      return <SourceCoverageDetails key={slug} appName={rows[0].appName} observed={coverage.observed} expected={coverage.expected} rows={rows} />;
+      return <details key={slug} className="rounded-lg border border-neutral-200 bg-white">
+        <summary className="cursor-pointer px-3 py-3 text-sm font-medium">{rows[0].appName}<span className="ml-2 text-xs font-normal text-neutral-500">{coverage.observed}/{coverage.expected}개 보고서 확보</span></summary>
+        <div className="overflow-x-auto px-3 pb-3"><table className="w-full min-w-[640px] text-left text-xs">
+          <caption className="sr-only">{rows[0].appName} 수집 상태</caption>
+          <thead><tr className="border-b text-neutral-500"><th className="py-2">소스·보고서</th><th>상태</th><th>자료 기준</th><th>근거·해결 방법</th></tr></thead>
+          <tbody>{rows.map((row) => <tr key={`${row.source}:${row.reportType}:${row.account}`} className="border-b border-neutral-100 align-top">
+            <td className="max-w-44 py-2 pr-3"><b>{row.source}</b><p>{row.reportType}</p>{row.account && <p className="break-all text-neutral-500">{row.account}</p>}</td>
+            <td className="py-2 pr-3">{row.state === "empty" ? "확인된 0" : sourceStateLabel(row.state)}</td>
+            <td className="whitespace-nowrap py-2 pr-3">{row.dataThrough ?? "미확인"}</td>
+            <td className="max-w-80 py-2"><p>{row.reason}</p>{row.remedy && <p className="mt-1 text-amber-800">{row.remedy}</p>}{row.runId && <p className="mt-1 break-all text-neutral-400">수집 실행 {row.runId}</p>}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </details>;
     })}</div>
   </Panel></section>;
 }

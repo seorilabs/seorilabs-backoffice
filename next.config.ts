@@ -15,7 +15,6 @@ const nextConfig: NextConfig = {
     "*": ["**/@img/**", "**/sharp/**"],
   },
   // lint/typecheck 는 CI verify 잡에서 이미 수행 → 빌드 시 중복 제거(빌드 단축).
-  eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: true },
   experimental: {
     // server action 본문 크기(기획 입력 폼 등)

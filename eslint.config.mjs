@@ -1,16 +1,19 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({ baseDirectory: __dirname });
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTypeScript from "eslint-config-next/typescript";
 
 const eslintConfig = [
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+  ...nextVitals,
+  ...nextTypeScript,
   {
-    ignores: ["node_modules/**", ".next/**", "src/generated/**"],
+    // React Compiler는 사용하지 않는다. 이번 런타임 수정에서 기존 화면의
+    // effect와 ref 설계를 바꾸지 않고 이전 lint 범위를 유지한다.
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/refs": "off",
+    },
+  },
+  {
+    ignores: ["node_modules/**", ".next/**", "scripts-dist/**", "src/generated/**"],
   },
 ];
 
