@@ -8,7 +8,7 @@ import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
 import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/analytics/console-sync/collect";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { startConsoleFixture } from "./console-metrics/fixture-server";
-import { ingestConsoleMetrics } from "../src/lib/core/console-metrics-collect";
+import { ingestConsoleMetrics, getConsoleSyncStatus } from "../src/lib/core/console-metrics-collect";
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
@@ -62,6 +62,8 @@ async function main() {
     assert.ok((partialRow.raw as Record<string, unknown>).iaaByOs);
     const partialLedger = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date("2026-10-12") } });
     assert.equal(partialLedger.state, "failed"); assert.equal(partialLedger.sealed, false);
+    const partialStatus = (await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)!;
+    assert.ok(partialStatus.firstIncompleteDate && partialStatus.firstIncompleteDate <= "2026-10-12");
     // 나중에 확인된 OS를 더해 광고를 복원하고 결제 미확인은 계속 NULL로 둔다.
     fixture.state.failIos = false;
     await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), nextNow));
@@ -73,6 +75,12 @@ async function main() {
     const fullRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
     assert.equal(fullRow.iapTrxAmountKrw, 0); assert.equal(fullRow.iaaEarningKrw, 34);
     assert.deepEqual((fullRow.raw as Record<string, unknown>).missingMetrics, []);
+    assert.equal((await getConsoleSyncStatus()).apps.find((row) => row.slug === app.slug)?.firstIncompleteDate, null);
+    // 직접 push도 내부 결측 목록을 몰라도 명시한 완전 지표로 복구할 수 있다.
+    await prisma.appConsoleMetricDaily.update({ where, data: { raw: { missingMetrics: ["iap"] } } });
+    await ingestConsoleMetrics({ apps: [{ slug: app.slug, miniAppId: 61736, workspaceId: 38345, days: [{ date: "2026-10-12", iaaImpressions: 6, iaaEarningKrw: 34, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 }] }] }, nextNow);
+    const pushed = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
+    assert.deepEqual((pushed.raw as Record<string, unknown>).missingMetrics, []);
     // 신규 unique 키를 동시에 만드는 서로 다른 OS 패치도 모두 보존한다.
     for (let i = 0; i < 4; i++) {
       const day = `2026-10-${13 + i}`;

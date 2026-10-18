@@ -400,7 +400,7 @@ async function Overview({ ga4Apps, consoleApps }: { ga4Apps: AppRef[]; consoleAp
                       <td className="px-3 py-2 text-right text-neutral-600">
                         {latest?.avgSessionSec != null ? `${Math.round(latest.avgSessionSec)}초` : "—"}
                       </td>
-                      <td className="px-3 py-2 text-right text-neutral-600">{latest ? latest.iaaImpressions : "—"}</td>
+                      <td className="px-3 py-2 text-right text-neutral-600">{latest?.iaaImpressions ?? "—"}</td>
                       <td className="px-3 py-2 text-right text-neutral-600">
                         {latest?.iaaEarningKrw != null ? `₩${Math.round(latest.iaaEarningKrw).toLocaleString("ko-KR")}` : "—"}
                       </td>

@@ -23,7 +23,7 @@ bash scripts/console-metrics/status.sh          # 앱별 lastDate/rows 요약
 ```
 
 - `endDate` = 어제(D-1, KST).
-- `startDate` = `minLastDate` − 2일(재집계 overlap). `minLastDate` 는 데이터가 있는 앱들의
+- `startDate` = `minLastDate` − 2일(재집계 overlap). 리스팅의 `firstIncompleteDate`가 더 이르면 그 날짜부터 다시 조회한다. 부분 행의 최신 날짜가 전진해도 과거 결측은 재조회 범위에 남긴다. `minLastDate` 는 데이터가 있는 앱들의
   마지막 저장일 중 가장 이른 값(status 응답). 데이터가 하나도 없으면 `endDate` − 13일.
 - `appsWithNoData`(rows=0, 신규 등록 등)는 별도 백필: 그 앱만 출시일부터 당긴다.
 - 안전 상한: 한 앱 당 최대 120일(`MAX_DAYS_PER_APP`). 그보다 큰 gap 은 120일씩 나눠 반복.

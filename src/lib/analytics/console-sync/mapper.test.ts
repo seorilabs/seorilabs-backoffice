@@ -51,3 +51,8 @@ test("모든 지표가 없는 날짜는 행을 만들지 않는다", () => {
   const input = { dau: { au: [], newAu: [] }, session: { metric: [] }, android: { dailyReports: [] }, ios: { dailyReports: [] }, iap: { metric: [] } };
   assert.equal(normalizeConsoleResponses(input, "2026-10-11", "2026-10-11").days.length, 0);
 });
+
+test("배열 날짜의 한 OS도 원본 병합에 쓸 정규화된 날짜로 보존한다", () => {
+  const result = normalizeConsoleResponses({ ...fixture(), android: { dailyReports: [{ date: [2026, 10, 11], impression: 6, estimatedEarning: 34 }] }, ios: { dailyReports: [] } }, "2026-10-11", "2026-10-11");
+  assert.deepEqual(result.days[0].raw?.iaaByOs, { ANDROID: { date: "2026-10-11", impression: 6, estimatedEarning: 34 } });
+});

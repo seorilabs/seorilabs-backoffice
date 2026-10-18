@@ -8,7 +8,11 @@ const object = (value: unknown): Record<string, unknown> => value != null && typ
 /** 빠진 구획과 OS는 기존 원본을 지우지 않는다. */
 export function mergeConsoleRaw(previous: unknown, incoming: unknown): Record<string, unknown> {
   const merged = new Map(Object.entries(object(previous)));
-  for (const [key, value] of Object.entries(object(incoming))) {
+  const next = object(incoming);
+  if (next.window != null && JSON.stringify(next.window) !== JSON.stringify(merged.get("window"))) {
+    for (const key of ["referrer", "age", "gender", "os", "appVersion", "retention"]) merged.delete(key);
+  }
+  for (const [key, value] of Object.entries(next)) {
     if (value == null) continue;
     merged.set(key, key === "iaaByOs" ? { ...object(merged.get(key)), ...Object.fromEntries(Object.entries(object(value)).filter(([, row]) => row != null)) } : value);
   }
@@ -30,8 +34,15 @@ export function consoleAdTotal(raw: unknown, date: string) {
   return { iaaImpressions: android.data.impression + ios.data.impression, iaaEarningKrw: android.data.estimatedEarning + ios.data.estimatedEarning };
 }
 
-/** 관측된 값만 합산하며 전부 미확인이면 null을 유지한다. */
+/** 하나라도 미확인이면 부분 합계를 완전한 합계로 표시하지 않는다. */
 export function sumConsoleValues(values: readonly (number | null | undefined)[]): number | null {
+  if (!values.length || values.some((value) => value == null)) return null;
   const known = values.filter((value): value is number => value != null);
-  return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
+  return known.reduce((sum, value) => sum + value, 0);
+}
+
+/** 수집과 과거 원장 복구가 같은 완료 기준을 쓴다. */
+export function isCompleteConsoleMetric(row: Partial<Record<typeof consoleFinancialFields[number], number | null>> & { raw?: unknown }): boolean {
+  const missing = object(row.raw).missingMetrics;
+  return consoleFinancialFields.every((field) => row[field] != null) && (!Array.isArray(missing) || missing.length === 0);
 }

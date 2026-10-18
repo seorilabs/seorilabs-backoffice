@@ -45,7 +45,7 @@ export function normalizeConsoleResponses(input: Record<string, unknown>, start:
     const active = au?.get(date); const fresh = newAu?.get(date); const duration = session?.get(date);
     if (!a && !i && !p && !active && !fresh && !duration) continue;
     const raw: Row = {};
-    if (a || i) raw.iaaByOs = { ...(a ? { ANDROID: a } : {}), ...(i ? { IOS: i } : {}) };
+    if (a || i) raw.iaaByOs = { ...(a ? { ANDROID: { ...a, date } } : {}), ...(i ? { IOS: { ...i, date } } : {}) };
     if (p) raw.iap = p;
     raw.missingMetrics = metrics;
     if (date === end) {

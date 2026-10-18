@@ -26,6 +26,6 @@ fi
 echo "$RESP" | jq -r '
   "minLastDate=\(.minLastDate // "-")  maxLastDate=\(.maxLastDate // "-")  noData=[\(.appsWithNoData | join(","))]",
   "",
-  (["slug","miniAppId","lastDate","rows","lastCollectedAt"] | @tsv),
-  (.apps[] | [.slug, (.miniAppId // "-"), (.lastDate // "-"), .rows, (.lastCollectedAt // "-")] | @tsv)
+  (["slug","miniAppId","lastDate","firstIncompleteDate","rows","lastCollectedAt"] | @tsv),
+  (.apps[] | [.slug, (.miniAppId // "-"), (.lastDate // "-"), (.firstIncompleteDate // "-"), .rows, (.lastCollectedAt // "-")] | @tsv)
 ' | column -t -s "$(printf '\t')"

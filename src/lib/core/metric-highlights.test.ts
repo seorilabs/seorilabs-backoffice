@@ -606,3 +606,11 @@ test("새 부분 행의 미확인 매출로 0원이나 감소율을 만들지 �
   assert.equal(out.totals.iaaKrw, null); assert.equal(out.totals.iapKrw, null);
   assert.equal(out.totals.previousIaaKrw, null);
 });
+
+test("당일 광고가 빠진 리스팅의 전일 금액으로 거짓 감소율을 만들지 않는다", () => {
+  const a = listing("A", [{ date: "2026-10-16", iaa: 0 }, { date: "2026-10-15", iaa: 5000 }]);
+  const b = listing("B", [{ date: "2026-10-16", iaa: 100 }, { date: "2026-10-15", iaa: 100 }]);
+  const rows = [{ ...a.rowsDesc[0], iaaEarningKrw: null }, a.rowsDesc[1]];
+  const out = foldConsoleTotals([{ ...a, rowsDesc: rows }, b], "2026-10-16");
+  assert.equal(out.totals.iaaKrw, null);
+});

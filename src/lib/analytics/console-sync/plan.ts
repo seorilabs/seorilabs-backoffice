@@ -12,7 +12,11 @@ export function consoleCollectionPlan(status: ConsoleSyncStatus, now: Date, laun
     const key = `${app.slug}#${app.miniAppId}`;
     if (!AIT_LISTINGS.some((l) => l.appSlug === app.slug && l.miniAppId === app.miniAppId)) { blocked.push({ key, reason: "등록된 workspace·리스팅 확인 필요" }); continue; }
     if (app.lastDate && (!parseMetricDay(app.lastDate) || app.lastDate > end)) { blocked.push({ key, reason: "저장 날짜 확인 필요" }); continue; }
-    const start = app.rows === 0 ? launches[key] : regularStart;
+    let start = app.rows === 0 ? launches[key] : regularStart;
+    if (app.rows > 0 && app.firstIncompleteDate) {
+      if (!parseMetricDay(app.firstIncompleteDate) || app.firstIncompleteDate > end) { blocked.push({ key, reason: "미확인 관측 날짜 확인 필요" }); continue; }
+      if (start && app.firstIncompleteDate < start) start = app.firstIncompleteDate;
+    }
     if (!start || !parseMetricDay(start) || start > end) { blocked.push({ key, reason: "확인된 출시일 필요" }); continue; }
     for (let cursor = start; cursor <= end;) {
       const chunkEnd = [shiftMetricDay(cursor, MAX_DAYS_PER_APP - 1), end].sort()[0];

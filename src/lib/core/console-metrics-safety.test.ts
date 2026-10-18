@@ -82,3 +82,12 @@ test("부분 저장은 관측 완료로 기록하지 않으며 빈 날짜는 생
   const result = await ingest(push({ date: day.date }), new Date());
   assert.equal(result.upserts, 0);
 });
+
+test("직접 push는 실제 채운 지표의 결측 표시만 해소한다", async () => {
+  await ingest(push({ ...day, avgSessionSec: undefined, raw: { missingMetrics: ["session", "iap"] } }), new Date());
+  const financial = { date: day.date, iaaImpressions: 0, iaaEarningKrw: 0, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 };
+  await ingest(push(financial), new Date());
+  assert.deepEqual((stored.raw as { missingMetrics: string[] }).missingMetrics, ["session"]);
+  await ingest(push({ date: day.date, avgSessionSec: 10 }), new Date());
+  assert.deepEqual((stored.raw as { missingMetrics: string[] }).missingMetrics, []);
+});
