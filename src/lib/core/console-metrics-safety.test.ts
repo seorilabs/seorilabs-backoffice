@@ -13,7 +13,12 @@ const db = {
     },
     update: async (input: unknown) => { stored = { ...stored, ...(input as { data: Record<string, unknown> }).data }; return stored; },
   },
-  metricCollectionLedger: { findMany: async () => [], upsert: async (input: unknown) => { void input; return {}; } },
+  metricCollectionLedger: {
+    findMany: async () => [],
+    upsert: async (input: unknown) => { void input; return {}; },
+    updateMany: async (input: unknown) => { void input; return { count: 0 }; },
+    create: async (input: unknown) => { void input; return {}; },
+  },
 };
 (globalThis as typeof globalThis & { prisma: PrismaClient }).prisma = db as unknown as PrismaClient;
 let ingest: typeof import("./console-metrics-collect").ingestConsoleMetrics;
@@ -69,7 +74,10 @@ test("부분 행은 null로 생성하고 기존 값은 결측으로 덮어쓰지
 
 test("부분 저장은 관측 완료로 기록하지 않으며 빈 날짜는 생성하지 않는다", async (t) => {
   const ledger = t.mock.method(db.metricCollectionLedger, "upsert");
+  const created = t.mock.method(db.metricCollectionLedger, "create");
   await ingest(push({ date: day.date, dau: 5 }), new Date());
+  assert.equal(created.mock.callCount(), 1);
+  assert.equal((created.mock.calls[0].arguments[0] as { data: { state: string } }).data.state, "failed");
   assert.ok(ledger.mock.calls.every((call) => (call.arguments[0] as { create: { state: string } }).create.state !== "observed"));
   const result = await ingest(push({ date: day.date }), new Date());
   assert.equal(result.upserts, 0);

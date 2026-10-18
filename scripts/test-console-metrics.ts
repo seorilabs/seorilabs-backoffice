@@ -8,6 +8,7 @@ import { createConsoleReader } from "../src/lib/analytics/console-sync/client";
 import { collectConsoleMetrics, withConsoleCollectionLock } from "../src/lib/analytics/console-sync/collect";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { startConsoleFixture } from "./console-metrics/fixture-server";
+import { ingestConsoleMetrics } from "../src/lib/core/console-metrics-collect";
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
@@ -71,6 +72,18 @@ async function main() {
     assert.equal(complete.state, "complete");
     const fullRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
     assert.equal(fullRow.iapTrxAmountKrw, 0); assert.equal(fullRow.iaaEarningKrw, 34);
+    assert.deepEqual((fullRow.raw as Record<string, unknown>).missingMetrics, []);
+    // 신규 unique 키를 동시에 만드는 서로 다른 OS 패치도 모두 보존한다.
+    for (let i = 0; i < 4; i++) {
+      const day = `2026-10-${13 + i}`;
+      const patch = (os: string, impression: number, estimatedEarning: number) => ({ apps: [{ slug: app.slug, miniAppId: 61736, workspaceId: 38345,
+        days: [{ date: day, raw: { iaaByOs: { [os]: { date: day, impression, estimatedEarning } } } }] }] });
+      const results = await Promise.all([ingestConsoleMetrics(patch("ANDROID", 6, 34), nextNow), ingestConsoleMetrics(patch("IOS", 2, 12), nextNow)]);
+      assert.ok(results.every((result) => result.upserts === 1 && result.errors.length === 0));
+      const merged = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where: { appId_miniAppId_date: { appId: app.id, miniAppId: 61736, date: new Date(day) } } });
+      assert.equal(merged.iaaImpressions, 8); assert.equal(merged.iaaEarningKrw, 46);
+      assert.deepEqual(Object.keys((merged.raw as { iaaByOs: object }).iaaByOs).sort(), ["ANDROID", "IOS"]);
+    }
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
     await reader!.close(); reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);

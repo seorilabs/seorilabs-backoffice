@@ -7,6 +7,7 @@ import type {
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
 import { consoleMetricFields, consoleFinancialFields, mergeConsoleRaw, consoleAdTotal, hasConsoleAdObservation } from "@/lib/analytics/console-values";
+import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { recordCollectionFailure, recordObservations, type ObservationInput } from "@/lib/analytics/coverage";
@@ -162,7 +163,7 @@ export async function ingestConsoleMetrics(
         result.warnings.push({ key, warning: `raw.${section} 값이 전부 비어 있음 (${day.date})` });
       }
       try {
-        const saved = await prisma.$transaction(async (tx) => {
+        const saved = await retryPrismaConflict(() => prisma.$transaction(async (tx) => {
           // upsert가 행 잠금을 잡은 뒤 원본을 합쳐 동시 수집의 다른 OS를 잃지 않는다.
           const where = { appId_miniAppId_date: { appId: app.id, miniAppId, date } };
           const stored = await tx.appConsoleMetricDaily.upsert({ where,
@@ -172,7 +173,7 @@ export async function ingestConsoleMetrics(
           const raw = mergeConsoleRaw(stored.raw, day.raw);
           const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
           return tx.appConsoleMetricDaily.update({ where, data: { ...total, raw: Object.keys(raw).length ? raw as Prisma.InputJsonObject : Prisma.JsonNull } });
-        });
+        }));
         result.upserts++;
         const missing = Array.isArray(day.raw?.missingMetrics) ? day.raw.missingMetrics : [];
         if (consoleFinancialFields.every((field) => saved[field] != null) && !missing.length) {

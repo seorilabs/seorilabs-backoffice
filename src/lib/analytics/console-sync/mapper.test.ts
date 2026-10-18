@@ -13,6 +13,7 @@ test("확인된 0, 미집계 DAU와 OS 원본을 구분한다", () => {
   assert.equal(result.days.length, 1); assert.deepEqual(result.missing, []);
   assert.equal(result.days[0].dau, undefined); assert.equal(result.days[0].avgSessionSec, 3.5);
   assert.equal(result.days[0].iaaEarningKrw, 34); assert.equal(result.days[0].payingUsers, 0);
+  assert.deepEqual(result.days[0].raw?.missingMetrics, []);
   assert.deepEqual(result.days[0].raw?.iaaByOs, { ANDROID: input.android.dailyReports[0], IOS: input.ios.dailyReports[0] });
 });
 test("빠진 지표만 건너뛰고 확인된 지표는 남긴다", () => {
