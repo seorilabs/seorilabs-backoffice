@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { collectStoreReviews } from "@/lib/store-reviews/collector";
+import { parseReviewOptions } from "@/lib/store-reviews/options";
 
 async function main(): Promise<void> {
-  const result = await collectStoreReviews();
+  const options = parseReviewOptions(process.argv.slice(2));
+  const result = await collectStoreReviews({}, options);
   console.log("[store-review-collector] result", JSON.stringify({
     targets: result.targets,
     storeCoverage: result.storeCoverage,

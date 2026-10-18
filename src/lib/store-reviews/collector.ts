@@ -1,4 +1,4 @@
-import type { Lifecycle, Prisma, StoreReviewStore } from "@prisma/client";
+import type { AppStatus, Prisma, StoreReviewStore } from "@prisma/client";
 import {
   beginCollection,
   completeCollection,
@@ -15,6 +15,10 @@ import { enqueueNotification } from "@/lib/notifications/outbox";
 import { listAppStoreReviews } from "@/lib/store-reviews/app-store";
 import { createGooglePlayReviewFetcher } from "@/lib/store-reviews/google-play";
 import {
+  validateReviewOptions,
+  type StoreReviewCollectOptions,
+} from "@/lib/store-reviews/options";
+import {
   classifyReviewChange,
   reviewContentHash,
   reviewNotificationDedupeKey,
@@ -28,14 +32,16 @@ import type {
 
 export interface ReviewAppTarget {
   id: string;
+  slug: string;
+  status: AppStatus;
   displayName: string;
-  currentStage: Lifecycle;
   playPackage: string | null;
   iosBundle: string | null;
   marketTargets: Prisma.JsonValue;
 }
 
 export interface ReviewRepository {
+  notificationExists(dedupeKey: string): Promise<boolean>;
   initialized(appId: string, store: StoreReviewStore): Promise<boolean>;
   findObservation(
     appId: string,
@@ -64,6 +70,14 @@ export interface ReviewRepository {
 }
 
 const prismaReviewRepository: ReviewRepository = {
+  async notificationExists(dedupeKey) {
+    return Boolean(
+      await prisma.notificationEvent.findUnique({
+        where: { dedupeKey },
+        select: { id: true },
+      }),
+    );
+  },
   async beginCollection(appId, store) {
     return (await beginCollection(`reviews:${store}`, appId, appId)).id;
   },
@@ -179,8 +193,6 @@ export interface StoreReviewCollectResult {
   errors: Array<{ app: string; store: StoreReviewStore; error: string }>;
 }
 
-const REVIEWABLE_STAGES = new Set<Lifecycle>(["RELEASE", "LIVEOPS"]);
-
 function marketTargets(value: Prisma.JsonValue): Set<string> {
   return new Set(
     Array.isArray(value)
@@ -207,12 +219,16 @@ async function processReviews(input: {
   enqueue: ReviewEnqueue;
   now: () => Date;
   result: StoreReviewCollectResult;
+  notifyReviewIds: ReadonlySet<string>;
 }): Promise<void> {
   const initialized = await input.repository.initialized(
     input.app.id,
     input.store,
   );
   for (const review of input.reviews) {
+    if (input.notifyReviewIds.size && !input.notifyReviewIds.has(review.externalReviewId)) {
+      continue;
+    }
     if (review.store !== input.store) {
       throw new Error(`리뷰 store 불일치: expected=${input.store}`);
     }
@@ -223,7 +239,20 @@ async function processReviews(input: {
       input.store,
       review.externalReviewId,
     );
-    const change = classifyReviewChange({ initialized, existing, contentHash });
+    const dedupeKey = reviewNotificationDedupeKey({ appId: input.app.id, review, contentHash });
+    const recovering = input.notifyReviewIds.has(review.externalReviewId);
+    const pendingNotification = existing != null && existing.notifiedHash !== contentHash;
+    const alreadyQueued = (recovering || pendingNotification) &&
+      await input.repository.notificationExists(dedupeKey);
+    const change = alreadyQueued
+      ? "unchanged"
+      : recovering
+        ? (existing?.notifiedHash && existing.notifiedHash !== contentHash ? "updated" : "new")
+        : classifyReviewChange({
+            initialized: initialized || pendingNotification,
+            existing,
+            contentHash,
+          });
     const observationId = await input.repository.saveObservation({
       appId: input.app.id,
       review,
@@ -236,15 +265,12 @@ async function processReviews(input: {
       continue;
     }
     if (change === "unchanged") {
+      if (alreadyQueued) await input.repository.markNotified(observationId, contentHash);
       input.result.unchanged++;
       continue;
     }
     await input.enqueue({
-      dedupeKey: reviewNotificationDedupeKey({
-        appId: input.app.id,
-        review,
-        contentHash,
-      }),
+      dedupeKey,
       kind: "STORE_REVIEW",
       payload: {
         text: storeReviewDiscordText({
@@ -291,12 +317,18 @@ async function processReviews(input: {
     await input.repository.markNotified(observationId, contentHash);
     input.result.enqueued++;
   }
-  await input.repository.markSuccessful(input.app.id, input.store, input.now());
+  // 일부 ID의 복구는 전체 마켓의 최초 기준선을 대신하지 않는다.
+  if (!input.notifyReviewIds.size) {
+    await input.repository.markSuccessful(input.app.id, input.store, input.now());
+  }
 }
 
 export async function collectStoreReviews(
   dependencies: StoreReviewCollectorDependencies = {},
+  options: StoreReviewCollectOptions = {},
 ): Promise<StoreReviewCollectResult> {
+  validateReviewOptions(options);
+  const notifyReviewIds = new Set(options.notifyReviewIds);
   const destinations = (
     dependencies.destinations ??
     (() => {
@@ -314,8 +346,9 @@ export async function collectStoreReviews(
         where: { status: "ACTIVE" },
         select: {
           id: true,
+          slug: true,
+          status: true,
           displayName: true,
-          currentStage: true,
           playPackage: true,
           iosBundle: true,
           marketTargets: true,
@@ -323,7 +356,9 @@ export async function collectStoreReviews(
       }));
   const apps = await listApps();
   const targets = apps.flatMap((app) => {
-    if (!REVIEWABLE_STAGES.has(app.currentStage)) return [];
+    if (app.status !== "ACTIVE" || (options.appSlug && app.slug !== options.appSlug)) {
+      return [];
+    }
     const markets = marketTargets(app.marketTargets);
     return [
       ...(markets.has("play") && app.playPackage
@@ -332,8 +367,11 @@ export async function collectStoreReviews(
       ...(markets.has("appstore") && app.iosBundle
         ? [{ app, store: "APP_STORE" as const, externalId: app.iosBundle }]
         : []),
-    ];
+    ].filter((target) => !options.store || target.store === options.store);
   });
+  if ((options.appSlug || options.store) && targets.length === 0) {
+    throw new Error("지정한 앱과 마켓의 수집 대상 없음");
+  }
   const result: StoreReviewCollectResult = {
     targets: targets.length,
     storeCoverage: {
@@ -372,6 +410,10 @@ export async function collectStoreReviews(
           ? await googleFetcher!(target.externalId)
           : await appStoreFetcher!(target.externalId);
       result.fetched += reviews.length;
+      const returnedIds = new Set(reviews.map((review) => review.externalReviewId));
+      if ([...notifyReviewIds].some((id) => !returnedIds.has(id))) {
+        throw new Error("공식 API에 요청한 복구 리뷰 ID가 없습니다");
+      }
       await processReviews({
         app: target.app,
         store: target.store,
@@ -381,9 +423,14 @@ export async function collectStoreReviews(
         enqueue: dependencies.enqueue ?? enqueueNotification,
         now: dependencies.now ?? (() => new Date()),
         result,
+        notifyReviewIds,
       });
-      if (collectionId)
-        await repository.completeCollection?.(collectionId, reviews.length);
+      if (collectionId) {
+        await repository.completeCollection?.(
+          collectionId,
+          notifyReviewIds.size || reviews.length,
+        );
+      }
       result.storeCoverage[target.store].succeeded++;
     } catch (error) {
       if (collectionId)

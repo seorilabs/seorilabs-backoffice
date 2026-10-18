@@ -41,7 +41,6 @@ export async function sourceHealth(appId?: string) {
       displayName: true,
       slug: true,
       status: true,
-      currentStage: true,
       marketTargets: true,
       iosBundle: true,
       playPackage: true,
@@ -148,8 +147,11 @@ export async function sourceHealth(appId?: string) {
     }
   for (const app of apps) {
     const expected: Array<[string, string, boolean, boolean?]> = [];
-    const markets = Array.isArray(app.marketTargets) ? app.marketTargets : [];
-    const reviewable = app.status === "ACTIVE" && ["RELEASE", "LIVEOPS"].includes(app.currentStage);
+    const markets = Array.isArray(app.marketTargets)
+      ? app.marketTargets.filter((market): market is string => typeof market === "string")
+          .map((market) => market.toLowerCase())
+      : [];
+    const reviewable = app.status === "ACTIVE";
     if (app.playPackage)
       expected.push(
         ["play-submissions", app.playPackage, true],
