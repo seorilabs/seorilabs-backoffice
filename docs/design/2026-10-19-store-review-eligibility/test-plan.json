@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "7644fc4b59b302127547c722205cd6762846f98c",
+  "changedFeatures": [
+    "feedback-and-market-observations",
+    "collection-health",
+    "notification-outbox-report-visuals-and-retention"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}
