@@ -4,7 +4,13 @@ import { metricDaysBetween } from "./metric-day";
 type MetricDefinition = { label: string; unit: string; aggregation: "sum" | "ratio" | "none"; direction: "higher" | "lower" | "neutral"; definition: string };
 const count = (label: string, definition: string, direction: MetricDefinition["direction"] = "higher"): MetricDefinition => ({ label, definition, unit: "건", aggregation: "sum", direction });
 const money = (label: string, definition: string, direction: MetricDefinition["direction"] = "higher"): MetricDefinition => ({ label, definition, unit: "통화", aggregation: "sum", direction });
+const providerRate = (label: string): MetricDefinition => ({ label, unit: "% (공급자)", aggregation: "none", direction: "neutral", definition: "공식 Android vitals 일별 비율. 표본은 반올림되어 정확한 영향 사용자 수·분모를 역산하지 않으며 합산·자동 변화 판정을 보류" });
 export const METRIC_DICTIONARY = {
+  provider_crash_rate: providerRate("오류 경험 사용자 비율"),
+  provider_user_crash_rate: providerRate("사용 중 오류 경험 비율"),
+  provider_anr_rate: providerRate("응답 없음 경험 비율"),
+  provider_user_anr_rate: providerRate("사용 중 응답 없음 비율"),
+  provider_rounded_users: { label: "품질 표본 사용자(반올림)", unit: "명 (반올림)", aggregation: "none", direction: "neutral", definition: "공급자가 10·100·1,000·1,000,000 단위로 반올림한 사용자. 정확한 분모가 아니며 기간·차원 사이 합산 불가" } satisfies MetricDefinition,
   store_downloads: count("스토어 다운로드", "스토어 보고서의 다운로드. 설치·첫 실행과 구분"),
   store_impressions: count("스토어 노출", "스토어 노출 횟수. 고유 방문자와 구분"),
   store_page_views: count("스토어 페이지 조회", "스토어 페이지 조회 횟수. 설치·고유 방문자와 구분"),
@@ -48,6 +54,7 @@ export const unifiedMetricRowSchema = z.object({
   valueStatus: z.enum(["provisional", "analyzable", "estimated", "settled"]),
 }).strict().superRefine((row, context) => {
   const metric = METRIC_DICTIONARY[row.metric];
+  if (row.metric.startsWith("provider_") && (row.numerator !== null || row.denominator !== null || row.value !== null && (row.value < 0 || (row.metric !== "provider_rounded_users" && row.value > 100)))) context.addIssue({ code: "custom", message: "공급자 품질 비율은 정확한 분모로 변환하지 않습니다." });
   if (metric.unit.startsWith("통화") && !row.currency) context.addIssue({ code: "custom", message: "금액에는 통화가 필요합니다." });
   if (!["observed", "empty"].includes(row.state) && row.value !== null) context.addIssue({ code: "custom", message: "관측되지 않은 수치를 0이나 실적으로 저장할 수 없습니다." });
   if (row.state === "empty" && row.value !== 0) context.addIssue({ code: "custom", message: "확인된 0은 실제 0이어야 합니다." });

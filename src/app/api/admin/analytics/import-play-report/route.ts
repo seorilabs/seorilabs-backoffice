@@ -7,6 +7,7 @@ import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
 import { parseReportFile, playInstallRows } from "@/lib/analytics/report-files";
 import { beginCollection, completeCollection } from "@/lib/insights/collection";
+import { verifyPlayReportFile } from "@/lib/analytics/providers/play-reports";
 import { importMetricReport } from "@/lib/analytics/report-batches";
 import { metricDayOf, parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 export const runtime = "nodejs";
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
     if (!input.sourceUri.startsWith(path) || !/^\d{6}_country\.csv$/.test(input.sourceUri.slice(path.length))) throw new Error("REPORT_SOURCE_MISMATCH");
     const buffer = Buffer.from(input.fileBase64, "base64"), hash = createHash("sha256").update(buffer).digest("hex");
     if (hash !== input.expectedSha256) throw new Error("REPORT_HASH_MISMATCH");
+    await verifyPlayReportFile(input.sourceUri, input.sourceVersion, buffer);
     const rows = playInstallRows(parseReportFile(buffer, ","), app.playPackage);
     const month = input.sourceUri.slice(path.length, path.length + 6);
     if (rows.some((row) => row.day.replaceAll("-", "").slice(0, 6) !== month || row.day > input.processingDate)) throw new Error("REPORT_DATE_MISMATCH");

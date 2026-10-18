@@ -15,6 +15,7 @@ export async function importMetricReport(input: MetricReportBatchInput, runId: s
   if (!(["https:", "gs:"].includes(uri.protocol)) || uri.username || uri.password || uri.search || uri.hash) throw new Error("REPORT_SOURCE_URI_INVALID");
   if (batch.source === "apple-analytics" && (uri.origin !== "https://api.appstoreconnect.apple.com" || !/^\/v1\/analyticsReportInstances\/[A-Za-z0-9-]+$/.test(uri.pathname))
     || batch.source === "admob" && batch.sourceUri !== `https://admob.googleapis.com/v1/accounts/${batch.accountId}/networkReport`
+    || batch.source === "android-vitals" && (uri.origin !== "https://playdeveloperreporting.googleapis.com" || !["crashRateMetricSet", "anrRateMetricSet"].some((set) => uri.pathname === `/v1beta1/apps/${batch.resourceId}/${set}`))
     || batch.source === "play-reports" && (uri.protocol !== "gs:" || uri.hostname !== batch.accountId || !uri.pathname.startsWith(`/stats/installs/installs_${batch.resourceId}_`) || !/\d{6}_country\.csv$/.test(uri.pathname))) throw new Error("REPORT_SOURCE_URI_MISMATCH");
   return retryPrismaConflict(() => prisma.$transaction(async (db) => {
     // 같은 활성 설정의 병렬 가져오기를 직렬화해 오래된 generation의 역전을 막는다.
@@ -26,19 +27,30 @@ export async function importMetricReport(input: MetricReportBatchInput, runId: s
     const run = await db.sourceCollectionRun.findUnique({ where: { id: runId } });
     if (!run || run.appId !== batch.appId || run.source !== batch.source || run.target !== batch.connectionId || run.status !== "running") throw new Error("REPORT_RUN_MISMATCH");
     if (batch.source === "play-reports") {
-      if (!/^\d+$/.test(batch.sourceVersion)) throw new Error("PLAY_GENERATION_INVALID");
-      const priorWatermark = await db.sourceCollectionRun.findFirst({ where: { appId: batch.appId, source: batch.source, target: batch.connectionId, coverage: { path: "$.versions", not: Prisma.JsonNull } }, orderBy: [{ startedAt: "desc" }, { id: "desc" }], select: { coverage: true } });
-      const history = priorWatermark ? [priorWatermark] : [];
-      const versions = history.flatMap((row) => {
-        const parsed = row.coverage as { versions?: Array<{ uri: string; version: string }> } | null;
-        return parsed?.versions?.filter((one) => one.uri === batch.sourceUri && /^\d+$/.test(one.version)).map((one) => BigInt(one.version)) ?? [];
-      });
-      if (versions.some((version) => version > BigInt(batch.sourceVersion))) throw new Error("PLAY_GENERATION_STALE");
+      if (!/^\d{1,30}$/.test(batch.sourceVersion)) throw new Error("PLAY_GENERATION_INVALID");
+      // 실패·빈 실행·연결 이름 변경으로 URI별 최대 generation이 사라지지 않는다.
+      const watermark = await db.$queryRaw<Array<{ version: string | null }>>`
+        SELECT CAST(MAX(version) AS CHAR) AS version FROM (
+          SELECT CAST(v.version AS DECIMAL(30,0)) AS version
+          FROM source_collection_run r JOIN JSON_TABLE(r.coverage, '$.versions[*]'
+            COLUMNS(uri VARCHAR(2048) PATH '$.uri', version VARCHAR(191) PATH '$.version')) v
+          WHERE r.appId = ${batch.appId} AND r.source = 'play-reports' AND v.uri = ${batch.sourceUri}
+            AND v.version REGEXP '^[0-9]{1,30}$'
+          UNION ALL SELECT CAST(sourceVersion AS DECIMAL(30,0)) FROM metric_report_batch
+          WHERE appId = ${batch.appId} AND source = 'play-reports' AND sourceUri = ${batch.sourceUri}
+        ) history`;
+      if (watermark[0]?.version && BigInt(watermark[0].version) > BigInt(batch.sourceVersion)) throw new Error("PLAY_GENERATION_STALE");
       const coverage = run.coverage as Prisma.InputJsonObject | null;
-      const current = ((coverage?.versions ?? (priorWatermark?.coverage as Prisma.InputJsonObject | null)?.versions) as Array<{ uri: string; version: string }> | undefined) ?? [];
+      const current = (coverage?.versions as Array<{ uri: string; version: string }> | undefined) ?? [];
       await db.sourceCollectionRun.update({ where: { id: runId }, data: { coverage: { ...coverage, versions: [...current.filter((one) => one.uri !== batch.sourceUri), { uri: batch.sourceUri, version: batch.sourceVersion }] } } });
     }
-    const prior = await db.metricReportBatch.findFirst({ where: { appId: batch.appId, source: batch.source, accountId: batch.accountId, resourceId: batch.resourceId, reportType: batch.reportType, periodStart: toDbDay(batch.periodStart), periodEnd: toDbDay(batch.periodEnd), grain: batch.grain, timeZone: batch.timeZone }, orderBy: [{ processingDate: "desc" }, { createdAt: "desc" }, { id: "desc" }] });
+    const priorId = batch.source === "play-reports" ? await db.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM metric_report_batch WHERE appId = ${batch.appId} AND source = ${batch.source}
+        AND accountId = ${batch.accountId} AND resourceId = ${batch.resourceId} AND reportType = ${batch.reportType}
+        AND periodStart = ${toDbDay(batch.periodStart)} AND periodEnd = ${toDbDay(batch.periodEnd)}
+        AND grain = ${batch.grain} AND timeZone = ${batch.timeZone}
+      ORDER BY CAST(sourceVersion AS DECIMAL(30,0)) DESC, processingDate DESC, createdAt DESC, id DESC LIMIT 1` : null;
+    const prior = priorId ? priorId.length ? await db.metricReportBatch.findUnique({ where: { id: priorId[0].id } }) : null : await db.metricReportBatch.findFirst({ where: { appId: batch.appId, source: batch.source, accountId: batch.accountId, resourceId: batch.resourceId, reportType: batch.reportType, periodStart: toDbDay(batch.periodStart), periodEnd: toDbDay(batch.periodEnd), grain: batch.grain, timeZone: batch.timeZone }, orderBy: [{ processingDate: "desc" }, { createdAt: "desc" }, { id: "desc" }] });
     if (batch.source === "play-reports" && prior && BigInt(batch.sourceVersion) < BigInt(prior.sourceVersion)) throw new Error("PLAY_GENERATION_STALE");
     if (prior && normalizedRowsHash(prior.rows as unknown as MetricReportBatchInput["rows"]) === normalizedRowsHash(batch.rows)) return { id: prior.id, duplicate: true };
     const dedupeKey = jsonDigest({ ...batch } as unknown as JsonValue);
@@ -67,7 +79,7 @@ export async function metricReportPartitions(end: string, db: Prisma.Transaction
     SELECT id FROM (
       SELECT id, ROW_NUMBER() OVER (
         PARTITION BY appId, source, accountId, resourceId, reportType, periodStart, periodEnd, grain, timeZone
-        ORDER BY CASE WHEN source = 'play-reports' THEN CAST(sourceVersion AS UNSIGNED) ELSE 0 END DESC,
+        ORDER BY CASE WHEN source = 'play-reports' THEN CAST(sourceVersion AS DECIMAL(30,0)) ELSE 0 END DESC,
           processingDate DESC, createdAt DESC, id DESC
       ) AS position FROM metric_report_batch
       WHERE appId IN (${Prisma.join(apps.map((app) => app.id))})

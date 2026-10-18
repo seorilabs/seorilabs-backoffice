@@ -23,15 +23,15 @@ import { metricDayWindow } from "@/lib/analytics/metric-day";
 async function freezeDailyReport(now: Date, refDate: string, db: Prisma.TransactionClient) {
   const schedule = dailyReportSchedule(metricDayStart(shiftMetricDay(refDate, 1)));
     const data = await collectHighlightData(now, refDate, db);
-    const sources = await metricSourceInventory(refDate, db);
+    const sources = await metricSourceInventory(refDate, db, now);
     const trend = await orgTrendSeries(refDate, 28, db);
     const cohorts = await reportCohorts(refDate, db);
     const actions = await metricIssueReportActions(now, db);
     const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
-    const finance = await db.sourceCollectionRun.findFirst({ where: { source: "finance-costs", target: financeMonth(now).month, completedAt: { lte: now < schedule.cutoffAt ? now : schedule.cutoffAt } }, orderBy: { completedAt: "desc" } });
+    const finance = await db.sourceCollectionRun.findFirst({ where: { source: "finance-costs", target: financeMonth(schedule.dueAt).month, completedAt: { lte: now } }, orderBy: { completedAt: "desc" } });
     const parsedCost = orgReportDocumentSchema.shape.costs.safeParse(finance?.coverage ?? null);
-    const costSnapshot = parsedCost.success ? parsedCost.data : null;
+    const costSnapshot = parsedCost.success && parsedCost.data ? { ...parsedCost.data, collectedAt: parsedCost.data.collectedAt ?? finance?.completedAt?.toISOString() } : null;
     const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
@@ -175,7 +175,6 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     const doc = frozen.doc;
     if (previous.edition && previous.edition.frozenAt >= doc.edition!.frozenAt) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
     if (previous.published.factsHash === doc.edition!.inputHash) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
-    doc.costs = previous.costs;
     doc.edition!.replacesVersion = latest!.version;
     doc.edition!.changes = reportCorrectionDiff(previous, doc);
     // 앞선 수치에서 만든 해설은 새 수치의 원인 설명으로 재사용하지 않는다.
