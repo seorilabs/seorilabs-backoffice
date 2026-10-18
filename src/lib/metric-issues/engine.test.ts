@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { registerFixedCandidates, type RegistrationPorts } from "./engine";
+import { candidateMarker, registerFixedCandidates, type RegistrationPorts } from "./engine";
 import type { Candidate, MetricFact, RegistrationPolicy } from "./contracts";
+import { IssuePostRejected } from "./post-outcome";
 const candidate: Candidate = { title: "첫 행동을 기록하도록 이벤트 계약을 맞춘다", kind: "instrumentation", problemKey: "first-action-contract", customerProblem: "행동이 기록되지 않는다", outcome: "핵심 행동을 기록한다", scope: ["events.ts"], acceptanceCriteria: ["정해진 인자를 기록한다", "중복 기록이 없다"], validation: ["개발 환경 전송 경로 검증"], proof: { path: "events.ts", line: 1, excerpt: 'send("action", {})', contractPath: "contract.ts", contractExcerpt: 'required: ["id"]', expected: "id를 기록한다", actual: "id가 없다", reproduction: "행동 실행" } };
 const fact: MetricFact = { metric: "ga4_dau", day: "2026-10-17", periodStart: "2026-10-10", baseline: 100, latest: 40, baselineDays: 7, sample: 100, complete: true, mature: true, source: "ga4", scope: "one", runId: "source", direction: "lowlight" };
 const policy: RegistrationPolicy = { sha: "policy", documentHash: "doc", data: { schedules: { timezone: "Asia/Seoul", registration: { localTimes: ["02:00", "14:00"], openAutopilotIssueLimit: 10, mode: "evidence-batch" } }, repositories: [{ repository: "seorilabs/example", registration: "ENABLED" }], titlePolicy: { forbiddenPrefixPatterns: [], forbiddenAgentOrderPattern: "[UN][0-9]+" } } };
@@ -43,4 +44,24 @@ test("매 생성 전에 정책·재고·기본 브랜치·표본·수정 관찰�
     if (reason === "lease") p.port.active = async () => false;
     await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], p.port); assert.equal(p.counts().creates, 0, reason);
   }
+});
+test("발췌·제목이 달라도 같은 파일과 선언 계약은 같은 문제로 연결한다", async () => {
+  const p = ports(), changed = { ...candidate, title: "핵심 행동 인자를 전달한다", proof: { ...candidate.proof, excerpt: 'send("action", {})\n' } };
+  p.port.files = async () => ({ "events.ts": 'send("action", {})\n', "contract.ts": 'required: ["id"]' });
+  assert.equal(candidateMarker("seorilabs/example", changed), candidateMarker("seorilabs/example", candidate));
+  await registerFixedCandidates("app", "seorilabs/example", "source", [candidate, changed], p.port);
+  assert.equal(p.counts().creates, 1); assert.deepEqual(p.results, ["registered", "linked"]);
+});
+test("라벨 조회 중 예산이 끝나면 POST 권한을 발급하지 않는다", async () => {
+  const p = ports(); let active = true;
+  p.port.active = async () => active; p.port.labelsExist = async () => { active = false; return true; };
+  assert.equal(await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], p.port), "execution-budget-exhausted");
+  assert.equal(p.attempts.length, 0); assert.equal(p.counts().creates, 0);
+});
+test("생성 POST의 명확한 거절은 기록하고 종료하며 일반 GET 오류는 불명 상태를 유지한다", async () => {
+  const p = ports(); p.port.create = async () => { throw new IssuePostRejected(403); };
+  assert.equal(await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], p.port), "provider-rejected");
+  assert.deepEqual(p.results, ["needs_input"]);
+  const ambiguous = ports(); ambiguous.port.create = async () => { throw Object.assign(new Error("후속 GET 권한 오류"), { status: 403 }); };
+  assert.equal(await registerFixedCandidates("app", "seorilabs/example", "source", [candidate], ambiguous.port), "global-safety-blocked");
 });

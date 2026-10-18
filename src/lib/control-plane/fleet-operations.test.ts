@@ -496,6 +496,13 @@ test("Fleet run 오류를 화면에 내보내기 전에 credential 후보를 제
   });
 });
 
+test("검증된 보고 연결의 logical ID는 편집에 보존하고 비밀값은 계속 가린다", () => {
+  const connection = { id: "apple", source: "apple-analytics", enabled: true, accountId: "12345678-1234-4234-8234-123456789abc", resourceId: "1234567890", credentialId: "shared/apple/app-store-connect-uploader", timeZone: "UTC" };
+  assert.deepEqual(redactFleetJson({ analyticsSources: [connection] }), { analyticsSources: [connection] });
+  const invalid = { analyticsSources: [{ ...connection, credentialId: "x".repeat(40), apiKey: "fixture-only" }] };
+  assert.doesNotMatch(JSON.stringify(redactFleetJson(invalid)), /fixture-only|xxxxxxxxxxxxxxxx/);
+});
+
 test("Prisma 모델과 UI에는 raw authentication secret 필드가 없다", () => {
   const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
   const migration = readFileSync(

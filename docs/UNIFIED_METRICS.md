@@ -40,14 +40,14 @@ AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 
 
 등록은 기존 operator-command worker의 유지보수와 실행 대기열·임대·감사 원장을 사용한다. 별도 폴링 루프와 분석 worker의 GitHub 쓰기 권한을 추가하지 않는다. 최신 중앙 계약·JSON schema·등록 문서를 exact SHA로 읽고 ENABLED 저장소만 02시·14시 중앙 슬롯에 한 번 순회한다. 실행 예산은 해당 occurrence 입력에 고정한다. 열린 자동 처리 이슈·최근 종료 이슈·관련 PR·기본 브랜치·최근 수정 및 배포·표본을 먼저 확인한다. 금액 변화 단독으로 등록하지 않는다.
 
-코드의 명시적 선언과 실제 경로를 확인한 유한 후보 목록만 고정하고, 매 생성 전에 정책·재고·기본 브랜치·분모·관찰 기간·근거·필수 라벨을 다시 확인한다. POST 권한은 후보당 한 번만 감사 원장에 기록한다. GitHub 클라이언트의 자동 재전송을 끄며 응답 불명은 먼저 이슈 마커·본문·라벨을 읽는다. 확인되지 않으면 전역 guard를 유지해 새 등록을 중지한다. 만료 실행 복구는 readback만 수행한다. 새 이슈 0건은 정상이며 코드 변경·PR·릴리스는 하지 않는다.
+코드의 명시적 선언과 실제 경로를 확인한 유한 후보 목록만 고정하고, 매 생성 전에 정책·재고·기본 브랜치·분모·관찰 기간·근거·필수 라벨을 다시 확인한다. POST 권한은 후보당 한 번만 감사 원장에 기록한다. 앱 자동 운영 중지와 실행 마감을 생성 직전에도 다시 검사한다. 파일·선언 계약 기준의 안정된 문제 키로 제목·발췌가 달라져도 중복을 막는다. GitHub 클라이언트의 자동 재전송을 끄며 응답 불명은 먼저 이슈 마커·본문·라벨을 읽는다. 확인되지 않으면 전역 guard를 유지해 새 등록을 중지한다. 생성 POST 자체의 명확한 4xx 거절은 미생성으로 기록하고 해당 실행을 종료한다. 생성 뒤 GET 오류는 거절로 간주하지 않는다. 이미 확인한 이슈는 후속 편집·보관 때문에 재확인하지 않고, 미확인 이슈만 보관된 저장소에서도 조회한다. 응답 불명 상태를 관리자 강제 해제로 우회하거나 SQL로 풀지 않는다. 만료 실행 복구는 readback만 수행한다. 새 이슈 0건은 정상이며 코드 변경·PR·릴리스는 하지 않는다.
 
-전체 기능의 긴급 중지는 `FEATURE_METRIC_ISSUE_REGISTRATION=false`이다. 중앙 운영 중지는 `/api/control-plane/metric-issue-registration` GET의 `updatedAt`을 읽고 POST에 `enabled`, `expectedUpdatedAt`, `maxElapsedMs`(최대 600000), `maxTokens`(최대 40000)를 넣는다. 기존 control-plane 관리자 principal·토큰·Idempotency-Key가 필요하다. 상태·설정 버전·감사는 같은 transaction이며 재전송은 동일 결과를 반환한다. 활성화는 수집 활성화와 별개다. 초기 정의가 없으면 실행하지 않는다.
+전체 기능의 긴급 중지는 `backoffice-runtime-flags` ConfigMap의 `FEATURE_METRIC_ISSUE_REGISTRATION=false`이며 해당 worker rollout으로 반영한다. 누락 시에도 중지 상태이며 배포가 운영 중지 값을 덮지 않는다. 중앙 운영 중지는 `/api/control-plane/metric-issue-registration` GET의 `updatedAt`을 읽고 POST에 `enabled`, `expectedUpdatedAt`, `maxElapsedMs`(최대 600000), `maxTokens`(최대 40000)를 넣는다. 기존 control-plane 관리자 principal·토큰·Idempotency-Key가 필요하다. 상태·설정 버전·감사는 같은 transaction이며 재전송은 동일 결과를 반환한다. 활성화는 수집 활성화와 별개다. 초기 정의가 없으면 실행하지 않는다.
 
 공개 저장소에는 운영 숫자나 모델의 자유 서술을 넣지 않고 현재 공개 코드의 검증한 발췌와 고정 안내만 기재한다. 라이브 인과·피해 규모가 미확정이므로 등록 중요도는 P3로 제한한다. 공개 코드·CI만으로 인수조건을 확인하는 이슈는 cloud, 비공개 근거를 재조회해야 하는 이슈는 local로 구분한다. 비공개 측정 기간·기준선·표본·수집 범위는 실행 원장에 보존한다. 보고서에는 같은 snapshot 시점의 등록·기존 이슈 연결·근거 부족·관찰·정책 제외·입력 필요 결과가 포함된다. 정오 이후 결과는 기존 보고서의 새 버전으로 반영한다.
 
 ## Apple 공용 실행 키 정합성
 
-2026-10-18 조사에서 기존 실행 키 `6ZPC58D7NF`는 앱 조회는 가능했으나 분석 보고서 조회가 403이었고, 등록된 활성 공용 키 `UHVPXA39JA`는 같은 계정의 24개 앱 및 42개 분석 요청을 200으로 조회했다. 새 키를 만들거나 기존 키를 폐기하지 않는다. `shared/apple/app-store-connect-uploader`의 기존 활성 원본을 사용하도록 SealedSecret의 Apple 세 필드만 갱신한다. 원본·이전 실행 복사본의 로컬/BeeStation 암호화 백업과 양쪽 복원 검증을 마쳤다.
+등록된 활성 공용 identity로 공식 앱·분석 요청 조회를 확인했다. 세부 계정 권한과 운영 대상·요청 수는 비공개 운영 증거에 보존한다. 새 키를 만들거나 기존 키를 폐기하지 않는다. `shared/apple/app-store-connect-uploader`의 기존 활성 원본을 사용하도록 SealedSecret의 Apple 세 필드만 갱신한다. 원본·이전 실행 복사본의 로컬/BeeStation 암호화 백업과 양쪽 복원 검증을 마쳤다.
 
 운영 적용은 최종 before-deploy 검사 뒤 수행한다. SealedSecret 동기화와 실제 Secret의 공개 key ID를 먼저 확인하고 웹·worker를 같은 승인 이미지로 교체한다. 이후 실행 환경에서 앱·분석 요청을 다시 읽는다. 결과 불명이면 변경을 반복하지 않고 상태부터 확인한다. 장애 시 보호된 이전 세 필드의 실행 복사본으로 복원하며 다른 Secret 필드를 덮지 않는다. 이 변경은 새 자격증명 생성·키 회전·폐기가 아니다.

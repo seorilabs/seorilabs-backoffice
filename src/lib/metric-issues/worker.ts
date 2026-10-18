@@ -6,17 +6,15 @@ import { issueMetricFacts } from "./facts";
 import { analyzeIssueCandidates } from "./analysis";
 import { candidateGate } from "./contracts";
 import { registerFixedCandidates } from "./engine";
+import { recoverRegistrationAttempts } from "./recovery";
 import { claimMetricRegistration, finishMetricRegistration, registrationActive, registrationAttempt, registrationEvent, registrationResult, type RegistrationClaim } from "./queue";
 
 async function recover(claim: RegistrationClaim) {
-  const attempts = await prisma.agentRunEvent.findMany({ where: { runId: claim.runId, type: "METRIC_ISSUE_ATTEMPT" }, orderBy: { createdAt: "asc" } });
-  for (const event of attempts) {
-    const intent = event.payload as { repository: string; marker: string; title: string; body: string; labels: string[]; appId: string };
-    const row = await withRegistrationGithub(intent.repository, async (github) => (await github.readback(new Date())).issues.find((row) => row.body.includes(intent.marker)));
-    if (!row || row.title !== intent.title || row.body !== intent.body || !intent.labels.every((label) => row.labels.includes(label))) return false;
-    await registrationEvent(claim, "METRIC_ISSUE_RESULT", { appId: intent.appId, repository: intent.repository, status: "registered", title: row.title, marker: intent.marker, url: row.url, number: row.number, reason: "실행 중단 후 생성 여부·본문·라벨을 다시 확인했습니다." }, `${claim.runId}:recovered:${intent.marker}`);
-  }
-  return true;
+  const events = await prisma.agentRunEvent.findMany({ where: { runId: claim.runId, type: { in: ["METRIC_ISSUE_ATTEMPT", "METRIC_ISSUE_RESULT"] } }, orderBy: { createdAt: "asc" } });
+  return recoverRegistrationAttempts(events, {
+    find: (intent) => withRegistrationGithub(intent.repository, (github) => github.findIssueForRecovery(intent.marker, new Date())),
+    confirm: async (intent, row) => { await registrationEvent(claim, "METRIC_ISSUE_RESULT", { appId: intent.appId, repository: intent.repository, status: "registered", title: row.title, marker: intent.marker, url: row.url, number: row.number, reason: "실행 중단 후 생성 여부·본문·라벨을 다시 확인했습니다." }, `${claim.runId}:recovered:${intent.marker}`); },
+  });
 }
 /** 기존 operator worker의 유지보수 호출이 중앙 슬롯을 한 번만 claim한다. 별도 등록 루프는 없다. */
 export async function maintainMetricIssueRegistration() {
@@ -30,18 +28,18 @@ export async function maintainMetricIssueRegistration() {
       reason = await recover(claim) ? "repository-pass-completed" : "global-safety-blocked";
       return;
     }
-    const reportApps = await prisma.app.findMany({ where: { status: { in: ["ACTIVE", "PAUSED"] } }, select: { id: true, repoFullName: true } });
-    for (const app of reportApps) if (!policy.data.repositories.some((row) => row.repository === app.repoFullName && row.registration === "ENABLED")) await registrationResult(claim, { appId: app.id, repository: app.repoFullName, status: "excluded", title: "중앙 정책에 따라 자동 이슈 등록에서 제외합니다.", reason: "보고 대상에는 포함하며 추가 지표·코드 분석은 하지 않습니다.", policySha: policy.sha });
+    const reportApps = await prisma.app.findMany({ where: { status: { in: ["ACTIVE", "PAUSED"] } }, select: { id: true, status: true, repoFullName: true } });
+    for (const app of reportApps) if (app.status !== "ACTIVE" || !policy.data.repositories.some((row) => row.repository === app.repoFullName && row.registration === "ENABLED")) await registrationResult(claim, { appId: app.id, repository: app.repoFullName, status: "excluded", title: app.status === "PAUSED" ? "자동 운영이 중지된 앱은 새 이슈를 등록하지 않습니다." : "중앙 정책에 따라 자동 이슈 등록에서 제외합니다.", reason: "보고 대상에는 포함하며 추가 지표·코드 분석은 하지 않습니다.", policySha: policy.sha });
     const configured = policy.data.repositories.filter((row) => row.registration === "ENABLED").map((row) => row.repository);
     const today = metricDayOf(new Date()), dayIndex = Math.floor((toDbDay(today).getTime() - Date.UTC(Number(today.slice(0, 4)), 0, 1)) / 86400_000);
     const offset = configured.length ? dayIndex % configured.length : 0, repositories = [...configured.slice(offset), ...configured.slice(0, offset)];
     // 실행 입력에 순회와 예산을 고정한다. 이후 정책 재검사는 제외만 허용한다.
     await registrationEvent(claim, "METRIC_REGISTRATION_PLAN", { policySha: policy.sha, repositories, budget: claim.budget });
-    const active = async () => Date.now() - started < claim.budget.maxElapsedMs && await registrationActive(claim);
+    const active = async () => Date.now() + 31_000 - started < claim.budget.maxElapsedMs && await registrationActive(claim);
     for (const repository of repositories) {
       if (!await active()) { reason = "execution-budget-exhausted"; break; }
       visited.push(repository);
-      const app = await prisma.app.findFirst({ where: { repoFullName: repository, status: { in: ["ACTIVE", "PAUSED"] } }, select: { id: true } });
+      const app = await prisma.app.findFirst({ where: { repoFullName: repository, status: "ACTIVE" }, select: { id: true } });
       if (!app) { await registrationEvent(claim, "METRIC_REGISTRATION_SKIPPED", { repository, reason: "보고 대상 앱 연결 없음" }); continue; }
       const fresh = await loadRegistrationPolicy(true);
       if (!fresh.data.repositories.some((row) => row.repository === repository && row.registration === "ENABLED")) { await registrationResult(claim, { appId: app.id, repository, status: "excluded", title: "중앙 정책에서 등록을 제외했습니다.", reason: "현재 정책 제외", policySha: fresh.sha }); continue; }
@@ -69,7 +67,7 @@ export async function maintainMetricIssueRegistration() {
           attempt: (marker, intent) => registrationAttempt(claim, marker, intent), result: (row) => registrationResult(claim, row), create: (title, body, labels) => github.create(title, body, labels),
         });
       });
-      if (stop !== "completed") { reason = stop; break; }
+      if (stop !== "completed") { reason = stop === "provider-rejected" ? "global-safety-blocked" : stop; break; }
     }
   } catch {
     reason = "global-safety-blocked";

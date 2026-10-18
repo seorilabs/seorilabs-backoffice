@@ -8,6 +8,7 @@ import type { JsonValue } from "@/lib/control-plane/json";
 import { ControlPlaneError } from "@/lib/control-plane/service";
 import { registrationSlot, type RegistrationPolicy } from "./contracts";
 import type { RegistrationResult } from "./engine";
+import { unresolvedRegistrationAttempts } from "./recovery";
 export const REGISTRATION_KEY = "central-metric-issue-registration";
 export const REGISTRATION_TEMPLATE = "metric-issue-registration-v1";
 const actor = "system:metric-issue-registration", scope = "metric-issue-registration";
@@ -72,16 +73,23 @@ export async function registrationAttempt(claim: RegistrationClaim, marker: stri
     // POST 직전 durable capability와 운영 중지 상태를 잠그고 재확인한다.
     const lease = await db.agentLease.findUnique({ where: { id: claim.leaseId }, include: { run: { include: { occurrence: { include: { definition: true } } } } } });
     if (!lease || lease.revokedAt || lease.expiresAt.getTime() <= Date.now() + 60_000 || lease.generation !== claim.generation || lease.run.leaseGeneration !== claim.generation || lease.run.status !== "RUNNING" || !lease.run.occurrence.definition.enabled || lease.run.occurrence.definition.cancelledAt) return false;
+    if (!lease.run.startedAt || lease.run.startedAt.getTime() + claim.budget.maxElapsedMs <= Date.now() + 31_000) return false;
+    const target = z.object({ appId: z.string(), repository: z.string() }).parse(intent);
+    const app = await db.app.findUnique({ where: { id: target.appId }, select: { status: true, repoFullName: true } });
+    if (!app || app.status !== "ACTIVE" || app.repoFullName !== target.repository) return false;
     const created = await db.agentRunEvent.createMany({ data: [{ runId: claim.runId, generation: claim.generation, actor, type: "METRIC_ISSUE_ATTEMPT", requestId: `${claim.runId}:${marker}`, payload: JSON.parse(JSON.stringify({ marker, ...intent as object })) }], skipDuplicates: true });
     return created.count === 1;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 }
 export async function registrationResult(claim: RegistrationClaim, row: RegistrationResult) { await registrationEvent(claim, "METRIC_ISSUE_RESULT", row, row.marker ? `${claim.runId}:result:${row.marker}` : undefined); }
 export async function finishMetricRegistration(claim: RegistrationClaim, reason: string, summary: unknown) {
-  const now = new Date(), blocked = reason === "global-safety-blocked";
+  const now = new Date();
   await retryPrismaConflict(() => prisma.$transaction(async (db) => {
     const run = await db.agentRun.findUniqueOrThrow({ where: { id: claim.runId } });
     if (run.leaseGeneration !== claim.generation || run.status !== "RUNNING") return;
+    const events = await db.agentRunEvent.findMany({ where: { runId: run.id, type: { in: ["METRIC_ISSUE_ATTEMPT", "METRIC_ISSUE_RESULT"] } }, select: { type: true, payload: true } });
+    const blocked = unresolvedRegistrationAttempts(events).length > 0;
+    if (blocked) reason = "global-safety-blocked";
     await db.agentRunEvent.create({ data: { runId: run.id, type: "METRIC_REGISTRATION_FINISHED", actor, generation: claim.generation, payload: JSON.parse(JSON.stringify({ reason, summary })) } });
     if (blocked) {
       // 응답 불명의 guard는 유지한다. 다음 실행도 먼저 readback하며 새 POST를 하지 않는다.

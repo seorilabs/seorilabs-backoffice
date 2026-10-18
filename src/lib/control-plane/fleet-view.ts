@@ -10,6 +10,7 @@ import { latestDiscoveryObservationOrder } from "@/lib/control-plane/discovery-o
 import { platformSdkObservationFromDiscovery } from "@/lib/control-plane/platform-sdk-observation";
 import { repositorySourceIsCurrent } from "@/lib/control-plane/repository-registration";
 import { prisma } from "@/lib/prisma";
+import { analyticsConnectionSchema } from "@/lib/analytics/source-contract";
 
 const fleetConfigRevisionSelect = {
   id: true,
@@ -76,6 +77,11 @@ export function redactFleetJson(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (normalized === "analyticssources") {
+      const connections = analyticsConnectionSchema.array().max(20).safeParse(child);
+      // 소스별 고정 logical ID는 비밀값이 아니다. 나머지 값에는 기존 마스킹을 유지한다.
+      if (connections.success) return [key, connections.data.map(({ credentialId, ...connection }) => ({ ...redactFleetJson(connection) as object, credentialId }))];
+    }
     if (normalized === "ads") {
       const publicAds = admobConfigSchema.safeParse(child);
       if (publicAds.success) return [key, publicAds.data];

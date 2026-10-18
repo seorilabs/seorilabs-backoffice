@@ -4,6 +4,7 @@ import type { OrgReportDocument } from "@/lib/core/org-report-schema";
 import { coverageSummary, publicationState } from "@/lib/report/daily-contract";
 import { sourceStateLabel } from "@/lib/insights/collection";
 import { Panel } from "./OrgReportSections";
+import { actionStatusLabels } from "@/lib/report/action-presentation";
 
 const time = (value: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 
@@ -30,10 +31,9 @@ export function DailyEditionSummary({ doc, version }: { doc: OrgReportDocument; 
 
 export function DailyEditionActions({ doc }: { doc: OrgReportDocument }) {
   if (!doc.edition) return null;
-  const status = { registered: "등록됨", linked: "기존 이슈와 연결", insufficient: "근거 부족", observing: "관찰 중", excluded: "정책 제외", needs_input: "사람 입력 필요" };
   return <Panel title="다음 행동">
     {doc.edition.actions.length ? <ul className="space-y-2 text-sm">{doc.edition.actions.map((action, index) => <li key={index}>
-      <span className="mr-2 rounded bg-neutral-100 px-2 py-1 text-xs">{status[action.status]}</span>
+      <span className="mr-2 rounded bg-neutral-100 px-2 py-1 text-xs">{actionStatusLabels[action.status]}</span>
       {action.appName} · {action.url ? <Link className="text-blue-700 underline" href={action.url}>{action.title}</Link> : action.title}
     </li>)}</ul> : <p className="text-sm text-neutral-600">등록할 근거를 갖춘 새 개선 후보가 없습니다. 새 이슈 0건도 정상 결과입니다.</p>}
   </Panel>;

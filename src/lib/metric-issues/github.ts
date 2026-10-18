@@ -1,6 +1,7 @@
 import { getInstallationOctokit, getFleetScopedGithubTokenIssuer, type Octokit } from "@/lib/github/app";
 import { withFleetScopedGithubClient } from "@/lib/github/scoped-installation-client";
 import type { Candidate } from "./contracts";
+import { IssuePostRejected, isRejectedStatus } from "./post-outcome";
 
 export interface IssueReadback { number: number; title: string; body: string; state: string; url: string; labels: string[] }
 export interface PullReadback { number: number; title: string; body: string; mergedAt: string | null; closing: number[] }
@@ -77,8 +78,16 @@ export class RegistrationGithub {
     catch (error) { if ((error as { status?: number }).status === 404) return false; throw error; }
   }
   async create(title: string, body: string, labels: string[]) {
-    const row = (await this.client.rest.issues.create({ owner: this.owner, repo: this.repo, title, body, labels, request: { retries: 0, signal: AbortSignal.timeout(30_000) } })).data;
+    let row;
+    try { row = (await this.client.rest.issues.create({ owner: this.owner, repo: this.repo, title, body, labels, request: { retries: 0, signal: AbortSignal.timeout(30_000) } })).data; }
+    catch (error) { const status = (error as { status?: unknown }).status; if (isRejectedStatus(status)) throw new IssuePostRejected(status); throw error; }
     return this.issue(row.number);
+  }
+  async findIssueForRecovery(marker: string, now: Date) {
+    // 보관된 저장소도 읽는다. 등록 분석용 default branch·PR 조회와 분리한다.
+    const rows = await this.client.paginate(this.client.rest.issues.listForRepo, { owner: this.owner, repo: this.repo, state: "all", since: new Date(now.getTime() - 90 * 86400_000).toISOString(), per_page: 100 });
+    const matched = rows.filter((row) => !row.pull_request && row.body?.includes(marker));
+    return matched.length === 1 ? this.issue(matched[0].number) : undefined;
   }
   async issue(number: number): Promise<IssueReadback> {
     const row = (await this.client.rest.issues.get({ owner: this.owner, repo: this.repo, issue_number: number })).data;

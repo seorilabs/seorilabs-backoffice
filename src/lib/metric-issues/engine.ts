@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { candidateGate, metricIssueTitle, renderMetricIssue, verifyCodeProof, type Candidate, type MetricFact, type RegistrationPolicy } from "./contracts";
 import type { IssueReadback, PullReadback, RepositoryReadback } from "./github";
-export interface RegistrationResult { appId: string; repository: string; status: "registered" | "linked" | "insufficient" | "observing" | "excluded" | "needs_input"; title: string; reason: string; marker?: string; url?: string; number?: number; policySha?: string; sourceSha?: string; fact?: MetricFact }
+import { IssuePostRejected } from "./post-outcome";
+export interface RegistrationResult { appId: string; repository: string; status: "registered" | "linked" | "insufficient" | "observing" | "excluded" | "needs_input"; title: string; reason: string; marker?: string; url?: string; number?: number; policySha?: string; sourceSha?: string; fact?: MetricFact; rejectedStatus?: number }
 export interface RegistrationPorts {
   now(): Date; active(): Promise<boolean>; policy(): Promise<RegistrationPolicy>; readback(): Promise<RepositoryReadback>;
   files(sha: string): Promise<Record<string, string>>; relatedFix(candidate: Candidate, pulls: PullReadback[], now: Date): Promise<Date | null>;
@@ -11,7 +12,7 @@ export interface RegistrationPorts {
   result(result: RegistrationResult): Promise<void>; create(title: string, body: string, labels: string[]): Promise<IssueReadback>;
 }
 export function candidateMarker(repository: string, candidate: Candidate) {
-  return `metric-issue:${createHash("sha256").update(JSON.stringify([repository, candidate.kind, candidate.proof.path, candidate.proof.excerpt, candidate.proof.contractPath, candidate.proof.contractExcerpt])).digest("hex")}`;
+  return `metric-issue:${createHash("sha256").update(JSON.stringify([repository, candidate.kind, candidate.proof.path, candidate.proof.contractPath])).digest("hex")}`;
 }
 function duplicate(candidate: Candidate, marker: string, title: string, state: RepositoryReadback) {
   const normalized = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
@@ -21,7 +22,8 @@ function confirms(row: IssueReadback, title: string, body: string, labels: strin
   return row.title === title && row.body === body && labels.every((label) => row.labels.includes(label));
 }
 /** 호출자가 사전에 봉인한 유한 목록만 직렬로 소진한다. 응답 불명은 새 POST 없이 readback한다. */
-export async function registerFixedCandidates(appId: string, repository: string, sourceSha: string, candidates: Candidate[], port: RegistrationPorts): Promise<"completed" | "execution-budget-exhausted" | "global-safety-blocked"> {
+export async function registerFixedCandidates(appId: string, repository: string, sourceSha: string, candidates: Candidate[], port: RegistrationPorts): Promise<"completed" | "execution-budget-exhausted" | "global-safety-blocked" | "provider-rejected"> {
+  const confirmed: IssueReadback[] = [];
   for (const candidate of candidates) {
     if (!await port.active()) return "execution-budget-exhausted";
     const policy = await port.policy();
@@ -30,7 +32,7 @@ export async function registerFixedCandidates(appId: string, repository: string,
     const state = await port.readback(), title = metricIssueTitle(candidate, !state.private), marker = candidateMarker(repository, candidate);
     if (state.archived) { await port.result({ ...base, status: "excluded", reason: "보관되었거나 사용할 수 없는 저장소입니다." }); continue; }
     if (state.openAutopilot >= policy.data.schedules.registration.openAutopilotIssueLimit) { await port.result({ ...base, status: "observing", reason: "열린 자동 처리 이슈가 중앙 재고 상한에 도달했습니다." }); continue; }
-    const existing = duplicate(candidate, marker, title, state);
+    const existing = duplicate(candidate, marker, title, { ...state, issues: [...state.issues, ...confirmed] });
     if (existing) { await port.result({ ...base, title, marker, status: "linked", reason: "열린·최근 종료 이슈 또는 관련 PR의 기존 문제와 연결했습니다.", url: existing.url, number: existing.number }); continue; }
     const fact = (await port.facts()).find((row) => candidateGate({ enabled: true, open: state.openAutopilot, limit: policy.data.schedules.registration.openAutopilotIssueLimit, relatedFixAt: null, now: port.now(), fact: row, kind: candidate.kind }) === "eligible");
     if (!fact) { await port.result({ ...base, status: "insufficient", reason: "완전한 비교·표본을 갖춘 변화 근거가 없습니다." }); continue; }
@@ -41,14 +43,22 @@ export async function registerFixedCandidates(appId: string, repository: string,
     const body = renderMetricIssue(candidate, fact, { repo: repository, sha: sourceSha, marker, publicRepository: !state.private });
     const labels = ["autopilot", "P3", state.private ? "autopilot:local" : "autopilot:cloud", candidate.kind === "instrumentation" ? "instrumentation" : "bug", fact.source === "ga4" ? "evidence:ga4" : fact.source === "console" ? "evidence:console" : "evidence:store"];
     if (!await port.labelsExist(labels)) { await port.result({ ...base, status: "needs_input", reason: "중앙 필수 라벨이 저장소에 없습니다. 표준 라벨 조정이 필요합니다." }); continue; }
+    if (!await port.active()) return "execution-budget-exhausted";
     if (!await port.attempt(marker, { title, body, labels, appId, repository })) continue;
     let created: IssueReadback | undefined;
-    try { created = await port.create(title, body, labels); } catch { /* POST는 재시도하지 않는다. */ }
+    try { created = await port.create(title, body, labels); } catch (error) {
+      if (error instanceof IssuePostRejected) {
+        await port.result({ ...base, title, marker, status: "needs_input", rejectedStatus: error.status, reason: `GitHub가 생성 POST를 거절했습니다(HTTP ${error.status}). 이슈를 재전송하지 않고 이번 등록 실행을 종료합니다.`, fact });
+        return "provider-rejected";
+      }
+      // POST의 결과와 후속 GET 실패를 구분할 수 없으면 재전송하지 않는다.
+    }
     if (!created || !confirms(created, title, body, labels)) {
       try { created = (await port.readback()).issues.find((row) => row.body.includes(marker)); } catch { created = undefined; }
     }
     if (!created || !confirms(created, title, body, labels)) { await port.result({ ...base, title, marker, status: "needs_input", reason: "생성 여부 또는 본문·라벨 readback이 불명확합니다. 재전송 없이 등록 전체를 중지했습니다.", fact }); return "global-safety-blocked"; }
     await port.result({ ...base, title, marker, status: "registered", reason: "생성한 이슈의 번호·본문·라벨을 다시 확인했습니다.", url: created.url, number: created.number, fact });
+    confirmed.push(created);
   }
   return "completed";
 }
