@@ -294,7 +294,7 @@ async function processReviews(input: {
               : `언어 ${review.locale ?? "제공 안됨"} · 국가 제공 안됨`,
           version: review.appVersion ?? "제공 안됨",
         },
-        report: { category: "internal", reason: "GROUPED_REVIEW_CONTENT" },
+        report: { category: "change", reason: "INDIVIDUAL_REVIEW" },
         // 별점이 상자 색으로 먼저 읽히게 한다. 낮은 별점은 대응이 필요한 신호다.
         rating: review.rating,
         change,

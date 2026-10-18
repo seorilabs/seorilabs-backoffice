@@ -15,6 +15,7 @@ const internalSignals = new Set([
   "release-impact",
   "keyword-change", // 발행 스냅샷의 순위 보고서로 통합
   "review-change", // 개수만 가진 기존 요약은 원문 보고와 중복
+  "review-themes", // 건별 원문과 일간 통계로 전달
   "service-failure",
   "service-recovery", // 장애 카드와 중복
   "submission-approved",
@@ -78,7 +79,7 @@ export function reportDecision(
   )
     return { send: false, reason: "EXTERNAL_AUTOMATIC_REVIEW_AUDIT" };
   if (
-    input.kind === "STORE_REVIEW" &&
+    input.kind === "STORE_REVIEW" && report.category !== "change" &&
     (typeof p.externalReviewId === "string" ||
       (typeof p.rating === "number" &&
         ["new", "updated"].includes(String(p.change))))
