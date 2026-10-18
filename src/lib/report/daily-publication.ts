@@ -3,33 +3,47 @@ import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { prisma } from "@/lib/prisma";
 import { collectHighlightData, dailyReportContext, metricHighlightDedupeKey } from "@/lib/core/metric-highlights";
 import { assembleOrgReportDocument, orgTrendSeries, saveOrgReport } from "@/lib/core/org-report";
-import { parseOrgReportDocument, type OrgReportDocument } from "@/lib/core/org-report-schema";
+import { parseOrgReportDocument, orgReportDocumentSchema, type OrgReportDocument } from "@/lib/core/org-report-schema";
 import { metricSourceInventory } from "@/lib/analytics/source-inventory";
 import { metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { dailyReportSchedule } from "./daily-contract";
 import { reportConclusions, reportFactsHash, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
 import { metricNarrative } from "@/lib/core/metric-narrative";
-import { collectFinanceCosts, financeMonth } from "@/lib/core/finance-costs";
+import { financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { reportCohorts } from "./cohorts";
+import { providerMetricSeries } from "@/lib/analytics/report-query";
+import { METRIC_DICTIONARY } from "@/lib/analytics/unified-metrics";
+import { metricDayWindow } from "@/lib/analytics/metric-day";
 
 async function freezeDailyReport(now: Date, refDate: string, db: Prisma.TransactionClient) {
   const schedule = dailyReportSchedule(metricDayStart(shiftMetricDay(refDate, 1)));
     const data = await collectHighlightData(now, refDate, db);
-    const sources = await metricSourceInventory(refDate, db);
+    const sources = await metricSourceInventory(refDate, db, now);
     const trend = await orgTrendSeries(refDate, 28, db);
     const cohorts = await reportCohorts(refDate, db);
+    const providerMetrics = await providerMetricSeries(refDate, db);
     const { context } = await dailyReportContext(refDate, db);
-    const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: now });
+    const finance = await db.sourceCollectionRun.findFirst({ where: { source: "finance-costs", target: financeMonth(schedule.dueAt).month, completedAt: { lte: now } }, orderBy: { completedAt: "desc" } });
+    const parsedCost = orgReportDocumentSchema.shape.costs.safeParse(finance?.coverage ?? null);
+    const costSnapshot = parsedCost.success && parsedCost.data ? { ...parsedCost.data, collectedAt: parsedCost.data.collectedAt ?? finance?.completedAt?.toISOString() } : null;
+    const doc = assembleOrgReportDocument({ data, narrative: null, costs: costSnapshot ?? null, origin: "published", generatedAt: now });
     doc.edition = {
       cutoffAt: schedule.cutoffAt.toISOString(), dueAt: schedule.dueAt.toISOString(), frozenAt: now.toISOString(),
-      inputHash: "", sources, trend, cohorts, context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
+      inputHash: "", sources, trend, cohorts, providerMetrics, weekly: weeklyReportSummary(trend, now), context, changes: [], conclusions: [...context.map((line) => line.replace(/^- /, "")), ...reportConclusions(doc)].slice(0, 3), actions: [],
     };
     doc.edition.inputHash = reportFactsHash(doc);
     return { data, doc };
+}
+
+function weeklyReportSummary(trend: Awaited<ReturnType<typeof orgTrendSeries>>, now: Date) {
+  if (new Intl.DateTimeFormat("en", { timeZone: "Asia/Seoul", weekday: "short" }).format(now) !== "Mon") return [];
+  const latest = trend.slice(-7), previous = trend.slice(-14, -7);
+  // 대상별 획득 범위가 다른 일간 합계를 주간 성장률로 오인하지 않는다.
+  return [`주간 관측: 최근 7일 중 GA4 ${latest.filter((point) => point.ga4Dau !== null).length}일, 직전 주 ${previous.filter((point) => point.ga4Dau !== null).length}일 자료 확보.`, "수정 후 효과는 같은 앱·대상·버전의 관찰 기간과 표본을 확보한 뒤 판단합니다. 아래 28일 추이와 코호트를 함께 확인하세요."];
 }
 
 /** 외부 호출 전에 일관된 DB snapshot을 저장한다. 재시도는 같은 준비본을 유지한다. */
@@ -54,15 +68,14 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 120_000 }));
   if (!prepared.doc || !prepared.data) return { preparationId: prepared.row.id, refDate: schedule.refDate, reused: true };
   // 11시에는 이 작업을 기다리지 않는다. 실패하면 저장된 수치·고정 문장으로 발행한다.
-  const [narrative, costs, attachment] = await Promise.allSettled([
-    metricNarrative(prepared.data), collectFinanceCosts(now), dailyReportImage(prepared.doc),
+  const [narrative, attachment] = await Promise.allSettled([
+    metricNarrative(prepared.data), dailyReportImage(prepared.doc),
   ]);
   const doc = prepared.doc;
   if (narrative.status === "fulfilled") {
     doc.narrative = narrative.value.text;
     doc.narrativeMeta = { fallback: narrative.value.fallback, provider: narrative.value.provider, model: narrative.value.model, promptVersion: narrative.value.promptVersion };
   }
-  if (costs.status === "fulfilled") doc.costs = { month: financeMonth(now).month, ...costs.value };
   await prisma.orgReportPreparation.updateMany({ where: { id: prepared.row.id, publishedVersion: null }, data: {
     enrichment: { narrative: doc.narrative, narrativeMeta: doc.narrativeMeta ?? null, costs: doc.costs } as unknown as Prisma.InputJsonObject,
     ...(attachment.status === "fulfilled" ? { attachment: attachment.value as unknown as Prisma.InputJsonObject } : {}),
@@ -85,8 +98,18 @@ export async function dailyReportImage(doc: OrgReportDocument) {
       { label: "결제 거래액", color: "#7c3aed", values: points.map((point) => point.consoleIapTrxKrw) },
     ] },
   ];
-  const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: points.map((point) => point.date) }))).png().toBuffer()));
-  const bytes = await sharp({ create: { width: 960, height: 1020, channels: 4, background: "#fff" } })
+  const provider = doc.edition?.providerMetrics.find((series) => series.points.some((point) => point.value !== null) && series.points.every((point) => point.value === null || point.value >= 0));
+  if (provider) {
+    const days = metricDayWindow(provider.points.at(-1)!.day, 28);
+    charts.push({ title: `${provider.appName} · ${METRIC_DICTIONARY[provider.metric].label}`, unit: provider.currency ?? provider.unit,
+      source: `${provider.source} · ${provider.timeZone} · ${provider.reportType} · 발행 입력 고정`,
+      series: [{ label: `${METRIC_DICTIONARY[provider.metric].label}${provider.segment ? ` · ${provider.segment}` : ""}`, color: "#0891b2", values: days.map((day) => provider.points.find((point) => point.day === day)?.value ?? null) }],
+      // 이 패널은 공급자 시간대의 달력일을 사용한다.
+      days,
+    } as typeof charts[number] & { days: string[] });
+  }
+  const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer()));
+  const bytes = await sharp({ create: { width: 960, height: charts.length * 510, channels: 4, background: "#fff" } })
     .composite(buffers.map((input, index) => ({ input, left: 0, top: index * 510 }))).png().toBuffer();
   return { filename: "daily-report.png", contentType: "image/png", base64: bytes.toString("base64") };
 }
@@ -150,7 +173,6 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     const doc = frozen.doc;
     if (previous.edition && previous.edition.frozenAt >= doc.edition!.frozenAt) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
     if (previous.published.factsHash === doc.edition!.inputHash) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
-    doc.costs = previous.costs;
     doc.edition!.replacesVersion = latest!.version;
     doc.edition!.changes = reportCorrectionDiff(previous, doc);
     // 앞선 수치에서 만든 해설은 새 수치의 원인 설명으로 재사용하지 않는다.

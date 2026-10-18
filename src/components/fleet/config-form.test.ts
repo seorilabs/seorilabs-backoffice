@@ -200,6 +200,13 @@ test("빈 draft도 서버 validator가 읽는 최소 payload를 만든다", () =
   assert.deepEqual(payload, { schemaVersion: 1, markets: [] });
   assert.equal(configRevisionPayloadSchema.safeParse(payload).success, true);
 });
+test("보고 소스 연결은 다른 설정 편집에서도 보존되고 UI에서 개별 중지할 수 있다", () => {
+  const input = { schemaVersion: 1, markets: [], analyticsSources: [{ id: "apple", source: "apple-analytics", enabled: true, accountId: "11111111-1111-1111-1111-111111111111", resourceId: "123456789", credentialId: "shared/apple/app-store-connect-uploader", timeZone: "UTC" }] };
+  const draft = draftFromPayload(configRevisionPayloadSchema.parse(input));
+  assert.deepEqual(payloadFromDraft(draft), input);
+  draft.analyticsSources[0].enabled = false;
+  assert.equal(configRevisionPayloadSchema.parse(payloadFromDraft(draft)).analyticsSources?.[0].enabled, false);
+});
 
 test("ProjectBlueprint 선언을 끄면 payload에서 통째로 빠진다", () => {
   const draft = draftFromPayload(fullPayload);

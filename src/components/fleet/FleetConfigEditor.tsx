@@ -476,6 +476,20 @@ export function FleetConfigEditor({
         )}
 
         <div className="mt-4 space-y-4">
+          <Section title="지표 보고 소스" description="기존 공급자 계정·앱 공개 ID·credential logical ID만 연결합니다. 비밀값은 입력하지 않습니다. 연결별 수집을 중지할 수 있으며 저장·검증·적용은 다른 중앙 설정과 같은 절차를 사용합니다.">
+            <RowList rows={draft.analyticsSources} empty="연결된 보고 소스가 없습니다." addLabel="보고 소스 추가"
+              onAdd={() => patch({ analyticsSources: [...draft.analyticsSources, { id: "", source: "apple-analytics", enabled: false, accountId: "", resourceId: "", credentialId: "shared/apple/app-store-connect-uploader", timeZone: "UTC" }] })}
+              onRemove={(index) => patch({ analyticsSources: draft.analyticsSources.filter((_, item) => item !== index) })}
+              render={(row, index) => { const update = (value: Partial<typeof row>) => patch({ analyticsSources: draft.analyticsSources.map((item, itemIndex) => itemIndex === index ? { ...item, ...value } : item) }); return <>
+                <TextField label="연결 이름" value={row.id} onChange={(id) => update({ id })} hint="영문 소문자·숫자·점·하이픈, 64자 이하" />
+                <Field label="공급자"><select className={inputClass} value={row.source} onChange={(event) => { const source = event.target.value as typeof row.source; update({ source, credentialId: ({ "apple-analytics": "shared/apple/app-store-connect-uploader", "play-reports": "shared/google-play/publisher", "android-vitals": "shared/google-play/publisher", admob: "shared/admob/reporting" })[source] }); }}><option value="apple-analytics">App Store 분석</option><option value="play-reports">Google Play 보고서</option><option value="admob">AdMob 광고 보고</option><option value="android-vitals">Android 품질 보고</option></select></Field>
+                <TextField label="공급자 계정 ID" value={row.accountId} onChange={(accountId) => update({ accountId })} hint="Apple issuer ID / Play pubsite_prod_rev_* / AdMob pub-* / Android 품질은 기존 Play identity의 공개 client ID" />
+                <TextField label="앱 공개 ID" value={row.resourceId} onChange={(resourceId) => update({ resourceId })} hint="Apple 숫자 ID / Play package / AdMob ca-app-pub-*~*" />
+                <TextField label="자격증명 논리 ID" value={row.credentialId} onChange={(credentialId) => update({ credentialId })} />
+                <TextField label="원천 보고 시간대" value={row.timeZone} onChange={(timeZone) => update({ timeZone })} hint="Apple UTC. Play·AdMob은 실제 원천 시간대 확인 후 입력" />
+                <label className="text-sm"><input type="checkbox" checked={row.enabled} onChange={(event) => update({ enabled: event.target.checked })} className="mr-2" />이 소스 수집 사용</label>
+              </>; }} />
+          </Section>
           <Section
             title="마켓 설정"
             description="마켓별 사용 여부, 지원 언어, 승인 전 테스트용 배포 채널을 설정합니다."

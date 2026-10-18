@@ -16,5 +16,6 @@ export function dailyReportCsv(doc: OrgReportDocument, version: number) {
       rows.push([doc.refDate, version, app.displayName, `앱인토스 ${listing.miniAppId}`, listing.date, "결제 거래액", listing.iapTrxKrw, "KRW", "거래액"]);
     }
   }
+  for (const series of doc.edition?.providerMetrics ?? []) for (const point of series.points) rows.push([doc.refDate, version, series.appName, `${series.source} · ${series.account} · ${series.timeZone} · ${series.reportType}`, point.day, `${series.metric}${series.segment ? ` · ${series.segment}` : ""}`, point.value, series.currency ?? series.unit, `${point.state} · ${point.valueStatus} · 분자 ${point.numerator ?? "미확인"} / 분모 ${point.denominator ?? "미확인"} · ${point.sourceHash}`]);
   return "\uFEFF" + rows.map((row) => row.map(cell).join(",")).join("\r\n") + "\r\n";
 }

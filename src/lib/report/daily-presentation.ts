@@ -21,7 +21,9 @@ export function reportFactsHash(doc: OrgReportDocument): string {
     refDate: doc.refDate, summary: doc.summary, apps: doc.apps, movements: doc.movements,
     retention: doc.retention, trend: doc.edition?.trend,
     cohorts: doc.edition?.cohorts,
-    sources: doc.edition?.sources.map(({ slug, source, state, dataThrough }) => ({ slug, source, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
+    costs: doc.costs ? { month: doc.costs.month, figures: doc.costs.figures, summaryLines: doc.costs.summaryLines, warnings: doc.costs.warnings } : null,
+    providerMetrics: doc.edition?.providerMetrics.map((series) => ({ ...series, points: series.points.map((point) => ({ ...point, runId: undefined, sourceHash: undefined, sourceUri: undefined, configRevisionId: undefined })) })),
+    sources: doc.edition?.sources.map(({ slug, source, reportType, account, state, dataThrough }) => ({ slug, source, reportType, account, state, dataThrough: dataThrough && dataThrough > doc.refDate ? doc.refDate : dataThrough })),
     actions: doc.edition?.actions,
     context: doc.edition?.context,
   })).digest("hex");
@@ -37,6 +39,11 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
   compare("토스 광고 추정 수익(KRW)", before.summary.console.iaaKrw, after.summary.console.iaaKrw);
   compare("토스 결제 거래액(KRW)", before.summary.console.iapTrxKrw, after.summary.console.iapTrxKrw);
   for (const app of after.apps) compare(`${app.displayName} 활성(명)`, before.apps.find((row) => row.slug === app.slug)?.ga4?.dau ?? null, app.ga4?.dau ?? null);
+  for (const series of after.edition?.providerMetrics ?? []) {
+    const match = before.edition?.providerMetrics.find((row) => row.appId === series.appId && row.source === series.source && row.account === series.account && row.resource === series.resource && row.reportType === series.reportType && row.metric === series.metric && row.segment === series.segment && row.currency === series.currency && row.timeZone === series.timeZone);
+    const latest = series.points.at(-1);
+    if (latest) compare(`${series.appName} ${series.metric}${series.segment ? ` · ${series.segment}` : ""} ${latest.day} ${series.currency ?? series.unit}`, match?.points.find((row) => row.day === latest.day)?.value ?? null, latest.value);
+  }
   const known = (doc: OrgReportDocument) => doc.edition?.cohorts.reduce((sum, cohort) => sum + cohort.values.filter((cell) => cell.returned !== null).length, 0) ?? 0;
   compare("잔존 코호트 복귀 수 확보 칸", known(before), known(after));
   for (const cohort of after.edition?.cohorts ?? []) for (const cell of cohort.values) {
@@ -54,6 +61,7 @@ export function reportCorrectionDiff(before: OrgReportDocument, after: OrgReport
       compare(`${point.date} 추이 ${label}`, prior[key as keyof typeof prior], point[key as keyof typeof point]);
     }
   }
+  if (JSON.stringify(before.costs?.figures ?? null) !== JSON.stringify(after.costs?.figures ?? null)) changes.push({ label: "월 누적 비용·잔액", before: before.costs?.summaryLines.join(" · ") ?? "미수집", after: after.costs?.summaryLines.join(" · ") ?? "미수집" });
   // 이전 버전 링크와 함께 비교표·판정·근거의 갱신을 누락 없이 알린다.
   if (!changes.length && reportFactsHash(before) !== reportFactsHash(after)) changes.push({ label: "비교표·판정·근거 갱신", before: "이전 발행본의 값·판정·수집 범위", after: "새 발행본의 값·판정·수집 범위 · 정정 전후 링크에서 대조" });
   return changes;
@@ -72,6 +80,8 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
     `**일간 보고 · ${doc.refDate} · v${version}${doc.published?.corrections ? " · 정정" : ""}**`,
     ...(edition?.changes.slice(0, 3).map((change) => `- 정정 ${change.label}: ${change.before} → ${change.after}`) ?? []),
     ...(edition?.conclusions ?? reportConclusions(doc)).map((line) => `- ${line}`),
+    ...(edition?.weekly ?? []).map((line) => `- ${line}`),
+    ...(edition?.providerMetrics.filter((series) => series.verdict === "highlight" || series.verdict === "lowlight").slice(0, 3).map((series) => { const point = series.points.find((point) => point.day === series.assessmentDay) ?? series.points.at(-1)!; return `- ${series.verdict === "highlight" ? "좋아진 점" : "나빠진 점"} · ${series.appName} · ${series.metric}${series.segment ? ` · ${series.segment}` : ""}: ${point.value?.toLocaleString("ko-KR") ?? "미확인"} ${series.currency ?? series.unit} · ${point.day} ${series.timeZone}`; }) ?? []),
     "", "**좋아진 점**", ...(!movementLines("highlight").length ? ["- 기준선을 넘는 변화 없음"] : movementLines("highlight")),
     "**나빠진 점**", ...(!movementLines("lowlight").length ? ["- 기준선을 넘는 변화 없음"] : movementLines("lowlight")),
     "", `GA4 활성 합계 ${doc.summary.ga4.apps ? `${doc.summary.ga4.dau.toLocaleString("ko-KR")}명` : "미수집"} · 관측 ${doc.summary.ga4.apps}개 앱 · ${doc.refDate}`,

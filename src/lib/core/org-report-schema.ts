@@ -216,6 +216,7 @@ export const orgReportDocumentSchema = z
     costs: z
       .object({
         month: z.string(),
+        collectedAt: z.string().datetime().optional(),
         summaryLines: z.array(z.string()),
         warnings: z.array(
           z

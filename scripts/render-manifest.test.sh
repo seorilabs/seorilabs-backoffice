@@ -33,6 +33,7 @@ MANIFESTS=(
   k8s/operations-insights-worker.yaml
   k8s/market-feedback-cronjobs.yaml
   k8s/store-review-cronjob.yaml
+  k8s/extended-metrics-cronjob.yaml
   k8s/store-submissions-cronjob.yaml
   k8s/vault-rag.yaml
   k8s/fleet-parity-wave-job.yaml

@@ -2,21 +2,7 @@ import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export const SOURCE_STATE_LABELS: Record<string, string> = {
-  observed: "수집됨",
-  empty: "자료 없음",
-  not_landed: "아직 도착하지 않음",
-  failed: "수집 실패",
-  needs_input: "설정·권한 필요",
-  needs_instrumentation: "계측 필요",
-  not_applicable: "대상 아님",
-  running: "수집 중",
-  partial: "일부 수집됨",
-  stale: "수집 지연",
-};
-export function sourceStateLabel(state: string) {
-  return SOURCE_STATE_LABELS[state] ?? "확인 필요";
-}
+export { SOURCE_STATE_LABELS, sourceStateLabel } from "./collection-state";
 export function collectionErrorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
   if (/403|권한|자격증명|미설정|401/.test(message)) return "SOURCE_PERMISSION_REQUIRED";
@@ -46,6 +32,16 @@ export async function completeCollection(
     errorCode?: string;
   },
 ) {
+  if (input.coverage) {
+    const current = await prisma.sourceCollectionRun.findUnique({ where: { id }, select: { coverage: true } });
+    const before = (current?.coverage as { versions?: Array<{ uri: string; version: string }> } | null)?.versions ?? [];
+    const merged = new Map(before.map((row) => [row.uri, row]));
+    for (const row of (input.coverage.versions ?? []) as Array<{ uri: string; version: string }>) {
+      const prior = merged.get(row.uri);
+      if (!prior || !/^\d+$/.test(prior.version) || !/^\d+$/.test(row.version) || BigInt(row.version) >= BigInt(prior.version)) merged.set(row.uri, row);
+    }
+    input.coverage = { ...(current?.coverage as Prisma.InputJsonObject ?? {}), ...input.coverage, ...(merged.size ? { versions: [...merged.values()] } : {}) };
+  }
   await prisma.sourceCollectionRun.update({
     where: { id },
     data: { ...input, completedAt: new Date() },
