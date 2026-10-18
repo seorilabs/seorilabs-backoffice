@@ -27,7 +27,7 @@ export function ProviderMetrics({ series }: { series: ProviderSeries[] }) {
 }
 function Series({ series }: { series: ProviderSeries }) {
   const [dimension, setDimension] = useState("");
-  const latest = series.points.at(-1)!, definition = METRIC_DICTIONARY[series.metric], unit = series.currency ?? series.unit;
+  const latest = series.points.at(-1)!, assessed = series.points.find((point) => point.day === series.assessmentDay), definition = METRIC_DICTIONARY[series.metric], unit = series.currency ?? series.unit;
   const dimensions = [...new Set(series.dimensions.flatMap((row) => Object.keys(row.labels)))];
   const days = metricDayWindow(latest.day, 28), values = days.map((day) => series.points.find((point) => point.day === day)?.value ?? null);
   const present = values.filter((value): value is number => value !== null), min = Math.min(0, ...present), max = Math.max(1, ...present);
@@ -36,7 +36,7 @@ function Series({ series }: { series: ProviderSeries }) {
     <summary className="cursor-pointer px-3 py-3 text-sm"><b>{series.appName} · {definition.label}{series.segment ? ` · ${series.segment}` : ""}</b><span className="ml-2">{number(latest.value)} {unit}</span><span className="ml-2 text-xs text-neutral-600">{latest.day} · {series.timeZone} · {statusLabel[latest.valueStatus]}</span></summary>
     <div className="space-y-3 border-t p-3 text-xs text-neutral-600">
       <p>{series.definition} · {series.source} · {series.reportType} · 계정 {series.account}</p>
-      <p>판단: {({ insufficient: "비교 근거 부족", flat: "기준을 넘는 변화 없음", observing: "연속 관측 대기", highlight: "좋아진 점", lowlight: "나빠진 점" })[series.verdict]} · {latest.numerator !== null ? `분자 ${number(latest.numerator)} / 분모 ${number(latest.denominator)}` : "비율 분모 해당 없음"}</p>
+      <p>판단 기준일 {series.assessmentDay ?? "분석 가능한 자료 없음"} · 판단: {({ insufficient: "비교 근거 부족", flat: "기준을 넘는 변화 없음", observing: "연속 관측 대기", highlight: "좋아진 점", lowlight: "나빠진 점" })[series.verdict]} · {assessed?.numerator !== null && assessed?.numerator !== undefined ? `분자 ${number(assessed.numerator)} / 분모 ${number(assessed.denominator)}` : "비율 분모 해당 없음"}</p>
       <p>최근 4주 같은 요일: {series.weekdayBaseline === null ? `${series.weekdayObservations}/4일 확보 · 비교 보류` : `중앙값 ${number(series.weekdayBaseline)} ${unit}`}</p>
       <svg viewBox="0 0 720 200" role="img" aria-label={`${series.appName} ${definition.label} 28일 추이, 단위 ${unit}. 빈 구간은 미확인.`} className="h-auto w-full">
         <text x="2" y="20" fontSize="11">{number(max)} {unit}</text><text x="2" y="174" fontSize="11">{number(min)}</text>

@@ -7,6 +7,9 @@ import {
   alignTrendGrid,
   assembleOrgReportDocument,
 } from "@/lib/core/org-report";
+import { dailyEditionSchema } from "@/lib/report/daily-contract";
+import { providerSeriesSchema } from "@/lib/analytics/report-query";
+import { dailyReportCsv } from "@/lib/report/daily-csv";
 import { reportFactsHash, reportCorrectionDiff } from "@/lib/report/daily-presentation";
 import { parseOrgReportDocument } from "@/lib/core/org-report-schema";
 
@@ -382,4 +385,28 @@ test("앱 분류별 수익도 같은 콘솔 기준일의 관측만 합산한다"
   data.consoleSeries[0].rowsDesc[0].date = new Date("2026-08-29T00:00:00Z");
   const doc = assembleOrgReportDocument({ data, narrative: null, costs: null, origin: "published", generatedAt: GENERATED });
   assert.equal(doc.segments.game.iaaKrw, null);
+});
+
+test("비용만 바뀌어도 정정하고 수집 시각만 바뀐 것은 같은 사실이다", () => {
+  const before = assemble(), after = assemble();
+  before.costs = { month: "2026-09", summaryLines: ["GCP USD 1"], warnings: [], figures: { github: null, gcp: { total: 1, currency: "USD" }, llm: null, stability: null } };
+  after.costs = structuredClone(before.costs);
+  after.costs.collectedAt = "2026-09-01T01:00:00.000Z";
+  assert.equal(reportFactsHash(before), reportFactsHash(after));
+  after.costs.figures.gcp!.total = 2;
+  assert.notEqual(reportFactsHash(before), reportFactsHash(after));
+  assert.ok(reportCorrectionDiff(before, after).some((row) => row.label.includes("비용")));
+});
+
+
+test("정정·CSV가 같은 날짜의 서로 다른 다운로드 의미를 섞지 않는다", () => {
+  const before = assemble();
+  const series = [120, 5].map((value, index) => providerSeriesSchema.parse({ appId: "a1", appName: "앱", source: "apple-analytics", account: "account", resource: "app", reportType: "App Downloads Standard", timeZone: "UTC", metric: "store_downloads", segment: index ? "Download Type: Redownload" : "Download Type: First-time download", currency: null, unit: "건", definition: "다운로드", dimensions: [], verdict: "insufficient", points: [{ day: REF, value, numerator: null, denominator: null, state: "observed", valueStatus: "analyzable", sourceHash: "hash", sourceUri: "https://api.appstoreconnect.apple.com", runId: "run", configRevisionId: "config" }] }));
+  before.edition = dailyEditionSchema.parse({ cutoffAt: GENERATED.toISOString(), dueAt: GENERATED.toISOString(), frozenAt: GENERATED.toISOString(), inputHash: "hash", sources: [], trend: [], cohorts: [], providerMetrics: series, context: [], changes: [], conclusions: [], actions: [] });
+  const after = structuredClone(before); after.summary.ga4.dau = 61;
+  const changes = reportCorrectionDiff(before, after);
+  assert.ok(changes.some((row) => row.label.includes("GA4")));
+  assert.equal(changes.some((row) => row.label.includes("store_downloads")), false);
+  const csv = dailyReportCsv(after, 2);
+  assert.ok(csv.includes("Download Type: Redownload") && csv.includes("Download Type: First-time download"));
 });

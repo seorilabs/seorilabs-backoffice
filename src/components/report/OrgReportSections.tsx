@@ -454,7 +454,7 @@ export function RevenueCostSection({ doc }: { doc: OrgReportDocument }) {
       {costs ? (
         <>
           <p className="text-xs text-neutral-400">
-            수익은 기준일 하루치, 비용은 발행 시점의 이번 달({costs.month}) 누적입니다.
+            수익은 기준일 하루치, 비용은 {costs.month} 누적입니다. 비용 자료 수집 시각: {costs.collectedAt ? new Date(costs.collectedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "과거 문서에 기록 없음"}.
           </p>
           {costs.warnings.length > 0 && (
             <div className="space-y-2">
@@ -483,7 +483,7 @@ export function RevenueCostSection({ doc }: { doc: OrgReportDocument }) {
         </>
       ) : (
         <p className="text-xs text-neutral-400">
-          비용은 발행 시점에만 수집됩니다 — 이 문서는 재계산이라 발행 당시 비용이 보존되지 않았습니다.
+          이 보고서에 고정할 수 있는 비용 자료가 없습니다. 오전 비용 수집 실행과 월별 원천 권한을 확인하세요.
         </p>
       )}
     </div>

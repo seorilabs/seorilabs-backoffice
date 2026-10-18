@@ -32,12 +32,15 @@ export async function completeCollection(
     errorCode?: string;
   },
 ) {
-  if (input.coverage && Array.isArray(input.coverage.versions)) {
+  if (input.coverage) {
     const current = await prisma.sourceCollectionRun.findUnique({ where: { id }, select: { coverage: true } });
     const before = (current?.coverage as { versions?: Array<{ uri: string; version: string }> } | null)?.versions ?? [];
     const merged = new Map(before.map((row) => [row.uri, row]));
-    for (const row of input.coverage.versions as Array<{ uri: string; version: string }>) merged.set(row.uri, row);
-    input.coverage = { ...input.coverage, versions: [...merged.values()] };
+    for (const row of (input.coverage.versions ?? []) as Array<{ uri: string; version: string }>) {
+      const prior = merged.get(row.uri);
+      if (!prior || !/^\d+$/.test(prior.version) || !/^\d+$/.test(row.version) || BigInt(row.version) >= BigInt(prior.version)) merged.set(row.uri, row);
+    }
+    input.coverage = { ...(current?.coverage as Prisma.InputJsonObject ?? {}), ...input.coverage, ...(merged.size ? { versions: [...merged.values()] } : {}) };
   }
   await prisma.sourceCollectionRun.update({
     where: { id },

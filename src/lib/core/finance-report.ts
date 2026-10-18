@@ -106,7 +106,7 @@ export async function sendFinanceReport(
   const run = await collection.beginCollection("finance-costs", month);
   const snapshot = await collectFinanceCosts(now);
   const { warnings, figures } = snapshot;
-  await collection.completeCollection(run.id, { status: Object.values(figures).some((value) => value !== null) ? "partial" : "needs_input", dataThrough: now, coverage: JSON.parse(JSON.stringify({ month, ...snapshot })) });
+  await collection.completeCollection(run.id, { status: Object.values(figures).every((value) => value !== null) ? "observed" : Object.values(figures).some((value) => value !== null) ? "partial" : "needs_input", dataThrough: now, coverage: JSON.parse(JSON.stringify({ month, ...snapshot, collectedAt: now.toISOString() })) });
   const baseKey = financeReportDedupeKey(now);
   for (let attempt = 0; ; attempt++) {
     try {

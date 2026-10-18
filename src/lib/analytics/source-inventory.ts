@@ -19,7 +19,7 @@ const reports = [
   ["play-finance", "정산"], ["reviews:GOOGLE_PLAY", "리뷰"], ["play-submissions", "출시 상태"],
   ...Object.keys(APPLE_REPORT_FIELDS).map((name) => ["apple-analytics", name] as const), ["apple-sales", "판매·추가 구독 보고"],
   ["apple-finance", "정산"], ["reviews:APP_STORE", "리뷰"], ["apple-submissions", "출시 상태"],
-  ["android-vitals", "오류·영향 사용자"], ["crashlytics", "오류·영향 사용자"],
+  ["android-vitals", "crashRateMetricSet"], ["android-vitals", "anrRateMetricSet"], ["crashlytics", "오류·영향 사용자"],
   ["firebase-performance", "시작·화면·네트워크 성능"], ["admob", "광고 요청·응답·노출·추정 수익"],
   ["backend-payments", "결제·지급 실패"], ["feedback", "고객 피드백"],
   ["apple-keyword", "검색 순위"], ["apple-public-lookup", "경쟁 앱 변화"],
@@ -27,8 +27,8 @@ const reports = [
   ["firebase-experiments", "실험·Remote Config"], ["firebase-messaging", "메시지 결과"],
 ] as const;
 
-export async function metricSourceInventory(day: string, db: Prisma.TransactionClient = prisma): Promise<SourceCoverage[]> {
-  const cutoffAt = dailyReportSchedule(metricDayStart(shiftMetricDay(day, 1))).cutoffAt;
+export async function metricSourceInventory(day: string, db: Prisma.TransactionClient = prisma, asOf?: Date): Promise<SourceCoverage[]> {
+  const cutoffAt = asOf ?? dailyReportSchedule(metricDayStart(shiftMetricDay(day, 1))).cutoffAt;
   const apps = await db.app.findMany({
     where: visibleAppWhere, orderBy: { displayName: "asc" },
     select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true,
@@ -51,7 +51,7 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     const sourceKey = source === "play-acquisition" ? "play-reports" : source;
     const connections = payload.success ? payload.data.analyticsSources?.filter((one) => one.source === sourceKey) ?? [] : [];
     return (connections.length ? connections : [null]).map((connection): SourceCoverage => {
-    const batches = partitions.filter((one) => one.appId === app.id && one.source === sourceKey && (!connection || one.accountId === connection.accountId && one.resourceId === connection.resourceId) && (source !== "apple-analytics" || one.reportType === reportType));
+    const batches = partitions.filter((one) => one.appId === app.id && one.source === sourceKey && (!connection || one.accountId === connection.accountId && one.resourceId === connection.resourceId) && (!["apple-analytics", "android-vitals"].includes(source) || one.reportType === reportType));
     const ga4 = source.startsWith("ga4") ? resolveGa4Target(app) : null;
     const ait = source === "ait_console" ? resolveAitTarget(app) : null;
     const cells = ledger.filter((cell) => cell.appId === app.id && cell.source === source);
@@ -62,14 +62,15 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
     if (batches.length) {
       const latestDay = batches.reduce((a, b) => a > b.periodEnd ? a : b.periodEnd, "");
       const rows = batches.filter((batch) => batch.periodEnd === latestDay).flatMap((batch) => batch.rows);
-      state = rows.every((row) => row.state === "empty") ? "empty" : rows.every((row) => ["empty", "observed"].includes(row.state) || row.state === "not_applicable" && row.denominator === 0 && row.numerator === 0) ? "observed" : "partial";
+      state = rows.every((row) => row.state === "empty") ? "empty" : rows.every((row) => ["empty", "observed"].includes(row.state) || row.state === "not_applicable" && row.denominator === 0 && row.numerator !== null) ? "observed" : "partial";
       reason = `${latestDay} · ${batches.length}개 날짜·출처 partition · ${connection?.timeZone ?? "원천 시간대"}. 비공개 셀은 0으로 계산하지 않습니다.`;
       const failures = (run?.coverage as { reportFailures?: Array<{ reportType: string }> } | null)?.reportFailures;
-      if (latestDay < day || failures?.some((failure) => failure.reportType === reportType)) {
+      if (failures?.some((failure) => failure.reportType === reportType)) {
         state = "partial";
         reason += ` 요청 기준 ${day} 중 최신 확보일과 인스턴스 누락 범위를 함께 확인하세요.`;
       }
-      remedy = state === "partial" ? "원천의 비공개·누락 셀과 분모를 확인하세요." : "";
+      if (latestDay < day) reason += ` 공급자 집계 지연을 포함한 최신 기준일입니다. 요청일 ${day}의 미도착은 실적 0이나 수집 실패가 아닙니다.`;
+      remedy = state === "partial" ? "원천의 비공개·누락 셀과 분모를 확인하세요." : latestDay < day ? "다음 공식 자료 도착 후 기준일을 갱신합니다." : "";
     } else if (connection && !connection.enabled) {
       state = "needs_input"; reason = "운영자가 이 소스의 수집을 중지했습니다."; remedy = "기존 설정 서비스를 통해 연결을 활성화하세요.";
     } else if (cells.length) {
