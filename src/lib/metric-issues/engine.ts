@@ -39,7 +39,7 @@ export async function registerFixedCandidates(appId: string, repository: string,
     if (!verifyCodeProof(candidate, await port.files(state.sha))) { await port.result({ ...base, status: "insufficient", reason: "현재 코드에서 선언·실행 경로 근거를 다시 확인할 수 없습니다.", fact }); continue; }
     if (policy.data.titlePolicy.forbiddenPrefixPatterns.some((pattern) => new RegExp(pattern).test(title)) || new RegExp(policy.data.titlePolicy.forbiddenAgentOrderPattern).test(title)) { await port.result({ ...base, status: "insufficient", reason: "중앙 제목 계약을 충족하지 않습니다." }); continue; }
     const body = renderMetricIssue(candidate, fact, { repo: repository, sha: sourceSha, marker, publicRepository: !state.private });
-    const labels = ["autopilot", candidate.priority, "autopilot:local", candidate.kind === "instrumentation" ? "instrumentation" : "bug", fact.source === "ga4" ? "evidence:ga4" : fact.source === "console" ? "evidence:console" : "evidence:store"];
+    const labels = ["autopilot", "P3", state.private ? "autopilot:local" : "autopilot:cloud", candidate.kind === "instrumentation" ? "instrumentation" : "bug", fact.source === "ga4" ? "evidence:ga4" : fact.source === "console" ? "evidence:console" : "evidence:store"];
     if (!await port.labelsExist(labels)) { await port.result({ ...base, status: "needs_input", reason: "중앙 필수 라벨이 저장소에 없습니다. 표준 라벨 조정이 필요합니다." }); continue; }
     if (!await port.attempt(marker, { title, body, labels, appId, repository })) continue;
     let created: IssueReadback | undefined;

@@ -44,4 +44,4 @@ AdMob은 header·row·footer와 matchingRowCount·경고를 검사한다. micro 
 
 전체 기능의 긴급 중지는 `FEATURE_METRIC_ISSUE_REGISTRATION=false`이다. 중앙 운영 중지는 `/api/control-plane/metric-issue-registration` GET의 `updatedAt`을 읽고 POST에 `enabled`, `expectedUpdatedAt`, `maxElapsedMs`(최대 600000), `maxTokens`(최대 40000)를 넣는다. 기존 control-plane 관리자 principal·토큰·Idempotency-Key가 필요하다. 상태·설정 버전·감사는 같은 transaction이며 재전송은 동일 결과를 반환한다. 활성화는 수집 활성화와 별개다. 초기 정의가 없으면 실행하지 않는다.
 
-공개 저장소에는 운영 숫자나 모델의 자유 서술을 넣지 않고 현재 공개 코드의 검증한 발췌와 고정 안내만 기재한다. 비공개 측정 기간·기준선·표본·수집 범위는 실행 원장에 보존한다. 보고서에는 같은 snapshot 시점의 등록·기존 이슈 연결·근거 부족·관찰·정책 제외·입력 필요 결과가 포함된다. 정오 이후 결과는 기존 보고서의 새 버전으로 반영한다.
+공개 저장소에는 운영 숫자나 모델의 자유 서술을 넣지 않고 현재 공개 코드의 검증한 발췌와 고정 안내만 기재한다. 라이브 인과·피해 규모가 미확정이므로 등록 중요도는 P3로 제한한다. 공개 코드·CI만으로 인수조건을 확인하는 이슈는 cloud, 비공개 근거를 재조회해야 하는 이슈는 local로 구분한다. 비공개 측정 기간·기준선·표본·수집 범위는 실행 원장에 보존한다. 보고서에는 같은 snapshot 시점의 등록·기존 이슈 연결·근거 부족·관찰·정책 제외·입력 필요 결과가 포함된다. 정오 이후 결과는 기존 보고서의 새 버전으로 반영한다.
