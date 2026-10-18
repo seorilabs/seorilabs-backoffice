@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  dailyReportContext,
   baselineOf,
   evaluateMovement,
   median,
@@ -613,4 +614,31 @@ test("당일 광고가 빠진 리스팅의 전일 금액으로 거짓 감소율�
   const rows = [{ ...a.rowsDesc[0], iaaEarningKrw: null }, a.rowsDesc[1]];
   const out = foldConsoleTotals([{ ...a, rowsDesc: rows }, b], "2026-10-16");
   assert.equal(out.totals.iaaKrw, null);
+});
+
+
+test("일간 출시 기록은 내부 식별자 대신 앱, 마켓, 확인한 상태를 보여 준다", async () => {
+  const opaqueIds = ["0123456789abcdef".repeat(4), "f8fe3c3c-29ed-4b4d-8cbb-8cb667b6baf0"];
+  const db = {
+    operationalIncident: { findMany: async () => [] },
+    storeReviewSubmissionObservation: { findMany: async () => opaqueIds.map((externalVersionId, index) => ({
+      app: { displayName: "예시 앱" }, store: index === 0 ? "GOOGLE_PLAY" : "APP_STORE",
+      externalVersionId, stateLabel: index === 0 ? "프로덕션 공개 확인" : "심사 중", contentHash: "matched", notifiedHash: "matched",
+    })) },
+  } as unknown as Parameters<typeof dailyReportContext>[1];
+  const out = await dailyReportContext("2026-10-17", db);
+  assert.deepEqual(out.context, ["- 예시 앱, Google Play, 프로덕션 공개 확인", "- 예시 앱, App Store, 심사 중"]);
+  assert.deepEqual(out.contextFacts.map((fact) => fact.value), out.context);
+  for (const id of opaqueIds) assert.ok(!JSON.stringify(out).includes(id));
+});
+
+test("일간 출시 문구를 바꿔도 전달하지 않은 관측과 상태가 다른 관측을 제외한다", async () => {
+  const db = {
+    operationalIncident: { findMany: async () => [] },
+    storeReviewSubmissionObservation: { findMany: async () => [
+      { app: { displayName: "예시 앱" }, store: "GOOGLE_PLAY", externalVersionId: "private-id", stateLabel: "공개 확인", contentHash: "new", notifiedHash: "old" },
+    ] },
+  } as unknown as Parameters<typeof dailyReportContext>[1];
+  const out = await dailyReportContext("2026-10-17", db);
+  assert.deepEqual(out.context, []);assert.deepEqual(out.contextFacts, []);
 });
