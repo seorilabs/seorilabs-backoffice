@@ -67,13 +67,13 @@ export async function importMetricReport(input: MetricReportBatchInput, runId: s
 }
 
 /** 최신 processingDate가 같은 날짜 partition을 통째로 대체한다. 예전 차원 행을 섞지 않는다. */
-export async function metricReportPartitions(end: string, db: Prisma.TransactionClient = prisma, appId?: string) {
+export async function* metricReportPartitions(end: string, db: Prisma.TransactionClient = prisma, appId?: string) {
   const apps = await db.app.findMany({ where: visibleAppWhere, select: { id: true, configRevisions: { where: { status: "ACTIVE" }, orderBy: { revision: "desc" }, take: 1, select: { payload: true } } } });
   const connections = new Map(apps.map((app) => { const parsed = configRevisionPayloadSchema.safeParse(app.configRevisions[0]?.payload); return [app.id, parsed.success ? parsed.data.analyticsSources?.filter((source) => source.enabled) ?? [] : []]; }));
   const admobOwners = new Map<string, Set<string>>();
   for (const [app, sources] of connections) for (const source of sources) if (source.source === "admob") { const owners = admobOwners.get(source.resourceId) ?? new Set<string>(); owners.add(app); admobOwners.set(source.resourceId, owners); }
   for (const [app, sources] of connections) connections.set(app, sources.filter((source) => source.source !== "admob" || admobOwners.get(source.resourceId)?.size === 1));
-  if (!apps.length) return [];
+  if (!apps.length) return;
   // JSON 원천은 최신 partition만 읽는다. 과거 처리본 수에 비례해 메모리를 쓰지 않는다.
   const latest = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM (
@@ -86,18 +86,20 @@ export async function metricReportPartitions(end: string, db: Prisma.Transaction
         AND periodStart >= ${toDbDay(shiftMetricDay(end, -89))} AND periodStart <= ${toDbDay(end)}
     ) ranked WHERE position = 1
   `);
-  const rows = await db.metricReportBatch.findMany({ where: { ...(appId ? { appId } : {}), id: { in: latest.map((row) => row.id) } } });
   const seen = new Set<string>();
-  return rows.flatMap((batch) => {
-    if (!connections.get(batch.appId)?.some((source) => source.source === batch.source && source.accountId === batch.accountId && source.resourceId === batch.resourceId && source.timeZone === batch.timeZone)) return [];
-    const key = JSON.stringify([batch.appId, batch.source, batch.accountId, batch.resourceId, batch.reportType, dbDay(batch.periodStart), dbDay(batch.periodEnd), batch.grain, batch.timeZone]);
-    if (seen.has(key)) return [];
-    seen.add(key);
-    const metrics = unifiedMetricRowSchema.array().parse(batch.rows);
-    return [{ id: batch.id, appId: batch.appId, source: batch.source, accountId: batch.accountId, resourceId: batch.resourceId, reportType: batch.reportType,
-      periodStart: dbDay(batch.periodStart), periodEnd: dbDay(batch.periodEnd), grain: batch.grain, timeZone: batch.timeZone,
-      processingDate: dbDay(batch.processingDate), configRevisionId: batch.configRevisionId, sourceHash: batch.sourceHash, sourceUri: batch.sourceUri, runId: batch.runId, rows: metrics }];
-  });
+  for (let offset = 0; offset < latest.length; offset += 32) {
+    const rows = await db.metricReportBatch.findMany({ where: { ...(appId ? { appId } : {}), id: { in: latest.slice(offset, offset + 32).map((row) => row.id) } } });
+    for (const batch of rows) {
+      if (!connections.get(batch.appId)?.some((source) => source.source === batch.source && source.accountId === batch.accountId && source.resourceId === batch.resourceId && source.timeZone === batch.timeZone)) continue;
+      const key = JSON.stringify([batch.appId, batch.source, batch.accountId, batch.resourceId, batch.reportType, dbDay(batch.periodStart), dbDay(batch.periodEnd), batch.grain, batch.timeZone]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const metrics = unifiedMetricRowSchema.array().parse(batch.rows);
+      yield { id: batch.id, appId: batch.appId, source: batch.source, accountId: batch.accountId, resourceId: batch.resourceId, reportType: batch.reportType,
+        periodStart: dbDay(batch.periodStart), periodEnd: dbDay(batch.periodEnd), grain: batch.grain, timeZone: batch.timeZone,
+        processingDate: dbDay(batch.processingDate), configRevisionId: batch.configRevisionId, sourceHash: batch.sourceHash, sourceUri: batch.sourceUri, runId: batch.runId, rows: metrics };
+    }
+  }
 }
 
 /** 일별 값·차원·완성 상태만 비교한다. 파일 재생성·수집일 변경은 중복 자료다. */

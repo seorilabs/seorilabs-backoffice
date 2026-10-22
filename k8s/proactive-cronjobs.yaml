@@ -474,9 +474,10 @@ spec:
       activeDeadlineSeconds: 300
       template:
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           containers:
             - name: trigger
+              terminationMessagePolicy: FallbackToLogsOnError
               image: curlimages/curl:8.11.1
               command:
                 - sh

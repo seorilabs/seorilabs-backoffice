@@ -24,7 +24,7 @@ spec:
             app.kubernetes.io/component: extended-metrics-collector
         spec:
           automountServiceAccountToken: false
-          restartPolicy: OnFailure
+          restartPolicy: Never
           nodeSelector:
             kubernetes.io/hostname: rpi5
           imagePullSecrets:
@@ -37,6 +37,7 @@ spec:
             - name: collector
               image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
               imagePullPolicy: Always
+              terminationMessagePolicy: FallbackToLogsOnError
               workingDir: /app
               command: ["node", "/app/scripts-dist/extended-metrics-collector.cjs"]
               env:

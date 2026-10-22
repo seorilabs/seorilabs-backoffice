@@ -6,7 +6,7 @@ import type {
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
-import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, hasConsoleAdObservation, isCompleteConsoleMetric } from "@/lib/analytics/console-values";
+import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, isCompleteConsoleMetric } from "@/lib/analytics/console-values";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
@@ -174,7 +174,7 @@ export async function ingestConsoleMetrics(
           const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
           if (day.raw?.missingMetrics == null && Array.isArray(raw.missingMetrics)) {
             const covered = [
-              ...(total != null || (day.iaaImpressions != null && day.iaaEarningKrw != null) ? ["iaa.ANDROID", "iaa.IOS"] : []),
+              ...consoleCoveredAdMetrics(raw, day.date),
               ...(day.iapTrxAmountKrw != null && day.iapSettlementKrw != null && day.payingUsers != null ? ["iap"] : []),
               ...(day.dau != null && day.newUsers != null ? ["dau"] : []),
               ...(day.avgSessionSec != null ? ["session"] : []),

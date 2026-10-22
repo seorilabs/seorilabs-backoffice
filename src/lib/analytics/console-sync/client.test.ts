@@ -17,7 +17,7 @@ test("실제 HTTP MCP에서 갱신·429·병렬 상한·allowlist·부분 결측
     assert.ok(fixture.state.maxActive <= 2);
     const before = fixture.state.tools.length; await assert.rejects(reader.call("deploy" as ConsoleReadTool, {}), /MCP_TOOL_NOT_ALLOWED/); assert.equal(fixture.state.tools.length, before);
     fixture.state.failIos = true;
-    const missing = await source.queryListing(target, "2026-10-11", "2026-10-11"); assert.equal(missing.days.length, 1); assert.equal(missing.days[0].avgSessionSec, 30); assert.equal(missing.days[0].iaaEarningKrw, undefined); assert.deepEqual(missing.missing[0].metrics, ["iaa.IOS"]);
+    const missing = await source.queryListing(target, "2026-10-11", "2026-10-11"); assert.equal(missing.days.length, 1); assert.equal(missing.days[0].avgSessionSec, 30); assert.equal(missing.days[0].iaaEarningKrw, 34); assert.deepEqual(missing.missing[0].metrics, ["iaa.IOS"]);
     fixture.state.rateLimits = 10;
     await assert.rejects(source.queryListing(target, "2026-10-11", "2026-10-11"), /RATE_LIMITED/);
   } finally { await reader.close(); await fixture.close(); }

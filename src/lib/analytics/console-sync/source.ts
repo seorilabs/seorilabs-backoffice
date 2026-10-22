@@ -19,6 +19,7 @@ export class McpConsoleMetricsSource implements ConsoleMetricsSource {
       ["dau", "dashboard_dau", { ...common, request: { ...period, timeUnit: "DAY" } }], ["session", "dashboard_session", { ...common, request: { ...period, timeUnit: "DAY" } }],
       ["android", "dashboard_revenue_iaa", { ...common, request: { ...period, osType: "ANDROID" } }], ["ios", "dashboard_revenue_iaa", { ...common, request: { ...period, osType: "IOS" } }],
       ["iap", "dashboard_revenue_iap", { ...common, request: { ...period, timeUnitType: "DAY" } }],
+      ["total", "dashboard_revenue_iaa", { ...common, request: period }],
     ];
     const responses: Record<string, unknown> = {}; const errors: { metric: string; code: string }[] = [];
     for (let offset = 0; offset < requests.length; offset += 2) {
