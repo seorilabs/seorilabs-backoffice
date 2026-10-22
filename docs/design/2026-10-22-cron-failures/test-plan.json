@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "ac78fe929726fafb7c3c3226b9a10bce7b9effc5",
+  "changedFeatures": [
+    "github-webhook-reconcile-and-registry-sync",
+    "ait-console-pod-collection",
+    "metric-collection-ledger-and-backfill",
+    "app-and-market-metrics",
+    "metric-report-highlights-finance-liveops",
+    "notification-outbox-report-visuals-and-retention",
+    "runtime-health-metrics-and-operational-events"
+  ],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": { "markets": ["web", "service"], "until": "public" }
+}
