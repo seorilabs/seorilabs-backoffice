@@ -1,0 +1,213 @@
+{
+  "observedAt": "2026-10-22T07:57:17.600734+00:00",
+  "context": "vzyx-cluster",
+  "server": "https://k8s.vzyx.xyz:16443",
+  "readOnlyInvestigation": true,
+  "cronjobs": [
+    {
+      "namespace": "platform",
+      "name": "backoffice-ait-console-metrics",
+      "schedule": "30 3,9,15,21 * * *",
+      "timeZone": "Asia/Seoul",
+      "suspend": false,
+      "lastScheduleTime": "2026-10-22T06:30:00Z",
+      "lastSuccessfulTime": null,
+      "backoffLimit": 0,
+      "activeDeadlineSeconds": 900,
+      "restartPolicy": "Never",
+      "images": [
+        "registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:5ea07f0b7c0835b012df98f7f486971da0525d81080cb69db06939e4b8704bac"
+      ]
+    },
+    {
+      "namespace": "platform",
+      "name": "backoffice-extended-metrics",
+      "schedule": "0 1 * * *",
+      "timeZone": null,
+      "suspend": false,
+      "lastScheduleTime": "2026-10-22T01:00:00Z",
+      "lastSuccessfulTime": "2026-10-21T01:03:56Z",
+      "backoffLimit": 2,
+      "activeDeadlineSeconds": 2700,
+      "restartPolicy": "OnFailure",
+      "images": [
+        "registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:5ea07f0b7c0835b012df98f7f486971da0525d81080cb69db06939e4b8704bac"
+      ]
+    },
+    {
+      "namespace": "platform",
+      "name": "backoffice-metric-daily-reconcile",
+      "schedule": "45 14 * * *",
+      "timeZone": null,
+      "suspend": false,
+      "lastScheduleTime": "2026-10-21T14:45:00Z",
+      "lastSuccessfulTime": "2026-10-20T14:45:31Z",
+      "backoffLimit": 2,
+      "activeDeadlineSeconds": 300,
+      "restartPolicy": "OnFailure",
+      "images": [
+        "curlimages/curl:8.11.1"
+      ]
+    },
+    {
+      "namespace": "platform",
+      "name": "backoffice-reconcile",
+      "schedule": "0 */6 * * *",
+      "timeZone": null,
+      "suspend": false,
+      "lastScheduleTime": "2026-10-22T06:00:00Z",
+      "lastSuccessfulTime": "2026-10-18T12:04:28Z",
+      "backoffLimit": 1,
+      "activeDeadlineSeconds": 900,
+      "restartPolicy": "Never",
+      "images": [
+        "curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
+      ]
+    },
+    {
+      "namespace": "tasks",
+      "name": "trends-news",
+      "schedule": "0 9,12,17,21 * * *",
+      "timeZone": "Asia/Seoul",
+      "suspend": false,
+      "lastScheduleTime": "2026-10-22T03:00:00Z",
+      "lastSuccessfulTime": "2026-10-09T00:02:56Z",
+      "backoffLimit": 0,
+      "activeDeadlineSeconds": null,
+      "restartPolicy": "Never",
+      "images": [
+        "registry.vzyx.xyz/cronjobs:3f2477edf29faea698507aeb04e91387c99a0561"
+      ]
+    }
+  ],
+  "consoleRuns": [
+    {
+      "pod": "backoffice-ait-console-metrics-29876790-m8gnj",
+      "state": "partial",
+      "through": "2026-10-21",
+      "upserts": 71,
+      "missingListingDays": 114,
+      "errors": 0,
+      "missingMetricCounts": {
+        "iaa.ANDROID": 79,
+        "iaa.IOS": 101,
+        "iap": 56
+      }
+    },
+    {
+      "pod": "backoffice-ait-console-metrics-29877150-sqkmp",
+      "state": "partial",
+      "through": "2026-10-21",
+      "upserts": 71,
+      "missingListingDays": 113,
+      "errors": 0,
+      "missingMetricCounts": {
+        "iaa.ANDROID": 77,
+        "iaa.IOS": 100,
+        "iap": 56
+      }
+    },
+    {
+      "pod": "backoffice-ait-console-metrics-29877510-9cgjb",
+      "state": "partial",
+      "through": "2026-10-21",
+      "upserts": 71,
+      "missingListingDays": 113,
+      "errors": 0,
+      "missingMetricCounts": {
+        "iaa.ANDROID": 77,
+        "iaa.IOS": 100,
+        "iap": 56
+      }
+    }
+  ],
+  "extendedFirstAttempt": {
+    "connections": 64,
+    "batches": 53,
+    "counts": {
+      "not_landed": 35,
+      "failed": 3,
+      "observed": 26
+    },
+    "errors": [
+      {
+        "source": "android-vitals",
+        "app": "spiritgate-defenders",
+        "errorCode": "PLAY_VITALS_HTTP_503",
+        "startedAt": "2026-10-22T01:02:16.779Z",
+        "completedAt": "2026-10-22T01:02:18.349Z"
+      },
+      {
+        "source": "android-vitals",
+        "app": "reascend",
+        "errorCode": "PLAY_VITALS_HTTP_503",
+        "startedAt": "2026-10-22T01:02:39.321Z",
+        "completedAt": "2026-10-22T01:02:43.390Z"
+      },
+      {
+        "source": "apple-analytics",
+        "app": "cycle-pair",
+        "errorCode": "SOURCE_TIMEOUT",
+        "startedAt": "2026-10-22T01:06:05.880Z",
+        "completedAt": "2026-10-22T01:06:25.159Z"
+      }
+    ]
+  },
+  "webPod": {
+    "pod": "backoffice-55b7d4bd6c-nzjct",
+    "sourceSha": "ad9a5eab80400cb487059e643250375775e7f275",
+    "resources": [
+      {
+        "limits": {
+          "cpu": "1",
+          "memory": "768Mi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "256Mi"
+        }
+      }
+    ],
+    "lastTermination": [
+      {
+        "containerID": "containerd://81d8cb111fe37d7877c89c7daf81d53ec60db9a2df4bcfce2f33ba4be74999a2",
+        "exitCode": 137,
+        "finishedAt": "2026-10-21T14:45:16Z",
+        "reason": "OOMKilled",
+        "startedAt": "2026-10-18T23:00:15Z"
+      }
+    ]
+  },
+  "reconcileErrorLines": [
+    "2026-10-22T03:03:00.914396304+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T03:03:00.922655322+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T03:03:00.922692822+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T03:03:00.922720581+09:00     target: 'issue_mirror_repoFullName_number_key'",
+    "2026-10-22T03:07:22.026708219+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T03:07:22.028294336+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T03:07:22.028321707+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T03:07:22.028341984+09:00     target: 'issue_mirror_repoFullName_number_key'",
+    "2026-10-22T09:02:45.104337945+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T09:02:45.106672342+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T09:02:45.106688583+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T09:02:45.106708731+09:00     target: 'issue_mirror_repoFullName_number_key'",
+    "2026-10-22T09:06:44.590323291+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T09:06:44.593268688+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T09:06:44.593287596+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T09:06:44.593320725+09:00     target: 'issue_mirror_repoFullName_number_key'",
+    "2026-10-22T15:02:42.998239220+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T15:02:43.001694635+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T15:02:43.001739839+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T15:02:43.001760043+09:00     target: 'issue_mirror_repoFullName_number_key'",
+    "2026-10-22T15:06:38.915225601+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T15:06:38.918593018+09:00 [reconcile] seorilabs/merge-lizard 실패: Error [PrismaClientKnownRequestError]: ",
+    "2026-10-22T15:06:38.918642629+09:00 Unique constraint failed on the constraint: `issue_mirror_repoFullName_number_key`",
+    "2026-10-22T15:06:38.918686092+09:00     target: 'issue_mirror_repoFullName_number_key'"
+  ],
+  "news": {
+    "pod": "trends-news-29877300-t87bt",
+    "http503": true,
+    "stage": "GeminiService.generateNewsSummary",
+    "unhandledException": true
+  }
+}

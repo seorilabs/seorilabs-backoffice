@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
+import { visibleAppWhere } from "@/lib/domain/app-visibility";
 import { prisma } from "@/lib/prisma";
 import { metricReportPartitions } from "./report-batches";
 import { METRIC_DICTIONARY, unifiedMetricRowSchema, metricChange, type MetricSlice, type UnifiedMetricRow } from "./unified-metrics";
@@ -40,14 +41,13 @@ export function aggregateReportRows(rows: UnifiedMetricRow[]) {
 
 /** 웹·발행·CSV의 공용 조회. 광고/스토어/GA4의 다른 정의를 한 합계로 만들지 않는다. */
 export async function providerMetricSeries(end: string, db: Prisma.TransactionClient = prisma, appId?: string): Promise<ProviderSeries[]> {
-  const partitions = await metricReportPartitions(end, db, appId);
-  const apps = await db.app.findMany({ where: { id: { in: [...new Set(partitions.map((one) => one.appId))] } }, select: { id: true, displayName: true } });
+  const apps = await db.app.findMany({ where: { ...visibleAppWhere, ...(appId ? { id: appId } : {}) }, select: { id: true, displayName: true } });
   const series = new Map<string, ProviderSeries>();
-  for (const partition of partitions) {
+  for await (const partition of metricReportPartitions(end, db, appId)) {
     const groups = new Map<string, UnifiedMetricRow[]>();
     for (const row of partition.rows) {
       const semantics = semanticDimensions(row);
-      const key = JSON.stringify([row.metric, row.currency, semantics]); groups.set(key, [...(groups.get(key) ?? []), row]);
+      const key = JSON.stringify([row.metric, row.currency, semantics]); const group = groups.get(key) ?? []; group.push(row); groups.set(key, group);
     }
     for (const rows of groups.values()) {
       const combined = aggregateReportRows(rows), metric = combined.metric;

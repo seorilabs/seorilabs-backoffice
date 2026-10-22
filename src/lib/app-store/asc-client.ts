@@ -53,8 +53,8 @@ export interface JsonApiDoc {
 }
 
 /** ASC REST 호출. 2xx 아니면 errors detail 을 묶어 throw. 204/빈 응답 허용. */
-export async function asc(path: string, init?: RequestInit): Promise<JsonApiDoc> {
-  const res = await fetch(`${ASC_BASE}${path}`, {
+export async function asc(path: string, init?: RequestInit, request: typeof fetch = fetch): Promise<JsonApiDoc> {
+  const res = await request(`${ASC_BASE}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${mintToken()}`,

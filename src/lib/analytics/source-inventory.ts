@@ -36,12 +36,17 @@ export async function metricSourceInventory(day: string, db: Prisma.TransactionC
       configRevisions: { where: { status: "ACTIVE" }, orderBy: { revision: "desc" }, take: 1, select: { revision: true, payload: true } } },
   });
   const ids = apps.map((app) => app.id);
-  const [ledger, runs, partitions] = await Promise.all([
+  const [ledger, runs] = await Promise.all([
     db.metricCollectionLedger.findMany({ where: { appId: { in: ids }, day: toDbDay(day) } }),
     // GROUP BY 뒤 개별 최신 실행을 읽어 전역 take로 오래된 앱을 숨기지 않는다.
     db.sourceCollectionRun.groupBy({ by: ["appId", "source", "target"], where: { appId: { in: ids }, startedAt: { lte: cutoffAt } }, _max: { startedAt: true } }),
-    metricReportPartitions(day, db),
   ]);
+  type Partition = ReturnType<typeof metricReportPartitions> extends AsyncGenerator<infer P> ? P : never;
+  const partitions: Array<Pick<Partition, "appId" | "source" | "accountId" | "resourceId" | "reportType" | "periodEnd"> & { rows: Array<Pick<Partition["rows"][number], "state" | "numerator" | "denominator">> }> = [];
+  for await (const partition of metricReportPartitions(day, db)) {
+    partitions.push({ appId: partition.appId, source: partition.source, accountId: partition.accountId, resourceId: partition.resourceId, reportType: partition.reportType, periodEnd: partition.periodEnd,
+      rows: partition.rows.map(({ state, numerator, denominator }) => ({ state, numerator, denominator })) });
+  }
   const latest = runs.length ? await db.sourceCollectionRun.findMany({
     where: { OR: runs.map((run) => ({ appId: run.appId, source: run.source, target: run.target, startedAt: run._max.startedAt! })) },
     orderBy: { startedAt: "desc" },

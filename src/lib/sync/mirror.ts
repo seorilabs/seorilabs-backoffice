@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { getInstallationOctokit } from "@/lib/github/app";
+import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { upsertFleetProjectProjection } from "@/lib/control-plane/automation-service";
 import type {
   IssueState,
@@ -106,6 +108,14 @@ export async function upsertIssue(
   gh: GhIssueInput,
 ): Promise<void> {
   if (gh.pull_request) return; // PR 은 issue 미러에서 제외
+  const slot = await prisma.issueMirror.findUnique({ where: { repoFullName_number: { repoFullName, number: gh.number } } });
+  const replacing = slot && slot.nodeId !== gh.node_id;
+  if (replacing) {
+    const [owner, repo] = repoFullName.split("/");
+    const { data: current } = await (await getInstallationOctokit()).rest.issues.get({ owner, repo, issue_number: gh.number });
+    if (current.pull_request || current.number !== gh.number || current.repository_url.toLowerCase() !== `https://api.github.com/repos/${repoFullName}`.toLowerCase()) throw new Error("ISSUE_IDENTITY_READBACK_MISMATCH");
+    gh = current as GhIssueInput;
+  }
   const ghUpdatedAt = new Date(gh.updated_at);
   const existing = await prisma.issueMirror.findUnique({
     where: { nodeId: gh.node_id },
@@ -138,11 +148,24 @@ export async function upsertIssue(
     ghUpdatedAt,
   };
 
-  await prisma.issueMirror.upsert({
+  await retryPrismaConflict(() => prisma.$transaction(async (tx) => {
+    // 조회 중 도착한 현재 이벤트와 식별자 교체를 직렬화한다.
+    await tx.$queryRaw`SELECT id FROM issue_mirror WHERE repoFullName = ${repoFullName} AND number = ${gh.number} FOR UPDATE`;
+    const current = await tx.issueMirror.findUnique({ where: { repoFullName_number: { repoFullName, number: gh.number } } });
+    if (current && current.nodeId !== gh.node_id) {
+      if (!replacing || current.nodeId !== slot.nodeId) throw new Error("ISSUE_IDENTITY_CHANGED_DURING_READBACK");
+      await tx.auditLog.create({ data: { actorLogin: "system:github-sync", action: "github.issue.identity.reconciled", entityType: "IssueMirror", entityId: current.id,
+        payload: { previous: JSON.parse(JSON.stringify(current)), currentNodeId: gh.node_id, repoFullName, number: gh.number } } });
+      await tx.issueMirror.update({ where: { id: current.id }, data: { ...data, nodeId: gh.node_id, linkedPrUrl: null } });
+      return;
+    }
+    if (current && current.ghUpdatedAt > ghUpdatedAt) return;
+    await tx.issueMirror.upsert({
     where: { nodeId: gh.node_id },
     create: { nodeId: gh.node_id, ...data },
     update: data,
-  });
+    });
+  }));
   await upsertFleetProjectProjection(repoFullName, gh.number);
 }
 

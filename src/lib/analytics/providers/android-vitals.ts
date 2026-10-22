@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { parseMetricDay, shiftMetricDay } from "../metric-day";
 import { unifiedMetricRowSchema, type UnifiedMetricKey } from "../unified-metrics";
 import type { DatedMetricRow } from "../report-files";
+import { fetchReadWithRetry } from "./read-retry";
 
 export const VITALS_BASE = "https://playdeveloperreporting.googleapis.com/v1beta1";
 export type VitalsRequest = (path: string, body?: unknown) => Promise<unknown>;
@@ -11,7 +12,7 @@ export const vitalsRequest: VitalsRequest = async (path, body) => {
   if (!env.googlePlayServiceAccountJson()) throw new Error("PLAY_VITALS_PERMISSION_REQUIRED");
   const auth = new GoogleAuth({ credentials: JSON.parse(env.googlePlayServiceAccountJson()), scopes: ["https://www.googleapis.com/auth/playdeveloperreporting"] });
   const token = await auth.getAccessToken();
-  const response = await fetch(VITALS_BASE + path, { method: body ? "POST" : "GET", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000) });
+  const response = await fetchReadWithRetry(VITALS_BASE + path, { method: body ? "POST" : "GET", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
   if (!response.ok) throw new Error(`PLAY_VITALS_HTTP_${response.status}`);
   const text = await response.text();
   if (Buffer.byteLength(text) > 32 * 1024 * 1024) throw new Error("PLAY_VITALS_REPORT_LIMIT");

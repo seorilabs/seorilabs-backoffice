@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeConsoleRaw, consoleAdTotal, hasConsoleAdObservation, sumConsoleValues, isCompleteConsoleMetric } from "./console-values";
+import { mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, sumConsoleValues, isCompleteConsoleMetric } from "./console-values";
 
 const android = { date: "2026-10-11", impression: 6, estimatedEarning: 34 };
 const ios = { date: "2026-10-11", impression: 2, estimatedEarning: 12 };
@@ -21,6 +21,12 @@ test("미확인 값의 합계는 0과 구별한다", () => {
   assert.equal(sumConsoleValues([null, 0]), null);
   assert.equal(sumConsoleValues([null, 3, 7]), null);
   assert.equal(sumConsoleValues([0, 3, 7]), 10);
+});
+
+test("공식 합계가 있어도 없는 OS 원본을 확인한 것으로 바꾸지 않는다", () => {
+  const raw = { iaaTotal: { ...ios, estimatedEarning: 4 }, iaaByOs: { IOS: ios } };
+  assert.equal(consoleAdTotal(raw, ios.date)?.iaaEarningKrw, 4);
+  assert.deepEqual(consoleCoveredAdMetrics(raw, ios.date), ["iaa.IOS"]);
 });
 
 test("조회 구간이 바뀌면 이전 구간의 분포·잔존 집계를 섞지 않는다", () => {

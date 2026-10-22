@@ -35,17 +35,19 @@ export function normalizeConsoleResponses(input: Record<string, unknown>, start:
   const session = indexRows(input.session, "metric", "dateKey", value, start, end);
   const android = indexRows(input.android, "dailyReports", "date", ad, start, end);
   const ios = indexRows(input.ios, "dailyReports", "date", ad, start, end);
+  const total = indexRows(input.total, "dailyReports", "date", ad, start, end);
   const iap = indexRows(input.iap, "metric", "trxDate", payment, start, end);
   const days: ConsoleDailyMetric[] = []; const missing: { date: string; metrics: string[] }[] = [];
   for (const date of metricDayWindow(end, length)) {
     const metrics = [!au || !newAu ? "dau" : null, !session ? "session" : null,
       !android?.has(date) ? "iaa.ANDROID" : null, !ios?.has(date) ? "iaa.IOS" : null, !iap?.has(date) ? "iap" : null].filter((v): v is string => v !== null);
     if (metrics.length) missing.push({ date, metrics });
-    const a = android?.get(date); const i = ios?.get(date); const p = iap?.get(date);
+    const a = android?.get(date); const i = ios?.get(date); const p = iap?.get(date); const combined = total?.get(date);
     const active = au?.get(date); const fresh = newAu?.get(date); const duration = session?.get(date);
-    if (!a && !i && !p && !active && !fresh && !duration) continue;
+    if (!a && !i && !p && !active && !fresh && !duration && !combined) continue;
     const raw: Row = {};
     if (a || i) raw.iaaByOs = { ...(a ? { ANDROID: { ...a, date } } : {}), ...(i ? { IOS: { ...i, date } } : {}) };
+    if (combined) raw.iaaTotal = { ...combined, date };
     if (p) raw.iap = p;
     raw.missingMetrics = metrics;
     if (date === end) {
@@ -54,8 +56,8 @@ export function normalizeConsoleResponses(input: Record<string, unknown>, start:
       for (const key of ["referrer", "age", "gender", "os", "appVersion"]) if (Array.isArray(dau[key])) raw[key] = dau[key];
     }
     const checked = validateConsoleDay({ date, dau: active?.value, newUsers: fresh?.value,
-      avgSessionSec: duration?.value, iaaImpressions: a && i ? (a.impression as number) + (i.impression as number) : undefined,
-      iaaEarningKrw: a && i ? (a.estimatedEarning as number) + (i.estimatedEarning as number) : undefined,
+      avgSessionSec: duration?.value, iaaImpressions: combined?.impression ?? (a && i ? (a.impression as number) + (i.impression as number) : undefined),
+      iaaEarningKrw: combined?.estimatedEarning ?? (a && i ? (a.estimatedEarning as number) + (i.estimatedEarning as number) : undefined),
       iapTrxAmountKrw: p?.trxAmount, iapSettlementKrw: p?.settlementAmount, payingUsers: p?.pu, raw });
     if (checked.ok) days.push(checked.day); else missing.push({ date, metrics: checked.fields });
   }

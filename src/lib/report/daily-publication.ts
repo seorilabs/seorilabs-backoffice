@@ -110,7 +110,8 @@ export async function dailyReportImage(doc: OrgReportDocument) {
       days,
     } as typeof charts[number] & { days: string[] });
   }
-  const buffers = await Promise.all(charts.map((chart) => sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer()));
+  const buffers: Buffer[] = [];
+  for (const chart of charts) buffers.push(await sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer());
   const heights = await Promise.all(buffers.map(async (input) => (await sharp(input).metadata()).height!));
   let top = 0;
   const panels = buffers.map((input, index) => {
@@ -173,12 +174,10 @@ export async function correctRecentDailyReports(now = new Date()) {
   const from = days[0], to = days.at(-1)!;
   const reports = await prisma.orgReportDaily.findMany({
     where: { date: { gte: toDbDay(from), lte: toDbDay(to) } },
-    select: { date: true, report: true }, orderBy: { date: "desc" },
+    select: { date: true }, orderBy: { date: "desc" },
   });
   const results: Array<Awaited<ReturnType<typeof correctDailyReport>>> = [];
   for (const report of reports) {
-    const previous = parseOrgReportDocument(report.report);
-    if (!previous?.published || !previous.edition) continue;
     results.push(await correctDailyReport(now, dbDay(report.date)));
   }
   return { from, to, processed: results.length, corrected: results.filter((result) => result.action === "corrected").length, results };
@@ -186,9 +185,13 @@ export async function correctRecentDailyReports(now = new Date()) {
 
 /** 늦은 자료는 새 버전에 보존하고 같은 outbox 메시지의 숫자·그림·링크를 함께 고친다. */
 export async function correctDailyReport(now = new Date(), refDate = shiftMetricDay(lastElapsedMetricDay(now), -1)) {
+  const initial = await prisma.orgReportDaily.findUnique({ where: { date: toDbDay(refDate) } });
+  const before = initial ? parseOrgReportDocument(initial.report) : null;
+  if (!before?.published || !before.edition) return { day: refDate, action: "none", version: null, requeued: 0 };
   const frozen = await prisma.$transaction((db) => freezeDailyReport(now, refDate, db), {
     isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 120_000,
   });
+  if (sameReportFacts(before, frozen.doc)) return { day: refDate, action: "none", version: initial!.version, requeued: 0 };
   const attachment = await dailyReportImage(frozen.doc).catch(() => null);
   return prisma.$transaction(async (db) => {
     // 동일 날짜의 정정을 직렬화한다. 이전 버전 확인과 outbox 갱신을 분리하지 않는다.

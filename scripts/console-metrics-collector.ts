@@ -9,6 +9,8 @@ import { SecretManagerConsoleGrantVersions } from "../src/lib/analytics/console-
 import { consoleRuntimeLedger } from "../src/lib/control-plane/console-oauth-runtime";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { collectAndNotify } from "../src/lib/analytics/console-sync/notification";
+import { consoleExecutionFailed } from "../src/lib/analytics/console-sync/execution";
+import { beginCollection, completeCollection } from "../src/lib/insights/collection";
 
 async function execute(mode: string) {
   if (!["collect", "verify-auth", "verify-refresh"].includes(mode)) throw new ConsoleSyncError("CONSOLE_MODE_INVALID");
@@ -38,10 +40,13 @@ async function execute(mode: string) {
 }
 async function main() {
   const mode = process.argv[2] ?? "collect";
+  const ledger = mode === "collect" ? await beginCollection("ait-console-run", `workspace:${AIT_WORKSPACE_ID}`) : null;
   const result = mode === "collect" ? await collectAndNotify(() => execute(mode)) : { ...await execute(mode), notification: undefined };
+  const failed = consoleExecutionFailed(result);
+  if (ledger) await completeCollection(ledger.id, { status: failed ? "failed" : result.state,
+    coverage: JSON.parse(JSON.stringify(result)) });
   (result.state === "failed" ? process.stderr : process.stdout).write(`${JSON.stringify(result)}\n`);
-  if (result.state === "failed" || result.notification?.state === "failed") process.exitCode = 1;
-  else if (result.state === "partial") process.exitCode = 2;
+  if (failed) process.exitCode = 1;
 }
 main().catch((error) => { process.stderr.write(`${JSON.stringify({ state: "failed", code: consoleErrorCode(error) })}\n`); process.exitCode = 1; })
   .finally(() => prisma.$disconnect().catch(() => {}));

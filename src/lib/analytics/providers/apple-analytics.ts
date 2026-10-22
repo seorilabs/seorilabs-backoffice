@@ -3,9 +3,10 @@ import { gunzipSync } from "node:zlib";
 import { asc, ASC_BASE, asArray, type JsonApiDoc, type JsonApiResource } from "@/lib/app-store/asc-client";
 import { APPLE_REPORT_FIELDS, appleReportRows, parseReportFile, type DatedMetricRow } from "../report-files";
 import { parseMetricDay } from "../metric-day";
+import { fetchReadWithRetry } from "./read-retry";
 
 export type AppleRequest = (path: string) => Promise<JsonApiDoc>;
-const defaultRequest: AppleRequest = (path) => asc(path, { signal: AbortSignal.timeout(15_000) });
+const defaultRequest: AppleRequest = (path) => asc(path, undefined, (url, init) => fetchReadWithRetry(url, init, { timeoutMs: 15_000, budgetMs: 50_000 }));
 
 export async function applePages(path: string, request: AppleRequest = defaultRequest): Promise<JsonApiResource[]> {
   const resources: JsonApiResource[] = [], seen = new Set<string>(), ids = new Set<string>();
@@ -28,7 +29,7 @@ export async function downloadAppleSegment(url: string, request = fetch): Promis
   const target = new URL(url);
   if (target.protocol !== "https:" || target.username || target.password || !(/(^|\.)(apple\.com|mzstatic\.com|amazonaws\.com)$/.test(target.hostname))) throw new Error("APPLE_DOWNLOAD_HOST_INVALID");
   // 서명된 다운로드 URL에 ASC JWT를 전송하거나 저장하지 않는다.
-  const response = await request(target, { signal: AbortSignal.timeout(30_000), redirect: "error" });
+  const response = await fetchReadWithRetry(target, { redirect: "error" }, { request });
   if (!response.ok || !response.body) throw new Error(`APPLE_DOWNLOAD_${response.status}`);
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
   let size = 0;

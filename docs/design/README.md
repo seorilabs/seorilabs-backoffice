@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-10-22 | [예약 작업 실패 대응](2026-10-22-cron-failures/design.md) — 사용자 수정 지시 승인, L1 서비스 검증과 운영 반영 | [#522](https://github.com/seorilabs/seorilabs-backoffice/issues/522) |
 | 2026-10-19 | [건별 알림과 리뷰 일간 통계](2026-10-19-direct-notifications/design.md) — 사용자 직접 지시, 운영 UID와 11시 통계 선택, L1 서비스 검증과 운영 반영 | [#520](https://github.com/seorilabs/seorilabs-backoffice/issues/520) |
 | 2026-10-19 | [앱 운영 이벤트 건별 알림 복원](2026-10-19-app-event-rows/design.md) — 사용자 건별 복원 선택, L1 서비스 검증과 웹 운영 반영 | [#518](https://github.com/seorilabs/seorilabs-backoffice/issues/518) |
 | 2026-10-18 | [Play 승격 제어 ref](2026-10-18-play-promotion-control-ref/design.md) — 사용자 “둘다 진행”, L1/dev | [#489](https://github.com/seorilabs/seorilabs-backoffice/issues/489) |

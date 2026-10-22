@@ -11,7 +11,7 @@ import { startConsoleFixture } from "./console-metrics/fixture-server";
 import { ingestConsoleMetrics, getConsoleSyncStatus } from "../src/lib/core/console-metrics-collect";
 import { recordObservations } from "../src/lib/analytics/coverage";
 const url = new URL(process.env.DATABASE_URL ?? "");
-if (url.hostname !== "127.0.0.1" || url.port !== "33319" || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
+if (url.hostname !== "127.0.0.1" || url.port !== (process.env.CONSOLE_QA_DB_PORT ?? "33319") || url.pathname !== "/backoffice_console_qa") throw new Error("ISOLATED_DATABASE_REQUIRED");
 async function main() {
   const apps: App[] = [];
   for (const listing of AIT_LISTINGS) {
@@ -59,7 +59,7 @@ async function main() {
     assert.equal(partial.state, "partial");
     const where = { appId_miniAppId_date: { appId: app.id, miniAppId: 61736, date: new Date("2026-10-12") } };
     const partialRow = await prisma.appConsoleMetricDaily.findUniqueOrThrow({ where });
-    assert.equal(partialRow.avgSessionSec, 30); assert.equal(partialRow.iaaEarningKrw, null); assert.equal(partialRow.iapTrxAmountKrw, null);
+    assert.equal(partialRow.avgSessionSec, 30); assert.equal(partialRow.iaaEarningKrw, 34); assert.equal(partialRow.iapTrxAmountKrw, null);
     assert.ok((partialRow.raw as Record<string, unknown>).iaaByOs);
     const partialLedger = await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date("2026-10-12") } });
     assert.equal(partialLedger.state, "failed"); assert.equal(partialLedger.sealed, false);

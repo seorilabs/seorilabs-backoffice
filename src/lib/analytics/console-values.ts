@@ -29,10 +29,20 @@ export function hasConsoleAdObservation(raw: unknown, date: string): boolean {
 
 /** 같은 날짜의 두 OS가 확인된 경우에만 합계를 만든다. */
 export function consoleAdTotal(raw: unknown, date: string) {
+  const total = ad.safeParse(object(raw).iaaTotal);
+  if (total.success && total.data.date === date) return { iaaImpressions: total.data.impression, iaaEarningKrw: total.data.estimatedEarning };
   const byOs = object(object(raw).iaaByOs);
   const android = ad.safeParse(byOs.ANDROID); const ios = ad.safeParse(byOs.IOS);
   if (!android.success || !ios.success || android.data.date !== date || ios.data.date !== date) return null;
   return { iaaImpressions: android.data.impression + ios.data.impression, iaaEarningKrw: android.data.estimatedEarning + ios.data.estimatedEarning };
+}
+
+/** 합계 확인과 별도로 실제 OS별 관측이 있는 지표만 반환한다. */
+export function consoleCoveredAdMetrics(raw: unknown, date: string): string[] {
+  const byOs = object(object(raw).iaaByOs);
+  return ["ANDROID", "IOS"].filter((os) => {
+    const row = ad.safeParse(byOs[os]); return row.success && row.data.date === date;
+  }).map((os) => `iaa.${os}`);
 }
 
 /** 하나라도 미확인이면 부분 합계를 완전한 합계로 표시하지 않는다. */

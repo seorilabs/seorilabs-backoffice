@@ -26,7 +26,7 @@ async function main() {
   await assert.rejects(importMetricReport({ ...batch, accountId: "22222222-2222-2222-2222-222222222222" }, run.id), /CONNECTION_MISMATCH/);
   await assert.rejects(importMetricReport({ ...batch, sourceUri: "https://evil.example/source" }, run.id), /URI_MISMATCH/);
   await importMetricReport({ ...batch, sourceVersion: "instance:two", processingDate: "2026-10-13", sourceHash: "b".repeat(64), rows: [row(8, "US")] }, run.id);
-  const partitions = await metricReportPartitions("2026-10-17", prisma, id);
+  const partitions = await Array.fromAsync(metricReportPartitions("2026-10-17", prisma, id));
   assert.equal(partitions.length, 1); assert.equal(partitions[0].rows.length, 1);
   const series = await providerMetricSeries("2026-10-17", prisma, id);
   assert.equal(series[0].points[0].value, 8, "이전 JP 5건을 최신 partition에 더하면 안 됩니다.");
@@ -72,7 +72,7 @@ async function main() {
   assert.equal(playState?.state, "observed", "공급자 최신 기준일의 정상 지연은 일부 수집이 아니다");
   await prisma.configRevision.update({ where: { id: revision.id }, data: { status: "SUPERSEDED" } });
   await assert.rejects(importMetricReport(batch, run.id), /CONFIG_STALE/);
-  assert.equal((await metricReportPartitions("2026-10-17", prisma, id)).length, 0, "현재 활성 연결 없는 자료를 최신 분석에 노출하지 않습니다.");
+  assert.equal((await Array.fromAsync(metricReportPartitions("2026-10-17", prisma, id))).length, 0, "현재 활성 연결 없는 자료를 최신 분석에 노출하지 않습니다.");
   assert.equal(await prisma.metricReportBatch.count({ where: { appId: id } }), 3, "원천 이력은 보존합니다.");
   await prisma.configRevision.create({ data: { appId: id, revision: 2, status: "ACTIVE", payload, payloadHash: "c".repeat(64), createdBy: "qa", idempotencyKey: id + ":2" } });
   assert.equal((await completedInstance(id, { ...connection, id: "renamed" }, batch.sourceUri, "cached-v1", "2026-07-21", "2026-10-18"))?.through, through, "설정 revision·연결 이름이 달라도 같은 원천 성공 기록을 재사용한다");
