@@ -27,3 +27,10 @@ test("미집계 값은 0으로 검증하지 않고 제공된 OS별 원값도 대
   assert.equal(verifyConsoleRows(partial, [{ ...row, dau: 8, raw }], now).verified, 1);
   assert.equal(verifyConsoleRows(partial, [{ ...row, raw: { iaaByOs: {} } }], now).verified, 0);
 });
+
+test("DOUBLE 직렬화의 끝자리 표현 차이만 허용하고 실제 값 차이는 거부한다", () => {
+  const expected = [{ ...days[0], avgSessionSec: 152.83333333333334 }];
+  assert.equal(verifyConsoleRows(expected, [{ ...row, avgSessionSec: 152.8333333333333 }], now).verified, 1);
+  assert.equal(verifyConsoleRows(expected, [{ ...row, avgSessionSec: 152.833334 }], now).verified, 0);
+  assert.equal(verifyConsoleRows([{ ...days[0], iaaEarningKrw: 1e-20 }], [{ ...row, iaaEarningKrw: 0 }], now).verified, 0);
+});
