@@ -149,5 +149,5 @@ def parse_report(data, month, period_end):
         read, listened = units(record['Kindle+ Pages Read']), units(record['Kindle+ Pages Listened'])
         require(read + listened == units(record['Total Kindle+ Pages Read and Listened']))
         result.append({**base(record, 'Date', 'eBook ASIN', 'ebook'), 'kind': 'kenp', 'pagesRead': read, 'pagesListened': listened})
-    require(len(result) <= 20000)
+    require(len(result) <= 8000)
     return result

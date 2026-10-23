@@ -31,6 +31,8 @@ API는 `GET /api/admin/book-sales?month=YYYY-MM`과 `POST /api/admin/book-sales`
 
 판형별 Royalty의 `unitsSold`, `refunds`, `netUnits`와 예상 로열티를 별도로 집계한다. Orders Processed는 `paidOrders`, `freeOrders`, KENP는 읽은 페이지와 들은 페이지다. 같은 판매가 Combined Sales와 Summary에도 있으므로 이 두 시트의 금액을 다시 더하지 않는다. Summary는 소계 검증에만 사용한다.
 
+정규화한 보고서는 최대 8,000행, 전송 본문은 24MiB까지 허용하며 Ingress의 25MiB 한도 안에 둔다. 수집 상태 화면은 원본 판매 행을 읽지 않는다.
+
 통화는 합치지 않는다. KDP 원본의 달력일과 월 단위를 보존하며 시간대는 `marketplace-local`이다. 확정 로열티와 실제 지급은 연결하지 않았으므로 `confirmedRoyalties`와 `payments`는 `null`이다. 필수 시트가 모두 있는 빈 보고서만 0건이며, 형식 변경이나 인증 실패는 0건으로 저장하지 않는다.
 
 `SourceCollectionRun`의 `source=book-sales-kdp`, `target=<계정>:<월>`에 정규화된 전체 관측을 저장한다. 재전송은 실행 ID로 구분하며 같은 ID에 다른 내용을 보내면 HTTP 409다. DB schema와 중앙 설정은 바꾸지 않는다.

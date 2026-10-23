@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ingestBookSales, readBookSales, type BookSalesStore, type StoredBookRun } from "./service";
-import { handleBookSalesPost } from "./http";
+import { handleBookSalesPost, BOOK_SALES_MAX_BODY_BYTES } from "./http";
+import { parseBookSalesInput } from "./contract";
 
 function memoryStore(): BookSalesStore {
   const runs = new Map<string, StoredBookRun>();
@@ -58,6 +59,21 @@ test("토큰을 검사한 뒤에만 본문과 저장 함수를 실행한다", as
   assert.equal((await handleBookSalesPost("token", "token", body, save)).status, 200);
   assert.equal(writes, 1);
   assert.equal((await handleBookSalesPost("token", "token", async () => "{", save)).status, 400);
-  assert.equal((await handleBookSalesPost("token", "token", async () => "x".repeat(2_000_001), save)).status, 413);
+  assert.equal((await handleBookSalesPost("token", "token", async () => "x".repeat(BOOK_SALES_MAX_BODY_BYTES + 1), save)).status, 413);
   assert.equal(writes, 1);
+});
+
+// 이전 2MB 한도를 넘는 정상 보고서를 보존한다.
+test("8,000행의 정상 보고서는 전송 한도 안에서 저장 함수에 전달된다", async () => {
+  const raw = { ...success, rows: Array.from({ length: 8_000 }, () => ({ ...success.rows[0], title: "책".repeat(600) })) };
+  const body = JSON.stringify(raw);
+  assert.ok(Buffer.byteLength(body) > 2_000_000);
+  assert.ok(Buffer.byteLength(body) < BOOK_SALES_MAX_BODY_BYTES);
+  const result = await handleBookSalesPost("token", "token", async () => body, async (value) => {
+    const input = parseBookSalesInput(value, now);
+    assert.equal(input.kind === "snapshot" ? input.rows.length : 0, 8_000);
+    return { runId: "large-report", status: "observed" };
+  });
+  assert.equal(result.status, 200);
+  assert.throws(() => parseBookSalesInput({ ...raw, rows: [...raw.rows, raw.rows[0]] }, now));
 });

@@ -20,6 +20,7 @@ from kdp_report import parse_report, ReportError
 
 ACCOUNT = 'kdp-wellknowngeek'
 ARTIFACT_ROOT = Path('/Volumes/Data/Backup/agent-artifacts')
+MAX_API_BYTES = 24 * 1024 * 1024
 
 
 class CollectError(RuntimeError):
@@ -88,7 +89,7 @@ def api(config, payload=None, month=None):
     request = Request(url, data=data, headers={'x-admin-token': token, 'content-type': 'application/json'})
     try:
         with build_opener(NoRedirect).open(request, timeout=60) as response:
-            result = json.loads(response.read(2_000_001))
+            result = json.loads(response.read(MAX_API_BYTES + 1))
             if result.get('ok') is not True: raise CollectError('KDP_BACKOFFICE_RESPONSE_INVALID')
             return result
     except HTTPError as error:

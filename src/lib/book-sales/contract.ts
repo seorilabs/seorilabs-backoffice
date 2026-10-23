@@ -24,7 +24,7 @@ const rowSchema = z.discriminatedUnion("kind", [
 const common = z.object({ schemaVersion: z.literal(1), runId: z.string().uuid(), account: z.literal(BOOK_SALES_ACCOUNT),
   month: bookMonthSchema, capturedAt: z.string().datetime({ offset: true }) }).strict();
 export const bookSalesInputSchema = z.discriminatedUnion("kind", [
-  common.extend({ kind: z.literal("snapshot"), periodEnd: z.string(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), rows: z.array(rowSchema).max(20_000) }).strict(),
+  common.extend({ kind: z.literal("snapshot"), periodEnd: z.string(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), rows: z.array(rowSchema).max(8_000) }).strict(),
   common.extend({ kind: z.literal("failure"), errorCode: z.enum(["KDP_AUTH_REQUIRED", "KDP_DOWNLOAD_FAILED", "KDP_REPORT_INVALID", "KDP_ARCHIVE_FAILED", "KDP_BROWSER_UNAVAILABLE"]) }).strict(),
 ]);
 export type BookSalesInput = z.infer<typeof bookSalesInputSchema>;
