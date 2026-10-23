@@ -352,6 +352,16 @@ for manifest in \
 done
 
 echo "== image CronJob rollout =="
+# OAuth와 활성 스케줄은 실제 운영 설정을 보존하고 이미지만 갱신한다.
+k -n "$namespace" set image cronjob/backoffice-ait-console-metrics "collector=$image"
+apply_image_manifest operations-batch-observer-cronjob.yaml
+for collector in backoffice-ait-console-metrics backoffice-batch-observer; do
+  collector_image="$(k -n "$namespace" get cronjob "$collector" -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+  if [ "$collector_image" != "$image" ]; then
+    echo "오류: $collector 이미지 digest가 일치하지 않는다" >&2
+    exit 1
+  fi
+done
 apply_image_manifest store-submissions-cronjob.yaml
 store_submission_image="$(k -n "$namespace" get cronjob backoffice-store-submissions -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
 if [ "$store_submission_image" != "$image" ]; then

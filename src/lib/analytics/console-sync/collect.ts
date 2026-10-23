@@ -4,6 +4,7 @@ import { recordCollectionFailure } from "../coverage";
 import { consoleCollectionPlan } from "./plan";
 import { ConsoleSyncError, consoleErrorCode } from "./oauth";
 import type { McpConsoleMetricsSource } from "./source";
+import { verifyStoredConsoleDays } from "./readback";
 
 // 갱신 전에 잠금을 잡는다. 여러 수집 Job이 같은 refresh token을 동시에 쓰지 않는다.
 export async function withConsoleCollectionLock<T>(run: (assertHeld: () => Promise<void>) => Promise<T>): Promise<T | { state: "already_running" }> {
@@ -34,8 +35,14 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
     const appId = appIds.get(window.slug);
     if (appId) await recordCollectionFailure(response.missing.map((missing) => ({ source: "ait_console" as const, appId, listingId: window.miniAppId, day: missing.date, detail: `미확인 지표: ${missing.metrics.join(",")}` })), now);
     const stored = response.days.length ? await ingestConsoleMetrics({ apps: [{ ...window, days: response.days }] }, now) : null;
+    let verification = { expected: response.days.length, verified: 0, mismatched: response.days.map((day) => day.date) };
+    const storageErrors = [...(stored?.errors ?? [])];
+    try {
+      if (appId) verification = await verifyStoredConsoleDays(appId, window.miniAppId, response.days, now);
+      if (verification.mismatched.length) storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_MISMATCH" });
+    } catch { storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_FAILED" }); }
     results.push({ window, upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
-      skipped: stored?.skipped ?? [], storageErrors: stored?.errors ?? [], warnings: stored?.warnings ?? [] });
+      skipped: stored?.skipped ?? [], storageErrors, warnings: stored?.warnings ?? [], verification });
   }
   const readback = await getConsoleSyncStatus();
   const incomplete = plan.blocked.length > 0 || results.some((r) => r.missing.length || r.errors.length || r.skipped.length || r.storageErrors.length || r.warnings.length)

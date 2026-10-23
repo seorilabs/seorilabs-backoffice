@@ -177,12 +177,11 @@ export async function recordIncident(input: {
   detectedAt: Date;
   appId?: string;
   evidence?: Prisma.InputJsonObject;
-}): Promise<OperationalIncident> {
+}, transaction?: Prisma.TransactionClient): Promise<OperationalIncident> {
   const dedupeKey = `${input.source}:${input.kind}:${input.appId ?? "global"}:${input.signalId}`;
   for (let attempt = 0; ; attempt++) {
     try {
-      return await prisma.$transaction(
-        async (tx) => {
+      const write = async (tx: Prisma.TransactionClient) => {
           const signalKey = `incident-observation:${input.source}:${input.kind}:${input.appId ?? "global"}:${input.signalId}`;
           const recorded = await tx.notificationEvent.findUnique({
             where: { dedupeKey: signalKey },
@@ -266,12 +265,11 @@ export async function recordIncident(input: {
           );
           await enqueueIncident(incident, input.signalId, tx);
           return incident;
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
+        };
+      return transaction ? await write(transaction) : await prisma.$transaction(write, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       if (
-        attempt >= 3 ||
+        transaction || attempt >= 3 ||
         (!["P2034", "P2002"].includes(
           (error as { code?: string }).code ?? "",
         ) &&
@@ -288,8 +286,8 @@ export async function recoverIncident(input: {
   appId?: string;
   signalId: string;
   recoveredAt: Date;
-}): Promise<OperationalIncident | null> {
-  const active = await prisma.operationalIncident.findFirst({
+}, db: Pick<Prisma.TransactionClient, "operationalIncident" | "notificationEvent"> = prisma): Promise<OperationalIncident | null> {
+  const active = await db.operationalIncident.findFirst({
     where: {
       source: input.source,
       kind: input.kind,
@@ -299,7 +297,7 @@ export async function recoverIncident(input: {
     orderBy: { firstDetectedAt: "desc" },
   });
   if (!active) return null;
-  const incident = await prisma.operationalIncident.update({
+  const incident = await db.operationalIncident.update({
     where: { id: active.id },
     data: {
       status: "RECOVERED",
@@ -307,7 +305,7 @@ export async function recoverIncident(input: {
       lastDetectedAt: input.recoveredAt,
     },
   });
-  await enqueueIncident(incident, input.signalId);
+  await enqueueIncident(incident, input.signalId, db);
   return incident;
 }
 

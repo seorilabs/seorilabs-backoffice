@@ -32,6 +32,7 @@ export function consoleCollectionNotification(result: Outcome, runId: string, no
       `조회 ${upsertsByListing.size}개 리스팅 · 반영 ${result.results.reduce((sum, row) => sum + row.upserts, 0)}건`,
       `결측 ${count("missing")}개 리스팅·날짜 조합 · 조회 오류 ${count("errors")}건 · 저장 오류 ${count("storageErrors")}건`,
       `조회 보류 ${blockedByListing.size}개 · 저장 제외 ${count("skipped")}건 · 경고 ${count("warnings")}건`);
+    lines.push(`저장 대조: 요청 ${result.results.reduce((n, row) => n + (row.verification?.expected ?? 0), 0)}건, 일치 ${result.results.reduce((n, row) => n + (row.verification?.verified ?? 0), 0)}건, 불일치 ${result.results.reduce((n, row) => n + (row.verification?.mismatched.length ?? 0), 0)}건`);
     if (result.state === "partial") lines.push("결측값은 0으로 채우지 않았으며 전체 수집 완료가 아닙니다.");
     for (const key of listings) {
       const reason = blockedByListing.get(key);
@@ -44,8 +45,9 @@ export function consoleCollectionNotification(result: Outcome, runId: string, no
     dedupeKey: `ait-console-collection:${runId}`,
     kind: "OPERATIONAL_EVENT" as const,
     occurredAt: now,
-    destinations: discordDestinations(["metrics-daily"]),
+    destinations: discordDestinations(["ops-alerts"]),
     payload: {
+      report: { category: "response", reason: "USER_REQUESTED_COLLECTION_RESULT" },
       text: lines.join("\n"),
       source: "ait_console", runId, state: result.state,
       embed: { title, timestamp: now.toISOString(), color: result.state === "complete" ? EMBED_COLOR.SUCCESS

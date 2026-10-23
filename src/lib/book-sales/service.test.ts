@@ -31,6 +31,17 @@ test("정정 보고서에서 사라진 판매를 이전 보고서와 더하지 �
   assert.equal(result.totals?.paidOrders, 0);
 });
 
+test("저장한 최신 변화만 한 번 알리고 늦은 과거 보고서와 재수집은 알리지 않는다", async () => {
+  const store = memoryStore(); const events: unknown[] = [];
+  store.notify = async (event) => { events.push(event); };
+  await ingestBookSales(success, now, store);
+  await ingestBookSales(success, now, store);
+  assert.equal(events.length, 1);
+  await ingestBookSales({ ...success, runId: "846aeab9-c873-4de5-ab97-3e5d2452abec", capturedAt: "2026-10-23T08:30:00Z", rows: [] }, now, store);
+  await ingestBookSales({ ...success, runId: "846aeab9-c873-4de5-ab97-3e5d2452abed", capturedAt: "2026-10-23T09:30:00Z", sourceHash: "b".repeat(64) }, now, store);
+  assert.equal(events.length, 1);
+});
+
 test("인증 실패는 마지막 성공 수량을 보존하고 재인증 상태를 표시한다", async () => {
   const store = memoryStore();
   await ingestBookSales(success, now, store);
