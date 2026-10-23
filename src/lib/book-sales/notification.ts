@@ -4,8 +4,10 @@ import { EMBED_COLOR } from "@/lib/notifications/style";
 import { summarizeBookSales, type BookSalesSnapshot } from "./contract";
 
 function facts(snapshot: BookSalesSnapshot | null) {
-  return (snapshot?.rows ?? []).map((row) => JSON.stringify(row.kind === "royalty"
-    ? { ...row, royalty: new Prisma.Decimal(row.royalty).toFixed() } : row)).sort();
+  return (snapshot?.rows ?? []).map((row) => {
+    const value = row.kind === "royalty" ? { ...row, royalty: new Prisma.Decimal(row.royalty).toFixed() } : row;
+    return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))));
+  }).sort();
 }
 export function bookSalesChangeNotification(previous: BookSalesSnapshot | null, current: BookSalesSnapshot, now: Date) {
   if (JSON.stringify(facts(previous)) === JSON.stringify(facts(current))) return null;

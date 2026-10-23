@@ -23,6 +23,8 @@ test("신규 판매와 정정을 운영알림에 보내고 발송 정책이 숨�
 test("같은 사실의 재수집과 빈 첫 관측은 알리지 않는다", () => {
   assert.equal(bookSalesChangeNotification(null, snapshot(), now), null);
   const current = snapshot([order]);
+  const reordered = { ...current, rows: current.rows.map((row) => Object.fromEntries(Object.entries(row).reverse())) } as BookSalesSnapshot;
+  assert.equal(bookSalesChangeNotification(reordered, current, now), null);
   assert.equal(bookSalesChangeNotification(current, { ...current, sourceHash: "b".repeat(64),
     periodEnd: "2026-10-24", capturedAt: "2026-10-24T00:00:00Z" }, now), null);
   assert.equal(bookSalesChangeNotification(snapshot([order, { ...order, date: "2026-10-11" }]),

@@ -6,6 +6,12 @@ import { verifyStoredConsoleDays } from "./readback";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
+import { AIT_LISTINGS } from "../ait-apps";
+
+export function consolePushAppId(push: { slug?: string; miniAppId?: number }, registry: { id: string; slug: string; aitMiniAppId: number | null }[]) {
+  const slug = push.slug ?? AIT_LISTINGS.find((listing) => listing.miniAppId === push.miniAppId)?.appSlug;
+  return (registry.find((app) => app.slug === slug) ?? registry.find((app) => app.aitMiniAppId === push.miniAppId))?.id;
+}
 
 /** 기존 수동 push도 같은 저장 대조를 거친 뒤 운영알림을 남긴다. */
 export async function ingestAndVerifyConsolePush(payload: unknown, now: Date) {
@@ -18,9 +24,9 @@ export async function ingestAndVerifyConsolePush(payload: unknown, now: Date) {
     for (const push of (payload as ConsoleMetricsPush).apps) {
       if (!push || !Array.isArray(push.days)) continue;
       expected += push.days.length;
-      const app = registry.find((app) => push.slug ? app.slug === push.slug : app.aitMiniAppId === push.miniAppId);
+      const appId = consolePushAppId(push, registry);
       const days = push.days.flatMap((day) => { const checked = validateConsoleDay(day); return checked.ok ? [checked.day] : []; });
-      if (app && push.miniAppId) verified += (await verifyStoredConsoleDays(app.id, push.miniAppId, days, now)).verified;
+      if (appId && push.miniAppId) verified += (await verifyStoredConsoleDays(appId, push.miniAppId, days, now)).verified;
     }
     failed = verified !== expected || result.errors.length > 0 || result.skipped.length > 0 || result.warnings.length > 0;
     return { ...result, verification: { expected, verified, mismatched: expected - verified } };
