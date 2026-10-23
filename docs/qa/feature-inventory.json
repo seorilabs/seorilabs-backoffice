@@ -2,6 +2,10 @@
   "schemaVersion": 1,
   "features": [
     {
+      "id": "book-sales-collection",
+      "core": false
+    },
+    {
       "id": "navigation-and-redirects",
       "core": true
     },

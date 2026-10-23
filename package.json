@@ -13,7 +13,7 @@
     "start": "next start",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --test \"src/**/*.test.ts\" && python3 -m unittest discover -s scripts/book-sales -p 'test_*.py'",
     "discord:register": "tsx scripts/register-discord-commands.ts",
     "test:operations-acceptance": "tsx scripts/test-operations-insights.ts",
     "test:p6-queue-acceptance": "tsx scripts/test-fleet-queue-acceptance.ts",
