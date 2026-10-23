@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backoffice-batch-observer
+  namespace: platform
+spec:
+  schedule: "* * * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 110
+      template:
+        spec:
+          serviceAccountName: backoffice-batch-observer
+          restartPolicy: Never
+          nodeSelector: { kubernetes.io/hostname: rpi5 }
+          imagePullSecrets: [{ name: registry-pull-cred }]
+          securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001 }
+          containers:
+            - name: observer
+              image: __BACKOFFICE_IMAGE_DIGEST__
+              command: [node, /app/scripts-dist/operations-batch-observer.cjs]
+              env:
+                - name: INTERNAL_ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: backoffice-secrets, key: INTERNAL_ADMIN_TOKEN }
+              resources:
+                requests: { cpu: 25m, memory: 64Mi }
+                limits: { cpu: 300m, memory: 192Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }

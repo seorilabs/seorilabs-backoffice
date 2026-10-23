@@ -49,3 +49,19 @@ class CollectTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class BatchResultTests(unittest.TestCase):
+    def test_one_batch_id_tracks_start_and_verified_finish(self):
+        with patch('collect.configuration', return_value=('https://backoffice.vzyx.xyz', 'fixture')), patch('collect.api', return_value={'ok': True}) as api_mock, patch('collect.collect_months', return_value={'ok': True, 'results': [{'state': 'observed'}, {'state': 'empty'}, {'state': 'empty'}]}):
+            self.assertTrue(collect(SimpleNamespace(since=None, dry_run=False, session=None))['ok'])
+        batches = [call.kwargs['payload']['run'] for call in api_mock.call_args_list if call.kwargs.get('path')]
+        self.assertEqual([run['status'] for run in batches], ['running', 'succeeded'])
+        self.assertEqual(batches[0]['id'], batches[1]['id'])
+        self.assertEqual(batches[1]['verified'], 3)
+
+    def test_exception_records_failure_without_inventing_verified_months(self):
+        with patch('collect.configuration', return_value=('https://backoffice.vzyx.xyz', 'fixture')), patch('collect.api', return_value={'ok': True}) as api_mock, patch('collect.collect_months', side_effect=CollectError('KDP_READBACK_MISMATCH')):
+            with self.assertRaises(CollectError): collect(SimpleNamespace(since=None, dry_run=False, session=None))
+        batches = [call.kwargs['payload']['run'] for call in api_mock.call_args_list if call.kwargs.get('path')]
+        self.assertEqual(batches[-1]['status'], 'failed')
+        self.assertEqual(batches[-1]['verified'], 0)

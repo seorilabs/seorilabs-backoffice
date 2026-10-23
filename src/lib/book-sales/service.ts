@@ -1,4 +1,7 @@
 import { Prisma } from "@prisma/client";
+import { enqueueNotification } from "@/lib/notifications/outbox";
+import { bookSalesChangeNotification } from "./notification";
+import type { BookSalesSnapshot } from "./contract";
 import { prisma } from "@/lib/prisma";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { metricDayOf } from "@/lib/analytics/metric-day";
@@ -10,22 +13,32 @@ export interface StoredBookRun {
 export interface BookSalesStore {
   save(data: ReturnType<typeof snapshotRunData>): Promise<StoredBookRun>;
   latest(target: string, successOnly: boolean): Promise<StoredBookRun | null>;
+  notify?: (event: NonNullable<ReturnType<typeof bookSalesChangeNotification>>) => Promise<unknown>;
 }
-const databaseStore: BookSalesStore = {
-  save: (data) => retryPrismaConflict(() => prisma.sourceCollectionRun.upsert({
+function makeStore(db: Pick<Prisma.TransactionClient, "sourceCollectionRun" | "notificationEvent">): BookSalesStore { return {
+  save: (data) => db.sourceCollectionRun.upsert({
     where: { id: data.id }, update: {}, create: { ...data, coverage: data.coverage as Prisma.InputJsonObject },
-  })),
-  latest: (target, successOnly) => prisma.sourceCollectionRun.findFirst({
+  }),
+  latest: (target, successOnly) => db.sourceCollectionRun.findFirst({
     where: { source: BOOK_SALES_SOURCE, target, ...(successOnly ? { status: { in: ["observed", "empty"] } } : {}) },
     orderBy: [{ startedAt: "desc" }, { id: "desc" }],
   }),
-};
+  notify: (event) => enqueueNotification(event, db),
+}; }
+const databaseStore = makeStore(prisma);
 
-export async function ingestBookSales(raw: unknown, now = new Date(), store = databaseStore) {
+export async function ingestBookSales(raw: unknown, now = new Date(), store?: BookSalesStore): Promise<{ runId: string; status: string }> {
+  if (!store) return retryPrismaConflict(() => prisma.$transaction((tx) => ingestBookSales(raw, now, makeStore(tx)), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   const input = parseBookSalesInput(raw, now);
   const data = snapshotRunData(input, now);
+  const previous = input.kind === "snapshot" ? await store.latest(data.target, true) : null;
   const stored = await store.save(data);
   if ((stored.coverage as { digest?: string } | null)?.digest !== data.coverage.digest) throw new Error("BOOK_SALES_RUN_CONFLICT");
+  if (input.kind === "snapshot" && previous?.id !== stored.id && (await store.latest(data.target, true))?.id === stored.id) {
+    const prior = (previous?.coverage as { snapshot?: BookSalesSnapshot } | null)?.snapshot ?? null;
+    const event = bookSalesChangeNotification(prior, input, now);
+    if (event) await store.notify?.(event);
+  }
   return { runId: stored.id, status: stored.status };
 }
 

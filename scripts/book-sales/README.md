@@ -18,8 +18,10 @@ $PY scripts/book-sales/collect.py --since 2026-01
 $PY scripts/book-sales/collect.py
 # 해당 월의 저장 결과를 다시 조회
 $PY scripts/book-sales/collect.py --status --since 2026-10
-# 검증과 병합된 커밋에서 설치. 기존 작업이나 설치 디렉터리는 덮어쓰지 않는다.
+# 검증과 병합된 커밋에서 처음 설치한다.
 $PY scripts/book-sales/install_launchd.py
+# 기존 설치 교체: 현재 커밋, 설치 해시와 실행 상태를 검사하고 bootstrap 실패 시 복구한다.
+$PY scripts/book-sales/install_launchd.py --replace-source <기존_40자리_SHA>
 launchctl print gui/$(id -u)/xyz.seorilabs.book-sales
 ```
 
@@ -44,3 +46,5 @@ API는 `GET /api/admin/book-sales?month=YYYY-MM`과 `POST /api/admin/book-sales`
 `KDP_AUTH_REQUIRED`가 발생하면 자기 독립 Edge에서 등록 계정을 확인하고 재인증한 뒤 같은 수집기를 다시 실행한다. 비밀번호 거부, 보안키, CAPTCHA를 우회하거나 세션 쿠키를 다른 프로필로 복사하지 않는다. NAS 오류면 원본을 삭제하지 않으며 NAS 연결을 복구한 뒤 수집한다. 실패한 다운로드의 원본이 로컬 세션에 남았는지도 확인해 NAS 이관 후 정리한다.
 
 중단은 `launchctl bootout gui/$(id -u)/xyz.seorilabs.book-sales`로 이 작업만 해제한다. 보고서 이력과 다른 브라우저 작업은 보존한다. 다음 자연 예약 실행은 실제 실행 뒤 별도로 확인한다.
+
+판매 내용 변경 알림과 전체 수집 실행 결과는 [서비스 배치 결과 알림](../../docs/OPERATIONS_BATCH_RESULTS.md)을 따른다.

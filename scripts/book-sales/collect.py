@@ -82,9 +82,9 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def api(config, payload=None, month=None):
+def api(config, payload=None, month=None, path="/api/admin/book-sales"):
     origin, token = config
-    url = origin + '/api/admin/book-sales' + ('?month=' + month if month else '')
+    url = origin + path + ('?month=' + month if month else '')
     data = json.dumps(payload, ensure_ascii=False).encode() if payload else None
     request = Request(url, data=data, headers={'x-admin-token': token, 'content-type': 'application/json'})
     try:
@@ -98,11 +98,7 @@ def api(config, payload=None, month=None):
         raise CollectError('KDP_BACKOFFICE_UNAVAILABLE') from None
 
 
-def collect(args):
-    now = datetime.now(timezone.utc)
-    windows = month_windows(now.astimezone(ZoneInfo('Asia/Seoul')).date(), args.since)
-    config = None if args.dry_run else configuration(Path.home() / '.config/seorilabs/backoffice.env')
-    if config: api(config, month=windows[-1][0])  # 배포와 인증부터 확인한다.
+def collect_months(args, now, windows, config):
     sys.path.insert(0, str(Path.home() / '.agent/scripts'))
     from agent_browser import BrowserClient
     client = BrowserClient(profile=ACCOUNT)
@@ -125,7 +121,11 @@ def collect(args):
                 except OSError: raise CollectError('KDP_ARCHIVE_FAILED') from None
                 rows = parse_report(data, month, end)
                 payload = {**common, 'kind': 'snapshot', 'periodEnd': end, 'sourceHash': digest, 'rows': rows}
-                if config: api(config, payload=payload)
+                if config:
+                    api(config, payload=payload)
+                    readback = api(config, month=month)
+                    if readback.get("sourceHash") != digest or readback.get("periodEnd") != end or readback.get("state") not in ["observed", "empty"]:
+                        raise CollectError("KDP_READBACK_MISMATCH")
                 results.append({'month': month, 'state': 'observed' if rows else 'empty', 'rows': len(rows), 'sourceHash': digest, 'archive': archived})
             except (CollectError, ReportError) as error:
                 code = str(error)
@@ -138,6 +138,32 @@ def collect(args):
         return {'ok': len(results) == len(windows) and all(r['state'] in ['observed', 'empty'] for r in results), 'dryRun': args.dry_run, 'results': results}
     finally:
         if not args.session: client.release(lease)
+
+
+def batch_result(config, run_id, started_at, status, expected, verified):
+    return api(config, path='/api/admin/operations/batch-results', payload={'kind': 'local', 'run': {
+        'id': run_id, 'name': 'book-sales-kdp', 'startedAt': started_at.isoformat(),
+        'completedAt': None if status == 'running' else datetime.now(timezone.utc).isoformat(),
+        'status': status, 'expected': expected, 'verified': verified}})
+
+
+def collect(args):
+    now = datetime.now(timezone.utc)
+    windows = month_windows(now.astimezone(ZoneInfo('Asia/Seoul')).date(), args.since)
+    config = None if args.dry_run else configuration(Path.home() / '.config/seorilabs/backoffice.env')
+    run_id = str(uuid.uuid4())
+    if config:
+        api(config, month=windows[-1][0])
+        batch_result(config, run_id, now, 'running', len(windows), 0)
+    try:
+        result = collect_months(args, now, windows, config)
+    except Exception:
+        if config: batch_result(config, run_id, now, 'failed', len(windows), 0)
+        raise
+    if config:
+        verified = sum(row['state'] in ['observed', 'empty'] for row in result.get('results', []))
+        batch_result(config, run_id, now, 'succeeded' if result['ok'] else 'failed', len(windows), verified)
+    return result
 
 
 def main():

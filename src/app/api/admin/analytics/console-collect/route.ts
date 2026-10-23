@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import {
-  ingestConsoleMetrics,
   getConsoleSyncStatus,
 } from "@/lib/core/console-metrics-collect";
+import { ingestAndVerifyConsolePush } from "@/lib/analytics/console-sync/push";
 
 // AppsInToss 콘솔 지표 ingest(push). 인증된 로컬 Claude 세션(스케줄러)이 MCP dashboard_* 를
 // 조회·정규화해 { apps: ConsoleAppPush[] } 를 POST 한다. x-admin-token 보호(GA4 collect 와 동일).
@@ -38,10 +38,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
   try {
-    const result = await ingestConsoleMetrics(payload, new Date());
+    const result = await ingestAndVerifyConsolePush(payload, new Date());
     return NextResponse.json({ ok: true, ...result });
-  } catch (e) {
-    console.error("[admin/analytics/console-collect] 실패:", e);
-    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  } catch {
+    return NextResponse.json({ error: "console collection or verification failed" }, { status: 500 });
   }
 }

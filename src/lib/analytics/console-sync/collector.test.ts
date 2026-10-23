@@ -103,14 +103,14 @@ test("수집 CLI가 지연 조회와 저장 완료 뒤 MCP 연결을 닫는다",
   const result = await executeCollector(false);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).state, "complete");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:metrics-daily", "ledger:complete", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:ops-alerts", "ledger:complete", "disconnect"]);
 });
 
 test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를 해제한다", async () => {
   const result = await executeCollector(true);
   assert.equal(result.exitCode, 1);
   assert.equal(JSON.parse(result.stderr).code, "STORAGE_FAILED");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:metrics-daily", "ledger:failed", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:ops-alerts", "ledger:failed", "disconnect"]);
 });
 
  test("공급자 결측만 남으면 CLI는 종료하고 자료의 부분 완료는 원장에 보존한다", async () => {

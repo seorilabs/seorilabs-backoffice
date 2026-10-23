@@ -155,6 +155,10 @@ if [[ "$args" == *" get cronjob "* && "$args" == *"jsonpath="* ]]; then
   printf '%s' "$BACKOFFICE_IMAGE"
   exit 0
 fi
+if [[ "$args" == *" set image cronjob/backoffice-ait-console-metrics "* ]]; then
+  printf 'SET_AIT_IMAGE\n' >> "$FAKE_KUBECTL_LOG"
+  exit 0
+fi
 
 if [[ "$args" == *" logs job/"* ]]; then
   printf 'fake migration failure\n' >&2

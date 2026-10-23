@@ -2,6 +2,10 @@
   "schemaVersion": 1,
   "features": [
     {
+      "id": "operations-batch-reporting",
+      "core": false
+    },
+    {
       "id": "book-sales-collection",
       "core": false
     },

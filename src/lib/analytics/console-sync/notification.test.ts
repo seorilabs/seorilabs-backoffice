@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { collectConsoleMetrics } from "./collect";
 import { collectAndNotify, consoleCollectionNotification } from "./notification";
+import { reportDecision } from "@/lib/notifications/report-policy";
 import { ConsoleSyncError } from "./oauth";
 
 const sample: Awaited<ReturnType<typeof collectConsoleMetrics>> = {
   state: "partial", end: "2026-10-13", blocked: [{ key: "waiting#2", reason: "출시일 확인 필요" }],
   results: [{ window: { slug: "example", miniAppId: 1, workspaceId: 38345, start: "2026-10-10", end: "2026-10-13" }, upserts: 3,
-    missing: [{ date: "2026-10-12", metrics: ["iap"] }], errors: [], skipped: [], storageErrors: [], warnings: [] }],
+    missing: [{ date: "2026-10-12", metrics: ["iap"] }], errors: [], skipped: [], storageErrors: [], warnings: [], verification: { expected: 3, verified: 3, mismatched: [] } }],
   readback: { apps: [{ slug: "example", miniAppId: 1, lastDate: "2026-10-11", lastCollectedAt: null, rows: 3 }], minLastDate: "2026-10-11", maxLastDate: "2026-10-11", appsWithNoData: [] },
 };
 
 test("부분 수집 알림은 실제 반영·결측·최신 날짜를 구분하고 원본을 전송하지 않는다", () => {
   const result = consoleCollectionNotification(sample, "run-1", new Date("2026-10-13T15:00:00Z"));
   assert.equal(result.kind, "OPERATIONAL_EVENT");
-  assert.deepEqual(result.destinations, [{ provider: "DISCORD", key: "metrics-daily" }]);
+  assert.deepEqual(result.destinations, [{ provider: "DISCORD", key: "ops-alerts" }]);
   assert.match(result.payload.embed.title, /부분 완료/);
   assert.match(result.payload.text, /반영 3건/);
   assert.match(result.payload.text, /결측 1개 리스팅·날짜 조합/);
@@ -80,4 +81,8 @@ test("전부 보류되어도 리스팅별 최신 날짜와 보류 사유를 남�
   const result = consoleCollectionNotification({ ...sample, results: [], blocked: [{ key: "example#1", reason: "공급자 요청 제한으로 실행 보류" }] }, "run-8");
   assert.match(result.payload.text, /조회 0개 리스팅/);
   assert.match(result.payload.text, /example#1: 조회 보류.*공급자 요청 제한.*최신 2026-10-11/);
+});
+
+test("승인된 앱인토스 수집 결과는 기존 억제 규칙과 구분해 발송한다", () => {
+  assert.equal(reportDecision(consoleCollectionNotification(sample, "approved-run")).send, true);
 });
