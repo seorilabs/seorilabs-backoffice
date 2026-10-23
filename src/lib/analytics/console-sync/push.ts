@@ -10,7 +10,8 @@ import { AIT_LISTINGS } from "../ait-apps";
 
 export function consolePushAppId(push: { slug?: string; miniAppId?: number }, registry: { id: string; slug: string; aitMiniAppId: number | null }[]) {
   const slug = push.slug ?? AIT_LISTINGS.find((listing) => listing.miniAppId === push.miniAppId)?.appSlug;
-  return (registry.find((app) => app.slug === slug) ?? registry.find((app) => app.aitMiniAppId === push.miniAppId))?.id;
+  const app = registry.find((app) => app.slug === slug) ?? registry.find((app) => app.aitMiniAppId === push.miniAppId);
+  return app && (push.slug == null || push.slug === app.slug) ? app.id : undefined;
 }
 
 /** 기존 수동 push도 같은 저장 대조를 거친 뒤 운영알림을 남긴다. */
