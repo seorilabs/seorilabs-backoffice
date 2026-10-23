@@ -3,6 +3,7 @@
 
 async def main(session):
     from datetime import date
+    from playwright.async_api import expect
     from urllib.parse import urlparse
     page = session.page()
     await page.goto('https://kdpreports.amazon.com/royalties', wait_until='domcontentloaded')
@@ -24,7 +25,7 @@ async def main(session):
         await first.press('Tab')
         await last.fill(end.strftime('%m/%d/%Y'))
         await last.press('Tab')
-        await page.get_by_text('Content is loading', exact=True).wait_for(state='hidden', timeout=30000)
+        await expect(page.get_by_text('Content is loading', exact=True).filter(visible=True)).to_have_count(0, timeout=30000)
         if await first.input_value() != start.strftime('%m/%d/%Y') or await last.input_value() != end.strftime('%m/%d/%Y'):
             return {'errorCode': 'KDP_REPORT_INVALID'}
         phase = 'download'
