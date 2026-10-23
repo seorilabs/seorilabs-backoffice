@@ -1,7 +1,8 @@
 import { publicLinkTarget } from "@/lib/market/support-links";
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
+import { lastElapsedMetricDay, metricDayOf, toDbDay } from "@/lib/analytics/metric-day";
+import { BOOK_SALES_ACCOUNT, BOOK_SALES_SOURCE } from "@/lib/book-sales/contract";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
 import { resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { configRevisionPayloadSchema } from "@/lib/control-plane/contracts";
@@ -55,8 +56,12 @@ export async function sourceHealth(appId?: string) {
   const day = lastElapsedMetricDay(new Date());
   const [attempts, ledger] = await Promise.all([
     prisma.sourceCollectionRun.findMany({
-      where: { OR: [{ appId: { in: ids } }, { appId: null }] },
+      where: { OR: [{ appId: { in: ids } }, { appId: null }],
+        // 책의 과거 월 관측은 해당 월의 이력이다. 예약 상태는 이번 달 시도로 판단한다.
+        AND: [{ OR: [{ source: { not: BOOK_SALES_SOURCE } }, { target: `${BOOK_SALES_ACCOUNT}:${metricDayOf(new Date()).slice(0, 7)}` }] }] },
       orderBy: { startedAt: "desc" },
+      // 상태 화면에서 월별 원본 보고서 JSON을 함께 읽지 않는다.
+      select: { id: true, source: true, target: true, appId: true, status: true, startedAt: true, dataThrough: true, errorCode: true },
       take: 2000,
     }),
     prisma.metricCollectionLedger.findMany({
