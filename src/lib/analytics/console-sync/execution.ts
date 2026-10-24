@@ -1,5 +1,6 @@
 interface ConsoleOutcome {
   state: string;
+  skipReason?: string;
   blocked?: readonly unknown[];
   results?: ReadonlyArray<{ errors: readonly unknown[]; storageErrors: readonly unknown[]; skipped?: readonly unknown[]; verification?: { expected: number; verified: number; mismatched: readonly unknown[] } }>;
   notification?: { state: string };
@@ -19,6 +20,6 @@ export function rejectedConsoleSkips(skipped: readonly unknown[]): readonly unkn
 }
 export function consoleExecutionSkipped(result: ConsoleOutcome): boolean {
   if (consoleExecutionFailed(result)) return false;
-  return result.state === "already_running" || !!result.results?.length && result.results.every((row) =>
+  return !!result.skipReason || result.state === "already_running" || !!result.results?.length && result.results.every((row) =>
     !!row.skipped?.length && rejectedConsoleSkips(row.skipped).length === 0 && row.verification?.expected === 0);
 }

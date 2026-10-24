@@ -15,6 +15,7 @@ export function consoleCollectionNotification(result: Collected | Failed, runId:
     lines.push(`실패 단계: ${result.code.includes("AUTH") || result.code.includes("OAUTH") ? "인증" : "수집"}`,
       `오류 코드: ${result.code}`, "저장 여부: 확인 필요", "조치: 실행 로그와 등록된 운영 연결을 확인하세요.");
   } else {
+    if (result.skipReason) lines.push(result.skipReason);
     const count = (key: "errors" | "skipped" | "storageErrors") => result.results.reduce((n, row) => n + row[key].length, 0);
     const expected = result.results.reduce((n, row) => n + row.verification.expected, 0);
     const verified = result.results.reduce((n, row) => n + row.verification.verified, 0);

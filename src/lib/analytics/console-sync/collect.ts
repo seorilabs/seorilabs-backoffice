@@ -1,3 +1,4 @@
+import { AIT_LISTINGS } from "../ait-apps";
 import { prisma } from "@/lib/prisma";
 import { getConsoleSyncStatus, ingestConsoleMetrics } from "@/lib/core/console-metrics-collect";
 import { recordCollectionFailure } from "../coverage";
@@ -20,8 +21,13 @@ export async function withConsoleCollectionLock<T>(run: (assertHeld: () => Promi
   }, { timeout: 840_000, maxWait: 5_000 });
 }
 export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now: Date, launches: Record<string, string> = {}) {
-  const plan = consoleCollectionPlan(await getConsoleSyncStatus(), now, launches);
-  const registry = await prisma.app.findMany({ select: { id: true, slug: true } });
+  const status = await getConsoleSyncStatus();
+  const plan = consoleCollectionPlan(status, now, launches);
+  const registry = await prisma.app.findMany({ select: { id: true, slug: true, status: true, aitMiniAppId: true } });
+  const declared = registry.filter((app) => app.aitMiniAppId != null || AIT_LISTINGS.some((listing) => listing.appSlug === app.slug));
+  const noActiveTargets = !status.apps.length && declared.length > 0 && declared.every((app) => app.status !== "ACTIVE")
+    && AIT_LISTINGS.every((listing) => registry.some((app) => app.slug === listing.appSlug));
+  if (noActiveTargets) plan.blocked.length = 0;
   const appIds = new Map(registry.map((app) => [app.slug, app.id]));
   const results = [];
   for (const window of plan.windows) {
@@ -48,6 +54,7 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
   const readback = await getConsoleSyncStatus();
   const incomplete = plan.blocked.length > 0 || results.some((r) => r.missing.length || r.errors.length || r.skipped.length || r.storageErrors.length || r.warnings.length)
     || readback.apps.some((a) => a.lastDate !== plan.end);
-  if (!results.length && !plan.blocked.length) throw new ConsoleSyncError("CONSOLE_NO_TARGETS");
-  return { state: incomplete ? "partial" as const : "complete" as const, end: plan.end, blocked: plan.blocked, results, readback };
+  if (!results.length && !plan.blocked.length && !noActiveTargets) throw new ConsoleSyncError("CONSOLE_NO_TARGETS");
+  return { state: incomplete || noActiveTargets ? "partial" as const : "complete" as const,
+    ...(noActiveTargets ? { skipReason: "등록된 모든 앱이 운영 중지여서 이번 실행은 수집하지 않았습니다." } : {}), end: plan.end, blocked: plan.blocked, results, readback };
 }

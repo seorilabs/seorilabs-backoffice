@@ -1,6 +1,11 @@
+// 전용 DB를 prisma db push --force-reset으로 준비한 뒤 한 번 실행한다.
 import assert from "node:assert/strict";
 import { prisma } from "@/lib/prisma";
 import { ingestBatchResults } from "@/lib/operations-batches/service";
+import { AIT_LISTINGS } from "@/lib/analytics/ait-apps";
+import { collectConsoleMetrics } from "@/lib/analytics/console-sync/collect";
+import { consoleExecutionFailed, consoleExecutionSkipped } from "@/lib/analytics/console-sync/execution";
+import type { McpConsoleMetricsSource } from "@/lib/analytics/console-sync/source";
 import { ingestAndVerifyConsolePush } from "@/lib/analytics/console-sync/push";
 import { drainAllNotifications } from "@/lib/notifications/deploy";
 
@@ -79,6 +84,13 @@ async function main() {
   assert.equal((excludedEvent.payload as { executionStatus: string }).executionStatus, "skipped");
   assert.equal(await prisma.operationalIncident.count(), priorIncidents);
   await drainAllNotifications(100);
+  for (const slug of new Set(AIT_LISTINGS.map((listing) => listing.appSlug))) {
+    await prisma.app.upsert({ where: { slug }, update: { status: "PAUSED" },
+      create: { slug, displayName: "격리 앱", repoFullName: `isolated/${slug}`, type: "GAME", engine: "GODOT", status: "PAUSED", marketTargets: [] } });
+  }
+  const noActive = await collectConsoleMetrics({ async queryListing() { assert.fail("운영 중지 앱의 지표 조회"); } } as unknown as McpConsoleMetricsSource, new Date(at(7)));
+  assert.equal(consoleExecutionSkipped(noActive), true);
+  assert.equal(consoleExecutionFailed(noActive), false);
   process.env.DISCORD_CHANNEL_BATCH_MONITORING_ID = "";
   const third = "33333333-3333-4333-8333-333333333333";
   await local(third, "succeeded", 6);
