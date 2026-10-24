@@ -33,7 +33,9 @@ export class McpConsoleMetricsSource implements ConsoleMetricsSource {
         else { const code = consoleErrorCode(result.reason); if (fatal.has(code)) throw new ConsoleSyncError(code); errors.push({ metric: requests[offset + index][0], code }); }
       }
     }
-    return { ...normalizeConsoleResponses(responses, start, end), errors };
+    const normalized = normalizeConsoleResponses(responses, start, end);
+    errors.push(...normalized.invalidResponses.map((metric) => ({ metric, code: "CONSOLE_RESPONSE_INVALID" })));
+    return { ...normalized, errors };
   }
   async queryConsoleMetrics(target: ConsoleSourceTarget, start: string, end: string) { return (await this.queryListing(target, start, end)).days; }
 }

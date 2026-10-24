@@ -277,6 +277,11 @@ while true; do
 done
 echo "trigger_observation=${trigger_state} contract_digest=${expected_digest} migration_completed_at=${migration_completed_at} source_sha=${source_sha}"
 
+# 새 목적지를 처리하는 소비자를 먼저 교체한 뒤 새 알림을 만드는 웹을 교체한다.
+echo "== notification consumer rollout =="
+apply_image_manifest discord-workers.yaml
+wait_for_deployment backoffice-notification-worker
+
 echo "== availability-preserving web rollout =="
 apply_image_manifest deployment.yaml
 wait_for_deployment backoffice
@@ -284,8 +289,6 @@ wait_for_deployment backoffice
 echo "== worker rollout =="
 apply_image_manifest app-ops-worker.yaml
 wait_for_deployment backoffice-app-ops-worker
-apply_image_manifest discord-workers.yaml
-wait_for_deployment backoffice-notification-worker
 wait_for_deployment backoffice-operator-command-worker
 apply_image_manifest repository-discovery-worker.yaml
 wait_for_deployment backoffice-repository-discovery-worker
@@ -353,6 +356,7 @@ done
 
 echo "== image CronJob rollout =="
 # OAuth와 활성 스케줄은 실제 운영 설정을 보존하고 이미지만 갱신한다.
+k -n "$namespace" patch cronjob backoffice-ait-console-metrics --type=strategic --patch-file "$root/k8s/console-metrics-batch-identity-patch.yaml"
 k -n "$namespace" set image cronjob/backoffice-ait-console-metrics "collector=$image"
 apply_image_manifest operations-batch-observer-cronjob.yaml
 for collector in backoffice-ait-console-metrics backoffice-batch-observer; do

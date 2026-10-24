@@ -71,6 +71,7 @@ async function deliver(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (!env.discordChannelId("batch-monitoring")) throw new Error("BATCH_MONITORING_CHANNEL_NOT_CONFIGURED");
   const delivery = deliver();
   try {
     await consume();

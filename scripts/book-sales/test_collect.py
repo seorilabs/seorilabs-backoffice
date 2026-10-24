@@ -65,3 +65,4 @@ class BatchResultTests(unittest.TestCase):
         batches = [call.kwargs['payload']['run'] for call in api_mock.call_args_list if call.kwargs.get('path')]
         self.assertEqual(batches[-1]['status'], 'failed')
         self.assertEqual(batches[-1]['verified'], 0)
+        self.assertEqual(batches[-1]['errorCode'], 'KDP_READBACK_MISMATCH')

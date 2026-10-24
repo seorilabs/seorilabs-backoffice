@@ -27,7 +27,7 @@ const SLUG_BY_MINIAPP = new Map(AIT_LISTINGS.map((l) => [l.miniAppId, l.appSlug]
 export interface ConsoleIngestResult {
   targetApps: number; // 해석에 성공해 수집된 앱 수
   upserts: number; // 저장된 (앱×날짜) row 수
-  skipped: { key: string; reason: string }[]; // 매핑/유효성 실패로 제외
+  skipped: { key: string; reason: string; category?: "excluded" | "invalid" }[]; // 매핑/유효성 실패로 제외
   errors: { key: string; error: string }[]; // upsert 중 예외
   // 저장은 했지만 producer 가 채워야 할 값이 비어 온 경우. 실패가 아니라 품질 신호다.
   warnings: { key: string; warning: string }[];
@@ -56,7 +56,7 @@ export function emptyRawSections(raw: unknown): string[] {
   return empty;
 }
 
-function pushKey(p: ConsoleAppPush): string {
+export function consolePushKey(p: ConsoleAppPush): string {
   const base = p.slug ?? (p.miniAppId != null ? `miniApp:${p.miniAppId}` : "unknown");
   return p.miniAppId != null ? `${base}#${p.miniAppId}` : base;
 }
@@ -97,7 +97,7 @@ export async function ingestConsoleMetrics(
     if ((push.slug != null && typeof push.slug !== "string") || typeof push.miniAppId !== "number" || !Number.isInteger(push.miniAppId) || (push.miniAppId ?? 0) <= 0) {
       result.skipped.push({ key: "unknown", reason: "리스팅 식별자 형식 오류" }); continue;
     }
-    const key = pushKey(push);
+    const key = consolePushKey(push);
     // miniAppId 는 리스팅 키(필수). slug 미제공 시 miniAppId→slug 코드표로 App 을 잇는다.
     const resolvedSlug = push.slug ?? (push.miniAppId != null ? SLUG_BY_MINIAPP.get(push.miniAppId) : undefined);
     const app =
@@ -108,7 +108,7 @@ export async function ingestConsoleMetrics(
       continue;
     }
     if (!isConsoleMetricCollectionActive(app.status)) {
-      result.skipped.push({ key, reason: `App 운영 중지(status=${app.status})` });
+      result.skipped.push({ key, reason: `App 운영 중지(status=${app.status})`, category: "excluded" });
       continue;
     }
     const miniAppId = push.miniAppId;

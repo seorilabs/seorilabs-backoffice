@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "b1e3b612e28e532f68d9f9aee8361dc0abd7e7ca",
+  "changedFeatures": [
+    "ait-console-pod-collection",
+    "book-sales-collection",
+    "operations-batch-reporting",
+    "notification-outbox-report-visuals-and-retention",
+    "runtime-health-metrics-and-operational-events"
+  ],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["service"],
+    "until": "public"
+  }
+}

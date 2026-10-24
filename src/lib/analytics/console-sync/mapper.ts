@@ -61,5 +61,7 @@ export function normalizeConsoleResponses(input: Record<string, unknown>, start:
       iapTrxAmountKrw: p?.trxAmount, iapSettlementKrw: p?.settlementAmount, payingUsers: p?.pu, raw });
     if (checked.ok) days.push(checked.day); else missing.push({ date, metrics: checked.fields });
   }
-  return { days, missing };
+  const invalidResponses = Object.entries({ dau: au && newAu, session, android, ios, total, iap })
+    .filter(([key, value]) => input[key] !== undefined && value === null).map(([key]) => key);
+  return { days, missing, invalidResponses };
 }
