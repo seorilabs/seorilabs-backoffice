@@ -5,6 +5,7 @@ export const DISCORD_BACKOFFICE = "backoffice";
 export const DISCORD_METRICS = "metrics-daily";
 export const DISCORD_ACTION_EVENTS = "action-events";
 export const DISCORD_RELEASE_OPS = "release-ops";
+export const DISCORD_BATCH_MONITORING = "batch-monitoring";
 export const DISCORD_OPS_ALERTS = "ops-alerts";
 export const DISCORD_SEORI_REVIEW = "seori-review";
 export const DISCORD_PRIVATE_FEED = "private-feed";
@@ -25,6 +26,7 @@ export const DISCORD_DESTINATIONS = [
   DISCORD_ACTION_EVENTS,
   DISCORD_RELEASE_OPS,
   DISCORD_OPS_ALERTS,
+  DISCORD_BATCH_MONITORING,
   DISCORD_SEORI_REVIEW,
   DISCORD_PRIVATE_FEED,
   DISCORD_USER_REVIEWS,

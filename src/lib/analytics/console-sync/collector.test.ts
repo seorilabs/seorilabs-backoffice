@@ -7,7 +7,7 @@ import test from "node:test";
 import { build } from "esbuild";
 
 // 실제 CLI·MCP HTTP·매핑을 실행한다. DB와 운영 자격증명 경계만 격리한다.
-async function executeCollector(storageFailure: boolean, withMissing = false) {
+async function executeCollector(storageFailure: boolean, withMissing = false, alreadyRunning = false) {
   const directory = await mkdtemp(path.join(tmpdir(), "console-collector-test-"));
   const entry = path.resolve("scripts/console-metrics-collector.ts");
   const output = path.join(directory, "collector.cjs");
@@ -36,6 +36,9 @@ async function executeCollector(storageFailure: boolean, withMissing = false) {
         fixture.state.failIos = ${withMissing}; return fixture;
       } }`,
     runtime: `export function consoleRuntimeLedger() { return {}; }`,
+    incident: `${event}
+      export async function recordIncident() { events.push("incident:failed"); }
+      export async function recoverIncident() { events.push("incident:recovered"); }`,
     notification: `${event}
       export async function enqueueNotification(input) {
         events.push('notification:' + input.kind + ':' + input.destinations[0].key);
@@ -49,7 +52,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false) {
       }; }`,
     collect: `${event}
       import { ConsoleSyncError } from ${JSON.stringify(path.resolve("src/lib/analytics/console-sync/oauth.ts"))};
-      export async function withConsoleCollectionLock(run) { return run(async () => {}); }
+      export async function withConsoleCollectionLock(run) { return ${alreadyRunning} ? {state:"already_running"} : run(async () => {}); }
       export async function collectConsoleMetrics(source) {
         events.push('collection-start');
         // 실제 수집의 상태 조회처럼 연결 생성 뒤 비동기 DB 응답을 기다린다.
@@ -59,7 +62,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false) {
         if (${storageFailure}) { events.push('storage-failed'); throw new ConsoleSyncError('STORAGE_FAILED'); }
         const state = response.days.length === 1 && response.errors.length === 0 && response.missing.length === 0 ? 'complete' : 'partial';
         events.push('collection-finished'); return {state, end:'2026-10-11', blocked:[],
-          results:[{window:{slug:'lizard-tycoon',miniAppId:61736,start:'2026-10-11'},upserts:response.days.length,missing:response.missing,errors:response.errors,skipped:[],storageErrors:[],warnings:[]}],
+          results:[{window:{slug:'lizard-tycoon',miniAppId:61736,start:'2026-10-11'},upserts:response.days.length,providedDates:response.days.map(day=>day.date),verification:{expected:response.days.length,verified:response.days.length,mismatched:[]},missing:response.missing,errors:response.errors,skipped:[],storageErrors:[],warnings:[]}],
           readback:{apps:[{slug:'lizard-tycoon',miniAppId:61736,lastDate:'2026-10-11'}]}};
       }`,
   };
@@ -76,6 +79,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false) {
           if (modulePath.endsWith("/console-sync/oauth") || modulePath === "./oauth") key = "oauth";
           if (modulePath.endsWith("/console-sync/versions")) key = "versions";
           if (modulePath.endsWith("/control-plane/console-oauth-runtime")) key = "runtime";
+          if (modulePath.endsWith("/notifications/incidents")) key = "incident";
           if (modulePath.endsWith("/notifications/outbox")) key = "notification";
           if (modulePath.endsWith("/console-sync/collect")) key = "collect";
           if (args.importer === entry && modulePath.endsWith("/console-sync/client")) key = "client";
@@ -85,7 +89,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false) {
       }}],
     });
     const child = spawn(process.execPath, [output, "collect"], {
-      env: { PATH: process.env.PATH, NODE_ENV: "test", AIT_CONSOLE_CREDENTIAL_ID: "shared/apps-in-toss/console-oauth", CONSOLE_COLLECTOR_TEST_TRACE: trace },
+      env: { PATH: process.env.PATH, NODE_ENV: "test", BATCH_JOB_UID: "11111111-2222-4333-8444-555555555555", AIT_CONSOLE_CREDENTIAL_ID: "shared/apps-in-toss/console-oauth", CONSOLE_COLLECTOR_TEST_TRACE: trace },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = ""; let stderr = "";
@@ -103,14 +107,14 @@ test("수집 CLI가 지연 조회와 저장 완료 뒤 MCP 연결을 닫는다",
   const result = await executeCollector(false);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).state, "complete");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:ops-alerts", "ledger:complete", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:complete", "incident:recovered", "disconnect"]);
 });
 
 test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를 해제한다", async () => {
   const result = await executeCollector(true);
   assert.equal(result.exitCode, 1);
   assert.equal(JSON.parse(result.stderr).code, "STORAGE_FAILED");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:ops-alerts", "ledger:failed", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:failed", "incident:failed", "disconnect"]);
 });
 
  test("공급자 결측만 남으면 CLI는 종료하고 자료의 부분 완료는 원장에 보존한다", async () => {
@@ -118,4 +122,12 @@ test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).state, "partial");
   assert.ok(result.events.includes("ledger:partial"));
+});
+
+
+test("예약 수집이 잠금으로 보류되면 실제 수집 성공이나 복구로 보고하지 않는다", async () => {
+  const result = await executeCollector(false, false, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(result.stdout).state, "already_running");
+  assert.deepEqual(result.events, ["ledger:start", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:already_running", "disconnect"]);
 });

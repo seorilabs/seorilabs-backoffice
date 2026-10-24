@@ -41,7 +41,7 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
       if (appId) verification = await verifyStoredConsoleDays(appId, window.miniAppId, response.days, now);
       if (verification.mismatched.length) storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_MISMATCH" });
     } catch { storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_FAILED" }); }
-    results.push({ window, upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
+    results.push({ window, providedDates: response.days.map((day) => day.date), upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
       skipped: stored?.skipped ?? [], storageErrors, warnings: stored?.warnings ?? [], verification });
   }
   const readback = await getConsoleSyncStatus();

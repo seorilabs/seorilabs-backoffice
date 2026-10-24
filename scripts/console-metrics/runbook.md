@@ -136,8 +136,8 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 ### 수집 직후 디스코드 결과
 
 `collect` 실행은 MCP 연결과 수집 잠금을 정리한 뒤 기존 알림 대기열에 실행당 한 건을 넣는다.
-기존 notification worker가 `metrics-daily` 목적지로 전송하고 전송 실패 시 기존 재시도 정책을 적용한다.
-정상·부분 완료·실패를 구분하며 수집 구간, 반영 건수, 결측 리스팅·날짜 조합 수, 조회/저장 오류,
+기존 notification worker가 `batch-monitoring` 목적지로 전송하고 전송 실패 시 기존 재시도 정책을 적용한다.
+실행 성공·실패와 자료 제공 상태를 분리해 배치모니터링 채널로 보고한다. 정상 응답의 값 미제공은 실행 실패가 아니며 partial 자료 원장은 보존한다. 수집 구간, 반영 건수, 미제공 등록 항목·날짜 조합 수, 조회/저장 오류,
 리스팅별 최신 저장 날짜를 알린다. 실패 전 저장 건수를 확인하지 못한 경우 0으로 표시하지 않는다.
 토큰·원본 응답·오류 본문은 보내지 않는다. `verify-auth`, `verify-refresh`, 동시 실행 보류는 알림을 만들지 않는다.
 

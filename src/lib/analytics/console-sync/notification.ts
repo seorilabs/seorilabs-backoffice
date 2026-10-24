@@ -1,76 +1,75 @@
 import { randomUUID } from "node:crypto";
-import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { EMBED_COLOR } from "@/lib/notifications/style";
 import type { collectConsoleMetrics } from "./collect";
 import { consoleErrorCode } from "./oauth";
+import { consoleExecutionFailed } from "./execution";
+import { consoleReport } from "./report";
 
 type Collected = Awaited<ReturnType<typeof collectConsoleMetrics>>;
 type Failed = { state: "failed"; code: string };
-type Outcome = Collected | Failed;
 type RunResult = Collected | { state: "already_running" } | { state: "authenticated" };
 
-export function consoleCollectionNotification(result: Outcome, runId: string, now = new Date()) {
-  const title = result.state === "complete" ? "앱인토스 수집 완료"
-    : result.state === "partial" ? "앱인토스 수집 부분 완료" : "앱인토스 수집 실패";
+export function consoleCollectionNotification(result: Collected | Failed, runId: string, now = new Date(), startedAt = now) {
   const lines: string[] = [];
   if (result.state === "failed") {
-    lines.push(`오류 코드: ${result.code}`, "실패 전 반영 여부는 수집 로그와 DB에서 확인해야 합니다.");
+    lines.push(`실패 단계: ${result.code.includes("AUTH") || result.code.includes("OAUTH") ? "인증" : "수집"}`,
+      `오류 코드: ${result.code}`, "저장 여부: 확인 필요", "조치: 실행 로그와 등록된 운영 연결을 확인하세요.");
   } else {
-    const count = (key: "missing" | "errors" | "skipped" | "storageErrors" | "warnings") =>
-      result.results.reduce((sum, row) => sum + row[key].length, 0);
-    const upsertsByListing = new Map<string, number>();
+    const count = (key: "errors" | "skipped" | "storageErrors") => result.results.reduce((n, row) => n + row[key].length, 0);
+    const expected = result.results.reduce((n, row) => n + row.verification.expected, 0);
+    const verified = result.results.reduce((n, row) => n + row.verification.verified, 0);
+    const missing = new Map<string, Set<string>>();
+    const provided = new Set<string>();
+    const metrics = new Map<string, number>();
+    const listingKeys = new Set<string>();
     for (const row of result.results) {
       const key = `${row.window.slug}#${row.window.miniAppId}`;
-      upsertsByListing.set(key, (upsertsByListing.get(key) ?? 0) + row.upserts);
+      listingKeys.add(key);
+      for (const day of row.providedDates) provided.add(`${key}:${day}`);
+      for (const day of row.missing) {
+        const k = `${key}:${day.date}`;
+        const names = missing.get(k) ?? new Set<string>();
+        for (const name of day.metrics) names.add(name);
+        missing.set(k, names);
+      }
     }
-    const readbackByListing = new Map(result.readback.apps.map((app) => [`${app.slug}#${app.miniAppId}`, app]));
-    const blockedByListing = new Map(result.blocked.map((row) => [row.key, row.reason]));
-    const listings = new Set([...upsertsByListing.keys(), ...readbackByListing.keys(), ...blockedByListing.keys()]);
-    const starts = result.results.map((row) => row.window.start).sort();
-    lines.push(`수집 구간: ${starts[0] ?? "조회 보류"} ~ ${result.end} (KST)`,
-      `조회 ${upsertsByListing.size}개 리스팅 · 반영 ${result.results.reduce((sum, row) => sum + row.upserts, 0)}건`,
-      `결측 ${count("missing")}개 리스팅·날짜 조합 · 조회 오류 ${count("errors")}건 · 저장 오류 ${count("storageErrors")}건`,
-      `조회 보류 ${blockedByListing.size}개 · 저장 제외 ${count("skipped")}건 · 경고 ${count("warnings")}건`);
-    lines.push(`저장 대조: 요청 ${result.results.reduce((n, row) => n + (row.verification?.expected ?? 0), 0)}건, 일치 ${result.results.reduce((n, row) => n + (row.verification?.verified ?? 0), 0)}건, 불일치 ${result.results.reduce((n, row) => n + (row.verification?.mismatched.length ?? 0), 0)}건`);
-    if (result.state === "partial") lines.push("결측값은 0으로 채우지 않았으며 전체 수집 완료가 아닙니다.");
-    for (const key of listings) {
-      const reason = blockedByListing.get(key);
-      const action = upsertsByListing.has(key) ? `반영 ${upsertsByListing.get(key)}건${reason ? ` · 일부 조회 보류(${reason})` : ""}`
-        : `조회 보류${reason ? `(${reason})` : ""}`;
-      lines.push(`- ${key === "all" ? "전체 대상" : key}: ${action} · 최신 ${readbackByListing.get(key)?.lastDate ?? "미확인"}`);
+    let partial = 0;
+    for (const [key, names] of missing) {
+      if (provided.has(key)) partial++;
+      for (const name of names) metrics.set(name, (metrics.get(name) ?? 0) + 1);
     }
+    const names: Record<string, string> = { "iaa.ANDROID": "Android 광고", "iaa.IOS": "iOS 광고", iap: "인앱결제", dau: "사용자 수", session: "이용 시간" };
+    const start = result.results.map((row) => row.window.start).sort()[0];
+    lines.push(`확인 기간: ${start ?? "미조회"} ~ ${result.end}`, `조회한 등록 항목: ${listingKeys.size}개`,
+      `저장 ${result.results.reduce((n, row) => n + row.upserts, 0)}건, 저장 대조 ${verified}/${expected}건 일치`,
+      `조회 오류 ${count("errors")}건, 저장 오류 ${count("storageErrors")}건, 저장 제외 ${count("skipped")}건`);
+    if (consoleExecutionFailed(result)) {
+      const codes = [...new Set(result.results.flatMap((row) => [...row.errors.map((error) => error.code), ...row.storageErrors.map((error) => error.error)]))];
+      const phase = result.results.some((row) => row.verification.mismatched.length) ? "저장 대조" : count("storageErrors") ? "저장" : count("errors") ? "조회" : count("skipped") ? "입력 검증" : "조회 대상 또는 요청 제한";
+      lines.push(`실패 단계: ${phase}`, ...codes.slice(0, 3).map((code) => `오류 코드: ${code}`), "조치: 실패한 항목과 운영 연결을 확인하세요.");
+    }
+    if (result.blocked.length) lines.push(`조회 보류: ${new Set(result.blocked.map((row) => row.key)).size}개`,
+      ...[...new Set(result.blocked.map((row) => row.reason))].slice(0, 3).map((reason) => `사유: ${reason}`));
+    lines.push("", `자료 제공 상태: ${consoleExecutionFailed(result) ? "실행 오류로 일부 항목 확인 보류" : missing.size ? "일부 값 미제공" : "이번 조회의 미제공 없음"}`);
+    if (missing.size) lines.push(`일부 지표만 확인 ${partial}개, 모든 값 미제공 ${missing.size - partial}개`,
+      [...metrics].map(([metric, n]) => `${names[metric] ?? "기타 지표"} ${n}개`).join(", "),
+      "단위는 등록 항목과 날짜의 조합입니다. 지표별 숫자는 겹칠 수 있습니다.", "제공되지 않은 값은 0으로 바꾸지 않았습니다.");
+    lines.push("같은 기간을 다시 조회해 갱신한 기록 수이며, 신규 이용자나 판매 건수가 아닙니다.");
   }
-  return {
-    dedupeKey: `ait-console-collection:${runId}`,
-    kind: "OPERATIONAL_EVENT" as const,
-    occurredAt: now,
-    destinations: discordDestinations(["ops-alerts"]),
-    payload: {
-      report: { category: "response", reason: "USER_REQUESTED_COLLECTION_RESULT" },
-      text: lines.join("\n"),
-      source: "ait_console", runId, state: result.state,
-      embed: { title, timestamp: now.toISOString(), color: result.state === "complete" ? EMBED_COLOR.SUCCESS
-        : result.state === "partial" ? EMBED_COLOR.WARNING : EMBED_COLOR.FAILURE },
-    },
-  };
+  return consoleReport({ runId, now, failed: consoleExecutionFailed(result), dataState: result.state, lines, startedAt });
 }
 
-// 수집/연결 정리가 끝난 뒤 영속 대기열에 한 번 넣는다. Discord 전송 재시도는 기존 worker가 맡는다.
-export async function collectAndNotify(
-  run: () => Promise<RunResult>,
-  runId: string = randomUUID(),
-  enqueue = enqueueNotification,
-) {
+// Job UID를 재사용해 감시자의 종료 관측과 같은 실행으로 묶는다.
+export async function collectAndNotify(run: () => Promise<RunResult>, runId: string = randomUUID(), enqueue = enqueueNotification) {
+  const startedAt = new Date();
   let result: RunResult | Failed;
   try { result = await run(); }
   catch (error) { result = { state: "failed", code: consoleErrorCode(error) }; }
   if (result.state === "already_running" || result.state === "authenticated") return { ...result, notification: undefined };
   try {
-    const eventId = await enqueue(consoleCollectionNotification(result, runId));
+    const eventId = await enqueue(consoleCollectionNotification(result, runId, new Date(), startedAt));
     return { ...result, notification: { state: "queued" as const, eventId } };
   } catch {
-    // 수집 결과는 유지한다. DB 오류 본문이나 자격증명은 출력하지 않는다.
     return { ...result, notification: { state: "failed" as const, code: "CONSOLE_NOTIFICATION_ENQUEUE_FAILED" } };
   }
 }

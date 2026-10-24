@@ -1,0 +1,13 @@
+# 기존 운영 OAuth, 활성 스케줄과 다른 환경변수를 보존하는 전략적 병합 패치.
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: collector
+              env:
+                - name: BATCH_JOB_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']

@@ -11,3 +11,9 @@ test("자료 결측만 남은 부분 완료와 실제 조회·저장·알림 실
   assert.equal(consoleExecutionFailed({ ...partial, notification: { state: "failed" } }), true);
   assert.equal(consoleExecutionFailed({ state: "failed" }), true);
 });
+
+
+test("입력 거부와 저장 대조 실패도 실행 실패다", () => {
+  assert.equal(consoleExecutionFailed({ state: "partial", results: [{ errors: [], storageErrors: [], skipped: ["invalid date"] }] }), true);
+  assert.equal(consoleExecutionFailed({ state: "partial", results: [{ errors: [], storageErrors: [], verification: { expected: 2, verified: 1, mismatched: ["2026-10-23"] } }] }), true);
+});

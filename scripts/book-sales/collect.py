@@ -140,11 +140,11 @@ def collect_months(args, now, windows, config):
         if not args.session: client.release(lease)
 
 
-def batch_result(config, run_id, started_at, status, expected, verified):
+def batch_result(config, run_id, started_at, status, expected, verified, error_code=None):
     return api(config, path='/api/admin/operations/batch-results', payload={'kind': 'local', 'run': {
         'id': run_id, 'name': 'book-sales-kdp', 'startedAt': started_at.isoformat(),
         'completedAt': None if status == 'running' else datetime.now(timezone.utc).isoformat(),
-        'status': status, 'expected': expected, 'verified': verified}})
+        'status': status, 'expected': expected, 'verified': verified, **({'errorCode': error_code} if error_code else {})}})
 
 
 def collect(args):
@@ -157,12 +157,14 @@ def collect(args):
         batch_result(config, run_id, now, 'running', len(windows), 0)
     try:
         result = collect_months(args, now, windows, config)
-    except Exception:
-        if config: batch_result(config, run_id, now, 'failed', len(windows), 0)
+    except Exception as error:
+        code = str(error) if isinstance(error, (CollectError, ReportError)) and str(error) in ['KDP_READBACK_MISMATCH', 'KDP_AUTH_REQUIRED', 'KDP_DOWNLOAD_FAILED', 'KDP_REPORT_INVALID', 'KDP_ARCHIVE_FAILED', 'KDP_BROWSER_UNAVAILABLE'] else 'KDP_COLLECTION_FAILED'
+        if config: batch_result(config, run_id, now, 'failed', len(windows), 0, code)
         raise
     if config:
         verified = sum(row['state'] in ['observed', 'empty'] for row in result.get('results', []))
-        batch_result(config, run_id, now, 'succeeded' if result['ok'] else 'failed', len(windows), verified)
+        error_code = result.get('errorCode') or next((row.get('errorCode') for row in result.get('results', []) if row.get('errorCode')), None)
+        batch_result(config, run_id, now, 'succeeded' if result['ok'] else 'failed', len(windows), verified, error_code)
     return result
 
 

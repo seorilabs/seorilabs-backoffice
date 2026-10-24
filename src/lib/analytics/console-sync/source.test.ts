@@ -21,3 +21,11 @@ test("공식 합계와 양 OS를 독립 조회하고 동시 요청은 2개를 �
   assert.equal(requests.length, 6); assert.equal(peak, 2);
   assert.equal(result.days[0].iaaEarningKrw, 4); assert.deepEqual(result.missing[0].metrics, ["iaa.ANDROID"]);
 });
+
+
+test("비정상 응답은 정상 조회의 빈 배열과 구분해 실행 오류로 남긴다", async () => {
+  const reader = { async call() { return { unexpected: [] }; } } as unknown as ConsoleReader;
+  const result = await new McpConsoleMetricsSource(reader).queryListing({ slug: "lizard-tycoon", workspaceId: 38345, miniAppId: 61736 }, "2026-10-11", "2026-10-11");
+  assert.equal(result.errors.length, 6);
+  assert.ok(result.errors.every((error) => error.code === "CONSOLE_RESPONSE_INVALID"));
+});

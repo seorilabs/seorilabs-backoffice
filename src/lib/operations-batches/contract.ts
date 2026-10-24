@@ -13,6 +13,7 @@ export const runSchema = z.object({ id: name, namespace, name, cronUid: name,
   status: z.enum(["running", "succeeded", "failed"]) }).strict();
 export const localRunSchema = z.object({ id: z.string().uuid(), name: z.literal("book-sales-kdp"),
   startedAt: timestamp, completedAt: timestamp.nullable(), status: z.enum(["running", "succeeded", "failed"]),
+  errorCode: z.enum(["KDP_AUTH_REQUIRED", "KDP_DOWNLOAD_FAILED", "KDP_REPORT_INVALID", "KDP_ARCHIVE_FAILED", "KDP_BROWSER_UNAVAILABLE", "KDP_COLLECTION_FAILED", "KDP_READBACK_MISMATCH"]).optional(),
   expected: z.number().int().min(0).max(120), verified: z.number().int().min(0).max(120) }).strict();
 export const batchInputSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("kubernetes"), observedAt: timestamp, cronJobs: z.array(cronSchema).max(200), runs: z.array(runSchema).max(2000) }).strict(),

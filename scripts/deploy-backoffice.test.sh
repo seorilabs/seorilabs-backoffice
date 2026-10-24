@@ -155,6 +155,11 @@ if [[ "$args" == *" get cronjob "* && "$args" == *"jsonpath="* ]]; then
   printf '%s' "$BACKOFFICE_IMAGE"
   exit 0
 fi
+if [[ "$args" == *" patch cronjob backoffice-ait-console-metrics --type=strategic --patch-file "* ]]; then
+  [ -f "${!#}" ]
+  printf 'PATCH_AIT_IDENTITY\n' >> "$FAKE_KUBECTL_LOG"
+  exit 0
+fi
 if [[ "$args" == *" set image cronjob/backoffice-ait-console-metrics "* ]]; then
   printf 'SET_AIT_IMAGE\n' >> "$FAKE_KUBECTL_LOG"
   exit 0
@@ -271,6 +276,7 @@ fi
 
 migration_line="$(line_of '^CREATE_JOB ')"
 verify_line="$(line_of '^READ_TRIGGER_STATE$')"
+notification_line="$(line_of '^ROLLOUT backoffice-notification-worker$')"
 web_line="$(line_of '^APPLY_STDIN backoffice,')"
 web_rollout_line="$(line_of '^ROLLOUT backoffice$')"
 scheduler_line="$(line_of '^APPLY_FILE scheduler-cronjobs.yaml$')"
@@ -278,7 +284,8 @@ worker_line="$(line_of '^APPLY_STDIN backoffice-app-ops-worker,')"
 catchup_line="$(line_of '^CREATE_JOB backoffice-scheduler-catchup-')"
 
 if ! [ "$migration_line" -lt "$verify_line" ] ||
-   ! [ "$verify_line" -lt "$web_line" ] ||
+   ! [ "$verify_line" -lt "$notification_line" ] ||
+   ! [ "$notification_line" -lt "$web_line" ] ||
    ! [ "$web_line" -lt "$web_rollout_line" ] ||
    ! [ "$web_rollout_line" -lt "$worker_line" ] ||
    ! [ "$worker_line" -lt "$scheduler_line" ] ||
@@ -287,7 +294,7 @@ if ! [ "$migration_line" -lt "$verify_line" ] ||
   cat "$log" >&2
   exit 1
 fi
-echo "  ok   migration → trigger-verify → web → worker → scheduler → catch-up"
+echo "  ok   migration → trigger-verify → notification consumer → web → worker → scheduler → catch-up"
 echo "  ok   동일 SHA 재실행은 같은 source-bound desired-state run으로 검증"
 
 echo "== rollout condition이 먼저 끝나도 새 generation exact state를 기다린다 =="

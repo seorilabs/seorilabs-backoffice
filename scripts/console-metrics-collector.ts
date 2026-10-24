@@ -9,6 +9,9 @@ import { SecretManagerConsoleGrantVersions } from "../src/lib/analytics/console-
 import { consoleRuntimeLedger } from "../src/lib/control-plane/console-oauth-runtime";
 import { McpConsoleMetricsSource } from "../src/lib/analytics/console-sync/source";
 import { collectAndNotify } from "../src/lib/analytics/console-sync/notification";
+import { enqueueNotification } from "../src/lib/notifications/outbox";
+import { consoleReport, recordConsoleIncident } from "../src/lib/analytics/console-sync/report";
+import { randomUUID } from "node:crypto";
 import { consoleExecutionFailed } from "../src/lib/analytics/console-sync/execution";
 import { beginCollection, completeCollection } from "../src/lib/insights/collection";
 
@@ -41,10 +44,17 @@ async function execute(mode: string) {
 async function main() {
   const mode = process.argv[2] ?? "collect";
   const ledger = mode === "collect" ? await beginCollection("ait-console-run", `workspace:${AIT_WORKSPACE_ID}`) : null;
-  const result = mode === "collect" ? await collectAndNotify(() => execute(mode)) : { ...await execute(mode), notification: undefined };
+  const runId = process.env.BATCH_JOB_UID || randomUUID();
+  const result = mode === "collect" ? await collectAndNotify(() => execute(mode), runId) : { ...await execute(mode), notification: undefined };
+  if (mode === "collect" && result.state === "already_running" && process.env.BATCH_JOB_UID) {
+    await enqueueNotification(consoleReport({ runId, now: new Date(), failed: false, skipped: true,
+      dataState: "already_running", lines: ["다른 수집이 진행 중이어서 이번 실행은 수집하지 않았습니다."] }));
+  }
   const failed = consoleExecutionFailed(result);
   if (ledger) await completeCollection(ledger.id, { status: failed ? "failed" : result.state,
     coverage: JSON.parse(JSON.stringify(result)) });
+  if (mode === "collect" && !["already_running", "authenticated"].includes(result.state))
+    await recordConsoleIncident(failed, runId, new Date(), process.env.BATCH_JOB_UID);
   (result.state === "failed" ? process.stderr : process.stdout).write(`${JSON.stringify(result)}\n`);
   if (failed) process.exitCode = 1;
 }
