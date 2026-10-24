@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-10-24 | [배치모니터링 채널과 실행 결과 카드 v1](2026-10-24-batch-monitoring/design.md) — 설계와 L1 서비스 테스트 계획 검토 대기, 채널 링크 입력 필요 | BO-BATCH-MONITORING-20261024-v1 |
 | 2026-10-22 | [예약 작업 실패 대응](2026-10-22-cron-failures/design.md) — 사용자 수정 지시 승인, L1 서비스 검증과 운영 반영 | [#522](https://github.com/seorilabs/seorilabs-backoffice/issues/522) |
 | 2026-10-19 | [건별 알림과 리뷰 일간 통계](2026-10-19-direct-notifications/design.md) — 사용자 직접 지시, 운영 UID와 11시 통계 선택, L1 서비스 검증과 운영 반영 | [#520](https://github.com/seorilabs/seorilabs-backoffice/issues/520) |
 | 2026-10-19 | [앱 운영 이벤트 건별 알림 복원](2026-10-19-app-event-rows/design.md) — 사용자 건별 복원 선택, L1 서비스 검증과 웹 운영 반영 | [#518](https://github.com/seorilabs/seorilabs-backoffice/issues/518) |
