@@ -34,3 +34,10 @@ export async function recordConsoleIncident(failed: boolean, runId: string, now:
     evidence: { impact: "수집 작업의 일부 또는 전체를 완료하지 못했습니다.", action: "배치모니터링의 실패 단계와 수집 기록을 확인하세요." } });
   else await recoverIncident({ ...key, recoveredAt: now });
 }
+
+
+export function consoleVerificationLine(verified: number, expected: number): string {
+  if (!expected) return "저장 대조: 제공된 검증 대상 없음";
+  return verified === expected ? `저장 대조 ${verified}/${expected}건 일치`
+    : `저장 대조: 일치 ${verified}건, 확인 필요 ${Math.max(0, expected - verified)}건 (대상 ${expected}건)`;
+}

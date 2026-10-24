@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import type { collectConsoleMetrics } from "./collect";
 import { consoleErrorCode } from "./oauth";
-import { consoleExecutionFailed } from "./execution";
-import { consoleReport } from "./report";
+import { consoleExecutionFailed, consoleExecutionSkipped, rejectedConsoleSkips } from "./execution";
+import { consoleReport, consoleVerificationLine } from "./report";
 
 type Collected = Awaited<ReturnType<typeof collectConsoleMetrics>>;
 type Failed = { state: "failed"; code: string };
@@ -41,8 +41,10 @@ export function consoleCollectionNotification(result: Collected | Failed, runId:
     const names: Record<string, string> = { "iaa.ANDROID": "Android 광고", "iaa.IOS": "iOS 광고", iap: "인앱결제", dau: "사용자 수", session: "이용 시간" };
     const start = result.results.map((row) => row.window.start).sort()[0];
     lines.push(`확인 기간: ${start ?? "미조회"} ~ ${result.end}`, `조회한 등록 항목: ${listingKeys.size}개`,
-      `저장 ${result.results.reduce((n, row) => n + row.upserts, 0)}건, 저장 대조 ${verified}/${expected}건 일치`,
-      `조회 오류 ${count("errors")}건, 저장 오류 ${count("storageErrors")}건, 저장 제외 ${count("skipped")}건`);
+      `저장 ${result.results.reduce((n, row) => n + row.upserts, 0)}건, ${consoleVerificationLine(verified, expected)}`,
+      `조회 오류 ${count("errors")}건, 저장 오류 ${count("storageErrors")}건, 입력 거부 ${result.results.reduce((n, row) => n + rejectedConsoleSkips(row.skipped).length, 0)}건`);
+    const excluded = result.results.reduce((n, row) => n + row.skipped.filter((item) => item.category === "excluded").length, 0);
+    if (excluded) lines.push(`운영 중지에 따른 정상 대상 제외: ${excluded}개`);
     if (consoleExecutionFailed(result)) {
       const codes = [...new Set(result.results.flatMap((row) => [...row.errors.map((error) => error.code), ...row.storageErrors.map((error) => error.error)]))];
       const phase = result.results.some((row) => row.verification.mismatched.length) ? "저장 대조" : count("storageErrors") ? "저장" : count("errors") ? "조회" : count("skipped") ? "입력 검증" : "조회 대상 또는 요청 제한";
@@ -56,7 +58,7 @@ export function consoleCollectionNotification(result: Collected | Failed, runId:
       "단위는 등록 항목과 날짜의 조합입니다. 지표별 숫자는 겹칠 수 있습니다.", "제공되지 않은 값은 0으로 바꾸지 않았습니다.");
     lines.push("같은 기간을 다시 조회해 갱신한 기록 수이며, 신규 이용자나 판매 건수가 아닙니다.");
   }
-  return consoleReport({ runId, now, failed: consoleExecutionFailed(result), dataState: result.state, lines, startedAt });
+  return consoleReport({ runId, now, failed: consoleExecutionFailed(result), dataState: result.state, lines, startedAt, skipped: consoleExecutionSkipped(result) });
 }
 
 // Job UID를 재사용해 감시자의 종료 관측과 같은 실행으로 묶는다.

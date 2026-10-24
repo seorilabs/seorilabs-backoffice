@@ -71,6 +71,14 @@ async function main() {
   await drainAllNotifications(100);
   assert.equal((await prisma.operationalIncident.findUniqueOrThrow({ where: { id: incident.id } })).status, "RECOVERED");
 
+  await prisma.app.update({ where: { slug: "lucid-chess" }, data: { status: "PAUSED" } });
+  const priorIncidents = await prisma.operationalIncident.count();
+  const excluded = await ingestAndVerifyConsolePush(payload, new Date(at(6)), () => new Date(at(6) + 1000));
+  assert.equal(excluded.verification.expected, 0);
+  const excludedEvent = await prisma.notificationEvent.findFirstOrThrow({ where: { dedupeKey: { startsWith: "ait-console-push:" } }, orderBy: { occurredAt: "desc" } });
+  assert.equal((excludedEvent.payload as { executionStatus: string }).executionStatus, "skipped");
+  assert.equal(await prisma.operationalIncident.count(), priorIncidents);
+  await drainAllNotifications(100);
   process.env.DISCORD_CHANNEL_BATCH_MONITORING_ID = "";
   const third = "33333333-3333-4333-8333-333333333333";
   await local(third, "succeeded", 6);

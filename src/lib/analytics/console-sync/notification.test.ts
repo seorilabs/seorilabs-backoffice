@@ -115,3 +115,9 @@ test("140개 하루 기록의 84건 저장과 70개 부분 제공, 56개 전체 
   assert.match(report.payload.text, /일부 지표만 확인 70개, 모든 값 미제공 56개/);
   assert.ok(report.payload.text.length < 2000);
 });
+
+test("저장 대조 실패는 확인이 필요한 건수를 직접 표시한다", () => {
+  const report = consoleCollectionNotification({ ...sample, blocked: [], results: [{ ...sample.results[0], verification: { expected: 3, verified: 2, mismatched: ["2026-10-12"] } }] }, "mismatched");
+  assert.match(report.payload.embed.title, /실패/);
+  assert.match(report.payload.text, /확인 필요 1건/);
+});

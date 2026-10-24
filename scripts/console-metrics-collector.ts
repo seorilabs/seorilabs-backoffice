@@ -12,7 +12,7 @@ import { collectAndNotify } from "../src/lib/analytics/console-sync/notification
 import { enqueueNotification } from "../src/lib/notifications/outbox";
 import { consoleReport, recordConsoleIncident } from "../src/lib/analytics/console-sync/report";
 import { randomUUID } from "node:crypto";
-import { consoleExecutionFailed } from "../src/lib/analytics/console-sync/execution";
+import { consoleExecutionFailed, consoleExecutionSkipped } from "../src/lib/analytics/console-sync/execution";
 import { beginCollection, completeCollection } from "../src/lib/insights/collection";
 
 async function execute(mode: string) {
@@ -53,7 +53,7 @@ async function main() {
   const failed = consoleExecutionFailed(result);
   if (ledger) await completeCollection(ledger.id, { status: failed ? "failed" : result.state,
     coverage: JSON.parse(JSON.stringify(result)) });
-  if (mode === "collect" && !["already_running", "authenticated"].includes(result.state))
+  if (mode === "collect" && result.state !== "authenticated" && !consoleExecutionSkipped(result))
     await recordConsoleIncident(failed, runId, new Date(), process.env.BATCH_JOB_UID);
   (result.state === "failed" ? process.stderr : process.stdout).write(`${JSON.stringify(result)}\n`);
   if (failed) process.exitCode = 1;

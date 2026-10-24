@@ -35,13 +35,14 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
     const appId = appIds.get(window.slug);
     if (appId) await recordCollectionFailure(response.missing.map((missing) => ({ source: "ait_console" as const, appId, listingId: window.miniAppId, day: missing.date, detail: `미확인 지표: ${missing.metrics.join(",")}` })), now);
     const stored = response.days.length ? await ingestConsoleMetrics({ apps: [{ ...window, days: response.days }] }, now) : null;
-    let verification = { expected: response.days.length, verified: 0, mismatched: response.days.map((day) => day.date) };
+    const excluded = stored?.skipped.some((row) => row.category === "excluded") && !stored.upserts;
+    let verification = excluded ? { expected: 0, verified: 0, mismatched: [] as string[] } : { expected: response.days.length, verified: 0, mismatched: response.days.map((day) => day.date) };
     const storageErrors = [...(stored?.errors ?? [])];
     try {
-      if (appId) verification = await verifyStoredConsoleDays(appId, window.miniAppId, response.days, now);
+      if (appId && !excluded) verification = await verifyStoredConsoleDays(appId, window.miniAppId, response.days, now);
       if (verification.mismatched.length) storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_MISMATCH" });
     } catch { storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_FAILED" }); }
-    results.push({ window, providedDates: response.days.map((day) => day.date), upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
+    results.push({ window, providedDates: excluded ? [] : response.days.map((day) => day.date), upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
       skipped: stored?.skipped ?? [], storageErrors, warnings: stored?.warnings ?? [], verification });
   }
   const readback = await getConsoleSyncStatus();
