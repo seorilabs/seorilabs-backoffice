@@ -50,6 +50,7 @@ export const PLATFORM_OPERATION_KEYS = [
   "platform.ads.grant-suppression",
   "platform.ads.revoke-suppression",
   "platform.config.set-update-policy",
+  "platform.inbox.issue",
 ] as const;
 
 export type PlatformOperationKey = (typeof PLATFORM_OPERATION_KEYS)[number];
@@ -103,6 +104,13 @@ const commonInputs = [
  * 저장소 관리자가 manifest를 바꿔도 플랫폼 원장을 조작할 권한은 생기지 않는다.
  */
 export const PLATFORM_OPERATION_DEFINITIONS = {
+  "platform.inbox.issue": {
+    id: "issue-inbox", label: "Starter 우편 발송", description: "Starter 계정에 서버 우편과 보상을 발송합니다.",
+    intent: "mutate", risk: "high", confirmation: "typed",
+    inputs: [commonInputs[0], commonInputs[1], commonInputs[2], commonInputs[4],
+      {key:"title",label:"제목",type:"text",required:true},
+      {key:"body",label:"본문",type:"text",required:true}],
+  },
   "platform.iap.grant-entitlement": {
     id: "grant-entitlement",
     label: "Entitlement 지급",
@@ -450,6 +458,14 @@ const sandboxResetCloseInputSchema = z
   })
   .strict();
 
+const inboxInputSchema = z.object({
+  operation: z.literal("platform.inbox.issue"), requestId: requestIdSchema,
+  appSlug: z.literal("starter-game"), platformUserId: platformUserIdSchema,
+  entitlementId: z.enum(["starter_test_ticket_1", "starter_badge"]),
+  title: z.string().trim().min(1).max(120), body: z.string().min(1).max(4000),
+  reason: reasonSchema, serverConfirmation: serverConfirmationSchema,
+}).strict();
+
 export const platformOperationInputSchema = z
   .discriminatedUnion("operation", [
     grantInputSchema,
@@ -460,6 +476,7 @@ export const platformOperationInputSchema = z
     adsGrantInputSchema,
     adsRevokeInputSchema,
     updatePolicyInputSchema,
+    inboxInputSchema,
   ])
   .superRefine((input, ctx) => {
     // 정책 조작은 확인 문구 규칙이 다르다. 강제 대상을 새로 추가할 때만

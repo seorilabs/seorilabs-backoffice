@@ -4,6 +4,7 @@ const links = [
   { href: "/platform", label: "개요" },
   { href: "/platform/auth", label: "인증" },
   { href: "/platform/iap", label: "앱 내 결제" },
+  { href: "/platform/inbox", label: "우편함" },
   { href: "/platform/ads", label: "광고" },
   { href: "/platform/updates", label: "업데이트" },
 ] as const;

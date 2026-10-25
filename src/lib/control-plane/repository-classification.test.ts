@@ -33,3 +33,9 @@ test("정책에 없는 저장소는 null을 돌려준다", () => {
   // 신규 저장소를 앱이라고 추측해 자동 편입하지 않는다. 판정은 사람이 기록한다.
   assert.equal(repositoryClassificationPolicy("seorilabs/does-not-exist-xyz"), null);
 });
+
+ test("등록한 게임 starter만 공개 제품 후보로 허용한다", () => {
+  assert.deepEqual(repositoryClassificationPolicy("seorilabs/starter-template-game"), {classification: "PRODUCT_APP_CANDIDATE", reasonCode: null, allowPublicDiscovery: true});
+  assert.equal(repositoryClassificationPolicy("seorilabs/starter-template-app")?.classification, "EXCLUDED");
+  assert.equal(repositoryClassificationPolicy("seorilabs/starter-template-other")?.allowPublicDiscovery, false);
+});
