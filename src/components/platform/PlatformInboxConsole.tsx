@@ -22,7 +22,13 @@ export function PlatformInboxConsole({enabled}:{enabled:boolean}) {
  function checkStatus() {
   if(!reference)return;
   startTransition(async()=>{
-   try {const status=await getPlatformOperationStatusAction(reference.appSlug,reference.requestId);setResult(status);setMessage(status.error??status.result?.summary??status.status??"상태 미확인");}
+   try {
+    const status=await getPlatformOperationStatusAction(reference.appSlug,reference.requestId);setResult(status);
+    setMessage(!status.ok ? status.error??"처리 상태를 확인하지 못했습니다."
+     : status.outcomeUnknown ? (status.outcomeExpired?"접수 결과를 확인하지 못한 채 확인 기한이 지났습니다. 요청 ID를 보관하고 운영 기록을 확인해 주세요.":"접수 결과가 확인되지 않았습니다. 같은 요청 ID로 처리 상태를 다시 확인해 주세요.")
+     : !status.found ? "접수된 요청이 아직 없습니다. 같은 요청 ID로 다시 접수할 수 있습니다."
+     : status.result?.summary??({QUEUED:"처리를 기다리고 있습니다.",RUNNING:"우편 발송을 처리하고 있습니다.",COMPLETED:"처리가 종료되었습니다. 결과를 확인해 주세요.",FAILED:"처리에 실패했습니다.",CANCELLED:"요청이 취소됐습니다."}[status.status??""]??"처리 상태를 확인했습니다."));
+   }
    catch {setMessage("상태를 확인하지 못했습니다. 같은 요청을 유지합니다.");}
   });
  }
