@@ -81,6 +81,20 @@ GitHub 기본 브랜치와 최신 discovery SHA를 8개 앱에서 대조했다. 
 
 이 후속 이슈는 새 버전이나 바이너리 출시 승인으로 사용하지 않는다. 해당 앱의 기존 릴리스 승인과 테스트 계획 안에서 문구를 반영하고 모든 활성 언어와 이미지를 다시 검수한다. 앱인토스의 등록 정보와 노출 중단 상태는 이번 1차 적용으로 바꾸지 않았다.
 
+## 기존 앱인토스 웹앱 종료 결정
+
+2026-10-25 사용자가 “게임으로 바꿔서 재론칭해서 더 이상 다루지 않아도 됌”이라고 밝히며 기존 웹앱 삭제를 지시했다. 작업 [#537](https://github.com/seorilabs/seorilabs-backoffice/issues/537)에 따라 workspace `38345`의 기존 웹앱 `crossword-puzzle`을 위반 원인 조사와 노출 복구 후속 작업에서 제외했다. 재론칭한 `crossword-puzzle-game`과 Google Play 및 App Store의 가로세로 퍼즐은 유지한다.
+
+인증된 Console에서 기존 웹앱의 이름과 appName, 작업공간을 대조하고 앱 운영 설정을 열었다. 제공되는 `운영 종료하기` 버튼은 disabled 상태였다. 종료 클릭 대기는 시간 초과됐으며, 다시 읽은 화면에서도 버튼이 비활성 상태이고 웹앱이 남아 있었다. 종료 요청이나 삭제 완료를 확인하지 못했으므로 삭제 완료로 기록하지 않는다. 비활성화 사유는 확인되지 않았으며 다른 API로 종료를 우회하지 않았다. 별도 게임의 홈 조회도 확인했으며 게임 변경은 하지 않았다.
+
+기존 웹앱은 사용자의 종료 결정에 따라 이번 SEO 유지관리에서 제외한다. 위반 원인 조사와 복구를 새 후속 작업으로 다시 등록하지 않는다. 문서만 바뀌며 제품 코드, 중앙 설정과 네이티브 마켓 문구는 바꾸지 않았다. 기존 L1 개발 환경 검증 범위를 유지하고 기기 실행은 하지 않는다.
+
+이 정정에서도 `pnpm typecheck`, `pnpm lint`, 더미 DATABASE_URL의 `pnpm build`와 `git diff --check`가 통과했다. lint에는 기존 경고 1개가 있다. Console 조회와 제한, 실패 과정, 검증 로그 11개, 총 35,962바이트는 아래 NAS 위치에 스트림 복사하고 크기와 SHA-256을 직접 대조했다. 기본 검증 목록의 SHA-256은 `6ed2c47ded215034c6fc95cf14cfda205f667a742c8a29d719a4ec5dc559afa6`이며, `console-readback`의 별도 검증 목록은 `53ccfdf89b3c4aaed263640828fd1bb520cf1248f509b54d3d43b7e2a3f64700`이다. 원본 보관 기간은 미정이며 임의로 삭제하지 않는다.
+
+```text
+/Volumes/Data/Backup/agent-artifacts/seorilabs-backoffice/2026-10-25/3a64fa1cfb7e1bb4ade8038282aa3c7841c7d733/retire-crossword-web-20261025T085311Z
+```
+
 ## 관측과 검증
 
 - 중앙 설정 8개의 payload를 계획한 값과 대조했다. localizations와 monitoring.keywords 외의 모든 항목이 보존됐다.
