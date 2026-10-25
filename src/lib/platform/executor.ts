@@ -14,6 +14,8 @@ import type {
 import { createPlatformWriteOperationsClient } from "./executor-client";
 import { splitVersions } from "@/lib/platform/update-policy";
 import type {
+  PlatformInboxRequest,
+  PlatformInboxIssued,
   SetUpdatePolicyRequest,
   SetUpdatePolicyResult,
 } from "@/lib/platform/client";
@@ -130,6 +132,7 @@ export interface PlatformAdsSuppressionResult {applied:boolean;requestId:string;
 
 /** executor가 소비하는 최소 client 포트. 실제 client 클래스에 의존하지 않는다. */
 export interface PlatformOperationsClient {
+  issueInbox?(request: PlatformInboxRequest, actor: string): Promise<PlatformInboxIssued>;
   grantEntitlement(
     request: PlatformOperatorRequest,
     actor: string,
@@ -392,6 +395,18 @@ export async function executePlatformOperation(
     // preparedResume와 상호 배타적인 parser 결과다.
     if (!prepared) throw new Error("플랫폼 오퍼레이션을 준비하지 못했습니다.");
     const params = prepared.params;
+    if (prepared.operationKey === "platform.inbox.issue") {
+      if (!client.issueInbox) throw new Error("우편 발송 write client가 준비되지 않았습니다.");
+      const request: PlatformInboxRequest = {
+        requestId: prepared.requestId, appId: prepared.appSlug,
+        platformUserId: stringParam(params, "platformUserId"), title: stringParam(params, "title"), body: stringParam(params, "body"),
+        rewards: [{kind:"entitlement", entitlementId:stringParam(params,"entitlementId"),quantity:1}],
+        expiresAt: 0, reason: prepared.reason as PlatformOperationReason, confirmation: stringParam(params,"serverConfirmation"),
+      };
+      const result = await client.issueInbox(request, actor);
+      if (!result || typeof result.id !== "string" || !result.id || result.title !== request.title || result.body !== request.body || result.expiresAt !== 0 || (!Array.isArray(result.rewards) || result.rewards.length !== 1 || result.rewards[0].kind !== "entitlement" || result.rewards[0].entitlementId !== request.rewards[0].entitlementId || result.rewards[0].quantity !== 1)) throw new PlatformOperationUnknownOutcomeError();
+      return {version:1,requestId:prepared.requestId,operation:prepared.operationKey,status:"success",summary:"서버 우편을 발송했습니다.",data:{messageIdHash: (await import("node:crypto")).createHash("sha256").update(result.id).digest("hex"),rewardCount:result.rewards.length},completedAt:new Date().toISOString()};
+    }
     if (prepared.operationKey === "platform.iap.set-economy-tester") {
       if (!client.setEconomyTester) {
         throw new Error("시험 계정 write client가 준비되지 않았습니다.");

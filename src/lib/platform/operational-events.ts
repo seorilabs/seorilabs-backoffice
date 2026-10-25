@@ -7,6 +7,9 @@ import { marketLabel, testPurchaseState } from "@/lib/notifications/iap-summary"
 
 export const OPERATIONAL_EVENT_TYPES = [
   "identity.created",
+  "identity.recovered",
+  "inbox.issued",
+  "inbox.claimed",
   "app.version.first_seen",
   "iap.granted",
   "ad.reward.delivered",
@@ -17,6 +20,9 @@ export const OPERATIONAL_EVENT_TYPES = [
 export type OperationalEventType = (typeof OPERATIONAL_EVENT_TYPES)[number];
 
 const allowedAttributes: Record<OperationalEventType, Set<string>> = {
+  "identity.recovered": new Set(["provider", "platformUserId"]),
+  "inbox.issued": new Set(["messageIdHash", "platformUserId", "rewardCount"]),
+  "inbox.claimed": new Set(["messageIdHash", "platformUserId", "rewardCount"]),
   // referrer는 AppsInToss 로그인의 DEFAULT/SANDBOX 구분이다. 실서비스 유입과
   // 샌드박스 테스트를 같은 카드로 읽지 않으려고 받는다.
   //
@@ -157,6 +163,14 @@ export function operationalEventFacts(
   event: OperationalEventInput,
 ): OperationalEventFacts {
   switch (event.type) {
+    case "identity.recovered":
+      return { icon: "🔑", headline: "계정 복구", facts: [text(event, "provider")] };
+    case "inbox.issued":
+    case "inbox.claimed":
+      return {
+        icon: "✉️", headline: event.type === "inbox.issued" ? "우편 발송" : "우편 수령",
+        facts: [`우편 ${text(event, "messageIdHash").slice(0, 12)}`, `보상 ${text(event, "rewardCount")}개`],
+      };
     case "identity.created": {
       const facts = [text(event, "authType")];
       if (attr(event, "signInProvider"))

@@ -87,6 +87,12 @@ const EXACT_POLICIES = new Map<string, RepositoryClassificationPolicy>([
     reasonCode: null,
     allowPublicDiscovery: true,
   }],
+  // The public starter is also the approved, internally distributed platform reference app.
+  ["seorilabs/starter-template-game", {
+    classification: "PRODUCT_APP_CANDIDATE",
+    reasonCode: null,
+    allowPublicDiscovery: true,
+  }],
   ["seorilabs/trait-test-hub", {
     classification: "PRODUCT_APP_CANDIDATE",
     reasonCode: null,

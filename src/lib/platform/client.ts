@@ -330,6 +330,13 @@ export interface PlatformAdsConfig {
     cooldownSeconds: number;
   }>;
 }
+export interface PlatformInboxRequest {
+  requestId: string; appId: string; platformUserId: string; title: string; body: string;
+  rewards: Array<{kind: "entitlement"; entitlementId: string; quantity: 1}>;
+  expiresAt: number; reason: PlatformOperationReason; confirmation: string;
+}
+export interface PlatformInboxIssued { id: string; title: string; body: string; rewards: PlatformInboxRequest["rewards"]; expiresAt: number; }
+
 export interface AdsSuppressionRequest {
   requestId: string;
   appId: string;
@@ -1264,6 +1271,10 @@ export class PlatformClient {
       `/v1/admin/ads/reward-claims?${params.toString()}`,
     );
     return requiredArray(value, "claims").map(validateAdClaim);
+  }
+
+  async issueInbox(req: PlatformInboxRequest, actor: string): Promise<PlatformInboxIssued> {
+    return this.request<PlatformInboxIssued>("POST", `/v1/admin/apps/${encodeURIComponent(req.appId)}/inbox`, {requestId:req.requestId, platformUserId:req.platformUserId, title:req.title, body:req.body, rewards:req.rewards, expiresAt:req.expiresAt, reason:req.reason, confirmation:req.confirmation}, actor);
   }
 
   async grantAdsSuppression(

@@ -108,6 +108,12 @@ export interface RevokePlatformAdsSuppressionInput extends Omit<GrantPlatformAds
   grantRequestId: string;
 }
 
+export interface IssuePlatformInboxInput {
+  operation: "platform.inbox.issue"; requestId: string; appSlug: "starter-game";
+  platformUserId: string; title: string; body: string; entitlementId: "starter_test_ticket_1" | "starter_badge";
+  reason: string; serverConfirmation: string;
+}
+
 export type EnqueuePlatformOperationInput =
   | GrantPlatformEntitlementInput
   | RevokePlatformEntitlementInput
@@ -115,7 +121,8 @@ export type EnqueuePlatformOperationInput =
   | DecidePlatformRefundReviewInput
   | SetPlatformEconomyTesterInput
   | GrantPlatformAdsSuppressionInput
-  | RevokePlatformAdsSuppressionInput;
+  | RevokePlatformAdsSuppressionInput
+  | IssuePlatformInboxInput;
 
 export interface EnqueuePlatformOperationResult {
   ok: boolean;
@@ -192,6 +199,7 @@ export async function enqueuePlatformOperationAction(
 
     revalidatePath("/platform/iap");
     revalidatePath("/platform/ads");
+    revalidatePath("/platform/inbox");
     return { ok: true, requestId: prepared.requestId };
   } catch (error) {
     return {

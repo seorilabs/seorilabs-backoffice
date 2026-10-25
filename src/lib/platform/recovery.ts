@@ -135,7 +135,8 @@ export function parsePlatformRecoveryReference(
       candidate.operation !== "platform.iap.decide-refund-review" &&
       candidate.operation !== "platform.iap.set-economy-tester" &&
       candidate.operation !== "platform.ads.grant-suppression" &&
-      candidate.operation !== "platform.ads.revoke-suppression")
+      candidate.operation !== "platform.ads.revoke-suppression" &&
+      candidate.operation !== "platform.inbox.issue")
   ) {
     return null;
   }

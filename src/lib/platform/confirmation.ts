@@ -43,6 +43,9 @@ export function platformSandboxResetCloseConfirmationText(input: {
 export function platformOperationConfirmationText(
   input: PlatformConfirmationInput,
 ): string {
+  if (input.operation === "platform.inbox.issue") {
+    return `ISSUE INBOX ${input.appSlug} ${input.platformUserId}`;
+  }
   if (input.operation === "platform.iap.grant-entitlement") {
     return `GRANT ${input.appSlug} ${input.platformUserId} ${input.entitlementId}`;
   }
