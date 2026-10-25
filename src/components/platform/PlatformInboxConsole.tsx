@@ -2,6 +2,7 @@
 import {useEffect,useState,useTransition} from "react";
 import {enqueuePlatformOperationAction,getPlatformOperationStatusAction,retryUnknownPlatformOperationAction,type PlatformOperationStatusResponse} from "@/lib/actions/platform-ops";
 import {listPlatformRecoveryReferences,savePlatformRecoveryReference,removePlatformRecoveryReference,type PlatformRecoveryReference} from "@/lib/platform/recovery";
+const STATUS_TEXT:Record<string,string>={waiting:"처리를 기다리고 있습니다.",queued:"처리를 기다리고 있습니다.",running:"우편 발송을 처리하고 있습니다.",completed:"처리가 종료되었습니다. 결과를 확인해 주세요.",failed:"처리에 실패했습니다.",cancelled:"요청이 취소됐습니다."};
 
 export function PlatformInboxConsole({enabled}:{enabled:boolean}) {
  const [reference,setReference]=useState<PlatformRecoveryReference|null>(null);
@@ -25,9 +26,10 @@ export function PlatformInboxConsole({enabled}:{enabled:boolean}) {
    try {
     const status=await getPlatformOperationStatusAction(reference.appSlug,reference.requestId);setResult(status);
     setMessage(!status.ok ? status.error??"처리 상태를 확인하지 못했습니다."
-     : status.outcomeUnknown ? (status.outcomeExpired?"접수 결과를 확인하지 못한 채 확인 기한이 지났습니다. 요청 ID를 보관하고 운영 기록을 확인해 주세요.":"접수 결과가 확인되지 않았습니다. 같은 요청 ID로 처리 상태를 다시 확인해 주세요.")
+     : status.outcomeExpired ? "접수 결과를 확인하지 못한 채 확인 기한이 지났습니다. 요청 ID를 보관하고 운영 기록을 확인해 주세요."
+     : status.outcomeUnknown ? "접수 결과가 확인되지 않았습니다. 같은 요청 ID로 처리 상태를 다시 확인해 주세요."
      : !status.found ? "접수된 요청이 아직 없습니다. 같은 요청 ID로 다시 접수할 수 있습니다."
-     : status.result?.summary??({QUEUED:"처리를 기다리고 있습니다.",RUNNING:"우편 발송을 처리하고 있습니다.",COMPLETED:"처리가 종료되었습니다. 결과를 확인해 주세요.",FAILED:"처리에 실패했습니다.",CANCELLED:"요청이 취소됐습니다."}[status.status??""]??"처리 상태를 확인했습니다."));
+     : status.result?.summary??STATUS_TEXT[(status.status??"").toLowerCase()]??"처리 상태를 확인했습니다.");
    }
    catch {setMessage("상태를 확인하지 못했습니다. 같은 요청을 유지합니다.");}
   });
@@ -45,7 +47,7 @@ export function PlatformInboxConsole({enabled}:{enabled:boolean}) {
   });
  }
  const missing=!!result?.ok&&!result.found;
- const terminal=!!result?.ok&&!!result.found&&!result.outcomeUnknown&&["success","error","failure","cancelled","SUCCESS","FAILURE","CANCELLED"].includes(result.conclusion??result.result?.status??"");
+ const terminal=!!result?.ok&&!!result.found&&!result.outcomeUnknown&&!result.outcomeExpired&&["success","error","failure","cancelled","SUCCESS","FAILURE","CANCELLED"].includes(result.conclusion??result.result?.status??"");
  const field="mt-1 block w-full rounded border border-neutral-300 p-2 text-sm";
  return <section className="max-w-3xl space-y-4">
   <p className="text-sm text-neutral-600">Starter 내부 테스트 계정으로 서버 우편을 발송합니다. 앱의 UID 또는 지원 코드로 인증 화면에서 플랫폼 사용자 ID를 먼저 확인하세요. 보상은 선택한 상품 1개이며 우편은 만료되지 않습니다.</p>
