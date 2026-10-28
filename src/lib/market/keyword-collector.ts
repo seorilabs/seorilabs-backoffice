@@ -20,6 +20,11 @@ export async function saveKeywordObservation(data: Prisma.KeywordObservationCrea
       await tx.marketObservation.createMany({ data: [{ ...key, value: { rank: stored.rank, resultCount: stored.resultCount }, sourceUrl: stored.sourceUrl, observedAt: stored.observedAt }], skipDuplicates: true });
       await tx.marketObservation.updateMany({ where: { ...key, observedAt: { lt: stored.observedAt } }, data: { value: { rank: stored.rank, resultCount: stored.resultCount }, sourceUrl: stored.sourceUrl, observedAt: stored.observedAt } });
     }
+    await tx.sourceCollectionRun.createMany({data:[{
+      id:`keyword:${stored.id}`,appId:stored.appId,source:stored.market==="app-store"?"apple-keyword":"google-play-web",target:stored.country+":"+stored.term,
+      status:keywordSuccess(stored.status)?"observed":stored.status,startedAt:stored.observedAt,completedAt:stored.observedAt,dataThrough:keywordSuccess(stored.status)?stored.observedAt:null,
+      errorCode:stored.errorCode,coverage:{batchId:stored.batchId,sourceSha:stored.sourceSha,observations:stored.resultCount??0}
+    }],skipDuplicates:true});
     return stored;
   });
 }

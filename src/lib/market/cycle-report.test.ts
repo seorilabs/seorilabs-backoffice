@@ -27,3 +27,8 @@ test("반환 범위가 짧으면 목록 부재를 상위권 이탈로 만들지 
  assert.equal(rankChangeBoundary({rank:null,resultCount:10},{rank:20,resultCount:200}),undefined);
  assert.equal(rankChangeBoundary({rank:20,resultCount:200},{rank:null,resultCount:200}),20);
 });
+test("목록 부재의 반환 범위가 달라지면 같은 결과로 숨기지 않는다",()=>{
+ const before={...item(0),rank:null,resultCount:30};
+ const after={...before,resultCount:200};
+ assert.equal(selectCycleItems([after],[report([before])],()=>false).length,1);
+});

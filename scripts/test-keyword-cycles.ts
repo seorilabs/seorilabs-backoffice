@@ -35,6 +35,7 @@ async function main() {
     assert.equal(again.eventId,result.eventId);
   }
   assert.equal(await prisma.keywordObservation.count({where:{appId:app.id,market:'app-store'}}),9);
+  assert.equal(await prisma.sourceCollectionRun.count({where:{appId:app.id,source:"apple-keyword"}}),9);
   const latest=await prisma.keywordObservation.findUniqueOrThrow({where:{id:lastId}});
   await saveKeywordObservation({...latest,id:'f'.repeat(48)+String(suffix).padStart(16,'0'),term:'search term',status:'failed',rank:null,resultCount:null,observedAt:new Date(latest.observedAt.getTime()+1000)});
   const daily=await prisma.marketObservation.findFirstOrThrow({where:{appId:app.id,target:'search term'},orderBy:{observedAt:'desc'}});

@@ -1,4 +1,4 @@
-# 운영 활성화 승인이 필요한 신규 read-only 수집·주간 분석 일정. suspend=true 유지.
+# 운영 중인 일별 수집과 주간 분석, 승인된 검색 위치 보고 일정.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -184,7 +184,7 @@ spec:
   schedule: 30 1 * * 1
   startingDeadlineSeconds: 900
   successfulJobsHistoryLimit: 2
-  suspend: true
+  suspend: false
 
 ---
 # 검색 위치 보고: 08:40, 14:40, 21:40 KST

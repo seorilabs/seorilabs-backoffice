@@ -29,7 +29,7 @@ export async function keywordHistoryQuery(params: HistoryParams, now = new Date(
   }
   const where = { appId: app.id, kind: "keyword", country: selection.country, target: { in: app.keywords }, observedAt: { lte: now } };
   const listingTarget = collectionTarget(app.iosBundle + ":" + selection.country);
-  const [observations, prior, legacyAttempts, cycleAttempts] = await Promise.all([
+  const [observations, prior, attempts] = await Promise.all([
     prisma.marketObservation.findMany({ where: { ...where, day: { gte: toDbDay(start), lte: toDbDay(selection.day) } } }),
     // 이전 성공 날짜는 그래프 기간 밖에서도 찾는다. 형식 오류를 성공 기준으로 쓰지 않는다.
     // 바인딩된 입력과 창 함수로 검색어마다 유효한 마지막 관측 한 건만 가져온다.
@@ -51,9 +51,7 @@ export async function keywordHistoryQuery(params: HistoryParams, now = new Date(
       { source: "apple-keyword", target: { in: app.keywords.map(term => selection.country + ":" + term) } },
       { source: "apple-public-lookup", target: listingTarget },
     ], startedAt: { gte: metricDayStart(start), lt: metricDayStart(shiftMetricDay(selection.day, 1)), lte: now } }, take: ATTEMPT_LIMIT + 1, orderBy: [{ startedAt: "desc" }, { id: "desc" }] }),
-    prisma.keywordObservation.findMany({where:{appId:app.id,market:"app-store",source:"apple-search-api",language:"en_us",country:selection.country,observedAt:{gte:metricDayStart(start),lt:metricDayStart(shiftMetricDay(selection.day,1)),lte:now}},orderBy:{observedAt:"desc"},take:ATTEMPT_LIMIT+1}),
   ]);
-  const attempts = [...legacyAttempts, ...cycleAttempts.map(row=>({id:row.id,appId:row.appId,source:"apple-keyword",target:row.country+":"+row.term,status:["observed","absent"].includes(row.status)?"observed":row.status,startedAt:row.observedAt,completedAt:row.observedAt,errorCode:row.errorCode,resultCount:row.resultCount,leaseUntil:null}))];
   if (attempts.length > ATTEMPT_LIMIT) throw new Error("검색 순위 수집 시도가 조회 한도를 넘었습니다. 기간을 줄여 다시 조회하세요.");
   return { apps, selection, today: metricDayOf(now), app, history: buildKeywordHistory(app, selection, [...prior, ...observations], attempts, now, listingTarget) };
 }

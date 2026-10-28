@@ -11,7 +11,7 @@ import type { KeywordRow } from "./keyword-monitoring";
 export const rankRowIdentity = (r: Pick<KeywordRow, "appId" | "country" | "term" | "market" | "source" | "language">) => JSON.stringify([r.appId, r.market ?? "app-store", r.source ?? "apple-search-api", r.country, r.language ?? "en_us", r.term]);
 export function selectCycleItems(candidates: RankReportItem[], previous: RankReport[], brand: (item: RankReportItem) => boolean) {
   const introduced = previous.flatMap(report => report.items);
-  const eligible = candidates.filter(item => !introduced.some(before => rankRowIdentity(before) === rankRowIdentity(item) && before.rank === item.rank));
+  const eligible = candidates.filter(item => !introduced.some(before => rankRowIdentity(before) === rankRowIdentity(item) && before.rank === item.rank && (item.rank!==null || before.resultCount===item.resultCount)));
   const counts = (item: RankReportItem) => introduced.filter(before => rankRowIdentity(before) === rankRowIdentity(item)).length;
   const sorted = [...eligible].sort((a,b) => counts(a)-counts(b) || a.term.localeCompare(b.term) || a.appId.localeCompare(b.appId));
   const selected: RankReportItem[] = [];

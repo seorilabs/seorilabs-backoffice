@@ -296,6 +296,10 @@ if ! [ "$migration_line" -lt "$verify_line" ] ||
 fi
 echo "  ok   migration → trigger-verify → notification consumer → web → worker → scheduler → catch-up"
 echo "  ok   동일 SHA 재실행은 같은 source-bound desired-state run으로 검증"
+[ "$(grep -c '^ROLLOUT backoffice-operations-insights$' "$log")" -eq 2 ]
+[ "$(grep -c '^APPLY_STDIN backoffice-keyword-collection,' "$log")" -eq 2 ]
+[ "$(grep -c '^APPLY_STDIN backoffice-market-feedback,backoffice-weekly-insights,backoffice-keyword-daily,' "$log")" -eq 2 ]
+echo "  ok   검색 수집과 보고 worker 및 CronJob이 같은 배포에 포함된다"
 
 echo "== rollout condition이 먼저 끝나도 새 generation exact state를 기다린다 =="
 : > "$log"

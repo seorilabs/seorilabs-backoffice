@@ -207,7 +207,7 @@ export async function keywordMonitoring(
     };
   });
   const ids = apps.map((app) => app.id);
-  const [history, legacyAttempts, cycleAttempts] = await Promise.all([
+  const [history, attempts] = await Promise.all([
     prisma.marketObservation.findMany({
       where: {
         kind: "keyword",
@@ -227,9 +227,7 @@ export async function keywordMonitoring(
         },
       },
     }),
-    prisma.keywordObservation.findMany({where:{appId:{in:ids},market:"app-store",source:"apple-search-api",language:"en_us",observedAt:{gte:metricDayStart(day),lt:metricDayStart(shiftMetricDay(day,1)),lte:now}}}),
   ]);
-  const attempts = [...legacyAttempts,...cycleAttempts.map(row=>({appId:row.appId,source:"apple-keyword",target:row.country+":"+row.term,status:["observed","absent"].includes(row.status)?"observed":row.status,startedAt:row.observedAt,completedAt:row.observedAt}))];
   const rows = buildKeywordRows(apps, history, attempts, day);
   return {
     day,
