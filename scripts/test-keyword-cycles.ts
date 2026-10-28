@@ -32,9 +32,19 @@ async function main() {
     const failedTask={...task,term:"blocked term"};
     await saveKeywordObservation({id:keywordObservationId(cycle.id,failedTask),batchId:cycle.id,appId:app.id,market:task.market,source:"apple-search-api",country:"kr",language:"en_us",term:failedTask.term,revision:1,sourceSha:"a".repeat(40),observedAt:at,status:"failed",rank:null,resultCount:null,errorCode:"SOURCE_BLOCKED",sourceUrl:"https://itunes.apple.com/search"});
     const result=await sendCycleKeywordRanks(new Date(at.getTime()+75*60000));
-    if(index===0)assert.ok(result.eventId);
+    if(index===0){
+      assert.ok(result.eventId);
+      await prisma.app.update({where:{id:app.id},data:{displayName:"검색 검수 앱 수정"}});
+      await prisma.notificationDelivery.updateMany({where:{eventId:result.eventId},data:{status:"SENT",providerMessageId:"isolated-message-id"}});
+    }
     const again=await sendCycleKeywordRanks(new Date(at.getTime()+76*60000));
     assert.equal(again.eventId,result.eventId);
+    if(index===0){
+      const updated=await prisma.notificationEvent.findUniqueOrThrow({where:{id:again.eventId}});
+      assert.ok((updated.payload as {rankReport:{items:{appName:string}[]}}).rankReport.items.every(item=>item.appName==="검색 검수 앱 수정"));
+      const delivery=await prisma.notificationDelivery.findFirstOrThrow({where:{eventId:again.eventId}});
+      assert.equal(delivery.status,"PENDING");assert.equal(delivery.providerMessageId,"isolated-message-id");
+    }
   }
   assert.equal(await prisma.keywordObservation.count({where:{appId:app.id,market:'app-store'}}),12);
   assert.equal(await prisma.sourceCollectionRun.count({where:{appId:app.id,source:"apple-keyword"}}),12);
