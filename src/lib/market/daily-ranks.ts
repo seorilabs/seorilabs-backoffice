@@ -14,7 +14,7 @@ export function rankCsv(rows: KeywordRow[], day: string) {
     "국가",
     "검색어",
     "오늘 순위",
-    "수집 상태",
+    "수집 상태", "최근 시도 상태", "최근 시도 시각 KST",
     "이전 관측일",
     "이전 순위",
     "변화",
@@ -29,7 +29,7 @@ export function rankCsv(rows: KeywordRow[], day: string) {
     row.country.toUpperCase(),
     row.term,
     row.rankLabel,
-    row.state,
+    row.state, row.attemptState ?? row.state, row.attemptedAt ? kstDateTimeShort(new Date(row.attemptedAt)) : "",
     row.previousDay,
     row.previousDay
       ? row.previousRank === null

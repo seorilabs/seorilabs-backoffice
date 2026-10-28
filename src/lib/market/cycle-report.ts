@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { metricDayOf, parseMetricDay } from "@/lib/analytics/metric-day";
 import { discordDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, retryDeadLetterNotification } from "@/lib/notifications/outbox";
+import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { keywordCycle, marketLabel } from "./keyword-cycle";
 import { rankReportKey, rankReportText, type RankReport, type RankReportItem } from "./rank-report";
 import { keywordSuccess } from "./keyword-collector";
@@ -43,8 +44,8 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
   if (requestedDay && requestedDay !== cycle.day) throw Error("REPORT_REQUIRES_CURRENT_CYCLE");
   const batch = await prisma.keywordCollectionBatch.findUnique({ where: { id: cycle.id } });
   if (!batch?.completedAt) return { batchId: cycle.id, status: "collection_incomplete" };
-  const current = await prisma.keywordObservation.findMany({ where: { batchId: batch.id, status: { in: ["observed", "absent"] } } });
-  if (!current.length) return { batchId: cycle.id, status: "no_observations" };
+  const current = await prisma.keywordObservation.findMany({ where: { batchId: batch.id } });
+  if (!current.some(row=>keywordSuccess(row.status))) return { batchId: cycle.id, status: "no_observations" };
   return prisma.$transaction(async tx => {
     const dedupeKey = `keyword-report-cycle:${cycle.day}-${cycle.reportSlot}`;
     const existing = await tx.notificationEvent.findUnique({ where: { dedupeKey } });
@@ -64,10 +65,12 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     for (const row of current) {
       const identity = rankRowIdentity(row), previous = history.find(before => rankRowIdentity(before) === identity && keywordSuccess(before.status));
       const appName = apps.find(app=>app.id === row.appId)?.displayName ?? row.appId;
-      const ranked = row.rank === null ? `반환된 ${row.resultCount}개 목록에 없음` : `${row.rank}위`;
-      const change = !previous ? "첫 관측" : previous.rank === row.rank ? "변화 없음" : previous.rank === null ? "결과 목록 진입" : row.rank === null ? "결과 목록 이탈" : `${Math.abs(row.rank-previous.rank)}계단 ${row.rank < previous.rank ? "상승" : "하락"}`;
-      const item: KeywordRow = { appId: row.appId, appName, country: row.country, term: row.term, revision: row.revision, state: "수집됨", rank: row.rank, rankLabel: ranked, previousRank: previous?.rank ?? null, previousDay: previous ? metricDayOf(previous.observedAt) : null, change, observedAt: row.observedAt, sourceUrl: row.sourceUrl, market: row.market, source: row.source, language: row.language, resultCount: row.resultCount, previousAt: previous?.observedAt.toISOString() ?? null, observationId: row.id, isBrand: row.isBrand };
+      const success=keywordSuccess(row.status),state=success?"수집됨":sourceStateLabel(row.status);
+      const ranked = !success ? state : row.rank === null ? `반환된 ${row.resultCount}개 목록에 없음` : `${row.rank}위`;
+      const change = !success ? "비교 불가" : !previous ? "첫 관측" : previous.rank === row.rank ? "변화 없음" : previous.rank === null ? "결과 목록 진입" : row.rank === null ? "결과 목록 이탈" : `${Math.abs(row.rank-previous.rank)}계단 ${row.rank < previous.rank ? "상승" : "하락"}`;
+      const item: KeywordRow = { appId: row.appId, appName, country: row.country, term: row.term, revision: row.revision, state, rank: success?row.rank:null, rankLabel: ranked, previousRank: previous?.rank ?? null, previousDay: previous ? metricDayOf(previous.observedAt) : null, change, observedAt: success?row.observedAt:null, attemptedAt:row.observedAt.toISOString(),attemptState:state, sourceUrl: row.sourceUrl, market: row.market, source: row.source, language: row.language, resultCount: row.resultCount, previousAt: previous?.observedAt.toISOString() ?? null, observationId: row.id, isBrand: row.isBrand };
       rows.push(item);
+      if(!success)continue;
       const crossed = rankChangeBoundary(previous,row);
       const material = previous && previous.rank !== null && row.rank !== null && Math.min(previous.rank,row.rank) <= 50 && Math.abs(previous.rank-row.rank) >= 10;
       const dates = Array.from({length:28}, (_,i) => metricDayOf(new Date(now.getTime()-(27-i)*86400000)));

@@ -29,13 +29,15 @@ async function main() {
       const retry=await saveKeywordObservation({...input,rank:99,observedAt:new Date(at.getTime()+1000)});
       assert.equal(retry.rank,rank);assert.equal(retry.observedAt.getTime(),at.getTime());
     }
+    const failedTask={...task,term:"blocked term"};
+    await saveKeywordObservation({id:keywordObservationId(cycle.id,failedTask),batchId:cycle.id,appId:app.id,market:task.market,source:"apple-search-api",country:"kr",language:"en_us",term:failedTask.term,revision:1,sourceSha:"a".repeat(40),observedAt:at,status:"failed",rank:null,resultCount:null,errorCode:"SOURCE_BLOCKED",sourceUrl:"https://itunes.apple.com/search"});
     const result=await sendCycleKeywordRanks(new Date(at.getTime()+75*60000));
     if(index===0)assert.ok(result.eventId);
     const again=await sendCycleKeywordRanks(new Date(at.getTime()+76*60000));
     assert.equal(again.eventId,result.eventId);
   }
-  assert.equal(await prisma.keywordObservation.count({where:{appId:app.id,market:'app-store'}}),9);
-  assert.equal(await prisma.sourceCollectionRun.count({where:{appId:app.id,source:"apple-keyword"}}),9);
+  assert.equal(await prisma.keywordObservation.count({where:{appId:app.id,market:'app-store'}}),12);
+  assert.equal(await prisma.sourceCollectionRun.count({where:{appId:app.id,source:"apple-keyword"}}),12);
   const latest=await prisma.keywordObservation.findUniqueOrThrow({where:{id:lastId}});
   await saveKeywordObservation({...latest,id:'f'.repeat(48)+String(suffix).padStart(16,'0'),term:'search term',status:'failed',rank:null,resultCount:null,observedAt:new Date(latest.observedAt.getTime()+1000)});
   const daily=await prisma.marketObservation.findFirstOrThrow({where:{appId:app.id,target:'search term'},orderBy:{observedAt:'desc'}});
@@ -46,6 +48,11 @@ async function main() {
   assert.equal(apple.history?.rows[0].rank,10);assert.equal(play.history?.rows[0].rank,7);assert.equal(play.history?.rows[0].resultCount,30);
   const events=await prisma.notificationEvent.findMany({where:{dedupeKey:{startsWith:'keyword-report-cycle:'}},include:{deliveries:true}});
   assert.ok(events.every(event=>event.deliveries.length===1));
+  const snapshot=events.find(event=>(event.payload as {rankReport:{rows:{appId:string}[]}}).rankReport.rows.some(row=>row.appId===app.id));
+  assert.ok(snapshot);
+  const report=(snapshot.payload as {rankReport:{rows:{term:string;state:string}[];items:{term:string}[]}}).rankReport;
+  assert.equal(report.rows.find(row=>row.term==="blocked term")?.state,"수집 실패");
+  assert.ok(report.items.every(item=>item.term!=="blocked term"));
   console.log(JSON.stringify({status:'passed',checks:['three-cycles','retry-immutable','last-success','market-separation','report-dedupe','daily-query'],appId:app.id}));
 }
 main().finally(()=>prisma.$disconnect()).catch(error=>{console.error(error);process.exitCode=1});

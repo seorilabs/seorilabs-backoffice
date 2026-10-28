@@ -41,6 +41,7 @@ interface Attempt {
 export interface KeywordRow {
   isBrand?: boolean;
   attemptState?: string;
+  attemptedAt?: string | null;
   market?: string; source?: string; language?: string; resultCount?: number | null; previousAt?: string | null; observationId?: string;
   appId: string;
   appName: string;
@@ -141,6 +142,7 @@ export function buildKeywordRows(
             term,
             revision: app.revision,
             state,
+            attemptedAt: keyword?.startedAt.toISOString() ?? listing?.startedAt.toISOString() ?? null,
             attemptState: keyword && !["observed","empty"].includes(keyword.status) ? sourceStateLabel(keyword.status) : undefined,
             rank,
             resultCount: current ? (current.value as {resultCount?:number}).resultCount ?? null : null, market:"app-store", source:"apple-search-api", language:"en_us",

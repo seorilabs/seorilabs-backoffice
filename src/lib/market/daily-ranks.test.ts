@@ -25,6 +25,8 @@ test("전체 CSV에는 변화 없는 행·미수집도 포함하고 수식·따�
         ...row,
         term: '=HYPERLINK("x")\n키워드',
         state: "미수집",
+        attemptState: "수집 실패",
+        attemptedAt:"2026-10-11T04:00:00Z",
         rankLabel: "미수집",
         observedAt: null,
       },
@@ -35,6 +37,8 @@ test("전체 CSV에는 변화 없는 행·미수집도 포함하고 수식·따�
   assert.match(csv, /머지 함대/);
   assert.match(csv, /'\=HYPERLINK\(""x""\)/);
   assert.match(csv, /미수집/);
+  assert.match(csv,/최근 시도 상태/);
+  assert.match(csv,/수집 실패/);
   assert.match(csv, /2026-10-10/);
 });
 test("명시적 발행 기준일은 유효한 과거·당일만 허용한다", async () => {
