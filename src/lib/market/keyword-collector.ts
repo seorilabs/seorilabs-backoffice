@@ -46,8 +46,9 @@ export async function collectKeywordRanks(now = new Date()) {
         for (const country of config.countries) for (const term of config.keywords) tasks.push({ appId: app.id, market, identity, brandNames:[app.displayName,app.repoFullName.split("/")[1].replaceAll("-"," ")], revision: revision.revision, country, language: market === "app-store" ? "en_us" : "en", term });
       }
     }
-    // 지난 회차 미수집을 먼저 배치한다. 최초 회차는 앱별 한 검색어씩 번갈아 처리한다.
-    const missing = await prisma.keywordObservation.findMany({ where: { status: "not_collected", batchId: { not: cycle.id } }, orderBy: { observedAt: "desc" }, take: 5000 });
+    // 직전 회차에서 예산 때문에 못 읽은 검색어를 우선한다. 복구된 과거 실패는 우선권을 이어받지 않는다.
+    const previousBatch = await prisma.keywordCollectionBatch.findFirst({where:{id:{lt:cycle.id},completedAt:{not:null}},orderBy:{startedAt:"desc"}});
+    const missing = previousBatch ? await prisma.keywordObservation.findMany({where:{batchId:previousBatch.id,status:"not_collected",errorCode:"CYCLE_BUDGET_EXCEEDED"}}) : [];
     const priority = new Set(missing.map(row => keywordTaskKey({ ...row, market: row.market as KeywordMarket })));
     tasks.sort((a,b) => Number(priority.has(keywordTaskKey(b))) - Number(priority.has(keywordTaskKey(a))) || a.term.localeCompare(b.term) || a.appId.localeCompare(b.appId));
     await prisma.keywordCollectionBatch.createMany({ data: [{ id: cycle.id, sourceSha, startedAt: now, plan: tasks as unknown as Prisma.InputJsonValue }], skipDuplicates: true });
