@@ -2,6 +2,16 @@ import { boundedText } from "./public-sources";
 import { parsePlaySearch } from "./keyword-cycle";
 import { playSearchUrl } from "./keyword-cycle";
 export { playSearchUrl } from "./keyword-cycle";
+export function playPublicName(html: string, id: string): string | undefined {
+  if (!/<\/html>\s*$/i.test(html)) throw Error("PLAY_RESPONSE_TRUNCATED");
+  if (/recaptcha|unusual traffic|consent.google.com\/m/i.test(html)) throw Error("PLAY_BLOCKED");
+  if (!html.includes(`"${id}"`)) return undefined;
+  for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    const data=JSON.parse(match[1]) as {"@type"?:unknown;name?:unknown};
+    if (data?.["@type"] === "SoftwareApplication" && typeof data.name === "string" && data.name.length > 0 && data.name.length <= 300) return data.name;
+  }
+  return undefined;
+}
 export function createPlaySearchClient(input: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> } = {}) {
   const impl = input.fetchImpl ?? fetch;
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
@@ -23,7 +33,7 @@ export function createPlaySearchClient(input: { fetchImpl?: typeof fetch; sleep?
     search: async (term: string, country: string, language: string) => parsePlaySearch(await request(playSearchUrl(term, country, language))),
     publicListing: async (id: string, country: string) => {
       const html = await request(`https://play.google.com/store/apps/details?id=${encodeURIComponent(id)}&hl=en&gl=${country.toUpperCase()}`);
-      return /<\/html>/.test(html) && html.includes(`"${id}"`) && /itemprop="name"|"@type":"SoftwareApplication"/.test(html);
+      return playPublicName(html,id);
     },
   };
 }

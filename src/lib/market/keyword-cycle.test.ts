@@ -24,3 +24,9 @@ test("브랜드는 공개 이름의 제목과 앱 이름으로 구분한다",()=
  assert.equal(brandKeyword("BabyNest",["BabyNest: Shared Baby Care Log"]),true);
  assert.equal(brandKeyword("baby tracker",["BabyNest: Shared Baby Care Log"]),false);
 });
+test("일반 장르 검색어를 앱 이름의 일부라는 이유로 브랜드로 제한하지 않는다",()=>{
+ assert.equal(brandKeyword("chess",["Lucid Chess"]),false);
+ assert.equal(brandKeyword("farm tycoon",["Happy Farm Tycoon"]),false);
+ assert.equal(brandKeyword("matgo",["Moonlight Matgo"]),false);
+ assert.equal(brandKeyword("Moonlight Matgo",["Moonlight Matgo"]),true);
+});
