@@ -5,10 +5,16 @@ export { playSearchUrl } from "./keyword-cycle";
 export function playPublicName(html: string, id: string): string | undefined {
   if (!/<\/html>\s*$/i.test(html)) throw Error("PLAY_RESPONSE_TRUNCATED");
   if (/recaptcha|unusual traffic|consent.google.com\/m/i.test(html)) throw Error("PLAY_BLOCKED");
-  if (!html.includes(`"${id}"`)) return undefined;
   for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
-    const data=JSON.parse(match[1]) as {"@type"?:unknown;name?:unknown};
-    if (data?.["@type"] === "SoftwareApplication" && typeof data.name === "string" && data.name.length > 0 && data.name.length <= 300) return data.name;
+    try {
+      const data=JSON.parse(match[1]) as {"@type"?:unknown;name?:unknown;url?:unknown}|null;
+      if (data?.["@type"] !== "SoftwareApplication" || typeof data.url !== "string") continue;
+      const url=new URL(data.url);
+      if (url.origin !== "https://play.google.com" || !/^\/store\/apps\/details(?:\/[^/]*)?$/.test(url.pathname) || url.searchParams.get("id") !== id) continue;
+      if (typeof data.name === "string" && data.name.length > 0 && data.name.length <= 300) return data.name;
+    } catch {
+      // 잘못된 다른 구조화 데이터는 대상 앱의 공개 확인에 쓰지 않는다.
+    }
   }
   return undefined;
 }
