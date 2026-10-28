@@ -47,6 +47,6 @@ export function brandKeyword(term: string, names: string[]) {
   const query = normalize(term);
   return names.some(name => {
     const brand = normalize(name.split(/[:：]/)[0]);
-    return Boolean(brand && query && (query.includes(brand) || brand.includes(query)));
+    return Boolean(brand && query && query.includes(brand));
   });
 }

@@ -52,7 +52,7 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     const since = new Date(now.getTime()-7*86400000);
     const previousEvents = await tx.notificationEvent.findMany({ where: { dedupeKey: { startsWith: "keyword-report-cycle:", not:dedupeKey }, occurredAt: { gte: since, lte: now } }, select: { payload: true } });
     const previousReports = previousEvents.flatMap(event => { const report = (event.payload as {rankReport?: RankReport}).rankReport; return report ? [report] : []; });
-    const apps = await tx.app.findMany({ where: { id: { in: [...new Set(current.map(row=>row.appId))] } }, select: { id: true, displayName: true, repoFullName: true } });
+    const apps = await tx.app.findMany({ where: { id: { in: [...new Set(current.map(row=>row.appId))] } }, select: { id: true, displayName: true } });
     const cycleHistory = await tx.keywordObservation.findMany({ where: { appId: { in: apps.map(app=>app.id) }, observedAt: { lt: batch.startedAt, gte: new Date(now.getTime()-90*86400000) }, status: { in: ["observed", "absent"] } }, orderBy: { observedAt: "desc" } });
     const legacy = await tx.marketObservation.findMany({where:{kind:"keyword",appId:{in:apps.map(app=>app.id)},observedAt:{lt:batch.startedAt,gte:new Date(now.getTime()-90*86400000)}},orderBy:{observedAt:"desc"}});
     const history = [...cycleHistory, ...legacy.flatMap(row=>{
@@ -75,7 +75,7 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
       const dates = Array.from({length:28}, (_,i) => metricDayOf(new Date(now.getTime()-(27-i)*86400000)));
       candidates.push({ ...item, observedAt: row.observedAt.toISOString(), points: dates.map(day => { const found = day === cycle.day ? row : history.find(before => rankRowIdentity(before) === identity && metricDayOf(before.observedAt) === day); return { day, rank: found?.rank ?? null, state: !found ? "missing" : found.rank === null ? "outside" : "ranked" }; }), reason: crossed ? `상위 ${crossed}개 ${row.rank !== null && row.rank <= crossed ? "진입" : "이탈"}` : material ? "상위권의 뚜렷한 순위 변화" : change, score: crossed ? 1000-crossed : material ? 100 : 0 });
     }
-    const brand = (item: RankReportItem) => { if(item.isBrand)return true; const term = item.term.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""); const name = item.appName.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""); const slug = apps.find(app=>app.id===item.appId)?.repoFullName.split("/")[1].replace(/[^\p{L}\p{N}]/gu, "") ?? ""; return name.includes(term) || term.includes(name) || Boolean(slug && (slug.includes(term) || term.includes(slug))); };
+    const brand = (item: RankReportItem) => item.isBrand === true;
     const items = selectCycleItems(candidates, previousReports, brand);
     if (!items.length) return { batchId: cycle.id, status: "no_new_results" };
     const report: RankReport = { version: 1, day: cycle.day, capturedAt: now.toISOString(), items, rows: rows.map(row=>({...row, observedAt: row.observedAt?.toISOString() ?? null})) };

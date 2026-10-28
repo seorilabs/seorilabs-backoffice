@@ -33,7 +33,7 @@ export async function collectKeywordRanks(now = new Date()) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw Error("KEYWORD_SOURCE_SHA_REQUIRED");
   let batch = await prisma.keywordCollectionBatch.findUnique({ where: { id: cycle.id } });
   if (!batch) {
-    const apps = await prisma.app.findMany({ where: { status: "ACTIVE" }, select: { id: true, displayName:true, repoFullName:true, iosBundle: true, playPackage: true, configRevisions: { where: { status: "ACTIVE" }, orderBy: { revision: "desc" }, take: 1 } } });
+    const apps = await prisma.app.findMany({ where: { status: "ACTIVE" }, select: { id: true, displayName:true, iosBundle: true, playPackage: true, configRevisions: { where: { status: "ACTIVE" }, orderBy: { revision: "desc" }, take: 1 } } });
     const tasks: KeywordTask[] = [];
     for (const app of apps) {
       const revision = app.configRevisions[0], parsed = configRevisionPayloadSchema.safeParse(revision?.payload);
@@ -43,7 +43,7 @@ export async function collectKeywordRanks(now = new Date()) {
         if (market === "google-play" && process.env.KEYWORD_PLAY_ENABLED !== "true") continue;
         const identity = market === "app-store" ? app.iosBundle : app.playPackage;
         if (!identity) continue;
-        for (const country of config.countries) for (const term of config.keywords) tasks.push({ appId: app.id, market, identity, brandNames:[app.displayName,app.repoFullName.split("/")[1].replaceAll("-"," ")], revision: revision.revision, country, language: market === "app-store" ? "en_us" : "en", term });
+        for (const country of config.countries) for (const term of config.keywords) tasks.push({ appId: app.id, market, identity, brandNames:[app.displayName], revision: revision.revision, country, language: market === "app-store" ? "en_us" : "en", term });
       }
     }
     // 직전 회차에서 예산 때문에 못 읽은 검색어를 우선한다. 복구된 과거 실패는 우선권을 이어받지 않는다.
@@ -64,18 +64,18 @@ export async function collectKeywordRanks(now = new Date()) {
     const id = keywordObservationId(batch.id, task);
     if (await prisma.keywordObservation.findUnique({ where: { id }, select: { id: true } })) continue;
     const sourceUrl = task.market === "app-store" ? `https://itunes.apple.com/search?term=${encodeURIComponent(task.term)}&country=${task.country}&entity=software&limit=200` : playSearchUrl(task.term, task.country, task.language);
-    let status = "not_collected", rank: number | null = null, resultCount: number | null = null, errorCode: string | null = "CYCLE_BUDGET_EXCEEDED", isBrand=brandKeyword(task.term,task.brandNames??[]);
+    let status = "not_collected", rank: number | null = null, resultCount: number | null = null, errorCode: string | null = "CYCLE_BUDGET_EXCEEDED", isBrand=false;
     if (Date.now() < deadline - 300_000) {
       try {
         const listingKey = JSON.stringify([task.market, task.identity, task.country]);
-        if (!listings.has(listingKey)) listings.set(listingKey, task.market === "app-store" ? apple.lookup({ bundleId: task.identity }, task.country).then(rows => rows.filter(row=>row.bundleId===task.identity).map(row=>({id:row.trackId,name:row.trackName}))[0]) : play.publicListing(task.identity, task.country).then(ok => ok ? {id:task.identity,name:task.brandNames?.[0]??task.identity} : undefined));
+        if (!listings.has(listingKey)) listings.set(listingKey, task.market === "app-store" ? apple.lookup({ bundleId: task.identity }, task.country).then(rows => rows.filter(row=>row.bundleId===task.identity).map(row=>({id:row.trackId,name:row.trackName}))[0]) : play.publicListing(task.identity, task.country).then(name => name ? {id:task.identity,name} : undefined));
         const identity = await listings.get(listingKey)!;
         if (!identity) { status = "not_collected"; errorCode = "PUBLIC_LISTING_UNCONFIRMED"; }
         else {
           const searchKey = JSON.stringify([task.market, task.country, task.language, task.term]);
           if (!searches.has(searchKey)) searches.set(searchKey, task.market === "app-store" ? apple.search(task.term, task.country).then(rows => rows.map(row => row.trackId)) : play.search(task.term, task.country, task.language));
           const results = await searches.get(searchKey)!;
-          const index = results.indexOf(identity.id); isBrand ||= brandKeyword(task.term,[identity.name]); rank = index < 0 ? null : index + 1; resultCount = results.length;
+          const index = results.indexOf(identity.id); isBrand = brandKeyword(task.term,[...(task.brandNames??[]),identity.name]); rank = index < 0 ? null : index + 1; resultCount = results.length;
           status = rank === null ? "absent" : "observed"; errorCode = null;
         }
       } catch (error) {
