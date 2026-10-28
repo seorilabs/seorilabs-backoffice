@@ -75,7 +75,8 @@
     },
     {
       "id": "fleet-configuration-revisions",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "fleet-discovery-and-classification",
@@ -147,7 +148,8 @@
     },
     {
       "id": "market-public-collection-and-android-vitals",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "insight-signals-budget-and-worker",
@@ -163,7 +165,8 @@
     },
     {
       "id": "notification-outbox-report-visuals-and-retention",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "vault-search-ai-and-writer",

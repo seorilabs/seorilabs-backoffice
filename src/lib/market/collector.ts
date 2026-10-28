@@ -1,4 +1,3 @@
-import { boundedEvidenceLabel } from "@/lib/insights/contract";
 import { publicLinkTarget } from "./support-links";
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -9,9 +8,6 @@ import { observedCollection } from "@/lib/insights/collection";
 import { publishSignal } from "@/lib/insights/service";
 import {
   createApplePublicClient,
-  keywordRank,
-  significantRankChange,
-  describeRankChange,
   OFFICIAL_FEEDS,
   parseOfficialFeed,
   boundedText,
@@ -201,52 +197,6 @@ export async function collectMarketFeedback(now = new Date()) {
         }
       } catch {
         failed++;
-      }
-      for (const term of own ? config.keywords : []) {
-        try {
-          await observedCollection(
-            { source: "apple-keyword", target: `${country}:${term}`, appId: app.id },
-            async () => {
-              const results = await client.search(term, country);
-              const rank = keywordRank(results, own!.trackId);
-              const sourceUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=${country}&entity=software&limit=200`;
-              const previous = await save({
-                appId: app.id,
-                kind: "keyword",
-                target: term,
-                country,
-                value: { rank, resultCount: results.length, trackId: own!.trackId },
-                sourceUrl,
-              });
-              const before = previous?.value as { rank?: number | null } | undefined;
-              if (before && significantRankChange(before.rank ?? null, rank)) {
-                const change = describeRankChange(before.rank ?? null, rank);
-                await publishSignal({
-                  dedupeKey: `keyword:${app.id}:${metricDayOf(now)}:${digest(`${country}:${term}`).slice(0, 24)}`,
-                  appId: app.id,
-                  kind: "keyword-change",
-                  title: `${app.displayName} App Store 검색 순위 ${change.direction}`,
-                  observedAt: now,
-                  facts: [
-                    {
-                      id: "rank",
-                      label: boundedEvidenceLabel(
-                        `${country === "kr" ? "한국" : country === "us" ? "미국" : country.toUpperCase()} App Store에서 "${term}" 검색 시 순위`,
-                      ),
-                      value: change.text,
-                      source:
-                        "Apple 검색 API 결과 200개 중 순서 · 실제 기기 화면 순위와 다를 수 있음",
-                    },
-                  ],
-                  sourceRefs: [{ label: "검색 관측", url: sourceUrl }],
-                });
-              }
-              return { value: null, count: results.length };
-            },
-          );
-        } catch {
-          failed++;
-        }
       }
       for (const id of config.competitorAppIds) {
         try {

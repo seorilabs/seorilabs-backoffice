@@ -35,3 +35,12 @@ test("AC-5: 관측 저장 뒤 수집 실패는 재시도 여부를 추정하지 
   assert.match(html, /sea · 결과 목록에 없음 · 최근 수집 실패/);
   assert.doesNotMatch(html, /재시도/);
 });
+
+test("Play 관측 기록에는 수집 활성화나 국가 적용을 단정하지 않는다",()=>{
+  const app={id:"app",displayName:"앱",iosBundle:null,playPackage:"com.example.app",status:"ACTIVE",revision:1,countries:["us"],keywords:["sea"]};
+  const now=new Date("2026-10-28T12:00:00Z"),selection=normalizeKeywordSelection([app],{market:"google-play"},now),history=buildKeywordHistory(app,selection,[],[],now);
+  const noop=()=>{},router:AppRouterInstance={back:noop,forward:noop,refresh:noop,push:noop,replace:noop,prefetch:noop,bfcacheId:"qa"};
+  const html=renderToStaticMarkup(createElement(AppRouterContext.Provider,{value:router},createElement(KeywordRankChart,{apps:[app],app,selection,history,today:selection.day})));
+  const note=html.match(/<p class="text-xs text-neutral-600">(.*?)<\/p>/)?.[1]??"";
+  assert.match(note,/관측 기록/);assert.match(note,/요청 조건/);assert.doesNotMatch(note,/KST 수집/);
+});

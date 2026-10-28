@@ -290,6 +290,17 @@ echo "== worker rollout =="
 apply_image_manifest app-ops-worker.yaml
 wait_for_deployment backoffice-app-ops-worker
 wait_for_deployment backoffice-operator-command-worker
+apply_image_manifest operations-insights-worker.yaml
+wait_for_deployment backoffice-operations-insights
+apply_image_manifest market-feedback-cronjobs.yaml
+apply_image_manifest keyword-collection-cronjob.yaml
+for collector in backoffice-market-feedback backoffice-keyword-collection backoffice-keyword-daily; do
+  collector_image="$(k -n "$namespace" get cronjob "$collector" -o 'jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+  if [ "$collector_image" != "$image" ]; then
+    echo "오류: $collector 이미지 digest가 일치하지 않는다" >&2
+    exit 1
+  fi
+done
 apply_image_manifest repository-discovery-worker.yaml
 wait_for_deployment backoffice-repository-discovery-worker
 

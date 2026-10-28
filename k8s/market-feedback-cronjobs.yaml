@@ -1,4 +1,4 @@
-# 운영 활성화 승인이 필요한 신규 read-only 수집·주간 분석 일정. suspend=true 유지.
+# 운영 중인 일별 수집과 주간 분석, 승인된 검색 위치 보고 일정.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -93,7 +93,7 @@ spec:
   schedule: 20 12 * * *
   startingDeadlineSeconds: 900
   successfulJobsHistoryLimit: 2
-  suspend: true
+  suspend: false
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -184,10 +184,10 @@ spec:
   schedule: 30 1 * * 1
   startingDeadlineSeconds: 900
   successfulJobsHistoryLimit: 2
-  suspend: true
+  suspend: false
 
 ---
-# 일일 App Store 전체 검색 순위표 · 21:40 KST · 승인된 배포 후 활성화
+# 검색 위치 보고: 08:40, 14:40, 21:40 KST
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -293,7 +293,7 @@ spec:
           volumes:
             - emptyDir: {}
               name: tmp
-  schedule: 40 12 * * *
+  schedule: 40 23,5,12 * * *
   startingDeadlineSeconds: 900
   successfulJobsHistoryLimit: 2
-  suspend: true
+  suspend: false

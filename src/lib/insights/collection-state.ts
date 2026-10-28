@@ -1,4 +1,6 @@
 export const SOURCE_STATE_LABELS: Record<string, string> = {
+  unparseable: "해석 불가",
+  not_collected: "미수집",
   observed: "수집됨",
   empty: "자료 없음",
   not_landed: "아직 도착하지 않음",

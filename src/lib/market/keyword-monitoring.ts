@@ -15,6 +15,7 @@ export interface KeywordApp {
   id: string;
   displayName: string;
   iosBundle: string | null;
+  playPackage?: string | null;
   status: string;
   revision: number | null;
   countries: string[];
@@ -38,6 +39,10 @@ interface Attempt {
   completedAt: Date | null;
 }
 export interface KeywordRow {
+  isBrand?: boolean;
+  attemptState?: string;
+  attemptedAt?: string | null;
+  market?: string; source?: string; language?: string; resultCount?: number | null; previousAt?: string | null; observationId?: string;
   appId: string;
   appName: string;
   country: string;
@@ -103,10 +108,9 @@ export function buildKeywordRows(
             `${app.iosBundle}:${country}`,
           );
           let state = "미수집";
-          if (keyword && !["observed", "empty"].includes(keyword.status))
+          if (keyword && !current && !["observed", "empty"].includes(keyword.status))
             state = sourceStateLabel(keyword.status);
-          else if (keyword && current) state = "수집됨";
-          else if (current && !listing) state = "수집됨";
+          else if (current) state = "수집됨";
           else if (listing?.status === "empty") state = "공개 리스팅 미확인";
           else if (listing && !["observed", "empty"].includes(listing.status))
             state = sourceStateLabel(listing.status);
@@ -138,7 +142,10 @@ export function buildKeywordRows(
             term,
             revision: app.revision,
             state,
+            attemptedAt: keyword?.startedAt.toISOString() ?? listing?.startedAt.toISOString() ?? null,
+            attemptState: keyword && !["observed","empty"].includes(keyword.status) ? sourceStateLabel(keyword.status) : undefined,
             rank,
+            resultCount: current ? (current.value as {resultCount?:number}).resultCount ?? null : null, market:"app-store", source:"apple-search-api", language:"en_us",
             rankLabel:
               state === "수집됨"
                 ? rank === null
@@ -150,7 +157,7 @@ export function buildKeywordRows(
             change,
             observedAt:
               state === "수집됨"
-                ? (keyword?.completedAt ?? current?.observedAt ?? null)
+                ? (current?.observedAt ?? null)
                 : (keyword?.startedAt ?? listing?.startedAt ?? null),
             sourceUrl:
               current?.sourceUrl ??

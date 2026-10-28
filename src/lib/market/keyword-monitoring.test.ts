@@ -18,8 +18,9 @@ test("검색 결과 없음은 조회 실패·국가 리스팅 없음과 다르�
   assert.equal(rows[0].rankLabel, "결과 목록에 없음");
   assert.equal(rows[2].state, "공개 리스팅 미확인");
   const failed = buildKeywordRows([app], [observation("2026-10-11", 36)], [attempt("apple-keyword", "kr:키워드", "failed")], "2026-10-11");
-  assert.equal(failed[0].state, "수집 실패");
-  assert.equal(failed[0].rankLabel, "수집 실패");
+  assert.equal(failed[0].state, "수집됨");
+  assert.equal(failed[0].attemptState, "수집 실패");
+  assert.equal(failed[0].rankLabel, "36위");
 });
 test("첫 관측과 순위 변화, 중단 앱을 구분한다", () => {
   const rows = buildKeywordRows([app], [observation("2026-10-11", 36), observation("2026-10-08", 50)], [], "2026-10-11");
