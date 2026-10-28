@@ -4,6 +4,7 @@ import {
   discoverOperationalSignals,
   publishWeeklySignals,
 } from "@/lib/insights/triggers";
+import { collectKeywordRanks } from "@/lib/market/keyword-collector";
 import { collectMarketFeedback } from "@/lib/market/collector";
 import { collectAndroidVitals } from "@/lib/market/android-vitals";
 import { sendDailyKeywordRanks } from "@/lib/market/daily-ranks";
@@ -26,6 +27,10 @@ async function main() {
   if (mode === "keyword-daily") {
     if (process.argv.length > 4) throw Error("INVALID_REPORT_ARGUMENTS");
     await sendDailyKeywordRanks(new Date(), process.argv[3]);
+    return;
+  }
+  if (mode === "keywords") {
+    console.log(await collectKeywordRanks());
     return;
   }
   if (mode === "market") {

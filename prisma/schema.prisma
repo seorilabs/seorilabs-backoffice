@@ -2827,3 +2827,37 @@ enum ConsoleOAuthPhase {
   ACTIVE
   REFRESH_IN_FLIGHT
 }
+
+// 회차의 설정과 작업 목록은 최초 실행 시 고정한다. 기존 일별 이력을 소급 생성하지 않는다.
+model KeywordCollectionBatch {
+  id          String @id @db.VarChar(32)
+  sourceSha   String @db.Char(40)
+  plan        Json
+  startedAt   DateTime @db.DateTime(3)
+  completedAt DateTime? @db.DateTime(3)
+  @@map("keyword_collection_batch")
+}
+
+// 수정·삭제 없이 회차와 행의 고유키로 삽입한다. 실패도 관측 원장에 보존한다.
+model KeywordObservation {
+  id           String @id @db.Char(64)
+  batchId      String @db.VarChar(32)
+  appId        String
+  market       String @db.VarChar(16)
+  source       String @db.VarChar(32)
+  country      String @db.VarChar(2)
+  language     String @db.VarChar(8)
+  term         String @db.VarChar(100)
+  revision     Int
+  sourceSha    String @db.Char(40)
+  observedAt   DateTime @db.DateTime(3)
+  status       String @db.VarChar(24)
+  rank         Int?
+  resultCount  Int?
+  isBrand      Boolean @default(false)
+  sourceUrl    String @db.VarChar(2048)
+  errorCode    String? @db.VarChar(64)
+  @@index([batchId])
+  @@index([appId, market, country, observedAt])
+  @@map("keyword_observation")
+}

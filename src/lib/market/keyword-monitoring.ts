@@ -15,6 +15,7 @@ export interface KeywordApp {
   id: string;
   displayName: string;
   iosBundle: string | null;
+  playPackage?: string | null;
   status: string;
   revision: number | null;
   countries: string[];
@@ -38,6 +39,9 @@ interface Attempt {
   completedAt: Date | null;
 }
 export interface KeywordRow {
+  isBrand?: boolean;
+  attemptState?: string;
+  market?: string; source?: string; language?: string; resultCount?: number | null; previousAt?: string | null; observationId?: string;
   appId: string;
   appName: string;
   country: string;
@@ -103,10 +107,9 @@ export function buildKeywordRows(
             `${app.iosBundle}:${country}`,
           );
           let state = "미수집";
-          if (keyword && !["observed", "empty"].includes(keyword.status))
+          if (keyword && !current && !["observed", "empty"].includes(keyword.status))
             state = sourceStateLabel(keyword.status);
-          else if (keyword && current) state = "수집됨";
-          else if (current && !listing) state = "수집됨";
+          else if (current) state = "수집됨";
           else if (listing?.status === "empty") state = "공개 리스팅 미확인";
           else if (listing && !["observed", "empty"].includes(listing.status))
             state = sourceStateLabel(listing.status);
@@ -138,7 +141,9 @@ export function buildKeywordRows(
             term,
             revision: app.revision,
             state,
+            attemptState: keyword && !["observed","empty"].includes(keyword.status) ? sourceStateLabel(keyword.status) : undefined,
             rank,
+            resultCount: current ? (current.value as {resultCount?:number}).resultCount ?? null : null, market:"app-store", source:"apple-search-api", language:"en_us",
             rankLabel:
               state === "수집됨"
                 ? rank === null
@@ -150,7 +155,7 @@ export function buildKeywordRows(
             change,
             observedAt:
               state === "수집됨"
-                ? (keyword?.completedAt ?? current?.observedAt ?? null)
+                ? (current?.observedAt ?? null)
                 : (keyword?.startedAt ?? listing?.startedAt ?? null),
             sourceUrl:
               current?.sourceUrl ??
@@ -202,7 +207,7 @@ export async function keywordMonitoring(
     };
   });
   const ids = apps.map((app) => app.id);
-  const [history, attempts] = await Promise.all([
+  const [history, legacyAttempts, cycleAttempts] = await Promise.all([
     prisma.marketObservation.findMany({
       where: {
         kind: "keyword",
@@ -222,7 +227,9 @@ export async function keywordMonitoring(
         },
       },
     }),
+    prisma.keywordObservation.findMany({where:{appId:{in:ids},market:"app-store",source:"apple-search-api",language:"en_us",observedAt:{gte:metricDayStart(day),lt:metricDayStart(shiftMetricDay(day,1)),lte:now}}}),
   ]);
+  const attempts = [...legacyAttempts,...cycleAttempts.map(row=>({appId:row.appId,source:"apple-keyword",target:row.country+":"+row.term,status:["observed","absent"].includes(row.status)?"observed":row.status,startedAt:row.observedAt,completedAt:row.observedAt}))];
   const rows = buildKeywordRows(apps, history, attempts, day);
   return {
     day,

@@ -1,3 +1,4 @@
+import { marketLabel } from "@/lib/market/keyword-cycle";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -38,16 +39,16 @@ export default async function Page({
         >
           <h2 className="text-xl font-semibold">{rankConclusion(item)}</h2>
           <p className="my-3">
-            {item.previousDay} {rankValue(item.previousRank)} → {report.day}{" "}
+            {item.previousAt ?? item.previousDay ?? "이전 관측 없음"} {item.previousDay ? rankValue(item.previousRank) + " → " : ""} {item.observedAt ?? report.day}{" "}
             {rankValue(item.rank)}
           </p>
           <p>
-            국가 {item.country.toUpperCase()} · 검색어 {item.term}
+            {marketLabel(item.market)}, {item.country.toUpperCase()}{item.market === "google-play" ? " 설정 요청" : ""}, 검색어 {item.term}, {item.source ?? "apple-search-api"}, 반환 {item.resultCount ?? "미기록"}개
           </p>
         </section>
       ))}
       <p>
-        검색 API 최대 200개 결과의 위치입니다. 검색 유입이나 매출의 증가는
+        출처별 반환 목록의 위치입니다. Google Play 국가는 요청 조건입니다. 검색 유입이나 매출의 증가는
         뜻하지 않습니다. 목록 밖과 미수집은 선으로 연결하지 않습니다.
       </p>
       <details open>
@@ -81,7 +82,7 @@ export default async function Page({
           <thead>
             <tr>
               <th>앱</th>
-              <th>국가·검색어</th>
+              <th>마켓, 출처, 반환 개수</th><th>국가·검색어</th>
               <th>기준일 순위</th>
               <th>이전 관측·순위</th>
             </tr>
@@ -90,9 +91,9 @@ export default async function Page({
             {report.rows.map((r, i) => (
               <tr className="border-t" key={i}>
                 <td className="p-2">{r.appName}</td>
-                <td>
+                <td>{marketLabel(r.market)}, {r.source ?? "apple-search-api"}, {r.resultCount ?? "미기록"}개</td><td>
                   <Link
-                    href={`/feedback/keywords?app=${encodeURIComponent(r.appId)}&country=${encodeURIComponent(r.country)}&term=${encodeURIComponent(r.term)}&date=${report.day}&days=30`}
+                    href={`/feedback/keywords?app=${encodeURIComponent(r.appId)}&country=${encodeURIComponent(r.country)}&term=${encodeURIComponent(r.term)}&date=${report.day}&days=30&market=${r.market ?? "app-store"}`}
                   >
                     {r.country.toUpperCase()} · {r.term}
                   </Link>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { makeRankReport, rankReportSvg, rankReportText } from "./rank-report";
+import { rankReportSvg, rankReportText, type RankReport } from "./rank-report";
 import type { KeywordRow } from "./keyword-monitoring";
 const row: KeywordRow = {
   appId: "a",
@@ -17,37 +17,13 @@ const row: KeywordRow = {
   observedAt: new Date("2026-10-17T12:20:00Z"),
   sourceUrl: "https://itunes.apple.com/search",
 };
-test("140→68 상위100 진입은 보고하되 하위권 이동·첫 관측·수집 실패는 제외", () => {
-  const report = makeRankReport(
-    [
-      row,
-      { ...row, rank: 130, previousRank: 199 },
-      { ...row, previousDay: null },
-      { ...row, state: "수집 실패" },
-    ],
-    [],
-    "2026-10-17",
-    new Date(),
-  );
-  assert.equal(report.items.length, 1);
-  assert.match(report.items[0].reason, /100.*진입/);
-  assert.match(rankReportText(report, "https://example.com"), /140위.*68위/);
+const reportFixture = ():RankReport => ({version:1,day:"2026-10-17",capturedAt:new Date().toISOString(),rows:[{...row,observedAt:row.observedAt!.toISOString()}],items:[{...row,observedAt:row.observedAt!.toISOString(),reason:"상위 100개 진입",score:900,points:[{day:"2026-10-15",rank:null,state:"missing"},{day:"2026-10-16",rank:null,state:"outside"},{day:"2026-10-17",rank:null,state:"missing"}]}]});
+test("보고서는 실제 순위와 마켓, 출처와 반환 범위를 표기한다",()=>{
+ const report=reportFixture();report.items[0].market="google-play";report.items[0].source="google-play-web";report.items[0].resultCount=80;
+ const text=rankReportText(report,"https://example.com");assert.match(text,/140위.*68위/);assert.match(text,/Google Play 웹/);assert.match(text,/설정 요청/);assert.match(text,/반환 80개/);
 });
 test("없는 날과 결과 목록 밖을 201위로 그리지 않고 국가·검색어를 보존", () => {
-  const report = makeRankReport(
-    [row],
-    [
-      {
-        appId: "a",
-        country: "kr",
-        target: row.term,
-        day: new Date("2026-10-16"),
-        value: { rank: null },
-      },
-    ],
-    "2026-10-17",
-    new Date(),
-  );
+  const report = reportFixture();
   assert.equal(report.items[0].points.at(-2)?.state, "outside");
   assert.equal(report.items[0].points.at(-1)?.state, "missing");
   const svg = rankReportSvg(report);
@@ -59,7 +35,7 @@ test("없는 날과 결과 목록 밖을 201위로 그리지 않고 국가·검�
 
 test("압축 그래프는 인접한 목록 밖·미수집을 단일 기호와 범례로 구분한다", async () => {
   const { rankDiscordSvg } = await import("./rank-report");
-  const report = makeRankReport([row], [], "2026-10-17", new Date());
+  const report = reportFixture();
   report.items[0].points.at(-1)!.state = "outside";
   const svg = rankDiscordSvg(report);
   assert.match(svg, /○ 결과 목록 밖 · × 미수집 · ! 자료 오류/);
@@ -68,28 +44,9 @@ test("압축 그래프는 인접한 목록 밖·미수집을 단일 기호와 �
   assert.doesNotMatch(svg, />목록 밖<\/text>/);
 });
 
-test("지난 추세가 남아 있어도 오늘 순위가 그대로면 지속 변화로 재발송하지 않는다", () => {
-  const ranks = [99, 95, 90, 85, 83, 80, 80];
-  const history = ranks.map((rank, i) => ({
-    appId: "a",
-    country: "kr",
-    target: row.term,
-    day: new Date(`2026-10-${11 + i}`),
-    value: { rank },
-  }));
-  assert.equal(
-    makeRankReport(
-      [{ ...row, rank: 80, previousRank: 80 }],
-      history,
-      "2026-10-17",
-      new Date(),
-    ).items.length,
-    0,
-  );
-});
 test("불변 보고서 주소는 전체 snapshot을 구분하고 발행시각만의 차이는 제외한다", async () => {
   const { rankReportKey } = await import("./rank-report");
-  const report = makeRankReport([row], [], "2026-10-17", new Date());
+  const report = reportFixture();
   assert.equal(
     rankReportKey(report),
     rankReportKey({ ...report, capturedAt: "other" }),

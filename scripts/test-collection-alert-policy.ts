@@ -1,3 +1,5 @@
+import { keywordCycle } from "@/lib/market/keyword-cycle";
+import { keywordObservationId, saveKeywordObservation } from "@/lib/market/keyword-collector";
 import assert from "node:assert/strict";
 import { shiftMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
@@ -21,7 +23,7 @@ async function main() {
   policyDay = shiftMetricDay(
     policyDay,
     await prisma.notificationEvent.count({
-      where: { dedupeKey: { startsWith: "keyword-report-day:" } },
+      where: { dedupeKey: { startsWith: "keyword-report-cycle:" } },
     }),
   );
   const fixtureSuffix=Date.now();
@@ -224,6 +226,10 @@ async function main() {
         sourceUrl: "https://itunes.apple.com/search",
       })),
     });
+    const cycle=keywordCycle(at(170));
+    const task={appId:app.id,market:"app-store" as const,country:"kr",language:"en_us",term:"해전",revision:1,identity:app.iosBundle!};
+    await prisma.keywordCollectionBatch.create({data:{id:cycle.id,sourceSha:"a".repeat(40),startedAt:cycle.start,completedAt:at(161),plan:[task]}});
+    await saveKeywordObservation({id:keywordObservationId(cycle.id,task),batchId:cycle.id,appId:app.id,market:task.market,source:"apple-search-api",country:"kr",language:"en_us",term:task.term,revision:1,sourceSha:"a".repeat(40),observedAt:at(160),status:"observed",rank:36,resultCount:200,sourceUrl:"https://itunes.apple.com/search"});
     outgoing.length = 0;
     const daily = await sendDailyKeywordRanks(at(170));
     await drainAllNotifications(100);
