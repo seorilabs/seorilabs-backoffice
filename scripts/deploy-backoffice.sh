@@ -108,7 +108,8 @@ deployment_matches_image() {
   unavailable="${unavailable:-0}"
 
   [ "${observed:-0}" -ge "${generation:-1}" ] &&
-    [ "$desired" -gt 0 ] &&
+    # 분석 worker는 운영 정책상 중지 상태(0)를 허용한다. 나머지 workload는 실제 가용 복제본을 요구한다.
+    { [ "$desired" -gt 0 ] || { [ "$deployment" = backoffice-operations-insights ] && [ "$desired" -eq 0 ]; }; } &&
     [ "$replicas" -eq "$desired" ] &&
     [ "$updated" -eq "$desired" ] &&
     [ "$ready" -eq "$desired" ] &&
