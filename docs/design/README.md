@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-10-28 | [검색 순위 수집 확대와 Google Play 관측 v1](2026-10-28-keyword-frequency-and-play/design.md) — 사람 검토 대기, 하루 3회 보고와 검색어 확대, L1 서비스 검증과 운영 반영 제안 | 구현 전 |
 | 2026-10-24 | [배치모니터링 채널과 실행 결과 카드 v1](2026-10-24-batch-monitoring/design.md) — 사용자 “승인한다.”, 승인 커밋 `083904c`, L1 서비스 검증과 운영 반영 | [#530](https://github.com/seorilabs/seorilabs-backoffice/issues/530) |
 | 2026-10-22 | [예약 작업 실패 대응](2026-10-22-cron-failures/design.md) — 사용자 수정 지시 승인, L1 서비스 검증과 운영 반영 | [#522](https://github.com/seorilabs/seorilabs-backoffice/issues/522) |
 | 2026-10-19 | [건별 알림과 리뷰 일간 통계](2026-10-19-direct-notifications/design.md) — 사용자 직접 지시, 운영 UID와 11시 통계 선택, L1 서비스 검증과 운영 반영 | [#520](https://github.com/seorilabs/seorilabs-backoffice/issues/520) |
