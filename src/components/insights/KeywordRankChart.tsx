@@ -78,7 +78,7 @@ export function KeywordRankChart({ apps, app, selection, history, today }: {
   const statusSeries = history.series.find(series => series.term === statusTerm) ?? history.series[0];
   const latestSeriesPoints = statusSeries?.points.slice(-7) ?? [];
   return <div className="space-y-4" aria-busy={busy}>
-    <p className="text-xs text-neutral-600">{marketLabel(selection.market)} · 07:20, 13:20, 20:20 KST 수집 · 반환된 목록의 순서입니다. {selection.market === "google-play" ? "국가는 요청 조건이며 적용 여부는 미확인입니다." : "Apple 검색 API 최대 200개, 실제 기기 화면과 다를 수 있습니다."}</p>
+    <p className="text-xs text-neutral-600">{selection.market === "google-play" ? "Google Play 웹 관측 기록입니다. 반환된 목록의 순서이며, 국가는 요청 조건으로 적용 여부는 미확인입니다." : "App Store · 07:20, 13:20, 20:20 KST 수집 · Apple 검색 API 최대 200개 결과의 순서로, 실제 기기 화면과 다를 수 있습니다."}</p>
     {selection.notice && <p role="status" className="text-sm text-amber-800">입력값을 확인해 조회 가능한 앱·국가·기간으로 바꿨습니다.</p>}
     <div className="flex flex-wrap items-end gap-3">
       <label className="grid min-w-0 flex-[1_1_8rem] gap-1 text-sm">마켓<select aria-label="마켓" className={filterControl} value={selection.market ?? "app-store"} disabled={busy} onChange={event => navigate({market:event.target.value as KeywordMarket})}><option value="app-store">App Store</option><option value="google-play">Google Play 웹</option></select></label>
