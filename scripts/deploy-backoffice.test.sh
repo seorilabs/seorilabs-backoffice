@@ -134,6 +134,10 @@ if [[ "$args" == *"-n data get deployment/vault-indexer "* || "$args" == *"-n da
 fi
 
 if [[ "$args" == *" get deployment/"* && "$args" == *"jsonpath="* ]]; then
+  if [[ "$args" == *"get deployment/backoffice-operations-insights "* && "${FAKE_INSIGHTS_PAUSED:-false}" = true ]]; then
+    printf '1|1|0|0|0|0|0||%s,' "$BACKOFFICE_IMAGE"
+    exit 0
+  fi
   count=0
   [ ! -f "$FAKE_DEPLOYMENT_COUNTER" ] || count="$(cat "$FAKE_DEPLOYMENT_COUNTER")"
   count=$((count + 1))
@@ -200,6 +204,7 @@ run_deploy() {
   FAKE_KUBECTL_STATE="$state" \
   FAKE_KUBECTL_COUNTER="$counter" \
   FAKE_DEPLOYMENT_COUNTER="$deployment_counter" \
+  FAKE_INSIGHTS_PAUSED="${FAKE_INSIGHTS_PAUSED:-false}" \
   FAKE_DEPLOYMENT_STALE_READS="${FAKE_DEPLOYMENT_STALE_READS:-0}" \
   FAKE_MIGRATION_RESULT="$1" \
   FAKE_CATCHUP_CREATE_UNKNOWN="${FAKE_CATCHUP_CREATE_UNKNOWN:-false}" \
@@ -300,6 +305,14 @@ echo "  ok   동일 SHA 재실행은 같은 source-bound desired-state run으로
 [ "$(grep -c '^APPLY_STDIN backoffice-keyword-collection,' "$log")" -eq 2 ]
 [ "$(grep -c '^APPLY_STDIN backoffice-market-feedback,backoffice-weekly-insights,backoffice-keyword-daily,' "$log")" -eq 2 ]
 echo "  ok   검색 수집과 보고 worker 및 CronJob이 같은 배포에 포함된다"
+
+echo "== 중지된 분석 worker는 복제본 0과 같은 digest를 확인한다 =="
+: > "$log"
+FAKE_INSIGHTS_PAUSED=true
+run_deploy Complete >/dev/null
+unset FAKE_INSIGHTS_PAUSED
+grep -q '^APPLY_STDIN backoffice-keyword-collection,' "$log"
+echo "  ok   분석 worker 중지 상태 보존 뒤 수집 일정을 반영한다"
 
 echo "== rollout condition이 먼저 끝나도 새 generation exact state를 기다린다 =="
 : > "$log"
