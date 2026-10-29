@@ -282,8 +282,22 @@ export function operationalInterestCard(
 ): MessageRender {
   const facts = operationalEventFacts(event);
   const failure = isOpsAlert(event.type);
+  const value = (key:string) => {const v=attr(event,key);return typeof v === "number" || typeof v === "string" ? v : null;};
+  const presentation = event.type.startsWith("ad.") ? {
+    title: event.type === "ad.reward.delivered" ? "🎬 광고 보상 지급 완료" : "❌ 광고 보상 지급 실패",
+    fields: [{label:"앱",value:displayName},...(event.type === "ad.reward.delivered" ? [{label:"보상 항목",value:value("rewardKey")},{label:"지급 수량",value:value("rewardAmount")}] : [{label:"오류",value:value("errorCode")}])],
+    ...(failure ? {body:"광고 시청 후 보상이 지급되지 않았습니다. 지급 원장에서 실패와 재시도 결과를 확인하세요."} : {}),
+    context:[`제공사: ${text(event,"provider","미제공")} | 광고 위치: ${text(event,"placementId","미제공")}`],
+    timestamp:event.occurredAt,
+  } : event.type.startsWith("iap.") ? {
+    title: event.type === "iap.granted" ? "💳 결제 권리 지급 완료" : "❌ 결제 완료 처리 실패",
+    fields:[{label:"앱",value:displayName},{label:"주문 구분",value:purchaseEnvironment(event)},{label:"마켓",value:marketLabel(attr(event,"platform"))},...(event.type === "iap.granted" ? [{label:"지급 항목",value:value("entitlementId")}] : [{label:"오류",value:value("errorCode")}])],
+    ...(failure ? {body:"권리 지급 상태와 마켓 완료 상태를 구분해 지급 원장을 확인하세요."} : {}),
+    timestamp:event.occurredAt,
+  } : undefined;
   return {
     text: facts.facts.join("\n"),
+    ...(presentation ? {presentation} : {}),
     embed: {
       title: `${facts.icon} ${displayName} · ${facts.headline}`,
       color: failure ? EMBED_COLOR.FAILURE : EMBED_COLOR.SUCCESS,

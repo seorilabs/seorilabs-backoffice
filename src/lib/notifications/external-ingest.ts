@@ -59,6 +59,7 @@ export async function ingestExternalNotification(
             },
           }
         : {}),
+      ...(payload.presentation ? {presentation: JSON.parse(JSON.stringify(payload.presentation))} : {}),
       source: payload.source,
       externalId: payload.id,
       ...(payload.attachment ? { attachment: payload.attachment } : {}),

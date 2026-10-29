@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { handleOperatorInteraction } from "@/lib/operator/handler";
 import { hasOperatorCapability, interactionChannelKeys, isOperatorScope } from "@/lib/operator/roles";
 import { InteractionResponseType, EPHEMERAL_FLAG } from "@/lib/operator/types";
-import { createChannelMessage, editChannelMessage, renderSlackMessage, type MessageActionRow } from "@/lib/notifications/channel";
+import { createChannelMessage, editChannelMessage, renderSlackMessages, type MessageActionRow } from "@/lib/notifications/channel";
 import { slackApi, respondSlack } from "./api";
 import { normalizeSlackRequest, validateSlackScope, object, type SlackIngress, type SlackContext } from "./normalize";
 
@@ -57,16 +57,18 @@ async function deliverResult(input: SlackIngress, result: Result): Promise<void>
     return;
   }
   const {data,text,options} = resultContent(result);
-  const content = renderSlackMessage(text || "처리했습니다.",options);
+  const contents = renderSlackMessages(text || "처리했습니다.",options);
   const ephemeral = (Number(data.flags ?? 0) & EPHEMERAL_FLAG) !== 0;
   if (result.type === InteractionResponseType.UPDATE_MESSAGE && input.context.messageId) {
     const edited = await editChannelMessage(input.context.channelId,input.context.messageId,text,options);
     if (!edited.ok) throw new Error("SLACK_RESULT_UPDATE_FAILED");
   } else if (input.responseUrl) {
-    if (!await respondSlack(input.responseUrl,{...content,response_type:ephemeral ? "ephemeral" : "in_channel"})) throw new Error("SLACK_RESPONSE_FAILED");
+    for(const content of contents) if (!await respondSlack(input.responseUrl,{...content,response_type:ephemeral ? "ephemeral" : "in_channel"})) throw new Error("SLACK_RESPONSE_FAILED");
   } else if (ephemeral) {
-    const sent = await slackApi("chat.postEphemeral",{channel:input.context.channelId,user:input.context.userId,...content});
-    if (!sent.ok) throw new Error("SLACK_EPHEMERAL_FAILED");
+    for(const content of contents) {
+      const sent = await slackApi("chat.postEphemeral",{channel:input.context.channelId,user:input.context.userId,...content});
+      if (!sent.ok) throw new Error("SLACK_EPHEMERAL_FAILED");
+    }
   } else {
     const sent = await createChannelMessage(input.context.channelId,text,options);
     if (!sent.ok) throw new Error("SLACK_RESULT_DELIVERY_FAILED");

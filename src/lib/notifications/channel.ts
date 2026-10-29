@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { env } from "@/lib/env";
 import { notificationChannelId } from "./destinations";
+import type { MessagePresentation } from "@/lib/slack/presentation";
+import { renderSlackMessages } from "@/lib/slack/message";
+export { renderSlackMessage, renderSlackMessages } from "@/lib/slack/message";
 import { slackApi, type SlackResult } from "@/lib/slack/api";
 
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -11,8 +14,11 @@ export interface MessageActionRow { type: 1; components: MessageButton[] }
 export interface MessageAttachment { filename: string; contentType: string; base64: string }
 export interface MessageEmbed { title?: string; color?: number; url?: string; footer?: string; timestamp?: string }
 export interface FileReceipt { checksum: string; fileId: string; uploaded: boolean; complete: boolean; messageTs?: string; fileIds: string[] }
+export interface MessagePageReceipt { state: "STARTED" | "CONFIRMED"; messageId?: string }
 export interface MessageOptions {
+  pages?: MessagePageReceipt[]; persistPages?: (pages: MessagePageReceipt[]) => Promise<void>;
   alertRoleId?: string; components?: MessageActionRow[]; attachment?: MessageAttachment; inlineImage?: boolean;
+  presentation?: MessagePresentation;
   plain?: boolean; embed?: MessageEmbed; replyToMessageId?: string; botToken?: string;
   receipt?: FileReceipt; persistReceipt?: (receipt: FileReceipt) => Promise<void>;
   beforeCreate?: () => Promise<boolean>; created?: (result: DeliveryResult) => Promise<void>;
@@ -28,9 +34,8 @@ export function slackText(value: string): string {
   });
   return escape(text).replace(/\*\*([^*]+)\*\*/g,"*$1*").replace(/~~([^~]+)~~/g,"~$1~").replace(/\u0001(\d+)\u0001/g, (_, index: string) => links[Number(index)] ?? "");
 }
-export function splitMessageText(text: string, budget = 40000): string[] {
+export function splitMessageText(text: string): string[] {
   let rest = text.trim();
-  if (rest.length > budget) rest = rest.slice(0, Math.max(0,budget - 24)) + "\n…(길이 제한으로 이하 생략)";
   const chunks: string[] = [];
   while (rest.length > 2800) {
     let end = rest.lastIndexOf("\n",2800);
@@ -39,26 +44,6 @@ export function splitMessageText(text: string, budget = 40000): string[] {
   }
   if (rest) chunks.push(rest);
   return chunks;
-}
-export function renderSlackMessage(text: string, options: MessageOptions = {}): { text: string; blocks: SlackBlock[]; unfurl_links: false; unfurl_media: false } {
-  const blocks: SlackBlock[] = [];
-  const title = options.plain ? undefined : options.embed?.title;
-  if (title) blocks.push({ type: "header", text: { type: "plain_text", text: title.slice(0,150), emoji: true } });
-  for (const chunk of splitMessageText(slackText(text),38000)) blocks.push({ type: "section", text: { type:"mrkdwn",text:chunk,verbatim:true } });
-  if (options.receipt?.fileId && options.inlineImage) blocks.push({ type:"image",slack_file:{id:options.receipt.fileId},alt_text:title ?? options.attachment?.filename ?? "보고서 이미지" });
-  const meta = [options.embed?.footer, options.embed?.timestamp, options.embed?.url].filter(Boolean).join(" | ");
-  if (meta) blocks.push({ type:"context",elements:[{type:"mrkdwn",text:escape(meta).slice(0,2000),verbatim:true}] });
-  if (options.alertRoleId && /^(<@[UW][A-Z0-9]+>\s*)+$/.test(options.alertRoleId)) blocks.push({type:"context",elements:[{type:"mrkdwn",text:options.alertRoleId}]});
-  for (const row of options.components ?? []) {
-    const elements = row.components.filter(button => !button.disabled).map(button => {
-      const label = { type:"plain_text",text:button.label.slice(0,75),emoji:true };
-      if (button.url && /^https:\/\//.test(button.url)) return { type:"button",text:label,url:button.url,action_id:`link:${createHash("sha256").update(button.url).digest("hex").slice(0,20)}` };
-      if (!button.custom_id) return null;
-      return {type:"button",text:label,action_id:button.custom_id,value:button.custom_id,...(button.style === 4 ? {style:"danger"} : button.style === 3 ? {style:"primary"} : {})};
-    }).filter(Boolean);
-    if (elements.length) blocks.push({type:"actions",elements:elements.slice(0,25)});
-  }
-  return { text: `${title ? title + "\n" : ""}${slackText(text)}`.slice(0,40000),blocks:blocks.slice(0,50),unfurl_links:false,unfurl_media:false };
 }
 
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string,unknown> : {}; }
@@ -109,6 +94,44 @@ async function uploadAttachment(channel: string, text: string, options: MessageO
   await options.created?.({ok:true,messageId:receipt.messageTs});
   return {ok:true,messageId:existingMessage ?? receipt.messageTs,receipt};
 }
+/** 연속편은 providerReceipt에 시도를 먼저 기록하고 결과 불명 요청을 재전송하지 않는다. */
+export function messagePageReceipts(value: unknown): MessagePageReceipt[] {
+  if(!Array.isArray(value))return [];
+  return value.flatMap(item => {
+    const page=object(item);
+    return page.state === "STARTED" || page.state === "CONFIRMED" ? [{state:page.state,...(typeof page.messageId === "string" ? {messageId:page.messageId} : {})} as MessagePageReceipt] : [];
+  });
+}
+async function continuationPages(channel:string, rootId:string, messages:ReturnType<typeof renderSlackMessages>, options:MessageOptions):Promise<DeliveryResult> {
+  const receipts=[...(options.pages ?? [])];
+  const save=async()=>{await options.persistPages?.(structuredClone(receipts));};
+  for(let index=1;index<messages.length;index++) {
+    const current=receipts[index-1];
+    if(current?.state === "STARTED")return {ok:false,error:"SLACK_DELIVERY_OUTCOME_UNKNOWN",terminal:true};
+    let result:DeliveryResult;
+    if(current?.messageId) {
+      result=await slackApi("chat.update",{channel,ts:current.messageId,...messages[index]},{token:options.botToken});
+      if(!result.ok)return result;
+      continue;
+    }
+    receipts[index-1]={state:"STARTED"};await save();
+    result=await slackApi("chat.postMessage",{channel,...messages[index],...(options.replyToMessageId ? {thread_ts:options.replyToMessageId} : {})},{token:options.botToken});
+    if(result.ok && !result.messageId)result={ok:false,error:"SLACK_DELIVERY_OUTCOME_UNKNOWN",terminal:true};
+    if(!result.ok) {
+      if(result.error !== "SLACK_DELIVERY_OUTCOME_UNKNOWN"){receipts.splice(index-1,1);await save();}
+      return result;
+    }
+    receipts[index-1]={state:"CONFIRMED",messageId:result.messageId};await save();
+  }
+  // 내용 갱신으로 짧아진 경우 같은 전송의 남은 연속편만 지운다.
+  while(receipts.length>messages.length-1) {
+    const page=receipts.at(-1)!;
+    if(page.state === "STARTED")return {ok:false,error:"SLACK_DELIVERY_OUTCOME_UNKNOWN",terminal:true};
+    if(page.messageId){const deleted=await deleteChannelMessage(channel,page.messageId,options.botToken);if(!deleted.ok && deleted.error !== "message_not_found")return deleted;}
+    receipts.pop();await save();
+  }
+  return {ok:true,messageId:rootId};
+}
 export async function createChannelMessage(channel: string, text: string, options: MessageOptions = {}): Promise<DeliveryResult> {
   if (!/^[CG][A-Z0-9]+$/.test(channel)) return {ok:false,error:"SLACK_CHANNEL_NOT_CONFIGURED",terminal:true};
   if (options.attachment) {
@@ -116,25 +139,29 @@ export async function createChannelMessage(channel: string, text: string, option
     if (!file.ok || !file.messageId) return file;
     return editChannelMessage(channel,file.messageId,text,{...options,attachment:undefined,receipt:file.receipt});
   }
+  const messages=renderSlackMessages(text,options);
   if (options.beforeCreate && !await options.beforeCreate()) return {ok:false,error:"SLACK_DELIVERY_OUTCOME_UNKNOWN",terminal:true};
-  let result = await slackApi("chat.postMessage",{channel,...renderSlackMessage(text,options),...(options.replyToMessageId ? {thread_ts:options.replyToMessageId} : {})},{token:options.botToken});
+  let result = await slackApi("chat.postMessage",{channel,...messages[0],...(options.replyToMessageId ? {thread_ts:options.replyToMessageId} : {})},{token:options.botToken});
   if (result.ok && !result.messageId) result = {ok:false,error:"SLACK_DELIVERY_OUTCOME_UNKNOWN",terminal:true};
   await options.created?.(result);
-  return result;
+  if(!result.ok || !result.messageId)return result;
+  return continuationPages(channel,result.messageId,messages,options);
 }
 export async function editChannelMessage(channel: string, messageId: string, text: string, options: MessageOptions = {}): Promise<DeliveryResult> {
   if (!/^\d+\.\d+$/.test(messageId)) return {ok:false,error:"SLACK_MESSAGE_ID_INVALID",terminal:true};
   let receipt = options.receipt;
   if (options.attachment) {
-    // 삭제된 원본에 새 파일을 먼저 공유하면 복구할 수 없는 첨부가 남는다.
-    const current = await slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,options),...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
+    const current = await slackApi("chat.update",{channel,ts:messageId,...renderSlackMessages(text,options)[0],...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
     if (!current.ok) return current;
     const file = await uploadAttachment(channel,text,options,messageId);
     if (!file.ok) return file;
     receipt = file.receipt;
   }
-  // 인라인 이미지와 file_share의 기본 미리보기가 같은 그래프를 두 번 그리지 않게 한다.
-  return slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,{...options,receipt}),...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
+  const messages=renderSlackMessages(text,{...options,receipt});
+  const result=await slackApi("chat.update",{channel,ts:messageId,...messages[0],...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
+  if(!result.ok)return result;
+  // 기본 파일 미리보기는 원본에서 비우고 마지막 페이지에 이미지를 표시한다.
+  return continuationPages(channel,messageId,messages,options);
 }
 export function deletedMessageReplacement(options: MessageOptions): MessageOptions {
   // 삭제가 확인된 메시지의 공유 영수증은 새 게시에 재사용하지 않는다. 이전 파일 ID는 보존 정리에 남긴다.

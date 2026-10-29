@@ -8,7 +8,7 @@ import {
 import { senderBotToken } from "@/lib/notifications/sender";
 import { senderKey } from "@/lib/notifications/sender";
 import { deleteLegacyDiscordReview } from "./legacy-discord";
-import { fileReceipt } from "./channel";
+import { fileReceipt, messagePageReceipts } from "./channel";
 import { slackApi } from "@/lib/slack/api";
 
 function deletedOrMissing(result: {
@@ -96,10 +96,14 @@ export async function maintainSlackRetention(now = new Date()) {
       deletedNotifications++;
       continue;
     }
-    if (messageId) {
-      const result = await deleteNotification(delivery.destinationKey,messageId,senderBotToken(delivery.event.payload));
-      if (!deletedOrMissing(result)) continue;
+    const pages=messagePageReceipts(receiptObject.pages);
+    if(pages.some(page=>page.state === "STARTED"))continue;
+    let allDeleted=true;
+    for(const id of new Set([messageId,...pages.map(page=>page.messageId)].filter((id):id is string=>!!id))) {
+      const result=await deleteNotification(delivery.destinationKey,id,senderBotToken(delivery.event.payload));
+      if(!deletedOrMissing(result))allDeleted=false;
     }
+    if(!allDeleted)continue;
     let deletedFiles = true;
     for (const file of receipt?.fileIds ?? []) {
       const deleted = await slackApi("files.delete",{file});

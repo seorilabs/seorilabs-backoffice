@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createChannelMessage, deletedMessageReplacement, editChannelMessage, renderSlackMessage, slackText, type FileReceipt } from "./channel";
+import { createChannelMessage, deletedMessageReplacement, editChannelMessage, renderSlackMessage, renderSlackMessages, slackText, type FileReceipt } from "./channel";
 import { isUnreusableCard } from "./deploy";
 import { slackApi } from "@/lib/slack/api";
 
@@ -20,13 +20,13 @@ test("Slack 본문은 임의 멘션을 이스케이프하고 링크와 굵은 �
   assert.equal(JSON.stringify(value).includes('"old"'),false);
   assert.match(JSON.stringify(value),/command:confirm:run/);
 });
-test("Slack 본문과 블록 상한을 지키고 잘린 사실을 남긴다", () => {
-  const value=renderSlackMessage("긴 행\n".repeat(15000));
-  assert.ok(value.blocks.length <= 50);
-  assert.ok(value.text.length <= 40000);
-  for(const block of value.blocks) if(block.type==="section") assert.ok((block.text as {text:string}).text.length <= 3000);
-  assert.match(JSON.stringify(value.blocks),/길이 제한으로 이하 생략/);
+test("긴 Slack 본문은 제한 안에서 이어 보내며 마지막 내용까지 보존한다", () => {
+  const values=renderSlackMessages("긴 행\n".repeat(15000)+"마지막 내용");
+  assert.ok(values.length>1);
+  for(const value of values){assert.ok(value.blocks.length<=50);assert.ok(value.text.length<=40000);}
+  assert.match(values.at(-1)!.text,/마지막 내용/);
 });
+
 test("네이티브 스레드는 같은 채널의 thread_ts를 사용하고 별도 채널을 만들지 않는다",async()=>{
   const original=globalThis.fetch; let url=""; let body:Record<string,unknown>={};
   globalThis.fetch=async(input,init)=>{url=String(input);body=JSON.parse(String(init?.body));return Response.json({ok:true,ts:"1793260000.123456",channel:"CTEST"});};
