@@ -12,6 +12,7 @@ import {
   type DeliveryResult,
   type MessageOptions,
 } from "@/lib/notifications/channel";
+import { storedPresentation } from "@/lib/slack/presentation";
 import { messageRender, type MessageRender } from "@/lib/notifications/format";
 import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import {
@@ -307,6 +308,7 @@ async function deliverIssueThread(
     return { ok: false, error: "부모 이슈 알림 발송 대기 중" };
   return editOrSend(destinationKey,messageId,thread.text,{
     ...deliveryOptions,plain:thread.plain,attachment:thread.attachment,replyToMessageId:parent.providerMessageId,
+    presentation:storedPresentation((payload as Prisma.JsonObject).presentation),
   });
 }
 
