@@ -1,6 +1,6 @@
 # Slack 설정과 전환 상태
 
-확인일: 2026-10-29. Slack 설정과 개발 구현을 완료하고 최종 검수 중이다. 운영 배포, Discord 명령 해제와 자연 수신은 아직 완료하지 않았다.
+확인일: 2026-10-29. 아래는 운영 전환 전의 Slack 설정 확인 기록이다. 최종 운영 상태와 실제 전환 결과는 [실행 이슈 #548](https://github.com/seorilabs/seorilabs-backoffice/issues/548)의 공급자 확인 기록을 따른다.
 
 워크스페이스는 `seorilabs.slack.com` (`T0CCP49NJAK`), 앱은 `Seorilabs Backoffice` (`A0CD8B7CLH2`), 봇은 `seori` (`U0CD4EU0Y4S`)다. 실제 로그인 프로필과 회사 계정을 대조했다. 운영자 Slack ID는 `U0CD2GKL36J`다.
 

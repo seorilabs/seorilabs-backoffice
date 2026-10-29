@@ -148,3 +148,47 @@ test("삭제된 첨부 카드는 새 파일과 메시지로 대체하고 이전 
     assert.equal(oldReceipt.checksum, createHash("sha256").update(bytes).digest("hex"));
   } finally { globalThis.fetch = original; }
 });
+
+test("인라인 그래프는 기본 파일 미리보기만 비우고 일반 첨부는 유지한다", async () => {
+  const original = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "https://slack.com/api/chat.update");
+    const body = JSON.parse(String(init?.body));
+    bodies.push(body);
+    return Response.json({ok:true,ts:body.ts,channel:body.channel});
+  };
+  const receipt: FileReceipt = {checksum:"png-hash",fileId:"FCHART",uploaded:true,complete:true,messageTs:"2200000000.000001",fileIds:["FCHART"]};
+  try {
+    assert.equal((await editChannelMessage("CTEST","2200000000.000001","그래프",{botToken:"test",inlineImage:true,receipt})).ok,true);
+    assert.deepEqual(bodies[0].file_ids,[]);
+    assert.equal((bodies[0].blocks as {type:string}[]).filter(block=>block.type==="image").length,1);
+    assert.equal((await editChannelMessage("CTEST","2200000000.000001","CSV 첨부",{botToken:"test",inlineImage:false,receipt})).ok,true);
+    assert.equal(Object.hasOwn(bodies[1],"file_ids"),false);
+    assert.equal((bodies[1].blocks as {type:string}[]).filter(block=>block.type==="image").length,0);
+  } finally { globalThis.fetch=original; }
+});
+
+test("첨부 교체가 실패해도 원본 그래프 블록을 유지하고 새 게시를 만들지 않는다", async () => {
+  const original=globalThis.fetch;
+  const updates: Record<string,unknown>[]=[];
+  const receipt:FileReceipt={checksum:"old",fileId:"FOLD",uploaded:true,complete:true,messageTs:"2200000000.000001",fileIds:["FOLD"]};
+  globalThis.fetch=async(input,init)=>{
+    const url=String(input);
+    if(url.endsWith('chat.update')){
+      const body=JSON.parse(String(init?.body));updates.push(body);
+      return Response.json({ok:true,ts:body.ts,channel:body.channel});
+    }
+    if(url.endsWith('files.getUploadURLExternal'))return Response.json({ok:true,file_id:"FNEW",upload_url:"https://files.slack.com/upload/replace"});
+    if(url==='https://files.slack.com/upload/replace')throw new TypeError('synthetic upload interruption');
+    throw new Error('새 메시지를 게시하면 안 됨');
+  };
+  try {
+    const result=await editChannelMessage('CTEST','2200000000.000001','정정',{botToken:'test',inlineImage:true,receipt,attachment:{filename:'new.png',contentType:'image/png',base64:Buffer.from('new').toString('base64')}});
+    assert.equal(result.error,'SLACK_DELIVERY_OUTCOME_UNKNOWN');
+    assert.equal(updates.length,1);
+    assert.equal(updates[0].ts,'2200000000.000001');
+    assert.deepEqual((updates[0].blocks as {type:string;slack_file?:{id:string}}[]).filter(b=>b.type==='image').map(b=>b.slack_file?.id),['FOLD']);
+    assert.deepEqual(updates[0].file_ids,[]);
+  } finally {globalThis.fetch=original;}
+});

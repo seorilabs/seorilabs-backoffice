@@ -1,7 +1,7 @@
 # Slack 운영 기능 전체 이전
 
 - 설계 버전: 2
-- 상태: 승인, 구현 중
+- 상태: 승인
 - 기준 소스: `ea965a5a2a6512e4e07ac158a65133e16b9c0316`
 - 승인: 사용자가 설계 커밋 `585279e`를 검토하고 “승인한다. 모두 이전해라.”라고 지시했다. 알림 시험 범위를 모든 Backoffice 운영 기능의 Slack 전환으로 확대한 직접 지시다.
 - 운영 대상: `https://seorilabs.slack.com`, 워크스페이스 `T0CCP49NJAK`, 앱 `A0CD8B7CLH2`, 회사 계정 `ih@seorilabs.com`.

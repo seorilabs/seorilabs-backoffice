@@ -127,13 +127,14 @@ export async function editChannelMessage(channel: string, messageId: string, tex
   let receipt = options.receipt;
   if (options.attachment) {
     // 삭제된 원본에 새 파일을 먼저 공유하면 복구할 수 없는 첨부가 남는다.
-    const current = await slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,options)},{token:options.botToken});
+    const current = await slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,options),...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
     if (!current.ok) return current;
     const file = await uploadAttachment(channel,text,options,messageId);
     if (!file.ok) return file;
     receipt = file.receipt;
   }
-  return slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,{...options,receipt})},{token:options.botToken});
+  // 인라인 이미지와 file_share의 기본 미리보기가 같은 그래프를 두 번 그리지 않게 한다.
+  return slackApi("chat.update",{channel,ts:messageId,...renderSlackMessage(text,{...options,receipt}),...(options.inlineImage && receipt?.fileId ? {file_ids:[]} : {})},{token:options.botToken});
 }
 export function deletedMessageReplacement(options: MessageOptions): MessageOptions {
   // 삭제가 확인된 메시지의 공유 영수증은 새 게시에 재사용하지 않는다. 이전 파일 ID는 보존 정리에 남긴다.
