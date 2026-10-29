@@ -5,6 +5,7 @@ import { handleOperatorInteraction } from "@/lib/operator/handler";
 import { hasOperatorCapability, interactionChannelKeys, isOperatorScope } from "@/lib/operator/roles";
 import { InteractionResponseType, EPHEMERAL_FLAG } from "@/lib/operator/types";
 import { createChannelMessage, editChannelMessage, renderSlackMessages, type MessageActionRow } from "@/lib/notifications/channel";
+import { respondSlackPages } from "./result-delivery";
 import { slackApi, respondSlack } from "./api";
 import { normalizeSlackRequest, validateSlackScope, object, type SlackIngress, type SlackContext } from "./normalize";
 
@@ -46,7 +47,7 @@ function resultContent(result: Result) {
   const text = [typeof data.content === "string" ? data.content : "",...embeds.map(embed => String(object(embed).description ?? ""))].filter(Boolean).join("\n\n");
   return {data,text,options:{components:(Array.isArray(data.components) ? data.components : []) as MessageActionRow[]}};
 }
-export async function deliverResult(input: SlackIngress, result: Result): Promise<void> {
+async function deliverResult(input: SlackIngress, result: Result): Promise<void> {
   if (result.type === InteractionResponseType.MODAL) {
     const opened = await slackApi("views.open",{trigger_id:input.triggerId,view:operatorView(input,result.data)});
     if (!opened.ok) await respondToUser(input,"입력창을 열지 못했습니다. 명령을 다시 실행하세요.");
@@ -63,14 +64,7 @@ export async function deliverResult(input: SlackIngress, result: Result): Promis
     const edited = await editChannelMessage(input.context.channelId,input.context.messageId,text,options);
     if (!edited.ok) throw new Error("SLACK_RESULT_UPDATE_FAILED");
   } else if (input.responseUrl) {
-    for(const [index,content] of contents.entries()) {
-      if(index<5) {
-        if(!await respondSlack(input.responseUrl,{...content,response_type:ephemeral ? "ephemeral" : "in_channel",...(contents.length>1 ? {replace_original:false} : {})}))throw new Error("SLACK_RESPONSE_FAILED");
-      } else {
-        const sent=await slackApi(ephemeral ? "chat.postEphemeral" : "chat.postMessage",{channel:input.context.channelId,...(ephemeral ? {user:input.context.userId} : {}),...content});
-        if(!sent.ok)throw new Error("SLACK_RESPONSE_FAILED");
-      }
-    }
+    await respondSlackPages(input.responseUrl,contents,input.context,ephemeral);
   } else if (ephemeral) {
     for(const content of contents) {
       const sent = await slackApi("chat.postEphemeral",{channel:input.context.channelId,user:input.context.userId,...content});
