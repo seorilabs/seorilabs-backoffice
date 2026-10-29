@@ -19,7 +19,7 @@ function harness(changed: boolean) {
     dailyReportImage: async () => { images++; return null; },
     reportCorrectionDiff: () => [], saveOrgReport: async () => ({ version: 4 }),
     orgReportUrl: () => null, enqueueNotification: async () => "event", requeueNotification: async () => 1,
-    renderDailyEdition: () => "fixture report", discordDestinations: () => [], SEORI_SENDER: {},
+    renderDailyEdition: () => "fixture report", notificationDestinations: () => [], SEORI_SENDER: {},
   };
   const correct = new Function(...Object.keys(ports), `${compiled}; return correctDailyReport;`)(...Object.values(ports));
   return { correct, images: () => images, transactions: () => transactions };

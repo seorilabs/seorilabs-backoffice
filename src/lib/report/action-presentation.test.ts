@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { actionDeduplicationKey, discordActionLines } from "./action-presentation";
+import { actionDeduplicationKey, messageActionLines } from "./action-presentation";
 test("정책 제외 앱이 앞서도 등록 이슈·입력 과제를 상태와 함께 우선 표시한다", () => {
-  const lines = discordActionLines([
+  const lines = messageActionLines([
     ...["A", "B", "C"].map((appName) => ({ appName, title: "정책 제외", status: "excluded" as const, url: null })),
     { appName: "Z", title: "검증된 개선", status: "registered", url: "https://github.com/seorilabs/example/issues/1" },
     { appName: "D", title: "필수 라벨 확인", status: "needs_input", url: null },

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "ea965a5a2a6512e4e07ac158a65133e16b9c0316",
+  "changedFeatures": [
+    "notification-outbox-report-visuals-and-retention",
+    "metric-report-highlights-finance-liveops",
+    "store-submission-review-collection",
+    "operations-batch-reporting",
+    "discord-command-registration-and-deferred-reads",
+    "discord-operator-confirmation-and-deployment-approval",
+    "auth-and-app-rbac",
+    "issues-planning-and-stage-transitions",
+    "ai-draft-generation-and-github-registration",
+    "release-build-and-dispatch",
+    "vault-search-ai-and-writer"
+  ],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": true,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["service"],
+    "until": "public"
+  }
+}

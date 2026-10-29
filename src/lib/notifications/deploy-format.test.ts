@@ -20,7 +20,7 @@ test("deploy-all 실패 카드는 마켓 업로드 미진행을 명시한다", (
   assert.equal(card.embed?.title, "🚀 내 도마뱀 키우기 v1.1.6 · 전체 마켓 배포");
   assert.equal(card.embed?.color, EMBED_COLOR.FAILURE);
   assert.equal(card.embed?.url, "https://github.com/seorilabs/lizard-tycoon/actions/runs/32197982643");
-  // 갱신 시각은 본문이 아니라 상자 하단에 Discord 가 렌더한다.
+  // 갱신 시각은 본문이 아니라 상자 하단에 Slack 가 렌더한다.
   assert.equal(card.embed?.timestamp, AT.toISOString());
   assert.doesNotMatch(card.text, /마지막 갱신/);
   assert.match(card.text, /배포 워크플로: ❌ 실패/);

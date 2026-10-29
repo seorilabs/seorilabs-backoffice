@@ -102,6 +102,10 @@
     "20261018010000_console_partial_metrics": {
       "sha256": "bbbc818199c09d16b5d05638e2ba5e3ac0ff3104c311eb9adbc826717e1c0f8f",
       "reason": "#485 사용자 결측 지표 건너뛰기 수정 지시: 숫자 7개 열의 NULL 허용 확대와 기본값 제거만 수행한다. 행·키·기존 숫자·과거 0은 보존한다. MODIFY를 쓰는 MySQL nullable 확대이며 축소·삭제·backfill은 없다. 격리 MySQL에서 기존 값 보존과 기존 writer 호환성을 검증한다."
+    },
+    "20261029000000_slack_operations": {
+      "sha256": "c1fea6aac772c4a34c386d99a0b07c96345119d3e4bf75ae780f25327420227e",
+      "reason": "2026-10-29 사용자 승인: Slack 전체 운영 이전. 기존 DISCORD enum 값과 행, 물리 컬럼을 유지하고 SLACK 값과 nullable 전송 영수증, provider 구분 및 Slack 전용 표만 추가한다. enum의 호환 확장을 위한 정확한 MODIFY SQL이며 데이터 삭제나 기존 enum 축소는 없다."
     }
   },
   "legacy": {

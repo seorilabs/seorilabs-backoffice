@@ -15,7 +15,7 @@ export async function resolveReportEvidence(
       id: { in: facts.map((f) => f.value) },
       kind: "STORE_REVIEW",
       createdAt: {
-        gte: new Date(Date.now() - env.discordRetentionDays() * 86400000),
+        gte: new Date(Date.now() - env.reviewRetentionDays() * 86400000),
       },
     },
     select: { id: true, payload: true },

@@ -81,11 +81,11 @@ export async function requeueNotification(
   db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
 ): Promise<number> {
   await db.notificationDelivery.updateMany({
-    where: { eventId, status: "PROCESSING" },
+    where: { eventId, provider: "SLACK", status: "PROCESSING" },
     data: { refreshRequested: true },
   });
   const result = await db.notificationDelivery.updateMany({
-    where: { eventId, status: { in: ["SENT", "DEAD_LETTER", "SUPPRESSED"] } },
+    where: { eventId, provider: "SLACK", status: { in: ["SENT", "DEAD_LETTER", "SUPPRESSED"] } },
     data: {
       status: "PENDING",
       attempts: 0,
@@ -105,7 +105,7 @@ export async function retryDeadLetterNotification(
   db: Pick<Prisma.TransactionClient, "notificationDelivery"> = prisma,
 ) {
   return db.notificationDelivery.updateMany({
-    where: { eventId, status: "DEAD_LETTER" },
+    where: { eventId, provider: "SLACK", status: "DEAD_LETTER" },
     data: {
       status: "PENDING",
       attempts: 0,
@@ -150,6 +150,8 @@ export function isTerminalFailure(
 export async function drainNotifications(
   limit: number,
   deliver: (input: {
+    deliveryId: string;
+    providerReceipt: Prisma.JsonValue | null;
     kind: NotificationKind;
     destinationKey: string;
     payload: Prisma.JsonValue;
@@ -167,13 +169,14 @@ export async function drainNotifications(
     const now = new Date();
     await prisma.notificationDelivery.updateMany({
       where: {
+        provider: "SLACK",
         status: "PROCESSING",
         updatedAt: { lt: new Date(now.getTime() - 10 * 60_000) },
       },
       data: { status: "PENDING", nextAttemptAt: now },
     });
     const rows = await prisma.notificationDelivery.findMany({
-      where: { status: "PENDING", nextAttemptAt: { lte: now } },
+      where: { provider: "SLACK", status: "PENDING", nextAttemptAt: { lte: now } },
       orderBy: { createdAt: "asc" },
       take: limit,
       include: { event: true },
@@ -309,6 +312,8 @@ export async function drainNotifications(
         continue;
       }
       const result = await deliver({
+        deliveryId: row.id,
+        providerReceipt: row.providerReceipt,
         kind: row.event.kind,
         destinationKey: row.destinationKey,
         payload,
@@ -397,7 +402,7 @@ export async function enqueueEditableNotification(
       select: {
         id: true,
         payload: true,
-        deliveries: { select: { status: true } },
+        deliveries: { where: { provider: "SLACK" }, select: { status: true } },
       },
     });
     const id = await enqueueNotification(input, tx);

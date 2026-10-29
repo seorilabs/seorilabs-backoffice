@@ -8,7 +8,7 @@ import {
 } from "@/lib/domain/app-visibility";
 import { llmChatConfigured } from "@/lib/ai/llm";
 import { getOrgDefaultBranches } from "@/lib/github/read";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import {
   filterDefaultBranchMerges,
@@ -173,7 +173,7 @@ export async function sendDailyDigest(now: Date): Promise<DailyDigestResult> {
       },
       embed: { color: EMBED_COLOR.INFO },
     },
-    destinations: discordDestinations(["backoffice"]),
+    destinations: notificationDestinations(["backoffice"]),
   });
   return {
     date: window.label,

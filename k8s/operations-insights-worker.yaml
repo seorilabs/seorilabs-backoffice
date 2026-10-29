@@ -22,6 +22,11 @@ spec:
           image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
           command: ["node", "/app/scripts-dist/operations-insights-worker.cjs"]
           env:
+            - { name: SLACK_ENABLED, value: "true" }
+            - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
+            - { name: SLACK_WORKSPACE_ID, value: "T0CCP49NJAK" }
+            - { name: SLACK_ROLE_OPERATIONS_ADMIN_USERS, value: "U0CD2GKL36J" }
+            - { name: SLACK_ROLE_RELEASE_OPS_USERS, value: "U0CD2GKL36J" }
             - name: INSIGHTS_WORKER_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: HOME, value: "/tmp"}
@@ -32,18 +37,18 @@ spec:
             - {name: CLAUDE_CHAT_TIMEOUT_MS, value: "180000"}
             - {name: INSIGHTS_DAILY_LIMIT, value: "200"}
             # 알림 생산자는 공개 채널 설정만 읽고 전송 토큰은 받지 않는다.
-            - name: DISCORD_CHANNEL_APP_OPS_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true}}
-            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID}}
-            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID}}
-            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID}}
-            - name: DISCORD_CHANNEL_USER_REVIEWS_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true}}
-            - name: DISCORD_CHANNEL_BACKOFFICE_ID
-              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID}}
+            - name: SLACK_CHANNEL_APP_OPS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_APP_OPS_ID, optional: true}}
+            - name: SLACK_CHANNEL_METRICS_DAILY_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_METRICS_DAILY_ID}}
+            - name: SLACK_CHANNEL_RELEASE_OPS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_RELEASE_OPS_ID}}
+            - name: SLACK_CHANNEL_OPS_ALERTS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_OPS_ALERTS_ID}}
+            - name: SLACK_CHANNEL_USER_REVIEWS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_USER_REVIEWS_ID, optional: true}}
+            - name: SLACK_CHANNEL_BACKOFFICE_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_BACKOFFICE_ID}}
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: backoffice-secrets, key: DATABASE_URL}}
             - name: CLAUDE_API_KEY_IH

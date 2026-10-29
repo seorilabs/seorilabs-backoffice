@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  MAX_DISCORD_ATTACHMENT_BASE64_CHARS,
+  MAX_CHANNEL_ATTACHMENT_BASE64_CHARS,
   notificationSubject,
   parseExternalNotification,
   routeFromNotificationSubject,
@@ -33,12 +33,12 @@ test("외부 알림 payload를 엄격 검증한다", () => {
     attachment: {
       filename: "oversized.bin",
       contentType: "application/octet-stream",
-      base64: "A".repeat(MAX_DISCORD_ATTACHMENT_BASE64_CHARS + 1),
+      base64: "A".repeat(MAX_CHANNEL_ATTACHMENT_BASE64_CHARS + 1),
     },
   }));
 });
 
-test("외부 알림은 같은 producer의 부모 알림 아래 Discord 쓰레드를 지정할 수 있다", () => {
+test("외부 알림은 같은 producer의 부모 알림 아래 Slack 쓰레드를 지정할 수 있다", () => {
   const payload = parseExternalNotification({
     version: 1,
     id: "review:entry:1",

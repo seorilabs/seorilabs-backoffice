@@ -1,18 +1,18 @@
 import { z } from "zod";
-import { MAX_DISCORD_ATTACHMENT_BYTES } from "@/lib/notifications/discord";
+import { MAX_ATTACHMENT_BYTES } from "@/lib/notifications/channel";
 import {
-  DISCORD_PRIVATE_FEED,
-  DISCORD_SEORI_REVIEW,
-  type DiscordDestinationKey,
+  CHANNEL_PRIVATE_FEED,
+  CHANNEL_SEORI_REVIEW,
+  type DestinationKey,
 } from "@/lib/notifications/destinations";
 
 export const OPS_NOTIFICATION_SUBJECT_PREFIX = "ops.notification.v1";
-export const MAX_DISCORD_ATTACHMENT_BASE64_CHARS =
-  4 * Math.ceil(MAX_DISCORD_ATTACHMENT_BYTES / 3);
+export const MAX_CHANNEL_ATTACHMENT_BASE64_CHARS =
+  4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3);
 
-const ROUTES = new Set<DiscordDestinationKey>([
-  DISCORD_PRIVATE_FEED,
-  DISCORD_SEORI_REVIEW,
+const ROUTES = new Set<DestinationKey>([
+  CHANNEL_PRIVATE_FEED,
+  CHANNEL_SEORI_REVIEW,
 ]);
 
 const payloadSchema = z
@@ -50,7 +50,7 @@ const payloadSchema = z
           .max(120)
           .regex(/^[^/\\]+$/),
         contentType: z.string().min(1).max(100),
-        base64: z.string().min(1).max(MAX_DISCORD_ATTACHMENT_BASE64_CHARS),
+        base64: z.string().min(1).max(MAX_CHANNEL_ATTACHMENT_BASE64_CHARS),
       })
       .optional(),
     thread: z
@@ -79,17 +79,17 @@ const payloadSchema = z
 
 export type ExternalNotification = z.infer<typeof payloadSchema>;
 
-export function notificationSubject(route: DiscordDestinationKey): string {
+export function notificationSubject(route: DestinationKey): string {
   if (!ROUTES.has(route)) throw new Error(`허용되지 않은 알림 route: ${route}`);
   return `${OPS_NOTIFICATION_SUBJECT_PREFIX}.${route}`;
 }
 
 export function routeFromNotificationSubject(
   subject: string,
-): DiscordDestinationKey | null {
+): DestinationKey | null {
   const prefix = `${OPS_NOTIFICATION_SUBJECT_PREFIX}.`;
   if (!subject.startsWith(prefix)) return null;
-  const route = subject.slice(prefix.length) as DiscordDestinationKey;
+  const route = subject.slice(prefix.length) as DestinationKey;
   return ROUTES.has(route) ? route : null;
 }
 
@@ -99,8 +99,8 @@ export function parseExternalNotification(
   const parsed = payloadSchema.parse(value);
   if (parsed.attachment) {
     const bytes = Buffer.from(parsed.attachment.base64, "base64");
-    if (bytes.length === 0 || bytes.length > MAX_DISCORD_ATTACHMENT_BYTES) {
-      throw new Error("Discord 첨부 크기 제한 초과");
+    if (bytes.length === 0 || bytes.length > MAX_ATTACHMENT_BYTES) {
+      throw new Error("Slack 첨부 크기 제한 초과");
     }
   }
   return parsed;

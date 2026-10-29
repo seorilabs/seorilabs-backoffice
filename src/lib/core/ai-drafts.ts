@@ -112,7 +112,7 @@ export async function createBugDraftCore(input: {
     symptom: input.symptom,
     codebaseContext: codebaseContext || undefined,
   });
-  // 웹과 Discord에서 같은 문서 생성 한도를 사용한다.
+  // 웹과 Slack에서 같은 문서 생성 한도를 사용한다.
   const outputText = await llmComplete({
     system,
     prompt,

@@ -4,7 +4,7 @@ import {
   classifyReviewChange,
   reviewContentHash,
   reviewNotificationDedupeKey,
-  storeReviewDiscordText,
+  storeReviewSlackText,
 } from "@/lib/store-reviews/shape";
 import type { StoreReview } from "@/lib/store-reviews/types";
 
@@ -46,7 +46,7 @@ test("최초 수집은 기준선, 이후 신규·변경·미변경을 notified h
   }), "updated");
 });
 
-test("수정 시각을 포함한 짧은 dedupe key와 한국어 Discord 본문을 만든다", () => {
+test("수정 시각을 포함한 짧은 dedupe key와 한국어 Slack 본문을 만든다", () => {
   const contentHash = reviewContentHash(review);
   const first = reviewNotificationDedupeKey({ appId: "app-1", review, contentHash });
   const revertedLater = reviewNotificationDedupeKey({
@@ -57,7 +57,7 @@ test("수정 시각을 포함한 짧은 dedupe key와 한국어 Discord 본문�
   assert.notEqual(first, revertedLater);
   assert.ok(first.length < 191);
 
-  const text = storeReviewDiscordText({
+  const text = storeReviewSlackText({
     appDisplayName: "해피 *팜*",
     review: { ...review, rating: 5, title: "좋은 [게임]" },
     change: "updated",

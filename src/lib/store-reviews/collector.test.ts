@@ -86,7 +86,7 @@ const apple: StoreReview = {
   sourceModifiedAt: new Date("2026-08-18T00:00:00Z"),
 };
 
-const destination = [{ provider: "DISCORD" as const, key: "user-reviews" as const }];
+const destination = [{ provider: "SLACK" as const, key: "user-reviews" as const }];
 
 test("첫 실행은 기준선만 만들고 다음 신규·변경 리뷰만 enqueue한다", async () => {
   const repository = new MemoryReviewRepository();
@@ -186,7 +186,7 @@ test("user-reviews 채널이 없으면 API 호출과 기준선 생성을 시작�
         return [app];
       },
     }),
-    /Discord 목적지 미설정: user-reviews/,
+    /Slack 목적지 미설정: user-reviews/,
   );
   assert.equal(listed, false);
 });
@@ -412,4 +412,18 @@ test("수정 리뷰 복구 뒤 markNotified 실패도 기존 알림을 다시 �
   assert.equal(retried.enqueued, 0);
   assert.equal(retried.unchanged, 1);
   assert.equal(events.length, 1);
+});
+
+test("실제 Slack 채널 설정으로 기본 리뷰 목적지를 선택한다", async () => {
+  const key = "SLACK_CHANNEL_USER_REVIEWS_ID";
+  const previous = process.env[key];
+  try {
+    process.env[key] = "C0CD4FX486N";
+    const result = await collectStoreReviews({ listApps: async () => [] });
+    assert.equal(result.enqueued, 0);
+    process.env[key] = "123456789012345678";
+    await assert.rejects(() => collectStoreReviews({ listApps: async () => [] }), /목적지 미설정/);
+  } finally {
+    if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+  }
 });

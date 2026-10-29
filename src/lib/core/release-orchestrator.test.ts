@@ -251,14 +251,14 @@ test("AIT 배포는 optional upload caller에도 비공개 업로드를 명시�
     target: "AIT",
     tag: "v1.0.22",
     workflowRef: "main",
-    memo: "Discord slash release",
+    memo: "Slack slash release",
     iosViaXcodeCloud: false,
     source: h.source,
     dispatcher: h.dispatcher,
   });
   assert.deepEqual(h.dispatched[0].inputs, {
     release_tag: "v1.0.22",
-    memo: "Discord slash release",
+    memo: "Slack slash release",
     upload: "true",
   });
 });

@@ -7,7 +7,7 @@ import { sendCycleKeywordRanks } from "@/lib/market/cycle-report";
 import { keywordHistoryQuery } from "@/lib/market/keyword-history-query";
 const database = new URL(process.env.DATABASE_URL ?? "");
 if (!['127.0.0.1','localhost'].includes(database.hostname) || !(database.pathname === '/keyword_qa' || database.pathname.endsWith('_contract_test'))) throw Error('ISOLATED_KEYWORD_DATABASE_REQUIRED');
-process.env.DISCORD_CHANNEL_METRICS_DAILY_ID = '1002';
+process.env.SLACK_CHANNEL_METRICS_DAILY_ID = '1002';
 async function main() {
   const suffix = Date.now();
   const app = await prisma.app.create({data:{slug:`qa-keyword-${suffix}`,repoFullName:`isolated/keyword-${suffix}`,displayName:'검색 검수 앱',type:'APP',engine:'GODOT',status:'ACTIVE',marketTargets:[],iosBundle:`com.qa.${suffix}`,playPackage:`com.qa.${suffix}`}});

@@ -11,8 +11,8 @@ import {
   type GhRunInput,
 } from "@/lib/sync/mirror";
 import {
-  discordDestinationOrFallback,
-  discordDestinations,
+  destinationOrFallback,
+  notificationDestinations,
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { issueEventReport } from "@/lib/notifications/issue-events";
@@ -52,7 +52,7 @@ interface WebhookPayload {
   label?: { name?: string };
 }
 
-// 실시간 webhook 에서만(미러 backfill 아님) Discord 알림. 실패해도 webhook 200 유지.
+// 실시간 webhook 에서만(미러 backfill 아님) Slack 알림. 실패해도 webhook 200 유지.
 async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
   try {
     const repoFullName = p.repository?.full_name ?? "";
@@ -98,7 +98,7 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
             // 두 줄마다 상자를 그리면 채널이 카드 더미가 된다.
             plain: true,
           },
-          destinations: discordDestinations(["backoffice"]),
+          destinations: notificationDestinations(["backoffice"]),
         });
       }
     }
@@ -126,12 +126,12 @@ async function notifyHooks(event: string, p: WebhookPayload): Promise<void> {
         kind: "OPS_ALERT",
         destinations:
           report.payload.report.category === "change"
-            ? discordDestinationOrFallback("github-issues", "backoffice")
+            ? destinationOrFallback("github-issues", "backoffice")
             : [],
       });
     }
   } catch (e) {
-    console.error("[discord] notifyHooks error:", e);
+    console.error("[slack] notifyHooks error:", e);
   }
 }
 

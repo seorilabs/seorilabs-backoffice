@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import test from "node:test";
 import { verifyAppleWebhookSignature } from "@/lib/app-store/webhook-verify";
 import { extractAppleSubmissionEvent } from "@/lib/app-store/submission-events";
-import { discordRender } from "@/lib/notifications/format";
+import { messageRender } from "@/lib/notifications/format";
 
 const payload = {
   data: {
@@ -34,8 +34,8 @@ test("Apple 공식 이벤트를 검증하고 버전 ID와 새 단계를 읽는�
   assert.equal(event?.previousState, "PREPARE_FOR_SUBMISSION");
 });
 
-test("알림 payload는 기존 Discord 렌더러 계약을 충족한다", () => {
-  const rendered = discordRender("STORE_REVIEW", {
+test("알림 payload는 기존 Slack 렌더러 계약을 충족한다", () => {
+  const rendered = messageRender("STORE_REVIEW", {
     text: "✓ 심사 중",
     embed: { title: "App Store · Test", color: 0x0a84ff },
   });

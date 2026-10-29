@@ -1,6 +1,7 @@
 import { marketLabel } from "./keyword-cycle";
 import { kstDateTimeShort } from "@/lib/format/kst";
 import { createHash } from "node:crypto";
+import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import type { KeywordRow } from "./keyword-monitoring";
 export interface RankReportPoint {
   day: string;
@@ -31,6 +32,12 @@ export function rankReportKey(report: RankReport) {
     )
     .digest("hex")
     .slice(0, 24)}`;
+}
+
+/** 저장소의 JSON 키 순서와 무관하게 같은 관측인지를 비교한다. 기존 공개 주소 해시는 유지한다. */
+export function sameRankReportContent(left: RankReport, right: RankReport): boolean {
+  const content = (report: RankReport) => contractCanonicalJson({day:report.day,items:report.items,rows:report.rows} as unknown as JsonValue);
+  return content(left) === content(right);
 }
 export const rankValue = (rank: number | null) =>
   rank === null ? "결과 목록 밖" : `${rank}위`;
@@ -105,8 +112,8 @@ export function rankReportSvg(report: RankReport, days = 7, maxItems = 3) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="white"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="48" font-size="32" font-weight="700">${report.day} 검색 위치 관측</text><text x="40" y="85" font-size="22" fill="#475569">검색 출처별 관측 · 최근 ${days}일 · 국가·검색어별 비교</text>${cards}</g></svg>`;
 }
 
-/** Discord inline은 세로 제한으로 축소되므로 큰 글자와 짧은 3개 행을 사용한다. */
-export function rankDiscordSvg(report: RankReport) {
+/** Slack inline은 세로 제한으로 축소되므로 큰 글자와 짧은 3개 행을 사용한다. */
+export function rankSlackSvg(report: RankReport) {
   const items = report.items.slice(0, 3);
   const hasGaps = items.some((item) =>
     item.points.slice(-7).some((point) => point.state !== "ranked"),

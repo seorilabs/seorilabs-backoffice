@@ -1,7 +1,7 @@
 import type { OperatorCommandRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { currentDiscordMemberRoles } from "@/lib/notifications/discord";
-import { hasDiscordCapability } from "@/lib/discord/roles";
+import { currentOperatorRoles } from "@/lib/notifications/channel";
+import { hasOperatorCapability } from "@/lib/operator/roles";
 import { assertCanReview, directApprovalEnabled, providerError, targetHash, ApprovalCredentialError, reviewMatches } from "./policy";
 import { z } from "zod";
 const paramsSchema = z.object({ approvalId: z.string(), targetHash: z.string(), githubId: z.string(), decision: z.enum(["approved", "rejected"]), reason: z.string().max(1000) });
@@ -36,17 +36,17 @@ export async function recoverUncertainApprovals() {
 async function executionDependencies() {
   const { approverClient, readRun, pending, readTarget } = await import("./github");
   const { observeApprovalRun, refreshApprovalCard } = await import("./monitor");
-  return { prisma, currentDiscordMemberRoles, hasDiscordCapability, approverClient, readRun, pending, readTarget, observeApprovalRun, refreshApprovalCard, recoverApproval };
+  return { prisma, currentOperatorRoles, hasOperatorCapability, approverClient, readRun, pending, readTarget, observeApprovalRun, refreshApprovalCard, recoverApproval };
 }
 export async function executeDeploymentApproval(command: OperatorCommandRun, dependencies?: Awaited<ReturnType<typeof executionDependencies>>) {
-  const { prisma, currentDiscordMemberRoles, hasDiscordCapability, approverClient, readRun, pending, readTarget, observeApprovalRun, refreshApprovalCard, recoverApproval } = dependencies ?? await executionDependencies();
+  const { prisma, currentOperatorRoles, hasOperatorCapability, approverClient, readRun, pending, readTarget, observeApprovalRun, refreshApprovalCard, recoverApproval } = dependencies ?? await executionDependencies();
   const params = paramsSchema.parse(command.params);
   const row = await prisma.deploymentApproval.findUniqueOrThrow({ where: { id: params.approvalId } });
   if (!command.confirmedAt || Date.now() - command.confirmedAt.getTime() > 600_000 || Date.now() - command.createdAt.getTime() > 600_000) throw new Error("승인 확인 만료");
-  if (!directApprovalEnabled(row.environment)) throw new Error("Discord 직접 승인 비활성");
+  if (!directApprovalEnabled(row.environment)) throw new Error("Slack 직접 승인 비활성");
   if (params.decision === "rejected" && !params.reason.trim()) throw new Error("거절 사유 필요");
-  if (!hasDiscordCapability(await currentDiscordMemberRoles(command.actorDiscordUserId), "release_approval")) throw new Error("현재 Discord 승인 역할 없음");
-  const link = await prisma.discordAccountLink.findUnique({ where: { discordUserId: command.actorDiscordUserId } });
+  if (!hasOperatorCapability(await currentOperatorRoles(command.actorUserId), "release_approval")) throw new Error("현재 Slack 승인 역할 없음");
+  const link = await prisma.slackAccountLink.findUnique({ where: { slackUserId: command.actorUserId } });
   if (!link || String(link.githubId) !== params.githubId) throw new Error("GitHub 계정 연결 변경 또는 해제");
   const user = await prisma.user.findUnique({ where: { githubId: link.githubId } });
   if (!user?.allowlisted) throw new Error("Backoffice 접근 권한 없음");
@@ -59,15 +59,15 @@ export async function executeDeploymentApproval(command: OperatorCommandRun, dep
   assertCanReview({ currentUserCanApprove: item.current_user_can_approve, githubId: String(link.githubId), triggeringActorId: String(run.triggering_actor?.id), actorId: String(run.actor?.id), expectedAttempt: row.runAttempt, actualAttempt: run.run_attempt!, expectedSha: row.sourceSha, actualSha: run.head_sha, expectedTargetHash: params.targetHash, actualTargetHash: targetHash(target) });
   // 쓰기 직전 요청 단위 CAS. worker 재시작/다른 interaction도 이 행에서 단 한 번만 전송한다.
   const claimed = await prisma.$transaction(async tx => {
-    const currentLink = await tx.discordAccountLink.findUnique({ where: { githubId: link.githubId } });
-    if (currentLink?.discordUserId !== command.actorDiscordUserId) throw new Error("계정 연결 해제됨");
+    const currentLink = await tx.slackAccountLink.findUnique({ where: { githubId: link.githubId } });
+    if (currentLink?.slackUserId !== command.actorUserId) throw new Error("계정 연결 해제됨");
     const claim = await tx.deploymentApproval.updateMany({ where: { id: row.id, actionState: "IDLE", providerState: "WAITING", targetHash: params.targetHash }, data: { actionState: "SENDING", actionCommandId: command.id, actorGithubId: link.githubId, actorLogin: user.login, decision: params.decision, actionStartedAt: new Date() } });
     if (claim.count) await tx.auditLog.create({ data: { actorLogin: user.login, action: "deployment.review.requested", entityType: "deployment_approval", entityId: row.id, payload: { commandId: command.id, decision: params.decision, reason: params.reason, targetHash: params.targetHash } } });
     return claim.count === 1;
   });
   if (!claimed) throw new Error("이미 처리 중이거나 처리된 승인 요청");
   try {
-    await client.rest.actions.reviewPendingDeploymentsForRun({ owner: "seorilabs", repo: "platform", run_id: run.id, environment_ids: [Number(row.environmentId)], state: params.decision, comment: `backoffice:${command.id}\n${params.reason || "Discord에서 승인"}` });
+    await client.rest.actions.reviewPendingDeploymentsForRun({ owner: "seorilabs", repo: "platform", run_id: run.id, environment_ids: [Number(row.environmentId)], state: params.decision, comment: `backoffice:${command.id}\n${params.reason || "Slack에서 승인"}` });
     await prisma.deploymentApproval.update({ where: { id: row.id }, data: { actionState: "CONFIRMED", decidedAt: new Date() } });
   } catch {
     await recoverApproval(row.id);

@@ -94,7 +94,7 @@ test("KDP는 성공 실행마다 전용 채널에 한 번 보고한다", async (
   const events = m.events.filter((row) => row.dedupeKey === `batch-result:batch:local:${first}`);
   assert.equal(events.length, 1);
   assert.match(String((events[0].payload as Row).text), /대조 3개월/);
-  assert.deepEqual((events[0].deliveries as Row).create, [{ provider: "DISCORD", destinationKey: "batch-monitoring" }]);
+  assert.deepEqual((events[0].deliveries as Row).create, [{ provider: "SLACK", destinationKey: "batch-monitoring" }]);
 });
 
 const reportingStart = new Date("2026-10-24T05:00:00Z");

@@ -30,7 +30,7 @@ export function submissionSignal(state: string, track: string | null) {
   return null;
 }
 export async function discoverOperationalSignals(now = new Date()) {
-  const since = new Date(now.getTime() - env.discordRetentionDays() * 86400000);
+  const since = new Date(now.getTime() - env.reviewRetentionDays() * 86400000);
   const [reviewEvents, apps] = await Promise.all([
     prisma.notificationEvent.findMany({
       where: {

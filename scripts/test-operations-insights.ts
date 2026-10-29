@@ -102,7 +102,7 @@ async function main() {
   const delivery = await prisma.notificationDelivery.create({
     data: {
       eventId: event.id,
-      provider: "DISCORD",
+      provider: "SLACK",
       destinationKey: `qa-edit:${next.id}`,
       status: "PENDING",
       refreshRequested: null,

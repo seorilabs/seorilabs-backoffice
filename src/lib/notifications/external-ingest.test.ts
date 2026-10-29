@@ -19,7 +19,7 @@ test("DB enqueue가 완료된 뒤에만 accepted ack를 반환한다", async () 
     payload,
     {
       destinationConfigured: () => true,
-      destinations: (route) => [{ provider: "DISCORD", key: route }],
+      destinations: (route) => [{ provider: "SLACK", key: route }],
       enqueue: async (input) => {
         assert.equal(input.dedupeKey, `external:${payload.source}:${payload.id}`);
         return durableEnqueue;
@@ -57,7 +57,7 @@ test("전달 worker의 채널 설정이 있으면 논리 목적지를 enqueue한
       },
     },
   );
-  assert.deepEqual(destinations, [{ provider: "DISCORD", key: "private-feed" }]);
+  assert.deepEqual(destinations, [{ provider: "SLACK", key: "private-feed" }]);
 });
 
 test("외부 쓰레드 알림은 producer 범위의 부모 dedupe key로 변환한다", async () => {
@@ -93,4 +93,22 @@ test("외부 쓰레드 알림은 producer 범위의 부모 dedupe key로 변환�
       plain: false,
     },
   });
+});
+
+test("기본 설정 검증은 Slack 채널 ID를 허용하고 이전 숫자 ID를 거부한다", async () => {
+  const key = "SLACK_CHANNEL_PRIVATE_FEED_ID";
+  const previous = process.env[key];
+  try {
+    process.env[key] = "C0CD8VDS4AY";
+    let deliveries: unknown;
+    const ack = await ingestExternalNotification("ops.notification.v1.private-feed", payload, {
+      enqueue: async (input) => { deliveries = input.destinations; return "configured-slack"; },
+    });
+    assert.equal(ack.accepted, true);
+    assert.deepEqual(deliveries, [{provider:"SLACK",key:"private-feed"}]);
+    process.env[key] = "123456789012345678";
+    await assert.rejects(() => ingestExternalNotification("ops.notification.v1.private-feed", payload), /목적지 미설정/);
+  } finally {
+    if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+  }
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { env } from "@/lib/env";
 import { lastElapsedMetricDay, metricDayOf, metricDayStart, parseMetricDay, metricDaysBetween } from "@/lib/analytics/metric-day";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { enqueueEditableNotification } from "@/lib/notifications/outbox";
 import { prisma } from "@/lib/prisma";
 import { storeLabel } from "./shape";
@@ -68,7 +68,7 @@ export async function sendDailyReviewStatistics(
   const kstHour = new Date(now.getTime()+9*3600000).getUTCHours();
   if (!manual && kstHour < 11) return { status: "not-due", reports: 0 };
   const day = manual?.day ?? lastElapsedMetricDay(now);
-  if (!parseMetricDay(day) || day >= metricDayOf(now) || metricDaysBetween(metricDayOf(now),day) > env.discordRetentionDays()) throw new Error("INVALID_REVIEW_REPORT_DAY");
+  if (!parseMetricDay(day) || day >= metricDayOf(now) || metricDaysBetween(metricDayOf(now),day) > env.reviewRetentionDays()) throw new Error("INVALID_REVIEW_REPORT_DAY");
   const apps = await dependencies.listApps();
   if (manual && !apps.some(app=>app.slug===manual.appSlug)) throw new Error("REVIEW_REPORT_APP_NOT_FOUND");
   const start = metricDayStart(day), end = new Date(start.getTime()+86400000);
@@ -82,7 +82,7 @@ export async function sendDailyReviewStatistics(
       payload: { text: reviewStatisticsText(group,app.displayName,day), appId: app.id, store: group.store, day,
         report: {category:"change",reason:"DAILY_REVIEW_STATISTICS"},
         embed: {title:"리뷰 일간 통계",color:0x2563eb} },
-      destinations: discordDestinations(["user-reviews"]),
+      destinations: notificationDestinations(["user-reviews"]),
     });
     reports++;
   }

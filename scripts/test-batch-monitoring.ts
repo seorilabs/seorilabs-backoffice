@@ -17,15 +17,27 @@ const captured: Array<{ url: string; method: string; body: Record<string, unknow
 const originalFetch = globalThis.fetch;
 
 async function main() {
-  process.env.DISCORD_BOT_TOKEN = "isolated-fixture";
-  process.env.DISCORD_CHANNEL_BATCH_MONITORING_ID = "1005";
-  process.env.DISCORD_CHANNEL_OPS_ALERTS_ID = "1001";
+  process.env.SLACK_ENABLED = "true";
+  process.env.SLACK_WORKSPACE_ID = "T000BATCH";
+  process.env.SLACK_APP_ID = "A000BATCH";
+  process.env.SLACK_BOT_TOKEN = "isolated-fixture";
+  process.env.SLACK_CHANNEL_BATCH_MONITORING_ID = "C000BATCH";
+  process.env.SLACK_CHANNEL_OPS_ALERTS_ID = "C000OPS";
+  const messages = new Map<string, Record<string, unknown>>();
   globalThis.fetch = async (input, options) => {
-    const address = String(input);
-    assert.ok(address.startsWith("https://discord.com/api/v10/"));
+    const address = new URL(String(input));
+    assert.equal(address.origin, "https://slack.com", "검수 중 실제 외부 요청 금지");
+    assert.ok(["/api/chat.postMessage", "/api/chat.update"].includes(address.pathname), "예상하지 않은 Slack API 요청");
+    assert.equal(options?.method, "POST");
     const body = JSON.parse(String(options?.body ?? "{}"));
-    captured.push({ url: address, method: options?.method ?? "GET", body });
-    return new Response(JSON.stringify({ id: String(2000 + captured.length) }), { status: 200 });
+    assert.match(String(body.channel), /^C[A-Z0-9]+$/);
+    captured.push({ url: address.href, method: options?.method ?? "", body });
+    const ts = address.pathname === "/api/chat.update" ? String(body.ts) : `2200000000.${String(captured.length).padStart(6, "0")}`;
+    assert.match(ts, /^\d+\.\d+$/);
+    const key = `${body.channel}:${ts}`;
+    if (address.pathname === "/api/chat.update" && !messages.has(key)) return Response.json({ ok: false, error: "message_not_found" });
+    messages.set(key, body);
+    return Response.json({ ok: true, channel: body.channel, ts, message: { text: body.text, blocks: body.blocks } });
   };
   const local = async (id: string, status: string, minute: number) => ingestBatchResults({ kind: "local", run: {
     id, name: "book-sales-kdp", status, startedAt: new Date(at(minute)).toISOString(), completedAt: new Date(at(minute) + 30000).toISOString(),
@@ -36,11 +48,11 @@ async function main() {
   await local(first, "failed", 1);
   await local(first, "failed", 1);
   await drainAllNotifications(100);
-  assert.equal(captured.filter((request) => request.url.includes("/channels/1005/")).length, 1);
-  assert.equal(captured.filter((request) => request.url.includes("/channels/1001/")).length, 1);
+  assert.equal(captured.filter((request) => request.url.endsWith("/chat.postMessage") && request.body.channel === "C000BATCH").length, 1);
+  assert.equal(captured.filter((request) => request.url.endsWith("/chat.postMessage") && request.body.channel === "C000OPS").length, 1);
   await local(second, "succeeded", 2);
   await drainAllNotifications(100);
-  assert.ok(captured.some((request) => request.method === "PATCH" && request.url.includes("/channels/1001/")));
+  assert.ok(captured.some((request) => request.url.endsWith("/chat.update") && request.body.channel === "C000OPS"));
   assert.equal(await prisma.notificationEvent.count({ where: { dedupeKey: `batch-result:batch:local:${first}` } }), 1);
 
   await prisma.app.create({ data: { slug: "lucid-chess", displayName: "격리 체스", repoFullName: "isolated/lucid-chess",
@@ -64,8 +76,10 @@ async function main() {
   await drainAllNotifications(100);
   const sent = await prisma.notificationDelivery.findFirstOrThrow({ where: { eventId: event.id } });
   assert.equal(sent.status, "SENT");
+  assert.equal(sent.provider, "SLACK");
   assert.equal(sent.destinationKey, "batch-monitoring");
   assert.ok(sent.providerMessageId);
+  assert.match(sent.providerMessageId, /^\d+\.\d+$/);
 
   const invalid = { apps: [{ ...payload.apps[0], days: [{ ...row, date: "invalid" }] }] };
   await ingestAndVerifyConsolePush(invalid, new Date(at(4)), () => new Date(at(4) + 1000));
@@ -91,7 +105,7 @@ async function main() {
   const noActive = await collectConsoleMetrics({ async queryListing() { assert.fail("운영 중지 앱의 지표 조회"); } } as unknown as McpConsoleMetricsSource, new Date(at(7)));
   assert.equal(consoleExecutionSkipped(noActive), true);
   assert.equal(consoleExecutionFailed(noActive), false);
-  process.env.DISCORD_CHANNEL_BATCH_MONITORING_ID = "";
+  process.env.SLACK_CHANNEL_BATCH_MONITORING_ID = "";
   const third = "33333333-3333-4333-8333-333333333333";
   await local(third, "succeeded", 6);
   const before = captured.length;
@@ -101,7 +115,7 @@ async function main() {
   assert.equal(captured.length, before);
   assert.ok(captured.every((request) => !JSON.stringify(request.body).includes("isolated-fixture")));
   console.log(JSON.stringify({ passed: true, verified: ["KDP per-run dedupe", "incident recovery", "partial data execution success",
-    "confirmed zero preserved", "manual input rejection", "missing channel not sent", "Discord HTTP delivery readback"],
-    messages: captured.filter((request) => request.url.includes("/channels/1005/")).map((request) => request.body) }));
+    "confirmed zero preserved", "manual input rejection", "missing channel not sent", "Slack HTTP delivery readback"],
+    messages: captured.filter((request) => request.body.channel === "C000BATCH").map((request) => request.body) }));
 }
 main().finally(async () => { globalThis.fetch = originalFetch; await prisma.$disconnect(); });

@@ -7,7 +7,7 @@ import {
   type MarketReleaseInput,
 } from "@/lib/sync/deploy-all-release";
 import type { DeployAllRunJob } from "@/lib/core/deploy-all-jobs";
-import type { DiscordRender } from "@/lib/notifications/format";
+import type { MessageRender } from "@/lib/notifications/format";
 
 const DEPLOY_ALL = `
 jobs:
@@ -45,7 +45,7 @@ function context(overrides: Partial<DeployAllRunContext> = {}): DeployAllRunCont
 
 interface Recorded {
   releases: MarketReleaseInput[];
-  runCards: Array<{ render: DiscordRender; eventKey: string; occurredAt: Date }>;
+  runCards: Array<{ render: MessageRender; eventKey: string; occurredAt: Date }>;
 }
 
 function deps(

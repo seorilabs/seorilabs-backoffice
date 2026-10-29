@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SEORI_SENDER, senderBotToken, senderKey } from "@/lib/notifications/sender";
 
-const TOKEN_KEY = "DISCORD_TEAMMATE_SEORI_BOT_TOKEN";
+const TOKEN_KEY = "SLACK_BOT_TOKEN";
 
 function withToken<T>(value: string | undefined, fn: () => T): T {
   const original = process.env[TOKEN_KEY];

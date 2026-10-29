@@ -7,7 +7,7 @@ import { setPlayInternalTestUrlAction } from "@/lib/actions/release";
  * Play 내부 테스트 바로가기 링크 입력.
  *
  * opt-in URL(play.google.com/apps/internaltest/<id>)은 패키지명에서 파생되지 않아
- * Play Console 에서 한 번 복사해 넣어야 한다. 저장하면 Discord Play 배포 카드에
+ * Play Console 에서 한 번 복사해 넣어야 한다. 저장하면 Slack Play 배포 카드에
  * 링크 버튼이 붙고, 비우면 버튼이 사라진다.
  */
 export function PlayInternalTestControl({

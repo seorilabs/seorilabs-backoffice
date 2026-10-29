@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { iapDestinations } from "@/lib/notifications/iap-summary";
-import { discordDestinationOrFallback, discordDestinations } from "@/lib/notifications/destinations";
+import { destinationOrFallback, notificationDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { renderPayload } from "@/lib/notifications/format";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
@@ -147,8 +147,8 @@ export async function POST(request: NextRequest) {
       report: { category: "change", reason: "REQUESTED_INDIVIDUAL_EVENT" },
     },
     destinations: input.type.startsWith("iap.") ? iapDestinations()
-      : input.type.startsWith("ad.") ? discordDestinationOrFallback("ad-rewards", "action-events")
-      : discordDestinations(["action-events"]),
+      : input.type.startsWith("ad.") ? destinationOrFallback("ad-rewards", "action-events")
+      : notificationDestinations(["action-events"]),
   });
   return NextResponse.json(
     { ok: true, duplicate },

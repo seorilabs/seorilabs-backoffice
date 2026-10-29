@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { niceMax, splitSegmentsOnNull } from "./chart-geometry";
-import type { DiscordAttachment } from "@/lib/notifications/discord";
+import type { MessageAttachment } from "@/lib/notifications/channel";
 export interface ReportChartSeries {
   label: string;
   color: string;
@@ -122,7 +122,7 @@ export function reportChartSvg(input: {
 export async function reportChartPng(
   input: Parameters<typeof reportChartSvg>[0],
   filename = "metrics-trend.png",
-): Promise<DiscordAttachment> {
+): Promise<MessageAttachment> {
   const svg = reportChartSvg(input);
   const bytes = await sharp(Buffer.from(svg)).png().toBuffer();
   return { filename, contentType: "image/png", base64: bytes.toString("base64") };

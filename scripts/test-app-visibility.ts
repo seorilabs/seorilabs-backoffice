@@ -41,7 +41,7 @@ async function main() {
   await prisma.appOperationRun.update({where: {id: blocker.id}, data: {status: 'SUCCEEDED', error: null}});
   const pendingCommand = await prisma.operatorCommandRun.create({data: {
     appId: app.id, sourceInteractionId: `${prefix}-command`, operation: 'qa.no-external-execution',
-    actorDiscordUserId: 'qa', actorLabel: 'QA', channelId: 'qa', status: 'PENDING',
+    actorUserId: 'qa', actorLabel: 'QA', channelId: 'qa', status: 'PENDING',
     expiresAt: new Date(Date.now() + 60000),
   }});
   for (const status of ['PENDING', 'PROCESSING'] as const) {

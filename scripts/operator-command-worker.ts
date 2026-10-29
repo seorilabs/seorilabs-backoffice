@@ -1,7 +1,7 @@
 import { reconcileDeploymentApprovals } from "@/lib/deployment-approvals/monitor";
 import { recoverUncertainApprovals } from "@/lib/deployment-approvals/execute";
 import { prisma } from "@/lib/prisma";
-import { maintainOperatorCommands, processNextOperatorCommand } from "@/lib/discord/command-runs";
+import { maintainOperatorCommands, processNextOperatorCommand } from "@/lib/operator/command-runs";
 
 import { maintainMetricIssueRegistration } from "@/lib/metric-issues/worker";
 

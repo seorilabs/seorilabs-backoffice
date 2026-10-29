@@ -2,20 +2,20 @@ import { Prisma, type OperationalIncident } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { kstDateTime } from "@/lib/format/kst";
 import { EMBED_COLOR } from "@/lib/notifications/style";
-import type { DiscordRender } from "@/lib/notifications/format";
+import type { MessageRender } from "@/lib/notifications/format";
 import {
-  discordDestinations,
-  isDiscordDestinationKey,
+  notificationDestinations,
+  isDestinationKey,
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import type { DiscordActionRow } from "@/lib/notifications/discord";
+import type { MessageActionRow } from "@/lib/notifications/channel";
 
 export function incidentComponents(
   incident: Pick<
     OperationalIncident,
-    "id" | "status" | "assignedDiscordUserId"
+    "id" | "status" | "assignedUserId"
   >,
-): DiscordActionRow[] {
+): MessageActionRow[] {
   if (incident.status === "RECOVERED") return [];
   return [
     {
@@ -31,9 +31,9 @@ export function incidentComponents(
         {
           type: 2,
           style: 1,
-          label: incident.assignedDiscordUserId ? "담당 지정됨" : "내가 담당",
+          label: incident.assignedUserId ? "담당 지정됨" : "내가 담당",
           custom_id: `incident:assign:${incident.id}`,
-          disabled: Boolean(incident.assignedDiscordUserId),
+          disabled: Boolean(incident.assignedUserId),
         },
         {
           type: 2,
@@ -53,7 +53,7 @@ export function incidentComponents(
  * 않고 결과 색을 그대로 태운다 — 발생(빨강)에서 확인됨(주황)을 거쳐 복구(초록)로
  * 흘러가는 편이, 고정된 "장애색" 하나보다 지금 상태를 정확히 전달한다.
  */
-export function incidentRender(incident: OperationalIncident): DiscordRender {
+export function incidentRender(incident: OperationalIncident): MessageRender {
   const icon =
     incident.status === "RECOVERED"
       ? "✅"
@@ -121,8 +121,8 @@ export function incidentRender(incident: OperationalIncident): DiscordRender {
     );
   if (incident.acknowledgedBy)
     lines.push(`확인: <@${incident.acknowledgedBy}>`);
-  if (incident.assignedDiscordUserId)
-    lines.push(`담당: <@${incident.assignedDiscordUserId}>`);
+  if (incident.assignedUserId)
+    lines.push(`담당: <@${incident.assignedUserId}>`);
   if (incident.recoveredAt)
     lines.push(`복구 시각: ${kstDateTime(incident.recoveredAt)}`);
   return {
@@ -158,8 +158,8 @@ async function enqueueIncident(
       occurredAt: incident.lastDetectedAt,
       // 목적지는 장애가 만들어질 때 고정된 값을 그대로 쓴다. 살아 있는 카드를
       // 중간에 다른 채널로 옮기면 그 카드의 수명주기 편집이 끊긴다.
-      destinations: discordDestinations([
-        isDiscordDestinationKey(incident.destinationKey)
+      destinations: notificationDestinations([
+        isDestinationKey(incident.destinationKey)
           ? incident.destinationKey
           : "ops-alerts",
       ]),
@@ -311,7 +311,7 @@ export async function recoverIncident(input: {
 
 export async function acknowledgeIncident(
   id: string,
-  actorDiscordUserId: string,
+  actorUserId: string,
   assignSelf: boolean,
 ) {
   const incident = await prisma.operationalIncident.findUnique({
@@ -323,9 +323,9 @@ export async function acknowledgeIncident(
     where: { id, status: { in: ["OPEN", "ACKNOWLEDGED"] } },
     data: {
       status: "ACKNOWLEDGED",
-      acknowledgedBy: incident.acknowledgedBy ?? actorDiscordUserId,
+      acknowledgedBy: incident.acknowledgedBy ?? actorUserId,
       acknowledgedAt: incident.acknowledgedAt ?? new Date(),
-      ...(assignSelf ? { assignedDiscordUserId: actorDiscordUserId } : {}),
+      ...(assignSelf ? { assignedUserId: actorUserId } : {}),
     },
   });
   return prisma.operationalIncident.findUniqueOrThrow({ where: { id } });
@@ -334,7 +334,7 @@ export async function acknowledgeIncident(
 /** 다른 주문의 성공을 복구로 추정하지 않고 권한 있는 운영자가 해결을 기록한다. */
 export async function resolveIncident(
   id: string,
-  actorDiscordUserId: string,
+  actorUserId: string,
   expectedLastDetectedAt?: Date,
 ) {
   return prisma.$transaction(async (tx) => {
@@ -360,7 +360,7 @@ export async function resolveIncident(
         evidence: {
           ...evidence,
           resolutionSource: "operator",
-          resolvedBy: actorDiscordUserId,
+          resolvedBy: actorUserId,
         },
       },
     });
@@ -373,7 +373,7 @@ export async function resolveIncident(
     });
     await tx.auditLog.create({
       data: {
-        actorLogin: `discord:${actorDiscordUserId}`,
+        actorLogin: `slack:${actorUserId}`,
         action: "incident.resolved",
         entityType: "operational_incident",
         entityId: id,

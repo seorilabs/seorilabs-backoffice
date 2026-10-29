@@ -34,10 +34,10 @@ test("없는 날과 결과 목록 밖을 201위로 그리지 않고 국가·검�
 });
 
 test("압축 그래프는 인접한 목록 밖·미수집을 단일 기호와 범례로 구분한다", async () => {
-  const { rankDiscordSvg } = await import("./rank-report");
+  const { rankSlackSvg } = await import("./rank-report");
   const report = reportFixture();
   report.items[0].points.at(-1)!.state = "outside";
-  const svg = rankDiscordSvg(report);
+  const svg = rankSlackSvg(report);
   assert.match(svg, /○ 결과 목록 밖 · × 미수집 · ! 자료 오류/);
   assert.match(svg, />○<\/text>/);
   assert.match(svg, />×<\/text>/);
@@ -58,4 +58,14 @@ test("불변 보고서 주소는 전체 snapshot을 구분하고 발행시각만
       rows: [{ ...report.rows[0], state: "미수집" }],
     }),
   );
+});
+
+test("MySQL JSON의 키 순서가 달라도 같은 보고서를 다시 발행하지 않는다",async()=>{
+ const {sameRankReportContent}=await import("./rank-report");
+ const report=reportFixture();
+ const reorder=(value:unknown):unknown=>Array.isArray(value)?value.map(reorder):value&&typeof value==="object"?Object.fromEntries(Object.entries(value).reverse().map(([key,nested])=>[key,reorder(nested)])):value;
+ const stored=reorder(report) as typeof report;
+ assert.equal(sameRankReportContent(report,stored),true);
+ assert.equal(sameRankReportContent(report,{...stored,capturedAt:"other"}),true);
+ assert.equal(sameRankReportContent(report,{...stored,rows:[{...stored.rows[0],state:"미수집"}]}),false);
 });

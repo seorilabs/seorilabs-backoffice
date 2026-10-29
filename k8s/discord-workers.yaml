@@ -36,51 +36,65 @@ spec:
           workingDir: /app
           command: ["node", "/app/scripts-dist/notification-worker.cjs"]
           env:
-            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
+            - { name: SLACK_ENABLED, value: "true" }
+            - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
+            - { name: SLACK_WORKSPACE_ID, value: "T0CCP49NJAK" }
+            - { name: SLACK_ROLE_OPERATIONS_ADMIN_USERS, value: "U0CD2GKL36J" }
+            - name: DISCORD_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_BOT_TOKEN, optional: true } }
+            - name: DISCORD_CHANNEL_USER_REVIEWS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true } }
+            - name: DISCORD_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
+            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID, optional: true } }
+            - name: DISCORD_CHANNEL_BACKOFFICE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID, optional: true } }
+            - { name: PLATFORM_SLACK_APPROVAL_ENVIRONMENTS, value: "staging,production" }
             - name: NODE_ENV
               value: production
             - name: HOME
               value: /tmp
             - name: NOTIFICATION_POLL_INTERVAL_MS
               value: "1000"
-            - name: DISCORD_RETENTION_DAYS
+            - name: SLACK_REVIEW_RETENTION_DAYS
               value: "30"
             - name: NATS_SERVER_URL
               value: nats://nats.data.svc.cluster.local:4222
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
-            - name: DISCORD_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_BOT_TOKEN } }
-            - name: DISCORD_CHANNEL_BACKOFFICE_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID } }
-            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID } }
-            - name: DISCORD_CHANNEL_ACTION_EVENTS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_ACTION_EVENTS_ID } }
-            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
-            - name: DISCORD_CHANNEL_BATCH_MONITORING_ID
-              value: "1563531114025328681"
-            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
-            - name: DISCORD_CHANNEL_SEORI_REVIEW_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_SEORI_REVIEW_ID } }
-            - name: DISCORD_CHANNEL_PRIVATE_FEED_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_PRIVATE_FEED_ID } }
-            - name: DISCORD_CHANNEL_USER_REVIEWS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_USER_REVIEWS_ID, optional: true } }
-            - name: DISCORD_ROLE_RELEASE_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
+            - name: SLACK_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_BOT_TOKEN } }
+            - name: SLACK_CHANNEL_BACKOFFICE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_BACKOFFICE_ID } }
+            - name: SLACK_CHANNEL_METRICS_DAILY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRICS_DAILY_ID } }
+            - name: SLACK_CHANNEL_ACTION_EVENTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_ACTION_EVENTS_ID } }
+            - name: SLACK_CHANNEL_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_RELEASE_OPS_ID } }
+            - name: SLACK_CHANNEL_BATCH_MONITORING_ID
+              value: "C0CD4FX1Y7L"
+            - name: SLACK_CHANNEL_OPS_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_OPS_ALERTS_ID } }
+            - name: SLACK_CHANNEL_SEORI_REVIEW_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_SEORI_REVIEW_ID } }
+            - name: SLACK_CHANNEL_PRIVATE_FEED_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_PRIVATE_FEED_ID } }
+            - name: SLACK_CHANNEL_USER_REVIEWS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_USER_REVIEWS_ID, optional: true } }
+            - name: SLACK_ROLE_RELEASE_OPS_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_RELEASE_OPS_USERS } }
             # 서리 일일 재무 리포트가 놓이는 채널과, 그 리포트를 게시·삭제할 봇 정체.
             # 토큰이 없으면 메인 봇으로 나가므로 리포트 자체가 사라지지는 않는다.
-            - name: DISCORD_CHANNEL_APP_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
-            - name: DISCORD_CHANNEL_GITHUB_ISSUES_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
-            - name: DISCORD_CHANNEL_IAP_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_IAP_ID, optional: true } }
-            - name: DISCORD_CHANNEL_AD_REWARDS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_AD_REWARDS_ID, optional: true } }
+            - name: SLACK_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_APP_OPS_ID, optional: true } }
+            - name: SLACK_CHANNEL_GITHUB_ISSUES_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
+            - name: SLACK_CHANNEL_IAP_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_IAP_ID, optional: true } }
+            - name: SLACK_CHANNEL_AD_REWARDS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_AD_REWARDS_ID, optional: true } }
             - name: DISCORD_TEAMMATE_SEORI_BOT_TOKEN
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_TEAMMATE_SEORI_BOT_TOKEN, optional: true } }
             # 배포 카드의 App Store 액션 버튼은 심사 단계에 따라 달라진다. 카드를 그리는
@@ -142,27 +156,32 @@ spec:
           workingDir: /app
           command: ["node", "/app/scripts-dist/operator-command-worker.cjs"]
           env:
+            - { name: SLACK_ENABLED, value: "true" }
             - name: FEATURE_METRIC_ISSUE_REGISTRATION
               valueFrom: { configMapKeyRef: { name: backoffice-runtime-flags, key: FEATURE_METRIC_ISSUE_REGISTRATION, optional: true } }
             - name: FEATURE_GENERAL_ISSUES_ENABLED
               valueFrom: { configMapKeyRef: { name: backoffice-runtime-flags, key: FEATURE_GENERAL_ISSUES_ENABLED, optional: true } }
-            - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID, optional: true } }
-            - name: DISCORD_ROLE_OPERATOR_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATOR_ID, optional: true } }
-            - name: DISCORD_ROLE_PRODUCT_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_PRODUCT_ID, optional: true } }
-            - name: DISCORD_ROLE_DESIGN_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DESIGN_ID, optional: true } }
-            - name: DISCORD_ROLE_DEVELOPMENT_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DEVELOPMENT_ID, optional: true } }
-            - name: DISCORD_ROLE_CS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_CS_ID, optional: true } }
-            - name: DISCORD_ROLE_QA_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_QA_ID, optional: true } }
-            - name: DISCORD_ROLE_RELEASE_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID, optional: true } }
-            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
+            - name: SLACK_ROLE_OPERATIONS_ADMIN_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_OPERATIONS_ADMIN_USERS, optional: true } }
+            - name: SLACK_ROLE_OPERATOR_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_OPERATOR_USERS, optional: true } }
+            - name: SLACK_ROLE_PRODUCT_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_PRODUCT_USERS, optional: true } }
+            - name: SLACK_ROLE_DESIGN_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DESIGN_USERS, optional: true } }
+            - name: SLACK_ROLE_DEVELOPMENT_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DEVELOPMENT_USERS, optional: true } }
+            - name: SLACK_ROLE_CS_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_CS_USERS, optional: true } }
+            - name: SLACK_ROLE_QA_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_QA_USERS, optional: true } }
+            - name: SLACK_ROLE_DATA_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DATA_USERS, optional: true } }
+            - name: SLACK_ROLE_VIEWER_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_VIEWER_USERS, optional: true } }
+            - name: SLACK_ROLE_RELEASE_OPS_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_RELEASE_OPS_USERS, optional: true } }
+            - { name: PLATFORM_SLACK_APPROVAL_ENVIRONMENTS, value: "staging,production" }
             - { name: PLATFORM_APPROVER_TOKEN_DIRECTORY, value: /var/run/secrets/platform-approvers }
             - { name: NODE_ENV, value: production }
             - { name: HOME, value: /tmp }
@@ -179,12 +198,12 @@ spec:
             - { name: XCODE_CLOUD_APP_STORE_REPOS, value: "seorilabs/happy-farm,seorilabs/crossword-puzzle,seorilabs/foam-party,seorilabs/lucid-chess,seorilabs/cycle-pair,seorilabs/slotmachine-game,seorilabs/lizard-tycoon,seorilabs/jomul,seorilabs/spiritgate-defenders,seorilabs/saju-reader,seorilabs/reascend,seorilabs/lord-ledger" }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DATABASE_URL } }
-            - name: DISCORD_APPLICATION_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_APPLICATION_ID } }
-            - name: DISCORD_GUILD_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_GUILD_ID } }
-            - name: DISCORD_BOT_TOKEN
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_BOT_TOKEN } }
+            - name: SLACK_APP_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_APP_ID } }
+            - name: SLACK_WORKSPACE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_WORKSPACE_ID } }
+            - name: SLACK_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_BOT_TOKEN } }
             - name: GITHUB_APP_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: GITHUB_APP_ID } }
             - name: GITHUB_PRIVATE_KEY

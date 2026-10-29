@@ -17,7 +17,7 @@ export function senderKey(payload: Prisma.JsonValue): string | null {
 
 /** 발신자 키 → 봇 토큰. 미지정이거나 토큰이 없으면 undefined(메인 봇). */
 export function senderBotToken(payload: Prisma.JsonValue): string | undefined {
-  return senderKey(payload) === SEORI_SENDER ? env.discordSeoriBotToken() || undefined : undefined;
+  return senderKey(payload) === SEORI_SENDER ? env.slackBotToken() || undefined : undefined;
 }
 
 /**

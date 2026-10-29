@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { batchName, batchResultNotification, frequentBatch, hourStart } from "./notification";
 import { kstTime } from "@/lib/analytics/console-sync/report";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import { BATCH_SOURCE, OBSERVER_SOURCE, batchInputSchema, dailyWindow, expectedSchedules, incidentAction, summarizeRuns,
   type BatchInput, type CronObservation } from "./contract";
@@ -100,7 +100,7 @@ export async function publishBatchSummary(tx: Prisma.TransactionClient, now: Dat
     unknownCoverage ? `관측 공백 있음: 도입 전 구간 또는 감시 중단 ${gaps.length}구간. 사라진 이력과 미관측 실행의 성공 여부는 미확인입니다.` : "감시 연결 이력에 공백이 없습니다.",
     "실행 성공은 프로세스 완료 기준입니다. 수집 자료의 완성도와 저장 대조 결과는 수집별 알림에서 확인하세요.",
     ...attention.slice(0, 12), ...(attention.length > 12 ? [`그 밖의 주의 대상 ${attention.length - 12}개 (집계 원장 보존)`] : [])];
-  await enqueueNotification({ dedupeKey, kind: "OPERATIONAL_EVENT", occurredAt: now, destinations: discordDestinations(["batch-monitoring"]),
+  await enqueueNotification({ dedupeKey, kind: "OPERATIONAL_EVENT", occurredAt: now, destinations: notificationDestinations(["batch-monitoring"]),
     payload: { report: { category: "response", reason: "USER_REQUESTED_BATCH_SUMMARY" }, source: BATCH_SOURCE,
       text: lines.join("\n"), summary: json({ ...totals, unknownCoverage, details }),
       embed: { title: "서비스 배치 일일 결과", color: totals.failed || unknownCoverage || attention.length ? EMBED_COLOR.WARNING : EMBED_COLOR.SUCCESS, timestamp: now.toISOString() } } }, tx);
@@ -154,7 +154,7 @@ async function publishHourlySummaries(tx: Prisma.TransactionClient, now: Date, c
     const prior = await tx.notificationEvent.findUnique({ where: { dedupeKey: key }, select: { id: true, payload: true } });
     if ((prior?.payload as { digest?: string } | null)?.digest === digest) continue;
     const eventId = await enqueueNotification({ dedupeKey: key, kind: "OPERATIONAL_EVENT", occurredAt: now,
-      destinations: discordDestinations(["batch-monitoring"]), payload: { source: BATCH_SOURCE, digest,
+      destinations: notificationDestinations(["batch-monitoring"]), payload: { source: BATCH_SOURCE, digest,
         report: { category: "response", reason: "USER_REQUESTED_BATCH_RESULT" },
         text: [`${kstTime(start)} ~ ${kstTime(finish)} (한국 시간)`, ...details,
           ...(start < activatedAt ? ["감시 시작 이후 확인한 실행만 포함합니다."] : []),

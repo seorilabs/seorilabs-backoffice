@@ -17,7 +17,7 @@ test("운영 worker에 공개 채널이 설정되고 Job 식별 패치는 OAuth�
   const workers = parseAllDocuments(readFileSync("k8s/discord-workers.yaml", "utf8")).map((doc) => doc.toJSON());
   const worker = workers.find((item) => item.metadata.name === "backoffice-notification-worker");
   const env = worker.spec.template.spec.containers[0].env;
-  assert.match(env.find((item: { name: string }) => item.name === "DISCORD_CHANNEL_BATCH_MONITORING_ID").value, /^\d{17,20}$/);
+  assert.match(env.find((item: { name: string }) => item.name === "SLACK_CHANNEL_BATCH_MONITORING_ID").value, /^[CG][A-Z0-9]{8,}$/);
   const patch = parse(readFileSync("k8s/console-metrics-batch-identity-patch.yaml", "utf8"));
   assert.deepEqual(Object.keys(patch.spec), ["jobTemplate"]);
   const container = patch.spec.jobTemplate.spec.template.spec.containers[0];

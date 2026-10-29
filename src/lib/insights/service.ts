@@ -10,8 +10,8 @@ import {
   requeueNotification,
 } from "@/lib/notifications/outbox";
 import {
-  discordDestinationOrFallback,
-  type DiscordDestinationKey,
+  destinationOrFallback,
+  type DestinationKey,
 } from "@/lib/notifications/destinations";
 import { llmChatModel } from "@/lib/ai/llm";
 import { env } from "@/lib/env";
@@ -60,7 +60,7 @@ async function serializable<T>(
     }
   }
 }
-function destination(kind: string, severity: string): DiscordDestinationKey {
+function destination(kind: string, severity: string): DestinationKey {
   if (severity === "critical" && /service-/.test(kind)) return "ops-alerts";
   if (/review/.test(kind)) return "user-reviews";
   if (/release|submission|published|public-listing/.test(kind))
@@ -326,7 +326,7 @@ async function claim(workerId: string) {
                   document.id,
                   made,
                 ),
-                destinations: discordDestinationOrFallback(
+                destinations: destinationOrFallback(
                   destination(document.signal.kind, document.signal.severity),
                   "backoffice",
                 ),
@@ -566,7 +566,7 @@ export async function processNextInsight(
             document.id,
             made,
           ),
-          destinations: discordDestinationOrFallback(
+          destinations: destinationOrFallback(
             destination(document.signal.kind, document.signal.severity),
             "backoffice",
           ),

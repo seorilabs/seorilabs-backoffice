@@ -39,7 +39,7 @@ test("미설정/빈 allowlist 는 전부 대상 아님", () => {
 });
 
 test("두 워커의 Xcode Cloud allowlist 가 서로 어긋나지 않는다", () => {
-  // 웹/스케줄러는 deployment.yaml, Discord 명령 워커는 discord-workers.yaml 을 쓴다.
+  // 웹/스케줄러는 deployment.yaml, Slack 명령 워커는 discord-workers.yaml 을 쓴다.
   // 한쪽만 갱신하면 같은 repo 가 경로에 따라 GH 와 Xcode Cloud 로 갈린다.
   const pick = (file: string) =>
     readFileSync(new URL(file, import.meta.url), "utf8")

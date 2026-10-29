@@ -1,8 +1,8 @@
 import type { ReleaseMarket, ReleaseStatus } from "@prisma/client";
-import type { DiscordActionRow } from "@/lib/notifications/discord";
+import type { MessageActionRow } from "@/lib/notifications/channel";
 import { playInternalTestLink } from "@/lib/domain/play-internal-test";
 import { EMBED_COLOR } from "@/lib/notifications/style";
-import type { DiscordRender } from "@/lib/notifications/format";
+import type { MessageRender } from "@/lib/notifications/format";
 
 const MARKET_LABEL: Record<ReleaseMarket, string> = {
   AIT: "AppsInToss",
@@ -76,7 +76,7 @@ export function renderDeployAllStatusCard(input: {
   status: Extract<ReleaseStatus, "SUCCEEDED" | "FAILED">;
   runUrl?: string;
   updatedAt: Date;
-}): DiscordRender {
+}): MessageRender {
   const lines = [
     `배포 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
     input.status === "SUCCEEDED"
@@ -90,7 +90,7 @@ export function renderDeployAllStatusCard(input: {
       title: `🚀 ${input.displayName} ${input.version} · 전체 마켓 배포`,
       color: STATUS_COLOR[input.status],
       ...(input.runUrl ? { url: input.runUrl } : {}),
-      // 갱신 시각은 본문에 적지 않고 Discord 가 상자 하단에 렌더하게 한다.
+      // 갱신 시각은 본문에 적지 않고 Slack 가 상자 하단에 렌더하게 한다.
       // 이 카드는 같은 메시지를 계속 편집하므로 "언제 갱신됐나" 가 늘 필요하다.
       timestamp: input.updatedAt.toISOString(),
     },
@@ -125,7 +125,7 @@ export function renderDeployStatusCard(input: {
   externalBuildNumber?: number | null;
   runUrl?: string;
   updatedAt: Date;
-}): DiscordRender {
+}): MessageRender {
   const lines = [
     `빌드·업로드 워크플로: ${WORKFLOW_STATUS_LABEL[input.status]}`,
     ...marketGates(input.market, input.status, input.track),
@@ -191,7 +191,7 @@ function button(
   action: DeployCardAction,
   releaseRecordId: string,
   style: 1 | 2 | 4,
-): DiscordActionRow["components"][number] {
+): MessageActionRow["components"][number] {
   return {
     type: 2,
     style,
@@ -200,7 +200,7 @@ function button(
   };
 }
 
-function row(components: DiscordActionRow["components"]): DiscordActionRow[] {
+function row(components: MessageActionRow["components"]): MessageActionRow[] {
   return components.length ? [{ type: 1, components }] : [];
 }
 
@@ -208,7 +208,7 @@ function row(components: DiscordActionRow["components"]): DiscordActionRow[] {
 function appStoreButtons(
   releaseRecordId: string,
   review: AppStoreReviewCardState | null,
-): DiscordActionRow["components"] {
+): MessageActionRow["components"] {
   // 상태를 못 읽었으면 임의 액션을 노출하지 않고 새로고침만 남긴다.
   if (!review) return [button("appstore_refresh", releaseRecordId, 2)];
   const refresh = button("appstore_refresh", releaseRecordId, 2);
@@ -242,7 +242,7 @@ export function isReleaseTag(version: string): boolean {
   return RELEASE_TAG_RE.test(version);
 }
 
-function linkButton(label: string, url: string): DiscordActionRow["components"][number] {
+function linkButton(label: string, url: string): MessageActionRow["components"][number] {
   return { type: 2, style: 5, label, url };
 }
 
@@ -260,12 +260,12 @@ export function deployCardComponents(input: {
   review?: AppStoreReviewCardState | null;
   /** 백오피스에 입력된 Play 내부 테스트 바로가기 URL. */
   internalTestUrl?: string | null;
-}): DiscordActionRow[] {
+}): MessageActionRow[] {
   if (input.status !== "SUCCEEDED") return [];
   if (input.market === "PLAY") {
     // 내부 테스트 링크는 태그와 무관하다. snapshot 후보도 내부 트랙으로 올라간다.
     const internalTest = playInternalTestLink(input.internalTestUrl);
-    const buttons: DiscordActionRow["components"] = [];
+    const buttons: MessageActionRow["components"] = [];
     if (isReleaseTag(input.version) && !input.promotionRequested) {
       buttons.push(button("play_promote", input.releaseRecordId, 4));
     }

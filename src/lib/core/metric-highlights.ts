@@ -571,7 +571,7 @@ export interface ConsoleListingSeries {
 }
 
 /**
- * 하이라이트 판정에 쓰인 적재·판정 결과 일체. Discord 리포트와 Org 종합 보고서 스냅샷이
+ * 하이라이트 판정에 쓰인 적재·판정 결과 일체. Slack 리포트와 Org 종합 보고서 스냅샷이
  * 같은 계산 결과를 공유하기 위해 원시 시계열까지 함께 담는다(재질의 없이 분해 생성).
  */
 export interface HighlightData {

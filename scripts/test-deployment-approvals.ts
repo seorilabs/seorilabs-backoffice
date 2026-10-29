@@ -11,7 +11,7 @@ async function main() {
   const code = await issueLinkCode(githubId);
   const results = await Promise.allSettled([connectAccount(code, `${githubId}1`), connectAccount(code, `${githubId}2`)]);
   assert.equal(results.filter(r => r.status === "fulfilled").length, 1, "일회용 코드 동시 소비 1회");
-  const stored = await prisma.discordLinkCode.findUniqueOrThrow({ where: { codeHash: createHash("sha256").update(code).digest("hex") } });
+  const stored = await prisma.slackLinkCode.findUniqueOrThrow({ where: { codeHash: createHash("sha256").update(code).digest("hex") } });
   assert.ok(stored.consumedAt); assert.notEqual(stored.codeHash, code);
   const row = await prisma.deploymentApproval.create({ data: { repository: "seorilabs/platform", runId: githubId, runAttempt: 1, environmentId: 20n, environment: "staging", sourceSha: "a".repeat(40), workflow: "Deploy staging", runNumber: 1, waitingSince: new Date(), observedAt: new Date() } });
   const claims = await Promise.all(Array.from({ length: 10 }, (_, i) => prisma.deploymentApproval.updateMany({ where: { id: row.id, actionState: "IDLE" }, data: { actionState: "SENDING", actionCommandId: `test-${githubId}-${i}` } })));
@@ -20,7 +20,7 @@ async function main() {
   const secondAttempt = await prisma.deploymentApproval.create({ data: { repository: "seorilabs/platform", runId: githubId, runAttempt: 2, environmentId: 20n, environment: "staging", sourceSha: "a".repeat(40), workflow: "Deploy staging", runNumber: 1, waitingSince: new Date(), observedAt: new Date() } });
   assert.notEqual(row.id, secondAttempt.id);
   await disconnectAccount(githubId, `approval-test-${githubId}`);
-  assert.equal(await prisma.discordAccountLink.count({ where: { githubId } }), 0);
+  assert.equal(await prisma.slackAccountLink.count({ where: { githubId } }), 0);
   console.log("MySQL: 코드 동시 소비, 계정 유일성, 요청 CAS, worker 재시작, 재실행 분리, 연결 해제 통과");
 }
 main().finally(() => prisma.$disconnect());

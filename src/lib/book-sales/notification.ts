@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import { summarizeBookSales, type BookSalesSnapshot } from "./contract";
 
@@ -16,7 +16,7 @@ export function bookSalesChangeNotification(previous: BookSalesSnapshot | null, 
   const royalties = Object.entries(after.estimatedRoyalties).map(([currency, amount]) => `${currency} ${amount}`).join(", ") || "0";
   return {
     dedupeKey: `book-sales-change:${current.account}:${current.month}:${current.runId}`,
-    kind: "OPERATIONAL_EVENT" as const, occurredAt: now, destinations: discordDestinations(["ops-alerts"]),
+    kind: "OPERATIONAL_EVENT" as const, occurredAt: now, destinations: notificationDestinations(["ops-alerts"]),
     payload: { source: "book-sales-kdp", report: { category: "change", reason: "BOOK_SALES_FACTS_CHANGED" },
       text: [`${current.month} KDP 판매 보고서에 신규 또는 정정 데이터가 있습니다.`,
         `순판매 ${before?.netUnits ?? "미관측"} → ${after.netUnits}권, 환불 ${after.refunds}권`,

@@ -3,7 +3,7 @@ import { METRIC_SPECS } from "@/lib/core/metric-highlights";
 import type { OrgReportDocument } from "@/lib/core/org-report-schema";
 import { coverageSummary } from "./daily-contract";
 import { sourceStateLabel } from "@/lib/insights/collection";
-import { discordActionLines } from "./action-presentation";
+import { messageActionLines } from "./action-presentation";
 
 function canonicalFact(_key: string, value: unknown): unknown {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -131,7 +131,7 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
     `토스 광고 추정 수익 ${doc.summary.console.iaaKrw === null ? "미수집" : `${Math.round(doc.summary.console.iaaKrw).toLocaleString("ko-KR")}원`} · 기준 ${doc.consoleMeta.refDate ?? "미확인"}`,
     `수집 범위 ${coverage.observed}/${coverage.expected}개 앱·보고서 · 누락은 0으로 계산하지 않습니다.`,
     "**다음 행동**",
-    ...discordActionLines(edition?.actions ?? []),
+    ...messageActionLines(edition?.actions ?? []),
     ...(url ? [`[같은 버전의 전체 보고서·근거](${url})`] : []),
   ].join("\n");
 }

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import {
   enqueueNotification,
   retryDeadLetterNotification,
@@ -191,7 +191,7 @@ export async function sendFinanceReport(
                   timestamp: now.toISOString(),
                 },
               },
-              destinations: discordDestinations(["app-ops"]),
+              destinations: notificationDestinations(["app-ops"]),
             },
             tx,
           );

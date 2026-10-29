@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { kstLogStamp } from "@/lib/format/kst";
 import { EMBED_COLOR } from "@/lib/notifications/style";
-import type { DiscordRender } from "@/lib/notifications/format";
+import type { MessageRender } from "@/lib/notifications/format";
 import { marketLabel, testPurchaseState } from "@/lib/notifications/iap-summary";
 
 export const OPERATIONAL_EVENT_TYPES = [
@@ -229,9 +229,9 @@ export function operationalEventFacts(
 /**
  * #action-events 로그 한 줄.
  *
- * 이 채널은 훑어 보는 기록이라 건마다 상자를 그리면 로그로 읽히지 않는다. Discord 는
+ * 이 채널은 훑어 보는 기록이라 건마다 상자를 그리면 로그로 읽히지 않는다. Slack 는
  * 비고정폭 폰트라 열 정렬이 불가능하므로, 정렬 대신 이모지와 굵은 앱 이름으로 스캔을
- * 만든다. 시각을 맨 뒤에 두는 이유는 Discord 가 메시지 왼쪽에 게시 시각을 이미 붙이기
+ * 만든다. 시각을 맨 뒤에 두는 이유는 Slack 가 메시지 왼쪽에 게시 시각을 이미 붙이기
  * 때문이다 — 줄 안의 시각은 이벤트 발생 시각으로만 의미가 있다.
  */
 export function operationalEventLine(
@@ -279,7 +279,7 @@ export function isOpsAlert(type: OperationalEventType): boolean {
 export function operationalInterestCard(
   event: OperationalEventInput,
   displayName: string,
-): DiscordRender {
+): MessageRender {
   const facts = operationalEventFacts(event);
   const failure = isOpsAlert(event.type);
   return {

@@ -1,5 +1,5 @@
 import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
 export const kstTime = (date: Date) => new Intl.DateTimeFormat("ko-KR", {
@@ -13,7 +13,7 @@ export function consoleReport(input: {
     dedupeKey: `ait-console-${input.manual ? "push" : "collection"}:${input.runId}`,
     kind: "OPERATIONAL_EVENT" as const,
     occurredAt: input.now,
-    destinations: discordDestinations(["batch-monitoring"]),
+    destinations: notificationDestinations(["batch-monitoring"]),
     payload: {
       report: { category: "response", reason: "USER_REQUESTED_COLLECTION_RESULT" },
       text: [`${input.manual ? "수동 수집 " : ""}시작 ${kstTime(input.startedAt ?? input.now)}`, `종료 ${kstTime(input.now)} (한국 시간)`, ...input.lines].join("\n"),

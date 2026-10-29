@@ -65,7 +65,7 @@ function isolated(t: TestContext, options: { registered?: boolean; failEnqueue?:
   }));
   t.mock.method(db.operationalEvent, "count", async () => 1);
   t.mock.method(db.notificationEvent, "findUnique", async ({ where }: Prisma.NotificationEventFindUniqueArgs) => notifications.get(where.dedupeKey ?? "") ?? null);
-  t.mock.method(env, "discordChannelId", () => "1234567890");
+  t.mock.method(env, "notificationChannelId", () => "1234567890");
   t.mock.method(db.notificationEvent, "upsert", async ({ create }: Prisma.NotificationEventUpsertArgs) => {
     if (failEnqueue) { failEnqueue = false; throw new Error("outbox temporarily unavailable"); }
     if (!notifications.has(create.dedupeKey)) notifications.set(create.dedupeKey, create);
@@ -83,7 +83,7 @@ test("신규 계정과 새 버전 첫 유입은 실제 라우트에서 한 줄 �
     assert.equal((await POST(request(event))).status, 202);
     const notification = notifications.get(`operational:${event.eventId}`);
     assert.ok(notification, event.type);
-    assert.deepEqual(notification.deliveries, { create: [{ provider: "DISCORD", destinationKey: "action-events" }] });
+    assert.deepEqual(notification.deliveries, { create: [{ provider: "SLACK", destinationKey: "action-events" }] });
     const payload = notification.payload as Prisma.InputJsonObject;
     assert.match(String(payload.text), /블룸핸드.*1\.0\.3.*ios/);
     assert.equal(String(payload.text).includes("\n"), false);

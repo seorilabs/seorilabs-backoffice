@@ -4,25 +4,47 @@ const database = new URL(process.env.DATABASE_URL || 'http://invalid');
 if (!['127.0.0.1', 'localhost'].includes(database.hostname) || database.pathname !== '/backoffice_qa') throw new Error('ISOLATED_DATABASE_REQUIRED');
 Object.assign(process.env, {
   FEATURE_GENERAL_ISSUES_ENABLED: 'true', FEATURE_CLAUDE_ENABLED: 'true', CHAT_LLM_PROVIDER: 'anthropic', CLAUDE_API_KEY_IH: 'qa-synthetic-key',
-  GITHUB_APP_ID: '999', DISCORD_GUILD_ID: '100', DISCORD_CHANNEL_BACKOFFICE_ID: '200', DISCORD_CHANNEL_RELEASE_OPS_ID: '201', DISCORD_ROLE_PRODUCT_ID: 'product', DISCORD_ROLE_DEVELOPMENT_ID: 'development', DISCORD_ROLE_VIEWER_ID: 'viewer', DISCORD_BOT_TOKEN: 'qa-synthetic-bot',
+  GITHUB_APP_ID: '999', SLACK_ENABLED: 'true', SLACK_APP_ID: 'A000GENERAL', SLACK_WORKSPACE_ID: 'T000GENERAL', SLACK_CHANNEL_BACKOFFICE_ID: 'C000OPS', SLACK_CHANNEL_RELEASE_OPS_ID: 'C000RELEASE',
+  SLACK_ROLE_OPERATIONS_ADMIN_USERS: '', SLACK_ROLE_OPERATOR_USERS: '', SLACK_ROLE_PRODUCT_USERS: '', SLACK_ROLE_DESIGN_USERS: '', SLACK_ROLE_DEVELOPMENT_USERS: '', SLACK_ROLE_QA_USERS: '', SLACK_ROLE_DATA_USERS: '', SLACK_ROLE_RELEASE_OPS_USERS: '', SLACK_ROLE_CS_USERS: '', SLACK_ROLE_VIEWER_USERS: '', SLACK_BOT_TOKEN: 'qa-synthetic-bot',
   AUTH_SECRET: 'qa-isolated-general-issues-secret', AUTH_TRUST_HOST: 'true', AUTH_URL: 'http://localhost:3307',
 });
 process.env.GITHUB_PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
-const state = global.__generalIssueQa = { issues: [], messages: [], mode: 'ok', writes: 0, memberRoles: ['product'] };
+const state = global.__generalIssueQa = { issues: [], messages: [], mode: 'ok', writes: 0, slackUsers: {}, slackMessages: new Map(), slackSequence: 0 };
 const originalFetch = global.fetch;
 global.fetch = async (input, init = {}) => {
   const url = new URL(typeof input === 'string' ? input : input.url || String(input));
   const method = init.method || 'GET';
-  const body = init.body ? JSON.parse(String(init.body)) : {};
+  const contentType = new Headers(init.headers).get('content-type') || '';
+  const body = !init.body ? {} : contentType.startsWith('application/x-www-form-urlencoded')
+    ? Object.fromEntries(new URLSearchParams(String(init.body)))
+    : JSON.parse(String(init.body));
   if (['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname)) return originalFetch(input, init);
   if (url.hostname === 'api.anthropic.com') {
     if (state.mode === 'claude-fail') return Response.json({ error: 'qa' }, { status: 503 });
     return Response.json({ type: 'message', stop_reason: 'end_turn', content: [{ type: 'text', text: body.system?.includes('일반 요청') ? JSON.stringify({ title: '설정 조사 요청', body: '## 요청\n설정 화면의 알림 설정 방법을 조사해 주세요.' }) : '## 기획·버그 초안\n요청 내용 확인' }] });
   }
-  if (url.hostname === 'discord.com') {
-    if (url.pathname.includes('/members/')) return Response.json({ roles: state.memberRoles });
-    state.messages.push({ url: url.pathname, method, body });
-    return Response.json({ id: String(800 + state.messages.length) });
+  if (url.origin === 'https://slack.com') {
+    if (method !== 'POST') throw new Error(`UNEXPECTED_QA_SLACK_METHOD ${method}`);
+    if (url.pathname === '/api/users.info') {
+      if (!contentType.startsWith('application/x-www-form-urlencoded')) throw new Error('INVALID_QA_SLACK_USER_ENCODING');
+      const user = state.slackUsers[body.user];
+      return user ? Response.json({ ok: true, user: { ...user } }) : Response.json({ ok: false, error: 'user_not_found' });
+    }
+    if (['/api/chat.postMessage', '/api/chat.update', '/api/chat.postEphemeral'].includes(url.pathname)) {
+      if (!/^[CG][A-Z0-9]+$/.test(body.channel || '')) throw new Error('INVALID_QA_SLACK_CHANNEL');
+      if (typeof body.text !== 'string' || !body.text.trim() || !Array.isArray(body.blocks)) throw new Error('INVALID_QA_SLACK_MESSAGE');
+      const ts = url.pathname === '/api/chat.update' ? String(body.ts) : `2200000000.${String(++state.slackSequence).padStart(6, '0')}`;
+      if (!/^\d+\.\d+$/.test(ts)) throw new Error('INVALID_QA_SLACK_TIMESTAMP');
+      const key = `${body.channel}:${ts}`;
+      if (url.pathname === '/api/chat.update' && !state.slackMessages.has(key)) return Response.json({ ok: false, error: 'message_not_found' });
+      const message = { text: body.text, blocks: body.blocks };
+      state.slackMessages.set(key, message);
+      state.messages.push({ url: url.pathname, method, body, ts });
+      return url.pathname === '/api/chat.postEphemeral'
+        ? Response.json({ ok: true, message_ts: ts })
+        : Response.json({ ok: true, channel: body.channel, ts, message });
+    }
+    throw new Error(`UNEXPECTED_QA_SLACK_REQUEST ${method} ${url.pathname}`);
   }
   if (url.hostname === 'api.github.com') {
     if (url.pathname === '/orgs/seorilabs/installation') return Response.json({ id: 999, app_id: 999, target_id: 999, account: { id: 999, login: 'seorilabs', type: 'Organization' }, repository_selection: 'all', target_type: 'Organization', permissions: {}, events: [] });

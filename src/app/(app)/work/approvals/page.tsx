@@ -1,5 +1,5 @@
 import { kstDateTimeShort } from "@/lib/format/kst";
-import { DiscordAccountConnection } from "@/components/DiscordAccountConnection";
+import { SlackAccountConnection } from "@/components/SlackAccountConnection";
 import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
@@ -42,7 +42,7 @@ export default async function ApprovalsPage() {
         <p className="text-sm text-neutral-500">
           GitHub 환경 승인입니다. 승인과 배포 성공은 별도로 확인합니다.
         </p>
-        <DiscordAccountConnection />
+        <SlackAccountConnection />
         {deployments.length === 0 && (
           <p className="text-sm">
             저장된 대기 항목 없음 — 조회 장애 여부는 #ops-alerts에서 확인하세요.

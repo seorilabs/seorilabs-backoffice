@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
 const BUCKET_MS = 5 * 60_000;
@@ -119,7 +119,7 @@ export async function recordRealtimeActivity(input: {
               timestamp: input.bucketAt.toISOString(),
             },
           },
-          destinations: discordDestinations(["app-ops"]),
+          destinations: notificationDestinations(["app-ops"]),
         }, tx);
       }
       return decision.alert ? "alerted" : "sampled";
