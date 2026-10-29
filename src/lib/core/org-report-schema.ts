@@ -139,7 +139,7 @@ export const orgReportDocumentSchema = z
       .nullable()
       .optional(),
     /**
-     * Discord 에 실제로 나간 내용의 지문. 늦게 도착한 수집을 반영해 이 날짜를 다시
+     * Slack 에 실제로 나간 내용의 지문. 늦게 도착한 수집을 반영해 이 날짜를 다시
      * 계산했을 때 "정정이 필요한가"를 판단하는 유일한 근거다. 발행분이 아니면 null.
      *
      * optional 이라 구 문서도 그대로 파싱된다. version 리터럴을 올리면 기존 스냅샷이

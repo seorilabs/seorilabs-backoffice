@@ -2,7 +2,7 @@ import { env } from "@/lib/env";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
-// Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Discord로 알린다.
+// Godot 최신 stable 버전을 감지해, pin 된 버전과 다르면 Slack로 알린다.
 // 실제 bump(코드 수정)는 하지 않는다 — 감지+알림 전용. CronJob 이 주기 호출.
 
 const RELEASES_API =

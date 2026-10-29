@@ -1,4 +1,4 @@
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import {
   enqueueNotification,
   type NotificationOutboxClient,
@@ -7,7 +7,7 @@ import {
   deployNotificationDedupeKey,
   type EnqueueDeployCompletionPayload,
 } from "@/lib/notifications/deploy-format";
-import { renderPayload, type DiscordRender } from "@/lib/notifications/format";
+import { renderPayload, type MessageRender } from "@/lib/notifications/format";
 
 // 배포 알림 enqueue 전용. 전달(deploy.ts)은 App Store Connect 를 호출하는데, 이 경로는
 // workflow_run 미러와 reconcile CronJob 양쪽에서 호출되는 공용 enqueue 경계다.
@@ -25,7 +25,7 @@ export async function enqueueDeployCompletionNotification(
       status: payload.status,
       ...(payload.runUrl ? { runUrl: payload.runUrl } : {}),
     },
-    destinations: discordDestinations(["release-ops"]),
+    destinations: notificationDestinations(["release-ops"]),
   }, db);
 }
 
@@ -34,7 +34,7 @@ export async function enqueueDeployCompletionNotification(
  * 같은 릴리즈 채널에 단발 알림으로 남겨 ALL 배포가 무음으로 끝나지 않게 한다.
  */
 export async function enqueueDeployAllResultNotification(input: {
-  render: DiscordRender;
+  render: MessageRender;
   eventKey: string;
   occurredAt: Date;
 }): Promise<void> {
@@ -43,6 +43,6 @@ export async function enqueueDeployAllResultNotification(input: {
     kind: "OPS_ALERT",
     payload: renderPayload(input.render),
     occurredAt: input.occurredAt,
-    destinations: discordDestinations(["release-ops"]),
+    destinations: notificationDestinations(["release-ops"]),
   });
 }

@@ -2,34 +2,35 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import {
-  deleteDiscordChannelMessage,
-  deleteDiscordMessage,
-} from "@/lib/notifications/discord";
+  deleteChannelMessage,
+  deleteNotification,
+} from "@/lib/notifications/channel";
 import { senderBotToken } from "@/lib/notifications/sender";
+import { senderKey } from "@/lib/notifications/sender";
+import { deleteLegacyDiscordReview } from "./legacy-discord";
+import { fileReceipt } from "./channel";
+import { slackApi } from "@/lib/slack/api";
 
 function deletedOrMissing(result: {
   ok: boolean;
-  statusCode?: number;
-  errorCode?: number;
+  error?: string;
 }): boolean {
   return (
-    result.ok || (result.statusCode === 404 && result.errorCode === 10_008)
+    result.ok || result.error === "message_not_found"
   );
 }
 
 export function notificationRetentionWhere(
   cutoff: Date,
   protectedIds: string[],
+  provider: "SLACK" | "DISCORD" = "SLACK",
 ): Prisma.NotificationDeliveryWhereInput {
   return {
-    provider: "DISCORD",
-    status: { in: ["SENT", "SUPPRESSED"] },
+    provider,
+    status: { in: ["SENT", "SUPPRESSED", "DEAD_LETTER"] },
     deletedAt: null,
-    sentAt: { lt: cutoff },
-    providerMessageId: {
-      not: null,
-      ...(protectedIds.length ? { notIn: protectedIds } : {}),
-    },
+    event: { createdAt: { lt: cutoff }, OR: [{kind:"STORE_REVIEW"},{payload:{path:"$.reviewReport",equals:true}}] },
+    ...(protectedIds.length ? { OR: [{providerMessageId:null},{providerMessageId:{notIn:protectedIds}}] } : {}),
   };
 }
 
@@ -38,6 +39,7 @@ export function commandRetentionWhere(
   protectedIds: string[],
 ): Prisma.OperatorCommandRunWhereInput {
   return {
+    sourceProvider: "SLACK",
     status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
     completedAt: { lt: cutoff },
     messageId: {
@@ -55,20 +57,14 @@ export function reviewEventRetentionWhere(
     createdAt: { lt: cutoff },
     deliveries: {
       some: {},
-      every: {
-        OR: [
-          { status: "DEAD_LETTER" },
-          { status: "SUPPRESSED" },
-          { deletedAt: { not: null } },
-        ],
-      },
+      every: { deletedAt: { not: null } },
     },
   };
 }
 
-export async function maintainDiscordRetention(now = new Date()) {
+export async function maintainSlackRetention(now = new Date()) {
   const cutoff = new Date(
-    now.getTime() - env.discordRetentionDays() * 24 * 60 * 60_000,
+    now.getTime() - env.reviewRetentionDays() * 24 * 60 * 60_000,
   );
   const activeIncidents = await prisma.operationalIncident.findMany({
     where: {
@@ -81,7 +77,7 @@ export async function maintainDiscordRetention(now = new Date()) {
     item.providerMessageId ? [item.providerMessageId] : [],
   );
   const deliveries = await prisma.notificationDelivery.findMany({
-    where: notificationRetentionWhere(cutoff, protectedIds),
+    where: { OR: [notificationRetentionWhere(cutoff,protectedIds,"SLACK"),notificationRetentionWhere(cutoff,protectedIds,"DISCORD")] },
     orderBy: { sentAt: "asc" },
     take: 100,
     // 메인 봇이 아닌 정체로 게시한 알림은 그 봇만 확실히 지울 수 있다.
@@ -89,16 +85,28 @@ export async function maintainDiscordRetention(now = new Date()) {
   });
   let deletedNotifications = 0;
   for (const delivery of deliveries) {
-    const result = await deleteDiscordMessage(
-      delivery.destinationKey,
-      delivery.providerMessageId!,
-      senderBotToken(delivery.event.payload),
-    );
-    if (!deletedOrMissing(result)) continue;
-    await prisma.notificationDelivery.update({
-      where: { id: delivery.id },
-      data: { deletedAt: now },
-    });
+    const receiptObject = delivery.providerReceipt && typeof delivery.providerReceipt === "object" && !Array.isArray(delivery.providerReceipt) ? delivery.providerReceipt : {};
+    const receipt = fileReceipt(receiptObject.file);
+    const messageId = delivery.providerMessageId ?? (typeof receiptObject.postedMessageId === "string" ? receiptObject.postedMessageId : receipt?.messageTs);
+    // 전송 결과를 모르면 삭제를 확인할 수 없다. 원문과 영수증을 보존해 조치 대상으로 남긴다.
+    if ((receiptObject.postState === "STARTED" || delivery.lastError === "SLACK_DELIVERY_OUTCOME_UNKNOWN") && !messageId) continue;
+    if (delivery.provider === "DISCORD") {
+      if (messageId && !await deleteLegacyDiscordReview(delivery.destinationKey,messageId,senderKey(delivery.event.payload) ?? undefined)) continue;
+      await prisma.notificationDelivery.update({where:{id:delivery.id},data:{deletedAt:now}});
+      deletedNotifications++;
+      continue;
+    }
+    if (messageId) {
+      const result = await deleteNotification(delivery.destinationKey,messageId,senderBotToken(delivery.event.payload));
+      if (!deletedOrMissing(result)) continue;
+    }
+    let deletedFiles = true;
+    for (const file of receipt?.fileIds ?? []) {
+      const deleted = await slackApi("files.delete",{file});
+      if (!deleted.ok && deleted.error !== "file_not_found") deletedFiles = false;
+    }
+    if (!deletedFiles) continue;
+    await prisma.notificationDelivery.update({where:{id:delivery.id},data:{deletedAt:now}});
     deletedNotifications++;
   }
 
@@ -109,7 +117,7 @@ export async function maintainDiscordRetention(now = new Date()) {
   });
   let deletedCommands = 0;
   for (const command of commands) {
-    const result = await deleteDiscordChannelMessage(
+    const result = await deleteChannelMessage(
       command.channelId,
       command.messageId!,
     );
@@ -120,11 +128,13 @@ export async function maintainDiscordRetention(now = new Date()) {
     });
     deletedCommands++;
   }
-  const turns = await prisma.discordTurn.deleteMany({
+  const turns = await prisma.slackTurn.deleteMany({
     where: { createdAt: { lt: cutoff } },
   });
-  // 리뷰 원문은 전송 payload에만 최대 보존기한 동안 둔다. Discord 삭제가
-  // 확인됐거나 전송이 영구 실패한 이벤트만 제거해 pending 재시도는 보존한다.
+  await prisma.discordTurn.deleteMany({where:{createdAt:{lt:cutoff}}});
+  await prisma.slackRequestReceipt.deleteMany({where:{createdAt:{lt:new Date(now.getTime() - 86400000)}}});
+  // 리뷰 원문은 전송 payload에만 최대 보존기한 동안 둔다. Slack 삭제가
+  // 확인된 이벤트만 제거해 pending과 결과 불명 요청은 보존한다.
   const expiredReviewEvents = await prisma.notificationEvent.findMany({
     where: reviewEventRetentionWhere(cutoff),
     orderBy: { createdAt: "asc" },
@@ -143,6 +153,7 @@ export async function maintainDiscordRetention(now = new Date()) {
     where: {
       createdAt: { lt: cutoff },
       payload: { path: "$.reviewReport", equals: true },
+      deliveries: { every: { deletedAt: { not: null } } },
     },
     data: {
       payload: {

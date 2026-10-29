@@ -406,7 +406,7 @@ const recomputeBody = () => {
 };
 
 test("재계산은 발행 기록이 있는 날을 건드리지 않는다", () => {
-  // 그 날들은 Discord 메시지가 살아 있어 수치만 바꾸면 메시지와 문서가 갈린다.
+  // 그 날들은 Slack 메시지가 살아 있어 수치만 바꾸면 메시지와 문서가 갈린다.
   assert.match(recomputeBody(), /previous\?\.published[\s\S]{0,200}?skippedPublished\.push\(day\)/u);
 });
 

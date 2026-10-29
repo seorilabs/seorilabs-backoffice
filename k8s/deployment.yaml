@@ -36,7 +36,7 @@ spec:
         app.kubernetes.io/component: web
         seorilabs.dev/source-sha: "__BACKOFFICE_IMAGE_TAG__"
     spec:
-      # data ns 인덱싱 Job 생성용(Discord /index). RBAC: k8s/vault-trigger-rbac.yaml
+      # data ns 인덱싱 Job 생성용(Slack /seori note index). RBAC: k8s/vault-trigger-rbac.yaml
       serviceAccountName: backoffice
       nodeSelector:
         kubernetes.io/hostname: rpi5
@@ -52,7 +52,11 @@ spec:
             - name: http
               containerPort: 3000
           env:
-            - { name: PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS, value: "staging,production" }
+            - { name: SLACK_ENABLED, value: "true" }
+            - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
+            - name: SLACK_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_BOT_TOKEN } }
+            - { name: PLATFORM_SLACK_APPROVAL_ENVIRONMENTS, value: "staging,production" }
             - name: NODE_ENV
               value: production
             - name: PORT
@@ -280,53 +284,53 @@ spec:
                   name: backoffice-secrets
                   key: PLATFORM_ADMIN_READ_SA_KEY_JSON
                   optional: true
-            # Interaction webhook은 공개키로 검증하고, 쓰기는 별도 worker가 Bot token으로 수행한다.
-            - name: DISCORD_PUBLIC_KEY
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_PUBLIC_KEY } }
-            - name: DISCORD_GUILD_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_GUILD_ID } }
-            # Discord interaction 스코프 검사에 쓰인다. 버튼은 카드가 놓인 채널에서 눌리므로
+            # Interaction webhook은 HMAC 서명으로 검증하고, 쓰기는 별도 worker가 Bot token으로 수행한다.
+            - name: SLACK_SIGNING_SECRET
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_SIGNING_SECRET } }
+            - name: SLACK_WORKSPACE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_WORKSPACE_ID } }
+            # Slack interaction 스코프 검사에 쓰인다. 버튼은 카드가 놓인 채널에서 눌리므로
             # 카드를 보내는 채널 ID 가 여기 없으면 그 채널의 버튼이 전부 거부된다.
-            # 목록은 roles.ts 의 DISCORD_CARD_CHANNEL_KEYS 와 일치해야 한다.
-            - name: DISCORD_CHANNEL_BACKOFFICE_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_BACKOFFICE_ID } }
-            - name: DISCORD_CHANNEL_RELEASE_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_RELEASE_OPS_ID } }
-            - name: DISCORD_CHANNEL_OPS_ALERTS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_OPS_ALERTS_ID } }
-            - name: DISCORD_CHANNEL_METRICS_DAILY_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_METRICS_DAILY_ID } }
+            # 목록은 roles.ts 의 CHANNEL_CARD_CHANNEL_KEYS 와 일치해야 한다.
+            - name: SLACK_CHANNEL_BACKOFFICE_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_BACKOFFICE_ID } }
+            - name: SLACK_CHANNEL_RELEASE_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_RELEASE_OPS_ID } }
+            - name: SLACK_CHANNEL_OPS_ALERTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_OPS_ALERTS_ID } }
+            - name: SLACK_CHANNEL_METRICS_DAILY_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRICS_DAILY_ID } }
             # 담당제 통합 운영 채널 — confirm 카드 버튼 allowlist 검증에 필요.
-            - name: DISCORD_CHANNEL_APP_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_APP_OPS_ID, optional: true } }
+            - name: SLACK_CHANNEL_APP_OPS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_APP_OPS_ID, optional: true } }
             # GitHub 이슈 알림 전용 채널. enqueue 가 이 값의 유무로 목적지를 정하므로
             # 웹 Pod 에도 있어야 한다. 미설정이면 #backoffice 로 폴백한다.
-            - name: DISCORD_CHANNEL_GITHUB_ISSUES_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
-            - name: DISCORD_CHANNEL_IAP_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_IAP_ID, optional: true } }
-            - name: DISCORD_CHANNEL_AD_REWARDS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_CHANNEL_AD_REWARDS_ID, optional: true } }
-            - name: DISCORD_ROLE_OPERATIONS_ADMIN_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATIONS_ADMIN_ID } }
-            - name: DISCORD_ROLE_OPERATOR_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_OPERATOR_ID } }
-            - name: DISCORD_ROLE_PRODUCT_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_PRODUCT_ID } }
-            - name: DISCORD_ROLE_DESIGN_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DESIGN_ID } }
-            - name: DISCORD_ROLE_DEVELOPMENT_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DEVELOPMENT_ID } }
-            - name: DISCORD_ROLE_QA_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_QA_ID } }
-            - name: DISCORD_ROLE_DATA_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_DATA_ID } }
-            - name: DISCORD_ROLE_RELEASE_OPS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_RELEASE_OPS_ID } }
-            - name: DISCORD_ROLE_CS_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_CS_ID } }
-            - name: DISCORD_ROLE_VIEWER_ID
-              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: DISCORD_ROLE_VIEWER_ID } }
+            - name: SLACK_CHANNEL_GITHUB_ISSUES_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_GITHUB_ISSUES_ID, optional: true } }
+            - name: SLACK_CHANNEL_IAP_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_IAP_ID, optional: true } }
+            - name: SLACK_CHANNEL_AD_REWARDS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_AD_REWARDS_ID, optional: true } }
+            - name: SLACK_ROLE_OPERATIONS_ADMIN_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_OPERATIONS_ADMIN_USERS } }
+            - name: SLACK_ROLE_OPERATOR_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_OPERATOR_USERS } }
+            - name: SLACK_ROLE_PRODUCT_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_PRODUCT_USERS } }
+            - name: SLACK_ROLE_DESIGN_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DESIGN_USERS } }
+            - name: SLACK_ROLE_DEVELOPMENT_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DEVELOPMENT_USERS } }
+            - name: SLACK_ROLE_QA_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_QA_USERS } }
+            - name: SLACK_ROLE_DATA_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_DATA_USERS } }
+            - name: SLACK_ROLE_RELEASE_OPS_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_RELEASE_OPS_USERS } }
+            - name: SLACK_ROLE_CS_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_CS_USERS } }
+            - name: SLACK_ROLE_VIEWER_USERS
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_ROLE_VIEWER_USERS } }
             - name: PLATFORM_EVENT_SHARED_SECRET
               valueFrom:
                 secretKeyRef:

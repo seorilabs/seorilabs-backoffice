@@ -28,7 +28,7 @@ import {
 // Org 종합 지표 보고서.
 //
 // 발행은 report/daily-publication.ts에서 입력 고정과 전송을 분리한다. 이 모듈은 문서 조립과 조회를
-// 딱 한 번 수행해 (1) 스냅샷(OrgReportDaily) 저장과 (2) Discord 하이라이트 발송이
+// 딱 한 번 수행해 (1) 스냅샷(OrgReportDaily) 저장과 (2) Slack 하이라이트 발송이
 // 항상 같은 수치·판정·해설을 싣게 한다. 스냅샷 저장에 실패하면 발송하지 않는다 —
 // 500 으로 cron 재시도를 받고, outbox dedupeKey 가 이중 발송을 막는다(SENT 는 재발송
 // 되지 않는다).
@@ -90,7 +90,7 @@ function buildConsoleMeta(data: HighlightData): ConsoleMeta {
 
 /**
  * 적재된 재료 → 보고서 문서(순수 조립, DB/LLM/외부 호출 없음).
- * 수치 규칙은 Discord 하이라이트와 동일하다: GA4 합계는 기준일 스냅샷이 있는 앱만,
+ * 수치 규칙은 Slack 하이라이트와 동일하다: GA4 합계는 기준일 스냅샷이 있는 앱만,
  * 콘솔 합계는 각 리스팅의 최신 스냅샷(지연은 lagDays 로 정직하게 기록).
  */
 export function assembleOrgReportDocument(input: {
@@ -534,7 +534,7 @@ export interface RecomputeResult {
  * 둘 다 남아야 이번 사고가 기록으로 남는다. 해설과 비용은 null 로 둔다. 과거 시점을
  * 복원할 수 없고, 수치가 바뀐 문서에 옛 해설을 이어 붙이는 것이 애초의 결함이었다.
  *
- * 발행 기록(published)이 있는 날은 건드리지 않는다. 그 날들은 Discord 메시지가 아직
+ * 발행 기록(published)이 있는 날은 건드리지 않는다. 그 날들은 Slack 메시지가 아직
  * 살아 있으므로 정정 경로가 메시지까지 함께 고쳐야 한다.
  */
 export async function recomputeOrgReports(

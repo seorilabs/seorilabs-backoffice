@@ -9,8 +9,8 @@ import {
   metricDayStart,
 } from "@/lib/analytics/metric-day";
 import { reportChartSvg } from "./discord-chart";
-import type { DiscordAttachment } from "@/lib/notifications/discord";
-export async function operationsChart(end: string, weekly = false): Promise<DiscordAttachment> {
+import type { MessageAttachment } from "@/lib/notifications/channel";
+export async function operationsChart(end: string, weekly = false): Promise<MessageAttachment> {
   const points = await orgTrendSeries(end, weekly ? 7 : 28);
   const days = points.map((point) => point.date);
   const charts: Array<Parameters<typeof reportChartSvg>[0]> = [

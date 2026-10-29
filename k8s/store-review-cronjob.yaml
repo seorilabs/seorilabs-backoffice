@@ -41,6 +41,11 @@ spec:
               workingDir: /app
               command: ["node", "/app/scripts-dist/store-review-collector.cjs"]
               env:
+                - { name: SLACK_ENABLED, value: "true" }
+                - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
+                - { name: SLACK_WORKSPACE_ID, value: "T0CCP49NJAK" }
+                - { name: SLACK_ROLE_OPERATIONS_ADMIN_USERS, value: "U0CD2GKL36J" }
+                - { name: SLACK_ROLE_RELEASE_OPS_USERS, value: "U0CD2GKL36J" }
                 - { name: NODE_ENV, value: production }
                 - { name: HOME, value: /tmp }
                 - { name: CHECKPOINT_DISABLE, value: "1" }
@@ -50,11 +55,11 @@ spec:
                     secretKeyRef:
                       name: backoffice-secrets
                       key: DATABASE_URL
-                - name: DISCORD_CHANNEL_USER_REVIEWS_ID
+                - name: SLACK_CHANNEL_USER_REVIEWS_ID
                   valueFrom:
                     secretKeyRef:
                       name: backoffice-secrets
-                      key: DISCORD_CHANNEL_USER_REVIEWS_ID
+                      key: SLACK_CHANNEL_USER_REVIEWS_ID
                       optional: true
                 - name: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
                   valueFrom:

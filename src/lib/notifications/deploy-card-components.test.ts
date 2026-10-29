@@ -174,7 +174,7 @@ test("심사 상태를 읽지 못하면 임의 액션 대신 새로고침만 남
   );
 });
 
-test("카드 버튼 custom_id 는 Discord 100자 제한 안에서 액션과 배포 기록을 함께 담는다", () => {
+test("카드 버튼 custom_id 는 Slack 100자 제한 안에서 액션과 배포 기록을 함께 담는다", () => {
   const id = deployCardCustomId("appstore_review_create", RELEASE_ID);
   assert.equal(id, `deploycard:appstore_review_create:${RELEASE_ID}`);
   assert.ok(id.length <= 100);

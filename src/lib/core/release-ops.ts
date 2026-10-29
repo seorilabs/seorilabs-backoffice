@@ -79,7 +79,7 @@ export {
   type DeployTarget,
 } from "@/lib/core/deploy-targets";
 
-// 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Discord 공용.
+// 릴리즈/배포 오케스트레이션 코어 — Backoffice UI / Slack 공용.
 // 원칙: GitHub write(태그/Release/dispatch) 후 결과는 webhook 으로 미러에 재수렴.
 // 배포 dispatch 는 ReleaseRecord 를 직접 INSERT 하지 않는다(workflow_run 미러가 담당).
 

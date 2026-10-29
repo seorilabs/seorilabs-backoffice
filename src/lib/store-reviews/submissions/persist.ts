@@ -2,7 +2,7 @@ import { NotificationKind, Prisma, type StoreReviewStore } from "@prisma/client"
 import { prisma } from "@/lib/prisma";
 import { dispatchSubmissionObservation } from "@/lib/store-reviews/submissions/collector";
 import { enqueueNotification } from "@/lib/notifications/outbox";
-import { DISCORD_RELEASE_OPS } from "@/lib/notifications/destinations";
+import { CHANNEL_RELEASE_OPS } from "@/lib/notifications/destinations";
 import { decodePlayState, PLAY_STATE_PREFIX, PLAY_UNAVAILABLE } from "@/lib/google-play/release-state";
 import { normalizeSubmissionState } from "@/lib/store-reviews/submissions/normalizer";
 import { submissionContentHash } from "@/lib/store-reviews/submissions/store-agnostic-dedupe";
@@ -78,7 +78,7 @@ export async function persistSubmission(input: SubmissionWrite): Promise<"baseli
           kind: NotificationKind.STORE_REVIEW,
           payload: input.card(previous?.state ?? input.initialPreviousState ?? null),
           occurredAt: input.sourceEventAt,
-          destinations: [{ provider: "DISCORD", key: DISCORD_RELEASE_OPS }],
+          destinations: [{ provider: "SLACK", key: CHANNEL_RELEASE_OPS }],
         }, tx);
       }
       return notify ? "transition" : kind === "transition" ? "no-change" : kind;
@@ -144,7 +144,7 @@ export async function persistPlaySubmission(
           kind: NotificationKind.STORE_REVIEW,
           payload: input.card(previous?.state ?? null, firstPublished?.sourceEventAt ?? (valid?.lifecycle === "PUBLISHED" ? input.sourceEventAt : null)),
           occurredAt: input.sourceEventAt,
-          destinations: [{ provider: "DISCORD", key: DISCORD_RELEASE_OPS }],
+          destinations: [{ provider: "SLACK", key: CHANNEL_RELEASE_OPS }],
         }, tx);
         return kind;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });

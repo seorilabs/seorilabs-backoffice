@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import {
-  discordDestinationOrFallback,
+  destinationOrFallback,
   type NotificationDestination,
 } from "@/lib/notifications/destinations";
 
@@ -41,5 +41,5 @@ export function testPurchaseState(
 }
 
 export function iapDestinations(): NotificationDestination[] {
-  return discordDestinationOrFallback("iap", "action-events");
+  return destinationOrFallback("iap", "action-events");
 }

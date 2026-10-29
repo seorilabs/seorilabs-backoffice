@@ -15,7 +15,7 @@ const sample: Awaited<ReturnType<typeof collectConsoleMetrics>> = {
 test("부분 수집 알림은 실제 반영·결측·최신 날짜를 구분하고 원본을 전송하지 않는다", () => {
   const result = consoleCollectionNotification(sample, "run-1", new Date("2026-10-13T15:00:00Z"));
   assert.equal(result.kind, "OPERATIONAL_EVENT");
-  assert.deepEqual(result.destinations, [{ provider: "DISCORD", key: "batch-monitoring" }]);
+  assert.deepEqual(result.destinations, [{ provider: "SLACK", key: "batch-monitoring" }]);
   assert.match(result.payload.embed.title, /실패/);
   assert.match(result.payload.text, /저장 3건/);
   assert.match(result.payload.text, /일부 지표만 확인 1개, 모든 값 미제공 0개/);
@@ -27,7 +27,7 @@ test("부분 수집 알림은 실제 반영·결측·최신 날짜를 구분하�
 test("미제공만 남은 수집은 성공 카드와 자료 상태를 나눈다", () => {
   const result = consoleCollectionNotification({ ...sample, blocked: [] }, "missing-only");
   assert.equal(result.payload.embed.title, "✅ 앱인토스 지표 수집 성공");
-  assert.deepEqual(result.destinations, [{ provider: "DISCORD", key: "batch-monitoring" }]);
+  assert.deepEqual(result.destinations, [{ provider: "SLACK", key: "batch-monitoring" }]);
   assert.match(result.payload.text, /자료 제공 상태: 일부 값 미제공/);
 });
 

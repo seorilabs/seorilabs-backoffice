@@ -3,7 +3,7 @@ import { verifyStaticToken } from "@/lib/security";
 import { collectMetrics, collectionFailedEntirely } from "@/lib/core/analytics-collect";
 import { parseWindowDays } from "@/lib/ga4/datasets";
 
-// 일별 GA4 지표 재집계 트리거(CronJob 23:00 KST 이 호출). Discord 발송이나
+// 일별 GA4 지표 재집계 트리거(CronJob 23:00 KST 이 호출). Slack 발송이나
 // 종합 보고서 발행은 하지 않고 AppMetricDaily 만 갱신한다. 11:00 KST 발행분은
 // dedupeKey 가 하루 1건이라 재실행해도 무해하지만, Obsidian 큐잉은 매 호출마다
 // 새 노트가 쌓이므로 metric-daily 보고에는 절대 연결하지 않는다.

@@ -231,7 +231,7 @@ export async function planMarketDeploy(opts: {
     if (opts.target === "AIT" && declared.inputNames.has("upload")) {
       inputs.upload = "true";
     }
-    // PLAY 단독: 백오피스/Discord 에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
+    // PLAY 단독: 백오피스/Slack 에서 트리거하는 Google Play 배포는 항상 업로드 + 내부 테스터
     // 배포까지 진행한다. ALL은 위에서 deploy-all이 선언한 prefixed input을 따로 채운다.
     if (opts.target === "PLAY") {
       Object.assign(

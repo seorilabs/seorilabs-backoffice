@@ -7,7 +7,7 @@ import {
 } from "@/lib/notifications/external-contract";
 import { ingestExternalNotification } from "@/lib/notifications/external-ingest";
 import { drainAllNotifications } from "@/lib/notifications/deploy";
-import { maintainDiscordRetention } from "@/lib/notifications/retention";
+import { maintainSlackRetention } from "@/lib/notifications/retention";
 import { drainAppleSubmissionInbox, purgeSubmissionPayloads } from "@/lib/app-store/submission-inbox";
 
 const encoder = new TextEncoder();
@@ -56,7 +56,7 @@ async function deliver(): Promise<void> {
   let lastRetention = 0;
   while (!stopping) {
     if (Date.now() - lastRetention >= 24 * 60 * 60_000) {
-      const retained = await maintainDiscordRetention();
+      const retained = await maintainSlackRetention();
       await purgeSubmissionPayloads();
       if (retained.deletedNotifications || retained.deletedCommands || retained.deletedTurns || retained.deletedReviewEvents) {
         console.log(`[notification-worker] 보존기한 정리 알림 ${retained.deletedNotifications} · 명령 ${retained.deletedCommands} · 대화 ${retained.deletedTurns} · 리뷰 payload ${retained.deletedReviewEvents}`);
@@ -71,7 +71,7 @@ async function deliver(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (!env.discordChannelId("batch-monitoring")) throw new Error("BATCH_MONITORING_CHANNEL_NOT_CONFIGURED");
+  if (!env.notificationChannelId("batch-monitoring")) throw new Error("BATCH_MONITORING_CHANNEL_NOT_CONFIGURED");
   const delivery = deliver();
   try {
     await consume();

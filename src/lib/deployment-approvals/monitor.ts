@@ -4,7 +4,7 @@ import {
   enqueueNotification,
   requeueNotification,
 } from "@/lib/notifications/outbox";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import {
   getInstallationOctokit,
   pending,
@@ -39,7 +39,7 @@ export async function refreshApprovalCard(id: string) {
     dedupeKey: `platform-approval:${id}`,
     kind: "OPS_ALERT",
     payload: { deploymentApprovalId: id },
-    destinations: discordDestinations(["release-ops"]),
+    destinations: notificationDestinations(["release-ops"]),
   });
   await requeueNotification(eventId);
   const reminders = await prisma.notificationEvent.findMany({
@@ -121,7 +121,7 @@ export async function observeApprovalRun(runId: number) {
         dedupeKey: `platform-approval:${row.id}`,
         kind: "OPS_ALERT",
         payload: { deploymentApprovalId: row.id },
-        destinations: discordDestinations(["release-ops"]),
+        destinations: notificationDestinations(["release-ops"]),
       });
     }
     const tracked = await prisma.deploymentApproval.findMany({
@@ -211,6 +211,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
       if (!row.initialNotifiedAt) continue;
       const unsent = await prisma.notificationDelivery.count({
         where: {
+          provider: "SLACK",
           status: { in: ["PENDING", "PROCESSING", "DEAD_LETTER"] },
           event: {
             dedupeKey: { startsWith: `platform-approval-reminder:${row.id}:` },
@@ -237,7 +238,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
             dedupeKey: `platform-approval-reminder:${row.id}:${row.reminderSequence + 1}`,
             kind: "OPS_ALERT",
             payload: { deploymentApprovalId: row.id, reminder: true },
-            destinations: discordDestinations(["release-ops"]),
+            destinations: notificationDestinations(["release-ops"]),
           },
           tx,
         );
@@ -245,6 +246,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
     }
     await prisma.notificationDelivery.updateMany({
       where: {
+        provider: "SLACK",
         status: "DEAD_LETTER",
         nextAttemptAt: { lte: now },
         event: {
@@ -258,6 +260,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
     });
     const failed = await prisma.notificationDelivery.findMany({
       where: {
+        provider: "SLACK",
         lastError: { not: null },
         NOT: { lastError: "야간 재알림 보류" },
         event: {
@@ -272,7 +275,7 @@ export async function reconcileDeploymentApprovals(now = new Date()) {
     for (const item of failed)
       await approvalAlert(
         `delivery:${item.id}`,
-        "플랫폼 승인 카드 전송 실패 — 알림 대기열과 Discord 채널 설정을 확인하세요.",
+        "플랫폼 승인 카드 전송 실패 — 알림 대기열과 Slack 채널 설정을 확인하세요.",
       );
   } catch (error) {
     await approvalAlert(

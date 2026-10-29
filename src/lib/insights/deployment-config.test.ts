@@ -5,7 +5,7 @@ import test from "node:test";
 
 const channels = [
   "APP_OPS", "METRICS_DAILY", "RELEASE_OPS", "OPS_ALERTS", "USER_REVIEWS", "BACKOFFICE",
-].map((key) => `DISCORD_CHANNEL_${key}_ID`);
+].map((key) => `SLACK_CHANNEL_${key}_ID`);
 
 for (const file of ["k8s/operations-insights-worker.yaml", "k8s/market-feedback-cronjobs.yaml"]) {
   for (const document of parseAllDocuments(readFileSync(file, "utf8"))) {
@@ -25,7 +25,7 @@ for (const file of ["k8s/operations-insights-worker.yaml", "k8s/market-feedback-
         assert.equal(variable.valueFrom?.secretKeyRef?.key, name);
       }
       for (const name of [
-        "DISCORD_BOT_TOKEN", "DISCORD_TEAMMATE_SEORI_BOT_TOKEN",
+        "SLACK_BOT_TOKEN", "CHANNEL_TEAMMATE_SEORI_BOT_TOKEN",
         "GITHUB_PRIVATE_KEY", "GITHUB_DEPLOYMENT_APPROVER_TOKENS",
       ]) {
         assert.equal(variables.some((item) => item.name === name), false,

@@ -24,9 +24,10 @@ function incident(
     evidence: null,
     destinationKey: "ops-alerts",
     providerMessageId: null,
+    messageProvider: "SLACK",
     acknowledgedBy: null,
     acknowledgedAt: null,
-    assignedDiscordUserId: null,
+    assignedUserId: null,
     firstDetectedAt: detectedAt,
     lastDetectedAt: detectedAt,
     recoveredAt: null,
@@ -49,7 +50,7 @@ test("장애 발생·확인·복구 상태를 같은 카드 수명주기로 표�
     status: "ACKNOWLEDGED",
     providerMessageId: "message-1",
     acknowledgedBy: "operator-1",
-    assignedDiscordUserId: "operator-1",
+    assignedUserId: "operator-1",
   });
   assert.match(incidentRender(acknowledged).text, /상태: \*\*확인됨\*\*/);
   assert.match(incidentRender(acknowledged).text, /<@operator-1>/);

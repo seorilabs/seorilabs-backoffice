@@ -83,56 +83,98 @@ async function main() {
     "회복 횟수 요약을 발행하지 않는다",
   );
 
-  process.env.DISCORD_BOT_TOKEN = "isolated-local-only";
-  process.env.DISCORD_CHANNEL_OPS_ALERTS_ID = "1001";
-  process.env.DISCORD_CHANNEL_METRICS_DAILY_ID = "1002";
-  process.env.DISCORD_CHANNEL_APP_OPS_ID = "1003";
-  process.env.DISCORD_ROLE_RELEASE_OPS_ID = "9999";
+  process.env.SLACK_ENABLED = "true";
+  process.env.SLACK_WORKSPACE_ID = "T000POLICY";
+  process.env.SLACK_APP_ID = "A000POLICY";
+  process.env.SLACK_BOT_TOKEN = "isolated-local-only";
+  process.env.SLACK_CHANNEL_OPS_ALERTS_ID = "C000OPS";
+  process.env.SLACK_CHANNEL_METRICS_DAILY_ID = "C000METRICS";
+  process.env.SLACK_CHANNEL_APP_OPS_ID = "C000APP";
+  process.env.SLACK_ROLE_RELEASE_OPS_USERS = "U000RELEASE";
   const outgoing: Array<{
+    api: string;
     method: string;
-    body: {
-      content?: string;
-      allowed_mentions: { roles: string[] };
-      attachments?: unknown[];
-    };
+    body: Record<string, unknown>;
   }> = [];
+  const messages = new Map<string, Record<string, unknown>>();
+  const files = new Map<string, { filename: string; length: number; bytes?: Buffer; channel?: string; ts?: string }>();
+  let sequence = 0;
+  const nextTs = () => `2200000000.${String(++sequence).padStart(6, "0")}`;
+  const mentioned = (request: typeof outgoing[number]) => JSON.stringify(request.body.blocks ?? []).includes("<@U000RELEASE>");
+  const noBroadMention = (request: typeof outgoing[number]) => !/<!(channel|here|everyone)>/.test(JSON.stringify(request.body));
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const target = String(input);
-    assert.ok(
-      target.startsWith("https://discord.com/api/v10/"),
-      "unexpected external request",
-    );
-    const body =
-      init?.body instanceof FormData
-        ? JSON.parse(String(init.body.get("payload_json")))
-        : JSON.parse(String(init?.body));
-    outgoing.push({ method: init?.method ?? "GET", body });
-    return new Response(
-      JSON.stringify(
-        target.endsWith("/40400")
-          ? { code: 10008, message: "Unknown Message" }
-          : { id: String(2000 + outgoing.length) },
-      ),
-      {
-        status: target.endsWith("/40400") ? 404 : 200,
-        headers: { "content-type": "application/json" },
-      },
-    );
+    const target = new URL(String(input));
+    assert.equal(init?.method, "POST");
+    if (target.origin === "https://files.slack.com") {
+      assert.match(target.pathname, /^\/upload\/v1\/F[A-Z0-9]+$/);
+      const id = target.pathname.split("/").pop()!;
+      const file = files.get(id);
+      assert.ok(file, "발급하지 않은 업로드 URL");
+      const bytes = init?.body;
+      assert.ok(Buffer.isBuffer(bytes), "PNG 원문 바이트를 업로드한다");
+      assert.equal(bytes.length, file.length);
+      assert.deepEqual(bytes.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      file.bytes = Buffer.from(bytes);
+      outgoing.push({ api: "upload", method: "POST", body: { file: id, bytes: bytes.length } });
+      return new Response("OK", { status: 200 });
+    }
+    assert.equal(target.origin, "https://slack.com", "검수 중 실제 외부 요청 금지");
+    const api = target.pathname.replace(/^\/api\//, "");
+    assert.equal(target.pathname, `/api/${api}`);
+    const contentType = new Headers(init?.headers).get("content-type") ?? "";
+    const form = ["files.getUploadURLExternal", "files.info"].includes(api);
+    assert.match(contentType, form ? /^application\/x-www-form-urlencoded/ : /^application\/json/);
+    const body = (form
+      ? Object.fromEntries(new URLSearchParams(String(init?.body)))
+      : JSON.parse(String(init?.body ?? "{}"))) as Record<string, unknown>;
+    outgoing.push({ api, method: "POST", body });
+    if (api === "chat.postMessage" || api === "chat.update") {
+      assert.match(String(body.channel), /^C[A-Z0-9]+$/);
+      const ts = api === "chat.update" ? String(body.ts) : nextTs();
+      assert.match(ts, /^\d+\.\d+$/);
+      const key = `${body.channel}:${ts}`;
+      if (api === "chat.update" && !messages.has(key)) return Response.json({ ok: false, error: "message_not_found" });
+      messages.set(key, body);
+      return Response.json({ ok: true, channel: body.channel, ts, message: { text: body.text, blocks: body.blocks } });
+    }
+    if (api === "files.getUploadURLExternal") {
+      assert.match(String(body.filename), /\.png$/);
+      assert.ok(Number(body.length) > 8);
+      const id = `F${String(files.size + 1).padStart(10, "0")}`;
+      files.set(id, { filename: String(body.filename), length: Number(body.length) });
+      return Response.json({ ok: true, file_id: id, upload_url: `https://files.slack.com/upload/v1/${id}` });
+    }
+    if (api === "files.completeUploadExternal") {
+      assert.ok(Array.isArray(body.files) && body.files.length === 1);
+      const requested = body.files[0] as { id: string; title: string };
+      const file = files.get(requested.id);
+      assert.ok(file?.bytes, "업로드를 마친 파일만 공유한다");
+      assert.equal(file.ts, undefined, "같은 파일을 다시 게시하지 않는다");
+      assert.match(String(body.channel_id), /^C[A-Z0-9]+$/);
+      file.channel = String(body.channel_id);
+      file.ts = nextTs();
+      messages.set(`${file.channel}:${file.ts}`, { text: body.initial_comment, file: requested.id });
+      return Response.json({ ok: true, files: [{ id: requested.id, title: requested.title }] });
+    }
+    if (api === "files.info") {
+      const file = files.get(String(body.file));
+      assert.ok(file?.channel && file.ts);
+      return Response.json({ ok: true, file: { id: body.file, shares: { public: { [file.channel]: [{ ts: file.ts }] }, private: {} } } });
+    }
+    assert.fail(`예상하지 않은 Slack API 요청: ${api}`);
   };
   try {
     await enqueueNotification({
       dedupeKey: "metrics:operations:qa-legacy-pending",
       kind: "OPS_ALERT",
       payload: { text: "이전 형식의 수집 회복", alertRoleId: "9999" },
-      destinations: [{ provider: "DISCORD", key: "ops-alerts" }],
+      destinations: [{ provider: "SLACK", key: "ops-alerts" }],
     });
     await drainAllNotifications(100);
     assert.equal(outgoing.length, 0, "구형 수집 회복 대기도 SUPPRESSED");
     assert.ok(
-      outgoing.every(
-        (request) => request.body.allowed_mentions.roles.length === 0,
-      ),
+      outgoing.every((request) => !mentioned(request) && noBroadMention(request)),
     );
     outgoing.length = 0;
     const input = {
@@ -146,36 +188,31 @@ async function main() {
     const incident = await recordIncident({ ...input, signalId: "first" });
     await drainAllNotifications(100);
     assert.equal(
-      outgoing.filter((request) =>
-        request.body.allowed_mentions.roles.includes("9999"),
-      ).length,
+      outgoing.filter(mentioned).length,
       1,
     );
     outgoing.length = 0;
     await recordIncident({ ...input, signalId: "repeat" });
     await drainAllNotifications(100);
+    assert.ok(outgoing.length > 0, "반복 관측은 기존 장애 카드를 갱신한다");
     assert.ok(
       outgoing.every(
         (request) =>
-          request.method === "PATCH" &&
-          request.body.allowed_mentions.roles.length === 0,
+          request.api === "chat.update" && !mentioned(request) && noBroadMention(request),
       ),
     );
-    await prisma.operationalIncident.update({
-      where: { id: incident.id },
-      data: { providerMessageId: "40400" },
-    });
+    const currentIncident = await prisma.operationalIncident.findUniqueOrThrow({ where: { id: incident.id } });
+    assert.ok(currentIncident.providerMessageId);
+    assert.equal(messages.delete(`C000OPS:${currentIncident.providerMessageId}`), true, "사용자가 지운 메시지를 대체한다");
     outgoing.length = 0;
     await recordIncident({ ...input, signalId: "replacement" });
     await drainAllNotifications(100);
     assert.deepEqual(
-      outgoing.map((request) => request.method),
-      ["PATCH", "POST"],
+      outgoing.map((request) => request.api),
+      ["chat.update", "chat.postMessage"],
     );
     assert.ok(
-      outgoing.every(
-        (request) => request.body.allowed_mentions.roles.length === 0,
-      ),
+      outgoing.every((request) => !mentioned(request) && noBroadMention(request)),
     );
     outgoing.length = 0;
     await recordIncident({
@@ -186,9 +223,7 @@ async function main() {
     });
     await drainAllNotifications(100);
     assert.ok(
-      outgoing.every(
-        (request) => request.body.allowed_mentions.roles.length === 0,
-      ),
+      outgoing.every((request) => !mentioned(request) && noBroadMention(request)),
     );
 
     await prisma.configRevision.create({
@@ -221,7 +256,7 @@ async function main() {
         target: "해전",
         country: "kr",
         day: toDbDay(date),
-        observedAt: at(160),
+        observedAt: new Date(toDbDay(date).getTime() + 160 * 60000),
         value: { rank: date === policyDay ? 36 : 51 },
         sourceUrl: "https://itunes.apple.com/search",
       })),
@@ -242,19 +277,20 @@ async function main() {
       "SENT",
       "최초 발행이 불필요한 편집으로 다시 대기하면 안 된다",
     );
+    assert.equal(delivered.provider, "SLACK");
+    const firstDeliveryRequests = outgoing.length;
     const again = await sendDailyKeywordRanks(at(175));
     assert.equal(again.eventId, daily.eventId);
     await drainAllNotifications(100);
     assert.deepEqual(
-      outgoing.map((request) => request.method),
-      ["POST"],
+      outgoing.filter((request) => request.api === "files.completeUploadExternal").length,
+      1,
     );
+    assert.equal(outgoing.length, firstDeliveryRequests, "같은 발행의 재계산은 업로드나 메시지를 반복하지 않는다");
+    assert.equal(outgoing.filter((request) => request.api === "upload").length, 1);
+    assert.equal(outgoing.filter((request) => request.api === "chat.postMessage").length, 0, "파일 게시 메시지와 본문 메시지를 따로 만들지 않는다");
     assert.ok(
-      outgoing.every(
-        (request) =>
-          request.body.allowed_mentions.roles.length === 0 &&
-          request.body.attachments?.length === 1,
-      ),
+      outgoing.every((request) => !mentioned(request) && noBroadMention(request)),
     );
     assert.equal(
       (
@@ -276,9 +312,10 @@ async function main() {
     assert.equal(payload.rankReport.items.length, 1);
     assert.doesNotMatch(payload.text, /CSV 파일 첨부|6조합/);
     assert.ok(
-      outgoing.every((request) =>
-        JSON.stringify(request.body).includes("attachment://"),
-      ),
+      outgoing.some((request) => request.api === "chat.update" && Array.isArray(request.body.blocks) && request.body.blocks.some((block) => {
+        const image = block as { type?: string; slack_file?: { id?: string } };
+        return image.type === "image" && !!image.slack_file?.id && files.has(image.slack_file.id);
+      })),
       "PNG는 본문 안에 표시한다",
     );
   } finally {

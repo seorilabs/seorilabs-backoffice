@@ -1,6 +1,6 @@
 import type { CronObservation } from "./contract";
 import { expectedSchedules } from "./contract";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 import { kstTime } from "@/lib/analytics/console-sync/report";
 
@@ -52,7 +52,7 @@ export function batchResultNotification(run: ReportableRun) {
   if (failed) lines.push("조치: 장애알림의 실패 원인과 실행 기록을 확인하세요.");
   return { dedupeKey: run.name === "backoffice-ait-console-metrics" ? `ait-console-collection:${uid}` : `batch-result:${run.id}`,
     kind: "OPERATIONAL_EVENT" as const, occurredAt: new Date(run.completedAt ?? run.startedAt),
-    destinations: discordDestinations(["batch-monitoring"]), payload: {
+    destinations: notificationDestinations(["batch-monitoring"]), payload: {
       report: { category: "response", reason: "USER_REQUESTED_BATCH_RESULT" }, source: "scheduled-batch", runId: run.id,
       executionStatus: run.status, text: lines.join("\n"),
       embed: { title: `${failed ? "❌" : "✅"} ${batchName(run.name)} ${failed ? "실패" : "성공"}`,

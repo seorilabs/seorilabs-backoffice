@@ -7,8 +7,8 @@ import {
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
-  discordChannelId,
-  discordDestinations,
+  notificationChannelId,
+  notificationDestinations,
   type NotificationDestination,
 } from "@/lib/notifications/destinations";
 import { enqueueNotification } from "@/lib/notifications/outbox";
@@ -23,7 +23,7 @@ import {
   reviewContentHash,
   reviewNotificationDedupeKey,
   reviewRatingColor,
-  storeReviewDiscordText,
+  storeReviewSlackText,
 } from "@/lib/store-reviews/shape";
 import type {
   ReviewObservationState,
@@ -273,7 +273,7 @@ async function processReviews(input: {
       dedupeKey,
       kind: "STORE_REVIEW",
       payload: {
-        text: storeReviewDiscordText({
+        text: storeReviewSlackText({
           appDisplayName: input.app.displayName,
           review,
           change,
@@ -332,12 +332,12 @@ export async function collectStoreReviews(
   const destinations = (
     dependencies.destinations ??
     (() => {
-      if (!/^\d+$/.test(discordChannelId("user-reviews"))) return [];
-      return discordDestinations(["user-reviews"]);
+      if (!/^\d+$/.test(notificationChannelId("user-reviews"))) return [];
+      return notificationDestinations(["user-reviews"]);
     })
   )();
   if (destinations.length !== 1) {
-    throw new Error("Discord 목적지 미설정: user-reviews");
+    throw new Error("Slack 목적지 미설정: user-reviews");
   }
   const listApps =
     dependencies.listApps ??

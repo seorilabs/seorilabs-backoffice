@@ -20,11 +20,13 @@ function bool(key: string, fallback = false): boolean {
   return v === "true" || v === "1";
 }
 
-export function parseDiscordRetentionDays(value: string | undefined): number {
+export function parseSlackRetentionDays(value: string | undefined): number {
   const parsed = Number(value ?? "30");
   if (!Number.isFinite(parsed)) return 30;
   return Math.min(365, Math.max(1, Math.floor(parsed)));
 }
+
+const OPERATOR_ROLE_KEYS = { operations_admin: true, operator: true, product: true, design: true, development: true, qa: true, data: true, release_ops: true, cs: true, viewer: true };
 
 export const env = {
   get,
@@ -132,17 +134,24 @@ export const env = {
     Boolean(optional("PLATFORM_ADMIN_URL").trim()) &&
     Boolean(optional("PLATFORM_ADMIN_WRITE_SA_KEY_JSON").trim()),
   // Google Play Developer API 리뷰 조회용 공용 publisher service account.
-  // 리뷰 collector CronJob에만 주입하고 웹/Discord worker에는 전달하지 않는다.
+  // 리뷰 collector CronJob에만 주입하고 웹/Slack worker에는 전달하지 않는다.
   googlePlayServiceAccountJson: () =>
     optional("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON").trim(),
   appStoreConnectConfigured: () =>
     Boolean(optional("APP_STORE_CONNECT_API_KEY_ID").trim()) &&
     Boolean(optional("APP_STORE_CONNECT_ISSUER_ID").trim()) &&
     Boolean(optional("APP_STORE_CONNECT_PRIVATE_KEY_BASE64").trim()),
-  discordApplicationId: () => optional("DISCORD_APPLICATION_ID").trim(),
-  discordPublicKey: () => optional("DISCORD_PUBLIC_KEY").trim(),
+  slackAppId: () => optional("SLACK_APP_ID").trim(),
+  slackSigningSecret: () => optional("SLACK_SIGNING_SECRET").trim(),
+  slackBotToken: () => optional("SLACK_BOT_TOKEN").trim(),
+  slackWorkspaceId: () => optional("SLACK_WORKSPACE_ID").trim(),
+  slackEnabled: () => bool("SLACK_ENABLED", false),
+  operatorRoles: (userId: string) => Object.keys(OPERATOR_ROLE_KEYS).filter(key =>
+    optional(`SLACK_ROLE_${key.toUpperCase()}_USERS`).split(",").map(value => value.trim()).includes(userId)),
+  // 과거 Discord 메시지의 기존 보존 정책을 마칠 때만 사용한다.
   discordBotToken: () => optional("DISCORD_BOT_TOKEN").trim(),
-  discordGuildId: () => optional("DISCORD_GUILD_ID").trim(),
+  discordSeoriBotToken: () => optional("DISCORD_TEAMMATE_SEORI_BOT_TOKEN").trim(),
+  discordChannelId: (key: string) => optional(`DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
   // 재무 리포트 비용 소스. 전부 선택적 — 미설정 소스는 리포트에 "미설정" 으로 표기.
   githubBillingToken: () => optional("GITHUB_BILLING_TOKEN").trim(),
   // GitHub 플랜 포함 hosted 분량(macOS 10x·Windows 2x 환산 기준). Team 플랜 3,000분.
@@ -157,13 +166,11 @@ export const env = {
   llmMonthlyBudgetUsd: () => Number(optional("LLM_MONTHLY_BUDGET_USD", "0")),
   // 서리(운영 총괄) 봇. 일일 재무 리포트를 이 정체로 게시한다. 미설정이면 메인 봇으로
   // 나가므로 리포트가 사라지지는 않는다.
-  discordSeoriBotToken: () => optional("DISCORD_TEAMMATE_SEORI_BOT_TOKEN").trim(),
-  discordChannelId: (key: string) =>
-    optional(`DISCORD_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
-  discordRoleId: (key: string) =>
-    optional(`DISCORD_ROLE_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
-  discordRetentionDays: () =>
-    parseDiscordRetentionDays(optional("DISCORD_RETENTION_DAYS", "30")),
+  notificationChannelId: (key: string) =>
+    optional(`SLACK_CHANNEL_${key.toUpperCase().replace(/-/g, "_")}_ID`).trim(),
+  operatorRoleMention: (key: string) => optional(`SLACK_ROLE_${key.toUpperCase()}_USERS`).split(",").map(value => value.trim()).filter(value => /^[UW][A-Z0-9]+$/.test(value)).map(value => `<@${value}>`).join(" "),
+  reviewRetentionDays: () =>
+    parseSlackRetentionDays(optional("SLACK_REVIEW_RETENTION_DAYS", "30")),
   natsServerUrl: () => optional("NATS_SERVER_URL", "nats://nats.data.svc.cluster.local:4222"),
   platformEventSharedSecret: () => optional("PLATFORM_EVENT_SHARED_SECRET"),
 };

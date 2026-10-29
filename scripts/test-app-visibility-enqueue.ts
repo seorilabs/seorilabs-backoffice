@@ -11,7 +11,7 @@ import { publishSignal } from "@/lib/insights/service";
 import { enqueueAppOperation } from "@/lib/app-ops/runs";
 import { enqueuePlatformOperation } from "@/lib/platform/runs";
 import { preparePlatformOperation } from "@/lib/platform/operations";
-import { createOperatorCommand, confirmOperatorCommand } from "@/lib/discord/command-runs";
+import { createOperatorCommand, confirmOperatorCommand } from "@/lib/operator/command-runs";
 
 const url = new URL(process.env.DATABASE_URL ?? "");
 if (!["127.0.0.1", "localhost"].includes(url.hostname) || url.pathname !== "/backoffice_iap_qa") {
@@ -67,14 +67,14 @@ test("중앙 IAP 요청 준비 후 숨김이 먼저 완료되면 지급 요청�
   await assertNoAppOperations(app.id);
 });
 
-test("숨긴 앱에는 Discord 작업을 만들거나 기존 확인 대기를 실행 대기로 바꾸지 않는다", async () => {
+test("숨긴 앱에는 Slack 작업을 만들거나 기존 확인 대기를 실행 대기로 바꾸지 않는다", async () => {
   const {app, hide} = await fixture();
   const input = {sourceInteractionId: randomUUID(), appId: app.id, operation: "qa.no-external-execution",
-    actorDiscordUserId: "qa", channelId: "qa", needsConfirmation: true};
+    actorUserId: "qa", channelId: "qa", needsConfirmation: true};
   const awaiting = await createOperatorCommand(input);
   await hide();
   await assert.rejects(createOperatorCommand({...input, sourceInteractionId: randomUUID(), needsConfirmation: false}), /비활성 앱/);
-  await assert.rejects(confirmOperatorCommand({id: awaiting.id, actorDiscordUserId: "qa", channelId: "qa"}), /비활성 앱/);
+  await assert.rejects(confirmOperatorCommand({id: awaiting.id, actorUserId: "qa", channelId: "qa"}), /비활성 앱/);
   assert.equal((await prisma.operatorCommandRun.findUniqueOrThrow({where: {id: awaiting.id}})).status, "AWAITING_CONFIRMATION");
   assert.equal(await prisma.operatorCommandRun.count({where: {appId: app.id}}), 1);
 });
@@ -130,7 +130,7 @@ test("숨긴 앱의 종료된 자동 작업을 수동 재시도로 다시 등록
 test("작업 등록이 먼저 완료되면 앱 숨김을 거부하고 실행 대기를 보존한다", async () => {
   const {app, admin, hide} = await fixture();
   await createOperatorCommand({sourceInteractionId: randomUUID(), appId: app.id,
-    operation: "qa.no-external-execution", actorDiscordUserId: admin.login, channelId: "qa"});
+    operation: "qa.no-external-execution", actorUserId: admin.login, channelId: "qa"});
   await assert.rejects(hide(), /진행 중/);
   assert.equal((await prisma.app.findUniqueOrThrow({where: {id: app.id}})).status, "ACTIVE");
   assert.equal(await prisma.auditLog.count({where: {entityId: app.id, action: "app.visibility"}}), 0);

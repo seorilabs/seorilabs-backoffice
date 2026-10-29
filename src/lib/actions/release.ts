@@ -66,7 +66,7 @@ export async function createReleaseAction(
 }
 
 // Play Console 내부 테스트 opt-in URL. 패키지명에서 계산할 수 없어 사람이 콘솔에서 복사해
-// 넣는 값이며, 여기 저장된 값이 Discord Play 배포 카드의 "내부 테스트" 링크 버튼이 된다.
+// 넣는 값이며, 여기 저장된 값이 Slack Play 배포 카드의 "내부 테스트" 링크 버튼이 된다.
 export async function setPlayInternalTestUrlAction(
   appId: string,
   url: string,

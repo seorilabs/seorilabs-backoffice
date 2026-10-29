@@ -37,7 +37,7 @@ export function remindersAllowed(now: Date) {
   return hour >= 9 && hour < 22;
 }
 export function directApprovalEnabled(environment: string) {
-  return (process.env.PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS ?? "").split(",").includes(environment);
+  return (process.env.PLATFORM_SLACK_APPROVAL_ENVIRONMENTS ?? "").split(",").includes(environment);
 }
 export function monitoringEnabled() { return process.env.PLATFORM_APPROVAL_MONITOR_ENABLED !== "false"; }
 export function assertCanReview(input: { currentUserCanApprove: boolean; githubId: string; triggeringActorId: string; actorId: string; expectedAttempt: number; actualAttempt: number; expectedSha: string; actualSha: string; expectedTargetHash: string; actualTargetHash: string }) {

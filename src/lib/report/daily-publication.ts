@@ -13,7 +13,7 @@ import { metricNarrative } from "@/lib/core/metric-narrative";
 import { financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
 import { enqueueNotification, requeueNotification } from "@/lib/notifications/outbox";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { reportCohorts } from "./cohorts";
 import { providerMetricSeries } from "@/lib/analytics/report-query";
@@ -161,7 +161,7 @@ export async function publishDailyReport(now = new Date(), refDate?: string) {
         report: { category: "change", reason: "SCHEDULED_DAILY_REPORT" }, sender: SEORI_SENDER, editable: true,
         ...(preparation.attachment ? { attachment: preparation.attachment as Prisma.InputJsonObject } : {}),
         ...(url ? { components: [{ type: 1, components: [{ type: 2, style: 5, label: `전체 보고서 v${version}`, url }] }] } : {}),
-      }, destinations: discordDestinations(["app-ops"]) }, db);
+      }, destinations: notificationDestinations(["app-ops"]) }, db);
     await requeueNotification(eventId, db);
     await db.orgReportPreparation.update({ where: { id: preparation.id }, data: { publishedVersion: version } });
     return { preparationId: preparation.id, refDate: doc.refDate, version, eventId, reused: false };
@@ -214,7 +214,7 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
         report: { category: "change", reason: "DAILY_REPORT_CORRECTION" }, sender: SEORI_SENDER, editable: true,
         ...(attachment ? { attachment: attachment as unknown as Prisma.InputJsonObject } : {}),
         ...(url ? { components: [{ type: 1, components: [{ type: 2, style: 5, label: `정정 보고서 v${version}`, url }] }] } : {}),
-      }, destinations: discordDestinations(["app-ops"]) }, db);
+      }, destinations: notificationDestinations(["app-ops"]) }, db);
     const requeued = await requeueNotification(eventId, db);
     return { day: refDate, action: "corrected", version, requeued };
   }, { timeout: 30_000 });

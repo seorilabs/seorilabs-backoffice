@@ -19,7 +19,7 @@ test("DB enqueue가 완료된 뒤에만 accepted ack를 반환한다", async () 
     payload,
     {
       destinationConfigured: () => true,
-      destinations: (route) => [{ provider: "DISCORD", key: route }],
+      destinations: (route) => [{ provider: "SLACK", key: route }],
       enqueue: async (input) => {
         assert.equal(input.dedupeKey, `external:${payload.source}:${payload.id}`);
         return durableEnqueue;
@@ -57,7 +57,7 @@ test("전달 worker의 채널 설정이 있으면 논리 목적지를 enqueue한
       },
     },
   );
-  assert.deepEqual(destinations, [{ provider: "DISCORD", key: "private-feed" }]);
+  assert.deepEqual(destinations, [{ provider: "SLACK", key: "private-feed" }]);
 });
 
 test("외부 쓰레드 알림은 producer 범위의 부모 dedupe key로 변환한다", async () => {

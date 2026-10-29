@@ -86,7 +86,7 @@ const apple: StoreReview = {
   sourceModifiedAt: new Date("2026-08-18T00:00:00Z"),
 };
 
-const destination = [{ provider: "DISCORD" as const, key: "user-reviews" as const }];
+const destination = [{ provider: "SLACK" as const, key: "user-reviews" as const }];
 
 test("첫 실행은 기준선만 만들고 다음 신규·변경 리뷰만 enqueue한다", async () => {
   const repository = new MemoryReviewRepository();
@@ -186,7 +186,7 @@ test("user-reviews 채널이 없으면 API 호출과 기준선 생성을 시작�
         return [app];
       },
     }),
-    /Discord 목적지 미설정: user-reviews/,
+    /Slack 목적지 미설정: user-reviews/,
   );
   assert.equal(listed, false);
 });

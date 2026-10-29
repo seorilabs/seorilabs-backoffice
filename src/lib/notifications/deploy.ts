@@ -1,22 +1,20 @@
 import { deliverApproval } from "@/lib/deployment-approvals/delivery";
 import type { Prisma, ReleaseMarket } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { discordChannelId } from "@/lib/notifications/destinations";
 import { incidentShouldMention } from "@/lib/notifications/mention-policy";
 import {
-  createDiscordChannelMessage,
-  editDiscord,
-  sendDiscord,
-  startDiscordThread,
-  type DiscordActionRow,
-  type DiscordDeliveryResult,
-  type DiscordMessageOptions,
-} from "@/lib/notifications/discord";
-import { discordRender, type DiscordRender } from "@/lib/notifications/format";
+  editNotification,
+  sendNotification,
+  fileReceipt,
+  deletedMessageReplacement,
+  type MessageActionRow,
+  type DeliveryResult,
+  type MessageOptions,
+} from "@/lib/notifications/channel";
+import { messageRender, type MessageRender } from "@/lib/notifications/format";
 import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import {
   issueThreadPayload,
-  threadStartFailure,
 } from "@/lib/notifications/issue-thread";
 import { env } from "@/lib/env";
 import {
@@ -63,7 +61,7 @@ async function previousReleaseMessage(
   if (siblings.length === 0) return null;
   const delivery = await prisma.notificationDelivery.findFirst({
     where: {
-      provider: "DISCORD",
+      provider: "SLACK",
       destinationKey,
       status: "SENT",
       providerMessageId: { not: null },
@@ -116,8 +114,8 @@ async function appStoreReviewCardState(
  * null = ReleaseRecord 없음.
  */
 export interface DeployCardRender {
-  render: DiscordRender;
-  components: DiscordActionRow[];
+  render: MessageRender;
+  components: MessageActionRow[];
   /** 카드 메시지를 공유하는 단위. 같은 앱·마켓·버전이면 같은 카드다. */
   release: { appId: string; market: ReleaseMarket; version: string };
 }
@@ -222,23 +220,23 @@ export async function renderDeployCard(
  * 복구된다(previousReleaseMessage 가 가장 최근 카드를 고른다).
  */
 export function isUnreusableCard(result: {
-  statusCode?: number;
-  errorCode?: number;
+  error?: string;
 }): boolean {
-  if (result.statusCode === 404 && result.errorCode === 10_008) return true;
-  return result.statusCode === 403;
+  return result.error === "message_not_found";
 }
 
 async function deliverDeployCompletion(
   payload: DeployCompletionPayload,
   destinationKey: string,
+  knownMessageId: string | null,
+  deliveryOptions: MessageOptions,
 ): Promise<DeliveryOverrideResult> {
   const card = await renderDeployCard(payload.releaseRecordId, payload.runUrl);
   if (!card) return { ok: false, error: "release record not found" };
-  const options = { components: card.components, embed: card.render.embed };
-  const messageId = await previousReleaseMessage(card.release, destinationKey);
+  const options = { ...deliveryOptions, components: card.components, embed: card.render.embed };
+  const messageId = knownMessageId ?? await previousReleaseMessage(card.release, destinationKey);
   if (messageId) {
-    const edited = await editDiscord(
+    const edited = await editNotification(
       destinationKey,
       messageId,
       card.render.text,
@@ -246,7 +244,7 @@ async function deliverDeployCompletion(
     );
     if (edited.ok || !isUnreusableCard(edited)) return edited;
   }
-  return sendDiscord(destinationKey, card.render.text, options);
+  return sendNotification(destinationKey, card.render.text, options);
 }
 
 function attachmentFromPayload(payload: Prisma.JsonValue) {
@@ -269,12 +267,12 @@ function attachmentFromPayload(payload: Prisma.JsonValue) {
 
 function componentsFromPayload(
   payload: Prisma.JsonValue,
-): DiscordActionRow[] | undefined {
+): MessageActionRow[] | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     return undefined;
   const value = (payload as Prisma.JsonObject).components;
   return Array.isArray(value)
-    ? (value as unknown as DiscordActionRow[]).slice(0, 5)
+    ? (value as unknown as MessageActionRow[]).slice(0, 5)
     : undefined;
 }
 
@@ -288,12 +286,14 @@ function componentsFromPayload(
 async function deliverIssueThread(
   payload: Prisma.JsonValue,
   destinationKey: string,
+  messageId: string | null,
+  deliveryOptions: MessageOptions,
 ): Promise<DeliveryOverrideResult> {
   const thread = issueThreadPayload(payload);
   if (!thread) return { ok: false, error: "invalid issue thread payload" };
   const parent = await prisma.notificationDelivery.findFirst({
     where: {
-      provider: "DISCORD",
+      provider: "SLACK",
       destinationKey,
       status: "SENT",
       deletedAt: null,
@@ -304,21 +304,9 @@ async function deliverIssueThread(
   });
   if (!parent?.providerMessageId)
     return { ok: false, error: "부모 이슈 알림 발송 대기 중" };
-  const started = await startDiscordThread(
-    discordChannelId(destinationKey),
-    parent.providerMessageId,
-    thread.threadName,
-  );
-  if (!started.ok) return threadStartFailure(started);
-  const sent = await createDiscordChannelMessage(
-    parent.providerMessageId,
-    thread.text,
-    {
-      plain: thread.plain,
-      attachment: thread.attachment,
-    },
-  );
-  return sent.ok ? { ok: true } : sent;
+  return editOrSend(destinationKey,messageId,thread.text,{
+    ...deliveryOptions,plain:thread.plain,attachment:thread.attachment,replyToMessageId:parent.providerMessageId,
+  });
 }
 
 /**
@@ -331,25 +319,36 @@ async function editOrSend(
   destinationKey: string,
   providerMessageId: string | null,
   text: string,
-  options: DiscordMessageOptions = {},
-): Promise<DiscordDeliveryResult> {
+  options: MessageOptions = {},
+): Promise<DeliveryResult> {
   if (providerMessageId) {
-    const edited = await editDiscord(
+    const edited = await editNotification(
       destinationKey,
       providerMessageId,
       text,
       options,
     );
-    if (edited.ok || edited.statusCode !== 404 || edited.errorCode !== 10_008)
+    if (edited.ok || edited.error !== "message_not_found")
       return edited;
+    options = deletedMessageReplacement(options);
   }
-  return sendDiscord(destinationKey, text, options);
+  return sendNotification(destinationKey, text, options);
 }
 
 export async function drainAllNotifications(limit = 30) {
+  if (!env.slackEnabled()) return {processed:0,sent:0,deadLetter:0};
   return drainNotifications(
     limit,
-    async ({ kind, destinationKey, payload, providerMessageId }) => {
+    async ({ kind, destinationKey, payload, providerMessageId, deliveryId, providerReceipt }) => {
+      let receipt: Prisma.JsonObject = providerReceipt && typeof providerReceipt === "object" && !Array.isArray(providerReceipt) ? providerReceipt as Prisma.JsonObject : {};
+      const save = async () => { await prisma.notificationDelivery.update({where:{id:deliveryId},data:{providerReceipt:receipt as Prisma.InputJsonObject}}); };
+      const deliveryOptions: MessageOptions = {
+        receipt:fileReceipt(receipt.file),
+        persistReceipt:async file => { receipt = {...receipt,file:JSON.parse(JSON.stringify(file)) as Prisma.JsonObject}; await save(); },
+        beforeCreate:async () => { if (receipt.postState === "STARTED") return false; receipt = {...receipt,postState:"STARTED"}; delete receipt.postedMessageId; await save(); return true; },
+        created:async result => { if (result.ok && result.messageId) receipt = {...receipt,postState:"CONFIRMED",postedMessageId:result.messageId}; else if (result.error !== "SLACK_DELIVERY_OUTCOME_UNKNOWN") delete receipt.postState; await save(); },
+      };
+      providerMessageId ??= typeof receipt.postedMessageId === "string" ? receipt.postedMessageId : null;
       if (
         payload &&
         typeof payload === "object" &&
@@ -360,13 +359,16 @@ export async function drainAllNotifications(limit = 30) {
           payload,
           destinationKey,
           providerMessageId,
+          undefined,
+          undefined,
+          deliveryOptions,
         ).catch(() => ({ ok: false, error: "플랫폼 승인 카드 전송 실패" }));
       }
       if (kind === "DEPLOY_COMPLETION") {
         const deploy = deployCompletionPayload(payload);
         if (!deploy)
           return { ok: false, error: "invalid deploy notification payload" };
-        return deliverDeployCompletion(deploy, destinationKey).catch(
+        return deliverDeployCompletion(deploy, destinationKey, providerMessageId, deliveryOptions).catch(
           (error) => ({
             ok: false,
             error: error instanceof Error ? error.message : "unknown error",
@@ -386,16 +388,17 @@ export async function drainAllNotifications(limit = 30) {
         if (!incident) return { ok: false, error: "incident not found" };
         const card = incidentRender(incident);
         const options = {
+          ...deliveryOptions,
           alertRoleId: incidentShouldMention(incident)
-            ? env.discordRoleId("release_ops")
+            ? env.operatorRoleMention("release_ops")
             : undefined,
           components: incidentComponents(incident),
           embed: card.embed,
         };
-        const deliveryMode = incidentDeliveryMode(incident.providerMessageId);
+        const deliveryMode = incidentDeliveryMode(providerMessageId ?? (incident.messageProvider === "SLACK" ? incident.providerMessageId : null));
         let result =
           deliveryMode.kind === "edit"
-            ? await editDiscord(
+            ? await editNotification(
                 destinationKey,
                 deliveryMode.messageId,
                 card.text,
@@ -405,10 +408,9 @@ export async function drainAllNotifications(limit = 30) {
         if (
           !result ||
           (!result.ok &&
-            result.statusCode === 404 &&
-            result.errorCode === 10_008)
+            result.error === "message_not_found")
         ) {
-          result = await sendDiscord(destinationKey, card.text, options);
+          result = await sendNotification(destinationKey, card.text, options);
         }
         if (
           result.ok &&
@@ -417,7 +419,7 @@ export async function drainAllNotifications(limit = 30) {
         ) {
           await prisma.operationalIncident.update({
             where: { id: incident.id },
-            data: { providerMessageId: result.messageId },
+            data: { providerMessageId: result.messageId, messageProvider:"SLACK" },
           });
         }
         return result;
@@ -425,8 +427,8 @@ export async function drainAllNotifications(limit = 30) {
       // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
       // 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
       if (issueThreadPayload(payload))
-        return deliverIssueThread(payload, destinationKey);
-      const render = discordRender(kind, payload);
+        return deliverIssueThread(payload, destinationKey, providerMessageId, deliveryOptions);
+      const render = messageRender(kind, payload);
       if (!render) return { ok: false, error: "알림 payload 형식 오류" };
       let generatedAttachment;
       const object =
@@ -438,11 +440,11 @@ export async function drainAllNotifications(limit = 30) {
         ((object.rankReport as { items?: unknown[] }).items?.length ?? 0) > 0
       ) {
         try {
-          const { rankDiscordSvg } = await import("@/lib/market/rank-report");
+          const { rankSlackSvg } = await import("@/lib/market/rank-report");
           const sharp = (await import("sharp")).default;
           const bytes = await sharp(
             Buffer.from(
-              rankDiscordSvg(
+              rankSlackSvg(
                 object.rankReport as unknown as import("@/lib/market/rank-report").RankReport,
               ),
             ),
@@ -478,6 +480,7 @@ export async function drainAllNotifications(limit = 30) {
         }
       }
       const options = {
+        ...deliveryOptions,
         attachment: generatedAttachment ?? attachmentFromPayload(payload),
         components: componentsFromPayload(payload),
         inlineImage: (generatedAttachment ?? attachmentFromPayload(payload))?.contentType === "image/png",
@@ -495,7 +498,7 @@ export async function drainAllNotifications(limit = 30) {
           options,
         );
       }
-      return sendDiscord(destinationKey, render.text, options);
+      return editOrSend(destinationKey, providerMessageId, render.text, options);
     },
   );
 }

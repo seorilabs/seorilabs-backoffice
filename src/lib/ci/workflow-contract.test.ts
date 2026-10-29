@@ -87,9 +87,10 @@ test("PR은 전체 build를 검증하고 main은 검증 뒤 production 이미지
     join(process.cwd(), ".github/workflows/migration-contract.yml"),
     "utf8",
   );
-  assert.match(migrationSource, /scenario: \[empty, cutover\]/);
+  assert.match(migrationSource, /scenario: \[empty, cutover, slack_cutover\]/);
   assert.match(migrationSource, /scripts\/test-migration-bootstrap\.sh/);
   assert.match(migrationSource, /scripts\/test-migration-cutover\.sh/);
+  assert.match(migrationSource, /scripts\/test-slack-cutover\.ts/);
   assert.ok(migration.on?.workflow_call !== undefined);
 });
 

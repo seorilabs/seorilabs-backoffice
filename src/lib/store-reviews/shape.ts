@@ -56,7 +56,7 @@ export function classifyReviewChange(input: {
     : "updated";
 }
 
-function escapeDiscordMarkdown(value: string): string {
+function escapeSlackMarkdown(value: string): string {
   return value.replace(/([\\`*_~|\[\]])/g, "\\$1");
 }
 
@@ -67,7 +67,7 @@ function preview(value: string): string {
 }
 
 function quote(value: string): string {
-  const escaped = escapeDiscordMarkdown(preview(value) || "본문 없음");
+  const escaped = escapeSlackMarkdown(preview(value) || "본문 없음");
   return escaped.split("\n").map((line) => `> ${line}`).join("\n");
 }
 
@@ -79,7 +79,7 @@ function stars(rating: number): string {
   return `${"★".repeat(rating)}${"☆".repeat(5 - rating)}`;
 }
 
-export function storeReviewDiscordText(input: {
+export function storeReviewSlackText(input: {
   appDisplayName: string;
   review: StoreReview;
   change: Exclude<ReviewChangeKind, "baseline" | "unchanged">;
@@ -89,7 +89,7 @@ export function storeReviewDiscordText(input: {
   const { review } = input;
   const heading = input.change === "new" ? "새 리뷰" : "리뷰 수정";
   const lines = [
-    `${input.change === "new" ? "💬" : "✏️"} **${storeLabel(review.store)} ${heading} · ${escapeDiscordMarkdown(input.appDisplayName)}**`,
+    `${input.change === "new" ? "💬" : "✏️"} **${storeLabel(review.store)} ${heading} · ${escapeSlackMarkdown(input.appDisplayName)}**`,
   ];
   const rating = `${stars(review.rating)} ${review.rating}/5`;
   lines.push(
@@ -106,13 +106,13 @@ export function storeReviewDiscordText(input: {
     ? review.sourceModifiedAt ? "수정" : "변경 관측"
     : review.sourceCreatedAt ? "작성" : "작성/관측";
   const metadata = [
-    review.locale ? `지역/언어: ${escapeDiscordMarkdown(review.locale)}` : "",
+    review.locale ? `지역/언어: ${escapeSlackMarkdown(review.locale)}` : "",
     displayedAt
       ? `${timeLabel}: ${kstDateTime(displayedAt)}`
       : "",
   ].filter(Boolean);
   if (metadata.length) lines.push(metadata.join(" · "));
-  if (review.title) lines.push(`제목: **${escapeDiscordMarkdown(preview(review.title))}**`);
+  if (review.title) lines.push(`제목: **${escapeSlackMarkdown(preview(review.title))}**`);
   lines.push(quote(review.body));
   return lines.join("\n");
 }

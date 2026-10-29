@@ -69,7 +69,7 @@ test("과거 outbox 이관 migration은 event와 목적지 delivery를 분리하
   );
 });
 
-test("Discord 이관 migration은 기존 이벤트 slug를 실제 App FK로 변환해 milestone을 선반영한다", () => {
+test("Slack 이관 migration은 기존 이벤트 slug를 실제 App FK로 변환해 milestone을 선반영한다", () => {
   assert.match(discordSql, /INNER JOIN `app` ON `app`\.`slug` = `candidate_event`\.`appId`/);
   assert.match(discordSql, /AND NOT EXISTS \(/);
   assert.match(

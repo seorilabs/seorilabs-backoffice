@@ -2,11 +2,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { metricDayOf, parseMetricDay } from "@/lib/analytics/metric-day";
-import { discordDestinations } from "@/lib/notifications/destinations";
+import { notificationDestinations } from "@/lib/notifications/destinations";
 import { enqueueNotification, requeueNotification, retryDeadLetterNotification } from "@/lib/notifications/outbox";
 import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { keywordCycle, marketLabel } from "./keyword-cycle";
-import { rankReportKey, rankReportText, type RankReport, type RankReportItem } from "./rank-report";
+import { rankReportKey, rankReportText, sameRankReportContent, type RankReport, type RankReportItem } from "./rank-report";
 import { keywordSuccess } from "./keyword-collector";
 import type { KeywordRow } from "./keyword-monitoring";
 export const rankRowIdentity = (r: Pick<KeywordRow, "appId" | "country" | "term" | "market" | "source" | "language">) => JSON.stringify([r.appId, r.market ?? "app-store", r.source ?? "apple-search-api", r.country, r.language ?? "en_us", r.term]);
@@ -80,14 +80,14 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     if (!items.length) return { batchId: cycle.id, status: "no_new_results" };
     const report: RankReport = { version: 1, day: cycle.day, capturedAt: now.toISOString(), items, rows: rows.map(row=>({...row, observedAt: row.observedAt?.toISOString() ?? null})) };
     const previousReport=(existing?.payload as {rankReport?:RankReport}|undefined)?.rankReport;
-    if(existing && previousReport && rankReportKey(previousReport)===rankReportKey(report)){
+    if(existing && previousReport && sameRankReportContent(previousReport,report)){
       await retryDeadLetterNotification(existing.id,tx);
       return {batchId:cycle.id,eventId:existing.id,status:"same_cycle"};
     }
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
     const payload = { text: rankReportText(report,url), editable: true, sender: "seori", refDate: cycle.day, report: { category: "change", reason: "SEARCH_VISIBILITY_OBSERVATION" }, rankReport: report, components: [{ type:1, components:[{type:2,style:5,label:"전체 보고서와 근거 열기",url}] }], embed: { title: "검색 위치 관측", color: 0x2563eb, footer: `${cycle.day} ${cycle.reportSlot.slice(0,2)}:${cycle.reportSlot.slice(2)} KST` } };
     await enqueueNotification({ dedupeKey:`keyword-report:${rankReportKey(report)}`,kind:"OPS_ALERT",payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:[] },tx);
-    const eventId = await enqueueNotification({ dedupeKey,kind:"OPS_ALERT",payload:JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:discordDestinations(["metrics-daily"]) },tx);
+    const eventId = await enqueueNotification({ dedupeKey,kind:"OPS_ALERT",payload:JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:notificationDestinations(["metrics-daily"]) },tx);
     if(existing)await requeueNotification(eventId,tx);
     return { batchId:cycle.id,eventId,items:items.map(item=>`${marketLabel(item.market)}:${item.term}`) };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });

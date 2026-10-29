@@ -6,7 +6,7 @@ export const compareReportActions = (a: ReportAction, b: ReportAction) => priori
 export function actionDeduplicationKey(row: { appId: string; marker?: string; status: string; reason?: string; title: string }) {
   return JSON.stringify(row.marker ? [row.appId, row.marker] : [row.appId, row.status, row.reason ?? row.title]);
 }
-export function discordActionLines(actions: ReportAction[]) {
+export function messageActionLines(actions: ReportAction[]) {
   const lines = actions.filter((action) => action.status !== "excluded").sort(compareReportActions).slice(0, 3)
     .map((action) => `- ${actionStatusLabels[action.status]} · ${action.appName}: ${action.title}${action.url ? ` ${action.url}` : ""}`);
   const excluded = new Set(actions.filter((action) => action.status === "excluded").map((action) => action.appName)).size;

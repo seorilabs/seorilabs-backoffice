@@ -1,6 +1,6 @@
 import { kstDateTimeShort } from "@/lib/format/kst";
 import type { DeploymentApproval } from "@prisma/client";
-import type { DiscordActionRow } from "@/lib/notifications/discord";
+import type { MessageActionRow } from "@/lib/notifications/channel";
 import { directApprovalEnabled, targetSchema } from "./policy";
 export function approvalCard(row: DeploymentApproval) {
   const url = `https://github.com/${row.repository}/actions/runs/${row.runId}/attempts/${row.runAttempt}`;
@@ -15,9 +15,9 @@ export function approvalCard(row: DeploymentApproval) {
     `대기 관측 시작: <t:${Math.floor(row.waitingSince.getTime() / 1000)}:f>`,
     row.actorLogin && row.decidedAt ? `${row.decision === "approved" ? "승인 확인" : "거절 확인"}: ${row.actorLogin} · ${kstDateTimeShort(row.decidedAt)}` : "",
     row.observationError ?? "",
-    !directApprovalEnabled(row.environment) ? "Discord 직접 처리 비활성 · GitHub에서 처리할 수 있습니다." : "",
+    !directApprovalEnabled(row.environment) ? "Slack 직접 처리 비활성 · GitHub에서 처리할 수 있습니다." : "",
   ].filter(Boolean).join("\n");
-  const components: DiscordActionRow[] = [{ type: 1, components: [
+  const components: MessageActionRow[] = [{ type: 1, components: [
     { type: 2, style: 3, label: "승인", custom_id: `papproval:approved:${row.id}`, disabled: !canAct },
     { type: 2, style: 4, label: "거절", custom_id: `papproval:rejected:${row.id}`, disabled: !canAct },
     { type: 2, style: 5, label: "변경 내용 보기", url: `https://github.com/${row.repository}/commit/${parsed.success ? parsed.data.imageSha : row.sourceSha}` },

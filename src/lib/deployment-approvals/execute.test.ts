@@ -6,7 +6,7 @@ import { targetHash, type DeploymentTarget } from "./policy";
 const sha = "a".repeat(40);
 const target: DeploymentTarget = { version: 1, repository: "seorilabs/platform", runId: "10", runAttempt: 1, sourceSha: sha, imageSha: sha, environment: "staging", workflow: "deploy-staging.yml", image: `asia-northeast3-docker.pkg.dev/seorilabs-platform/platform/platform:${sha}`, targets: ["cloud-run:seorilabs-platform:asia-northeast3:platform-api-stg"] };
 function fixture() {
-  process.env.PLATFORM_DISCORD_APPROVAL_ENVIRONMENTS = "staging";
+  process.env.PLATFORM_SLACK_APPROVAL_ENVIRONMENTS = "staging";
   let sends = 0;
   let roles = true;
   let linked = true;
@@ -24,14 +24,14 @@ function fixture() {
       updateMany: async () => { if (row.actionState !== "IDLE") return { count: 0 }; row.actionState = "SENDING"; return { count: 1 }; },
       update: async ({ data }: { data: { actionState: string } }) => { row.actionState = data.actionState; return row; },
     },
-    discordAccountLink: { findUnique: async () => linked ? { githubId: 1n, discordUserId: "discord1" } : null },
+    slackAccountLink: { findUnique: async () => linked ? { githubId: 1n, slackUserId: "discord1" } : null },
     user: { findUnique: async () => ({ allowlisted: allowed, login: "reviewer" }) },
     auditLog: { create: async () => ({}) },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   };
   const deps = {
     prisma: db,
-    currentDiscordMemberRoles: async () => ["release"], hasDiscordCapability: () => roles,
+    currentOperatorRoles: async () => ["release"], hasOperatorCapability: () => roles,
     approverClient: async () => { if (tokenError) throw { status: 401 }; return { rest: { actions: { reviewPendingDeploymentsForRun: async () => { sends++; if (apiError) throw new Error("timeout"); } } } }; },
     readRun: async () => live,
     pending: async () => waiting ? [{ environment: { id: 20, name: "staging" }, current_user_can_approve: canApprove }] : [],
@@ -39,7 +39,7 @@ function fixture() {
     observeApprovalRun: async () => {}, refreshApprovalCard: async () => {},
     recoverApproval: async () => { row.actionState = recovered ? "CONFIRMED" : "UNKNOWN"; },
   } as unknown as NonNullable<Parameters<typeof executeDeploymentApproval>[1]>;
-  const command = { id: "command1", createdAt: new Date(), confirmedAt: new Date(), actorDiscordUserId: "discord1", params: { approvalId: row.id, githubId: "1", targetHash: targetHash(target), decision: "approved", reason: "" } } as unknown as OperatorCommandRun;
+  const command = { id: "command1", createdAt: new Date(), confirmedAt: new Date(), actorUserId: "discord1", params: { approvalId: row.id, githubId: "1", targetHash: targetHash(target), decision: "approved", reason: "" } } as unknown as OperatorCommandRun;
   return { row, live, command, deps, sends: () => sends, denyRole: () => { roles = false; }, unlink: () => { linked = false; }, denyUser: () => { allowed = false; }, denyGitHub: () => { canApprove = false; }, expireToken: () => { tokenError = true; }, timeout: () => { apiError = true; }, external: () => { waiting = false; }, recover: () => { recovered = true; } };
 }
 test("정상 승인·거절은 요청마다 GitHub에 한 번만 전달", async () => {

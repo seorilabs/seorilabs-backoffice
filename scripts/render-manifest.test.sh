@@ -462,7 +462,7 @@ else
   ng "CI deployer 최소권한 계약이 깨졌다"
 fi
 
-echo "== Discord worker 권한 분리 =="
+echo "== Slack worker 권한 분리 =="
 discord_workers="$root/k8s/discord-workers.yaml"
 notification_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-notification-worker/ { print }' "$discord_workers")"
 operator_doc="$(awk 'BEGIN { RS="---" } /name: backoffice-operator-command-worker/ { print }' "$discord_workers")"
@@ -472,7 +472,7 @@ if printf '%s' "$notification_doc" | grep -q 'automountServiceAccountToken: fals
    printf '%s' "$operator_doc" | grep -q 'operator-command-worker.cjs'; then
   ok "알림 worker와 쓰기 권한 command worker 분리"
 else
-  ng "Discord worker 최소권한 경계가 깨졌다"
+  ng "Slack worker 최소권한 경계가 깨졌다"
 fi
 
 if grep -q 'reconcileDeploymentApprovals' "$root/scripts/operator-command-worker.ts" &&

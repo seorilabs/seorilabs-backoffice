@@ -14,15 +14,15 @@ import {
 import { engagementRate, platformSegments } from "@/lib/ga4/metric-shapes";
 import { listingsForSlug, resolveAitTarget } from "@/lib/analytics/ait-apps";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
-import { discordDestinations } from "@/lib/notifications/destinations";
-import { htmlToDiscord } from "@/lib/notifications/format";
+import { notificationDestinations } from "@/lib/notifications/destinations";
+import { htmlToMessage } from "@/lib/notifications/format";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { reconcileMetricAnomalies } from "@/lib/analytics/anomalies";
 import { count, countOrDash, pct, won } from "@/lib/format/units";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
 // 일별 지표 보고서: 앱별 상세 노트를 Obsidian(프로젝트/지표)에 큐잉하고, 전체 요약을
-// Discord로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
+// Slack로 발송. BigQuery/콘솔을 직접 치지 않고 저장된 스냅샷만 읽는다(AppMetricDaily=GA4,
 // AppConsoleMetricDaily=AppsInToss 콘솔). 두 소스는 모수가 달라(GA4=전 표면, 콘솔=토스 표면)
 // 한 줄로 합치지 않고 섹션을 나눠 함께 보고한다.
 // vault-writer 가 파일명 앞에 처리일(KST)을 붙이므로 title 에는 날짜를 넣지 않는다.
@@ -133,7 +133,7 @@ export function buildAppReportMd(
   return lines.join("\n");
 }
 
-/** Discord 변환 전 요약 한 줄(제한된 HTML). 활성사용자·참여율·플랫폼 반영. */
+/** Slack 변환 전 요약 한 줄(제한된 HTML). 활성사용자·참여율·플랫폼 반영. */
 /**
  * GA4 한 줄(HTML). 앱마다 최신 행을 쓰는데 export 도착이 앱마다 달라 refDate 보다 오래된
  * 행이 섞인다. 메시지 머리말은 refDate 하나를 내걸므로, 다른 날짜 값이 같은 날인 것처럼
@@ -279,7 +279,7 @@ export function buildConsoleSection(
 }
 
 /**
- * Discord 변환 전 리포트 메시지 본문(제한된 HTML). GA4(전 표면)와 콘솔(토스 표면)은 모수가 달라 한 메시지 안에서
+ * Slack 변환 전 리포트 메시지 본문(제한된 HTML). GA4(전 표면)와 콘솔(토스 표면)은 모수가 달라 한 메시지 안에서
  * 섹션으로 나란히 싣는다. 각 섹션은 보고할 줄이 있을 때만 붙어, 한쪽 소스만 있어도 발송된다.
  */
 export function buildReportMessage({
@@ -440,12 +440,12 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       consoleLines: consoleSection.lines,
       link: env.optional("AUTH_URL").trim(),
     });
-    const destinations = discordDestinations(["app-ops"]);
+    const destinations = notificationDestinations(["app-ops"]);
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",
       payload: {
-        text: htmlToDiscord(reportHtml),
+        text: htmlToMessage(reportHtml),
         embed: { color: EMBED_COLOR.INFO },
       },
       destinations,

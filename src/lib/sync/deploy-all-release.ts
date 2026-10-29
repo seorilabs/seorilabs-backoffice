@@ -7,7 +7,7 @@ import {
   type DeployAllRunJob,
 } from "@/lib/core/deploy-all-jobs";
 import { renderDeployAllStatusCard } from "@/lib/notifications/deploy-format";
-import type { DiscordRender } from "@/lib/notifications/format";
+import type { MessageRender } from "@/lib/notifications/format";
 import { releaseTrackForWorkflow } from "@/lib/sync/release-status";
 
 // deploy-all 실행 → 마켓별 배포 기록. 미러(prisma·octokit)와 분리해 폴백 분기를 단위 테스트한다.
@@ -45,7 +45,7 @@ export interface DeployAllReleaseDeps {
   listRunJobs(repoFullName: string, runId: bigint, runAttempt: number): Promise<DeployAllRunJob[]>;
   recordMarketRelease(input: MarketReleaseInput): Promise<void>;
   appDisplayName(appId: string): Promise<string | null>;
-  enqueueRunResultCard(input: { render: DiscordRender; eventKey: string; occurredAt: Date }): Promise<void>;
+  enqueueRunResultCard(input: { render: MessageRender; eventKey: string; occurredAt: Date }): Promise<void>;
 }
 
 /**

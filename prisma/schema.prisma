@@ -335,6 +335,7 @@ model NotificationDelivery {
   nextAttemptAt     DateTime                   @default(now()) @db.DateTime(3)
   lastError         String?                    @db.Text
   providerMessageId String?
+  providerReceipt   Json?
   suppressedAt      DateTime?                  @db.DateTime(3)
   suppressionReason String?                    @db.VarChar(240)
   refreshRequested  Boolean? @default(false)
@@ -364,6 +365,7 @@ enum NotificationKind {
 
 enum NotificationProvider {
   DISCORD
+  SLACK
 }
 
 enum NotificationDeliveryStatus {
@@ -394,12 +396,13 @@ model OperationalEvent {
 // 별도 worker가 처리한다. interaction token은 저장하지 않는다.
 model OperatorCommandRun {
   id                  String                @id @default(cuid())
+  sourceProvider      NotificationProvider? @default(DISCORD)
   sourceInteractionId String                @unique
   appId               String?
   app                 App?                  @relation(fields: [appId], references: [id], onDelete: SetNull)
   operation           String
   params              Json?
-  actorDiscordUserId  String
+  actorUserId         String @map("actorDiscordUserId")
   actorLabel          String
   channelId           String
   messageId           String?
@@ -445,7 +448,8 @@ model OperationalIncident {
   providerMessageId     String?
   acknowledgedBy        String?
   acknowledgedAt        DateTime?      @db.DateTime(3)
-  assignedDiscordUserId String?
+  assignedUserId        String? @map("assignedDiscordUserId")
+  messageProvider       NotificationProvider? @default(DISCORD)
   firstDetectedAt       DateTime       @db.DateTime(3)
   lastDetectedAt        DateTime       @db.DateTime(3)
   recoveredAt           DateTime?      @db.DateTime(3)
@@ -2674,6 +2678,42 @@ model DiscordLinkCode {
   createdAt DateTime @default(now())
   @@index([githubId, expiresAt])
   @@map("discord_link_code")
+}
+
+model SlackAccountLink {
+  githubId BigInt @id
+  slackUserId String @unique
+  createdAt DateTime @default(now())
+  @@map("slack_account_link")
+}
+
+model SlackLinkCode {
+  codeHash String @id
+  githubId BigInt
+  expiresAt DateTime @db.DateTime(3)
+  consumedAt DateTime? @db.DateTime(3)
+  createdAt DateTime @default(now())
+  @@index([githubId, expiresAt])
+  @@map("slack_link_code")
+}
+
+model SlackTurn {
+  id String @id @default(cuid())
+  workspaceId String
+  channelId String
+  userId String
+  role String
+  content String @db.Text
+  createdAt DateTime @default(now())
+  @@index([workspaceId, channelId, userId, createdAt])
+  @@map("slack_turn")
+}
+
+model SlackRequestReceipt {
+  id String @id
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+  @@map("slack_request_receipt")
 }
 
 // 기타 소스의 시도 이력. GA4/AppsInToss는 기존 MetricCollectionLedger를 유지한다.
