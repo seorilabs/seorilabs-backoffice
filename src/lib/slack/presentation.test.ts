@@ -77,3 +77,9 @@ test("접근성 본문에도 버튼과 이미지 설명을 포함한다",()=>{
  const message=renderSlackMessage("결과",{embed:{title:"보고서"},receipt:{fileId:"FTEST",checksum:"s",fileIds:["FTEST"],uploaded:true,complete:true},inlineImage:true,components:[{type:1,components:[{type:2,style:3,label:"확인",custom_id:"confirm"},{type:2,style:2,label:"취소",custom_id:"cancel"}]}]});
  assert.match(message.text,/동작: 확인, 취소/);assert.match(message.text,/보고서/);
 });
+
+test("이름이 빈 링크와 여러 문단의 인용도 내용과 경계를 보존한다",()=>{
+ const value=renderSlackMessage("[](https://example.com/empty)\n\n> 첫 문단\n>\n> 다음 문단");
+ assert.match(JSON.stringify(value.blocks),/https:\/\/example.com\/empty/);
+ assert.match(value.text,/첫 문단\n다음 문단/);
+});

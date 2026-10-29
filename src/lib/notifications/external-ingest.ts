@@ -59,9 +59,8 @@ export async function ingestExternalNotification(
             },
           }
         : {}),
-      ...(payload.presentation ? {presentation: JSON.parse(JSON.stringify(payload.presentation))} : payload.thread ? {} : {
-        embed:{footer:payload.source,...(payload.occurredAt ? {timestamp:payload.occurredAt} : {})},
-      }),
+      ...(payload.presentation ? {presentation: JSON.parse(JSON.stringify(payload.presentation))} : {}),
+      ...(!payload.thread ? {embed:{footer:payload.source,...(payload.occurredAt ? {timestamp:payload.occurredAt} : {})}} : {}),
       source: payload.source,
       externalId: payload.id,
       ...(payload.attachment ? { attachment: payload.attachment } : {}),

@@ -37,13 +37,13 @@ export function renderSlackMessages(text:string, options:MessageOptions = {}): S
   if(p?.links?.length)groups.push([{type:"rich_text",elements:[{type:"rich_text_section",elements:p.links.flatMap((link,index)=>[...(index ? [{type:"text",text:"  "}] : []),{type:"link",url:link.url,text:link.label}])}]}]);
   const suffix:SlackBlock[]=[];
   if(options.receipt?.fileId && options.inlineImage)suffix.push({type:"image",slack_file:{id:options.receipt.fileId},alt_text:p?.title ?? title ?? options.attachment?.filename ?? "보고서 이미지"});
-  const metadata=[...(p?.context ?? []),...(!p && options.embed?.footer ? [options.embed.footer] : []),presentationTime(p?.timestamp ?? options.embed?.timestamp)].filter((s):s is string=>!!s);
+  const metadata=[...(p?.context ?? []),...(options.embed?.footer ? [options.embed.footer] : []),presentationTime(p?.timestamp ?? options.embed?.timestamp)].filter((s):s is string=>!!s);
   for(const value of metadata) {
     // context는 Markdown을 해석하지 않아 내부 코드와 특수문자를 그대로 읽는다.
     const chars=Array.from(value);
     for(let start=0;start<chars.length;start+=1900)suffix.push({type:"context",elements:[plain(chars.slice(start,start+1900).join(""))]});
   }
-  if(!p && options.embed?.url && /^https:\/\//.test(options.embed.url))suffix.push({type:"context",elements:[{type:"mrkdwn",text:`<${options.embed.url.replace(/&/g,"&amp;").replace(/>/g,"%3E").replace(/\|/g,"%7C")}|상세 보기>`}]});
+  if(options.embed?.url && /^https:\/\//.test(options.embed.url))suffix.push({type:"context",elements:[{type:"mrkdwn",text:`<${options.embed.url.replace(/&/g,"&amp;").replace(/>/g,"%3E").replace(/\|/g,"%7C")}|상세 보기>`}]});
   if(options.alertRoleId && /^(<@[UW][A-Z0-9]+>\s*)+$/.test(options.alertRoleId))suffix.push({type:"context",elements:[{type:"mrkdwn",text:options.alertRoleId}]});
   let primaryUsed=false;
   for(const row of options.components ?? []) {

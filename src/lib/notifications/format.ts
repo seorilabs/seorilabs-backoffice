@@ -79,7 +79,7 @@ export function messageRender(
   const text = stringField(object, "text");
   if (!text) return null;
   const presentation = storedPresentation(object?.presentation);
-  if (presentation) return {text, presentation};
+  if (presentation) {const embed=embedMetaOf(object);return {text, presentation,...(embed ? {embed} : {})};}
   if (object?.plain === true) return { text, plain: true };
   const embed = embedMetaOf(object);
   return { text, ...(embed ? { embed } : {}) };

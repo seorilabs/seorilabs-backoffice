@@ -97,7 +97,7 @@ export async function maintainSlackRetention(now = new Date()) {
       continue;
     }
     const pages=messagePageReceipts(receiptObject.pages);
-    if(pages.some(page=>page.state === "STARTED"))continue;
+    const unresolvedPages=pages.some(page=>page.state === "STARTED");
     let allDeleted=true;
     for(const id of new Set([messageId,...pages.map(page=>page.messageId)].filter((id):id is string=>!!id))) {
       const result=await deleteNotification(delivery.destinationKey,id,senderBotToken(delivery.event.payload));
@@ -109,7 +109,8 @@ export async function maintainSlackRetention(now = new Date()) {
       const deleted = await slackApi("files.delete",{file});
       if (!deleted.ok && deleted.error !== "file_not_found") deletedFiles = false;
     }
-    if (!deletedFiles) continue;
+    // 확인된 메시지와 파일은 지우되 결과 불명 연속편의 원장과 payload는 남긴다.
+    if (!deletedFiles || unresolvedPages) continue;
     await prisma.notificationDelivery.update({where:{id:delivery.id},data:{deletedAt:now}});
     deletedNotifications++;
   }

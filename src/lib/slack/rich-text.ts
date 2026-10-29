@@ -9,7 +9,7 @@ const safeUrl = (value: string) => /^https?:\/\//i.test(value) && (() => {try {r
 function inline(tokens: Token[], style: Record<string, boolean> = {}): RichInline[] {
   return tokens.flatMap((token): RichInline[] => {
     if (token.type === "strong" || token.type === "em" || token.type === "del") return inline(token.tokens ?? [], {...style,[{strong:"bold",em:"italic",del:"strike"}[token.type]]:true});
-    if (token.type === "link") return safeUrl(token.href) ? [{type:"link",url:token.href,text:token.text === token.href ? new URL(token.href).hostname : inline(token.tokens ?? []).map(inlinePlain).join(""),...(Object.keys(style).length ? {style} : {})}] : inline(token.tokens ?? [],style);
+    if (token.type === "link") return safeUrl(token.href) ? [{type:"link",url:token.href,text:token.text === token.href ? new URL(token.href).hostname : (inline(token.tokens ?? []).map(inlinePlain).join("") || new URL(token.href).hostname),...(Object.keys(style).length ? {style} : {})}] : inline(token.tokens ?? [],style);
     if (token.type === "codespan") return [{type:"text",text:decode(token.text),style:{...style,code:true}}];
     if (token.type === "br") return [{type:"text",text:"\n"}];
     if (token.type === "image") return [{type:"text",text:decode(token.text)}];
@@ -29,17 +29,20 @@ function elements(tokens: Token[], indent = 0): RichElement[] {
       case "heading": return [section(inline(token.tokens ?? [],{bold:true}))];
       case "paragraph": case "text": return [section(inline(token.tokens ?? Lexer.lexInline(token.text)))];
       case "code": return [{type:"rich_text_preformatted",elements:[{type:"text",text:token.text || " "}]}];
-      case "blockquote": return [{type:"rich_text_quote",elements:elements(token.tokens ?? []).flatMap(item => flattenInline(item))}];
+      case "blockquote": return [{type:"rich_text_quote",elements:joinedInline(elements(token.tokens ?? []))}];
       case "list": return (token as Tokens.List).items.flatMap((item,index) => {
         const nested = item.tokens.filter(t=>t.type === "list");
         const body = item.tokens.filter(t=>t.type !== "list");
-        return [{type:"rich_text_list",style:token.ordered ? "ordered" : "bullet",indent:Math.min(indent,8),...(token.ordered ? {offset:Number(token.start) + index - 1} : {}),elements:[section([...(item.task ? [{type:"text" as const,text:item.checked ? "☑ " : "☐ "}] : []),...elements(body).flatMap(flattenInline)])]},...elements(nested,indent+1)];
+        return [{type:"rich_text_list",style:token.ordered ? "ordered" : "bullet",indent:Math.min(indent,8),...(token.ordered ? {offset:Number(token.start) + index - 1} : {}),elements:[section([...(item.task ? [{type:"text" as const,text:item.checked ? "☑ " : "☐ "}] : []),...joinedInline(elements(body))])]},...elements(nested,indent+1)];
       });
       case "table": return [section(inline((token as Tokens.Table).header.flatMap((cell,index)=>[...cell.tokens,{type:"text",raw:"",text:index===(token as Tokens.Table).header.length-1 ? "\n" : " | "}]))),...(token as Tokens.Table).rows.map(row=>section(row.flatMap((cell,index)=>[...inline(cell.tokens),{type:"text" as const,text:index===row.length-1 ? "" : " | "}])))];
       case "hr": return [section([{type:"text",text:"────"}])];
       default: return [section(inline(Lexer.lexInline(token.raw)))];
     }
   });
+}
+function joinedInline(items:RichElement[]):RichInline[] {
+  return items.flatMap((item,index)=>[...(index ? [{type:"text" as const,text:"\n"}] : []),...flattenInline(item)]);
 }
 function flattenInline(element: RichElement): RichInline[] {
   return element.elements.flatMap(child => child.type === "text" || child.type === "link" ? [child as RichInline] : flattenInline(child as RichElement));
@@ -62,7 +65,7 @@ function splitElement(element: RichElement): RichElement[] {
   if (element.type === "rich_text_list") return element.elements.flatMap(child => splitElement(child as RichElement).map(part=>({...element,elements:[part]})));
   const pieces: RichElement[]=[]; let children: RichInline[]=[]; let size=0;
   for(const child of element.elements as RichInline[]) {
-    const text=child.type === "text" ? child.text : child.text ?? child.url;
+    const text=child.type === "text" ? child.text : child.text || child.url;
     // URL 자체는 분할할 수 없고 표시 문자열만 분할한다.
     const parts=Array.from(text);
     for(let start=0;start<parts.length;start+=2000) {

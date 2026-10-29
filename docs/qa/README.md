@@ -36,3 +36,9 @@
 `ait-console-pod-collection`을 기능 목록에 추가했다. 최신 main의 검색 순위 기능까지 합쳐 44개다.
 새 서비스의 격리 실행·실제 OAuth 차단은 [검수 기록](2026-10-12-console-sync-pod/report.md)을 따른다.
 이 기록은 전체 Backoffice 제품 E2E 통과를 대신하지 않는다.
+
+Slack 표시 개편의 전체 회귀부터 worker, API, 원장 기능 20개의 `runtimeKind`를
+`service`로 명시한다. 기존 서비스 3개와 UI 23개를 합친 전체 46개, UI 핵심 11개는
+유지한다. UI 기능은 실제 브라우저, 서비스 기능은 격리 DB와 실제 HTTP 및 worker
+실행으로 검증하며 외부 provider 대역을 실제 외부 업무 성공으로 기록하지 않는다.
+선택한 분류는 `feature-inventory.json`을 따른다. 분류 정정으로 검수 범위를 줄이지 않는다.
