@@ -148,3 +148,23 @@ test("삭제된 첨부 카드는 새 파일과 메시지로 대체하고 이전 
     assert.equal(oldReceipt.checksum, createHash("sha256").update(bytes).digest("hex"));
   } finally { globalThis.fetch = original; }
 });
+
+test("인라인 그래프는 기본 파일 미리보기만 비우고 일반 첨부는 유지한다", async () => {
+  const original = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "https://slack.com/api/chat.update");
+    const body = JSON.parse(String(init?.body));
+    bodies.push(body);
+    return Response.json({ok:true,ts:body.ts,channel:body.channel});
+  };
+  const receipt: FileReceipt = {checksum:"png-hash",fileId:"FCHART",uploaded:true,complete:true,messageTs:"2200000000.000001",fileIds:["FCHART"]};
+  try {
+    assert.equal((await editChannelMessage("CTEST","2200000000.000001","그래프",{botToken:"test",inlineImage:true,receipt})).ok,true);
+    assert.deepEqual(bodies[0].file_ids,[]);
+    assert.equal((bodies[0].blocks as {type:string}[]).filter(block=>block.type==="image").length,1);
+    assert.equal((await editChannelMessage("CTEST","2200000000.000001","CSV 첨부",{botToken:"test",inlineImage:false,receipt})).ok,true);
+    assert.equal(Object.hasOwn(bodies[1],"file_ids"),false);
+    assert.equal((bodies[1].blocks as {type:string}[]).filter(block=>block.type==="image").length,0);
+  } finally { globalThis.fetch=original; }
+});

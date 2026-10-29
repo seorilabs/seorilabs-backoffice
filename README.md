@@ -2,6 +2,8 @@
 
 앱 제작 공장(기획→개발→QA→마켓등록→출시→운영)을 관리·가시화하는 백오피스. K8s(vzyx-cluster)에서 동작하며 GitHub Issues/PR/Actions 를 source of truth 로 미러링하고, 라이프사이클 워크플로우·승인 게이트·마켓별 출시·운영 지속개선을 한 곳에서 본다.
 
+운영 창구의 Slack 전환은 [승인 설계](docs/design/2026-10-29-slack-notifications/design.md)와 [실행 이슈 #548](https://github.com/seorilabs/seorilabs-backoffice/issues/548)에서 추적한다. `seorilabs.slack.com`의 운영명령 채널에서 `/seori help`로 기존 21개 기능을 확인할 수 있다. 실제 운영 반영 여부는 실행 이슈의 공급자 확인 기록을 따른다.
+
 ## 무엇을 하는가 (v1)
 
 - **앱/게임 중앙 레지스트리** — org 레포를 스캔(type/engine 분기)해 마켓 식별자·마켓 타겟을 모은다.

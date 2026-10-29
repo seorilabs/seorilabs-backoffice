@@ -1,5 +1,11 @@
 # 배포 런북 (vzyx-cluster / platform ns)
 
+## Slack 전환 정본
+
+2026-10-29 승인된 [전체 이전 설계](design/2026-10-29-slack-notifications/design.md), [채널과 앱 확인](design/2026-10-29-slack-notifications/setup.md), [실행 이슈 #548](https://github.com/seorilabs/seorilabs-backoffice/issues/548)을 따른다. 신규 구성은 `.env.example`과 `k8s/secret.example.yaml`의 `SLACK_*` 키를 사용한다. `pnpm slack:manifest`가 명령과 입력 요청 구성을 출력한다. 업무 역할은 `SLACK_ROLE_*_USERS`에 Slack 사용자 ID 목록으로 설정한다.
+
+아래 Discord 배포와 리뷰, 보고 절은 이전 운영 기록이다. 새 Discord 명령을 등록하거나 신규 전송 키를 구성하지 않는다. 기존 Discord 키와 리뷰 채널은 승인된 과거 리뷰 보존 정리를 위해 유지한다. 미발송 이관은 이전 worker 정지와 실제 DB 조회 후 `scripts/slack-cutover.ts`로 실행하며, 기존 서버와 대화는 삭제하지 않는다. 실제 전환 완료 여부는 실행 이슈의 이미지, 명령과 수신 readback을 확인한다.
+
 ## 0. 사전
 - 도메인 `backoffice.vzyx.xyz` → 클러스터 ingress (다른 `*.vzyx.xyz` 와 동일).
 - 이미지 `registry.vzyx.xyz/seorilabs/seorilabs-backoffice`.
