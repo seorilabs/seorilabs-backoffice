@@ -332,7 +332,7 @@ export async function collectStoreReviews(
   const destinations = (
     dependencies.destinations ??
     (() => {
-      if (!/^\d+$/.test(notificationChannelId("user-reviews"))) return [];
+      if (!/^[CG][A-Z0-9]+$/.test(notificationChannelId("user-reviews"))) return [];
       return notificationDestinations(["user-reviews"]);
     })
   )();

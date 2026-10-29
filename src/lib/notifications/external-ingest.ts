@@ -26,7 +26,7 @@ export async function ingestExternalNotification(
   if (!route) throw new Error("허용되지 않은 NATS subject");
   const destinationConfigured =
     dependencies.destinationConfigured ??
-    ((key: DestinationKey) => /^\d+$/.test(notificationChannelId(key)));
+    ((key: DestinationKey) => /^[CG][A-Z0-9]+$/.test(notificationChannelId(key)));
   if (!destinationConfigured(route))
     throw new Error(`Slack 목적지 미설정: ${route}`);
   const destinations = (

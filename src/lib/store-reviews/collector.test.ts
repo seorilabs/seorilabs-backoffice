@@ -413,3 +413,17 @@ test("수정 리뷰 복구 뒤 markNotified 실패도 기존 알림을 다시 �
   assert.equal(retried.unchanged, 1);
   assert.equal(events.length, 1);
 });
+
+test("실제 Slack 채널 설정으로 기본 리뷰 목적지를 선택한다", async () => {
+  const key = "SLACK_CHANNEL_USER_REVIEWS_ID";
+  const previous = process.env[key];
+  try {
+    process.env[key] = "C0CD4FX486N";
+    const result = await collectStoreReviews({ listApps: async () => [] });
+    assert.equal(result.enqueued, 0);
+    process.env[key] = "123456789012345678";
+    await assert.rejects(() => collectStoreReviews({ listApps: async () => [] }), /목적지 미설정/);
+  } finally {
+    if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+  }
+});
