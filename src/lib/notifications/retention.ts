@@ -8,7 +8,7 @@ import {
 import { senderBotToken } from "@/lib/notifications/sender";
 import { senderKey } from "@/lib/notifications/sender";
 import { deleteLegacyDiscordReview } from "./legacy-discord";
-import { fileReceipt } from "./channel";
+import { fileReceipt, messagePageReceipts } from "./channel";
 import { slackApi } from "@/lib/slack/api";
 
 function deletedOrMissing(result: {
@@ -96,16 +96,21 @@ export async function maintainSlackRetention(now = new Date()) {
       deletedNotifications++;
       continue;
     }
-    if (messageId) {
-      const result = await deleteNotification(delivery.destinationKey,messageId,senderBotToken(delivery.event.payload));
-      if (!deletedOrMissing(result)) continue;
+    const pages=messagePageReceipts(receiptObject.pages);
+    const unresolvedPages=pages.some(page=>page.state === "STARTED");
+    let allDeleted=true;
+    for(const id of new Set([messageId,...pages.map(page=>page.messageId)].filter((id):id is string=>!!id))) {
+      const result=await deleteNotification(delivery.destinationKey,id,senderBotToken(delivery.event.payload));
+      if(!deletedOrMissing(result))allDeleted=false;
     }
+    if(!allDeleted)continue;
     let deletedFiles = true;
     for (const file of receipt?.fileIds ?? []) {
       const deleted = await slackApi("files.delete",{file});
       if (!deleted.ok && deleted.error !== "file_not_found") deletedFiles = false;
     }
-    if (!deletedFiles) continue;
+    // 확인된 메시지와 파일은 지우되 결과 불명 연속편의 원장과 payload는 남긴다.
+    if (!deletedFiles || unresolvedPages) continue;
     await prisma.notificationDelivery.update({where:{id:delivery.id},data:{deletedAt:now}});
     deletedNotifications++;
   }

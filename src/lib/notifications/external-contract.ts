@@ -15,6 +15,8 @@ const ROUTES = new Set<DestinationKey>([
   CHANNEL_SEORI_REVIEW,
 ]);
 
+import { presentationSchema } from "@/lib/slack/presentation";
+
 const payloadSchema = z
   .object({
     version: z.literal(1),
@@ -29,6 +31,7 @@ const payloadSchema = z
       .max(80)
       .regex(/^[A-Za-z0-9._-]+$/),
     text: z.string().trim().min(1).max(16_000),
+    presentation: presentationSchema.optional(),
     occurredAt: z.string().datetime({ offset: true }).optional(),
     report: z
       .object({

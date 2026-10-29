@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "c9257ebdb89ba6fe0aca19bd251f6711e2662928",
+  "changedFeatures": [
+    "notification-outbox-report-visuals-and-retention",
+    "discord-command-registration-and-deferred-reads",
+    "discord-operator-confirmation-and-deployment-approval",
+    "metric-report-highlights-finance-liveops",
+    "operations-batch-reporting"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": true,
+  "foundationRerun": true,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}

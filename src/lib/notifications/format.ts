@@ -1,6 +1,8 @@
 import type { NotificationKind, Prisma } from "@prisma/client";
 import type { MessageEmbed } from "@/lib/notifications/channel";
 
+import { storedPresentation, type MessagePresentation } from "@/lib/slack/presentation";
+
 type JsonObject = Prisma.JsonObject;
 
 function objectPayload(payload: Prisma.JsonValue): JsonObject | null {
@@ -23,6 +25,7 @@ function stringField(payload: JsonObject | null, key: string): string {
  */
 export interface MessageRender {
   text: string;
+  presentation?: MessagePresentation;
   /** true 면 상자 없는 본문 한 줄. embed 메타는 무시된다. */
   plain?: boolean;
   embed?: MessageEmbed;
@@ -60,6 +63,7 @@ export function renderPayload(
   return {
     ...extra,
     text: render.text,
+    ...(render.presentation ? {presentation: JSON.parse(JSON.stringify(render.presentation))} : {}),
     ...(render.plain ? { plain: true } : {}),
     ...(render.embed ? { embed: { ...render.embed } as Prisma.InputJsonObject } : {}),
   };
@@ -74,6 +78,8 @@ export function messageRender(
   const object = objectPayload(payload);
   const text = stringField(object, "text");
   if (!text) return null;
+  const presentation = storedPresentation(object?.presentation);
+  if (presentation) {const embed=embedMetaOf(object);return {text, presentation,...(embed ? {embed} : {})};}
   if (object?.plain === true) return { text, plain: true };
   const embed = embedMetaOf(object);
   return { text, ...(embed ? { embed } : {}) };

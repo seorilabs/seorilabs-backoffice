@@ -6,11 +6,13 @@ import {
   editNotification,
   sendNotification,
   fileReceipt,
+  messagePageReceipts,
   deletedMessageReplacement,
   type MessageActionRow,
   type DeliveryResult,
   type MessageOptions,
 } from "@/lib/notifications/channel";
+import { storedPresentation } from "@/lib/slack/presentation";
 import { messageRender, type MessageRender } from "@/lib/notifications/format";
 import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import {
@@ -306,6 +308,7 @@ async function deliverIssueThread(
     return { ok: false, error: "부모 이슈 알림 발송 대기 중" };
   return editOrSend(destinationKey,messageId,thread.text,{
     ...deliveryOptions,plain:thread.plain,attachment:thread.attachment,replyToMessageId:parent.providerMessageId,
+    presentation:storedPresentation((payload as Prisma.JsonObject).presentation),
   });
 }
 
@@ -344,6 +347,8 @@ export async function drainAllNotifications(limit = 30) {
       const save = async () => { await prisma.notificationDelivery.update({where:{id:deliveryId},data:{providerReceipt:receipt as Prisma.InputJsonObject}}); };
       const deliveryOptions: MessageOptions = {
         receipt:fileReceipt(receipt.file),
+        pages:messagePageReceipts(receipt.pages),
+        persistPages:async pages => {receipt={...receipt,pages:JSON.parse(JSON.stringify(pages))};await save();},
         persistReceipt:async file => { receipt = {...receipt,file:JSON.parse(JSON.stringify(file)) as Prisma.JsonObject}; await save(); },
         beforeCreate:async () => { if (receipt.postState === "STARTED") return false; receipt = {...receipt,postState:"STARTED"}; delete receipt.postedMessageId; await save(); return true; },
         created:async result => { if (result.ok && result.messageId) receipt = {...receipt,postState:"CONFIRMED",postedMessageId:result.messageId}; else if (result.error !== "SLACK_DELIVERY_OUTCOME_UNKNOWN") delete receipt.postState; await save(); },
@@ -486,6 +491,7 @@ export async function drainAllNotifications(limit = 30) {
         inlineImage: (generatedAttachment ?? attachmentFromPayload(payload))?.contentType === "image/png",
         // 재무 리포트처럼 발신자가 지정된 알림은 그 봇 정체로 나간다.
         botToken: senderBotToken(payload),
+        ...(render.presentation ? {presentation:render.presentation} : {}),
         ...(render.plain ? { plain: true } : { embed: render.embed }),
       };
       // 신규 계정 요약과 정정 가능한 일일 보고서는 같은 카드를 계속 갱신한다.

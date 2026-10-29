@@ -3,11 +3,13 @@
   "features": [
     {
       "id": "operations-batch-reporting",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "book-sales-collection",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "navigation-and-redirects",
@@ -51,7 +53,8 @@
     },
     {
       "id": "auth-and-app-rbac",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "issues-planning-and-stage-transitions",
@@ -80,31 +83,38 @@
     },
     {
       "id": "fleet-discovery-and-classification",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "fleet-legacy-import-parity-and-compliance",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "fleet-bindings-assets-and-github-bootstrap",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "fleet-release-candidates-and-gates",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "fleet-automation-project-and-agent-queue",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "github-mutation-adapter-and-recovery",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "provider-execution-and-reauthorization",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "platform-overview-and-presence",
@@ -132,19 +142,23 @@
     },
     {
       "id": "github-webhook-reconcile-and-registry-sync",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "store-submission-review-collection",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "metric-collection-ledger-and-backfill",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "metric-report-highlights-finance-liveops",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "market-public-collection-and-android-vitals",
@@ -153,15 +167,18 @@
     },
     {
       "id": "insight-signals-budget-and-worker",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "discord-command-registration-and-deferred-reads",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "discord-operator-confirmation-and-deployment-approval",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "notification-outbox-report-visuals-and-retention",
@@ -170,11 +187,13 @@
     },
     {
       "id": "vault-search-ai-and-writer",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "runtime-health-metrics-and-operational-events",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "settings-diagnostics-and-admin-controls",
@@ -182,11 +201,23 @@
     },
     {
       "id": "ait-console-pod-collection",
-      "core": false
+      "core": false,
+      "runtimeKind": "service"
     },
     {
       "id": "keyword-rank-history-and-charts",
       "core": true
+    },
+    {
+      "id": "slack-message-presentation",
+      "core": false,
+      "paths": [
+        "src/lib/slack/message.ts",
+        "src/lib/slack/presentation.ts",
+        "src/lib/slack/rich-text.ts",
+        "src/lib/slack/examples.ts",
+        "src/lib/notifications/format.ts"
+      ]
     }
   ]
 }
