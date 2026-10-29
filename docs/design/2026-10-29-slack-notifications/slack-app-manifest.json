@@ -1,0 +1,23 @@
+{
+  "display_information": {
+    "name": "Seorilabs Backoffice",
+    "description": "Seorilabs 운영 보고와 사용자 리뷰를 전달합니다.",
+    "background_color": "#243447"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "seori",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": ["chat:write", "channels:read", "files:write"]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
