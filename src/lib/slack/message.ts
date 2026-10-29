@@ -8,6 +8,8 @@ const plain = (text:string) => ({type:"plain_text",text,emoji:true});
 const literal = (text:string, bold=false): SlackBlock => ({type:"rich_text",elements:[{type:"rich_text_section",elements:[{type:"text",text,...(bold ? {style:{bold:true}} : {})}]}]});
 function blockPlain(block: SlackBlock): string {
   if(block.type === "divider")return "";
+  if(block.type === "image")return String(block.alt_text ?? "");
+  if(block.type === "actions")return "동작: " + (block.elements as {text:{text:string};url?:string}[]).map(e=>e.text.text+(e.url ? ` (${e.url})` : "")).join(", ");
   if(block.type === "rich_text")return (block.elements as Parameters<typeof richPlain>[0][]).map(richPlain).join("\n");
   if(block.type === "header")return (block.text as {text:string}).text;
   if(block.type === "context")return (block.elements as {text:string}[]).map(e=>e.text).join(" | ");
@@ -25,7 +27,10 @@ export function renderSlackMessages(text:string, options:MessageOptions = {}): S
   const groups:SlackBlock[][]=[];
   const status=p?.status && ({success:"✅ 완료",warning:"⚠️ 확인 필요",failure:"❌ 실패",info:"ℹ️ 안내"})[p.status];
   if(status)groups.push([literal(status)]);
-  if(p?.fields?.length) groups.push([literal(p.fields.map(f=>`${f.label}: ${f.value == null || f.value === "" ? "미제공" : typeof f.value === "number" ? f.value.toLocaleString("ko-KR") : f.value}`).join("\n"))]);
+  if(p?.fields?.length) {
+    const chars=Array.from(p.fields.map(f=>`${f.label}: ${f.value == null || f.value === "" ? "미제공" : typeof f.value === "number" ? f.value.toLocaleString("ko-KR") : f.value}`).join("\n"));
+    for(let start=0;start<chars.length;start+=2400)groups.push([literal(chars.slice(start,start+2400).join(""))]);
+  }
   if(body)groups.push(richBlocks(body));
   for(const section of p?.sections ?? [])groups.push([...(section.title ? [literal(section.title,true)] : []),...richBlocks(section.body)]);
   for(const [index,item] of (p?.items ?? []).entries()) groups.push([...(index ? [{type:"divider"}] : []),literal(item.title,true),...richBlocks(item.summary),{type:"rich_text",elements:[{type:"rich_text_section",elements:[{type:"link",url:item.url,text:"원문 보기"}]}]}]);
@@ -66,7 +71,7 @@ export function renderSlackMessages(text:string, options:MessageOptions = {}): S
   if(current.length || !pages.length)pages.push(current);
   // 부가 요소도 개수 제한 전에 배치한다. 버튼과 첨부를 slice로 버리지 않는다.
   for(const block of suffix) {
-    if(pages.at(-1)!.length>=46)pages.push([]);
+    if(pages.at(-1)!.length>=46 || pages.at(-1)!.map(blockPlain).join("\n").length+blockPlain(block).length>28000)pages.push([]);
     pages.at(-1)!.push(block);
   }
   return pages.map((blocks,index)=>{

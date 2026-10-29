@@ -72,3 +72,8 @@ test("광고 보상의 0과 미제공, 결제의 실제와 테스트 및 미확�
   assert.ok(renderSlackMessage(card.text,{presentation:card.presentation}).text.includes(label));
  }
 });
+
+test("접근성 본문에도 버튼과 이미지 설명을 포함한다",()=>{
+ const message=renderSlackMessage("결과",{embed:{title:"보고서"},receipt:{fileId:"FTEST",checksum:"s",fileIds:["FTEST"],uploaded:true,complete:true},inlineImage:true,components:[{type:1,components:[{type:2,style:3,label:"확인",custom_id:"confirm"},{type:2,style:2,label:"취소",custom_id:"cancel"}]}]});
+ assert.match(message.text,/동작: 확인, 취소/);assert.match(message.text,/보고서/);
+});

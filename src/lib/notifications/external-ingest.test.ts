@@ -115,7 +115,7 @@ test("기본 설정 검증은 Slack 채널 ID를 허용하고 이전 숫자 ID�
 
 test("외부 뉴스의 선택형 표시 정보는 본문과 식별자를 유지해 저장한다", async()=>{
   const {ingestExternalNotification}=await import("./external-ingest");
-  let input:Parameters<import("./outbox").enqueueNotification>[0]|undefined;
+  let input:Parameters<typeof import("./outbox").enqueueNotification>[0]|undefined;
   const presentation={layout:"newsletter" as const,title:"뉴스 1건",items:[{title:"기사",summary:"요약",url:"https://example.com/a"}]};
   await ingestExternalNotification("ops.notification.v1.private-feed",{version:1,id:"news-preserved",source:"news",text:"기존 본문",presentation},{destinationConfigured:()=>true,destinations:()=>[{provider:"SLACK",key:"private-feed"}],enqueue:async value=>{input=value;return "event";}});
   assert.equal(input?.dedupeKey,"external:news:news-preserved");assert.equal(input?.payload.text,"기존 본문");assert.deepEqual(input?.payload.presentation,presentation);
