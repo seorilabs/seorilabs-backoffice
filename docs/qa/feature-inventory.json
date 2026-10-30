@@ -218,6 +218,16 @@
         "src/lib/slack/examples.ts",
         "src/lib/notifications/format.ts"
       ]
+    },
+    {
+      "id": "personal-supervisor",
+      "core": true,
+      "paths": [
+        "src/app/(app)/work/supervisor/**",
+        "src/lib/supervisor/**",
+        "src/app/api/supervisor/**",
+        "scripts/supervisor/**"
+      ]
     }
   ]
 }
