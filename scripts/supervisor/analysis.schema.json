@@ -1,0 +1,373 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "targetId": {
+            "type": "string"
+          },
+          "problemKey": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "design": {
+            "type": "string"
+          },
+          "preview": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "string"
+          },
+          "observationIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeLimitMinutes": {
+            "type": "number"
+          },
+          "impact": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "effortMinutes": {
+            "type": "number"
+          },
+          "executor": {
+            "type": "string",
+            "enum": [
+              "codex"
+            ]
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "testCommands": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "files"
+                    ]
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "github-pr"
+                    ]
+                  },
+                  "repository": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "repository"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "files"
+                    ]
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "files"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "readback"
+                    ]
+                  },
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "expectedText": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "argv",
+                  "expectedText"
+                ]
+              }
+            ]
+          },
+          "release": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "markets": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "until": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "markets",
+                  "until"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "testPlan": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schemaVersion": {
+                "type": "integer",
+                "enum": [
+                  1
+                ]
+              },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "L1",
+                  "L2",
+                  "L3"
+                ]
+              },
+              "baseline": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changedFeatures": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "environments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "redesign": {
+                "type": "boolean"
+              },
+              "foundationRerun": {
+                "type": "boolean"
+              },
+              "floorOverrides": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "rule": {
+                      "type": "string"
+                    },
+                    "featureId": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "rule",
+                    "featureId",
+                    "reason"
+                  ]
+                }
+              },
+              "release": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "markets": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "until": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "markets",
+                      "until"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "level",
+              "baseline",
+              "changedFeatures",
+              "environments",
+              "redesign",
+              "foundationRerun",
+              "floorOverrides",
+              "release"
+            ]
+          }
+        },
+        "required": [
+          "targetId",
+          "problemKey",
+          "title",
+          "problem",
+          "scope",
+          "design",
+          "preview",
+          "tests",
+          "observationIds",
+          "acceptance",
+          "tools",
+          "timeLimitMinutes",
+          "impact",
+          "confidence",
+          "effortMinutes",
+          "executor",
+          "deadline",
+          "testCommands",
+          "binding",
+          "verification",
+          "release",
+          "testPlan"
+        ]
+      }
+    }
+  },
+  "required": [
+    "candidates"
+  ]
+}

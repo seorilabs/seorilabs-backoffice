@@ -18,6 +18,6 @@ export const config = {
   // 조용히 열리는 것을 막기 위해서다 — 새 경로는 인증을 확인한 뒤 여기에 명시적으로 추가한다.
   // src/middleware.test.ts 가 api/internal/** 전 route를 회귀로 고정한다.
   matcher: [
-    "/((?!api/(?:webhooks|discord/interactions|slack/interactions|auth|admin|control-plane|health|metrics)(?:/|$)|api/internal/platform/operational-events(?:/|$)|api/internal/(?:agents|agent-adapter|workflow-bundle-candidate-executor|approved-caller-reconciliation-executor)(?:/|$)|_next/static|_next/image|favicon.ico|login(?:/|$)).*)",
+    "/((?!api/(?:webhooks|discord/interactions|slack/interactions|supervisor|auth|admin|control-plane|health|metrics)(?:/|$)|api/internal/platform/operational-events(?:/|$)|api/internal/(?:agents|agent-adapter|workflow-bundle-candidate-executor|approved-caller-reconciliation-executor)(?:/|$)|_next/static|_next/image|_next/hmr(?:/|$)|favicon.ico|login(?:/|$)).*)",
   ],
 };

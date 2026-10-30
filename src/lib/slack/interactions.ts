@@ -1,3 +1,5 @@
+import { requireSlackOwner } from '@/lib/supervisor/auth';
+import { handleSupervisorSlack } from '@/lib/supervisor/slack';
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -84,6 +86,15 @@ async function claim(id: string): Promise<boolean> {
 export async function prepareSlackRequest(body: string, schedule: (work: () => Promise<void>) => void): Promise<Record<string,unknown> | null> {
   const input = normalizeSlackRequest(body,env.operatorRoles);
   if (!validateSlackScope(input,{workspaceId:env.slackWorkspaceId(),applicationId:env.slackAppId()})) throw new Error("SLACK_SCOPE_DENIED");
+  if (input.kind === "action" && input.interaction.data?.custom_id?.startsWith("supervisor:")) {
+    requireSlackOwner(input.context);
+    if (!await claim(input.interaction.id)) return null;
+    schedule(async () => {
+      try { await handleSupervisorSlack(input); }
+      catch { await respondToUser(input,"최신 검토본과 승인 권한을 확인하세요.").catch(() => {}); }
+    });
+    return null;
+  }
   const card = input.kind === "action" || input.interaction.data?.custom_id?.startsWith("papproval:") === true;
   if (!isOperatorScope({workspaceId:input.context.workspaceId,channelId:input.context.channelId,expectedWorkspaceId:env.slackWorkspaceId(),allowedChannelIds:interactionChannelKeys(card,input.interaction.data?.custom_id).map(env.notificationChannelId)})) throw new Error("SLACK_SCOPE_DENIED");
   if (input.kind === "options") {

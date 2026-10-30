@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     const response = await prepareSlackRequest(body,work => after(work));
     return response ? NextResponse.json(response) : new NextResponse(null,{status:200});
   } catch (error) {
-    if (error instanceof SyntaxError || (error instanceof Error && /^SLACK_(CONTEXT|SCOPE|COMMAND|REQUEST|ACTION|OPTIONS)_/.test(error.message))) return NextResponse.json({response_type:"ephemeral",text:"허용된 워크스페이스의 운영명령 채널에서 /seori help를 확인하세요."},{status:200});
+    if (error instanceof SyntaxError || (error instanceof Error && /^(?:SUPERVISOR_SLACK|SLACK)_(CONTEXT|SCOPE|COMMAND|REQUEST|ACTION|OPTIONS)_/.test(error.message))) return NextResponse.json({response_type:"ephemeral",text:"허용된 워크스페이스의 운영명령 채널에서 /seori help를 확인하세요."},{status:200});
     console.error("[slack] 요청 저장 실패");
     return NextResponse.json({error:"request unavailable"},{status:503});
   }

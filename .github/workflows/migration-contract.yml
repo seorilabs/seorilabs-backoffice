@@ -51,3 +51,4 @@ jobs:
         run: |
           pnpm prisma migrate deploy
           pnpm exec tsx scripts/test-slack-cutover.ts
+          pnpm exec tsx --test src/lib/supervisor/service.test.ts

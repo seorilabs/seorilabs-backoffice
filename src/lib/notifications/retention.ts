@@ -40,6 +40,7 @@ export function commandRetentionWhere(
 ): Prisma.OperatorCommandRunWhereInput {
   return {
     sourceProvider: "SLACK",
+    executionLocation: "SERVER",
     status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
     completedAt: { lt: cutoff },
     messageId: {
