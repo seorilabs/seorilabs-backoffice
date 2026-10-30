@@ -127,18 +127,26 @@ export function SupervisorInbox() {
           운영 모드{" "}
           <select
             aria-label="운영 모드"
+            aria-describedby="supervisor-mode-description"
             disabled={busy || !data}
             value={data?.state.mode || "OBSERVE"}
             onChange={(e) => void write("mode", { mode: e.target.value })}
             className="w-full min-w-0 max-w-full rounded border p-2 sm:w-auto"
           >
             <option value="OBSERVE">관찰만</option>
-            <option value="ACTIVE">제안 발송과 승인 실행</option>
-            <option value="PAUSED">관측과 신규 실행 중지</option>
+            <option value="ACTIVE">제안과 실행</option>
+            <option value="PAUSED">중지</option>
           </select>
         </label>
         <p className="text-sm text-neutral-600">
           오전 9시, 최대 3건 · 한국 시간
+        </p>
+        <p id="supervisor-mode-description" className="basis-full text-sm text-neutral-600" aria-live="polite">
+          {data?.state.mode === "ACTIVE"
+            ? "검토할 제안을 보내고, 승인한 작업만 실행합니다."
+            : data?.state.mode === "PAUSED"
+              ? "새 관측과 실행을 멈추고, 진행 중인 작업의 결과는 받습니다."
+              : "제안을 내부 검토용으로 모읍니다."}
         </p>
         {data?.state.activeRunId && (
           <span
