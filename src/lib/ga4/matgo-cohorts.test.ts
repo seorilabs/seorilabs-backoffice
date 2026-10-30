@@ -13,6 +13,9 @@ test("실제 내보내기 날짜와 동의한 신규 저장, 테스트 제외를
   assert.match(sql, /_dbg/);
   assert.match(sql, /first_complete >= first_begin/);
   assert.match(sql, /second_begin >= first_complete/);
+  assert.doesNotMatch(sql, /user_first_touch_timestamp/);
+  assert.match(sql, /MIN\(IF\(event_name='analytics_ready' AND traffic='production' AND install_cohort='fresh', active_day, NULL\)\) AS cohort_day/);
+  assert.match(sql, /SAFE_DIVIDE\(COUNTIF\(first_complete >= first_begin AND second_begin >= first_complete\), COUNTIF\(first_complete >= first_begin\)\)/);
   assert.match(sql, /INTERVAL 7 DAY\) IN UNNEST\(\[DATE '2026-10-23', DATE '2026-10-30'\]\)/);
   assert.doesNotMatch(sql, /@[a-z_]+/);
 });

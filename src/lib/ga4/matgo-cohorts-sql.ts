@@ -19,7 +19,6 @@ export function buildMatgoCohortsSql(target: Ga4Target, start: string, end: stri
 -- ${startDay}, ${endDay}, ${observed}는 실제로 존재하는 일별 테이블 목록에서 만든다.
 WITH events AS (
   SELECT user_pseudo_id AS user_id, event_name, event_timestamp,
-    DATE(TIMESTAMP_MICROS(user_first_touch_timestamp), 'Asia/Seoul') AS cohort_day,
     PARSE_DATE('%Y%m%d', event_date) AS active_day,
     platform AS sdk_platform,
     (SELECT value.string_value FROM UNNEST(event_params) WHERE key='traffic_type') AS traffic,
@@ -32,7 +31,9 @@ WITH events AS (
   WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', ${startDay}) AND FORMAT_DATE('%Y%m%d', ${endDay})
     AND REGEXP_CONTAINS(_TABLE_SUFFIX, r'^\\d{8}$') AND user_pseudo_id IS NOT NULL
 ), identities AS (
-  SELECT user_id, MIN(cohort_day) AS cohort_day, ANY_VALUE(sdk_platform) AS sdk_platform,
+  SELECT user_id,
+    MIN(IF(event_name='analytics_ready' AND traffic='production' AND install_cohort='fresh', active_day, NULL)) AS cohort_day,
+    ANY_VALUE(sdk_platform) AS sdk_platform,
     LOGICAL_OR(traffic='test' OR is_debug) AS test_user,
     LOGICAL_OR(event_name='analytics_ready' AND traffic='production' AND install_cohort='fresh') AS new_install
   FROM events GROUP BY user_id
@@ -53,8 +54,8 @@ SELECT cohort_day,
   COUNTIF(first_begin IS NOT NULL) AS first_match_starters,
   COUNTIF(first_complete >= first_begin) AS first_match_completers,
   SAFE_DIVIDE(COUNTIF(first_complete >= first_begin), COUNTIF(first_begin IS NOT NULL)) AS first_match_completion_rate,
-  COUNTIF(second_begin >= first_complete) AS second_match_starters,
-  SAFE_DIVIDE(COUNTIF(second_begin >= first_complete), COUNTIF(first_complete IS NOT NULL)) AS second_match_start_rate,
+  COUNTIF(first_complete >= first_begin AND second_begin >= first_complete) AS second_match_starters,
+  SAFE_DIVIDE(COUNTIF(first_complete >= first_begin AND second_begin >= first_complete), COUNTIF(first_complete >= first_begin)) AS second_match_start_rate,
   IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) IN UNNEST(${observed}),
     COUNTIF(DATE_ADD(cohort_day, INTERVAL 1 DAY) IN UNNEST(active_days)), NULL) AS d1_returned,
   IF(DATE_ADD(cohort_day, INTERVAL 1 DAY) IN UNNEST(${observed}),

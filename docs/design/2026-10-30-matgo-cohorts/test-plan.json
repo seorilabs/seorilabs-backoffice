@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "level": "L1",
-  "baseline": "keyword-rank-date-20261030-f3fe3c6",
+  "baseline": "f3fe3c6900a53df5efe072eaa8393d53bfdc132e",
   "changedFeatures": [
     "app-and-market-metrics"
   ],
@@ -15,5 +15,6 @@
       "service"
     ],
     "until": "public"
-  }
+  },
+  "foundationRerun": false
 }
