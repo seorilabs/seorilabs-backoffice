@@ -125,24 +125,29 @@ export async function submitObservations(raw: unknown[]) {
 }
 async function validateEvidence(tx: Tx, p: ProposalInput, now: Date) {
   const observations = await tx.workObservation.findMany({
-    where: {
-      id: { in: p.observationIds },
-      targetId: p.targetId,
-      problemKey: p.problemKey,
-    },
+    where: { id: { in: p.observationIds }, targetId: p.targetId },
   });
   ensure(
     observations.length === new Set(p.observationIds).size,
     "EVIDENCE_MISSING",
   );
-  for (const observation of observations)
+  const groups = new Set<string>();
+  for (const observation of observations) {
+    // 로컬 상태는 여러 문서와 코드 문제를 발견하는 공통 근거이며 문제 자체가 아니다.
+    ensure(
+      observation.source === "local" || observation.problemKey === p.problemKey,
+      "EVIDENCE_PROBLEM_MISMATCH",
+    );
     ensure(!eligibility(observation, now), "EVIDENCE_NOT_READY");
-  // 같은 문제의 최신 관찰 대기를 과거 관측으로 우회하지 않는다.
-  const latest = await tx.workObservation.findFirst({
-    where: { targetId: p.targetId, problemKey: p.problemKey },
-    orderBy: { observedAt: "desc" },
-  });
-  ensure(latest && !eligibility(latest, now), "LATEST_EVIDENCE_NOT_READY");
+    groups.add(observation.problemKey);
+  }
+  for (const problemKey of groups) {
+    const latest = await tx.workObservation.findFirst({
+      where: { targetId: p.targetId, problemKey },
+      orderBy: { observedAt: "desc" },
+    });
+    ensure(latest && !eligibility(latest, now), "LATEST_EVIDENCE_NOT_READY");
+  }
 }
 export async function createProposal(raw: unknown, actor: string) {
   const input = proposalSchema.parse(raw),

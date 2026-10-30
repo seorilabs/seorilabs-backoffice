@@ -51,3 +51,5 @@ launchctl bootout gui/$(id -u)/com.seorilabs.personal-supervisor
 ## 개발 검증
 
 `python3 -m unittest discover -s scripts/supervisor -p 'test_*.py'`, `pnpm test`, 필수 정적 검사를 실행한다. 실제 MySQL 검수는 로컬 `supervisor_test` 또는 CI의 `backoffice_*_contract_test` DB에서만 허용한다. `dev-fixture.ts`는 127.0.0.1:33367의 전용 DB만 허용하며 개발용 JWT를 비공개 산출물 폴더에 쓴다. 인증을 끄는 테스트 경로는 없다.
+
+승인 전 모델 분석은 read-only다. 승인 실행은 사용자의 기존 Codex sandbox 설정을 재사용하며 전역 설정을 변경하지 않는다. CLI의 권한 거절에는 대기하고 설정이나 계정을 바꿔 다시 실행하지 않는다.

@@ -323,6 +323,75 @@ test(
         ),
         /EVIDENCE_NOT_READY/,
       );
+      const localSnapshot = {
+        ...observation,
+        id: "local-" + randomUUID(),
+        problemKey: "local-snapshot",
+        source: "local",
+      };
+      await submitObservations([localSnapshot]);
+      const chapterA = await createProposal(
+        {
+          ...body,
+          problemKey: "chapter-a-ending",
+          observationIds: [localSnapshot.id],
+        },
+        "pc",
+      );
+      const chapterB = await createProposal(
+        {
+          ...body,
+          problemKey: "chapter-b-ending",
+          observationIds: [localSnapshot.id],
+        },
+        "pc",
+      );
+      assert.notEqual(
+        chapterA.id,
+        chapterB.id,
+        "같은 폴더 관측은 다른 문서 문제를 각각 제안할 수 있다",
+      );
+      await assert.rejects(
+        createProposal(
+          { ...body, problemKey: "different-provider-problem" },
+          "pc",
+        ),
+        /EVIDENCE_PROBLEM_MISMATCH/,
+      );
+      await decideProposal({
+        id: chapterA.id,
+        version: chapterA.version,
+        digest: chapterA.digest,
+        decision: "approve",
+        actor: "@human",
+      });
+      const chapterRun = (await claimRun("pc")).run!;
+      await reportRun(chapterRun.id, "pc", {
+        requestId: randomUUID(),
+        generation: chapterRun.generation!,
+        kind: "succeeded",
+        sessionId: randomUUID(),
+        summary: "격리 작업 완료",
+        evidence: ["file:qa-result"],
+        checkpoint: {
+          testsPassed: true,
+          readbackVerified: true,
+          processStopped: true,
+        },
+      });
+      const chapterC = await createProposal(
+        {
+          ...body,
+          problemKey: "chapter-c-ending",
+          observationIds: [localSnapshot.id],
+        },
+        "pc",
+      );
+      assert.equal(
+        chapterC.status,
+        "READY",
+        "첫 문서 완료 뒤 다음 문서 문제도 제안한다",
+      );
       await setMode("OBSERVE", "@human");
       assert.deepEqual(await reservePublications(), []);
     } finally {

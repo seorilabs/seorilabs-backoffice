@@ -200,7 +200,11 @@ def codex(config, prompt: str, root: Path, deadline: float, schema: Path, heartb
         raise Waiting('Codex CLI를 찾지 못했습니다.')
     with tempfile.TemporaryDirectory(prefix='supervisor-cli-') as temp:
         output = Path(temp)/'result.json'
-        argv = [binary,'exec','--json','--color','never','--output-schema',str(schema),'-o',str(output),'-C',str(root),'-s','read-only' if heartbeat is None else 'workspace-write','-c','approval_policy="never"','-']
+        argv = [binary,'exec','--json','--color','never','--output-schema',str(schema),'-o',str(output),'-C',str(root),'-c','approval_policy="never"']
+        if heartbeat is None:
+            argv.extend(['-s','read-only'])
+        # 승인된 작업은 기존 사용자 sandbox 설정을 재사용한다. 전역 설정을 쓰지 않는다.
+        argv.append('-')
         child = subprocess.Popen(argv,cwd=root,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=clean_env(),start_new_session=True)
         session = None
         if journal is not None:
@@ -441,6 +445,8 @@ def observe(client,config,sources):
         item={'id':target_id,'name':mapping['name'],'kind':mapping['kind'],'repository':mapping.get('repository'),'appId':mapping.get('appId'),'policySha':sources.get('policySha') if mapping['kind']=='APP' else None,'enabled':True}
         client.request('targets',item)
         if (root/'.git').exists():
+            remotes=git(root,'remote').splitlines()
+            if 'origin' in remotes:git(root,'fetch','-q','origin')
             state=git(root,'status','--porcelain')
             head=git(root,'rev-parse','HEAD')
             summary=f'로컬 HEAD {head}, 변경 항목 {len(state.splitlines())}개. 사용자 작업은 보존한다.'
@@ -448,7 +454,7 @@ def observe(client,config,sources):
         else:
             summary='집필 폴더를 확인했다. 원문은 PC에서 검토하고 서버에는 필요한 검토본만 보낸다.'
             refs=['file:registered-writing-folder']
-        problem='local-review-'+sha(summary.encode())[:16]
+        problem='local-snapshot'
         observations.append({'id':sha((target_id+problem+now).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
     app_targets={item.get('appId'):key for key,item in config['targets'].items() if item.get('appId')}
     for item in sources.get('issues',[]):
