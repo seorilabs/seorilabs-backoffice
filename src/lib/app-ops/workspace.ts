@@ -24,6 +24,7 @@ export interface AppWorkspaceSource {
   repoId: bigint | null;
   firebaseProject: string | null;
   ga4Dataset: string | null;
+  configRevisions?: readonly { payload: unknown }[];
   aitWorkspaceId: number | null;
   aitMiniAppId: number | null;
   opsManifest: unknown;

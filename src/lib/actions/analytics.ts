@@ -1,5 +1,7 @@
 "use server";
 
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
+
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { requireSession } from "@/lib/auth-helpers";
@@ -71,7 +73,7 @@ export async function adRevenueProbe(): Promise<AdProbeResult> {
 
   const apps = await prisma.app.findMany({
     orderBy: { displayName: "asc" },
-    select: { slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+    select: { slug: true, displayName: true, firebaseProject: true, ga4Dataset: true, configRevisions: activeGa4ConfigSelect },
   });
 
   const result: AdProbeResult = {

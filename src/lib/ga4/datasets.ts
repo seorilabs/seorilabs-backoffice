@@ -1,3 +1,4 @@
+import { ga4ConnectionSchema } from "./config";
 // GA4 BigQuery export 대상 앱 매핑 + 날짜 유틸.
 // 진실원본은 DB(App.firebaseProject + App.ga4Dataset). 아직 채워지지 않은 앱을 위해
 // 코드 내 fallback 표를 둔다(DB 값이 있으면 항상 DB 우선). 신규 게임은 DB 또는 이 표에
@@ -46,10 +47,17 @@ export interface AppGa4Fields {
   slug: string;
   firebaseProject: string | null;
   ga4Dataset: string | null;
+  configRevisions?: readonly { payload: unknown }[];
 }
 
 /** 앱의 GA4 쿼리 대상(프로젝트+데이터셋)을 해석한다. DB 값 우선, 없으면 fallback 표. */
 export function resolveGa4Target(app: AppGa4Fields): Ga4Target | null {
+  const payload = app.configRevisions?.[0]?.payload;
+  if (payload && typeof payload === "object" && "ga4" in payload && payload.ga4 !== undefined) {
+    const parsed = ga4ConnectionSchema.safeParse(payload.ga4);
+    if (!parsed.success || !parsed.data.enabled) return null;
+    return { firebaseProject: parsed.data.projectId, dataset: parsed.data.datasetId };
+  }
   if (app.firebaseProject && app.ga4Dataset) {
     return { firebaseProject: app.firebaseProject, dataset: app.ga4Dataset };
   }

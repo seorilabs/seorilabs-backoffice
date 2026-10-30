@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { notFound } from "next/navigation";
 
 import { AppWorkspaceShell } from "@/components/app-ops/AppWorkspaceShell";
@@ -28,7 +29,7 @@ export default async function AppWorkspaceLayout({
       currentStage: true,
       status: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
       aitWorkspaceId: true,
       aitMiniAppId: true,
       opsManifest: true,

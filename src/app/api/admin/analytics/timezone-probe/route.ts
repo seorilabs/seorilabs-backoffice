@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyStaticToken } from "@/lib/security";
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
     const apps = await prisma.app.findMany({
       orderBy: { slug: "asc" },
-      select: { slug: true, firebaseProject: true, ga4Dataset: true },
+      select: { slug: true, firebaseProject: true, ga4Dataset: true, configRevisions: activeGa4ConfigSelect },
     });
 
     const results: unknown[] = [];

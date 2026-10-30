@@ -3,7 +3,8 @@
   "level": "L1",
   "baseline": "0a1c340e4d42cf7cc195120fb53b7949886d7a70",
   "changedFeatures": [
-    "analytics"
+    "app-and-market-metrics",
+    "collection-health"
   ],
   "environments": [
     "dev"

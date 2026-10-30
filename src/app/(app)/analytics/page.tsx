@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { ConsoleMonthlyRevenue, type ConsoleRevenueAgg, type ConsoleMonthlyRevenueItem, type ConsoleMonthlyRevenueReport } from "@/components/analytics/ConsoleMonthlyRevenue";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -39,7 +40,7 @@ export default async function AnalyticsPage({
       slug: true,
       displayName: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
       aitWorkspaceId: true,
       aitMiniAppId: true,
       opsManifest: true,

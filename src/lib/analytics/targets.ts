@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
@@ -45,7 +46,7 @@ export async function ga4CoverageTargets(db: Prisma.TransactionClient = prisma):
       slug: true,
       displayName: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
     },
   });
   const skipped: string[] = [];
@@ -110,4 +111,13 @@ export async function consoleCoverageTargets(db: Prisma.TransactionClient = pris
     }));
   });
   return { targets, skipped };
+}
+
+/** 잘못된 요청은 조회와 수집 원장을 만들기 전에 거절한다. */
+export class InvalidAnalyticsTarget extends Error {}
+export function filterGa4Targets<T extends { appId: string }>(targets: T[], appId?: string): T[] {
+  if (appId === undefined) return targets;
+  const selected = targets.filter(target => target.appId === appId);
+  if (!appId.trim() || selected.length === 0) throw new InvalidAnalyticsTarget("수집 가능한 앱이 아닙니다.");
+  return selected;
 }

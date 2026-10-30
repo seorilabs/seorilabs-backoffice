@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { storeLabel } from "@/lib/store-reviews/shape";
 import { sumConsoleValues } from "@/lib/analytics/console-values";
 import type { AppType, Prisma } from "@prisma/client";
@@ -705,7 +706,7 @@ export async function collectHighlightData(
       displayName: true,
       type: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
       aitWorkspaceId: true,
       aitMiniAppId: true,
     },

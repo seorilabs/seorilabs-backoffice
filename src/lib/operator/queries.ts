@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { prisma } from "@/lib/prisma";
 import { asStringArray } from "@/lib/format";
 import { hasApproval } from "@/lib/domain/labels";
@@ -139,7 +140,7 @@ export async function metricsQuery(slug?: string): Promise<SlackQueryResult> {
     const all = await prisma.app.findMany({
       where: visibleAppWhere,
       orderBy: { displayName: "asc" },
-      select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+      select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true, configRevisions: activeGa4ConfigSelect },
     });
     const apps = all.filter((app) => resolveGa4Target(app));
     if (apps.length === 0) return { content: "GA4 지표 대상 앱이 없습니다." };
@@ -156,7 +157,7 @@ export async function metricsQuery(slug?: string): Promise<SlackQueryResult> {
 
   const app = await prisma.app.findFirst({
     where: { slug, ...visibleAppWhere },
-    select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+    select: { id: true, slug: true, displayName: true, firebaseProject: true, ga4Dataset: true, configRevisions: activeGa4ConfigSelect },
   });
   if (!app) return { content: `앱을 찾을 수 없습니다: \`${slug}\`` };
   const rows = await prisma.appMetricDaily.findMany({
