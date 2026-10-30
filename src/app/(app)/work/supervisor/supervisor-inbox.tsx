@@ -123,14 +123,14 @@ export function SupervisorInbox() {
   return (
     <>
       <div className="my-5 flex flex-wrap items-center gap-3 rounded-xl border bg-white p-4">
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex w-full min-w-0 flex-wrap items-center gap-2 text-sm sm:w-auto">
           운영 모드{" "}
           <select
             aria-label="운영 모드"
             disabled={busy || !data}
             value={data?.state.mode || "OBSERVE"}
             onChange={(e) => void write("mode", { mode: e.target.value })}
-            className="rounded border p-2"
+            className="w-full min-w-0 max-w-full rounded border p-2 sm:w-auto"
           >
             <option value="OBSERVE">관찰만</option>
             <option value="ACTIVE">제안 발송과 승인 실행</option>
