@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "4e64f79bd81fafc1be9b7664182777d7e060fd42",
+  "changedFeatures": ["market-public-collection-and-android-vitals", "notification-outbox-report-visuals-and-retention"],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {"markets": ["service"], "until": "public"}
+}
