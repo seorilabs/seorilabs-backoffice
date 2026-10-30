@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "54c323a9edc5a401b9b1e733e7a6014f6fc72d9a",
+  "changedFeatures": ["slack-message-presentation", "notification-outbox-report-visuals-and-retention"],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {"markets": ["service"], "until": "public"}
+}
