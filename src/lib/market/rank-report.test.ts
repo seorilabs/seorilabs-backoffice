@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { rankReportSvg, rankReportText, type RankReport } from "./rank-report";
 import type { KeywordRow } from "./keyword-monitoring";
+import { markdownElements, markdownPlain } from "@/lib/slack/rich-text";
 const row: KeywordRow = {
   appId: "a",
   appName: "삼국지 풍운록",
@@ -21,6 +22,21 @@ const reportFixture = ():RankReport => ({version:1,day:"2026-10-17",capturedAt:n
 test("보고서는 실제 순위와 마켓, 출처와 반환 범위를 표기한다",()=>{
  const report=reportFixture();report.items[0].market="google-play";report.items[0].source="google-play-web";report.items[0].resultCount=80;
  const text=rankReportText(report,"https://example.com");assert.match(text,/140위.*68위/);assert.match(text,/Google Play 웹/);assert.match(text,/설정 요청/);assert.match(text,/반환 80개/);
+});
+test("관측 시각의 연월일을 Slack의 중첩 번호 목록으로 바꾸지 않는다", () => {
+  const report = reportFixture();
+  report.items[0].previousAt = "2026-10-16T11:20:00Z";
+  const text = rankReportText(report, "https://example.com");
+  assert.doesNotMatch(JSON.stringify(markdownElements(text)), /"style":"ordered"/);
+  assert.match(markdownPlain(text), /2026\. 10\. 16\./);
+  assert.match(markdownPlain(text), /2026\. 10\. 17\./);
+});
+test("첫 관측은 이전 기록 없음과 현재 관측 시각을 나눠 표시한다", () => {
+  const report = reportFixture();
+  report.items[0].previousDay = null;
+  report.items[0].previousAt = null;
+  const text = markdownPlain(rankReportText(report, "https://example.com"));
+  assert.match(text, /이전 관측 없음 · 2026\. 10\. 17\./);
 });
 test("없는 날과 결과 목록 밖을 201위로 그리지 않고 국가·검색어를 보존", () => {
   const report = reportFixture();
