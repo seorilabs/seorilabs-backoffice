@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 
 import {
   closeNotStartedSandboxResetAction,
@@ -34,6 +35,11 @@ import {
   platformEntitlementAllowedForApp,
 } from "@/lib/platform/catalog";
 import { PLATFORM_OPERATION_REASONS } from "@/lib/platform/reasons";
+import {
+  platformIapOperationLabel as operationLabel,
+  platformIapRecoveryView,
+  type PlatformManualIapOperation,
+} from "@/lib/platform/iap-recovery-view";
 import type { PlatformEntitlementSummary } from "@/lib/platform/read-contract";
 import {
   canSubmitPlatformRecovery,
@@ -84,11 +90,6 @@ interface PlatformRetryRequest {
   platformUserId: string;
 }
 
-type PlatformManualOperationKey = Exclude<
-  PlatformOperationKey,
-  "platform.iap.decide-refund-review"
->;
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -107,7 +108,7 @@ export function PlatformIapManagement({
   const [entitlements, setEntitlements] = useState<PlatformEntitlementSummary[]>(
     [],
   );
-  const [operation, setOperation] = useState<PlatformManualOperationKey>(
+  const [operation, setOperation] = useState<PlatformManualIapOperation>(
     "platform.iap.grant-entitlement",
   );
   const [appSlug, setAppSlug] = useState(initialAppSlug ?? writableApps[0]?.slug ?? "");
@@ -146,6 +147,9 @@ export function PlatformIapManagement({
 
   const environment = snapshot?.health?.environment;
   const activeCatalog = platformCatalogForApp(catalog, appSlug);
+  const recoveryDestination = retryRequest
+    ? platformIapRecoveryView(retryRequest.operation).destination
+    : null;
 
   const activateRecoveryReference = useCallback(
     (
@@ -163,8 +167,9 @@ export function PlatformIapManagement({
       setSandboxResetRemoteState(null);
       setResumeConfirmation("");
       setCloseConfirmation("");
-      if (recovered.operation !== "platform.iap.decide-refund-review") {
-        setOperation(recovered.operation);
+      const recoveryView = platformIapRecoveryView(recovered.operation);
+      if (recoveryView.manualOperation !== null) {
+        setOperation(recoveryView.manualOperation);
       }
       setAppSlug(recovered.appSlug);
       setConfirmation("");
@@ -618,6 +623,7 @@ export function PlatformIapManagement({
   function retryUnknownWrite() {
     if (
       !retryRequest ||
+      recoveryDestination !== null ||
       writeOperation.state !== "unknown" ||
       serverRowConfirmedMissing
     ) {
@@ -743,6 +749,7 @@ export function PlatformIapManagement({
   }
 
   function reconcileExpiredUnknownWrite() {
+    if (recoveryDestination !== null) return;
     if (
       !retryRequest ||
       writeOperation.state !== "expired_unknown" ||
@@ -822,6 +829,7 @@ export function PlatformIapManagement({
 
   function submitWrite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (recoveryDestination !== null) return;
     if (!writableApps.some((app) => app.slug === appSlug) || catalogPending) {
       setWriteOperation({ state: "error", summary: "지급 가능한 게임과 상품을 확인한 뒤 실행하세요." });
       return;
@@ -1108,6 +1116,7 @@ export function PlatformIapManagement({
     confirmation.trim() !== expectedConfirmation ||
     reason.trim() === "" ||
     !environmentConfirmed ||
+    recoveryDestination !== null ||
     (operation === "platform.iap.reset-app-store-sandbox" &&
       (environment !== "sandbox" || !appleClearedConfirmed)) ||
     (operation !== "platform.iap.reset-app-store-sandbox" &&
@@ -1229,7 +1238,7 @@ export function PlatformIapManagement({
               <select
                 value={operation}
                 onChange={(event) => {
-                  setOperation(event.target.value as PlatformManualOperationKey);
+                  setOperation(event.target.value as PlatformManualIapOperation);
                   setPlatformUserId("");
                   setGrantRequestId("");
                   setEntitlementId("");
@@ -1417,11 +1426,13 @@ export function PlatformIapManagement({
         >
           {writePending
             ? "처리 중…"
-            : retryRequest && serverRowConfirmedMissing
-              ? "보존된 동일 Request ID로 재등록"
-              : retryRequest
-                ? "보존된 동일 Request ID로 재요청"
-                : `${operationLabel(operation)} 요청`}
+            : recoveryDestination
+              ? "다른 관리 화면의 복구 대기"
+              : retryRequest && serverRowConfirmedMissing
+                ? "보존된 동일 Request ID로 재등록"
+                : retryRequest
+                  ? "보존된 동일 Request ID로 재요청"
+                  : `${operationLabel(operation)} 요청`}
         </button>
           </>
         )}
@@ -1435,7 +1446,17 @@ export function PlatformIapManagement({
             동일 Request ID 상태 다시 확인
           </button>
         )}
+        {retryRequest && recoveryDestination && (
+          <p className="mt-3 text-sm text-amber-900">
+            보존된 요청은 {operationLabel(retryRequest.operation)}입니다. 같은 ID 상태를 확인하거나{" "}
+            <Link href={recoveryDestination.href} className="font-semibold underline">
+              {recoveryDestination.label}
+            </Link>
+            에서 복구하세요. 이 화면에서는 해당 작업을 다시 실행하지 않습니다.
+          </p>
+        )}
         {retryRequest &&
+          recoveryDestination === null &&
           writeOperation.state === "unknown" &&
           !serverRowConfirmedMissing && (
             <button
@@ -1447,7 +1468,9 @@ export function PlatformIapManagement({
               동일 Request ID 안전 재실행
             </button>
           )}
-        {retryRequest && writeOperation.state === "expired_unknown" && (
+        {retryRequest &&
+          recoveryDestination === null &&
+          writeOperation.state === "expired_unknown" && (
           <div className="mt-4 rounded border border-red-300 bg-red-50 p-3">
             <p className="text-sm font-semibold text-red-900">
               {retryRequest.operation ===
@@ -1640,19 +1663,6 @@ export function PlatformIapManagement({
       />
     </div>
   );
-}
-
-function operationLabel(operation: PlatformOperationKey): string {
-  if (operation === "platform.iap.grant-entitlement") {
-    return "Entitlement 지급";
-  }
-  if (operation === "platform.iap.revoke-entitlement") {
-    return "Entitlement 회수";
-  }
-  if (operation === "platform.iap.decide-refund-review") {
-    return "Google Play 환불 검토 결정";
-  }
-  return "App Store Sandbox 원장 초기화";
 }
 
 function Field({
