@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "level": "L1",
-  "baseline": "f3fe3c6900a53df5efe072eaa8393d53bfdc132e",
+  "baseline": "2b97adfd812c927b098de689d575a6e168ed042f",
   "changedFeatures": [
     "app-and-market-metrics"
   ],
