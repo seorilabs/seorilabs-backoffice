@@ -90,6 +90,26 @@ def command(argv, cwd: Path, timeout=60, monitor=None):
 def git(root: Path, *args):
     return command(['git', *args], root)
 
+def local_head(root: Path):
+    result=subprocess.run(['git','rev-parse','--verify','--quiet','HEAD'],cwd=root,env=clean_env(),capture_output=True,text=True,timeout=60)
+    if result.returncode==0:
+        return result.stdout.strip()
+    if result.returncode==1:
+        # 첫 커밋 전의 정상 브랜치만 허용한다. 손상된 저장소를 빈 저장소로 추측하지 않는다.
+        git(root,'symbolic-ref','--quiet','HEAD')
+        return None
+    raise Waiting('로컬 Git HEAD를 확인하지 못했습니다.')
+
+def remote_default_head(root: Path):
+    entries=[line.split('\t',1) for line in git(root,'ls-remote','--symref','origin','HEAD').splitlines() if '\t' in line]
+    branch=next((value.removeprefix('ref: ') for value,ref in entries if ref=='HEAD' and value.startswith('ref: refs/heads/')),None)
+    tip=next((value for value,ref in entries if ref=='HEAD' and re.fullmatch('[0-9a-f]{40}',value)),None)
+    if branch is None or tip is None:
+        raise Waiting('원격 기본 브랜치와 커밋을 확인하지 못했습니다.')
+    git(root,'fetch','-q','origin',branch)
+    git(root,'cat-file','-e',tip+'^{commit}')
+    return tip
+
 def verify_binding(root: Path, binding, require_ancestor=True):
     if binding['kind'] == 'git':
         commit = binding['commit']
@@ -448,12 +468,14 @@ def observe(client,config,sources):
             remotes=git(root,'remote').splitlines()
             if 'origin' in remotes:git(root,'fetch','-q','origin')
             state=git(root,'status','--porcelain')
-            head=git(root,'rev-parse','HEAD')
-            summary=f'로컬 HEAD {head}, 변경 항목 {len(state.splitlines())}개. 사용자 작업은 보존한다.'
-            refs=['git:'+head]
+            head=local_head(root)
+            summary=f'로컬 HEAD {head or "첫 커밋 전"}, 변경 항목 {len(state.splitlines())}개. 사용자 작업은 보존한다.'
+            refs=['git:'+head] if head else ['file:registered-git-folder#unborn-head']
         else:
             summary='집필 폴더를 확인했다. 원문은 PC에서 검토하고 서버에는 필요한 검토본만 보낸다.'
             refs=['file:registered-writing-folder']
+        space=shutil.disk_usage(root)
+        summary+=f' 디스크 전체 {space.total} bytes, 남은 공간 {space.free} bytes.'
         problem='local-snapshot'
         observations.append({'id':sha((target_id+problem+now).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
     app_targets={item.get('appId'):key for key,item in config['targets'].items() if item.get('appId')}
@@ -480,9 +502,7 @@ def prepare_proposal(config,candidate):
     target=config['targets'][candidate['targetId']]
     root=Path(target['path']).expanduser()
     if target['kind'] in ('APP','TOOL','ENVIRONMENT','BOOK') and (root/'.git').exists():
-        git(root,'fetch','-q','origin')
-        default=git(root,'symbolic-ref','refs/remotes/origin/HEAD')
-        baseline=git(root,'rev-parse',default)
+        baseline=remote_default_head(root)
         work=STATE/'designs'/str(uuid.uuid4())
         work.parent.mkdir(parents=True,exist_ok=True)
         git(root,'worktree','add','-b','supervisor/design-'+work.name,str(work),baseline)

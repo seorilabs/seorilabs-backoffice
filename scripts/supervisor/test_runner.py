@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('runner',Path(__file__).with_name('runner.py'))
 r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
 
@@ -138,4 +139,56 @@ class SafetyTests(unittest.TestCase):
     def test_schema_and_prompts_are_valid(self):
         for name in ('analysis.schema.json','result.schema.json'):
             self.assertEqual(json.loads(Path(__file__).with_name(name).read_text())['type'],'object')
+class ObservationContracts(unittest.TestCase):
+    def test_unborn_writing_repository_is_observed_without_changing_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            subprocess.run(['git', 'init', '--initial-branch=main', str(root)], check=True, capture_output=True)
+            (root / 'draft.md').write_text('keep original draft\n')
+            class Fake:
+                def request(self, path, body=None): return {}
+            rows = r.observe(Fake(), {'targets': {'writing:test': {'path': temp, 'kind': 'WRITING', 'name': 'test'}}}, {})
+            self.assertEqual(len(rows), 1)
+            self.assertIn('첫 커밋 전', rows[0]['summary'])
+            self.assertEqual((root / 'draft.md').read_text(), 'keep original draft\n')
+
+    def test_local_fact_contains_measured_disk_space(self):
+        with tempfile.TemporaryDirectory() as temp:
+            observed = []
+            class Fake:
+                def request(self, path, body=None):
+                    if path == 'observations': observed.extend(body)
+                    return {}
+            config = {'targets': {'writing:test': {'path': temp, 'kind': 'WRITING', 'name': 'test'}}}
+            with patch.object(r.shutil, 'disk_usage', return_value=SimpleNamespace(total=10000, used=5679, free=4321)):
+                r.observe(Fake(), config, {})
+            self.assertIn('10000 bytes', observed[0]['summary'])
+            self.assertIn('4321 bytes', observed[0]['summary'])
+
+    def test_design_uses_live_remote_default_despite_stale_tracking_head(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            def git(root, *args):
+                return subprocess.check_output(['git', '-C', str(root), *args], text=True, stderr=subprocess.DEVNULL).strip()
+            bare = base / 'remote.git'; seed = base / 'seed'; target = base / 'target'
+            subprocess.run(['git', 'init', '--bare', '--initial-branch=main', str(bare)], check=True, capture_output=True)
+            subprocess.run(['git', 'init', '--initial-branch=main', str(seed)], check=True, capture_output=True)
+            git(seed, 'config', 'user.name', 'fixture'); git(seed, 'config', 'user.email', 'fixture@example.invalid'); git(seed, 'config', 'commit.gpgsign', 'false')
+            (seed / 'source.txt').write_text('A\n'); git(seed, 'add', 'source.txt'); git(seed, 'commit', '-m', 'first')
+            git(seed, 'remote', 'add', 'origin', str(bare)); git(seed, 'push', '-q', 'origin', 'main')
+            subprocess.run(['git', 'clone', '-q', str(bare), str(target)], check=True, capture_output=True)
+            git(target, 'config', 'user.name', 'fixture'); git(target, 'config', 'user.email', 'fixture@example.invalid'); git(target, 'config', 'commit.gpgsign', 'false')
+            original = git(target, 'rev-parse', 'HEAD')
+            (target / 'user.txt').write_text('keep this user work\n')
+            (seed / 'source.txt').write_text('B\n'); git(seed, 'add', 'source.txt'); git(seed, 'commit', '-m', 'new default')
+            expected = git(seed, 'rev-parse', 'HEAD'); git(seed, 'push', '-q', 'origin', 'HEAD:refs/heads/new-default')
+            git(bare, 'symbolic-ref', 'HEAD', 'refs/heads/new-default')
+            self.assertEqual(git(target, 'symbolic-ref', 'refs/remotes/origin/HEAD'), 'refs/remotes/origin/main')
+            candidate = {'targetId': 'tool:test', 'design': 'fixture design', 'preview': 'fixture preview', 'scope': 'source.txt', 'release': None, 'testPlan': {'schemaVersion': 1, 'level': 'L1', 'baseline': 'pending', 'changedFeatures': ['fixture'], 'environments': ['dev'], 'redesign': False, 'foundationRerun': False, 'floorOverrides': [], 'release': None}}
+            with patch.object(r, 'STATE', base / 'state'):
+                result = r.prepare_proposal({'targets': {'tool:test': {'path': str(target), 'kind': 'TOOL'}}}, candidate)
+            self.assertEqual(git(target, 'rev-parse', result['binding']['commit'] + '^'), expected)
+            self.assertEqual(git(target, 'rev-parse', 'HEAD'), original)
+            self.assertEqual((target / 'user.txt').read_text(), 'keep this user work\n')
+
 if __name__=='__main__':unittest.main()
