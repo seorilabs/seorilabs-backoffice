@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { BetaAnalyticsDataClient } from "@google-analytics/data";
 
 import { visibleAppWhere } from "@/lib/domain/app-visibility";
@@ -208,7 +209,7 @@ export async function loadGa4RealtimeSnapshot(now = new Date()): Promise<Ga4Real
   }
   const apps = await prisma.app.findMany({
     where: visibleAppWhere,
-    select: { slug: true, displayName: true, firebaseProject: true, ga4Dataset: true },
+    select: { slug: true, displayName: true, firebaseProject: true, ga4Dataset: true, configRevisions: activeGa4ConfigSelect },
   });
   const targets: RealtimeTarget[] = [];
   for (const app of apps) {

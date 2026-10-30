@@ -9,7 +9,7 @@ import {
   toDbDay,
   toGa4TableSuffix,
 } from "@/lib/analytics/metric-day";
-import { ga4CoverageTargets } from "@/lib/analytics/targets";
+import { ga4CoverageTargets, filterGa4Targets } from "@/lib/analytics/targets";
 import {
   recordCollectionFailure,
   recordObservations,
@@ -90,7 +90,7 @@ export function collectionFailedEntirely(result: {
 
 export async function collectMetrics(
   now: Date,
-  opts: { windowDays?: number } = {},
+  opts: { windowDays?: number; appId?: string } = {},
 ): Promise<CollectResult> {
   if (!env.ga4Configured()) {
     throw new Error("GA4 미설정 — FEATURE_GA4_ANALYTICS + GA4_SA_KEY_JSON 필요");
@@ -101,7 +101,9 @@ export async function collectMetrics(
   const startSuffix = toGa4TableSuffix(days[0]);
   const endSuffix = toGa4TableSuffix(end);
 
-  const { targets, skipped } = await ga4CoverageTargets();
+  const coverage = await ga4CoverageTargets();
+  const targets = filterGa4Targets(coverage.targets, opts.appId);
+  const skipped = opts.appId === undefined ? coverage.skipped : [];
 
   const run = await beginCollection("ga4", `window:${days[0]}:${end}`);
   const result: CollectResult = {

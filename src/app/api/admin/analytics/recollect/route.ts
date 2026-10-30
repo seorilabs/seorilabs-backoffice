@@ -1,3 +1,4 @@
+import { InvalidAnalyticsTarget } from "@/lib/analytics/targets";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { collectMetrics, collectionFailedEntirely } from "@/lib/core/analytics-collect";
@@ -23,7 +24,8 @@ export async function POST(req: NextRequest) {
     const windowDays = parseWindowDays(req.nextUrl.searchParams.get("windowDays"));
     const result = await collectMetrics(
       new Date(),
-      windowDays === undefined ? {} : { windowDays },
+      { ...(windowDays === undefined ? {} : { windowDays }),
+        ...(req.nextUrl.searchParams.has("appId") ? { appId: req.nextUrl.searchParams.get("appId")! } : {}) },
     );
     // 전 대상 실패는 성공이 아니다. cron 의 curl -fsS 가 잡게 500 으로 낸다.
     if (collectionFailedEntirely(result)) {
@@ -32,6 +34,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
+    if (e instanceof InvalidAnalyticsTarget) return NextResponse.json({ error: e.message }, { status: 400 });
     console.error("[admin/analytics/recollect] 실패:", e);
     return NextResponse.json({ error: "recollect failed" }, { status: 500 });
   }

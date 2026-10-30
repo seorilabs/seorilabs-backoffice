@@ -1,3 +1,4 @@
+import { ga4ConnectionSchema } from "@/lib/ga4/config";
 import { z } from "zod";
 import { analyticsConnectionSchema } from "@/lib/analytics/source-contract";
 import {
@@ -516,6 +517,7 @@ export const monitoringConfigSchema = z.object({
 });
 
 export const configRevisionPayloadSchema = z.object({
+  ga4: ga4ConnectionSchema.optional(),
   schemaVersion: z.literal(1),
   markets: z.array(z.object({
     market: z.enum(["google-play", "app-store", "apps-in-toss"]),

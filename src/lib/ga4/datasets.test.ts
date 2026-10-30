@@ -79,3 +79,11 @@ test("parseWindowDays 는 기본 수집과 제한된 백필 범위를 구분한�
   assert.throws(() => parseWindowDays("367"), /1~366/);
   assert.throws(() => parseWindowDays("1.5"), /양의 정수/);
 });
+
+test("활성 설정은 기존 연결보다 우선하고 비활성은 fallback도 차단한다", () => {
+  const app = { slug: "happy-farm", firebaseProject: "old-project", ga4Dataset: "analytics_1" };
+  const ga4 = { enabled: true, projectId: "seorilabs-ungeul", datasetId: "analytics_552066659" };
+  assert.deepEqual(resolveGa4Target({ ...app, configRevisions: [{ payload: { ga4 } }] }), { firebaseProject: ga4.projectId, dataset: ga4.datasetId });
+  assert.equal(resolveGa4Target({ ...app, configRevisions: [{ payload: { ga4: { ...ga4, enabled: false } } }] }), null);
+  assert.deepEqual(resolveGa4Target({ ...app, configRevisions: [{ payload: { schemaVersion: 1 } }] }), { firebaseProject: "old-project", dataset: "analytics_1" });
+});

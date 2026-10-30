@@ -32,3 +32,11 @@ test("소스 계약: 대상에서 빠진 앱은 skipped 로 드러난다", () =>
   assert.match(source, /skipped\.push\(app\.slug\)/u);
   assert.equal((source.match(/skipped\.push\(app\.slug\)/gu) ?? []).length, 2);
 });
+
+test("appId 필터는 한 앱만 선택하고 잘못된 대상은 거절한다", async () => {
+  const { filterGa4Targets, InvalidAnalyticsTarget } = await import("./targets");
+  const targets = [{ appId: "ungeul" }, { appId: "other" }];
+  assert.deepEqual(filterGa4Targets(targets, "ungeul"), [targets[0]]);
+  assert.deepEqual(filterGa4Targets(targets), targets);
+  for (const id of ["", " ", "missing"]) assert.throws(() => filterGa4Targets(targets, id), InvalidAnalyticsTarget);
+});

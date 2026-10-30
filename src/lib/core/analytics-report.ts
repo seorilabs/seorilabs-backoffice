@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { sumConsoleValues } from "@/lib/analytics/console-values";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -365,7 +366,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       slug: true,
       displayName: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
       aitWorkspaceId: true,
       aitMiniAppId: true,
     },

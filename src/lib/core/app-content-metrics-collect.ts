@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { resolveGa4Target } from "@/lib/ga4/datasets";
@@ -38,6 +39,7 @@ export interface ContentCollectAppRow {
   slug: string;
   firebaseProject: string | null;
   ga4Dataset: string | null;
+  configRevisions?: readonly { payload: unknown }[];
   opsManifest?: unknown;
 }
 
@@ -103,7 +105,7 @@ export async function collectAppContentMetrics(
       id: true,
       slug: true,
       firebaseProject: true,
-      ga4Dataset: true,
+      ga4Dataset: true, configRevisions: activeGa4ConfigSelect,
       opsManifest: true,
     },
   });

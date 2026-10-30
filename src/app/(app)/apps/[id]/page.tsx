@@ -1,3 +1,4 @@
+import { activeGa4ConfigSelect } from "@/lib/ga4/config";
 import { notFound } from "next/navigation";
 
 import { CapabilityGrid, Panel, WorkspaceSection } from "@/components/app-ops/WorkspaceUi";
@@ -25,6 +26,7 @@ export default async function AppOverview({
   const app = await prisma.app.findFirst({
     where: { id, ...visibleAppWhere },
     include: {
+      configRevisions: activeGa4ConfigSelect,
       issues: { orderBy: [{ state: "asc" }, { priority: "asc" }], take: 100 },
       pullRequests: { orderBy: { ghUpdatedAt: "desc" }, take: 50 },
       releases: { orderBy: { updatedAt: "desc" }, take: 30 },
