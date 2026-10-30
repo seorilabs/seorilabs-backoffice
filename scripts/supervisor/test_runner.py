@@ -116,6 +116,25 @@ class SafetyTests(unittest.TestCase):
             self.assertTrue(reports[0]['checkpoint']['readbackVerified'])
             self.assertFalse((r.STATE/'claim-intent.json').exists())
 
+    def test_repeated_observation_uses_distinct_fact_identity_and_existing_links(self):
+        from urllib.parse import urlparse
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);batches=[]
+            config={'targets':{'environment:test':{'path':str(root),'kind':'ENVIRONMENT','name':'test'}}}
+            class Fake:
+                def request(self,path,body=None):
+                    if path=='observations':batches.append(body)
+                    return {}
+            sources={'incidents':[{'id':'qa-incident','appId':None,'summary':'test incident','lastDetectedAt':r.iso()}]}
+            r.observe(Fake(),config,sources);time.sleep(0.005);r.observe(Fake(),config,sources)
+            self.assertNotEqual(batches[0][0]['id'],batches[1][0]['id'])
+            self.assertEqual(batches[0][0]['problemKey'],batches[1][0]['problemKey'])
+            repo=Path(__file__).resolve().parents[2]
+            for observation in batches[0]:
+                for ref in observation['references']:
+                    if ref.startswith('https://backoffice.vzyx.xyz/'):
+                        self.assertTrue((repo/'src/app/(app)'/urlparse(ref).path.lstrip('/')/'page.tsx').exists(),ref)
+
     def test_schema_and_prompts_are_valid(self):
         for name in ('analysis.schema.json','result.schema.json'):
             self.assertEqual(json.loads(Path(__file__).with_name(name).read_text())['type'],'object')

@@ -19,3 +19,6 @@
 수정은 구조화된 거절 응답, 거절 원본 보존 후 프로세스 그룹 중단과 실행 재조회, 빈 HEAD 처리, 같은 claim 식별자의 멱등 처리, CLI 시작 전 서버 체크포인트, 실행 전 취소의 중단 보고다. 로컬 회귀 11건과 실제 API, 웹 승인, 가짜 CLI subprocess, 실제 원고 해시 적용, 서버 완료 재조회가 통과했다. 개발 서버 컴파일을 마친 Slack의 거절 요청 응답은 약 0.01초였다.
 
 초기 독립 검수의 원본 29개는 `/Volumes/Data/Backup/agent-artifacts/seorilabs-backoffice/2026-10-30/3f04012a394371971f24db5b691b919550e2950b/independent-runtime-qa-20261030T034221Z`에 보관했다. manifest SHA-256은 `74ccaf7a7e01e4875f98fa3568b21cfae229bde03a0351152e3557e28022148e`다. 후속 예비 원본 16개는 같은 후보 아래 `independent-recovery-preflight-a90ccd66-20261030T035338Z`에 보관했으며 manifest SHA-256은 `11cdbc087ffa2a78ae2c11d7b1ceb64c24f2772a73147254de7c36a5ba5fd7bd`다. 두 사본 모두 파일 직접 읽기 크기와 해시, 마지막 manifest readback을 검증했다.
+
+
+후속 자체 점검에서 같은 시간대의 관측 갱신이 기존 ID와 다른 시각으로 충돌하는 실패를 재현했다. 관측 ID에는 실제 전체 관측 시각을 사용하고 문제 식별자는 유지했다. 근거 링크의 실제 페이지 존재도 검사해 `/settings/health`로 고쳤다. 새 Python 회귀를 포함한다. 기존 ChatGPT 로그인과 실제 Codex CLI에서 빈 후보 JSON schema 응답 및 정확한 세션 ID를 확인했다. 이는 연결 검수이며 자연 제안이 아니다. MiniMax 1회차를 처리했으며 수정 확인은 600초 제한으로 중단됐다. 그 결과를 통과로 표시하지 않고 최대 회차 규칙에 따라 자체 점검과 독립 실행으로 진행한다.

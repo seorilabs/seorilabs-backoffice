@@ -449,7 +449,7 @@ def observe(client,config,sources):
             summary='집필 폴더를 확인했다. 원문은 PC에서 검토하고 서버에는 필요한 검토본만 보낸다.'
             refs=['file:registered-writing-folder']
         problem='local-review-'+sha(summary.encode())[:16]
-        observations.append({'id':sha((target_id+problem+now[:13]).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
+        observations.append({'id':sha((target_id+problem+now).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
     app_targets={item.get('appId'):key for key,item in config['targets'].items() if item.get('appId')}
     for item in sources.get('issues',[]):
         target=app_targets.get(item['appId'])
@@ -465,7 +465,7 @@ def observe(client,config,sources):
             if not target:continue
             observed=item[field]
             expires=(dt.datetime.fromisoformat(observed.replace('Z','+00:00'))+dt.timedelta(days=7)).isoformat(timespec='milliseconds').replace('+00:00','Z')
-            observations.append({'id':sha((group+item['id']+observed).encode()),'targetId':target,'problemKey':group+'-'+(sha((item['source']+item.get('target','')+str(item.get('appId'))).encode())[:24] if group=='collections' else item['id']),'resolved':group=='collections' and item['status'] in ('observed','empty','not_applicable'),'source':group,'summary':summary(item),'references':['https://backoffice.vzyx.xyz/'+('feedback' if group in ('reviews','releases') else 'settings/collections')+'#'+item['id']],'observedAt':observed,'expiresAt':expires,'waitUntil':None,'samples':1,'minSamples':1})
+            observations.append({'id':sha((group+item['id']+observed).encode()),'targetId':target,'problemKey':group+'-'+(sha((item['source']+item.get('target','')+str(item.get('appId'))).encode())[:24] if group=='collections' else item['id']),'resolved':group=='collections' and item['status'] in ('observed','empty','not_applicable'),'source':group,'summary':summary(item),'references':['https://backoffice.vzyx.xyz/'+('feedback' if group in ('reviews','releases') else 'settings/health')+'#'+item['id']],'observedAt':observed,'expiresAt':expires,'waitUntil':None,'samples':1,'minSamples':1})
     for start in range(0,len(observations),100):
         client.request('observations',observations[start:start+100])
     return observations
