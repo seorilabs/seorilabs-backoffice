@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "f3fe3c6900a53df5efe072eaa8393d53bfdc132e",
+  "changedFeatures": [
+    "app-and-market-metrics"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  },
+  "foundationRerun": false
+}
