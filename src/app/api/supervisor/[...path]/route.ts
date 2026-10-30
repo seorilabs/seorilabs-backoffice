@@ -39,6 +39,20 @@ export async function GET(request: NextRequest, { params }: Context) {
     const path = (await params).path.join("/");
     const machine = machinePrincipal(request);
     if (!machine) await requireHuman(request);
+    if (path.startsWith("runs/")) {
+      ensure(machine, "MACHINE_REQUIRED", 403);
+      const state = await prisma.workCoordinator.findUnique({
+        where: { id: 1 },
+      });
+      const id = path === "runs/owned" ? state?.activeRunId : path.slice(5);
+      const run = id
+        ? await prisma.operatorCommandRun.findFirst({
+            where: { id, executionLocation: "LOCAL", executionOwner: machine },
+            include: { workProposal: { include: { target: true } } },
+          })
+        : null;
+      return response({ run, activeRunId: state?.activeRunId ?? null });
+    }
     if (path === "snapshot") return response(await supervisorSnapshot());
     if (path === "sources") {
       ensure(machine, "MACHINE_REQUIRED", 403);
@@ -111,7 +125,7 @@ export async function GET(request: NextRequest, { params }: Context) {
             },
           }),
           prisma.sourceCollectionRun.findMany({
-            where: { status: { in: ["FAILED", "PARTIAL"] } },
+            where: { status: { not: "running" } },
             orderBy: { startedAt: "desc" },
             take: 50,
             select: {
@@ -185,7 +199,14 @@ export async function POST(request: NextRequest, { params }: Context) {
       case "proposals":
         return response(await createProposal(body, owner));
       case "runs/claim":
-        return response(await claimRun(owner));
+        return response(
+          await claimRun(
+            owner,
+            new Date(),
+            z.object({ requestId: z.string().uuid() }).strict().parse(body)
+              .requestId,
+          ),
+        );
       case "analysis/begin":
         return response(await beginAnalysis(owner));
       case "analysis/finish":

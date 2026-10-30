@@ -19,10 +19,19 @@ export function proposalBlocks(p: {
     { type: "header", text: plain(p.title.slice(0, 150)) },
     { type: "section", text: plain(body.problem.slice(0, 2000)) },
     {
+      type: "section",
+      text: plain(
+        (
+          "실행할 테스트 명령\n" +
+          body.testCommands.map((argv) => JSON.stringify(argv)).join("\n")
+        ).slice(0, 2900),
+      ),
+    },
+    {
       type: "context",
       elements: [
         plain(
-          `검토본 ${p.version} · 예상 ${body.effortMinutes}분 · 상한 ${body.timeLimitMinutes}분 · ${body.release ? body.release.markets.join(", ") + " " + body.release.until : "PR 병합까지"}`,
+          `검토본 ${p.version} · 예상 ${body.effortMinutes}분 · 상한 ${body.timeLimitMinutes}분 · ${body.release ? body.release.markets.join(", ") + " " + body.release.until : body.binding.kind === "files" ? "문서 적용과 확인까지" : "PR 병합까지"}`,
         ),
       ],
     },

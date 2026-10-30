@@ -229,7 +229,9 @@ export function SupervisorInbox() {
                 <span className="rounded bg-neutral-100 px-3 py-2">
                   {body.release
                     ? body.release.markets.join(", ") + " " + body.release.until
-                    : "PR 병합까지"}
+                    : body.binding.kind === "files"
+                      ? "문서 적용과 확인까지"
+                      : "PR 병합까지"}
                 </span>
               </div>
               <section className="mb-4">
@@ -258,6 +260,12 @@ export function SupervisorInbox() {
                   </summary>
                   <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-sm leading-6">
                     {text}
+                    {title === "테스트 계획"
+                      ? "\n\n실행할 테스트 명령\n" +
+                        body.testCommands
+                          .map((argv) => JSON.stringify(argv))
+                          .join("\n")
+                      : ""}
                   </pre>
                 </details>
               ))}
@@ -386,9 +394,9 @@ export function SupervisorInbox() {
                       있습니다.
                     </p>
                     <label className="mt-3 block text-sm">
-                      확인 근거 링크
+                      확인 근거 링크 또는 파일 해시
                       <input
-                        type="url"
+                        type="text"
                         value={recoveryEvidence}
                         onChange={(e) => setRecoveryEvidence(e.target.value)}
                         placeholder="https://github.com/..."
@@ -397,7 +405,8 @@ export function SupervisorInbox() {
                     </label>
                     <button
                       disabled={
-                        busy || !recoveryEvidence.startsWith("https://")
+                        busy ||
+                        !/^(https:\/\/|file:|git:)/.test(recoveryEvidence)
                       }
                       onClick={() =>
                         void write(`proposals/${p.id}/decision`, {

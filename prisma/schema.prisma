@@ -459,6 +459,7 @@ model WorkObservation {
   waitUntil   DateTime? @db.DateTime(3)
   samples     Int      @default(1)
   minSamples  Int      @default(1)
+  resolved    Boolean  @default(false)
   createdAt   DateTime @default(now()) @db.DateTime(3)
   @@index([targetId, problemKey, observedAt])
   @@map("work_observation")

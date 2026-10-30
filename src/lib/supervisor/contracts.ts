@@ -51,6 +51,7 @@ export const observationSchema = z
     observedAt: z.string().datetime(),
     expiresAt: z.string().datetime(),
     waitUntil: z.string().datetime().nullable(),
+    resolved: z.boolean().default(false),
     samples: z.number().int().nonnegative().max(1000000000),
     minSamples: z.number().int().positive().max(1000000000),
   })

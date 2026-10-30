@@ -212,7 +212,13 @@ test(
         version: p2.version,
         digest: p2.digest,
       });
-      const second = (await claimRun("pc")).run!;
+      const claimRequestId = randomUUID();
+      const second = (await claimRun("pc", new Date(), claimRequestId)).run!;
+      assert.equal(
+        (await claimRun("pc", new Date(), claimRequestId)).run!.id,
+        second.id,
+        "같은 claim 요청의 응답 유실은 기존 실행을 돌려준다",
+      );
       await decideProposal({
         id: p2.id,
         version: 2,
@@ -261,6 +267,61 @@ test(
       await assert.rejects(
         createProposal({ ...body, design: "제외 우회" }, "pc"),
         /ALREADY_HANDLED/,
+      );
+      const expiryObservation = {
+        ...observation,
+        id: "expiry-" + randomUUID(),
+        problemKey: "expiry",
+      };
+      await submitObservations([expiryObservation]);
+      const expiry = await createProposal(
+        {
+          ...body,
+          problemKey: "expiry",
+          observationIds: [expiryObservation.id],
+        },
+        "pc",
+      );
+      await decideProposal({
+        id: expiry.id,
+        version: expiry.version,
+        digest: expiry.digest,
+        decision: "approve",
+        actor: "@human",
+      });
+      await prisma.operatorCommandRun.update({
+        where: {
+          id: (
+            await prisma.workProposal.findUniqueOrThrow({
+              where: { id: expiry.id },
+            })
+          ).runId!,
+        },
+        data: { expiresAt: new Date(0) },
+      });
+      await claimRun("pc");
+      assert.equal(
+        (
+          await prisma.workProposal.findUniqueOrThrow({
+            where: { id: expiry.id },
+          })
+        ).status,
+        "BLOCKED",
+        "실행 전 만료는 새 검토를 허용한다",
+      );
+      const resolved = {
+        ...observation,
+        id: "resolved-" + randomUUID(),
+        problemKey: "resolved",
+        resolved: true,
+      };
+      await submitObservations([resolved]);
+      await assert.rejects(
+        createProposal(
+          { ...body, problemKey: "resolved", observationIds: [resolved.id] },
+          "pc",
+        ),
+        /EVIDENCE_NOT_READY/,
       );
       await setMode("OBSERVE", "@human");
       assert.deepEqual(await reservePublications(), []);

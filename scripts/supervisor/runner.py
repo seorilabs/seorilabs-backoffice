@@ -26,6 +26,12 @@ STOPPING = False
 class Waiting(Exception):
     pass
 
+class Rejected(Waiting):
+    def __init__(self,status,code):
+        self.status=status
+        self.code=code
+        super().__init__(f'서버가 요청을 거부했습니다 ({status}, {code}).')
+
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -129,7 +135,12 @@ class Client:
             with urllib.request.build_opener(NoRedirect).open(req, timeout=15) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
-            raise Waiting(f'서버가 요청을 거부했습니다 ({error.code}).') from None
+            try:
+                code=json.loads(error.read(16000)).get('error','REQUEST_REJECTED')
+            except (ValueError,OSError):
+                code='REQUEST_REJECTED'
+            if not isinstance(code,str) or not re.fullmatch(r'[A-Z_]{1,80}',code):code='REQUEST_REJECTED'
+            raise Rejected(error.code,code) from None
         except (OSError, ValueError):
             raise Waiting('서버 연결을 확인해야 합니다.') from None
 
@@ -154,14 +165,33 @@ def process_identity(pid):
     result = subprocess.run(['ps','-p',str(pid),'-o','lstart=','-o','args='],capture_output=True,text=True)
     return result.stdout.strip() if result.returncode == 0 else None
 
-def stop_child(child):
-    if child.poll() is None:
-        os.killpg(child.pid, signal.SIGTERM)
+def group_members(group):
+    result=subprocess.run(['ps','-axo','pid=,pgid=,stat='],capture_output=True,text=True,timeout=5)
+    if result.returncode:
+        raise Waiting('작업 프로세스 그룹을 확인하지 못했습니다.')
+    members=[]
+    for line in result.stdout.splitlines():
+        parts=line.split()
+        if len(parts)>=3 and parts[1]==str(group) and not parts[2].startswith('Z'):
+            members.append(int(parts[0]))
+    return members
+
+def stop_group(group):
+    for sig,seconds in ((signal.SIGTERM,5),(signal.SIGKILL,5)):
         try:
-            child.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait(timeout=5)
+            os.killpg(group,sig)
+        except ProcessLookupError:
+            return
+        end=time.monotonic()+seconds
+        while time.monotonic()<end:
+            if not group_members(group):return
+            time.sleep(0.1)
+    if group_members(group):raise Waiting('작업의 자식 프로세스가 아직 실행 중입니다.')
+
+def stop_child(child):
+    # leader가 먼저 종료돼도 같은 그룹의 자식은 계속 쓸 수 있으므로 그룹을 항상 확인한다.
+    stop_group(child.pid)
+    child.wait(timeout=5)
 
 def codex(config, prompt: str, root: Path, deadline: float, schema: Path, heartbeat=None, journal=None):
     """모델 원시 로그를 저장하지 않고 정확한 세션 ID와 최종 결과만 읽는다."""
@@ -184,10 +214,10 @@ def codex(config, prompt: str, root: Path, deadline: float, schema: Path, heartb
             selector.register(child.stdout,selectors.EVENT_READ)
             last_beat = 0.0
             buffer = b''
-            while child.poll() is None:
+            while selector.get_map():
                 if STOPPING or time.monotonic() >= deadline:
                     raise Waiting('승인한 실행 시간이 끝났습니다.')
-                if heartbeat and time.monotonic()-last_beat >= 25:
+                if heartbeat and child.poll() is None and time.monotonic()-last_beat >= 25:
                     heartbeat(session)
                     last_beat = time.monotonic()
                 for key,_ in selector.select(timeout=1):
@@ -214,6 +244,19 @@ def codex(config, prompt: str, root: Path, deadline: float, schema: Path, heartb
                                 private_json(STATE/'active.json',journal)
                     if len(buffer)>2*1024*1024:
                         raise Waiting('CLI 출력 크기를 초과했습니다.')
+            child.wait(timeout=5)
+            if buffer:
+                try:
+                    event=json.loads(buffer)
+                    candidate=event.get('thread_id')
+                    if event.get('type')=='thread.started' and isinstance(candidate,str) and re.fullmatch(r'[a-f0-9-]{36}',candidate):
+                        if session and session!=candidate:raise Waiting('CLI 세션이 바뀌었습니다.')
+                        session=candidate
+                        if journal is not None:
+                            journal['sessionId']=session
+                            private_json(STATE/'active.json',journal)
+                except ValueError:
+                    pass
             if child.returncode != 0 or not output.exists() or not session:
                 raise Waiting('Codex 실행이 중단됐습니다. 한도와 권한을 확인해야 합니다.')
             return json.loads(output.read_text()),session
@@ -260,10 +303,12 @@ def execute(client,config,run):
     root=Path(mapping['path']).expanduser().resolve()
     journal={'runId':run['id'],'generation':run['generation'],'sessionId':None,'pid':None,'identity':None,'root':str(root),'targetId':p['targetId']}
     private_json(STATE/'active.json',journal)
+    (STATE/'claim-intent.json').unlink(missing_ok=True)
     session=None
     deadline=time.monotonic()+p['timeLimitMinutes']*60
     workspace=root
     try:
+        report(client,run,'checkpoint','승인한 원본을 확인하고 실행을 준비합니다.',checkpoint={'phase':'preparing'})
         verify_binding(root,p['binding'],require_ancestor=False)
         if p['binding']['kind']=='git':
             workspace=STATE/'worktrees'/run['id']
@@ -317,35 +362,72 @@ def execute(client,config,run):
     # 미반영 worktree와 문서는 보존한다. 완료한 작업만 운영 정리 명령으로 제거한다.
 
 def recover(client):
-    flush_outbox(client)
     path=STATE/'active.json'
     if not path.exists():
+        intent=STATE/'claim-intent.json'
+        if intent.exists():
+            claim=client.request('runs/claim',json.loads(intent.read_text()))
+            if claim.get('run'):
+                run=claim['run']
+                checkpoint=run.get('checkpoint') or {}
+                if checkpoint.get('claimRequestId')==json.loads(intent.read_text())['requestId'] and not checkpoint.get('phase'):
+                    return run
+                raise Waiting('실행 시작 기록이 있어 자동으로 다시 실행하지 않습니다.')
+            active=claim.get('active')
+            if active:
+                state=client.request('runs/'+active['id'])
+                if state['activeRunId']==active['id']:
+                    checkpoint=active.get('checkpoint') or {}
+                    if active['executionOwner']!=client.machine or checkpoint.get('claimRequestId')!=json.loads(intent.read_text())['requestId'] or checkpoint.get('phase'):
+                        raise Waiting('기존 claim의 실제 실행 상태를 확인해야 합니다.')
+                    report(client,active,'stopped','claim 응답 유실 뒤 CLI 실행 전 중단을 확인했습니다.',evidence=['file:claim-intent-readback'],checkpoint={'processStopped':True,'readbackVerified':True})
+                elif active['status'] not in ('SUCCEEDED','FAILED','CANCELLED','EXPIRED'):
+                    raise Waiting('기존 claim의 실제 실행 상태를 확인해야 합니다.')
+                intent.unlink();return
+            intent.unlink()
+        flush_outbox(client)
         return
     j=json.loads(path.read_text())
-    snapshot=client.request('snapshot')
-    recorded=next((p.get('run') for p in snapshot['proposals'] if p.get('runId')==j['runId']),None)
-    if recorded and recorded['status'] in ('SUCCEEDED','FAILED','CANCELLED') and snapshot['state']['activeRunId']!=j['runId']:
-        if not j.get('pid') or process_identity(j['pid']) is None:
-            path.unlink()
-            return
     if j.get('pid'):
         observed=process_identity(j['pid'])
-        if observed is not None:
-            if observed!=j.get('identity'):
-                raise Waiting('기존 프로세스 식별자가 재사용됐습니다. 원격 상태와 세션을 확인해야 합니다.')
-            os.killpg(j['pid'],signal.SIGTERM)
-            for _ in range(10):
-                if process_identity(j['pid']) is None:
-                    break
-                time.sleep(1)
-            if process_identity(j['pid']) is not None:
-                raise Waiting('기존 CLI가 아직 실행 중입니다.')
+        if observed is not None and observed!=j.get('identity'):
+            raise Waiting('기존 프로세스 식별자가 재사용됐습니다. 원격 상태와 세션을 확인해야 합니다.')
+        stop_group(j['pid'])
+    # 먼저 중단을 확인한 뒤 서버의 확정 결과와 응답 유실을 대조한다.
+    state=client.request('runs/'+j['runId'])
+    recorded=state['run']
+    if not isinstance(recorded,dict):raise Waiting('서버에서 기존 실행을 찾지 못했습니다.')
+    outbox=STATE/'outbox.json'
+    if outbox.exists():
+        pending=json.loads(outbox.read_text())
+        try:
+            flush_outbox(client)
+        except Rejected as error:
+            if error.status!=409 or error.code not in ('RUN_LEASE_LOST','RUN_OWNERSHIP_LOST'):
+                raise
+            if pending['runId']!=j['runId'] or pending['body']['generation']!=j['generation']:
+                raise Waiting('재전송 기록과 실행 세대가 다릅니다.')
+            if recorded['generation']!=j['generation']:
+                raise Waiting('서버 실행 세대가 달라졌습니다.')
+            # 확정 거절된 보고도 보존하고 새 상태 보고만 별도 요청으로 보낸다.
+            os.replace(outbox,STATE/('rejected-'+pending['body']['requestId']+'.json'))
+    state=client.request('runs/'+j['runId'])
+    recorded=state['run']
+    if state['activeRunId']!=j['runId']:
+        if recorded['status'] not in ('SUCCEEDED','FAILED','CANCELLED','EXPIRED'):
+            raise Waiting('서버의 실행 소유권을 확인해야 합니다.')
+        path.unlink()
+        return
+    if recorded.get('localState')=='PAUSED':
+        path.unlink()
+        return
     root=Path(j.get('workspace',j['root']))
     evidence=['file:'+j['targetId']+':checkpoint']
     if (root/'.git').exists():
-        evidence.append('git:'+git(root,'rev-parse','HEAD'))
         git(root,'status','--porcelain')
-    report(client,{'id':j['runId'],'generation':j['generation']},'paused','재시작 후 기존 프로세스 중단과 파일 상태를 확인했습니다. 외부 적용은 재실행하지 않습니다.',j.get('sessionId'),evidence,{'processStopped':True,'phase':'needs_external_readback'})
+        head=subprocess.run(['git','rev-parse','--verify','HEAD'],cwd=root,capture_output=True)
+        if head.returncode==0:evidence.append('git:'+head.stdout.decode().strip())
+    report(client,{'id':j['runId'],'generation':j['generation']},'paused','재시작 후 기존 프로세스 그룹 중단과 파일 상태를 확인했습니다. 외부 결과는 확인이 필요하며 쓰기를 반복하지 않습니다.',j.get('sessionId'),evidence,{'processStopped':True,'phase':'needs_external_readback'})
     path.unlink()
 
 def observe(client,config,sources):
@@ -367,7 +449,7 @@ def observe(client,config,sources):
             summary='집필 폴더를 확인했다. 원문은 PC에서 검토하고 서버에는 필요한 검토본만 보낸다.'
             refs=['file:registered-writing-folder']
         problem='local-review-'+sha(summary.encode())[:16]
-        observations.append({'id':sha((target_id+problem+now[:10]).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
+        observations.append({'id':sha((target_id+problem+now[:13]).encode()),'targetId':target_id,'problemKey':problem,'source':'local','summary':summary,'references':refs,'observedAt':now,'expiresAt':expiry,'waitUntil':None,'samples':1,'minSamples':1})
     app_targets={item.get('appId'):key for key,item in config['targets'].items() if item.get('appId')}
     for item in sources.get('issues',[]):
         target=app_targets.get(item['appId'])
@@ -383,7 +465,7 @@ def observe(client,config,sources):
             if not target:continue
             observed=item[field]
             expires=(dt.datetime.fromisoformat(observed.replace('Z','+00:00'))+dt.timedelta(days=7)).isoformat(timespec='milliseconds').replace('+00:00','Z')
-            observations.append({'id':sha((group+item['id']+observed).encode()),'targetId':target,'problemKey':group+'-'+item['id'],'source':group,'summary':summary(item),'references':['https://backoffice.vzyx.xyz/'+('feedback' if group in ('reviews','releases') else 'settings/collections')+'#'+item['id']],'observedAt':observed,'expiresAt':expires,'waitUntil':None,'samples':1,'minSamples':1})
+            observations.append({'id':sha((group+item['id']+observed).encode()),'targetId':target,'problemKey':group+'-'+(sha((item['source']+item.get('target','')+str(item.get('appId'))).encode())[:24] if group=='collections' else item['id']),'resolved':group=='collections' and item['status'] in ('observed','empty','not_applicable'),'source':group,'summary':summary(item),'references':['https://backoffice.vzyx.xyz/'+('feedback' if group in ('reviews','releases') else 'settings/collections')+'#'+item['id']],'observedAt':observed,'expiresAt':expires,'waitUntil':None,'samples':1,'minSamples':1})
     for start in range(0,len(observations),100):
         client.request('observations',observations[start:start+100])
     return observations
@@ -417,17 +499,25 @@ def prepare_proposal(config,candidate):
     else:
         candidate.pop('testPlan',None)
         binding=candidate['binding']
-        if binding['kind']!='files':
+        if not isinstance(binding,dict) or binding.get('kind')!='files':
             raise Waiting('비Git 문서의 파일 해시가 필요합니다.')
         verify_binding(root,binding)
     return candidate
 
 def cycle(client,config):
-    recover(client)
+    recovered=recover(client)
+    if recovered:
+        execute(client,config,recovered)
+        return
     snapshot=client.request('snapshot')
     if snapshot['state']['mode']=='PAUSED':
         return
-    claim=client.request('runs/claim',{}) if snapshot['state']['mode']=='ACTIVE' else None
+    claim=None
+    if snapshot['state']['mode']=='ACTIVE':
+        intent={'requestId':str(uuid.uuid4())}
+        private_json(STATE/'claim-intent.json',intent)
+        claim=client.request('runs/claim',intent)
+        if not claim.get('run'):(STATE/'claim-intent.json').unlink(missing_ok=True)
     if claim and claim.get('run'):
         execute(client,config,claim['run'])
         return
@@ -435,15 +525,24 @@ def cycle(client,config):
         raise Waiting('기존 작업 결과를 확인해야 합니다.')
     if snapshot['state']['activeRunId']:
         return
+    last_observed=max((o['observedAt'] for o in snapshot['observations'] if o['source']=='local'),default='1970-01-01T00:00:00Z')
+    sources=None;observed=None
+    if (dt.datetime.now(UTC)-dt.datetime.fromisoformat(last_observed.replace('Z','+00:00'))).total_seconds()>=3600:
+        sources=client.request('sources')
+        observed=observe(client,config,sources)
     analysis=client.request('analysis/begin',{})
     if analysis:
         try:
-            sources=client.request('sources')
-            observed=observe(client,config,sources)
+            if sources is None:sources=client.request('sources')
+            if observed is None:observed=observe(client,config,sources)
             prompt=Path(__file__).with_name('analysis.md').read_text()+'\n등록된 PC 대상:\n'+json.dumps(config['targets'],ensure_ascii=False)+'\n관측과 서버 상태:\n'+json.dumps({'observations':observed,'sources':sources,'proposals':snapshot['proposals']},ensure_ascii=False)
-            result,_=codex(config,prompt,Path(config['analysisRoot']).expanduser(),time.monotonic()+30*60,Path(__file__).with_name('analysis.schema.json'))
+            end=time.monotonic()+max(0,(dt.datetime.fromisoformat(analysis['deadline'].replace('Z','+00:00'))-dt.datetime.now(UTC)).total_seconds())
+            result,_=codex(config,prompt,Path(config['analysisRoot']).expanduser(),end,Path(__file__).with_name('analysis.schema.json'))
             for candidate in result['candidates'][:3]:
-                client.request('proposals',prepare_proposal(config,candidate))
+                if time.monotonic()>=end:raise Waiting('하루 분석 시간이 끝났습니다.')
+                prepared=prepare_proposal(config,candidate)
+                if time.monotonic()>=end:raise Waiting('하루 분석 시간이 끝났습니다.')
+                client.request('proposals',prepared)
         finally:
             client.request('analysis/finish',{'day':analysis['day']})
     if snapshot['state']['mode']=='ACTIVE':

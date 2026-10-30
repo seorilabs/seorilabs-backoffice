@@ -58,6 +58,64 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(result['status'],'completed')
             self.assertEqual(session,'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
 
+    def test_expired_heartbeat_and_empty_git_recover_to_paused(self):
+        for empty_git in (False,True):
+            with self.subTest(empty_git=empty_git),tempfile.TemporaryDirectory() as temp,patch.object(r,'STATE',Path(temp)):
+                root=Path(temp)/'documents';root.mkdir()
+                if empty_git:subprocess.run(['git','init','-q',str(root)],check=True)
+                journal={'runId':'one','generation':2,'sessionId':None,'pid':None,'identity':None,'root':str(root),'workspace':str(root),'targetId':'book'}
+                r.private_json(r.STATE/'active.json',journal)
+                pending={'runId':'one','body':{'requestId':'old-heartbeat','generation':2,'kind':'heartbeat'}}
+                r.private_json(r.STATE/'outbox.json',pending)
+                calls=[]
+                class Fake:
+                    def request(self,path,body=None):
+                        calls.append((path,body))
+                        if path=='runs/one':return {'activeRunId':'one','run':{'id':'one','generation':2,'status':'PROCESSING','localState':'UNCERTAIN'}}
+                        if body['kind']=='heartbeat':raise r.Rejected(409,'RUN_LEASE_LOST')
+                        return {'accepted':True}
+                r.recover(Fake())
+                self.assertEqual(sum(bool(body) and body['kind']=='paused' for _,body in calls),1)
+                self.assertFalse((r.STATE/'active.json').exists())
+                self.assertTrue((r.STATE/'rejected-old-heartbeat.json').exists())
+
+    def test_cli_leader_exit_stops_descendant_writer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);binary=root/'fake-codex';marker=root/'late-write'
+            child_code='import time;from pathlib import Path;time.sleep(1);Path('+repr(str(marker))+').write_text("late")'
+            binary.write_text('#!/usr/bin/env python3\nimport subprocess,sys\nsys.stdin.read()\nsubprocess.Popen([sys.executable,"-c",'+repr(child_code)+'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\nsys.exit(1)\n')
+            binary.chmod(0o700)
+            with self.assertRaises(r.Waiting):r.codex({'codex':str(binary)},'test',root,time.monotonic()+10,root/'schema.json')
+            time.sleep(1.2)
+            self.assertFalse(marker.exists(),'종료된 CLI의 자식은 쓸 수 없어야 한다')
+
+    def test_claim_response_loss_reuses_exact_claim_id(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(r,'STATE',Path(temp)):
+            intent={'requestId':'one-exact-claim'};r.private_json(r.STATE/'claim-intent.json',intent)
+            calls=[]
+            class Fake:
+                def request(self,path,body=None):
+                    calls.append((path,body));return {'run':{'id':'one','checkpoint':{'claimRequestId':intent['requestId']}},'active':None}
+            self.assertEqual(r.recover(Fake())['id'],'one')
+            self.assertEqual(calls,[('runs/claim',intent)])
+            self.assertTrue((r.STATE/'claim-intent.json').exists())
+
+    def test_cancelled_claim_response_loss_reports_stopped_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(r,'STATE',Path(temp)):
+            intent={'requestId':'cancelled-claim'};r.private_json(r.STATE/'claim-intent.json',intent)
+            active={'id':'one','generation':1,'status':'CANCELLED','localState':'STOP_REQUESTED','executionOwner':'pc','checkpoint':{'claimRequestId':intent['requestId']}}
+            reports=[]
+            class Fake:
+                machine='pc'
+                def request(self,path,body=None):
+                    if path=='runs/claim':return {'run':None,'active':active}
+                    if path=='runs/one':return {'run':active,'activeRunId':'one'}
+                    reports.append(body);return {'accepted':True}
+            r.recover(Fake())
+            self.assertEqual([report['kind'] for report in reports],['stopped'])
+            self.assertTrue(reports[0]['checkpoint']['readbackVerified'])
+            self.assertFalse((r.STATE/'claim-intent.json').exists())
+
     def test_schema_and_prompts_are_valid(self):
         for name in ('analysis.schema.json','result.schema.json'):
             self.assertEqual(json.loads(Path(__file__).with_name(name).read_text())['type'],'object')

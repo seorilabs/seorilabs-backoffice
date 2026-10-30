@@ -17,6 +17,10 @@ const observation = {
 };
 test("AC1 오래된 자료, 미래 시각, 표본 부족과 수정 후 대기를 제외한다", () => {
   assert.equal(eligibility(observation, now), null);
+  assert.equal(
+    eligibility({ ...observation, resolved: true }, now),
+    "resolved",
+  );
   assert.equal(eligibility({ ...observation, expiresAt: now }, now), "stale");
   assert.equal(
     eligibility(

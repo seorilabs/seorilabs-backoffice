@@ -33,6 +33,7 @@ CREATE TABLE `work_observation` (
     `waitUntil` DATETIME(3) NULL,
     `samples` INTEGER NOT NULL DEFAULT 1,
     `minSamples` INTEGER NOT NULL DEFAULT 1,
+    `resolved` BOOLEAN NOT NULL DEFAULT false,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     INDEX `work_observation_targetId_problemKey_observedAt_idx`(`targetId`, `problemKey`, `observedAt`),

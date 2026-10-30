@@ -11,9 +11,11 @@ export function eligibility(
     waitUntil: Date | null;
     samples: number;
     minSamples: number;
+    resolved?: boolean;
   },
   now: Date,
 ): string | null {
+  if (o.resolved) return "resolved";
   if (o.observedAt.getTime() > now.getTime() + 60000) return "future";
   if (o.expiresAt <= now) return "stale";
   if (o.samples < o.minSamples) return "samples";

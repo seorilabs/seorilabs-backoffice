@@ -13,7 +13,14 @@ import {
   type ProposalInput,
   type ReportInput,
 } from "./contracts";
-import { eligibility, canDecide, canReport, dayKey, afterNine } from "./policy";
+import {
+  eligibility,
+  canDecide,
+  canReport,
+  dayKey,
+  afterNine,
+  rankCandidates,
+} from "./policy";
 
 type Tx = Prisma.TransactionClient;
 const LEASE_MS = 120000;
@@ -366,11 +373,16 @@ export async function decideProposal(
     });
   });
 }
-export async function claimRun(owner: string, now = new Date()) {
+export async function claimRun(
+  owner: string,
+  now = new Date(),
+  requestId: string = randomUUID(),
+) {
   const pending = await prisma.operatorCommandRun.findFirst({
     where: {
       executionLocation: "LOCAL",
       status: "PENDING",
+      expiresAt: { gt: now },
       workProposal: { status: "APPROVED" },
     },
     orderBy: { createdAt: "asc" },
@@ -380,6 +392,56 @@ export async function claimRun(owner: string, now = new Date()) {
     await assertCurrentTargetPolicy(pending.workProposal.targetId);
   return prisma.$transaction(async (tx) => {
     const coordinator = await lock(tx);
+    const previous = await tx.workEvent.findUnique({
+      where: { id: `claim:${requestId}` },
+    });
+    if (previous) {
+      ensure(previous.actor === owner && previous.runId, "CLAIM_ID_CONFLICT");
+      const run = await tx.operatorCommandRun.findUniqueOrThrow({
+        where: { id: previous.runId },
+        include: { workProposal: { include: { target: true } } },
+      });
+      ensure(run.executionOwner === owner, "RUN_OWNERSHIP_LOST");
+      return coordinator.mode === "ACTIVE" &&
+        canReport(run, owner, run.generation!, now) &&
+        run.localState === "RUNNING"
+        ? { run, active: null }
+        : { run: null, active: run };
+    }
+    const expired = await tx.operatorCommandRun.findMany({
+      where: {
+        executionLocation: "LOCAL",
+        operation: "supervisor_execute",
+        status: "PENDING",
+        expiresAt: { lte: now },
+      },
+      include: { workProposal: true },
+      take: 100,
+    });
+    for (const run of expired) {
+      await tx.operatorCommandRun.update({
+        where: { id: run.id },
+        data: {
+          status: "EXPIRED",
+          localState: "STOPPED",
+          completedAt: now,
+          summary: "승인 후 실행 대기 기한이 지나 새 검토가 필요합니다.",
+        },
+      });
+      if (run.workProposal)
+        await tx.workProposal.update({
+          where: { id: run.workProposal.id },
+          data: { status: "BLOCKED" },
+        });
+      await event(
+        tx,
+        "PENDING_EXPIRED",
+        owner,
+        {},
+        run.workProposal?.id,
+        run.id,
+      );
+    }
     ensure(coordinator.mode === "ACTIVE", "SUPERVISOR_NOT_ACTIVE");
     if (coordinator.activeRunId) {
       const active = await tx.operatorCommandRun.findUniqueOrThrow({
@@ -428,6 +490,7 @@ export async function claimRun(owner: string, now = new Date()) {
         status: "PROCESSING",
         executionOwner: owner,
         generation,
+        checkpoint: { claimRequestId: requestId },
         leaseUntil: new Date(now.getTime() + LEASE_MS),
         localState: "RUNNING",
         startedAt: now,
@@ -443,9 +506,10 @@ export async function claimRun(owner: string, now = new Date()) {
       tx,
       "CLAIMED",
       owner,
-      { generation },
+      { generation, requestId },
       candidate.workProposal!.id,
       run.id,
+      `claim:${requestId}`,
     );
     return { run, active: null };
   });
@@ -508,7 +572,8 @@ export async function reportRun(
     );
     if (input.kind === "succeeded")
       ensure(
-        input.evidence.length > 0 &&
+        input.sessionId !== null &&
+          input.evidence.length > 0 &&
           input.checkpoint.testsPassed === true &&
           input.checkpoint.readbackVerified === true,
         "COMPLETION_EVIDENCE_REQUIRED",
@@ -639,7 +704,7 @@ export async function listProposals() {
   });
 }
 export async function supervisorSnapshot() {
-  const [targets, proposals, state, observations] = await Promise.all([
+  const [targets, proposals, state, recent] = await Promise.all([
     prisma.workTarget.findMany(),
     listProposals(),
     prisma.workCoordinator.findUnique({ where: { id: 1 } }),
@@ -649,6 +714,15 @@ export async function supervisorSnapshot() {
       take: 300,
     }),
   ]);
+  const ids = proposals.flatMap(
+    (p) => proposalSchema.parse(p.payload).observationIds,
+  );
+  const bound = await prisma.workObservation.findMany({
+    where: { id: { in: ids } },
+  });
+  const observations = [
+    ...new Map([...recent, ...bound].map((o) => [o.id, o])).values(),
+  ];
   return {
     now: new Date().toISOString(),
     targets,
@@ -674,13 +748,17 @@ export async function reservePublications(now = new Date()) {
       take: 30,
     });
     const selected = [];
+    const eligible = [];
     for (const p of candidates) {
-      if (selected.length >= 3 - count) break;
       try {
         await validateEvidence(tx, proposalSchema.parse(p.payload), now);
       } catch {
         continue;
       }
+      eligible.push({ ...p, ...proposalSchema.parse(p.payload) });
+    }
+    for (const p of rankCandidates(eligible, new Set(), now)) {
+      if (selected.length >= 3 - count) break;
       await tx.workProposal.update({
         where: { id: p.id },
         data: { publicationDay: day, deliveryState: "STARTED" },
