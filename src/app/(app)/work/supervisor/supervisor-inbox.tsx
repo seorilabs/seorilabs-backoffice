@@ -179,7 +179,7 @@ export function SupervisorInbox() {
       )}
       {data && data.proposals.length > 0 && (
         <div className="grid gap-5 md:grid-cols-[280px_minmax(0,1fr)]">
-          <nav aria-label="제안 목록" className="space-y-2">
+          <nav aria-label="제안 목록" className="max-h-64 space-y-2 overflow-y-auto md:max-h-none md:overflow-visible">
             {data.proposals.map((item) => (
               <button
                 key={item.id}
