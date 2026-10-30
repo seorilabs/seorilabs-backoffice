@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-30T14:36:07.186334+00:00",
+  "identity": "system:serviceaccount:platform:ci-deployer",
+  "server": "https://k8s.vzyx.xyz:16443",
+  "namespace": "platform",
+  "deployment": "backoffice",
+  "sourceSha": "2b97adfd812c927b098de689d575a6e168ed042f",
+  "images": [
+    "registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:30e58217bace5e2f951276ffd1cc66e72ef761606c9489c6dc667ede0c9c55ac"
+  ],
+  "readyReplicas": 1
+}
