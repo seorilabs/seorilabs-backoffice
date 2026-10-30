@@ -32,6 +32,8 @@ launchctl print gui/$(id -u)/com.seorilabs.personal-supervisor
 
 서버 웹 Deployment에는 `SUPERVISOR_OWNER_LOGIN`, `SUPERVISOR_SLACK_OWNER_ID`, `SUPERVISOR_MACHINE_ID`의 공개 식별자를 설정한다. 기존 `INTERNAL_ADMIN_TOKEN`과 Slack 서명 키를 재사용한다. 모델 환경에는 이 값을 전달하지 않는다. 인증 파일을 CLI 인자와 로그에 넣지 않는다. 기존 중앙 worker와 adapter 권한은 이 API와 별개이며 잠금을 바꾸지 않는다.
 
+대표 제안과 결과는 운영자와 봇만 참여한 비공개 `#에이전트`로 보낸다. 웹과 notification worker의 `SLACK_CHANNEL_SUPERVISOR_ID`를 같은 채널로 설정한다. 기존 `private-feed`는 뉴스용으로 유지하며, 대표 채널 미설정 시 뉴스 채널로 대체하지 않는다.
+
 새 서버 상태는 `OBSERVE`다. 관측은 PC가 깨어 있을 때 서버 시각을 기준으로 매시간 갱신하며, 오전 9시 이후 하루 한 번 30분 이내로 후보를 검토한다. 후보가 없으면 제안 메시지를 보내지 않는다. `/work/supervisor`에서 관찰 결과를 확인한 뒤 `제안 발송과 승인 실행`으로 바꾸면 같은 시각 규칙으로 최대 3건을 발송한다. 사람만 진행, 보류, 제외와 취소를 결정한다.
 
 ## 복구와 정지

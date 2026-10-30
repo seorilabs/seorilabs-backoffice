@@ -21,6 +21,8 @@ test(
   "AC1-4 실제 MySQL에서 승인, claim, 만료, 취소, 응답 유실과 복구를 확인한다",
   { skip: !local },
   async () => {
+    const previousChannel = process.env.SLACK_CHANNEL_SUPERVISOR_ID;
+    process.env.SLACK_CHANNEL_SUPERVISOR_ID = "CAGENTQA";
     const targetId = "qa-" + randomUUID();
     const target = {
       id: targetId,
@@ -117,11 +119,26 @@ test(
         decision: "approve" as const,
         actor: "@human",
       };
+      delete process.env.SLACK_CHANNEL_SUPERVISOR_ID;
+      await assert.rejects(
+        decideProposal(decision),
+        /SUPERVISOR_SLACK_CHANNEL_NOT_CONFIGURED/,
+      );
+      assert.equal(
+        (await prisma.workProposal.findUniqueOrThrow({ where: { id: p.id } })).runId,
+        null,
+        "대표 채널이 없으면 승인 실행을 생성하지 않는다",
+      );
+      process.env.SLACK_CHANNEL_SUPERVISOR_ID = "CAGENTQA";
       const [a, b] = await Promise.all([
         decideProposal(decision),
         decideProposal(decision),
       ]);
       assert.equal(a.runId, b.runId, "승인은 하나의 실행만 만든다");
+      assert.equal(
+        (await prisma.operatorCommandRun.findUniqueOrThrow({ where: { id: a.runId! } })).channelId,
+        "CAGENTQA",
+      );
       await setMode("ACTIVE", "@human");
       const claims = await Promise.all([
         claimRun("pc"),
@@ -379,6 +396,15 @@ test(
           processStopped: true,
         },
       });
+      const completion = await prisma.notificationEvent.findFirstOrThrow({
+        where: { dedupeKey: { startsWith: `supervisor-result:${chapterRun.id}:` } },
+        include: { deliveries: true },
+      });
+      assert.deepEqual(
+        completion.deliveries.map((delivery) => delivery.destinationKey),
+        ["supervisor"],
+        "대표 작업 결과도 뉴스와 분리한다",
+      );
       const chapterC = await createProposal(
         {
           ...body,
@@ -421,6 +447,8 @@ test(
         data: { activeRunId: null, mode: "OBSERVE" },
       });
       await prisma.$disconnect();
+      if (previousChannel === undefined) delete process.env.SLACK_CHANNEL_SUPERVISOR_ID;
+      else process.env.SLACK_CHANNEL_SUPERVISOR_ID = previousChannel;
     }
   },
 );

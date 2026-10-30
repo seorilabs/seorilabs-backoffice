@@ -29,7 +29,8 @@ test("AC2 Slack은 다른 사용자, 채널, workspace와 미설정을 거부한
   try {
     process.env.SUPERVISOR_SLACK_OWNER_ID = "UOWNER";
     process.env.SLACK_WORKSPACE_ID = "TQA";
-    process.env.SLACK_CHANNEL_PRIVATE_FEED_ID = "CQA";
+    process.env.SLACK_CHANNEL_PRIVATE_FEED_ID = "CNEWS";
+    process.env.SLACK_CHANNEL_SUPERVISOR_ID = "CQA";
     const scope = { workspaceId: "TQA", channelId: "CQA", userId: "UOWNER" };
     assert.equal(requireSlackOwner(scope), "slack:UOWNER");
     for (const key of Object.keys(scope))
@@ -37,6 +38,19 @@ test("AC2 Slack은 다른 사용자, 채널, workspace와 미설정을 거부한
         () => requireSlackOwner({ ...scope, [key]: "other" }),
         /SCOPE_DENIED/,
       );
+    assert.throws(
+      () => requireSlackOwner({ ...scope, channelId: "CNEWS" }),
+      /SCOPE_DENIED/,
+      "뉴스 채널에서는 대표 제안을 승인할 수 없다",
+    );
+    delete process.env.SLACK_CHANNEL_SUPERVISOR_ID;
+    assert.throws(() => requireSlackOwner(scope), /SCOPE_DENIED/);
+    assert.throws(
+      () => requireSlackOwner({ ...scope, channelId: "CNEWS" }),
+      /SCOPE_DENIED/,
+      "대표 채널 미설정 시 뉴스 채널로 대신 승인하지 않는다",
+    );
+    process.env.SLACK_CHANNEL_SUPERVISOR_ID = "CQA";
     delete process.env.SUPERVISOR_SLACK_OWNER_ID;
     assert.throws(() => requireSlackOwner(scope), /SCOPE_DENIED/);
   } finally {

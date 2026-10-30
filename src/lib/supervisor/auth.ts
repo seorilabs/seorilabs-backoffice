@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { verifyStaticToken } from "@/lib/security";
 import { env } from "@/lib/env";
 import { ensure } from "./contracts";
+import { supervisorSlackChannelId } from "./channel";
 export function machinePrincipal(request: NextRequest): string | null {
   const owner = process.env.SUPERVISOR_MACHINE_ID?.trim();
   if (!owner || request.headers.get("x-supervisor-machine") !== owner)
@@ -64,8 +65,8 @@ export function requireSlackOwner(input: {
     !!process.env.SUPERVISOR_SLACK_OWNER_ID &&
       input.userId === process.env.SUPERVISOR_SLACK_OWNER_ID &&
       input.workspaceId === env.slackWorkspaceId() &&
-      !!env.notificationChannelId("private-feed") &&
-      input.channelId === env.notificationChannelId("private-feed"),
+      !!supervisorSlackChannelId() &&
+      input.channelId === supervisorSlackChannelId(),
     "SUPERVISOR_SLACK_SCOPE_DENIED",
     403,
   );

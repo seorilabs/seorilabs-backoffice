@@ -9,6 +9,7 @@ export const CHANNEL_BATCH_MONITORING = "batch-monitoring";
 export const CHANNEL_OPS_ALERTS = "ops-alerts";
 export const CHANNEL_SEORI_REVIEW = "seori-review";
 export const CHANNEL_PRIVATE_FEED = "private-feed";
+export const CHANNEL_SUPERVISOR = "supervisor";
 export const CHANNEL_USER_REVIEWS = "user-reviews";
 // 서리 봇 정체로 나가는 일일 재무 리포트와 지표 하이라이트.
 export const CHANNEL_APP_OPS = "app-ops";
@@ -29,6 +30,7 @@ export const CHANNEL_DESTINATIONS = [
   CHANNEL_BATCH_MONITORING,
   CHANNEL_SEORI_REVIEW,
   CHANNEL_PRIVATE_FEED,
+  CHANNEL_SUPERVISOR,
   CHANNEL_USER_REVIEWS,
   CHANNEL_APP_OPS,
   CHANNEL_IAP,

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
 import { slackApi } from "@/lib/slack/api";
-import { proposalSchema } from "./contracts";
+import { ensure, proposalSchema } from "./contracts";
+import { supervisorSlackChannelId } from "./channel";
 import { reservePublications, decideProposal } from "./service";
 import { requireSlackOwner } from "./auth";
 import type { SlackIngress } from "@/lib/slack/normalize";
@@ -65,11 +65,13 @@ export function proposalBlocks(p: {
   ];
 }
 export async function publishProposals() {
+  const channel = supervisorSlackChannelId();
+  ensure(channel, "SUPERVISOR_SLACK_CHANNEL_NOT_CONFIGURED", 503);
   const proposals = await reservePublications();
   const result = [];
   for (const proposal of proposals) {
     const sent = await slackApi("chat.postMessage", {
-      channel: env.notificationChannelId("private-feed"),
+      channel,
       text: proposal.title,
       blocks: proposalBlocks(proposal),
     });

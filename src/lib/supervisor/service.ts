@@ -3,7 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { enqueueNotification } from "@/lib/notifications/outbox";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
-import { env } from "@/lib/env";
+import { CHANNEL_SUPERVISOR } from "@/lib/notifications/destinations";
+import { supervisorSlackChannelId } from "./channel";
 import {
   ensure,
   digest,
@@ -337,6 +338,8 @@ export async function decideProposal(
           : "EXCLUDED";
     let runId: string | undefined;
     if (status === "APPROVED") {
+      const channelId = supervisorSlackChannelId();
+      ensure(channelId, "SUPERVISOR_SLACK_CHANNEL_NOT_CONFIGURED", 503);
       if (p.target.appId) await lockAppForNewWork(tx, p.target.appId);
       const run = await tx.operatorCommandRun.create({
         data: {
@@ -347,7 +350,7 @@ export async function decideProposal(
           executionLocation: "LOCAL",
           actorUserId: input.actor,
           actorLabel: input.actor,
-          channelId: env.notificationChannelId("private-feed"),
+          channelId,
           status: "PENDING",
           confirmedAt: now,
           expiresAt: new Date(now.getTime() + 7 * 86400000),
@@ -638,7 +641,7 @@ export async function reportRun(
             source: "personal-supervisor",
             externalId: input.requestId,
           },
-          destinations: [{ provider: "SLACK", key: "private-feed" }],
+          destinations: [{ provider: "SLACK", key: CHANNEL_SUPERVISOR }],
         },
         tx,
       );
