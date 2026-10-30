@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "keyword-rank-date-20261030-f3fe3c6",
+  "changedFeatures": [
+    "app-and-market-metrics"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}
