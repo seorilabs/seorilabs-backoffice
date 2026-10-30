@@ -10,6 +10,21 @@ import { rankReportKey, rankReportText, sameRankReportContent, type RankReport, 
 import { keywordSuccess } from "./keyword-collector";
 import type { KeywordRow } from "./keyword-monitoring";
 export const rankRowIdentity = (r: Pick<KeywordRow, "appId" | "country" | "term" | "market" | "source" | "language">) => JSON.stringify([r.appId, r.market ?? "app-store", r.source ?? "apple-search-api", r.country, r.language ?? "en_us", r.term]);
+/** 시각 내림차순인 성공 이력에서 첫 관측을 유지한다. 동률의 기존 우선순위도 보존한다. */
+export function indexRankHistory<T extends Parameters<typeof rankRowIdentity>[0] & { observedAt: Date }>(history: readonly T[]) {
+  const indexed = new Map<string, { latest: T; byDay: Map<string, T> }>();
+  for (const point of history) {
+    const identity = rankRowIdentity(point);
+    let group = indexed.get(identity);
+    if (!group) {
+      group = { latest: point, byDay: new Map<string, T>() };
+      indexed.set(identity, group);
+    }
+    const day = metricDayOf(point.observedAt);
+    if (!group.byDay.has(day)) group.byDay.set(day, point);
+  }
+  return indexed;
+}
 export function selectCycleItems(candidates: RankReportItem[], previous: RankReport[], brand: (item: RankReportItem) => boolean) {
   const introduced = previous.flatMap(report => report.items);
   const eligible = candidates.filter(item => !introduced.some(before => rankRowIdentity(before) === rankRowIdentity(item) && before.rank === item.rank && (item.rank!==null || before.resultCount===item.resultCount)));
@@ -60,9 +75,11 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
       if(value.rank !== null && !(typeof value.rank === "number" && Number.isInteger(value.rank) && value.rank>=1 && value.rank<=200))return [];
       return [{appId:row.appId,market:"app-store",source:"apple-search-api",language:"en_us",country:row.country,term:row.target,rank:value.rank as number|null,resultCount:value.resultCount??null,observedAt:row.observedAt,status:value.rank===null?"absent":"observed"}];
     })].sort((a,b)=>b.observedAt.getTime()-a.observedAt.getTime());
+    const indexedHistory = indexRankHistory(history);
+    const dates = Array.from({length:28}, (_,i) => metricDayOf(new Date(now.getTime()-(27-i)*86400000)));
     const rows: KeywordRow[] = [], candidates: RankReportItem[] = [];
     for (const row of current) {
-      const identity = rankRowIdentity(row), previous = history.find(before => rankRowIdentity(before) === identity && keywordSuccess(before.status));
+      const identity = rankRowIdentity(row), historical = indexedHistory.get(identity), previous = historical?.latest;
       const appName = apps.find(app=>app.id === row.appId)?.displayName ?? row.appId;
       const success=keywordSuccess(row.status),state=success?"수집됨":sourceStateLabel(row.status);
       const ranked = !success ? state : row.rank === null ? `반환된 ${row.resultCount}개 목록에 없음` : `${row.rank}위`;
@@ -72,8 +89,7 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
       if(!success)continue;
       const crossed = rankChangeBoundary(previous,row);
       const material = previous && previous.rank !== null && row.rank !== null && Math.min(previous.rank,row.rank) <= 50 && Math.abs(previous.rank-row.rank) >= 10;
-      const dates = Array.from({length:28}, (_,i) => metricDayOf(new Date(now.getTime()-(27-i)*86400000)));
-      candidates.push({ ...item, observedAt: row.observedAt.toISOString(), points: dates.map(day => { const found = day === cycle.day ? row : history.find(before => rankRowIdentity(before) === identity && metricDayOf(before.observedAt) === day); return { day, rank: found?.rank ?? null, state: !found ? "missing" : found.rank === null ? "outside" : "ranked" }; }), reason: crossed ? `상위 ${crossed}개 ${row.rank !== null && row.rank <= crossed ? "진입" : "이탈"}` : material ? "상위권의 뚜렷한 순위 변화" : change, score: crossed ? 1000-crossed : material ? 100 : 0 });
+      candidates.push({ ...item, observedAt: row.observedAt.toISOString(), points: dates.map(day => { const found = day === cycle.day ? row : historical?.byDay.get(day); return { day, rank: found?.rank ?? null, state: !found ? "missing" : found.rank === null ? "outside" : "ranked" }; }), reason: crossed ? `상위 ${crossed}개 ${row.rank !== null && row.rank <= crossed ? "진입" : "이탈"}` : material ? "상위권의 뚜렷한 순위 변화" : change, score: crossed ? 1000-crossed : material ? 100 : 0 });
     }
     const brand = (item: RankReportItem) => item.isBrand === true;
     const items = selectCycleItems(candidates, previousReports, brand);
