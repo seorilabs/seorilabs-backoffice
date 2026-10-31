@@ -240,6 +240,7 @@ function DraftCard({
         const result = await confirmDraftRegistration(draft.id);
         setRegistrationPending(result.pending);
         if (result.confirmed && result.url) {
+          setError(null);
           setCommitted(result.url);
           router.refresh();
           setTimeout(onDone, 1500);
