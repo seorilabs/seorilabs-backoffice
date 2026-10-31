@@ -227,8 +227,8 @@ function DraftCard({
         setCommitted(r.url);
         router.refresh();
         setTimeout(onDone, 1500);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "등록 실패");
+      } catch {
+        setError("등록 결과를 확인하지 못했습니다. 중복 등록을 막기 위해 다시 보내지 않습니다. ‘GitHub 등록 결과 확인’을 눌러 확인하세요.");
         setRegistrationPending(true);
       }
     });
@@ -249,8 +249,8 @@ function DraftCard({
               ? "아직 등록 기록을 확인하지 못했습니다. 중복 방지를 위해 재전송하지 않습니다. GitHub 기록을 확인하고 다시 조회하세요."
               : "등록 요청이 시작되지 않았습니다. 오류를 해결한 뒤 등록할 수 있습니다.",
           );
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "등록 결과 확인 실패");
+      } catch {
+        setError("등록 결과를 아직 확인하지 못했습니다. 초안은 그대로 보존됩니다. 잠시 후 ‘GitHub 등록 결과 확인’을 다시 누르세요.");
       }
     });
   }
@@ -301,7 +301,7 @@ function DraftCard({
           </a>
         </p>
       ) : (
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={!ready || pending || registrationPending}
