@@ -52,6 +52,10 @@ spec:
             - name: http
               containerPort: 3000
           env:
+            - { name: SUPERVISOR_OWNER_LOGIN, value: "magicsih" }
+            - { name: SUPERVISOR_SLACK_OWNER_ID, value: "U0CD2GKL36J" }
+            - { name: SUPERVISOR_MACHINE_ID, value: "Ilhwanui-MacBookAir" }
+            - { name: SLACK_CHANNEL_SUPERVISOR_ID, value: "C0CDN5X6Z7E" }
             - { name: SLACK_ENABLED, value: "true" }
             - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
             - name: SLACK_BOT_TOKEN

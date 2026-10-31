@@ -10,6 +10,7 @@ export default function WorkPage() {
       </p>
       <nav className="my-5 flex flex-wrap gap-2" aria-label="작업 영역">
         {[
+          ["supervisor", "대표 에이전트"],
           ["issues", "이슈"],
           ["approvals", "승인 대기"],
           ["board", "개발·출시 단계"],

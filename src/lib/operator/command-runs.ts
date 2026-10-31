@@ -783,12 +783,12 @@ async function execute(
 
 export async function processNextOperatorCommand(): Promise<boolean> {
   const candidate = await prisma.operatorCommandRun.findFirst({
-    where: { sourceProvider: "SLACK", status: "PENDING", expiresAt: { gt: new Date() } },
+    where: { executionLocation: "SERVER", sourceProvider: "SLACK", status: "PENDING", expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "asc" },
   });
   if (!candidate) return false;
   const claimed = await prisma.operatorCommandRun.updateMany({
-    where: { id: candidate.id, status: "PENDING" },
+    where: { id: candidate.id, executionLocation: "SERVER", status: "PENDING" },
     data: {
       status: "PROCESSING",
       attempts: { increment: 1 },
@@ -898,11 +898,12 @@ export async function processNextOperatorCommand(): Promise<boolean> {
 export async function maintainOperatorCommands(now = new Date()) {
   const [expired, stale, redacted] = await prisma.$transaction([
     prisma.operatorCommandRun.updateMany({
-      where: { status: "AWAITING_CONFIRMATION", expiresAt: { lte: now } },
+      where: { executionLocation: "SERVER", status: "AWAITING_CONFIRMATION", expiresAt: { lte: now } },
       data: { status: "EXPIRED", params: Prisma.DbNull, completedAt: now },
     }),
     prisma.operatorCommandRun.updateMany({
       where: {
+        executionLocation: "SERVER",
         status: "PROCESSING",
         startedAt: { lt: new Date(now.getTime() - STALE_MS) },
       },
@@ -915,6 +916,7 @@ export async function maintainOperatorCommands(now = new Date()) {
     }),
     prisma.operatorCommandRun.updateMany({
       where: {
+        executionLocation: "SERVER",
         redactedAt: null,
         expiresAt: { lte: now },
         status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },

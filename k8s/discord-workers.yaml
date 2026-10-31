@@ -38,6 +38,7 @@ spec:
           env:
             - { name: SLACK_ENABLED, value: "true" }
             - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }
+            - { name: SLACK_CHANNEL_SUPERVISOR_ID, value: "C0CDN5X6Z7E" }
             - { name: SLACK_WORKSPACE_ID, value: "T0CCP49NJAK" }
             - { name: SLACK_ROLE_OPERATIONS_ADMIN_USERS, value: "U0CD2GKL36J" }
             - name: DISCORD_BOT_TOKEN

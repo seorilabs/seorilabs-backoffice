@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  agentRules: false,
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // repo-contract의 fleet validator는 import.meta.url 기준으로 패키지에 동봉된 JSON schema를
   // 런타임 로드한다. webpack이 이를 client-style로 번들하면 존재하지 않는 source checkout
   // fallback까지 정적 resolve하므로 server package 그대로 standalone trace에 포함한다.

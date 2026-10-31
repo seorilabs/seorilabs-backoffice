@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "paused"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "prUrl": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "prUrl"
+  ]
+}

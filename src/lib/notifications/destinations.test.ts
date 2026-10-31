@@ -3,8 +3,22 @@ import test from "node:test";
 import {
   destinationOrFallback,
   notificationDestinations,
+  notificationChannelId,
 } from "@/lib/notifications/destinations";
 import { CHANNEL_CARD_CHANNEL_KEYS } from "@/lib/operator/roles";
+
+test("대표 제안 목적지는 뉴스 채널과 분리하며 미설정 시 대체하지 않는다", () => {
+  withChannel("SLACK_CHANNEL_PRIVATE_FEED_ID", "CNEWS", () => {
+    withChannel("SLACK_CHANNEL_SUPERVISOR_ID", "CAGENT", () => {
+      assert.equal(notificationChannelId("supervisor"), "CAGENT");
+      assert.equal(notificationChannelId("private-feed"), "CNEWS");
+    });
+    withChannel("SLACK_CHANNEL_SUPERVISOR_ID", undefined, () => {
+      assert.equal(notificationChannelId("supervisor"), "");
+      assert.equal(notificationChannelId("private-feed"), "CNEWS");
+    });
+  });
+});
 
 function withChannel(key: string, value: string | undefined, run: () => void): void {
   const previous = process.env[key];
