@@ -47,7 +47,18 @@
           "tools": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "codex",
+                "claude",
+                "gemini",
+                "mcode",
+                "git",
+                "github",
+                "browser",
+                "provider",
+                "python"
+              ]
             }
           },
           "timeLimitMinutes": {
