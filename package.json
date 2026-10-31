@@ -13,7 +13,7 @@
     "start": "next start",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\" && python3 -m unittest discover -s scripts/book-sales -p 'test_*.py'",
+    "test": "tsx --test \"src/**/*.test.ts\" && python3 -m unittest discover -s scripts/book-sales -p 'test_*.py' && python3 -m unittest discover -s scripts/supervisor -p 'test_*.py'",
     "slack:manifest": "tsx scripts/slack-manifest.ts",
     "test:operations-acceptance": "tsx scripts/test-operations-insights.ts",
     "test:p6-queue-acceptance": "tsx scripts/test-fleet-queue-acceptance.ts",

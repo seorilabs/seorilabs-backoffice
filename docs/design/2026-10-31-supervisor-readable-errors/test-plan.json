@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "2d570384bd4fd5bb29ddbb21c6a86c9ef2344e33",
+  "changedFeatures": [
+    "local-draft-editor",
+    "issues-planning-and-stage-transitions"
+  ],
+  "environments": ["dev"],
+  "redesign": true,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["service", "web"],
+    "until": "public"
+  }
+}

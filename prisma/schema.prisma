@@ -401,6 +401,13 @@ model OperatorCommandRun {
   appId               String?
   app                 App?                  @relation(fields: [appId], references: [id], onDelete: SetNull)
   operation           String
+  executionLocation   String?               @default("SERVER") @db.VarChar(16)
+  executionOwner      String?               @db.VarChar(128)
+  leaseUntil          DateTime?             @db.DateTime(3)
+  generation          Int?                  @default(0)
+  checkpoint          Json?
+  localState          String?               @db.VarChar(32)
+  workProposal        WorkProposal?
   params              Json?
   actorUserId         String @map("actorDiscordUserId")
   actorLabel          String
@@ -419,8 +426,99 @@ model OperatorCommandRun {
   updatedAt           DateTime              @updatedAt
 
   @@index([status, createdAt])
+  @@index([executionLocation, status, createdAt])
   @@index([redactedAt, expiresAt])
   @@map("operator_command_run")
+}
+
+// 개인 대표 에이전트의 대상 식별자. 실제 PC 경로와 원고 전체는 저장하지 않는다.
+model WorkTarget {
+  id           String   @id @db.VarChar(128)
+  name         String   @db.VarChar(191)
+  kind         String   @db.VarChar(32)
+  repository   String?  @db.VarChar(191)
+  appId        String?
+  policySha    String?  @db.VarChar(40)
+  enabled      Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+  observations WorkObservation[]
+  proposals    WorkProposal[]
+  @@map("work_target")
+}
+
+model WorkObservation {
+  id          String   @id @db.VarChar(128)
+  targetId    String   @db.VarChar(128)
+  target      WorkTarget @relation(fields: [targetId], references: [id])
+  problemKey  String   @db.VarChar(128)
+  source      String   @db.VarChar(64)
+  summary     String   @db.Text
+  references  Json
+  observedAt  DateTime @db.DateTime(3)
+  expiresAt   DateTime @db.DateTime(3)
+  waitUntil   DateTime? @db.DateTime(3)
+  samples     Int      @default(1)
+  minSamples  Int      @default(1)
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  @@index([targetId, problemKey, observedAt])
+  @@map("work_observation")
+}
+
+model WorkProposal {
+  id          String   @id @default(cuid())
+  targetId    String   @db.VarChar(128)
+  target      WorkTarget @relation(fields: [targetId], references: [id])
+  problemKey  String   @db.VarChar(128)
+  version     Int
+  title       String   @db.VarChar(191)
+  payload     Json
+  digest      String   @db.VarChar(64)
+  status      String   @default("READY") @db.VarChar(32)
+  snoozedUntil DateTime? @db.DateTime(3)
+  decidedBy   String?  @db.VarChar(191)
+  decidedAt   DateTime? @db.DateTime(3)
+  runId       String?  @unique
+  run         OperatorCommandRun? @relation(fields: [runId], references: [id])
+  publicationDay String? @db.VarChar(10)
+  deliveryState String? @db.VarChar(32)
+  messageId   String?  @db.VarChar(64)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  @@unique([targetId, problemKey, version])
+  @@index([status, createdAt])
+  @@map("work_proposal")
+}
+
+// 전역 변경 잠금과 일일 발송 예약을 같은 행 잠금으로 직렬화한다.
+model WorkCoordinator {
+  id          Int      @id
+  mode        String   @default("OBSERVE") @db.VarChar(16)
+  activeRunId String?  @db.VarChar(191)
+  updatedAt   DateTime @updatedAt
+  @@map("work_coordinator")
+}
+
+model WorkAnalysis {
+  day         String   @id @db.VarChar(10)
+  owner       String   @db.VarChar(128)
+  startedAt   DateTime @default(now()) @db.DateTime(3)
+  deadline    DateTime @db.DateTime(3)
+  completedAt DateTime? @db.DateTime(3)
+  @@map("work_analysis")
+}
+
+// 승인 본문 해시와 실행 세대를 결합한 이력. 서비스에는 수정과 삭제 경로가 없다.
+model WorkEvent {
+  id         String   @id @db.VarChar(128)
+  proposalId String?  @db.VarChar(191)
+  runId      String?  @db.VarChar(191)
+  kind       String   @db.VarChar(32)
+  actor      String   @db.VarChar(191)
+  details    Json
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+  @@index([proposalId, createdAt])
+  @@index([runId, createdAt])
+  @@map("work_event")
 }
 
 enum OperatorCommandStatus {

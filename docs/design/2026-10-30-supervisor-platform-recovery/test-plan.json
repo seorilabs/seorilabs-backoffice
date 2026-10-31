@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "0a1c340e4d42cf7cc195120fb53b7949886d7a70",
+  "changedFeatures": [
+    "personal-supervisor",
+    "discord-operator-confirmation-and-deployment-approval",
+    "notification-outbox-report-visuals-and-retention",
+    "platform-iap-ledger-and-operations",
+    "platform-iap-recovery-and-crystal-testers"
+  ],
+  "environments": ["dev"],
+  "redesign": true,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": ["service", "web"],
+    "until": "public"
+  }
+}

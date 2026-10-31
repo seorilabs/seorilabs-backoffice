@@ -37,6 +37,7 @@ test("종료된 명령만 정리하며 활성 장애 카드와 game-factory 채�
   const cutoff = new Date("2026-07-19T00:00:00Z");
   assert.deepEqual(commandRetentionWhere(cutoff, ["active-incident-message"]), {
     sourceProvider:"SLACK",
+    executionLocation:"SERVER",
     status: { in: ["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"] },
     completedAt: { lt: cutoff },
     messageId: { not: null, notIn: ["active-incident-message"] },

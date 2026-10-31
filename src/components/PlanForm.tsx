@@ -34,6 +34,7 @@ export function PlanForm({
   const [aiPending, startAi] = useTransition();
   const [result, setResult] = useState<{ number: number; htmlUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [registrationErrorRepository, setRegistrationErrorRepository] = useState<string | null>(null);
   const router = useRouter();
 
   function set<K extends keyof typeof form>(k: K, v: string) {
@@ -42,6 +43,7 @@ export function PlanForm({
 
   function generateAi() {
     setError(null);
+    setRegistrationErrorRepository(null);
     if (!form.repoFullName || !form.title.trim()) {
       setError("AI 초안은 레포와 제목이 필요합니다.");
       return;
@@ -62,6 +64,7 @@ export function PlanForm({
 
   function submit() {
     setError(null);
+    setRegistrationErrorRepository(null);
     setResult(null);
     if (!form.repoFullName || !form.title.trim()) {
       setError("레포와 제목은 필수입니다.");
@@ -91,8 +94,9 @@ export function PlanForm({
         set("title", "");
         set("summary", "");
         router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "이슈 생성 실패");
+      } catch {
+        setError("이슈 등록 결과를 확인하지 못했습니다. 입력 내용은 보존했습니다. 선택한 저장소의 GitHub 이슈를 먼저 확인하고 중복 등록을 피하세요.");
+        setRegistrationErrorRepository(form.repoFullName);
       }
     });
   }
@@ -199,7 +203,21 @@ export function PlanForm({
         )}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && (
+        <div className="space-y-1 text-sm text-red-600">
+          <p>{error}</p>
+          {registrationErrorRepository && (
+            <a
+              className="underline"
+              href={`https://github.com/${registrationErrorRepository}/issues`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub 이슈 확인
+            </a>
+          )}
+        </div>
+      )}
       {result && (
         <p className="text-sm text-emerald-700">
           생성됨:{" "}
