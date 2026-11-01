@@ -65,7 +65,8 @@ export async function collectCategoryRanks(
             if (response.ok) {
               const text = await boundedText(response, 4 * 1024 * 1024);
               const chart = parseAppleCategoryChart(text);
-              const found = chart.find((c) => c.bundleId === app.iosBundle);
+              const targetTrackId = targetLookup ? String(targetLookup.trackId) : "";
+              const found = chart.find((c) => (targetTrackId && c.trackId === targetTrackId) || (c.bundleId && c.bundleId === app.iosBundle));
               const rank = found ? found.rank : null;
 
               // 직전 관측 조회
@@ -81,12 +82,13 @@ export async function collectCategoryRanks(
                 orderBy: { day: "desc" },
               });
               const prevValue = prevObs?.value as { rank?: number | null } | null;
-              const previousRank = prevValue?.rank !== undefined ? prevValue.rank : undefined;
+              const previousRank = prevObs ? (prevValue?.rank ?? null) : undefined;
               const change = describeCategoryRankChange(previousRank, rank);
 
               const summaryItem: CategoryRankSummaryItem = {
                 appName: app.displayName,
                 market: "app-store",
+                country,
                 categoryName: catInfo.categoryName,
                 rank,
                 previousRank: previousRank ?? null,
@@ -131,7 +133,7 @@ export async function collectCategoryRanks(
     }
 
     // 2. Google Play 수집
-    if (app.playPackage && process.env.KEYWORD_PLAY_ENABLED !== "false") {
+    if (app.playPackage && process.env.KEYWORD_PLAY_ENABLED === "true") {
       for (const country of countries) {
         try {
           const detailUrl = `https://play.google.com/store/apps/details?id=${encodeURIComponent(app.playPackage)}&hl=ko&gl=${country.toUpperCase()}`;
@@ -162,12 +164,13 @@ export async function collectCategoryRanks(
                   orderBy: { day: "desc" },
                 });
                 const prevValue = prevObs?.value as { rank?: number | null } | null;
-                const previousRank = prevValue?.rank !== undefined ? prevValue.rank : undefined;
+                const previousRank = prevObs ? (prevValue?.rank ?? null) : undefined;
                 const change = describeCategoryRankChange(previousRank, rank);
 
                 const summaryItem: CategoryRankSummaryItem = {
                   appName: app.displayName,
                   market: "google-play",
+                  country,
                   categoryName: catInfo.categoryName,
                   rank,
                   previousRank: previousRank ?? null,
@@ -252,6 +255,7 @@ export async function getLatestCategoryRankSummaries(
       results.push({
         appName: val.appName ?? obs.appId,
         market: val.market ?? "app-store",
+        country: obs.country,
         categoryName: val.categoryName ?? obs.target,
         rank: val.rank ?? null,
         previousRank: val.previousRank ?? null,

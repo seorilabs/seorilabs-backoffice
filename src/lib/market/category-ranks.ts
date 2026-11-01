@@ -12,6 +12,7 @@ export interface AppleChartEntry {
 export interface CategoryRankSummaryItem {
   appName: string;
   market: KeywordMarket | string;
+  country: string;
   categoryName: string;
   rank: number | null;
   previousRank: number | null;
@@ -39,7 +40,7 @@ export function parseAppleCategoryChart(jsonText: string): AppleChartEntry[] {
 
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i] as {
-      id?: { attributes?: { "im:bundleId"?: string; "im:id"?: string } };
+      id?: { label?: string; attributes?: { "im:bundleId"?: string; "im:id"?: string } };
       "im:name"?: { label?: string };
       category?: { attributes?: { "im:id"?: string; label?: string; term?: string } };
     };
@@ -56,7 +57,7 @@ export function parseAppleCategoryChart(jsonText: string): AppleChartEntry[] {
         title,
         categoryId,
         categoryName,
-        rank: i + 1,
+        rank: results.length + 1,
       });
     }
   }
@@ -79,7 +80,7 @@ export function parsePlayCategoryChart(html: string): string[] {
     .replace(/<!--[\s\S]*?-->/g, "");
 
   const packages: string[] = [];
-  const linkRegex = /<a\b[^>]*href="\/store\/apps\/details\?id=([A-Za-z0-9_.]+)(?:[?&][^"<>]*)?"[^>]*>([\s\S]*?)<\/a>/g;
+  const linkRegex = /<a\b[^>]*href="(?:https?:\/\/play\.google\.com)?\/store\/apps\/details\?id=([A-Za-z0-9_.]+)(?:[?&][^"<>]*)?"[^>]*>([\s\S]*?)<\/a>/g;
 
   for (const match of cleaned.matchAll(linkRegex)) {
     const pkg = match[1];
@@ -92,9 +93,9 @@ export function parsePlayCategoryChart(html: string): string[] {
     }
   }
 
-  // 링크 태그 외에 단순 details?id 매칭으로 보완 (클러스터 내 리스트아이템 기준)
+  // 링크 태그 외에 단순 details?id 매칭으로 보완 (링크 태그로 추출되지 않은 경우에만 폴백)
   if (packages.length === 0) {
-    const fallbackRegex = /\/store\/apps\/details\?id=([A-Za-z0-9_.]+)/g;
+    const fallbackRegex = /(?:https?:\/\/play\.google\.com)?\/store\/apps\/details\?id=([A-Za-z0-9_.]+)/g;
     for (const match of cleaned.matchAll(fallbackRegex)) {
       const pkg = match[1];
       if (pkg && !packages.includes(pkg)) {
@@ -140,10 +141,15 @@ export function parseAppleLookupCategory(app: {
   primaryGenreName?: string;
   genreIds?: Array<number | string>;
   genres?: string[];
+  [key: string]: unknown;
 } | null | undefined): { categoryId: string; categoryName: string } | null {
   if (!app) return null;
-  const categoryId = app.primaryGenreId ? String(app.primaryGenreId) : app.genreIds?.[0] ? String(app.genreIds[0]) : "";
-  const categoryName = app.primaryGenreName ?? app.genres?.[0] ?? "";
+  const genreIds = Array.isArray(app.genreIds) ? app.genreIds : [];
+  const catIdRaw = app.primaryGenreId ?? genreIds[0];
+  const categoryId = catIdRaw !== undefined && catIdRaw !== null ? String(catIdRaw) : "";
+  const genres = Array.isArray(app.genres) ? app.genres : [];
+  const catNameRaw = typeof app.primaryGenreName === "string" ? app.primaryGenreName : genres[0];
+  const categoryName = typeof catNameRaw === "string" ? catNameRaw : "";
   if (!categoryId) return null;
   return { categoryId, categoryName: categoryName || categoryId };
 }
@@ -185,9 +191,10 @@ export function formatCategoryRankSummary(items: CategoryRankSummaryItem[]): str
 
   const lines = items.map((item) => {
     const market = marketLabel(item.market);
+    const country = item.country ? ` · ${item.country.toUpperCase()}` : "";
     const rankStr = item.rank === null ? "순위권 밖" : `${item.rank}위`;
     const prevStr = item.previousRank !== null && item.previousRank !== undefined ? ` (이전: ${item.previousRank}위 · ${item.change})` : ` (${item.change})`;
-    return `• **${item.appName.replace(/[@<>`]/g, "")}** · ${market} ${item.categoryName} ${rankStr}${prevStr}`;
+    return `• **${item.appName.replace(/[@<>`]/g, "")}** · ${market}${country} ${item.categoryName} ${rankStr}${prevStr}`;
   });
 
   return [

@@ -163,6 +163,7 @@ describe("category-ranks", () => {
         {
           appName: "맞고세이프",
           market: "app-store",
+          country: "kr",
           categoryName: "게임 > 카드",
           rank: 14,
           previousRank: 16,
@@ -171,6 +172,7 @@ describe("category-ranks", () => {
         {
           appName: "맞고세이프",
           market: "google-play",
+          country: "kr",
           categoryName: "게임 > 카드",
           rank: 28,
           previousRank: 27,
@@ -180,8 +182,8 @@ describe("category-ranks", () => {
 
       const formatted = formatCategoryRankSummary(items);
       assert.ok(formatted.includes("*카테고리 순위 관측*"));
-      assert.ok(formatted.includes("• **맞고세이프** · App Store 게임 > 카드 14위 (이전: 16위 · 2계단 상승 (▲2))"));
-      assert.ok(formatted.includes("• **맞고세이프** · Google Play 웹 게임 > 카드 28위 (이전: 27위 · 1계단 하락 (▼1))"));
+      assert.ok(formatted.includes("• **맞고세이프** · App Store · KR 게임 > 카드 14위 (이전: 16위 · 2계단 상승 (▲2))"));
+      assert.ok(formatted.includes("• **맞고세이프** · Google Play 웹 · KR 게임 > 카드 28위 (이전: 27위 · 1계단 하락 (▼1))"));
     });
 
     it("항목이 없으면 빈 문자열을 반환한다", () => {

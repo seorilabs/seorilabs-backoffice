@@ -114,6 +114,9 @@ describe("category-collector", () => {
       return new Response("Not found", { status: 404 });
     };
 
+    const originalPlayEnabled = process.env.KEYWORD_PLAY_ENABLED;
+    process.env.KEYWORD_PLAY_ENABLED = "true";
+
     try {
       const result = await collectCategoryRanks(new Date(), {
         fetchImpl: mockFetch as unknown as typeof fetch,
@@ -126,15 +129,18 @@ describe("category-collector", () => {
       const appleItem = result.items.find((i) => i.market === "app-store");
       assert.ok(appleItem);
       assert.equal(appleItem?.rank, 2);
+      assert.equal(appleItem?.country, "kr");
       assert.equal(appleItem?.categoryName, "카드");
       assert.equal(appleItem?.change, "첫 관측 (2위)");
 
       const playItem = result.items.find((i) => i.market === "google-play");
       assert.ok(playItem);
       assert.equal(playItem?.rank, 2);
+      assert.equal(playItem?.country, "kr");
       assert.equal(playItem?.categoryName, "보드");
       assert.equal(playItem?.change, "첫 관측 (2위)");
     } finally {
+      process.env.KEYWORD_PLAY_ENABLED = originalPlayEnabled;
       prismaApp.findMany = originalAppFindMany;
       prismaObs.findFirst = originalObsFindFirst;
       prismaObj.$transaction = originalTx;
@@ -177,6 +183,7 @@ describe("category-collector", () => {
       const summaries = await getLatestCategoryRankSummaries(new Date());
       assert.equal(summaries.length, 1);
       assert.equal(summaries[0].appName, "맞고세이프");
+      assert.equal(summaries[0].country, "kr");
       assert.equal(summaries[0].rank, 14);
       assert.equal(summaries[0].change, "2계단 상승 (▲2)");
     } finally {
