@@ -8,6 +8,8 @@ import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { keywordCycle, marketLabel } from "./keyword-cycle";
 import { rankReportKey, rankReportText, sameRankReportContent, type RankReport, type RankReportItem } from "./rank-report";
 import { keywordSuccess } from "./keyword-collector";
+import { formatCategoryRankSummary } from "./category-ranks";
+import { getLatestCategoryRankSummaries } from "./category-collector";
 import type { KeywordRow } from "./keyword-monitoring";
 export const rankRowIdentity = (r: Pick<KeywordRow, "appId" | "country" | "term" | "market" | "source" | "language">) => JSON.stringify([r.appId, r.market ?? "app-store", r.source ?? "apple-search-api", r.country, r.language ?? "en_us", r.term]);
 /** 시각 내림차순인 성공 이력에서 첫 관측을 유지한다. 동률의 기존 우선순위도 보존한다. */
@@ -100,8 +102,10 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
       await retryDeadLetterNotification(existing.id,tx);
       return {batchId:cycle.id,eventId:existing.id,status:"same_cycle"};
     }
+    const categorySummaries = await getLatestCategoryRankSummaries(now);
+    const categoryRankBlock = formatCategoryRankSummary(categorySummaries);
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
-    const payload = { text: rankReportText(report,url), editable: true, sender: "seori", refDate: cycle.day, report: { category: "change", reason: "SEARCH_VISIBILITY_OBSERVATION" }, rankReport: report, components: [{ type:1, components:[{type:2,style:5,label:"전체 보고서와 근거 열기",url}] }], embed: { title: "검색 위치 관측", color: 0x2563eb, footer: `${cycle.day} ${cycle.reportSlot.slice(0,2)}:${cycle.reportSlot.slice(2)} KST` } };
+    const payload = { text: rankReportText(report,url,categoryRankBlock), editable: true, sender: "seori", refDate: cycle.day, report: { category: "change", reason: "SEARCH_VISIBILITY_OBSERVATION" }, rankReport: report, components: [{ type:1, components:[{type:2,style:5,label:"전체 보고서와 근거 열기",url}] }], embed: { title: "검색 위치 관측", color: 0x2563eb, footer: `${cycle.day} ${cycle.reportSlot.slice(0,2)}:${cycle.reportSlot.slice(2)} KST` } };
     await enqueueNotification({ dedupeKey:`keyword-report:${rankReportKey(report)}`,kind:"OPS_ALERT",payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:[] },tx);
     const eventId = await enqueueNotification({ dedupeKey,kind:"OPS_ALERT",payload:JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:notificationDestinations(["metrics-daily"]) },tx);
     if(existing)await requeueNotification(eventId,tx);

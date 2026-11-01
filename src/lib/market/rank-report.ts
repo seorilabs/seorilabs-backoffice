@@ -54,9 +54,13 @@ export function rankConclusion(item: RankReportItem) {
   return `${item.appName.replace(/[@<>`]/g, "")} · ${item.country.toUpperCase()} “${item.term.replace(/[@<>`]/g, "")}” 검색에서 ${change}.`;
 }
 
-export function rankReportText(report: RankReport, url: string) {
+export function rankReportText(report: RankReport, url: string, categoryRankBlock?: string) {
   const top = report.items.slice(0, 3);
-  return [
+  const sections: string[] = [];
+  if (categoryRankBlock && categoryRankBlock.trim()) {
+    sections.push(categoryRankBlock.trim(), "");
+  }
+  sections.push(
     `**${top[0] ? rankConclusion(top[0]) : "비교 가능한 중요한 순위 변화가 없습니다."}**`,
     ...top.map(
       (r) =>
@@ -65,7 +69,8 @@ export function rankReportText(report: RankReport, url: string) {
     "",
     "검색 결과 위치의 변화입니다. 검색 유입·매출 증가를 뜻하지 않습니다.",
     `[전체 보고서·28일 추세·CSV](${url})`,
-  ].join("\n");
+  );
+  return sections.join("\n");
 }
 const esc = (s: string) =>
   s.replace(
