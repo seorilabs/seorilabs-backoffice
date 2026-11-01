@@ -5,6 +5,7 @@ import {
   publishWeeklySignals,
 } from "@/lib/insights/triggers";
 import { collectKeywordRanks } from "@/lib/market/keyword-collector";
+import { collectCategoryRanks } from "@/lib/market/category-collector";
 import { collectMarketFeedback } from "@/lib/market/collector";
 import { collectAndroidVitals } from "@/lib/market/android-vitals";
 import { sendDailyKeywordRanks } from "@/lib/market/daily-ranks";
@@ -29,8 +30,19 @@ async function main() {
     await sendDailyKeywordRanks(new Date(), process.argv[3]);
     return;
   }
+  if (mode === "category-ranks") {
+    console.log(await collectCategoryRanks());
+    return;
+  }
   if (mode === "keywords") {
-    console.log(await collectKeywordRanks());
+    const keywordResult = await collectKeywordRanks();
+    let categoryResult: unknown = null;
+    try {
+      categoryResult = await collectCategoryRanks();
+    } catch (err) {
+      console.error("[operations-insights] 카테고리 순위 수집 실패:", err);
+    }
+    console.log({ keywordResult, categoryResult });
     return;
   }
   if (mode === "market") {
