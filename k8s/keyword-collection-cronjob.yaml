@@ -1,4 +1,4 @@
-# 승인 설계 f0c855f: 07:20, 13:20, 20:20 KST. Play 광고 원문 검증 전 비활성.
+# 승인 설계: 07:20, 13:20, 20:20 KST. Google Play 키워드 및 카테고리 순위 수집 활성화.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -43,7 +43,7 @@ spec:
                 - name: BACKOFFICE_SOURCE_SHA
                   value: __BACKOFFICE_IMAGE_TAG__
                 - name: KEYWORD_PLAY_ENABLED
-                  value: "false"
+                  value: "true"
               image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
               imagePullPolicy: Always
               name: keywords
