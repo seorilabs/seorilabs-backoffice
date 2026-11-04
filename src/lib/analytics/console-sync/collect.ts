@@ -1,3 +1,6 @@
+import { shiftMetricDay } from "../metric-day";
+import { consoleMetricPoints } from "./insight-points";
+import type { MetricCollectionPoint } from "@/lib/insights/metric-collection-facts";
 import { AIT_LISTINGS } from "../ait-apps";
 import { prisma } from "@/lib/prisma";
 import { getConsoleSyncStatus, ingestConsoleMetrics } from "@/lib/core/console-metrics-collect";
@@ -23,13 +26,14 @@ export async function withConsoleCollectionLock<T>(run: (assertHeld: () => Promi
 export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now: Date, launches: Record<string, string> = {}) {
   const status = await getConsoleSyncStatus();
   const plan = consoleCollectionPlan(status, now, launches);
-  const registry = await prisma.app.findMany({ select: { id: true, slug: true, status: true, aitMiniAppId: true } });
+  const registry = await prisma.app.findMany({ select: { id: true, slug: true, displayName: true, status: true, aitMiniAppId: true } });
   const declared = registry.filter((app) => app.aitMiniAppId != null || AIT_LISTINGS.some((listing) => listing.appSlug === app.slug));
   const noActiveTargets = !status.apps.length && declared.length > 0 && declared.every((app) => app.status !== "ACTIVE")
     && AIT_LISTINGS.every((listing) => registry.some((app) => app.slug === listing.appSlug));
   if (noActiveTargets) plan.blocked.length = 0;
   const appIds = new Map(registry.map((app) => [app.slug, app.id]));
   const results = [];
+  const metricPoints: MetricCollectionPoint[] = [];
   for (const window of plan.windows) {
     let response: Awaited<ReturnType<McpConsoleMetricsSource["queryListing"]>>;
     try { response = await source.queryListing(window, window.start, window.end); }
@@ -48,6 +52,8 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
       if (appId && !excluded) verification = await verifyStoredConsoleDays(appId, window.miniAppId, response.days, now);
       if (verification.mismatched.length) storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_MISMATCH" });
     } catch { storageErrors.push({ key: `${window.slug}#${window.miniAppId}`, error: "CONSOLE_READBACK_FAILED" }); }
+    if (!excluded) metricPoints.push(...consoleMetricPoints(window.slug, window.miniAppId,
+      response.days.filter(day => day.date >= shiftMetricDay(plan.end, -1) && !verification.mismatched.includes(day.date)), registry.find(app => app.id === appId)?.displayName));
     results.push({ window, providedDates: excluded ? [] : response.days.map((day) => day.date), upserts: stored?.upserts ?? 0, missing: response.missing, errors: response.errors,
       skipped: stored?.skipped ?? [], storageErrors, warnings: stored?.warnings ?? [], verification });
   }
@@ -56,5 +62,5 @@ export async function collectConsoleMetrics(source: McpConsoleMetricsSource, now
     || readback.apps.some((a) => a.lastDate !== plan.end);
   if (!results.length && !plan.blocked.length && !noActiveTargets) throw new ConsoleSyncError("CONSOLE_NO_TARGETS");
   return { state: incomplete || noActiveTargets ? "partial" as const : "complete" as const,
-    ...(noActiveTargets ? { skipReason: "등록된 모든 앱이 운영 중지여서 이번 실행은 수집하지 않았습니다." } : {}), end: plan.end, blocked: plan.blocked, results, readback };
+    ...(noActiveTargets ? { skipReason: "등록된 모든 앱이 운영 중지여서 이번 실행은 수집하지 않았습니다." } : {}), end: plan.end, blocked: plan.blocked, results, readback, ...(metricPoints.length ? { metricPoints } : {}) };
 }

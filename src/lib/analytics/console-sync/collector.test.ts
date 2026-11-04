@@ -22,7 +22,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false, al
       }};`,
     ledger: `${event}
       export async function beginCollection() { events.push('ledger:start'); return {id:'run-1'}; }
-      export async function completeCollection(id, result) { events.push('ledger:' + result.status); }`,
+      export async function completeCollection(id, result) { if (result.status !== 'already_running' && !result.coverage?.metricInsight?.facts?.length) throw new Error('COLLECTION_INSIGHT_MISSING'); events.push('ledger:' + result.status); }`,
     oauth: `export const MCP_URL = 'https://mcp.toss.im/adapters/apps-in-toss-console/mcp';
       export const TOKEN_URL = 'https://business-accounts.toss.im/oauth2/token';
       export class ConsoleSyncError extends Error { constructor(code) { super(code); this.code = code; } }

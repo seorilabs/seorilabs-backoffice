@@ -61,7 +61,7 @@ export function rankReportText(report: RankReport, url: string, categoryRankBloc
     sections.push(categoryRankBlock.trim(), "");
   }
   sections.push(
-    `**${top[0] ? rankConclusion(top[0]) : "비교 가능한 중요한 순위 변화가 없습니다."}**`,
+    `**${top[0] ? rankConclusion(top[0]) : report.rows.some(row => row.state === "수집됨") ? "이번 회차의 관측값에 새로운 주요 변화가 없습니다." : "이번 회차의 검색 위치를 확인하지 못했습니다."}**`,
     ...top.map(
       (r) =>
         `- **${r.appName.replace(/[@<>`]/g, "")}** · ${marketLabel(r.market)} · ${r.country.toUpperCase()}${r.market === "google-play" ? " 설정 요청" : ""} “${r.term.replace(/[@<>`]/g, "")}”\n  관측 비교: ${r.previousAt ? kstDateTimeShort(new Date(r.previousAt)) : r.previousDay ?? "이전 관측 없음"} ${r.previousDay ? rankValue(r.previousRank) + " → " : "· "}${r.observedAt ? kstDateTimeShort(new Date(r.observedAt)) : report.day} **${r.rank === null ? r.rankLabel : rankValue(r.rank)}** · ${r.reason} · ${r.source ?? "apple-search-api"}, 반환 ${r.resultCount ?? "미기록"}개`,

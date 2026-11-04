@@ -130,6 +130,7 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
     "", `GA4 활성 합계 ${doc.summary.ga4.apps ? `${doc.summary.ga4.dau.toLocaleString("ko-KR")}명` : "미수집"} · 관측 ${doc.summary.ga4.apps}개 앱 · ${doc.refDate}`,
     `토스 광고 추정 수익 ${doc.summary.console.iaaKrw === null ? "미수집" : `${Math.round(doc.summary.console.iaaKrw).toLocaleString("ko-KR")}원`} · 기준 ${doc.consoleMeta.refDate ?? "미확인"}`,
     `수집 범위 ${coverage.observed}/${coverage.expected}개 앱·보고서 · 누락은 0으로 계산하지 않습니다.`,
+    "", "**인사이트**", doc.narrative?.trim() || "AI 분석 실패 — 확인한 수치와 비교 결과만 보고합니다.",
     "**다음 행동**",
     ...messageActionLines(edition?.actions ?? []),
     ...(url ? [`[같은 버전의 전체 보고서·근거](${url})`] : []),

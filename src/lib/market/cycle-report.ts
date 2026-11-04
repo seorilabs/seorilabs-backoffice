@@ -7,7 +7,7 @@ import { enqueueNotification, requeueNotification, retryDeadLetterNotification }
 import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { keywordCycle, marketLabel } from "./keyword-cycle";
 import { rankReportKey, rankReportText, sameRankReportContent, type RankReport, type RankReportItem } from "./rank-report";
-import { keywordSuccess } from "./keyword-collector";
+import { keywordObservationId, keywordSuccess, type KeywordTask } from "./keyword-collector";
 import { formatCategoryRankSummary } from "./category-ranks";
 import { getLatestCategoryRankSummaries } from "./category-collector";
 import type { KeywordRow } from "./keyword-monitoring";
@@ -55,14 +55,30 @@ export function rankChangeBoundary(previous: {rank:number|null;resultCount:numbe
     return (previous.rank !== null && previous.rank<=limit) !== (current.rank !== null && current.rank<=limit);
   });
 }
+export function rankCollectionReady(batch: {completedAt: Date | null; startedAt: Date}, now: Date, scheduledAt = batch.startedAt) {
+  return batch.completedAt !== null || now.getTime() >= Math.min(batch.startedAt.getTime(), scheduledAt.getTime()) + 70 * 60_000;
+}
+export function rankCollectionCoverage(expected: number, stored: number, successful: number) {
+  return `검색 위치 수집 ${stored}/${expected}개 · 비교 가능 ${successful}개 · 미수집 ${Math.max(0, expected-stored)}개 · 실패·보류 ${stored-successful}개`;
+}
 export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: string): Promise<{batchId:string;status?:string;eventId?:string;items?:string[]}> {
   if (requestedDay !== undefined && (!parseMetricDay(requestedDay) || requestedDay > metricDayOf(now))) throw Error("INVALID_REPORT_DAY");
   const cycle = keywordCycle(now);
   if (requestedDay && requestedDay !== cycle.day) throw Error("REPORT_REQUIRES_CURRENT_CYCLE");
   const batch = await prisma.keywordCollectionBatch.findUnique({ where: { id: cycle.id } });
-  if (!batch?.completedAt) return { batchId: cycle.id, status: "collection_incomplete" };
-  const current = await prisma.keywordObservation.findMany({ where: { batchId: batch.id } });
-  if (!current.some(row=>keywordSuccess(row.status))) return { batchId: cycle.id, status: "no_observations" };
+  if (batch && !rankCollectionReady(batch, now, cycle.start)) return { batchId: cycle.id, status: "collection_incomplete" };
+  const current = await prisma.keywordObservation.findMany({ where: { batchId: cycle.id } });
+  const stored = current.filter(row => row.status !== "not_collected").length, successful = current.filter(row => keywordSuccess(row.status)).length;
+  const tasks = (batch?.plan ?? []) as unknown as KeywordTask[];
+  const missingIds = new Set<string>();
+  for (const task of tasks) {
+    const id = keywordObservationId(cycle.id, task);
+    if (current.some(row => row.id === id)) continue;
+    missingIds.add(id);
+    current.push({ id, batchId:cycle.id, appId:task.appId, market:task.market, source:task.market === "app-store" ? "apple-search-api" : "google-play-web",
+      country:task.country, language:task.language, term:task.term, revision:task.revision, sourceSha:batch!.sourceSha,
+      observedAt:now, status:"not_collected", rank:null, resultCount:null, isBrand:false, sourceUrl:"",errorCode:"COLLECTION_INCOMPLETE" });
+  }
   return prisma.$transaction(async tx => {
     const dedupeKey = `keyword-report-cycle:${cycle.day}-${cycle.reportSlot}`;
     const existing = await tx.notificationEvent.findUnique({ where: { dedupeKey } });
@@ -70,8 +86,8 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     const previousEvents = await tx.notificationEvent.findMany({ where: { dedupeKey: { startsWith: "keyword-report-cycle:", not:dedupeKey }, occurredAt: { gte: since, lte: now } }, select: { payload: true } });
     const previousReports = previousEvents.flatMap(event => { const report = (event.payload as {rankReport?: RankReport}).rankReport; return report ? [report] : []; });
     const apps = await tx.app.findMany({ where: { id: { in: [...new Set(current.map(row=>row.appId))] } }, select: { id: true, displayName: true } });
-    const cycleHistory = await tx.keywordObservation.findMany({ where: { appId: { in: apps.map(app=>app.id) }, observedAt: { lt: batch.startedAt, gte: new Date(now.getTime()-90*86400000) }, status: { in: ["observed", "absent"] } }, orderBy: { observedAt: "desc" } });
-    const legacy = await tx.marketObservation.findMany({where:{kind:"keyword",appId:{in:apps.map(app=>app.id)},observedAt:{lt:batch.startedAt,gte:new Date(now.getTime()-90*86400000)}},orderBy:{observedAt:"desc"}});
+    const cycleHistory = await tx.keywordObservation.findMany({ where: { appId: { in: apps.map(app=>app.id) }, observedAt: { lt: (batch?.startedAt ?? cycle.start), gte: new Date(now.getTime()-90*86400000) }, status: { in: ["observed", "absent"] } }, orderBy: { observedAt: "desc" } });
+    const legacy = await tx.marketObservation.findMany({where:{kind:"keyword",appId:{in:apps.map(app=>app.id)},observedAt:{lt:(batch?.startedAt ?? cycle.start),gte:new Date(now.getTime()-90*86400000)}},orderBy:{observedAt:"desc"}});
     const history = [...cycleHistory, ...legacy.flatMap(row=>{
       const value=row.value as {rank?:unknown;resultCount?:number};
       if(value.rank !== null && !(typeof value.rank === "number" && Number.isInteger(value.rank) && value.rank>=1 && value.rank<=200))return [];
@@ -86,7 +102,7 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
       const success=keywordSuccess(row.status),state=success?"수집됨":sourceStateLabel(row.status);
       const ranked = !success ? state : row.rank === null ? `반환된 ${row.resultCount}개 목록에 없음` : `${row.rank}위`;
       const change = !success ? "비교 불가" : !previous ? "첫 관측" : previous.rank === row.rank ? "변화 없음" : previous.rank === null ? "결과 목록 진입" : row.rank === null ? "결과 목록 이탈" : `${Math.abs(row.rank-previous.rank)}계단 ${row.rank < previous.rank ? "상승" : "하락"}`;
-      const item: KeywordRow = { appId: row.appId, appName, country: row.country, term: row.term, revision: row.revision, state, rank: success?row.rank:null, rankLabel: ranked, previousRank: previous?.rank ?? null, previousDay: previous ? metricDayOf(previous.observedAt) : null, change, observedAt: success?row.observedAt:null, attemptedAt:row.observedAt.toISOString(),attemptState:state, sourceUrl: row.sourceUrl, market: row.market, source: row.source, language: row.language, resultCount: row.resultCount, previousAt: previous?.observedAt.toISOString() ?? null, observationId: row.id, isBrand: row.isBrand };
+      const item: KeywordRow = { appId: row.appId, appName, country: row.country, term: row.term, revision: row.revision, state, rank: success?row.rank:null, rankLabel: ranked, previousRank: previous?.rank ?? null, previousDay: previous ? metricDayOf(previous.observedAt) : null, change, observedAt: success?row.observedAt:null, attemptedAt:missingIds.has(row.id)||row.errorCode === "CYCLE_BUDGET_EXCEEDED"?null:row.observedAt.toISOString(),attemptState:state, sourceUrl: row.sourceUrl, market: row.market, source: row.source, language: row.language, resultCount: row.resultCount, previousAt: previous?.observedAt.toISOString() ?? null, observationId: row.id, isBrand: row.isBrand };
       rows.push(item);
       if(!success)continue;
       const crossed = rankChangeBoundary(previous,row);
@@ -95,17 +111,18 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     }
     const brand = (item: RankReportItem) => item.isBrand === true;
     const items = selectCycleItems(candidates, previousReports, brand);
-    if (!items.length) return { batchId: cycle.id, status: "no_new_results" };
+
     const report: RankReport = { version: 1, day: cycle.day, capturedAt: now.toISOString(), items, rows: rows.map(row=>({...row, observedAt: row.observedAt?.toISOString() ?? null})) };
-    const previousReport=(existing?.payload as {rankReport?:RankReport}|undefined)?.rankReport;
-    if(existing && previousReport && sameRankReportContent(previousReport,report)){
-      await retryDeadLetterNotification(existing.id,tx);
-      return {batchId:cycle.id,eventId:existing.id,status:"same_cycle"};
-    }
     const categorySummaries = await getLatestCategoryRankSummaries(now);
     const categoryRankBlock = formatCategoryRankSummary(categorySummaries);
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
-    const payload = { text: rankReportText(report,url,categoryRankBlock), editable: true, sender: "seori", refDate: cycle.day, report: { category: "change", reason: "SEARCH_VISIBILITY_OBSERVATION" }, rankReport: report, components: [{ type:1, components:[{type:2,style:5,label:"전체 보고서와 근거 열기",url}] }], embed: { title: "검색 위치 관측", color: 0x2563eb, footer: `${cycle.day} ${cycle.reportSlot.slice(0,2)}:${cycle.reportSlot.slice(2)} KST` } };
+    const text = rankCollectionCoverage(tasks.length || current.length, stored, successful) + "\n" + rankReportText(report,url,categoryRankBlock);
+    const previousReport=(existing?.payload as {rankReport?:RankReport}|undefined)?.rankReport;
+    if(existing && previousReport && sameRankReportContent(previousReport,report) && (existing.payload as {text?:string}).text === text){
+      await retryDeadLetterNotification(existing.id,tx);
+      return {batchId:cycle.id,eventId:existing.id,status:"same_cycle"};
+    }
+    const payload = { text, editable: true, sender: "seori", refDate: cycle.day, report: { category: "change", reason: "SEARCH_VISIBILITY_OBSERVATION" }, rankReport: report, components: [{ type:1, components:[{type:2,style:5,label:"전체 보고서와 근거 열기",url}] }], embed: { title: "검색 위치 관측", color: 0x2563eb, footer: `${cycle.day} ${cycle.reportSlot.slice(0,2)}:${cycle.reportSlot.slice(2)} KST` } };
     await enqueueNotification({ dedupeKey:`keyword-report:${rankReportKey(report)}`,kind:"OPS_ALERT",payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:[] },tx);
     const eventId = await enqueueNotification({ dedupeKey,kind:"OPS_ALERT",payload:JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonObject,occurredAt:now,destinations:notificationDestinations(["metrics-daily"]) },tx);
     if(existing)await requeueNotification(eventId,tx);

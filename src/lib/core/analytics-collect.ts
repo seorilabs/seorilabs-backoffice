@@ -1,3 +1,4 @@
+import { metricCollectionSnapshot, type MetricCollectionPoint } from "@/lib/insights/metric-collection-facts";
 import { beginCollection, completeCollection } from "@/lib/insights/collection";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -119,6 +120,7 @@ export async function collectMetrics(
     errors: [],
   };
 
+  const insightPoints: MetricCollectionPoint[] = [];
   for (const target of targets) {
     const attempt = await beginCollection("ga4", `${target.ga4.firebaseProject}.${target.ga4.dataset}`, target.appId);
     try {
@@ -176,6 +178,10 @@ export async function collectMetrics(
           update: data,
         });
         result.upserts++;
+        if (day >= shiftMetricDay(end, -1)) insightPoints.push({ key: target.appId, label: target.displayName, day,
+          metrics: { dau: {label:"활성 사용자",value: data.dau,unit:"명"},
+            newUsers: {label:"신규 사용자",value:data.newUsers,unit:"명"},
+            impressions: {label:"실제 광고 노출",value:data.networkAdImpressions,unit:"회"} } });
         // 테이블은 있는데 그 앱의 그 날 행이 없다 = 진짜 활동 0. 0 행을 남겨야
         // 기준선이 그 날을 건너뛰지 않는다.
         observations.push({
@@ -206,6 +212,6 @@ export async function collectMetrics(
     }
   }
 
-  await completeCollection(run.id, { status: result.errors.length === result.targetApps ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", coverage: { from: days[0], to: end, targetApps: targets.length, upserts: result.upserts, notLanded: result.notLanded, errors: result.errors.length } });
+  await completeCollection(run.id, { status: result.errors.length === result.targetApps ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", coverage: { from: days[0], to: end, targetApps: targets.length, upserts: result.upserts, notLanded: result.notLanded, errors: result.errors.length, metricInsight: metricCollectionSnapshot("ga4", end, collectionFailedEntirely(result) ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", insightPoints) as unknown as Prisma.InputJsonObject } });
   return result;
 }

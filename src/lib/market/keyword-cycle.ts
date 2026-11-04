@@ -30,7 +30,8 @@ export function parsePlaySearch(html: string): string[] {
     const links = [...card.matchAll(/<a\b[^>]*href="\/store\/apps\/details\?id=([A-Za-z0-9_.]+)(?:&amp;[^"<>]*)?"/g)];
     const unique = [...new Set(links.map(match => match[1]))];
     if (unique.length !== 1) throw Error("PLAY_PARSE_FAILED");
-    if (!ids.includes(unique[0])) ids.push(unique[0]);
+    // 정규식 캡처는 V8에서 큰 HTML의 부분 문자열일 수 있다. 캐시에 원문까지 남기지 않는다.
+    if (!ids.includes(unique[0])) ids.push(new TextDecoder().decode(new TextEncoder().encode(unique[0])));
   }
   if (!ids.length || ids.length > 200) throw Error("PLAY_PARSE_FAILED");
   return ids;

@@ -1,3 +1,4 @@
+import { METRIC_COLLECTION_KIND, reconcileMetricCollectionInsights } from "@/lib/insights/metric-collection";
 import { prisma } from "@/lib/prisma";
 import { processNextInsight } from "@/lib/insights/service";
 import {
@@ -27,7 +28,7 @@ async function main() {
   }
   if (mode === "keyword-daily") {
     if (process.argv.length > 4) throw Error("INVALID_REPORT_ARGUMENTS");
-    await sendDailyKeywordRanks(new Date(), process.argv[3]);
+    console.log(await sendDailyKeywordRanks(new Date(), process.argv[3]));
     return;
   }
   if (mode === "category-ranks") {
@@ -35,13 +36,10 @@ async function main() {
     return;
   }
   if (mode === "keywords") {
-    const keywordResult = await collectKeywordRanks();
     let categoryResult: unknown = null;
-    try {
-      categoryResult = await collectCategoryRanks();
-    } catch (err) {
-      console.error("[operations-insights] 카테고리 순위 수집 실패:", err);
-    }
+    try { categoryResult = await collectCategoryRanks(); }
+    catch { console.error("[operations-insights] 카테고리 순위 수집 실패"); }
+    const keywordResult = await collectKeywordRanks();
     console.log({ keywordResult, categoryResult });
     return;
   }
@@ -54,20 +52,22 @@ async function main() {
     await publishWeeklySignals();
     return;
   }
-  if (mode !== "worker") throw new Error("INVALID_MODE");
+  const metricOnly = mode === "metric-collections";
+  if (mode !== "worker" && !metricOnly) throw new Error("INVALID_MODE");
   let lastScan = 0;
   let lastReviewReportDay = "";
   while (!stopping) {
     try {
       if (Date.now() - lastScan >= 60_000) {
-        if (lastReviewReportDay !== metricDayOf(new Date())) {
+        if (!metricOnly && lastReviewReportDay !== metricDayOf(new Date())) {
           const result = await sendDailyReviewStatistics();
           if (result.status === "published") lastReviewReportDay = metricDayOf(new Date());
         }
-        await discoverOperationalSignals();
+        if (metricOnly) await reconcileMetricCollectionInsights();
+        else await discoverOperationalSignals();
         lastScan = Date.now();
       }
-      if (!(await processNextInsight()))
+      if (!(await processNextInsight(undefined, undefined, metricOnly ? METRIC_COLLECTION_KIND : undefined)))
         await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch {
       console.error(
@@ -79,7 +79,8 @@ async function main() {
 }
 main()
   .finally(() => prisma.$disconnect())
-  .catch(() => {
-    console.error("[operations-insights] 종료 실패");
+  .catch((error: unknown) => {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code).replace(/[^A-Z0-9_]/g, "").slice(0, 64) : "COLLECTOR_FAILED";
+    console.error("[operations-insights] 종료 실패", { code, name: error instanceof Error ? error.name : "UnknownError" });
     process.exitCode = 1;
   });
