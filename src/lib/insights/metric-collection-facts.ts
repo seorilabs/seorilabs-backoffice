@@ -19,9 +19,11 @@ export function metricCollectionSnapshot(source: "ga4" | "ait_console", day: str
       value: `${comparable ? `전일 ${before}${metric.unit} → ` : ""}${metric.value}${metric.unit}`,
       change: comparable ? Math.abs(metric.value - before) / Math.max(Math.abs(before), 1) : null }];
   }));
+  const comparable = rows.filter(row => row.change !== null);
   const conclusion = state === "failed" ? "수집 실패 — 확인한 자료 범위만 보고" : !rows.length ? "판단할 자료 부족 — 기준일에 확인된 지표 없음"
-    : rows.every(row => row.change === 0) ? "주요 변화 없음 — 비교 가능한 관측값이 전일과 같음"
-      : rows.every(row => row.change === null) ? "판단할 자료 부족 — 전일 비교 자료 없음" : "전일과 비교한 관측값 변화";
+    : comparable.length === 0 ? "판단할 자료 부족 — 전일 비교 자료 없음"
+      : comparable.every(row => row.change === 0) ? "주요 변화 없음 — 비교 가능한 관측값이 전일과 같음"
+      : "전일과 비교한 관측값 변화";
   const sourceLabel = `${label} · ${day} · 이번 수집의 확인된 값 · 앱·리스팅별 비교`;
   const facts: Evidence[] = [
     { id: "coverage", label: `${label} 수집 범위`, value: `기준일 ${day}, 확인 ${new Set(current.map(point => point.key)).size}개 앱·리스팅, 상태 ${{observed: "정상", complete: "정상", partial: "부분 수집", failed: "실패"}[state] ?? "자료 확인 필요"}`, source: sourceLabel },
