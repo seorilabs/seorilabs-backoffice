@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { slackApi } from "./api";
+import { renderSlackMessage } from "./message";
 
 const response = (body: unknown, status = 200, headers = {}) => async () => new Response(JSON.stringify(body), { status, headers });
 
@@ -33,4 +34,32 @@ test("생성 API의 비정상 JSON 응답도 게시 결과 미확정으로 보�
     assert.equal(result.error,"SLACK_DELIVERY_OUTCOME_UNKNOWN");
     assert.equal(result.terminal,true);
   }
+});
+
+
+test("긴 순위 보고 갱신은 4000자 대체 텍스트와 전체 블록을 함께 보낸다",async()=>{
+ const body=Array.from({length:120},(_,i)=>`• **앱 ${i}** · App Store · KR Games 순위권 밖 (순위권 밖 유지)`).join("\n");
+ const message=renderSlackMessage(body,{embed:{title:"검색 위치 관측"}});
+ const result=await slackApi("chat.update",{channel:"CTEST",ts:"1.2",...message},{token:"test",request:async(_url,init)=>{
+  const sent=JSON.parse(String(init?.body));
+  assert.ok(sent.text.length<=4000,`갱신용 텍스트 ${sent.text.length}자`);
+  assert.deepEqual(sent.blocks,message.blocks);
+  assert.ok(JSON.stringify(sent.blocks).includes("앱 119"));
+  return new Response(JSON.stringify({ok:true,ts:"1.2"}));
+ }});
+ assert.equal(result.ok,true);
+ assert.ok(message.text.length>4000);
+});
+
+test("블록 없는 갱신은 원문을 자르지 않고 이모지 경계도 보호한다",async()=>{
+ const text="a".repeat(3998)+"😀"+"b".repeat(100);
+ for(const blocks of [undefined,[{type:"rich_text",elements:[]}]]){
+  const result=await slackApi("chat.update",{text,blocks},{token:"test",request:async(_url,init)=>{
+   const sent=JSON.parse(String(init?.body));
+   if(blocks){assert.ok(sent.text.length<=4000);assert.ok(!/[\uD800-\uDBFF]…$/.test(sent.text));}
+   else assert.equal(sent.text,text);
+   return new Response(JSON.stringify({ok:true}));
+  }});
+  assert.equal(result.ok,true);
+ }
 });
