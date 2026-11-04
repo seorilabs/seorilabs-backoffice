@@ -18,3 +18,10 @@ test("전체 실패·기준일 미착지·관측된 0·변화 없음을 구분�
  assert.match(make("observed", [point("2026-11-03", 0)]), /0명/);
  assert.doesNotMatch(make("observed", [point("2026-11-03", 0)]), /전일 0/);
 });
+
+test("비교 자료가 없는 지표가 섞여도 비교 가능한 값이 같으면 변화라고 하지 않는다", () => {
+ const made=metricCollectionSnapshot("ga4","2026-11-03","partial",[
+   point("2026-11-02",10),point("2026-11-03",10),point("2026-11-03",5,"new-listing"),
+ ]);
+ assert.match(made.facts.find(fact=>fact.id==="conclusion")!.value,/주요 변화 없음/);
+});
