@@ -27,6 +27,7 @@ import {
   INSIGHT_PROMPT_VERSION,
   personaForKind,
   renderInsightCard,
+  fallbackReasonLabel,
   type Evidence,
   type Insight,
   fallbackInsight,
@@ -91,11 +92,12 @@ function notificationPayload(
   const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
   const observationCard =
     /^(source-stale|source-recovery|keyword-change)$/.test(signal.kind);
-  const body = observationCard
+  let body = observationCard
     ? facts.map((fact) => `- ${fact.label}: ${fact.value}`).join("\n") +
       "\n기준: " +
       [...new Set(facts.map((fact) => fact.source))].join(" · ")
     : renderInsightCard(facts, analysis);
+  if (signal.kind === "metric-collection" && analysis?.fallback) body += `\nAI 분석 실패 — 확인한 수치만 보고합니다. (${fallbackReasonLabel(analysis.errorCode)})`;
   return {
     text: `**${safeText(signal.title)}**\n${body}\n[근거·상세](${base}/feedback/insights/${insightId})`,
     signalKind: signal.kind,
@@ -230,7 +232,7 @@ export async function publishSignal(input: {
         repoFullName: app?.repoFullName ?? "seorilabs/seorilabs-backoffice",
         createsPr: false,
         labels: [],
-        taskInput: { insightId: document.id, inputHash },
+        taskInput: { insightId: document.id, inputHash, signalKind: signal.kind },
         workKey: `insight:${document.id}`,
         priority: input.severity === "critical" ? 1 : 100,
         maxAttempts: 3,
@@ -256,13 +258,14 @@ export async function publishSignal(input: {
   });
 }
 
-async function claim(workerId: string) {
+async function claim(workerId: string, signalKind?: string) {
   return serializable(async (tx) => {
     const now = new Date();
     // API worker의 lease만 회수한다. 다른 Codex/Claude run·repo guard를 건드리지 않는다.
     const expired = await tx.agentLease.findMany({
       where: {
         workerId: { startsWith: "insights:" },
+        ...(signalKind ? { run: { taskInput: { path: "$.signalKind", equals: signalKind } } } : {}),
         revokedAt: null,
         expiresAt: { lte: now },
       },
@@ -357,6 +360,7 @@ async function claim(workerId: string) {
     const run = await tx.agentRun.findFirst({
       where: {
         status: "PENDING",
+        ...(signalKind ? { taskInput: { path: "$.signalKind", equals: signalKind } } : {}),
         cancelledAt: null,
         eligibleAt: { lte: now },
         occurrence: {
@@ -466,10 +470,11 @@ async function reserveRequest(
 export async function processNextInsight(
   workerId = `insights:${process.env.INSIGHTS_WORKER_ID ?? "local"}:${process.pid}`,
   generate = generateInsight,
+  signalKind?: string,
 ): Promise<boolean> {
   if (!workerId.startsWith("insights:"))
     throw new Error("INVALID_INSIGHT_WORKER_ID");
-  const claimed = await claim(workerId);
+  const claimed = await claim(workerId, signalKind);
   if (!claimed) return false;
   const document = await prisma.insightDocument.findUniqueOrThrow({
     where: { runId: claimed.run.id },

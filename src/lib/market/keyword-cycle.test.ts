@@ -30,3 +30,13 @@ test("일반 장르 검색어를 앱 이름의 일부라는 이유로 브랜드�
  assert.equal(brandKeyword("matgo",["Moonlight Matgo"]),false);
  assert.equal(brandKeyword("Moonlight Matgo",["Moonlight Matgo"]),true);
 });
+
+test("보고 시각에는 중단된 회차도 부분 수집으로 보고하고 수집 중에는 기다린다", async () => {
+ const { rankCollectionReady, rankCollectionCoverage } = await import("./cycle-report");
+ const start = new Date("2026-11-03T22:20:00Z");
+ assert.equal(rankCollectionReady({completedAt:null,startedAt:start}, new Date("2026-11-03T22:30:00Z")),false);
+ assert.equal(rankCollectionReady({completedAt:null,startedAt:start}, new Date("2026-11-03T23:40:00Z")),true);
+ assert.equal(rankCollectionReady({completedAt:null,startedAt:new Date("2026-11-03T22:40:00Z")},new Date("2026-11-03T23:40:00Z"),start),true);
+ assert.match(rankCollectionCoverage(822, 496, 480), /496.*822/);
+ assert.match(rankCollectionCoverage(822, 496, 480), /미수집 326/);
+});

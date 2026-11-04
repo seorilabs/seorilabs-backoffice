@@ -1,3 +1,7 @@
+import { beginCollection, completeCollection } from "@/lib/insights/collection";
+import { lastElapsedMetricDay } from "../metric-day";
+import { metricCollectionSnapshot, type MetricCollectionPoint } from "@/lib/insights/metric-collection-facts";
+import { consoleMetricPoints } from "./insight-points";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { ingestConsoleMetrics, consolePushKey } from "@/lib/core/console-metrics-collect";
@@ -17,23 +21,32 @@ export function consolePushAppId(push: { slug?: string; miniAppId?: number }, re
 /** 기존 수동 push도 같은 저장 대조를 거친 뒤 운영알림을 남긴다. */
 export async function ingestAndVerifyConsolePush(payload: unknown, now: Date, clock: () => Date = () => new Date()) {
   const runId = randomUUID();
+  const ledger = await beginCollection("ait-console-push", runId);
+  const metricPoints: MetricCollectionPoint[] = [];
   let result: Awaited<ReturnType<typeof ingestConsoleMetrics>> | undefined;
   let expected = 0; let verified = 0; let failed = false;
   try {
     result = await ingestConsoleMetrics(payload, now);
-    const registry = await prisma.app.findMany({ select: { id: true, slug: true, aitMiniAppId: true } });
+    const registry = await prisma.app.findMany({ select: { id: true, slug: true, displayName: true, aitMiniAppId: true } });
     for (const push of (payload as ConsoleMetricsPush).apps) {
       if (!push || !Array.isArray(push.days) || result.skipped.some((row) => row.category === "excluded" && row.key === consolePushKey(push))) continue;
       expected += push.days.length;
       const appId = consolePushAppId(push, registry);
       const days = push.days.flatMap((day) => { const checked = validateConsoleDay(day); return checked.ok ? [checked.day] : []; });
-      if (appId && push.miniAppId) verified += (await verifyStoredConsoleDays(appId, push.miniAppId, days, now)).verified;
+      if (appId && push.miniAppId) {
+        const checked = await verifyStoredConsoleDays(appId, push.miniAppId, days, now);
+        verified += checked.verified;
+        metricPoints.push(...consoleMetricPoints(push.slug ?? appId, push.miniAppId, days.filter(day => !checked.mismatched.includes(day.date)), registry.find(app => app.id === appId)?.displayName));
+      }
     }
     failed = verified !== expected || result.errors.length > 0 || rejectedConsoleSkips(result.skipped).length > 0;
     return { ...result, verification: { expected, verified, mismatched: expected - verified } };
   } catch (error) { failed = true; throw error; }
   finally {
     const excludedOnly = !failed && expected === 0 && !!result?.skipped.length && rejectedConsoleSkips(result.skipped).length === 0;
+    await completeCollection(ledger.id, { status: failed ? "failed" : "observed", coverage: {
+      metricInsight: JSON.parse(JSON.stringify(metricCollectionSnapshot("ait_console", metricPoints.map(point => point.day).sort().at(-1) ?? lastElapsedMetricDay(now), failed ? "failed" : excludedOnly || result?.warnings.length ? "partial" : "complete", metricPoints))),
+    } });
     await enqueueNotification(consoleReport({ runId, manual: true, failed, skipped: excludedOnly, startedAt: now, now: clock(),
       dataState: failed ? "failed" : excludedOnly || result?.warnings.length ? "partial" : "complete",
       lines: [`저장 ${result?.upserts ?? "미확인"}건, ${consoleVerificationLine(verified, expected)}`,

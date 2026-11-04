@@ -192,7 +192,11 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 120_000,
   });
   if (sameReportFacts(before, frozen.doc)) return { day: refDate, action: "none", version: initial!.version, requeued: 0 };
-  const attachment = await dailyReportImage(frozen.doc).catch(() => null);
+  const [attachment, narrative] = await Promise.all([
+    dailyReportImage(frozen.doc).catch(() => null), metricNarrative(frozen.data),
+  ]);
+  frozen.doc.narrative = narrative.text;
+  frozen.doc.narrativeMeta = {fallback:narrative.fallback,provider:narrative.provider,model:narrative.model,promptVersion:narrative.promptVersion};
   return prisma.$transaction(async (db) => {
     // 동일 날짜의 정정을 직렬화한다. 이전 버전 확인과 outbox 갱신을 분리하지 않는다.
     await db.$queryRaw`SELECT id FROM org_report_daily WHERE date = ${toDbDay(refDate)} FOR UPDATE`;
@@ -204,8 +208,7 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     if (sameReportFacts(previous, doc)) return { day: refDate, action: "none", version: latest!.version, requeued: 0 };
     doc.edition!.replacesVersion = latest!.version;
     doc.edition!.changes = reportCorrectionDiff(previous, doc);
-    // 앞선 수치에서 만든 해설은 새 수치의 원인 설명으로 재사용하지 않는다.
-    doc.narrative = null;
+    // 해설은 이 고정 입력으로 새로 생성했다. 더 최신 정정이 먼저 발행됐으면 위에서 반환한다.
     doc.published = { ...previous.published, factsHash: doc.edition!.inputHash, corrections: previous.published.corrections + 1 };
     const { version } = await saveOrgReport(doc, db);
     const url = orgReportUrl(refDate, version);

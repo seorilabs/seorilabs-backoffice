@@ -12,9 +12,9 @@ const snapshot = (rows: unknown[] = []): BookSalesSnapshot => parseBookSalesInpu
 const order = { kind: "orders", date: "2026-10-10", title: "Example", identifier: "B000000001",
   marketplace: "Amazon.com", format: "unknown", paidUnits: 2, freeUnits: 0 };
 
-test("신규 판매와 정정을 운영알림에 보내고 발송 정책이 숨기지 않는다", () => {
+test("신규 판매와 정정을 재무보고에 보내고 발송 정책이 숨기지 않는다", () => {
   const event = bookSalesChangeNotification(snapshot(), snapshot([order]), now)!;
-  assert.deepEqual(event.destinations, [{ provider: "SLACK", key: "ops-alerts" }]);
+  assert.deepEqual(event.destinations, [{ provider: "SLACK", key: "app-ops" }]);
   assert.match(event.payload.text, /2/);
   assert.equal(reportDecision(event).send, true);
   assert.ok(bookSalesChangeNotification(snapshot([order]), snapshot(), now));

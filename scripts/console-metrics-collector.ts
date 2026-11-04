@@ -1,3 +1,4 @@
+import { metricCollectionSnapshot } from "../src/lib/insights/metric-collection-facts";
 import { z } from "zod";
 import { prisma } from "../src/lib/prisma";
 import { AIT_LISTINGS, AIT_WORKSPACE_ID } from "../src/lib/analytics/ait-apps";
@@ -52,7 +53,9 @@ async function main() {
   }
   const failed = consoleExecutionFailed(result);
   if (ledger) await completeCollection(ledger.id, { status: failed ? "failed" : result.state,
-    coverage: JSON.parse(JSON.stringify(result)) });
+    coverage: JSON.parse(JSON.stringify({ ...result,
+      ...(!consoleExecutionSkipped(result) ? { metricInsight: metricCollectionSnapshot("ait_console", "end" in result ? result.end : lastElapsedMetricDay(new Date()), failed ? "failed" : result.state, "metricPoints" in result ? result.metricPoints ?? [] : []) } : {}),
+    })) });
   if (mode === "collect" && result.state !== "authenticated" && !consoleExecutionSkipped(result))
     await recordConsoleIncident(failed, runId, new Date(), process.env.BATCH_JOB_UID);
   (result.state === "failed" ? process.stderr : process.stdout).write(`${JSON.stringify(result)}\n`);
