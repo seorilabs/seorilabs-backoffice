@@ -8,7 +8,7 @@ const card=(id:string,destination:DestinationKey,title:string,text:string,extra:
 const reward=operationalInterestCard({version:1,eventId:"synthetic_reward_001",occurredAt:at,type:"ad.reward.delivered",appId:"sample",outcome:"delivered",attributes:{provider:"admob",placementId:"daily_bonus",rewardKey:"crystal",rewardAmount:0}},"예제 앱");
 export const slackDestinationExamples:SlackExample[]=[
  card("backoffice","backoffice","승인 대기","**예제 앱 출시 요청**\n변경 내용과 대상 마켓을 확인하세요.\n\n[실행 근거](https://example.com/evidence)",{components:actions}),
- {...card("metrics-daily","metrics-daily","오늘 운영보고","**이용자 1,240명, 어제보다 8% 증가**\n\n## 주요 수치\n- 매출 32,000원\n- 수집 누락: 미제공\n\n[상세 보고서](https://example.com/report)"),image:true},
+ {...card("metrics-daily","metrics-daily","검색 순위 보고 예시","**예제 앱 · App Store · US · puzzle game**\n검색 위치 7위 → 4위\n관측 8/10개, 미수집 2개\n\n[전체 보고서와 근거](https://example.com/report)"),image:true},
  card("action-events","action-events","앱 이벤트","**예제 앱 1.2.3** 신규 계정 1명 · 09:30 KST",{plain:true}),
  card("release-ops","release-ops","빌드 업로드 완료","예제 앱 1.2.3\n\n처리 중입니다. 심사와 공개 상태는 아직 확인되지 않았습니다.",{components:actions}),
  card("ops-alerts","ops-alerts","⚠️ 보상 지급 실패","**영향: 광고 시청 후 보상을 받지 못한 주문 1건**\n지급 원장에서 실패와 재시도 결과를 확인하세요.\n\n오류: `PROVIDER_TIMEOUT`",{components:actions}),
