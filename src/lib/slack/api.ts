@@ -18,10 +18,9 @@ export async function slackApi(method: string, payload: Record<string, unknown>,
   if (!/^[a-z]+\.[A-Za-z]+$/.test(method)) return { ok: false, error: "SLACK_METHOD_INVALID", terminal: true };
   let response: Response;
   const form = FORM_METHODS.has(method);
-  // chat.update의 대체 text 제한. 화면에 표시할 전체 blocks는 보존한다.
+  // 블록 갱신의 대체 본문은 Slack이 생성한다. 긴 text를 함께 보내면 갱신이 거부된다.
   const wirePayload = method === "chat.update" && Array.isArray(payload.blocks) && payload.blocks.length > 0
-    && typeof payload.text === "string" && payload.text.length > 4000
-    ? { ...payload, text: payload.text.slice(0,3999).replace(/[\uD800-\uDBFF]$/, "") + "…" } : payload;
+    ? Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "text")) : payload;
   try {
     response = await (options.request ?? fetch)(`https://slack.com/api/${method}`, {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": form ? "application/x-www-form-urlencoded; charset=utf-8" : "application/json; charset=utf-8" },

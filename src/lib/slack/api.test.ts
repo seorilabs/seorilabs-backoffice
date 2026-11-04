@@ -37,29 +37,31 @@ test("생성 API의 비정상 JSON 응답도 게시 결과 미확정으로 보�
 });
 
 
-test("긴 순위 보고 갱신은 4000자 대체 텍스트와 전체 블록을 함께 보낸다",async()=>{
+test("긴 순위 보고 갱신은 전체 블록으로 Slack이 대체 본문을 생성하게 한다",async()=>{
  const body=Array.from({length:120},(_,i)=>`• **앱 ${i}** · App Store · KR Games 순위권 밖 (순위권 밖 유지)`).join("\n");
  const message=renderSlackMessage(body,{embed:{title:"검색 위치 관측"}});
  const result=await slackApi("chat.update",{channel:"CTEST",ts:"1.2",...message},{token:"test",request:async(_url,init)=>{
   const sent=JSON.parse(String(init?.body));
-  assert.ok(sent.text.length<=4000,`갱신용 텍스트 ${sent.text.length}자`);
+  assert.equal("text" in sent,false);
   assert.deepEqual(sent.blocks,message.blocks);
   assert.ok(JSON.stringify(sent.blocks).includes("앱 119"));
   return new Response(JSON.stringify({ok:true,ts:"1.2"}));
  }});
- assert.equal(result.ok,true);
- assert.ok(message.text.length>4000);
+ assert.equal(result.ok,true);assert.ok(message.text.length>4000);
 });
 
-test("블록 없는 갱신은 원문을 자르지 않고 이모지 경계도 보호한다",async()=>{
+test("블록 없는 갱신과 최초 게시의 원문을 보존한다",async()=>{
  const text="a".repeat(3998)+"😀"+"b".repeat(100);
- for(const blocks of [undefined,[{type:"rich_text",elements:[]}]]){
-  const result=await slackApi("chat.update",{text,blocks},{token:"test",request:async(_url,init)=>{
+ const rich=renderSlackMessage(text).blocks;
+ for(const [method,blocks] of [["chat.update",undefined],["chat.update",[]],["chat.update",rich],["chat.postMessage",rich]] as const){
+  const payload={text,blocks},original=structuredClone(payload);
+  const result=await slackApi(method,payload,{token:"test",request:async(_url,init)=>{
    const sent=JSON.parse(String(init?.body));
-   if(blocks){assert.ok(sent.text.length<=4000);assert.ok(!/[\uD800-\uDBFF]…$/.test(sent.text));}
+   if(method==="chat.update"&&blocks?.length)assert.equal("text" in sent,false);
    else assert.equal(sent.text,text);
+   if(blocks)assert.deepEqual(sent.blocks,blocks);
    return new Response(JSON.stringify({ok:true}));
   }});
-  assert.equal(result.ok,true);
+  assert.equal(result.ok,true);assert.deepEqual(payload,original);
  }
 });
