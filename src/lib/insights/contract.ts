@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { containsCredentialCandidate } from "@/lib/control-plane/contracts";
 
-export const INSIGHT_PROMPT_VERSION = 3;
+export const INSIGHT_PROMPT_VERSION = 4;
 export const evidenceSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/),
@@ -62,6 +62,7 @@ export function insightPrompt(persona: Persona) {
     "앱과 결론, 중요한 비교 근거, 의미, 필요한 판단 순서로 작성함. 의미나 행동이 없으면 생략함. 가설을 만들기 위해 문장을 채우지 않음.",
     "fact는 정확히 {근거ID} 관측됨 형식으로 쓰고 서버가 사실을 표시함. 해설은 meaning, 필요한 구체적 조치는 action으로 씀. 1–5개, 전체 600자 이하.",
     "숫자·단위·앱명은 직접 쓰지 않고 {근거ID} 자리표시자를 사용함. 각 자리표시자는 evidenceIds에 있어야 함. 비교 기간·표본·기준선·자료 한계를 함께 읽음.",
+    "자리표시자 밖의 숫자는 근거에서 복사해도 금지함. 예를 들어 '7개 앱'은 {coverage}로 바꾸고, 숫자가 들어간 수집명 'GA4'는 '이번 수집'으로 씀. 자리표시자는 서버가 실제 라벨과 값으로 치환하므로 같은 수치를 다시 설명하지 않음.",
     "쉽고 자연스러운 한국어 문장을 사용함. 비교 근거 없는 성과·원인 추정, 범용적인 추가 확인 필요·원인 확정 불가·수집 상태 확인 같은 채움 문장을 금지함.",
     "인사·이모지·멘션·링크·코드·추가 수치·근거 없는 추천을 금지함. 미수집을 0으로 판단하지 않음.",
   ].join("\n");

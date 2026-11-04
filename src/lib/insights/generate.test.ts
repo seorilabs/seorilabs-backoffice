@@ -67,3 +67,36 @@ test("예산 상한과 공급자 오류는 호출을 반복하지 않고 사실�
   );
   assert.equal(attempts, 1);
 });
+
+
+test("직접 쓴 수치는 거부하고 구체적인 자리표시자 지시로 한 번만 재생성한다", async () => {
+  const collectionFacts = [
+    { id: "coverage", label: "GA4 수집 범위", value: "확인 7개 앱, 부분 수집", source: "확인된 수집 결과" },
+  ];
+  let attempts = 0;
+  const released: string[] = [];
+  const result = await generateInsight(collectionFacts, "growth", {
+    configured: true,
+    acquire: async () => "permit-" + (attempts + 1),
+    release: async (permit) => { released.push(permit); },
+    chat: async (messages) => {
+      attempts++;
+      if (attempts === 1) return JSON.stringify({ bullets: [
+        { kind: "fact", text: "{coverage} 관측됨", evidenceIds: ["coverage"] },
+        { kind: "meaning", text: "7개 앱 중 일부만 비교할 수 있음", evidenceIds: ["coverage"] },
+      ] });
+      const instruction = messages.map((message) => message.content).join("\n");
+      assert.match(instruction, /이전 응답/);
+      assert.match(instruction, /자리표시자 밖.*숫자/);
+      assert.match(instruction, /GA4/);
+      return JSON.stringify({ bullets: [
+        { kind: "fact", text: "{coverage} 관측됨", evidenceIds: ["coverage"] },
+        { kind: "meaning", text: "{coverage}이므로 관측된 앱의 변화만 비교할 수 있음", evidenceIds: ["coverage"] },
+      ] });
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(result.fallback, false);
+  assert.deepEqual(released, ["permit-1", "permit-2"]);
+  assert.match(result.content.bullets[1].text, /\{coverage\}/);
+});
