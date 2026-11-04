@@ -61,7 +61,7 @@ export function resolveOperatorCommand(data: OperatorInteraction["data"], autoco
 }
 
 export function commandHelpText() {
-  return ["**Seorilabs 운영 안내**", "명령 시작: **운영명령** 채널. 운영 카드 버튼은 카드가 있는 채널에서 사용합니다.", ...COMMAND_DEFINITIONS.map(c => `\`/seori ${c.path.join(" ")}${c.options.map(o => ` ${o.required ? o.name : `[${o.name}]`}`).join("")}\` — ${c.description}`), "예: `/seori issue create app:happy-farm`, `/seori app status app:happy-farm`", "장애알림: 장애, 운영보고: 보고서, 수집결과: 수집과 시장 정보", "개발이슈: 이슈 · 출시관리: 출시·배포 · 결제알림: 결제 · 사용자리뷰: 스토어 리뷰", "쓰기 작업에는 업무 역할이 필요합니다. 일반 이슈는 연결된 GitHub 계정의 앱 쓰기 권한도 확인합니다.", "https://backoffice.vzyx.xyz"].join("\n");
+  return ["**Seorilabs 운영 안내**", "명령 시작: **운영명령** 채널. 운영 카드 버튼은 카드가 있는 채널에서 사용합니다.", ...COMMAND_DEFINITIONS.map(c => `\`/seori ${c.path.join(" ")}${c.options.map(o => ` ${o.required ? o.name : `[${o.name}]`}`).join("")}\` — ${c.description}`), "예: `/seori issue create app:happy-farm`, `/seori app status app:happy-farm`", "장애알림: 장애, 순위보고: 스토어 순위, 재무보고: 지표 인사이트와 재무, 수집결과: 수집과 시장 정보", "개발이슈: 이슈 · 출시관리: 출시·배포 · 결제알림: 결제 · 사용자리뷰: 스토어 리뷰", "쓰기 작업에는 업무 역할이 필요합니다. 일반 이슈는 연결된 GitHub 계정의 앱 쓰기 권한도 확인합니다.", "https://backoffice.vzyx.xyz"].join("\n");
 }
 
 /** 기존 operation도 등록 명세의 같은 경로를 사용한다. */
