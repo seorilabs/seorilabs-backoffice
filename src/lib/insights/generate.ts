@@ -47,7 +47,7 @@ export async function generateInsight(
             content:
               insightPrompt(persona) +
               (attempt
-                ? "\n이전 형식이 잘못됐음. 근거 ID·자리표시자 규약을 반드시 준수함."
+                ? "\n이전 응답이 검증에 실패했음. 자리표시자 밖에는 숫자를 쓰지 않음. 앱 수·기간·값은 {근거ID}로만 쓰고 GA4 같은 숫자 포함 이름도 피함. fact는 정확히 {근거ID} 관측됨으로 쓰며, fact 다음 meaning 다음 action 순서와 전체 길이 제한을 다시 확인해 새 JSON만 반환함."
                 : ""),
           },
           { role: "user", content: JSON.stringify({ facts }) },
