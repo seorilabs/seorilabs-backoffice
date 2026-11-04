@@ -18,10 +18,14 @@ export async function slackApi(method: string, payload: Record<string, unknown>,
   if (!/^[a-z]+\.[A-Za-z]+$/.test(method)) return { ok: false, error: "SLACK_METHOD_INVALID", terminal: true };
   let response: Response;
   const form = FORM_METHODS.has(method);
+  // chat.update의 대체 text 제한. 화면에 표시할 전체 blocks는 보존한다.
+  const wirePayload = method === "chat.update" && Array.isArray(payload.blocks) && payload.blocks.length > 0
+    && typeof payload.text === "string" && payload.text.length > 4000
+    ? { ...payload, text: payload.text.slice(0,3999).replace(/[\uD800-\uDBFF]$/, "") + "…" } : payload;
   try {
     response = await (options.request ?? fetch)(`https://slack.com/api/${method}`, {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": form ? "application/x-www-form-urlencoded; charset=utf-8" : "application/json; charset=utf-8" },
-      body: form ? new URLSearchParams(Object.entries(payload).map(([key,value]) => [key,String(value)])) : JSON.stringify(payload), signal: AbortSignal.timeout(options.timeoutMs ?? 8000),
+      body: form ? new URLSearchParams(Object.entries(payload).map(([key,value]) => [key,String(value)])) : JSON.stringify(wirePayload), signal: AbortSignal.timeout(options.timeoutMs ?? 8000),
     });
   } catch {
     return { ok: false, error: CREATES.has(method) ? "SLACK_DELIVERY_OUTCOME_UNKNOWN" : "SLACK_REQUEST_UNAVAILABLE", terminal: CREATES.has(method) };
