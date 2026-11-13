@@ -52,7 +52,7 @@ async function main() {
   assert.equal((await sendCycleKeywordRanks(new Date("2026-11-05T04:30:00Z"))).status,"collection_incomplete");
   const partial=await sendCycleKeywordRanks(new Date("2026-11-05T05:40:00Z"));assert.ok(partial.eventId);
   const event=await prisma.notificationEvent.findUniqueOrThrow({where:{id:partial.eventId}});
-  assert.match(String((event.payload as {text:string}).text),/399\/822/);
+  assert.doesNotMatch(String((event.payload as {text:string}).text),/399\/822/);
   const report=(event.payload as {rankReport:{rows:{state:string;attemptedAt?:string|null}[]}}).rankReport;
   assert.equal(report.rows.length,822);
   assert.equal(report.rows.filter(row=>row.attemptedAt===null).length,423);

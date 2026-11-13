@@ -68,7 +68,6 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
   const batch = await prisma.keywordCollectionBatch.findUnique({ where: { id: cycle.id } });
   if (batch && !rankCollectionReady(batch, now, cycle.start)) return { batchId: cycle.id, status: "collection_incomplete" };
   const current = await prisma.keywordObservation.findMany({ where: { batchId: cycle.id } });
-  const stored = current.filter(row => row.status !== "not_collected").length, successful = current.filter(row => keywordSuccess(row.status)).length;
   const tasks = (batch?.plan ?? []) as unknown as KeywordTask[];
   const missingIds = new Set<string>();
   for (const task of tasks) {
@@ -115,7 +114,11 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     const report: RankReport = { version: 1, day: cycle.day, capturedAt: now.toISOString(), items, rows: rows.map(row=>({...row, observedAt: row.observedAt?.toISOString() ?? null})) };
     const categorySummaries = await getLatestCategoryRankSummaries(now);
     report.categories=categorySummaries;
-    await recordCollectionIssue({job:"backoffice-keyword-daily",runId:cycle.id,at:now,failed:successful<tasks.length || stored>successful,target:"스토어 검색 위치",items:rows.filter(r=>r.state!=="수집됨").slice(0,12).map(r=>`${r.appName} ${r.market} ${r.country} ${r.term}: ${r.state}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."},tx);
+    if(batch && !batch.completedAt){
+      const marker=await tx.notificationEvent.findUnique({where:{dedupeKey:`keyword-collection-run:${cycle.id}`},select:{payload:true}});
+      const runId=(marker?.payload as {runId?:string}|null)?.runId??cycle.id;
+      await recordCollectionIssue({job:"backoffice-keyword-collection",runId,at:now,failed:true,target:"스토어 검색 위치",items:rows.filter(r=>r.state!=="수집됨").slice(0,12).map(r=>`${r.appName} ${r.market} ${r.country} ${r.term}: ${r.state}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."},tx);
+    }
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
     const text = rankReportText(report,url);
     const previousReport=(existing?.payload as {rankReport?:RankReport}|undefined)?.rankReport;

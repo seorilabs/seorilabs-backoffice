@@ -486,7 +486,8 @@ export async function processNextInsight(
     include: { signal: true },
   });
   const facts = evidenceListSchema.parse(document.signal.facts);
-  const displayFacts = await resolveReportEvidence(document.signal.kind, facts);
+  const resolvedFacts = await resolveReportEvidence(document.signal.kind, facts);
+  const displayFacts = document.signal.kind === "metric-collection" ? resolvedFacts.filter(f=>f.id.startsWith("metric_change_")).slice(0,3) : resolvedFacts;
 
   const made = !signalDecision(document.signal.kind).send
     ? {

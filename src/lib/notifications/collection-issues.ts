@@ -5,7 +5,7 @@ import { enqueueNotification } from "./outbox";
 import { recordIncident, recoverIncident } from "./incidents";
 export const COLLECTION_SOURCE = "collection";
 export function isCollectionBatch(name:string){
- return /book-sales-kdp|(?:analytics|metric|console|keyword|market-feedback|store-review|store-submission|platform-metric).*(?:collect|recollect|metrics|feedback|reviews|submissions|daily|probe)$/.test(name) && !/report|highlights|reconcile/.test(name);
+ return /keyword-collection|book-sales-kdp|(?:analytics|metric|console|keyword|market-feedback|store-review|store-submission|platform-metric).*(?:collect|recollect|metrics|feedback|reviews|submissions|daily|probe)$/.test(name) && !/report|highlights|reconcile/.test(name);
 }
 export const collectionRunId=(id:string)=>id.replace(/^batch:(?:k8s|local):/,"");
 export async function recordCollectionIssue(input:{job:string;runId:string;at:Date;failed:boolean;skipped?:boolean;observerOnly?:boolean;target:string;items:string[];period:string;cause:string;action:string;url?:string},tx?:Prisma.TransactionClient){

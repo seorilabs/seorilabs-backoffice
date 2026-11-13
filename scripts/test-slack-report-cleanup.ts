@@ -5,6 +5,7 @@ import { recordCollectionIssue } from "@/lib/notifications/collection-issues";
 import { enqueueNotificationOnce,drainNotifications } from "@/lib/notifications/outbox";
 import { publishSignal,processNextInsight,insightNotificationKey } from "@/lib/insights/service";
 import { metricCollectionSnapshot } from "@/lib/insights/metric-collection-facts";
+import { consoleReport,publishConsoleReport } from "@/lib/analytics/console-sync/report";
 import { fallbackInsight } from "@/lib/insights/contract";
 const url=new URL(process.env.DATABASE_URL??"");
 assert.ok(url.hostname==="127.0.0.1" && url.pathname.endsWith("_contract_test"));
@@ -24,12 +25,15 @@ async function main(){
  await recordCollectionIssue({...issue,observerOnly:true,failed:false});assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:first.id}})).status,"OPEN");
  await prisma.operationalIncident.update({where:{id:first.id},data:{providerMessageId:"qa-failure-receipt"}});
  await recordCollectionIssue({...issue,runId:"job-3",failed:false});assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:first.id}})).status,"RECOVERED");
+ const scheduled=await recordCollectionIssue({...issue,job:"backoffice-ait-console-metrics"});
+ await publishConsoleReport(consoleReport({runId:prefix,manual:true,now,failed:false,dataState:"complete",lines:[]}));
+ assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:scheduled!.id}})).status,"OPEN");
  const imm={dedupeKey:`${prefix}:once`,kind:"OPS_ALERT" as const,payload:{text:"최초 사실",report:{category:"change"}},destinations:[{provider:"SLACK" as const,key:"metric-insights" as const}]};
  const immutable=await Promise.all([enqueueNotificationOnce(imm),enqueueNotificationOnce({...imm,payload:{...imm.payload,text:"다른 AI 문장"}})]);
  assert.equal(immutable[0],immutable[1]);assert.equal(await prisma.notificationDelivery.count({where:{eventId:immutable[0]}}),1);
  const point=(day:string,value:number)=>({key:prefix,label:"격리 앱",day,metrics:{dau:{label:"활성 사용자",value,unit:"명"}}});
  const snapshot=metricCollectionSnapshot("ga4","2026-11-12","observed",[point("2026-11-11",10),point("2026-11-12",20)]);
- const analyze=async(facts:Parameters<typeof fallbackInsight>[0])=>({content:fallbackInsight(facts),fallback:true,errorCode:"ANALYSIS_PROVIDER_FAILED"});
+ const analyze=async(facts:Parameters<typeof fallbackInsight>[0])=>{assert.ok(facts.every(f=>f.id.startsWith("metric_change_")));return {content:fallbackInsight(facts),fallback:true,errorCode:"ANALYSIS_PROVIDER_FAILED"};};
  for(const id of ["first","repeat"]){await publishSignal({dedupeKey:`${prefix}:${id}`,kind:"metric-collection",title:"격리 변화",facts:snapshot.facts,sourceRefs:[],observedAt:now});assert.equal(await processNextInsight("insights:qa-cleanup",analyze,"metric-collection"),true);}
  const docs=await prisma.insightDocument.findMany({where:{signal:{dedupeKey:{startsWith:prefix},kind:"metric-collection"}}});assert.equal(docs.length,2);assert.notEqual(docs[0].notificationKey,docs[1].notificationKey);
  const notificationKey=insightNotificationKey("metric-collection",snapshot.facts,docs[0].notificationKey);

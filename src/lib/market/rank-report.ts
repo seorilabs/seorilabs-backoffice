@@ -28,6 +28,7 @@ export function rankReportKey(report: RankReport) {
         day: report.day,
         items: report.items,
         rows: report.rows,
+        categories: report.categories,
       }),
     )
     .digest("hex")
@@ -36,7 +37,7 @@ export function rankReportKey(report: RankReport) {
 
 /** 저장소의 JSON 키 순서와 무관하게 같은 관측인지를 비교한다. 기존 공개 주소 해시는 유지한다. */
 export function sameRankReportContent(left: RankReport, right: RankReport): boolean {
-  const content = (report: RankReport) => contractCanonicalJson({day:report.day,items:report.items,rows:report.rows} as unknown as JsonValue);
+  const content = (report: RankReport) => contractCanonicalJson({day:report.day,items:report.items,rows:report.rows,...(report.categories ? {categories:report.categories} : {})} as unknown as JsonValue);
   return content(left) === content(right);
 }
 export const rankValue = (rank: number | null) =>

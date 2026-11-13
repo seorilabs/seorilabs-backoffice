@@ -91,3 +91,10 @@ test("전체 목록 밖은 앱 나열 없이 분포를 보내며 미수집을 �
  const text=rankReportText(report,"https://example.com");assert.match(text,/모든 대상이 목록 밖/);assert.doesNotMatch(text,/삼국지|카테고리 앱/);
  const svg=rankSlackSvg(report);assert.match(svg,/목록 밖 1 · 미수집 1/);assert.match(svg,/카테고리/);assert.doesNotMatch(svg,/>201<|삼국지/);
 });
+
+test("카테고리만 바뀌어도 이미지 주소와 보고서 내용을 구분한다",async()=>{
+ const {rankReportKey,sameRankReportContent}=await import("./rank-report");
+ const before=reportFixture(),after={...before,categories:[{appName:"예제",market:"app-store",country:"us",categoryName:"Games",rank:null,previousRank:10,change:"이탈"}]};
+ assert.notEqual(rankReportKey(before),rankReportKey(after));assert.equal(sameRankReportContent(before,after),false);
+ assert.equal(sameRankReportContent(after,JSON.parse(JSON.stringify(after))),true);
+});

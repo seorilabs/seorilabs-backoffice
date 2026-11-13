@@ -27,6 +27,10 @@ spec:
                 - /app/scripts-dist/operations-insights-worker.cjs
                 - keywords
               env:
+                - name: BATCH_JOB_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
                 - name: NODE_ENV
                   value: production
                 - name: HOME
