@@ -1,3 +1,4 @@
+import { METRIC_DICTIONARY } from "@/lib/analytics/unified-metrics";
 import { createHash } from "node:crypto";
 import { METRIC_SPECS } from "@/lib/core/metric-highlights";
 import type { OrgReportDocument } from "@/lib/core/org-report-schema";
@@ -119,8 +120,10 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
   `GA4 보상형 광고 완료 ${n(ga4.adCompletions,"회")} · ${comparison(before?.adCompletions,"회")}`,
  ] : ["GA4 기준일 지표 미수집"];
  if(doc.retention?.d1Pct!=null)figures.push(`GA4 D1 잔존율 ${n(doc.retention.d1Pct,"%")} · ${doc.retention.cohortDate} 신규 ${n(doc.retention.users,"명")} 코호트`);
+ const consoleUsage=doc.apps.flatMap(app=>app.listings.filter(l=>l.avgSessionSec!=null).map(listing=>({app,listing})))[0];
+ if(consoleUsage)figures.push(`앱인토스 ${consoleUsage.app.displayName} (${consoleUsage.listing.label??consoleUsage.listing.miniAppId}) 평균 이용 시간 ${n(consoleUsage.listing.avgSessionSec,"초")} · 기준 ${consoleUsage.listing.date}`);
  const usage=doc.edition?.providerMetrics.find(series=>series.metric === "session_seconds");
- if(usage){const point=usage.points.find(p=>p.day===usage.assessmentDay)??usage.points.at(-1);if(point?.value!=null)figures.push(`${usage.source} ${usage.appName} 세션 시간 ${n(point.value,"초")} · ${point.day} ${usage.timeZone}`);}
+ if(usage && !consoleUsage){const point=usage.points.find(p=>p.day===usage.assessmentDay)??usage.points.at(-1);if(point?.value!=null)figures.push(`${usage.source} ${usage.appName} 세션 시간 ${n(point.value,"초")} · ${point.day} ${usage.timeZone}`);}
  for(const app of doc.apps)for(const listing of app.listings){if(listing.dau!==null)figures.push(`앱인토스 ${app.displayName} (${listing.label??listing.miniAppId}) 활성 사용자 ${n(listing.dau,"명")} · 기준 ${listing.date}`);}
 
  const insights=reportConclusions(doc).slice(0,3);
@@ -131,9 +134,11 @@ export function renderDailyEdition(doc: OrgReportDocument, version: number, url:
 }
 function editionChanges(doc:OrgReportDocument){return (doc.edition?.changes??[]).filter(c=>!/수집|비용|잔액|거래|수익/.test(c.label)).map(c=>`${c.label}: ${c.before} → ${c.after}`);}
 
-export function financialReportFacts(doc:OrgReportDocument){return {summary:doc.summary.console,refDate:doc.consoleMeta.refDate,costs:doc.costs?{month:doc.costs.month,figures:doc.costs.figures,summaryLines:doc.costs.summaryLines}:null};}
+export function financialReportFacts(doc:OrgReportDocument){return {summary:doc.summary.console,refDate:doc.consoleMeta.refDate,costs:doc.costs?{month:doc.costs.month,figures:doc.costs.figures,summaryLines:doc.costs.summaryLines}:null,provider:financialProviderFacts(doc)};}
 export function renderFinancialEdition(doc:OrgReportDocument,url:string|null){
  const money=(v:number|null)=>v===null?"미수집":`${Math.round(v).toLocaleString("ko-KR")}원`;
  const c=doc.summary.console;
- return [`**일간 재무 보고 · ${doc.refDate}**`,`앱인토스 광고 추정 수익 ${money(c.listings && doc.consoleMeta.refDate ? c.iaaKrw : null)}`,`앱인토스 결제 거래액 ${money(c.listings && doc.consoleMeta.refDate ? c.iapTrxKrw : null)}`,`앱인토스 결제 정산액 ${money(c.listings && doc.consoleMeta.refDate ? c.iapSettlementKrw : null)}`,`금액 기준일 ${doc.consoleMeta.refDate??"미확인"}`,...(doc.costs?.summaryLines??[]),"거래액·추정 수익·정산액은 서로 다른 금액입니다.",...(url?[`[금액·비용·잔액 근거](${url})`]:[])].join("\n");
+ return [`**일간 재무 보고 · ${doc.refDate}**`,`앱인토스 광고 추정 수익 ${money(c.listings && doc.consoleMeta.refDate ? c.iaaKrw : null)}`,`앱인토스 결제 거래액 ${money(c.listings && doc.consoleMeta.refDate ? c.iapTrxKrw : null)}`,`앱인토스 결제 정산액 ${money(c.listings && doc.consoleMeta.refDate ? c.iapSettlementKrw : null)}`,`금액 기준일 ${doc.consoleMeta.refDate??"미확인"}`,...financialProviderFacts(doc).map(series=>`${series.appName} · ${series.source} · ${METRIC_DICTIONARY[series.metric].label}${series.segment ? ` (${series.segment})` : ""}: ${series.point.value===null?"미수집":series.point.value.toLocaleString("ko-KR")} ${series.currency} · ${series.point.day} ${series.timeZone}`),...(doc.costs?.summaryLines??[]),"거래액·추정 수익·정산액은 서로 다른 금액입니다.",...(url?[`[금액·비용·잔액 근거](${url})`]:[])].join("\n");
 }
+
+function financialProviderFacts(doc:OrgReportDocument){return (doc.edition?.providerMetrics??[]).filter(s=>s.currency!==null && METRIC_DICTIONARY[s.metric].unit.startsWith("통화")).flatMap(s=>{const point=s.points.find(p=>p.day===s.assessmentDay)??s.points.at(-1);return point ? [{appName:s.appName,source:s.source,metric:s.metric,segment:s.segment,timeZone:s.timeZone,currency:s.currency,point:{day:point.day,value:point.value}}]:[];});}

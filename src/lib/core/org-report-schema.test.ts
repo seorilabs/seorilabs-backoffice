@@ -125,3 +125,11 @@ test("sample 이 없는 Movement 는 sample 키 자체를 만들지 않는다", 
   });
   assert.ok(!("sample" in serializeMovement(movement)));
 });
+
+test("지표와 재무 본문은 수집 건수와 서로 다른 목적의 지표를 섞지 않는다",async()=>{
+ const {renderDailyEdition,renderFinancialEdition}=await import("@/lib/report/daily-presentation");
+ const doc=sampleDocument();doc.apps[0].listings[0].avgSessionSec=42;
+ const metrics=renderDailyEdition(doc,1,null);assert.match(metrics,/평균 이용 시간 42초/);assert.match(metrics,/기준 2026-08-30/);assert.doesNotMatch(metrics,/수집 범위.*개|비용|광고 추정 수익|거래액/);
+ const finance=renderFinancialEdition(doc,null);assert.doesNotMatch(finance,/활성 사용자|잔존율|이용 시간|수집 성공/);assert.match(finance,/거래액/);
+ doc.summary.console.listings=0;doc.consoleMeta.refDate=null;assert.match(renderFinancialEdition(doc,null),/광고 추정 수익 미수집/);
+});
