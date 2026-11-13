@@ -302,6 +302,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_RELEASE_OPS_ID } }
             - name: SLACK_CHANNEL_OPS_ALERTS_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_OPS_ALERTS_ID } }
+            - name: SLACK_CHANNEL_METRIC_INSIGHTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRIC_INSIGHTS_ID } }
             - name: SLACK_CHANNEL_METRICS_DAILY_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRICS_DAILY_ID } }
             # 담당제 통합 운영 채널 — confirm 카드 버튼 allowlist 검증에 필요.

@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
               purchaseEnvironment:
                 input.attributes.isTestPurchase === false
                   ? "실제 주문"
-                  : "실제·테스트 여부 제공 안됨",
+                  : "구분 미확인",
             }
           : {}),
         impact:

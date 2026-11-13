@@ -37,6 +37,8 @@ spec:
             - {name: CLAUDE_CHAT_TIMEOUT_MS, value: "180000"}
             - {name: INSIGHTS_DAILY_LIMIT, value: "200"}
             # 알림 생산자는 공개 채널 설정만 읽고 전송 토큰은 받지 않는다.
+            - name: SLACK_CHANNEL_METRIC_INSIGHTS_ID
+              valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_METRIC_INSIGHTS_ID}}
             - name: SLACK_CHANNEL_APP_OPS_ID
               valueFrom: {secretKeyRef: {name: backoffice-secrets, key: SLACK_CHANNEL_APP_OPS_ID, optional: true}}
             - name: SLACK_CHANNEL_METRICS_DAILY_ID

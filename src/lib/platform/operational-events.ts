@@ -43,7 +43,7 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
   "app.version.first_seen": new Set(["appVersion", "runtime", "sdk"]),
   // isTestPurchase 는 마켓 검증의 관측 사실이다. 키가 없으면 "미확인" 이고
   // 실거래로 추정하지 않는다 — AppsInToss 는 provider 가 이 값을 만들지 않는다.
-  "iap.granted": new Set(["platform", "entitlementId", "isTestPurchase"]),
+  "iap.granted": new Set(["platform", "entitlementId", "isTestPurchase", "grantKind"]),
   "ad.reward.delivered": new Set([
     "provider",
     "placementId",
@@ -57,6 +57,11 @@ const allowedAttributes: Record<OperationalEventType, Set<string>> = {
     "errorCode",
   ]),
 };
+
+for (const [type, keys] of Object.entries(allowedAttributes)) {
+  for (const key of ["platformUserId", "countryCode", "countrySource"]) keys.add(key);
+  if (type.startsWith("ad.")) keys.add("clientPlatform");
+}
 
 const scalar = z.union([
   z.string().max(120),
@@ -102,6 +107,11 @@ export function parseOperationalEvent(
   ) {
     return null;
   }
+  const a = result.data.attributes;
+  if ((a.countryCode !== undefined && (typeof a.countryCode !== "string" || !/^[A-Z]{2,3}$/.test(a.countryCode))) ||
+    (a.countrySource !== undefined && (typeof a.countrySource !== "string" || !/^[a-z][a-zA-Z0-9_.-]{0,79}$/.test(a.countrySource))) ||
+    (a.clientPlatform !== undefined && !["android", "ios", "apps_in_toss"].includes(String(a.clientPlatform))) ||
+    (a.grantKind !== undefined && !["purchase", "restore", "transfer"].includes(String(a.grantKind)))) return null;
   return result.data;
 }
 
@@ -250,13 +260,14 @@ export function operationalEventLine(
   const rest = facts.filter(fact => fact !== `v${version}`).map(inline);
   const uid = attr(event, "platformUserId");
   if (event.type === "identity.created" && typeof uid === "string") rest.push(`UID: \`${uid}\``);
+  if (typeof attr(event, "countryCode") === "string") rest.push(`국가: ${attr(event, "countryCode")}`);
   rest.push(stamp);
   return `**[${inline(displayName)}:${inline(version)}]** ${title} - ${rest.join(" / ")}`;
 }
 
 function purchaseEnvironment(event: OperationalEventInput): string {
   const state = testPurchaseState(event.attributes);
-  return state === "test" ? "테스트 주문" : state === "real" ? "실제 주문" : "실제·테스트 여부 제공 안됨";
+  return state === "test" ? "테스트 주문" : state === "real" ? "실제 주문" : "구분 미확인";
 }
 
 /** 알려진 테스트 결제 실패는 실제 이용자 피해 알림과 분리한다. */
@@ -282,26 +293,29 @@ export function operationalInterestCard(
 ): MessageRender {
   const facts = operationalEventFacts(event);
   const failure = isOpsAlert(event.type);
-  const value = (key:string) => {const v=attr(event,key);return typeof v === "number" || typeof v === "string" ? v : null;};
-  const presentation = event.type.startsWith("ad.") ? {
-    title: event.type === "ad.reward.delivered" ? "🎬 광고 보상 지급 완료" : "❌ 광고 보상 지급 실패",
-    fields: [{label:"앱",value:displayName},...(event.type === "ad.reward.delivered" ? [{label:"보상 항목",value:value("rewardKey")},{label:"지급 수량",value:value("rewardAmount")}] : [{label:"오류",value:value("errorCode")}])],
-    ...(failure ? {body:"광고 시청 후 보상이 지급되지 않았습니다. 지급 원장에서 실패와 재시도 결과를 확인하세요."} : {}),
-    context:[`제공사: ${text(event,"provider","미제공")} | 광고 위치: ${text(event,"placementId","미제공")}`],
-    timestamp:event.occurredAt,
-  } : event.type.startsWith("iap.") ? {
-    title: event.type === "iap.granted" ? "💳 결제 권리 지급 완료" : "❌ 결제 완료 처리 실패",
-    fields:[{label:"앱",value:displayName},{label:"주문 구분",value:purchaseEnvironment(event)},{label:"마켓",value:marketLabel(attr(event,"platform"))},...(event.type === "iap.granted" ? [{label:"지급 항목",value:value("entitlementId")}] : [{label:"오류",value:value("errorCode")}])],
-    ...(failure ? {body:"권리 지급 상태와 마켓 완료 상태를 구분해 지급 원장을 확인하세요."} : {}),
-    timestamp:event.occurredAt,
-  } : undefined;
+  const safe = (v: unknown) => String(v ?? "미확인").replace(/[@<>\r\n]/g, "");
+  const value = (key: string) => safe(attr(event, key));
+  const appName = safe(displayName);
+  const country = typeof attr(event, "countryCode") === "string" ? value("countryCode") : null;
+  const fields: Array<{label: string; value: string}> = [];
+  let title = `${facts.icon} ${appName} · ${facts.headline}`;
+  if (event.type.startsWith("ad.")) {
+    const platform = ({android:"Android",ios:"iOS",apps_in_toss:"앱인토스"} as Record<string,string>)[value("clientPlatform")] ?? "플랫폼 미확인";
+    title = `${failure ? "❌" : "🎬"} [${platform}] 광고 보상 ${failure ? "지급 실패" : "지급 완료"} - ${appName}`;
+    fields.push(...(failure ? [{label:"오류",value:value("errorCode")},{label:"제공사",value:value("provider")},{label:"광고 위치",value:value("placementId")}] : [{label:value("rewardKey"),value:value("rewardAmount")}]));
+  } else if (event.type.startsWith("iap.")) {
+    const market = ({google_play:"구글플레이",app_store:"앱스토어",apps_in_toss:"앱인토스"} as Record<string,string>)[value("platform")] ?? marketLabel(attr(event,"platform"));
+    const action = failure ? "결제 완료 처리 실패" : attr(event,"grantKind") === "transfer" ? "소유권 이전" : attr(event,"grantKind") === "restore" ? "구매 복원" : attr(event,"grantKind") === "purchase" ? "결제 발생" : "결제 권리 지급 완료";
+    title = `${failure ? "❌" : "💳"} [${market}] ${purchaseEnvironment(event)} ${action} - ${appName}`;
+    fields.push(...(failure ? [{label:"오류",value:value("errorCode")}] : [{label:"지급항목",value:value("entitlementId")}]));
+    fields.push({label:"사용자 ID",value:value("platformUserId")});
+  }
+  if (country) fields.push({label:event.type.startsWith("iap.") ? "결제 국가" : "국가",value:country});
+  const body = failure ? "지급 원장에서 실패와 재시도 결과를 확인하세요." : !event.type.startsWith("ad.") && !event.type.startsWith("iap.") ? facts.facts.join("\n") : undefined;
+  const presentation = {title,fields,...(body ? {body} : {}),timestamp:event.occurredAt};
   return {
-    text: facts.facts.join("\n"),
-    ...(presentation ? {presentation} : {}),
-    embed: {
-      title: `${facts.icon} ${displayName} · ${facts.headline}`,
-      color: failure ? EMBED_COLOR.FAILURE : EMBED_COLOR.SUCCESS,
-      timestamp: event.occurredAt,
-    },
+    text: [title,...fields.map(f=>`${f.label}: ${f.value}`),body].filter(Boolean).join("\n"),
+    presentation,
+    embed: {title,color:failure ? EMBED_COLOR.FAILURE : EMBED_COLOR.SUCCESS,timestamp:event.occurredAt},
   };
 }

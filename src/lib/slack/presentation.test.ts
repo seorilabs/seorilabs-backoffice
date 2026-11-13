@@ -63,11 +63,11 @@ test("광고 보상의 0과 미제공, 결제의 실제와 테스트 및 미확�
  const {operationalInterestCard}=await import("@/lib/platform/operational-events");
  const event={version:1 as const,eventId:"synthetic_event_12345",occurredAt:"2026-10-29T00:00:00Z",appId:"sample",outcome:"delivered"};
  for(const rewardAmount of [0,undefined]){
-  const card=operationalInterestCard({...event,type:"ad.reward.delivered",attributes:{provider:"admob",...(rewardAmount===undefined ? {} : {rewardAmount})}},"예제 앱");
+  const card=operationalInterestCard({...event,type:"ad.reward.delivered",attributes:{provider:"admob",rewardKey:"crystal",...(rewardAmount===undefined ? {} : {rewardAmount})}},"예제 앱");
   const message=renderSlackMessage(card.text,{presentation:card.presentation});
-  assert.match(message.text,/광고 보상 지급 완료/);assert.match(message.text,rewardAmount===0 ? /지급 수량: 0/ : /지급 수량: 미제공/);
+  assert.match(message.text,/광고 보상 지급 완료/);assert.match(message.text,rewardAmount===0 ? /crystal: 0/ : /crystal: 미확인/);
  }
- for(const [isTestPurchase,label] of [[true,"테스트 주문"],[false,"실제 주문"],[undefined,"실제·테스트 여부 제공 안됨"]] as const){
+ for(const [isTestPurchase,label] of [[true,"테스트 주문"],[false,"실제 주문"],[undefined,"구분 미확인"]] as const){
   const card=operationalInterestCard({...event,type:"iap.granted",attributes:{platform:"appstore",...(isTestPurchase===undefined ? {} : {isTestPurchase})}},"예제 앱");
   assert.ok(renderSlackMessage(card.text,{presentation:card.presentation}).text.includes(label));
  }
