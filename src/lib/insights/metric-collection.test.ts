@@ -25,3 +25,12 @@ test("비교 자료가 없는 지표가 섞여도 비교 가능한 값이 같으
  ]);
  assert.match(made.facts.find(fact=>fact.id==="conclusion")!.value,/주요 변화 없음/);
 });
+
+test("작은 표본·동일 값·재무 값은 지표 변화 알림으로 만들지 않는다",async()=>{
+ const {materialMetricFacts}=await import("./metric-collection-facts");
+ const make=(prior:number,current:number)=>metricCollectionSnapshot("ga4","2026-11-03","observed",[point("2026-11-02",prior),point("2026-11-03",current)]);
+ assert.equal(make(1,2).reportable,false);assert.equal(make(10,10).reportable,false);
+ const change=make(10,20);assert.equal(change.reportable,true);
+ assert.deepEqual(materialMetricFacts(change.facts),materialMetricFacts(make(10,20).facts));
+ const retained=metricCollectionSnapshot("ga4","2026-11-03","observed",[{key:"a",label:"앱",day:"2026-11-02",metrics:{d1:{label:"D1",value:10,unit:"%",sample:2}}},{key:"a",label:"앱",day:"2026-11-03",metrics:{d1:{label:"D1",value:60,unit:"%",sample:2}}}]);assert.equal(retained.reportable,false);
+});

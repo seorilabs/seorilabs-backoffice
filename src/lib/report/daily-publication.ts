@@ -8,7 +8,7 @@ import { parseOrgReportDocument, orgReportDocumentSchema, type OrgReportDocument
 import { metricSourceInventory } from "@/lib/analytics/source-inventory";
 import { dbDay, metricDayStart, shiftMetricDay, lastElapsedMetricDay, toDbDay } from "@/lib/analytics/metric-day";
 import { dailyReportSchedule } from "./daily-contract";
-import { reportConclusions, reportFactsHash, sameReportFacts, renderDailyEdition, reportCorrectionDiff } from "./daily-presentation";
+import { reportConclusions, reportFactsHash, sameReportFacts, renderDailyEdition, reportCorrectionDiff,financialReportFacts,renderFinancialEdition } from "./daily-presentation";
 import { metricNarrative } from "@/lib/core/metric-narrative";
 import { financeMonth } from "@/lib/core/finance-costs";
 import { orgReportUrl } from "@/lib/core/org-report-link";
@@ -17,7 +17,6 @@ import { notificationDestinations } from "@/lib/notifications/destinations";
 import { SEORI_SENDER } from "@/lib/notifications/sender";
 import { reportCohorts } from "./cohorts";
 import { providerMetricSeries } from "@/lib/analytics/report-query";
-import { METRIC_DICTIONARY } from "@/lib/analytics/unified-metrics";
 import { metricDayWindow } from "@/lib/analytics/metric-day";
 
 async function freezeDailyReport(now: Date, refDate: string, db: Prisma.TransactionClient) {
@@ -89,29 +88,17 @@ export async function prepareDailyReport(now = new Date(), refDate?: string) {
 export async function dailyReportImage(doc: OrgReportDocument) {
   const { reportChartSvg, ga4ChartContext } = await import("./discord-chart");
   const sharp = (await import("sharp")).default;
-  const points = doc.edition?.trend ?? [];
+  const points = (doc.edition?.trend ?? []).slice(-7);
   const charts = [
     { title: `활성·신규 사용자 · ${doc.refDate}`, ...ga4ChartContext(doc), unit: "명", source: "GA4 · 앱 사이 사용자 중복 포함 · 발행 입력 고정", series: [
       { label: "활성 합계", color: "#2563eb", values: points.map((point) => point.ga4Dau) },
       { label: "신규 합계", color: "#059669", values: points.map((point) => point.ga4NewUsers) },
     ] },
-    { title: "광고 추정 수익·결제 거래액", unit: "KRW", source: "앱인토스 · 정산 후 순수익과 구분 · 발행 입력 고정", series: [
-      { label: "광고 추정 수익", color: "#d97706", values: points.map((point) => point.consoleIaaKrw) },
-      { label: "결제 거래액", color: "#7c3aed", values: points.map((point) => point.consoleIapTrxKrw) },
-    ] },
+
   ];
-  const provider = doc.edition?.providerMetrics.find((series) => series.points.some((point) => point.value !== null) && series.points.every((point) => point.value === null || point.value >= 0));
-  if (provider) {
-    const days = metricDayWindow(provider.points.at(-1)!.day, 28);
-    charts.push({ title: `${provider.appName} · ${METRIC_DICTIONARY[provider.metric].label}`, unit: provider.currency ?? provider.unit,
-      source: `${provider.source} · ${provider.timeZone} · ${provider.reportType} · 발행 입력 고정`,
-      series: [{ label: `${METRIC_DICTIONARY[provider.metric].label}${provider.segment ? ` · ${provider.segment}` : ""}`, color: "#0891b2", values: days.map((day) => provider.points.find((point) => point.day === day)?.value ?? null) }],
-      // 이 패널은 공급자 시간대의 달력일을 사용한다.
-      days,
-    } as typeof charts[number] & { days: string[] });
-  }
   const buffers: Buffer[] = [];
   for (const chart of charts) buffers.push(await sharp(Buffer.from(reportChartSvg({ ...chart, days: "days" in chart ? chart.days as string[] : points.map((point) => point.date) }))).png().toBuffer());
+  buffers.push(await sharp(Buffer.from(appComparisonSvg(doc))).png().toBuffer());
   const heights = await Promise.all(buffers.map(async (input) => (await sharp(input).metadata()).height!));
   let top = 0;
   const panels = buffers.map((input, index) => {
@@ -151,7 +138,7 @@ export async function publishDailyReport(now = new Date(), refDate?: string) {
     const enriched = preparation.enrichment as { narrative?: string; narrativeMeta?: OrgReportDocument["narrativeMeta"]; costs?: OrgReportDocument["costs"] } | null;
     if (enriched) { doc.narrative = enriched.narrative ?? null; doc.narrativeMeta = enriched.narrativeMeta; doc.costs = enriched.costs ?? null; }
     doc.generatedAt = now.toISOString();
-    doc.published = { factsHash: doc.edition.inputHash, dedupeKey: metricHighlightDedupeKey(doc.refDate), publishedAt: now.toISOString(),
+    doc.published = { factsHash: doc.edition.inputHash, dedupeKey: metricHighlightDedupeKey(doc.refDate)+":metric-insights", publishedAt: now.toISOString(),
       observed: doc.edition.sources.filter((source) => ["observed", "empty"].includes(source.state)).length,
       expected: doc.edition.sources.filter((source) => source.state !== "not_applicable").length, corrections: 0 };
     const { version } = await saveOrgReport(doc, db);
@@ -161,8 +148,9 @@ export async function publishDailyReport(now = new Date(), refDate?: string) {
         report: { category: "change", reason: "SCHEDULED_DAILY_REPORT" }, sender: SEORI_SENDER, editable: true,
         ...(preparation.attachment ? { attachment: preparation.attachment as Prisma.InputJsonObject } : {}),
         ...(url ? { components: [{ type: 1, components: [{ type: 2, style: 5, label: `전체 보고서 v${version}`, url }] }] } : {}),
-      }, destinations: notificationDestinations(["app-ops"]) }, db);
+      }, destinations: notificationDestinations(["metric-insights"]) }, db);
     await requeueNotification(eventId, db);
+    await enqueueFinancialEdition(doc,url,now,db);
     await db.orgReportPreparation.update({ where: { id: preparation.id }, data: { publishedVersion: version } });
     return { preparationId: preparation.id, refDate: doc.refDate, version, eventId, reused: false };
   }, { timeout: 30_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }));
@@ -212,13 +200,30 @@ export async function correctDailyReport(now = new Date(), refDate = shiftMetric
     doc.published = { ...previous.published, factsHash: doc.edition!.inputHash, corrections: previous.published.corrections + 1 };
     const { version } = await saveOrgReport(doc, db);
     const url = orgReportUrl(refDate, version);
+    if (!doc.published.dedupeKey.endsWith(":metric-insights")) return {day:refDate,action:"corrected",version,requeued:0};
     const eventId = await enqueueNotification({ dedupeKey: doc.published.dedupeKey, kind: "OPERATIONAL_EVENT", occurredAt: now,
       payload: { text: renderDailyEdition(doc, version, url), reportVersion: version, refDate,
         report: { category: "change", reason: "DAILY_REPORT_CORRECTION" }, sender: SEORI_SENDER, editable: true,
         ...(attachment ? { attachment: attachment as unknown as Prisma.InputJsonObject } : {}),
         ...(url ? { components: [{ type: 1, components: [{ type: 2, style: 5, label: `정정 보고서 v${version}`, url }] }] } : {}),
-      }, destinations: notificationDestinations(["app-ops"]) }, db);
+      }, destinations: notificationDestinations(["metric-insights"]) }, db);
     const requeued = await requeueNotification(eventId, db);
+    await enqueueFinancialEdition(doc,url,now,db);
     return { day: refDate, action: "corrected", version, requeued };
   }, { timeout: 30_000 });
+}
+
+async function enqueueFinancialEdition(doc:OrgReportDocument,url:string|null,now:Date,db:Prisma.TransactionClient){
+ const dedupeKey=`finance-daily:${doc.refDate}`,fingerprint=JSON.stringify(financialReportFacts(doc));
+ const prior=await db.notificationEvent.findUnique({where:{dedupeKey},select:{id:true,payload:true}});
+ if((prior?.payload as {financialFingerprint?:string}|null)?.financialFingerprint===fingerprint)return;
+ const eventId=await enqueueNotification({dedupeKey,kind:"OPERATIONAL_EVENT",occurredAt:now,payload:{text:renderFinancialEdition(doc,url),financialFingerprint:fingerprint,editable:true,sender:SEORI_SENDER,report:{category:"change",reason:"DAILY_FINANCIAL_REPORT"}},destinations:notificationDestinations(["app-ops"])},db);
+ if(prior)await requeueNotification(eventId,db);
+}
+
+export function appComparisonSvg(doc:OrgReportDocument){
+ const apps=doc.apps.filter(a=>a.ga4!==null).sort((a,b)=>b.ga4!.dau-a.ga4!.dau).slice(0,6),max=Math.max(1,...apps.map(a=>a.ga4!.dau)),height=130+Math.max(1,apps.length)*72;
+ const esc=(s:string)=>s.replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&apos;"})[c]!);
+ const rows=apps.map((a,i)=>{const y=130+i*72;return `<text x="40" y="${y}" font-size="24">${esc(a.displayName.slice(0,24))}</text><rect x="380" y="${y-25}" width="${450*a.ga4!.dau/max}" height="30" fill="#2563eb" rx="4"/><text x="920" y="${y}" font-size="26" text-anchor="end">${a.ga4!.dau}명</text>`;}).join("");
+ return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="${height}"><rect width="960" height="${height}" fill="white"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="30" font-weight="700">앱별 활성 사용자 · ${doc.refDate}</text><text x="40" y="82" font-size="20">GA4 · 같은 기준일 · 미수집 앱 제외</text>${rows||'<text x="40" y="140" font-size="26">기준일 관측 없음</text>'}</g></svg>`;
 }

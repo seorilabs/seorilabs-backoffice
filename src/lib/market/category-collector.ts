@@ -251,7 +251,7 @@ export async function getLatestCategoryRankSummaries(
       appName?: string;
     } | null;
 
-    if (val) {
+    if (val && (val.rank === null || typeof val.rank === "number")) {
       results.push({
         appName: val.appName ?? obs.appId,
         market: val.market ?? "app-store",

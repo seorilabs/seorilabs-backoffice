@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
   try {
-    const result = await collectMetrics(new Date(), { windowDays });
+    const result = await collectMetrics(new Date(), { windowDays, runId:req.headers.get("x-collection-run-id")?.match(/^[a-z0-9-]{1,100}$/)?.[0], job:"backoffice-analytics-collect" });
     // 전 대상 실패는 성공이 아니다. cron 의 curl -fsS 가 잡게 500 으로 낸다.
     if (collectionFailedEntirely(result)) {
       console.error("[admin/analytics/collect] 전 대상 수집 실패:", result.errors);

@@ -36,6 +36,8 @@ async function executeCollector(storageFailure: boolean, withMissing = false, al
         fixture.state.failIos = ${withMissing}; return fixture;
       } }`,
     runtime: `export function consoleRuntimeLedger() { return {}; }`,
+    issues: `${event}
+ export async function recordCollectionIssue(input) {events.push(input.skipped ? "collection:skipped" : input.failed ? "collection:failed" : "collection:healthy");return {id:"issue-1"};}`,
     incident: `${event}
       export async function recordIncident() { events.push("incident:failed"); }
       export async function recoverIncident() { events.push("incident:recovered"); }`,
@@ -76,6 +78,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false, al
           const modulePath = args.path.replace(/\.ts$/, "");
           if (modulePath.endsWith("/insights/collection")) key = "ledger";
           if (modulePath.endsWith("/prisma")) key = "prisma";
+          if (modulePath.endsWith("/notifications/collection-issues")) key = "issues";
           if (modulePath.endsWith("/console-sync/oauth") || modulePath === "./oauth") key = "oauth";
           if (modulePath.endsWith("/console-sync/versions")) key = "versions";
           if (modulePath.endsWith("/control-plane/console-oauth-runtime")) key = "runtime";
@@ -107,14 +110,14 @@ test("수집 CLI가 지연 조회와 저장 완료 뒤 MCP 연결을 닫는다",
   const result = await executeCollector(false);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).state, "complete");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:complete", "incident:recovered", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "collection-finished", "close", "collection:healthy", "ledger:complete", "disconnect"]);
 });
 
 test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를 해제한다", async () => {
   const result = await executeCollector(true);
   assert.equal(result.exitCode, 1);
   assert.equal(JSON.parse(result.stderr).code, "STORAGE_FAILED");
-  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:failed", "incident:failed", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "collection:failed", "ledger:failed", "disconnect"]);
 });
 
  test("공급자 결측만 남으면 CLI는 종료하고 자료의 부분 완료는 원장에 보존한다", async () => {
@@ -129,5 +132,5 @@ test("예약 수집이 잠금으로 보류되면 실제 수집 성공이나 복�
   const result = await executeCollector(false, false, true);
   assert.equal(result.exitCode, 0);
   assert.equal(JSON.parse(result.stdout).state, "already_running");
-  assert.deepEqual(result.events, ["ledger:start", "notification:OPERATIONAL_EVENT:batch-monitoring", "ledger:already_running", "disconnect"]);
+  assert.deepEqual(result.events, ["ledger:start", "collection:skipped", "ledger:already_running", "disconnect"]);
 });

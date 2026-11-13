@@ -115,8 +115,13 @@ spec:
                 - >-
                   curl -fsS --max-time 300 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
+                  -H "x-collection-run-id: $BATCH_JOB_UID"
                   http://backoffice.platform.svc.cluster.local/api/admin/analytics/collect
               env:
+                - name: BATCH_JOB_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
                 - name: ADMIN_TOKEN
                   valueFrom:
                     secretKeyRef:
@@ -437,8 +442,13 @@ spec:
                 - >-
                   curl -fsS --max-time 300 -XPOST
                   -H "x-admin-token: $ADMIN_TOKEN"
+                  -H "x-collection-run-id: $BATCH_JOB_UID"
                   http://backoffice.platform.svc.cluster.local/api/admin/analytics/recollect
               env:
+                - name: BATCH_JOB_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
                 - name: ADMIN_TOKEN
                   valueFrom:
                     secretKeyRef:

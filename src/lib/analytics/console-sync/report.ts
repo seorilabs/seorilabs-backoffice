@@ -1,4 +1,4 @@
-import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
+import { recordCollectionIssue } from "@/lib/notifications/collection-issues";
 import { notificationDestinations } from "@/lib/notifications/destinations";
 import { EMBED_COLOR } from "@/lib/notifications/style";
 
@@ -13,9 +13,9 @@ export function consoleReport(input: {
     dedupeKey: `ait-console-${input.manual ? "push" : "collection"}:${input.runId}`,
     kind: "OPERATIONAL_EVENT" as const,
     occurredAt: input.now,
-    destinations: notificationDestinations(["batch-monitoring"]),
+    destinations: notificationDestinations([]),
     payload: {
-      report: { category: "response", reason: "USER_REQUESTED_COLLECTION_RESULT" },
+      report: { category: input.failed ? "response" : "internal", reason: input.failed ? "COLLECTION_FAILURE" : "COLLECTION_SUCCESS_LEDGER" },
       text: [`${input.manual ? "수동 수집 " : ""}시작 ${kstTime(input.startedAt ?? input.now)}`, `종료 ${kstTime(input.now)} (한국 시간)`, ...input.lines].join("\n"),
       source: "ait_console", runId: input.runId, state: input.dataState,
       executionStatus: input.skipped ? "skipped" : input.failed ? "failed" : "succeeded",
@@ -26,15 +26,11 @@ export function consoleReport(input: {
 }
 
 
-export async function recordConsoleIncident(failed: boolean, runId: string, now: Date, jobUid?: string) {
-  const key = jobUid
-    ? { source: "scheduled-batch", kind: "k8s:platform:backoffice-ait-console-metrics", signalId: `batch:k8s:${jobUid}` }
-    : { source: "ait-console-manual", kind: "collection", signalId: runId };
-  if (failed) await recordIncident({ ...key, severity: "warning", detectedAt: now, summary: "앱인토스 지표 수집 실패",
-    evidence: { impact: "수집 작업의 일부 또는 전체를 완료하지 못했습니다.", action: "배치모니터링의 실패 단계와 수집 기록을 확인하세요." } });
-  else await recoverIncident({ ...key, recoveredAt: now });
+export async function publishConsoleReport(report: ReturnType<typeof consoleReport>):Promise<string> {
+ const p=report.payload;
+ const issue=await recordCollectionIssue({job:"backoffice-ait-console-metrics",runId:p.runId,at:report.occurredAt,failed:p.executionStatus === "failed",skipped:p.executionStatus === "skipped",target:"앱인토스 지표",items:p.text.split("\n").filter(line=>/실패 항목:|원인:|대상:|확인 필요|미제공/.test(line)),period:p.text.split("\n").find(line=>line.startsWith("기준 기간:"))??"이번 요청 기간",cause:p.text.split("\n").filter(line=>/원인:|실패 항목:/.test(line)).join("; ")||"저장 대조 또는 수집 실패",action:"수집 기록에서 실패한 항목과 운영 연결을 확인하세요."});
+ return issue?.id ?? "";
 }
-
 
 export function consoleVerificationLine(verified: number, expected: number): string {
   if (!expected) return "저장 대조: 제공된 검증 대상 없음";

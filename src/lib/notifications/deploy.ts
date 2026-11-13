@@ -391,6 +391,7 @@ export async function drainAllNotifications(limit = 30) {
           where: { id: incidentId },
         });
         if (!incident) return { ok: false, error: "incident not found" };
+        if (incident.source === "collection" && incident.status === "RECOVERED" && !incident.providerMessageId) return {ok:true};
         const card = incidentRender(incident);
         const options = {
           ...deliveryOptions,
@@ -441,8 +442,7 @@ export async function drainAllNotifications(limit = 30) {
           ? (payload as Prisma.JsonObject)
           : null;
       if (
-        object?.rankReport &&
-        ((object.rankReport as { items?: unknown[] }).items?.length ?? 0) > 0
+        object?.rankReport
       ) {
         try {
           const { rankSlackSvg } = await import("@/lib/market/rank-report");

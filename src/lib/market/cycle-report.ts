@@ -1,3 +1,4 @@
+import { recordCollectionIssue } from "@/lib/notifications/collection-issues";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
@@ -8,7 +9,6 @@ import { sourceStateLabel } from "@/lib/insights/collection-state";
 import { keywordCycle, marketLabel } from "./keyword-cycle";
 import { rankReportKey, rankReportText, sameRankReportContent, type RankReport, type RankReportItem } from "./rank-report";
 import { keywordObservationId, keywordSuccess, type KeywordTask } from "./keyword-collector";
-import { formatCategoryRankSummary } from "./category-ranks";
 import { getLatestCategoryRankSummaries } from "./category-collector";
 import type { KeywordRow } from "./keyword-monitoring";
 export const rankRowIdentity = (r: Pick<KeywordRow, "appId" | "country" | "term" | "market" | "source" | "language">) => JSON.stringify([r.appId, r.market ?? "app-store", r.source ?? "apple-search-api", r.country, r.language ?? "en_us", r.term]);
@@ -114,9 +114,10 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
 
     const report: RankReport = { version: 1, day: cycle.day, capturedAt: now.toISOString(), items, rows: rows.map(row=>({...row, observedAt: row.observedAt?.toISOString() ?? null})) };
     const categorySummaries = await getLatestCategoryRankSummaries(now);
-    const categoryRankBlock = formatCategoryRankSummary(categorySummaries);
+    report.categories=categorySummaries;
+    await recordCollectionIssue({job:"backoffice-keyword-daily",runId:cycle.id,at:now,failed:successful<tasks.length || stored>successful,target:"스토어 검색 위치",items:rows.filter(r=>r.state!=="수집됨").slice(0,12).map(r=>`${r.appName} ${r.market} ${r.country} ${r.term}: ${r.state}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."},tx);
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
-    const text = rankCollectionCoverage(tasks.length || current.length, stored, successful) + "\n" + rankReportText(report,url,categoryRankBlock);
+    const text = rankReportText(report,url);
     const previousReport=(existing?.payload as {rankReport?:RankReport}|undefined)?.rankReport;
     if(existing && previousReport && sameRankReportContent(previousReport,report) && (existing.payload as {text?:string}).text === text){
       await retryDeadLetterNotification(existing.id,tx);

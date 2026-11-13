@@ -1,5 +1,4 @@
 import { marketLabel } from "./keyword-cycle";
-import { kstDateTimeShort } from "@/lib/format/kst";
 import { createHash } from "node:crypto";
 import { contractCanonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import type { KeywordRow } from "./keyword-monitoring";
@@ -15,6 +14,7 @@ export interface RankReportItem extends Omit<KeywordRow, "observedAt"> {
   score: number;
 }
 export interface RankReport {
+  categories?: import("./category-ranks").CategoryRankSummaryItem[];
   version: 1;
   day: string;
   capturedAt: string;
@@ -54,23 +54,16 @@ export function rankConclusion(item: RankReportItem) {
   return `${item.appName.replace(/[@<>`]/g, "")} · ${item.country.toUpperCase()} “${item.term.replace(/[@<>`]/g, "")}” 검색에서 ${change}.`;
 }
 
-export function rankReportText(report: RankReport, url: string, categoryRankBlock?: string) {
-  const top = report.items.slice(0, 3);
-  const sections: string[] = [];
-  if (categoryRankBlock && categoryRankBlock.trim()) {
-    sections.push(categoryRankBlock.trim(), "");
-  }
-  sections.push(
-    `**${top[0] ? rankConclusion(top[0]) : report.rows.some(row => row.state === "수집됨") ? "이번 회차의 관측값에 새로운 주요 변화가 없습니다." : "이번 회차의 검색 위치를 확인하지 못했습니다."}**`,
-    ...top.map(
-      (r) =>
-        `- **${r.appName.replace(/[@<>`]/g, "")}** · ${marketLabel(r.market)} · ${r.country.toUpperCase()}${r.market === "google-play" ? " 설정 요청" : ""} “${r.term.replace(/[@<>`]/g, "")}”\n  관측 비교: ${r.previousAt ? kstDateTimeShort(new Date(r.previousAt)) : r.previousDay ?? "이전 관측 없음"} ${r.previousDay ? rankValue(r.previousRank) + " → " : "· "}${r.observedAt ? kstDateTimeShort(new Date(r.observedAt)) : report.day} **${r.rank === null ? r.rankLabel : rankValue(r.rank)}** · ${r.reason} · ${r.source ?? "apple-search-api"}, 반환 ${r.resultCount ?? "미기록"}개`,
-    ),
-    "",
-    "검색 결과 위치의 변화입니다. 검색 유입·매출 증가를 뜻하지 않습니다.",
-    `[전체 보고서·28일 추세·CSV](${url})`,
-  );
-  return sections.join("\n");
+export function rankReportText(report: RankReport, url: string) {
+ const top=report.items.filter(r=>r.score>0 && !(r.rank===null && r.previousRank===null)).slice(0,2);
+ const observed=report.rows.filter(row=>row.state === "수집됨");
+ const conclusion=top[0] ? rankConclusion(top[0]) : !observed.length ? "이번 회차의 검색 위치를 확인하지 못했습니다." : observed.every(row=>row.rank===null) ? "확인한 검색 결과에서 모든 대상이 목록 밖입니다." : "이번 회차에 새로운 주요 순위 변화가 없습니다.";
+ const lines=top.map(r=>`- ${r.appName.replace(/[@<>`]/g,"")} · ${marketLabel(r.market)} · ${r.country.toUpperCase()} “${r.term.replace(/[@<>`]/g,"")}”: ${r.previousDay?rankValue(r.previousRank):"첫 관측"} → ${rankValue(r.rank)}`);
+ if(lines.length<2){
+  const category=report.categories?.find(c=>c.rank!==c.previousRank);
+  if(category)lines.push(`- 카테고리 · ${category.appName} · ${category.country.toUpperCase()} ${category.categoryName}: ${rankValue(category.previousRank)} → ${rankValue(category.rank)}`);
+ }
+ return [`**${conclusion}**`,...lines.slice(0,2),`[상세 순위·추세·원본](${url})`].join("\n");
 }
 const esc = (s: string) =>
   s.replace(
@@ -118,8 +111,8 @@ export function rankReportSvg(report: RankReport, days = 7, maxItems = 3) {
 }
 
 /** Slack inline은 세로 제한으로 축소되므로 큰 글자와 짧은 3개 행을 사용한다. */
-export function rankSlackSvg(report: RankReport) {
-  const items = report.items.slice(0, 3);
+function rankChangeSvg(report: RankReport) {
+  const items = report.items.filter(item=>item.score>0 && item.rank!==null).slice(0, 2);
   const hasGaps = items.some((item) =>
     item.points.slice(-7).some((point) => point.state !== "ranked"),
   );
@@ -149,4 +142,22 @@ export function rankSlackSvg(report: RankReport) {
     })
     .join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="#ffffff"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="44" font-size="36" font-weight="700">${report.day} 검색 위치 관측</text><text x="40" y="81" font-size="26" fill="#475569">이전 관측 → 기준일 · 그래프 최근 7일 · 작은 숫자가 높은 순위</text>${hasGaps ? '<text x="40" y="112" font-size="24" fill="#475569">○ 결과 목록 밖 · × 미수집 · ! 자료 오류</text>' : ""}${rows}</g></svg>`;
+}
+
+/** 미수집은 목록 밖과 별도 구간이다. 카테고리 관측도 검색 위치와 섞지 않는다. */
+export function rankDistributionSvg(report:RankReport) {
+ const groups=new Map<string,{ranked:number;outside:number;missing:number}>();
+ const add=(key:string,state:"ranked"|"outside"|"missing")=>{const g=groups.get(key)??{ranked:0,outside:0,missing:0};g[state]++;groups.set(key,g);};
+ for(const row of report.rows)add(`검색 · ${marketLabel(row.market)} · ${row.country.toUpperCase()}`,row.state!=="수집됨"?"missing":row.rank===null?"outside":"ranked");
+ for(const row of report.categories??[])add(`카테고리 · ${marketLabel(row.market)} · ${row.country.toUpperCase()}`,row.rank===null?"outside":"ranked");
+ const rows=[...groups].sort(([a],[b])=>a.localeCompare(b));
+ const height=155+Math.max(1,rows.length)*85;
+ const body=rows.map(([label,g],i)=>{const y=145+i*85,total=g.ranked+g.outside+g.missing;let x=40;const bars=([['ranked','#2563eb'],['outside','#94a3b8'],['missing','#f59e0b']] as const).map(([key,color])=>{const w=920*g[key]/Math.max(1,total);const bar=`<rect x="${x}" y="${y+12}" width="${w}" height="20" fill="${color}"/>`;x+=w;return bar;}).join("");return `<text x="40" y="${y}" font-size="27">${esc(fitLabel(label,42))}</text><text x="960" y="${y+58}" text-anchor="end" font-size="25">순위 확인 ${g.ranked} · 목록 밖 ${g.outside} · 미수집 ${g.missing}</text>${bars}`;}).join("");
+ return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${height}"><rect width="1000" height="${height}" fill="white"/><g font-family="Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" fill="#0f172a"><text x="40" y="48" font-size="36" font-weight="700">${report.day} 국가별 순위 관측 분포</text><text x="40" y="90" font-size="25">파랑 순위 확인 · 회색 목록 밖 · 주황 미수집</text>${body || '<text x="40" y="150" font-size="28">수집된 관측 없음</text>'}</g></svg>`;
+}
+export function rankSlackSvg(report:RankReport){
+ const distribution=rankDistributionSvg(report),changes=report.items.some(i=>i.score>0 && i.rank!==null)?rankChangeSvg(report):null;
+ if(!changes)return distribution;
+ const h=Number(distribution.match(/height="(\d+)"/)![1]),ch=Number(changes.match(/height="(\d+)"/)![1]);
+ return `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="${h+ch}">${distribution}<g transform="translate(0 ${h})">${changes}</g></svg>`;
 }

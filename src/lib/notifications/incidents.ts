@@ -13,10 +13,10 @@ import type { MessageActionRow } from "@/lib/notifications/channel";
 export function incidentComponents(
   incident: Pick<
     OperationalIncident,
-    "id" | "status" | "assignedUserId"
+    "id" | "status" | "assignedUserId" | "source"
   >,
 ): MessageActionRow[] {
-  if (incident.status === "RECOVERED") return [];
+  if (incident.status === "RECOVERED" || incident.source === "collection") return [];
   return [
     {
       type: 1,
@@ -54,6 +54,14 @@ export function incidentComponents(
  * 흘러가는 편이, 고정된 "장애색" 하나보다 지금 상태를 정확히 전달한다.
  */
 export function incidentRender(incident: OperationalIncident): MessageRender {
+  if (incident.source === "collection") {
+    const e=incident.evidence as Prisma.JsonObject ?? {};
+    const clean=(v: unknown)=>String(v ?? "미확인").replace(/[@<>]/g, "");
+    const text=incident.status === "RECOVERED" ? `✅ ${clean(e.target ?? incident.summary)} 수집 문제가 해결됐습니다.` : [
+      `⚠️ 대상: ${clean(e.target ?? incident.summary)}`,`실패 항목: ${clean(e.items)}`,`기준 기간: ${clean(e.period)}`,`원인: ${clean(e.cause)}`,`필요 조치: ${clean(e.action)}`,`[상세 기록](${clean(e.url)})`,
+    ].join("\n");
+    return {text,embed:{title:incident.status === "RECOVERED" ? "수집 복구" : "수집 확인 필요",color:incident.status === "RECOVERED" ? EMBED_COLOR.SUCCESS : EMBED_COLOR.WARNING}};
+  }
   const icon =
     incident.status === "RECOVERED"
       ? "✅"
@@ -243,7 +251,7 @@ export async function recordIncident(input: {
                 summary: input.summary,
                 evidence: input.evidence,
                 destinationKey:
-                  input.source === "metrics" ? "app-ops" : "ops-alerts",
+                  input.source === "collection" ? "batch-monitoring" : input.source === "metrics" ? "metric-insights" : "ops-alerts",
                 firstDetectedAt: input.detectedAt,
                 lastDetectedAt: input.detectedAt,
               },
@@ -263,7 +271,9 @@ export async function recordIncident(input: {
             },
             tx,
           );
-          await enqueueIncident(incident, input.signalId, tx);
+          const oldSignature = (active?.evidence as Prisma.JsonObject | null)?.failureSignature;
+          if (input.source !== "collection" || !active || oldSignature !== input.evidence?.failureSignature)
+            await enqueueIncident(incident, input.signalId, tx);
           return incident;
         };
       return transaction ? await write(transaction) : await prisma.$transaction(write, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
