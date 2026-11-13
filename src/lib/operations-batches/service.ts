@@ -37,7 +37,7 @@ async function saveRuns(tx: Prisma.TransactionClient, input: BatchInput, now: Da
     finished.push(completedAt);
     if (isCollectionBatch(run.name)) {
       if (latest?.startedAt && startedAt < latest.startedAt) continue;
-      await recordCollectionIssue({job:run.name,runId:run.id,at:completedAt,failed:run.status === "failed",target:batchName(run.name),items:["예약 수집 실행"],period:run.scheduledAt ?? run.startedAt,cause:("errorCode" in run ? run.errorCode : undefined) ?? "프로세스 실패. 실행 로그에서 세부 원인 확인 필요",action:"실행 로그와 등록된 운영 연결을 확인하세요."},tx);
+      await recordCollectionIssue({job:run.name,runId:run.id,observerOnly:true,at:completedAt,failed:run.status === "failed",target:batchName(run.name),items:["예약 수집 실행"],period:run.scheduledAt ?? run.startedAt,cause:("errorCode" in run ? run.errorCode : undefined) ?? "프로세스 실패. 실행 로그에서 세부 원인 확인 필요",action:"실행 로그와 등록된 운영 연결을 확인하세요."},tx);
       continue;
     }
     const action = incidentAction(run.status, startedAt, latest?.startedAt ?? null);

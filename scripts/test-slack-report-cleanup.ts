@@ -21,7 +21,7 @@ async function main(){
  const first=await recordCollectionIssue(issue);assert.ok(first);assert.equal(first.destinationKey,"batch-monitoring");
  await recordCollectionIssue(issue);await recordCollectionIssue({...issue,runId:"job-2"});
  assert.equal(await prisma.notificationEvent.count({where:{kind:"INCIDENT",payload:{path:"$.incidentId",equals:first.id}}}),1);
- await recordCollectionIssue({...issue,failed:false});assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:first.id}})).status,"OPEN");
+ await recordCollectionIssue({...issue,observerOnly:true,failed:false});assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:first.id}})).status,"OPEN");
  await prisma.operationalIncident.update({where:{id:first.id},data:{providerMessageId:"qa-failure-receipt"}});
  await recordCollectionIssue({...issue,runId:"job-3",failed:false});assert.equal((await prisma.operationalIncident.findUniqueOrThrow({where:{id:first.id}})).status,"RECOVERED");
  const imm={dedupeKey:`${prefix}:once`,kind:"OPS_ALERT" as const,payload:{text:"최초 사실",report:{category:"change"}},destinations:[{provider:"SLACK" as const,key:"metric-insights" as const}]};
