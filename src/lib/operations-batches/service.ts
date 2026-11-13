@@ -4,7 +4,7 @@ import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { recordIncident, recoverIncident } from "@/lib/notifications/incidents";
 import { isCollectionBatch, recordCollectionIssue } from "@/lib/notifications/collection-issues";
 import { batchName } from "./notification";
-import { BATCH_SOURCE, OBSERVER_SOURCE, batchInputSchema, incidentAction,
+import { BATCH_SOURCE, OBSERVER_SOURCE, batchInputSchema, expectedSchedules, incidentAction,
   type BatchInput, type CronObservation } from "./contract";
 
 const REPORTING_ID = "operations-batch-reporting:vzyx-cluster";
@@ -69,6 +69,19 @@ export async function ingestBatchResults(raw: unknown, now = new Date(), db: Pic
         create: { id: OBSERVER_ID, source: OBSERVER_SOURCE, target: "vzyx-cluster", startedAt: now, ...data }, update: data });
     }
     const { accepted } = await saveRuns(tx, input, now, reporting.startedAt);
+    if(input.kind === "kubernetes")await reportCollectionGaps(tx,input.cronJobs,now,reporting.startedAt);
     return { accepted };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 55_000 }));
+}
+
+/** 정상 건수 요약 대신, 보존된 실행 이력으로 확인할 수 없는 예정 수집만 보고한다. */
+async function reportCollectionGaps(tx:Prisma.TransactionClient,crons:CronObservation[],now:Date,activatedAt:Date){
+ const end=new Date(now.getTime()-15*60_000),start=new Date(Math.max(activatedAt.getTime(),end.getTime()-86400_000));
+ if(end<=start)return;
+ for(const cron of crons.filter(c=>isCollectionBatch(c.name) && !c.suspended)){
+  const expected=expectedSchedules(cron,start,end);if(expected===null || expected===0)continue;
+  const runs=await tx.sourceCollectionRun.findMany({where:{source:BATCH_SOURCE,target:`k8s:${cron.namespace}:${cron.name}`,startedAt:{gte:start,lt:now}},select:{coverage:true}});
+  const observed=new Set(runs.map(r=>(r.coverage as {scheduledAt?:string})?.scheduledAt).filter((s):s is string=>!!s && new Date(s)>=start && new Date(s)<end));
+  await recordCollectionIssue({job:`missing:${cron.name}`,runId:`${cron.uid}:${end.toISOString()}`,at:now,failed:observed.size<expected,target:batchName(cron.name),items:["예정 수집의 실행 관측 누락"],period:`${start.toISOString()} ~ ${end.toISOString()}`,cause:"예정 시각 뒤 15분이 지났으나 실행 이력을 확인하지 못했습니다. 성공·실패 여부 미확인",action:"CronJob 정지·스케줄·Job 생성과 감시 연결을 확인하세요."},tx);
+ }
 }

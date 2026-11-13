@@ -98,3 +98,12 @@ test("생산자가 같은 실행의 부분 실패를 기록하면 프로세스 �
 test("KDP 저장 대조 불일치는 성공으로 접수하지 않는다",async()=>{
  const m=memory(),input=local(first,"succeeded");input.run.verified=2;await assert.rejects(ingestBatchResults(input,now,m.db),/BATCH_INVALID_VALIDATION/);assert.equal(m.events.length,0);
 });
+
+test("예정 수집 관측 누락은 성공률 요약 없이 보고하고 다음 관측에서 복구한다",async()=>{
+ const m=memory(),cron=cronFor("backoffice-analytics-collect");await observeRuns(m,[cron],[],reportingStart);
+ await observeRuns(m,[cron],[],nowFor("06:16"));
+ const missing=m.incidents.find(i=>i.kind===`missing:${cron.name}`);assert.ok(missing);assert.equal(missing.destinationKey,"batch-monitoring");
+ assert.match(JSON.stringify(missing.evidence),/성공·실패 여부 미확인/);
+ await observeRuns(m,[cron],[k8sRun(cron.name,"gap-1","succeeded","2026-10-24T05:00:00Z"),k8sRun(cron.name,"gap-2","succeeded","2026-10-24T06:00:00Z")],nowFor("06:17"));assert.equal(missing.status,"RECOVERED");
+ assert.equal(m.events.filter(e=>String(e.dedupeKey).startsWith("operations-batch-daily")).length,0);
+});
