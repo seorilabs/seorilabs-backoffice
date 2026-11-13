@@ -68,6 +68,8 @@ spec:
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_BOT_TOKEN } }
             - name: SLACK_CHANNEL_BACKOFFICE_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_BACKOFFICE_ID } }
+            - name: SLACK_CHANNEL_METRIC_INSIGHTS_ID
+              valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRIC_INSIGHTS_ID } }
             - name: SLACK_CHANNEL_METRICS_DAILY_ID
               valueFrom: { secretKeyRef: { name: backoffice-secrets, key: SLACK_CHANNEL_METRICS_DAILY_ID } }
             - name: SLACK_CHANNEL_ACTION_EVENTS_ID

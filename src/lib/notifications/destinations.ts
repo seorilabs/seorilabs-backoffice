@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 
 export const CHANNEL_BACKOFFICE = "backoffice";
 export const CHANNEL_METRICS = "metrics-daily";
+export const CHANNEL_METRIC_INSIGHTS = "metric-insights";
 export const CHANNEL_ACTION_EVENTS = "action-events";
 export const CHANNEL_RELEASE_OPS = "release-ops";
 export const CHANNEL_BATCH_MONITORING = "batch-monitoring";
@@ -24,6 +25,7 @@ export const CHANNEL_GITHUB_ISSUES = "github-issues";
 export const CHANNEL_DESTINATIONS = [
   CHANNEL_BACKOFFICE,
   CHANNEL_METRICS,
+  CHANNEL_METRIC_INSIGHTS,
   CHANNEL_ACTION_EVENTS,
   CHANNEL_RELEASE_OPS,
   CHANNEL_OPS_ALERTS,
