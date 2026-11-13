@@ -97,7 +97,7 @@ export async function publishWeeklySignals(now = new Date()) {
     start = shiftMetricDay(end, -6);
   const data = await collectHighlightData(now, end);
   const facts: Evidence[] = data.movements
-    .filter((m) => m.verdict === "highlight" || m.verdict === "lowlight")
+    .filter((m) => (m.verdict === "highlight" || m.verdict === "lowlight") && !["console_iaa","console_iap"].includes(m.metricKey))
     .slice(0, 8)
     .map((m, i) => ({
       id: `change_${i}`,

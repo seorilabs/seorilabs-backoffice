@@ -44,6 +44,9 @@ async function main() {
   await execute("2026-11-04T22:30:00Z",false);
   assert.equal(await prisma.keywordObservation.count({where:{batchId:first}}),822);
   const complete=await prisma.keywordCollectionBatch.findUniqueOrThrow({where:{id:first}});assert.ok(complete.completedAt);
+  await prisma.keywordCollectionBatch.update({where:{id:first},data:{completedAt:null}});
+  await sendCycleKeywordRanks(new Date("2026-11-04T23:40:00Z"));
+  assert.equal(await prisma.operationalIncident.count({where:{source:"collection",kind:"backoffice-keyword-collection"}}),0,"전부 저장한 뒤 완료 표식만 없어진 실행은 수집 누락으로 보고하지 않는다.");
   const second="2026-11-05-1320";
   await execute("2026-11-05T04:25:00Z",true);
   const before=await prisma.keywordObservation.findMany({where:{batchId:second},select:{id:true,observedAt:true,rank:true}});
@@ -52,7 +55,7 @@ async function main() {
   assert.equal((await sendCycleKeywordRanks(new Date("2026-11-05T04:30:00Z"))).status,"collection_incomplete");
   const partial=await sendCycleKeywordRanks(new Date("2026-11-05T05:40:00Z"));assert.ok(partial.eventId);
   const event=await prisma.notificationEvent.findUniqueOrThrow({where:{id:partial.eventId}});
-  assert.match(String((event.payload as {text:string}).text),/399\/822/);
+  assert.doesNotMatch(String((event.payload as {text:string}).text),/399\/822/);
   const report=(event.payload as {rankReport:{rows:{state:string;attemptedAt?:string|null}[]}}).rankReport;
   assert.equal(report.rows.length,822);
   assert.equal(report.rows.filter(row=>row.attemptedAt===null).length,423);

@@ -63,6 +63,7 @@ const appGa4Schema = z
 
 const appListingSchema = z
   .object({
+    avgSessionSec:z.number().nullable().optional(),
     miniAppId: z.number(),
     /** 같은 App 의 다중 리스팅 구분 라벨. 단일 리스팅이면 null. */
     label: z.string().nullable(),

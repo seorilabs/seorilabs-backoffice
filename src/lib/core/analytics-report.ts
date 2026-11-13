@@ -441,7 +441,7 @@ export async function sendMetricsReport(now: Date): Promise<ReportResult> {
       consoleLines: consoleSection.lines,
       link: env.optional("AUTH_URL").trim(),
     });
-    const destinations = notificationDestinations(["app-ops"]);
+    const destinations = notificationDestinations(["metric-insights"]);
     await enqueueNotification({
       dedupeKey: `metrics:daily:${result.refDate}`,
       kind: "DAILY_METRICS",

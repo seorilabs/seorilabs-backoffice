@@ -6,8 +6,8 @@ import { transpileModule, ScriptTarget } from "typescript";
 const source = readFileSync("src/lib/report/daily-publication.ts", "utf8");
 function harness(changed: boolean, raced = false) {
   const start = source.indexOf("export async function correctDailyReport(");
-  const compiled = transpileModule(source.slice(start).replace("export async", "async"), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
-  const before = { published: { corrections: 0 }, edition: { frozenAt: "2026-10-21" }, value: 1 };
+  const compiled = transpileModule(source.slice(start).split("\nasync function enqueueFinancialEdition")[0].replace("export async", "async"), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  const before = { published: { corrections: 0,dedupeKey:"metrics:highlight:2026-10-21:metric-insights" }, edition: { frozenAt: "2026-10-21" }, value: 1 };
   let images = 0, transactions = 0, analyses = 0, saves = 0, reads = 0;
   const db = { orgReportDaily: { findUnique: async () => { const newer = reads++ > 0 && raced; return { report: newer ? {...before, edition:{frozenAt:"2026-10-23"},value:3} : before, version: newer ? 5 : 3 }; } }, $queryRaw: async () => [] };
   const ports = {
@@ -19,7 +19,7 @@ function harness(changed: boolean, raced = false) {
     metricNarrative: async (input: {frozenValue: number}) => { analyses++; assert.equal(input.frozenValue,2); return {text:"새 사실의 해설",fallback:false,provider:"fixture",model:"fixture",promptVersion:1}; },
     dailyReportImage: async () => { images++; return null; },
     reportCorrectionDiff: () => [], saveOrgReport: async (doc: {narrative:string;value:number}) => { saves++; assert.equal(doc.narrative,"새 사실의 해설");assert.equal(doc.value,2); return { version:4 }; },
-    orgReportUrl: () => null, enqueueNotification: async () => "event", requeueNotification: async () => 1,
+    enqueueFinancialEdition: async()=>{}, orgReportUrl: () => null, enqueueNotification: async () => "event", requeueNotification: async () => 1,
     renderDailyEdition: () => "fixture report", notificationDestinations: () => [], SEORI_SENDER: {},
   };
   const correct = new Function(...Object.keys(ports), `${compiled}; return correctDailyReport;`)(...Object.values(ports));

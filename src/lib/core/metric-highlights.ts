@@ -472,6 +472,7 @@ export interface Ga4Row {
 }
 
 export interface ConsoleRow {
+  avgSessionSec?:number|null;
   date: Date;
   dau: number | null;
   newUsers: number | null;

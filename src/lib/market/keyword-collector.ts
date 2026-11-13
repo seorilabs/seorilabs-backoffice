@@ -28,6 +28,8 @@ export async function saveKeywordObservation(data: Prisma.KeywordObservationCrea
     return stored;
   });
 }
+import { enqueueNotification } from "@/lib/notifications/outbox";
+import { recordCollectionIssue } from "@/lib/notifications/collection-issues";
 export async function collectKeywordRanks(now = new Date()) {
   const cycle = keywordCycle(now), sourceSha = process.env.BACKOFFICE_SOURCE_SHA ?? "";
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw Error("KEYWORD_SOURCE_SHA_REQUIRED");
@@ -56,6 +58,8 @@ export async function collectKeywordRanks(now = new Date()) {
   }
   if (!batch.completedAt && batch.sourceSha !== sourceSha) throw Error("KEYWORD_BATCH_SOURCE_MISMATCH");
   if (batch.completedAt) return { batchId: batch.id, status: "already_complete" };
+  const runId=process.env.BATCH_JOB_UID ?? cycle.id;
+  await enqueueNotification({dedupeKey:`keyword-collection-run:${cycle.id}`,kind:"OPERATIONAL_EVENT",destinations:[],payload:{runId,report:{category:"internal",reason:"COLLECTION_RUN_IDENTITY"}}});
   const tasks = batch.plan as unknown as KeywordTask[], apple = createApplePublicClient(), play = createPlaySearchClient();
   const listings = new Map<string, Promise<{id:string|number;name:string}|undefined>>();
   const searches = new Map<string, Promise<Array<string | number>>>();
@@ -86,5 +90,7 @@ export async function collectKeywordRanks(now = new Date()) {
     await saveKeywordObservation({ id, batchId: batch.id, appId: task.appId, market: task.market, source: keywordSource(task.market), country: task.country, language: task.language, term: task.term, revision: task.revision, sourceSha: batch.sourceSha, observedAt: new Date(), status, rank, resultCount, isBrand, sourceUrl, errorCode });
   }
   await prisma.keywordCollectionBatch.updateMany({ where: { id: batch.id, completedAt: null }, data: { completedAt: new Date() } });
+  const incomplete=await prisma.keywordObservation.findMany({where:{batchId:batch.id,status:{notIn:["observed","absent"]}}});
+  await recordCollectionIssue({job:"backoffice-keyword-collection",runId,at:new Date(),failed:incomplete.length>0,target:"스토어 검색 위치",items:incomplete.slice(0,12).map(r=>`${r.market} ${r.country} ${r.term}: ${r.errorCode??r.status}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."});
   return { batchId: batch.id, count: tasks.length };
 }

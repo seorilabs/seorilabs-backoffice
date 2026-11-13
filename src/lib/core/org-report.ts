@@ -206,6 +206,7 @@ export function assembleOrgReportDocument(input: {
     const latest = series.rowsDesc[0];
     entryOf(series.app).listings.push({
       miniAppId: series.miniAppId,
+      avgSessionSec:latest.avgSessionSec??null,
       label: series.listingLabel,
       date: dbDay(latest.date),
       lagDays: metricDaysBetween(data.refDate, dbDay(latest.date)),

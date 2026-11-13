@@ -112,6 +112,7 @@ export async function recordRealtimeActivity(input: {
           kind: "OPERATIONAL_EVENT",
           occurredAt: input.bucketAt,
           payload: {
+            report: {category:"change",reason:"REALTIME_ACTIVITY_CHANGE"},
             text: `최근 5분 활성 사용자 ${input.activeUsers}명\n평소 수준 ${decision.baseline}명 · ${Math.round(input.activeUsers / Math.max(1, decision.baseline!))}배`,
             embed: {
               title: `📈 ${input.displayName} · 활성 사용자 급증`,
@@ -119,7 +120,7 @@ export async function recordRealtimeActivity(input: {
               timestamp: input.bucketAt.toISOString(),
             },
           },
-          destinations: notificationDestinations(["app-ops"]),
+          destinations: notificationDestinations(["metric-insights"]),
         }, tx);
       }
       return decision.alert ? "alerted" : "sampled";

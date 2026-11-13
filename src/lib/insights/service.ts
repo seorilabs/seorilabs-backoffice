@@ -1,3 +1,4 @@
+import { metricFactsReportable, materialMetricFacts } from "./metric-collection-facts";
 import { resolveReportEvidence } from "./review-evidence";
 import { signalDecision } from "@/lib/notifications/report-policy";
 import { lockAppForNewWork } from "@/lib/control-plane/app-work-lock";
@@ -7,10 +8,12 @@ import { canonicalJson, type JsonValue } from "@/lib/control-plane/json";
 import { prisma } from "@/lib/prisma";
 import {
   enqueueNotification,
+  enqueueNotificationOnce,
   requeueNotification,
 } from "@/lib/notifications/outbox";
 import {
   destinationOrFallback,
+  notificationDestinations,
   type DestinationKey,
 } from "@/lib/notifications/destinations";
 import { llmChatModel } from "@/lib/ai/llm";
@@ -66,9 +69,12 @@ function destination(kind: string, severity: string): DestinationKey {
   if (/review/.test(kind)) return "user-reviews";
   if (/release|submission|published|public-listing/.test(kind))
     return "release-ops";
+  if (/metric|retention|realtime|liveops/.test(kind)) return "metric-insights";
   if (/keyword|competitor|policy/.test(kind)) return "metrics-daily";
   return "app-ops";
 }
+function insightDestinations(kind:string,severity:string){const key=destination(kind,severity);return key === "metric-insights" ? notificationDestinations([key]) : destinationOrFallback(key,"backoffice");}
+export function insightNotificationKey(kind:string,facts:Evidence[],fallback:string){return kind === "metric-collection" ? `metric-insight:${createHash("sha256").update(JSON.stringify(materialMetricFacts(facts))).digest("hex")}` : fallback;}
 function safeText(value: string) {
   return value.replace(/[@<>`]/g, "").slice(0, 160);
 }
@@ -83,7 +89,7 @@ function notificationPayload(
   insightId: string,
   analysis?: { content: Insight; fallback: boolean; errorCode: string | null },
 ) {
-  const facts = evidenceListSchema.parse(signal.facts).map((fact) => ({
+  const facts = evidenceListSchema.parse(signal.facts).filter(fact=>signal.kind !== "metric-collection" || fact.id.startsWith("metric_change_")).slice(0,3).map((fact) => ({
     ...fact,
     label: safeText(fact.label),
     value: safeText(fact.value),
@@ -92,11 +98,12 @@ function notificationPayload(
   const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz";
   const observationCard =
     /^(source-stale|source-recovery|keyword-change)$/.test(signal.kind);
+  const shownAnalysis = signal.kind === "metric-collection" && analysis ? {...analysis,content:{...analysis.content,bullets:analysis.content.bullets.filter(b=>b.evidenceIds.every(id=>facts.some(f=>f.id===id))).slice(0,3)}} : analysis;
   let body = observationCard
     ? facts.map((fact) => `- ${fact.label}: ${fact.value}`).join("\n") +
       "\n기준: " +
       [...new Set(facts.map((fact) => fact.source))].join(" · ")
-    : renderInsightCard(facts, analysis);
+    : renderInsightCard(facts, shownAnalysis);
   if (signal.kind === "metric-collection" && analysis?.fallback) body += `\nAI 분석 실패 — 확인한 수치만 보고합니다. (${fallbackReasonLabel(analysis.errorCode)})`;
   return {
     text: `**${safeText(signal.title)}**\n${body}\n[근거·상세](${base}/feedback/insights/${insightId})`,
@@ -319,24 +326,22 @@ async function claim(workerId: string, signalKind?: string) {
               completedAt: now,
             },
           });
-          if (facts.length && signalDecision(document.signal.kind).send) {
-            const eventId = await enqueueNotification(
+          const notificationKey=insightNotificationKey(document.signal.kind,facts,document.notificationKey);
+          if (facts.length && signalDecision(document.signal.kind).send && (document.signal.kind !== "metric-collection" || metricFactsReportable(facts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
+            const eventId = await (document.signal.kind === "metric-collection" ? enqueueNotificationOnce : enqueueNotification)(
               {
-                dedupeKey: document.notificationKey,
+                dedupeKey: notificationKey,
                 kind: "OPS_ALERT",
                 payload: notificationPayload(
                   { ...document.signal, facts },
                   document.id,
                   made,
                 ),
-                destinations: destinationOrFallback(
-                  destination(document.signal.kind, document.signal.severity),
-                  "backoffice",
-                ),
+                destinations: insightDestinations(document.signal.kind, document.signal.severity),
               },
               tx,
             );
-            await requeueNotification(eventId, tx);
+            if(document.signal.kind!=="metric-collection") await requeueNotification(eventId, tx);
           }
         }
         await tx.automationOccurrence.update({
@@ -481,7 +486,8 @@ export async function processNextInsight(
     include: { signal: true },
   });
   const facts = evidenceListSchema.parse(document.signal.facts);
-  const displayFacts = await resolveReportEvidence(document.signal.kind, facts);
+  const resolvedFacts = await resolveReportEvidence(document.signal.kind, facts);
+  const displayFacts = document.signal.kind === "metric-collection" ? resolvedFacts.filter(f=>f.id.startsWith("metric_change_")).slice(0,3) : resolvedFacts;
 
   const made = !signalDecision(document.signal.kind).send
     ? {
@@ -561,24 +567,22 @@ export async function processNextInsight(
         },
       },
     });
-    if (signalDecision(document.signal.kind).send && displayFacts.length) {
-      const eventId = await enqueueNotification(
+    const notificationKey=insightNotificationKey(document.signal.kind,displayFacts,document.notificationKey);
+    if (signalDecision(document.signal.kind).send && displayFacts.length && (document.signal.kind !== "metric-collection" || metricFactsReportable(displayFacts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
+      const eventId = await (document.signal.kind === "metric-collection" ? enqueueNotificationOnce : enqueueNotification)(
         {
-          dedupeKey: document.notificationKey,
+          dedupeKey: notificationKey,
           kind: "OPS_ALERT",
           payload: notificationPayload(
             { ...document.signal, facts: displayFacts },
             document.id,
             made,
           ),
-          destinations: destinationOrFallback(
-            destination(document.signal.kind, document.signal.severity),
-            "backoffice",
-          ),
+          destinations: insightDestinations(document.signal.kind, document.signal.severity),
         },
         tx,
       );
-      await requeueNotification(eventId, tx);
+      if(document.signal.kind!=="metric-collection") await requeueNotification(eventId, tx);
     }
   });
   return true;

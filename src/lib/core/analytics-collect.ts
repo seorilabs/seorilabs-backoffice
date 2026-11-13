@@ -1,3 +1,4 @@
+import { recordCollectionIssue } from "@/lib/notifications/collection-issues";
 import { metricCollectionSnapshot, type MetricCollectionPoint } from "@/lib/insights/metric-collection-facts";
 import { beginCollection, completeCollection } from "@/lib/insights/collection";
 import { prisma } from "@/lib/prisma";
@@ -91,7 +92,7 @@ export function collectionFailedEntirely(result: {
 
 export async function collectMetrics(
   now: Date,
-  opts: { windowDays?: number; appId?: string } = {},
+  opts: { windowDays?: number; appId?: string; runId?: string; job?: string } = {},
 ): Promise<CollectResult> {
   if (!env.ga4Configured()) {
     throw new Error("GA4 미설정 — FEATURE_GA4_ANALYTICS + GA4_SA_KEY_JSON 필요");
@@ -181,7 +182,8 @@ export async function collectMetrics(
         if (day >= shiftMetricDay(end, -1)) insightPoints.push({ key: target.appId, label: target.displayName, day,
           metrics: { dau: {label:"활성 사용자",value: data.dau,unit:"명"},
             newUsers: {label:"신규 사용자",value:data.newUsers,unit:"명"},
-            impressions: {label:"실제 광고 노출",value:data.networkAdImpressions,unit:"회"} } });
+            impressions: {label:"실제 광고 노출",value:data.networkAdImpressions,unit:"회"},
+ adCompletions:{label:"보상형 광고 완료",value:data.adCompletions,unit:"회"} } });
         // 테이블은 있는데 그 앱의 그 날 행이 없다 = 진짜 활동 0. 0 행을 남겨야
         // 기준선이 그 날을 건너뛰지 않는다.
         observations.push({
@@ -213,5 +215,6 @@ export async function collectMetrics(
   }
 
   await completeCollection(run.id, { status: result.errors.length === result.targetApps ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", coverage: { from: days[0], to: end, targetApps: targets.length, upserts: result.upserts, notLanded: result.notLanded, errors: result.errors.length, metricInsight: metricCollectionSnapshot("ga4", end, collectionFailedEntirely(result) ? "failed" : result.errors.length || result.notLanded ? "partial" : "observed", insightPoints) as unknown as Prisma.InputJsonObject } });
+  await recordCollectionIssue({job:opts.job ?? "backoffice-analytics-collect",runId:opts.runId ?? run.id,at:new Date(),failed:result.errors.length>0 || result.notLanded>0,target:"GA4 앱 사용 지표",items:[...result.errors.map(row=>`${row.slug}: 수집 실패`),...(result.notLanded?[`원본 미착지 ${result.notLanded}개 앱·날짜`]:[])],period:`${days[0]} ~ ${end}`,cause:result.errors.length ? "원본 조회 실패 또는 권한 확인 필요" : "기준 기간의 원본 미착지",action:"수집 원장에서 실패한 앱·날짜를 확인하고 공급자 권한 또는 원본 도착을 확인하세요."});
   return result;
 }

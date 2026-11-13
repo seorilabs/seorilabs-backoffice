@@ -1,8 +1,3 @@
-import type { CronObservation } from "./contract";
-import { expectedSchedules } from "./contract";
-import { notificationDestinations } from "@/lib/notifications/destinations";
-import { EMBED_COLOR } from "@/lib/notifications/style";
-import { kstTime } from "@/lib/analytics/console-sync/report";
 
 const labels: Record<string, string> = {
   "book-sales-kdp": "KDP 판매 보고서 수집", "backoffice-ait-console-metrics": "앱인토스 지표 수집",
@@ -25,37 +20,3 @@ const labels: Record<string, string> = {
   "registry-safe-gc": "컨테이너 저장소 정리",
 };
 export const batchName = (name: string) => labels[name] ?? name.replace(/^backoffice-/, "");
-const frequencyCache = new Map<string, boolean>();
-export function frequentBatch(cron: CronObservation, now: Date): boolean {
-  const day = now.toISOString().slice(0, 10);
-  const key = `${day}:${cron.schedule}:${cron.timeZone}`;
-  if (!frequencyCache.has(key)) {
-    if (frequencyCache.size > 200) frequencyCache.clear();
-    const start = new Date(`${day}T00:00:00Z`);
-    frequencyCache.set(key, (expectedSchedules({ ...cron, suspended: false }, start, new Date(start.getTime() + 86400000)) ?? 0) > 48);
-  }
-  return frequencyCache.get(key)!;
-}
-export const hourStart = (date: Date) => new Date(Math.floor(date.getTime() / 3600000) * 3600000);
-export interface ReportableRun {
-  id: string; name: string; status: string; startedAt: string; completedAt: string | null;
-  expected?: number | null; verified?: number | null; errorCode?: string;
-}
-export function batchResultNotification(run: ReportableRun) {
-  const failed = run.status === "failed";
-  const kdp = run.name === "book-sales-kdp";
-  const uid = run.id.replace(/^batch:k8s:/, "");
-  const lines = [`시작 ${kstTime(new Date(run.startedAt))}`, `종료 ${run.completedAt ? kstTime(new Date(run.completedAt)) : "미확인"} (한국 시간)`];
-  if (kdp) lines.push(`대상 ${run.expected ?? "미확인"}개월, 저장 대조 ${run.verified ?? "미확인"}개월`);
-  else lines.push("실행 종료 상태를 확인했습니다. 자료 완성도는 해당 수집 보고서에서 확인합니다.");
-  if (run.errorCode) lines.push(`오류 코드: ${run.errorCode}`);
-  if (failed) lines.push("조치: 장애알림의 실패 원인과 실행 기록을 확인하세요.");
-  return { dedupeKey: run.name === "backoffice-ait-console-metrics" ? `ait-console-collection:${uid}` : `batch-result:${run.id}`,
-    kind: "OPERATIONAL_EVENT" as const, occurredAt: new Date(run.completedAt ?? run.startedAt),
-    destinations: notificationDestinations(["batch-monitoring"]), payload: {
-      report: { category: "response", reason: "USER_REQUESTED_BATCH_RESULT" }, source: "scheduled-batch", runId: run.id,
-      executionStatus: run.status, text: lines.join("\n"),
-      embed: { title: `${failed ? "❌" : "✅"} ${batchName(run.name)} ${failed ? "실패" : "성공"}`,
-        color: failed ? EMBED_COLOR.FAILURE : EMBED_COLOR.SUCCESS },
-    } };
-}

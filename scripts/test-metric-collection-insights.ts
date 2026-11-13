@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { beginCollection, completeCollection } from "@/lib/insights/collection";
 import { metricCollectionSnapshot } from "@/lib/insights/metric-collection-facts";
 import { reconcileMetricCollectionInsights, METRIC_COLLECTION_KIND } from "@/lib/insights/metric-collection";
-import { publishSignal, processNextInsight } from "@/lib/insights/service";
+import { publishSignal, processNextInsight, insightNotificationKey } from "@/lib/insights/service";
 import { fallbackInsight } from "@/lib/insights/contract";
 import { ingestAndVerifyConsolePush } from "@/lib/analytics/console-sync/push";
 import { AIT_LISTINGS } from "@/lib/analytics/ait-apps";
@@ -55,9 +55,9 @@ async function main() {
 
   assert.equal(await processNextInsight("insights:qa-filter",async facts=>({content:fallbackInsight(facts),fallback:true,errorCode:"ANALYSIS_PROVIDER_FAILED"}),METRIC_COLLECTION_KIND),true);
   assert.equal((await prisma.insightDocument.findUniqueOrThrow({where:{id:legacy.id}})).status,"PENDING");
-  const event = await prisma.notificationEvent.findUniqueOrThrow({where:{dedupeKey:signal.insights[0].notificationKey},include:{deliveries:true}});
+  const event = await prisma.notificationEvent.findUniqueOrThrow({where:{dedupeKey:insightNotificationKey(METRIC_COLLECTION_KIND,snapshot.facts,signal.insights[0].notificationKey)},include:{deliveries:true}});
   assert.match((event.payload as {text:string}).text,/AI 분석 실패/);
-  assert.equal(event.deliveries[0].destinationKey,"app-ops");
+  assert.equal(event.deliveries[0].destinationKey,"metric-insights");
   let posts=0;
   await drainNotifications(100,async delivery=>{if(delivery.deliveryId===event.deliveries[0].id)posts++;return {ok:true,messageId:"qa-receipt"};});
   await drainNotifications(100,async ()=>{posts++;return {ok:true,messageId:"qa-duplicate"};});

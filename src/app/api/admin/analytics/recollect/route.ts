@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     const windowDays = parseWindowDays(req.nextUrl.searchParams.get("windowDays"));
     const result = await collectMetrics(
       new Date(),
-      { ...(windowDays === undefined ? {} : { windowDays }),
+      {runId:req.headers.get("x-collection-run-id")?.match(/^[a-z0-9-]{1,100}$/)?.[0],job:"backoffice-analytics-recollect", ...(windowDays === undefined ? {} : { windowDays }),
         ...(req.nextUrl.searchParams.has("appId") ? { appId: req.nextUrl.searchParams.get("appId")! } : {}) },
     );
     // 전 대상 실패는 성공이 아니다. cron 의 curl -fsS 가 잡게 500 으로 낸다.

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { NotificationKind, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { NotificationDestination } from "@/lib/notifications/destinations";
@@ -68,6 +69,18 @@ export async function enqueueNotification(
     select: { id: true },
   });
   return event.id;
+}
+
+/** 같은 내용의 수집 인사이트를 다른 실행이 동시에 만들더라도 최초 payload만 보존한다. */
+export async function enqueueNotificationOnce(input:Parameters<typeof enqueueNotification>[0],db:NotificationOutboxClient=prisma):Promise<string>{
+ const id=randomUUID();
+ try {
+ const event=await db.notificationEvent.upsert({where:{dedupeKey:input.dedupeKey},create:{id,dedupeKey:input.dedupeKey,kind:input.kind,payload:{...input.payload,reportFingerprint:reportFingerprint(input.kind,input.payload)},occurredAt:input.occurredAt,deliveries:{create:input.destinations.map(destination=>({provider:destination.provider,destinationKey:destination.key}))}},update:{},select:{id:true}});
+ return event.id;
+ } catch(error){
+ if((error as {code?:string}).code!=="P2002")throw error;
+ return (await db.notificationEvent.findUniqueOrThrow({where:{dedupeKey:input.dedupeKey},select:{id:true}})).id;
+ }
 }
 
 // 이미 보낸 카드를 갱신 발송 대상으로 되돌린다. providerMessageId를 남겨야 워커가

@@ -70,99 +70,40 @@ test("알림 대기열 쓰기가 실패하면 실행과 장애 기록도 함께 
   assert.equal(m.runs.length, 0); assert.equal(m.incidents.length, 0);
 });
 
-test("감시 공백과 첫 도입 전 구간을 표시하고 날짜별 요약은 재전송하지 않는다", async () => {
-  const m = memory();
-  const cron = { namespace: "platform", name: "example", uid: "cron-uid", schedule: "* * * * *", timeZone: "Asia/Seoul", suspended: false, lastScheduleAt: null };
-  const observe = (date: Date) => ingestBatchResults({ kind: "kubernetes", observedAt: date.toISOString(), cronJobs: [cron], runs: [] }, date, m.db);
-  await observe(now);
-  await observe(new Date(now.getTime() + 60_000));
-  let summaries = m.events.filter((row) => row.kind === "OPERATIONAL_EVENT");
-  assert.equal(summaries.length, 1);
-  assert.match(String((summaries[0].payload as Row).text), /관측 공백 있음/);
-  await observe(new Date("2026-10-25T00:00:00Z"));
-  summaries = m.events.filter((row) => row.kind === "OPERATIONAL_EVENT");
-  assert.equal(summaries.length, 2);
-  assert.match(String((summaries[1].payload as Row).text), /감시 중단 1구간/);
-  assert.ok(!JSON.stringify(m.events).includes("private-feed"));
+test("성공 실행·시간별·일일 건수 요약은 발송하지 않는다",async()=>{
+ const m=memory();await ingestBatchResults(local(first,"succeeded"),now,m.db);await ingestBatchResults(local(first,"succeeded"),now,m.db);
+ await ingestBatchResults({kind:"kubernetes",observedAt:now.toISOString(),cronJobs:[],runs:[]},now,m.db);
+ assert.equal(m.events.length,0);assert.equal(m.incidents.length,0);
+});
+const reportingStart=new Date("2026-10-24T05:00:00Z");
+const nowFor=(time:string)=>new Date(`2026-10-24T${time}:00Z`);
+const cronFor=(name:string)=>({namespace:"platform",name,uid:`cron-${name}`,schedule:"0 * * * *",timeZone:"Asia/Seoul",suspended:false,lastScheduleAt:null});
+const k8sRun=(name:string,id:string,status:string,at="2026-10-24T05:02:00Z")=>({id,namespace:"platform",name,cronUid:`cron-${name}`,startedAt:at,scheduledAt:at,completedAt:status === "running" ? null : new Date(Date.parse(at)+30000).toISOString(),status});
+const observeRuns=(m:ReturnType<typeof memory>,crons:ReturnType<typeof cronFor>[],runs:ReturnType<typeof k8sRun>[],at:Date)=>ingestBatchResults({kind:"kubernetes",observedAt:at.toISOString(),cronJobs:crons,runs},at,m.db);
+test("수집 프로세스 실패는 수집결과에만 한 번 보고한다",async()=>{
+ const m=memory(),cron=cronFor("backoffice-ait-console-metrics");
+ await observeRuns(m,[cron],[],reportingStart);const run=k8sRun(cron.name,"job-1","failed");
+ await observeRuns(m,[cron],[run],nowFor("05:03"));await observeRuns(m,[cron],[run],nowFor("05:04"));
+ assert.equal(m.incidents.length,1);assert.equal(m.incidents[0].destinationKey,"batch-monitoring");assert.equal(m.events.filter(e=>e.kind === "INCIDENT").length,1);
+ assert.ok(!JSON.stringify(m.events).includes("ops-alerts"));
+});
+test("생산자가 같은 실행의 부분 실패를 기록하면 프로세스 성공으로 복구하지 않는다",async()=>{
+ const m=memory(),cron=cronFor("backoffice-ait-console-metrics");await observeRuns(m,[cron],[],reportingStart);
+ await observeRuns(m,[cron],[k8sRun(cron.name,"failure","failed")],nowFor("05:03"));
+ m.events.push({id:"producer",dedupeKey:`incident-observation:collection:${cron.name}:global:partial`,payload:{incidentId:m.incidents[0].id}});
+ await observeRuns(m,[cron],[k8sRun(cron.name,"partial","succeeded","2026-10-24T05:04:00Z")],nowFor("05:05"));assert.equal(m.incidents[0].status,"OPEN");
+ m.events.push({id:"skip",dedupeKey:`collection-skipped:${cron.name}:skipped`,payload:{}});
+ await observeRuns(m,[cron],[k8sRun(cron.name,"skipped","succeeded","2026-10-24T05:06:00Z")],nowFor("05:07"));assert.equal(m.incidents[0].status,"OPEN");
+});
+test("KDP 저장 대조 불일치는 성공으로 접수하지 않는다",async()=>{
+ const m=memory(),input=local(first,"succeeded");input.run.verified=2;await assert.rejects(ingestBatchResults(input,now,m.db),/BATCH_INVALID_VALIDATION/);assert.equal(m.events.length,0);
 });
 
-
-test("KDP는 성공 실행마다 전용 채널에 한 번 보고한다", async () => {
-  const m = memory();
-  await ingestBatchResults(local(first, "succeeded"), now, m.db);
-  await ingestBatchResults(local(first, "succeeded"), now, m.db);
-  const events = m.events.filter((row) => row.dedupeKey === `batch-result:batch:local:${first}`);
-  assert.equal(events.length, 1);
-  assert.match(String((events[0].payload as Row).text), /대조 3개월/);
-  assert.deepEqual((events[0].deliveries as Row).create, [{ provider: "SLACK", destinationKey: "batch-monitoring" }]);
-});
-
-const reportingStart = new Date("2026-10-24T05:00:00Z");
-const cronFor = (name: string, schedule = "0 * * * *") => ({ namespace: "platform", name, uid: `cron-${name}`, schedule, timeZone: "Asia/Seoul", suspended: false, lastScheduleAt: null });
-const k8sRun = (name: string, id: string, status: string, at = "2026-10-24T05:02:00Z") => ({ id, namespace: "platform", name, cronUid: `cron-${name}`, startedAt: at, scheduledAt: at, completedAt: status === "running" ? null : new Date(new Date(at).getTime() + 30000).toISOString(), status });
-const observeRuns = (m: ReturnType<typeof memory>, crons: ReturnType<typeof cronFor>[], runs: ReturnType<typeof k8sRun>[], now: Date) => ingestBatchResults({ kind: "kubernetes", observedAt: now.toISOString(), cronJobs: crons, runs }, now, m.db);
-
-test("일반 예약 작업의 종료를 한 번 보고하고 기존 이력은 재발송하지 않는다", async () => {
-  const m = memory(); const cron = cronFor("backoffice-db-backup");
-  await observeRuns(m, [cron], [], reportingStart);
-  const run = k8sRun(cron.name, "new-job", "succeeded");
-  await observeRuns(m, [cron], [run, k8sRun(cron.name, "old-job", "failed", "2026-10-24T04:00:00Z")], nowFor("05:03"));
-  await observeRuns(m, [cron], [run], nowFor("05:04"));
-  const events = m.events.filter((row) => String(row.dedupeKey).startsWith("batch-result:"));
-  assert.equal(events.length, 1);
-  assert.match(String(((events[0].payload as Row).embed as Row).title), /운영 DB 백업 성공/);
-});
-const nowFor = (time: string) => new Date(`2026-10-24T${time}:00Z`);
-
-test("앱인토스 상세 카드와 Job 관측을 중복 발송하지 않고 종료 실패는 같은 카드를 정정한다", async () => {
-  const m = memory(); const cron = cronFor("backoffice-ait-console-metrics");
-  await observeRuns(m, [cron], [], reportingStart);
-  m.events.push({ id: "detail", dedupeKey: "ait-console-collection:ait-job", payload: { executionStatus: "succeeded", text: "저장 84건", embed: { title: "성공" } } });
-  await observeRuns(m, [cron], [k8sRun(cron.name, "ait-job", "failed")], nowFor("05:03"));
-  const events = m.events.filter((row) => row.dedupeKey === "ait-console-collection:ait-job");
-  assert.equal(events.length, 1);
-  assert.equal((events[0].payload as Row).executionStatus, "failed");
-  assert.match(String((events[0].payload as Row).text), /저장 84건.*\n종료 확인:/);
-  assert.ok(m.requeues() > 0);
-  assert.equal(m.incidents.length, 1);
-});
-
-test("수집 결과 전에 프로세스가 종료되면 Job 최종 실패를 전용 채널에도 보고한다", async () => {
-  const m = memory(); const cron = cronFor("backoffice-ait-console-metrics");
-  await observeRuns(m, [cron], [], reportingStart);
-  await observeRuns(m, [cron], [k8sRun(cron.name, "crashed-job", "failed")], nowFor("05:03"));
-  const event = m.events.find((row) => row.dedupeKey === "ait-console-collection:crashed-job")!;
-  assert.equal((event.payload as Row).executionStatus, "failed");
-  assert.match(String(((event.payload as Row).embed as Row).title), /앱인토스 지표 수집 실패/);
-});
-
-test("매분 성공은 시간별로 묶고 늦게 도착한 관측은 같은 요약을 정정한다", async () => {
-  const m = memory(); const cron = cronFor("backoffice-automation-scheduler", "* * * * *");
-  await observeRuns(m, [cron], [], reportingStart);
-  await observeRuns(m, [cron], [k8sRun(cron.name, "minute-1", "succeeded")], nowFor("05:03"));
-  assert.equal(m.events.filter((row) => String(row.dedupeKey).startsWith("batch-result:")).length, 0);
-  await observeRuns(m, [cron], [], nowFor("06:00"));
-  await observeRuns(m, [cron], [k8sRun(cron.name, "minute-2", "succeeded", "2026-10-24T05:59:00Z")], nowFor("06:01"));
-  await observeRuns(m, [cron], [], nowFor("06:02"));
-  const events = m.events.filter((row) => String(row.dedupeKey).startsWith("operations-batch-hourly:"));
-  assert.equal(events.length, 1);
-  assert.match(String((events[0].payload as Row).text), /성공 2회/);
-  assert.match(String((events[0].payload as Row).text), /정정/);
-  assert.ok(m.requeues() > 0);
-});
-
-test("KDP 저장 대조가 맞지 않으면 성공으로 접수하지 않는다", async () => {
-  const m = memory(); const input = local(first, "succeeded"); input.run.verified = 2;
-  await assert.rejects(ingestBatchResults(input, now, m.db), /BATCH_INVALID_VALIDATION/);
-  assert.equal(m.events.length, 0);
-});
-
-
-test("수집을 시작하지 않은 보류 실행이 기존 실패를 복구하지 않는다", async () => {
-  const m = memory(); const cron = cronFor("backoffice-ait-console-metrics");
-  await observeRuns(m, [cron], [], reportingStart);
-  await observeRuns(m, [cron], [k8sRun(cron.name, "first-failure", "failed")], nowFor("05:03"));
-  m.events.push({ id: "skipped", dedupeKey: "ait-console-collection:skipped-job", payload: { executionStatus: "skipped" } });
-  await observeRuns(m, [cron], [k8sRun(cron.name, "skipped-job", "succeeded", "2026-10-24T05:04:00Z")], nowFor("05:05"));
-  assert.equal(m.incidents[0].status, "OPEN");
+test("예정 수집 관측 누락은 성공률 요약 없이 보고하고 다음 관측에서 복구한다",async()=>{
+ const m=memory(),cron=cronFor("backoffice-analytics-collect");await observeRuns(m,[cron],[],reportingStart);
+ await observeRuns(m,[cron],[],nowFor("06:16"));
+ const missing=m.incidents.find(i=>i.kind===`missing:${cron.name}`);assert.ok(missing);assert.equal(missing.destinationKey,"batch-monitoring");
+ assert.match(JSON.stringify(missing.evidence),/성공·실패 여부 미확인/);
+ await observeRuns(m,[cron],[k8sRun(cron.name,"gap-1","succeeded","2026-10-24T05:00:00Z"),k8sRun(cron.name,"gap-2","succeeded","2026-10-24T06:00:00Z")],nowFor("06:17"));assert.equal(missing.status,"RECOVERED");
+ assert.equal(m.events.filter(e=>String(e.dedupeKey).startsWith("operations-batch-daily")).length,0);
 });
