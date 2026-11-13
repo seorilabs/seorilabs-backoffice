@@ -32,3 +32,8 @@ test("국가·플랫폼·운영 ID의 잘못된 값을 거부한다",()=>{
   assert.equal(parseOperationalEvent({...event,type:"ad.reward.delivered",attributes}),null);
  }
 });
+
+test("앱의 기존 우편·복구 정보와 광고 실패의 진단 정보는 보존한다",()=>{
+ const recovered=operationalInterestCard({...event,type:"identity.recovered",attributes:{provider:"apple",platformUserId:event.attributes.platformUserId}},"앱");assert.match(recovered.presentation!.body!,/apple/);
+ const failed=operationalInterestCard({...event,type:"ad.reward.delivery_failed",attributes:{provider:"admob",placementId:"daily_bonus",errorCode:"PROVIDER_TIMEOUT"}},"앱");assert.match(failed.text,/제공사: admob/);assert.match(failed.text,/광고 위치: daily_bonus/);
+});
