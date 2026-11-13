@@ -116,8 +116,10 @@ export async function sendCycleKeywordRanks(now = new Date(), requestedDay?: str
     report.categories=categorySummaries;
     if(batch && !batch.completedAt){
       const marker=await tx.notificationEvent.findUnique({where:{dedupeKey:`keyword-collection-run:${cycle.id}`},select:{payload:true}});
-      const runId=(marker?.payload as {runId?:string}|null)?.runId??cycle.id;
-      await recordCollectionIssue({job:"backoffice-keyword-collection",runId,at:now,failed:true,target:"스토어 검색 위치",items:rows.filter(r=>r.state!=="수집됨").slice(0,12).map(r=>`${r.appName} ${r.market} ${r.country} ${r.term}: ${r.state}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."},tx);
+      const runId=(marker?.payload as {runId?:string}|null)?.runId;
+      const incomplete=rows.filter(r=>r.state!=="수집됨");
+      // 구 이미지의 UID를 추정하지 않는다. 미실행·프로세스 실패는 배치 감시자가 보고한다.
+      if(runId)await recordCollectionIssue({job:"backoffice-keyword-collection",runId,at:now,failed:incomplete.length>0,target:"스토어 검색 위치",items:incomplete.slice(0,12).map(r=>`${r.appName} ${r.market} ${r.country} ${r.term}: ${r.state}`),period:cycle.day,cause:"일부 검색 관측 실패 또는 미수집",action:"순위 수집 원장에서 실패한 대상의 응답·권한을 확인하세요."},tx);
     }
     const base = env.optional("AUTH_URL") || "https://backoffice.vzyx.xyz", url = `${base}/feedback/rank-reports/${rankReportKey(report)}`;
     const text = rankReportText(report,url);
