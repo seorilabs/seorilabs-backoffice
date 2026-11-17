@@ -92,7 +92,11 @@ while IFS=$'\t' read -r ns name; do
 
   if ! sealed="$("$kubectl_bin" -n "$ns" get sealedsecret "$name" -o json </dev/null 2>"$tmp/get.err")"; then
     problems+=("${ns}/${name}: SealedSecret을 읽지 못했다: $(head -n1 "$tmp/get.err")")
-    fixes+=("$(apply_fix "$ns" "$name")")
+    if grep -q '(Forbidden)' "$tmp/get.err"; then
+      fixes+=("kubectl apply -f k8s/ci-deployer-rbac.yaml (배포 계정의 sealedsecrets get 권한)")
+    else
+      fixes+=("$(apply_fix "$ns" "$name")")
+    fi
     continue
   fi
   state="$(printf '%s\n' "$sealed" | jq -r '[

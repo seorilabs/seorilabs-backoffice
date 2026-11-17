@@ -141,10 +141,13 @@ expect_fail() {
 }
 
 # deploy-backoffice.sh가 점검하는 실제 매니페스트 목록을 그대로 쓴다.
-mapfile -t deploy_manifests < <(awk '
+deploy_manifests=()
+while IFS= read -r manifest; do
+  deploy_manifests+=("$root/k8s/$manifest")
+done < <(awk '
   /^secret_ref_manifests=\($/ { inside = 1; next }
   inside && /^\)$/ { exit }
-  inside { gsub(/[[:space:]]/, ""); if ($0 != "") print "'"$root"'/k8s/" $0 }
+  inside { gsub(/[[:space:]]/, ""); if ($0 != "") print }
 ' "$here/deploy-backoffice.sh")
 if [ "${#deploy_manifests[@]}" -lt 10 ]; then
   echo "FAIL deploy-backoffice.sh의 secret_ref_manifests 목록을 읽지 못했다" >&2
@@ -325,6 +328,15 @@ load_forms_sealed
 rm "$sealed_dir/platform/app-secrets.json"
 : > "$sealed_dir/platform/app-secrets.forbidden"
 expect_fail "조회 거부" "Forbidden" "$tmp/forms.yaml"
+grep -qF 'kubectl apply -f k8s/ci-deployer-rbac.yaml' "$err"
+if grep -q '저장소에 platform/app-secrets SealedSecret 매니페스트가 없다' "$err"; then
+  echo "FAIL 권한 거부를 SealedSecret 누락으로 안내했다" >&2
+  exit 1
+fi
+echo "  ok   권한 거부는 배포 계정 권한 적용을 안내"
+load_forms_sealed
+rm "$sealed_dir/platform/app-secrets.json"
+expect_fail "NotFound는 SealedSecret 적용을 안내" "저장소에 platform/app-secrets SealedSecret 매니페스트가 없다" "$tmp/forms.yaml"
 
 echo "== AC4 컨트롤러가 현재 generation을 풀지 못했으면 실패한다 =="
 load_forms_sealed
