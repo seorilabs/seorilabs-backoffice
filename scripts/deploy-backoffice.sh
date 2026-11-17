@@ -183,6 +183,36 @@ restore_scheduler_manifests() {
   verify_schedulers_resumed
 }
 
+# 아래에서 적용·생성하는 매니페스트 전부. 새 매니페스트를 적용하면 여기에도 넣는다
+# (deploy-backoffice.test.sh가 누락을 잡는다). 부분 패치인
+# console-metrics-batch-identity-patch.yaml은 객체로 변환할 수 없고 시크릿 참조가 없어 뺀다.
+secret_ref_manifests=(
+  migration-job.yaml
+  discord-workers.yaml
+  deployment.yaml
+  app-ops-worker.yaml
+  operations-insights-worker.yaml
+  market-feedback-cronjobs.yaml
+  keyword-collection-cronjob.yaml
+  repository-discovery-worker.yaml
+  scheduler-cronjobs.yaml
+  scheduler-catchup-job.yaml
+  proactive-cronjobs.yaml
+  app-content-analytics-cronjob.yaml
+  platform-metric-cronjob.yaml
+  operations-batch-observer-cronjob.yaml
+  store-submissions-cronjob.yaml
+  store-review-cronjob.yaml
+  extended-metrics-cronjob.yaml
+  realtime-spike-cronjob.yaml
+)
+
+# 필수 Secret 키가 클러스터 SealedSecret에 없으면 아무것도 바꾸기 전에 멈춘다.
+# Secret에만 직접 넣은 키는 sealed-secrets 컨트롤러가 재시작할 때 지워진다.
+echo "== secret reference preflight =="
+KUBECTL_BIN="$kubectl_bin" BACKOFFICE_NAMESPACE="$namespace" \
+  "$root/scripts/check-deploy-secret-refs.sh" "${secret_ref_manifests[@]/#/$root/k8s/}"
+
 echo "== pre-deploy migration =="
 job_ref="$(render migration-job.yaml | k create -f - -o name)"
 job_name="${job_ref##*/}"

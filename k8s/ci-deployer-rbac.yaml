@@ -38,6 +38,11 @@ rules:
   - apiGroups: ["batch"] # deploy.yml 이 CronJob 매니페스트를 선언적 apply
     resources: ["cronjobs"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  # 배포 전 필수 Secret 키가 SealedSecret에 있는지 확인한다(check-deploy-secret-refs.sh).
+  # 암호문은 공개 저장소에 이미 있어 새로 노출되는 값이 없다. Secret 읽기는 계속 주지 않는다.
+  - apiGroups: ["bitnami.com"]
+    resources: ["sealedsecrets"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -63,7 +63,25 @@ kubectl -n platform create secret generic backoffice-secrets \
 Claude 전환 후보를 운영에 적용하기 전에 자격증명 정책의 원본·백업·복원 확인을 거쳐
 `platform/backoffice-secrets`의 `CLAUDE_API_KEY_IH`를 준비하고 SealedSecret에도 반영한다.
 현재 MiniMax 암호문은 전환 완료 전 보존한다. 비밀값을 명령 인자·파일 출력·실행 로그에 넣지 않는다.
-키가 없는 상태의 배포는 Secret 참조 단계에서 차단된다. 코드 PR·로컬 API 연결 성공은 운영 전환 완료가 아니다.
+키가 클러스터 SealedSecret에 없는 상태의 배포는 아래 시크릿 참조 점검에서 차단된다. 코드 PR·로컬 API 연결 성공은 운영 전환 완료가 아니다.
+
+### 새 시크릿 키 추가
+
+매니페스트에 필수 `secretKeyRef`를 더하는 PR은 봉인한 키를 `k8s/*-sealedsecret.yaml`에 함께 넣는다.
+배포는 SealedSecret을 적용하지 않으므로 trusted operator가 배포 전에
+`kubectl apply -f k8s/backoffice-sealedsecret.yaml`로 적용하고
+`kubectl -n platform get sealedsecret backoffice-secrets -o yaml`에서 `observedGeneration`이
+`generation`과 같고 `Synced`가 `True`인지 확인한다.
+
+Secret을 `kubectl patch`나 `edit`로 직접 고치지 않는다. sealed-secrets 컨트롤러가 재시작하면 Secret을
+SealedSecret 기준으로 다시 써서 직접 넣은 키가 지워지고, 그 뒤 재시작한 Pod는
+`CreateContainerConfigError`로 멈춘다. 2026-11-15에 이 경로로 Slack 알림이 31시간, 웹이 21시간 멈췄다.
+
+배포 스크립트는 migration Job을 만들기 전에 `scripts/check-deploy-secret-refs.sh`로 배포 매니페스트의
+필수 참조(`optional: true` 제외)를 클러스터 SealedSecret과 대조한다. 키가 없거나 컨트롤러가 현재
+generation을 풀지 못했으면 아무것도 바꾸지 않고 멈추며, 누락 키와 적용할 파일을 출력한다. 이 점검에는
+`k8s/ci-deployer-rbac.yaml`의 `bitnami.com/sealedsecrets` `get` 권한이 필요하다. 새 매니페스트를 배포
+스크립트에 추가하면 `secret_ref_manifests` 목록에도 넣는다.
 
 ## 4. 이미지 빌드 & 배포
 

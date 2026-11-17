@@ -11,6 +11,8 @@ log="$tmp/kubectl.log"
 state="$tmp/job.state"
 counter="$tmp/job.counter"
 deployment_counter="$tmp/deployment.counter"
+yaml_cache="$tmp/yaml-cache"
+mkdir -p "$yaml_cache"
 source_sha="0123456789abcdef0123456789abcdef01234567"
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 image="registry.vzyx.xyz/seorilabs/seorilabs-backoffice@sha256:${digest}"
@@ -42,8 +44,50 @@ set -euo pipefail
 : "${FAKE_BACKFILL_SOURCE_SHA:=$BACKOFFICE_SOURCE_SHA}"
 : "${FAKE_BACKFILL_STATUS:=COMPLETED}"
 : "${FAKE_BACKFILL_FAILED:=0}"
+: "${FAKE_REPO_ROOT:?}"
+: "${FAKE_YAML_CACHE_DIR:?}"
+: "${FAKE_SEALED_MISSING_KEY:=}"
 
 args="$*"
+
+# 시크릿 참조 점검: YAML 해석은 저장소 yaml 패키지로, SealedSecret은 저장소 파일을
+# 현재 generation이 동기화된 클러스터 객체처럼 돌려준다. 배포를 여러 번 돌리므로
+# 같은 파일의 변환 결과는 캐시한다.
+yaml_to_json_cached() {
+  local cache
+  cache="$FAKE_YAML_CACHE_DIR/$(printf '%s\n' "$@" | cksum | cut -d' ' -f1).json"
+  if [ ! -f "$cache" ]; then
+    node "$FAKE_REPO_ROOT/scripts/fixtures/yaml-to-json.cjs" "$@" > "$cache.tmp"
+    mv "$cache.tmp" "$cache"
+  fi
+  cat "$cache"
+}
+if [[ "$args" == "create --dry-run=client -o json --validate=false "* ]]; then
+  printf 'SECRET_PREFLIGHT_PARSE\n' >> "$FAKE_KUBECTL_LOG"
+  shift 5
+  files=()
+  while [ "$#" -gt 0 ]; do
+    files+=("$2")
+    shift 2
+  done
+  yaml_to_json_cached "${files[@]}"
+  exit
+fi
+if [[ "$args" =~ ^-n\ platform\ get\ sealedsecret\ ([a-z0-9-]+)\ -o\ json$ ]]; then
+  name="${BASH_REMATCH[1]}"
+  printf 'READ_SEALED %s\n' "$name" >> "$FAKE_KUBECTL_LOG"
+  sealed_file="$(grep -l "^  name: ${name}\$" "$FAKE_REPO_ROOT"/k8s/*sealedsecret*.yaml | head -n1 || true)"
+  if [ -z "$sealed_file" ]; then
+    printf 'Error from server (NotFound): sealedsecrets.bitnami.com "%s" not found\n' "$name" >&2
+    exit 1
+  fi
+  yaml_to_json_cached "$sealed_file" \
+    | jq --arg missing "$FAKE_SEALED_MISSING_KEY" '
+        .metadata.generation = 1
+        | .status = {observedGeneration: 1, conditions: [{type: "Synced", status: "True"}]}
+        | if $missing == "" then . else del(.spec.encryptedData[$missing]) end'
+  exit 0
+fi
 
 if [[ "$args" == *"create -f - -o name"* ]]; then
   payload="$(cat)"
@@ -226,6 +270,9 @@ run_deploy() {
   FAKE_TRIGGER_OBSERVED_AT="${FAKE_TRIGGER_OBSERVED_AT:-}" \
   FAKE_TRIGGER_STATE_MISSING="${FAKE_TRIGGER_STATE_MISSING:-false}" \
   FAKE_VAULT_PARITY="${FAKE_VAULT_PARITY:-match}" \
+  FAKE_REPO_ROOT="$here/.." \
+  FAKE_YAML_CACHE_DIR="$yaml_cache" \
+  FAKE_SEALED_MISSING_KEY="${FAKE_SEALED_MISSING_KEY:-}" \
   KUBECTL_BIN="$fake" \
   BACKOFFICE_IMAGE="$run_image" \
   BACKOFFICE_SOURCE_SHA="$source_sha" \
@@ -256,6 +303,75 @@ if grep -q '^APPLY_' "$log"; then
 fi
 echo "  ok   fail-closed"
 
+echo "== AC1 필수 시크릿 키가 클러스터 SealedSecret에 없으면 아무것도 바꾸지 않는다 =="
+# 2026-11-15 장애: 키를 Secret에만 직접 넣어 rollout은 통과했고, sealed-secrets 컨트롤러
+# 재시작 때 키가 지워져 웹과 알림 워커가 CreateContainerConfigError로 멈췄다.
+: > "$log"
+preflight_err="$tmp/preflight.err"
+FAKE_SEALED_MISSING_KEY=SLACK_CHANNEL_METRIC_INSIGHTS_ID
+if run_deploy Complete >/dev/null 2>"$preflight_err"; then
+  echo "FAIL SealedSecret에 없는 필수 키가 deploy 성공으로 처리됐다" >&2
+  exit 1
+fi
+unset FAKE_SEALED_MISSING_KEY
+grep -q '^READ_SEALED backoffice-secrets$' "$log"
+if grep -qE '^(CREATE_JOB|APPLY_|ROLLOUT|PATCH_|SET_|DELETE_)' "$log"; then
+  echo "FAIL 시크릿 참조 점검 실패 뒤에도 클러스터를 바꿨다" >&2
+  cat "$log" >&2
+  exit 1
+fi
+grep -qF 'platform/backoffice-secrets: SLACK_CHANNEL_METRIC_INSIGHTS_ID' "$preflight_err"
+grep -qF 'kubectl apply -f k8s/backoffice-sealedsecret.yaml' "$preflight_err"
+echo "  ok   migration Job 생성 전에 누락 키와 적용할 파일을 알리고 중단"
+
+echo "== AC6 배포 스크립트가 적용하는 매니페스트는 모두 시크릿 점검 목록에 있다 =="
+# 점검 목록 밖의 매니페스트는 필수 키 누락을 잡지 못한다. 목록 정의를 뺀 실행 코드에서
+# 매니페스트 이름을 모아 목록과 비교한다. 제외 대상: 읽기 전용 verifier, 안내 문구의
+# vault-rag, 객체로 변환할 수 없는 부분 패치.
+manifest_drift() {
+  local script="$1" listed used manifest drift=""
+  listed="$(awk '
+    /^secret_ref_manifests=\($/ { inside = 1; next }
+    inside && /^\)$/ { exit }
+    inside { gsub(/[[:space:]]/, ""); if ($0 != "") print }
+  ' "$script" | sort -u)"
+  used="$(awk '
+    /^secret_ref_manifests=\($/ { inside = 1; next }
+    inside && /^\)$/ { inside = 0; next }
+    !inside && !/^[[:space:]]*#/
+  ' "$script" | grep -oE '[A-Za-z0-9_.-]+\.yaml' | sort -u)"
+  for manifest in $used; do
+    case "$manifest" in
+      provider-audit-trigger-verifier.yaml | vault-rag.yaml | console-metrics-batch-identity-patch.yaml) continue ;;
+    esac
+    printf '%s\n' "$listed" | grep -Fxq "$manifest" || drift="$drift $manifest"
+  done
+  printf '%s' "${drift# }"
+}
+drift="$(manifest_drift "$here/deploy-backoffice.sh")"
+if [ -n "$drift" ]; then
+  echo "FAIL deploy-backoffice.sh의 secret_ref_manifests에 빠진 매니페스트: $drift" >&2
+  exit 1
+fi
+for manifest in $(awk '/^secret_ref_manifests=\($/ { f = 1; next } f && /^\)$/ { exit } f { print $1 }' "$here/deploy-backoffice.sh"); do
+  if [ ! -f "$here/../k8s/$manifest" ]; then
+    echo "FAIL 점검 목록의 매니페스트가 없다: $manifest" >&2
+    exit 1
+  fi
+done
+mutated="$tmp/deploy-backoffice.mutated.sh"
+sed 's|^apply_image_manifest realtime-spike-cronjob.yaml$|&\napply_image_manifest new-worker.yaml|' \
+  "$here/deploy-backoffice.sh" > "$mutated"
+if [ "$(manifest_drift "$mutated")" != new-worker.yaml ]; then
+  echo "FAIL 목록에 없는 새 매니페스트 적용을 감지하지 못했다" >&2
+  exit 1
+fi
+if grep -qE 'secretKeyRef|secretRef|secretName' "$here/../k8s/console-metrics-batch-identity-patch.yaml"; then
+  echo "FAIL 점검에서 제외한 부분 패치에 시크릿 참조가 생겼다" >&2
+  exit 1
+fi
+echo "  ok   적용 매니페스트와 점검 목록 일치, 새 매니페스트 누락 감지"
+
 echo "== 성공 순서와 동일 SHA 재실행 =="
 : > "$log"
 run_deploy Complete >/dev/null
@@ -279,8 +395,15 @@ if grep -q '^APPLY_FILE backup-pvc.yaml$' "$log"; then
   exit 1
 fi
 
+secret_preflight_line="$(line_of '^READ_SEALED backoffice-secrets$')"
 migration_line="$(line_of '^CREATE_JOB ')"
 verify_line="$(line_of '^READ_TRIGGER_STATE$')"
+if [ -z "$secret_preflight_line" ] || ! [ "$secret_preflight_line" -lt "$migration_line" ]; then
+  echo "FAIL 시크릿 참조 점검이 migration Job보다 먼저 실행되지 않았다" >&2
+  cat "$log" >&2
+  exit 1
+fi
+echo "  ok   시크릿 참조 점검 → migration"
 notification_line="$(line_of '^ROLLOUT backoffice-notification-worker$')"
 web_line="$(line_of '^APPLY_STDIN backoffice,')"
 web_rollout_line="$(line_of '^ROLLOUT backoffice$')"
