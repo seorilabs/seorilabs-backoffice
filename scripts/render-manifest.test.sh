@@ -448,6 +448,7 @@ data_rbac="$root/k8s/ci-deployer-data-rbac.yaml"
 if grep -q 'resources: \["jobs"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["pods/log"\]' "$platform_rbac" &&
    ! grep -q 'resources: \["secrets"\]' "$platform_rbac" &&
+   grep -A1 'resources: \["sealedsecrets"\]' "$platform_rbac" | grep -q 'verbs: \["get"\]' &&
    grep -q 'resourceNames: \["vault-writer"\]' "$data_rbac" &&
    grep -q 'resourceNames: \["backoffice-provider-audit-trigger-state"\]' "$data_rbac" &&
    grep -q 'resourceNames: \["vault-writer"\]' "$data_rbac" &&

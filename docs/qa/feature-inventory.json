@@ -228,6 +228,17 @@
         "src/app/api/supervisor/**",
         "scripts/supervisor/**"
       ]
+    },
+    {
+      "id": "backoffice-production-deploy",
+      "core": false,
+      "runtimeKind": "service",
+      "paths": [
+        "scripts/deploy-backoffice.sh",
+        "scripts/check-deploy-secret-refs.sh",
+        "k8s/ci-deployer-rbac.yaml",
+        ".github/workflows/deploy.yml"
+      ]
     }
   ]
 }
