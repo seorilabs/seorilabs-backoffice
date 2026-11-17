@@ -4,6 +4,7 @@ import { validatedEvidence, type Evidence } from "./contract";
 import { publishSignal } from "./service";
 
 export const METRIC_COLLECTION_KIND = "metric-collection";
+export const METRIC_WEEKLY_KIND = "metric-weekly";
 /** 완료 원장에 고정한 근거를 재조회한다. 요청 전후 중단도 같은 실행 ID로 복구한다. */
 export async function reconcileMetricCollectionInsights() {
   // JSON 본문은 정렬하지 않는다. 큰 coverage가 MySQL 정렬 메모리를 소진하지 않게 한다.

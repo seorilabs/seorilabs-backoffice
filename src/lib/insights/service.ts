@@ -22,6 +22,8 @@ import {
   metricDayOf,
   metricDayStart,
   shiftMetricDay,
+  lastCompletedWeekEnd,
+  parseMetricDay,
 } from "@/lib/analytics/metric-day";
 import {
   evidenceListSchema,
@@ -78,10 +80,15 @@ export function insightNotificationKey(kind:string,facts:Evidence[],fallback:str
 function safeText(value: string) {
   return value.replace(/[@<>`]/g, "").slice(0, 160);
 }
+/** 주간 신호의 끝(일요일). 생성 요일과 관계없이 제목의 기간과 차트 기준일을 맞춘다. */
+export function weeklyEnd(signal: { kind: string; dedupeKey?: string }): string | null {
+  return signal.kind === "metric-weekly" ? parseMetricDay(signal.dedupeKey?.replace(/^weekly:/, "")) : null;
+}
 function notificationPayload(
   signal: {
     title: string;
     kind: string;
+    dedupeKey?: string;
     severity: string;
     facts: unknown;
     observedAt: Date;
@@ -119,7 +126,7 @@ function notificationPayload(
     ...(/metric-weekly/.test(signal.kind)
       ? {
           chart: "org-trend",
-          refDate: shiftMetricDay(metricDayOf(signal.observedAt), -1),
+          refDate: weeklyEnd(signal) ?? shiftMetricDay(metricDayOf(signal.observedAt), -1),
           weekly: true,
         }
       : {}),
@@ -265,14 +272,23 @@ export async function publishSignal(input: {
   });
 }
 
-async function claim(workerId: string, signalKind?: string) {
+async function claim(workerId: string, signalKinds?: readonly string[]) {
+  // 종류는 실행 입력이 아니라 분석 문서의 신호로 고른다. 예전 실행에는 입력에 종류가 없다.
+  // 후보 목록은 잠금 없이 읽고, 실행 상태는 아래 트랜잭션이 다시 확인한다.
+  const scoped = signalKinds
+    ? (await prisma.insightDocument.findMany({
+        where: { status: "PENDING", runId: { not: null }, signal: { kind: { in: [...signalKinds] } } },
+        select: { runId: true },
+      })).map((document) => document.runId!)
+    : undefined;
+  if (scoped && !scoped.length) return null;
   return serializable(async (tx) => {
     const now = new Date();
     // API worker의 lease만 회수한다. 다른 Codex/Claude run·repo guard를 건드리지 않는다.
     const expired = await tx.agentLease.findMany({
       where: {
         workerId: { startsWith: "insights:" },
-        ...(signalKind ? { run: { taskInput: { path: "$.signalKind", equals: signalKind } } } : {}),
+        ...(scoped ? { runId: { in: scoped } } : {}),
         revokedAt: null,
         expiresAt: { lte: now },
       },
@@ -327,7 +343,7 @@ async function claim(workerId: string, signalKind?: string) {
             },
           });
           const notificationKey=insightNotificationKey(document.signal.kind,facts,document.notificationKey);
-          if (facts.length && signalDecision(document.signal.kind).send && (document.signal.kind !== "metric-collection" || metricFactsReportable(facts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
+          if (facts.length && signalDecision(document.signal.kind).send && !staleWeeklySignal(document.signal, now) && (document.signal.kind !== "metric-collection" || metricFactsReportable(facts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
             const eventId = await (document.signal.kind === "metric-collection" ? enqueueNotificationOnce : enqueueNotification)(
               {
                 dedupeKey: notificationKey,
@@ -365,7 +381,7 @@ async function claim(workerId: string, signalKind?: string) {
     const run = await tx.agentRun.findFirst({
       where: {
         status: "PENDING",
-        ...(signalKind ? { taskInput: { path: "$.signalKind", equals: signalKind } } : {}),
+        ...(scoped ? { id: { in: scoped } } : {}),
         cancelledAt: null,
         eligibleAt: { lte: now },
         occurrence: {
@@ -472,14 +488,18 @@ async function reserveRequest(
     return true;
   });
 }
+/** 주간 신호는 그 주가 마지막으로 끝난 주일 때만 보낸다. 밀린 지난주 보고를 한꺼번에 보내지 않는다. */
+export function staleWeeklySignal(signal: { kind: string; dedupeKey: string }, now: Date): boolean {
+  return signal.kind === "metric-weekly" && signal.dedupeKey !== `weekly:${lastCompletedWeekEnd(now)}`;
+}
 export async function processNextInsight(
   workerId = `insights:${process.env.INSIGHTS_WORKER_ID ?? "local"}:${process.pid}`,
   generate = generateInsight,
-  signalKind?: string,
+  signalKinds?: string | readonly string[],
 ): Promise<boolean> {
   if (!workerId.startsWith("insights:"))
     throw new Error("INVALID_INSIGHT_WORKER_ID");
-  const claimed = await claim(workerId, signalKind);
+  const claimed = await claim(workerId, typeof signalKinds === "string" ? [signalKinds] : signalKinds);
   if (!claimed) return false;
   const document = await prisma.insightDocument.findUniqueOrThrow({
     where: { runId: claimed.run.id },
@@ -489,11 +509,14 @@ export async function processNextInsight(
   const resolvedFacts = await resolveReportEvidence(document.signal.kind, facts);
   const displayFacts = document.signal.kind === "metric-collection" ? resolvedFacts.filter(f=>f.id.startsWith("metric_change_")).slice(0,3) : resolvedFacts;
 
-  const made = !signalDecision(document.signal.kind).send
+  const skipped = !signalDecision(document.signal.kind).send
+    ? "INTERNAL_OBSERVATION"
+    : staleWeeklySignal(document.signal, new Date()) ? "STALE_WEEKLY" : null;
+  const made = skipped
     ? {
         content: fallbackInsight(facts),
         fallback: true,
-        errorCode: "INTERNAL_OBSERVATION",
+        errorCode: skipped,
       }
     : displayFacts.length === 0
       ? {
@@ -568,7 +591,7 @@ export async function processNextInsight(
       },
     });
     const notificationKey=insightNotificationKey(document.signal.kind,displayFacts,document.notificationKey);
-    if (signalDecision(document.signal.kind).send && displayFacts.length && (document.signal.kind !== "metric-collection" || metricFactsReportable(displayFacts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
+    if (!skipped && displayFacts.length && (document.signal.kind !== "metric-collection" || metricFactsReportable(displayFacts) && !await tx.notificationEvent.findUnique({where:{dedupeKey:notificationKey},select:{id:true}}))) {
       const eventId = await (document.signal.kind === "metric-collection" ? enqueueNotificationOnce : enqueueNotification)(
         {
           dedupeKey: notificationKey,

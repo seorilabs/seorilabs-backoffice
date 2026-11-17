@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reportDecision, signalDecision } from "./report-policy";
+import { INTERNAL_SIGNAL_KINDS, reportDecision, signalDecision } from "./report-policy";
 
 test("평점 작은 모수·수집 상태·출시 후 단순 관측은 내부 기록", () => {
   for (const kind of [
@@ -12,6 +12,7 @@ test("평점 작은 모수·수집 상태·출시 후 단순 관측은 내부 �
     "review-change",
     "service-failure",
     "submission-approved",
+    "public-listing-confirmed",
   ])
     assert.equal(signalDecision(kind).send, false, kind);
 });
@@ -235,4 +236,10 @@ test("구형 재무·정적 개발 요약·원문 스레드는 대기에서 제�
     }).send,
     true,
   );
+});
+
+test("정리 대상 종류 목록은 보고하지 않는 종류와 같다", () => {
+  assert.ok(INTERNAL_SIGNAL_KINDS.includes("public-listing-confirmed"));
+  for (const kind of INTERNAL_SIGNAL_KINDS) assert.equal(signalDecision(kind).send, false, kind);
+  assert.equal(INTERNAL_SIGNAL_KINDS.includes("metric-weekly"), false);
 });

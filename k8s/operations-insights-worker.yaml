@@ -1,4 +1,4 @@
-# 승인 설계 2026-11-04: 새 수집 분석만 처리한다. 이전 신호는 재발송하지 않는다.
+# 승인 설계 2026-11-04, 2026-11-17: 수집 후 분석과 주간 점검을 보낸다. 지난 주간 신호와 보고하지 않는 종류의 예전 실행은 발송 없이 끝낸다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +20,7 @@ spec:
       containers:
         - name: operations-insights
           image: registry.vzyx.xyz/seorilabs/seorilabs-backoffice:latest
-          command: ["node", "/app/scripts-dist/operations-insights-worker.cjs", "metric-collections"]
+          command: ["node", "/app/scripts-dist/operations-insights-worker.cjs", "metric-insights"]
           env:
             - { name: SLACK_ENABLED, value: "true" }
             - { name: SLACK_APP_ID, value: "A0CD8B7CLH2" }

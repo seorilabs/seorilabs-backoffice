@@ -1,3 +1,4 @@
+import { METRIC_WEEKLY_KIND } from "./metric-collection";
 import type { Prisma } from "@prisma/client";
 import { closedReviewGroups } from "./review-groups";
 import { prisma } from "@/lib/prisma";
@@ -5,7 +6,7 @@ import { publishSignal } from "./service";
 import { collectHighlightData } from "@/lib/core/metric-highlights";
 import { decodePlayState } from "@/lib/google-play/release-state";
 import {
-  lastElapsedMetricDay,
+  lastCompletedWeekEnd,
   shiftMetricDay,
 } from "@/lib/analytics/metric-day";
 import { env } from "@/lib/env";
@@ -93,7 +94,7 @@ export async function discoverOperationalSignals(now = new Date()) {
   return { count };
 }
 export async function publishWeeklySignals(now = new Date()) {
-  const end = lastElapsedMetricDay(now),
+  const end = lastCompletedWeekEnd(now),
     start = shiftMetricDay(end, -6);
   const data = await collectHighlightData(now, end);
   const facts: Evidence[] = data.movements
@@ -109,7 +110,7 @@ export async function publishWeeklySignals(now = new Date()) {
     return { suppressed: true, reason: "NO_MATERIAL_WEEKLY_CHANGE" };
   return publishSignal({
     dedupeKey: "weekly:" + end,
-    kind: "metric-weekly",
+    kind: METRIC_WEEKLY_KIND,
     title: `주간 점검 · ${start} ~ ${end} · 마지막 날의 주요 변화`,
     observedAt: now,
     facts,

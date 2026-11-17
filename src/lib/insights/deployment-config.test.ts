@@ -34,3 +34,11 @@ for (const file of ["k8s/operations-insights-worker.yaml", "k8s/market-feedback-
     });
   }
 }
+
+test("지표 worker는 스크립트가 받는 지표 분석 모드로 실행한다", () => {
+  const worker = parseAllDocuments(readFileSync("k8s/operations-insights-worker.yaml", "utf8")).map((document) => document.toJS())
+    .find((resource) => resource.kind === "Deployment");
+  const command = worker.spec.template.spec.containers[0].command as string[];
+  assert.deepEqual(command.slice(-1), ["metric-insights"]);
+  assert.match(readFileSync("scripts/operations-insights-worker.ts", "utf8"), /const metricOnly = mode === "metric-insights";/);
+});

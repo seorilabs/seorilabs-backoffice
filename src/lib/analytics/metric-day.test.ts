@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   metricDayOf,
   lastElapsedMetricDay,
+  lastCompletedWeekEnd,
   metricDayStart,
   dbDay,
   toDbDay,
@@ -98,4 +99,11 @@ test("소스 계약: metric-day 바깥에서 시각을 직접 날짜로 자르�
       `${path} 는 metricDayOf/dbDay 를 써야 한다`,
     );
   }
+});
+
+test("lastCompletedWeekEnd 는 요일과 관계없이 끝난 마지막 주의 일요일이다", () => {
+  assert.equal(lastCompletedWeekEnd(new Date("2026-11-16T01:30:00Z")), "2026-11-15"); // 월 10:30 KST
+  assert.equal(lastCompletedWeekEnd(new Date("2026-11-17T09:53:00Z")), "2026-11-15"); // 화 재실행
+  assert.equal(lastCompletedWeekEnd(new Date("2026-11-22T03:00:00Z")), "2026-11-15"); // 일 12:00 KST
+  assert.equal(lastCompletedWeekEnd(new Date("2026-11-22T15:30:00Z")), "2026-11-22"); // 월 00:30 KST
 });

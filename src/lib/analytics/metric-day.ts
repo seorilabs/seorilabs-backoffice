@@ -41,6 +41,12 @@ export function lastElapsedMetricDay(now: Date): string {
   return shiftMetricDay(metricDayOf(now), -1);
 }
 
+/** 끝난 마지막 주(월~일, KST)의 일요일. 월요일 보고와 다른 요일 재실행이 같은 주를 가리킨다. */
+export function lastCompletedWeekEnd(now: Date): string {
+  const day = lastElapsedMetricDay(now);
+  return shiftMetricDay(day, -toDbDay(day).getUTCDay());
+}
+
 /** 달력일 00:00 KST 의 UTC 시각. capturedAt/occurredAt 같은 시각 컬럼 범위 질의용. */
 export function metricDayStart(day: string): Date {
   return new Date(toDbDay(day).getTime() - KST_OFFSET_MS);
