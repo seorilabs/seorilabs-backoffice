@@ -23,7 +23,7 @@
 
 | ID | 조건 |
 | --- | --- |
-| AC1 | `next`, `eslint-config-next`가 16.4.6이고 lock 파일에서 Next 계열 외 버전 변경이 없다. |
+| AC1 | `next`, `eslint-config-next`가 16.4.6이다. lock 파일의 Next 계열 외 변경은 `next`가 참조하는 `caniuse-lite`가 이미 있던 1.0.30001816으로 합쳐지며 1.0.30001799 항목이 빠지는 것뿐이다. |
 | AC2 | 보안 권고 일괄 조회에서 `next@16.4.6`에 해당하는 권고가 없다. |
 | AC3 | `next build`가 보안 권고로 멈추지 않고 성공한다. |
 | AC4 | 전체 단위 테스트, typecheck, lint, 배포 계약 셸 테스트, migration 계약이 통과한다. |
