@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import { prisma } from "@/lib/prisma";
 import { beginCollection, completeCollection } from "@/lib/insights/collection";
 import { metricCollectionSnapshot } from "@/lib/insights/metric-collection-facts";
-import { reconcileMetricCollectionInsights, METRIC_COLLECTION_KIND } from "@/lib/insights/metric-collection";
+import { reconcileMetricCollectionInsights, METRIC_COLLECTION_KIND, METRIC_WEEKLY_KIND } from "@/lib/insights/metric-collection";
+import { INTERNAL_SIGNAL_KINDS } from "@/lib/notifications/report-policy";
+import { lastCompletedWeekEnd, shiftMetricDay } from "@/lib/analytics/metric-day";
 import { publishSignal, processNextInsight, insightNotificationKey } from "@/lib/insights/service";
 import { fallbackInsight } from "@/lib/insights/contract";
 import { ingestAndVerifyConsolePush } from "@/lib/analytics/console-sync/push";
@@ -78,6 +80,30 @@ async function main() {
   assert.match(JSON.stringify(collectedRun.coverage),/0명/);
   assert.equal(await reconcileMetricCollectionInsights(),1);
   assert.equal(await processNextInsight("insights:qa-ga4",async facts=>({content:fallbackInsight(facts),fallback:false,errorCode:null}),METRIC_COLLECTION_KIND),true);
-  console.log(JSON.stringify({status:"passed",checks:["durable-completion","concurrent-reconcile","frozen-facts","old-queue-filter","provider-fallback","delivery-receipt","manual-push","observed-zero","ga4-provider-to-storage-to-insight"]}));
+  // 주간 점검은 끝난 마지막 주만 보낸다. 지난 주·다른 기준일 신호와 보고하지 않는 종류의 예전 실행은 발송 없이 끝낸다.
+  const kinds=[METRIC_COLLECTION_KIND,METRIC_WEEKLY_KIND,...INTERNAL_SIGNAL_KINDS];
+  const weekEnd=lastCompletedWeekEnd(new Date());
+  const weekly=(end:string)=>publishSignal({dedupeKey:`weekly:${end}`,kind:METRIC_WEEKLY_KIND,title:`주간 점검 · ${end}`,facts:[{id:"change_0",label:"격리 앱 활성 사용자",value:"20명 · 기준 10명",source:`${end} 일별 값`}],sourceRefs:[],observedAt:new Date()});
+  const current=await weekly(weekEnd), stale=await weekly(shiftMetricDay(weekEnd,-7)), offWeek=await weekly(shiftMetricDay(weekEnd,1));
+  // 예전 실행: 실행 입력에 종류가 없고, 신호 종류는 지금 보고하지 않는 공개 리스팅 확인이다.
+  const oldListing=await weekly(shiftMetricDay(weekEnd,-14));
+  await prisma.operationalSignal.update({where:{id:oldListing.signalId},data:{kind:"public-listing-confirmed",dedupeKey:`public-listing:qa-${Date.now()}`}});
+  const doc=(id:string)=>prisma.insightDocument.findUniqueOrThrow({where:{id}});
+  await prisma.agentRun.update({where:{id:(await doc(oldListing.id)).runId!},data:{taskInput:{insightId:oldListing.id,inputHash:oldListing.inputHash}}});
+  let processed=0;
+  while(await processNextInsight("insights:qa-weekly",async facts=>({content:fallbackInsight(facts),fallback:false,errorCode:null}),kinds))processed++;
+  assert.equal(processed,4);
+  const sent=async(id:string)=>!!await prisma.notificationEvent.findUnique({where:{dedupeKey:(await doc(id)).notificationKey}});
+  assert.equal((await doc(current.id)).status,"READY"); assert.equal(await sent(current.id),true);
+  const currentEvent=await prisma.notificationEvent.findUniqueOrThrow({where:{dedupeKey:current.notificationKey},include:{deliveries:true}});
+  assert.equal(currentEvent.deliveries[0].destinationKey,"metric-insights");
+  for(const skipped of [stale,offWeek]){assert.equal((await doc(skipped.id)).errorCode,"STALE_WEEKLY");assert.equal(await sent(skipped.id),false);}
+  assert.equal((await doc(oldListing.id)).errorCode,"INTERNAL_OBSERVATION"); assert.equal(await sent(oldListing.id),false);
+  const runIds=await Promise.all([current,stale,offWeek,oldListing].map(async d=>(await doc(d.id)).runId!));
+  assert.equal(await prisma.agentRun.count({where:{id:{in:runIds},status:"SUCCEEDED"}}),4);
+  assert.equal((await doc(legacy.id)).status,"PENDING");
+  // 다른 요일에 다시 실행해도 같은 주의 신호로 합쳐진다.
+  assert.equal((await prisma.operationalSignal.findUniqueOrThrow({where:{id:current.signalId}})).dedupeKey,`weekly:${weekEnd}`);
+  console.log(JSON.stringify({status:"passed",checks:["durable-completion","concurrent-reconcile","frozen-facts","old-queue-filter","provider-fallback","delivery-receipt","manual-push","observed-zero","ga4-provider-to-storage-to-insight","weekly-current-only","legacy-internal-drain"]}));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>prisma.$disconnect());

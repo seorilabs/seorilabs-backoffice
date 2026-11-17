@@ -1,4 +1,5 @@
-import { METRIC_COLLECTION_KIND, reconcileMetricCollectionInsights } from "@/lib/insights/metric-collection";
+import { METRIC_COLLECTION_KIND, METRIC_WEEKLY_KIND, reconcileMetricCollectionInsights } from "@/lib/insights/metric-collection";
+import { INTERNAL_SIGNAL_KINDS } from "@/lib/notifications/report-policy";
 import { prisma } from "@/lib/prisma";
 import { processNextInsight } from "@/lib/insights/service";
 import {
@@ -52,7 +53,9 @@ async function main() {
     await publishWeeklySignals();
     return;
   }
-  const metricOnly = mode === "metric-collections";
+  // 지표 worker는 수집 후 분석과 주간 점검을 보내고, 보고하지 않는 종류의 예전 실행은 발송 없이 끝낸다.
+  const metricOnly = mode === "metric-insights";
+  const metricKinds = [METRIC_COLLECTION_KIND, METRIC_WEEKLY_KIND, ...INTERNAL_SIGNAL_KINDS];
   if (mode !== "worker" && !metricOnly) throw new Error("INVALID_MODE");
   let lastScan = 0;
   let lastReviewReportDay = "";
@@ -67,7 +70,7 @@ async function main() {
         else await discoverOperationalSignals();
         lastScan = Date.now();
       }
-      if (!(await processNextInsight(undefined, undefined, metricOnly ? METRIC_COLLECTION_KIND : undefined)))
+      if (!(await processNextInsight(undefined, undefined, metricOnly ? metricKinds : undefined)))
         await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch {
       console.error(

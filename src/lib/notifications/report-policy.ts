@@ -21,7 +21,10 @@ const internalSignals = new Set([
   "submission-approved",
   "submission-rejected",
   "published", // 버전·마켓 전환 카드와 중복
+  "public-listing-confirmed", // 스토어 제출 수집의 "프로덕션 공개 확인" 카드와 중복
 ]);
+/** 보고하지 않는 신호 종류. 예전에 쌓인 분석 실행을 발송 없이 정리할 때도 쓴다. */
+export const INTERNAL_SIGNAL_KINDS: readonly string[] = [...internalSignals];
 export function signalDecision(kind: string): ReportDecision {
   return internalSignals.has(kind)
     ? { send: false, reason: `INTERNAL_OBSERVATION:${kind}` }
