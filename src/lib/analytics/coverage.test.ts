@@ -42,7 +42,7 @@ test("활동 0 도 봉인 대상이다(GA4)", () => {
   );
 });
 
-test("콘솔은 경과일만 보고, empty 는 콘솔에 없다", () => {
+test("콘솔은 경과일만 보고, 예약 수집이 확인한 활동 0도 봉인한다", () => {
   assert.equal(
     sealRule({ source: "ait_console", state: "observed", ageDays: 3, observations: 1 }),
     true,
@@ -51,9 +51,12 @@ test("콘솔은 경과일만 보고, empty 는 콘솔에 없다", () => {
     sealRule({ source: "ait_console", state: "observed", ageDays: 2, observations: 9 }),
     false,
   );
-  // 콘솔은 push 로만 들어와 "활동 0"을 관측할 수 없다.
   assert.equal(
-    sealRule({ source: "ait_console", state: "empty", ageDays: 30, observations: 9 }),
+    sealRule({ source: "ait_console", state: "empty", ageDays: 3, observations: 1 }),
+    true,
+  );
+  assert.equal(
+    sealRule({ source: "ait_console", state: "empty", ageDays: 2, observations: 9 }),
     false,
   );
 });

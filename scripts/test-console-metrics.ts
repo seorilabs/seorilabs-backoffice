@@ -114,6 +114,17 @@ async function main() {
       assert.equal(merged.iaaImpressions, 8); assert.equal(merged.iaaEarningKrw, 46);
       assert.deepEqual(Object.keys((merged.raw as { iaaByOs: object }).iaaByOs).sort(), ["ANDROID", "IOS"]);
     }
+    // 활동이 없는 날은 실패가 아니다. 확정된 날짜는 활동 0, 전날은 집계 대기로 남기고 값이 있는 칸은 덮지 않는다.
+    fixture.state.idle = true;
+    const idle = await withConsoleCollectionLock(async () => collectConsoleMetrics(new McpConsoleMetricsSource(reader!), new Date("2026-10-20T01:00:00Z")));
+    fixture.state.idle = false;
+    assert.ok("results" in idle); assert.ok(idle.results.every((r) => r.missing.length === 0 && r.errors.length === 0));
+    const cell = async (day: string) => (await prisma.metricCollectionLedger.findFirstOrThrow({ where: { source: "ait_console", appId: app.id, listingId: 61736, day: new Date(day) } })).state;
+    assert.equal(await cell("2026-10-07"), "empty"); // 값 없이 실패로 남았던 칸
+    assert.equal(await cell("2026-10-13"), "failed"); // 값이 저장된 칸은 그대로
+    assert.equal(await cell("2026-10-17"), "observed");
+    assert.equal(await cell("2026-10-18"), "empty");
+    assert.equal(await cell("2026-10-19"), "not_landed");
     // 실행 종료 뒤 잠금이 풀리고 새 프로세스에 해당하는 OAuth 인스턴스로 조회된다.
     await reader!.close(); reader = await createConsoleReader(await createFixtureOAuth(credential, fixture.fetcher));
     await new McpConsoleMetricsSource(reader).verifyWorkspace(); assert.equal(fixture.state.refreshes, 2);
@@ -127,7 +138,7 @@ async function main() {
     await assert.rejects(withConsoleCollectionLock(async () => { throw new Error("fixture-failure"); }), /fixture-failure/);
     const unlocked = await other.$queryRaw<Array<{ acquired: number | bigint }>>`SELECT GET_LOCK('backoffice:ait-console-collect', 0) AS acquired`;
     assert.equal(Number(unlocked[0].acquired), 1); await other.$queryRaw`SELECT RELEASE_LOCK('backoffice:ait-console-collect')`;
-    process.stdout.write(`HTTP MCP → 저장 서비스 → 격리 MySQL → 전체 ${AIT_LISTINGS.length}개 리스팅 readback 통과; 결측 보존·동시 잠금·재시작·재인증 차단·실패 후 잠금 해제 통과\n`);
+    process.stdout.write(`HTTP MCP → 저장 서비스 → 격리 MySQL → 전체 ${AIT_LISTINGS.length}개 리스팅 readback 통과; 결측 보존·활동 0·집계 대기·동시 잠금·재시작·재인증 차단·실패 후 잠금 해제 통과\n`);
   } finally {
     await reader?.close(); await fixture.close(); await other.$disconnect();
     const appId = { in: apps.map((app) => app.id) };

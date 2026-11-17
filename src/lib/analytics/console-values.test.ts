@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, sumConsoleValues, isCompleteConsoleMetric } from "./console-values";
+import { mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, sumConsoleValues, isCompleteConsoleMetric, consoleRowState } from "./console-values";
 
 const android = { date: "2026-10-11", impression: 6, estimatedEarning: 34 };
 const ios = { date: "2026-10-11", impression: 2, estimatedEarning: 12 };
@@ -54,4 +54,14 @@ test("원본의 특수 키가 광고 원본을 상속시키지 않는다", () =>
   const raw = mergeConsoleRaw(null, JSON.parse(JSON.stringify({ ["__proto__"]: { iaaByOs: { ANDROID: android, IOS: ios } } })));
   assert.equal(Object.getPrototypeOf(raw), Object.prototype);
   assert.equal(consoleAdTotal(raw, "2026-10-11"), null);
+});
+
+test("저장 행의 원장 상태는 수집과 과거 원장 복구가 같은 기준으로 정한다", () => {
+  const full = { iaaImpressions: 6, iaaEarningKrw: 34, iapTrxAmountKrw: 0, iapSettlementKrw: 0, payingUsers: 0 };
+  const empty = { iaaImpressions: null, iaaEarningKrw: null, iapTrxAmountKrw: null, iapSettlementKrw: null, payingUsers: null };
+  assert.equal(consoleRowState({ ...full, raw: { missingMetrics: [], pendingMetrics: [] } }), "observed");
+  // 전날 광고·결제 행만 아직 없는 행은 실패가 아니라 집계 대기다.
+  assert.equal(consoleRowState({ ...empty, raw: { missingMetrics: [], pendingMetrics: ["iaa.IOS", "iap"] } }), "not_landed");
+  assert.equal(consoleRowState({ ...empty, raw: { missingMetrics: ["iap"], pendingMetrics: ["iaa.IOS"] } }), "failed");
+  assert.equal(consoleRowState({ ...empty, raw: {} }), "failed");
 });

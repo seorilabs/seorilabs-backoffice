@@ -140,9 +140,11 @@ export async function recordObservations(
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
         continue;
       }
-    } else if (part.state === "failed") {
-      // 선행 조회 뒤 다른 수집이 observed로 바꿔도 원자적 조건으로 보존한다.
-      const updated = await prisma.metricCollectionLedger.updateMany({ where: { ...identity, state: { notIn: ["observed", "empty"] } }, data });
+    } else if (part.state === "failed" || (part.source === "ait_console" && part.state === "empty")) {
+      // 선행 조회 뒤 다른 수집이 observed로 바꿔도 원자적 조건으로 보존한다. 콘솔의 활동 0도
+      // 이미 값을 저장한 칸을 덮지 않는다.
+      const kept = part.state === "failed" ? ["observed", "empty"] : ["observed"];
+      const updated = await prisma.metricCollectionLedger.updateMany({ where: { ...identity, state: { notIn: kept } }, data });
       if (updated.count === 0) {
         try { await prisma.metricCollectionLedger.create({ data: { ...identity, ...data } }); }
         catch (error) {

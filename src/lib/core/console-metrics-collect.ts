@@ -6,7 +6,7 @@ import type {
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
-import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, isCompleteConsoleMetric } from "@/lib/analytics/console-values";
+import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, consoleRowState } from "@/lib/analytics/console-values";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
@@ -128,9 +128,8 @@ export async function ingestConsoleMetrics(
     }
 
     result.targetApps++;
-    // 콘솔 원장은 기록적이다. 대화형·파드 수집 모두 확인한 행만 저장하므로 "모든 칸에
-    // 행을 쓴다"는 보장이 없고, 행이 없다는 사실은 활동 0 이 아니라 푸시가 아직
-    // 안 왔다는 뜻이다(GA4 원장은 반대로 권위적이다).
+    // 이 경로는 받은 행만 저장한다. 행이 없다는 사실은 활동 0 이 아니라 푸시가 아직
+    // 안 왔다는 뜻이다. 활동 0(empty)은 콘솔 응답 전체를 본 예약 수집만 기록한다.
     const observations: ObservationInput[] = [];
     const failures: Omit<ObservationInput, "state">[] = [];
     const dateCounts = new Map<string, number>();
@@ -172,20 +171,25 @@ export async function ingestConsoleMetrics(
           });
           const raw = mergeConsoleRaw(stored.raw, day.raw);
           const total = day.raw?.iaaByOs && day.iaaEarningKrw == null && day.iaaImpressions == null ? consoleAdTotal(raw, day.date) : null;
-          if (day.raw?.missingMetrics == null && Array.isArray(raw.missingMetrics)) {
-            const covered = [
-              ...consoleCoveredAdMetrics(raw, day.date),
-              ...(day.iapTrxAmountKrw != null && day.iapSettlementKrw != null && day.payingUsers != null ? ["iap"] : []),
-              ...(day.dau != null && day.newUsers != null ? ["dau"] : []),
-              ...(day.avgSessionSec != null ? ["session"] : []),
-            ];
-            raw.missingMetrics = raw.missingMetrics.filter((metric) => !covered.includes(String(metric)));
+          const covered = [
+            ...consoleCoveredAdMetrics(raw, day.date),
+            ...(day.iapTrxAmountKrw != null && day.iapSettlementKrw != null && day.payingUsers != null ? ["iap"] : []),
+            ...(day.dau != null && day.newUsers != null ? ["dau"] : []),
+            ...(day.avgSessionSec != null ? ["session"] : []),
+          ];
+          for (const key of ["missingMetrics", "pendingMetrics"] as const) {
+            const list = raw[key];
+            if (day.raw?.[key] == null && Array.isArray(list)) raw[key] = list.filter((metric) => !covered.includes(String(metric)));
           }
           return tx.appConsoleMetricDaily.update({ where, data: { ...total, raw: Object.keys(raw).length ? raw as Prisma.InputJsonObject : Prisma.JsonNull } });
         }));
         result.upserts++;
-        if (isCompleteConsoleMetric(saved)) {
+        const state = consoleRowState(saved);
+        if (state === "observed") {
           observations.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, state: "observed" });
+        } else if (state === "not_landed") {
+          // 전날 광고·결제가 아직 집계 전이다. 실패가 아니며 다음 회차가 다시 조회한다.
+          observations.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, state: "not_landed", detail: "집계 대기" });
         } else {
           result.warnings.push({ key, warning: `확인된 지표만 부분 저장 (${day.date})` });
           failures.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, detail: "확인된 지표만 부분 저장" });

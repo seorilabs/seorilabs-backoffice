@@ -8,7 +8,7 @@ import { ConsoleSyncError } from "./oauth";
 const sample: Awaited<ReturnType<typeof collectConsoleMetrics>> = {
   state: "partial", end: "2026-10-13", blocked: [{ key: "waiting#2", reason: "출시일 확인 필요" }],
   results: [{ window: { slug: "example", miniAppId: 1, workspaceId: 38345, start: "2026-10-10", end: "2026-10-13" }, upserts: 3, providedDates: ["2026-10-10", "2026-10-11", "2026-10-12"],
-    missing: [{ date: "2026-10-12", metrics: ["iap"] }], errors: [], skipped: [], storageErrors: [], warnings: [], verification: { expected: 3, verified: 3, mismatched: [] } }],
+    missing: [{ date: "2026-10-12", metrics: ["iap"] }], pending: [], emptyDates: [], errors: [], skipped: [], storageErrors: [], warnings: [], verification: { expected: 3, verified: 3, mismatched: [] } }],
   readback: { apps: [{ slug: "example", miniAppId: 1, lastDate: "2026-10-11", lastCollectedAt: null, rows: 3 }], minLastDate: "2026-10-11", maxLastDate: "2026-10-11", appsWithNoData: [] },
 };
 

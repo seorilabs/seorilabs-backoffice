@@ -21,6 +21,9 @@ async function execute(mode: string) {
   let launches: Record<string, string>;
   try { launches = z.record(z.string().refine((v) => parseMetricDay(v) !== null)).parse(JSON.parse(process.env.AIT_CONSOLE_CONFIRMED_LAUNCHES ?? "{}")); }
   catch { throw new ConsoleSyncError("CONSOLE_LAUNCH_DATES_INVALID"); }
+  // 과거 미확인 칸을 다시 조회하는 일회성 실행에서만 준다(예: 2026-07-01).
+  const retryFrom = process.env.AIT_CONSOLE_RETRY_FROM || undefined;
+  if (retryFrom && !parseMetricDay(retryFrom)) throw new ConsoleSyncError("CONSOLE_RETRY_FROM_INVALID");
   const run = async (assertHeld: () => Promise<void>) => {
     if (process.env.AIT_CONSOLE_CREDENTIAL_ID !== "shared/apps-in-toss/console-oauth") throw new ConsoleSyncError("OAUTH_IDENTITY_MISMATCH");
     const runtime = consoleRuntimeLedger({ kind: "worker", principal: process.env.AIT_CONSOLE_RUNTIME_PRINCIPAL ?? "", workspaceId: 38345 }, assertHeld);
@@ -35,7 +38,7 @@ async function execute(mode: string) {
         const result = await source.queryListing({ slug: listing.appSlug, workspaceId: AIT_WORKSPACE_ID, miniAppId: listing.miniAppId }, date, date);
         return { state: "authenticated" as const, mode, metricDays: result.days.length, missing: result.missing, errors: result.errors };
       }
-      return await collectConsoleMetrics(source, new Date(), launches);
+      return await collectConsoleMetrics(source, new Date(), launches, retryFrom);
     } finally { await reader.close().catch(() => {}); }
   };
   // 검사 모드도 수집과 같은 잠금 범위를 사용한다. DB에는 지표를 저장하지 않는다.

@@ -33,7 +33,7 @@ async function executeCollector(storageFailure: boolean, withMissing = false, al
     versions: `import { startConsoleFixture } from ${JSON.stringify(path.resolve("scripts/console-metrics/fixture-server.ts"))};
       export class SecretManagerConsoleGrantVersions { static async fromWif() {
         const fixture = globalThis.__collectorFixture = await startConsoleFixture();
-        fixture.state.failIos = ${withMissing}; return fixture;
+        fixture.state.emptyIos = ${withMissing}; return fixture;
       } }`,
     runtime: `export function consoleRuntimeLedger() { return {}; }`,
     issues: `${event}
@@ -62,9 +62,9 @@ async function executeCollector(storageFailure: boolean, withMissing = false, al
         const response = await source.queryListing({slug:'lizard-tycoon',workspaceId:38345,miniAppId:61736}, '2026-10-11', '2026-10-11');
         events.push('query-finished');
         if (${storageFailure}) { events.push('storage-failed'); throw new ConsoleSyncError('STORAGE_FAILED'); }
-        const state = response.days.length === 1 && response.errors.length === 0 && response.missing.length === 0 ? 'complete' : 'partial';
+        const state = response.days.length === 1 && response.errors.length === 0 && response.missing.length === 0 && response.pending.length === 0 ? 'complete' : 'partial';
         events.push('collection-finished'); return {state, end:'2026-10-11', blocked:[],
-          results:[{window:{slug:'lizard-tycoon',miniAppId:61736,start:'2026-10-11'},upserts:response.days.length,providedDates:response.days.map(day=>day.date),verification:{expected:response.days.length,verified:response.days.length,mismatched:[]},missing:response.missing,errors:response.errors,skipped:[],storageErrors:[],warnings:[]}],
+          results:[{window:{slug:'lizard-tycoon',miniAppId:61736,start:'2026-10-11'},upserts:response.days.length,providedDates:response.days.map(day=>day.date),verification:{expected:response.days.length,verified:response.days.length,mismatched:[]},missing:response.missing,pending:response.pending,errors:response.errors,skipped:[],storageErrors:[],warnings:[]}],
           readback:{apps:[{slug:'lizard-tycoon',miniAppId:61736,lastDate:'2026-10-11'}]}};
       }`,
   };
@@ -120,7 +120,7 @@ test("수집 CLI가 비동기 저장 실패에도 연결을 한 번 닫고 DB를
   assert.deepEqual(result.events, ["ledger:start", "collection-start", "query-finished", "storage-failed", "close", "collection:failed", "ledger:failed", "disconnect"]);
 });
 
- test("공급자 결측만 남으면 CLI는 종료하고 자료의 부분 완료는 원장에 보존한다", async () => {
+ test("전날 집계 대기만 남으면 CLI는 성공으로 끝나고 자료의 부분 완료는 원장에 보존한다", async () => {
   const result = await executeCollector(false, true);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).state, "partial");
