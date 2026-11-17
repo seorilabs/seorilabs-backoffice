@@ -130,14 +130,34 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 
 운영 배포와 스케줄 활성화 승인을 별도로 받은 뒤에만 적용한다. 첫 자연 실행은 종료 코드와
 `state`, `results`의 누락·오류·경고·업서트 수 및 `readback`을 확인한다. 최신 날짜만으로 완료를
-판정하지 않는다. `partial` 자료 상태는 원장에 보존한다. 공급자 결측만 있으면 실행 종료 코드는 0이며 조회 보류, 인증, 조회, 저장이나 알림 기록 실패는 1이다. 공식 일별 광고 합계와 OS별 원본을 따로 읽고 빈 날짜를 0으로 보정하지 않는다. 문제 시 suspend하고 기존
-대화형 수집을 사용하며 과거 지표를 지우거나 0으로 보정하지 않는다.
+판정하지 않는다. `partial` 자료 상태는 원장에 보존한다. 조회 보류, 인증, 조회, 저장이나 알림 기록 실패는 종료 코드 1이다. 문제 시 suspend하고 기존
+대화형 수집을 사용하며 과거 지표를 지우지 않는다.
+
+콘솔은 광고·결제 활동이 없는 날의 행을 응답에서 뺀다. 그래서 응답이 정상이면 행 부재를 이렇게 다룬다([설계](../../docs/design/2026-11-17-ait-console-empty-days/design.md)).
+
+| 날짜 | 처리 | 원장 |
+| --- | --- | --- |
+| 이틀 이상 지난 날 | 광고·결제 0으로 저장. 모든 지표가 없으면 행을 만들지 않음 | `observed`, 행이 없으면 `empty` |
+| 전날 | 값을 비워 둠(`raw.pendingMetrics`). 새벽 회차는 집계가 덜 끝났을 수 있음 | `not_landed`, 알림 없음 |
+| 응답 오류·형식 오류 | 해당 지표를 비워 둠(`raw.missingMetrics`) | `failed`, 실패 알림 |
+
+DAU와 신규 사용자의 행 부재는 계속 `null`(콘솔 미집계)이다. 예약 회차는 최근 14일의 미확인 칸만 다시 조회한다.
+그보다 오래된 `failed` 칸을 다시 판정하려면 같은 CronJob으로 일회성 Job을 만들고 `AIT_CONSOLE_RETRY_FROM`을 준다.
+
+```bash
+kubectl -n platform create job --from=cronjob/backoffice-ait-console-metrics ait-console-retry-$(date +%Y%m%d) \
+  --dry-run=client -o json \
+  | jq '.spec.template.spec.containers[0].env += [{"name":"AIT_CONSOLE_RETRY_FROM","value":"2026-07-01"}]' \
+  | kubectl create -f -
+```
+
+리스팅마다 남은 가장 이른 `failed` 날짜부터 120일 단위로 조회한다. 예약 회차와 같은 잠금을 쓰므로 겹치면 한쪽이 보류된다.
 
 ### 수집 직후 디스코드 결과
 
 `collect` 실행은 MCP 연결과 수집 잠금을 정리한 뒤 기존 알림 대기열에 실행당 한 건을 넣는다.
 기존 notification worker가 `batch-monitoring` 목적지로 전송하고 전송 실패 시 기존 재시도 정책을 적용한다.
-실행 성공·실패와 자료 제공 상태를 분리해 배치모니터링 채널로 보고한다. 정상 응답의 값 미제공은 실행 실패가 아니며 partial 자료 원장은 보존한다. 수집 구간, 반영 건수, 미제공 등록 항목·날짜 조합 수, 조회/저장 오류,
+실행 성공·실패와 자료 제공 상태를 분리해 배치모니터링 채널로 보고한다. 정상 응답의 행 부재는 실행 실패가 아니며 partial 자료 원장은 보존한다. 수집 구간, 반영 건수, 미제공 등록 항목·날짜 조합 수, 조회/저장 오류,
 리스팅별 최신 저장 날짜를 알린다. 실패 전 저장 건수를 확인하지 못한 경우 0으로 표시하지 않는다.
 토큰·원본 응답·오류 본문은 보내지 않는다. `verify-auth`, `verify-refresh`, 동시 실행 보류는 알림을 만들지 않는다.
 

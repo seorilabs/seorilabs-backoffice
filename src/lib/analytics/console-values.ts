@@ -63,3 +63,8 @@ export function isPendingConsoleMetric(row: { raw?: unknown }): boolean {
   const raw = object(row.raw); const missing = raw.missingMetrics; const pending = raw.pendingMetrics;
   return (!Array.isArray(missing) || missing.length === 0) && Array.isArray(pending) && pending.length > 0;
 }
+
+/** 저장 행의 원장 상태. 수집과 과거 원장 복구가 같은 기준을 쓴다. */
+export function consoleRowState(row: Parameters<typeof isCompleteConsoleMetric>[0]): "observed" | "not_landed" | "failed" {
+  return isCompleteConsoleMetric(row) ? "observed" : isPendingConsoleMetric(row) ? "not_landed" : "failed";
+}

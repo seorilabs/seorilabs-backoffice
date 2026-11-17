@@ -6,7 +6,7 @@ import type {
   ConsoleDailyMetric,
 } from "@/lib/analytics/console-source";
 import { MAX_DAYS_PER_APP, validateConsoleDay } from "@/lib/analytics/console-source";
-import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, isCompleteConsoleMetric, isPendingConsoleMetric } from "@/lib/analytics/console-values";
+import { consoleMetricFields, mergeConsoleRaw, consoleAdTotal, consoleCoveredAdMetrics, hasConsoleAdObservation, consoleRowState } from "@/lib/analytics/console-values";
 import { retryPrismaConflict } from "@/lib/prisma-conflict";
 import { AIT_WORKSPACE_ID, AIT_LISTINGS } from "@/lib/analytics/ait-apps";
 import { parseMetricDay, toDbDay } from "@/lib/analytics/metric-day";
@@ -184,9 +184,10 @@ export async function ingestConsoleMetrics(
           return tx.appConsoleMetricDaily.update({ where, data: { ...total, raw: Object.keys(raw).length ? raw as Prisma.InputJsonObject : Prisma.JsonNull } });
         }));
         result.upserts++;
-        if (isCompleteConsoleMetric(saved)) {
+        const state = consoleRowState(saved);
+        if (state === "observed") {
           observations.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, state: "observed" });
-        } else if (isPendingConsoleMetric(saved)) {
+        } else if (state === "not_landed") {
           // 전날 광고·결제가 아직 집계 전이다. 실패가 아니며 다음 회차가 다시 조회한다.
           observations.push({ source: "ait_console", appId: app.id, listingId: miniAppId, day: day.date, state: "not_landed", detail: "집계 대기" });
         } else {

@@ -14,7 +14,7 @@ import {
   type ObservationInput,
 } from "@/lib/analytics/coverage";
 import { consoleCoverageTargets, ga4CoverageTargets } from "@/lib/analytics/targets";
-import { isCompleteConsoleMetric } from "@/lib/analytics/console-values";
+import { consoleRowState } from "@/lib/analytics/console-values";
 import { backfillGa4State } from "@/lib/analytics/observation";
 
 // 원장이 생기기 전 기간을 채운다.
@@ -92,7 +92,7 @@ export async function backfillMetricLedger(
     const stored = new Map(rows.map((row) => [dbDay(row.date), row]));
     const observations: ObservationInput[] = days.map((day) => {
       const row = stored.get(day);
-      const state: MetricObservationState = row ? isCompleteConsoleMetric(row) ? "observed" : "failed" : "not_landed";
+      const state: MetricObservationState = row ? consoleRowState(row) : "not_landed";
       if (state === "observed") result.console.observed += 1;
       else if (state === "failed") result.console.failed += 1;
       else result.console.notLanded += 1;
