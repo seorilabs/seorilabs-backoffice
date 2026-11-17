@@ -23,6 +23,7 @@ import {
   metricDayStart,
   shiftMetricDay,
   lastCompletedWeekEnd,
+  parseMetricDay,
 } from "@/lib/analytics/metric-day";
 import {
   evidenceListSchema,
@@ -79,10 +80,15 @@ export function insightNotificationKey(kind:string,facts:Evidence[],fallback:str
 function safeText(value: string) {
   return value.replace(/[@<>`]/g, "").slice(0, 160);
 }
+/** 주간 신호의 끝(일요일). 생성 요일과 관계없이 제목의 기간과 차트 기준일을 맞춘다. */
+export function weeklyEnd(signal: { kind: string; dedupeKey?: string }): string | null {
+  return signal.kind === "metric-weekly" ? parseMetricDay(signal.dedupeKey?.replace(/^weekly:/, "")) : null;
+}
 function notificationPayload(
   signal: {
     title: string;
     kind: string;
+    dedupeKey?: string;
     severity: string;
     facts: unknown;
     observedAt: Date;
@@ -120,7 +126,7 @@ function notificationPayload(
     ...(/metric-weekly/.test(signal.kind)
       ? {
           chart: "org-trend",
-          refDate: shiftMetricDay(metricDayOf(signal.observedAt), -1),
+          refDate: weeklyEnd(signal) ?? shiftMetricDay(metricDayOf(signal.observedAt), -1),
           weekly: true,
         }
       : {}),
@@ -267,16 +273,17 @@ export async function publishSignal(input: {
 }
 
 async function claim(workerId: string, signalKinds?: readonly string[]) {
+  // 종류는 실행 입력이 아니라 분석 문서의 신호로 고른다. 예전 실행에는 입력에 종류가 없다.
+  // 후보 목록은 잠금 없이 읽고, 실행 상태는 아래 트랜잭션이 다시 확인한다.
+  const scoped = signalKinds
+    ? (await prisma.insightDocument.findMany({
+        where: { status: "PENDING", runId: { not: null }, signal: { kind: { in: [...signalKinds] } } },
+        select: { runId: true },
+      })).map((document) => document.runId!)
+    : undefined;
+  if (scoped && !scoped.length) return null;
   return serializable(async (tx) => {
     const now = new Date();
-    // 종류는 실행 입력이 아니라 분석 문서의 신호로 고른다. 예전 실행에는 입력에 종류가 없다.
-    const scoped = signalKinds
-      ? (await tx.insightDocument.findMany({
-          where: { status: "PENDING", runId: { not: null }, signal: { kind: { in: [...signalKinds] } } },
-          select: { runId: true },
-        })).map((document) => document.runId!)
-      : undefined;
-    if (scoped && !scoped.length) return null;
     // API worker의 lease만 회수한다. 다른 Codex/Claude run·repo guard를 건드리지 않는다.
     const expired = await tx.agentLease.findMany({
       where: {

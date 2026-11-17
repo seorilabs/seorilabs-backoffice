@@ -97,6 +97,7 @@ async function main() {
   assert.equal((await doc(current.id)).status,"READY"); assert.equal(await sent(current.id),true);
   const currentEvent=await prisma.notificationEvent.findUniqueOrThrow({where:{dedupeKey:current.notificationKey},include:{deliveries:true}});
   assert.equal(currentEvent.deliveries[0].destinationKey,"metric-insights");
+  assert.equal((currentEvent.payload as {refDate:string}).refDate,weekEnd);
   for(const skipped of [stale,offWeek]){assert.equal((await doc(skipped.id)).errorCode,"STALE_WEEKLY");assert.equal(await sent(skipped.id),false);}
   assert.equal((await doc(oldListing.id)).errorCode,"INTERNAL_OBSERVATION"); assert.equal(await sent(oldListing.id),false);
   const runIds=await Promise.all([current,stale,offWeek,oldListing].map(async d=>(await doc(d.id)).runId!));
