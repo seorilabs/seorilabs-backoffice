@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "level": "L3",
+  "baseline": "addfc6badb09429c3dd468043a215834ec94e426",
+  "changedFeatures": [
+    "backoffice-production-deploy"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}
