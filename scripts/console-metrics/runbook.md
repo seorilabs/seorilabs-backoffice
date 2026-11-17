@@ -130,7 +130,7 @@ ServiceAccount·공개 WIF ConfigMap·Secret Manager resource·IAM과 manifest�
 
 운영 배포와 스케줄 활성화 승인을 별도로 받은 뒤에만 적용한다. 첫 자연 실행은 종료 코드와
 `state`, `results`의 누락·오류·경고·업서트 수 및 `readback`을 확인한다. 최신 날짜만으로 완료를
-판정하지 않는다. `partial` 자료 상태는 원장에 보존한다. 조회 보류, 인증, 조회, 저장이나 알림 기록 실패는 종료 코드 1이다. 문제 시 suspend하고 기존
+판정하지 않는다. `partial` 자료 상태는 원장에 보존한다. 전날 집계 대기만 남은 실행은 종료 코드 0이며 `partial`로 보존한다. 조회 보류, 인증, 조회, 저장이나 알림 기록 실패는 종료 코드 1이다. 문제 시 suspend하고 기존
 대화형 수집을 사용하며 과거 지표를 지우지 않는다.
 
 콘솔은 광고·결제 활동이 없는 날의 행을 응답에서 뺀다. 그래서 응답이 정상이면 행 부재를 이렇게 다룬다([설계](../../docs/design/2026-11-17-ait-console-empty-days/design.md)).
@@ -151,7 +151,7 @@ kubectl -n platform create job --from=cronjob/backoffice-ait-console-metrics ait
   | kubectl create -f -
 ```
 
-리스팅마다 남은 가장 이른 `failed` 날짜부터 120일 단위로 조회한다. 예약 회차와 같은 잠금을 쓰므로 겹치면 한쪽이 보류된다.
+리스팅마다 남은 가장 이른 `failed` 날짜부터 120일 단위로 조회한다. 예약 회차(KST 03:30, 09:30, 15:30, 21:30)와 같은 잠금을 쓰므로 그 시각을 피한다. 잠금을 못 잡은 Job은 아무것도 조회하지 않고 `already_running`으로 끝나 Job 상태만으로는 구분되지 않는다. Job 로그의 `state`, `results`와 원장의 `failed` 칸 수로 결과를 확인한다.
 
 ### 수집 직후 디스코드 결과
 
