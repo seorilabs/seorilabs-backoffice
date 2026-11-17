@@ -8,7 +8,7 @@ export type MetricSource = (typeof METRIC_SOURCES)[number];
 
 export const METRIC_OBSERVATION_STATES = [
   "observed", // 소스가 그 날을 응답했고 값을 저장했다.
-  "empty", // 소스 테이블은 착지했는데 그 대상의 그 날 활동이 진짜 0 이다.
+  "empty", // 소스가 그 날을 응답했고 그 대상의 활동이 진짜 0 이다(GA4 테이블 착지, 콘솔 전 지표 정상 응답).
   "not_landed", // export/푸시가 아직 없다. 나중에 채워질 수 있다.
   "failed", // 쿼리·푸시가 오류로 끝났다. 재시도 대상.
   "not_applicable", // 그 날 이 대상은 수집 범위가 아니다(출시 전·중단·매핑 없음).
@@ -28,7 +28,7 @@ export function impliesLanded(state: MetricObservationState): boolean {
 /**
  * GA4 는 같은 상태로 두 번 이상 봐야 봉인한다. 한 번 관측만으로 봉인하면 첫 관측이
  * 미완결 테이블이었을 때 낮은 값이 영구 고정된다(09-12 에 실제로 그럴 뻔했다).
- * 콘솔은 자동 수집이 없어 관측 횟수로 성숙을 말할 수 없으므로 경과일만 본다.
+ * 콘솔은 전날 새벽 회차만 집계가 덜 끝나 있을 수 있어 경과일만 본다.
  */
 export const SEAL_RULES: Record<
   MetricSource,
@@ -49,8 +49,6 @@ export function sealRule(input: {
   observations: number;
 }): boolean {
   if (!isObserved(input.state)) return false;
-  // 콘솔은 push 로만 들어와 "활동 0"을 관측할 수 없다. empty 는 GA4 전용이다.
-  if (input.source === "ait_console" && input.state !== "observed") return false;
   const rule = SEAL_RULES[input.source];
   return input.ageDays >= rule.minAgeDays && input.observations >= rule.minObservations;
 }

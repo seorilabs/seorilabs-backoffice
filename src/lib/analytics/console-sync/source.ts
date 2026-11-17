@@ -11,7 +11,7 @@ export class McpConsoleMetricsSource implements ConsoleMetricsSource {
     const result = z.object({ workspaces: z.array(z.object({ id: z.number() })) }).safeParse(await this.reader.call("workspace_overview", {}));
     if (!result.success || !result.data.workspaces.some((w) => w.id === AIT_WORKSPACE_ID)) throw new ConsoleSyncError("CONSOLE_WORKSPACE_MISMATCH");
   }
-  async queryListing(target: ConsoleSourceTarget, start: string, end: string) {
+  async queryListing(target: ConsoleSourceTarget, start: string, end: string, settledThrough?: string) {
     if (target.workspaceId !== AIT_WORKSPACE_ID || !AIT_LISTINGS.some((l) => l.appSlug === target.slug && l.miniAppId === target.miniAppId)) throw new ConsoleSyncError("CONSOLE_LISTING_MISMATCH");
     const common = { workspaceId: target.workspaceId, miniAppId: target.miniAppId };
     const period = { startDate: start, endDate: end };
@@ -33,7 +33,7 @@ export class McpConsoleMetricsSource implements ConsoleMetricsSource {
         else { const code = consoleErrorCode(result.reason); if (fatal.has(code)) throw new ConsoleSyncError(code); errors.push({ metric: requests[offset + index][0], code }); }
       }
     }
-    const normalized = normalizeConsoleResponses(responses, start, end);
+    const normalized = normalizeConsoleResponses(responses, start, end, settledThrough);
     errors.push(...normalized.invalidResponses.map((metric) => ({ metric, code: "CONSOLE_RESPONSE_INVALID" })));
     return { ...normalized, errors };
   }

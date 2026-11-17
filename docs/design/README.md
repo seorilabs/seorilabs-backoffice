@@ -2,6 +2,7 @@
 
 | 날짜 | 설계와 승인 | 실행 |
 | --- | --- | --- |
+| 2026-11-17 | [앱인토스 콘솔 수집의 활동 0과 실패 구분](2026-11-17-ait-console-empty-days/design.md) — 사용자 “실패원인 확인하고 고치자”, 행 부재를 활동 0과 집계 대기로 구분, L1 개발 환경과 운영 배포·과거 칸 재조회 | |
 | 2026-11-17 | [Next.js 16.4.6 보안 패치](2026-11-17-next-16-4-6/design.md) — 사용자 “남은것 처리해”, GHSA-mfr8-8qww-v76h, L3 개발 환경(CI 전체 회귀)과 운영 배포 | [#586](https://github.com/seorilabs/seorilabs-backoffice/issues/586) |
 | 2026-11-17 | [배포 전 필수 시크릿 키 확인](2026-11-17-deploy-secret-preflight/design.md) — 사용자 “추천안으로 진행하자”, 11/15 Slack 중단 재발 방지, L1 서비스 검증과 운영 배포 | [#584](https://github.com/seorilabs/seorilabs-backoffice/issues/584) |
 | 2026-10-29 | [Slack 운영 기능 전체 이전 v2](2026-10-29-slack-notifications/design.md) — 사용자 승인, 13개 알림 목적지와 기존 21개 운영 기능 전환, L3 개발 환경 검증과 공개 서비스 반영 | [실행 티켓](2026-10-29-slack-notifications/execution-ticket.md), [설정 확인](2026-10-29-slack-notifications/setup.md) |

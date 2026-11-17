@@ -32,3 +32,13 @@ test("기존 리스팅의 자동 재조회는 누락이나 수집 지연이 오�
     assert.equal(plan.windows[0].end, "2026-10-19");
   }
 });
+
+test("운영자가 준 재조회 시작일이 있을 때만 14일보다 오래된 미확인 날짜까지 다시 조회한다", () => {
+  const one = { ...app(56407, "2026-11-16"), firstIncompleteDate: "2026-07-24" };
+  const now = new Date("2026-11-17T13:00:00Z");
+  assert.equal(consoleCollectionPlan(status([one]), now).windows[0].start, "2026-11-03");
+  const wide = consoleCollectionPlan(status([one]), now, {}, "2026-07-01");
+  assert.equal(wide.windows[0].start, "2026-07-24"); assert.equal(wide.windows.at(-1)?.end, "2026-11-16");
+  assert.ok(wide.windows.every((window) => window.end >= window.start));
+  assert.equal(consoleCollectionPlan(status([one]), now, {}, "not-a-day").windows[0].start, "2026-11-03");
+});

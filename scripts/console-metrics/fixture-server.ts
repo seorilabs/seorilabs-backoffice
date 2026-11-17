@@ -21,7 +21,7 @@ function inputSchema(name: string) {
   return z.object({ workspaceId: z.number().int(), miniAppId: z.number().int(), request }).strict();
 }
 export async function startConsoleFixture() {
-  const state = { failIos: false, failIap: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
+  const state = { failIos: false, emptyIos: false, idle: false, failIap: false, revoked: false, rateLimits: 0, unavailable: 0, retryAfter: "0", refreshes: 0, active: 0, maxActive: 0, tools: [] as string[] };
   const server = createServer(async (req, res) => {
     try {
       if (req.url === "/token") { state.refreshes++; res.setHeader("Content-Type", "application/json"); res.statusCode = state.revoked ? 400 : 200; res.end(JSON.stringify(state.revoked ? { error: "invalid_grant" } : { access_token: "fixture-access", token_type: "bearer", expires_in: 3600, refresh_token: "fixture-refresh" })); return; }
@@ -42,8 +42,15 @@ export async function startConsoleFixture() {
           let result: unknown;
           if (name === "dashboard_dau") result = { au: [], newAu: [], age: [], gender: [], referrer: [] };
           if (name === "dashboard_session") result = { metric: dates.map((dateKey) => ({ dateKey, value: 30 })) };
-          if (name === "dashboard_revenue_iap") result = { metric: state.failIap ? [] : dates.map((trxDate) => ({ trxDate, trxAmount: 0, settlementAmount: 0, pu: 0 })) };
-          if (name === "dashboard_revenue_iaa") result = { dailyReports: dates.flatMap((date) => state.failIos && request.osType === "IOS" ? [] : [{ date, impression: request.osType === "IOS" ? 0 : 6, estimatedEarning: request.osType === "IOS" ? 0 : 34, ecpm: 5 }]) };
+          // idle은 활동이 전혀 없는 기간이다. 콘솔은 정상 응답에 빈 배열을 준다.
+          if (state.idle) result = name === "dashboard_dau" ? { au: [], newAu: [] } : name === "dashboard_revenue_iaa" ? { dailyReports: [] } : { metric: [] };
+          if (state.idle) return { content: [{ type: "text", text: JSON.stringify(result) }] };
+          // 실패 상태는 실제 장애처럼 도구 오류로 응답한다. 빈 배열은 활동 0이라 실패가 아니다.
+          if ((name === "dashboard_revenue_iap" && state.failIap) || (name === "dashboard_revenue_iaa" && state.failIos && request.osType === "IOS"))
+            return { isError: true, content: [{ type: "text", text: "잠시 시스템에 오류가 발생했어요" }] };
+          if (name === "dashboard_revenue_iap") result = { metric: dates.map((trxDate) => ({ trxDate, trxAmount: 0, settlementAmount: 0, pu: 0 })) };
+          // emptyIos는 그날 iOS 광고 활동이 없어 콘솔이 행을 빼는 경우다.
+          if (name === "dashboard_revenue_iaa") result = { dailyReports: state.emptyIos && request.osType === "IOS" ? [] : dates.map((date) => ({ date, impression: request.osType === "IOS" ? 0 : 6, estimatedEarning: request.osType === "IOS" ? 0 : 34, ecpm: 5 })) };
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         } finally { state.active--; }
       });

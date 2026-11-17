@@ -19,7 +19,7 @@ test("공식 합계와 양 OS를 독립 조회하고 동시 요청은 2개를 �
   } } as unknown as ConsoleReader;
   const result = await new McpConsoleMetricsSource(reader).queryListing({ slug: "lizard-tycoon", workspaceId: 38345, miniAppId: 61736 }, "2026-10-11", "2026-10-11");
   assert.equal(requests.length, 6); assert.equal(peak, 2);
-  assert.equal(result.days[0].iaaEarningKrw, 4); assert.deepEqual(result.missing[0].metrics, ["iaa.ANDROID"]);
+  assert.equal(result.days[0].iaaEarningKrw, 4); assert.deepEqual(result.missing, []); assert.deepEqual(result.pending[0].metrics, ["iaa.ANDROID"]);
 });
 
 

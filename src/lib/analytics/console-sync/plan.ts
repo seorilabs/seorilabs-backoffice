@@ -3,9 +3,10 @@ import { MAX_DAYS_PER_APP, type ConsoleSourceTarget } from "../console-source";
 import { lastElapsedMetricDay, parseMetricDay, shiftMetricDay } from "../metric-day";
 import type { ConsoleSyncStatus } from "@/lib/core/console-metrics-collect";
 export interface ConsoleWindow extends ConsoleSourceTarget { start: string; end: string; }
-export function consoleCollectionPlan(status: ConsoleSyncStatus, now: Date, launches: Record<string, string> = {}) {
+/** retryFrom은 운영자가 과거 미확인 구간을 다시 조회할 때만 준다. 기본 재조회는 최근 14일이다. */
+export function consoleCollectionPlan(status: ConsoleSyncStatus, now: Date, launches: Record<string, string> = {}, retryFrom?: string) {
   const end = lastElapsedMetricDay(now);
-  const retryFloor = shiftMetricDay(end, -13);
+  const retryFloor = retryFrom && parseMetricDay(retryFrom) && retryFrom < end ? retryFrom : shiftMetricDay(end, -13);
   const observed = status.apps.flatMap((a) => a.lastDate && parseMetricDay(a.lastDate) && a.lastDate <= end ? [a.lastDate] : []);
   const regularStart = observed.length ? shiftMetricDay(observed.sort()[0], -2) : shiftMetricDay(end, -13);
   const windows: ConsoleWindow[] = []; const blocked: { key: string; reason: string }[] = [];

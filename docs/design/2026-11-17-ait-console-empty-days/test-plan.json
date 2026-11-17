@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "9cc5f4932820faff04847fbac83ebcac20c3eb10",
+  "changedFeatures": [
+    "ait-console-pod-collection",
+    "metric-collection-ledger-and-backfill"
+  ],
+  "environments": [
+    "dev"
+  ],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": {
+    "markets": [
+      "service"
+    ],
+    "until": "public"
+  }
+}

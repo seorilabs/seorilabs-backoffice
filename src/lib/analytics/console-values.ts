@@ -57,3 +57,9 @@ export function isCompleteConsoleMetric(row: Partial<Record<typeof consoleFinanc
   const missing = object(row.raw).missingMetrics;
   return consoleFinancialFields.every((field) => row[field] != null) && (!Array.isArray(missing) || missing.length === 0);
 }
+
+/** 응답 오류는 없고, 확정 전 날짜의 광고·결제 행만 아직 없는 저장 행인가. */
+export function isPendingConsoleMetric(row: { raw?: unknown }): boolean {
+  const raw = object(row.raw); const missing = raw.missingMetrics; const pending = raw.pendingMetrics;
+  return (!Array.isArray(missing) || missing.length === 0) && Array.isArray(pending) && pending.length > 0;
+}
