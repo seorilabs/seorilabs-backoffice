@@ -301,18 +301,23 @@ export function operationalInterestCard(
   let title = `${facts.icon} ${appName} · ${facts.headline}`;
   if (event.type.startsWith("ad.")) {
     const platform = ({android:"Android",ios:"iOS",apps_in_toss:"앱인토스"} as Record<string,string>)[value("clientPlatform")] ?? "플랫폼 미확인";
-    title = `${failure ? "❌" : "🎬"} [${platform}] 광고 보상 ${failure ? "지급 실패" : "지급 완료"} - ${appName}`;
+    title = `${failure ? "❌" : "🎬"} [${appName} · ${platform}] 광고 보상 ${failure ? "지급 실패" : "지급 완료"}`;
     fields.push(...(failure ? [{label:"오류",value:value("errorCode")},{label:"제공사",value:value("provider")},{label:"광고 위치",value:value("placementId")}] : [{label:value("rewardKey"),value:value("rewardAmount")}]));
   } else if (event.type.startsWith("iap.")) {
     const market = ({google_play:"구글플레이",app_store:"앱스토어",apps_in_toss:"앱인토스"} as Record<string,string>)[value("platform")] ?? marketLabel(attr(event,"platform"));
     const action = failure ? "결제 완료 처리 실패" : attr(event,"grantKind") === "transfer" ? "소유권 이전" : attr(event,"grantKind") === "restore" ? "구매 복원" : attr(event,"grantKind") === "purchase" ? "결제 발생" : "결제 권리 지급 완료";
-    title = `${failure ? "❌" : "💳"} [${market}] ${purchaseEnvironment(event)} ${action} - ${appName}`;
+    title = `${failure ? "❌" : "💳"} [${appName} · ${market}] ${purchaseEnvironment(event)} ${action}`;
     fields.push(...(failure ? [{label:"오류",value:value("errorCode")}] : [{label:"지급항목",value:value("entitlementId")}]));
     fields.push({label:"사용자 ID",value:value("platformUserId")});
   }
   if (country) fields.push({label:event.type.startsWith("iap.") ? "결제 국가" : "국가",value:country});
+  const compact = event.type.startsWith("ad.") || event.type.startsWith("iap.");
+  if (compact) {
+    const primary = fields.shift()!;
+    title += ` — ${primary.label}: ${primary.value}`;
+  }
   const body = failure ? "지급 원장에서 실패와 재시도 결과를 확인하세요." : !event.type.startsWith("ad.") && !event.type.startsWith("iap.") ? facts.facts.join("\n") : undefined;
-  const presentation = {title,fields,...(body ? {body} : {}),timestamp:event.occurredAt};
+  const presentation = {title,fields,...(compact ? {layout:"compact" as const} : {}),...(body ? {body} : {}),timestamp:event.occurredAt};
   return {
     text: [title,...fields.map(f=>`${f.label}: ${f.value}`),body].filter(Boolean).join("\n"),
     presentation,

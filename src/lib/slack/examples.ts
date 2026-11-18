@@ -6,6 +6,7 @@ const at="2026-10-29T00:30:00Z";
 const actions:MessageOptions["components"]=[{type:1,components:[{type:2,style:3,label:"확인",custom_id:"synthetic:confirm"},{type:2,style:2,label:"취소",custom_id:"synthetic:cancel"}]}];
 const card=(id:string,destination:DestinationKey,title:string,text:string,extra:MessageOptions={}):SlackExample=>({id,destination,text,options:{embed:{title,footer:"합성 자료",timestamp:at},...extra}});
 const reward=operationalInterestCard({version:1,eventId:"synthetic_reward_001",occurredAt:at,type:"ad.reward.delivered",appId:"sample",outcome:"delivered",attributes:{provider:"admob",placementId:"daily_bonus",rewardKey:"crystal",rewardAmount:0}},"예제 앱");
+const purchase=operationalInterestCard({version:1,eventId:"synthetic_purchase_001",occurredAt:at,type:"iap.granted",appId:"sample",outcome:"granted",attributes:{platform:"google_play",isTestPurchase:true,grantKind:"purchase",entitlementId:"premium"}},"예제 앱");
 export const slackDestinationExamples:SlackExample[]=[
  card("backoffice","backoffice","승인 대기","**예제 앱 출시 요청**\n변경 내용과 대상 마켓을 확인하세요.\n\n[실행 근거](https://example.com/evidence)",{components:actions}),
  {...card("metrics-daily","metrics-daily","검색 순위 보고 예시","**예제 앱 · App Store · US · puzzle game**\n검색 위치 7위 → 4위\n관측 8/10개, 미수집 2개\n\n[전체 보고서와 근거](https://example.com/report)"),image:true},
@@ -19,7 +20,7 @@ export const slackDestinationExamples:SlackExample[]=[
  card("supervisor","supervisor","대표 작업 승인 대기","**예제 앱의 저장 오류를 복구합니다.**\n근거: 개발 환경에서 재현한 저장 실패\n범위: 저장 처리와 회귀 검사\n시간 상한: 30분\n\n[설계와 테스트 계획 보기](https://example.com/work/proposal)",{components:actions}),
  card("user-reviews","user-reviews","새 사용자 리뷰","**예제 앱 · ★★★★☆**\n\n> 설정을 찾기 쉬워졌습니다.\n\n[스토어 리뷰 보기](https://example.com/review)"),
  {...card("app-ops","app-ops","일일 재무보고","**수익 32,000원, 비용 12,000원**\n순수익 20,000원\n전일 대비 수익 8% 증가\n\n[상세 재무보고](https://example.com/finance)"),image:true},
- {id:"iap",destination:"iap",text:"결제 구분",options:{presentation:{title:"💳 결제 권리 지급 완료",fields:[{label:"앱",value:"예제 앱"},{label:"주문 구분",value:"테스트 주문"},{label:"지급 항목",value:"premium"}],timestamp:at}}},
+ {id:"iap",destination:"iap",text:purchase.text,options:{presentation:purchase.presentation}},
  {id:"ad-rewards",destination:"ad-rewards",text:reward.text,options:{presentation:reward.presentation}},
  card("github-issues","github-issues","개발 이슈 등록","**예제 앱의 저장 오류**\n현재 상태: 열림\n\n[이슈 보기](https://example.com/issues/1)"),
 ];

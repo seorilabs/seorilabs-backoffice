@@ -3,7 +3,7 @@ import { z } from "zod";
 const url = z.string().url().max(3000).refine(value => /^https?:\/\//i.test(value), "HTTP 링크가 필요합니다");
 const short = z.string().trim().min(1).max(1000);
 export const presentationSchema = z.object({
-  layout: z.enum(["card", "newsletter"]).optional(),
+  layout: z.enum(["card", "newsletter", "compact"]).optional(),
   title: short,
   status: z.enum(["success", "warning", "failure", "info"]).optional(),
   body: z.string().max(100_000).optional(),

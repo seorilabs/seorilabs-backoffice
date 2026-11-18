@@ -76,7 +76,8 @@ export function renderSlackMessages(text:string, options:MessageOptions = {}): S
   }
   return pages.map((blocks,index)=>{
     const pageTitle=title ? `${title}${pages.length>1 ? ` (${index+1}/${pages.length})` : ""}` : pages.length>1 ? `이어서 (${index+1}/${pages.length})` : undefined;
-    if(pageTitle)blocks=[...(pageTitle.length<=150 ? [{type:"header",text:plain(pageTitle)}] : richBlocks(`**${pageTitle.replace(/[\\*]/g,"\\$&")}**`)),...blocks];
+    // 짧은 운영 알림은 첫 본문 블록만으로도 앱과 처리 결과를 알 수 있게 한다.
+    if(pageTitle)blocks=[...(p?.layout === "compact" ? [literal(pageTitle,true)] : pageTitle.length<=150 ? [{type:"header",text:plain(pageTitle)}] : richBlocks(`**${pageTitle.replace(/[\\*]/g,"\\$&")}**`)),...blocks];
     return {text:blocks.map(blockPlain).filter(Boolean).join("\n").replace(/</g,"&lt;").replace(/>/g,"&gt;").slice(0,40000),blocks,unfurl_links:false,unfurl_media:false};
   });
 }

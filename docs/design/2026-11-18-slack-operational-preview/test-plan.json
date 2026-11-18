@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "level": "L1",
+  "baseline": "6d4d2a69fc04f48a6248f658b754541896ebbc2f",
+  "changedFeatures": [
+    "runtime-health-metrics-and-operational-events",
+    "slack-message-presentation"
+  ],
+  "environments": ["dev"],
+  "redesign": false,
+  "foundationRerun": false,
+  "floorOverrides": [],
+  "release": null
+}
