@@ -10,5 +10,8 @@
   "redesign": false,
   "foundationRerun": false,
   "floorOverrides": [],
-  "release": null
+  "release": {
+    "markets": ["service"],
+    "until": "public"
+  }
 }

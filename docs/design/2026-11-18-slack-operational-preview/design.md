@@ -1,6 +1,6 @@
 # 광고 보상과 결제 푸시의 첫 줄 보정
 
-사용자가 2026-11-18에 광고 보상 푸시에는 보상 이름만 보여 알기 어렵다고 제보하고, 결제에도 같은 형식이면 보정하도록 지시했다. 이 수정 지시 범위에서 구현·검증·PR 병합까지 진행한다. 테스트 계획의 `release`는 `null`이며 운영 배포는 별도 단계다. 실행 티켓: [#593](https://github.com/seorilabs/seorilabs-backoffice/issues/593). 기존 [#580](https://github.com/seorilabs/seorilabs-backoffice/issues/580)의 사용자 화면 검수 이력은 유지한다.
+사용자가 2026-11-18에 광고 보상 푸시에는 보상 이름만 보여 알기 어렵다고 제보하고, 결제에도 같은 형식이면 보정하도록 지시했다. 구현·검증·PR 병합은 [#594](https://github.com/seorilabs/seorilabs-backoffice/pull/594)로 완료했다. 이어 같은 대화에서 사용자가 “배포도 해”라고 지시하여 출시 범위를 서비스 운영 배포와 정상 상태 확인까지 넓혔다. 이 지시를 승인 근거로 테스트 계획의 `release`를 `service`·`public`으로 기록한다. 실행 티켓: [#593](https://github.com/seorilabs/seorilabs-backoffice/issues/593). 기존 [#580](https://github.com/seorilabs/seorilabs-backoffice/issues/580)의 사용자 화면 검수 이력은 유지한다.
 
 ## 문제와 동작
 
@@ -34,4 +34,4 @@ L1 서비스 개발 환경에서 합성 이벤트로 검증한다. 먼저 새 �
 
 ## 적용과 복구
 
-한 PR로 구현과 테스트를 병합한다. 운영 적용 시에는 새로 생성되는 알림부터 바뀌며 이미 저장된 payload와 과거 메시지는 유지한다. 되돌릴 때는 해당 PR 변경을 되돌린다. 운영 배포·실제 푸시 확인은 이번 개발 범위의 미실행 단계다.
+배포 승인 기록을 병합한 최종 후보 SHA에서 서비스 실행 근거를 확인하고 중앙 검증기를 통과한 뒤 기존 `deploy.yml`의 명시적 `workflow_dispatch`와 `deploy=true`로 운영에 배포한다. 웹·알림 worker 등 기존 workload의 source SHA, immutable image digest와 준비 상태, 공개 health를 다시 읽어 확인한다. 운영 적용 시에는 새로 생성되는 알림부터 바뀌며 이미 저장된 payload와 과거 메시지는 유지한다. 되돌릴 때는 직전 정상 이미지와 배포 런북을 사용한다. 실제 결제·광고 이벤트를 만들거나 테스트 메시지를 운영 Slack에 보내지 않는다. 사용자 휴대폰의 푸시 표시는 별도 실제 화면 확인이며 이번 배포 완료의 증거로 주장하지 않는다.
