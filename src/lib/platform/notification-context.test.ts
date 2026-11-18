@@ -7,7 +7,7 @@ test("결제 검증 국가와 원장 ID를 수신하고 실제·테스트·미�
  for (const [flag,label] of [[false,"실제 주문"],[true,"테스트 주문"],[undefined,"구분 미확인"]] as const){
   const attributes={...event.attributes}; if(flag===undefined)delete attributes.isTestPurchase;else attributes.isTestPurchase=flag;
   const card=operationalInterestCard({...event,attributes},"예제 앱");
-  assert.match(card.presentation!.title,new RegExp(`구글플레이.*${label}.*예제 앱`));
+  assert.match(card.presentation!.title,new RegExp(`예제 앱.*구글플레이.*${label}`));
   assert.match(card.text,/사용자 ID: pu_/);assert.match(card.text,/결제 국가:/);
  }
 });
