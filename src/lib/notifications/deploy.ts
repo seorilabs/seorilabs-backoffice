@@ -1,5 +1,5 @@
 import { deliverApproval } from "@/lib/deployment-approvals/delivery";
-import type { Prisma, ReleaseMarket } from "@prisma/client";
+import type { NotificationKind, Prisma, ReleaseMarket } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { incidentShouldMention } from "@/lib/notifications/mention-policy";
 import {
@@ -18,6 +18,7 @@ import { editablePayload, senderBotToken } from "@/lib/notifications/sender";
 import {
   issueThreadPayload,
 } from "@/lib/notifications/issue-thread";
+import { appEventThreadPayload } from "@/lib/platform/app-event-thread";
 import { env } from "@/lib/env";
 import {
   drainNotifications,
@@ -313,6 +314,47 @@ async function deliverIssueThread(
 }
 
 /**
+ * 앱 이벤트 댓글을 쓰레드에 단다.
+ *
+ * 그날·그 앱의 첫 이벤트가 만든 부모 메시지(본메시지) 아래에 댓글로 싣는다.
+ * 부모가 아직 안 나갔으면 붙일 곳이 없으므로 실패로 돌려 재시도에 맡긴다
+ * (부모와 댓글 알림이 같은 대기열에 들어가므로 보통 다음 drain 에서 해소된다).
+ */
+async function deliverAppEventReply(
+  kind: NotificationKind,
+  payload: Prisma.JsonValue,
+  destinationKey: string,
+  deliveryOptions: MessageOptions,
+): Promise<DeliveryOverrideResult> {
+  const thread = appEventThreadPayload(payload);
+  if (!thread) return { ok: false, error: "invalid app event thread payload" };
+  const parent = await prisma.notificationDelivery.findFirst({
+    where: {
+      provider: "SLACK",
+      destinationKey: thread.destinationKey,
+      status: "SENT",
+      deletedAt: null,
+      providerMessageId: { not: null },
+      event: { dedupeKey: thread.parentDedupeKey },
+    },
+    select: { providerMessageId: true },
+  });
+  if (!parent?.providerMessageId)
+    return { ok: false, error: "부모 앱이벤트 알림 발송 대기 중" };
+  const render = messageRender(kind, payload);
+  if (!render) return { ok: false, error: "알림 payload 형식 오류" };
+  // 댓글이므로 부모와 달리 같은 메시지를 편집하지 않는다. 게시 결과가 불명확하면
+  // 재게시하지 않는다(기존 영수증 규칙).
+  return sendNotification(destinationKey, render.text, {
+    ...deliveryOptions,
+    ...(render.plain ? { plain: true } : {}),
+    ...(render.presentation ? { presentation: render.presentation } : {}),
+    ...(!render.plain && render.embed ? { embed: render.embed } : {}),
+    replyToMessageId: parent.providerMessageId,
+  });
+}
+
+/**
  * providerMessageId 가 있으면 그 메시지를 고치고, 사람이 지웠으면(10008) 새로 만든다.
  *
  * 이 판단을 호출부마다 복사하면 한 곳만 고쳐지고 나머지가 같은 카드를 새로 만든다.
@@ -430,8 +472,11 @@ export async function drainAllNotifications(limit = 30) {
         }
         return result;
       }
-      // 쓰레드 게시는 kind 가 아니라 payload 로 구분한다. NotificationKind 는 MySQL ENUM 이라
-      // 값 추가에 ALTER MODIFY 가 필요한데 expand-only 게이트가 막는다.
+      // 쓰레드 게시와 본메시지 갱신은 kind 가 아니라 payload 로 구분한다.
+      // NotificationKind 는 MySQL ENUM 이라 값 추가에 ALTER MODIFY 가 필요한데
+      // expand-only 게이트가 막는다.
+      if (appEventThreadPayload(payload))
+        return deliverAppEventReply(kind, payload, destinationKey, deliveryOptions);
       if (issueThreadPayload(payload))
         return deliverIssueThread(payload, destinationKey, providerMessageId, deliveryOptions);
       const render = messageRender(kind, payload);

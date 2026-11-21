@@ -1,8 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import {
-  destinationOrFallback,
-  type NotificationDestination,
-} from "@/lib/notifications/destinations";
+
+// 결제 표시 요약과 테스트 주문 판정.
+// 목적지 결정은 운영 이벤트 경로가 app-event-thread 의 단일 해석을 쓴다.
 
 export const IAP_MARKET_LABELS: Record<string, string> = {
   app_store: "App Store",
@@ -38,8 +37,4 @@ export function testPurchaseState(
   if (value === true) return "test";
   if (value === false) return "real";
   return "unknown";
-}
-
-export function iapDestinations(): NotificationDestination[] {
-  return destinationOrFallback("iap", "action-events");
 }
