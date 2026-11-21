@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [empty, cutover, slack_cutover]
+        scenario: [empty, cutover, slack_cutover, app_event_thread]
     services:
       mysql:
         image: mysql@sha256:0596fa224cdf3b3355ce3ddbfd7ce77be27ec9e51841dfc5d2e1c8b81eea69d2
@@ -52,3 +52,7 @@ jobs:
           pnpm prisma migrate deploy
           pnpm exec tsx scripts/test-slack-cutover.ts
           pnpm exec tsx --test src/lib/supervisor/service.test.ts
+      - if: matrix.scenario == 'app_event_thread'
+        run: |
+          pnpm prisma migrate deploy
+          pnpm exec tsx scripts/test-app-event-thread.ts

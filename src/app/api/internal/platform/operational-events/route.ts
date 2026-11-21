@@ -1,9 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { iapDestinations } from "@/lib/notifications/iap-summary";
-import { destinationOrFallback, notificationDestinations } from "@/lib/notifications/destinations";
-import { enqueueNotification } from "@/lib/notifications/outbox";
+import { notificationDestinations } from "@/lib/notifications/destinations";
+import { enqueueEditableNotification, enqueueNotification } from "@/lib/notifications/outbox";
 import { renderPayload } from "@/lib/notifications/format";
 import { metricDayOf, metricDayStart } from "@/lib/analytics/metric-day";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +14,13 @@ import {
   parseOperationalEvent,
   verifyOperationalEventSignature,
 } from "@/lib/platform/operational-events";
+import {
+  appEventParentDedupeKey,
+  appEventThreadSummary,
+  dayThreadStats,
+  isAppEventThreadDestination,
+  operationalDestinationKey,
+} from "@/lib/platform/app-event-thread";
 import { recordIncident } from "@/lib/notifications/incidents";
 
 export const runtime = "nodejs";
@@ -137,19 +143,86 @@ export async function POST(request: NextRequest) {
     }
   }
   const appEvent = input.type === "identity.created" || input.type === "app.version.first_seen";
-  await enqueueNotification({
-    dedupeKey, kind: "OPERATIONAL_EVENT", occurredAt,
-    payload: {
-      ...(appEvent
-        ? { text: operationalEventLine(input, app?.displayName ?? input.appId, undefined, signupOrdinal), plain: true,
-            ...(signupOrdinal === undefined ? {} : { signupOrdinal }) }
-        : renderPayload(operationalInterestCard(input, app?.displayName ?? input.appId))),
-      report: { category: "change", reason: "REQUESTED_INDIVIDUAL_EVENT" },
-    },
-    destinations: input.type.startsWith("iap.") ? iapDestinations()
-      : input.type.startsWith("ad.") ? destinationOrFallback("ad-rewards", "action-events")
-      : notificationDestinations(["action-events"]),
-  });
+  const appName = app?.displayName ?? input.appId;
+  // 이벤트가 실제로 놓이는 채널. 전용 채널이 없으면 기존 폴백 규칙을 따른다.
+  const destinationKey = operationalDestinationKey(input.type);
+  const destinations = notificationDestinations([destinationKey]);
+  const eventPayload: Prisma.InputJsonObject = appEvent
+    ? {
+        text: operationalEventLine(input, appName, undefined, signupOrdinal),
+        plain: true,
+        ...(signupOrdinal === undefined ? {} : { signupOrdinal }),
+      }
+    : renderPayload(operationalInterestCard(input, appName));
+  const report = { category: "change", reason: "REQUESTED_INDIVIDUAL_EVENT" };
+
+  if (isAppEventThreadDestination(destinationKey)) {
+    // 그날·그 앱의 첫 이벤트가 루트 메시지(본메시지)를 만들고, 그 이벤트부터
+    // 쓰레드 댓글로 싣는다. 본메시지는 건수와 마지막 갱신 시각만 들고 댓글이
+    // 늘어날 때마다 같은 메시지를 편집해 갱신한다.
+    const day = metricDayOf(occurredAt);
+    const stats = await dayThreadStats({
+      appId: input.appId,
+      day,
+      destinationKey,
+    });
+    const parentDedupeKey = appEventParentDedupeKey(
+      destinationKey,
+      day,
+      input.appId,
+    );
+    await enqueueEditableNotification({
+      dedupeKey: parentDedupeKey,
+      kind: "OPERATIONAL_EVENT",
+      occurredAt,
+      payload: {
+        text: appEventThreadSummary({
+          destinationKey,
+          day,
+          appName,
+          count: stats.count,
+          lastEventAt: stats.lastEventAt,
+        }),
+        plain: true,
+        editable: true,
+        report: { category: "change", reason: "DAILY_APP_EVENT_THREAD" },
+        appEventThread: {
+          destinationKey,
+          day,
+          appId: input.appId,
+          count: stats.count,
+          ...(stats.lastEventAt
+            ? { lastEventAt: stats.lastEventAt.toISOString() }
+            : {}),
+        },
+      },
+      destinations,
+    });
+    await enqueueNotification({
+      dedupeKey,
+      kind: "OPERATIONAL_EVENT",
+      occurredAt,
+      payload: {
+        ...eventPayload,
+        report,
+        appEventThread: {
+          parentDedupeKey,
+          destinationKey,
+          day,
+          appId: input.appId,
+        },
+      },
+      destinations,
+    });
+  } else {
+    await enqueueNotification({
+      dedupeKey,
+      kind: "OPERATIONAL_EVENT",
+      occurredAt,
+      payload: { ...eventPayload, report },
+      destinations,
+    });
+  }
   return NextResponse.json(
     { ok: true, duplicate },
     { status: duplicate ? 200 : 202 },
